@@ -17,7 +17,7 @@ import (
 func (n *Node) editQueue(ctx context.Context, id string, keep []int) ([]string, error) {
 	pane, err := n.paneFor(ctx, id)
 	if err != nil {
-		return nil, err
+		return nil, n.paneless(id, "queue_edit_unsupported", "its queue is on its own screen, in no pane Persona can type in", err)
 	}
 	p := n.transcriptPath(id)
 	if p == "" {
@@ -46,13 +46,23 @@ func (n *Node) editQueue(ctx context.Context, id string, keep []int) ([]string, 
 	_ = n.sendKeys(ctx, pane, "ctrl+u")
 	for _, k := range keep {
 		if k >= 0 && k < len(queue) {
-			if err := n.prompt(ctx, pane, queue[k]); err != nil {
+			if err := n.promptClaude(ctx, pane, queue[k]); err != nil {
 				return queue, fmt.Errorf("re-queue: %w", err)
 			}
 			time.Sleep(150 * time.Millisecond)
 		}
 	}
 	return queue, nil
+}
+
+// paneless is a queue call's error when paneFor found no pane: a refusal with code for a session a claude outside
+// Persona's panes has open in none (Claude's desktop app, a background session), whose queued messages still go in
+// order at its next step (#12789); err itself for any other session, such as one no claude has open.
+func (n *Node) paneless(id, code, why string, err error) error {
+	if c, ok := n.outsideClaude(id); ok && outsidePane(c) == "" {
+		return refusal(code, why, nil)
+	}
+	return err
 }
 
 // offersSendNow: the screen shows a queued message with a send-now Persona knows how to press (sendNowOffer,
@@ -68,18 +78,18 @@ var sendNowWait = 3 * time.Second
 // sendNowScrollWait is how long the node waits for a scrolled-up Claude Code to be back at its end.
 var sendNowScrollWait = time.Second
 
-// sendQueuedNow gives the agent what waits in Claude Code's queue now (#6088), with Claude Code's own send-now, the keys
-// its hint names: a command the agent runs moves to the background and goes on, a reply it is writing is asked again
-// with the message (measured on 2.1.319, 2.1.311 and 2.1.321; Esc would stop the command). Pressed only while the
-// screen offers it: that is the queue right now (the transcript says a message was taken about a second late, and a key
-// pressed then would hit a turn that already has it), and an older Claude without it offers nothing.
+// sendQueuedNow gives the agent what waits in its queue now (#6088, #14871), with the CLI's own send-now keys named
+// by its hint (Claude Code's ctrl+enter / ctrl+x ctrl+s, Antigravity CLI's alt+m). Pressed only while the screen offers
+// it: that is the queue right now (the transcript says a message was taken about a second late, and a key pressed then
+// would hit a turn that already has it), and an older CLI without it offers nothing.
 func (n *Node) sendQueuedNow(ctx context.Context, id string) error {
-	if a, ok := n.agent(id); ok && a.Agent != "claude" {
-		return refusal("send_now_unsupported", "only Claude Code can send queued messages now", nil)
+	a, hasAgent := n.agent(id)
+	if hasAgent && a.Agent != "claude" && a.Agent != agyAgent {
+		return refusal("send_now_unsupported", "only Claude Code and Antigravity CLI can send queued messages now", nil)
 	}
 	pane, err := n.paneFor(ctx, id)
 	if err != nil {
-		return err
+		return n.paneless(id, "send_now_unsupported", "its send-now is a key on its own screen, in no pane Persona can press it in", err)
 	}
 	screen, err := n.readPane(ctx, pane, "visible", 80)
 	if err != nil {
@@ -113,6 +123,9 @@ func (n *Node) sendQueuedNow(ctx context.Context, id string) error {
 				return refusal("send_now_unrecognized", "messages are queued but the screen shows no send-now hint Persona knows", nil)
 			}
 		}
+		if hasAgent && a.Agent == agyAgent && n.hasAgyQueued(id, pane) {
+			return refusal("send_now_unrecognized", "messages are queued but the screen shows no send-now hint Persona knows", nil)
+		}
 		return refusal("nothing_queued", "nothing is queued for the agent any more", nil)
 	}
 	if err := n.sendKeys(ctx, pane, keys...); err != nil {
@@ -125,6 +138,10 @@ func (n *Node) sendQueuedNow(ctx context.Context, id string) error {
 		case <-time.After(150 * time.Millisecond):
 		}
 		if s, err := n.readPane(ctx, pane, "visible", 80); err == nil && !offersSendNow(s) {
+			if hasAgent && a.Agent == agyAgent {
+				n.clearAgyQueue(id, pane)
+				n.notifySessionsSoon()
+			}
 			return nil
 		}
 	}

@@ -2,9 +2,7 @@ import MarkdownUI
 import PersonaKit
 import Photos
 import SwiftUI
-#if canImport(UIKit)
 import UIKit
-#endif
 
 /// An image the viewer shows: its bytes, a picture file on a machine (its thumbnail, as big as the node draws one), or
 /// a Feishu image (a hub path or a web URL, through `LarkMedia`). `title` / `detail` are the two lines of the top bar
@@ -12,10 +10,15 @@ import UIKit
 struct ViewerImage: Identifiable, Hashable {
     var payload: ImagePayload?
     var file: FileRef?
+    /// A reply's machine-local image: read in full through ChatImageLoader, not a path-only FileThumbnails entry.
+    var download: FileRef?
     var url: String?
     var title: String?
     var detail: String?
-    var id: String { payload?.identity ?? file.map { "file:" + $0.id } ?? url.map { "url:" + $0 } ?? "" }
+    var id: String {
+        if let download { return "download:" + download.machineRef.path + ":" + (download.cwd ?? "") + ":" + download.path }
+        return payload?.identity ?? file.map { "file:" + $0.id } ?? url.map { "url:" + $0 } ?? ""
+    }
 
     /// Width × height in pixels when known before decoding.
     var pixelSize: String? {
@@ -41,6 +44,7 @@ struct ImageViewer: View {
     /// Pages whose last load gave no picture: they say so, with Retry, instead of spinning on (#182). Not loaded again
     /// until Retry.
     @State private var failed: Set<Int> = []
+    @State private var failureReasons: [Int: String] = [:]
     @State private var chrome = true
     /// How far a pull-down has gone, 0…1: the backdrop and the bars fade with it.
     @State private var pull: CGFloat = 0
@@ -106,10 +110,8 @@ struct ImageViewer: View {
         }
         // The viewer's own pull-down closes it (the system's zoom-transition drag would fight the zoomed picture's pan).
         .interactiveDismissDisabled()
-        #if os(iOS) || os(visionOS)
         .statusBarHidden(!showsChrome)
         .persistentSystemOverlays(showsChrome ? .automatic : .hidden)
-        #endif
         #if DEBUG
         // Screenshots: `-showViewerChromeHidden YES` opens with the bars hidden, `-showViewerInfo YES` with Info open.
         .task {
@@ -122,7 +124,6 @@ struct ImageViewer: View {
     // MARK: Pages
 
     @ViewBuilder private var pager: some View {
-        #if os(iOS) || os(visionOS)
         // UIKit pages the pictures: a page-style TabView stopped between two pages now and then (#5678, ImagePager.swift).
         ImagePagerView(count: images.count, images: decoded, index: $index,
                        onTap: toggleChrome,
@@ -139,26 +140,7 @@ struct ImageViewer: View {
             .task(id: index) {
                 for i in [index, index + 1, index - 1] { await load(i) }
             }
-        #else
-        // No page-style TabView on the Mac: one image at a time, ← / → and the pager's arrows move (ImagePager).
-        ImagePager(count: images.count, index: $index) { i in page(i) }
-        #endif
     }
-
-    #if os(macOS)
-    private func page(_ i: Int) -> some View {
-        Group {
-            if let img = decoded[i] {
-                ZoomableImage(image: img, onTap: toggleChrome)
-            } else if failed.contains(i) {
-                notLoaded(i)
-            } else {
-                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-        }
-        .task(id: i) { await load(i) }
-    }
-    #endif
 
     /// Decodes picture `i` once (a page asking again while it loads waits for nothing).
     private func load(_ i: Int) async {
@@ -176,12 +158,12 @@ struct ImageViewer: View {
     /// failures for the session), would only fail again. The bars stay while it is the page shown (`showsChrome`).
     private func notLoaded(_ i: Int) -> some View {
         let item = images[i]
-        let again = item.payload.map { $0.ref != nil } ?? (item.url != nil)
+        let again = item.download != nil || item.payload.map { $0.ref != nil } ?? (item.url != nil)
         let retry: (title: String, run: () -> Void)? = again
             ? (title: String(localized: "Retry [Components b8784c]"), run: { self.retry(i) }) : nil
-        let message = again ? String(localized: "Couldn't get this image. Tap Retry to try again.")
+        let message = failureReasons[i] ?? (again ? String(localized: "Couldn't get this image. Tap Retry to try again.")
             : item.payload == nil && item.file != nil ? String(localized: "Couldn't get a preview of this image. Use Open in Files in the ⋯ menu.")
-            : String(localized: "This image's data can't be opened")
+            : String(localized: "This image's data can't be opened"))
         return EmptyStateView(symbol: Theme.Icon.error, title: String(localized: "Image didn't load"), message: message, action: retry,
                               tint: Theme.caution)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -191,15 +173,12 @@ struct ImageViewer: View {
     /// Retry on a page that did not load: its load runs again.
     private func retry(_ i: Int) {
         failed.remove(i)
+        failureReasons[i] = nil
         Task { await load(i) }
     }
 
     private func toggleChrome() {
-        #if os(macOS)
-        // A click keeps the bars on the Mac (they hold the only close button besides Esc).
-        #else
         chrome.toggle()
-        #endif
     }
 
     // MARK: Bars
@@ -341,11 +320,7 @@ struct ImageViewer: View {
     // MARK: Actions
 
     static func pixels(_ img: UIImage) -> String {
-        #if canImport(UIKit)
         "\(Int(img.size.width * img.scale))×\(Int(img.size.height * img.scale))"
-        #else
-        "\(Int(img.size.width))×\(Int(img.size.height))"
-        #endif
     }
 
     private func copy(_ img: UIImage) {
@@ -359,16 +334,23 @@ struct ImageViewer: View {
         #if DEBUG // `-showViewerDecodeDelay`: legacy stress; `-showViewerDecodeDuringPan`: an event-driven gate.
         let delay = UserDefaults.standard.double(forKey: "showViewerDecodeDelay")
         if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
-        #if os(iOS) || os(visionOS)
         await ImagePagingProbe.shared.beforeDecode(i)
         #endif
-        #endif
-        let image = await ViewerLoader.image(images[i], side: nil)
-        #if DEBUG && (os(iOS) || os(visionOS))
-        ImagePagingProbe.shared.decoded(i, image: image)
-        #endif
-        decoded[i] = image
-        if image == nil, !Task.isCancelled { failed.insert(i) }
+        do {
+            let image = try await ViewerLoader.image(images[i], side: nil)
+            #if DEBUG && (os(iOS) || os(visionOS))
+            ImagePagingProbe.shared.decoded(i, image: image)
+            #endif
+            decoded[i] = image
+            if image == nil, !Task.isCancelled {
+                failed.insert(i)
+                failureReasons[i] = nil
+            }
+        } catch {
+            guard !Task.isCancelled else { return }
+            failed.insert(i)
+            failureReasons[i] = error.shown
+        }
     }
 
     private func save() async {
@@ -395,11 +377,15 @@ struct ImageViewer: View {
 
 /// Loads what a `ViewerImage` points at. `side`: the long edge to decode to (a thumbnail), nil for the full picture.
 enum ViewerLoader {
-    @MainActor static func image(_ item: ViewerImage, side: CGFloat?) async -> UIImage? {
+    @MainActor static func image(_ item: ViewerImage, side: CGFloat?) async throws -> UIImage? {
         if let p = item.payload { return await ChatImageLoader.image(p, side: side) }
         if let url = item.url {
             if let side { return await LarkMedia.shared.image(url, size: url.hasPrefix("/") ? larkThumbEdge(points: side / 3) : nil, maxPixel: side) }
             return await LarkMedia.shared.image(url, maxPixel: 4096)
+        }
+        if let f = item.download {
+            // Reply-local files use the same complete download and cwd-aware cache as their thumbnails.
+            return try await ChatImageLoader.image(f, side: side)
         }
         if let f = item.file, AppModel.shared.features(f.group).contains("file_thumb"), let api = AppModel.shared.api(f.group) {
             // Only the file is known: the biggest thumbnail the node draws (1024 px); Open in Files has the original.
@@ -460,7 +446,7 @@ private struct ViewerThumb: View {
             .overlay {
                 if let picture { Image(uiImage: picture).resizable().scaledToFill() }
             }
-            .task(id: item.id) { picture = await ViewerLoader.image(item, side: 120) }
+            .task(id: item.id) { picture = try? await ViewerLoader.image(item, side: 120) }
     }
 }
 

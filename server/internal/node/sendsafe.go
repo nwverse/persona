@@ -11,6 +11,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/herdr"
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/screen"
@@ -102,9 +103,14 @@ func (n *Node) promptChanged(id, pane, rev string, d *screen.Dialog) error {
 
 // sendOpts are the optional fields of session.send.
 type sendOpts struct {
-	ClientMsgID string `json:"client_msg_id"`
+	ClientMsgID    string `json:"client_msg_id"`
+	TaskID         string `json:"task_id"`
+	WorkspaceID    string `json:"workspace_id"`
+	WorkspaceLabel string `json:"workspace_label"`
 	// ClearDraft is the draft the user saw in a refusal and chose to clear: cleared only if the box still shows it.
 	ClearDraft string `json:"clear_draft"`
+	// WaitForEffort says the sender can keep the message if the thinking effort is still pending.
+	WaitForEffort bool `json:"wait_for_effort"`
 	// DismissNotice: a notice that Enter only closes («Enter to continue», no options) is closed before the text is
 	// typed. Any other dialog is refused as before.
 	DismissNotice bool `json:"dismiss_notice"`
@@ -127,6 +133,9 @@ type sendOpts struct {
 	// human-input marker and drops any a caller sent). A Claude outside Persona's terminals takes it as the person's
 	// input through its tmux pane, or through Persona's plugin when it has no pane; every other message keeps its inbox.
 	OwnerInput bool `json:"owner_input"`
+	// CompactIfFull: the assistant's agent_send (#11137): a Claude Code or Codex Agent whose context is nearly full when
+	// the message would go in is compacted with its own /compact first (compact_before_send.go).
+	CompactIfFull bool `json:"compact_if_full"`
 	// readBox: a screen that cannot be read refuses (unreadBoxMessage) instead of passing for an empty box. After a
 	// command that may still sit in the box (ultracode.go), not knowing is not enough to type after it.
 	readBox bool
@@ -271,20 +280,27 @@ func (n *Node) checkPaneFor(ctx context.Context, pane, kind string, opts sendOpt
 	return nil
 }
 
+// errTerminalFinished marks a host refusal where the agent's terminal has already ended or disappeared (nothing typed;
+// retrying remotely cannot revive it).
+var errTerminalFinished = errors.New("terminal finished")
+
 // Refusals of a host that takes input on its own terms (herdr-core): it refused the text with nothing typed, or it
 // cannot type text without submitting it.
 const (
-	notDelivered        = "not_delivered"
-	notDeliveredMessage = "电脑上的终端这次没有收下这条消息，什么都没输入：稍后再发。"
-	botmuxDownMessage   = "这个会话在 botmux 里的机器人（%s）这次没有应答（%s），这条消息没有发出去：稍后再发。"
-	shellOnlyMessage    = "这个会话的 Agent 已经退出，终端回到了命令行，这条消息没有发出去（什么都没输入）：在电脑上重新打开它再发。"
-	cannotType          = "cannot_type"
-	cannotTypeMessage   = "电脑上的这个终端只能整条发送（粘贴后回车），不能只输入文字，这次什么都没按：在电脑上回答，或者直接发消息。"
-	unreadBoxMessage    = "读不到电脑上终端的画面，不知道刚才输入的命令是不是还停在输入框里，这条消息没有发出去（什么都没输入）：稍后再发。"
+	notDelivered      = "not_delivered"
+	botmuxDownMessage = "这个会话在 botmux 里的机器人（%s）这次没有应答（%s），这条消息没有发出去：稍后再发。"
+	shellOnlyMessage  = "这个会话的 Agent 已经退出，终端回到了命令行，这条消息没有发出去（什么都没输入）：在电脑上重新打开它再发。"
+	cannotType        = "cannot_type"
+	cannotTypeMessage = "电脑上的这个终端只能整条发送（粘贴后回车），不能只输入文字，这次什么都没按：在电脑上回答，或者直接发消息。"
+	unreadBoxMessage  = "读不到电脑上终端的画面，不知道刚才输入的命令是不是还停在输入框里，这条消息没有发出去（什么都没输入）：稍后再发。"
 )
 
-// deliveryRefusal is the refusal for a host's error that typed nothing (host.ErrNotDelivered), nil for any other.
+// deliveryRefusal is the refusal for a host's error that typed nothing (host.ErrNotDelivered, host.ErrAgentBlocked),
+// nil for any other.
 func deliveryRefusal(err error) error {
+	if errors.Is(err, host.ErrAgentBlocked) {
+		return refusal(screen.DialogOpen, dialogMessage, nil)
+	}
 	if !errors.Is(err, host.ErrNotDelivered) {
 		return nil
 	}
@@ -294,11 +310,14 @@ func deliveryRefusal(err error) error {
 	if errors.Is(err, errShellOnly) {
 		return refusal(notRunning, shellOnlyMessage, nil)
 	}
+	if errors.Is(err, errTerminalFinished) {
+		return refusal(notDelivered, i18n.T(i18n.Default, "rpc-errors.not_delivered_finished"), map[string]any{"reason": "terminal_finished"})
+	}
 	var down *botmuxDownError
 	if errors.As(err, &down) {
 		return refusal(notDelivered, fmt.Sprintf(botmuxDownMessage, down.App, down.Why), nil)
 	}
-	return refusal(notDelivered, notDeliveredMessage, nil)
+	return refusal(notDelivered, i18n.T(i18n.Default, "rpc-errors.not_delivered"), map[string]any{"reason": "terminal_refused"})
 }
 
 // typingRefusal refuses, before anything is pressed, keys that type text into a host that cannot type without
@@ -535,10 +554,10 @@ const (
 // notRunningRefusal refuses, with nothing typed, a send to a session that is not live when the machine's engine
 // cannot start sessions (no host.Launcher) or is Orca, instead of trying to resume it there: when the pane it was last
 // seen in is still there, its agent is not in front (suspended, in the background); otherwise it is gone. nil when the
-// engine can resume it: herdr, and Orca for a Claude session (its own <id>.jsonl; Codex, TRAEX and pi sessions are
+// engine can resume it: herdr, and Orca for a Claude session (its own <id>.jsonl; Codex, TRAE CLI and pi sessions are
 // not resumed in Orca).
 // orcaContinues: Orca can continue session id once its agent is gone — a Claude session (its own <id>.jsonl, not a
-// Codex or TRAEX rollout); Codex, TRAEX and pi sessions are not resumed in Orca (#5548). Send (notRunningRefusal) and
+// Codex or TRAE CLI rollout); Codex, TRAE CLI and pi sessions are not resumed in Orca (#5548). Send (notRunningRefusal) and
 // retire share it, so the task closer never closes an agent a message cannot bring back.
 func (n *Node) orcaContinues(id string) bool { return n.claudeTranscript(id, true) != "" }
 

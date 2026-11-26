@@ -14,7 +14,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// A to-do's relayed writes that keep an operation receipt (#10465, docs/protocol/protocol.md "Operation receipts"):
+// A to-do's relayed writes that keep an operation receipt (#10465, #11084): creating one, including its images;
 // the answer to one of its asks, which a notification action or a phone that lost the reply asks again with the same
 // X-Persona-Op-Id, gets the first reply back instead of a second effect or a 409 for the round it already ended; a
 // message to the to-do on its conversation's route is not typed to its Agent twice. The id is the header
@@ -34,10 +34,16 @@ const (
 	todoAnswerOp = "todo_answer"
 	// todoRouteOp is the receipt kind of a message to a to-do on its conversation's route.
 	todoRouteOp = "todo_route"
+	// todoCreateOp is the receipt kind of creating a to-do with uploaded images.
+	todoCreateOp = "todo_create"
 )
+
+// todoCreateImagesKey marks a create that really carries images, as decided by todoCreateHasImages.
+type todoCreateImagesKey struct{}
 
 // todoReceiptRoutes are the relayed to-do routes with a receipt, and the receipt's kind.
 var todoReceiptRoutes = map[string]string{
+	"POST /api/v1/todos":                              todoCreateOp,
 	"POST /api/v1/todos/{id}/asks/{ask}/answer":       todoAnswerOp,
 	"POST /api/v1/assistant/conversations/{id}/route": todoRouteOp,
 }
@@ -48,15 +54,31 @@ var todoReceiptRoutes = map[string]string{
 // minutes stay.
 const todoRelayWait = 10 * time.Minute
 
+// todoCreateHasImages distinguishes an image create from the legacy create path. An empty or missing array is an
+// image-less create even when the caller supplied an operation ID; malformed JSON takes the ordinary validation route.
+func todoCreateHasImages(r *http.Request) bool {
+	raw, err := io.ReadAll(r.Body)
+	r.Body = io.NopCloser(bytes.NewReader(raw))
+	if err != nil {
+		return false
+	}
+	var in struct {
+		Images []json.RawMessage `json:"images"`
+	}
+	return json.Unmarshal(raw, &in) == nil && len(in.Images) > 0
+}
+
 // todoRelay relays a to-do write with a receipt, as a send, to the manager by names. A message on the conversation
-// route without an op id, which is all an older app sends, goes as it always went.
+// route without an op id, which is all an older app sends, goes as it always went. An image-less create goes through
+// the plain relay too, even with an op id: the new receipt exists only for creates that actually carry images.
 func (h *Hub) todoRelay(kind string, by ownerOf) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id, ok := h.owner(w, r, by)
 		if !ok {
 			return
 		}
-		if kind == todoRouteOp && r.Header.Get("X-Persona-Op-Id") == "" {
+		_, withImages := r.Context().Value(todoCreateImagesKey{}).(bool)
+		if (kind == todoRouteOp || kind == todoCreateOp) && (r.Header.Get("X-Persona-Op-Id") == "" || kind == todoCreateOp && !withImages) {
 			h.forwardHTTP(w, r, id)
 			return
 		}
@@ -97,6 +119,13 @@ func (h *Hub) withTodoReceipt(kind string, next http.HandlerFunc) http.HandlerFu
 		f.state = todoSendOutcome(seen.status, seen.body)
 	})
 	return func(w http.ResponseWriter, r *http.Request) {
+		if kind == todoCreateOp && !todoCreateHasImages(r) {
+			next(w, r)
+			return
+		}
+		if kind == todoCreateOp {
+			r = r.WithContext(context.WithValue(r.Context(), todoCreateImagesKey{}, true))
+		}
 		if r.Header.Get("X-Persona-Op-Id") == "" {
 			next(w, r)
 			return
@@ -133,14 +162,16 @@ func todoOfWrite(kind string, r *http.Request) string {
 	return in.TodoID
 }
 
-// todoSendOutcome is how a to-do write's relay ended, for its final todo_send_state and its receipt alike. Delivered
-// on a 2xx: its Agent took the message, or the manager took the answer (one it recorded for the supervisor too, a 200
-// that says delivered "none"). Failed only when the answer shows nothing was taken: it says delivered "none", it never
+// todoSendOutcome is how a to-do write's relay ended, for its final todo_send_state and its receipt alike. Delivered on
+// a 2xx: its Agent took the message, or the manager took the answer (one it recorded for the supervisor too, a 200 that
+// says delivered "none"). Failed only when the answer shows nothing was taken: it says delivered "none", it never
 // reached a manager (assistant_offline, whose receipt is let go, so the op id may go again), or the request was refused
-// before anything ran (400, 401, 403, 404). Anything else is unknown, since it may have been taken: 502
-// assistant_in_doubt, and a manager's 409 or 502 that says nothing of delivery (the conversation route answers 409 for
-// a send whose result it does not know too). The same op id gets the recorded answer back; only a new one could type
-// it twice.
+// before anything ran (400, 401, 403, 404 that say nothing of delivery). Anything else is unknown, since it may have
+// been taken: 502 assistant_in_doubt, a manager's send_in_doubt (delivered "unknown", or "yes" for words typed before
+// what followed failed), and a 409 or 502 that says nothing of delivery, which is all an older manager says (its
+// conversation route answers 409 for a send whose result it does not know too); a newer one says delivered on every
+// refusal of a to-do's write (spec/fixtures/todo-writes). The same op id gets the recorded answer back; only a new one
+// could type it twice.
 func todoSendOutcome(status int, body []byte) string {
 	var out struct {
 		Delivered string `json:"delivered"`

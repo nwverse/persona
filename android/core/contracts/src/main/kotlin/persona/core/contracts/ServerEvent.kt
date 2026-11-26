@@ -62,7 +62,12 @@ data class Hello(
     @SerialName("min_app_build") val minAppBuild: Int? = null,
     /** Dedicated hub-owned receipt protocol version; an extension's feature string cannot establish trust. */
     @SerialName("message_send_state") val messageSendState: Int? = null,
-) : ServerEvent
+    /** The pictures a message may carry; older hubs use the same documented defaults, not a four-picture cap. */
+    @SerialName("image_limits") val imageLimits: ImageLimitsTable? = null,
+) : ServerEvent {
+    fun imageLimitsFor(agent: String? = null): ImageLimits =
+        (imageLimits ?: ImageLimitsTable.Standard).forAgent(agent)
+}
 
 @KeepGeneratedSerializer
 @Serializable(with = HubMeshSerializer::class)
@@ -101,6 +106,10 @@ data class SessionsEvent(
     @SerialName("machine_id") val machineId: String, val sessions: List<Session> = emptyList(),
 ) : ServerEvent
 
+/** A whole, authoritative row, including an empty Agent queue when undelivered is absent. */
+@Serializable
+data class SessionRowEvent(val session: Session) : ServerEvent
+
 /** Session-scoped hub receipt, not proof of durable delivery to the Agent. */
 @KeepGeneratedSerializer
 @Serializable(with = MessageSendStateEventSerializer::class)
@@ -108,7 +117,7 @@ data class MessageSendStateEvent(
     @SerialName("machine_id") val machineId: String,
     @SerialName("session_id") val sessionId: String,
     @SerialName("client_msg_id") val clientMessageId: String,
-    @WireEnum("processing", "delivered", "failed", "unknown") val state: String,
+    @WireEnum("processing", "delivered", "failed", "unknown", "kept") val state: String,
     @WireTime val at: String,
     /** Stamped by the authenticated socket, never read from or written to JSON. */
     @kotlinx.serialization.Transient val socketGeneration: Long? = null,
@@ -252,6 +261,14 @@ data class HubUpdateEvent(val update: persona.core.contracts.api.HubUpdateStatus
 @Serializable(with = KnowledgeSelectionEventSerializer::class)
 data class KnowledgeSelectionEvent(val manager: String? = null) : ServerEvent
 
+/** One assistant's saved prompts changed. An absent manager names the hub's default assistant. */
+@Serializable
+data class SavedPromptsEvent(val manager: String? = null) : ServerEvent
+
+/** One assistant's starred messages changed. An absent manager names the hub's default assistant. */
+@Serializable
+data class StarredMessagesEvent(val manager: String? = null) : ServerEvent
+
 /**
  * An extension's install, upgrade or uninstall moved on (docs/protocol/protocol.md "Extension install, upgrade and uninstall progress"): only to a client
  * that says `extension_operations`, and not replayed after a reconnect (the page lists them again).
@@ -274,6 +291,13 @@ data class ExtensionAuthEvent(val extension: String, val auth: persona.core.cont
  * payload: the clients read `GET /api/v1/assistant/directions/tree` again (the default manager's alone).
  */
 data object DirectionsEvent : ServerEvent
+
+/**
+ * The assistant's Dashboards places changed (#15017, `assistant_pages`, payload `{}`): a page was kept, pinned,
+ * unpinned, renamed, removed or restored, or the switch in Settings › Assistant was turned. Only from a hub that
+ * says `assistant_pages`; the clients read the extension places list (`GET /api/v1/extensions/-/ui`) again.
+ */
+data object AssistantPagesEvent : ServerEvent
 
 /**
  * Whose an extension push is (`extension_ui`, `extension_operation`, `extension_auth`): the hub puts a top-level
@@ -316,8 +340,11 @@ object ServerEventSerializer : KSerializer<ServerEvent> {
             "sessions" -> input.json.decodeFromJsonElement<SessionsEvent>(obj).let { event ->
                 event.copy(sessions = event.sessions.map { it.copy(machineId = event.machineId) })
             }
+            "session" -> input.json.decodeFromJsonElement<SessionRowEvent>(obj).also {
+                require(it.session.machineId.isNotBlank() && it.session.sessionId.isNotBlank())
+            }
             "message_send_state" -> {
-                require((obj["state"] as? JsonPrimitive)?.content in setOf("processing", "delivered", "failed", "unknown"))
+                require((obj["state"] as? JsonPrimitive)?.content in setOf("processing", "delivered", "failed", "unknown", "kept"))
                 input.json.decodeFromJsonElement<MessageSendStateEvent>(obj).also {
                     require(it.machineId.isNotBlank() && it.sessionId.isNotBlank() && it.clientMessageId.isNotBlank())
                     require(parseTime(it.at) != null)
@@ -361,7 +388,10 @@ object ServerEventSerializer : KSerializer<ServerEvent> {
             "inbox" -> input.json.decodeFromJsonElement<InboxEvent>(obj)
             "todos" -> input.json.decodeFromJsonElement<TodosEvent>(obj)
             "assistant_feed" -> input.json.decodeFromJsonElement<AssistantFeedEvent>(obj)
+            "assistant_saved_prompts" -> input.json.decodeFromJsonElement<SavedPromptsEvent>(obj)
+            "assistant_starred" -> input.json.decodeFromJsonElement<StarredMessagesEvent>(obj)
             "directions" -> DirectionsEvent
+            "assistant_pages" -> AssistantPagesEvent
             "task_plan" -> input.json.decodeFromJsonElement<TaskPlanEvent>(obj)
             "assistant_view" -> input.json.decodeFromJsonElement<AssistantViewEvent>(obj)
             "assistant_view_action" -> input.json.decodeFromJsonElement<AssistantViewActionEvent>(obj)
@@ -389,6 +419,7 @@ object ServerEventSerializer : KSerializer<ServerEvent> {
         val (type, payload) = when (value) {
             is Hello -> "hello" to output.json.encodeToJsonElement(value)
             is ItemsEvent -> "items" to output.json.encodeToJsonElement(value)
+            is SessionRowEvent -> "session" to output.json.encodeToJsonElement(value)
             is SessionsEvent -> "sessions" to output.json.encodeToJsonElement(value)
             is MessageSendStateEvent -> "message_send_state" to output.json.encodeToJsonElement(value)
             is SessionsListEvent -> "sessions_list" to output.json.encodeToJsonElement(value)
@@ -419,7 +450,10 @@ object ServerEventSerializer : KSerializer<ServerEvent> {
             is InboxEvent -> "inbox" to output.json.encodeToJsonElement(value)
             is TodosEvent -> "todos" to output.json.encodeToJsonElement(value)
             is AssistantFeedEvent -> "assistant_feed" to output.json.encodeToJsonElement(value)
+            is SavedPromptsEvent -> "assistant_saved_prompts" to output.json.encodeToJsonElement(value)
+            is StarredMessagesEvent -> "assistant_starred" to output.json.encodeToJsonElement(value)
             DirectionsEvent -> "directions" to JsonObject(emptyMap())
+            AssistantPagesEvent -> "assistant_pages" to JsonObject(emptyMap())
             is TaskPlanEvent -> "task_plan" to output.json.encodeToJsonElement(value)
             is AssistantViewEvent -> "assistant_view" to output.json.encodeToJsonElement(value)
             is AssistantViewActionEvent -> "assistant_view_action" to output.json.encodeToJsonElement(value)
@@ -436,7 +470,18 @@ object ServerEventSerializer : KSerializer<ServerEvent> {
     }
 }
 
-object HelloSerializer : WireSerializer<Hello>(Hello.generatedSerializer())
+object HelloSerializer : WireSerializer<Hello>(Hello.generatedSerializer()) {
+    override fun deserialize(decoder: Decoder): Hello {
+        val input = decoder as? JsonDecoder ?: throw SerializationException("Wire models require JSON")
+        val obj = input.decodeJsonElement() as? JsonObject ?: throw SerializationException("Expected hello object")
+        val limits = parseImageLimitsTable(obj["image_limits"])
+        val withoutLimits = JsonObject(obj.filterKeys { it != "image_limits" })
+        return input.json.decodeFromJsonElement(
+            object : WireSerializer<Hello>(Hello.generatedSerializer()) {},
+            withoutLimits,
+        ).copy(imageLimits = limits)
+    }
+}
 object HubMeshSerializer : WireSerializer<HubMesh>(HubMesh.generatedSerializer())
 object MeshHubSerializer : WireSerializer<MeshHub>(MeshHub.generatedSerializer())
 object ItemsEventSerializer : WireSerializer<ItemsEvent>(ItemsEvent.generatedSerializer())

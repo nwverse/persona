@@ -13,6 +13,7 @@ import { agentId, agentName, providerAgent } from "./agent-kind";
 import { explicitLauncherModel } from "./compatibility";
 import type { AssistantSetup } from "./assistant-models";
 import { ALL_EFFORTS, defaultModel, modelName, modelSupportsFast, typedModelOffered, type AgentModel, type LauncherModels } from "./launcher-models";
+import { launcherSupervisionPolicy } from "./launcher-supervision";
 import { validModelId } from "./model-id";
 import { cleanSetup, type PanelConfig, type PanelModel, type PanelProvider, type PanelState } from "./model-panel";
 import { providerTitle } from "./provider-names";
@@ -45,6 +46,9 @@ export interface AssistantPanelOptions {
   /** The chat already runs on `engine`: a provider of another engine can't take it over (the hub refuses it, 409
    *  `launcher_other_kind`), so it is listed off with why. Not set on the new-conversation page. */
   running?: boolean;
+  /** A capable hub uses a separate, explicitly confirmed conversation switch. */
+  switching?: boolean;
+  supervision?: boolean;
   /** A new conversation may choose an advertised native speed for its first turn. */
   starting?: boolean;
   /** The chat has Codex's Fast speed: the model it runs offers it ("as it runs": on when `fastOn`). */
@@ -79,7 +83,8 @@ export function assistantPanel(setup: AssistantSetup, info: AssistantLaunchers |
       p.models = models;
     }
     // the provider it runs on stays as it is, whatever its kind: it is what the panel says the chat runs
-    if (running && kind !== runs && l.name !== setup.provider) p.unavailable = t("chat-modelpanel.other_engine", { from: agentName(runs), to: agentName(kind) });
+    if (running && !o.switching && kind !== runs && l.name !== setup.provider) p.unavailable = t("chat-modelpanel.other_engine", { from: agentName(runs), to: agentName(kind) });
+    else if (o.supervision && !launcherSupervisionPolicy(l)) p.unavailable = t("chat-modelpanel.supervision_unavailable");
     else if (typed && typedModelOffered(kind, e.list)) p.typable = true;
     return p;
   });
@@ -88,7 +93,7 @@ export function assistantPanel(setup: AssistantSetup, info: AssistantLaunchers |
     const claude = setup.provider === "claude";
     const e = listOf(setup.provider);
     const models = e.list ? e.list.models.map((m) => panelModel(m, engine, Boolean(o.starting))) : setup.model ? [{ id: setup.model, name: modelLabel(setup.model), efforts: [] }] : [];
-    providers.unshift({ id: setup.provider, name: setup.provider, engine, models: claude && !e.list ? null : models, ...(claude ? (e.list ? {} : { loading: true }) : { unavailable: t("chat-modelpill.provider_gone") }) });
+    providers.unshift({ id: setup.provider, name: providerTitle({ name: setup.provider }), engine, models: claude && !e.list ? null : models, ...(claude ? (e.list ? {} : { loading: true }) : { unavailable: t("chat-modelpill.provider_gone") }) });
   }
   // what can't run it, a Paseo provider among them: that provider is its engine, never "paseo" (#8142)
   for (const u of info?.unavailable ?? []) {
@@ -109,14 +114,16 @@ export function assistantPanel(setup: AssistantSetup, info: AssistantLaunchers |
   return { providers, state };
 }
 
-/** What a pick of `config` keeps for the chat: the launcher, the model unless it is the launcher's default entry, the
- *  effort when the setup has one. null: nothing to keep (an ID the hub would refuse, or the setup the chat runs now). */
+/** What a pick of `config` keeps for the chat: the launcher, the model unless it explicitly follows the launcher's
+ *  default ("default", or the sole default row of a locked launcher), and the effort when the setup has one.
+ *  null: nothing to keep (an ID the hub would refuse, or the setup the chat already keeps as `current`). */
 export function assistantPickOf(config: PanelConfig, list: LauncherModels | null | undefined, current: PanelConfig | null): ModelPick | null {
   const row = list?.models.find((m) => m.id === config.model);
   if (!row && !validModelId(config.model)) return null;
   if (current && current.provider === config.provider && current.model === config.model && (current.effort || "") === (config.effort || "")) return null;
   const pick: ModelPick = { launcher: config.provider };
-  if (!row?.default) pick.model = config.model;
+  const launcherDefault = config.model === "default" || Boolean(list?.locked && row?.default);
+  if (!launcherDefault) pick.model = config.model;
   if (config.effort) pick.effort = config.effort;
   return pick;
 }

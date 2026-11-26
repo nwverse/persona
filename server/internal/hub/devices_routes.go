@@ -123,6 +123,14 @@ func (h *Hub) deviceRoutesRelayed(api *http.ServeMux) {
 	for _, pattern := range devicewire.Routes {
 		fullOnly := pattern == linkSwitchRoute // not an app's pairing code standing in for one (link_switch.go)
 		api.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
+			if pattern == devicewire.HeldOutboxRoute && !personSent(r.Context()) {
+				writeErrCode(w, http.StatusForbidden, proto.CodeReadOnly, i18n.Err("outbox.read_only"))
+				return
+			}
+			if (pattern == devicewire.HeldStartsListRoute || pattern == devicewire.HeldStartRetryRoute || pattern == devicewire.HeldStartDeleteRoute) && !personSent(r.Context()) {
+				writeErrCode(w, http.StatusForbidden, proto.CodeReadOnly, i18n.Err("devices-held-starts.read_only"))
+				return
+			}
 			if fullOnly && !mayTrust(principalOf(r.Context())) {
 				writeErrCode(w, http.StatusForbidden, "forbidden", i18n.Err("hub-link_switch.forbidden"))
 				return

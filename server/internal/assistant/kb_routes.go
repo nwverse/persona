@@ -42,6 +42,9 @@ func (s *Service) kbRoutes() {
 	}
 	s.recordingRoutes(engine)
 	s.kbSelectionRoutes()
+	s.taskLessonRoutes(engine)
+	s.kbRecordingRoutes(engine)
+	s.kbRecordingMediaRoutes(engine)
 	s.handle("GET /api/v1/kb/{kind}", func(w http.ResponseWriter, r *http.Request) {
 		e := engine(w, r)
 		kind := r.PathValue("kind")
@@ -91,6 +94,9 @@ func (s *Service) kbRoutes() {
 			return
 		}
 		out := map[string]any{"detail": d}
+		if d.Kind == kb.KindRecording {
+			out["supports_expected_pinned"] = true
+		}
 		// Opened from a search: every place the query is in it, so the page can start there.
 		if q := strings.TrimSpace(r.URL.Query().Get("q")); q != "" {
 			m := e.Matches(d.Kind, d.ID, q, 40)
@@ -160,14 +166,23 @@ func (s *Service) kbRoutes() {
 			return
 		}
 		var u kb.UserUpdate
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&u); err != nil {
+		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&u); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
+		if (u.ProjectMode != nil || u.SourceURLs != nil) && !fullRole(r) {
+			apierr.Write(w, http.StatusForbidden, i18n.Err("assistant-kb_routes.source_settings_forbidden"))
 			return
 		}
 		ignored := kb.UserUnsupported(r.PathValue("kind"), u) // not applied: said, not dropped silently
 		id, err := e.ApplyUser(r.PathValue("kind"), r.PathValue("id"), u)
 		if errors.Is(err, kb.ErrNotFound) {
 			apierr.Write(w, http.StatusNotFound, err)
+			return
+		} else if u.ExpectedPinned != nil && errors.Is(err, kb.ErrConflict) {
+			apierr.Write(w, http.StatusConflict, err)
 			return
 		} else if err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)

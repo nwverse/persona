@@ -3,8 +3,10 @@ package link
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"os"
 	"slices"
@@ -59,8 +61,9 @@ const (
 var errPairedAgain = errors.New("paired again meanwhile")
 
 var (
-	errPin    = newTextError("link-errors.pin_mismatch", nil)
-	errRedial = newTextError("link-errors.manual_reconnect", nil)
+	errPin               = newTextError("link-errors.pin_mismatch", nil)
+	errRedial            = newTextError("link-errors.manual_reconnect", nil)
+	errCredentialRefused = errors.New("hub refused the link credential")
 	// errRepaired: link.json was paired again while the link was up; it reconnects at once with the new pairing.
 	errRepaired = newTextError("link-errors.repaired", nil)
 	// errDirectReady: while connected over SSH without Always, a direct WebSocket connected and passed validation;
@@ -147,6 +150,8 @@ type Options struct {
 	SSHBin           string
 	// directReady observes candidate publication in package tests; production leaves it nil.
 	directReady chan *directHandoff
+	// routeAddrs replaces the local address lookup for route memory tests.
+	routeAddrs func() ([]net.Addr, error)
 	// limiter replaces passive mode's (tests).
 	limiter *authLimiter
 }
@@ -159,6 +164,10 @@ type httpError struct {
 
 func (e *httpError) Error() string { return "HTTP " + strconv.Itoa(e.status) }
 
+func (e *httpError) Is(target error) bool {
+	return target == errCredentialRefused && (e.status == http.StatusUnauthorized || e.status == http.StatusForbidden)
+}
+
 func handshakeError(resp *http.Response, err error) error {
 	if resp == nil || resp.StatusCode == http.StatusSwitchingProtocols {
 		return err
@@ -168,6 +177,27 @@ func handshakeError(resp *http.Response, err error) error {
 		he.retry = time.Duration(s) * time.Second
 	}
 	return he
+}
+
+// retryWait applies rate limits to the backoff and reports whether they allow probes. A 429 anywhere in the error
+// tree disables probes, and the longest Retry-After from those responses can extend the wait.
+func retryWait(err error, wait time.Duration) (time.Duration, bool) {
+	switch e := err.(type) {
+	case *httpError:
+		if e.status == http.StatusTooManyRequests {
+			return max(wait, e.retry), false
+		}
+	case interface{ Unwrap() []error }:
+		probe := true
+		for _, child := range e.Unwrap() {
+			delay, childProbe := retryWait(child, wait)
+			wait, probe = delay, probe && childProbe
+		}
+		return wait, probe
+	case interface{ Unwrap() error }:
+		return retryWait(e.Unwrap(), wait)
+	}
+	return wait, true
 }
 
 // backoff: exponential from 1 s to a minute, each wait randomized down to half so links that broke together do not
@@ -235,7 +265,7 @@ func Run(ctx context.Context, o Options) error {
 		if mode == ModePassive {
 			runPassive(mctx, o, rep)
 		} else {
-			runActive(mctx, o, rep)
+			runActive(mctx, o, rep, backoff{})
 		}
 		cancel()
 		if ctx.Err() == nil {
@@ -283,19 +313,18 @@ func watchMode(ctx context.Context, path, mode string, cancel context.CancelFunc
 	}
 }
 
-// runActive keeps the link to the hub up until ctx ends.
-func runActive(ctx context.Context, o Options, rep *reporter) {
+// runActive keeps the link to the hub up until ctx ends, starting with backoff b.
+func runActive(ctx context.Context, o Options, rep *reporter, b backoff) {
 	rep.switchTo(ModeActive)
-	var b backoff
-	// last is the kind of the link that worked last: a proxy or SSH route goes first next time (routeOrder). A new
-	// credential, tunnel or proxy setting starts over from direct.
-	var last, lastToken, lastProxy string
-	var lastSSHConfig *SSH
+	memory := routeMemory{path: o.Path, addresses: o.routeAddrs}
+	if memory.addresses == nil {
+		memory.addresses = net.InterfaceAddrs
+	}
 	for ctx.Err() == nil {
 		was := stampOf(o.Path) // a change from here on (paired again, an address added) cuts the wait below short
 		c, err := Load(o.Path)
 		if err != nil {
-			last, lastToken, lastProxy, lastSSHConfig = "", "", "", nil
+			memory.clear()
 			if errors.Is(err, os.ErrNotExist) {
 				rep.set(func(s *Status) { *s = Status{State: "unpaired"} })
 			} else {
@@ -304,15 +333,11 @@ func runActive(ctx context.Context, o Options, rep *reporter) {
 			o.wait(ctx, time.Hour, was)
 			continue
 		}
-		if c.Token != lastToken || !c.SSH.Equal(lastSSHConfig) || c.Proxy != lastProxy {
-			last = ""
-			lastToken, lastProxy = c.Token, c.Proxy
-			lastSSHConfig = cloneSSH(c.SSH)
-		}
 		rep.set(func(s *Status) {
 			*s = Status{State: "connecting", Machine: c.Machine, HubName: c.HubName, MachineName: c.MachineName, Trust: trustOf(c),
 				Endpoints: ranked(c.Endpoints), SSH: cloneSSH(c.SSH)}
 		})
+		last := memory.beforeDial(c)
 		l, err := dialActive(ctx, c, o.SSHBin, last)
 		var end error
 		state := "waiting"
@@ -320,12 +345,11 @@ func runActive(ctx context.Context, o Options, rep *reporter) {
 			end = err
 		} else {
 			for {
-				last = l.ep.Kind
 				start := time.Now()
 				rep.links++
 				l.gen = rep.links
 				var handoff *directHandoff
-				handoff, end = l.serve(ctx, c, o, rep)
+				handoff, end = l.serve(ctx, c, o, rep, &memory)
 				if time.Since(start) > time.Minute {
 					b = backoff{}
 				}
@@ -341,14 +365,15 @@ func runActive(ctx context.Context, o Options, rep *reporter) {
 				// Serve the exact socket the SSH probe connected, under the configuration that validated it. A redial
 				// here would both lose that ownership and reintroduce the gap that dropped working SSH links.
 				l, c = handoff.candidate, handoff.config
-				last = ""
+				memory.clear()
 				b = backoff{}
 			}
 			// The link writes link.json itself (the hub's addresses and names): from here only a new credential or tunnel
 			// change, written while the link was up, counts as a change since it was read. The stamp is taken before the
 			// read, so a change written in between still counts.
 			now := stampOf(o.Path)
-			if f, err := Read(o.Path); err != nil || (f.Token == c.Token && f.SSH.Equal(c.SSH) && f.Proxy == c.Proxy) {
+			if f, err := Read(o.Path); err != nil || (f.Token == c.Token && f.SSH.Equal(c.SSH) && f.Proxy == c.Proxy &&
+				f.ProxyAlways == c.ProxyAlways) {
 				was = now
 			}
 		}
@@ -356,24 +381,27 @@ func runActive(ctx context.Context, o Options, rep *reporter) {
 			return
 		}
 		wait := b.next()
-		var he *httpError
+		rateWait, canProbe := retryWait(end, wait)
+		var reach func(context.Context) bool
 		switch {
 		case errors.Is(end, errDirectReady):
-			last = ""
+			memory.clear()
 			b, wait = backoff{}, 0
 		case errors.Is(end, errRedial), errors.Is(end, errRepaired):
 			b, wait = backoff{}, 0
-		case errors.As(end, &he) && (he.status == http.StatusUnauthorized || he.status == http.StatusForbidden):
+		case errors.Is(end, errCredentialRefused):
 			state, wait = "refused", refusedWait
 			end = newTextError("link-errors.credential_refused", nil)
-		case errors.As(end, &he) && he.status == http.StatusTooManyRequests:
-			wait = max(wait, he.retry)
+		case !canProbe:
+			wait = rateWait
 		case websocket.CloseStatus(end) == CloseReplaced:
 			wait = replaceWait
 			end = newTextError("link-errors.replaced", nil)
 		case websocket.CloseStatus(end) == CloseRevoked:
 			state, wait = "refused", refusedWait
 			end = newTextError("link-errors.credential_revoked", nil)
+		case wait > probeOver:
+			reach = hubProbe(c)
 		}
 		retry := time.Now().Add(wait)
 		o.Logf("link: %s; next attempt in %s", ErrorText(i18n.En, end), wait.Round(time.Second))
@@ -381,14 +409,14 @@ func runActive(ctx context.Context, o Options, rep *reporter) {
 			*s = Status{State: state, Machine: c.Machine, HubName: c.HubName, MachineName: c.MachineName, Error: summary(end),
 				SSHError: sshStatusOf(end), Retry: &retry, Trust: trustOf(c), Endpoints: ranked(c.Endpoints), SSH: cloneSSH(c.SSH)}
 		})
-		o.wait(ctx, wait, was)
+		o.waitWithProbe(ctx, wait, was, reach)
 	}
 }
 
 // dialActive dials c's hub over its routes in routeOrder. A pinned hub that refused the credential, on whichever
 // route, ends the attempt: no other route can do better.
 func dialActive(ctx context.Context, c *Config, sshBin string, last string) (*link, error) {
-	p, eps, perr := proxied(c)
+	p, eps, perr := proxyRoute(c)
 	return tryRoutes(routeOrder(c, p != nil || perr != nil, last), func(kind string) (*link, error) {
 		switch kind {
 		case KindSSH:
@@ -401,17 +429,22 @@ func dialActive(ctx context.Context, c *Config, sshBin string, last string) (*li
 		}
 		return dial(ctx, c)
 	}, func(err error) bool {
-		var he *httpError
-		return ctx.Err() != nil || (c.FP != "" && errors.As(err, &he) &&
-			(he.status == http.StatusUnauthorized || he.status == http.StatusForbidden))
+		return ctx.Err() != nil || (c.FP != "" && errors.Is(err, errCredentialRefused))
 	})
 }
 
 // routeOrder is the order c's routes are tried in (docs/operations/link.md "Outbound proxy"): direct candidates
 // (""), the outbound proxy when there is one, the SSH tunnel when there is one; last, the kind of the link that worked
-// last, first when it is one of these. Always use SSH, or a tunnel and no candidates, leaves the tunnel alone.
+// last, first when it is one of these. Always use SSH leaves the tunnel alone; else proxy-only mode
+// (Config.ProxyAlways) leaves the proxy alone, whatever last was; else a tunnel and no candidates leaves the tunnel.
 func routeOrder(c *Config, proxy bool, last string) []string {
-	if c.SSH != nil && (c.SSH.Always || len(c.Endpoints) == 0) {
+	if c.SSH != nil && c.SSH.Always {
+		return []string{KindSSH}
+	}
+	if c.ProxyAlways {
+		return []string{KindProxy}
+	}
+	if c.SSH != nil && len(c.Endpoints) == 0 {
 		return []string{KindSSH}
 	}
 	order := []string{""}
@@ -451,7 +484,13 @@ func tryRoutes[T any](order []string, try func(kind string) (T, error), stop fun
 // wait sleeps up to d, less if the network changed, a reconnect was asked for or link.json changed (paired again,
 // an address added) since was: the stamp (stampOf) from when the attempt read it, so a change that landed during the
 // attempt (a new credential written while the hub refused the old one) ends the wait at its first poll.
-func (o Options) wait(ctx context.Context, d time.Duration, was time.Time) {
+func (o Options) wait(ctx context.Context, d time.Duration, was fileStamp) {
+	o.waitWithProbe(ctx, d, was, nil)
+}
+
+// waitWithProbe also ends a long wait when reach reports that the hub has gone from unreachable at the start of
+// the wait to reachable. A nil reach leaves the wake conditions of wait in place.
+func (o Options) waitWithProbe(ctx context.Context, d time.Duration, was fileStamp, reach func(context.Context) bool) {
 	start, reason := time.Now(), "timer"
 	defer func() {
 		if o.Logf != nil {
@@ -460,8 +499,14 @@ func (o Options) wait(ctx context.Context, d time.Duration, was time.Time) {
 	}()
 	timer := time.NewTimer(d)
 	defer timer.Stop()
-	poll := time.NewTicker(cmp.Or(o.PairCheck, 2*time.Second))
+	poll := time.NewTicker(cmp.Or(o.PairCheck, pairCheck))
 	defer poll.Stop()
+	var recovered <-chan struct{}
+	if reach != nil && d > probeOver {
+		probeCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		recovered = probeRecovery(probeCtx, reach)
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -475,6 +520,12 @@ func (o Options) wait(ctx context.Context, d time.Duration, was time.Time) {
 		case <-o.Redial:
 			reason = "redial"
 			return
+		case <-recovered:
+			reason = "hub_reachable"
+			if o.Logf != nil {
+				o.Logf("link: the hub answers again; trying now")
+			}
+			return
 		case <-poll.C:
 			if !stampOf(o.Path).Equal(was) {
 				reason = "config_changed"
@@ -484,10 +535,28 @@ func (o Options) wait(ctx context.Context, d time.Duration, was time.Time) {
 	}
 }
 
-// stampOf is when link.json at path was last written (zero when there is none): a different stamp means it changed.
-func stampOf(path string) time.Time {
-	if fi, err := os.Stat(path); err == nil {
-		return fi.ModTime()
+// fileStamp is link.json as of one look: when it was last written and what it held (the zero stamp when there is
+// none). A different stamp means it changed.
+type fileStamp struct {
+	mod time.Time
+	sum [sha256.Size]byte
+}
+
+// Equal: the file was not written in between, or written back the same.
+func (s fileStamp) Equal(o fileStamp) bool { return s == o }
+
+// stampOf is link.json at path as of now. The modification time alone missed a change: two writes within the file
+// system's timestamp granularity (a pairing, then a mode switch or a new credential a moment later) leave one time,
+// and a watcher that had looked between them waited on as if nothing had happened. The file is a few kilobytes,
+// read about once a second.
+func stampOf(path string) fileStamp {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return fileStamp{}
 	}
-	return time.Time{}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return fileStamp{mod: fi.ModTime()}
+	}
+	return fileStamp{mod: fi.ModTime(), sum: sha256.Sum256(b)}
 }

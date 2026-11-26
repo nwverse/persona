@@ -335,6 +335,20 @@ func StripAssistantFields(v *View) []string {
 					e.Nodes[k].Action = nil
 				}
 			}
+			// and so do a scene's pins
+			for k := range e.Pins {
+				if AssistantOnlyAction(e.Pins[k].Action) {
+					drop("assistant_action")
+					e.Pins[k].Action = nil
+				}
+			}
+			// and a map's markers
+			for k := range e.Markers {
+				if AssistantOnlyAction(e.Markers[k].Action) {
+					drop("assistant_action")
+					e.Markers[k].Action = nil
+				}
+			}
 			items = append(items, e)
 		}
 		s.Items = items

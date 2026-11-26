@@ -1,7 +1,9 @@
 package assistantwire
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"iter"
 	"strings"
 	"time"
 
@@ -26,6 +28,7 @@ var InboxRoutes = []string{
 	"POST /api/v1/inbox/{id}/done",
 	"POST /api/v1/inbox/{id}/draft",
 	"POST /api/v1/inbox/{id}/reply",
+	"POST /api/v1/inbox/{id}/retry",
 	"POST /api/v1/inbox/{id}/suggestion",
 	"POST /api/v1/inbox/{id}/handoff",
 	"POST /api/v1/inbox/{id}/task-link/recheck",
@@ -170,6 +173,17 @@ const (
 	CodeInboxSendFailed = "inbox_send_failed"
 	// CodeInboxSendUnrecorded: the once-only send record (sent_messages) could not be written, so nothing was tried.
 	CodeInboxSendUnrecorded = "inbox_send_unrecorded"
+	// CodeInboxReplyPolicyBlocked: inbox.reply_policy vetoed sending this reply suggestion; nothing was sent.
+	CodeInboxReplyPolicyBlocked = "inbox_reply_policy_blocked"
+)
+
+// Reply policy routes (inbox.reply_policy, docs/assistant/inbox.md "Reply policy").
+// The classifier outputs only a category; the server maps that category to one of these routes.
+const (
+	ReplyRouteOwnerDraft = "owner_draft"
+	ReplyRouteBot        = "bot"
+	ReplyRouteOwnerOnly  = "owner_only"
+	ReplyRouteNoReply    = "no_reply"
 )
 
 // Rounds of InboxRound.Round.
@@ -242,13 +256,11 @@ const (
 	ReadLoginRefused = "login_refused"
 )
 
-// InboxMailRead is a round's mail: each account's latest inbox page (an account that could not be read is left out).
+// InboxMailRead contains the latest pages from each account's eligible mailboxes.
 type InboxMailRead struct {
 	Accounts []InboxMailAccount `json:"accounts"`
-	// Failed are the accounts this round could not read, with why (#1849). They are still left out of Accounts, so a
-	// manager that does not know this field reads the round as before; one an earlier round read while the manager
-	// was away is in Accounts too, with what that round read (mergeRounds). Absent when the sender does not know it:
-	// no account is said to have failed.
+	// Failed names accounts with a discovery or page read error (#1849). Accounts may also include their successful
+	// pages and pages held while the manager was away (mergeRounds).
 	Failed []InboxMailFailed `json:"failed,omitempty"`
 }
 
@@ -262,9 +274,42 @@ type InboxMailFailed struct {
 
 // InboxMailAccount is one mail account and its latest messages.
 type InboxMailAccount struct {
-	ID       string             `json:"id"`
-	Email    string             `json:"email"`
-	Messages []InboxMailSummary `json:"messages"`
+	ID               string             `json:"id"`
+	Email            string             `json:"email"`
+	Messages         []InboxMailSummary `json:"messages"`
+	UIDValidity      uint32             `json:"uid_validity,omitempty"`
+	InboxUnavailable bool               `json:"inbox_unavailable,omitempty"`
+	Folders          []InboxMailFolder  `json:"folders,omitempty"` // Other successfully read mailboxes, including their empty pages.
+}
+
+// InboxMailFolder is a single selectable IMAP folder and its most recent page.
+type InboxMailFolder struct {
+	Name        string             `json:"name"`
+	UIDValidity uint32             `json:"uid_validity,omitempty"`
+	Messages    []InboxMailSummary `json:"messages"`
+}
+
+// Mailboxes yields the successful pages, including empty ones. Older hubs send only Messages.
+func (a InboxMailAccount) Mailboxes() iter.Seq[InboxMailFolder] {
+	return func(yield func(InboxMailFolder) bool) {
+		if !a.InboxUnavailable && !yield(InboxMailFolder{Name: "INBOX", UIDValidity: a.UIDValidity, Messages: a.Messages}) {
+			return
+		}
+		for _, f := range a.Folders {
+			if !yield(f) {
+				return
+			}
+		}
+	}
+}
+
+// MailFolderKey preserves the account-only identity of historical INBOX data. Other IMAP names are case-sensitive
+// and may contain the delimiters used in an Inbox item ID or an archive cursor.
+func MailFolderKey(account, mailbox string) string {
+	if mailbox == "" || strings.EqualFold(mailbox, "INBOX") {
+		return account
+	}
+	return account + ":m:" + base64.RawURLEncoding.EncodeToString([]byte(mailbox))
 }
 
 // MailAddress is a mail's sender or recipient (mail.Address).
@@ -329,9 +374,11 @@ type InboxConfig struct {
 	// Rules are the user's own triage rules (setting inbox.rules, else manager.json's inbox.rules); AgentRules guide the
 	// judge linking a Needs you item to one of the user's tasks (inbox.agent_rules); what the AI twin takes on is set
 	// by inbox policies (docs/assistant/inbox.md "Policies").
-	Rules      string           `json:"rules,omitempty"`
-	AgentRules string           `json:"agent_rules,omitempty"`
-	Agent      InboxAgentConfig `json:"agent"`
+	Rules       string                  `json:"rules,omitempty"`
+	AgentRules  string                  `json:"agent_rules,omitempty"`
+	Agent       InboxAgentConfig        `json:"agent"`
+	Visibility  *InboxVisibilityConfig  `json:"visibility,omitempty"`
+	ReplyPolicy *InboxReplyPolicyConfig `json:"reply_policy,omitempty"`
 	// LarkAccount is the default Feishu account, the gateway account Feishu items came to unless they say another: the
 	// Feishu extension's default (GET accounts of its messaging source), else hub.json's lark.account (#5098).
 	LarkAccount int `json:"lark_account,omitempty"`
@@ -340,6 +387,31 @@ type InboxConfig struct {
 	// Extensions are the connectors a plugin provides (installed, or hub.json's), whether or not a round read them:
 	// their items have no fallback tier (a model sorts them, or they wait), from the manager's start on.
 	Extensions []string `json:"extensions,omitempty"`
+}
+
+// InboxVisibilityConfig quarantines matching stored items from AI handling. Explicit chat ids work for groups and
+// direct chats; DirectChats also excludes every direct chat. Empty controls preserve the legacy behavior.
+type InboxVisibilityConfig struct {
+	Sources     []string `json:"sources,omitempty"`
+	Chats       []string `json:"chats,omitempty"`
+	DirectChats bool     `json:"direct_chats,omitempty"`
+}
+
+// AppliesTo scopes the boundary to its configured sources. The empty source list keeps the two Lark connectors'
+// legacy shorthand; naming sources never implicitly selects any other connector.
+func (c *InboxVisibilityConfig) AppliesTo(source string) bool {
+	if c == nil {
+		return false
+	}
+	if len(c.Sources) == 0 {
+		return source == "lark" || source == "larkcli"
+	}
+	for _, candidate := range c.Sources {
+		if candidate == source {
+			return true
+		}
+	}
+	return false
 }
 
 // InboxAgentConfig is manager.json's inbox.agent: the AI twin (docs/assistant/inbox.md).
@@ -355,10 +427,38 @@ type InboxAgentConfig struct {
 	// MaxAgeHours: items whose newest message is older are not handed over (default 24), so turning this on does
 	// not start an agent for every old item.
 	MaxAgeHours int `json:"max_age_hours,omitempty"`
+	// ReadProfile "source_only" limits model handling to the current item and explicitly allowlisted read-only
+	// connector tools. The empty profile preserves the legacy read-only investigation tools and knowledge-base context.
+	ReadProfile    string   `json:"read_profile,omitempty"`
+	ConnectorTools []string `json:"connector_tools,omitempty"`
 	// Rules is manager.json's inbox.agent.rules: the file default for the settings key `inbox.agent_rules`
 	// (extmgr/self_settings.go inboxAgentRules). The database value wins once set; without either, what the twin takes on
 	// is set by inbox policies. Kept so older hub.json files still parse.
 	Rules string `json:"rules,omitempty"`
+}
+
+// InboxReplyPolicyConfig is manager.json's opt-in inbox.reply_policy configuration.
+// Default is disabled (Enabled: false), preserving existing queue, suggestion, and confirmation behavior.
+type InboxReplyPolicyConfig struct {
+	Enabled bool `json:"enabled,omitempty"`
+	// Revision identifies the policy revision. Combined with a canonical digest of the normalized policy so any
+	// policy change invalidates older snapshots.
+	Revision string `json:"revision,omitempty"`
+	// Categories maps classifier-produced category names to server routes (owner_draft, bot, owner_only, no_reply).
+	// When omitted while Enabled is true, the built-in default category table is used.
+	Categories map[string]string `json:"categories,omitempty"`
+	// Rules is optional extra classification guidance; it never grants or overrides server routes.
+	Rules string `json:"rules,omitempty"`
+	// TimeoutSeconds bounds each classification call (default 30 seconds).
+	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
+	// Sources limits either policy schema to these sources; an empty list applies it to every source.
+	Sources []string `json:"sources,omitempty"`
+	// RequireIndependentReview requires a second classifier to confirm an owner-draft category.
+	RequireIndependentReview bool `json:"require_independent_review,omitempty"`
+	// UnknownMode and Routes retain the original Task 2 schema. Their presence selects legacy routing; Categories,
+	// Rules and TimeoutSeconds belong to the compiled schema and are never interpreted through legacy forced routes.
+	UnknownMode string            `json:"unknown_mode,omitempty"`
+	Routes      map[string]string `json:"routes,omitempty"`
 }
 
 // InboxRepoMutes is MethodInboxRepoMutes's params.
@@ -403,7 +503,8 @@ type InboxMute struct {
 }
 
 // InboxNeedsYou is EventInboxNeedsYou's params: how many open items are in "Needs you" (status action; the ones not
-// triaged yet count), the connectors' among them: the number the apps' Inbox badge shows of this manager's list.
+// triaged yet count), the connectors' among them, read or not: this manager's inbox part of the switchers' badges. The
+// apps' Inbox badge is not this number: it counts only the unread ones.
 type InboxNeedsYou struct {
 	Count int `json:"count"`
 }

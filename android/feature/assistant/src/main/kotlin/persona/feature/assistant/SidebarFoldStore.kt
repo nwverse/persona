@@ -18,6 +18,24 @@ internal class SidebarFoldStore(context: Context) {
         prefs.edit().putBoolean(KEY_RECENT_FOLDED, folded).apply()
     }
 
+    val pagesFolded: Boolean get() = prefs.getBoolean("pages.folded", false)
+    val chatsFolded: Boolean get() = prefs.getBoolean("chats.folded", false)
+
+    fun setPagesFolded(folded: Boolean) {
+        prefs.edit().putBoolean("pages.folded", folded).apply()
+    }
+
+    fun setChatsFolded(folded: Boolean) {
+        prefs.edit().putBoolean("chats.folded", folded).apply()
+    }
+
+    /** The Spaces section (#13500), open by default. */
+    val spacesFolded: Boolean get() = prefs.getBoolean("spaces.folded", false)
+
+    fun setSpacesFolded(folded: Boolean) {
+        prefs.edit().putBoolean("spaces.folded", folded).apply()
+    }
+
     companion object {
         const val PREFS_NAME = "assistant-sidebar-folds"
         const val KEY_RECENT_FOLDED = "recent.folded"

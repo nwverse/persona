@@ -2,6 +2,7 @@
 import hashlib
 import hmac
 import importlib.util
+import io
 from datetime import datetime, timezone
 import json
 import os
@@ -13,7 +14,7 @@ import tempfile
 import threading
 import time
 import unittest
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager, nullcontext, redirect_stderr
 from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
@@ -68,12 +69,8 @@ class WatcherTests(unittest.TestCase):
         self.github = patch.object(pr_watch, "run", return_value=subprocess.CompletedProcess([], 0, "{}", ""))
         self.github = self.github.start()
         self.addCleanup(self.github.stop)
-        # These unit tests do not perform real GitHub calls. Keep the three
-        # read-only activity APIs empty unless a stale-specific test supplies
-        # its own observations; the production parser still fails on bad data.
-        self.activity = patch.object(self.watcher, "stale_progress_at", side_effect=lambda repo, number, snapshot, old, **kwargs: pr_watch_common.progress_timestamp(snapshot, [], [], []))
-        self.activity.start()
-        self.addCleanup(self.activity.stop)
+        # Stale tests provide their own activity observations. Do not replace
+        # the whole activity method here: that would hide the reader under test.
 
     def test_stale_metadata_does_not_erase_completed_exact_head_evidence(self):
         old_base = "d" * 40
@@ -92,35 +89,42 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(after["findings"], [finding])
         self.assertEqual(after["repair_rounds"], 2)
 
-    def test_snapshot_resolves_live_base_instead_of_recorded_base_oid(self):
+    def test_snapshot_resolves_live_base_in_one_graphql_request(self):
         # GitHub's baseRefOid is the base recorded at the PR's last sync, not
         # the branch tip that the watcher fetches (#10568).
         fields = dict(pr(), baseRefOid=SHA_A)
-        with patch.object(pr_watch_common, "run", side_effect=[
-                subprocess.CompletedProcess([], 0, json.dumps(fields), ""),
-                subprocess.CompletedProcess([], 0, SHA_BASE + "\n", "")]) as execute:
+        fields["baseRefName"] = "develop"
+        response = {"data": {"repository": {"pullRequest": dict(fields, baseRef={"target": {"oid": SHA_BASE}})}}}
+        with patch.object(pr_watch_common, "run", return_value=subprocess.CompletedProcess(
+                [], 0, json.dumps(response), "")) as execute:
             result = pr_watch_common.pr_snapshot("example/one", 7)
         self.assertEqual(result["baseRefOid"], SHA_BASE)
-        view, base = (call.args[0] for call in execute.call_args_list)
-        self.assertEqual(view[:3], ["gh", "pr", "view"])
-        self.assertNotIn("baseRefOid", view[-1])
-        self.assertEqual(base[:3], ["gh", "api", "repos/example/one/commits/main"])
+        execute.assert_called_once()
+        argv = execute.call_args.args[0]
+        self.assertEqual(argv[:2], ["gh", "api"])
+        self.assertEqual(argv[2:], ["graphql", "--input", "-"])
+        payload = json.loads(execute.call_args.kwargs["input_text"])
+        query = payload["query"]
+        self.assertIn("baseRef { target { oid } }", query)
+        self.assertNotIn("baseRefOid", query)
+        self.assertEqual(payload["variables"],
+                         {"owner": "example", "name": "one", "number": 7})
+        self.assertEqual(result["baseRefName"], "develop")
+
+    def test_snapshot_rejects_missing_or_invalid_live_base(self):
+        fields = dict(pr(), baseRefOid=None)
+        for base in (None, "", "0" * 40, "not-a-sha"):
+            with self.subTest(base=base):
+                response = {"data": {"repository": {"pullRequest": dict(fields, baseRef={"target": {"oid": base}})}}}
+                with patch.object(pr_watch_common, "run", return_value=subprocess.CompletedProcess(
+                        [], 0, json.dumps(response), "")):
+                    with self.assertRaises(pr_watch_common.WatchError):
+                        pr_watch_common.pr_snapshot("example/one", 7)
 
     def test_snapshot_rejects_gh_errors(self):
         with patch.object(pr_watch_common, "run", return_value=subprocess.CompletedProcess([], 1, "", "network unavailable")):
             with self.assertRaises(pr_watch_common.WatchError):
                 pr_watch_common.pr_snapshot("example/one", 7)
-
-    def test_snapshot_rejects_invalid_live_base(self):
-        fields = pr()
-        fields.pop("baseRefOid")
-        for base in ("", "0" * 40, "not-a-sha"):
-            with self.subTest(base=base), \
-                    patch.object(pr_watch_common, "run", side_effect=[
-                        subprocess.CompletedProcess([], 0, json.dumps(fields), ""),
-                        subprocess.CompletedProcess([], 0, base + "\n", "")]):
-                with self.assertRaises(pr_watch_common.WatchError):
-                    pr_watch_common.pr_snapshot("example/one", 7)
 
     def test_existing_continuation_contains_the_fork_head(self):
         # Separate watchers keep private state; GitHub is the shared record (#10881).
@@ -209,7 +213,7 @@ class WatcherTests(unittest.TestCase):
 
     def test_same_head_replacement_push_refreshes_stale_activity(self):
         snapshot = pr(createdAt="2026-11-01T00:00:00Z", updatedAt="2026-11-16T00:00:00Z")
-        with patch.object(pr_watch, "gh_json", side_effect=[[], [], []]):
+        with patch.object(pr_watch.Watcher, "stale_activity", return_value={"comments": [], "reviews": [], "inline": []}):
             progress = pr_watch.Watcher.stale_progress_at(self.watcher, "example/one", 7, snapshot,
                                                          {"stale_head": SHA_A, "stale_updated_at": pr_watch_common.github_time("2026-11-15T00:00:00Z")})
         self.assertEqual(progress, pr_watch_common.github_time("2026-11-01T00:00:00Z"))
@@ -300,20 +304,14 @@ class WatcherTests(unittest.TestCase):
 
     def test_stale_multiple_activity_records_use_real_queries_and_ignore_only_own_notice(self):
         config = dict(self.watcher.config["repositories"][0], close_stale=True)
-        snapshot = pr(createdAt="2026-11-01T00:00:00.123Z")
+        snapshot = pr(createdAt="2026-11-01T00:00:00.123Z", updatedAt="2026-11-01T00:00:00.123Z")
         old = pr_watch_common.github_time("2026-11-01T00:00:00.123Z")
         now = old + 8 * 86400
-        comments = [{"createdAt": "2026-11-01T01:00:00Z", "body": "old review"},
-                    {"createdAt": "2026-11-02T01:00:00.456Z", "body": "another old comment"}]
         current = dict(snapshot)
         calls = []
-        def activity(argv, **kwargs):
-            calls.append(argv)
-            if "issues/7/comments" in argv[1]:
-                return comments + ([{"createdAt": "2026-11-08T00:00:00Z", "body": self.comments[-1]}] if len(self.comments) else [])
-            if "pulls/7/reviews" in argv[1]:
-                return [{"createdAt": "2026-11-01T02:00:00Z"}]
-            return [{"committedDate": "2026-11-01T03:00:00Z"}, {"committedDate": "2026-11-02T03:00:00Z"}]
+        def activity(repo, number, snapshot, old, **kwargs):
+            calls.append((repo, number))
+            return pr_watch_common.github_time(snapshot["createdAt"]) + (0 if kwargs.get("ignore_notice") else 1)
         def github(argv, **kwargs):
             if argv[1:3] == ["pr", "edit"]:
                 return subprocess.CompletedProcess(argv, 0, "", "")
@@ -321,30 +319,228 @@ class WatcherTests(unittest.TestCase):
                 current["state"] = "CLOSED"
                 return subprocess.CompletedProcess(argv, 0, "", "")
             self.fail(argv)
-        with patch.object(pr_watch, "gh_json", side_effect=activity), \
+        with patch.object(self.watcher, "stale_progress_at", side_effect=activity), \
                 patch.object(pr_watch, "pr_snapshot", side_effect=lambda *args: dict(current)), \
                 patch.object(pr_watch, "run", side_effect=github), \
                 patch.object(pr_watch.time, "time", return_value=now):
             self.assertTrue(self.watcher.mark_and_close_stale(config, snapshot, {}))
         self.assertEqual(current["state"], "CLOSED")
-        self.assertTrue(all(".[] |" in call[-1] for call in calls))
+        self.assertEqual(len(calls), 2)
         self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "stale_closed")
 
+    def test_stale_activity_graphql_paginates_every_collection(self):
+        def connection(nodes, next_cursor):
+            return {"nodes": nodes, "pageInfo": {"hasNextPage": next_cursor is not None,
+                                                   "endCursor": next_cursor}}
+        pages = {
+            "comments": {
+                None: connection([{"createdAt": "2026-11-01T01:00:00Z", "body": "one"}], "comments-1"),
+                "comments-1": connection([{"createdAt": "2026-11-02T01:00:00Z", "body": "two"}], None),
+            },
+            "reviews": {
+                None: connection([{"createdAt": "2026-11-01T02:00:00Z"}], "reviews-1"),
+                "reviews-1": connection([{"createdAt": "2026-11-03T02:00:00Z"}], "reviews-2"),
+                "reviews-2": connection([{"createdAt": "2026-11-05T02:00:00Z"}], None),
+            },
+            "reviewThreads": {
+                None: connection([], "threads-1"),
+                "threads-1": connection([{"comments": connection(
+                    [{"createdAt": "2026-11-04T03:00:00Z", "body": "inline"}], None)}], "threads-2"),
+                "threads-2": connection([{"comments": connection(
+                    [{"createdAt": "2026-11-06T03:00:00Z", "body": "later inline"}], None)}], None),
+            },
+        }
+        calls = []
+        def response(argv, **kwargs):
+            self.assertEqual(argv, ["api", "graphql", "--input", "-"])
+            payload = json.loads(kwargs["input_text"])
+            variables = payload["variables"]
+            calls.append(payload)
+            data = {}
+            for field, needed, collection in (("comments", "needComments", "comments"),
+                                              ("reviews", "needReviews", "reviews"),
+                                              ("threads", "needThreads", "reviewThreads")):
+                if variables[needed]:
+                    data[collection] = pages[collection][variables[field + "Cursor"]]
+            return {"data": {"repository": {"pullRequest": data}}}
+        with patch.object(pr_watch, "gh_json", side_effect=response):
+            activity = self.watcher.stale_activity("example/one", 7)
+        self.assertEqual([len(activity[key]) for key in ("comments", "reviews", "inline")], [2, 3, 2])
+        self.assertEqual(len(calls), 3)
+        self.assertTrue(all("comments(first: $pageSize" in call["query"] for call in calls))
+        self.assertIsNone(calls[0]["variables"]["commentsCursor"])
+        self.assertEqual(calls[1]["variables"]["commentsCursor"], "comments-1")
+        self.assertEqual(calls[-1]["variables"]["threadsCursor"], "threads-2")
+        self.assertTrue(any(not call["variables"]["needComments"] for call in calls[1:]))
+        self.assertEqual(calls[-1]["variables"]["reviewsCursor"], "reviews-2")
+
+    def test_stale_activity_does_not_restart_completed_collections(self):
+        calls = []
+        def response(argv, **kwargs):
+            payload = json.loads(kwargs["input_text"])
+            calls.append(payload)
+            data = {}
+            if payload["variables"]["needComments"]:
+                done = payload["variables"]["commentsCursor"] == "comments-1"
+                data["comments"] = {"nodes": [] if done else [{"createdAt": "2026-11-01T01:00:00Z", "body": "one"}],
+                                    "pageInfo": {"hasNextPage": False,
+                                                 "endCursor": None if done else "comments-1"}}
+            if payload["variables"]["needReviews"]:
+                done = payload["variables"]["reviewsCursor"] == "reviews-1"
+                data["reviews"] = {"nodes": [] if done else [{"createdAt": "2026-11-01T02:00:00Z"}],
+                                   "pageInfo": {"hasNextPage": False,
+                                                "endCursor": None if done else "reviews-1"}}
+            if payload["variables"]["needThreads"]:
+                done = payload["variables"]["threadsCursor"] == "threads-1"
+                data["reviewThreads"] = {"nodes": [] if done else [{"comments": {
+                    "nodes": [{"createdAt": "2026-11-01T03:00:00Z", "body": "inline"}],
+                    "pageInfo": {"hasNextPage": False, "endCursor": None}}}],
+                    "pageInfo": {"hasNextPage": False if done else True,
+                                 "endCursor": None if done else "threads-1"}}
+            return {"data": {"repository": {"pullRequest": data}}}
+        with patch.object(pr_watch, "gh_json", side_effect=response):
+            activity = self.watcher.stale_activity("example/one", 7)
+        self.assertEqual([len(activity[key]) for key in ("comments", "reviews", "inline")], [1, 1, 1])
+        self.assertEqual(calls[-1]["variables"]["needComments"], False)
+        self.assertEqual(calls[1]["variables"]["needReviews"], False)
+        self.assertEqual(calls[-1]["variables"]["threadsCursor"], "threads-1")
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(all("needComments" in call["variables"] for call in calls))
+        self.assertTrue(all("needReviews" in call["variables"] for call in calls))
+        self.assertTrue(all("needThreads" in call["variables"] for call in calls))
+        self.assertEqual([call["variables"]["commentsCursor"] for call in calls],
+                         [None, False])
+
+    def test_stale_activity_requires_complete_cursor_pages(self):
+        response = {"data": {"repository": {"pullRequest": {
+            "comments": {"nodes": [], "pageInfo": {"hasNextPage": True, "endCursor": None}},
+            "reviews": {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}},
+            "reviewThreads": {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}},
+        }}}}
+        with patch.object(pr_watch, "gh_json", return_value=response):
+            with self.assertRaisesRegex(pr_watch_common.WatchError, "pagination"):
+                self.watcher.stale_activity("example/one", 7)
+
+    def test_stale_enabled_settled_heads_still_need_cleanup(self):
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        self.watcher.repositories["example/one"]["close_stale"] = True
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                               base=SHA_BASE, format=1, outcome="repair_exhausted",
+                               repair_exhausted=True, failure_posted=True)
+        self.assertFalse(self.watcher.unchanged_head_complete_or_waiting("example/one", 7, SHA_A))
+        self.watcher.state.annotate("example/one", 7, outcome="merged")
+        self.assertTrue(self.watcher.unchanged_head_complete_or_waiting("example/one", 7, SHA_A))
+
+    def test_review_only_blocking_findings_can_still_stale_close(self):
+        self.watcher.repositories["example/one"].update(merge=False, close_stale=True)
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        finding = {"path": "x.py", "line": 1, "severity": "P0", "summary": "blocking", "suggestion": "fix"}
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                               base=SHA_BASE, format=1, outcome="findings", semantic="findings",
+                               findings=[finding], review_posted=True)
+        old = pr_watch_common.github_time("2026-11-01T00:00:00Z")
+        snapshot = pr(createdAt="2026-11-01T00:00:00Z", updatedAt="2026-11-01T00:00:00Z")
+        current = dict(snapshot)
+        def github(argv, **kwargs):
+            if argv[1:3] == ["pr", "edit"]:
+                return subprocess.CompletedProcess(argv, 0, "", "")
+            if argv[1:3] == ["pr", "close"]:
+                current["state"] = "CLOSED"
+                return subprocess.CompletedProcess(argv, 0, "", "")
+            self.fail(argv)
+        with patch.object(self.watcher, "stale_progress_at", return_value=old) as activity, \
+                patch.object(pr_watch, "pr_snapshot", side_effect=lambda *args: dict(current)), \
+                patch.object(pr_watch, "run", side_effect=github), \
+                patch.object(pr_watch.time, "time", return_value=old + 8 * 86400):
+            self.watcher.process("example/one", 7)
+        self.assertEqual(activity.call_count, 2)
+        self.assertEqual(current["state"], "CLOSED")
+        self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "stale_closed")
+
+    def test_discovery_skips_settled_heads_but_retries_expired_and_new_heads(self):
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        for outcome in ("merged", "continuation", "repair_published"):
+            self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                                   base=SHA_BASE, format=1, outcome=outcome)
+            self.assertTrue(self.watcher.unchanged_head_complete_or_waiting("example/one", 7, SHA_A))
+            self.assertFalse(self.watcher.unchanged_head_complete_or_waiting("example/one", 7, SHA_B))
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                               base=SHA_BASE, format=1, outcome="retry", retry_after=time.time() - 1)
+        self.assertFalse(self.watcher.unchanged_head_complete_or_waiting("example/one", 7, SHA_A))
+        self.watcher.state.annotate("example/one", 7, retry_after=time.time() + 60)
+        self.assertTrue(self.watcher.unchanged_head_complete_or_waiting("example/one", 7, SHA_A))
+        with patch.object(pr_watch, "gh_json", return_value=[pr(isDraft=False)]) as listing, \
+                patch.object(self.watcher, "enqueue") as enqueue:
+            self.watcher.discover()
+        listing.assert_called_once()
+        enqueue.assert_not_called()
+        with patch.object(pr_watch, "gh_json", return_value=[pr(SHA_B, isDraft=False)]), \
+                patch.object(self.watcher, "enqueue") as enqueue:
+            self.watcher.discover()
+        enqueue.assert_called_once_with("example/one", 7, SHA_B, "poll")
+
+    def test_discovery_polls_open_prs_older_than_the_newest_two_hundred(self):
+        # gh lists the newest PRs first and stops at --limit (#14864).
+        listing = [{"number": 300 - index, "headRefOid": SHA_A, "isDraft": False,
+                    "baseRefName": "main", "mergeable": "MERGEABLE"} for index in range(250)]
+        def gh(argv, **kwargs):
+            return listing[:int(argv[argv.index("--limit") + 1])]
+        logs = []
+        with patch.object(pr_watch, "gh_json", side_effect=gh), \
+                patch.object(self.watcher, "enqueue") as enqueue, \
+                patch.object(self.watcher, "log", side_effect=logs.append):
+            self.watcher.discover()
+        self.assertEqual(sorted(call.args[1] for call in enqueue.call_args_list), list(range(51, 301)))
+        self.assertEqual(logs, [])
+        with patch.object(pr_watch, "DISCOVERY_LIMIT", 250), \
+                patch.object(pr_watch, "gh_json", side_effect=gh), \
+                patch.object(self.watcher, "enqueue"), \
+                patch.object(self.watcher, "log", side_effect=logs.append):
+            self.watcher.discover()
+        self.assertEqual(len(logs), 1)
+        self.assertIn("example/one: discovery reached its bound of 250 open PRs", logs[0])
+
+    def test_same_head_backoff_and_terminal_records_skip_stale_activity(self):
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        cases = [
+            {"outcome": "merge_failed", "retry_after": time.time() + 300},
+            {"outcome": "merge_failed", "blocking": True},
+            {"outcome": "merged"},
+            {"outcome": "repair_exhausted", "repair_exhausted": True},
+            {"outcome": "repair_published"},
+        ]
+        for record in cases:
+            with self.subTest(outcome=record["outcome"]):
+                self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                                       base=SHA_BASE, **record)
+                with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                        patch.object(self.watcher, "stale_progress_at") as activity, \
+                        patch.object(pr_watch, "semantic_review") as review:
+                    self.watcher.process("example/one", 7)
+                activity.assert_not_called()
+                review.assert_not_called()
+
     def test_stale_pr_with_multiple_activity_records_closes_despite_its_own_notice_extra(self):
+
         config = dict(self.watcher.config["repositories"][0], close_stale=True)
-        snapshot = pr(createdAt="2026-11-01T00:00:00Z", updatedAt="2026-11-08T00:00:00Z")
+        snapshot = pr(createdAt="2026-11-01T00:00:00Z", updatedAt="2026-11-01T00:00:00Z")
         old = pr_watch_common.github_time("2026-11-01T00:00:00Z")
         notice = "This PR has had no substantive progress for more than seven days"
         comments = [{"createdAt": "2026-11-08T00:00:00Z", "body": notice},
                     {"createdAt": "2026-11-08T00:00:01Z", "body": "I am still working on this"}]
-        with patch.object(pr_watch, "gh_json", side_effect=[comments, [], []]):
+        with patch.object(self.watcher, "stale_activity", side_effect=[
+                {"comments": comments, "reviews": [], "inline": []},
+                {"comments": comments, "reviews": [], "inline": []}]):
             activity = pr_watch.Watcher.stale_progress_at(self.watcher, "example/one", 7, snapshot,
                                                          {"stale_head": SHA_A}, ignore_notice=notice)
-        self.assertEqual(activity, pr_watch_common.github_time("2026-11-08T00:00:01Z"))
-        with patch.object(pr_watch, "gh_json", side_effect=[comments[:1], [], []]):
+            self.assertEqual(activity, pr_watch_common.github_time("2026-11-08T00:00:01Z"))
             activity = pr_watch.Watcher.stale_progress_at(self.watcher, "example/one", 7, snapshot,
                                                          {"stale_head": SHA_A}, ignore_notice=notice)
-        self.assertEqual(activity, pr_watch_common.github_time("2026-11-01T00:00:00Z"))
+            self.assertEqual(activity, pr_watch_common.github_time("2026-11-08T00:00:01Z"))
+        with patch.object(self.watcher, "stale_activity", return_value={"comments": comments[:1], "reviews": [], "inline": []}):
+            activity = self.watcher.stale_progress_at("example/one", 7, snapshot,
+                                                     {"stale_head": SHA_A}, ignore_notice=notice)
+            self.assertEqual(activity, pr_watch_common.github_time("2026-11-01T00:00:00Z"))
 
     def test_recent_pr_activity_prevents_stale_close(self):
         self.github_pr = pr(createdAt="2026-11-01T00:00:00Z", updatedAt="2026-11-14T00:00:00Z")
@@ -371,14 +567,14 @@ class WatcherTests(unittest.TestCase):
         old = time.time() - 8 * 86400
         snapshot = pr(createdAt=datetime.fromtimestamp(old - 86400, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                       updatedAt=datetime.fromtimestamp(time.time(), timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
-        with patch.object(pr_watch, "gh_json", side_effect=[[], [], []]):
+        with patch.object(pr_watch.Watcher, "stale_activity", return_value={"comments": [], "reviews": [], "inline": []}):
             progress = pr_watch.Watcher.stale_progress_at(self.watcher, "example/one", 7, snapshot, {})
         self.assertGreater(time.time() - progress, 0)
         self.assertLess(time.time() - progress, 60)
 
     def test_stale_marker_does_not_change_activity_without_new_work(self):
         snapshot = pr(createdAt="2026-11-01T00:00:00Z", updatedAt="2026-11-16T00:00:00Z")
-        with patch.object(pr_watch, "gh_json", side_effect=[[], [], []]):
+        with patch.object(pr_watch.Watcher, "stale_activity", return_value={"comments": [], "reviews": [], "inline": []}):
             progress = pr_watch.Watcher.stale_progress_at(self.watcher, "example/one", 7, snapshot,
                                                          {"stale_head": SHA_A, "last_progress_at": pr_watch_common.github_time("2026-11-08T00:00:00Z")})
         self.assertEqual(progress, pr_watch_common.github_time("2026-11-08T00:00:00Z"))
@@ -386,7 +582,7 @@ class WatcherTests(unittest.TestCase):
     def test_stale_review_comments_count_as_progress(self):
         snapshot = pr(createdAt="2026-11-01T00:00:00Z", updatedAt="2026-11-16T00:00:00Z")
         inline = [{"createdAt": "2026-11-15T00:00:00Z", "body": "**P1** — newly published failure"}]
-        with patch.object(pr_watch, "gh_json", side_effect=[[], [], inline]):
+        with patch.object(pr_watch.Watcher, "stale_activity", return_value={"comments": [], "reviews": [], "inline": inline}):
             progress = pr_watch.Watcher.stale_progress_at(self.watcher, "example/one", 7, snapshot,
                                                          {"stale_head": SHA_A})
         self.assertEqual(progress, pr_watch_common.github_time("2026-11-15T00:00:00Z"))
@@ -397,7 +593,7 @@ class WatcherTests(unittest.TestCase):
         old_state = {"stale_head": snapshot["headRefOid"], "stale_notice": notice,
                      "last_progress_at": pr_watch_common.github_time("2026-11-08T00:00:00Z")}
         comments = [{"createdAt": "2026-11-08T00:00:00Z", "body": notice}]
-        with patch.object(pr_watch, "gh_json", side_effect=[comments, [], []]):
+        with patch.object(pr_watch.Watcher, "stale_activity", return_value={"comments": comments, "reviews": [], "inline": []}):
             progress = pr_watch.Watcher.stale_progress_at(self.watcher, "example/one", 7, snapshot, old_state)
         self.assertEqual(progress, pr_watch_common.github_time("2026-11-08T00:00:00Z"))
 
@@ -433,8 +629,12 @@ class WatcherTests(unittest.TestCase):
         with patch.object(pr_watch_common, "checked", return_value=""):
             with self.assertRaises(pr_watch_common.WatchError):
                 pr_watch_common.gh_json(["pr", "view", "7"])
-        with patch.object(pr_watch, "gh_json", side_effect=pr_watch_common.WatchError("gh returned an empty response")):
-            self.assertEqual(self.watcher.stale_activity_json("example/one", 7, "issues", "comments", ".created_at"), [])
+        empty = {"data": {"repository": {"pullRequest": {
+            key: {"nodes": [], "pageInfo": {"hasNextPage": False, "endCursor": None}}
+            for key in ("comments", "reviews", "reviewThreads")}}}}
+        with patch.object(pr_watch, "gh_json", return_value=empty):
+            self.assertEqual(self.watcher.stale_activity("example/one", 7),
+                             {"comments": [], "reviews": [], "inline": []})
 
     def test_paginated_json_records_and_page_arrays_are_flattened(self):
         text = '{"createdAt": "2026-11-01T00:00:00Z"}\n{"createdAt": "2026-11-02T00:00:00Z"}\n'
@@ -635,6 +835,47 @@ class WatcherTests(unittest.TestCase):
         finding_calls = [call for call in self.github.call_args_list
                          if call.args[0][:2] == ["gh", "api"]]
         self.assertEqual(len(finding_calls), 1)
+
+    def test_moved_base_does_not_republish_reviews_on_an_unchanged_head(self):
+        # A merge-blocked PR is re-reviewed whenever main moves; the same head
+        # must not collect a new copy of the same reviews each time (#11738).
+        reworded = [{"path": "x.py", "line": 2, "severity": "P2", "summary": "note %d" % n, "suggestion": "consider"}
+                    for n in range(3)]
+        other_base = "d" * 40
+        with patch.object(pr_watch, "semantic_review", side_effect=[[f] for f in reworded]) as review, \
+                patch.object(pr_watch, "verify", return_value=[{"name": "test", "ok": True}]), \
+                patch.object(self.watcher, "merge", side_effect=pr_watch_common.WatchError("ratchet: 1 time.Sleep call")):
+            for base in (SHA_BASE, other_base, SHA_BASE):
+                with patch.object(pr_watch, "pr_snapshot", return_value=pr(baseRefOid=base)):
+                    self.watcher.process("example/one", 7)
+                self.watcher.state.annotate("example/one", 7, retry_after=0)
+        self.assertEqual(review.call_count, 3)  # each new base is still reviewed
+        findings = [c for c in self.github.call_args_list if c.args[0][:2] == ["gh", "api"]]
+        success = [c for c in self.github.call_args_list if c.args[0][:3] == ["gh", "pr", "review"]]
+        self.assertEqual((len(findings), len(success)), (1, 1))
+
+    def test_a_heads_findings_are_published_once_except_a_new_p0(self):
+        first = {"path": "x.py", "line": 2, "severity": "P2", "summary": "note", "suggestion": "consider"}
+        moved = dict(first, summary="same place, new words")
+        nit = {"path": "y.py", "line": 9, "severity": "P1", "summary": "another", "suggestion": "fix"}
+        p0 = {"path": "z.py", "line": 4, "severity": "P0", "summary": "breaks", "suggestion": "repair"}
+        snapshot = {"head": SHA_A}
+        for findings in ([first], [moved], [moved, nit], [moved, nit, p0], [moved, nit, p0]):
+            self.watcher.comment_findings("example/one", 7, snapshot, findings)
+        posted = [c for c in self.github.call_args_list if c.args[0][:2] == ["gh", "api"]]
+        self.assertEqual(len(posted), 2)  # the first review, then the new P0 alone
+        second = json.loads(posted[1].kwargs["input_text"])
+        self.assertEqual([(c["path"], c["line"]) for c in second["comments"]], [("z.py", 4)])
+        anchors = {(f["path"], f["line"]) for f in self.watcher.head_publication("example/one", 7, SHA_A)["published_findings"]}
+        self.assertEqual(anchors, {("x.py", 2), ("z.py", 4)})
+        self.watcher.comment_findings("example/one", 7, {"head": SHA_B}, [nit])
+        self.assertEqual(len([c for c in self.github.call_args_list if c.args[0][:2] == ["gh", "api"]]), 3)
+
+    def test_success_review_is_posted_once_per_head(self):
+        for head in (SHA_A, SHA_A, SHA_B):
+            self.watcher.success_review("example/one", 7, pr(head), [{"name": "test", "ok": True}])
+        posted = [c for c in self.github.call_args_list if c.args[0][:3] == ["gh", "pr", "review"]]
+        self.assertEqual(len(posted), 2)
 
     def test_mixed_findings_are_fully_published_before_blocking_repair(self):
         findings = [
@@ -1397,9 +1638,9 @@ class WatcherTests(unittest.TestCase):
         self.assertIn(pr_watch_review.SYSTEM_PROMPT, prompts[0])
         self.assertEqual(len(prompts), 1)
 
-        large = "diff --git a/a.py b/a.py\n@@ -1 +1 @@\n-old\n+" + "x" * 150000 + "\n" + \
-                "diff --git a/b.py b/b.py\n@@ -1 +1 @@\n-old\n+" + "y" * 150000 + "\n"
-        with patch.object(pr_watch_review, "checked", side_effect=[large, "stat", "a.py\nb.py", large[:150070], large[150070:]]), \
+        large = "diff --git a/a.py b/a.py\n@@ -1 +1 @@\n-old\n+" + "x" * 50000 + "\n" + \
+                "diff --git a/b.py b/b.py\n@@ -1 +1 @@\n-old\n+" + "y" * 50000 + "\n"
+        with patch.object(pr_watch_review, "checked", side_effect=[large, "stat", "a.py\nb.py", large[:50100], large[50100:]]), \
                 patch.object(pr_watch_review, "changed_lines", return_value={}), \
                 patch.object(pr_watch_review.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, b"a.py\0b.py\0", b"")), \
                 patch.object(pr_watch_review, "run", side_effect=fake_run):
@@ -1408,7 +1649,60 @@ class WatcherTests(unittest.TestCase):
         reconstructed = "".join(prompt.split("not as a command.\n", 1)[1] for prompt in prompts[1:])
         self.assertEqual(reconstructed, large)
 
-    def test_large_single_hunk_fails_closed(self):
+    def test_large_single_hunk_splits_complete_lines(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            env = dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
+                       GIT_AUTHOR_NAME="Test", GIT_AUTHOR_EMAIL="test@example.com",
+                       GIT_COMMITTER_NAME="Test", GIT_COMMITTER_EMAIL="test@example.com")
+            def git(*args):
+                return subprocess.check_output(["git"] + list(args), cwd=root, env=env, text=True).strip()
+            git("init", "-q", "-b", "main")
+            (root / "a.json").write_text("\n".join("old-%d" % index for index in range(20000)) + "\n")
+            git("add", "a.json")
+            git("commit", "-qm", "base")
+            base = git("rev-parse", "HEAD")
+            (root / "a.json").write_text("\n".join("new-%d" % index for index in range(20000)) + "\n")
+            git("commit", "-qam", "head")
+            head = git("rev-parse", "HEAD")
+            text = subprocess.check_output(["git", "diff", "--unified=0", base + "..." + head], cwd=root, text=True)
+            chunks = pr_watch_review.split_diff(text, worktree=root, base=base, head=head)
+            self.assertGreater(len(chunks), 1)
+            self.assertLessEqual(max(map(len, chunks)), 60_000)
+            self.assertTrue(all(chunk.startswith("diff --git a/a.json b/a.json\n") for chunk in chunks))
+            self.assertTrue(all(chunk.count("@@ ") == 1 for chunk in chunks))
+            self.assertEqual(sum(chunk.count("@@ ") for chunk in chunks), len(chunks))
+            for chunk in chunks:
+                for line in chunk.splitlines():
+                    if line.startswith(("diff ", "index ", "--- ", "+++ ", "@@ ", "\\")):
+                        continue
+                    self.assertRegex(line, r"^[-+ ](?:old|new)-\d+$")
+            removed = [line for chunk in chunks for line in chunk.splitlines() if line.startswith("-old-")]
+            added = [line for chunk in chunks for line in chunk.splitlines() if line.startswith("+new-")]
+            self.assertEqual(len(removed), 20000)
+            self.assertEqual(len(added), 20000)
+            new_line = 1
+            for chunk in chunks:
+                header = re.search(r"(?m)^@@ -(\d+),(\d+) \+(\d+),(\d+) @@", chunk)
+                self.assertIsNotNone(header)
+                old_count = sum(line.startswith(("-", " ")) for line in chunk.splitlines()
+                                if not line.startswith("---"))
+                new_count = sum(line.startswith(("+", " ")) for line in chunk.splitlines()
+                                if not line.startswith("+++"))
+                self.assertEqual(int(header.group(2)), old_count)
+                self.assertEqual(int(header.group(4)), new_count)
+                self.assertEqual(int(header.group(3)), new_line - int(new_count == 0))
+                new_line += new_count
+
+    def test_split_hunk_header_uses_part_ranges(self):
+        self.assertEqual(pr_watch_review.split_hunk_header(
+            "@@ -100 +200 @@ function\n", 40, 80, 3, 2), "@@ -140,3 +280,2 @@ function\n")
+        self.assertEqual(pr_watch_review.split_hunk_header(
+            "@@ -100,0 +200,1 @@\n", 0, 10, 0, 1), "@@ -99,0 +210,1 @@\n")
+        self.assertEqual(pr_watch_review.split_hunk_header(
+            "@@ -100 +200 @@\n", 40, 0, 0, 2), "@@ -139,0 +200,2 @@\n")
+
+    def test_large_single_diff_line_fails_closed(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=True, capture_output=True)
@@ -1578,7 +1872,9 @@ class WatcherTests(unittest.TestCase):
         self.assertFalse(any(command[0].startswith("CI ") for command in commands))
         self.assertEqual(calls, [None, None, None, str(root / "scripts/operations"), None, None])
 
-    def test_changed_sleep_guard_requires_lowering_the_baseline(self):
+    def test_changed_sleep_guard_refuses_a_rise_and_passes_a_fall(self):
+        # Count ratchets fail only when a count rises (docs/operations/testing.md, "Count ratchets"): a test file under
+        # its baseline passes without the baseline lowered.
         import pr_watch_test_guards
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1590,8 +1886,12 @@ class WatcherTests(unittest.TestCase):
             test.parent.mkdir(parents=True)
             test.write_text("package example\n")
             with patch.object(pr_watch_test_guards, "checked", return_value=baseline.read_text()):
+                self.assertEqual(pr_watch_test_guards.baseline_guard("server/internal/example/example_test.go", root), [])
+            test.write_text("package example\n\nfunc TestWait(t *testing.T) {\n" + "\ttime.Sleep(time.Second)\n" * 3 + "}\n")
+            with patch.object(pr_watch_test_guards, "checked", return_value=baseline.read_text()):
                 violations = pr_watch_test_guards.baseline_guard("server/internal/example/example_test.go", root)
-            self.assertIn("lower the baseline", violations[0])
+            self.assertEqual(len(violations), 1)
+            self.assertIn("3 time.Sleep call(s), baseline 2", violations[0])
 
     def test_go_test_runner_uses_disposable_postgres_and_cleanup(self):
         import pr_watch_go_tests
@@ -1657,6 +1957,62 @@ class WatcherTests(unittest.TestCase):
             commands = pr_watch_verify.persona_checks(".", pr(title="test: update an argument-driven check"), 1, {})
         self.assertEqual(commands[0], ("CI scripts", ["bash", "scripts/ci/scripts.sh"]))
 
+    def test_invalid_base_sha_runs_no_git_or_privacy_command(self):
+        import pr_watch_test_guards
+        invalid = (
+            "c" * 39,
+            "c" * 41,
+            "C" * 40,
+            "g" * 40,
+            "--help",
+            "-" + "c" * 39,
+            "c" * 40 + "\n",
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            for base in invalid:
+                for repository_guards in (False, True):
+                    with self.subTest(base=base, repository_guards=repository_guards), \
+                            patch.object(pr_watch_test_guards, "checked") as checked, \
+                            patch.object(pr_watch_test_guards, "privacy_environment") as privacy, \
+                            patch.object(pr_watch_test_guards, "documentation_guard") as documentation:
+                        argv = ["--base=" + base, "--head", SHA_A, "--worktree", directory]
+                        if repository_guards:
+                            argv.append("--repository-guards")
+                        with self.assertRaisesRegex(pr_watch_common.WatchError, "base.*40 lowercase hexadecimal"):
+                            pr_watch_test_guards.main(argv)
+                        checked.assert_not_called()
+                        privacy.assert_not_called()
+                        documentation.assert_not_called()
+
+    def test_noncommit_or_missing_base_runs_only_the_object_validator(self):
+        import pr_watch_test_guards
+        for object_type in ("tree", "blob", "tag", "missing"):
+            with self.subTest(object_type=object_type), tempfile.TemporaryDirectory() as directory, \
+                    patch.object(pr_watch_test_guards, "privacy_environment") as privacy, \
+                    patch.object(pr_watch_test_guards, "documentation_guard") as documentation:
+                def fake_checked(argv, **kwargs):
+                    self.assertEqual(["git", "cat-file", "-t", SHA_BASE], argv)
+                    if object_type == "missing":
+                        raise pr_watch_common.WatchError("missing object")
+                    return object_type + "\n"
+                with patch.object(pr_watch_test_guards, "checked", side_effect=fake_checked) as checked:
+                    with self.assertRaisesRegex(pr_watch_common.WatchError, "base.*commit"):
+                        pr_watch_test_guards.main([
+                            "--base", SHA_BASE, "--head", SHA_A, "--worktree", directory, "--repository-guards",
+                        ])
+                checked.assert_called_once()
+                privacy.assert_not_called()
+                documentation.assert_not_called()
+
+    def test_valid_base_commit_is_the_changed_guard_control(self):
+        import pr_watch_test_guards
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(pr_watch_test_guards, "checked", return_value="commit\n") as checked:
+            self.assertEqual(0, pr_watch_test_guards.main([
+                "--base", SHA_BASE, "--head", SHA_A, "--worktree", directory,
+            ]))
+        checked.assert_called_once_with(["git", "cat-file", "-t", SHA_BASE], cwd=Path(directory).resolve())
+
     def test_documentation_guards_use_base_not_stale_watcher_or_pr_source(self):
         import pr_watch_test_guards
         base_source = (
@@ -1701,6 +2057,9 @@ class WatcherTests(unittest.TestCase):
             shown = []
 
             def fake_checked(argv, **kwargs):
+                if argv[:3] == ["git", "cat-file", "-t"]:
+                    self.assertEqual(SHA_BASE, argv[3])
+                    return "commit\n"
                 if argv[:2] == ["git", "show"]:
                     if not argv[2].startswith(SHA_BASE + ":scripts/test/"):
                         raise AssertionError("guard source did not come from the exact base: " + argv[2])
@@ -1724,6 +2083,86 @@ class WatcherTests(unittest.TestCase):
             expected = {SHA_BASE + ":scripts/test/" + name
                         for name in relatives + ("doc_sections_known.txt",)}
             self.assertEqual(expected, set(shown))
+
+    def test_extension_repository_guards_use_its_own_base_doc_checks(self):
+        import pr_watch_test_guards
+        check_source = (
+            "import pathlib\n"
+            "import sys\n"
+            "ROOT = pathlib.Path(__file__).resolve().parent.parent\n"
+            "def check(root):\n"
+            "    return [] if (pathlib.Path(root) / 'docs-ok').is_file() else ['missing target']\n"
+            "def main():\n"
+            "    errors = check(ROOT)\n"
+            "    print('docs: %s' % ('failed' if errors else 'ok'))\n"
+            "    return bool(errors)\n"
+        )
+        test_source = (
+            "import importlib.util\n"
+            "import pathlib\n"
+            "import tempfile\n"
+            "import unittest\n"
+            "spec = importlib.util.spec_from_file_location('check_docs', pathlib.Path(__file__).with_name('check-docs.py'))\n"
+            "docs = importlib.util.module_from_spec(spec)\n"
+            "spec.loader.exec_module(docs)\n"
+            "class LinkTests(unittest.TestCase):\n"
+            "    def test_checker(self):\n"
+            "        with tempfile.TemporaryDirectory() as tmp:\n"
+            "            self.assertEqual(['missing target'], docs.check(tmp))\n"
+        )
+        stale_source = "raise SystemExit('PR or watcher documentation source ran')\n"
+        for docs_ok in (True, False):
+            with self.subTest(docs_ok=docs_ok), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                watcher, checkout = root / "watcher", root / "pr"
+                for base in (watcher, checkout):
+                    (base / "scripts").mkdir(parents=True)
+                    for name in ("check-docs.py", "test-docs.py"):
+                        (base / "scripts" / name).write_text(stale_source)
+                if docs_ok:
+                    (checkout / "docs-ok").write_text("")
+                shown = []
+
+                def fake_checked(argv, **kwargs):
+                    if argv[:3] == ["git", "cat-file", "-t"]:
+                        return "commit\n"
+                    if argv[:2] == ["git", "show"]:
+                        shown.append(argv[2])
+                        if argv[2] == SHA_BASE + ":scripts/check-docs.py":
+                            return check_source
+                        if argv[2] == SHA_BASE + ":scripts/test-docs.py":
+                            return test_source
+                        raise pr_watch_common.WatchError("fatal: path does not exist: " + argv[2])
+                    return ""
+
+                original_path = sys.path.copy()
+                argv = ["--base", SHA_BASE, "--head", SHA_A, "--worktree", str(checkout), "--repository-guards",
+                        "--repository", "nwverse/persona-extensions"]
+                with patch.dict(sys.modules), \
+                        patch.object(pr_watch_test_guards, "ROOT", watcher), \
+                        patch.object(pr_watch_test_guards, "privacy_environment", return_value={}), \
+                        patch.object(pr_watch_test_guards, "documentation_guard") as persona_guard, \
+                        patch.object(pr_watch_test_guards, "checked", side_effect=fake_checked):
+                    if docs_ok:
+                        self.assertEqual(0, pr_watch_test_guards.main(argv))
+                    else:
+                        with self.assertRaisesRegex(pr_watch_common.WatchError, "scripts/check-docs.py"):
+                            pr_watch_test_guards.main(argv)
+                persona_guard.assert_not_called()
+                self.assertEqual(original_path, sys.path)
+                self.assertEqual([SHA_BASE + ":scripts/check-docs.py", SHA_BASE + ":scripts/test-docs.py"], shown)
+
+    def test_extension_doc_unit_test_failure_blocks(self):
+        import pr_watch_test_guards
+        failing = "import unittest\nclass T(unittest.TestCase):\n    def test_x(self):\n        self.fail('x')\n"
+        sources = {":scripts/check-docs.py": "def main():\n    return False\n", ":scripts/test-docs.py": failing}
+        # Keep the planted failure's report out of the suite log; only the raised guard error matters.
+        with tempfile.TemporaryDirectory() as directory, patch.dict(sys.modules), \
+                redirect_stderr(io.StringIO()), \
+                patch.object(pr_watch_test_guards, "checked",
+                             side_effect=lambda argv, **kwargs: sources[argv[2][len(SHA_BASE):]]):
+            with self.assertRaisesRegex(pr_watch_common.WatchError, "scripts/test-docs.py"):
+                pr_watch_test_guards.extension_documentation_guards(Path(directory), SHA_BASE)
 
     def test_documentation_guard_reads_pr_not_watcher_root(self):
         import pr_watch_test_guards
@@ -2543,7 +2982,9 @@ class WatcherTests(unittest.TestCase):
         with patch.object(pr_watch_verify, "run_check", return_value={"name": "Privacy and documentation guards", "ok": True}) as check:
             results = pr_watch_verify.verify("nwverse/persona-extensions", pr(), ".", {"profile": "semantic_only"})
         self.assertEqual(len(results), 1)
-        self.assertIn("--repository-guards", check.call_args.args[1])
+        argv = check.call_args.args[1]
+        self.assertIn("--repository-guards", argv)
+        self.assertEqual("nwverse/persona-extensions", argv[argv.index("--repository") + 1])
 
     def test_verification_policy_version_covers_semantic_only(self):
         self.assertGreaterEqual(pr_watch.VERIFICATION_POLICY_VERSION, 3)
@@ -2555,8 +2996,10 @@ class WatcherTests(unittest.TestCase):
                                   "verify": {}, "merge": True, "privacy": None, "notify_command": None}]
         watcher = pr_watch.Watcher(config, verbose=False)
         with patch.object(pr_watch, "run", return_value=subprocess.CompletedProcess([], 0, "", "")) as run, \
+                patch.object(pr_watch, "require_local_gate") as local_gate, \
                 patch.object(pr_watch, "pr_snapshot", return_value=pr(state="MERGED")):
             watcher.merge(config["repositories"][0], pr())
+        local_gate.assert_called_once_with(repo, SHA_A, SHA_BASE)
         argv = run.call_args.args[0]
         self.assertEqual(argv[2:6], ["--expect-head", SHA_A, "--expect-base", SHA_BASE])
         self.assertEqual(argv[6], "7")
@@ -2849,17 +3292,96 @@ class WatcherTests(unittest.TestCase):
         self.assertNotIn("Environment=ANTHROPIC", service)
         self.assertNotIn("/home/", service)
 
-    def test_ten_workers_start_and_stop_cleanly(self):
-        self.config["workers"] = 10
+    def test_configured_workers_start_and_stop_cleanly(self):
+        for count in (10, 20):
+            with self.subTest(workers=count):
+                self.config["workers"] = count
+                watcher = pr_watch.Watcher(self.config, verbose=False)
+                watcher.start_workers()
+                self.addCleanup(watcher.stopping.set)
+                self.assertEqual(len(watcher.workers), count)
+                for _ in watcher.workers:
+                    watcher.tasks.put((2, -1, ("", 0)))
+                for worker in watcher.workers:
+                    worker.join(timeout=5)
+                    self.assertFalse(worker.is_alive())
+                self.addCleanup(watcher.review_executor.shutdown, wait=True, cancel_futures=True)
+                self.assertEqual(watcher.review_executor._max_workers, 16)
+
+    def test_reviewer_concurrency_is_bounded_and_refills_ready_work(self):
+        self.config["reviewer_concurrency"] = 16
         watcher = pr_watch.Watcher(self.config, verbose=False)
         watcher.start_workers()
         self.addCleanup(watcher.stopping.set)
-        self.assertEqual(len(watcher.workers), 10)
+        self.addCleanup(watcher.review_executor.shutdown, wait=True, cancel_futures=True)
         for _ in watcher.workers:
             watcher.tasks.put((2, -1, ("", 0)))
         for worker in watcher.workers:
             worker.join(timeout=5)
-            self.assertFalse(worker.is_alive())
+        active = 0
+        peak = 0
+        completed = []
+        lock = threading.Lock()
+        gate = threading.Event()
+        release = threading.Event()
+
+        def review(repo, current, worktree, config):
+            nonlocal active, peak
+            with lock:
+                active += 1
+                peak = max(peak, active)
+                if active == 16:
+                    gate.set()
+            release.wait(timeout=5)
+            with lock:
+                active -= 1
+                completed.append(current["number"])
+            return []
+
+        with patch.object(pr_watch, "semantic_review", side_effect=review):
+            futures = [watcher.review_executor.submit(
+                pr_watch.semantic_review, "example/one", {"number": number}, ".", self.config["reviewer"])
+                for number in range(18)]
+            self.assertTrue(gate.wait(timeout=5), "the first sixteen reviewers were not filled")
+            release.set()
+            for future in futures:
+                future.result(timeout=5)
+        self.assertEqual(peak, 16)
+        self.assertEqual(len(completed), 18)
+        for count in (0, 21):
+            self.config["reviewer_concurrency"] = count
+            with self.assertRaisesRegex(pr_watch_common.WatchError, "reviewer concurrency"):
+                pr_watch.Watcher(self.config, verbose=False).start_workers()
+
+    def test_discovery_rate_limit_retains_the_resident_service(self):
+        watcher = pr_watch.Watcher(self.config, verbose=False)
+        with patch.object(pr_watch, "gh_json", side_effect=pr_watch_common.WatchError("API rate limit already exceeded")):
+            watcher.discover()
+        self.assertIsNone(watcher.fatal)
+        self.assertFalse(watcher.stopping.is_set())
+
+    def test_worker_count_is_bounded(self):
+        for count in (-1, 0, 21):
+            with self.subTest(workers=count):
+                self.config["workers"] = count
+                watcher = pr_watch.Watcher(self.config, verbose=False)
+                with self.assertRaisesRegex(pr_watch_common.WatchError,
+                                            "workers must be between 1 and 20"):
+                    watcher.start_workers()
+                self.assertEqual(watcher.workers, [])
+
+    def test_reviewer_default_does_not_change_the_evidence_fingerprint(self):
+        path = self.root / "config.json"
+        raw = {"repositories": [{"name": "example/one", "checkout": str(self.root), "verify": {}}],
+               "reviewer": {}, "workers": 20, "poll_seconds": 60, "state": str(self.root / "state.json")}
+        path.write_text(json.dumps(raw))
+        baseline = pr_watch.fingerprint("configuration", 0, "0" * 40, "config", pr_watch.load_config(path))
+        raw["reviewer"]["concurrency"] = 16
+        path.write_text(json.dumps(raw))
+        configured = pr_watch.load_config(path)
+        self.assertNotIn("concurrency", configured["reviewer"])
+        self.assertEqual(configured["reviewer_concurrency"], 16)
+        self.assertEqual(pr_watch.fingerprint("configuration", 0, "0" * 40, "config", configured), baseline)
 
     def test_config_has_no_implicit_merge_or_repositories(self):
         path = self.root / "config.json"
@@ -2868,6 +3390,372 @@ class WatcherTests(unittest.TestCase):
         self.assertFalse(config["repositories"][0]["merge"])
         self.assertFalse(config["repositories"][0]["close_stale"])
         self.assertEqual(len(config["repositories"]), 1)
+
+    def enable_human_reviews(self):
+        self.config["repositories"][0]["respect_human_reviews"] = True
+        self.watcher.repositories["example/one"]["respect_human_reviews"] = True
+
+    def human_decision(self, kind, review_id=101, login="human-reviewer", head=SHA_A):
+        if kind == "none":
+            return {"decision": "none"}
+        states = {"approved": "APPROVED", "changes_requested": "CHANGES_REQUESTED", "commented": "COMMENTED"}
+        return {"decision": kind,
+                "review": {"id": review_id, "login": login, "state": states[kind],
+                           "commit_id": head, "submitted_at": "2026-11-20T10:00:00Z"}}
+
+    def test_respect_human_reviews_defaults_off_and_rejects_non_boolean(self):
+        path = self.root / "hr-config.json"
+        path.write_text(json.dumps({"repositories": [{"name": "example/one", "checkout": str(self.root), "verify": {}}],
+                                    "state": str(self.root / "hr-state.json")}))
+        self.assertFalse(pr_watch.load_config(path)["repositories"][0]["respect_human_reviews"])
+        raw = json.loads(path.read_text())
+        raw["repositories"][0]["respect_human_reviews"] = "yes"
+        path.write_text(json.dumps(raw))
+        with self.assertRaises(pr_watch_common.WatchError):
+            pr_watch.load_config(path)
+
+    def test_without_the_flag_human_reviews_are_never_read(self):
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(self.watcher, "human_review_decision") as human, \
+                patch.object(pr_watch, "semantic_review", return_value=[]) as review, \
+                patch.object(pr_watch, "verify", return_value=[{"name": "privacy", "ok": True}]), \
+                patch.object(self.watcher, "merge", return_value=True):
+            self.watcher.process("example/one", 7)
+        human.assert_not_called()
+        review.assert_called_once()
+
+    def test_human_approval_skips_the_reviewer_and_all_publication_but_keeps_every_gate(self):
+        self.enable_human_reviews()
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(self.watcher, "human_review_decision",
+                             return_value=self.human_decision("approved")) as human, \
+                patch.object(pr_watch, "semantic_review") as review, \
+                patch.object(pr_watch, "verify", return_value=[{"name": "privacy", "ok": True}]) as verify, \
+                patch.object(self.watcher, "merge", return_value=True) as merge:
+            self.watcher.process("example/one", 7)
+        human.assert_called_once_with("example/one", 7, SHA_A)
+        review.assert_not_called()
+        verify.assert_called_once()
+        merge.assert_called_once()
+        self.github.assert_not_called()
+        self.assertEqual(self.comments, [])
+        record = self.watcher.state.get("example/one", 7)
+        self.assertEqual(record["semantic"], "passed")
+        self.assertEqual(record["semantic_source"], "human")
+        self.assertEqual(record["human_review"]["id"], 101)
+        self.assertEqual(record["human_review"]["commit_id"], SHA_A)
+        self.assertEqual(record["outcome"], "merged")
+
+    def test_human_change_request_parks_then_a_same_head_approval_resolves_it(self):
+        self.enable_human_reviews()
+        decisions = [self.human_decision("changes_requested", review_id=202),
+                     self.human_decision("approved", review_id=203)]
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(self.watcher, "human_review_decision", side_effect=decisions), \
+                patch.object(pr_watch, "semantic_review") as review, \
+                patch.object(pr_watch, "verify", return_value=[{"name": "privacy", "ok": True}]) as verify, \
+                patch.object(self.watcher, "merge", return_value=True) as merge:
+            self.watcher.process("example/one", 7)
+            parked = self.watcher.state.get("example/one", 7)
+            self.assertEqual(parked["outcome"], "human_changes_requested")
+            self.assertEqual(parked["human_review"]["id"], 202)
+            verify.assert_not_called()
+            merge.assert_not_called()
+            self.watcher.process("example/one", 7)
+        review.assert_not_called()
+        verify.assert_called_once()
+        merge.assert_called_once()
+        resolved = self.watcher.state.get("example/one", 7)
+        self.assertEqual(resolved["outcome"], "merged")
+        self.assertEqual(resolved["human_review"]["id"], 203)
+
+    def test_same_head_comment_after_human_approval_parks_instead_of_using_stored_pass(self):
+        self.enable_human_reviews()
+        decisions = [self.human_decision("approved", review_id=301),
+                     self.human_decision("commented", review_id=302)]
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(self.watcher, "human_review_decision", side_effect=decisions) as human, \
+                patch.object(pr_watch, "semantic_review") as review, \
+                patch.object(pr_watch, "verify", return_value=[{"name": "privacy", "ok": True}]) as verify, \
+                patch.object(self.watcher, "merge", return_value=False) as merge:
+            self.watcher.process("example/one", 7)
+            approved = self.watcher.state.get("example/one", 7)
+            self.assertEqual(approved["outcome"], "passed")
+            self.assertEqual(approved["semantic_source"], "human")
+            self.watcher.process("example/one", 7)
+        self.assertEqual(human.call_count, 2)
+        review.assert_not_called()
+        verify.assert_called_once()
+        merge.assert_called_once()
+        parked = self.watcher.state.get("example/one", 7)
+        self.assertEqual(parked["outcome"], "human_commented")
+        self.assertEqual(parked["human_review"]["id"], 302)
+
+    def test_same_head_dismissal_after_human_approval_restores_normal_ai_review(self):
+        self.enable_human_reviews()
+        decisions = [self.human_decision("approved", review_id=303),
+                     self.human_decision("none")]
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(self.watcher, "human_review_decision", side_effect=decisions) as human, \
+                patch.object(pr_watch, "semantic_review", return_value=[]) as review, \
+                patch.object(pr_watch, "verify", return_value=[{"name": "privacy", "ok": True}]), \
+                patch.object(self.watcher, "merge", return_value=False):
+            self.watcher.process("example/one", 7)
+            self.assertEqual(self.watcher.state.get("example/one", 7)["semantic_source"], "human")
+            self.watcher.process("example/one", 7)
+        self.assertEqual(human.call_count, 2)
+        review.assert_called_once()
+        record = self.watcher.state.get("example/one", 7)
+        self.assertNotIn("semantic_source", record)
+        self.assertEqual(record["semantic"], "passed")
+
+    def test_restart_with_human_semantic_evidence_resumes_verification_and_merge(self):
+        self.enable_human_reviews()
+        decision = self.human_decision("approved", review_id=304)
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                               base=SHA_BASE, format=1, outcome="reviewed",
+                               semantic="passed", findings=[], semantic_source="human",
+                               human_review=decision["review"], review_attempts=0,
+                               review_posted=True, success_posted=True)
+        resumed = pr_watch.Watcher(self.config, verbose=False)
+        resumed.remove_worktree = lambda *args: None
+        resumed.worktree = lambda *args: self.root / "checkout"
+        resumed.comment = lambda repo, number, body: self.comments.append(body)
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(resumed, "human_review_decision", return_value=decision), \
+                patch.object(pr_watch, "semantic_review") as review, \
+                patch.object(pr_watch, "verify", return_value=[{"name": "privacy", "ok": True}]) as verify, \
+                patch.object(resumed, "merge", return_value=True) as merge:
+            resumed.process("example/one", 7)
+        review.assert_not_called()
+        verify.assert_called_once()
+        merge.assert_called_once()
+        self.github.assert_not_called()
+        self.assertEqual(self.comments, [])
+        record = resumed.state.get("example/one", 7)
+        self.assertEqual(record["verification"], "passed")
+        self.assertEqual(record["semantic_source"], "human")
+        self.assertEqual(record["outcome"], "merged")
+
+    def test_same_head_comment_after_merge_failure_parks_instead_of_retrying_merge(self):
+        self.enable_human_reviews()
+        approval = self.human_decision("approved", review_id=305)
+        comment = self.human_decision("commented", review_id=306)
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                               base=SHA_BASE, format=1, outcome="merge_failed",
+                               semantic="passed", findings=[], semantic_source="human",
+                               human_review=approval["review"], verification="passed",
+                               verification_policy=pr_watch.VERIFICATION_POLICY_VERSION,
+                               checks=[{"name": "privacy", "ok": True}], review_posted=True,
+                               success_posted=True, retry_after=0, blocking=False)
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(self.watcher, "human_review_decision", return_value=comment) as human, \
+                patch.object(pr_watch, "semantic_review") as review, \
+                patch.object(pr_watch, "verify") as verify, \
+                patch.object(self.watcher, "merge", return_value=True) as merge:
+            self.watcher.process("example/one", 7)
+        human.assert_called_once_with("example/one", 7, SHA_A)
+        review.assert_not_called()
+        verify.assert_not_called()
+        merge.assert_not_called()
+        record = self.watcher.state.get("example/one", 7)
+        self.assertEqual(record["outcome"], "human_commented")
+        self.assertEqual(record["human_review"]["id"], 306)
+
+    def test_human_review_read_failure_during_merge_retry_stays_retryable(self):
+        self.enable_human_reviews()
+        approval = self.human_decision("approved", review_id=308)
+        comment = self.human_decision("commented", review_id=309)
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                               base=SHA_BASE, format=1, outcome="merge_failed",
+                               semantic="passed", findings=[], semantic_source="human",
+                               human_review=approval["review"], verification="passed",
+                               verification_policy=pr_watch.VERIFICATION_POLICY_VERSION,
+                               checks=[{"name": "privacy", "ok": True}], review_posted=True,
+                               success_posted=True, retry_after=0, blocking=False)
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(self.watcher, "human_review_decision",
+                             side_effect=[pr_watch_common.WatchError("reviews unavailable"), comment]) as human, \
+                patch.object(pr_watch, "semantic_review") as review, \
+                patch.object(pr_watch, "verify") as verify, \
+                patch.object(self.watcher, "merge", return_value=True) as merge:
+            self.watcher.process("example/one", 7)
+            self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "retry")
+            self.watcher.state.annotate("example/one", 7, retry_after=0)
+            self.watcher.process("example/one", 7)
+        self.assertEqual(human.call_count, 2)
+        review.assert_not_called()
+        verify.assert_not_called()
+        merge.assert_not_called()
+        record = self.watcher.state.get("example/one", 7)
+        self.assertEqual(record["outcome"], "human_commented")
+        self.assertEqual(record["human_review"]["id"], 309)
+
+    def test_failed_or_repairing_human_evidence_does_not_restart_verification(self):
+        self.enable_human_reviews()
+        decision = self.human_decision("approved", review_id=307)
+        for number, outcome in ((7, "failed"), (8, "repairing")):
+            with self.subTest(outcome=outcome):
+                evidence_key = "example/one#" + str(number) + "@" + SHA_BASE + ".." + SHA_A
+                self.watcher.state.put("example/one", number, SHA_A, evidence_key=evidence_key,
+                                       base=SHA_BASE, format=1, outcome=outcome,
+                                       semantic="passed", findings=[], semantic_source="human",
+                                       human_review=decision["review"], review_posted=True,
+                                       verification_policy=pr_watch.VERIFICATION_POLICY_VERSION,
+                                       success_posted=True, retry_after=0)
+                with patch.object(pr_watch, "pr_snapshot", return_value=pr(number=number)), \
+                        patch.object(self.watcher, "human_review_decision", return_value=decision) as human, \
+                        patch.object(pr_watch, "verify", return_value=[]) as verify, \
+                        patch.object(self.watcher, "merge", return_value=False) as merge:
+                    self.watcher.process("example/one", number)
+                human.assert_not_called()
+                verify.assert_not_called()
+                merge.assert_not_called()
+                self.assertEqual(self.watcher.state.get("example/one", number)["outcome"], outcome)
+
+    def test_human_comment_only_parks_without_approval_or_merge(self):
+        self.enable_human_reviews()
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(self.watcher, "human_review_decision",
+                             return_value=self.human_decision("commented")), \
+                patch.object(pr_watch, "semantic_review") as review, \
+                patch.object(pr_watch, "verify") as verify, \
+                patch.object(self.watcher, "merge") as merge:
+            self.watcher.process("example/one", 7)
+            parked = self.watcher.state.get("example/one", 7)
+            writes = []
+            original_put = self.watcher.state.put
+            def counting_put(*args, **kwargs):
+                writes.append(args)
+                return original_put(*args, **kwargs)
+            with patch.object(self.watcher.state, "put", side_effect=counting_put):
+                self.watcher.process("example/one", 7)
+        review.assert_not_called()
+        verify.assert_not_called()
+        merge.assert_not_called()
+        self.assertEqual(self.comments, [])
+        record = self.watcher.state.get("example/one", 7)
+        self.assertEqual(record["outcome"], "human_commented")
+        self.assertEqual(record["human_review"]["id"], parked["human_review"]["id"])
+        self.assertEqual(writes, [])
+
+    def test_head_without_a_human_review_gets_the_normal_ai_review(self):
+        self.enable_human_reviews()
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(self.watcher, "human_review_decision",
+                             return_value=self.human_decision("none")) as human, \
+                patch.object(pr_watch, "semantic_review", return_value=[]) as review, \
+                patch.object(pr_watch, "verify", return_value=[{"name": "privacy", "ok": True}]), \
+                patch.object(self.watcher, "merge", return_value=True):
+            self.watcher.process("example/one", 7)
+        human.assert_called_once()
+        review.assert_called_once()
+        self.assertNotIn("semantic_source", self.watcher.state.get("example/one", 7))
+
+    def test_new_head_after_a_park_is_re_evaluated_and_reviewed_fresh(self):
+        self.enable_human_reviews()
+        decisions = [self.human_decision("changes_requested", head=SHA_A),
+                     self.human_decision("none", head=SHA_B)]
+        with patch.object(pr_watch, "pr_snapshot",
+                          side_effect=[pr(head=SHA_A)] + [pr(head=SHA_B)] * 5), \
+                patch.object(self.watcher, "human_review_decision", side_effect=decisions) as human, \
+                patch.object(pr_watch, "semantic_review", return_value=[]) as review, \
+                patch.object(pr_watch, "verify", return_value=[{"name": "privacy", "ok": True}]), \
+                patch.object(self.watcher, "merge", return_value=True):
+            self.watcher.process("example/one", 7)
+            self.assertEqual(self.watcher.state.get("example/one", 7)["outcome"], "human_changes_requested")
+            self.watcher.process("example/one", 7)
+        self.assertEqual(human.call_args_list[1].args[2], SHA_B)
+        self.assertEqual(review.call_args.args[1]["headRefOid"], SHA_B)
+        record = self.watcher.state.get("example/one", 7)
+        self.assertEqual(record["head"], SHA_B)
+        self.assertNotIn("human_review", record)
+
+    def test_human_approval_does_not_skip_the_verification_gate(self):
+        self.enable_human_reviews()
+        dry = pr_watch.Watcher(self.config, dry_run=True, verbose=False)
+        dry.remove_worktree = lambda *args: None
+        dry.worktree = lambda *args: self.root / "checkout"
+        dry.comment = lambda *args: None
+        dry.recover_infrastructure = lambda *args: None
+        failure = pr_watch_common.VerificationError("privacy scan failed", checks=[])
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(dry, "human_review_decision", return_value=self.human_decision("approved")), \
+                patch.object(pr_watch, "semantic_review") as review, \
+                patch.object(pr_watch, "verify", side_effect=failure) as verify, \
+                patch.object(dry, "merge") as merge:
+            dry.process("example/one", 7)
+        review.assert_not_called()
+        verify.assert_called_once()
+        merge.assert_not_called()
+        record = dry.state.get("example/one", 7)
+        self.assertEqual(record["semantic"], "passed")
+        self.assertNotIn(record.get("verification"), ("passed", "base_failure"))
+        self.assertEqual(record["outcome"], "retry")
+
+    def test_completed_watcher_evidence_is_not_replaced_by_human_reviews(self):
+        self.enable_human_reviews()
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        self.watcher.state.put("example/one", 7, SHA_A, evidence_key=evidence_key,
+                               base=SHA_BASE, format=1, outcome="passed_with_findings",
+                               semantic="passed", findings=[], review_posted=True,
+                               success_posted=True, verification="passed",
+                               checks=[{"name": "privacy", "ok": True}])
+        with patch.object(pr_watch, "pr_snapshot", return_value=pr()), \
+                patch.object(self.watcher, "human_review_decision") as human, \
+                patch.object(pr_watch, "semantic_review") as review, \
+                patch.object(pr_watch, "verify") as verify, \
+                patch.object(self.watcher, "merge", return_value=True) as merge:
+            self.watcher.process("example/one", 7)
+        human.assert_not_called()
+        review.assert_not_called()
+        verify.assert_not_called()
+        merge.assert_called_once()
+        self.github.assert_not_called()
+        self.assertEqual(self.comments, [])
+
+    def test_human_flag_is_outside_the_policy_fingerprint_but_moves_the_config_digest(self):
+        def write_config(flag):
+            path = self.root / ("policy-%s.json" % flag)
+            path.write_text(json.dumps({
+                "repositories": [{"name": "example/one", "checkout": str(self.root), "verify": {},
+                                  "respect_human_reviews": flag}],
+                "state": str(self.root / ("policy-state-%s.json" % flag))}))
+            return pr_watch.load_config(path)
+        off, on = write_config(False), write_config(True)
+        policy = lambda config: pr_watch.fingerprint("repository-policy", 0, "0" * 40, "config",
+                                                     config["repository_policy"])
+        digest = lambda config: pr_watch.fingerprint("configuration", 0, "0" * 40, "config", config)
+        self.assertEqual(policy(off), policy(on))
+        self.assertNotEqual(digest(off), digest(on))
+
+    def test_toggling_the_human_flag_migrates_without_clearing_exact_head_evidence(self):
+        def loaded_config(flag):
+            path = self.root / ("migration-%s.json" % flag)
+            path.write_text(json.dumps({
+                "repositories": [{"name": "example/one", "checkout": str(self.root / "checkout"),
+                                  "verify": {"profile": "commands", "commands": [["true"]]},
+                                  "merge": True, "respect_human_reviews": flag}],
+                "state": str(self.root / "migration-state.json")}))
+            return pr_watch.load_config(path)
+        first = pr_watch.Watcher(loaded_config(False), verbose=False)
+        first.single_instance()
+        first.instance.close()
+        evidence_key = "example/one#7@" + SHA_BASE + ".." + SHA_A
+        first.state.put("example/one", 7, SHA_A, evidence_key=evidence_key, base=SHA_BASE, format=1,
+                        outcome="passed", semantic="passed", verification="passed",
+                        review_posted=True, success_posted=True, findings=[])
+        migrated = pr_watch.Watcher(loaded_config(True), allow_config_migration=True, verbose=False)
+        migrated.single_instance()
+        migrated.instance.close()
+        record = pr_watch.State(str(self.root / "migration-state.json")).data["prs"]["example/one#7"]
+        self.assertEqual(record["semantic"], "passed")
+        self.assertEqual(record["verification"], "passed")
+        self.assertEqual(record["outcome"], "passed")
+        self.assertTrue(record["review_posted"])
 
 
 class ReviewTests(unittest.TestCase):

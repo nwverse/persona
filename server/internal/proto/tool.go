@@ -1,6 +1,10 @@
 package proto
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/nwverse/persona/sdk/go/wire"
+)
 
 // Tool is an MCP tool definition.
 type Tool struct {
@@ -15,6 +19,9 @@ type Tool struct {
 	// (assistant/tool_loading.go). personad mcp leaves Claude Code's alwaysLoad off such a tool, so it waits behind
 	// ToolSearch. Absent (an older manager, node or MCP server) is loaded up front, as before.
 	DeferLoading bool `json:"defer_loading,omitempty"`
+	// WorkGuideTool is discoverable on demand in an opted-in Assistant conversation.
+	// Older MCP servers ignore it and keep advertising the original tool.
+	WorkGuideTool bool `json:"work_guide_tool,omitempty"`
 }
 
 // Content is an MCP tool result content block.
@@ -37,6 +44,9 @@ type ToolResult struct {
 	// them from that phone's registration and client hello; older hubs and queued receipts leave them absent.
 	SourceDeviceName     string `json:"source_device_name,omitempty"`
 	SourceDevicePlatform string `json:"source_device_platform,omitempty"`
+	// ToolViews are out-of-band declarative views from a connector read tool rendered inline alongside the turn;
+	// stripped before returning tool outputs to model runtimes.
+	ToolViews []wire.View `json:"tool_views,omitempty"`
 }
 
 // The kinds of a tool's failure (ToolResult.ErrorKind), as personad tool's exit codes have them.
@@ -44,6 +54,9 @@ const (
 	ToolErrorDeclined    = "declined"     // the user (or connector_gate) did not allow the write
 	ToolErrorUnavailable = "unavailable"  // the node, the hub or the connector cannot be reached or is not signed in
 	ToolErrorRateLimited = "rate_limited" // the connector waits out a rate limit (RetryAfter seconds)
+	// ToolErrorUnanswered: the write's card ended without the user's own answer (it expired, was withdrawn or cleared,
+	// someone else answered it): nothing was written, and the user did not decline it.
+	ToolErrorUnanswered = "unanswered"
 )
 
 func TextResult(text string, isErr bool) ToolResult {

@@ -1,4 +1,5 @@
 import { CSRF_HEADERS } from "../lib/compatibility";
+import { HubUnreachableError, isNetworkFailure } from "../lib/network-failure";
 // The admin API client (docs/operations/admin.md "API"): a session cookie, not the web client's bearer token. Writes carry the
 // session's CSRF token, which lives in memory only (GET state hands it out again after a reload).
 import { currentLanguage, t } from "../i18n";
@@ -22,7 +23,8 @@ export class AdminError extends Error {
 
 export type Transport = (url: string, init: RequestInit) => Promise<Response>;
 
-let transport: Transport = (url, init) => fetch(url, init);
+// fetch's own rejection is the one TypeError that means the hub was not reached (lib/network-failure.ts)
+let transport: Transport = (url, init) => fetch(url, init).catch((e: unknown) => { throw e instanceof TypeError ? new HubUnreachableError(e) : e; });
 let csrf = "";
 let onLoginRequired: () => void = () => {};
 
@@ -127,7 +129,7 @@ export function errorText(e: unknown): string {
     if (e.code === "rate_limited") return e.retryAfter ? t("admin-api.rate_limited_seconds", { count: e.retryAfter }) : t("admin-api.rate_limited");
     return MESSAGES[e.code] ?? e.message;
   }
-  if (e instanceof TypeError) return t("admin-api.hub_unreachable");
+  if (isNetworkFailure(e)) return t("admin-api.hub_unreachable");
   return e instanceof Error ? e.message : String(e);
 }
 
@@ -277,7 +279,7 @@ export const followExtensionLogs: LogFollower = (...args) => follower(...args);
 // ── usage sources (docs/server/usage-windows.md "Account-pool gateways"): the gateways whose usage windows join the sidebar's ──
 
 export const getUsageSources = () => adminApi<UsageSources>("/usage-sources");
-export const saveUsageSettings = (s: { enabled?: boolean; poll_minutes?: number }) => adminApi<UsageSources>("/usage-sources", "PUT", s);
+export const saveUsageSettings = (s: { enabled?: boolean; poll_minutes?: number; hidden_providers?: string[] }) => adminApi<UsageSources>("/usage-sources", "PUT", s);
 export const addUsageSource = (s: UsageSourceInput) => adminApi<{ source: UsageSource }>("/usage-sources", "POST", s);
 export const editUsageSource = (id: string, s: UsageSourceInput) => adminApi<{ source: UsageSource }>(`/usage-sources/${enc(id)}`, "PUT", s);
 export const removeUsageSource = (id: string) => adminApi<{ ok: boolean }>(`/usage-sources/${enc(id)}`, "DELETE");

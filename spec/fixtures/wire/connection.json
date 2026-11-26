@@ -26,6 +26,12 @@
       "fp": "",
       "hub_id": "00000000-0000-4000-8000-000000000001",
       "hub_name": "家里",
+      "image_limits": {
+        "request_bytes": 33554432,
+        "image_bytes": 3750000,
+        "max_side": 1600,
+        "per_message": 20
+      },
       "locale": "zh-Hans",
       "mesh": {
         "hubs": [
@@ -42,6 +48,7 @@
       "message_send_state": 1,
       "min_app_build": 0,
       "protocol": 1,
+      "push_grading": false,
       "server_version": "fixture-version",
       "tls_port": 0,
       "todo_send_state": 1,

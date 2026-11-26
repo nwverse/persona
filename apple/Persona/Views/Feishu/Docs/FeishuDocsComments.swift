@@ -56,13 +56,9 @@ struct FeishuDocsCommentsView: View {
         }
         .navigationTitle("Comments")
         .navigationBarTitleDisplayMode(.inline)
-        #if os(macOS)
-        .macSheetDone { dismiss() }
-        #else
         .toolbar {
             SheetClose { dismiss() }
         }
-        #endif
         .refreshable { await model?.load() }
         .onChange(of: model?.writeError) { _, message in
             guard let message else { return }
@@ -163,7 +159,8 @@ struct FeishuDocsThreadCard: View {
             }
             ForEach(thread.replies) { r in
                 HStack(alignment: .top, spacing: Theme.Space.s) {
-                    LarkAvatarImage(name: r.author.name, url: r.author.avatarUrl.map { LarkMedia.url($0, manager: manager) }, size: Theme.Size.wellXS)
+                    LarkAvatarImage(name: r.author.name, url: r.author.avatarUrl, size: Theme.Size.wellXS)
+                        .environment(\.larkManager, manager)
                     VStack(alignment: .leading, spacing: Theme.Space.xs) {
                         HStack(spacing: Theme.Space.sm) {
                             Text(r.author.name).font(Theme.Font.captionStrong).lineLimit(1)

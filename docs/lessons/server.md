@@ -1,8 +1,35 @@
 # Lessons: hub / node and networking
 
+## An IMAP retry that replays the step that ended the connection fails the same way (2026-11-22, #12808)
+
+go-imap/v2 completes a command when its tagged answer arrives, before it reads on. A server that hangs up right after
+answering (QQ Mail does after a keyword `UID SEARCH`) leaves the command a success and fails the *next* one: the reader
+has already closed the connection, so over TLS the write returns a bare `net.ErrClosed` ("use of closed network
+connection"). Retrying the whole operation on a new login sends the search again, and the server ends that connection
+too: two QQ accounts' `mail_search` failed on every try with `fetch: use of closed network connection`, and nothing
+was logged. What a try already got (the search's UIDs) has to survive into the retry, so the retry only does what
+failed (`listOne` in `server/internal/modules/mail/imap_list.go`). Tell a dead connection by `Client.State() ==
+ConnStateLogout`: the reader sets it before it fails the waiting commands, so a command that failed sees it already,
+and `Client.Close()` then returns the reader's own error, the reason to log. A proxy that closes after a chosen tagged
+answer reproduces it (`server/internal/modules/mail/closed_conn_test.go`).
+
+## Under a full-tunnel VPN the default route's address is the tunnel's (#11125)
+
+A UDP "connect" towards a far address reports the source address of the route it would take, the usual way to find
+"the address traffic goes out of". When a VPN routes general traffic through its tunnel, that is the tunnel's own
+address (`utun*` on macOS), and many VPN clients give the tunnel a new one on every reconnect. `hub setup` wrote it into
+`public_url` and `public.tls_listen` as the LAN address, so after the next reconnect the TLS port refused everyone, LAN
+clients included. Before an address goes into config as the LAN address, check the interface it is on: up, not
+loopback, not virtual (`pickLANIPv4` in `server/internal/hub/setup_machine.go`), else take the first private IPv4 on
+such an interface.
+
 ## A cancelled RPC test must acknowledge cancellation before releasing work (#10342)
 
 A local context cancellation only starts delivery of `rpc.cancel`; it does not prove the node has processed it. A test that releases a held file write immediately can let the operation finish as `done`, after which polling for `cancelled` times out and the original destination is not restored. Keep the write held until a following `file.operation` request on the same ordered connection has been answered, then release it. Exercise cancellation and normal completion in the same command, and keep the existing deadline, cleanup and restoration assertions.
+
+## Connected Link status does not acknowledge the hub's initial writes (#10409)
+
+The active Link client reports `connected` immediately after writing `hello`; the hub may still be writing its initial `endpoints` and `node` messages. A lifecycle test that kills SSH, switches mode or unpairs on that status can make the hub write to a closed socket. Wait for the same connection to report the hub name and online node, in that order, before the destructive step. To reproduce the early close deterministically, hold the hub at that write boundary, use an abortive tunnel close and wait for the SSH process to die: a graceful FIN alone can still let the first writes succeed (`server/internal/link/ssh_readiness_test.go`).
 
 ## Queue admission decides notification replay (#10394)
 
@@ -28,6 +55,14 @@ UI routes and switches identify a contribution by extension plus local ID. A glo
 make an unrelated disabled built-in block installation. Check both registry preview and plan commit: fixing only
 preview leaves the install broken. Exercise real installs, batched plans, upgrades, rollback and reload, while keeping
 non-UI contribution conflicts and within-manifest duplicate checks intact.
+
+## Queue admission decides notification replay (#10394)
+
+A connected WebSocket is not evidence that its outbound queue accepted a notification. Record admission per device
+and retain the event in the existing reconnect ring when every eligible socket rejects it. If another socket for the
+same credential accepts it, do not retain a duplicate. Keep recipient-selection counts separate from queue admission
+and delivery. Exercise the real notification bus handler with a full queue, same-ID outbox retry and reconnect;
+keep push-route, capability and preference exclusions intact.
 
 ## Empty assistant creation must not become a model turn
 
@@ -593,7 +628,9 @@ following the destination. Run the same helper in preflight and exec the agent a
 `CAP_SYS_ADMIN` to harden these mounts: that breaks `unshare -rm`, which was working; direct `umount` in the original
 namespace therefore remains an explicit boundary. Bubblewrap keeps a supervisor even without `--unshare-pid` or with
 `--as-pid-1`: verify the agent's `PPID` in the host pid namespace, not equal pids, and use `--die-with-parent` for
-lifecycle cleanup.
+lifecycle cleanup. A kernel can pass the basic bwrap probe yet refuse `open_tree` on an alias symlink with `EPERM`
+(observed on Linux 5.4). Keep that start fail closed. Real tests may skip only the structured alias-`open_tree` `EPERM`
+from the full-profile preflight, never every unavailable result or a `move_mount` failure (#11073).
 
 ## Runtime policy and publisher-owned node packages (#2566)
 
@@ -1334,6 +1371,8 @@ Splitting a registry at its first colon reads `[::1]:5000` as `[`, selecting HTT
 ## persona-link passive mode and node service (docs/operations/link.md ("Passive mode", "Installing the node service"), 2026-11-02)
 
 - Link only relays node streams; remote updates belong in node RPC (#1158, `docs/operations/node-update.md`). Each attach creates a new `Node`, so update exclusion and installation transactions must belong to the resident process; closing the current RPC doesn't restart resident node. Shut down the resident service only after the success response is actually written; a separate recovery process rolls back if the new version can't start. Old nodes don't know the update protocol and need one local upgrade first; version mismatch alone mustn't enable a deployment button.
+- **Record the backup's version after executable drift** (#15686). A resident still running V1 can have V2 on disk.
+  Redeploy backs up V2 and records its self-reported version so V2 can clear the restart barrier after rollback.
 
 - Linux `setsid` detaches the process group, not the systemd service cgroup: when node startup fails, the manager kills rollback processes in the same cgroup (#1158). Recovery must run in a separate transient user service and be ready before binary replacement. Complete its readiness handshake before acquiring the update-directory lock, or the parent waits for readiness holding the lock while recovery waits for that lock. Tests use fake `systemd-run`, never installing recovery services on the development machine.
 - A missing identity and an unavailable identity need different fallback decisions (#2910). A Linux zombie keeps both its procfs start time and its `ps -o lstart=` result, so rejecting it in `osproc.Identify` alone still lets a watchdog check count it as alive. Preserve the difference between a live exact identity, a known exited process, and an unreadable identity; only the last needs a weaker reading. Check for known exit even for older markers without exact identities. Tests can hold a deterministic zombie with `waitid(WEXITED|WNOWAIT)` after SIGKILL, then reap it during cleanup.
@@ -1964,6 +2003,11 @@ For future safety-driven delete/reject decisions, don't rely on error-swallowing
 - Before taking rows out of a list, find every reader of the list, not only the lookups by id: grep the field and every accessor that returns it (`m.sessions`, `keptSessions`, `sessionList`). The hub's lists never showed archived rows, but `Machine.session` (sending, deleting, pins) and the watch-state prune found them, and scans read them too: a port an archived agent listens on allowed `/ports/{port}/connect` and previews (`portAllowed`), the manager's `sessions.list`, the update's busy check, space names, the node's revs and the unknown state while the manager is away. The first version kept only the lookups and narrowed port access without meaning to (review of #6877). Keep the rows apart in the order told and give the scans an accessor for both (`keptWhole`); prove it by comparing each reader against a hub given the whole list, and check the test fails without the change.
 - A cache of derived data needs a key that changes with everything it was derived from. The archive's sorted row index depends on the record set (never changed in place, so its identity is the key) and on which of the node's rows have a record: a session the node lists again moves from the archive's rows into the node's, with no record written. A test that only writes records would pass with a key that misses the second.
 
+## Archive generations outlive close RPCs (2026-11-21, #7789)
+
+- `time.Now` alone is not an archive version: it can tie or move backwards, and deleting a provisional record loses the high-water mark a later archive needs after a restart. Allocate the next marker from the persisted one under the archive gate. An applicable force-close rollback leaves a restored generation; a stale rollback is a no-op, not another write that could fence out a newer close.
+- A close RPC runs outside the archive gate. Carry the generation captured by the archive write into completion, and check it under the gate before writing `ClosedAt` or requesting native archiving. Skip a stale completion's publish; an applicable completion publishes with the archive read marker captured under that gate, so a re-archive between check and publish is not visible as activity to the old close. Publishing a cached blocked row without that fence can automatically restore the newer re-archive even when its record was left untouched. Metadata-write errors are different: preserve the committed archive's normal publish and recheck the generation before the immediate native retry.
+
 ## Heartbeat timeouts on slow links (2026-11-06, #3452)
 
 At about 30 KB/s from hub to a computer, its link repeatedly disconnected with "no pong within 5s", failing every message. Ping doesn't jump the queue: it follows bytes already given to TCP,
@@ -2079,6 +2123,46 @@ A connection that outlives its transport (protocol.md "Resuming") changes what s
 - **A side that decides the transport is dead must tell the other.** One side's silence check fired while the other's
   read loop was busy (not dead); the busy side then waited for its own pings, past the other side's window. The side
   that loses a transport closes it, and the node keeps the connection longer than the manager takes to notice.
+- **A resumed connection can change path, not only transport (#10944).** After a failed try on the old path, a better
+  path may take the connection back. `path` / `via` can no longer be captured for the connection's lifetime: final
+  `pathEnded`, the better-path watcher, the machine's route and the tailcat watcher all need the pair after a successful
+  move. Commit it only after `Peer.Resume` succeeds; a failed attempt must leave the route and its accounting alone.
+  Callbacks that outlive a route (a planned switch, an RTT ping or a tailcat probe) carry its generation and check it
+  before acting. Path failure and SSH flap timing use the current route's own start, not the whole connection's.
+
+## A large session over a slow link (2026-11-23, #13677)
+
+A computer on Persona Link at about 100 KB/s with a 300 ms round trip went offline (`node exited`) every few minutes
+while a chat had one of its sessions open: 4.9 MB of transcript, most of it screenshots. Lanes were on, and still:
+
+- **What a pong waits behind is what was written without credit.** The node's `session.items` pushes were events and
+  its answers to `session.items` answers: neither waits for credit, so a catch-up of megabytes went to the transport at
+  once, and Persona Link's WebSocket ping on the stream (10 s / 5 s, the hub's end) timed out behind it. The hub closed
+  the stream, the manager read the end of the connection as the node exiting, and a link computer gets no grace. The
+  pushes now go on the bulk lane with credit and those answers wait for credit on the interactive lane, ahead of bulk:
+  a person's page read is not held behind a background catch-up. Only the node's own pushes: a runtime's are forwarded
+  from that runtime's read loop, which must not wait for credit.
+- **A watch that answers after its catch-up looks like a dead node.** The hub gives `session.watch` 10 s; a catch-up
+  of 5 MB at 100 KB/s is 50 s. The node now reads the file, answers, and then pushes. A page read used to wait for the
+  push lock the catch-up holds, which was the whole catch-up again (29.5 s and a 502, as in the hub's log); it reads
+  the file as it is now, since what the catch-up read is on its way.
+- **Putting the data back for subscribers that want none.** The catch-up put every image's data back
+  (`File.WithImages`, "the hub sends them to every subscriber, lazy or not"), and every app subscribes with
+  `lazy_images`, whose data the hub strips again. Catch-ups carry placeholders now; a batch of new lines carries images
+  whole only up to 128 KiB each and 256 KiB together, the newest first; a push is cut at about 256 KiB at line
+  boundaries. The 5 MB session's catch-up went from 6.4 MB
+  over the link (55 s) to 0.3 MB (1 s) in the slow link soak (testing.md "Slow link soak").
+- **A reproduction has to know how far the hub has read.** A catch-up only happens with `since_seq`, which the hub
+  learns from a push: an app that opened the session, saw no new line and closed it leaves nothing to catch up on,
+  and a soak that does so passes on the broken code. The soak shows a line while the session is open, then grows it.
+- **Resuming hides the drop, not the cause.** On a node that resumes (#10663) the same stream drops three times and
+  comes back within a second each; a 0.9.1 node, without resuming, goes offline and the catch-up never arrives. Count
+  the drops (`connection over link lost`), not only the offline transitions.
+- **The web app multiplied it.** Its stale-page pull asked again every 10 s however often it failed (and at once
+  when an ask took longer than that), the user-input index retried forever, two views of one session asked side by
+  side, and none of it looked at archiving. One gate per session and read in the tab now (`web/src/lib/pull-gate.ts`):
+  one ask out at a time, the next after a failure waiting 3 s doubling to 5 minutes, and no stale pull for an archived
+  session. Archiving does not end the hub's watch while a view has the session open: the watch follows open views.
 
 ## A new value for an existing RPC parameter may be silently ignored by an old node (2026-11-06, #4858)
 
@@ -2142,6 +2226,20 @@ Redeploy installed the old node (or failed its self-check), and the mismatch cou
 another version renames those unlabelled builds to `.prev`, so the lookup falls through to the release of the hub's version.
 Whenever a file's meaning is "the build of whatever version the hub runs now", whatever changes the hub's version without changing that file
 must relabel it or move it.
+
+## A node update left the Windows build behind, and it passed for the new version (2026-11-22, #12958)
+
+The same mistake came back with node updates on: the update replaced only the platforms in the release's `files`, and releases up to v0.9.1
+list no Windows `personad`, so `bin/nodes/personad-windows-amd64.exe` stayed the old build without a `.version`. Every Redeploy to a Windows
+computer then failed with "node executable self-check version or platform mismatch"; `deploy.sh`, which builds only Linux and macOS, left it
+behind the same way. Switching a hub before replacing `bin/nodes` made the new hub push the old builds, labelled as its version, to every
+computer that reconnected.
+Now a node update sets aside unlabelled builds before the release's go in, `deploy.sh` builds the Windows node programs, and the manager takes
+an unlabelled local build for the hub's version only when the version string is in the file: the node's self-check compares the version the
+build was linked with, so the string's absence proves the build is another one (its presence proves nothing). Lookups are looked up again when
+a local build changes, so a build put in place after the switch is used at once.
+Fixing one path that changes the hub's version is not enough: check every writer of the directory (self-update with and without node updates,
+deploy scripts, hand switches), and give the reader a check that does not trust any of them.
 
 ## Generic plans make "empty means no filter" lose indexes (2026-11-06, #4907)
 
@@ -2235,9 +2333,18 @@ The same holds on every path that reports a push, not only the API that was fixe
 
 `Pusher.send*` and the WebSocket notify take `wants func(NotifyPrefs) bool`, and nil is not just "every device": `alertWanted` lets it past Phone Muted (`mute_while_desktop`) and the pusher sends it to an open desktop too (an assistant's reminder, an extension's push). Wrapping nil in a filter to add one more condition (a muted manager) silently turns those pushes into ordinary ones, and they stop reaching a phone in Phone Muted mode. Put an extra per-device rule where the devices are walked (`Pusher.sendFrom`, `notifyWSFrom` take the manager) instead of in `wants`.
 
-## A LaunchAgent node is throttled, and a protected folder stalls Claude before any hook (macOS, measured 2026-11; re-check; #5944)
+## A LaunchAgent node is throttled, and a protected folder stalls Claude before any hook (macOS 26 and 27, measured 2026-11; #5944, #13359)
 
-- A plist with no `ProcessType` doesn't get "Standard" scheduling: launchd gives the job the Background policy, low scheduling priority and throttled I/O (`launchctl print gui/<uid>/<label>` shows `spawn type = daemon (3)`). A resident node under it got 15.45 CPU seconds in 139 s (scheduling priority 4 instead of 31), and the Claude Code it started did not become ready in time. Nothing looks wrong in the node's own logs; only the timings are long. When a Mac's Agents start slowly or time out, look at the agent's spawn type before blaming the machine's load.
+What each `ProcessType` gives a LaunchAgent, measured with short-lived test agents on Apple silicon Macs with 18 cores in three 6-core clusters: on macOS 27 (2026-11-21, rechecked on 27.2.1) and on macOS 26.5.1 (2026-11-23), with the same results on both. `launchctl print gui/<uid>/<label>` shows the spawn type, `ps -M` (or `ps -o pri=`) the threads' priority; the cores column is a job of 12 busy children on an otherwise lightly loaded Mac (macOS 26.5.1).
+
+| `ProcessType` | spawn type | thread priority | cores |
+| --- | --- | --- | --- |
+| not set, or `Standard` | `daemon (3)` | 20 (utility clamp) | every cluster: 11 of 12 children ran at once |
+| `Background` | `background (5)` | 4 | one 6-core cluster at a time: about 4.8 |
+| `Interactive` | `interactive (4)` | 31 | every cluster: 12 |
+
+- A plist with no `ProcessType` doesn't get default scheduling: the job and every child run at the utility clamp (priority 20 instead of 31) on every cluster and yield to default-priority work (on macOS 27, a 6-thread default-priority job started beside one got about 5.7 cores at once). `Background` is the throttled one: priority 4 on one cluster, inherited by every child. The priority comes from the spawn type and changes only when launchd starts the job again from a new definition (`bootout`, then `bootstrap`): `taskpolicy -B -p <pid>` returns 0 and leaves the job, and the children it starts afterwards, at 4 (both versions). A background mark set from outside with `taskpolicy -b` is cleared by `-B` at once, which makes the two easy to confuse. `Nice` does not move threads that run with a QoS class (macOS 27).
+- The case behind this lesson (#5944): a resident node got 15.45 CPU seconds in 139 s at scheduling priority 4 instead of 31, and the Claude Code it started did not become ready in time. Priority 4 is what `Background` gives; neither version measured gives it to a job without `ProcessType`, so that node ran under a background policy from somewhere else or on an earlier macOS (which was not recorded). Nothing looks wrong in the node's own logs; only the timings are long. When a Mac's Agents start slowly or time out, look at the agent's spawn type and its threads' priority before blaming the machine's load.
 - `ProcessType=Interactive` gives `spawn type = interactive (4)`. It changes scheduling only and grants no TCC permission: a job that cannot read a protected folder still cannot (`docs/plans/plan-connectors.md` "Full Disk Access (TCC)"). The plists Persona wrote (`scripts/deploy/node-launchd.sh`, `nodePlist` in `cmd/persona-link/nodesvc.go`) did not set it; both write it now, and `personad node doctor` reports an agent without it.
 - Editing the plist isn't enough. `kickstart -k` restarts the job from the definition launchd loaded, so the change needs `bootout` then `bootstrap`. Right after `bootout`, `bootstrap` can briefly fail with `5: Input/output error`, so retry it. Whether a running agent has the key is visible only in `launchctl print`'s spawn type, not in the file.
 - The rename (#277) introduced a new node-agent label, but both installers leave an installed agent as it is. A Mac can have either supported plist, or both. Code that looks for the node's agent has to recognize the installed definitions. With both there, use the one launchd has loaded: the other is a file launchd is not running, and loading it starts a second node next to the running one.
@@ -2603,7 +2710,7 @@ On TestFlight 224 an extension's **Review** spun for two minutes and then failed
 
 ## What the port relay costs, hop by hop (2026-11-10, #3067)
 
-`server/cmd/vncbench relay` puts an echo server behind `…/ports/{port}/connect`. With everything on the hub machine
+`server/internal/modules/screen-share/vncbench relay` puts an echo server behind `…/ports/{port}/connect`. With everything on the hub machine
 (client, hub, manager, its own node) a small message's round trip is 1.6 ms, 0.8 ms more than a WebSocket ping to the
 hub, and a download runs at 88 MB/s: the hub, the bus, the manager and the stream mux are not where a live screen's
 latency goes. The hub → node leg (`ssh -T` over Tailscale on the LAN) is where it varies; plain `ssh host cat` shows the
@@ -2810,7 +2917,7 @@ computer every 2 s): the manager allocated 555 MB and used about 2.1 s of CPU a 
 `internal/assistant`'s `TestPlacesThatSealAreKnown` (`keyrotate_guard_test.go`) counts every `.Seal(`, `sealKey(`,
 `.encrypt(`, `SealWith(` and `secretkey.New` per file under `internal/` and `cmd/`, so nothing new seals with the
 manager's `secret.key` without the key rotation re-sealing it. It counts AEADs with keys of their own too, in packages
-that have nothing to do with the assistant: #7954 sealed the live screen's UDP packets in `internal/screenlink`, its
+that have nothing to do with the assistant: #7954 sealed the live screen's UDP packets in `internal/modules/screen-share/screenlink`, its
 tests and its importers passed, and the hub deploy failed on this guard. When code under `internal/` or `cmd/` seals,
 run `go test -run TestPlacesThatSealAreKnown ./internal/assistant` (no database needed) and record the file there:
 with `secret.key`, after putting where it keeps the sealed value into `db.sealedTables` or `db.sealedSettings`; with
@@ -2868,6 +2975,74 @@ nothing ran the old build after the new one.
   video status. Check the folder's build before pressing Redeploy, and after a deploy check that no machine reports
   `node_mismatch`.
 
+## Shared preparation inputs must stay outside Manager implementation (#7357)
+
+Repository binding types were first delivered under the assistant package. Once the database and
+naming contracts consumed them, the Hub inherited that Manager dependency through the database,
+even though the Hub's new code only routed requests. Put the pure shared definitions and validators
+in `repositorywire`, retaining the delivered import path with aliases and forwarding helpers. Check
+the full Hub dependency guard as well as the Manager tests when adding shared persistent contracts.
+
+A preparation request can be saved before the Node admits it. After a rejected correction, the newest
+business operation can therefore differ from the operation that still owns the physical resources.
+Record that Node operation explicitly and target further correction/cleanup through its trusted
+record. Cover repeated corrections and cancellation before any Node effect, not only one failed fetch.
+
+Default cleanup retains branches. A workspace-private bare repository must survive removal of its
+worktree for that promise to hold. Verify the retained branch's actual commit after cleanup, including
+local commits; a directory-exists assertion alone does not show that the branch data survived.
+
+For a test of a newer transcript copy, give the base fixture an explicitly older timestamp.
+The filesystem's timestamp on a new write can lag a wall-clock value passed to `os.Chtimes`,
+so writing the continuation next does not establish the ordering the test requires. Keep
+equal-timestamp selection covered separately.
+
+
+When main moves repository persistence into the Manager-owned store, preparation and naming
+transactions must move with it and share that store's Todo lock and database pool. Keeping an old
+copy in shared db would drop link receipts and reintroduce the dependency the move removed. Node
+consumers use the neutral repositorywire contract, not its Manager compatibility import.
+
+A checkout removed during partial cleanup still has a task branch to protect. Preflight non-force
+branch deletion for removed instances too, including removal reconciled after a lost receipt; a retry
+must not reach branch -D merely because the checkout is gone. Test a real first removal followed by a
+second removal failure, refusal of the non-force retry with the local commit still referenced, and
+successful explicit force. A branch already deleted before its receipt is a separate recovery case.
+
+
+When compressed tool guidance meets a changed continuation contract, retain the upstream effective
+criteria, owner-authorized scope changes and stale scope-revision check. Regenerate tool snapshots
+from the merged source, then measure the complete schema; an old snapshot can silently lose a new
+argument even when its shorter description still fits the budget.
+
+Compare the complete measurement with the fixed main total too. A merged inventory can include the
+extra tool and pass its own updater while exceeding main's allowance. Keep every new schema field
+and shorten equivalent repeated parameter guidance rather than hiding entries or raising the limit.
+
+Regenerating the full catalog may also expose upstream tools or fields missing from main's snapshots.
+Keep those measured too; move space from equivalent parameter guidance before the guarded update,
+and compare the resulting complete total with the fixed main allowance.
+
+Keep a shared request-context hook separate from repository editor UI, so a lazy naming form does
+not pull that editor into its dependency graph just to reuse ownership and lifetime checks.
+
+The shell's worktree request channel and Agent cleanup reads must also stay separate from creation
+transport and form guidance. Import those narrow modules eagerly and retain the old exports for lazy
+callers; moving only the dialog leaves the form's top-level translations on the first screen.
+
+A cache getter must copy its map while holding the lock before a publisher iterates it. Returning the
+book after unlocking races with tag insertion/deletion even when each record is replaced atomically.
+Keep a snapshot stable across later writes and verify concurrent publication under the race detector.
+
+An automatically merged route inventory can still miss newly registered upstream routes. Regenerate
+it from actual registrations and inspect the classifications; administration routes stay restricted
+to full credentials unless the authorization policy explicitly grants an extension scope.
+
+When repository providers add shared identity, snapshot or link validation, extend the neutral `repositorywire`
+contract and keep the delivered Manager import as aliases and forwarding helpers. Provider registries and extension
+calls stay in the Manager; moving those calls with the shared fields would make Node and Hub depend on Manager
+execution. Run the original provider tests as well as workspace and dependency guards after the split.
+
 ## A fence keyed to the first credential keeps a re-paired phone under its old one (2026-11-17, #9611)
 
 - A push registration is keyed by the app's own `device_id` and fenced to the credential that first registered it.
@@ -2921,6 +3096,15 @@ those inputs. Compare those callers' rendered input bytes, not just triage's gol
 The tier criteria are shared with event grouping. Describe each event's assigned new activity and unresolved
 requests, not one "current new message" for an entire batch. A mixed-event regression should keep a new request
 and screenshot separate from another event's final acknowledgement, while retaining each event's overall tier.
+
+## Sparse visibility metadata and single-session allocation budgets
+
+Directory visibility (#8578) needs a wire flag without making every `Session` larger. Keep optional flags in
+existing sparse metadata and update the handwritten encoder and its layout hash together. Check both the
+row size and single-session allocation guards: invoking visibility callbacks from a lower-level list decorator
+made its one-row slice escape even after the row size was restored. Apply the annotation at the final list or
+single-row boundary, before folding/counting, and test archive-only rows too. Read persisted supervision before
+hiding; an unavailable task inventory must preserve possible supervision notifications.
 
 ## Doing the owner's call later (#10661)
 
@@ -2994,3 +3178,55 @@ the TLS hello then held it open forever, on the direct route and through the pro
 Whoever writes a `DialTLSContext` gives the handshake its own deadline and closes the raw connection when it runs out.
 Test it by waiting for the far end to see the connection close, not by how long the request took: the request returns
 on its own deadline either way (`TestDirectStalledHandshakeIsClosed`, `TestProxyStallingInsideTheTunnelIsClosed`).
+
+## A script on a proxied machine sends the hub's token to the proxy (2026-11-21, #12493)
+
+- A machine whose environment sets `http_proxy` / `https_proxy` usually has a `no_proxy` that excludes private ranges as
+  CIDRs (`<private range>/8`). Python's `urllib` matches `no_proxy` by host name suffix and ignores CIDR entries; other
+  clients differ on this. A script that calls the hub's API by its LAN address (`http://<hub address>:18660/api/…`)
+  then goes to the proxy, `Authorization: Bearer <token>` included, in plain HTTP.
+- Seen on a hub machine: a one-off `POST /api/v1/machines/{mid}/deploy` got an HTML `403 Forbidden` back. The hub's
+  log had no such request; the proxy had answered, and it had the master token. The token had to be rotated.
+- Call the hub's API from such a machine with proxies off: `urllib.request.build_opener(urllib.request.ProxyHandler({}))`,
+  `curl --noproxy '*'`, or `env -u http_proxy -u https_proxy …`. `127.0.0.1` helps only when the hub listens there; a
+  hub.json `listen` bound to one address does not.
+- Before sending a credential, ask `GET /api/v1/health` without one and check the answer is the hub's JSON (its `commit`,
+  and `features` for a trusted source). An HTML page or any answer that is not the hub's, to a request that carried a
+  credential, means the credential left the machine: rotate it, then retry with proxies off.
+
+## Rich-text mention boundaries are not textual whitespace (#12655)
+
+A received Lark post can place an `at` element immediately before a command's `text` element. Flattening those into
+`@Persona/read` loses the boundary that the whole-word textual mention stripper needs. Retain the structured nodes
+for command extraction, resolve each leading `at` through the event's mention IDs, and stop at unapproved mentions
+or ordinary text. Display names can collide; inserting spaces alone cannot establish which person was mentioned.
+Check both the manager's admission gate and the assistant's reparse of the original event, using a synthetic event,
+a recording handoff and a queue barrier. Such a test proves local handling of that event shape, not whether a live
+client inserts whitespace.
+
+## Required extension isolation must fail closed (#12994)
+
+A proxy URL in an environment variable is voluntary routing, not a sandbox. When
+the sandbox probe fails, reject the host spec before starting a process or egress
+proxy. Container images must carry bubblewrap and allow its nested user namespace
+and mounts; test the actual runtime stage as a non-root user with no outer
+capabilities. Merely finding `bwrap` on PATH or skipping an unavailable real test
+is not evidence of isolation.
+
+## Shared runner mirrors
+
+- Versioned queue output can retain incomplete entries during a rolling upgrade. Preserve empty ticket, tag and commit fields as unknown; do not reject the whole snapshot or deduplicate an empty commit. Track an external lease by its stable run name when present: a legacy waiting ticket may be absent once that same run enters a slot. Keep the original ticket for display. A v1 result with null exit and empty run/finish time means no known result, not exit zero. Cover both transitions with scrubbed fixtures.
+
+- Register relayed resource routes in the domain’s `assistantwire` file instead of expanding the frozen central literal. New CLI tools that bind to a verified process need both forged-caller rejection and a positive process-session test; pane-only fixtures cannot attest process identity. Keep package-level validation regexes lazy so adding a CLI does not add startup work to every hook.
+
+- The hub’s MCP golden harness reconstructs the Agent tool list separately from the manager’s live discovery path. Add new manager-owned Agent tools to that helper as well as the per-tool goldens; otherwise production discovery can match its language snapshots while the hub’s legacy golden test still offers the old list. Full runner logs identify this as an index/leftover-file mismatch.
+
+- Register non-session runner RPCs through `nodeRPC` in the resource domain file. Adding a case to `Node.handleMethod` bypasses the domain registration rule and fails the central-list freeze even when the node package tests pass. Include the architecture-guard shard when adding a node RPC.
+
+## A switch outcome does not mean its sweep released every row lock (#15138)
+
+`logicalSweep` starts background reconciliation; a batch reaching `switched` does not join that goroutine.
+A fixture's next `SetConversationPick` can collide with its final `ClaimConversationInput` transaction even when no
+input remains. `FOR UPDATE NOWAIT` maps PostgreSQL lock contention to `ErrConversationSwitchBusy`. Use the existing
+bounded wait for that specific error, keep the original expected epoch, and fail immediately on other errors.
+Do not treat the error text as proof of an unfinished operation or wait for an unrelated batch state.

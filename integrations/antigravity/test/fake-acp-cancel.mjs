@@ -5,9 +5,10 @@
 //   'ask'            request permission mid-prompt and wait for the answer
 //   'ask-then-end'   request permission, then end the turn without waiting for the answer
 //   'ask-on-cancel'  request permission when the cancel arrives (a request that crossed it on the wire)
+//   'ignore-cancel'  hold the prompt and never end it, even when cancelled (an agent that does not confirm the cancel)
 //   anything else    hold the prompt until it is cancelled
 // Every message it receives goes to the --record file as one JSON line, after a first {"started": <pid>} line.
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, existsSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 
 if (process.argv.includes('models')) { console.log('test-model\tTest Model'); process.exit(0) }
@@ -20,19 +21,20 @@ const send = (o) => process.stdout.write(`${JSON.stringify(o)}\n`)
 let nextId = 1
 const turns = new Map() // sessionId -> { id, mode, cancelled, open: Set of permission request ids }
 
-function askPermission(sessionId, toolCallId) {
+function askPermission(sessionId, toolCallId, toolCall = { title: 'run_command', rawInput: { command: 'ls' } }, options) {
   const id = `perm-${nextId++}`
+  record({ askedPermission: id, sessionId })
   send({
     jsonrpc: '2.0',
     id,
     method: 'session/request_permission',
     params: {
       sessionId,
-      toolCall: { toolCallId, title: 'run_command', rawInput: { command: 'ls' } },
-      options: [
+      toolCall: { toolCallId, ...toolCall },
+      options: options === undefined ? [
         { optionId: 'allow', name: 'Allow', kind: 'allow_once' },
         { optionId: 'reject', name: 'Reject', kind: 'reject_once' },
-      ],
+      ] : options,
     },
   })
   return id
@@ -64,9 +66,50 @@ function onRequest(msg) {
     case 'session/prompt': {
       const sessionId = params.sessionId
       const mode = params.prompt?.find((b) => b.type === 'text')?.text?.trim() || ''
+      if (mode === 'reply') {
+        send({ jsonrpc: '2.0', method: 'session/update', params: { sessionId,
+          update: { sessionUpdate: 'agent_message_chunk', content: { text: 'Finished.' } } } })
+        return answer({ stopReason: 'end_turn' })
+      }
       const turn = { id, mode, cancelled: false, open: new Set() }
       turns.set(sessionId, turn)
-      if (mode === 'ask') turn.open.add(askPermission(sessionId, 'call-1'))
+      if (mode === 'ask' || mode.startsWith('ask-shape ')) {
+        const toolCall = mode === 'ask' ? undefined : JSON.parse(mode.slice('ask-shape '.length))
+        turn.open.add(askPermission(sessionId, 'call-1', toolCall))
+      }
+      if (mode.startsWith('ask-options ')) {
+        const options = JSON.parse(mode.slice('ask-options '.length))
+        turn.open.add(askPermission(sessionId, 'call-1', undefined, options))
+      }
+      if (mode.startsWith('ask-full ')) {
+        const { toolCall, options, waitFile } = JSON.parse(mode.slice('ask-full '.length))
+        if (waitFile) {
+          const timer = setInterval(() => {
+            if (!turns.has(sessionId) || turn.cancelled) {
+              clearInterval(timer)
+              return
+            }
+            if (existsSync(waitFile)) {
+              clearInterval(timer)
+              turn.open.add(askPermission(sessionId, 'call-1', toolCall, options))
+            }
+          }, 10)
+        } else {
+          turn.open.add(askPermission(sessionId, 'call-1', toolCall, options))
+        }
+      }
+      if (mode === 'updates' || mode === 'unrelated-updates') {
+        let count = 0
+        const timer = setInterval(() => {
+          send({ jsonrpc: '2.0', method: 'session/update', params: {
+            sessionId: mode === 'updates' ? sessionId : 'another-session', update: { sessionUpdate: 'heartbeat' },
+          } })
+          if (++count === 16 || !turns.has(sessionId)) {
+            clearInterval(timer)
+            if (turns.delete(sessionId)) answer({ stopReason: 'end_turn' })
+          }
+        }, 40)
+      }
       if (mode === 'ask-then-end') {
         askPermission(sessionId, 'call-1')
         turns.delete(sessionId)
@@ -85,6 +128,7 @@ function onNotification(msg) {
   const sessionId = msg.params?.sessionId
   const turn = turns.get(sessionId)
   if (!turn) return
+  if (turn.mode === 'ignore-cancel') return
   turn.cancelled = true
   if (turn.mode === 'ask-on-cancel') turn.open.add(askPermission(sessionId, 'call-2'))
   endIfDone(sessionId)

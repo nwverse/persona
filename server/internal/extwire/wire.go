@@ -31,6 +31,14 @@ var Routes = []string{
 	"/api/v1/imessage/",
 	"/api/v1/agents",
 	"/api/v1/agents/",
+	// The concrete Agents patterns also let scoped devices authorize against the hub's real relay mux.
+	"GET /api/v1/agents",
+	"GET /api/v1/agents/sessions",
+	"GET /api/v1/agents/sessions/{id}",
+	"GET /api/v1/agents/sessions/{id}/messages",
+	"GET /api/v1/agents/sessions/{id}/avatar",
+	"POST /api/v1/agents/sessions/{id}/messages",
+	"POST /api/v1/agents/sessions/{id}/read",
 	"/api/v1/messaging",
 	"/api/v1/messaging/",
 	"/api/v1/devices/{id}/widgets",
@@ -170,6 +178,12 @@ type Report struct {
 	// passes the manager's messages of those types only. An older manager's report has none: the hub cannot tell its
 	// extensions' types, and passes any type but its own from it.
 	EventsDeclared bool `json:"events_declared,omitempty"`
+	// PushGradingDeclared: PushGradingExtensions lists every enabled, compatible extension on this manager currently
+	// granted the push.grading scope. The hub prunes any stored push grading layer of this manager whose extension is
+	// absent, so disabling, uninstalling or dropping the scope restores the owner's settings. Older managers omit this
+	// flag and their layers are left untouched across rolling upgrades.
+	PushGradingDeclared   bool     `json:"push_grading_declared,omitempty"`
+	PushGradingExtensions []string `json:"push_grading_extensions,omitempty"`
 }
 
 // BotIdentity is a platform's stable identifier, not a display name or an authentication token.
@@ -222,6 +236,9 @@ const (
 	// HubSettingsTool: {machine_id, session_id, arguments} → {text}: persona_settings on one of them (the card is the
 	// hub's: the manager asks HubWaitInteraction).
 	HubSettingsTool = "settings.tool"
+	// HubClarificationTake: {proof} → ClarificationProof: consume a one-time,
+	// card/text/conversation-bound channel clarification proof before session.send_once.
+	HubClarificationTake = "approval_clarification.take"
 	// HubKBArchives, … see the routes.
 	// HubAudit: Audit → {}: a request of an extension's token the hub refused, for that extension's audit in its manager
 	// (plugin_audit). The manager takes the actions below only.
@@ -263,6 +280,12 @@ const (
 	// once what the token has open through it (the calls and WebSockets on the relay streams to the manager), as for a
 	// revoked device.
 	HubTokenRevoked = "extensions.token_revoked"
+	// HubMachinesPairLink: {extension, request} → wire.MachinesPairLinkResult: creates a pending link computer (or
+	// re-issues a pairing code for an existing pending one) and returns a one-time persona://link?... URL.
+	HubMachinesPairLink = "machines.pair_link"
+	// HubMachinesStatus: {extension, request} → wire.MachinesStatusResult: returns the current connection and
+	// confirmation status of a computer.
+	HubMachinesStatus = "machines.status"
 )
 
 // MethodAccept: {id} → {}: the hub holds a request for the manager (a relayed route): it dials the relay with the id.

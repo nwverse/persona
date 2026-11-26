@@ -5,9 +5,11 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 @Serializable @SerialName("persona.core.navigation.AssistantRoute") data object AssistantRoute : NavKey
+@Serializable @SerialName("persona.core.navigation.StarredMessagesRoute") data object StarredMessagesRoute : NavKey
 @Serializable @SerialName("persona.core.navigation.UsageCalendarRoute") data object UsageCalendarRoute : NavKey
 @Serializable @SerialName("persona.core.navigation.AgentsRoute") data object AgentsRoute : NavKey
 @Serializable @SerialName("persona.core.navigation.InboxRoute") data object InboxRoute : NavKey
+@Serializable @SerialName("persona.core.navigation.LarkMessagesRoute") data object LarkMessagesRoute : NavKey
 @Serializable @SerialName("persona.core.navigation.SettingsRoute") data object SettingsRoute : NavKey
 @Serializable @SerialName("persona.core.navigation.ConnectionSettingsRoute") data object ConnectionSettingsRoute : NavKey
 @Serializable enum class ConversationKind { Assistant, Agent }
@@ -33,9 +35,21 @@ sealed interface RouteSource {
     @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
     @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
     val side: Boolean = false,
+    /** Opens the unified Session Overview sheet focused on the Subagents section (from parent-row rollup tap). */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val openSubagents: Boolean = false,
+    /** Explicit full subagent detail view opened from Session Overview or a TaskCard; never redirects back to parent. */
+    @OptIn(kotlinx.serialization.ExperimentalSerializationApi::class)
+    @kotlinx.serialization.EncodeDefault(kotlinx.serialization.EncodeDefault.Mode.NEVER)
+    val subagentDetail: Boolean = false,
 ) : NavKey
 
-@Serializable @SerialName("persona.core.navigation.InboxItemRoute") data class InboxItemRoute(val itemId: String) : NavKey
+@Serializable @SerialName("persona.core.navigation.InboxItemRoute") data class InboxItemRoute(
+    val itemId: String,
+    /** The assistant whose item this is; null keeps the current assistant and the route's old saved form. */
+    val manager: String? = null,
+) : NavKey
 
 /**
  * An inbox item drawn by the extension of the connector it comes from (its `inbox_item` UI, docs/extensions/extensions.md "UI slots"):

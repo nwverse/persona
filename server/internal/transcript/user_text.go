@@ -67,6 +67,13 @@ func (m *Meta) applyQueue(op, content string) {
 
 // caveatRe drops Claude Code's note that the lines around it came from a local command (context for the model).
 var caveatRe = lazyre.New(`(?s)<local-command-caveat>.*?</local-command-caveat>`)
+var inlineReferenceRe = lazyre.New(`(?m)(?:^|\r?\n\r?\n)<!-- persona-inline-v1 \[[^\r\n]*`)
+
+// WithoutInlineReferenceAnchors removes the web composer's anchor map from visible user prose.
+// A page clipped in the middle of the anchor line can still show the preceding text.
+func WithoutInlineReferenceAnchors(text string) string {
+	return dropTagged(inlineReferenceRe, "<!-- persona-inline-v1 ", text)
+}
 
 var teammateRe = lazyre.New(`(?s)<teammate-message([^>]*)>\s*(.*?)\s*</teammate-message>`)
 var teammateIDRe = lazyre.New(`teammate_id="([^"]*)"`)
@@ -190,6 +197,8 @@ func userText(mk func(int, string, string) proto.Item, s string, meta *Meta) []p
 	}
 	if trimmed == "[Request interrupted by user]" || trimmed == "[Request interrupted by user for tool use]" {
 		it := mk(0, "system", proto.KindNotice)
+		meta.clearTurnError() // A user interrupt must not leave an older gateway failure eligible for recovery.
+		meta.resumesSaid = true
 		meta.endTurn(it.Seq, it.TS)
 		it.Text = InterruptedNotice
 		return []proto.Item{it}

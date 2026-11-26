@@ -87,6 +87,9 @@ func TestBusForwardsTrustedDeviceActor(t *testing.T) {
 				if req.Method != http.MethodPost || req.Path != r.URL.Path || string(req.Body) != `{}` {
 					t.Fatalf("forwarded request: %+v", req)
 				}
+				if req.ModeActor == nil || req.ModeActor.Kind != "device" || req.ModeActor.DeviceName != "Trusted device" {
+					t.Errorf("trusted mode actor: %+v", req.ModeActor)
+				}
 				for name, want := range map[string]string{assistantwire.DeviceNameHeader: "Trusted device", assistantwire.RoleHeader: roleFull} {
 					if values := req.Header[name]; len(values) != 1 || values[0] != want {
 						t.Errorf("forwarded %s=%v want [%s]", name, values, want)
@@ -178,6 +181,10 @@ func TestBusForwardsTheAssistantRoutes(t *testing.T) {
 	<-got
 	for _, c := range [][2]string{{"POST", "/api/v1/task-plans/p1/start"}, {"GET", "/api/v1/task-trust"},
 		{"DELETE", "/api/v1/task-trust"}, {"POST", "/api/v1/todos/t1/done-check"}, {"GET", "/api/v1/todos"},
+		{"POST", "/api/v1/todos/reorganize"},
+		{"POST", "/api/v1/todos/decisions/batch"},
+		{"POST", "/api/v1/todos/t1/blockers"},
+		{"DELETE", "/api/v1/todos/t1/blockers/blk_1"},
 		{"PUT", "/api/v1/todos/t1/spaces/m1/group/alpha"}, {"GET", "/api/v1/assistant"}, {"PUT", "/api/v1/assistant"},
 		{"POST", "/api/v1/assistant/conversations"}, {"POST", "/api/v1/assistant/main/new"}, {"POST", "/api/v1/assistant/main/clear"},
 		{"DELETE", "/api/v1/assistant/memory/note.md"}} {

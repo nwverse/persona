@@ -1,0 +1,130 @@
+{
+  "name": "schedule_routine",
+  "description": "Create a recurring routine, or pass `id` from list_followups to edit supplied fields. `enabled: false` pauses it. Use `time` (with optional `weekdays`) or 5-field `cron` in the user's zone (at least 5m apart; aliases, 0/7=Sun, Vixie day OR; no seconds/@every/TZ=; check reply's next runs). `until` needs RFC 3339 or relative duration.\n\nRuns inherit Main chat's launcher/model/effort (omit to keep; empty launcher resets). Permission mode is the user's. `fresh_each_run: true` starts a new chat per run with its state note. For a supervised to-do, pass `todo_id` (omit keeps; \"\" clears; Persona checks real progress from run 2 and asks on stalls). For a dashboard page you write, pass `page_id` (one routine/page, immutable, \u003e=60m apart, never pushes or posts to Inbox, no report/todo_id; held on draft until Keep, data-only grant on kept page). Get owner consent before creating or changing recurring work.",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "todo_id": {
+        "type": "string",
+        "description": "supervised to-do this routine advances"
+      },
+      "page_id": {
+        "type": "string",
+        "description": "pg_ dashboard page to refresh (immutable, \u003c=1/hour, no push/inbox/report/todo_id)"
+      },
+      "fresh_each_run": {
+        "type": "boolean"
+      },
+      "id": {
+        "type": "string",
+        "description": "existing routine id to edit"
+      },
+      "title": {
+        "type": "string",
+        "description": "short name shown in the app, e.g. 早报"
+      },
+      "prompt": {
+        "type": "string",
+        "description": "self-contained instructions for each run"
+      },
+      "time": {
+        "type": "string",
+        "description": "HH:MM, 24-hour"
+      },
+      "weekdays": {
+        "type": "array",
+        "items": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 7
+        },
+        "description": "1=Mon…7=Sun; omit/empty = every day"
+      },
+      "cron": {
+        "type": "string",
+        "description": "replaces time/weekdays: 5 fields in user's zone (e.g. */30 9-18 * * 1-5) or @hourly/@daily/@weekly/@monthly/@yearly"
+      },
+      "enabled": {
+        "type": "boolean"
+      },
+      "report": {
+        "type": "boolean",
+        "description": "daily report: prepends Persona's north-star lines. Omit to keep"
+      },
+      "push": {
+        "type": "string",
+        "enum": [
+          "every",
+          "asked"
+        ],
+        "description": "every (default): push every answer; asked: only notify_user (own chat). Omit to keep"
+      },
+      "inbox": {
+        "type": "string",
+        "enum": [
+          "off",
+          "worthy",
+          "every"
+        ],
+        "description": "Inbox rows (only when requested): off (default), worthy (inbox_post), every. Omit to keep"
+      },
+      "run_if": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "description": "owner-approved pre-run shell check (exit 0 runs, 1 skips; null removes; omit keeps)",
+        "properties": {
+          "command": {
+            "type": "string",
+            "maxLength": 4096
+          },
+          "timeout_s": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 60,
+            "default": 30
+          },
+          "on_error": {
+            "type": "string",
+            "enum": [
+              "run",
+              "skip"
+            ],
+            "default": "run"
+          }
+        },
+        "required": [
+          "command"
+        ],
+        "additionalProperties": false
+      },
+      "until": {
+        "type": [
+          "string",
+          "null"
+        ],
+        "description": "end time (RFC 3339 or 30m/2h/1d); null clears, omit keeps"
+      },
+      "launcher": {
+        "type": "string",
+        "description": "launcher override; empty resets to Main chat; omit keeps"
+      },
+      "model": {
+        "type": "string",
+        "description": "model id for launcher; empty uses launcher default; omit keeps"
+      },
+      "effort": {
+        "type": "string",
+        "enum": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "description": "Claude thinking effort; omit keeps"
+      }
+    }
+  }
+}

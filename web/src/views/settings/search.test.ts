@@ -14,6 +14,7 @@ const PAGES = [
   "./LanguageRow.tsx",
   "./TranslationSettings.tsx",
   "./AgentOpenSetting.tsx",
+  "./SeenRowsSetting.tsx",
   "./TerminalModeSetting.tsx",
   "./SidebarPages.tsx",
   "./AssistantSettings.tsx",
@@ -68,6 +69,31 @@ function rowLabelKeys(source: string): string[] {
 }
 
 const labels = [...new Set(PAGES.flatMap((p) => rowLabelKeys(read(p))))].filter((k) => !(k in NOT_SETTINGS));
+const views = new URL("../", import.meta.url);
+const sources = (readdirSync(views, { recursive: true }) as string[])
+  .filter((f) => f.endsWith(".tsx") && !f.includes(".test."))
+  .map((f) => readFileSync(new URL(f, views), "utf8"))
+  .concat(read("../../modules/mail/MailSettings.tsx"))
+  // Advanced › Appearance's extension theme row is drawn by ui/ExtensionThemePicker.tsx when a theme is installed
+  .concat(readFileSync(new URL("../../ui/ExtensionThemePicker.tsx", import.meta.url), "utf8"))
+  .join("\n");
+
+// The index reads t() at module scope, just as it does after the page loads its catalog. Build an independent
+// fixture for each language during collection; these tests check the index, not cold module-loading latency.
+async function inLanguage(lang: string) {
+  vi.resetModules();
+  const { initI18n, t } = await import("../../i18n");
+  await initI18n(lang);
+  const { SEARCH_INDEX, searchSettings } = await import("./search");
+  const { registerModule, resetModulesForTest } = await import("../../core/module-host");
+  return { lang, t, SEARCH_INDEX, searchSettings, registerModule, resetModulesForTest };
+}
+const languages: Awaited<ReturnType<typeof inLanguage>>[] = [];
+// resetModules changes the registry: constructing these fixtures concurrently would mix their catalogs.
+for (const lang of ["en", "zh-Hans", "ja"]) languages.push(await inLanguage(lang));
+const [english, chinese] = languages;
+const { LOCAL_SHORTCUTS, SHORTCUTS } = await import("../../lib/shortcuts");
+const { TERMINAL_LABS_ID } = await import("../../lib/labs-terminal");
 
 describe("the settings search's index", () => {
   it("reads the pages' row labels (the scan finds what it should)", () => {
@@ -79,21 +105,13 @@ describe("the settings search's index", () => {
     expect(labels.length).toBeGreaterThan(60);
   });
 
-  it.each(["en", "zh-Hans", "ja"])("has every fixed row label of the pages it covers in %s", async (lang) => {
-    vi.resetModules();
-    const { initI18n, t } = await import("../../i18n");
-    await initI18n(lang);
-    const { SEARCH_INDEX } = await import("./search");
+  it.each(languages)("has every fixed row label of the pages it covers in $lang", ({ t, SEARCH_INDEX }) => {
     const words = new Set(SEARCH_INDEX.flatMap((g) => [...g.group.split(/ › | \/ /), ...(g.hint?.split(" / ") ?? [])]));
     const missing = labels.filter((k) => !words.has(t(k)));
     expect(missing).toEqual([]);
   });
 
-  it.each(["en", "zh-Hans", "ja"])("finds the words the audit searched for, and each label's own words, in %s", async (lang) => {
-    vi.resetModules();
-    const { initI18n, t } = await import("../../i18n");
-    await initI18n(lang);
-    const { searchSettings } = await import("./search");
+  it.each(languages)("finds the words the audit searched for, and each label's own words, in $lang", ({ lang, t, searchSettings }) => {
     const finds = (q: string, tab: string, anchor: string) => expect(searchSettings(q).groups, q).toContainEqual(expect.objectContaining({ tab, anchor }));
     finds(t("lib-agent-settings.setting_effortLevel"), "agents", "settings-claude");
     finds(t("lib-agent-settings.setting_model_reasoning_effort"), "agents", "settings-codex");
@@ -116,50 +134,105 @@ describe("the settings search's index", () => {
     if (lang !== "ja") finds("token", "devices", "devices");
   });
 
-  it("finds the words people searched for in Chinese (audit item 18), each under a label that says it", async () => {
-    vi.resetModules();
-    const { initI18n } = await import("../../i18n");
-    await initI18n("zh-Hans");
-    await import("./search").then(({ searchSettings }) => {
-      const found = (q: string) => searchSettings(q).groups.map((g) => `${g.tab}/${g.anchor}/${g.group}`);
-      for (const q of ["主题", "主题色", "深色", "字号", "语言", "思考强度", "思考", "时区", "token", "API Key", "密钥", "撤销", "退出", "免打扰", "自动更新", "默认权限", "出错自动继续"])
-        expect(found(q), q).not.toEqual([]);
-      expect(found("思考强度")).toEqual(expect.arrayContaining([
-        "agents/settings-claude/Claude Code › 思考强度", "agents/settings-codex/Codex › 思考强度", "models/settings-model-config/模型配置 › 思考强度",
-      ]));
-      expect(found("时区")).toContain("persona/runs-on/时区");
-      // Revoke is named Revoke, not Connect a new device; the API key is found as a key and a secret
-      expect(found("撤销")).toEqual(["devices/devices/撤销"]);
-      expect(found("密钥")).toEqual(expect.arrayContaining(["extensions/extensions/密钥", "models/settings-providers/新增供应商"]));
-      expect(found("token")).toEqual(expect.arrayContaining(["devices/devices/设备 token", "extensions/market/管理市场"]));
-    });
+  it.each(languages)("finds registered feature switches and their group in General in $lang", ({ t, searchSettings, registerModule, resetModulesForTest }) => {
+    const group = t("settings-features.features_group");
+    const features = t("settings-features.area_features");
+    const title = t("sidebar.nav_health");
+    const matches = (query: string) => searchSettings(query).groups.filter((g) => g.anchor.startsWith("configuration-features-"));
+    expect(matches(group)).toEqual([]);
+    registerModule({ id: "sample", title: () => title, description: () => "A synthetic module", load: async () => ({}) });
+    try {
+      const destination = { tab: "general", anchor: "configuration-features-modules" };
+      expect(matches(group)).toEqual([expect.objectContaining(destination)]);
+      expect(searchSettings(features)).toEqual({ tabs: [], groups: [expect.objectContaining(destination)] });
+      expect(matches(title)).toEqual([expect.objectContaining({ tab: "general", anchor: "configuration-features-sample" })]);
+    } finally {
+      resetModulesForTest();
+    }
   });
 
-  it("finds a label typed without its spaces, or with other case", async () => {
-    vi.resetModules();
-    const { initI18n } = await import("../../i18n");
-    await initI18n("en");
-    const { searchSettings } = await import("./search");
+  it("finds the words people searched for in Chinese (audit item 18), each under a label that says it", () => {
+    const { searchSettings } = chinese;
+    const found = (q: string) => searchSettings(q).groups.map((g) => `${g.tab}/${g.anchor}/${g.group}`);
+    for (const q of ["主题", "主题色", "深色", "字号", "语言", "思考强度", "思考", "时区", "token", "API Key", "密钥", "撤销", "退出", "免打扰", "自动更新", "默认权限", "出错自动继续"])
+      expect(found(q), q).not.toEqual([]);
+    expect(found("思考强度")).toEqual(expect.arrayContaining([
+      "agents/settings-claude/Claude Code › 思考强度", "agents/settings-codex/Codex › 思考强度", "models/settings-model-config/模型配置 › 思考强度",
+    ]));
+    expect(found("时区")).toContain("persona/runs-on/时区");
+    // Revoke is named Revoke, not Connect a new device; the API key is found as a key and a secret
+    expect(found("撤销")).toEqual(["devices/devices/撤销"]);
+    expect(found("密钥")).toEqual(expect.arrayContaining(["extensions/extensions/密钥", "models/settings-providers/新增供应商"]));
+    expect(found("token")).toEqual(expect.arrayContaining(["devices/devices/设备 token", "extensions/market/管理市场"]));
+  });
+
+  it("finds a label typed without its spaces, or with other case", () => {
+    const { searchSettings } = english;
     expect(searchSettings("timezone").groups).toContainEqual(expect.objectContaining({ anchor: "runs-on" }));
     expect(searchSettings("QUIET HOURS").groups).toContainEqual(expect.objectContaining({ anchor: "notify-quiet" }));
     expect(searchSettings("effort").groups.map((g) => g.anchor)).toEqual(expect.arrayContaining(["settings-claude", "settings-codex", "settings-model-config"]));
   });
 
-  it("lands every entry on something a page draws, and lists each once", async () => {
-    const { SEARCH_INDEX } = await import("./search");
-    const { LOCAL_SHORTCUTS, SHORTCUTS } = await import("../../lib/shortcuts");
-    const { TERMINAL_LABS_ID } = await import("../../lib/labs-terminal");
-    const views = new URL("../", import.meta.url);
-    const sources = (readdirSync(views, { recursive: true }) as string[])
-      .filter((f) => f.endsWith(".tsx") && !f.includes(".test."))
-      .map((f) => readFileSync(new URL(f, views), "utf8"))
-      .join("\n");
+  it.each(languages)("remaps Inbox Sources search entries to integrations -sources when integrations_v2 is on in $lang", ({ t, searchSettings }) => {
+    const label = t("settings-nav.tab_sources");
+    const off = searchSettings(label, false);
+    expect(off.tabs).toContain("sources");
+    expect(off.tabs).not.toContain("integrations");
+    expect(off.groups).toContainEqual(expect.objectContaining({ tab: "sources", anchor: "inbox-sources" }));
+
+    const on = searchSettings(label, true, true);
+    expect(on.tabs).toContain("integrations");
+    expect(on.tabs).not.toContain("sources");
+    expect(on.groups).toContainEqual(expect.objectContaining({ tab: "integrations", anchor: "inbox-sources", sub: "-sources" }));
+
+    const flow = searchSettings(t("settings-integrations.view_sources"), true, true);
+    expect(flow.groups).toContainEqual(expect.objectContaining({ tab: "integrations", anchor: "inbox-sources", sub: "-sources" }));
+
+    const fwdLabel = t("settings-assistantsettings.inbox_todo_forward");
+    expect(searchSettings(fwdLabel, false).groups).toContainEqual(expect.objectContaining({ tab: "sources", anchor: "inbox-todo-forward" }));
+    expect(searchSettings(fwdLabel, true, true).groups).toContainEqual(expect.objectContaining({ tab: "integrations", anchor: "inbox-todo-forward", sub: "-sources" }));
+  });
+
+  it.each(languages)("uses the available Data flow destination once in $lang", ({ t, searchSettings }) => {
+    const forward = t("settings-assistantsettings.inbox_todo_forward");
+    const flow = t("settings-integrations.view_sources");
+    expect(searchSettings(forward, true, true).groups).toEqual([
+      expect.objectContaining({ tab: "integrations", group: `${flow} › ${forward}`, sub: "-sources" }),
+    ]);
+    expect(searchSettings(forward, true, false).groups).toEqual([expect.objectContaining({ tab: "persona" })]);
+    for (const key of ["settings-nav.tab_sources", "settings-integrations.view_sources", "external-sources.flows"]) {
+      expect(searchSettings(t(key), true, false).groups.filter((g) => g.sub === "-sources")).toEqual([]);
+    }
+  });
+
+  it.each(languages)("finds each integration setting at its own destination in $lang", ({ t, searchSettings }) => {
+    for (const [key, sub] of [
+      ["settings-connectors.lark", "builtin:lark"], ["settings-larksync.title", "builtin:feishu-bot"],
+      ["settings-extensions.market_title", "-market"], ["settings-extensionmarket.manage_markets", "-markets"],
+      ["settings-feishubot.title", "builtin:feishu-bot"], ["settings-larkdisplay.anti_recall", "builtin:lark"],
+      ["settings-larkdisplay.edit_history", "builtin:lark"], ["external-sources.flows", "-sources"],
+      ["settings-integrations.thread_mode_title", "builtin:feishu-bot"], ["settings-integrations.thread_idle_hours_title", "builtin:feishu-bot"],
+    ]) {
+      expect(searchSettings(t(key), true, true).groups, key).toContainEqual(expect.objectContaining({ tab: "integrations", sub }));
+    }
+    for (const field of ["thread_mode", "thread_idle_hours"]) {
+      expect(searchSettings(field, true, true).groups).toEqual([
+        expect.objectContaining({ sub: "builtin:feishu-bot", anchor: `configuration-channel-routing-feishu-${field}` }),
+      ]);
+    }
+    expect(searchSettings(t("settings-extensions.title"), true, true).groups).toContainEqual(expect.objectContaining({
+      tab: "integrations", anchor: "extensions", group: t("settings-integrations.group_extensions"),
+    }));
+  });
+
+  it("lands every entry on something a page draws, and lists each once", () => {
+    const { SEARCH_INDEX } = english;
     // anchors a page writes from a value: each one's source, and the values it takes
     const made: [RegExp, string, (rest: string) => boolean][] = [
       [/^shortcut-(.+)$/, "anchor={`shortcut-${s.id}`}", (id) => [...SHORTCUTS, ...LOCAL_SHORTCUTS].some((s) => s.id === id)],
       [/^knowledge-(.+)$/, "anchor={`knowledge-${kind}`}", (kind) => kind === "messages" || kind === "docs"],
       [/^settings-(.+)$/, "id={`settings-${id}`}", (id) => ["claude", "codex", "agy", "omp", "grok"].includes(id)],
-      [/^configuration-(.+)$/, "data-settings-row={`configuration-${doc.id}-${field.id}`}", (id) => id === `${TERMINAL_LABS_ID}-renderer`],
+      [/^configuration-(.+)$/, "data-settings-row={`configuration-${doc.id}-${field.id}`}", (id) => id === `${TERMINAL_LABS_ID}-renderer` || id === "assistant-work-work_guide" || id === "assistant-todos-v2-todos_v2" || id === "assistant-integrations-v2-integrations_v2"],
     ];
     const drawn = (anchor: string) =>
       new RegExp(`\\b(anchor|data-settings-row|data-settings-group|id)="${anchor}"`).test(sources) ||
@@ -167,7 +240,7 @@ describe("the settings search's index", () => {
         const m = re.exec(anchor);
         return !!m && sources.includes(code) && takes(m[1]);
       });
-    expect(SEARCH_INDEX.filter((g) => !drawn(g.anchor)).map((g) => g.anchor)).toEqual([]);
+    expect(SEARCH_INDEX.filter((g) => g.anchor ? !drawn(g.anchor) : !g.sub).map((g) => g.anchor)).toEqual([]);
     const keys = SEARCH_INDEX.map((g) => `${g.tab}/${g.anchor}/${g.group}`);
     expect(keys.length).toBe(new Set(keys).size);
   });

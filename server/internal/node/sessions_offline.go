@@ -117,9 +117,10 @@ func (n *Node) scanOffline() []proto.Session {
 	unlisted := n.runtimes.unlistedTranscripts() // sessions of a runtime's own that it no longer lists (runtimeunlisted.go)
 	// The desktop app's sessions as its sidebar lists them (claudedesktop.go).
 	desktop := readClaudeDesktopIndex(n.home)
+	desktopProjects := map[string]string{}
 	for _, p := range files {
 		id := strings.TrimSuffix(filepath.Base(p), ".jsonl")
-		if !validID(id) {
+		if !validID(id) || n.isRoundFork(id) {
 			continue
 		}
 		st, err := os.Stat(p)
@@ -140,11 +141,13 @@ func (n *Node) scanOffline() []proto.Session {
 			continue
 		}
 		// Another platform's runs (agentfilters.go) go before the newest are counted: hundreds a day would crowd out
-		// the user's own. So do a program's one-shot runs (`claude -p`, claude_oneshot.go).
+		// the user's own. So do a program's one-shot runs (`claude -p`, claude_oneshot.go), unless the desktop app's
+		// sidebar lists the transcript: a session New Agent starts there is written by `claude -p` and taken over by the
+		// app (claudedesktop_new.go), and says only sdk-cli until the app ends a turn in it (#15522).
 		if !forked[id] && n.agentFiltered("claude", p) {
 			continue
 		}
-		if !forked[id] && !unlisted[id] && n.oneShotRun(id, filepath.Base(filepath.Dir(p)), p, st, persona) {
+		if !forked[id] && !unlisted[id] && !inDesktop && n.oneShotRun(id, filepath.Base(filepath.Dir(p)), p, st, persona) {
 			continue
 		}
 		if inDesktop { // counted on their own: they neither take the others' 80 nor are pushed out by them
@@ -187,10 +190,24 @@ func (n *Node) scanOffline() []proto.Session {
 			title, cwd = cmp.Or(title, about.title), cmp.Or(cwd, about.cwd)
 		}
 		cwd = n.assistantHome(id, cwd)
+		if c.count == assistants && !identity.IsAssistantDir(cwd) && !identity.InSpace(cwd) {
+			base := filepath.Base(filepath.Dir(c.path))
+			if dir := n.assistantDirOfProject(base); dir != "" {
+				cwd = dir
+			} else if !isMeetingRoomProject(base) {
+				if strings.HasSuffix(base, "-health") {
+					cwd = identity.HealthDir(n.home)
+				} else if strings.HasSuffix(base, "-assistant") {
+					cwd = identity.AssistantDir(n.home)
+				}
+			}
+		}
 		if !n.sessionScopeAllows(cwd) {
 			continue
 		}
-		if cwd != "" && n.cwdBlocked(cwd) {
+		// A blocked Agent folder never takes the assistant's own conversations or the sessions the hub keeps out, at
+		// rest as in the live list (sessions.go); a blocked Claude config folder still does here.
+		if n.restBlocked(id, cwd, keep) {
 			continue
 		}
 		// Sessions that never produced output (hook probes): small files read whole with no title and no words. A bigger
@@ -202,16 +219,18 @@ func (n *Node) scanOffline() []proto.Session {
 		}
 		n.setPath(id, c.path)
 		s := proto.Session{
-			SessionID: id, Title: title, Cwd: cwd, Status: proto.StatusOffline, Model: m.model,
+			SessionID: id, Title: title, Cwd: cwd, Status: proto.StatusOffline, Model: n.shownModel(id, m.model),
 			Agent: "claude", AgentSurface: m.surface,
 			LastText: snippet(m.lastText), UpdatedAt: lastUsed(m, c.st), Rev: c.st.Size(),
 		}
 		s.Activity, s.ActivityAt = m.activityOf()
-		setContext(&s, m)
+		n.setSessionContext(&s, m)
+		m.turnErr.set(&s) // Preserve the full gateway error and its reset after the terminal Agent exits.
 		s.ModelFallback = m.modelFallback
 		n.setModelRestore(&s, c.path, m)
-		s.PermissionMode, s.Effort = n.currentModes(id, m)
+		n.terminalModesRow(&s, m)
 		untitled(&s, m)
+		n.decorateClaudeDesktop(&s, desktop, desktopProjects)
 		out = append(out, s)
 		shown[id] = true
 		counted[c.count]++
@@ -223,6 +242,10 @@ func (n *Node) scanOffline() []proto.Session {
 // scanOffline reads only Claude's projects and codexSessions keeps the assistant's out of Agents, so such a conversation
 // had no row at all, and every client turned its composer off, with nothing left to send the message that resumes it (#2126).
 func (n *Node) codexAssistantsAtRest(seen map[string]bool) []proto.Session {
+	return n.codexAssistantsAtRestIn(seen, nil)
+}
+
+func (n *Node) codexAssistantsAtRestIn(seen map[string]bool, pass *codexListPass) []proto.Session {
 	if n.state == nil || n.codices == nil {
 		return nil
 	}
@@ -241,7 +264,7 @@ func (n *Node) codexAssistantsAtRest(seen map[string]bool) []proto.Session {
 	}
 	var cands []cand
 	for id := range cwds {
-		path := n.codexPath(id)
+		path := n.codexPathIn(id, pass)
 		if path == "" {
 			continue
 		}
@@ -302,13 +325,14 @@ func (n *Node) assistantDirOfProject(base string) string {
 }
 
 // assistantHome is the directory session id is listed in at rest: the directory its node record says it started in,
-// when that is an assistant or health directory (the unresolved path its running process and resumes use), else cwd
-// (what its transcript says: where an assistant conversation started, an agent's latest directory, #2368).
+// when that is an assistant or space directory (the unresolved path its running process and resumes use), else cwd
+// (what its transcript says: where an assistant conversation started, an agent's latest directory, #2368). A record
+// of a scoped node's unlisted built-in directory (unlistedAssistantDir) is passed over for the transcript's.
 func (n *Node) assistantHome(id, cwd string) string {
 	if n.state == nil {
 		return cwd
 	}
-	if st, ok := n.state.get(id); ok && identity.IsAssistantDir(st.Cwd) {
+	if st, ok := n.state.get(id); ok && (identity.IsAssistantDir(st.Cwd) || identity.InSpace(st.Cwd)) && !n.unlistedAssistantDir(st.Cwd) {
 		return st.Cwd
 	}
 	return cwd

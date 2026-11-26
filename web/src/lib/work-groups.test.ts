@@ -221,6 +221,15 @@ describe("while the agent works", () => {
     expect(groups(groups(b)[0].children)[0].children[0]).toMatchObject({ step: { item: fold } });
   });
 
+  it("keeps the same work rows when a stream supersedes trailing words, and lets the reader open the older words", () => {
+    const seg = segments([user("u", 0), ...tool("check", "Read", 1000), say("a1", "Progress.", 2000)])[0];
+    const draw = (streaming: boolean) => groups(workBlocks(exchangeSteps(seg), { live: true, streaming, turnStart: seg.user?.ts, identity: seg.id }))[0];
+    const initial = draw(false), next = draw(true);
+    expect(next.id).toBe(initial.id);
+    expect(initial.children.map(shape)).toEqual(["check"]);
+    expect(next.children.map(shape)).toEqual(["check", "a1"]);
+  });
+
   it("streaming supersedes the persisted text without losing it from inspection", () => {
     const seg = segments([user("u1", 0), say("a1", "Earlier progress.", 1000), ...tool("t1", "Bash", 2000)])[0];
     const b = workBlocks(exchangeSteps(seg), { live: true, streaming: true, turnStart: seg.user?.ts });
@@ -664,7 +673,9 @@ describe("a tool call's own elapsed time (#8163)", () => {
 
   it("measures the span purely from the call and result timestamps", () => {
     expect(toolDurationMs(stepOf(1000, 5000))).toBe(4000);
-    expect(toolDurationLabel(stepOf(1000, 5000))).toBe("4s");
+    expect(toolDurationLabel(stepOf(1000, 5000))).toBeNull();
+    expect(toolDurationLabel(stepOf(0, 29_999))).toBeNull();
+    expect(toolDurationLabel(stepOf(0, 30_000))).toBe("30s");
     expect(toolDurationLabel(stepOf(0, 252_000))).toBe("4m 12s");
     // the same formatter as the group total, including its rounding to whole seconds
     expect(toolDurationLabel(stepOf(0, 65_400))).toBe("1m 5s");

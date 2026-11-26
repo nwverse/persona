@@ -26,6 +26,70 @@ func (d *DB) InsertInteraction(ctx context.Context, ix proto.Interaction) error 
 	return err
 }
 
+// UpdateInteractionDeadline publishes the effective deadline of the same pending card that was inserted at created.
+// The creation-time guard prevents a resolved or replacement card from acquiring a deadline after this write was
+// prepared. No decision, resolution, or execution state is changed.
+func (d *DB) UpdateInteractionDeadline(ctx context.Context, id string, created, expires time.Time) error {
+	raw, err := json.Marshal(expires.UTC())
+	if err != nil {
+		return err
+	}
+	tag, err := d.pool.Exec(ctx, `UPDATE interactions SET payload = jsonb_set(payload, '{expires_at}', $3::jsonb, false)
+		WHERE id = $1 AND created_at = $2 AND status = 'pending'`, id, created, raw)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return errors.New("interaction deadline was not recorded")
+	}
+	return nil
+}
+
+// InsertResolvedInteraction writes an already-resolved decision in one statement, without ever creating a pending
+// card. Unlike InsertInteraction's idempotent card publication, a duplicate id is an error: an audit record must not
+// silently disappear. The decision and its resolved timestamp become queryable together.
+func (d *DB) InsertResolvedInteraction(ctx context.Context, ix proto.Interaction, res *proto.Resolution) error {
+	payload, err := json.Marshal(ix)
+	if err != nil {
+		return err
+	}
+	raw, err := json.Marshal(res)
+	if err != nil {
+		return err
+	}
+	resolvedAt := time.Now().UTC()
+	_, err = d.pool.Exec(ctx, `INSERT INTO interactions
+		(id, machine_id, session_id, kind, payload, created_at, status, resolution, resolved_at)
+		VALUES ($1, $2, $3, $4, $5, $6, 'resolved', $7, $8)`,
+		ix.ID, ix.MachineID, ix.SessionID, ix.Kind, payload, ix.CreatedAt, raw, resolvedAt)
+	return err
+}
+
+// MarkResolvedInteractionOutcome records the result of an operation whose skipped-card decision was inserted before
+// its write. A saved outcome also enters the existing automatic-authorization count. If this update fails, the original
+// attempted outcome remains, which is deliberately an unknown result rather than a false success or failure.
+func (d *DB) MarkResolvedInteractionOutcome(ctx context.Context, id string, created time.Time, outcome string, at time.Time) error {
+	if outcome != "saved" && outcome != "not_saved" {
+		return errors.New("unknown resolved-interaction outcome")
+	}
+	raw, err := json.Marshal(outcome)
+	if err != nil {
+		return err
+	}
+	tag, err := d.pool.Exec(ctx, `UPDATE interactions
+		SET payload = jsonb_set(payload, '{tool_input,outcome}', $3::jsonb, false),
+		auto_authorized_at = CASE WHEN $4 THEN COALESCE(auto_authorized_at, $5) ELSE auto_authorized_at END
+		WHERE id = $1 AND created_at = $2 AND status = 'resolved'`,
+		id, created, raw, outcome == "saved", at)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return errors.New("resolved-interaction outcome was not recorded")
+	}
+	return nil
+}
+
 // MarkInteractionResumable records that pending interaction id outlives a restart from now on (its payload's
 // resumable, which ExpireStaleInteractions reads): an ask_user question that let go of its turn and is now waited on by
 // no call (assistant/ask_release.go, #7392). false when id is not pending.
@@ -38,14 +102,43 @@ func (d *DB) MarkInteractionResumable(ctx context.Context, id string) (bool, err
 	return tag.RowsAffected() == 1, nil
 }
 
-// FinishInteraction records how an interaction ended; only the first outcome counts.
+// Who or what ended an interaction (interactions.ended_by, WithEndedBy). Only EndedByDevice is the user on one of their
+// devices; the rest are nobody answering (expired, withdrawn, cleared) or someone else answering for them.
+const (
+	EndedByDevice    = "device"    // the user answered it on a device (the apps' POST /api/v1/interactions/{id}/resolve)
+	EndedByExtension = "extension" // an extension answered it through the same route
+	EndedByExpired   = "expired"   // its time ran out unanswered
+	EndedByWithdrawn = "withdrawn" // the asker went away first (its call ended, its hook disconnected)
+	EndedByCleared   = "cleared"   // a newer card replaced it, or it was cleared with the others (a restart)
+	// EndedByAssistant, EndedByDefault and EndedByTerminal: answered for the user (proto.Resolution.AnsweredBy).
+	EndedByAssistant  = proto.AnsweredByAssistant
+	EndedByDefault    = proto.AnsweredByDefault
+	EndedByTerminal   = proto.AnsweredByTerminal
+	EndedByRemembered = "remembered" // the manager's kept "Always allow" answered it (proto.Resolution.Remembered)
+)
+
+type endedByKey struct{}
+
+// WithEndedBy is ctx for a FinishInteraction that records by (one of the EndedBy* above) as who or what ended the card.
+func WithEndedBy(ctx context.Context, by string) context.Context {
+	return context.WithValue(ctx, endedByKey{}, by)
+}
+
+// EndedBy is what WithEndedBy put on ctx; "" when nothing did.
+func EndedBy(ctx context.Context) string {
+	by, _ := ctx.Value(endedByKey{}).(string)
+	return by
+}
+
+// FinishInteraction records how an interaction ended, and who or what ended it when ctx says (WithEndedBy); only the
+// first outcome counts.
 func (d *DB) FinishInteraction(ctx context.Context, id, status string, res *proto.Resolution) error {
 	var raw []byte
 	if res != nil {
 		raw, _ = json.Marshal(res)
 	}
-	_, err := d.pool.Exec(ctx, `UPDATE interactions SET status = $2, resolution = $3, resolved_at = now()
-		WHERE id = $1 AND status = 'pending'`, id, status, raw)
+	_, err := d.pool.Exec(ctx, `UPDATE interactions SET status = $2, resolution = $3, resolved_at = now(), ended_by = $4
+		WHERE id = $1 AND status = 'pending'`, id, status, raw, EndedBy(ctx))
 	return err
 }
 
@@ -261,10 +354,13 @@ func (d *DB) InteractionRecord(ctx context.Context, id string) (*InteractionReco
 // The startup statements of ExpireStaleInteractions. Both must stay answerable from the interactions_pending
 // partial index (migration 0393); TestPendingInteractionsIndexed checks the plans of these exact constants.
 const (
-	resumablePendingSQL = `SELECT payload FROM interactions WHERE status = 'pending'
-		AND (payload->>'resumable')::boolean IS TRUE AND (payload->>'expires_at')::timestamptz > now()`
-	cancelPendingSQL = `UPDATE interactions SET status = 'cancelled', resolved_at = now()
-		WHERE status = 'pending' AND NOT (id = ANY($1))
+	resumableAtStartupSQL = `(payload->>'resumable')::boolean IS TRUE
+		AND ((payload->>'expires_at')::timestamptz > now()
+			OR ((payload->>'owner_proposal')::boolean IS TRUE AND (payload->>'no_expiry')::boolean IS TRUE))`
+	startupPendingSQL = `SELECT id, CASE WHEN ` + resumableAtStartupSQL + ` THEN payload END
+		FROM interactions WHERE status = 'pending'`
+	cancelPendingSQL = `UPDATE interactions SET status = 'cancelled', resolved_at = now(), ended_by = 'cleared'
+		WHERE status = 'pending' AND id = ANY($1) AND (` + resumableAtStartupSQL + `) IS NOT TRUE
 		AND id NOT IN (SELECT interaction_id FROM session_work WHERE interaction_id <> '')
 		AND id NOT IN (SELECT protected.id FROM settings,
 			jsonb_array_elements(CASE WHEN jsonb_typeof(value) = 'array' THEN value ELSE '[]'::jsonb END) AS item,
@@ -279,26 +375,34 @@ const (
 // them under the same id and ends cards it no longer needs. cancelled are the ids it marked: the apps may still show
 // them (#4568).
 func (d *DB) ExpireStaleInteractions(ctx context.Context) (kept []proto.Interaction, cancelled []string, err error) {
-	rows, err := d.pool.Query(ctx, resumablePendingSQL)
+	rows, err := d.pool.Query(ctx, startupPendingSQL)
 	if err != nil {
 		return nil, nil, err
 	}
-	kept, err = pgx.CollectRows(rows, func(r pgx.CollectableRow) (proto.Interaction, error) {
-		var payload []byte
-		var ix proto.Interaction
-		if err := r.Scan(&payload); err != nil {
-			return ix, err
+	var stale []string
+	var id string
+	var payload []byte
+	_, err = pgx.ForEachRow(rows, []any{&id, &payload}, func() error {
+		if payload == nil {
+			stale = append(stale, id)
+			return nil
 		}
-		return ix, json.Unmarshal(payload, &ix)
+		var ix proto.Interaction
+		if err := json.Unmarshal(payload, &ix); err != nil {
+			return err
+		}
+		kept = append(kept, ix)
+		return nil
 	})
 	if err != nil {
 		return nil, nil, err
 	}
-	ids := make([]string, len(kept))
-	for i, ix := range kept {
-		ids[i] = ix.ID
+	if len(stale) == 0 {
+		return kept, nil, nil
 	}
-	rows, err = d.pool.Query(ctx, cancelPendingSQL, ids)
+	// Another manager can publish or reclaim a card during recovery. Cancel only
+	// rows we saw as stale, provided they are still pending and not resumable.
+	rows, err = d.pool.Query(ctx, cancelPendingSQL, stale)
 	if err != nil {
 		return nil, nil, err
 	}

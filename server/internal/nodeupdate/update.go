@@ -9,7 +9,6 @@ import (
 	"crypto/sha256"
 	"debug/buildinfo"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -44,17 +43,20 @@ type Check struct {
 	Program string `json:"program,omitempty"`
 	// ResidentHandover says this image can consume a same-PID listener/run-lock descriptor ticket after exec.
 	ResidentHandover bool `json:"resident_handover,omitempty"`
+	// AdoptionMarker says startup understands a confirmation record for an executable installed externally.
+	AdoptionMarker bool `json:"adoption_marker,omitempty"`
 }
 
 type upload struct {
-	ID           string
-	Spec         proto.NodeUpdateBeginParams
-	Path         string
-	Offset       int64
-	At           time.Time
-	Accepted     bool
-	Restarted    bool
-	PreflightErr error
+	ID               string
+	Spec             proto.NodeUpdateBeginParams
+	Path             string
+	Offset           int64
+	At               time.Time
+	Accepted         bool
+	Restarted        bool
+	PreflightErr     error
+	AdoptionDeadline time.Time
 }
 
 // Options says how the resident node is run.
@@ -164,8 +166,8 @@ func New(version string, restart func(string), opts Options) *Manager {
 		return m
 	}
 	m.exe = exe
-	m.identity, err = os.Stat(exe)
-	if err != nil || !m.identity.Mode().IsRegular() {
+	m.identity, err = executableInfo(exe)
+	if err != nil {
 		m.reason = "常驻 node 的执行文件不可用"
 		return m
 	}
@@ -226,9 +228,7 @@ func (m *Manager) Begin(p proto.NodeUpdateBeginParams) (proto.NodeUpdateBeginRes
 	if p.Version == m.version {
 		return proto.NodeUpdateBeginResult{}, errors.New("node already runs the target version")
 	}
-	if _, err := os.Stat(markerPath(m.exe)); err == nil {
-		return proto.NodeUpdateBeginResult{}, errors.New("a node update is awaiting confirmation")
-	} else if !os.IsNotExist(err) {
+	if err := checkPendingSwap(m.exe); err != nil {
 		return proto.NodeUpdateBeginResult{}, err
 	}
 	var random [16]byte
@@ -311,50 +311,71 @@ func (m *Manager) Commit(ctx context.Context, id string, idle func() error) (pro
 	if u.Offset != u.Spec.Size {
 		return proto.NodeUpdateCommitResult{}, errors.New("node executable upload is incomplete")
 	}
+	checked, err := executableInfo(m.exe)
+	if err != nil {
+		return proto.NodeUpdateCommitResult{}, err
+	}
 	// The hub sends the kind of program the node runs (devices/deploy.go nodeBinary); this keeps a personad that may
 	// run a hub or a manager too from becoming persona-node all the same.
 	if err := update.CheckReplace(m.exe, u.Path); err != nil {
 		return proto.NodeUpdateCommitResult{}, err
 	}
-	if err := validateReplacement(ctx, u.Path, u.Spec, m.requireResidentHandover); err != nil {
+	check, err := validateReplacement(ctx, u.Path, u.Spec, m.requireResidentHandover)
+	if err != nil {
 		return proto.NodeUpdateCommitResult{}, err
 	}
 	// What is installed: with a Signer, a signed copy of the upload. From here on the transaction's confirmation and
 	// rollback compare the installed program with that file's sha256, not the upload's (the hub compares versions).
 	stage, newHash := m.signedStage(ctx, u)
+	defer dropCopy(stage, u.Path)
 	if err := ctx.Err(); err != nil {
-		dropCopy(stage, u.Path)
 		return proto.NodeUpdateCommitResult{}, err
 	}
-	err := locked(m.exe, func() error {
-		if _, err := os.Stat(markerPath(m.exe)); err == nil {
-			return errors.New("a node update is awaiting confirmation")
-		} else if !os.IsNotExist(err) {
+	err = locked(m.exe, func() error {
+		if err := checkPendingSwap(m.exe); err != nil {
 			return err
 		}
-		if m.identity != nil {
-			current, err := os.Stat(m.exe)
-			if err != nil {
+		current, err := executableInfo(m.exe)
+		if err != nil {
+			return err
+		}
+		// Validate the program kind again if another installer changed the file during staging.
+		if !sameFileState(checked, current) {
+			if err := update.CheckReplace(m.exe, u.Path); err != nil {
 				return err
-			}
-			if !os.SameFile(m.identity, current) {
-				return errSuperseded
 			}
 		}
 		oldHash, err := fileHash(m.exe)
 		if err != nil {
 			return err
 		}
+		if err := checkFileState(m.exe, current); err != nil {
+			return err
+		}
+		drifted := m.identity != nil && !os.SameFile(m.identity, current)
+		if drifted && (oldHash == newHash || oldHash == u.Spec.SHA256) {
+			return m.adoptInstalled(ctx, u, newHash, oldHash, current, check.AdoptionMarker, idle)
+		}
 		backup := backupPath(m.exe, id)
 		if err := copyFile(m.exe, backup); err != nil {
 			return err
+		}
+		from := m.version
+		if drifted {
+			// Startup releases the rollback barrier when the restored version runs.
+			// The backup can hold a different version from this still-running node.
+			from, err = rollbackVersion(ctx, backup, oldHash, u.Spec.Version)
+			if err != nil {
+				_ = os.Remove(backup)
+				return err
+			}
 		}
 		birth, err := processStart(os.Getpid())
 		if err != nil {
 			_ = os.Remove(backup)
 			return err
 		}
-		p := pending{ID: id, Exe: m.exe, Backup: backup, Stage: stage, Version: u.Spec.Version, From: m.version, OldHash: oldHash, NewHash: newHash, PID: os.Getpid(), ProcessStart: birth, ProcessPrecise: osproc.Identify(os.Getpid()).Start, Deadline: time.Now().Add(m.timeout)}
+		p := pending{ID: id, Exe: m.exe, Backup: backup, Stage: stage, Version: u.Spec.Version, From: from, OldHash: oldHash, NewHash: newHash, PID: os.Getpid(), ProcessStart: birth, ProcessPrecise: osproc.Identify(os.Getpid()).Start, Deadline: time.Now().Add(m.timeout)}
 		p.SupervisorPID, p.SupervisorStart = supervisorOf()
 		if err := savePending(p); err != nil {
 			_ = os.Remove(backup)
@@ -367,21 +388,19 @@ func (m *Manager) Commit(ctx context.Context, id string, idle func() error) (pro
 		}
 		// Recheck after self-check, backup, and watchdog startup: any of them can
 		// take long enough for an agent to become active again.
-		if err := ctx.Err(); err != nil {
+		if err := checkCommitIdle(ctx, idle); err != nil {
 			_ = cleanupPendingOnly(p)
 			return err
-		}
-		if idle != nil {
-			if err := idle(); err != nil {
-				_ = cleanupPendingOnly(p)
-				return err
-			}
 		}
 		// The directory lock orders Persona's own writers, but an external
 		// deployment (a plain copy, a package manager) never takes it. The swap
 		// lands only while the installed file is still the one this transaction
 		// examined, checked through one descriptor right before the rename.
-		if err := renameStill(stage, m.exe, oldHash); err != nil {
+		err = checkFileState(m.exe, current)
+		if err == nil {
+			err = renameStill(stage, m.exe, oldHash)
+		}
+		if err != nil {
 			_ = cleanupPendingOnly(p)
 			return err
 		}
@@ -394,7 +413,6 @@ func (m *Manager) Commit(ctx context.Context, id string, idle func() error) (pro
 		return syncDir(filepath.Dir(m.exe))
 	})
 	if err != nil {
-		dropCopy(stage, u.Path)
 		return proto.NodeUpdateCommitResult{}, err
 	}
 	u.Accepted = true
@@ -404,8 +422,74 @@ func (m *Manager) Commit(ctx context.Context, id string, idle func() error) (pro
 	return result, nil
 }
 
+func rollbackVersion(ctx context.Context, backup, oldHash, targetVersion string) (string, error) {
+	sum, err := fileHash(backup)
+	if err != nil {
+		return "", err
+	}
+	if sum != oldHash {
+		return "", errSuperseded
+	}
+	check, err := runCheck(ctx, backup)
+	if err != nil {
+		return "", fmt.Errorf("check node rollback backup: %w", err)
+	}
+	if strings.TrimSpace(check.Version) == "" || check.Version == targetVersion {
+		return "", errors.New("node rollback backup must report a version distinct from the target")
+	}
+	return check.Version, nil
+}
+
+// adoptInstalled records confirmation for a target already installed by another updater.
+// Matching the checked stage also verifies the bytes that passed its platform and self-checks.
+func (m *Manager) adoptInstalled(ctx context.Context, u *upload, newHash, sum string, current os.FileInfo, adoptionMarker bool, idle func() error) error {
+	// An exact upload can already meet the configured signature. Legacy targets
+	// also need that signature when configured so their startup leaves the file untouched.
+	if sum != newHash || (m.signer != nil && !adoptionMarker) {
+		if m.signer == nil || !m.signer.Meets(ctx, m.exe) {
+			return errSuperseded
+		}
+	}
+	if err := checkCommitIdle(ctx, idle); err != nil {
+		return err
+	}
+	// The Hub can replace the file during verification or the idle check.
+	if err := checkFileState(m.exe, current); err != nil {
+		return err
+	}
+	deadline := time.Now().Add(m.timeout)
+	if adoptionMarker {
+		p := pending{ID: u.ID, Exe: m.exe, Stage: u.Path, Version: u.Spec.Version,
+			NewHash: sum, Adopted: true, Deadline: deadline}
+		if err := savePending(p); err != nil {
+			return err
+		}
+	} else {
+		// A legacy target confirms by running version. Clear any earlier adoption
+		// record, which that target would read as an invalid rollback marker.
+		if err := os.Remove(markerPath(m.exe)); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	_ = os.Remove(u.Path)
+	u.AdoptionDeadline = deadline
+	return nil
+}
+
+func checkCommitIdle(ctx context.Context, idle func() error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if idle != nil {
+		if err := idle(); err != nil {
+			return err
+		}
+	}
+	return ctx.Err()
+}
+
 // ResponseWritten signals the resident to reload this update, at most once, after the acceptance
-// was written to the transport. Failed writes leave the watchdog to restore it.
+// was written to the transport. Failed writes leave installed swaps to the watchdog.
 func (m *Manager) ResponseWritten(id string) {
 	m.mu.Lock()
 	u := m.upload
@@ -463,7 +547,7 @@ func (m *Manager) Confirm(version string) error {
 		if p.Version != version {
 			return errors.New("confirmation does not match pending node version")
 		}
-		if !time.Now().Before(p.Deadline) {
+		if !p.Adopted && !time.Now().Before(p.Deadline) {
 			return errors.New("node update confirmation deadline expired")
 		}
 		sum, err := fileHash(m.exe)
@@ -473,13 +557,7 @@ func (m *Manager) Confirm(version string) error {
 		if sum != p.NewHash {
 			return errors.New("running node executable no longer matches update")
 		}
-		if err := os.Remove(markerPath(m.exe)); err != nil {
-			return err
-		}
-		discard(p.Backup) // the watchdog runs from it until it sees the marker gone
-		_ = os.Remove(p.Stage)
-		removeRetired(filepath.Dir(m.exe)) // the old program's file, moved aside on Windows: nothing runs it now
-		return syncDir(filepath.Dir(m.exe))
+		return cleanup(p)
 	})
 }
 
@@ -500,8 +578,11 @@ func (m *Manager) Close() {
 }
 
 func (m *Manager) expireLocked() {
-	if u := m.upload; u != nil && !u.Accepted && time.Since(u.At) >= UploadTTL {
-		m.clearLocked()
+	if u := m.upload; u != nil {
+		if (!u.Accepted && time.Since(u.At) >= UploadTTL) ||
+			(!u.AdoptionDeadline.IsZero() && !time.Now().Before(u.AdoptionDeadline)) {
+			m.clearLocked()
+		}
 	}
 }
 func (m *Manager) clearLocked() {
@@ -540,85 +621,68 @@ func (m *Manager) armSweepLocked() {
 }
 
 func validate(ctx context.Context, path string, spec proto.NodeUpdateBeginParams) error {
-	return validateReplacement(ctx, path, spec, false)
+	_, err := validateReplacement(ctx, path, spec, false)
+	return err
 }
 
-func validateReplacement(ctx context.Context, path string, spec proto.NodeUpdateBeginParams, requireHandover bool) error {
+func validateReplacement(ctx context.Context, path string, spec proto.NodeUpdateBeginParams, requireHandover bool) (Check, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return Check{}, err
 	}
 	st, err := os.Stat(path)
 	if err != nil {
-		return err
+		return Check{}, err
 	}
 	if st.Size() != spec.Size {
-		return errors.New("node executable size mismatch")
+		return Check{}, errors.New("node executable size mismatch")
 	}
 	sum, err := fileHash(path)
 	if err != nil {
-		return err
+		return Check{}, err
 	}
 	if sum != spec.SHA256 {
-		return errors.New("node executable sha256 mismatch")
+		return Check{}, errors.New("node executable sha256 mismatch")
 	}
 	info, err := buildinfo.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("node executable build info: %w", err)
+		return Check{}, fmt.Errorf("node executable build info: %w", err)
 	}
 	settings := map[string]string{}
 	for _, s := range info.Settings {
 		settings[s.Key] = s.Value
 	}
 	if settings["GOOS"] != runtime.GOOS || settings["GOARCH"] != runtime.GOARCH {
-		return errors.New("node executable platform or architecture mismatch")
+		return Check{}, errors.New("node executable platform or architecture mismatch")
 	}
 	if err := os.Chmod(path, 0o755); err != nil {
-		return err
+		return Check{}, err
 	}
 	return selfCheck(ctx, path, spec, requireHandover)
 }
 
 // selfCheck runs path's node-update-check: it must start here and say the target version, this platform and, when
 // required, the listener handover.
-func selfCheck(ctx context.Context, path string, spec proto.NodeUpdateBeginParams, requireHandover bool) error {
+func selfCheck(ctx context.Context, path string, spec proto.NodeUpdateBeginParams, requireHandover bool) (Check, error) {
 	check, err := runCheck(ctx, path)
 	if err != nil {
-		return err
+		return Check{}, err
 	}
 	if check.Version != spec.Version || check.OS != runtime.GOOS || check.Arch != runtime.GOARCH {
-		return errors.New("node executable self-check version or platform mismatch")
+		return Check{}, errors.New("node executable self-check version or platform mismatch")
 	}
 	if requireHandover && !check.ResidentHandover {
-		return errors.New("node executable does not support resident listener handover")
+		return Check{}, errors.New("node executable does not support resident listener handover")
 	}
-	return syncFile(path)
+	return check, syncFile(path)
 }
 
-// runCheck is what path's node-update-check says.
+// runCheck is what path's node-update-check says, under the update's limits.
 func runCheck(ctx context.Context, path string) (Check, error) {
-	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, path, "node-update-check")
-	var output limitedBuffer
-	cmd.Stdout, cmd.Stderr = &output, io.Discard
-	cmd.WaitDelay = time.Second
-	if err := cmd.Run(); err != nil {
+	check, err := RunCheck(ctx, path, checkLimits)
+	if err != nil {
 		return Check{}, fmt.Errorf("node executable self-check: %w", err)
 	}
-	var check Check
-	if err := json.Unmarshal(output.Bytes(), &check); err != nil {
-		return Check{}, fmt.Errorf("node executable self-check output: %w", err)
-	}
 	return check, nil
-}
-
-type limitedBuffer struct{ bytes.Buffer }
-
-func (b *limitedBuffer) Write(p []byte) (int, error) {
-	if b.Len()+len(p) > 4096 {
-		return 0, errors.New("self-check output exceeds limit")
-	}
-	return b.Buffer.Write(p)
 }
 
 func fileHash(path string) (string, error) {
@@ -639,8 +703,54 @@ func fileHash(path string) (string, error) {
 // someone else's now and must be left in place, the transaction cleaned up.
 var errSuperseded = errors.New("node executable was replaced by another deployment")
 
+func executableInfo(path string) (os.FileInfo, error) {
+	st, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !st.Mode().IsRegular() || (runtime.GOOS != "windows" && st.Mode().Perm()&0o111 == 0) {
+		return nil, errSuperseded
+	}
+	if runtime.GOOS != "windows" {
+		return st, nil
+	}
+	// A Windows path stat defers reading the file ID until SameFile. Capture
+	// the ID from a handle while this path still names the inspected file.
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	snapshot, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !sameFileState(st, snapshot) {
+		return nil, errSuperseded
+	}
+	return snapshot, nil
+}
+
+func sameFileState(a, b os.FileInfo) bool {
+	return a.Mode() == b.Mode() && a.Size() == b.Size() && a.ModTime().Equal(b.ModTime()) && os.SameFile(a, b)
+}
+
+func checkFileState(path string, expected os.FileInfo) error {
+	st, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return errSuperseded
+	}
+	if err != nil {
+		return err
+	}
+	if !sameFileState(expected, st) {
+		return errSuperseded
+	}
+	return nil
+}
+
 // renameStill replaces dst with src only while dst is still the file whose
-// sha256 is want. The file's inode, size and modification time are snapshotted
+// sha256 is want. The file's inode, mode, size and modification time are snapshotted
 // before and rechecked after the hash is read through one open descriptor, and
 // once more against the path immediately before the rename, so a deployment
 // that renamed dst into place or rewrote it in place (cp never takes the
@@ -649,6 +759,10 @@ var errSuperseded = errors.New("node executable was replaced by another deployme
 // adjacent syscalls. The descriptor is closed before the rename: Windows will not
 // rename a file over one this process holds open.
 func renameStill(src, dst, want string) error {
+	current, err := executableInfo(dst)
+	if err != nil {
+		return err
+	}
 	f, err := os.Open(dst)
 	if err != nil {
 		return err
@@ -657,6 +771,9 @@ func renameStill(src, dst, want string) error {
 	before, err := f.Stat()
 	if err != nil {
 		return err
+	}
+	if !sameFileState(current, before) {
+		return errSuperseded
 	}
 	sum := sha256.New()
 	if _, err := io.Copy(sum, f); err != nil {
@@ -669,16 +786,12 @@ func renameStill(src, dst, want string) error {
 	if err != nil {
 		return err
 	}
-	if !after.ModTime().Equal(before.ModTime()) || after.Size() != before.Size() {
+	if !sameFileState(before, after) {
 		return errSuperseded
 	}
 	_ = f.Close()
-	now, err := os.Stat(dst)
-	if err != nil {
+	if err := checkFileState(dst, after); err != nil {
 		return err
-	}
-	if !os.SameFile(after, now) || !now.ModTime().Equal(after.ModTime()) || now.Size() != after.Size() {
-		return errSuperseded
 	}
 	return replaceFile(src, dst)
 }

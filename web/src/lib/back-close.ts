@@ -49,13 +49,19 @@ export function isOverlayEntry(state: unknown, id: string): boolean {
   return Boolean(state && typeof state === "object" && (state as Record<string, unknown>)[KEY] === id);
 }
 
-/** Removes only overlay metadata, preserving the page's other history state. */
-function clearOverlayMarkers(state: Record<string, unknown>) {
-  const rest = { ...state };
+/** Returns `state` without overlay metadata, preserving the page's own history state. */
+export function withoutOverlayState(state: unknown): Record<string, unknown> | null {
+  if (!state || typeof state !== "object") return null;
+  const rest = { ...(state as Record<string, unknown>) };
   delete rest[KEY];
   delete rest[AT];
   delete rest[DEPTH];
-  history.replaceState(Object.keys(rest).length ? rest : null, "", location.href);
+  return Object.keys(rest).length ? rest : null;
+}
+
+/** Removes only overlay metadata, preserving the page's other history state. */
+function clearOverlayMarkers(state: Record<string, unknown>) {
+  history.replaceState(withoutOverlayState(state), "", location.href);
 }
 
 /** Opens one overlay's history entry: Back calls `onClose`. Returns the close (from the page) that takes it off. */
@@ -69,13 +75,15 @@ export function openOverlay(onClose: () => void): () => void {
     const depth = overlayDepth(history.state) + 1;
     history.pushState({ ...overlayState(history.state, id), [AT]: location.href, [DEPTH]: depth }, "", location.href);
   }
+  const depth = overlayDepth(history.state);
   // where it opened: a replace that moves the page under it (an old link turned into its new one, a delete going
   // home) keeps the marker, so Back still closes it; closing it from the page then must not go back from the new page
   const at = location.href;
   let popped = false;
   const onPop = () => {
-    // the entry under ours came back: ours is gone, the overlay goes with it
-    if (!isOverlayEntry(history.state, id)) {
+    // Only close when history has popped below this overlay's depth, so stacked overlays (e.g. a dialog over a menu
+    // over a side panel) pop strictly one level at a time instead of triggering lower listeners early.
+    if (!isOverlayEntry(history.state, id) && overlayDepth(history.state) < depth) {
       popped = true;
       removeEventListener("popstate", onPop);
       onClose();
@@ -102,11 +110,21 @@ export function openOverlay(onClose: () => void): () => void {
   };
 }
 
+/** How long one Back may take to land (its popstate) before what waits for it goes on anyway. */
+const BACK_MS = 500;
+
+/** Runs `then` once the next Back lands (its popstate: true), or after `ms` without one (false). */
+export function afterBack(then: (popped: boolean) => void, ms = BACK_MS): void {
+  const timer = setTimeout(() => (removeEventListener("popstate", pop), then(false)), ms);
+  const pop = () => (clearTimeout(timer), removeEventListener("popstate", pop), then(true));
+  addEventListener("popstate", pop);
+}
+
 /** For the page's first load, before anything draws: an entry that still carries an overlay's marker is one the last
  *  load left behind (a reload with the side panel open, #5134). The overlay is gone, so its entry would only make the
  *  first Back do nothing. On the address it opened on, go back off it (more than once for overlays stacked on each
  *  other); on another (the page moved under it), take the marker off and stay. `ms`: how long one Back may take. */
-export async function settleOverlayEntry(ms = 500): Promise<void> {
+export async function settleOverlayEntry(ms = BACK_MS): Promise<void> {
   const marked = () => {
     const st = history.state as Record<string, unknown> | null;
     return onOverlayEntry(st) ? st : null;
@@ -116,9 +134,7 @@ export async function settleOverlayEntry(ms = 500): Promise<void> {
     if (!st) return;
     if (st[AT] !== location.href) break;
     const popped = await new Promise<boolean>((done) => {
-      const timer = setTimeout(() => (removeEventListener("popstate", pop), done(false)), ms);
-      const pop = () => (clearTimeout(timer), removeEventListener("popstate", pop), done(true));
-      addEventListener("popstate", pop);
+      afterBack(done, ms);
       history.back();
     });
     if (!popped) break; // nothing under it (a new tab's only entry): keep the entry, without the marker
@@ -129,9 +145,10 @@ export async function settleOverlayEntry(ms = 500): Promise<void> {
 }
 
 /** While `open` (and `enabled`, e.g. only on a narrow screen), Back closes it through `onClose`. A navigation away while
- *  it is open leaves its entry under the new page; closing then does not go back (that would undo the navigation). */
-export function useCloseOnBack(open: boolean, onClose: () => void, enabled = true): void {
+ *  it is open leaves its entry under the new page; closing then does not go back (that would undo the navigation).
+ *  Bump `step` when Back popped an inner level while the overlay stays open so another Back entry is armed. */
+export function useCloseOnBack(open: boolean, onClose: () => void, enabled = true, step = 0): void {
   const close = useRef(onClose);
   close.current = onClose;
-  useEffect(() => (open && enabled ? openOverlay(() => close.current()) : undefined), [open, enabled]);
+  useEffect(() => (open && enabled ? openOverlay(() => close.current()) : undefined), [open, enabled, step]);
 }

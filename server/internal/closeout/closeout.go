@@ -6,36 +6,45 @@ package closeout
 
 import (
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/textfmt"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
 
-var (
-	blockRe = lazyre.New(`(?s)<closeout\b([^>]*)>(.*?)</closeout>`)
-	attrRe  = lazyre.New(`([a-z_]+)\s*=\s*"([^"]*)"`)
-)
+var attrRe = lazyre.New(`([a-z_]+)\s*=\s*"([^"]*)"`)
+
+// nextMaxRunes is the longest reply that every version of the session list carries whole.
+const nextMaxRunes = 180
 
 // Example is the form an agent is asked to write, as the prompts show it.
 const Example = `<closeout status="done|not_done|blocked" merged="yes|no|n/a" deployed="yes|no|n/a">
 did: <what changed, one sentence; up to three such lines>
 artifact: <pr|commit|branch|doc|build|url|file> <reference>
+delivery: <live|pr|merged|off|none; omit when no delivery standard applies>
+unblock: <user|agent|other; omit without a delivery gate>
 verified: <what you ran or measured and its reading, or "untested">
 missing: <what you still need from someone, if anything>
 waiting: <for status="blocked": who or what you wait for>
+next: <optional on done: one short reply naming the proposed action in the owner's language>
 </closeout>`
 
 // Parse reads the last closeout block in an agent's reply. ok is false when there is none or its status is not one
 // of done, not_done and blocked: a block that does not say where the work stands is no closeout.
 func Parse(reply string) (c proto.Closeout, artifacts []proto.WorkArtifact, ok bool) {
-	all := blockRe.FindAllStringSubmatch(reply, -1)
-	if len(all) == 0 {
+	if report, ok := textfmt.FinalWorkReport(reply); ok {
+		c.Status, c.Merged, c.Deployed = report.Status, yesNo(report.Merged), yesNo(report.Deployed)
+		return readFields(c, report.Body)
+	}
+	blocks := closeoutBlocks(reply)
+	if len(blocks) == 0 {
 		return c, nil, false
 	}
-	m := all[len(all)-1]
-	for _, a := range attrRe.FindAllStringSubmatch(m[1], -1) {
+	m := blocks[len(blocks)-1]
+	for _, a := range attrRe.FindAllStringSubmatch(m.attrs, -1) {
 		v := strings.ToLower(strings.TrimSpace(a[2]))
 		switch a[1] {
 		case "status":
@@ -51,8 +60,32 @@ func Parse(reply string) (c proto.Closeout, artifacts []proto.WorkArtifact, ok b
 	default:
 		return proto.Closeout{}, nil, false
 	}
-	for _, line := range strings.Split(m[2], "\n") {
+	return readFields(c, m.body)
+}
+
+func readFields(c proto.Closeout, body string) (proto.Closeout, []proto.WorkArtifact, bool) {
+	var artifacts []proto.WorkArtifact
+	var seenNext, afterNext bool
+	for line := range strings.Lines(body) {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
 		key, val, found := cutKey(line)
+		followsNext := afterNext
+		if afterNext && !found { // a continuation cannot be sent as only its first line
+			c.Next = ""
+		}
+		afterNext = key == "next"
+		if afterNext {
+			if seenNext || nothing(val) || utf8.RuneCountInString(val) > nextMaxRunes ||
+				strings.IndexFunc(val, unicode.IsControl) >= 0 || strings.ContainsAny(val, "\u2028\u2029") || strings.HasPrefix(val, "<") {
+				c.Next = ""
+			} else {
+				c.Next = val
+			}
+			seenNext = true
+			continue
+		}
 		if !found || val == "" {
 			continue
 		}
@@ -67,6 +100,18 @@ func Parse(reply string) (c proto.Closeout, artifacts []proto.WorkArtifact, ok b
 			if len(artifacts) < 5 && ref != "" && isKind(kind) {
 				artifacts = append(artifacts, proto.WorkArtifact{Kind: kind, Ref: clip(ref, 300)})
 			}
+		case "delivery":
+			val = strings.ToLower(val)
+			switch val {
+			case "live", "pr", "merged", "off", "none":
+				c.Delivery = val
+			}
+		case "unblock":
+			val = strings.ToLower(val)
+			switch val {
+			case "user", "agent", "other":
+				c.Unblock = val
+			}
 		case "verified":
 			c.Verified = clip(val, 300)
 		case "missing":
@@ -77,14 +122,282 @@ func Parse(reply string) (c proto.Closeout, artifacts []proto.WorkArtifact, ok b
 			if !nothing(val) {
 				c.Waiting = clip(val, 120)
 			}
+		default:
+			if followsNext { // a colon in free-form continuation text does not start a report field
+				c.Next = ""
+			}
 		}
+	}
+	if c.Status != proto.CloseoutDone || c.Missing != "" || c.Waiting != "" {
+		c.Next = ""
 	}
 	return c, artifacts, true
 }
 
 // Strip returns reply without its closeout blocks, for a reader that is given the closeout separately.
 func Strip(reply string) string {
-	return strings.TrimSpace(blockRe.ReplaceAllString(reply, ""))
+	if report, ok := textfmt.FinalWorkReport(reply); ok {
+		reply = reply[:report.Start] + reply[report.End:]
+	}
+	blocks := closeoutBlocks(reply)
+	if len(blocks) == 0 {
+		return strings.TrimSpace(reply)
+	}
+	var b strings.Builder
+	last := 0
+	for _, blk := range blocks {
+		b.WriteString(reply[last:blk.start])
+		last = blk.end
+	}
+	b.WriteString(reply[last:])
+	return strings.TrimSpace(b.String())
+}
+
+type byteSpan struct {
+	start, end int
+}
+
+type closeoutBlock struct {
+	start, end  int
+	attrs, body string
+}
+
+func closeoutBlocks(reply string) []closeoutBlock {
+	const (
+		openTag  = "<closeout"
+		closeTag = "</closeout>"
+	)
+	if !strings.Contains(reply, openTag) {
+		return nil
+	}
+	spans := codeSpans(reply)
+	var out []closeoutBlock
+	for pos := 0; pos < len(reply); {
+		rel := strings.Index(reply[pos:], openTag)
+		if rel < 0 {
+			break
+		}
+		openStart := pos + rel
+		afterName := openStart + len(openTag)
+		if afterName < len(reply) && isWordByte(reply[afterName]) {
+			pos = afterName
+			continue
+		}
+		if overlapsCode(spans, openStart, afterName) {
+			pos = afterName
+			continue
+		}
+		gtRel := strings.IndexByte(reply[afterName:], '>')
+		if gtRel < 0 {
+			break
+		}
+		openEnd := afterName + gtRel + 1
+		if overlapsCode(spans, openStart, openEnd) {
+			pos = afterName
+			continue
+		}
+		searchPos := openEnd
+		matched := false
+		for searchPos < len(reply) {
+			closeRel := strings.Index(reply[searchPos:], closeTag)
+			if closeRel < 0 {
+				return out
+			}
+			closeStart := searchPos + closeRel
+			closeEnd := closeStart + len(closeTag)
+			if overlapsCode(spans, closeStart, closeEnd) {
+				searchPos = closeEnd
+				continue
+			}
+			out = append(out, closeoutBlock{
+				start: openStart,
+				end:   closeEnd,
+				attrs: reply[afterName : openEnd-1],
+				body:  reply[openEnd:closeStart],
+			})
+			pos = closeEnd
+			matched = true
+			break
+		}
+		if !matched {
+			return out
+		}
+	}
+	return out
+}
+
+func isWordByte(b byte) bool {
+	return b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' || b >= '0' && b <= '9' || b == '_'
+}
+
+func overlapsCode(spans []byteSpan, start, end int) bool {
+	for _, sp := range spans {
+		if sp.end <= start {
+			continue
+		}
+		if sp.start >= end {
+			return false
+		}
+		return true
+	}
+	return false
+}
+
+// codeSpans returns sorted byte ranges of CommonMark fenced code blocks and single-line inline backtick code spans.
+func codeSpans(s string) []byteSpan {
+	var (
+		spans           []byteSpan
+		fenceChar       byte
+		fenceLen        int
+		fenceQuoteDepth int
+		fenceStart      int
+	)
+	for lineStart := 0; lineStart < len(s); {
+		nl := strings.IndexByte(s[lineStart:], '\n')
+		lineEnd := len(s)
+		rawEnd := len(s)
+		if nl >= 0 {
+			lineEnd = lineStart + nl + 1
+			rawEnd = lineStart + nl
+		}
+		if rawEnd > lineStart && s[rawEnd-1] == '\r' {
+			rawEnd--
+		}
+		rawLine := s[lineStart:rawEnd]
+		if fenceChar != 0 {
+			qDepth, rest := stripQuotePrefix(rawLine)
+			if qDepth < fenceQuoteDepth {
+				spans = append(spans, byteSpan{start: fenceStart, end: lineStart})
+				fenceChar = 0
+			} else {
+				if qDepth == fenceQuoteDepth && isClosingFence(rest, fenceChar, fenceLen) {
+					spans = append(spans, byteSpan{start: fenceStart, end: lineEnd})
+					fenceChar = 0
+				}
+				lineStart = lineEnd
+				continue
+			}
+		}
+		qDepth, rest := stripQuotePrefix(rawLine)
+		if ch, n := openingFence(rest); ch != 0 {
+			fenceChar = ch
+			fenceLen = n
+			fenceQuoteDepth = qDepth
+			fenceStart = lineStart
+			lineStart = lineEnd
+			continue
+		}
+		spans = appendInlineCodeSpans(spans, rawLine, lineStart)
+		lineStart = lineEnd
+	}
+	if fenceChar != 0 {
+		spans = append(spans, byteSpan{start: fenceStart, end: len(s)})
+	}
+	return spans
+}
+
+func stripQuotePrefix(line string) (int, string) {
+	depth := 0
+	for {
+		spaces := 0
+		i := 0
+		for i < len(line) && spaces < 3 && line[i] == ' ' {
+			spaces++
+			i++
+		}
+		if i >= len(line) || line[i] != '>' {
+			return depth, line
+		}
+		depth++
+		i++
+		if i < len(line) && (line[i] == ' ' || line[i] == '\t') {
+			i++
+		}
+		line = line[i:]
+	}
+}
+
+func openingFence(line string) (byte, int) {
+	spaces := 0
+	for spaces < len(line) && spaces < 4 && line[spaces] == ' ' {
+		spaces++
+	}
+	if spaces >= 4 || spaces >= len(line) {
+		return 0, 0
+	}
+	ch := line[spaces]
+	if ch != '`' && ch != '~' {
+		return 0, 0
+	}
+	n := 0
+	for spaces+n < len(line) && line[spaces+n] == ch {
+		n++
+	}
+	if n < 3 {
+		return 0, 0
+	}
+	if ch == '`' && strings.IndexByte(line[spaces+n:], '`') >= 0 {
+		return 0, 0
+	}
+	return ch, n
+}
+
+func isClosingFence(line string, ch byte, minLen int) bool {
+	spaces := 0
+	for spaces < len(line) && spaces < 4 && line[spaces] == ' ' {
+		spaces++
+	}
+	if spaces >= 4 || spaces >= len(line) || line[spaces] != ch {
+		return false
+	}
+	n := 0
+	for spaces+n < len(line) && line[spaces+n] == ch {
+		n++
+	}
+	if n < minLen {
+		return false
+	}
+	for i := spaces + n; i < len(line); i++ {
+		if line[i] != ' ' && line[i] != '\t' {
+			return false
+		}
+	}
+	return true
+}
+
+func appendInlineCodeSpans(spans []byteSpan, line string, lineOffset int) []byteSpan {
+	for i := 0; i < len(line); {
+		if line[i] != '`' {
+			i++
+			continue
+		}
+		n := 0
+		for i+n < len(line) && line[i+n] == '`' {
+			n++
+		}
+		closed := false
+		for j := i + n; j < len(line); {
+			if line[j] != '`' {
+				j++
+				continue
+			}
+			m := 0
+			for j+m < len(line) && line[j+m] == '`' {
+				m++
+			}
+			if m == n {
+				spans = append(spans, byteSpan{start: lineOffset + i, end: lineOffset + j + m})
+				i = j + m
+				closed = true
+				break
+			}
+			j += m
+		}
+		if !closed {
+			i += n
+		}
+	}
+	return spans
 }
 
 // Has reports whether reply carries a closeout Parse accepts.
@@ -98,7 +411,7 @@ func Has(reply string) bool {
 // question in such a reply is conversation or an offer, not a wait (docs/protocol/agent-states.md "Awaiting your
 // reply", #4110). False when the reply has no closeout.
 func WaitsOnNobody(reply string) bool {
-	if !strings.Contains(reply, "<closeout") { // most replies have none: no regexp run, nothing allocated
+	if !strings.Contains(reply, "<closeout") && !strings.Contains(reply, "### Persona ") { // most replies have none: no regexp run, nothing allocated
 		return false
 	}
 	c, _, ok := Parse(reply)

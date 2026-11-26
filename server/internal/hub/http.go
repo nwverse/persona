@@ -9,8 +9,10 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,11 +28,13 @@ import (
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/link"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/sessionlist"
+	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
 // nodeOutdated recognizes the prefix also returned by an old manager that lacks
@@ -54,6 +58,7 @@ func (h *Hub) routes() http.Handler {
 	if h.upd != nil {
 		h.upd.routes(api)
 	}
+	h.recoveryRoutes(api)
 	h.machineRoutes(api)
 	// Confirm / reject / rename a computer (machine_trust.go, machine_rename.go).
 	h.machineTrustRoutes(api)
@@ -61,18 +66,28 @@ func (h *Hub) routes() http.Handler {
 	h.deviceRoutesRelayed(api) // the manager's own: reconnect, engine, herdr, deploy, claude-dirs (devices_routes.go)
 	h.sharingRoutes(api)
 	h.fileRoutes(api)
+	h.machineFileRoutes(api)
 	h.gitRoutes(api)
 	h.agentSettingsRoutes(api)
 	h.sessionRoutes(api)
 	h.paneRoutes(api)
 	h.nodeDoctorRoutes(api)
+	h.machineProcRoutes(api)
+	h.machineToolchainRoutes(api)
+	h.machineServicesRoutes(api)
+	h.machineNetworkRoutes(api)
+	h.machineStorageRoutes(api)
 	h.nodeUpdateRelayRoutes(api)
 	api.HandleFunc("GET /api/v1/interactions", func(w http.ResponseWriter, r *http.Request) {
 		ixs := visibleInteractions(h.pendingInteractions(), h.requestHasElicitation(r))
-		if extensionToken(r) { // an extension's token: its manager's cards only, none private (extension_private.go)
+		if restrictedAgentData(r) {
 			em := extensionManager(r)
+			ro := principalOf(r.Context()).Role == roleReadOnly
 			ixs = slices.DeleteFunc(ixs, func(ix proto.Interaction) bool {
-				return em != "" && cmp.Or(ix.Manager, assistantwire.AssistantID) != em || h.hiddenFromExtensions(ix)
+				return em != "" && cmp.Or(ix.Manager, assistantwire.AssistantID) != em ||
+					ix.Private ||
+					(ro && ix.ToolName == proto.SecretHandoffTool) ||
+					h.spacesHidden(r) && h.hiddenFromExtensions(ix)
 			})
 		}
 		writeJSON(w, map[string]any{"interactions": h.withMuted(ixs)})
@@ -80,6 +95,7 @@ func (h *Hub) routes() http.Handler {
 	api.HandleFunc("GET /api/v1/ops/{id}", h.getClientOp)
 	h.fleetRoutesRelayed(api) // resolve, history, seen: the manager's (fleet_link.go)
 	h.phoneWriteRoutes(api)
+	h.phonePrimaryRoutes(api)
 	h.deviceRoutes(api)
 	h.pushRoutes(api)
 	h.webPushRoutes(api)
@@ -89,7 +105,7 @@ func (h *Hub) routes() http.Handler {
 	h.assistantRoutes(api)
 	h.pinRoutes(api)
 	h.notifyRoutes(api)
-	h.lnRoutes(api)
+	h.pushGradingRoutes(api)
 	h.personaRoutes(api)
 	h.lookRoutes(api)
 	h.lookUploadRoutes(api)
@@ -101,6 +117,7 @@ func (h *Hub) routes() http.Handler {
 	h.extensionRoutesRelayed(api)
 	api.HandleFunc("GET /api/v1/ws", h.serveWS)
 	h.tokenRoutes(api)
+	h.readOnlySessionRoutes(api)
 	h.portRoutes(api)
 	h.previewRoutes(api)
 	h.pairRoutes(api)
@@ -112,7 +129,7 @@ func (h *Hub) routes() http.Handler {
 	h.runtimeCLIRoutes(api)
 	// What the center serves: its own apps' requests and those the members pass on (peer_http.go), whose source the
 	// member judged (no gate here for them). A member passes everything but its own few routes on (memberForward).
-	centerAPI := h.centerSharing(h.auth(h.extensionAPIs(jsonRouteErrors(api), api)))
+	centerAPI := h.centerSharing(h.auth(h.quiesceGate(h.extensionAPIs(jsonRouteErrors(api), api))))
 	h.mesh.centerAPI.Store(centerAPI)
 	appAPI := h.gate(h.memberForward(centerAPI))
 	h.busRoutes(mux)
@@ -120,7 +137,7 @@ func (h *Hub) routes() http.Handler {
 	h.managerInstallRoutes(mux) // GET /i/<code>: the install script (managers_install.go)
 	mux.Handle("/api/", appAPI)
 	mux.Handle("/", h.adminRoutes(mux, appAPI, webApp(filepath.Join(h.cfg.dir, "web"))))
-	return h.outerLayers(h.sharingDispatcher(h.plaintextLoopbackOnly(jsonRouteErrors(mux))))
+	return h.outerLayers(h.privateNetworkOnly(h.sharingDispatcher(h.plaintextLoopbackOnly(jsonRouteErrors(mux)))))
 }
 
 // outerLayers are what every request goes through around the routes, outermost first: the auth layer's marks
@@ -187,6 +204,16 @@ func (h *Hub) auth(next http.Handler) http.Handler {
 		tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if tok == "" {
 			tok = r.URL.Query().Get("token")
+		}
+		if tok == "" && isReadOnlySessionsRoute(r.URL.Path) {
+			if r2, handled, authorized := h.tryAdminReadOnlyAuth(w, r); handled {
+				if !authorized {
+					return
+				}
+				w.Header().Set("Cache-Control", "no-store")
+				h.observeClientRequest(next, w, r2, principal{Role: "admin"})
+				return
+			}
 		}
 		// An extension's token that fails counts in a bucket of its own, which gates extensions' tokens only: never the
 		// bus, the apps or any other credential. A relayed manager's extensions call from its address, and calls the
@@ -307,6 +334,19 @@ func (h *Hub) auth(next http.Handler) http.Handler {
 				writeErrCode(w, http.StatusForbidden, codeOtherManager, err)
 				return
 			}
+		} else if p.Role == roleScoped {
+			if !h.authorizeScopedDevice(w, r, p) {
+				return
+			}
+		} else if p.Role == roleReadOnly {
+			if !h.readOnlySessionsAllowed() {
+				h.disconnectReadOnlyClients()
+				h.securityError(w, r, http.StatusForbidden, "readonly_sessions_disabled", 0)
+				return
+			}
+			if !h.authorizeReadOnly(w, r, p) {
+				return
+			}
 		} else if !allowed(p, r.Method, r.URL.Path) {
 			msg := "this device can only read and answer"
 			if p.Role == roleLink || p.Role == roleLinkPair {
@@ -322,6 +362,10 @@ func (h *Hub) auth(next http.Handler) http.Handler {
 			ctx, cancel := h.pairContext(r.Context(), p)
 			defer cancel()
 			r = r.WithContext(ctx)
+		} else if !p.ExpiresAt.IsZero() && r.URL.Path != "/api/v1/ws" {
+			ctx, cancel := expiringContext(r.Context(), p.ExpiresAt)
+			defer cancel()
+			r = r.WithContext(ctx)
 		}
 		// API answers are live data: without this the phone's URLCache kept a copy of every page it pulled (megabytes,
 		// never read again). Images and media that may be cached set their own Cache-Control.
@@ -335,9 +379,19 @@ type statusWriter struct {
 	status          int
 	securityFailure bool
 	lang            i18n.Lang
+	why             string // what the hub's own server error said, for its request line (NoteError)
 }
 
 func (s *statusWriter) WriteHeader(code int) { s.status = code; s.ResponseWriter.WriteHeader(code) }
+
+// NoteError keeps what a server error the hub writes itself says (apierr.ErrorNoter), for its request line. Only the
+// hub's own errors are noted: the body of an answer it passes on as it is (a manager's, an extension's or a linked
+// hub's, through relayTo or setupPeerHTTP) is never read, whatever it holds (#14490).
+func (s *statusWriter) NoteError(status int, body map[string]any) {
+	if status >= 500 {
+		s.why = loggedError(body)
+	}
+}
 
 // authRefusal is a request's mark that the hub's own auth layer refused it (authMarks puts it in the context).
 type authRefusal struct{ refused atomic.Bool }
@@ -361,7 +415,8 @@ func (s *statusWriter) Unwrap() http.ResponseWriter { return s.ResponseWriter }
 
 // logRequests logs failed and slow requests (method, path, status, time; never the query, body or token) under
 // a request id: the app's X-Client-Request-Id when it sent one, which it shows next to a server error, else a new
-// one. Every response carries it as X-Request-Id.
+// one. Every response carries it as X-Request-Id. A server error's line also says the code and the error the hub
+// answered with (loggedError): without them a 502 left nothing to go on (#13468).
 func logRequests(h *Hub, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -380,13 +435,58 @@ func logRequests(h *Hub, next http.Handler) http.Handler {
 		// Auth and ingress refusals are logged by securityError (masked, rate limited), WebSocket ones included.
 		if !sw.securityFailure && (sw.status >= 400 || (!longLived(r) && time.Since(start) > 2*time.Second)) {
 			path := loggedPath(r.URL.Path)
+			why := ""
+			if sw.status >= 500 {
+				why = sw.why
+			}
 			if client.Platform != "" {
-				h.logf("[%s] %s %s -> %d (%s) client=%q", id, r.Method, path, sw.status, time.Since(start).Round(time.Millisecond), client.Platform+"/"+client.Version)
+				h.logf("[%s] %s %s -> %d (%s) client=%q%s", id, r.Method, path, sw.status, time.Since(start).Round(time.Millisecond), client.Platform+"/"+client.Version, why)
 			} else {
-				h.logf("[%s] %s %s -> %d (%s)", id, r.Method, path, sw.status, time.Since(start).Round(time.Millisecond))
+				h.logf("[%s] %s %s -> %d (%s)%s", id, r.Method, path, sw.status, time.Since(start).Round(time.Millisecond), why)
 			}
 		}
 	})
+}
+
+// loggedErrorText bounds the text a server error's request line shows.
+const loggedErrorText = 300
+
+// loggedError is what a server error's request line adds, from the error body the hub wrote (apierr, NoteError):
+// ` code=<code>`, then ` detail="<detail>"`, the technical words a localized failure keeps apart from its generic error
+// (rpc-errors.failed), else ` error="<error>"`; one line, quoted, clipped. "" when it has neither code nor error.
+func loggedError(body map[string]any) string {
+	code, _ := body["code"].(string)
+	text, _ := body["error"].(string)
+	if code == "" && text == "" {
+		return ""
+	}
+	var b strings.Builder
+	if code != "" {
+		b.WriteString(" code=")
+		if strings.Trim(code, "abcdefghijklmnopqrstuvwxyz0123456789_.-") == "" {
+			b.WriteString(code)
+		} else {
+			b.WriteString(strconv.Quote(textfmt.Clip(code, 40)))
+		}
+	}
+	quoted := func(s string) string { return strconv.Quote(textfmt.Clip(textfmt.OneLine(s), loggedErrorText)) }
+	switch d := body["detail"].(type) {
+	case string:
+		if d != "" {
+			b.WriteString(" detail=" + quoted(d))
+			return b.String()
+		}
+	case nil:
+	default: // a structured detail (a refusal's fields): as compact JSON
+		if raw, err := json.Marshal(d); err == nil {
+			b.WriteString(" detail=" + quoted(string(raw)))
+			return b.String()
+		}
+	}
+	if text != "" {
+		b.WriteString(" error=" + quoted(text))
+	}
+	return b.String()
 }
 
 // loggedPath is a request's path as the log may show it: an install code in /i/<code> (a credential) is masked.
@@ -496,6 +596,14 @@ func callErr(w http.ResponseWriter, err error) {
 func (h *Hub) callNode(w http.ResponseWriter, r *http.Request, m *Machine, method string, params any, timeout time.Duration, outdated string, args i18n.Args, handle ...func(error) bool) (json.RawMessage, bool) {
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
+	if strings.HasPrefix(method, "git.") {
+		var err error
+		method, params, err = backendGitTarget(r, method, params)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, err)
+			return nil, false
+		}
+	}
 	var out json.RawMessage
 	if err := m.call(ctx, method, params, &out); err != nil {
 		if h.nodeOutdated(w, r, err, outdated, args) {
@@ -535,15 +643,29 @@ func (h *Hub) proxy(method string, params func(*http.Request) any) http.HandlerF
 // sessionItems pages through a session's history. With lazy_images=1 images come without their data (the app
 // fetches each one from sessionImage when it scrolls into view); older apps still get them inline.
 func (h *Hub) sessionItems(w http.ResponseWriter, r *http.Request, m *Machine) {
-	q := r.URL.Query()
+	q, queryErr := url.ParseQuery(r.URL.RawQuery)
+	if h.sessionNavigation(w, r, m, q, queryErr) {
+		return
+	}
 	params := map[string]any{"session_id": r.PathValue("sid")}
+	strict := q.Get("strict") == "1"
+	if strict {
+		params["strict_read"] = true
+	}
 	userInputs := q.Get("user_inputs") == "1"
+	metaOnly := q.Get("meta_only") == "1"
 	if userInputs {
-		params["user_inputs"] = true // only a count/position projection, never message bodies
+		params["user_inputs"] = true // the index carries positions and bounded excerpts
+		if metaOnly {
+			params["meta_only"] = true
+		}
 	}
 	// Only the paging the app gave: one it left out or sent empty (iOS's latest page has before_seq=) is not 0 to a
 	// runtime, which may take before_seq 0 as a bad value and refuse every page, and the app's sync then asks again.
 	for _, k := range []string{"before_seq", "limit", "turns"} {
+		if userInputs && k == "before_seq" {
+			continue // the public index spans the conversation independently of page cursors
+		}
 		if v := q.Get(k); v != "" {
 			params[k] = atoi(v)
 		}
@@ -572,22 +694,37 @@ func (h *Hub) sessionItems(w http.ResponseWriter, r *http.Request, m *Machine) {
 			writeErr(w, http.StatusBadGateway, errors.New("incomplete user input index"))
 			return
 		}
+		if metaOnly {
+			// An older node may have returned the legacy index with excerpts.
+			for i := range index.Inputs {
+				index.Inputs[i] = index.Inputs[i].WithoutExcerpts()
+			}
+		}
 		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, index)
 		return
 	}
 	var res struct {
-		Items     []proto.Item `json:"items"`
-		HasMore   bool         `json:"has_more"`
-		MoreAfter bool         `json:"more_after,omitempty"`
-		More      bool         `json:"more,omitempty"` // a fold's lines go on after these
+		Items      []proto.Item `json:"items"`
+		HasMore    bool         `json:"has_more"`
+		MoreAfter  bool         `json:"more_after,omitempty"`
+		More       bool         `json:"more,omitempty"` // a fold's lines go on after these
+		StrictRead bool         `json:"strict_read,omitempty"`
+		Partial    bool         `json:"partial,omitempty"`
 		itemSpan
 	}
 	if err := m.call(ctx, "session.items", params, &res); err != nil {
 		callErr(w, err)
 		return
 	}
-	res.Items = cardCompatItems(h.requestLang(r), h.requestWants(r, featureCardRing), localizedItems(h.requestLang(r), h.withInjected(res.Items)))
+	if strict && !res.StrictRead {
+		writeErrCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.Err("chatexport.node_version"))
+		return
+	}
+	res.Items = clientItemsCompat(h.requestLang(r), h.requestWants(r, featureCardRing), h.requestWants(r, featureMarkdownCloseout), h.requestWants(r, proto.FeatureToolViews), localizedItems(h.requestLang(r), h.withInjected(res.Items)))
+	// Allow binding a pending live Hub TTFT on latest-page / incremental reads while keeping historical pages read-only.
+	allowBind := atoi(q.Get("before_seq")) == 0 && atoi(q.Get("through_seq")) == 0 && principalOf(r.Context()).Role != roleReadOnly
+	h.ttft.annotate(m.cfg.ID, r.PathValue("sid"), res.Items, allowBind)
 	if q.Get("lazy_images") == "1" {
 		res.Items = proto.WithoutImageData(res.Items)
 	}
@@ -599,15 +736,32 @@ func (h *Hub) sessionItems(w http.ResponseWriter, r *http.Request, m *Machine) {
 func (h *Hub) sessionItemFull(w http.ResponseWriter, r *http.Request, m *Machine) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	var it proto.Item
-	if err := m.call(ctx, "session.item", map[string]any{"session_id": r.PathValue("sid"), "item_id": r.PathValue("iid")}, &it); err != nil {
+	params := map[string]any{"session_id": r.PathValue("sid"), "item_id": r.PathValue("iid")}
+	strict := r.URL.Query().Get("strict") == "1"
+	if strict {
+		params["strict_read"] = true
+	}
+	var full struct {
+		proto.Item
+		StrictRead      bool `json:"strict_read,omitempty"`
+		SourceTextBytes *int `json:"source_text_bytes,omitempty"`
+	}
+	if err := m.call(ctx, "session.item", params, &full); err != nil {
 		callErr(w, err)
 		return
 	}
-	// The whole item for the channels that follow the conversation, or show its view (the manager's, fleet_follow.go).
-	h.asstOf(h.sessionOwner(m.cfg.ID, r.PathValue("sid"))).notify(assistantwire.EventSessionItems, assistantwire.SessionItems{MachineID: m.cfg.ID, SessionID: r.PathValue("sid"),
-		Items: []proto.Item{it}})
-	writeItemsJSON(w, cardCompatItems(h.requestLang(r), h.requestWants(r, featureCardRing), localizedItems(h.requestLang(r), h.withInjected([]proto.Item{it})))[0])
+	if strict && !full.StrictRead {
+		writeErrCode(w, http.StatusConflict, proto.CodeNodeOutdated, i18n.Err("chatexport.node_version"))
+		return
+	}
+	it := full.Item
+	if !strict && principalOf(r.Context()).Role != roleReadOnly {
+		// A client opened an item whole. Let the channels following its view see it too (fleet_follow.go).
+		h.asstOf(h.sessionOwner(m.cfg.ID, r.PathValue("sid"))).notify(assistantwire.EventSessionItems, assistantwire.SessionItems{MachineID: m.cfg.ID, SessionID: r.PathValue("sid"),
+			Items: []proto.Item{it}})
+	}
+	full.Item = clientItemsCompat(h.requestLang(r), h.requestWants(r, featureCardRing), h.requestWants(r, featureMarkdownCloseout), h.requestWants(r, proto.FeatureToolViews), localizedItems(h.requestLang(r), h.withInjected([]proto.Item{it})))[0]
+	writeItemsJSON(w, full)
 }
 
 // sessionImage serves one item's image as raw bytes. An item's image never changes, so the app may cache it forever.
@@ -671,9 +825,8 @@ func (h *Hub) proxyBodyFor(method string, timeout time.Duration, mutate ...func(
 	})
 }
 
-// interruptSession stops a session's turn (session.interrupt). One of the assistant's conversations stopped here is
-// the user's stop button in an app: the assistant is told, so a Feishu /agent request it works on is stopped as well
-// (#3308; the plugin's own /stop goes through the assistant, not here).
+// interruptSession stops a session's turn (session.interrupt). The manager retires any pending follow-up for every
+// known session; a reporting Assistant conversation is also marked stopped for its plugin (#3308).
 func (h *Hub) interruptSession(w http.ResponseWriter, r *http.Request, m *Machine) {
 	p, ok := optionalObject(w, r, 32<<20)
 	if !ok {
@@ -686,7 +839,7 @@ func (h *Hub) interruptSession(w http.ResponseWriter, r *http.Request, m *Machin
 	if !ok {
 		return
 	}
-	if s, ok := m.session(sid); ok && (s.Assistant || m.isAssistant(s)) {
+	if _, ok := m.session(sid); ok {
 		h.asstOf(h.sessionOwner(m.cfg.ID, sid)).UserStopped(r.Context(), assistantwire.SessionRef{MachineID: m.cfg.ID, SessionID: sid})
 	}
 	writeRawJSON(w, out)
@@ -695,6 +848,15 @@ func (h *Hub) interruptSession(w http.ResponseWriter, r *http.Request, m *Machin
 func (h *Hub) listSessions(w http.ResponseWriter, r *http.Request) {
 	named, ok := h.sessionsManager(w, r) // ?manager=<id>: that manager's computers only (sessions_list.go)
 	if !ok {
+		return
+	}
+	// include_inactive=1: sessions active in a time window, inactive ones too (sessions_history.go). Without it, as
+	// before: since / cursor / limit stay the indexed list's.
+	if history, err := historyMode(r); err != nil {
+		sessionListErr(w, err)
+		return
+	} else if history {
+		h.historySessions(w, r, named)
 		return
 	}
 	_, lookup := r.URL.Query()["session_id"]
@@ -716,7 +878,7 @@ func (h *Hub) listSessions(w http.ResponseWriter, r *http.Request) {
 		if mid != "" && m.cfg.ID != mid || em != "" && owner != em || named != "" && owner != named {
 			continue
 		}
-		lists = append(lists, stampedList{withoutHealthSessions(r, h.shown(m.cfg.ID, m.keptSessions())), owner})
+		lists = append(lists, stampedList{h.withoutSpaceSessions(r, h.shown(m.cfg.ID, m.keptSessions())), owner})
 	}
 	writeSessionLists(w, lists)
 }
@@ -774,37 +936,45 @@ func writeSessionLists(w http.ResponseWriter, lists []stampedList) {
 	_, _ = w.Write(buf.Bytes())
 }
 
+type sessionStartRequest struct {
+	MachineID        string        `json:"machine_id"`
+	Cwd              string        `json:"cwd"`
+	Launcher         string        `json:"launcher"`
+	AgentType        string        `json:"agent_type,omitempty"`
+	WorkSession      bool          `json:"work_session,omitempty"`
+	Model            string        `json:"model,omitempty"` // picked in "New agent" for this start; empty: applyModel's
+	Prompt           string        `json:"prompt"`
+	ClientMsgID      string        `json:"client_msg_id,omitempty"`
+	Images           []proto.Image `json:"images,omitempty"`
+	ResumeSessionID  string        `json:"resume_session_id"`
+	WorkspaceID      string        `json:"workspace_id"`
+	DesktopProjectID string        `json:"desktop_project_id"`
+	// Host: the machine's enabled engine host to open in (herdr, orca, paseo…; #2576); empty: its default host.
+	// Checked by the node (an older node ignores it and starts in its engine).
+	Host           string `json:"host,omitempty"`
+	PermissionMode string `json:"permission_mode,omitempty"`
+	Effort         string `json:"effort,omitempty"`
+	// LauncherDefaultEffort keeps an explicit launcher's effort at its native default.
+	LauncherDefaultEffort bool   `json:"launcher_default_effort,omitempty"`
+	Speed                 string `json:"speed,omitempty"`
+	Ultracode             *bool  `json:"ultracode,omitempty"`
+	// Goal: a one-line condition the node sets with /goal after the first message is in (node/startgoal.go); a
+	// start it cannot take there answers 409 start_goal_unsupported before anything starts.
+	Goal string `json:"goal,omitempty"`
+	// TabName names the herdr tab; empty: one made from the first message (tabName, assistant/agents_start.go),
+	// else agent-<n>.
+	TabName string `json:"tab_name,omitempty"`
+	// Async: answer at once with the session it is going to be and start it in the background (node/starting.go);
+	// messages sent to it meanwhile go in once it is ready. NameHint: what the tab name is made from when the
+	// app sends the first message itself (so it shows as a message right away) instead of as prompt.
+	Async    bool   `json:"async,omitempty"`
+	NameHint string `json:"name_hint,omitempty"`
+	TodoID   string `json:"todo_id,omitempty"`
+}
+
 func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
-	var p struct {
-		MachineID       string `json:"machine_id"`
-		Cwd             string `json:"cwd"`
-		Launcher        string `json:"launcher"`
-		AgentType       string `json:"agent_type,omitempty"`
-		WorkSession     bool   `json:"work_session,omitempty"`
-		Model           string `json:"model,omitempty"` // picked in "New agent" for this start; empty: applyModel's
-		Prompt          string `json:"prompt"`
-		ResumeSessionID string `json:"resume_session_id"`
-		WorkspaceID     string `json:"workspace_id"`
-		// Host: the machine's enabled engine host to open in (herdr, orca, paseo…; #2576); empty: its default host.
-		// Checked by the node (an older node ignores it and starts in its engine).
-		Host           string `json:"host,omitempty"`
-		PermissionMode string `json:"permission_mode,omitempty"`
-		Effort         string `json:"effort,omitempty"`
-		Ultracode      *bool  `json:"ultracode,omitempty"`
-		// Goal: a one-line condition the node sets with /goal after the first message is in (node/startgoal.go); a
-		// start it cannot take there answers 409 start_goal_unsupported before anything starts.
-		Goal string `json:"goal,omitempty"`
-		// TabName names the herdr tab; empty: one made from the first message (tabName, assistant/agents_start.go),
-		// else agent-<n>.
-		TabName string `json:"tab_name,omitempty"`
-		// Async: answer at once with the session it is going to be and start it in the background (node/starting.go);
-		// messages sent to it meanwhile go in once it is ready. NameHint: what the tab name is made from when the
-		// app sends the first message itself (so it shows as a message right away) instead of as prompt.
-		Async    bool   `json:"async,omitempty"`
-		NameHint string `json:"name_hint,omitempty"`
-		TodoID   string `json:"todo_id,omitempty"`
-	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 4<<20))
+	var p sessionStartRequest
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, proto.MessageBodyLimit)) // a first message with its pictures
 	if err == nil {
 		err = json.Unmarshal(body, &p)
 	}
@@ -812,12 +982,27 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		writeBodyErr(w, err, err)
 		return
 	}
+	h.startSessionWith(w, r, p, false)
+}
+
+func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p sessionStartRequest, handoff bool) {
+	orig := p
+	replay := heldStartReplayOf(r.Context())
+	if strings.HasPrefix(p.ClientMsgID, proto.A2ADeliveryPrefix) {
+		writeErrCode(w, http.StatusBadRequest, "client_msg_id_reserved", i18n.Err("hub-send.reserved_id"))
+		return
+	}
 	if p.WorkSession && (p.Launcher == "" || p.AgentType == "" || strings.TrimSpace(p.Cwd) == "" ||
 		p.ResumeSessionID != "" || p.TodoID != "" || p.WorkspaceID != "" || p.Host != "") {
 		writeErrCode(w, http.StatusBadRequest, "work_target_required", errors.New("Choose a computer, project folder, harness and launcher for the new session."))
 		return
 	}
-	r = h.captureHumanSubmission(r, p.Prompt)
+	if apierr.ImagesOverLimit(w, proto.HubImageLimits.For(p.AgentType), len(p.Images)) {
+		return
+	}
+	if !handoff && replay == nil {
+		r = h.captureHumanSubmission(r, p.Prompt)
+	}
 	if p.TodoID != "" && principalOf(r.Context()).Role != roleFull {
 		writeErr(w, http.StatusForbidden, errors.New("read-only role cannot modify todos"))
 		return
@@ -829,22 +1014,55 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 	}
 	// Resuming with a permission mode changes that session's mode: an extension's token, only of a conversation its
 	// extension opened (extension_modes.go).
-	if pr := principalOf(r.Context()); pr.Role == roleExtension && p.ResumeSessionID != "" && p.PermissionMode != "" {
-		if why := h.extensionModeRefused(pr, p.MachineID, p.ResumeSessionID, map[string]any{"permission_mode": p.PermissionMode}); why != "" {
-			h.refuseExtensionMode(w, r, pr, p.MachineID, p.ResumeSessionID, p.PermissionMode, why)
-			return
-		}
+	pr := principalOf(r.Context())
+	if pr.Role == roleScoped && (p.PermissionMode != "" || p.ResumeSessionID != "") && !slices.Contains(pr.Scopes, extwire.ScopeAgentsPermissionMode) {
+		scopedPermissionDenied(w, extwire.ScopeAgentsPermissionMode)
+		return
 	}
 	m := h.localMachine(p.MachineID)
 	if m == nil {
 		writeErr(w, http.StatusNotFound, i18n.Err("devices-api.unknown_machine"))
 		return
 	}
+	if pr.Role == roleExtension && p.ResumeSessionID != "" && p.PermissionMode != "" {
+		if why := h.extensionModeRefused(pr, p.MachineID, p.ResumeSessionID, map[string]any{"permission_mode": p.PermissionMode}); why != "" {
+			h.refuseExtensionMode(w, r, pr, p.MachineID, p.ResumeSessionID, p.PermissionMode, why)
+			return
+		}
+	}
+	if restrictedAgentData(r) {
+		// A scoped token resumes only a chat its computer lists, shown and outside any space. An extension's
+		// resume is decided last (extensionResume): one its computer no longer lists goes to the computer's check (#10941).
+		if pr.Role == roleScoped && p.ResumeSessionID != "" && !h.publicSessionForControl(m, p.ResumeSessionID) {
+			writeErr(w, http.StatusNotFound, errDeleteUnknown)
+			return
+		}
+		if identity.InSpace(startCwd(m, p.Cwd)) {
+			writeErrCode(w, http.StatusForbidden, "permission_denied", i18n.Err("apierr-apierr.health_start_forbidden"))
+			return
+		}
+	}
 	if h.machineUntrusted(m.cfg.ID) { // not confirmed yet (machine_trust.go)
 		writeErrCode(w, http.StatusConflict, "machine_pending", i18n.Err("hub-machine_trust.start_pending"))
 		return
 	}
+	if p.AgentType != "" && !agentTypeRe.MatchString(p.AgentType) {
+		writeErr(w, http.StatusBadRequest, errors.New("unsupported agent type"))
+		return
+	}
+	opID := strings.ToLower(strings.TrimSpace(r.Header.Get("X-Persona-Op-Id")))
+	if replay != nil {
+		opID = replay.opID
+	}
+	canHold := replay == nil && !handoff && p.ResumeSessionID == "" && opID != "" &&
+		clientOpUUID.MatchString(opID) && personSent(r.Context()) && h.requestWants(r, proto.FeatureAgentStartHold)
+	if canHold && !m.isConnected() {
+		if h.tryHoldStart(r.Context(), w, r, m, orig, opID, true) {
+			return
+		}
+	}
 	decided := ""
+	var handoffImages []proto.Image
 	if p.TodoID != "" {
 		// The manager checks the todo (404, 409, 503 assistant_offline while it is away) and puts its decisions before
 		// the prompt, a new agent's project background before those (#1618, #2820); they go to the agent, not into
@@ -854,10 +1072,11 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 			hand.New, hand.MachineID, hand.Cwd = true, m.cfg.ID, startCwd(m, p.Cwd)
 		}
 		var ok bool
-		if decided, ok = h.todoHandoff(r.Context(), w, hand); !ok {
+		if decided, handoffImages, ok = h.todoHandoff(r.Context(), w, hand); !ok {
 			return
 		}
 	}
+	inferredAgentType := p.AgentType == ""
 	if p.AgentType == "" {
 		for _, launcher := range m.cfg.Launchers {
 			if launcher.Name == p.Launcher {
@@ -878,13 +1097,17 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 	if p.TodoID != "" {
 		p.Prompt = decided
 	}
-	async := startsAsync(p.Async, p.ResumeSessionID, p.AgentType)
+	if strings.TrimSpace(p.Prompt) != "" {
+		p.Images = append(p.Images, handoffImages...)
+	}
+	async := startsAsync(p.Async, p.ResumeSessionID, p.Launcher, p.AgentType) && !desktopStartLauncher(p.Launcher)
 	parent := r.Context()
 	if r.Header.Get("X-Persona-Op-Id") != "" {
 		// Finish an accepted start even if its HTTP response is lost; client_ops records the outcome.
 		parent = context.WithoutCancel(parent)
 	}
-	ctx, cancel := context.WithTimeout(parent, startBudget(async && !p.WorkSession))
+	startedAt := time.Now()
+	ctx, cancel := context.WithDeadline(parent, startedAt.Add(startBudgetForLauncher(async && !p.WorkSession, p.Launcher)))
 	defer cancel()
 	var res struct {
 		Session      proto.Session `json:"session"`
@@ -896,13 +1119,14 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 	raw, _ := json.Marshal(p)
 	params := map[string]any{}
 	_ = json.Unmarshal(raw, &params)
-	name := "" // a tab named now, before it opens; one started in the background is renamed when its name comes (below)
-	if !async && p.TabName == "" && p.ResumeSessionID == "" {
+	name := "" // a local placeholder now; the manager names the returned session in the background
+	if p.TabName == "" && p.ResumeSessionID == "" {
 		name = nameFrom
 	}
 	// The manager says what it runs on (Models › Agents, a model picked for this start) and names its tab
 	// (agents_link.go).
 	note, err := h.agentStartParams(ctx, m, params, name)
+	cancel()
 	if err != nil {
 		var refused *startRefused
 		if errors.As(err, &refused) {
@@ -912,6 +1136,35 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		callErr(w, err) // 503 assistant_offline without the manager (the machine is its to reach), else 502
 		return
 	}
+	// Defaults and fallback launchers are resolved by the manager. Use what will actually run for both the node's
+	// acknowledgement mode and the total start budget, without retaining the shorter resolution deadline.
+	resolvedLauncher, _ := params["launcher"].(string)
+	resolvedAgent, _ := params["agent_type"].(string)
+	if inferredAgentType && resolvedLauncher != p.Launcher && resolvedAgent == p.AgentType {
+		resolvedAgent = "" // a fallback must not inherit the originally requested launcher's inferred type
+		delete(params, "agent_type")
+	}
+	if resolvedAgent == "" {
+		for _, configured := range m.cfg.Launchers {
+			if configured.Name == resolvedLauncher && configured.AgentType != "" {
+				resolvedAgent = configured.AgentType
+				params["agent_type"] = resolvedAgent
+				break
+			}
+		}
+	}
+	if handoff {
+		if resolvedLauncher != p.Launcher {
+			writeErr(w, http.StatusConflict, i18n.Err("hub-context_handoff.launcher_missing"))
+			return
+		}
+		params["require_launcher"] = true
+	}
+	askedAsync, _ := params["async"].(bool)
+	async = startsAsync(askedAsync, p.ResumeSessionID, resolvedLauncher, resolvedAgent) && !desktopStartLauncher(resolvedLauncher)
+	params["async"] = async
+	ctx, cancel = context.WithDeadline(parent, startedAt.Add(startBudgetForLauncher(async && !p.WorkSession, resolvedLauncher)))
+	defer cancel()
 	method := "session.start"
 	if p.WorkSession {
 		method = devicewire.MethodStartWorkSession // An old node must refuse, never silently ignore strict start options.
@@ -930,8 +1183,39 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		}
 		setWorkLauncherConfig(m, p.Launcher, params)
 	}
-	if err := m.call(ctx, method, params, &res); err != nil {
+	// An extension's token resumes a conversation its computer lists outside the health space, or one it does not
+	// list that the computer checks (extensionResume, #10941). Decided last, once every check that holds for any id
+	// has passed: a request one of them refuses is answered the same whichever conversation it names.
+	checkedResume := false
+	if pr.Role == roleExtension && p.ResumeSessionID != "" {
+		var ok bool
+		if checkedResume, ok = h.extensionResume(w, m, p.ResumeSessionID); !ok {
+			return
+		}
+	}
+	if checkedResume {
+		params["resume_outside_health"] = true // nodeproto.ResumeOutsideHealth: set after the manager's fill, never the caller's
+	}
+	if p.ResumeSessionID == "" && opID != "" {
+		params["op_id"] = opID // nodeproto.StartOpID: recorded by the node for reconnect reconciliation (#10674)
+	}
+	err = m.call(ctx, method, params, &res)
+	if replay != nil {
+		replay.nodeCalled, replay.nodeErr = true, err
+	}
+	if err != nil {
+		if canHold && errors.Is(err, errOffline) {
+			if h.tryHoldStart(ctx, w, r, m, orig, opID, false) {
+				return
+			}
+		}
 		h.startEnded(m.cfg.ID, p.ResumeSessionID, params, err)
+		if re := (*rpc.Error)(nil); checkedResume && errors.As(err, &re) && re.Code == proto.CodeResumeUnknown {
+			// The answer the hub gives a conversation it lists in the space or does not know: the extension is not
+			// told which it was.
+			writeErr(w, http.StatusNotFound, errDeleteUnknown)
+			return
+		}
 		callErr(w, apierr.OnMachine(err, m.name())) // a launcher the new tab cannot run "on <name>'s MacBook"
 		return
 	}
@@ -954,10 +1238,12 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	res.Session.MachineID = m.cfg.ID
+	namingSession := res.Session
 	if shown, ok := h.awaitListed(ctx, m, res.Session.SessionID); ok {
 		res.Session.State = shown.State // as the manager works it out (fleet_link.go)
+		namingSession = shown
 	}
-	if p.TodoID != "" && p.ResumeSessionID == "" && strings.TrimSpace(p.Prompt) == "" {
+	if p.TodoID != "" && p.ResumeSessionID == "" && strings.TrimSpace(p.Prompt) == "" && len(p.Images) == 0 {
 		cwd := res.Session.Cwd
 		if cwd == "" {
 			cwd = startCwd(m, p.Cwd)
@@ -979,17 +1265,13 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 	m.mu.Unlock()
 	res.LauncherNote = apierr.JoinNotes(h.requestLang(r), note, apierr.StartInstead(h.requestLang(r), engine, m.name(), res.Instead, res.Session))
 	writeJSON(w, res)
-	if async && p.TabName == "" {
-		// The name takes a model call (seconds): the tab opens as agent-<n> and is renamed when it comes.
-		go func(id string) {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			if name := h.autoTabName(ctx, nameFrom); name != "" {
-				if err := m.call(ctx, "session.rename", map[string]any{"session_id": id, "tab_name": name}, nil); err != nil {
-					h.logf("tab name %s: %v", id, err)
-				}
-			}
-		}(res.Session.SessionID)
+	if p.TabName == "" && p.ResumeSessionID == "" && !desktopStartLauncher(resolvedLauncher) {
+		requested, _ := params["tab_name"].(string)
+		_ = h.notifyBus(h.machineOwner(m.cfg.ID), assistantwire.EventAgentTabNameStarted, assistantwire.AgentTabNameStart{
+			MachineID: assistantwire.AgentMachineID(m.cfg.ID), SessionID: assistantwire.AgentSessionID(res.Session.SessionID),
+			TabID:           assistantwire.AgentTabID(cmp.Or(namingSession.SlotID, namingSession.TabID)),
+			ExpectedTabName: cmp.Or(namingSession.HerdrTabName(), requested), NameFrom: nameFrom,
+		})
 	}
 }
 
@@ -1012,7 +1294,10 @@ func (h *Hub) startEnded(mid, resume string, params map[string]any, err error) {
 		if errors.As(err, &re) {
 			// Work picker refusals happen before the launcher runs. Counting
 			// them as failures could hide a working launcher from the picker.
-			if strings.HasPrefix(re.Code, "work_") {
+			// So does a resume of a conversation the computer has nothing of,
+			// which a manager from before that refusal counts against the
+			// launcher (#10941).
+			if strings.HasPrefix(re.Code, "work_") || re.Code == proto.CodeResumeUnknown {
 				return
 			}
 			r.Code, r.Data = re.Code, re.Data
@@ -1032,8 +1317,8 @@ func startEngine(info proto.NodeInfo) string {
 
 // startsAsync: a start the app asked to have answered at once is, when the node can acknowledge it before the session
 // is ready (only Claude can, and not a resume).
-func startsAsync(asked bool, resume, agentType string) bool {
-	return asked && resume == "" && (agentType == "" || agentType == "claude")
+func startsAsync(asked bool, resume, launcher, agentType string) bool {
+	return asked && resume == "" && (agentType == "claude" || (agentType == "" && launcher != "agy"))
 }
 
 // startBudget is how long a start may take: one acknowledged before the session is ready a moment, one answered only
@@ -1043,6 +1328,17 @@ func startBudget(async bool) time.Duration {
 		return 15 * time.Second
 	}
 	return 100 * time.Second
+}
+
+func desktopStartLauncher(launcher string) bool {
+	return launcher == "claude-desktop" || launcher == "codex-app"
+}
+
+func startBudgetForLauncher(async bool, launcher string) time.Duration {
+	if desktopStartLauncher(launcher) {
+		return 3 * time.Minute // seed (30s), import (15s), and first message (up to 2m)
+	}
+	return startBudget(async)
 }
 
 // ---- WebSocket ----
@@ -1072,6 +1368,8 @@ type client struct {
 	desktop bool
 	// device and role: whose credential opened the connection (devicetokens.go); device is empty for the pairing token.
 	device, role string
+	scopes       []string
+	expiresAt    time.Time
 	uiConnection string // hub-owned identity for targeted extension page transport
 	uiRequests   chan struct{}
 	uiManagers   map[string]bool
@@ -1147,6 +1445,9 @@ func (h *Hub) broadcastTo(typ string, b []byte, elicitation bool) {
 	}
 	forms := map[i18n.Lang][]byte{}
 	for c := range h.clients {
+		if c.role == roleScoped && typ != "sessions" {
+			continue
+		}
 		if elicitation && !c.has("elicitation") {
 			continue
 		}
@@ -1246,9 +1547,11 @@ func (h *Hub) itemsToSubscribers(machineID, sessionID string, items []proto.Item
 	}
 	// One message per language and image mode: the node's Chinese lines read in each connection's (transcript_text.go).
 	type form struct {
-		lang i18n.Lang
-		lazy bool
-		ring bool // draws ```persona-card rings (card_compat.go)
+		lang             i18n.Lang
+		lazy             bool
+		markdownCloseout bool
+		ring             bool // draws ```persona-card rings (card_compat.go)
+		toolViews        bool // draws Item.ToolViews / Fold.ToolViews (proto.FeatureToolViews)
 	}
 	msgs := map[form][]byte{}
 	key := [2]string{machineID, sessionID}
@@ -1261,10 +1564,10 @@ func (h *Hub) itemsToSubscribers(machineID, sessionID string, items []proto.Item
 		if !sub {
 			continue
 		}
-		f := form{c.lang(), wantsLazy, c.has(featureCardRing)}
+		f := form{lang: c.lang(), lazy: wantsLazy, ring: c.has(featureCardRing), markdownCloseout: c.has(featureMarkdownCloseout), toolViews: c.has(proto.FeatureToolViews)}
 		b, ok := msgs[f]
 		if !ok {
-			its := cardCompatItems(f.lang, f.ring, localizedItems(f.lang, items))
+			its := clientItemsCompat(f.lang, f.ring, f.markdownCloseout, f.toolViews, localizedItems(f.lang, items))
 			if f.lazy {
 				its = proto.WithoutImageData(its)
 			}
@@ -1275,26 +1578,22 @@ func (h *Hub) itemsToSubscribers(machineID, sessionID string, items []proto.Item
 	}
 }
 
+// phoneClient is the connected phone that takes tool (none given: any): only connected providers of it are eligible.
+// The primary device the owner chose goes first while it is connected and offers the tool (phone_primary.go); then
+// real devices before simulators, then the one active last.
 func (h *Hub) phoneClient(tool ...string) *client {
+	name := ""
+	if len(tool) > 0 {
+		name = tool[0]
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	// Only connected providers of the requested tool are eligible; prefer real devices, then recent activity.
-	var best *client
-	for c := range h.clients {
-		select {
-		case <-c.done:
-			continue
-		default:
-		}
-		if !c.phone || (len(tool) > 0 && !c.phoneToolNames[tool[0]]) {
-			continue
-		}
-		if best == nil || (best.sim && !c.sim) || (best.sim == c.sim &&
-			(c.activeAt.After(best.activeAt) || (c.activeAt.Equal(best.activeAt) && c.since.After(best.since)))) {
-			best = c
+	if primary, offers := h.primaryPhoneLocked(name); offers {
+		if c := h.phoneClientLocked(name, primary); c != nil {
+			return c
 		}
 	}
-	return best
+	return h.phoneClientLocked(name, "")
 }
 
 func (h *Hub) serveWS(w http.ResponseWriter, r *http.Request) {
@@ -1315,8 +1614,26 @@ func (h *Hub) serveWS(w http.ResponseWriter, r *http.Request) {
 	conn.SetReadLimit(64 << 20)
 	ctx, cancel := context.WithCancel(r.Context())
 	who := principalOf(r.Context())
+	if who.Role == roleReadOnly && (!h.readOnlySessionsAllowed() || who.ExpiresAt.IsZero() || !time.Now().Before(who.ExpiresAt)) {
+		cancel()
+		_ = conn.Close(wsCloseReadOnlyExpired, "read-only session expired")
+		return
+	}
+	if !who.ExpiresAt.IsZero() {
+		expCtx, expCancel := expiringContext(ctx, who.ExpiresAt)
+		defer expCancel()
+		go func() {
+			<-expCtx.Done()
+			if ctx.Err() == nil {
+				_ = conn.Close(wsCloseReadOnlyExpired, "session expired")
+				cancel()
+			}
+		}()
+	}
 	c := &client{cancel: cancel, done: ctx.Done(), hub: h, conn: conn, out: make(chan []byte, 512), subs: map[[2]string]bool{}, since: time.Now(),
-		device: who.ID, role: who.Role, delta: wantsFeature(r, featureSessionsDelta), listMode: wantsFeature(r, featureSessionsList), have: map[string]map[string][]byte{},
+		device: who.ID, role: who.Role, scopes: slices.Clone(who.Scopes), expiresAt: who.ExpiresAt,
+		delta:    who.Role != roleScoped && who.Role != roleReadOnly && wantsFeature(r, featureSessionsDelta),
+		listMode: who.Role != roleScoped && wantsFeature(r, featureSessionsList), have: map[string]map[string][]byte{},
 		urlFeatures: urlFeatures(r), acceptLang: i18n.FromRequest(r), meta: clientMeta{updates: make(chan heartbeatConfig, 512), done: ctx.Done()}}
 	c.traffic = h.requestTrafficAttribution(r, who)
 	c.uiConnection = randomHex(24)
@@ -1326,10 +1643,14 @@ func (h *Hub) serveWS(w http.ResponseWriter, r *http.Request) {
 		h.sessionListIndex() // before registration: never seed the index under h.mu
 	}
 	h.mu.Lock()
-	if h.wsStopping || h.isDeviceRevoked(c.device) {
+	if h.wsStopping || h.isDeviceRevoked(c.device) || (c.role == roleReadOnly && !h.readOnlySessionsAllowed()) {
 		h.mu.Unlock()
 		cancel()
-		_ = conn.CloseNow()
+		if c.role == roleReadOnly {
+			_ = conn.Close(wsCloseReadOnlyExpired, "read-only session unavailable")
+		} else {
+			_ = conn.CloseNow()
+		}
 		return
 	}
 	if h.wsConnections == nil {
@@ -1372,18 +1693,27 @@ func (h *Hub) serveWS(w http.ResponseWriter, r *http.Request) {
 	}
 	// The hello goes first, then (resuming) what the client missed, before any live event: under h.mu, which
 	// broadcastTo holds while it numbers and sends (eventlog.go).
-	hello := h.hello()
+	hello := h.helloFor(who)
 	stream, after, resuming := resumeOf(r)
 	h.mu.Lock()
 	// Check under the registration lock so revocation either rejects this client or sees it to close it.
-	if h.wsStopping || h.isDeviceRevoked(c.device) {
+	if h.wsStopping || h.isDeviceRevoked(c.device) || (c.role == roleReadOnly && !h.readOnlySessionsAllowed()) {
 		h.mu.Unlock()
+		if c.role == roleReadOnly {
+			_ = conn.Close(wsCloseReadOnlyExpired, "read-only session unavailable")
+		}
 		return
 	}
 	h.clients[c] = struct{}{}
-	h.helloLocked(c, hello, stream, after, resuming)
+	if c.role == roleScoped {
+		c.sendJSON(hello)
+	} else {
+		h.helloLocked(c, hello, stream, after, resuming)
+	}
 	h.mu.Unlock()
-	go h.fleetClientsChanged() // an app that takes elicitations (fleet_link.go)
+	if c.role != roleReadOnly {
+		go h.fleetClientsChanged() // an app that takes elicitations (fleet_link.go)
+	}
 
 	writerDone = make(chan struct{})
 	go func() {
@@ -1398,6 +1728,7 @@ func (h *Hub) serveWS(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	c.sendJSON(map[string]any{"type": "machines", "machines": localizedMachines(c.lang(), h.machineList())})
+	h.sendCountsViews(c) // the managers' counts views, before the lists they count (counts_view.go)
 	if c.listMode {
 		h.sessionListNotice(c)
 	} else {
@@ -1430,22 +1761,23 @@ func (h *Hub) serveWS(w http.ResponseWriter, r *http.Request) {
 
 func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 	var msg struct {
-		Type       string          `json:"type"`
-		MachineID  string          `json:"machine_id"`
-		SessionID  string          `json:"session_id"`
-		SinceSeq   int             `json:"since_seq"`
-		LazyImages bool            `json:"lazy_images"`
-		FoldWork   bool            `json:"fold_work"`
-		DeviceName string          `json:"device_name"`
-		DeviceID   string          `json:"device_id"` // register_phone / register_desktop: the app's id for pushes
-		Platform   string          `json:"platform"`
-		Simulator  bool            `json:"simulator"`
-		Tools      []proto.Tool    `json:"tools"`
-		CallID     string          `json:"call_id"`
-		Content    []proto.Content `json:"content"`
-		IsError    bool            `json:"is_error"`
-		Epoch      string          `json:"epoch"`
-		AfterSeq   int             `json:"after_seq"`
+		Type          string          `json:"type"`
+		MachineID     string          `json:"machine_id"`
+		SessionID     string          `json:"session_id"`
+		InteractionID string          `json:"interaction_id"`
+		SinceSeq      int             `json:"since_seq"`
+		LazyImages    bool            `json:"lazy_images"`
+		FoldWork      bool            `json:"fold_work"`
+		DeviceName    string          `json:"device_name"`
+		DeviceID      string          `json:"device_id"` // register_phone / register_desktop: the app's id for pushes
+		Platform      string          `json:"platform"`
+		Simulator     bool            `json:"simulator"`
+		Tools         []proto.Tool    `json:"tools"`
+		CallID        string          `json:"call_id"`
+		Content       []proto.Content `json:"content"`
+		IsError       bool            `json:"is_error"`
+		Epoch         string          `json:"epoch"`
+		AfterSeq      int             `json:"after_seq"`
 		// terminal_subscribe, terminal_input: the grid the app drives the terminal at (docs/integrations/terminal.md)
 		Control  *termCtl `json:"control"`
 		Takeover bool     `json:"takeover"`
@@ -1473,6 +1805,23 @@ func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 	}
 	if json.Unmarshal(data, &msg) != nil {
 		return
+	}
+	if c.role == roleScoped && !scopedSocketCommand(msg.Type) {
+		return
+	}
+	if c.role == roleReadOnly {
+		if !h.readOnlySessionsAllowed() {
+			if c.conn != nil {
+				go c.conn.Close(wsCloseReadOnlyExpired, "read-only sessions disabled")
+			}
+			if c.cancel != nil {
+				c.cancel()
+			}
+			return
+		}
+		if !readOnlySocketCommand(msg.Type) {
+			return
+		}
 	}
 	h.mu.Lock()
 	c.activeAt = time.Now()
@@ -1526,6 +1875,9 @@ func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 		if m == nil {
 			return
 		}
+		if (c.role == roleScoped || c.role == roleReadOnly) && !h.scopedPublicSession(m.cfg.ID, msg.SessionID) {
+			return
+		}
 		if m.conversationDeleted(msg.SessionID) {
 			c.sendJSON(deletedConversationEvent(m.cfg.ID, msg.SessionID))
 			return
@@ -1545,6 +1897,7 @@ func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 		if !already {
 			m.watcherJoined(msg.SessionID)
 		}
+		m.replayLiveTools(c, msg.SessionID)
 		// Not in the read loop: the node may take up to watchCallTimeout to answer the watch (watcherJoined). The
 		// backlog still goes after it, so nothing falls between the two.
 		go func() {
@@ -1615,6 +1968,10 @@ func (h *Hub) onClientMessage(ctx context.Context, c *client, data []byte) {
 		if m := h.localMachine(msg.MachineID); m != nil && msg.SessionID != "" {
 			h.markSeen(m.cfg.ID, msg.SessionID)
 		}
+	case "interaction_seen":
+		if c.role == roleFull && !c.runtimeCLI && msg.InteractionID != "" {
+			h.markInteractionSeen(msg.InteractionID)
+		}
 	case "tool_result":
 		if c.role != roleFull {
 			return
@@ -1645,6 +2002,7 @@ func (h *Hub) sendBacklog(ctx context.Context, c *client, m *Machine, sid string
 			Items     []proto.Item `json:"items"`
 			HasMore   bool         `json:"has_more"`
 			MoreAfter bool         `json:"more_after"`
+			Partial   bool         `json:"partial,omitempty"`
 			itemSpan
 		}
 		if err := m.call(ctx, "session.items", params, &res); err != nil {
@@ -1655,11 +2013,14 @@ func (h *Hub) sendBacklog(ctx context.Context, c *client, m *Machine, sid string
 			c.sendJSON(failure)
 			return
 		}
-		res.Items = cardCompatItems(c.lang(), c.has(featureCardRing), localizedItems(c.lang(), h.withInjected(res.Items)))
+		res.Items = clientItemsCompat(c.lang(), c.has(featureCardRing), c.has(featureMarkdownCloseout), c.has(proto.FeatureToolViews), localizedItems(c.lang(), h.withInjected(res.Items)))
 		if lazy {
 			res.Items = proto.WithoutImageData(res.Items)
 		}
 		out := res.itemSpan.into(map[string]any{"type": "items", "machine_id": m.cfg.ID, "session_id": sid, "items": res.Items, "backlog": true})
+		if res.Partial {
+			out["partial"] = true
+		}
 		if since == 0 {
 			// Only a page counted back from the end knows whether older items exist. A catch-up after since_seq does
 			// not: sending false there told the app the history was complete, and scrolling up stopped at its oldest.

@@ -10,18 +10,23 @@ import PersonaWire
 /// - `in_progress`: the rows of Working and Waiting; Just finished is not counted.
 /// - `sections`: the rows of each section, every section named.
 /// - A step its parent carries (its `part_of` names an open row of the same list) counts with its parent only.
+/// - An outside owner decision (`todo_od_…`) keeps its own row and count: `part_of` associates it with existing work,
+///   but does not make the request a step of that work (#8235).
 nonisolated enum TodoCountsFallback {
     /// The ids of the steps their parents carry.
     static func carried(_ rows: [TodoFiled]) -> Set<String> {
         let open = Set(rows.filter { !$0.closed }.map(\.id))
-        return Set(rows.filter { row in row.partOf.map { $0 != row.id && open.contains($0) } ?? false }.map(\.id))
+        return Set(rows.filter { row in
+            if row.id.hasPrefix("todo_od_") { return false }
+            return row.partOf.map { $0 != row.id && open.contains($0) } ?? false
+        }.map(\.id))
     }
 
     static func counts(_ rows: [TodoFiled]) -> TodoCounts {
-        var c = TodoCounts(sections: Dictionary(uniqueKeysWithValues: TodoListSection.all.map { ($0, 0) }))
+        var c = TodoCounts()
         let skip = carried(rows)
         for row in rows where !skip.contains(row.id) {
-            c.sections[row.section, default: 0] += 1
+            c.sections[row.section] += 1
             if !row.closed && row.section != TodoListSection.someday { c.open += 1 }
             if row.section == TodoListSection.needsYou && !row.quiet { c.needsYou += 1 }
             if row.section == TodoListSection.working || row.section == TodoListSection.waiting { c.inProgress += 1 }

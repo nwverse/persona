@@ -1,9 +1,7 @@
 import Foundation
 import Network
 import PersonaWire
-#if canImport(UIKit)
 import UIKit
-#endif
 
 /// Developing Persona (Settings › About, #9460, docs/operations/developing-persona.md): the device's own switch. While
 /// it is on the app records its logs, errors and energy use on the device (`DevRecorder`, `DevMetrics`) for the owner
@@ -57,7 +55,7 @@ final class DevMode {
     func launch(tab: AppTab) {
         self.tab = Self.name(tab)
         guard isOn else { return }
-        begin(active: Self.inFront)
+        begin(active: Self.inFront, fresh: true)
     }
 
     func setOn(_ on: Bool) {
@@ -69,7 +67,7 @@ final class DevMode {
             since = now
             defaults.set(now, forKey: Self.sinceKey)
             size = nil
-            begin(active: Self.inFront)
+            begin(active: Self.inFront, fresh: false)
         } else {
             end()
             since = nil
@@ -139,20 +137,20 @@ final class DevMode {
         case .chats: "agents"
         case .mail: "inbox"
         case .settings: "settings"
-        #if os(iOS) || os(visionOS)
         case .feishu: "feishu"
-        #endif
         }
     }
 
     // MARK: Recording
 
-    private func begin(active: Bool) {
+    /// `fresh`: at launch, so the connection tally counts the period in front from its start (#11390); turned on by
+    /// hand, it starts with the next one.
+    private func begin(active: Bool, fresh: Bool) {
         let recorder = recorder
         #if os(iOS)
         UIDevice.current.isBatteryMonitoringEnabled = true
         #endif
-        recorder.start(active: active, page: current, device: device())
+        recorder.start(active: active, page: current, device: device(), fresh: fresh)
         DevProbe.install(recorder)
         HubRedirects.finished = { @Sendable task, metrics in recorder.request(task, metrics) }
         Task.detached(priority: .utility) { DevMetrics.shared.start() }
@@ -203,7 +201,6 @@ final class DevMode {
                 Task { @MainActor in if let self, self.isOn { run(self) } }
             })
         }
-        #if canImport(UIKit)
         on(UIApplication.didBecomeActiveNotification) { m in
             m.recorder.lifecycle(active: true, device: m.device())
             m.tick()
@@ -213,7 +210,6 @@ final class DevMode {
             m.recorder.lifecycle(active: false, device: m.device())
         }
         on(UIApplication.willTerminateNotification) { m in m.recorder.flush() }
-        #endif
         on(ProcessInfo.thermalStateDidChangeNotification) { m in m.recorder.device("thermal", ["state": m.device().thermal]) }
         on(Notification.Name.NSProcessInfoPowerStateDidChange) { m in m.recorder.device("power", ["low_power": m.device().lowPower]) }
         #if os(iOS)
@@ -256,11 +252,7 @@ final class DevMode {
     #endif
 
     private static var inFront: Bool {
-        #if canImport(UIKit)
         UIApplication.shared.applicationState != .background
-        #else
-        true
-        #endif
     }
 }
 

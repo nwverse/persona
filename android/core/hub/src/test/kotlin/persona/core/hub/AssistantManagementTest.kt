@@ -4,7 +4,11 @@ import persona.core.contracts.JsonCodec
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.AgentSkill
 import persona.core.contracts.api.AlwaysGrant
+import persona.core.contracts.api.AssistantConfigUpdate
 import persona.core.contracts.api.AssistantRefused
+import persona.core.contracts.api.ConversationSwitchRequest
+import persona.core.contracts.api.ConversationSwitchState
+import persona.core.contracts.api.ConversationTagFilters
 import persona.core.contracts.api.AssistantSkills
 import persona.core.contracts.api.NewMainResult
 import persona.core.contracts.api.ScheduledTask
@@ -18,6 +22,30 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class AssistantManagementTest {
+    @Test fun mainAssistantCatalogReadsOwnPurposeWithoutReplacingEligibility() = runBlocking {
+        MockWebServer().use { server ->
+            val api = HttpAssistantManagement(server.url("/").toString(), "test-token", OkHttpClient())
+            val shared = """{"launchers":[{"name":"claude"}],"default":{"provider":"claude","model":"shared","effort":"low"}}"""
+            for ((own, expected) in listOf(
+                MockResponse().setBody("""{"launchers":[{"name":"not-eligible"}],"default":{"provider":"claude","model":"main","effort":"high"}}""") to "main",
+                MockResponse().setBody("""{"launchers":[]}""") to "shared",
+                MockResponse().setResponseCode(404).setBody("""{"error":"unknown purpose"}""") to "shared",
+            )) {
+                server.enqueue(MockResponse().setBody(shared))
+                server.enqueue(own)
+                val result = api.mainAssistantLauncherList("box", refresh = true)
+                assertEquals(listOf("claude"), result.launchers.map { it.name })
+                assertEquals(expected, result.default?.model)
+                assertEquals("assistant", server.takeRequest().requestUrl?.queryParameter("purpose"))
+                assertEquals("assistant.main", server.takeRequest().requestUrl?.queryParameter("purpose"))
+            }
+            server.enqueue(MockResponse().setBody(shared))
+            server.enqueue(MockResponse().setResponseCode(503).setBody("""{"error":"temporarily unavailable"}"""))
+            val failure = runCatching { api.mainAssistantLauncherList("box") }.exceptionOrNull() as HubFailure
+            assertEquals(503, failure.status)
+        }
+    }
+
     /** "Push when done" travels both ways; a task without it never sends it, so a hub without `task_push` is not sent it. */
     @Test fun taskPushIsReadAndSentOnlyWhenSet() = runBlocking {
         MockWebServer().use { server ->
@@ -131,6 +159,28 @@ class AssistantManagementTest {
         }
     }
 
+    @Test fun conversationTagFiltersPutExactNullEmptyAndOrderedSets() = runBlocking {
+        MockWebServer().use { server ->
+            val api = HttpAssistantManagement(server.url("/").toString(), "test-token", OkHttpClient()).forManager("work")
+            val values = listOf(
+                ConversationTagFilters(null) to """{"conversation_tag_filters":null}""",
+                ConversationTagFilters(emptyList()) to """{"conversation_tag_filters":[]}""",
+                ConversationTagFilters(listOf("second", "first")) to """{"conversation_tag_filters":["second","first"]}""",
+            )
+            for ((value, body) in values) {
+                server.enqueue(MockResponse().setBody("""{"conversation_tag_filters":${body.substringAfter(':').substringBeforeLast('}')}}"""))
+                val answer = api.updateConfig(AssistantConfigUpdate(conversationTagFilters = value))
+                assertEquals(value, answer.conversationTagFilters)
+                val request = server.takeRequest()
+                assertEquals("PUT", request.method)
+                assertEquals("/api/v1/assistant", request.requestUrl?.encodedPath)
+                assertEquals("work", request.requestUrl?.queryParameter(ManagerQuery))
+                assertEquals("work", request.getHeader(ManagerHeader))
+                assertEquals(body, request.body.readUtf8())
+            }
+        }
+    }
+
     /**
      * #5055: a Persona chat's pick is kept with `PUT …/model` (the launcher, the model unless it is the default entry, the
      * effort, the chat's computer) and dropped with `DELETE`; a refusal keeps the hub's words. The panel's providers come
@@ -167,6 +217,14 @@ class AssistantManagementTest {
             assertEquals("Team API", launchers.launchers.single().title)
             assertEquals("opus", launchers.default?.model)
             assertEquals("api_protocol" to "用的是 Responses 协议", launchers.unavailable.single().let { it.code to it.reason })
+            for (refresh in listOf(false, true)) {
+                server.enqueue(MockResponse().setBody("""{"launchers":[]}"""))
+                api.assistantLauncherList("mac", refresh)
+                val url = requireNotNull(server.takeRequest().requestUrl)
+                assertEquals("/api/v1/machines/mac/launchers", url.encodedPath)
+                assertEquals("assistant", url.queryParameter("purpose"))
+                assertEquals("1".takeIf { refresh }, url.queryParameter("refresh"))
+            }
         }
     }
 
@@ -369,6 +427,93 @@ class AssistantManagementTest {
             server.enqueue(MockResponse().setBody("""{"results":[]}"""))
             assertTrue(api.searchChats("lane", limit = 80)!!.results.isEmpty())
             assertTrue(server.takeRequest().path!!.contains("limit=50"))
+        }
+    }
+
+    @Test fun conversationSwitchReadsSegmentsAndSubmitsSwitchWithExactWireFields() = runBlocking {
+        MockWebServer().use { server ->
+            var current = true
+            val api = HttpAssistantManagement(server.url("/").toString(), "test-token", OkHttpClient()) { current }
+                .forManager("work")
+            val session = SessionKey("mac/1", "chat/2")
+            server.enqueue(MockResponse().setBody("""{"enabled":true,"epoch":4,"supervision_required":true}"""))
+            assertEquals(ConversationSwitchState(enabled = true, epoch = 4, supervisionRequired = true), api.conversationSwitchState(session))
+            val get = server.takeRequest()
+            assertEquals("GET", get.method)
+            assertEquals("/api/v1/assistant/conversations/chat%2F2/segments", get.requestUrl?.encodedPath)
+            assertEquals("mac/1", get.requestUrl?.queryParameter("machine_id"))
+            assertEquals("work", get.requestUrl?.queryParameter(ManagerQuery))
+            assertEquals("work", get.getHeader(ManagerHeader))
+
+            val request = ConversationSwitchRequest(
+                operationId = "op-123",
+                expectedEpoch = 4,
+                sourceMachineId = "mac/1",
+                machineId = "mac/1",
+                launcher = "agy",
+                model = "gemini-3",
+                effort = "high",
+                permissionMode = "acceptEdits",
+            )
+            server.enqueue(MockResponse().setBody("""{"operation_id":"op-123","phase":"preparing","epoch":4}"""))
+            api.submitConversationSwitch(session, request)
+            val post = server.takeRequest()
+            assertEquals("POST", post.method)
+            assertEquals("/api/v1/assistant/conversations/chat%2F2/switch", post.requestUrl?.encodedPath)
+            assertEquals("work", post.requestUrl?.queryParameter(ManagerQuery))
+            assertEquals("work", post.getHeader(ManagerHeader))
+            assertEquals(
+                buildJsonObject {
+                    put("operation_id", "op-123")
+                    put("expected_epoch", 4)
+                    put("source_machine_id", "mac/1")
+                    put("machine_id", "mac/1")
+                    put("launcher", "agy")
+                    put("model", "gemini-3")
+                    put("effort", "high")
+                    put("permission_mode", "acceptEdits")
+                },
+                JsonCodec.parseToJsonElement(post.body.readUtf8()),
+            )
+
+            // Blank optional fields are omitted rather than sent empty.
+            server.enqueue(MockResponse().setBody("""{"operation_id":"op-124","phase":"preparing"}"""))
+            api.submitConversationSwitch(
+                session,
+                ConversationSwitchRequest("op-124", 1, "mac/1", "mac/1", "codex", model = "", effort = null, permissionMode = "  "),
+            )
+            assertEquals(
+                buildJsonObject {
+                    put("operation_id", "op-124")
+                    put("expected_epoch", 1)
+                    put("source_machine_id", "mac/1")
+                    put("machine_id", "mac/1")
+                    put("launcher", "codex")
+                },
+                JsonCodec.parseToJsonElement(server.takeRequest().body.readUtf8()),
+            )
+
+            // Definitive refusal preserves delivered = "none" and the hub's message.
+            server.enqueue(MockResponse().setResponseCode(409).setBody("""{"code":"busy","error":"Conversation is busy","delivered":"none"}"""))
+            val refused = runCatching { api.submitConversationSwitch(session, request) }.exceptionOrNull() as HubFailure
+            assertEquals(409, refused.status)
+            assertEquals("busy", refused.code)
+            assertEquals("none", refused.delivered)
+            assertEquals("Conversation is busy", refused.message)
+            server.takeRequest()
+
+            // Uncertain failure preserves delivered = "unknown".
+            server.enqueue(MockResponse().setResponseCode(502).setBody("""{"code":"timeout","error":"response unconfirmed","delivered":"unknown"}"""))
+            val uncertain = runCatching { api.submitConversationSwitch(session, request) }.exceptionOrNull() as HubFailure
+            assertEquals(502, uncertain.status)
+            assertEquals("unknown", uncertain.delivered)
+            server.takeRequest()
+
+            // Stale pairing guard stops requests before sending.
+            current = false
+            assertTrue(runCatching { api.conversationSwitchState(session) }.exceptionOrNull() is CancellationException)
+            assertTrue(runCatching { api.submitConversationSwitch(session, request) }.exceptionOrNull() is CancellationException)
+            assertEquals(5, server.requestCount)
         }
     }
 }

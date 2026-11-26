@@ -186,6 +186,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
     resume: true,
     // start() runs permission_mode plan in Paseo's plan mode or refuses it (holdsPlan).
     readonly: true,
+    backend_workspace_root: true,
     // start() runs only Paseo's own providers: a launcher it lacks gets one of the same kind, said on the answer, or a
     // refusal (sameKindProvider); as the machine's engine its providers are all that a start there can run.
     sameKind: true,
@@ -1646,6 +1647,9 @@ export function createPaseoBridge(deps = {}, options = {}) {
    */
   async function deliverMessage(params, wait) {
     const agent = agentFor(params.session_id)
+    if (params.a2a_wake_on_send && agent.archivedAt) {
+      throw new RpcError('The receiving agent was archived', 'a2a_session_busy', { delivered: 'none' })
+    }
     const text = typeof params.text === 'string' ? params.text : ''
     const images = (params.images ?? []).filter((i) => i?.data).map((i) => ({ data: i.data, mimeType: i.mime || 'image/jpeg' }))
     if (!text.trim() && images.length === 0) throw new RpcError('消息是空的', 'bad_request')
@@ -1991,7 +1995,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
    * its project, as in Paseo. Several workspaces at that worktree: the one under its repository's project record, then
    * the latest.
    */
-  function workspaceFor(named, cwd, { strict = false } = {}) {
+  function workspaceFor(named, cwd, { strict = false, projectId } = {}) {
     if (typeof named === 'string' && named) {
       if (workspaces.has(named) || [...agents.values()].some(({ agent }) => agent.workspaceId === named)) return named
       if (strict && workspacesRead && WORKSPACE_ID.test(named)) {
@@ -2005,14 +2009,20 @@ export function createPaseoBridge(deps = {}, options = {}) {
     for (const { agent, project } of agents.values()) {
       const ws = agent.workspaceId
       if (typeof ws !== 'string' || !ws || agent.archivedAt || !linkedWorktree(project)) continue
+      const owner = workspaces.get(ws)?.projectId ?? project?.projectKey ?? project?.projectId
+      if (projectId && owner !== projectId) continue
       const c = project.checkout
       if (!samePath(c.worktreeRoot ?? c.cwd, cwd) && !samePath(agent.cwd, cwd)) continue
       consider(ws, [strayRecord(project) ? 0 : 1, Date.parse(agent.updatedAt) || 0])
     }
     for (const d of workspaces.values()) {
-      // A worktree by its placement; one Paseo just made has none yet, only its kind.
-      if (!linkedWorktree(d.project) && !(d.workspaceKind === 'worktree' && !d.project)) continue
+      if (projectId && d.projectId !== projectId) continue
       const c = d.project?.checkout
+      // Once cwd-only resolution names the project, its exact directory workspace is reusable too; legacy duplicates
+      // under another project are not. Without that resolution, keep the existing worktree-only lookup unchanged.
+      const exactOwned = projectId && samePath(d.workspaceDirectory, cwd)
+      // A worktree by its placement; one Paseo just made has none yet, only its kind.
+      if (!exactOwned && !linkedWorktree(d.project) && !(d.workspaceKind === 'worktree' && !d.project)) continue
       if (!samePath(d.workspaceDirectory, cwd) && !(c && samePath(c.worktreeRoot ?? c.cwd, cwd))) continue
       consider(d.id, [strayRecord(d.project) ? 0 : 1, Date.parse(d.activityAt ?? d.createdAt) || 0])
     }
@@ -2057,8 +2067,9 @@ export function createPaseoBridge(deps = {}, options = {}) {
 
   /**
    * Resolve creation ownership from a fresh, complete project list. Path aliases are the same directory; a linked
-   * worktree can use its main checkout's project. Names and remotes never identify a project (clones stay separate).
-   * An unavailable list or several matching records is not permission to allocate another project or guess one.
+   * worktree prefers its main checkout's project. Names and remotes never identify a project (clones stay separate).
+   * Duplicate records at that physical root use a stable ID order; distinct non-main roots stay ambiguous.
+   * An unavailable list is never permission to allocate another project.
    */
   async function projectAt(dir) {
     let res
@@ -2077,25 +2088,40 @@ export function createPaseoBridge(deps = {}, options = {}) {
       try { return realpathSync(path) } catch { return resolve(path) }
     }
     const roots = new Set([physical(dir)])
+    let checkoutRoot
+    let mainRoot
     try {
       // Older Git versions do not support --path-format. The common directory is relative to this command's cwd.
       const { stdout } = await readGit('git', ['-C', dir, 'rev-parse', '--show-toplevel', '--git-common-dir'],
         { encoding: 'utf8', timeout: 5000, maxBuffer: 64 * 1024, env: { ...process.env, LC_ALL: 'C' } })
       const [top, common] = stdout.trim().split('\n')
       if (!top || !common) throw new Error('Git returned no checkout identity')
-      roots.add(physical(top))
+      checkoutRoot = physical(top)
+      roots.add(checkoutRoot)
       const gitDir = physical(resolve(dir, common))
-      roots.add(basename(gitDir) === '.git' ? dirname(gitDir) : gitDir)
+      mainRoot = basename(gitDir) === '.git' ? dirname(gitDir) : gitDir
+      roots.add(mainRoot)
     } catch (err) {
       if (err.code !== 128 || !/not a git repository/i.test(err.stderr ?? '')) {
         throw new RpcError('Cannot identify this checkout. Retry before creating anything.', 'project_unavailable')
       }
     }
-    const matches = new Set(res.projects.filter((p) => !p.archivedAt && roots.has(physical(p.projectRootPath))).map((p) => p.projectId))
+    const matches = new Map() // physical registered root -> active project IDs at that exact root
+    for (const p of res.projects) {
+      if (p.archivedAt) continue
+      const root = physical(p.projectRootPath)
+      if (!roots.has(root)) continue
+      if (!matches.has(root)) matches.set(root, [])
+      matches.get(root).push(p.projectId)
+    }
+    // Only a linked worktree's legacy project yields to its main checkout's. A distinct project explicitly registered
+    // at a selected subdirectory of the main checkout stays ambiguous. Duplicates at one root use their lowest ID.
+    const preferred = mainRoot && checkoutRoot !== mainRoot && matches.get(mainRoot)
+    if (preferred?.length) return preferred.sort()[0]
     if (matches.size > 1) {
       throw new RpcError('More than one Paseo project matches this folder. Choose a workspace in the intended project.', 'project_ambiguous')
     }
-    return matches.values().next().value
+    return matches.values().next().value?.sort()[0]
   }
 
   /** Paseo's worktrees root: its config's worktrees.root, else <Paseo home>/worktrees (its config.js resolveWorktreesRoot). */
@@ -2281,7 +2307,20 @@ export function createPaseoBridge(deps = {}, options = {}) {
       }
     }
     const prompt = typeof params.prompt === 'string' ? params.prompt : ''
-    let workspaceId = workspaceFor(params.workspace_id, cwd, { strict: true })
+    const implicitWorkspace = !(typeof params.workspace_id === 'string' && params.workspace_id)
+    let projectId
+    let projectError
+    if (implicitWorkspace) {
+      try {
+        projectId = await projectAt(cwd)
+      } catch (err) {
+        projectError = err
+      }
+    }
+    // Main-project preference is best effort for an implicit start: an existing worktree workspace remains usable when
+    // project discovery fails. With no such fallback, keep the original creation error instead of allocating blindly.
+    let workspaceId = workspaceFor(params.workspace_id, cwd, { strict: true, projectId })
+    if (!workspaceId && projectError) throw projectError
     // The Persona session is fixed for this start: the id the hub named for it (session_id: the manager names the
     // sessions it starts, to find one whose answer it lost), else paseo-<the first Paseo agent id>. The row handed to
     // the node while Paseo is still creating, the label, the tools' PERSONA_SESSION_ID and the listed session are all
@@ -2295,13 +2334,14 @@ export function createPaseoBridge(deps = {}, options = {}) {
     // request has an idempotency key of its own, the same each time it is asked: Paseo's creation service keeps a
     // request by its key across connections, so one asked again after a reconnect (repeat) gets the agent Paseo made
     // for it, or waits for the one it is still making, never a second agent.
-    const attempt = (withTools, withPolicy) => {
-      const mcpServers = withTools ? personaMcpServers(options.mcpConfig, sessionId, log) : undefined
+    const attempt = async (withTools, withPolicy) => {
+      const a2aToken = withTools ? await rt.a2aMcpToken(sessionId).catch(() => undefined) : undefined
+      const mcpServers = withTools ? personaMcpServers(options.mcpConfig, sessionId, log, a2aToken) : undefined
       const req = { agentId, idempotencyKey: `persona:${sessionId}:${++tries}`, config: mcpServers ? { ...config, mcpServers } : config,
         labels: { [SESSION_LABEL]: sessionId } }
       const policy = mcpServers && withPolicy && root === 'claude' ? preapproved(mcpServers) : undefined
       if (policy) req.config.toolPolicy = policy
-      if (prompt.trim()) req.initialPrompt = prompt
+      if (prompt.trim() && !params.backend_workspace_root) req.initialPrompt = prompt
       if (workspaceId) req.workspaceId = workspaceId
       // Paseo answers once the agent's provider is up, which has no bound of its own: the start gives up at until.
       const ask = () => paseo.request('agent.create.request', req, { timeoutMs: Math.max(until - Date.now(), 1000) })
@@ -2313,7 +2353,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
     // that cannot preapprove them gets them without, asking as before (allowOwn answers those asks).
     const created = (async () => {
       if (!workspaceId) {
-        const projectId = await projectAt(cwd)
+        if (!implicitWorkspace) projectId = await projectAt(cwd)
         if (projectId) {
           // agent.create has no projectId field. Create the directory workspace with explicit ownership, then start
           // in it. Keep this inside the start's existing wait/late-result flow, with one key across reconnects.
@@ -2321,6 +2361,9 @@ export function createPaseoBridge(deps = {}, options = {}) {
           const made = await repeat(`creating workspace for ${sessionId}`,
             () => paseo.request('workspace.create.request', req, { timeoutMs: Math.max(until - Date.now(), 1000) }), until, () => undefined)
           const d = made?.workspace
+          if (params.backend_workspace_root && (!d?.id || d.projectId !== projectId || !samePath(d.workspaceDirectory, cwd))) {
+            throw new RpcError('Paseo could not open the prepared task directory', 'backend_workspace_start_refused')
+          }
           if (!d?.id || d.projectId !== projectId) {
             throw new RpcError(`Paseo did not create the workspace in the selected project: ${made?.error || 'no matching workspace returned'}`, 'create_failed')
           }
@@ -2360,7 +2403,7 @@ export function createPaseoBridge(deps = {}, options = {}) {
       ...(EFFORTS.includes(config.thinkingOptionId) ? { effort: config.thinkingOptionId } : {}),
     })
     const said = Object.keys(instead).length ? { instead } : {}
-    const res = await within(created, callWait)
+    const res = params.backend_workspace_root ? await created : await within(created, callWait)
     if (res === TIMEOUT) {
       // Still being created (its provider starting, Paseo restarting): listed as starting until Paseo is done (track).
       // Then the agent's row takes over, or this one says why it did not start.
@@ -2378,6 +2421,14 @@ export function createPaseoBridge(deps = {}, options = {}) {
     }
     upsert(res.agent)
     const row = rowOf(res.agent)
+    if (params.backend_workspace_root) {
+      if (!row || !samePath(res.agent.cwd, cwd) || !samePath(row.cwd, cwd)) {
+        throw new RpcError('Paseo returned an agent outside the prepared task directory', 'backend_workspace_cwd_mismatch')
+      }
+      if (prompt.trim()) {
+        await deliverMessage({ session_id: row.session_id, text: prompt, client_msg_id: `workspace-start:${sessionId}` }, startGiveUp)
+      }
+    }
     // The effort it runs at, while Paseo's record does not say it yet.
     if (row && !row.effort && config.thinkingOptionId && EFFORTS.includes(config.thinkingOptionId)) row.effort = config.thinkingOptionId
     return { session: row ?? placeholder(), ...said }

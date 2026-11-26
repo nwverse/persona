@@ -412,7 +412,7 @@ func TestSnapshotNeedsYouIsTheState(t *testing.T) {
 	putPending(s, &pending{ix: proto.Interaction{ID: "own", MachineID: "mac", SessionID: "cccccccc-3", Kind: proto.IxQuestion,
 		Questions: []proto.Question{{Question: "删掉这个分支吗？"}}}})
 
-	needs, unread, awaiting, waiting, _, _, _, _ := s.snapshotAgents(context.Background(), ft.f.devices, "")
+	needs, unread, awaiting, waiting, _, _, _ := s.snapshotAgents(context.Background(), ft.f.devices, "")
 	if live := s.fleetSnapshot().NeedsYou; len(needs) != live || live != 1 || needs[0].Session != "cccccccc" {
 		t.Fatalf("需要你: snapshot %+v, Live Activity %d; want the one asking", needs, live)
 	}
@@ -450,7 +450,7 @@ func TestSnapshotLeavesMutedAgentsOut(t *testing.T) {
 			Questions: []proto.Question{{Question: "删掉这个分支吗？"}}}})
 	}
 
-	needs, unread, _, _, _, muted, working, _ := s.snapshotAgents(context.Background(), ft.f.devices, "")
+	needs, unread, _, _, _, muted, working := s.snapshotAgents(context.Background(), ft.f.devices, "")
 	live := s.fleetSnapshot()
 	if len(needs) != live.NeedsYou || live.NeedsYou != 1 || needs[0].Session != "aaaaaaaa" {
 		t.Fatalf("需要你: snapshot %+v, Live Activity %d; want only the agent not muted", needs, live.NeedsYou)
@@ -475,4 +475,38 @@ func setMutes(s *Service, p Pins) {
 	s.fleet.mutesMu.Lock()
 	s.fleet.mutes = &p
 	s.fleet.mutesMu.Unlock()
+}
+
+func TestWorkProjectionRejectsStoredUnsupportedModelWait(t *testing.T) {
+	at := time.Now().UTC()
+	row := proto.Session{SessionID: "s1", Status: proto.StatusDone, State: proto.StateIdle, UpdatedAt: at,
+		AsksRead: true, ReadOnlyReason: "Read-only history"}
+	for _, tc := range []struct {
+		name      string
+		edit      func(*proto.WorkState)
+		wantReply bool
+	}{
+		{name: "only a model summary"},
+		{name: "verified question", edit: func(w *proto.WorkState) {
+			w.Questions = []proto.Question{{Question: "Which file should I use?"}}
+		}, wantReply: true},
+		{name: "authorization link", edit: func(w *proto.WorkState) {
+			w.Link = &proto.WorkLink{URL: "https://example.com/authorize"}
+		}, wantReply: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitUser, By: "model", TurnAt: at, Line: "Waiting for approval"}
+			if tc.edit != nil {
+				tc.edit(&w)
+			}
+			c := row
+			c.Work = workOf(i18n.Default, c, &w, nil)
+			if got := awaitsReply(c); got != tc.wantReply || (c.Work != nil) != tc.wantReply {
+				t.Fatalf("awaits reply = %v, work = %+v, want reply %v", got, c.Work, tc.wantReply)
+			}
+			if w.Phase != proto.WorkBlocked {
+				t.Fatal("projection rewrote the stored work")
+			}
+		})
+	}
 }

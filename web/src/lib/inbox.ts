@@ -3,30 +3,39 @@
 // kept in one module-level list so the sidebar's badge and the page share it. Pulled on first use, again on `inbox`
 // pushes and on (re)connect. Marking done applies at once and is sent in the background; a failure puts it back.
 //
-// The pure parts (filters, sections, labels, the "Hand to AI" message, Feishu message parts) are plain functions so the
-// tests can run them without a DOM.
+// The pure parts (filters, sections, labels, the "Hand to AI" message) are plain functions so the tests can run them
+// without a DOM.
 
-import { chosenManager, itemHeaders, otherManager, sameManager, stampedHeaders } from "./manager-choice";
+import { itemHeaders, otherManager, sameManager, stampedHeaders } from "./manager-choice";
 import { scoped, useScope } from "./current-assistant";
-import { formatDate, t } from "../i18n";
+import { t } from "../i18n";
 import { useEffect, useRef, useSyncExternalStore } from "react";
-import { api, ApiError, enc, errorText, getToken } from "./api";
-import { BASE } from "./base";
+import { api, ApiError, enc, errorText } from "./api";
 import type { AgentMutes } from "./agent-groups";
 import { agentName } from "./agent-kind";
-import { connectorOpenTitle } from "./connectors";
+import { connectorOpenTitle } from "./connector-profiles";
 import { contextBody } from "./context-body";
-import { conversationPage } from "./conversation-page";
 import type { Route } from "./router";
 import { isResumed } from "./reconnect";
 import { sameValue } from "./stable-lines";
 import { onHubEvent } from "./store";
-import type { AssistantInfo, Interaction, Session } from "./types";
+import type { Interaction, Session } from "./types";
 import { toast } from "../ui/atoms";
 import { byTime } from "./times";
 import { homeKey } from "./folded-rows";
+import { supervisorHeld } from "./supervisor-held";
 import { inFolderFilter } from "./inbox-folders";
-import { actedText, actOnSuggestion, statusOf, type ChainEntry, type InboxHandling, type InboxRelated, type InboxStatus, type InboxSuggestion, type InboxSuggestionAttempt, type SuggestionAction } from "./inbox-events";
+import type { ChainEntry, InboxHandling, InboxRelated, InboxStatus, InboxSuggestion, InboxSuggestionAttempt, SuggestionAction } from "./inbox-events";
+import { actedText, actOnSuggestion, statusOf } from "./inbox-suggestion"; // not inbox-events.ts: that one is the Inbox page's
+import type { MailAccount } from "./agent-settings";
+import type { ExternalRef } from "../features/external-sources/api";
+
+// Not the Inbox's: re-exported from their own modules until their importers import them from there (#11538).
+export { withToken } from "./media-url";
+export { shortTime } from "./format";
+export { conversationRoute } from "./conversation-page";
+export { comparePosition, mergeMessages, type LarkMention, type LarkMessage, type LarkPage, type LarkPart } from "./lark-messages";
+export type { MailAccount };
 
 // ── wire types (docs/protocol/protocol.md "Inbox API") ─────────
 
@@ -81,6 +90,19 @@ export interface InboxAgent {
   changes?: DocChange[];
 }
 
+/** Deterministic PR/Issue auto-forwarding metadata persisted on an Inbox item (#12492). */
+export interface InboxTodoForward {
+  todo_id: string;
+  todo_title?: string;
+  canonical_url?: string;
+  match_kind?: "pull_request" | "issue" | string;
+  status: "forwarded" | "queued" | "resumed" | "fallback" | "failed" | string;
+  machine_id?: string;
+  session_id?: string;
+  reason?: string;
+  forwarded_at?: string;
+}
+
 export interface InboxItem {
   id: string;
   /** The manager whose inbox it is, in the hub's merged list (docs/protocol/protocol.md "Per-manager routing"); none: the default.
@@ -95,6 +117,7 @@ export interface InboxItem {
   where?: string;
   sender?: string;
   avatar?: string;
+  avatar_url?: string;
   preview: string;
   count: number;
   started_at?: string;
@@ -115,14 +138,21 @@ export interface InboxItem {
     /** The Lark gateway account the chat is in; `ol_account` only when that is not the hub's own (docs/extensions/feishu.md "Multiple accounts"). */
     account_id?: number; ol_account?: number;
   };
-  mail?: { account_id: string; mailbox: string; uids: number[]; message_id?: string; from?: { name?: string; email?: string }; direct?: boolean; thread?: string };
+  mail?: { account_id: string; mailbox?: string; uids: number[]; message_id?: string; from?: { name?: string; email?: string }; direct?: boolean; thread?: string };
   doc?: InboxDoc;
   moment?: { post_id: string; notice?: string; reply_to?: string; my_post?: boolean; post_text?: string };
   /** A connector's thread (GitHub…): `source` is the connector's id, `account_name` its name. */
   connector?: InboxConnector;
+  /** The hub's normalized source followed by its ancestors in lookup order. */
+  external_path?: ExternalRef[];
   /** Only in GET /inbox/{id}: the conversation as text. */
   context?: string;
+  /** Only in GET /inbox/{id}, for a mail: whether the hub clipped the newest mail's text when it stored `context`.
+   *  Absent: the hub does not know (or is from before it sent this). Read it through storedMailClipping (lib/mail-stored.ts). */
+  mail_body_truncated?: boolean;
   agent?: InboxAgent;
+  /** Deterministic PR/Issue auto-forward status and linked to-do metadata (#12492). */
+  todo_forward?: InboxTodoForward;
   /** New foreign mail translated by the hub as it came in (for a device whose Settings › Translation asks), by target language. */
   translations?: Record<string, { subject: string; preview: string }>;
   /** What it grew out of (docs/assistant/inbox.md "Relationships: parents and children"): another item, a todo or an agent session ("<machine>/<session>"). */
@@ -216,12 +246,6 @@ export interface InboxConnector {
    *  hub, a connector that sends none), the initial. */
   avatar_url?: string;
   rule_tier?: string;
-}
-
-export interface MailAccount {
-  id: string;
-  name?: string;
-  email: string;
 }
 
 // ── one item ─────────────────────────────────────────────
@@ -342,6 +366,12 @@ export function fromLine(it: InboxItem, preview?: string): string {
   return t("lib-inbox.sender_line", { sender: it.sender, text: it.preview });
 }
 
+/** The mail's IMAP folder. The default inbox needs no label. */
+export function sourceMailbox(it: InboxItem): string | undefined {
+  const mailbox = it.mail?.mailbox;
+  return mailbox && mailbox.toLowerCase() !== "inbox" ? mailbox : undefined;
+}
+
 export function agentDraft(it: InboxItem): string | undefined {
   return it.agent?.state === "drafted" && it.agent.draft ? it.agent.draft : undefined;
 }
@@ -378,28 +408,6 @@ export function sameItem(a: { id: string; manager?: string }, b: { id: string; m
 
 /** The header naming an item's manager on a request about it (none for the default's). */
 export const itemRequest = (it: { manager?: string }) => itemHeaders(it.manager);
-
-/** Media under /api/ for an <img>: the token goes in the query (an <img> can't send a header), and the path under the
- * sub-path the page is served at (lib/base.ts). */
-export function withToken(url: string | undefined, token = getToken(), base = BASE): string | undefined {
-  if (!url) return undefined;
-  if (!url.startsWith("/api/")) return url;
-  return `${base}${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}`;
-}
-
-/** 18:20 today, "Yesterday", "Wed" within the week, "Oct 28" this year, else 2025-10-28 (LarkTime.short). */
-export function shortTime(iso?: string, now = new Date()): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime()) || d.getFullYear() < 2000) return "";
-  const day = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-  const days = Math.round((day(now) - day(d)) / 86400_000);
-  if (days <= 0) return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-  if (days === 1) return t("lib-inbox.yesterday");
-  if (now.getTime() - d.getTime() < 6 * 86400_000) return formatDate(d, { weekday: "short" });
-  if (d.getFullYear() === now.getFullYear()) return formatDate(d, { month: "short", day: "numeric" });
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
 
 // ── filters and sections ─────────────────────────────────
 
@@ -487,7 +495,7 @@ export function mailAccounts(accounts: MailAccount[], items: InboxItem[]): MailA
  *  card goes by its parent's (#5120): the child has no row of its own to mute it from, and the switcher's count
  *  (lib/manager-attention.ts) mutes it the same way. */
 export function interactionMuted(ix: Interaction, sessions: Record<string, Session[]>, mutes: AgentMutes): boolean {
-  if (ix.folded_under) return interactionMuted({ ...ix, session_id: ix.folded_under, folded_under: undefined }, sessions, mutes);
+  if (ix.folded_under) return interactionMuted({ ...ix, machine_id: ix.folded_under_machine_id || ix.machine_id, session_id: ix.folded_under, folded_under: undefined, folded_under_machine_id: undefined }, sessions, mutes);
   const key = `${ix.machine_id}/${ix.session_id}`;
   if (mutes.sessions.includes(key)) return true;
   if (mutes.allowed?.includes(key)) return false;
@@ -526,8 +534,9 @@ export function interactionAsk(ix: Interaction): string {
 
 export function waitingAgents(interactions: Interaction[], sessions: Record<string, Session[]>, mutes: AgentMutes, f: InboxFilter): Interaction[] {
   if (f.source || f.folder || (f.kind && f.kind !== "agent")) return [];
+  // a card a task's supervisor holds is not the user's yet (lib/supervisor-held.ts)
   const shown = interactions
-    .filter((ix) => !interactionMuted(ix, sessions, mutes) && hasText([ix.session_title, ix.summary, interactionTitle(ix), interactionAsk(ix)], f.query))
+    .filter((ix) => !supervisorHeld(ix) && !interactionMuted(ix, sessions, mutes) && hasText([ix.session_title, ix.summary, interactionTitle(ix), interactionAsk(ix)], f.query))
     .sort((a, b) => byTime(a.created_at, b.created_at) || a.id.localeCompare(b.id));
   return withChildCardsUnderParents(shown);
 }
@@ -541,16 +550,6 @@ function withChildCardsUnderParents(cards: Interaction[]): Interaction[] {
   const at = new Map<string, number>();
   for (const ix of cards) if (!at.has(group(ix))) at.set(group(ix), at.size);
   return [...cards].sort((a, b) => at.get(group(a))! - at.get(group(b))!);
-}
-
-/** A conversation's page: the assistant's are in Persona (/persona/<sid>, naming its computer and manager with several
- *  assistants: lib/conversation-page.ts), an agent's is /s/<machine>/<sid>. `manager`: whose it is when the row doesn't
- *  say (an inbox item's). */
-export function conversationRoute(mid: string, sid: string, sessions: Record<string, Session[]>, assistant: AssistantInfo | null, manager?: string): Route {
-  const s = (sessions[mid] ?? []).find((x) => x.session_id === sid);
-  const own = assistant?.machine_id === mid && assistant.conversations.some((c) => c.session_id === sid);
-  // the current assistant's own list has it: the current one's
-  return s?.assistant || own ? conversationPage(sid, mid, s?.manager ?? manager ?? (own ? chosenManager() ?? undefined : undefined)) : { name: "session", mid, sid };
 }
 
 function escAttr(s: string) {
@@ -581,83 +580,6 @@ export function handOffToMain(item: InboxItem, text: string, clientID: string, r
   }).finally(() => { if (pendingHandoffs.get(key) === request) pendingHandoffs.delete(key); });
   pendingHandoffs.set(key, request);
   return request;
-}
-
-// ── Feishu messages (docs/protocol/protocol.md "Lark API") ──────
-
-export interface LarkPart {
-  kind: string;
-  text?: string;
-  url?: string;
-  refId?: string;
-  metadata?: Record<string, unknown>;
-}
-
-export interface LarkMessage {
-  id: string;
-  position: string;
-  sender_id?: string;
-  sender_name?: string;
-  sender_avatar?: string;
-  sender_type?: string;
-  is_mine?: boolean;
-  type?: string;
-  text?: string;
-  created_at?: string;
-  recalled?: boolean;
-  /** The Lark gateway kept a recalled message's content (lark-display.ts): shown only with "Keep recalled messages" on, still marked "Recalled". */
-  retained?: boolean;
-  edited?: boolean;
-  /** An edited message's earlier versions, oldest first (lark-display.ts, shown with "Edit history" on). */
-  edit_history?: { edited_at: string; text: string; parts?: LarkPart[]; olk?: unknown }[];
-  reply_count?: number;
-  thread_reply_count?: number;
-  at_me?: boolean;
-  /** Read state (others' messages) and Feishu's unread badge at this message: what the read report carries. */
-  is_read?: boolean;
-  badge_count?: number;
-  parts?: LarkPart[];
-  reply_to?: { id?: string; sender_name?: string; text?: string; parts?: LarkPart[]; recalled?: boolean; retained?: boolean };
-  sending?: boolean;
-  failed?: boolean;
-  client_id?: string;
-  /** The Lark gateway's capabilities as the hub passes them on: whether a Pin may be added / removed (lark-pins.ts). */
-  can_pin?: boolean;
-  can_unpin?: boolean;
-  deleted?: boolean;
-  local_state?: string;
-  /** The thread a message is in; "root", "reply" or "" (a plain message). */
-  thread_id?: string;
-  thread_kind?: string;
-  /** An encrypted message's public face is in text / parts already; its presence marks it encrypted. */
-  olk?: unknown;
-  /** Reactions under it (lib/lark-chat.ts): the key, how many, whether one is mine, who. */
-  reactions?: { key: string; count: number; mine?: boolean; users?: string[] }[];
-}
-
-export interface LarkPage {
-  messages: LarkMessage[];
-  has_older?: boolean;
-  has_newer?: boolean;
-  older_cursor?: string;
-  newer_cursor?: string;
-  /** A topic group: the messages are its topics' first messages (the hub finds out without being told). */
-  topic?: boolean;
-}
-
-/** Oldest first by position (numeric when both are), one copy per id: a later page wins. */
-export function mergeMessages(have: LarkMessage[], batch: LarkMessage[]): LarkMessage[] {
-  // the hub's copy of a message this page sent replaces its local one (same client_id), which may still be waiting
-  const echoed = new Set(batch.flatMap((m) => (m.client_id && !m.id.startsWith("temp-") ? [m.client_id] : [])));
-  const byId = new Map(have.filter((m) => !(m.id.startsWith("temp-") && m.client_id && echoed.has(m.client_id))).map((m) => [m.id, m]));
-  for (const m of batch) byId.set(m.id, m);
-  return [...byId.values()].sort((a, b) => comparePosition(a.position, b.position));
-}
-
-export function comparePosition(a: string, b: string): number {
-  const x = Number(a), y = Number(b);
-  if (Number.isFinite(x) && Number.isFinite(y)) return x - y;
-  return a.localeCompare(b);
 }
 
 // ── Moments ──────────────────────────────────────────────
@@ -1706,10 +1628,4 @@ export function resetInboxForTests() {
   unsentReplies.clear();
   droppedChanges.clear();
   pendingHandoffs.clear();
-}
-
-/** Someone a sent message @s: Feishu notifies them; the text holds their `@name` ("Everyone" is `user_id` "all"). */
-export interface LarkMention {
-  user_id: string;
-  name: string;
 }

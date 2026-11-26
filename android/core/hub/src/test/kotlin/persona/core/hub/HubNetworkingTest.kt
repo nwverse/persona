@@ -2,6 +2,7 @@ package persona.core.hub
 
 import persona.core.contracts.Endpoint
 import persona.core.contracts.JsonCodec
+import persona.core.contracts.api.AgentMessageHoldFeature
 import persona.core.contracts.api.ConnectionState
 import java.io.EOFException
 import java.net.InetAddress
@@ -89,7 +90,7 @@ class HubNetworkingTest {
             OkHttpHubConnection(config, HubNetwork("first")).use { connection ->
                 val first = withTimeout(5000) { hellos.receive() }
                 assertEquals("android", (first.getValue("platform").jsonPrimitive.content).zhAny())
-                assertEquals(setOf("endpoints", "ws_notify", "app_ping", "elicitation", "persona_contracts_v1"),
+                assertEquals(setOf("endpoints", "ws_notify", "app_ping", "elicitation", AgentMessageHoldFeature, "persona_contracts_v1"),
                     first.getValue("features").jsonArray.map { it.jsonPrimitive.content }.toSet())
                 assertEquals(20, first.getValue("heartbeat").jsonObject.getValue("interval").jsonPrimitive.int)
                 withTimeout(5000) { connection.state.first { it == ConnectionState.Online } }
@@ -177,9 +178,11 @@ class HubNetworkingTest {
     @Test fun aHandshakeCutShortIsRetriedNotACertificateChange() = runBlocking {
         val certificate = HeldCertificate.Builder().commonName("example.com").build()
         ServerSocket(0, 50, InetAddress.getLoopbackAddress()).use { proxy ->
-            thread(isDaemon = true) {
-                while (!proxy.isClosed) runCatching {
-                    proxy.accept().use { socket -> socket.getInputStream().read(ByteArray(512)) } // the ClientHello, then gone
+            val _ = thread(isDaemon = true) {
+                while (!proxy.isClosed) {
+                    val _ = runCatching {
+                        proxy.accept().use { socket -> socket.getInputStream().read(ByteArray(512)) } // the ClientHello, then gone
+                    }
                 }
             }
             val endpoint = Endpoint("https://${InetAddress.getLoopbackAddress().hostAddress}:${proxy.localPort}/", "lan")

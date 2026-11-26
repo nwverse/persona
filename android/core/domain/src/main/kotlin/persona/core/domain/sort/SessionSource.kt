@@ -3,6 +3,7 @@ package persona.core.domain.sort
 import persona.core.contracts.CoreText.Key
 import persona.core.contracts.CoreText
 import persona.core.contracts.Session
+import persona.core.contracts.Interaction
 
 /*
  * Where a session comes from and what the phone may do with it (docs/protocol/protocol.md "Codex sources and capabilities", the same rules
@@ -16,6 +17,13 @@ val Session.canRead: Boolean get() = !hasSource || capabilities?.read == true
 val Session.canSend: Boolean get() = !isStoppedAgent && (!hasSource || capabilities?.send == true)
 val Session.canInterrupt: Boolean get() = !isStoppedAgent && (!hasSource || capabilities?.interrupt == true)
 val Session.canApprove: Boolean get() = !isStoppedAgent && (!hasSource || capabilities?.approve == true)
+
+/** A desktop Codex async question is answered by sending a message to its owning window. */
+fun Session.canAnswerInteraction(request: Interaction): Boolean =
+    canApprove || canSend && capabilities?.answerQuestions == true &&
+        key == request.sessionKey && request.kind == "question" && request.agent == "codex" &&
+        request.toolName == "request_user_input_async" && !request.questions.isNullOrEmpty()
+
 /** A pane in a terminal engine: the terminal and its keys; closing and renaming where the node says nothing else ([canClose], [canRename]). */
 val Session.canTerminal: Boolean get() = !hasSource || capabilities?.terminal == true
 /**
@@ -30,6 +38,10 @@ val Session.canClose: Boolean get() = capabilities?.close ?: canTerminal
 val Session.canRename: Boolean get() = capabilities?.rename ?: canTerminal
 /** Join a Codex app-server thread live: offered until it is attached. */
 val Session.canAttach: Boolean get() = hasSource && capabilities?.attach == true && !attached
+/** Read-only Codex session whose node offers explicit takeover or continuation (`capabilities.takeover`). */
+val Session.canContinueCodex: Boolean get() = isCodex && !canSend && capabilities?.takeover != null
+/** Explicit in-place takeover is available for this read-only Codex session (`capabilities.takeover.canResume`). */
+val Session.canTakeover: Boolean get() = canContinueCodex && capabilities?.takeover?.canResume == true
 
 /** A declared modes capability wins; an older hub that omits it keeps the agent-based rule. */
 val Session.canChangeModes: Boolean get() = isLive && canSend && (capabilities?.modes ?: isClaude)
@@ -45,9 +57,10 @@ val Session.listedModes: List<String>? get() = capabilities?.permissionModes
 val Session.canSwitchListedModes: Boolean get() = isLive && canSend && listedModes != null
 /**
  * Only the effort changes, among the session's own [Session.efforts]: a Codex thread the hub drives through its
- * app-server (the hub lists the levels only then; the iOS `Session.setsEffortOnly`).
+ * app-server (the hub lists the levels only then; the iOS `Session.setsEffortOnly`). A runtime that declares
+ * `capabilities.modes` (such as Antigravity) changes both and is not effort-only.
  */
-val Session.canChangeEffortOnly: Boolean get() = isLive && !isClaude && !assistant && canSend && efforts.isNotEmpty()
+val Session.canChangeEffortOnly: Boolean get() = isLive && !isClaude && !assistant && !canChangeModes && canSend && efforts.isNotEmpty()
 /** /model and /clear are typed into Claude's pane: Claude in a terminal engine, not Persona's conversations. */
 val Session.canTypeClaudeCommands: Boolean get() = canChangeModes && !assistant && !paneId.isNullOrBlank() && canTerminal
 /**
@@ -134,18 +147,20 @@ val Session.hostKind: String
 val Session.isBotmux: Boolean get() = hostKind == "botmux"
 /** A pane of Tern: its tab is renamed in Tern, not herdr (the rename dialogs say so, as on iOS). */
 val Session.isTern: Boolean get() = hostKind == "tern"
+/** A pane of Rex: its tab is renamed in Rex, not herdr (the rename dialogs say so, as on iOS). */
+val Session.isRex: Boolean get() = hostKind == "rex"
 /** Null for the rest (Orca, runtimes, apps), which carry no source label (iOS `Session.source`). */
 val Session.agentSource: AgentSource?
     get() = when (hostKind) {
         "botmux" -> AgentSource.Feishu
-        "herdr", "herdr-core", "tern" -> AgentSource.Terminal
+        "herdr", "herdr-core", "tern", "rex" -> AgentSource.Terminal
         else -> null
     }
 // The kinds a pane id may be prefixed with: keep in step with Kinds in server/internal/host/host.go.
-private val HOST_KINDS = setOf("orca", "herdr-core", "tern", "botmux")
+private val HOST_KINDS = setOf("orca", "herdr-core", "tern", "rex", "botmux")
 
 // The engines that make a session's own worktree (#6115): worktree/status and worktree/remove take one as their kind.
-private val WORKTREE_ENGINES = setOf("herdr", "herdr-core", "orca", "tern", "paseo", "cindy")
+private val WORKTREE_ENGINES = setOf("herdr", "herdr-core", "orca", "tern", "rex", "paseo", "cindy")
 
 /**
  * The engine a session runs in, which made its own worktree (Paseo makes its own): its terminal's host, else the runtime

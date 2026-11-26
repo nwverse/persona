@@ -60,8 +60,8 @@ Manifest fields:
 | `catalog.list` | `{}` → `{sources: [...]}` | Optional `catalog`: source/tool metadata and recipes; validated without executing tools ("Source catalog" below) |
 | `catalog.call` | `{source, tool, args?}` → `{text}` | Current catalog only; non-read-only or missing tools answer `not_read_only`; args is an object, default `{}` |
 | `tools.list` | `{}` → `{tools: [{name, description, input_schema}]}` | Read-only tools, names prefixed `<id>_` |
-| `tools.call` | `{name, args}` → `{text, images?}` | `images` (optional, #8484): pictures for the model after the text, `[{mime, data, caption?}]`; only on a hub whose `initialize` lists `tool_images`. See "Pictures in a tool's answer" below |
-| `thread.page` | `{thread, before?, limit}` → `{chat, messages, before?}` | One Inbox thread page, oldest first; empty before means latest, earlier pages use returned cursor; limit max 50. Fields `connector/threads.go`: `ThreadChat` / `ThreadMessage` / `ThreadMedia`… `chat.reply` is reply action with `{chat, text, reply_to}` |
+| `tools.call` | `{name, args}` → `{text, images?, views?}` | `images` (optional, #8484): pictures for the model after the text, `[{mime, data, caption?}]`; only on a hub whose `initialize` lists `tool_images`. `views` (optional, #14730): out-of-band declarative `View`s rendered inline in conversation UIs (`ToolViews`); only on a hub whose `initialize` lists `tool_views`. See below |
+| `thread.page` | `{thread, before?, limit}` → `{chat, messages, before?}` | One Inbox thread page, oldest first; empty before means latest, earlier pages use returned cursor; limit max 50. Fields `connectorwire/threads.go`: `ThreadChat` / `ThreadMessage` / `ThreadMedia`… `chat.reply` is reply action with `{chat, text, reply_to}` |
 | `thread.media` | `{ref}` → `{mime, data}` | Base64 avatar / media bytes, max 4 MB. Ref immutable; hub persists, app caches forever. Changing avatars include version in ref |
 | `actions.list` | `{}` → `{tools: [{name, description, input_schema}]}` | Writes, `<id>_` prefix |
 | `actions.describe` | `{name, args}` → `{action: {name, visible}, summary}` | Phone card action / full content; visible = audience. No network. Error means invalid args, returned to caller without card |
@@ -71,7 +71,7 @@ Manifest fields:
 | `recall.do` | `{request_id, action, message_ref, target?, at?}` → `{status, error?}` | Current protocol's write, **only once the user agreed on their own device**; the program never starts one. `request_id` is the hub's stable opaque id for this connector and external message (not the ledger row id). The other fields keep legacy recall's meaning, including `at` for the connector's own time limit; no message text, origin, approval record, account or credential is sent. `status` is `done`, `already_recalled`, `not_recallable`, `unavailable`, `refused` or `unknown`. Only the first two confirm the message is gone; an empty or unrecognized status, malformed answer or lost response is `unknown`, never success. `error` is one sentence for people, without secrets or message text. One request id shares an in-flight operation and replays a confirmed `done` / `already_recalled`; failure and unknown outcomes are not cached after current waiters finish, so the user's explicit later retry is allowed. A program that answers `can` but lacks `do` is `not_recallable`: the hub does not send a second kind of write through legacy recall |
 | `inbox.collect` | `{}` → `{things: [InboxThing]}` | Memory-only |
 | `inbox.reply` | `{thread, item_id?, last?, text, client_id?, changes?}` → `{}` | User pressed Send, itself confirmation. App `client_id` ensures one send on retry, connector derives if absent. `changes: [{ref, field, value}]` first update document-row status (Change Status / AI-twin proposal), allowing empty text |
-| `archive.changes` | `{cursor, limit}` → `{batches: [{source?, chat: {id, name, kind, topic?, muted?, collapsed?, done?, updated_at?}, messages}], next, more}` | Program-owned cursor, stored / returned unchanged, initial empty string. Chat flags and message fields below (“Chat flags and document signals”). Batches archive as `<source>-<chat.id>`; absent source uses connector ID, otherwise must be `archive_sources`; invalid source drops batch / logs |
+| `archive.changes` | `{cursor, limit}` → `{batches: [{source?, chat: {id, name, kind, topic?, muted?, collapsed?, done?, updated_at?, state?, state_at?, source_url?}, messages}], next, more}` | Program-owned cursor, stored / returned unchanged, initial empty string. Chat flags and message fields below (“Chat flags and document signals”). Batches archive as `<source>-<chat.id>`; absent source uses connector ID, otherwise must be `archive_sources`; invalid source drops batch / logs |
 | `archive.media` | `{ref}` → `{mime, data}` | Base64 archive media, max 20 MB, stored in chat attachments. Optional; absent yields [Attachment] row |
 | `history.chats` | `{}` → `{chats: [{id, name, kind, muted?, collapsed?, done?, bot?, estimate?, source?}]}` | History declared only, read-only. The conversations whose older history can be imported (“History” below) |
 | `archive.history` | `{chat, before?, after?, around?, limit?}` → `{messages?, older?, newer?, more?, unreadable?, pace?}` | History declared only, read-only. One page of one conversation, oldest first (“History” below) |
@@ -89,6 +89,10 @@ Manifest fields:
 | `inbox.settle` | `{threads}` → `{settled: {thread: reason}}` | Settle declared; which still-open hub items are ended under current rules, e.g. older rules / no longer collected thread; hub marks done |
 | `machines.online` | `{machine}` → `{}` | Machines declared; user's computer just connected, allowing token-on-computer connector retry. Hub does not await reply |
 | `auth.get` / `auth.set` | `{}` / `{source, machine?, machine_name?}` → `{source, machine?, scopes?, scopes_known}` | User chooses auth source, hub stores (currently GitHub only: machine gh login / device-code login). `auth.set` **after each startup** and user change; program does not persist. Scopes present only if GitHub reports token permissions |
+
+An archive can attach a stable HTTP(S) `source_url` to a chat so project views can identify the same external
+source. `state` and `state_at` describe the source's delivery state. A deployment or user acceptance belongs
+to separate verification evidence.
 
 Taking back a sent message (#5278): a connector that declares the capability `recall` is a `connector.Recaller` to the hub (`connector.RecallerOf`; one that does not is never offered a recall), and the hub asks it with `recall.can` / `recall.do` above (or legacy `recall` for an older program). The ledger rows it can be asked about are the ones with a `message_ref`: a write through `actions.do` (the ref in its answer), a send it recorded with `sent.record`, and the writes the node's gate forwarded for a gate of its own (`docs/extensions/connectors.md` "Sent as the user"). The capability is not something to agree to: it is shown at install and never asks again on an upgrade.
 
@@ -123,6 +127,16 @@ Group-capable connectors submit each thread's new messages as a **batch awaiting
 - **Old hubs**: before #1680, unknown group rejects **entire connector registration**, unknown capability, and `meta_description` prevents manifest load. Extension `engines.persona` must require hub build containing #1680 (`">=YYYYMMDDHHMM"`, build UTC time at merge), so old hubs reject install / upgrade rather than lose connector afterward. Development build 0 skips check.
 - **Future capabilities**: since #1680, unknown **extension-provided** connector capabilities log once per extension / capability, remove that capability, keep running. Built-in connectors remain strict. Future capability additions no longer drop entire connector on old hubs with #1680, but already deployed pre-#1680 hubs still do.
 
+### Call context (#13246)
+
+`tools.call`, `actions.describe` and `actions.do` also say where the call comes from, so a connector can apply limits of its own:
+
+- `track`: the calling conversation's track, its slug (`main` for the main track); absent when the hub cannot tell.
+- `track_kind`: the track's kind; absent when not known (the main track).
+- `categories`: the conversation's information categories (`health`, `finance`, `relationships`, `emotion`, `legal_id`; `docs/assistant/health.md` "Information categories"), `[]` for general. **Absent means not known** (an older hub, a turn not tagged yet): take it for sensitive.
+
+All three are optional and additive (no version change): a program that ignores them works as before. Whether the phone confirms a write stays the hub's decision, never the connector's. A connector built on `server/internal/connector/serve` reads them with `connector.CallContextOf(ctx)` inside `Call`, `Describe` and `Write`; an SDK program reads them from the params (`ConnectorCallParams`, `ConnectorDoParams`).
+
 ### Pictures in a tool's answer (#8484)
 
 A read tool can hand the model pictures to look at (frames of a video, the pictures of a post): `tools.call` answers `{text, images: [{mime, data, caption?}]}` (`ConnectorToolImage` in the schema; the Go SDK's `ext.ToolImage(data, caption)`).
@@ -136,6 +150,14 @@ A read tool can hand the model pictures to look at (frames of a video, the pictu
 - **Where they don't**: `catalog.call` (subscriptions), `actions.do` and `personad tool` carry the text only.
 - **In the apps**: the pictures are image items on the tool call's card, loaded when shown (`lazy_images`), from the Claude transcript and from Codex's (`McpToolCall` image content).
 - **Privacy**: they stay in the conversation's transcript on the computer that runs it, like computer use's screenshots, and never in the hub's log, the extension's audit or its stats. An extension whose pictures are other people's content says so in its own description.
+
+### Tool views in a tool's answer (#14730)
+
+A connector read tool (`tools.call`) can return declarative UI views (`views: [View]`, in `connectorwire.ConnectorCallResult`; Go SDK `ext.ToolResult{Text, Views}`) for Persona's conversation views to draw beside the turn's answer without sending geometry or layout data into the model's context.
+
+- **Who takes them**: a hub whose `initialize` lists `tool_views` in `hub.capabilities` (`docs/extensions/extensions.md` "Process extension protocol"). Older hubs ignore `views` and still pass `text` to the model, so `text` must remain complete and self-contained. The connector protocol version does not change.
+- **Sanitization and bounds** (`connector.SanitizeToolViews`): at most **4 views** (`connector.ToolViewsMost`) and **128 KiB** of JSON per call (`connector.ToolViewsBytesMost`). Every view is deep-cloned, assistant-only fields and inline `html` components are stripped (`wire.StripAssistantFields`), extension-local image `ref`s are rejected (`wire.HasImageRef`, since inline tool views are not routed through an extension's HTTP signing surface), empty sections are dropped, and each view must pass `wire.CheckView`.
+- **Separation from LLM context**: `ToolResult.tool_views` travels from connector -> hub -> node (`mcp.call` / `cli.call`), where the node strips `tool_views` before returning `ToolResult` to Claude Code, Codex, DSH, or `personad tool`, and attaches the stripped views to the recorded `tool_result` item (`Item.tool_views`) and folded run summary (`Fold.tool_views`). Like `images`, `tool_views` never appear in hub audit logs or extension stats, and `catalog.call` / `actions.do` ignore them.
 
 ## Program calls hub
 
@@ -257,7 +279,7 @@ Connectors may give assistant a CLI (#1704; Telegram tg previously built into pe
 - Default output one JSON line, original tool text. Failure stderr `{error, kind, retry_after?}`, text format `<name>: …`; usage mistakes too, before anything is called (no tool or connector, an unknown option, `--format` without a value, arguments that are not one JSON object: kind `usage`), while `-h` / `--help` prints the usage on stdout, exit 0. Exit codes: 0 success, 1 failure, 2 usage, 3 unavailable (node / hub unreachable, logged out), 4 rate limit with seconds `retry_after`, 5 user / `connector_gate` denial, 130 interrupted (Ctrl-C / SIGTERM before result; pending approval card withdrawn; approved executing write may have happened, verify before retry; not node / hub failure).
   Codes follow hub / node categories in `mcp.call` `error_kind` / `retry_after` (`docs/protocol/protocol.md`), not wording. Gate denial, logged-out connector, `rate_limited` state / program error carry categories.
   Only old hub / node without category uses wording: The user declined / (`connector_gate`) do not allow → 5; is not available / Persona hub error → 3; `限流中，N 秒` / `限流，N 秒` / `还要 N 秒` (“rate limited, N seconds” / “N seconds remaining”) → 4, `retry_after` N. Rate-limited status without seconds also parses state.error this way.
-- `personad tool <tool> [<JSON args> | -]` calls directly, same restrictions / output.
+- `personad tool <tool> [<JSON args> | -]` calls directly, same restrictions / output. The one exception is an Agent's own tools (`task_spawn`, its to-do's `todo_decisions`, a task leader's `task_plan`, …): from an Agent's pane or Codex thread they go as that Agent's call, decided by the hub for it, never as the assistant's and never reaching a connector ([unified-entry.md](../assistant/unified-entry.md) ("Separate sessions within a supervised task (#5751)")).
 
 ## Errors
 

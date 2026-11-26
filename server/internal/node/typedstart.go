@@ -11,6 +11,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/herdr"
 	"github.com/nwverse/persona/server/internal/host"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -30,6 +31,15 @@ const terminalNotReady = proto.CodeTerminalNotReady
 
 // startScriptPrefix names the files a start writes in the node's directory.
 const startScriptPrefix = "agent-start-"
+
+var startScriptTitleRe = lazyre.New(`^(?:\.|source)\s+['"]?(?:[^'"\s]*[/\\])?agent-start-\d+\.sh['"]?(?:\s+&&\s+true\s+\S+)?$`)
+
+// isStartScriptTitle reports whether title is the shell's terminal title for Persona's own sourced agent-start-*.sh
+// command (typedstart.go), which must never stand as a session's display title.
+func isStartScriptTitle(title string) bool {
+	t := strings.TrimSpace(title)
+	return t != "" && startScriptTitleRe.MatchString(t)
+}
 
 // startScript is the start file at path that runs cmd: it removes itself, then runs cmd.
 func startScript(path, cmd string) string {
@@ -96,17 +106,6 @@ func (n *Node) runAgentCommand(ctx context.Context, launch host.Launcher, create
 	return t.done, nil
 }
 
-// runWorkAgentCommand is runAgentCommand without automatic terminal cleanup. A launch.Run error can mean the pane
-// accepted the command but its response was lost, so the caller gets done even on error and cleans the agent, not the
-// terminal. done is nil only when no command could be typed; it removes an unsourced start file in every case.
-func (n *Node) runWorkAgentCommand(ctx context.Context, launch host.Launcher, created *host.Created, ws, anchor, cmd string, shells ...string) (done func(), err error) {
-	t, err := n.typeStartMode(ctx, launch, created, ws, anchor, cmd, false, shells...)
-	if t == nil {
-		return nil, err
-	}
-	return t.done, err
-}
-
 // typedStart is a start's line typed into its new pane (typeStart): the line, and the start file it sources ("" when
 // the command was typed out).
 type typedStart struct {
@@ -154,6 +153,10 @@ func (n *Node) typeStartMode(ctx context.Context, launch host.Launcher, created 
 		}
 		return nil, err
 	}
+	backend := backendLaunchFrom(ctx)
+	if backend != nil {
+		cmd = cdThen(backend.executor.journal.Plan.RootPath, cmd, shells...)
+	}
 	useStartFile := n.typesStartFile(launch, shells...)
 	t := &typedStart{launch: launch, created: created, line: cmd}
 	bash := ""
@@ -178,6 +181,15 @@ func (n *Node) typeStartMode(ctx context.Context, launch host.Launcher, created 
 		t.path = path
 	}
 	t.line = startLineChoice(cmd, t.path, anchor, bash, useStartFile, shells...)
+	if backend != nil {
+		if err := backend.beforeDispatch(anchor); err != nil {
+			t.done()
+			if closeOnError {
+				n.closeNewTab(ctx, launch, created, ws)
+			}
+			return nil, err
+		}
+	}
 	if err := launch.Run(ctx, created.Pane, t.line); err != nil {
 		t.done()
 		if closeOnError {
@@ -222,9 +234,9 @@ func (n *Node) closeNewTab(ctx context.Context, launch host.Launcher, created *h
 	if !ok || adoptedPane(ctx) != nil {
 		return
 	}
-	space := ws
+	space := created.SpaceID
 	if space == "" {
-		space = created.SpaceID
+		space = ws
 	}
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	_ = org.Close(cctx, created.Pane, space, created.SlotID)

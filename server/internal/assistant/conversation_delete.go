@@ -5,19 +5,24 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-const deletedConversationsKey = db.ConversationDeletionsKey
+const (
+	deletedConversationsKey = db.ConversationDeletionsKey
+	deletedConversationsTTL = 2 * time.Second
+)
 
 type durableConversationDeletions interface {
 	PutConversationDeletion(context.Context, string, string, json.RawMessage) error
@@ -28,6 +33,7 @@ type durableConversationDeletions interface {
 // A tombstone keeps reference identity, never the deleted conversation's words.
 // The computer's transcript, task origins and previously derived records remain.
 type deletedConversation struct {
+	Hidden  bool      `json:"hidden_segment,omitempty"`
 	Machine string    `json:"machine_id"`
 	ID      string    `json:"session_id"`
 	Space   string    `json:"space,omitempty"`
@@ -35,19 +41,29 @@ type deletedConversation struct {
 }
 
 type conversationDeleteBook struct {
-	mu     sync.Mutex
-	loaded bool
-	rows   map[string]deletedConversation
+	mu       sync.Mutex
+	loaded   bool
+	loadedAt time.Time
+	now      func() time.Time
+	rows     map[string]deletedConversation
+}
+
+func (b *conversationDeleteBook) clock() time.Time {
+	if b.now != nil {
+		return b.now()
+	}
+	return time.Now()
 }
 
 func (s *Service) loadDeletedConversations(ctx context.Context) error {
 	b := &s.deletedConversations
-	_, durable := s.store().(durableConversationDeletions)
+	st := s.store()
+	_, durable := st.(durableConversationDeletions)
 	if b.loaded && !durable {
 		return nil
 	}
 	rows := map[string]deletedConversation{}
-	if st := s.store(); st != nil {
+	if st != nil {
 		if _, err := st.Setting(ctx, deletedConversationsKey, &rows); err != nil {
 			return err
 		}
@@ -55,21 +71,85 @@ func (s *Service) loadDeletedConversations(ctx context.Context) error {
 	if rows == nil {
 		rows = map[string]deletedConversation{}
 	}
-	b.rows, b.loaded = rows, true
+	b.rows, b.loaded, b.loadedAt = rows, true, b.clock()
 	return nil
+}
+
+func (s *Service) loadDeletedConversationsCached(ctx context.Context) error {
+	b := &s.deletedConversations
+	st := s.store()
+	_, durable := st.(durableConversationDeletions)
+	if b.loaded {
+		if !durable {
+			return nil
+		}
+		if !b.loadedAt.IsZero() {
+			if age := b.clock().Sub(b.loadedAt); age >= 0 && age < deletedConversationsTTL {
+				return nil
+			}
+		}
+	}
+	return s.loadDeletedConversations(ctx)
+}
+
+// deletedConversationsSnapshot returns the cached deletion ledger, loading or
+// refreshing it when empty or past its durable TTL. Callers must treat the
+// returned map as read-only.
+func (s *Service) deletedConversationsSnapshot(ctx context.Context) (map[string]deletedConversation, error) {
+	b := &s.deletedConversations
+	b.mu.Lock()
+	err := s.loadDeletedConversationsCached(ctx)
+	rows := b.rows
+	b.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+func (s *Service) refreshDurableConversationDeletion(ctx context.Context, machine, id string, row deletedConversation) {
+	b := &s.deletedConversations
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if st := s.store(); st != nil {
+		rows := map[string]deletedConversation{}
+		if _, err := st.Setting(ctx, deletedConversationsKey, &rows); err == nil {
+			if rows == nil {
+				rows = map[string]deletedConversation{}
+			}
+			key := runtimeListID(machine, id)
+			if _, ok := rows[key]; !ok {
+				rows[key] = row
+			}
+			b.rows, b.loaded, b.loadedAt = rows, true, b.clock()
+			return
+		}
+	}
+	next := make(map[string]deletedConversation, len(b.rows)+1)
+	for k, v := range b.rows {
+		next[k] = v
+	}
+	next[runtimeListID(machine, id)] = row
+	b.rows, b.loaded, b.loadedAt = next, false, time.Time{}
 }
 
 func (s *Service) deletedConversation(ctx context.Context, machine, id string) (deletedConversation, bool, error) {
 	if st, ok := s.store().(durableConversationDeletions); ok {
-		raw, found, err := st.ConversationDeletion(ctx, machine, id)
-		if err != nil || !found {
-			return deletedConversation{}, false, err
+		for _, alias := range s.physicalAliases(machine) {
+			raw, found, err := st.ConversationDeletion(ctx, alias, id)
+			if err != nil {
+				return deletedConversation{}, false, err
+			}
+			if !found {
+				continue
+			}
+			var row deletedConversation
+			if err := json.Unmarshal(raw, &row); err != nil {
+				return row, false, err
+			}
+			return row, true, nil
 		}
-		var row deletedConversation
-		if err := json.Unmarshal(raw, &row); err != nil {
-			return row, false, err
-		}
-		return row, true, nil
+		return deletedConversation{}, false, nil
 	}
 	b := &s.deletedConversations
 	b.mu.Lock()
@@ -80,8 +160,12 @@ func (s *Service) deletedConversation(ctx context.Context, machine, id string) (
 	if len(b.rows) == 0 {
 		return deletedConversation{}, false, nil
 	}
-	row, ok := b.rows[runtimeListID(machine, id)]
-	return row, ok, nil
+	for _, alias := range s.physicalAliases(machine) {
+		if row, ok := lookupRuntimeListID(b.rows, alias, id); ok {
+			return row, true, nil
+		}
+	}
+	return deletedConversation{}, false, nil
 }
 
 func (s *Service) conversationAvailable(ctx context.Context, machine, id string) error {
@@ -108,10 +192,8 @@ func (s *Service) deletedRow(ctx context.Context, row deletedConversation) proto
 }
 
 func (s *Service) deletionRows(ctx context.Context, machine string, list []proto.Session, complete bool) []proto.Session {
-	b := &s.deletedConversations
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if err := s.loadDeletedConversations(ctx); err != nil {
+	rows, err := s.deletedConversationsSnapshot(ctx)
+	if err != nil {
 		// Do not expose assistant history while its deletion ledger is unreadable.
 		kept := list[:0]
 		for _, row := range list {
@@ -121,26 +203,75 @@ func (s *Service) deletionRows(ctx context.Context, machine string, list []proto
 		}
 		return kept
 	}
-	if len(b.rows) == 0 {
+	if len(rows) == 0 {
 		return list
 	}
-	seen := map[string]bool{}
+	aliases := s.physicalAliases(machine)
+	var seen map[string]bool
+	w := 0
 	for i := range list {
-		if row, ok := b.rows[runtimeListID(machine, list[i].SessionID)]; ok {
-			list[i] = s.deletedRow(ctx, row)
-			seen[row.ID] = true
+		sid := list[i].SessionID
+		var (
+			row     deletedConversation
+			deleted bool
+		)
+		for _, alias := range aliases {
+			if r, ok := lookupRuntimeListID(rows, alias, sid); ok {
+				r.Machine = machine
+				row, deleted = r, true
+				break
+			}
 		}
+		if deleted {
+			if row.Hidden {
+				continue
+			}
+			list[w] = s.deletedRow(ctx, row)
+			if complete {
+				if seen == nil {
+					seen = map[string]bool{}
+				}
+				seen[row.ID] = true
+			}
+			w++
+			continue
+		}
+		if w != i {
+			list[w] = list[i]
+		}
+		w++
 	}
+	list = list[:w]
 	if complete {
 		var missing []deletedConversation
-		for _, row := range b.rows {
-			if row.Machine == machine && !seen[row.ID] {
+		d := s.physicalDevices()
+		var canonical string
+		if d != nil && machine != "" {
+			canonical = d.Canonical(machine)
+		}
+		for _, row := range rows {
+			if seen[row.ID] || row.Hidden || row.Machine == "" || machine == "" {
+				continue
+			}
+			same := row.Machine == machine
+			if !same && d != nil {
+				same = d.Canonical(row.Machine) == canonical
+			}
+			if same {
+				row.Machine = machine
+				if seen == nil {
+					seen = map[string]bool{}
+				}
+				seen[row.ID] = true
 				missing = append(missing, row)
 			}
 		}
-		sort.Slice(missing, func(i, j int) bool { return missing[i].ID < missing[j].ID })
-		for _, row := range missing {
-			list = append(list, s.deletedRow(ctx, row))
+		if len(missing) > 0 {
+			sort.Slice(missing, func(i, j int) bool { return missing[i].ID < missing[j].ID })
+			list = slices.Grow(list, len(missing))
+			for _, row := range missing {
+				list = append(list, s.deletedRow(ctx, row))
+			}
 		}
 	}
 	return list
@@ -161,14 +292,22 @@ func (s *Service) deleteConversation(ctx context.Context, machine, id string) er
 	if s.devs != nil {
 		machine = s.devs.Canonical(machine)
 	}
-	if _, ok, err := s.deletedConversation(ctx, machine, id); err != nil {
+	if row, ok, err := s.deletedConversation(ctx, machine, id); err != nil {
 		return err
 	} else if ok {
+		if _, durable := s.store().(durableConversationDeletions); durable {
+			s.refreshDurableConversationDeletion(ctx, machine, id, row)
+		}
 		return s.finishDeletedConversation(ctx, machine, id)
 	}
 	cfg := s.settings(ctx)
 	if cfg.Main == id || s.isBackground(ctx, id) {
 		return &rpc.Error{Code: "conversation_protected", Message: i18n.T(s.lang(ctx), "assistant-conversation_delete.protected")}
+	}
+	if slices.Contains(cfg.Leaders, id) {
+		// A current direction's lead conversation (#11392): unpinning it (…/end) ends the direction, after which it
+		// deletes as any other conversation.
+		return &rpc.Error{Code: "conversation_protected", Message: i18n.T(s.lang(ctx), "assistant-conversation_delete.lead_protected")}
 	}
 	c, found := s.session(ctx, machine, id)
 	if !found || !c.Assistant {
@@ -212,8 +351,17 @@ func (s *Service) deleteConversation(ctx context.Context, machine, id string) er
 		if err != nil {
 			return err
 		}
+		kept := s.conversationKeptPages(ctx, machine, id)
+		// The deletion's transaction moves the pages it kept to Recently removed (db.RemoveConversationAssistantPagesTx).
 		if err := durable.PutConversationDeletion(ctx, machine, id, raw); err != nil {
 			return err
+		}
+		s.refreshDurableConversationDeletion(ctx, machine, id, row)
+		for i, page := range kept {
+			if i == 0 {
+				s.pagesListChanged(ctx)
+			}
+			s.pageChanged(page, pageContent)
 		}
 		return s.finishDeletedConversation(ctx, machine, id)
 	}
@@ -232,7 +380,7 @@ func (s *Service) deleteConversation(ctx context.Context, machine, id string) er
 		b.mu.Unlock()
 		return err
 	}
-	b.rows = next
+	b.rows, b.loaded, b.loadedAt = next, true, b.clock()
 	b.mu.Unlock()
 	return s.finishDeletedConversation(ctx, machine, id)
 }
@@ -332,7 +480,14 @@ func (s *Service) writeConversationJSON(ctx context.Context, w http.ResponseWrit
 }
 
 func conversationWrite(method string) bool {
-	return method == "assistant.send" || method == "session.send" || method == "session.start" || method == "session.resume" || method == "session.fork" || method == "session.rewind"
+	if a2aDeliveryMethod(method) {
+		return true
+	}
+	switch method {
+	case "assistant.send", "session.send", DeviceSessionSendOnce, "session.start", "session.resume", "session.fork", "session.rewind", assistantwire.DeviceAssistantAnswerAgain:
+		return true
+	}
+	return false
 }
 
 // Check every referenced identity: a resume may name both a new session id and

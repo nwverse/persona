@@ -10,7 +10,7 @@
 // effort and speed only. Loaded with the panel, not with the composer.
 import { t } from "../i18n";
 import { agentId, agentName, providerAgent } from "./agent-kind";
-import { ALL_EFFORTS, defaultModel, launcherAgent, modelName, typedModelOffered, type AgentModel, type LauncherModels } from "./launcher-models";
+import { ALL_EFFORTS, defaultModel, effortVariantBase, launcherAgent, modelName, typedModelOffered, type AgentModel, type LauncherModels } from "./launcher-models";
 import { launcherBlock } from "./launcher-health";
 import { validModelId } from "./model-id";
 import { cleanSetup, type PanelConfig, type PanelModel, type PanelProvider, type PanelState } from "./model-panel";
@@ -38,7 +38,7 @@ function panelModel(m: AgentModel, engine: string, current: boolean, s: Session,
   if (m.description) out.description = m.description;
   if (m.resolved) out.resolved = m.resolved;
   if (m.aliases?.length) out.aliases = m.aliases;
-  if (m.default_effort && (!current || s.effort)) out.defaultEffort = m.default_effort;
+  if (m.default_effort && (!current || s.effort || effortVariantBase(m.id, m.default_effort))) out.defaultEffort = m.default_effort;
   if (m.custom) out.custom = true;
   if (m.price) out.price = m.price;
   if (current && engine === "codex" && hasFast(s)) out.fast = true;
@@ -69,6 +69,8 @@ export interface PanelOptions {
   engineSwitch?: boolean;
   /** The engine each launcher runs, as the panel's providers say (a pick from a list not read yet still knows it). */
   engineOf?: (launcher: string) => string | undefined;
+  /** Display-only advertised model for a newly launched session before `s.model` arrives; never used by `pickPlan`. */
+  displayModel?: string;
 }
 
 /** Whether `s` may move to another launcher of its engine: on a hub that does it, a Claude Code Agent whose model the
@@ -76,12 +78,16 @@ export interface PanelOptions {
  *  `switch_unsupported`, #8142). */
 export const switchesLauncher = (s: Session, o: PanelOptions): boolean => Boolean(o.switching) && !s.source_kind && sessionEngine(s) === "claude" && canSwitchModel(s);
 
-/** The engine a conversation moves to from `engine` ("" for an engine that doesn't switch). */
+const SWITCH_ENGINES = new Set(["claude", "codex", "agy"]);
+
+/** The engine a conversation moves to from `engine` ("" for an engine that doesn't switch). Kept for single-target callers. */
 export const otherEngine = (engine: string): string => (engine === "claude" ? "codex" : engine === "codex" ? "claude" : "");
 
-/** Whether `s` may move to a launcher of `engine`, the other engine, with its next message (#5054). */
-export const switchesEngine = (s: Session, engine: string, o: PanelOptions): boolean =>
-  Boolean(o.engineSwitch) && engine !== "" && engine === otherEngine(sessionEngine(s)) && engineSwitchable(s);
+/** Whether `s` may move to a launcher of `engine`, another engine, with its next message (#5054). */
+export const switchesEngine = (s: Session, engine: string, o: PanelOptions): boolean => {
+  const from = sessionEngine(s);
+  return Boolean(o.engineSwitch) && engine !== "" && engine !== from && SWITCH_ENGINES.has(from) && SWITCH_ENGINES.has(engine) && engineSwitchable(s);
+};
 
 /** The panel's providers and state for `s`: `launchers` the computer's (undefined before they are read), `listOf` what
  *  was read for each. The session's own launcher is always there, at its place in the list or first. */
@@ -93,7 +99,8 @@ export function sessionPanel(s: Session, launchers: Launcher[] | undefined, list
   const all = launchers ?? [];
   const names = all.some((l) => l.name === own) ? all.map((l) => l.name) : [own, ...all.map((l) => l.name)];
   const ownList = listOf(own).list;
-  const row = currentModelRow(ownList?.models ?? [], s.model);
+  const shownModel = s.model || o.displayModel;
+  const row = currentModelRow(ownList?.models ?? [], shownModel);
 
   const providers = names.map((name): PanelProvider => {
     const e = listOf(name);
@@ -113,13 +120,13 @@ export function sessionPanel(s: Session, launchers: Launcher[] | undefined, list
       else p.loading = true;
       // the model it runs stays there while its list is read or couldn't be: its flyout (effort, Fast, ultracode) works
       // as the old popover's tabs did with no list
-      if (mine && s.model) p.models = [panelModel({ id: s.model, name: modelLabel(s.model) }, kind, true, s, false)];
+      if (mine && shownModel) p.models = [panelModel({ id: shownModel, name: modelLabel(shownModel) }, kind, true, s, false)];
     } else {
       let models = (e.list?.models ?? []).map((m) => panelModel(m, kind, mine && m === row, s));
       // a launcher that fixes its own --model takes no model with a switch: its default entry, only
       if (other && e.list?.locked) models = models.filter((m) => m.id === defaultModel(e.list?.models ?? [])?.id);
       // the model it runs, when the list doesn't name it (a list that couldn't be read, an older hub, a model it lacks)
-      if (mine && !row && s.model) models.push(panelModel({ id: s.model, name: modelLabel(s.model) }, kind, true, s, false));
+      if (mine && !row && shownModel) models.push(panelModel({ id: shownModel, name: modelLabel(shownModel) }, kind, true, s, false));
       p.models = models;
     }
     if (other) {
@@ -135,7 +142,7 @@ export function sessionPanel(s: Session, launchers: Launcher[] | undefined, list
     return p;
   });
 
-  const model = row?.id ?? s.model;
+  const model = row?.id ?? shownModel;
   const state: PanelState = {
     current: model ? cleanSetup({ provider: own, model, effort: s.effort, fast: s.service_tier === "priority" }) : null,
     // the models that switch at once: the session's own launcher's
@@ -174,8 +181,8 @@ export function pickPlan(s: Session, config: PanelConfig, listOf: (launcher: str
   const steps: ModeStep[] = [];
   if (s.pending_switch?.launcher && s.pending_switch.launcher !== own) steps.push({ launcher: own, from: own });
   if (!same) steps.push({ model: config.model });
-  const effort = config.effort || (sessionEngine(s) === "agy" ? row?.default_effort : undefined);
-  if (effort && effort !== s.effort) steps.push({ effort });
+  const effortAfterModel = (!same && sessionEngine(s) === "agy" ? row?.default_effort : undefined) || s.effort;
+  if (config.effort && config.effort !== effortAfterModel) steps.push({ effort: config.effort });
   // a saved setup without Fast is Standard (cleanSetup drops `fast: false`)
   const speed = speedStep(s, Boolean(config.fast));
   if (speed) steps.push(speed);

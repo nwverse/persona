@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -70,6 +71,38 @@ func TestHerdrCoreListsClaudeTerminals(t *testing.T) {
 	}
 }
 
+// A terminal another terminal started is a side session under the session of its nearest listed ancestor terminal
+// (terminal.parent): it keeps its own state, and the manager draws it under that row.
+func TestHerdrCoreLinksStartedTerminals(t *testing.T) {
+	n, _, hc, home := hcNode(t)
+	for _, id := range []string{sidA, sidB, sidC} {
+		writeTranscript(t, home, hcCwd, id, time.Now().Add(-time.Minute), `{"type":"custom-title","customTitle":"x"}`)
+	}
+	writeClaudePID(t, home, 4242, sidA)
+	writeClaudePID(t, home, 4343, sidB)
+	writeClaudePID(t, home, 4444, sidC)
+	lead := hcTerminal("t1", "claude-code", "idle", 4242, "claude", hcCwd, "", "", "")
+	shell := hcTerminal("t2", "", "", 5000, "zsh", hcCwd, "", "", "")
+	shell["parent"] = "t1"
+	child := hcTerminal("t3", "claude-code", "working", 4343, "claude", hcCwd, "", "", "")
+	child["parent"] = "t2"
+	grandchild := hcTerminal("t4", "claude-code", "done", 4444, "claude", hcCwd, "", "", "")
+	grandchild["parent"] = "t3"
+	hc.setTerminals(lead, shell, child, grandchild)
+
+	m := byID(listSessions(t, n))
+	leadRow, childRow, grandchildRow := m[sidA], m[sidB], m[sidC]
+	if got := childRow.ParentAgentID(); got != sidA {
+		t.Errorf("child parent_agent_id = %q, want %q", got, sidA)
+	}
+	if got := grandchildRow.ParentAgentID(); got != sidB {
+		t.Errorf("grandchild parent_agent_id = %q, want %q", got, sidB)
+	}
+	if got := leadRow.ParentAgentID(); got != "" {
+		t.Errorf("lead parent_agent_id = %q", got)
+	}
+}
+
 func TestHerdrCoreStatusAndAgent(t *testing.T) {
 	cases := []struct {
 		app, state, fg string // fg: the foreground's argv[0], "" for none
@@ -81,9 +114,13 @@ func TestHerdrCoreStatusAndAgent(t *testing.T) {
 		{"claude-code", "idle", "claude", "claude", proto.StatusIdle},
 		{"claude-code", "error", "claude", "claude", proto.StatusUnknown},
 		{"codex", "working", "codex", "codex", proto.StatusWorking},
+		{"traex", "working", "traex", traexAgent, proto.StatusWorking},
+		{"traecli", "done", "traecli", traexAgent, proto.StatusDone},
+		{"codex", "done", "traecli", traexAgent, proto.StatusDone},
 		{"grok-build", "idle", "grok", "", ""},            // not a program the node drives: left for a compatible CLI
 		{"", "", "claude", "claude", proto.StatusUnknown}, // has not reported yet
 		{"", "", "/opt/bin/codex", "codex", proto.StatusUnknown},
+		{"", "", "/opt/bin/traecli", traexAgent, proto.StatusUnknown},
 		{"", "", "zsh", "", ""},
 		{"claude-code", "done", "zsh", "", ""},      // claude exited: its last state stays on the terminal
 		{"claude-code", "done", "-zsh", "", ""},     // a login shell
@@ -115,10 +152,15 @@ func TestHerdrCoreStatusAndAgent(t *testing.T) {
 // hcSession is a node with one claude session in herdr-core terminal t1.
 func hcSession(t *testing.T) (*Node, *fakeHC) {
 	t.Helper()
+	return hcSessionWithPID(t, 4242)
+}
+
+func hcSessionWithPID(t *testing.T, pid int) (*Node, *fakeHC) {
+	t.Helper()
 	n, _, hc, home := hcNode(t)
 	writeTranscript(t, home, hcCwd, sidA, time.Now().Add(-time.Minute), `{"type":"custom-title","customTitle":"x"}`)
-	writeClaudePID(t, home, 4242, sidA)
-	hc.setTerminals(hcTerminal("t1", "claude-code", "idle", 4242, "claude", hcCwd, "", "", ""))
+	writeClaudePID(t, home, pid, sidA)
+	hc.setTerminals(hcTerminal("t1", "claude-code", "idle", pid, "claude", hcCwd, "", "", ""))
 	if m := byID(listSessions(t, n)); m[sidA].PaneID != "herdr-core:t1" {
 		t.Fatalf("not listed: %v", m)
 	}
@@ -186,19 +228,44 @@ func TestHerdrCoreSendRefusedByHerdrCore(t *testing.T) {
 // The claude exited and the terminal is back at its shell, its last state still on it: the shell does not get the
 // message as a command — refused before anything is typed.
 func TestHerdrCoreSendAfterTheAgentExited(t *testing.T) {
-	n, hc := hcSession(t)
-	exited := hcTerminal("t1", "claude-code", "done", 4242, "claude", hcCwd, "", "", "")
-	exited["foreground"] = map[string]any{"pid": 4241, "name": "zsh", "argv": []string{"-zsh"}, "cwd": hcCwd}
+	pid, exit := idleTerminalTestProcess(t)
+	n, hc := hcSessionWithPID(t, pid)
+	exit()
+	exited := hcTerminal("t1", "claude-code", "done", pid, "claude", hcCwd, "", "", "")
+	exited["foreground"] = map[string]any{"pid": pid - 1, "name": "zsh", "argv": []string{"-zsh"}, "cwd": hcCwd}
 	hc.setTerminals(exited)
 	_, err := request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "rm -rf build"})
 	if code, _ := refusalOf(t, err); code != "not_delivered" {
 		t.Fatalf("send to an exited agent: %v", err)
+	}
+	if _, data := refusalOf(t, err); data["reason"] != "terminal_finished" {
+		t.Fatalf("send to an exited agent data = %v, want reason=terminal_finished", data)
 	}
 	if tr := hc.trace("terminal.send"); len(tr) != 0 {
 		t.Errorf("typed: %v", tr)
 	}
 	if m := byID(listSessions(t, n)); m[sidA].PaneID != "" {
 		t.Errorf("an exited agent still listed live: %+v", m[sidA])
+	}
+
+	// A live terminal running an unrecognized foreground app (not exited/shell) is still refused with delivered=none,
+	// but uses the generic terminal_refused reason rather than claiming the terminal ended.
+	n2, hc2 := hcSession(t)
+	other := hcTerminal("t1", "grok-build", "idle", 5000, "grok", hcCwd, "", "", "")
+	hc2.setTerminals(other)
+	_, err = request(t, n2, "session.send", map[string]any{"session_id": sidA, "text": "hello"})
+	if code, data := refusalOf(t, err); code != "not_delivered" || data["delivered"] != "none" || data["reason"] != "terminal_refused" {
+		t.Fatalf("send to live unrecognized foreground: code=%q data=%v", code, data)
+	}
+
+	// A live terminal with missing foreground metadata must also stay terminal_refused (not terminal_finished).
+	n3, hc3 := hcSession(t)
+	missingFg := hcTerminal("t1", "claude-code", "idle", 5000, "claude", hcCwd, "", "", "")
+	delete(missingFg, "foreground")
+	hc3.setTerminals(missingFg)
+	_, err = request(t, n3, "session.send", map[string]any{"session_id": sidA, "text": "hello"})
+	if code, data := refusalOf(t, err); code != "not_delivered" || data["delivered"] != "none" || data["reason"] != "terminal_refused" {
+		t.Fatalf("send to live missing foreground: code=%q data=%v", code, data)
 	}
 }
 
@@ -231,6 +298,91 @@ func TestHerdrCoreKeysAndText(t *testing.T) {
 			t.Errorf("%v pressed %v", params, tr)
 		}
 	}
+}
+
+// A herdr-core work-agent session (agy) converts herdr-core delivery refusals (blocked, unavailable, finished,
+// status_mismatch) into structured dialog_open / not_delivered refusals with delivered=none instead of uncoded 502s,
+// and never passes force on ordinary session.send calls.
+func TestHerdrCoreWorkAgentSendRefusals(t *testing.T) {
+	n, _, hc, _ := hcNode(t)
+	blocked := hcTerminal("t13", "antigravity", "blocked", 5151, "agy", hcCwd, "", "", "")
+	hc.setTerminals(blocked)
+	if err := n.refreshHosts(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	id := otherSession(host.Agent{Agent: agyAgent, PaneID: "herdr-core:t13"})
+	if _, ok := n.agent(id); !ok {
+		t.Fatalf("agy herdr-core session %q not listed", id)
+	}
+
+	for _, tc := range []struct {
+		name       string
+		kind       string
+		screen     string
+		wantCode   string
+		wantReason string
+		wantDialog string
+	}{
+		{name: "blocked bare screen", kind: "blocked", screen: " Antigravity CLI\n", wantCode: "dialog_open"},
+		{name: "blocked with dialog", kind: "blocked", screen: "Allow command?\n❯ 1. Yes\n  2. No\n\nEsc to cancel\n", wantCode: "dialog_open", wantDialog: "Allow command?"},
+		{name: "unavailable", kind: "unavailable", wantCode: "not_delivered", wantReason: "terminal_refused"},
+		{name: "finished", kind: "finished", wantCode: "not_delivered", wantReason: "terminal_finished"},
+		{name: "status_mismatch", kind: "status_mismatch", wantCode: "not_delivered", wantReason: "terminal_refused"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			hc.reset()
+			hc.setScreen("t13", tc.screen)
+			var sawForce any
+			hc.handle("terminal.send", func(p map[string]any) any {
+				sawForce = p["force"]
+				return hcFail{tc.kind}
+			})
+			_, err := request(t, n, "session.send", map[string]any{"session_id": id, "text": "hello"})
+			code, data := refusalOf(t, err)
+			if code != tc.wantCode || data["delivered"] != "none" {
+				t.Fatalf("%s: code=%q data=%v, want code=%q delivered=none", tc.name, code, data, tc.wantCode)
+			}
+			if tc.wantReason != "" && data["reason"] != tc.wantReason {
+				t.Fatalf("%s: data=%v, want reason=%q", tc.name, data, tc.wantReason)
+			}
+			if sawForce != nil {
+				t.Fatalf("ordinary session.send must never pass force, got %v", sawForce)
+			}
+			if tc.wantDialog != "" {
+				if data["dialog"] != tc.wantDialog || data["notice"] != false {
+					t.Fatalf("dialog data = %v, want dialog=%q notice=false", data, tc.wantDialog)
+				}
+			} else if _, has := data["dialog"]; has {
+				t.Fatalf("unexpected dialog headline in data: %v", data)
+			}
+		})
+	}
+
+	// After terminal.send confirms a blocked refusal, workAgentCalls never issues a post-failure terminal.read
+	// (reusing only the screen already captured before sending) so refusal latency cannot turn into a caller timeout.
+	t.Run("blocked refusal does not issue post-send screen read", func(t *testing.T) {
+		var afterSend atomic.Bool
+		postReads := 0
+		hc.reset()
+		hc.handle("terminal.send", func(map[string]any) any {
+			afterSend.Store(true)
+			return hcFail{"blocked"}
+		})
+		hc.handle("terminal.read", func(map[string]any) any {
+			if afterSend.Load() {
+				postReads++
+			}
+			return map[string]any{"text": "Allow command?\n❯ 1. Yes\n  2. No\n\nEsc to cancel\n", "complete": true, "how": "screen"}
+		})
+		_, err := request(t, n, "session.send", map[string]any{"session_id": id, "text": "hello"})
+		code, data := refusalOf(t, err)
+		if code != "dialog_open" || data["delivered"] != "none" || data["dialog"] != "Allow command?" {
+			t.Fatalf("code=%q data=%v, want dialog_open delivered=none dialog=Allow command?", code, data)
+		}
+		if postReads != 0 {
+			t.Fatalf("post-send terminal.read called %d times, want 0", postReads)
+		}
+	})
 }
 
 // A colored screen read gets the plain rows (CRLF-ended like colored ones); "recent" reads the screen too (asking for
@@ -391,6 +543,50 @@ func TestHerdrCoreSkipsANestedHerdr(t *testing.T) {
 	}
 }
 
+// herdr-core opens Windows PowerShell by default on Windows: its terminal is a shell to start in and to type into.
+func TestHerdrCoreWindowsPowerShellIsAShell(t *testing.T) {
+	for _, name := range []string{"powershell.exe", `C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe`, "pwsh.exe", "PowerShell.EXE", "zsh", "-bash"} {
+		if !hcShell(name) {
+			t.Errorf("hcShell(%q) = false", name)
+		}
+	}
+	for _, name := range []string{"claude.exe", "node", "cmd.exe", ""} {
+		if hcShell(name) {
+			t.Errorf("hcShell(%q) = true", name)
+		}
+	}
+	fg := herdrcore.Foreground{Pid: 1, Name: "powershell.exe", Argv: []string{`C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe`, "-NoExit"}}
+	if !isShell(&fg) {
+		t.Errorf("isShell(%+v) = false", fg)
+	}
+}
+
+// On Windows herdr-core names the first program below the shell as in front: a start's claude runs three bash deep.
+// The nearest agent below it is found in the process table, and its terminal is claude's (#11214).
+func TestHerdrCoreAgentBelowTheReportedForeground(t *testing.T) {
+	procs := map[int]proc{
+		10: {cmd: "powershell.exe"},
+		20: {ppid: 10, cmd: "bash.exe"}, 21: {ppid: 20, cmd: "bash.exe"}, 22: {ppid: 21, cmd: "bash.exe"},
+		30: {ppid: 22, cmd: "claude.exe"}, 31: {ppid: 30, cmd: "claude.exe"}, 32: {ppid: 30, cmd: "bash.exe"},
+		40: {ppid: 10, cmd: "node.exe"},
+	}
+	children := procChildren(procs)
+	if got := agentBelow(procs, children, 20); got != 30 {
+		t.Errorf("agentBelow(20) = %d, want 30 (the nearest claude)", got)
+	}
+	if got := agentBelow(procs, children, 40); got != 0 {
+		t.Errorf("agentBelow(40) = %d, want none", got)
+	}
+	cycle := map[int]proc{1: {ppid: 2, cmd: "bash.exe"}, 2: {ppid: 1, cmd: "bash.exe"}}
+	if got := agentBelow(cycle, procChildren(cycle), 1); got != 0 {
+		t.Errorf("agentBelow in a cycle = %d", got)
+	}
+	tm := herdrcore.Terminal{Address: "t3", State: "live", Foreground: &herdrcore.Foreground{Pid: 30, Name: "claude.exe", Argv: []string{"claude.exe"}}}
+	if a := fromTerminal(tm); a.Agent != "claude" {
+		t.Errorf("claude.exe in front: agent %q", a.Agent)
+	}
+}
+
 func TestHookPane(t *testing.T) {
 	env := func(kv ...string) func(string) string {
 		return func(k string) string {
@@ -410,6 +606,8 @@ func TestHookPane(t *testing.T) {
 		{env("HC_TERMINAL_ID", "t7"), "herdr-core:t7"},
 		{env("TERN_PANE", "42"), "tern:42"},
 		{env("HERDR_PANE_ID", "w1:p2", "TERN_PANE", "42"), "w1:p2"}, // herdr's client in a Tern tab: the agent is herdr's
+		{env("REX_BLOCK", "block:b1"), "rex:block:b1"},
+		{env("HERDR_PANE_ID", "w1:p2", "REX_BLOCK", "block:b1"), "w1:p2"}, // herdr's client in a Rex pane: the agent is herdr's
 		{env(), ""},
 	} {
 		if got := nodeclient.HookPane(c.env); got != c.want {

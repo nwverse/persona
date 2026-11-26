@@ -2,11 +2,13 @@ package assistant
 
 import (
 	"context"
-	"github.com/nwverse/persona/server/internal/compat"
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
@@ -24,6 +26,17 @@ func claudeMDHub(devices ...Device) *fakeHub {
 	return f
 }
 
+// Shared platform instructions keep ordinary work with its planning lead and escalate only owner decisions.
+func TestAssistantInstructionsKeepTaskReviewWithItsPlanningLead(t *testing.T) {
+	f := claudeMDHub(Device{ID: "server", Name: "Server", Kind: "local"})
+	s := newTestService(t, f)
+	s.kb.dir = "<hub>/data"
+	text := s.claudeMD(context.Background(), "server", false)
+	if strings.Contains(text, "新任务统一由主对话督办") || !strings.Contains(text, "主管派的任务归该主管") || !strings.Contains(text, "主对话不直接指挥主管的 Agent") {
+		t.Fatal("the platform instructions disagree with direction ownership")
+	}
+}
+
 // The CLAUDE.md the assistant writes into its directory from what the hub tells it (claudeMD, prepare).
 func TestGoldenAssistantClaudeMD(t *testing.T) {
 	ctx := context.Background()
@@ -32,6 +45,9 @@ func TestGoldenAssistantClaudeMD(t *testing.T) {
 	f.hello.Owner = "示例用户"
 	f.hello.OwnerNotes = "  我在示例公司做后端。\n常用 skills：demo-skill。  "
 	f.hello.KB = &KBSettings{ExtraDirs: []string{"/home/me/notes", "/home/me/facts"}} // manager.json's kb section
+	f.answerApp(assistantwire.AppPhone, assistantwire.PhoneTools, func(json.RawMessage) (any, error) {
+		return map[string]any{"tools": []map[string]string{{"name": "phone_calendar_events"}, {"name": "phone_reminders_create"}}}, nil
+	})
 	s := newTestService(t, f)
 	s.kb.dir = "<hub>/data"
 	golden(t, "assistant_claude_md.full", s.claudeMD(ctx, "server", false))
@@ -48,8 +64,12 @@ func TestGoldenAssistantClaudeMD(t *testing.T) {
 	if _, err := s.prepare(ctx, "server"); err != nil {
 		t.Fatal(err)
 	}
-	if got := bare.prepared[0]["claude_md"]; got != s.claudeMD(ctx, "server", true) || bare.prepared[0]["dir"] != compat.StateDir+"/assistant" {
-		t.Fatalf("assistant.prepare: %v", bare.prepared[0])
+	if got := bare.prepared[0]["views_guide_md"]; got != s.claudeMD(ctx, "server", true) {
+		t.Fatalf("assistant.prepare compact instructions: %v", bare.prepared[0])
+	}
+	full, _ := bare.prepared[0]["claude_md"].(string)
+	if !strings.Contains(full, `"title":"选择方案"`) || bare.prepared[0]["dir"] != compat.StateDir+"/assistant" {
+		t.Fatalf("assistant.prepare must retain the complete fallback for older nodes: %v", bare.prepared[0])
 	}
 }
 
@@ -57,24 +77,33 @@ func TestGoldenAssistantViewRepair(t *testing.T) {
 	golden(t, "assistant_view_repair", prompts.RenderAssistantViewRepair(prompts.AssistantViewRepair{Errors: []string{"persona-view block 0: fallback: include a plain text summary"}}))
 }
 
-func TestAssistantRichViewPromptExamplesAreValid(t *testing.T) {
+func TestAssistantRichViewPromptKeepsCoreGuidance(t *testing.T) {
 	text := prompts.RenderAssistantClaudeMD(prompts.AssistantClaudeMD{})
-	blocks := wire.AssistantViewBlocks(text)
-	if len(blocks) != 2 {
-		t.Fatalf("prompt has %d examples, want 2", len(blocks))
+	if blocks := wire.AssistantViewBlocks(text); len(blocks) != 0 {
+		t.Fatalf("shared prompt still carries %d full view examples; want them in the on-demand skill", len(blocks))
 	}
-	for _, block := range blocks {
-		if _, err := block.Parse(); err != nil {
-			t.Fatalf("prompt teaches an invalid view: %v", err)
-		}
-	}
-	for _, want := range []string{"view_show", "view_update", "view_get", "submit=true", "ask_user", "fallback", "自动运行"} {
+	for _, want := range []string{"persona-views", "persona-view", "view_show", "view_update", "view_get", "ask_user", "fallback", "HTML", "密码"} {
 		if !strings.Contains(text, want) {
-			t.Fatalf("missing rich view guidance: %s", want)
+			t.Fatalf("missing core rich view guidance: %s", want)
 		}
 	}
-	if strings.Contains(text, "助手的卡片点不了") {
-		t.Fatal("interactive guidance still teaches read-only cards")
+	for _, moved := range []string{"getBoundingClientRect", "stat_grid 把多项放进 stats 数组", `"title":"选择方案"`} {
+		if strings.Contains(text, moved) {
+			t.Fatalf("detailed view procedure remains inline: %s", moved)
+		}
+	}
+	full := prompts.RenderAssistantClaudeMD(prompts.AssistantClaudeMD{FullViewGuide: true})
+	blocks := wire.AssistantViewBlocks(full)
+	if len(blocks) != 1 {
+		t.Fatalf("legacy fallback has %d complete examples, want 1", len(blocks))
+	}
+	if _, err := blocks[0].Parse(); err != nil {
+		t.Fatalf("legacy fallback teaches an invalid view: %v", err)
+	}
+	for _, want := range []string{"getBoundingClientRect", "stat_grid 把多项放进 stats 数组", "persona.reply", "persona.open"} {
+		if !strings.Contains(full, want) {
+			t.Errorf("legacy fallback lost %q", want)
+		}
 	}
 }
 
@@ -130,22 +159,47 @@ func TestAssistantMachinesFromWhereItRuns(t *testing.T) {
 		}
 		return out
 	}
-	here, ssh, noCommand := "就是你所在的这台机器", "`ssh box-alias '<命令>'`", "不能直接在它上面执行命令"
+	here, ssh, agent := "就是你所在的这台机器", "SSH 别名 `box-alias`，工作交给 Agent", "交给这台电脑上的 Agent"
 	for _, tc := range []struct {
 		at   string
 		want map[string]string
 	}{
-		{"server", map[string]string{"server": here, "box": ssh, "laptop": noCommand}},
-		{"box", map[string]string{"server": noCommand, "box": here, "laptop": noCommand}},
-		{"laptop", map[string]string{"server": noCommand, "box": noCommand, "laptop": here}},
+		{"server", map[string]string{"server": here, "box": ssh, "laptop": agent}},
+		{"box", map[string]string{"server": agent, "box": here, "laptop": agent}},
+		{"laptop", map[string]string{"server": agent, "box": agent, "laptop": here}},
 	} {
 		got := lines(tc.at)
 		for id, want := range tc.want {
 			if !strings.Contains(got[id], want) {
 				t.Errorf("assistant on %s, line for %s = %q, want %q", tc.at, id, got[id], want)
 			}
-			if tc.at != "server" && strings.Contains(got[id], "ssh ") {
-				t.Errorf("assistant on %s is told to ssh: %q", tc.at, got[id])
+			if strings.Contains(got[id], "`ssh ") {
+				t.Errorf("assistant on %s is given an ssh command: %q", tc.at, got[id])
+			}
+		}
+	}
+}
+
+func TestAssistantClaudeMDDelegationBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		locale   string
+		quick    string
+		dispatch string
+		source   string
+	}{
+		{"", "本机跑命令、读文件只限一两次调用", "改代码或多步工作用 `task_plan`", "到源码所在的电脑和目录查"},
+		{"zh-Hans", "本机跑命令、读文件只限一两次调用", "改代码或多步工作用 `task_plan`", "到源码所在的电脑和目录查"},
+		{"en", "only for quick local checks (one or two calls", "Use `task_plan` for code changes", "Use the computer and directory with the source checkout"},
+		{"ja", "手元で 1〜2 回の呼び出しで済む確認に限る", "`task_plan` で Agent に任せる", "ソースのチェックアウト先のコンピュータとディレクトリを指定する"},
+	} {
+		for _, guide := range []bool{false, true} {
+			got := prompts.RenderAssistantClaudeMD(prompts.AssistantClaudeMD{
+				Language: answerLanguage(tc.locale), WorkGuide: guide,
+			})
+			for _, want := range []string{tc.quick, tc.dispatch, "`readonly: true`", tc.source} {
+				if !strings.Contains(got, want) {
+					t.Errorf("locale %q, work guide %t: missing %q", tc.locale, guide, want)
+				}
 			}
 		}
 	}
@@ -163,7 +217,7 @@ func TestGoldenMainHandoff(t *testing.T) {
 }
 
 // The CLAUDE.md asks for the user's language (docs/protocol/i18n.md); zh-Hans, or a hub that says none, keeps it as it was.
-func TestAssistantClaudeMDLanguage(t *testing.T) {
+func TestGoldenAssistantClaudeMDLanguage(t *testing.T) {
 	ctx := context.Background()
 	f := claudeMDHub(Device{ID: "server", Name: "服务器", Kind: "local"})
 	s := newTestService(t, f)
@@ -182,6 +236,9 @@ func TestAssistantClaudeMDLanguage(t *testing.T) {
 		if !strings.Contains(got, want) || strings.Contains(got, "；用中文。") {
 			t.Fatalf("%s: no %q", locale, want)
 		}
+		// The header contains both the response language and the relay acknowledgement rule.
+		header, _, _ := strings.Cut(got, "\n## ")
+		golden(t, "assistant_relay_instructions."+locale, strings.TrimSpace(header))
 	}
 }
 

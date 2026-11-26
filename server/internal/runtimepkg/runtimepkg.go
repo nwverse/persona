@@ -55,7 +55,8 @@ const (
 var Packages = map[string][]string{
 	"persona-dsh-runtime":         {"dsh/package.json", "dsh/lib/*.js", "runtime-sdk/package.json", "runtime-sdk/index.js", "runtime-sdk/lib/*.js"},
 	"persona-pi-runtime":          {"pi/package.json", "pi/index.js", "pi/companion.mjs", "pi/lib/*.js", "runtime-sdk/package.json", "runtime-sdk/index.js", "runtime-sdk/lib/*.js"},
-	"persona-antigravity-runtime": {"antigravity/package.json", "antigravity/companion.mjs", "antigravity/mcp-proxy.mjs", "antigravity/lib/*.js", "runtime-sdk/package.json", "runtime-sdk/index.js", "runtime-sdk/lib/*.js"},
+	"persona-antigravity-runtime": {"antigravity/package.json", "antigravity/companion.mjs", "antigravity/desktop.mjs", "antigravity/mcp-proxy.mjs", "antigravity/media-guard.mjs", "antigravity/lib/*.js", "runtime-sdk/package.json", "runtime-sdk/index.js", "runtime-sdk/lib/*.js"},
+	"persona-opencode-runtime":    {"opencode/package.json", "opencode/index.js", "opencode/companion.mjs", "opencode/lib/*.js", "runtime-sdk/package.json", "runtime-sdk/index.js", "runtime-sdk/lib/*.js"},
 	// The Paseo bridge is not loaded by another program: the node writes it out and runs it (node/paseobridge.go).
 	"persona-paseo-runtime": {"paseo/package.json", "paseo/bridge.mjs", "paseo/lib/*.js", "runtime-sdk/package.json", "runtime-sdk/index.js", "runtime-sdk/lib/*.js"},
 }
@@ -523,7 +524,14 @@ func byDirectory(files []File) []partFiles {
 // the tar entries carry mode 0644, time 0 and no owner; the gzip header (left zero) carries no name and time 0.
 func pack(files []File) ([]byte, error) {
 	sorted := append([]File(nil), files...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Path < sorted[j].Path })
+	// Keep small files and their tar headers together in the gzip window. Paths break ties for reproducibility.
+	sort.Slice(sorted, func(i, j int) bool {
+		a, b := sorted[i], sorted[j]
+		if len(a.Data) != len(b.Data) {
+			return len(a.Data) < len(b.Data)
+		}
+		return a.Path < b.Path
+	})
 	var buf bytes.Buffer
 	zw, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
 	if err != nil {

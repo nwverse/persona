@@ -1,11 +1,12 @@
 import { backgroundWork, taskBackgroundWork, type BackgroundWork } from "./background-work";
 import { cardDismissed, cardFiled, cardSent, startFailure, type FeedItem, type TaskPlan } from "./feed";
 import { cardBucket, taskCardSlots, type TaskCardMetadata } from "./task-cards";
-import { decisionDismissed, reviewState } from "./supervision";
-import { finishedAt, JUST_DONE_MS, supersededFailedStarts, triage } from "./todo-triage";
-import { awaitsReview, dockAgents, makeSessionLookup, openAsk, todoRank, todoStatus, type SessionLookup, type Todo, type TodoStatus } from "./todos";
+import { decisionDismissed, linkedParkInteraction, parkInteractionID, reviewState, withoutParkInteraction } from "./supervision";
+import { finishedAt, hubNeedsYou, JUST_DONE_MS, openByView, supersededFailedStarts, triage } from "./todo-triage";
+import { awaitsReview, dockAgents, heldDelivery, heldForSupervisor, makeSessionLookup, openAsk, taskReviewDecisionAsk, todoRank, todoStatus, withInteractionLookup, type SessionLookup, type Todo, type TodoStatus } from "./todos";
 import { byTime } from "./times";
 import { homeKey } from "./folded-rows";
+import { sameManager } from "./manager-choice";
 import type { Interaction, Session } from "./types";
 
 /**
@@ -63,6 +64,7 @@ export interface AssistantEntriesInput {
   conversation: string;
   /** The main conversation's id: it watches every task and the Agents opened by hand. */
   main?: string;
+  manager?: string;
   todos: Todo[];
   /** Every session, as the lists show them (answered cards applied). */
   sessions: Session[];
@@ -99,18 +101,21 @@ export function entryStatus(todo: Todo, lookup: SessionLookup, plans: Record<str
   return st === "not_started" && startFailure(todo, plans) ? "failed" : st;
 }
 
-/** The task waits for the user's decision: an open ask (a decided one only while the task is open), or its supervisor's
- *  `needs_user` on an open task. A `pending_review` is its supervisor's to do, however long it has waited (#8678). */
+/** The task waits for the user's decision: an open task's ask, or its supervisor's `needs_user` on an open task. A
+ *  finished task never does, whatever ask it still carries: the hub's To-dos triage files it with the finished ones
+ *  and the tray has nothing to answer, so it would keep the badge up for good (#12974). A `pending_review` is its
+ *  supervisor's to do, however long it has waited (#8678). */
 export function taskAwaitsDecision(todo: Todo): boolean {
-  const ask = openAsk(todo);
-  if (ask) return !(todo.done_at && ask.outcome === "decide");
   if (todo.done_at) return false;
-  return todo.supervision?.state === "needs_user";
+  if (openAsk(todo)) return true;
+  return todo.supervision?.state === "needs_user" || todo.supervision?.state === "user_check";
 }
 
 /** The task waits for its supervisor's review and nothing of it runs: an open `pending_review` whose status is a
- *  finished turn (`awaitsReview`). An agent at work again keeps it In progress. */
+ *  finished turn (`awaitsReview`), or an owner hold its Agent reported that its supervisor has not read yet
+ *  (`heldForSupervisor`). An agent at work again keeps it In progress. */
 function underReview(todo: Todo, status: TodoStatus): boolean {
+  if (heldForSupervisor(todo) && (status === "follow_up" || status === "unread" || status === "not_started")) return true; // #13191
   return !todo.done_at && reviewState(todo) === "pending_review" && awaitsReview(todo, status);
 }
 
@@ -129,9 +134,16 @@ export function decisionLaterKey(todo: Todo): string {
 }
 
 export function assistantEntries(input: AssistantEntriesInput): AssistantEntries {
-  const { conversation, main, todos, sessions, interactions, plans, feed } = input;
+  const { conversation, main, feed } = input;
+  const owns = (owner: string | undefined) => !input.manager || sameManager(owner, input.manager);
+  const todos = input.manager ? input.todos.filter((t) => owns(t.manager)) : input.todos;
+  const sessions = input.manager ? input.sessions.filter((s) => owns(s.manager)) : input.sessions;
+  const interactions = input.manager ? input.interactions.filter((ix) => owns(ix.manager)) : input.interactions;
+  const plans = input.manager
+    ? Object.fromEntries(Object.entries(input.plans).filter(([, plan]) => owns(plan.manager)))
+    : input.plans;
   const now = input.now ?? Date.now();
-  const lookup = input.lookup ?? makeSessionLookup(sessions);
+  const lookup = withInteractionLookup(input.lookup ?? makeSessionLookup(sessions), interactions);
   const isMain = !!main && main === conversation;
   const byTodo = new Map(todos.map((todo) => [todo.id, todo]));
   // failed starts whose work finished in a related to-do: closed, as the To-dos page has them (#3713)
@@ -152,7 +164,9 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
   const finished: FinishedItem[] = [];
   const folded = new Set<string>();
   const slots = taskCardSlots(conversation, input.cards ?? [], feed, plans, todos, isMain);
+  const openOf = openByView(todos);
   const activeAgents = (todo: Todo) => (todo.done_at ? [] : (todo.agents ?? []).filter((a) => !a.released_at));
+  const homeAgents = (todo: Todo) => (todo.done_at ? [] : (todo.agents ?? []).filter((a) => !a.released_at || parkInteractionID(todo)));
   // One home per request (docs/design/DESIGN_SYSTEM.md 4.8): an Agent several of these tasks list asks under one of them,
   // the task the hub ties its session to (`todo`), else the first that lists it. The others neither repeat its cards nor
   // wait on the user for them; they are in progress.
@@ -160,7 +174,7 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
   for (const card of slots) {
     const todo = card.todo_id ? byTodo.get(card.todo_id) : undefined;
     if (!todo) continue;
-    for (const a of activeAgents(todo)) {
+    for (const a of homeAgents(todo)) {
       const k = sessionKey(a.machine_id, a.session_id);
       const ids = listing.get(k) ?? [];
       if (!ids.includes(todo.id)) listing.set(k, [...ids, todo.id]);
@@ -172,24 +186,42 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
     return tied && ids?.includes(tied) ? tied : ids?.[0];
   };
   for (const card of slots) {
-    const todo = card.todo_id ? byTodo.get(card.todo_id) : undefined;
+    const sourceTodo = card.todo_id ? byTodo.get(card.todo_id) : undefined;
     // a plan task with no to-do yet is its plan's row (below); a to-do the hub no longer sends is finished
-    if (!todo) continue;
+    if (!sourceTodo) continue;
+    const candidate = linkedParkInteraction(sourceTodo, interactions);
+    const linkedHome = candidate ? homeOf(candidate.machine_id, candidate.session_id) : undefined;
+    const todo = linkedHome !== undefined && linkedHome !== sourceTodo.id ? withoutParkInteraction(sourceTodo) : sourceTodo;
     const active = activeAgents(todo);
     const own = active.filter((a) => homeOf(a.machine_id, a.session_id) === todo.id);
     // what the task waits on the user for is its own Agents' (an Agent another task holds asks there)
     const status = own.length < active.length ? withNeeds(entryStatus(todo, lookup, plans), todoStatus({ ...todo, agents: own }, lookup)) : entryStatus(todo, lookup, plans);
-    const asks = own.flatMap((a) => asksOf.get(sessionKey(a.machine_id, a.session_id)) ?? []);
+    const linked = linkedParkInteraction(todo, interactions);
+    // a card the task's supervising conversation holds (delegating) is that conversation's until it passes it up
+    const routed = own.flatMap((a) => asksOf.get(sessionKey(a.machine_id, a.session_id)) ?? []);
+    const ownAsks = routed.filter((ix) => !ix.delegating);
+    const asks = linked && !ownAsks.some((ix) => ix.id === linked.id) ?
+      [...ownAsks, linked].sort((a, b) => byTime(a.created_at, b.created_at) || a.id.localeCompare(b.id)) : ownAsks;
     const key = `task:${todo.id}`;
     const bucket = cardBucket(card, todo, plans, lookup, now, input.restored?.get(todo.id) ?? 0, superseded.has(todo.id));
     const countsOpen = bucket === "open";
-    // a failed start carries done_at (the hub ends it), yet it is the user's to retry while its bucket says open
-    const waits = status === "failed" ? bucket === "open" : !todo.done_at && WAITS_ON_YOU.has(status);
+    // a failed start carries done_at (the hub ends it), yet it is the user's to retry while its bucket says open; a
+    // supervised task's failed start is its supervisor's to retry or remedy, and an Agent whose every card its
+    // supervisor holds waits on that conversation, not on the user
+    const supervised = !!todo.supervision?.supervisor;
+    const held = routed.length > 0 && ownAsks.length === 0;
+    const waits = status === "failed" ? bucket === "open" && !supervised : !todo.done_at && WAITS_ON_YOU.has(status) && !held;
     const decision = taskAwaitsDecision(todo);
+    const deliveryApproval = heldDelivery(todo)?.unblock === "user";
+    // The global badge skips quiet tasks. Explicit reviews can still ask the owner in the conversation tray.
+    const supervisesHere = todo.supervision?.supervisor === conversation;
+    const quietOwnerAskHere = todo.quiet && (isMain || supervisesHere) && (reviewState(todo) === "user_check" ||
+      taskReviewDecisionAsk(todo) && !input.deferred?.[decisionLaterKey(todo)]);
+    const hub = hubNeedsYou(quietOwnerAskHere ? { ...todo, quiet: false } : todo, openOf);
     if (asks.length) asking.push({ kind: "task", key, todo, status, asks, countsOpen });
-    else if (waits || decision) {
+    else if (hub ?? (waits || decision || deliveryApproval)) {
       // Only the review decision is hidden; a live Agent question above still has its home.
-      if (!(status !== "needs_you" && decision && (decisionDismissed(todo) || input.deferred?.[decisionLaterKey(todo)]))) {
+      if (deliveryApproval || !(status !== "needs_you" && decision && (decisionDismissed(todo) || input.deferred?.[decisionLaterKey(todo)]))) {
         deciding.push({ item: { kind: "task", key, todo, status, asks, countsOpen }, rank: todoRank(todo, status), at: card.at });
       }
     }
@@ -206,26 +238,35 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
       // related to-do finished is history, not news
       const tr = triage(todo, lookup, now, input.restored?.get(todo.id) ?? 0, superseded.has(todo.id));
       const ended = finishedAt(todo, tr);
+      const seenAt = Date.parse(todo.seen_at ?? "");
       if ((tr.section === "just_done" || tr.section === "done") && status !== "failed" && todo.origin && ended > 0 && now - ended < JUST_DONE_MS) {
-        finished.push({ kind: "task", key, card, todo, status, fresh: tr.section === "just_done", at: ended });
+        // Closed and accepted work is already Done on the To-dos page (#5732); Finished has its own unseen marker.
+        finished.push({ kind: "task", key, card, todo, status, fresh: Number.isNaN(seenAt) || seenAt < ended, at: ended });
       }
       continue;
     }
     for (const agent of active) folded.add(sessionKey(agent.machine_id, agent.session_id));
+    if (linked) folded.add(sessionKey(linked.machine_id, linked.session_id));
   }
 
   // Agents that belong to no task, the main conversation's only (dockAgents): asking ones wait on the user, working ones run.
   const agentsAsking: NeedsYouItem[] = [];
   const agentsRunning: RunningItem[] = [];
   for (const { session, state } of dockAgents(sessions.map((s) => lookup(s.machine_id, s.session_id) ?? s), todos, conversation, main)) {
-    if (folded.has(sessionKey(session.machine_id, session.session_id))) continue;
-    const key = `agent:${sessionKey(session.machine_id, session.session_id)}`;
-    if (state === "needs_you") agentsAsking.push({ kind: "agent", key, session, asks: asksOf.get(sessionKey(session.machine_id, session.session_id)) ?? [] });
-    else agentsRunning.push({ kind: "agent", key, session, activity: backgroundWork(session) });
+    const sk = sessionKey(session.machine_id, session.session_id);
+    if (folded.has(sk)) continue;
+    const key = `agent:${sk}`;
+    const agentAsks = asksOf.get(sk) ?? [];
+    const userAsks = agentAsks.filter((ix) => !ix.delegating);
+    if (state === "needs_you" && (agentAsks.length === 0 || userAsks.length > 0)) {
+      agentsAsking.push({ kind: "agent", key, session, asks: userAsks });
+    } else {
+      agentsRunning.push({ kind: "agent", key, session, activity: backgroundWork(session) });
+    }
   }
 
   const plansWaiting: NeedsYouItem[] = Object.values(plans)
-    .filter((plan) => plan.conversation === conversation && plan.state === "open")
+    .filter((plan) => ((isMain && plan.space !== "health") || plan.conversation === conversation) && plan.state === "open")
     .sort((a, b) => byTime(a.created_at, b.created_at) || a.id.localeCompare(b.id))
     .map((plan) => ({ kind: "plan", key: `plan:${plan.id}`, plan }));
   const messages: NeedsYouItem[] = feed.filter((it) => messageWaits(it, input.deferred)).map((item) => ({ kind: "message", key: `message:${item.id}`, item }));
@@ -248,14 +289,25 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
   };
 }
 
-/** Needs you's rows by the conversation supervising them (#4314, docs/assistant/assistant.md "Background rounds"): a
- *  task's `origin`, else `conversation` (agents, plans, message cards, hand-made to-dos). This conversation's group comes
+/** Needs you's rows by conversation (#4314, docs/assistant/assistant.md "Background rounds"): review decisions
+ *  follow their supervisor. Personal verifications are in Main's own group and their supervisor's tray. Rows
+ *  showing a live Agent interaction follow their origin. This conversation's group comes
  *  first, then the others in the order their first row appears; the rows and their order within a group are as given,
  *  so the entry's count is unchanged. One group when every row is this conversation's. */
-export function needsYouBySupervisor(items: readonly NeedsYouItem[], conversation: string): { supervisor: string; items: NeedsYouItem[] }[] {
+export function needsYouBySupervisor(items: readonly NeedsYouItem[], conversation: string, isMain = false): { supervisor: string; items: NeedsYouItem[] }[] {
   const groups = new Map<string, NeedsYouItem[]>([[conversation, []]]);
   for (const item of items) {
-    const supervisor = item.kind === "task" && item.todo.origin ? item.todo.origin : conversation;
+    let supervisor = conversation;
+    if (item.kind === "task") {
+      const { todo, asks } = item;
+      if (!asks.length && reviewState(todo) === "user_check") {
+        supervisor = isMain ? conversation : todo.supervision?.supervisor || todo.origin || conversation;
+      } else {
+        supervisor = (!asks.length && taskReviewDecisionAsk(todo) && todo.supervision?.supervisor) || todo.origin || conversation;
+      }
+    } else if (item.kind === "plan") {
+      supervisor = item.plan.conversation || conversation;
+    }
     const group = groups.get(supervisor);
     if (group) group.push(item);
     else groups.set(supervisor, [item]);

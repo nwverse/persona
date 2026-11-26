@@ -31,6 +31,7 @@ const assistantShellReady = "__PERSONA_ASSISTANT_SHELL_READY__"
 const (
 	assistantEarlyExit  = 30 * time.Second
 	assistantStderrTail = 5
+	assistantGroupSweep = time.Second
 )
 
 // assistantStartWait: how long a send that started a fresh process waits for its first output before answering. A
@@ -245,8 +246,9 @@ func (n *Node) claudeAssistantMCPAndToolsFor(id, cwd string, legacyMCP bool, too
 	// The extensions' MCP servers whose command is on this machine (assistant_mcp.go).
 	var allow, deny []string
 	builtins := assistantBuiltinTools
+	inbox := toolSet == "" && n.assistantOrigin(id) == originInbox
 	if toolSet == "" {
-		if n.assistantOrigin(id) == originInbox {
+		if inbox {
 			builtins = assistantInboxBuiltinTools
 		}
 		var extra map[string]any
@@ -258,6 +260,12 @@ func (n *Node) claudeAssistantMCPAndToolsFor(id, cwd string, legacyMCP bool, too
 		builtins = roundBuiltinTools
 	}
 	mcp, _ := json.Marshal(map[string]any{"mcpServers": compat.MCPRegistrationServers(servers, legacyMCP)})
+	if inbox {
+		// Local Read is investigation. Network, shell and mutation tools keep their normal permission flow. Credential
+		// denies are appended below as individual arguments, after the legacy comma-joined MCP rules.
+		allow = append(allow, "Read")
+		allow = append(allow, n.inboxReadRules()...) // inbox_policy.go
+	}
 	allow = append(allow, healthReportRules(cwd)...) // healthdeny.go
 	toolFlags := []string{"--mcp-config", string(mcp), "--allowedTools", strings.Join(append([]string{n.assistantTools(legacyMCP)}, allow...), ","), "--tools", builtins}
 	if toolSet != "" {
@@ -266,6 +274,9 @@ func (n *Node) claudeAssistantMCPAndToolsFor(id, cwd string, legacyMCP bool, too
 	// One --disallowedTools with a word per rule (it takes several, up to the next flag): a path may hold a comma.
 	if len(deny) > 0 {
 		deny = []string{strings.Join(deny, ",")}
+	}
+	if inbox {
+		deny = append(deny, n.inboxSecretDenyRules()...)
 	}
 	deny = append(deny, n.healthDenyRules(cwd)...) // healthdeny.go
 	if len(deny) > 0 {
@@ -314,14 +325,17 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 	if err := execution.check("claude"); err != nil {
 		return nil, err
 	}
+	resolvedModel, err := n.resolveClaudeModelArg(startCtx, launcher, execution.Model)
+	if err != nil {
+		return nil, err
+	}
 	if err := n.checkExternalAssistant(startCtx, id, launcher, execution, spare); err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(cwd, 0o700); err != nil {
+	if err := n.prepareAssistantCwd(cwd, execution.Strict); err != nil {
 		return nil, err
 	}
 	guest := n.guestOf(id) != nil // a guest, a meeting's room too (assistant_guest.go)
-	var err error
 	execution.ConfigDir, err = n.assistantProfileSelection(context.Background(), id, launcher, execution.ConfigDir, resume)
 	if err != nil {
 		return nil, err
@@ -343,6 +357,13 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 	}
 	// Persona's hooks: a plugin, or in --settings for a claude that loads none (hooksplugin.go).
 	settings, hooks := n.claudeStartSettings(context.Background(), launcher, "assistant", cwd, configPath)
+	if !guest {
+		var sourceErr error
+		settings, sourceErr = n.sourceClaudeSettings(startCtx, launcher, cwd, settings, configPath, sourceSession(assistantModelSource(execution), id))
+		if sourceErr != nil {
+			return nil, sourceErr
+		}
+	}
 	compaction := n.assistantCompactionPolicy(launcher, cwd, settings, execution)
 	if hooks == "" && n.launcherOwnSettings(context.Background(), launcher) != "" {
 		compaction.ownSettings = ""
@@ -352,6 +373,18 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 	if toolSearch.forceOff {
 		n.logger.Printf("assistant %s: starts with every tool loaded: %s refused tool search for model %q", short(id), launcher, execution.Model)
 	}
+	// The node resolves the original upstream before substituting the local endpoint.
+	// A launcher/policy overriding our final settings simply never reaches it.
+	startedCacheProxy := false
+	cacheProxy := n.startCacheWarm(id, launcher, compaction, execution, spare || guest || round.anchor != "")
+	if cacheProxy != nil {
+		compaction.cacheProxyBase = cacheProxy.BaseURL()
+	}
+	defer func() {
+		if cacheProxy != nil && !startedCacheProxy {
+			cacheProxy.Close()
+		}
+	}()
 	var settingsErr error
 	settings, settingsErr = n.assistantCompactionSettings(id, cwd, settings, compaction)
 	if settingsErr != nil {
@@ -362,6 +395,10 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 	}
 	if guest { // none of the owner's Claude Code setup (assistant_guest.go)
 		if settings, settingsErr = n.guestSettingsFile(id, cwd, configPath, settings, hooks == ""); settingsErr != nil {
+			return nil, settingsErr
+		}
+		settings, settingsErr = n.sourceClaudeSettings(startCtx, launcher, cwd, settings, configPath, sourceSession(assistantModelSource(execution), id))
+		if settingsErr != nil {
 			return nil, settingsErr
 		}
 		args = append(args, guestSettingArgs()...)
@@ -377,14 +414,11 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 	// an old hub that still addresses the legacy namespace keeps the alias.
 	legacyMCP := !n.hubSupportsPersonaContracts()
 	args = append(args, n.claudeAssistantMCPAndToolsFor(id, cwd, legacyMCP, round.toolSet)...)
-	model := execution.Model
-	if model == "" && resume && execution.Fingerprint != "" && !guest {
+	model := resolvedModel
+	if execution.Model == "" && resume && execution.Fingerprint != "" && !guest {
 		// The model configuration names none: the launcher's default, not the model the session ran on last
 		// (assistant_resume_model.go). A guest keeps what it started on.
-		model = n.resumeModel(launcher, cwd, settings, configPath)
-	}
-	if model != "" {
-		model = n.claudeModelArg(launcher, model) // no tier alias for a gateway (#10365); "" its default
+		model = n.claudeModelArg(launcher, n.resumeModel(launcher, cwd, settings, configPath))
 	}
 	if model != "" {
 		args = append(args, "--model", model)
@@ -416,13 +450,17 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 	if toolSearch.env != "" {
 		startEnv = append(startEnv, toolSearchEnv+"="+toolSearch.env)
 	}
-	env := identity.Environment(withoutEnv(os.Environ(), []string{toolSearchEnv}), append(startEnv, compaction.env()...)...)
+	env := identity.Environment(withoutEnv(os.Environ(), []string{toolSearchEnv, categoriesEnv}), append(startEnv, compaction.env()...)...)
 	env = n.claudeProcessEnv(env, configDir)
+	if cacheProxy != nil {
+		env = identity.Environment(env, "ANTHROPIC_BASE_URL="+cacheProxy.BaseURL())
+	}
 	gateEnv, releaseGates := n.assistantLarkEnv(cwd, id) // its addresses at the gate proxy go with the process
 	if guest {
 		releaseGates()
 		gateEnv, releaseGates = nil, func() {} // no commands to gate: it has no Bash
 	}
+	categories := categoriesFromEnv(gateEnv)
 	cleanupMCP := func() {}
 	cleanupAdapter := func() {}
 	started := false
@@ -509,25 +547,37 @@ func (n *Node) spawnClaudeWith(id, cwd, launcher string, resume, spare bool, rou
 	// Effort is deliberately unconfirmed here: --effort cannot express auto and
 	// launcher environment/policy can override a flag. syncAssistantModes must
 	// receive its ACK before the user's first input, just as for live changes.
-	p := &assistantProc{id: id, agent: "claude", launcher: launcher, cwd: cwd, cmd: cmd, stdin: stdin, exited: make(chan struct{}), ready: make(chan struct{}),
+	p := &assistantProc{cacheProxy: cacheProxy, id: id, agent: "claude", launcher: launcher, cwd: cwd, cmd: cmd, stdin: stdin, exited: make(chan struct{}), ready: make(chan struct{}),
 		stderrDone: make(chan struct{}), born: time.Now(), lastActive: time.Now(), mode: startMode, canBypass: startMode == proto.ModeBypass, model: processExecution, fingerprint: n.executionFingerprint(launcher, processExecution),
-		instructions: instructions, personaMCPOnly: !legacyMCP, origin: execution.Origin, compactIdleAt: compaction.idle(), declaredWindow: compaction.declared(),
+		instructions: instructions, personaMCPOnly: !legacyMCP, categories: categories, guest: guest, origin: execution.Origin, compactIdleAt: compaction.idle(), declaredWindow: compaction.declared(),
 		round: round.anchor != "", toolSet: round.toolSet, toolSearch: toolSearch, endpoint: compaction.endpoint, tui: tui, tuiNote: tuiNote}
+	startedCacheProxy = true
+	if cacheProxy != nil {
+		n.cacheWarmPool().put(id, cacheProxy, launcher, processExecution, n.executionFingerprint(launcher, modelExecution{}))
+	}
 	if tui {
 		p.mode, p.effort = tuiMode, tuiEffort // its start flags: nothing to set by control request (syncAssistantModes)
 	}
+	p.owner.Store(n)
+	liveAssistants.Store(p, struct{}{})
 	if !spare {
 		n.mu.Lock()
 		n.procs[id] = p
 		n.mu.Unlock()
 	}
 	go watchAssistantStderr(n.logger, p, stderr)
-	liveAssistants.Store(p, struct{}{})
 	go n.readAssistant(p, stdout)
 	go func() {
 		_ = cmd.Wait()
-		if proto.IsExternalLauncher(launcher) && !osproc.SweepGroup(cmd.Process.Pid, externalAdapterGroupSweep) {
-			n.logger.Printf("assistant %s: external process group cleanup budget exhausted", short(id))
+		if cacheProxy != nil {
+			cacheProxy.CloseListener()
+		}
+		if proto.IsExternalLauncher(launcher) {
+			if !osproc.SweepGroup(cmd.Process.Pid, externalAdapterGroupSweep) {
+				n.logger.Printf("assistant %s: external process group cleanup budget exhausted", short(id))
+			}
+		} else if p.stopped.Load() {
+			osproc.SweepGroup(cmd.Process.Pid, assistantGroupSweep)
 		}
 		cleanupMCP()
 		cleanupAdapter()

@@ -1,9 +1,15 @@
 package hub
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // The hub hands the node (and through it a runtime) only the paging the app gave: an empty or missing before_seq,
@@ -43,7 +49,7 @@ func TestSessionItemsForwardsOnlyTheGivenPaging(t *testing.T) {
 	}
 }
 
-// Index mode has a position-only wire shape, including when no inputs exist. A node that ignores the flag
+// Index mode has a narrow wire shape, including when no inputs exist. A node that ignores the flag
 // must not silently become a zero count: older nodes keep the client's loaded-only compatibility rail.
 func TestSessionItemsUserInputsWireShape(t *testing.T) {
 	for _, c := range []struct {
@@ -58,13 +64,25 @@ func TestSessionItemsUserInputsWireShape(t *testing.T) {
 			"total": 1, "inputs": []any{map[string]any{"id": "input-1#0", "seq": 7, "text": "synthetic body"}},
 			"history": "fixture", "items": []any{map[string]any{"text": "synthetic body"}},
 		}, 200, `{"total":1,"inputs":[{"id":"input-1#0","seq":7}],"history":"fixture"}`},
+		{"excerpts and count", map[string]any{
+			"total": 2, "history": "fixture", "inputs": []any{
+				map[string]any{"id": "input-1#0", "seq": 7, "preview": "Question", "answer": "Answer", "text": "synthetic body"},
+				map[string]any{"id": "input-2#0", "seq": 9, "attachments": 2, "image": "synthetic image"},
+			},
+		}, 200, `{"total":2,"inputs":[{"id":"input-1#0","seq":7,"preview":"Question","answer":"Answer"},{"id":"input-2#0","seq":9,"attachments":2}],"history":"fixture"}`},
 		{"older node", map[string]any{"items": []any{}, "has_more": false}, 502, ""},
 		{"partial index", map[string]any{"total": 2, "inputs": []any{map[string]any{"id": "input-1#0", "seq": 7}}, "history": "fixture"}, 502, ""},
 		{"null index", map[string]any{"total": 0, "inputs": nil, "history": "fixture"}, 502, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			m := wireNode(t, func(p json.RawMessage) any { return c.response })
-			req := httptest.NewRequest("GET", "/api/v1/sessions/m1/s1/items?user_inputs=1", nil)
+			m := wireNode(t, func(p json.RawMessage) any {
+				var params map[string]any
+				if err := json.Unmarshal(p, &params); err != nil || params["user_inputs"] != true || params["before_seq"] != nil {
+					t.Errorf("unexpected projection request: %s, %v", p, err)
+				}
+				return c.response
+			})
+			req := httptest.NewRequest("GET", "/api/v1/sessions/m1/s1/items?user_inputs=1&before_seq=1", nil)
 			req.SetPathValue("sid", "s1")
 			w := httptest.NewRecorder()
 			(&Hub{}).sessionItems(w, req, m)
@@ -90,5 +108,65 @@ func TestSessionItemsUserInputsWireShape(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The private export can distinguish a strict local read from a cached reply or
+// a terminal-only runtime's otherwise valid placeholder page.
+func TestStrictExportTranscriptHubContract(t *testing.T) {
+	for _, strict := range []bool{false, true} {
+		for _, nodeAck := range []bool{false, true} {
+			t.Run(fmt.Sprintf("strict=%t/node-ack=%t", strict, nodeAck), func(t *testing.T) {
+				m := wireNodeRPC(t, func(_ context.Context, method string, raw json.RawMessage) (any, error) {
+					var request map[string]any
+					if err := json.Unmarshal(raw, &request); err != nil {
+						return nil, err
+					}
+					if (request["strict_read"] == true) != strict || request["session_id"] != "s1" {
+						t.Errorf("incorrect strict request: %s %v", method, request)
+					}
+					item := proto.Item{ID: "i#0", Seq: 1, Role: "assistant", Kind: "text", Text: "complete"}
+					if method == "session.item" {
+						if request["item_id"] != item.ID {
+							t.Errorf("wrong full item id: %v", request)
+						}
+						return struct {
+							proto.Item
+							StrictRead      bool `json:"strict_read,omitempty"`
+							SourceTextBytes int  `json:"source_text_bytes,omitempty"`
+						}{item, nodeAck, len(item.Text)}, nil
+					}
+					return map[string]any{"items": []proto.Item{item}, "has_more": false,
+						"history": "fixture", "from_seq": 0, "to_seq": 1, "strict_read": nodeAck}, nil
+				})
+				h := &Hub{}
+				for _, target := range []struct {
+					path string
+					read func(http.ResponseWriter, *http.Request, *Machine)
+				}{
+					{"/items", h.sessionItems},
+					{"/items/i%230/full", h.sessionItemFull},
+				} {
+					req := httptest.NewRequest("GET", "/api/v1/sessions/m1/s1"+target.path, nil)
+					if strict {
+						req.URL.RawQuery = "strict=1"
+					}
+					req.SetPathValue("sid", "s1")
+					req.SetPathValue("iid", "i#0")
+					w := httptest.NewRecorder()
+					target.read(w, req, m)
+					if strict && !nodeAck {
+						if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "node_outdated") {
+							t.Fatalf("unsupported read yielded %d: %s", w.Code, w.Body)
+						}
+						continue
+					}
+					if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "complete") ||
+						(strict && !strings.Contains(w.Body.String(), `"strict_read":true`)) {
+						t.Fatalf("unexpected wire response %d: %s", w.Code, w.Body)
+					}
+				}
+			})
+		}
 	}
 }

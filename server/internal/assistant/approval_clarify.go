@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	approvalops "github.com/nwverse/persona/server/internal/approval"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -34,12 +35,14 @@ type preparedApproval struct {
 	terminal   bool
 	deliveries map[string]clarifyDelivery
 
-	decisionTimer *time.Timer
-	pauseTimer    *time.Timer
-	remaining     time.Duration
-	paused        bool
-	pauseStarted  time.Time
-	pausedTotal   time.Duration
+	decisionTimer    *time.Timer
+	pauseTimer       *time.Timer
+	decisionGen      uint64    // bumped whenever decisionTimer is stopped or replaced
+	decisionDeadline time.Time // current effective decision deadline while not paused
+	remaining        time.Duration
+	paused           bool
+	pauseStarted     time.Time
+	pausedTotal      time.Duration
 
 	// A turn covers only questions accepted before it starts. A question
 	// accepted during that turn waits for the next one, as the node queues it.
@@ -79,7 +82,10 @@ var (
 	// clarificationPauseBudget is cumulative per card, not per question.
 	clarificationPauseBudget = 24 * time.Hour
 	clarifyQuestionRunes     = 1000
-	// approvalWaitingWindow is how long a prepared card stays pending after its decision window ended unanswered.
+	// approvalInitialWait bounds how long a prepared tool call holds its conversation's turn before returning the
+	// non-final waiting result. The owner still has the much longer waiting window to answer the retained card.
+	approvalInitialWait = 75 * time.Second
+	// approvalWaitingWindow is how long a prepared card stays pending after the original tool call returned unanswered.
 	approvalWaitingWindow = 24 * time.Hour
 )
 
@@ -87,8 +93,30 @@ var (
 // caller returns either its final tool result or, on the first accepted
 // question, a non-final Clarifying outcome while the card stays pending.
 func (s *Service) waitPreparedCard(ctx context.Context, ix proto.Interaction, op approvalops.Operation) (approvalops.Outcome, error) {
-	if reservedCard(ix) || ix.MachineID == "" || ix.SessionID == "" || ix.Kind != proto.IxPermission || op.Apply == nil {
+	if reservedCard(ix) || ix.Kind != proto.IxPermission || op.Apply == nil {
 		return approvalops.Outcome{}, errClarifyUnavailable
+	}
+	live := ix.MachineID != "" && ix.SessionID != ""
+	if live {
+		// Clarification needs an exact live conversation for the owner's question
+		// and its answer. Unavailable origins retain the older one-shot card instead.
+		// A deleted or unreadable origin stays prepared so clarify returns that exact
+		// error rather than disguising it as a different fallback.
+		if err := s.conversationAvailable(ctx, ix.MachineID, ix.SessionID); err == nil {
+			// The latest complete session list already answers the common case;
+			// ask the node only when that list does not contain the conversation.
+			s.fleet.mu.Lock()
+			_, listed := s.fleet.prev[ix.MachineID][ix.SessionID]
+			s.fleet.mu.Unlock()
+			if !listed {
+				if _, ok := s.session(ctx, ix.MachineID, ix.SessionID); !ok {
+					live = false
+				}
+			}
+		}
+	}
+	if !live {
+		return s.waitOneShotPreparedCard(ctx, ix, op)
 	}
 	state := &preparedApproval{op: op, caller: ctx, release: make(chan struct{}), deliveries: map[string]clarifyDelivery{}}
 	ix.CanClarify = true
@@ -114,8 +142,10 @@ func (s *Service) waitPreparedCard(ctx context.Context, ix proto.Interaction, op
 // awaitPrepared releases only the original tool call on clarification. Final
 // resolution, expiry and replacement still finish the interaction normally.
 // Every waiter listens to the broadcast, never the one-shot p.done: a snapshot
-// waiter cannot steal the original caller's terminal result.
-func (s *Service) awaitPrepared(ctx context.Context, p *pending) (proto.Resolution, error) {
+// waiter cannot steal the original caller's terminal result. An auxiliary
+// snapshot waiter's cancellation detaches only that waiter; the original
+// caller owns the prepared operation's cancellation lifecycle.
+func (s *Service) awaitPrepared(ctx context.Context, p *pending, auxiliary bool) (proto.Resolution, error) {
 	s.fleet.mu.Lock()
 	if p.resolved == nil {
 		p.resolved = make(chan struct{})
@@ -147,6 +177,30 @@ func (s *Service) awaitPrepared(ctx context.Context, p *pending) (proto.Resoluti
 		}
 		return proto.Resolution{}, errApprovalClarifying
 	case <-ctx.Done():
+		s.fleet.mu.Lock()
+		settled := p.claimed || p.prepared.terminal
+		orphaned := false
+		if !settled && !auxiliary && p.ix.Resumable && s.fleet.interactions[p.ix.ID] == p {
+			orphaned = s.orphanLocked(p)
+		}
+		s.fleet.mu.Unlock()
+		if settled {
+			// A final claim made concurrently with the disconnect wins, exactly as
+			// in the ordinary waiter. Wait for its outcome rather than orphaning a
+			// card that has already finished.
+			<-resolved
+			return terminal()
+		}
+		if auxiliary {
+			// The snapshot stopped asking for this card. Its auxiliary waiter
+			// leaves, but the original operation and owner card remain pending.
+			return proto.Resolution{Dismiss: true}, nil
+		}
+		if orphaned {
+			// Match the ordinary hook waiter: a transient disconnect does not
+			// cancel a resumable card while its reconnect grace is running.
+			return proto.Resolution{Dismiss: true}, nil
+		}
 		s.endPrepared(p, "cancelled", "The approval was cancelled before the owner answered; nothing changed.")
 		return proto.Resolution{}, ctx.Err()
 	}
@@ -156,33 +210,97 @@ func (s *Service) awaitPrepared(ctx context.Context, p *pending) (proto.Resoluti
 func (s *Service) startPreparedTimer(p *pending) {
 	s.fleet.mu.Lock()
 	defer s.fleet.mu.Unlock()
-	if p.prepared == nil || p.prepared.terminal {
+	a := p.prepared
+	if a == nil || a.terminal || p.claimed || s.fleet.interactions[p.ix.ID] != p || a.paused || a.clarified {
 		return
 	}
-	p.prepared.decisionTimer = time.AfterFunc(max(0, time.Until(p.ix.ExpiresAt)), func() {
-		s.expirePrepared(p)
+	if persistentOwnerProposal(p.ix) {
+		if a.decisionTimer != nil {
+			a.decisionTimer.Stop()
+			a.decisionTimer = nil
+		}
+		a.decisionGen++
+		return
+	}
+	if !p.ix.ExpiresAt.IsZero() {
+		a.decisionDeadline = p.ix.ExpiresAt
+	}
+	if a.decisionDeadline.IsZero() {
+		return
+	}
+	if a.decisionTimer != nil {
+		a.decisionTimer.Stop()
+	}
+	a.decisionGen++
+	gen := a.decisionGen
+	wait := min(max(0, time.Until(a.decisionDeadline)), approvalInitialWait)
+	a.decisionTimer = time.AfterFunc(wait, func() {
+		s.expirePreparedGen(p, gen)
 	})
 }
 
 func (s *Service) expirePrepared(p *pending) {
-	if s.keepWaiting(p) {
-		return
+	s.fleet.mu.Lock()
+	var gen uint64
+	if p != nil && p.prepared != nil {
+		gen = p.prepared.decisionGen
 	}
-	s.endPreparedIf(p, "expired", "", func(a *preparedApproval) bool { return !a.paused })
+	s.fleet.mu.Unlock()
+	s.expirePreparedGen(p, gen)
 }
 
-// keepWaiting is the end of an unanswered card's first decision window. The card is not taken off the apps: the
+func (s *Service) expirePreparedGen(p *pending, gen uint64) {
+	if p == nil {
+		return
+	}
+	s.fleet.mu.Lock()
+	a := p.prepared
+	if a == nil || a.decisionGen != gen {
+		s.fleet.mu.Unlock()
+		return
+	}
+	orphaned := false
+	if p.ix.Resumable && !a.clarified && !p.claimed &&
+		s.fleet.interactions[p.ix.ID] == p && a.caller.Err() != nil {
+		// The disconnect and initial-wait callbacks can race. Start the same
+		// reconnect grace here when the caller has gone but awaitPrepared has not
+		// yet observed it; a clarified card no longer has a caller to reconnect.
+		orphaned = s.orphanLocked(p)
+	}
+	s.fleet.mu.Unlock()
+	if orphaned {
+		// The initial-wait and reconnect-grace timers share the card. While the
+		// hook is detached, only the orphan timer may end it; a reconnect updates
+		// prepared.caller and lets a later initial wait complete normally.
+		return
+	}
+	if s.keepWaitingGen(p, gen) {
+		return
+	}
+	s.endPreparedIf(p, "expired", "", func(a *preparedApproval) bool {
+		return !a.paused && a.decisionGen == gen
+	})
+}
+
+// keepWaitingGen is the end of an unanswered card's first decision window. The card is not taken off the apps: the
 // owner may have had no notification at all (no working push, the app in the background) and only sees it when they
 // open the Persona app or the web. Its original tool call returns a non-final result (approvalops.WaitingText), the
 // card stays pending for approvalWaitingWindow more with its new deadline told to the apps (no second push), and its
 // final outcome reaches the conversation through the approval journal, as after a question. It keeps nothing waiting
-// when the caller already went away, once the card has clarified (its own timing applies) or ended. False: expire.
-func (s *Service) keepWaiting(p *pending) bool {
+// when the caller already went away, once the card has clarified (its own timing applies), superseded, or ended. False: expire.
+func (s *Service) keepWaitingGen(p *pending, gen uint64) bool {
+	// A scheduled task's own conversation has nobody present to continue the turn
+	// between rounds. Let its detachable card expire at the initial window instead
+	// of retaining a needs-you session that makes every later round skip as busy.
+	// Classification reads settings and the schedule book, so it runs without mu.
+	if p.ix.Detachable && s.dispatchConversationClass(context.Background(), p.ix.MachineID, p.ix.SessionID) == dispatchClassScheduled {
+		return false
+	}
 	for {
 		s.fleet.mu.Lock()
 		a := p.prepared
 		if a == nil || a.terminal || p.claimed || s.fleet.interactions[p.ix.ID] != p || a.clarified || a.paused ||
-			a.caller.Err() != nil {
+			a.decisionGen != gen || a.caller.Err() != nil {
 			s.fleet.mu.Unlock()
 			return false
 		}
@@ -198,37 +316,52 @@ func (s *Service) keepWaiting(p *pending) bool {
 		s.fleet.mu.Unlock()
 
 		err := s.approvalJournalStarted(context.Background(), ix)
+		deadline := time.Time{}
+		if err == nil {
+			deadline = time.Now().Add(approvalWaitingWindow).UTC()
+			err = s.updateInteractionDeadline(context.Background(), ix.ID, ix.CreatedAt, deadline)
+			if err != nil {
+				// approvalJournalStarted succeeded, so balance its new entry before
+				// this card expires. A failed start already removed that entry.
+				s.approvalJournalAborted(context.Background(), ix.ID)
+			}
+		}
 		s.fleet.mu.Lock()
 		a.attempt = nil
 		close(attempt.done)
 		ended := a.terminal || p.claimed || s.fleet.interactions[p.ix.ID] != p
-		if err != nil || ended || a.caller.Err() != nil {
+		stale := a.decisionGen != gen
+		if err != nil || ended || stale || a.caller.Err() != nil {
 			s.fleet.mu.Unlock()
 			if err != nil {
 				s.logf("approval %s: could not keep the unanswered card waiting, it expires: %v", ix.ID, err)
 				return false
 			}
 			s.approvalJournalAborted(context.Background(), ix.ID)
-			return ended // ended meanwhile: nothing more to do; its caller gone: it expires as before
+			return ended || stale // ended/superseded meanwhile: nothing more to do; its caller gone: it expires as before
 		}
 		a.clarified, a.waiting = true, true
-		p.ix.ExpiresAt = time.Now().Add(approvalWaitingWindow).UTC()
+		p.ix.ExpiresAt = deadline
+		a.decisionDeadline = p.ix.ExpiresAt
 		ix = p.ix
 		if a.decisionTimer != nil {
 			a.decisionTimer.Stop()
 		}
-		a.decisionTimer = time.AfterFunc(approvalWaitingWindow, func() { s.expirePrepared(p) })
+		a.decisionGen++
+		nextGen := a.decisionGen
+		a.decisionTimer = time.AfterFunc(approvalWaitingWindow, func() { s.expirePreparedGen(p, nextGen) })
 		s.fleet.mu.Unlock()
 		s.show(ix) // the apps keep the card, with its new deadline
+		s.armPendingReminder(ix)
 		close(a.release)
 		return true
 	}
 }
 
 // approvalNudgeDeadline returns the live effective deadline for a card the Lark
-// sweep is about to nudge. A question pauses that deadline; completed pauses move
-// it by their cumulative duration. Reading the prepared interaction here also
-// follows an implementation that extends its window without changing this sweep.
+// sweep is about to nudge. A question pauses that deadline; completed pauses have
+// already moved the published deadline by their cumulative duration. Reading the
+// prepared interaction here also follows an implementation that extends its window.
 func (s *Service) approvalNudgeDeadline(ix proto.Interaction) (time.Time, bool) {
 	s.fleet.mu.Lock()
 	defer s.fleet.mu.Unlock()
@@ -248,23 +381,31 @@ func (s *Service) approvalNudgeDeadline(ix proto.Interaction) (time.Time, bool) 
 	if a.terminal || a.paused {
 		return time.Time{}, false
 	}
-	return p.ix.ExpiresAt.Add(a.pausedTotal), true
+	return p.ix.ExpiresAt, true
 }
 
-// pausePreparedLocked preserves the remaining decision time and starts the one
-// cumulative pause budget. Repeated questions while paused change neither.
-func (s *Service) pausePreparedLocked(p *pending) {
+// pausePreparedLocked preserves the remaining decision time and publishes the
+// actual cumulative-pause deadline. Repeated questions while paused change neither.
+func (s *Service) pausePreparedLocked(p *pending) bool {
 	a := p.prepared
 	if a.paused || a.terminal {
-		return
+		return false
 	}
-	a.remaining = max(0, time.Until(p.ix.ExpiresAt.Add(a.pausedTotal)))
+	now := time.Now()
+	if a.decisionDeadline.IsZero() && !p.ix.ExpiresAt.IsZero() {
+		a.decisionDeadline = p.ix.ExpiresAt
+	}
+	a.remaining = max(0, a.decisionDeadline.Sub(now))
 	if a.decisionTimer != nil {
 		a.decisionTimer.Stop()
+		a.decisionTimer = nil
 	}
+	a.decisionGen++
 	a.paused = true
-	a.pauseStarted = time.Now()
+	a.pauseStarted = now
+	p.ix.ExpiresAt = now.Add(clarificationPauseBudget - a.pausedTotal).UTC()
 	s.armPauseBudgetLocked(p)
+	return true
 }
 
 func (s *Service) armPauseBudgetLocked(p *pending) {
@@ -285,19 +426,29 @@ func (s *Service) armPauseBudgetLocked(p *pending) {
 
 // resumePreparedLocked is called when the turn covering every accepted
 // question has committed its answer (and every required channel run has
-// finished). A stale timer callback cannot resume a new pause.
-func (s *Service) resumePreparedLocked(p *pending) {
+// finished). A stale timer callback cannot resume a new pause. The returned card
+// tells clients the resumed decision deadline without another arrival or push.
+func (s *Service) resumePreparedLocked(p *pending) (proto.Interaction, bool) {
 	a := p.prepared
-	if !a.paused || a.terminal || a.attempt != nil || a.questionSeq != a.acceptedSeq || a.acceptedSeq != a.answeredSeq || len(a.channelRuns) != 0 {
-		return
+	if !a.paused || a.terminal || p.claimed || s.fleet.interactions[p.ix.ID] != p || a.attempt != nil || a.questionSeq != a.acceptedSeq || a.acceptedSeq != a.answeredSeq || len(a.channelRuns) != 0 {
+		return proto.Interaction{}, false
 	}
-	a.pausedTotal += time.Since(a.pauseStarted)
+	now := time.Now()
+	a.pausedTotal += now.Sub(a.pauseStarted)
 	a.paused = false
 	if a.pauseTimer != nil {
 		a.pauseTimer.Stop()
 		a.pauseTimer = nil
 	}
-	a.decisionTimer = time.AfterFunc(a.remaining, func() { s.expirePrepared(p) })
+	if a.decisionTimer != nil {
+		a.decisionTimer.Stop()
+	}
+	a.decisionGen++
+	gen := a.decisionGen
+	a.decisionDeadline = now.Add(a.remaining).UTC()
+	p.ix.ExpiresAt = a.decisionDeadline
+	a.decisionTimer = time.AfterFunc(a.remaining, func() { s.expirePreparedGen(p, gen) })
+	return p.ix, true
 }
 
 // clarificationTurnStarted associates the new turn with questions accepted
@@ -317,7 +468,7 @@ func (s *Service) clarificationTurnStarted(machine, session string) {
 
 func (s *Service) clarificationTurnEnded(machine, session string) {
 	s.fleet.mu.Lock()
-	defer s.fleet.mu.Unlock()
+	var tells []proto.Interaction
 	for _, p := range s.fleet.interactions {
 		a := p.prepared
 		if a == nil || !a.clarified || a.terminal || p.ix.MachineID != machine || p.ix.SessionID != session || !a.turnActive {
@@ -325,7 +476,13 @@ func (s *Service) clarificationTurnEnded(machine, session string) {
 		}
 		a.turnActive = false
 		a.answeredSeq = max(a.answeredSeq, a.turnSeq)
-		s.resumePreparedLocked(p)
+		if ix, ok := s.resumePreparedLocked(p); ok {
+			tells = append(tells, ix)
+		}
+	}
+	s.fleet.mu.Unlock()
+	for _, ix := range tells {
+		s.show(ix)
 	}
 }
 
@@ -397,18 +554,20 @@ func (s *Service) clarify(ctx context.Context, id, text, clientMsgID string, ori
 
 	if attempt.first {
 		if err := s.approvalJournalStarted(ctx, p.ix); err != nil {
-			s.finishClarifyAttempt(p, attempt, nil, err)
-			return err
+			return s.finishClarifyAttempt(p, attempt, nil, err)
 		}
 	}
 
 	// Validate the exact destination before changing expiry or releasing the
 	// tool. SendParams rejects a missing/ended conversation; no main-chat fallback.
-	params, err := s.SendParams(ctx, SendParams{MachineID: p.ix.MachineID, SessionID: p.ix.SessionID,
-		Params: map[string]any{"session_id": p.ix.SessionID, "text": text, "client_msg_id": clientMsgID}})
+	questionParams := map[string]any{"session_id": p.ix.SessionID, "text": text, "client_msg_id": clientMsgID}
+	if token := assistantwire.ClarificationProofOf(ctx); token != "" {
+		questionParams[assistantwire.ClarificationProofParam] = token
+		questionParams[assistantwire.ClarificationInteractionParam] = id
+	}
+	params, err := s.SendParams(ctx, SendParams{MachineID: p.ix.MachineID, SessionID: p.ix.SessionID, Params: questionParams, VerbatimText: true})
 	if err != nil {
-		s.finishClarifyAttempt(p, attempt, nil, err)
-		return err
+		return s.finishClarifyAttempt(p, attempt, nil, err)
 	}
 	var run *channel.Run
 	if origin != nil && origin.Channel == channel.Feishu {
@@ -427,8 +586,7 @@ func (s *Service) clarify(ctx context.Context, id, text, clientMsgID string, ori
 	}
 	err = s.sendOnce(ctx, p.ix.MachineID, params)
 	if err != nil && !relayInDoubt(err) {
-		s.finishClarifyAttempt(p, attempt, nil, err)
-		return err
+		return s.finishClarifyAttempt(p, attempt, nil, err)
 	}
 	if err != nil {
 		// The request may already have been accepted. Rolling back into a blocked
@@ -438,15 +596,16 @@ func (s *Service) clarify(ctx context.Context, id, text, clientMsgID string, ori
 		s.logf("approval %s: question delivery outcome uncertain; retaining the pending card: %v", id, err)
 		err = nil
 	}
-	s.finishClarifyAttempt(p, attempt, run, nil)
-	return nil
+	return s.finishClarifyAttempt(p, attempt, run, nil)
 }
 
-func (s *Service) finishClarifyAttempt(p *pending, attempt *clarifyAttempt, run *channel.Run, err error) {
+func (s *Service) finishClarifyAttempt(p *pending, attempt *clarifyAttempt, run *channel.Run, err error) error {
 	s.fleet.mu.Lock()
 	a := p.prepared
 	attempt.err = err
 	release := false
+	var tell proto.Interaction
+	tellDeadline := false
 	if err == nil && !a.terminal && !p.claimed && s.fleet.interactions[p.ix.ID] == p {
 		release = attempt.first && !a.clarified
 		a.clarified = true
@@ -459,27 +618,35 @@ func (s *Service) finishClarifyAttempt(p *pending, attempt *clarifyAttempt, run 
 			}
 			a.channelRuns[run.ID] = true
 		}
-		s.pausePreparedLocked(p)
+		tellDeadline = s.pausePreparedLocked(p)
+		tell = p.ix
 	} else if err == nil {
 		err = errClarifyUnavailable
 		attempt.err = err
 	}
+	finalErr := attempt.err
 	a.attempt = nil
-	if !a.terminal {
-		s.resumePreparedLocked(p)
+	if !a.terminal && !p.claimed && s.fleet.interactions[p.ix.ID] == p {
+		if ix, ok := s.resumePreparedLocked(p); ok {
+			tell, tellDeadline = ix, true
+		}
 	}
 	close(attempt.done)
 	s.fleet.mu.Unlock()
 
-	if err != nil && attempt.first {
+	if tellDeadline {
+		s.show(tell)
+	}
+	if finalErr != nil && attempt.first {
 		s.approvalJournalAborted(context.Background(), p.ix.ID)
 	}
-	if run != nil && attempt.err == nil {
+	if run != nil && finalErr == nil {
 		s.startChannelRun(run)
 	}
 	if release {
 		close(a.release)
 	}
+	return finalErr
 }
 
 // clarificationChannelEnded resumes expiry after this Lark answer has either
@@ -487,13 +654,17 @@ func (s *Service) finishClarifyAttempt(p *pending, attempt *clarifyAttempt, run 
 // keep their own entries and continue to hold the pause.
 func (s *Service) clarificationChannelEnded(id, runID string) {
 	s.fleet.mu.Lock()
-	defer s.fleet.mu.Unlock()
 	p := s.fleet.interactions[id]
 	if p == nil || p.prepared == nil {
+		s.fleet.mu.Unlock()
 		return
 	}
 	delete(p.prepared.channelRuns, runID)
-	s.resumePreparedLocked(p)
+	ix, tell := s.resumePreparedLocked(p)
+	s.fleet.mu.Unlock()
+	if tell {
+		s.show(ix)
+	}
 }
 
 // approvalAnswerTurnStarted/Ended are small indirections used by Service's turn
@@ -511,7 +682,9 @@ type approvalBook struct {
 	mu         sync.Mutex
 	loaded     bool
 	list       []approvalJournalEntry
+	handled    map[string]bool
 	delivering bool
 	again      bool
 	retry      bool
+	retryDelay time.Duration // 0: approvalResultRetryDelay; tests shorten it
 }

@@ -651,8 +651,10 @@ These suggestions apply only to creation and do not establish ownership for clos
   - `POST /machines/{mid}/worktree/create {workspace_id, branch, path, kind?}` → `{workspace_id, tab_id?, pane?, terminal?, path, branch}`.
   - Only these fields accepted; no base commit, `--force` or command. Node `worktree.prepare` / `worktree.create` (`node/worktree.go`).
 - **Task branch inspection** (#8357): the node-only `worktree.prepare` request may additionally name a `branch`.
-  If already checked out in this repository, `existing: {path, branch}` is returned only after clean-tree and complete
-  live-Agent checks. Dirty/busy/unknown state refuses with the checkout path and known owner. The task manager separately
+  If already checked out in this repository, `existing: {path, branch}` is returned only after status and complete
+  live-Agent checks. Explicit branches require a clean tree. For its own generated branch the task manager sends
+  `allow_untracked: true`. The node honors this only for `task/` branches inside the checkouts folder and still refuses
+  tracked or staged changes. An older node ignores the flag and requires a clean tree. The task manager separately
   checks unfinished-task ownership before reuse. Older nodes omit `existing`; ordinary creation still refuses duplicate checkouts.
   Since #10365 `existing.path` is the checkouts folder's own spelling (`<path>/<dir name of the branch>`) when it is that
   checkout, else the home's spelling of git's resolved path (`node/selfprogram.go` `visiblePath`), `in_checkouts` says whether it lies in
@@ -660,13 +662,19 @@ These suggestions apply only to creation and do not establish ownership for clos
   checkout of this repository its git links are made portable (`node/worktree_links.go`), whether it is then handed back or
   refused (a refusal names it for a workspace `{existing}`). Not on Windows, where Git for Windows misreads a link written
   with backslashes and no terminal sees only one spelling of the home. The refusals carry codes, `checkout_dirty`, `checkout_in_use`,
-  `checkout_changed`, `checkout_unverified`, with `branch`, `path` and `owner` as data. A create whose checkout path holds
+  `checkout_changed`, `checkout_unverified`, with `branch`, `path` and `owner` as data where applicable. A `checkout_dirty`
+  refusal includes up to three changed paths in `files`. A create whose checkout path holds
   something is refused with code `worktree_path_taken` (data `path`), worded in the request's `locale`; nothing there is adopted.
 - **Unnamed worktrees** (#1399): prepare advertises `automatic_name: true`. A full device may send `{workspace_id, kind: "orca", parent_workspace_id?, auto_name: true}` without a branch or path. Only a boolean `true` enables this alternative; strings and missing fields remain invalid. The node verifies the source repository and parent, then sends Orca a random creature-name seed with `nameWasGenerated: true`, the source HEAD and the chosen parent, omitting `branchNameOverride`. Orca owns branch prefixes, retired names, collision retries and subsequent first-work branch naming. The result returns the actual branch and directory. Explicit branch/path creates keep the existing checks; combining overrides with automatic naming is refused. For other hosts that support worktree creation, the node chooses a unique `persona/worktree-<random>` branch and checkout path, then uses the same checked creation route. Content-based renaming is host-specific. Older nodes keep the manual form; an older hub refuses the new boolean mode safely, so update both before using it.
 - **Creation retries** use the existing operation receipt header on `worktree/create`. Apple keeps one operation ID for unchanged source, parent and naming parameters, so a lost success response can be replayed without creating another randomly named checkout. Changing the target or parameters starts a new operation. A timeout with an unknown outcome keeps its receipt and never dispatches the same operation again; clients must not treat a pending or unknown receipt as a created worktree. This protection requires a hub with the worktree receipt route; older clients without the header retain the original behavior.
 - **Delegate to herdr**: herdr 0.9 has `worktree create` (socket `worktree.create {workspace_id, branch, path, focus}`, CLI fallback `herdr worktree create --workspace … --branch … --path … --no-focus`):
   check out existing branch, otherwise create from workspace HEAD. New workspace carries worktree provenance, grouped under original, recognized by herdr sidebar grouping too. No computer focus stealing (like other menu actions); web navigates itself.
   herdr and Orca implement `host.Worktreer` (`CanWorktree` checks `herdr worktree --help`, `WorktreesDir`, `CreateWorktree`).
+  When no herdr workspace holds the repository (none is open there, or the one there has tabs in different folders, so it is no
+  reliable source), the node calls `herdr worktree create --cwd <repository root>` instead of opening a plain workspace: herdr
+  makes it from that repository, and the workspace still carries its `worktree.repo_key`, so the sidebar files it under the repository.
+  When an Agent's tab opens in a worktree the assistant made for it, the worktree's first shell (marked, below and
+  `docs/integrations/engines.md`) closes at once if nothing is in it, so the workspace holds the Agent's tab, named for its task, not an empty `1` beside it.
 - **Delegate to Orca** (#5325, `node/hostorca_worktree.go`): Orca runtime's `worktree.create {repo: "id:<project id>", name, branchNameOverride, baseBranch?, parentWorktree, activate: false}` (the one call `orca worktree create` makes).
   The new worktree is Orca's own: listed under the source workspace in Orca's sidebar (`parentWorktree`) and in Persona's workspaces; not activated, no setup hooks, no focus stealing. Orca opens a terminal in it itself; the node waits up to 5 seconds for it and points the web client at it.
   - Branch: an existing local branch is checked out as is (no `baseBranch`), otherwise created from the source workspace's HEAD like herdr (`baseBranch` is the current branch as git reads it now, the commit on a detached HEAD; Orca uses the local branch, unpushed commits included, measured 2026-11-05).

@@ -60,7 +60,7 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
     val routingState by routingConnection.state.collectAsStateWithLifecycle()
     val routingFeatures = routingConnection.lastHello?.features.orEmpty()
     val home = rememberChildSessionHome(SessionKey(route.machineId, route.sessionId), sessions, actions,
-        routingFeatures, routingState == ConnectionState.Online, side = route.side)
+        routingFeatures, routingState == ConnectionState.Online, side = route.side, directSubagent = route.subagentDetail)
     // A link to a side session (#7944: a notification, Needs you, a search hit) opens its parent, then the side over it,
     // once: Back from the side comes to the parent.
     val landedSide = remember(home, sessions, routingFeatures) { home.shownSide(sessions, routingFeatures) }
@@ -81,8 +81,11 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
     }
     // The hub's leader conversations drive the chat's background-round fold (#6595), scoped to this manager.
     val assistantSnapshot by session.assistant.assistant.collectAsStateWithLifecycle()
+    val agentPreferences by remember(session) { session.preferences.snapshots }
+        .collectAsStateWithLifecycle(persona.feature.agents.AgentsPreferencesSnapshot())
     val waiting = rememberWaitingRequests(session, sessions)
     val assistant = route.kind == ConversationKind.Assistant || metadata?.assistant == true
+    val preferHerdrTabName = !assistant && persona.core.contracts.GroupKeys.namespaceOf(route.machineId) in agentPreferences.herdrTabNameHubs
     val editor = rememberChatDraftEditor(wiring, key)
     val storedComposer by (editor?.composer ?: remember { MutableStateFlow<ChatComposerState?>(null) }).collectAsStateWithLifecycle()
     val draftError by (editor?.error ?: remember { MutableStateFlow<Int?>(null) }).collectAsStateWithLifecycle()
@@ -102,11 +105,12 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
     var git by remember { mutableStateOf<persona.core.contracts.api.SessionGitStatus?>(null) }
     val cwd = metadata?.cwd.orEmpty()
     val connectionState = (wiring?.connection ?: session.connection).state
-    LaunchedEffect(cwd, session.files, pane, connectionState) {
+    LaunchedEffect(key.machineId, cwd, session.files, pane, connectionState) {
         val files = session.files
-        if (!assistant && cwd.isNotBlank() && files != null) followGitStatus(connectionState, { files.status(route.machineId, cwd) }) { git = it }
+        if (!assistant && cwd.isNotBlank() && files != null) followGitStatus(connectionState, { files.status(key.machineId, cwd) }) { git = it }
     }
     val filesAvailable = !assistant && cwd.isNotBlank() && session.files != null
+    val canOpenFilePath = filesAvailable || (assistant && key.machineId.isNotBlank() && session.files != null)
     fun open(p: FilesPane, path: String? = null, line: Int? = null) {
         insertionFocused = composer.focused; focus.clearFocus(); openedPath = path; openedLine = line; pane = p
     }
@@ -130,6 +134,8 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
                     mainConversation = assistantSnapshot.mainSession?.sessionId,
                     leaderConversations = assistantSnapshot.leaders.toSet(),
                     onOpenSession = { navigator.navigate(ChatRoute(it.machineId, it.sessionId)) },
+                    onOpenSubagent = { navigator.navigate(ChatRoute(it.machineId, it.sessionId, ConversationKind.Agent, subagentDetail = true)) },
+                    openSubagents = route.openSubagents,
                     onOpenSide = { navigator.navigate(ChatRoute(it.machineId, it.sessionId, ConversationKind.Agent, side = true)) },
                     onFollowSession = { onGroupGone(route, route.copy(machineId = it.machineId, sessionId = it.sessionId)) },
                     waiting = waiting,
@@ -139,13 +145,17 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
                     },
                     onOpenAssistant = { navigator.navigate(persona.feature.chat.conversationRoute(it, assistant = true)) },
                     onConnectionDetails = { navigator.navigate(SettingsPageRoute(SettingsPage.Diagnostics)) },
-                    files = session.files, ports = wiring?.ports, onOpenPath = if (filesAvailable) ({ path, line -> open(FilesPane.Files, path, line) }) else null,
+                    files = session.files, hubScope = wiring?.scope?.path ?: session.identity, ports = wiring?.ports,
+                    onOpenPath = if (canOpenFilePath) ({ path, line -> open(FilesPane.Files, path, line) }) else null,
                     onOpenTodo = { todoId -> navigator.navigate(persona.core.navigation.TodoDetailRoute(todoId)) },
                     // A model error the hub named on Persona's turn: Fix It opens what the home's readiness card would (MainReadiness.kt).
                     onFixModel = { action, launcher, manager ->
-                        navigator.navigate(if (action == persona.core.designsystem.ReadinessActionId.EditProvider)
-                            launcher?.takeIf(String::isNotBlank)?.let { persona.core.navigation.ModelProviderRoute(it) } ?: SettingsPageRoute(SettingsPage.Providers)
-                        else persona.core.navigation.ModelPurposeRoute("assistant", manager))
+                        navigator.navigate(when (action) {
+                            persona.core.designsystem.ReadinessActionId.EditProvider ->
+                                launcher?.takeIf(String::isNotBlank)?.let { persona.core.navigation.ModelProviderRoute(it) } ?: SettingsPageRoute(SettingsPage.Providers)
+                            persona.core.designsystem.ReadinessActionId.PickModel -> SettingsPageRoute(SettingsPage.ModelConfig)
+                            else -> persona.core.navigation.ModelPurposeRoute("assistant", manager)
+                        })
                     },
                     // A briefing's recommended setup opens the page its mechanism is turned on at, and changes nothing (#5085).
                     onOpenSetup = { page, manager ->
@@ -156,16 +166,17 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
                             persona.core.contracts.BriefSetupPage.StandingAuthorizations ->
                                 SettingsPageRoute(SettingsPage.StandingAuthorizations)
                         })
-                    }),
+                    },
+                    preferHerdrTabName = preferHerdrTabName),
                 renderStyle = if (assistant) ChatRenderStyle.Assistant else ChatRenderStyle.Agent,
                 composerState = composer, composerService = wiring?.composer,
                 onDraftChanged = editor?.let { it::changed },
                 statusBindings = ChatStatusBindings(recovery = wiring?.recovery, draftSaveError = draftError?.let { androidx.compose.ui.res.stringResource(it) }),
                 onContextCleared = { navigator.navigate(ChatRoute(it.machineId, it.sessionId)) })
-            if (pane != null && filesAvailable) {
+            if (pane != null && (filesAvailable || (canOpenFilePath && openedPath != null))) {
                 BackHandler { pane = null; openedPath = null; openedLine = null }
                 CompositionLocalProvider(persona.core.designsystem.LocalSplitDetail provides null) {
-                    SessionFilesScreen(route.copy(sessionId = key.sessionId), cwd, requireNotNull(session.files), { pane = null; openedPath = null; openedLine = null }, { path ->
+                    SessionFilesScreen(route.copy(machineId = key.machineId, sessionId = key.sessionId), cwd.ifBlank { "~" }, requireNotNull(session.files), { pane = null; openedPath = null; openedLine = null }, { path ->
                         composer.value = insertFilePath(composer.value, path, insertionFocused)
                         pane = null
                         openedPath = null

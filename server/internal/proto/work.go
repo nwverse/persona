@@ -80,7 +80,10 @@ const (
 // Closeout is what an agent says of its own work as a turn ends: the agent's claim, not something the hub checked.
 // Its artifacts are the work state's (WorkState.Artifacts).
 type Closeout struct {
-	Status string `json:"status"` // done, not_done or blocked
+	// Delivery, Unblock: explicit delivery disposition and the party responsible for its gate.
+	Delivery string `json:"delivery,omitempty"`
+	Unblock  string `json:"unblock,omitempty"`
+	Status   string `json:"status"` // done, not_done or blocked
 	// Waiting: who or what a blocked turn waits for.
 	Waiting string `json:"waiting,omitempty"`
 	// Did: what changed, at most three sentences.
@@ -90,6 +93,8 @@ type Closeout struct {
 	Deployed string `json:"deployed,omitempty"`
 	// Verified: what was run or measured, with its reading; "untested" is an answer.
 	Verified string `json:"verified,omitempty"`
+	// Next is one optional follow-up the owner may choose after a completed turn.
+	Next string `json:"next,omitempty"`
 	// Missing: what it still needs from the user or someone else.
 	Missing string `json:"missing,omitempty"`
 	// Checked is what the hub found when it looked at the closeout's pull request itself; nil when it had nothing to

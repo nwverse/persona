@@ -31,6 +31,7 @@ import persona.core.contracts.parseTime
 import persona.core.designsystem.JIcon
 import persona.core.designsystem.JTag
 import persona.core.designsystem.PersonaTheme
+import persona.core.designsystem.ReadingContent
 import persona.core.designsystem.Tokens
 import persona.core.designsystem.Tone
 import persona.core.designsystem.icons.PhIcons
@@ -49,6 +50,7 @@ import persona.core.domain.tasks.reviewVerdictStage
 private fun ReviewStage.label(round: Int): String = when (this) {
     ReviewStage.Ongoing -> stringResource(R.string.chat_review_ongoing)
     ReviewStage.Pending -> stringResource(R.string.chat_review_pending)
+    ReviewStage.UserCheck -> stringResource(R.string.chat_review_user_check)
     ReviewStage.Rework -> stringResource(R.string.chat_review_rework, maxOf(round, 1))
     ReviewStage.NeedsUser -> stringResource(R.string.chat_review_needs_user)
     ReviewStage.Accepted -> stringResource(R.string.chat_review_accepted)
@@ -56,7 +58,7 @@ private fun ReviewStage.label(round: Int): String = when (this) {
 }
 
 internal val ReviewStage.tone: Tone get() = when (this) {
-    ReviewStage.Pending, ReviewStage.Rework -> Tone.Caution
+    ReviewStage.Pending, ReviewStage.UserCheck, ReviewStage.Rework -> Tone.Caution
     ReviewStage.NeedsUser -> Tone.Caution
     ReviewStage.Accepted -> Tone.Positive
     ReviewStage.Ongoing, ReviewStage.Cancelled -> Tone.Neutral
@@ -134,7 +136,7 @@ internal fun LatestReport(todo: Todo, modifier: Modifier = Modifier) {
                 style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
             at?.let { Text(relativeTime(it, now, resources), style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3, maxLines = 1) }
         }
-        ChatMarkdown(text, "report/${todo.id}", PersonaTheme.type.callout)
+        ReadingContent { ChatMarkdown(text, "report/${todo.id}", PersonaTheme.type.callout) }
     }
 }
 

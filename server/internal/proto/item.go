@@ -9,6 +9,8 @@ import (
 	_ "image/png"
 	"strings"
 	"time"
+
+	"github.com/nwverse/persona/sdk/go/wire"
 )
 
 // Item kinds.
@@ -63,6 +65,9 @@ type Fold struct {
 	// Sources: the web pages the run's successful web calls used (FoldSource), so a chat shows its reply's sources
 	// without opening the run. Absent when it used none, and from older nodes.
 	Sources []FoldSource `json:"sources,omitempty"`
+	// ToolViews: the out-of-band declarative views returned by the run's connector tool calls (FoldToolView), rendered
+	// beside Images under the assistant's reply without opening the fold.
+	ToolViews []FoldToolView `json:"tool_views,omitempty"`
 }
 
 // FoldSourcesMax bounds Fold.Sources.
@@ -102,6 +107,17 @@ type FoldImage struct {
 	Size      int    `json:"size,omitempty"` // bytes, about (the base64's length × 3 / 4, like Image.Placeholder)
 	Width     int    `json:"width,omitempty"`
 	Height    int    `json:"height,omitempty"`
+}
+
+// FoldToolViewsMax bounds Fold.ToolViews.
+const FoldToolViewsMax = 8
+
+// FoldToolView is an out-of-band declarative view returned by a connector tool call in a folded run.
+type FoldToolView struct {
+	ItemID    string    `json:"item_id,omitempty"`
+	ToolUseID string    `json:"tool_use_id"`
+	Tool      string    `json:"tool"`
+	View      wire.View `json:"view"`
 }
 
 // FoldTaskSnapshot preserves a successful task result without its raw tool payload.
@@ -166,8 +182,47 @@ func WithoutImageData(items []Item) []Item {
 	return out
 }
 
+// PositionalItemID identifies the fallback IDs assigned to JSONL records that lack a runtime ID.
+func PositionalItemID(id string) bool {
+	if _, source, ok := ParseSegmentItemID(id); ok {
+		id = source
+	}
+	suffix, ok := strings.CutPrefix(id, "line")
+	if !ok {
+		return false
+	}
+	line, block, ok := strings.Cut(suffix, "#")
+	return ok && decimalItemPart(line) && decimalItemPart(block)
+}
+
+// SegmentItemID namespaces only later segments. The first segment retains its
+// existing identifiers, including positional IDs used by client caches.
+func SegmentItemID(segment, source string) string { return "segment:" + segment + ":" + source }
+
+func ParseSegmentItemID(id string) (segment, source string, ok bool) {
+	rest, ok := strings.CutPrefix(id, "segment:")
+	if !ok {
+		return "", "", false
+	}
+	segment, source, ok = strings.Cut(rest, ":")
+	return segment, source, ok && segment != "" && source != ""
+}
+
+func decimalItemPart(s string) bool {
+	return s != "" && !strings.ContainsFunc(s, func(r rune) bool { return r < '0' || r > '9' })
+}
+
+// QuestionReply preserves the question quoted by a Codex reply. A single answer is already in Item.Text.
+type QuestionReply struct {
+	Question string `json:"question"`
+	Answer   string `json:"answer,omitempty"`
+}
+
 // Item is one content block of a Claude Code transcript.
 type Item struct {
+	// Stored identifies an incomplete durable copy. Its source can be requested from
+	// the existing full-item/image routes; availability still depends on the runtime.
+	Stored    *StoredItem     `json:"stored,omitempty"`
 	ID        string          `json:"id"`
 	Seq       int             `json:"seq"`
 	TS        time.Time       `json:"ts"`
@@ -180,6 +235,9 @@ type Item struct {
 	IsError   bool            `json:"is_error,omitempty"`
 	Image     *Image          `json:"image,omitempty"`
 	Queued    bool            `json:"queued,omitempty"` // user input typed while the agent worked, absorbed mid-turn
+
+	QuestionReplies    []QuestionReply `json:"question_replies,omitempty"`
+	QuestionRepliesCut bool            `json:"question_replies_cut,omitempty"`
 	// Outcome: what a tool_result's call came to (status, exit code, patch, git…), set by the node from the
 	// runtime's record; absent on other items and from older nodes (ToolOutcome).
 	Outcome *ToolOutcome `json:"outcome,omitempty"`
@@ -190,10 +248,13 @@ type Item struct {
 	// FullSize: Text was cut for pages and pushes (it ends in a "truncated, open for the full text" line, in Chinese); the whole of it, this many
 	// bytes, comes from GET /api/v1/sessions/{mid}/{sid}/items/{item id}/full.
 	FullSize int `json:"full_size,omitempty"`
+	// SourceFingerprint identifies the original text record behind a positional item ID. Unlike the line
+	// number, it does not match different content that reuses that position after a rewrite.
+	SourceFingerprint string `json:"source_fingerprint,omitempty"`
 	// Wake marks a background task's notice that started new work after the agent had finished its turn
 	// (not one absorbed mid-turn): the exchange before it is over and its last words are an answer.
 	Wake bool `json:"wake,omitempty"`
-	// Narration marks assistant text belonging to the work summary (Codex commentary), even if sent unfolded.
+	// Narration marks public progress text (Claude narration or Codex commentary), including on unfolded pages.
 	Narration bool `json:"narration,omitempty"`
 	// From names the Claude session that sent this message (cross-session messaging), not the user.
 	From string `json:"from,omitempty"`
@@ -234,6 +295,21 @@ type Item struct {
 	// Visualization is set on KindVisualization items: a Codex visualize marker's reference to an HTML fragment on
 	// the node. The bytes are not carried here; the session visualization route serves them after path checks.
 	Visualization *Visualization `json:"visualization,omitempty"`
+	// TTFTMS is the observed time-to-first-token in milliseconds from turn send/request start to the first
+	// assistant token/chunk during live streaming execution. Nil when not observed (such as historical replays).
+	TTFTMS *int64 `json:"ttft_ms,omitempty"`
+	// ToolViews are out-of-band declarative views attached to a tool_result by the node when recording the turn,
+	// rendered inline in conversation UIs and never included in model context.
+	ToolViews []wire.View `json:"tool_views,omitempty"`
+}
+
+type StoredItem struct {
+	Complete    bool   `json:"complete"`
+	SourceBytes int    `json:"source_bytes"`
+	MachineID   string `json:"machine_id"`
+	SessionID   string `json:"session_id"`
+	History     string `json:"history"`
+	ItemID      string `json:"item_id"`
 }
 
 // Visualization is one Codex visualize reference (the visualize plugin's in-conversation HTML contract): the
@@ -365,17 +441,24 @@ type MessageSource struct {
 	// Push is a scheduled input's delivery mode, persisted with the input so a queued user message cannot change it.
 	// "asked" suppresses that run's normal completion; absent keeps the existing every-answer behavior.
 	Push string `json:"push,omitempty"`
+	// ScheduleRunID correlates a reference-only prompt with the run that sent it.
+	ScheduleRunID string `json:"schedule_run_id,omitempty"`
 }
 
 const (
+	A2ADeliveryPrefix   = "persona-a2a-" // Manager-assigned client message IDs for A2A deliveries.
 	SourceConversation  = "conversation"
 	SourcePatrol        = "patrol"
 	SourceFollowup      = "followup"
+	SourceAutoContinue  = "auto-continue" // a hub-generated continuation after a transient error or usage-limit reset
 	SourceSupervision   = "supervision"
+	SourceNotice        = "notice"         // a notice relayed by Persona
 	SourceScheduledTask = "scheduled_task" // a scheduler outside Persona, e.g. a Codex heartbeat
 	// SourceMeeting is a batch of a recorded meeting the session attends (docs/assistant/meeting-minutes.md "Feeding
 	// the attending session"): other people's words, never the user's; Title is the meeting's name.
 	SourceMeeting = "meeting"
+	// SourceExtension: an event an extension observed and reported (assistant.event). Title is the extension's name.
+	SourceExtension = "extension"
 )
 
 // SourceFromInjected upgrades existing metadata without guessing from ordinary text.

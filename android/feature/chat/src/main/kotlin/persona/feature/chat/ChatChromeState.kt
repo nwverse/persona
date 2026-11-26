@@ -19,11 +19,12 @@ import persona.core.domain.sort.tabKey
 
 internal fun spaceCompanions(session: Session?, sessions: List<Session>): List<Session> {
     if (session == null) return emptyList()
-    val space = session.spaceId?.takeIf(String::isNotBlank) ?: session.workspaceId?.takeIf(String::isNotBlank)
+    val space = session.spaceId?.takeIf(String::isNotBlank) ?: return emptyList()
+    val listed = (sessions + session).mapTo(HashSet()) { it.key }
     return sessions.filter { other ->
         other.machineId == session.machineId && other.key != session.key && !other.assistant &&
-            if (space != null) (other.spaceId?.takeIf(String::isNotBlank) ?: other.workspaceId) == space
-            else !session.spaceName.isNullOrBlank() && other.spaceName == session.spaceName
+            other.spaceId?.takeIf(String::isNotBlank) == space &&
+            other.foldedUnderKey?.let { it in listed } != true
     // tab by tab, a tab's agents together by their place in it (#2515, as the web's tab groups): the launcher first
     }.sortedWith(compareBy<Session> { it.slotIndex ?: Int.MAX_VALUE }.thenBy { it.slotId.orEmpty() }.then(PaneOrder))
 }
@@ -81,6 +82,20 @@ internal class ChatChromeState(
         scope.launch {
             try {
                 if (service.rename(session, edit.title, edit.tabName)) notice = res.getString(R.string.chat_action_renamed)
+            } catch (error: CancellationException) { throw error }
+            catch (error: Exception) { notice = operationFeedback(error).text.resolve(res) }
+            finally { busy = false }
+        }
+    }
+
+    fun renameUnified(session: Session, name: String) {
+        val service = renamer ?: return
+        val edit = SessionRename.unifiedChanges(session, name)
+        if (!canRename || !edit.changed) return
+        busy = true
+        scope.launch {
+            try {
+                if (service.renameUnified(session, name)) notice = res.getString(R.string.chat_action_renamed)
             } catch (error: CancellationException) { throw error }
             catch (error: Exception) { notice = operationFeedback(error).text.resolve(res) }
             finally { busy = false }

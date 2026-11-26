@@ -118,7 +118,7 @@ var streamID = lazyre.New(`^[A-Za-z0-9_-]{1,64}$`)
 
 // serve runs the link until it ends and says why. A direct handoff is already connected and owned by the caller;
 // every other return leaves no direct candidate behind.
-func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) (*directHandoff, error) {
+func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter, memory *routeMemory) (*directHandoff, error) {
 	l.again = make(chan struct{}, 1)
 	l.setEndpoints(c.Endpoints)
 	ctx, cancel := context.WithCancelCause(ctx)
@@ -156,6 +156,9 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) (
 		*s = Status{State: "connected", Conn: l.gen, Machine: c.Machine, HubName: c.HubName, MachineName: c.MachineName, Address: l.ep.URL,
 			Kind: l.ep.Kind, Proxy: l.proxy, Since: &since, Node: "unknown", Trust: trustOf(c), Endpoints: ranked(c.Endpoints), SSH: cloneSSH(c.SSH)}
 	})
+	if memory != nil {
+		memory.connected(l.ep.Kind)
+	}
 	go l.renames(ctx, o, rep)
 	go l.presence(ctx, o)
 	go l.confirms(ctx, o)
@@ -182,15 +185,17 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) (
 		pairT := time.NewTicker(cmp.Or(o.PairCheck, pairCheck))
 		defer pairT.Stop()
 		// On a fallback route (a proxy, or SSH it need not use), direct candidates are probed now and then to switch
-		// back, and a new proxy setting is followed at once.
-		fallback := l.ep.Kind == KindProxy || (l.ep.Kind == KindSSH && c.SSH != nil && !c.SSH.Always)
+		// back, and a new proxy setting is followed at once. Proxy-only mode keeps a proxy link off direct: it is no
+		// fallback, but still follows the proxy setting.
+		fallback := (l.ep.Kind == KindProxy && !c.ProxyAlways) || (l.ep.Kind == KindSSH && c.SSH != nil && !c.SSH.Always)
+		followProxy := fallback || l.ep.Kind == KindProxy
 		var directC <-chan time.Time
 		if fallback {
 			directT := time.NewTicker(cmp.Or(o.DirectRetryEvery, DirectRetryEvery))
 			defer directT.Stop()
 			directC = directT.C
 		}
-		var seen time.Time
+		var seen fileStamp
 		var looked bool
 		// A ping waits for its pong on its own, so a reconnect or a network change is not held up behind one that is
 		// out (with a slow link's heartbeat, for up to the hub's timeout). One of each kind at a time; the first that
@@ -308,6 +313,9 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) (
 					ping(false, hb.timeout)
 				}
 			case <-o.Check:
+				if memory != nil {
+					memory.networkChanged()
+				}
 				if l.localGone() {
 					drop(newTextError("link-errors.network_address_gone", nil))
 					return
@@ -326,7 +334,7 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) (
 				// Only the mtime says when to look: endpoints and renames rewrite link.json with the same pairing.
 				if now := stampOf(o.Path); !looked || !now.Equal(seen) {
 					looked, seen = true, now
-					if repaired(o.Path, c, fallback) {
+					if repaired(o.Path, c, followProxy) {
 						reconnect(errRepaired)
 						return
 					}
@@ -399,7 +407,7 @@ func (l *link) serve(ctx context.Context, c *Config, o Options, rep *reporter) (
 func directHandoffConfig(path string, current *Config, ep Endpoint) *Config {
 	next, err := Load(path)
 	if err != nil || next.Hub != current.Hub || next.Machine != current.Machine || next.FP != current.FP ||
-		next.Trust != current.Trust || next.Token != current.Token || !next.SSH.Equal(current.SSH) ||
+		next.Trust != current.Trust || next.Token != current.Token || !next.SSH.Equal(current.SSH) || next.ProxyAlways ||
 		!slices.Contains(next.Endpoints, ep) {
 		return nil
 	}
@@ -477,16 +485,17 @@ func (l *link) pairedAgain() {
 	}
 }
 
-// repaired: link.json now holds another credential, computer, hub or SSH tunnel than c, or another proxy setting for
-// a link on a fallback route (the proxy comes before SSH), or was removed (unpaired). A file that cannot be read for
-// another reason changes nothing: the link stays as it is.
-func repaired(path string, c *Config, fallback bool) bool {
+// repaired: link.json now holds another credential, computer, hub, SSH tunnel or proxy-only setting than c, or
+// another proxy setting for a link that follows it (on the proxy, or on SSH it need not use, as the proxy comes
+// before SSH), or was removed (unpaired). A file that cannot be read for another reason changes nothing: the link
+// stays as it is.
+func repaired(path string, c *Config, followProxy bool) bool {
 	f, err := Read(path)
 	if err != nil {
 		return errors.Is(err, os.ErrNotExist)
 	}
 	return f.Token != c.Token || f.FP != c.FP || f.Trust != c.Trust || f.Machine != c.Machine || !f.SSH.Equal(c.SSH) ||
-		(fallback && f.Proxy != c.Proxy)
+		f.ProxyAlways != c.ProxyAlways || (followProxy && f.Proxy != c.Proxy)
 }
 
 // heartbeat is how a link is pinged: every, and how long a pong may take; hub: the hub said so (endpoints).
@@ -594,7 +603,7 @@ func (l *link) localGone() bool {
 		return false
 	}
 	for _, a := range addrs {
-		if p, err := netip.ParsePrefix(a.String()); err == nil && p.Addr().Unmap().WithZone("") == l.local.WithZone("") {
+		if interfaceIP(a) == l.local.WithZone("") {
 			return false
 		}
 	}

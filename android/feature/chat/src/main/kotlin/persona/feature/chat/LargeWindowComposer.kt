@@ -3,6 +3,7 @@ package persona.feature.chat
 import android.view.DragEvent
 import androidx.compose.foundation.draganddrop.dragAndDropTarget
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.FlowRowScope
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -33,11 +34,13 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.coroutineContext
+import persona.core.contracts.ImageLimits
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.ChatComposerService
 import persona.core.designsystem.ComposerDropTargetFrame
 import persona.core.designsystem.ComposerHardwareActions
 import persona.core.designsystem.LocalComposerHardware
+import persona.core.designsystem.LocalHubImageLimits
 import persona.core.designsystem.LocalLargeWindowInput
 import persona.core.designsystem.ModelPillWidth
 import persona.core.designsystem.hardwareShortcutTextInput
@@ -64,6 +67,7 @@ fun LargeWindowComposer(
     placeholder: String = stringResource(R.string.chat_composer_placeholder),
     leading: (@Composable RowScope.() -> Unit)? = null,
     accessory: (@Composable ColumnScope.() -> Unit)? = null,
+    hintChips: (@Composable FlowRowScope.() -> Unit)? = null,
     modeHint: String? = null,
     onOverlay: (Boolean) -> Unit = {},
     visible: Boolean = true,
@@ -74,36 +78,51 @@ fun LargeWindowComposer(
     onMentionTask: (String) -> Unit = {},
     onMentionOpen: (Boolean) -> Unit = {},
     onModel: (() -> Unit)? = null,
+    // /permissions opens the chat's permission mode picker (#6513); null where the chat has none.
+    onPermissions: (() -> Unit)? = null,
+    onWorkflows: (() -> Unit)? = null,
     loop: Boolean = false,
     blockedLabel: String? = null,
     onBlocked: () -> Unit = {},
     useShellSurface: Boolean = false,
     modelPill: (@Composable (ModelPillWidth) -> Unit)? = null,
+    upload: ComposerAttachmentUpload? = null,
+    wrapPlaceholder: Boolean = false,
+    covered: Boolean = false,
+    imageLimits: ImageLimits = LocalHubImageLimits.current.forAgent(null),
 ) {
     val largeWindow = LocalLargeWindowInput.current
+    val dictate = rememberComposerDictation(session, state, visible && enabled, onNotice)
+    if (covered) SideEffect { dictate?.session?.cover() }
     val composer: @Composable () -> Unit = {
         ChatComposer(
             session = session, state = state, working = working, sending = sending, canClear = canClear,
-            service = service, uploadDestination = uploadDestination, onSend = onSend, onCommand = onCommand, onNotice = onNotice,
+            service = service, uploadDestination = uploadDestination, upload = upload, onSend = onSend, onCommand = onCommand, onNotice = onNotice,
             extraContent = extraContent, assistantChat = assistantChat, enabled = enabled, placeholder = placeholder, leading = leading,
-            accessory = accessory, modeHint = modeHint, onOverlay = onOverlay, visible = visible,
+            accessory = accessory, hintChips = hintChips, modeHint = modeHint, onOverlay = onOverlay, visible = visible, dictate = dictate.takeUnless { covered },
             agentName = agentName, canInterrupt = canInterrupt, mentions = mentions, onMention = onMention,
-            onMentionTask = onMentionTask, onMentionOpen = onMentionOpen, onModel = onModel, loop = loop,
-            blockedLabel = blockedLabel, onBlocked = onBlocked, useShellSurface = useShellSurface, modelPill = modelPill,
+            onMentionTask = onMentionTask, onMentionOpen = onMentionOpen, onModel = onModel, onPermissions = onPermissions, onWorkflows = onWorkflows, loop = loop,
+            blockedLabel = blockedLabel, onBlocked = onBlocked, useShellSurface = useShellSurface, modelPill = modelPill, wrapPlaceholder = wrapPlaceholder,
+            imageLimits = imageLimits,
         )
     }
 
-    val currentOnSend by rememberUpdatedState(onSend)
-    val sendAction = remember { { currentOnSend() } }
+    val mainClear = LocalMainChatClear.current?.takeIf { enabled }
+    val currentSubmit by rememberUpdatedState {
+        if (!covered && dictate?.active != true) dispatchComposerSend(state, extraContent, mainClear, onPermissions, onWorkflows, onSend)
+    }
+    val sendAction = remember { { currentSubmit() } }
     val hasContent = state.hasContent || extraContent
-    val canSend = enabled && state.ready && !sending
+    val canSend = visible && !covered && enabled && state.ready && !sending && dictate?.active != true
     val sendEnabled = canSend && hasContent && blockedLabel == null
-    val collapseForSend = remember(state) {
+    val collapseForSend = remember(state, extraContent, onPermissions) {
         { collapse: () -> Unit ->
             val focusRequest = state.focusRequest
+            val opensPermissions = isPermissionsCommand(state, extraContent, onPermissions)
             collapse()
             state.focusRequest = focusRequest
-            state.focused = false
+            // The leading mode control owns the requested picker; keep it composed until that picker is dismissed.
+            state.focused = opensPermissions
         }
     }
     val collapseForEscape = remember(state) {
@@ -134,9 +153,8 @@ fun LargeWindowComposer(
             scope.launch {
                 try {
                     for (uri in uris) {
-                        val mediaCount = state.attachments.count { it.media }
                         val result = withContext(NonCancellable + Dispatchers.IO) {
-                            importDroppedAttachment(context, uri, mediaCount)
+                            importDroppedAttachment(context, uri, state.attachments, limits = imageLimits, canSpill = service != null)
                         }
                         result.attachment?.let { attachment ->
                             ComposerDropCleanup.track(state, context)

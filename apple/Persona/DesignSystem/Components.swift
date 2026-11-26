@@ -9,6 +9,7 @@ struct StatusDot: View {
     var size: CGFloat = 9
     /// It only waits in the background (`Session.waitsInBackground`).
     var waiting = false
+    var justFinished = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// The needs-you ring: one breath every `breath` seconds, out to `1 + breathScale` times the dot as it fades.
@@ -36,25 +37,18 @@ struct StatusDot: View {
             } else if Self.showsBreathingRing(state: state, reduceMotion: reduceMotion) {
                 Circle().fill(state.color)
                     .overlay {
-                        #if os(macOS)
-                        // Core Animation runs it: the clock below relaid the whole window 30 times a second.
-                        MacBreathingRing(color: state.color.opacity(Self.ringOpacity))
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(true)
-                        #else
                         VisibleWork { eligible in
                             BreathingRing(color: state.color.opacity(Self.ringOpacity), eligible: eligible)
                         }
                         .allowsHitTesting(false)
                         .accessibilityHidden(true)
-                        #endif
                     }
             } else {
-                Circle().fill(state.color)
+                Circle().fill(justFinished ? StatusPalette.unread.dot : state.color)
             }
         }
         .frame(width: size, height: size)
-        .accessibilityLabel(state == .working && waiting ? String(localized: "Waiting in the background") : state.label)
+        .accessibilityLabel(justFinished ? StateName.justFinished.text : (state == .working && waiting ? String(localized: "Waiting in the background") : state.label))
     }
 }
 
@@ -140,6 +134,7 @@ struct AgentStateBadge: View {
     var state: AgentState
     /// It only waits in the background (`Session.waitsInBackground`).
     var waiting = false
+    var justFinished = false
     private static let attention = BUIGlyph("M12 6v8M12 18.5v.01")
 
     var body: some View {
@@ -153,6 +148,7 @@ struct AgentStateBadge: View {
                 .accessibilityLabel(String(localized: "Waiting in the background"))
         case .working: BUISpinner(size: Theme.Size.badge, lineWidth: Theme.Size.rule)
         case .unread: badge(Theme.positive, .check)
+        case .idle where justFinished: StatusDot(state: .idle, size: Theme.Size.dotXL, justFinished: true)
         case .idle: Circle().strokeBorder(Theme.cardStroke, lineWidth: Theme.Size.rule).frame(width: Theme.Size.badge, height: Theme.Size.badge)
         case .offline, .unknown: StatusDot(state: state, size: 9)
         }
@@ -490,6 +486,11 @@ struct SegmentedChoice<Value: Hashable>: View {
 }
 
 struct EmptyStateView: View {
+    /// How the action is drawn: the page's one action, prominent; or a way to another place that holds what this one
+    /// lacks ("3 coming up this week ›"), the accent's words and ›, where the page already has its prominent action
+    /// (a foot toolbar's +). BeautifulUI draws its own secondary button for either.
+    enum ActionLook { case prominent, link }
+
     var symbol: String
     var title: String
     var message: String
@@ -497,6 +498,7 @@ struct EmptyStateView: View {
     /// The mark's color when it means something (`Theme.caution` for a warning); the accent otherwise. BeautifulUI
     /// keeps its own quiet mark.
     var tint: Color? = nil
+    var actionLook = ActionLook.prominent
 
     var body: some View {
         if AppStyle.current.usesBeautifulUI {
@@ -520,9 +522,26 @@ struct EmptyStateView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
             if let action {
-                Button(action: action.run) { Text(action.title).lineLimit(1) }
-                    .themedButton(prominent: true)
-                    .padding(.top, Theme.Space.xs)
+                switch actionLook {
+                case .prominent:
+                    Button(action: action.run) { Text(action.title).lineLimit(1) }
+                        .themedButton(prominent: true)
+                        .padding(.top, Theme.Space.xs)
+                case .link:
+                    Button(action: action.run) {
+                        HStack(spacing: Theme.Space.xs) {
+                            Text(action.title).lineLimit(1)
+                            ThemedIcon(Theme.Icon.disclosure)
+                                .font(Theme.Font.labelHeavy)
+                                .accessibilityHidden(true)
+                        }
+                        .tapTargetHeight()
+                        .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Theme.accent)
+                    .accessibilityShowsLargeContentViewer()
+                }
             }
         }
         .padding(Theme.Space.xxl)

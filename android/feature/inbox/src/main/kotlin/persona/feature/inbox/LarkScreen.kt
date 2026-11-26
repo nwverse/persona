@@ -49,6 +49,7 @@ import persona.core.chatlist.*
 import persona.core.navigation.Navigator
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import persona.core.inbox.*
 
 /** The host sets this while an in-app sheet or overlay covers the conversation. */
 val LocalLarkReadOccluded = staticCompositionLocalOf { false }
@@ -56,16 +57,28 @@ val LocalLarkReadOccluded = staticCompositionLocalOf { false }
 
 internal val LocalLarkMessageDisplay = staticCompositionLocalOf { LarkMessageDisplay.Hidden }
 
+/** Messages metadata never overrides an Inbox item's manager-scoped landing or a deep link's established lookup. */
+internal fun larkMessagesSummary(route: LarkRoute, rows: List<LarkChatSummary>?): LarkChatSummary? =
+    if (route.fromMessages) rows?.firstOrNull { it.id == route.feedId } else null
+
 @Composable
 fun LarkScreen(repository: InboxRepository, route: LarkRoute, navigator: Navigator) {
     val inbox by repository.snapshot.collectAsStateWithLifecycle()
     val source = inbox.contentSource
     val manager = itemManager(repository, route.itemId)
+    // A Messages row already carries this chat's opening metadata. Capture it once so reading does not move the landing;
+    // Inbox rows and deep links keep their established lookup fallback.
+    val listed = remember(repository, source, route) {
+        larkMessagesSummary(route, repository.larkMessages.value?.state?.value?.rows)
+    }
     key(source, route, manager) {
         // Where to open (the first unread) is the item's manager's account's read state.
         val opening by produceState<Pair<LarkReadingStore?, LarkListNavigation>?>(null, source, manager) {
             val store = source?.let { repository.readingStore() }
-            val navigation = try { source?.forManager(manager)?.read { larkListNavigation(this, route.feedId) } ?: LarkListNavigation() }
+            val navigation = try {
+                listed?.let { LarkListNavigation(it.readPosition, it.unread > 0 || it.markedUnread, it.mentionPosition) }
+                    ?: source?.forManager(manager)?.read { larkListNavigation(this, route.feedId) } ?: LarkListNavigation()
+            }
             catch (e: CancellationException) { throw e }
             catch (_: Exception) { LarkListNavigation() }
             value = store to navigation
@@ -93,8 +106,10 @@ fun LarkScreen(repository: InboxRepository, route: LarkRoute, navigator: Navigat
 /** A chat's thread, read with the chat's message display settings (a pin that replies in a thread opens here too, iOS `LarkThreadView`). */
 @Composable
 internal fun LarkChatThreadSheet(root: LarkMessage, repository: InboxRepository, display: LarkMessageDisplay,
-    onDismiss: () -> Unit) {
-    CompositionLocalProvider(LocalLarkMessageDisplay provides display) { LarkThreadSheet(root, repository, onDismiss = onDismiss) }
+    mentionFeed: String? = null, onDismiss: () -> Unit) {
+    CompositionLocalProvider(LocalLarkMessageDisplay provides display) {
+        LarkThreadSheet(root, repository, mentionFeed = mentionFeed, onDismiss = onDismiss)
+    }
 }
 
 @Composable
@@ -103,7 +118,17 @@ private fun LarkConversationScreen(repository: InboxRepository, route: LarkRoute
     jumpTo: (Long) -> Unit,
 ) {
     val flow = remember(repository, route.feedId, target.around) { repository.conversation(route.feedId, target.around) }
-    val conversation by flow.collectAsStateWithLifecycle(LarkConversation(loading = true))
+    val loadedConversation by flow.collectAsStateWithLifecycle(LarkConversation(loading = true))
+    val listed = remember(repository, route) {
+        larkMessagesSummary(route, repository.larkMessages.value?.state?.value?.rows)
+    }
+    val conversation = remember(loadedConversation, listed) {
+        loadedConversation.copy(
+            title = loadedConversation.title.ifBlank { listed?.name.orEmpty() },
+            isGroup = loadedConversation.isGroup ?: listed?.isGroup,
+            isTopic = loadedConversation.isTopic || listed?.isTopic == true,
+        )
+    }
     val inbox by repository.snapshot.collectAsStateWithLifecycle()
     val record = inbox.records.inboxRecord(route.itemId)
     val feedback = persona.core.designsystem.LocalAppFeedback.current
@@ -120,7 +145,7 @@ private fun LarkConversationScreen(repository: InboxRepository, route: LarkRoute
     val confirmedReads by repository.messageReads.collectAsStateWithLifecycle()
     val displayed = remember(conversation.messages, timelineVersion, timeline, confirmedReads, inbox.contentSource) {
         timeline.items(conversation.messages).map { message ->
-            if (message.position != null && InboxMessageRead(inbox.contentSource?.scope.orEmpty(), route.feedId, message.id, message.position) in confirmedReads)
+            if (message.position?.let { InboxMessageRead(inbox.contentSource?.scope.orEmpty(), route.feedId, message.id, it) in confirmedReads } == true)
                 message.copy(isRead = true) else message
         }
     }
@@ -222,7 +247,7 @@ private fun LarkConversationScreen(repository: InboxRepository, route: LarkRoute
             if (atNewerEdge && latestConversation.hasNewer && !latestConversation.loadingNewer) try {
                 repository.loadNewer(route.feedId)
             } catch (e: CancellationException) { throw e }
-            catch (_: Exception) { error = res.getString(R.string.inbox_lark_messages_failed) }
+            catch (_: Exception) { error = res.getString(persona.core.inbox.R.string.inbox_lark_messages_failed) }
         }
     }
     // Not keyed on the list: a change while a request is out must not cancel it (its answer would be lost and the next
@@ -270,7 +295,8 @@ private fun LarkConversationScreen(repository: InboxRepository, route: LarkRoute
     // Pictures in a thread or a forwarded bundle open in the same viewer (alone when they are not the conversation's).
     val openImage: (LarkPart.Image) -> Unit = remember { { image -> viewer = larkGallery(larkImages(messages), image) } }
     thread?.let { root -> CompositionLocalProvider(LocalLarkImageOpener provides openImage) {
-        LarkChatThreadSheet(root, repository, shownDisplay, onDismiss = { thread = null })
+        LarkChatThreadSheet(root, repository, shownDisplay, mentionFeed = larkMentionFeed(route.feedId, conversation),
+            onDismiss = { thread = null })
     } }
     profilePerson?.let { person ->
         LarkProfileSheet(person, repository, onDismiss = { profilePerson = null })
@@ -378,7 +404,9 @@ private fun LarkConversationScreen(repository: InboxRepository, route: LarkRoute
                 JIconButton(PhIcons.DotsThree, stringResource(R.string.inbox_more), { more = true })
             })
     }, bottomBar = {
-        ReplyComposerField(reply, composer::update, onSend = { composer.send(context = repository.pagePins) }, stringResource(R.string.inbox_lark_reply_to, title),
+        LarkReplyComposerField(repository, composer, reply, larkMentionFeed(route.feedId, conversation),
+            onSend = { composer.send(context = repository.pagePins) },
+            placeholder = stringResource(R.string.inbox_lark_reply_to, title),
             modifier = Modifier.imePadding(), accessory = {
                 // Opened in place of the item's extension page, which broke: one line with "Retry" (inbox_item, #1683).
                 InboxExtensionNotice(route.itemId, route, Modifier)
@@ -661,10 +689,10 @@ internal fun LarkPartContent(
                     open?.invoke(part.text, part.source)
                 })
             } else {
-                LarkRichInlineText(part.text, source = part.source, onOpenProfile = onOpenProfile)
+                ReadingContent { LarkRichInlineText(part.text, source = part.source, onOpenProfile = onOpenProfile) }
             }
         }
-        is LarkPart.Code -> LarkCodeBlock(part.code, part.language)
+        is LarkPart.Code -> ReadingContent { LarkCodeBlock(part.code, part.language) }
         is LarkPart.Audio -> LarkVoiceView(part)
         is LarkPart.Video -> LarkVideoView(part, onPlay = { onPlayVideo?.invoke(part.ref) })
         is LarkPart.Sticker -> LarkStickerView(part)

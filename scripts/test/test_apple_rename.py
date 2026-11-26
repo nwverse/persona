@@ -16,6 +16,22 @@ TARGETS = PROJECT.split('targets:\n', 1)[1].split('schemes:\n', 1)[0]
 SCHEMES = PROJECT.split('schemes:\n', 1)[1]
 FORMER_NAME = ('jar' + 'vis').capitalize()
 
+TEST_ONLY_TARGET_EXCEPTIONS = {
+    'AboutVersionAccessibilityHost':
+        'Standalone test process for the shared About row accessibility tree; never embedded in Persona (#11150).',
+    'AboutVersionAccessibilityUITests':
+        'UI tests for the standalone About row accessibility host, not the production app (#11150).',
+}
+TEST_ONLY_SCHEME_EXCEPTIONS = {
+    'AboutVersionAccessibilityHost': 'Runs only the standalone About row accessibility UI tests (#11150).',
+    'AboutVersionVisualTests': 'Builds PersonaTests without PersonaUITests for About row visual comparisons (#11150).',
+    'PersonaOfflineUnitTests': 'Builds and runs offline PersonaTests without PersonaUITests (#12474).',
+}
+
+
+def is_allowed_product_name(name, exceptions):
+    return name.startswith('Persona') or name in exceptions
+
 
 def blocks(text):
     matches = list(re.finditer(r'^  (\w+):\n', text, re.MULTILINE))
@@ -41,6 +57,7 @@ class AppleRenameTests(unittest.TestCase):
         self.assertFalse((APPLE / 'PersonaLink/Sources' / (FORMER_NAME + 'Link')).exists())
         self.assertFalse((APPLE / 'PersonaLink/Sources/PersonaLink').exists())
         self.assertTrue((APPLE / 'PersonaLink/Sources/PersonaScreen').is_dir())
+        self.assertTrue((APPLE / 'PersonaLink/App/Sources/PersonaLink').is_dir())
         tracked = subprocess.run(['git', 'ls-files', '--', 'mac'], cwd=ROOT, capture_output=True, text=True, check=True).stdout
         self.assertEqual(tracked, '', 'the independent Link helper package is apple/PersonaLink/')
         self.assertIn('name: Persona\n', PROJECT)
@@ -58,7 +75,7 @@ class AppleRenameTests(unittest.TestCase):
             'PersonaShare': 'PersonaShare', 'PersonaVisionShare': 'PersonaShare',
             'PersonaWatchWidgets': 'PersonaWatchWidgets', 'PersonaVisionWidgets': 'PersonaWidgets',
         }
-        self.assertEqual(set(targets), {*expected, 'PersonaTests', 'PersonaUITests'})
+        self.assertEqual(set(targets), {*expected, 'PersonaTests', 'PersonaUITests', *TEST_ONLY_TARGET_EXCEPTIONS})
         for target, module in expected.items():
             with self.subTest(target=target):
                 self.assertIn('PRODUCT_MODULE_NAME: ' + module + '\n', targets[target])
@@ -76,19 +93,41 @@ class AppleRenameTests(unittest.TestCase):
 
     def test_only_canonical_schemes_build_existing_targets(self):
         schemes = blocks(SCHEMES)
-        self.assertEqual(set(schemes), {'Persona', 'PersonaWatch', 'PersonaVision'})
-        for name, scheme in schemes.items():
-            self.assertIn(name + ': all\n', scheme)
+        canonical = {'Persona', 'PersonaWatch', 'PersonaVision'}
+        self.assertEqual(set(schemes), {*canonical, *TEST_ONLY_SCHEME_EXCEPTIONS})
+        for name in canonical:
+            self.assertIn(name + ': all\n', schemes[name])
         self.assertNotIn('PersonaMac', schemes)
         self.assertFalse((APPLE / (FORMER_NAME + '.xcodeproj')).is_symlink())
+
+    def test_about_version_test_only_exceptions_are_narrow_and_reasoned(self):
+        expected_targets = {'AboutVersionAccessibilityHost', 'AboutVersionAccessibilityUITests'}
+        expected_schemes = {'AboutVersionAccessibilityHost', 'AboutVersionVisualTests', 'PersonaOfflineUnitTests'}
+        for exceptions, expected in ((TEST_ONLY_TARGET_EXCEPTIONS, expected_targets),
+                                     (TEST_ONLY_SCHEME_EXCEPTIONS, expected_schemes)):
+            self.assertEqual(set(exceptions), expected)
+            for name, reason in exceptions.items():
+                with self.subTest(name=name):
+                    self.assertIsInstance(reason, str)
+                    self.assertTrue(reason.strip(), 'a test-only exception needs a deliberate reason')
+        for exceptions, expected in ((TEST_ONLY_TARGET_EXCEPTIONS, expected_targets),
+                                     (TEST_ONLY_SCHEME_EXCEPTIONS, expected_schemes)):
+            for name in expected:
+                with self.subTest(registered=name):
+                    self.assertTrue(is_allowed_product_name(name, exceptions))
+            with self.subTest(unregistered='AboutVersionUnregisteredTests'):
+                self.assertFalse(is_allowed_product_name('AboutVersionUnregisteredTests', exceptions))
+        self.assertTrue(is_allowed_product_name('Persona', {}))
 
     def test_intent_control_activity_and_info_keys_use_canonical_identity(self):
         expected = {
             'Persona/Intents/AskPersonaIntent.swift': ['AskPersonaIntent'],
             'Persona/Intents/PersonaStatusIntent.swift': ['PersonaStatusIntent'],
             'Persona/Intents/PersonaShortcuts.swift': ['PersonaShortcuts'],
-            'PersonaWidgets/PersonaControls.swift': ['AskPersonaControl', 'PersonaAgentsControl', 'DictatePersonaControl'],
-            'LiveActivity/PersonaControlIntents.swift': ['OpenPersonaAssistantIntent', 'OpenPersonaAgentsIntent', 'OpenPersonaDictationIntent'],
+            'PersonaWidgets/PersonaControls.swift': ['AskPersonaControl', 'PersonaAgentsControl', 'DictatePersonaControl',
+                                                     'CallPersonaControl'],
+            'LiveActivity/PersonaControlIntents.swift': ['OpenPersonaAssistantIntent', 'OpenPersonaAgentsIntent',
+                                                         'OpenPersonaDictationIntent', 'OpenPersonaCallIntent'],
             'LiveActivity/PersonaActivityAttributes.swift': ['PersonaActivityAttributes'],
         }
         for path, names in expected.items():
@@ -100,6 +139,7 @@ class AppleRenameTests(unittest.TestCase):
         self.assertIn('kind: "persona.control.ask"', controls)
         self.assertIn('kind: "persona.control.agents"', controls)
         self.assertIn('kind: "persona.control.dictate"', controls)
+        self.assertIn('kind: "persona.control.call"', controls)
         info = plistlib.loads((APPLE / 'PersonaNotify/Info.plist').read_bytes())
         self.assertEqual(info['NSExtension']['NSExtensionPrincipalClass'], '$(PRODUCT_MODULE_NAME).NotificationService')
         self.assertIn('PersonaPushKeychainGroup', info)
@@ -146,7 +186,8 @@ class AppleRenameTests(unittest.TestCase):
         selection = root.split('private var usesShell: Bool {', 1)[1].split('\n    }', 1)[0]
         self.assertRegex(selection, r'#if os\(visionOS\)[\s\S]*?return false')
         # Active compact width still selects the shell; #2836 holds that width while iOS snapshots the app away.
-        self.assertRegex(selection, r'#elseif os\(iOS\)\s+return \(heldWidthClass \?\? widthClass\) == \.compact \|\| flipped\s+#else\s+return false')
+        # No other platform since the Mac app went (#13611): iOS is the last branch.
+        self.assertRegex(selection, r'#elseif os\(iOS\)\s+return \(heldWidthClass \?\? widthClass\) == \.compact \|\| flipped\s+#endif')
         # The Sidebar layout when it is chosen, at every width (#6332: the drawer on a phone, the column at regular width);
         # otherwise the shell at compact width, else the tabs. Nothing picked is Merged where wide and the shell at compact
         # width (#4206, NavigationLayout.effective).
@@ -200,10 +241,22 @@ class AppleRenameTests(unittest.TestCase):
         script = (ROOT / 'scripts/app/mac-link.sh').read_text()
         # Persona Screen is the package's one product, built by name (#7927: swift build, kept by its sources).
         self.assertIn('PersonaScreen "$@"', script)
-        self.assertNotIn('-scheme PersonaLink', script)
         self.assertNotIn('--product PersonaLink', script)
         self.assertIn('persona-link" install --node-bin', script)
-        self.assertNotIn('open "/Applications/Persona Link.app"', script)
+
+    def test_menu_bar_app_is_a_package_of_its_own_with_the_canonical_process_name(self):
+        # Apart from Persona Screen's package, so building the App never changes Screen's bits (#7927).
+        package = (APPLE / 'PersonaLink/App/Package.swift').read_text()
+        self.assertIn('name: "PersonaLink"', package)
+        self.assertIn('path: "Sources/PersonaLink"', package)
+        info = plistlib.loads((APPLE / 'PersonaLink/App/Info.plist').read_bytes())
+        self.assertEqual(info['CFBundleExecutable'], 'PersonaLink')
+        self.assertTrue(info['LSUIElement'])
+        script = (ROOT / 'scripts/app/mac-link.sh').read_text()
+        self.assertIn('-scheme PersonaLink', script)
+        self.assertIn('cp "$products/PersonaLink" "$APP/Contents/MacOS/PersonaLink"', script)
+        self.assertIn('pkill -x PersonaLink', script)
+        self.assertIn('open "/Applications/Persona Link.app"', script)
 
     def test_entitlement_checker_accepts_only_the_canonical_product(self):
         spec = importlib.util.spec_from_file_location('entitlements', ROOT / 'scripts/release/entitlements.py')

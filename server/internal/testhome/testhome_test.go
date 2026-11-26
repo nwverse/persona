@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/identity"
 )
 
 // quiet is Main without the message about a write to ~/.persona, which these tests provoke on purpose.
@@ -40,6 +43,33 @@ func TestMainGivesAnEmptyHomeAndRestoresTheEnvironment(t *testing.T) {
 	}
 	if _, err := os.Stat(home); !os.IsNotExist(err) {
 		t.Fatalf("the throw-away home is still there: %v", err)
+	}
+}
+
+// PERSONA_HOME's former name goes too: with PERSONA_HOME unset, identity reads it, and a test's state directory was the
+// one it named (a Persona of an older install) instead of the throw-away home's. It comes back afterwards.
+func TestMainClearsTheFormerStateVariable(t *testing.T) {
+	_, legacy := compat.EnvNames("PERSONA_HOME")
+	t.Setenv("HOME", "/real/home")
+	t.Setenv("PERSONA_HOME", "/real/state")
+	t.Setenv(legacy, "/real/former-state")
+	t.Setenv(isolated, "")
+	_ = os.Unsetenv(isolated)
+	code := quiet(func() int {
+		home := os.Getenv("HOME")
+		if v, ok := os.LookupEnv(legacy); ok {
+			t.Errorf("%s=%q in the tests", legacy, v)
+		}
+		if got, want := identity.DataDir(home), filepath.Join(home, ".persona"); got != want {
+			t.Errorf("state directory %q, want %q", got, want)
+		}
+		return 0
+	})
+	if code != 0 {
+		t.Fatalf("exit code %d", code)
+	}
+	if os.Getenv(legacy) != "/real/former-state" {
+		t.Fatalf("not restored: %s=%q", legacy, os.Getenv(legacy))
 	}
 }
 
@@ -141,5 +171,66 @@ func TestMainKeepsTheGoToolsSettings(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("go env under the throw-away HOME:\n%s\nwant\n%s", got, want)
+	}
+}
+
+// A run started from inside git (`git bisect run` exports GIT_DIR) has no git repository variables: a test's `git init`
+// in its own directory makes a repository there and leaves the one the run was started from alone (#13610). They come
+// back afterwards.
+func TestMainKeepsGitOffTheRepositoryItWasStartedFrom(t *testing.T) {
+	gitBin, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("no git:", err)
+	}
+	t.Setenv(isolated, "")
+	_ = os.Unsetenv(isolated)
+	outer := t.TempDir()
+	if out, err := exec.Command(gitBin, "init", "-q", outer).CombinedOutput(); err != nil {
+		t.Fatalf("git init: %s %v", out, err)
+	}
+	config := filepath.Join(outer, ".git", "config")
+	before, err := os.ReadFile(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	elsewhere := t.TempDir() // a work tree apart from the repository: a leaked `git init` writes core.worktree
+	t.Setenv("GIT_DIR", filepath.Join(outer, ".git"))
+	t.Setenv("GIT_WORK_TREE", elsewhere)
+	inner := filepath.Join(t.TempDir(), "repo")
+	code := quiet(func() int {
+		for _, k := range gitLocators {
+			if v, ok := os.LookupEnv(k); ok {
+				t.Errorf("%s=%q inside the run", k, v)
+			}
+		}
+		if out, err := exec.Command(gitBin, "init", "-q", inner).CombinedOutput(); err != nil {
+			t.Errorf("git init: %s %v", out, err)
+		}
+		return 0
+	})
+	if code != 0 {
+		t.Fatalf("exit code %d", code)
+	}
+	if after, err := os.ReadFile(config); err != nil || string(after) != string(before) {
+		t.Errorf("the outer repository's config changed:\n%s\nwas\n%s", after, before)
+	}
+	if _, err := os.Stat(filepath.Join(inner, ".git")); err != nil {
+		t.Errorf("no repository where the test made one: %v", err)
+	}
+	if os.Getenv("GIT_DIR") != filepath.Join(outer, ".git") || os.Getenv("GIT_WORK_TREE") != elsewhere {
+		t.Fatalf("not restored: GIT_DIR=%q GIT_WORK_TREE=%q", os.Getenv("GIT_DIR"), os.Getenv("GIT_WORK_TREE"))
+	}
+}
+
+// ClearGit, for a package that does not run through Main, unsets every one of them.
+func TestClearGitUnsetsTheRepositoryVariables(t *testing.T) {
+	for _, k := range gitLocators {
+		t.Setenv(k, "/elsewhere")
+	}
+	ClearGit()
+	for _, k := range gitLocators {
+		if v, ok := os.LookupEnv(k); ok {
+			t.Errorf("%s=%q after ClearGit", k, v)
+		}
 	}
 }

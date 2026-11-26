@@ -6,13 +6,16 @@ import persona.core.navigation.AppTab
 import persona.core.navigation.AssistantRoute
 import persona.core.navigation.EngineRoute
 import persona.core.navigation.ExtensionUiRoute
+import persona.core.navigation.LarkMessagesRoute
 import persona.core.navigation.LauncherRoute
 import persona.core.navigation.MachineDetailRoute
 import persona.core.navigation.MachinesRoute
+import persona.core.navigation.StarredMessagesRoute
 import persona.core.navigation.TodoDetailRoute
 import persona.core.navigation.TodosRoute
-import persona.feature.knowledge.KnowledgeDetailRoute
-import persona.feature.knowledge.KnowledgeRoute
+import persona.core.navigation.KnowledgeDetailRoute
+import persona.core.navigation.KnowledgeKindRoute
+import persona.core.navigation.KnowledgeRoute
 
 /** How the Assistant stack shares the window, without measuring a device or owning another back stack. */
 internal data class AssistantPanePolicy(
@@ -50,8 +53,8 @@ internal fun assistantPanePolicy(
 }
 
 private fun isAssistantSecondaryDestination(key: NavKey): Boolean = when (key) {
-    MachinesRoute, TodosRoute, KnowledgeRoute -> true
+    StarredMessagesRoute, MachinesRoute, TodosRoute, KnowledgeRoute, LarkMessagesRoute -> true
     is MachineDetailRoute, is AddComputerRoute, is EngineRoute, is LauncherRoute,
-    is TodoDetailRoute, is KnowledgeDetailRoute, is ExtensionUiRoute -> true
+    is TodoDetailRoute, is KnowledgeDetailRoute, is KnowledgeKindRoute, is ExtensionUiRoute -> true
     else -> isInboxDestination(key)
 }

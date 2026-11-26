@@ -238,12 +238,6 @@ func (s *Service) delegateSince(ix proto.Interaction, forget func(), since time.
 // it or tells the user. A call that comes too late is dropped. forget takes back delegable's note unless the answer
 // went.
 func (s *Service) delegateNow(ix proto.Interaction, forget func(), since time.Time) {
-	answered := false
-	defer func() {
-		if !answered {
-			forget()
-		}
-	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	timeout := s.hello(ctx).Agents.Delegate.Timeout()
 	cancel()
@@ -271,8 +265,9 @@ func (s *Service) delegateNow(ix proto.Interaction, forget func(), since time.Ti
 		// Noted since delegable: the agent has the answer at once and may ask the same again before this goes on.
 		ok, err := s.answerQuestion(ix.MachineID, ix.SessionID, ix.ID, d.res.Answers, d.res.Reason)
 		if ok {
-			answered = true
 			s.rememberDelegated(ix)
+		} else if err == nil {
+			forget() // no longer pending: no answer from the assistant
 		}
 		if ok || err == nil {
 			s.delegateMark(ix, "delegate_end")
@@ -283,6 +278,7 @@ func (s *Service) delegateNow(ix proto.Interaction, forget func(), since time.Ti
 		ix.Delegate = d.res.Ask
 	}
 	s.delegateMark(ix, "delegate_end") // before the user is told: a restart after this does not tell them twice
+	forget()                           // a repeat may arrive as soon as the first card becomes the user's
 	s.escalate(ix)
 }
 
@@ -448,8 +444,10 @@ func (s *Service) reanswer(ctx context.Context, id string, answers map[string]st
 	if len(items) == 0 {
 		return http.StatusBadRequest, errNoAnswers
 	}
-	text := prompts.RenderAgentReanswer(prompts.AgentReanswer{Items: items})
-	sum := sha256.Sum256([]byte(text))
+	text := prompts.RenderAgentReanswer(prompts.AgentReanswer{Language: answerLanguage(s.hello(ctx).Locale), Items: items})
+	// Delivery language is not the identity of the user's answer. Keep the legacy
+	// key so a locale change or upgrade cannot redeliver an already-sent override.
+	sum := sha256.Sum256([]byte(prompts.RenderAgentReanswer(prompts.AgentReanswer{Items: items})))
 	key := id + "_" + hex.EncodeToString(sum[:6])
 	s.fleet.mu.Lock()
 	sent := s.fleet.reanswered[key]

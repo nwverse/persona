@@ -24,8 +24,9 @@ import (
 // too ("Set model to `Opus 5.5` and saved as your default for new sessions", seen in local transcripts); there is no
 // session-only form of the command, and the popover says so.
 //
-// Only Claude Code's TUI sessions: a Codex thread on its app-server keeps its effort-only control (codex_effort.go),
-// a headless Persona conversation switches model in its own chip, and every other agent has no command to type.
+// Only Claude Code's TUI sessions here. A Codex thread on its app-server switches through thread/settings/update
+// (codex_effort.go), a Codex in a pane on the terminal route through Codex's own /model with arguments
+// (codex_terminal_modes.go), a headless Persona conversation in its own chip; every other agent has no command to type.
 
 // modelCommand is the line typed into Claude Code to switch the session to model: an id from the agent's own list
 // (aliases such as opus, a full id, a bracketed variant like opus[1m], a gateway's provider/model) or one the user
@@ -210,6 +211,9 @@ func (n *Node) shownModel(id, fromTranscript string) string {
 	if fromTranscript != m.Model.From || time.Since(m.Model.At) > pendingModelTTL {
 		return fromTranscript
 	}
+	if n.metaOf(id).modelAt.After(m.Model.At) {
+		return fromTranscript
+	}
 	return m.Model.Model
 }
 
@@ -251,10 +255,19 @@ func (n *Node) setModel(ctx context.Context, id, model string) error {
 		return fmt.Errorf("Persona 对话的模型在对话上方的芯片里换")
 	}
 	if n.externalCodex(id) || n.codexPath(id) != "" || n.traexPath(id) != "" {
-		return fmt.Errorf("Codex / TRAEX 的会话不支持在手机上切换模型")
+		return fmt.Errorf("Codex / TRAE CLI 的会话不支持在手机上切换模型")
 	}
 	if err := n.switchingRefusal(id); err != nil { // a launcher switch, maybe on the last connection's Node
 		return err
+	}
+	// Outside / Claude Desktop sessions without a terminal pane switch session-only model via Persona's Claude plugin.
+	if handled, err := n.ccPluginSetSettings(ctx, id, model, ""); handled {
+		if err != nil {
+			return err
+		}
+		n.noteModel(id, model, n.transcriptModel(id))
+		n.notifySessions()
+		return nil
 	}
 	// One at a time with the messages: a send in flight is typing into the same box.
 	defer n.typing.lock(id)()
@@ -269,6 +282,9 @@ func (n *Node) setModel(ctx context.Context, id, model string) error {
 		if a.AgentStatus == proto.StatusWorking || a.AgentStatus == proto.StatusBlocked {
 			return fmt.Errorf("Agent 正在工作，这一轮结束后再切换模型")
 		}
+	}
+	if c, ok := n.outsideClaude(id); ok && (c.Status == "busy" || c.Status == "waiting") {
+		return fmt.Errorf("Agent 正在工作，这一轮结束后再切换模型")
 	}
 	// The same checks as a message: a dialog with the keyboard or a draft in the box refuses, nothing typed.
 	if err := n.checkPane(ctx, pane, "claude", ""); err != nil {
@@ -325,14 +341,91 @@ func (n *Node) setModel(ctx context.Context, id, model string) error {
 
 // setModelAndModes applies a request of session.modes: the model first (the efforts a model takes depend on it),
 // then the mode and effort.
-func (n *Node) setModelAndModes(ctx context.Context, id, model, mode, effort string) error {
-	if model != "" {
-		if err := n.setModel(ctx, id, model); err != nil {
-			return err
+func (n *Node) setModelAndModes(ctx context.Context, id, model, mode, effort string, queueEffort bool) (pending, changed bool, err error) {
+	if !n.isAssistantSession(id) {
+		if c, t, ok := n.codexEffortThread(id); ok {
+			if err := n.switchingRefusal(id); err != nil {
+				return false, false, err
+			}
+			if mode != "" {
+				return false, false, fmt.Errorf("Codex 的会话在手机上只能改思考强度和模型，权限模式要在电脑上改")
+			}
+			if err := n.setCodexSettings(ctx, id, c, t, model, effort); err != nil {
+				return false, false, err
+			}
+			return false, strings.TrimSpace(model) != "" || strings.TrimSpace(effort) != "", nil
+		}
+		if src, found := n.codexSource(id); found && codexDesktopChat(src) {
+			if err := n.switchingRefusal(id); err != nil {
+				return false, false, err
+			}
+			if err := n.codexDesktopModes(ctx, id, src, model, mode, effort); err != nil {
+				return false, false, err
+			}
+			return false, strings.TrimSpace(model) != "" || strings.TrimSpace(effort) != "", nil
+		}
+		// A Codex in a pane on the terminal route: Codex's own /model, typed into its box (codex_terminal_modes.go).
+		if t, why, ok := n.codexOnTerminalCtx(ctx, id, true); ok {
+			if err := n.switchingRefusal(id); err != nil {
+				return false, false, err
+			}
+			if mode != "" {
+				return false, false, fmt.Errorf("Codex 的会话在手机上只能改思考强度和模型，权限模式要在电脑上改")
+			}
+			if strings.TrimSpace(model) == "" && strings.TrimSpace(effort) == "" {
+				return false, false, nil
+			}
+			if why != nil {
+				return false, false, why
+			}
+			changed, err := n.setCodexTerminalSettings(ctx, id, t, model, effort)
+			return false, changed, err
+		}
+		if mode == "" && (model != "" || effort != "") {
+			m := strings.TrimSpace(model)
+			if m != "" {
+				if st, ok := n.state.get(id); ok {
+					m = cmp.Or(n.claudeModelArg(st.Launcher, m), "default")
+				}
+				if _, err := modelCommand(m); err != nil {
+					return false, false, err
+				}
+			}
+			if err := validModes("", effort); err != nil {
+				return false, false, err
+			}
+			if handled, err := n.ccPluginSetSettings(ctx, id, m, effort); handled {
+				if err != nil {
+					return false, false, err
+				}
+				if m != "" {
+					n.noteModel(id, m, n.transcriptModel(id))
+				}
+				if effort != "" {
+					n.noteModes(id, "", effort)
+				}
+				n.notifySessions()
+				return false, true, nil
+			}
 		}
 	}
-	if mode == "" && effort == "" {
-		return nil
+	if model != "" {
+		if err := n.setModel(ctx, id, model); err != nil {
+			return false, false, err
+		}
+		changed = true
 	}
-	return n.setModes(ctx, id, mode, effort)
+	if mode == "" && effort == "" {
+		return false, changed, nil
+	}
+	var pendingPtr *bool
+	if queueEffort {
+		pendingPtr = &pending
+	}
+	var modesChanged bool
+	err = n.updateModes(ctx, id, mode, effort, pendingPtr, &modesChanged)
+	if err != nil && changed {
+		return pending, true, partialModesErr(err)
+	}
+	return pending, changed || modesChanged, err
 }

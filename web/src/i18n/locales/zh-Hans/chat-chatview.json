@@ -7,6 +7,7 @@
   "not_delivered": "没送到：{error}",
   "interrupted": "已中断",
   "interrupt_failed": "中断失败：{error}",
+  "send_now_failed": "立即发送失败：{error}",
   "new_chat": "新对话",
   "session": "会话",
   "not_found_title": "找不到这条对话",
@@ -15,6 +16,9 @@
   "start_failed_title": "启动失败",
   "starting_agent": "正在启动 Agent",
   "loading_earlier": "加载更早的消息",
+  "background_activity": "后台活动",
+  "background_empty": "已加载的记录里没有已完成的静默督办轮。",
+  "background_load_earlier": "加载更早的后台活动",
   "started_in": "在 {path} 开始",
   "chat_start": "对话开始",
   "preparing": "正在准备",
@@ -130,5 +134,6 @@
   "todo_completed_label": "待办（已完成）：{title}",
   "export": "导出对话…",
   "side_sessions_count": "分支会话（{count}）",
-  "side_sessions_needs_you": "有分支会话需要你"
+  "side_sessions_needs_you": "有分支会话需要你",
+  "open_agent_page": "打开 Agent 会话"
 }

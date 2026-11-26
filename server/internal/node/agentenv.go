@@ -21,7 +21,8 @@ import (
 // variable goes too (assistantOnlyEnvNames). An Agent that wants CLAUDE_CODE_AUTO_COMPACT_WINDOW or ENABLE_TOOL_SEARCH
 // gets them from its launcher or Claude Code's settings, not from the pane.
 var assistantOnlyEnv = []string{
-	"PERSONA_ASSISTANT", "PERSONA_ASSISTANT_BIN", "PERSONA_SESSION_ID", "PERSONA_SPACE", "PERSONA_GUEST",
+	modelSourceEnv, modelSourceBinEnv,
+	"PERSONA_ASSISTANT", "PERSONA_ASSISTANT_BIN", "PERSONA_SESSION_ID", "PERSONA_SPACE", trackKindEnv, categoriesEnv, "PERSONA_GUEST",
 	"CLAUDE_CODE_AUTO_COMPACT_WINDOW", "ENABLE_TOOL_SEARCH",
 	"CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_EXECPATH", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_CHILD_SESSION",
 	"CLAUDE_CODE_SESSION_ATTENDED", "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_EFFORT",
@@ -32,7 +33,7 @@ var assistantOnlyEnv = []string{
 // typed start line unsets it again, so the Agent, and the shell the tab keeps once it exits, have the environment
 // the user's own terminals have; the Agent mark the tab also starts with (agentMarkEnv) stays. Nothing an Agent's own
 // shells read: they are not interactive and load none of those frameworks.
-var startupOnlyEnv = []string{"DISABLE_AUTO_UPDATE", "DISABLE_UPDATE_PROMPT", "POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD"}
+var startupOnlyEnv = []string{"DISABLE_AUTO_UPDATE", "DISABLE_UPDATE_PROMPT", "ZSH_DISABLE_COMPFIX", "POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD"}
 
 // assistantOnlyEnvNames is assistantOnlyEnv with each Persona variable's older spelling after it.
 func assistantOnlyEnvNames() []string {

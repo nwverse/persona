@@ -129,7 +129,7 @@ func (s *Service) handoffPrepare(ctx context.Context, machine, machineName strin
 	if !s.hello(ctx).SecretHandoffGate {
 		return nil, errors.New("the hub is older than secret hand-offs (it does not check who approves them): update the hub first")
 	}
-	nodes, _ := s.devs.(nodeAnnouncer)
+	nodes, _ := s.physicalDevices().(nodeAnnouncer)
 	if s.devs == nil || !s.devs.Has(machine) || nodes == nil {
 		return nil, fmt.Errorf("%s is not connected by this manager: secrets can be handed only to an Agent on one of its own computers", machineName)
 	}
@@ -195,13 +195,13 @@ func (s *Service) handoffApprove(ctx context.Context, convMachine, self string, 
 	input.Agent, input.MachineName, input.Cwd, input.Prompt = agent, h.machineName, cwd, clip(oneLine(prompt), 200)
 	raw, _ := json.Marshal(input)
 	now := time.Now().UTC()
-	expires := now.Add(handoffCardWait)
+	expires := now.Add(ownerCardMaxWait)
 	ix := proto.Interaction{ID: "ix_" + randomHex(6), MachineID: convMachine, SessionID: self, SessionTitle: "Persona",
 		Kind: proto.IxPermission, ToolName: proto.SecretHandoffTool, ToolInput: raw, ToolTitle: i18n.T(l, "assistant-secret_handoff.title"),
 		Summary:     handoffSummary(l, len(names), agent, h.machineName),
 		AlwaysLabel: i18n.T(l, "assistant-secret_handoff.always", i18n.Args{"launcher": h.launcher, "machine": h.machineName}),
-		CreatedAt:   now, ExpiresAt: expires}
-	r, err := s.ask(ctx, ix)
+		CreatedAt:   now, ExpiresAt: expires, SeenTTLSeconds: secondsCeil(handoffCardWait)}
+	r, err := s.ask(withCard(ctx, cardSecretForm), ix)
 	claim, vouched := s.takeHandoffClaim(ix.ID)
 	if err != nil {
 		return "", "", err
@@ -217,7 +217,7 @@ func (s *Service) handoffApprove(ctx context.Context, convMachine, self string, 
 	// device the hub vouched for. Anything else declines, a no with "always" or other fields beside it included.
 	switch {
 	case vouched:
-	case r.Dismiss && !time.Now().Before(expires.Add(-time.Second)):
+	case r.Dismiss && (r.Outcome() == proto.OutcomeExpired || !time.Now().Before(expires.Add(-time.Second))):
 		return "", handoffAnswer(results(handoffExpired), "The hand-off card expired unanswered."), nil
 	case proto.SecretHandoffApproves(r): // not through the hub's gate: refused, as the hub would
 		return "", handoffAnswer(results(handoffDeclined), "The hand-off was not approved on iPhone or the web."), nil
@@ -309,10 +309,12 @@ type humanSends struct {
 }
 
 type humanSend struct {
-	words string // the text sent, its words joined by single spaces, at most humanWordsMost bytes
-	at    time.Time
-	line  string // the transcript line it counted for (handoffLine), once one was read
-	void  bool   // sent again by someone else, or with other words: it counts for nothing
+	words      string // the text sent, its words joined by single spaces, at most humanWordsMost bytes
+	at         time.Time
+	line       string // the transcript line it counted for (handoffLine), once one was read
+	void       bool   // sent again by someone else, or with other words: it counts for nothing
+	replyAsked bool   // the manager already tried the follow-up (missing_reply.go)
+	replyOnly  bool   // an app start or legacy owner send, usable only for missing-reply recovery
 }
 
 // withoutContext is a vouched message's words, or its line's, compared without any context block: the ones the
@@ -353,6 +355,31 @@ const (
 )
 
 func (h *humanSends) note(session, id, text string) {
+	h.record(session, id, text, false)
+}
+
+func (h *humanSends) noteForReply(session, id, text string) {
+	h.record(session, id, text, true)
+}
+
+// markReplyOnly downgrades a recorded vouched send so it remains usable for missing-reply recovery without letting
+// secret hand-off Always rules bypass approval when another conversation's quiet context rode along (#3962).
+func (h *humanSends) markReplyOnly(session, id string) {
+	if session == "" || id == "" {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	ids := h.m[session]
+	sent, ok := ids[id]
+	if !ok || sent.void {
+		return
+	}
+	sent.replyOnly = true
+	ids[id] = sent
+}
+
+func (h *humanSends) record(session, id, text string, replyOnly bool) {
 	if session == "" || id == "" {
 		return
 	}
@@ -363,12 +390,13 @@ func (h *humanSends) note(session, id, text string) {
 	if sent, ok := ids[id]; ok { // the same id again: the same message (the node sends it once), else nothing
 		if sent.words != words {
 			sent.void = true
-			ids[id] = sent
 		}
+		sent.replyOnly = sent.replyOnly || replyOnly
+		ids[id] = sent
 		return
 	}
 	makeRoomLocked(ids, true)
-	ids[id] = humanSend{words: words, at: time.Now()}
+	ids[id] = humanSend{words: words, at: time.Now(), replyOnly: replyOnly}
 }
 
 // voidSend: a send into session carried id, and it is not one that counts (the hub did not vouch for it, or it carries
@@ -459,26 +487,47 @@ func makeRoomLocked(ids map[string]humanSend, vouched bool) bool {
 // the transcript line it counts for: the first one it was read on (a picture of it, picture, is tied by the id alone,
 // on the same line).
 func (h *humanSends) has(session, id, text string, picture bool, line string) bool {
-	if session == "" || id == "" || line == "" {
+	if session == "" || id == "" || id == firstReplySendID {
 		return false
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	sent, ok := h.m[session][id]
-	if !ok || sent.void || time.Since(sent.at) > humanSendsKeep {
+	if !ok || sent.replyOnly || !sent.matches(text, picture, line) {
 		return false
 	}
-	if !picture && !strings.Contains(humanWords(withoutContext(text), 1<<20), sent.words) {
-		return false
-	}
-	switch sent.line {
-	case "":
+	if sent.line == "" {
 		sent.line = line
 		h.m[session][id] = sent
-	case line:
-	default:
-		return false // the id on a second line: it counted for its first already
 	}
+	return true
+}
+
+func (sent humanSend) matches(text string, picture bool, line string) bool {
+	return line != "" && !sent.void && time.Since(sent.at) <= humanSendsKeep &&
+		(sent.line == "" || sent.line == line) &&
+		(picture || strings.Contains(humanWords(withoutContext(text), 1<<20), sent.words))
+}
+
+// claimReply checks the input and records the attempt together, independently of other chats.
+// The caller accepts an ID-less input only on the conversation's first transcript page.
+func (h *humanSends) claimReply(session string, owner proto.Item) bool {
+	id := owner.ClientMsgID
+	if id == firstReplySendID {
+		return false
+	}
+	if id == "" {
+		id = firstReplySendID
+	}
+	line := handoffLine(owner.ID)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	sent, ok := h.m[session][id]
+	if !ok || sent.replyAsked || !sent.matches(owner.Text, false, line) {
+		return false
+	}
+	sent.line, sent.replyAsked = line, true
+	h.m[session][id] = sent
 	return true
 }
 

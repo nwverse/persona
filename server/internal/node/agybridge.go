@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -15,6 +17,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/osproc"
+	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/runtimepkg"
 )
 
@@ -24,8 +27,9 @@ import (
 // Persona assistant and Agents work out of the box without a manual launchd/systemd setup.
 
 const (
-	agyPackage   = "persona-antigravity-runtime"
-	agyRuntimeID = "agy"
+	agyPackage    = "persona-antigravity-runtime"
+	agyRuntimeID  = "agy"
+	agyYieldGrace = 5 * time.Second
 )
 
 var (
@@ -39,37 +43,92 @@ var (
 var agyInstanceSeq atomic.Uint64
 
 type agyBridge struct {
-	mu       sync.Mutex
-	cancel   context.CancelFunc
-	done     chan struct{}
-	instance string
-	yieldCh  chan struct{}
+	mu         sync.Mutex
+	cancel     context.CancelFunc
+	done       chan struct{}
+	instance   string
+	bin        string
+	wakeCh     chan struct{}
+	yieldGrace time.Duration
+	takeover   sync.Mutex
+	// providerEnv is the Gemini API key provider a Persona-managed agy launcher gives the companion (#13762): the
+	// launcher's GOOGLE_GEMINI_BASE_URL / GEMINI_API_KEY plus PERSONA_AGY_MODEL_PROVIDER=gemini, nil without one. It
+	// only ever goes into the companion's environment, never into its arguments, logs or a file.
+	providerEnv []string
 }
 
-func (rh *RuntimeHost) isBuiltinAgyInstance(instance string) bool {
-	if instance == "" {
-		return false
-	}
-	rh.agy.mu.Lock()
-	defer rh.agy.mu.Unlock()
-	return rh.agy.instance == instance
-}
-
-func (rh *RuntimeHost) yieldAgyBridge() {
-	rh.agy.mu.Lock()
-	ch := rh.agy.yieldCh
-	rh.agy.mu.Unlock()
-	if ch != nil {
-		select {
-		case ch <- struct{}{}:
-		default:
+// agyProviderEnv is what the managed agy launchers say about the provider: the first one (by name) that carries a key
+// is the machine's, since one companion serves every agy session here. None when agy runs on its own sign-in.
+func (n *Node) agyProviderEnv() []string {
+	n.managed.mu.Lock()
+	names := make([]string, 0, len(n.managed.byID))
+	for name, l := range n.managed.byID {
+		if l.AgentType() == "agy" {
+			names = append(names, name)
 		}
 	}
+	n.managed.mu.Unlock()
+	sort.Strings(names)
+	for _, name := range names {
+		if l, ok := n.managedLauncher(name); ok && l.APIKey != "" {
+			return append(managedEnv(l), "PERSONA_AGY_MODEL_PROVIDER=gemini")
+		}
+	}
+	return nil
 }
 
-// EnableAutoCompanions turns on automatic supervision of built-in CLI companions (Antigravity `agy`) once Listen runs.
-// Production nodes (`personad node --attach` and `personad node --stdio`) enable this; unit test fixtures leave it off
-// so the host machine's installed CLIs never join synthetic runtime tests.
+// syncAgyProvider hands the companion the provider the managed launchers name now; it restarts when that changed.
+func (n *Node) syncAgyProvider() {
+	if n.runtimeHost != nil {
+		n.runtimeHost.setAgyProviderEnv(n.agyProviderEnv())
+	}
+}
+
+func (rh *RuntimeHost) setAgyProviderEnv(env []string) {
+	rh.agy.mu.Lock()
+	changed := !slices.Equal(rh.agy.providerEnv, env)
+	rh.agy.providerEnv = env
+	rh.agy.mu.Unlock()
+	if changed {
+		rh.wakeAgyBridge()
+	}
+}
+
+func (rh *RuntimeHost) agyProviderEnv() []string {
+	rh.agy.mu.Lock()
+	defer rh.agy.mu.Unlock()
+	return slices.Clone(rh.agy.providerEnv)
+}
+
+func (rh *RuntimeHost) builtinAgyInstance() string {
+	rh.agy.mu.Lock()
+	defer rh.agy.mu.Unlock()
+	return rh.agy.instance
+}
+
+func (rh *RuntimeHost) builtinAgyExecutable() string {
+	rh.agy.mu.Lock()
+	bin := rh.agy.bin
+	rh.agy.mu.Unlock()
+	if bin != "" {
+		return bin
+	}
+	return findAgyExecutable()
+}
+
+func (rh *RuntimeHost) wakeAgyBridge() {
+	rh.agy.mu.Lock()
+	wake := rh.agy.wakeCh
+	rh.agy.mu.Unlock()
+	select {
+	case wake <- struct{}{}:
+	default:
+	}
+}
+
+// EnableAutoCompanions turns on automatic supervision of built-in CLI companions (Antigravity `agy` and `opencode`)
+// once Listen runs. Production nodes (`personad node --attach` and `personad node --stdio`) enable this; unit test
+// fixtures leave it off so the host machine's installed CLIs never join synthetic runtime tests.
 func (rh *RuntimeHost) EnableAutoCompanions() {
 	rh.autoCompanions = true
 }
@@ -84,6 +143,7 @@ func (rh *RuntimeHost) setAgyBridge(on bool) {
 	if !on {
 		b.cancel()
 		b.cancel = nil
+		b.wakeCh = nil
 		done := b.done
 		b.mu.Unlock()
 		<-done
@@ -96,7 +156,8 @@ func (rh *RuntimeHost) setAgyBridge(on bool) {
 	}
 	ctx, cancel := context.WithCancel(base)
 	b.cancel, b.done = cancel, make(chan struct{})
-	go rh.agyBridgeLoop(ctx, b.done)
+	b.wakeCh = make(chan struct{}, 1)
+	go rh.agyBridgeLoop(ctx, b.done, b.wakeCh)
 }
 
 // findAgyExecutable finds an installed `agy` CLI binary without spawning a login shell.
@@ -184,7 +245,7 @@ var agyBridgeCommand = func(ctx context.Context, rh *RuntimeHost, agyBin, instan
 	if pkg == nil {
 		return nil, errors.New("this personad carries no Antigravity runtime package (built without go generate ./internal/runtimepkg)")
 	}
-	dir, err := writePackage(filepath.Join(filepath.Dir(rh.path), "runtime-packages", agyPackage), pkg)
+	dir, err := writePackageWithReservation(filepath.Join(filepath.Dir(rh.path), "runtime-packages", agyPackage+"-builtin"), pkg, true)
 	if err != nil {
 		return nil, fmt.Errorf("write Antigravity runtime: %w", err)
 	}
@@ -193,14 +254,30 @@ var agyBridgeCommand = func(ctx context.Context, rh *RuntimeHost, agyBin, instan
 		return nil, err
 	}
 	args := []string{filepath.Join(dir, "antigravity", "companion.mjs"),
-		"--socket", rh.path, "--agy-bin", agyBin, "--no-update", "--parent-stdin"}
+		"--socket", rh.dialPath(), "--agy-bin", agyBin, "--no-update", "--parent-stdin"}
 	if instance != "" {
 		args = append(args, "--instance", instance)
 	}
 	cmd := exec.Command(js.Path, args...)
-	cmd.Env = js.env(append(os.Environ(), "PERSONA_RUNTIME_SOCKET="+rh.path))
+	cmd.Env = js.env(agyBridgeEnv(ctx, rh, os.Environ()))
 	cmd.Dir = dir
 	return cmd, nil
+}
+
+// agyBridgeEnv constructs the companion environment from base, applying the runtime socket and any managed agy
+// provider environment, and falling back to OS system proxy settings (macOS `scutil --proxy`) when neither base nor
+// the provider explicitly names any proxy variable (including an explicit empty value such as `HTTPS_PROXY=`).
+func agyBridgeEnv(ctx context.Context, rh *RuntimeHost, base []string) []string {
+	env := slices.Clone(base)
+	if rh != nil {
+		env = setEnvVar(env, "PERSONA_RUNTIME_SOCKET", rh.dialPath())
+		for _, kv := range rh.agyProviderEnv() {
+			if k, v, ok := strings.Cut(kv, "="); ok {
+				env = setEnvVar(env, k, v)
+			}
+		}
+	}
+	return withSystemProxyEnv(ctx, env)
 }
 
 func (rh *RuntimeHost) agyConnected() bool {
@@ -212,7 +289,7 @@ func (rh *RuntimeHost) agyConnected() bool {
 	return rh.reg.byRuntime(agyRuntimeID) != nil
 }
 
-func (rh *RuntimeHost) agyBridgeLoop(ctx context.Context, done chan struct{}) {
+func (rh *RuntimeHost) agyBridgeLoop(ctx context.Context, done chan struct{}, wake <-chan struct{}) {
 	defer close(done)
 	wait := agyBridgeRestartMin
 	loggedMissingJS := false
@@ -222,12 +299,13 @@ func (rh *RuntimeHost) agyBridgeLoop(ctx context.Context, done chan struct{}) {
 			select {
 			case <-ctx.Done():
 				return
+			case <-wake:
 			case <-time.After(agyBridgeProbeEvery):
 			}
 			continue
 		}
 		started := time.Now()
-		yielded, err := rh.runAgyBridge(ctx, agyBin)
+		yielded, err := rh.runAgyBridge(ctx, agyBin, wake)
 		if ctx.Err() != nil {
 			return
 		}
@@ -257,22 +335,23 @@ func (rh *RuntimeHost) agyBridgeLoop(ctx context.Context, done chan struct{}) {
 	}
 }
 
-func (rh *RuntimeHost) runAgyBridge(ctx context.Context, agyBin string) (bool, error) {
+func (rh *RuntimeHost) runAgyBridge(ctx context.Context, agyBin string, wake <-chan struct{}) (bool, error) {
 	instance := fmt.Sprintf("builtin-agy-%d-%d", os.Getpid(), agyInstanceSeq.Add(1))
-	yieldCh := make(chan struct{}, 1)
 	rh.agy.mu.Lock()
 	rh.agy.instance = instance
-	rh.agy.yieldCh = yieldCh
+	rh.agy.bin = agyBin
 	rh.agy.mu.Unlock()
 	defer func() {
 		rh.agy.mu.Lock()
 		if rh.agy.instance == instance {
 			rh.agy.instance = ""
-			rh.agy.yieldCh = nil
+			rh.agy.bin = ""
 		}
 		rh.agy.mu.Unlock()
 	}()
 
+	started := rh.agyProviderEnv() // read before the command is made: a change in between restarts it
+	bin := statAgy(agyBin)         // the file the companion runs; a different one later restarts it (agyChange)
 	cmd, err := agyBridgeCommand(ctx, rh, agyBin, instance)
 	if err != nil {
 		return false, err
@@ -313,15 +392,161 @@ func (rh *RuntimeHost) runAgyBridge(ctx context.Context, agyBin string) (bool, e
 			<-exited
 		}
 	}
-	select {
-	case err := <-exited:
-		return false, err
-	case <-yieldCh:
-		rh.logger.Printf("agy runtime: yielding to external agy runtime")
-		stopChild()
-		return true, nil
-	case <-ctx.Done():
-		stopChild()
-		return false, ctx.Err()
+	probe := time.NewTicker(agyBridgeProbeEvery)
+	defer probe.Stop()
+	var change agyChange
+	for {
+		if !slices.Equal(started, rh.agyProviderEnv()) {
+			rh.logger.Printf("agy runtime: the agy launcher's model provider changed; restarting")
+			stopChild()
+			return true, nil
+		}
+		if _, external := rh.agyPeers(instance); external {
+			rh.logger.Printf("agy runtime: yielding to external agy runtime")
+			stopChild()
+			return true, nil
+		}
+		select {
+		case err := <-exited:
+			return false, err
+		case <-wake:
+		case <-probe.C:
+			if change.see(bin, statAgy(findAgyExecutable())) {
+				builtin, _ := rh.agyPeers(instance)
+				if builtin != nil && builtin.agyBusy() {
+					change.logWait(rh.logger, bin)
+					continue
+				}
+				rh.logger.Printf("agy runtime: %s; restarting", change.describe(bin))
+				stopChild()
+				return true, nil
+			}
+		case <-ctx.Done():
+			stopChild()
+			return false, ctx.Err()
+		}
 	}
+}
+
+// agyBinary is an agy executable as a companion started on it: its path and the file there then (nil: none could be
+// read). The node resolves agy once per companion start, so one installed elsewhere later, or replaced in place by an
+// update, is noticed only by comparing (#14533).
+type agyBinary struct {
+	path string
+	info os.FileInfo
+}
+
+func statAgy(path string) agyBinary {
+	b := agyBinary{path: path}
+	if path != "" {
+		if info, err := os.Stat(path); err == nil {
+			b.info = info
+		}
+	}
+	return b
+}
+
+// same: o is the same path to the same file, unchanged (os.SameFile, size and modification time).
+func (b agyBinary) same(o agyBinary) bool {
+	if b.path != o.path || (b.info == nil) != (o.info == nil) {
+		return false
+	}
+	return b.info == nil || os.SameFile(b.info, o.info) && b.info.Size() == o.info.Size() && b.info.ModTime().Equal(o.info.ModTime())
+}
+
+// agyChange follows what the probes find in place of the companion's agy. A change counts once two probes in a row
+// see the same one, so an installer caught between removing the old file and writing the new one restarts nothing.
+type agyChange struct {
+	seen   *agyBinary
+	logged bool
+}
+
+// see records what a probe found, now, against the companion's own bin; true once the same change was seen twice.
+func (c *agyChange) see(bin, now agyBinary) bool {
+	if now.same(bin) {
+		c.seen, c.logged = nil, false
+		return false
+	}
+	if c.seen == nil || !c.seen.same(now) {
+		c.seen, c.logged = &now, false
+		return false
+	}
+	return true
+}
+
+func (c *agyChange) describe(bin agyBinary) string {
+	switch {
+	case c.seen == nil:
+		return "agy is unchanged"
+	case c.seen.path == "":
+		return fmt.Sprintf("agy at %s is gone", bin.path)
+	case c.seen.path != bin.path:
+		return fmt.Sprintf("agy moved from %s to %s", bin.path, c.seen.path)
+	}
+	return fmt.Sprintf("agy at %s was replaced", bin.path)
+}
+
+// logWait says once per change that the restart waits for the companion's work: an agy turn in flight, or a call the
+// node is waiting on, would be cut by it. The old file keeps running until then.
+func (c *agyChange) logWait(logger *log.Logger, bin agyBinary) {
+	if !c.logged {
+		c.logged = true
+		logger.Printf("agy runtime: %s; restarting once no agy session is working", c.describe(bin))
+	}
+}
+
+func (rh *RuntimeHost) agyPeers(instance string) (builtin *runtimeConn, external bool) {
+	rh.reg.mu.Lock()
+	defer rh.reg.mu.Unlock()
+	for _, conn := range rh.reg.conns {
+		select {
+		case <-conn.peer.Done():
+			continue
+		default:
+		}
+		conn.mu.Lock()
+		ready, hello := conn.ready, conn.hello
+		conn.mu.Unlock()
+		if ready && hello.Runtime == agyRuntimeID {
+			if hello.Instance != instance {
+				external = true
+			} else if builtin == nil || conn.serial > builtin.serial {
+				builtin = conn
+			}
+		}
+	}
+	return builtin, external
+}
+
+func (h *runtimeConn) waitAgyIdle(ctx context.Context) {
+	if h.peer.WaitPending(ctx) != nil {
+		return
+	}
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for h.agyWorking() {
+		select {
+		case <-ctx.Done():
+			return
+		case <-h.peer.Done():
+			return
+		case <-tick.C:
+		}
+	}
+}
+
+// agyBusy: the companion has a session at work, or the node waits on a call to it (a start, a check), without waiting.
+func (h *runtimeConn) agyBusy() bool {
+	return h.peer.Pending() > 0 || h.agyWorking()
+}
+
+func (h *runtimeConn) agyWorking() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, session := range h.sessions {
+		if session.Status == proto.StatusWorking {
+			return true
+		}
+	}
+	return false
 }

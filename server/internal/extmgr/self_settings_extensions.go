@@ -13,7 +13,6 @@ import (
 
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/i18n"
-	"github.com/nwverse/persona/server/internal/volc"
 )
 
 // An extension's settings in persona_settings (#2385): extension.<id> for every extension the user can configure that has
@@ -31,7 +30,7 @@ func (h *Manager) extensionSettings() []selfSetting {
 	}
 	var out []selfSetting
 	for _, p := range h.extensions.reg.List() {
-		if p.ReadOnly() || p.Record.Source == extension.SourceDev || p.Schema == nil || len(p.Schema.Fields) == 0 {
+		if p.ReadOnly() || p.Record.Source == extension.SourceDev || p.Schema == nil || len(assistantExtensionFields(p.Schema.Fields)) == 0 {
 			continue
 		}
 		id, name := p.Record.ID, extensionDisplayName(p)
@@ -72,8 +71,8 @@ func (h *Manager) extensionSettingsText(id string) (string, error) {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Settings of %s (%s); set changes only the fields given, null puts one back to its default:\n", extensionDisplayName(p), p.Record.ID)
 	saved := h.savedSettings(p)
-	for _, f := range p.Schema.Fields {
-		if isVolc(p) && f.Name == volcMeetingsField {
+	for _, f := range assistantExtensionFields(p.Schema.Fields) {
+		if isVolc(h.modules(), p) && f.Name == volcMeetingsField {
 			continue // the owner's choice of meeting transcription, never set here
 		}
 		if f.Type == "object" {
@@ -91,6 +90,10 @@ func (h *Manager) extensionSettingsText(id string) (string, error) {
 		writeFieldLine(&b, "", f, saved)
 	}
 	return strings.TrimRight(b.String(), "\n"), nil
+}
+
+func assistantExtensionFields(fields []extension.Field) []extension.Field {
+	return slices.DeleteFunc(slices.Clone(fields), func(f extension.Field) bool { return f.EntryList() })
 }
 
 func quotedTitle(f extension.Field) string {
@@ -245,7 +248,7 @@ func (h *Manager) setExtensionSettings(id, title string, v json.RawMessage) (*se
 	if p == nil {
 		return nil, fmt.Errorf("no extension %s", id)
 	}
-	if _, ok := patch[volcMeetingsField]; ok && id == volc.ExtensionID {
+	if _, ok := patch[volcMeetingsField]; ok && id == volcID(h.modules()) {
 		return nil, errors.New(volcMeetingsField + " is the owner's choice of meeting transcription: only Settings › Extensions or Recording settings on a device change it")
 	}
 	for _, f := range iphoneOwnFields {
@@ -257,7 +260,8 @@ func (h *Manager) setExtensionSettings(id, title string, v json.RawMessage) (*se
 		return nil, fmt.Errorf("%s is set in manager.json: change it there (or in the admin page)", id)
 	}
 	before := h.savedSettings(p)
-	next, err := patchSettings(p.Schema.Fields, before, patch)
+	fields := assistantExtensionFields(p.Schema.Fields)
+	next, err := patchSettings(fields, before, patch)
 	if err != nil {
 		return nil, err
 	}
@@ -266,7 +270,7 @@ func (h *Manager) setExtensionSettings(id, title string, v json.RawMessage) (*se
 		return nil, err
 	}
 	l := h.userLang()
-	lines := h.settingChanges(l, p.Schema.Fields, before, next, "")
+	lines := h.settingChanges(l, fields, before, next, "")
 	if len(lines) == 0 {
 		return &selfChange{summary: ss(l, "no_change", i18n.Args{"title": title})}, nil
 	}
@@ -284,7 +288,7 @@ func (h *Manager) setExtensionSettings(id, title string, v json.RawMessage) (*se
 					return "", fmt.Errorf("%s changed since the card was shown; nothing saved: get it again", k)
 				}
 			}
-			next, err := patchSettings(p.Schema.Fields, now, patch)
+			next, err := patchSettings(fields, now, patch)
 			if err != nil {
 				return "", err
 			}
@@ -295,7 +299,7 @@ func (h *Manager) setExtensionSettings(id, title string, v json.RawMessage) (*se
 			if err := h.checkExtensionSettings(p, raw); err != nil {
 				return "", err
 			}
-			cleared, err := h.extensions.reg.SetConfigClearing(ctx, id, raw, "assistant")
+			cleared, err := h.extensions.reg.SetConfigPreservingEntries(ctx, id, raw, "assistant")
 			if err != nil {
 				return "", settingsError(err)
 			}
@@ -314,7 +318,7 @@ func (h *Manager) checkExtensionSettings(p *extension.Extension, raw json.RawMes
 			return errors.New(fe.Path + ": " + fe.Message)
 		}
 	}
-	if err := p.Schema.Check(raw); err != nil {
+	if err := p.Schema.CheckPreservingEntries(raw); err != nil {
 		return settingsError(err)
 	}
 	return nil

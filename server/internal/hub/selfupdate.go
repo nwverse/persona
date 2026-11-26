@@ -14,9 +14,11 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/hubedge"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/operations/backup"
 	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/update"
 )
@@ -63,7 +65,7 @@ type updateRecord struct {
 	ToBuild     int64                     `json:"to_build"`
 	Started     time.Time                 `json:"started"`
 	Ended       time.Time                 `json:"ended"`
-	Result      string                    `json:"result"` // updated | rolled_back | failed | held (newer, not installed by itself: Reason)
+	Result      string                    `json:"result"` // updated | rolled_back | failed | cancelled | held (newer, not installed by itself: Reason)
 	Reason      string                    `json:"reason,omitempty"`
 	Auto        bool                      `json:"auto"`
 	Source      string                    `json:"source,omitempty"`
@@ -73,15 +75,23 @@ type updateRecord struct {
 
 // updateSettings are kept in Postgres (settings hub_update).
 type updateSettings struct {
-	Source            string                    `json:"source,omitempty"`           // empty/release or web-dev
-	DevelopmentAuto   bool                      `json:"development_auto,omitempty"` // opt-in; never inherited from release
-	DevelopmentBad    []string                  `json:"development_bad,omitempty"`
-	DevelopmentBackup *update.DevelopmentBackup `json:"development_backup,omitempty"`
-	AutoUpdateNodes   *bool                     `json:"auto_update_nodes,omitempty"` // nil: use the startup configuration
-	Auto              *bool                     `json:"auto,omitempty"`              // nil: on (the default)
-	AutoNoticeSeen    bool                      `json:"auto_notice_seen"`
-	Bad               []int64                   `json:"bad,omitempty"` // builds that went back: not installed automatically again
-	History           []updateRecord            `json:"history,omitempty"`
+	ConfirmedDevelopment *devicewire.DevelopmentTarget `json:"confirmed_development,omitempty"`
+	Source               string                        `json:"source,omitempty"`           // empty/release or web-dev
+	DevelopmentAuto      bool                          `json:"development_auto,omitempty"` // opt-in; never inherited from release
+	DevelopmentBad       []string                      `json:"development_bad,omitempty"`
+	DevelopmentBackup    *update.DevelopmentBackup     `json:"development_backup,omitempty"`
+	// The snapshot settings chosen in Settings › Hub › Update source › Web
+	// development. Directory is a tri-state: nil keeps hub.json's directory
+	// (else the recommended one), and a persisted path — including the
+	// recommended one, which "Use recommended" stores — is the Web choice and
+	// wins over hub.json. Retain 0 is unset (hub.json's, else three).
+	DevelopmentBackupDirectory *string        `json:"development_backup_directory,omitempty"`
+	DevelopmentBackupRetain    int            `json:"development_backup_retain,omitempty"`
+	AutoUpdateNodes            *bool          `json:"auto_update_nodes,omitempty"` // nil: use the startup configuration
+	Auto                       *bool          `json:"auto,omitempty"`              // nil: on (the default)
+	AutoNoticeSeen             bool           `json:"auto_notice_seen"`
+	Bad                        []int64        `json:"bad,omitempty"` // builds that went back: not installed automatically again
+	History                    []updateRecord `json:"history,omitempty"`
 }
 
 func (s updateSettings) auto() bool { return s.Auto == nil || *s.Auto }
@@ -130,10 +140,15 @@ type updater struct {
 	newestImage string // a Docker hub: the newest release tag of its image
 	lastCheck   time.Time
 	busy        []busyItem
+	attempt     *developmentAttempt // guarded by mu; nil once adoption wins
 	running     bool
 	checking    bool
-	now         bool // the user confirmed "Update now": stop waiting for idle
-	confirmed   bool // no update to confirm, or this process confirmed it
+	opGen       uint64 // bumped whenever an update or check starts, preventing busy-check ABA races
+	now         bool   // the user confirmed "Update now": stop waiting for idle
+	confirmed   bool   // no update to confirm, or this process confirmed it
+
+	developmentProgress *update.DevelopmentProgress // protected by mu, like the phase
+	developmentStarted  time.Time
 
 	// refreshing is held by the one request reading latest.json for an install script (freshRelease); refreshTried
 	// is when one last did. releaseRead is when release was read: a read that worked (lastCheck is when the hub last
@@ -144,9 +159,12 @@ type updater struct {
 
 	// androidNote is what syncAndroid last logged: the same failure is not logged again every hour.
 	androidNote string
-	devRun      func(context.Context, *update.DevelopmentConfig, string, string, map[string]any, any) error
+	devRun      func(context.Context, *update.DevelopmentConfig, string, string, map[string]any, any, func(update.DevelopmentProgress)) error
 	// behindNote is the update source and release noteBehind last logged as behind: once per pair, not every hour.
 	behindNote string
+	// testAfterBackupRecoveryCheck runs in tests right after UnrecoveredSnapshot
+	// and before re-acquiring u.mu in PUT /api/v1/hub/update/settings.
+	testAfterBackupRecoveryCheck func()
 }
 
 func newUpdater(h *Hub) *updater {
@@ -406,10 +424,21 @@ func (u *updater) saveLocked(ctx context.Context) error {
 func (u *updater) record(ctx context.Context, r updateRecord) error {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	return u.recordLocked(ctx, r)
+}
+
+func (u *updater) recordLocked(ctx context.Context, r updateRecord) error {
 	if err := u.loadLocked(ctx); err != nil {
 		return err
 	}
 	u.settings.History = append(u.settings.History, r)
+	if r.Result == "updated" {
+		u.settings.ConfirmedDevelopment = nil
+		target := devicewire.DevelopmentBuild(r.Commit, r.ToVersion, r.ToBuild)
+		if r.Source == "web-dev" && r.Reason == "" && target.Valid() {
+			u.settings.ConfirmedDevelopment = &target
+		}
+	}
 	if r.Result == "rolled_back" && !slices.Contains(u.settings.Bad, r.ToBuild) {
 		u.settings.Bad = append(u.settings.Bad, r.ToBuild)
 	}
@@ -482,10 +511,10 @@ func (u *updater) confirm(ctx context.Context, p update.Pending) {
 		case <-time.After(2 * time.Second):
 		}
 	}
-	if err := os.Remove(update.PendingPath(u.dir)); errors.Is(err, os.ErrNotExist) {
+	if err := os.Remove(update.PendingPath(u.dir)); err != nil {
 		// The watchdog claimed the marker at its deadline and is putting the old version back (update.Watch):
 		// recording this update as done would contradict the rollback the old version records.
-		u.h.logf("update: %s -> %s: the watchdog is already going back", p.FromVersion, p.ToVersion)
+		u.h.logf("update: %s -> %s: cannot claim confirmation: %v", p.FromVersion, p.ToVersion, err)
 		return
 	}
 	u.mu.Lock()
@@ -495,6 +524,9 @@ func (u *updater) confirm(ctx context.Context, p update.Pending) {
 		u.edgeConfirmed()
 	}
 	nodeErr := u.updateNodes(ctx, p.Nodes, p.FromVersion, p.Development)
+	if p.Development != nil {
+		nodeErr = errors.Join(nodeErr, u.publishDevelopmentPackages(p))
+	}
 	why := ""
 	if nodeErr != nil {
 		why = su(u.h.userLang(), "err_computer_packages")
@@ -509,6 +541,9 @@ func (u *updater) confirm(ctx context.Context, p update.Pending) {
 		u.notify(su(l, "push_updated_title", i18n.Args{"version": p.ToVersion}), su(l, "push_updated_body"))
 	}
 	update.ClearDevelopmentAdoption(u.dir, p)
+	if p.Development != nil {
+		u.h.queueDevicesConfig(nodeErr == nil)
+	}
 	if p.WebPrev != "" && filepath.Dir(p.WebPrev) == filepath.Join(u.dir, "development") && strings.HasPrefix(filepath.Base(p.WebPrev), "web-previous-") {
 		_ = os.RemoveAll(p.WebPrev)
 	}
@@ -549,7 +584,7 @@ func (u *updater) rollback(p update.Pending, reason string) error {
 	if p.Development == nil && !u.adoptionUnresolved() {
 		u.removeDownloads(u.stagedDir(p.ToBuild))
 	}
-	// The old build reads only the hub.push_sent setting, and an exec skips the stop that writes it (lnmode.go).
+	// The old build reads only the hub.push_sent setting, and an exec skips the stop that writes it (push_grading.go).
 	if err := u.h.push.mirrorSent(context.Background()); err != nil {
 		u.h.logf("update: delivered pushes for %s: %v", p.FromVersion, err)
 	}
@@ -565,8 +600,9 @@ func (u *updater) rollback(p update.Pending, reason string) error {
 }
 
 // updateNodes puts the release's node binaries where "Redeploy" takes them (the manager's, internal/devices deploy.go)
-// and has the manager redeploy each connected machine whose node is not this build, one at a time. With node updates
-// off, the hub moved on from version from alone: the builds of that version it leaves in bin/nodes go aside.
+// and has the manager redeploy each connected machine whose node is not this build, one at a time. The builds of
+// version from that carry no version file go aside first, whether node updates are on or off: only the release's own
+// builds may pass for the hub's version (#1825; a platform the release does not carry, #12958).
 func (u *updater) updateNodes(ctx context.Context, staged, from string, development ...*update.DevelopmentCandidate) error {
 	dir := identity.NodeBinaryDir()
 	info, err := os.Lstat(dir)
@@ -589,6 +625,17 @@ func (u *updater) updateNodes(ctx context.Context, staged, from string, developm
 			}
 		}
 		return nil
+	}
+	if !dev && !managed && from != "" && from != u.h.version {
+		// The release replaces the builds of the platforms it carries; one it does not carry (a Windows build next to
+		// a release published without one, a build left by hand) would otherwise stay unlabelled and pass for this
+		// hub's version, and Redeploy would send it to fail the node's self-check. Set aside first, the release's
+		// builds go in below, and the manager fetches the rest from the release of the hub's version.
+		if moved, err := setAsideOldNodes(dir); err != nil {
+			u.h.logf("update: set aside the node builds of %s: %v", from, err)
+		} else if len(moved) > 0 {
+			u.h.logf("update: node builds of %s set aside before the release's go in: %s", from, strings.Join(moved, ", "))
+		}
 	}
 	if dev && from != "" && from != u.h.version {
 		if development[0].BackupID != "" {
@@ -632,7 +679,7 @@ func (u *updater) updateNodes(ctx context.Context, staged, from string, developm
 	if first != nil {
 		return first
 	}
-	if u.nodesEnabled() {
+	if !dev && u.nodesEnabled() {
 		u.h.updateNodes(ctx)
 	} // each computer retains the existing policy/guardian
 	return nil
@@ -686,16 +733,28 @@ func (u *updater) isConfirmed() bool {
 // set changes the state the apps see and tells them.
 func (u *updater) set(state, progress, errText string) {
 	u.mu.Lock()
+	u.setLocked(state, progress, errText)
+	u.mu.Unlock()
+	u.broadcastStatus()
+}
+
+func (u *updater) broadcastStatus() {
+	u.h.broadcast(map[string]any{"type": "hub_update", "update": u.view()})
+}
+
+func (u *updater) setLocked(state, progress, errText string) {
 	u.state, u.progress = state, progress
+	u.developmentProgress, u.developmentStarted = nil, time.Time{}
 	if errText != "" || state != "rolled_back" {
 		u.errText = errText
 	}
-	u.mu.Unlock()
-	u.h.broadcast(map[string]any{"type": "hub_update", "update": u.view()})
 }
 
 // updateView is GET /api/v1/hub/update.
 type updateView struct {
+	CanCancel       bool                      `json:"can_cancel"`
+	Cancelling      bool                      `json:"cancelling"`
+	SupportsPreview bool                      `json:"supports_preview"`
 	Source          string                    `json:"source"`
 	Development     *developmentView          `json:"development,omitempty"`
 	Backup          *update.DevelopmentBackup `json:"backup,omitempty"`
@@ -715,6 +774,9 @@ type updateView struct {
 	LastCheck       *time.Time                `json:"last_check,omitempty"`
 	Confirmed       bool                      `json:"confirmed"`
 	Image           *imageView                `json:"image,omitempty"` // a Docker hub's image
+
+	DevelopmentProgress *update.DevelopmentProgress `json:"development_progress,omitempty"`
+
 	// UpdateURL is where the hub looks for releases now (selfupdate_source.go), UpdateFrom whether hub.json's
 	// update.url or the build said so; UpdateProxy the proxy its checks and downloads go through (update.proxy), with
 	// no user or password. All three are left out when there is none.
@@ -750,13 +812,31 @@ func (u *updater) viewIn(l i18n.Lang) updateView {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	selfUpdates, source := u.h.selfUpdates(), u.h.updateSource()
-	v := updateView{Version: u.h.version, Build: u.h.build.Number, Channel: u.h.build.Channel, CanUpdate: selfUpdates,
+	v := updateView{SupportsPreview: true, Version: u.h.version, Build: u.h.build.Number, Channel: u.h.build.Channel, CanUpdate: selfUpdates,
+		CanCancel: u.attempt != nil, Cancelling: u.attempt != nil && u.attempt.cancelling,
 		State: u.state, Progress: u.progress, Busy: u.busy, Error: u.errText, Auto: u.settings.auto() && selfUpdates,
 		AutoNotice: selfUpdates && !u.settings.AutoNoticeSeen, Confirmed: u.confirmed,
 		AutoUpdateNodes: u.nodesEnabledLocked(), UpdateURL: source.url, UpdateFrom: source.from, UpdateProxy: proxyShown(source.proxy)}
+	if p := u.developmentProgress; p != nil && p.Phase == u.state {
+		progress := *p
+		progress.ElapsedSeconds = max(progress.ElapsedSeconds, int64(time.Since(u.developmentStarted)/time.Second))
+		v.DevelopmentProgress = &progress
+	}
 	v.Source = "release"
 	v.Backup = u.settings.DevelopmentBackup
-	v.Development = &developmentView{Configured: u.developmentConfig() != nil, Branch: "main", CurrentCommit: u.h.build.Commit, CurrentUpdatedAt: u.currentUpdatedAtLocked()}
+	dv := &developmentView{Configured: u.developmentAvailable(), Branch: "main", CurrentCommit: u.h.build.Commit,
+		CurrentUpdatedAt: u.currentUpdatedAtLocked()}
+	if !dv.Configured {
+		dv.Why = u.developmentUnavailableWhy(l)
+	}
+	backupConfig := u.developmentBackupConfigLocked()
+	dv.BackupDirectory, dv.BackupRetain = backupConfig.Directory, backupConfig.Retain
+	dv.BuiltinQuiesce = backupConfig.Builtin && u.developmentQuiesceError(backupConfig) == nil
+	if u.h.cfg != nil {
+		dv.BackupDefaultDirectory = backup.RecommendedDevelopmentBackupDir(u.h.cfg.dir)
+		dv.BackupDirectoryIsDefault = backup.SamePath(backupConfig.Directory, dv.BackupDefaultDirectory)
+	}
+	v.Development = dv
 	if u.developmentLocked() {
 		v.Source, v.CanUpdate, v.Auto, v.AutoNotice = "web-dev", u.developmentAvailable(), u.settings.DevelopmentAuto, false
 	} else {
@@ -774,7 +854,10 @@ func (u *updater) viewIn(l i18n.Lang) updateView {
 		v.Busy = []busyItem{}
 	}
 	if !v.CanUpdate && u.developmentLocked() {
-		v.Why = su(l, "err_development_config")
+		v.Why = u.developmentUnavailableWhy(l)
+		if v.Why == "" {
+			v.Why = su(l, "err_development_config")
+		}
 	} else if !v.CanUpdate {
 		v.Why = u.whyNotReason(l)
 	}
@@ -783,11 +866,9 @@ func (u *updater) viewIn(l i18n.Lang) updateView {
 		v.LastCheck = &t
 	}
 	if r := u.release; r != nil {
-		released := r.Manifest.Released
-		v.Latest = &latestView{Version: r.Manifest.Version, Build: r.Manifest.Build, Released: &released, Notes: r.Manifest.Notes,
+		v.Latest = &latestView{Version: r.Manifest.Version, Build: r.Manifest.Build, Notes: r.Manifest.Notes,
 			Newer: u.h.build.Newer(r.Manifest.Build), Bad: slices.Contains(u.settings.Bad, r.Manifest.Build)}
 		if r.Development != nil {
-			v.Latest.Released = nil // checked Git candidates have no publication date
 			v.Latest.Commit, v.Latest.Branch = r.Development.Commit, r.Development.Branch
 			v.Latest.UpdatedAt = r.Development.UpdatedAt
 			v.Latest.BackupID = r.Development.BackupID
@@ -796,6 +877,8 @@ func (u *updater) viewIn(l i18n.Lang) updateView {
 			if r.Manifest.Ancestors != "" {
 				v.Latest.Held = u.developmentHold(r.Manifest)
 			}
+		} else if released := r.Manifest.Released; !released.IsZero() {
+			v.Latest.Released = &released
 		}
 		// A deliberately selected saved program version is not evidence that
 		// the development Git source stopped publishing releases.

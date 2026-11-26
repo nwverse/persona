@@ -1,7 +1,6 @@
 import BeautifulUI
 import SwiftUI
 
-#if os(iOS) || os(visionOS)
 /// The iPhone's ChatGPT-style shell (docs/apple/ios.md「New shell」): no tab bar. Assistant (the Persona assistant) and Agents (the Agents
 /// list) are two pages under the top switch, both kept alive like tabs (switching keeps each one's place); the drawer
 /// slides both aside; Inbox / Scheduled Tasks / Knowledge / Machines push onto Assistant; Settings is a sheet.
@@ -114,7 +113,20 @@ struct ShellView: View {
                          onMachines: { go(.machines) },
                          onOpenExtension: { go(.extensionPage($0)) },
                          openHealth: { go(.health) },
-                         openRecordingsPage: openRecordingsPage)
+                         openSpace: { go(.space($0)) },
+                         openNewSpace: { go(.newSpace) },
+                         openRecordingsPage: openRecordingsPage,
+                         openStarred: openStarredPage)
+            // Keep the drawer's route closures out of the page strip's opaque type (#6735, #12249).
+            .stackSegment()
+    }
+
+    private var openStarredPage: (() -> Void)? {
+        #if os(iOS)
+        { go(.starred) }
+        #else
+        nil
+        #endif
     }
 
     /// The drawer's Recordings: the page, which shows the recording running, else Record to start one.
@@ -263,4 +275,3 @@ private struct ShellMovingBar: View {
         .accessibilityHidden(true)
     }
 }
-#endif

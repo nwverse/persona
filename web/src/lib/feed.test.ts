@@ -5,6 +5,7 @@ import {
   cardFiled,
   cardSent,
   dayLabel,
+  dismissPlan,
   displayLines,
   draftPlaceholder,
   field,
@@ -105,6 +106,11 @@ describe("the assistant's feed among the chat's lines (docs/assistant/unified-en
     const res = (text: string, err = false) => ({ id: "r", seq: 2, role: "user", kind: "tool_result", text, is_error: err }) as Item;
     const ok = quickResult(use("mcp__persona__phone_reminders_create", "u1"), res(JSON.stringify({ id: "R1", title: "打电话", due: "2026-11-07T10:00:00+08:00", list: "提醒事项" })));
     expect(ok).toMatchObject({ kind: "reminder", title: "打电话", place: "提醒事项" });
+    const agyWrapped = quickResult(
+      use("mcp_persona_phone_reminders_create", "u1b"),
+      res("Created At: 2026-11-23T16:10:40+08:00\nCompleted At: 2026-11-23T16:10:44+08:00\n" + JSON.stringify({ id: "R2", title: "Call back", list: "Reminders" })),
+    );
+    expect(agyWrapped).toMatchObject({ kind: "reminder", title: "Call back", place: "Reminders" });
     expect(quickResult(use("mcp__persona__phone_reminders_list", "u2"), res(JSON.stringify({ id: "x" })))).toBeUndefined();
     expect(quickResult(use("phone_calendar_create_event", "u3"), res("denied", true))).toBeUndefined();
     const step = { kind: "tool" as const, id: "u1", use: use("phone_reminders_create", "u1"), result: res(JSON.stringify({ id: "R1", title: "t" })), images: [] };
@@ -524,4 +530,54 @@ it("discards a feed response arriving after deletion, including its plan and car
   expect(getFeedState().plans.late).toBeUndefined();
   expect(getFeedState().taskCards[sid]).toBeUndefined();
   reset();
+});
+
+
+it("keeps an owner-dismissed plan when an older Main feed snapshot arrives", async () => {
+  const conversation = "pending-plan-race";
+  const plan: TaskPlan = { id: "pending-race", conversation, tasks: [], state: "open" };
+  let release!: (r: Response) => void;
+  vi.stubGlobal("localStorage", { getItem: () => "tok", setItem() {}, removeItem() {} });
+  vi.stubGlobal("fetch", vi.fn((url: string) => url.includes("/dismiss")
+    ? Promise.resolve(Response.json({ plan: { ...plan, state: "dismissed" } }))
+    : new Promise<Response>((resolve) => { release = resolve; })));
+  try {
+    const reading = loadFeed(conversation);
+    await dismissPlan(plan);
+    release(Response.json({ items: [], plans: { [plan.id]: plan } }));
+    await reading;
+    expect(getFeedState().plans[plan.id]?.state).toBe("dismissed");
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+
+it("removes a pending plan after a reconnect snapshot no longer includes it", async () => {
+  const conversation = "pending-snapshot-main";
+  const plan: TaskPlan = { id: "snapshot-pending", conversation: "routine-snapshot", tasks: [], state: "open" };
+  let pending = true;
+  vi.stubGlobal("localStorage", { getItem: () => "tok", setItem() {}, removeItem() {} });
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json({ items: [], plans: pending ? { [plan.id]: plan } : {}, pending_plan_ids: pending ? [plan.id] : [] })));
+  try {
+    await loadFeed(conversation);
+    expect(getFeedState().plans[plan.id]?.state).toBe("open");
+    pending = false;
+    await loadFeed(conversation);
+    expect(getFeedState().plans[plan.id]).toBeUndefined();
+  } finally { vi.unstubAllGlobals(); }
+});
+
+it("clears an already-loaded side plan on the first authoritative empty Main snapshot", async () => {
+  const plan: TaskPlan = { id: "side-before-main", conversation: "side-before-main-chat", tasks: [], state: "open" };
+  vi.stubGlobal("localStorage", { getItem: () => "tok", setItem() {}, removeItem() {} });
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => Response.json(url.includes("side-before-main-chat")
+    ? { items: [], plans: { [plan.id]: plan } }
+    : { items: [], plans: {}, pending_plan_ids: [] })));
+  try {
+    await loadFeed(plan.conversation);
+    expect(getFeedState().plans[plan.id]?.state).toBe("open");
+    await loadFeed("first-empty-main-snapshot");
+    expect(getFeedState().plans[plan.id]).toBeUndefined();
+  } finally { vi.unstubAllGlobals(); }
 });

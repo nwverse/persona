@@ -23,7 +23,6 @@
   "connecting": "正在连接…",
   "retry": "重试",
   "tab_gone": "这个标签页已经不在了",
-  "open_sidebar": "打开侧边栏",
   "joining": "正在连接 Persona…",
   "session_choices_one": "有 {count} 个会话的 id 以 {sid} 开头，选一个打开",
   "session_choices_other": "有 {count} 个会话的 id 以 {sid} 开头，选一个打开",
@@ -33,5 +32,7 @@
   "new_version": "有新版本",
   "new_version_reload": "点此刷新",
   "title_request": "请求",
-  "title_compare_runs": "对比运行"
+  "title_compare_runs": "对比运行",
+  "title_space": "空间",
+  "title_new_space": "新建空间"
 }

@@ -55,7 +55,10 @@ type chatReplyBook struct {
 	running sync.Mutex // one round's batches at a time
 	mu      sync.Mutex
 	told    map[string]*chatTold // by chatReplyKey
-	wg      sync.WaitGroup       // the rounds being told
+	// refused: by conversation, when the owner was pushed that it refused a chat_reply for good (chatReplyRefused); one
+	// push until a chat_reply goes into it again or chatReplyWindow is over. In memory: a restart may push once more.
+	refused map[string]time.Time
+	wg      sync.WaitGroup // the rounds being told
 }
 
 // chatTold is what one conversation was told of one chat: the messages told or queued (when last handed), and when a
@@ -94,6 +97,11 @@ func (b *chatReplyBook) pruneLocked(now time.Time) {
 			delete(b.told, key)
 		}
 	}
+	for to, at := range b.refused {
+		if now.Sub(at) > chatReplyWindow {
+			delete(b.refused, to)
+		}
+	}
 }
 
 // chatSentStore is the part of the assistant's store that reads the sent-as-user ledger (the manager's Postgres).
@@ -113,11 +121,50 @@ func larkChatFeed(thread string) (string, bool) {
 	return rest, true
 }
 
+// chatReplyRelayOn is assistant.chat_reply_relay in effect with settings cfg: off unless set to true.
+func chatReplyRelayOn(cfg Settings) bool {
+	return cfg.ChatReplyRelay != nil && *cfg.ChatReplyRelay
+}
+
+// dropQueuedChatReplies takes every chat_reply that still waits in the relay queue out of it (assistant.chat_reply_relay
+// turned off). One going into its conversation right now (the head of a draining queue) is dropped by the drain.
+func (s *Service) dropQueuedChatReplies(ctx context.Context) {
+	b := &s.relays
+	b.mu.Lock()
+	if !s.relayLocked(ctx) {
+		b.mu.Unlock()
+		return
+	}
+	changed := false
+	for to, q := range b.st.Queue {
+		kept := q[:0:0]
+		for i, m := range q {
+			if m.Tool == chatReplyTool && !(i == 0 && b.draining[to]) {
+				changed = true
+				continue
+			}
+			kept = append(kept, m)
+		}
+		if len(kept) == 0 {
+			delete(b.st.Queue, to)
+		} else {
+			b.st.Queue[to] = kept
+		}
+	}
+	if changed {
+		s.saveRelayLocked()
+	}
+	b.mu.Unlock()
+	if changed {
+		s.publish(ctx)
+	}
+}
+
 // tellChatWriters takes the batches of new messages the Lark connector handed in a round (people's chats, not a
 // bot's) and tells the conversations that wrote into their chats as the user, in the background (tellChatBatches).
 func (s *Service) tellChatWriters(ctx context.Context, src assistantwire.InboxSource) {
-	if src.ID != migratedConnectorID {
-		return
+	if src.ID != migratedConnectorID || chatReplyHinted(s.settings(ctx)) && !chatReplyRelayOn(s.settings(ctx)) {
+		return // off and the hint was given: nothing to look at
 	}
 	var batches []connector.InboxThing
 	for _, t := range src.Things {
@@ -173,10 +220,37 @@ func (s *Service) tellChatBatches(ctx context.Context, batches []connector.Inbox
 				listed = true
 			}
 			if s.chatWriterOpen(ctx, machine, w.session, list) {
+				if !chatReplyRelayOn(s.settings(ctx)) {
+					s.hintChatReply(ctx, w.session, t)
+					return // one hint is all there is while it is off
+				}
 				s.tellChatBatch(ctx, w.session, w.at, t, now)
 			}
 		}
 	}
+}
+
+func chatReplyHinted(cfg Settings) bool { return cfg.ChatReplyHinted }
+
+// hintChatReply is the whole of the feature's discovery while it is off: once, ever, the first conversation that
+// wrote into a chat as the user and has others' replies there hears that they are not passed on and that the owner
+// can turn that on. It carries no one's words and is dropped like a chat_reply is if the setting is turned on
+// meanwhile only by being a plain message (it is not a chat_reply, so the drop of queued ones leaves it).
+func (s *Service) hintChatReply(ctx context.Context, to string, t connector.InboxThing) {
+	won := false
+	if _, err := s.updateSettings(ctx, func(v *Settings) error {
+		if v.ChatReplyHinted {
+			return nil
+		}
+		v.ChatReplyHinted, won = true, true
+		return nil
+	}); err != nil || !won {
+		return
+	}
+	lang := answerLanguage(s.hello(ctx).Locale)
+	text := prompts.RenderChatReplyHint(prompts.ChatReplyHint{Language: lang, Title: clip(oneLine(t.Title), 60), Group: t.Kind != KindDM})
+	s.logf("chat replies: the setting is off; the one-time hint goes to %s", short(to))
+	s.relayOrQueue(ctx, to, relayMsg{From: t.Thread, FromTitle: "Persona", Tool: taskEndTool, Text: text, At: time.Now().UTC()}) // i18n-ignore: the queue's label
 }
 
 // chatWriter is a conversation that wrote into a chat as the user, and when it last did.
@@ -334,19 +408,46 @@ func (s *Service) chatReplyGoing(to, thread string) bool {
 }
 
 // chatReplyDelivered: a chat_reply went into conversation to; the next one about that chat waits chatReplyGap. Its
-// messages count as told, also when it was queued before a restart.
+// messages count as told, also when it was queued before a restart. A refusal of to's is over: the next one is pushed.
 func (s *Service) chatReplyDelivered(to string, msg relayMsg) {
-	if msg.Chat == nil {
-		return
-	}
 	b := &s.chatReplies
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	delete(b.refused, to)
+	b.wentLocked(to, msg, time.Now())
+}
+
+// chatReplyRefused: conversation to refused chat_reply msg for good (relayRefused). It counts as gone for the gap, so
+// the chat's next batch waits chatReplyGap and what comes meanwhile merges into that one, not a try and a refusal per
+// batch; its messages count as told. True when the owner is to be pushed: the first such refusal by to since a
+// chat_reply last went into it, within chatReplyWindow.
+func (s *Service) chatReplyRefused(to string, msg relayMsg) bool {
+	b := &s.chatReplies
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	now := time.Now()
+	b.wentLocked(to, msg, now)
+	if at, pushed := b.refused[to]; pushed && now.Sub(at) <= chatReplyWindow {
+		return false
+	}
+	if b.refused == nil {
+		b.refused = map[string]time.Time{}
+	}
+	b.refused[to] = now
+	return true
+}
+
+// wentLocked notes chat_reply msg as gone into conversation to at now: the gap starts, its messages are told. b.mu is
+// held.
+func (b *chatReplyBook) wentLocked(to string, msg relayMsg, now time.Time) {
+	if msg.Chat == nil {
+		return
+	}
 	told := b.toldLocked(to, msg.Chat.Thread)
-	told.went = time.Now()
+	told.went = now
 	for _, id := range msg.Chat.IDs {
 		if _, ok := told.ids[id]; !ok {
-			told.ids[id] = told.went
+			told.ids[id] = now
 		}
 	}
 }

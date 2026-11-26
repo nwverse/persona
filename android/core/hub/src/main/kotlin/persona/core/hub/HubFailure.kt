@@ -27,7 +27,7 @@ class HubFailure(
     override val status: Int? = null,
     override val code: String? = null,
     val retryable: Boolean = true,
-    val delivered: String? = null,
+    override val delivered: String? = null,
     val retryAfterSeconds: Long? = null,
     cause: Throwable? = null,
     /** The input the hub refused (`field` of its error body) and its reason (`message`), when it names one. */
@@ -64,8 +64,16 @@ class HubFailure(
         private fun isPinRejection(error: Throwable) =
             error is SSLPeerUnverifiedException || error is CertificateException
 
-        internal fun from(response: Response): HubFailure {
-            val raw = runCatching { response.peekBody(64 * 1024).string() }.getOrNull()
+        private const val MaxErrorBodyBytes = 64L * 1024
+
+        /** The failure a refused [response] stands for; public for modules' own hub calls (`:module:*`, #13433). */
+        fun from(response: Response, requireReadableBody: Boolean = false): HubFailure {
+            val raw = if (requireReadableBody) {
+                val error = response.peekBody(MaxErrorBodyBytes + 1)
+                if (error.contentLength() > MaxErrorBodyBytes)
+                    throw HubFailure(HubError.Protocol, status = response.code)
+                error.string()
+            } else runCatching { response.peekBody(MaxErrorBodyBytes).string() }.getOrNull()
             val body = raw?.let { runCatching { JsonCodec.decodeFromString<ErrorBody>(it) }.getOrNull() }
             val path = response.request.url.encodedPath
             val knowledge = path == "/api/v1/kb" || path.startsWith("/api/v1/kb/") || path == "/api/v1/kb-search" ||

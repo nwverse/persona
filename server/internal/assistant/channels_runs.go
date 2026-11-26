@@ -5,11 +5,15 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // The turns channels wait on (docs/extensions/channels.md "Message flow"): one copy for every channel. A message from a channel
@@ -30,7 +34,7 @@ type channelSink interface {
 type channelProgress interface {
 	progress(ctx context.Context, r *channel.Run, took time.Duration, steps []string, live string)
 	// folded: o went into a later run; its progress message says so.
-	folded(ctx context.Context, o *channel.Run)
+	folded(ctx context.Context, o *channel.Run, owner *chanLive)
 }
 
 // channelRecall is a sink that marks a message the owner recalled: one taken out of a run that answers others too
@@ -55,25 +59,24 @@ type chanLive struct {
 	notFound bool      // the last read did not find the message in the conversation yet
 	finished bool
 	done     chan struct{}
+	// stoppedCard is the successfully interrupted progress message; under mu, so redelivered presses act once.
+	stoppedCard string
 	// checking is held by checkChannelRun: the watch loop and a turn's end may both check at once, and two checks
 	// would send the same answer twice.
 	checking chanMutex
 	failing  time.Time // its answer first failed to go out (answerAgain)
 	// unsettled: the turn was first read as over without words at its end (its answer may not be written yet)
 	unsettled time.Time
-	// items are the turn's thinking, words and tool calls (for the Feishu bot's agent message); cot what of them it
-	// has shown, under mu.
+	// items are the turn's thinking, words and tool calls (for the Feishu bot's agent message).
 	items []proto.Item
-	cot   cotProgress
+	// sink is the sink's own state of the run (the lark module's, larkHost.RunState), made on first use; under the
+	// channels' lock. It may stop work of its own when the run is dropped (Abort) and forget a held run's turn
+	// (NextTurn).
+	sink any
 	// from is the seq of the run's own message once found (0: not yet: queued behind another turn, or not in);
 	// upTo the last item noted; looked when locateRun last read the conversation.
 	from, upTo int
 	looked     time.Time
-	// sentCard is the progress card last sent (its hash), not sent again; backoff and quietUntil hold updates back
-	// after Feishu's rate limit. All under mu.
-	sentCard   [32]byte
-	backoff    time.Duration
-	quietUntil time.Time
 	// What the progress card shows besides the steps, noted as the items come (liveNote): the calls with no result
 	// yet (oldest first), how many calls, the files read and changed, the subagents.
 	open         []openCall
@@ -98,7 +101,7 @@ type subtask struct {
 // Bounds of chanLive's notes: a turn of thousands of calls stays small.
 const (
 	liveOpenMost  = 50
-	liveFilesMost = 1000
+	liveFilesMost = assistantwire.RunFilesMost
 	liveSubsMost  = 50
 )
 
@@ -176,26 +179,10 @@ func (m chanMutex) TryLock() bool {
 	}
 }
 
-// claimChannelMessage: the first time channel id's message is seen; an error while the messages seen can't be read.
+// claimChannelMessage claims a message without a thread reservation; unreadable or unwritable state stays retryable.
 func (s *Service) claimChannelMessage(id, msg string) (bool, error) {
-	c := &s.chans
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	s.loadChannelStateLocked(context.Background())
-	if !c.stLoaded {
-		return false, errChannelsUnread
-	}
-	seen := c.st.Seen[id]
-	if msg == "" || slices.Contains(seen, msg) {
-		return false, nil
-	}
-	seen = append(seen, msg)
-	if len(seen) > channelSeenKeep {
-		seen = seen[len(seen)-channelSeenKeep:]
-	}
-	c.st.Seen[id] = seen
-	s.saveChannelStateLocked()
-	return true, nil
+	admission, err := s.admitChannelMessage(context.Background(), id, channel.Message{ID: msg})
+	return admission != nil, err
 }
 
 var errChannelsUnread = errors.New("the channels' state could not be read")
@@ -228,6 +215,26 @@ func (s *Service) channelRuns(id string) []channel.Run {
 	return out
 }
 
+// finishUnrelatedChannelRun ends a held run whose conversation now belongs to an ordinary user turn. Its original
+// answer stands; no later answer or new quiet-ending card goes to the channel.
+func (s *Service) finishUnrelatedChannelRun(id string) {
+	r, _ := s.channelRunByID(id)
+	if r == nil {
+		return
+	}
+	s.finishChannelRun(r, &channel.Result{Quiet: true, End: channel.EndUnrelated})
+}
+
+// endHeldChannelRuns ends held runs on a conversation before an owner's own new message starts its turn. Channel
+// messages fold their earlier runs before reaching this path, so only runs left held by another surface end here.
+func (s *Service) endHeldChannelRuns(machine, session string) {
+	for _, snap := range s.channelRuns("") {
+		if snap.Held && snap.MachineID == machine && snap.SessionID == session {
+			s.finishUnrelatedChannelRun(snap.ID)
+		}
+	}
+}
+
 // startChannelRun records a run and watches it. An earlier run of the same channel on the same conversation that has
 // not answered yet is folded into this one: one answer covers both messages.
 func (s *Service) startChannelRun(r *channel.Run) {
@@ -254,7 +261,8 @@ func (s *Service) startChannelRunForBinding(r *channel.Run, generation *uint64) 
 		// One answer covers both only when both go to the same place: a topic's reply never turns up in the private chat
 		// (or another topic), nor the other way round.
 		if o.Channel == r.Channel && o.MachineID == r.MachineID && o.SessionID == r.SessionID && !c.answering[o.ID] && !o.Recalled &&
-			o.Ext["chat"] == r.Ext["chat"] && o.Ext["thread"] == r.Ext["thread"] && o.Ext["clarify"] == "" && r.Ext["clarify"] == "" {
+			o.Ext["chat"] == r.Ext["chat"] && o.Ext["thread"] == r.Ext["thread"] && o.Ext["clarify"] == "" && r.Ext["clarify"] == "" &&
+			o.Ext[readChatKey] == "" && r.Ext[readChatKey] == "" { // a /read is answered under its own message, alone
 			folded = append(folded, o)
 			r.Fold(o)
 			continue
@@ -286,7 +294,7 @@ func (s *Service) startChannelRunForBinding(r *channel.Run, generation *uint64) 
 			p.mu.Unlock()
 		}
 		if fs, ok := sink.(channelProgress); ok && ended {
-			fs.folded(ctx, o)
+			fs.folded(ctx, o, gone[o.ID])
 		}
 	}
 	s.noteChannelConversation(r.Channel, r.MachineID, r.SessionID)
@@ -360,7 +368,7 @@ func (s *Service) sweepChannelRuns() {
 // sinkReady: channel id can be answered now (the Feishu bot is connected and paired; a plugin's is there).
 func (s *Service) sinkReady(ctx context.Context, id string) bool {
 	if id == channel.Feishu {
-		st, err := s.feishuStatusKept(ctx)
+		st, err := s.larkModule().StatusKept(ctx)
 		return err == nil && st.Ready
 	}
 	_, ok := s.pluginChannel(ctx, id)
@@ -416,3 +424,61 @@ var (
 	errCannotSend = errors.New("cannot send yet")
 	errNoChannel  = errors.New("no channel")
 )
+
+// chansNow is the channels' clock.
+func (s *Service) chansNow() time.Time {
+	c := &s.chans
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.clock()
+}
+
+// unreachable: the call did not reach the hub, or did not come back (worth trying again).
+func unreachable(err error) bool {
+	return errors.Is(err, bus.ErrOffline) || errors.Is(err, rpc.ErrClosed) || errors.Is(err, context.DeadlineExceeded)
+}
+
+// cotItemsMost bounds what a run keeps of its turn's process.
+const cotItemsMost = 2000
+
+// runExt is one of a run's channel values, read under the channels' lock (a held run's next turn clears them).
+func (s *Service) runExt(r *channel.Run, key string) string {
+	c := &s.chans
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return r.Ext[key]
+}
+
+// cotItem: it is part of a turn's process.
+func cotItem(it proto.Item) bool {
+	switch it.Kind {
+	case proto.KindThinking, proto.KindText:
+		return it.Role == "assistant" && strings.TrimSpace(it.Text) != ""
+	case proto.KindToolUse, proto.KindToolResult:
+		return true
+	}
+	return false
+}
+
+// runItems is a copy of what the run saw of its turn's process.
+func (s *Service) runItems(id string) (*chanLive, []proto.Item) {
+	c := &s.chans
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	p := c.live[id]
+	if p == nil {
+		return nil, nil
+	}
+	return p, append([]proto.Item(nil), p.items...)
+}
+
+// runSteps is a copy of the tool-call lines the run saw.
+func (s *Service) runSteps(id string) []string {
+	c := &s.chans
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if p := c.live[id]; p != nil {
+		return append([]string(nil), p.steps...)
+	}
+	return nil
+}

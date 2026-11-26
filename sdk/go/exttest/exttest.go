@@ -17,7 +17,6 @@ import (
 	"os/exec"
 	"regexp"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
@@ -84,6 +83,11 @@ func Check(t testing.TB, manifest []byte, run Run, config ...json.RawMessage) wi
 	h := newHub(run)
 	h.manifest = &m // what it declares is granted here
 	go h.serve(ctx)
+	defer func() {
+		for _, p := range h.takeProblems() {
+			t.Errorf("%s", p)
+		}
+	}()
 
 	if err := h.call(ctx, wire.MethodPing, struct{}{}, nil); code(err) != wire.ErrorCodeNotInitialized {
 		t.Fatalf("ping before initialize: want %s, got %v", wire.ErrorCodeNotInitialized, err)
@@ -230,6 +234,13 @@ func Check(t testing.TB, manifest []byte, run Run, config ...json.RawMessage) wi
 		case <-time.After(5 * time.Second):
 			t.Fatal("still running 5 seconds after the hub closed its stdin")
 		}
+		select {
+		case <-h.closed:
+		case <-time.After(time.Second):
+		}
+	}
+	for _, p := range h.takeProblems() {
+		t.Errorf("%s", p)
 	}
 	return res
 }
@@ -269,10 +280,11 @@ var uiVersion = func() int {
 }()
 
 // CheckView checks a View the way the apps will read it: against the schema (wire.ValidateJSON: only known fields
-// and components, the tones, the limits of each), https links, a graph's structure (wire.CheckGraph), at most 300
-// components (a tile or a graph node one each) and 16 KB of state, and for a card (compact: an overview card, a
-// widget, a shortcut's result) at most 2 sections and 12 components and no fields, a graph there being one of the 12
-// (the hub draws it as a still preview, not a row per node). The hub holds a widget to less still (FitWidget):
+// and components, the tones, the limits of each), https links, a graph's structure (wire.CheckGraph), a scene's
+// (wire.CheckScene) and at most one scene, at most 300 components (a tile, a graph node or a scene's pin one each) and
+// 16 KB of state, and for a card (compact: an overview card, a widget, a shortcut's result) at most 2 sections and 12
+// components and no fields, a graph or a scene there being one of the 12 (the app draws it as a still preview, not a
+// row per node or pin). The hub holds a widget to less still (FitWidget):
 // `personad extension test` checks that.
 func CheckView(raw json.RawMessage, compact bool) error {
 	if err := wire.ValidateJSON("View", raw); err != nil {
@@ -285,22 +297,37 @@ func CheckView(raw json.RawMessage, compact bool) error {
 	if len(v.State) > 16<<10 {
 		return errors.New("state is over 16 KB")
 	}
-	n, card := 0, 0
+	n, card, scenes := 0, 0, 0
 	for si, s := range v.Sections {
 		for ii, c := range s.Items {
-			// a grid's or a carousel's tiles, and a graph's nodes, are components of the page each
-			n += max(1, len(c.Tiles)+len(c.Nodes))
-			if c.Type == wire.ComponentGraph {
-				card++ // a card draws a graph as one still preview
+			// a grid's or a carousel's tiles, a graph's nodes, a scene's pins and a map's markers are components of the page each
+			n += max(1, len(c.Tiles)+len(c.Nodes)+len(c.Pins)+len(c.Markers))
+			if c.Type == wire.ComponentGraph || c.Type == wire.ComponentScene || c.Type == wire.ComponentMap {
+				card++ // a card draws a graph, scene or map as one still preview
 			} else {
 				card += max(1, len(c.Tiles))
 			}
 			at := fmt.Sprintf("sections[%d].items[%d] (%s)", si, ii, c.Type)
-			if c.Type == wire.ComponentLink && !strings.HasPrefix(c.URL, "https://") {
-				return fmt.Errorf("%s: links are https", at)
+			if c.Type == wire.ComponentLink {
+				if err := wire.CheckHTTPS(c.URL, "link"); err != nil {
+					return fmt.Errorf("%s: %w", at, err)
+				}
 			}
 			if c.Type == wire.ComponentGraph {
 				if err := wire.CheckGraph(&c); err != nil {
+					return fmt.Errorf("%s: %w", at, err)
+				}
+			}
+			if c.Type == wire.ComponentScene {
+				if scenes++; scenes > 1 {
+					return fmt.Errorf("%s: a view has at most one scene", at)
+				}
+				if err := wire.CheckScene(&c); err != nil {
+					return fmt.Errorf("%s: %w", at, err)
+				}
+			}
+			if c.Type == wire.ComponentMap {
+				if err := wire.CheckMap(&c); err != nil {
 					return fmt.Errorf("%s: %w", at, err)
 				}
 			}

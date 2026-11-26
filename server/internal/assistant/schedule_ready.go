@@ -39,7 +39,7 @@ type noticeBody struct {
 // taskTarget is where the run of t would go: the machine and launcher, and whether it starts or continues the task's
 // own conversation on the assistant's machine (own) rather than going into the conversation it came from.
 func (s *Service) taskTarget(ctx context.Context, t Task, mainLauncher string) (machine, launcher string, own bool) {
-	if t.SessionID != "" {
+	if t.continuesSource() {
 		if _, ok := s.device(ctx, t.MachineID); ok {
 			launcher = mainLauncher // a conversation that does not say runs on the main conversation's (readinessModel)
 			if c, ok := s.session(ctx, t.MachineID, t.SessionID); ok && c.Launcher != "" {
@@ -52,7 +52,7 @@ func (s *Service) taskTarget(ctx context.Context, t Task, mainLauncher string) (
 	if b, err := s.resolveModel(ctx, "task."+t.ID); err == nil {
 		launcher = strings.TrimPrefix(b.Provider, "launcher.")
 	}
-	return s.settings(ctx).MachineID, launcher, true
+	return s.taskMachine(ctx, t), launcher, true
 }
 
 // readyFor reports whether the run of t can go by the readiness r: false, with the step, when a step that keeps the
@@ -70,7 +70,7 @@ func (s *Service) readyFor(ctx context.Context, t Task, r Readiness) (bool, Read
 			continue
 		}
 		switch {
-		case st.ID == StepComputer && (own || onMain):
+		case st.ID == StepComputer && (own && t.ExecutionMachineID == "" || onMain):
 			return false, st // with no computer at all the task's own conversation has nowhere to start
 		case st.ID != StepComputer && onMain && launcher == cmp.Or(st.Launcher, r.Launcher):
 			return false, st
@@ -132,7 +132,7 @@ func (s *Service) noteReady(ctx context.Context, t Task) {
 	}
 	l := s.lang(ctx)
 	text := i18n.T(l, "assistant-schedule.ready_again", i18n.Args{"name": t.labelIn(l)})
-	if t.Space == SpaceHealth { // the main conversation does not name a health task either (health.go)
+	if s.trackPolicy(ctx, t.Space).Redact { // the main conversation does not name a task of a space that redacts either (health.go)
 		text = i18n.T(l, "assistant-schedule.ready_again_unnamed")
 	}
 	if _, err := s.appendFeed(ctx, main, feedNotice, "", noticeBody{Text: text}); err != nil {

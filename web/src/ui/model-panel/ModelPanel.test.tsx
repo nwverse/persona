@@ -175,14 +175,19 @@ describe("the model panel", () => {
     expect(document.body.querySelector("[data-rail-cell]")).toBeNull();
     expect(launcher("claude").getAttribute("aria-expanded")).toBe("true");
     expect(launcher("codex").getAttribute("aria-expanded")).toBe("false");
-    expect(document.body.textContent).toContain("需要新开对话");
+    // a folded launcher that can't take a pick says why in its tooltip, not in a line of the list (#12315)
+    expect(launcher("codex").getAttribute("aria-description")).toBe("需要新开对话");
+    expect(document.body.textContent).not.toContain("需要新开对话");
   });
 
-  it("distinguishes identical model names by their launcher in All", async () => {
+  it.each(["search", "expanded"] as const)("distinguishes identical model names by their launcher in %s", async (view) => {
     const shared = [{ id: "fable", name: "Fable", efforts: [] }];
     await open({ providers: [claude({ models: shared }), codex({ models: shared, unavailable: undefined })], state: { current: null, recommended: [], starting: true } });
-    act(() => launcher("claude").click());
-    act(() => launcher("codex").click());
+    if (view === "search") type(search(), "Fable");
+    else {
+      act(() => launcher("claude").click());
+      act(() => launcher("codex").click());
+    }
     const duplicates = rows().filter((r) => r.textContent?.includes("Fable"));
     expect(duplicates).toHaveLength(2);
     expect(duplicates[0].textContent).toContain("Claude");
@@ -280,10 +285,9 @@ describe("the model panel", () => {
     expect(onPick).toHaveBeenCalledWith({
       provider: "claude",
       model: "sonnet",
-      effort: "xhigh",
     });
     expect(onClose).toHaveBeenCalled();
-    expect(stored("recent")).toEqual([{ provider: "claude", model: "sonnet", effort: "xhigh" }]);
+    expect(stored("recent")).toEqual([{ provider: "claude", model: "sonnet" }]);
   });
 
   it("a refused pick keeps the panel open and records nothing", async () => {
@@ -504,7 +508,6 @@ describe("the model panel", () => {
     expect(saved[0]).toMatchObject({
       provider: "claude",
       model: "sonnet",
-      effort: "xhigh",
     });
     expect(document.body.querySelector("[data-panel-quick]")?.textContent).toContain("Sonnet 5");
     act(() => document.body.querySelector<HTMLButtonElement>('[data-panel-quick] button[aria-label="取消收藏"]')!.click());
@@ -632,9 +635,13 @@ describe("launcher-first acceptance #10249", () => {
     const { onPick } = await open({ providers: catalog(), state: { current: { provider: "account-2", model: "opus" }, recommended: [] } });
     expect(document.body.querySelectorAll("[data-panel-launcher]")).toHaveLength(7);
     expect([...document.body.querySelectorAll('[data-panel-launcher][aria-expanded="true"]')].map((el) => el.getAttribute("data-panel-launcher"))).toEqual(["account-2"]);
-    expect(launcher("account-6").parentElement!.textContent).toContain("Signed out");
-    for (const header of document.body.querySelectorAll("[data-panel-launcher]")) {
-      expect(header.textContent).toContain("Claude Code · Opus 5.5 · 3 个模型");
+    expect(launcher("account-6").getAttribute("aria-description")).toBe("Signed out");
+    for (const header of document.body.querySelectorAll<HTMLElement>("[data-panel-launcher]")) {
+      // the launcher the chat runs on says "Current" and not its model again (#12315)
+      if (header.dataset.panelLauncher === "account-2") {
+        expect(header.textContent).toContain("当前");
+        expect(header.textContent).not.toContain("Opus 5.5");
+      } else expect(header.textContent).toContain("Claude Code · Opus 5.5 · 3 个模型");
     }
     act(() => launcher("account-4").click());
     const wanted = document.body.querySelector<HTMLElement>('[data-panel-row="model:account-4\\a sonnet"]')!;
@@ -735,7 +742,7 @@ describe("a long list", () => {
     expect(document.body.querySelector("[data-panel-more]")).toBeNull();
   });
 
-  it("a name cut short shows the launcher and whole model ID; others add them only on a touch screen", async () => {
+  it.each(["", "A detailed model"])("a name cut short shows the launcher and whole model ID; others add them only on a touch screen (description: %s)", async (description) => {
     const sw = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollWidth");
     const cw = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
     // a name longer than 20 characters does not fit
@@ -757,7 +764,7 @@ describe("a long list", () => {
         providers: [
           claude({
             models: [
-              { id: long, name: long, efforts: [] },
+              { id: long, name: long, description, efforts: [] },
               { id: "sonnet", name: "Sonnet 5", efforts: [] },
             ],
           }),

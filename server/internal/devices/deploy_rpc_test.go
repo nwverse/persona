@@ -2,6 +2,7 @@ package devices
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -23,27 +24,28 @@ import (
 )
 
 type updatingNode struct {
-	mu          sync.Mutex
-	machine     *Machine
-	peer        *rpc.Peer
-	data        []byte
-	expected    []byte
-	begin       int
-	commits     int
-	confirms    int
-	aborts      int
-	resume      int64
-	badOffset   bool
-	busyCommit  bool
-	busySession bool
-	sessionErr  error
-	background  bool
-	sessions    []proto.Session // when set, what sessions.list answers
-	updateBusy  *bool           // with sessions: the node's update_busy (nil leaves it out)
-	installErr  error
-	stayOld     bool
-	target      string // the build it confirms ("" the fixture hub's, new-build)
-	committed   chan struct{}
+	mu                  sync.Mutex
+	machine             *Machine
+	peer                *rpc.Peer
+	data                []byte
+	expected            []byte
+	begin               int
+	commits             int
+	confirms            int
+	aborts              int
+	resume              int64
+	badOffset           bool
+	busyCommit          bool
+	busySession         bool
+	sessionErr          error
+	background          bool
+	sessions            []proto.Session // when set, what sessions.list answers
+	updateBusy          *bool           // with sessions: the node's update_busy (nil leaves it out)
+	installErr          error
+	stayOld             bool
+	target              string // the build it confirms ("" the fixture hub's, new-build)
+	committed           chan struct{}
+	handoffGraceSeconds int
 }
 
 func (n *updatingNode) handle(_ context.Context, method string, params json.RawMessage) (any, error) {
@@ -77,7 +79,7 @@ func (n *updatingNode) handle(_ context.Context, method string, params json.RawM
 			return nil, err
 		}
 		sum := sha256.Sum256(n.expected)
-		if p.Size != int64(len(n.expected)) || p.SHA256 != hex.EncodeToString(sum[:]) || p.Version != "new-build" {
+		if p.Size != int64(len(n.expected)) || p.SHA256 != hex.EncodeToString(sum[:]) || p.Version != cmp.Or(n.target, "new-build") {
 			return nil, errors.New("wrong update metadata")
 		}
 		n.begin++
@@ -102,6 +104,13 @@ func (n *updatingNode) handle(_ context.Context, method string, params json.RawM
 		}
 		return map[string]any{"offset": offset}, nil
 	case "node.update.commit":
+		var p proto.NodeUpdateCommitParams
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, err
+		}
+		if p.HandoffGraceSeconds != nil {
+			n.handoffGraceSeconds = *p.HandoffGraceSeconds
+		}
 		n.commits++
 		if n.busyCommit && n.commits == 1 {
 			return nil, &rpc.Error{Code: "node_update_busy", Message: "node is busy"}
@@ -114,7 +123,7 @@ func (n *updatingNode) handle(_ context.Context, method string, params json.RawM
 		}
 		if !n.stayOld {
 			n.machine.mu.Lock()
-			n.machine.info.Version = "new-build"
+			n.machine.info.Version = cmp.Or(n.target, "new-build")
 			n.machine.mu.Unlock()
 		}
 		if n.committed != nil {
@@ -191,7 +200,7 @@ func TestStaleDeployErrorClearsWhenTheNodeMatches(t *testing.T) {
 }
 
 func TestLinkedDeployCapabilities(t *testing.T) {
-	hubNodeBinary(t, "linux", "amd64")
+	hubNodeBinary(t, "linux", "amd64", "new-build")
 	for _, kind := range []string{kindLink, kindService} {
 		t.Run(kind, func(t *testing.T) {
 			_, m, _, _ := linkedDeployFixture(t, kind)
@@ -247,10 +256,16 @@ func TestLinkedDeployTransfersAndConfirms(t *testing.T) {
 // Redeploy sends the kind of program the node says it runs: persona-node to persona-node, personad to the rest; so
 // does an update the hub queued before it restarted, when the node comes back (nodeUpdateConnected).
 func TestRedeployBringsTheProgramTheNodeRuns(t *testing.T) {
-	fullBuild := updatetest.Program(t, nodeproto.ProgramPersonad, "linux", "amd64")
+	fullBuild := updatetest.VersionedProgram(t, nodeproto.ProgramPersonad, "linux", "amd64", "new-build") // linkedDeployFixture's hub
 	nodeBuild := updatetest.Program(t, nodeproto.ProgramPersonaNode, "linux", "amd64")
-	for _, tc := range []struct{ program, via string }{{nodeproto.ProgramPersonaNode, "redeploy"}, {nodeproto.ProgramPersonad, "redeploy"},
-		{"", "redeploy"}, {nodeproto.ProgramPersonaNode, "reconnect"}, {"", "reconnect"}} {
+	for _, tc := range []struct{ program, via, path string }{
+		{nodeproto.ProgramPersonaNode, "redeploy", ""},
+		{nodeproto.ProgramPersonad, "redeploy", "/opt/persona/bin/persona-node"},
+		{"", "redeploy", ""},
+		{nodeproto.ProgramPersonaNode, "reconnect", ""},
+		{nodeproto.ProgramPersonad, "reconnect", "/opt/persona/bin/persona-node"},
+		{"", "reconnect", ""},
+	} {
 		program := tc.program
 		t.Run(tc.via+"/program="+program, func(t *testing.T) {
 			home := t.TempDir()
@@ -278,6 +293,7 @@ func TestRedeployBringsTheProgramTheNodeRuns(t *testing.T) {
 			n.mu.Unlock()
 			m.mu.Lock()
 			m.info.Program = program
+			m.info.Executable = tc.path
 			info := m.info
 			m.mu.Unlock()
 			if tc.via == "reconnect" {
@@ -285,8 +301,12 @@ func TestRedeployBringsTheProgramTheNodeRuns(t *testing.T) {
 					t.Fatal(err)
 				}
 				m.nodeUpdateConnected(context.Background(), m.peer, info)
-			} else if err := m.startDeploy(); err != nil {
-				t.Fatal(err)
+			} else {
+				ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+				defer cancel()
+				if err := h.Redeploy(ctx, m.cfg.ID); err != nil {
+					t.Fatal(err)
+				}
 			}
 			waitMachine(t, m, 10*time.Second, func(s proto.Machine) bool { return !s.Deploying })
 			n.mu.Lock()
@@ -476,12 +496,15 @@ func TestLinkedDeployPreflightFailureEndsConfirmation(t *testing.T) {
 	h, m, n, bin := linkedDeployFixture(t, kindLink)
 	h.opts.Store = newMemStore()
 	n.stayOld = true
-	if err := m.startRPCDeployment(nodePackage{Version: h.hubVersion(), path: bin}, nil); err != nil {
+	run, err := m.startRPCDeploymentRun(nodePackage{Version: h.hubVersion(), path: bin}, nil)
+	if err != nil {
 		t.Fatal(err)
 	}
-	waitMachine(t, m, 5*time.Second, func(s proto.Machine) bool { return s.DeployPhase == "confirming" })
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
+	outcome := make(chan error, 1)
+	go func() { outcome <- m.waitDeploy(ctx, run) }()
+	waitMachine(t, m, 5*time.Second, func(s proto.Machine) bool { return s.DeployPhase == "confirming" })
 	for _, failure := range []proto.NodeUpdatePreflightFailure{
 		{ID: "old-update", Error: "stale failure"},
 		{ID: "update-one", Error: "exit status 23"},
@@ -493,6 +516,14 @@ func TestLinkedDeployPreflightFailureEndsConfirmation(t *testing.T) {
 	s := waitMachine(t, m, 5*time.Second, func(s proto.Machine) bool { return !s.Deploying })
 	if s.DeployPhase != "" || s.DeployError != "exit status 23" || s.NodeVersion != "old-build" || !s.Online {
 		t.Fatalf("snapshot = %+v", s)
+	}
+	select {
+	case err := <-outcome:
+		if err == nil || err.Error() != "exit status 23" {
+			t.Fatalf("redeploy outcome = %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatalf("waiting for redeploy outcome: %v", ctx.Err())
 	}
 	var saved nodeDeployRecord
 	found, err := h.opts.Store.Setting(ctx, m.deployRecordKey(), &saved)

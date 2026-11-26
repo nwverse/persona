@@ -7,6 +7,7 @@
   "not_delivered": "届きませんでした：{error}",
   "interrupted": "中断しました",
   "interrupt_failed": "中断できませんでした：{error}",
+  "send_now_failed": "今すぐ送信できませんでした：{error}",
   "new_chat": "新しいチャット",
   "session": "セッション",
   "not_found_title": "会話が見つかりません",
@@ -15,6 +16,9 @@
   "start_failed_title": "起動できませんでした",
   "starting_agent": "エージェントを起動中",
   "loading_earlier": "以前のメッセージを読み込み中",
+  "background_activity": "バックグラウンドアクティビティ",
+  "background_empty": "読み込み済みの履歴に完了した静かな監督ラウンドはありません。",
+  "background_load_earlier": "以前のアクティビティを読み込む",
   "started_in": "{path}で開始",
   "chat_start": "チャットの始まり",
   "preparing": "準備中",
@@ -130,5 +134,6 @@
   "todo_completed_label": "To-do（完了）：{title}",
   "export": "会話を書き出す…",
   "side_sessions_count": "子セッション（{count}）",
-  "side_sessions_needs_you": "子セッションが対応を待っています"
+  "side_sessions_needs_you": "子セッションが対応を待っています",
+  "open_agent_page": "Agent のページを開く"
 }

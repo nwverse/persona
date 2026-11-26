@@ -37,11 +37,15 @@ type quietNotice struct {
 	ask     string
 	text    string
 	files   []taskFile // what a done turn handed over (task_files.go)
+	card    string     // needs: the card it stands for (quietCard), whose push goes out if the notice is refused for good
 }
 
 type quietBook struct {
+	wg      sync.WaitGroup // tracks armed timers and in-flight quiet-notice callbacks so teardown drains them cleanly
 	mu      sync.Mutex
+	stopped bool
 	pending map[string]*quietNotice // by todo id
+	timers  map[string]*time.Timer  // by todo id
 }
 
 // noticeStates are the words for a state in the notice's "meanwhile it also…".
@@ -56,6 +60,10 @@ func (s *Service) quietNotify(ctx context.Context, t Todo, machine, state, ask, 
 	}
 	b := &s.quiet
 	b.mu.Lock()
+	if b.stopped {
+		b.mu.Unlock()
+		return
+	}
 	if b.pending == nil {
 		b.pending = map[string]*quietNotice{}
 	}
@@ -66,11 +74,25 @@ func (s *Service) quietNotify(ctx context.Context, t Todo, machine, state, ask, 
 	} else if n.state != state {
 		n.earlier = appendOnce(n.earlier, noticeStates[n.state])
 	}
-	n.todo, n.machine, n.state, n.ask, n.text, n.files = t, machine, state, ask, text, files
-	b.mu.Unlock()
+	n.todo, n.machine, n.state, n.ask, n.text, n.files, n.card = t, machine, state, ask, text, files, ""
 	if !waiting {
-		time.AfterFunc(quietNoticeDelay, func() { s.sendQuietNotice(t.ID) })
+		if b.timers == nil {
+			b.timers = map[string]*time.Timer{}
+		}
+		id := t.ID
+		if prev := b.timers[id]; prev != nil {
+			delete(b.timers, id)
+			if prev.Stop() {
+				b.wg.Done()
+			}
+		}
+		b.wg.Add(1)
+		b.timers[id] = time.AfterFunc(quietNoticeDelay, func() {
+			defer b.wg.Done()
+			s.runQuietNoticeTimer(id)
+		})
 	}
+	b.mu.Unlock()
 }
 
 func appendOnce(list []string, s string) []string {
@@ -85,12 +107,44 @@ func appendOnce(list []string, s string) []string {
 	return append(list, s)
 }
 
+func (s *Service) runQuietNoticeTimer(id string) {
+	b := &s.quiet
+	b.mu.Lock()
+	stopped := b.stopped
+	b.mu.Unlock()
+	if stopped {
+		return
+	}
+	s.sendQuietNotice(id)
+}
+
+// stopQuietTimers stops new quiet-notice timers from arming, disarms pending timers, and drains in-flight callbacks.
+func (s *Service) stopQuietTimers() {
+	b := &s.quiet
+	b.mu.Lock()
+	b.stopped = true
+	for id, timer := range b.timers {
+		delete(b.timers, id)
+		if timer.Stop() {
+			b.wg.Done()
+		}
+	}
+	b.mu.Unlock()
+	b.wg.Wait()
+}
+
 // sendQuietNotice puts task id's notice into the main conversation: now, or queued behind its turn.
 func (s *Service) sendQuietNotice(id string) {
 	b := &s.quiet
 	b.mu.Lock()
 	n := b.pending[id]
 	delete(b.pending, id)
+	if timer := b.timers[id]; timer != nil {
+		delete(b.timers, id)
+		if timer.Stop() {
+			b.wg.Done()
+		}
+	}
 	b.mu.Unlock()
 	if n == nil {
 		return
@@ -123,7 +177,8 @@ func (s *Service) sendQuietNotice(id string) {
 			retryWith = p.Tasks[i].RetryWith[0]
 		}
 	}
-	msg := relayMsg{From: id, FromTitle: "任务「" + n.todo.Title + "」", Tool: noticeTool, Text: renderNotice(n, reporting, retryWith), At: time.Now().UTC(), State: n.state}
+	msg := relayMsg{From: id, FromTitle: "任务「" + n.todo.Title + "」", Tool: noticeTool, Text: renderNotice(n, reporting, retryWith), At: time.Now().UTC(), State: n.state,
+		Card: n.card}
 	if s.replaceQueuedNotice(to, msg) {
 		s.publish(ctx)
 		return
@@ -140,6 +195,9 @@ func (s *Service) sendQuietNotice(id string) {
 		return
 	}
 	if err := s.tryDirectRelay(ctx, machine, to, &msg); err != nil {
+		if s.refusedDirect(ctx, machine, to, msg, err) {
+			return // refused for good: it is not queued, and a needs or failed notice's push goes out (relayRefused)
+		}
 		s.logf("task %s: quiet notice: %v; queued", id, err)
 		if s.queueNotice(id, n, to, msg) {
 			s.publish(ctx)
@@ -156,6 +214,10 @@ func (s *Service) queueNotice(id string, n *quietNotice, to string, msg relayMsg
 	}
 	b := &s.quiet
 	b.mu.Lock()
+	if b.stopped {
+		b.mu.Unlock()
+		return false
+	}
 	if b.pending == nil {
 		b.pending = map[string]*quietNotice{}
 	}
@@ -172,16 +234,28 @@ func (s *Service) queueNotice(id string, n *quietNotice, to string, msg relayMsg
 		if len(n.files) > 0 { // the newer state may be one that carries no files (a question): keep what came
 			cur.files = n.files
 		}
-	} else {
-		b.pending[id] = n
-	}
-	b.mu.Unlock()
-	if newer {
+		b.mu.Unlock()
 		s.logf("task %s: quiet notice: the relay queue can't be read; a newer one waits", id)
 		return false
 	}
-	s.logf("task %s: quiet notice: the relay queue can't be read; trying again in %s", id, quietNoticeDelay)
-	time.AfterFunc(quietNoticeDelay, func() { s.sendQuietNotice(id) })
+	b.pending[id] = n
+	if b.timers == nil {
+		b.timers = map[string]*time.Timer{}
+	}
+	if prev := b.timers[id]; prev != nil {
+		delete(b.timers, id)
+		if prev.Stop() {
+			b.wg.Done()
+		}
+	}
+	delay := quietNoticeDelay
+	b.wg.Add(1)
+	b.timers[id] = time.AfterFunc(delay, func() {
+		defer b.wg.Done()
+		s.runQuietNoticeTimer(id)
+	})
+	b.mu.Unlock()
+	s.logf("task %s: quiet notice: the relay queue can't be read; trying again in %s", id, delay)
 	return false
 }
 
@@ -192,7 +266,8 @@ func renderNotice(n *quietNotice, reporting bool, retryWith string) string {
 		Ask: n.ask, Text: n.text, Files: taskFilePrompts(n.files), Reporting: reporting, RetryWith: retryWith})
 }
 
-// replaceQueuedNotice: a notice about the same task still waits in the queue: msg takes its place (true).
+// replaceQueuedNotice: a quiet notice about the same task still waits in the queue: msg takes its place (true).
+// Agent report relays have no quiet-notice state and stay separate, so a later quiet notice cannot erase one.
 func (s *Service) replaceQueuedNotice(to string, msg relayMsg) bool {
 	b := &s.relays
 	b.mu.Lock()
@@ -203,7 +278,7 @@ func (s *Service) replaceQueuedNotice(to string, msg relayMsg) bool {
 	q := b.st.Queue[to]
 	for i := range q {
 		// The first one may be going in right now (drainRelays takes it off once delivered): leave it.
-		if q[i].Tool == noticeTool && q[i].From == msg.From && (i > 0 || !b.draining[to]) {
+		if q[i].Tool == noticeTool && q[i].State != "" && q[i].From == msg.From && (i > 0 || !b.draining[to]) {
 			q[i] = msg.replacing(q[i], time.Now()) // it waited since then (relay_presence.go)
 			s.saveRelayLocked()
 			return true
@@ -257,64 +332,62 @@ func (s *Service) dropQueuedNeeds(todoID string) bool {
 	return removed || changed
 }
 
-// quietAgentTask: an agent agent_start opened from the main conversation is a quiet task while the user wants those
-// told only there (quietTask), and so is one a reporting conversation opened (reporters.go): a todo is made and the
-// agent is linked to it, so it goes like a task_plan task (card, snapshot, receipt, notices). Without the setting it
-// stays an agent of its own (false). While assistant.agent_tasks is on (#3617, agent_tasks.go) an agent any other
-// conversation starts is a quiet task too, whatever main_tasks_quiet says: supervised by that conversation when it is
-// a leader, else by the main one. told is who hears of the task, as agent_start's answer says it.
-func (s *Service) quietAgentTask(ctx context.Context, conversation string, m Device, cwd, prompt string, tab any, sid string) (told string, ok bool) {
-	if sid == "" {
-		return "", false
+// prepareAgentTask records an assistant agent_start before the node is called (#5732, #13657). The calling conversation
+// stays its origin; a calling lead or live assistant side conversation supervises its own work, otherwise main does.
+// Quiet controls notification behavior, never whether the work is tracked. The supervisor also gets a card when it differs
+// from the origin.
+func (s *Service) prepareAgentTask(ctx context.Context, conversation string, m Device, cwd, prompt string, tab any) (Todo, string, bool) {
+	supervisor := s.settings(ctx).Main
+	source := ""
+	if s.isLeader(ctx, conversation) || s.liveSideSupervisor(ctx, conversation) {
+		supervisor, source = conversation, "plan"
 	}
-	_, reports := s.reporterOf(ctx, conversation)
-	supervisor, managed := "", false
-	if !reports {
-		supervisor, managed = s.agentTaskSupervisor(ctx, conversation)
-	}
-	if !managed {
-		supervisor = ""
-		if !reports && !s.isMain(ctx, conversation) {
-			return "", false
-		}
-		if !s.quietTask(ctx, conversation) {
-			return "", false
-		}
-	}
-	if s.isMain(ctx, conversation) {
-		supervisor = conversation
-	}
-	// The prompt cleaned up now, the model's name for it later (todo_titles.go); the tab name when nothing is left.
 	tabName, _ := tab.(string)
 	title, retitle := s.taskTitle(ctx, "", prompt)
 	if title == "" {
 		title, retitle = tabName, false
 	}
-	todo, err := s.newTodo(ctx, title, prompt, conversation, "", managed || s.quietTask(ctx, conversation))
+	todo, err := s.newTodo(ctx, title, prompt, conversation, "", s.quietTask(ctx, conversation))
 	if err != nil {
-		s.logf("agent_start %s: todo: %v", short(sid), err)
-		return "", false
+		s.logf("agent_start on %s: todo: %v", m.ID, err)
+		return Todo{}, "", false
 	}
 	if retitle {
 		s.nameTodoLater(ctx, todo.ID, title, prompt)
 	}
-	// The main conversation follows up what it hands out (supervise.go), as task_plan has it; a reporting
-	// conversation's task is not supervised: its notices go back to that conversation, not into a supervision message for the
-	// main one (#4101).
 	if supervisor != "" {
-		s.superviseTodo(ctx, todo.ID, supervisor, nil, 0)
+		if err := s.superviseTodo(ctx, todo.ID, supervisor, nil, 0, source); err != nil {
+			s.dropAdoption(ctx, todo.ID, err)
+			return Todo{}, "", false
+		}
 	}
-	s.briefFor(ctx, s.callerOrigin(ctx, conversation), todo, nil, 0) // who asked, before its agent is linked (task_brief.go)
-	if err := s.linkTodoAgent(ctx, todo.ID, m.ID, sid, title, cwd, ""); err != nil {
-		s.logf("agent_start %s: link %s: %v", short(sid), todo.ID, err)
-	}
+	s.briefFor(ctx, s.callerOrigin(ctx, conversation), todo, nil, 0)
 	if _, err := s.appendFeed(ctx, conversation, feedTask, todo.ID, nil); err != nil {
 		s.logf("task %s: feed: %v", todo.ID, err)
 	}
+	told := startToldHere
 	if supervisor != "" && supervisor != conversation {
-		return startToldMain, true
+		if _, err := s.appendFeed(ctx, supervisor, feedTask, todo.ID, nil); err != nil {
+			s.logf("task %s: main feed: %v", todo.ID, err)
+		}
+		told = startToldMain
 	}
-	return startToldHere, true
+	if current, ok := s.todoNow(todo.ID); ok {
+		todo = current
+	}
+	return todo, told, true
+}
+
+// linkPreparedAgentTask attaches the node's answered session and its actual agent kind to the task made before its start.
+func (s *Service) linkPreparedAgentTask(ctx context.Context, todo Todo, m Device, cwd, sid, agent string) error {
+	if sid == "" {
+		return fmt.Errorf("empty session id")
+	}
+	if err := s.linkTodoAgent(ctx, todo.ID, m.ID, sid, todo.Title, cwd, agent); err != nil {
+		s.logf("agent_start %s: link %s: %v", short(sid), todo.ID, err)
+		return err
+	}
+	return nil
 }
 
 // startToldHere / startToldMain: who hears of an agent_start task, in the tool's answer: the conversation that started it, or
@@ -337,8 +410,20 @@ func (s *Service) InteractionRaised(ctx context.Context, r InteractionRaised) {
 		name = m.Name
 	}
 	s.taskNotice(ctx, t, name, "needs", noticeAsk(ix), "")
+	s.quietCard(t.ID, ix.ID)
 	if t.Quiet { // any other task's card is in the next report already (taskAsks)
 		s.taskReport(t, reportNeeds, name, [2]string{ix.MachineID, ix.SessionID}, noticeAsk(ix), &ix)
+	}
+}
+
+// quietCard notes card as the one task id's waiting needs notice stands for: the card whose push the notice replaced,
+// pushed after all if the notice is refused for good (quietNoticeRefused).
+func (s *Service) quietCard(id, card string) {
+	b := &s.quiet
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if n := b.pending[id]; n != nil && n.state == "needs" {
+		n.card = card
 	}
 }
 
@@ -358,6 +443,11 @@ func noticeAsk(ix proto.Interaction) string {
 			}
 			b.WriteByte('\n')
 		}
+	case supervisedScreen(ix):
+		if title := clip(oneLine(ix.SessionTitle), 70); title != "" {
+			b.WriteString(title + " · ")
+		}
+		b.WriteString(terminalQuestionText(ix))
 	case ix.Kind == proto.IxPlan:
 		b.WriteString("批准它的计划：\n" + clipMarkdown(ix.Plan, 1200))
 	default:

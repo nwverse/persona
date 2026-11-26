@@ -53,6 +53,7 @@ export function ListPane({
 }) {
   const [tags, setTags] = useState<Partial<Record<KBKind, string>>>({});
   const tag = tags[kind];
+  // Recordings are existing knowledge data: the Meetings list and search keep them when the recording module is off.
   const key = listKey(kind, tag);
   const [list, setList] = useState<KBList | undefined>(() => lists.get(key));
   const [error, setError] = useState("");

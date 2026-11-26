@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -71,10 +72,70 @@ type DecisionOption struct {
 	LeadsTo string `json:"leads_to"`
 }
 
+// terminalResumeLabel recognizes the existing terminal instruction in the three
+// supported languages. It can only offer navigation; it never authorizes a start.
+func terminalResumeLabel(label string) bool {
+	label = strings.ToLower(strings.TrimSpace(label))
+	return strings.HasPrefix(label, "resume ") && strings.Contains(label, "terminal") ||
+		strings.Contains(label, "终端") && strings.Contains(label, "恢复") || // i18n-ignore: matches the terminal-resume instruction as written in zh-Hans / ja, never shown
+		strings.Contains(label, "ターミナル") && strings.Contains(label, "再開") // i18n-ignore: matches the terminal-resume instruction as written in zh-Hans / ja, never shown
+}
+
+func terminalResumeMention(text string) bool {
+	text = strings.ToLower(text)
+	return strings.Contains(text, "resume") && strings.Contains(text, "terminal") ||
+		strings.Contains(text, "终端") && strings.Contains(text, "恢复") || // i18n-ignore: matches the terminal-resume instruction as written in zh-Hans / ja, never shown
+		strings.Contains(text, "ターミナル") && strings.Contains(text, "再開") // i18n-ignore: matches the terminal-resume instruction as written in zh-Hans / ja, never shown
+}
+
+func soleDecisionAgent(t Todo, asked time.Time) *SessionRef {
+	var target *SessionRef
+	for _, a := range t.Agents {
+		if !a.active() || a.LinkedAt.After(asked) || a.MachineID == "" || a.SessionID == "" {
+			continue
+		}
+		if target != nil {
+			return nil
+		}
+		target = &SessionRef{MachineID: a.MachineID, SessionID: a.SessionID}
+	}
+	return target
+}
+
+// decisionTerminal returns a task-owned target. An archived/released binding is
+// never used to redirect an owner's recovery action to another Agent.
+func decisionTerminal(t Todo, label string) *SessionRef {
+	if !terminalResumeLabel(label) {
+		return nil
+	}
+	var match *SessionRef
+	for _, a := range t.Agents {
+		if !a.active() || len(a.SessionID) < 8 || !strings.Contains(strings.ToLower(label), strings.ToLower(a.SessionID[:8])) {
+			continue
+		}
+		if match != nil {
+			return nil
+		}
+		match = &SessionRef{MachineID: a.MachineID, SessionID: a.SessionID}
+	}
+	return match
+}
+
 // reviewDecision is what a needs_user review says of its decision, as checked (readDecision).
 type reviewDecision struct {
 	WhyOwner, Reason, Recommend, CostOfWaiting string
 	Options                                    []DecisionOption
+}
+
+// decisionPushLevel is the push level of a decision the owner is asked, by why it is theirs. Choosing what comes
+// first (priority) is the owner's call but no emergency: P1, in Needs you without ringing through low-distraction
+// mode. A step that cannot be undone, one others will see, a delivery to accept or what only the owner knows stays
+// P0 (decision rights: a2eb5451's "update the profile now?" rang as P0 on 2026-11-23).
+func decisionPushLevel(why string) string {
+	if why == whyPriority {
+		return assistantwire.LevelP1
+	}
+	return assistantwire.LevelP0
 }
 
 // neverDefault: the decision is never taken by default (it cannot be undone, or other people will see it).
@@ -85,10 +146,14 @@ const decisionElse = "When nothing needs the user, don't use needs_user: decide 
 	"send the work back (rework), or close it (accepted or cancelled). A task that only waits for something or someone is no " +
 	"decision either: park it (parked, with reason, waiting_on, evidence and until), and it comes back to you at that time."
 
+// decisionReasonMaxRunes is the shared rune cap for a needs_user decision's question/reason across validation
+// (readDecision) and stored asks (askConclusion).
+const decisionReasonMaxRunes = 200
+
 // readDecision checks a review's decision: every part there, the recommended option first among two to four. The
 // error names everything missing at once, and what to do when nothing needs the owner.
 func readDecision(why, reason, recommend, cost string, options []DecisionOption) (reviewDecision, error) {
-	d := reviewDecision{WhyOwner: strings.TrimSpace(why), Reason: clip(oneLine(reason), 200), Recommend: clip(oneLine(recommend), 120),
+	d := reviewDecision{WhyOwner: strings.TrimSpace(why), Reason: clip(oneLine(reason), decisionReasonMaxRunes), Recommend: clip(oneLine(recommend), 120),
 		CostOfWaiting: clip(oneLine(cost), 200)}
 	for _, o := range options {
 		o.Label, o.LeadsTo = clip(oneLine(o.Label), 120), clip(oneLine(o.LeadsTo), 200)
@@ -214,6 +279,19 @@ func (s *Service) decisionStands(t Todo) string {
 // backgroundText is a decision's one line of background: where its task came from, when, and where it stands. "" for
 // an ask that has none (not a decision, or one from before #3804).
 func backgroundText(l i18n.Lang, loc *time.Location, a *acceptAsk) string {
+	if a.OutsideID != "" {
+		kind := a.OutsideKind
+		switch kind {
+		case "script", "extension":
+		default:
+			kind = "app"
+		}
+		line := i18n.T(l, "assistant-reports.decision_outside_source_"+kind, i18n.Args{"source": a.OutsideSource})
+		if a.OutsideBackground != "" {
+			line += " · " + a.OutsideBackground
+		}
+		return line
+	}
 	f := a.From
 	if f == nil {
 		return ""
@@ -261,13 +339,21 @@ func decisionLines(l i18n.Lang, loc *time.Location, a *acceptAsk) []string {
 	if a.CostOfWaiting != "" {
 		out = append(out, i18n.T(l, "assistant-reports.decision_cost", i18n.Args{"cost": a.CostOfWaiting}))
 	}
-	if neverDefault(a.WhyOwner) && a.Deadline.IsZero() {
+	if (neverDefault(a.WhyOwner) || a.OutsideID != "" && !a.DefaultAllowed) && a.Deadline.IsZero() {
 		out = append(out, i18n.T(l, "assistant-reports.decision_never_default"))
 	}
 	return out
 }
 
 // ---- answering ----
+
+// decisionTextDelivery distinguishes Agent delivery from a record awaiting supervisor follow-up.
+type decisionTextDelivery string
+
+const (
+	decisionTextAgent    decisionTextDelivery = "agent"
+	decisionTextRecorded decisionTextDelivery = "recorded_for_supervisor"
+)
 
 // errDecisionOption: the option named is none of the decision's.
 var errDecisionOption = errors.New("option is not one of the decision's options")
@@ -299,6 +385,7 @@ func (s *Service) askRound(id, asked string) (*acceptAsk, error) {
 // "OK" takes it; another is their own choice, kept in the to-do's decisions and sent to the task's Agent, which ends
 // the decision. With no Agent that can receive it, the choice is still recorded and handed to the supervisor. A zero
 // result means the round is over. errDecisionOption: no such option; another delivery error leaves the round retryable.
+// A recurring check's decision (Check) goes to the supervisor, not the Agent, whichever option it is (checkDecided).
 func (s *Service) chooseOption(ctx context.Context, id, asked, label string) (acceptResult, error) {
 	s.reviewDismissals.actions.acquire(id)
 	defer s.reviewDismissals.actions.release(id)
@@ -308,9 +395,18 @@ func (s *Service) chooseOption(ctx context.Context, id, asked, label string) (ac
 	}
 	label = strings.TrimSpace(label)
 	i := slices.IndexFunc(a.Options, func(o DecisionOption) bool { return o.Label == label })
+	if a.OutsideID != "" {
+		if i < 0 {
+			return acceptResult{}, errDecisionOption
+		}
+		return s.answerOutside(ctx, id, asked, outsideAnswer{Option: label}, false)
+	}
+	if terminalResumeLabel(label) && i >= 0 {
+		return acceptResult{}, i18n.Err("assistant-reports.manual_terminal_resume")
+	}
 	switch {
 	case label == a.Recommend && label != "":
-		return s.acceptTryAsDismissalLocked(ctx, id, "", false)
+		return s.acceptTryAsDismissalLocked(ctx, id, "", a.AskedAt, false)
 	case i < 0:
 		return acceptResult{}, errDecisionOption
 	}
@@ -323,14 +419,16 @@ func (s *Service) chooseOption(ctx context.Context, id, asked, label string) (ac
 	s.deadlineAnswered(ctx, id, a.AskedAt) // their own answer: no default at its deadline, even if the send fails
 	msg := i18n.T(l, "assistant-reports.decision_chosen_to_agent", i18n.Args{"option": label, "leads_to": a.Options[i].LeadsTo})
 	var sendErr error
-	if _, err := s.relayToTask(ctx, t.Origin, id, msg, func(cur Todo) bool {
-		return cur.DoneAt == nil && !acceptAskStale(a, cur)
-	}); err != nil {
-		s.logf("task %s: decision to agent: %v", id, err)
-		if !noAgentCanTake(err) {
-			return acceptResult{}, err
+	if a.Check == "" { // a recurring check's decision goes to the supervisor instead (checkDecided)
+		if _, err := s.relayToTask(ctx, t.Origin, id, msg, func(cur Todo) bool {
+			return cur.DoneAt == nil && !acceptAskStale(a, cur)
+		}); err != nil {
+			s.logf("task %s: decision to agent: %v", id, err)
+			if !noAgentCanTake(err) {
+				return acceptResult{}, err
+			}
+			sendErr = err
 		}
-		sendErr = err
 	}
 	if st := s.todoDB(); st != nil {
 		at, dec := decisionNow(), "dec_"+randomHex(8)
@@ -344,9 +442,12 @@ func (s *Service) chooseOption(ctx context.Context, id, asked, label string) (ac
 		}
 	}
 	result := acceptSucceeded()
-	if sendErr != nil {
+	switch {
+	case a.Check != "":
+		s.checkDecided(ctx, t, a, label, false)
+	case sendErr != nil:
 		result = s.decisionNotDelivered(ctx, id, a.AskedAt, label, sendErr)
-	} else {
+	default:
 		s.userDecided(ctx, id)
 	}
 	s.endAsk(ctx, id, a.AskedAt, "", label)
@@ -384,6 +485,11 @@ func (s *Service) routeDecisionAnswer(ctx context.Context, conversation, id, ask
 func (s *Service) answerDecisionText(ctx context.Context, id, asked, text string) (acceptResult, error) {
 	s.reviewDismissals.actions.acquire(id)
 	defer s.reviewDismissals.actions.release(id)
+	if a, err := s.askRound(id, asked); err != nil {
+		return acceptResult{}, err
+	} else if a != nil && a.OutsideID != "" {
+		return s.answerOutside(ctx, id, asked, outsideAnswer{Text: decisionText(text)}, false)
+	}
 	st := s.todoDB()
 	if st == nil {
 		return acceptResult{}, errAcceptStore
@@ -409,6 +515,10 @@ func (s *Service) answerDecisionTextLocked(ctx context.Context, st todoStore, t 
 	if err != nil || a == nil {
 		return FeedItem{}, acceptResult{}, err
 	}
+	if a.OutsideID != "" {
+		result, err := s.answerOutside(ctx, id, asked, outsideAnswer{Text: decisionText(text)}, false)
+		return FeedItem{}, result, err
+	}
 	completeDismissal, err := s.prepareDismissalForAnswer(ctx, t)
 	if err != nil {
 		return FeedItem{}, acceptResult{}, err
@@ -428,17 +538,22 @@ func (s *Service) answerDecisionTextLocked(ctx context.Context, st todoStore, t 
 		Question: cmp.Or(a.Reason, i18n.T(s.botLang(ctx), "assistant-reports.verdict_decide")),
 		Choice:   decisionText(text), Source: db.DecisionManual, SourceMessage: item.ID, CreatedAt: at}
 	if _, err := s.insertDecision(ctx, st, row); err != nil {
+		if sendErr == nil { // its Agent has the words: say so, never "nothing was taken" (the to-do may be gone by now)
+			err = wordsSent{err}
+		}
 		return FeedItem{}, acceptResult{}, err
 	}
 	completeDismissal()
 	s.decisionsChanged(ctx, id, at)
 	result := acceptSucceeded()
+	delivery := decisionTextAgent
 	if sendErr != nil {
+		delivery = decisionTextRecorded
 		result = s.decisionNotDelivered(ctx, id, a.AskedAt, text, sendErr)
 	} else {
 		s.userDecided(ctx, id)
 	}
-	s.endAsk(ctx, id, a.AskedAt, "", row.Choice)
+	s.endAskWithTextDelivery(ctx, id, a.AskedAt, "", row.Choice, delivery)
 	return item, result, nil
 }
 
@@ -452,6 +567,11 @@ func (s *Service) askCardNow(id, card string) bool {
 // endAsk marks task id's decision asked at as answered (response: the fixed answer it got, or chosen: the option
 // taken that was not the recommended one), and redraws its cards.
 func (s *Service) endAsk(ctx context.Context, id string, asked time.Time, response, chosen string) {
+	s.endAskWithTextDelivery(ctx, id, asked, response, chosen, "")
+}
+
+// endAskWithTextDelivery persists the observed free-text outcome with the answer before redrawing any cards.
+func (s *Service) endAskWithTextDelivery(ctx context.Context, id string, asked time.Time, response, chosen string, delivery decisionTextDelivery) {
 	b := &s.accept
 	b.mu.Lock()
 	a := b.asks[id]
@@ -459,11 +579,14 @@ func (s *Service) endAsk(ctx context.Context, id string, asked time.Time, respon
 		b.mu.Unlock()
 		return
 	}
-	a.AcceptedAt, a.Response, a.Chosen = time.Now().UTC(), response, chosen
+	a.AcceptedAt, a.Response, a.Chosen, a.TextDelivery = time.Now().UTC(), response, chosen, delivery
+	// Only option/fixed-answer callers use endAsk; explicit text always supplies its delivery outcome.
+	a.OptionTaken = delivery == "" && response == "" && chosen != ""
 	s.saveAcceptLocked(ctx)
 	cp := *a
 	b.mu.Unlock()
 	s.askChanged(ctx)
+	s.todoPushOver(id) // answered: its next push may ring
 	s.updateAskCards(ctx, id, cp)
 }
 
@@ -488,6 +611,10 @@ func (s *Service) ownerCannotAnswer(ctx context.Context, id, asked, response str
 	a, err := s.askRound(id, asked)
 	if err != nil || a == nil {
 		return false, err
+	}
+	if a.OutsideID != "" {
+		result, err := s.answerOutside(ctx, id, asked, outsideAnswer{Response: response}, false)
+		return result.taken, err
 	}
 	t, _ := s.todoNow(id)
 	completeDismissal, err := s.prepareDismissalForAnswer(ctx, t)
@@ -592,7 +719,7 @@ func ownerDecisionReturned(v *Supervision) bool {
 // decisionRecheckDue says a complete decision is old enough that it must not be pushed again before its supervisor
 // confirms the facts. The sweep persists the hand-back; owner projections also honor an already-persisted marker.
 func decisionRecheckDue(a *acceptAsk, now time.Time) bool {
-	return a != nil && decideAsk(a) && a.AgentReply == nil && a.Recommend != "" && now.Sub(a.AskedAt) >= decisionRecheckAfter
+	return a != nil && a.OutsideID == "" && decideAsk(a) && a.AgentReply == nil && a.Recommend != "" && now.Sub(a.AskedAt) >= decisionRecheckAfter
 }
 
 // ---- old and unanswerable decisions ----
@@ -665,6 +792,7 @@ func (s *Service) sweepDecisionAges(now time.Time) {
 		}
 		b.mu.Unlock()
 		s.askChanged(ctx)
+		s.todoPushOver(w.todo)
 		s.logf("task %s: its decision waited %s: back to its supervisor to confirm it", w.todo, humanDuration(now.Sub(a.AskedAt)))
 		s.signal(superviseSignal{Todo: w.todo, Kind: sigRecheck, Key: "recheck@" + a.AskedAt.UTC().Format(time.RFC3339Nano),
 			Minutes: int(now.Sub(a.AskedAt).Minutes()), Decision: s.signalDecision(ctx, &a)})
@@ -730,4 +858,16 @@ func ownerCannotStats(events []db.WorkEvent) map[string]map[string]int {
 		out[sup][resp]++
 	}
 	return out
+}
+
+// decisionLine is a decision as a line quotes it: the question and what was chosen.
+func decisionLine(d db.TodoDecisionRow) string {
+	q, c := clip(oneLine(d.Question), 40), clip(oneLine(d.Choice), 60)
+	switch {
+	case q == "":
+		return c
+	case c == "":
+		return q
+	}
+	return q + " → " + c
 }

@@ -89,9 +89,15 @@
     <string name="settings_devices_empty_detail">ペアリング後、ここでデバイスの確認や取り消しができます。</string>
     <string name="settings_devices_unnamed">名前のないデバイス</string>
     <string name="settings_devices_this">このデバイス</string>
+    <string name="settings_devices_online">オンライン</string>
+    <string name="settings_devices_group_devices">デバイス</string>
+    <string name="settings_devices_group_browsers">ブラウザー</string>
+    <string name="settings_devices_group_links">コンピューター</string>
+    <string name="settings_devices_group_integrations">連携・制限付きアクセス</string>
     <string name="settings_devices_platform_role">%1$s、%2$s</string>
     <string name="settings_devices_role_full">フルアクセス</string>
     <string name="settings_devices_role_answer">回答のみ</string>
+    <string name="settings_devices_role_scoped">アクセス制限</string>
     <string name="settings_devices_role_unknown">役割の情報なし</string>
     <string name="settings_devices_added">追加日時：%1$s</string>
     <string name="settings_devices_last_used">最終使用：%1$s</string>
@@ -124,10 +130,10 @@
     <string name="settings_notify_quiet_end">終了</string>
     <string name="settings_notify_quiet_footer">この時間帯は、エージェントの完了は通知しません（朝の「今日の確認事項」カードにまとまります）。対応が必要なものは音を鳴らさずに届きます。アシスタントに頼んだリマインダーはいつもどおり届きます。いずれかのデバイスがおやすみ時間の間は、チャットボットからの未回答カードのお知らせも後回しにします。このスマートフォンのタイムゾーンで判断します。</string>
     <string name="settings_notify_quiet_footer_zone">この時間帯は、エージェントの完了は通知しません（朝の「今日の確認事項」カードにまとまります）。対応が必要なものは音を鳴らさずに届きます。アシスタントに頼んだリマインダーはいつもどおり届きます。いずれかのデバイスがおやすみ時間の間は、チャットボットからの未回答カードのお知らせも後回しにします。現在は設定した場所の%1$sで判断します。ここで変更すると、このスマートフォンのタイムゾーンで判断します。</string>
-    <string name="settings_notify_low_distraction">通知を抑えるモード</string>
+    <string name="settings_notify_low_distraction">プッシュ通知の優先度フィルター</string>
     <string name="settings_notify_low_distraction_subtitle">対応が必要なことだけ通知し、ほかはブリーフィングに回します</string>
     <string name="settings_notify_low_distraction_footer">すべてのデバイスに適用されます。オンにすると、質問、承認、あなたにしかできない判断、設定したリマインダー、メイン会話からのお知らせは通常どおり通知されます。タスクの結果、「確認してください」の依頼、ほかの会話のお知らせはブリーフィングと「保留された通知」に回り、エージェントの完了は通知されません。</string>
-    <string name="settings_notify_low_distraction_save_failed">保存できなかったため、通知を抑えるモードを元に戻しました。</string>
+    <string name="settings_notify_low_distraction_save_failed">保存できなかったため、プッシュ通知の優先度フィルターを元に戻しました。</string>
     <string name="settings_reading">読み込み中</string>
     <string name="settings_retry_read">再読み込み</string>
     <string name="settings_saving">保存中…</string>
@@ -135,6 +141,8 @@
     <string name="settings_not_provided">情報なし</string>
     <string name="settings_about_build">ビルド番号</string>
     <string name="settings_devices_watch">ウォッチ</string>
+    <string name="settings_devices_web">Web</string>
+    <string name="settings_devices_link">Persona Link</string>
     <string name="settings_devices_phone_unknown">スマートフォン（プラットフォームの情報なし）</string>
     <string name="settings_devices_platform_unknown">プラットフォームの情報なし</string>
     <string name="settings_devices_no_record">記録なし</string>
@@ -286,7 +294,7 @@
     <string name="settings_off">オフ</string>
     <string name="settings_retry_cleanup">クリーンアップを再試行</string>
     <string name="settings_try_demo">ハブがない場合はデモを試す</string>
-    <string name="settings_style_title">UIスタイル</string>
+    <string name="settings_style_title">外観</string>
     <string name="settings_avatar_title">アバター</string>
     <string name="settings_about_persona">Personaについて</string>
     <string name="settings_phone_data_title">スマートフォンのデータ</string>

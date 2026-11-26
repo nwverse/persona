@@ -131,12 +131,12 @@ func (c *Conn) Call(ctx context.Context, name string, args json.RawMessage) (str
 	return a.Text, err
 }
 
-// CallImages is Call with the pictures the program answered (connector.ImageTools, #8484): a program that has none,
-// or does not know the field, answers the text alone.
+// CallImages is Call with the pictures and out-of-band views the program answered (connector.ImageTools, #8484): a
+// program that has none, or does not know the fields, answers the text alone.
 func (c *Conn) CallImages(ctx context.Context, name string, args json.RawMessage) (connector.ToolAnswer, error) {
 	var out serve.CallResult
-	err := c.call(ctx, serve.MCall, serve.CallParams{Name: name, Args: args}, &out)
-	return connector.ToolAnswer{Text: out.Text, Images: out.Images}, err
+	err := c.call(ctx, serve.MCall, serve.CallParams{Name: name, Args: args, CallFrom: serve.CallFromContext(ctx)}, &out)
+	return connector.ToolAnswer{Text: out.Text, Images: out.Images, Views: out.Views}, err
 }
 
 // Actions answers from memory, as Tools.
@@ -148,7 +148,7 @@ func (c *Conn) Actions() []proto.Tool {
 
 func (c *Conn) Describe(ctx context.Context, name string, args json.RawMessage) (connector.Action, string, error) {
 	var out serve.DescribeResult
-	err := c.call(ctx, serve.MDescribe, serve.CallParams{Name: name, Args: args}, &out)
+	err := c.call(ctx, serve.MDescribe, serve.CallParams{Name: name, Args: args, CallFrom: serve.CallFromContext(ctx)}, &out)
 	return out.Action, out.Summary, err
 }
 
@@ -165,7 +165,7 @@ func (c *Conn) DoRef(ctx context.Context, name string, args json.RawMessage) (co
 	var id [16]byte
 	_, _ = rand.Read(id[:])
 	var out serve.CallResult
-	err := c.call(ctx, serve.MDo, serve.DoParams{Name: name, Args: args, RequestID: hex.EncodeToString(id[:])}, &out)
+	err := c.call(ctx, serve.MDo, serve.DoParams{Name: name, Args: args, RequestID: hex.EncodeToString(id[:]), CallFrom: serve.CallFromContext(ctx)}, &out)
 	return connector.DoResult{Text: out.Text, MessageRef: out.MessageRef}, err
 }
 

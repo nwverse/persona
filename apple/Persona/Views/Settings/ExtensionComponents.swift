@@ -142,10 +142,6 @@ struct ExtensionRemoteImage: View {
         .task(id: Request(url: url, pixels: Int(ceil(points * displayScale * Theme.sizeScale(typeSize))))) {
             image = nil
             failed = false
-            #if DEBUG && os(macOS)
-            let captureLoad = MacExtensionSnapshotBatch.beginImageLoad(url)
-            defer { MacExtensionSnapshotBatch.finishImageLoad(captureLoad, loaded: image != nil) }
-            #endif
             let pixels = Int(ceil(points * displayScale * Theme.sizeScale(typeSize)))
             guard let cg = await ExtensionImageCache.shared.image(url, maxPixel: pixels) else {
                 if !Task.isCancelled { failed = true }
@@ -425,10 +421,9 @@ struct ExtensionChartItem: View {
     /// A stacked bar of one category (a single day's parts): it is a horizontal segmented bar, not a lone column.
     private var singleShare: [SegmentedShareBar.Share]? {
         let mapped = mapped
-        guard DataChart.isSingleCategoryShare(kind: chartKind, stacked: item.stacked == true, series: mapped) else { return nil }
-        let total = mapped.reduce(0) { $0 + $1.values[0] }
+        guard let ratios = DataChart.singleCategoryShares(kind: chartKind, stacked: item.stacked == true, series: mapped) else { return nil }
         return mapped.enumerated().map { i, s in
-            SegmentedShareBar.Share(id: i, color: s.color ?? DataChart.hues[i % DataChart.hues.count], ratio: s.values[0] / total)
+            SegmentedShareBar.Share(id: i, color: s.color ?? DataChart.hues[i % DataChart.hues.count], ratio: ratios[i])
         }
     }
 
@@ -730,11 +725,7 @@ struct ExtensionFieldItem: View {
     private func labeled(@ViewBuilder _ content: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: Theme.Space.xs) {
             Text(label).font(Theme.Font.labelStrong).foregroundStyle(.secondary).lineLimit(2)
-            #if os(macOS)
-            content().labelsHidden() // a Mac form would put the label beside an empty box (#1221)
-            #else
             content()
-            #endif
         }
         .padding(.vertical, Theme.Space.xxs)
     }

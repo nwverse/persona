@@ -124,6 +124,46 @@ func TestOrcaBridgeListsChats(t *testing.T) {
 	}
 }
 
+// Both bridges shorten the preview before sending a runtime snapshot. Preserve line boundaries
+// long enough to distinguish the delivery marker from a mention in ordinary text.
+func TestBridgeReportedBotmuxPreview(t *testing.T) {
+	const marker = "BOTMUX_NOTHING_TO_SEND"
+	for _, tc := range []struct {
+		name string
+		row  func(string) map[string]any
+	}{
+		{"Orca", func(reply string) map[string]any {
+			return orcaRow(orcart.Worktree{}, orcart.AgentRow{LastAssistantMessage: reply}, &orcaHead{provider: orcaChatUUID})
+		}},
+		{"Cindy", func(reply string) map[string]any {
+			row, _ := mapCindySessionRow(cindyDBRow{ID: "sample", ListPreview: reply}, false, false, nil)
+			return row
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := &runtimeConn{}
+			for _, step := range []struct{ reply, want string }{
+				{marker + "\nBuild passed.", "Build passed."},
+				{marker + "\r\n" + marker, "Build passed."},
+				{"The literal " + marker + " is documented.", "The literal " + marker + " is documented."},
+			} {
+				raw, err := json.Marshal(tc.row(step.reply))
+				if err != nil {
+					t.Fatal(err)
+				}
+				var row proto.Session
+				if err := json.Unmarshal(raw, &row); err != nil {
+					t.Fatal(err)
+				}
+				h.sessions = normalizeRuntimeSessions(h, []proto.Session{row})
+				if got := h.sessions[0].LastText; got != step.want {
+					t.Fatalf("preview for %q: got %q, want %q", step.reply, got, step.want)
+				}
+			}
+		})
+	}
+}
+
 // Before the transcript is on disk the bridge answers session.items with an empty page the hub can read: history,
 // when present, is the transcript's version string (the hub's itemSpan), never a bool (#4886).
 func TestOrcaBridgeItemsBeforeTranscriptDecodeAsSpan(t *testing.T) {
@@ -315,5 +355,28 @@ func TestOrcaBridgeQuestionCard(t *testing.T) {
 	got, _ := json.Marshal(o.writes("agentSession.respondToQuestion")[0]["answers"])
 	if want := `[{"optionIds":["u","e"],"questionId":"qa"},{"optionIds":[],"other":"staging-2","questionId":"qb"}]`; string(got) != want {
 		t.Fatalf("answers %s, want %s", got, want)
+	}
+}
+
+func TestOrcaPlanModeChoiceIsAudited(t *testing.T) {
+	_, hub, o := orcaBridgeNode(t)
+	yes := true
+	hub.mu.Lock()
+	hub.resolve = func(proto.Interaction) proto.Resolution {
+		return proto.Resolution{Approve: &yes, Mode: "bypassPermissions", ModeActor: &proto.ModeActor{Kind: "device", DeviceID: "d1", DeviceName: "Phone"}}
+	}
+	hub.mu.Unlock()
+	plan := strings.Replace(orcaApproval, `"title":"Allow Bash?"`, `"title":"Approve plan?","subject":{"kind":"plan","text":"Inspect the project."}`, 1)
+	o.set("blocked", plan)
+	waitFor(t, "the mode audit", func() bool { hub.mu.Lock(); defer hub.mu.Unlock(); return len(hub.modeSets) > 0 })
+	hub.mu.Lock()
+	events := append([]proto.ModeSetEvent(nil), hub.modeSets...)
+	hub.mu.Unlock()
+	if len(events) != 1 || events[0].SessionID != orcaChatUUID || events[0].From != "acceptEdits" || events[0].To != "bypassPermissions" || events[0].Actor.DeviceID != "d1" {
+		t.Fatalf("audit: %+v", events)
+	}
+	set := o.writes("agentSession.setOption")
+	if len(set) != 1 || set[0]["value"] != "full-access" {
+		t.Fatalf("mode not applied: %+v", set)
 	}
 }

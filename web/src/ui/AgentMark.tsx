@@ -6,14 +6,15 @@
 // letter on a plain tile of the same box.
 //
 // Where each mark comes from (also in THIRD_PARTY_NOTICES.md). Simple Icons (SI) releases the files under CC0; the
-// marks stay their owners' trademarks and are shown only to say which agent a row is.
+// marks stay their owners' trademarks and are shown only to say which agent a row is, or which product a personal
+// Agents account drives (views/agents/account-groups.tsx, #16248: Grok, the Blossom for ChatGPT, Claude, Gemini).
 //   claude    SI 16.36.0 `claude.svg` (source claude.ai), coral #D97757 as in apple/…/Brands/brand-claude
 //   codex     OpenAI Blossom, github.com/openai/openai-cookbook `chatgpt-blossom-black.svg`, as apple/…/Brands/brand-openai
 //   opencode  SI `opencode.svg`; source github.com/anomalyco/opencode packages/identity/mark.svg (the project is MIT)
 //   cursor    SI `cursor.svg`; source cursor.com/brand
 //   gemini    SI `googlegemini.svg`; source gemini.google.com (no brand kit found)
 //   pi        SI `pi.svg`; source pi.dev/favicon.svg (no licence text found)
-//   trae      SI `trae.svg`; source trae.ai (TRAE, ByteDance's coding agent; not TRAEX, which keeps its letter)
+//   trae      SI `trae.svg`; source trae.ai (TRAE artwork, used for TRAE and TRAE CLI)
 //   grok, agy  Lobe Icons 1.104.0 Grok and Antigravity monochrome marks
 //   dsh, kimi, copilot  SI 16.36.0 DeepSeek, Kimi and GitHub Copilot marks
 // viewBoxes of opencode, cursor and trae are cropped to the glyph (CLAUDE.md: assets carry no padding); nothing else is changed.
@@ -22,7 +23,7 @@ import { agentLetter, agentName, isMarked, markId, sessionAgent, type AgentSurfa
 import { cx } from "./atoms";
 import claudeMark from "./brands/claude.svg";
 import codexMark from "./brands/codex.svg";
-import cursorMark from "./brands/cursor.svg";
+import cursorMark from "./brands/cursor.svg?no-inline";
 import geminiMark from "./brands/gemini.svg";
 import opencodeMark from "./brands/opencode.svg";
 import piMark from "./brands/pi.svg";

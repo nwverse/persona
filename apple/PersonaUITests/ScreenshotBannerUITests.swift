@@ -1,3 +1,4 @@
+import Vision
 import XCTest
 
 /// The screenshot banner (#9508, docs/apple/ios.md 「Screenshot banner」) against scripts/mock/mock_hub.py
@@ -53,15 +54,96 @@ final class ScreenshotBannerUITests: XCTestCase {
         }
     }
 
-    /// Settings › Appearance & Display has the switch (on: the UI tests pass it, a fresh install's default is
+    /// The banner names the assistant as the bar does (#12243). Against a mock with one assistant
+    /// (`MOCK_MANAGERS=1 PORT=… python3 scripts/mock/mock_hub.py`), the Sidebar layout's Assistant chat (the drawer row
+    /// at compact width, the bar beside the column where it stands beside the page): the bar's name pill says the
+    /// current assistant's name, and the system screenshot's banner, read with Vision, says the same name, never the
+    /// persona's ("Persona", "Pers…"), which it said before. TEST_RUNNER_PERSONA_SHOTS keeps
+    /// `screenshot-banner-name-<off|on>-<light|dark>.png` (off: what the screen shows; on: what a screenshot shows).
+    @MainActor func testTheBannerSaysTheBarsName() throws {
+        for scheme in ["light", "dark"] {
+            let args = ["-openAssistant", Self.main, "-app.navigation", "sidebar"]
+            try look(banner: false, scheme: scheme, page: "name", args, control: "persona-avatar", measure: false)
+            let app = launch(["-ui.scheme", scheme] + args, banner: true)
+            defer { app.terminate() }
+            let pill = app.descendants(matching: .any)["persona-avatar"].firstMatch
+            XCTAssertTrue(pill.waitForExistence(timeout: 30), "\(scheme): no name pill")
+            // "<name>" online, "<name>, Connecting…" while it connects (a full-width comma in Chinese).
+            let name = String(pill.label.split(whereSeparator: { $0 == "," || $0 == "\u{FF0C}" }).first ?? "")
+                .trimmingCharacters(in: .whitespaces)
+            XCTAssertFalse(name.isEmpty, "\(scheme): the pill has no name")
+            RunLoop.current.run(until: Date().addingTimeInterval(2))
+            let shot = Self.screenshot(of: app)
+            save(shot, "screenshot-banner-name-on-\(scheme)")
+            // The banner's strip: the screenshot's whole width (on its side wider than the app's frame says), down past
+            // the bar.
+            let strip = CGRect(x: 0, y: 0, width: 10_000, height: max(pill.frame.maxY + 16, 110))
+            let lines = try Self.text(in: shot, strip)
+            let words = lines.map(\.text)
+            let said = try XCTUnwrap(Self.bannerName(lines), "\(scheme): no banner in the screenshot: \(words)")
+            XCTAssertTrue(said.contains(name), "\(scheme): the banner says \(said), the bar \(name): \(words)")
+            if name != "Persona" {
+                XCTAssertFalse(said.contains("Pers"), "\(scheme): the banner says the persona's name: \(words)")
+            }
+        }
+    }
+
+    /// A system screenshot of the display the app is on: on iPhone Duo `XCUIScreen.main` is the outer display, black
+    /// while the Duo is open, so the screen as large as the app's window (the open one's inner display).
+    @MainActor private static func screenshot(of app: XCUIApplication) -> XCUIScreenshot {
+        let size = app.frame.size
+        let shots = XCUIScreen.screens.map { $0.screenshot() }
+        func fits(_ s: XCUIScreenshot) -> Bool {
+            let i = s.image.size
+            return (abs(i.width - size.width) < 2 && abs(i.height - size.height) < 2)
+                || (abs(i.width - size.height) < 2 && abs(i.height - size.width) < 2)
+        }
+        return shots.first(where: fits) ?? XCUIScreen.main.screenshot()
+    }
+
+    /// What the banner's name reads: the text before the repository on its row (Vision may read the two as one line),
+    /// else the nearest line to the repository's left on that row. Beside the iPad's or the open Duo's column the
+    /// column's head says the assistant's name in the same row, further left: not the banner's.
+    private static func bannerName(_ lines: [(text: String, box: CGRect)]) -> String? {
+        guard let repo = lines.first(where: { $0.text.contains(repository) }),
+              let at = repo.text.range(of: repository) else { return nil }
+        let before = repo.text[..<at.lowerBound].trimmingCharacters(in: .whitespaces)
+        if before.count > 2 { return before }
+        // GitHub's mark alone may read as a letter: not a name.
+        return lines.filter { abs($0.box.midY - repo.box.midY) < repo.box.height && $0.box.maxX <= repo.box.minX + 0.01
+            && $0.text.trimmingCharacters(in: .whitespaces).count > 1 }
+            .max { $0.box.maxX < $1.box.maxX }?.text
+    }
+
+    /// The lines Vision reads in `rect` (points) of a screenshot, Chinese and English, each with its box (Vision's:
+    /// normalized, from the bottom left).
+    private static func text(in shot: XCUIScreenshot, _ rect: CGRect) throws -> [(text: String, box: CGRect)] {
+        // Upright first: a screenshot of a display on its side (the open Duo's) keeps its pixels as they were and says
+        // how to turn them.
+        let raw = shot.image
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = raw.scale
+        let image = UIGraphicsImageRenderer(size: raw.size, format: format).image { _ in raw.draw(at: .zero) }
+        let cg = try XCTUnwrap(image.cgImage)
+        let scale = CGFloat(cg.width) / image.size.width
+        let r = CGRect(x: rect.minX * scale, y: rect.minY * scale, width: rect.width * scale, height: rect.height * scale).integral
+        let crop = try XCTUnwrap(cg.cropping(to: r.intersection(CGRect(x: 0, y: 0, width: cg.width, height: cg.height))))
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.recognitionLanguages = ["zh-Hans", "en-US"]
+        request.usesLanguageCorrection = false
+        try VNImageRequestHandler(cgImage: crop).perform([request])
+        return (request.results ?? []).compactMap { o in o.topCandidates(1).first.map { ($0.string, o.boundingBox) } }
+    }
+
+    /// Settings › Advanced › Appearance & Display has the switch (on: the UI tests pass it, a fresh install's default is
     /// `ScreenshotBannerPrefs.enabledByDefault`, ScreenshotBannerTests).
     @MainActor func testTheSwitch() throws {
         for scheme in ["light", "dark"] {
             let app = launch(["-ui.scheme", scheme, "-tab", "settings", "-app.tab", "settings"], banner: true)
             defer { app.terminate() }
-            let appearance = app.descendants(matching: .any)["settings-appearance"].firstMatch
-            XCTAssertTrue(app.descendants(matching: .any)["settings-list"].firstMatch.waitForExistence(timeout: 30), "no Settings")
-            for _ in 0..<8 where !appearance.isHittable { app.swipeUp() }
+            XCTAssertTrue(app.openSettingsAdvancedPage(), "no Settings › Advanced")
+            let appearance = app.settingsAdvancedRow("settings-appearance")
             appearance.tap()
             let toggle = app.switches["settings-screenshot-banner"].firstMatch
             XCTAssertTrue(app.descendants(matching: .any)["settings-style"].firstMatch.waitForExistence(timeout: 15), "no Appearance & Display")
@@ -157,7 +239,7 @@ final class ScreenshotBannerUITests: XCTestCase {
         if measure { XCTAssertTrue(el.isHittable, "\(page): \(id) is on screen") }
         XCTAssertFalse(app.staticTexts[Self.repository].exists, "\(page): the banner is out of VoiceOver's reach")
         RunLoop.current.run(until: Date().addingTimeInterval(2))
-        let shot = XCUIScreen.main.screenshot()
+        let shot = Self.screenshot(of: app)
         save(shot, name ?? "screenshot-banner-\(page)-\(banner ? "on" : "off")-\(scheme)")
         guard measure else { return Crop(luma: []) }
         let crop = try Self.crop(shot, el.frame.insetBy(dx: 4, dy: 4))
@@ -179,8 +261,12 @@ final class ScreenshotBannerUITests: XCTestCase {
         let ctx = try XCTUnwrap(CGContext(data: &px, width: crop.width, height: crop.height, bitsPerComponent: 8, bytesPerRow: crop.width * 4,
                                           space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
         ctx.draw(crop, in: CGRect(x: 0, y: 0, width: crop.width, height: crop.height))
-        return Crop(luma: stride(from: 0, to: px.count, by: 4).map { i in
-            (Int(px[i]) * 299 + Int(px[i + 1]) * 587 + Int(px[i + 2]) * 114) / 1000
+        // Typed parts: with Vision imported, the one-line sum timed out Xcode 26's type-checker (#13374).
+        return Crop(luma: stride(from: 0, to: px.count, by: 4).map { (i: Int) -> Int in
+            let r: Int = Int(px[i]) * 299
+            let g: Int = Int(px[i + 1]) * 587
+            let b: Int = Int(px[i + 2]) * 114
+            return (r + g + b) / 1000
         })
     }
 

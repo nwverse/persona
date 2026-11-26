@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/extension/egress"
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // TestMain: this test binary is also the sandbox's first process (RunCommand) and the program it runs (probe).
@@ -150,8 +151,14 @@ func TestLinuxCommandLine(t *testing.T) {
 	if strings.Contains(line, os.Getenv("HOME")+" ") && os.Getenv("HOME") != "" {
 		t.Errorf("the home directory is bound: %s", line)
 	}
-	if !slices.Contains(env, "HTTPS_PROXY=http://127.0.0.1:3128") || !slices.Contains(env, "NO_PROXY=") {
+	if !slices.Contains(env, "HTTPS_PROXY=http://127.0.0.1:3128") || !slices.Contains(env, "NO_PROXY=") || !slices.Contains(env, "NODE_USE_ENV_PROXY=1") {
 		t.Errorf("env %v", env)
+	}
+	// A strict sandbox addresses its broker itself: no proxy, so Node is not told to use one (#15707).
+	strict := plan
+	strict.Strict = true
+	if _, _, env := Linux("/usr/bin/bwrap", strict); slices.ContainsFunc(env, func(kv string) bool { return strings.HasPrefix(kv, "NODE_USE_ENV_PROXY=") }) {
+		t.Errorf("strict env %v", env)
 	}
 	plan.Scope = true
 	name, args, env = Linux("/usr/bin/bwrap", plan)
@@ -176,7 +183,7 @@ func TestProbeMountsAsStart(t *testing.T) {
 		t.Fatalf("a start's options are not the probe's:\n%v\n%v", setup, args)
 	}
 	line := strings.Join(setup, " ")
-	for _, want := range []string{"--proc /proc", "--dev /dev", "--tmpfs /tmp", "--tmpfs /run", "--ro-bind /usr/local/bin/personad " + SelfPath,
+	for _, want := range []string{"--unshare-pid", "--ro-bind /proc /proc", "--dev /dev", "--tmpfs /tmp", "--tmpfs /run", "--ro-bind /usr/local/bin/personad " + SelfPath,
 		"--remount-ro /", "--chdir /x/pkg"} {
 		if !strings.Contains(line, want) {
 			t.Errorf("no %q in %s", want, line)
@@ -399,7 +406,8 @@ func TestBwrapProbeArgs(t *testing.T) {
 	line := strings.Join(args, " ")
 	for _, want := range []string{
 		"--die-with-parent",
-		"--proc /proc",
+		"--unshare-pid",
+		"--ro-bind /proc /proc",
 		"--dev /dev",
 		"--tmpfs /tmp",
 		"--tmpfs /run",
@@ -418,5 +426,70 @@ func TestBwrapProbeArgs(t *testing.T) {
 		if !slices.Contains(args, ns) {
 			t.Errorf("missing namespace %q in %v", ns, args)
 		}
+	}
+}
+
+// resetProbe puts the probe cache back as it was before a test replaced probeFn.
+func resetProbe() {
+	probeMu.Lock()
+	defer probeMu.Unlock()
+	probed, probedAt, probedOK = Support{}, time.Time{}, false
+}
+
+// A machine that cannot sandbox starts working the moment bwrap is installed (#13540): the missing-bwrap reason is not
+// cached, so the next probe finds bwrap, and once a machine can sandbox it stays probed.
+func TestProbeRecoversFromMissingBwrap(t *testing.T) {
+	old := probeFn
+	t.Cleanup(func() { probeFn = old; resetProbe() })
+	resetProbe()
+	calls := 0
+	probeFn = func() Support {
+		calls++
+		s := Support{OS: "linux"}
+		s.setReason("extension-status.sandbox_no_bwrap", nil)
+		return s
+	}
+	if sup := Probe(); sup.Available() || sup.Reason == nil || sup.Reason.Key != "extension-status.sandbox_no_bwrap" {
+		t.Fatalf("before bwrap: %+v", sup)
+	}
+	if sup := Probe(); sup.Available() || calls != 2 {
+		t.Fatalf("a missing bwrap is probed again at once: %+v, %d calls", sup, calls)
+	}
+	probeFn = func() Support { calls++; return Support{OS: "linux", Bwrap: "/usr/bin/bwrap", Scope: true} }
+	if sup := Probe(); !sup.Available() {
+		t.Fatalf("bwrap installed: %+v", sup)
+	}
+	probeFn = func() Support { calls++; return Support{OS: "linux"} }
+	if sup := Probe(); !sup.Available() || calls != 3 {
+		t.Fatalf("available is probed once and kept: %+v, %d calls", sup, calls)
+	}
+}
+
+// A broken mount or another failure is reused for a moment instead of spawning bwrap on every list endpoint.
+func TestProbeCachesAnotherFailure(t *testing.T) {
+	old := probeFn
+	t.Cleanup(func() { probeFn = old; resetProbe() })
+	resetProbe()
+	calls := 0
+	probeFn = func() Support {
+		calls++
+		s := Support{OS: "linux"}
+		s.setReason("extension-status.sandbox_mount", i18n.Args{"err": "boom"})
+		return s
+	}
+	if Probe().Available() {
+		t.Fatal("available")
+	}
+	Probe()
+	if calls != 1 {
+		t.Fatalf("a mount failure is cached for a moment: %d calls", calls)
+	}
+	// Once the interval has passed it is tried again.
+	probeMu.Lock()
+	probedAt = time.Now().Add(-probeRetryInterval)
+	probeMu.Unlock()
+	Probe()
+	if calls != 2 {
+		t.Fatalf("tried again after the interval: %d calls", calls)
 	}
 }

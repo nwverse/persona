@@ -12,6 +12,11 @@ import (
 // kbwire.Update, so the extension protocol (kb.update) has no way to send it.
 type UserUpdate struct {
 	Update
+	// ExpectedPinned guards a recording correction; omission keeps the original unconditional update.
+	ExpectedPinned *string `json:"expected_pinned,omitempty"`
+	// ProjectMode and SourceURLs are the owner's project settings. An empty SourceURLs list clears the pointers.
+	ProjectMode *string  `json:"project_mode,omitempty"`
+	SourceURLs  []string `json:"source_urls,omitempty"`
 	// Unmerge (projects): undo the merge that folded this project into another (Unmerge); nothing else applies.
 	Unmerge bool `json:"unmerge,omitempty"`
 	// LockLists: a list a removal takes a link out of is locked whole too, on both entries, so automatic organizing
@@ -26,11 +31,18 @@ type UserUpdate struct {
 
 // ApplyUser is Apply, or Unmerge when u asks for it.
 func (e *Engine) ApplyUser(kind, id string, u UserUpdate) (string, error) {
+	if u.ExpectedPinned != nil && (kind != KindRecording || u.Pinned == nil) {
+		return "", fmt.Errorf("expected_pinned requires a recording pinned update")
+	}
+
 	if !u.Unmerge {
 		return e.applyUser(kind, id, u)
 	}
 	if kind != KindProject {
 		return "", errors.New("unmerge applies to projects")
+	}
+	if u.ProjectMode != nil || u.SourceURLs != nil {
+		return "", fmt.Errorf("%w: set project_mode or source_urls separately from unmerge", ErrInvalidProjectSource)
 	}
 	return e.Unmerge(id)
 }
@@ -88,6 +100,9 @@ func (e *Engine) unmergeProject(drop *Project) error {
 		return fmt.Errorf("%s is not merged", drop.Slug)
 	}
 	keep, found := e.Store.Project(drop.MergedInto)
+	if drop.referenceOnly() || found && keep.referenceOnly() {
+		return fmt.Errorf("%w: cannot unmerge projects", ErrReferenceOnly)
+	}
 	if found && !keep.Live() {
 		return fmt.Errorf("%s went into %s, which was merged into %s since: unmerge %s first", drop.Slug, keep.Slug, keep.MergedInto, keep.Slug)
 	}
@@ -151,7 +166,7 @@ func (e *Engine) unmergeProject(drop *Project) error {
 				}
 			}
 			for list, ids := range rec.Excluded {
-				keep.include(list, ids...)
+				taggingInclude(&keep.Tagging, list, ids...)
 			}
 		} else {
 			names := map[string]bool{normName(drop.Name): true}

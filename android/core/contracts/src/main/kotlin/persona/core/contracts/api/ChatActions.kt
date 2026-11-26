@@ -1,5 +1,6 @@
 package persona.core.contracts.api
 
+import persona.core.contracts.CodexTakeoverInfo
 import persona.core.contracts.CoreText
 import persona.core.contracts.ModelPrice
 import persona.core.contracts.QueueEdit
@@ -41,6 +42,10 @@ interface ChatActions {
     suspend fun execute(session: Session, action: ChatAction): ChatActionResult
     suspend fun verify(session: Session, action: ChatAction): ChatActionResult
 
+    /** Answer the failed start's terminal question (feature `start_continue`), returning the session the hub kept. */
+    suspend fun continueStart(session: Session, choice: String): Session =
+        throw UnsupportedOperationException("Session start answers unavailable")
+
     /**
      * Pull everything queued while the agent works back out and re-queue the indexes in [keep], in order
      * (POST …/queue, the node's session.queue.edit); returns what was queued before the edit and, in a Persona conversation,
@@ -58,6 +63,14 @@ interface ChatActions {
      * for it in the reader's language. Not idempotent: a failure is reported, never retried.
      */
     suspend fun sendQueuedNow(session: Session): Unit = throw UnsupportedOperationException("Send now unavailable")
+
+    /** Retry a kept assistant message that gave up (POST …/assistant/conversations/{id}/undelivered/{msg}/retry). */
+    suspend fun retryUndelivered(session: Session, messageId: String): Unit =
+        throw UnsupportedOperationException("Kept message retry unavailable")
+
+    /** Never send a kept assistant message again (DELETE …/assistant/conversations/{id}/undelivered/{msg}). */
+    suspend fun deleteUndelivered(session: Session, messageId: String): Unit =
+        throw UnsupportedOperationException("Kept message deletion unavailable")
 
     /**
      * "Branch to new chat" (#2137, POST …/fork): the node copies the conversation up to the end of [atItemId]'s turn (a reply's
@@ -111,6 +124,22 @@ interface ChatActions {
      */
     suspend fun catalogPrices(ids: List<String>): Map<String, ModelPrice?> =
         throw UnsupportedOperationException("Catalog unavailable")
+
+    /** Inspect whether a read-only Codex CLI session can be resumed or continued (`GET /api/v1/machines/{mid}/codex/{sid}/takeover`). */
+    suspend fun codexTakeoverInfo(session: Session): CodexTakeoverInfo =
+        throw UnsupportedOperationException("Codex takeover unavailable")
+
+    /** Explicitly take over a read-only Codex CLI session (`POST /api/v1/machines/{mid}/codex/{sid}/takeover`). */
+    suspend fun codexTakeover(session: Session, token: String, confirmStop: Boolean): Session =
+        throw UnsupportedOperationException("Codex takeover unavailable")
+
+    /** Start an independent Codex continuation session carrying the source transcript extract and linked to-do under [operationId]. */
+    suspend fun startCodexContinuation(session: Session, info: CodexTakeoverInfo, operationId: String): AgentStartResult =
+        throw UnsupportedOperationException("Codex continuation unavailable")
+
+    /** Reconcile an unconfirmed Codex continuation start (`GET /api/v1/ops/{operationId}`). */
+    suspend fun codexContinuationOperation(session: Session, operationId: String): AgentStartResult =
+        throw UnsupportedOperationException("Codex continuation receipt unavailable")
 }
 
 /** What "Rewind to here" restores: the conversation alone, or the files changed after the message too. */

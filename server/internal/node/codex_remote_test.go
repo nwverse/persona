@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -51,6 +52,9 @@ type remoteFixture struct {
 	backgroundReply map[string]any
 	backgroundPages map[string]map[string]any
 	response        func(string, map[string]any) (any, bool)
+	// open: the connections being served now; accepted: every connection served so far. A connection stops counting
+	// as open only once all it carried is in got.
+	open, accepted int
 }
 
 func (f *remoteFixture) serve(w http.ResponseWriter, r *http.Request) {
@@ -61,7 +65,14 @@ func (f *remoteFixture) serve(w http.ResponseWriter, r *http.Request) {
 	defer c.CloseNow()
 	f.mu.Lock()
 	f.socket = c
+	f.open++
+	f.accepted++
 	f.mu.Unlock()
+	defer func() {
+		f.mu.Lock()
+		f.open--
+		f.mu.Unlock()
+	}()
 	for {
 		_, b, err := c.Read(r.Context())
 		if err != nil {
@@ -129,7 +140,11 @@ func (f *remoteFixture) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		if response != nil {
 			if value, handled := response(m.Method, p); handled {
-				f.push(map[string]any{"id": m.ID, "result": value})
+				if rpcErr, ok := value.(*codexError); ok {
+					f.push(map[string]any{"id": m.ID, "error": rpcErr})
+				} else {
+					f.push(map[string]any{"id": m.ID, "result": value})
+				}
 				continue
 			}
 		}
@@ -172,11 +187,14 @@ func (f *remoteFixture) serve(w http.ResponseWriter, r *http.Request) {
 			result = map[string]any{"turn": map[string]any{"id": "turn-1"}}
 			fallthrough // its effort is the thread's from then on, as a settings update's
 		case "thread/settings/update":
-			if e, ok := p["effort"].(string); ok {
-				f.mu.Lock()
-				f.threadEffort = e
-				f.mu.Unlock()
+			f.mu.Lock()
+			if mod, ok := p["model"].(string); ok {
+				f.threadModel = mod
 			}
+			if e, ok := p["effort"].(string); ok {
+				f.threadEffort = e
+			}
+			f.mu.Unlock()
 		case "model/list":
 			if models != nil {
 				result = models
@@ -221,6 +239,7 @@ func remoteTestNode(t *testing.T) *Node {
 	n, home := testNode(t)
 	n.codices = newCodexRegistry()
 	n.codices.scan = func() []codexProcess { return nil }
+	fixtureCodexIndex(n.codices)
 	n.logger = log.New(io.Discard, "", 0)
 	n.metas = map[string]quickMeta{}
 	n.bgScans = map[string]*bgScan{}
@@ -229,14 +248,38 @@ func remoteTestNode(t *testing.T) *Node {
 	return n
 }
 
+// fixtureCodexIndex gives a fixture node's Codex home index room to finish a cold scan of a healthy test home, which can
+// invoke several sqlite3 subprocesses (desktop projects and sidebar threads). Under multi-shard CPU contention that
+// scan can outlast the production 100ms/300ms budgets, and a list that stops waiting leaves the home's threads out of
+// its rows (#15981, #15990). Stall-isolation tests use boundedTestNode to keep the production budgets.
+func fixtureCodexIndex(r *codexRegistry) {
+	r.index.scanWait = 5 * time.Second
+	r.index.listWait = 5 * time.Second
+}
+
+// boundedTestNode returns a remoteTestNode with the production Codex home index wait budgets
+// (codexHomeScanWait and codexHomeListWait), for tests that deliberately block a home's scan.
+func boundedTestNode(t *testing.T) *Node {
+	t.Helper()
+	n := remoteTestNode(t)
+	n.codices.index.scanWait = 0
+	n.codices.index.listWait = 0
+	return n
+}
+
 func connectRemoteFixture(t *testing.T, n *Node, home, id string, threads ...string) (*remoteFixture, *codexRemote) {
 	t.Helper()
 	f := &remoteFixture{home: home, threads: threads}
 	server := httptest.NewServer(http.HandlerFunc(f.serve))
+	t.Cleanup(server.Close)
+	c := connectFixtureEndpoint(t, n, home, id, "ws"+strings.TrimPrefix(server.URL, "http"))
+	return f, c
+}
+
+func connectFixtureEndpoint(t *testing.T, n *Node, home, id, endpoint string) *codexRemote {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	// The node canonicalizes every server's home before it dials (configureCodex, discoverCodex); macOS's TempDir
-	// lives under the /var -> /private/var symlink, so a raw home never matches the app-server's codexHome.
-	spec := proto.CodexServer{ID: id, Home: canonicalCodexHome(home, n.home), Endpoint: "ws" + strings.TrimPrefix(server.URL, "http")}
+	spec := proto.CodexServer{ID: id, Home: canonicalCodexHome(home, n.home), Endpoint: endpoint}
 	n.ensureCodexRemote(ctx, spec)
 	waitFor(t, "remote connected", func() bool {
 		n.codices.mu.Lock()
@@ -252,8 +295,8 @@ func connectRemoteFixture(t *testing.T, n *Node, home, id string, threads ...str
 	n.codices.mu.Lock()
 	c := n.codices.remotes[id]
 	n.codices.mu.Unlock()
-	t.Cleanup(func() { cancel(); c.close(); server.Close() })
-	return f, c
+	t.Cleanup(func() { cancel(); c.close() })
+	return c
 }
 
 func TestCodexRemoteIdentityAndOnlyReadDiscovery(t *testing.T) {
@@ -751,7 +794,8 @@ func TestCodexRemoteSlowReadsTimeOutAlone(t *testing.T) {
 }
 
 // A refresh whose own time runs out stops asking: threads not read in time keep their last copy and are not backed off
-// as slow, while those whose own read timed out are.
+// as slow, while those whose own read timed out are. Reads go out never read first (readOrder): the nine new threads
+// in list order, then the known one, read when the connection came up.
 func TestCodexRemoteRefreshBudgetStopsReads(t *testing.T) {
 	n := remoteTestNode(t)
 	logs := &syncBuffer{}
@@ -771,23 +815,27 @@ func TestCodexRemoteRefreshBudgetStopsReads(t *testing.T) {
 		f.slowRead[raw] = true
 	}
 	f.mu.Unlock()
+	order := slices.Concat(slow[1:], slow[:1])
 
+	before := f.readCounts()
 	if err := c.refresh(); err != nil {
 		t.Fatal(err)
 	}
+	after := f.readCounts()
 	c.mu.Lock()
 	_, kept := c.threads[remoteRaw]
+	_, knownBackedOff := c.slow[remoteRaw]
 	backedOff := len(c.slow)
-	_, first := c.slow[remoteRaw]
+	_, first := c.slow[order[0]]
 	c.mu.Unlock()
-	if !kept {
-		t.Fatal("a known thread was dropped")
+	if !kept || knownBackedOff {
+		t.Fatalf("known thread not read in time: kept %v, backed off %v", kept, knownBackedOff)
 	}
 	if backedOff != codexReadWorkers || !first {
 		t.Fatalf("%d threads backed off (first %v), want the %d whose own read timed out", backedOff, first, codexReadWorkers)
 	}
-	for _, raw := range slow[2*codexReadWorkers:] {
-		if got := f.readCount(raw); got != 0 {
+	for _, raw := range order[2*codexReadWorkers:] {
+		if got := after[raw] - before[raw]; got != 0 {
 			t.Fatalf("%s asked %d times after the refresh ran out of time", raw, got)
 		}
 	}

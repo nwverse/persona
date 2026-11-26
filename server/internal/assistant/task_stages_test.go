@@ -35,35 +35,6 @@ func TestTaskStageMergeRequestLinks(t *testing.T) {
 	}
 }
 
-func TestTaskStageKind(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		readonly bool
-		criteria []string
-		pr       string
-		want     string
-	}{
-		{"unknown is code", false, nil, "", "code"},
-		{"read-only", true, nil, "", "general"},
-		{"research", false, []string{"Publish the research report"}, "", "general"},
-		{"Chinese code", false, []string{"修复登录错误，全部测试通过"}, "", "code"},
-		{"Chinese research", false, []string{"调研并给出方案"}, "", "general"},
-		{"unknown criteria", false, []string{"Everything works"}, "", "code"},
-		{"research with code", false, []string{"Research the bug and implement a fix"}, "", "code"},
-		{"doc review", false, []string{"Doc review complete"}, "", "general"},
-		{"MR delivery", false, []string{"MR merged and deployed"}, "", "code"},
-		{"release", false, []string{"Release shipped"}, "", "code"},
-		{"Chinese delivery", false, []string{"合并、部署、上线"}, "", "code"},
-		{"MR evidence overrides read-only", true, []string{"Research report ready"}, "https://example.com/g/r/-/merge_requests/9", "code"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := taskStageKind(tc.readonly, tc.criteria, tc.pr); got != tc.want {
-				t.Fatalf("kind = %s, want %s", got, tc.want)
-			}
-		})
-	}
-}
-
 func TestTaskStageMidTaskReply(t *testing.T) {
 	s, f := newTaskService(t)
 	todo := startedTask(t, s, f)
@@ -269,7 +240,7 @@ func TestTaskStagePendingPlan(t *testing.T) {
 		t.Fatalf("pending plan rolled back the stored stage: %s", stored)
 	}
 	// Starting another turn is not proof that the plan was approved.
-	s.taskWorking(ctx, "box", "s1")
+	s.taskWorking(ctx, "box", "s1", startRow{})
 	if todoNow(s, todo.ID).Stage != "plan" {
 		t.Fatal("working status cleared pending plan")
 	}
@@ -292,6 +263,7 @@ func TestTaskStageReviewVerdict(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, f := newTaskService(t)
+			setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
 			todo := startedTask(t, s, f)
 			ctx := context.Background()
 			s.setTaskDelivery(ctx, todo.ID, TodoDelivery{State: deliveryMerged})
@@ -342,8 +314,10 @@ func TestTaskStageMetadataRoundTrip(t *testing.T) {
 	if got := s2.todoStages(ctx)[todo.ID].Kind; got != "general" {
 		t.Fatalf("reloaded kind = %s", got)
 	}
-	b := (&briefFacts{Progress: []briefProgress{{ID: todo.ID, Stage: "develop", StageKind: "general"}}}).body(s, "progress")
-	if b.Progress[0].StageKind != "general" {
-		t.Fatal("briefing omitted kind")
+	if s.briefingOn() {
+		b := s.briefBodyOf(&briefFacts{Progress: []briefProgress{{ID: todo.ID, Stage: "develop", StageKind: "general"}}}, "progress")
+		if b.Progress[0].StageKind != "general" {
+			t.Fatal("briefing omitted kind")
+		}
 	}
 }

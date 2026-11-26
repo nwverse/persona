@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"go/scanner"
 	"go/token"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/shellcmd"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -16,6 +18,13 @@ import (
 // groups as written inline (larkgate_inline.go) and resolves immediately preceding literal command assignments
 // solely for classification. It never executes the input.
 func normalizeLarkCommand(cmd, cwd string, gates []proto.CommandGate) string {
+	return normalizeLarkCommandTracked(cmd, cwd, gates, nil)
+}
+
+// resolved, when non-nil, records the normalized segment positions whose executable came from a proven assignment.
+// The classifier uses that provenance only for the neighboring-opaque-program check; the command itself is still
+// parsed and classified normally. Positions, rather than word content, keep an identical later literal segment distinct.
+func normalizeLarkCommandTracked(cmd, cwd string, gates []proto.CommandGate, resolved map[int]bool) string {
 	tree, err := syntax.NewParser().Parse(strings.NewReader(cmd), "")
 	if err != nil {
 		return cmd
@@ -31,128 +40,38 @@ func normalizeLarkCommand(cmd, cwd string, gates []proto.CommandGate) string {
 			return cmd
 		}
 	}
-	// Only `;`, `&&` and `||` lists of simple commands take part, and for literal command assignments pipes of them.
+	// Only the leading prefix of simple commands, pipelines, and && / || chains takes part in assignment
+	// propagation. An unsupported suffix (loops, subshells, blocks, declarations) stops later resolutions without
+	// invalidating earlier ones; flat && / || lists still get heredoc handling below.
 	stmts, flat := larkFlatStmts(tree.Stmts)
-	units, piped := larkPipeUnits(tree.Stmts)
-	if !flat && !piped {
+	prefixStmts := larkNormPrefix(tree.Stmts)
+	if !flat && len(prefixStmts) == 0 {
 		return cmd
 	}
-	for _, unit := range append(units, stmts) {
-		for _, stmt := range unit {
-			call := stmt.Cmd.(*syntax.CallExpr)
-			for _, a := range call.Assigns {
-				if a.Name == nil || a.Append || a.Index != nil || a.Array != nil || a.Value == nil {
-					return cmd
-				}
-				if a.Name.Value == "IFS" || larkExecutableEnv[a.Name.Value] {
-					return cmd // executable lookup and field splitting invalidate earlier inferences
-				}
-				if _, home := larkHomeWord(a.Value, cmd); home {
-					continue
-				}
-				if _, dynamic := executionWord(a.Value); dynamic {
-					return cmd // expansions can assign shell state or alter executable lookup
-				}
-			}
+	if !larkNormAssignsSafe(prefixStmts, cmd) {
+		return cmd
+	}
+	state := larkNormState{
+		vars:     map[string]string{},
+		varsDir:  map[string]string{},
+		textVars: map[string]string{},
+	}
+	if filepath.IsAbs(cwd) {
+		state.currentDir = filepath.Clean(cwd)
+	}
+	changed := false
+	segPosReliable := true
+	segmentPosition := 0
+	for _, stmt := range prefixStmts {
+		onTrue, onFalse := walkNormStmt(stmt, state, cmd, gates, resolved, &segmentPosition, &segPosReliable, &changed)
+		if b, ok := stmt.Cmd.(*syntax.BinaryCmd); ok && (b.Op == syntax.AndStmt || b.Op == syntax.OrStmt) {
+			state = intersectNormState(onTrue, onFalse)
+		} else {
+			state = onTrue
 		}
 	}
-	vars := map[string]string{}
-	// Variables resolve only in a straight sequence: an assignment after && or || may never have happened. A pipe's
-	// commands run apart from the shell: its assignments set nothing for the commands after it.
-	changed, unsafe := false, !piped
-	// moved: a literal cd ran before. It changes nothing an absolute path names, but a relative one, or a bare name with
-	// "." or an empty entry in PATH, is looked up from the new directory: only absolute values resolve after it (#8389).
-	moved := false
-	for _, unit := range units {
-		for _, stmt := range unit {
-			if unsafe {
-				break
-			}
-			call := stmt.Cmd.(*syntax.CallExpr)
-			if len(call.Args) == 0 {
-				if len(unit) > 1 {
-					unsafe = true // an assignment in a pipe sets nothing the next command sees
-					break
-				}
-				for _, a := range call.Assigns {
-					if a.Name == nil {
-						continue
-					}
-					delete(vars, a.Name.Value)
-					if a.Append || a.Index != nil || a.Array != nil || a.Value == nil {
-						continue
-					}
-					value, dynamic := executionWord(a.Value)
-					if home, ok := larkHomeWord(a.Value, cmd); ok {
-						value, dynamic = home, false
-					}
-					if !dynamic && safeLiteralCommand(value) {
-						vars[a.Name.Value] = value
-					}
-				}
-				continue
-			}
-			words := make([]string, len(call.Args))
-			for i, word := range call.Args {
-				words[i], _ = executionWord(word)
-			}
-			suffix, ok := unwrapCommand(words)
-			resolvedAbsolute := false
-			if ok && len(suffix) > 0 {
-				index := len(words) - len(suffix)
-				dynamicArgs := false
-				for i, arg := range call.Args {
-					if i == index {
-						continue
-					}
-					_, dynamic := executionWord(arg)
-					if dynamic || wordExpandsToMany(arg) {
-						dynamicArgs = true
-						break
-					}
-				}
-				if dynamicArgs {
-					unsafe = true
-					break // do not resolve the executable after another argument can change shell state
-				}
-				word := call.Args[index]
-				if len(word.Parts) == 1 {
-					if p, ok := word.Parts[0].(*syntax.ParamExp); ok && p.Param != nil && !p.Excl && !p.Length && !p.Width && p.Index == nil && p.Slice == nil && p.Repl == nil && p.Exp == nil && p.Names == 0 {
-						if value, ok := vars[p.Param.Value]; ok && (!moved || filepath.IsAbs(value)) {
-							word.Parts = []syntax.WordPart{&syntax.Lit{Value: value}}
-							resolvedAbsolute = filepath.IsAbs(value) && (index == 0 || filepath.Base(words[0]) == "timeout")
-							changed = true
-						}
-					}
-				}
-			}
-			// Only commands that cannot change the parent shell's state can take part. In a pipe that is its last
-			// command (zsh runs it in the shell itself); the others run apart.
-			name := words[0]
-			unchanged := resolvedAbsolute || stmt != unit[len(unit)-1] || map[string]bool{"echo": true, ":": true, "true": true, "false": true, "ls": true, "git": true, "go": true, "pwd": true, "date": true, "sleep": true, "cat": true, "tee": true, "head": true, "tail": true, "cut": true, "sort": true, "uniq": true, "tr": true, "wc": true, "grep": true, "jq": true}[name]
-			if name == "cd" && len(unit) == 1 && len(call.Args) <= 2 && len(call.Assigns) == 0 && len(stmt.Redirs) == 0 {
-				literal := true
-				for _, arg := range call.Args {
-					_, dynamic := executionWord(arg)
-					literal = literal && !dynamic && !wordExpandsToMany(arg)
-				}
-				unchanged, moved = literal, moved || literal
-			}
-			if !unchanged {
-				unsafe = true
-				break
-			}
-			if len(call.Assigns) != 0 || len(stmt.Redirs) != 0 {
-				clear(vars)
-			}
-		}
-	}
-	if unsafe && changed {
-		// Drop the resolutions; here-documents below are judged on their own.
-		tree, _ = syntax.NewParser().Parse(strings.NewReader(cmd), "")
-		stmts, _ = larkFlatStmts(tree.Stmts)
-		changed = false
-	}
+	// An opaque command stops later resolutions; expansions already made in earlier commands remain valid because
+	// those commands run first. Keeping them also handles a literal prefix in the final command of a sequence.
 	if !flat {
 		stmts = nil // here-documents are judged only in lists of simple commands
 	}
@@ -269,13 +188,23 @@ func normalizeLarkCommand(cmd, cwd string, gates []proto.CommandGate) string {
 		changed = true
 	}
 	if !changed {
+		if len(resolved) > 0 && (!segPosReliable || !larkResolvedPrefixMatches(prefixStmts, segmentPosition)) {
+			clear(resolved)
+		}
 		return cmd // with the inline rewrites, if any
 	}
 	var out bytes.Buffer
 	if err := syntax.NewPrinter().Print(&out, tree); err != nil {
+		if resolved != nil {
+			clear(resolved)
+		}
 		return cmd
 	}
-	return out.String()
+	result := out.String()
+	if len(resolved) > 0 && (!segPosReliable || !larkResolvedPrefixMatches(prefixStmts, segmentPosition)) {
+		clear(resolved)
+	}
+	return result
 }
 
 // Special files, symlinks and virtual filesystems can forward the heredoc to
@@ -345,6 +274,197 @@ func inertGoDocument(body *syntax.Word) bool {
 	}
 }
 
+// larkLiteralDirectory tracks only an explicit literal cd whose destination is a known existing directory. An empty
+// result disables relative-prefix expansion until another absolute cd; bare cd, options, previous-directory syntax and
+// other users' home directories stay unknown.
+func larkLiteralDirectory(args []*syntax.Word, currentDir string) string {
+	if len(args) != 2 {
+		return ""
+	}
+	to, _ := executionWord(args[1])
+	to = larkHomePath(to)
+	if !filepath.IsAbs(to) && to != "." && to != ".." && !strings.HasPrefix(to, "./") && !strings.HasPrefix(to, "../") {
+		return "" // CDPATH can choose a directory outside currentDir
+	}
+	if !filepath.IsAbs(to) && currentDir != "" {
+		to = filepath.Join(currentDir, to)
+	}
+	if !filepath.IsAbs(to) {
+		return ""
+	}
+	to = filepath.Clean(to)
+	info, err := os.Stat(to)
+	if err != nil || !info.IsDir() {
+		return ""
+	}
+	return to
+}
+
+// larkNoParentReference rejects every parent component before a relative executable is joined to a tracked directory.
+// Without it, symlinked directories could make filepath.Clean differ from the kernel's component-by-component lookup.
+func larkNoParentReference(name string) bool {
+	for _, part := range strings.Split(name, "/") {
+		if part == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+// larkRelativeGate keeps a newly resolved relative prefix from turning a configured gate command or script into an
+// ordinary program merely because the invocation contains a slash. Basenames cover exact commands and script suffixes
+// after the prefix is joined to its tracked directory, and deliberately remain conservative across directories.
+func larkRelativeGate(gates []proto.CommandGate, name string) bool {
+	base := filepath.Base(name)
+	for _, gate := range gates {
+		if gate.Command != "" && filepath.Base(gate.Command) == base ||
+			gate.Script != "" && filepath.Base(gate.Script) == base {
+			return true
+		}
+	}
+	return false
+}
+
+// These commands cannot execute another program, write a file through an option, or change shell state. Their output
+// redirections are checked separately. Keep this list narrower than unchanged: wrappers, interpreters, xargs, tee and
+// even general-purpose tools such as find, sed or awk do not belong here.
+var larkIndependentReadCommands = map[string]bool{
+	"echo": true, ":": true, "true": true, "false": true, "pwd": true,
+	"ls": true, "cat": true, "head": true, "tail": true, "grep": true,
+	"cut": true, "tr": true, "wc": true, "jq": true,
+}
+
+func larkIndependentRead(args []*syntax.Word, words []string, executable int) bool {
+	if executable != 0 || !larkIndependentReadCommands[words[executable]] {
+		return false
+	}
+	for i, arg := range args {
+		if i != executable && !larkReadOnlyWord(arg) {
+			return false
+		}
+	}
+	return true
+}
+
+// larkReadOnlyWord permits literal glob/brace syntax and side-effect-free scalar parameters. Actual brace expansion only
+// adds read arguments. Command/process substitution, arithmetic, arrays and parameter operators remain opaque. Parsing
+// uses the bash dialect, while execution may use zsh: once a word contains a parameter or literal '$', only pure ASCII
+// $NAME/${NAME} parameters and the literal set [A-Za-z0-9/._,@%-] are accepted. This conservatively rejects zsh flags,
+// subscripts, modifiers and glob qualifiers rather than trying to blacklist each spelling.
+func larkReadOnlyWord(word *syntax.Word) bool {
+	safe, restricted, literalsSafe := true, false, true
+	syntax.Walk(word, func(node syntax.Node) bool {
+		if !safe {
+			return false
+		}
+		switch n := node.(type) {
+		case nil, *syntax.Word, *syntax.DblQuoted:
+			return true
+		case *syntax.Lit:
+			restricted = restricted || strings.Contains(n.Value, "$")
+			literalsSafe = literalsSafe && larkReadOnlyLiteral(n.Value)
+			return true
+		case *syntax.SglQuoted:
+			return false
+		case *syntax.ParamExp:
+			restricted = true
+			safe = larkReadOnlyParameter(n)
+			return false
+		default:
+			safe = false
+			return false
+		}
+	})
+	return safe && (!restricted || literalsSafe)
+}
+
+func larkReadOnlyParameter(p *syntax.ParamExp) bool {
+	if !scalarParameter(p) {
+		return false
+	}
+	name := p.Param.Value
+	if name == "" {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if c == '_' || c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || i > 0 && c >= '0' && c <= '9' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func larkReadOnlyLiteral(value string) bool {
+	for i := 0; i < len(value); i++ {
+		c := value[i]
+		if c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' {
+			continue
+		}
+		switch c {
+		case '/', '.', '_', ',', '@', '%', '-':
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// larkBindingRedirects keeps assignments across descriptor duplication and literal /dev/null input/output. Real file
+// output, here-documents, inherited input descriptors and dynamic targets retain the old invalidation behavior.
+func larkBindingRedirects(redirs []*syntax.Redirect) bool {
+	for _, redirect := range redirs {
+		if redirect == nil || redirect.Word == nil {
+			return false
+		}
+		// executionWord marks every expansion with '$', so a dynamic target cannot equal an accepted literal below.
+		target, _ := executionWord(redirect.Word)
+		if redirect.N != nil {
+			if redirect.N.Value == "" {
+				return false
+			}
+			for _, r := range redirect.N.Value {
+				if r < '0' || r > '9' {
+					return false // {NAME} assigns the opened descriptor number to NAME
+				}
+			}
+		}
+		switch redirect.Op {
+		case syntax.DplOut:
+			if target != "1" && target != "2" {
+				return false
+			}
+			if redirect.N != nil && redirect.N.Value != "1" && redirect.N.Value != "2" {
+				return false
+			}
+		case syntax.RdrIn, syntax.RdrOut, syntax.AppOut:
+			if target != "/dev/null" {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// literalCommandPrefix is the unquoted field splitting of a statically assigned command prefix. Quotes and shell
+// metacharacters inside a variable are data at runtime, not syntax to reinterpret; rejecting them here keeps that
+// distinction and prevents a value from smuggling in another command, glob or expansion.
+func literalCommandPrefix(value string) ([]string, bool) {
+	fields := strings.Fields(value)
+	if len(fields) == 0 {
+		return nil, false
+	}
+	for _, field := range fields {
+		if !safeLiteralCommand(field) {
+			return nil, false
+		}
+	}
+	return fields, true
+}
+
 func safeLiteralCommand(value string) bool {
 	if value == "" {
 		return false
@@ -368,32 +488,522 @@ func larkHomePath(p string) string {
 	return p
 }
 
-// larkPipeUnits lists the top-level statements of a `;` list, each as its simple commands: one, or a pipe's in
-// order; false for anything else (&&, ||, loops, subshells, background jobs).
-func larkPipeUnits(in []*syntax.Stmt) ([][]*syntax.Stmt, bool) {
-	var out [][]*syntax.Stmt
+type larkNormState struct {
+	vars       map[string]string
+	varsDir    map[string]string
+	textVars   map[string]string
+	currentDir string
+	// moved: a literal cd ran before. It changes nothing an absolute path names, but a relative one, or a bare name with
+	// "." or an empty entry in PATH, is looked up from the new directory: only absolute values resolve after it (#8389).
+	moved  bool
+	unsafe bool
+}
+
+func (s larkNormState) clone() larkNormState {
+	return larkNormState{
+		vars:       maps.Clone(s.vars),
+		varsDir:    maps.Clone(s.varsDir),
+		textVars:   maps.Clone(s.textVars),
+		currentDir: s.currentDir,
+		moved:      s.moved,
+		unsafe:     s.unsafe,
+	}
+}
+
+// intersectNormState keeps only facts guaranteed to hold along both execution paths a and b.
+func intersectNormState(a, b larkNormState) larkNormState {
+	out := larkNormState{
+		vars:     map[string]string{},
+		varsDir:  map[string]string{},
+		textVars: map[string]string{},
+		moved:    a.moved || b.moved,
+		unsafe:   a.unsafe || b.unsafe,
+	}
+	if a.currentDir != "" && a.currentDir == b.currentDir {
+		out.currentDir = a.currentDir
+	} else if a.currentDir != b.currentDir {
+		out.moved = true
+	}
+	for k, v := range a.vars {
+		if bv, ok := b.vars[k]; ok && bv == v {
+			out.vars[k] = v
+			if ad, ok := a.varsDir[k]; ok && ad != "" && b.varsDir[k] == ad {
+				out.varsDir[k] = ad
+			}
+		}
+	}
+	for k, v := range a.textVars {
+		if bv, ok := b.textVars[k]; ok && bv == v {
+			out.textVars[k] = v
+		}
+	}
+	return out
+}
+
+// larkNormPrefix returns the leading prefix of statements made solely of simple commands, pipelines, and && / || chains.
+func larkNormPrefix(in []*syntax.Stmt) []*syntax.Stmt {
+	var out []*syntax.Stmt
 	for _, s := range in {
-		var unit []*syntax.Stmt
-		var add func(*syntax.Stmt) bool
-		add = func(s *syntax.Stmt) bool {
-			if s.Background || s.Negated || s.Coprocess {
-				return false
-			}
-			switch c := s.Cmd.(type) {
-			case *syntax.CallExpr:
-				unit = append(unit, s)
-				return true
-			case *syntax.BinaryCmd:
-				return (c.Op == syntax.Pipe || c.Op == syntax.PipeAll) && len(s.Redirs) == 0 && add(c.X) && add(c.Y)
-			}
+		if !larkNormStmtOK(s, false) {
+			break
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+func larkNormStmtOK(s *syntax.Stmt, inPipe bool) bool {
+	if s.Background || s.Negated || s.Coprocess {
+		return false
+	}
+	switch c := s.Cmd.(type) {
+	case *syntax.CallExpr:
+		return true
+	case *syntax.BinaryCmd:
+		if len(s.Redirs) != 0 {
 			return false
 		}
-		if !add(s) {
-			return nil, false
+		if c.Op == syntax.Pipe || c.Op == syntax.PipeAll {
+			return larkNormStmtOK(c.X, true) && larkNormStmtOK(c.Y, true)
 		}
-		out = append(out, unit)
+		if !inPipe && (c.Op == syntax.AndStmt || c.Op == syntax.OrStmt) {
+			return larkNormStmtOK(c.X, false) && larkNormStmtOK(c.Y, false)
+		}
 	}
-	return out, true
+	return false
+}
+
+// larkLiteralAssignValue extracts a static assignment value preserving POSIX double-quote backslash
+// semantics and rejecting ANSI-C ($'...') and localized ($"...") quotes as well as all expansions (including $?).
+func larkLiteralAssignValue(word *syntax.Word, cmd string) (string, bool) {
+	if home, ok := larkHomeWord(word, cmd); ok {
+		return home, true
+	}
+	if _, dynamic := executionWord(word); dynamic {
+		return "", false
+	}
+	value, _, ok := literalLoopWord(word, nil)
+	return value, ok
+}
+
+// larkSingleQuotedParts encodes value as WordParts so syntax.Printer escapes embedded single quotes,
+// preventing single-quote escape when printing rewritten script arguments.
+func larkSingleQuotedParts(value string) []syntax.WordPart {
+	chunks := strings.Split(value, "'")
+	parts := make([]syntax.WordPart, 0, len(chunks)*2-1)
+	for i, chunk := range chunks {
+		if i > 0 {
+			parts = append(parts, &syntax.Lit{Value: `\'`})
+		}
+		if chunk != "" || len(chunks) == 1 {
+			parts = append(parts, &syntax.SglQuoted{Value: chunk})
+		}
+	}
+	return parts
+}
+
+// larkSimpleRedirectTargets reports whether every redirect target is a plain unquoted word that shellcmd.Split
+// reads identically to the shell AST without splitting or truncating on embedded separators or quotes.
+func larkSimpleRedirectTargets(redirs []*syntax.Redirect) bool {
+	for _, r := range redirs {
+		if r == nil || r.Word == nil {
+			continue
+		}
+		for _, part := range r.Word.Parts {
+			lit, ok := part.(*syntax.Lit)
+			if !ok || strings.ContainsAny(lit.Value, " \t\n|;&<>()'\"\\#") {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// larkResolvedPrefixMatches verifies a 1-to-1 bijection between AST CallExpr positions in prefixStmts
+// and shellcmd.Split segments, preventing segment-count shifts (including cross-statement +k/-k cancellation)
+// from assigning resolved-executable provenance to a different segment.
+func larkResolvedPrefixMatches(prefixStmts []*syntax.Stmt, want int) bool {
+	var buf bytes.Buffer
+	if syntax.NewPrinter().Print(&buf, &syntax.File{Stmts: prefixStmts}) != nil {
+		return false
+	}
+	segs, ok := shellcmd.Split(buf.String())
+	if !ok || len(segs) != want {
+		return false
+	}
+	matched := true
+	var check func(*syntax.Stmt)
+	check = func(s *syntax.Stmt) {
+		if !matched {
+			return
+		}
+		switch c := s.Cmd.(type) {
+		case *syntax.CallExpr:
+			var one bytes.Buffer
+			if syntax.NewPrinter().Print(&one, s) != nil {
+				matched = false
+				return
+			}
+			oneSegs, oneOK := shellcmd.Split(one.String())
+			if !oneOK || len(oneSegs) != 1 {
+				matched = false
+			}
+		case *syntax.BinaryCmd:
+			check(c.X)
+			check(c.Y)
+		}
+	}
+	for _, s := range prefixStmts {
+		check(s)
+		if !matched {
+			return false
+		}
+	}
+	return true
+}
+
+// larkScriptWordSafe rejects zsh-only parameter syntax that the bash AST represents as literal parts:
+// any unescaped "$" in a Lit (e.g. $~X, $=X, $+X, $^X, $#, $é) and any Lit starting with ":" or "["
+// immediately following a ParamExp (zsh parameter modifiers and subscripts).
+func larkScriptWordSafe(word *syntax.Word) bool {
+	if word == nil {
+		return false
+	}
+	var checkParts func([]syntax.WordPart, bool) bool
+	checkParts = func(parts []syntax.WordPart, quoted bool) bool {
+		prevParam := false
+		for _, part := range parts {
+			switch p := part.(type) {
+			case *syntax.Lit:
+				if prevParam && (strings.HasPrefix(p.Value, ":") || strings.HasPrefix(p.Value, "[")) {
+					return false
+				}
+				if larkHasUnescapedDollar(p.Value, quoted) {
+					return false
+				}
+				prevParam = false
+			case *syntax.DblQuoted:
+				if p.Dollar || !checkParts(p.Parts, true) {
+					return false
+				}
+				prevParam = false
+			case *syntax.SglQuoted:
+				if p.Dollar {
+					return false
+				}
+				prevParam = false
+			case *syntax.ParamExp:
+				prevParam = true
+			default:
+				return false
+			}
+		}
+		return true
+	}
+	return checkParts(word.Parts, false)
+}
+
+func larkHasUnescapedDollar(s string, quoted bool) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) {
+			if !quoted || strings.ContainsRune("\"\\$`\n", rune(s[i+1])) {
+				i++
+				continue
+			}
+		}
+		if s[i] == '$' {
+			return true
+		}
+	}
+	return false
+}
+
+// larkNormAssignsSafe rejects any prefix containing dynamic, indexed, append, array, IFS, or executable-environment
+// assignments so those mutations cannot invalidate earlier variable inferences.
+func larkNormAssignsSafe(stmts []*syntax.Stmt, cmd string) bool {
+	safe := true
+	var check func(*syntax.Stmt)
+	check = func(s *syntax.Stmt) {
+		if !safe {
+			return
+		}
+		switch c := s.Cmd.(type) {
+		case *syntax.CallExpr:
+			for _, a := range c.Assigns {
+				if a.Name == nil || a.Append || a.Index != nil || a.Array != nil || a.Value == nil {
+					safe = false
+					return
+				}
+				if a.Name.Value == "IFS" || larkExecutableEnv[a.Name.Value] {
+					safe = false // executable lookup and field splitting invalidate earlier inferences
+					return
+				}
+				if _, ok := larkLiteralAssignValue(a.Value, cmd); !ok {
+					safe = false // expansions or special quote forms can alter shell state or decoded bytes
+					return
+				}
+			}
+		case *syntax.BinaryCmd:
+			check(c.X)
+			check(c.Y)
+		}
+	}
+	for _, s := range stmts {
+		check(s)
+		if !safe {
+			return false
+		}
+	}
+	return true
+}
+
+func larkPipeUnit(s *syntax.Stmt) []*syntax.Stmt {
+	var unit []*syntax.Stmt
+	var collect func(*syntax.Stmt)
+	collect = func(s *syntax.Stmt) {
+		switch c := s.Cmd.(type) {
+		case *syntax.CallExpr:
+			unit = append(unit, s)
+		case *syntax.BinaryCmd:
+			collect(c.X)
+			collect(c.Y)
+		}
+	}
+	collect(s)
+	return unit
+}
+
+// literalExecutableParam extracts the variable name when word is a plain scalar parameter expansion ($V, ${V})
+// or a double-quoted single scalar expansion ("$V", "${V}"). Double-quoted expansions suppress word splitting, so
+// callers must require a single safe token when quoted is true.
+func literalExecutableParam(word *syntax.Word) (name string, quoted, ok bool) {
+	if word == nil || len(word.Parts) != 1 {
+		return "", false, false
+	}
+	var p *syntax.ParamExp
+	switch part := word.Parts[0].(type) {
+	case *syntax.ParamExp:
+		p = part
+	case *syntax.DblQuoted:
+		if part.Dollar || len(part.Parts) != 1 {
+			return "", false, false
+		}
+		p, ok = part.Parts[0].(*syntax.ParamExp)
+		if !ok {
+			return "", false, false
+		}
+		quoted = true
+	default:
+		return "", false, false
+	}
+	if !scalarParameter(p) {
+		return "", false, false
+	}
+	return p.Param.Value, quoted, true
+}
+
+// walkNormStmt propagates proven bindings through && and || using two exit states:
+// onTrue holds when stmt succeeds (the only entry to the right side of &&),
+// onFalse holds when stmt fails (the only entry to the right side of ||).
+func walkNormStmt(stmt *syntax.Stmt, state larkNormState, cmd string, gates []proto.CommandGate, resolved map[int]bool, segPos *int, segPosReliable *bool, changed *bool) (onTrue, onFalse larkNormState) {
+	if b, ok := stmt.Cmd.(*syntax.BinaryCmd); ok {
+		switch b.Op {
+		case syntax.AndStmt:
+			xTrue, xFalse := walkNormStmt(b.X, state, cmd, gates, resolved, segPos, segPosReliable, changed)
+			yTrue, yFalse := walkNormStmt(b.Y, xTrue, cmd, gates, resolved, segPos, segPosReliable, changed)
+			return yTrue, intersectNormState(xFalse, yFalse)
+		case syntax.OrStmt:
+			xTrue, xFalse := walkNormStmt(b.X, state, cmd, gates, resolved, segPos, segPosReliable, changed)
+			yTrue, yFalse := walkNormStmt(b.Y, xFalse, cmd, gates, resolved, segPos, segPosReliable, changed)
+			return intersectNormState(xTrue, yTrue), yFalse
+		}
+	}
+	before := state.clone()
+	after, wasCD := applyNormUnit(larkPipeUnit(stmt), state, cmd, gates, resolved, segPos, segPosReliable, changed)
+	if wasCD {
+		// If cd failed (entering the right arm of ||), do not assume the target directory was entered.
+		before.moved = true
+		before.currentDir = ""
+		before.unsafe = after.unsafe
+		return after, before
+	}
+	return after, after.clone()
+}
+
+func applyNormUnit(unit []*syntax.Stmt, state larkNormState, cmd string, gates []proto.CommandGate, resolved map[int]bool, segPos *int, segPosReliable *bool, changed *bool) (larkNormState, bool) {
+	wasCD := false
+	for _, stmt := range unit {
+		position := *segPos
+		*segPos++
+		if !larkSimpleRedirectTargets(stmt.Redirs) {
+			*segPosReliable = false
+		}
+		if state.unsafe {
+			continue
+		}
+		call := stmt.Cmd.(*syntax.CallExpr)
+		if len(call.Args) == 0 {
+			if len(unit) > 1 || !larkBindingRedirects(stmt.Redirs) {
+				state.unsafe = true // an assignment in a pipe or with non-binding redirects sets nothing safe for later commands
+				continue
+			}
+			for _, a := range call.Assigns {
+				if a.Name == nil {
+					continue
+				}
+				delete(state.vars, a.Name.Value)
+				delete(state.varsDir, a.Name.Value)
+				delete(state.textVars, a.Name.Value)
+				if a.Append || a.Index != nil || a.Array != nil || a.Value == nil {
+					continue
+				}
+				if value, ok := larkLiteralAssignValue(a.Value, cmd); ok {
+					state.textVars[a.Name.Value] = value
+					if _, ok := literalCommandPrefix(value); ok {
+						state.vars[a.Name.Value] = value
+						state.varsDir[a.Name.Value] = state.currentDir
+					}
+				}
+			}
+			continue
+		}
+		words := make([]string, len(call.Args))
+		for i, word := range call.Args {
+			words[i], _ = executionWord(word)
+		}
+		suffix, ok := unwrapCommand(words)
+		if !ok || len(suffix) == 0 {
+			state.unsafe = true
+			continue // unknown wrapper form or wrapper without target command must not propagate bindings
+		}
+		resolvedAbsolute := false
+		index := len(words) - len(suffix)
+		base := filepath.Base(suffix[0])
+		scriptArguments := commandShells[strings.TrimRight(base, "0123456789.")] || base == "ssh"
+		type scriptReplacement struct {
+			index int
+			value string
+		}
+		var scriptReplacements []scriptReplacement
+		var replacedArgs map[int]bool
+		if scriptArguments {
+			for i := index + 1; i < len(call.Args); i++ {
+				arg := call.Args[i]
+				if !larkScriptWordSafe(arg) {
+					continue
+				}
+				value, replaced, literal := literalLoopWord(arg, state.vars)
+				if !literal || !replaced {
+					// Text bindings also cover literal script fragments. Unquoted field splitting rules still
+					// reject a multiword value; a quoted expansion stays one word.
+					value, replaced, literal = literalLoopWord(arg, state.textVars)
+				}
+				if !literal || !replaced {
+					continue
+				}
+				if replacedArgs == nil {
+					replacedArgs = map[int]bool{}
+				}
+				scriptReplacements = append(scriptReplacements, scriptReplacement{index: i, value: value})
+				replacedArgs[i] = true
+			}
+		}
+		dynamicArgs := false
+		argsReadOnly := true
+		for i, arg := range call.Args {
+			if i == index || replacedArgs[i] {
+				continue
+			}
+			_, dynamic := executionWord(arg)
+			if dynamic || wordExpandsToMany(arg) {
+				dynamicArgs = true
+				if !larkReadOnlyWord(arg) {
+					argsReadOnly = false
+					break
+				}
+			}
+		}
+		if dynamicArgs && !argsReadOnly {
+			state.unsafe = true
+			continue // do not mutate or resolve when another argument can mutate shell state
+		}
+		// Commit script argument replacements only after all sibling arguments passed side-effect validation.
+		for _, r := range scriptReplacements {
+			call.Args[r.index].Parts = larkSingleQuotedParts(r.value)
+			words[r.index], *changed = r.value, true
+		}
+		if paramName, quoted, ok := literalExecutableParam(call.Args[index]); ok {
+			if value, ok := state.vars[paramName]; ok {
+				var prefix []string
+				var literal bool
+				if quoted {
+					if safeLiteralCommand(value) {
+						prefix, literal = []string{value}, true
+					}
+				} else {
+					prefix, literal = literalCommandPrefix(value)
+				}
+				// Reject leading "-" so a variable cannot inject a wrapper option (e.g. `env "$V" python3 ...`)
+				// and inherit resolved-executable provenance for the command that follows it.
+				if literal && strings.HasPrefix(prefix[0], "-") {
+					literal = false
+				}
+				resolvable := literal && (!state.moved || filepath.IsAbs(prefix[0]))
+				// System binary directories have special filter semantics downstream; keep relative prefixes opaque there.
+				if literal && state.moved && !filepath.IsAbs(prefix[0]) && strings.HasPrefix(prefix[0], "./") &&
+					larkNoParentReference(prefix[0]) && state.currentDir != "" && state.varsDir[paramName] == state.currentDir &&
+					filepath.Dir(filepath.Join(state.currentDir, prefix[0])) != "/bin" && filepath.Dir(filepath.Join(state.currentDir, prefix[0])) != "/usr/bin" &&
+					!isLarkCLI(prefix[0]) && !larkRelativeGate(gates, prefix[0]) {
+					prefix[0] = filepath.Join(state.currentDir, prefix[0])
+					resolvable = true
+				}
+				if resolvable {
+					expanded := make([]*syntax.Word, 0, len(call.Args)+len(prefix)-1)
+					expanded = append(expanded, call.Args[:index]...)
+					for _, field := range prefix {
+						expanded = append(expanded, &syntax.Word{Parts: []syntax.WordPart{&syntax.Lit{Value: field}}})
+					}
+					expanded = append(expanded, call.Args[index+1:]...)
+					call.Args = expanded
+					if resolved != nil && *segPosReliable {
+						resolved[position] = true
+					}
+					resolvedAbsolute = filepath.IsAbs(prefix[0]) && (index == 0 || filepath.Base(words[0]) == "timeout")
+					*changed = true
+				}
+			}
+		}
+		if dynamicArgs && !larkIndependentRead(call.Args, words, index) {
+			state.unsafe = true
+			continue // do not propagate bindings past a non-independent dynamic invocation
+		}
+		// Only commands that cannot change the parent shell's state can take part. In a pipe that is its last
+		// command (zsh runs it in the shell itself); the others run apart.
+		name := words[0]
+		unchanged := resolvedAbsolute || stmt != unit[len(unit)-1] || map[string]bool{"echo": true, ":": true, "true": true, "false": true, "ls": true, "git": true, "go": true, "pwd": true, "date": true, "sleep": true, "cat": true, "tee": true, "head": true, "tail": true, "cut": true, "sort": true, "uniq": true, "tr": true, "wc": true, "grep": true, "jq": true, "timeout": true, "env": true, "nice": true, "nohup": true, "setsid": true, "stdbuf": true, "xargs": true, "sudo": true, "ssh": true}[name]
+		if name == "cd" && len(unit) == 1 && len(call.Args) <= 2 && len(call.Assigns) == 0 && len(stmt.Redirs) == 0 {
+			literal := true
+			for _, arg := range call.Args {
+				_, dynamic := executionWord(arg)
+				literal = literal && !dynamic && !wordExpandsToMany(arg)
+			}
+			unchanged, state.moved = literal, state.moved || literal
+			if literal {
+				state.currentDir = larkLiteralDirectory(call.Args, state.currentDir)
+				wasCD = true
+			}
+		}
+		if !unchanged {
+			state.unsafe = true
+			continue
+		}
+		if len(call.Assigns) != 0 || !larkBindingRedirects(stmt.Redirs) {
+			clear(state.vars)
+			clear(state.varsDir)
+			clear(state.textVars)
+		}
+	}
+	return state, wasCD
 }
 
 // larkFlatStmts lists the simple commands of a `;`, `&&` and `||` list, in order; false for anything else (pipes,

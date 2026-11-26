@@ -176,8 +176,29 @@ func TestOwnerDecidesWithoutAReview(t *testing.T) {
 	f := Facts{ID: "todo_r", CreatedAt: hours(-5), UpdatedAt: hours(-5), Agents: []Agent{},
 		Supervision: &Supervision{State: reviewNeedsUser, UpdatedAt: hours(-1)}}
 	if v := View(f, testNow); v.Reason != assistantwire.TodoReasonOwnerDecides || v.Line == nil ||
-		v.Line.Key != lineDecision || v.Line.Args != nil || !v.Since.IsZero() {
+		v.Line.Key != assistantwire.TodoLineKeyDecision || v.Line.Args != nil || !v.Since.IsZero() {
 		t.Fatalf("%+v", v)
+	}
+}
+
+func TestPersonalVerificationStaysInNeedsYou(t *testing.T) {
+	f := Facts{ID: "todo_verify", Origin: "conv_lead", CreatedAt: hours(-5), UpdatedAt: hours(-1),
+		Delivery: &Delivery{State: deliveryLive, At: hours(-2)},
+		Ask:      &Ask{Verdict: "Please verify the result", AskedAt: hours(-1)}}
+	if v := View(f, testNow); v.Section != assistantwire.TodoListSectionJustFinished {
+		t.Fatalf("ordinary verification section = %q", v.Section)
+	}
+	f.Supervision = &Supervision{State: reviewUserCheck, UpdatedAt: hours(-1), Reviews: []Review{{Verdict: reviewAccepted, At: hours(-1)}}}
+	views := Views([]Facts{f}, testNow)
+	v := views[0]
+	if v.Phase != assistantwire.TodoPhaseNeedsYou || v.Section != assistantwire.TodoListSectionNeedsYou || v.Reason != assistantwire.TodoReasonVerify {
+		t.Fatalf("personal verification view: %+v", v)
+	}
+	if v.Line == nil || v.Line.Args["text"] != f.Ask.Verdict || !v.Since.Equal(f.Ask.AskedAt) {
+		t.Fatalf("personal verification line and round: %+v", v)
+	}
+	if c := Counts([]Facts{f}, views); c.Open != 1 || c.NeedsYou != 1 {
+		t.Fatalf("personal verification counts: %+v", c)
 	}
 }
 

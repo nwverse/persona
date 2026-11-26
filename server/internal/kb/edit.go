@@ -3,6 +3,8 @@ package kb
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"github.com/nwverse/persona/server/internal/kbwire"
 	"os"
 	"path/filepath"
 	"slices"
@@ -60,12 +62,7 @@ func fieldKey(field string) string {
 	return field
 }
 
-func (t *Tagging) fieldLocked(field string) bool {
-	if slices.Contains(t.LockedFields, field) {
-		return true
-	}
-	return t.Locked && (field == "importance" || field == "relevance" || field == "tags")
-}
+func taggingFieldLocked(t *Tagging, field string) bool { return kbwire.TaggingFieldLocked(t, field) }
 
 // putEntity rereads protected fields while holding the metadata lock. A stale pipeline object cannot
 // restore locked links or overwrite a hand edit made while a model or connector was running.
@@ -108,10 +105,28 @@ func (s *Store) putEntity(kind, id string, v any, t *Tagging, manual bool) (err 
 	if err != nil {
 		return err
 	}
-	if !exists && t.persisted {
+	if !exists && t.Persisted {
 		return nil
 	} // forgotten during an external call
 	incoming := protectedEntity(v, t, current, manual)
+	if kind == KindProject && exists {
+		// Only a digest commit or a summary write can change the field records.
+		// Other project writers may have read their copy while a digest was running.
+		keys := []string{"field_coverage", "one_line_needs_summary_review", "one_line"}
+		if !manual {
+			keys = append(keys, "project_mode", "source_urls")
+			if string(current["project_mode"]) == `"reference-only"` {
+				keys = append(keys, "goal", "my_role", "note", "keywords", "status", "kind")
+			}
+		}
+		for _, key := range keys {
+			if value, ok := current[key]; ok {
+				incoming[key] = value
+			} else {
+				delete(incoming, key)
+			}
+		}
+	}
 	before, _ := json.Marshal(current)
 	after, _ := json.Marshal(incoming)
 	changed = !exists || !bytes.Equal(before, after)
@@ -134,7 +149,7 @@ func (s *Store) putEntity(kind, id string, v any, t *Tagging, manual bool) (err 
 			*entity = Topic{}
 		}
 		_ = json.Unmarshal(after, v)
-		t.persisted = true
+		t.Persisted = true
 	}
 	return err
 }
@@ -211,7 +226,7 @@ func protectedEntity(v any, t *Tagging, current map[string]json.RawMessage, manu
 	return incoming
 }
 
-func (s *Store) putSummary(kind, id, text string, manual bool) error {
+func (s *Store) putSummary(kind, id, text string, manual bool, writer ...string) error {
 	if s.readOnly {
 		return ErrReadOnly
 	}
@@ -232,13 +247,18 @@ func (s *Store) putSummary(kind, id, text string, manual bool) error {
 	var t struct {
 		Tagging
 		Status string `json:"status"`
+		Mode   string `json:"project_mode"`
 	}
 	exists, err := readJSON(s.entityPath(kind, id), &t)
 	if err != nil {
 		unlock()
 		return err
 	}
-	if !manual && (!exists || t.fieldLocked("summary") || (kind == KindPerson && t.Status == "ignored")) {
+	if kind == KindProject && t.Mode == referenceOnly {
+		unlock()
+		return fmt.Errorf("%w: cannot save summary", ErrReferenceOnly)
+	}
+	if !manual && (!exists || taggingFieldLocked(&t.Tagging, "summary") || (kind == KindPerson && t.Status == "ignored")) {
 		unlock()
 		return nil
 	}
@@ -249,9 +269,30 @@ func (s *Store) putSummary(kind, id, text string, manual bool) error {
 	if changed {
 		err = writeFile(path, next)
 	}
+	metaChanged := false
+	if err == nil && changed && kind == KindProject {
+		if p, ok := s.Project(id); ok {
+			if len(writer) > 0 {
+				p.recordProjectField("summary", string(next), writer[0], "kb.update", nil)
+			} else {
+				delete(p.FieldCoverage, "summary")
+			}
+			if p.OneLine != "" && (len(writer) > 0 || len(old) > 0) {
+				p.OneLineNeedsReview = true
+				if len(writer) > 0 && !taggingFieldLocked(&p.Tagging, "one_line") {
+					p.Dirty = true
+				}
+			}
+			err = writeJSON(s.entityPath(kind, id), p)
+			metaChanged = err == nil
+		}
+	}
 	unlock()
 	if err == nil && changed {
 		s.notify(kind, id, "summary")
+	}
+	if metaChanged {
+		s.notify(kind, id, "metadata")
 	}
 	return err
 }
@@ -325,12 +366,12 @@ func (e *Engine) unlink(kind, id string, u Update, le linkEdit) error {
 			}
 		}
 		for _, pid := range le.allow["people"] {
-			if err := person(pid, func(p *Person) { p.include("projects", id) }); err != nil {
+			if err := person(pid, func(p *Person) { taggingInclude(&p.Tagging, "projects", id) }); err != nil {
 				return err
 			}
 		}
 		for _, cid := range le.allow["chats"] {
-			if err := chat(cid, func(c *Chat) { c.include("projects", id) }); err != nil {
+			if err := chat(cid, func(c *Chat) { taggingInclude(&c.Tagging, "projects", id) }); err != nil {
 				return err
 			}
 		}
@@ -346,7 +387,7 @@ func (e *Engine) unlink(kind, id string, u Update, le linkEdit) error {
 			}
 		}
 		for _, pid := range le.allow["people"] {
-			if err := person(pid, func(p *Person) { p.include("chats", id) }); err != nil {
+			if err := person(pid, func(p *Person) { taggingInclude(&p.Tagging, "chats", id) }); err != nil {
 				return err
 			}
 		}
@@ -362,7 +403,7 @@ func (e *Engine) unlink(kind, id string, u Update, le linkEdit) error {
 			}
 		}
 		for _, cid := range le.allow["chats"] {
-			if err := chat(cid, func(c *Chat) { c.include("people", id) }); err != nil {
+			if err := chat(cid, func(c *Chat) { taggingInclude(&c.Tagging, "people", id) }); err != nil {
 				return err
 			}
 		}
@@ -384,7 +425,7 @@ func (e *Engine) unlink(kind, id string, u Update, le linkEdit) error {
 			continue
 		}
 		if allowed("projects", slug) && !slices.Contains(u.RemoveProjects, slug) {
-			p.include(list, member)
+			taggingInclude(&p.Tagging, list, member)
 		} else {
 			*p.list(list) = removeStrings(*p.list(list), []string{member})
 			lock(&p.Tagging, list)

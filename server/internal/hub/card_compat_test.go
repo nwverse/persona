@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -218,10 +219,10 @@ func TestCardCompatItemsTouchesOnlyAssistantTextAndKeepsTheNodesSlice(t *testing
 		{ID: "a", Role: "assistant", Kind: proto.KindText, Text: ringReply},
 		{ID: "t", Role: "assistant", Kind: proto.KindToolResult, Text: ringReply},
 	}
-	if got := cardCompatItems(i18n.ZhHans, true, items); &got[0] != &items[0] {
+	if got := cardCompatItems(i18n.ZhHans, true, true, items); &got[0] != &items[0] {
 		t.Fatal("a client that draws rings got a copy")
 	}
-	got := cardCompatItems(i18n.ZhHans, false, items)
+	got := cardCompatItems(i18n.ZhHans, false, true, items)
 	if got[0].Text != ringReply || got[2].Text != ringReply {
 		t.Fatal("a user message or tool result was rewritten")
 	}
@@ -279,6 +280,46 @@ func TestEachClientGetsTheRingOrAViewPushed(t *testing.T) {
 	}
 }
 
+func TestWorkReportProjectionFollowsEachClientWithoutChangingHistory(t *testing.T) {
+	const report = "### Persona work report\n\n- Status: blocked\n- Merged: no\n- Deployed: n/a\n- Waiting: the sample owner\n\n---"
+	const archived = "<closeout status=\"done\">\ndid: reviewed the archive\n</closeout>"
+	items := []proto.Item{
+		{ID: "a1", Role: "assistant", Kind: proto.KindText, Text: "Three examples checked.\n\n" + report},
+		{ID: "u2", Role: "user", Kind: proto.KindText, Text: report},
+		{ID: "t3", Role: "assistant", Kind: proto.KindText, Text: report, FullSize: 6000},
+		{ID: "a4", Role: "assistant", Kind: proto.KindText, Text: archived},
+	}
+	h := &Hub{clients: map[*client]struct{}{}}
+	for _, known := range []bool{true, false} {
+		c := &client{out: make(chan []byte, 1), subs: map[[2]string]bool{{"m1", "s1"}: true}}
+		c.meta.features = map[string]bool{featureMarkdownCloseout: known}
+		addTestClient(h, c)
+	}
+	h.itemsToSubscribers("m1", "s1", items, itemSpan{}, false)
+	for c := range h.clients {
+		var event struct{ Items []proto.Item }
+		if err := json.Unmarshal(<-c.out, &event); err != nil || len(event.Items) != len(items) {
+			t.Fatalf("event = %+v, err = %v", event, err)
+		}
+		got := event.Items[0].Text
+		if c.has(featureMarkdownCloseout) {
+			if got != items[0].Text {
+				t.Errorf("new client got %q", got)
+			}
+		} else if !strings.HasPrefix(got, "Three examples checked.\n\n<closeout status=\"blocked\"") || !strings.HasSuffix(got, "</closeout>") || strings.Contains(got, "### Persona ") {
+			t.Errorf("old client cannot strip the report: %q", got)
+		}
+		for i := 1; i < len(items); i++ {
+			if event.Items[i].Text != items[i].Text {
+				t.Errorf("item %d changed: %+v", i, event.Items[i])
+			}
+		}
+	}
+	if !strings.HasSuffix(items[0].Text, report) {
+		t.Fatal("projection mutated the stored reply")
+	}
+}
+
 // A REST page declares rings in X-Persona-Features, or by matching a connection of its device that declared them.
 func TestRequestWantsRingsByHeaderOrMatchingConnection(t *testing.T) {
 	c := &client{device: "d1"}
@@ -305,5 +346,52 @@ func TestRequestWantsRingsByHeaderOrMatchingConnection(t *testing.T) {
 	}
 	if !req("android/1", "elicitation, persona_card_ring") {
 		t.Fatal("the X-Persona-Features header was not read")
+	}
+}
+
+func TestToolViewsGatedByClientFeatureAndPreserveNodeSlice(t *testing.T) {
+	lat, lon := 39.9, 116.3
+	view := wire.View{Fallback: "Route", Sections: []wire.Section{{Items: []wire.Component{{Type: wire.ComponentMap, Markers: []wire.MapMarker{{ID: "p1", Lat: &lat, Lon: &lon, Label: "Home"}}}}}}}
+	items := []proto.Item{
+		{ID: "r1", Seq: 1, Role: "user", Kind: proto.KindToolResult, Text: "ok", ToolViews: []wire.View{view}},
+		{ID: "f1", Seq: 2, Role: "assistant", Kind: proto.KindFold, Fold: &proto.Fold{Items: 2, Tools: 1, ThroughSeq: 2, ThroughID: "r1", ToolNames: []string{"amap_route"}, Changes: []proto.FoldChange{},
+			ToolViews: []proto.FoldToolView{{ItemID: "r1", ToolUseID: "u1", Tool: "amap_route", View: view}}}},
+	}
+
+	if got := clientItemsCompat(i18n.En, true, true, true, items); &got[0] != &items[0] {
+		t.Fatal("client with tool_views got unnecessary copy")
+	}
+	stripped := clientItemsCompat(i18n.En, true, true, false, items)
+	if len(stripped[0].ToolViews) != 0 || len(stripped[1].Fold.ToolViews) != 0 {
+		t.Fatalf("expected tool views stripped for legacy client: %+v", stripped)
+	}
+	if len(items[0].ToolViews) != 1 || len(items[1].Fold.ToolViews) != 1 {
+		t.Fatal("node slice or fold mutated while stripping tool views")
+	}
+
+	h := &Hub{clients: map[*client]struct{}{}}
+	if !slices.Contains(h.features(), proto.FeatureToolViews) {
+		t.Fatalf("hub features missing %q: %v", proto.FeatureToolViews, h.features())
+	}
+	oldClient := &client{out: make(chan []byte, 2), subs: map[[2]string]bool{{"m1", "s1"}: true}, meta: clientMeta{Platform: "ios-app", Version: "1.0", features: map[string]bool{}}}
+	newClient := &client{out: make(chan []byte, 2), subs: map[[2]string]bool{{"m1", "s1"}: true}, device: "d2", meta: clientMeta{Platform: "web", Version: "2.0", features: map[string]bool{proto.FeatureToolViews: true}}}
+	addTestClient(h, oldClient)
+	addTestClient(h, newClient)
+	h.itemsToSubscribers("m1", "s1", items, itemSpan{}, false)
+
+	var oldEv, newEv struct {
+		Items []proto.Item `json:"items"`
+	}
+	if err := json.Unmarshal(<-oldClient.out, &oldEv); err != nil || len(oldEv.Items) != 2 {
+		t.Fatalf("old client decode: %v", err)
+	}
+	if len(oldEv.Items[0].ToolViews) != 0 || len(oldEv.Items[1].Fold.ToolViews) != 0 {
+		t.Fatalf("old client received tool_views: %+v", oldEv.Items)
+	}
+	if err := json.Unmarshal(<-newClient.out, &newEv); err != nil || len(newEv.Items) != 2 {
+		t.Fatalf("new client decode: %v", err)
+	}
+	if len(newEv.Items[0].ToolViews) != 1 || len(newEv.Items[1].Fold.ToolViews) != 1 {
+		t.Fatalf("new client did not receive tool_views: %+v", newEv.Items)
 	}
 }

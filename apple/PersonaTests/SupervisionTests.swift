@@ -135,6 +135,15 @@ struct SupervisionTests {
         #expect(TodoItem(id: "t", title: "x").reviewBadge == nil)
     }
 
+    @Test func personalVerificationIsOpenUntilPass() {
+        let ledger = TaskSupervision(supervisor: "main", state: "user_check", reviews: [.init(verdict: "accepted")])
+        let waiting = sup(ledger)
+        #expect(waiting.doneAt == nil && waiting.reviewState == .userCheck && !waiting.acceptanceStands)
+        #expect(waiting.reviewBadge?.label == "待你验收" && waiting.reviewBadge?.tone == .caution)
+        let passed = sup(ledger, done: true, doneBy: "review")
+        #expect(passed.reviewState == .accepted && passed.reviewBadge?.label == "已验收")
+    }
+
     /// An accepted or cancelled task the user reopened goes on again.
     @Test func reopenedAcceptedCountsAsInProgress() {
         let accepted = TaskSupervision(supervisor: "main", doneWhen: ["A"], state: "accepted")
@@ -143,6 +152,18 @@ struct SupervisionTests {
         #expect(reopened.reviewState == .ongoing && reopened.reviewBadge?.label == "督办中")
         let cancelled = TaskSupervision(supervisor: "main", state: "cancelled")
         #expect(sup(cancelled, done: false).reviewState == .ongoing)
+    }
+
+    /// A continuation's new round (#11553): `task_plan` continues reopened an accepted task with a new Agent, and the hub
+    /// kept the acceptance in the reviews but put the ledger back to going on. The history alone never makes the to-do
+    /// accepted; more work sent to the accepted task's Agent (#3156) keeps the ledger, and the chip, accepted.
+    @Test func aContinuationShowsItsNewRoundNotTheEarlierAcceptance() {
+        let earlier = TaskSupervision.Review(verdict: "accepted", checks: [.init(criterion: "A", met: true)])
+        let continued = sup(.init(supervisor: "main", doneWhen: ["A"], state: "", reviews: [earlier]), done: false)
+        #expect(!continued.acceptanceStands && continued.reviewState == .ongoing)
+        #expect(continued.reviewBadge?.label == "督办中" && continued.reviewBadge?.tone == .neutral)
+        let standing = sup(.init(supervisor: "main", doneWhen: ["A"], state: "accepted", reviews: [earlier]), done: false)
+        #expect(standing.acceptanceStands && standing.reviewBadge?.label == "已验收")
     }
 
     @Test func statusLabelOfAReviewedTask() {
@@ -320,6 +341,24 @@ struct ChatSupervisionTests {
         #expect(!visible([input(1), use, result(3, use, text: #"{"visibility":"user"}"#, error: true)]))
     }
 
+    @Test func antigravityTimestampWrappedFinishReceiptsFoldFallbackRepliesWithoutAlteringPlainText() {
+        let headers = "Created At: 2026-11-23T16:10:40+08:00\nCompleted At: 2026-11-23T16:10:44+08:00\n" +
+            "Created At: 2026-11-23T16:10:40+08:00\nCompleted At: 2026-11-23T16:10:44+08:00\n"
+        let silentReceipt = #"{"level":"triage","summary":"All quiet.","visibility":"silent"}"#
+        #expect(HubNaming.stripToolResultTimestampHeaders(headers + silentReceipt) == silentReceipt)
+        #expect(HubNaming.stripToolResultTimestampHeaders("Created At: 2026-11-23T09:10:40Z\r\nCompleted At: 2026-11-23T09:10:44Z\r\nOutput:\r\n" + silentReceipt) == silentReceipt)
+        let plain = "Created At: 2026-11-23\nCompleted At: 2026-11-23\nHello"
+        #expect(HubNaming.stripToolResultTimestampHeaders(plain) == plain)
+        let single = "Created At: 2026-11-23T16:10:40+08:00\nTitle: Notes"
+        #expect(HubNaming.stripToolResultTimestampHeaders(single) == single)
+
+        let finish = call(2, "mcp_persona_supervision_finish")
+        let fallback = Item(id: "a4#0", seq: 4, role: "assistant", kind: .text, text: "OK")
+        #expect(!visible([input(1), finish, result(3, finish, text: headers + silentReceipt), fallback]))
+        #expect(visible([input(1), finish, result(3, finish, text: headers + #"{"visibility":"user"}"#), fallback]))
+        #expect(visible([input(1), finish, result(3, finish, text: "Created At: yesterday\n" + silentReceipt), fallback]))
+    }
+
     @Test func reviewsPromoteOnlyAcceptedOrNeedsUserWithSuccessfulResults() {
         for verdict in ["accepted", "needs_user", "rework", "cancelled", "pending_review"] {
             let use = call(2, "task_review", input: .object(["verdict": .string(verdict)]))
@@ -358,7 +397,7 @@ struct ChatSupervisionTests {
         folded.fold?.supervisionUser = nil
         folded.supervisionUser = nil
         #expect(!visible([input(1), folded]))
-        #expect(ChatCache.folder == "chats-v21")
+        #expect(ChatCache.folder == "chats-v25")
     }
 
     @Test func queuedSupervisionAndTheNextGenuineQueuedInputAreSeparateTurns() {

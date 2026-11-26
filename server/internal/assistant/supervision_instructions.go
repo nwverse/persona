@@ -2,8 +2,9 @@ package assistant
 
 import (
 	"context"
-	"slices"
+	"fmt"
 
+	"github.com/nwverse/persona/server/internal/assistant/supervisionrole"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -12,14 +13,31 @@ import (
 // It is never read from RPC parameters or inferred from a model purpose supplied by a caller.
 type supervisionStartup struct{}
 
-// runtimeConversation reports a known session hosted by the runtime protocol, which has no separate policy channel.
+// runtimeSessionSupportsSupervisionPolicy reports an explicit capability, never an inference from a launcher name.
+func runtimeSessionSupportsSupervisionPolicy(c proto.Session) bool {
+	return c.SourceKind == proto.SourceRuntime && c.Capabilities != nil && c.Capabilities.SupervisionPolicy
+}
+
+// runtimeSessionLacksSupervisionPolicy reports a session hosted by the runtime protocol whose runtime has not
+// advertised supervision_policy support. Absent or unknown capability stays conservatively unsupported (#10338, #11173).
+func runtimeSessionLacksSupervisionPolicy(c proto.Session) bool {
+	return c.SourceKind == proto.SourceRuntime && !runtimeSessionSupportsSupervisionPolicy(c)
+}
+
+// runtimeWithSupervisionPolicy reports a known runtime session with an explicit separate policy channel.
+func (s *Service) runtimeWithSupervisionPolicy(ctx context.Context, machine, id string) bool {
+	c, ok := s.session(ctx, machine, id)
+	return ok && runtimeSessionSupportsSupervisionPolicy(c)
+}
+
+// runtimeWithoutSupervisionPolicy reports a known session hosted by a runtime that lacks a separate policy channel.
 // Launcher names and agent kinds alone do not identify that execution path.
-func (s *Service) runtimeConversation(ctx context.Context, machine, id string) bool {
+func (s *Service) runtimeWithoutSupervisionPolicy(ctx context.Context, machine, id string) bool {
 	if id == "" {
 		return false
 	}
 	c, ok := s.session(ctx, machine, id)
-	return ok && c.SourceKind == proto.SourceRuntime
+	return ok && runtimeSessionLacksSupervisionPolicy(c)
 }
 
 func (s *Service) supervisionInstructions(ctx context.Context, machine, id string) (string, error) {
@@ -29,17 +47,19 @@ func (s *Service) supervisionInstructions(ctx context.Context, machine, id strin
 	}
 	main := id == cfg.Main
 	if main {
-		if machine != cfg.mainRouteMachine() || cfg.MainSupervisesOwnTasks == nil || !*cfg.MainSupervisesOwnTasks {
+		if machine != cfg.mainRouteMachine() {
 			return "", nil
 		}
 	} else if machine != cfg.MachineID {
 		return "", nil
 	}
 	c, known := s.session(ctx, machine, id)
-	if known && c.SourceKind == proto.SourceRuntime {
+	if known && runtimeSessionLacksSupervisionPolicy(c) {
 		return "", nil
 	}
-	if !main && !(id == cfg.BackgroundSupervisor && cfg.BackgroundSupervisorMachineID == machine) && !slices.Contains(cfg.Leaders, id) {
+	background := (id == cfg.BackgroundSupervisor && cfg.BackgroundSupervisorMachineID == machine) || s.isBackgroundCallerOn(ctx, machine, id)
+	leader := s.isLeader(ctx, id)
+	if !main && !background && !leader {
 		// Side chats genuinely supervise their own open tasks (#4669). Sharing the
 		// directory, a scheduled purpose, or the ability to plan is not a role.
 		if known && (!c.Assistant || c.Space != "") {
@@ -68,8 +88,39 @@ func (s *Service) supervisionInstructions(ctx context.Context, machine, id strin
 	} else if guest {
 		return "", nil
 	}
-	// A leader's own direction notes follow its policy (direction_notes.go): changing them restarts only this one.
-	return s.leaderPolicy(ctx, id, prompts.RenderSupervisionInstructions()), nil
+	role := supervisionrole.RoleSide()
+	switch {
+	case main:
+		role = supervisionrole.RoleMain()
+	case background:
+		role = supervisionrole.RoleBackground()
+	case leader:
+		role = supervisionrole.RoleLeader()
+	}
+	idle := leadIdle(c, known)
+	if idle {
+		if err := s.recordSupervisionRole(ctx, machine, id, role); err != nil {
+			// Role persistence must not add a new owner-send failure mode. Without a durable baseline, retain the legacy
+			// complete policy for this send and retry the compact selection on a later idle send.
+			policy := prompts.RenderSupervisionInstructions()
+			return s.leaderPolicy(ctx, id, policy, false, role)
+		}
+	}
+	policyRole := role
+	if known && !idle {
+		if held, ok := s.workingSupervisionRole(ctx, machine, id); ok {
+			policyRole = held
+		} else {
+			// A pre-role-filtering process has no baseline. Keep its complete legacy policy until an idle send instead of
+			// presenting a new fingerprint that the node must refuse as busy.
+			policy := prompts.RenderSupervisionInstructions()
+			return s.leaderPolicy(ctx, id, policy, false, role)
+		}
+	}
+	policy := supervisionPolicy(policyRole)
+	// A leader's own direction notes and leader/side role changes follow its role policy (direction_notes.go): both wait
+	// for an idle send and roll back together if that send is refused. Former leaders keep remaining tasks as side supervisors.
+	return s.leaderPolicy(ctx, id, policy, idle, role)
 }
 
 func (s *Service) putSupervisionInstructions(ctx context.Context, machine, id string, p map[string]any) error {
@@ -79,8 +130,14 @@ func (s *Service) putSupervisionInstructions(ctx context.Context, machine, id st
 	if err != nil {
 		return err
 	}
-	if id == "" && ctx.Value(supervisionStartup{}) == true && p["guest"] == nil {
-		text = prompts.RenderSupervisionInstructions()
+	if id == "" && p["guest"] == nil {
+		if startup := ctx.Value(supervisionStartup{}); startup != nil {
+			role, ok := startup.(supervisionrole.Role)
+			if !ok {
+				return fmt.Errorf("invalid supervision startup role %T", startup)
+			}
+			text = supervisionPolicy(role)
+		}
 	}
 	p["supervision_instructions"] = text
 	return nil

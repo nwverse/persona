@@ -34,10 +34,15 @@ func (t *Todo) setPlan(row db.TodoRow) {
 	t.Project = row.Project
 	t.Kind = row.Kind
 	t.SeenAt = row.SeenAt
+	t.AutoSeenUndone = row.AutoSeenUndone
 	t.RestoredAt, t.SomedayUntil = row.RestoredAt, row.SomedayUntil
 	t.InboxItem = row.InboxItem
 	t.PartOf, t.After = row.PartOf, slices.Clone(row.After)
 	t.RequireAcceptedAfter = row.RequireAcceptedAfter
+	t.Responsible = cloneResponsible(row.Responsible)
+	t.Audience = row.Audience
+	t.DirectionID = row.DirectionID
+	t.ItemType = row.ItemType
 }
 
 // keepPlan writes t's plan, project and the owner's marks (seen, restored, Someday) into row: a row made in memory for a
@@ -51,10 +56,15 @@ func (t *Todo) keepPlan(row *db.TodoRow) {
 	row.Project = t.Project
 	row.Kind = t.Kind
 	row.SeenAt = t.SeenAt
+	row.AutoSeenUndone = t.AutoSeenUndone
 	row.RestoredAt, row.SomedayUntil = t.RestoredAt, t.SomedayUntil
 	row.InboxItem = t.InboxItem
 	row.PartOf, row.After = t.PartOf, slices.Clone(t.After)
 	row.RequireAcceptedAfter = t.RequireAcceptedAfter
+	row.Responsible = cloneResponsible(t.Responsible)
+	row.Audience = t.Audience
+	row.DirectionID = t.DirectionID
+	row.ItemType = t.ItemType
 }
 
 // todoRowOf is todo t as a row (what memory has of it; the store-less PATCH changes it).
@@ -97,10 +107,13 @@ func (t Todo) dueText(loc *time.Location) string {
 // todoPlanIn is the plan in a POST or PATCH body: due_at (RFC 3339) or due_date (YYYY-MM-DD), remind_at (RFC 3339),
 // priority. A field left out is kept, null (or "") clears it.
 type todoPlanIn struct {
-	DueAt    json.RawMessage `json:"due_at"`
-	DueDate  json.RawMessage `json:"due_date"`
-	RemindAt json.RawMessage `json:"remind_at"`
-	Priority *string         `json:"priority"`
+	DueAt       json.RawMessage `json:"due_at"`
+	DueDate     json.RawMessage `json:"due_date"`
+	RemindAt    json.RawMessage `json:"remind_at"`
+	Priority    *string         `json:"priority"`
+	Audience    *string         `json:"audience"`
+	DirectionID *string         `json:"direction_id"`
+	ItemType    *string         `json:"item_type"`
 }
 
 // edit puts the plan into e; an error says which field could not be read.
@@ -132,6 +145,17 @@ func (p todoPlanIn) edit(e *db.TodoEdit) error {
 			return err
 		}
 		e.Priority = &pr
+	}
+	if p.Audience != nil {
+		aud, err := todoAudience(*p.Audience)
+		if err != nil {
+			return err
+		}
+		e.Audience = &aud
+	}
+	if p.DirectionID != nil {
+		dir := strings.TrimSpace(*p.DirectionID)
+		e.DirectionID = &dir
 	}
 	return nil
 }
@@ -176,16 +200,33 @@ func todoPriority(p string) (string, error) {
 	return "", fmt.Errorf("priority must be high, normal or low, not %q", p)
 }
 
+// todoAudience validates an optional to-do audience: "", "human", or "autonomous" (#14619).
+func todoAudience(a string) (string, error) {
+	trimmed := strings.TrimSpace(a)
+	if err := db.ValidateTodoAudience(trimmed); err != nil {
+		return "", err
+	}
+	return trimmed, nil
+}
+
 // createPlainTodo makes a todo of the user's (no conversation, no plan of tasks) with plan's due date, reminder and
 // priority, and tells the apps.
 func (s *Service) createPlainTodo(ctx context.Context, title, notes string, plan db.TodoEdit, bindings ...*repository.CreateBindings) (Todo, error) {
-	return s.createTodoFrom(ctx, title, notes, "", plan, bindings...)
+	return s.createPlainTodoWithImages(ctx, title, notes, plan, nil, bindings...)
+}
+
+func (s *Service) createPlainTodoWithImages(ctx context.Context, title, notes string, plan db.TodoEdit, images []db.TodoImage, bindings ...*repository.CreateBindings) (Todo, error) {
+	return s.createTodoFromWithImages(ctx, title, notes, "", plan, images, bindings...)
 }
 
 // createTodoFrom is createPlainTodo for a to-do made from an Inbox row (#6480): inboxItem is that row's id, "" for none.
 func (s *Service) createTodoFrom(ctx context.Context, title, notes, inboxItem string, plan db.TodoEdit, bindings ...*repository.CreateBindings) (Todo, error) {
+	return s.createTodoFromWithImages(ctx, title, notes, inboxItem, plan, nil, bindings...)
+}
+
+func (s *Service) createTodoFromWithImages(ctx context.Context, title, notes, inboxItem string, plan db.TodoEdit, images []db.TodoImage, bindings ...*repository.CreateBindings) (Todo, error) {
 	now := time.Now().UTC()
-	row := db.TodoRow{ID: "todo_" + randomHex(8), Title: title, Notes: notes, CreatedAt: now, UpdatedAt: now, InboxItem: inboxItem}
+	row := db.TodoRow{ID: "todo_" + randomHex(8), Title: title, Notes: notes, CreatedAt: now, UpdatedAt: now, InboxItem: inboxItem, Images: images}
 	plan.Title, plan.Notes, plan.Done = nil, nil, nil
 	plan.Apply(&row, now)
 	return s.insertTodo(ctx, row, bindings...)
@@ -193,7 +234,7 @@ func (s *Service) createTodoFrom(ctx context.Context, title, notes, inboxItem st
 
 // createDirectionTodo makes a piece of leader's direction (#5846): a todo with plan's due date, reminder, priority and
 // project, opened by the leader and supervised by it, with no agent and no done_when, as a Lark topic opens one
-// (feishu_thread_open.go). So the direction tree lists it under that direction (as not started until an agent works on
+// (the lark module's thread_open.go). So the direction tree lists it under that direction (as not started until an agent works on
 // it, direction_tree.go), and task_plan's todo_id can run an agent on it later instead of opening a second todo.
 func (s *Service) createDirectionTodo(ctx context.Context, leader, title, notes string, plan db.TodoEdit, bindings ...*repository.CreateBindings) (Todo, error) {
 	now := time.Now().UTC()
@@ -205,7 +246,12 @@ func (s *Service) createDirectionTodo(ctx context.Context, leader, title, notes 
 	if err != nil {
 		return Todo{}, err
 	}
-	s.superviseTodo(ctx, t.ID, leader, nil, 0)
+	if err := s.superviseTodo(ctx, t.ID, leader, nil, 0); err != nil {
+		if rerr := s.removeTodo(context.WithoutCancel(ctx), t.ID); rerr != nil {
+			s.logf("todo %s: take back after supervision failure: %v", t.ID, rerr)
+		}
+		return Todo{}, err
+	}
 	if cur, ok := s.todoNow(t.ID); ok {
 		t = cur
 	}
@@ -229,9 +275,22 @@ func (s *Service) createPieceTodo(ctx context.Context, conversation, title, note
 // todo it closes has its outcome recorded and a question's to-do answered as dropped. db.ErrTodoNotFound when it is not
 // there.
 func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo, error) {
+	if e.Audience != nil {
+		if err := db.ValidateTodoAudience(*e.Audience); err != nil {
+			return Todo{}, err
+		}
+	}
+	if e.ItemType != nil {
+		if err := db.ValidateTodoItemType(strings.TrimSpace(*e.ItemType)); err != nil {
+			return Todo{}, err
+		}
+	}
 	cur, ok := s.todoNow(id)
 	if !ok {
 		return Todo{}, db.ErrTodoNotFound
+	}
+	if e.Done != nil && *e.Done && cur.DoneAt == nil && s.outsideBackingPending(id) {
+		return Todo{}, errOutsideDecisionPending
 	}
 	if cur.isConcern() && cur.DoneAt == nil && e.Done != nil && *e.Done {
 		return Todo{}, db.ErrConcernUnreported // only its report closes it (concerns.go); the store checks it again
@@ -243,13 +302,45 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 	if f := s.editWriteHook; f != nil {
 		f(id)
 	}
-	s.todos.writing.Lock()
+	reopening := e.Done != nil && !*e.Done
+	var fencedSessions [][2]string
+	if reopening {
+		fencedSessions = todoProtectedSessions(cur, e.Responsible)
+	} else if e.SetResponsible && e.Responsible != nil && e.Responsible.Kind == db.ResponsibleSession && e.Responsible.SessionID != "" {
+		fencedSessions = [][2]string{{e.Responsible.MachineID, e.Responsible.SessionID}}
+	}
+	for {
+		if reopening {
+			// Keep a concurrent ledger writer from publishing an older state over the reopened row.
+			s.supervise.writeMu.Lock()
+		}
+		s.todos.writing.Lock()
+		if ch := s.idleCloseFenceForSessions(fencedSessions); ch != nil {
+			s.todos.writing.Unlock()
+			if reopening {
+				s.supervise.writeMu.Unlock()
+			}
+			select {
+			case <-ch:
+				continue
+			case <-ctx.Done():
+				return Todo{}, ctx.Err()
+			}
+		}
+		break
+	}
+	unlock := func() {
+		s.todos.writing.Unlock()
+		if reopening {
+			s.supervise.writeMu.Unlock()
+		}
+	}
 	if links {
 		// Checked again with the graph held still: a write since the caller's check may have changed the request
 		// (todo_pieces.go). A *pieceError when it no longer holds.
 		l, err := s.recheckPieces(id, e)
 		if err != nil {
-			s.todos.writing.Unlock()
+			unlock()
 			return Todo{}, err
 		}
 		e.PartOf, e.After = l.PartOf, l.After
@@ -259,7 +350,7 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 	if st := s.todoDB(); st != nil {
 		var err error
 		if row, err = st.EditTodo(ctx, id, e, now); err != nil {
-			s.todos.writing.Unlock()
+			unlock()
 			return Todo{}, err
 		}
 	} else {
@@ -267,7 +358,7 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 		// again from the copy read before the lock)
 		base, ok := s.todoNow(id)
 		if !ok {
-			s.todos.writing.Unlock()
+			unlock()
 			return Todo{}, db.ErrTodoNotFound
 		}
 		r := todoRowOf(base)
@@ -275,7 +366,7 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 		row = &r
 	}
 	out, doneKeys, applied := s.setTodoRow(id, *row, nil)
-	s.todos.writing.Unlock()
+	unlock()
 	if applied {
 		s.todoRowSet(ctx, doneKeys)
 	}
@@ -283,7 +374,19 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 		// Done by the user: what the task came to goes in its decisions and its projects' timelines (#2820). cur
 		// still has the agents that were working on it.
 		s.goRecordTaskOutcome(cur, *row.DoneAt)
+		s.todoPushOver(id)
 		s.askTodoClosed(context.WithoutCancel(ctx), id, row.Title) // a question's to-do closed unanswered (ask_todo.go)
+		maySatisfyAfter := row.StartError == "" && row.DoneBy != db.DoneByCancelled
+		s.onTodoWorkspaceReleased(ctx, cur, maySatisfyAfter)
+		if maySatisfyAfter {
+			s.evaluateTodoAfterDependents(ctx, id)
+			s.evaluateParentCloseoutForChild(ctx, id)
+		}
+	}
+	if reopening && row.DoneAt == nil && (cur.DoneAt != nil || e.RestartWork ||
+		row.ReopenedAt != nil && (cur.ReopenedAt == nil || !row.ReopenedAt.Equal(*cur.ReopenedAt))) {
+		s.resetTodoReadyWake(ctx, id)
+		s.resetParentCloseoutWake(ctx, id)
 	}
 	return out, nil
 }
@@ -294,10 +397,15 @@ func (s *Service) deleteTodo(ctx context.Context, id string) error {
 	if !ok {
 		return db.ErrTodoNotFound
 	}
+	if s.outsideBackingPending(id) {
+		return errOutsideDecisionPending
+	}
 	if err := s.removeTodo(ctx, id); err != nil {
 		return err
 	}
+	s.todoPushOver(id)
 	s.askTodoClosed(context.WithoutCancel(ctx), id, cur.Title) // a question's to-do deleted unanswered (ask_todo.go)
+	s.onTodoWorkspaceReleased(ctx, cur, false)
 	return nil
 }
 
@@ -406,23 +514,46 @@ func (s *Service) remind(ctx context.Context, id string, at, now time.Time) {
 	title, body := s.reminderText(ctx, todo, at, now)
 	larkTitle, larkBody := s.reminderLarkText(ctx, todo, at, now)
 	set := s.settings(ctx)
-	channelTitle, channelBody := s.reminderChannelText(ctx, todo, title, body)
+	// Decided once, on the fullest copy's words, so the phone, the channels and Feishu agree.
+	private, known, space := s.todoReminderPrivate(ctx, todo, larkTitle+"\n"+larkBody)
+	channelTitle, channelBody := s.reminderCopyText(ctx, private, space, title, body)
 	// A reminder the owner set for themself: theirs to act on, so P0 even in the hub's low-distraction mode, keyed by
 	// to-do and due time (each due time rings once).
-	s.push(ctx, Notification{Subtitle: i18n.T(s.lang(ctx), "assistant-todos.remind_subtitle"), DeviceID: set.MachineID,
+	s.push(withCard(ctx, cardTodoRemind), Notification{Subtitle: i18n.T(s.lang(ctx), "assistant-todos.remind_subtitle"), DeviceID: set.MachineID,
 		SessionID: set.Main, Title: channelTitle, Body: channelBody, Level: assistantwire.LevelP0,
 		RelatedKey: "todo-remind:" + id + "@" + at.UTC().Format(time.RFC3339)})
 	// Only the Feishu copy gets the full notes, to-do deep link and reply context. Ordinary phone and other-channel
-	// copies keep their existing short text; a health task's content stays behind the generic notice on every copy.
-	go s.feishuTodoReminder(set.MachineID, set.Main, larkTitle, larkBody, todo)
+	// copies keep their existing short text; the content of a task from a space that redacts stays behind the generic
+	// notice on every copy.
+	// Feishu's copy, which carries the notes and a link, also stays behind the notice when the origin cannot be told,
+	// with the notice it always had then.
+	lark := &todoReminderSend{private: private || !known, space: space}
+	if !private && !known {
+		lark.noticeTitle, lark.noticeBody = spaceNotice(s.botLang(ctx))
+	}
+	go s.feishuTodoReminderSend(set.MachineID, set.Main, larkTitle, larkBody, todo, lark)
 	go s.channelPush(set.MachineID, set.Main, channelTitle, channelBody)
 	s.logf("todo %s: reminded (due %s)", id, at.Format(time.RFC3339))
 }
 
-// reminderChannelText applies the health space's outbound rule to phone and channel copies; ordinary text is unchanged.
+// todoReminderPrivate is whether a reminder of t saying text leaves as only a notice (exitPolicy: the text's own
+// categories and its origin track's), whether its origin could be told, and its track.
+func (s *Service) todoReminderPrivate(ctx context.Context, t Todo, text string) (private, known bool, space string) {
+	space, known = s.selfSpace(ctx, t.Origin)
+	return s.exitPolicy(ctx, text, t.Origin, space).Redact, known, space
+}
+
+// reminderChannelText applies the outbound rule to the phone and channel copies of t's reminder saying title and
+// body; ordinary text is unchanged.
 func (s *Service) reminderChannelText(ctx context.Context, t Todo, title, body string) (string, string) {
-	if s.todoInHealth(ctx, t) {
-		return healthNotice(s.lang(ctx))
+	private, _, space := s.todoReminderPrivate(ctx, t, title+"\n"+body)
+	return s.reminderCopyText(ctx, private, space, title, body)
+}
+
+// reminderCopyText is a reminder's phone or channel copy: only a notice when it is private (from track space).
+func (s *Service) reminderCopyText(ctx context.Context, private bool, space, title, body string) (string, string) {
+	if private {
+		return s.redactedNotice(ctx, s.lang(ctx), space)
 	}
 	return title, body
 }

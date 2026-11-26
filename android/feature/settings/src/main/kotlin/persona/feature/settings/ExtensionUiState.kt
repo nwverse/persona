@@ -88,8 +88,18 @@ internal object ExtensionViewText {
     /** [askText] when [extension] is the subscription pages; every other page refuses the link. */
     fun askFrom(extension: String, url: String?): String? = if (extension == SUBSCRIPTIONS_UI) askText(url) else null
 
+    /** A space conversation's machine and session, never a general app link. */
+    fun spaceConversation(url: String?): Pair<String, String>? {
+        val uri = runCatching { java.net.URI(url ?: return null) }.getOrNull() ?: return null
+        if (uri.scheme?.lowercase() != "persona" || uri.rawAuthority != "tracks" || uri.rawQuery != null || uri.rawFragment != null || uri.userInfo != null) return null
+        val parts = uri.rawPath?.removePrefix("/")?.split("/") ?: return null
+        if (parts.size != 3 || parts.any { it.isEmpty() || it.length > 256 || !it.all { c -> c.isLetterOrDigit() || c in "_.:-" } }) return null
+        if (parts[1] == "health") return null
+        return parts[0] to parts[2]
+    }
+
     /** Which `open_url` a button may bring back: https, and on the subscription pages also Set Up with …. */
-    fun opens(extension: String, url: String?): Boolean = isHttps(url) || askFrom(extension, url) != null
+    fun opens(extension: String, url: String?): Boolean = isHttps(url) || askFrom(extension, url) != null || extension == "space-conversations" && spaceConversation(url) != null
 
     /** A query component, with `+` kept (the pages percent-encode; they do not use form encoding). */
     private fun decodeQuery(raw: String): String? =
@@ -581,10 +591,11 @@ internal class ExtensionViewModel(
         val action = control.action
         val values = (if (action.submit) state.value.values else emptyMap()) + action.values.orEmpty() + (control.name to value)
         val result = api.uiAction(extension, ui, action.id, context, currentState(), values)
+        val nextView = result.view
         when {
-            result.view != null -> mutable.update { s ->
-                val fresh = ExtensionViewText.fields(result.view)
-                s.copy(view = result.view, values = fresh + s.values.filterKeys { it in fresh }, error = null, drawnAt = now())
+            nextView != null -> mutable.update { s ->
+                val fresh = ExtensionViewText.fields(nextView)
+                s.copy(view = ExtensionCodeReview.keepLoaded(s.view, nextView), values = fresh + s.values.filterKeys { it in fresh }, error = null, drawnAt = now())
             }
             result.items.isNotEmpty() -> mutable.update { s -> s.copy(view = s.view?.let { ExtensionCodeReview.patchView(it, result.items) }) }
             result.toast == null && result.openUrl == null && result.push == null && !result.pop -> redraw()
@@ -595,10 +606,12 @@ internal class ExtensionViewModel(
 
     /** Draws the view again without holding the page (a control's answer said nothing). */
     private suspend fun redraw() {
-        val view = runCatching { api.renderUi(extension, ui, context, currentState()) }.getOrNull() ?: return
+        val view = try { api.renderUi(extension, ui, context, currentState()) }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (_: Exception) { return }
         mutable.update { s ->
             val fresh = ExtensionViewText.fields(view)
-            s.copy(view = view, values = fresh + s.values.filterKeys { it in fresh }, drawnAt = now())
+            s.copy(view = ExtensionCodeReview.keepLoaded(s.view, view), values = fresh + s.values.filterKeys { it in fresh }, drawnAt = now())
         }
     }
 
@@ -629,7 +642,7 @@ internal class ExtensionViewModel(
                 mutable.update { s ->
                     // What was typed stays; the view's new fields come in with its values.
                     val fresh = ExtensionViewText.fields(view)
-                    s.copy(view = view, values = fresh + s.values.filterKeys { it in fresh }, error = null, drawnAt = now())
+                    s.copy(view = ExtensionCodeReview.keepLoaded(s.view, view), values = fresh + s.values.filterKeys { it in fresh }, error = null, drawnAt = now())
                 }
             }
             ExtensionActionOutcome(result.toast?.takeIf { it.isNotBlank() }, result.openUrl?.takeIf(opens), push = result.push, pop = result.pop)
@@ -670,8 +683,9 @@ internal class ExtensionViewModel(
             val current = state.value
             val result = api.uiAction(extension, ui, action.id, context, current.view?.state ?: initialState,
                 ExtensionViewText.sent(action, current.values, values))
+            val nextView = result.view
             when {
-                result.view != null -> mutable.update { it.copy(view = result.view, values = ExtensionViewText.fields(result.view), error = null, drawnAt = now()) }
+                nextView != null -> mutable.update { it.copy(view = ExtensionCodeReview.keepLoaded(it.view, nextView), values = ExtensionViewText.fields(nextView), error = null, drawnAt = now()) }
                 // UI version 5: components in place, or lines for a diff, say enough
                 result.items.isNotEmpty() -> mutable.update { s -> s.copy(view = s.view?.let { ExtensionCodeReview.patchView(it, result.items) }) }
                 result.lines != null -> Unit

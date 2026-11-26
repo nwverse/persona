@@ -92,6 +92,9 @@ func ProjectEfforts(levels, vocab []string) []string {
 	return out
 }
 
+// ModeDefault applies the ordinary permission rules.
+const ModeDefault = "default"
+
 // ModeBypass skips every permission prompt; a headless claude only takes it at start (--permission-mode).
 const ModeBypass = "bypassPermissions"
 
@@ -158,7 +161,7 @@ type Session struct {
 	Capabilities     *SessionCapabilities `json:"capabilities,omitempty"`
 	IsSubagent       bool                 `json:"is_subagent,omitempty"`
 	Attached         bool                 `json:"attached,omitempty"`
-	// CanFork: "Branch to new chat" works for it (a Claude Code conversation the node can copy, node/fork.go); older nodes
+	// CanFork: "Branch to new chat" works for it (node/fork.go); older nodes
 	// never say so, and the clients hide it.
 	CanFork          bool `json:"can_fork,omitempty"`
 	StartedByPersona bool `json:"started_by_persona"`
@@ -218,11 +221,40 @@ type Session struct {
 	AgentSurface string `json:"agent_surface,omitempty"`
 	Launcher     string `json:"launcher,omitempty"`
 	Model        string `json:"model,omitempty"`
+	// RequestedModel is the last model passed to a Persona-managed process.
+	// Nil means an older node or an observed session; an empty value means launcher default.
+	// Model remains the transcript-reported name, which a gateway may rewrite.
+	RequestedModel *string `json:"requested_model,omitempty"`
 	// PermissionMode and Effort are what Claude Code runs with now: default / acceptEdits / plan / auto /
 	// bypassPermissions, and low … max. Empty while unknown (before the first turn, Codex). A Codex thread the phone
 	// drives through its app-server has an Effort too (Codex's levels, see Efforts) but never a PermissionMode.
 	PermissionMode string `json:"permission_mode,omitempty"`
 	Effort         string `json:"effort,omitempty"`
+	// PendingEffort is a terminal change waiting for this Claude Code turn to end. If the attempt fails, the
+	// target stays visible and messages remain held until the user chooses an effort again. A pointer keeps
+	// optional effort metadata within the row size budget.
+	PendingEffort      *string `json:"pending_effort,omitempty"`
+	EffortChangeFailed bool    `json:"effort_change_failed,omitempty"`
+	// ContextRestartRecommended: the latest three measured requests each used over 300,000 input
+	// tokens since the last compaction. Omitted when false or the runtime has no request-level evidence.
+	// Kept with EffortChangeFailed so it fits the row's allocation size class.
+	ContextRestartRecommended bool `json:"context_restart_recommended,omitempty"`
+	// OffLauncher: Persona started this Claude Code Agent on Launcher, but the claude that runs it now was not started
+	// by Persona's command (it lacks Persona's --mcp-config): herdr's bare `claude --resume <id>` after a restart on a
+	// herdr older than 0.9.2, or a resume typed by hand (#11792). Launcher's settings, model, MCP and hooks do not
+	// apply to it, and a launcher switch to Launcher itself brings it back there. Beside EffortChangeFailed, in its
+	// padding: a Session stays in its allocation size class.
+	OffLauncher bool `json:"off_launcher,omitempty"`
+	// LogicalPlaceholder is manager-internal provenance: this row stands in for a logical conversation whose active
+	// physical segment is not listed. Its Assistant identity comes from the logical root, not from a physical Cwd.
+	// It occupies the last byte of padding before BackgroundStalledSince, keeping Session in its allocation size class.
+	LogicalPlaceholder bool `json:"-"`
+	// BackgroundStalledSince (#13744): the time since which this session's background commands have used no CPU and
+	// written no output, set only when a known worker (a build, tests, a download) runs there and that has lasted ten
+	// minutes while the turn is over. State stays working: a running tool is work, this only tells a client the work
+	// looks stuck. Zero (omitted) otherwise. Whole seconds in a uint32, in the padding before Ultracode: a Session
+	// stays in its allocation size class (TestSessionFitsItsSizeClass).
+	BackgroundStalledSince UnixTime32 `json:"background_stalled_since,omitempty"`
 	// Ultracode is Claude Code's independent session-only workflow switch: nil means unknown.
 	// UltracodePending (beside AsksRead) means a requested change waits for an idle input box; LostAt asks the client
 	// to offer reopening after a resumed process reset an enabled switch. Reopening or dismissing the notice clears
@@ -254,8 +286,8 @@ type Session struct {
 	// ServiceTier is the acknowledged native speed, omitted while unknown.
 	ServiceTier  string        `json:"service_tier,omitempty"`
 	ServiceTiers []ServiceTier `json:"service_tiers,omitempty"`
-	// Space is the assistant's space it runs in: "health" for the health space's (docs/assistant/health.md), "" for the
-	// assistant's own. Set by the hub on the assistant's conversations.
+	// Space is "health" for a session in the health space (docs/assistant/health.md), or empty otherwise.
+	// The node can preserve it from the start directory even when a live pane's working directory moves.
 	Space string `json:"space,omitempty"`
 	// ModelPick is the launcher / model / effort picked for one of the assistant's conversations, which its next
 	// messages run on (#5033, docs/assistant/model-config.md "A conversation's own model"); nil follows Model
@@ -408,9 +440,11 @@ type Session struct {
 	// (docs/assistant/todos.md "State calculation rules", #1516).
 	TurnError string `json:"turn_error,omitempty"`
 	// TurnErrorKind is what the agent's record says of TurnError, when it says (Claude Code's error field, Codex's
-	// error kinds): TurnErrorTransient (worth a "Continue"), TurnErrorUser (the user must act) or TurnErrorUsageLimit
-	// (a subscription's usage limit, until it resets); empty: read off the text. Or the hub's own word on a task
-	// Agent's turn that had no output at all (SilentTurnKind: TurnErrorNoOutput, TurnErrorStopped), with TurnError
+	// error kinds): TurnErrorTransient (worth a "Continue"), TurnErrorUser (the user must act), TurnErrorUsageLimit
+	// (a subscription's usage limit, until it resets), or TurnErrorUnrecoverable (the conversation is invalid).
+	// The hub's permanent-error classification overrides a generic runtime kind; empty: read off the text.
+	// Or the hub's own word on a task Agent's turn that had no output at all
+	// (SilentTurnKind: TurnErrorNoOutput, TurnErrorStopped), with TurnError
 	// the sentence for it in the user's language (#10187).
 	TurnErrorKind string `json:"turn_error_kind,omitempty"`
 	// TurnErrorResetsAt is when the subscription usage limit that ended the turn resets (TurnErrorKind
@@ -418,8 +452,9 @@ type Session struct {
 	// rollout's own rate limits), else what the hub reads off Claude Code's words when they name a time zone. Nil: not
 	// known, and nothing waits for it. Only a subscription's limit has one: a gateway's or an API key's 429 never does.
 	TurnErrorResetsAt *time.Time `json:"turn_error_resets_at,omitempty"`
-	// TurnErrorCode says what is wrong when the hub can tell from TurnError (docs/assistant/onboarding.md 5.2): one of the
-	// TurnErrorCode* values, for a card that says what to fix (sign in, the key, the model). Empty: not known.
+	// TurnErrorCode says what is wrong when the hub or node can tell from TurnError (docs/assistant/onboarding.md 5.2):
+	// one of the TurnError* values below, for a client fix card (sign in, the key, the model) or for upstream-stall
+	// visibility (TurnErrorUpstreamUnavailable). Empty: not known.
 	TurnErrorCode string `json:"turn_error_code,omitempty"`
 	// ModelFallback is the refusal fallback still active in this session, as the runtime recorded it.
 	ModelFallback *ModelRefusal `json:"model_fallback,omitempty"`
@@ -483,9 +518,10 @@ type Session struct {
 
 // Session.TurnErrorKind values.
 const (
-	TurnErrorTransient  = "transient"   // the model service failed for a moment: worth a "Continue"
-	TurnErrorUser       = "user"        // sign-in, context window, the model…: the user must act
-	TurnErrorUsageLimit = "usage_limit" // a subscription's usage limit: it goes on once the limit resets (TurnErrorResetsAt)
+	TurnErrorTransient     = "transient"     // the model service failed for a moment: worth a "Continue"
+	TurnErrorUser          = "user"          // sign-in, context window, the model…: the user must act
+	TurnErrorUsageLimit    = "usage_limit"   // a subscription's usage limit: it goes on once the limit resets (TurnErrorResetsAt)
+	TurnErrorUnrecoverable = "unrecoverable" // this conversation cannot continue; start a new one
 	// The hub's word on a task Agent's turn that ended with no reply, tool call or image (#2349, #10187): no error the
 	// model service reported, and no "Done" either.
 	TurnErrorNoOutput = "no_output" // the model service answered nothing: interrupted, worth a "Continue"
@@ -503,9 +539,17 @@ const (
 	TurnErrorModelRoute               = "model_route"                // the model name is not one the service or gateway knows
 	TurnErrorRateLimited              = "rate_limited"               // too many requests, or a usage limit
 	TurnErrorModelFallbackUnavailable = "model_fallback_unavailable" // a refusal selected a model the service cannot use
+	TurnErrorCompactionSealed         = "compaction_sealed"          // native context is encrypted to another account
 	// TurnErrorToolSearchUnsupported: the gateway refused Claude Code's on-demand tool loading (tool search, #10365). The
 	// node now starts that launcher and model with every tool loaded, so a retry works: not the user's to fix.
 	TurnErrorToolSearchUnsupported = "tool_search_unsupported"
+	// TurnErrorUpstreamUnavailable: the model gateway reported an exhausted upstream account pool, or the session hit >= 2
+	// consecutive upstream 5xx turns with no assistant progress in between (#13372). Visibility label: TurnErrorKind stays
+	// transient unless another rule marks it.
+	TurnErrorUpstreamUnavailable = "upstream_unavailable"
+	// TurnErrorImagesTooLarge: accumulated pictures in the conversation exceed the model API's size, count or dimension
+	// limit (#13045). Compacting the conversation clears older pictures so the failed turn can be sent again.
+	TurnErrorImagesTooLarge = "images_too_large"
 )
 
 // Codes a call refuses with when the assistant's conversation cannot start on a machine (docs/assistant/onboarding.md 4.6, 5.2):
@@ -532,6 +576,10 @@ const (
 	// would act on when an engine types the directory (Orca's `cd`, node/hostorca_launch.go). Nothing ran; a refusal of
 	// the request, not the launcher's fault.
 	CodeDirectoryUntypable = "directory_untypable"
+	// CodeAgyCompanionOffline: the start named HostAgy on a computer whose Antigravity companion is not connected
+	// (node/starthost.go). Nothing ran. A task start the hub sent there by default starts again in the computer's
+	// default host (assistant/tasks_placement.go, #13447); one that named the host is refused.
+	CodeAgyCompanionOffline = "agy_companion_offline"
 )
 
 // Codes session.modes refuses with (node/modes.go), the text in the request's language (apierr.Call). 409.
@@ -541,6 +589,19 @@ const (
 	CodeModesOnComputer = "modes_on_computer"
 	// CodeModesNotRunning: no process or pane runs the session; a message resumes it.
 	CodeModesNotRunning = "modes_not_running"
+	// CodeModesUnsupported: an agent in a terminal whose mode, effort and model are its start's (cursor, agy).
+	CodeModesUnsupported    = "modes_unsupported"
+	CodeEffortChangePending = "effort_change_pending"
+	// A Codex on the terminal route, whose model and effort the node types as `/model <model> --reasoning=<level>`
+	// (node/codex_terminal_modes.go, #12572). CodeModesCodexVersion: a Codex older than 0.169 started the session, and
+	// its /model takes no arguments. CodeModesCodexNoRollout: the session has no rollout yet to confirm a change by.
+	// CodeModesCodexRefused: Codex answered the command with a refusal; the message is Codex's own words.
+	// CodeModesCodexUnconfirmed: the command went in, and the rollout did not record the change in time (delivered
+	// "unknown": it may still have taken).
+	CodeModesCodexVersion     = "modes_codex_version"
+	CodeModesCodexNoRollout   = "modes_codex_no_rollout"
+	CodeModesCodexRefused     = "modes_codex_refused"
+	CodeModesCodexUnconfirmed = "modes_codex_unconfirmed"
 )
 
 // CodeNotLoaded is what session.items and session.item refuse with when reading the session would start its agent: an
@@ -550,6 +611,16 @@ const (
 // language (apierr.Call). 409.
 const CodeNotLoaded = "not_loaded"
 
+// NotFoundNoTranscript and NotFoundUnknownSession are why a node's read of a session's history (session.items,
+// session.item, session.image, session.visualization) is not_found, its data.reason (node/transcript_files.go
+// readErr): a session the node knows with no transcript to read (its file gone, or none ever written), or an id it
+// has no record of. The hub words each in the request's language (apierr.Call); a not_found without one (an older
+// node, a runtime's own answer, a missing file) keeps the plain summary (#11388).
+const (
+	NotFoundNoTranscript   = "no_transcript"
+	NotFoundUnknownSession = "unknown_session"
+)
+
 // CodeTurnOverBackground is session.interrupt's answer when the Escape went to a session whose turn was already over
 // and only its background work (a background command, a subagent, a workflow) keeps it Working: nothing was
 // interrupted and that work goes on (#10828).
@@ -558,6 +629,12 @@ const CodeTurnOverBackground = "turn_over_background"
 // CodeAgentStopped is what session.send refuses with for an Agent that has stopped and is read-only (node/stopped.go,
 // #4754): nothing was typed, and it takes no message until it is resumed (the user's Resume on its terminal page).
 const CodeAgentStopped = "agent_stopped"
+
+// CodeResumeUnknown is what session.start refuses a resume with when the computer has nothing of the conversation to
+// resume (no transcript, start or record of the id), and, for a resume carrying resume_outside_health, also when what
+// it has started or was recorded in a health space or an Agent folder kept out of Persona (#10941): a new
+// conversation would otherwise be listed under the id of another. Nothing was started. 409.
+const CodeResumeUnknown = "resume_unknown"
 
 // PendingSwitch is Session.PendingSwitch: the launcher the Agent moves to, the model and effort to run it with ("":
 // the launcher's own default model; the effort it runs with now), and when the user picked it. Agent is the engine
@@ -593,6 +670,9 @@ const (
 	// CodeSwitchUnsupported: not a Claude Code Agent running in a terminal Persona can restart it in (Codex, another
 	// CLI, a runtime's session, an assistant conversation, botmux).
 	CodeSwitchUnsupported = "switch_unsupported"
+	// CodeCompactFailed: a send that asked to compact a nearly full Agent first (#11137) found the compaction failed:
+	// nothing was sent, and the refusal says why.
+	CodeCompactFailed = "compact_failed"
 	// CodeSwitchLauncherMissing: the launcher picked is not on the session's computer.
 	CodeSwitchLauncherMissing = "switch_launcher_missing"
 	// CodeSwitchOtherAgent: the launcher picked runs another agent than Claude Code.
@@ -708,4 +788,52 @@ type ServiceTier struct {
 // Tokens32 is n as Session.ContextTokens and ContextWindow hold it: saturated at the int32 bounds.
 func Tokens32(n int) int32 {
 	return int32(max(min(n, math.MaxInt32), math.MinInt32))
+}
+
+// ContextNearlyFullShare is the share of its model's window an Agent's context may fill before the assistant's
+// agent_send compacts it ahead of the message (#11137): above it the Agent would compact, or run out, as it reads.
+const ContextNearlyFullShare = 0.85
+
+// ContextNearlyFull: what the model saw in the latest reply fills ContextNearlyFullShare of its window (both known).
+func ContextNearlyFull(tokens, window int) bool {
+	return window > 0 && tokens > 0 && float64(tokens) >= ContextNearlyFullShare*float64(window)
+}
+
+// UnixTime32 is a time in whole seconds since the epoch (zero: not set) that is sent as RFC 3339 like the other times;
+// four bytes, so that it fits the padding in Session.
+type UnixTime32 uint32
+
+// UnixTime32Of is t as a UnixTime32 (zero for the zero time and for times it cannot hold).
+func UnixTime32Of(t time.Time) UnixTime32 {
+	if t.IsZero() || t.Unix() <= 0 || t.Unix() > 1<<32-1 {
+		return 0
+	}
+	return UnixTime32(t.Unix())
+}
+
+// Time is the time it holds (the zero time when not set).
+func (u UnixTime32) Time() time.Time {
+	if u == 0 {
+		return time.Time{}
+	}
+	return time.Unix(int64(u), 0).UTC()
+}
+
+// MarshalJSON writes null for a zero one, so that a Session leaves it out of every encoder's output.
+func (u UnixTime32) MarshalJSON() ([]byte, error) {
+	if u == 0 {
+		return []byte("null"), nil
+	}
+	return u.Time().MarshalJSON()
+}
+
+func (u *UnixTime32) UnmarshalJSON(b []byte) error {
+	var t time.Time
+	if string(b) != "null" {
+		if err := t.UnmarshalJSON(b); err != nil {
+			return err
+		}
+	}
+	*u = UnixTime32Of(t)
+	return nil
 }

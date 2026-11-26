@@ -11,7 +11,10 @@ import (
 )
 
 // Profile tools expose the same operations as settings, without copying credentials into model context.
-func (s *Service) toolModelProfile(ctx context.Context, self, name string, args json.RawMessage) (string, error) {
+func (s *Service) toolModelProfile(ctx context.Context, machine, self, name string, args json.RawMessage) (string, error) {
+	if name == "model_profile_capture" {
+		return s.captureModelProfile(ctx, ToolCall{MachineID: machine, SessionID: self}, args)
+	}
 	var a struct {
 		ID string `json:"id"`
 	}
@@ -19,21 +22,45 @@ func (s *Service) toolModelProfile(ctx context.Context, self, name string, args 
 		return "", err
 	}
 	by := ProfileActor{Kind: "assistant"}
-	switch name {
-	case "model_profile_switch":
-		if a.ID == "" {
-			return "", fmt.Errorf("id is required; use model_profiles_list")
-		}
-		if _, err := s.applyModelProfile(ctx, a.ID, by); err != nil {
-			return "", err
-		}
-	case "model_profile_rollback":
-		if _, err := s.rollbackModelProfile(ctx, by); err != nil {
+	var execution *ownerActionExecution
+	var err error
+	if name == "model_profile_switch" || name == "model_profile_rollback" {
+		execution, err = s.consumeOwnerBuiltin(ctx, machine, self, name, args)
+		if err != nil {
 			return "", err
 		}
 	}
+	switch name {
+	case "model_profile_switch":
+		if a.ID == "" {
+			if execution != nil {
+				return s.finishOwnerBuiltin(ctx, *execution, "", fmt.Errorf("id is required; use model_profiles_list"))
+			}
+			return "", fmt.Errorf("id is required; use model_profiles_list")
+		}
+		if execution != nil {
+			_, err = s.applyApprovedModelProfileSwitch(ctx, a.ID, by, execution.Item)
+		} else {
+			_, err = s.applyModelProfile(ctx, a.ID, by)
+		}
+	case "model_profile_rollback":
+		if execution != nil {
+			_, err = s.applyApprovedModelProfileRollback(ctx, by, execution.Item)
+		} else {
+			_, err = s.rollbackModelProfile(ctx, by)
+		}
+	}
+	if err != nil {
+		if execution != nil {
+			return s.finishOwnerBuiltin(ctx, *execution, "", err)
+		}
+		return "", err
+	}
 	v, err := s.modelProfilesView(ctx)
 	if err != nil {
+		if execution != nil {
+			return s.finishOwnerBuiltin(ctx, *execution, "", ownerActionCompletedError{err: err})
+		}
 		return "", err
 	}
 	var result any = v
@@ -45,24 +72,54 @@ func (s *Service) toolModelProfile(ctx context.Context, self, name string, args 
 		result = v.Profiles[i]
 	}
 	raw, err := json.Marshal(result)
+	if execution != nil {
+		if err != nil {
+			err = ownerActionCompletedError{err: err}
+		}
+		return s.finishOwnerBuiltin(ctx, *execution, string(raw), err)
+	}
 	return string(raw), err
 }
 
 func (s *Service) applyStartTier(ctx context.Context, params map[string]any) error {
+	if _, err := validateStartSpeed(params); err != nil {
+		return err
+	}
 	tier, _ := params["tier"].(string)
 	delete(params, "tier") // node runtimes need only the resolved fields
 	if tier == "" {
 		return nil
 	}
-	t, err := s.tierModel(ctx, tier)
+	slot := tierStartOf(ctx)
+	facts := tierFacts{}
+	if slot != nil {
+		facts.Machine, facts.Keep = slot.machine, slot.keep
+	}
+	pick, err := s.pickTierCandidate(ctx, tier, facts)
 	if err != nil {
 		return err
 	}
+	t := pick.Tier
 	launcher, _ := params["launcher"].(string)
 	model, _ := params["model"].(string)
 	effort, _ := params["effort"].(string)
-	layTier(t, &launcher, &model, &effort)
-	params["launcher"], params["model"], params["effort"] = launcher, model, effort
+	speed, _ := params["speed"].(string)
+	mode, _ := params["permission_mode"].(string)
+	if layTier(t, &launcher, &model, &effort) {
+		if speed == "" && (model == "" || model == t.Model) {
+			speed = t.Speed
+		}
+		if mode == "" && t.PermissionMode != "" {
+			mode = t.PermissionMode
+		}
+		if slot != nil {
+			slot.pick = &pick // the tier gave the start its launcher: its pick is the dispatch's
+		}
+	}
+	params["launcher"], params["model"], params["effort"], params["speed"] = launcher, model, effort, speed
+	if mode != "" {
+		params["permission_mode"] = mode
+	}
 	return nil
 }
 
@@ -81,13 +138,18 @@ func layTier(t ModelTier, launcher, model, effort *string) bool {
 }
 
 func (s *Service) applyTaskTier(ctx context.Context, t *PlanTask) error {
-	p := map[string]any{"tier": t.Tier, "launcher": t.Launcher, "model": t.Model, "effort": t.Effort}
+	ctx, _ = withTierStart(ctx, t.Machine) // the preview picks the candidate the start on t.Machine would
+	p := map[string]any{"tier": t.Tier, "launcher": t.Launcher, "model": t.Model, "effort": t.Effort, "speed": t.Speed, "permission_mode": t.Permission}
 	if err := s.applyStartTier(ctx, p); err != nil {
 		return err
 	}
 	t.Launcher, _ = p["launcher"].(string)
 	t.Model, _ = p["model"].(string)
 	t.Effort, _ = p["effort"].(string)
+	t.Speed, _ = p["speed"].(string)
+	if mode, _ := p["permission_mode"].(string); mode != "" && !t.Readonly {
+		t.Permission = mode
+	}
 	return nil
 }
 
@@ -108,7 +170,9 @@ func (s *Service) modelProfileContext(ctx context.Context) *prompts.SnapshotProf
 	out := &prompts.SnapshotProfile{ID: p.ID, Name: p.Name}
 	for _, name := range slices.Sorted(maps.Keys(p.Tiers)) {
 		t := p.Tiers[name]
-		out.Tiers = append(out.Tiers, prompts.SnapshotTier{Name: name, Launcher: t.Launcher, Model: t.Model, Effort: t.Effort, Description: t.Description})
+		// The first candidate, with how many others follow it: the whole list would grow every turn's snapshot.
+		out.Tiers = append(out.Tiers, prompts.SnapshotTier{Name: name, Launcher: t.Launcher, Model: t.Model, Effort: t.Effort, Speed: t.Speed,
+			PermissionMode: t.PermissionMode, Description: t.Description, More: len(t.list()) - 1, Aliases: t.Aliases})
 	}
 	return out
 }

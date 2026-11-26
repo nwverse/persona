@@ -32,7 +32,7 @@ request (`ShellState.show`, `ShellState.swift:91-93`) and starts the drawer's cl
 | New Chat | `go(.newConversation)` | Assistant's root, new conversation | dropped, as above |
 | Inbox, To-dos, Machines, extension pages | `go` → `show` → `path.append(ShellRoute…)` (`apple/Persona/Views/Shell/ShellHome.swift:429-442`) | `NavigationStack` push on Assistant | the place in front and its sub-pages are dropped first; back returns to the conversation, also when it was opened from Agents |
 | Scheduled Tasks, Knowledge, Profile, Recordings | `go` → `show` → `show… = true` (`AssistantView.swift:247-257`) | push by `navigationDestination(isPresented:)` | dropped first, as above; these pushes are not in `path` at all |
-| Health | `go(.health)` → `enterHealth()` (`AssistantView.swift:397-410`) | the latest health conversation, or a push of Health | dropped first |
+| Health | `go(.health)` → `enterHealth()` → `backToRoot(); present(.health)` in `AssistantView.swift` | the Health home (#13273), with its conversation list; a page root in the embedded Sidebar layout | returned to the root before presentation |
 | Settings | `ShellView.swift:105-108` | `.sheet` on the shell (`ShellView.swift:30-36`) | the drawer closes under the rising sheet; closing Settings lands on the page, not the drawer it came from |
 | Archived, Auto conversations | `AssistantSidebar.swift:904-915`, presented from the drawer's own hosting view | sheet over the drawer | picking a row dismisses the sheet, closes the drawer and resets the stack in the same turn |
 | Search (iPhone Duo open) | `AssistantSidebar.swift:917-923` | `fullScreenCover` | as Archived |
@@ -202,18 +202,19 @@ switch the detail without a push when a sidebar item is chosen; only drilling do
 - **Drill-downs**: what a page opens inside itself (an Inbox item, a machine's details, a recording, a conversation an item
   links to) is pushed on the root, with Back, as before.
 - **The top-leading button follows how the page was reached, not what it is (#8603)**: a root has the button that opens the
-  sidebar (the main conversation's, `Theme.Icon.sidebar`; the persona's face in a phone's drawer; the system's Show Sidebar
-  under side bars), never a ‹; a drill-down has ‹, which goes back one page. The same Agent's chat is a root when picked in
+  sidebar (the main conversation's, `Theme.Icon.sidebar`; the persona's face in a phone's drawer; under side bars the side
+  column's first item, where a sub-page has Back, #11636), never a ‹; a drill-down has ‹, which goes back one page. The same Agent's chat is a root when picked in
   the sidebar and a drill-down when opened from a waiting Agent on the main conversation or in Inbox. A place's root draws
   that button itself (`ListButtonItem`): the system's toggle was not drawn again after a drill-down on it was popped (the
   open Duo upright, Inbox → an Agent's chat → Back), which left the root with no way back to the sidebar. The system's
-  toggle is removed on the roots' column, except under the Duo's side bars, where it is their Show Sidebar; so a sub-page
+  toggle is removed on the roots' column, under the Duo's side bars too (#11636: it was missing on an Agent's chat, whose
+  bar has no title row to draw it in, and on a place after a pop); so a sub-page
   has Back alone and, with the column laid over the page (the open Duo upright), the sidebar is reached from a root.
 - **Each root keeps its drill-down** while the user is elsewhere (`SidebarPageRoots`, a pure value with unit tests,
   `PersonaTests/SidebarPageRootsTests`); picking the root in front goes back to it (the tab-bar rule); another conversation
   picked while the conversation is in front starts at its root without a pop. Another assistant or hub forgets every root.
-- **The shaded row follows the root**, also while drilled in (`UnifiedSidebar.atRoot`, `shownPlace`; an Agent's row from
-  the root).
+- **The shaded row follows the root**, also while drilled in (`UnifiedSidebar.atRoot`, `shownPlace`, `shownAgent`): one
+  row of the whole column at a time, an Agent's in every grouping, all in one shade (`SidebarSelectedShade`, #11032).
 - **Motion**: a switch is never animated (the open Duo upright: the column sliding away is the only motion); a drill-down's
   push and a re-pick's pop are.
 - **Structure**: `AssistantView` (embedded) stays the stack's root, so the sidebar's requests and routes keep landing there,
@@ -231,15 +232,26 @@ switch the detail without a push when a sidebar item is chosen; only drilling do
   to its root; an edge swipe at a root stays on it; an Agent's chat picked in the sidebar has the sidebar's button and no ‹,
   pushed from a page it has ‹ (`testTheLeadingButtonFollowsHowThePageWasReached`); in the Separate layout's Agents tab an
   Agent and then another replace the root with no transition (`testTheAgentsTabSwitchesItsRootWithoutAPush`). A task's card in the
-  conversation pushes its Agent's chat with Back, the root staying the conversation (#9971, `SecondaryPageBackTests`). Run on the iPad, the open Duo upright and
-  on its side, and an iPhone.
+  conversation pushes its Agent's chat with Back, the root staying the conversation (#9971, `SecondaryPageBackTests`). So do the
+  other ways into an Agent from inside a page (#12006, `AppModel.openInPage`, `PageAgentPushTests`): a Brief card's Open, a
+  to-do's Agent rows and the Agent it is handed to, a knowledge project's Agents, a meeting's hand-off, a card's session link and
+  a held push. The conversation pushes on its path (`pushInboxChat`); a page that was itself pushed pushes the chat from its own
+  destination (`pushedAgentChat`), since some are pushed by view and a value would land under them. A page in a sheet closes and
+  the Agent opens as before; the sidebar's own rows, notifications and Open in Agents still pick a root. Run on the iPad, the
+  open Duo upright and on its side, and an iPhone.
 
 **Android** (#9667). A regular window — the sidebar column beside the page, or over it — follows this section. `SidebarPageRoots`
 (`android/app/src/main/java/persona/android/navigation/SidebarPageRoots.kt`) is the pure model, with the same steps as `SidebarPageRoots.swift`: a place
 replaces the Assistant stack's root and does not animate; a drill-down pushes; each root keeps its path; picking the root in
-front pops; the shaded row follows the root (`AssistantSidebarShade`). The conversation and the fixed places (Inbox, To-dos,
-Knowledge and Computers) stay composed while another is in front, so the conversation keeps its non-saveable history, local
-operations, running effects and list anchor, and those places keep their list, filter and scroll. Folding inserts the
+front pops; the shaded row follows the root (`AssistantSidebarShade`). An Agent root shades its exact Directions row with the
+same `JRow` selected look and semantics as the other rows; a nested sub-Agent opens its parent without selecting both rows.
+An Agent pushed from inside Persona keeps Persona's root shade on either tab, including compact windows; compact Persona
+retains its existing conversation shading. In the Merged sidebar layout (#13165), an Agent opened from inside a Persona page
+(such as a card in the main conversation) is pushed onto that root's own stack rather than the Agents tab, so picking another
+sidebar Agent or place leaves it on the conversation's stack, picking Main Chat again restores it with Back returning to the
+conversation, and re-picking Main Chat while it is already in front pops to the bare conversation. The conversation and the fixed places (Inbox, To-dos,
+Knowledge and Computers), plus the optional Lark Messages place while enabled, stay composed while another is in front, so the conversation keeps its non-saveable history, local
+operations, running effects and list anchor, and those places keep their list, filter and scroll. Messages is a retained Assistant secondary place, not a primary tab; its Lark chat drill-down stays on the Messages host so Back returns to that list. Turning its switch off forgets only that host and path and restores the Assistant path retained before it, even when Agents is selected; background cleanup leaves the selected tab unchanged. Folding inserts the
 conversation under that same list and unfolding removes it, so that page is not rebuilt. A to-do opened as its own root, or an
 extension page, keeps only its path and is composed only while it is in front (`SidebarRootHosts`). Folding that root copies it onto the conversation and leaves the fixed places composed. A place the phone drawer
 pushed over the conversation is promoted onto its own host when the window becomes regular, and that promotion rebuilds the
@@ -248,3 +260,34 @@ System Back at a place root returns to the conversation as a root switch, with n
 root leaves the app. The compact phone drawer still pushes a place that has no host yet over the conversation. A fixed place that already has a host is shown on that host. Health and
 Scheduled Tasks are not navigation destinations on Android; picking them shows the conversation page, where those screens already open.
 
+**Web** (#12055). The browser's history is the stack: an Agent opened from inside a page (a to-do, a knowledge project, a
+meeting, a Persona conversation's card set to Full page) is a new entry naming that page, so Back returns to it and the
+Agent's page offers "Came from … · click to return"; the sidebar keeps that page's row lit while the Agent is shown
+(`web/src/lib/persona-nav.ts` `sidebarRoute`, `docs/web/web.md` "An Agent opened from inside a page is a drill-down"). An
+Agent picked in the sidebar is a root and lights its own row. Reselecting the open Agent replaces its drill-down entry
+without adding a history entry, clearing the origin and the way-back strip at the same address. Set to Full page, the
+main conversation keeps the page it opened last while another place is in front (#13164, `pickMainChat` in
+`web/src/lib/handoff.ts`): Main Chat picked from there opens it again over the conversation, so Back returns to the
+conversation; picked while the conversation or its page is in front, it goes to the bare conversation.
+
+## 7. To-dos places under the To-dos row (#10465)
+
+On iOS, against a hub with `todo_view` and from #10465's switch-on, the To-dos row in the drawer and the sidebar folds open
+the To-dos places (`docs/design/proposals/todos-redesign.md` 3.3; DESIGN_SYSTEM 3.5 "To-dos places"): **Today**,
+**Upcoming**, up to five **projects**, then **All Projects…**. They are children of To-dos, not places of their own:
+
+- A child is drawn as a sidebar row set in under To-dos (`TodoPlaceRows` draws them through `AssistantSidebar`'s own row),
+  and picking one is picking To-dos (`ShellPage.todos`, `ShellRoute.todos`) on that place (`TodoWorkspace.open`). The
+  shaded row is the place shown while To-dos is the page: To-dos itself for All To-dos, else the child; a place whose
+  child is not in sight shades All Projects… for a project, else To-dos.
+- The rules above hold with one addition: To-dos opened for another place starts at its root, never animated, and drops
+  what it kept, which belonged to the place before (`ShellPlaces.enter(fresh:)` on the iPhone shell,
+  `SidebarPageRoots.select(fresh:)` for the Sidebar layout's page; `ShellPlacesTests`, `SidebarPageRootsTests`). The same
+  place picked again is the tab-bar rule as before.
+- The To-dos row brings To-dos back as it was left, on its last place (kept for the app's run), as every place comes
+  back (option 2, and option 3's kept drill-down); where To-dos is the place in front, beside the sidebar or under the
+  drawer and whatever is pushed on it, it is All To-dos, To-dos' root. The page that opens To-dos decides from its own
+  state, as it decides the tab-bar rule (`TodoWorkspace.opening(inFront:)`: `ShellPlaces.current`, the Sidebar layout's
+  root, the classic page).
+- All Projects… is a task: its sheet opens over the drawer and a project picked in it opens after the sheet has gone.
+- The list's title menu ("All To-dos ⌄") is the same places a second way, inside the page: it changes the list in place.

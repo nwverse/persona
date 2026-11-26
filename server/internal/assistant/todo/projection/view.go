@@ -17,40 +17,13 @@ import (
 // fields each sets, and every line key, are listed in spec/fixtures/todo-view/README.md. next_change_at is worked out
 // apart from the rows (nextChange): the first moment the whole view reads differently.
 
-// Line keys (spec/fixtures/todo-view/README.md "Line keys"): stable identifiers, never renamed or reused.
-const (
-	lineFailedStart     = "failed_start"
-	lineAgentAsks       = "agent_asks"
-	lineInterrupted     = "interrupted"
-	lineDecision        = "decision"
-	lineDecisionDefault = "decision_default"
-	lineCannot          = "cannot"
-	lineAwaitsReply     = "awaits_reply"
-	lineWorking         = "working"
-	linePersonaWorking  = "persona_working"
-	lineStarting        = "starting"
-	lineBackground      = "background"
-	lineParked          = "parked"
-	lineFinished        = "finished"
-	lineAccepted        = "accepted"
-	lineDeployed        = "deployed"
-	linePROpen          = "pr_open"
-	lineUsageLimit      = "usage_limit"
-	lineRunWaits        = "run_waits"
-	lineFinishedSeen    = "finished_seen"
-	lineCompleted       = "completed"
-	lineCanceled        = "canceled"
-	lineReported        = "reported"
-	lineSuperseded      = "superseded"
-	lineSomeday         = "someday"
-)
-
 // placement is a view and what ranks it within its section, worked out from the facts together with the view (the
 // ranking never reads them back off it): the soonest deadline of the decisions on the row, when it wakes (a park's
 // end, a usage limit's reset and its grace, the hub's next wake of a run that waits) and when it comes back from
 // Someday; a zero time is none.
 type placement struct {
 	assistantwire.TodoSummary
+	wait                 *assistantwire.TodoWait
 	deadline, wake, back time.Time
 }
 
@@ -198,13 +171,13 @@ func (r *reading) outcome() (string, *assistantwire.TodoLine) {
 		f.DoneBy == doneByReview && f.Supervision != nil && f.Supervision.State == reviewCancelled
 	switch {
 	case f.StartError != "": // only a superseded failed start is closed with its error
-		return assistantwire.TodoReasonSuperseded, line(lineSuperseded)
+		return assistantwire.TodoReasonSuperseded, line(assistantwire.TodoLineKeySuperseded)
 	case cancelled:
-		return assistantwire.TodoReasonCanceled, line(lineCanceled, "reason", cancelNote(f))
+		return assistantwire.TodoReasonCanceled, line(assistantwire.TodoLineKeyCanceled, "reason", cancelNote(f))
 	case f.DoneBy == doneByReported:
-		return assistantwire.TodoReasonReported, line(lineReported)
+		return assistantwire.TodoReasonReported, line(assistantwire.TodoLineKeyReported)
 	}
-	return assistantwire.TodoReasonCompleted, line(lineCompleted, "by", f.DoneBy)
+	return assistantwire.TodoReasonCompleted, line(assistantwire.TodoLineKeyCompleted, "by", f.DoneBy)
 }
 
 // cancelNote is why the to-do was cancelled: the first line of the cancelling review's note, else its
@@ -243,8 +216,15 @@ func (r *reading) failedStart() placement {
 		}
 		return r.rest()
 	}
+	if f.Supervision != nil && f.Supervision.Supervisor != "" {
+		// A supervised task's failed start is its supervisor's to retry, remedy or give up on (the start remedies and
+		// the failed signal go there): Persona works on it, and only the supervisor's needs_user brings it to the owner.
+		p := r.at(assistantwire.TodoPhaseWorking, assistantwire.TodoListSectionWorking, assistantwire.TodoReasonPersonaWorking)
+		p.Line, p.Since = line(assistantwire.TodoLineKeyFailedStart, "error", f.StartError), utc(failed)
+		return p
+	}
 	p := r.at(assistantwire.TodoPhaseNeedsYou, assistantwire.TodoListSectionNeedsYou, assistantwire.TodoReasonFailedStart)
-	p.Line, p.Since = line(lineFailedStart, "error", f.StartError), utc(failed)
+	p.Line, p.Since = line(assistantwire.TodoLineKeyFailedStart, "error", f.StartError), utc(failed)
 	if f.Origin != "" {
 		p.Asks = []assistantwire.OwnerAsk{withRisk(assistantwire.OwnerAsk{ID: "todo:retry@" + listed(failed),
 			Kind: assistantwire.OwnerAskKindRetry, Home: assistantwire.OwnerAskHomeTodo}, assistantwire.OwnerAskRiskSafe)}
@@ -269,14 +249,14 @@ func (r *reading) runAsks() (placement, bool) {
 		for _, rn := range asking {
 			p.Asks = append(p.Asks, runAsk(rn))
 		}
-		p.Line = line(lineAgentAsks, "run", asking[0].title(), "text", p.Asks[0].Text)
+		p.Line = line(assistantwire.TodoLineKeyAgentAsks, "run", asking[0].title(), "text", p.Asks[0].Text)
 		p.Since = utc(asking[0].since())
 		r.withOwnAsk(&p)
 		return p, true
 	}
 	if rn, ok := firstRun(r.runs, runInterrupted); ok {
 		p := r.at(assistantwire.TodoPhaseNeedsYou, assistantwire.TodoListSectionNeedsYou, assistantwire.TodoReasonInterrupted)
-		p.Line, p.Since = line(lineInterrupted, "run", rn.title()), utc(rn.since())
+		p.Line, p.Since = line(assistantwire.TodoLineKeyInterrupted, "run", rn.title()), utc(rn.since())
 		r.withOwnAsk(&p)
 		return p, true
 	}
@@ -386,7 +366,7 @@ func (r *reading) ownAsk() (assistantwire.OwnerAsk, *Ask) {
 	round := listed(a.AskedAt)
 	out := assistantwire.OwnerAsk{ID: DecisionAskID(a.AskedAt), Kind: assistantwire.OwnerAskKindDecision,
 		Home: assistantwire.OwnerAskHomeTodo, Round: round, Text: a.Question, Recommend: a.Recommend,
-		Options: a.Options, CanWait: canWaitDecision(a)}
+		Options: a.Options, CanWait: r.canWaitAsk(a)}
 	if a.Default == defaultTaken && a.Deadline != nil {
 		out.DefaultAt = utc(*a.Deadline)
 	}
@@ -396,34 +376,76 @@ func (r *reading) ownAsk() (assistantwire.OwnerAsk, *Ask) {
 // canWaitDecision: a decision that can wait for the briefing.
 func canWaitDecision(a *Ask) bool { return a.Outcome == outcomeDecide && a.ForBriefing }
 
+// canWaitAsk reports whether decision ask a stays in the Can wait fold at r.now.
+// Under todos_v2, non-critical can_wait decisions age into active Needs you after the configured SLA
+// (default 48h; disabled when CanWaitSLADisabled is true).
+func (r *reading) canWaitAsk(a *Ask) bool {
+	if !canWaitDecision(a) {
+		return false
+	}
+	if r.f.TodosV2 && !a.AskedAt.IsZero() {
+		if d, ok := canWaitSLADuration(r.f); ok && !r.now.Before(a.AskedAt.Add(d)) {
+			return false
+		}
+	}
+	return true
+}
+
+// pendingReviewWaiting reports whether f is in pending_review without an open owner ask under todos_v2.
+func (r *reading) pendingReviewWaiting() bool {
+	return r.f.TodosV2 && reviewState(r.f) == reviewPending && !r.settled() && openAsk(r.f) == nil
+}
+
 // ---- row 3: the owner decides ----
 
-// ownerDecides: open, and its review waits for the owner (needs_user) or its ask is a decision or says it cannot be
-// done, unless the owner chose Don't handle on it. A decision that can wait is row 4's. verify, steps_proposed,
-// signin and a possible duplicate have no input yet (spec/fixtures/todo-view/README.md "Not produced yet").
+// ownerDecides: open, and its review requires personal verification or waits for the owner's decision. A decision
+// may also say the work cannot be done. A dismissed decision is out, and a decision that can wait is row 4's.
 func (r *reading) ownerDecides() (placement, bool) {
-	if r.dismissed() {
-		return placement{}, false
+	state := reviewState(r.f)
+	if state == reviewUserCheck {
+		p := r.at(assistantwire.TodoPhaseNeedsYou, assistantwire.TodoListSectionNeedsYou, assistantwire.TodoReasonVerify)
+		p.Since = utc(r.f.Supervision.UpdatedAt)
+		if a := openAsk(r.f); a != nil && a.Outcome == "" {
+			// Clients answer the verification round from the listed to-do's ask through the existing Pass action.
+			p.Line, p.Since = line(assistantwire.TodoLineKeyDecision, "text", a.Verdict), utc(a.AskedAt)
+		}
+		return p, true
 	}
 	a := r.decisionAsk()
-	switch {
-	case a != nil && canWaitDecision(a): // row 4
-		return placement{}, false
-	case a == nil && reviewState(r.f) != reviewNeedsUser:
-		return placement{}, false
-	}
 	p := r.at(assistantwire.TodoPhaseNeedsYou, assistantwire.TodoListSectionNeedsYou, assistantwire.TodoReasonOwnerDecides)
 	switch {
+	case a == nil && (r.dismissed() || state != reviewNeedsUser):
+		if d := r.f.Delivery; d != nil && d.Owner {
+			p.Line, p.Since = line(assistantwire.TodoLineKeyDecision, "text", d.Gate), utc(d.At)
+			return p, true
+		}
+		if r.pendingReviewWaiting() {
+			since := pendingReviewSince(r.f)
+			d, ok := pendingReviewSLADuration(r.f)
+			if !ok {
+				p.Line, p.Since = line(assistantwire.TodoLineKeyDecision), utc(since)
+				return p, true
+			}
+			if !since.IsZero() && !r.now.Before(since.Add(d)) {
+				p.Line, p.Since = line(assistantwire.TodoLineKeyDecision), utc(since)
+				return p, true
+			}
+		}
+		return placement{}, false
+	case a != nil && r.canWaitAsk(a): // row 4
+		return placement{}, false
+	}
+	switch {
 	case a == nil: // a needs_user review with no ask listed: its question, nothing to answer here
-		p.Line = line(lineDecision)
+		p.Line = line(assistantwire.TodoLineKeyDecision)
 		if rv := latestReview(r.f.Supervision); rv != nil {
-			p.Line, p.Since = line(lineDecision, "text", rv.Reason, "recommend", rv.Recommend), utc(rv.At)
+			p.Line, p.Since = line(assistantwire.TodoLineKeyDecision, "text", rv.Reason, "recommend", rv.Recommend), utc(rv.At)
 		}
 		return p, true
 	case a.Outcome == outcomeCannot:
-		p.Line = line(lineCannot)
+		p.Line = line(assistantwire.TodoLineKeyCannot)
 	default:
-		p.Line = line(lineDecision, "text", a.Question, "recommend", a.Recommend)
+		p.Line = line(assistantwire.TodoLineKeyDecision, "text", a.Question, "recommend", a.Recommend)
 	}
 	p.Since = utc(a.AskedAt)
 	r.withOwnAsk(&p)
@@ -437,9 +459,9 @@ func (r *reading) ownerDecides() (placement, bool) {
 func (r *reading) canWait() (placement, bool) {
 	if a, src := r.ownAsk(); src != nil && a.CanWait {
 		p := r.at(assistantwire.TodoPhaseNeedsYou, assistantwire.TodoListSectionCanWait, assistantwire.TodoReasonCanWait)
-		p.Line = line(lineDecision, "text", a.Text, "recommend", a.Recommend)
+		p.Line = line(assistantwire.TodoLineKeyDecision, "text", a.Text, "recommend", a.Recommend)
 		if !a.DefaultAt.IsZero() {
-			p.Line = line(lineDecisionDefault, "text", a.Text, "recommend", a.Recommend, "default_at", stamp(a.DefaultAt))
+			p.Line = line(assistantwire.TodoLineKeyDecisionDefault, "text", a.Text, "recommend", a.Recommend, assistantwire.TodoLineArgDefaultAt, stamp(a.DefaultAt))
 		}
 		p.Since = utc(src.AskedAt)
 		p.addAsk(a, src)
@@ -447,7 +469,7 @@ func (r *reading) canWait() (placement, bool) {
 	}
 	if rn, ok := firstRun(r.runs, runAwaitsReply); ok {
 		p := r.at(assistantwire.TodoPhaseNeedsYou, assistantwire.TodoListSectionCanWait, assistantwire.TodoReasonAwaitsReply)
-		p.Line, p.Since = line(lineAwaitsReply, "run", rn.title(), "text", rn.s.Asks), utc(rn.since())
+		p.Line, p.Since = line(assistantwire.TodoLineKeyAwaitsReply, "run", rn.title(), "text", rn.s.Asks), utc(rn.since())
 		return p, true
 	}
 	return placement{}, false
@@ -468,9 +490,9 @@ func (r *reading) working() (placement, bool) {
 			text = firstLine(rn.s.LastText)
 		}
 		p := r.at(assistantwire.TodoPhaseWorking, assistantwire.TodoListSectionWorking, assistantwire.TodoReasonAgentRunning)
-		p.Line = line(lineWorking, "run", rn.title(), "text", text)
+		p.Line = line(assistantwire.TodoLineKeyWorking, "run", rn.title(), "text", text)
 		if rn.kind == runPersona {
-			p.Reason, p.Line = assistantwire.TodoReasonPersonaWorking, line(linePersonaWorking, "text", text)
+			p.Reason, p.Line = assistantwire.TodoReasonPersonaWorking, line(assistantwire.TodoLineKeyPersonaWorking, "text", text)
 		}
 		p.Since = utc(rn.since())
 		return p, true
@@ -480,14 +502,19 @@ func (r *reading) working() (placement, bool) {
 		reason string
 		key    string
 	}{
-		{runStarting, assistantwire.TodoReasonStarting, lineStarting},
-		{runBackground, assistantwire.TodoReasonBackground, lineBackground},
+		{runStarting, assistantwire.TodoReasonStarting, assistantwire.TodoLineKeyStarting},
+		{runBackground, assistantwire.TodoReasonBackground, assistantwire.TodoLineKeyBackground},
 	} {
 		if rn, ok := firstRun(r.runs, k.kind); ok {
 			p := r.at(assistantwire.TodoPhaseWorking, assistantwire.TodoListSectionWorking, k.reason)
 			p.Line, p.Since = line(k.key, "run", rn.title()), utc(rn.since())
 			return p, true
 		}
+	}
+	if r.pendingReviewWaiting() {
+		p := r.at(assistantwire.TodoPhaseWorking, assistantwire.TodoListSectionWorking, assistantwire.TodoReasonPersonaWorking)
+		p.Line, p.Since = line(assistantwire.TodoLineKeyPersonaWorking), utc(pendingReviewSince(r.f))
+		return p, true
 	}
 	return placement{}, false
 }
@@ -507,10 +534,11 @@ func (r *reading) parked() (placement, bool) {
 		reason = assistantwire.TodoReasonSomeoneElse
 	}
 	p := r.at(assistantwire.TodoPhaseWaiting, assistantwire.TodoListSectionWaiting, reason)
-	p.Line = line(lineParked, "reason", sv.Parked.Reason, "until", stamp(sv.Parked.Until))
+	p.Line = line(assistantwire.TodoLineKeyParked, "reason", sv.Parked.Reason, assistantwire.TodoLineArgUntil, stamp(sv.Parked.Until))
 	if rv := latestReview(sv); rv != nil && rv.Verdict == reviewParked {
 		p.Since = utc(rv.At)
 	}
+	p.wait = buildParkedWait(sv)
 	p.wake = sv.Parked.Until
 	return p, true
 }
@@ -524,26 +552,26 @@ func (r *reading) finish() (time.Time, *assistantwire.TodoLine, bool) {
 	f := r.f
 	if r.settled() {
 		if acceptanceStands(f) {
-			return latestReview(f.Supervision).At, line(lineAccepted), true
+			return latestReview(f.Supervision).At, line(assistantwire.TodoLineKeyAccepted), true
 		}
 		at := f.Delivery.At
 		if at.IsZero() {
 			at = r.last
 		}
-		return at, line(lineDeployed), true
+		return at, line(assistantwire.TodoLineKeyDeployed), true
 	}
 	if rn, ok := firstRun(r.runs, runUnread); ok {
-		return rn.since(), line(lineFinished, "run", rn.title()), true
+		return rn.since(), line(assistantwire.TodoLineKeyFinished, "run", rn.title()), true
 	}
 	if reviewState(f) == reviewPending {
 		at := f.Supervision.UpdatedAt
 		if f.Supervision.PendingSince != nil {
 			at = *f.Supervision.PendingSince
 		}
-		return at, line(lineFinished), true
+		return at, line(assistantwire.TodoLineKeyFinished), true
 	}
 	if a := openAsk(f); a != nil && (a.Outcome == "" || a.Outcome == outcomeDone) {
-		return a.AskedAt, line(lineFinished), true
+		return a.AskedAt, line(assistantwire.TodoLineKeyFinished), true
 	}
 	return time.Time{}, nil, false
 }
@@ -580,7 +608,7 @@ func (r *reading) finishedSeen() (placement, bool) {
 		return placement{}, false
 	}
 	p := r.at(assistantwire.TodoPhaseTodo, assistantwire.TodoListSectionTodo, assistantwire.TodoReasonFinishedSeen)
-	p.Line, p.Since = line(lineFinishedSeen, "at", stamp(at)), utc(at)
+	p.Line, p.Since = line(assistantwire.TodoLineKeyFinishedSeen, assistantwire.TodoLineArgAt, stamp(at)), utc(at)
 	return p, true
 }
 
@@ -593,25 +621,28 @@ func (r *reading) finishedSeen() (placement, bool) {
 func (r *reading) waiting() (placement, bool) {
 	if prs := openPRs(r.f, r.now); len(prs) > 0 && !r.settled() {
 		p := r.at(assistantwire.TodoPhaseWaiting, assistantwire.TodoListSectionWaiting, assistantwire.TodoReasonPrOpen)
-		p.Line = line(linePROpen)
+		p.Line = line(assistantwire.TodoLineKeyPrOpen)
+		p.wait = buildPRWait(prs[0])
 		return p, true
 	}
 	if rn, ok := firstRun(r.runs, runLimited); ok {
 		p := r.at(assistantwire.TodoPhaseWaiting, assistantwire.TodoListSectionWaiting, assistantwire.TodoReasonUsageLimit)
-		p.Line, p.Since = line(lineUsageLimit, "run", rn.title()), utc(rn.since())
+		p.Line, p.Since = line(assistantwire.TodoLineKeyUsageLimit, "run", rn.title()), utc(rn.since())
 		if reset := usageLimitReset(*rn.s); reset != nil {
-			p.Line = line(lineUsageLimit, "run", rn.title(), "resets_at", stamp(*reset))
+			p.Line = line(assistantwire.TodoLineKeyUsageLimit, "run", rn.title(), assistantwire.TodoLineArgResetsAt, stamp(*reset))
 			p.wake = reset.Add(usageLimitGrace)
 		}
+		p.wait = buildUsageLimitWait(rn)
 		return p, true
 	}
 	if rn, ok := firstRun(r.runs, runWaits); ok {
 		p := r.at(assistantwire.TodoPhaseWaiting, assistantwire.TodoListSectionWaiting, assistantwire.TodoReasonSomeoneElse)
-		p.Line, p.Since = line(lineRunWaits, "run", rn.title(), "on", waitsOn(*rn.s)), utc(rn.since())
+		p.Line, p.Since = line(assistantwire.TodoLineKeyRunWaits, "run", rn.title(), "on", waitsOn(*rn.s)), utc(rn.since())
 		// When the hub looks next ranks it; that moment passing changes nothing by itself, as a park's end does not.
 		if w := rn.s.Work.WakeAt; w != nil {
 			p.wake = *w
 		}
+		p.wait = buildRunWaitsWait(rn)
 		return p, true
 	}
 	return placement{}, false
@@ -626,9 +657,9 @@ func (r *reading) someday() (placement, bool) {
 		return placement{}, false
 	}
 	p := r.at(assistantwire.TodoPhaseSomeday, assistantwire.TodoListSectionSomeday, assistantwire.TodoReasonDeferred)
-	p.Line = line(lineSomeday)
+	p.Line = line(assistantwire.TodoLineKeySomeday)
 	if until.Before(somedayNoDate) {
-		p.Line, p.back = line(lineSomeday, "until", stamp(*until)), *until
+		p.Line, p.back = line(assistantwire.TodoLineKeySomeday, assistantwire.TodoLineArgUntil, stamp(*until)), *until
 	}
 	return p, true
 }
@@ -689,8 +720,18 @@ func (r *reading) withSteps(own placement) placement {
 		if s.closed() {
 			own.Steps.Done++
 		} else if !f.closed() {
-			sr := read(s, r.now)
-			steps = append(steps, part{placement: sr.place(), step: s, last: sr.last})
+			step := s
+			if r.f.TodosV2 {
+				cp := *s
+				cp.TodosV2 = true
+				cp.PendingReviewSLAHours = r.f.PendingReviewSLAHours
+				cp.PendingReviewSLADisabled = r.f.PendingReviewSLADisabled
+				cp.CanWaitSLAHours = r.f.CanWaitSLAHours
+				cp.CanWaitSLADisabled = r.f.CanWaitSLADisabled
+				step = &cp
+			}
+			sr := read(step, r.now)
+			steps = append(steps, part{placement: sr.place(), step: step, last: sr.last})
 		}
 	}
 	// The parts on the row: the one that leads it, then, on a row that lists asks, the others that are in Needs you or
@@ -727,6 +768,10 @@ func (r *reading) withSteps(own placement) placement {
 	out.Seen = r.seenSince(latest(r.last, latestOf(parts)))
 	if lead.step != nil {
 		out.Line = withArg(out.Line, "step", lead.step.Title)
+		if out.wait != nil {
+			out.wait = cloneWait(out.wait)
+			out.wait.Step = lead.step.Title
+		}
 		out.Inactive, out.Steps, out.back = time.Time{}, own.Steps, time.Time{}
 	}
 	return out
@@ -843,8 +888,32 @@ func moments(f *Facts, now time.Time) []time.Time {
 	if due, ok := dueEnd(f); ok {
 		add(due)
 	}
+	if f.TodosV2 {
+		if reviewState(f) == reviewPending {
+			if since := pendingReviewSince(f); !since.IsZero() {
+				if d, ok := pendingReviewSLADuration(f); ok {
+					add(since.Add(d))
+				}
+			}
+		}
+		if a := openAsk(f); a != nil && canWaitDecision(a) && !a.AskedAt.IsZero() {
+			if d, ok := canWaitSLADuration(f); ok {
+				add(a.AskedAt.Add(d))
+			}
+		}
+	}
 	for i := range f.Steps {
-		out = append(out, moments(&f.Steps[i], now)...)
+		if f.TodosV2 {
+			cp := f.Steps[i]
+			cp.TodosV2 = true
+			cp.PendingReviewSLAHours = f.PendingReviewSLAHours
+			cp.PendingReviewSLADisabled = f.PendingReviewSLADisabled
+			cp.CanWaitSLAHours = f.CanWaitSLAHours
+			cp.CanWaitSLADisabled = f.CanWaitSLADisabled
+			out = append(out, moments(&cp, now)...)
+		} else {
+			out = append(out, moments(&f.Steps[i], now)...)
+		}
 	}
 	return out
 }

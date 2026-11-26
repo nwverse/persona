@@ -13,6 +13,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -39,23 +40,40 @@ const (
 // directionsSettle is how long a change waits for the rest before the leaders are compared again.
 const directionsSettle = time.Second
 
+// directionOutside identifies a direction without a Persona conversation and, when both ids are present, the outside
+// coding Agent it stands for. It is persisted in assistant_outside_directions, not in the legacy JSON direction record.
+type directionOutside struct {
+	MachineID string `json:"machine_id,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
+}
+
 // direction is one leader's record. Told is what the extensions were last told of it (nil: nothing yet).
 type direction struct {
-	MachineID string      `json:"machine_id,omitempty"`
-	Project   string      `json:"project,omitempty"`
-	By        string      `json:"by"`
-	At        time.Time   `json:"at"`
-	EndedAt   *time.Time  `json:"ended_at,omitempty"`
-	Told      *leaderTold `json:"told,omitempty"`
+	MachineID string            `json:"machine_id,omitempty"`
+	Outside   *directionOutside `json:"-"`
+	Project   string            `json:"project,omitempty"`
+	By        string            `json:"by"`
+	At        time.Time         `json:"at"`
+	EndedAt   *time.Time        `json:"ended_at,omitempty"`
+	Told      *leaderTold       `json:"told,omitempty"`
 	// Name: the name the owner or the secretary gave the direction (#3679, "" none: directionName falls back); NameBy
 	// who gave it (directionByUser or directionByAssistant).
 	Name   string `json:"name,omitempty"`
 	NameBy string `json:"name_by,omitempty"`
 	// Progress: the leader's latest own summary (leader_progress, #3679).
 	Progress *leaderProgress `json:"progress,omitempty"`
-	// Notes: what the owner wrote for this direction (#10086, direction_notes.go), "" none; NotesAt when.
-	Notes   string     `json:"notes,omitempty"`
-	NotesAt *time.Time `json:"notes_at,omitempty"`
+	// Notes: what the owner wrote for this direction (#10086, direction_notes.go), "" none; NotesAt when, at
+	// millisecond precision (older records: finer). NotesLastAt: the last NotesAt issued, kept when the notes are
+	// cleared, so a later save never issues it again (nil on older records: NotesAt is).
+	Notes       string     `json:"notes,omitempty"`
+	NotesAt     *time.Time `json:"notes_at,omitempty"`
+	NotesLastAt *time.Time `json:"notes_last_at,omitempty"`
+	// NotesInEffect: the notes block the conversation was last given (notesInEffect, #11392): set by a send that found
+	// it idle (its leader's block, or "" once it is no leader) and, before any did, by the first notes save while it
+	// leads (the block of the notes before that save); nil while unknown. RoleInEffect is the role policy sent with it.
+	// A direction ended or made again keeps both until an idle send, so a working process never gets a new fingerprint.
+	NotesInEffect *string `json:"notes_in_effect,omitempty"`
+	RoleInEffect  string  `json:"role_in_effect,omitempty"`
 }
 
 type leaderTold struct {
@@ -119,6 +137,29 @@ type directionBook struct {
 	m      map[string]*direction // by leader conversation id
 	armed  bool                  // a compare is scheduled
 	after  func(d time.Duration, f func())
+	now    func() time.Time // tests: the clock notes are saved and the owner's messages are aged by (nil: time.Now)
+	// inflight: by conversation, the moves of its notes block in effect and the owner's messages whose outcomes are
+	// not yet known (direction_notes.go notesSendOutcome); ownerSeen: the owner's latest message ids it gave parameters
+	// for (notesOwnerCarry); namedOn: one more than the newest connection to the hub on which a notice named its
+	// message (hubConnOf; 0 none), so its notices name their messages (notesOwnerOutcome). In memory only.
+	inflight  map[string]*notesFlight
+	ownerSeen map[string][]string
+	namedOn   uint64
+}
+
+// clock is now on b's clock; b.mu is held.
+func (b *directionBook) clock() time.Time {
+	if b.now != nil {
+		return b.now()
+	}
+	return time.Now()
+}
+
+// outsideDirectionStore is the manager database's conversationless-direction persistence. It is separate from Store's
+// base settings contract so lightweight assistant stores keep their existing behavior; outside creation requires it.
+type outsideDirectionStore interface {
+	OutsideDirections(context.Context) (map[string]db.OutsideDirection, error)
+	CreateOutsideDirection(context.Context, string, db.OutsideDirection, map[string]any) error
 }
 
 // directionsLocked reads the book once; b.mu is held. A failed read leaves it unloaded: nothing is told or saved over it.
@@ -137,20 +178,37 @@ func (s *Service) directionsLocked(ctx context.Context) bool {
 	if m == nil {
 		m = map[string]*direction{}
 	}
+	if st, ok := s.store().(outsideDirectionStore); ok {
+		outside, err := st.OutsideDirections(ctx)
+		if err != nil {
+			s.logf("load outside directions: %v", err)
+			return false
+		}
+		for id, ref := range outside {
+			if d := m[id]; d != nil {
+				d.Outside = &directionOutside{MachineID: ref.MachineID, SessionID: ref.SessionID}
+			}
+		}
+	}
 	b.m, b.loaded = m, true
 	return true
 }
 
 func (s *Service) saveDirectionsLocked(ctx context.Context) {
+	if err := s.saveDirectionsCheckedLocked(ctx); err != nil {
+		s.logf("save assistant directions: %v", err)
+	}
+}
+
+// saveDirectionsCheckedLocked durably saves the book, returning a failure an authoritative writer must not hide.
+func (s *Service) saveDirectionsCheckedLocked(ctx context.Context) error {
 	st := s.store()
 	if st == nil {
-		return
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	if err := st.PutSetting(ctx, directionsKey, s.directions.m); err != nil {
-		s.logf("save assistant directions: %v", err)
-	}
+	return st.PutSetting(ctx, directionsKey, s.directions.m)
 }
 
 // directionsSoon schedules comparing the leaders with what the extensions were told, once the changes of the next
@@ -236,7 +294,12 @@ func (s *Service) directionsSync(ctx context.Context) {
 		if !leaders[id] && d.EndedAt == nil {
 			d.EndedAt, changed = &now, true
 		}
-		cur := leaderTold{Title: titles[id].title, Name: nameOf(d, titles[id].title, pnames, pok), Project: d.Project, Ended: d.EndedAt != nil}
+		curName := nameOf(d, titles[id].title, pnames, pok)
+		curTitle := titles[id].title
+		if d.Outside != nil {
+			curTitle = curName // no conversation title exists; event consumers still get a useful non-empty title
+		}
+		cur := leaderTold{Title: curTitle, Name: curName, Project: d.Project, Ended: d.EndedAt != nil}
 		if d.Told != nil && *d.Told == cur || !tell {
 			continue
 		}
@@ -311,6 +374,9 @@ func (s *Service) directionViews(ctx context.Context) (map[string]*proto.Directi
 	}
 	out := make(map[string]*proto.Direction, len(b.m))
 	for id, d := range b.m {
+		if d.Outside != nil {
+			continue // a direction id is not proof that a Persona conversation exists
+		}
 		out[id] = &proto.Direction{Project: d.Project, By: d.By, At: d.At, EndedAt: d.EndedAt}
 	}
 	return out, true
@@ -319,15 +385,35 @@ func (s *Service) directionViews(ctx context.Context) (map[string]*proto.Directi
 // leaderView is a leader as GET /api/v1/assistant/leaders lists it: what leader.changed says of it, and its record.
 type leaderView struct {
 	assistantwire.LeaderChangedEvent
+	// External marks a direction with no Persona conversation. MachineID and SessionID together name its optional
+	// outside Agent; both are empty for a standalone direction. The direction ID is never that Agent's session ID.
+	External  bool   `json:"external,omitempty"`
+	MachineID string `json:"machine_id,omitempty"`
+	SessionID string `json:"session_id,omitempty"`
 	// Progress: the leader's latest own summary (leader_progress), nil before its first.
 	Progress *leaderProgress `json:"progress,omitempty"`
-	// Notes: what the owner wrote for the direction (direction_notes.go), NotesAt when; the leader and the
-	// direction's new Agents are given them.
+	// Notes: what the owner wrote for the direction (direction_notes.go), NotesAt when (null with no notes: the
+	// value a save sends back as notes_at, #11392); the leader and the direction's new Agents are given them.
 	Notes   string     `json:"notes,omitempty"`
-	NotesAt *time.Time `json:"notes_at,omitempty"`
+	NotesAt *time.Time `json:"notes_at"`
 	By      string     `json:"by"`
 	At      time.Time  `json:"at"`
 	EndedAt *time.Time `json:"ended_at,omitempty"`
+}
+
+// directionLeaderView is one direction's read model, shared by creation, progress writes and GET leaders.
+func directionLeaderView(id string, d *direction, title string, pnames map[string]string, pok bool) leaderView {
+	name := nameOf(d, title, pnames, pok)
+	if d.Outside != nil {
+		title = name
+	}
+	v := leaderView{LeaderChangedEvent: assistantwire.LeaderChangedEvent{ID: id, Title: title, Name: name,
+		Project: d.Project, Ended: d.EndedAt != nil}, Progress: d.Progress, Notes: d.Notes, NotesAt: d.NotesAt,
+		By: d.By, At: d.At, EndedAt: d.EndedAt}
+	if d.Outside != nil {
+		v.External, v.MachineID, v.SessionID = true, d.Outside.MachineID, d.Outside.SessionID
+	}
+	return v
 }
 
 // directionRoutes: GET /api/v1/assistant/leaders lists every direction, current leaders first, then ended ones, each as
@@ -347,9 +433,7 @@ func (s *Service) directionRoutes() {
 		}
 		list := make([]leaderView, 0, len(b.m))
 		for id, d := range b.m {
-			list = append(list, leaderView{LeaderChangedEvent: assistantwire.LeaderChangedEvent{ID: id, Title: titles[id].title,
-				Name: nameOf(d, titles[id].title, pnames, pok), Project: d.Project, Ended: d.EndedAt != nil}, Progress: d.Progress,
-				Notes: d.Notes, NotesAt: d.NotesAt, By: d.By, At: d.At, EndedAt: d.EndedAt})
+			list = append(list, directionLeaderView(id, d, titles[id].title, pnames, pok))
 		}
 		b.mu.Unlock()
 		slices.SortFunc(list, func(a, b leaderView) int {

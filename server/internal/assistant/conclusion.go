@@ -3,12 +3,14 @@ package assistant
 import (
 	"cmp"
 	"context"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/repository"
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/db"
-	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
@@ -31,17 +33,38 @@ const (
 func decideAsk(a *acceptAsk) bool { return a.Conclusion && a.Outcome == outcomeDecide }
 
 // verdictText is an ask's verdict line: the same words on its Lark card, the briefing's card and `brief` item, the board
-// and the snapshot. A deployed task's ask is done, deployed.
-func verdictText(l i18n.Lang, a *acceptAsk) string {
+// and the snapshot. A verification ask (!a.Conclusion) reflects the to-do's effective delivery state.
+func verdictText(l i18n.Lang, a *acceptAsk, delivery *TodoDelivery) string {
 	label := i18n.T(l, "assistant-reports.verdict_"+cmp.Or(a.Outcome, outcomeDone))
 	reason := a.Reason
 	if !a.Conclusion {
-		reason = i18n.T(l, "assistant-reports.verdict_deployed")
+		reason = verifyReason(l, delivery)
 	}
 	if reason == "" {
 		return label
 	}
 	return i18n.T(l, "assistant-reports.verdict_line", i18n.Args{"verdict": label, "reason": reason})
+}
+
+// verifyReason picks the verification ask's reason from the to-do's effective delivery state: only explicit live says
+// deployed; held states name their gate; none or missing live evidence stays neutral.
+func verifyReason(l i18n.Lang, delivery *TodoDelivery) string {
+	state := ""
+	if delivery != nil {
+		state = delivery.State
+	}
+	switch state {
+	case deliveryLive:
+		return i18n.T(l, "assistant-reports.verdict_deployed")
+	case deliveryPR:
+		return i18n.T(l, "assistant-reports.verdict_verify_pr")
+	case deliveryMerged:
+		return i18n.T(l, "assistant-reports.verdict_verify_merged")
+	case deliveryOff:
+		return i18n.T(l, "assistant-reports.verdict_verify_off")
+	default:
+		return i18n.T(l, "assistant-reports.verdict_verify")
+	}
 }
 
 // recommendText is a decision's recommended option as a line ("" when it is not a decision or recommends nothing).
@@ -55,16 +78,47 @@ func recommendText(l i18n.Lang, a *acceptAsk) string {
 // askSummary is the plain line a card of ask a falls back to, and what the chat list shows of it.
 func askSummary(l i18n.Lang, a *acceptAsk) string {
 	if a.Conclusion {
-		return verdictText(l, a)
+		return verdictText(l, a, nil)
 	}
 	return a.Changed
+}
+
+// checkOptionTaken identifies a check's recommendation or an explicitly recorded option. Older nonempty Chosen
+// text cannot establish an option selection, even if it spells a label.
+func checkOptionTaken(a *acceptAsk) bool {
+	return a.Check != "" && (a.Chosen == "" || a.OptionTaken)
 }
 
 // acceptedNote is what the bot answers under a card the owner passed.
 func acceptedNote(l i18n.Lang, a *acceptAsk) string {
 	switch {
+	case a.OutsideID != "" && !a.WithdrawnAt.IsZero():
+		return i18n.T(l, "assistant-reports.outside_withdrawn")
+	case a.OutsideID != "" && a.ByDefault:
+		return i18n.T(l, "assistant-reports.outside_answered_default")
+	case a.OutsideID != "":
+		return i18n.T(l, "assistant-reports.outside_answered")
+	case decideAsk(a) && a.Superseded:
+		if a.SupersededReason != "" {
+			return i18n.T(l, "assistant-reports.decision_superseded_reason", i18n.Args{"reason": a.SupersededReason})
+		}
+		return i18n.T(l, "assistant-reports.decision_superseded")
+	case decideAsk(a) && a.AgentReply != nil && a.AgentReply.Handled:
+		return i18n.T(l, "assistant-reports.decision_handled_in_agent")
 	case decideAsk(a) && a.ByDefault:
 		return i18n.T(l, "assistant-reports.verdict_taken_default")
+	case decideAsk(a) && a.TextDelivery == decisionTextAgent && a.Chosen != "":
+		return i18n.T(l, "assistant-reports.decision_chosen_noted", i18n.Args{"option": a.Chosen})
+	case decideAsk(a) && a.TextDelivery == decisionTextRecorded && a.Chosen != "":
+		return i18n.T(l, "assistant-reports.decision_chosen_for_supervisor", i18n.Args{"option": a.Chosen})
+	case decideAsk(a) && a.TextDelivery != "" && a.Chosen != "": // unknown future outcome: do not invent delivery
+		return i18n.T(l, "assistant-reports.decision_chosen_recorded", i18n.Args{"option": a.Chosen})
+	case decideAsk(a) && checkOptionTaken(a) && a.Chosen != "": // a check's option went to the supervisor
+		return i18n.T(l, "assistant-reports.decision_chosen_supervisor", i18n.Args{"option": a.Chosen})
+	case decideAsk(a) && checkOptionTaken(a) && a.Response == "": // its OK: to the supervisor, not the Agent
+		return i18n.T(l, "assistant-reports.verdict_taken_supervisor")
+	case decideAsk(a) && !a.OptionTaken && a.Chosen != "": // older text has no stored selection or delivery evidence
+		return i18n.T(l, "assistant-reports.decision_chosen_recorded", i18n.Args{"option": a.Chosen})
 	case decideAsk(a) && a.Chosen != "":
 		return i18n.T(l, "assistant-reports.decision_chosen_noted", i18n.Args{"option": a.Chosen})
 	case decideAsk(a) && a.Response != "":
@@ -81,25 +135,28 @@ func acceptedNote(l i18n.Lang, a *acceptAsk) string {
 
 // conclusionCard is a conclusion's card: the verdict line, the recommended option of a decision, the link, and the button
 // ("Got it", or for a decision "Take the recommendation"); once passed, what came of it instead of the button.
-func (s *Service) conclusionCard(ctx context.Context, t Todo, a acceptAsk) *feishubot.Card {
+func (s *Service) conclusionCard(ctx context.Context, t Todo, a acceptAsk) *botcard.Card {
 	l := s.botLang(ctx)
-	title := i18n.T(l, "assistant-reports.verdict_title", i18n.Args{"task": clip(oneLine(t.Title), 30)})
-	icon, color := "📌", feishubot.Green
-	switch a.Outcome {
-	case outcomeCannot:
-		color = feishubot.Red
-	case outcomeDecide:
-		color = feishubot.Orange
+	title := s.feishuDirection(ctx, t, s.feishuDirections(ctx)) + i18n.T(l, "assistant-reports.verdict_title", i18n.Args{"task": clip(oneLine(t.Title), 30)})
+	color := botcard.Green
+	switch {
+	case !a.AcceptedAt.IsZero(): // passed: over
+		color = botcard.Grey
+	case a.Outcome == outcomeCannot:
+		color = botcard.Red
+	case a.Outcome == outcomeDecide:
+		color = botcard.Orange
 	}
-	c := feishubot.NewCard(icon+" "+title, color, verdictText(l, &a))
+	delivery := currentDelivery(t)
+	c := botcard.NewCard(title, color, verdictText(l, &a, delivery)).Tag(i18n.T(l, "assistant-reports.tag_conclusion"), botcard.Neutral)
 	// The goal, where it is now (with how far the work went out) and the evidence below (#3218).
-	now := feishubot.EscapeMarkdown(verdictText(l, &a))
+	now := botcard.EscapeMarkdown(verdictText(l, &a, delivery))
 	if live := liveText(l, s.todoStages(ctx)[t.ID]); live != "" && a.Outcome != outcomeDecide {
-		now += " · " + feishubot.EscapeMarkdown(live)
+		now += " · " + botcard.EscapeMarkdown(live)
 	}
-	c.Markdown(i18n.T(l, "assistant-reports.goal_head", i18n.Args{"goal": feishubot.EscapeMarkdown(clip(oneLine(t.Title), 80)), "now": now}))
+	c.Markdown(i18n.T(l, "assistant-reports.goal_head", i18n.Args{"goal": botcard.EscapeMarkdown(clip(oneLine(t.Title), 80)), "now": now}))
 	if r := recommendText(l, &a); r != "" {
-		c.Markdown(feishubot.EscapeMarkdown(r))
+		c.Markdown(botcard.EscapeMarkdown(r))
 	}
 	// The criteria and how each ended stay on the task's page, not on the card (#10380): the card leads with the result,
 	// and names only what was not met, so a shortfall is never hidden behind "Done".
@@ -109,53 +166,55 @@ func (s *Service) conclusionCard(ctx context.Context, t Todo, a acceptAsk) *feis
 		}
 	}
 	if d := deadlineText(l, s.location(ctx), a.Deadline, a.Reversible, time.Now()); d != "" && decideAsk(&a) && a.AcceptedAt.IsZero() && a.AgentReply == nil {
-		c.Markdown(feishubot.EscapeMarkdown(d))
+		c.Markdown(botcard.EscapeMarkdown(d))
 	}
 	// Self-contained (#3804): where it came from and stands, what each option leads to, what waiting costs.
 	for _, line := range decisionLines(l, s.location(ctx), &a) {
-		c.Markdown(feishubot.EscapeMarkdown(line))
+		c.Markdown(botcard.EscapeMarkdown(line))
 	}
 	if a.Link != "" {
-		c.Markdown(i18n.T(l, "assistant-reports.verdict_link", i18n.Args{"link": "[" + feishubot.EscapeMarkdown(clip(a.Link, 80)) + "](" + a.Link + ")"}))
+		c.Markdown(i18n.T(l, "assistant-reports.verdict_link", i18n.Args{"link": "[" + botcard.EscapeMarkdown(clip(a.Link, 80)) + "](" + a.Link + ")"}))
 	}
 	if !a.AcceptedAt.IsZero() {
 		return c.Note(acceptedNote(l, &a))
 	}
-	var bs []feishubot.Button
+	// One row: the primary answer, the first other option of a decision, and a "more" menu with the rest — the other
+	// options, the fixed answers for a decision they cannot answer as it is (decision.go), the link.
+	var bs []botcard.Button
+	var menu []botcard.MenuItem
 	hint := "assistant-reports.verdict_reply_hint"
 	switch {
 	case decideAsk(&a) && a.Recommend != "":
-		bs = append(bs, feishubot.Btn(i18n.T(l, "assistant-reports.verdict_take"), feishubot.Primary, map[string]any{"a": "accept", "id": t.ID}))
+		bs = append(bs, botcard.Btn(i18n.T(l, "assistant-reports.verdict_take"), botcard.Primary, map[string]any{"a": "accept", "id": t.ID}))
 		hint = "assistant-reports.verdict_decide_hint"
 	case decideAsk(&a):
 		hint = "assistant-reports.verdict_decide_hint_none"
 	default:
-		bs = append(bs, feishubot.Btn(i18n.T(l, "assistant-reports.verdict_ack"), feishubot.Primary, map[string]any{"a": "accept", "id": t.ID}))
-	}
-	if a.Link != "" {
-		bs = append(bs, feishubot.LinkBtn(i18n.T(l, "assistant-reports.accept_open"), a.Link))
-	}
-	if len(bs) > 0 {
-		c.Buttons(bs...)
+		bs = append(bs, botcard.Btn(i18n.T(l, "assistant-reports.verdict_ack"), botcard.Primary, map[string]any{"a": "accept", "id": t.ID}))
 	}
 	if decideAsk(&a) {
-		// The other options, then the fixed answers for a decision they cannot answer as it is (decision.go).
-		var more []feishubot.Button
 		for i, o := range a.Options {
-			if i > 0 {
-				more = append(more, feishubot.Btn(clip(o.Label, 20), feishubot.Default, map[string]any{"a": "accept", "id": t.ID, "opt": o.Label}))
+			if i == 0 {
+				continue
 			}
+			if len(bs) < 2 {
+				bs = append(bs, botcard.Btn(clip(o.Label, 20), botcard.Default, map[string]any{"a": "accept", "id": t.ID, "opt": o.Label}))
+				continue
+			}
+			menu = append(menu, botcard.MenuItem{Label: clip(o.Label, 20), Value: map[string]any{"opt": o.Label}})
 		}
-		if len(more) > 0 {
-			c.Buttons(more...)
-		}
-		var cannot []feishubot.Button
 		for _, r := range ownerResponses {
-			cannot = append(cannot, feishubot.Btn(i18n.T(l, "assistant-reports.decision_response_"+r), feishubot.Default,
-				map[string]any{"a": "accept", "id": t.ID, "resp": r}))
+			menu = append(menu, botcard.MenuItem{Label: i18n.T(l, "assistant-reports.decision_response_"+r), Value: map[string]any{"resp": r}})
 		}
-		c.Buttons(cannot...)
 	}
+	if a.Link != "" {
+		if len(menu) == 0 {
+			bs = append(bs, botcard.LinkBtn(i18n.T(l, "assistant-reports.accept_open"), a.Link))
+		} else {
+			menu = append(menu, botcard.MenuItem{Label: i18n.T(l, "assistant-reports.accept_open"), URL: a.Link})
+		}
+	}
+	c.Buttons(append(bs, botcard.Overflow(map[string]any{"a": "accept", "id": t.ID}, menu...))...)
 	return c.Note(i18n.T(l, hint))
 }
 
@@ -201,6 +260,8 @@ type conclusionInput struct {
 	ForBriefing bool
 	// RaisedBy: the leader conversation or background supervisor that raised it, kept while it is held (acceptAsk).
 	RaisedBy string
+	// Check: the recurring schedule whose progress check raised the decision (acceptAsk.Check).
+	Check string
 	// Verified: the supervisor checked the evidence (supervisorVerified): a done or cannot conclusion tells the owner and
 	// is not left for them to acknowledge (#3240).
 	Verified bool
@@ -232,7 +293,11 @@ func (s *Service) askConclusion(ctx context.Context, t Todo, in conclusionInput)
 	b.mu.Unlock()
 	l := s.botLang(ctx)
 	note, _, _ := strings.Cut(strings.TrimSpace(in.Note), "\n")
-	a := acceptAsk{Conclusion: true, Outcome: in.Outcome, Reason: clip(oneLine(cmp.Or(strings.TrimSpace(in.Reason), note)), 120),
+	reasonLimit := 120
+	if in.Outcome == outcomeDecide {
+		reasonLimit = decisionReasonMaxRunes
+	}
+	a := acceptAsk{Conclusion: true, Outcome: in.Outcome, Reason: clip(oneLine(cmp.Or(strings.TrimSpace(in.Reason), note)), reasonLimit),
 		Recommend: clip(oneLine(in.Recommend), 120), Link: s.conclusionLink(ctx, t, in), AskedAt: time.Now().UTC(), Earlier: earlier}
 	if in.Outcome == outcomeDecide && a.Recommend != "" {
 		a.Deadline, a.Reversible = in.Deadline, in.Reversible
@@ -240,7 +305,7 @@ func (s *Service) askConclusion(ctx context.Context, t Todo, in conclusionInput)
 	if in.Outcome == outcomeDecide {
 		a.WhyOwner, a.Options, a.CostOfWaiting = in.Decision.WhyOwner, in.Decision.Options, in.Decision.CostOfWaiting
 		a.From, a.Stands = s.decisionBackground(ctx, t) // the hub's, not the model's: where it came from, where it stands
-		a.ForBriefing = in.ForBriefing
+		a.ForBriefing, a.Check = in.ForBriefing, in.Check
 		if a.ForBriefing {
 			a.RaisedBy = in.RaisedBy
 		}
@@ -265,21 +330,74 @@ func lastAgent(t Todo) TodoAgent {
 	return t.Agents[len(t.Agents)-1]
 }
 
-// conclusionLink is the one link of a conclusion: the one the review gave, when it is a web address; else the task's PR;
-// else the first web address in the review's note and evidence; else the agent's conversation; else the task's page.
+// validWebURL returns raw trimmed when it is a well-formed http(s) URL with a non-empty host; "" otherwise.
+func validWebURL(raw string) string {
+	u := strings.TrimSpace(raw)
+	if u == "" || urlRe.FindString(u) != u {
+		return ""
+	}
+	parsed, err := url.Parse(u)
+	if err != nil || parsed.Host == "" {
+		return ""
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "http", "https":
+		return u
+	default:
+		return ""
+	}
+}
+
+// todoRepositoryDeliveryPR returns the first canonical delivery PR/MR URL saved in task id's repository bindings.
+// It reads saved bindings without mutating state and skips reference-role links.
+func (s *Service) todoRepositoryDeliveryPR(ctx context.Context, id string) string {
+	st, ok := s.store().(todoRepositoryStore)
+	if !ok {
+		return ""
+	}
+	set, err := st.TodoRepositories(ctx, id)
+	if err != nil {
+		return ""
+	}
+	for _, row := range set.Repositories {
+		for _, l := range row.Links {
+			if l.Kind != "pull_request" {
+				continue
+			}
+			role := l.Role
+			if role == "" {
+				role = repository.LinkRoleDelivery
+			}
+			if role != repository.LinkRoleDelivery {
+				continue
+			}
+			if u := validWebURL(l.CanonicalURL); u != "" {
+				return u
+			}
+		}
+	}
+	return ""
+}
+
+// conclusionLink is the one link of a conclusion: the one the review gave, when it is a web address; else the task's
+// stage PR (or PRURL); else a canonical saved repository delivery PR/MR link; else the first web address in the
+// review's note and evidence; else the agent's conversation; else the task's page.
 func (s *Service) conclusionLink(ctx context.Context, t Todo, in conclusionInput) string {
-	if u := strings.TrimSpace(in.Link); u != "" && urlRe.FindString(u) == u {
+	if u := validWebURL(in.Link); u != "" {
 		return u
 	}
-	if pr := s.todoStages(ctx)[t.ID].PR; pr != "" {
+	if pr := validWebURL(cmp.Or(s.todoStages(ctx)[t.ID].PR, t.PRURL)); pr != "" {
+		return pr
+	}
+	if pr := s.todoRepositoryDeliveryPR(ctx, t.ID); pr != "" {
 		return pr
 	}
 	texts := []string{in.Note}
 	for _, c := range in.Checks {
 		texts = append(texts, c.Evidence)
 	}
-	if u := urlRe.FindString(strings.Join(texts, "\n")); u != "" {
-		return strings.TrimRight(u, ".,;:!?")
+	if u := validWebURL(strings.TrimRight(urlRe.FindString(strings.Join(texts, "\n")), ".,;:!?")); u != "" {
+		return u
 	}
 	web := s.webBase(ctx)
 	if ag := lastAgent(t); web != "" && ag.SessionID != "" {
@@ -291,6 +409,14 @@ func (s *Service) conclusionLink(ctx context.Context, t Todo, in conclusionInput
 // dropDecision ends task id's decision still waiting, once its review moved on (rework, cancelled): it is no longer
 // listed, its button takes nothing, and a reply to its card is answered "already handled".
 func (s *Service) dropDecision(ctx context.Context, id string) {
+	s.supersedeDecision(ctx, id, "")
+}
+
+// supersedeDecision clears task id's open needs_user decision ask when supervision transitions the review via
+// task_review, recording the natural-language reason (never fabricating an owner selection), notifying clients so it
+// leaves "Needs you", and redrawing any Lark cards to remove buttons and display the supersession note (#13112).
+func (s *Service) supersedeDecision(ctx context.Context, id, reason string) {
+	reason = clip(oneLine(strings.TrimSpace(reason)), 300)
 	b := &s.accept
 	b.mu.Lock()
 	if !s.loadAcceptLocked(ctx) {
@@ -302,32 +428,54 @@ func (s *Service) dropDecision(ctx context.Context, id string) {
 		b.mu.Unlock()
 		return
 	}
-	a.AcceptedAt = time.Now().UTC()
+	now := time.Now().UTC()
+	a.AcceptedAt = now
+	if !a.Deadline.IsZero() && a.DueAt.IsZero() {
+		a.DueAt = now
+	}
+	a.Superseded = true
+	a.SupersededReason = reason
 	s.saveAcceptLocked(ctx)
+	cp := *a
 	b.mu.Unlock()
 	s.askChanged(ctx)
+	s.todoPushOver(id) // a later decision of the task rings again
+	if len(cp.Messages) > 0 {
+		s.updateAskCards(ctx, id, cp)
+	}
 }
 
 // askCopy is task id's ask as it is now (false: none, or a claim still going out).
 func (s *Service) askCopy(id string) (acceptAsk, bool) {
+	a, _, ok := s.askCopyReadable(id)
+	return a, ok
+}
+
+// askCopyReadable is the three-state form of askCopy. readable is false when the acceptance book could not be read
+// (a transient settings-store failure), which is not evidence that no owner card exists: callers that would spend a
+// once-per-round marker on that conclusion must hold off and retry rather than treat an unreadable ledger as card-less.
+// ok is false both for an unreadable book and for a readable one with no ask; the distinction is readable.
+func (s *Service) askCopyReadable(id string) (ask acceptAsk, readable, ok bool) {
 	b := &s.accept
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if !s.loadAcceptLocked(context.Background()) {
-		return acceptAsk{}, false
+		return acceptAsk{}, false, false
 	}
 	a := b.asks[id]
 	if a == nil || a.AskedAt.IsZero() {
-		return acceptAsk{}, false
+		return acceptAsk{}, true, false
 	}
-	return *a, true
+	return *a, true, true
 }
 
 // takeRecommendation: the owner took decision a's recommended option for task id (or, a.ByDefault, nobody answered by its
 // deadline and the hub took it, #3127): it is kept in the todo's decisions and sent to the task's agent, whose next stop
 // comes back to the supervisor (userDecided). With no Agent to receive an explicit owner choice, the choice is recorded
 // and handed to the supervisor instead. Any other delivery error takes nothing and leaves the round retryable. A
-// failed automatic default keeps the old rollback and owner-reminder behavior.
+// failed automatic default keeps the old rollback and owner-reminder behavior. A decision a recurring check raised
+// (a.Check) is about the supervisor's approach, not the Agent's work: it is recorded and goes to the supervisor with
+// what the option leads to, and the Agent hears only what the supervisor then tells it (checkDecided, #11587).
 func (s *Service) takeRecommendation(ctx context.Context, id string, a acceptAsk) (acceptResult, error) {
 	t, ok := s.todoNow(id)
 	if !ok {
@@ -343,14 +491,16 @@ func (s *Service) takeRecommendation(ctx context.Context, id string, a acceptAsk
 		row.Reason, row.Source = defaultReason(l, s.location(ctx), a.Deadline), db.DecisionAgent
 	}
 	var sendErr error
-	if _, err := s.relayToTask(ctx, t.Origin, id, msg, func(cur Todo) bool {
-		return cur.DoneAt == nil && !acceptAskStale(&a, cur)
-	}); err != nil {
-		s.logf("task %s: conclusion to agent: %v", id, err)
-		if a.ByDefault || !noAgentCanTake(err) {
-			return acceptResult{}, err // a retryable failure or an automatic default takes nothing
+	if a.Check == "" && a.OutsideID == "" {
+		if _, err := s.relayToTask(ctx, t.Origin, id, msg, func(cur Todo) bool {
+			return cur.DoneAt == nil && !acceptAskStale(&a, cur)
+		}); err != nil {
+			s.logf("task %s: conclusion to agent: %v", id, err)
+			if a.ByDefault || !noAgentCanTake(err) {
+				return acceptResult{}, err // a retryable failure or an automatic default takes nothing
+			}
+			sendErr = err
 		}
-		sendErr = err
 	}
 	if st := s.todoDB(); st != nil {
 		at := decisionNow()
@@ -364,10 +514,16 @@ func (s *Service) takeRecommendation(ctx context.Context, id string, a acceptAsk
 			s.decisionsChanged(ctx, id, at)
 		}
 	}
-	if sendErr != nil {
+	switch {
+	case a.OutsideID != "":
+		// An outside caller polls the answer; there is no Agent or supervisor to relay to.
+	case a.Check != "":
+		s.checkDecided(ctx, t, &a, a.Recommend, false)
+	case sendErr != nil:
 		return s.decisionNotDelivered(ctx, id, a.AskedAt, a.Recommend, sendErr), nil
+	default:
+		s.userDecided(ctx, id)
 	}
-	s.userDecided(ctx, id)
 	return acceptSucceeded(), nil
 }
 

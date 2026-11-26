@@ -32,9 +32,11 @@ func (n *Node) codexSpeedRow(s *proto.Session) {
 		return
 	}
 	c.mu.Lock()
-	tiers := c.models[firstNonEmpty(thread.model, s.Model)].tiers
+	tiers := c.models[n.codexModelNow(s.SessionID, c, thread, s.Model)].tiers
 	c.mu.Unlock()
-	s.ServiceTier = thread.serviceTier
+	if thread.serviceTier != "" {
+		s.ServiceTier = thread.serviceTier
+	}
 	if len(tiers) > 0 {
 		s.ServiceTiers = append([]proto.ServiceTier{{ID: "default", Name: "Standard"}}, tiers...)
 	}
@@ -53,7 +55,7 @@ func (n *Node) setCodexSpeed(ctx context.Context, id, tier string) error {
 	if !ok {
 		return fmt.Errorf("this session does not support Codex speed changes")
 	}
-	model := firstNonEmpty(thread.model, n.metaOf(id).model)
+	model := n.codexModelNow(id, c, thread, n.metaOf(id).model)
 	c.mu.Lock()
 	tiers := c.models[model].tiers
 	c.mu.Unlock()

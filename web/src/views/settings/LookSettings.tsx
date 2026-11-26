@@ -1,5 +1,6 @@
-// Settings › General › Appearance's "Theme color" and "Text size" (ui/look.ts; the app's ThemeColorPicker and StyleSettingsPage's "Text size"),
-// and the web's own "Recent chats in the sidebar" (lib/sidebar-recent.ts).
+// Settings › Advanced › Appearance's "Theme color", "Font" and "Sidebar icons" (#13398), and General's "Text size"
+// (ui/look.ts; the app's ThemeColorPicker and StyleSettingsPage's "Text size"), plus General's "Recent chats in the
+// sidebar" (lib/sidebar-recent.ts). Moving the rows changed no component and no browser storage key.
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { t } from "../../i18n";
 import { cx } from "../../ui/atoms";
@@ -11,9 +12,11 @@ import {
   type AccentChoice, type TextSize,
 } from "../../ui/look";
 import { RECENT_COUNTS, setRecentCount, useRecentCount } from "../../lib/sidebar-recent";
+import { setSidebarUsageShown, useSidebarUsageShown } from "../../lib/sidebar-usage";
+import { setSidebarIconMode, SIDEBAR_ICON_MODES, useSidebarIconMode, type SidebarIconMode } from "../../lib/sidebar-icons";
 import { usePersona } from "../assistant/Persona";
 import { Segmented } from "../assistant/parts";
-import { Row } from "./SettingsParts";
+import { Row, Switch } from "./SettingsParts";
 import { FONT_PRESETS, quoteFont, setFontChoice, useFontPreference, validFontFamily, type FontChoice, type FontKind } from "../../ui/font-preference";
 
 function subscribeScheme(l: () => void) {
@@ -143,4 +146,25 @@ function FontRow({ kind, choice }: { kind: FontKind; choice: FontChoice }) {
       <p className="text-submeta text-ink-3" role={draft.length > 0 && !valid ? "alert" : undefined}>{draft.length > 0 && !valid ? t("ui-look.font_invalid") : unavailable ? t("ui-look.font_unavailable") : t("ui-look.font_local")}</p>
     </div>}
   </div>;
+}
+
+/** "Sidebar icons": Monochrome (the default, the neutral ink) or Colored, a color for each page's icon (#10822).
+ *  Stacked on a phone like Recent chats, so the name is not cut beside the choices. */
+export function SidebarIconsRow() {
+  const mode = useSidebarIconMode();
+  return (
+    <Row label={t("ui-look.sidebar_icons")} hint={t("ui-look.sidebar_icons_hint")} wrapHint stackOnNarrow anchor="sidebar-icons">
+      <Segmented<SidebarIconMode> label={t("ui-look.sidebar_icons")} value={mode} options={SIDEBAR_ICON_MODES.map((v) => ({ v, label: t(`ui-look.sidebar_icons_${v}`) }))} onChange={setSidebarIconMode} />
+    </Row>
+  );
+}
+
+/** "Launcher quota in the sidebar": the usage card under the sidebar, on by default. */
+export function SidebarUsageRow() {
+  const on = useSidebarUsageShown();
+  return (
+    <Row label={t("ui-look.sidebar_usage")} hint={t("ui-look.sidebar_usage_hint")} wrapHint anchor="sidebar-usage">
+      <Switch on={on} onChange={setSidebarUsageShown} label={t("ui-look.sidebar_usage")} />
+    </Row>
+  );
 }

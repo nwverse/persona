@@ -92,9 +92,8 @@ func (e notWrittenError) Error() string        { return e.err.Error() }
 func (e notWrittenError) Unwrap() error        { return e.err }
 func (e notWrittenError) Is(target error) bool { return target == ErrNotWritten }
 
-// ErrWriteDelayed is matched (errors.Is) by what Call answers when its request reached the wire only after waiting
-// behind another write, then its reply wait ended. The error is still the ctx's error. A ping delayed this way says
-// the write channel was busy; it is not the same as an uninterrupted ping that nobody answered.
+// ErrWriteDelayed matches a timed-out call that waited behind another write. For a framed ping it also covers
+// observed acknowledgements draining earlier events or answers during that ping's response budget.
 var ErrWriteDelayed = errors.New("rpc: request written after waiting for the writer")
 
 type writeDelayedError struct {
@@ -106,8 +105,8 @@ func (e writeDelayedError) Error() string        { return e.err.Error() }
 func (e writeDelayedError) Unwrap() error        { return e.err }
 func (e writeDelayedError) Is(target error) bool { return target == ErrWriteDelayed }
 
-// WriteDelayRemaining reports how much of the caller's deadline budget remained when its delayed request finished
-// writing. Negative means the write finished after the deadline. The boolean is false for other errors.
+// WriteDelayRemaining reports the budget left after a delayed write, including observed transport backlog ahead
+// of a framed ping. A negative value means the write finished after its deadline.
 func WriteDelayRemaining(err error) (time.Duration, bool) {
 	var e writeDelayedError
 	if errors.As(err, &e) {
@@ -122,6 +121,7 @@ type Limits struct{ FrameBytes, ConcurrentRequests, PendingCalls int }
 
 type Peer struct {
 	Limits       Limits
+	ReadLimit    int  // optional inbound message budget, in bytes; Limits.FrameBytes takes precedence
 	TrackReplies bool // enable AfterReply hooks for a resident's drain boundary
 	prefix       string
 	w            io.Writer
@@ -166,12 +166,14 @@ type Peer struct {
 	// Lanes (lanes.go): the table EnableLanes set (nil: this peer never frames), the frame writer once either direction
 	// is framed (mu), set as out once this side's output is, this side's rpc.lanes call until its answer is read (mu),
 	// whether this side answered one (mu), and closed once this side's output is framed.
-	lanes      laneTable
-	lw         *laneWriter
-	out        atomic.Pointer[laneWriter]
-	lanesCall  string
-	lanesAsked bool
-	lanesUp    chan struct{}
+	lanes laneTable
+	// creditReplies: methods whose answers this side writes with credit (CreditReplies).
+	creditReplies map[string]bool
+	lw            *laneWriter
+	out           atomic.Pointer[laneWriter]
+	lanesCall     string
+	lanesAsked    bool
+	lanesUp       chan struct{}
 
 	// resume (resume.go): nil unless EnableResume. OnLost, when set, is told (in a goroutine of its own) that the
 	// transport was lost and the peer waits to be resumed: the caller closes it, which ends a write or read still stuck
@@ -315,9 +317,12 @@ func (p *Peer) Serve(ctx context.Context, r io.Reader) error {
 		}
 		p.mu.Unlock()
 	}
-	maximum := 64 * 1024 * 1024
+	maximum := p.ReadLimit
 	if p.Limits.FrameBytes > 0 {
 		maximum = p.Limits.FrameBytes
+	}
+	if maximum <= 0 {
+		maximum = 64 << 20
 	}
 	act := &readActivity{r: r}
 	lr := newLineReader(act, maximum)
@@ -462,7 +467,7 @@ func (p *Peer) handle(ctx context.Context, m message) {
 			out.Result = b
 		}
 	}
-	r := p.lanes.reply(m.Method)
+	r := p.replyRoute(m.Method)
 	if err := p.write(out, r); errors.Is(err, errFrameBudget) {
 		// The request must get an error, not a permanently unresolved promise.
 		// If even the error cannot fit, disconnect so all pending calls fail.
@@ -514,8 +519,25 @@ func (p *Peer) writeContext(ctx context.Context, m message, r route) error {
 }
 
 type writeObservation struct {
-	delayed   bool
-	remaining time.Duration
+	delayed      bool
+	remaining    time.Duration
+	writer       *laneWriter // a control frame queued behind previously written, unacknowledged events or answers
+	acked, ahead uint64      // acknowledged at enqueue, and the last uncredited frame before this control frame
+}
+
+// A later cumulative acknowledgement through the traffic ahead of this ping proves the peer was draining its path.
+// A silent peer, a duplicate acknowledgement or one covering the ping itself cannot extend its response budget.
+func (o *writeObservation) observePingDrain(deadline time.Time) {
+	if o.writer == nil {
+		return
+	}
+	o.writer.mu.Lock()
+	through, at := o.writer.ackedThrough, o.writer.ackAdvanced
+	o.writer.mu.Unlock()
+	if through > o.acked && through <= o.ahead && !at.After(deadline) {
+		o.delayed = true
+		o.remaining = min(o.remaining, max(deadline.Sub(at), 0))
+	}
 }
 
 // writeContextObserved also reports whether this message had to wait behind another writer before reaching the wire,
@@ -656,6 +678,9 @@ func (p *Peer) Call(ctx context.Context, method string, params any, out any) err
 			params, _ := json.Marshal(map[string]string{"id": id})
 			_ = p.write(message{Event: cancelEvent, Params: params}, controlRoute)
 		}
+		if deadline, ok := ctx.Deadline(); ok && method == "ping" && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			writeObservation.observePingDrain(deadline)
+		}
 		if writeObservation.delayed {
 			return writeDelayedError{err: ctx.Err(), remaining: writeObservation.remaining}
 		}
@@ -686,7 +711,10 @@ func (p *Peer) Notify(event string, params any) error {
 // NotifyContext bounds waiting for the writer. Once writing starts, the transport owner must close a stalled
 // connection to interrupt it; cancellation alone cannot stop an arbitrary io.Writer.
 func (p *Peer) NotifyContext(ctx context.Context, event string, params any) error {
-	r := p.lanes.eventRoute(event)
+	return p.notifyRoute(ctx, event, params, p.lanes.eventRoute(event))
+}
+
+func (p *Peer) notifyRoute(ctx context.Context, event string, params any, r route) error {
 	if raw, ok := params.(Marshaled); ok {
 		if line, ok := marshaledLine(event, raw); ok {
 			return p.writeContext(ctx, message{line: line}, r)

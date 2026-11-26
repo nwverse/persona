@@ -2,11 +2,13 @@ package persona.feature.inbox
 
 import persona.core.contracts.api.InboxBulkAction
 import persona.core.contracts.api.InboxDoneTarget
+import persona.core.contracts.api.LarkMember
 import persona.core.contracts.api.ManagerPins
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.CoroutineContext
 import kotlin.coroutines.EmptyCoroutineContext
+import persona.core.inbox.*
 
 /** This repository with [pins] on every request made through it (an item page's own); null pins: this one. */
 fun InboxRepository.pinned(pins: ManagerPins?): InboxRepository =
@@ -55,6 +57,8 @@ internal class PinnedInboxRepository(val base: InboxRepository, val pins: Manage
     override suspend fun react(messageId: String, key: String, remove: Boolean) = withContext(pins) { base.react(messageId, key, remove) }
     override suspend fun cardAction(messageId: String, actionId: String) = withContext(pins) { base.cardAction(messageId, actionId) }
     override suspend fun userProfile(userId: String, feedId: String?) = withContext(pins) { base.userProfile(userId, feedId) }
+    override suspend fun larkMembers(feedId: String, query: String, limit: Int): List<LarkMember> =
+        withContext(pins) { base.larkMembers(feedId, query, limit) }
     override suspend fun quickReactions() = withContext(pins) { base.quickReactions() }
     override suspend fun emojis() = withContext(pins) { base.emojis() }
     override suspend fun inboxMutes(manager: String?) = withContext(pins) { base.inboxMutes(manager) }

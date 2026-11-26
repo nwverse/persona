@@ -148,3 +148,54 @@ func TestCodexTakeoverRequiresFullCredentials(t *testing.T) {
 		}
 	}
 }
+
+func TestBackendWorkspacesRequireFullCredentials(t *testing.T) {
+	patterns := routePatterns(t)
+	for _, pattern := range []string{
+		"GET /api/v1/todos/{id}/backend-workspace",
+		"GET /api/v1/todos/{id}/backend-workspace/operations/{operation_id}",
+		"POST /api/v1/todos/{id}/backend-workspace/prepare",
+		"POST /api/v1/todos/{id}/backend-workspace/cancel",
+		"POST /api/v1/todos/{id}/backend-workspace/cleanup",
+	} {
+		if !slices.Contains(patterns, pattern) {
+			t.Errorf("missing backend workspace route %s", pattern)
+		}
+		if scope := extwire.RouteScopes[pattern]; scope != "" {
+			t.Errorf("backend workspace route %s grants extension scope %s", pattern, scope)
+		}
+	}
+}
+
+func TestRepoMirrorsRequireFullCredentials(t *testing.T) {
+	patterns := routePatterns(t)
+	for _, pattern := range []string{
+		"GET /api/v1/assistant/repositories/mirrors",
+		"GET /api/v1/assistant/repositories/{id}/mirrors/{machine_id}",
+		"PUT /api/v1/assistant/repositories/{id}/mirrors/{machine_id}",
+		"POST /api/v1/assistant/repositories/{id}/mirrors/{machine_id}/sync",
+		"DELETE /api/v1/assistant/repositories/{id}/mirrors/{machine_id}",
+	} {
+		if !slices.Contains(patterns, pattern) {
+			t.Errorf("missing repo mirror route %s", pattern)
+		}
+		if scope := extwire.RouteScopes[pattern]; scope != "" {
+			t.Errorf("repo mirror route %s grants extension scope %s", pattern, scope)
+		}
+	}
+}
+
+func TestTodoHandoffRequiresFullCredentials(t *testing.T) {
+	patterns := routePatterns(t)
+	for _, pattern := range []string{
+		"GET /api/v1/todos/{id}/handoffs",
+		"POST /api/v1/todos/{id}/handoff",
+	} {
+		if !slices.Contains(patterns, pattern) {
+			t.Errorf("missing todo handoff route %s", pattern)
+		}
+		if scope := extwire.RouteScopes[pattern]; scope != "" {
+			t.Errorf("todo handoff route %s grants extension scope %s", pattern, scope)
+		}
+	}
+}

@@ -59,6 +59,13 @@ is repeated for byte-identical output. `scripts/ci/android.sh` explicitly select
 check in its lint/build lane; a missing Swift toolchain, download failure or source mismatch fails the check rather
 than silently skipping it. An ordinary Gradle build does not fetch or run the generator.
 
+Before either mode's valid-source invocation, the same pinned CLI must reject the unchanged About row alongside a
+synthetic component with no native mapping. Both `check` and `generate` must return nonzero with the input's source
+location, component name and mapping suggestion, create neither output directory and leave the reviewed Kotlin
+unchanged. `scripts/app/test_refract_about_version.py` covers that fail-closed boundary with mocked failures; it runs
+in the lint/build lane without a CLI, network or Swift. This bounded CLI evidence does not accept a generator release
+or satisfy Gate A's remaining readiness items.
+
 Generated `android/feature/settings/src/test/kotlin/persona/feature/settings/generated/AboutVersionRow.kt` imports
 only Compose and Persona code. Both it and `AboutVersionSnapshot.kt` live only in `:feature:settings`'s test source
 set; ordinary debug/release production source sets contain neither the generated row nor its adapter. Its model is
@@ -69,8 +76,22 @@ style change.
 ## Evidence and limits
 
 `AboutVersionRefractTest` compares actual generated versus handwritten pixels across Glass, Brief and Board, light
-and dark, en/zh-Hans/ja, and standard/2x text; it also exercises the missing-version fallback, the unchanged
-three-row rollback and the existing native Commit tests. Captures go to build output or `-Dpersona.shots=<dir>` and
-are attached to the PR, never committed. These are **Native JVM Compose component captures**, not device/emulator,
-system-bar, navigation, accessibility-service or performance evidence. No such broader result is claimed by this
-consumer.
+and dark, en/zh-Hans/ja, and standard/2x text. `AboutVersionMatrixTest` extends those pairs to 360dp compact and
+640dp regular component widths, Standard/Compact density, actual Compose font scales 1x/2x and independent short/long
+Version values. It captures complete three-row groups: handwritten Version/Build/Commit beside generated Version with
+native Build/Commit. The pairs must be nonempty and byte-identical, and present/unknown Commit groups must differ;
+the main matrix also checks the injected font scale and a measured text-width difference. A separate synthetic 3x
+text-density probe directly measures native and generated Version-row heights beyond the fixed minimum and requires
+Compact's actual vertical padding to be 10dp smaller than Standard's. It checks the actual 3x scale, both above-minimum
+preconditions and native/generated height equality, and repeats at 420dpi. Compose's per-edge integer `roundToPx`
+model determines the exact expected pixel reduction, so fractional dp-to-pixel conversion is not mistaken for a UI
+regression. This is not a claim about supported font sizes; the ordinary 1x/2x matrix does not require the
+fixed-minimum About row to shrink. A separate gap outside the captured group measures the real
+`Tokens.Space.Standard.l.dense`. The test compares the rows' actual Compose semantics, checks
+single-line long-value layout, the native Commit's copy action label, full-value clipboard result and unknown no-op,
+and measures 48dp minimum touch bounds. It also exercises the missing-version fallback,
+the unchanged three-row rollback and the existing native Commit tests. Captures go to build output or
+`-Dpersona.shots=<dir>` and are attached to the PR, never committed. These are **Native JVM Compose component captures
+and semantics**, not device/emulator, system-bar, navigation, accessibility-service or performance evidence. A
+regular-width fixture is not a tablet-window test, and retained full-value semantics does not establish TalkBack speech
+or traversal. No such broader result is claimed by this consumer.

@@ -12,7 +12,13 @@
   "done": "Done",
   "interrupted": "Interrupted",
   "follow_up": "Follow-up",
-  "task_waiting": "Waiting",
+  "waits_owner": "Waiting on you",
+  "waits_prerequisite": "Waiting on a prerequisite",
+  "waits_delivery": "Waiting to merge / deploy",
+  "waits_external": "Waiting on something external",
+  "waits_background": "Waiting on background work",
+  "waits_retry": "Waiting to retry",
+  "waits_unknown": "Paused (nothing needed from you)",
   "not_started": "Not started",
   "failed": "Didn't start",
   "count_needs_you_one": "{count} needs you",
@@ -26,5 +32,12 @@
   "direction_working": "Doing",
   "direction_needs_you": "Needs you",
   "direction_stuck": "Stuck",
-  "direction_planned": "Not started"
+  "direction_planned": "Not started",
+  "bg_stalled_minutes_one": "Background command quiet for {count} min",
+  "bg_stalled_minutes_other": "Background commands quiet for {count} min",
+  "bg_stalled_hours_one": "Background command quiet for {count} hr",
+  "bg_stalled_hours_other": "Background commands quiet for {count} hr",
+  "bg_stalled_days_one": "Background command quiet for {count} day",
+  "bg_stalled_days_other": "Background commands quiet for {count} days",
+  "bg_stalled_hint": "Its background commands have used no CPU and written no output for a while, so they may be stuck. It still counts as Working: a running tool is work, and whether to stop it is up to you."
 }

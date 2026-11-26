@@ -3,9 +3,10 @@
 // those Agents are on. One case per line of the issue's acceptance, then the rules' edges: pieces at any depth, a
 // `part_of` loop, quiet tasks, and the page's "Not done", which stays as it is. The data is made up.
 import { describe, expect, it } from "vitest";
-import type { Session } from "./types";
+import type { Interaction, Session } from "./types";
 import { makeSessionLookup, type Todo } from "./todos";
-import { ownerBadge, triage, triageTodos, waitsOnOwner } from "./todo-triage";
+import type { TodoSummary } from "./todo-view-wire";
+import { ownerBadge, ownerNeeds, triage, triageTodos, waitsOnOwner } from "./todo-triage";
 
 const NOW = Date.parse("2026-11-10T12:00:00Z");
 const hoursAgo = (h: number) => new Date(NOW - h * 3600_000).toISOString();
@@ -72,6 +73,29 @@ describe("the sidebar's To-dos badge, the issue's acceptance (#11085)", () => {
   it("counts a personal to-do no Agent was ever on", () => {
     expect(counted([personal("own")])).toEqual(["own"]);
   });
+
+  it("keeps one badge count and calls the task agent_asks only while its exact linked interaction is pending", () => {
+    const ix = { id: "ix-owner", machine_id: "m", session_id: "worker", kind: "question", created_at: hoursAgo(1) } as Interaction;
+    const linked = task("linked", {
+      agents: [{ ...agent("worker"), released_at: hoursAgo(0) }],
+      supervision: {
+        supervisor: "conv", state: "parked",
+        parked: { reason: "Owner permission", waiting_on: "external_event", until: hoursAgo(-4), count: 1,
+          evidence: { kind: "external_event", target: "Read-only permission", wake: "The owner answers", interaction_id: ix.id } },
+      },
+    });
+    const sessions = [session("worker", "idle")];
+    const pendingTodo = { ...linked, view: { phase: "needs_you", section: "needs_you", reason: "agent_asks", rank: 0,
+      asks: [{ id: "run:worker", kind: "question", home: "run", interaction: ix.id }] } } as Todo;
+    const pending = makeSessionLookup(sessions);
+    expect(waitsOnOwner(pendingTodo, triage(pendingTodo, pending, NOW))).toBe("agent_asks");
+    expect([...ownerBadge([pendingTodo], pending, NOW)]).toEqual(["linked"]);
+    const resolved = makeSessionLookup(sessions);
+    expect(waitsOnOwner(pendingTodo, triage(pendingTodo, makeSessionLookup(sessions, []), NOW))).toBeNull();
+    expect(waitsOnOwner(linked, triage(linked, resolved, NOW))).toBeNull();
+    // Once answered, a conversation's parked task with no Agent on it is its supervising conversation's, not counted.
+    expect([...ownerBadge([linked], resolved, NOW)]).toEqual([]);
+  });
 });
 
 describe("the badge's rules", () => {
@@ -82,9 +106,10 @@ describe("the badge's rules", () => {
       task("leaf", { part_of: "mid", agents: [agent("run")] }),
     ];
     expect(counted(list)).toEqual([]);
-    // the Agent at the bottom stops: nothing is on any of them any more
+    // the Agent at the bottom stops: nothing is on any of them any more. The owner's own goal counts again; the
+    // conversation's pieces are its supervising conversation's to pick up
     const stopped = list.map((td) => (td.id === "leaf" ? { ...td, agents: [agent("idle")] } : td));
-    expect(counted(stopped)).toEqual(["goal", "leaf", "mid"]);
+    expect(counted(stopped)).toEqual(["goal"]);
     // the bottom one waits on the owner: it counts, the two above it do not again
     const asking = list.map((td) => (td.id === "leaf" ? { ...td, agents: [agent("ask")] } : td));
     expect(counted(asking)).toEqual(["leaf"]);
@@ -106,6 +131,8 @@ describe("the badge's rules", () => {
     const list = [decide, personal("goal"), held, task("p", { part_of: "goal", agents: [agent("run2")] })];
     expect(counted(list)).toEqual(["d", "h"]);
     expect(waitsOnOwner(held, triage(held, lookup, NOW))).toBe("delivery_ok");
+    const heldForDecision = { ...held, supervision: decide.supervision };
+    expect(waitsOnOwner(heldForDecision, triage(heldForDecision, lookup, NOW))).toBe("owner_decides");
     // held for an Agent or for others, it is nobody's to OK: it still counts, as nothing shows an Agent on it
     const forAgent = { ...held, delivery: { state: "pr", unblock: "agent" } };
     expect(waitsOnOwner(forAgent, triage(forAgent, lookup, NOW))).toBeNull();
@@ -116,18 +143,48 @@ describe("the badge's rules", () => {
     expect(counted([asks, task("busy", { part_of: "ask-goal", agents: [agent("run3")] })])).toEqual(["ask-goal"]);
   });
 
-  it("does not read a shelved hold as waiting on the owner, nor let it carry its goal", () => {
+  it("shelves an inactive external hold, and keeps an explicit owner hold visible and counted once", () => {
     const old = hoursAgo(100);
-    const shelved = task("held", { part_of: "goal", created_at: hoursAgo(120), updated_at: old, agents: [{ ...agent("old"), linked_at: hoursAgo(110) }], delivery: { state: "pr", unblock: "user", at: old } });
+    const shelved = task("held", { part_of: "goal", created_at: hoursAgo(120), updated_at: old, agents: [{ ...agent("old"), linked_at: hoursAgo(110) }], delivery: { state: "pr", unblock: "other", at: old } });
     expect(triage(shelved, lookup, NOW).section).toBe("shelved");
     expect(waitsOnOwner(shelved, triage(shelved, lookup, NOW))).toBeNull();
     expect(counted([personal("goal"), shelved])).toEqual(["goal"]);
+    const approval = { ...shelved, delivery: { state: "pr", unblock: "user", at: old } };
+    expect(triage(approval, lookup, NOW).section).toBe("waiting");
+    expect(waitsOnOwner(approval, triage(approval, lookup, NOW))).toBe("delivery_ok");
+    expect(counted([personal("goal"), approval])).toEqual(["held"]);
   });
 
-  it("counts a cut-off Agent's task, and keeps counting tasks no Agent is on", () => {
+  it("counts a cut-off Agent's task, and the owner's own to-dos no Agent is on, not a conversation's idle task", () => {
     expect(counted([task("cut", { agents: [agent("cut")] })])).toEqual(["cut"]);
-    // its Agents stopped; a piece waiting for its turn with no Agent yet
-    expect(counted([task("stopped", { agents: [agent("idle")] }), task("queued", { part_of: "x", after: ["y"] })])).toEqual(["queued", "stopped"]);
+    // a conversation's task whose Agents stopped, or a piece waiting for its turn: its supervising conversation's to pick up
+    expect(counted([task("stopped", { agents: [agent("idle")] }), task("queued", { part_of: "x", after: ["y"] })])).toEqual([]);
+    // the owner's own to-do whose Agent stopped is still theirs
+    expect(counted([personal("mine", { agents: [agent("idle")] })])).toEqual(["mine"]);
+  });
+
+  it("reads the hub's view when it has one: what a supervisor holds is not the owner's", () => {
+    const failed = task("failed", { start_error: "Desk Mac is offline", done_at: hoursAgo(1), supervision: { supervisor: "lead", done_when: [], state: "", round: 0, reviews: [] } as unknown as Todo["supervision"] });
+    expect(counted([failed])).toEqual(["failed"]); // no view: the web's own triage
+    expect(counted([{ ...failed, view: { phase: "working", section: "working", reason: "persona_working", rank: 0 } }])).toEqual([]);
+    const asking = task("asking", { agents: [agent("ask")] });
+    expect(counted([{ ...asking, view: { phase: "working", section: "working", reason: "persona_working", rank: 0 } }])).toEqual([]);
+    expect(Object.fromEntries(ownerNeeds([{ ...asking, view: { phase: "needs_you", section: "needs_you", reason: "agent_asks", rank: 0 } }], lookup, NOW))).toEqual({ asking: "agent_asks" });
+    expect(Object.fromEntries(ownerNeeds([{ ...asking, view: { phase: "needs_you", section: "needs_you", reason: "verify", rank: 0 } }], lookup, NOW))).toEqual({ asking: "owner_decides" });
+    // a view this web does not know falls back to its own triage
+    expect(counted([{ ...asking, view: { phase: "working", section: "a_newer_section", reason: "persona_working", rank: 0 } as unknown as TodoSummary }])).toEqual(["asking"]);
+  });
+
+  it("counts what the hub counts in needs_you once it sends views: one number with the hub and the tray", () => {
+    const v = (section: string, phase = section) => ({ phase, section, reason: section === "needs_you" ? "owner_decides" : "rest", rank: 0 }) as TodoSummary;
+    // the owner's own to-do the hub files under To do is not in its needs_you, so not in the badge
+    expect(counted([personal("mine", { view: v("todo") })])).toEqual([]);
+    // a step an open parent carries is counted with the parent only; a closed parent's step counts by itself
+    expect(counted([personal("goal", { view: v("needs_you") }), task("step", { part_of: "goal", view: v("needs_you") })])).toEqual(["goal"]);
+    expect(counted([personal("goal", { view: v("done") }), task("step", { part_of: "goal", view: v("needs_you") })])).toEqual(["step"]);
+    // an outside decision has its own answer home: never carried
+    expect(counted([personal("goal", { view: v("needs_you") }), task("todo_od_1", { part_of: "goal", view: v("needs_you") })]).sort()).toEqual(["goal", "todo_od_1"]);
+    expect(counted([task("q", { quiet: true, view: v("needs_you") })])).toEqual([]);
   });
 
   it("leaves quiet tasks out, while a quiet piece's Agent still carries its goal", () => {
@@ -150,5 +207,36 @@ describe("the badge's rules", () => {
     // a closed or shelved to-do waits on nobody
     expect(waitsOnOwner(list[5], triage(list[5], lookup, NOW))).toBeNull();
     expect(waitsOnOwner(list[6], triage(list[6], lookup, NOW))).toBeNull();
+  });
+});
+
+describe("why the badge counts a to-do (#11838, ownerNeeds)", () => {
+  const list = [
+    task("failed", { start_error: "no launcher on that computer", done_at: hoursAgo(1) }),
+    task("asking", { agents: [agent("ask")] }),
+    task("decide", { agents: [agent("idle")], ask: { outcome: "decide", verdict: "Ship it or wait?", asked_at: hoursAgo(1) } }),
+    task("held", { agents: [agent("run")], delivery: { state: "merged", unblock: "user" } }),
+    personal("errand"),
+    task("stopped", { agents: [agent("idle")] }),
+    // not counted: its own Agent at work, a goal its pieces carry, a quiet task whose Agent works
+    task("working", { agents: [agent("run2")] }),
+    personal("goal"),
+    task("piece", { part_of: "goal", quiet: true, agents: [agent("run3")] }),
+    task("quiet", { quiet: true }),
+  ];
+
+  it("says what each counted to-do waits on the owner for, or that no Agent is on the owner's own one", () => {
+    expect(Object.fromEntries(ownerNeeds(list, lookup, NOW))).toEqual({
+      failed: "failed_start",
+      asking: "agent_asks",
+      decide: "owner_decides",
+      held: "delivery_ok",
+      errand: "unattended",
+    });
+  });
+
+  it("is the badge: the same to-dos, so its size is the badge's number", () => {
+    expect([...ownerBadge(list, lookup, NOW)].sort()).toEqual([...ownerNeeds(list, lookup, NOW).keys()].sort());
+    expect(ownerBadge(list, lookup, NOW).size).toBe(5);
   });
 });

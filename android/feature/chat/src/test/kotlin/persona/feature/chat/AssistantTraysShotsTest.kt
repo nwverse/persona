@@ -379,8 +379,14 @@ class AssistantTraysShotsTest {
                 // the release task's agent asks; the web task runs; the crash-log Agent was opened by hand
                 style = s; dark = d; fixture.requests.value = listOf(planRequest, question); fixture.drafts.value = listOf(inboxDraft); settle()
                 rule.onNodeWithTag("assistant-tray-needs").assertDoesNotExist()
-                for (entry in listOf("needs", "running"))
-                    assertEquals(JChipTokens.height, rule.onNodeWithTag("assistant-entry-$entry").getUnclippedBoundsInRoot().height)
+                for (entry in listOf("needs", "running")) {
+                    val height = rule.onNodeWithTag("assistant-entry-$entry").getUnclippedBoundsInRoot().height
+                    if (s == AppStyle.Glass) {
+                        assertTrue("Glass DockCapsule height ($height <= ${JChipTokens.height})", height <= JChipTokens.height)
+                    } else {
+                        assertEquals(JChipTokens.height, height)
+                    }
+                }
                 rule.onNodeWithTag("assistant-entry-agents").assertDoesNotExist()
                 val suffix = "${s.name.lowercase()}-${if (d) "dark" else "light"}"
                 corners += shot("collapsed-$suffix")
@@ -466,7 +472,8 @@ class AssistantTraysShotsTest {
         // after In progress, as tall as the other entries
         assertTrue(rule.onNodeWithTag("assistant-entry-running").getUnclippedBoundsInRoot().left <
             rule.onNodeWithTag("assistant-entry-finished").getUnclippedBoundsInRoot().left)
-        assertEquals(JChipTokens.height, rule.onNodeWithTag("assistant-entry-finished").getUnclippedBoundsInRoot().height)
+        assertEquals(rule.onNodeWithTag("assistant-entry-running").getUnclippedBoundsInRoot().height,
+            rule.onNodeWithTag("assistant-entry-finished").getUnclippedBoundsInRoot().height)
         rule.onNodeWithTag("assistant-entry-finished").performClick(); settle()
         // the open entry shows whole: the row scrolls for it, as the web's does
         val bar = rule.onNodeWithTag("assistant-tray-bar").getUnclippedBoundsInRoot()
@@ -504,6 +511,7 @@ class AssistantTraysShotsTest {
         fixture.sessionRows.value = fixture.sessionRows.value + stopped
         fixture.returnedTodos = todoRows + Todo("task-d", stopped.title, origin = "main", agents = listOf(TodoAgent(stopped.machineId, stopped.sessionId)),
             prUrl = "https://github.com/example/project/pull/57",
+            prStatus = TodoPRStatus(url = "https://github.com/example/project/pull/57", state = "open", checkedAt = Instant.now().toString()),
             check = TodoCheck("waiting", "Waiting for CI to finish", "2026-11-01T10:00:00Z", "2026-11-01T09:00:00Z"))
         fixture.tasks.reloadTodos()
         fixture.requests.value = emptyList(); fixture.drafts.value = emptyList()
@@ -708,8 +716,14 @@ class AssistantTraysShotsTest {
             val historical = rule.onNodeWithTag("historical-all").getUnclippedBoundsInRoot().height
             assertEquals(JChipTokens.height, historical)
             assertEquals(historical, rule.onNodeWithTag("historical-task").getUnclippedBoundsInRoot().height)
-            for (tag in listOf("entry-needs", "entry-running", "entry-empty"))
-                assertEquals(tag, historical, rule.onNodeWithTag(tag).getUnclippedBoundsInRoot().height)
+            for (tag in listOf("entry-needs", "entry-running", "entry-empty")) {
+                val height = rule.onNodeWithTag(tag).getUnclippedBoundsInRoot().height
+                if (s == AppStyle.Glass) {
+                    assertTrue("$tag on Glass uses compact DockCapsule height ($height <= $historical)", height <= historical)
+                } else {
+                    assertEquals(tag, historical, height)
+                }
+            }
             assertEquals(44.dp, rule.onNodeWithTag("replaced-entry").getUnclippedBoundsInRoot().height)
             shot("height-comparison-${s.name.lowercase()}-${if (d) "dark" else "light"}")
         }
@@ -902,7 +916,11 @@ class AssistantTraysShotsTest {
     private fun completedConclusion(outcome: String) {
         val fixture = Fixture()
         val ask = TodoAsk(outcome = outcome, verdict = "Please acknowledge the completed conclusion.", askedAt = "2026-11-01T09:00:00Z")
-        fixture.returnedTodos = listOf(todoRows.first().copy(ask = ask, doneAt = "2026-11-01T09:00:00Z"))
+        // The work is delivered but not accepted yet, so the task stays open. A done_at row belongs in Finished
+        // and never carries a review action (#12977), so this scenario must not mark it completed prematurely.
+        fixture.returnedTodos = listOf(todoRows.first().copy(ask = ask))
+        // This decision, not a different task's permission, owns the row under test.
+        fixture.requests.value = listOf(planRequest, question)
         fixture.tasks.reloadTodos()
         rule.mainClock.autoAdvance = false
         rule.setContent { PersonaTheme(reduceMotion = true) {
@@ -911,6 +929,7 @@ class AssistantTraysShotsTest {
         } }
         settle()
         rule.onNodeWithTag("assistant-entry-needs").performClick(); settle()
+        rule.waitUntil(15_000) { rule.onAllNodesWithTag("assistant-review-todo:task-a", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty() }
         rule.onNodeWithTag("assistant-review-todo:task-a").performScrollTo().performClick(); settle()
         rule.mainClock.advanceTimeBy(1_500); settle()
         rule.onNode(hasText(ask.verdict) and hasAnyAncestor(isDialog())).assertIsDisplayed()
@@ -993,5 +1012,72 @@ class AssistantTraysShotsTest {
         assertNull(trayApproval(permission.copy(fields = listOf(InteractionField("password", "Password", secret = true))), running))
         assertNull(trayApproval(question, blocked))
         assertEquals(Resolution(approve = true, mode = "acceptEdits"), trayApproval(planRequest, blocked))
+    }
+
+    @Test fun trayScheduleTimeFormatsWireIsoInPageLocale() {
+        val zone = java.time.ZoneId.of("Asia/Shanghai")
+        val now = Instant.parse("2026-11-20T04:00:00Z")
+        val sameDay = "2026-11-20T17:30:00+08:00"
+        val otherDay = "2026-11-23T09:00:00+08:00"
+        for (locale in listOf(java.util.Locale.ENGLISH, java.util.Locale.SIMPLIFIED_CHINESE, java.util.Locale.JAPANESE)) {
+            assertEquals(
+                LocalizedFormats.format(Instant.parse("2026-11-20T09:30:00Z"), LocalizedFormats.TIME, locale, zone),
+                formatTrayScheduleTime(sameDay, locale, zone, now),
+            )
+            assertEquals(
+                LocalizedFormats.format(Instant.parse("2026-11-23T01:00:00Z"), LocalizedFormats.MONTH_DAY_TIME, locale, zone),
+                formatTrayScheduleTime(otherDay, locale, zone, now),
+            )
+        }
+        assertEquals("not-a-timestamp", formatTrayScheduleTime("not-a-timestamp", java.util.Locale.ENGLISH, zone, now))
+    }
+
+    @Test fun runningTrayAndScheduleSheetFormatNextRunInLightDarkAndLargestText() {
+        val nextRunIso = "2026-11-23T09:00:00+08:00"
+        val fixture = Fixture().apply {
+            requests.value = emptyList(); drafts.value = emptyList()
+            returnedTodos = emptyList(); tasks.reloadTodos()
+            sessionRows.value = listOf(Session(main.machineId, main.sessionId, title = "Persona", assistant = true, state = "idle", status = "idle"))
+        }
+        val customManagement = object : AssistantManagement by fixture.management {
+            override suspend fun tasks() = listOf(ScheduledTask("morning", "Morning briefing", prompt = "Summarize overnight updates.",
+                repeats = ScheduledTask.DAILY, enabled = true, nextRun = nextRunIso, lastStatus = "ok"))
+        }
+        var dark by mutableStateOf(false)
+        var large by mutableStateOf(false)
+        rule.mainClock.autoAdvance = false
+        rule.setContent {
+            val scale = if (large) 2f else 1f
+            val configuration = Configuration(LocalConfiguration.current).apply {
+                fontScale = scale
+                uiMode = (uiMode and Configuration.UI_MODE_NIGHT_MASK.inv()) or
+                    if (dark) Configuration.UI_MODE_NIGHT_YES else Configuration.UI_MODE_NIGHT_NO
+            }
+            val density = androidx.compose.ui.unit.Density(androidx.compose.ui.platform.LocalDensity.current.density, scale)
+            CompositionLocalProvider(LocalConfiguration provides configuration, androidx.compose.ui.platform.LocalDensity provides density) {
+                PersonaTheme(darkTheme = dark, reduceMotion = true, style = AppStyle.Glass) {
+                    Column(Modifier.fillMaxSize().background(PersonaTheme.palette.background).testTag("assistant-page-shot")) {
+                        ChatScreen(main, fixture.chats, fixture.sender, fixture.interactions, fixture.sessions, {},
+                            chrome = ChatChromeBindings(tasks = fixture.tasks, assistantManagement = customManagement, inboxTrays = fixture.inbox,
+                                inboxScope = "fixture", onOpenSession = { fixture.opened += it }),
+                            renderStyle = ChatRenderStyle.Assistant, embedded = true, showTopBar = false)
+                    }
+                }
+            }
+        }
+        settle()
+        rule.waitUntil(10_000) { rule.onAllNodesWithTag("assistant-tray-bar").fetchSemanticsNodes().isNotEmpty() }
+        val expected = "Next run: " + formatTrayScheduleTime(nextRunIso, java.util.Locale.ENGLISH)
+        rule.onNodeWithTag("assistant-entry-running").performClick(); settle()
+        for (big in listOf(false, true)) for (d in listOf(false, true)) {
+            dark = d; large = big; settle()
+            rule.onNodeWithText(expected).assertIsDisplayed()
+            rule.onNode(hasText(nextRunIso, substring = true)).assertDoesNotExist()
+            shot("schedule-tray-${if (d) "dark" else "light"}-${if (big) "large" else "default"}")
+        }
+        large = false; dark = false; settle()
+        rule.onNodeWithText("Morning briefing").performClick(); settle()
+        rule.onAllNodesWithText(expected).onFirst().assertIsDisplayed()
+        rule.onNode(hasText(nextRunIso, substring = true)).assertDoesNotExist()
     }
 }

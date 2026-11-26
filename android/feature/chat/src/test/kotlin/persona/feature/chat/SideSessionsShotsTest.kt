@@ -23,6 +23,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import org.junit.Assert.assertEquals
@@ -118,5 +119,84 @@ class SideSessionsShotsTest {
             save(rule.onNode(isDialog()).captureToImage().asAndroidBitmap(), "menu-$name")
         }
         assertEquals(List(AppStyle.entries.size * 2) { SessionKey("macbook", "work") }, opened)
+    }
+
+    @Test fun reorderingSidesMidPressDoesNotOpenTheNewlyPromotedFirstRow() {
+        val first = side("s1", "First branch session", "working", "working", "2026-11-15T10:00:00Z")
+        val second = side("s2", "Second branch session", "working", "working", "2026-11-15T09:59:00Z")
+        var currentSides by mutableStateOf(listOf(first, second))
+        val opened = mutableListOf<SessionKey>()
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
+                ChatSideSessionsSheet(
+                    sides = currentSides,
+                    rows = listOf(parent) + currentSides,
+                    rollup = sideRollup(parent, currentSides, listOf(parent) + currentSides),
+                    onDismiss = {},
+                    onOpen = { opened += it },
+                )
+            }
+        }
+        rule.waitForIdle()
+        // Touch down on Row #1 ("First branch session"), then reorder [s2, s1] before lifting the finger
+        val node = rule.onNodeWithText("First branch session")
+        node.performTouchInput { down(center) }
+        rule.runOnIdle { currentSides = listOf(second, first) }
+        rule.waitForIdle()
+        node.performTouchInput { up() }
+        rule.waitForIdle()
+        assertEquals("tapping #1 must never misroute to s2 when s2 jumps to #1", emptyList<SessionKey>(), opened.filter { it == second.key })
+    }
+
+    @Test fun sessionActionsMenuOffersBranchToNewChatAndDisablesWhileTurnRuns() {
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        var sessionState by mutableStateOf("idle")
+        var forkedCount = 0
+        val outDir = File("build/fork-session-shots").apply { mkdirs() }
+        rule.setContent {
+            PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+                val scope = rememberCoroutineScope()
+                val resources = androidx.compose.ui.platform.LocalResources.current
+                val chrome = remember { ChatChromeState(resources, null, scope, {}, {}) }
+                val current = parent.copy(status = sessionState, state = sessionState, canFork = true)
+                Box(Modifier.testTag("shot").width(400.dp).height(860.dp).background(PersonaTheme.palette.background)) {
+                    ChatHeader(current, machine, listOf(current), chrome, null, false,
+                        onBack = {}, onOpenSession = {}, onConnectionDetails = {}, onOverlay = {},
+                        onForkSession = { forkedCount++ })
+                }
+            }
+        }
+        for (s in AppStyle.entries) for (d in listOf(false, true)) {
+            rule.runOnIdle { style = s; dark = d; sessionState = "idle" }
+            rule.waitForIdle()
+            rule.onNodeWithContentDescription("More actions").performClick()
+            rule.waitForIdle()
+            repeat(4) { rule.mainClock.advanceTimeByFrame(); rule.waitForIdle() }
+            rule.onNodeWithText("Branch to new chat").assertExists()
+            val bmp = rule.onNode(isDialog()).captureToImage().asAndroidBitmap()
+            File(outDir, "fork-menu-${s.name.lowercase()}-${if (d) "dark" else "light"}.png").outputStream().use {
+                bmp.compress(Bitmap.CompressFormat.PNG, 100, it)
+            }
+            rule.onNodeWithText("Branch to new chat").performClick()
+            rule.waitForIdle()
+        }
+        assertEquals(AppStyle.entries.size * 2, forkedCount)
+
+        // While a turn is running, Branch to new chat stays visible with its explanation and does not invoke onForkSession
+        rule.runOnIdle { style = AppStyle.Glass; dark = false; sessionState = "working" }
+        rule.waitForIdle()
+        rule.onNodeWithContentDescription("More actions").performClick()
+        rule.waitForIdle()
+        repeat(4) { rule.mainClock.advanceTimeByFrame(); rule.waitForIdle() }
+        rule.onNodeWithText("Branch to new chat").assertExists()
+        rule.onNodeWithText("Wait for the current turn to finish").assertExists()
+        val workingBmp = rule.onNode(isDialog()).captureToImage().asAndroidBitmap()
+        File(outDir, "fork-menu-working-glass-light.png").outputStream().use {
+            workingBmp.compress(Bitmap.CompressFormat.PNG, 100, it)
+        }
+        rule.onNodeWithText("Branch to new chat").performClick()
+        rule.waitForIdle()
+        assertEquals(AppStyle.entries.size * 2, forkedCount)
     }
 }

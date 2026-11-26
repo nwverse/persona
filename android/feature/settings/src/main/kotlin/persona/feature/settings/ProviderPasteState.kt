@@ -20,6 +20,8 @@ internal data class ProviderPasteUiState(
     val action: ProviderPasteAction? = null,
     val reading: Boolean = false,
     val readImmediately: Boolean = false,
+    /** Opened from a link: hide the key-bearing text and offer "Paste something else" (#5428). */
+    val fromLink: Boolean = false,
     val error: ResText? = null,
 ) {
     /** An answer belongs only to the exact text it was read from. */
@@ -67,7 +69,7 @@ internal fun ProviderPasteDraft.defaultAction(): ProviderPasteAction =
 internal fun ProviderPasteDraft.existingDraft(existing: HubLauncher, action: ProviderPasteAction): NewProviderDraft {
     val base = providerDraftOf(existing)
     return when (action.kind) {
-        PasteActionKind.Key -> base.copy(apiKey = provider.apiKey.orEmpty())
+        PasteActionKind.Key -> base.copy(apiKey = provider.apiKey.orEmpty(), apiKeyByReference = false)
         PasteActionKind.Merge -> {
             val added = modelsForProvider().filter { candidate -> base.models.none { it.id == candidate.id } }.distinctBy { it.id }
             base.copy(models = base.models + added)

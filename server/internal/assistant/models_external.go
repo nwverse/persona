@@ -252,16 +252,7 @@ func (s *Service) externalPickerLaunchers(ctx context.Context, d Device, refresh
 	c.zshrcMu.Lock()
 	known := slices.Clone(c.zshrc[d.ID])
 	c.zshrcMu.Unlock()
-	res := machineLauncherListing{}
-	for _, l := range known {
-		res.Launchers = append(res.Launchers, proto.LauncherEnvelope(l))
-	}
-	list, _ := s.machineLaunchersFrom(ctx, d.ID, res)
-	discovered := make([]ConfiguredLauncher, 0, len(list))
-	for _, l := range list {
-		discovered = append(discovered, ConfiguredLauncher{Launcher: l})
-	}
-	return sessionLaunchers(discovered, s.hello(ctx).Models.Launchers[d.ID]), nil
+	return s.pickerLaunchersSeen(ctx, d.ID, known, true), nil
 }
 
 // externalTarget reads this computer's advertisement, without a global provider view or
@@ -454,7 +445,7 @@ func (s *Service) externalPickContext(ctx context.Context, machine, sid string, 
 func (s *Service) applyExternalScope(ctx context.Context, id string, params map[string]any, b ModelBinding) error {
 	scope, ok := ctx.Value(externalPickKey{}).(externalPickScope)
 	starting := ok && s.externalMainStartScope(ctx, scope.pick.MachineID, scope.execution.SessionID, scope.pick)
-	if !ok || id != "assistant" || launcherProvider(scope.pick.Launcher) != b.Provider || scope.pick.Model != b.Model ||
+	if !ok || (id != "assistant" && id != purposeMain) || launcherProvider(scope.pick.Launcher) != b.Provider || scope.pick.Model != b.Model ||
 		!s.externalMainScope(ctx, scope.pick.MachineID, scope.execution.SessionID) && !starting {
 		return i18n.Err("external-adapter.scope_required")
 	}

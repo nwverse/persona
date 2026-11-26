@@ -12,9 +12,11 @@ import (
 	"github.com/nwverse/persona/server/internal/aiwire"
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/modelhttp"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/shellcmd"
+	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
 // launcherCheckDir starts the name of the temp directory a check runs in; Claude Code names the projects directory it
@@ -116,6 +118,10 @@ func (n *Node) launcherCheckWith(ctx context.Context, name string, o launcherChe
 		if err != nil {
 			return proto.LauncherCheck{Agent: agent, Error: err.Error()}
 		}
+		settings, err = n.sourceClaudeSettings(ctx, name, dir, settings, "", modelhttp.Source{Role: "background"})
+		if err != nil {
+			return proto.LauncherCheck{Agent: agent, Error: err.Error()}
+		}
 		after += scriptSettingsFlag(settings)
 	}
 	ctx, cancel := context.WithTimeout(ctx, launcherCheckTimeout)
@@ -125,8 +131,15 @@ func (n *Node) launcherCheckWith(ctx context.Context, name string, o launcherChe
 		script = turn.inDirScript(n)
 	}
 	run := func(flag string) (string, error) {
-		cmd := loginShell(ctx, script(name, dir, before+flag+after))
-		cmd.Env = turn.env // nil (the node's own) but for an assistant turn
+		line := script(name, dir, before+flag+after)
+		if agent == "codex" && os.Getenv(modelhttp.SourceHostsEnv) != "" {
+			line = codexShellWith(line, "")
+		}
+		cmd := loginShell(ctx, line)
+		cmd.Env = turn.env
+		if agent == "codex" {
+			cmd.Env = append(cmd.Environ(), modelSourceEnvironment(modelhttp.Source{Role: "background"}, n.bin)...)
+		} // nil (the node's own) but for an assistant turn
 		killGroupOnCancel(cmd)
 		out, err := cmd.CombinedOutput()
 		return strings.TrimSpace(string(out)), err
@@ -156,13 +169,13 @@ func (n *Node) launcherCheckWith(ctx context.Context, name string, o launcherChe
 	}
 	if agent == "claude" {
 		if r, ok := claudeResult(text); ok {
-			res.Model, res.Answer = r.model, clipText(r.result, 200)
+			res.Model, res.Answer = r.model, clipText(textfmt.StripTerminalEscapes(r.result), 200)
 			if turn.on && r.subtype == "error_max_turns" {
 				// The model answered with a tool call, which the one turn allowed did not run: the request went through.
 				r.isError, res.Answer = false, ""
 			}
 			if r.isError {
-				res.Error = clipText(redactCheck(r.result), 400)
+				res.Error = clipText(redactCheck(textfmt.LauncherErrorSummary(r.result, 400)), 400)
 				// A result that is only its kind (error_during_execution…) says nothing of why; what claude printed
 				// besides its result line often does.
 				if r.bare {
@@ -179,7 +192,7 @@ func (n *Node) launcherCheckWith(ctx context.Context, name string, o launcherChe
 			return res
 		}
 	} else if err == nil && text != "" {
-		lines := strings.Split(text, "\n")
+		lines := strings.Split(textfmt.StripTerminalEscapes(text), "\n")
 		res.OK, res.Answer = true, clipText(lines[len(lines)-1], 200)
 		return res
 	}
@@ -223,8 +236,12 @@ func (n *Node) launcherAgent(ctx context.Context, name string) string {
 	return "claude"
 }
 
-// checkOutput is the end of what a check printed, as its error says it: the last lines, without keys, URLs or IPs.
-func checkOutput(text string) string { return clipText(redactCheck(lastLines(text, 6)), 400) }
+// checkOutput is what a check printed, as its error says it: terminal escapes and the shell's startup noise gone, keys,
+// URLs and IPs redacted (the escapes around an address are stripped first, so one a prompt wrapped still matches), and
+// the result summarized to its error line.
+func checkOutput(text string) string {
+	return textfmt.LauncherErrorSummary(redactCheck(textfmt.StripTerminalEscapes(text)), 400)
+}
 
 var (
 	checkURL = lazyre.New(`(?i)\b[a-z][a-z0-9+.-]*://[^\s"'<>]+`)
@@ -261,7 +278,8 @@ type claudeOut struct {
 // "{" that starts one (an interactive zsh may print banners first, and a shell integration's escape codes on the same
 // line, #3412).
 func claudeResult(out string) (claudeOut, bool) {
-	lines := strings.Split(out, "\n")
+	// Escape sequences the shell integration leaves around the line (or on it) must not reach the JSON parser.
+	lines := strings.Split(textfmt.StripTerminalEscapes(out), "\n")
 	for l := len(lines) - 1; l >= 0; l-- {
 		line := lines[l]
 		for i := strings.IndexByte(line, '{'); i >= 0; {

@@ -19,12 +19,12 @@ export function CommentPill({ at, onComment }: { at: { x: number; y: number }; o
       onPointerDown={(e) => e.preventDefault()}
       onMouseDown={(e) => e.preventDefault()}
       onClick={onComment}
-      className="fixed z-40 flex h-8 items-center gap-1.5 rounded-full bg-tooltip-bg pr-2 pl-3 text-[12.5px] font-medium whitespace-nowrap text-tooltip-fg shadow-overlay"
+      className="fixed z-40 flex h-8 items-center gap-1.5 rounded-full bg-tooltip-bg pr-2 pl-3 text-label font-medium whitespace-nowrap text-tooltip-fg shadow-overlay"
       style={{ left: at.x, top: at.y, animation: `pop-in 140ms ${EASE} both` }}
     >
       <Icon name="chat" size={13} />
       {t("chat-comments.pill")}
-      <kbd className="rounded-[4px] border border-tooltip-border px-1 font-sans text-[10.5px] leading-[16px] text-tooltip-muted">C</kbd>
+      <kbd className="rounded-[4px] border border-tooltip-border px-1 font-sans text-submeta leading-[16px] text-tooltip-muted">C</kbd>
     </button>,
     document.body,
   );

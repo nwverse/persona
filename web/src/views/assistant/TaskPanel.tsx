@@ -2,12 +2,14 @@
 // agent's own chat — everything the Agents page does works here — and, with several agents, a switch between them. Opened
 // while Agents open in the side panel (lib/agent-open.ts, #5424); loaded with the first one (SidePanel).
 
-// the question a failed start's tab stopped on, answered here (#10365): only for such a failure
-const ShellQuestion = lazy(() => import("../ShellQuestionCard"));
 import { lazy, Suspense, useState } from "react";
-import { isRemovable, openAsk, TODO_STATUS_INFO } from "../../lib/todos";
+import { isRemovable, openAsk } from "../../lib/todos";
+import { statusWord } from "../../lib/todo-wait-reason";
 import { TodoAskLine } from "../TodoAsk";
-import { reportText } from "../../lib/supervision";
+import { VerificationReport } from "./VerificationReport";
+import { openPanel } from "../../lib/panel";
+import { reportText, reviewState } from "../../lib/supervision";
+import { TaskWaitInfo } from "./TaskWaitInfo";
 import { LatestReport } from "./Supervision";
 import { useStore } from "../../lib/store";
 import { Button, IconButton, Menu, useMenu, type MenuItem } from "../../ui/atoms";
@@ -21,6 +23,10 @@ import { href, type Route } from "../../lib/router";
 import { t } from "../../i18n";
 import { startInFlight, useFeed } from "../../lib/feed";
 import { TaskWorkspaceLine } from "./TaskWorkspace";
+
+// the question a failed start's tab stopped on, answered here (#10365): only for such a failure. After the imports: in
+// development Vite turns `import { lazy }` into a const at its place, which a call above it would read too early.
+const ShellQuestion = lazy(() => import("../ShellQuestionCard"));
 
 /** ⋯'s "Open in new window": the page the panel shows, as its own tab (⌘-click on the link does the same). */
 function openInWindow(to: Route): MenuItem {
@@ -44,15 +50,22 @@ export function TaskPanel({ todoId, onClose }: { todoId: string; onClose: () => 
       </>
     );
   }
+  if (reviewState(todo) === "user_check") {
+    return <>
+      <PanelHeader icon="todo" title={todo.title} subtitle={t("assistant-taskpanel.report")} onClose={onClose} />
+      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        <VerificationReport todo={todo} onOpenWorker={(mid, sid) => openPanel({ kind: "agent", mid, sid }, { push: true })} />
+      </div>
+    </>;
+  }
   const agents = (todo.agents ?? []).filter((a) => !a.released_at);
   const lead = st.lead;
   const chosen = agents.find((a) => `${a.machine_id}/${a.session_id}` === picked) ?? (lead ? agents.find((a) => a.session_id === lead.session_id) : agents[0]);
-  const info = TODO_STATUS_INFO[st.status];
   const starting = st.status === "not_started" && startInFlight(todo, plans);
   // the header also stands for the agent shown: after ⌄ picks another, its machine and project, not the lead's
   const shown = chosen ? (sessions[chosen.machine_id] ?? []).find((x) => x.session_id === chosen.session_id) : undefined;
   // The chat header prepends the usage-limit line of the agent it shows, so the status word is not said twice.
-  const head = st.status === "usage_limit" && usageLimitLabel(shown ?? lead) ? "" : starting ? t("assistant-tasks.status_starting") : info.label;
+  const head = st.status === "usage_limit" && usageLimitLabel(shown ?? lead) ? "" : starting ? t("assistant-tasks.status_starting") : statusWord(st.status, st.wait);
   const subtitle = [head, chosen ? place({ ...todo, agents: [chosen] }, shown ?? lead) : place(todo, lead)].filter(Boolean).join(" · ");
   const taskItems: MenuItem[] = [
     openInWindow(chosen ? { name: "session", mid: chosen.machine_id, sid: chosen.session_id } : { name: "todos", id: todo.id }),
@@ -64,6 +77,7 @@ export function TaskPanel({ todoId, onClose }: { todoId: string; onClose: () => 
     const key = `${a.machine_id}/${a.session_id}`;
     return { key, label: s?.title || a.title || a.agent || a.session_id.slice(0, 8), state: s ? stateOf(s) : undefined, checked: chosen === a, onSelect: () => setPicked(key) };
   });
+  const waitInfo = todo.wait != null && <div className="border-b border-line px-4 py-2"><TaskWaitInfo todo={todo} /></div>;
   if (chosen) {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
@@ -71,11 +85,13 @@ export function TaskPanel({ todoId, onClose }: { todoId: string; onClose: () => 
           key={`${chosen.machine_id}/${chosen.session_id}`}
           mid={chosen.machine_id}
           sid={chosen.session_id}
-          panel={{ onClose, title: todo.title, sub: subtitle, items: taskItems, beside: switcher.length > 1 ? <AgentSwitch agents={switcher} /> : undefined }}
+          // the bubble before × opens the Agent shown (the one ⌄ picked) as its own page
+          panel={{ onClose, page: { name: "session", mid: chosen.machine_id, sid: chosen.session_id }, title: todo.title, sub: subtitle, items: taskItems, beside: switcher.length > 1 ? <AgentSwitch agents={switcher} /> : undefined }}
           // what the task's result waits on from the user (#2056), and what its agent last reported, as it wrote it (#3181),
           // over its agent's chat
-          banner={openAsk(todo) || reportText(todo.supervision) || planned?.workspace ? (
+          banner={waitInfo || openAsk(todo) || reportText(todo.supervision) || planned?.workspace ? (
             <>
+              {waitInfo}
               {planned?.workspace && <div className="border-b border-line px-4 py-2"><TaskWorkspaceLine task={planned} /></div>}
               {openAsk(todo) && <TodoAskLine todo={todo} className="border-b border-line bg-inset px-4 py-2.5" />}
               <LatestReport todo={todo} banner />
@@ -89,6 +105,7 @@ export function TaskPanel({ todoId, onClose }: { todoId: string; onClose: () => 
     <>
       <PanelHeader icon="todo" title={todo.title} subtitle={subtitle} actions={<PanelMore items={taskItems} />} onClose={onClose} />
       <div className="flex min-h-0 flex-1 flex-col">
+        {waitInfo}
         {planned?.workspace && <div className="border-b border-line px-4 py-2"><TaskWorkspaceLine task={planned} /></div>}
         {st.failure || todo.agents?.some((a) => a.start_error) ? (
           <div className="flex flex-col items-start gap-3 p-6 text-[13px]">
@@ -147,7 +164,7 @@ function PanelMore({ items }: { items: MenuItem[] }) {
 export function AgentPanel({ mid, sid, onClose }: { mid: string; sid: string; onClose: () => void }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <ChatView key={`${mid}/${sid}`} mid={mid} sid={sid} panel={{ onClose, items: [openInWindow({ name: "session", mid, sid })] }} />
+      <ChatView key={`${mid}/${sid}`} mid={mid} sid={sid} panel={{ onClose, page: { name: "session", mid, sid }, items: [openInWindow({ name: "session", mid, sid })] }} />
     </div>
   );
 }

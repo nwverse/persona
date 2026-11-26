@@ -12,18 +12,21 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// fakeCLI is the machine's claude -p in cliTest: it appends its args to $CLI_FAKE_DIR/cli-argv and keeps its
-// CLAUDE_CONFIG_DIR in cli-profile, keeps every stdin line in stdin.jsonl, answers control requests (an error from
-// control-mode-error.json or control-effort-error.json, held while control-hold exists, after the lines in
-// control-extra.jsonl, exiting at control-exit), and plays a fixed turn for each user message (no result while
-// $CLI_FAKE_DIR/hold exists).
-const fakeCLI = `case " $* " in
+// Answer the profile's sign-in check before a fake records a conversation start.
+const fakeCLIAuthStatus = `case " $* " in
   *" auth status "*)
     printf '%s\n' "$*" >> "$CLI_FAKE_DIR/cli-auth-argv"
     echo '{"loggedIn":true}'
     exit 0 ;;
 esac
-printf '%s\n' "$*" >> "$CLI_FAKE_DIR/cli-argv"
+`
+
+// fakeCLI is the machine's claude -p in cliTest: it appends its args to $CLI_FAKE_DIR/cli-argv and keeps its
+// CLAUDE_CONFIG_DIR in cli-profile, keeps every stdin line in stdin.jsonl, answers control requests (an error from
+// control-mode-error.json or control-effort-error.json, held while control-hold exists, after the lines in
+// control-extra.jsonl, exiting at control-exit), and plays a fixed turn for each user message (no result while
+// $CLI_FAKE_DIR/hold exists).
+const fakeCLI = fakeCLIAuthStatus + `printf '%s\n' "$*" >> "$CLI_FAKE_DIR/cli-argv"
 printf '%s\n' "$CLAUDE_CONFIG_DIR" > "$CLI_FAKE_DIR/cli-profile"
 echo '{"type":"system","subtype":"init"}'
 while IFS= read -r line; do
@@ -87,29 +90,9 @@ func cliTestHome(t *testing.T, home func(*testing.T, string)) *cliFixture {
 	buf := &syncBuffer{}
 	n.logger = log.New(buf, "", 0)
 	fh := withFakeHub(t, n)
-	// Every process it started, the warm spare too, has exited when the test ends: liveAssistants is the test binary's,
-	// and a later test reading it (update_inventory.go) would find one still running.
-	t.Cleanup(func() {
-		n.mu.Lock()
-		ids := make([]string, 0, len(n.procs))
-		for id := range n.procs {
-			ids = append(ids, id)
-		}
-		spare := n.spare
-		n.spare = nil
-		n.mu.Unlock()
-		var procs []*assistantProc
-		for _, id := range ids {
-			n.cancelAssistantRecovery(id)
-			if p := n.takeAssistant(id); p != nil {
-				procs = append(procs, p)
-			}
-		}
-		if spare != nil {
-			procs = append(procs, spare)
-		}
-		stopAndWait(procs)
-	})
+	// Every process it started, the warm spare and any retired attempt too, has exited when the test ends:
+	// liveAssistants is the test binary's, and a later test reading it (update_inventory.go) would find one still running.
+	t.Cleanup(n.stopAllAssistants)
 	return &cliFixture{n: n, fh: fh, dir: dir, log: buf}
 }
 

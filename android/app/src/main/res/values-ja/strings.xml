@@ -7,13 +7,12 @@
     <string name="app_show_list">一覧を表示</string>
     <string name="app_tab_settings">設定</string>
     <string name="app_demo_badge">体験</string>
-    <string name="app_try_demo">ハブがない場合は体験モードへ</string>
+    <string name="app_try_demo">デモ</string>
     <string name="app_back">戻る</string>
     <string name="app_unavailable_phone_tools">このモードではスマートフォンのツールを使えません</string>
     <string name="app_demo_no_terminal">体験モードにはターミナルのデータがありません</string>
     <string name="app_demo_no_machines">体験モードにはマシン監視のデータがありません</string>
-    <string name="app_demo_no_knowledge">体験モードにはナレッジのデータがありません</string>
-    <string name="app_demo_no_voice">体験モードには音声チャットがありません</string>
+    <string name="app_page_unavailable">このページは現在利用できません</string>
     <string name="app_pane_agents_title">セッションを選択</string>
     <string name="app_pane_agents_detail">左側のセッションとターミナルがここに表示されます。</string>
     <string name="app_pane_inbox_title">メッセージを選択</string>
@@ -81,6 +80,11 @@
     <string name="app_share_queueing">送信キューに追加しています…</string>
     <string name="app_share_queued_offline">送信キューに追加しました。オンラインになると自動で送信されます</string>
     <string name="app_share_queue_failed">送信キューに追加できませんでした。内容は保持されています。もう一度お試しください</string>
+    <string name="app_diagnostics_title">診断情報をAgentに送信</string>
+    <string name="app_diagnostics_archive">診断情報アーカイブ</string>
+    <string name="app_diagnostics_note">このAndroid端末の診断情報です。添付ファイルを確認して、問題の特定を手伝ってください。</string>
+    <string name="app_diagnostics_open_chat">チャットを開く</string>
+    <string name="app_diagnostics_prepare_failed">診断情報の下書きを準備できませんでした。接続を確認してもう一度お試しください。まだ何も送信されていません。</string>
     <string name="app_capsule_open_and_handle">表示して対応</string>
     <string name="app_capsule_main_prompt">Personaに何を頼みますか？</string>
     <string name="app_capsule_main_section">メイン</string>

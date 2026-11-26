@@ -1,8 +1,10 @@
 {
+  "retry_instruction": "The previous attempt failed ({reason}). Continue from the latest progress and check what has already been done before making a new suggestion.",
   "disabled": "The AI twin is off",
   "never": "Kept for you by your Never AI twin rule",
   "timeout": "Timed out without a suggestion",
   "no_draft": "Finished without a suggestion",
   "start_failed": "Could not start, so it was not handled",
-  "start_gave_up": "Could not start after retrying"
+  "start_gave_up": "Could not start after retrying",
+  "reply_policy_blocked": "Kept out of AI drafting by reply policy"
 }

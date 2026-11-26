@@ -80,9 +80,14 @@ func (n *Node) heldFallbackWithExpiry(id, launcher string, asked modelExecution)
 			return asked, expired
 		}
 		out := f.to
-		out.IsMain, out.Interject, out.Ultracode = asked.IsMain, asked.Interject, asked.Ultracode // the message's own
+		// The hold selects a fallback model, never the fallback turn's authorization. Keep this message's fresh origin
+		// decision so an ordinary-to-Inbox change still selects a new built-in tool policy before any input is written.
+		out.Origin, out.OriginKnown = asked.Origin, asked.OriginKnown
+		out.IsMain, out.Public, out.Interject, out.Ultracode = asked.IsMain, asked.Public, asked.Interject, asked.Ultracode // the message's own
 		out.SupervisionInstructions = asked.SupervisionInstructions
 		out.NewModelChoice = false // the old hold selected this execution, not a new pick
+		out.PersistedModel = false
+		out.FromRecovery = true
 		return out, false
 	}
 
@@ -161,6 +166,32 @@ func (n *Node) noteUnavailable(launcher, model string) {
 		n.unavailable = map[string]time.Time{}
 	}
 	n.unavailable[launcher+"\x00"+model] = time.Now().Add(assistantUnavailableFor)
+}
+
+// isModelUnavailable reports whether model was recently found unavailable on launcher and has not expired.
+func (n *Node) isModelUnavailable(launcher, model string) bool {
+	if launcher == "" || model == "" {
+		return false
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	now := time.Now()
+	for _, candidate := range []string{model, strings.TrimSuffix(model, oneMillionSuffix)} {
+		if candidate == "" {
+			continue
+		}
+		k := unavailableKey(launcher, candidate)
+		until, ok := n.unavailable[k]
+		if !ok {
+			continue
+		}
+		if now.After(until) {
+			delete(n.unavailable, k)
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // markUnavailableUsed marks every model of launcher found unavailable, and not expired, as used by chain r. n.mu is

@@ -1,8 +1,24 @@
 package assistantwire
 
-import "time"
+import (
+	"time"
+
+	"github.com/nwverse/persona/server/internal/proto"
+)
 
 // ---- the todos (the assistant's, docs/assistant/todos.md) ----
+
+// todoRoutes are the to-dos' relayed routes listed since the central Routes literal (bus.go) closed; the hub relays
+// them like Routes.
+var todoRoutes = []string{
+	"GET /api/v1/todos/revision",                     // the pushed read's cheap validator (todo_revision.go, #13804)
+	"POST /api/v1/todos/reorganize",                  // batch reorganization without interrupting running Agents (todo_reorganize.go, #14704)
+	"POST /api/v1/todos/decisions/batch",             // batch decision submission for Decision Queue (todo_decisions_batch.go, #15698)
+	"POST /api/v1/todos/{id}/blockers",               // add external PR blocker under todos_v2 (todo_blockers_routes.go, #16198)
+	"DELETE /api/v1/todos/{id}/blockers/{blockerId}", // cancel blocker under todos_v2 (todo_blockers_routes.go, #16198)
+}
+
+func init() { Routes = append(Routes, todoRoutes...) }
 
 // TodoReport is what the hub shows of the todos: active links, display-only completed ownership and the agents kept
 // quiet (#1731: no pushes, badges or Live
@@ -39,12 +55,13 @@ type TodoHandoff struct {
 // decisions in effect before it (as it was without any, or when they could not be read). Status and Error, when set,
 // say the hand-off may not go (404: no such todo, 409: it is done); the hub answers the app with them as they are.
 type TodoHandoffResult struct {
-	Found  bool       `json:"found"`
-	Title  string     `json:"title,omitempty"`
-	DoneAt *time.Time `json:"done_at,omitempty"`
-	Text   string     `json:"text,omitempty"`
-	Status int        `json:"status,omitempty"`
-	Error  string     `json:"error,omitempty"`
+	Found  bool          `json:"found"`
+	Title  string        `json:"title,omitempty"`
+	DoneAt *time.Time    `json:"done_at,omitempty"`
+	Text   string        `json:"text,omitempty"`
+	Images []proto.Image `json:"images,omitempty"`
+	Status int           `json:"status,omitempty"`
+	Error  string        `json:"error,omitempty"`
 }
 
 // TodoLinkParams is assistant.todo_link's params: the agent handed work for a todo works for it from now on (a link
@@ -81,4 +98,8 @@ const (
 	MethodTodoLink = "assistant.todo_link"
 	// EventTodoSpaceRenamed: TodoSpaceRenamed, one way.
 	EventTodoSpaceRenamed = "todos.space_renamed"
+	// CodeSendInDoubt: a to-do's message or answer that failed while its words may be with its Agent already
+	// (delivered "unknown") or are, with what followed failed ("yes"), #10465. Never retryable: a client checks its op
+	// id, or looks at the to-do, instead of sending the words again.
+	CodeSendInDoubt = "send_in_doubt"
 )

@@ -4,12 +4,14 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/herdr"
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -47,9 +49,30 @@ var (
 // shell it left closed too (closeAfterExit: Herdr only, refused when anything else is in it). cause is what the
 // close records: an automatic one (idle, task_completed) keeps the supervisor's resume, anything else is the user's;
 // an after-exit close keeps the cause the Agent stopped with.
-func (n *Node) retire(ctx context.Context, id string, closeTerminal, afterExit bool, cause proto.StopCause) (done bool, err error) {
+// retireActivityGuard carries the session activity version and pane observed by the manager before requesting a
+// guarded idle close. When Active is true, the node refreshes the live host state under recovery+typing locks and
+// refuses with not_retirable if the session became active, opened a dialog, changed pane, or changed transcript version.
+type retireActivityGuard struct {
+	Active            bool
+	ExpectedRev       int64
+	HasExpectedRev    bool
+	ExpectedUpdatedAt time.Time
+	ExpectedPane      string
+}
+
+func (n *Node) retire(ctx context.Context, id string, closeTerminal, afterExit bool, cause proto.StopCause, guards ...retireActivityGuard) (done bool, err error) {
+	var guard retireActivityGuard
+	if len(guards) > 0 {
+		guard = guards[0]
+	}
 	if !closeTerminal {
+		if guard.Active {
+			return false, refusal(notRetirable, "guarded retire requires close_terminal", nil)
+		}
 		return n.stopWithCause(ctx, id, true, proto.StopUnknown)
+	}
+	if guard.Active && !guard.HasExpectedRev && guard.ExpectedUpdatedAt.IsZero() {
+		return false, refusal(notRetirable, "guarded retire requires activity version or timestamp", nil)
 	}
 	release := n.recovery.lock(id)
 	defer release()
@@ -58,19 +81,111 @@ func (n *Node) retire(ctx context.Context, id string, closeTerminal, afterExit b
 		return false, err
 	}
 	if !ok {
-		if !afterExit {
+		if !afterExit || guard.Active {
 			return false, nil
 		}
 		return n.closeExited(ctx, id)
 	}
 	defer unlock()
-	if !cause.AllowsSupervisorResume() || cause == proto.StopRestart {
+	if guard.Active {
+		stillRunning, guardErr := n.verifyRetireActivityGuardLocked(ctx, id, guard)
+		if guardErr != nil {
+			return false, guardErr
+		}
+		if !stillRunning {
+			return false, nil
+		}
+	}
+	if !cause.AllowsSupervisorResume() || cause == proto.StopRestart || cause == proto.StopTimeout {
 		cause = proto.StopUser
 	}
 	if err := n.closeWithCause(ctx, id, cause); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+// verifyRetireActivityGuardLocked checks live host state and current transcript activity under n.recovery and n.typing
+// locks before a guarded idle terminal close. It returns (false, nil) when the agent is no longer running.
+func (n *Node) verifyRetireActivityGuardLocked(ctx context.Context, id string, guard retireActivityGuard) (bool, error) {
+	a, ok := n.agent(id)
+	if !ok {
+		return false, nil
+	}
+	if guard.ExpectedPane != "" && a.PaneID != guard.ExpectedPane {
+		return false, refusal(notRetirable, "session pane changed", nil)
+	}
+	kind := host.ParsePane(a.PaneID).Kind
+	h := n.hosts.Get(kind)
+	if h == nil {
+		return false, refusal(notRetirable, "this session host is not available", nil)
+	}
+	if err := n.refreshHostForPaneStrict(ctx, h, a.PaneID); err != nil {
+		return false, refusal(notRetirable, "could not verify live session state: "+err.Error(), nil)
+	}
+	a, ok = n.agent(id)
+	if !ok {
+		return false, nil
+	}
+	if a.AgentStatus != proto.StatusIdle && a.AgentStatus != proto.StatusDone {
+		why := "the agent status is unknown"
+		if a.AgentStatus != "" {
+			why = "the agent is " + a.AgentStatus
+		}
+		return false, refusal(notRetirable, why, nil)
+	}
+	if guard.ExpectedPane != "" && a.PaneID != guard.ExpectedPane {
+		return false, refusal(notRetirable, "session pane changed", nil)
+	}
+	if head := n.dialogOn(id, a.PaneID); head != "" {
+		return false, refusal(notRetirable, "session has an open dialog", nil)
+	}
+	if head := n.allowDialog(id); head != "" {
+		return false, refusal(notRetirable, "session has an open approval dialog", nil)
+	}
+	if !guard.ExpectedUpdatedAt.IsZero() && !a.LastTextAt.IsZero() && a.LastTextAt.After(guard.ExpectedUpdatedAt) {
+		return false, refusal(notRetirable, "session had newer output", nil)
+	}
+	curRev, curUpdatedAt, hasTranscript := n.currentSessionActivity(id, a)
+	if guard.HasExpectedRev {
+		if hasTranscript {
+			if curRev != guard.ExpectedRev {
+				return false, refusal(notRetirable, "session activity version changed", nil)
+			}
+		} else if guard.ExpectedRev > 0 {
+			return false, refusal(notRetirable, "session activity version could not be verified", nil)
+		} else {
+			n.mu.Lock()
+			lastRev := n.lastRevs[id]
+			n.mu.Unlock()
+			if lastRev != guard.ExpectedRev {
+				return false, refusal(notRetirable, "session activity version changed", nil)
+			}
+		}
+	}
+	if !guard.ExpectedUpdatedAt.IsZero() && hasTranscript && !curUpdatedAt.IsZero() && !curUpdatedAt.Equal(guard.ExpectedUpdatedAt) {
+		return false, refusal(notRetirable, "session activity timestamp changed", nil)
+	}
+	return true, nil
+}
+
+func (n *Node) currentSessionActivity(id string, a host.Agent) (rev int64, updatedAt time.Time, hasTranscript bool) {
+	if p := n.transcriptPath(id); p != "" {
+		if st, err := os.Stat(p); err == nil {
+			m := n.meta(p, st)
+			rev = st.Size()
+			updatedAt = lastUsed(m, st)
+			hasTranscript = true
+		}
+	}
+	if a.Agent == traexAgent {
+		if t, ok := n.traexThread(id); ok {
+			if u := t.updated(); !u.IsZero() && (updatedAt.IsZero() || u.After(updatedAt)) {
+				updatedAt = u
+			}
+		}
+	}
+	return rev, updatedAt, hasTranscript
 }
 
 // closeExited closes the shell session id's agent left when it quit (closeAfterExit), under the recovery lock its
@@ -220,10 +335,29 @@ func (n *Node) quitAgentRound(ctx context.Context, id, pane string, only host.Ho
 			return true, nil
 		}
 	}
+	codexAgent := false
+	codexExtra := 0
+	if a, ok := n.agent(id); ok && a.PaneID == pane && a.Agent == "codex" {
+		codexAgent = true
+		if !requireFresh {
+			// While mid-turn on an app-server, abort the turn at the protocol level first so Ctrl+C reaches an
+			// idle composer; otherwise keep Ctrl+C-only keys (codex_waiting_test.go) and follow up within Codex's
+			// ~1s "Press Ctrl-C again to exit" window before stopWait expires it (#12389).
+			wireInterrupted := n.interruptCodexActiveTurn(ctx, id)
+			codexExtra = 1
+			if !wireInterrupted && (a.AgentStatus == proto.StatusWorking || a.AgentStatus == proto.StatusBlocked) {
+				codexExtra = 2
+			}
+		}
+	}
 	_ = n.sendKeys(ctx, pane, "ctrl+c")
 	time.Sleep(200 * time.Millisecond)
 	if err := n.sendKeys(ctx, pane, "ctrl+c"); err != nil {
 		return false, err
+	}
+	extraAt := time.Time{}
+	if codexAgent && codexExtra > 0 && stopWait >= 400*time.Millisecond {
+		extraAt = time.Now().Add(250 * time.Millisecond)
 	}
 	for deadline := time.Now().Add(stopWait); ; {
 		if err := ctx.Err(); err != nil {
@@ -236,8 +370,22 @@ func (n *Node) quitAgentRound(ctx context.Context, id, pane string, only host.Ho
 			err = n.refreshHosts(ctx)
 		}
 		if err == nil {
-			if a, ok := n.agent(id); !ok || a.PaneID != pane {
+			a, ok := n.agent(id)
+			if !ok || a.PaneID != pane {
 				return true, nil
+			}
+			// If earlier Ctrl+C presses only aborted a turn or cleared a draft, follow up with Ctrl+C while still
+			// inside Codex's short exit-confirmation window (never on non-Codex panes).
+			if codexExtra > 0 && !extraAt.IsZero() && !time.Now().Before(extraAt) {
+				codexExtra--
+				if codexExtra > 0 {
+					extraAt = time.Now().Add(250 * time.Millisecond)
+				} else {
+					extraAt = time.Time{}
+				}
+				if a.Agent == "codex" {
+					_ = n.sendKeys(ctx, pane, "ctrl+c")
+				}
 			}
 		} else if requireFresh {
 			return false, err
@@ -253,16 +401,21 @@ func (n *Node) quitAgentRound(ctx context.Context, id, pane string, only host.Ho
 // resumed is what a Claude session that is not running is resumed with: the directory, launcher and model it was
 // started with, the modes it ran in and its title as the tab's name.
 type resumed struct {
-	cwd, launcher, mode, effort, tab string
-	execution                        modelExecution
+	cwd, launcher, mode, effort, tab    string
+	taskID, workspaceID, workspaceLabel string
+	execution                           modelExecution
 }
 
 // resumeWith is how a Claude session that is not running comes back, by a message (send) or by a start that resumes
 // it and leaves these out (session.start, fillResume).
 func (n *Node) resumeWith(id string, opts sendOpts) resumed {
 	st, _ := n.state.get(id)
-	r := resumed{cwd: st.Cwd, tab: n.resumeTabName(id)}
+	r := resumed{cwd: st.Cwd, tab: n.resumeTabName(id), taskID: st.TaskID, workspaceID: st.WorkspaceID, workspaceLabel: st.WorkspaceLabel}
+	if r.taskID == "" {
+		r.taskID, r.workspaceID, r.workspaceLabel = opts.TaskID, opts.WorkspaceID, opts.WorkspaceLabel
+	}
 	r.launcher, r.execution = n.resumeLauncher(st, id, opts)
+	r.execution.Source = st.ModelSource
 	if r.cwd == "" {
 		if p := n.transcriptPath(id); p != "" {
 			if fi, err := os.Stat(p); err == nil {
@@ -288,6 +441,9 @@ func (n *Node) fillResume(id string, asked resumed) resumed {
 	}
 	r := n.resumeWith(id, sendOpts{})
 	out := asked
+	if out.execution.Source.Role == "" {
+		out.execution.Source = r.execution.Source
+	}
 	out.launcher = cmp.Or(asked.launcher, r.launcher)
 	if out.launcher == r.launcher && asked.execution.Model == "" && asked.execution.Fingerprint == "" {
 		out.execution.Model, out.execution.Fingerprint = r.execution.Model, r.execution.Fingerprint
@@ -296,6 +452,15 @@ func (n *Node) fillResume(id string, asked resumed) resumed {
 	out.mode = cmp.Or(asked.mode, r.mode)
 	out.effort = cmp.Or(asked.effort, r.effort)
 	out.tab = cmp.Or(asked.tab, r.tab)
+	out.taskID = cmp.Or(asked.taskID, r.taskID)
+	if r.taskID != "" && out.taskID == r.taskID {
+		// The node's own task record is authoritative; a conflicting user workspace is never adopted.
+		out.workspaceID = cmp.Or(r.workspaceID, asked.workspaceID)
+		out.workspaceLabel = cmp.Or(r.workspaceLabel, asked.workspaceLabel)
+	} else {
+		out.workspaceID = cmp.Or(asked.workspaceID, r.workspaceID)
+		out.workspaceLabel = cmp.Or(asked.workspaceLabel, r.workspaceLabel)
+	}
 	return out
 }
 
@@ -318,6 +483,9 @@ func (n *Node) resumeTabName(id string) string {
 // what a Codex thread started outside Persona is resumed with (codex_resume.go).
 func (n *Node) resumeOtherWith(ctx context.Context, id string, st sessionState, text string, images []proto.Image) error {
 	ctx = n.withResumeHost(ctx, id)
+	if st.TaskID != "" {
+		ctx, _ = withTaskSpace(ctx, st.TaskID, st.WorkspaceID, st.WorkspaceLabel)
+	}
 	if r := n.notRunningRefusal(ctx, id); r != nil {
 		return r
 	}
@@ -339,7 +507,7 @@ func (n *Node) resumeOtherWith(ctx context.Context, id string, st sessionState, 
 		if argv, err = n.codexReadonlyArgs(st.Launcher, argv, st.AppMode); err != nil {
 			return err // Refuse conflicting permissions before creating a workspace, tab or attachment.
 		}
-		argv = codexExecutionArgs(argv, n.codexOwnEffort(ctx, argv, codexPaneEnv(launch), st.Cwd, modelExecution{Model: st.Model, Effort: st.ModelEffort}))
+		argv = codexTaskArgs(codexExecutionArgs(argv, n.codexOwnEffort(ctx, argv, codexPaneEnv(launch), st.Cwd, modelExecution{Model: st.Model, Effort: st.ModelEffort})), codexKeptTaskInstructions(st))
 		if home, thread, ok := n.codexThread(id); ok && codexArchived(home, n.codexPath(id)) {
 			// Restore through Codex itself before its TUI can block the first prompt on an archive confirmation.
 			restored, err := n.codexArchive(ctx, id, home, thread, false)
@@ -358,7 +526,7 @@ func (n *Node) resumeOtherWith(ctx context.Context, id string, st sessionState, 
 	if len(paths) > 0 {
 		text = strings.TrimSpace(text) + "\n\n<attached_images>\n" + strings.Join(paths, "\n") + "\n</attached_images>"
 	}
-	ws, err := n.workspaceFor(ctx, launch, st.Cwd)
+	ws, err := n.tabSpace(ctx, launch, st.Cwd, "")
 	if err != nil {
 		return err
 	}
@@ -370,6 +538,9 @@ func (n *Node) resumeOtherWith(ctx context.Context, id string, st sessionState, 
 	return uncertain(n.resumeCodex(ctx, launch, id, st, argv, text, ws, tab))
 }
 
+// Resume already knows the thread and only waits for it to reappear in the host. A var for tests.
+var codexResumeWait = 60 * time.Second
+
 // resumeCodex runs `<launcher words> resume <id> -- <message>` (through codex-start, like a new Codex, in the thread's
 // directory) in a new tab and waits until the engine shows that Codex in it. In a pane it was given (adoptedPane: a
 // switch between engines, engine_switch.go) it runs there once its shell is at rest.
@@ -377,14 +548,18 @@ func (n *Node) resumeCodex(ctx context.Context, launch host.Launcher, id string,
 	if codexOnRemote(argv) {
 		argv = append(argv, "-C", st.Cwd)
 	}
-	argv = append(argv, "resume", id)
+	thread := id
+	if _, raw, ok := n.codexThread(id); ok && raw != "" {
+		thread = raw
+	}
+	argv = append(argv, "resume", thread)
 	dir, err := os.MkdirTemp(n.dir, "codex-start-")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(dir)
 	file := filepath.Join(dir, "start.json")
-	b, _ := json.Marshal(codexStartFile{Argv: argv, Prompt: prompt, Agent: herdrAgentFor(launch, "codex"), Dir: st.Cwd})
+	b, _ := json.Marshal(codexStartFile{Source: sourceSession(st.ModelSource, id), SourceHosts: sourceHostsFor(st.ModelSource), Argv: argv, Prompt: prompt, Agent: herdrAgentFor(launch, "codex"), Dir: st.Cwd})
 	if err := os.WriteFile(file, b, 0o600); err != nil {
 		return err
 	}
@@ -411,11 +586,14 @@ func (n *Node) resumeCodex(ctx context.Context, launch host.Launcher, id string,
 	}
 	defer done()
 	n.bindPane(pane, id) // the pane runs this thread (kept in its state): no guessing another rollout for it
-	wait, cancel := context.WithTimeout(ctx, codexStartWait)
+	wait, cancel := context.WithTimeout(ctx, codexResumeWait)
 	defer cancel()
 	for {
 		if err := n.refreshHosts(wait); err == nil {
 			if a, ok := n.agent(id); ok && a.PaneID == pane {
+				// Codex may come up behind its own update offer, whose default is Update now: the next Enter (a
+				// message, a /compact) would install it and quit Codex (#11316). Skipped as a new start skips it.
+				n.settleCodexStartup(wait, pane)
 				return nil
 			}
 		}
@@ -437,16 +615,27 @@ func (n *Node) resumeCodex(ctx context.Context, launch host.Launcher, id string,
 // The pane is marked as Persona's (personaTabToken, the session id when it is already known): once its agent exits,
 // the tab stays with the shell, linked to the session (personatab.go).
 func (n *Node) newTab(ctx context.Context, launch host.Launcher, cwd, ws, tabName, id string) (*host.Created, error) {
+	ts := taskSpaceIn(ctx, launch)
 	if c := adoptedPane(ctx); c != nil { // "Run Agent Here": the pane the user picked, not a new tab (panes_actions.go)
+		if ts != nil {
+			ts.adopted = true
+		}
 		return c, nil
 	}
 	if c, err := keptClaimOf(ctx).tab(ctx); err != nil || c != nil { // a failed start's kept tab (startremedy.go)
+		if ts != nil {
+			ts.adopted = true
+		}
 		return c, err
 	}
 	var created *host.Created
 	var err error
 	if ws == "" {
-		if created, err = createStartSpace(ctx, launch, cwd, filepath.Base(cwd)); err == nil && created.SlotID != "" {
+		label := filepath.Base(cwd)
+		if ts != nil {
+			label = ts.label
+		}
+		if created, err = createStartSpace(ctx, launch, cwd, label); err == nil && created.SlotID != "" {
 			var taken map[string]bool
 			if _, ok := launch.(*herdrCoreHost); ok {
 				taken = n.tabLabels(ctx, launch, created.SpaceID) // CreateSpace can reuse an app space by its folder.
@@ -455,10 +644,22 @@ func (n *Node) newTab(ctx context.Context, launch host.Launcher, cwd, ws, tabNam
 		}
 	} else {
 		created, err = createStartSlot(ctx, launch, ws, cwd, tabLabel(tabName, n.tabLabels(ctx, launch, ws)))
+		var missing *herdr.Error
+		if h, ok := launch.(*herdrHost); ok && ctx.Value(reopenWorktreeWorkspaceKey{}) == true &&
+			errors.As(err, &missing) && missing.Code == "workspace_not_found" {
+			created, err = n.reopenWorktreeTab(ctx, h, ws, cwd, tabName)
+		}
+		if err == nil {
+			if ts != nil && created != nil && created.SpaceID == "" {
+				created.SpaceID = ws
+			}
+			n.closeWorktreeShells(ctx, launch, cmp.Or(created.SpaceID, ws), created.Pane.String()) // the Agent's tab is the worktree's tab now
+		}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("创建终端标签页失败：%w", err)
 	}
+	ts.opened(created.SpaceID)
 	markPersonaTab(ctx, launch, created.Pane, id)
 	markTaskTerminal(ctx, launch, created.Pane)
 	n.agentTerminalOpened(launch, created.Pane) // finished_close.go

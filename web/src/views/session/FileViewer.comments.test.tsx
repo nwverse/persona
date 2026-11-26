@@ -143,7 +143,8 @@ async function pick(kind: Kind) {
   expect(pill(), `Comment action for ${kind}`).not.toBeNull();
 }
 
-function writeNote(n: number, note: string) {
+async function writeNote(n: number, note: string) {
+  await vi.waitFor(() => expect(host.querySelector<HTMLTextAreaElement>(`[data-comment-card="${n}"] textarea`)).not.toBeNull());
   const input = host.querySelector<HTMLTextAreaElement>(`[data-comment-card="${n}"] textarea`)!;
   expect(input).toBe(document.activeElement);
   act(() => {
@@ -174,8 +175,8 @@ function expected(kind: Kind, n: number, note: string) {
 describe("selection comments from the Agent's file panel", () => {
   it("reopens the selected HTML source line from a sent comment, even after switching back to Preview", async () => {
     await pick("html");
-    act(() => pill()!.click());
-    writeNote(1, "Check this heading.");
+    await act(async () => pill()!.click());
+    await writeNote(1, "Check this heading.");
     const text = await send();
     await act(async () => root.render(<><QuoteStack blocks={splitQuotes(text)!.quotes} mid={MID} sid={SID} /><SidePanel /></>));
     const jump = host.querySelector<HTMLButtonElement>('[data-comment-block="1"] button')!;
@@ -193,19 +194,20 @@ describe("selection comments from the Agent's file panel", () => {
 
   it("restores a sent file comment's line range in the edit composer", async () => {
     await pick("source");
-    act(() => pill()!.click());
-    writeNote(1, "Review these lines.");
+    await act(async () => pill()!.click());
+    await writeNote(1, "Review these lines.");
     const text = await send();
-    act(() => { sendDraft(KEY, { type: "replace", text }); });
+    await act(async () => { sendDraft(KEY, { type: "replace", text }); });
+    await vi.waitFor(() => expect(host.querySelector<HTMLButtonElement>('[data-comment-card="1"] button')).not.toBeNull());
     act(() => host.querySelector<HTMLButtonElement>('[data-comment-card="1"] button')!.click());
     expect(getPanel()).toMatchObject({ kind: "file", path: "/work/example.ts", mid: MID, sid: SID, line: 2, to: 3 });
   });
 
   it.each(["markdown", "source", "html"] as const)("sends the selection and location from the %s preview", async (kind) => {
     await pick(kind);
-    act(() => pill()!.click());
+    await act(async () => pill()!.click());
     expect(pill()).toBeNull();
-    writeNote(1, "Clarify this passage.");
+    await writeNote(1, "Clarify this passage.");
     expect(await send()).toBe(expected(kind, 1, "Clarify this passage."));
   });
 
@@ -213,8 +215,8 @@ describe("selection comments from the Agent's file panel", () => {
     const kinds = ["markdown", "source", "html"] as const;
     for (const [i, kind] of kinds.entries()) {
       await pick(kind);
-      act(() => pill()!.click());
-      writeNote(i + 1, `Note ${i + 1}`);
+      await act(async () => pill()!.click());
+      await writeNote(i + 1, `Note ${i + 1}`);
     }
     const text = await send();
     expect(text).toBe(kinds.map((kind, i) => expected(kind, i + 1, `Note ${i + 1}`)).join("\n\n"));
@@ -263,8 +265,8 @@ describe("selection comments from the Agent's file panel", () => {
     select(first.node, first.offset, last.node, last.offset);
     await waitForPill();
     expect(pill()).not.toBeNull();
-    act(() => pill()!.click());
-    writeNote(1, "Check both lines.");
+    await act(async () => pill()!.click());
+    await writeNote(1, "Check both lines.");
     expect(splitQuotes(await send())!.quotes.map(parseCommentBlock)).toMatchObject([
       { text: FILES.paged.text + NEXT_PAGE, comment: { file: { location: "/work/paged.ts:1-2" } } },
     ]);
@@ -285,8 +287,8 @@ describe("selection comments from the Agent's file panel", () => {
     select(start.node, start.offset, end, endOffset);
     await waitForPill();
     expect(pill()).not.toBeNull();
-    act(() => pill()!.click());
-    writeNote(1, "Check this range.");
+    await act(async () => pill()!.click());
+    await writeNote(1, "Check this range.");
     const selected = first === 4 ? [VISIBLE_TAIL] : ["const second = 7;", DISPLAYED_LINE];
     const location = first === 4 ? "4" : "3-4";
     expect(await send()).toBe([
@@ -321,8 +323,8 @@ describe("selection comments from the Agent's file panel", () => {
     select(first.node, first.offset, last.node, last.offset);
     await waitForPill();
     expect(pill()).not.toBeNull();
-    act(() => pill()!.click());
-    writeNote(1, "Check this line.");
+    await act(async () => pill()!.click());
+    await writeNote(1, "Check this line.");
     expect(splitQuotes(await send())!.quotes.map(parseCommentBlock)).toMatchObject([
       { text: "  const first = 42;", comment: { file: { location: "/work/example.ts:2" } } },
     ]);

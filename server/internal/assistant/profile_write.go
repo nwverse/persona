@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -24,6 +25,10 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var in struct {
 		Settings
+		ConversationTagFilters json.RawMessage `json:"conversation_tag_filters"`
+		ExpectedWorkGuide      *bool           `json:"expected_work_guide"`
+		ExpectedTodosV2        *bool           `json:"expected_todos_v2"`
+		ExpectedIntegrationsV2 *bool           `json:"expected_integrations_v2"`
 		WorkspaceRulesPatch    json.RawMessage `json:"workspace_rules"`
 		Permission             json.RawMessage `json:"default_permission_mode"`
 		Readonly               json.RawMessage `json:"readonly_mode"`
@@ -32,9 +37,26 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		Glossary               json.RawMessage `json:"meeting_glossary"`
 		TranscriptionExtension json.RawMessage `json:"meeting_transcription_extension"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+	var raw json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
 		apierr.Write(w, http.StatusBadRequest, err)
 		return
+	}
+	if err := json.Unmarshal(raw, &in); err != nil {
+		apierr.Write(w, http.StatusBadRequest, err)
+		return
+	}
+	labsSeen, err := normalizeLabsSeen(in.LabsSeen)
+	if err != nil {
+		apierr.Write(w, http.StatusBadRequest, err)
+		return
+	}
+	if in.LabsSeen != nil {
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(raw, &fields) == nil && len(fields) == 1 {
+			s.putLabsSeen(w, ctx, labsSeen)
+			return
+		}
 	}
 	if in.Permission != nil {
 		if err := json.Unmarshal(in.Permission, &in.DefaultPermissionMode); err != nil {
@@ -46,7 +68,10 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-schedule.bad_permission_mode", i18n.Args{"mode": strconv.Quote(in.DefaultPermissionMode)}))
 		return
 	}
-	if in.Permission != nil && !s.explicitSettingsTarget(w, r) {
+	if (in.Permission != nil || in.WorkGuide != nil || in.TodosV2 != nil ||
+		in.TodosV2AutoSeen != "" || in.TodosV2PendingReviewSLAHours != nil ||
+		in.TodosV2CanWaitSLAHours != nil || in.TodosV2FoldChildren != nil ||
+		in.IntegrationsV2 != nil) && !s.explicitSettingsTarget(w, r) {
 		return
 	}
 	if in.Readonly != nil {
@@ -85,6 +110,10 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		in.StartDefaults.By = "owner" // this route is full credentials only
 	}
 	before := s.settings(ctx)
+	if _, err := applyLabsSeen(&before, labsSeen); err != nil {
+		apierr.Write(w, http.StatusBadRequest, err)
+		return
+	}
 	machine := before.MachineID
 	if in.MachineID != "" {
 		if _, ok := s.device(ctx, in.MachineID); !ok {
@@ -107,12 +136,43 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, http.StatusBadRequest, errors.New("recording_days must be 1–365"))
 		return
 	}
+	var conversationTagFilters []string
+	tagFiltersWritten := len(in.ConversationTagFilters) > 0
+	if tagFiltersWritten && !bytes.Equal(bytes.TrimSpace(in.ConversationTagFilters), []byte("null")) {
+		if err := json.Unmarshal(in.ConversationTagFilters, &conversationTagFilters); err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
+		var err error
+		conversationTagFilters, err = normalizeConversationTagFilters(conversationTagFilters)
+		if err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
+	}
+	conversationOrder, orderErr := normalizeConversationOrder(in.ConversationOrder)
+	if orderErr != nil {
+		apierr.Write(w, http.StatusBadRequest, orderErr)
+		return
+	}
+	if in.CacheKeepaliveMinutes != nil && (*in.CacheKeepaliveMinutes < 1 || *in.CacheKeepaliveMinutes > 55) || in.CacheKeepaliveMax != nil && (*in.CacheKeepaliveMax < 1 || *in.CacheKeepaliveMax > 144) {
+		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-profile.bad_cache_keepalive"))
+		return
+	}
 	if m := in.IdleAutoCompactMinutes; m != nil && (*m < minIdleAutoCompactMinutes || *m > maxIdleAutoCompactMinutes) {
 		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-profile.bad_idle_auto_compact_minutes"))
 		return
 	}
+	if m := in.SupervisionBatchMinutes; m != nil && (*m < 0 || *m > maxSupervisionBatchMinutes) {
+		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-profile.bad_supervision_batch_minutes"))
+		return
+	}
 	if n := in.IdleAutoCompactTokens; n != nil && (*n < minIdleAutoCompactTokens || *n > maxIdleAutoCompactTokens) {
 		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-profile.bad_idle_auto_compact_tokens"))
+		return
+	}
+	if m := in.IdleReleaseMinutes; m != nil && (*m < minIdleReleaseMinutes || *m > maxIdleReleaseMinutes) {
+		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-profile.bad_idle_release_minutes"))
 		return
 	}
 	if in.MinutesRetention != nil {
@@ -124,6 +184,22 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if m := in.MeetingAttendanceDefault; m != nil && !slices.Contains(meetingRoles, *m) {
 		apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-meeting.bad_default_role"))
+		return
+	}
+	if g := in.DeliveryGate; g != nil && !slices.Contains(deliveryGates, *g) {
+		apierr.Write(w, http.StatusBadRequest, errors.New("delivery_gate must be off, merged or live"))
+		return
+	}
+	if in.TodosV2AutoSeen != "" && !slices.Contains(todosV2AutoSeenModes, in.TodosV2AutoSeen) {
+		apierr.Write(w, http.StatusBadRequest, errors.New("todos_v2_auto_seen must be off, subtasks or all_autonomous"))
+		return
+	}
+	if h := in.TodosV2PendingReviewSLAHours; h != nil && !slices.Contains(todosV2PendingReviewSLAOptions, *h) {
+		apierr.Write(w, http.StatusBadRequest, errors.New("todos_v2_pending_review_sla_hours must be 0, 12, 24 or 48"))
+		return
+	}
+	if h := in.TodosV2CanWaitSLAHours; h != nil && !slices.Contains(todosV2CanWaitSLAOptions, *h) {
+		apierr.Write(w, http.StatusBadRequest, errors.New("todos_v2_can_wait_sla_hours must be 0, 24, 48 or 72"))
 		return
 	}
 	if code := s.readMeetingTranscriptionSettings(&in.Settings, in.TranscriptionMode, in.Glossary, in.TranscriptionExtension); code != "" {
@@ -149,6 +225,12 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	if err := validateAgentNamingSettings(in.Settings); err != nil {
 		apierr.Write(w, http.StatusBadRequest, err)
 		return
+	}
+	if in.OwnerApprovalPhrases != nil {
+		if _, err := ownerApprovalPhrases(Settings{OwnerApprovalPhrases: in.OwnerApprovalPhrases}); err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
 	}
 	if (in.AgentAutoNaming != nil || in.AgentAutoNamingMax != nil || in.AgentAutoNamingIntervalHours != nil) && !s.explicitSettingsTarget(w, r) {
 		return
@@ -189,7 +271,25 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 			mainMachine = before.MachineID
 		}
 	}
-	if _, err := s.updateSettings(ctx, func(v *Settings) error {
+	guideChanged := false
+	errGuideChanged := errors.New("work guide setting changed")
+	errTodosV2Changed := errors.New("todos_v2 setting changed")
+	errIntegrationsV2Changed := errors.New("integrations_v2 setting changed")
+	var labsSeenChanged bool
+	saved, err := s.updateSettings(ctx, func(v *Settings) error {
+		var err error
+		if labsSeenChanged, err = applyLabsSeen(v, labsSeen); err != nil {
+			return err
+		}
+		if in.WorkGuide != nil && in.ExpectedWorkGuide != nil && *in.ExpectedWorkGuide != v.workGuideOn() {
+			return errGuideChanged
+		}
+		if in.TodosV2 != nil && in.ExpectedTodosV2 != nil && *in.ExpectedTodosV2 != v.todosV2On() {
+			return errTodosV2Changed
+		}
+		if in.IntegrationsV2 != nil && in.ExpectedIntegrationsV2 != nil && *in.ExpectedIntegrationsV2 != v.integrationsV2On() {
+			return errIntegrationsV2Changed
+		}
 		if len(in.WorkspaceRulesPatch) > 0 {
 			rules, err := workspacenaming.Patch(v.WorkspaceRules, in.WorkspaceRulesPatch)
 			if err != nil {
@@ -222,6 +322,15 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.MainTasksQuiet != nil {
 			v.MainTasksQuiet = in.MainTasksQuiet
 		}
+		if in.CacheKeepalive != nil {
+			v.CacheKeepalive = in.CacheKeepalive
+		}
+		if in.CacheKeepaliveMinutes != nil {
+			v.CacheKeepaliveMinutes = in.CacheKeepaliveMinutes
+		}
+		if in.CacheKeepaliveMax != nil {
+			v.CacheKeepaliveMax = in.CacheKeepaliveMax
+		}
 		if in.IdleAutoCompact != nil {
 			v.IdleAutoCompact = in.IdleAutoCompact
 		}
@@ -230,6 +339,9 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.IdleAutoCompactTokens != nil {
 			v.IdleAutoCompactTokens = in.IdleAutoCompactTokens
+		}
+		if in.IdleReleaseMinutes != nil {
+			v.IdleReleaseMinutes = in.IdleReleaseMinutes
 		}
 		if in.StartRequestedTasks != nil {
 			v.StartRequestedTasks = in.StartRequestedTasks
@@ -249,14 +361,48 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.KBTopics != nil {
 			v.KBTopics = in.KBTopics
 		}
+		if in.Dashboards != nil {
+			v.Dashboards = in.Dashboards
+		}
 		if in.MainBackgroundFolded != nil {
 			v.MainBackgroundFolded = in.MainBackgroundFolded
+		}
+		if in.FoldRoutineRelayReplies != nil {
+			v.FoldRoutineRelayReplies = in.FoldRoutineRelayReplies
 		}
 		if in.MainCompactWindow != nil {
 			v.MainCompactWindow = in.MainCompactWindow
 		}
+		if in.WorkGuide != nil {
+			guideChanged = v.workGuideOn() != *in.WorkGuide
+			v.WorkGuide = in.WorkGuide
+		}
+		if in.TodosV2 != nil {
+			v.TodosV2 = in.TodosV2
+		}
+		if in.TodosV2AutoSeen != "" {
+			v.TodosV2AutoSeen = in.TodosV2AutoSeen
+		}
+		if in.TodosV2PendingReviewSLAHours != nil {
+			v.TodosV2PendingReviewSLAHours = in.TodosV2PendingReviewSLAHours
+		}
+		if in.TodosV2CanWaitSLAHours != nil {
+			v.TodosV2CanWaitSLAHours = in.TodosV2CanWaitSLAHours
+		}
+		if in.TodosV2FoldChildren != nil {
+			v.TodosV2FoldChildren = in.TodosV2FoldChildren
+		}
+		if in.IntegrationsV2 != nil {
+			v.IntegrationsV2 = in.IntegrationsV2
+		}
 		if in.RecentTaskChats != nil {
 			v.RecentTaskChats = in.RecentTaskChats
+		}
+		if in.ConversationOrder != nil {
+			v.ConversationOrder = conversationOrder
+		}
+		if tagFiltersWritten {
+			v.ConversationTagFilters = conversationTagFilters
 		}
 		if in.MeetingAttendanceDefault != nil {
 			v.MeetingAttendanceDefault = in.MeetingAttendanceDefault
@@ -277,8 +423,12 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.ArchiveClosedDays != nil {
 			v.ArchiveClosedDays = in.ArchiveClosedDays
 		}
-		if in.DoneNeedsDelivery != nil {
+		if in.DeliveryGate != nil {
+			v.DeliveryGate = in.DeliveryGate
+			v.DoneNeedsDelivery = nil
+		} else if in.DoneNeedsDelivery != nil {
 			v.DoneNeedsDelivery = in.DoneNeedsDelivery
+			v.DeliveryGate = nil
 		}
 		if in.ReviewSamplePercent != nil {
 			v.ReviewSamplePercent = in.ReviewSamplePercent
@@ -289,8 +439,20 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.ClaudeInteractive != nil {
 			v.ClaudeInteractive = in.ClaudeInteractive
 		}
+		if in.OwnerReplyApproval != nil {
+			v.OwnerReplyApproval = in.OwnerReplyApproval
+		}
+		if in.PersistentOwnerActionCards != nil {
+			v.PersistentOwnerActionCards = in.PersistentOwnerActionCards
+		}
+		if in.OwnerApprovalPhrases != nil {
+			v.OwnerApprovalPhrases = in.OwnerApprovalPhrases
+		}
 		if in.AgentTasks != nil {
 			v.AgentTasks = in.AgentTasks
+		}
+		if in.TaskLessons != nil {
+			v.TaskLessons = in.TaskLessons
 		}
 		if in.CloseEndedTerminals != nil {
 			v.CloseEndedTerminals = in.CloseEndedTerminals
@@ -307,6 +469,12 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.InboxSignals != nil {
 			v.InboxSignals = in.InboxSignals
 		}
+		if in.InboxTodoForward != nil {
+			v.InboxTodoForward = in.InboxTodoForward
+		}
+		if in.PREventsRouteToAgent != nil {
+			v.PREventsRouteToAgent = in.PREventsRouteToAgent
+		}
 		if in.InboxPost != nil {
 			v.InboxPost = in.InboxPost
 		}
@@ -315,6 +483,12 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.MainSupervisesOwnTasks != nil {
 			v.MainSupervisesOwnTasks = in.MainSupervisesOwnTasks
+		}
+		if in.SupervisionBatchMinutes != nil {
+			v.SupervisionBatchMinutes = in.SupervisionBatchMinutes
+		}
+		if in.AutoSupervisionMessages != nil {
+			v.AutoSupervisionMessages = in.AutoSupervisionMessages
 		}
 		if in.DefaultPermissionMode != "" {
 			v.DefaultPermissionMode = in.DefaultPermissionMode
@@ -335,16 +509,62 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		return nil
-	}); err != nil {
+	})
+	if err != nil {
+		if errors.Is(err, errGuideChanged) || errors.Is(err, errTodosV2Changed) || errors.Is(err, errIntegrationsV2Changed) {
+			apierr.WriteCode(w, http.StatusConflict, "configuration_conflict", err)
+			return
+		}
+		if errors.Is(err, errLabsSeenLimit) {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		}
 		apierr.Write(w, http.StatusInternalServerError, err)
 		return
 	}
+	if labsSeenChanged {
+		s.publishLabsSeen(ctx, saved.LabsSeen)
+	}
+	if guideChanged {
+		s.mcpChanges.notify()
+	}
 	s.settingsChanged(ctx)
+	// Revoke already captured requests as part of a policy edit. Forwarding stays
+	// available; only a subsequent genuine request can rearm the snapshot.
+	if (in.CacheKeepalive != nil || in.CacheKeepaliveMinutes != nil || in.CacheKeepaliveMax != nil) && cacheKeepaliveOf(before) != cacheKeepaliveOf(s.settings(ctx)) {
+		clearCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		for _, ref := range s.cacheKeepaliveRefs(ctx, before) {
+			_ = s.call(clearCtx, ref.MachineID, "assistant.cache_clear", map[string]any{"session_id": ref.SessionID}, nil)
+		}
+	}
+	if in.SupervisionBatchMinutes != nil && supervisionBatchMinutesOf(s.settings(ctx)) != supervisionBatchMinutesOf(before) {
+		s.rescheduleSupervision()
+	}
+	afterTodosV2 := s.settings(ctx)
+	if (in.TodosV2 != nil && afterTodosV2.todosV2On() != before.todosV2On()) ||
+		(afterTodosV2.todosV2On() && (afterTodosV2.todosV2PendingReviewSLAHours() != before.todosV2PendingReviewSLAHours() ||
+			afterTodosV2.todosV2CanWaitSLAHours() != before.todosV2CanWaitSLAHours() ||
+			afterTodosV2.todosV2FoldChildrenOn() != before.todosV2FoldChildrenOn())) {
+		s.todosPushSoon()
+	}
 	if in.MeetingTranscriptionExtension != nil {
 		s.transcriptionReadinessChanged() // named again: probed again (the answer stands meanwhile)
 	}
+	if after := s.settings(ctx).Dashboards; in.Dashboards != nil && (before.Dashboards != nil && *before.Dashboards) != (after != nil && *after) {
+		s.pagesListChanged(ctx) // the sidebar's Dashboards come or go (pages_events.go)
+		s.mcpChanges.notify()   // and the page tool with them, in every open conversation's list (pages_tool.go)
+	}
 	if in.Main != "" && in.Main != "-" && in.Main != before.Main {
-		s.handOverMainTasks(context.WithoutCancel(ctx), before.Main, in.Main) // its open tasks follow the main conversation (main_handover.go)
+		if before.Main != "" {
+			s.handOverMainTasks(context.WithoutCancel(ctx), before.Main, in.Main)  // its open tasks follow the main conversation (main_handover.go)
+			s.handOverMainAlways(context.WithoutCancel(ctx), before.Main, in.Main) // its Always-allow grants follow once (#16158)
+		} else {
+			s.handOverFormerMainTasks(context.WithoutCancel(ctx)) // after newMain / clearMain, old main sits in Former
+			if len(before.Former) > 0 && before.Former[0].SessionID != "" && before.Former[0].SessionID != in.Main {
+				s.handOverMainAlways(context.WithoutCancel(ctx), before.Former[0].SessionID, in.Main)
+			}
+		}
 	}
 	apierr.WriteJSON(w, s.view(ctx, false))
 }

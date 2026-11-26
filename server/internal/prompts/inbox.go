@@ -1,7 +1,10 @@
 package prompts
 
+import "encoding/json"
+
 // InboxItem is an inbox item as the models read it (inbox/item): what kind of thing it is, then the conversation.
 type InboxItem struct {
+	Language   string // Native language name; empty preserves the legacy Chinese output.
 	Kind       string // dm | mention | group | bot | doc | moment | mail; a connector's own (inbox/kinds/<source>)
 	MailDirect bool   // mail: sent to me, not cc / a list
 	// Source is a connector's id ("github") for its items, "" for Feishu's and mail's.
@@ -36,6 +39,12 @@ type InboxTriage struct {
 
 func RenderInboxTriage(t InboxTriage) string { return render("inbox/triage", t) }
 
+// RenderInboxReplyPolicyReview is the legacy schema's independent second review. The shared legacy/compiled reply-policy
+// declarations are below with the upstream localized prompt declarations.
+func RenderInboxReplyPolicyReview() string {
+	return render("inbox/reply_policy_review", nil)
+}
+
 // InboxGroup is the system prompt that relates a conversation's new messages to its events (inbox/group, #1680).
 type InboxGroup struct {
 	Owner string // "" is the Chinese "you"
@@ -57,13 +66,15 @@ func RenderInboxGroup(g InboxGroup) string { return render("inbox/group", g) }
 // InboxSettled is the system prompt that says whether an open "Needs you" event is over, given what came after it in
 // its conversation (inbox/settled; assistant/inbox_settle.go).
 type InboxSettled struct {
-	Owner string // "" is the Chinese "you"
+	Language string // Native language name; empty preserves the legacy Chinese output.
+	Owner    string // "" is the Chinese "you"
 }
 
 func RenderInboxSettled(s InboxSettled) string { return render("inbox/settled", s) }
 
 // InboxSettledInput is the event and the messages after it (inbox/settled_input), oldest first.
 type InboxSettledInput struct {
+	Language                string // Native language name; empty preserves the legacy Chinese output.
 	Title, Summary, Context string
 	Later                   []InboxSettledLine
 }
@@ -79,7 +90,8 @@ func RenderInboxSettledInput(in InboxSettledInput) string { return render("inbox
 
 // InboxGroupInput is one batch as the model reads it, with the tool calls made so far (inbox/group_input).
 type InboxGroupInput struct {
-	Thread string
+	Language string // Native language name; empty preserves the legacy Chinese output.
+	Thread   string
 	// Kind is who the other side of a direct chat is, in the connector's words (its kind_descriptions: a person, a bot
 	// or an app); "" for a group, whose messages carry their own mention markers.
 	Kind    string
@@ -115,6 +127,7 @@ func RenderInboxDraft(d InboxDraft) string { return render("inbox/draft", d) }
 
 // InboxDraftInput is the item and how the user wants to answer (inbox/draft_input).
 type InboxDraftInput struct {
+	Language    string // Native language name; empty preserves the legacy Chinese output.
 	Item        InboxItem
 	Instruction string
 }
@@ -124,17 +137,19 @@ func RenderInboxDraftInput(in InboxDraftInput) string { return render("inbox/dra
 // InboxJudge is the system prompt that links an item to one of the user's tasks (inbox/judge): since phase 1 every
 // Needs you item goes to the manager, so only its task_id is used.
 type InboxJudge struct {
-	Owner string
-	Rules string // manager.json inbox.agent.rules, trimmed
+	Language string // Native language name; empty preserves the legacy Chinese output.
+	Owner    string
+	Rules    string // manager.json inbox.agent.rules, trimmed
 }
 
 func RenderInboxJudge(j InboxJudge) string { return render("inbox/judge", j) }
 
 // InboxJudgeInput is the item with its triage summary (inbox/judge_input).
 type InboxJudgeInput struct {
-	Summary string
-	Item    InboxItem
-	Tasks   []InboxTask // the user's tasks going on (docs/assistant/unified-entry.md), for the judge to link the item to one
+	Language string // Native language name; empty preserves the legacy Chinese output.
+	Summary  string
+	Item     InboxItem
+	Tasks    []InboxTask // the user's tasks going on (docs/assistant/unified-entry.md), for the judge to link the item to one
 }
 
 // InboxTask is a task the user started from the assistant's conversation: a todo and where its agents are.
@@ -149,12 +164,16 @@ func RenderInboxJudgeInput(in InboxJudgeInput) string { return render("inbox/jud
 // InboxAgent is the first message of the AI twin's conversation for an item (inbox/agent). At most one of Lark, Doc,
 // Moment and Mail is set: where the item came from.
 type InboxAgent struct {
-	Owner   string
-	EventID string // the inbox item's id: the conversation is bound to it
-	Title   string
-	Item    InboxItem
-	Task    string // what to do: the triage's summary ("" the default)
-	Reason  string // the triage's reason
+	Language string // Native language name; empty preserves the legacy Chinese output.
+	Owner    string
+	EventID  string // the inbox item's id: the conversation is bound to it
+	Title    string
+	Item     InboxItem
+	Task     string // what to do: the triage's summary ("" the default)
+	Reason   string // the triage's reason
+	// ReplyPolicy adds the drafting restrictions only when this item is in an enabled policy's scope. False leaves the
+	// legacy prompt byte-identical when the feature is absent or disabled.
+	ReplyPolicy bool
 	// Resumed: the conversation that handled the event is gone; Recap and Chain are where it got to.
 	Resumed bool
 	Recap   string
@@ -162,15 +181,26 @@ type InboxAgent struct {
 	Notes   []string // what came since (the user's answers…), each rendered (inbox/handling/*)
 	// Linked: the user's task the item is about (the judge's task_id), its progress for the reply.
 	Linked *InboxTask
-	Lark   *InboxAgentLark
-	Doc    *InboxAgentDoc
-	Moment *InboxAgentMoment
-	Mail   *InboxAgentMail
+	// HandoffTargets are the eligible existing conversations on this manager (main, leaders, linked task)
+	// that kind "handoff" may propose handing the item to (#13562).
+	HandoffTargets []InboxHandoffTarget
+	Lark           *InboxAgentLark
+	Doc            *InboxAgentDoc
+	Moment         *InboxAgentMoment
+	Mail           *InboxAgentMail
 	// Connector: an item of a connector's (GitHub…).
 	Connector *InboxAgentConnector
 	KB        *KBContext // what the knowledge base knows about the item's chat
 	// KnowledgeDir: the knowledge base directory the KB part names; "" is the default ~/.persona/data.
 	KnowledgeDir string
+}
+
+// InboxHandoffTarget is an eligible existing conversation on this manager listed in inbox/agent (#13562).
+type InboxHandoffTarget struct {
+	Machine string
+	Session string
+	Role    string // main | leader | task
+	Title   string
 }
 
 // InboxAgentLark is the item's Feishu chat; Account is the gateway account it is in when that is not lark.account.
@@ -211,6 +241,7 @@ func RenderInboxAgent(a InboxAgent) string { return render("inbox/agent", a) }
 // Session), a due follow-up check (Who, Next and Checks), or that the event is closed (Text says how: self_replied,
 // replied, dismissed, read, user).
 type InboxHandlingNote struct {
+	Language         string // Native language name; empty preserves the legacy Chinese output.
 	Owner            string
 	Text             string
 	Edited           bool
@@ -245,6 +276,7 @@ func RenderInboxHandlingNote(name string, n InboxHandlingNote) string {
 // InboxHandoff is the message that hands an event to Persona's main conversation (inbox/handoff): the user's Text
 // after a context block naming the event, so that conversation can write back with inbox_suggest.
 type InboxHandoff struct {
+	Language  string // Native language name; empty preserves the legacy Chinese output.
 	ID, Title string
 	Text      string
 }
@@ -253,11 +285,24 @@ func RenderInboxHandoff(h InboxHandoff) string { return render("inbox/handoff", 
 
 // InboxHandoffNote wraps a handling note (Note) for a conversation the event was handed to (inbox/handoff_note).
 type InboxHandoffNote struct {
+	Language  string // Native language name; empty preserves the legacy Chinese output.
 	ID, Title string
 	Note      string
 }
 
-func RenderInboxHandoffNote(n InboxHandoffNote) string { return render("inbox/handoff_note", n) }
+func RenderInboxHandoffNote(n InboxHandoffNote) string {
+	if n.Language == "" {
+		return render("inbox/handoff_note", n)
+	}
+	marker, err := json.Marshal(inboxMetadata{Title: n.Title})
+	if err != nil {
+		panic(err)
+	}
+	return render("inbox/handoff_note", struct {
+		InboxHandoffNote
+		Marker string
+	}{n, "<persona-inbox>" + string(marker) + "</persona-inbox>"})
+}
 
 // InboxFolders is the system prompt that files items into folder paths (inbox/folders, #2463).
 type InboxFolders struct {
@@ -273,6 +318,7 @@ func RenderInboxFolders(f InboxFolders) string { return render("inbox/folders", 
 
 // InboxFoldersInput is one batch of items to file, with the folders in use and the user's own moves (inbox/folders_input).
 type InboxFoldersInput struct {
+	Language string // Native language name; empty preserves the legacy Chinese output.
 	Folders  []InboxFolderUse
 	Examples []InboxFolderExample
 	Items    []InboxFolderItem
@@ -307,7 +353,8 @@ func RenderInboxMergeTitle(m InboxMergeTitle) string { return render("inbox/merg
 
 // InboxMergeTitleInput is the rows that were merged, newest first (inbox/merge_title_input).
 type InboxMergeTitleInput struct {
-	Items []InboxFolderItem
+	Language string // Native language name; empty preserves the legacy Chinese output.
+	Items    []InboxFolderItem
 }
 
 func RenderInboxMergeTitleInput(in InboxMergeTitleInput) string {
@@ -317,8 +364,68 @@ func RenderInboxMergeTitleInput(in InboxMergeTitleInput) string {
 // SubscriptionKind is a source subscription's kind of Inbox item (#2039, inbox/kinds/subscription): what its items'
 // type line says (InboxItem.Described, through the round's kinds).
 type SubscriptionKind struct {
-	Kind  string // sub_mail … sub_digest, sub_failing
-	Label string // the subscription's label: whose items they are
+	Language string // Native language name; empty preserves the legacy Chinese output.
+	Kind     string // sub_mail … sub_digest, sub_failing
+	Label    string // the subscription's label: whose items they are
 }
 
 func RenderSubscriptionKind(k SubscriptionKind) string { return render("inbox/kinds/subscription", k) }
+
+// InboxReplyPolicy is the system prompt for classifying an Inbox item or reply text into a configured category
+// (inbox/reply_policy). The server maps the returned category to a route; the model never chooses a route.
+type InboxReplyPolicy struct {
+	Language   string   // Native language name; empty preserves the legacy Chinese output.
+	Owner      string   // "" is the Chinese "you"
+	Categories []string // sorted allowed category names from server policy
+	Rules      string   // optional extra classification guidance, trimmed
+}
+
+func RenderInboxReplyPolicy(p ...InboxReplyPolicy) string {
+	if len(p) == 0 {
+		return render("inbox/reply_policy_legacy", nil)
+	}
+	return render("inbox/reply_policy", p[0])
+}
+
+// InboxReplyPolicyInput combines the legacy owner-edit fields with the upstream localized item fields. Each renderer
+// selects its own template: legacy Text/Original/Edit never flow into the compiled schema's item presentation.
+type InboxReplyPolicyInput struct {
+	// Legacy Task 2 input.
+	Text     string
+	Original string
+	Edit     bool
+	// Upstream compiled-policy input.
+	Language  string // Native language name; empty preserves the legacy Chinese output.
+	Title     string
+	Sender    string
+	Source    string
+	Kind      string
+	Context   string
+	ReplyText string // non-empty when checking a proposed suggestion or final text before send
+}
+
+func RenderInboxReplyPolicyInput(in InboxReplyPolicyInput) string {
+	legacy := in.Text != "" || in.Original != "" || in.Edit ||
+		(in.Language == "" && in.Title == "" && in.Sender == "" && in.Source == "" && in.Kind == "" && in.Context == "" && in.ReplyText == "")
+	if legacy {
+		return render("inbox/reply_policy_legacy_input", in)
+	}
+	return render("inbox/reply_policy_input", in)
+}
+
+// RenderExternalInboxTriage gives the small-task model its routing response schema.
+func RenderExternalInboxTriage(language string) string {
+	return render("inbox/external_routing", struct{ Language string }{language})
+}
+
+// ExternalInboxUpdate is one source update routed to its existing owner.
+type ExternalInboxUpdate struct {
+	Language string
+	Event    string
+	Summary  string
+	URL      string
+}
+
+func RenderExternalInboxUpdate(in ExternalInboxUpdate) string {
+	return render("inbox/external_update", in)
+}

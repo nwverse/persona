@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 // The composer's toolbar as cindy's (#5324): the + opens the + / @ panel with a search box that has the keys; a typed @
 // opens the same panel above the box. "Add" first (files or images, Plan mode where the session has modes), then a few of
-// each resource; picking a file types `@path `, a session becomes a context chip. One round button on the right: Stop
+// each resource; picking a file or session inserts an inline reference. One round button on the right: Stop
 // while the agent works and nothing is typed, Send otherwise (Queue message while it works, with a second Stop).
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { onOverlayEntry } from "../../lib/back-close";
 import { loadPages } from "../../lib/lazy-page";
 import { getContexts } from "../../lib/links";
 import { applyCompleteSessions } from "../../lib/store";
@@ -13,6 +14,7 @@ import type { Session } from "../../lib/types";
 import { Composer } from "./Composer";
 import type { MentionSource } from "./ComposerPanel";
 import type { PlanMode } from "./PermissionPicker";
+import { composerField, composerFieldText } from "./composer-test-field";
 import { t } from "../../i18n";
 
 // the session folder's first level: a test may put other entries in it
@@ -36,11 +38,14 @@ beforeAll(async () => {
   act(() => applyCompleteSessions([{ machine_id: "m2", session_id: "other", title: "Fix the login page", agent: "claude", cwd: "/code/site", updated_at: "2026-11-12T10:00:00Z" } as Session]));
 });
 
-// a precise pointer unless a test takes it away (lib/viewport.ts keeps one list per query, so the switch is read live)
+// a precise pointer on a wide screen unless a test changes that (lib/viewport.ts keeps one list per query, so the
+// switches are read live)
 let fine = true;
+let narrow = false;
 beforeEach(() => {
   fine = true;
-  vi.stubGlobal("matchMedia", (q: string) => ({ get matches() { return q.includes("fine") && fine; }, media: q, addEventListener() {}, removeEventListener() {} }));
+  narrow = false;
+  vi.stubGlobal("matchMedia", (q: string) => ({ get matches() { return q === "(max-width: 1023px)" ? narrow : q.includes("fine") && fine; }, media: q, addEventListener() {}, removeEventListener() {} }));
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   Element.prototype.scrollIntoView ??= () => {};
   api.mockClear();
@@ -105,8 +110,23 @@ describe("the + (#5324)", () => {
     expect(texts.slice(2).join("|")).toContain("Composer.tsx");
     expect(texts.join("|")).toContain("src/");
     expect(texts.join("|")).toContain("Fix the login page");
-    // cindy's 44 px resource rows
-    expect(option("Composer.tsx").className).toContain("h-[44px]");
+    // Compact pointer rows keep a full touch target.
+    expect(option("Composer.tsx").className).toContain("[@media(pointer:coarse)]:h-11");
+  });
+
+  it("closes on a touch outside it, not only a mouse press (#11237)", async () => {
+    render();
+    click(plus());
+    await settle();
+    expect(panel()).not.toBeNull();
+    // inside it, or on the + (which toggles it), it stays
+    act(() => void panel()!.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType: "touch" })));
+    expect(panel()).not.toBeNull();
+    const outside = document.createElement("div");
+    document.body.append(outside);
+    act(() => void outside.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType: "touch" })));
+    expect(panel()).toBeNull();
+    outside.remove();
   });
 
   it("filters as the search is typed, and Backspace in an empty search or Esc closes it, the caret back in the box", async () => {
@@ -125,22 +145,27 @@ describe("the + (#5324)", () => {
     expect(document.activeElement).toBe(box());
   });
 
-  it("types a picked file's `@path ` at the caret", async () => {
+  it("adds a picked file at the last caret while the search has focus", async () => {
     render();
-    setValue(box(), "look at");
+    setValue(box(), "look at please");
+    act(() => {
+      box().focus();
+      box().setSelectionRange(7, 7);
+    });
     click(plus());
     await settle();
     setValue(search()!, "Composer");
     press(search()!, "Enter");
     expect(panel()).toBeNull();
-    expect(box().value).toBe("look at @web/Composer.tsx ");
+    expect(composerFieldText(host)).toBe("look at Composer.tsx please");
+    expect(composerField(host).querySelector("[data-inline-mention]")?.getAttribute("title")).toBe("/code/app/web/Composer.tsx");
   });
 
-  it("browses a folder in its search box, and adds a session as a context chip", async () => {
+  it("browses a folder with its disclosure and inserts a session in the prompt", async () => {
     render();
     click(plus());
     await settle();
-    click(option("src/"));
+    click(option("src/").querySelector("[data-browse-folder]")!);
     expect(search()!.value).toBe("src/");
     click(plus()); // the + toggles it shut
     expect(panel()).toBeNull();
@@ -148,8 +173,8 @@ describe("the + (#5324)", () => {
     await settle();
     click(option("Fix the login page"));
     expect(panel()).toBeNull();
-    expect(box().value).toBe("");
-    expect(getContexts(KEY).map((c) => c.title)).toEqual(["Fix the login page"]);
+    expect(composerFieldText(host)).toBe("Fix the login page ");
+    expect(getContexts(KEY)).toEqual([]);
   });
 
   it("checks Plan mode while the session plans, and its row switches it", async () => {
@@ -218,6 +243,55 @@ describe("the + (#5324)", () => {
   });
 });
 
+describe("Back with the + panel open (#11442)", () => {
+  // jsdom's Back lands as a popstate on a real timer, after back-close's own 0 ms one
+  beforeEach(() => void vi.useRealTimers());
+  const settleBack = () => act(async () => void (await new Promise((r) => setTimeout(r, 30))));
+  const goBack = () => act(async () => {
+    const popped = new Promise((r) => addEventListener("popstate", r, { once: true }));
+    history.back();
+    await popped;
+  });
+
+  it("closes it on a narrow screen and stays on the page", async () => {
+    narrow = true;
+    const at = location.href;
+    render();
+    click(plus());
+    expect(panel()?.dataset.composerPanel).toBe("plus");
+    expect(onOverlayEntry()).toBe(true);
+    await goBack();
+    expect(panel()).toBeNull();
+    expect(location.href).toBe(at);
+    expect(onOverlayEntry()).toBe(false);
+  });
+
+  it("closed from the page (the + again, Esc), takes its entry back off, leaving no Back that does nothing", async () => {
+    narrow = true;
+    render();
+    click(plus());
+    expect(onOverlayEntry()).toBe(true);
+    click(plus());
+    expect(panel()).toBeNull();
+    await settleBack();
+    expect(onOverlayEntry()).toBe(false);
+    click(plus());
+    expect(onOverlayEntry()).toBe(true);
+    press(search()!, "Escape");
+    expect(panel()).toBeNull();
+    await settleBack();
+    expect(onOverlayEntry()).toBe(false);
+  });
+
+  it("adds no entry on a wide screen", async () => {
+    render();
+    const before = history.state;
+    click(plus());
+    expect(panel()).not.toBeNull();
+    expect(history.state).toBe(before);
+  });
+});
+
 describe("a typed @ (#5324)", () => {
   it("opens the same panel above the box, without a search box, and the keys stay in the box", async () => {
     const plan: PlanMode = { on: false, toggle: vi.fn() };
@@ -243,7 +317,7 @@ describe("a typed @ (#5324)", () => {
     await settle();
     expect(options().map((o) => o.textContent?.replace(/lib$/, ""))).toEqual(["links.ts"]);
     press(box(), "Enter");
-    expect(box().value).toBe("see @lib/links.ts ");
+    expect(composerFieldText(host)).toBe("see links.ts ");
     expect(panel()).toBeNull();
   });
 });
@@ -263,18 +337,22 @@ describe("a typed query picks a resource before an Add row (#5324)", () => {
     expect(options()[0].textContent).toContain("api.ts");
     press(box(), "Enter");
     expect(picker).not.toHaveBeenCalled();
-    expect(box().value).toBe("@api.ts ");
+    expect(composerFieldText(host)).toBe("api.ts ");
     picker.mockRestore();
   });
 
-  it("`@pl` + Enter opens the plans/ folder, not Plan mode", async () => {
+  it("`@pl` + Enter inserts a folder, and Right Arrow can browse it", async () => {
     entries = [{ name: "plans", dir: true }];
     const plan: PlanMode = { on: false, toggle: vi.fn() };
     await at("@pl", plan);
     expect(options()[0].textContent).toContain("plans/");
-    press(box(), "Enter");
+    press(box(), "ArrowRight");
     expect(plan.toggle).not.toHaveBeenCalled();
     expect(box().value).toBe("@plans/");
+    await at("@pl", plan);
+    press(box(), "Enter");
+    expect(composerFieldText(host)).toBe("plans/ ");
+    expect(composerField(host).querySelector("[data-inline-mention]")?.getAttribute("title")).toBe("/code/app/plans/");
   });
 
   it("`@plan` with nothing else matching still offers Plan mode", async () => {
@@ -320,7 +398,7 @@ describe("the round button (#5324)", () => {
 
   it("queues what is typed while the agent works, a second Stop left of voice", () => {
     localStorage.setItem(`draft:${KEY}`, "and also this");
-    render({ working: true, onStop: () => {}, voice: { mode: "start", label: "voice", onClick: () => {} } });
+    render({ working: true, onStop: () => {}, action: { icon: "voice", name: "Voice", label: "voice", primary: true, onClick: () => {}, attributes: { "data-testid": "composer-voice" } } });
     expect(send()!.getAttribute("aria-label")).toBe(t("chat-composer.queue"));
     expect(send()!.title).toBe(t("chat-composer.queue_hint"));
     expect(stops()).toHaveLength(1);

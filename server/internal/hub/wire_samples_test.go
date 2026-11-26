@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistant"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/nodeproto"
@@ -191,11 +192,11 @@ func wireSamples(t *testing.T) map[string][]wireSample {
 	hello := h.hello()
 	// Replace the random client ID, and the hub's feature list with the samples' fixed one (wireFeatures), leaving
 	// every other protocol field from hello intact.
-	hello["client_id"] = "000000000001"
-	if got, _ := hello["features"].([]string); !slices.Equal(got, h.features()) {
-		t.Fatalf("hello no longer carries features() under features: %v", hello["features"])
+	hello.ClientID = "000000000001"
+	if !slices.Equal(hello.Features, h.features()) {
+		t.Fatalf("hello no longer carries features() under features: %v", hello.Features)
 	}
-	hello["features"] = wireFeatures
+	hello.Features = wireFeatures
 	add("connection", "hello_features", "The hello lists the hub's features; the sample carries a fixed list with one flag no client knows, which decoders keep reading past.", "event", ws(hello),
 		map[string]any{"/type": "hello", "/features": wireFeatures}, "server/internal/hub/hello.go: Hub.hello", "server/internal/hub/hello_features_test.go: TestHelloAndHealthCarryTheHubsFeatures",
 		"apple/Shared/LiveConnection.swift: ServerEvent.decode", "docs/protocol/protocol.md: Health check and feature flags")
@@ -522,6 +523,7 @@ func wireSamples(t *testing.T) map[string][]wireSample {
 	inboxLark := assistant.InboxItem{ID: "lark:feed_example:10", Source: "lark", Kind: assistant.KindMention, Account: "feishu", AccountName: "飞书", Title: "示例讨论", Sender: "小王", Preview: "请确认示例。", Count: 1, StartedAt: now, UpdatedAt: now, Tier: assistant.TierAction, Lark: &assistant.InboxLark{FeedID: "feed_example", IsGroup: true, StartPosition: "10", MentionPosition: "10"}, Context: "仅详情展示的示例内容", Last: "10", TriagedAt: "10", Agent: &assistant.InboxAgent{State: "drafted", MachineID: "m1", SessionID: "s1", Draft: "已收到示例。"}}
 	inboxMail := assistant.InboxItem{ID: "mail:account_example:thread_example:11", Source: "mail", Kind: assistant.KindMail, Account: "account_example", AccountName: "user@example.com", Title: "示例邮件", Preview: "示例已确认。", Count: 1, StartedAt: now, UpdatedAt: now, DoneAt: &now, DoneBy: "user", Read: true, Mail: &assistant.InboxMail{AccountID: "account_example", Mailbox: "INBOX", UIDs: []uint32{11}, MessageID: "message_example", From: assistant.MailAddress{Name: "小王", Email: "sender@example.com"}, Thread: "thread_example", Direct: true}}
 	add("inbox", "inbox_list", "收件箱列表包含飞书和邮件条目，并移除内部上下文。", "inbox", httpJSON(map[string]any{"items": []assistant.InboxItem{inboxLark.Listed(), inboxMail.Listed()}}), map[string]any{"/items/0/source": "lark", "/items/0/context": nil, "/items/0/agent/draft": "已收到示例。", "/items/1/source": "mail", "/items/1/mail/uids/0": 11, "/items/1/done_by": "user"}, "server/internal/assistant/inbox.go: InboxItem.listed", "server/internal/assistant/inbox_api.go: Service.inboxRoutes", "apple/Shared/InboxModels.swift: InboxItem")
+	wireInboxEveryBlock(t, add, httpJSON, now)
 	wireFeed(t, add, httpJSON, now)
 	wireErrors(t, add)
 	wireCompatibility(t, files, add, ws, httpJSON, now)
@@ -554,16 +556,21 @@ type wireAdder func(string, string, string, string, json.RawMessage, map[string]
 // wireNode exercises the real RPC consumer without launching a node or opening a network connection.
 func wireNode(t *testing.T, reply func(json.RawMessage) any) *Machine {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	h2nR, h2nW := io.Pipe()
-	n2hR, n2hW := io.Pipe()
-	hp, np := rpc.New("h", h2nW), rpc.New("n", n2hW)
-	np.OnRequest = func(_ context.Context, method string, p json.RawMessage) (any, error) {
+	return wireNodeRPC(t, func(_ context.Context, method string, p json.RawMessage) (any, error) {
 		if method != "session.items" {
 			return nil, fmt.Errorf("unexpected method: %s", method)
 		}
 		return reply(p), nil
-	}
+	})
+}
+
+func wireNodeRPC(t *testing.T, reply rpc.Handler) *Machine {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	h2nR, h2nW := io.Pipe()
+	n2hR, n2hW := io.Pipe()
+	hp, np := rpc.New("h", h2nW), rpc.New("n", n2hW)
+	np.OnRequest = reply
 	done := make(chan struct{}, 2)
 	go func() { defer func() { done <- struct{}{} }(); _ = hp.Serve(ctx, n2hR) }()
 	go func() { defer func() { done <- struct{}{} }(); _ = np.Serve(ctx, h2nR) }()
@@ -684,6 +691,11 @@ func wireErrors(t *testing.T, add wireAdder) {
 		}
 		add("errors", "conflict_"+code, "拒绝操作的错误字段与 error 平铺在同一层。", "error", wireBody(t, w, 409), fields, "server/internal/hub/http.go: callErr", "apple/Shared/APIClient.swift: APIError.fields(in:)", "docs/protocol/protocol.md: 发消息 / 终端对话框")
 	}
+	w = httptest.NewRecorder()
+	apierr.ImagesOverLimit(w, proto.DefaultImageLimits, proto.ImagesPerMessage+1)
+	add("errors", "images_over_limit", "A message with more pictures than a message holds: the limits and the count as numbers beside the error, flat like the other fields (#12973).", "error",
+		wireBody(t, w, http.StatusRequestEntityTooLarge), map[string]any{"/code": proto.CodeImagesOverLimit, "/delivered": "none", "/limit/per_message": proto.ImagesPerMessage, "/got/images": proto.ImagesPerMessage + 1},
+		"server/internal/apierr/images.go: ImagesOverLimit", "docs/protocol/protocol.md: Pictures in a message")
 }
 
 func wireCompatibility(t *testing.T, files map[string][]wireSample, add wireAdder, ws, httpJSON func(any) json.RawMessage, now time.Time) {
@@ -716,9 +728,12 @@ func wireCompatibility(t *testing.T, files map[string][]wireSample, add wireAdde
 	add("compatibility", "session_zero_time", "Go 零时间能解码，但不算有意义的日期。", "compat_session", httpJSON(proto.Session{SessionID: "s1"}), map[string]any{"/updated_at_meaningful": false, "/seen_at_meaningful": false}, "server/internal/proto/session.go: Session", "apple/Packages/PersonaWire/Sources/PersonaWire/JSONValue.swift: JSON.decoder, Date.isMeaningful")
 	add("compatibility", "date_at_cutoff", "当前 iOS 将 2000 年起点本身也判为无意义日期。", "compat_session", httpJSON(map[string]any{"session_id": "s1", "updated_at": "2000-01-01T00:00:00Z"}), map[string]any{"/updated_at_meaningful": false}, "apple/Packages/PersonaWire/Sources/PersonaWire/JSONValue.swift: Date.isMeaningful", "docs/archive/redesign/README.md: D5（现状差异）")
 	for i := range files["errors"] {
-		if i == 0 {
+		switch {
+		case i == 0:
 			files["errors"][i].HTTPStatus = 401
-		} else {
+		case files["errors"][i].Name == "images_over_limit":
+			files["errors"][i].HTTPStatus = http.StatusRequestEntityTooLarge
+		default:
 			files["errors"][i].HTTPStatus = 409
 		}
 	}

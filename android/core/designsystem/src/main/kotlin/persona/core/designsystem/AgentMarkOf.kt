@@ -19,7 +19,8 @@ val Session.agentMark: AgentMarkSpec?
         }
         return when {
             isCodex -> AgentMarkSpec(AgentMarkKind.Codex, "Codex", surface)
-            agent?.lowercase() in TRAE -> AgentMarkSpec(AgentMarkKind.Trae, "TRAE", surface)
+            agent == "traex" || agent == "traecli" || agent == "trae-cli" -> AgentMarkSpec(AgentMarkKind.Trae, agentLabel, surface)
+            agent.equals("trae", ignoreCase = true) -> AgentMarkSpec(AgentMarkKind.Trae, "TRAE", surface)
             isClaude -> AgentMarkSpec(AgentMarkKind.Claude, "Claude Code", surface)
             else -> AgentMarkSpec(knownAgentMark(agent) ?: knownAgentMark(launcher) ?: knownAgentMark(agentLabelHint), agentLabel, surface)
         }
@@ -36,12 +37,10 @@ fun knownAgentMark(name: String?): AgentMarkKind? {
     return MARKS[key] ?: LEGACY_MARKS[product.takeWhile(Char::isLetterOrDigit)]
 }
 
-private val TRAE = setOf("trae", "trae-cli", "traecli")
-
 private val LEGACY_MARKS = mapOf(
     "claude" to AgentMarkKind.Claude, "claudecode" to AgentMarkKind.Claude,
     "codex" to AgentMarkKind.Codex,
-    "trae" to AgentMarkKind.Trae, "traecli" to AgentMarkKind.Trae,
+    "trae" to AgentMarkKind.Trae, "traex" to AgentMarkKind.Trae, "traecli" to AgentMarkKind.Trae,
 )
 
 private val MARKS = LEGACY_MARKS + mapOf(

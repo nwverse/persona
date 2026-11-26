@@ -3,76 +3,72 @@
 // It is the agent's own claim and the card says so. Beside "merged" and "deployed" stands what the hub found when it
 // looked itself: confirmed, contradicted (in the caution color, with the warning mark: color is never the only signal)
 // or not checked. It is not part of the transcript: the reply that carried the raw block shows without it while this
-// card is there (lib/closeout.ts stripCloseout).
+// card is there (lib/closeout-text.ts stripCloseout).
 // Verified commands get only the facts recorded in this closeout's own exchange, never a badge: CloseoutEvidence, a chunk
 // of its own, so its matching code and strings stay off the first screen (#8118).
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { t } from "../../i18n";
-import { closeoutClaim, shownCloseout, type Claim } from "../../lib/closeout";
-import { lazyPage } from "../../lib/lazy-page";
+import { closeoutClaim, shownCloseout, type Claim, type CloseoutStatus } from "../../lib/closeout";
 import { clickLink, linkHref } from "../../lib/links";
-import { getState, subscribe, type State } from "../../lib/store";
 import type { Segment } from "../../lib/turns";
-import type { Item, Session } from "../../lib/types";
+import type { Closeout, Item, Session } from "../../lib/types";
 import { Collapse, cx } from "../../ui/atoms";
 import { Icon, type IconName } from "../../ui/icons";
 import { prLink } from "../TodoStageBar";
+import { CloseoutEvidence, closeoutEvidenceChunk, loadCloseoutEvidence, onCloseoutEvidenceChunk } from "./closeout-evidence-chunk";
+export { stripCloseout } from "../../lib/closeout-text";
 
 const KIND_ICON: Record<string, IconName> = { pr: "pullRequest", commit: "commit", branch: "branch", doc: "file", build: "tool", url: "link" };
 
-const CloseoutEvidence = lazyPage(() => import("./CloseoutEvidence").then((m) => m.CloseoutEvidence));
-
 // The evidence chunk starts loading as soon as the store holds a session whose closeout a card would show, before any
-// card mounts (preloadCloseoutEvidence, #8139). Session lists carry only where a closeout stands; did and Verified come
+// card mounts (preloadCloseout, #8139). Session lists carry only where a closeout stands; did and Verified come
 // with the session's own read, so the chunk is normally in before a card has a Verified line to draw the row under. When
 // that read still comes first, the card keeps drawing without its did, Verified and evidence rows until the chunk is in
 // and so is the closeout's exchange (the row's facts come from it): HOLD_MS at most, and never again once they showed.
 // The card grows once, as it does when the read arrives, and not again when the chunk or the transcript lands. After a
 // failed load they draw without the row, which joins them when a later card's load brings the chunk in.
 const HOLD_MS = 1000;
-type Chunk = "idle" | "loading" | "failed" | "retrying";
-let chunk: Chunk = "idle";
-const chunkListeners = new Set<() => void>();
-const setChunk = (next: Chunk) => {
-  chunk = next;
-  chunkListeners.forEach((l) => l());
-};
-const onChunk = (l: () => void) => {
-  chunkListeners.add(l);
-  return () => void chunkListeners.delete(l);
-};
-const chunkNow = (): Chunk | "in" => (CloseoutEvidence.ready() ? "in" : chunk);
 
-/** Loads the evidence chunk (again after a failure); nothing while it is in or on its way. */
-function loadEvidence() {
-  if (CloseoutEvidence.ready() || chunk === "loading" || chunk === "retrying") return;
-  setChunk(chunk === "failed" ? "retrying" : "loading");
-  CloseoutEvidence.preload().then(() => setChunk("idle"), () => setChunk("failed"));
+export type ExpandFold = (fold: Item) => Promise<boolean | void>;
+export type CloseoutArtifact = { kind: string; ref: string };
+export type CloseoutLinkClick = (event: ReactMouseEvent<HTMLAnchorElement>, url: string, title?: string) => void;
+
+export interface CloseoutEvidenceRenderProps {
+  session?: Session;
+  verified: string;
+  open: boolean;
+  segment?: Segment;
+  expandFold?: ExpandFold;
 }
 
-type SaverWindow = { navigator?: { connection?: { saveData?: boolean } } };
-
-/** Starts the evidence chunk once the store holds a session whose closeout a card would show (App, from the start). Not
- *  with Data Saver on: a card's own load starts it then. Returns the stop. */
-export function preloadCloseoutEvidence(w: SaverWindow = globalThis as SaverWindow): () => void {
-  if (w.navigator?.connection?.saveData) return () => {};
-  let sessions: State["sessions"] | undefined;
-  let summaries: State["sessionSummaries"] | undefined;
-  const check = () => {
-    const s = getState();
-    if (s.sessions === sessions && s.sessionSummaries === summaries) return;
-    sessions = s.sessions;
-    summaries = s.sessionSummaries;
-    if (!Object.values(sessions).some((rows) => rows.some((row) => shownCloseout(row))) && !summaries.some((row) => shownCloseout(row))) return;
-    stop();
-    loadEvidence();
-  };
-  const stop = subscribe(check);
-  check();
-  return stop;
+export interface CloseoutCardProps {
+  session?: Session;
+  segment?: Segment;
+  expandFold?: ExpandFold;
+  /** Explicit closeout data skips reading `session.work.closeout`. Pass `null` to hide the card. */
+  closeout?: Closeout | null;
+  /** Explicit artifacts override `session.work.artifacts`. */
+  artifacts?: CloseoutArtifact[];
+  /** Controlled disclosure state; defaults to internally managed open state when omitted. */
+  open?: boolean;
+  /** Notified when the user toggles the closeout header. */
+  onOpenChange?: (open: boolean) => void;
+  /** Builds artifact link addresses without reading the default router or hub state. */
+  resolveLinkHref?: (url: string) => string;
+  /** Handles artifact link activation while preserving the click event for modifier keys. */
+  onLinkClick?: CloseoutLinkClick;
+  /** Replaces the default lazy `CloseoutEvidence` chunk and store-driven hold when provided. */
+  renderEvidence?: (props: CloseoutEvidenceRenderProps) => ReactNode;
 }
 
-type ExpandFold = (fold: Item) => Promise<boolean | void>;
+const noopSubscribe = () => () => {};
+const controlledEvidenceChunk = () => "in" as const;
+
+function explicitCloseout(closeout: Closeout | null): (Closeout & { status: CloseoutStatus }) | undefined {
+  if (!closeout) return undefined;
+  if (closeout.status !== "done" && closeout.status !== "not_done" && closeout.status !== "blocked") return undefined;
+  return closeout as Closeout & { status: CloseoutStatus };
+}
 
 /** An artifact's reference as a web link, when it is one (http or https only). */
 function webLink(ref: string): string | undefined {
@@ -84,36 +80,58 @@ function webLink(ref: string): string | undefined {
   }
 }
 
-export function CloseoutCard({ session, segment, expandFold }: { session: Session; segment?: Segment; expandFold?: ExpandFold }) {
-  const c = shownCloseout(session);
-  const [open, setOpen] = useState(true);
-  const evidenceChunk = useSyncExternalStore(onChunk, chunkNow, chunkNow);
+export function CloseoutCard({
+  session,
+  segment,
+  expandFold,
+  closeout,
+  artifacts: controlledArtifacts,
+  open: controlledOpen,
+  onOpenChange,
+  resolveLinkHref,
+  onLinkClick,
+  renderEvidence,
+}: CloseoutCardProps) {
+  const c = closeout !== undefined ? explicitCloseout(closeout) : shownCloseout(session);
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(true);
+  const open = controlledOpen ?? uncontrolledOpen;
   const hasVerified = Boolean(c?.verified);
-  const waiting = hasVerified && (evidenceChunk === "idle" || evidenceChunk === "loading" || !segment);
+  const useDefaultEvidence = !renderEvidence && Boolean(session) && hasVerified;
+  const evidenceChunk = useSyncExternalStore(
+    useDefaultEvidence ? onCloseoutEvidenceChunk : noopSubscribe,
+    useDefaultEvidence ? closeoutEvidenceChunk : controlledEvidenceChunk,
+    useDefaultEvidence ? closeoutEvidenceChunk : controlledEvidenceChunk,
+  );
+  const waiting = useDefaultEvidence && (evidenceChunk === "idle" || evidenceChunk === "loading" || !segment);
   const [released, release] = useState(false);
   const hold = waiting && !released;
   useEffect(() => {
-    if (hasVerified) loadEvidence();
-  }, [hasVerified]);
+    if (useDefaultEvidence) loadCloseoutEvidence();
+  }, [useDefaultEvidence]);
   useEffect(() => {
-    if (!hasVerified) return;
+    if (!useDefaultEvidence) return;
     if (!waiting) {
       release(true);
       return;
     }
     const timer = setTimeout(() => release(true), HOLD_MS);
     return () => clearTimeout(timer);
-  }, [hasVerified, waiting]);
+  }, [useDefaultEvidence, waiting]);
   if (!c) return null;
   const merged = closeoutClaim(c, "merged");
   const deployed = closeoutClaim(c, "deployed");
   const contradicted = merged?.state === "contradicted" || deployed?.state === "contradicted";
-  const artifacts = session.work?.artifacts ?? [];
+  const artifacts = controlledArtifacts ?? session?.work?.artifacts ?? [];
   // held: drawn as the session list has it, without what the session's own read brought
   const did = hold ? [] : (c.did ?? []);
   const verified = hold ? undefined : c.verified;
   const status = c.status === "blocked" && c.waiting ? t("chat-chatview.closeout_blocked_on", { waiting: c.waiting }) : t(`chat-chatview.closeout_status_${c.status}`);
   const hasBody = did.length > 0 || artifacts.length > 0 || Boolean(merged || deployed || verified || c.missing);
+  const toggleOpen = () => {
+    const next = !open;
+    if (controlledOpen === undefined) setUncontrolledOpen(next);
+    onOpenChange?.(next);
+  };
   return (
     // the chat column's own width and side padding, so the card lines up with the transcript under it
     <div className="mx-auto w-full max-w-[880px] shrink-0 px-5 pt-3 sm:px-8">
@@ -122,7 +140,7 @@ export function CloseoutCard({ session, segment, expandFold }: { session: Sessio
           type="button"
           disabled={!hasBody}
           aria-expanded={hasBody ? open : undefined}
-          onClick={() => setOpen((o) => !o)}
+          onClick={toggleOpen}
           className={cx("flex w-full min-w-0 items-center gap-2 px-3 py-2 text-left pointer-coarse:min-h-11", hasBody && "cursor-pointer hover:bg-hover")}
         >
           <span className={cx("flex shrink-0 items-center", contradicted ? "text-orange" : c.status === "done" ? "text-green" : "text-ink-2")}>
@@ -147,14 +165,20 @@ export function CloseoutCard({ session, segment, expandFold }: { session: Sessio
               {artifacts.length > 0 && (
                 <Field label={t("chat-chatview.closeout_artifacts")}>
                   <span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-                    {artifacts.map((a, i) => <Artifact key={i} kind={a.kind} reference={a.ref} />)}
+                    {artifacts.map((a, i) => (
+                      <Artifact key={i} kind={a.kind} reference={a.ref} resolveLinkHref={resolveLinkHref} onLinkClick={onLinkClick} />
+                    ))}
                   </span>
                 </Field>
               )}
               {merged && <Field label={t("chat-chatview.closeout_merged")}><ClaimLine what="merged" claim={merged} /></Field>}
               {deployed && <Field label={t("chat-chatview.closeout_deployed")}><ClaimLine what="deployed" claim={deployed} /></Field>}
               {verified && <Field label={t("chat-chatview.closeout_verified")}>{verified}</Field>}
-              {verified && evidenceChunk === "in" && <CloseoutEvidence session={session} verified={verified} open={open} segment={segment} expandFold={expandFold} />}
+              {verified && (
+                renderEvidence
+                  ? renderEvidence({ session, verified, open, segment, expandFold })
+                  : evidenceChunk === "in" && session && <CloseoutEvidence session={session} verified={verified} open={open} segment={segment} expandFold={expandFold} />
+              )}
               {c.missing && <Field label={t("chat-chatview.closeout_missing")}>{c.missing}</Field>}
             </dl>
           </Collapse>
@@ -173,7 +197,17 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-function Artifact({ kind, reference }: { kind: string; reference: string }) {
+function Artifact({
+  kind,
+  reference,
+  resolveLinkHref,
+  onLinkClick,
+}: {
+  kind: string;
+  reference: string;
+  resolveLinkHref?: (url: string) => string;
+  onLinkClick?: CloseoutLinkClick;
+}) {
   const url = webLink(reference);
   const icon = KIND_ICON[kind] ?? "link";
   if (!url) {
@@ -189,12 +223,12 @@ function Artifact({ kind, reference }: { kind: string; reference: string }) {
   const text = pr?.text ?? url.replace(/^https?:\/\//, "");
   return (
     <a
-      href={linkHref(url)}
+      href={resolveLinkHref ? resolveLinkHref(url) : linkHref(url)}
       target="_blank"
       rel="noreferrer noopener"
       aria-label={pr?.label}
       title={url}
-      onClick={(e) => clickLink(e, url, text)}
+      onClick={(e) => (onLinkClick ? onLinkClick(e, url, text) : clickLink(e, url, text))}
       className="inline-flex min-w-0 max-w-full items-center gap-1 font-medium text-accent-ink hover:underline"
     >
       <Icon name={icon} size={12} className="shrink-0" />

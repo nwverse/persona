@@ -60,7 +60,56 @@ drawn after it with the header where it was tapped, and a search for `make step-
 fold. Only the mock's own reads leave the browser; other origins are blocked. Screenshots and `results.json`
 (`results-big.json`) go to the artifact directory; a 240-second watchdog ends the run, and the last line is the verdict.
 
-## Sidebar groups (#9071)
+## Overview's extension cards (#9745)
+
+```sh
+MOCK_EXTENSIONS=1 MOCK_OVERVIEW_CARDS=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/overview-cards.mjs <loopback-web-origin> <artifact-directory> [Chromium executable]
+# a hub without the route: the mock with MOCK_NAVIGATION=off; a default manager from before the field: MOCK_NAVIGATION=no-overview
+node web/e2e/overview-cards.mjs <loopback-web-origin> <artifact-directory> --old-hub|--old-manager [Chromium executable]
+```
+
+Against an exclusively owned mock-backed web server, in Simplified Chinese. Four made-up cards (the gateway's usage,
+Quota left, Needs me, Agenda): with nothing arranged they come in the hub's order, two a row; **整理总览** then drags
+Agenda onto the first card, makes it a full row, moves Needs me earlier with the keyboard and switches Quota left off
+(drawn as its outline while arranging). After **完成**, Agenda spans the row over two half cards, the hub keeps the
+arrangement, a reload and a second browser draw the same and never send the hidden card's render request, and Reset
+with Undo puts the cards back and the arrangement again. `--old-hub` / `--old-manager` check that the arrangement stays
+in the browser, survives a reload and that the edit state says it is kept in this browser only. Light and dark
+screenshots of Overview as it was, the edit state, the arranged result and the edit state with the hidden card at
+1440 × 900, the arranged result and the edit state at 390 × 844, and `results.json`, go to the artifact directory; a
+300-second watchdog ends the run.
+
+## Overview's own sections (#10905)
+
+```sh
+MOCK_EXTENSIONS=1 MOCK_OVERVIEW_CARDS=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/overview-sections.mjs <loopback-web-origin> <artifact-directory> [Chromium executable]
+```
+
+Against an exclusively owned mock-backed web server, in Simplified Chinese. With nothing arranged the sections come
+first in their order and the cards last (#11147); **整理总览** draws each section as a bar (需要你 and 卡住了，要你去看
+without a switch, 始终显示), drags 进行中的任务 onto 需要你 and switches 工作中 off. After **完成**, 进行中的任务 is right
+under the greeting, above 需要你, the cards still last, and 工作中 is not drawn; the hub keeps the arrangement (every section named), a
+reload and a second browser draw the same, and Reset puts Overview back. Light and dark screenshots of Overview as it
+was, the edit state and 进行中的任务 moved first, at 1440 × 1300 and 390 × 1600, and `results-sections.json`, go to the
+artifact directory; a 300-second watchdog ends the run.
+
+## Sidebar More (#13798)
+
+```sh
+MOCK_EXTENSIONS=1 MOCK_EXTENSION_COLUMNS=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/sidebar-more.mjs <loopback-web-origin> <artifact-directory> [Chromium executable]
+```
+
+Against an exclusively owned mock-backed web server, in Simplified Chinese. More starts visible with a put-away page. Its
+settings switch hides the row at once, the hub keeps `more: false` with that page's choice, a second browser and a reload
+keep it hidden, and the rail has no More menu. Turning it back on brings the page back. A direct link still opens while More
+is hidden. Light and dark screenshots of the wide sidebar, phone drawer and setting, plus the rail and large text, and
+`results.json`, go to the artifact directory; a 180-second watchdog ends the run.
 
 ```sh
 MOCK_EXTENSIONS=1 MOCK_EXTENSION_COLUMNS=1 MOCK_SIDEBAR_GROUPS=1 PORT=<port> python3 scripts/mock/mock_hub.py &
@@ -202,7 +251,12 @@ node web/e2e/user-navigation.mjs <loopback-web-origin> <artifact-directory>
 
 The URL is an origin without a route or token. The runner uses `playwright-core` with the installed `chrome` channel, checks the mock's HTTP health and WebSocket hello, and opens the actual app's conversation page. Browser routes supply entirely invented inputs and answers, including instructions without question marks. All browser HTTP writes and WebSocket client commands are intercepted rather than forwarded to the hub; unrelated mock messages are suppressed, external requests are blocked, and no existing browser profile or account is used. It does not exercise model delivery or claim production-hub acceptance.
 
-Checks run in light and dark at 1600 × 900 and a mouse-driven narrow desktop width of 1024 × 820. They verify the bell-shaped mark profile, 16px card radius, roomy padding, bold single-line input and two-line excerpt, card/rail hover transfer and immediate removal when both are left (measured from the actual mouse-out event to DOM removal, independently of the rail's idle timer). They also cover body-scroll reveal, right-edge geometry, a single current-input `aria-current`, input-plus-short-answer hover previews, clicking, dragging between horizontal marks and releasing to jump, Arrow/Home/End and Enter through the focusable navigation region, accessible input labels and selected-input descriptions, Escape cancellation without interrupting the session, fade to zero after roughly two seconds of inactivity, and pointer/Tab recovery through the retained edge trigger. A separate 240-input conversation traverses **every** mark by keyboard and jumps to the first, middle and last inputs; wheel navigation also verifies that a bounded window can move both forward and back to the earliest input. Windowing may bound the rendered marks but must not discard earlier inputs. Every screenshot is checked for page/console errors and Vite overlays, and all runs reject failed reads and external traffic.
+Checks run in light and dark at 1440 × 900 and 390 × 844. Wide cases verify the visible resting rail in the left
+gutter, rightward bell-shaped expansion, a bold single-line query and up to three lines of reply, a continuous hover
+bridge, and immediate preview dismissal after mouse-out. They verify body-scroll ownership, click and drag landing,
+keyboard previews and jumps, Escape cancellation and Tab reachability after idle. At 390 px this short fixture has symmetric padding and a separate scrollbar. The 240-input conversation
+reaches every input by keyboard, jumps to three positions and checks native wheel scrolling and viewport-bounded
+rendering with 7–8 px rows.
 
 Artifacts include `results.json` (per-check verdicts, timings, geometry, reached-mark count, intercepted request metadata and errors) and light/dark screenshots of scroll, hover, click, drag/release, keyboard, idle and edge-focus states, plus the long conversation's earliest/middle/latest inputs. The runner exits nonzero on failure or its four-minute timeout and prints a final one-line verdict. The caller must run it against the completed implementation, actually inspect the images, and upload the evidence; writing or syntax-checking this script is not browser acceptance.
 
@@ -214,17 +268,28 @@ node web/e2e/chat-scrollbar.mjs <loopback-web-origin> <artifact-directory>
 
 Use the same exclusively owned mock-backed server as the navigation runner, preferably `vite preview` after a production build. All app HTTP/WebSocket traffic is answered by invented data; no writes reach the mock or a real hub. The runner checks 1600, 640 and 390 px pointer layouts, touch-only 390 px, the largest app text size, light/dark, reduced motion, forced colors and an unsupported-scrollbar-color fallback. It measures independent edge/rail hit areas and content clearance, scroll/idle colors and unchanged geometry, and drags the **native** thumb to verify real scroll movement. The 180-second deadline prints a final success/failure/timeout verdict. Screenshots and `results.json` stay outside git.
 
-Presentation contract: `NAV_RAIL_METRICS.edgeGap` moves the existing 36 px navigation hit strip 16 px inward from the native scrollbar gutter; mark width calculations and all navigation gestures remain unchanged. Only missing right-side content padding is added on narrow layouts, so an already roomy centered column stays centered. `useChatScrollbar` changes native thumb color without cancelling input, changing scrollbar width between states, replacing the thumb or rerendering chat content. It reveals while scrolling, retains visibility over the scrollbar's edge or during a drag, and fades after 1 second of inactivity through `--chat-scrollbar-fade` (220 ms, disabled by Reduce Motion). The track stays transparent. Unsupported browsers and forced-color mode keep native presentation. This scoped fix reuses native browser scroll controls rather than introducing a second scroll widget, preserving platform keyboard, touch and drag behavior.
+The navigation hit strip is 16 px inside the left edge of the chat pane when the natural gutter fits. The native
+thumb uses the right edge. The transcript uses symmetric padding in both wide and narrow cases.
+`useChatScrollbar` reveals the thumb during scrolling, scrollbar hover or drag, then fades after one second of idle
+through `--chat-scrollbar-fade` (220 ms, disabled by Reduce Motion). Forced colors and unsupported browsers use native presentation.
 
 **Headless Chrome pitfall**: Playwright adds `--hide-scrollbars` by default. This runner removes that argument; otherwise screenshots can show no native thumb and a zero-width gutter even though CSS reports a visible color. Always inspect the actual scrolling/idle images as well as computed styles.
 
-## Progressive user-input history (#4836)
+## On-demand user-input history (#15813)
 
 ```sh
-node web/e2e/user-history-navigation.mjs <loopback-web-origin> <artifact-directory> [input-count] [main|session] [initial-body-count] [standard|large]
+node web/e2e/user-history-navigation.mjs <loopback-web-origin> <artifact-directory> [input-count] [main|session] [initial-body-count] [standard|large] [legacy|slow|cancel]
 ```
 
-The production-built app uses only synthetic intercepted HTTP/WebSocket responses, not a live hub. The default fixture has 678 genuine inputs, with automated supervision and compaction records between them, and only two input bodies in its first page. In wide/narrow light/dark runs it verifies 50 initial marks with full-history ordinals, no body reads on metadata loading or hover, unloaded-target landing through backward pages, and more marks after upward scrolling. Pass `36` for the same short-history check: all 36 marks are present. Pass `120 main 120` to restore a complete larger first page: it still starts at 50 marks, and reaching its earlier body content reveals the remainder without an unnecessary backward request. It saves inspected-state screenshots and `results.json`, and ends with a pass/fail/timeout verdict.
+Serve the production web build on an isolated loopback origin. The runner intercepts data requests and the
+WebSocket with an invented conversation, so this scenario needs only a web server. The default starts with two
+input bodies and a 120-input compact index. Light and dark runs at 1440 × 900 and 390 × 844 check the pixel-sized
+native wheel step, lazy excerpt batches, the visible loading label, a direct context jump and return to the live
+tail after a WebSocket reply. It saves all three states per run and writes the observed requests to `results.json`.
+Pass `120 main 2 large` for the largest app text size.
+
+`36 main 2 standard legacy` exercises a positions-only Hub. `75 main 12 standard slow` checks legacy read failure
+and retry. `75 main 12 standard cancel` checks interrupted backward jumps. Runtime artifacts stay outside Git.
 
 ## The sidebar's Agents groupings on a paging hub (#6662)
 
@@ -236,7 +301,7 @@ node web/e2e/agents-paged-groupings.mjs <loopback-web-origin> <artifact-director
 
 Run against an exclusively owned mock-backed web server. It checks the one grouping bar (待办 / 机器 / 仓库 / 项目 / 状态) over the paged and the complete list, By to-do paged as a section per open to-do (open) and 没挂待办的 (folded) against the mock's `todo` counts, By machine and By state paged, and By repository and a pin taking the complete list; it saves light and dark screenshots. `MOCK_MANAGERS=1` keeps one assistant, since with several the sidebar reads the complete list. The runner clears the mock's default pins for the run (they also keep the complete list), sets one for the pinned case, and puts them back. `--before` takes the same screenshots of a build from before #6662 with no checks. (It replaces `agents-browse-by.mjs`, whose sidebar view by catalog project the sidebar no longer offers; `PagedSessionList.groups.test.tsx` still covers that view.)
 
-It reads the mock's own catalog and holds the page to it, in English at 1280 x 900 (light and dark), a 240 px sidebar and a 390 px touch phone: Browse by Computer draws one section per computer, the busiest first, the first three open on their newest six sessions and the counts adding up to the list's total; Project lists the catalog's projects in its order, the repository on two computers as one section with its remote and both directories and the sessions of both; the value pill's menu is as wide as its pill and names each computer under the project; a picked project is the one flat list of its sessions; Space names each computer's spaces, tells two of one name apart and ends with the sessions in no space; the chosen Browse by survives a reload; Recently updated is the flat list. With `--hub` it also drives 20 s of the mock's churn while the list is drawn by project and prints the mock's read counters by kind, failing when the groups were read more than once per 1.5 s or a complete list was read. Screenshots of each step go to the artifact directory. A three-minute watchdog ends the run with a timeout verdict. Browser and mock checks only: no real hub, node or Git repository is involved.
+It reads the mock's own catalog and holds the page to it, in English at 1280 x 900 (light and dark), a 240 px sidebar and a 390 px touch phone: Browse by Computer draws one section per computer in the hub's order, the first three open on their first six sessions in stable computer → workspace → tab → pane order and the counts adding up to the list's total; Project lists the catalog's projects in fixed name order, the repository on two computers as one section with its remote and both directories and the sessions of both; the value pill's menu is as wide as its pill and names each computer under the project; a picked project is the one flat list of its sessions; Space names each computer's spaces, tells two of one name apart and ends with the sessions in no space; the chosen Browse by survives a reload; Recently updated is the flat list. With `--hub` it also drives 20 s of the mock's churn while the list is drawn by project and prints the mock's read counters by kind, failing when the groups were read more than once per 1.5 s or a complete list was read. Screenshots of each step go to the artifact directory. A three-minute watchdog ends the run with a timeout verdict. Browser and mock checks only: no real hub, node or Git repository is involved.
 
 ## Machines and Overview at desktop widths (web audit items 3, 25, 30 and 76)
 
@@ -257,6 +322,16 @@ node web/e2e/machine-alerts.mjs http://127.0.0.1:<web port> <artifact-directory>
 ```
 
 Run against an exclusively owned mock-backed web server with the mock's alert fleet (made-up computers, one per alert: memory, disk, version, offline, launchers, healthy). Light and dark at 1280 and 390 px, it screenshots the cards with their alert chips, the memory sheet and its Stop idle Agents confirmation, the hand-off picker, the disk sheet with its cleanup confirmation, the version sheet, the offline and launcher sheets, and the Capabilities view; it checks that every chip is a labelled button, that the offline computer is first and the healthy one last, that the cache in use can't be picked, that the offline computer is not a hand-off target and an eligible one is ranked first, that the version sheet says how much older the node's build is, that no button's text wraps and nothing is wider than a sheet, and that the page logs no errors. Its last scene redeploys the mock's Studio Mac through the stepper to the node's new build (restart the mock to run it again). It prints one line per check and a verdict; it exits 1 on a failed check and 2 on its four-minute timeout.
+
+## Read-only to-do progress board (#12713)
+
+```sh
+PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npm run dev -- --host 127.0.0.1 --port <web port> --strictPort &)
+node web/e2e/todo-progress-board.mjs <loopback-web-origin> [--shots <artifact-directory>] [--executable <chromium>]
+```
+
+Runs against an exclusively owned mock-backed web server, replacing every to-do, session and project with synthetic data over REST and the socket; no real hub data is read. At desktop and phone widths, light and dark, and default and large text, it checks stored-project and No-project groups, responsibility, latest progress with its own timestamp, owner decisions, per-project counts, closed/shelved exclusion, the exact 72-hour boundary, positive-hour persistence and invalid input, read-only rows, detail navigation and browser Back. It records and rejects every non-GET request and permits no client socket command other than the ordinary read-only `client_hello`, including across a Board reload, then checks viewport fit and browser errors and optionally saves four screenshots. The browser clock is fixed; no fixed sleeps are used. A failing check exits non-zero, and a four-minute watchdog prints a timeout verdict.
 
 ## To-dos with a keyboard, narrow and wide (web audit items 2, 74, 75, 88)
 
@@ -503,3 +578,25 @@ node web/e2e/font-preferences.mjs http://127.0.0.1:<web-port> <artifact-director
 ```
 
 Use exclusively owned mock/Vite processes and a fresh Chrome profile. This drives the real Settings page at wide/phone widths, light/dark and standard/large text, captures Default and Custom, checks immediate and cross-tab application/reset, before-paint reload, zero additional font requests and actual CJK/symbol fallback faces. It mounts the production single-pane and Full UI renderers against the synthetic hub and checks their first font family, retained-view attachment and unchanged size; it does not verify a live shell. All network access is restricted to the supplied loopback origin. Results and sixteen screenshots go outside the repository; a four-minute watchdog bounds the run.
+
+## Sidebar icon colors (#10822)
+
+```sh
+MOCK_EXTENSIONS=1 MOCK_NAV_ICON_COLOR=1 PORT=<port> python3 scripts/mock/mock_hub.py &
+(cd web && PERSONA_HUB_URL=http://127.0.0.1:<port> npx vite --port <web port> --strictPort &)
+node web/e2e/sidebar-icon-colors.mjs <loopback-web-origin> <artifact-directory> [--monochrome-only] [--chromium <executable>]
+```
+
+Against an exclusively owned mock-backed web server, in Simplified Chinese, light and dark, at 1440 × 900 and 390 × 844
+(touch). With nothing stored (Monochrome), every page icon of the wide sidebar, the icon rail and the phone's drawer is
+`--ink-3` and the open page's `--ink`. It then picks 彩色 in Settings › General › Appearance › 侧栏图标 and checks that
+each built-in page's icon is its named color, that the made-up extension page naming `icon_color` (花园) is green and
+the gateway's 用量 (none named) neutral, that the open page keeps `--ink`, that Inbox keeps its orange under the pointer,
+and that every colored icon reads at 3:1 on the sidebar and on the hover fill, as the browser resolves them.
+`--monochrome-only` takes only the Monochrome part, to set its screenshots beside another build's. Screenshots and
+`results.json` go to the artifact directory; a five-minute watchdog ends the run, and the last line is the verdict.
+
+### Native fetch receiver and Settings
+
+After building the web bundle, run `node web/e2e/native-fetch-settings.mjs <artifact-directory>` with an output directory outside the checkout.
+The runner starts its own loopback HTTP hub fixture on an ephemeral port and opens the actual Managers settings page in installed Chrome, in light and dark mode. It uses a fresh browser context and synthetic credentials, blocks external requests, rejects HTTP writes, and leaves native browser fetch untouched. It checks that hub-provided manager data reaches the settings UI, that health and explicitly bound fetch succeed, and that the original member-call pattern really throws `Illegal invocation`. JSON results and screenshots stay outside the repository. This verifies browser transport and rendering against an isolated fixture, not a deployed hub or account.

@@ -1,0 +1,43 @@
+{
+  "name": "agent_supervise",
+  "description": "主对话或方向主管可收编没有进行中任务的 Agent。省略 role 即为 worker；leader 需要 done_when，不能使用工作信任电脑。它可用 task_plan 分派直属 worker，用 task_review 验收；worker 不能继续派活。已有任务用 task_scope 调整验收条件或预计用时，用 agent_transfer 转交其他对话的任务。",
+  "input_schema": {
+    "type": "object",
+    "required": [
+      "machine",
+      "session_id"
+    ],
+    "properties": {
+      "machine": {
+        "type": "string",
+        "description": "agents_list machine id or name"
+      },
+      "session_id": {
+        "type": "string",
+        "description": "Agent session id or first 8 characters"
+      },
+      "title": {
+        "type": "string",
+        "description": "Chinese task title, under 20 characters; empty: Agent title"
+      },
+      "role": {
+        "type": "string",
+        "enum": [
+          "leader"
+        ]
+      },
+      "done_when": {
+        "type": "array",
+        "maxItems": 6,
+        "items": {
+          "type": "string"
+        },
+        "description": "checkable completion criteria"
+      },
+      "expect_minutes": {
+        "type": "integer",
+        "description": "estimated minutes from now"
+      }
+    }
+  }
+}

@@ -4,6 +4,7 @@
 
 import { createHash } from 'node:crypto'
 import { basename, join } from 'node:path'
+import { assistantPreview } from '../../runtime-sdk/lib/assistant-preview.js'
 import { appToolName, clipInput, interactionId, snippet, summaryOf } from '../../runtime-sdk/index.js'
 
 /** The runtime id: the engine's (proto.EnginePaseo), the space kind, the agent of sessions the apps do not know. */
@@ -517,6 +518,7 @@ export function agentRow(agent, o = {}) {
   const rewind = rewindOf(agent)
   row.capabilities = o.archived ? { rewind: false, rewind_code: false, modes: false, model: false }
     : { rewind: rewind.conversation, rewind_code: rewind.code }
+  if (!o.archived && !agent.archivedAt && agent.status === 'closed') row.capabilities.a2a_wake_on_send = true
   const modes = !o.archived && permissionModesOf(root, autoAcceptOf(agent) !== undefined)
   if (modes) row.capabilities.permission_modes = modes
   const t = transcriptOf(agent, roots)
@@ -951,7 +953,11 @@ export function timelineItems(entries, { maxSeq, running = false, echoes } = {})
       return
     }
     if (type === 'tool_call' && x.item.status === 'running') safeSeq = Math.min(safeSeq, x.seqStart - 1)
-    if (type === 'assistant_message' && x.item.text) lastText = x.item.text
+    if (type === 'assistant_message' && x.item.text) {
+      const preview = assistantPreview(x.item.text)
+      // A whitespace-only reply clears the cached row when the bridge receives this page.
+      if (preview !== undefined) lastText = preview || x.item.text
+    }
     items.push(...entryItems(x, echoes))
   })
   items.sort((a, b) => a.seq - b.seq || a.id.localeCompare(b.id))

@@ -2,7 +2,7 @@
 
 `ChatScreen` 已接入 `ChatLinkHost`。网页从底部铺满，拖动标题栏或把手可停在六成，再下拉关闭；右侧按钮也能切换档位。六成时给会话和输入框留出空间，无遮罩，网页内容区保留自己的滚动手势。标题栏是设计系统的件：返回（网页后退，到头了就关闭）、标题和网址、收起 / 铺满、⋯（复制链接、重新加载、在浏览器打开、分享）、关闭。
 
-裸链接、Markdown、用户消息、工具代码和交互正文统一使用 App 内入口。链接按项目约定在中文、空白处结束，去掉尾部标点和不成对的括号。网页新窗口回到当前 WebView。
+裸链接、Markdown、用户消息、工具代码和交互正文统一使用 App 内入口。链接按项目约定在中文、空白处结束，去掉尾部标点和不成对的括号。网页新窗口回到当前 WebView。长按（或大屏右键）对话里的 Markdown 链接与普通网址会弹出锚定下拉菜单（`ChatLinkMenu` / `JPointerMenu`），提供在 Persona 中打开、在浏览器打开、复制链接、分享（端口转发与非网页链接仅保留适用项），不与消息长按菜单或文字选择冲突。
 
 ## 链接协议（2026-11-02 按主线旧 App 补齐，`ChatLinks.kind`）
 
@@ -51,3 +51,9 @@
 - `ChatWebViewPool` configures `WebSettings.LOAD_DEFAULT` on every new WebView so standard HTTP `Cache-Control` / `ETag` headers apply: cacheable assets stay fast from the shared HTTP cache, while pages with `Cache-Control: no-store` / `no-cache` and HTML5 `<video>` byte-range requests are never served stale from disk. Forwarded ports (`forget(url)`) keep `WebSettings.LOAD_NO_CACHE`.
 - `WebChromeClient` implements `onShowCustomView`, `onHideCustomView`, and a 1x1 transparent `getDefaultVideoPoster`. `ChatLinkHost` displays active custom views via `JFullScreen` over `PersonaTheme.palette.mediaBackdrop`, exits fullscreen before navigating back or closing the card, and `ChatWebViewPool` detaches the custom view and notifies `CustomViewCallback.onCustomViewHidden()` once on hide, navigation, page switch, release, renderer loss, trim, and pool destruction. Background/inactive views cannot present fullscreen custom views.
 - Direct audio/video file URLs skip background preloading. For preloaded HTML pages paused while detached, `ChatWebViewPool` tracks pause state (avoiding redundant `onResume()` calls across Compose recompositions) and triggers a one-shot `<video>` `load()` recovery on stalled unplayed elements (`readyState < 2`, excluding `preload="none"`, `srcObject`, and `blob:` / `mediastream:` sources) once the view is active, resumed, attached to a window, and finished loading.
+
+## Chrome-aligned page rendering
+
+- `ChatWebViewPool` keeps algorithmic darkening and view-level force dark off (`setAlgorithmicDarkeningAllowed(settings, false)`, `settings.isAlgorithmicDarkeningAllowed = false` on API 33+, `isForceDarkAllowed = false`) so pages without dark-mode CSS are not heuristically inverted (including images and QR codes), while pages declaring `prefers-color-scheme: dark` still follow the app's dark theme (`values-night/themes.xml` `android:isLightTheme=false`).
+- Viewport and pinch-zoom settings match Chrome and `HtmlPreview`: `useWideViewPort = true`, `loadWithOverviewMode = true`, `setSupportZoom(true)`, `builtInZoomControls = true`, and `displayZoomControls = false`.
+- `mixedContentMode` uses `WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE` so passive mixed resources (such as HTTP images and QR codes on HTTPS pages) render while active mixed content (HTTP scripts, stylesheets, iframes) remains blocked.

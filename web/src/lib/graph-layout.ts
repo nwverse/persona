@@ -123,8 +123,10 @@ function kidsOf(n: string, s: Structure, visible: Set<string>, folded: Set<strin
 function readingOrder(roots: string[], s: Structure, visible: Set<string>, folded: Set<string>): { order: string[]; depth: Record<string, number> } {
   const order: string[] = [];
   const depth: Record<string, number> = {};
+  const seen = new Set<string>();
   const visit = (n: string, d: number) => {
-    if (n in depth) return;
+    if (seen.has(n)) return;
+    seen.add(n);
     depth[n] = d;
     order.push(n);
     for (const c of kidsOf(n, s, visible, folded)) visit(c, d + 1);
@@ -150,8 +152,10 @@ function framesOf(runs: string[][], s: Structure): { group: string; members: str
 }
 
 /** The tree layout (the shared rule 4): leaves take the next free slot, a parent sits halfway between its first and
- *  last child; each root after the first half a slot further on, a quarter slot where the group changes in a run. */
-function treeLayout(roots: string[], s: Structure, visible: Set<string>, folded: Set<string>): { slot: Record<string, number>; depth: Record<string, number>; frames: { group: string; members: string[] }[] } {
+ *  last child; each root after the first half a slot further on, a quarter slot where the group changes in a run.
+ *  `maxLeafRows` (UI version 10's control room) packs a run of more than that many leaf siblings into a grid of columns
+ *  instead of one long row, so a wide fan-out stays readable; without it the rules above are byte for byte the same. */
+function treeLayout(roots: string[], s: Structure, visible: Set<string>, folded: Set<string>, maxLeafRows?: number): { slot: Record<string, number>; depth: Record<string, number>; frames: { group: string; members: string[] }[] } {
   const slot: Record<string, number> = {};
   const depth: Record<string, number> = {};
   const runs: string[][] = [];
@@ -165,12 +169,62 @@ function treeLayout(roots: string[], s: Structure, visible: Set<string>, folded:
       return;
     }
     runs.push(kids);
-    for (let k = 0; k < kids.length; k++) {
-      const c = kids[k];
-      if (k > 0 && s.group[c] !== s.group[kids[k - 1]] && (s.group[c] || s.group[kids[k - 1]])) nxt.at += GROUP_GAP;
-      place(c, d + 1);
+    if (maxLeafRows === undefined) {
+      for (let k = 0; k < kids.length; k++) {
+        const c = kids[k];
+        if (k > 0 && s.group[c] !== s.group[kids[k - 1]] && (s.group[c] || s.group[kids[k - 1]])) nxt.at += GROUP_GAP;
+        place(c, d + 1);
+      }
+      slot[n] = (slot[kids[0]] + slot[kids[kids.length - 1]]) / 2;
+    } else {
+      // Segments: a child with visible, unfolded children alone, or a maximal run of leaf siblings of one group. A
+      // wide leaf run (more than maxLeafRows) folds into columns: Math.max(maxLeafRows, ceil(sqrt(L * 2.8))) rows
+      // (weighted by the ~3:1 horizontal-to-vertical node pitch so the packed block stays near-square in pixels),
+      // filled down each column, its leaves one slot apart in the row and one depth further out per column.
+      const isLeaf = (c: string) => kidsOf(c, s, visible, folded).length === 0;
+      const mixedGroups = new Set<string>();
+      for (const c of kids) if (s.group[c] && !isLeaf(c)) mixedGroups.add(s.group[c]);
+      const segments: { items: string[]; group: string }[] = [];
+      for (let k = 0; k < kids.length; ) {
+        const c = kids[k];
+        if (!isLeaf(c)) {
+          segments.push({ items: [c], group: s.group[c] });
+          k += 1;
+          continue;
+        }
+        const group = s.group[c];
+        const run = [c];
+        k += 1;
+        while (k < kids.length && isLeaf(kids[k]) && s.group[kids[k]] === group) (run.push(kids[k]), (k += 1));
+        segments.push({ items: run, group });
+      }
+      let previous = "";
+      let first = true;
+      for (const segment of segments) {
+        if (!first && segment.group !== previous && (segment.group || previous)) nxt.at += GROUP_GAP;
+        first = false;
+        previous = segment.group;
+        if (segment.items.length > maxLeafRows && (!segment.group || !mixedGroups.has(segment.group))) {
+          const L = segment.items.length;
+          const rows = Math.max(maxLeafRows, Math.ceil(Math.sqrt(L * 2.8)));
+          const base = nxt.at;
+          segment.items.forEach((leaf, idx) => {
+            depth[leaf] = d + 1 + Math.floor(idx / rows);
+            slot[leaf] = base + (idx % rows);
+          });
+          nxt.at = base + Math.min(L, rows);
+        } else {
+          for (const c of segment.items) place(c, d + 1);
+        }
+      }
+      let minSlot = Infinity;
+      let maxSlot = -Infinity;
+      for (const c of kids) {
+        if (slot[c] < minSlot) minSlot = slot[c];
+        if (slot[c] > maxSlot) maxSlot = slot[c];
+      }
+      slot[n] = (minSlot + maxSlot) / 2;
     }
-    slot[n] = (slot[kids[0]] + slot[kids[kids.length - 1]]) / 2;
   };
   const rs = regroup(roots, (r) => s.group[r] || null);
   runs.push(rs);
@@ -188,8 +242,16 @@ function fractionLess(a: number, b: number, c: number, d: number): boolean {
 
 /** The layered layout (the shared rule 5): a node one layer past its furthest visible, unfolded parent; layers sorted
  *  by the mean place of the parents (one sweep down) then of the children (one up, own place when without), stably
- *  comparing fractions; groups pulled together in each layer; each layer centred on the widest. */
-function layeredLayout(ids: string[], s: Structure, visible: Set<string>, folded: Set<string>): { slot: Record<string, number>; depth: Record<string, number>; frames: { group: string; members: string[] }[] } {
+ *  comparing fractions; groups pulled together in each layer; each layer centred on the widest. When `groupByTitle`
+ *  is true (web canvases), nodes sharing a group title in a layer cluster into one contiguous frame regardless of
+ *  their upstream parents. */
+function layeredLayout(
+  ids: string[],
+  s: Structure,
+  visible: Set<string>,
+  folded: Set<string>,
+  groupByTitle = false,
+): { slot: Record<string, number>; depth: Record<string, number>; frames: { group: string; members: string[] }[] } {
   const vis = ids.filter((i) => visible.has(i));
   const vparents: Record<string, string[]> = {};
   const vchildren: Record<string, string[]> = {};
@@ -233,20 +295,25 @@ function layeredLayout(ids: string[], s: Structure, visible: Set<string>, folded
       })
       .map((x) => x.n);
 
+  // A layer's group key: by default (the shared spec), its title among nodes with the same visible, unfolded parents;
+  // with `groupByTitle`, its title alone so multi-parent nodes in one group stay contiguous inside one frame.
+  const gkey = groupByTitle
+    ? (n: string): string | null => s.group[n] || null
+    : (n: string): string | null => (!s.group[n] ? null : `${vparents[n].map((q) => s.index[q]).sort((a, b) => a - b).join(",")}\0${s.group[n]}`);
+
   for (let L = 1; L < count; L++) {
     // down: by the mean place of the parents
     const p = pos();
     layers[L] = sortBy(layers[L], (n) => [vparents[n].reduce((sum, m) => sum + p[m], 0), vparents[n].length]);
+    if (groupByTitle) layers[L] = regroup(layers[L], gkey);
   }
   for (let L = count - 2; L >= 0; L--) {
     // up: by the mean place of the children; a node without any keeps its own place as its key
     const p = pos();
     layers[L] = sortBy(layers[L], (n) => (vchildren[n].length ? [vchildren[n].reduce((sum, m) => sum + p[m], 0), vchildren[n].length] : [p[n], 1]));
+    if (groupByTitle) layers[L] = regroup(layers[L], gkey);
   }
 
-  // A layer's group key: its title among nodes with the same visible, unfolded parents, as one string so two nodes of
-  // the same group compare equal whatever their parents' order (the reference compares the tuples by value).
-  const gkey = (n: string): string | null => (!s.group[n] ? null : `${vparents[n].map((q) => s.index[q]).sort((a, b) => a - b).join(",")}\0${s.group[n]}`);
   layers = layers.map((row) => regroup(row, gkey));
 
   const slot: Record<string, number> = {};
@@ -281,18 +348,26 @@ function layeredLayout(ids: string[], s: Structure, visible: Set<string>, folded
   return { slot, depth: layer, frames };
 }
 
+export interface GraphLayoutOptions {
+  maxLeafRows?: number;
+  groupByTitle?: boolean;
+}
+
 /**
  * What a client draws for a graph with this fold set (the view's `folded` when the argument is omitted). Follows the
  * shared rules exactly; graph-layout.test.ts checks every field against every case in
- * spec/fixtures/graph-layout/cases.json.
+ * spec/fixtures/graph-layout/cases.json. `opts.maxLeafRows` packs wide pure-leaf runs into columns and
+ * `opts.groupByTitle` keeps same-group nodes contiguous per layer across parents; without them the layout is unchanged.
  */
-export function layOutGraph(graph: LayoutGraph, folded?: string[]): GraphLayout {
+export function layOutGraph(graph: LayoutGraph, folded?: string[], opts?: GraphLayoutOptions): GraphLayout {
   const s = structure(graph);
   const fold = new Set(folded ?? graph.folded ?? []);
   const visible = visibleNodes(s.ids, s.children, s.parents, fold);
   const roots = s.ids.filter((i) => s.parents[i].length === 0);
   const { order, depth } = readingOrder(regroup(roots, (r) => s.group[r] || null), s, visible, fold);
-  const laid = (graph.layout ?? "tree") === "tree" ? treeLayout(roots, s, visible, fold) : layeredLayout(s.ids, s, visible, fold);
+  const laid = (graph.layout ?? "tree") === "tree"
+    ? treeLayout(roots, s, visible, fold, opts?.maxLeafRows)
+    : layeredLayout(s.ids, s, visible, fold, !!opts?.groupByTitle);
   const right = (graph.direction ?? "right") === "right";
   const at: Record<string, [number, number]> = {};
   for (const n of s.ids) {

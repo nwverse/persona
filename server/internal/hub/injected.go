@@ -74,6 +74,8 @@ func injectedLine(l i18n.Lang, in *proto.Injected) string {
 			return i18n.T(l, "injected.wake", args)
 		case "limit_continue":
 			return i18n.T(l, "injected.limit_continue")
+		case "limit_fallback":
+			return i18n.T(l, "injected.limit_fallback")
 		case "once":
 			return i18n.T(l, "injected.followup_due", args)
 		case "daily", "interval":
@@ -81,6 +83,8 @@ func injectedLine(l i18n.Lang, in *proto.Injected) string {
 		}
 	case proto.InjectedSystem:
 		switch in.State {
+		case "answer_again":
+			return i18n.T(l, "injected.answer_again")
 		case "inbox":
 			return i18n.T(l, "injected.inbox_update", args)
 		case "ask_answered":

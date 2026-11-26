@@ -9,7 +9,7 @@ import { handleUnauthorized, setToken } from "../lib/api";
 import { onOpenNewAgent, type NewAgentPreset } from "../lib/new-agent";
 import { resetManagerChoice } from "../lib/manager-choice";
 import { getGroups, resetGroupsCache, runStatus } from "../lib/compare-runs";
-import { resetRunner, retryRun } from "../lib/compare-runner";
+import { resetRunner, retryRun, startCompare } from "../lib/compare-runner";
 import { NewAgent } from "./NewAgent";
 import { resetModelListsForTests } from "../lib/session-models";
 import { t } from "../i18n";
@@ -26,7 +26,11 @@ let host: HTMLDivElement;
 let closes: number;
 let started: number;
 const flush = () => act(async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); });
-const tick = (ms = 0) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+const tick = (ms = 0) => act(async () => {
+  await vi.advanceTimersByTimeAsync(0);
+  await vi.dynamicImportSettled();
+  await vi.advanceTimersByTimeAsync(ms);
+});
 const button = (text: string) => [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.trim() === text);
 const textarea = () => document.querySelector<HTMLTextAreaElement>("textarea")!;
 const adds = () => calls.filter((c) => c.url.endsWith("/worktree/add"));
@@ -130,6 +134,21 @@ describe("New agent's Runs (#8916)", () => {
     // the one Agent's conversation opened, as ever (its local page, then the started session's)
     expect(location.pathname).toBe("/s/computer/synthetic-run-1");
     expect(getGroups()).toHaveLength(0);
+  });
+
+  it("keeps the document title hint in memory for every run", async () => {
+    const nameHint = "team/brief r9";
+    await act(async () => {
+      startCompare({
+        mid: "computer", cwd: "/projects/demo", nameHint: "review", branch: "review", count: 2,
+        spec: { launcher: "claude", nameHint }, paseo: false, text: "Private team document", attachments: [],
+      });
+    });
+    for (let n = 1; n <= 2; n++) {
+      await answer(pending[n - 1], made(n));
+      expect(starts()[n - 1].body?.name_hint).toBe(nameHint);
+    }
+    expect(JSON.stringify(Object.entries(localStorage))).not.toContain(nameHint);
   });
 
   it("closes at once on the runs' page, then makes the worktrees one at a time and starts each run", async () => {

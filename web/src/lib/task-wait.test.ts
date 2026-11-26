@@ -167,7 +167,7 @@ describe("recorded external wait information", () => {
   it.each([`${pr.url}?from=review#comment`, "https://example.test/team/demo/-/merge_requests/7#note"])("keeps a ready review object with a query or fragment: %s", (url) => {
     const todo = make("review-link", 96);
     todo.supervision!.parked!.evidence = { ...evidence(96), kind: "merge_review", ready: true, url };
-    expect(taskWait(todo, now)?.contact?.status).toBe("sent");
+    expect(taskWait(todo, now)?.contact).toMatchObject({ status: "sent" });
     expect(taskWait(todo, now)?.canRemind).toBe(true);
   });
 
@@ -219,7 +219,8 @@ describe("wait-age ordering on task surfaces", () => {
     const got = orderWaitGroups(original, now);
     expect(got.sections.parked.map((group) => group.lead.id)).toEqual(["z-older", "middle"]);
     expect(got.sections.parked[0].members.map((todo) => todo.id)).toEqual(["z-older", "a-newer"]);
-    expect(got.sections.parked[0].key).toBe("z-older");
+    expect(got.sections.parked[0].key).toBe(original.sections.parked[0].key);
+    expect(got.sections.parked[0].key).toBe("a-newer");
     expect(got.todoCounts).toBe(original.todoCounts);
     expect(got.sections.working).toBe(original.sections.working);
     expect(got.open).toBe(original.open);

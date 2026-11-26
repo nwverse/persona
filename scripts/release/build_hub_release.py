@@ -10,6 +10,8 @@ import subprocess
 import sys
 import tempfile
 
+from node_artifacts import node_files
+
 
 def run(args, cwd, env=None):
     print('+', ' '.join(map(str, args)), flush=True)
@@ -27,20 +29,22 @@ def run_together(commands, cwd, env=None):
             raise subprocess.CalledProcessError(status, args)
 
 
-def package_release(binary, bin_dir, out, platforms, version, build, sha, root):
+def package_release(binary, bin_dir, out, platforms, version, build, sha, root, *, publish_nodes=False):
     # A retry may leave old content-addressed files in out; only this build's
     # canonical platform names belong in the manifest generator input.
     with tempfile.TemporaryDirectory(prefix='.packages-', dir=out) as directory:
         packages = Path(directory)
-        for platform in platforms:
-            with (bin_dir / ('personad-' + platform)).open('rb') as src, \
-                    gzip.open(packages / ('personad-' + platform + '.gz'), 'wb') as dest:
-                shutil.copyfileobj(src, dest)
+        programs = ('personad', 'persona-node') if publish_nodes else ('personad',)
+        for program in programs:
+            for platform in platforms:
+                name = f'{program}-{platform}'
+                with (bin_dir / name).open('rb') as src, gzip.open(packages / (name + '.gz'), 'wb') as dest:
+                    shutil.copyfileobj(src, dest)
         run([str(binary), 'release', 'manifest', '--dir', str(packages), '--version', version,
              '--build', build, '--commit', sha, '--out', str(packages / 'manifest.json')], root)
         manifest = json.loads((packages / 'manifest.json').read_text())
-        for platform, artifact in manifest['files'].items():
-            name = f'personad-{platform}-{artifact["sha256"]}.gz'
+        for program, platform, artifact in node_files(manifest):
+            name = f'{program}-{platform}-{artifact["sha256"]}.gz'
             os.replace(packages / artifact['name'], out / name)
             artifact['name'] = name
         return manifest
@@ -75,12 +79,17 @@ def main():
     run(['python3', 'scripts/privacy_check.py'], root)
     run(['go', 'mod', 'verify'], root / 'server')
     run(['go', 'vet', './...'], root / 'server')
+    # Before the tests: the runtime packages are git-ignored build output in this reused checkout, and tests read what
+    # is embedded (internal/claudeplugin). Generated only after a passing run, a stale package failed every later one.
+    run(['go', 'generate', './internal/runtimepkg'], root / 'server')
     sys.path.insert(0, str(root / 'scripts/test'))
-    from server_test_env import clean_environment
+    from server_test_env import clean_environment, with_trimpath
     test_env = clean_environment(os.environ)
     caches = json.loads(subprocess.check_output(
-        ['go', 'env', '-json', 'GOCACHE', 'GOMODCACHE', 'GOPATH'], cwd=root / 'server'))
+        ['go', 'env', '-json', 'GOCACHE', 'GOMODCACHE', 'GOPATH', 'GOFLAGS'], cwd=root / 'server'))
+    goflags = caches.pop('GOFLAGS', '') or ''
     test_env.update(caches)
+    test_env['GOFLAGS'] = with_trimpath(goflags)
     with tempfile.TemporaryDirectory(prefix='hub-release-tests-') as home:
         test_env.update(HOME=home, ZDOTDIR=home)
         # internal/node's and internal/assistant's serial runs outgrew Go's ten-minute -timeout: they run in
@@ -113,27 +122,29 @@ def main():
         # keep its hashed assets gzipped as the hub sends them (docs/web/web.md "Precompressed assets").
         run(['python3', 'scripts/release/check_bundle_privacy.py', '--whole-short', str(webdist)], root)
         run(['go', 'run', './internal/webasset/precompress', 'internal/hub/webdist'], root / 'server')
-        run(['go', 'generate', './internal/runtimepkg'], root / 'server')
         tags = build_tags(root)
         flags = (f'-s -w -X main.version={version} -X main.channel=release '
                  f'-X main.build={args.build} -X main.commit={sha} -X main.updateURL={args.update_url}')
         bin_dir = out / 'bin'
         bin_dir.mkdir(exist_ok=True)
         binary = bin_dir / 'personad-linux-amd64'
-        env = dict(os.environ, GOOS='linux', GOARCH='amd64', CGO_ENABLED='0')
-        run(['go', 'build', '-tags', tags, '-trimpath', '-ldflags', flags,
-             '-o', str(binary), './cmd/personad'], root / 'server', env)
         platforms = ['linux-amd64']
         if args.publish_nodes or args.publish_managers:
-            darwin = bin_dir / 'personad-darwin-arm64'
-            run(['go', 'build', '-tags', tags, '-trimpath', '-ldflags', flags,
-                 '-o', str(darwin), './cmd/personad'], root / 'server',
-                dict(os.environ, GOOS='darwin', GOARCH='arm64', CGO_ENABLED='0'))
             platforms.append('darwin-arm64')
+        programs = ('personad', 'persona-node') if args.publish_nodes else ('personad',)
+        for program in programs:
+            for platform in platforms:
+                system, arch = platform.split('-')
+                env = dict(os.environ, GOOS=system, GOARCH=arch, CGO_ENABLED='0')
+                run(['go', 'build', '-tags', tags, '-trimpath', '-ldflags', flags,
+                     '-o', str(bin_dir / f'{program}-{platform}'), f'./cmd/{program}'], root / 'server', env)
         run(['python3', 'scripts/release/check_bundle_privacy.py', '--whole-short', str(bin_dir)], root)
-        manifest = package_release(binary, bin_dir, out, platforms, version, args.build, sha, root)
+        manifest = package_release(binary, bin_dir, out, platforms, version, args.build, sha, root,
+                                   publish_nodes=args.publish_nodes)
         if args.publish_nodes:
             write_json(out / 'node-manifest.json', manifest)
+            # Only the node publisher uploads these archives. Keep Hub and Manager manifests scoped to their files.
+            manifest.pop('nodes', None)
         if args.publish_managers:
             write_json(out / 'manager-manifest.json', manifest)
         manifest['files'] = {'linux-amd64': manifest['files']['linux-amd64']}

@@ -100,7 +100,7 @@ func TestExactIdentityLookup(t *testing.T) {
 func TestOrderingAndZeroValue(t *testing.T) {
 	var i Index
 	empty := mustQuery(t, &i, Options{})
-	if empty.Total != 0 || empty.HasMore || empty.Sessions == nil || empty.Remove == nil || empty.Revision == "" {
+	if empty.Total != 0 || empty.HasMore || empty.Sessions == nil || empty.Remove == nil || empty.Added == nil || empty.Revision == "" {
 		t.Fatalf("empty = %+v", empty)
 	}
 	before := i.Revision()
@@ -129,7 +129,7 @@ func TestOrderingAndZeroValue(t *testing.T) {
 		t.Fatal("caller changed cached counts")
 	}
 	wire, err := json.Marshal(empty)
-	if err != nil || !strings.Contains(string(wire), `"sessions":[]`) || !strings.Contains(string(wire), `"remove":[]`) || strings.Contains(string(wire), "next_cursor") {
+	if err != nil || !strings.Contains(string(wire), `"sessions":[]`) || !strings.Contains(string(wire), `"remove":[]`) || !strings.Contains(string(wire), `"added":[]`) || strings.Contains(string(wire), "next_cursor") {
 		t.Fatalf("wire = %s, %v", wire, err)
 	}
 }
@@ -382,6 +382,33 @@ func TestDeltaChangesAndFilteredExit(t *testing.T) {
 	}
 }
 
+func TestDeltaAddedDistinguishesCreationFromFilterEntrance(t *testing.T) {
+	var i Index
+	a := testItem("a", 1)
+	i.Replace("batch", []Item{a})
+	baseline := i.Revision()
+	changed := a
+	changed.State = "idle"
+	i.Replace("batch", []Item{changed, testItem("b", 2)})
+
+	first := mustQuery(t, &i, Options{Since: baseline, Limit: 1})
+	if got := sessionIDs(first); !reflect.DeepEqual(got, []string{"b"}) || !reflect.DeepEqual(first.Added, []string{"b"}) {
+		t.Fatalf("created row = %+v", first)
+	}
+	second := mustQuery(t, &i, Options{Since: baseline, Cursor: first.NextCursor, Limit: 1})
+	if got := sessionIDs(second); !reflect.DeepEqual(got, []string{"a"}) || len(second.Added) != 0 {
+		t.Fatalf("updated row = %+v", second)
+	}
+	entered := mustQuery(t, &i, Options{Since: baseline, State: "idle"})
+	if got := sessionIDs(entered); !reflect.DeepEqual(got, []string{"a"}) || len(entered.Added) != 0 {
+		t.Fatalf("filter entrance is not creation = %+v", entered)
+	}
+	full := mustQuery(t, &i, Options{})
+	if len(full.Added) != 0 {
+		t.Fatalf("full page added = %v", full.Added)
+	}
+}
+
 func TestDeltaCollapsesLatestAndFrozenHighwater(t *testing.T) {
 	var i Index
 	items := []Item{testItem("a", 1), testItem("b", 2), testItem("c", 3), testItem("d", 4)}
@@ -487,6 +514,50 @@ func TestRevisionExpiryAndBounds(t *testing.T) {
 		t.Fatalf("oversized journal: len=%d changes=%d floor=%d", len(i.journal), i.journalChanges, i.floor)
 	}
 	mustQuery(t, &i, Options{Since: i.Revision()})
+}
+
+func TestRecentRevisionSurvivesHighChurnBurst(t *testing.T) {
+	const legacyMaxJournalRevisions = 128
+	var i Index
+	i.Replace("batch", []Item{testItem("a", 0)})
+	baseline := i.Revision()
+	for n := 1; n <= 2*legacyMaxJournalRevisions; n++ {
+		i.Replace("batch", []Item{testItem("a", n)})
+	}
+	p := mustQuery(t, &i, Options{Since: baseline})
+	if len(i.journal) <= legacyMaxJournalRevisions || i.journalChanges > maxJournalChanges {
+		t.Fatalf("high-churn journal: revisions=%d changes=%d", len(i.journal), i.journalChanges)
+	}
+	if !reflect.DeepEqual(sessionIDs(p), []string{"a"}) || len(p.Remove) != 0 || p.HasMore || p.Revision != i.Revision() {
+		t.Fatalf("high-churn delta = %+v", p)
+	}
+}
+
+func TestJournalChangedIDBudgetStillExpires(t *testing.T) {
+	const idsPerRevision = 256
+	revisions := maxJournalChanges/idsPerRevision + 1
+	if revisions >= maxJournalRevisions {
+		t.Fatalf("test must exercise the changed-ID bound before the revision bound: revisions=%d max=%d", revisions, maxJournalRevisions)
+	}
+	var i Index
+	baseline := i.Revision()
+	var atFloor string
+	items := make([]Item, idsPerRevision)
+	for n := 0; n < revisions; n++ {
+		for j := range items {
+			items[j] = testItem(fmt.Sprintf("item-%03d", j), n)
+		}
+		i.Replace("batch", items)
+		if n == 0 {
+			atFloor = i.Revision()
+		}
+	}
+	_, err := i.Query(Options{Since: baseline})
+	requireCode(t, err, "revision_expired")
+	mustQuery(t, &i, Options{Since: atFloor})
+	if i.floor != 1 || i.journalChanges > maxJournalChanges || len(i.journal) >= maxJournalRevisions {
+		t.Fatalf("changed-ID eviction: floor=%d revisions=%d changes=%d", i.floor, len(i.journal), i.journalChanges)
+	}
 }
 
 func TestCursorExpiryBindingAndEviction(t *testing.T) {

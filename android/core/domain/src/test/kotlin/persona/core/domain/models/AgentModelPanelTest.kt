@@ -58,6 +58,52 @@ class AgentModelPanelTest {
         assertFalse(AgentModelPanel.switchesLauncher(agent.copy(agent = "codex"), switching))
     }
 
+    @Test fun theOtherEngineIsSupportedInBothDirectionsOnlyWithTheFeature() {
+        val features = setOf(AgentModelPanel.ENGINE_SWITCH)
+        val pick = PanelConfig("cx", "gpt-5.5")
+        val claude = AgentModelPanel.panel(agent, launchers, ::read, features)
+        assertNull(claude.providers.single { it.id == "cx" }.unavailable)
+        assertEquals(PanelReason.OtherProvider, claude.providers.single { it.id == "work" }.unavailable)
+        val step = ModeStep.Launcher("cx", "example", "gpt-5.5", agent = "codex")
+        assertEquals(listOf(step), AgentModelPanel.pickPlan(agent, pick, { lists[it] }, features, launchers))
+        assertTrue(AgentModelPanel.needsEngineConfirmation(agent, step))
+        val pending = agent.copy(pendingSwitch = PendingSwitch("cx", "gpt-5.5", agent = "codex"))
+        assertFalse(AgentModelPanel.needsEngineConfirmation(pending, step))
+        assertEquals(emptyList<ModeStep>(), AgentModelPanel.pickPlan(pending, pick, { lists[it] }, features, launchers))
+        assertEquals(PanelNote.Engine, AgentModelPanel.panel(pending, launchers, ::read, features).state.note)
+        assertEquals(PillSetup("codex", "cx", AgentModelPanel.modelLabel("gpt-5.5")), AgentModelPanel.pendingPill(pending, ::read, launchers, "Default"))
+        assertEquals(listOf(ModeStep.Launcher("example", "example")),
+            AgentModelPanel.pickPlan(pending, PanelConfig("example", "opus", "high"), { lists[it] }, features, launchers))
+
+        val codex = agent.copy(agent = "codex", launcher = null, model = "gpt-5.5")
+        assertEquals(listOf(ModeStep.Launcher("example", "codex", "opus", agent = "claude")),
+            AgentModelPanel.pickPlan(codex, PanelConfig("example", "opus"), { lists[it] }, features, launchers))
+        assertNull(AgentModelPanel.pickPlan(codex, PanelConfig("example", "opus"), { lists[it] }, switching, launchers))
+    }
+
+    @Test fun unsupportedOrBusySessionsCannotScheduleAHandoff() {
+        val features = setOf(AgentModelPanel.ENGINE_SWITCH)
+        val codex = agent.copy(agent = "codex", launcher = "cx")
+        val pick = PanelConfig("example", "opus")
+        val unsupported = listOf(
+            codex.copy(assistant = true),
+            codex.copy(archived = true),
+            codex.copy(awaitingFirstMessage = true),
+            codex.copy(spaceKind = "codex_app"),
+            codex.copy(paneId = null),
+            codex.copy(sourceKind = "codex_app_server"),
+            codex.copy(sourceKind = "runtime"),
+            codex.copy(state = "offline"),
+            codex.copy(capabilities = SessionCapabilities(send = false)),
+            codex.copy(state = "working"),
+            codex.copy(state = "needs_you"),
+        )
+        for (session in unsupported) {
+            assertNull("unexpected pick for $session", AgentModelPanel.pickPlan(session, pick, { lists[it] }, features, launchers))
+        }
+        assertNull(AgentModelPanel.pickPlan(agent, PanelConfig("ghost", "gpt-5.5"), { lists["cx"] }, features, launchers))
+    }
+
     @Test fun aLauncherThatFixesItsModelTakesOnlyItsDefault() {
         val locked = lists + ("work" to lists.getValue("work").copy(locked = "--model is set"))
         val panel = AgentModelPanel.panel(agent, launchers, { ModelList(read = true, list = locked[it]) }, switching)
@@ -187,6 +233,21 @@ class AgentModelPanelTest {
         val reading = AgentModelPanel.panel(agent, launchers, { ModelList(loading = true) }, emptySet()).providers.first()
         assertEquals(listOf("claude-opus-5-5"), reading.models?.map { it.id })
         assertTrue(reading.loading)
+    }
+
+    @Test fun aSavedAliasSelectsTheFoldedRowAndSendsNoSecondSwitch() {
+        val folded = AgentModel("claude-opus-5-5", "Opus 5.5", aliases = listOf("opus", "fable"), efforts = listOf("low", "high"))
+        val own = LauncherModels("claude", listOf(folded, AgentModel("sonnet", "Sonnet 4.5")))
+        val saved = agent.copy(model = "opus")
+        val panel = AgentModelPanel.panel(saved, launchers, { name -> if (name == "example") ModelList(read = true, list = own) else read(name) }, emptySet())
+        assertEquals(PanelConfig("example", "claude-opus-5-5", "high"), panel.state.current)
+        assertEquals(listOf("claude-opus-5-5", "sonnet"), panel.providers.first().models?.map { it.id })
+        assertEquals(emptyList<ModeStep>(), AgentModelPanel.pickPlan(saved,
+            PanelConfig("example", "claude-opus-5-5", "high"), { if (it == "example") own else lists[it] }, emptySet()))
+        assertEquals("Opus 5.5", AgentModelPanel.pill(saved, ModelList(read = true, list = own), launchers).setup.model)
+
+        val waiting = saved.copy(pendingSwitch = PendingSwitch("work", "fable"))
+        assertEquals("Opus 5.5", AgentModelPanel.pendingPill(waiting, { ModelList(read = true, list = own) }, launchers, "Default")?.model)
     }
 
     @Test fun switchRefusalsAreTheSwitches() {

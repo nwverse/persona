@@ -116,24 +116,37 @@ func (n *Node) putPendingSwitch(id string, ps *proto.PendingSwitch) {
 // with the model and effort, the permission mode applied after (handled). The session's own launcher drops a switch
 // that waits; handled false then when the request asks for more (a model, mode or effort), which goes on as it would
 // without a launcher.
-func (n *Node) launcherModes(ctx context.Context, id, launcher, from, model, mode, effort string) (handled bool, err error) {
+// validSwitchID reports whether id is a valid session identifier for launcher/engine switching: a UUID (Claude Code,
+// Codex) or a live terminal Antigravity pane row ID (otherSession).
+func (n *Node) validSwitchID(id string) bool {
+	if validID(id) {
+		return true
+	}
+	a, live := n.agent(id)
+	return live && a.Agent == agyAgent
+}
+
+func (n *Node) launcherModes(ctx context.Context, id, launcher, from, model, mode, effort string) (handled, changed bool, err error) {
 	launcher, from = strings.TrimSpace(launcher), strings.TrimSpace(from)
-	if !validID(id) {
-		return true, fmt.Errorf("invalid session id %q", id)
+	if !n.validSwitchID(id) {
+		return true, false, fmt.Errorf("invalid session id %q", id)
 	}
 	// What the request changes must not be overwritten by the hub's copy of the record still on its way (#5510).
 	if err := n.state.loaded(ctx); err != nil {
-		return true, err
+		return true, false, err
 	}
 	ps := proto.PendingSwitch{Launcher: launcher, Model: strings.TrimSpace(model), Effort: effort}
+	// An agent whose claude Persona did not start with its command (herdr's bare resume, offlauncher.go) does not run
+	// on its own launcher: picking that one may be a switch back to it, checked like any other.
+	off := n.offLauncher(id)
 	// The checks run a login shell, ask the hub for a provider's secrets, read the launcher's models: not while holding
 	// up the session's messages.
 	checked := false
-	if own, _ := n.engineOwnLauncher(id, n.liveEngine(id)); launcher != own {
+	if own, _ := n.engineOwnLauncher(id, n.liveEngine(id)); launcher != own || off {
 		// A launcher of the other engine (Claude Code ↔ Codex) is a switch to it (engine_switch.go, #5054).
 		to, err := n.switchEngine(ctx, id, launcher)
 		if err != nil {
-			return true, err
+			return true, false, err
 		}
 		ps.Agent = to
 		if to != "" {
@@ -142,30 +155,36 @@ func (n *Node) launcherModes(ctx context.Context, id, launcher, from, model, mod
 			_, err = n.planSwitch(ctx, id, ps)
 		}
 		if err != nil {
-			return true, err
+			return true, false, err
 		}
 		checked = true
 	}
 	// A switch being carried out right now (from the moment a message takes it up) takes minutes: the pick is refused
 	// at once rather than held past the hub's wait, and made again against what the agent runs on then.
 	if n.restarting(id) {
-		return true, refusal(proto.CodeSwitchStale, "the agent is being started again (a launcher switch, a resume): pick again once it runs", nil)
+		return true, false, refusal(proto.CodeSwitchStale, "the agent is being started again (a launcher switch, a resume): pick again once it runs", nil)
 	}
 	// One at a time with the messages: one carrying a switch out writes the record anew, and would drop a pick made
 	// meanwhile; this one waits for it, and is then taken against the launcher the agent runs on by then.
 	unlock := n.typing.lock(id)
 	own, _ := n.engineOwnLauncher(id, n.liveEngine(id))
-	if from != "" && from != own || launcher != own && !checked {
+	// Off its launcher (again by then: a switch carried out meanwhile puts it back on), picking that launcher is the
+	// switch back to it, unless a switch to another one waits: that pick cancels it, as it does for an agent on it.
+	waiting := n.pendingSwitch(id)
+	back := launcher == own && n.offLauncher(id) && (waiting == nil || waiting.Launcher == own)
+	if from != "" && from != own || (launcher != own || back) && !checked {
 		unlock()
-		return true, refusal(proto.CodeSwitchStale, fmt.Sprintf("the session runs on launcher %s now, not %s", own, cmp.Or(from, launcher)), nil)
+		return true, false, refusal(proto.CodeSwitchStale, fmt.Sprintf("the session runs on launcher %s now, not %s", own, cmp.Or(from, launcher)), nil)
 	}
-	if launcher == own {
+	if launcher == own && !back {
+		cancelled := false
 		if n.pendingSwitch(id) != nil {
 			n.putPendingSwitch(id, nil)
 			n.logf("session %s: launcher switch cancelled", id)
+			cancelled = true
 		}
 		unlock()
-		return model == "" && mode == "" && effort == "", nil
+		return model == "" && mode == "" && effort == "", cancelled, nil
 	}
 	before := n.pendingSwitch(id)
 	ps.At = time.Now().UTC()
@@ -173,7 +192,7 @@ func (n *Node) launcherModes(ctx context.Context, id, launcher, from, model, mod
 	unlock()
 	n.logf("session %s: switch to launcher %s (engine %q, model %q, effort %q) waits for the next message", id, launcher, ps.Agent, ps.Model, effort)
 	if mode == "" {
-		return true, nil
+		return true, true, nil
 	}
 	if err := n.setModes(ctx, id, mode, ""); err != nil {
 		// The request did not go through: the switch it recorded goes too, the one before it back.
@@ -182,9 +201,9 @@ func (n *Node) launcherModes(ctx context.Context, id, launcher, from, model, mod
 			n.putPendingSwitch(id, before)
 		}
 		unlock()
-		return true, err
+		return true, false, err
 	}
-	return true, nil
+	return true, true, nil
 }
 
 // liveEngine is the engine session id's live agent runs ("claude" or "codex"; "" for another agent), "claude" when it
@@ -212,7 +231,7 @@ func (n *Node) switchEngine(ctx context.Context, id, launcher string) (string, e
 	if err != nil {
 		return "", err
 	}
-	if (to == "claude" || to == "codex") && to != from {
+	if isSwitchEngine(to) && to != from {
 		return to, nil
 	}
 	return "", nil
@@ -259,7 +278,11 @@ func (n *Node) planSwitch(ctx context.Context, id string, ps proto.PendingSwitch
 	if err != nil {
 		return nil, err
 	}
-	forward := modelExecution{Model: ps.Model, PlanThen: n.planThen(id)}
+	sourceState, _ := n.state.get(id)
+	forward := modelExecution{Source: sourceState.ModelSource, Model: ps.Model, PlanThen: n.planThen(id)}
+	if st, _ := n.state.get(id); forward.Model == "" && st.Launcher == ps.Launcher && n.offLauncher(id) {
+		forward.Model = st.Model // back on the launcher it was started on (offlauncher.go): with the model it ran there
+	}
 	if forward.Model == "" {
 		model, ok := n.switchModel(ps.Launcher, cwd, dir, dirKnown)
 		if !ok {
@@ -279,7 +302,7 @@ func (n *Node) planSwitch(ctx context.Context, id string, ps proto.PendingSwitch
 func (n *Node) switchSession(ctx context.Context, id string, engine bool) (host.Agent, host.Host, host.PaneRef, error) {
 	var a host.Agent
 	var ref host.PaneRef
-	if !validID(id) {
+	if !validID(id) && (!engine || !n.validSwitchID(id)) {
 		return a, nil, ref, fmt.Errorf("invalid session id %q", id)
 	}
 	unsupported := switchUnsupported
@@ -307,7 +330,7 @@ func (n *Node) switchSession(ctx context.Context, id string, engine bool) (host.
 	if !live {
 		return a, nil, ref, n.noPaneForModes(id) // a claude in a terminal Persona does not drive
 	}
-	if a.Agent != "" && a.Agent != "claude" && (!engine || a.Agent != "codex") {
+	if a.Agent != "" && a.Agent != "claude" && (!engine || !isSwitchEngine(a.Agent)) {
 		return a, nil, ref, unsupported(a.Agent + " runs in this terminal")
 	}
 	kind := host.ParsePane(a.PaneID).Kind
@@ -840,7 +863,7 @@ func (n *Node) liveBackground(path string, since time.Time) int {
 // lets --resume bring back the model the conversation last ran), and the mode a plan goes on in. Not the transcript's
 // model: a gateway may answer under another name than the id it takes.
 func (n *Node) ranExecution(id string, prev sessionState) modelExecution {
-	ex := modelExecution{Model: prev.Model, Fingerprint: prev.ModelFingerprint, PlanThen: prev.PlanThen}
+	ex := modelExecution{Source: prev.ModelSource, Model: prev.Model, Fingerprint: prev.ModelFingerprint, PlanThen: prev.PlanThen}
 	n.mu.Lock()
 	var picked string
 	if m, ok := n.modes[id]; ok && m.Model != nil {
@@ -929,7 +952,7 @@ func (n *Node) resumeTurn(ctx context.Context, id string) (done func()) {
 // is dropped and refuses the message instead (switchNowRefusal).
 func (n *Node) applySwitch(ctx context.Context, id, pane string, ps proto.PendingSwitch, now bool) (string, bool, error) {
 	own, _ := n.ownLauncher(id)
-	if ps.Launcher == own || time.Since(ps.At) > switchMaxAge {
+	if ps.Launcher == own && !n.offLauncher(id) || time.Since(ps.At) > switchMaxAge { // off its own: a switch back (offlauncher.go)
 		n.logf("session %s: switch to launcher %s picked %s dropped: on it already, or picked too long ago", id, ps.Launcher, ps.At.Format(time.RFC3339))
 		n.putPendingSwitch(id, nil)
 		return pane, false, nil
@@ -1142,6 +1165,12 @@ func (n *Node) quitStillOpen(id, engine string) error {
 	if engine == "codex" {
 		if n.codexHolds(n.codexPath(id)) {
 			return errors.New("a Codex still has the thread open")
+		}
+		return nil
+	}
+	if engine == agyAgent {
+		if conv := n.agyHandoffConversation(id); conv != "" && agyPresenceHeld(n.agyDataRoot(), conv) {
+			return errors.New("an Antigravity process still has the conversation open")
 		}
 		return nil
 	}

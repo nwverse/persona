@@ -53,10 +53,18 @@ type InboxConfig struct {
 	// Agent (model 3) works on the Needs you items (and those a policy hands it) and drafts the reply (the manager's
 	// inbox_agent.go).
 	Agent InboxAgentConfig `json:"agent,omitempty"`
+	// ReplyPolicy optionally restricts which classified items may become owner reply drafts. It retains both the legacy
+	// pointer fields and the upstream compiled categories; the assistant deliberately interprets only one schema.
+	ReplyPolicy *assistantwire.InboxReplyPolicyConfig `json:"reply_policy,omitempty"`
+	// Visibility keeps explicitly named chats, or all direct chats when enabled, out of AI handling and reads.
+	Visibility *assistantwire.InboxVisibilityConfig `json:"visibility,omitempty"`
 }
 
 // InboxAgentConfig is manager.json's inbox.agent, handed to the manager as it is.
 type InboxAgentConfig = assistantwire.InboxAgentConfig
+
+// InboxReplyPolicyConfig is manager.json's inbox.reply_policy, handed to the manager as it is.
+type InboxReplyPolicyConfig = assistantwire.InboxReplyPolicyConfig
 
 // inboxSources is this code's part of the inbox: the wake-ups, one collection at a time, and what the manager
 // reported.
@@ -234,7 +242,7 @@ func (h *Manager) collectInbox(ctx context.Context, round inboxRound) error {
 	return nil
 }
 
-// What is kept for the manager while it is away, at most: things of one source, messages of one mail account (the
+// What is kept for the manager while it is away, at most: things of one source, messages of one mailbox (the
 // newest).
 const (
 	heldThingsMost = 2000
@@ -292,13 +300,42 @@ func mergeRounds(old, n assistantwire.InboxRound) assistantwire.InboxRound {
 				m.Accounts = append(m.Accounts, a) // not read this time
 				continue
 			}
-			m.Accounts[i].Messages = mergeHeld(a.Messages, m.Accounts[i].Messages, heldMailMost, func(s assistantwire.InboxMailSummary) string {
-				return s.Mailbox + "\x00" + strconv.FormatUint(uint64(s.UID), 10)
-			})
+			cur := &m.Accounts[i]
+			if cur.InboxUnavailable && !a.InboxUnavailable {
+				cur.InboxUnavailable, cur.UIDValidity, cur.Messages = false, a.UIDValidity, a.Messages
+			} else {
+				cur.UIDValidity, cur.Messages = mergeMailPage(a.UIDValidity, cur.UIDValidity, a.Messages, cur.Messages)
+			}
+			cur.Folders = slices.Clone(cur.Folders)
+			at := map[string]int{}
+			for j, f := range cur.Folders {
+				at[f.Name] = j
+			}
+			for _, f := range a.Folders {
+				if j, ok := at[f.Name]; ok {
+					dst := &cur.Folders[j]
+					dst.UIDValidity, dst.Messages = mergeMailPage(f.UIDValidity, dst.UIDValidity, f.Messages, dst.Messages)
+				} else {
+					cur.Folders = append(cur.Folders, f)
+				}
+			}
 		}
 		out.Mail = m
 	}
 	return out
+}
+
+// The same UID may be a different mail after renumbering. Do not replay a held page of the old validity.
+func mergeMailPage(oldValidity, validity uint32, old, n []assistantwire.InboxMailSummary) (uint32, []assistantwire.InboxMailSummary) {
+	if validity == 0 {
+		validity = oldValidity
+	}
+	if oldValidity != 0 && oldValidity != validity {
+		return validity, n
+	}
+	return validity, mergeHeld(old, n, heldMailMost, func(m assistantwire.InboxMailSummary) string {
+		return strconv.FormatUint(uint64(m.UID), 10)
+	})
 }
 
 // mergeHeld is what only old has, then n, the newest most of them.

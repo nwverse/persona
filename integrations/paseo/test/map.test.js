@@ -156,8 +156,9 @@ test("an archived agent keeps its row when its id is not its transcript's: a ses
   const able = { ...started, capabilities: { supportsRewindConversation: true, supportsRewindBoth: true } }
   assert.deepEqual(agentRow(able, { roots, archived: true, thinking: ['low', 'high'] }).capabilities,
     { rewind: false, rewind_code: false, modes: false, model: false })
-  assert.deepEqual(agentRow({ ...able, archivedAt: null }, { roots }).capabilities, { rewind: true, rewind_code: true },
-    "listed: the provider's own rewind, modes and model left to the node")
+  assert.deepEqual(agentRow({ ...able, archivedAt: null }, { roots }).capabilities,
+    { rewind: true, rewind_code: true, a2a_wake_on_send: true },
+    'an idle-retired agent can wake on send until it is archived')
   const grok = agentSnapshot({ id: 'g1', provider: 'grok', archivedAt: at, labels: { 'persona.session': 'paseo-g1' } })
   assert.equal(agentRow(grok, { roots, archived: true, thinking: ['low', 'high'] }).efforts, undefined, 'no effort to pick either')
 })
@@ -512,6 +513,19 @@ test("what another agent hands this one is a message from another session, a sub
     ['8#0', 'system', 'notice', 'Something Paseo has not sent yet.', undefined, undefined], // a bare envelope of another kind
   ], 'an empty message shows nothing')
   assert.ok(items.every((i) => !i.wake && !i.queued), 'the timeline does not say whether one started a run')
+})
+
+test('botmux sentinel entries preserve the timeline preview and original items', () => {
+  const marker = 'BOTMUX_NOTHING_TO_SEND'
+  const mixed = 'Notes\n' + marker + '\nready'
+  const entries = [entry(1, { type: 'assistant_message', text: mixed })]
+  const row = (timeline) => agentRow(agentSnapshot({ provider: 'grok' }), { roots: providerRoots(CONFIG), lastText: timeline.lastText })
+  assert.equal(row(timelineItems(entries)).last_text, 'Notes ready')
+  entries.push(entry(2, { type: 'assistant_message', text: marker }))
+  const timeline = timelineItems(entries)
+  assert.equal(row(timeline).last_text, 'Notes ready')
+  assert.deepEqual(timeline.items.map(i => i.text), [mixed, marker])
+  assert.equal(row(timelineItems(entries.slice(1))).last_text, undefined)
 })
 
 test('a timeline as items: results where they finished, the text being written held back, echoes tagged', () => {

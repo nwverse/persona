@@ -13,6 +13,7 @@ import org.robolectric.annotation.Config
 import persona.core.contracts.InboxEventFields
 import persona.core.domain.inbox.InboxItem
 import java.util.Locale
+import persona.core.inbox.*
 
 /**
  * F-7: whether or not the hub sends `where`, one row structure — title, the AI summary, then a third line that
@@ -88,6 +89,17 @@ class InboxRowThirdLineReviewTest {
     @Test fun aTranslatedMailShowsTheTranslation() {
         val mail = record(kind = "mail", source = "mail", isGroup = null, preview = "Can we move it to Friday?")
         assertEquals("Alex: Sie können es auf Freitag verschieben?", inboxRowThirdLine(mail, res, translatedPreview = "Sie können es auf Freitag verschieben?"))
+    }
+
+    @Test fun mailShowsItsSourceFolderWithThePreview() {
+        val mail = record(kind = "mail", source = "mail", isGroup = null, preview = "Update")
+        fun inFolder(name: String) = mail.copy(mail = InboxMailRef("demo", name, listOf(7L)))
+        assertEquals("Projects/通知 · Alex: Update", inboxRowThirdLine(inFolder("Projects/通知"), res))
+        assertEquals("Projects/通知 · Alex: Translated", inboxRowThirdLine(inFolder("Projects/通知"), res, "Translated"))
+        assertEquals(" INBOX  · Alex: Update", inboxRowThirdLine(inFolder(" INBOX "), res))
+        for (folder in listOf("INBOX", "InBoX", "")) {
+            assertEquals("Alex: Update", inboxRowThirdLine(inFolder(folder), res))
+        }
     }
 
     /** The line is not drawn twice when the AI summary already is that same sentence (the assistant's own rows). */

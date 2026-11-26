@@ -35,20 +35,24 @@ import (
 
 // echoRecord is one send the node ties to the transcript: expected while Line is "", found after.
 type echoRecord struct {
-	SessionID   string    `json:"session_id"`
-	ClientMsgID string    `json:"client_msg_id"`
-	Text        string    `json:"text,omitempty"`    // the start of what was typed (echoTextLen runes)
-	Literal     string    `json:"literal,omitempty"` // its raw start when clipping a text-only send left Text empty
-	Images      int       `json:"images,omitempty"`
-	SentAt      time.Time `json:"sent_at"`
-	AfterSeq    int       `json:"after_seq"`          // the session's last item before it was typed (counted in In)
-	Line        string    `json:"line,omitempty"`     // the line found: its items' id before "#" (one of In's)
-	History     string    `json:"history,omitempty"`  // the transcript version AfterSeq counts in
-	Accepted    bool      `json:"accepted,omitempty"` // acknowledged by the send path, including queued input
+	SessionID   string               `json:"session_id"`
+	ClientMsgID string               `json:"client_msg_id"`
+	Source      *proto.MessageSource `json:"source,omitempty"`
+	Text        string               `json:"text,omitempty"`    // the start of what was typed (echoTextLen runes)
+	Literal     string               `json:"literal,omitempty"` // its raw start when clipping a text-only send left Text empty
+	Images      int                  `json:"images,omitempty"`
+	SentAt      time.Time            `json:"sent_at"`
+	AfterSeq    int                  `json:"after_seq"`          // the session's last item before it was typed (counted in In)
+	Line        string               `json:"line,omitempty"`     // the line found: its items' id before "#" (one of In's)
+	History     string               `json:"history,omitempty"`  // the transcript version AfterSeq counts in
+	Accepted    bool                 `json:"accepted,omitempty"` // acknowledged by the send path, including queued input
 	// In is where AfterSeq and Line count: echoInTranscript or echoInRuntime. A record sent after nothing (a start's
 	// first message) or handed back by a hub from before #8358 has none: it is looked for and tagged wherever the
 	// items come from, as before, and counts where it is found from then on.
 	In string `json:"in,omitempty"`
+	// Parts are the ids of the items of Line that are this send's when the line holds several sends (Claude Code writes
+	// the messages it queued during a turn as one line: echoSpans); none when the whole line is its.
+	Parts []string `json:"parts,omitempty"`
 	// scanned: lines through this seq were looked at for it and did not fit (a line stays as it was parsed).
 	scanned int
 }
@@ -126,7 +130,7 @@ func (l *echoLog) expect(r echoRecord) bool {
 	for _, o := range list {
 		if o.ClientMsgID == r.ClientMsgID {
 			if o.Line == "" && r.Line != "" {
-				o.Line, o.In = r.Line, r.In
+				o.Line, o.In, o.Parts = r.Line, r.In, r.Parts
 			}
 			if o.SentAt.Equal(r.SentAt) {
 				o.Accepted = o.Accepted || r.Accepted
@@ -230,7 +234,7 @@ func (l *echoLog) match(id, in string, items []proto.Item) []echoRecord {
 	taken := map[string]bool{}
 	for _, r := range recs {
 		if r.movesTo(in) {
-			r.In, r.AfterSeq, r.scanned, r.Line = in, 0, 0, ""
+			r.In, r.AfterSeq, r.scanned, r.Line, r.Parts = in, 0, 0, "", nil
 		}
 		if r.foundIn(in) {
 			taken[r.Line] = true
@@ -245,10 +249,15 @@ func (l *echoLog) match(id, in string, items []proto.Item) []echoRecord {
 			}
 			taken[ln.key] = true
 			for _, r := range recs {
-				if r.ClientMsgID == it.ClientMsgID && r.Line == "" {
-					r.Line, r.In = ln.key, in
-					found = append(found, *r)
+				if r.ClientMsgID != it.ClientMsgID || r.Line == ln.key {
+					continue
 				}
+				if r.Line != "" && (in != echoInRuntime || !r.foundIn(in) ||
+					slices.ContainsFunc(lines, func(other echoLine) bool { return other.key == r.Line })) {
+					continue
+				}
+				r.Line, r.In, r.Parts = ln.key, in, nil
+				found = append(found, *r)
 			}
 		}
 	}
@@ -256,16 +265,23 @@ func (l *echoLog) match(id, in string, items []proto.Item) []echoRecord {
 	if len(items) > 0 {
 		last = items[len(items)-1].Seq
 	}
-	for _, r := range recs {
+	for i, r := range recs {
 		if r.Line != "" || time.Since(r.SentAt) > echoWithin {
 			continue
 		}
 		for _, ln := range lines {
-			if taken[ln.key] || ln.seq <= r.AfterSeq || ln.seq <= r.scanned {
+			if taken[ln.key] || !r.mayBe(ln) {
 				continue
 			}
-			if !ln.ts.IsZero() && (ln.ts.Before(r.SentAt.Add(-echoSlack)) || ln.ts.After(r.SentAt.Add(echoWithin))) {
-				continue
+			// Claude Code writes the messages it queued while a turn ran as one line when the turn ends: each send
+			// takes its own items of it, in the order sent (#14338).
+			if spans := echoSpans(ln, r, recs[i+1:]); len(spans) > 1 {
+				for _, s := range spans {
+					s.rec.Line, s.rec.In, s.rec.Parts = ln.key, in, s.ids
+					found = append(found, *s.rec)
+				}
+				taken[ln.key] = true
+				break
 			}
 			if echoFits(r, ln.items) {
 				r.Line, r.In, taken[ln.key] = ln.key, in, true
@@ -283,16 +299,27 @@ func (l *echoLog) match(id, in string, items []proto.Item) []echoRecord {
 }
 
 // tag puts the client_msg_id of records found among items from in on their lines' items (a copy when anything
-// changes).
+// changes): on all of a line's items, or on the record's parts of a line several sends share.
 func (l *echoLog) tag(id, in string, items []proto.Item) []proto.Item {
 	l.mu.Lock()
-	var byLine map[string]string
+	type metadata struct {
+		id     string
+		source *proto.MessageSource
+	}
+	var byLine, byItem map[string]metadata
 	for _, r := range l.recs[id] {
-		if r.foundIn(in) {
-			if byLine == nil {
-				byLine = map[string]string{}
-			}
-			byLine[r.Line] = r.ClientMsgID
+		if !r.foundIn(in) {
+			continue
+		}
+		if byLine == nil {
+			byLine, byItem = map[string]metadata{}, map[string]metadata{}
+		}
+		if len(r.Parts) == 0 {
+			byLine[r.Line] = metadata{r.ClientMsgID, r.Source}
+			continue
+		}
+		for _, part := range r.Parts {
+			byItem[part] = metadata{r.ClientMsgID, r.Source}
 		}
 	}
 	l.mu.Unlock()
@@ -301,14 +328,24 @@ func (l *echoLog) tag(id, in string, items []proto.Item) []proto.Item {
 	}
 	var out []proto.Item
 	for i, it := range items {
-		c, ok := byLine[echoLineKey(it.ID)]
-		if !ok || it.ClientMsgID == c {
+		r, ok := byItem[it.ID]
+		if !ok {
+			r, ok = byLine[echoLineKey(it.ID)]
+		}
+		if !ok {
+			continue
+		}
+		source := it.Source
+		if it.Role == "user" && r.source != nil && (source == nil || *source != *r.source) {
+			source = r.source
+		}
+		if it.ClientMsgID == r.id && it.Source == source {
 			continue
 		}
 		if out == nil {
 			out = slices.Clone(items)
 		}
-		out[i].ClientMsgID = c
+		out[i].ClientMsgID, out[i].Source = r.id, source
 	}
 	if out == nil {
 		return items
@@ -486,6 +523,145 @@ func echoFits(r *echoRecord, line []proto.Item) bool {
 	return len(words) >= echoPrefix && string(words[:echoPrefix]) == string(sent[:echoPrefix])
 }
 
+// mayBe: ln was written after r was typed, within the time its copy can come (from echoSlack before the send to
+// echoWithin after it).
+func (r *echoRecord) mayBe(ln echoLine) bool {
+	if ln.seq <= r.AfterSeq || ln.seq <= r.scanned {
+		return false
+	}
+	return ln.ts.IsZero() || !ln.ts.Before(r.SentAt.Add(-echoSlack)) && !ln.ts.After(r.SentAt.Add(echoWithin))
+}
+
+const (
+	echoSpanSends = 20  // the most sends one line is split among (Claude Code's queue holds fewer)
+	echoSpanItems = 200 // a line with more items is not split
+)
+
+// echoSpan is one send's part of a line it shares with other sends: the ids of its items.
+type echoSpan struct {
+	rec *echoRecord
+	ids []string
+}
+
+// echoPart is what fitting a send to a run of a line's items reads of one item.
+type echoPart struct {
+	words []rune
+	user  bool // the user's words, or a picture
+	image bool
+	cut   bool // the page cut its text: only its start can be compared
+}
+
+// echoSpans splits ln into the copies of several sends: first, then the sends after it in the order sent that are still
+// expected and can be in ln. When a turn ends, Claude Code writes the messages it queued meanwhile as one user line,
+// each message's blocks one after the other in the order typed (#14338). Each send takes a run of consecutive items whose
+// words and pictures are its own (echoPartFits); the split that ties the most sends and covers every item wins, each
+// run starting as late as it can (a part with no words between two messages, such as the context Persona puts before
+// a message, goes with the message after it). Nil when fewer than two sends fit: the line is one send's, or none's.
+func echoSpans(ln echoLine, first *echoRecord, later []*echoRecord) []echoSpan {
+	n := len(ln.items)
+	if n < 2 || n > echoSpanItems {
+		return nil
+	}
+	recs := []*echoRecord{first}
+	for _, r := range later {
+		if len(recs) == echoSpanSends {
+			break
+		}
+		if r.Line == "" && time.Since(r.SentAt) <= echoWithin && r.mayBe(ln) {
+			recs = append(recs, r)
+		}
+	}
+	if len(recs) < 2 {
+		return nil
+	}
+	parts := make([]echoPart, n)
+	for i, it := range ln.items {
+		switch {
+		case it.Role == "user" && it.Kind == proto.KindText:
+			parts[i] = echoPart{words: echoWords(it.Text), user: true, cut: it.FullSize > 0}
+		case it.Role == "user" && it.Kind == proto.KindImage:
+			parts[i] = echoPart{user: true, image: true}
+		}
+	}
+	sent, whole := make([][]rune, len(recs)), make([]bool, len(recs))
+	for k, r := range recs {
+		sent[k] = echoWords(r.Text)
+		// markup only, a bare command, controls typed inert: echoFits knows how their copies read
+		whole[k] = r.Literal != "" || strings.HasPrefix(strings.TrimSpace(r.Text), "/") || inertControls(r.Text) != r.Text
+	}
+	// start[k][e]: where the k-th send's run starts when the first k sends cover the line's first e items; -1 when
+	// they cannot. The earliest start is kept, so that read back from the end each run starts as late as it can.
+	start := make([][]int, len(recs)+1)
+	for k := range start {
+		start[k] = slices.Repeat([]int{-1}, n+1)
+	}
+	start[0][0] = 0
+	most := 0
+	for k := 1; k <= len(recs); k++ {
+		reached := false
+		for p := 0; p < n; p++ {
+			if start[k-1][p] < 0 {
+				continue
+			}
+			for e := p + 1; e <= n; e++ {
+				if start[k][e] < 0 && echoPartFits(recs[k-1], sent[k-1], whole[k-1], parts[p:e], ln.items[p:e]) {
+					start[k][e], reached = p, true
+				}
+			}
+		}
+		if !reached {
+			break
+		}
+		if start[k][n] >= 0 {
+			most = k
+		}
+	}
+	if most < 2 {
+		return nil
+	}
+	spans := make([]echoSpan, most)
+	for k, e := most, n; k > 0; k-- {
+		p := start[k][e]
+		var ids []string
+		for _, it := range ln.items[p:e] {
+			if !slices.Contains(ids, it.ID) {
+				ids = append(ids, it.ID)
+			}
+		}
+		spans[k-1] = echoSpan{rec: recs[k-1], ids: ids}
+		e = p
+	}
+	return spans
+}
+
+// echoPartFits: a run of a line's items (parts, read once; sent: r's words) is r's copy in a line it shares with other
+// sends. It has as many pictures as r, and it starts with all of r's words (the next send's words may follow in a run
+// that ends later: the split decides), or only with their start when the page cut the text. A short text must be the
+// same; a send echoFits must read whole (markup only, a bare command, inert controls) is matched as on a line of its own.
+func echoPartFits(r *echoRecord, sent []rune, whole bool, parts []echoPart, items []proto.Item) bool {
+	images, user, cut := 0, false, false
+	var words []rune
+	for _, p := range parts {
+		if p.image {
+			images++
+		}
+		user, cut = user || p.user, cut || p.cut
+		words = append(words, p.words...)
+	}
+	if !user || images != r.Images {
+		return false
+	}
+	switch {
+	case whole || cut:
+		return echoFits(r, items)
+	case len(sent) == 0:
+		return len(words) == 0
+	case len(sent) < echoPrefix:
+		return string(words) == string(sent)
+	}
+	return len(words) >= len(sent) && string(words[:len(sent)]) == string(sent)
+}
+
 // echoAfter is where a session's items end before a send: the seq of the last one, and where it counts
 // (echoRecord.In). The zero value is after nothing, wherever the items come from.
 type echoAfter struct {
@@ -515,14 +691,22 @@ func (n *Node) echoBase(id string) echoAfter {
 // a watch that pushed it before the send returned sent it without its client_msg_id, never to carry it in a push
 // again (the app's bubble then waited for a page).
 func (n *Node) sendEchoed(id, clientMsgID, text string, images int, after echoAfter, send func() error) error {
-	return n.sendWithEcho(id, clientMsgID, text, images, after, nil, send)
+	return n.sendWithEcho(id, clientMsgID, text, images, after, nil, nil, send)
 }
 
-func (n *Node) sendWithEcho(id, clientMsgID, text string, images int, after echoAfter, retry *echoRecord, send func() error) error {
+func (n *Node) sendWithEcho(id, clientMsgID, text string, images int, after echoAfter, source *proto.MessageSource, retry *echoRecord, send func() error) error {
 	if clientMsgID == "" {
 		return send()
 	}
-	r := echoRecord{SessionID: id, ClientMsgID: clientMsgID, Text: text, Images: images, SentAt: time.Now(), AfterSeq: after.seq, In: after.in, History: after.history}
+	if strings.HasPrefix(clientMsgID, "model-retry:") {
+		if r, known := n.echoes.record(id, clientMsgID); known && r.Line != "" {
+			return nil // a restored transcript receipt proves this continuation arrived
+		}
+	}
+	if retry != nil && source == nil {
+		source = retry.Source
+	}
+	r := echoRecord{SessionID: id, ClientMsgID: clientMsgID, Text: text, Source: source, Images: images, SentAt: time.Now(), AfterSeq: after.seq, In: after.in, History: after.history}
 	fresh := true
 	if retry == nil {
 		fresh = n.echoes.expect(r)
@@ -652,7 +836,7 @@ func (n *Node) sendUnseen(ctx context.Context, id, text string, images []proto.I
 	if check.state != proto.EchoKnownUnseen || !check.record.SentAt.Equal(previous.SentAt) {
 		return echoUnconfirmed()
 	}
-	return n.sendWithEcho(id, opts.ClientMsgID, text, len(images), check.after, &check.record, func() error {
+	return n.sendWithEcho(id, opts.ClientMsgID, text, len(images), check.after, nil, &check.record, func() error {
 		return n.sendLocked(ctx, id, text, images, opts)
 	})
 }
@@ -678,7 +862,11 @@ func (n *Node) echoed(id string, f *transcript.File, items []proto.Item) []proto
 			break
 		}
 	}
-	return n.echoes.tag(id, echoInTranscript, items)
+	items = n.echoes.tag(id, echoInTranscript, items)
+	if f != nil && n.isAssistantSession(id) {
+		items = f.FoldBackgroundPlaceholders(items)
+	}
+	return items
 }
 
 // restoreEchoes takes back the records the hub kept (session.echoes, after the node started).
@@ -716,7 +904,7 @@ func (n *Node) echoedRaw(id string, raw json.RawMessage, field string) json.RawM
 		n.notifyEcho(r)
 	}
 	tagged := n.echoes.tag(id, echoInRuntime, items)
-	if tagged[0].ClientMsgID == items[0].ClientMsgID && slices.Equal(echoIDs(tagged), echoIDs(items)) {
+	if &tagged[0] == &items[0] {
 		return raw // nothing changed
 	}
 	b, err := json.Marshal(tagged)
@@ -727,14 +915,6 @@ func (n *Node) echoedRaw(id string, raw json.RawMessage, field string) json.RawM
 	out, err := json.Marshal(batch)
 	if err != nil {
 		return raw
-	}
-	return out
-}
-
-func echoIDs(items []proto.Item) []string {
-	out := make([]string, len(items))
-	for i, it := range items {
-		out[i] = it.ClientMsgID
 	}
 	return out
 }

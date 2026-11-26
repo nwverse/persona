@@ -55,6 +55,29 @@ afterEach(() => {
 });
 
 describe("session metadata extractors & facet building", () => {
+  it("finds TRAE CLI by the product name and its command spelling", () => {
+    const aliases = ["traex", "traecli", "trae-cli"];
+    const sessions = aliases.map((agent, index) => mkSession(`cli-${index}`, { agent }));
+    sessions.push(mkSession("paseo", { agent: "paseo", launcher: "trae-cli" }), mkSession("launcher", { agent: "", launcher: "trae-cli" }));
+    for (const session of sessions) {
+      expect(agentSearchHit(session, "TRAE CLI", baseCtx).score).toBe(40);
+      expect(agentSearchHit(session, "traecli", baseCtx).score).toBe(40);
+      expect(agentSearchHit(session, "harness:trae", baseCtx).score).toBe(0);
+      for (const alias of aliases) expect(agentSearchHit(session, `harness:${alias}`, baseCtx).score).toBe(30);
+    }
+    const genericTrae = mkSession("generic", { agent: "trae" });
+    for (const alias of aliases) expect(agentSearchHit(genericTrae, `harness:${alias}`, baseCtx).score).toBe(0);
+    const list = [...sessions, genericTrae];
+    const facets = buildAgentFacets(list, machines, baseCtx.pins);
+    expect(facets.harnesses).toEqual([
+      { id: "traex", label: "TRAE CLI", count: 5 },
+      { id: "trae", label: "TRAE", count: 1 },
+    ]);
+    expect(applyDimensionFilters(list, { ...DEFAULT_DIMENSION_FILTERS, harnesses: ["trae"] }, baseCtx).sessions).toEqual([genericTrae]);
+    expect(applyDimensionFilters(list, { ...DEFAULT_DIMENSION_FILTERS, harnesses: ["traex"] }, baseCtx).sessions).toEqual(sessions);
+    expect(applyDimensionFilters(list, { ...DEFAULT_DIMENSION_FILTERS, searchAsCode: true, customPlanCode: 's.harness === "trae-cli"' }, baseCtx).sessions).toEqual(sessions);
+  });
+
   it("extracts harness, project, model, and error status", () => {
     const s1 = mkSession("s1", { agent: "claude-code", model: "claude-opus-5-5[1m]", repo_root: "/code/persona" });
     const s2 = mkSession("s2", { agent: "", launcher: "codex-gpt-5", model: "", repo_root: undefined, cwd: "/code/weather", turn_error: "rate_limited" });
@@ -67,6 +90,12 @@ describe("session metadata extractors & facet building", () => {
     expect(sessionProjectName(s2)).toBe("weather");
     expect(sessionModelId(s2)).toBe("gpt-5");
     expect(sessionHasError(s2)).toBe(true);
+  });
+
+  it("keeps a gateway's routed model with its prefix", () => {
+    expect(sessionModelId(mkSession("s", { model: "passthrough/route-gemini-4-carbon/gemini-4-carbon" }))).toBe("passthrough/route-gemini-4-carbon/gemini-4-carbon");
+    expect(sessionModelId(mkSession("s", { model: "route-a/gemini-4-carbon" }))).toBe("route-a/gemini-4-carbon");
+    expect(sessionModelId(mkSession("s", { model: "passthrough/claude-opus-5-5[1m]" }))).toBe("passthrough/claude-opus-5-5[1m]");
   });
 
   it("builds facet counts across harnesses, projects, models, machines, and pins", () => {
@@ -172,6 +201,24 @@ describe("structured inline query operators & search scopes", () => {
     const errEv = buildEvidenceSnippet(s, "peer", "errors", baseCtx);
     expect(errEv?.role).toBe("error");
     expect(errEv?.match.toLowerCase()).toBe("peer");
+  });
+
+  it("keeps an emoji whole where the text before the match is cut", () => {
+    // the 28 units before the match start on the second unit of an emoji
+    const ev = buildEvidenceSnippet(mkSession("s1", { asks: "xxxxx😀" + "y".repeat(27) + "needle" + "z".repeat(10) }), "needle", "user", baseCtx);
+    expect(ev?.before).toBe("…😀" + "y".repeat(27));
+  });
+
+  it("keeps an emoji whole where the text after the match is cut", () => {
+    // the 52 units after the match end on the first unit of an emoji
+    const ev = buildEvidenceSnippet(mkSession("s1", { asks: "needle" + "z".repeat(51) + "😀" + "tail" }), "needle", "user", baseCtx);
+    expect(ev?.after).toBe("z".repeat(51) + "😀…");
+  });
+
+  it("keeps an emoji whole where the errors scope's fallback line is cut", () => {
+    // the fallback line is the error text cut at 90 units
+    const ev = buildEvidenceSnippet(mkSession("s1", { turn_error: "e".repeat(89) + "😀" + "tail" }), "nothing-like-it", "errors", baseCtx);
+    expect(ev?.match).toBe("e".repeat(89) + "😀");
   });
 });
 

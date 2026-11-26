@@ -11,8 +11,9 @@ vi.hoisted(() => {
 });
 
 import { t } from "../../i18n";
-import { closePanel, openPanel, type Panel } from "../../lib/panel";
+import { closePanel, getPanel, openPanel, popPanel, type Panel } from "../../lib/panel";
 import { href } from "../../lib/router";
+import { handoffFrom } from "../../lib/handoff";
 import { applyCompleteSessions, getState, refreshTodos, reset } from "../../lib/store";
 import { TODO_STATUS_INFO, type Todo } from "../../lib/todos";
 import type { Session } from "../../lib/types";
@@ -102,6 +103,22 @@ async function expectSessionWindow(s = first) {
 }
 
 describe("Agent panel new-window destination", () => {
+  it("opens the verification report first and restores it after inspecting a released worker", async () => {
+    const todo = task();
+    todo.agents![0].released_at = at;
+    todo.supervision = { supervisor: "owner", state: "user_check", done_when: ["Check the route"], criteria: [{ criterion: "Check the route", state: "met", evidence: "Both transfers checked" }] };
+    todo.ask = { verdict: "Ready to verify", summary: "The itinerary is ready.", asked_at: at, link: "https://example.com/itinerary" };
+    await open({ kind: "task", todo: todo.id }, todo);
+    expect(host.textContent).toContain(todo.ask.summary);
+    expect(host.textContent).toContain("Both transfers checked");
+    expect(host.querySelector("a")?.href).toBe(todo.ask.link);
+    const button = [...host.querySelectorAll("button")].find((b) => b.textContent === t("assistant-taskpanel.raw_session"));
+    act(() => button!.click());
+    expect(getPanel()).toEqual({ kind: "agent", mid: first.machine_id, sid: first.session_id });
+    act(() => { popPanel(); });
+    expect(host.textContent).toContain(todo.ask.summary);
+  });
+
   it("opens the displayed Agent session from a task card or task-backed In progress tray entry", async () => {
     await open({ kind: "task", todo: "example-task" });
     expect(host.querySelector("aside header h1")?.textContent).toBe("Example task");
@@ -146,6 +163,78 @@ describe("Agent panel new-window destination", () => {
     } finally {
       history.replaceState({}, "", before);
     }
+  });
+});
+
+describe("Open Agent page button", () => {
+  const button = () => host.querySelector<HTMLButtonElement>(`aside header button[aria-label="${t("chat-chatview.open_agent_page")}"]`);
+  async function expectJump(s: Session) {
+    const before = location.href;
+    try {
+      const b = button();
+      expect(b).not.toBeNull();
+      expect(b!.title).toBe(t("chat-chatview.open_agent_page"));
+      // it sits just before ×, after the header's other buttons
+      expect(b!.nextElementSibling?.getAttribute("aria-label")).toBe(t("sidepanel.close"));
+      act(() => b!.click());
+      await settle();
+      expect(location.pathname).toBe(href({ name: "session", mid: s.machine_id, sid: s.session_id }));
+      expect(getPanel()).toBeNull();
+      expect(newWindow).not.toHaveBeenCalled();
+    } finally {
+      history.replaceState({}, "", before);
+    }
+  }
+
+  it("opens the task's Agent as its own page and closes the panel", async () => {
+    await open({ kind: "task", todo: "example-task" });
+    await expectJump(first);
+  });
+
+  it("follows the Agent picked in a multi-Agent task", async () => {
+    await open({ kind: "task", todo: "example-task" }, task([first, second]), [first, second]);
+    act(() => host.querySelector<HTMLButtonElement>(`aside button[aria-label="${t("assistant-taskpanel.switch_agent")}"]`)!.click());
+    await settle();
+    await clickMenu(second.title);
+    await expectJump(second);
+  });
+
+  it("from a conversation, says where it came from and Back opens the task's panel again", async () => {
+    const before = location.href;
+    history.replaceState(null, "", "/persona");
+    try {
+      await open({ kind: "task", todo: "example-task" });
+      act(() => button()!.click());
+      await settle();
+      expect(location.pathname).toBe(href({ name: "session", mid: first.machine_id, sid: first.session_id }));
+      expect(handoffFrom()).toEqual({ path: "/persona" });
+      expect(getPanel()).toBeNull();
+      await act(async () => {
+        await new Promise<void>((done) => {
+          addEventListener("popstate", () => setTimeout(done, 0), { once: true });
+          history.back();
+        });
+      });
+      expect(location.pathname).toBe("/persona");
+      expect(getPanel()).toEqual({ kind: "task", todo: "example-task" });
+    } finally {
+      history.replaceState({}, "", before);
+    }
+  });
+
+  it("opens a directly opened Agent's page", async () => {
+    await open({ kind: "agent", mid: first.machine_id, sid: first.session_id });
+    await expectJump(first);
+  });
+
+  it.each([
+    ["not started", task([])],
+    ["failed to start", { ...task([]), start_error: "Synthetic start failure" }],
+    ["released", { ...task(), id: "released-agent", agents: [{ ...task().agents![0], released_at: at }] }],
+  ])("is absent while the task has no Agent to show (%s)", async (_, todo) => {
+    await open({ kind: "task", todo: todo.id }, todo, []);
+    expect(host.querySelector("aside header")).not.toBeNull();
+    expect(button()).toBeNull();
   });
 });
 

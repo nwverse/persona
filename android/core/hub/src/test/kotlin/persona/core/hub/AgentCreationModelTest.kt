@@ -12,6 +12,31 @@ import org.junit.Test
 
 /** New agents follow the "New Agent" model configuration and start in the background (docs/protocol/protocol.md "New session"). */
 class AgentCreationModelTest {
+    @Test fun ompUsesTheOrdinarySessionEndpointWithOnlyTheChosenModel() = runBlocking {
+        MockWebServer().use { server ->
+            val service = HttpAgentCreationService("hub/pairing", server.url("/").toString(), "test-token", OkHttpClient())
+            server.enqueue(MockResponse().setBody("""{"agent":"omp","models":[],"locked":"Pinned on this computer"}"""))
+            assertEquals("Pinned on this computer", service.launcherModels("box", "omp", false, "herdr")?.locked)
+            assertEquals("/api/v1/machines/box/launchers/omp/models?host=herdr", server.takeRequest().path)
+            for ((launcher, model) in listOf("omp" to null, "omp" to "openai/gpt-5.2", "" to null)) {
+                server.enqueue(MockResponse().setBody("""{"session":{"machine_id":"box","session_id":"created"}}"""))
+                val start = AgentStartRequest("box", "/project", launcher, workspaceId = "workspace", agentType = "omp", model = model)
+                service.start(start, java.util.UUID.randomUUID().toString())
+                val post = server.takeRequest()
+                assertEquals("POST", post.method)
+                assertEquals("/api/v1/sessions", post.path)
+                assertEquals(buildJsonObject {
+                    put("machine_id", "box")
+                    put("cwd", "/project")
+                    put("launcher", launcher)
+                    put("workspace_id", "workspace")
+                    put("agent_type", "omp")
+                    model?.let { put("model", it) }
+                }, JsonCodec.parseToJsonElement(post.body.readUtf8()))
+            }
+        }
+    }
+
     @Test fun anAsyncStartWithoutLauncherFollowsTheConfigurationAndCarriesTheNameHint() = runBlocking {
         MockWebServer().use { server ->
             val service = HttpAgentCreationService("hub/pairing", server.url("/").toString(), "test-token", OkHttpClient())
@@ -53,15 +78,18 @@ class AgentCreationModelTest {
                 {"id":"default","name":"Default (recommended)","description":"Use the default model","resolved":"claude-opus-5-5",
                  "default":true,"efforts":["low","medium","high","xhigh","max"]},
                 {"id":"haiku","name":"Haiku 5.5","resolved":"claude-haiku-5-5"},
+                {"id":"claude-opus-5-5","name":"Opus 5.5","aliases":["opus","fable","sonnet","haiku"]},
                 {"id":"gateway/glm-5.3","name":"glm-5.3","description":"From gateway","efforts":["low","medium","high"],"future":1}]}"""))
             val list = requireNotNull(service.launcherModels("machine/one", "my launcher"))
             assertEquals("claude", (list.agent).zhAny())
             assertNull(list.locked)
-            assertEquals(listOf("default", "haiku", "gateway/glm-5.3"), (list.models.map { it.id }).zhAny())
-            assertEquals(listOf(true, false, false), list.models.map { it.isDefault })
+            assertEquals(listOf("default", "haiku", "claude-opus-5-5", "gateway/glm-5.3"), (list.models.map { it.id }).zhAny())
+            assertEquals(listOf(true, false, false, false), list.models.map { it.isDefault })
             assertEquals("claude-opus-5-5", (list.models[0].resolved).zhAny())
             assertEquals(emptyList<String>(), (list.models[1].efforts).zhAny())
-            assertEquals(listOf("low", "medium", "high"), (list.models[2].efforts).zhAny())
+            assertEquals(listOf("low", "medium", "high"), (list.models[3].efforts).zhAny())
+            assertEquals(listOf("opus", "fable", "sonnet", "haiku"), list.models[2].aliases)
+            assertTrue("older rows keep the empty-alias default", list.models.take(2).all { it.aliases.isEmpty() })
             val first = server.takeRequest()
             assertEquals("/api/v1/machines/machine%2Fone/launchers/my%20launcher/models", (first.requestUrl?.encodedPath).zhAny())
             assertNull(first.requestUrl?.queryParameter("refresh"))
@@ -91,7 +119,7 @@ class AgentCreationModelTest {
             val service = HttpAgentCreationService("hub/pairing", server.url("/").toString(), "test-token", OkHttpClient())
             server.enqueue(MockResponse().setBody("""{"agent":"codex","models":[{"id":"gpt-6.1-sol","name":"GPT-6.1-sol"}]}"""))
             val model = requireNotNull(service.launcherModels("box", "test-launcher")).models.single()
-            assertEquals("6.1 Sol", (model.label).zhAny())
+            assertEquals("GPT-6.1 Sol", (model.label).zhAny())
             server.takeRequest()
             server.enqueue(MockResponse().setBody("""{"session":{"machine_id":"box","session_id":"gpt"}}"""))
             service.start(AgentStartRequest("box", "/srv/app", "test-launcher", model = model.id),

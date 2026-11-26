@@ -16,6 +16,7 @@ import (
 // node is started with, not only through resolution.
 func TestInboxAgentModelOverrideAndReset(t *testing.T) {
 	s, f, st := modelService(t)
+	f.inbox = newFakeInbox()
 	ctx := context.Background()
 	inherited := ModelBinding{Provider: "launcher.claude", Model: "agents-default", Effort: "medium"}
 	setModel(t, s, "agent.new", inherited)
@@ -33,7 +34,7 @@ func TestInboxAgentModelOverrideAndReset(t *testing.T) {
 		t.Helper()
 		p := purposeOf(t, s, purposeAgent)
 		if p.Effective != want || p.Revision != revision || p.CategoryID != "agent.new" || p.Parent != "agent.new" ||
-			!slices.Equal(p.Fields, []string{"provider", "model", "effort"}) {
+			!slices.Equal(p.Fields, []string{"provider", "model", "effort", "permission_mode"}) {
 			t.Fatalf("purpose: %+v; want binding %+v at revision %d", p, want, revision)
 		}
 		if overridden {
@@ -43,8 +44,12 @@ func TestInboxAgentModelOverrideAndReset(t *testing.T) {
 		} else if p.Override != (ModelBinding{}) || p.InheritedFrom == "" {
 			t.Fatalf("inheritance not exposed: %+v", p)
 		}
+		it := &InboxItem{ID: "event", Title: "Message", Agent: &InboxAgent{State: AgentRunning, ProcessingTurn: "model-override"}}
+		s.inbox.mu.Lock()
+		s.inbox.items = map[string]*InboxItem{it.ID: it}
+		s.inbox.mu.Unlock()
 		before := len(f.sends)
-		machine, session, err := s.startInboxAgent(ctx, InboxAgentConfig{Enabled: true}, &InboxItem{ID: "event", Title: "Message"}, "Model configuration test only")
+		machine, session, err := s.startInboxAgent(ctx, InboxAgentConfig{Enabled: true}, it, "Model configuration test only")
 		if err != nil || machine == "" || session == "" {
 			t.Fatalf("twin start: %s/%s %v", machine, session, err)
 		}

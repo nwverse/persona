@@ -29,8 +29,8 @@ struct TodoCountsFallbackTests {
     }
 
     private static func filed(_ c: Case) throws -> [TodoFiled] {
-        var section: [String: String] = [:]
-        for (s, ids) in c.expected.order ?? [:] { for id in ids { section[id] = s } }
+        var section: [String: TodoListSection] = [:]
+        for (s, ids) in c.expected.order ?? [:] { for id in ids { section[id] = TodoListSection(rawValue: s) } }
         return try c.input.todos.map { row in
             let s = try #require(section[row.id], "\(c.name): \(row.id) has no section in expected.order")
             let closed = row.doneAt != nil && (s == TodoListSection.justFinished || s == TodoListSection.done)
@@ -56,13 +56,25 @@ struct TodoCountsFallbackTests {
 
     /// A step its open parent carries counts with its parent only; under a closed parent it counts as the row it is.
     @Test func aStepCountsOnceWithItsParent() {
-        func row(_ id: String, _ section: String, closed: Bool = false, partOf: String? = nil) -> TodoFiled {
-            TodoFiled(id: id, section: section, closed: closed, rank: 0, inactive: false, byView: true, quiet: false, partOf: partOf,
+        func row(_ id: String, _ section: TodoListSection, closed: Bool = false, partOf: String? = nil, quiet: Bool = false) -> TodoFiled {
+            TodoFiled(id: id, section: section, closed: closed, rank: 0, inactive: false, byView: true, quiet: quiet, partOf: partOf,
                       project: nil, asks: [])
         }
         let open = [row("p", TodoListSection.needsYou), row("s", TodoListSection.needsYou, partOf: "p")]
         #expect(TodoCountsFallback.counts(open).needsYou == 1 && TodoCountsFallback.carried(open) == ["s"])
         let closedParent = [row("p", TodoListSection.done, closed: true), row("s", TodoListSection.needsYou, partOf: "p")]
         #expect(TodoCountsFallback.counts(closedParent).needsYou == 1 && TodoCountsFallback.carried(closedParent).isEmpty)
+    }
+
+    /// An outside decision's association is not a parent step: neither an open nor a quiet parent can take its row or count.
+    @Test func anOutsideDecisionCountsIndependentlyOfItsParent() {
+        func row(_ id: String, _ section: TodoListSection, partOf: String? = nil, quiet: Bool = false) -> TodoFiled {
+            TodoFiled(id: id, section: section, closed: false, rank: 0, inactive: false, byView: true, quiet: quiet, partOf: partOf,
+                      project: nil, asks: [])
+        }
+        let open = [row("p", TodoListSection.needsYou), row("todo_od_1", TodoListSection.needsYou, partOf: "p")]
+        #expect(TodoCountsFallback.counts(open).needsYou == 2 && TodoCountsFallback.carried(open).isEmpty)
+        let quietParent = [row("p", TodoListSection.needsYou, quiet: true), row("todo_od_1", TodoListSection.needsYou, partOf: "p")]
+        #expect(TodoCountsFallback.counts(quietParent).needsYou == 1 && TodoCountsFallback.carried(quietParent).isEmpty)
     }
 }

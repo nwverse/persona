@@ -10,6 +10,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/larkhost"
 )
 
 // Concerns (#3561, docs/assistant/todos.md "Concerns", docs/design/proposals/owner-at-a-glance.md G5): something the owner
@@ -46,12 +47,16 @@ func todoKind(s string) (string, error) {
 // createConcern records a concern of the owner's: origin the main conversation, no agent; plan sets its due date,
 // priority and project as for any to-do. It needs the hub's database, or it could never be reported and closed.
 func (s *Service) createConcern(ctx context.Context, title, notes string, plan db.TodoEdit, bindings ...*repository.CreateBindings) (Todo, error) {
+	return s.createConcernWithImages(ctx, title, notes, plan, nil, bindings...)
+}
+
+func (s *Service) createConcernWithImages(ctx context.Context, title, notes string, plan db.TodoEdit, images []db.TodoImage, bindings ...*repository.CreateBindings) (Todo, error) {
 	if s.todoDB() == nil {
 		return Todo{}, errConcernNoStore
 	}
 	now := time.Now().UTC()
 	row := db.TodoRow{ID: "todo_" + randomHex(8), Title: title, Notes: notes, CreatedAt: now, UpdatedAt: now,
-		Origin: s.settings(ctx).Main, Kind: db.KindConcern}
+		Origin: s.settings(ctx).Main, Kind: db.KindConcern, Images: images}
 	plan.Title, plan.Notes, plan.Done = nil, nil, nil
 	plan.Apply(&row, now)
 	return s.insertTodo(ctx, row, bindings...)
@@ -93,7 +98,7 @@ func (s *Service) reportConcern(ctx context.Context, id, report, machine, sessio
 	s.todoDecisionEvent(row)
 	if !closed && postable(row) {
 		// A close already posts the report as its done line (setTodoRow): only a report on a closed one is posted here.
-		s.threadPost(id, threadEvent{kind: threadDecision, text: decisionLine(row)})
+		s.chat().ThreadPost(id, larkhost.ThreadEvent{Kind: larkhost.ThreadDecision, Text: decisionLine(row)})
 	}
 	s.logf("todo %s: concern reported (closed %v)", id, closed)
 	return out, closed, nil

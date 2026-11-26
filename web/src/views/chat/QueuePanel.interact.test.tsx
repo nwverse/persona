@@ -6,6 +6,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../lib/api";
+import { onDraftEvent, type DraftEvent } from "../../lib/drafts";
 import type { Session } from "../../lib/types";
 import { QueuePanel } from "./QueuePanel";
 
@@ -42,8 +43,7 @@ const settle = () => act(() => new Promise((r) => setTimeout(r, 0)));
 describe("QueuePanel row actions", () => {
   it("pulls a message back to edit or deletes it, re-queueing the others in order", async () => {
     vi.mocked(api).mockResolvedValue({ queue: ["第一条", "第二条", "第三条"] });
-    const withdrawn: string[] = [];
-    render(<QueuePanel session={session} draftKey="qp-edit" canEdit onWithdrawn={(t) => void withdrawn.push(t)} />);
+    render(<QueuePanel session={session} draftKey="qp-edit" canEdit />);
     click(within(1, "[data-queue-edit]"));
     await settle();
     click(within(2, "[data-queue-delete]"));
@@ -52,7 +52,6 @@ describe("QueuePanel row actions", () => {
       ["/sessions/m/s/queue", { keep: [0, 2] }],
       ["/sessions/m/s/queue", { keep: [0, 1] }],
     ]);
-    expect(withdrawn).toEqual(["第二条", "第三条"]);
   });
 
   it("sends every queued message at one press, with no dialog; its tooltip and description say what happens", async () => {
@@ -68,12 +67,30 @@ describe("QueuePanel row actions", () => {
     await settle();
   });
 
+  it.each([[true, true], [false, true], [true, false], [false, false]])("respects runtime queue capabilities (edit %s, steer %s)", (queue_edit, queue_send_now) => {
+    const runtime: Session = { ...session, agent: "agy", source_kind: "runtime", capabilities: { queue_edit, queue_send_now } };
+    render(<QueuePanel session={runtime} draftKey="qp-runtime-capabilities" canEdit />);
+    expect(Boolean(rows()[0].querySelector("[data-queue-edit]"))).toBe(queue_edit);
+    expect(Boolean(rows()[0].querySelector("[data-send-now]"))).toBe(queue_send_now);
+  });
+
   it("says in the Persona chat's words what sending now does", () => {
     const persona = { ...session, agent: undefined, assistant: true, queued: ["我的"] } as unknown as Session;
     render(<QueuePanel session={persona} draftKey="qp-persona-send" canEdit persona="Nova" />);
     const send = within(0, "[data-send-now]");
     expect(send.getAttribute("aria-label")).toBe("现在就把排队的消息全部发给 Nova，不用等到下一步");
     expect(document.getElementById(send.getAttribute("aria-describedby")!)!.textContent).toContain("Nova 会马上收到");
+  });
+
+  it("explains that a runtime assistant stops its turn and starts only the next queued message", () => {
+    const runtime: Session = { ...session, agent: "agy", assistant: true, source_kind: "runtime", capabilities: { queue_send_now: true } };
+    render(<QueuePanel session={runtime} draftKey="qp-runtime-assistant-send" canEdit persona="Nova" />);
+    const send = within(0, "[data-send-now]");
+    const tip = "停止 Nova 当前这一轮，开始处理下一条排队消息";
+    const body = "Nova 会停止当前这一轮，开始处理下一条排队消息。其余消息仍按原顺序排队。";
+    expect(send.getAttribute("aria-label")).toBe(tip);
+    expect(document.getElementById(send.getAttribute("aria-describedby")!)!.textContent).toBe(body);
+    expect(send.title).toBe(`${tip}\n${body}`);
   });
 
   it("shows a spinner where the busy row's actions were and takes no other action meanwhile", async () => {
@@ -121,6 +138,26 @@ describe("QueuePanel row actions", () => {
     expect(texts()).toEqual(["第一条", "第二条", "第三条"]);
     for (const r of rows()) expect(r.querySelector("button")).toBeNull();
     expect(host.querySelector("[data-queue-explain]")).toBeNull();
+  });
+
+  it("renders queued terminal agy follow-ups with Send now and no edit actions (#14871)", async () => {
+    vi.mocked(api).mockResolvedValue({});
+    const agy = { ...session, agent: "agy", queued: ["Check the linter..."] } as unknown as Session;
+    const candidate = {
+      id: "c1",
+      raw: "Check the linter output carefully",
+      images: [{ mime: "image/png", data: "AAAA" }],
+      before: [],
+    };
+    render(<QueuePanel session={agy} draftKey="qp-agy" canEdit pending={[candidate]} />);
+    expect(texts()).toEqual(["Check the linter..."]);
+    expect(rows()[0].querySelector("[data-queue-edit]")).toBeNull();
+    expect(rows()[0].querySelector("[data-queue-delete]")).toBeNull();
+    expect(rows()[0].querySelector("[data-queue-photo-thumb]")).not.toBeNull();
+    const send = within(0, "[data-send-now]");
+    click(send);
+    expect(calls()).toEqual([["/sessions/m/s/queue/send-now", {}]]);
+    await settle();
   });
 });
 
@@ -258,6 +295,35 @@ describe("QueuePanel relayed group", () => {
     expect(rows()[0].querySelector("[data-queue-note]")).toBeNull();
   });
 
+  it("shows no-wake relays arriving with the next message in an idle chat", () => {
+    const idle = { ...persona(["来自「日报」（不唤醒）：备忘"], 1), state: "idle" } as Session;
+    render(<QueuePanel session={idle} draftKey="qp-rg" canEdit persona="Nova" />);
+    expect(summary().textContent).toBe("1 条消息来自其他对话 · 随下一轮消息送达");
+    expect(rows()).toHaveLength(0);
+    click(summary());
+    expect(summary().textContent).toBe("1 条消息来自其他对话 · 随下一轮消息送达");
+    expect(within(0, "[data-queue-from]").textContent).toBe("日报");
+    expect(texts()).toEqual(["备忘"]);
+    expect(rows()[0].getAttribute("aria-label")).toBe("排队的第 1 条：来自「日报」 · 备忘 · 随下一轮消息送达");
+    expect(rows()[0].querySelector("button")).toBeNull();
+    expect(host.textContent).not.toContain("对话空闲后送达");
+  });
+
+  it("shows per-row delivery notes for a mixed relay group", () => {
+    show(["来自「日报」（不唤醒）：备忘", "来自「主对话」：帮我看下日程", "督办消息"], 3);
+    expect(summary().textContent).toBe("3 条消息来自其他对话");
+    click(summary());
+    expect(texts()).toEqual(["备忘", "帮我看下日程", "督办消息"]);
+    expect(rows().map((row) => row.querySelector("[data-queue-note]")?.textContent)).toEqual([
+      "随下一轮消息送达", "对话空闲后送达", "对话空闲后送达",
+    ]);
+    expect(rows().map((row) => row.getAttribute("aria-label"))).toEqual([
+      "排队的第 1 条：来自「日报」 · 备忘 · 随下一轮消息送达",
+      "排队的第 2 条：来自「主对话」 · 帮我看下日程 · 对话空闲后送达",
+      "排队的第 3 条：其他对话 · 督办消息 · 对话空闲后送达",
+    ]);
+  });
+
   it("keeps the own rows' actions and a hairline above the relayed group with several of each", () => {
     show(["我的一", "我的二", "来自「主对话」：甲", "来自「日报」：乙"], 2);
     expect(ownList()).not.toBeNull();
@@ -343,5 +409,160 @@ describe("QueuePanel relayed group", () => {
     expect(host.querySelector("[data-queue-relayed-toggle]")).toBeNull();
     click(body(0));
     expect(body(0).className).toContain("truncate");
+  });
+});
+
+describe("QueuePanel status, always-visible Send now and photo thumbnails (#10871)", () => {
+  const photo = (name: string) => `/Users/me/.persona/uploads/2026-11-20/${name}.png`;
+  const withPhotos = (...names: string[]) => `[Image #1]\n<attached_images>\n${names.map((n) => `path: ${photo(n)}`).join("\n")}\n</attached_images>`;
+  const errorImg = (img: HTMLImageElement) => act(() => void img.dispatchEvent(new Event("error")));
+
+  it("shows the queued status header in full layout and keeps Send now visible without hover on the first row", () => {
+    render(<QueuePanel session={session} draftKey="qp-10871-status" canEdit />);
+    const header = host.querySelector<HTMLElement>("[data-queue-header]");
+    expect(header).not.toBeNull();
+    expect(header!.textContent).toContain("已排队，尚未发送");
+
+    const firstRow = rows()[0];
+    const firstActions = firstRow.querySelector<HTMLElement>("[data-queue-actions]")!;
+    const firstSendNow = firstRow.querySelector<HTMLButtonElement>("[data-send-now]")!;
+    expect(firstActions.className).not.toContain("opacity-0");
+    expect(firstSendNow.className).not.toContain("opacity-0");
+    expect(firstSendNow.textContent).toContain("立即发送");
+    expect(firstSendNow.title).toContain("现在就把排队的消息全部发给 Claude");
+
+    const secondActions = rows()[1].querySelector<HTMLElement>("[data-queue-actions]")!;
+    expect(secondActions.className).toContain("opacity-0");
+  });
+
+  it("omits the full-layout status header in compact mode", () => {
+    render(<QueuePanel session={session} draftKey="qp-10871-compact" canEdit compact />);
+    expect(host.querySelector("[data-queue-header]")).toBeNull();
+  });
+
+  it("renders thumbnails for server-saved photo paths and falls back from thumb to inline download to icon", () => {
+    const raw = withPhotos("shot1");
+    render(<QueuePanel session={{ ...session, queued: [raw] }} draftKey="qp-10871-thumb" canEdit />);
+    const img = rows()[0].querySelector<HTMLImageElement>("[data-queue-photo-thumb]")!;
+    expect(img).not.toBeNull();
+    expect(img.src).toContain("/file/thumb?");
+    expect(img.src).toContain(encodeURIComponent(photo("shot1")));
+
+    // first error: fall back to inline file download
+    errorImg(img);
+    const inlineImg = rows()[0].querySelector<HTMLImageElement>("[data-queue-photo-thumb]")!;
+    expect(inlineImg.src).toContain("/file/download?");
+    expect(inlineImg.src).toContain("inline=1");
+
+    // second error: fall back gracefully to photo icon
+    errorImg(inlineImg);
+    expect(rows()[0].querySelector("[data-queue-photo-thumb]")).toBeNull();
+    expect(rows()[0].querySelector("[data-queue-photo-fallback] svg")).not.toBeNull();
+  });
+
+  it("uses local preview data URLs when freshly queued and collapses more than three photos into a +N badge", () => {
+    const dataUrl = "data:image/png;base64,iVBORw0KGgo=";
+    const fivePhotos = withPhotos("p1", "p2", "p3", "p4", "p5");
+    render(
+      <QueuePanel
+        session={{ ...session, queued: [fivePhotos] }}
+        draftKey="qp-10871-multi"
+        canEdit
+        pending={[{ id: "local", raw: fivePhotos, before: [], images: [{ mime: "image/png", data: "iVBORw0KGgo=" }] }]}
+      />,
+    );
+    const thumbs = [...rows()[0].querySelectorAll<HTMLImageElement>("[data-queue-photo-thumb]")];
+    expect(thumbs).toHaveLength(3);
+    expect(thumbs[0].getAttribute("src")).toBe(dataUrl);
+    expect(thumbs[1].getAttribute("src")).toContain(encodeURIComponent(photo("p2")));
+    expect(thumbs[2].getAttribute("src")).toContain(encodeURIComponent(photo("p3")));
+    const overflow = rows()[0].querySelector<HTMLElement>("[data-queue-photo-overflow]");
+    expect(overflow?.textContent).toBe("+2");
+  });
+});
+
+describe("QueuePanel pull-back lifecycle and cross-session isolation", () => {
+  it("still restores text and images to the originating draft when unmounting after the last queued item empties before HTTP resolves", async () => {
+    let resolvePull!: (v: unknown) => void;
+    vi.mocked(api).mockReturnValue(new Promise((r) => { resolvePull = r; }));
+    const draftEvents: DraftEvent[] = [];
+    const unsub = onDraftEvent("qp-unmount-last", (e) => draftEvents.push(e));
+    try {
+      const single = { ...session, queued: ["最后一条排队消息"] } as unknown as Session;
+      render(<QueuePanel session={single} draftKey="qp-unmount-last" canEdit />);
+      click(within(0, "[data-queue-edit]"));
+      expect(calls()).toEqual([["/sessions/m/s/queue", { keep: [] }]]);
+
+      // Queue-emptying push unmounts QueuePanel while the composer for qp-unmount-last stays mounted.
+      render(null);
+      expect(host.innerHTML).toBe("");
+
+      resolvePull({
+        queue: ["最后一条排队消息"],
+        images: [[{ mime: "image/png", data: "AAAA" }]],
+      });
+      await settle();
+
+      expect(draftEvents).toEqual([
+        { type: "append", text: "最后一条排队消息" },
+        { type: "image", image: { name: "photo-1.png", mime: "image/png", data: "AAAA" } },
+      ]);
+    } finally {
+      unsub();
+    }
+  });
+
+  it("never restores into session B or unlocks session A2 on cross-session / ABA switches while an edit pull-back is in flight", async () => {
+    let resolveA1!: (v: unknown) => void;
+    let resolveA2!: (v: unknown) => void;
+    vi.mocked(api)
+      .mockReturnValueOnce(new Promise((r) => { resolveA1 = r; }))
+      .mockReturnValueOnce(new Promise((r) => { resolveA2 = r; }));
+
+    const eventsA: DraftEvent[] = [];
+    const eventsB: DraftEvent[] = [];
+    const unsubA = onDraftEvent("qp-aba-a", (e) => eventsA.push(e));
+    const unsubB = onDraftEvent("qp-aba-b", (e) => eventsB.push(e));
+    try {
+      const sessionA = { ...session, machine_id: "m-a", session_id: "s-a", queued: ["A 第一条", "A 第二条"] } as unknown as Session;
+      const sessionB = { ...session, machine_id: "m-b", session_id: "s-b", queued: ["B 第一条"] } as unknown as Session;
+
+      // Start pull-back in session A (request #1 stays pending).
+      render(<QueuePanel session={sessionA} draftKey="qp-aba-a" canEdit />);
+      click(within(0, "[data-queue-edit]"));
+      expect(within(1, "[data-queue-delete]").hasAttribute("disabled")).toBe(true);
+
+      // Switch to session B while A1 is in flight: B is interactive and unlocked.
+      render(<QueuePanel session={sessionB} draftKey="qp-aba-b" canEdit />);
+      expect(within(0, "[data-queue-delete]").hasAttribute("disabled")).toBe(false);
+
+      // ABA: return to session A and start delete #2 on row 1.
+      render(<QueuePanel session={sessionA} draftKey="qp-aba-a" canEdit />);
+      expect(within(1, "[data-queue-delete]").hasAttribute("disabled")).toBe(false);
+      click(within(1, "[data-queue-delete]"));
+      expect(within(0, "[data-queue-edit]").hasAttribute("disabled")).toBe(true);
+
+      // Stale A1 edit resolves late: restores strictly to A's draft (never B) and does NOT unlock A2.
+      resolveA1({
+        queue: ["A 第一条", "A 第二条"],
+        images: [[{ mime: "image/png", data: "BBBB" }]],
+      });
+      await settle();
+
+      expect(eventsB).toEqual([]);
+      expect(eventsA).toEqual([
+        { type: "append", text: "A 第一条" },
+        { type: "image", image: { name: "photo-1.png", mime: "image/png", data: "BBBB" } },
+      ]);
+      expect(within(0, "[data-queue-edit]").hasAttribute("disabled")).toBe(true);
+
+      // Active A2 delete resolves: unlocks A2 cleanly.
+      resolveA2({ queue: ["A 第一条", "A 第二条"] });
+      await settle();
+      expect(within(0, "[data-queue-edit]").hasAttribute("disabled")).toBe(false);
+    } finally {
+      unsubA();
+      unsubB();
+    }
   });
 });

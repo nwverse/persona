@@ -1,8 +1,10 @@
 {
+  "retry_instruction": "上次处理失败（{reason}）。请从最新进展接着做，检查已经完成的工作，再给出新的建议。",
   "disabled": "AI 分身已关闭",
   "never": "已按「不交给 AI 分身」规则留给你处理",
   "timeout": "超时，没有给出建议",
   "no_draft": "做完了但没有给出建议",
   "start_failed": "没能启动，未开始处理",
-  "start_gave_up": "多次启动都没成功"
+  "start_gave_up": "多次启动都没成功",
+  "reply_policy_blocked": "已按回复策略留给你处理，不交给 AI 起草"
 }
