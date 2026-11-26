@@ -56,6 +56,8 @@ With the SDK (`integrations/runtime-sdk`, Node 22+, no dependencies) you only wr
 | `listSessions()` | Session rows: `session_id`, `title`, `cwd`, `status` (`working` / `blocked` / `done` / `idle` / `offline`), `updated_at`, `rev` (changes whenever content changes; the App fetches new content based on it), `last_text`, `space_id` / `space_name` (sessions in the same space are grouped together in the App), `model`; optionally `permission_mode` / `effort` (the current mode), `transcript` (this session's chat is a local Claude transcript: the content belongs to node, see "Runtimes that run Claude Code" below), `codex_thread` (this session's chat is a local Codex thread, see "Runtimes that run Codex" below), `is_subagent` / `parent_session_id` (another of the runtime's sessions started this one, see "Sub-Agents and background tasks" below), `started_at` (when the session began: a child's card counts its running time from it) and `started_by_persona` (the hub started this session through the runtime or had it take the session over: the manager finds a start whose answer it lost among these, so say it after a restart too; a daemon's is dropped, #8130). A session `start` answered before it really began (see below) is listed with `starting: true` until it has, and once it failed as `offline` with `start_error` (why) for a while, as the node lists its own starts (`docs/protocol/protocol.md` ("New session")) |
 | `items(params)` | One page of items (same params and result as `session.items`: from the end backwards by `turns` / `limit`, `before_seq` to page back, `after_seq` to catch up, `from_seq` + `through_seq` for a range), with `history` and `to_seq` |
 
+A row's `last_text` is the agent's reply preview. When botmux delivers a reply to its topic, the agent can finish with a line containing only `BOTMUX_NOTHING_TO_SEND`. The node removes standalone marker lines from reported previews. A marker-only update retains the previous words for that session or subagent when available. Runtime drivers that shorten previews should remove marker lines before joining lines or clipping text. The full message remains available in `session.items`.
+
 Optional (for each one present, the SDK declares the capability in `runtime.hello`; for those missing, node answers "not supported" for you and the App displays as usual):
 
 | Driver method | Capability |
@@ -565,10 +567,17 @@ node integrations/antigravity/desktop.mjs
 ```
 
 It discovers the local desktop hub through the current user's private descriptor under
-`~/.gemini/antigravity/daemon/`, lists existing conversations, watches exported transcript items,
-and forwards text replies and interrupts to the selected Cascade. Start each conversation with a message in the desktop app so replies can reuse its model and tool configuration.
-Handle approvals there as well. The desktop and CLI companions can run together. Override the desktop data directory
-with `--desktop-dir` or the Persona runtime socket with `--socket`. The desktop RPC is private and version dependent.
+`~/.gemini/antigravity/daemon/`, advertises an opt-in `antigravity-desktop` launcher, lists active
+conversations, watches exported transcript items, starts new conversations through
+`ConversationService/CreateConversation` (with model and effort selection via `launchers.models`
+and `session.start`), forwards text replies and settled interrupts, and supports native `rename`,
+`archive`, and `unarchive` controls through `ConversationService/UpdateConversation`.
+Desktop-UI-created conversations without an initialized configuration still require an initial turn
+in the desktop app so replies can reuse their model and tool configuration, and approvals stay in
+Antigravity Desktop. The desktop and CLI companions can run together. Override the desktop data
+directory with `--desktop-dir`, the Persona runtime socket with `--socket`, or the runtime identity
+and default model with `--runtime`, `--launcher`, `--display-name`, and `--model`. The desktop RPC
+is private and version dependent.
 
 ### Antigravity CLI
 
