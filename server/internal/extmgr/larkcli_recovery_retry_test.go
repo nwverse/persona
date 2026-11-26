@@ -11,20 +11,21 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/cliport"
+
 	"github.com/nwverse/persona/server/internal/connector"
-	cliconnector "github.com/nwverse/persona/server/internal/connector/larkcli"
 	"github.com/nwverse/persona/server/internal/lark"
 )
 
 // Registry.Remove/Add is an asynchronous replacement; polling may observe the gap.
-func currentRecoveryCLI(h *Manager) *cliconnector.Connector {
-	c, _ := h.connectors.Get("larkcli").(*cliconnector.Connector)
+func currentRecoveryCLI(h *Manager) cliport.Connector {
+	c, _ := h.connectors.Get("larkcli").(cliport.Connector)
 	return c
 }
 
 func recoveryCLI(t *testing.T, w *botLoadWorld) string {
 	t.Helper()
-	bin, err := filepath.Abs(filepath.Join("..", "larkcli", "testdata", "fake-lark-cli.sh"))
+	bin, err := filepath.Abs(filepath.Join("..", "modules", "lark", "larkcli", "testdata", "fake-lark-cli.sh"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +37,18 @@ func recoveryCLI(t *testing.T, w *botLoadWorld) string {
 	return log
 }
 
+func (w *botLoadWorld) startRecoveryConnectors(t *testing.T) {
+	t.Helper()
+	w.h.startConnectors(w.ctx)
+	t.Cleanup(func() {
+		w.cancel()
+		w.h.connectors.Stop() // the CLI audit and environment belong to this test until its last watcher exits
+		eventually(t, 2*time.Second, "CLI profile recovery to stop", func() bool { return !w.h.larkCLIRecovery.running.Load() })
+	})
+}
+
 func TestLarkCLIManagedRecoveryRetriesTransientSyncFailure(t *testing.T) {
+	needsLarkCLI(t)
 	w := newBotLoadWorld(t, true, false)
 	recoveryCLI(t, w)
 	real := w.h.cfg.Lark.CLI.Bin
@@ -70,7 +82,7 @@ exec "$LARKCLI_RECOVERY_REAL" "$@"
 	if err := w.store.botStore.PutSetting(w.ctx, botSettingsKey, FeishuBotSettings{AppID: "cli_recovered", SecretEnc: sealed}); err != nil {
 		t.Fatal(err)
 	}
-	w.h.startConnectors(w.ctx)
+	w.startRecoveryConnectors(t)
 	w.store.recover()
 	w.advance()
 	w.h.botAPI()
@@ -137,6 +149,7 @@ func (s *dualLarkReadStore) Setting(ctx context.Context, key string, out any) (b
 }
 
 func TestLarkCLIDualSettingsOutageRestoresDurableSwitches(t *testing.T) {
+	needsLarkCLI(t)
 	for _, tc := range []struct {
 		name, override, chosen               string
 		enabled, missing, missingPreferences bool
@@ -166,12 +179,12 @@ func TestLarkCLIDualSettingsOutageRestoresDurableSwitches(t *testing.T) {
 			st := &dualLarkReadStore{Store: w.store}
 			st.failed.Store(true)
 			w.h.store = st
-			w.h.startConnectors(w.ctx)
+			w.startRecoveryConnectors(t)
 			initialReads := st.connectorReads.Load()
 			if w.h.connectors.Enabled("larkcli") || w.h.connectors.Feeds("larkcli", connector.FeedInbox) {
 				t.Error("unread connector preferences started as enabled/feed-on")
 			}
-			current := w.h.connectors.Get("larkcli").(*cliconnector.Connector)
+			current := w.h.connectors.Get("larkcli").(cliport.Connector)
 			if _, err := current.Call(w.ctx, "larkcli_chats", json.RawMessage(`{}`)); !errors.Is(err, errBotSettingsUnread) {
 				t.Fatalf("unknown preferences ran CLI: %v", err)
 			}

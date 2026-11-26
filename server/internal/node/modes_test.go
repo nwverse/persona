@@ -143,6 +143,59 @@ func TestEffortPickerAndOutcome(t *testing.T) {
 	}
 }
 
+func TestEffortPicker330(t *testing.T) {
+	for _, tt := range []struct {
+		name, screen, key string
+	}{
+		{"offers a session-only key", slider330Save, "s"},
+		{"enter is session-only", slider330Enter, "enter"},
+		{"wrapped footer", strings.Replace(slider330Save, "only · Enter", "\n  only · Enter", 1), "s"},
+		{"ordinary output", "Effort\n  Use the arrows to adjust or save for later.\n❯ ", ""},
+		{"footer in scrollback", slider330Save + "\n❯ ", ""},
+		{"another dialog", strings.Replace(slider330Save, "Effort", "Volume", 1), ""},
+		{"no session binding", slider330Body + "  ←/→ to adjust · Enter to save · Esc to cancel\n", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := effortSliderConfirmKey(tt.screen); got != tt.key {
+				t.Errorf("confirmation key = %q, want %q", got, tt.key)
+			}
+			want := ""
+			switch tt.key {
+			case "s":
+				want = "session-slider"
+			case "enter":
+				want = "slider"
+			}
+			if got := effortPicker(tt.screen); got != want {
+				t.Errorf("picker = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestEffortOutcome330(t *testing.T) {
+	for _, tt := range []struct {
+		screen, effort string
+	}{
+		{"⎿  Set effort level to medium (this session\n  only): Balanced approach", "medium"},
+		{"  ○ low · /effort\n────\n❯ ", "low"},
+		{"  ◐ medium · /effort\n────\n❯ ", "medium"},
+		{"  ● high · /effort\n────\n❯ ", "high"},
+		{"  ◉ xhigh · /effort\n────\n❯ ", "xhigh"},
+		{"  ◈ max · /effort\n────\n❯ ", "max"},
+		{"  ◐ medium · /effort\n────\n❯ ", "auto"},
+	} {
+		if err := effortOutcome(tt.screen, tt.effort); err != nil {
+			t.Errorf("effortOutcome(%q, %q) = %v", tt.screen, tt.effort, err)
+		}
+	}
+	for _, screen := range []string{"  ◐ medium · /effort\n────\n❯ ", "  ◉ xhigh · working"} {
+		if err := effortOutcome(screen, "xhigh"); err == nil {
+			t.Errorf("effortOutcome(%q, xhigh) accepted an unconfirmed change", screen)
+		}
+	}
+}
+
 // effortSlider330 is Claude Code 2.1.330's /effort slider with `footer` as its key hints.
 func effortSlider330(footer string) string {
 	return "❯ /effort\n\n  Effort\n  ──────────▲\n  low     medium     high     xhigh      max     ultracode\n  " + effortPickerDefault +
@@ -211,6 +264,159 @@ func TestTuiPickDefaultEffort(t *testing.T) {
 	if err := n.tuiPickDefaultEffort(context.Background(), "w1:p1"); err == nil {
 		t.Fatal("no default found but no error")
 	}
+}
+
+func TestTuiSetEffortReturnsDeliveryRefusalOnHerdrCore(t *testing.T) {
+	n, hc := hcSession(t)
+	hc.setScreen("t1", "────\n❯ \n────\n  ? for shortcuts\n")
+	for kind, wantCode := range map[string]string{
+		"blocked":     "dialog_open",
+		"unavailable": "not_delivered",
+	} {
+		t.Run(kind, func(t *testing.T) {
+			var sawForce any
+			hc.handle("terminal.send", func(p map[string]any) any {
+				sawForce = p["force"]
+				return hcFail{kind}
+			})
+			err := n.tuiSetEffort(context.Background(), "herdr-core:t1", "high")
+			code, data := refusalOf(t, err)
+			if code != wantCode || data["delivered"] != "none" {
+				t.Fatalf("tuiSetEffort(%s) = code %q data %v, want %q delivered=none", kind, code, data, wantCode)
+			}
+			if sawForce != nil {
+				t.Fatalf("tuiSetEffort must not pass force, got %v", sawForce)
+			}
+		})
+	}
+
+	// When permission_mode is already active (no-op), a refused /effort still returns a definite delivered="none" refusal.
+	t.Run("no-op mode+effort keeps definite refusal", func(t *testing.T) {
+		hc.setScreen("t1", "────\n❯ \n────\n  ⏸ plan mode on (shift+tab to cycle)\n")
+		hc.handle("terminal.send", func(map[string]any) any { return hcFail{"blocked"} })
+		err := n.setModes(context.Background(), sidA, "plan", "high")
+		code, data := refusalOf(t, err)
+		if code != "dialog_open" || data["delivered"] != "none" {
+			t.Fatalf("no-op mode+effort returned code=%q data=%v, want dialog_open delivered=none", code, data)
+		}
+	})
+
+	// When permission_mode actually changes before /effort is refused, preserve the structured dialog_open code while
+	// marking delivered="unknown" so client_ops does not record the partial request as failed/unapplied.
+	t.Run("real mode transition+effort keeps code with unknown delivery", func(t *testing.T) {
+		hc.setScreen("t1", "────\n❯ \n────\n  ? for shortcuts\n")
+		hc.handle("terminal.keys", func(map[string]any) any {
+			hc.setScreen("t1", "────\n❯ \n────\n  ⏸ plan mode on (shift+tab to cycle)\n")
+			return map[string]any{}
+		})
+		hc.handle("terminal.send", func(map[string]any) any { return hcFail{"blocked"} })
+		err := n.setModes(context.Background(), sidA, "plan", "high")
+		code, data := refusalOf(t, err)
+		if code != "dialog_open" || data["delivered"] != deliveredUnknown || data["partial"] != true {
+			t.Fatalf("partial mode+effort returned code=%q data=%v, want dialog_open delivered=unknown partial=true", code, data)
+		}
+		if detail, _ := data["detail"].(string); detail == "" {
+			t.Fatalf("partial mode+effort lost original refusal detail: %v", data)
+		}
+		if strings.Contains(err.Error(), "没有发出去") {
+			t.Fatalf("partial mode+effort summary should not claim nothing was sent: %q", err.Error())
+		}
+	})
+
+	// When permission_mode actually changes before /effort fails with unavailable, do not claim nothing was typed.
+	t.Run("real mode transition+unavailable effort keeps partial summary", func(t *testing.T) {
+		hc.setScreen("t1", "────\n❯ \n────\n  ? for shortcuts\n")
+		hc.handle("terminal.keys", func(map[string]any) any {
+			hc.setScreen("t1", "────\n❯ \n────\n  ⏸ plan mode on (shift+tab to cycle)\n")
+			return map[string]any{}
+		})
+		hc.handle("terminal.send", func(map[string]any) any { return hcFail{"unavailable"} })
+		err := n.setModes(context.Background(), sidA, "plan", "high")
+		code, data := refusalOf(t, err)
+		if code != "not_delivered" || data["delivered"] != deliveredUnknown || data["partial"] != true || data["reason"] != "terminal_refused" {
+			t.Fatalf("partial unavailable returned code=%q data=%v", code, data)
+		}
+		if strings.Contains(err.Error(), "什么都没输入") {
+			t.Fatalf("partial unavailable summary claimed nothing was typed: %q", err.Error())
+		}
+		if detail, _ := data["detail"].(string); detail == "" {
+			t.Fatalf("partial unavailable lost detail: %v", data)
+		}
+	})
+
+	// When dropping a queued permission restart already mutated state before /effort is refused, preserve the
+	// structured code with delivered="unknown".
+	t.Run("cancelled mode restart+effort keeps code with unknown delivery", func(t *testing.T) {
+		hc.setScreen("t1", "────\n❯ \n────\n  ⏸ plan mode on (shift+tab to cycle)\n")
+		hc.handle("terminal.send", func(map[string]any) any { return hcFail{"blocked"} })
+		n.switches().setRestart(sidA, proto.ModeBypass, time.Now(), 4242, "start-1")
+		err := n.setModes(context.Background(), sidA, "plan", "high")
+		code, data := refusalOf(t, err)
+		if code != "dialog_open" || data["delivered"] != deliveredUnknown {
+			t.Fatalf("cancelled restart+effort returned code=%q data=%v, want dialog_open delivered=unknown", code, data)
+		}
+		if got := n.switches().restartMode(sidA); got != "" {
+			t.Fatalf("queued restart was not dropped: %q", got)
+		}
+	})
+
+	// session.modes reports changed=false when permission_mode was already active and changed=true when it transitioned.
+	t.Run("session.modes reports changed flag accurately", func(t *testing.T) {
+		hc.setScreen("t1", "────\n❯ \n────\n  ⏸ plan mode on (shift+tab to cycle)\n")
+		res, err := request(t, n, "session.modes", map[string]any{"session_id": sidA, "permission_mode": "plan"})
+		if err != nil {
+			t.Fatalf("no-op session.modes: %v", err)
+		}
+		if res["changed"] != false {
+			t.Fatalf("no-op session.modes reply = %v, want changed=false", res)
+		}
+		hc.setScreen("t1", "────\n❯ \n────\n  ? for shortcuts\n")
+		hc.handle("terminal.keys", func(map[string]any) any {
+			hc.setScreen("t1", "────\n❯ \n────\n  ⏸ plan mode on (shift+tab to cycle)\n")
+			return map[string]any{}
+		})
+		res, err = request(t, n, "session.modes", map[string]any{"session_id": sidA, "permission_mode": "plan"})
+		if err != nil {
+			t.Fatalf("real session.modes: %v", err)
+		}
+		if res["changed"] != true {
+			t.Fatalf("real session.modes reply = %v, want changed=true", res)
+		}
+	})
+
+	// Cancelling a pending launcher switch via session.modes counts as an applied change if a subsequent /effort is refused.
+	t.Run("cancelled launcher switch+effort keeps partial unknown delivery", func(t *testing.T) {
+		n.state.put(sidA, sessionState{Launcher: "claude"})
+		n.putPendingSwitch(sidA, &proto.PendingSwitch{Launcher: "other"})
+		hc.setScreen("t1", "────\n❯ \n────\n  ⏸ plan mode on (shift+tab to cycle)\n")
+		hc.handle("terminal.send", func(map[string]any) any { return hcFail{"blocked"} })
+		_, err := request(t, n, "session.modes", map[string]any{"session_id": sidA, "launcher": "claude", "effort": "high"})
+		code, data := refusalOf(t, err)
+		if code != "dialog_open" || data["delivered"] != deliveredUnknown || data["partial"] != true {
+			t.Fatalf("cancelled launcher switch+effort = code=%q data=%v, want dialog_open delivered=unknown partial=true", code, data)
+		}
+		if n.pendingSwitch(sidA) != nil {
+			t.Fatalf("pending launcher switch was not cleared")
+		}
+	})
+
+	// When permission_mode switches and /effort is then blocked by an existing draft (plain error), partialModesErr
+	// still marks delivered=unknown, partial=true, retryable=false and keeps the draft instructions in detail.
+	t.Run("real mode transition+draft error keeps partial outcome and draft detail", func(t *testing.T) {
+		hc.setScreen("t1", "────\n❯ \n────\n  ? for shortcuts\n")
+		hc.handle("terminal.keys", func(map[string]any) any {
+			hc.setScreen("t1", "────\n❯ unsent draft\n────\n  ⏸ plan mode on (shift+tab to cycle)\n")
+			return map[string]any{}
+		})
+		err := n.setModes(context.Background(), sidA, "plan", "high")
+		_, data := refusalOf(t, err)
+		if data["delivered"] != deliveredUnknown || data["partial"] != true || data["retryable"] != false {
+			t.Fatalf("partial draft error data=%v (err=%v), want delivered=unknown partial=true retryable=false", data, err)
+		}
+		if detail, _ := data["detail"].(string); !strings.Contains(detail, "输入框") {
+			t.Fatalf("partial draft error lost draft instructions in detail: %v", data)
+		}
+	})
 }
 
 type nopWriteCloser struct{ bytes.Buffer }

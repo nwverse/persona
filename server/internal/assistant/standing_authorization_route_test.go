@@ -179,7 +179,7 @@ func TestStandingAuthorizationFailureAndRevocation(t *testing.T) {
 					t.Fatal(err)
 				}
 			case "audit_failure":
-				e.s.store = func() Store { return failingStandingStore{database} }
+				e.s.setStore(func() Store { return failingStandingStore{database} })
 			case "revoked":
 				saveDispatchAuthorizations(t, database)
 			case "explicit_task_limit":
@@ -327,7 +327,7 @@ func TestStandingAuthorizationConcurrentTaskDecision(t *testing.T) {
 }
 
 func TestStandingAuthorizationAuditTransactionRollsBack(t *testing.T) {
-	dsn := newDatabase(t)
+	dsn := newMigratedDatabase(t, db.ManagerSet)
 	database, err := db.Open(t.Context(), dsn, db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)

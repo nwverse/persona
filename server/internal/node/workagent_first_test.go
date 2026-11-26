@@ -2,7 +2,6 @@ package node
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -213,13 +212,88 @@ func TestWorkAgentFirstMessageGivesUpAfterTries(t *testing.T) {
 	if row == nil || row.Status != proto.StatusBlocked || row.AttentionReason != want {
 		t.Fatalf("listed as %+v, want blocked with %q", row, want)
 	}
-	a, _ := x.n.agent(id)
-	params, _ := json.Marshal(map[string]any{"session_id": id, "text": "Please start on the task above."})
-	if _, err, handled := x.n.workAgentCalls(context.Background(), "session.send", id, a, params); !handled || err != nil {
-		t.Fatalf("send: handled %v, %v", handled, err)
+	stubAgyNativePrompt(t, x.n, x.f, "w1:p2", agyTestID)
+	if _, err := request(t, x.n, "session.send", map[string]any{"session_id": id, "text": "Please start on the task above."}); err != nil {
+		t.Fatalf("send: %v", err)
 	}
 	if p, ok := x.n.lostFirst.get(id); ok {
 		t.Errorf("still listed as lost after a message went in: %q", p.why)
+	}
+}
+
+// A start notice that appears after agyTrustFolder returned is dismissed with Esc before confirmWorkFirst retries
+// the dropped first message (#11345).
+func TestWorkAgentFirstRetryDismissesLateAgyNotice(t *testing.T) {
+	withAgyTrustWait(t, 2*time.Second)
+	var dismissed atomic.Bool
+	x := newWorkFirstFixture(t, agyAgent, func(submissions int, home string) any {
+		status := proto.StatusIdle
+		if submissions >= 2 && dismissed.Load() {
+			status = proto.StatusWorking
+		}
+		return agentWithStatus(agyAgent, status)(submissions, home)
+	})
+	x.f.after(func(c herdrCall) {
+		switch c.Method {
+		case "agent.prompt":
+			if x.submissions.Load() == 1 && !dismissed.Load() {
+				// Late announcement arrives after the initial prompt was dropped.
+				x.f.setScreen("w1:p2", agyNoticeScreen)
+			}
+		case "pane.send_keys":
+			if slices.Contains(keysOf(c), "escape") {
+				dismissed.Store(true)
+				x.f.setScreen("w1:p2", agyIdleScreen)
+			}
+		}
+	})
+	id := x.start(t, agyAgent)
+	if !dismissed.Load() {
+		t.Fatal("late start notice was not dismissed before retry")
+	}
+	if got := x.submissions.Load(); got != 2 {
+		t.Errorf("submitted %d times, want 2", got)
+	}
+	if p, ok := x.n.lostFirst.get(id); ok {
+		t.Errorf("listed as lost after retry: %q", p.why)
+	}
+}
+
+// A trust dialog that appears after agyTrustFolder timed out is answered before confirmWorkFirst retries the dropped
+// first message (#11345).
+func TestWorkAgentFirstRetryAnswersLateAgyTrustDialog(t *testing.T) {
+	withAgyTrustWait(t, 2*time.Second)
+	var trusted atomic.Bool
+	var prompts atomic.Int32
+	x := newWorkFirstFixture(t, agyAgent, func(_ int, home string) any {
+		status := proto.StatusIdle
+		if prompts.Load() >= 2 && trusted.Load() {
+			status = proto.StatusWorking
+		}
+		return agentWithStatus(agyAgent, status)(0, home)
+	})
+	x.f.after(func(c herdrCall) {
+		switch c.Method {
+		case "agent.prompt":
+			if prompts.Add(1) == 1 && !trusted.Load() {
+				x.f.setScreen("w1:p2", agyTrustScreen)
+			}
+		case "pane.send_keys":
+			if isEnter(c) {
+				trusted.Store(true)
+				x.f.setScreen("w1:p2", agyIdleScreen)
+			}
+		}
+	})
+	id := x.start(t, agyAgent)
+	if !trusted.Load() {
+		t.Fatal("late trust dialog was not answered before retry")
+	}
+	if got := prompts.Load(); got != 2 {
+		t.Errorf("prompted %d times, want 2", got)
+	}
+	if p, ok := x.n.lostFirst.get(id); ok {
+		t.Errorf("listed as lost after retry: %q", p.why)
 	}
 }
 
@@ -242,4 +316,65 @@ func TestPromptShown(t *testing.T) {
 			t.Errorf("%s: promptShown = %v, want %v", tc.name, got, tc.want)
 		}
 	}
+}
+
+// confirmWorkFirst treats herdr-core's host.ErrDialogOpen the same way as classic herdr's host.ErrAgentBlocked on
+// background retries (lostDialog), while workAgentFirst keeps initial-prompt failures non-refusal so a start that
+// already created a terminal is not recorded as a 409/failed receipt that could spawn a duplicate terminal on retry.
+func TestWorkAgentFirstRecognizesDialogOpen(t *testing.T) {
+	t.Run("initial prompt blocked stays non-refusal", func(t *testing.T) {
+		n, _, hc, _ := hcNode(t)
+		hc.setTerminals(hcTerminal("t13", "antigravity", "blocked", 5151, "agy", hcCwd, "", "", ""))
+		hc.handle("terminal.send", func(map[string]any) any { return hcFail{"blocked"} })
+		err := n.workAgentFirst(context.Background(), "herdr-core:t13", "agy-herdr-core-t13", agyAgent, agyFirstMessage)
+		if err == nil || refusalCode(err) != "" {
+			t.Fatalf("workAgentFirst(blocked) = %v (code %q), want non-refusal error", err, refusalCode(err))
+		}
+	})
+
+	t.Run("retry blocked returns lostWorkDialog when delivery is unconfirmed", func(t *testing.T) {
+		withWorkFirstWaits(t, 40*time.Millisecond)
+		n, _, hc, _ := hcNode(t)
+		hc.setTerminals(hcTerminal("t13", "antigravity", "idle", 5151, "agy", hcCwd, "", "", ""))
+		hc.setScreen("t13", agyIdleScreen)
+		hc.handle("terminal.send", func(map[string]any) any { return hcFail{"blocked"} })
+		why := n.confirmWorkFirst(context.Background(), "herdr-core:t13", agyAgent, agyFirstMessage)
+		if why != lostWorkDialog() {
+			t.Fatalf("confirmWorkFirst blocked on herdr-core = %q, want %q", why, lostWorkDialog())
+		}
+	})
+
+	t.Run("retry blocked with unsubmitted draft visible keeps warning", func(t *testing.T) {
+		withWorkFirstWaits(t, 40*time.Millisecond)
+		n, _, hc, _ := hcNode(t)
+		hc.setTerminals(hcTerminal("t13", "antigravity", "idle", 5151, "agy", hcCwd, "", "", ""))
+		hc.setScreen("t13", agyIdleScreen)
+		hc.handle("terminal.send", func(map[string]any) any {
+			// A visible prompt or paste chip may still be an unsubmitted draft, so keep the Needs You warning.
+			hc.setScreen("t13", "│ > [Pasted text #1 +12 lines] │\nAllow command?\n")
+			return hcFail{"blocked"}
+		})
+		if why := n.confirmWorkFirst(context.Background(), "herdr-core:t13", agyAgent, agyFirstMessage); why != lostWorkDialog() {
+			t.Fatalf("confirmWorkFirst blocked with draft visible = %q, want %q", why, lostWorkDialog())
+		}
+	})
+
+	t.Run("retry blocked with reported agy conversation counts as taken", func(t *testing.T) {
+		withWorkFirstWaits(t, 40*time.Millisecond)
+		n, _, hc, _ := hcNode(t)
+		hc.setTerminals(hcTerminal("t13", "antigravity", "idle", 5151, "agy", hcCwd, "", "", ""))
+		hc.setScreen("t13", agyIdleScreen)
+		hc.handle("terminal.send", func(map[string]any) any {
+			n.mu.Lock()
+			if n.agyReports == nil {
+				n.agyReports = map[string]agyHookReport{}
+			}
+			n.agyReports["herdr-core:t13"] = agyHookReport{conversation: agyTestID, event: "PreInvocation", at: time.Now()}
+			n.mu.Unlock()
+			return hcFail{"blocked"}
+		})
+		if why := n.confirmWorkFirst(context.Background(), "herdr-core:t13", agyAgent, agyFirstMessage); why != "" {
+			t.Fatalf("confirmWorkFirst blocked with reported agy conversation = %q, want empty (taken)", why)
+		}
+	})
 }

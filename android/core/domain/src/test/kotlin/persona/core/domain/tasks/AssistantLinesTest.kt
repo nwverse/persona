@@ -44,6 +44,53 @@ class AssistantLinesTest {
         assertEquals(listOf("u1", "a1", "feed-early", "u2", "a2", "feed-mid"), (out.filterNot { it.startsWith("day-") }).zhAny())
     }
 
+    @Test fun earliestHoldsBackOlderFeedItemsAndDayLinesUntilEarlierPagesLoad() {
+        val day1 = Instant.parse("2026-11-04T12:00:00Z")
+        val day2 = Instant.parse("2026-11-05T12:00:00Z")
+        val day3 = Instant.parse("2026-11-06T12:00:00Z")
+        val allFeed = listOf(
+            FeedItem("untimed", "c1", at = null, kind = "notice"),
+            FeedItem("days-ago", "c1", day1.toString(), "brief"),
+            FeedItem("day2-card", "c1", day2.plusSeconds(60).toString(), "task", "t2"),
+            FeedItem("before-page", "c1", "2026-11-06T16:00:00+08:00", "today"), // 08:00Z on day 3
+            FeedItem("at-boundary", "c1", day3.toString(), "notice"),
+            FeedItem("in-page", "c1", day3.plusSeconds(120).toString(), "task", "t3"),
+        )
+        val page3Lines = listOf(
+            ChatLine.Row(ChatRow("user", LineItem(Item("u3", role = "user", kind = "text", ts = day3.toString())))),
+            ChatLine.Row(ChatRow("reply", LineItem(Item("a3", role = "assistant", kind = "text", ts = day3.plusSeconds(30).toString())))),
+            ChatLine.Row(ChatRow("user", LineItem(Item("u4", role = "user", kind = "text", ts = day3.plusSeconds(300).toString())))),
+        )
+        // Newest page only (hasOlder = true): older days and same-day morning card stay hidden; boundary, in-page and untimed stay.
+        val partial = AssistantLines.lines(page3Lines, allFeed, ZoneOffset.UTC, earliest = day3).map { it.id }
+        assertEquals(listOf("day-2026-11-06"), partial.filter { it.startsWith("day-") })
+        assertEquals(
+            listOf("feed-untimed", "u3", "a3", "feed-at-boundary", "feed-in-page", "u4"),
+            partial.filterNot { it.startsWith("day-") },
+        )
+
+        // Loading an older page moves earliest back to day 2: day 2's card and day 3's morning card interleave chronologically.
+        val page2Lines = listOf(
+            ChatLine.Row(ChatRow("user", LineItem(Item("u2", role = "user", kind = "text", ts = day2.toString())))),
+            ChatLine.Row(ChatRow("reply", LineItem(Item("a2", role = "assistant", kind = "text", ts = day2.plusSeconds(30).toString())))),
+        ) + page3Lines
+        val expanded = AssistantLines.lines(page2Lines, allFeed, ZoneOffset.UTC, earliest = day2).map { it.id }
+        assertEquals(listOf("day-2026-11-05", "day-2026-11-06"), expanded.filter { it.startsWith("day-") })
+        assertEquals(
+            listOf("feed-untimed", "u2", "a2", "feed-day2-card", "feed-before-page", "u3", "a3", "feed-at-boundary", "feed-in-page", "u4"),
+            expanded.filterNot { it.startsWith("day-") },
+        )
+
+        // Complete history (earliest = null / hasOlder = false): every day and feed item appears.
+        val complete = AssistantLines.lines(page2Lines, allFeed, ZoneOffset.UTC, earliest = null).map { it.id }
+        assertEquals(listOf("day-2026-11-04", "day-2026-11-05", "day-2026-11-06"), complete.filter { it.startsWith("day-") })
+        assertTrue("feed-days-ago" in complete)
+
+        // Empty partial page (earliest = Instant.MAX): all timed historical items wait; untimed item is not dropped.
+        val emptyPartial = AssistantLines.lines(emptyList(), allFeed, ZoneOffset.UTC, earliest = Instant.MAX).map { it.id }
+        assertEquals(listOf("feed-untimed"), emptyPartial)
+    }
+
     @Test fun mergeKeepsOneCopyOldestFirst() {
         val a = feed("a", 5); val b = feed("b", 10)
         assertEquals(listOf("b", "a"), (AssistantLines.merge(listOf(a), listOf(b, a)).map { it.id }).zhAny())
@@ -185,5 +232,39 @@ class AssistantLinesTest {
         assertEquals(DayLabel(today, DayLabel.Kind.Today), AssistantLines.dayLabel(today, today))
         assertEquals(DayLabel(today.minusDays(1), DayLabel.Kind.Yesterday), AssistantLines.dayLabel(today.minusDays(1), today))
         assertEquals(DayLabel(LocalDate.of(2025, 11, 3), DayLabel.Kind.OtherYear), AssistantLines.dayLabel(LocalDate.of(2025, 11, 3), today))
+    }
+
+    @Test fun timeFastPathMatchesInstantParseAcrossValidAndInvalidInputs() {
+        for (iso in listOf(
+            "2026-11-23T12:34:56Z",
+            "2026-11-23T12:34:56.789Z",
+            "2026-11-23T12:34:56.123456789Z",
+            "2026-11-23T12:34:56z",
+            "2026-11-23T20:34:56+08:00",
+        )) {
+            assertEquals(iso, Instant.parse(iso), AssistantLines.time(iso))
+        }
+        for (invalid in listOf(null, "", "   ", "not-a-timestamp", "0001-01-01T00:00:00Z", "1999-12-31T23:59:59Z", "2026-13-40T99:00:00Z")) {
+            assertNull(invalid.toString(), AssistantLines.time(invalid))
+        }
+    }
+
+    @Test fun lineItemTimeReturnsNullForMalformedOrBlankTimestampWithoutThrowing() {
+        val valid = persona.core.domain.lines.LineItem(
+            persona.core.contracts.Item(id = "a", kind = "assistant", seq = 1, text = "ok", ts = "2026-11-25T10:00:00Z"),
+        )
+        val blank = persona.core.domain.lines.LineItem(
+            persona.core.contracts.Item(id = "b", kind = "assistant", seq = 2, text = "blank", ts = ""),
+        )
+        val bad = persona.core.domain.lines.LineItem(
+            persona.core.contracts.Item(id = "c", kind = "assistant", seq = 3, text = "bad", ts = "2026-13-40T99:00:00Z"),
+        )
+        val garbage = persona.core.domain.lines.LineItem(
+            persona.core.contracts.Item(id = "d", kind = "assistant", seq = 4, text = "garbage", ts = "not-a-timestamp"),
+        )
+        org.junit.Assert.assertEquals(java.time.Instant.parse("2026-11-25T10:00:00Z"), valid.time)
+        org.junit.Assert.assertNull(blank.time)
+        org.junit.Assert.assertNull(bad.time)
+        org.junit.Assert.assertNull(garbage.time)
     }
 }

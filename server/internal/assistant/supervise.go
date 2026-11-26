@@ -102,7 +102,12 @@ type Supervision struct {
 	// Progress: what its agent last reported to the supervisor (report_to_supervisor, agent_control.go). A live
 	// reading kept in memory only (the next report brings it back after a restart), and apart from UpdatedAt, which
 	// names the review a task waits for.
-	Progress *TaskProgress `json:"progress,omitempty"`
+	Progress      *TaskProgress          `json:"progress,omitempty"`
+	Investigation *investigationFindings `json:"investigation_findings,omitempty"`
+	// OwnerWork is server-only evidence for the close guard (#15406): the latest owner-authored instruction and the
+	// latest Persona assignment per linked Agent session. Keeping it out of the wire shape prevents another Agent or
+	// an ordinary to-do reader from seeing an excerpt meant for the owner and the responsible supervisor.
+	OwnerWork []ownerSessionWork `json:"-"`
 }
 
 // assigned records a current ownership decision, rather than a pre-policy legacy ledger.
@@ -125,6 +130,10 @@ type TaskProgress struct {
 	// is Text (one line of at most 200 characters).
 	Detail string    `json:"detail,omitempty"`
 	At     time.Time `json:"at"`
+	// machine and session name the Agent that sent this report (in memory only, never on the wire), so a done report
+	// only settles left-over shells of the Agent that wrote it (#16418).
+	machine string
+	session string
 }
 
 // TaskReview is one review: the assistant's verdict, with each criterion's evidence or gap.
@@ -139,7 +148,8 @@ type TaskReview struct {
 	Note                string        `json:"note,omitempty"`
 	// UserCheck: an accepted review that still wants the owner to look themselves (task_review user_check): its
 	// "Please verify" waits for them instead of being passed by the supervisor (acceptance_supervisor.go, #3240).
-	UserCheck bool `json:"user_check,omitempty"`
+	UserCheck bool   `json:"user_check,omitempty"`
+	Link      string `json:"link,omitempty"` // Deliverable named by the supervisor for owner verification.
 	// A needs_user review's decision (#3804, decision.go): why only the owner can decide, what is to be decided, the
 	// option recommended, the options (the recommended first) and what waiting costs.
 	WhyOwner      string           `json:"why_owner,omitempty"`
@@ -158,6 +168,8 @@ type TaskReview struct {
 	WaitingOn string    `json:"waiting_on,omitempty"`
 	Parks     int       `json:"parks,omitempty"`
 	DueAt     time.Time `json:"due_at,omitzero"`
+	// DueResends: how many times its parked_due was told again because no task_review followed the reminder.
+	DueResends int `json:"due_resends,omitempty"`
 	// ParkEndedAt is recorded when this wait is replaced or resolved, so its time is excluded from stalled checks.
 	ParkEndedAt time.Time `json:"park_ended_at,omitzero"`
 	// Evidence is absent on legacy parks. A new park records its external wait, inspected source receipt and
@@ -169,6 +181,8 @@ type TaskReview struct {
 	Reply *connectorwire.LarkReplyObservation `json:"reply,omitempty"`
 	// ExternalPR is this external-event park's observed object, independent of the task's PR associations.
 	ExternalPR *externalPRObservation `json:"external_pr,omitempty"`
+	// ExternalIssue is the last read of the GitHub issue this park's evidence names (park_issue_wake.go, #14050).
+	ExternalIssue *externalIssueObservation `json:"external_issue,omitempty"`
 	// Decided: the owner's decision (its id) that ended this park before its time (parkDecided, parked.go), and
 	// DecidedTold: when a supervision message carried that to the supervisor.
 	Decided     string    `json:"decided,omitempty"`
@@ -189,11 +203,15 @@ type TaskReview struct {
 	// SupersededReason records the supervisor's natural-language reason when this task_review superseded an earlier
 	// pending needs_user decision without fabricating an owner selection (#13112).
 	SupersededReason string `json:"superseded_reason,omitempty"`
+	// WithdrewNeedsUser: this accepted review is the supervisor taking back the needs_user it had raised
+	// (task_review withdraw_needs_user): no owner answered it, and nothing was pushed or carded for it.
+	WithdrewNeedsUser bool `json:"withdrew_needs_user,omitempty"`
 }
 
-// OwnerWait is a judgment that a supervised task's stretch of work (begun at Work) stopped on the owner's decision:
-// when it was judged and the judge's reason. PushPending marks a new, still-undelivered push; NotifiedAt records its
-// success. Legacy waits have neither and are not replayed on upgrade.
+// OwnerWait is a judgment that a supervised task's stretch of work (begun at Work) stopped on a decision its agent
+// says is the owner's: when it was judged and the judge's reason. It goes to the supervisor, never straight to the
+// owner (noteOwnerWait). PushPending and NotifiedAt are what earlier versions recorded of their own push to the owner;
+// they are read and kept, never set.
 type OwnerWait struct {
 	Work        time.Time  `json:"work"`
 	At          time.Time  `json:"at"`
@@ -241,9 +259,19 @@ func (v *Supervision) clone() *Supervision {
 	if out.DoneWhen == nil {
 		out.DoneWhen = []string{}
 	}
-	if v.Progress != nil {
+	if v.Progress != nil && !isCodexRouteProgress(v.Progress) {
 		p := *v.Progress
 		out.Progress = &p
+	} else {
+		out.Progress = nil
+	}
+	out.OwnerWork = make([]ownerSessionWork, len(v.OwnerWork))
+	for i, w := range v.OwnerWork {
+		out.OwnerWork[i] = w
+		if w.Instruction != nil {
+			instruction := *w.Instruction
+			out.OwnerWork[i].Instruction = &instruction
+		}
 	}
 	if v.AutoReview != nil {
 		a := *v.AutoReview
@@ -261,6 +289,7 @@ func (v *Supervision) clone() *Supervision {
 		at := *v.CardlessToldAt
 		out.CardlessToldAt = &at
 	}
+	out.Investigation = v.Investigation.clone()
 	out.Parked = out.parked()
 	return &out
 }
@@ -321,7 +350,14 @@ func supervisionFromRow(r db.TodoSupervisionRow) *Supervision {
 	v := &Supervision{Supervisor: r.Supervisor, SupervisorSource: r.SupervisorSource, DoneWhen: r.DoneWhen, Criteria: r.Criteria, ExpectMinutes: r.ExpectMinutes, State: r.State, Round: r.Round,
 		PendingSince: r.PendingSince, CardlessToldAt: r.CardlessToldAt, UpdatedAt: r.UpdatedAt}
 	_ = json.Unmarshal(r.Reviews, &v.Reviews)
+	if len(r.OwnerWork) > 0 {
+		_ = json.Unmarshal(r.OwnerWork, &v.OwnerWork)
+	}
 	v.StalledReworkRounds = v.stalledReworkRounds()
+	if len(r.InvestigationFindings) != 0 {
+		v.Investigation = &investigationFindings{}
+		_ = json.Unmarshal(r.InvestigationFindings, v.Investigation)
+	}
 	if len(r.AutoReview) > 0 {
 		var a AutoReview
 		if json.Unmarshal(r.AutoReview, &a) == nil {
@@ -402,15 +438,23 @@ func (v *Supervision) applyReworkAccounting(kind string) (round, stalled int) {
 
 func (v *Supervision) row(todoID string) db.TodoSupervisionRow {
 	raw, _ := json.Marshal(v.Reviews)
-	var auto, waits json.RawMessage
+	var auto, waits, investigation json.RawMessage
+	ownerWork, _ := json.Marshal(v.OwnerWork)
+	if len(v.OwnerWork) == 0 {
+		ownerWork = json.RawMessage("[]")
+	}
 	if v.AutoReview != nil {
 		auto, _ = json.Marshal(v.AutoReview)
 	}
 	if v.Waits != nil {
 		waits, _ = json.Marshal(v.Waits)
 	}
-	return db.TodoSupervisionRow{TodoID: todoID, Supervisor: v.Supervisor, SupervisorSource: v.SupervisorSource, DoneWhen: v.DoneWhen, Criteria: v.Criteria, ExpectMinutes: v.ExpectMinutes,
-		State: v.State, Round: v.Round, Reviews: raw, AutoReview: auto, Waits: waits, PendingSince: v.PendingSince, CardlessToldAt: v.CardlessToldAt, UpdatedAt: v.UpdatedAt}
+	if v.Investigation != nil {
+		investigation, _ = json.Marshal(v.Investigation)
+	}
+	return db.TodoSupervisionRow{TodoID: todoID, InvestigationFindings: investigation, Supervisor: v.Supervisor, SupervisorSource: v.SupervisorSource, DoneWhen: v.DoneWhen, Criteria: v.Criteria, ExpectMinutes: v.ExpectMinutes,
+		State: v.State, Round: v.Round, Reviews: raw, AutoReview: auto, Waits: waits, OwnerWork: ownerWork,
+		PendingSince: v.PendingSince, CardlessToldAt: v.CardlessToldAt, UpdatedAt: v.UpdatedAt}
 }
 
 // cleanDoneWhen is a task's criteria as kept: trimmed, no empty or repeated ones, at most 6 of at most 200 characters.
@@ -592,8 +636,11 @@ func (s *Service) updateSupervisionGuardedLockedAt(ctx context.Context, id strin
 }
 
 // noteProgress keeps p as supervised task id's progress (in memory, no ledger write: see Supervision.Progress) and
-// tells the apps; false when id is no supervised task.
+// tells the apps; false when id is no supervised task or p is a legacy startup notice.
 func (s *Service) noteProgress(ctx context.Context, id string, p TaskProgress) bool {
+	if isCodexRouteProgress(&p) {
+		return false
+	}
 	s.todos.mu.Lock()
 	cur := s.todos.todos[id]
 	ok := cur != nil && cur.Supervision != nil
@@ -607,6 +654,24 @@ func (s *Service) noteProgress(ctx context.Context, id string, p TaskProgress) b
 		s.todosChanged(ctx)
 	}
 	return ok
+}
+
+// clearDoneProgress drops a prior turn's in-memory done report when a new turn begins on supervised task id, so an
+// earlier done report cannot settle shells left behind by a later turn (#16418).
+func (s *Service) clearDoneProgress(ctx context.Context, id string) {
+	s.todos.mu.Lock()
+	cur := s.todos.todos[id]
+	cleared := false
+	if cur != nil && cur.Supervision != nil && cur.Supervision.Progress != nil && cur.Supervision.Progress.Kind == upReportDone {
+		v := cur.Supervision.clone()
+		v.Progress = nil
+		cur.Supervision = v
+		cleared = true
+	}
+	s.todos.mu.Unlock()
+	if cleared {
+		s.todosChanged(ctx)
+	}
 }
 
 // ---- the snapshot ----
@@ -642,8 +707,8 @@ func taskHealth(t Todo, agents []proto.Session, now time.Time) (string, int) {
 	if t.DoneAt != nil {
 		return "", 8
 	}
-	if v.Waits != nil { // the judge found it stopped on the owner's decision (#1277): not to be accepted as done
-		return "停下等用户拍板，别直接验收", 0 // i18n-ignore: the snapshot is the assistant's prompt
+	if v.Waits != nil { // the judge found it stopped on what its agent says is the owner's decision (#1277)
+		return "Agent 停下说要用户拍板：先判断是不是用户的事，别直接验收", 0 // i18n-ignore: the snapshot is the assistant's prompt
 	}
 	if snapshotDoneRule(t, agents, nil, nil, now, now.Location()) == ruleAccepted {
 		// v.state masks an accepted review after reopening; acceptanceStands inside the shared triage rule still holds
@@ -662,13 +727,10 @@ func taskHealth(t Todo, agents []proto.Session, now time.Time) (string, int) {
 		}
 	}
 	for _, c := range agents {
-		if c.State != proto.StateWorking {
+		if c.State != proto.StateWorking || aliveBackgroundWork(c, now) {
 			continue
 		}
-		moved := c.UpdatedAt
-		if c.ActivityAt != nil && c.ActivityAt.After(moved) {
-			moved = *c.ActivityAt
-		}
+		moved := stalledSessionMoved(c)
 		if still := now.Sub(moved); !moved.IsZero() && still >= stallAfter(v.ExpectMinutes) {
 			return "卡住 " + humanDuration(still), 2
 		}

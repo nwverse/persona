@@ -26,10 +26,10 @@ var (
 	build   = ""
 )
 
-const usage = `usage:
+var usage = `usage:
 ` + nodecmd.LaunchUsage + `
 ` + nodecmd.NodeUsage + `
-` + nodecmd.Usage + `
+` + nodecmd.Usage() + `
 ` + nodecmd.SysmonUsage + `
   personad version [-v]     the version; -v adds the channel and build number`
 
@@ -54,7 +54,7 @@ func main() {
 		}
 		return
 	}
-	handled, err := nodecmd.Run(ctx, stop, os.Args[1:], nodecmd.Build{Version: version, Program: nodeproto.ProgramPersonaNode})
+	handled, err := nodecmd.Run(ctx, stop, os.Args[1:], nodecmd.Build{Version: version, Program: nodeproto.ProgramPersonaNode, Edition: update.ThisEdition})
 	if !handled {
 		fmt.Fprintln(os.Stderr, nodecmd.Named(usage))
 		// Say where the commands it leaves out are rather than only listing its own.

@@ -31,6 +31,7 @@ import persona.core.navigation.AppTab
 import persona.core.navigation.ChatRoute
 import persona.core.navigation.ConversationKind
 import persona.core.navigation.Navigator
+import persona.core.inbox.*
 
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [35], qualifiers = "en-w400dp-h1000dp-xhdpi")
@@ -161,14 +162,14 @@ internal class HandOffBarTestRepository(
         handOffRequests += request
         handOffGate?.await()
         failure?.let { throw it }
-        return if (request.machineId != null && request.sessionId != null) SessionKey(request.machineId, request.sessionId) else result
+        return if (request.machineId != null && request.sessionId != null) SessionKey(request.machineId!!, request.sessionId!!) else result
     }
 
     override suspend fun saveHandOffMemory(value: List<HandOffMemoryEntry>) {
         memoryGate?.await()
         handOffMemory.value = value
     }
-    override suspend fun personaContext(itemId: String): String = "Full example context"
+    override suspend fun personaContext(itemId: String): PersonaContext = PersonaContext("Full example context")
     override suspend fun draftReply(itemId: String, instruction: String): String = "AI reply"
     override suspend fun setDone(itemId: String, done: Boolean) {
         doneCalls++

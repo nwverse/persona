@@ -1,4 +1,4 @@
-Record requested/agreed work or reminders immediately, without confirmation; execute via task_plan. Open title/due duplicates return existing to-dos but refuse bindings: use todo_repositories_get/set. Short title in the user's language; details in notes. In leader chats: record that direction's work; task_plan dispatches, todo_complete finishes unassigned work. Bindings save atomically; IDs/catalog_revision from repositories_list. No files or task progress changes.{{template "shared/mcp_language" .}}
+Record agreed work or reminders now; run work via task_plan. Open title/due duplicates return the existing to-do; edit its bindings via todo_repositories_get/set. Leader chats record work in their direction and complete unassigned work via todo_complete. Bindings are atomic, using repositories_list IDs and revision. No file or progress changes. A result naming an active related Agent means reuse it, not a new dispatch.{{template "shared/mcp_language" .}}
 
 ```json
 {
@@ -15,13 +15,17 @@ Record requested/agreed work or reminders immediately, without confirmation; exe
       "type": "string",
       "description": "Details."
     },
+    "topic_message_id": {
+      "type": "string",
+      "description": "Lark message ID supplied in the current prompt."
+    },
     "due": {
       "type": "string",
-      "description": "Day only: YYYY-MM-DD; otherwise YYYY-MM-DD HH:MM (user time zone) or RFC3339. Relative 2h/3d accepted."
+      "description": "YYYY-MM-DD, YYYY-MM-DD HH:MM (local), RFC3339, or 2h/3d."
     },
     "remind": {
       "type": "string",
-      "description": "Future reminder (user time zone/RFC3339 or relative 30m/2h/1d). Only if requested or deadline close and important."
+      "description": "Future reminder (local/RFC3339 or 30m/2h/1d). Only if asked or urgent."
     },
     "priority": {
       "type": "string",
@@ -38,11 +42,23 @@ Record requested/agreed work or reminders immediately, without confirmation; exe
         "todo",
         "concern"
       ],
-      "description": "todo (default); concern (main chat only) tracks a user-raised matter until concern_report reports its outcome; other completion tools cannot close it."
+      "description": "todo (default); concern (main chat only) closes only via concern_report."
+    },
+    "audience": {
+      "type": "string",
+      "enum": [
+        "human",
+        "autonomous"
+      ],
+      "description": "Optional: human or autonomous."
+    },
+    "direction_id": {
+      "type": "string",
+      "description": "Optional direction id."
     },
     "project": {
       "type": "string",
-      "description": "Existing kb_list project slug/name; prefer long-term work. Only when clear; no near-duplicates."
+      "description": "Existing kb_list project slug/name; only when clear, no near-duplicates."
     },
     "part_of": {
       "type": "string",
