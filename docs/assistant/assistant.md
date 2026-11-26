@@ -353,6 +353,9 @@ The current mechanisms are generic; specific commands, routes, and variables are
   - With only gated commands (and output-only commands such as jq / head / grep / echo / cd / `timeout N`), check each: reads allowed directly; self-only actions (mark read, complete own to-dos) allowed;
     other writes (send / reply / recall / forward, reactions, docs, schedules, approvals, mail, group settings…) show a phone "Lark" approval card with action, chat name (extension `assistant.summary`),
     method, path, and body to send (reads `@file`). Denial returns user feedback as the reason; "Always allow in this session" remembers this route type with ids stripped.
+    For a gate without `Auth` in default mode, an `@file` body never selects a body-scoped `allow` (and cannot silently clear an earlier body-scoped restriction): the call is confirmed or denied by fallback rules because no proxy can verify the eventual request body at send time. Inline bodies, body-independent rules without an earlier body-scoped restriction, authenticated proxy gates (where the proxy enforces rules on the received body), and bypass mode are unchanged (#8413).
+    `@file` body and `--url-query @file` reads pin the resolved parent directory with `os.OpenRoot`, open without blocking or following a final symlink, accept only regular files up to 1 MiB (with `os.DevNull` kept as an empty `--url-query` sentinel), reject lexical and resolved `/proc`, `/dev` and `/sys` paths, and keep the 4000-character whole-character clip for bodies.
+    `sort -o` / `--output` / `--compress-program`, `date -s` / `--set` / positional clock-setting operands, and `uniq` with a second output-file operand are not treated as output-only filters.
     On Claude Code alone, one static authenticated send/reply with a top-level text body declares `editable_text`: the web may replace that text on a plain Allow or attach a denial note. The node retires the original card's grant, applies the same classifier and rules to the rebuilt command, and grants only the edited call once with all other tool input and call identity unchanged. Codex, runtimes, lark-cli, dynamic/file bodies and other routes keep ordinary Allow/Deny.
   - A write that went out through the proxy (the API answered 2xx) is kept in the sent-as-user ledger (`docs/extensions/connectors.md` "Sent as the user"): the node tells the manager (`lark.sent`) how the gate let it through. Not in it: lark-cli writes and gates without `auth`.
   - A health conversation's writes are confirmed each time, rules' allow included (`docs/assistant/health.md` "Outbound"), at both entrances: `larkCheck` turns an allow into a card, and the proxy address opened for a process started in the health space
@@ -2907,6 +2910,12 @@ repeated. Retired callers lose manager tool authority immediately. Physical appr
 activation; the node's retirement latch prevents recovery and idle-compaction work on that segment. Closure is retried
 when offline nodes reconnect. Deleting a conversation cascades through segment history and queue content, retaining
 only deletion markers and minimal offline closure identities.
+
+Each manager advances at most four conversations at a time, rotating across the remaining work on later sweeps.
+Preparation and receipt calls run after Postgres releases its connection. The durable start claim and operation ID
+prevent duplicate starts, and mapping the candidate rechecks the current operation and epoch under the row lock.
+If a cancellation or deletion wins during a node call, the sweep uses the saved candidate identity to close the
+unused session.
 
 `conversations_switch` and `POST /api/v1/assistant/conversation-switches` coordinate an explicit set of these logical
 switches without adding another engine protocol. The settings-backed batch stores each conversation's before-image,
