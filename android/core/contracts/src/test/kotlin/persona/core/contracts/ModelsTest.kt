@@ -186,7 +186,11 @@ class ModelsTest {
         }
         assertEquals("traex", builtIn.name)
         assertEquals("My CLI", builtIn.copy(displayName = "My CLI").title)
-        assertEquals("claude", builtIn.copy(name = "claude", agentType = "claude").title)
+        assertEquals("Claude Code", builtIn.copy(name = "claude", agentType = "claude").title)
+        assertEquals("Codex", builtIn.copy(name = "codex", agentType = "codex").title)
+        assertEquals("Claude Desktop", AgentLauncher(name = "claude-desktop", agentType = "claude").title)
+        assertEquals("Codex App", AgentLauncher(name = "codex-app", agentType = "codex").title)
+        assertEquals("Antigravity CLI", AgentLauncher(name = "agy", agentType = "agy").title)
         assertEquals("Custom Claude", HubLauncher(name = "traex", displayName = "Custom Claude").title)
     }
 
@@ -199,8 +203,8 @@ class ModelsTest {
         assertEquals("TRAE CLI", launcher.title)
         assertEquals("TRAE CLI", settings.title)
         assertEquals("My CLI", launcher.copy(displayName = "My CLI").title)
-        assertEquals("traex", launcher.copy(source = "persona").title)
-        assertEquals("traex", launcher.copy(baseUrl = null).title)
+        assertEquals("custom-cli", launcher.copy(name = "custom-cli", source = "persona").title)
+        assertEquals("TRAE CLI", launcher.copy(baseUrl = null).title)
     }
 
     @Test fun aPaseoProviderIsNamedByItsOwnNameNeverTheEngines() {
