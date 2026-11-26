@@ -279,6 +279,13 @@ func (s *Service) nodeRequest(ctx context.Context, machine, method string, param
 		if res, refused := s.guestRefuses(ctx, machine, p.SessionID, p.Name, p.Guest); refused {
 			return res, true, nil
 		}
+		// A proxy reply's one tool is answered here, before a meeting room's (bot_handoff.go).
+		if id, handoff, err := s.handoffOf(ctx, machine, p.SessionID); err == nil && handoff {
+			if s.isWorkMachine(machine) {
+				return proto.TextResult("unknown tool "+p.Name, true), true, nil
+			}
+			return s.larkModule().HandoffToolCall(ctx, id, p.Name, p.Args), true, nil
+		}
 		if rec, room, err := s.roomOf(ctx, machine, p.SessionID); err == nil && room {
 			if s.isWorkMachine(machine) {
 				return proto.TextResult("unknown tool "+p.Name, true), true, nil
