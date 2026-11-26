@@ -7,7 +7,7 @@ import { loadTaskRepositories, repositoryRequestOptions, type RepositoryLayout, 
 import { useRepositoryRequestContext } from "../lib/use-repository-request-context";
 import { loadWorkspaceRules, previewWorkspaceNaming, RULE_FIELDS, rulesPatch, sameRules, saveWorkspaceRules, WORKSPACE_NAMING_VERSION,
   type NamingDiagnostic, type WorkspaceNamingPreview as Preview, type WorkspaceNamingSettings, type WorkspaceRules } from "../lib/workspace-naming";
-import { settingsInputClass } from "../views/settings/SettingsParts";
+import { Group, settingsInputClass } from "../views/settings/SettingsParts";
 import { Icon } from "./icons";
 import { Button, Loading } from "./atoms";
 
@@ -95,6 +95,11 @@ export function WorkspaceNamingPreview({ result, loading, error, repositories = 
       </div>}
     </>}
   </div>;
+}
+
+export function WorkspaceNamingSettingsGroup({ version, manager, owner }: { version: string; manager: string; owner: string }) {
+  if (version !== WORKSPACE_NAMING_VERSION) return null;
+  return <Group><WorkspaceNaming manager={manager} owner={owner} /></Group>;
 }
 
 /** Secondary advanced area. It changes no creation mode and never starts an Agent. */

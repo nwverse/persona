@@ -33,12 +33,11 @@ import { PersonaAvatar, usePersona } from "../assistant/Persona";
 import { TaskTrust } from "./TaskTrust";
 import { DirectionNotes, directionNotesDeps } from "./DirectionNotes";
 import { CacheKeepaliveSettings, type CacheKeepaliveState } from "./CacheKeepaliveSettings";
-import { WORKSPACE_NAMING_VERSION } from "../../lib/workspace-naming";
 import { PageBoundary } from "../PageBoundary";
 
 const StandingAuthorizations = lazyPage(() => import("./StandingAuthorizations").then((m) => m.StandingAuthorizations));
 const Repositories = lazyPage(() => import("./Repositories").then((m) => m.Repositories));
-const WorkspaceNaming = lazyPage(() => import("../../ui/WorkspaceNaming").then((m) => m.WorkspaceNaming));
+const WorkspaceNaming = lazyPage(() => import("../../ui/WorkspaceNaming").then((m) => m.WorkspaceNamingSettingsGroup));
 
 interface AssistantState extends AgentAutoNamingState, CacheKeepaliveState {
   manager?: string;
@@ -547,14 +546,14 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
         <TaskTrust manager={manager} machineName={(id) => machines.find((machine) => machine.id === id)?.name || id} />
       </Group>
 
-      {info?.manager === manager && info.workspace_naming_version === WORKSPACE_NAMING_VERSION && (
-        <Group anchor="workspace-naming">
+      {info?.manager === manager && info.workspace_naming_version && (
+        <div data-settings-group="workspace-naming">
           <PageBoundary page="workspace-naming">
             <Suspense fallback={<Loading />}>
-              <WorkspaceNaming manager={manager} owner={owner} />
+              <WorkspaceNaming manager={manager} owner={owner} version={info.workspace_naming_version} />
             </Suspense>
           </PageBoundary>
-        </Group>
+        </div>
       )}
 
       {/* Who follows up the main chat's tasks (#5082), delivery closeout gate (#12034), following up agents, their tasks' new messages, stopping idle ones and tidying closed ones (#3617, #4293, #4754, #3618): each row only from a hub that has its setting */}
