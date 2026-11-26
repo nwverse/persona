@@ -219,13 +219,9 @@ func (h *Hub) queueDevicesConfig(checkNodes bool) {
 				d.sent[p.ID] = b
 				d.mu.Unlock()
 			}
-			if checkNodes && cfg.AutoUpdateNodes {
-				ctx, cancel := context.WithTimeout(context.Background(), updateRequestLimit)
-				if err := h.callBus(ctx, p.ID, devicewire.MethodUpdateNodes, map[string]any{}, nil); err != nil {
-					h.logf("update: [%s] checks its node packages: %v", p.ID, err)
-				}
-				cancel()
-			}
+		}
+		if checkNodes && h.upd.nodesEnabled() && h.upd.isConfirmed() {
+			h.updateNodes(context.Background())
 		}
 	})
 }

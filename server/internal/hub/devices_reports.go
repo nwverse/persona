@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -670,4 +671,20 @@ func (h *Hub) machineConnected(ctx context.Context, m *Machine, at time.Time) de
 		}
 	}
 	return out
+}
+
+// updateNodes tells connected managers to check their own computers after
+// the Hub publishes packages or the operator enables automatic updates.
+func (h *Hub) updateNodes(ctx context.Context) {
+	for _, p := range h.busRoster() {
+		if p.Role != bus.RoleManager {
+			continue
+		}
+		call, cancel := context.WithTimeout(ctx, updateRequestLimit)
+		err := h.callBus(call, p.ID, devicewire.MethodUpdateNodes, map[string]any{}, nil)
+		cancel()
+		if err != nil {
+			h.logf("update: [%s] checks its node packages: %v", p.ID, err)
+		}
+	}
 }

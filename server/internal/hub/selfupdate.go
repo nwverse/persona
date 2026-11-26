@@ -547,7 +547,9 @@ func (u *updater) confirm(ctx context.Context, p update.Pending) {
 		u.notify(su(l, "push_updated_title", i18n.Args{"version": p.ToVersion}), su(l, "push_updated_body"))
 	}
 	update.ClearDevelopmentAdoption(u.dir, p)
-	u.h.queueDevicesConfig(nodeErr == nil && u.nodesEnabled())
+	if p.Development != nil || u.nodesEnabled() || u.publishedBuild() != nil {
+		u.h.queueDevicesConfig(nodeErr == nil && u.nodesEnabled())
+	}
 	if p.WebPrev != "" && filepath.Dir(p.WebPrev) == filepath.Join(u.dir, "development") && strings.HasPrefix(filepath.Base(p.WebPrev), "web-previous-") {
 		_ = os.RemoveAll(p.WebPrev)
 	}
