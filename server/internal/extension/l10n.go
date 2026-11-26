@@ -41,7 +41,7 @@ type Translation struct {
 	// Groups: the titles of the sidebar groups its nav_pages name (UIGroup), by group id.
 	Groups map[string]string `json:"groups,omitempty"`
 	// MCPTools: the descriptions of its mcp_tools, by tool name.
-	MCPTools map[string]*MCPToolText `json:"mcp_tools,omitempty"`
+	MCPTools map[string]*mcpToolText `json:"mcp_tools,omitempty"`
 }
 
 // FieldText is a configuration property's text: its title, description and confirmation (x-confirm), its choices'

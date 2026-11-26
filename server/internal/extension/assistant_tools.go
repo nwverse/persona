@@ -293,8 +293,8 @@ func mcpToolLines(l i18n.Lang, tools, agentTools []MCPToolItem, more bool) []Per
 	return out
 }
 
-// MCPToolText is a tool's text in one language (Translation.MCPTools).
-type MCPToolText struct {
+// mcpToolText is a tool's text in one language (Translation.MCPTools).
+type mcpToolText struct {
 	Description string `json:"description,omitempty"`
 }
 
