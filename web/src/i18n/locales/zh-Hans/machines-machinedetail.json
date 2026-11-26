@@ -68,7 +68,6 @@
   "screen": "查看屏幕",
   "screen_hint": "打开这台 Mac 的实时屏幕（屏幕共享）",
   "files": "文件",
-  "files_hint": "从个人文件夹开始浏览这台电脑的文件",
   "machine_switch_link_intro": "当前通过 SSH 连接。改用 Persona Link 后，这台电脑会自己连上 hub，换了网络也能连。",
   "machine_switch_link_action": "切换到 Persona Link…",
   "machine_switch_link_title": "将「{name}」切换到 Persona Link？",

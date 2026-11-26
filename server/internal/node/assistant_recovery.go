@@ -913,7 +913,7 @@ func (n *Node) sanitizePersistedModel(ctx context.Context, id, launcher string, 
 	}
 	if r := st.ModelRecovery; modelRecoveryTargetsModel(r, model) {
 		if !crossEngine && r.From != "" && r.From != model && proto.ValidModelID(r.From) && !n.isModelUnavailable(launcher, r.From) &&
-			n.persistedModelAvailableOnLauncher(ctx, launcher, r.From) {
+			n.persistedModelAvailableOnLauncher(ctx, launcher, r.From, false) {
 			n.logger.Printf("assistant %s: restoring configured model %q in place of recovery model %q on %s", short(id), r.From, model, launcher)
 			execution.Model = r.From
 			return
@@ -930,23 +930,18 @@ func (n *Node) sanitizePersistedModel(ctx context.Context, id, launcher string, 
 	if !crossEngine {
 		return
 	}
-	// Cross-engine fallback cleared the hub's options for another engine and fell back to the conversation's own
-	// launcher. Conversations that follow global settings have no per-session pick, and any persisted model not
-	// present in the launcher's available configuration must fall back to the launcher's default.
-	if followsSetting {
-		drop("cross-engine resume of setting-following conversation")
-		return
-	}
-	if !n.persistedModelAvailableOnLauncher(ctx, launcher, model) {
+	// The request's options belonged to a different engine, but the saved model may belong to the launcher we
+	// are actually resuming on. For a session that follows global settings, require proof from that launcher
+	// before reusing a saved model; an unknown legacy model still falls back to the launcher's default.
+	if !n.persistedModelAvailableOnLauncher(ctx, launcher, model, followsSetting) {
 		drop("not in launcher configuration or catalog")
-		return
 	}
 }
 
 // persistedModelAvailableOnLauncher reports whether a persisted model is valid for launcher without spawning a CLI
 // probe. Managed launchers validate against their declared model list or configured primary/tier models; cached
-// launcher catalogs are consulted when present.
-func (n *Node) persistedModelAvailableOnLauncher(ctx context.Context, launcher, model string) bool {
+// launcher catalogs are consulted when present. requireKnown rejects a model when neither source can confirm it.
+func (n *Node) persistedModelAvailableOnLauncher(ctx context.Context, launcher, model string, requireKnown bool) bool {
 	if model == "" || !proto.ValidModelID(model) {
 		return false
 	}
@@ -1004,7 +999,7 @@ func (n *Node) persistedModelAvailableOnLauncher(ctx context.Context, launcher, 
 			return false
 		}
 	}
-	return true
+	return !requireKnown
 }
 
 func managedConfiguredModels(l proto.ManagedLauncher) map[string]bool {

@@ -1212,7 +1212,9 @@ A herdr tab's workers are the same (web, #5180; the owner asked on 2026-11-12 th
 
 A row read from Unread or Just finished and held in that place ("Rows read during a visit" below) does not need the user: it is drawn and counted as Seen, so it never stands in for, or hides, one that does.
 
-On the web, people opening a computer see waiting Agents first. Each session has a conversation link and, when the hub supplies it, a separate to-do link. Workspaces with active sessions precede other known workspaces. Files, Terminal and New agent carry the selected computer and workspace. Work shows its workspace shortcuts before secondary navigation. Files has one directory listing on the selected computer. Every disk alert opens that computer’s Storage map with reclaim suggestions. Cleanup shows the server’s targets, asks for confirmation and reports individual outcomes. Diagnostics groups self-check, network, ports and processes, services and toolchain. Management holds the computer name, engine, launchers, Link and deployment controls (#16196).
+On the web, people opening a computer see waiting Agents first. Each session has a conversation link and, when the hub supplies it, a separate to-do link. Workspaces with active sessions precede other known workspaces. Files, Terminal and New agent carry the selected computer and workspace. Files has one directory listing on the selected computer. Every disk alert opens that computer’s Storage map with reclaim suggestions. Cleanup shows the server’s targets, asks for confirmation and reports individual outcomes. Diagnostics groups self-check, network, ports and processes, services and toolchain. Management holds the computer name, engine, launchers, Link and deployment controls (#16196).
+
+The web computer header keeps New agent and the available Terminal action together across views. They sit beside the computer identity when space allows and wrap below it on a phone. Immediately below the header, underlined links mark the primary views on a single horizontally scrollable row. The selected link stays in view. Work lists waiting sessions and workspace actions below these links. Compact pills within Diagnostics select a tool. Both levels expose the current link and give adjacent touch controls their own 44 px targets. The fleet switcher aligns with its cards. A single computer has direct Files and Storage shortcuts, and the detail rail appears only when there is another computer to switch to on a wide screen (#16328).
 
 #### Finished work nobody has seen
 
@@ -2719,6 +2721,10 @@ to-do. Reuse the review chip and caution tone for **Awaiting your verification**
 The existing Agent state column continues to describe the Agent, not the task. Only the owner's Pass completes the
 task; change feedback returns it to ongoing work and invalidates that verification round. Reuse the existing
 verification card, Pass action and chat feedback path; no new setting, component, group or polling loop.
+
+For everyday Assistant users on the web (#16313), Open on a personal verification leads with its report.
+The worker transcript is one secondary action away. Follow up in chat places a removable task quote above the
+existing draft in the originating conversation. Opening or removing the quote leaves the Pass action available.
 
 The task cards follow `docs/design/task-cards.md`, which holds the state tables and the reasons.
 
