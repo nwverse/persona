@@ -1095,7 +1095,7 @@ and a disabled knowledge base (`kb.enabled: false`) returns 503 as before.
 | Endpoint | Purpose |
 | --- | --- |
 | `GET /api/v1/kb/{kind}?tag=` | Sorted list (`items`) and common tags (`tags`); kind is projects / chats / people / docs / meetings / events / recordings / topics (topics: the most points first, `extra` is the count; docs, meetings and events: `extra` is the link and `source` the connector that supplied it, #8872) |
-| `GET /api/v1/kb/{kind}/{id}` | `detail` (meta, summary, project timeline, last 7 days' chat messages, a topic's `points`, the links the user removed as `removed`); projects also include `agents` |
+| `GET /api/v1/kb/{kind}/{id}` | `detail` (meta, summary, project timeline, last 7 days' chat messages, a topic's `points`, the links the user removed as `removed`); projects also include `agents`; a chat also `inbox`, its Inbox items ("A chat's Inbox items" below) |
 | `PUT /api/v1/kb/{kind}/{id}` | Edit (fields as in `kb_update`); create a project if absent |
 | `DELETE /api/v1/kb/projects/{id}` | Soft-delete a project ("Deleting a project" above); returns its trash entry (`id`, `kind`, `slug`, `name`, `deleted_at`, `unlinked`); 404 for unknown or merged projects |
 | `DELETE /api/v1/kb/recordings/{id}` | Delete a stored recording (files, index row, project links; a tombstone stays for `recording_audio_days`); `{"deleted": bool}`, `false` when there was none; 400 for an id that is no UUID. The knowledge base's own route: it answers with or without the recording module ("Recordings without the recording module" above) |
@@ -1108,6 +1108,43 @@ and a disabled knowledge base (`kb.enabled: false`) returns 503 as before.
 | `GET /api/v1/kb/moments/{id}` | One archived Moments post (`post`, `markdown`: body + all comments), opened from a project's Related Moments |
 | `GET /api/v1/kb/chats/{id}/context` | What the knowledge base knows about a chat (`chat_id`, `chat_name`, `kind`, `summary`, first three projects as `projects: [{name, summary}]`), same context the hub puts in prompts; read-only, used by plugin /agent (#1484) |
 | `GET /api/v1/kb/chats/{id}/days/{day}` | All messages for a chat day (`messages[].n` is the file line number), and neighboring days with messages (`prev` / `next`) |
+
+## A chat's Inbox items
+
+A chat's page leads to the Inbox items that came from it, and an item leads back to the chat's page (#15356,
+`assistant/kb_inbox.go`). Neither side keeps a message id, so a message is matched on its time, sender and text.
+
+- **Which items**: an item is a chat's when its connector and thread are the chat's `connector` (in an older file, its
+  `source`) and `source_id`, whatever the connector, or when the chat is the one the AI twin reads for it (`kbChatOf` in
+  `assistant/inbox_agent.go`: a Feishu chat, a mail correspondent, a subscription's thread). The chat's `connector` is the
+  connector that wrote it whatever name it is filed under, its id or one of its manifest's archive sources, so a chat
+  filed under an archive source counts too. Nothing else relates an Inbox thread to an archive chat of another id. A row
+  merged into another counts for the one it was merged into, which is the row the Inbox lists: that one is listed on the
+  chat of each row it stands for, and on each it holds the messages the row of that chat received (a merged row keeps its
+  own chain and its source keeps collecting into it). An item the source visibility boundary quarantined
+  (`visibility_excluded`, [inbox.md](inbox.md) ("One item = one row")) is listed too, as the Inbox lists it: that boundary
+  keeps a chat's content from collection and the AI, not from the owner, and this page asks no model.
+- **`GET /api/v1/kb/chats/{id}`** adds `inbox`: the chat's items as the Inbox list has them (with `sources=all`: the open ones
+  and the done ones the list still carries), the open ones first, each group newest first, at most 50. Each has `id`,
+  `title`, `tier`, `status` (an open item's section), `summary`, `preview`, `updated_at`, `done_at` and `messages`: the rows
+  of the page's `recent` that it holds, each as `{day, line}`, the row's lines exactly as `recent` has them, so a client
+  finds the row by reading `line` as it reads `recent`. A row is an item's when its sender and text are a message the
+  item's chain received (a message the chain cut, ending in "…", by its start; spacing aside) and its minute, in the
+  chat's zone, is that message's own time or, for a message the chain keeps without one, within its batch: from the
+  received entry before it (the item's start for the first) to its own entry. A row goes to the newest item that holds it.
+  A chat with no items has no `inbox`.
+- **`GET /api/v1/inbox/{id}`** adds `kb_chat: {id, path}` when the knowledge base has the item's chat: the one its
+  connector archives the thread under (`<connector>-<thread>`, else a chat ending in `-<thread>` that it wrote under an
+  archive source) or the one the AI twin reads; `path` is its page
+  (`deeplink.KnowledgeEntry`). Not in the Inbox list: the apps read it when an item is opened.
+- **Who gets them**: only the user's own apps (a full-access device). An extension's token reads the knowledge base and
+  the Inbox by its own scopes (`kb.read`, `inbox.read`), so neither route tells it about the other; the watch reads
+  neither.
+- **The web**: a chat's page shows **In Inbox** with the open items (title, summary, tier pill, time), the done ones folded
+  under **N done**, each opening its item, and a row of its last 7 days that an item holds opens that item
+  (`web/src/views/knowledge/KBInbox.tsx`); an item's page has **Knowledge page** (`web/src/views/inbox/InboxKBChat.tsx`).
+  Both write their links with the route table's builder (`web/src/lib/deep-links.ts`). The iPhone follows in a later
+  change of #15356.
 
 ## Search
 

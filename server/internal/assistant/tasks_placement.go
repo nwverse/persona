@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/agentprompt"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -469,7 +470,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	prompt := t.Prompt
 	if t.HandoffID != "" {
 		if handoffSummary := strings.TrimSpace(s.todoHandoffSummary(ctx, t.HandoffID)); handoffSummary != "" {
-			prompt = handoffSummary + "\n\n" + prompt
+			prompt = agentprompt.WithContext(fit.agent, prompt, handoffSummary)
 		}
 	}
 	if t.usesPreparedWorkspace() && len(t.WorkspaceResolved.Repositories) > 0 {

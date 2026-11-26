@@ -1007,7 +1007,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		ResumeOnly       bool                          `json:"resume_only"`
 		OnlyRunning      bool                          `json:"only_running"` // assistant.compact: refuse not_running rather than start the process
 		IsMain           bool                          `json:"is_main"`
-		MainCompact      int                           `json:"main_compact_window"` // assistant.send, session.send, assistant.warm: with is_main (model_config.go)
+		MainCompact      int                           `json:"main_compact_window"` // assistant.send, session.send, assistant.warm: the main or a leader conversation's (model_config.go)
 		FollowsSetting   bool                          `json:"follows_setting"`
 		Interject        bool                          `json:"interject_background"`
 		Public           bool                          `json:"public"` // a public mention turn: no owner live snapshot on this input

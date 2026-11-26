@@ -844,9 +844,6 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			params["host"] = a.Host
 		}
 		prompt := a.Prompt
-		if !a.SkipProjectMemory {
-			prompt = s.withProjectContext(sctx, am.ID, a.Cwd, self, a.Prompt)
-		}
 		if a.Ultracode {
 			params["ultracode"] = true
 		}
@@ -875,6 +872,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		companion := s.companionStartHost(sctx, am, fit, params)
 		if err := s.applyOmpStartDefaults(sctx, am, own, fit, params); err != nil {
 			return "", err
+		}
+		if !a.SkipProjectMemory {
+			prompt = s.withProjectContextForAgent(sctx, am.ID, a.Cwd, self, fit.agent, prompt)
 		}
 		params["prompt"] = s.withCloseoutBrief(sctx, am.ID, prompt, false)
 		if err := checkStartSpeed(params, fit, ""); err != nil {
