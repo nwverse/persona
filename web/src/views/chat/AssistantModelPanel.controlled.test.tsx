@@ -123,7 +123,7 @@ const codexList: ModelList = {
         id: "gpt-fast",
         name: "GPT Fast",
         efforts: ["low", "high"],
-        service_tiers: [{ id: "default", name: "Standard" }, { id: "priority", name: "Fast" }],
+        service_tiers: [{ id: "default", name: "Standard" }, { id: "priority", name: "Fast" }, { id: "ultrafast", name: "Ultrafast" }],
       },
     ],
   },
@@ -322,7 +322,7 @@ describe("AssistantModelPanel with controlled props", () => {
     expect(onKeepPick).toHaveBeenNthCalledWith(1, session, { launcher: "claude", model: "opus", effort: "high" });
     await expect(props.onPick({ provider: "claude", model: "sonnet", effort: "low" })).resolves.toBe(false);
 
-    // Live fast toggle + effort change on current setup
+    // Live speed change on the current setup
     await expect(props.onApplyCurrent?.({ speed: "fast" })).resolves.toBe(true);
     expect(onSetServiceTier).toHaveBeenCalledWith(session, "priority");
 
@@ -330,7 +330,7 @@ describe("AssistantModelPanel with controlled props", () => {
     expect(onNotice).not.toHaveBeenCalled();
   });
 
-  it("handles draft picks, start-fast pinning, older-hub effort updates, and draft reset via controlled callbacks", async () => {
+  it("handles draft picks, start speed pinning, older-hub effort updates, and draft reset via controlled callbacks", async () => {
     const draftChat = makeChat({ session: undefined, kept: true });
     const draftSetup: AssistantSetup = { provider: "codex", model: "gpt-fast", effort: "low", source: "pick" };
     const onPickDraft = vi.fn();
@@ -359,9 +359,12 @@ describe("AssistantModelPanel with controlled props", () => {
 
     onPickDraft.mockClear();
     onPickServiceTier.mockClear();
-    await expect(mocks.panelProps!.onApplyCurrent?.({ speed: "fast", effort: "high" })).resolves.toBe(true);
+    await expect(mocks.panelProps!.onApplyCurrent?.({ speed: "ultrafast", effort: "high" })).resolves.toBe(true);
     expect(onPickDraft).toHaveBeenCalledWith({ launcher: "codex", model: "gpt-fast", effort: "high" });
-    expect(onPickServiceTier).toHaveBeenCalledWith("priority");
+    expect(onPickServiceTier).toHaveBeenCalledWith("ultrafast");
+
+    await expect(mocks.panelProps!.onApplyCurrent?.({ speed: "standard" })).resolves.toBe(true);
+    expect(onPickServiceTier).toHaveBeenLastCalledWith(undefined);
 
     const backBtn = host.querySelector<HTMLButtonElement>("[data-pick-strip] button")!;
     act(() => backBtn.click());

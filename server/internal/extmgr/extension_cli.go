@@ -519,7 +519,7 @@ type extensionArgs struct {
 	valueOptions []string // options that take a value as the next word or after "="
 	writes       bool     // the command can change hub state
 	writesWhen   func([]string) bool
-	exclusive    bool     // at most one of the options
+	exclusive    bool // at most one of the options
 	// repeatable: options (ending in "=") that may be given several times and do not count for exclusive.
 	repeatable []string
 	usage      string // printed with a mistake; extensionUsage when empty

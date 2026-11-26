@@ -3,10 +3,13 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
 
@@ -129,20 +132,25 @@ func (n *Node) setSessionSpeed(ctx context.Context, id, tier string) error {
 	return nil
 }
 
-// setCodexTerminalSpeed uses the same checked input and rollout acknowledgment as terminal model changes.
+// setCodexTerminalSpeed uses the same rollout acknowledgment as terminal model changes, with the input lock held by
+// setSessionSpeed through confirmation.
 func (n *Node) setCodexTerminalSpeed(ctx context.Context, id, tier string) error {
 	t, why, live := n.codexOnTerminalCtx(ctx, id, true)
 	if !live {
-		return fmt.Errorf("this session does not support Codex speed changes")
+		return speedUnsupported()
 	}
 	if why != nil {
-		return why
+		var rejected *rpc.Error
+		if errors.As(why, &rejected) && rejected.Code == proto.CodeModesCodexNoRollout {
+			return why
+		}
+		return speedUnsupported()
 	}
 	n.forgetMeta(t.rollout)
 	now := n.codexTerminalSettingsOf(id, t, n.metaOf(id))
 	model, _ := codexModelEffortsIn(t.home, now.model)
-	if !proto.ValidModelID(tier) || len(model.tiers) == 0 || tier != "default" && !slices.ContainsFunc(model.tiers, func(t proto.ServiceTier) bool { return t.ID == tier }) {
-		return fmt.Errorf("this model does not advertise the requested Codex speed")
+	if !slices.ContainsFunc(codexSpeedChoices(model.tiers), func(choice proto.ServiceTier) bool { return choice.ID == tier }) {
+		return speedUnsupported()
 	}
 	native := tier
 	switch tier {
@@ -152,5 +160,14 @@ func (n *Node) setCodexTerminalSpeed(ctx context.Context, id, tier string) error
 		native = "fast"
 	}
 	_, err := n.applyCodexTerminalSettings(ctx, id, t, "/model --speed="+native, codexTerminalSettings{tier: tier})
+	var outcome *rpc.Error
+	if errors.As(err, &outcome) {
+		switch outcome.Code {
+		case proto.CodeModesCodexRefused:
+			return refusal("session_speed_refused", outcome.Message, nil)
+		case proto.CodeModesCodexUnconfirmed:
+			return terminalSpeedUnconfirmed()
+		}
+	}
 	return err
 }

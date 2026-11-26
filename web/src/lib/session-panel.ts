@@ -9,7 +9,7 @@
 // engine needs a new conversation, and an agent that can't change its model while it runs (a Codex thread) keeps its
 // effort and speed only. Loaded with the panel, not with the composer.
 import { t } from "../i18n";
-import { sessionCan, stateOf } from "./format";
+import { activityOf, sessionCan } from "./format";
 import { agentId, agentName, providerAgent } from "./agent-kind";
 import { ALL_EFFORTS, defaultModel, effortVariantBase, launcherAgent, modelName, typedModelOffered, type AgentModel, type LauncherModels } from "./launcher-models";
 import { launcherBlock } from "./launcher-health";
@@ -41,7 +41,7 @@ function panelModel(m: AgentModel, engine: string, current: boolean, s: Session,
   if (m.default_effort && (!current || s.effort || effortVariantBase(m.id, m.default_effort))) out.defaultEffort = m.default_effort;
   if (m.custom) out.custom = true;
   if (m.price) out.price = m.price;
-  if (current && stateOf(s) !== "offline" && sessionCan(s, "send")) {
+  if (current && activityOf(s) !== "offline" && sessionCan(s, "send")) {
     const speeds = speedOptions(s);
     if (speeds.length) out.speeds = engine === "claude" ? speeds.map((choice) => choice.id === "fast" ? { ...choice, description: t("ui-modelpanel.claude_fast") } : choice) : speeds;
   }
@@ -215,7 +215,7 @@ function switchPlan(s: Session, config: PanelConfig, list: LauncherModels | null
 
 /** Speed always travels alone. An unsupported saved tier cannot turn into a different speed request. */
 export function speedStep(s: Session, speed: string | undefined, always = false): { service_tier: string } | undefined {
-  if (!speed || stateOf(s) === "offline" || !sessionCan(s, "send")) return undefined;
+  if (!speed || activityOf(s) === "offline" || !sessionCan(s, "send")) return undefined;
   const tier = speedTier(s, speed);
   if (!tier || (!always && speedId(s.service_tier ?? "") === speed)) return undefined;
   return { service_tier: tier };

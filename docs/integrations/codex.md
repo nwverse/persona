@@ -433,7 +433,7 @@ The entry point is the same as Claude's (machine, directory, launcher); subseque
   On Unix, the native `codex` command honors a same-name shell function, including its environment and flags (#4876).
   With an available Bash/Zsh, the function or executable can be supplied by its rc file; it need not exist on the outer process's PATH.
 - **First message arrives unchanged**: Codex creates a thread only after receiving its first message. A start that includes it answers with that thread (below); one without it answers with a waiting row
-  ("Starting without a first message"). Background startup (`async`) is still refused with `codex_needs_prompt`: older Apps get that and retry with the message. Older nodes refuse a start without a message the same way,
+  ("Starting without a first message"). Current nodes handle `async:true` synchronously for terminal Codex: they wait for the first thread and return its real ID. An older node may refuse the async request with `codex_needs_prompt`; an older App retries with the message. Older nodes refuse a start without a message the same way,
   so Apps make the message optional only for launchers marked `prompt_optional`. Launcher words and message are written together to a private temporary file under the node directory (0600). The pane receives only
   `personad codex-start <file>`: it claims the file (renames it away, so a node that gave up on the start and withdrew the file the same way leaves it nothing, and the other way round), reads and deletes it, then runs the launcher words (preceding `VAR=…` enters the environment), adding `--` and the message only when one is supplied.
   On Unix, native `codex` runs through the user's interactive shell to preserve a same-name function. The shell executes only `"$@"`: launcher words and the message are positional arguments, never interpolated as shell code.
@@ -463,6 +463,7 @@ The entry point is the same as Claude's (machine, directory, launcher); subseque
 - **No match**: the node waits at most 60 seconds (hub 100 seconds, App 110 seconds), then reports "Codex has opened in a new tab on the computer, but its session was not identified within 60 seconds…",
   followed by the last screen lines of that tab (falling back to the visible screen when the bottom rows are blank). If the launcher cannot run (command not found), fail as soon as a `personad codex-start:` line appears, without waiting the full timeout. codex-start's notes that it goes on after (the agent sandbox not wrapping the start) say `personad codex-start (note):` instead, so the Codex after them is not taken for a failure.
   If the terminal still reports Codex running, the error carries `agent_start_stalled`: the hub neither counts it as a broken launcher nor retries or reroutes the task automatically.
+  **Not signed in**: Codex shows its sign-in screen in place of its input box when it has no login on that computer, and no wait gets past it. A start that sees that screen (with or without a first message) fails at the next look, presses no key on it, and answers `codex_not_logged_in` with the screen's last lines (`codexSignInScreen`, `codexNotLoggedIn`). The screen is known by a "Sign in with …" choice under the cursor ("Sign in with ChatGPT", "Sign in with Device Code"), not by its numbers or the other choices ("Provide your own API key" in older versions, "Sign in another way" in newer ones), and never while the input box is drawn. The hub words it in the user's language, naming the computer and the fix (run `codex login` in a terminal there), and launcher health records it as `auth` from its code, never as a stalled start (`docs/server/launcher-health.md`). The new tab is closed as below; if closing fails, the error keeps `codex_not_logged_in` and adds the cleanup's words.
   Only after this wait returns a failure (including cancellation), the node closes the new pane to stop a Codex still waiting on a screen from later executing its queued prompt without a linked task.
   If that pane explicitly identifies a fresh thread, or its unique Codex writer holds the fresh rollout, cleanup also asks Codex to archive that thread natively after the pane closes (#11145). This removes an already-published orphan from the Agent list while retaining its transcript. A directory, title or matching first line never authorizes archive; adopted panes remain untouched. Native archive failure is retained with the failed-pane cleanup for retry.
   This uses the terminal's existing close operation instead of keeping a background start waiting indefinitely for a thread. The last screen lines remain in the error.
@@ -699,6 +700,8 @@ Two things Claude Code sessions have are missing here. Persona installs no Codex
 In Agents you can see live state, send messages, open the terminal, and close sessions. Existing sessions keep their stored agent identifier.
 The node integration (`server/internal/node/traex.go`) shares rollout parsing with Codex in `transcript/codex.go`.
 
+- **Model selection**: New Agent lists the models with selectable configuration names from the computer's `traex models --json`.
+  An explicit choice is passed as `--model` on a fresh start; Default leaves the CLI's own model preference in effect.
 - **herdr does not recognize it**: TRAE CLI panes are ordinary herdr panes (`agent_status: unknown`, absent from `agent list`); herdr has no custom-Agent configuration either.
   The node finds them itself: `~/.trae/cli/thread-writer-locks/<session id>.owner.json` records the pid writing the session. That pid's environment contains herdr's
   `HERDR_PANE_ID` (Linux reads `/proc/<pid>/environ`, macOS uses `ps -E`), giving an exact pane → pid → session mapping without directory guessing. Pane information comes from
@@ -810,13 +813,12 @@ An app-server thread uses `thread/settings/update` with the advertised native ID
 the common Fast ID is `priority`. `thread/resume` and `thread/settings/updated` report the acknowledged speed.
 Native null means Standard. Missing speed stays unknown because `thread/read` does not report it.
 
-A live terminal-route Codex whose rollout identifies CLI 0.169 or later uses the current model's tiers in that
-Codex home's `models_cache.json`. The node checks the terminal for a draft or dialog, then types one
-`/model --speed=<tier>` command. The terminal takes `standard` for Standard and `fast` for Fast, with the other tier
-IDs passed through. No model or effort argument is sent. The row reads the recorded speed from the rollout, including
-`thread_settings_applied` before the next turn. A timeout reports an uncertain change and leaves the terminal alone.
-A resume on a different binary may retain the version written when the rollout started. Panes without a verified
-rollout or cached tiers, screenless hosts and subagents do not offer this control.
+A live terminal-route Codex 0.169 or later uses the current model's tiers in its Codex home catalog. Startup settings
+and the running-version check follow "On the terminal route". The node checks the terminal for a draft or dialog,
+then types `/model --speed=<tier>`. The terminal takes `standard` for Standard and `fast` for Fast, with other tier IDs
+passed through. The command changes speed independently of model and effort. A new `thread_settings_applied` event
+confirms the selection before the next turn. A timeout reports an uncertain change. Panes without a verified rollout
+or advertised tiers, screenless hosts and subagents do not offer this control.
 
 The iOS main Assistant conversation reads the same session fields in its existing composer menu. A Speed section appears
 only when the session advertises `default` or `priority`; it uses localized Standard / Fast labels, explains Fast's extra

@@ -277,10 +277,7 @@ function AssistantModelPanelView({
   const switchingMode = Boolean(canSwitch && chat.kept && chat.session);
   const startingMode = !chat.session && startServiceTier;
   const { providers, state } = useMemo(
-    () => assistantPanel(setup, info, listOf, {
-      typed, engine, running, switching: switchingMode, supervision: supervisionRequired,
-      starting: startingMode, speeds: speedOptions({ service_tiers: tiers }),
-    }),
+    () => assistantPanel(setup, info, listOf, { typed, engine, running, switching: switchingMode, supervision: supervisionRequired, starting: startingMode, speeds: speedOptions({ service_tiers: tiers }) }),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `catalogVersion` stands for what was read from the default cache
     [setup.provider, setup.model, setup.effort, setup.speed, info, listOf, typed, engine, running, tiers, switchingMode, startingMode, supervisionRequired, catalogVersion],
   );
@@ -301,7 +298,7 @@ function AssistantModelPanelView({
     pickModel(key, pick.model);
     if (!chat.session) pickEffort(key, pick.effort);
   };
-  const setDraftTier = onPickServiceTier ?? pickServiceTier;
+  const setDraftServiceTier = onPickServiceTier ?? pickServiceTier;
   const apply = async (pick: ModelPick): Promise<boolean> => {
     const s = latest();
     const provider = providers.find((p) => p.id === pick.launcher);
@@ -330,7 +327,7 @@ function AssistantModelPanelView({
     }
     if (!chat.session) {
       const row = list?.models.find((m) => m.id === config.model);
-      setDraftTier(startServiceTier ? startSpeedTier(row, config.speed) : undefined);
+      setDraftServiceTier(startServiceTier ? startSpeedTier(row, config.speed) : undefined);
     }
     return true;
   };
@@ -352,7 +349,7 @@ function AssistantModelPanelView({
           keepHere(pick);
           effortApplied = patch.effort !== undefined;
         }
-        setDraftTier(tier);
+        setDraftServiceTier(tier);
       } else {
         const speed = speedStep(s, patch.speed, true);
         if (!(speed && "service_tier" in speed)) return false;
@@ -378,7 +375,7 @@ function AssistantModelPanelView({
     else {
       pickLauncher(key, undefined);
       pickEffort(key, undefined);
-      setDraftTier(undefined);
+      setDraftServiceTier(undefined);
     }
   };
   const onReload = controlledReload ?? ((provider: string) => {

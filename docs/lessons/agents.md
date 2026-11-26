@@ -818,6 +818,15 @@ other engines' panes (Orca) keep their original error.
   Both `enableArtifact: false` in `--settings` and environment `CLAUDE_CODE_DISABLE_ARTIFACT=1` worked in tests (interactive claude in tmux, three configs compared);
   Persona-managed launchers now carry both (`docs/integrations/launchers.md` ("Running Persona-managed launchers")).
 
+## A launchd node has no `$SHELL`, and macOS's `/etc/passwd` has no users (2026-11-26, #16217)
+
+The model list failed on a Mac with `claude did not provide a model list: unexpected EOF (zsh:1: command not found: claude)` while sessions started fine.
+- A launchd agent's environment has no `SHELL` and `PATH=/usr/bin:/bin:/usr/sbin:/sbin`. The `/etc/passwd` fallback that works under systemd finds nothing on macOS, which keeps accounts in Directory Services: the node guessed zsh for a bash user.
+- Even bash would not have helped: `bash -ic` reads `~/.bashrc`, but Terminal opens login shells, so Mac setups (nvm's installer, `brew shellenv`) live in `~/.bash_profile` / `~/.zprofile`. The session worked only because herdr's tab is a login shell.
+- On macOS read the shell with `dscl . -read /Users/<user> UserShell` (the node builds with `CGO_ENABLED=0`, so no `getpwuid`; `os/user` has no shell field) and run it as `-lic`; a bash with no `~/.bash_profile`, `~/.bash_login` or `~/.profile` stays `-ic`, since a login bash would read none of the user's files.
+- `zsh -l` runs `/etc/zprofile`'s `path_helper`, which moves the system directories ahead of the inherited PATH: a test that checks an exact PATH through the login shell expects `path_helper -s`'s order. Check with the node's own environment, not your terminal's: `env -i HOME=$HOME PATH=/usr/bin:/bin:/usr/sbin:/sbin bash -lic 'command -v claude'`.
+- A test that the node "runs the user's shell" must unset `SHELL`; a developer's terminal always has it, which hid this. The other way round, the node package's `TestMain` pins `SHELL` to zsh on macOS (`pinTestLoginShell`), so a developer whose login shell is bash runs the `~/.zshrc` fixtures in zsh.
+
 ## "the tab's shell had not run it yet (is the machine busy?)" when the launcher isn't there at all (#1642)
 
 The same 3-minute error came from a start whose launcher the tab's shell simply did not have: herdr's panes ran inside a container whose `~/.bashrc` detected the container and returned early,
@@ -1428,8 +1437,10 @@ workspace sharing the probe prefix while it still exists.
 ## AGY ACP can ignore the configured initial model (#3817)
 
 Native settings and `session/new` can disagree even when the configured model is valid. Resolve native display names or
-IDs against the catalog and apply the configured default explicitly to new sessions and availability checks. Preserve
-explicit caller choices and the native state of resumed conversations. Announce a model only after ACP accepts it.
+IDs against the catalog and apply the configured default explicitly to new sessions and availability checks. ACP can
+also discard the selected model when a process restarts (#15537). Before the first prompt on the new connection, apply
+the configured default to an idle conversation unless the caller chose a model or the connection already applied one.
+Leave history reads passive and announce a model only after ACP accepts it.
 
 ## A long-running agy acp keeps the account it saw (#10368)
 

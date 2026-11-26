@@ -610,12 +610,29 @@ input clears the previous reply preview, including input with no visible text. T
 until the assistant writes response text. This keeps user-authored questions out of awaiting-reply detection while
 preserving genuine assistant questions. User messages and tool records remain available in the conversation items.
 
+A row may report a long `title` or `last_text` (a whole opening prompt, a whole reply): the node lists the row with the
+title cut to 256 characters and `last_text` to 200, as it cuts its own rows, after reading the question a long reply
+ends with into `asks` (#16343). The conversation items keep the whole text.
+
 agy leaves print-mode (`agy -p`) conversations untitled. Before falling back to the folder name, the session title uses
 the first non-empty line of the cached metadata `summary.Preview`, with agy's request wrapper and Persona's context
 removed, cut to 60 characters (#14629). Several one-shot runs in one folder then show their own prompts. Such a title
 carries `title_source: "prompt"`, so the node keeps that provenance for the agy pane and Persona's naming may replace it.
 A preview whose first line is Persona's context (`Content of persona-context:…`, `<persona-context …>`) gives no title:
 agy keeps only that line, so the block cannot be removed whole.
+
+Antigravity CLI sessions show background work in Agents for both herdr panes and the ACP companion (#13594). Each
+running command, scheduled task, workflow or subagent counts once. Scheduled tasks use the Monitor row, including
+the cron description when available. Persona's `/loop` control applies to Claude Code's scheduler.
+
+The readers match a task's ID across the native start, finish, cancellation and kill records. A tool result that
+changes from running to done or error also ends its task. Up to 20 outcomes from the last day stay in Completed.
+Running background tasks keep their loaded ACP worker alive through the idle timeout.
+When a pane stops or the ACP session is no longer loaded, its running tasks disappear. Losing the session does
+not record an outcome. A joined live pane uses the companion's inventory after the native rewind cut. When ACP
+does not have that session loaded, its companion row carries projected running tasks in `agy_pane_background`
+for the live pane only. Without a companion row, the pane reads its local export. The node links a task log when
+the local export names the corresponding file in that conversation's task directory.
 
 A session is listed `unknown` when the evidence cannot say working, idle or done (`transcriptState` in
 `integrations/antigravity/lib/map.js`). It is never guessed as idle: an idle native summary closes a turn only when its
@@ -738,8 +755,10 @@ catalog on `models({launcher})` and refreshes on demand once the five-minute TTL
 `models({launcher, refresh: true})` (`caps.models`, `launchers.models`; #15253).
 Discovery never sends a prompt. The native settings file determines the advertised
 default. New sessions and availability checks explicitly apply that model through ACP, since ACP may ignore the
-settings file when choosing its initial model. An explicit caller model takes precedence, and resumed sessions retain
-their native selection. An unavailable catalog returns the native error instead of advertising a built-in model list.
+settings file when choosing its initial model. An idle conversation resumed on a fresh ACP connection also applies
+the configured model before its first prompt. An explicit caller model takes precedence, and an acknowledged model
+choice stays in effect on that connection. Reading history does not change the model or resume the session. An
+unavailable catalog returns the native error instead of advertising a built-in model list.
 A CLI whose stored sign-in expired long ago does not fail `agy models`: it hangs. The companion kills it after 25 seconds
 and reports that the sign-in may have expired and that running `agy` once on the computer signs in again; each
 discovery in a row that times out doubles the backoff for unforced lookups (from five minutes up to an hour), while an
@@ -838,7 +857,9 @@ end, and following user-input count are checked against `GetCascadeTrajectory`. 
 identifies its loopback native service. `RevertToCascadeStep` receives `conversationOnly: true` and the preceding step
 index, including `-1` for an empty conversation. Native refusal propagates to the caller. The bridge uses the current
 native summary and replacement step indices to discard the abandoned export tail, then publishes a changed history
-token. This survives companion restarts without modifying native transcript files.
+token. This survives companion restarts without modifying native transcript files. When the export instead numbers
+later steps after the abandoned tail, they show behind the kept steps once `GetCascadeTrajectory` confirms them, and a
+later rewind cuts at the matching visible step (#14297).
 A reused lower index is not proof of a rewind: when the export goes past the replaced steps before the replacement run
 reaches their last index, another process wrote the same conversation. The bridge then keeps both runs, ordered by
 step index (old steps first), and changes the content revision (#14626). If the replacement run later exports an index

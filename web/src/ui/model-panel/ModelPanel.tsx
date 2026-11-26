@@ -45,7 +45,7 @@ export interface ModelPanelProps {
   /** Applies a whole setup (a row, a favorite, a recent entry); true when it was applied: the panel then records it in
    *  Recent and closes. false: the caller has said why; the panel stays open with the old setup. */
   onPick: (config: PanelConfig) => Promise<boolean>;
-  /** A flyout edit (effort, Fast) on the model that runs now: applied at once, the flyout stays open. */
+  /** A live effort or speed edit on the current model keeps the panel open. */
   onApplyCurrent?: (patch: PanelOverride) => Promise<boolean>;
   /** Refreshes a provider's catalog (also used for Retry). */
   onReload?: (provider: string) => void;

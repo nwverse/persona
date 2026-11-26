@@ -141,9 +141,10 @@ func TestTerminalSpeedConfirmation(t *testing.T) {
 		t.Fatal("old setting or turn context confirmed a new command")
 	}
 	refused := "■ Speed 'ultrafast' is unavailable for example. Available: standard, priority."
-	if terminalSpeedRefusal(refused, refused, "/model --speed=ultrafast") != "" ||
-		terminalSpeedRefusal(refused, refused+"\n"+refused, "/model --speed=ultrafast") == "" ||
-		terminalSpeedRefusal("", "⎿ Fast mode requires usage credits", "/fast on") == "" {
+	target := codexTerminalSettings{tier: "ultrafast"}
+	if codexTerminalOutcome(refused, refused, target) != nil ||
+		codexTerminalOutcome(refused, refused+"\n"+refused, target) == nil ||
+		claudeTerminalSpeedRefusal("", "⎿ Fast mode requires usage credits") == "" {
 		t.Fatal("did not distinguish current runtime refusals from old screen text")
 	}
 }

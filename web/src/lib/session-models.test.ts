@@ -406,13 +406,17 @@ describe("reading the lists", () => {
   });
 
   it("reads at most three lists at a time, the session's own ahead of the queue", async () => {
-    for (const name of ["a", "b", "c", "d"]) void readModels("m-queue", name);
-    void readModels("m-queue", "own", { first: true });
+    const [a, b, c, d] = ["a", "b", "c", "d"].map((name) => readModels("m-queue", name));
+    const own = readModels("m-queue", "own", { first: true });
     await flush();
     expect(waiting.map((w) => w.url.split("/launchers/")[1])).toEqual(["a/models", "b/models", "c/models"]);
     await answer("/launchers/a/", json(claudeList));
+    await a;
     expect(waiting.map((w) => w.url.split("/launchers/")[1])).toEqual(["b/models", "c/models", "own/models"]);
-    for (const name of ["b", "c", "own", "d"]) await answer(`/launchers/${name}/`, json(claudeList));
+    for (const [name, read] of [["b", b], ["c", c], ["own", own], ["d", d]] as const) {
+      await answer(`/launchers/${name}/`, json(claudeList));
+      await read;
+    }
     expect(waiting).toEqual([]);
   });
 
@@ -459,4 +463,3 @@ describe("the running model while its list is not in", () => {
     expect(sessionPanel(session(), launchers, lists({})).providers.find((p) => p.id === "claude")!.models).toBeNull();
   });
 });
-

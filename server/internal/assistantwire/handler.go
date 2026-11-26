@@ -114,14 +114,20 @@ type SessionRef struct {
 	SessionID string `json:"session_id"`
 }
 
-// UserSpokeParams carries text only when the hub authenticated a person's own app.
+// UserSpokeParams carries text only when the hub authenticated a person's own app, for both
+// Agent conversations and the assistant's own supervisor / direction conversations. The event
+// reaches the manager before the message is persisted, so a direction's decision cards rely on
+// this text rather than a transcript read.
 // Keep it out of SessionRef: session references are also used as map keys.
 type UserSpokeParams struct {
 	SessionRef
 	Text string `json:"text,omitempty"`
 	// Source is set only with Text from authenticated owner input to an Agent: "app" for the app's message route,
 	// "terminal" for the terminal Agent-message route. It is never a runtime transcript role.
-	Source      string              `json:"source,omitempty"`
+	Source string `json:"source,omitempty"`
+	// ClientMsgID is the send's client_msg_id, sent with Text when the message has one: the same id its
+	// session.assistant_sent (ConversationSent) names, so the manager can wait for the send's outcome before an
+	// irreversible step (#13041). An older hub sends none; an older manager ignores it.
 	ClientMsgID wireids.ClientMsgID `json:"client_msg_id,omitempty"`
 	At          time.Time           `json:"at,omitempty"`
 }
