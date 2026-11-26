@@ -812,10 +812,13 @@ Something the owner raises in the main conversation and wants an answer to is a 
 
 **Personal verification** (#10047): `task_review` with `verdict: "accepted"` and `user_check: true` records the
 supervisor's review but leaves `done_at` unset, with `supervision.state: "user_check"` (**Awaiting your
-verification**). The task remains open and counted as Waiting on you, even if its delivery is already live or its
-reply has been read. In Web **Needs you**, personal verification appears in the main conversation's own group
-and in the supervising conversation's tray. While the ask is unavailable, the row opens the task. Pass appears
-once the hub supplies the answerable round. Lark also shows the card when task reports and notification settings allow it.
+verification**). The task remains open; #15680 (#15638) counts it in the calm **To verify** layer
+(`counts.user_check`) instead of red Needs you, even if its delivery is already live or its reply has been read. On
+Web it has its own **To verify** capsule in the Assistant bar and a calm `user_check` mark in a direction's counts,
+in the main conversation's own group and in the supervising conversation's tray. The row offers one-click Pass when
+its ask is absent and the round-bound Pass once the hub supplies it; an older hub that still sends the Needs you view
+with reason `verify` is honored as Needs you during rolling upgrade. Lark also shows the card when task reports and
+notification settings allow it.
 Completed-task retirement does not select this Agent, and personal verification also protects it from the
 ordinary stalled-task idle limit. This does not change the closure policy for tasks that really have completed.
 

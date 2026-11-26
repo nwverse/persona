@@ -230,11 +230,14 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
     const decision = taskAwaitsDecision(todo);
     const deliveryApproval = heldDelivery(todo)?.unblock === "user";
     const userCheck = !todo.done_at && reviewState(todo) === "user_check";
-    // The global badge skips quiet tasks. Explicit decisions can still ask the owner in the conversation tray; a plain
-    // user_check is optional verification and belongs in the calm To verify tray instead.
+    // The global badge skips quiet tasks. Explicit reviews can still ask the owner in the conversation tray. A quiet
+    // user_check the hub itself still lists as needs_you (reason verify) is un-quieted here so that authoritative view
+    // is honored — this also covers an older hub during rolling upgrade. With #15680's projection the hub instead sends
+    // a non-needs_you view for user_check, so `hub` is false below and it falls through to the calm To verify layer.
     const supervisesHere = todo.supervision?.supervisor === conversation;
     const quietOwnerAskHere = todo.quiet && (isMain || supervisesHere) &&
-      Boolean(taskReviewDecisionAsk(todo) && !input.deferred?.[decisionLaterKey(todo)]);
+      (reviewState(todo) === "user_check" ||
+        Boolean(taskReviewDecisionAsk(todo) && !input.deferred?.[decisionLaterKey(todo)]));
     // The hub's view decides when there is one, so this tray, the To-dos badge and the hub's needs_you agree.
     const hub = hubNeedsYou(quietOwnerAskHere ? { ...todo, quiet: false } : todo, openOf);
     if (asks.length) asking.push({ kind: "task", key, todo, status, asks, countsOpen });

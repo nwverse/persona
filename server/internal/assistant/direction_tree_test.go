@@ -948,10 +948,13 @@ func TestDirectionTreeSupervisorHeldDirectAndFoldedSubagentCards(t *testing.T) {
 	if alphaTasks[failedStartID].State != treeWorking {
 		t.Errorf("supervised failed start state = %q, want %q", alphaTasks[failedStartID].State, treeWorking)
 	}
-	// An open personal verification is the owner's to pass: the projection lists it under Needs you (reason verify,
-	// #16002), and the tree follows the projection.
-	if alphaTasks[userCheckID].State != treeNeedsYou {
-		t.Errorf("user_check task state = %q, want %q", alphaTasks[userCheckID].State, treeNeedsYou)
+	// An open personal verification is the optional "to verify" layer (#15638/#15680): calm review and
+	// counts.user_check, kept out of red Needs you on every surface, including the authoritative projection.
+	if alphaTasks[userCheckID].State != treeReview {
+		t.Errorf("user_check task state = %q, want %q", alphaTasks[userCheckID].State, treeReview)
+	}
+	if dirAlpha.Counts.UserCheck != 1 {
+		t.Errorf("dir-alpha counts = %+v, want UserCheck=1 for the personal verification", dirAlpha.Counts)
 	}
 	if alphaTasks[genuineDecideID].State != treeNeedsYou {
 		t.Errorf("owner decision task state = %q, want %q", alphaTasks[genuineDecideID].State, treeNeedsYou)
@@ -959,8 +962,8 @@ func TestDirectionTreeSupervisorHeldDirectAndFoldedSubagentCards(t *testing.T) {
 	if !dirAlpha.Running {
 		t.Errorf("dir-alpha Running = false, want true while supervisor handles held agent cards")
 	}
-	if dirAlpha.Counts.NeedsYou != 2 {
-		t.Fatalf("dir-alpha counts = %+v, want NeedsYou=2 (the owner decision and the personal verification)", dirAlpha.Counts)
+	if dirAlpha.Counts.NeedsYou != 1 {
+		t.Fatalf("dir-alpha counts = %+v, want NeedsYou=1 (the owner decision; the personal verification is calm user_check)", dirAlpha.Counts)
 	}
 	if got := dirAlpha.Counts.Working + dirAlpha.Counts.NeedsYou + dirAlpha.Counts.Stuck + dirAlpha.Counts.Review + dirAlpha.Counts.Planned; got != len(dirAlpha.Tasks) {
 		t.Fatalf("dir-alpha 5-state sum = %d, len(tasks) = %d", got, len(dirAlpha.Tasks))
@@ -978,11 +981,11 @@ func TestDirectionTreeSupervisorHeldDirectAndFoldedSubagentCards(t *testing.T) {
 	for _, d := range tr.Directions {
 		treeNeeds += d.Counts.NeedsYou
 	}
-	if treeNeeds != projCounts.NeedsYou || treeNeeds != 3 {
-		t.Fatalf("before escalation: treeNeeds=%d projCounts.NeedsYou=%d, want both 3", treeNeeds, projCounts.NeedsYou)
+	if treeNeeds != projCounts.NeedsYou || treeNeeds != 2 {
+		t.Fatalf("before escalation: treeNeeds=%d projCounts.NeedsYou=%d, want both 2", treeNeeds, projCounts.NeedsYou)
 	}
 
-	// Escalate the folded sub-agent's card to the user: counts must move to 3 in dir-alpha and 4 overall.
+	// Escalate the folded sub-agent's card to the user: counts must move to 2 in dir-alpha and 3 overall.
 	e.s.fleet.mu.Lock()
 	e.s.fleet.interactions["ix-alpha-sub-ro"].ix.Delegating = false
 	e.s.fleet.mu.Unlock()
@@ -993,16 +996,16 @@ func TestDirectionTreeSupervisorHeldDirectAndFoldedSubagentCards(t *testing.T) {
 	if alphaAfter[foldedHeldID].State != treeNeedsYou || alphaAfter[foldedHeldID].Agents[0].State != proto.StateNeedsYou {
 		t.Fatalf("after escalation: folded task=%+v, want task/agent needs_you", alphaAfter[foldedHeldID])
 	}
-	if dirAlphaAfter.Counts.NeedsYou != 3 {
-		t.Fatalf("after escalation: dir-alpha counts=%+v, want NeedsYou=3", dirAlphaAfter.Counts)
+	if dirAlphaAfter.Counts.NeedsYou != 2 {
+		t.Fatalf("after escalation: dir-alpha counts=%+v, want NeedsYou=2", dirAlphaAfter.Counts)
 	}
 	projAfter := e.s.todoProjectionOf(ctx, e.s.treeTodos(), now).counts()
 	treeNeedsAfter := 0
 	for _, d := range trAfter.Directions {
 		treeNeedsAfter += d.Counts.NeedsYou
 	}
-	if treeNeedsAfter != projAfter.NeedsYou || treeNeedsAfter != 4 {
-		t.Fatalf("after escalation: treeNeeds=%d projCounts.NeedsYou=%d, want both 4", treeNeedsAfter, projAfter.NeedsYou)
+	if treeNeedsAfter != projAfter.NeedsYou || treeNeedsAfter != 3 {
+		t.Fatalf("after escalation: treeNeeds=%d projCounts.NeedsYou=%d, want both 3", treeNeedsAfter, projAfter.NeedsYou)
 	}
 }
 

@@ -965,7 +965,7 @@ function isDecision(todo: Todo): boolean {
 
 /** What a Needs you row says folded (#5569): its mark, the title and, under it, what it waits for, with the kind at the
  *  end. None for the rows that are one line already (an Agent with no question, a task that only waits, a failed start). */
-function foldedRow(item: NeedsYouItem): { title: string; line?: string; kicker: string } | undefined {
+function foldedRow(item: NeedsYouItem, calmVerify = false): { title: string; line?: string; kicker: string } | undefined {
   if (item.kind === "plan") {
     const first = item.plan.tasks[0]?.title ?? t("assistant-tasks.plan_single");
     return { title: item.plan.tasks.length > 1 ? t("assistant-tasks.needs_more", { title: first, count: item.plan.tasks.length - 1 }) : first, kicker: t("assistant-tasks.plan_waiting") };
@@ -973,7 +973,9 @@ function foldedRow(item: NeedsYouItem): { title: string; line?: string; kicker: 
   if (item.kind === "message") return { title: [field(item.item, "sender"), field(item.item, "chat")].filter(Boolean).join(" · ") || t("assistant-tasks.task_fallback"), line: field(item.item, "text"), kicker: stateName("needs_you") };
   if (item.kind === "agent") return item.asks.length ? { title: sessionTitle(item.session), line: cardLine(item.asks[0]), kicker: interactionKicker(item.asks[0]) } : undefined;
   if (item.asks.length) return { title: item.todo.title, line: cardLine(item.asks[0]), kicker: interactionKicker(item.asks[0]) };
-  if (reviewState(item.todo) === "user_check" && !personalVerificationAsk(item.todo)) return undefined;
+  // In the urgent Needs-you tray a verification whose Pass round has not arrived is already one line (the body's
+  // open-task button), so it has no folded form. The calm To verify tray keeps its folded note + one-click Pass.
+  if (!calmVerify && reviewState(item.todo) === "user_check" && !personalVerificationAsk(item.todo)) return undefined;
   const ask = openAsk(item.todo);
   // a decision held for the briefing says so folded too (#5803): why it did not ring
   if (isDecision(item.todo)) return { title: item.todo.title, line: ask?.verdict, kicker: ask?.for_briefing === true ? t("todos.ask_held") : stateName("needs_you") };
@@ -1015,11 +1017,11 @@ function NeedsYouRow({ item, open, onToggle, verify = false }: { item: NeedsYouI
     const stop = window.setTimeout(() => growing.disconnect(), 1000);
     return () => { window.clearTimeout(stop); growing.disconnect(); };
   }, [open]);
-  const folded = foldedRow(item);
+  const folded = foldedRow(item, verify);
   // Whether the To-dos page counts this to-do as open (#3331): no attribute on rows that are no to-do. The chip badge
   // is summed from this same flag, so the trays and the header tell one number.
   const countsOpenAttr = item.kind === "task" ? { "data-counts-open": item.countsOpen ? "true" : "false" } : {};
-  if (!folded) return <NeedsYouBody item={item} />;
+  if (!folded) return <NeedsYouBody item={item} calmVerify={verify} />;
   const openTitle = item.kind === "agent" ? () => openAgent(item.session.machine_id, item.session.session_id)
     : item.kind === "task" ? () => {
       const ask = item.asks[0];
@@ -1061,7 +1063,7 @@ function NeedsYouRow({ item, open, onToggle, verify = false }: { item: NeedsYouI
   return (
     <div ref={ref} data-needs-row={item.key} data-needs-open {...countsOpenAttr} className="flex scroll-m-2 flex-col gap-1">
       {head}
-      <NeedsYouBody item={item} nested />
+      <NeedsYouBody item={item} nested calmVerify={verify} />
     </div>
   );
 }
@@ -1108,8 +1110,10 @@ function VerifyPassRow({ todo, rowKey, countsOpenAttr }: { todo: Todo; rowKey?: 
   );
 }
 
-/** The whole card of a Needs you row, or the one line it is. `nested`: inside its opened row, which carries the row's key. */
-export function NeedsYouBody({ item, nested = false }: { item: NeedsYouItem; nested?: boolean }) {
+/** The whole card of a Needs you row, or the one line it is. `nested`: inside its opened row, which carries the row's key.
+ *  `calmVerify`: rendered from the calm To verify tray (#15680), so a verification with no Pass round yet offers the
+ *  one-click Pass fallback instead of the urgent Needs-you tray's open-task line (#16002). */
+export function NeedsYouBody({ item, nested = false, calmVerify = false }: { item: NeedsYouItem; nested?: boolean; calmVerify?: boolean }) {
   const rowKey = nested ? undefined : item.key;
   if (item.kind === "plan") return <div><PlanCard plan={item.plan} /><OpenEntry title={t("assistant-tasks.needs_group_another")} onOpen={() => navigate(conversationPage(item.plan.conversation, undefined, item.plan.manager))} /></div>;
   if (item.kind === "message") return <MessageCard item={item.item} />;
@@ -1124,8 +1128,15 @@ export function NeedsYouBody({ item, nested = false }: { item: NeedsYouItem; nes
   const taskOpenAttr = !nested ? { "data-counts-open": item.countsOpen ? "true" : "false" } : {};
   if (asks.length) return <div data-needs-row={rowKey} {...taskOpenAttr}>{!nested && <button type="button" onClick={() => openTask(todo.id)} className="block max-w-full truncate px-1 text-left text-sm font-semibold hover:underline">{todo.title}</button>}{asks.map((ix) => <InteractionCard key={ix.id} ix={ix} />)}{nested && <OpenEntry title={todo.title} onOpen={() => openTask(todo.id)} />}</div>;
   const verifying = reviewState(todo) === "user_check";
-  const ask = verifying ? personalVerificationAsk(todo) : openAsk(todo);
-  if (verifying && !ask) return (
+  const listedAsk = openAsk(todo);
+  // #16002's open Pass round carries no outcome yet; #15680's acceptance round is the outcome:"done" ask. Both render
+  // the same Accept/Pass row, while an unrelated ask must not stand in for the verification round.
+  const ask = verifying
+    ? (personalVerificationAsk(todo) ?? (listedAsk?.outcome === "done" ? listedAsk : undefined))
+    : listedAsk;
+  // The urgent Needs-you tray keeps #16002's one-line link to a verification whose Pass round has not arrived. The
+  // calm To verify tray falls through to VerifyPassRow's one-click Pass instead.
+  if (verifying && !ask && !calmVerify) return (
     <button type="button" data-needs-row={rowKey} {...taskOpenAttr} onClick={() => openTask(todo.id)} className="flex min-w-0 items-center gap-2 rounded-control bg-field px-3 py-2 text-left text-sm hover:bg-hover">
       <StatusMark state="needs_you" />
       <span className="min-w-0 flex-1 truncate">{todo.title}</span>

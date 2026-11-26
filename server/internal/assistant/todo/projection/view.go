@@ -402,19 +402,12 @@ func (r *reading) pendingReviewWaiting() bool {
 
 // ---- row 3: the owner decides ----
 
-// ownerDecides: open, and its review requires personal verification or waits for the owner's decision. A decision
-// may also say the work cannot be done. A dismissed decision is out, and a decision that can wait is row 4's.
+// ownerDecides: open, and its review waits for the owner's decision (needs_user) or its ask is a decision or says it
+// cannot be done. A dismissed decision is out, and a decision that can wait is row 4's. Personal verification
+// (user_check) is deliberately not placed here: #15680 (#15638) keeps that optional "to verify" layer calm and out of
+// Needs you on every surface, so it falls through to its review/rest placement; clients report counts.user_check.
 func (r *reading) ownerDecides() (placement, bool) {
 	state := reviewState(r.f)
-	if state == reviewUserCheck {
-		p := r.at(assistantwire.TodoPhaseNeedsYou, assistantwire.TodoListSectionNeedsYou, assistantwire.TodoReasonVerify)
-		p.Since = utc(r.f.Supervision.UpdatedAt)
-		if a := openAsk(r.f); a != nil && a.Outcome == "" {
-			// Clients answer the verification round from the listed to-do's ask through the existing Pass action.
-			p.Line, p.Since = line(assistantwire.TodoLineKeyDecision, "text", a.Verdict), utc(a.AskedAt)
-		}
-		return p, true
-	}
 	a := r.decisionAsk()
 	p := r.at(assistantwire.TodoPhaseNeedsYou, assistantwire.TodoListSectionNeedsYou, assistantwire.TodoReasonOwnerDecides)
 	switch {
