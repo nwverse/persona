@@ -101,6 +101,10 @@ func (n *Node) scanOffline() []proto.Session {
 		assistants
 		keptOnes
 		desktopOnes // the desktop app's unarchived sessions, whatever their age (claudedesktop.go)
+		// desktopFolded: the ones of them a client draws under another row, not as a row (a side session or a fork under
+		// the session it came from, a scheduled task's earlier runs under its newest): counted apart, so they do not
+		// take the places of the sessions the sidebar lists at the top level (#15279).
+		desktopFolded
 	)
 	type cand struct {
 		path  string
@@ -141,15 +145,21 @@ func (n *Node) scanOffline() []proto.Session {
 			continue
 		}
 		// Another platform's runs (agentfilters.go) go before the newest are counted: hundreds a day would crowd out
-		// the user's own. So do a program's one-shot runs (`claude -p`, claude_oneshot.go).
+		// the user's own. So do a program's one-shot runs (`claude -p`, claude_oneshot.go), unless the desktop app's
+		// sidebar lists the transcript: a session New Agent starts there is written by `claude -p` and taken over by the
+		// app (claudedesktop_new.go), and says only sdk-cli until the app ends a turn in it (#15522).
 		if !forked[id] && n.agentFiltered("claude", p) {
 			continue
 		}
-		if !forked[id] && !unlisted[id] && n.oneShotRun(id, filepath.Base(filepath.Dir(p)), p, st, persona) {
+		if !forked[id] && !unlisted[id] && !inDesktop && n.oneShotRun(id, filepath.Base(filepath.Dir(p)), p, st, persona) {
 			continue
 		}
 		if inDesktop { // counted on their own: they neither take the others' 80 nor are pushed out by them
-			cands = append(cands, cand{p, st, desktopOnes})
+			count := desktopOnes
+			if desktop.parents[id] != "" {
+				count = desktopFolded
+			}
+			cands = append(cands, cand{p, st, count})
 			continue
 		}
 		cands = append(cands, cand{p, st, others})
@@ -157,8 +167,9 @@ func (n *Node) scanOffline() []proto.Session {
 	// Newest first, and only what is listed counts: a session the filters below leave out (a blocked or out-of-scope
 	// directory, a probe that never said anything, an older copy) took one of the 80 and pushed a listed one out.
 	sort.SliceStable(cands, func(i, j int) bool { return cands[i].st.ModTime().After(cands[j].st.ModTime()) })
-	limit := [...]int{others: 80, assistants: maxAssistantOffline, keptOnes: len(cands), desktopOnes: maxDesktopOffline}
-	var counted [4]int
+	limit := [...]int{others: 80, assistants: maxAssistantOffline, keptOnes: len(cands), desktopOnes: maxDesktopOffline,
+		desktopFolded: maxDesktopFolded}
+	var counted [len(limit)]int
 	listed := map[string]bool{}
 	shown := map[string]bool{} // what the desktop app's rules look at: rows are left out before they are counted
 	for _, c := range cands {
@@ -212,7 +223,7 @@ func (n *Node) scanOffline() []proto.Session {
 		// one only had its tail read, and a tail of tool calls under one huge line says nothing; the main conversation is
 		// listed whatever its tail holds. Dropping it left the app and the web with no session for the main chat, and its composer
 		// disabled (#1163: its last turn stopped mid tool call, under a 377 KB line).
-		if m.lastText == "" && m.lastTextAt.IsZero() && m.title == "" && !keep[id] && !forked[id] && c.count != desktopOnes && c.st.Size() <= quickTail {
+		if m.lastText == "" && m.lastTextAt.IsZero() && m.title == "" && !keep[id] && !forked[id] && c.count != desktopOnes && c.count != desktopFolded && c.st.Size() <= quickTail {
 			continue
 		}
 		n.setPath(id, c.path)
