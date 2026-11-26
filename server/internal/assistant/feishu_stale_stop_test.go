@@ -263,9 +263,10 @@ func TestFeishuStopBeforeTheRunWatcher(t *testing.T) {
 // holdDelivery is non-nil only for the early-failure regression: delivery waits
 // before calling the real e.deliver, so only cleanup can release it.
 func testFeishuStopBeforeTheRunWatcher(t *testing.T, delivered chan struct{}, holdDelivery chan struct{}) {
-	e := newThreadEnv(t, nil)
-	h := &stopWatcherHub{fakeHub: e.f, watching: make(chan struct{}), release: make(chan struct{}), hold: holdDelivery != nil}
-	setHub(e.s, h)
+	f := newFakeHub().withMachine()
+	h := &stopWatcherHub{fakeHub: f, watching: make(chan struct{}), release: make(chan struct{}), hold: holdDelivery != nil}
+	s := withSettings(t, f, New(Options{Hub: h, Logf: testLogf(t)}))
+	e := withFeishuThread(&todoEnv{t: t, s: s, f: f})
 	e.topicTodo("发版")
 	go func() {
 		defer close(delivered)

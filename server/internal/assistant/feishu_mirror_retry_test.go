@@ -74,13 +74,15 @@ func TestFeishuMirrorRetryKeepsItsKey(t *testing.T) {
 		return nil
 	})
 	w.s.feishuMirror(context.Background(), "server", "m1")
-	waitFor(t, "sent on the next try", func() bool { return len(w.tried()) == 2 })
+	want := botTarget{Kind: targetPersona, MachineID: "server", SessionID: "m1"}
+	// The transport records an attempt before returning the message ID needed to bind its thread.
+	waitFor(t, "retried card bound to its original conversation", func() bool {
+		return w.s.larkModule().Route("om_card", "") == want
+	})
 	keys := w.tried()
-	if keys[0] == "" || keys[0] != keys[1] {
+	if len(keys) != 2 || keys[0] == "" || keys[0] != keys[1] {
 		t.Fatalf("keys %q", keys)
 	}
-	// The fake records the key when it receives the post; the card's thread is remembered once the post returns.
-	waitFor(t, "the card's thread", func() bool { return w.s.larkModule().Route("om_card", "").SessionID == "m1" })
 }
 
 // One that keeps failing is tried feishuMirrorRetries more times, then given up.

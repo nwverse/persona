@@ -24,6 +24,10 @@ type WorkbenchItem struct {
 	ConnectorLabel        string
 	ConnectorCanReply     bool
 	ConnectorReplyTo      string
+	// ReplySuggestionVersion and ReplySuggestionText bind a rendered draft card to the exact current reply suggestion.
+	// They contain display data only; authorization snapshots stay inside the assistant.
+	ReplySuggestionVersion int
+	ReplySuggestionText    string
 	// Mutes are what it can be muted by.
 	Mutes []WorkbenchMute
 }

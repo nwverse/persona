@@ -384,6 +384,12 @@ describe("Composer", () => {
     const html = renderToStaticMarkup(<Composer draftKey="t" placeholder="给 Agent 发消息…" onSend={async () => true} />);
     expect(html).toMatch(/<textarea[^>]*style="max-height:min\(240px, calc\(var\(--kb-h\) \* 0.35\)\)"/);
   });
+
+  it("omits the attachment strip from an empty composer's dock", () => {
+    vi.stubGlobal("localStorage", { getItem: () => null });
+    const html = renderToStaticMarkup(<Composer draftKey="t" placeholder="…" onSend={async () => true} />);
+    expect(html).not.toContain("data-composer-attachments");
+  });
 });
 
 describe("tap areas", () => {

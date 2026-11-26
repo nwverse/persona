@@ -43,7 +43,7 @@ func TestFinalPassRetriesWhileUnreachable(t *testing.T) {
 	if n := len(h.tr.jobsOf(extwire.TranscriptionReplay)); n != 1+len(shortRec.lists["finalUnreachableRetries"]) {
 		t.Fatalf("%d tries", n)
 	}
-	m, _, _ := h.engine().MeetingRead(meetingRec)
+	m, _, _ := recW(h.engine()).MeetingRead(meetingRec)
 	if tr := m.Transcription; tr.FinalTries != 6 || tr.FinalUnreachable != 6 {
 		t.Fatalf("tries %d, unreachable %d", tr.FinalTries, tr.FinalUnreachable)
 	}
@@ -59,7 +59,7 @@ func TestFinalPassRetriesWhileUnreachable(t *testing.T) {
 	if n := len(h.tr.jobsOf(extwire.TranscriptionReplay)) - 6; n != 1+len(shortRec.lists["finalRetries"]) {
 		t.Fatalf("billed, then unavailable: %d tries", n)
 	}
-	m, _, _ = h.engine().MeetingRead(meetingOther)
+	m, _, _ = recW(h.engine()).MeetingRead(meetingOther)
 	if tr := m.Transcription; tr.FinalTries != 3 || tr.FinalUnreachable != 0 || tr.UsageSeconds < 3 {
 		t.Fatalf("billed, then unavailable: %+v", tr)
 	}
@@ -79,7 +79,7 @@ func TestFinalPassRetriesAndFallbacks(t *testing.T) {
 	if got := h.hubTexts(meetingRec); !slices.Equal(got, []string{"Live one.", "Live two."}) {
 		t.Fatalf("the final transcript %q", got)
 	}
-	m, _, _ := h.engine().MeetingRead(meetingRec)
+	m, _, _ := recW(h.engine()).MeetingRead(meetingRec)
 	if m.Transcription.FinalTries != 3 {
 		t.Fatalf("tries %d", m.Transcription.FinalTries)
 	}

@@ -181,6 +181,7 @@ func TestInboxAndThreadAndPrereqSignalsWakeDuringNeedsUser(t *testing.T) {
 	t.Run("linked inbox item wakes supervisor without bypassing to agent", func(t *testing.T) {
 		ctx := context.Background()
 		s, f, todo, _, _ := setupNeedsUserTaskWithLark(t, nil)
+		f.inbox = newFakeInbox()
 		turnInboxSignalsOn(t, s)
 		beforeNotices := len(f.notices())
 		beforeAgentSent := len(sentToAgent(f))

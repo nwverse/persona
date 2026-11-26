@@ -65,6 +65,7 @@ import persona.core.domain.sort.TerminalResume
 import persona.core.domain.sort.terminalResume
 import persona.core.domain.sort.canTerminal
 import persona.core.domain.sort.canTypeClaudeCommands
+import persona.core.domain.sort.displayTitle
 import persona.core.domain.sort.shownCloseout
 import persona.feature.chat.media.ChatImageViewer
 import persona.core.domain.rewind.Rewind
@@ -1039,7 +1040,7 @@ private fun ChatPage(
                             terminalHelp = canTerminal, onDiscardLocal = interactionController::discard, keyboard = keyboard,
                             labels = if (task) taskAsk?.let { mapOf(it.card.id to it.label) }.orEmpty() else emptyMap(),
                             first = if (task) null else chrome.requestId, counted = !task, suggestion = ruleLine,
-                            resize = resize)
+                            resize = resize, commandInputErrors = interactionController.commandInputErrors)
                     }
                 }
                 val onOpenSibling = chrome.onOpenSession
@@ -1052,8 +1053,9 @@ private fun ChatPage(
                     if (activityInHeader && openBackgroundList != null && backgroundOwner != null && ChatActivity.shown(backgroundOwner))
                         ({ ChatActivityPill(backgroundOwner, openBackgroundList) }) else null
                 val tabs = session != null && onOpenSibling != null && siblingSessions.size > 1
+                val preferHerdrTabName = renderStyle != ChatRenderStyle.Assistant && chrome.preferHerdrTabName
                 JPage(
-                    title = session?.displayTitle ?: stringResource(R.string.chat_screen_untitled),
+                    title = session?.displayTitle(preferHerdrTabName) ?: stringResource(R.string.chat_screen_untitled),
                     scrollEdgeStyle = ScrollEdgeStyle.Gradient,
                     topScrollEdgeStyle = if (tabs || activityPill != null) TabbedChatScrollEdgeStyle else ScrollEdgeStyle.Gradient,
                     topBar = {
@@ -1075,6 +1077,7 @@ private fun ChatPage(
                                         forking = forking,
                                         takeover = pageTakeover,
                                         menuOpen = headerMenuOpen,
+                                        preferHerdrTabName = preferHerdrTabName,
                                         machines = machines,
                                         childRows = childCards.list,
                                         onOpenSubagent = chrome.onOpenSubagent ?: chrome.onOpenSession,
@@ -1099,6 +1102,7 @@ private fun ChatPage(
                                 full = header, compact = {
                                     ChatSlimHeader(session, status, connection, onBack,
                                         onMore = if (compactGlassAgent) ({ headerMenuOpen.value = true }) else null,
+                                        preferHerdrTabName = preferHerdrTabName,
                                         onOpen = headerFold::open)
                                 })
                             else header()
@@ -1382,7 +1386,7 @@ private fun ChatPage(
                 terminal, snapshot.turnDurationSeconds, notice ?: snapshot.error, recovery, machine,
                 statusBindings.draftSaveError, fullTextState, sheetPlanState, planSheetState, renderStyle, composer,
                 messageMenu, quoteTarget,
-                onContext = { text -> linkContexts = linkContexts + messageContext(session?.displayTitle ?: res.getString(R.string.chat_screen_untitled), text, context.resources)
+                onContext = { text -> linkContexts = linkContexts + messageContext(session?.displayTitle(renderStyle != ChatRenderStyle.Assistant && chrome.preferHerdrTabName) ?: res.getString(R.string.chat_screen_untitled), text, context.resources)
                     notice = res.getString(R.string.chat_screen_added_context) },
                 onNotice = { notice = it }, onFork = onFork, rewindMenu = rewindMenu,
                 onDelete = { target -> messages.firstOrNull { it.clientMessageId == target.id }?.let { message ->

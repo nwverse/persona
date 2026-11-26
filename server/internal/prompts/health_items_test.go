@@ -51,6 +51,9 @@ func TestHealthStrengthPromptSection(t *testing.T) {
 			if strings.Contains(got, "**力量训练**") != strength {
 				t.Fatalf("strength section=%v for %q", strength, lang)
 			}
+			if strings.Contains(got, "用户说开始力量训练") != strength || strings.Contains(got, "`draft` 的 `plan`") != strength {
+				t.Fatalf("training-start plan guidance=%v for %q", strength, lang)
+			}
 			if strings.Contains(got, "\n\n- **力量训练**") || strings.Contains(got, "\n\n- **添加健康项**") || strings.Contains(got, "\n\n- **其他数据**") || strings.Contains(got, "\n\n  ") {
 				t.Fatalf("extra blank line in list for %q", lang)
 			}

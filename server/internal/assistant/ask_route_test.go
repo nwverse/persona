@@ -599,9 +599,21 @@ func TestUserApproval(t *testing.T) {
 		{proto.Interaction{Kind: proto.IxPermission, ToolName: "Bash", ToolInput: []byte(`{"command":"gh pr merge 12 --squash"}`)}, false},
 		{proto.Interaction{Kind: proto.IxPlan, Plan: "Merge the PR, then deploy to production."}, false},
 		{proto.Interaction{Kind: proto.IxPermission, ToolName: "Bash", ToolInput: []byte(`{"command":"gh issue comment 3 --body hi"}`)}, true},
+		{proto.Interaction{Kind: proto.IxPermission, ToolName: "Bash", ToolInput: []byte(`{"command":"send the release announcement"}`)}, true},
+		{proto.Interaction{Kind: proto.IxPermission, ToolName: "Bash", ToolInput: []byte(`{"command":"delete the old user records"}`)}, true},
+		{proto.Interaction{Kind: proto.IxPermission, ToolName: "Bash", ToolInput: []byte(`{"command":"为订阅付费"}`)}, true}, // i18n-ignore: synthetic payment command
 		{proto.Interaction{Kind: proto.IxPermission, ToolName: "mcp__mail__send", Summary: "Send mail to Bob"}, true},
 		{proto.Interaction{Kind: proto.IxPermission, ToolName: "Write", ToolInput: []byte(`{"file_path":"/work/notes.md","content":"删除旧数据，再发表评论"}`)}, false}, // i18n-ignore: synthetic file payload
 		{proto.Interaction{Kind: proto.IxPermission, ToolName: "Edit", EditableText: "Delete this comment", ToolInput: []byte(`{"file_path":"/work/notes.md","new_string":"Delete this comment"}`)}, false},
+		{proto.Interaction{Kind: proto.IxPermission, ToolName: "File /work/draft.md", ToolInput: []byte(`{"TargetFile":"/work/draft.md","CodeContent":"删除该字段"}`)}, false}, // i18n-ignore: synthetic Antigravity file payload
+		{proto.Interaction{Kind: proto.IxPermission, ToolName: "File /work/review.md", ToolInput: []byte(`{"Path":"/work/review.md","Content":"Replay the comment"}`)}, false},
+		{proto.Interaction{Kind: proto.IxPermission, ToolName: "File /work/edit.md", ToolInput: []byte(`{"TargetFile":"/work/edit.md","TargetContent":"old","ReplacementContent":"Delete this comment"}`)}, false},
+		{proto.Interaction{Kind: proto.IxPermission, ToolName: "File /work/run.json", ToolInput: []byte(`{"command":"send mail"}`)}, true},
+		{proto.Interaction{Kind: proto.IxPermission, ToolName: "Skill", ToolInput: []byte(`{"skill":"agent-browser","args":"只读检查、不发送邮件、不改设置"}`)}, false}, // i18n-ignore: synthetic skill arguments
+		{proto.Interaction{Kind: proto.IxPermission, ToolName: "Skill", ToolInput: []byte(`{"skill":"agent-browser","args":"Do not send mail or delete files"}`)}, false},
+		{proto.Interaction{Kind: proto.IxPermission, ToolName: "Skill", Fields: []proto.Field{{Key: "otp", Label: "OTP"}}}, true},
+		{proto.Interaction{Kind: proto.IxPermission, ToolName: "Skill", Secret: true}, true},
+		{proto.Interaction{Kind: proto.IxPermission, ToolName: "Skill", OwnerProposal: true}, true},
 		{proto.Interaction{Kind: proto.IxPermission, ToolName: "mcp__mail__reply", ToolInput: []byte(`{"body":"A plain project update."}`)}, true},
 		{proto.Interaction{Kind: proto.IxPermission, ToolName: "mcp__github__issue_comment", ToolInput: []byte(`{"body":"A plain project update."}`)}, true},
 		{proto.Interaction{Kind: proto.IxPermission, ToolName: "todo_remove", ToolInput: []byte(`{"id":"item"}`)}, true},

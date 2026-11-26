@@ -1,6 +1,10 @@
+import { mailReading } from "../../lib/mail";
+import { getState } from "../../lib/store";
+import { INBOX_SOURCES_FEATURE } from "../../lib/subscriptions";
 import { t } from "../../i18n";
 import { LOCAL_SHORTCUTS, SHORTCUTS } from "../../lib/shortcuts";
-import { enabledSettingsTabs, registeredModules } from "../../core/module-host";
+import { registeredModules } from "../../core/module-host";
+import { enabledSettingsTabs } from "../../core/module-settings";
 import { MODULE_FEATURES_ID } from "../../core/module-features";
 import { isLegacyIntegrationTab } from "./integrations-route";
 import { tabInfo, TABS, type Tab } from "./nav";
@@ -36,7 +40,7 @@ const AGENT_SETTINGS: { name: string; anchor: string; keys: string[] }[] = [
 /** What the search box matches beyond the categories (a curated static index): the pages' group headings and, by their
  *  labels, the settings on them (audit item 18), each in the page's own words, so every language finds them. Every
  *  static row label of the pages search.test.ts reads has an entry here. */
-export const SEARCH_INDEX: SearchGroup[] = [
+const SHARED_INDEX: SearchGroup[] = [
   // General › Appearance
   { tab: "general", group: t("settings.appearance"), anchor: "appearance" },
   { tab: "general", group: words(t("settings.theme_light"), t("settings.theme_dark")), hint: t("language.system"), anchor: "theme" },
@@ -57,6 +61,7 @@ export const SEARCH_INDEX: SearchGroup[] = [
   // General › Agents
   { tab: "general", group: t("settings.agent_preferences"), hint: words(t("terminal-full.mode_group"), t("settings.sidebar_terminals")), anchor: "agent-preferences" },
   { tab: "general", group: t("settings-agentopen.label"), hint: words(t("settings-agentopen.panel"), t("settings-agentopen.page")), anchor: "agent-open" },
+  { tab: "general", group: t("seen-rows.label"), hint: words(t("seen-rows.stay"), t("seen-rows.leave")), anchor: "seen-rows" },
   { tab: "general", group: t("context.details"), anchor: "agent-details" },
   // General › hubs, this browser, about
   { tab: "general", group: t("hubs.group_title"), hint: t("hubs.add_hub"), anchor: "hubs" },
@@ -90,10 +95,11 @@ export const SEARCH_INDEX: SearchGroup[] = [
     hint: words(
       t("settings-assistantsettings.auto_naming"), t("settings-assistantsettings.auto_naming_max"), t("settings-assistantsettings.auto_naming_periodic"),
       t("settings-assistantsettings.auto_naming_interval"), t("settings-assistantsettings.main_supervises"), t("settings-assistantsettings.auto_supervision_messages"), t("settings-assistantsettings.delivery_gate"), t("settings-assistantsettings.agent_tasks"), t("settings-assistantsettings.close_ended_terminals"),
-      t("settings-assistantsettings.inbox_signals"), t("settings-assistantsettings.inbox_todo_forward"), t("settings-assistantsettings.idle_close"), t("settings-assistantsettings.archive_closed"),
+      t("settings-assistantsettings.inbox_signals"), t("settings-assistantsettings.idle_close"), t("settings-assistantsettings.archive_closed"),
     ),
     anchor: "agents",
   },
+  { tab: "persona", group: t("settings-assistantsettings.inbox_todo_forward"), anchor: "inbox-todo-forward" },
   { tab: "persona", group: t("settings-assistantsettings.default_permissions"), hint: words(t("settings-directionnotes.title"), t("settings-directionnotes.permissions")), anchor: "default-permissions" },
   { tab: "persona", group: t("settings-assistantsettings.readonly_mode"), anchor: "readonly-mode" },
   {
@@ -160,15 +166,6 @@ export const SEARCH_INDEX: SearchGroup[] = [
   { tab: "notifications", group: t("settings-notifications.quiet"), hint: words(t("settings-notifications.quiet_start"), t("settings-notifications.quiet_end")), anchor: "notify-quiet" },
   // the hub's switch (#8157), by its group, which it draws on any hub and while it loads (LowDistractionSettings.tsx)
   { tab: "notifications", group: t("settings-notifications.low_distraction"), hint: t("settings-notifications.low_distraction_hint"), anchor: "low-distraction" },
-  // Connectors
-  { tab: "connectors", group: t("settings-connectors.mail"), anchor: "mail" },
-  { tab: "connectors", group: t("settings-connectors.lark"), anchor: "lark" },
-  { tab: "connectors", group: t("settings-sent.entry_label"), hint: t("settings-sent.hint"), anchor: "sent" },
-  // Extensions: an extension's secrets are on its page, opened from the list; a market's token under Manage markets
-  { tab: "extensions", group: t("settings-extensions.title"), anchor: "extensions" },
-  { tab: "extensions", group: t("settings-extensions.secrets_title"), anchor: "extensions" },
-  { tab: "extensions", group: t("settings-extensions.market_title"), anchor: "market" },
-  { tab: "extensions", group: t("settings-extensionmarket.manage_markets"), hint: t("settings-extensionmarket.token_optional"), anchor: "market" },
   // Shortcuts: each command by its name
   { tab: "shortcuts", group: t("settings-shortcutsettings.enable_all"), anchor: "shortcuts-all" },
   ...SHORTCUTS.map((s): SearchGroup => ({ tab: "shortcuts", group: s.label, anchor: `shortcut-${s.id}` })),
@@ -182,6 +179,7 @@ export const SEARCH_INDEX: SearchGroup[] = [
   { tab: "labs", group: path(t("settings-labs.work_area"), t("settings-labs.integrations_v2_title")), anchor: "configuration-assistant-integrations-v2-integrations_v2" },
   { tab: "labs", group: path(t("settings-labs.area_agents"), t("settings-labs.terminal_renderer")), hint: words(t("settings-labs.terminal_renderer_standard"), t("settings-labs.terminal_renderer_webgl")), anchor: "configuration-terminal-renderer" },
   // This hub
+  { tab: "hub", group: t("settings-recovery.title"), hint: t("settings-recovery.entry_hint"), anchor: "hub-recovery" },
   { tab: "hub", group: t("settings-hubsettings.version"), hint: words(t("settings-hubsettings.last_check"), t("settings-hubsettings.branch"), t("settings-hubsettings.current_commit"), t("settings-hubsettings.latest_commit")), anchor: "hub-version" },
   { tab: "hub", group: t("settings-hubsettings.channel"), hint: words(t("settings-hubsettings.source"), t("settings-hubsettings.web_dev")), anchor: "hub-channel" },
   { tab: "hub", group: t("settings-hubsettings.update"), hint: words(t("settings-hubsettings.update_version"), t("settings-hubsettings.target_commit"), t("settings-hubsettings.backup_created_at")), anchor: "hub-update" },
@@ -213,17 +211,42 @@ function moduleSwitchEntries(): SearchGroup[] {
 // What is typed and what is matched, compared without case or spaces: "timezone" finds "Time zone", "apikey" "API Key".
 const fold = (s: string) => s.toLocaleLowerCase().replace(/\s+/g, "");
 
-const INTEGRATIONS_ANCHOR_SUB: Record<string, string | undefined> = {
-  mail: "builtin:mail",
-  lark: "builtin:lark",
-  sent: "-sent",
-  market: "-market",
-};
+// Legacy groups sometimes share an anchor while their unified destinations differ.
+function integrationEntries(v2: boolean): SearchGroup[] {
+  const connectors = v2 ? "integrations" : "connectors";
+  const extensions = v2 ? "integrations" : "extensions";
+  const sources = v2 ? "integrations" : "sources";
+  const flow = t("settings-integrations.view_sources");
+  const forward = t("settings-assistantsettings.inbox_todo_forward");
+  const bot = v2 ? "builtin:feishu-bot" : "feishu-bot";
+  return [
+    { tab: connectors, group: t("settings-connectors.mail"), anchor: "mail", sub: v2 ? "builtin:mail" : undefined },
+    { tab: connectors, group: t("settings-connectors.lark"), anchor: "lark", sub: v2 ? "builtin:lark" : undefined },
+    { tab: connectors, group: t("settings-larkdisplay.title"), hint: words(t("settings-larkdisplay.anti_recall"), t("settings-larkdisplay.edit_history")), anchor: "lark", sub: v2 ? "builtin:lark" : undefined },
+    { tab: connectors, group: t("settings-feishubot.title"), hint: t("settings-integrations.feishu_bot_description"), anchor: "", sub: bot },
+    { tab: connectors, group: t("settings-larksync.title"), hint: words(t("settings-larksync.add"), t("settings-larksync.schedule_label")), anchor: "", sub: bot },
+    { tab: connectors, group: t("settings-sent.entry_label"), hint: t("settings-sent.hint"), anchor: "sent", sub: v2 ? "-sent" : undefined },
+    { tab: sources, group: v2 ? flow : t("settings-nav.tab_sources"), hint: words(t("settings-nav.tab_sources"), t("settings-nav.hint_sources")), anchor: "inbox-sources", sub: v2 ? "-sources" : undefined },
+    { tab: sources, group: v2 ? path(flow, forward) : forward, hint: t("settings-assistantsettings.inbox_todo_forward_hint"), anchor: "inbox-todo-forward", sub: v2 ? "-sources" : undefined },
+    { tab: sources, group: v2 ? path(flow, t("external-sources.flows")) : t("external-sources.flows"), hint: words(t("external-sources.section"), t("external-sources.add_binding")), anchor: "inbox-sources", sub: v2 ? "-sources" : undefined },
+    { tab: extensions, group: v2 ? t("settings-integrations.group_extensions") : t("settings-extensions.title"), hint: t("settings-extensions.title"), anchor: "extensions" },
+    { tab: extensions, group: t("settings-extensions.secrets_title"), anchor: "extensions" },
+    { tab: extensions, group: t("settings-extensions.market_title"), anchor: "market", sub: v2 ? "-market" : undefined },
+    { tab: extensions, group: t("settings-extensionmarket.manage_markets"), hint: t("settings-extensionmarket.token_optional"), anchor: "market", sub: v2 ? "-markets" : undefined },
+    ...(v2 ? ["thread_mode", "thread_idle_hours"].map((field): SearchGroup => ({
+      tab: "integrations", group: path(t("settings-integrations.routing_title"), t(`settings-integrations.${field}_title`)),
+      hint: field, anchor: `configuration-channel-routing-feishu-${field}`, sub: bot,
+    })) : []),
+  ];
+}
+
+export const SEARCH_INDEX = [...SHARED_INDEX, ...integrationEntries(false)];
+const UNIFIED_INDEX = [...SHARED_INDEX, ...integrationEntries(true)];
 
 /** The search box's matches: categories by label / hint, and page groups and settings by their heading or label.
- *  When `integrationsV2` is true, collapses `channels`/`connectors`/`extensions` into `integrations` and remaps
+ *  When `integrationsV2` is true, collapses `channels`/`connectors`/`extensions`/`sources` into `integrations` and remaps
  *  their indexed groups so quick search jumps directly to the unified Integrations & Extensions view. */
-export function searchSettings(query: string, integrationsV2 = false): { tabs: Tab[]; groups: SearchGroup[] } {
+export function searchSettings(query: string, integrationsV2 = false, hasInboxSources?: boolean): { tabs: Tab[]; groups: SearchGroup[] } {
   const q = fold(query);
   if (!q) return { tabs: [], groups: [] };
   const featureEntries = moduleSwitchEntries();
@@ -239,17 +262,21 @@ export function searchSettings(query: string, integrationsV2 = false): { tabs: T
   const tabMatches = (k: Tab) => {
     const info = tabInfo(k);
     if (has(info.label, info.hint)) return true;
-    // When integrations_v2 is enabled, searching legacy tab names ("Channels", "Connectors", "Extensions") still finds Integrations.
+    // When integrations_v2 is enabled, searching legacy tab names ("Channels", "Connectors", "Extensions", "Inbox Sources") still finds Integrations.
     if (integrationsV2 && k === "integrations") {
-      return (["channels", "connectors", "extensions"] as const).some((old) => has(tabInfo(old).label, tabInfo(old).hint));
+      return (["channels", "connectors", "extensions", "sources"] as const).some((old) => has(tabInfo(old).label, tabInfo(old).hint));
     }
     return false;
   };
-  const indexed = integrationsV2
-    ? SEARCH_INDEX.map((g) => (isLegacyIntegrationTab(g.tab) ? { ...g, tab: "integrations" as Tab, sub: INTEGRATIONS_ANCHOR_SUB[g.anchor] } : g))
-    : SEARCH_INDEX;
+  const showSources = integrationsV2 && (hasInboxSources ?? getState().features.includes(INBOX_SOURCES_FEATURE));
+  const indexed = integrationsV2 ? UNIFIED_INDEX.filter((g) => {
+    if (g.sub === "-sources") return showSources;
+    if (g.tab === "persona" && g.anchor === "inbox-todo-forward") return !showSources;
+    return true;
+  }) : SEARCH_INDEX;
+  const showMailbox = mailReading().kind === "full";
   return {
     tabs: searchableTabs.filter(tabMatches),
-    groups: [...indexed, ...featureEntries].filter((g) => has(g.group, g.hint)),
+    groups: [...indexed, ...featureEntries].filter((g) => (g.anchor !== "mail" || showMailbox) && has(g.group, g.hint)),
   };
 }

@@ -329,7 +329,7 @@ func TestRemedyWatchSharesTheSweepsPlanHistoryRead(t *testing.T) {
 			var counting *countingPlanHistoryStore
 			if base != nil {
 				counting = &countingPlanHistoryStore{Store: s.store()}
-				s.store = func() Store { return counting }
+				s.setStore(func() Store { return counting })
 			}
 			s.superviseWatch(ctx, time.Now())
 			for _, plan := range plans {

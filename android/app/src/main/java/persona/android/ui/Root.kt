@@ -222,6 +222,8 @@ private fun PersonaRootContent(
                             persona.core.designsystem.LocalPersonaName provides if (demo) "Persona" else persona.core.designsystem.LocalPersonaName.current,
                             // The demo serves its own Feishu chats, whatever the paired hub has.
                             persona.core.designsystem.LocalLarkFeatures provides if (demo) persona.core.contracts.LarkFeatures.All else persona.core.designsystem.LocalLarkFeatures.current,
+                            // The demo's mail is its own too, whatever modules the paired hub has on.
+                            persona.core.designsystem.LocalMailAccess provides if (demo) persona.core.designsystem.MailAccess.Live else persona.core.designsystem.LocalMailAccess.current,
                             // The demo's mail and chats are made up: nothing to send to a hub for translating.
                             persona.feature.inbox.LocalTranslator provides if (demo) null else persona.feature.inbox.LocalTranslator.current,
                             // A reply's ```persona-view / ```persona-card drawn with the extensions' components (#1851).
@@ -396,6 +398,9 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     // With several hub groups paired the Persona menu's heading ends with the selected group's name, as on iOS.
     val hubGroups by session.groups.groups.collectAsStateWithLifecycle()
     val preferences by session.preferences.snapshots.collectAsStateWithLifecycle(AgentsPreferencesSnapshot())
+    LaunchedEffect(session.preferences) {
+        session.preferences.watchDisplaySettings(kotlinx.coroutines.flow.flowOf(0))
+    }
     val todos by (session.tasks?.todos ?: remember { kotlinx.coroutines.flow.MutableStateFlow(emptyList()) }).collectAsStateWithLifecycle()
     val todosSupported by (session.tasks?.todosSupported ?: remember { kotlinx.coroutines.flow.MutableStateFlow(false) }).collectAsStateWithLifecycle()
     // Every page shows the current assistant (docs/assistant/managers.md "Clients"): the counts beside them are its too.

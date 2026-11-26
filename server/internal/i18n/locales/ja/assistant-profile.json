@@ -1,4 +1,6 @@
 {
+  "bad_labs_seen_id": "実験 ID は英小文字、数字、ハイフン、アンダースコアの 1〜64 文字で、英小文字か数字で始めてください。",
+  "too_many_labs_seen": "確認済みリストに保存できる実験は 64 件までです。",
   "bad_readonly_mode": "読み取り専用タスクの保護は sandbox または prompt を指定してください。",
   "launcher_agent": "{launcher}は{agent}を起動します。アシスタントに使えるのは、Claude Code、Codex、またはアシスタントとして動作できるランタイムを起動するランチャーだけです。",
   "manager_required": "設定を変更する前に、対象のアシスタントを選んでください。",

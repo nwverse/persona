@@ -1091,6 +1091,43 @@ describe("accepted messages waiting for their transcript copy (#2792)", () => {
       vi.useRealTimers();
     }
   });
+
+  it("keeps attached pictures on a sent message after switching to another conversation and back (#13830)", async () => {
+    const images = [
+      { mime: "image/jpeg", data: "AAAA" },
+      { mime: "image/png", data: "BBBB" },
+    ];
+    act(() => root.render(<ChatView key="c1" mid="hub" sid="c1" />));
+    await flush();
+    await act(async () => void (await captured.onSend!({ text: "Look at these two pictures", images })));
+    await flush();
+    const id = bodies[0].client_msg_id;
+    const key = `outbox-msg:hub/c1/${id}`;
+    expect(host.querySelectorAll("[data-user-bubble] img")).toHaveLength(2);
+    expect(localStorage.getItem(key)).not.toContain("AAAA");
+
+    // Switch to another conversation and back in the same tab (hosts key ChatView by conversation).
+    act(() => root.render(<ChatView key="c2" mid="hub" sid="c2" />));
+    await flush();
+    act(() => root.render(<ChatView key="c1" mid="hub" sid="c1" />));
+    await flush();
+    const restoredImgs = [...host.querySelectorAll(`[data-outbox="${id}"] [data-user-bubble] img`)].map((img) => img.getAttribute("src"));
+    expect(restoredImgs).toEqual(["data:image/jpeg;base64,AAAA", "data:image/png;base64,BBBB"]);
+    expect(host.querySelector(`[data-outbox="${id}"] [data-user-bubble]`)?.getAttribute("data-send-state")).toBe("sent");
+
+    // When the transcript echo arrives, the outbox entry settles and its images render from the transcript.
+    transcript.items = [
+      { id: "u1#0", seq: 1, role: "user", kind: "text", text: "Look at these two pictures", client_msg_id: id },
+      { id: "u1#1", seq: 1, role: "user", kind: "image", image: { mime: "image/jpeg", lazy: true }, client_msg_id: id },
+      { id: "u1#2", seq: 1, role: "user", kind: "image", image: { mime: "image/png", lazy: true }, client_msg_id: id },
+    ];
+    act(() => root.render(<ChatView key="c1" mid="hub" sid="c1" />));
+    await flush();
+    expect(host.querySelector(`[data-outbox="${id}"]`)).toBeNull();
+    expect(host.querySelectorAll("[data-user-bubble]")).toHaveLength(1);
+    expect(host.querySelectorAll("[data-user-bubble] img")).toHaveLength(2);
+    expect(localStorage.getItem(key)).toBeNull();
+  });
 });
 
 describe("sending in order, and with no row yet", () => {

@@ -152,7 +152,7 @@ func TestHealthIntakeExtensionsCannotReachRoutes(t *testing.T) {
 }
 
 func TestHealthIntakeFeatureFollowsDefaultManager(t *testing.T) {
-	for _, capability := range []string{assistantwire.CapabilityHealthIntake, assistantwire.CapabilityHealthItems} {
+	for _, capability := range []string{assistantwire.CapabilityHealthIntake, assistantwire.CapabilityHealthItems, assistantwire.CapabilityHealthTell} {
 		t.Run(capability, func(t *testing.T) { healthFeatureFollowsDefaultManager(t, capability) })
 	}
 }

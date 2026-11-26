@@ -1,6 +1,6 @@
 // What the agent is waiting on (questions, plans, permissions, terminal dialogs, MCP forms and links), as Beautiful UI's Approval Card.
 import { Component, createContext, Fragment, Suspense, useCallback, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ErrorInfo, type ReactNode, type RefObject } from "react";
-import { answerCard, usePendingLine } from "../../lib/card-answer";
+import { answerCard, usePendingLine, type AnswerFrom } from "../../lib/card-answer";
 import { cardKeyAction, focusComposer } from "../../lib/card-keys";
 import { lazyPage } from "../../lib/lazy-page";
 import { mergeRefs } from "../../lib/tap-guard";
@@ -44,8 +44,8 @@ import { isChunkError } from "../PageBoundary";
 import { useChatCardTapGuard, useChatTapGuardView } from "./card-tap-guard";
 
 /** Answers a card: the chat's cards and the overview's quick answers (Home, #4090) send through this. */
-export async function resolve(ix: Interaction, body: Record<string, unknown>) {
-  const r = await answerCard(ix, body);
+export async function resolve(ix: Interaction, body: Record<string, unknown>, from: AnswerFrom = {}) {
+  const r = await answerCard(ix, body, from);
   if (!r.ok) toast(r.error, "error");
   else if (r.already) toast(t("chat-interactions.already_answered"), "info");
   return r.ok;
@@ -685,7 +685,7 @@ function SecretRunCard({ ix }: { ix: Interaction }) {
       if (el) el.value = "";
     };
   }, []);
-  const { machine, purpose, commands } = secretRunInput(ix.tool_input);
+  const { machine, purpose, delivery, commands } = secretRunInput(ix.tool_input);
   // without commands in tool_input the hub's summary (the computer, the purpose and every command) stands in for them;
   // with neither, nothing says what would run and Run stays off
   const summary = commands.length ? "" : (ix.summary?.trim() ?? "");
@@ -695,7 +695,7 @@ function SecretRunCard({ ix }: { ix: Interaction }) {
   const send = async (body: Record<string, unknown>, key: "run" | "decline") => {
     setPassword("");
     setBusy(key);
-    await resolve(ix, body);
+    await resolve(ix, body, { handoffCard: true });
     setBusy(null);
   };
   return (
@@ -727,6 +727,12 @@ function SecretRunCard({ ix }: { ix: Interaction }) {
           </div>
         ) : (
           summary && <pre data-secret-run-summary className={CODE_BOX}>{summary}</pre>
+        )}
+        {delivery === "env" && (
+          <p role="alert" className="flex items-start gap-1.5 text-xs leading-snug font-medium text-orange">
+            <Icon name="warning" size={13} className="mt-px shrink-0" />
+            {t("chat-interactions.secret_run_env_warning")}
+          </p>
         )}
         <div className="flex flex-col gap-1">
           {/* The user's computer password, not this site's: "one-time-code" keeps Chrome from offering to save it (its

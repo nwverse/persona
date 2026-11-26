@@ -3,6 +3,9 @@ package recordingwire
 import (
 	"errors"
 	"fmt"
+	"time"
+
+	"github.com/nwverse/persona/server/internal/kbwire"
 )
 
 // MaxAppendSegments is how many segments one append carries at most.
@@ -100,4 +103,30 @@ type CoverageGap struct {
 	From   float64 `json:"from"`
 	To     float64 `json:"to"`
 	Reason string  `json:"reason"`
+}
+
+// RecordingAppend is POST /api/v1/recordings/{id}/segments's body. A nil field is absent: unchanged.
+type RecordingAppend struct {
+	Base      int64                     `json:"base"`
+	Revision  int64                     `json:"revision"`
+	From      *int                      `json:"from"`
+	Segments  []kbwire.RecordingSegment `json:"segments"`
+	Duration  *float64                  `json:"duration,omitempty"`
+	EndedAt   *time.Time                `json:"ended_at,omitempty"`
+	Title     *string                   `json:"title,omitempty"`
+	Bookmarks *[]RecordingBookmark      `json:"bookmarks,omitempty"`
+	Coverage  *RecordingCoverage        `json:"coverage,omitempty"`
+	Complete  *bool                     `json:"complete,omitempty"`
+}
+
+// RecordingAppended is what AppendRecording did: Status RecordingStored or RecordingExpired, Revision and Next the
+// stored ones after it. Complete: the recording is complete after it; Wake: the recap lane has work it did not have
+// before (the recording completed, its coverage passed an hour of its clock, or a late sentence fell in a past hour).
+type RecordingAppended struct {
+	ID       string
+	Revision int64
+	Next     int
+	Status   string
+	Complete bool
+	Wake     bool
 }

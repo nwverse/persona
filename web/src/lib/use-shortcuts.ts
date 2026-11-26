@@ -14,6 +14,7 @@ import { inWorkView, navigate, withWorkView, type Route } from "./router";
 import { canShowTerminal, readView, rememberView, resolveView } from "./session-view";
 import { cycleGrouping, groupingLabel, setAllFolded, stepSidebarRow } from "./sidebar-api";
 import { focusWaitingCard } from "./card-keys";
+import { COMPOSER_INPUT } from "./dock-focus";
 import { dispatchKey, registerShortcut } from "./shortcuts";
 import { getSession, getState } from "./store";
 
@@ -62,12 +63,19 @@ export function overlayOpen(doc: Pick<Document, "querySelector"> = document): bo
   return Boolean(doc.querySelector(`[data-shortcut-layer], [role="dialog"][aria-modal="true"]:not([aria-label=${JSON.stringify(SIDEBAR_LABEL)}])`));
 }
 
-const visible = (el: Element) => el.getClientRects().length > 0;
+const visible = (el: Element) => el.getClientRects().length > 0 && !el.closest("[inert]") && getComputedStyle(el).visibility !== "hidden";
+const enabledInput = (el: HTMLElement) => !el.matches(":disabled,[aria-disabled=true]") && !el.closest("fieldset:disabled") && visible(el);
 
 /** ⌘I: the conversation's input box, else the terminal that is showing. */
 function focusInput(route: Route): boolean {
   const chat = ["session", "tab", "persona", "persona-new", "agents"].includes(route.name);
-  const box = chat ? [...document.querySelectorAll<HTMLTextAreaElement>("main textarea:not(.xterm-helper-textarea)")].find((t) => !t.disabled && visible(t)) : undefined;
+  let box: HTMLElement | undefined;
+  if (chat) {
+    const composers = [...document.querySelectorAll<HTMLElement>(`main ${COMPOSER_INPUT}`)];
+    box = composers.length
+      ? composers.find(enabledInput)
+      : [...document.querySelectorAll<HTMLTextAreaElement>("main textarea:not(.xterm-helper-textarea)")].find(enabledInput);
+  }
   const el = box ?? [...document.querySelectorAll<HTMLTextAreaElement>(".xterm-helper-textarea")].find((t) => visible(t.closest(".xterm") ?? t));
   if (!el) return false;
   el.focus();

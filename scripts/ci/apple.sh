@@ -190,6 +190,16 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = packages ]; then
   # Persona Screen's package contains only Persona Screen, built as mac-link.sh builds it; PersonaScreenCore's tests
   # cover its capture decisions.
   ci_run 'Persona Screen build' 600 xcrun swift build -c release --package-path "$SOURCE/apple/PersonaLink" --scratch-path "$SPM/PersonaScreen" --product PersonaScreen -Xswiftc -warnings-as-errors
+  # Domain packages (docs/server/architecture.md "Domain model", 'Client modules'): every package with a *Domain or
+  # *Adapt target, found by its name, so a new one is tested the day it exists. The tests are black-box, and the build
+  # writes each module's public symbol graph, from which AppleDomain checks the public API.
+  DOMAIN_GRAPHS="$OUTPUT/domain-symbol-graphs"
+  mkdir -p "$DOMAIN_GRAPHS"
+  DOMAIN_PACKAGES=$(python3 -B "$CI_ROOT/scripts/test/test_client_domain_modules.py" --swift-packages)
+  for package in $DOMAIN_PACKAGES; do
+    ci_run "$(basename "$package") domain tests" 900 xcrun swift test --package-path "$SOURCE/$package" --scratch-path "$SPM/$(basename "$package")" --disable-testable-imports -Xswiftc -warnings-as-errors -Xswiftc -emit-symbol-graph -Xswiftc -emit-symbol-graph-dir -Xswiftc "$DOMAIN_GRAPHS" -Xswiftc -symbol-graph-minimum-access-level -Xswiftc public
+  done
+  ci_run 'Domain packages follow the domain rules (AppleDomain)' 300 env PERSONA_DOMAIN_SYMBOL_GRAPHS="$DOMAIN_GRAPHS" python3 -B "$CI_ROOT/scripts/test/test_client_domain_modules.py" AppleDomain
   # Blocking calls on the main actor (docs/apple/performance.md, "Automated checks"). The lint is built in a fixed
   # folder beside its build output: the snapshot above moves on every run, and a package whose folder moved is rebuilt
   # from scratch, swift-syntax included (seen with Xcode 27.2). Unchanged files keep their times (no -t), so an
@@ -232,7 +242,7 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE
   # dependency graph; do not delete the watch target to accommodate the runner.
   ci_run 'Unsigned iOS and embedded watch/extensions build' 1800 "${XCODE[@]}" -scheme Persona \
     -destination 'generic/platform=iOS' -derivedDataPath "$OUTPUT/ios-device" \
-    -disableAutomaticPackageResolution "${UNSIGNED[@]}" build
+    -disableAutomaticPackageResolution "${UNSIGNED[@]}" build 2>&1 | tee "$OUTPUT/ios-device.log"
   # Every Mach-O in the device app (extensions, frameworks, the Watch app) and every architecture: none links CallKit,
   # weakly or through a package (#9290). Device-only linker flags exist, so the simulator build cannot stand in for it.
   ci_run 'No CallKit in the device build' 300 python3 "$CI_ROOT/scripts/release/check_no_callkit.py" \
@@ -241,6 +251,8 @@ if [ "$LANE" = all ] || [ "$LANE" = ios ] || [ "$LANE" = ios-build ] || [ "$LANE
   # device build fail here (#6735; MainPagesStackTests measures the run-time part in the simulator).
   ci_run 'Debug view stack frames (device build)' 300 python3 "$CI_ROOT/scripts/ci/apple_stack_frames.py" \
     "$OUTPUT/ios-device/Build/Products/Debug-iphoneos/Persona.app"
+  # A domain result the app drops is an unused-result warning in this build's log (AppleDomain, swift-app-discard).
+  ci_run 'The app keeps the domain results (AppleDomain)' 300 env PERSONA_APP_BUILD_LOGS="$OUTPUT/ios-device.log" python3 -B "$CI_ROOT/scripts/test/test_client_domain_modules.py" AppleDomain
   fi
   if [ "$LANE" = all ] || [ "$LANE" = ios-core-only ]; then
   # The app without its moved feature modules (apple/modules-core-only.yml, #14017; docs/apple/ios.md "Modules"): the

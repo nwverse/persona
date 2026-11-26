@@ -42,7 +42,8 @@ type fakeInbox struct {
 	cfg       assistantwire.InboxConfig
 	configErr error
 	configRaw json.RawMessage
-	// configQueue supplies successive fresh reads. configHook runs after selection and before the response returns.
+	// configQueue, when nonempty, supplies successive fresh reads instead of cfg. configHook runs after each config response
+	// is selected and before it is returned, allowing a test to change state during that RPC.
 	configQueue []assistantwire.InboxConfig
 	configHook  func()
 	// model is every inbox purpose's model (nil: none set up), models by purpose over it: manager.json's "ai" and its

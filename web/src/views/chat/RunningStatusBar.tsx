@@ -181,7 +181,7 @@ function BackgroundWords({ line }: { line: BackgroundLine }) {
   );
 }
 
-const CRON_WHAT = /^Cron:\s*([^,\n]+?)(?:,\s*Prompt:\s*([\s\S]*))?$/i;
+const CRON_WHAT = /^Cron:\s*([^\r\n]+?)(?:,\s*Prompt:\s*([\s\S]*))?$/i;
 
 function formatCronSchedule(expr: string): string {
   const parts = expr.trim().split(/\s+/);

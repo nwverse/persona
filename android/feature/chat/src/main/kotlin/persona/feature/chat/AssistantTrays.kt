@@ -11,6 +11,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -352,10 +353,14 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
     // the tray closes once its last thing is handled; tapped while empty it still opens "All caught up"
     LaunchedEffect(needsCount) { if (needsCount == 0 && state.expanded == AssistantTray.NeedsYou) state.expanded = null }
     BackHandler(state.expanded != null) { state.expanded = null }
-    // The entry pills already sit inside a 48dp touch box, so only an expanded tray card adds top breathing room.
-    // Measure the entry bar (and optional under-slot) first so an expanded tray card only takes the remaining room
-    // and never squeezes the entry bar or pushes the composer below out of view when the IME is up.
+    // Entry pills keep 48dp touch targets through Compose clickable without inflating layout height, so keep compact
+    // token margins around the bar. Measure the entry bar (and optional under-slot) first so an expanded tray card
+    // only takes the remaining room and never squeezes the entry bar or pushes the composer below out of view when
+    // the IME is up.
     val horizontalPadding = Tokens.Space.m
+    val expandedTopPadding = Tokens.Space.xs
+    val collapsedTopPadding = Tokens.Space.xxs
+    val bottomPadding = Tokens.Space.xxs
     val verticalGap = Tokens.Space.xs
     val cardPadding = Tokens.Space.xs
     val listBottomPadding = Tokens.Space.s
@@ -363,7 +368,9 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
     AssistantTrayLayout(
         modifier = modifier,
         horizontalPadding = horizontalPadding,
-        topPadding = verticalGap,
+        expandedTopPadding = expandedTopPadding,
+        collapsedTopPadding = collapsedTopPadding,
+        bottomPadding = bottomPadding,
         verticalGap = verticalGap,
         cardPadding = cardPadding,
         minimumListHeight = minimumListHeight,
@@ -606,7 +613,9 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
 private inline fun AssistantTrayLayout(
     modifier: Modifier,
     horizontalPadding: Dp,
-    topPadding: Dp,
+    expandedTopPadding: Dp,
+    collapsedTopPadding: Dp,
+    bottomPadding: Dp,
     verticalGap: Dp,
     cardPadding: Dp,
     minimumListHeight: Dp,
@@ -614,8 +623,12 @@ private inline fun AssistantTrayLayout(
     content: @Composable () -> Unit,
 ) {
     val latestMax by rememberUpdatedState(maximumListHeight)
-    val policy = remember(horizontalPadding, topPadding, verticalGap, cardPadding, minimumListHeight) {
-        assistantTrayMeasurePolicy(horizontalPadding, topPadding, verticalGap, cardPadding, minimumListHeight) {
+    val policy = remember(
+        horizontalPadding, expandedTopPadding, collapsedTopPadding, bottomPadding, verticalGap, cardPadding, minimumListHeight,
+    ) {
+        assistantTrayMeasurePolicy(
+            horizontalPadding, expandedTopPadding, collapsedTopPadding, bottomPadding, verticalGap, cardPadding, minimumListHeight,
+        ) {
             latestMax(it)
         }
     }
@@ -624,14 +637,18 @@ private inline fun AssistantTrayLayout(
 
 private fun assistantTrayMeasurePolicy(
     horizontalPadding: Dp,
-    topPadding: Dp,
+    expandedTopPadding: Dp,
+    collapsedTopPadding: Dp,
+    bottomPadding: Dp,
     verticalGap: Dp,
     cardPadding: Dp,
     minimumListHeight: Dp,
     maximumListHeight: (Dp) -> Dp,
 ) = MeasurePolicy { measurables, constraints ->
     val horizontalPadPx = horizontalPadding.roundToPx()
-    val topPadPx = topPadding.roundToPx()
+    val expandedTopPadPx = expandedTopPadding.roundToPx()
+    val collapsedTopPadPx = collapsedTopPadding.roundToPx()
+    val bottomPadPx = bottomPadding.roundToPx()
     val gapPx = verticalGap.roundToPx()
     val cardVertPadPx = cardPadding.roundToPx() * 2
     val minListHeightPx = minimumListHeight.roundToPx()
@@ -650,7 +667,7 @@ private fun assistantTrayMeasurePolicy(
         }
         val gapBefore = if (nonCardCount > 0) gapPx else 0
         val maxChildHeight = if (constraints.hasBoundedHeight) {
-            (constraints.maxHeight - nonCardHeight - gapBefore).coerceAtLeast(0)
+            (constraints.maxHeight - collapsedTopPadPx - bottomPadPx - nonCardHeight - gapBefore).coerceAtLeast(0)
         } else {
             constraints.maxHeight
         }
@@ -663,7 +680,7 @@ private fun assistantTrayMeasurePolicy(
     var cardPlaced = false
     if (cardIndex >= 0) {
         val cardGapPx = if (nonCardCount > 0) gapPx else 0
-        val trayChromeHeightPx = nonCardHeight + topPadPx + cardGapPx + cardVertPadPx
+        val trayChromeHeightPx = nonCardHeight + expandedTopPadPx + bottomPadPx + cardGapPx + cardVertPadPx
         val requestedCapPx = minOf(maximumListHeight(trayChromeHeightPx.toDp()), AssistantTrayTokens.maximumHeight)
             .roundToPx().coerceAtLeast(0)
         val constraintListRoomPx = if (constraints.hasBoundedHeight) {
@@ -685,17 +702,20 @@ private fun assistantTrayMeasurePolicy(
 
     val maxChildWidth = placeables.maxOfOrNull { it?.width ?: 0 } ?: 0
     val totalWidth = constraints.constrainWidth(maxChildWidth + horizontalPadPx * 2)
-    var totalHeight = if (cardPlaced) topPadPx else 0
     var placedCount = 0
+    var placedContentHeight = 0
     for (placeable in placeables) {
         if (placeable != null) {
-            if (placedCount > 0) totalHeight += gapPx
-            totalHeight += placeable.height
+            if (placedCount > 0) placedContentHeight += gapPx
+            placedContentHeight += placeable.height
             placedCount++
         }
     }
+    val topPadPx = if (cardPlaced) expandedTopPadPx else if (placedCount > 0) collapsedTopPadPx else 0
+    val appliedBottomPadPx = if (placedCount > 0) bottomPadPx else 0
+    val totalHeight = topPadPx + placedContentHeight + appliedBottomPadPx
     layout(totalWidth, constraints.constrainHeight(totalHeight)) {
-        var y = if (cardPlaced) topPadPx else 0
+        var y = topPadPx
         var indexPlaced = 0
         for (placeable in placeables) {
             if (placeable != null) {
@@ -719,11 +739,13 @@ internal fun TaskRouteChip(host: AssistantTaskHost, modifier: Modifier = Modifie
     val routes by host.tasks.routes.collectAsStateWithLifecycle()
     val todos by host.tasks.todos.collectAsStateWithLifecycle()
     val task = routedTask(routes, todos, host.conversation) ?: return
-    // At the tray bar's inset, so the chip lines up with its chips above it.
-    Row(modifier.fillMaxWidth().padding(horizontal = Tokens.Space.m)) {
-        JChip(stringResource(R.string.chat_tasks_route_chip, task.title), Modifier.testTag("assistant-route-chip"),
-            icon = PhIcons.PaperPlaneTilt, accent = true, onRemove = { host.tasks.setRoute(host.conversation, null) },
-            removeLabel = stringResource(R.string.chat_tasks_route_clear))
+    // At the tray bar's inset, so the chip lines up with its chips above it without leaking 48dp box padding.
+    CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides Dp.Unspecified) {
+        Row(modifier.fillMaxWidth().padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.xxs)) {
+            JChip(stringResource(R.string.chat_tasks_route_chip, task.title), Modifier.testTag("assistant-route-chip"),
+                icon = PhIcons.PaperPlaneTilt, accent = true, onRemove = { host.tasks.setRoute(host.conversation, null) },
+                removeLabel = stringResource(R.string.chat_tasks_route_clear))
+        }
     }
 }
 

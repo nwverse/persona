@@ -37,7 +37,7 @@ func (r Ref) Accept(v RefVisitor) {
 ```
 
 **Start a package with the scaffold**, then edit it into the domain's own words:
-`python3 scripts/new_domain_slice.py go internal/<context>/<name> --doc "<one sentence>" [--value …] [--closed …] [--entity … --id …] [--builder] [--decider] [--adapter] [--act]`
+`python3 scripts/gen/new_domain_slice.py go internal/<context>/<name> --doc "<one sentence>" [--value …] [--closed …] [--entity … --id …] [--builder] [--decider] [--adapter] [--act]`
 (`--help` says what each flag writes). Its every-flag output is `server/internal/archguard/testdata/scaffold`.
 
 **Running the rules:** `go test ./<pkg>/...` runs the domain rules through the package's `rules_test.go`, and names each

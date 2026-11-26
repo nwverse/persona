@@ -62,7 +62,11 @@ func TestStrengthWorkoutReportInputsAndGoldens(t *testing.T) {
 				}
 			}
 			for _, language := range []struct{ tag, value string }{{"en", "English"}, {"zh-Hans", ""}, {"ja", "日本語"}} {
-				prompt, ok, err := s.WorkoutReport(ctx, workout.ID, language.value)
+				report, ok, err := s.WorkoutReport(ctx, workout.ID, language.value)
+				prompt := report.Prompt
+				if ok && !report.Start.Equal(workout.Start) {
+					t.Fatalf("report start = %v, want %v", report.Start, workout.Start)
+				}
 				if err != nil || !ok {
 					t.Fatal(ok, err)
 				}

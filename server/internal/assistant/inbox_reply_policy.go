@@ -10,6 +10,8 @@ import (
 	"io"
 	"maps"
 	"slices"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -19,15 +21,740 @@ import (
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
-// Server-side reply policy gates for Inbox owner drafts (docs/assistant/inbox.md "Reply policy", #11901).
-//
-// Opt-in via manager.json inbox.reply_policy (disabled by default). When disabled or empty, existing queue,
-// suggestion, and confirmation behavior is preserved unchanged. When enabled, a classifier outputs only a category
-// name, the server maps that category to owner_draft, bot, owner_only, or no_reply, and fail-closed gates run at
-// three independent boundaries:
-//   1. Queue gate (before AI handling / escalation / agent start)
-//   2. Suggestion gate (when accepting an owner reply suggestion in inbox_suggest / inbox_draft)
-//   3. Send gate (immediately before the confirmed outward sender call, including a final-text veto)
+// Server-side reply policy gates for Inbox owner drafts. The legacy Task 2 schema and the upstream compiled schema
+// share the same fresh visibility boundary, but each interprets only its own explicit configuration fields.
+
+// legacyReplyPolicyConfig identifies the original Task 2 policy schema. The upstream compiled schema and the legacy
+// schema are deliberately disjoint: a classifier category must never be interpreted under the other schema's routes.
+func legacyReplyPolicyConfig(cfg *assistantwire.InboxReplyPolicyConfig) bool {
+	// Sources and RequireIndependentReview are shared with the compiled schema. Only fields unique to the original
+	// Task 2 schema select legacy routing; otherwise a compiled source scope or review requirement would disable itself.
+	return cfg != nil && (cfg.Routes != nil || cfg.UnknownMode != "")
+}
+
+func replyPolicyConfigOf(input any) *assistantwire.InboxReplyPolicyConfig {
+	switch cfg := input.(type) {
+	case *assistantwire.InboxReplyPolicyConfig:
+		return cfg
+	case assistantwire.InboxReplyPolicyConfig:
+		return &cfg
+	default:
+		return nil
+	}
+}
+
+const (
+	ReplyRouteOwnerDraft = "owner_draft"
+	ReplyRouteBot        = "bot"
+	ReplyRouteOwnerOnly  = "owner_only"
+	ReplyRouteNoReply    = "no_reply"
+)
+
+var errReplyPolicyDenied = errCannotReply
+
+var replyPolicyCategories = map[string]bool{
+	"personal_transaction": true, "security_compliance": true, "approval_permission": true,
+	"decision_delegation": true, "technical_qa": true, "research": true, "alert_triage": true,
+	"ppe_deploy": true, "mr_precheck": true, "no_reply": true, "ordinary_coordination": true,
+	"logistical_followup": true, "acknowledgement": true, "other_owner_reply": true, "unknown": true,
+}
+
+var forcedReplyRoutes = map[string]string{
+	"personal_transaction": ReplyRouteOwnerOnly, "security_compliance": ReplyRouteOwnerOnly,
+	"approval_permission": ReplyRouteOwnerOnly, "decision_delegation": ReplyRouteOwnerOnly,
+	"technical_qa": ReplyRouteBot, "research": ReplyRouteBot, "alert_triage": ReplyRouteBot,
+	"ppe_deploy": ReplyRouteBot, "mr_precheck": ReplyRouteBot, "no_reply": ReplyRouteNoReply,
+	"unknown": ReplyRouteOwnerOnly, "": ReplyRouteOwnerOnly,
+}
+
+func validReplyRoute(route string) bool {
+	switch route {
+	case ReplyRouteOwnerDraft, ReplyRouteBot, ReplyRouteOwnerOnly, ReplyRouteNoReply:
+		return true
+	default:
+		return false
+	}
+}
+
+// validReplyPolicyConfig rejects the whole enabled specification, rather than letting one safe-looking category hide
+// a malformed route elsewhere. A disabled or absent policy is the legacy path and needs no validation here.
+func validReplyPolicyConfig(cfg *assistantwire.InboxReplyPolicyConfig) bool {
+	if cfg == nil || !cfg.Enabled {
+		return true
+	}
+	if strings.TrimSpace(cfg.Revision) == "" || cfg.UnknownMode != "" && !validReplyRoute(cfg.UnknownMode) {
+		return false
+	}
+	for category, route := range cfg.Routes {
+		if !replyPolicyCategories[category] || !validReplyRoute(route) {
+			return false
+		}
+	}
+	return true
+}
+
+// replyPolicyApplies selects sources explicitly, or every source when an enabled policy has no source list. A disabled
+// or nil policy is the compatibility path: none of the gates changes existing behavior.
+func replyPolicyApplies(input any, source string) bool {
+	cfg := replyPolicyConfigOf(input)
+	if cfg == nil || !cfg.Enabled {
+		return false
+	}
+	if !legacyReplyPolicyConfig(cfg) {
+		policy := compileReplyPolicy(cfg)
+		if !policy.enabled {
+			return false
+		}
+		if len(policy.sources) == 0 {
+			return true
+		}
+		return policy.sources[strings.TrimSpace(source)]
+	}
+	if len(cfg.Sources) == 0 {
+		return true
+	}
+	for _, candidate := range cfg.Sources {
+		if candidate == source {
+			return true
+		}
+	}
+	return false
+}
+
+// replyPolicySourceUnion is the durable set of sources whose text a row still carries. It includes the empty source:
+// an enabled policy with no source list applies to it too. Sorting makes the authorization content version stable.
+func replyPolicySourceUnion(groups ...[]string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, group := range groups {
+		for _, source := range group {
+			if !seen[source] {
+				seen[source] = true
+				out = append(out, source)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func replyPolicySourceSet(it *InboxItem) []string {
+	if it == nil {
+		return nil
+	}
+	sources := []string{it.Source}
+	sources = append(sources, it.ReplyContentSources...)
+	for _, ref := range it.MergedFrom {
+		sources = append(sources, ref.Source)
+	}
+	return replyPolicySourceUnion(sources)
+}
+
+func replyPolicySourcesApply(input any, sources []string) bool {
+	cfg := replyPolicyConfigOf(input)
+	if cfg != nil && !legacyReplyPolicyConfig(cfg) {
+		policy := compileReplyPolicy(cfg)
+		if !policy.enabled {
+			return false
+		}
+		if len(policy.sources) == 0 {
+			return true
+		}
+	}
+	for _, source := range sources {
+		if replyPolicyApplies(cfg, source) {
+			return true
+		}
+	}
+	return false
+}
+
+// replyPolicyItemApplies follows merged text, not just the survivor's current source. ReplyContentSources survives Undo
+// because Undo does not remove the member text already copied into the survivor's context.
+func replyPolicyItemApplies(input any, it *InboxItem) bool {
+	cfg := replyPolicyConfigOf(input)
+	if cfg != nil && !legacyReplyPolicyConfig(cfg) {
+		return compileReplyPolicy(cfg).appliesToItem(it)
+	}
+	return it != nil && replyPolicySourcesApply(cfg, replyPolicySourceSet(it))
+}
+
+func resetReplyPolicyClassification(it *InboxItem) {
+	it.ReplyCategory, it.ReplyMode, it.ReplyClassifiedOf, it.ReplyPolicyRev = "", "", "", ""
+	it.ReplyReviewed = false
+	it.ReplyPolicy = nil
+}
+
+func replyRoute(category string, input any) string {
+	cfg := replyPolicyConfigOf(input)
+	if cfg == nil || !cfg.Enabled {
+		return ""
+	}
+	category = strings.TrimSpace(category)
+	if !legacyReplyPolicyConfig(cfg) {
+		_, route, err := compileReplyPolicy(cfg).resolve(category)
+		if err != nil {
+			return ReplyRouteOwnerOnly
+		}
+		return route
+	}
+	if !validReplyPolicyConfig(cfg) || !replyPolicyCategories[category] {
+		return ReplyRouteOwnerOnly
+	}
+	if route, forced := forcedReplyRoutes[category]; forced {
+		return route
+	}
+	if route := cfg.Routes[category]; validReplyRoute(route) {
+		return route
+	}
+	return ReplyRouteOwnerOnly
+}
+
+// replyPolicyContentVersion covers the exact text the classifier saw, not only the latest source version. Merges can
+// append a restricted member's context without changing Last, so Last alone is not an authorization version.
+// replyPolicyContextTruncated also recognizes rows clipped before ReplyContextTruncated existed. A still-merged row at
+// the clipping cap cannot prove that its retained prefix was complete; fail closed and persist the boundary on new writes.
+func replyPolicyContextTruncated(it *InboxItem) bool {
+	if it == nil {
+		return false
+	}
+	// A mail snippet is not its body. Even after BodyOf catches up, readMailBody retains at most 3000 characters; a
+	// prefix at that boundary cannot authorize text that was never presented to the classifier.
+	mailIncomplete := it.Mail != nil && (it.BodyOf != it.Last ||
+		it.MailBodyTruncated != nil && *it.MailBodyTruncated ||
+		it.MailBodyTruncated == nil && utf8.RuneCountInString(it.Context) >= 3000)
+	return it.ReplyContextTruncated || mailIncomplete || len(it.MergedFrom) > 0 && utf8.RuneCountInString(it.Context) >= mergeCtxMax
+}
+
+func replyPolicyContentVersion(it *InboxItem) string {
+	if it == nil {
+		return ""
+	}
+	version := strconv.Itoa(len(it.Last)) + "\x00" + it.Last + "\x00" + it.Context
+	sources := replyPolicySourceSet(it)
+	truncated := replyPolicyContextTruncated(it)
+	if len(sources) > 1 || truncated {
+		// A clipped append can leave Last and Context byte-for-byte unchanged. Use a separate domain and length-prefix
+		// both text fields: Context itself may contain the source/truncation marker bytes, so suffixing the legacy form
+		// would let an ordinary item collide with a different merged authorization state.
+		version = "reply-policy-merged\x00" + strconv.Itoa(len(it.Last)) + "\x00" + it.Last + "\x00" + strconv.Itoa(len(it.Context)) + "\x00" + it.Context
+		version += "\x00sources\x00" + strconv.Itoa(len(sources))
+		for _, source := range sources {
+			version += "\x00" + strconv.Itoa(len(source)) + "\x00" + source
+		}
+		version += "\x00truncated\x00" + strconv.FormatBool(truncated)
+	}
+	// The compiled policy also binds title, sender, preview and the physical reply target. Keep the legacy merged-source
+	// domain above and add these fields as a length-unambiguous JSON suffix, so both authorization models invalidate
+	// every content or target change covered by their respective assertions.
+	payload := struct {
+		ID, Source, Kind, Last, Title, Sender, Preview, Context, Target string
+	}{
+		ID: it.ID, Source: it.Source, Kind: it.Kind, Last: it.Last, Title: it.Title,
+		Sender: it.Sender, Preview: it.Preview, Context: it.Context, Target: suggestionReplyTarget(it),
+	}
+	raw, _ := json.Marshal(payload)
+	version += "\x00compiled-fields\x00" + string(raw)
+	sum := sha256.Sum256([]byte(version))
+	return hex.EncodeToString(sum[:])
+}
+
+func replyPolicyClassificationCurrent(it *InboxItem, input any) bool {
+	cfg := replyPolicyConfigOf(input)
+	if cfg != nil && !legacyReplyPolicyConfig(cfg) {
+		policy := compileReplyPolicy(cfg)
+		if !policy.appliesToItem(it) {
+			return true
+		}
+		snap := it.ReplyPolicy
+		if snap == nil || snap.ContentVersion == "" || snap.ContentVersion != replyPolicyContentVersion(it) || snap.PolicyRevision != policy.revision {
+			return false
+		}
+		category, route, err := policy.resolve(snap.Category)
+		if err != nil || snap.Category != category || snap.Route != route {
+			return false
+		}
+		return route != assistantwire.ReplyRouteOwnerDraft || !policy.requireIndependentReview || snap.Reviewed
+	}
+	if it == nil {
+		return false
+	}
+	if !replyPolicyItemApplies(cfg, it) {
+		return true
+	}
+	if it.ReplyClassifiedOf == "" || it.ReplyClassifiedOf != replyPolicyContentVersion(it) || it.ReplyPolicyRev == "" || it.ReplyPolicyRev != cfg.Revision {
+		return false
+	}
+	// A definitively non-draft result is already fail closed, including an unknown produced by a failed review. Only an
+	// owner-draft route needs the independent review bit; turning that requirement on reclassifies an existing draft.
+	if replyRoute(it.ReplyCategory, cfg) != ReplyRouteOwnerDraft {
+		return true
+	}
+	return !cfg.RequireIndependentReview || it.ReplyReviewed
+}
+
+func replyPolicySnapshotCurrent(it *InboxItem, input any) bool {
+	cfg := replyPolicyConfigOf(input)
+	if it == nil || !replyPolicyItemApplies(cfg, it) {
+		return true
+	}
+	if !replyPolicyClassificationCurrent(it, cfg) {
+		return false
+	}
+	if cfg != nil && !legacyReplyPolicyConfig(cfg) {
+		return it.ReplyPolicy != nil && it.ReplyPolicy.Route == ReplyRouteOwnerDraft
+	}
+	route := replyRoute(it.ReplyCategory, cfg)
+	return route == ReplyRouteOwnerDraft && it.ReplyMode == route
+}
+
+// replyPolicyQueuePending leaves a not-yet-classified item queued without starting work. The next pass classifies it;
+// only a current, definitively non-owner-draft route is released like TwinNever.
+func replyPolicyQueuePending(it *InboxItem, cfg *assistantwire.InboxReplyPolicyConfig) bool {
+	if !legacyReplyPolicyConfig(cfg) {
+		return false
+	}
+	return replyPolicyItemApplies(cfg, it) && validReplyPolicyConfig(cfg) && !replyPolicyClassificationCurrent(it, cfg)
+}
+
+func replyPolicyQueueBlocked(it *InboxItem, cfg *assistantwire.InboxReplyPolicyConfig) bool {
+	if !legacyReplyPolicyConfig(cfg) {
+		return false
+	}
+	if !replyPolicyItemApplies(cfg, it) {
+		return false
+	}
+	if !validReplyPolicyConfig(cfg) {
+		return true
+	}
+	if !replyPolicyClassificationCurrent(it, cfg) {
+		return false
+	}
+	route := replyRoute(it.ReplyCategory, cfg)
+	return route != ReplyRouteOwnerDraft || it.ReplyMode != route
+}
+
+func replyPolicySuggestionGate(it *InboxItem, kind string, cfg *assistantwire.InboxReplyPolicyConfig) error {
+	if cfg != nil && !legacyReplyPolicyConfig(cfg) {
+		policy := compileReplyPolicy(cfg)
+		if kind != SuggestReply && kind != SuggestAgent || !policy.appliesToItem(it) {
+			return nil
+		}
+		return policy.allowsOwnerDraft(it.ReplyPolicy, replyPolicyContentVersion(it))
+	}
+	if (kind != SuggestReply && kind != SuggestAgent) || !replyPolicyItemApplies(cfg, it) {
+		return nil
+	}
+	if !replyPolicySnapshotCurrent(it, cfg) {
+		return errReplyPolicyDenied
+	}
+	return nil
+}
+
+// replyPolicyActionGate binds both reply and Agent confirmations to the classification the owner saw. In particular,
+// an Agent suggestion created before a policy was enabled, or before its category became restricted, cannot execute.
+func replyPolicyActionGate(it *InboxItem, g *InboxSuggestion, cfg *assistantwire.InboxReplyPolicyConfig) error {
+	if cfg != nil && !legacyReplyPolicyConfig(cfg) {
+		policy := compileReplyPolicy(cfg)
+		if g == nil || g.Kind != SuggestReply && g.Kind != SuggestAgent || !policy.appliesToItem(it) {
+			return nil
+		}
+		return verifyReplyPolicySuggestionLocked(it, g, suggestionAttempt(it, g.Version), policy)
+	}
+	if g == nil || g.Kind != SuggestReply && g.Kind != SuggestAgent || !replyPolicyItemApplies(cfg, it) {
+		return nil
+	}
+	if !replyPolicySnapshotCurrent(it, cfg) || g.ReplyCategory != it.ReplyCategory || g.ReplyMode != it.ReplyMode ||
+		g.ReplyClassifiedOf != it.ReplyClassifiedOf || g.ReplyPolicyRev != it.ReplyPolicyRev || g.ReplyReviewed != it.ReplyReviewed {
+		return errReplyPolicyDenied
+	}
+	return nil
+}
+
+func replyPolicySendGate(it *InboxItem, g *InboxSuggestion, cfg *assistantwire.InboxReplyPolicyConfig) error {
+	// Compiled suggestions are authorized by verifyReplyPolicySuggestionLocked / verifyReplyPolicySendAttemptLocked,
+	// which preserve the durable-attempt error mapping. This early gate belongs only to the legacy field snapshot.
+	if legacyReplyPolicyConfig(cfg) && g != nil && g.Kind == SuggestReply && replyPolicyItemApplies(cfg, it) {
+		return replyPolicyActionGate(it, g, cfg)
+	}
+	return nil
+}
+
+// mirroredLegacyReply identifies the AI draft exposed to old clients through agent.draft. A direct owner-authored reply
+// without this mirror stays on the legacy /reply path; a reply that edits the mirrored draft is still an AI suggestion
+// confirmation and must pass the same edit veto and snapshot authorization as the versioned suggestion API.
+func mirroredLegacyReply(it *InboxItem) *InboxSuggestion {
+	if it == nil || it.Agent == nil || it.Agent.State != AgentDrafted {
+		return nil
+	}
+	g := currentSuggestion(it)
+	if g == nil || g.Kind != SuggestReply || g.Handback || it.Agent.Draft == "" || it.Agent.Draft != g.Text || suggestionAttempt(it, g.Version) != nil {
+		return nil
+	}
+	return g
+}
+
+// replyInstructionForSuggestion returns the latest owner rewrite instruction not consumed by a later owner decision.
+// Reported progress and other unrelated chain entries do not consume it. A published replacement carries the chain ID,
+// but that ID authorizes only the identical generated text; every changed replacement needs its own classification.
+func chainReplyInstruction(chain []InboxChainEntry) *InboxChainEntry {
+	for i := len(chain) - 1; i >= 0; i-- {
+		switch chain[i].Kind {
+		case ChainConfirmed, ChainRejected:
+			return nil
+		case ChainInstructed:
+			instruction := chain[i]
+			return &instruction
+		}
+	}
+	return nil
+}
+
+func replyInstructionForSuggestion(it *InboxItem, proposedText string, input any) (*InboxChainEntry, bool) {
+	if it == nil {
+		return nil, false
+	}
+	instruction := it.ReplyInstruction
+	if instruction == nil {
+		instruction = chainReplyInstruction(it.Chain)
+	}
+	if instruction == nil {
+		return nil, false
+	}
+	g := currentSuggestion(it)
+	needsClassification := instruction.ID == "" || g == nil || g.ReplyInstruction != instruction.ID || g.Text != proposedText
+	if !needsClassification {
+		switch policy := input.(type) {
+		case replyPolicySpec:
+			needsClassification = policy.allowsOwnerDraft(g.ReplyPolicy, replyPolicyContentVersion(it)) != nil
+		default:
+			cfg := replyPolicyConfigOf(input)
+			if legacyReplyPolicyConfig(cfg) {
+				needsClassification = replyPolicyActionGate(it, g, cfg) != nil
+			} else {
+				needsClassification = compileReplyPolicy(cfg).allowsOwnerDraft(g.ReplyPolicy, replyPolicyContentVersion(it)) != nil
+			}
+		}
+	}
+	return instruction, needsClassification
+}
+
+func snapshotReplyPolicy(g *InboxSuggestion, it *InboxItem, input any) {
+	cfg := replyPolicyConfigOf(input)
+	if g == nil || g.Kind != SuggestReply && g.Kind != SuggestAgent || !replyPolicyItemApplies(cfg, it) {
+		return
+	}
+	if cfg != nil && !legacyReplyPolicyConfig(cfg) {
+		g.ReplyPolicy = cloneReplyPolicySnapshot(it.ReplyPolicy)
+		return
+	}
+	g.ReplyCategory, g.ReplyMode = it.ReplyCategory, it.ReplyMode
+	g.ReplyClassifiedOf, g.ReplyPolicyRev, g.ReplyReviewed = it.ReplyClassifiedOf, it.ReplyPolicyRev, it.ReplyReviewed
+}
+
+// strictReplyPolicyCategory accepts exactly one flat JSON object with no duplicate keys. Authorization must never
+// depend on JSON's first-object-wins extraction or last-duplicate-wins unmarshalling.
+func strictReplyPolicyCategory(raw string) (string, error) {
+	dec := json.NewDecoder(strings.NewReader(strings.TrimSpace(raw)))
+	opening, err := dec.Token()
+	if err != nil || opening != json.Delim('{') {
+		return "", errors.New("reply policy response is not one JSON object")
+	}
+	seen := map[string]bool{}
+	category := ""
+	for dec.More() {
+		token, err := dec.Token()
+		if err != nil {
+			return "", err
+		}
+		key, ok := token.(string)
+		if !ok || seen[key] {
+			return "", errors.New("ambiguous duplicate reply policy key")
+		}
+		if key != "category" {
+			return "", errors.New("unexpected reply policy key")
+		}
+		seen[key] = true
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			return "", err
+		}
+		if key == "category" {
+			if err := json.Unmarshal(value, &category); err != nil {
+				return "", errors.New("invalid reply policy category")
+			}
+		}
+	}
+	if _, err := dec.Token(); err != nil {
+		return "", err
+	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		return "", errors.New("multiple reply policy JSON values")
+	}
+	return strings.TrimSpace(category), nil
+}
+
+// classifyReplyPolicyInput returns only a category. The server, not the model, maps it to a route. Independent review
+// is a second invocation that must reach the same category without seeing the first answer. An owner edit includes the
+// original conversation: words such as "yes, go ahead" derive their authority from that context, not from the edit alone.
+func (s *Service) classifyReplyPolicyInput(ctx context.Context, inputCfg any, in prompts.InboxReplyPolicyInput) (string, error) {
+	cfg := replyPolicyConfigOf(inputCfg)
+	if cfg != nil && !legacyReplyPolicyConfig(cfg) {
+		data := replyPolicyItemData{id: "reply-policy-test", context: in.Context, contentVersion: "reply-policy-test"}
+		snap, err := s.classifyReplyPolicy(ctx, compileReplyPolicy(cfg), data, in.ReplyText)
+		if snap == nil {
+			return "", err
+		}
+		return snap.Category, err
+	}
+	if cfg == nil {
+		return "unknown", errors.New("missing reply policy config")
+	}
+	if !validReplyPolicyConfig(cfg) {
+		return "unknown", errors.New("invalid reply policy config")
+	}
+	if strings.TrimSpace(in.Text) == "" {
+		return "unknown", errors.New("empty reply policy input")
+	}
+	input := prompts.RenderInboxReplyPolicyInput(in)
+	classify := func(system string) (string, error) {
+		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		raw, err := s.inboxModelComplete(cctx, purposeTriage, prompts.RenderJSONOnly(system), input, 1024)
+		if err != nil {
+			return "", err
+		}
+		category, err := strictReplyPolicyCategory(raw)
+		if err != nil {
+			return "", err
+		}
+		if !replyPolicyCategories[category] {
+			return "", errors.New("invalid reply policy category")
+		}
+		return category, nil
+	}
+	category, err := classify(prompts.RenderInboxReplyPolicy())
+	if err != nil {
+		return "unknown", err
+	}
+	if cfg.RequireIndependentReview {
+		reviewed, err := classify(prompts.RenderInboxReplyPolicyReview())
+		if err != nil {
+			return "unknown", err
+		}
+		if reviewed != category {
+			return "unknown", errors.New("reply policy review disagreed")
+		}
+	}
+	return category, nil
+}
+
+func (s *Service) classifyReplyPolicyText(ctx context.Context, cfg *assistantwire.InboxReplyPolicyConfig, text string) (string, error) {
+	return s.classifyReplyPolicyInput(ctx, cfg, prompts.InboxReplyPolicyInput{Text: text})
+}
+
+// classifyInboxReplyPolicies classifies actionable items before their queue pass. Failures are persisted as unknown /
+// owner_only for this exact content and policy revision, so a model outage cannot turn into a draft on a later gate.
+func (s *Service) classifyInboxReplyPolicies(ctx context.Context, input any) {
+	cfg := replyPolicyConfigOf(input)
+	if cfg != nil && !legacyReplyPolicyConfig(cfg) {
+		policy := compileReplyPolicy(cfg)
+		if !policy.enabled {
+			return
+		}
+		b := &s.inbox
+		b.mu.Lock()
+		var todo []*InboxItem
+		for _, it := range b.items {
+			if it.VisibilityExcluded || !it.open() || !policy.appliesToItem(it) {
+				continue
+			}
+			if it.Tier != TierAction && b.policyTwin(it) != TwinFirst && !it.handled() {
+				continue
+			}
+			if !replyPolicyClassificationCurrent(it, cfg) {
+				todo = append(todo, it)
+			}
+		}
+		b.mu.Unlock()
+		for _, it := range todo {
+			if err := s.classifyInboxReplyPolicyItem(ctx, cfg, it); err != nil {
+				s.logf("inbox: reply policy classification for %s: %v", it.ID, err)
+			}
+		}
+		return
+	}
+	if cfg == nil || !cfg.Enabled || !validReplyPolicyConfig(cfg) {
+		return
+	}
+	b := &s.inbox
+	b.mu.Lock()
+	var todo []*InboxItem
+	for _, it := range b.items {
+		if it.VisibilityExcluded || !it.open() || !replyPolicyItemApplies(cfg, it) {
+			continue
+		}
+		// Classification runs before escalation. TwinFirst can enqueue an already-tiered FYI item, and an existing
+		// handling session can receive work outside TierAction; both need a snapshot before the queue pass.
+		if it.Tier != TierAction && b.policyTwin(it) != TwinFirst && !it.handled() {
+			continue
+		}
+		stale := it.ReplyClassifiedOf != replyPolicyContentVersion(it) || it.ReplyPolicyRev != cfg.Revision
+		if replyRoute(it.ReplyCategory, cfg) == ReplyRouteOwnerDraft && cfg.RequireIndependentReview && !it.ReplyReviewed {
+			stale = true
+		}
+		if stale {
+			todo = append(todo, it)
+		}
+	}
+	b.mu.Unlock()
+	for _, it := range todo {
+		if err := s.classifyInboxReplyPolicyItem(ctx, cfg, it); err != nil {
+			s.logf("inbox: reply policy classification for %s: %v", it.ID, err)
+		}
+	}
+}
+
+// classifyInboxReplyPolicyForDraft gives an explicitly requested on-demand draft the same classification fence as a
+// queue pass, including an open FYI item that has no TwinFirst rule or previous handling session.
+func (s *Service) classifyInboxReplyPolicyForDraft(ctx context.Context, id string, cfg *assistantwire.InboxReplyPolicyConfig) error {
+	b := &s.inbox
+	b.mu.Lock()
+	it := b.items[id]
+	b.mu.Unlock()
+	if it == nil {
+		return nil // draftReply returns the ordinary not-found error below.
+	}
+	return s.classifyInboxReplyPolicyItem(ctx, cfg, it)
+}
+
+// classifyInboxReplyPolicyItem classifies one current item and persists the exact content/policy snapshot. Model
+// failures become the durable unknown/owner_only result; only a failed persistence write is returned to the caller.
+func (s *Service) classifyInboxReplyPolicyItem(ctx context.Context, input any, it *InboxItem) error {
+	cfg := replyPolicyConfigOf(input)
+	if cfg != nil && !legacyReplyPolicyConfig(cfg) {
+		policy := compileReplyPolicy(cfg)
+		if !policy.enabled {
+			return nil
+		}
+		b := &s.inbox
+		b.mu.Lock()
+		if it.VisibilityExcluded || !it.open() || !policy.appliesToItem(it) || replyPolicyClassificationCurrent(it, cfg) {
+			b.mu.Unlock()
+			return nil
+		}
+		data := snapshotItemForReplyPolicyLocked(it)
+		it.replyClassifySerial++
+		serial := it.replyClassifySerial
+		b.mu.Unlock()
+
+		allowed, visibilityErr := s.inboxVisibilityModelAllowed(ctx, it)
+		if visibilityErr == nil && !allowed {
+			return nil
+		}
+		var snap *InboxReplyPolicySnapshot
+		if visibilityErr != nil {
+			snap = replyPolicyVisibilityFailSnapshot(policy, data.contentVersion, visibilityErr)
+		} else {
+			snap, _ = s.classifyReplyPolicy(ctx, policy, data, "")
+		}
+		if ctx.Err() != nil {
+			return nil
+		}
+		b.mu.Lock()
+		if it.VisibilityExcluded || !it.open() || replyPolicyContentVersion(it) != data.contentVersion || it.replyClassifySerial != serial {
+			b.mu.Unlock()
+			return nil
+		}
+		w := beginWrite(it)
+		it.ReplyPolicy = snap
+		b.settle(w)
+		b.mu.Unlock()
+		if failed := s.saveWrites(ctx, []*inboxWrite{w}, "its reply policy classification"); failed[data.id] {
+			return errInboxNotPersisted
+		}
+		return nil
+	}
+	if cfg == nil || !cfg.Enabled || !validReplyPolicyConfig(cfg) {
+		return nil
+	}
+	b := &s.inbox
+	b.mu.Lock()
+	if it.VisibilityExcluded || !it.open() || !replyPolicyItemApplies(cfg, it) || replyPolicyClassificationCurrent(it, cfg) {
+		b.mu.Unlock()
+		return nil
+	}
+	version, text, truncated := replyPolicyContentVersion(it), it.Context, replyPolicyContextTruncated(it)
+	// A slower earlier model response must not overwrite a newer classification of the same content. The serial is
+	// process-local concurrency evidence; the durable category/content/revision snapshot remains the restart fence.
+	it.replyClassifySerial++
+	serial := it.replyClassifySerial
+	b.mu.Unlock()
+	allowed, visibilityErr := s.inboxVisibilityModelAllowed(ctx, it)
+	if visibilityErr == nil && !allowed {
+		return nil
+	}
+	category, err := "unknown", visibilityErr
+	if visibilityErr == nil {
+		if truncated {
+			err = errors.New("merged reply context was truncated")
+		} else {
+			category, err = s.classifyReplyPolicyText(ctx, cfg, text)
+		}
+	}
+	if err != nil {
+		category = "unknown"
+	}
+	b.mu.Lock()
+	if !it.open() || replyPolicyContentVersion(it) != version || it.replyClassifySerial != serial {
+		b.mu.Unlock()
+		return nil
+	}
+	w := beginWrite(it)
+	it.ReplyCategory = category
+	it.ReplyMode = replyRoute(category, cfg)
+	it.ReplyClassifiedOf, it.ReplyPolicyRev = version, cfg.Revision
+	it.ReplyReviewed = err == nil && cfg.RequireIndependentReview
+	b.settle(w)
+	b.mu.Unlock()
+	if failed := s.saveWrites(ctx, []*inboxWrite{w}, "its reply policy classification"); failed[it.ID] {
+		return errInboxNotPersisted
+	}
+	return nil
+}
+
+// vetoEditedReply rechecks owner-introduced text before confirmation can reserve a send. Unedited text already carries
+// the item's trusted classification; an edited text must independently classify as an owner-draft route.
+func (s *Service) vetoEditedReply(ctx context.Context, id string, in suggestionReq, cfg *assistantwire.InboxReplyPolicyConfig) error {
+	if in.Action != suggestConfirm || in.Text == nil || strings.TrimSpace(*in.Text) == "" {
+		return nil
+	}
+	b := &s.inbox
+	b.mu.Lock()
+	it := b.items[id]
+	var g *InboxSuggestion
+	if it != nil {
+		g = currentSuggestion(it)
+	}
+	if it == nil || g == nil || (g.Kind != SuggestReply && g.Kind != SuggestAgent) || g.Version != in.Version || !replyPolicyItemApplies(cfg, it) {
+		b.mu.Unlock()
+		return nil
+	}
+	text := strings.TrimSpace(*in.Text)
+	original, conversation := g.Text, it.Context
+	b.mu.Unlock()
+	if text == original {
+		return nil
+	}
+	category, err := s.classifyReplyPolicyInput(ctx, cfg, prompts.InboxReplyPolicyInput{Text: text, Original: conversation, Edit: true})
+	if err != nil || replyRoute(category, cfg) != ReplyRouteOwnerDraft {
+		// This veto was required by the enabled policy under which classification just ran. A later disable can restore
+		// legacy behavior for a new attempt, but it cannot retroactively turn this rejected edit into an authorized send.
+		return errReplyPolicyDenied
+	}
+	return nil
+}
 
 // Default reply-policy category names mapped on the server when inbox.reply_policy.categories is omitted.
 const (
@@ -164,8 +891,20 @@ func validReplyPolicyRoute(route string) bool {
 
 // compileReplyPolicy normalizes inbox.reply_policy and derives a deterministic effective policy revision.
 // Disabled or zero-value configuration returns an inactive spec so existing behavior stays byte-for-byte identical.
-func compileReplyPolicy(cfg assistantwire.InboxReplyPolicyConfig) replyPolicySpec {
-	if !cfg.Enabled {
+func compileReplyPolicy(input any) replyPolicySpec {
+	var cfg assistantwire.InboxReplyPolicyConfig
+	switch value := input.(type) {
+	case assistantwire.InboxReplyPolicyConfig:
+		cfg = value
+	case *assistantwire.InboxReplyPolicyConfig:
+		if value == nil {
+			return replyPolicySpec{}
+		}
+		cfg = *value
+	default:
+		return replyPolicySpec{}
+	}
+	if !cfg.Enabled || legacyReplyPolicyConfig(&cfg) {
 		return replyPolicySpec{}
 	}
 	rawCats := cfg.Categories
@@ -244,34 +983,6 @@ func (p replyPolicySpec) resolve(category string) (normCat, route string, err er
 	return normCat, raw, nil
 }
 
-// replyPolicySourceSet follows retained member text as well as the survivor's current source. The durable union
-// survives Undo because Undo does not remove member context already copied into the survivor.
-func replyPolicySourceUnion(groups ...[]string) []string {
-	seen := map[string]bool{}
-	var out []string
-	for _, group := range groups {
-		for _, source := range group {
-			if source != "" && !seen[source] {
-				seen[source] = true
-				out = append(out, source)
-			}
-		}
-	}
-	slices.Sort(out)
-	return out
-}
-
-func replyPolicySourceSet(it *InboxItem) []string {
-	if it == nil {
-		return nil
-	}
-	sources := append([]string{it.Source}, it.ReplyContentSources...)
-	for _, ref := range it.MergedFrom {
-		sources = append(sources, ref.Source)
-	}
-	return replyPolicySourceUnion(sources)
-}
-
 func (p replyPolicySpec) appliesToItem(it *InboxItem) bool {
 	if !p.enabled || it == nil {
 		return false
@@ -285,51 +996,6 @@ func (p replyPolicySpec) appliesToItem(it *InboxItem) bool {
 		}
 	}
 	return false
-}
-
-func resetReplyPolicyClassification(it *InboxItem) {
-	it.ReplyPolicy = nil
-}
-
-// replyPolicyContextTruncated recognizes both newly recorded clipping and rows written before the durable boundary
-// existed. Mail body clipping is tracked separately from formatted headers; a snippet is never a complete body.
-func replyPolicyContextTruncated(it *InboxItem) bool {
-	if it == nil {
-		return false
-	}
-	mailIncomplete := it.Mail != nil && (it.BodyOf != it.Last ||
-		it.MailBodyTruncated != nil && *it.MailBodyTruncated ||
-		it.MailBodyTruncated == nil && utf8.RuneCountInString(it.Context) >= 3000)
-	return it.ReplyContextTruncated || mailIncomplete ||
-		len(it.MergedFrom) > 0 && utf8.RuneCountInString(it.Context) >= mergeCtxMax
-}
-
-// replyPolicyContentVersion hashes the item's message content and reply target so any content update
-// invalidates prior policy snapshots. Caller holds b.mu (or owns a copy of it).
-func replyPolicyContentVersion(it *InboxItem) string {
-	if it == nil {
-		return ""
-	}
-	payload := struct {
-		ID, Source, Kind, Last, Title, Sender, Preview, Context, Target string
-		Sources                                                         []string
-		Truncated                                                       bool
-	}{
-		ID:        it.ID,
-		Source:    it.Source,
-		Kind:      it.Kind,
-		Last:      it.Last,
-		Title:     it.Title,
-		Sender:    it.Sender,
-		Preview:   it.Preview,
-		Context:   it.Context,
-		Target:    suggestionReplyTarget(it),
-		Sources:   replyPolicySourceSet(it),
-		Truncated: replyPolicyContextTruncated(it),
-	}
-	raw, _ := json.Marshal(payload)
-	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:])
 }
 
 // replyPolicyAllowsOwnerDraft checks whether snap authorizes owner-draft handling for the given content version
@@ -385,42 +1051,6 @@ func snapshotItemForReplyPolicyLocked(it *InboxItem) replyPolicyItemData {
 		truncated:      replyPolicyContextTruncated(it),
 		sources:        replyPolicySourceSet(it),
 	}
-}
-
-// chainReplyInstruction returns the latest owner rewrite instruction not consumed by a later owner decision.
-// Reported progress and merge markers do not consume it. The durable item field survives chain trimming and resequencing.
-func chainReplyInstruction(chain []InboxChainEntry) *InboxChainEntry {
-	for i := len(chain) - 1; i >= 0; i-- {
-		switch chain[i].Kind {
-		case ChainConfirmed, ChainRejected:
-			return nil
-		case ChainInstructed:
-			instruction := chain[i]
-			return &instruction
-		}
-	}
-	return nil
-}
-
-// replyInstructionForSuggestion binds a generated replacement to the exact owner instruction that authorized its
-// rewrite. Identical text still needs a fresh classification when its snapshot or required review is no longer current.
-func replyInstructionForSuggestion(it *InboxItem, proposedText string, policy replyPolicySpec) (*InboxChainEntry, bool) {
-	if it == nil {
-		return nil, false
-	}
-	instruction := it.ReplyInstruction
-	if instruction == nil {
-		instruction = chainReplyInstruction(it.Chain)
-	}
-	if instruction == nil {
-		return nil, false
-	}
-	g := currentSuggestion(it)
-	needsClassification := instruction.ID == "" || g == nil || g.ReplyInstruction != instruction.ID || g.Text != proposedText
-	if !needsClassification {
-		needsClassification = policy.allowsOwnerDraft(g.ReplyPolicy, replyPolicyContentVersion(it)) != nil
-	}
-	return instruction, needsClassification
 }
 
 func replyPolicyItemWithInstruction(item replyPolicyItemData, instruction *InboxChainEntry) replyPolicyItemData {
@@ -599,89 +1229,26 @@ func (s *Service) classifyReplyPolicy(ctx context.Context, policy replyPolicySpe
 	return snap, nil
 }
 
-func replyPolicyClassificationCurrent(it *InboxItem, cfg assistantwire.InboxReplyPolicyConfig) bool {
-	policy := compileReplyPolicy(cfg)
-	if !policy.appliesToItem(it) {
-		return true
-	}
-	snap := it.ReplyPolicy
-	if snap == nil || snap.ContentVersion == "" || snap.ContentVersion != replyPolicyContentVersion(it) || snap.PolicyRevision != policy.revision {
-		return false
-	}
-	category, route, err := policy.resolve(snap.Category)
-	if err != nil || snap.Category != category || snap.Route != route {
-		return false
-	}
-	return route != assistantwire.ReplyRouteOwnerDraft || !policy.requireIndependentReview || snap.Reviewed
-}
-
-// classifyInboxReplyPolicies refreshes the explicit classification fence for every open item that can reach AI work.
-// Unlike the queue-only pass, merge/undo callers use this after triage has deliberately been reset.
-func (s *Service) classifyInboxReplyPolicies(ctx context.Context, cfg assistantwire.InboxReplyPolicyConfig) {
-	policy := compileReplyPolicy(cfg)
-	if !policy.enabled {
-		return
-	}
-	b := &s.inbox
-	b.mu.Lock()
-	var todo []*InboxItem
-	for _, it := range b.items {
-		if !it.open() || !policy.appliesToItem(it) {
-			continue
-		}
-		if it.Tier != TierAction && b.policyTwin(it) != TwinFirst && !it.handled() {
-			continue
-		}
-		if !replyPolicyClassificationCurrent(it, cfg) {
-			todo = append(todo, it)
-		}
-	}
-	b.mu.Unlock()
-	for _, it := range todo {
-		if err := s.classifyInboxReplyPolicyItem(ctx, cfg, it); err != nil {
-			s.logf("inbox: reply policy classification for %s: %v", it.ID, err)
-		}
-	}
-}
-
-// classifyInboxReplyPolicyItem persists the exact content/policy snapshot. A process-local serial prevents a slower
-// earlier response from overwriting a newer decision for the same content; the durable snapshot is the restart fence.
-func (s *Service) classifyInboxReplyPolicyItem(ctx context.Context, cfg assistantwire.InboxReplyPolicyConfig, it *InboxItem) error {
-	policy := compileReplyPolicy(cfg)
-	if !policy.enabled {
-		return nil
-	}
-	b := &s.inbox
-	b.mu.Lock()
-	if !it.open() || !policy.appliesToItem(it) || replyPolicyClassificationCurrent(it, cfg) {
-		b.mu.Unlock()
-		return nil
-	}
-	data := snapshotItemForReplyPolicyLocked(it)
-	it.replyClassifySerial++
-	serial := it.replyClassifySerial
-	b.mu.Unlock()
-
-	snap, _ := s.classifyReplyPolicy(ctx, policy, data, "")
-	if ctx.Err() != nil {
-		return nil
-	}
-	b.mu.Lock()
-	if !it.open() || replyPolicyContentVersion(it) != data.contentVersion || it.replyClassifySerial != serial {
-		b.mu.Unlock()
-		return nil
-	}
-	w := beginWrite(it)
-	it.ReplyPolicy = snap
-	b.settle(w)
-	b.mu.Unlock()
-	if failed := s.saveWrites(ctx, []*inboxWrite{w}, "its reply policy classification"); failed[it.ID] {
-		return errInboxNotPersisted
-	}
-	return nil
-}
-
 // ---- Gate 1: Queue gate (before AI handling) ----
+
+// replyPolicyVisibilityFailSnapshot builds a durable fail-closed snapshot when visibility authorization cannot be read.
+func replyPolicyVisibilityFailSnapshot(policy replyPolicySpec, contentVersion string, err error) *InboxReplyPolicySnapshot {
+	msg := ""
+	if err != nil {
+		msg = err.Error()
+	}
+	if msg == "" {
+		msg = "visibility configuration unavailable"
+	}
+	return &InboxReplyPolicySnapshot{
+		ContentVersion: contentVersion,
+		PolicyRevision: policy.revision,
+		At:             time.Now().UTC(),
+		Category:       "unknown",
+		Route:          assistantwire.ReplyRouteOwnerOnly,
+		Error:          msg,
+	}
+}
 
 // gateReplyPolicyQueue classifies open items eligible for AI handling (and already-queued items without a session)
 // whose reply-policy snapshot is missing, errored, or stale for the current content version or policy revision.
@@ -690,28 +1257,41 @@ func (s *Service) gateReplyPolicyQueue(ctx context.Context, policy replyPolicySp
 	if !policy.enabled {
 		return
 	}
+	type queueItem struct {
+		it   *InboxItem
+		data replyPolicyItemData
+	}
 	b := &s.inbox
 	b.mu.Lock()
-	var todo []replyPolicyItemData
+	var todo []queueItem
 	for _, it := range b.items {
 		if !b.needsReplyPolicyQueueCheckLocked(it, policy, since) {
 			continue
 		}
-		todo = append(todo, snapshotItemForReplyPolicyLocked(it))
+		todo = append(todo, queueItem{it: it, data: snapshotItemForReplyPolicyLocked(it)})
 	}
 	b.mu.Unlock()
 	if len(todo) == 0 {
 		return
 	}
 	var writes []*inboxWrite
-	for _, data := range todo {
-		snap, _ := s.classifyReplyPolicy(ctx, policy, data, "")
+	for _, entry := range todo {
+		allowed, visibilityErr := s.inboxVisibilityModelAllowed(ctx, entry.it)
+		if visibilityErr == nil && !allowed {
+			continue
+		}
+		var snap *InboxReplyPolicySnapshot
+		if visibilityErr != nil {
+			snap = replyPolicyVisibilityFailSnapshot(policy, entry.data.contentVersion, visibilityErr)
+		} else {
+			snap, _ = s.classifyReplyPolicy(ctx, policy, entry.data, "")
+		}
 		if ctx.Err() != nil {
 			return
 		}
 		b.mu.Lock()
-		it := b.items[data.id]
-		if it != nil && it.open() && replyPolicyContentVersion(it) == data.contentVersion {
+		it := b.items[entry.data.id]
+		if it != nil && !it.VisibilityExcluded && it.open() && replyPolicyContentVersion(it) == entry.data.contentVersion {
 			w := beginWrite(it)
 			it.ReplyPolicy = snap
 			b.settle(w)
@@ -725,7 +1305,7 @@ func (s *Service) gateReplyPolicyQueue(ctx context.Context, policy replyPolicySp
 // needsReplyPolicyQueueCheckLocked reports whether it is an escalation or queued-start candidate that needs a fresh
 // reply-policy classification. Caller holds b.mu.
 func (b *inboxBook) needsReplyPolicyQueueCheckLocked(it *InboxItem, policy replyPolicySpec, since time.Time) bool {
-	if !policy.appliesToItem(it) || !it.open() || it.Context == "" {
+	if it.VisibilityExcluded || !policy.appliesToItem(it) || !it.open() || it.Context == "" {
 		return false
 	}
 	cv := replyPolicyContentVersion(it)

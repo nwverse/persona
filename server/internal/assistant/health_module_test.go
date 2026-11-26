@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
@@ -157,6 +158,11 @@ var healthRouteRequests = []struct{ method, path, body string }{
 	{"POST", "/api/v1/assistant/health/water/reminder", `{"reminder":"r","action":"snooze"}`},
 }
 
+type healthTellModuleTestStore struct {
+	*intakeTestStore
+	healthTellStore
+}
+
 func TestHealthFollowsItsModule(t *testing.T) {
 	for _, off := range []bool{false, true} {
 		t.Run(fmt.Sprintf("off=%v", off), func(t *testing.T) {
@@ -165,18 +171,47 @@ func TestHealthFollowsItsModule(t *testing.T) {
 			if off {
 				modulesOff = []string{healthhost.ModuleID}
 			}
-			f, st := healthHub(), &intakeTestStore{}
+			f, st := healthHub(), &healthTellModuleTestStore{intakeTestStore: &intakeTestStore{}, healthTellStore: &healthTellMemStore{}}
 			s := withSettings(t, f, New(Options{Hub: f, Store: func() Store { return st }, Logf: testLogf(t), ModulesOff: modulesOff}))
+			if !slices.Contains(s.Routes(), "POST /api/v1/assistant/health/tell") {
+				t.Fatal("core Tell Health route absent")
+			}
+			if w := intakeHTTP(s, "POST", "/api/v1/assistant/health/tell", `{"client_id":"module-tell-client","text":"note"}`, "answer"); w.Code != http.StatusAccepted {
+				t.Fatalf("Tell Health with module off=%v: %d %s", off, w.Code, w.Body)
+			}
 			if s.healthOn() == absent {
 				t.Fatalf("Health layer loaded = %v with the module off = %v", s.healthOn(), off)
 			}
+			for _, pattern := range []string{
+				"GET /api/v1/assistant",
+				"GET /api/v1/assistant/memory",
+				"POST /api/v1/assistant/health/tell",
+			} {
+				if !slices.Contains(s.Routes(), pattern) {
+					t.Fatalf("Core Health route %s disappeared with the data module off=%v", pattern, off)
+				}
+			}
+			if w := intakeHTTP(s, "GET", "/api/v1/assistant?space=health", "", "full"); w.Code != http.StatusOK ||
+				!strings.Contains(w.Body.String(), `"sleep-000-0000"`) || !strings.Contains(w.Body.String(), `"steps-000-0000"`) {
+				t.Fatalf("Core Health conversation list with data module off=%v: %d %s", off, w.Code, w.Body)
+			}
 			for _, rq := range healthRouteRequests {
 				w := intakeHTTP(s, rq.method, rq.path, rq.body, "full")
-				if (w.Code == 404 && !strings.Contains(w.Body.String(), "not_found")) != absent {
-					t.Errorf("%s %s = %d %s with the module off = %v", rq.method, rq.path, w.Code, w.Body, off)
+				listed := slices.Contains(s.Routes(), rq.method+" "+strings.ReplaceAll(rq.path, intakeTestID, "{id}"))
+				if absent {
+					if w.Code != http.StatusNotFound {
+						t.Errorf("%s %s = %d %s with the module off, want 404", rq.method, rq.path, w.Code, w.Body)
+					}
+					if listed {
+						t.Errorf("module-owned route %s %s stayed listed with the module off", rq.method, rq.path)
+					}
+					continue
 				}
-				if slices.Contains(s.Routes(), rq.method+" "+strings.ReplaceAll(rq.path, intakeTestID, "{id}")) == absent {
-					t.Errorf("route %s %s listed = %v with the module off = %v", rq.method, rq.path, !off, off)
+				if w.Code == http.StatusNotFound {
+					t.Errorf("%s %s disappeared to 404 while the module was on: %s", rq.method, rq.path, w.Body)
+				}
+				if !listed {
+					t.Errorf("module-owned route %s %s was not listed while the module was on", rq.method, rq.path)
 				}
 			}
 			for _, name := range healthToolNames {
@@ -185,7 +220,10 @@ func TestHealthFollowsItsModule(t *testing.T) {
 					t.Errorf("%s listed = %v with the module off = %v", name, listed, off)
 				}
 			}
-			caps := withHealth([]string{assistantwire.CapabilityConfigOwn, assistantwire.CapabilityHealthIntake, assistantwire.CapabilityHealthItems}, s)
+			caps := withHealth([]string{assistantwire.CapabilityConfigOwn, assistantwire.CapabilityHealthTell, assistantwire.CapabilityHealthIntake, assistantwire.CapabilityHealthItems}, s)
+			if !slices.Contains(caps, assistantwire.CapabilityHealthTell) {
+				t.Fatal("core Tell Health capability absent")
+			}
 			if slices.Contains(caps, assistantwire.CapabilityHealthIntake) == absent {
 				t.Errorf("hello capabilities %v with the module off = %v", caps, off)
 			}

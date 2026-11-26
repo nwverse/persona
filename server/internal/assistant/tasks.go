@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/taskworkspace"
@@ -53,7 +54,9 @@ type PlanTask struct {
 	InboxHandoff string `json:"inbox_handoff,omitempty"`
 	// MachinePolicy defaults to fixed; only explicit flexible tasks may move to another machine.
 	MachinePolicy string `json:"machine_policy,omitempty"`
-	Cwd           string `json:"cwd"`
+	// PlacementConstraints restricts automatic machine selection when Machine is omitted.
+	PlacementConstraints *assistantwire.PlacementConstraints `json:"placement_constraints,omitempty"`
+	Cwd                  string                              `json:"cwd"`
 	// Repo: the Git repository the task runs in on Machine (taskRunDir: the workspace it resolved to, which can be
 	// another repository than Cwd's), named by its main checkout, so that every worktree of one repository is one kind
 	// the user can let start without asking (trustKey, #8259). "" when that folder is in no repository or the machine
@@ -143,11 +146,13 @@ type PlanTask struct {
 	// round), for ContinuesWhy: it keeps that to-do and its brief instead of creating another. Brief is
 	// the hub's: the brief as it will be kept, shown on the plan card so that "Start" confirms it; never what the tool
 	// call or a card's edit says.
-	Goal          string   `json:"goal,omitempty"`
-	OutOfBounds   []string `json:"out_of_bounds,omitempty"`
-	Continues     string   `json:"continues,omitempty"`
-	ContinuesWhy  string   `json:"continues_why,omitempty"`
-	ScopeRevision string   `json:"scope_revision,omitempty"`
+	Goal               string   `json:"goal,omitempty"`
+	OutOfBounds        []string `json:"out_of_bounds,omitempty"`
+	Continues          string   `json:"continues,omitempty"`
+	ContinuesWhy       string   `json:"continues_why,omitempty"`
+	HandoffID          string   `json:"handoff_id,omitempty"`
+	HandoffOperationID string   `json:"handoff_operation_id,omitempty"`
+	ScopeRevision      string   `json:"scope_revision,omitempty"`
 	// StartedWhy: why the assistant starts this on its own, when the owner did not just ask for it.
 	StartedWhy string     `json:"started_why,omitempty"`
 	Brief      *TaskBrief `json:"brief,omitempty"`
@@ -168,6 +173,7 @@ type PlanTask struct {
 	// a to-do (todo_id) keeps that to-do's own. Not what the apps send back with an edit.
 	PartOf      string   `json:"part_of,omitempty"`
 	After       []string `json:"after,omitempty"`
+	BlockedByPR []string `json:"blocked_by_pr,omitempty"`
 	RequestGate string   `json:"request_gate,omitempty"`
 	// Project: the knowledge-base project the task's todo goes in (#2581, todo_project.go), checked and kept as its slug
 	// when the plan is made; "" for none.
@@ -213,6 +219,8 @@ type PlanTask struct {
 	inPane    string
 	planID    string
 	planIndex int
+	// The preview is metadata-only until admission saves its naming operation.
+	dispatchedWorkspace *dispatchedWorkspacePlan
 	// cwdStatus: what worktree.status said of cwdStatusOf (machine NUL cleaned cwd) in this resolve, kept so that
 	// resolveTaskRepo does not ask the machine twice for that folder. Never serialized.
 	cwdStatus   *proto.WorktreeStatus
@@ -251,10 +259,14 @@ type PlanTask struct {
 	// startedAgent is the kind this start's answer reported, or the explicitly resolved launcher kind when that answer omitted it.
 	// Kept only until the Agent is linked; never serialized.
 	startedAgent string
+	// deferredStart is a Companion session whose real id exists but whose MCP and first prompt wait for the role link.
+	// The original first message is kept only for this start attempt; never serialized.
+	deferredStart *deferredTaskStart
 	// admissionRelease, once the admission gate passed, releases this start's held machine/direction slot. It is kept
 	// across the whole start (not the session.start RPC alone) and run when the agent is linked or the start failed for
 	// good, so the slot stays counted through the metrics/ledger gap. Never serialized (admission.go).
-	admissionRelease func()
+	admissionRelease      func()
+	admissionClaimMachine string
 }
 
 // Keep the default protection unless the owner opted into instructions only. Spawned helpers keep their caller's mode.

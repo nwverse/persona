@@ -168,6 +168,17 @@ type AssistantPageRow struct {
 	RemovedBy         string
 	// RemovedReason is why an Agent removed it (page remove), for the owner; empty otherwise.
 	RemovedReason string
+	// Watch is the watch definition JSON object (nil when the page has no watch).
+	Watch json.RawMessage
+	// Alert is the owner's alert switch and the manager's alert evaluation state.
+	Alert AssistantPageAlert
+	// OnOverview is whether the owner enabled this page's Overview card on the web.
+	OnOverview bool
+	// RoutineID is the scheduled routine bound to refresh this page ("" when none).
+	RoutineID string
+	// RefreshAskedAt and RefreshDevice record an owner's pending manual refresh request.
+	RefreshAskedAt *time.Time
+	RefreshDevice  string
 }
 
 // Listed is a removed page shown in Recently removed: one the owner had kept, removed by the owner, an Agent or with its
@@ -203,15 +214,18 @@ type AssistantPageWriter struct {
 
 const assistantPageSummary = `id, status, title, icon, icon_color, owner_kind, owner_machine, owner_ref, created_machine,
 	created_session, offer_view, why, version, pinned, pinned_at, paused, paused_by, kept_device, kept_at, writes_window_start,
-	writes_window_n, created_at, updated_at, content_at, removed_at, removed_by, removed_reason`
+	writes_window_n, created_at, updated_at, content_at, removed_at, removed_by, removed_reason, watch, alert, on_overview,
+	routine_id, refresh_asked_at, refresh_device`
 
 const assistantPageColumns = assistantPageSummary + `, view`
 
 func scanAssistantPage(row pgx.Row, withView bool) (*AssistantPageRow, error) {
 	var p AssistantPageRow
+	var watchRaw, alertRaw []byte
 	dest := []any{&p.ID, &p.Status, &p.Title, &p.Icon, &p.IconColor, &p.OwnerKind, &p.OwnerMachine, &p.OwnerRef,
 		&p.CreatedMachine, &p.CreatedSession, &p.OfferView, &p.Why, &p.Version, &p.Pinned, &p.PinnedAt, &p.Paused,
-		&p.PausedBy, &p.KeptDevice, &p.KeptAt, &p.WritesWindowStart, &p.WritesWindowN, &p.CreatedAt, &p.UpdatedAt, &p.ContentAt, &p.RemovedAt, &p.RemovedBy, &p.RemovedReason}
+		&p.PausedBy, &p.KeptDevice, &p.KeptAt, &p.WritesWindowStart, &p.WritesWindowN, &p.CreatedAt, &p.UpdatedAt, &p.ContentAt, &p.RemovedAt, &p.RemovedBy, &p.RemovedReason,
+		&watchRaw, &alertRaw, &p.OnOverview, &p.RoutineID, &p.RefreshAskedAt, &p.RefreshDevice}
 	if withView {
 		dest = append(dest, &p.View)
 	}
@@ -221,6 +235,18 @@ func scanAssistantPage(row pgx.Row, withView bool) (*AssistantPageRow, error) {
 	}
 	if err != nil {
 		return nil, err
+	}
+	if len(watchRaw) > 0 {
+		p.Watch = json.RawMessage(watchRaw)
+	}
+	if len(alertRaw) > 0 {
+		if err := json.Unmarshal(alertRaw, &p.Alert); err != nil {
+			return nil, fmt.Errorf("assistant page %s alert: %w", p.ID, err)
+		}
+		if p.Alert.PushedAt != nil {
+			t := p.Alert.PushedAt.UTC()
+			p.Alert.PushedAt = &t
+		}
 	}
 	return &p, nil
 }
@@ -317,8 +343,11 @@ type NewAssistantPage struct {
 	OfferView      string
 	Why            string
 	View           json.RawMessage
-	Note           string
-	At             time.Time
+	// Watch is an optional watch definition JSON object (nil/empty means no watch). When Watch is set, View may be
+	// empty and defaults to "{}".
+	Watch json.RawMessage
+	Note  string
+	At    time.Time
 }
 
 // CreateAssistantPage stores a draft as version 1. It refuses when the owner keeps the most pages, when the drafting
@@ -337,6 +366,15 @@ func (d *DB) CreateAssistantPage(ctx context.Context, p NewAssistantPage) (*Assi
 	}
 	if err := checkAssistantPageTitle(p.Title); err != nil {
 		return nil, err
+	}
+	p.Watch = normalizeOptionalJSON(p.Watch)
+	if len(p.Watch) > 0 {
+		if err := checkAssistantPageWatch(p.Watch); err != nil {
+			return nil, err
+		}
+		if len(p.View) == 0 {
+			p.View = json.RawMessage(`{}`)
+		}
 	}
 	if err := checkAssistantPageView(p.View); err != nil {
 		return nil, err
@@ -376,11 +414,11 @@ func (d *DB) CreateAssistantPage(ctx context.Context, p NewAssistantPage) (*Assi
 			return err
 		}
 		row, err := scanAssistantPage(tx.QueryRow(ctx, `INSERT INTO assistant_pages (id, status, title, title_key, icon,
-			icon_color, owner_kind, owner_machine, owner_ref, created_machine, created_session, offer_view, why, view, version,
+			icon_color, owner_kind, owner_machine, owner_ref, created_machine, created_session, offer_view, why, view, watch, version,
 			writes_window_start, writes_window_n, created_at, updated_at, content_at)
-			VALUES ($1, 'draft', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 1, $14, 1, $14, $14, $14)
+			VALUES ($1, 'draft', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 1, $15, 1, $15, $15, $15)
 			RETURNING `+assistantPageColumns, p.ID, p.Title, key, p.Icon, p.IconColor, p.OwnerKind, p.OwnerMachine,
-			p.OwnerRef, p.CreatedMachine, p.CreatedSession, p.OfferView, p.Why, []byte(p.View), p.At), true)
+			p.OwnerRef, p.CreatedMachine, p.CreatedSession, p.OfferView, p.Why, []byte(p.View), watchArg(p.Watch), p.At), true)
 		if err != nil {
 			return err
 		}
@@ -445,11 +483,18 @@ func (d *DB) countPagesWrite(ctx context.Context, tx pgx.Tx, at time.Time) error
 	return err
 }
 
-// AssistantPageUpdate replaces a page's contents.
+// AssistantPageUpdate replaces a page's contents (and optionally its watch).
 type AssistantPageUpdate struct {
 	ID       string
 	Expected int64
-	View     json.RawMessage
+	// View replaces the page's View; may be empty only when Watch or ClearWatch is set, in which case the existing
+	// View is kept.
+	View json.RawMessage
+	// Watch replaces the page's watch definition when non-empty. Changing a kept page's watch display is refused
+	// (ErrAssistantPageWatchDisplay); changing the watch's alert rule turns Alert.On off.
+	Watch json.RawMessage
+	// ClearWatch removes the watch on a draft page (refused on a kept watch page with ErrAssistantPageWatchDisplay).
+	ClearWatch bool
 	// Title and Icon change a draft's ("" keeps them); once kept they are the owner's.
 	Title string
 	Icon  string
@@ -468,8 +513,19 @@ func (d *DB) UpdateAssistantPage(ctx context.Context, u AssistantPageUpdate) (*A
 	if !slices.Contains([]string{AssistantPageByAgent, AssistantPageByRoutine, AssistantPageByTodoAgent, AssistantPageByOwner, AssistantPageByRestore}, u.By.Kind) {
 		return nil, fmt.Errorf("unknown assistant page writer %q", u.By.Kind)
 	}
-	if err := checkAssistantPageView(u.View); err != nil {
-		return nil, err
+	u.Watch = normalizeOptionalJSON(u.Watch)
+	if len(u.Watch) > 0 && u.ClearWatch {
+		return nil, errors.New("an assistant page update cannot both set and clear watch")
+	}
+	if len(u.Watch) > 0 {
+		if err := checkAssistantPageWatch(u.Watch); err != nil {
+			return nil, err
+		}
+	}
+	if len(u.View) > 0 || len(u.Watch) == 0 && !u.ClearWatch {
+		if err := checkAssistantPageView(u.View); err != nil {
+			return nil, err
+		}
 	}
 	if u.Title != "" {
 		if err := checkAssistantPageTitle(u.Title); err != nil {
@@ -493,6 +549,32 @@ func (d *DB) UpdateAssistantPage(ctx context.Context, u AssistantPageUpdate) (*A
 		case p.Status != AssistantPageDraft && (u.Title != "" && u.Title != p.Title || u.Icon != "" && u.Icon != p.Icon):
 			return ErrAssistantPageKept
 		}
+		nextWatch := p.Watch
+		var alertUpdate bool
+		var alertParam any
+		switch {
+		case len(u.Watch) > 0:
+			if p.Status != AssistantPageDraft {
+				if oldDisp := watchDisplay(p.Watch); oldDisp != "" && watchDisplay(u.Watch) != oldDisp {
+					return ErrAssistantPageWatchDisplay
+				}
+			}
+			nextWatch = u.Watch
+			if !watchAlertEqual(p.Watch, u.Watch) {
+				nextAlert := AssistantPageAlert{On: false, Tripped: false, PushedAt: p.Alert.PushedAt}
+				raw, err := marshalAlert(nextAlert)
+				if err != nil {
+					return err
+				}
+				alertUpdate, alertParam = true, raw
+			}
+		case u.ClearWatch:
+			if p.Status != AssistantPageDraft && len(p.Watch) > 0 {
+				return ErrAssistantPageWatchDisplay
+			}
+			nextWatch = nil
+			alertUpdate, alertParam = true, nil
+		}
 		start, n := p.WritesWindowStart, p.WritesWindowN
 		if !u.At.Before(start.Add(assistantPageWriteWindow)) {
 			start, n = u.At, 0
@@ -503,11 +585,16 @@ func (d *DB) UpdateAssistantPage(ctx context.Context, u AssistantPageUpdate) (*A
 		if err := d.countPagesWrite(ctx, tx, u.At); err != nil {
 			return err
 		}
+		var viewParam any
+		if len(u.View) > 0 {
+			viewParam = []byte(u.View)
+		}
 		title, icon := cmp.Or(u.Title, p.Title), cmp.Or(u.Icon, p.Icon)
-		row, err := scanAssistantPage(tx.QueryRow(ctx, `UPDATE assistant_pages SET view = $2, title = $3, title_key = $4,
-			icon = $5, version = version + 1, writes_window_start = $6, writes_window_n = $7, updated_at = $8, content_at = $8
-			WHERE id = $1 RETURNING `+assistantPageColumns, u.ID, []byte(u.View), title, AssistantPageTitleKey(title), icon,
-			start, n+1, u.At), true)
+		row, err := scanAssistantPage(tx.QueryRow(ctx, `UPDATE assistant_pages SET view = COALESCE($2, view), title = $3, title_key = $4,
+			icon = $5, watch = $6, alert = CASE WHEN $7 THEN $8::jsonb ELSE alert END, version = version + 1,
+			writes_window_start = $9, writes_window_n = $10, updated_at = $11, content_at = $11
+			WHERE id = $1 RETURNING `+assistantPageColumns, u.ID, viewParam, title, AssistantPageTitleKey(title), icon,
+			watchArg(nextWatch), alertUpdate, alertParam, start, n+1, u.At), true)
 		if err != nil {
 			return err
 		}
@@ -526,7 +613,11 @@ type AssistantPageKeep struct {
 	Device    string
 	// Pin also pins the page, unless AssistantPagesPinnedMost are pinned: it is then kept without.
 	Pin bool
-	At  time.Time
+	// AlertOn enables the page's alert switch in the same tap as Keep.
+	AlertOn bool
+	// OnOverview places the page on web Overview in the same tap as Keep.
+	OnOverview bool
+	At         time.Time
 }
 
 // KeepAssistantPage makes the draft offered on the card k.OfferView a kept page. It is idempotent by the card: a page
@@ -571,9 +662,21 @@ func (d *DB) KeepAssistantPage(ctx context.Context, k AssistantPageKeep) (p *Ass
 			}
 			pin = n < AssistantPagesPinnedMost
 		}
+		var alertUpdate bool
+		var alertParam any
+		if k.AlertOn {
+			nextAlert := old.Alert
+			nextAlert.On = true
+			raw, err := marshalAlert(nextAlert)
+			if err != nil {
+				return err
+			}
+			alertUpdate, alertParam = true, raw
+		}
 		p, err = scanAssistantPage(tx.QueryRow(ctx, `UPDATE assistant_pages SET status = 'active', kept_device = $2,
-			kept_at = $3, pinned = $4, pinned_at = CASE WHEN $4 THEN $3::timestamptz END, updated_at = $3
-			WHERE id = $1 RETURNING `+assistantPageSummary, id, k.Device, at, pin), false)
+			kept_at = $3, pinned = $4, pinned_at = CASE WHEN $4 THEN $3::timestamptz END, on_overview = $5,
+			alert = CASE WHEN $6 THEN $7::jsonb ELSE alert END, updated_at = $3
+			WHERE id = $1 RETURNING `+assistantPageSummary, id, k.Device, at, pin, k.OnOverview, alertUpdate, alertParam), false)
 		changed = err == nil
 		return err
 	})
@@ -775,11 +878,18 @@ func (d *DB) RestoreAssistantPage(ctx context.Context, id string, at time.Time) 
 	return p, changed, mapTitleConflict(err)
 }
 
-// DeleteAssistantPage deletes a removed page for good, with its versions and taps. Only a removed page can be
-// deleted (ErrAssistantPageNotGone); a page gone already reports false.
+// DeleteAssistantPage deletes a removed page for good, with its versions, taps, readings and grants. Only a removed
+// page can be deleted (ErrAssistantPageNotGone); a page gone already reports false.
 func (d *DB) DeleteAssistantPage(ctx context.Context, id string) (bool, error) {
-	var deleted bool
-	err := d.pagesTx(ctx, false, func(tx pgx.Tx) error {
+	deleted, _, err := d.DeleteAssistantPageWithRoutine(ctx, id)
+	return deleted, err
+}
+
+// DeleteAssistantPageWithRoutine deletes a removed page for good (cascading its versions, taps, readings and grants)
+// and returns whether it was deleted and the routine_id it had bound ("" if none) so the caller can delete the
+// routine. Only a removed page can be deleted (ErrAssistantPageNotGone); a page gone already reports false, "".
+func (d *DB) DeleteAssistantPageWithRoutine(ctx context.Context, id string) (deleted bool, routineID string, err error) {
+	err = d.pagesTx(ctx, false, func(tx pgx.Tx) error {
 		old, err := lockAssistantPage(ctx, tx, id)
 		if errors.Is(err, ErrAssistantPageNotFound) {
 			return nil
@@ -791,10 +901,13 @@ func (d *DB) DeleteAssistantPage(ctx context.Context, id string) (bool, error) {
 			return ErrAssistantPageNotGone
 		}
 		tag, err := tx.Exec(ctx, `DELETE FROM assistant_pages WHERE id = $1`, id)
-		deleted = err == nil && tag.RowsAffected() == 1
+		if err == nil && tag.RowsAffected() == 1 {
+			deleted = true
+			routineID = old.RoutineID
+		}
 		return err
 	})
-	return deleted, err
+	return deleted, routineID, err
 }
 
 // ExpireAssistantDrafts removes the drafts older than AssistantPageDraftLife at now (removed_by expired: never listed in
@@ -919,13 +1032,36 @@ func (d *DB) AssistantPageVersions(ctx context.Context, id string) ([]AssistantP
 }
 
 // PurgeAssistantPages deletes the pages removed AssistantPageRemovedLife or longer before now (listed, declined and
-// expired alike), with their versions and taps.
+// expired alike), with their versions, taps, readings and grants.
 func (d *DB) PurgeAssistantPages(ctx context.Context, now time.Time) (int64, error) {
-	var n int64
-	err := d.pagesTx(ctx, true, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx, `DELETE FROM assistant_pages WHERE status = 'removed' AND removed_at <= $1`, now.Add(-AssistantPageRemovedLife))
-		n = tag.RowsAffected()
-		return err
-	})
+	n, _, err := d.PurgeAssistantPagesWithRoutines(ctx, now)
 	return n, err
+}
+
+// PurgeAssistantPagesWithRoutines deletes the pages removed AssistantPageRemovedLife or longer before now (listed,
+// declined and expired alike), cascading their versions, taps, readings and grants, and returns how many pages were
+// deleted and the non-empty routine_ids they had bound so the caller can delete those routines.
+func (d *DB) PurgeAssistantPagesWithRoutines(ctx context.Context, now time.Time) (int64, []string, error) {
+	var n int64
+	var routines []string
+	err := d.pagesTx(ctx, true, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `DELETE FROM assistant_pages WHERE status = 'removed' AND removed_at <= $1 RETURNING routine_id`,
+			now.Add(-AssistantPageRemovedLife))
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var rid string
+			if err := rows.Scan(&rid); err != nil {
+				return err
+			}
+			n++
+			if rid != "" {
+				routines = append(routines, rid)
+			}
+		}
+		return rows.Err()
+	})
+	return n, routines, err
 }
