@@ -110,6 +110,7 @@ export function TaskDecision({ todo, rowKey, hideTitle = false }: { todo: Todo; 
 }
 
 export type NeedsYouPartProps =
+  | { decision: Todo; rowKey?: string }
   | { task: Todo; rowKey?: string; hideTitle?: boolean; countsOpenAttr: { "data-counts-open"?: string } }
   /** A task whose Agent did not start, in the tray (#10365). */
   | { failed: Todo; rowKey: string; countsOpenAttr: { "data-counts-open"?: string } }
@@ -120,6 +121,7 @@ export type NeedsYouPartProps =
  *  (startup-preload's budget): a decision's row, an open acceptance ask's row, a failed start's row (#10365), or a
  *  suggested rule's line (#5802). One chunk behind one component, so the first screen names one file for all. */
 export default function NeedsYouParts(props: NeedsYouPartProps) {
+  if ("decision" in props) return <TaskDecision todo={props.decision} rowKey={props.rowKey} />;
   if ("task" in props) {
     const { task, rowKey, hideTitle, countsOpenAttr } = props;
     const verifying = reviewState(task) === "user_check";
