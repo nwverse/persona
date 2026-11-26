@@ -43,10 +43,12 @@ import (
 // Antigravity non-rewind negative cache for summary_behind GetCascadeTrajectory checks + summarizeTranscript prefix summary reuse (#13086) add 872 B (272,914 B).
 // Antigravity Desktop session.start (ConversationService/CreateConversation), model discovery, and lifecycle controls (#15994) add 4,922 B (277,836 B).
 // Antigravity Assistant run_command command-gate routing, unclipped command & per-call Cwd forwarding, fail-closed reconnect, tracks Assistant detection, and Assistant allow_always bypass guard (#16202) add 511 B (278,347 B).
-// Applying the configured Antigravity model before the first prompt after ACP resume (#15537) measures 278,395 B (+61 B over main's 278,334 B).
+// After preserving Antigravity modes (#16300), the packages measured 278,334 B. Filtering botmux marker
+// lines before shortening runtime previews adds 549 B (#16310).
+// Applying the configured Antigravity model before the first prompt after ACP resume (#15537) adds 60 B (278,943 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 278_395
+	const budget = 278_943
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {
