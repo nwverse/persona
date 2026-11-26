@@ -601,22 +601,73 @@ func (s *Service) startRemedying(ctx context.Context, t Todo) bool {
 }
 
 // todoAgentStopped: nothing runs agent a now, so a new agent may take over its to-do: its session is listed stopped
-// (switchStopped) or archived, or its computer is gone from the hub. Not listed at all, or the computer not reached,
-// is not known to be stopped.
+// (switchStopped) or archived, its computer is gone from the hub, or its computer authoritatively confirms via
+// session.info that no such session exists there. An unlisted session whose existence cannot be ruled out (for
+// example, an aged-out Antigravity session still on disk beyond the recent list cap, an away runtime, a known
+// no_transcript session, or an unreachable computer) stays fail-closed as not stopped.
 func (s *Service) todoAgentStopped(ctx context.Context, a TodoAgent) bool {
+	stopped, listed, listErr := s.todoAgentStopPresence(ctx, a)
+	if stopped || listed || listErr != nil {
+		return stopped
+	}
+	return s.todoAgentConfirmedMissing(ctx, a)
+}
+
+// todoAgentStopPresence checks a's computer session list once, matching by SessionID or Aliases so an Antigravity
+// conversation running in a terminal pane under a pane row is still seen as live. Any live matching row wins.
+func (s *Service) todoAgentStopPresence(ctx context.Context, a TodoAgent) (stopped, listed bool, listErr error) {
 	list, err := s.sessions(ctx, a.MachineID)
 	if errors.Is(err, ErrNoDevice) {
-		return true
+		return true, false, nil
 	}
 	if err != nil {
-		return false
+		return false, false, err
 	}
+	live := false
 	for _, c := range list {
-		if c.SessionID == a.SessionID {
-			return c.Archived || switchStopped(c)
+		if !sessionNamesID(c, a.SessionID) {
+			continue
+		}
+		listed = true
+		if !(c.Archived || switchStopped(c)) {
+			live = true
 		}
 	}
-	return false
+	if !listed {
+		return false, false, nil
+	}
+	return !live, true, nil
+}
+
+// sessionNamesID reports whether row is id or carries id in its aliases.
+func sessionNamesID(row proto.Session, id string) bool {
+	return row.SessionID == id || slices.Contains(row.Aliases(), id)
+}
+
+// todoAgentConfirmedMissing probes a's computer directly via session.info to confirm that no such session exists
+// there. Only an authoritative missing-session refusal (not_found with confirmed_missing=true or reason=unknown_session)
+// returns true; existing/aged-out sessions, no_transcript, away runtimes, older nodes, and transport errors stay false.
+func (s *Service) todoAgentConfirmedMissing(ctx context.Context, a TodoAgent) bool {
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	err := s.call(cctx, a.MachineID, "session.info", map[string]any{"session_id": a.SessionID}, nil)
+	return sessionConfirmedMissing(err)
+}
+
+// sessionConfirmedMissing reports whether err is a node's authoritative confirmation that a session does not exist.
+func sessionConfirmedMissing(err error) bool {
+	var re *rpc.Error
+	if !errors.As(err, &re) || re.Code != codeSessionNotFound || len(re.Data) == 0 {
+		return false
+	}
+	var data struct {
+		Reason           string `json:"reason"`
+		ConfirmedMissing bool   `json:"confirmed_missing"`
+	}
+	if json.Unmarshal(re.Data, &data) != nil {
+		return false
+	}
+	return data.ConfirmedMissing || data.Reason == proto.NotFoundUnknownSession
 }
 
 // takeTodoForTask is the todo a started plan's task runs on (PlanTask.ReuseTodo), checked again now (it may have been
@@ -753,14 +804,27 @@ func (s *Service) stopContinuedTaskAgents(ctx context.Context, todo Todo) ([]Tod
 				msg:  fmt.Sprintf("continues: agent %s/%s on to-do %s has an unresolved approval or question; resolve it first", a.MachineID, short(a.SessionID), todo.ID),
 			}
 		}
-		if !s.todoAgentStopped(ctx, a) {
+		isStopped, listed, listErr := s.todoAgentStopPresence(ctx, a)
+		liveListed := listed && !isStopped
+		if !isStopped && !listed && listErr == nil && s.todoAgentConfirmedMissing(ctx, a) {
+			s.logf("continues: agent %s/%s on to-do %s is confirmed missing on its computer; letting its stale link go", a.MachineID, a.SessionID, todo.ID)
+			s.endSessionCards(a.MachineID, a.SessionID)
+			isStopped = true
+		}
+		if !isStopped {
 			cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 			err := s.call(cctx, a.MachineID, deviceSessionStop, map[string]any{"session_id": a.SessionID}, nil)
 			cancel()
 			if err != nil {
-				return nil, fmt.Errorf("continues: cannot stop agent %s/%s on to-do %s: %w", a.MachineID, a.SessionID, todo.ID, err)
+				if !liveListed && sessionNotFound(err) {
+					s.logf("continues: agent %s/%s on to-do %s is no longer on its computer; letting its stale link go: %v", a.MachineID, a.SessionID, todo.ID, err)
+					s.endSessionCards(a.MachineID, a.SessionID)
+				} else {
+					return nil, fmt.Errorf("continues: cannot stop agent %s/%s on to-do %s: %w", a.MachineID, a.SessionID, todo.ID, err)
+				}
+			} else {
+				s.endSessionCards(a.MachineID, a.SessionID)
 			}
-			s.endSessionCards(a.MachineID, a.SessionID)
 		}
 		stopped = append(stopped, a)
 	}

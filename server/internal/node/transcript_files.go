@@ -58,7 +58,7 @@ func (n *Node) readReason(id, missing string) string {
 	if id != missing || runtimeOwned || n.runtimeAssistant(session) || n.runtimes.transcriptOf(id) != "" {
 		return ""
 	}
-	if n.knownSession(id) {
+	if n.knownSession(id) || n.startingSession(id) {
 		return proto.NotFoundNoTranscript
 	}
 	if runtimeSessionID(session) || !n.recordsLoaded() {
