@@ -172,11 +172,9 @@ func (s *Service) taskWaits(ctx context.Context, t Todo) bool {
 	return waits || !known
 }
 
-type closedTurnLogKind uint8
-
 const (
-	ignoredClosedStart closedTurnLogKind = iota
-	droppedClosedEnd
+	ignoredClosedStart = "task %s: accepted; its agent works again, but nothing was sent for the task: left closed"
+	droppedClosedEnd   = "task %s: closed; its agent %s/%s ended a turn: dropped"
 )
 
 const maxClosedTurnLogs = 256
@@ -184,13 +182,13 @@ const maxClosedTurnLogs = 256
 type closedTurnLog struct {
 	todo, machine, session string
 	doneAt                 time.Time
-	kind                   closedTurnLogKind
+	format                 string
 }
 
 // Remember the most recent diagnostics for closed tasks in this manager. Eviction or a
 // restart can log an old closure again; the log history never participates in a turn decision.
-func (ts *tasksState) firstClosedTurnLog(t *Todo, machine, session string, kind closedTurnLogKind) bool {
-	entry := closedTurnLog{todo: t.ID, machine: machine, session: session, doneAt: t.DoneAt.UTC(), kind: kind}
+func (ts *tasksState) firstClosedTurnLog(t *Todo, machine, session string, format string) bool {
+	entry := closedTurnLog{todo: t.ID, machine: machine, session: session, doneAt: t.DoneAt.UTC(), format: format}
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	logs := ts.closedTurnLogs
@@ -238,7 +236,7 @@ func (s *Service) taskWorking(ctx context.Context, mid, sid string, row startRow
 			return
 		case closedTurnStays:
 			if s.tasks.firstClosedTurnLog(&closed, mid, sid, ignoredClosedStart) {
-				s.logf("task %s: accepted; its agent works again, but nothing was sent for the task: left closed", closed.ID)
+				s.logf(ignoredClosedStart, closed.ID)
 			}
 			return
 		}
@@ -498,7 +496,7 @@ func (s *Service) settleTurnReporting(ctx context.Context, machine, sid, unheard
 			// Its closed task's agent still: a turn nobody sent for the task, or one running when it was accepted
 			// (#7539). Nothing is made of its end; this line says it was seen.
 			if s.tasks.firstClosedTurnLog(&closed, machine, sid, droppedClosedEnd) {
-				s.logf("task %s: closed; its agent %s/%s ended a turn: dropped", closed.ID, machine, short(sid))
+				s.logf(droppedClosedEnd, closed.ID, machine, short(sid))
 			}
 		}
 		return settleRefused
