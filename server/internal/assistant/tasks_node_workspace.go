@@ -148,13 +148,36 @@ func (s *Service) previewDispatchedWorkspace(ctx context.Context, t *PlanTask, r
 	return true, nil
 }
 
+func (t *PlanTask) dispatchedWorkspaceOperationID() string {
+	return "op_" + taskworkspace.Hash([]string{t.TodoID, t.planID, strconv.Itoa(t.planIndex), "new"})[:24]
+}
+
+// A restart can land between saving the naming plan and updating the task.
+// Read the frozen operation before probing the node or choosing a legacy checkout.
+func (s *Service) recoverDispatchedWorkspace(ctx context.Context, t *PlanTask) error {
+	if t.Workspace == nil || t.Workspace.Mode != workspaceNew || t.TodoID == "" || t.planID == "" || t.inPane != "" {
+		return nil
+	}
+	if w := t.WorkspaceResolved; w != nil && (w.Created || w.Reused || w.OperationID != "") {
+		return nil
+	}
+	if _, ok := s.store().(workspaceNamingStore); !ok {
+		return nil
+	}
+	err := s.resolveSavedBackendPlan(ctx, t, t.TodoID, t.dispatchedWorkspaceOperationID(), false)
+	if problem, ok := errors.AsType[*taskworkspace.Problem](err); ok && problem.Code == "not_found" {
+		return nil
+	}
+	return err
+}
+
 func (s *Service) admitDispatchedWorkspace(ctx context.Context, t *PlanTask) error {
 	if t.planID == "" || t.TodoID == "" {
 		return taskworkspace.Failure("invalid_input", "admission", "", "", "")
 	}
 	op := t.WorkspaceResolved.OperationID
 	if op == "" {
-		op = "op_" + taskworkspace.Hash([]string{t.TodoID, t.planID, strconv.Itoa(t.planIndex), "new"})[:24]
+		op = t.dispatchedWorkspaceOperationID()
 		naming, ok := s.store().(workspaceNamingStore)
 		if !ok {
 			return taskworkspace.Failure("store_unavailable", "plan", op, "", "")

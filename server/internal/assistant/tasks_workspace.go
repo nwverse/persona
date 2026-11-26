@@ -465,6 +465,9 @@ func (s *Service) admitTaskWorkspace(ctx context.Context, t *PlanTask) error {
 	if t.backendWorkspace() {
 		return s.admitBackendTask(ctx, t)
 	}
+	if err := s.recoverDispatchedWorkspace(ctx, t); err != nil {
+		return err
+	}
 	if t.nodeDispatchedWorkspace() {
 		if t.WorkspaceResolved.Machine != t.Machine {
 			return i18n.ErrEnglish("assistant-tasks_workspace.machine_local", i18n.Args{"from": t.WorkspaceResolved.Machine, "to": t.Machine})

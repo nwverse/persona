@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
@@ -181,5 +182,42 @@ func TestTaskDispatchDoesNotFallBackAfterCapabilityTransportFailure(t *testing.T
 	err := s.resolveTaskWorkspace(t.Context(), &task)
 	if p, ok := errors.AsType[*taskworkspace.Problem](err); !ok || p.Code != "node_unavailable" || len(f.worktrees) != 0 {
 		t.Fatalf("unexpected engine fallback: %v, calls %v", err, f.worktrees)
+	}
+}
+
+func TestTaskDispatchRecoversNamingPlanSavedBeforeTaskUpdate(t *testing.T) {
+	ctx := t.Context()
+	st := newContainerWorkspaceMemStore()
+	h := newWorkspaceTestHarness(t, st)
+	todo, err := h.s.createTodo(ctx, "Recover an isolated task", "", "dispatch-chat", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := PlanTask{TodoID: todo.ID, planID: "plan-example", Machine: "box", Cwd: "/code/app", Workspace: &TaskWorkspace{Mode: workspaceNew}}
+	op := "op_" + taskworkspace.Hash([]string{todo.ID, task.planID, "0", "new"})[:24]
+	set, err := st.TodoRepositories(ctx, todo.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := repository.Snapshot(h.s.managerIdentity(), todo.ID, set.Revision, set.Repositories, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview := workspacenaming.Resolve(workspacenaming.Source{Manager: h.s.managerIdentity(), TodoID: todo.ID,
+		Title: todo.Title, MachineID: task.Machine, PlannedAt: time.Now(), Layout: repository.LayoutContainer,
+		Rules: workspacenaming.Defaults(), Repositories: snapshot}, workspacenaming.NodeContext{Home: t.TempDir()})
+	if preview.Plan == nil {
+		t.Fatal(preview.Diagnostics)
+	}
+	if _, err := st.SaveWorkspaceNamingPlan(ctx, todo.ID, op, 0, *preview.Plan); err != nil {
+		t.Fatal(err)
+	}
+	h.f.answerNode(taskworkspace.MethodPrefix+"capabilities", func(string, json.RawMessage) (any, error) {
+		return taskworkspace.Capabilities{Capability: taskworkspace.Capability, Start: true}, nil
+	})
+	err = h.s.admitTaskWorkspace(ctx, &task)
+	if p, ok := errors.AsType[*taskworkspace.Problem](err); !ok || p.Code != "unsupported" || p.OperationID != op ||
+		task.WorkspaceResolved == nil || task.WorkspaceResolved.Path != preview.Plan.RootPath || len(h.f.worktrees) != 0 {
+		t.Fatalf("lost the frozen operation during node rollback: workspace=%+v calls=%v err=%v", task.WorkspaceResolved, h.f.worktrees, err)
 	}
 }
