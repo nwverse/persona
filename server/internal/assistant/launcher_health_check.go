@@ -42,13 +42,13 @@ func (s *Service) probeLauncherHealth(ctx context.Context, machine, launcher str
 }
 
 // healthLaunchers are the launchers to check on machine: those it can start (its ~/.zshrc's, the managed ones) and
-// the default one when every machine has it (plain claude: a default only some have never starts where it isn't,
-// launcher_fit.go); not an API provider's. A runtime's launcher only when the main chat or Agents run on it (#10369):
+// the default one when every machine has it. An explicit inventory is authoritative for plain Claude; an older
+// node without a catalog still falls back to probing it. A runtime's launcher only when the main chat or Agents run on it (#10369):
 // those are in whileFailing, checked only while their record on machine says they do not work, through the runtime's
 // own launchers.check as the on-demand probe does. So a failure is rechecked and a pass clears it, but no runtime is
 // asked to spend a request each interval, and the record a pass leaves stays while the machine lists the launcher.
 func (s *Service) healthLaunchers(ctx context.Context, machine string) (names []string, whileFailing map[string]bool, err error) {
-	list, err := s.machineLaunchers(ctx, machine)
+	list, _, known, err := s.machineLaunchersOn(ctx, machine, "")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -60,14 +60,14 @@ func (s *Service) healthLaunchers(ctx context.Context, machine string) (names []
 func (s *Service) healthLaunchersOf(ctx context.Context, list []proto.Launcher) (names []string, whileFailing map[string]bool, runtimes []string) {
 	for _, l := range list {
 		switch {
-		case startableLauncher(l):
+		case startableLauncher(l), l.Name == "claude" && l.Source == "builtin":
 			names = append(names, l.Name)
 		case runtimeLauncher(l):
 			runtimes = append(runtimes, l.Name)
 		}
 	}
 	d := s.startLauncher(ctx, "")
-	if !slices.Contains(names, d) && s.launcherEverywhere(ctx, d) {
+	if (d != "claude" || !known) && !slices.Contains(names, d) && s.launcherEverywhere(ctx, d) {
 		names = append(names, d)
 	}
 	for _, name := range []string{s.launcherNow(ctx), d} {
@@ -179,11 +179,17 @@ func (s *Service) checkMachine(ctx context.Context, d Device, cfg healthConfig, 
 	}
 	b := &s.health
 	b.mu.Lock()
+	s.healthLoadLocked(ctx)
+	removed := false
 	for key, r := range b.recs {
 		if r.Machine == d.ID && !slices.Contains(listed, r.Launcher) {
 			delete(b.recs, key)
 			delete(b.recheckAt, key)
+			removed = true
 		}
+	}
+	if removed {
+		s.healthSaveLocked(ctx)
 	}
 	b.mu.Unlock()
 	var out []LauncherHealth
