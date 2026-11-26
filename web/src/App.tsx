@@ -321,7 +321,7 @@ function pageTarget(s: State, route: Route): PageTarget | undefined {
     if (route.at || route.standalone) return exact();
     const parentRow = pageRows(s, route.mid).find((r) => r.session_id === sub.parent);
     const dest = parentRow?.assistant
-      ? conversationRoute(route.mid, sub.parent, s.sessions, s.assistant, parentRow.manager)
+      ? conversationRoute(route.mid, sub.parent, s.sessions, s.assistant, parentRow)
       : { ...route, sid: sub.parent };
     return { link: undefined, to: routePath(dest), mid: route.mid, sid: undefined, parent: sub.parent, subagent: { mid: route.mid, sid: route.sid } };
   }
@@ -329,7 +329,7 @@ function pageTarget(s: State, route: Route): PageTarget | undefined {
   const row = rows.find((r) => r.session_id === route.sid);
   // a Persona conversation's `/s/…` link (a push, a copied address): its own page, which draws its plan cards, questions
   // and tasks; the agent chat here shows none of them
-  if (row?.assistant && !route.at) return { link: undefined, to: routePath(conversationRoute(route.mid, route.sid, s.sessions, s.assistant, row.manager)), mid: route.mid, sid: undefined };
+  if (row?.assistant && !route.at) return { link: undefined, to: routePath(conversationRoute(route.mid, route.sid, s.sessions, s.assistant, row)), mid: route.mid, sid: undefined };
   // a lead's worker's (#5180): the lead's page, the worker in its Team panel
   const worker = workerTarget(rows, route.mid, row, inWorkView(route));
   if (worker && !route.standalone) return worker;
@@ -343,7 +343,7 @@ function pageTarget(s: State, route: Route): PageTarget | undefined {
     if (route.at || route.standalone) return exact();
     const parentRow = pageRows(s, parentMid).find((r) => r.session_id === parent);
     const dest = parentRow?.assistant
-      ? conversationRoute(parentMid, parent, s.sessions, s.assistant, parentRow.manager)
+      ? conversationRoute(parentMid, parent, s.sessions, s.assistant, parentRow)
       : withWorkView({ name: "session", mid: parentMid, sid: parent }, inWorkView(route));
     return { link: undefined, to: routePath(dest), mid: parentMid, sid: undefined, parent, subagent: { mid: route.mid, sid: route.sid } };
   }
