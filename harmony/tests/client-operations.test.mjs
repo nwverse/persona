@@ -59,6 +59,7 @@ registerHooks({
       export const withSourceContext = text => text;
       export const messageDisplay = text => text;
       export const nativeNotifications = {async clear(){},features(){return ['elicitation'];}};
+      export const nativeLiveView = {async initialize(){},async receiveFleetEvent(){},async syncFromModel(){},async stopNow(){},setForeground(){}};
     `};
     if (url.endsWith('.ets')) return {format:'module', shortCircuit:true, source:stripTypeScriptTypes(readFileSync(new URL(url),'utf8').replace(/@ObservedV2\s*/g,'').replace(/@Trace\s+/g,''))};
     return next(url, context);

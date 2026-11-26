@@ -180,7 +180,7 @@ type todoStore interface {
 	ClaimTodoReminder(ctx context.Context, id string, remindAt, now time.Time) (bool, error)
 	RetitleTodo(ctx context.Context, id, from, to string, at time.Time) (*db.TodoRow, bool, error)
 	FailTodo(ctx context.Context, id, startError string, at time.Time) (*db.TodoRow, error)
-	AutoDoneTodo(ctx context.Context, id, reason string, at, workSince time.Time) (*db.TodoRow, bool, error)
+	AutoDoneTodo(ctx context.Context, id, reason string, at, workSince time.Time, guard func() error) (*db.TodoRow, bool, error)
 	RetryTodo(ctx context.Context, id string, at time.Time) (*db.TodoRow, bool, error)
 	DeleteTodo(ctx context.Context, id string) error
 	LinkTodoSpace(ctx context.Context, todoID, machineID, space string, linkedAt time.Time, keep db.KeptLinks) (string, error)
@@ -1063,8 +1063,8 @@ func (s *Service) todoRoutes() {
 	// GET /api/v1/todos: list all todos (newest created_at first), agents sorted (active first, then released); a todo
 	// waiting for the owner carries its ask (todo_ask.go), an open one nobody works on why (tasks_orphan.go); each its
 	// view, and the list its counts (todo_view_routes.go); to an extension's token without the to-dos it is not shown
-	// (todo_scope.go). With ?limit or ?cursor it answers one page and how to read the next (todo_pagination.go); no
-	// parameter keeps the complete answer, its fields and its revision header unchanged.
+	// (todo_scope.go). Without parameters the answer is complete. ?closed_limit= bounds the closed rows for clients that
+	// opt in (todo_pagination.go). With ?limit or ?cursor it answers one page of the whole list and how to read the next.
 	s.handle("GET /api/v1/todos", func(w http.ResponseWriter, r *http.Request) {
 		limit, after, paged, err := todoListPageQuery(r.URL.Query())
 		if err != nil {
@@ -1074,6 +1074,15 @@ func (s *Service) todoRoutes() {
 			}
 			apierr.WriteCode(w, http.StatusBadRequest, code, err)
 			return
+		}
+		closedLimit := 0
+		boundedClosed := false
+		if !paged {
+			closedLimit, boundedClosed, err = todoClosedLimitQuery(r.URL.Query())
+			if err != nil {
+				apierr.WriteCode(w, http.StatusBadRequest, "invalid_todo_closed_limit", err)
+				return
+			}
 		}
 		writes := s.trevision.writes.Load()
 		list, p, err := s.todosViewed(r.Context(), true)
@@ -1093,14 +1102,30 @@ func (s *Service) todoRoutes() {
 			sharedBlockers = p.sharedBlockers()
 			if cfg := s.settings(r.Context()); cfg.todosV2On() {
 				sharedBlockers = mergePersistedSharedBlockers(list, p, sharedBlockers)
-				board = buildTodoBoardProjectionWithOptions(list, s.todoBoardDirectionLabels(r.Context()), cfg.todosV2FoldChildrenOn())
+				if !paged {
+					// The board is the same complete projection as Counts. The closed_limit option bounds the rows a list
+					// client has to parse; it does not silently create a second, smaller set of board totals.
+					board = buildTodoBoardProjectionWithOptions(list, s.todoBoardDirectionLabels(r.Context()), cfg.todosV2FoldChildrenOn())
+				}
 			}
+		}
+		var closedNext string
+		var closedHasMore bool
+		if boundedClosed {
+			list, closedNext, closedHasMore = boundedTodoList(list, closedLimit)
 		}
 		if paged {
 			writeTodoPage(w, list, p, sharedBlockers, limit, after)
 			return
 		}
-		apierr.WriteJSON(w, todosList{Todos: list, Counts: p.counts(), SharedBlockers: sharedBlockers, Board: board})
+		apierr.WriteJSON(w, todosList{
+			Todos:            list,
+			Counts:           p.counts(),
+			SharedBlockers:   sharedBlockers,
+			Board:            board,
+			ClosedNextCursor: closedNext,
+			ClosedHasMore:    closedHasMore,
+		})
 	})
 	s.handle("GET /api/v1/todos/revision", s.todoRevisionRead)
 
@@ -1292,7 +1317,21 @@ func (s *Service) todoRoutes() {
 			return
 		}
 		e.PartOf, e.After = links.PartOf, links.After
-		resTodo, err := s.editTodo(r.Context(), id, e)
+		ctx := r.Context()
+		if e.Done != nil && *e.Done {
+			if work := s.taskCloseWorkSnapshot(cur, time.Now()); work != nil {
+				if !fullRole(r) {
+					apierr.WriteCode(w, http.StatusConflict, "todo_close_active", &taskCloseHoldError{todo: id, work: work})
+					return
+				}
+				ctx, err = s.confirmOwnerTaskClose(ctx, cur, work, false)
+				if err != nil {
+					apierr.WriteCode(w, http.StatusUnprocessableEntity, "todo_close_not_confirmed", err)
+					return
+				}
+			}
+		}
+		resTodo, err := s.editTodo(ctx, id, e)
 		if err != nil {
 			if errors.Is(err, db.ErrTodoNotFound) {
 				apierr.Write(w, http.StatusNotFound, err)
@@ -1300,6 +1339,8 @@ func (s *Service) todoRoutes() {
 				apierr.WriteCode(w, http.StatusConflict, "outside_decision_pending", err)
 			} else if errors.Is(err, db.ErrConcernUnreported) {
 				apierr.Write(w, http.StatusConflict, err) // report its outcome instead: POST …/decisions {source: "reported"}
+			} else if hold := (*taskCloseHoldError)(nil); errors.As(err, &hold) {
+				apierr.WriteCode(w, http.StatusConflict, "todo_close_active", i18n.Err("assistant-todos.close_not_confirmed"))
 			} else if pe := (*pieceError)(nil); errors.As(err, &pe) {
 				apierr.Write(w, http.StatusBadRequest, err) // another write changed the request since it was checked
 			} else {
@@ -2143,6 +2184,8 @@ func (s *Service) autoDoneTodo(ctx context.Context, id, reason string, work time
 	if t, ok := s.todoNow(id); ok && t.isConcern() {
 		return false, nil
 	}
+	s.loadSeen(ctx)
+	_ = s.loadTaskActivity(ctx)
 	s.todos.writing.Lock() // no other store write lands between the store's close and memory's
 	unlocked := false
 	unlock := func() {
@@ -2152,16 +2195,27 @@ func (s *Service) autoDoneTodo(ctx context.Context, id, reason string, work time
 		}
 	}
 	defer unlock()
-	if current, ok := s.todoNow(id); ok && current.DoneAt == nil {
-		if err := s.investigationCloseError(ctx, current); err != nil {
-			return false, err
+	guard := func() error {
+		if t, ok := s.todoNow(id); ok {
+			if err := s.taskCloseSnapshotError(t, time.Now()); err != nil {
+				return err
+			}
+			if t.DoneAt == nil {
+				if err := s.investigationCloseError(ctx, t); err != nil {
+					return err
+				}
+			}
 		}
+		return nil
+	}
+	if err := guard(); err != nil {
+		return false, err
 	}
 	now := time.Now().UTC()
 	var row db.TodoRow
 	st := s.todoDB()
 	if st != nil {
-		r, ok, err := st.AutoDoneTodo(ctx, id, reason, now, work)
+		r, ok, err := st.AutoDoneTodo(ctx, id, reason, now, work, guard)
 		if errors.Is(err, db.ErrTodoNotFound) {
 			return false, nil
 		}
@@ -2180,7 +2234,13 @@ func (s *Service) autoDoneTodo(ctx context.Context, id, reason string, work time
 		t.keepPlan(&row)
 	}
 	var before Todo
+	var activityErr error
 	_, doneKeys, ok := s.setTodoRow(id, row, func(t *Todo) bool {
+		if st == nil {
+			if activityErr = s.taskCloseSnapshotError(*t, time.Now()); activityErr != nil {
+				return false
+			}
+		}
 		// With a store its conditional write decided it (open, not reopened since work began) and, writing held, no
 		// writer that stores a row committed after it (all of them take writing): memory takes the stored row even
 		// when an in-memory bump (an agent's title synced) moved updated_at past it. Memory alone has only its own
@@ -2192,6 +2252,9 @@ func (s *Service) autoDoneTodo(ctx context.Context, id, reason string, work time
 		return true
 	})
 	unlock() // the notifications run without writing, as for the other writers
+	if activityErr != nil {
+		return false, activityErr
+	}
 	if !ok {
 		return false, nil
 	}

@@ -291,7 +291,7 @@ fun ChatListEffects(
                         settleAfterStop = null
                         activeDrags += interaction
                         userScrollPending = true
-                        if (!state.restored) state.epoch++
+                        if (!state.restored || state.programmaticScroll) state.epoch++
                         if (!state.dragged) state.dragged = true
                         if (!state.restored) state.restored = true
                         reconcileFollow()

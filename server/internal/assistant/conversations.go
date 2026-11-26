@@ -245,8 +245,7 @@ type relayMsg struct {
 	// its name); "" for other relays.
 	Key   string `json:"key,omitempty"`
 	Title string `json:"title,omitempty"`
-	// Card: the card a quiet task's needs notice stands for (quietCard), pushed if the notice is refused for good. A
-	// version that does not know it drops it on its next save: the task's newest waiting card is pushed then.
+	// Card identifies the card behind a quiet task's needs notice or a standalone permission relay.
 	Card string `json:"card,omitempty"`
 	// Urgent: a supervision message with a signal that waits on a decision (relay_presence.go). A version that does
 	// not know it drops it on its next save: the message then ranks and waits as any other supervision message.
@@ -902,7 +901,7 @@ func (s *Service) queuedRelays() (map[string][]string, bool) {
 	}
 	for id, q := range b.st.Queue {
 		for _, msg := range q {
-			if msg.Tool == noticeTool || msg.Tool == askAnswerTool || msg.Tool == spawnNoticeTool || msg.Tool == taskEndTool || msg.Tool == prFollowupTool || msg.Tool == relayRefusedTool { // a quiet task's notice (quiet.go), a question's answer (ask_todo.go): its title is enough
+			if msg.standalonePermission() || msg.Tool == noticeTool || msg.Tool == askAnswerTool || msg.Tool == spawnNoticeTool || msg.Tool == taskEndTool || msg.Tool == prFollowupTool || msg.Tool == relayRefusedTool { // a quiet task's notice (quiet.go), a question's answer (ask_todo.go): its title is enough
 				out[id] = append(out[id], msg.FromTitle+"的通知")
 				continue
 			}
@@ -930,7 +929,7 @@ func (msg relayMsg) source() *proto.MessageSource {
 		return &proto.MessageSource{Kind: proto.SourceConversation, ConversationID: msg.From, Title: msg.FromTitle}
 	case superviseTool:
 		return &proto.MessageSource{Kind: proto.SourceSupervision}
-	case prFollowupTool, taskEndTool, relayRefusedTool, spawnNoticeTool, chatReplyTool:
+	case prFollowupTool, taskEndTool, relayRefusedTool, spawnNoticeTool, chatReplyTool, cardAgentPermission:
 		return &proto.MessageSource{Kind: proto.SourceNotice, Title: "Persona"}
 	case extensionEventTool:
 		return &proto.MessageSource{Kind: proto.SourceExtension, Title: msg.FromTitle}
@@ -986,6 +985,13 @@ func (s *Service) sendRelay(ctx context.Context, machine, to string, msg relayMs
 		}
 	} else if s.isBackground(ctx, to) {
 		s.backgroundModel(ctx, params) // its own model purpose, on every message as the main chat's is (supervise_background.go)
+	}
+	if msg.standalonePermission() {
+		cfg := s.settings(ctx)
+		ix, pending := s.pendingStandalonePermission(to, msg, time.Now())
+		if !pending || cfg.Main != to || s.canonical(cfg.MachineID) != s.canonical(machine) || s.directoryHiddenSession(ix.MachineID, ix.SessionID) {
+			return superviseRoundReply{}, false, errStandalonePermissionStale
+		}
 	}
 	s.availInput(machine, to, relayKind(msg), time.Now())
 	if msg.Tool == superviseTool {
@@ -1266,7 +1272,7 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 			// A needs notice may have been answered on the phone after it queued while the agent's node still
 			// reported blocked (#4332): ask the task once more right before it would interrupt. A node that cannot
 			// be reached is not an answer, so its notice stays queued for a later drain.
-			stale, keep := msg.Withdrawn || msg.Tool == chatReplyTool && !chatReplyRelayOn(s.settings(ctx)), false
+			stale, keep := msg.Withdrawn || s.chatReplyStale(ctx, msg), false
 			if !stale && msg.Tool == noticeTool && msg.State == "needs" {
 				// The loading read covers a hub restart whose first drain runs before the todos were read in:
 				// an unreadable todo is unknown, so the notice is delivered as without the recheck.
@@ -1303,6 +1309,8 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 				keep = retry > 0
 				if relaySuppressed(err) { // restored after a restart or a reconnect, or left by a withdrawal that did not reach it
 					stale, suppressed, keep, retry, err = true, true, false, 0, nil // leaves unsent: nothing replayed, nobody pushed
+				} else if errors.Is(err, errStandalonePermissionStale) {
+					stale, err = true, nil
 				}
 			}
 			cancel()

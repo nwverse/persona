@@ -156,4 +156,20 @@ class AssistDraftBusTest {
         bus.markTextApplied("h2")
         assertFalse(bus.current()!!.hasUnappliedContent)
     }
+
+    @Test
+    fun composeReplacementKeepsAttachmentsAndUsesTheExactPromptText() {
+        val bus = AssistDraftQueue(clock = { 1_000L })
+        val prompt = "  What happened today?  "
+        bus.publish(id = "compose", text = prompt, textMode = AssistDraftTextMode.Replace)
+        val claimed = bus.claim(AssistDraftTarget.Session(mainSession))!!
+        assertEquals(prompt, claimed.text)
+
+        val attachment = ComposerAttachment("file-1", "notes.txt", "content://example/notes.txt", image = false)
+        val composer = ChatComposerState(ChatComposerDraft(text = "Earlier note", attachments = listOf(attachment)))
+        val applied = prefillAssistDraft(composer, claimed)
+        assertTrue(applied.textAdded)
+        assertEquals(prompt, composer.value.text)
+        assertEquals(listOf(attachment), composer.attachments)
+    }
 }

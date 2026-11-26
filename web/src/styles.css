@@ -33,7 +33,8 @@
     border-radius: var(--radius-card);
   }
 
-  [data-app-shell] > main {
+  [data-app-shell] > main,
+  [data-app-shell] > aside {
     background: var(--page);
     overflow: clip;
   }
@@ -71,6 +72,9 @@
 }
 [data-sidebar-rows] {
   --sidebar-group-bg: var(--canvas);
+}
+[data-sidebar-rows],
+[data-sidebar-scroller] {
   scroll-padding-top: calc(var(--sidebar-sticky-top, 0px) + var(--sidebar-controls-height, 0px) + var(--sidebar-row));
 }
 
@@ -827,23 +831,21 @@ select:not([multiple], [size], .appearance-none) {
 :root[data-surface-style="liquid-glass"] [data-app-shell] :is([data-sidebar-root], [data-sidebar-rail], [data-sidebar-sticky]) {
   background: transparent;
 }
-:root[data-surface-style="liquid-glass"] [data-app-shell] [data-sidebar-sticky] {
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-}
 :root[data-surface-style="liquid-glass"] .sidebar-group-heading {
+  position: static;
   background: transparent;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+}
+:root[data-surface-style="liquid-glass"] .sidebar-group-heading[data-edge]::after {
+  display: none;
 }
 :root[data-surface-style="liquid-glass"] [data-app-shell] {
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
 }
 :root[data-surface-style="liquid-glass"] [data-app-shell] > main,
 :root[data-surface-style="liquid-glass"] [data-app-shell] > aside {
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
   box-shadow: inset 0 1px 0 var(--mac-rim-top);
 }
 :root[data-surface-style="liquid-glass"] [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"]) > main {
@@ -852,10 +854,6 @@ select:not([multiple], [size], .appearance-none) {
 }
 :root.dark[data-surface-style="liquid-glass"] [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"]) > main {
   filter: drop-shadow(0 6px 18px rgba(0, 0, 0, 0.34));
-}
-:root[data-surface-style="liquid-glass"] [data-sidebar-rows] {
-  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent 100%);
-  mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent 100%);
 }
 @media (prefers-reduced-transparency: reduce) {
   :root[data-surface-style="liquid-glass"] {
@@ -881,11 +879,9 @@ select:not([multiple], [size], .appearance-none) {
   }
   :root[data-surface-style="liquid-glass"] [data-app-shell],
   :root[data-surface-style="liquid-glass"] [data-app-shell] > main,
-  :root[data-surface-style="liquid-glass"] [data-app-shell] > aside,
-  :root[data-surface-style="liquid-glass"] [data-app-shell] [data-sidebar-sticky],
-  :root[data-surface-style="liquid-glass"] .sidebar-group-heading {
-    backdrop-filter: none;
+  :root[data-surface-style="liquid-glass"] [data-app-shell] > aside {
     -webkit-backdrop-filter: none;
+    backdrop-filter: none;
   }
 }
 .range::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; margin-top: -7px; border-radius: 50%; background: #fff; box-shadow: var(--shadow-btn); transition: transform 150ms var(--ease-out-strong); }

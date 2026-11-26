@@ -1569,6 +1569,38 @@ Nanosecond stat fields can repeat across same-size writes within one filesystem 
 cache for recently modified exports, and cache settled histories after a quiet window. Run rewrite regressions on
 the deployment filesystem as well as the development machine, including a settled cache hit and atomic replacement.
 
+## Task closure is not user inactivity
+
+Closing a task must not interrupt its conversation (#6819). A quiet transcript does not prove the owner is away:
+a connected app may still be reading it, or a user message may be ahead of the next inventory update. Check live app
+subscriptions and durable owner activity before automatic closure/retirement; re-check task ownership after asynchronous
+lookups. Cancellation must use the same idle-only retirement as completion, not a forced stop or terminal-close fallback.
+Keep historical ownership and an explicit stop reason so the remaining transcript explains what happened.
+Input and view-exit activity are not read receipts: writing them as seen can suppress the reply the owner is waiting
+for (`TestQuietPatrolAbsorbedUserQuestionPushes`). Persist them separately and keep notification regressions in the check.
+The manager sees the owner's message on an Agent's own page only as a new turn. "Any turn of a planned task's Agent
+reopens its accepted task" therefore undid every review-accepted plan task the moment the owner kept chatting, and its
+Agent was never retired (#6819). Attribute such a turn with the owner's presence (`ownerOnSession`: viewing, or active
+within the idle window) and keep an explicit task send (`noteAgentSend`) as the only override; test the direct-chat
+turn, not just `agent_send`.
+
+An owner-activity hold must leave the completion turn unjudged and retryable, including unsupervised tasks and saved
+judgments replayed after a later start. Do not spend failed-judgment retries while waiting for the owner to leave.
+A terminal review can encounter activity after the judge already published `pending_review`. Both conversation and
+leader reviews must retract that turn's judgment, review state and queued review signal, including a refusal at the
+final write boundary. Clear the saved signal too, or the sweep can replay it while the owner is still present. Keep
+the turn and rework history so inactivity alone restores review without another Agent turn.
+Recheck task ownership, its closure timestamp and owner activity after a stop RPC too: a check before that call
+cannot protect a session linked or reopened while it is in flight. Ended terminal relays must remove their clients'
+terminal viewer entries and publish the departure without clearing independent chat subscriptions.
+
+The retirement inventory row predates the stop. Read the node's saved stop cause before native archival can remove its
+live row, then retain that observed evidence in the archive. Never copy the requested cause or retain a stale positive
+cause after a failed read. Recheck ownership and activity after this additional RPC too, and test the native
+stop/archive/resume chain with no live inventory row; an isolated snapshot-copy test misses this handoff.
+For a still-listed row, preserve its current stop provenance and terminal viewability when stripping live controls;
+do not fill a missing, unknown or user cause from the archive's older positive cause.
+
 ## Stopped-session ownership is not recovery permission (#8214)
 
 A `codex_history` source can be node-resumable while still rejecting ordinary messages. Keep the generic source-owned read-only guard; admit only the node-qualified terminal row to the explicit supervised Resume path. Persist user stops and fail closed on missing provenance instead of interpreting an old start time or a localized reason string as permission. A cached eligible row also needs a node-side recheck serialized with closes, and a new running observation must clear old eligibility. Keep this metadata in capabilities rather than enlarging the frequently copied Session row past its allocation size class.
@@ -1656,6 +1688,39 @@ old sessions even if pin and unpin happen before the coalesced catalog push: a s
 pin while the final catalog bytes equal the earlier unpinned snapshot.
 
 - **Separate assignment data from framework policy (#10200).** Let the manager supply matching project background once; callers add only facts it cannot resolve. Preserve attachment suffixes when a launcher falls back to first-message rules. A dedicated instruction channel must survive resume and must suppress duplicate SessionStart closeout guidance. Never replace a configured Codex developer policy to obtain a cleaner transcript: fall back conservatively. Herdr refuses apostrophes even inside quoted restore arguments; encode them as TOML Unicode escapes, and use a persistent file for Claude's multiline policy. One new closeout can carry delivery, gate and responsible party while both historical formats remain readable.
+
+## Check owner activity at the closure commit boundary (#6819)
+
+Checking before a write lock does not protect a slow write: messages and viewers update independently of task writes.
+Automatic closure needs the same transaction-final activity guard as a reviewed closure, and an activity hold must
+leave the turn unjudged so the sweep can retry. A memory-only review checks under the todo lock immediately before
+changing either the closure or its review ledger, not only before assembling the replacement row.
+
+Delivery of `fleet.clients` belongs to each manager connection, not to a shared success bit. Retain only successful
+recipients, retry failed ones even when the global viewer snapshot is unchanged, and send again after reconnection.
+Serialize ownership-refresh invalidation with sends so an in-flight report cannot hide the refresh.
+
+The post-stop archive guard cannot undo an interrupt. Register an in-flight retirement before its final activity read,
+cancel it on input, viewing or a read receipt, and propagate that cancellation across every RPC hop. Use the separate
+`session.stop_if_idle` route: an older peer must refuse, never fall back to an unconditional stop. Refresh the node's
+runtime and check cancellation and pending/recent input under its typing lock before each Ctrl+C.
+Input recorded between keys prevents the second interrupt. A cancelled or refused stop grants no recovery.
+Reload the stop observation for the current task completion after a manager restart. A live row from a resumed
+Agent then keeps the ordinary idle window, even though its first-seen clock starts over.
+Match the completion at Postgres microsecond precision. A manual edit and older JSON stop records can carry
+the original nanoseconds.
+Keep the new preflight on that guarded RPC: applying it to legacy stop/retire can rediscover a different engine and
+erase a retained session row before its established stop/recovery path runs. Verify those full-package regressions too.
+Install a test transport gate before linking or closing a task: both start background token/outcome work, so replacing
+the service's hub afterwards races that work even if the stop itself is synchronized.
+
+A deferred unsupervised judgment can outlive its inventory row or its manager. Retry its durable session/turn identity,
+but verify the same closed transcript again before applying a judgment. A new/open turn, a released/relinked Agent,
+reopening, an unreachable node or another working Agent is not completion evidence. Absence alone proves nothing.
+
+Polling-only native terminal pages still need a read-only hub subscription, including when the first hello has no
+`terminal_stream`. Keep page presence separate from the stream's success: retain it on unsupported, release it on page
+exit, and restore it after reconnect or page return. Never request a grid or takeover for polling presence.
 
 ## A transcript directory is not the selected launcher's sign-in
 

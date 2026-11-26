@@ -335,7 +335,7 @@ func (t *Todo) resetReopenedUserCheck() {
 type supervisionStore interface {
 	ListTodoSupervision(ctx context.Context) ([]db.TodoSupervisionRow, error)
 	PutTodoSupervision(ctx context.Context, r db.TodoSupervisionRow) error
-	ReviewDoneTodo(ctx context.Context, id, reason string, accepted bool, at time.Time) (*db.TodoRow, bool, error)
+	ReviewTodo(ctx context.Context, id, reason string, accepted bool, at time.Time, ledger *db.TodoSupervisionRow, guard func() error) (*db.TodoRow, bool, error)
 	LinkTodoReviewer(ctx context.Context, todoID, machineID, sessionID, title, cwd, agent, via string, at time.Time) error
 }
 
@@ -546,6 +546,39 @@ func (s *Service) updateSupervision(ctx context.Context, id string, change func(
 	return s.updateSupervisionAt(ctx, id, time.Now().UTC(), change)
 }
 
+type taskReviewClose struct {
+	reason   string
+	accepted bool
+	closed   bool
+	after    func()
+}
+
+// updateSupervisionWithClose validates on a private ledger, then commits it with a terminal review's closure before
+// the caller records any review effects. A late activity refusal therefore leaves no review on the open task.
+func (s *Service) updateSupervisionWithClose(ctx context.Context, id string, change func(*Supervision) bool, closing *taskReviewClose) (Supervision, bool, error) {
+	return s.updateSupervisionGuardedWithClose(ctx, id, nil, change, closing)
+}
+
+// updateSupervisionGuardedWithClose validates a current-todo guard and a private ledger in one write boundary,
+// committing a terminal review's closure before any post-commit effects run.
+func (s *Service) updateSupervisionGuardedWithClose(ctx context.Context, id string, guard func(Todo) bool, change func(*Supervision) bool, closing *taskReviewClose) (Supervision, bool, error) {
+	if closing == nil {
+		return s.updateSupervisionGuarded(ctx, id, guard, change)
+	}
+	s.loadSeen(ctx)
+	_ = s.loadTaskActivity(ctx)
+	// Match guarded supervision writes: the to-do writer must be acquired before the ledger writer.
+	s.todos.writing.Lock()
+	s.supervise.writeMu.Lock()
+	v, changed, err := s.updateSupervisionGuardedLockedAt(ctx, id, time.Now().UTC(), guard, change, closing)
+	s.supervise.writeMu.Unlock()
+	s.todos.writing.Unlock()
+	if closing.after != nil {
+		closing.after()
+	}
+	return v, changed, err
+}
+
 // updateSupervisionAt is updateSupervision at the caller's supervision-pass time.
 func (s *Service) updateSupervisionAt(ctx context.Context, id string, now time.Time, change func(*Supervision) bool) (Supervision, bool, error) {
 	return s.updateSupervisionGuardedAt(ctx, id, now, nil, change)
@@ -567,16 +600,16 @@ func (s *Service) updateSupervisionGuardedAt(ctx context.Context, id string, now
 	b := &s.supervise
 	b.writeMu.Lock()
 	defer b.writeMu.Unlock()
-	return s.updateSupervisionGuardedLockedAt(ctx, id, now, guard, change)
+	return s.updateSupervisionGuardedLockedAt(ctx, id, now, guard, change, nil)
 }
 
 // updateSupervisionLockedAt is updateSupervisionAt with supervise.writeMu already held.
 func (s *Service) updateSupervisionLockedAt(ctx context.Context, id string, now time.Time, change func(*Supervision) bool) (Supervision, bool, error) {
-	return s.updateSupervisionGuardedLockedAt(ctx, id, now, nil, change)
+	return s.updateSupervisionGuardedLockedAt(ctx, id, now, nil, change, nil)
 }
 
 // updateSupervisionGuardedLockedAt is the guarded form with supervise.writeMu already held.
-func (s *Service) updateSupervisionGuardedLockedAt(ctx context.Context, id string, now time.Time, guard func(Todo) bool, change func(*Supervision) bool) (Supervision, bool, error) {
+func (s *Service) updateSupervisionGuardedLockedAt(ctx context.Context, id string, now time.Time, guard func(Todo) bool, change func(*Supervision) bool, closing *taskReviewClose) (Supervision, bool, error) {
 	t, ok := s.todoNow(id)
 	if !ok {
 		return Supervision{}, false, db.ErrTodoNotFound
@@ -617,7 +650,17 @@ func (s *Service) updateSupervisionGuardedLockedAt(ctx context.Context, id strin
 		// Match the review period after a reload. Postgres stores PendingSince to microsecond precision.
 		park.ExternalPR.PendingSince = v.UpdatedAt.Truncate(time.Microsecond)
 	}
-	if st := s.supervisionDB(); st != nil && s.todoDB() != nil {
+	if closing != nil && !t.isConcern() {
+		var err error
+		closing.closed, closing.after, err = s.reviewDoneTodoLocked(ctx, id, closing.reason, closing.accepted, v, false)
+		if err != nil {
+			return Supervision{}, false, err
+		}
+		if closing.closed {
+			return *v, true, nil // the row and ledger were published together
+		}
+		// ReviewTodo also commits the ledger when the task was already closed.
+	} else if st := s.supervisionDB(); st != nil && s.todoDB() != nil {
 		if err := st.PutTodoSupervision(ctx, v.row(id)); err != nil {
 			return Supervision{}, false, err
 		}

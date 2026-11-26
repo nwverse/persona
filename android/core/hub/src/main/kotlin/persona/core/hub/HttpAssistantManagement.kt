@@ -393,6 +393,19 @@ class HttpAssistantManagement private constructor(
         return JsonCodec.decodeFromJsonElement(answer.getValue("usage"))
     }
 
+    override suspend fun usageProjects(): UsageProjects? = try {
+        val answer = request("GET", listOf("api", "v1", "usage", "projects"))
+        JsonCodec.decodeFromJsonElement<UsageProjects>(answer.getValue("usage")).takeIf { it.ranges.isNotEmpty() }
+    } catch (failure: HubFailure) {
+        if (failure.status == 404) null else throw failure
+    }
+
+    override suspend fun usageProjectDetail(key: String): UsageProjectDetail {
+        require(key.isNotBlank()) { "project key is required" }
+        val answer = request("GET", listOf("api", "v1", "usage", "projects", "detail"), query = mapOf("key" to key))
+        return JsonCodec.decodeFromJsonElement(answer.getValue("usage"))
+    }
+
     companion object {
         internal const val MODEL_PICK_TIMEOUT_SECONDS = 40L
     }

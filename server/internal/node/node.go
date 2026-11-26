@@ -222,6 +222,7 @@ type Node struct {
 	fulls               map[string]*fullClient            // client id -> a full herdr client running for the web (fullclient.go)
 	focus               focusState                        // focus sync for the full views (focus.go)
 	suggests            map[string]*suggestState          // session id -> Claude's suggested next message (suggestion.go)
+	checkpoints         checkpointTracker                 // per-turn working-tree snapshots (checkpoint.go)
 	driving             map[string]bool                   // session id -> Persona is working its TUI (a picker it opened is not "blocked")
 	blockedAt           map[string]time.Time              // session id -> when host status first became blocked without clearing
 	dialogs             paneDialogs                       // pane -> the dialog its last screen read showed (dialogstatus.go)
@@ -1172,6 +1173,15 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			}
 		}
 	}
+	if sessionSend || method == "session.start" && p.ResumeSessionID != "" {
+		id := p.SessionID
+		if method == "session.start" {
+			id = p.ResumeSessionID
+		}
+		if err := n.waitCheckpoint(ctx, id); err != nil {
+			return nil, err
+		}
+	}
 	if n.codexBlocked(p.SessionID) && (strings.HasPrefix(method, "session.") || strings.HasPrefix(method, "terminal.") || method == "assistant.send" || method == assistantwire.DeviceAssistantAnswerAgain || method == "assistant.permissions.reset") {
 		return nil, refusal("identity_conflict", "会话 ID 与另一来源重复，不能判断操作目标；未读取或发送", nil)
 	}
@@ -1289,19 +1299,30 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		}
 		return map[string]any{"closed": done, "guard_verified": true}, nil
 	}
-	if method == "session.stop" {
+	if method == "session.stop" || method == nodeproto.StopIfIdle {
 		var a struct {
-			Retire    bool            `json:"retire"`
-			StopCause proto.StopCause `json:"stop_cause"`
+			Retire        bool            `json:"retire"`
+			CloseTerminal bool            `json:"close_terminal"`
+			StopCause     proto.StopCause `json:"stop_cause"`
 		}
 		_ = json.Unmarshal(params, &a)
+		if method == nodeproto.StopIfIdle && (!a.Retire || !a.StopCause.AllowsSupervisorResume()) {
+			return nil, refusal(notRetirable, "an automatic stop needs retire and an automatic stop cause", nil)
+		}
+		if method == nodeproto.StopIfIdle && a.CloseTerminal && a.StopCause != proto.StopTaskCompleted && a.StopCause != proto.StopIdle {
+			return nil, refusal(notRetirable, "automatic terminal close requires a completed task or idle stop", nil)
+		}
 		cause := proto.StopUser
 		if a.Retire && a.StopCause.AllowsSupervisorResume() {
 			cause = a.StopCause
 		} else if !a.Retire && a.StopCause == proto.StopTimeout {
 			cause = proto.StopTimeout
 		}
-		stopped, err := n.stopWithCause(ctx, p.SessionID, a.Retire, cause)
+		if method == nodeproto.StopIfIdle && a.CloseTerminal {
+			stopped, closed, err := n.closeIdleTerminal(ctx, p.SessionID, cause)
+			return map[string]any{"stopped": stopped, "closed": closed}, err
+		}
+		stopped, err := n.stopWithGuard(ctx, p.SessionID, a.Retire, cause, method == nodeproto.StopIfIdle)
 		return map[string]any{"stopped": stopped}, err
 	}
 	if method == "session.restore_model" { // model_restore.go (#2528): closes an idle headless process, sends nothing

@@ -10,8 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/cliport"
+	"github.com/nwverse/persona/server/internal/cliwire"
 	"github.com/nwverse/persona/server/internal/kb"
-	"github.com/nwverse/persona/server/internal/larkcli"
 )
 
 // TestRealImportWithTheOwnersLogin imports into a temporary data directory through the real lark-cli login. It never
@@ -21,6 +22,7 @@ func TestRealImportWithTheOwnersLogin(t *testing.T) {
 	if os.Getenv("KB_LARK_REAL") != "1" {
 		t.Skip("set KB_LARK_REAL=1 to run against the real lark-cli")
 	}
+	needsLarkCLI(t)
 	e := newEngine(t)
 	// The owner's documents as they are, and a copy of one with its title blanked: the fill must bring it back.
 	if home, err := os.UserHomeDir(); err == nil {
@@ -47,7 +49,7 @@ func TestRealImportWithTheOwnersLogin(t *testing.T) {
 			}
 		}
 	}
-	client := NewClient(larkcli.New(larkcli.Config{Bin: os.Getenv("KB_LARK_BIN"), Timeout: time.Minute}), e.Store.Zone())
+	client := NewClient(cliport.NewRunner(cliwire.Config{Bin: os.Getenv("KB_LARK_BIN"), Timeout: time.Minute}), e.Store.Zone())
 	res, err := Run(context.Background(), e, client, Config{}, time.Now(), t.Logf)
 	if err != nil {
 		t.Fatalf("the import failed: %v", err)

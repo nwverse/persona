@@ -608,4 +608,3 @@ describe("restoreQueued in a Persona chat (#4342)", () => {
     }
   });
 });
-

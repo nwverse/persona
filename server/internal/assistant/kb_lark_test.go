@@ -2,15 +2,20 @@ package assistant
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/cliport"
 	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/moduleswitch"
 )
 
 // stubLark writes a fake lark-cli: it appends a line to $KB_LARK_MARKER when run, then answers with body and exit
@@ -29,6 +34,7 @@ func stubLark(t *testing.T, body string, exit int) (bin, marker string) {
 
 // The switch decides whether lark-cli is called at all.
 func TestKBLarkMinutesSwitch(t *testing.T) {
+	needsLarkCLI(t)
 	f := newFakeHub()
 	s := newKBService(t, f)
 	e := kbEng(t, s)
@@ -49,6 +55,7 @@ func TestKBLarkMinutesSwitch(t *testing.T) {
 
 // The interval: a second round right after one does not run lark-cli again.
 func TestKBLarkMinutesRespectsTheInterval(t *testing.T) {
+	needsLarkCLI(t)
 	f := newFakeHub()
 	s := newKBService(t, f)
 	e := kbEng(t, s)
@@ -80,6 +87,7 @@ func splitLines(s string) []string {
 
 // A failing lark-cli is logged and the round goes on: nothing is written and no panic escapes.
 func TestKBLarkMinutesFailureIsLoggedOnly(t *testing.T) {
+	needsLarkCLI(t)
 	f := newFakeHub()
 	s := newKBService(t, f)
 	e := kbEng(t, s)
@@ -92,5 +100,33 @@ func TestKBLarkMinutesFailureIsLoggedOnly(t *testing.T) {
 	}
 	if n := len(e.Store.Items(kb.KindMeeting)); n != 0 {
 		t.Fatalf("%d minutes written by a failing lark-cli", n)
+	}
+}
+
+// Without the lark module (left out of the build, or switched off as here) the import never runs lark-cli: it logs
+// that lark-cli is not part of the build and the round goes on.
+func TestKBLarkMinutesWithoutTheLarkModule(t *testing.T) {
+	f := newFakeHub()
+	s := newKBService(t, f)
+	e := kbEng(t, s)
+	s.moduleSwitch = moduleswitch.Off("lark")
+	var mu sync.Mutex
+	var logged []string
+	s.logf = func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		logged = append(logged, fmt.Sprintf(format, args...))
+	}
+	bin, marker := stubLark(t, `{"ok":true,"data":{"items":[],"has_more":false}}`, 0)
+	f.hello.KB.LarkMinutes = &assistantwire.KBLarkMinutes{Enabled: true, Binary: bin, IntervalMinutes: 1}
+
+	s.kbLarkMinutes(context.Background(), e, &kbRounds{})
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatal("the import ran lark-cli without the lark module")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !slices.ContainsFunc(logged, func(l string) bool { return strings.Contains(l, cliport.ErrUnavailable.Error()) }) {
+		t.Fatalf("logged %q, want that lark-cli is not part of this build", logged)
 	}
 }

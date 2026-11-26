@@ -20,6 +20,11 @@
         "startWindowIcon": "$media:startIcon",
         "startWindowBackground": "$color:start_window_background",
         "exported": true,
+        "supportWindowMode": [
+          "fullscreen",
+          "split",
+          "floating"
+        ],
         "skills": [
           {
             "entities": [
@@ -119,6 +124,9 @@
       },
       {
         "name": "ohos.permission.GET_NETWORK_INFO"
+      },
+      {
+        "name": "ohos.permission.VIBRATE"
       },
       {
         "name": "ohos.permission.CAMERA",

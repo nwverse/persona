@@ -170,6 +170,14 @@ or one of this machine's, never a name or an address the machine no longer has, 
 A new client of the hub on its own machine uses both, and its test runs against a listener on a non-loopback address of
 the machine that refuses other sources (`server/internal/hub/cli_listen_test.go`).
 
+## Handover notifications follow the machine state they announce (#6819)
+
+A configured machine's durable assignment and its cached `Machine.owner` are updated in separate steps. Publish the
+forced viewer refresh only after the cached owner and offline state are updated, even when the scoped report already
+uses the new assignment. A test with only a configured entry never exercises the cached machine's handover; create
+that machine too, and block the first notification write to check its state instead of accepting any later matching
+report.
+
 ## A token does not say whose it is, and a thread does not say whose item (2026-11-15, #7832)
 
 The GitHub connector kept its inbox things, its notifications cursor and its thread cache by thread and path, and swapped only the token when the
@@ -406,6 +414,22 @@ in bus order, but one worker persists only the latest pending report, with a bou
 write is logged and left for the next report, never retried in a tight loop. Both kinds of worker join the hub's
 `nodeWorkers`, whose shutdown wait is bounded. Tests hold the node or `PutSetting`, prove a later message or bus event
 is still handled, then release the dependency and join the workers before checking the final value and call count.
+
+## A node's event handler in the manager must not wait for that node (2026-11-26, #16214)
+
+The manager takes a node's events on the read loop of that node's connection: `rpc.Peer.Serve` calls `OnEvent` in
+place, and devices pass the event to the assistant's `NodeEvent` from there. Only that loop reads the node's answers.
+`setSessions` (a `sessions.changed`) classified the main conversation's latest round by reading its history from the
+same node, so after every finished main-chat turn the read waited for an answer nobody could read and ran into its
+15 s deadline. Meanwhile nothing else the node sent was read: pongs, answers to the apps' reads, item pushes, the
+reply's live text and the turn's end. The log shows it as one `session.items result=deadline took=14.998s` followed by
+a burst of answers that each took about 15 s, with `ping` deadlines in between. The transcript's size played no part:
+the pages it read took under a millisecond on a 100 MB transcript.
+
+Anything a node's event needs from that node runs on a goroutine of its own: one at a time per conversation, taking the
+newest revision asked for, and the list is published again when its result changes a row. Test it as the hub's read
+loops are tested: hold every call to the node, check that the event is still taken, then release it and wait for the
+result (`server/internal/assistant/conversation_attention_readloop_test.go`).
 
 ## App connection bookkeeping uses ordered background snapshots (2026-11-15, #6889)
 

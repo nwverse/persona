@@ -43,9 +43,9 @@ const agySwitchIdleScreen = "" +
 
 func TestAgySwitchCommands(t *testing.T) {
 	for in, want := range map[string]string{
-		"gemini-4-neon-medium": "/model gemini-4-neon-medium",
+		"gemini-4-neon-medium":   "/model gemini-4-neon-medium",
 		" claude-opus-5-5-high ": "/model claude-opus-5-5-high",
-		"gateway/model-x:free": "/model gateway/model-x:free",
+		"gateway/model-x:free":   "/model gateway/model-x:free",
 	} {
 		got, err := agyModelCommand(in)
 		if err != nil || got != want {

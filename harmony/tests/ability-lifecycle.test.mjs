@@ -27,6 +27,7 @@ registerHooks({
    export const nativeMeetingServices={async initialize(){s.meetingRefreshes=(s.meetingRefreshes||0)+1},setRecordingEvent(){},
      receive(parameters){if(parameters.personaMeetingType==='persona.meeting.reminder' && parameters.occurrence)s.meetingOpens=(s.meetingOpens||0)+1}};
    export const NOTIFICATION_ACTION='persona.notification.OPEN';export const nativeNotifications={refresh:()=>s.query};
+   export const LIVE_VIEW_ACTION='persona.liveview.OPEN';export const nativeLiveView={async stopNow(){}};
    export const deviceFeatures={async background(){},async foreground(){}};
    export const NativeDictation={cancelActive(){s.dictationStops++;}};
    export const KnowledgeRecording={async backgroundAll(){s.recordingStops++;}};

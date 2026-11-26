@@ -26,5 +26,6 @@
   "review_uncommitted": "未提交",
   "review_branch": "分支（自 {sha}）",
   "review_since": "自 {sha} 以来",
+  "review_turn": "这一轮 {sha}",
   "show_chat": "查看对话"
 }

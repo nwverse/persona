@@ -389,6 +389,12 @@ func (s *Service) askRound(id, asked string) (*acceptAsk, error) {
 func (s *Service) chooseOption(ctx context.Context, id, asked, label string) (acceptResult, error) {
 	s.reviewDismissals.actions.acquire(id)
 	defer s.reviewDismissals.actions.release(id)
+	return s.chooseOptionLocked(ctx, id, asked, label)
+}
+
+// chooseOptionLocked is chooseOption for a caller that already holds the card's action lock (settleSupervisorChoice,
+// which must keep it from its look at the waiting choice until the choice is recorded).
+func (s *Service) chooseOptionLocked(ctx context.Context, id, asked, label string) (acceptResult, error) {
 	a, err := s.askRound(id, asked)
 	if err != nil || a == nil {
 		return acceptResult{}, err

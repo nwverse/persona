@@ -25,6 +25,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import persona.core.contracts.api.*
 import persona.core.navigation.LocalDetailKey
+import persona.core.navigation.ExtensionRoute
 import persona.core.navigation.SettingsPage
 import persona.core.navigation.SettingsPageRoute
 import kotlinx.coroutines.CancellationException
@@ -207,7 +208,9 @@ private fun SettingsContent(
     // so the tab badge and the Extensions page stay current. Cards load only on the Extensions page when a tap can open them.
     val slots = services.extensionSlots.takeUnless { services.demo }
     val slotsState = slots?.state?.collectAsState()?.value ?: ExtensionSlotsState()
-    val slotCards = if (page == "plugins" && onNavigate != null) rememberExtensionCards(slots) { onNavigate(it) } else emptyList()
+    val slotCards = if (page == "plugins" && onNavigate != null) {
+        rememberExtensionCards(slots, onOpen = { onNavigate(it) }, onSettings = { id -> onNavigate(ExtensionRoute(id, manager = owner)) })
+    } else emptyList()
     LaunchedEffect(slots, page, connection) {
         if (slots != null && (page == "settings" || page == "plugins") && connection == ConnectionState.Online) slots.load()
     }

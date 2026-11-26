@@ -213,7 +213,7 @@ func (s *Service) superviseJudged(ctx context.Context, t Todo, work time.Time, c
 }
 
 // closedSince: task id is closed now (accepted, cancelled, closed by hand), or a review accepted or cancelled it after
-// the stretch of work begun at work (task_review writes the ledger before it closes the to-do). A judgment of that
+// the stretch of work begun at work (terminal task reviews commit the ledger and closure together). A judgment of that
 // stretch is moot: it neither changes the ledger nor tells the supervisor (#7539). A task opened again is judged
 // again by the work after its reopening, which began after that review.
 func (s *Service) closedSince(id string, work time.Time) bool {

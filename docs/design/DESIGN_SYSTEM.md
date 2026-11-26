@@ -2594,7 +2594,8 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   pager and a tray show one at a time, the pager stepping aside while a tray is open. The iOS pager is capped as a lone
   question card (#6277), owns the grabber (#12306), and in a voice call stays open at half the page. The Web pager scrolls inside the composer's existing height limit. The three numbers
   are To Decide (the pager's cards), Needs you (its rows) and, in an Agent's chat, "N pending". An Agent's chat keeps the
-  stack; the wrap-up chips stay chips after the entries.
+  stack; the wrap-up chips stay chips after the entries. The two paragraphs below describe older stacks on Android, Web and iOS
+  before #12831.
   In an Agent's chat on the web, the stack holds the conversation's own cards alone, as one slot: its first card with
   "2 / 6" (where it stands in the run), the next taking its place when it is answered, and what was just answered one
   line over it that goes 3 seconds after the last answer (details with the interaction cards in `docs/web/web.md`).
@@ -3244,6 +3245,17 @@ This requested HarmonyOS presentation uses compact icon submissions while retain
 7. Decide the cross-platform questions that need an owner: needs-you color on web, the third destination (DS-26), heading case (DS-27), per-style radii (DS-13).
 8. Make drift visible: extend the Android ratchet to the design system, add a web literal ratchet, and a test that compares the Swift scales with the shared JSON (DS-30, DS-35).
 9. Prune dead tokens and views, and replace the remaining `SecureField` uses (DS-31, DS-32).
+
+## Closed task conversation ownership
+
+The Agents web conversation keeps a quiet, persistent ownership line below its header after its to-do is completed or
+cancelled (#6819). It reuses the inset surface, secondary text and inline-link tokens; it is outside the transcript
+scroll area, so a long conversation cannot hide it. It names the completed/cancelled state and links to the to-do;
+while the session remains writable it says the user can keep chatting. Active task ownership suppresses this historical
+line. A stopped Agent instead gives its explicit stop reason beside the existing Terminal and Resume actions, never a
+promise that another message can be sent. There is no new setting, style, notification, count or automatic confirmation.
+The ownership notice and stopped/archived-session recovery controls load only when needed, keeping them out of the
+first-screen startup budget without changing their layout, text or actions. Session-detail load errors stay eager.
 
 ## UI change self-check
 

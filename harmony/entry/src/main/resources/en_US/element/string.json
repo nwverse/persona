@@ -2450,7 +2450,7 @@
     },
     {
       "name": "health_question_resting_heart_rate",
-      "value": "Log my weight today: 62.5 kg"
+      "value": "How has my resting heart rate been trending this week?"
     },
     {
       "name": "health_log_weight",
@@ -8597,6 +8597,234 @@
       "value": "This launcher has no models available to switch to."
     },
     {
+      "name": "agent_mark_all_seen",
+      "value": "Mark all as seen"
+    },
+    {
+      "name": "agent_mark_all_seen_confirm",
+      "value": "Mark {count} unread agents as seen?"
+    },
+    {
+      "name": "live_view_section_title",
+      "value": "Live View"
+    },
+    {
+      "name": "live_view_enable",
+      "value": "Show Live View"
+    },
+    {
+      "name": "live_view_enable_detail",
+      "value": "Keep waiting, working, and unread agents visible on the status bar and lock screen."
+    },
+    {
+      "name": "live_view_lock_details",
+      "value": "Show Details on Lock Screen"
+    },
+    {
+      "name": "live_view_lock_details_detail",
+      "value": "Display agent names and summaries instead of counts only."
+    },
+    {
+      "name": "live_view_test_publish",
+      "value": "Preview in System Live View"
+    },
+    {
+      "name": "live_view_test_stop",
+      "value": "End"
+    },
+    {
+      "name": "live_view_needs_count",
+      "value": "{count} need you"
+    },
+    {
+      "name": "live_view_working_count",
+      "value": "{count} working"
+    },
+    {
+      "name": "live_view_unread_count",
+      "value": "{count} unread"
+    },
+    {
+      "name": "live_view_all_caught_up",
+      "value": "All Caught Up"
+    },
+    {
+      "name": "live_view_assistant_replying",
+      "value": "Assistant replying"
+    },
+    {
+      "name": "live_view_background_tag",
+      "value": "Background"
+    },
+    {
+      "name": "live_view_anon_permission",
+      "value": "A permission request is waiting"
+    },
+    {
+      "name": "live_view_anon_plan",
+      "value": "A plan needs your approval"
+    },
+    {
+      "name": "live_view_anon_question",
+      "value": "A question needs your answer"
+    },
+    {
+      "name": "live_view_anon_screen",
+      "value": "A terminal needs you"
+    },
+    {
+      "name": "live_view_anon_working",
+      "value": "Working"
+    },
+    {
+      "name": "live_view_anon_unread",
+      "value": "Finished · unread"
+    },
+    {
+      "name": "live_view_capsule_needs",
+      "value": "Needs {count}"
+    },
+    {
+      "name": "live_view_capsule_working",
+      "value": "Working {count}"
+    },
+    {
+      "name": "live_view_capsule_unread",
+      "value": "Unread {count}"
+    },
+    {
+      "name": "live_view_capsule_done",
+      "value": "Done"
+    },
+    {
+      "name": "live_view_more_count",
+      "value": "+{count}"
+    },
+    {
+      "name": "live_view_system_disabled",
+      "value": "Enable Live View for Persona in system settings to display it on the status bar and lock screen."
+    },
+    {
+      "name": "live_view_entitlement_required",
+      "value": "System Live View requires a signed build with Live View capability enabled."
+    },
+    {
+      "name": "live_view_unavailable",
+      "value": "System Live View is unavailable on this device."
+    },
+    {
+      "name": "project_agent_count_one",
+      "value": "1 agent"
+    },
+    {
+      "name": "fold_inspector_title",
+      "value": "Live Inspector"
+    },
+    {
+      "name": "fold_inspector_fleet",
+      "value": "Fleet Pulse"
+    },
+    {
+      "name": "fold_posture_trifold",
+      "value": "Tri-Fold Workspace"
+    },
+    {
+      "name": "fold_posture_dual",
+      "value": "Foldable Split"
+    },
+    {
+      "name": "fold_posture_hover",
+      "value": "Tabletop Hover"
+    },
+    {
+      "name": "turn_changes_one",
+      "value": "1 file changed"
+    },
+    {
+      "name": "turn_changes_many",
+      "value": "{count} files changed"
+    },
+    {
+      "name": "turn_changes_review",
+      "value": "Review"
+    },
+    {
+      "name": "turn_changes_more",
+      "value": "Show {count} more"
+    },
+    {
+      "name": "bubble_show_more",
+      "value": "Show More"
+    },
+    {
+      "name": "bubble_show_less",
+      "value": "Show Less"
+    },
+    {
+      "name": "live_view_published_toast",
+      "value": "Live View updated on status bar"
+    },
+    {
+      "name": "agents_marked_seen_toast",
+      "value": "Marked {count} as seen"
+    },
+    {
+      "name": "live_view_preview_approve",
+      "value": "Approve"
+    },
+    {
+      "name": "live_view_preview_deny",
+      "value": "Deny"
+    },
+    {
+      "name": "live_view_capsule_metric_working",
+      "value": "Working"
+    },
+    {
+      "name": "fold_workbench_pulse",
+      "value": "Pulse"
+    },
+    {
+      "name": "fold_workbench_code",
+      "value": "Code"
+    },
+    {
+      "name": "fold_workbench_machines",
+      "value": "Machines"
+    },
+    {
+      "name": "fold_posture_trifold_angled",
+      "value": "Tri-Fold Stand"
+    },
+    {
+      "name": "fold_workbench_expand_tools",
+      "value": "Expand"
+    },
+    {
+      "name": "fold_workbench_pick_session",
+      "value": "Select an agent session to inspect files, git diff, and terminal."
+    },
+    {
+      "name": "fold_relay_next",
+      "value": "Next"
+    },
+    {
+      "name": "fold_relay_prev",
+      "value": "Previous"
+    },
+    {
+      "name": "fold_relay_queue",
+      "value": "{count} to review"
+    },
+    {
+      "name": "fold_relay_clear",
+      "value": "Queue clear"
+    },
+    {
+      "name": "machine_load_per_core",
+      "value": "{per}/core"
+    },
+    {
       "name": "phone_xiaoyi",
       "value": "XiaoYi"
     },
@@ -8859,6 +9087,30 @@
     {
       "name": "xiaoyi_failed",
       "value": "Unable to complete the request. Open Persona to check details."
+    },
+    {
+      "name": "fold_urgent_review",
+      "value": "Review"
+    },
+    {
+      "name": "fold_hover_deck_title",
+      "value": "Tabletop Deck"
+    },
+    {
+      "name": "fold_interrupt_agent",
+      "value": "Interrupt"
+    },
+    {
+      "name": "knowledge_minutes_checking",
+      "value": "Checking the whole recording…"
+    },
+    {
+      "name": "knowledge_minutes_checking_progress",
+      "value": "Checking the whole recording ({done} of {total} min)…"
+    },
+    {
+      "name": "knowledge_minutes_writing",
+      "value": "Writing the minutes…"
     }
   ]
 }

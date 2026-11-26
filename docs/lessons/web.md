@@ -10,6 +10,12 @@ and a body that breaks off, into `HubUnreachableError`. Only that, or a TypeErro
 message, is a gap (`isNetworkFailure`). Any other TypeError says what broke ("Something went wrong on this page: …") and
 is not retried. When code needs to know whether a request reached the hub, use `isNetworkFailure`, not `instanceof TypeError`.
 
+## Closed-task links keep native navigation and the app base (#6819)
+
+Build closed-task banner links with the router's `href` and handle clicks with `onLinkClick`. Plain clicks stay
+in-app, modified clicks retain native navigation, and native destinations retain the reverse-proxy base path.
+Test the rendered anchor and its click behavior at both the root and a nested base path, not only the router helper.
+
 ## Reopening a model picker can reuse the computer's catalog (#15481)
 
 The browser's repeat read and the computer's forced discovery are separate. Use the opening read for fast results

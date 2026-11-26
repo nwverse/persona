@@ -6,8 +6,9 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistant/kblark"
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/cliport"
+	"github.com/nwverse/persona/server/internal/cliwire"
 	"github.com/nwverse/persona/server/internal/kb"
-	"github.com/nwverse/persona/server/internal/larkcli"
 )
 
 const (
@@ -18,8 +19,9 @@ const (
 )
 
 // kbLarkMinutes imports the owner's Lark minutes and fills the titles of their Lark documents through lark-cli, when
-// kb.lark_minutes is on and the run is due (the archive lane's kbRounds.lark). A failure is logged and the round goes
-// on; nothing else in the knowledge base waits for it.
+// kb.lark_minutes is on and the run is due (the archive lane's kbRounds.lark). lark-cli is the lark module's adapter,
+// reached through the core's port (internal/cliport): a build without the module, or with it switched off, logs that
+// and skips the run. A failure is logged and the round goes on; nothing else in the knowledge base waits for it.
 func (s *Service) kbLarkMinutes(ctx context.Context, e *kb.Engine, r *kbRounds) {
 	cfg := s.larkMinutesConfig(ctx)
 	if !cfg.On() || e.Store.ReadOnly() {
@@ -33,7 +35,11 @@ func (s *Service) kbLarkMinutes(ctx context.Context, e *kb.Engine, r *kbRounds) 
 		return
 	}
 	r.lark = time.Now()
-	client := kblark.NewClient(larkcli.New(larkcli.Config{Bin: cfg.Binary, Profile: cfg.Profile, Timeout: kbLarkMinutesTimeout}), e.Store.Zone())
+	if !cliport.Available(s.moduleSwitch) {
+		s.logf("kb: lark minutes: %v", cliport.ErrUnavailable)
+		return
+	}
+	client := kblark.NewClient(cliport.NewRunner(cliwire.Config{Bin: cfg.Binary, Profile: cfg.Profile, Timeout: kbLarkMinutesTimeout}), e.Store.Zone())
 	res, err := kblark.Run(ctx, e, client, kblark.Config{SinceDays: cfg.SinceDays, DocSearch: cfg.DocSearch}, time.Now(), s.logf)
 	if err != nil {
 		if ctx.Err() == nil {

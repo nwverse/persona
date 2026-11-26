@@ -71,6 +71,7 @@
 
 - A rendered prompt used as a source-snapshot fingerprint must compare with the call's captured language (#6272). Re-reading the current language while committing a valid model answer makes a preference change look like a concurrent source edit. Freeze the wrapper language, keep the source comparison, and test both a locale-only change and real source changes. Audit natural-language parsers too: a conservative Chinese uncertainty check must recognize uncertainty in newly supported English and Japanese outputs. Shared recording inputs must keep their recording-language contract rather than inheriting a non-recording wrapper accidentally.
 - Persist a complete delivery round before its first external send (#10393). Saving only when the call returns handles a returned error but loses the result if the manager exits inside the call, after task acceptance has committed. Keep the original timestamp/key and acceptance metadata on disk while retaining an in-memory claim to block overlapping sends. Every other book save must preserve that prepared record too; retry must not send from memory when its preparation could not be saved. Use a child-process exit at the real provider boundary and a fresh manager on the same disposable database to prove recovery, with the returned-error case as a control.
+
 - A review wake is not a completion verdict (#8373). PR events and judged-done candidates share the same signal. Keep its wording neutral, preserve the actual reason and criterion evidence, and leave acceptance gates and display grouping unchanged.
 - A parked wait can cite a PR while waiting for a separate deployment or verification (#9775). Enroll the exact PR from an explicit event binding. Keep the source receipt and review transition together and identify the notification by that park. Test both a stage PR with terminal facts and a PR named only in the park.
 
@@ -327,7 +328,7 @@ Pitfalls, unusual behavior, and decisions at the time (formerly `CLAUDE.md`; ind
 - Nor may one part of the list failing drop that part (2026-11-13, #6422). The manager's `mcpTools` asked the hub for the phone's tools, logged a failure and listed the rest, so a conversation that started while the hub restarted had no `phone_*` for its whole life and the model told the user the phone couldn't set a reminder. Ask again briefly, then list what the hub last gave (`phoneTools`, `server/internal/assistant/fleet_tools.go`); each call is still the phone's to refuse.
 - Separate assistant process (2026-11-04,#1446, `docs/assistant/assistant.md` “Process”) can be unavailable to every hub inquiry. Startup connector registration asked each assistant tool name before connection,10 seconds each,60-second test. Startup / registration read last `assistantToolsNow`; wait only when node requests tools for assistant chat. Assistant schedule loop waits first handshake machine / timezone reply before running due tasks, or starts with empty config and fails all.
 - Bus events synchronously invoke read-loop callbacks (`internal/rpc`); slow handler stalls connection. Assistant queues in order, handles `session.turn_ended` separately (model query / waiting task Agent stop). To wait in tests, call assistant after event on same connection, then await empty queue (`BusHub.Settle`).
-- A full queue must not hand each event to a goroutine that waits for room (2026-11-26, #15906). Past 1024 waiting, the assistant's event queue did that: nothing bounded the goroutines, they reached the queue in the order the scheduler ran them (a turn's start, a stop and a seen mark of one conversation out of order), and they stayed blocked for good once the consumer's context ended. Blocking the caller is no way out either: it is the read loop, which also brings the answers the handlers wait for. The queue is now one ordered list (`eventQueue`, `server/internal/assistant/bus_events.go`): while more than `eventsRoom` wait, whole-state events (a machine's list, the hello, the mutes, a resync request) replace the waiting one of their key at the back of the line, every other event waits in arrival order up to `eventsMost`, and what comes past that is counted and made up for by dropping the connection once the line reaches that point, so the reconnection path reads everything again. Hold the consumer in tests with `BusHub.taking`, not a sleep.
+- A full queue must not hand each event to a goroutine that waits for room (2026-11-26, #15906). Past 1024 waiting, the assistant's event queue did that: nothing bounded the goroutines, they reached the queue in the order the scheduler ran them (a turn's start, a stop and a seen mark of one conversation out of order), and they stayed blocked for good once the consumer's context ended. Blocking the caller is no way out either: it is the read loop, which also brings the answers the handlers wait for. The queue is now one ordered list (`eventQueue`, `server/internal/assistant/bus_events.go`): while more than `eventsRoom` wait, an event of which only the newest matters (the mutes, a resync request) replaces the waiting one of its key at the back of the line, every other event waits in arrival order up to `eventsMost`, and what comes past that is counted and made up for by dropping the connection once the line reaches that point, so the reconnection path reads everything again. "Says the whole of something" is not enough to let a newer event replace a waiting one: the handler must also read nothing of the one before. `manager.updated` and `sessions.changed` are whole states, but their handlers go by what changed since the previous one (`trustChanged` gives keys to the computers a hello lists and the one before did not; `followStarts` and `taskStageSessions` go by consecutive lists), so replacing one loses a transition for good; each of them waits itself. And after a loss the line waits for the new connection's hello answer before it takes what is behind the note (`waitHelloAfter`, `helloWait` at most, once per connection): a lost `manager.updated` leaves the kept settings older than the events that follow. Hold the consumer in tests with `BusHub.taking`, not a sleep.
 - Hub default `os.Executable() assistant` launches test binary in tests, rerunning entire suite. Tests replace `assistantCommand` in init; subprocess tests detect env in `TestMain` and act as assistant.
 - `zsh -ic` expands existing aliases before script execution (#1674). Codex alias makes `codex() { … }` definition parse fail; earlier unalias in same string too late. Use function codex { … }, calls \codex to prevent recursive alias expansion. Real zsh regression with temporary ZDOTDIR, no user shell read / writes.
 - Session-only Agent approval lives in process (2026-11-05,#2202): Claude `addRules … destination: session`, Codex `acceptForSession`, Lark node memory lost on assistant recycle / deploy / launcher switch / node restart, not restored by `--resume`, causing repeated prompts despite Always Allow. Cross-process assistant state belongs in hub DB: cards `always_keys`, hub `assistant_always` auto-answers matches (`docs/assistant/assistant.md` “Always allow in this session”).
@@ -582,6 +583,10 @@ Without a background supervisor the main conversation's own card went to itself.
 delegating, check that the conversation it goes to is woken for it, can answer or hand it up, and is not the one
 waiting on it. A new route also keeps the exceptions of the existing ones: `askLadder` already left the supervising
 conversations' cards with the user, and the new route had to share that rule (`supervisorConversation`).
+
+For an Agent's permission without an open to-do (#16093), use the active relay queue and keep the card available
+in the app once its hold ends. Tie the queued message to the card's current route. A queued wake can outlive its card
+or the manager that routed it, so check the route before sending and drop stale wakes even if their target stays offline.
 
 ## One `todos` event per write, and nothing that copies every finished task on a timer (#5995)
 
@@ -929,6 +934,28 @@ answer retryable. Tests must check both the in-memory receipt and stored one, pl
 
 Restore the previous `DueAt` on acceptance-save failure, not an empty time: an owner message in the Agent chat uses
 that marker to pause the default. A later rejected answer must preserve both that pause and the dismissal.
+
+## Task-close guards must not wait for activity storage (#6819)
+
+Publish owner input in the activity cache before saving it, and keep the cache mutex out of database I/O. A review's
+transaction can hold the connection that an activity save is waiting for: its final guard must read caches only, not
+wait for that save. Serialize activity snapshots separately so a slower save cannot overwrite newer input.
+
+The judge's unsampled acceptance and a leaderless worker's cancellation need the same atomic ledger-and-closure
+commit as `task_review`. A refused close must leave no accepted/cancelled ledger or checked criteria on an open task.
+Defer the judge's completed turn on late owner activity so it can be judged again after inactivity; return a
+cancellation only when it actually committed. Regress the real owner bus event while storage is blocked, and check
+both the stored ledger and memory at the ledger, closure and final transaction boundaries.
+
+Lifecycle tests wait for the operation they exercise: acknowledge `task_review` before sending the next owner turn,
+and wait for `fleet.clients` notifications until the viewer snapshot matches. A terminal error can arrive before that
+snapshot. Fixed delays hide this ordering and grow the sleep ratchet; keep bounded failure deadlines, not guessed sleeps.
+
+- An opt-in terminal cleanup must not replace a guarded task retirement with an unconditional close (#6819, #10355).
+  Keep cancellation and the final input check through both irreversible boundaries: stopping the Agent and closing
+  the shell it left. Exercise the setting on and off, including input arriving during terminal inspection.
+
+- A terminal task review must commit its closure before publishing review effects (#6819). Activity can arrive after the initial guard, while another writer holds the ledger or task lock, or during a database write. Validate on a private ledger, save the ledger and closure in one transaction, and recheck activity immediately before commit so a refusal rolls both back. Only then record the brief result, review feed, decision changes and supervision signals; apply the same boundary to a task leader's review and tasks without a ledger.
 
 ## Reserve a conversation for replacement in the same step as the check that nothing goes in (#7315)
 

@@ -8601,6 +8601,234 @@
       "value": "此启动器没有可切换的模型。"
     },
     {
+      "name": "agent_mark_all_seen",
+      "value": "全部标为已读"
+    },
+    {
+      "name": "agent_mark_all_seen_confirm",
+      "value": "将 {count} 个未读会话全部标为已读？"
+    },
+    {
+      "name": "live_view_section_title",
+      "value": "实况窗"
+    },
+    {
+      "name": "live_view_enable",
+      "value": "启用实况窗"
+    },
+    {
+      "name": "live_view_enable_detail",
+      "value": "在状态栏胶囊和锁屏实时汇总等待、运行中与未读会话。"
+    },
+    {
+      "name": "live_view_lock_details",
+      "value": "锁屏显示 Agent 详情"
+    },
+    {
+      "name": "live_view_lock_details_detail",
+      "value": "显示会话标题与摘要，关闭时仅显示状态计数。"
+    },
+    {
+      "name": "live_view_test_publish",
+      "value": "在系统实况窗中预览"
+    },
+    {
+      "name": "live_view_test_stop",
+      "value": "结束"
+    },
+    {
+      "name": "live_view_needs_count",
+      "value": "{count} 个等你"
+    },
+    {
+      "name": "live_view_working_count",
+      "value": "{count} 个在做"
+    },
+    {
+      "name": "live_view_unread_count",
+      "value": "{count} 个未读"
+    },
+    {
+      "name": "live_view_all_caught_up",
+      "value": "已全部处理"
+    },
+    {
+      "name": "live_view_assistant_replying",
+      "value": "Persona 正在回复"
+    },
+    {
+      "name": "live_view_background_tag",
+      "value": "后台"
+    },
+    {
+      "name": "live_view_anon_permission",
+      "value": "有一条权限请求待处理"
+    },
+    {
+      "name": "live_view_anon_plan",
+      "value": "有一个计划待确认"
+    },
+    {
+      "name": "live_view_anon_question",
+      "value": "有一个问题等你回答"
+    },
+    {
+      "name": "live_view_anon_screen",
+      "value": "有一个终端等待处理"
+    },
+    {
+      "name": "live_view_anon_working",
+      "value": "正在处理"
+    },
+    {
+      "name": "live_view_anon_unread",
+      "value": "刚完成待看"
+    },
+    {
+      "name": "live_view_capsule_needs",
+      "value": "等你 {count}"
+    },
+    {
+      "name": "live_view_capsule_working",
+      "value": "在做 {count}"
+    },
+    {
+      "name": "live_view_capsule_unread",
+      "value": "未读 {count}"
+    },
+    {
+      "name": "live_view_capsule_done",
+      "value": "已看完"
+    },
+    {
+      "name": "live_view_more_count",
+      "value": "+{count}"
+    },
+    {
+      "name": "live_view_system_disabled",
+      "value": "请在系统设置中为 Persona 开启实况窗权限，以在状态栏和锁屏展示实时状态。"
+    },
+    {
+      "name": "live_view_entitlement_required",
+      "value": "系统实况窗需要已配置实况窗权益的签名包，当前已保留应用内预览。"
+    },
+    {
+      "name": "live_view_unavailable",
+      "value": "当前设备或模拟器暂不支持系统实况窗服务。"
+    },
+    {
+      "name": "project_agent_count_one",
+      "value": "1 个代理"
+    },
+    {
+      "name": "fold_inspector_title",
+      "value": "实时概览"
+    },
+    {
+      "name": "fold_inspector_fleet",
+      "value": "代理态势"
+    },
+    {
+      "name": "fold_posture_trifold",
+      "value": "三折叠宽屏工作台"
+    },
+    {
+      "name": "fold_posture_dual",
+      "value": "折叠双栏模式"
+    },
+    {
+      "name": "fold_posture_hover",
+      "value": "悬停分屏模式"
+    },
+    {
+      "name": "turn_changes_one",
+      "value": "已更改 1 个文件"
+    },
+    {
+      "name": "turn_changes_many",
+      "value": "已更改 {count} 个文件"
+    },
+    {
+      "name": "turn_changes_review",
+      "value": "查看变更"
+    },
+    {
+      "name": "turn_changes_more",
+      "value": "展开其余 {count} 个"
+    },
+    {
+      "name": "bubble_show_more",
+      "value": "展开全文"
+    },
+    {
+      "name": "bubble_show_less",
+      "value": "收起"
+    },
+    {
+      "name": "live_view_published_toast",
+      "value": "系统实况窗已更新"
+    },
+    {
+      "name": "agents_marked_seen_toast",
+      "value": "已将 {count} 项标为已读"
+    },
+    {
+      "name": "live_view_preview_approve",
+      "value": "批准"
+    },
+    {
+      "name": "live_view_preview_deny",
+      "value": "拒绝"
+    },
+    {
+      "name": "live_view_capsule_metric_working",
+      "value": "运行中"
+    },
+    {
+      "name": "fold_workbench_pulse",
+      "value": "动态"
+    },
+    {
+      "name": "fold_workbench_code",
+      "value": "代码"
+    },
+    {
+      "name": "fold_workbench_machines",
+      "value": "设备"
+    },
+    {
+      "name": "fold_posture_trifold_angled",
+      "value": "三折支架"
+    },
+    {
+      "name": "fold_workbench_expand_tools",
+      "value": "全屏展开"
+    },
+    {
+      "name": "fold_workbench_pick_session",
+      "value": "选择一个智能体会话即可并排查看文件、Git 差异与终端。"
+    },
+    {
+      "name": "fold_relay_next",
+      "value": "下一个"
+    },
+    {
+      "name": "fold_relay_prev",
+      "value": "上一个"
+    },
+    {
+      "name": "fold_relay_queue",
+      "value": "{count} 项待看"
+    },
+    {
+      "name": "fold_relay_clear",
+      "value": "已全部看完"
+    },
+    {
+      "name": "machine_load_per_core",
+      "value": "{per}/核"
+    },
+    {
       "name": "phone_xiaoyi",
       "value": "小艺"
     },
@@ -8863,6 +9091,30 @@
     {
       "name": "xiaoyi_failed",
       "value": "操作未能完成，请打开 Persona 查看详情。"
+    },
+    {
+      "name": "fold_urgent_review",
+      "value": "查看"
+    },
+    {
+      "name": "fold_hover_deck_title",
+      "value": "悬停控制坞"
+    },
+    {
+      "name": "fold_interrupt_agent",
+      "value": "中断"
+    },
+    {
+      "name": "knowledge_minutes_checking",
+      "value": "正在复核整场录音…"
+    },
+    {
+      "name": "knowledge_minutes_checking_progress",
+      "value": "正在复核整场录音（{done}/{total} 分钟）…"
+    },
+    {
+      "name": "knowledge_minutes_writing",
+      "value": "正在整理纪要…"
     }
   ]
 }

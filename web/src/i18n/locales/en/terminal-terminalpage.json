@@ -1,19 +1,12 @@
 {
   "new_failed": "Couldn't open a shell: {error}",
-  "refresh": "Refresh list",
-  "more": "More",
   "offline": "Offline",
-  "actions_for": "Actions for {name}",
   "loading": "Loading…",
   "retry": "Retry",
-  "no_panes": "No tabs open on this computer.",
   "no_panes_agent": "Tabs appear here when an agent starts on this computer.",
   "new_terminal": "New shell",
-  "space_header": "Space {name}",
   "new_in_space": "New shell in “{name}”",
-  "tab_header": "Tab {name}",
   "none_online": "No computer is online.",
-  "close_finished": "Close leftover shells",
   "close_finished_title_one": "Close {count} leftover shell?",
   "close_finished_title_other": "Close {count} leftover shells?",
   "close_finished_detail": "Closing these shells stops them. The sessions are kept, and Resume opens a new tab.",
@@ -24,9 +17,5 @@
   "closed_finished_one": "Closed {count} shell",
   "closed_finished_other": "Closed {count} shells",
   "finished_none": "No leftover shells to close",
-  "terminals": "Tabs",
-  "view_label": "History or tabs",
-  "back_terminals": "Back to tabs",
-  "pick_terminal": "Open a tab",
-  "pick_terminal_detail": "Choose a tab from the list, or use + beside a space to start a shell."
+  "terminals": "Tabs"
 }
