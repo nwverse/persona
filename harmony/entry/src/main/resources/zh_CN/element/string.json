@@ -9091,6 +9091,30 @@
     {
       "name": "xiaoyi_failed",
       "value": "操作未能完成，请打开 Persona 查看详情。"
+    },
+    {
+      "name": "fold_urgent_review",
+      "value": "查看"
+    },
+    {
+      "name": "fold_hover_deck_title",
+      "value": "悬停控制坞"
+    },
+    {
+      "name": "fold_interrupt_agent",
+      "value": "中断"
+    },
+    {
+      "name": "knowledge_minutes_checking",
+      "value": "正在复核整场录音…"
+    },
+    {
+      "name": "knowledge_minutes_checking_progress",
+      "value": "正在复核整场录音（{done}/{total} 分钟）…"
+    },
+    {
+      "name": "knowledge_minutes_writing",
+      "value": "正在整理纪要…"
     }
   ]
 }

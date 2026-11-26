@@ -82,7 +82,8 @@ export function isTriFoldExpandedStatus(foldStatus: number): boolean {
 export function isTriFoldAngledStatus(foldStatus: number): boolean {
   return (
     foldStatus === FOLD_STATUS_EXPANDED_WITH_SECOND_HALF_FOLDED ||
-    foldStatus === FOLD_STATUS_HALF_FOLDED_WITH_SECOND_EXPANDED
+    foldStatus === FOLD_STATUS_HALF_FOLDED_WITH_SECOND_EXPANDED ||
+    foldStatus === FOLD_STATUS_HALF_FOLDED_WITH_SECOND_HALF_FOLDED
   );
 }
 
@@ -97,32 +98,38 @@ export function widthClassFromBreakpoint(bp: number): FoldWidthClass {
 
 export function classifyFoldPosture(input: FoldPostureInput): FoldPostureKind {
   const width = Number.isFinite(input.windowWidthVp) ? Math.max(0, input.windowWidthVp) : 0;
+  // Narrow split-screen or floating windows must stay compact stack even when hardware reports tri-fold.
+  if (width > 0 && width < 560) {
+    return input.isFoldable ? 'cover' : 'straight';
+  }
   if (input.isFoldable && isTriFoldAngledStatus(input.foldStatus) && width >= 820) {
     return 'trifold_angled';
   }
   if (input.isFoldable && isHalfFoldedStatus(input.foldStatus) && input.nativeHoverAvailable) {
     return 'hover_tabletop';
   }
+  const allowsTriFold = width === 0 || width >= 820;
   if (
-    input.foldDisplayMode === FOLD_DISPLAY_MODE_GLOBAL_FULL ||
-    isTriFoldExpandedStatus(input.foldStatus) ||
-    (input.isFoldable && width >= 920) ||
-    input.widthClass === 'xl'
+    allowsTriFold &&
+    (input.foldDisplayMode === FOLD_DISPLAY_MODE_GLOBAL_FULL ||
+      isTriFoldExpandedStatus(input.foldStatus) ||
+      (input.isFoldable && width >= 920) ||
+      input.widthClass === 'xl' ||
+      (!input.isFoldable && input.widthClass === 'lg'))
   ) {
     return 'trifold_unfolded';
   }
   if (input.isFoldable) {
     if (
-      input.foldStatus === FOLD_STATUS_FOLDED ||
-      input.foldDisplayMode === FOLD_DISPLAY_MODE_MAIN ||
-      input.foldDisplayMode === FOLD_DISPLAY_MODE_SUB ||
-      width < 560
+      width === 0 &&
+      (input.foldStatus === FOLD_STATUS_FOLDED ||
+        input.foldDisplayMode === FOLD_DISPLAY_MODE_MAIN ||
+        input.foldDisplayMode === FOLD_DISPLAY_MODE_SUB)
     ) {
       return 'cover';
     }
     return 'dual_unfolded';
   }
-  if (input.widthClass === 'lg') return 'trifold_unfolded';
   if (input.widthClass === 'md' && width >= 640) return 'dual_unfolded';
   return 'straight';
 }
@@ -138,23 +145,24 @@ export function resolveFoldLayout(input: FoldPostureInput): FoldAdaptiveLayout {
   const hoverMode = posture === 'hover_tabletop';
 
   if (posture === 'trifold_unfolded') {
-    const masterWidth = width >= 1160 ? 312 : 288;
-    const inspectorWidth = width >= 1160 ? 356 : 316;
+    const compactTriFold = width > 0 && width < 960;
+    const masterWidth = width >= 1160 ? 312 : compactTriFold ? 256 : 288;
+    const inspectorWidth = width >= 1160 ? 356 : compactTriFold ? 288 : 316;
     return {
       posture: posture,
       navigationMode: 'split',
       isFoldableSplit: input.isFoldable,
       masterWidth: masterWidth,
-      masterMin: 256,
+      masterMin: compactTriFold ? 244 : 256,
       masterMax: 420,
       detailMin: 340,
       supportsInspector: true,
       autoShowInspector: true,
-      collapseRailForInspector: false,
+      collapseRailForInspector: compactTriFold,
       inspectorWidth: inspectorWidth,
       readingMaxWidth: 740,
       hoverMode: false,
-      cardColumns: width >= 960 ? 3 : 2
+      cardColumns: width === 0 || width >= 960 ? 3 : 2
     };
   }
 
@@ -235,6 +243,47 @@ export function compactTreeInset(level: number, windowWidthVp: number, controlSc
   return Math.round(14 + 20 * scale * clamped);
 }
 
+export interface HoverSplitGeometry {
+  readonly active: boolean;
+  readonly topPaneHeightVp: number;
+  readonly creaseBandVp: number;
+  readonly bottomPaneHeightVp: number;
+}
+
+/**
+ * Computes crease-aware top/bottom split heights for half-folded hover tabletop mode.
+ * Returns `active: false` unless both the upper reading pane (>= 180vp) and lower control deck
+ * (>= 140vp) fit cleanly on either side of the physical hinge crease.
+ */
+export function resolveHoverSplitGeometry(
+  windowHeightVp: number,
+  creaseTopVp: number,
+  creaseHeightVp: number
+): HoverSplitGeometry {
+  if (
+    !Number.isFinite(windowHeightVp) ||
+    !Number.isFinite(creaseTopVp) ||
+    !Number.isFinite(creaseHeightVp) ||
+    windowHeightVp <= 0 ||
+    creaseTopVp < 180 ||
+    creaseHeightVp <= 0
+  ) {
+    return { active: false, topPaneHeightVp: 0, creaseBandVp: 0, bottomPaneHeightVp: 0 };
+  }
+  const topPaneHeightVp = Math.floor(creaseTopVp);
+  const creaseBandVp = Math.max(12, Math.ceil(creaseHeightVp));
+  const bottomPaneHeightVp = Math.floor(windowHeightVp - topPaneHeightVp - creaseBandVp);
+  if (topPaneHeightVp < 180 || bottomPaneHeightVp < 140) {
+    return { active: false, topPaneHeightVp: 0, creaseBandVp: 0, bottomPaneHeightVp: 0 };
+  }
+  return {
+    active: true,
+    topPaneHeightVp: topPaneHeightVp,
+    creaseBandVp: creaseBandVp,
+    bottomPaneHeightVp: bottomPaneHeightVp
+  };
+}
+
 export type FoldShortcutAction =
   | 'search'
   | 'new_chat'
@@ -242,6 +291,7 @@ export type FoldShortcutAction =
   | 'workbench_pulse'
   | 'workbench_code'
   | 'workbench_machines'
+  | 'open_xiaoyi'
   | 'next_unread'
   | 'prev_unread'
   | 'dismiss'
@@ -253,6 +303,7 @@ export type FoldShortcutAction =
  * - Ctrl/Meta + N -> new chat or agent
  * - Ctrl/Meta + I -> toggle Live Inspector when supported by the current fold posture
  * - Ctrl/Meta + 1/2/3 -> switch Live Workbench tab (Pulse / Code / Machines) when supported
+ * - Ctrl/Meta + 0 -> open XiaoYi diagnostics & settings
  * - Ctrl/Meta + ] / [ -> step to next / previous actionable session in the relay queue
  * - Escape -> dismiss active overlay, sheet, or inspector
  */
@@ -273,6 +324,7 @@ export function resolveFoldShortcut(
   if (normalized === '1') return supportsInspector ? 'workbench_pulse' : 'none';
   if (normalized === '2') return supportsInspector ? 'workbench_code' : 'none';
   if (normalized === '3') return supportsInspector ? 'workbench_machines' : 'none';
+  if (normalized === '0') return 'open_xiaoyi';
   if (normalized === ']') return 'next_unread';
   if (normalized === '[') return 'prev_unread';
   return 'none';

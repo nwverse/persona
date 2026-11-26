@@ -106,10 +106,11 @@ import { tr, trError } from '../design/Strings';
 import { KeyCode } from '@kit.InputKit';
 import { Motion } from '../design/Motion';
 import { Haptics } from '../platform/Haptics';
-import { FOLD_DISPLAY_MODE_GLOBAL_FULL, pickRelaySessionIndex, resolveFoldLayout, resolveFoldShortcut, widthClassFromBreakpoint } from '../core/FoldPosture';
+import { HoverSplitGeometry, pickRelaySessionIndex, resolveFoldLayout, resolveFoldShortcut, resolveHoverSplitGeometry, widthClassFromBreakpoint } from '../core/FoldPosture';
 import type { FoldAdaptiveLayout } from '../core/FoldPosture';
 import { FoldInspectorPanel } from '../components/FoldInspectorPanel';
 import { FloatingToastOverlay } from '../components/FloatingToastOverlay';
+import { toastCenter } from '../models/ToastCenter';
 import { isHubStateKey } from '../core/StorageOwnership';
 import { formatSharedDraftText } from '../core/XiaoYiRoutes';
 
@@ -166,6 +167,7 @@ struct Index {
   @Local foldWorkbenchTab: number = 0;
   @Local foldWorkbenchTabSignal: number = 0;
   private foldInspectorCollapsedRail: boolean = false;
+  private lastFoldPosture: string = '';
   @Local foldWindowWidthVp: number = 0;
   @Local foldWindowHeightVp: number = 0;
   @Local drawerSearch: string = '';
@@ -942,6 +944,50 @@ struct Index {
       nativeHoverAvailable: this.environment.nativeHoverAvailable
     });
   }
+  @Computed get hoverSplit(): HoverSplitGeometry {
+    if (!this.foldLayout.hoverMode || this.environment.creaseHeightPx <= 0) {
+      return { active: false, topPaneHeightVp: 0, creaseBandVp: 0, bottomPaneHeightVp: 0 };
+    }
+    const heightVp = this.foldWindowHeightVp > 0 ? this.foldWindowHeightVp : this.phoneHeight;
+    let creaseTopVp = 0;
+    let creaseHeightVp = 0;
+    try {
+      const ui = this.getUIContext();
+      creaseTopVp = ui.px2vp(this.environment.creaseTopPx);
+      creaseHeightVp = ui.px2vp(this.environment.creaseHeightPx);
+    } catch (_) {
+      return { active: false, topPaneHeightVp: 0, creaseBandVp: 0, bottomPaneHeightVp: 0 };
+    }
+    return resolveHoverSplitGeometry(heightVp, creaseTopVp, creaseHeightVp);
+  }
+  private openXiaoYiQuick(): void {
+    if (this.wide() && this.model.profile.id) {
+      this.openSettings('phone_xiaoyi');
+    } else {
+      this.phoneSettingsQuery = '';
+      this.phoneSettingsTrail = pushPhoneSetting([], 'phone_xiaoyi');
+      if (this.model.profile.id && !this.wide()) this.spacesShown = true;
+      this.phoneSettingsShown = true;
+    }
+  }
+  private async interruptSessionFromWorkbench(row: ResourceRow): Promise<void> {
+    if (this.model.demo || row.kind !== 'session') return;
+    try {
+      const owner = await this.model.viewFor(row);
+      if (owner.selected.key() === row.key() && owner.canStop()) {
+        await owner.stop();
+        toastCenter.show(tr('fold_interrupt_agent'), 'info');
+        return;
+      }
+      if (owner.connected && owner.canInterrupt()) {
+        await owner.repo().stop(row, (): boolean => owner.connected && owner.canInterrupt());
+        owner.refresh().catch(() => {});
+        toastCenter.show(tr('fold_interrupt_agent'), 'info');
+      }
+    } catch (error) {
+      toastCenter.show(trError((error as Error).message || 'failed'), 'error');
+    }
+  }
   private wide(): boolean {
     return this.breakpoint === WidthBreakpoint.WIDTH_LG || this.breakpoint === WidthBreakpoint.WIDTH_XL || this.foldLayout.navigationMode === 'split';
   }
@@ -977,8 +1023,7 @@ struct Index {
   }
   private isTriFoldPosture(): boolean {
     return this.foldLayout.posture === 'trifold_unfolded' ||
-      this.foldLayout.posture === 'trifold_angled' ||
-      this.environment.foldDisplayMode === FOLD_DISPLAY_MODE_GLOBAL_FULL;
+      this.foldLayout.posture === 'trifold_angled';
   }
   private stepFoldRelay(direction: 1 | -1): void {
     const rows = (this.model.directoryReady && this.model.directorySessions.length
@@ -1023,6 +1068,7 @@ struct Index {
     if (event.keyCode === KeyCode.KEYCODE_1) return '1';
     if (event.keyCode === KeyCode.KEYCODE_2) return '2';
     if (event.keyCode === KeyCode.KEYCODE_3) return '3';
+    if (event.keyCode === KeyCode.KEYCODE_0) return '0';
     if (event.keyCode === KeyCode.KEYCODE_LEFT_BRACKET) return '[';
     if (event.keyCode === KeyCode.KEYCODE_RIGHT_BRACKET) return ']';
     return '';
@@ -1088,6 +1134,10 @@ struct Index {
       event.stopPropagation();
     } else if (action === 'workbench_machines') {
       this.switchFoldWorkbenchTab(2);
+      event.stopPropagation();
+    } else if (action === 'open_xiaoyi') {
+      Haptics.tap();
+      this.openXiaoYiQuick();
       event.stopPropagation();
     } else if (action === 'next_unread') {
       this.stepFoldRelay(1);
@@ -1161,6 +1211,10 @@ struct Index {
         onConnect: () => { if (this.pairByPassword) this.passwordConnect(); else this.connect(); } })
     } else this.pairingForm()
   }
+  @Monitor('environment.foldStatus', 'environment.foldDisplayMode', 'environment.windowWidthPx', 'environment.windowHeightPx')
+  foldEnvironmentChanged(): void {
+    this.updateBreakpoint();
+  }
   private updateBreakpoint(): void {
     const oldWide = this.wide();
     const ui = this.getUIContext();
@@ -1168,8 +1222,18 @@ struct Index {
     if (this.environment.windowWidthPx > 0) this.foldWindowWidthVp = ui.px2vp(this.environment.windowWidthPx);
     if (this.environment.windowHeightPx > 0) this.foldWindowHeightVp = ui.px2vp(this.environment.windowHeightPx);
     this.environment.syncPosture(this.foldWindowWidthVp || this.phoneWidth, this.foldWindowHeightVp || this.phoneHeight, Number(this.breakpoint));
+    const posture = this.foldLayout.posture;
     hilog.info(0x0000, 'PersonaLayout', 'widthBreakpoint=%{public}s posture=%{public}s wide=%{public}s',
-      String(this.breakpoint), this.foldLayout.posture, String(this.wide()));
+      String(this.breakpoint), posture, String(this.wide()));
+    if (this.lastFoldPosture && posture !== this.lastFoldPosture) {
+      const wasTriFold = this.lastFoldPosture === 'trifold_unfolded' || this.lastFoldPosture === 'trifold_angled';
+      const isNowTriFold = posture === 'trifold_unfolded' || posture === 'trifold_angled';
+      if (wasTriFold !== isNowTriFold) {
+        this.foldInspectorUserToggled = false;
+        this.foldInspectorOpen = this.foldLayout.autoShowInspector;
+      }
+    }
+    this.lastFoldPosture = posture;
     if (!this.foldLayout.supportsInspector) {
       this.foldInspectorUserToggled = false;
       this.foldInspectorOpen = false;
@@ -1304,10 +1368,10 @@ struct Index {
     }
     if (dest === 'dictate') { this.openSpace('persona'); this.newConversation(); return; }
     if (dest === 'settings_xiaoyi') {
-      if (!this.wide()) {
+      if (!this.wide() || !this.model.profile.id) {
         this.phoneSettingsQuery = '';
         this.phoneSettingsTrail = pushPhoneSetting([], 'phone_xiaoyi');
-        if (this.model.profile.id) this.spacesShown = true;
+        if (this.model.profile.id && !this.wide()) this.spacesShown = true;
         this.phoneSettingsShown = true;
       } else {
         this.openSettings('phone_xiaoyi');
@@ -3690,6 +3754,60 @@ struct Index {
     if (!this.spacesShown) return false;
     this.spacesShown = false; return true;
   }
+  @Builder hoverDeckPill(label: string, tint: ResourceColor, identity: string, action: () => void) {
+    Button(label, { type: ButtonType.Capsule })
+      .height(34)
+      .padding({ left: 12, right: 12 })
+      .fontSize(Tokens.interfaceFontVp(12, this.environment.fontScale))
+      .fontWeight(FontWeight.Medium)
+      .backgroundColor(Colors.surface)
+      .fontColor(tint)
+      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: 17 })
+      .shadow(PhoneStyle.cardElevation(this.environment.dark))
+      .onClick(() => {
+        Haptics.tap();
+        action();
+      })
+      .id(identity)
+  }
+
+  @Builder hoverTabletopDeck() {
+    Column({ space: 10 }) {
+      Row({ space: 8 }) {
+        Text(tr('fold_posture_hover'))
+          .fontSize(Tokens.interfaceFontVp(12, this.environment.fontScale))
+          .fontWeight(FontWeight.Bold)
+          .fontColor(Colors.link)
+          .padding({ left: 10, right: 10, top: 4, bottom: 4 })
+          .backgroundColor(Colors.selection)
+          .borderRadius(Tokens.capsule)
+        Text(tr('fold_hover_deck_title'))
+          .fontSize(Tokens.interfaceFontVp(14, this.environment.fontScale))
+          .fontWeight(FontWeight.Bold)
+          .fontColor(Colors.ink)
+          .layoutWeight(1)
+        this.hoverDeckPill(tr('fold_relay_prev'), Colors.ink, 'fold.hover.prev', () => this.stepFoldRelay(-1))
+        this.hoverDeckPill(tr('fold_relay_next'), Colors.link, 'fold.hover.next', () => this.stepFoldRelay(1))
+      }.width('100%').alignItems(VerticalAlign.Center)
+
+      Row({ space: 8 }) {
+        this.hoverDeckPill(tr('files'), Colors.link, 'fold.hover.files', () => this.openTools('', 0))
+        this.hoverDeckPill(tr('git'), Colors.link, 'fold.hover.git', () => this.openTools('', 1))
+        this.hoverDeckPill(tr('terminal'), Colors.link, 'fold.hover.terminal', () => this.openTools('', 2))
+        this.hoverDeckPill(tr('phone_xiaoyi'), Colors.ai, 'fold.hover.xiaoyi', () => this.openXiaoYiQuick())
+        if (this.wide() && this.foldLayout.supportsInspector) {
+          this.hoverDeckPill(tr('fold_inspector_title'), Colors.ink, 'fold.hover.inspector', () => this.toggleFoldInspector())
+        }
+      }.width('100%')
+    }
+    .width('100%')
+    .layoutWeight(1)
+    .padding({ left: 16, right: 16, top: 12, bottom: 16 })
+    .justifyContent(FlexAlign.SpaceEvenly)
+    .backgroundColor(Colors.grouped)
+    .id('fold.hover.deck')
+  }
+
   build() {
     Stack() {
     if (this.drawerFraction > 0 && this.fullHeightPhone() && !this.environment.keyboardHeightPx) {
@@ -3723,32 +3841,45 @@ struct Index {
           if (!this.wide()) PhoneFirstRun({error:this.model.error ? trError(this.model.error) : '',pendingCleanup:this.model.pendingCleanupCount>0,
             onScan:()=>this.openSheet('connect', 'scan'),
             onManual:()=>this.openSheet('connect', 'manual'),onDemo:()=>this.model.useDemo(),onCleanup:()=>this.model.retryCleanup()})
-          else Column({ space: 12 }) {
-            Image($r('app.media.foreground')).width(72).height(72).objectFit(ImageFit.Contain).borderRadius(18)
-            Text(tr('persona')).fontSize(34).fontWeight(FontWeight.Bold).fontColor(Colors.ink)
-            Text(tr('phone_welcome_intro')).fontSize(16).fontColor(Colors.secondary).textAlign(TextAlign.Center).margin({bottom:24})
-            if (this.model.error) Text(trError(this.model.error)).fontSize(14).fontColor(Colors.danger)
-            Button(tr('phone_connect_hub')).width('100%').height(48).fontSize(17).backgroundColor(Colors.action).fontColor(Colors.onAction)
-              .onClick(() => this.openSheet('connect')).id('welcome.connect')
-            Button(tr('phone_local_demo')).width('100%').height(46).fontSize(16).backgroundColor(Colors.surface).fontColor(Colors.link)
-              .onClick(() => this.model.useDemo()).id('welcome.demo')
-            if (this.model.pendingCleanupCount > 0) Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('retry_cleanup')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('retry_cleanup', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('retry_cleanup')).bindTips(tr('retry_cleanup')).onClick(() => this.model.retryCleanup())
-          }.justifyContent(FlexAlign.Center).width('100%').height('100%').padding({left:32,right:32}).backgroundColor(Colors.grouped)
+          else Column() {
+            Column({ space: 12 }) {
+              Image($r('app.media.foreground')).width(72).height(72).objectFit(ImageFit.Contain).borderRadius(18)
+              Text(tr('persona')).fontSize(34).fontWeight(FontWeight.Bold).fontColor(Colors.ink)
+              Text(tr('phone_welcome_intro')).fontSize(16).fontColor(Colors.secondary).textAlign(TextAlign.Center).margin({bottom:24})
+              if (this.model.error) Text(trError(this.model.error)).fontSize(14).fontColor(Colors.danger)
+              Button(tr('phone_connect_hub')).width('100%').height(48).fontSize(17).backgroundColor(Colors.action).fontColor(Colors.onAction)
+                .onClick(() => this.openSheet('connect')).id('welcome.connect')
+              Button(tr('phone_local_demo')).width('100%').height(46).fontSize(16).backgroundColor(Colors.surface).fontColor(Colors.link)
+                .onClick(() => this.model.useDemo()).id('welcome.demo')
+              if (this.model.pendingCleanupCount > 0) Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('retry_cleanup')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('retry_cleanup', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('retry_cleanup')).bindTips(tr('retry_cleanup')).onClick(() => this.model.retryCleanup())
+            }.width('100%').constraintSize({ maxWidth: 440 }).alignItems(HorizontalAlign.Center)
+          }.justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center).width('100%').height('100%').padding({left:32,right:32}).backgroundColor(Colors.grouped)
         }.width('100%').height('100%')
           .bindSheet($$this.showSheet, this.sheetContent(), { title: this.sheetKind === 'newagent' || this.compactPairing() ? undefined : {title:this.sheetTitle()}, height: this.sheetKind === 'newagent' || this.compactPairing() ? this.compactFormHeight() : SheetSize.LARGE, keyboardAvoidMode: this.sheetKind === 'newagent' ? SheetKeyboardAvoidMode.RESIZE_ONLY : undefined, showClose: this.sheetKind !== 'newagent' && !this.compactPairing(), onWillDismiss:(d:DismissSheetAction) => { if (this.sheetKind === 'newagent' && this.agentPanel) this.closeAgentPanel(); else if (!this.creatingAgent) d.dismiss(); } })
       } else {
-        if (!this.wide() && !this.floatingProjectHeader && !this.floatingDraftHeader && (this.phoneTop || this.model.section!==1 || !this.agentSearching) && this.phoneTop !== 'project_tree' && (this.phoneTop || !this.projectPlace() || !this.projectSearching)) this.phoneHeader()
-        Navigation(this.stack) { this.primaryContent() }.title({ builder: this.peerTitle, height: this.headerHeight() }, { systemMaterial: this.titleMaterial }).titleMode(NavigationTitleMode.Mini)
-          .hideBackButton(true).hideTitleBar(this.rail() || !this.wide()).menus([])
-          .backgroundColor(Colors.canvas)
-          .toolbarConfiguration([])
-          .mode(this.wide() ? NavigationMode.Split : NavigationMode.Stack)
-          .navBarWidth(this.rail() ? Tokens.collapsed : this.foldLayout.masterWidth)
-          .navBarWidthRange(this.rail() ? [Tokens.collapsed, Tokens.collapsed] : [this.foldLayout.masterMin, this.foldLayout.masterMax])
-          .minContentWidth(this.foldLayout.detailMin).enableDragBar(!this.rail()).navDestination(this.destination)
-          .onAreaChange(() => this.updateBreakpoint()).width('100%').layoutWeight(1)
+        Column() {
+          if (!this.wide() && !this.floatingProjectHeader && !this.floatingDraftHeader && (this.phoneTop || this.model.section!==1 || !this.agentSearching) && this.phoneTop !== 'project_tree' && (this.phoneTop || !this.projectPlace() || !this.projectSearching)) this.phoneHeader()
+          Navigation(this.stack) { this.primaryContent() }.title({ builder: this.peerTitle, height: this.headerHeight() }, { systemMaterial: this.titleMaterial }).titleMode(NavigationTitleMode.Mini)
+            .hideBackButton(true).hideTitleBar(this.rail() || !this.wide()).menus([])
+            .backgroundColor(Colors.canvas)
+            .toolbarConfiguration([])
+            .mode(this.wide() ? NavigationMode.Split : NavigationMode.Stack)
+            .navBarWidth(this.rail() ? Tokens.collapsed : this.foldLayout.masterWidth)
+            .navBarWidthRange(this.rail() ? [Tokens.collapsed, Tokens.collapsed] : [this.foldLayout.masterMin, this.foldLayout.masterMax])
+            .minContentWidth(this.foldLayout.detailMin).enableDragBar(!this.rail()).navDestination(this.destination)
+            .onAreaChange(() => this.updateBreakpoint()).width('100%').layoutWeight(1)
 
-          .bindSheet($$this.showSheet, this.sheetContent(), { title: this.sheetKind === 'newagent' || this.compactPairing() ? undefined : {title:this.sheetTitle()}, height: this.sheetKind === 'newagent' || this.compactPairing() ? this.compactFormHeight() : SheetSize.LARGE, keyboardAvoidMode: this.sheetKind === 'newagent' ? SheetKeyboardAvoidMode.RESIZE_ONLY : undefined, showClose: this.sheetKind !== 'newagent' && !this.compactPairing(), onWillDismiss:(d:DismissSheetAction) => { if (this.sheetKind === 'newagent' && this.agentPanel) this.closeAgentPanel(); else if (!this.creatingAgent) d.dismiss(); } })
+            .bindSheet($$this.showSheet, this.sheetContent(), { title: this.sheetKind === 'newagent' || this.compactPairing() ? undefined : {title:this.sheetTitle()}, height: this.sheetKind === 'newagent' || this.compactPairing() ? this.compactFormHeight() : SheetSize.LARGE, keyboardAvoidMode: this.sheetKind === 'newagent' ? SheetKeyboardAvoidMode.RESIZE_ONLY : undefined, showClose: this.sheetKind !== 'newagent' && !this.compactPairing(), onWillDismiss:(d:DismissSheetAction) => { if (this.sheetKind === 'newagent' && this.agentPanel) this.closeAgentPanel(); else if (!this.creatingAgent) d.dismiss(); } })
+        }
+        .width('100%')
+        .height(this.hoverSplit.active ? this.hoverSplit.topPaneHeightVp : 'auto')
+        .layoutWeight(this.hoverSplit.active ? 0 : 1)
+        if (this.hoverSplit.active) {
+          Row().width('100%').height(this.hoverSplit.creaseBandVp).backgroundColor(Colors.grouped).id('fold.hover.crease')
+          Column() {
+            this.hoverTabletopDeck()
+          }.width('100%').layoutWeight(1).id('fold.hover.tabletop')
+        }
       }
     }.layoutWeight(1).height('100%').backgroundColor(Colors.canvas)
       .accessibilityLevel(this.chatSearchShown || this.spacesShown && !this.wide() ? 'no-hide-descendants' : 'auto')
@@ -3771,6 +3902,8 @@ struct Index {
         },
         onOpenSession: (row: ResourceRow) => this.openPickedChat(row),
         onStepRelay: (direction: 1 | -1) => this.stepFoldRelay(direction),
+        onInterruptSession: (row: ResourceRow) => { this.interruptSessionFromWorkbench(row); },
+        onOpenXiaoYi: () => this.openXiaoYiQuick(),
         onOpenLink: (address: string) => this.openReader(address)
       })
     }
@@ -3798,7 +3931,14 @@ struct Index {
       .backgroundColor(this.compactInsetSurface())
       .blur(this.messageLift.current ? this.getUIContext().vp2px(3) : 0)
       .accessibilityLevel(this.messageLift.current ? 'no-hide-descendants' : 'auto')
-      .onAreaChange((_old:Area,now:Area) => { this.phoneWidth = Number(now.width); this.phoneHeight = Number(now.height); })
+      .onAreaChange((_old:Area,now:Area) => {
+        const nextWidth = Number(now.width);
+        const nextHeight = Number(now.height);
+        const changed = nextWidth !== this.phoneWidth || nextHeight !== this.phoneHeight;
+        this.phoneWidth = nextWidth;
+        this.phoneHeight = nextHeight;
+        if (changed) this.updateBreakpoint();
+      })
       .parallelGesture(PanGesture({fingers:1,direction:PanDirection.Horizontal,distance:12}).tag('phone.shell.pan')
         .onActionStart((event:GestureEvent) => this.startPhonePan(event))
         .onActionUpdate((event:GestureEvent) => this.movePhonePan(event.offsetX))
@@ -3810,8 +3950,10 @@ struct Index {
         onAppear: () => { this.spacesLayoutReady = true; this.measureSpaces(); }, onDisappear: () => { this.spacesLayoutReady = false; if (this.wide()) this.spacesShown = false; } })
     }
     }
-    Column().width(0).height(0).bindSheet(!this.model.profile.id && !this.wide() && this.phoneSettingsShown, this.phoneSettings(), {
-      height: this.compactFormHeight(), showClose: false, dragBar: false, backgroundColor: Colors.sheetBackground,
+    Column().width(0).height(0).bindSheet(!this.model.profile.id && this.phoneSettingsShown, this.phoneSettings(), {
+      height: this.wide() ? SheetSize.LARGE : this.compactFormHeight(),
+      preferType: this.wide() ? SheetType.CENTER : SheetType.BOTTOM,
+      showClose: false, dragBar: false, backgroundColor: Colors.sheetBackground,
       onWillDismiss: (dismiss: DismissSheetAction) => {
         if (dismiss.reason === DismissReason.PRESS_BACK && this.phoneSettingsPage) this.backPhoneSetting();
         else { this.phoneSettingsShown = false; dismiss.dismiss(); }

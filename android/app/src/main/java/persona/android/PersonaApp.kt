@@ -128,7 +128,7 @@ class PersonaApp : Application() {
         }
         // MainChatWidget also honors the app's explicit light/dark override.
         scope.launch {
-            appearance.scheme.distinctUntilChanged().drop(1).collect {
+            appearance.scheme.drop(1).collect {
                 persona.platform.shortcuts.MainChatWidget.refresh(this@PersonaApp)
             }
         }

@@ -120,7 +120,7 @@ checks; none of them is ever written by the hub's link builder.
 | `persona://browser-login?hub=&request=` | a browser asks to sign in (the web sign-in page's code) | read only by the app's own scanner in Settings › Devices; opened as a link it signs nothing in ([protocol.md](protocol.md) "Browser QR sign-in") |
 | `persona://shortcut-callback/…` | a Shortcut Persona ran came back | its token |
 | `persona://ask?text=`, `persona://sources-graph` | the subscriptions pages' actions | only from those pages |
-| `persona://compose?prompt=&text=` | an extension page's own quick prompt, into the assistant's composer without sending | only that extension's declared quick prompt; id and text must match it exactly (Web today; iOS and Android not yet) |
+| `persona://compose?prompt=&text=` | an extension page's own quick prompt, into the assistant's composer without sending | only that extension's declared quick prompt; id and text must match it exactly (Web and Android today; iOS not yet) |
 | `persona://widget/<kind>`, `persona://record…`, `persona://allday?action=` | Home Screen widgets, Live Activities, watch complications | Persona's own surfaces |
 | `persona://inbox/<id>/source` | an extension's link back to the Inbox item it is drawn for | only that item (`checkOpenURL`) |
 | `persona://tracks/<machine>/<space>/<session>` | the `space-conversations` extension opens an existing assistant conversation | only that extension; bounded ASCII path segments, no query, fragment or credentials; Health and arbitrary internal routes refused |
