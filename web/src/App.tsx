@@ -59,7 +59,7 @@ import { SIDEBAR_LABEL, useShortcuts } from "./lib/use-shortcuts";
 import { Sidebar, SidebarRail } from "./views/Sidebar";
 import { SidebarResize } from "./views/SidebarResize";
 import { SidebarRowHoverHost } from "./views/SidebarRowHover";
-import { SidePanel } from "./views/SidePanel";
+import { closePanel, usePanel } from "./lib/panel";
 import { ExtensionNavPage } from "./views/extensions/ExtensionSlots";
 import { useExtensionPlace } from "./lib/extension-slots";
 import { AttentionSignals } from "./lib/attention-signals";
@@ -103,6 +103,19 @@ const TodosView = lazyPage(() => import("./views/Todos").then((m) => m.TodosView
 // an address that is no page (lib/router.ts "not-found"): loaded only by one
 const NotFound = lazyPage(() => import("./views/NotFound").then((m) => m.NotFound));
 // Keep the shortcut palette warm. The new-agent dialog loads only when opened.
+// A closed side panel is not part of startup. Keep it mounted after first use so its hooks preserve focus and layout.
+const SidePanel = lazyPage(() => import("./views/SidePanel").then((m) => m.SidePanel));
+function SidePanelHost() {
+  const open = Boolean(usePanel());
+  if (!useOpened(open)) return null;
+  return (
+    <OverlayBoundary open={open} onClose={closePanel}>
+      <Suspense fallback={open && <div className="fixed right-4 top-4 z-40"><Loading /></div>}>
+        <SidePanel />
+      </Suspense>
+    </OverlayBoundary>
+  );
+}
 const Palette = lazyPage(() => import("./views/Palette").then((m) => m.Palette), { idle: true });
 // Where the toasts sit on a narrow screen (ui/toast-lift.tsx): off the first screen and out of the idle tier, which a
 // wide screen loads too; Shell loads it once the screen is narrow. A load that fails leaves the toasts at the bottom of
@@ -690,7 +703,7 @@ function Shell() {
         </div>
       </main>
       <SidebarRowHoverHost />
-      <SidePanel />
+      <SidePanelHost />
       {paletteOpened && (
         <OverlayBoundary open={palette.open} onClose={closePalette}>
           <Suspense fallback={null}>

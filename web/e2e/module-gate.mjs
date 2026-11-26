@@ -132,6 +132,15 @@ try {
           record(id, `${e.off_page.path} answers like a removed page`, scheme, gone, page.url());
           await shot(`${id}-${e.off_page.path.replace(/\W+/g, "-")}-off`);
         }
+        // A page the default panel keeps for existing data (#13430): it stays, read-only, and none of the module's
+        // write entries is on it.
+        if (!on && e.off_stays) {
+          const p = e.off_stays;
+          await go(p.path);
+          for (const s of p.shows) record(id, `${p.path} stays, read-only: shows ${s.name}`, scheme, await visible(page, s, 20000), page.url());
+          for (const h of p.hides) record(id, `${p.path}, read-only: no ${h.name}`, scheme, !(await visible(page, h, 1500)), `${h.selector ?? h.text} on ${page.url()}`);
+          await shot(`${id}-${p.path.replace(/\W+/g, "-")}-off-readonly`);
+        }
       }
     }
     // The steady state: one load and its hello, then every entry's page and an off module's own address reached inside

@@ -114,6 +114,15 @@ SERVER = {
     "mail": {"routes": ["/api/v1/mail/accounts"]},
     # its sessions run on the computers (internal/modules/all/node): nothing on the manager but its flag
     "screen-share": {},
+    # Briefing, Office and iPhone control have no HTTP surface of their own on a hub with no computer: the briefing's
+    # setting (`assistant.briefing_waits`) is hidden from persona_settings while the module is off and omitted while it is
+    # on until it is set, and its other parts are a scheduled job and the brief feed item; Office and iPhone control are
+    # device commands on the computers (internal/modules/all/node, checked as node commands by core-only-smoke) and
+    # Register adds nothing on the manager. So what the gate sees of each is its hello flag and the manager's module line,
+    # as for lark and screen-share; an empty row is the honest one, not a missing one (#16243).
+    "briefing": {},
+    "office": {},
+    "phone-extra": {},
 }
 
 # What the web app shows of a module (web/e2e/module-gate.mjs). An entry:
@@ -141,8 +150,16 @@ WEB = {
     },
     "health": {
         "entries": [
+            # Off, /health is not a removed page: #15704 (2026-11-26) makes it the default panel's read-only Health
+            # archive (#13430), so existing conversations, reports and memory stay readable and none of the module's
+            # write entries is on it. The same page a core-only build shows.
             {"name": "sidebar entry", "hubs": ["test", "mock"], "page": "/", "ready": {"selector": "a[href='/inbox']"},
-             "selector": "a[href='/health']", "opens": {"url": r"/health"}, "off_page": {"path": "/health", "text": NOT_FOUND}},
+             "selector": "a[href='/health']", "opens": {"url": r"/health"},
+             "off_stays": {"path": "/health",
+                           "shows": [{"name": "the read-only line", "selector": "[data-testid='health-readonly-note']"},
+                                     {"name": "reports", "selector": "[data-testid='health-readonly-reports']"},
+                                     {"name": "memory", "selector": "[data-testid='health-readonly-memory']"}],
+                           "hides": [{"name": "a composer", "selector": "textarea"}]}},
         ],
         "chunks": [r"/assets/(Health|HealthReports|HealthIntakePage)-[\w-]+\.js", r"/src/modules/health/"],
         "chunk_when_on": ["test", "mock"],
@@ -239,6 +256,10 @@ WEB = {
         "chunks": [r"/assets/RecordingDetail-[\w-]+\.js", r"/src/modules/recording/"],
         "chunk_when_on": ["test"],
     },
+    # briefing, office, phone-extra, volc and knowledge-ui have no WEB row on purpose: the web app gates nothing on their
+    # flags. briefing and knowledge-ui change what the hub returns (a scheduled job, the knowledge history import);
+    # office and phone-extra run on the computers; volc is a hub-side speech extension. The gate prints a NOTE for each
+    # (a missing WEB row is not a failure). A browser assertion would have nothing of the module to look at (#16243).
 }
 # Console lines that are not the app's errors. The test hub has no computer, so the assistant's memory (kept on the
 # assistant's computer) answers 409; the mock hub answers 404 for what it does not script. Chrome cancels loads in
@@ -432,7 +453,8 @@ def server_checks(rep, phase, hub, ids, on, loaded):
                     (id in [m.strip() for m in loaded.split(",")]) == want)
         row = SERVER.get(id)
         if row is None:
-            rep.add(phase, id, "has a SERVER row in scripts/ci/module-e2e.py", False, "add one: what the hub has of it")
+            rep.add(phase, id, "has a SERVER row in scripts/ci/module-e2e.py", False,
+                    "add one: what the hub has of the module (`{}` when it is only its flag and the manager line)")
             continue
         for ext in row.get("extensions", []):
             rep.add(phase, id, f"extension {ext} {'listed' if want else 'absent'}", (ext in extensions) == want, sorted(extensions))
