@@ -554,6 +554,7 @@ func (s *Service) applyPRStatus(ctx context.Context, t Todo, status TodoPRStatus
 			if _, err := s.reconcileTodoBlockersForPR(ctx, status); err != nil {
 				s.logf("task %s: reconcile blockers for PR %s: %v", t.ID, status.URL, err)
 			}
+			s.onPRStatusMergeTrain(ctx, t, status)
 		}
 		return nil
 	}
