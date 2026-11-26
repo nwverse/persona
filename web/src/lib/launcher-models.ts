@@ -36,11 +36,6 @@ export interface AgentModel {
   aliases?: string[];
 }
 
-/** Whether this catalog row natively offers Codex's Fast tier. */
-export function modelSupportsFast(m: AgentModel | undefined): boolean {
-  return Boolean(m?.service_tiers?.some((tier) => tier.id === "priority"));
-}
-
 export interface LauncherModels {
   /** What the launcher runs: claude, codex, traex, a runtime's agent. */
   agent: string;

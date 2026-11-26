@@ -298,7 +298,7 @@ func (n *Node) agentModelsCommand(ctx context.Context, name, agent, dir string, 
 	default:
 		launcher += ` "$@"`
 	}
-	cmd := exec.CommandContext(ctx, shell, append([]string{"-ic", launcher, "persona"}, args...)...)
+	cmd := exec.CommandContext(ctx, shell, append([]string{shellFlag(shell), launcher, "persona"}, args...)...)
 	cmd.Dir = dir
 	return cmd, nil
 }

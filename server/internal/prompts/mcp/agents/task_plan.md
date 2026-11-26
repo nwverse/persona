@@ -131,6 +131,7 @@ Workspace: "new" isolates checkout; {"new":{"branch":"task/my-change"}} names br
             "type": "boolean",
             "description": "large tasks only (Claude Code 2.1.284+ multi-agent); small: false; never in prompt/title"
           },
+          "multi_issue_report": {"type":"boolean","description":"Only for a report investigating several issues; requires a findings list before park or close."},
           "readonly": {
             "type": "boolean",
             "description": "true only for read-only tasks; false for authorized edits. Adds「本任务只读：不改项目文件、不提交、不对外写入」when true"

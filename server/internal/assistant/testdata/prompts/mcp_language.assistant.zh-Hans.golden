@@ -2769,6 +2769,10 @@
                 "type": "boolean",
                 "description": "large tasks only (Claude Code 2.1.284+ multi-agent); small: false; never in prompt/title"
               },
+              "multi_issue_report": {
+                "type": "boolean",
+                "description": "Only for a report investigating several issues; requires a findings list before park or close."
+              },
               "readonly": {
                 "type": "boolean",
                 "description": "true only for read-only tasks; false for authorized edits. Adds「本任务只读：不改项目文件、不提交、不对外写入」when true"
@@ -2940,8 +2944,52 @@
             "rework",
             "needs_user",
             "parked",
-            "cancelled"
+            "cancelled",
+            "findings"
           ]
+        },
+        "findings_review": {
+          "type": "object",
+          "description": "verdict=findings: omit to read; supply the displayed version to confirm and record dispositions without moving task state.",
+          "required": [
+            "version"
+          ],
+          "properties": {
+            "version": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "dispositions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "id"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "follow_up_todo_id": {
+                    "type": "string",
+                    "description": "Independent supervised to-do with the finding’s exact next action in done_when."
+                  },
+                  "wait_target": {
+                    "type": "string",
+                    "description": "A single finding may match the park evidence's target."
+                  },
+                  "done_evidence": {
+                    "type": "string",
+                    "description": "Evidence that this finding was resolved."
+                  },
+                  "owner_drop_decision_id": {
+                    "type": "string",
+                    "description": "Owner's manual decision, question 'Drop investigation finding \u003cid\u003e?', choice 'Drop', with reason."
+                  }
+                }
+              }
+            }
+          }
         },
         "rework_kind": {
           "type": "string",

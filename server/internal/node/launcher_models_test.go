@@ -182,7 +182,7 @@ func testManagedClaudeWithNode(t *testing.T, setup string, ordinaryLaunch bool) 
 	if shellSetup {
 		shellBin := filepath.Join(home, "shell runtime", "bin")
 		link(node, filepath.Join(shellBin, "node"))
-		wantPath = shellBin + ":" + serviceBin
+		wantPath = shellBin + ":" + loginShellPATH(t, serviceBin)
 		rc = `: > "$HOME/rc-ran"` + "\nexport PATH=" + shellQuote(shellBin) + `:"$PATH"` + "\n"
 	}
 	t.Setenv("FIXTURE_EXPECTED_PATH", wantPath)
@@ -691,4 +691,30 @@ func TestLauncherProbesOnlyRunKnownLaunchers(t *testing.T) {
 	if _, err := os.ReadFile(marker); err != nil {
 		t.Fatalf("a launcher in hub.json was not probed: %v", err)
 	}
+}
+
+// loginShellPATH is the PATH a zsh started as the node starts it (shellFlag) has before ~/.zshrc, from path: on macOS
+// a login shell, whose /etc/zprofile puts path_helper's directories first (#16217); elsewhere path as it is.
+func loginShellPATH(t *testing.T, path string) string {
+	t.Helper()
+	const helper = "/usr/libexec/path_helper"
+	if !strings.Contains(shellFlag("zsh"), "l") {
+		return path
+	}
+	if _, err := os.Stat(helper); err != nil {
+		return path
+	}
+	cmd := exec.Command(helper, "-s")
+	cmd.Env = []string{"PATH=" + path}
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// PATH="<dirs>"; export PATH;
+	v, ok := strings.CutPrefix(strings.TrimSpace(string(out)), `PATH="`)
+	v, _, found := strings.Cut(v, `";`)
+	if !ok || !found {
+		t.Fatalf("path_helper printed %q", out)
+	}
+	return v
 }

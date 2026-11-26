@@ -433,7 +433,7 @@ The entry point is the same as Claude's (machine, directory, launcher); subseque
   On Unix, the native `codex` command honors a same-name shell function, including its environment and flags (#4876).
   With an available Bash/Zsh, the function or executable can be supplied by its rc file; it need not exist on the outer process's PATH.
 - **First message arrives unchanged**: Codex creates a thread only after receiving its first message. A start that includes it answers with that thread (below); one without it answers with a waiting row
-  ("Starting without a first message"). Background startup (`async`) is still refused with `codex_needs_prompt`: older Apps get that and retry with the message. Older nodes refuse a start without a message the same way,
+  ("Starting without a first message"). Current nodes handle `async:true` synchronously for terminal Codex: they wait for the first thread and return its real ID. An older node may refuse the async request with `codex_needs_prompt`; an older App retries with the message. Older nodes refuse a start without a message the same way,
   so Apps make the message optional only for launchers marked `prompt_optional`. Launcher words and message are written together to a private temporary file under the node directory (0600). The pane receives only
   `personad codex-start <file>`: it claims the file (renames it away, so a node that gave up on the start and withdrew the file the same way leaves it nothing, and the other way round), reads and deletes it, then runs the launcher words (preceding `VAR=…` enters the environment), adding `--` and the message only when one is supplied.
   On Unix, native `codex` runs through the user's interactive shell to preserve a same-name function. The shell executes only `"$@"`: launcher words and the message are positional arguments, never interpolated as shell code.
@@ -805,16 +805,20 @@ A new local Codex launched inside Orca must keep that terminal’s hook environm
 
 ## Speed
 
-The web composer's effort menu includes a Speed submenu for Persona conversations running Codex and writable external app-server threads whose current model advertises
-`serviceTiers` through `model/list`. Standard sends `default`; Fast uses the advertised tier ID, currently `priority`.
-The submenu explains increased usage or cost before selection. It is independent of reasoning effort and takes effect
-on subsequent turns. Settings > Agents > Codex also exposes the native `service_tier` default for new sessions.
+The web model panel lists the running model's advertised speeds. It offers Standard, Fast, Ultrafast and any other
+tiers the runtime advertises, such as Flex. The control is independent of reasoning effort and takes effect on
+subsequent turns. Settings > Agents > Codex also exposes the native speed default for new sessions.
 
-An explicit choice uses `thread/settings/update` and waits for acknowledgment. Refusals, unsupported methods and lost
-connections return errors without retaining a next-turn speed override. `thread/resume` and `thread/settings/updated`
-provide the current speed. A native null means Standard. Missing speed stays unknown because `thread/read` does not
-currently report it. Refreshes preserve acknowledged state, and reconnects start with unknown state until native
-settings arrive. Terminal-only panes, subagents and models without advertised tiers have no speed control.
+An app-server thread uses `thread/settings/update` with the advertised native ID. The default ID is `default` and
+the common Fast ID is `priority`. `thread/resume` and `thread/settings/updated` report the acknowledged speed.
+Native null means Standard. Missing speed stays unknown because `thread/read` does not report it.
+
+A live terminal-route Codex 0.169 or later uses the current model's tiers in its Codex home catalog. Startup settings
+and the running-version check follow "On the terminal route". The node checks the terminal for a draft or dialog,
+then types `/model --speed=<tier>`. The terminal takes `standard` for Standard and `fast` for Fast, with other tier IDs
+passed through. The command changes speed independently of model and effort. A new `thread_settings_applied` event
+confirms the selection before the next turn. A timeout reports an uncertain change. Panes without a verified rollout
+or advertised tiers, screenless hosts and subagents do not offer this control.
 
 The iOS main Assistant conversation reads the same session fields in its existing composer menu. A Speed section appears
 only when the session advertises `default` or `priority`; it uses localized Standard / Fast labels, explains Fast's extra

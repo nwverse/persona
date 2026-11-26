@@ -742,8 +742,10 @@ catalog on `models({launcher})` and refreshes on demand once the five-minute TTL
 `models({launcher, refresh: true})` (`caps.models`, `launchers.models`; #15253).
 Discovery never sends a prompt. The native settings file determines the advertised
 default. New sessions and availability checks explicitly apply that model through ACP, since ACP may ignore the
-settings file when choosing its initial model. An explicit caller model takes precedence, and resumed sessions retain
-their native selection. An unavailable catalog returns the native error instead of advertising a built-in model list.
+settings file when choosing its initial model. An idle conversation resumed on a fresh ACP connection also applies
+the configured model before its first prompt. An explicit caller model takes precedence, and an acknowledged model
+choice stays in effect on that connection. Reading history does not change the model or resume the session. An
+unavailable catalog returns the native error instead of advertising a built-in model list.
 A CLI whose stored sign-in expired long ago does not fail `agy models`: it hangs. The companion kills it after 25 seconds
 and reports that the sign-in may have expired and that running `agy` once on the computer signs in again; each
 discovery in a row that times out doubles the backoff for unforced lookups (from five minutes up to an hour), while an
@@ -842,7 +844,9 @@ end, and following user-input count are checked against `GetCascadeTrajectory`. 
 identifies its loopback native service. `RevertToCascadeStep` receives `conversationOnly: true` and the preceding step
 index, including `-1` for an empty conversation. Native refusal propagates to the caller. The bridge uses the current
 native summary and replacement step indices to discard the abandoned export tail, then publishes a changed history
-token. This survives companion restarts without modifying native transcript files.
+token. This survives companion restarts without modifying native transcript files. When the export instead numbers
+later steps after the abandoned tail, they show behind the kept steps once `GetCascadeTrajectory` confirms them, and a
+later rewind cuts at the matching visible step (#14297).
 A reused lower index is not proof of a rewind: when the export goes past the replaced steps before the replacement run
 reaches their last index, another process wrote the same conversation. The bridge then keeps both runs, ordered by
 step index (old steps first), and changes the content revision (#14626). If the replacement run later exports an index
