@@ -69,10 +69,10 @@ Settings › Assistant › Dispatch tasks offers **When dispatching tasks, prefe
 A writable Git task whose directory is occupied defaults to `new`, regardless of preference.
 On a supported computer, the node uses the [workspace naming rules](todos.md#backend-workspace-naming).
 For a linked local Git workspace it uses the source checkout's commit. An explicit `new` in a plain
-directory can prepare a task folder with zero repositories. Older nodes keep their engine path. If
-that engine cannot prepare checkouts (`worktree_unsupported`), an inferred `new` reuses a free source
-directory or shares an occupied one with `workspace_resolved.shared: true`. An explicit `new` on
-that older node requires engine checkout support.
+directory can prepare a task folder with zero repositories, even with Git unavailable. Older nodes
+keep their engine path. If that engine cannot prepare checkouts (`worktree_unsupported`), an inferred
+`new` reuses a free source directory or shares an occupied one with `workspace_resolved.shared: true`.
+An explicit `new` on that older node requires engine checkout support.
 A Git source with no starting commit cannot produce a checkout (#5548). An inferred `new` then reuses
 a free source directory and refuses an occupied one. An explicit `new` returns the missing-commit error.
 An explicit `workspace` overrides inference. When a caller knows a particular checkout, it should name it with `existing`.

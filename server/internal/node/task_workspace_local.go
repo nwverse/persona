@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -33,11 +32,15 @@ func (n *Node) workspaceLocalSource(ctx context.Context, raw json.RawMessage) (a
 	if err != nil || !info.IsDir() {
 		return fail(repository.LocalSourceInvalidPath)
 	}
-	top, err := workspaceReadGit(ctx, cwd, "rev-parse", "--show-toplevel")
+	hasCheckout, err := workspaceHasCheckoutMarker(cwd)
 	if err != nil {
-		if exit, ok := errors.AsType[*exec.ExitError](err); ok && exit.ExitCode() == 128 {
-			return taskworkspace.LocalSource{}, nil // an ordinary directory
-		}
+		return fail(repository.LocalSourceUnavailable)
+	}
+	if !hasCheckout {
+		return taskworkspace.LocalSource{}, nil
+	}
+	top, err := workspaceReadGit(ctx, cwd, "rev-parse", "--show-toplevel")
+	if err != nil || top == "" {
 		return fail(repository.LocalSourceUnavailable)
 	}
 	common, err := workspaceReadGit(ctx, cwd, "rev-parse", "--git-common-dir")
@@ -93,6 +96,22 @@ func (n *Node) workspaceLocalSource(ctx context.Context, raw json.RawMessage) (a
 	return taskworkspace.LocalSource{Repository: &repository.PreparationRepository{
 		RepoID: "local", DirectoryAlias: repository.DefaultAlias(repository.Identity{Path: name}), RequestedRef: ref, Local: local,
 	}}, nil
+}
+
+// The marker can be a directory or a pointer file. Git checks its validity when
+// it exists, so an unreadable checkout cannot be treated as a plain folder.
+func workspaceHasCheckoutMarker(cwd string) (bool, error) {
+	for dir := cwd; ; {
+		_, err := os.Lstat(filepath.Join(dir, ".git"))
+		if !errors.Is(err, fs.ErrNotExist) {
+			return err == nil, err
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return false, nil
+		}
+		dir = parent
+	}
 }
 
 func (n *Node) workspaceLocalCommonAllowed(common string) bool {

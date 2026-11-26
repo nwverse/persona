@@ -7007,7 +7007,7 @@ Manager routes and the operation snapshot contract are documented in
 | Node method | Input and result |
 | --- | --- |
 | `workspace.naming.resolve` | `workspacenaming.Source` → `Preview {status, sample, plan?, diagnostics[], system_defaults?, branch_sources?}`. The target supplies `NodeContext`. Existing path components use the same symlink and scope checks as prepare. Missing paths are valid. Version `workspace-naming/v1`. |
-| `workspace.naming.local-source` | `{cwd, task_branch?}` → `{repository?, existing_path?, error?}`. Read-only discovery of the selected computer's local Git store, exact commit, and starting ref. An ordinary directory returns no repository. An explicitly named branch with a checkout returns its path for existing-checkout admission. Errors have a source code such as `no_commits` or `source_invalid`. |
+| `workspace.naming.local-source` | `{cwd, task_branch?}` → `{repository?, existing_path?, error?}`. Read-only discovery of the selected computer's local Git store, exact commit, and starting ref. A plain directory returns no repository even with Git unavailable. A checkout that Git cannot read returns `source_unavailable`. An explicitly named branch with a checkout returns its path for existing-checkout admission. Other source codes include `no_commits` and `source_invalid`. |
 
 The Assistant view's `workspace_naming_version` advertises naming support and `system_defaults`
 contains the built-in rules. A preview's `branch_sources` rows have `repo_id`, `kind`

@@ -1793,8 +1793,8 @@ immutable `container` naming plan, prepare all selected repositories, acquire
 the launch use lock and start the session at the container root. Pass
 `"workspace":{"container":{"operation_id":"op_example"}}` with `todo_id` to
 launch directly into an existing saved or prepared `container` workspace (a
-non-container `root` plan is rejected). Legacy `new`, `existing` and `none`
-single-repository policies and defaults are unchanged.
+non-container `root` plan is rejected). The `new`, `existing` and `none` choices
+remain available. A capable Node prepares an isolated `new` workspace.
 
 For an owner starting a to-do directly, including one created by hand, use
 `POST /api/v1/todos/{id}/backend-workspace/start`. Send `operation_id`,

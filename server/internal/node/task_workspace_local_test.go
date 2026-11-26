@@ -45,6 +45,31 @@ func localWorkspacePlan(t *testing.T, n *Node, source taskworkspace.LocalSource,
 	return *got.Plan
 }
 
+func TestWorkspaceLocalSourceAcceptsPlainFolderWithoutGit(t *testing.T) {
+	home := workspaceTemp(t)
+	n := &Node{home: home, dir: filepath.Join(home, ".persona")}
+	t.Setenv("PATH", workspaceTemp(t))
+	if got := localWorkspaceSource(t, n, home, ""); got != (taskworkspace.LocalSource{}) {
+		t.Fatalf("expected a repository-free source, got %+v", got)
+	}
+}
+
+func TestWorkspaceLocalSourceRefusesBrokenCheckout(t *testing.T) {
+	home := workspaceTemp(t)
+	n := &Node{home: home, dir: filepath.Join(home, ".persona")}
+	checkout := filepath.Join(home, "checkout")
+	child := filepath.Join(checkout, "child")
+	if err := os.MkdirAll(child, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(checkout, ".git"), []byte("gitdir: missing-git-directory\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got := localWorkspaceSource(t, n, child, ""); got.Error != repository.LocalSourceUnavailable || got.Repository != nil {
+		t.Fatalf("expected an unavailable checkout, got %+v", got)
+	}
+}
+
 func TestLocalTaskWorkspaceFromUnpushedCommit(t *testing.T) {
 	home := workspaceTemp(t)
 	n := &Node{home: home, dir: filepath.Join(home, ".persona")}
