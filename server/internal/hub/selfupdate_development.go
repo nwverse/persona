@@ -371,7 +371,7 @@ func (u *updater) checkDevelopment(ctx context.Context) (*update.Published, erro
 	}
 	number := update.DevelopmentNumber(u.h.build.Number)
 	m := &update.Manifest{Version: fmt.Sprintf("web-dev-%s-%d", candidate.Commit[:12], number), Build: number,
-		Commit: candidate.Commit, Released: time.Now()}
+		Commit: candidate.Commit, Released: time.Now(), Edition: u.h.build.Edition.Marker()}
 	r := &update.Published{Manifest: m, Development: &candidate}
 	u.mu.Lock()
 	// A repeated check of the same object retains the attempt identity (including
@@ -379,6 +379,7 @@ func (u *updater) checkDevelopment(ctx context.Context) (*update.Published, erro
 	if u.release != nil && u.release.Development != nil && u.release.Development.BackupID == "" && u.release.Development.Commit == candidate.Commit {
 		copy := *u.release
 		manifest := *copy.Manifest
+		manifest.Edition = m.Edition
 		copy.Manifest = &manifest
 		r = &copy
 	}
@@ -457,7 +458,11 @@ func (u *updater) buildDevelopment(ctx context.Context, r *update.Published) err
 			return developmentPhaseError(operation, lastStep)
 		}
 	}
-	m, err := update.BuildManifest(built.Artifacts, *r.Manifest)
+	// Development artifacts and their hosted packages use File.Name locally, not the publisher's core- aliases.
+	// Build that shape first, then restore the hub's edition below for CheckBinary.
+	local := *r.Manifest
+	local.Edition = ""
+	m, err := update.BuildManifest(built.Artifacts, local)
 	if err != nil {
 		return developmentPhaseError(operation, lastStep)
 	}
@@ -472,6 +477,7 @@ func (u *updater) buildDevelopment(ctx context.Context, r *update.Published) err
 		}
 	}
 	m.Ancestors = ancestors
+	m.Edition = r.Manifest.Edition
 	r.Manifest = m
 	return nil
 }

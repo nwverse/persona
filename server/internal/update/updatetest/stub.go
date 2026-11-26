@@ -44,8 +44,14 @@ func VersionedProgram(t testing.TB, name, goos, goarch, version string) string {
 // its build info says the core edition (update.EditionOf).
 func CoreProgram(t testing.TB, name, goos, goarch, version string) string {
 	t.Helper()
-	return programSource(t, name, goos, goarch, "package main\n\nimport \"os\"\n\nvar version = "+strconv.Quote(version)+
-		"\n\nfunc main() { os.Stdout.WriteString(version + \"\\n\") }\n", "persona_core_only")
+	return CoreProgramSource(t, name, goos, goarch, "package main\n\nimport \"os\"\n\nvar version = "+strconv.Quote(version)+
+		"\n\nfunc main() { os.Stdout.WriteString(version + \"\\n\") }\n")
+}
+
+// CoreProgramSource is ProgramSource built with the persona_core_only tag, for a test that needs its own main program.
+func CoreProgramSource(t testing.TB, name, goos, goarch, mainGo string) string {
+	t.Helper()
+	return programSource(t, name, goos, goarch, mainGo, "persona_core_only")
 }
 
 // ProgramSource is Program with main.go's source given.

@@ -245,13 +245,27 @@ for t in linux/amd64 linux/arm64 darwin/arm64 darwin/amd64; do
       -o "../$OUT/bin/$p-${t%/*}-${t#*/}" "./cmd/$p")
   done
 done
+# core_step <what> <command…>: an optional core package never stops the full release. Publishing the core makes its
+# build and checks required; otherwise a failure is loud, its incomplete output is removed, and the full release goes on.
+core_step() {
+  local what="$1"
+  shift
+  if "$@"; then return 0; fi
+  if [ "${PERSONA_PUBLISH_CORE:-0}" = 1 ]; then
+    echo "core edition $what failed; PERSONA_PUBLISH_CORE=1 requires the core packages" >&2
+    exit 1
+  fi
+  printf '\n*** CORE EDITION %s FAILED; FULL RELEASE CONTINUES ***\nNo core package from this run will be published. Set PERSONA_PUBLISH_CORE=1 to require and publish it, or PERSONA_CORE_PACKAGES=0 to skip it deliberately.\n\n' "$what" >&2
+  rm -rf "$CORE"
+  return 0
+}
 # The core edition (docs/operations/core-install.md, scripts/release/core_edition.sh): the same programs for the same
 # platforms, built with persona_core_only as well, so no built-in module is in them. Their own directory, served as
 # core-<name> beside the full release. Built here, while the web client is in place. PERSONA_CORE_PACKAGES=0 leaves the
 # edition out of this run.
 CORE="$OUT/core"
 if [ "${PERSONA_CORE_PACKAGES:-1}" != 0 ]; then
-  LDFLAGS="$LDFLAGS" scripts/release/core_edition.sh build "$CORE" linux/amd64 linux/arm64 darwin/arm64 darwin/amd64 windows/amd64 windows/arm64
+  core_step build env LDFLAGS="$LDFLAGS" scripts/release/core_edition.sh build "$CORE" linux/amd64 linux/arm64 darwin/arm64 darwin/amd64 windows/amd64 windows/arm64
 fi
 # The iPhone helper (persona-iphone-bridge, Rust, native/iphone-bridge) for each platform this machine can build: in
 # latest.json under helpers (only the builds that are here, all of which go up with the rest below) and kept with the
@@ -336,13 +350,15 @@ fi
 
 # The core edition's downloads, checked like the full ones and laid out as they are served ($CORE/dl), and both
 # editions checked against each other: no full program built with the tag, neither personad taking the other's manifest.
+pack_core_packages() {
+  adhoc_identifiers "$CORE/bin" &&
+    python3 scripts/release/check_bundle_privacy.py --whole-short "$CORE/bin" &&
+    python3 scripts/release/check_bundle_skills.py "$CORE/bin/personad-linux-amd64" &&
+    python3 scripts/release/check_bundle_skills.py "$CORE/bin/persona-manager-linux-amd64" &&
+    scripts/release/core_edition.sh pack "$CORE" "$VERSION" "$BUILD" "$COMMIT" "${RELEASE_CHANNEL:-release}" "$OUT/bin"
+}
 if [ -d "$CORE/bin" ]; then
-  adhoc_identifiers "$CORE/bin"
-  python3 scripts/release/check_bundle_privacy.py --whole-short "$CORE/bin"
-  python3 scripts/release/check_bundle_skills.py "$CORE/bin/personad-linux-amd64"
-  python3 scripts/release/check_bundle_skills.py "$CORE/bin/persona-manager-linux-amd64"
-  scripts/release/core_edition.sh pack "$CORE" "$VERSION" "$BUILD" "$COMMIT" "${RELEASE_CHANNEL:-release}" "$OUT/bin" \
-    || { echo "the core edition's packages did not check out (PERSONA_CORE_PACKAGES=0 leaves them out)" >&2; exit 1; }
+  core_step checks pack_core_packages
 fi
 
 # The site with dl/ and install.sh added, deployed from a copy (site/ in the tree stays as committed).

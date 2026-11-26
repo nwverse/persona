@@ -177,6 +177,8 @@ full edition finds it again.
 `scripts/release/publish.sh` builds both editions in one run: the full one in `build-publish/bin`, the core one in
 `build-publish/core` (`bin/` as built, `dl/` as served). `PERSONA_CORE_PACKAGES=0` leaves the core edition out.
 `NO_DEPLOY=1` builds and checks only. A deploying run uploads the core edition only with `PERSONA_PUBLISH_CORE=1`.
+A core build or check failure is otherwise a loud warning, removes that run's incomplete core output and never stops the
+full release; with `PERSONA_PUBLISH_CORE=1` the core packages are required and such a failure stops the release.
 
 Alone, for chosen platforms (`LDFLAGS` as a release sets them; the update URL is where the packages will be served):
 
