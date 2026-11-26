@@ -14,6 +14,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 // The To-dos view (#10226): what the manager works out for each to-do and for the list, by the pure projection in
@@ -28,6 +29,7 @@ import (
 type todoProjection struct {
 	facts []projection.Facts
 	views []assistantwire.TodoSummary
+	waits []*assistantwire.TodoWait
 }
 
 // todoProjectionOf works out the view of every to-do of list at now. list holds the rows as GET /api/v1/todos lists
@@ -41,11 +43,11 @@ func (s *Service) todoProjectionOf(ctx context.Context, list []listedTodo, now t
 		populateTodoItemTypes(list, reposByTodo)
 		s.populateTodoActiveBlockers(ctx, list)
 	}
-	views := projection.Views(facts, now)
+	views, waits := projection.ViewsAndWaits(facts, now)
 	if len(facts) > 0 && facts[0].TodosV2 {
-		applyActiveBlockersToViews(list, views)
+		applyActiveBlockersToViews(list, views, waits)
 	}
-	return todoProjection{facts: facts, views: views}
+	return todoProjection{facts: facts, views: views, waits: waits}
 }
 
 // populateTodoActiveBlockers loads all active persistent blockers in a single DB query and
@@ -97,7 +99,7 @@ func (s *Service) populateTodoActiveBlockers(ctx context.Context, list []listedT
 
 // applyActiveBlockersToViews projects open to-dos with active persistent blockers into waiting
 // when they are not already in needs_you, can_wait, working, waiting, just_finished, someday, or done.
-func applyActiveBlockersToViews(list []listedTodo, views []assistantwire.TodoSummary) {
+func applyActiveBlockersToViews(list []listedTodo, views []assistantwire.TodoSummary, waits []*assistantwire.TodoWait) {
 	for i := range list {
 		if i >= len(views) || len(list[i].ActiveBlockers) == 0 {
 			continue
@@ -117,6 +119,33 @@ func applyActiveBlockersToViews(list []listedTodo, views []assistantwire.TodoSum
 				assistantwire.TodoLineArgReason: activeBlockerWaitReason(list[i].ActiveBlockers),
 			},
 		}
+		if i < len(waits) {
+			waits[i] = activeBlockerWait(list[i].ActiveBlockers)
+		}
+	}
+}
+
+func activeBlockerWait(blockers []todoActiveBlockerView) *assistantwire.TodoWait {
+	if len(blockers) == 0 {
+		return nil
+	}
+	first := blockers[0]
+	_, _, label, canonicalURL := normalizePersistedBlockerKey(first.TargetRef)
+	if label == "" {
+		label = strings.TrimSpace(first.TargetRef)
+	}
+	target := label
+	if len(blockers) > 1 {
+		target = fmt.Sprintf("%s (+%d more)", label, len(blockers)-1)
+	}
+	kind := assistantwire.TodoWaitKindExternalEvent
+	if first.Kind == todoBlockerKindExternalPR {
+		kind = assistantwire.TodoWaitKindPrMerge
+	}
+	return &assistantwire.TodoWait{
+		Kind:      kind,
+		WaitingOn: target,
+		URL:       canonicalURL,
 	}
 }
 
@@ -704,11 +733,29 @@ func projectionFacts(t listedTodo, sessions map[[2]string]proto.Session, loc *ti
 		if p := v.Parked; p != nil {
 			parked := &projection.Parked{Reason: p.Reason, Until: p.Until, WaitingOn: p.WaitingOn}
 			if p.Evidence != nil {
-				parked.Evidence = &projection.ParkEvidence{
+				ev := &projection.ParkEvidence{
 					Kind:          p.Evidence.Kind,
 					Target:        p.Evidence.Target,
 					URL:           p.Evidence.URL,
+					Wake:          p.Evidence.Wake,
 					InteractionID: p.Evidence.InteractionID,
+				}
+				if c := p.Evidence.Contact; c != nil {
+					ev.Contact = &assistantwire.TodoWaitContact{
+						Channel: c.Channel,
+						URL:     c.URL,
+						Sender:  c.Sender,
+						SentAt:  c.SentAt,
+						Request: c.Request,
+					}
+				}
+				parked.Evidence = ev
+			}
+			if h := p.Handoff; h != nil {
+				parked.Handoff = &assistantwire.TodoHandoffRef{
+					TodoID: wireids.TodoID(h.TodoID),
+					Title:  h.Title,
+					Check:  h.Check,
 				}
 			}
 			f.Supervision.Parked = parked
@@ -725,10 +772,12 @@ func projectionFacts(t listedTodo, sessions map[[2]string]proto.Session, loc *ti
 		}
 	}
 	if p := t.PRStatus; p != nil {
-		f.PRStatus = &projection.PRStatus{URL: p.URL, State: p.State, Draft: p.Draft, CheckedAt: p.CheckedAt}
+		f.PRStatus = &projection.PRStatus{URL: p.URL, Title: p.Title, State: p.State, Draft: p.Draft,
+			Review: p.Review, Checks: p.Checks, Conflicts: p.Conflicts, CheckedAt: p.CheckedAt}
 	}
 	for _, p := range t.OtherPRs {
-		f.OtherPRs = append(f.OtherPRs, projection.PRStatus{URL: p.URL, State: p.State, Draft: p.Draft, CheckedAt: p.CheckedAt})
+		f.OtherPRs = append(f.OtherPRs, projection.PRStatus{URL: p.URL, Title: p.Title, State: p.State, Draft: p.Draft,
+			Review: p.Review, Checks: p.Checks, Conflicts: p.Conflicts, CheckedAt: p.CheckedAt})
 	}
 	if d := t.Delivery; d != nil {
 		f.Delivery = &projection.Delivery{State: d.State, At: d.At, Owner: d.waitsForOwner(), Gate: d.Gate}
