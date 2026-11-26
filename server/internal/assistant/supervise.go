@@ -129,6 +129,10 @@ type TaskProgress struct {
 	// is Text (one line of at most 200 characters).
 	Detail string    `json:"detail,omitempty"`
 	At     time.Time `json:"at"`
+	// machine and session name the Agent that sent this report (in memory only, never on the wire), so a done report
+	// only settles left-over shells of the Agent that wrote it (#16418).
+	machine string
+	session string
 }
 
 // TaskReview is one review: the assistant's verdict, with each criterion's evidence or gap.
@@ -632,6 +636,24 @@ func (s *Service) noteProgress(ctx context.Context, id string, p TaskProgress) b
 		s.todosChanged(ctx)
 	}
 	return ok
+}
+
+// clearDoneProgress drops a prior turn's in-memory done report when a new turn begins on supervised task id, so an
+// earlier done report cannot settle shells left behind by a later turn (#16418).
+func (s *Service) clearDoneProgress(ctx context.Context, id string) {
+	s.todos.mu.Lock()
+	cur := s.todos.todos[id]
+	cleared := false
+	if cur != nil && cur.Supervision != nil && cur.Supervision.Progress != nil && cur.Supervision.Progress.Kind == upReportDone {
+		v := cur.Supervision.clone()
+		v.Progress = nil
+		cur.Supervision = v
+		cleared = true
+	}
+	s.todos.mu.Unlock()
+	if cleared {
+		s.todosChanged(ctx)
+	}
 }
 
 // ---- the snapshot ----
