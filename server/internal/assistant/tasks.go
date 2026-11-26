@@ -219,6 +219,8 @@ type PlanTask struct {
 	inPane    string
 	planID    string
 	planIndex int
+	// The preview is metadata-only until admission saves its naming operation.
+	dispatchedWorkspace *dispatchedWorkspacePlan
 	// cwdStatus: what worktree.status said of cwdStatusOf (machine NUL cleaned cwd) in this resolve, kept so that
 	// resolveTaskRepo does not ask the machine twice for that folder. Never serialized.
 	cwdStatus   *proto.WorktreeStatus
