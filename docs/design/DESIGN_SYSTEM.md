@@ -4671,3 +4671,22 @@ VoiceOver drop hint on Apple).
   actor so GIF, APNG and animated WebP keep all their frames). Dropping on a picker card only opens the upload or edit
   dialog with the file ready to crop; nothing is saved until Upload / Save, and **Keep current** / **Keep Current
   Picture** / Cancel reverts it (principle 3).
+
+## Integrations & Extensions in web Settings
+
+People connecting a service can find its account, delivery and sync settings under one name. With
+the selected assistant’s Integrations experiment on, each service appears once. The capability chips
+(All, Chat channels, Data sources, Tools & appearance) filter those rows. A service can match more
+than one chip. Each chip exposes its selection with `aria-pressed` and shows its matching count.
+
+Opening a detail uses a single column on phones and narrow Settings hosts. On desktop the split
+starts at **740 CSS pixels of Settings content width**, measured after both sidebars. The
+`data-integrations-split` container reserves 300 px for the list and at least 440 px for the detail.
+Its list header stays visible, the chips can scroll horizontally within it, and the list and detail
+scroll vertically independently. Opening another detail returns that pane to the top.
+
+When Inbox Sources is available, the **Integrations | Data flow** segmented switcher opens either the
+catalog or a full-width view of where data goes. A `SubscriptionAlertBadge` belongs to the row that
+owns the subscription. A single alert names its state, multiple alerts show their count. The most
+severe state supplies the detail and tone (failure red, missing recipe, rate limit or disconnected
+source orange). Standalone push sources have their own rows. See [web Settings](../web/web.md#labs).
