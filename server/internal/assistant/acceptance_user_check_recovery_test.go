@@ -64,7 +64,7 @@ func TestUserCheckReopenRollsBackWithLedgerFailure(t *testing.T) {
 	for _, path := range []string{"edit", "reopen"} {
 		t.Run(path, func(t *testing.T) {
 			ctx := t.Context()
-			dsn := newDatabase(t)
+			dsn := newMigratedDatabase(t, db.ManagerSet)
 			store, err := db.Open(ctx, dsn, db.ManagerSet)
 			if err != nil {
 				t.Fatal(err)
@@ -124,7 +124,7 @@ func TestUserCheckReopenRollsBackWithLedgerFailure(t *testing.T) {
 
 func TestUserCheckAlreadyReopenedKeepsWorkingAfterRestart(t *testing.T) {
 	ctx := t.Context()
-	dsn := newDatabase(t)
+	dsn := newMigratedDatabase(t, db.ManagerSet)
 	store, err := db.Open(ctx, dsn, db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
@@ -147,6 +147,7 @@ func TestUserCheckAlreadyReopenedKeepsWorkingAfterRestart(t *testing.T) {
 }
 
 func TestUserCheckPassWaitsForItsOwnRound(t *testing.T) {
+	needsLarkLayer(t)
 	for _, source := range []string{"web button", "card reply", "recovery sweep"} {
 		t.Run(source, func(t *testing.T) {
 			ctx := t.Context()
@@ -206,9 +207,9 @@ func TestUserCheckPassWaitsForItsOwnRound(t *testing.T) {
 	}
 }
 
-func (d *userCheckPassStore) ReviewDoneTodo(ctx context.Context, id, reason string, accepted bool, at time.Time) (*db.TodoRow, bool, error) {
+func (d *userCheckPassStore) ReviewTodo(ctx context.Context, id, reason string, accepted bool, at time.Time, ledger *db.TodoSupervisionRow, guard func() error) (*db.TodoRow, bool, error) {
 	d.closeCalls.Add(1)
-	return d.DB.ReviewDoneTodo(ctx, id, reason, accepted, at)
+	return d.DB.ReviewTodo(ctx, id, reason, accepted, at, ledger, guard)
 }
 
 func (d *userCheckPassStore) PutTodoSupervision(ctx context.Context, row db.TodoSupervisionRow) error {
@@ -232,6 +233,7 @@ func (d *userCheckPassStore) PutSetting(ctx context.Context, key string, value a
 }
 
 func TestUserCheckRecoversEveryPersistedPassStep(t *testing.T) {
+	needsLarkLayer(t)
 	ctx := context.Background()
 	for _, tc := range []struct {
 		name             string
@@ -336,6 +338,7 @@ func TestUserCheckRecoversEveryPersistedPassStep(t *testing.T) {
 }
 
 func TestUserCheckRetriesFailedPassLedgerBeforeVerification(t *testing.T) {
+	needsLarkLayer(t)
 	ctx := context.Background()
 	store := &userCheckPassStore{DB: todoTestDB(t)}
 	s, f, todo := acceptedForUserCheckOn(t, store)

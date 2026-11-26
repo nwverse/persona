@@ -46,7 +46,7 @@ type fleetCache struct {
 	live         *assistantwire.FleetLive            // the assistant's
 	lives        map[string]*assistantwire.FleetLive // the other managers' (manager_state.go)
 	clients      assistantwire.Clients               // what fleet.clients said last
-	clientsSent  bool
+	clientsSent  map[string]*busConn                 // the connections that received the current clients snapshot
 	// clientsSend holds one fleet.clients from working out what is true to telling it (fleetClientsChanged).
 	clientsSend sync.Mutex
 }
@@ -134,9 +134,7 @@ func init() {
 		delete(f.interactions, p.ID)
 		f.mu.Unlock()
 		h.push.withdraw(p.ID) // a suspended app hears it by push (#4349)
-		if todo := assistantwire.TodoOfAskCard(p.ID); todo != "" {
-			h.push.todoPushOver(todo) // the to-do no longer waits on the owner: its next push rings (push_todo_dedup.go)
-		}
+		h.push.resolvedPushOver(p.ID)
 		event := map[string]any{"type": "interaction_resolved", "id": p.ID}
 		if p.AnsweredBy != "" {
 			event["answered_by"] = p.AnsweredBy // the app marks a question the assistant answered (docs/assistant/assistant.md)
@@ -449,26 +447,102 @@ func (h *Hub) waitInteraction(ctx context.Context, ix proto.Interaction) (proto.
 
 // ---- what the hub tells the manager of the apps ----
 
+// hasFullAppOnline reports whether at least one full user app (excluding runtime CLI simulators and
+// restricted/extension clients) is currently connected to the hub.
+func (h *Hub) hasFullAppOnline() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for c := range h.clients {
+		if c.role == roleFull && !c.runtimeCLI {
+			return true
+		}
+	}
+	return false
+}
+
 // fleetClientsChanged tells the managers what the apps can take now, when it changed (fleet.clients): an app that
-// takes MCP forms and links is connected, or a phone that registered for them would be pushed one (#2433). It runs
-// after an app connects, says hello or goes, and after the devices or their settings change. One at a time, each with
-// what is true then, so an older state never overtakes a newer one.
+// takes MCP forms and links is connected, or a phone that registered for them would be pushed one (#2433), or whether
+// a full user app is online. It runs after an app connects, says hello or goes, and after the devices or their settings
+// change. One at a time, each with what is true then, so an older state never overtakes a newer one.
 func (h *Hub) fleetClientsChanged() {
 	f := &h.reported
 	f.clientsSend.Lock()
 	defer f.clientsSend.Unlock()
-	c := assistantwire.Clients{Elicitation: h.hasElicitationClient(), ElicitationPush: h.push.pushesElicitation(h.desktopOnline())}
+	c := assistantwire.Clients{
+		Elicitation:     h.hasElicitationClient(),
+		ElicitationPush: h.push.pushesElicitation(h.desktopOnline()),
+		AppOnline:       h.hasFullAppOnline(),
+		Viewing:         h.viewedSessions(),
+	}
 	f.mu.Lock()
-	same := f.clientsSent && f.clients == c
-	f.clients, f.clientsSent = c, true
+	same := f.clients.Elicitation == c.Elicitation && f.clients.ElicitationPush == c.ElicitationPush &&
+		f.clients.AppOnline == c.AppOnline && slices.Equal(f.clients.Viewing, c.Viewing)
+	delivered := f.clientsSent
+	f.clients = c
 	f.mu.Unlock()
-	if !same {
-		if err := h.notifyManagers(assistantwire.EventClients, c); err != nil {
-			f.mu.Lock()
-			f.clientsSent = false
-			f.mu.Unlock()
+	next := map[string]*busConn{}
+	for _, p := range h.busRoster() {
+		if p.Role != bus.RoleManager {
+			continue
+		}
+		conn := h.busConnOf(p.ID)
+		if conn == nil {
+			continue
+		}
+		if same && delivered[p.ID] == conn {
+			next[p.ID] = conn
+			continue
+		}
+		if conn.peer.Notify(assistantwire.EventClients, h.clientsForManager(c, p.ID)) == nil {
+			next[p.ID] = conn
 		}
 	}
+	f.mu.Lock()
+	f.clientsSent = next
+	f.mu.Unlock()
+}
+
+// viewedSessions reports owner presence from apps authenticated with a full credential.
+func (h *Hub) viewedSessions() []assistantwire.SessionRef {
+	h.mu.Lock()
+	clients := make([]*client, 0, len(h.clients))
+	for c := range h.clients {
+		if c.role == roleFull {
+			clients = append(clients, c)
+		}
+	}
+	h.mu.Unlock()
+	seen := map[[2]string]bool{}
+	for _, c := range clients {
+		c.mu.Lock()
+		for key := range c.subs {
+			seen[key] = true
+		}
+		for key := range c.termSubs {
+			seen[[2]string{key[0], key[1]}] = true
+		}
+		c.mu.Unlock()
+	}
+	out := make([]assistantwire.SessionRef, 0, len(seen))
+	for key := range seen {
+		out = append(out, assistantwire.SessionRef{MachineID: key[0], SessionID: key[1]})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].MachineID < out[j].MachineID ||
+			out[i].MachineID == out[j].MachineID && out[i].SessionID < out[j].SessionID
+	})
+	return out
+}
+
+func (h *Hub) clientsForManager(c assistantwire.Clients, manager string) assistantwire.Clients {
+	out := c
+	out.Viewing = nil
+	for _, ref := range c.Viewing {
+		if h.sessionOwner(ref.MachineID, ref.SessionID) == manager {
+			out.Viewing = append(out.Viewing, ref)
+		}
+	}
+	return out
 }
 
 // clientsSettle runs on a manager connection's first word after its handshake, as mutesSettle does, and tells it what
@@ -488,23 +562,48 @@ func (h *Hub) clientsSettle(c *busConn) {
 		clients := f.clients
 		f.mu.Unlock()
 		if h.busCurrent(c) {
-			_ = c.peer.Notify(assistantwire.EventClients, clients)
+			err := c.peer.Notify(assistantwire.EventClients, h.clientsForManager(clients, c.ident.ID))
+			f.mu.Lock()
+			if err != nil {
+				delete(f.clientsSent, c.ident.ID)
+			} else {
+				if f.clientsSent == nil {
+					f.clientsSent = map[string]*busConn{}
+				}
+				f.clientsSent[c.ident.ID] = c
+			}
+			f.mu.Unlock()
 		}
 	}()
 }
 
-// fleetConnected: the manager's handshake went through: it is told what of the apps it needs.
-func (h *Hub) fleetConnected() {
+// fleetClientsRefresh also tells connected managers after an ownership change: their scoped viewers can change
+// even when the global viewer set does not.
+func (h *Hub) fleetClientsRefresh() {
 	f := &h.reported
+	f.clientsSend.Lock()
 	f.mu.Lock()
-	f.clientsSent = false
+	f.clientsSent = nil
 	f.mu.Unlock()
+	f.clientsSend.Unlock()
 	h.fleetClientsChanged()
 }
 
 // markSeen tells the manager the user looked at a session (an app's WebSocket seen).
 func (h *Hub) markSeen(machine, session string) {
 	_ = h.notifyBus(h.sessionOwner(machine, session), assistantwire.EventSeen, assistantwire.FleetSeen{MachineID: machine, SessionID: session})
+}
+
+// markInteractionSeen tells the owning manager that a full user app displayed pending interaction id to the user.
+func (h *Hub) markInteractionSeen(id string) {
+	if id == "" {
+		return
+	}
+	ix, ok := h.pendingInteraction(id)
+	if !ok {
+		return
+	}
+	_ = h.notifyBus(cmp.Or(ix.Manager, assistantwire.AssistantID), assistantwire.EventInteractionSeen, assistantwire.FleetInteractionSeen{InteractionID: id})
 }
 
 // mutesChanged tells every manager the muted spaces / agents (the hub's settings mutes) after a change and after a
@@ -703,6 +802,15 @@ func (h *Hub) fleetRoutesRelayed(api *http.ServeMux) {
 		}
 		h.forwardOwned(w, r, h.byRequest) // answered already: no longer pending, the request names its manager
 	}))
+	// Card view receipt: starts the short countdown on an unseen owner-only timed card (e.g. secret_run / secret_handoff).
+	// Restricted devices and extension tokens cannot claim the owner saw the card.
+	api.HandleFunc("POST /api/v1/interactions/{id}/seen", h.withoutTerminalControls(func(w http.ResponseWriter, r *http.Request) {
+		if answerOnly(r) || principalOf(r.Context()).Role != roleFull {
+			writeErr(w, http.StatusForbidden, errors.New("only a full user device can mark a card seen"))
+			return
+		}
+		h.forwardOwned(w, r, h.byInteraction)
+	}))
 	api.HandleFunc("GET /api/v1/interactions/history", func(w http.ResponseWriter, r *http.Request) {
 		if h.requestHasElicitation(r) {
 			r.Header.Set(assistantwire.ElicitationHeader, "1")
@@ -798,10 +906,11 @@ func relatedTodoID(key string, allowAsk bool) string {
 // own, or none. What the extensions are told of it (agent.finished, agent.needs_you) goes to from's only, and the
 // devices that muted from (NotifyPrefs.MutedManagers) get none of it.
 //
-// It returns where an assistant's push or a finished turn went (nil for a card, a reply reminder or a decision, whose
-// delivery is not reported): the devices it was handed to, the offline ones that keep it, and the ln-mode reason it was
-// held. The assistant's notify_user tool tells the model from it whether the notice reached a device, the briefing or
-// nothing, and counts it as an interruption only when a device took it.
+// It returns where an assistant's push or a finished turn went (nil for a card, a reply reminder or a decision when it
+// was not held; when held, held carries the intercept reason so notify.request reports held/reason consistently without
+// breaking existing checks for nil devices): the devices it was handed to, the offline ones that keep it, and the
+// ln-mode reason it was held. The assistant's notify_user tool tells the model from it whether the notice reached a
+// device, the briefing or nothing, and counts it as an interruption only when a device took it.
 func (h *Hub) deliverPushFrom(from string, n assistantwire.Notification) (out *pushOutcome, err error) {
 	switch n.Kind {
 	case assistantwire.NotifyInput:
@@ -812,7 +921,9 @@ func (h *Hub) deliverPushFrom(from string, n assistantwire.Notification) (out *p
 		if !ok || cmp.Or(ix.Manager, assistantwire.AssistantID) != from {
 			return nil, &rpc.Error{Code: devicewire.CodeNoDevice, Message: "an input push is for a pending card the manager reported"}
 		}
-		h.notifyInteractionHinted(from, ix, n.Subtitle, n.LinkCovered, n.Level, n.RelatedKey, n.Depth, n.Track)
+		if held := h.notifyInteractionHinted(from, ix, n.Subtitle, n.LinkCovered, n.Level, n.RelatedKey, n.Depth, n.Track); held != "" {
+			return &pushOutcome{held: held}, nil
+		}
 		return nil, nil
 	case assistantwire.NotifyPush, assistantwire.NotifyDone, assistantwire.NotifyReply, assistantwire.NotifyDecide:
 		if !h.ownsRef(from, n.DeviceID, n.SessionID) {
@@ -822,51 +933,36 @@ func (h *Hub) deliverPushFrom(from string, n assistantwire.Notification) (out *p
 	}
 	switch n.Kind {
 	case assistantwire.NotifyPush: // one with an id shows once, sent again however late (a day recap's push)
-		if !h.push.claimTodoPush(n.RelatedKey) {
-			// The same to-do's push about the same reason rang and the to-do still waits on the owner for it.
+		if !h.push.claimTodoPushCard(n.RelatedKey, n.CardID) {
+			// The same to-do's or concern's push about the same reason/state rang and still waits on the owner.
 			return &pushOutcome{held: interceptReasonDedup}, nil
 		}
-		policy := pushPolicy{level: levelFor(n.Kind, n.Level), relatedKey: n.RelatedKey, todoID: relatedTodoID(n.RelatedKey, !n.Asked),
-			depth: n.Depth, track: n.Track, cardID: n.CardID}
-		policy.level = h.pushGradingNotifyLevel(n, policy.level)
+		policy := pushPolicy{kind: assistantwire.NotifyPush, level: levelFor(n.Kind, n.Level), relatedKey: n.RelatedKey, todoID: relatedTodoID(n.RelatedKey, !n.Asked),
+			depth: n.Depth, track: n.Track, cardID: n.CardID, derivedLevel: n.Level == "", asked: n.Asked, mainConv: h.isMainForManager(from, n.DeviceID, n.SessionID)}
 		o := h.notifyDoneUnder(from, "assistant", n.DeviceID, n.Subtitle, n.SessionID, n.Title, n.Body, pushWants{}, managerPushCollapseID(from, n.ID),
 			pushRecordingID(n.RecordingID), policy)
 		out = &o
 	case assistantwire.NotifyDone:
 		o := h.notifyDoneUnder(from, "done", n.DeviceID, n.Subtitle, n.SessionID, n.Title, n.Body,
 			pushWants{Kind: "done", Took: time.Duration(n.TookMS) * time.Millisecond, Long: time.Duration(n.LongMS) * time.Millisecond},
-			"", "", pushPolicy{level: levelFor(n.Kind, n.Level), relatedKey: n.RelatedKey, todoID: relatedTodoID(n.RelatedKey, false),
+			"", "", pushPolicy{kind: assistantwire.NotifyDone, level: levelFor(n.Kind, n.Level), relatedKey: n.RelatedKey, todoID: relatedTodoID(n.RelatedKey, false),
 				done: true, track: n.Track})
 		out = &o
 	case assistantwire.NotifyReply:
-		h.notifyReplyKeyed(from, n.DeviceID, n.Subtitle, n.SessionID, n.Title, n.Body, n.RelatedKey)
+		if held := h.notifyReplyKeyed(from, n.DeviceID, n.Subtitle, n.SessionID, n.Title, n.Body, n.RelatedKey); held != "" {
+			out = &pushOutcome{held: held}
+		}
 	case assistantwire.NotifyDecide:
 		if n.Todo == nil || n.Todo.ID == "" || n.Todo.AskedAt.IsZero() || n.Todo.Recommend == "" {
 			return nil, errors.New("a decision's push needs its to-do, when it was asked and the option its OK takes")
 		}
-		h.notifyDecideKeyed(from, n.DeviceID, n.Subtitle, n.SessionID, n.Title, n.Body, *n.Todo, n.RelatedKey)
+		if held := h.notifyDecideKeyed(from, n.DeviceID, n.Subtitle, n.SessionID, n.Title, n.Body, *n.Todo, n.RelatedKey); held != "" {
+			out = &pushOutcome{held: held}
+		}
 	case assistantwire.NotifyHealthWater:
 		return h.notifyHealthWater(from, n)
 	default:
 		return nil, fmt.Errorf("unknown notification kind %q", n.Kind)
 	}
 	return out, nil
-}
-
-// pushGradingNotifyLevel is a notify_user push's effective level while push grading is on. A level the caller named explicitly
-// (P0/P1/P2) always stands. A notice that named none and came from the main conversation still interrupts (P0): the
-// owner talking to Persona directly keeps its alerts. Every other conversation's ordinary notice is P1 — held for the
-// "Needs you" list and the briefing instead of alerting. With the switch off the level the caller named stands, so
-// delivery is exactly as before.
-func (h *Hub) pushGradingNotifyLevel(n assistantwire.Notification, derived string) string {
-	if h.push == nil || !h.push.filtering() { // hub.ln_mode on, or an attention mode in force (push_attention.go)
-		return derived
-	}
-	if n.Level != "" {
-		return derived
-	}
-	if h.isMainOn(n.DeviceID, n.SessionID) {
-		return assistantwire.LevelP0
-	}
-	return assistantwire.LevelP1
 }

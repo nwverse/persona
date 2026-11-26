@@ -37,9 +37,9 @@ the same rule. All data is made up.
 
 ## Verification
 
-- hub: `cd server && go test ./internal/kb -run MinutesWaitFixture` (`server/internal/kb/transcription_progress_test.go`).
+- hub: `cd server && go test ./internal/recordingwire -run MinutesWaitFixture` (`server/internal/recordingwire/transcription_test.go`).
 - iPhone: `apple/PersonaTests/MinutesWaitFixtureTests.swift` (the rule in `MinutesWaitLine`,
   `apple/Persona/Recording/MeetingAudioWire.swift`).
-- web: `cd web && npx vitest run src/lib/minutes-wait.test.ts` (the rule in `web/src/lib/minutes-wait.ts`).
+- web: `cd web && npx vitest run src/modules/recording/minutes-wait.test.ts` (the rule in `web/src/modules/recording/minutes-wait.ts`).
 - Android: KnowledgeMinutesTest in the feature:knowledge module (the rule in KnowledgeMinutes.kt).
 - A new case: work out the expected line and numbers by hand from the rules above, then run the hub and client checks.

@@ -183,7 +183,7 @@ class KnowledgeImportedMeetingFlowTest {
                 repository.reads.clear()
                 model.refresh(); runCurrent()
                 assertEquals(setOf(KnowledgeKind.Meetings, KnowledgeKind.Recordings), repository.reads.map { it.first }.toSet())
-                assertEquals(R.string.knowledge_unreachable, model.page.value.message)
+                assertEquals(R.string.knowledge_ui_unreachable, model.page.value.message)
                 assertEquals(listOf("m3", "r1", "r2", "r3"), model.page.value.entries.map { it.id })
                 assertEquals(listOf("weekly", "client", "travel"), model.page.value.tags)
                 assertTrue(model.page.value.loaded)

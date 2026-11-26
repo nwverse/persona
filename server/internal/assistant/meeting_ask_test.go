@@ -1,10 +1,9 @@
 package assistant
 
 import (
-	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"net/http"
 	"runtime"
 	"strings"
@@ -31,9 +30,7 @@ func askPath(id string) string { return "/api/v1/recordings/" + id + "/ask" }
 // shortAsks makes the asks' waits short for one test.
 func shortAsks(t *testing.T, hold, liveWait, timeout time.Duration) {
 	t.Helper()
-	h, w, o, p := askHold, askLiveWait, askTimeout, askLivePoll
-	askHold, askLiveWait, askTimeout, askLivePoll = hold, liveWait, timeout, 5*time.Millisecond
-	t.Cleanup(func() { askHold, askLiveWait, askTimeout, askLivePoll = h, w, o, p })
+	pendingRec(t, map[string]time.Duration{"askHold": hold, "askLiveWait": liveWait, "askTimeout": timeout, "askLivePoll": 5 * time.Millisecond}, nil)
 }
 
 // meetingAskOf is the ask of a POST …/ask answer.
@@ -54,34 +51,6 @@ func (m *meetingFixture) asksOf(id string) []map[string]any {
 		out = append(out, a.(map[string]any))
 	}
 	return out
-}
-
-// minutesFor writes minutes for recording id from reply, as the minutes round would.
-func (m *meetingFixture) minutesFor(id, reply string) {
-	m.t.Helper()
-	e := m.engine()
-	model := minutesModel{reply: reply}
-	e.Model, e.ModelFor = model, func(string) kb.Model { return model }
-	if n := e.WriteMinutes(context.Background(), 5); n < 1 {
-		m.t.Fatalf("no minutes written for %s", id)
-	}
-}
-
-// earlierMeeting is a meeting of a week ago with minutes: a decision and Bo's action item, confirmed as a to-do. The
-// to-do's id.
-func (m *meetingFixture) earlierMeeting(transcript string) string {
-	m.t.Helper()
-	m.do("PUT", "/api/v1/recordings/"+earlier, "", map[string]any{"revision": 1, "started_at": time.Now().Add(-7 * 24 * time.Hour).UTC().Format(time.RFC3339),
-		"ended_at": time.Now().Add(-7*24*time.Hour + time.Hour).UTC().Format(time.RFC3339), "device": "phone", "kind": "meeting",
-		"title": "Design review", "complete": true, "segments": []map[string]any{{"start": 0, "end": 9, "text": transcript},
-			{"start": 10, "end": 19, "text": "We keep the cap"}, {"start": 20, "end": 29, "text": "Bo adds the test"}}}, http.StatusOK)
-	m.minutesFor(earlier, `{"title":"Design review","points":[{"text":"Exports over 4 MB are dropped","line":1,"who":"Ada"}],`+
-		`"decisions":[{"text":"Keep the cap for this release","line":2}],"actions":[{"who":"Bo","what":"Add the regression test","by":"Friday","line":3},`+
-		`{"who":"Ada","what":"Write the release note","line":3}],"open":[{"text":"Per entry or per recording?","line":2}]}`)
-	out := m.do("POST", "/api/v1/recordings/"+earlier+"/minutes/todos", "", map[string]any{"version": 1, "actions": []string{"a1"}}, http.StatusOK)
-	// Material for later meetings only once marked not private (#3862).
-	m.do("PUT", "/api/v1/recordings/"+earlier+"/private", "", map[string]any{"private": false}, http.StatusOK)
-	return out["todos"].([]any)[0].(map[string]any)["id"].(string)
 }
 
 // A typed question: answered from the material within the hold, the same id answered again from the stored ask
@@ -202,10 +171,10 @@ func TestMeetingAskLimits(t *testing.T) {
 
 	// 100 questions: the 101st is refused, a stored one still answered.
 	e := m.engine()
-	if _, err := e.LiveUpdate(meetingRec, func(l *kb.Live, _ kb.Recording) error {
+	if _, err := recW(e).LiveUpdate(meetingRec, func(l *recordingwire.Live, _ kb.Recording) error {
 		for len(l.Asks) < maxAsks {
-			l.Asks = append(l.Asks, kb.LiveAsk{ID: fmt.Sprintf("b0000000-0000-4000-8000-%012d", len(l.Asks)),
-				Question: "x", QuestionSource: askTyped, State: askAnswered, Answer: "y", Sources: []kb.AskSource{}, AskedAt: time.Now().UTC()})
+			l.Asks = append(l.Asks, recordingwire.LiveAsk{ID: fmt.Sprintf("b0000000-0000-4000-8000-%012d", len(l.Asks)),
+				Question: "x", QuestionSource: askTyped, State: askAnswered, Answer: "y", Sources: []recordingwire.AskSource{}, AskedAt: time.Now().UTC()})
 		}
 		return nil
 	}); err != nil {
@@ -248,11 +217,11 @@ func TestMeetingAskHeard(t *testing.T) {
 	e := m.engine()
 	go func() { // the phone's lines up to the tap, sent once the question is stored and waits for them
 		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); runtime.Gosched() {
-			if l, _, err := e.LiveRead(meetingRec); err == nil && len(l.Asks) > 0 {
+			if l, _, err := recW(e).LiveRead(meetingRec); err == nil && len(l.Asks) > 0 {
 				break
 			}
 		}
-		_, _, _ = e.LiveAppend(meetingRec, 2, []kb.LiveSegment{{Start: 56, End: 59.5, Text: "Anyone?"}})
+		_, _, _ = recW(e).LiveAppend(meetingRec, 2, []recordingwire.LiveSegment{{Start: 56, End: 59.5, Text: "Anyone?"}})
 	}()
 	ask := meetingAskOf(t, m.do("POST", askPath(meetingRec), "", map[string]any{"id": askOne, "at": 60, "live_next": 3}, http.StatusOK))
 	if ask["state"] != "answered" || ask["question"] != "What did we decide about the cap?" || ask["question_source"] != "heard" || ask["at"] != float64(60) {
@@ -305,49 +274,14 @@ func TestMeetingAskHeardStraddlesTap(t *testing.T) {
 	}
 }
 
-// A failed question asked again before the failed attempt let go of its slot (it stored its failure, then waits for
-// the lock the retry took first): the old attempt's cleanup leaves the retry's slot alone, so the retry is not taken for
-// an interrupted one and its answer is stored.
-func TestMeetingAskRetryKeepsItsSlot(t *testing.T) {
-	m := newMeetingFixture(t)
-	m.upload(meetingRec, 1, map[string]any{"attendance": "participant"})
-	e := m.engine()
-	if _, err := e.LiveUpdate(meetingRec, func(l *kb.Live, _ kb.Recording) error {
-		l.Asks = append(l.Asks, failAsk(kb.LiveAsk{ID: askOne, QuestionSent: "Who owns the test?", Question: "Who owns the test?",
-			QuestionSource: askTyped, State: askPending, Sources: []kb.AskSource{}, AskedAt: time.Now().UTC().Truncate(time.Second)}, askModelUnavailable))
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-	gate := make(chan struct{})
-	m.model.gate = gate
-	first := make(chan struct{}) // the failed attempt's own channel
-	m.s.asks.mu.Lock()
-	m.s.asks.running = map[string]map[string]chan struct{}{meetingRec: {askOne: first}}
-	m.s.asks.mu.Unlock()
-	_, retry, err := m.s.askStart(context.Background(), e, meetingRec, askRequest{ID: askOne, Question: "Who owns the test?"}, "en")
-	if err != nil || retry == nil {
-		t.Fatalf("retry: %v", err)
-	}
-	m.s.asks.finished(meetingRec, askOne, first) // the failed attempt's deferred cleanup, after the retry took its slot
-	if asks := m.asksOf(meetingRec); len(asks) != 1 || asks[0]["state"] != "pending" {
-		t.Fatalf("the retry read as %v", asks)
-	}
-	close(gate)
-	<-retry
-	if asks := m.asksOf(meetingRec); asks[0]["state"] != "answered" || asks[0]["answer"] != "We kept the cap." {
-		t.Fatalf("the retry's answer: %v", asks)
-	}
-}
-
 // A question pending in the live log when the hub restarted (nothing in this process answers it) reads as failed,
 // interrupted, is written so, and asked again with the same id is answered.
 func TestMeetingAskInterruptedByRestart(t *testing.T) {
 	m := newMeetingFixture(t)
 	m.upload(meetingRec, 1, map[string]any{"attendance": "participant"})
-	if _, err := m.engine().LiveUpdate(meetingRec, func(l *kb.Live, _ kb.Recording) error {
-		l.Asks = append(l.Asks, kb.LiveAsk{ID: askOne, Question: "Who owns the test?", QuestionSent: "Who owns the test?", QuestionSource: askTyped,
-			State: askPending, Lang: "en-US", Speak: true, Sources: []kb.AskSource{}, AskedAt: time.Now().UTC().Truncate(time.Second)})
+	if _, err := recW(m.engine()).LiveUpdate(meetingRec, func(l *recordingwire.Live, _ kb.Recording) error {
+		l.Asks = append(l.Asks, recordingwire.LiveAsk{ID: askOne, Question: "Who owns the test?", QuestionSent: "Who owns the test?", QuestionSource: askTyped,
+			State: askPending, Lang: "en-US", Speak: true, Sources: []recordingwire.AskSource{}, AskedAt: time.Now().UTC().Truncate(time.Second)})
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -355,13 +289,13 @@ func TestMeetingAskInterruptedByRestart(t *testing.T) {
 	if asks := m.asksOf(meetingRec); len(asks) != 1 || asks[0]["state"] != "failed" || asks[0]["error"] != askInterrupted {
 		t.Fatalf("listed: %v", asks)
 	}
-	if l, _, _ := m.engine().LiveRead(meetingRec); l.Asks[0].State != askFailed || l.Asks[0].Error != askInterrupted {
+	if l, _, _ := recW(m.engine()).LiveRead(meetingRec); l.Asks[0].State != askFailed || l.Asks[0].Error != askInterrupted {
 		t.Fatalf("stored: %+v", l.Asks)
 	}
 	if a := meetingAskOf(t, m.do("POST", askPath(meetingRec), "", map[string]any{"id": askOne, "question": "Who owns the test?"}, http.StatusOK)); a["state"] != "answered" || a["error"] != nil {
 		t.Fatalf("asked again: %v", a)
 	}
-	if l, _, _ := m.engine().LiveRead(meetingRec); len(l.Asks) != 1 {
+	if l, _, _ := recW(m.engine()).LiveRead(meetingRec); len(l.Asks) != 1 {
 		t.Fatalf("a second question for one id: %+v", l.Asks)
 	}
 }
@@ -388,20 +322,6 @@ func TestMeetingAskModelFailures(t *testing.T) {
 				t.Fatalf("%v", a)
 			}
 		})
-	}
-}
-
-// The answer is plain text of at most 400 characters, cut at a sentence end when one ends in its latter half.
-func TestPlainAnswer(t *testing.T) {
-	long := strings.Repeat("Bo owns it. ", 40)
-	if got := plainAnswer(long); len([]rune(got)) > maxAnswerRunes || !strings.HasSuffix(got, "it.") {
-		t.Fatalf("%d %q", len([]rune(got)), got)
-	}
-	if got := plainAnswer(strings.Repeat("会", 500)); len([]rune(got)) != maxAnswerRunes || !strings.HasSuffix(got, "…") {
-		t.Fatalf("%d", len([]rune(got)))
-	}
-	if got := plainAnswer("  **Kept**\n the `cap`.  "); got != "Kept the cap." {
-		t.Fatalf("%q", got)
 	}
 }
 
@@ -495,20 +415,6 @@ func TestGoldenMeetingAnswer(t *testing.T) {
 	golden(t, "meeting_answer.heard", prompts.RenderMeetingAnswerInput(in))
 }
 
-// Asks as the routes show them: no answer or sources unless answered, no error unless failed, the hub's own fields
-// left out.
-func TestViewAsk(t *testing.T) {
-	at, next := 3.5, 4
-	done := time.Date(2026, 11, 10, 7, 12, 9, 0, time.UTC)
-	raw, _ := json.Marshal(viewAsk(kb.LiveAsk{ID: askOne, QuestionSent: "q", QuestionSource: askTyped, At: &at, LiveNext: &next, State: askPending,
-		Answer: "leftover", Sources: []kb.AskSource{{Kind: "projects", ID: "x"}}, Error: "old", AnsweredAt: &done, Fed: true,
-		AskedAt: time.Date(2026, 11, 10, 7, 12, 3, 0, time.UTC)}))
-	if string(raw) != `{"id":"`+askOne+`","question":"","question_source":"typed","at":3.5,"state":"pending","answer":"","lang":"","speak":false,`+
-		`"sources":[],"asked_at":"2026-11-10T07:12:03Z"}` {
-		t.Fatalf("%s", raw)
-	}
-}
-
 // Phase 1 turns earlier meetings on, with the private mark: a meeting with no mark (recorded before the mark, by a
 // #3746 phone, the watch or the Mac) or marked private is never material, nor its projects or action-item states.
 func TestMeetingAnswerExcludesMeetingsNotMarkedNotPrivate(t *testing.T) {
@@ -518,7 +424,7 @@ func TestMeetingAnswerExcludesMeetingsNotMarkedNotPrivate(t *testing.T) {
 			todo := m.earlierMeeting("Earlier transcript")
 			switch mark {
 			case "none":
-				if _, err := m.engine().MeetingUpdate(earlier, func(mt *kb.Meeting, _ kb.Recording) error { mt.Private = nil; return nil }); err != nil {
+				if _, err := recW(m.engine()).MeetingUpdate(earlier, func(mt *kb.Meeting, _ kb.Recording) error { mt.Private = nil; return nil }); err != nil {
 					t.Fatal(err)
 				}
 			case "private":

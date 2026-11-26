@@ -106,10 +106,10 @@ func TestModuleRouteFollowsModulePresence(t *testing.T) {
 func TestModuleToolFollowsModulePresence(t *testing.T) {
 	const name = "module_echo"
 	m := testSlotModule{info: moduleTestInfo("tool-test"), register: func(h modapi.Host) error {
-		return h.AddMCPTool(name, "Echo the input", json.RawMessage(`{"type":"object"}`),
-			func(_ context.Context, _, _ string, args json.RawMessage) (string, error) {
-				return "echo:" + string(args), nil
-			})
+		return h.AddMCPTool(modapi.MCPTool{Name: name, Description: "Echo the input", InputSchema: modapi.ToolSchema(`{"type":"object"}`),
+			Run: func(_ context.Context, call modapi.ToolCall) (modapi.ToolResult, error) {
+				return modapi.ToolText("echo:" + string(call.Args)), nil
+			}})
 	}}
 	m.info.MCPTools = []string{name}
 	f := newFakeHub().withMachine()
@@ -139,11 +139,14 @@ func TestModuleToolConflictWithCoreDropsWholeModule(t *testing.T) {
 	m := testSlotModule{info: moduleTestInfo("tool-conflict")}
 	m.info.MCPTools = []string{unique, "notify_user"}
 	m.register = func(h modapi.Host) error {
-		run := func(context.Context, string, string, json.RawMessage) (string, error) { return "module shadow", nil }
-		if err := h.AddMCPTool(unique, "Unique module tool", json.RawMessage(`{"type":"object"}`), run); err != nil {
+		run := func(context.Context, modapi.ToolCall) (modapi.ToolResult, error) {
+			return modapi.ToolText("module shadow"), nil
+		}
+		schema := modapi.ToolSchema(`{"type":"object"}`)
+		if err := h.AddMCPTool(modapi.MCPTool{Name: unique, Description: "Unique module tool", InputSchema: schema, Run: run}); err != nil {
 			return err
 		}
-		return h.AddMCPTool("notify_user", "Conflicting module tool", json.RawMessage(`{"type":"object"}`), run)
+		return h.AddMCPTool(modapi.MCPTool{Name: "notify_user", Description: "Conflicting module tool", InputSchema: schema, Run: run})
 	}
 	f := newFakeHub().withMachine()
 	s := New(Options{Hub: f, Store: func() Store { return &memStore{} }, Logf: testLogf(t), Modules: []modapi.Module{m}})
@@ -186,7 +189,8 @@ func TestModuleRouteConflictWithCoreDropsWholeModule(t *testing.T) {
 		if err := h.AddHubRoute(core.Routes()[0], handler); err != nil {
 			return err
 		}
-		return h.AddMCPTool(uniqueTool, "Unique module tool", json.RawMessage(`{"type":"object"}`), func(context.Context, string, string, json.RawMessage) (string, error) { return "", nil })
+		return h.AddMCPTool(modapi.MCPTool{Name: uniqueTool, Description: "Unique module tool", InputSchema: modapi.ToolSchema(`{"type":"object"}`),
+			Run: func(context.Context, modapi.ToolCall) (modapi.ToolResult, error) { return modapi.ToolResult{}, nil }})
 	}
 	s := newService([]modapi.Module{m})
 	if s.modules.Loaded("route-core-conflict") || !strings.Contains(s.modules.Skipped("route-core-conflict"), "route") {
@@ -199,6 +203,25 @@ func TestModuleRouteConflictWithCoreDropsWholeModule(t *testing.T) {
 	}
 	if slices.ContainsFunc(s.Tools(context.Background()), func(tool proto.Tool) bool { return tool.Name == uniqueTool }) {
 		t.Fatal("route-conflicting module left its tool contribution")
+	}
+}
+
+func TestModuleRouteFallbackConflictDropsModuleWithoutPanic(t *testing.T) {
+	const id = "route-fallback-conflict"
+	const pattern = "/api/v1/recordings/{id}/photos"
+	m := testSlotModule{info: moduleTestInfo(id)}
+	m.info.HubRoutes = []string{pattern}
+	m.register = func(h modapi.Host) error {
+		return h.AddHubRoute(pattern, func(http.ResponseWriter, *http.Request) {})
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("fallback route conflict panicked Service construction: %v", r)
+		}
+	}()
+	s := New(Options{Hub: newFakeHub().withMachine(), Store: func() Store { return &memStore{} }, Logf: testLogf(t), Modules: []modapi.Module{m}})
+	if s.modules.Loaded(id) || !strings.Contains(s.modules.Skipped(id), "conflicts with a core or loaded module route") {
+		t.Fatalf("fallback-conflicting module loaded %v, skipped %q", s.modules.Loaded(id), s.modules.Skipped(id))
 	}
 }
 
@@ -371,4 +394,71 @@ func TestModuleBackgroundJobFollowsModulePresence(t *testing.T) {
 	case <-time.After(75 * time.Millisecond):
 	}
 	offCancel()
+}
+
+// The client-only modules (modapi.ClientModules) have no manifest on the server, so the manager announces their flags
+// itself: on by default beside the marker, off when the modules setting names them, and never from the list when this
+// build has a module of that id (its load state decides).
+func TestClientOnlyModuleFlagsFollowTheSwitch(t *testing.T) {
+	ids := modapi.ClientModules()
+	if len(ids) == 0 {
+		t.Skip("no client-only module is listed")
+	}
+	newService := func(mods []modapi.Module, off ...string) *Service {
+		f := newFakeHub().withMachine()
+		return New(Options{Hub: f, Store: func() Store { return &memStore{} }, Logf: testLogf(t), Modules: mods, ModulesOff: off})
+	}
+	got := newService([]modapi.Module{}).moduleFeatures()
+	for _, id := range ids {
+		if !slices.Contains(got, "module."+id) {
+			t.Errorf("a core-only manager does not announce client-only module %s: %v", id, got)
+		}
+	}
+	off := ids[0]
+	got = newService([]modapi.Module{}, off).moduleFeatures()
+	if slices.Contains(got, "module."+off) || !slices.Contains(got, "modules") {
+		t.Errorf("switched off, %s is still announced or the marker is gone: %v", off, got)
+	}
+	// A built-in module of the same id, switched off or without a feature, is not announced from the list.
+	same := testSlotModule{info: moduleTestInfo(off)}
+	if got = newService([]modapi.Module{same}).moduleFeatures(); slices.Contains(got, "module."+off) {
+		t.Errorf("a built-in module %s without a feature was announced from the client-only list: %v", off, got)
+	}
+}
+
+// persona_settings accepts a client-only id in the modules switch: the change reaches the approval card and, approved,
+// the stored row; the next start then leaves the flag out.
+func TestModuleSwitchSettingAcceptsClientOnlyIDs(t *testing.T) {
+	ids := modapi.ClientModules()
+	if len(ids) == 0 {
+		t.Skip("no client-only module is listed")
+	}
+	ctx := context.Background()
+	st := &memStore{}
+	f := newFakeHub().withMachine()
+	s := withSettings(t, f, New(Options{Hub: f, Store: func() Store { return st }, Logf: testLogf(t), Modules: []modapi.Module{}}))
+	done := make(chan string, 1)
+	go func() {
+		r := s.Tool(ctx, ToolCall{Name: "persona_settings", MachineID: "server", SessionID: "main",
+			Arguments: json.RawMessage(`{"action":"set","key":"modules","value":{"disabled":["` + ids[0] + `"]}}`)})
+		done <- r.Content[0].Text
+	}()
+	card, ok := awaitCard(s)
+	if !ok {
+		t.Fatalf("switching client-only module %s off made no approval card; tool returned %q", ids[0], <-done)
+	}
+	yes := true
+	if _, err := s.Action(ctx, Action{Op: "answer", InteractionID: card.ID,
+		Answer: json.RawMessage(mustMarshal(proto.Resolution{Allow: &yes}))}); err != nil {
+		t.Fatal(err)
+	}
+	resultOf(t, done, 5*time.Second)
+	off := ReadModuleSwitch(ctx, st, t.Logf)
+	if !slices.Equal(off, []string{ids[0]}) {
+		t.Fatalf("approved disabled list = %v", off)
+	}
+	next := New(Options{Hub: newFakeHub().withMachine(), Store: func() Store { return st }, Logf: testLogf(t), Modules: []modapi.Module{}, ModulesOff: off})
+	if got := next.moduleFeatures(); slices.Contains(got, "module."+ids[0]) {
+		t.Errorf("after the next start %s is still announced: %v", ids[0], got)
+	}
 }

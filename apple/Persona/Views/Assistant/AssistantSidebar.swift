@@ -800,6 +800,9 @@ struct AssistantSidebar: View {
     var onOpenExtension: ((ExtensionNavRoute) -> Void)? = nil
     /// Health: the health space's page (docs/assistant/health.md); nil leaves the row out.
     var openHealth: (() -> Void)? = nil
+    /// The `health` module provides Health's page (#14278); while it is off the row is left out. Observed: a hello that
+    /// turns it on or off draws the sidebar again.
+    private var hasHealth: Bool { Modules.registry.shellPage(id: SidebarRoute.healthPage) != nil }
     /// A domain space (#13500, docs/apple/ios.md "Domain spaces"): its latest conversation, else its home; and New
     /// space. nil leaves the Spaces section out.
     var openSpace: ((String) -> Void)? = nil
@@ -988,8 +991,8 @@ struct AssistantSidebar: View {
     /// What a folded Pages heading still says: Inbox's and To-dos' counts (the web's tally).
     @ViewBuilder private var placesTally: some View {
         if placesFolded {
-            let inbox = InboxStore.shared.unreadCount
-            let todos = TodoStore.shared.isSupported ? TodoStore.shared.sidebarCount : 0
+            let inbox = showsInbox ? InboxStore.shared.unreadCount : 0
+            let todos = showsTodos ? TodoStore.shared.sidebarCount : 0
             HStack(spacing: Theme.Space.xs) {
                 if inbox > 0 { CountBadge(count: inbox, look: .needs, label: String(localized: "Inbox")) }
                 if todos > 0 {
@@ -1342,7 +1345,7 @@ extension AssistantSidebar {
     // MARK: Spaces (#13500)
 
     /// The assistant has tracks and this sidebar opens spaces.
-    private var showsSpaces: Bool { openSpace != nil && SpaceStore.shared.supported == true }
+    private var showsSpaces: Bool { openSpace != nil && ExtensionSlots.shared.spaceConversationsEnabled && SpaceStore.shared.supported == true }
 
     /// The whole sidebar's Spaces: a heading over the spaces' rows and New space, under the places.
     @ViewBuilder private var spacesSection: some View {
@@ -1371,19 +1374,36 @@ extension AssistantSidebar {
 
     // MARK: What to start
 
+    private var showsInbox: Bool {
+        #if os(iOS)
+        !model.hiddenNavigationPages.contains(.inbox)
+        #else
+        true
+        #endif
+    }
+
+    private var showsTodos: Bool {
+        #if os(iOS)
+        if model.hiddenNavigationPages.contains(.todos) { return false }
+        #endif
+        return TodoStore.shared.isSupported
+    }
+
     @ViewBuilder private func actions(_ all: [Session]) -> some View {
         if let openInbox, let onMachines {
             // The shell's: the places to go (the main conversation is the row above them, `mainItem`).
             VStack(alignment: .leading, spacing: 0) {
                 meetingRow
-                action(String(localized: "Inbox"), Theme.Icon.inbox, id: "sidebar-inbox", count: InboxStore.shared.unreadCount, place: .inbox, run: openInbox)
+                if showsInbox {
+                    action(String(localized: "Inbox"), Theme.Icon.inbox, id: "sidebar-inbox", count: InboxStore.shared.unreadCount, place: .inbox, run: openInbox)
+                }
                 starredRow
-                if TodoStore.shared.isSupported {
+                if showsTodos {
                     todosRow { (openTodos ?? openInbox)() }
                 }
                 action(String(localized: "Scheduled Tasks"), Theme.Icon.schedule, place: .routines, run: openRoutines)
                 action(String(localized: "Knowledge"), Theme.Icon.knowledge, place: .knowledge, run: openKnowledge)
-                if let openHealth { action(String(localized: "Health"), Theme.Icon.health, id: "sidebar-health", place: .health, run: openHealth) }
+                if let openHealth, hasHealth { action(String(localized: "Health"), Theme.Icon.health, id: "sidebar-health", place: .health, run: openHealth) }
                 action(String(localized: "Machines"), Theme.Icon.machines, id: "sidebar-machines", place: .machines, run: onMachines)
                 if let openMessages {
                     action(String(localized: "Messages [Quote Views 4da199]"), Theme.Icon.feishuChats, id: "sidebar-messages", place: .messages, run: openMessages)
@@ -1402,7 +1422,7 @@ extension AssistantSidebar {
             starredRow
             action(String(localized: "Scheduled Tasks"), Theme.Icon.schedule, run: openRoutines)
             action(String(localized: "Knowledge"), Theme.Icon.knowledge, run: openKnowledge)
-            if let openHealth { action(String(localized: "Health"), Theme.Icon.health, id: "sidebar-health", run: openHealth) }
+            if let openHealth, hasHealth { action(String(localized: "Health"), Theme.Icon.health, id: "sidebar-health", run: openHealth) }
             extensionRows
         }
     }
@@ -1431,17 +1451,23 @@ extension AssistantSidebar {
     /// title and badge, in the hub's order. Nothing with a hub without slots.
     @ViewBuilder private var extensionRows: some View {
         if let onOpenExtension, ExtensionSlots.shared.available {
-            ForEach(ExtensionSlots.shared.pages) { p in
+            ForEach(ExtensionSlots.shared.pages, id: \.scopedID) { p in
                 extensionRow(p) { onOpenExtension(ExtensionNavRoute(p)) }
             }
         }
     }
 
+    nonisolated static func isExtensionSelected(_ place: ExtensionUIPlace, shown: ShellPage?) -> Bool {
+        guard case .extensionPage(let route) = shown else { return false }
+        return route.id == place.scopedID
+    }
+
     @ViewBuilder private func extensionRow(_ p: ExtensionUIPlace, run: @escaping () -> Void) -> some View {
         let symbol = ExtensionSlots.icon(p.icon)
+        let selected = Self.isExtensionSelected(p, shown: shownPlace)
         Group {
             if AppStyle.current.usesBeautifulUI {
-                BUISidebarRow(p.title, symbol: Theme.Icon.styled(symbol), action: run) {
+                BUISidebarRow(p.title, symbol: Theme.Icon.styled(symbol), isActive: selected, action: run) {
                     if let b = p.badge { ExtensionBadgeView(badge: b) }
                 }
             } else {
@@ -1458,6 +1484,9 @@ extension AssistantSidebar {
                     .padding(.horizontal, Theme.Space.m)
                     .padding(.vertical, Theme.Sidebar.rowPadding)
                     .scaledFrame(minHeight: Theme.Sidebar.row)
+                    .background {
+                        if selected { SidebarSelectedShade() }
+                    }
                     .contentShape(.rect)
                 }
                 .buttonStyle(.plain)
@@ -1466,7 +1495,7 @@ extension AssistantSidebar {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(p.title)
         .accessibilityValue(p.badge?.text ?? "")
-        .accessibilityAddTraits(.isButton)
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction { run() }
         .accessibilityIdentifier("sidebar-extension-\(p.owner)-\(p.id)")
     }

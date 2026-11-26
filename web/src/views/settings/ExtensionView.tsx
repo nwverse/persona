@@ -10,10 +10,12 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExt
 import { ApiError, credentialOwner, errorText, getToken, onCredentialChange } from "../../lib/api";
 import { extIdOf } from "../../lib/extension-api";
 import { openLink } from "../../lib/links";
+import { openTargetOf } from "../../ui/AssistantCard";
 import {
-  actUI, fieldValues, isReservedUI, isUnsupported, numberProblem, outcome, pushPage, refreshDelay, renderUI, submitValues, uiPlaces, UI_VERSION,
+  actUI, fieldValues, httpOnlyUI, isUnsupported, numberProblem, outcome, pushPage, refreshDelay, renderUI, submitValues, uiPlaces, UI_VERSION,
   type UIAction, type UIContext, type UIFilter, type UIItem, type UIMore, type UIPage, type UIPlace, type UIPush, type UISearch, type UITabs, type UIView,
 } from "../../lib/extension-ui";
+import { takeOverlayEntry, withoutOverlayState } from "../../lib/back-close";
 import { navigate } from "../../lib/router";
 import { isResumed } from "../../lib/reconnect";
 import { appSocketReady, onAppSocket, onHubEvent } from "../../lib/store";
@@ -24,15 +26,18 @@ import { NATIVE, NativeTabs } from "../../ui/ExtensionNative";
 import { keepLoaded, patchView } from "../../lib/code-review";
 import { KeysHelp, ReviewBar, ReviewKeys, ReviewProvider, ReviewToolbar, reviewing } from "../extensions/DiffReview";
 import { Icon } from "../../ui/icons";
-import { useStore } from "../../lib/store";
+import { getState, useStore } from "../../lib/store";
 import { canTryUIStream } from "../../lib/extension-ui-stream-gate";
 import { lazyPage } from "../../lib/lazy-page";
 import { PageBoundary } from "../PageBoundary";
-import { defaultKnown, defaultManager, otherManager, useKnownDefault, useLinkManager } from "../../lib/manager-choice";
+import { sendDraft } from "../../lib/drafts";
+import { conversationPage } from "../../lib/conversation-page";
+import { chosenManager, defaultKnown, defaultManager, otherManager, useKnownDefault, useLinkManager } from "../../lib/manager-choice";
 import { keepView, NATIVE_UI_VERSION, readKeptView } from "../../lib/extension-view-cache";
 import type { UIRowControl } from "../../lib/extension-ui-v6";
+import { ExtensionSetupNotice } from "./ExtensionSetupNotice";
 import { currentLanguage, t } from "../../i18n";
-import { HEALTH_INTAKE_UI } from "../../lib/health-intake-ui";
+import { HEALTH_INTAKE_UI, STRENGTH_EVENT } from "../../lib/health-intake-ui";
 import { SUBSCRIPTIONS_UI } from "../../lib/subscriptions-ui";
 import { ExtensionOwnerScope } from "../../lib/extension-owner";
 
@@ -102,8 +107,10 @@ function useInvalidate(extension: string, ui: string, draw: () => void, skipHell
     });
     // the subscription pages (#2041): a subscription saved, run or deleted anywhere draws them again
     const offSubscription = extension === SUBSCRIPTIONS_UI ? onHubEvent("subscription", () => now()) : () => {};
-    // the health pages (#13176): a record logged or undone anywhere, or a goal saved, draws them again
+    // the health pages (#13176): a record logged or undone anywhere, or a goal saved, draws them again; so does any
+    // change to strength training (#14713: its message carries nothing, the pages and the home card read again)
     const offIntake = extension === HEALTH_INTAKE_UI ? onHubEvent("health_intake", () => now()) : () => {};
+    const offStrength = extension === HEALTH_INTAKE_UI ? onHubEvent(STRENGTH_EVENT, () => now()) : () => {};
     // a reconnect the hub could not resume: an invalidate missed meanwhile is not replayed (#4954)
     const offHello = onHubEvent("hello", (msg) => !isResumed(msg) && !skipHelloRef.current?.() && now());
     const shown = () => {
@@ -114,6 +121,7 @@ function useInvalidate(extension: string, ui: string, draw: () => void, skipHell
       off();
       offSubscription();
       offIntake();
+      offStrength();
       offHello();
       clearTimeout(timer);
       document.removeEventListener("visibilitychange", shown);
@@ -180,8 +188,10 @@ export function ExtensionUI({ remember, ...props }: Parameters<typeof LegacyExte
   if (ready) negotiated.current = true;
   // System/embedded slots remain full fitted snapshots. Old hubs keep the exact existing component.
   // Another manager's extension draws over HTTP, which names its manager on each request (docs/assistant/managers.md "Clients").
-  // The subscription pages (#2041) are the manager's, drawn over HTTP only.
-  const baseHttp = legacyNegotiation || !supported || props.embedded || props.compact || otherManager(props.manager) || isReservedUI(props.extension);
+  // The manager's own pages (an id starting with "-": the subscription pages #2041, Dashboards #15017) are drawn over HTTP
+  // only, so they have nothing to wait for the hello for either.
+  const managerPage = httpOnlyUI(props.extension);
+  const baseHttp = legacyNegotiation || !supported || props.embedded || props.compact || otherManager(props.manager) || managerPage;
   // The page's last view, until it is drawn again: one drawn with a UI version it may be drawn with now (before the hello
   // either; over the socket also HTTP's, which a page the socket cannot draw falls back to) by the default's extension
   // (before the roster, the last one drawn).
@@ -200,13 +210,13 @@ export function ExtensionUI({ remember, ...props }: Parameters<typeof LegacyExte
   const httpLocked = useRef("");
   const lockedHttp = httpLocked.current === mountKey;
   const http = lockedHttp || baseHttp || knownHttp;
-  const waitingHello = !lockedHttp && !knownHttp && !props.embedded && !props.compact && typeof localStorage !== "undefined" && !!getToken() && !ready && !negotiated.current;
+  const waitingHello = !lockedHttp && !knownHttp && !managerPage && !props.embedded && !props.compact && typeof localStorage !== "undefined" && !!getToken() && !ready && !negotiated.current;
   useEffect(() => {
     if (!waitingHello || legacyNegotiation) return;
     const timer = setTimeout(() => setLegacyNegotiation(true), HELLO_NEGOTIATION_MS);
     return () => clearTimeout(timer);
   }, [waitingHello, legacyNegotiation]);
-  const placeholder = kept ? <KeptView view={kept.view} native={kept.key.version === NATIVE_UI_VERSION} compact={props.compact} bare={props.bare} title={props.title} onWide={props.onWide} /> : undefined;
+  const placeholder = kept ? <KeptView view={kept.view} native={kept.key.version === NATIVE_UI_VERSION} compact={props.compact} bare={props.bare} title={props.title} onWide={props.onWide} onTitle={props.onTitle} /> : undefined;
   const onView = useCallback((view: UIView, version: number, manager = defaultId || (defaultKnown() ? defaultManager() : "")) => {
     if (!page || !manager) return;
     const [extension, ui, state, language] = JSON.parse(page) as string[];
@@ -238,9 +248,10 @@ export function ExtensionUI({ remember, ...props }: Parameters<typeof LegacyExte
  *  "Updating" in the page's top margin, so nothing moves when the drawing replaces it. `native`: drawn over the socket,
  *  which titles the page itself. `compact`: a card's (#11091), its sections laid out as the drawing's own in the card's
  *  column (`contents`), "Updating" for screen readers only: the card's heading marks it (OverviewCard, by `data-kept-view`). */
-function KeptView({ view, native, compact, bare, title, onWide }: { view: UIView; native: boolean; compact?: boolean; bare?: boolean; title?: string; onWide?: (wide: boolean) => void }) {
+function KeptView({ view, native, compact, bare, title, onWide, onTitle }: { view: UIView; native: boolean; compact?: boolean; bare?: boolean; title?: string; onWide?: (wide: boolean) => void; onTitle?: (title: string | undefined) => void }) {
   const wide = wideView(view);
   useEffect(() => onWide?.(wide), [wide, onWide]);
+  useEffect(() => onTitle?.(view.title), [view.title, onTitle]);
   const values = useMemo(() => fieldValues(view), [view]);
   const first = view.sections[0]?.items[0];
   const titled = view.title || title;
@@ -315,17 +326,19 @@ function KeptView({ view, native, compact, bare, title, onWide }: { view: UIView
 }
 export function LegacyExtensionUI({
   extension, ui, context, embedded, compact, bare, title, onUnsupported, onMissing, onFailed, revision, onOpenSource, pages, history: withHistory, state: firstState, onWide, onDepth, navigation, active = true, manager,
-  placeholder, onView,
+  placeholder, onView, onTitle, openPage, onClose, setupOwner,
 }: {
   extension: string; ui: string; context?: UIContext; embedded?: boolean; compact?: boolean; bare?: boolean; title?: string;
   /** Whose extension it is (another manager's inbox item or computer, docs/assistant/managers.md "Clients"); none: the default's. */
   manager?: string;
+  /** A direct page can recover from its first 404 by opening the owning installation's settings. */
+  setupOwner?: string; // empty until the direct page's default manager is known
   onUnsupported?: () => void; onMissing?: () => void; onFailed?: (e: unknown) => void; revision?: string; onOpenSource?: () => void;
   pages?: "stack" | "open"; history?: boolean; state?: string;
   /** A native/legacy mixed stack has one history owner; HTTP entries delegate navigation. */
   navigation?: { push: (page: UIPush) => void; pop: () => void };
   active?: boolean;
-  /** The view drawn needs a wide page (UI version 4: split, code, diffs) or not. */
+  /** The view drawn needs a wide page (split, columns, code, diffs, or canvas components such as graph, scene, map) or not. */
   onWide?: (wide: boolean) => void;
   /** How many pages deep its stack is, whenever that changes (Inbox Sources keeps its List / Relationships switch on the first). */
   onDepth?: (depth: number) => void;
@@ -333,12 +346,40 @@ export function LegacyExtensionUI({
   placeholder?: ReactNode;
   /** The first page drew a view not typed into, asked with UI `version` (by `manager`'s extension; none: the default's). */
   onView?: (view: UIView, version: number, manager?: string) => void;
+  /** The first page's title as its view (or the kept one) says it, each time it is drawn: the page around it titles its
+   *  header with it (a Dashboards page, whose place is not listed unless pinned, #15017). */
+  onTitle?: (title: string | undefined) => void;
+  /** A push the page around opens itself, as a page of its own; true when it did (Dashboards' index opening a page, #15017). */
+  openPage?: (page: UIPush) => boolean;
+  /** The first page asked to be taken off (a pop with nothing under it): the page around it closes. Without it, ignored. */
+  onClose?: () => void;
 }) {
-  const [stack, setStack] = useState<UIPage[]>(() => [{ ui, ...(firstState ? { state: firstState } : {}) }]);
+  type StackEntry = UIPage & { id: number; initialState?: string };
+  const nextEntryId = useRef(1);
+  const [stack, setStack] = useState<StackEntry[]>(() => [
+    { id: 1, ui, ...(firstState ? { state: firstState, initialState: firstState } : {}) },
+  ]);
+  const stackRef = useRef(stack);
+  stackRef.current = stack;
+  const poppingRef = useRef<number | null>(null);
   const linkManager = useLinkManager();
   const top = stack[stack.length - 1];
-  const [view, setView] = useState<UIView | null>(null);
-  const [error, setError] = useState("");
+  const depth = stack.length;
+  const pageKey = `${top.id}\n${depth}\n${top.ui}`;
+  const pageKeyRef = useRef(pageKey);
+  pageKeyRef.current = pageKey;
+  const [shownView, setShownView] = useState<{ key: string; view: UIView } | null>(null);
+  const view = shownView?.key === pageKey ? shownView.view : null;
+  const setView = useCallback((next: UIView | null | ((before: UIView | null) => UIView | null)) => {
+    const key = pageKeyRef.current;
+    setShownView((cur) => {
+      const prev = cur?.key === key ? cur.view : null;
+      const resolved = typeof next === "function" ? next(prev) : next;
+      return resolved ? { key, view: resolved } : null;
+    });
+  }, []);
+  const [failure, setFailure] = useState<{ message: string; checkSetup: boolean; attempt: number }>();
+  const error = failure?.message;
   const [unsupported, setUnsupported] = useState(false);
   const [loading, setLoading] = useState(false);
   const [values, setValues] = useState<Record<string, string>>({});
@@ -354,50 +395,76 @@ export function LegacyExtensionUI({
   const [query, setQuery] = useState(""); // the search box as typed
   const stateRef = useRef<string | undefined>(top.state);
   const drawnRef = useRef(false); // a view has been drawn
+  const asked = useRef(0);
+  const inFlightRef = useRef(false);
   const ctxKey = `${context?.launcher ?? ""}\n${context?.machine ?? ""}\n${context?.item ?? ""}\n${context?.size ?? ""}`;
   const mode = pages ?? (compact || embedded ? "open" : "stack");
-  const depth = stack.length;
-  const pageKey = `${depth}\n${top.ui}`;
   useEffect(() => onDepth?.(depth), [depth, onDepth]);
 
   // the first page follows the props (a different extension or page opened in the same place)
+  const propKey = `${extension}\0${ui}\0${firstState ?? ""}`;
+  const lastPropKey = useRef(propKey);
   useEffect(() => {
-    setStack([{ ui, ...(firstState ? { state: firstState } : {}) }]);
-  }, [extension, ui, firstState]);
+    if (lastPropKey.current === propKey) return;
+    lastPropKey.current = propKey;
+    asked.current += 1;
+    poppingRef.current = null;
+    const entry: StackEntry = { id: ++nextEntryId.current, ui, ...(firstState ? { state: firstState, initialState: firstState } : {}) };
+    const next = [entry];
+    stackRef.current = next;
+    pageKeyRef.current = `${entry.id}\n1\n${entry.ui}`;
+    setStack(next);
+  }, [propKey, ui, firstState]);
 
   // keep: drawn again for the same thing, the fields typed into stay as typed
-  const show = (v: UIView, keep = false) => {
+  const show = (v: UIView, keep = false, expectedKey = pageKeyRef.current, expectedId = stackRef.current.at(-1)?.id) => {
+    const current = stackRef.current;
+    const lastIdx = current.length - 1;
+    const curTop = current[lastIdx];
+    if (!curTop || pageKeyRef.current !== expectedKey || curTop.id !== expectedId) return;
     // drawn again for the same page: the diffs loaded since stay (UI version 5)
     setView((before) => (keep ? keepLoaded(before, v) : v));
     const start = fieldValues(v);
     setValues((old) => (keep ? Object.fromEntries(Object.entries(start).map(([k, x]) => [k, old[k] ?? x])) : start));
-    stateRef.current = v.state;
+    const nextState = v.state ?? curTop.initialState;
+    stateRef.current = nextState;
+    const nextTitle = v.title || curTop.title;
+    if (curTop.state !== nextState || curTop.title !== nextTitle) {
+      const updated: StackEntry = { id: curTop.id, ui: curTop.ui };
+      if (curTop.initialState !== undefined) updated.initialState = curTop.initialState;
+      if (nextState !== undefined) updated.state = nextState;
+      if (nextTitle !== undefined) updated.title = nextTitle;
+      const nextStack = [...current.slice(0, lastIdx), updated];
+      stackRef.current = nextStack;
+      setStack(nextStack);
+    }
     drawnRef.current = true;
     // a control's choice stays only while its request is on its way: once answered, what the extension draws is shown
     setControls((c) => keepFlying(c, flight.current));
     if (!keep) setQuery(v.search?.value ?? "");
-    setError("");
+    setFailure(undefined);
     setUnsupported(false); // a view drawn is something here
     setDrawnAt(Date.now());
   };
   // Every request that draws the whole view (a draw, a press, a search) takes the next number when it leaves: an answer
   // whose number is not the latest any more is older than what was asked since (a press, another page, the next search)
   // and is not drawn, nor its error shown (#4931).
-  const asked = useRef(0);
-  const inFlightRef = useRef(false);
   const load = useCallback((keep?: boolean) => {
     const mine = ++asked.current;
+    const expectedKey = pageKey;
+    const expectedId = top.id;
     inFlightRef.current = true;
     setLoading(true);
     renderUI(extension, top.ui, context, stateRef.current, manager)
-      .then((v) => mine === asked.current && show(v, keep === true))
+      .then((v) => mine === asked.current && show(v, keep === true, expectedKey, expectedId))
       .catch((e) => {
         if (mine !== asked.current) return;
         if (isUnsupported(e)) (setUnsupported(true), onUnsupported?.());
         else if (onMissing && e instanceof ApiError && e.status === 404 && depth === 1) onMissing();
         else if (onFailed && !drawnRef.current) onFailed(e);
         else {
-          setError(errorText(e));
+          setFailure({ message: errorText(e), attempt: mine, checkSetup: setupOwner !== undefined && !drawnRef.current
+            && depth === 1 && !httpOnlyUI(extension) && e instanceof ApiError && e.status === 404 });
           setDrawnAt(Date.now()); // a failed refresh waits a whole interval too
         }
       })
@@ -412,7 +479,7 @@ export function LegacyExtensionUI({
     stateRef.current = top.state;
     drawnRef.current = false;
     setView(null);
-    setError("");
+    setFailure(undefined);
     setUnsupported(false); // "nothing here" was the page before's answer
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -421,6 +488,10 @@ export function LegacyExtensionUI({
   useEffect(() => {
     if (view) onWide?.(wide);
   }, [wide, view, onWide]);
+  const viewTitle = view && depth === 1 ? view.title : null;
+  useEffect(() => {
+    if (viewTitle !== null) onTitle?.(viewTitle);
+  }, [viewTitle, onTitle]);
   // the first page as the extension drew it, unless its fields hold what was typed and not sent (a redraw keeps them)
   const valuesNow = useRef(values);
   valuesNow.current = values;
@@ -452,32 +523,82 @@ export function LegacyExtensionUI({
   useEffect(() => {
     if (!historied) return;
     const onPop = (e: PopStateEvent) => {
+      poppingRef.current = null;
       const at = typeof (e.state as { extPage?: unknown } | null)?.extPage === "number" ? (e.state as { extPage: number }).extPage : 1;
-      setStack((s) => (at < s.length ? s.slice(0, Math.max(1, at)) : s));
+      const current = stackRef.current;
+      if (at >= current.length) return;
+      const next = current.slice(0, Math.max(1, at));
+      const nextTop = next[next.length - 1];
+      asked.current += 1;
+      stackRef.current = next;
+      pageKeyRef.current = `${nextTop.id}\n${next.length}\n${nextTop.ui}`;
+      setStack(next);
     };
     addEventListener("popstate", onPop);
-    return () => removeEventListener("popstate", onPop);
+    return () => {
+      poppingRef.current = null;
+      removeEventListener("popstate", onPop);
+    };
   }, [historied]);
 
   const push = (p: UIPush) => {
+    if (openPage?.(p)) return;
     if (navigation) { navigation.push(p); return; }
+    const current = stackRef.current;
+    const curTop = current[current.length - 1];
     if (mode === "open") {
-      navigate(pageHref(extension, p.ui || top.ui, p.state));
+      navigate(pageHref(extension, p.ui || curTop.ui, p.state));
       return;
     }
-    const next = pushPage(stack, p, top.ui);
-    if (historied && next.length > stack.length) history.pushState({ ...(history.state ?? {}), extPage: next.length }, "", location.href);
+    const pushed = pushPage(current, p, curTop.ui);
+    const next: StackEntry[] = pushed.map((entry, idx) =>
+      idx === pushed.length - 1
+        ? { ...entry, id: ++nextEntryId.current, ...(entry.state !== undefined ? { initialState: entry.state } : {}) }
+        : current[idx] ?? { ...entry, id: ++nextEntryId.current, ...(entry.state !== undefined ? { initialState: entry.state } : {}) },
+    );
+    const nextTop = next[next.length - 1];
+    asked.current += 1;
+    poppingRef.current = null;
+    if (historied && next.length > current.length) {
+      // Pushing onto this stack from inside an open overlay (e.g. a Full screen map/graph stop) replaces the
+      // overlay's entry without its markers so closing the overlay does not immediately history.back() off the new page.
+      const nextState = { ...(withoutOverlayState(history.state) ?? {}), extPage: next.length };
+      if (takeOverlayEntry()) history.replaceState(nextState, "", location.href);
+      else history.pushState(nextState, "", location.href);
+    }
+    stackRef.current = next;
+    pageKeyRef.current = `${nextTop.id}\n${next.length}\n${nextTop.ui}`;
     setStack(next);
   };
   const pop = () => {
     if (navigation) { navigation.pop(); return; }
-    if (stack.length <= 1) return;
-    if (historied) history.back(); // the popstate above takes the page off
-    else setStack((s) => s.slice(0, -1));
+    const current = stackRef.current;
+    if (current.length <= 1) {
+      onClose?.();
+      return;
+    }
+    if (historied) {
+      if (poppingRef.current === current.length) return;
+      poppingRef.current = current.length;
+      history.back(); // the popstate above takes the page off
+    } else {
+      const next = current.slice(0, -1);
+      const nextTop = next[next.length - 1];
+      asked.current += 1;
+      stackRef.current = next;
+      pageKeyRef.current = `${nextTop.id}\n${next.length}\n${nextTop.ui}`;
+      setStack(next);
+    }
   };
 
   // resolves to whether the action was done: false when it did not go (a field not a number) or failed
   const run = async (action: UIAction, extra?: Record<string, string>): Promise<boolean> => {
+    // A full page may open an existing Persona session or to-do (#14617): route locally, like an assistant card.
+    // The hub only keeps session and task targets on extension pages; other forms still go through ui.action.
+    if (action.open) {
+      openTargetOf(action.open, linkManager);
+      return true;
+    }
     if (action.push) {
       push(action.push);
       return true;
@@ -494,19 +615,24 @@ export function LegacyExtensionUI({
     }
     setBusy(action.id);
     const mine = ++asked.current;
+    const expectedKey = pageKey;
+    const expectedId = top.id;
     try {
       const r = outcome(await actUI(extension, top.ui, action.id, { context, state: stateRef.current, values: sent, manager }), context?.item, extension);
       // what it says to do is still done; the view it answers only while nothing was asked since
-      const latest = mine === asked.current;
-      if (r.view && latest) show(r.view, !!(extra && "q" in extra)); // a search keeps what is typed
+      const latest = mine === asked.current && pageKeyRef.current === expectedKey && stackRef.current.at(-1)?.id === expectedId;
+      if (r.view && latest) show(r.view, !!(extra && "q" in extra), expectedKey, expectedId); // a search keeps what is typed
       if (r.items && latest) setView((v) => (v ? patchView(v, r.items) : v));
       if (r.toast) toast(r.toast, "ok");
       if (r.url) openLink(r.url, undefined, linkManager);
+      if (r.track) navigate(r.track);
       if (r.source) onOpenSource?.();
       // an extension's own settings (persona://settings/extensions/<id>) open in the app
       if (r.settings) navigate(r.settings);
       // the subscription pages' Set Up with … (persona://ask): the text to the assistant's main conversation, which opens
       if (r.ask) askAssistant(r.ask);
+      // an extension's own quick prompt (persona://compose?prompt=<id>&text=<text>): into the main composer, not sent
+      if (r.compose) composeAssistant(r.compose);
       if (r.push) push(r.push);
       if (r.pop) pop();
       if (r.reload) load();
@@ -527,10 +653,13 @@ export function LegacyExtensionUI({
     async (action: UIAction, extra?: Record<string, string>) => {
       // it does not take a number (it does not make a draw on its way older), but its view is not drawn over a newer one
       const at = asked.current;
+      const expectedKey = pageKey;
+      const expectedId = top.id;
       try {
         const r = await actUI(extension, top.ui, action.id, { context, state: stateRef.current, values: { ...extra, ...action.values }, manager });
-        if (r.items?.length) setView((v) => (v ? patchView(v, r.items) : v));
-        if (r.view && at === asked.current) show(r.view, true);
+        const sameEntry = pageKeyRef.current === expectedKey && stackRef.current.at(-1)?.id === expectedId;
+        if (r.items?.length && sameEntry) setView((v) => (v ? patchView(v, r.items) : v));
+        if (r.view && at === asked.current && sameEntry) show(r.view, true, expectedKey, expectedId);
         if (r.toast) toast(r.toast, "ok");
         return r;
       } catch (e) {
@@ -551,6 +680,8 @@ export function LegacyExtensionUI({
     };
     flight.current.set(c.name, entry);
     const at = asked.current;
+    const expectedKey = pageKey;
+    const expectedId = top.id;
     let r: ReturnType<typeof outcome> | null = null;
     try {
       r = outcome(await actUI(extension, top.ui, c.action.id, { context, state: stateRef.current, values: { ...c.action.values, [c.name]: value }, manager }), context?.item, extension);
@@ -564,14 +695,16 @@ export function LegacyExtensionUI({
     if (entry.queued) void sendControl(entry.queued.c, entry.queued.value);
     else if (!r) setControls((x) => without(x, c.name)); // failed: the extension's last value again
     if (!r) return;
-    if (r.view && at === asked.current) show(r.view, true);
-    if (r.items) setView((v) => (v ? patchView(v, r.items) : v));
-    if ((r.view || r.items) && !entry.queued) setControls((x) => without(x, c.name));
+    const sameEntry = pageKeyRef.current === expectedKey && stackRef.current.at(-1)?.id === expectedId;
+    const applied = sameEntry && ((!!r.view && at === asked.current) || !!r.items);
+    if (r.view && at === asked.current && sameEntry) show(r.view, true, expectedKey, expectedId);
+    if (r.items && sameEntry) setView((v) => (v ? patchView(v, r.items) : v));
+    if (applied && !entry.queued) setControls((x) => without(x, c.name));
     if (r.toast) toast(r.toast, "ok");
     if (r.url) openLink(r.url, undefined, linkManager);
     if (r.push) push(r.push);
     if (r.pop) pop();
-    if (r.reload) load(true);
+    if (r.reload || (r.view && sameEntry && at !== asked.current && !inFlightRef.current)) load(true);
   };
   const applyControl = (c: UIRowControl, value: string) => {
     setControls((x) => ({ ...x, [c.name]: value }));
@@ -724,16 +857,18 @@ export function LegacyExtensionUI({
         </div>
       )}
       {error && !compact && (
-        <div className={cx("flex flex-col items-center gap-2 px-6 text-center", embedded ? "rounded-control bg-inset py-4 shadow-hairline" : "rounded-card bg-surface py-8 shadow-card")}>
-          <span className="flex size-9 items-center justify-center rounded-[10px] bg-red-tint text-red">
-            <Icon name="extension" size={16} />
-          </span>
-          <p className="text-meta font-medium text-ink">{view ? t("settings-extensionview.update_failed") : t("settings-extensionview.draw_failed")}</p>
-          <p className="max-w-[420px] text-label leading-relaxed break-words text-ink-3 select-text">{error}</p>
-          <Button tone="secondary" icon="retry" busy={loading} onClick={() => load()}>
-            {t("settings-extensionview.retry")}
-          </Button>
-        </div>
+        <ExtensionSetupNotice key={JSON.stringify([failure.attempt, setupOwner])} check={failure.checkSetup} extension={extension} manager={setupOwner || undefined}>
+          <div className={cx("flex flex-col items-center gap-2 px-6 text-center", embedded ? "rounded-control bg-inset py-4 shadow-hairline" : "rounded-card bg-surface py-8 shadow-card")}>
+            <span className="flex size-9 items-center justify-center rounded-[10px] bg-red-tint text-red">
+              <Icon name="extension" size={16} />
+            </span>
+            <p className="text-meta font-medium text-ink">{view ? t("settings-extensionview.update_failed") : t("settings-extensionview.draw_failed")}</p>
+            <p className="max-w-[420px] text-label leading-relaxed break-words text-ink-3 select-text">{error}</p>
+            <Button tone="secondary" icon="retry" busy={loading} onClick={() => load()}>
+              {t("settings-extensionview.retry")}
+            </Button>
+          </div>
+        </ExtensionSetupNotice>
       )}
       {view && (
         <ReviewProvider view={isReview ? view : null} page={pageKey} fetch={fetchQuiet}>
@@ -919,4 +1054,18 @@ export function askAssistant(text: string) {
   void import("../../lib/outbox")
     .then((m) => m.askPersona(text))
     .catch((e: unknown) => toast(t("settings-extensionview.action_failed", { error: errorText(e) }), "error"));
+}
+
+/** Puts one of an extension's quick prompts in the assistant's main composer, without sending it: the main
+ *  conversation opens (or the new-conversation page when there is none yet), and the owner sends when ready. */
+export function composeAssistant(text: string) {
+  const a = getState().assistant;
+  if (a?.main && a.machine_id) {
+    sendDraft(`${a.machine_id}/${a.main}`, { type: "replace", text });
+    navigate(conversationPage(a.main, a.machine_id, chosenManager() ?? undefined));
+    return;
+  }
+  sendDraft("persona-new", { type: "replace", text });
+  const onStarter = typeof location !== "undefined" && (location.pathname === "/persona/new" || (location.pathname === "/persona" && !a?.main));
+  if (!onStarter) navigate("/persona/new");
 }

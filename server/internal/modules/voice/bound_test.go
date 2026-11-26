@@ -107,7 +107,7 @@ func TestBoundToAnAgent(t *testing.T) {
 		{"role": "assistant", "text": "登录页的测试挂了两个"}, {"role": "tool", "text": "ignored"}}}))
 	ready := a.until(ofType("ready"))
 	target, _ := ready["target"].(map[string]any)
-	if ready["protocol"] != float64(2) || fmt.Sprint(ready["features"]) != "[target runs asks resume suspend speak speech_gate meeting hold dictation]" || target["kind"] != "agent" ||
+	if ready["protocol"] != float64(2) || fmt.Sprint(ready["features"]) != "[target runs asks resume suspend speak speech_gate meeting hold dictation reply]" || target["kind"] != "agent" ||
 		target["agent_label"] != "Claude Code" || target["title"] != "修登录页的测试" || target["machine_name"] != "工作站" || target["session_id"] != "a1" {
 		t.Fatalf("ready: %v", ready)
 	}
@@ -313,6 +313,43 @@ func TestUnpromptedRunCanBeSentAnyway(t *testing.T) {
 	logs.wait("call 1: run " + id + ": the app sends it again (the user's own confirmation, past the user-speech gate)")
 	if all := logs.String(); strings.Contains(all, task) {
 		t.Errorf("the log has the task:\n%s", all)
+	}
+}
+
+func TestResendableRefusalIsRegisteredBeforeItsFrame(t *testing.T) {
+	c := &conversation{ctx: t.Context(), version: 2, lang: i18n.En, out: make(chan outFrame, 1)}
+	tracker := newTracker(c, nil)
+	r := &voiceRun{task: "check the tests"}
+	r.ID = "voice-refusal"
+	tracker.notSent(r, sendFail{state: runRefused, code: "unprompted", prompt: "unprompted", resendable: true})
+
+	// Hold the tracker queue as if it were handling another event. The phone can
+	// act on its frame immediately, so showing it already would lose a quick tap.
+	select {
+	case <-c.out:
+		t.Fatal("phone offered resend before the tracker could accept it")
+	default:
+	}
+	select {
+	case register := <-tracker.ops:
+		register()
+	default:
+		t.Fatal("missing refused-run registration")
+	}
+	select {
+	case frame := <-c.out:
+		var state struct {
+			ID, State  string
+			Resendable bool
+		}
+		if err := json.Unmarshal(frame.text, &state); err != nil {
+			t.Fatal(err)
+		}
+		if state.ID != r.ID || state.State != runRefused || !state.Resendable || tracker.refused[r.ID] != r {
+			t.Fatalf("unregistered refusal: %+v", state)
+		}
+	default:
+		t.Fatal("registered run did not notify the phone")
 	}
 }
 
@@ -1101,29 +1138,37 @@ func tone(n int, amp int16) []byte {
 
 // What the extension says by itself waits while the user talks (the app's audio has their voice in it) and goes
 // userQuiet after they stop.
+//
+// The turn ends only once the call has heard the user: a turn already over when the call begins is read on the
+// hub link's first event, which can come before the first frame of the user's voice is heard, and then the answer is
+// rightly said at once (nobody is talking yet). That race failed this test under load (#14007).
 func TestSayWaitsForTheUserToStop(t *testing.T) {
 	setVar(t, &userQuiet, 400*time.Millisecond)
 	hub := agentHub(t)
 	id := voiceMessageID()
-	hub.add("a1", proto.Item{Role: "user", Kind: proto.KindText, Text: "跑一下全部测试", ClientMsgID: id},
-		proto.Item{Role: "assistant", Kind: proto.KindText, Text: "全部测试都过了。"})
-	hub.end("a1")
+	hub.add("a1", proto.Item{Role: "user", Kind: proto.KindText, Text: "跑一下全部测试", ClientMsgID: id})
 	up := boundUpstream(t, false)
 	pl := testPlugin(t, liveProvider(up), hub.server(t))
 	a := dialApp(t, pl, boundStart("a1", map[string]any{"resume": map[string]any{"runs": []map[string]any{
 		{"id": id, "msg_ids": []string{id}, "task": "跑一下全部测试", "base_seq": 0, "started_at": stamp(time.Now().Add(-time.Minute)), "state": runSent},
 	}}}))
 	a.until(ofType("ready"))
-	for range 25 { // 2.5 s of talking: the answer is read meanwhile (the first look is within a second)
+	for i := range 25 { // 2.5 s of talking: the turn ends and its answer is read meanwhile
 		_ = a.c.Write(context.Background(), websocket.MessageBinary, tone(1600, 3000))
+		if i == 0 {
+			// The service got the frame, so the call heard it first (readApp weighs a frame before it sends it on).
+			waitFor(t, "the user's voice reaching the service", func() bool { return framesOf(up, 3000) > 0 })
+			hub.add("a1", proto.Item{Role: "assistant", Kind: proto.KindText, Text: "全部测试都过了。"})
+			hub.end("a1")
+		}
 		time.Sleep(100 * time.Millisecond)
 	}
 	if n := up.count(said); n != 0 {
 		t.Fatal("said while the user talked")
 	}
 	stopped := time.Now()
-	up.nextMatch("the answer, said", said)
-	if took := time.Since(stopped); took < 250*time.Millisecond {
+	received := requireSpokenAfterVoiceFrames(t, up, "全部测试都过了", tone(1600, 3000), 25)
+	if took := received.Sub(stopped); took < 250*time.Millisecond {
 		t.Fatalf("said %v after the user stopped", took)
 	}
 }
@@ -1194,26 +1239,43 @@ func TestBoundTurnBetweenTheLookAndTheRead(t *testing.T) {
 // hub link: from an empty conversation (base 0) the link subscribes from 0, and a turn that ended before that
 // subscription got to the hub is in what the hub sends back on it (its last exchanges, #6068).
 func TestBoundTurnEndsBeforeTheLinkSubscribes(t *testing.T) {
+	setVar(t, &lookEvery, time.Hour) // leave scheduled polling out of the case
 	hub := agentHub(t)
 	hub.manual = true
-	hub.subDelay = 2 * time.Second
+	accept := make(chan struct{})
+	release := sync.OnceFunc(func() { close(accept) })
+	defer release()
+	hub.subReady = accept
+	var unanswered atomic.Value
+	hub.onPageSent = func(session string, page []proto.Item) {
+		if session == "a1" && len(page) == 1 && page[0].Role == "user" {
+			unanswered.Store(page[0].ClientMsgID)
+		}
+	}
 	up := boundUpstream(t, false)
 	pl := testPlugin(t, liveProvider(up), hub.server(t))
 	a := dialApp(t, pl, boundStart("a1", nil))
 	a.until(ofType("ready"))
 	a.send(map[string]any{"type": "text", "text": "跑一下全部测试"})
 	m := hub.waitSent(1)
-	looks := hub.lookCount()
-	for deadline := time.Now().Add(5 * time.Second); hub.lookCount() < looks+2; {
-		if time.Now().After(deadline) {
-			t.Fatal("the run was never looked at")
-		}
-		time.Sleep(20 * time.Millisecond)
+	waitFor(t, "the run's page with its unanswered message", func() bool { return unanswered.Load() == m.ID })
+	waitFor(t, "the pending subscription", func() bool { n, _ := hub.subscribes("a1"); return n > 0 })
+	if n, sub := hub.subscribes("a1"); n != 1 || sub["since_seq"] != float64(0) {
+		t.Fatalf("subscribed %d times, from %v; want the empty conversation's base", n, sub["since_seq"])
 	}
+	// The turn ends while that subscription waits at the hub (subReady): only what the hub sends back when it lets the
+	// subscription in can bring the turn's end to the link.
 	hub.status("a1", "working")
 	hub.add("a1", proto.Item{Role: "assistant", Kind: proto.KindText, Text: "测试在后台跑了，单元测试都过了。"})
 	hub.edit("a1", func(s *fakeSession) { s.background = 1 })
 	hub.end("a1")
+	release()
+	hub.subscribed("a1")
+	waitFor(t, "the link to receive the backlog through the turn end", func() bool {
+		pl.link.mu.Lock()
+		defer pl.link.mu.Unlock()
+		return pl.link.since[linkKey{"m", "a1"}] == 3 // user message, answer and turn_duration
+	})
 	if states := a.runStates(m.ID, runHeld); slices.Contains(states, runDone) {
 		t.Fatalf("run states %v", states)
 	}

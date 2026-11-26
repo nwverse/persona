@@ -39,7 +39,7 @@ describe("session capability contract", () => {
     for (const op of ["interrupt", "approve", "terminal"] as const) expect(sessionCan(desktop, op)).toBe(false);
     expect(sessionMenuActions(desktop)).toEqual([]);
     const terminal: Session = { ...desktop, source_kind: "claude_cli", capabilities: { read: true }, read_only_reason: "回复请在电脑上" };
-    expect(sourceSubtitle(terminal)).toBe("终端里的 Claude · 仅查看：回复请在电脑上");
+    expect(sourceSubtitle(terminal)).toBe("在标签页中的 Claude · 仅查看：回复请在电脑上");
     expect(sessionCan(terminal, "send")).toBe(false);
   });
 

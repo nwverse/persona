@@ -146,10 +146,14 @@ const decisionElse = "When nothing needs the user, don't use needs_user: decide 
 	"send the work back (rework), or close it (accepted or cancelled). A task that only waits for something or someone is no " +
 	"decision either: park it (parked, with reason, waiting_on, evidence and until), and it comes back to you at that time."
 
+// decisionReasonMaxRunes is the shared rune cap for a needs_user decision's question/reason across validation
+// (readDecision) and stored asks (askConclusion).
+const decisionReasonMaxRunes = 200
+
 // readDecision checks a review's decision: every part there, the recommended option first among two to four. The
 // error names everything missing at once, and what to do when nothing needs the owner.
 func readDecision(why, reason, recommend, cost string, options []DecisionOption) (reviewDecision, error) {
-	d := reviewDecision{WhyOwner: strings.TrimSpace(why), Reason: clip(oneLine(reason), 200), Recommend: clip(oneLine(recommend), 120),
+	d := reviewDecision{WhyOwner: strings.TrimSpace(why), Reason: clip(oneLine(reason), decisionReasonMaxRunes), Recommend: clip(oneLine(recommend), 120),
 		CostOfWaiting: clip(oneLine(cost), 200)}
 	for _, o := range options {
 		o.Label, o.LeadsTo = clip(oneLine(o.Label), 120), clip(oneLine(o.LeadsTo), 200)
@@ -385,6 +389,12 @@ func (s *Service) askRound(id, asked string) (*acceptAsk, error) {
 func (s *Service) chooseOption(ctx context.Context, id, asked, label string) (acceptResult, error) {
 	s.reviewDismissals.actions.acquire(id)
 	defer s.reviewDismissals.actions.release(id)
+	return s.chooseOptionLocked(ctx, id, asked, label)
+}
+
+// chooseOptionLocked is chooseOption for a caller that already holds the card's action lock (settleSupervisorChoice,
+// which must keep it from its look at the waiting choice until the choice is recorded).
+func (s *Service) chooseOptionLocked(ctx context.Context, id, asked, label string) (acceptResult, error) {
 	a, err := s.askRound(id, asked)
 	if err != nil || a == nil {
 		return acceptResult{}, err
@@ -768,6 +778,9 @@ func (s *Service) sweepDecisionAges(now time.Time) {
 		if !decisionRecheckDue(&a, now) {
 			continue
 		}
+		if t, ok := s.todoNow(w.todo); ok && s.reporterStopped(ctx, t.Origin) {
+			continue // signal would drop it under /stop (#3308): the owner keeps the decision until they speak
+		}
 		if !s.markDecisionRecheck(ctx, w.todo, a.AskedAt, now.UTC()) {
 			continue
 		}
@@ -788,6 +801,7 @@ func (s *Service) sweepDecisionAges(now time.Time) {
 		}
 		b.mu.Unlock()
 		s.askChanged(ctx)
+		s.todoPushOver(w.todo)
 		s.logf("task %s: its decision waited %s: back to its supervisor to confirm it", w.todo, humanDuration(now.Sub(a.AskedAt)))
 		s.signal(superviseSignal{Todo: w.todo, Kind: sigRecheck, Key: "recheck@" + a.AskedAt.UTC().Format(time.RFC3339Nano),
 			Minutes: int(now.Sub(a.AskedAt).Minutes()), Decision: s.signalDecision(ctx, &a)})
@@ -812,6 +826,9 @@ func (s *Service) undecidableSignal(ctx context.Context, t Todo, now time.Time) 
 		if a.AcceptedAt.IsZero() && a.Recommend != "" || !a.AcceptedAt.IsZero() && now.Sub(a.AcceptedAt) < decisionSettle {
 			return superviseSignal{}, false // answerable, or its answer is on its way to the agent
 		}
+	}
+	if s.reporterStopped(ctx, t.Origin) {
+		return superviseSignal{}, false // signal would drop it under /stop (#3308): keep it untold until the user speaks
 	}
 	_, changed, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
 		n := len(v.Reviews)
@@ -853,4 +870,16 @@ func ownerCannotStats(events []db.WorkEvent) map[string]map[string]int {
 		out[sup][resp]++
 	}
 	return out
+}
+
+// decisionLine is a decision as a line quotes it: the question and what was chosen.
+func decisionLine(d db.TodoDecisionRow) string {
+	q, c := clip(oneLine(d.Question), 40), clip(oneLine(d.Choice), 60)
+	switch {
+	case q == "":
+		return c
+	case c == "":
+		return q
+	}
+	return q + " → " + c
 }

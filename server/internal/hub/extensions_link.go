@@ -96,7 +96,10 @@ func init() {
 		if old == nil || !slices.Equal(before.Features, after.Features) || !machineExtrasEqual(before.Machines, after.Machines) {
 			h.broadcastMachines()
 		}
-		h.looksReported(before.Looks, after.Looks)               // the extensions' looks (looks.go)
+		h.looksReported(before.Looks, after.Looks) // the extensions' looks (looks.go)
+		if r.PushGradingDeclared {
+			h.reconcilePushGradingLayer(from, r.PushGradingExtensions)
+		}
 		if h.store != nil && from == assistantwire.AssistantID { // kept across a restart: the assistant's
 			h.queueExtReportSave(r)
 		}
@@ -218,7 +221,7 @@ func machineExtrasEqual(a, b map[string]extwire.MachineExtras) bool {
 // features are the hub's features with those of the extensions serving part of the API.
 func (h *Hub) features() []string {
 	out := append(slices.Clone(proto.Features), featureSessionsList, featureSessionsLookup, featureSessionsPaneSource, featureSessionsManager, featureSessionsPageCounts,
-		featureSessionsSearch, featureAgentsPageCounts, featureAgentsProviderOR, featureSessionsHierarchy, featureSessionsCatalog, featureSessionsTodo, featureSessionsQuickFilters, featureSessionsJustFinished, featureSessionsAgentsOnly, featureMachineRename, featureDesktopUnregister, nodeproto.MCPWait, "starred_messages")
+		featureSessionsSearch, featureAgentsPageCounts, featureAgentsProviderOR, featureSessionsHierarchy, featureSessionsCrossMachineHierarchy, featureSessionsCatalog, featureSessionsTodo, featureSessionsQuickFilters, featureSessionsJustFinished, featureSessionsAgentsOnly, featureMachineRename, featureDesktopUnregister, nodeproto.MCPWait, "starred_messages")
 	out = append(out, h.agentSessionArchiveFeatures()...)
 	out = append(out, h.agentAutonameFeatures()...)
 	out = append(out, h.sessionsSideFoldFeatures()...)
@@ -232,10 +235,20 @@ func (h *Hub) features() []string {
 	out = append(out, h.meetingTranscriptionFeatures()...)
 	out = append(out, h.recordingDayFeatures()...)
 	out = append(out, h.assistantSearchFeatures()...)
+	out = append(out, h.assistantPagesFeatures()...)
 	for _, f := range h.defaultManagerModuleFeatures() {
 		if !slices.Contains(out, f) {
 			out = append(out, f)
 		}
+	}
+	if h.defaultManagerNames(assistantwire.CapabilityHealthTell) {
+		out = append(out, assistantwire.CapabilityHealthTell)
+	}
+	if h.defaultManagerNames(assistantwire.CapabilityHealthStrength) {
+		out = append(out, assistantwire.CapabilityHealthStrength)
+	}
+	if h.defaultManagerNames(assistantwire.CapabilityHealthItems) {
+		out = append(out, assistantwire.CapabilityHealthItems)
 	}
 	if h.defaultManagerNames(assistantwire.CapabilityHealthIntake) {
 		out = append(out, assistantwire.CapabilityHealthIntake)
@@ -263,10 +276,10 @@ func (h *Hub) features() []string {
 			continue // only the default manager's hello can publish module presence
 		}
 		switch f {
-		case assistantwire.CapabilityHealthIntake, assistantwire.CapabilityAssistantSegments, featureAgentSessionArchives, featureAgentSessionArchiveClose, featureAgentAutoname, featureMeetingAttendance, featureMeetingConversation,
+		case assistantwire.CapabilityHealthTell, assistantwire.CapabilityHealthItems, assistantwire.CapabilityHealthStrength, assistantwire.CapabilityHealthIntake, assistantwire.CapabilityAssistantSegments, featureAgentSessionArchives, featureAgentSessionArchiveClose, featureAgentSessionIdleArchive, featureAgentAutoname, featureMeetingAttendance, featureMeetingConversation,
 			featureMeetingPhotos, featureMeetingLiveView, featureMeetingHighlights, featureMeetingNotes, featureMeetingEcho, featureMeetingTranscription, featureRecordingDay,
-			assistantwire.CapabilityTaskInput, featureAssistantSearch, featureDirectionSessions, featureAssistantStartServiceTier, featureSessionsSideFold, featureRemoteImages, featureTodoView, featureTodoRevision, featureTodoPlaces, featureTodoAsks, featureTodoTimeline:
-			continue // only manager hello can promise fleet archives, requested names, meetings, all-day recordings, chat search, direction sessions, start speed, the side-session fold, remote images, the To-dos view, its answers and its history
+			assistantwire.CapabilityTaskInput, featureAssistantSearch, featureAssistantPages, featureDirectionSessions, featureAssistantStartServiceTier, featureSessionsSideFold, featureRemoteImages, featureTodoView, featureTodoRevision, featureTodoPlaces, featureTodoAsks, featureTodoTimeline:
+			continue // only manager hello can promise fleet archives, requested names, meetings, all-day recordings, chat search, dashboards, direction sessions, start speed, the side-session fold, remote images, the To-dos view, its answers and its history
 		}
 		if !slices.Contains(out, f) {
 			out = append(out, f)

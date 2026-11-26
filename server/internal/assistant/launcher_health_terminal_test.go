@@ -119,21 +119,28 @@ func TestLauncherHealthRecordsAppStarts(t *testing.T) {
 		t.Fatalf("a start that worked: %+v", h)
 	}
 	// A successful follow-up can clear the failed start as soon as it is recorded. Read both states in order.
-	releaseCheck := make(chan struct{})
+	checking := make(chan struct{})
+	release := make(chan struct{})
 	f.checkWait = func(ctx context.Context) error {
 		select {
-		case <-releaseCheck:
+		case <-checking:
+		default:
+			close(checking)
+		}
+		select {
+		case <-release:
 			return nil
 		case <-ctx.Done():
 			return ctx.Err()
 		}
 	}
 	s.StartEnded(ctx, StartEnded{MachineID: "box", Error: "claude exited before showing its input box"})
-	h := healthState(s, "box", "claude")
-	close(releaseCheck)
-	if h.State != healthFailing || h.Source != healthSourceStart {
+	<-checking
+	if h := healthState(s, "box", "claude"); h.State != healthFailing || h.Source != healthSourceStart {
 		t.Fatalf("an app start of claude that failed: %+v", h)
 	}
+	close(release)
+	f.checkWait = nil
 	waitFor(t, "the passing recheck of the failed app start", func() bool {
 		checked := healthState(s, "box", "claude")
 		return checked.State == healthOK && checked.Source == healthSourceCheck
