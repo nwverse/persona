@@ -84,6 +84,8 @@ func TestDevelopmentAppliesOlderProgramBackupThroughSharedInstaller(t *testing.T
 				phases <- operation
 				var response any
 				switch operation {
+				case "preflight":
+					return nil
 				case "backups":
 					response = map[string]any{"backups": []update.DevelopmentVersion{version}}
 				case "prepare_backup":
@@ -649,7 +651,7 @@ func TestDevelopmentHeldHistorySkipsUnbuiltBadAndUnresolvedCandidates(t *testing
 }
 
 func TestDevelopmentUsesSharedInstallAndPreservesRecovery(t *testing.T) {
-	for _, failure := range []string{"", "automatic", "build", "backup", "adopt", "preimage", "partial", "restore"} {
+	for _, failure := range []string{"", "automatic", "preflight", "build", "backup", "adopt", "preimage", "partial", "restore"} {
 		t.Run(failure, func(t *testing.T) {
 			p := newPublisher(t, "unused", 202611021700)
 			h, machine, target, execs := updatingHub(t, p, "release")
@@ -683,6 +685,22 @@ func TestDevelopmentUsesSharedInstallAndPreservesRecovery(t *testing.T) {
 			var phases []string
 			u.devRun = func(ctx context.Context, c *update.DevelopmentConfig, dir, operation string, input map[string]any, result any, _ func(update.DevelopmentProgress)) error {
 				phases = append(phases, operation)
+				if operation == "preflight" && failure == "preflight" {
+					// Run the embedded helper against a synthetic installation.
+					home := t.TempDir()
+					if err := os.WriteFile(filepath.Join(home, "hub.json"), []byte(`{"database_url":"fixture-secret"}`), 0600); err != nil {
+						t.Fatal(err)
+					}
+					c.Backup.Directory = t.TempDir()
+					if err := os.Chmod(c.Backup.Directory, 0700); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(c.Backup.Directory, "coordination-pending.json"), nil, 0600); err != nil {
+						t.Fatal(err)
+					}
+					input["runtime"], input["hub_database"] = home, "fixture-secret"
+					return update.DevelopmentRequest(ctx, c, dir, operation, input, result, nil)
+				}
 				if operation == failure {
 					return errors.New("fixture phase failed")
 				}
@@ -795,7 +813,14 @@ func TestDevelopmentUsesSharedInstallAndPreservesRecovery(t *testing.T) {
 				if u.adoptionUnresolved() {
 					t.Fatal("fully restored attempt kept an unresolved fence")
 				}
-				if failure == "build" && len(phases) != 2 {
+				if failure == "preflight" {
+					want := su(h.userLang(), "backup_reason_coordination")
+					if !slices.Equal(phases, []string{"resolve", "preflight"}) || !strings.Contains(u.view().Error, want) || strings.Contains(u.view().Error, "fixture-secret") ||
+						!strings.Contains(u.view().Error, su(h.userLang(), "development_step_preflight")) {
+						t.Fatalf("wrong preflight failure: %v, %s", phases, u.view().Error)
+					}
+				}
+				if failure == "build" && !slices.Equal(phases, []string{"resolve", "preflight", "build"}) {
 					t.Fatal("backup ran after failed build")
 				}
 				return

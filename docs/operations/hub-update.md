@@ -66,8 +66,8 @@ drop what the snapshot is for — it may not be a symbolic link, and it must be 
 (`0700`; an existing folder readable by other users is refused with the `chmod` to run). A
 folder chosen inside the runtime is never archived into the snapshot. The folder cannot be
 changed while the current one holds a `coordination-pending.json` marker or an
-`.incomplete-*` snapshot: those fail-closed gates stop any retry until someone inspects them,
-and a new folder would otherwise pause and dump writers again past them. The retention count
+`.incomplete-*` snapshot. Retry in the same folder to clean up stale staging directories. A coordination
+marker requires operator recovery before retrying or changing folders. The retention count
 defaults to three and may be 1–50; an explicit `0` is refused (omit the field to inherit).
 
 Another local manager under `<runtime>/managers/<id>/manager.json`, an `extra_databases`
@@ -120,8 +120,7 @@ built-in manager whose tables still share the Hub's database (before
 `moved_to_own_database`) needs only that database checked; one moved to its own is checked
 separately (`backup.DiscoverDevelopment`, the same rules as the helper's inventory). Resume
 runs on every failure path, including cancellation; a Hub process that dies mid-snapshot
-leaves the incomplete directory in the store, which the next attempt refuses until it is
-inspected. Snapshot JSON, SQL dumps and file history keep their existing privacy rules.
+may leave a staging directory. The next preflight removes it under the backup lock. Snapshot JSON, SQL dumps and file history keep their existing privacy rules.
 
 The host needs Git, Python 3.11+, Node matching `web/package.json`, Go matching `server/go.mod`,
 and compatible `pg_dump`/`pg_restore` tools with access to every included database. Their libpq
@@ -136,12 +135,25 @@ installation user's existing HTTPS credential mechanism, with interactive prompt
 Updates execute build code from this project's repository.
 Docker Hubs and Windows Hubs retain their original update paths.
 
+In Settings › Hub the development pipeline runs **Build → Waiting for idle → Backup → Restart**.
+Build includes staging and verifying the programs. For a saved version, **Prepare backup** takes
+the place of Build. Before these stages, the hub checks the backup settings. Choose **Cancel update** and confirm to stop before binary adoption. Cancelling during this first check stops the attempt before the build.
+The hub interrupts resolution or a running build, or stops at a safe staging or idle boundary.
+During a snapshot it records the request in memory, finishes verification, resumes writers and
+saves the backup receipt. After cleanup the hub is idle, history shows **Cancelled**, and another
+update can start immediately.
+
+`GET /api/v1/hub/update` reports `can_cancel` and `cancelling`. The authenticated
+`POST /api/v1/hub/update/cancel` remains available during the built-in writer pause.
+Repeated requests during cancellation return the current status. Once the installer claims
+adoption, or when there is no cancellable attempt, cancel returns HTTP 409.
+
 Settings › Hub shows the current step and elapsed phase time during a development build,
 snapshot backup or saved-version preparation. Build progress covers the pinned checkout,
 `npm ci`, the Web development and public-share bundles, precompression and runtime assets,
 program/platform targets, and manifest checksum verification.
 
-The backup starts by pausing writers. Database progress shows completed dumps and the
+The backup checks its settings and storage before pausing writers. Database progress shows completed dumps and the
 cumulative bytes written by `pg_dump`; the final dump size is unknown while it runs.
 Before writing `files.tar.gz`, the helper scans the included trees for regular file counts
 and sizes using the archive exclusions. The archive reports completed files and uncompressed
@@ -159,7 +171,7 @@ The page polls for counters about once per second. The helper reports counter sa
 about every 750 ms, with an immediate event at step changes and when totals become available.
 The structured pipe carries only fixed step and target labels and numbers. Tool diagnostics
 stay in private logs and the result stays in its own file. On a failure the error names the
-failed step and phase log. Progress is cleared when the phase ends. Existing clients can keep
+failed step, available backup reason and phase log. Progress is cleared when the phase ends. Existing clients can keep
 reading `state` and the legacy `progress` string.
 
 The helper resolves the full commit of `refs/heads/main`; a missing `main` branch is an error.
@@ -270,7 +282,11 @@ additional user files, damaged archives and other backup systems are left alone.
 failed/incomplete snapshot is not counted and removes no valid recovery point. Cleanup failure
 stops adoption; it can temporarily leave more valid snapshots than the configured count rather
 than discard recovery evidence. The API retains the last snapshot/rotation receipt; the Web selector
-lists available program versions. Private phase logs are `update/development/<operation>.log`.
+lists available program versions. Before building, preflight checks the inventory, connection
+settings, folder, lock and coordination marker. The snapshot repeats these checks under its
+publication lock. Settings shows the failed step and a localized reason when available. Private
+phase logs are `update/development/<operation>.log`. Starting a snapshot moves its non-empty
+previous log to `update/development/backup.prev.log`.
 
 The data archive intentionally captures the existing standalone `web/` override before it is
 set aside in the same update transaction so the new embedded UI actually serves. Failed adoption
@@ -340,7 +356,8 @@ recovery procedure; use the offline procedure only when data recovery is actuall
 
 `coordination-pending.json` means a pause/resume outcome needs inspection: run the original
 resume procedure and verify the writers before removing that exact marker. `.incomplete-*`
-directories remain for inspection. Normal cancellation signals the helper and its active child
+directories are disposable staging. A retry logs and removes them only after acquiring the lock
+and finding no coordination marker. Interrupting a helper process signals the helper and its active child
 group with SIGINT, then escalates child termination within bounded waits. The resume hook gets
 its own 60-second deadline; additional SIGINT/SIGTERM signals are deferred until it finishes.
 A failed/timed-out resume or a force-killed helper retains its coordination evidence and blocks
