@@ -372,7 +372,7 @@ export function Integrations({
           })
         : Promise.resolve(null),
       hasMail
-        ? loadMailAccounts().catch(() => null)
+        ? loadMailAccounts(owner).catch(() => null)
         : Promise.resolve(null),
       hasLark
         ? api<LarkGatewaySummary>("/lark/status").catch(() => null)

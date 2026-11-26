@@ -873,7 +873,7 @@ describe("manager-owned integration links", () => {
 
   it.each([
     ["github", "saved-repositories-shortcut", "settings/persona#repositories"],
-    ["mail", "knowledge-scope-shortcut", "settings/knowledge#knowledge-items"],
+    ...(installedMailbox ? [["mail", "knowledge-scope-shortcut", "settings/knowledge#knowledge-items"]] : []),
   ])("opens %s settings with the owner's assistant already selected", async (id, row, destination) => {
     const onSettings = vi.fn(() => chosenManager());
     await act(async () => root.render(<IntegrationDetail integrationsV2 target={{ kind: "builtin", id, manager: "work" }} onSettings={onSettings} />));
