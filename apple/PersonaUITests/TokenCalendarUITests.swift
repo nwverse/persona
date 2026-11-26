@@ -127,6 +127,19 @@ final class TokenCalendarUITests: XCTestCase {
         shot("project xxxLarge")
     }
 
+    /// By Project at an accessibility text size (AX3): a project's name on a line of its own, its numbers on the next.
+    @MainActor func testByProjectAtAnAccessibilitySize() {
+        launch("light", textSize: "UICTContentSizeCategoryAccessibilityL")
+        XCTAssertTrue(line.waitForExistence(timeout: 30), "no token calendar on the home")
+        line.tap()
+        XCTAssertTrue(app.staticTexts["按项目"].waitForExistence(timeout: 10), "no By Project")
+        let repo = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "acme/storefront")).firstMatch
+        for _ in 0..<3 where !repo.isHittable { app.swipeUp() }
+        let window = app.windows.firstMatch.frame
+        XCTAssertTrue(repo.exists && repo.frame.maxX <= window.maxX + 1, "a project row runs off the screen: \(repo.frame)")
+        shot("projects AX3")
+    }
+
     /// By Agent at the largest text size the interface reaches (xxxLarge): every row on one line, within the screen.
     @MainActor func testTokenUsageByAgentAtTheLargestInterfaceText() {
         launch("light", textSize: "UICTContentSizeCategoryXXXL")

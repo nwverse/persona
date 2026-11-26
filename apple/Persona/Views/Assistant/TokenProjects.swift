@@ -169,8 +169,27 @@ struct UsageProjectsSection: View {
         }
     }
 
-    /// A row's tokens and share: never cut (the name gives way first).
+    private func row(_ p: UsageProject, top: Double) -> some View {
+        NavigationLink {
+            UsageProjectPage(project: p, range: $range)
+        } label: {
+            UsageProjectRow(project: p, top: top)
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+    }
+
     private func numbers(_ tokens: Int64, share: Double) -> some View {
+        UsageProjectNumbers(tokens: tokens, share: share)
+    }
+}
+
+/// A row's tokens and share: never cut (the name gives way first).
+struct UsageProjectNumbers: View {
+    let tokens: Int64
+    let share: Double
+
+    var body: some View {
         HStack(spacing: Theme.Space.s) {
             Text(TokenFormat.short(tokens))
             Text(TokenProjectText.share(share))
@@ -179,34 +198,55 @@ struct UsageProjectsSection: View {
         .fixedSize()
         .layoutPriority(1)
     }
+}
 
-    private func row(_ p: UsageProject, top: Double) -> some View {
-        NavigationLink {
-            UsageProjectPage(project: p, range: $range)
-        } label: {
-            VStack(alignment: .leading, spacing: Theme.Space.xs) {
-                HStack(spacing: Theme.Space.s) {
-                    ThemedIcon(TokenProjectText.icon(p.kind)).foregroundStyle(TokenProjectText.color(p.group)).font(Theme.Font.secondary)
-                    Text(TokenProjectText.name(p)).font(Theme.Font.body).foregroundStyle(.primary).lineLimit(1)
-                    if p.machines > 1 {
-                        HStack(spacing: Theme.Space.xxs) {
-                            ThemedIcon(Theme.Icon.laptop)
-                            Text(p.machines, format: .number)
-                        }
-                        .font(Theme.Font.label).foregroundStyle(.secondary)
-                        .accessibilityLabel(String(localized: "\(p.machines) computers"))
+/// One project in the list: its mark, name and computers, its tokens and share, a bar against the largest. At large
+/// text sizes (xxxLarge and up) the name takes a line of its own and the numbers the next, so a name is never cut to a
+/// few letters. Its own view, so only it reads the text size (docs/apple/performance.md: no ViewThatFits measuring
+/// in a list row).
+struct UsageProjectRow: View {
+    @Environment(\.dynamicTypeSize) private var size
+    let project: UsageProject
+    let top: Double
+
+    var body: some View {
+        let p = project
+        let stacked = size >= .xxxLarge
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+            HStack(spacing: Theme.Space.s) {
+                ThemedIcon(TokenProjectText.icon(p.kind)).foregroundStyle(TokenProjectText.color(p.group)).font(Theme.Font.secondary)
+                Text(TokenProjectText.name(p)).font(Theme.Font.body).foregroundStyle(.primary).lineLimit(stacked ? 2 : 1)
+                if p.machines > 1 {
+                    HStack(spacing: Theme.Space.xxs) {
+                        ThemedIcon(Theme.Icon.laptop)
+                        Text(p.machines, format: .number)
                     }
-                    Spacer(minLength: Theme.Space.s)
-                    numbers(p.tokens.total, share: p.share)
-                    ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.label).foregroundStyle(.tertiary)
+                    .font(Theme.Font.label).foregroundStyle(.secondary)
+                    .fixedSize()
+                    .accessibilityLabel(String(localized: "\(p.machines) computers"))
                 }
-                MeterBar(fraction: Double(p.tokens.total) / top, color: TokenProjectText.color(p.group))
-                    .padding(.leading, Theme.Space.l + Theme.Space.s)
+                Spacer(minLength: Theme.Space.s)
+                if !stacked {
+                    UsageProjectNumbers(tokens: p.tokens.total, share: p.share)
+                    disclosure
+                }
             }
-            .contentShape(.rect)
+            if stacked {
+                HStack(spacing: Theme.Space.s) {
+                    UsageProjectNumbers(tokens: p.tokens.total, share: p.share)
+                    Spacer(minLength: Theme.Space.s)
+                    disclosure
+                }
+                .padding(.leading, Theme.Space.l + Theme.Space.s)
+            }
+            MeterBar(fraction: Double(p.tokens.total) / top, color: TokenProjectText.color(p.group))
+                .padding(.leading, Theme.Space.l + Theme.Space.s)
         }
-        .buttonStyle(.plain)
-        .accessibilityElement(children: .combine)
+        .contentShape(.rect)
+    }
+
+    private var disclosure: some View {
+        ThemedIcon(Theme.Icon.disclosure).font(Theme.Font.label).foregroundStyle(.tertiary)
     }
 }
 
