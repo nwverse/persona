@@ -46,7 +46,9 @@ var supervisedStarts = map[string]string{
 	// agent_send's resume of a stopped agent: on an open task of the caller's, or the task the send made (#8099)
 	"resumeAndSend": "resumeAndSend",
 	// a timed-out task's original session: the user's Resume keeps its existing supervision ledger
-	"continueTimedOut": "continueTimedOut",
+	"continueTimedOut": "clearTimedOut",
+	// the owner's cross-provider handoff keeps the to-do's ledger, or adopts its ordinary owner first
+	"executeOwnerTodoHandoff": "executeOwnerTodoHandoff",
 }
 
 // startOptOuts are the start paths that stay unsupervised on purpose, with why. Each is the user's own conversation or
@@ -65,6 +67,7 @@ var startOptOuts = map[string]string{
 	"deliverSessionReview":       "the owner chose Send on a finished review card: an explicit message or resume of the source session",
 	"startRepairAgent":           "a launcher repair Agent: the launcher health checks follow it (launcher_repair.go)",
 	"a2aLaunch":                  "the persisted A2A task follows its Agent and returns questions, failures and results to the session that started it",
+	"StartHandoffGuest":          "a proxy reply's one-tool guest: the lark module's handoff book follows it and ends it on post, decline or expiry (modules/lark/handoff.go)",
 	"startBackground":            "the background supervisor's own conversation: it is the supervisor of the tasks no leader supervises (supervise_background.go)",
 }
 

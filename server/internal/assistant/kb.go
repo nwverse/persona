@@ -256,6 +256,9 @@ func (s *Service) kbOpenLocked(ctx context.Context, set assistantwire.KBSettings
 		if n := e.RetagMail(); n > 0 {
 			s.logf("kb: %d mail chat(s) queued to be tagged again under the current rules", n)
 		}
+		if n := e.DedupeLarkSyncChats(); n > 0 {
+			s.logf("kb: removed %d duplicate larksync message(s) already archived by the gateway", n)
+		}
 	}
 	k.cur.Store(&kbOpened{eng: e, set: set})
 	return e, nil
@@ -636,16 +639,20 @@ func (s *Service) kbProjectBusy(ctx context.Context, e *kb.Engine) func(slug str
 	}
 	s.todos.mu.RUnlock()
 	open := map[string]bool{}
+	var projects *kb.ProjectLookup
+	if e != nil && len(filed) > 0 {
+		projects = e.ProjectLookup() // once per round, not once per to-do (#15539)
+	}
 	for _, slug := range filed {
 		open[slug] = true
-		if e == nil {
+		if projects == nil {
 			continue
 		}
-		if p := e.FindProject(slug); p != nil {
+		if p := projects.Find(slug); p != nil {
 			open[p.Slug] = true
 			continue
 		}
-		for p, ok := e.Store.Project(slug); ok && p.MergedInto != "" && !open[p.MergedInto]; p, ok = e.Store.Project(p.MergedInto) {
+		for p, ok := projects.Project(slug); ok && p.MergedInto != "" && !open[p.MergedInto]; p, ok = projects.Project(p.MergedInto) {
 			open[p.MergedInto] = true
 		}
 	}

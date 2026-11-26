@@ -182,6 +182,11 @@ func (e *Engine) mergeCanonical(old, it *Item, source string) (*Item, error) {
 			// chat (itemSource).
 			next.Where = it.Where
 		}
+		if it.Note != "" {
+			next.Note = it.Note
+		} else if it.Content != "" && strings.HasPrefix(old.Note, "unreadable:") {
+			next.Note = ""
+		}
 		next.Content, next.Revision, next.BodyHash, next.CanonicalKey = it.Content, it.Revision, it.BodyHash, it.CanonicalKey
 		next.Aliases = mergeAliases(old.ID, old.Aliases, append([]string{it.ID}, it.Aliases...))
 		if retag {

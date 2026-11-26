@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"slices"
 
 	"github.com/nwverse/persona/server/internal/recordingwire"
 )
@@ -65,44 +64,11 @@ func (e *Engine) HubTranscript(rawID string) (HubTranscript, error) {
 	return st.readHubLocked(id)
 }
 
-// TranscriptOfRecord is a recording's text of record: in device mode the upload's segments; in hub mode the hub's
-// sentences, and each upload segment the hub's sentences, taken together (their union), cover no more than half of,
-// in time order (the hub's first at the same start), with Source set (SourceHub, SourceDevice). The phone's text is
-// made on the device in the recording's language only, so in hub mode it fills only where the hub has none. Persona's
-// echo stays in it, marked (Echo: the hub's by the echo rule, the phone's as uploaded); what is built from the meeting
-// reads it through MeetingLines.
+// TranscriptOfRecord is a recording's text of record (recordingwire.TranscriptOfRecord: the rule is the contract's,
+// the recording module's writers apply it too).
 func TranscriptOfRecord(hubMode bool, device, hub []RecordingSegment) []RecordingSegment {
-	if !hubMode {
-		return slices.Clone(device)
-	}
-	out := make([]RecordingSegment, 0, len(hub)+len(device))
-	spans := make([][2]float64, 0, len(hub))
-	for _, sg := range hub {
-		sg.Source = SourceHub
-		out = append(out, sg)
-		spans = append(spans, [2]float64{sg.Start, sg.End})
-	}
-	union := recordingwire.UnionSpans(spans)
-	for _, sg := range device {
-		if recordingwire.CoveredByUnion(sg.Start, sg.End, union) <= 0.5 {
-			sg.Source = SourceDevice
-			out = append(out, sg)
-		}
-	}
-	slices.SortStableFunc(out, func(a, b RecordingSegment) int {
-		switch {
-		case a.Start < b.Start:
-			return -1
-		case a.Start > b.Start:
-			return 1
-		}
-		return 0
-	})
-	return out
+	return recordingwire.TranscriptOfRecord(hubMode, device, hub)
 }
-
-// recordChars is how many characters segs have without Persona's echo (recordingwire.RecordChars).
-func recordChars(segs []RecordingSegment) int { return recordingwire.RecordChars(segs) }
 
 // hubMode: m says the recording is transcribed on the hub.
 func hubMode(m *Meeting) bool { return m != nil && m.Transcription.Hub() }
@@ -141,12 +107,4 @@ func recordOf(files map[string][]byte, m *Meeting, h HubTranscript) []RecordingS
 	var segs []RecordingSegment
 	_ = json.Unmarshal(files["segments.json"], &segs)
 	return TranscriptOfRecord(hubMode(m), segs, h.Segments)
-}
-
-// hubSegmentsOf is recording id's hub sentences (none when it has none or they cannot be read), for an upload.
-func (s *Store) hubSegmentsOf(id string) []RecordingSegment {
-	s.recFilesMu.RLock()
-	defer s.recFilesMu.RUnlock()
-	h, _ := s.readHubLocked(id)
-	return h.Segments
 }

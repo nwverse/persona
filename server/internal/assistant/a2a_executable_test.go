@@ -193,10 +193,10 @@ func TestA2ADeliverExecutableBySession(t *testing.T) {
 
 func TestA2AReturnUpdateAndWakeUseSenderNodeExecutable(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		sender     proto.Session
-		wake       bool
-		wantExec   bool
+		name     string
+		sender   proto.Session
+		wake     bool
+		wantExec bool
 	}{
 		{
 			name:     "live Codex pane sender gets mac executable",
@@ -282,11 +282,11 @@ func TestA2AReturnUpdateAndWakeUseSenderNodeExecutable(t *testing.T) {
 
 func TestA2ALaunchAndDispatchStartExecutable(t *testing.T) {
 	cases := []struct {
-		name      string
-		launcher  string
-		setup     func(t *testing.T, s *Service, h *a2aExecTestHub) context.Context
-		wantExec  bool
-		wantInfo  bool
+		name     string
+		launcher string
+		setup    func(t *testing.T, s *Service, h *a2aExecTestHub) context.Context
+		wantExec bool
+		wantInfo bool
 	}{
 		{
 			name:     "explicit codex launcher with list",

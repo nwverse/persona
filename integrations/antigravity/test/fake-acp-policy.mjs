@@ -66,6 +66,16 @@ function onRequest(msg) {
       return answer({})
     case 'session/set_config_option':
       answer({})
+      if (params.value === 'wake-idle') {
+        send({
+          jsonrpc: '2.0',
+          method: 'session/update',
+          params: {
+            sessionId: params.sessionId,
+            update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'autonomous step' } },
+          },
+        })
+      }
       if (params.value === 'ask-idle') askPermission(params.sessionId)
       return
     case 'session/prompt': {

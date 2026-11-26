@@ -2,8 +2,11 @@ package node
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -90,6 +93,68 @@ func agyPresenceSession(pid int) *host.AgentSession {
 		return &host.AgentSession{Source: agyPresenceSource, Agent: agyAgent, Kind: "id", Value: id}
 	}
 	return nil
+}
+
+// agyPresenceScanSupported reports whether this platform (Linux /proc/<pid>/fd) or a test stub can inspect foreground
+// process file descriptors for agy presence locks without extra host RPCs on platforms where it always returns "".
+func agyPresenceScanSupported() bool {
+	return runtime.GOOS == "linux" || reflect.ValueOf(agyPresenceOf).Pointer() != reflect.ValueOf(agyPresenceLocks).Pointer()
+}
+
+// agyPresenceForPane inspects the foreground processes of a classic herdr pane for an open presence/<uuid>.lock,
+// mirroring herdr-core's withAgyPresence (#13603). Returns nil when zero or multiple conversations are found.
+func agyPresenceForPane(ctx context.Context, h host.Host, pane string) *host.AgentSession {
+	if h == nil || pane == "" || !agyPresenceScanSupported() {
+		return nil
+	}
+	pctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	pids, err := h.PaneProcesses(pctx, host.ParsePane(pane))
+	cancel()
+	if err != nil || len(pids) == 0 {
+		return nil
+	}
+	found := ""
+	for _, pid := range pids {
+		if pid <= 0 {
+			continue
+		}
+		id := agyPresenceOf(pid)
+		if id == "" || !uuidRe.MatchString(id) {
+			continue
+		}
+		if found != "" && found != id {
+			return nil
+		}
+		found = id
+	}
+	if found == "" {
+		return nil
+	}
+	return &host.AgentSession{Source: agyPresenceSource, Agent: agyAgent, Kind: "id", Value: found}
+}
+
+// enrichHerdrAgyPresence resolves classic herdr agy panes from their foreground process presence lock when neither
+// herdr's antigravity_cli integration nor Persona's own agy hook has reported a conversation for the pane (e.g.
+// integration missing, agent_session replaced by custom:persona, hooks opted out, or after a node restart).
+func (n *Node) enrichHerdrAgyPresence(ctx context.Context, h host.Host, agents []host.Agent) {
+	if h == nil || h.Kind() != host.Herdr || !agyPresenceScanSupported() {
+		return
+	}
+	for i := range agents {
+		a := agents[i]
+		if a.Agent != agyAgent || a.PaneID == "" || reportedAgyConversation(a) != "" {
+			continue
+		}
+		n.mu.Lock()
+		hasHook := n.agyReports[a.PaneID].conversation != ""
+		n.mu.Unlock()
+		if hasHook {
+			continue
+		}
+		if sess := agyPresenceForPane(ctx, h, a.PaneID); sess != nil {
+			agents[i].AgentSession = sess
+		}
+	}
 }
 
 // procLocksHasDevIno reports whether a Linux /proc/locks snapshot contains a held FLOCK WRITE lock on the inode

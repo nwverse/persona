@@ -3,6 +3,7 @@ package writers
 import (
 	"encoding/json"
 	"errors"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"slices"
 	"strings"
 	"testing"
@@ -31,7 +32,7 @@ func TestHubTranscriptPut(t *testing.T) {
 	}
 	rev, err := e.HubTranscriptPut(recID, HubPassLive, []RecordingSegment{
 		hseg(20.5, 29, "zebrapricing 下周 revisit"), hseg(0, 4, "我们先把\nexport cap   保持在 4 MB。"), hseg(4.5, 9, "Bo owns it."), hseg(12, 12, "  "),
-		{Start: 13, End: 14, Text: "x", Source: kb.SourceDevice},
+		{Start: 13, End: 14, Text: "x", Source: recordingwire.SourceDevice},
 	})
 	if err != nil || rev != 1 {
 		t.Fatalf("put %d %v", rev, err)
@@ -59,7 +60,7 @@ func TestHubTranscriptPut(t *testing.T) {
 	for _, sg := range d.Segments {
 		sources = append(sources, sg.Source)
 	}
-	if !slices.Equal(sources, []string{SourceHub, SourceHub, kb.SourceDevice, SourceHub, SourceHub}) || !strings.Contains(d.Recent, "zebrapricing") {
+	if !slices.Equal(sources, []string{SourceHub, SourceHub, recordingwire.SourceDevice, SourceHub, SourceHub}) || !strings.Contains(d.Recent, "zebrapricing") {
 		t.Fatalf("detail segments %+v", d.Segments)
 	}
 	raw, _ := json.Marshal(d.Segments[0])
@@ -108,7 +109,7 @@ func TestHubTranscriptPut(t *testing.T) {
 	// Device mode, a delete, the trim.
 	const dev, trimmed = "5b6c3f4a-1d2e-4f80-9a1b-2c3d4e5f6a7b", "6c7d4e5b-2e3f-4a91-8b2c-3d4e5f6a7b8c"
 	u := meetingUpload(1, start, "一句")
-	u.SetTranscription(kb.TranscriptionDevice, nil)
+	u.SetTranscription(recordingwire.TranscriptionDevice, nil)
 	putRecording(t, e, dev, u, now)
 	if _, err := e.HubTranscriptPut(dev, HubPassLive, []RecordingSegment{hseg(0, 1, "x")}); !errors.Is(err, ErrNotHub) {
 		t.Fatalf("device: %v", err)

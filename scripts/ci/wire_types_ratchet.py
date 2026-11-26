@@ -146,6 +146,14 @@ def lifted_names(actual, metrics, exceptions, wide):
     return lifted
 
 
+def risen(actual, metrics, exceptions, wide=None):
+    """{(metric, name)} of the names violations reports."""
+    lifted = lifted_names(actual, metrics, exceptions, wide or {})
+    return {(metric, name) for metric in METRICS for name, count in actual["metrics"].get(metric, {}).items()
+            if count > metrics.get(metric, {}).get(name, 0) + exceptions.get(metric, {}).get(name, 0)
+            and name not in lifted.get(metric, ())}
+
+
 def violations(actual, metrics, exceptions, wide=None):
     """Lines for each name that is new or occurs more often than the baseline (plus its exception) allows, and was
     not lifted from outside the contract packages."""
@@ -193,6 +201,23 @@ def raised_against(candidate, previous, label, candidate_wide=None, previous_wid
     return lines
 
 
+def exceptions_grow(metrics, exceptions, previous_metrics, previous_exceptions, label):
+    """Lines for each metric whose allowance (baseline counts plus exceptions) is above a previous baseline's. An
+    exception may stand in for a name the same change removed (a rename: --update lowers the old name, the new one goes
+    in "exceptions"), but never add room: #15561 let three new weak fields in through exceptions alone."""
+    lines = []
+    for metric in METRICS:
+        def total(m, e):
+            return sum(m.get(metric, {}).values()) + sum(e.get(metric, {}).values())
+        now, before = total(metrics, exceptions), total(previous_metrics, previous_exceptions)
+        added = sorted(n for n, c in exceptions.get(metric, {}).items() if c > previous_exceptions.get(metric, {}).get(n, 0))
+        if added and now > before:
+            lines.append("wire types ratchet: {0}: exceptions {1} add room ({2} -> {3} allowed at {4}); an exception "
+                         "may only replace a name this change removes (lower the old one with --update). Type the new "
+                         "field instead: {5}".format(metric, ", ".join(added), before, now, label, FIX[metric]))
+    return lines
+
+
 def render(metrics, exceptions_text, wide=None):
     data = {"metrics": {metric: dict(sorted(metrics[metric].items())) for metric in METRICS if metrics.get(metric)}}
     if wide:
@@ -229,8 +254,9 @@ def check(root, base=None, env=None, counter=run_counter, notes=None):
                   "neutral: {2}".format(metric, len(names), ", ".join(names)))
     previous = _base_metrics(root, base, env)
     if previous:
-        (base_metrics, _, base_wide), label = previous
+        (base_metrics, base_exceptions, base_wide), label = previous
         found.extend(raised_against(metrics, base_metrics, label, wide, base_wide))
+        found.extend(exceptions_grow(metrics, exceptions, base_metrics, base_exceptions, label))
     return found
 
 

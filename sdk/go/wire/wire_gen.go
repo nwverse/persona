@@ -5,6 +5,7 @@ package wire
 
 import (
 	"encoding/json"
+	"errors"
 	"time"
 )
 
@@ -5047,17 +5048,19 @@ var KBKinds = []string{"projects", "chats", "people", "docs", "meetings", "event
 // KBErrorCode: error.code of a knowledge-base call besides permission_denied (data {scope}, the one missing):
 // invalid_params, not_found, assistant_offline (the manager is away), kb_unavailable (not open yet), conflict
 // (kb.update touches fields the user or another extension holds; data KBConflict, nothing was written).
-// assistant_offline and kb_unavailable are worth trying again; conflict is for the user to decide.
+// assistant_offline and kb_unavailable are worth trying again; conflict is for the user to decide. deleted:
+// kb.put_recording of a recording the user deleted, which is not made again.
 const (
 	KBErrorCodeInvalidParams    = "invalid_params"
 	KBErrorCodeNotFound         = "not_found"
 	KBErrorCodeAssistantOffline = "assistant_offline"
 	KBErrorCodeKbUnavailable    = "kb_unavailable"
 	KBErrorCodeConflict         = "conflict"
+	KBErrorCodeDeleted          = "deleted"
 )
 
 // KBErrorCodes are the values of KBErrorCode, in order.
-var KBErrorCodes = []string{"invalid_params", "not_found", "assistant_offline", "kb_unavailable", "conflict"}
+var KBErrorCodes = []string{"invalid_params", "not_found", "assistant_offline", "kb_unavailable", "conflict", "deleted"}
 
 // KBConflict: the data of a conflict error: field → who holds it (user, or ext:<extension id>); a linked entity's
 // field is <kind>/<id>.<field>.
@@ -5457,6 +5460,96 @@ type KBUpdateResult struct {
 	Ignored []KBIgnoredField `json:"ignored,omitempty"`
 }
 
+// KBPutRecordingParams: kb.put_recording (kb.write): create or update the extension's own recording with its minutes
+// and, optionally, its transcript (docs/extensions/extensions.md "Writing recordings and minutes"). It is the
+// extension's: no other extension may write it, and no extension a recording the phone uploaded (permission_denied).
+// The same params again change nothing; a recording the user deleted is not made again (deleted). A recording with
+// minutes is kept past recording_days, its minutes until minutes_days.
+type KBPutRecordingParams struct {
+	// A UUID the extension picks; one derived from its own source id makes a retry land on the same recording.
+	ID    string `json:"id"`
+	Title string `json:"title,omitempty"`
+	// An RFC 3339 time.
+	StartedAt time.Time `json:"started_at"`
+	// An RFC 3339 time, not before started_at.
+	EndedAt time.Time `json:"ended_at,omitzero"`
+	// An i18n code (zh-Hans, en, ja).
+	Language string              `json:"language,omitempty"`
+	Minutes  *KBRecordingMinutes `json:"minutes,omitempty"`
+	// Optional; n, source and echo are the hub's and are dropped. Without minutes, the hub makes minutes of it when the
+	// recording module is on.
+	Transcript []KBRecordingSegment `json:"transcript,omitempty"`
+	// Slugs of existing projects to link it to; a later write never removes a link.
+	Projects []string            `json:"projects,omitempty"`
+	Meeting  *KBRecordingMeeting `json:"meeting,omitempty"`
+}
+
+// KBRecordingMinutes: the minutes the extension wrote, stored as minutes.json and minutes.md. The hub sets version,
+// revision, generated_at, when, start and end. Minutes or a transcript is required.
+type KBRecordingMinutes struct {
+	Title     string            `json:"title,omitempty"`
+	Where     string            `json:"where,omitempty"`
+	Attendees []string          `json:"attendees,omitempty"`
+	Points    []KBMinutesPoint  `json:"points,omitempty"`
+	Decisions []KBMinutesItem   `json:"decisions,omitempty"`
+	Actions   []KBMinutesAction `json:"actions,omitempty"`
+	Open      []KBMinutesItem   `json:"open,omitempty"`
+	// An i18n code: what the minutes are written in.
+	Language string `json:"language,omitempty"`
+	// The minutes as Markdown: minutes.md, what searches and kb.get read. Required, not blank.
+	Markdown string `json:"markdown"`
+}
+
+// KBMinutesItem: A decision or an open question of the minutes.
+type KBMinutesItem struct {
+	Text string `json:"text"`
+	// Seconds from the recording's start.
+	At    float64 `json:"at"`
+	Photo int     `json:"photo,omitempty"`
+}
+
+// KBMinutesPoint: A point discussed; who only when the source names the person.
+type KBMinutesPoint struct {
+	Text string `json:"text"`
+	// Seconds from the recording's start.
+	At    float64 `json:"at"`
+	Photo int     `json:"photo,omitempty"`
+	Who   string  `json:"who,omitempty"`
+}
+
+// KBMinutesAction: an action item. id is the extension's, stable across writes (at most 64 characters): a to-do the
+// user made of it stays on it.
+type KBMinutesAction struct {
+	ID   string `json:"id"`
+	Who  string `json:"who,omitempty"`
+	What string `json:"what"`
+	// The deadline as said.
+	By string `json:"by,omitempty"`
+	// YYYY-MM-DD, when by is one date.
+	DueDate string `json:"due_date,omitempty"`
+	// Seconds from the recording's start.
+	At    float64 `json:"at"`
+	Photo int     `json:"photo,omitempty"`
+	// The hub's: the to-do made of it.
+	TodoID string `json:"todo_id,omitempty"`
+}
+
+// KBRecordingMeeting: the calendar item (events) or imported meeting (meetings) the recording was; it must exist.
+type KBRecordingMeeting struct {
+	Kind string `json:"kind"`
+	ID   string `json:"id"`
+}
+
+type KBPutRecordingResult struct {
+	ID string `json:"id"`
+	// The hub's revision of the recording: 1 when created, one more for each write that changed it.
+	Revision int  `json:"revision"`
+	Created  bool `json:"created,omitempty"`
+	// The write was the same as the last one; nothing was written.
+	Unchanged      bool `json:"unchanged,omitempty"`
+	MinutesVersion int  `json:"minutes_version,omitempty"`
+}
+
 // KBOwnerParams: kb.owner takes nothing.
 type KBOwnerParams struct {
 }
@@ -5732,19 +5825,25 @@ type ModelRefusal struct {
 }
 
 // AssistantErrorCode: error.code of the assistant calls besides permission_denied (data {scope: "assistant.read"}, or
-// "assistant.memory.read" for assistant.memory, or "assistant.entries.read" for assistant.entries.list):
-// invalid_params; not_found (assistant.messages: no such conversation in the assistant's own space);
-// assistant_offline (the manager is away: try again); machine_offline (the assistant's computer is not connected or
-// not set up: try again).
+// "assistant.memory.read" for assistant.memory, or "assistant.entries.read" for assistant.entries.list, or
+// "assistant.events" for assistant.event): invalid_params; not_found (assistant.messages: no such conversation in the
+// assistant's own space); assistant_offline (the manager is away: try again); machine_offline (the assistant's
+// computer is not connected or not set up: try again); assistant.event only: no_main_conversation (the user has no
+// main conversation: nothing was started or changed, do not retry until they have one); rate_limited (data
+// {retry_after} in seconds: too many events from this extension); queue_full (this extension already has the most
+// events waiting behind a running turn: try again later).
 const (
-	AssistantErrorCodeInvalidParams    = "invalid_params"
-	AssistantErrorCodeNotFound         = "not_found"
-	AssistantErrorCodeAssistantOffline = "assistant_offline"
-	AssistantErrorCodeMachineOffline   = "machine_offline"
+	AssistantErrorCodeInvalidParams      = "invalid_params"
+	AssistantErrorCodeNotFound           = "not_found"
+	AssistantErrorCodeAssistantOffline   = "assistant_offline"
+	AssistantErrorCodeMachineOffline     = "machine_offline"
+	AssistantErrorCodeNoMainConversation = "no_main_conversation"
+	AssistantErrorCodeRateLimited        = "rate_limited"
+	AssistantErrorCodeQueueFull          = "queue_full"
 )
 
 // AssistantErrorCodes are the values of AssistantErrorCode, in order.
-var AssistantErrorCodes = []string{"invalid_params", "not_found", "assistant_offline", "machine_offline"}
+var AssistantErrorCodes = []string{"invalid_params", "not_found", "assistant_offline", "machine_offline", "no_main_conversation", "rate_limited", "queue_full"}
 
 // AssistantConversationsParams: assistant.conversations (assistant.read): the conversations last active at or after
 // since, newest first.
@@ -5932,6 +6031,118 @@ type AssistantEntriesChangedEvent struct {
 	ID       string `json:"id"`
 	RecordID string `json:"record_id"`
 	Status   string `json:"status"`
+}
+
+// AssistantEventSeverity: how much the user should care. info: tell them only if it matters to what they are doing;
+// warning: they should hear about it; critical: they need to know now.
+const (
+	AssistantEventSeverityInfo     = "info"
+	AssistantEventSeverityWarning  = "warning"
+	AssistantEventSeverityCritical = "critical"
+)
+
+// AssistantEventSeverities are the values of AssistantEventSeverity, in order.
+var AssistantEventSeverities = []string{"info", "warning", "critical"}
+
+// AssistantEventState: where the thing an event's key names is now, in the extension's own words (firing, resolved,
+// ...): a label each extension chooses.
+// It is free text, not a closed set of values.
+type AssistantEventState string
+
+// AssistantEventReplace: whether an event takes the place of one of the extension's with the same key still waiting
+// behind a running turn: absent and true replace, false keeps the earlier one as its own message.
+// It has three values: AssistantEventReplaceDefault (absent from the JSON), AssistantEventReplaceTrue and
+// AssistantEventReplaceFalse.
+type AssistantEventReplace uint8
+
+const (
+	// AssistantEventReplaceDefault: absent.
+	AssistantEventReplaceDefault AssistantEventReplace = iota
+	// AssistantEventReplaceTrue: true.
+	AssistantEventReplaceTrue
+	// AssistantEventReplaceFalse: false.
+	AssistantEventReplaceFalse
+)
+
+// IsZero reports AssistantEventReplaceDefault, which omitzero leaves out of the JSON.
+func (v AssistantEventReplace) IsZero() bool { return v == AssistantEventReplaceDefault }
+
+// Or is the boolean v says, or absent when v is the default.
+func (v AssistantEventReplace) Or(absent bool) bool {
+	switch v {
+	case AssistantEventReplaceTrue:
+		return true
+	case AssistantEventReplaceFalse:
+		return false
+	}
+	return absent
+}
+
+// MarshalJSON writes true or false; AssistantEventReplaceDefault is null (a field tagged omitzero leaves it out
+// instead).
+func (v AssistantEventReplace) MarshalJSON() ([]byte, error) {
+	switch v {
+	case AssistantEventReplaceDefault:
+		return []byte("null"), nil
+	case AssistantEventReplaceTrue:
+		return []byte("true"), nil
+	case AssistantEventReplaceFalse:
+		return []byte("false"), nil
+	}
+	return nil, errors.New("AssistantEventReplace: not one of its three values")
+}
+
+// UnmarshalJSON reads true or false, and null as absent; anything else fails.
+func (v *AssistantEventReplace) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		*v = AssistantEventReplaceDefault
+		return nil
+	}
+	var b bool
+	if err := json.Unmarshal(data, &b); err != nil {
+		return err
+	}
+	*v = AssistantEventReplaceFalse
+	if b {
+		*v = AssistantEventReplaceTrue
+	}
+	return nil
+}
+
+// AssistantEventParams: assistant.event (assistant.events): one event for the assistant's main conversation. The
+// assistant gets it as something an extension observed, never as the user's words, and decides what to tell the user.
+// An event with the same key as one of this extension's still waiting behind a running turn replaces it, unless
+// replace is false. Lengths are in characters.
+type AssistantEventParams struct {
+	// What the event is about (one monitored thing). The same extension and key replace an event not yet delivered.
+	Key      string `json:"key"`
+	Severity string `json:"severity,omitempty"`
+	// One line saying what happened.
+	Title string `json:"title"`
+	// The details.
+	Body string `json:"body,omitempty"`
+	// What the extension suggests be done about it: a suggestion for the assistant to weigh, not an order.
+	ActionHint string `json:"action_hint,omitempty"`
+	// Where the thing the key names is now, in the extension's words (firing, resolved, ...).
+	State AssistantEventState `json:"state,omitempty"`
+	// false keeps an earlier event with the same key as its own message instead of replacing it. Absent is true.
+	Replace AssistantEventReplace `json:"replace,omitzero"`
+}
+
+// AssistantEventDelivery: what happened to the event. delivered: sent into the idle main conversation now. queued:
+// the conversation is running (or not reachable just now), so it goes in when its turn ends. replaced: it took the
+// place of an earlier event with the same key that was still queued.
+const (
+	AssistantEventDeliveryDelivered = "delivered"
+	AssistantEventDeliveryQueued    = "queued"
+	AssistantEventDeliveryReplaced  = "replaced"
+)
+
+// AssistantEventDeliveries are the values of AssistantEventDelivery, in order.
+var AssistantEventDeliveries = []string{"delivered", "queued", "replaced"}
+
+type AssistantEventResult struct {
+	Delivery string `json:"delivery"`
 }
 
 // AssistantDataStatusParams: assistant.data_status takes no parameters.
@@ -8197,6 +8408,13 @@ var newDef = map[string]func() any{
 	"KBHit":                         func() any { return new(KBHit) },
 	"KBUpdateParams":                func() any { return new(KBUpdateParams) },
 	"KBUpdateResult":                func() any { return new(KBUpdateResult) },
+	"KBPutRecordingParams":          func() any { return new(KBPutRecordingParams) },
+	"KBRecordingMinutes":            func() any { return new(KBRecordingMinutes) },
+	"KBMinutesItem":                 func() any { return new(KBMinutesItem) },
+	"KBMinutesPoint":                func() any { return new(KBMinutesPoint) },
+	"KBMinutesAction":               func() any { return new(KBMinutesAction) },
+	"KBRecordingMeeting":            func() any { return new(KBRecordingMeeting) },
+	"KBPutRecordingResult":          func() any { return new(KBPutRecordingResult) },
 	"KBOwnerParams":                 func() any { return new(KBOwnerParams) },
 	"KBOwner":                       func() any { return new(KBOwner) },
 	"KBChangedEvent":                func() any { return new(KBChangedEvent) },
@@ -8235,6 +8453,8 @@ var newDef = map[string]func() any{
 	"AssistantEntriesParams":        func() any { return new(AssistantEntriesParams) },
 	"AssistantEntriesResult":        func() any { return new(AssistantEntriesResult) },
 	"AssistantEntriesChangedEvent":  func() any { return new(AssistantEntriesChangedEvent) },
+	"AssistantEventParams":          func() any { return new(AssistantEventParams) },
+	"AssistantEventResult":          func() any { return new(AssistantEventResult) },
 	"AssistantDataStatusParams":     func() any { return new(AssistantDataStatusParams) },
 	"AssistantDataItem":             func() any { return new(AssistantDataItem) },
 	"AssistantDataStatusResult":     func() any { return new(AssistantDataStatusResult) },
@@ -8395,6 +8615,7 @@ var Calls = map[string]Call{
 	"kb.update":                       {Name: "kb.update", From: "program", Params: "KBUpdateParams", Result: "KBUpdateResult"},
 	"kb.owner":                        {Name: "kb.owner", From: "program", Params: "KBOwnerParams", Result: "KBOwner"},
 	"kb.recent":                       {Name: "kb.recent", From: "program", Params: "KBRecentParams", Result: "KBRecentResult"},
+	"kb.put_recording":                {Name: "kb.put_recording", From: "program", Params: "KBPutRecordingParams", Result: "KBPutRecordingResult"},
 	"event.kb.changed":                {Name: "event.kb.changed", From: "hub", Params: "KBChangedEvent", Result: "", Event: true},
 	"event.kb.forgotten":              {Name: "event.kb.forgotten", From: "hub", Params: "KBForgottenEvent", Result: "", Event: true},
 	"event.todo.changed":              {Name: "event.todo.changed", From: "hub", Params: "TodoChangedEvent", Result: "", Event: true},
@@ -8406,6 +8627,7 @@ var Calls = map[string]Call{
 	"assistant.messages":              {Name: "assistant.messages", From: "program", Params: "AssistantMessagesParams", Result: "AssistantMessagesResult"},
 	"assistant.memory":                {Name: "assistant.memory", From: "program", Params: "AssistantMemoryParams", Result: "AssistantMemoryResult"},
 	"assistant.entries.list":          {Name: "assistant.entries.list", From: "program", Params: "AssistantEntriesParams", Result: "AssistantEntriesResult"},
+	"assistant.event":                 {Name: "assistant.event", From: "program", Params: "AssistantEventParams", Result: "AssistantEventResult"},
 	"event.assistant.entries.changed": {Name: "event.assistant.entries.changed", From: "hub", Params: "AssistantEntriesChangedEvent", Result: "", Event: true},
 	"assistant.data_status":           {Name: "assistant.data_status", From: "program", Params: "AssistantDataStatusParams", Result: "AssistantDataStatusResult"},
 	"machines.pair_link":              {Name: "machines.pair_link", From: "program", Params: "MachinesPairLinkParams", Result: "MachinesPairLinkResult"},

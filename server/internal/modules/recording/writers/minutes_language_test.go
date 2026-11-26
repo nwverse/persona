@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -202,7 +202,7 @@ func TestDayRecapInTheRecordingsLanguage(t *testing.T) {
 	e := dayEngine(t, m, &now)
 	u := dayUpload(1, "大家好，今天评审 export", "Ada says the export drops entries over 4 MB", "Bo、金曜日までに regression test を追加してください")
 	u.Language = "en-US"
-	u.Coverage = &kb.RecordingCoverage{To: 7200, Gaps: []CoverageGap{{From: 600, To: 1200, Reason: GapInterrupted}}}
+	u.Coverage = &recordingwire.RecordingCoverage{To: 7200, Gaps: []CoverageGap{{From: 600, To: 1200, Reason: GapInterrupted}}}
 	mustPut(t, e, dayID, u, now)
 	if n := e.WriteDayRecaps(context.Background(), 1); n != 1 || len(m.calls) != 1 {
 		t.Fatalf("worked on %d, %d calls", n, len(m.calls))
@@ -301,7 +301,7 @@ func TestDayRecapRepairedKeepsItsLanguage(t *testing.T) {
 			// The phone erased 08:03 (line 4).
 			erase := dayUpload(5, texts[0], texts[1], texts[2], "")
 			erase.Language = tc.later
-			erase.Coverage = &kb.RecordingCoverage{To: 3600, Gaps: []CoverageGap{{From: 170, To: 200, Reason: GapErased}}}
+			erase.Coverage = &recordingwire.RecordingCoverage{To: 3600, Gaps: []CoverageGap{{From: 170, To: 200, Reason: GapErased}}}
 			mustPut(t, e, dayID, erase, now)
 			rc, err := e.ReadDayRecap(dayID)
 			if err != nil || rc.Version != 2 || len(rc.Gaps) != 1 {

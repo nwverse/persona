@@ -259,7 +259,7 @@ func (s *Service) linkInboxTaskURLs(ctx context.Context) {
 	}
 	b.mu.Lock()
 	for _, it := range b.items {
-		if itemVisibilityExcludedLocked(it) || !inboxTaskLinkEligible(it) {
+		if itemVisibilityExcludedLocked(it) || it.externallyRouted() || !inboxTaskLinkEligible(it) {
 			continue
 		}
 		if !it.open() {

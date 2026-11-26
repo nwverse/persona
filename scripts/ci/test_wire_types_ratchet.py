@@ -113,6 +113,22 @@ class RatchetTests(unittest.TestCase):
         self.write({}, {"bare-id": {"Item.OwnerID": {"count": 1, "pr": "#1", "why": "legacy wire"}}})
         self.assertEqual([], w.check(self.root, counter=self.counter({"bare-id": {"Item.OwnerID": 1}})))
 
+    def test_an_exception_that_adds_room_is_refused_against_the_base(self):
+        # #15561: new weak fields let in by exceptions alone, nothing removed.
+        found = w.exceptions_grow({"bare-id": {"A.ID": 1}}, {"bare-id": {"New.OwnerID": 1}}, {"bare-id": {"A.ID": 1}}, {},
+                                  "base")
+        self.assertEqual(1, len(found))
+        self.assertIn("New.OwnerID add room (1 -> 2", found[0])
+
+    def test_an_exception_for_a_rename_is_allowed(self):
+        # --update lowered the old name; the new one is an exception: the allowance does not grow.
+        self.assertEqual([], w.exceptions_grow({}, {"bare-id": {"Item.OwnerID": 1}}, {"bare-id": {"Item.HolderID": 1}}, {},
+                                               "base"))
+
+    def test_an_existing_exception_is_not_reported_again(self):
+        exc = {"bare-id": {"Old.ID": 1}}
+        self.assertEqual([], w.exceptions_grow({"bare-id": {"A.ID": 1}}, exc, {"bare-id": {"A.ID": 1}}, exc, "base"))
+
     def test_an_exception_without_a_pr_is_refused(self):
         self.write({}, {"bare-id": {"Item.OwnerID": {"count": 1, "why": "legacy wire"}}})
         with self.assertRaises(w.WireTypesError):
@@ -191,6 +207,97 @@ class CounterTests(unittest.TestCase):
         self.assertEqual({"bare-id": {"Clip.MachineID": 1, "Pic.ID": 1}}, before["wide"])
         self.assertEqual({"bare-id": {"Clip.MachineID": 1}}, after["metrics"])
         self.assertEqual(before["wide"], after["wide"])  # the alias is not a struct: the lift keeps the wide count
+
+
+@unittest.skipUnless(shutil.which("go") and shutil.which("git"), "go or git is not on PATH")
+class MergeGateTests(unittest.TestCase):
+    """scripts/ci/merge_wire_types.py on a real repository: the merge result is counted with the real Go counter."""
+
+    def setUp(self):
+        import merge_wire_types
+        self.m = merge_wire_types
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        self.root = Path(self.dir.name) / "repo"
+        server = self.root / "server/internal"
+        for name in ("hub", "assistant", "devices", "extmgr", "proto"):
+            (server / name).mkdir(parents=True)
+            (server / name / "doc.go").write_text("package " + name + "\n")  # git keeps no empty directory
+        (server / "archguard/testdata").mkdir(parents=True)
+        (server / "archguard/testdata/contracts.txt").write_text("internal/proto\n")
+        (server / "proto/a.go").write_text("package proto\ntype Session struct { MachineID string }\n")
+        (self.root / "scripts/ci").mkdir(parents=True)
+        (self.root / w.BASELINE_REL).write_text(baseline({"bare-id": {"Session.MachineID": 1}},
+                                                         wide={"bare-id": {"Session.MachineID": 1}}))
+        (self.root / "README.md").write_text("x\n")
+        self.git("init", "-q", "-b", "main")
+        self.commit("base")
+        self.base = self.git("rev-parse", "HEAD")
+
+    def git(self, *args):
+        return subprocess.run(["git", "-C", str(self.root), "-c", "user.name=t", "-c", "user.email=t@example.com", *args],
+                              capture_output=True, text=True, check=True).stdout.strip()
+
+    def commit(self, message):
+        self.git("add", "-A")
+        self.git("commit", "-qm", message)
+
+    def branch(self, name):
+        self.git("checkout", "-q", "-b", name, self.base)
+
+    def run_gate(self):
+        notes = []
+        lines = self.m.check(self.root, self.base, self.git("rev-parse", "HEAD"), out=notes.append)
+        self.git("checkout", "-q", "main")
+        return lines, notes
+
+    def test_a_new_weak_field_is_refused(self):
+        self.branch("weak")
+        (self.root / "server/internal/proto/a.go").write_text(
+            "package proto\ntype Session struct { MachineID string; OwnerSessionID string }\n")
+        self.commit("weak")
+        lines, _ = self.run_gate()
+        self.assertEqual(1, len(lines))
+        self.assertIn("Session.OwnerSessionID (new)", lines[0])
+
+    def test_a_typed_field_merges(self):
+        self.branch("typed")
+        (self.root / "server/internal/proto/a.go").write_text(
+            "package proto\ntype SessionID string\ntype Session struct { MachineID string; Owner SessionID }\n")
+        self.commit("typed")
+        self.assertEqual([], self.run_gate()[0])
+
+    def test_an_exception_that_adds_room_is_refused(self):
+        self.branch("exception")
+        (self.root / "server/internal/proto/a.go").write_text(
+            "package proto\ntype Session struct { MachineID string; OwnerSessionID string }\n")
+        (self.root / w.BASELINE_REL).write_text(baseline(
+            {"bare-id": {"Session.MachineID": 1}}, wide={"bare-id": {"Session.MachineID": 1}},
+            exceptions={"bare-id": {"Session.OwnerSessionID": {"count": 1, "pr": "#1", "why": "x"}}}))
+        self.commit("exception")
+        lines, _ = self.run_gate()
+        self.assertTrue(any("add room" in line for line in lines), lines)
+
+    def test_a_failure_already_on_the_base_is_not_the_prs(self):
+        (self.root / "server/internal/proto/a.go").write_text(
+            "package proto\ntype Session struct { MachineID string; StaleID string }\n")
+        self.git("checkout", "-q", "main")
+        self.commit("main went red")
+        self.base = self.git("rev-parse", "HEAD")
+        self.branch("other")
+        (self.root / "server/internal/proto/b.go").write_text("package proto\ntype Other struct{ N int }\n")
+        self.commit("unrelated go change")
+        lines, notes = self.run_gate()
+        self.assertEqual([], lines)
+        self.assertTrue(any("Session.StaleID already fails on the base" in n for n in notes), notes)
+
+    def test_a_pr_without_go_changes_is_not_counted(self):
+        self.branch("docs")
+        (self.root / "README.md").write_text("y\n")
+        self.commit("docs")
+        lines, notes = self.run_gate()
+        self.assertEqual([], lines)
+        self.assertIn("not counted", notes[0])
 
 
 class CommittedBaselineTests(unittest.TestCase):
