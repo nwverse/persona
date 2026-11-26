@@ -17,6 +17,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/aiwire"
 	"github.com/nwverse/persona/server/internal/modelhttp"
+	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/shellcmd"
@@ -622,7 +623,7 @@ func (n *Node) modelRunAgy(ctx context.Context, p proto.ModelRunParams, dir stri
 
 	cmd := loginShell(runCtx, script)
 	killGroupOnCancel(cmd)
-	raw, loggedOutFast, runErr := runWithEarlyAuthDetect(cancelRun, cmd, isAgyInteractiveAuthPrompt)
+	raw, loggedOutFast, runErr := runWithEarlyAuthDetect(runCtx, cancelRun, cmd, isAgyInteractiveAuthPrompt)
 	if ctx.Err() != nil {
 		return proto.ModelRunAnswer{}, timedOut
 	}
@@ -655,7 +656,7 @@ func (n *Node) modelRunAgy(ctx context.Context, p proto.ModelRunParams, dir stri
 
 // runWithEarlyAuthDetect captures combined stdout+stderr and cancels the process immediately if matchLine detects an
 // interactive login prompt (e.g. agy waiting 60 seconds for an OAuth browser callback when signed out).
-func runWithEarlyAuthDetect(cancel context.CancelFunc, cmd *exec.Cmd, matchLine func(string) bool) ([]byte, bool, error) {
+func runWithEarlyAuthDetect(ctx context.Context, cancel context.CancelFunc, cmd *exec.Cmd, matchLine func(string) bool) ([]byte, bool, error) {
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, false, err
@@ -664,6 +665,9 @@ func runWithEarlyAuthDetect(cancel context.CancelFunc, cmd *exec.Cmd, matchLine 
 	if err := cmd.Start(); err != nil {
 		return nil, false, err
 	}
+	// A descendant can retain the write end after the launcher dies. WaitDelay cannot interrupt Scan before Wait.
+	stopReading := context.AfterFunc(ctx, func() { _ = stdout.Close() })
+	defer stopReading()
 	var buf bytes.Buffer
 	var authTriggered bool
 	sc := bufio.NewScanner(stdout)
@@ -678,6 +682,10 @@ func runWithEarlyAuthDetect(cancel context.CancelFunc, cmd *exec.Cmd, matchLine 
 		}
 	}
 	waitErr := cmd.Wait()
+	if ctx.Err() != nil {
+		// A child forking during the first group signal can survive it on macOS (#5942).
+		osproc.SweepGroup(cmd.Process.Pid, time.Second)
+	}
 	return buf.Bytes(), authTriggered, waitErr
 }
 

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/aiwire"
+	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -408,6 +409,37 @@ sleep 5
 `)
 	if _, err := runModel(t, proto.ModelRunParams{Launcher: "agy", Prompt: "ping", TimeoutMS: 200}); runCode(err) != proto.CodeModelRunTimeout {
 		t.Fatalf("expected timeout after SUCCESS+sleep, got: %v", err)
+	}
+}
+
+func TestModelRunAgyDeadlineReleasesInheritedOutput(t *testing.T) {
+	sh, err := exec.LookPath(loginShellProgram())
+	if err != nil {
+		t.Skip("no supported launcher shell")
+	}
+	gate, release, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gate.Close()
+	defer release.Close()
+	// Release the child on a regression so the test reports the stalled read and reaps the launcher.
+	watchdog := time.AfterFunc(5*time.Second, func() { _ = release.Close() })
+	defer watchdog.Stop()
+
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	// Cancel just the launcher to deterministically leave the child holding stdout through the deadline.
+	// Save stdin on fd 3 before backgrounding so the child waits on the test's pipe.
+	cmd := exec.CommandContext(ctx, sh, "-c", `exec 3<&0; { echo holding; read -r line <&3; } & wait`)
+	cmd.SysProcAttr = osproc.SessionGroupAttr()
+	cmd.Stdin = gate
+	out, auth, _ := runWithEarlyAuthDetect(ctx, cancel, cmd, isAgyInteractiveAuthPrompt)
+	if !watchdog.Stop() {
+		t.Fatal("output scanner waited for the child to close its inherited stdout")
+	}
+	if ctx.Err() != context.DeadlineExceeded || !strings.Contains(string(out), "holding\n") || auth {
+		t.Fatalf("deadline with live output writer: ctx=%v output=%q auth=%v", ctx.Err(), out, auth)
 	}
 }
 
