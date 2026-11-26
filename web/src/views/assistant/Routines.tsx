@@ -16,6 +16,7 @@ import {
   momentLabel, skipNextTarget, untilLabel, untilText, upcoming, type Run, type SkipNextTarget, type Task,
 } from "../../lib/routines";
 import { isResumed } from "../../lib/reconnect";
+import { SCENARIO_TEMPLATES, type ScenarioDefinition } from "../../lib/scenario-routines";
 import { onHubEvent, useStore } from "../../lib/store";
 import { Button, cx, IconButton, Loading, Menu, toast, useMenu, useNow, type MenuItem } from "../../ui/atoms";
 import { contextMenuProps } from "../../ui/context-menu";
@@ -24,8 +25,13 @@ import type { MenuAt } from "../../ui/menu-model";
 import { Icon, type IconName } from "../../ui/icons";
 import { Pill } from "../settings/SettingsParts";
 import { Empty, IconTile, SectionTitle, Switch } from "./parts";
-import { RunLine, TaskEditor } from "./TaskEditor";
+import { lazyOverlay } from "../LazyOverlay";
+import { RunLine } from "./RunLine";
+import { ScenarioTemplateDialog } from "./ScenarioTemplateDialog";
 import { t } from "../../i18n";
+
+// Loaded on first open so the ~40 KB task editor stays off Routines' initial chunk.
+const TaskEditor = lazyOverlay(() => import("./TaskEditor").then((m) => m.TaskEditor));
 
 /** A task's mark, from its title (the iOS app's AssistantScheduleText.symbol). */
 function taskIcon(task: Task): IconName {
@@ -75,6 +81,7 @@ function RoutinesPage({ scope, onToggleSidebar }: { scope: number; onToggleSideb
   const [error, setError] = useState("");
   const [runsError, setRunsError] = useState("");
   const [editing, setEditing] = useState<Task | null>(null);
+  const [scenario, setScenario] = useState<ScenarioDefinition | null>(null);
   const [allRuns, setAllRuns] = useState(false);
   const [rowMenu, setRowMenu] = useState<{ task: Task; at: MenuAt } | null>(null);
   const menu = useMenu();
@@ -250,7 +257,14 @@ function RoutinesPage({ scope, onToggleSidebar }: { scope: number; onToggleSideb
   const openRowMenu = (task: Task) => (at: MenuAt) => setRowMenu({ task, at });
 
   const items: MenuItem[] = [
-    ...TEMPLATES.map((tpl) => ({ key: tpl.key, label: tpl.title, icon: taskIcon(fromTemplate(tpl)), hint: tpl.repeat === "interval" ? t("assistant-routines.every_30_min") : undefined, onSelect: () => setEditing(fromTemplate(tpl)) })),
+    ...SCENARIO_TEMPLATES.map((template) => ({
+      key: template.key,
+      label: t(`assistant-scenario-templates.${template.key}_title`),
+      detail: t(`assistant-scenario-templates.${template.key}_menu_detail`),
+      icon: template.key === "daily-digest" ? "sun" : template.key === "inbox-triage" ? "todo" : "read",
+      onSelect: () => setScenario(template),
+    })),
+    ...TEMPLATES.map((tpl, index) => ({ key: tpl.key, label: tpl.title, icon: taskIcon(fromTemplate(tpl)), hint: tpl.repeat === "interval" ? t("assistant-routines.every_30_min") : undefined, divider: index === 0, onSelect: () => setEditing(fromTemplate(tpl)) })),
     { key: "blank", label: t("assistant-routines.blank"), icon: "pencil" as IconName, onSelect: () => setEditing(blankTask()) },
   ];
 
@@ -392,6 +406,17 @@ function RoutinesPage({ scope, onToggleSidebar }: { scope: number; onToggleSideb
       </div>
 
       {rowMenu && <Menu anchor={rowMenu.at.anchor ?? null} point={rowMenu.at.point} onClose={() => setRowMenu(null)} items={rowItems(rowMenu.task)} />}
+
+      {scenario && <ScenarioTemplateDialog
+        key={scenario.key}
+        template={scenario}
+        readOptions={readOptions}
+        onClose={() => setScenario(null)}
+        onReview={(task) => {
+          setScenario(null);
+          setEditing(task);
+        }}
+      />}
 
       {editing && (
         <TaskEditor

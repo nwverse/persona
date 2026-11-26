@@ -12,6 +12,7 @@ import ts from "typescript";
 import { brotliCompress, constants, gzip as gzipCompress } from "node:zlib";
 import { startupMatcher } from "./i18n/startup-keys";
 import { MODULE_SWITCH_KEY } from "./core/module-switch";
+import { MODULE_HUB_KEY_PREFIX } from "./core/module-hub-storage";
 
 /** The languages under `dir` (src/i18n/locales): code → the language subtags its _meta.json matches. Build time only. */
 export function localeDirs(dir: string): Record<string, string[]> {
@@ -80,6 +81,13 @@ export function preloadScript(files: PreloadFiles): string {
     try {
       var off = JSON.parse(localStorage.getItem(${JSON.stringify(MODULE_SWITCH_KEY)}) || "[]");
       if (Array.isArray(off) && off.indexOf(own.module) >= 0) own = null;
+    } catch (e) {}
+  }
+  if (own) {
+    try {
+      var kept = JSON.parse(localStorage.getItem(${JSON.stringify(MODULE_HUB_KEY_PREFIX)} + location.origin + base.replace(/\\/+$/, "")) || "null");
+      var valid = Array.isArray(kept) && kept.every(function (x) { return typeof x === "string" && x.indexOf("module.") === 0; });
+      if (valid && kept.indexOf("module." + own.module) < 0) own = null;
     } catch (e) {}
   }
   [files.catalogs[lang]].concat(files.shared, own ? own.files : files.app).forEach(add);

@@ -256,6 +256,9 @@ func (s *Service) kbOpenLocked(ctx context.Context, set assistantwire.KBSettings
 		if n := e.RetagMail(); n > 0 {
 			s.logf("kb: %d mail chat(s) queued to be tagged again under the current rules", n)
 		}
+		if n := e.DedupeLarkSyncChats(); n > 0 {
+			s.logf("kb: removed %d duplicate larksync message(s) already archived by the gateway", n)
+		}
 	}
 	k.cur.Store(&kbOpened{eng: e, set: set})
 	return e, nil

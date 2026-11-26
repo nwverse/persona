@@ -10,6 +10,8 @@
 DELETE /api/v1/admin/devices/{id}
 DELETE /api/v1/admin/machines/{id}
 DELETE /api/v1/admin/peers/{hub_id}
+DELETE /api/v1/auth/readonly-sessions
+DELETE /api/v1/auth/readonly-sessions/{id}
 DELETE /api/v1/auth/tokens/{id}
 DELETE /api/v1/looks/uploads/{id} # the hub keeps the looks: personas/ is its own directory (look_uploads.go)
 DELETE /api/v1/machines/{mid}/files/entry
@@ -31,6 +33,7 @@ GET /api/v1/admin/sessions/{mid}/{sid}/ownership-inspection
 GET /api/v1/admin/state
 GET /api/v1/app/android/apk
 GET /api/v1/app/android/latest
+GET /api/v1/auth/readonly-sessions
 GET /api/v1/auth/tokens
 GET /api/v1/devices/push
 GET /api/v1/devices/{id}/lock-tests/{test_id}
@@ -39,6 +42,7 @@ GET /api/v1/devices/{id}/sessions
 GET /api/v1/endpoints
 GET /api/v1/fleet
 GET /api/v1/health
+GET /api/v1/hub/recovery # hub installation administration: read-only whole-install inventory
 GET /api/v1/hub/update
 GET /api/v1/hub/update/backups # hub installation administration: owned local recovery snapshots
 GET /api/v1/hub/update/history
@@ -134,11 +138,14 @@ POST /api/v1/admin/sessions/{mid}/{sid}/owner
 POST /api/v1/admin/setup
 POST /api/v1/admin/setup-code
 POST /api/v1/auth/pair-codes
+POST /api/v1/auth/readonly-sessions
 POST /api/v1/auth/tokens
 POST /api/v1/devices
 POST /api/v1/devices/{id}/live-activity
 POST /api/v1/devices/{id}/lock-tests
 POST /api/v1/devices/{id}/lock-tests/{test_id}/receipt
+POST /api/v1/hub/recovery/bundles/{id}/inspect # hub installation administration: audited offline integrity check
+POST /api/v1/hub/recovery/bundles/{id}/verify # hub installation administration: audited temporary-database verification
 POST /api/v1/hub/update
 POST /api/v1/hub/update/backups/{id}/apply # hub installation administration: shared self-update transaction
 POST /api/v1/hub/update/check

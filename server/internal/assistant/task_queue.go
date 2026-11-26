@@ -49,6 +49,7 @@ type TaskQueue struct {
 	Blockers  []string           `json:"blockers,omitempty"`
 	Gateway   *taskGatewayWait   `json:"gateway_wait,omitempty"`
 	Workspace *taskWorkspaceWait `json:"workspace_wait,omitempty"`
+	Placement *taskPlacementWait `json:"placement_wait,omitempty"`
 }
 
 // queueAdmissionRefusal parks a task the admission gate refused instead of failing it. The claim held by the start
@@ -89,7 +90,7 @@ func (s *Service) queueAdmissionRefusal(planID string, i int, t PlanTask, err er
 
 func admissionQueueEntry(now time.Time, reason, key string, retry bool, before *TaskQueue) TaskQueue {
 	q := TaskQueue{Reason: reason, Key: key, Attempt: 1, QueuedAt: now, NextAt: now.Add(admissionQueueInterval), Retry: retry}
-	if before != nil && before.Key != requestGateKey && before.Key != workspaceQueueKey {
+	if before != nil && before.Key != requestGateKey && before.Key != workspaceQueueKey && before.Key != pendingPlacementQueueKey {
 		q.QueuedAt, q.Attempt, q.Retry, q.Gateway = before.QueuedAt, before.Attempt+1, before.Retry, before.Gateway
 		// Group and quota waits have separate budgets. A new resource refusal starts a new stretch.
 		if before.Key == gatewayQuotaWaitKey || before.Key == admissionGroupFullKey && key != admissionGroupFullKey {
@@ -140,7 +141,7 @@ func (s *Service) sweepAdmissionQueue(ctx context.Context) {
 			if q == nil {
 				continue
 			}
-			if q.Key == workspaceQueueKey {
+			if q.Key == workspaceQueueKey || q.Key == pendingPlacementQueueKey {
 				continue
 			}
 			if q.Gateway != nil {
@@ -171,9 +172,9 @@ func (s *Service) sweepAdmissionQueue(ctx context.Context) {
 	s.sweepWorkspaceQueues(cctx)
 }
 
-// queueBounded says the generic attempt and time bounds apply. Group, prerequisite, quota and workspace waits manage their own.
+// queueBounded says the generic attempt and time bounds apply. Group, prerequisite, quota, workspace and placement waits manage their own.
 func queueBounded(q *TaskQueue) bool {
-	return q.Key != admissionGroupFullKey && q.Key != requestGateKey && q.Key != gatewayQuotaWaitKey && q.Key != workspaceQueueKey
+	return q.Key != admissionGroupFullKey && q.Key != requestGateKey && q.Key != gatewayQuotaWaitKey && q.Key != workspaceQueueKey && q.Key != pendingPlacementQueueKey
 }
 
 func queueExpired(q *TaskQueue, now time.Time) bool {

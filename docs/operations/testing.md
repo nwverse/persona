@@ -125,7 +125,10 @@ The parts are balanced by measured task time, and each lane runs its parts in on
 share runs once per lane rather than once per part (#3056). Module declarations are dynamically partitioned; unknown module prefixes
 use a fallback part, while unsupported declarations fail rather than skip coverage. Every module's complete test selector retains all
 variants. Gradle workers remain bounded; build and public Robolectric dependency caches do not contain private config. Per-lane Gradle
-profiles and test/lint reports are uploaded for diagnosis. Local entry points without lane options still run complete verification.
+profiles and test/lint reports are uploaded for diagnosis. An independent exact-source result job then verifies run-bound receipts from
+both lanes and publishes one aggregate artifact even when a lane fails or disappears; missing receipts are recorded as unavailable rather
+than as passes or ordinary test failures, and release signing consumes only a verified aggregate. Local entry points without lane
+options still run complete verification.
 The chat module's single-JVM tests use a 1 GB heap because their Robolectric native-graphics classes accumulate resource/theme
 tables in the shared test process. A two-worker lane can run at most two test JVMs, a 2 GB combined test-heap cap when both use that
 setting; the 4 GB Gradle daemon and non-heap allocations are separate.
@@ -218,8 +221,19 @@ The ordinary `AboutVersionRegularVisualTests` invocation has its own observation
 and `regular-visual-context.json`, recorded immediately before its unchanged `xcodebuild`. Its scoped stream therefore
 does not inherit the preceding readiness invocation's horizon. A 15-second sampler records only PID, parent PID, state
 and process name for the owned Persona host and a debugserver validated under it or its owned launchd_sim. A debugger
-first seen before the host remains associated with this invocation, including when absent from a later sample; matching
-`ps -M` output is bounded. One read-only `launchctl print system` after 60 seconds projects only the synthetic bundle
+first seen before the host remains associated with this invocation through its process start time while continuously
+present, including when its launcher exits. Once a successful snapshot observes it absent, or its identity is rejected,
+current owned ancestry is required before accepting it again. This applies even when its new parent is 1 or its
+one-second `lstart` timestamp is unchanged; an equal timestamp alone cannot transfer ownership. The timestamp is
+internal only and never exported. Matching `ps -M` output is bounded and runs only after an immediate PID, start-time
+and ancestry check.
+Each sample retains its own private identity snapshot while revalidation refreshes the shared current map. A process exit
+or a missing/changed identity at either check writes explicit unavailable evidence rather than aborting later sampling or
+final collection. A further check after temporary capture replaces a mismatching successful result with an explicit
+identity-mismatch status and unavailable evidence. Portable `ps` cannot atomically validate a PID and read its threads, so
+a replacement between those kernel operations remains an inherent race; the checks narrow it rather than claim atomic
+capture. Command arguments and private identity values are not exported.
+One read-only `launchctl print system` after 60 seconds projects only the synthetic bundle
 ID and its allowlisted `state`, `pid`, `runs` and `last exit code` fields; raw arguments, programs, paths, environment
 and arbitrary values are never exported. The visual command tees its actual stdout/stderr to `ios-about-regular.log`
 without losing its exit status. Once that invocation has started, failure diagnostics require the log, publish an
@@ -308,6 +322,7 @@ repair worker may not edit baselines (`docs/operations/main-verification.md`), s
 | Fixed sleeps | `time.Sleep` calls per Go test file under `server/` and `sdk/go/` | `scripts/ci/sleep_baseline.json` | `scripts/ci/sleep_ratchet.py` (guards, check-fast, merge) | `--update` |
 | Web font sizes | hard-coded px font sizes per `web/src` file | `scripts/ci/web_font_baseline.json` | `scripts/ci/web_font_ratchet.py` (guards, merge) | `--update` |
 | Prompt language | CJK prompt templates without language handling | `scripts/ci/prompt_language_baseline.json` | `scripts/ci/prompt_language_ratchet.py` (guards) | `--update` |
+| Migration enums | columns the migrations leave unchecked, named `table.column` per set: a text column named `*status`, `*kind`, `*state`, `*role`, `*phase` or `*outcome` with no CHECK on it (one a later migration adds, `NOT VALID` included, counts), and a `json` / `jsonb` column with neither a CHECK on it nor an `opaque: <reason>` comment on its line, the lines just before it or `COMMENT ON COLUMN`; replayed from the SQL with no database, generated columns left out, no ignore marker (`docs/plans/plan-typed-core.md`, step P9) | `scripts/ci/migration_enum_baseline.json` | `scripts/ci/migration_enum_check.py` (guards) | `--update` |
 | Hub hard-coded text | CJK string literals per hub and command-line file | `server/internal/i18n/hardcoded-baseline.json`, `server/internal/i18n/hardcoded-terminal-baseline.json` | `TestHardcodedChineseBaseline`, `TestHardcodedTerminalBaseline` (server lane) | `UPDATE_I18N_BASELINE=1` |
 | Web hard-coded text | CJK strings per `web/src` file | `web/src/i18n/hardcoded-baseline.json` | `web/src/i18n/catalog.test.ts` (web lane) | `UPDATE_I18N_BASELINE=1` |
 | Prompt sizes | bytes per instruction section, tool description and supervision event | `server/internal/assistant/testdata/prompt_sizes.json` | `TestPromptSizeRatchet` (server lane) | `PROMPT_SIZE_UPDATE=1` |
@@ -726,7 +741,8 @@ DOCKER=<docker client> python3 scripts/ci/module-e2e.py --modules voice,health,r
   composer and the Agents page in Chrome, no page or console error); per module, the hello flag, the manager's
   `modules: loaded …` line, its server-side parts (extensions, connectors, routes; table `SERVER`) and its web entry
   (table `WEB`: a selector or text on a page, what clicking it opens, an address of its own that answers like a removed
-  page while off) in light and dark, and its chunks: none may be requested once the app has the hello. A chunk an off
+  page while off; an entry that is data the user already has carries an `off` block instead of "absent while off",
+  below) in light and dark, and its chunks: none may be requested once the app has the hello. A chunk an off
   module's page fetches during a reload, before the hello is applied, is a `WARN` (#14431); `--strict-before-hello`
   makes it a failure.
 - **What the user already has stays** (#13430, `docs/architecture/core-and-modules.md` "A module that is off keeps
@@ -737,8 +753,17 @@ DOCKER=<docker client> python3 scripts/ci/module-e2e.py --modules voice,health,r
   own routes; while off, the opened recording's detail equals the `on` phase's, the one in flight says
   `paused: "module_off"`, and every file under `recordings/` is byte for byte what it was when the phase began.
   `scripts/ci/core-only-smoke.py` checks the same on a core-only hub and with `--switched-off recording`. The web row
-  still expects the web app to hide a recording's entry while the module is off: that is the web app's behaviour
-  today, and its change is a client follow-up.
+  asserts the same rule in the browser (the `off` block of the `recording` entry in `WEB`, #15530): while the module
+  is off the recording uploaded during the `on` phase and the seeded meeting with minutes are still listed under
+  Knowledge › Meetings, each opens in the default panel's read-only detail and shows its transcript (the seeded one
+  its minutes too), none of the module's controls is on that page (rename, make or regenerate minutes, hand to an Agent, the private
+  mark, the questions asked in the meeting), and none of the module's chunks is requested, the detail opened inside
+  the app included. `on` and `back-on` are as for every entry: present, opens, its chunk loads.
+  Mail has the same kind of row against the mock hub (#15995, the `Inbox mail item` entry): with `module.mail` off the
+  mock answers 404 on `/api/v1/mail/…` as the hub does and keeps the item's stored text on `GET /api/v1/inbox/{id}`
+  (`scripts/mock/mail_mock.py`, with `mail_body_truncated` as the text is: `MOCK_MAIL_STORED_TEXT=clipped` makes every
+  stored mail a long one cut at 3,000 characters, `=unknown` leaves the key out); the mail is still listed in the Inbox, opens with that text and the line saying mail
+  is off, and shows no reply, AI draft reply, attachment or error. On the older hub it opens the whole message.
 - **Output**: a `PASS` / `WARN` / `FAIL` line per phase, module and check, the evidence JSON (`--evidence`, default
   `<shots>/evidence.json`: commit, the settings row, the manager line, the hello's module flags, what the browser got and
   requested), and screenshots `<phase>-<scheme>-<name>.png` in `--shots` (this machine's name is masked; never commit

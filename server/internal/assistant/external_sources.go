@@ -260,21 +260,24 @@ func (x externalSourceRoutes) resolve(w http.ResponseWriter, r *http.Request, st
 		return
 	}
 	id := assistantwire.ExternalBindingID(r.URL.Query().Get("binding_id"))
-	policies, binding, err := store.ExternalSourcePolicies(r.Context(), path, id)
-	if err != nil {
-		x.storeError(w, err)
-		return
-	}
-	if binding != nil && !slices.Contains(path, binding.ExternalRef) {
-		x.storeError(w, externalsourcestore.ErrBindingNotFound)
-		return
-	}
-	resolved, err := externalbindingadapt.Resolve(path[0], policies, binding)
+	resolved, _, err := resolveExternalSourcePolicy(r.Context(), store, path, id)
 	if err != nil {
 		x.storeError(w, err)
 		return
 	}
 	apierr.WriteJSON(w, resolved)
+}
+
+func resolveExternalSourcePolicy(ctx context.Context, store externalSourceStore, path []assistantwire.ExternalRef, id assistantwire.ExternalBindingID) (assistantwire.ExternalEffectivePolicy, []assistantwire.ExternalScopedPolicy, error) {
+	policies, binding, err := store.ExternalSourcePolicies(ctx, path, id)
+	if err != nil {
+		return assistantwire.ExternalEffectivePolicy{}, nil, err
+	}
+	if binding != nil && !slices.Contains(path, binding.ExternalRef) {
+		return assistantwire.ExternalEffectivePolicy{}, nil, externalsourcestore.ErrBindingNotFound
+	}
+	resolved, err := externalbindingadapt.Resolve(path[0], policies, binding)
+	return resolved, policies, err
 }
 
 func requestExternalPath(w http.ResponseWriter, r *http.Request) ([]assistantwire.ExternalRef, error) {

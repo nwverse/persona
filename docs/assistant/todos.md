@@ -52,10 +52,13 @@ them (#8151); a read-only task for them is refused (below). Planning, card edits
 legacy plans, retries, and the final dispatch all resolve the launcher before applying this rule; a permission change is
 saved with the resolved launcher and model.
 
-An agy task the computer's Antigravity companion runs is the exception: the companion holds a `plan` start read-only
-(`caps.readonly`), so a read-only agy task starts there in agy's plan mode, pinned to it (`host: "agy"`, never a pane);
-with `assistant.readonly_mode: prompt` it keeps agy's Allow all and the first-message constraint, as Claude Code does
-(#13464). It is refused, as below, when the companion does not run its launcher or the task names a terminal host.
+An agy task the computer's Antigravity companion runs is the exception: a read-only agy task starts on the companion
+(`host: "agy"`, never a pane) with `permission: bypassPermissions` and the first-message read-only constraint, matching
+Claude Code, in both `sandbox` and `prompt` modes (agy's ACP `plan` mode prompts on every Bash command, including
+read-only inspection commands). It is refused, as below, when the companion does not run its launcher or the task names
+a terminal host. Active read-only tasks running in `plan` mode also auto-allow strictly read-only inspection Bash
+commands (`git show`/`diff`/`log`/`status`, `gh pr view`/`diff`/`list`/`checks`, `rg`/`grep`/`cat` within the workspace)
+while keeping all writes, redirects, substitutions, credential paths, and inbox-origin calls guarded.
 
 A read-only task whose launcher starts pi, the Cursor CLI or the Antigravity CLI in a terminal is refused when it is
 planned (#8316, `assistant/tasks_placement.go` `readonlyLauncherRefusal`): these agents have no read-only mode, so
@@ -810,8 +813,10 @@ Something the owner raises in the main conversation and wants an answer to is a 
 **Personal verification** (#10047): `task_review` with `verdict: "accepted"` and `user_check: true` records the
 supervisor's review but leaves `done_at` unset, with `supervision.state: "user_check"` (**Awaiting your
 verification**). The task remains open and counted as Waiting on you, even if its delivery is already live or its
-reply has been read. Its existing "Please verify" ask is reused; without a Lark card the same ask stays available in
-the apps. Completed-task retirement does not select this Agent, and personal verification also protects it from the
+reply has been read. In Web **Needs you**, personal verification appears in the main conversation's own group
+and in the supervising conversation's tray. While the ask is unavailable, the row opens the task. Pass appears
+once the hub supplies the answerable round. Lark also shows the card when task reports and notification settings allow it.
+Completed-task retirement does not select this Agent, and personal verification also protects it from the
 ordinary stalled-task idle limit. This does not change the closure policy for tasks that really have completed.
 
 The owner's **Pass** (app, card or approval reply) marks the task verified, closes it by review, and permits normal
@@ -1339,7 +1344,7 @@ An approved start is remembered across manager restarts and rechecked by the tas
 | Tool | What it does | Confirmed on the phone |
 | --- | --- | --- |
 | `todo_list` | Open to-dos and failed starts by default, earliest due first (none last), filtered by state, due before / after, overdue, with or without agents, project, words | — |
-| `todo_get` | One in full: notes, agents, the task it is, decisions in force | — |
+| `todo_get` | One in full: notes, agents, the task it is, its pending user decision and decisions in force | — |
 | `todo_create` | `title`, `notes`, `due` (a day, a moment in the user's time zone or RFC 3339, `2h` / `3d`), `remind` (a moment, not past), `priority`, `project`, `part_of`, `after` ("Requests in pieces"); an open to-do with the same title and due date is returned instead of made twice | No |
 | `todo_update` | Title, notes, due, remind, priority, project, `part_of`, `after`; `""` / `[]` clears | No |
 | `todo_complete` / `todo_reopen` | Mark done / open again | Only for a task, or a to-do agents work on (completing closes its agents) |
@@ -1360,6 +1365,7 @@ Only the main conversation and the ones acting for it (the background supervisor
 
 ### 2. To-do list and details
 - List: search bar, unfinished list, collapsed completed group at bottom. Every client's default list (web, iOS / Mac and Android, #3206) is by status section (Waiting on you, Working, Just finished, PR to merge, then Other open, Shelved, Done and Cancelled folded), related to-dos merged into one row and stale ones shelved; by folder is the web's secondary view (`docs/assistant/todo-status-sop.md`). Each row shows title, state dot, linked-Agent count and latest message from the highest-priority Agent. Tap circle or swipe left to mark done.
+- Search on iOS's V1 list (#10465; iOS, hubs with `todo_view`, from #10465's switch-on): the list's own field looks through the titles and notes of every to-do of the current assistant on the phone, open and closed, on the device, since `GET /api/v1/todos` returns them all; nothing is asked of the hub. What closed comes last, by the day it closed; a to-do found by its notes shows the sentence that matched (`docs/design/DESIGN_SYSTEM.md` 3.4, "To-dos list").
 - New to-do (Web, #11084): the existing dialog also takes JPEG/PNG images, shows their thumbnails and removes a mistaken selection before saving. A picture over the manager's 1 MiB or 4096 pixels is prepared in the page instead of refused (#13797, `web/src/lib/todo-image.ts`). Its header is read first: a file over 64 MiB or 50 megapixels (a decompression bomb among them), or one that is not a PNG or JPEG, fails with its name before anything is decoded, and one within the limits goes byte for byte. A larger one is scaled down and encoded again with the chat's `fitPicture`, one picture at a time in the order picked. A PNG that only had to be scaled below 4096 px stays a PNG, transparency and all, when it then fits; anything else becomes a JPEG on white at 4096, 2560 or 1600 px (quality 0.8, then 0.6). It never goes below 1600 px, or below a third of its own long side, so a screenshot's words stay readable: one that would need more (a very long scrolling capture) fails with a message instead. Until it is ready the tray shows it by name under "Preparing N images…" and Create waits; a picture removed meanwhile, or picked before the dialog closed, is dropped, and a failure keeps the draft and the other pictures. The manager still checks every byte, pixel, count and type limit. Creation is one busy operation with an inline failure; retry keeps the title, notes, repository draft, selected files and operation ID, while cancel releases the local previews. Saving images alone never starts an Agent or sends an external message.
 - Details: edit title/notes directly (iOS: notes can be dictated with the composer's mic, in details and in the New To-Do sheet, #2188); saved images appear under the notes and open in the existing zoom viewer. The Web reads their bytes with the to-do's credentials and manager, at most three at a time, releases object URLs when they leave the page and offers Retry on a failed read; current state; linked projects (whole-project links) and active Agents (state dot, title, machine/workspace labels, latest-message summary, update time, tap to chat; beyond session time window use snapshot and mark "Ended"; launch failures show reason/removal); collapsed "Previously involved" list; persistent bottom **Hand to Agent** and **Done / Reopen** buttons; delete in top-right more menu. On iOS the two buttons, a `StackingButtonRow`, stack whenever a label wouldn't fit beside the other (English and Japanese from xxLarge on an iPhone 17 Pro), Hand to Agent first; the button's Japanese is 「エージェントへ」 (#6151; UI `TodoPageTextSizeTests`).
 - **Decisions** section under notes (web): effective decisions chronologically (question, choice, reason, time, provenance), each can **Change decision** (write a replacement) or ⋯ **Which decision did this replace?** / **Undo replacement**; when superseded records exist, **View full history**, with old records struck through. Hide whole section if hub unsupported (route 404).

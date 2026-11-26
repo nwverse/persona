@@ -109,7 +109,7 @@ function Board({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
     // Every board write pushes workspace_board, so the timer is only for what no push covers (discovery, a manager
     // that came back after a 503): once a minute, as the sidebar's catalog (#5168). A fresh connection may have
     // missed pushes, so it reads again at once; a resumed one had them replayed.
-    refresh(); void refreshTodos(); const timer = setInterval(refresh, CATALOG_POLL_MS);
+    refresh(); void refreshTodos({ coalesce: true }); const timer = setInterval(refresh, CATALOG_POLL_MS);
     document.addEventListener("visibilitychange", refresh);
     const off = onHubEvent("workspace_board", (e) => { if (typeof e.revision !== "number" || e.revision > (model.snapshot().board?.revision ?? -1)) refresh(); });
     const offHello = onHubEvent("hello", (e) => { if (!isResumed(e)) refresh(); });

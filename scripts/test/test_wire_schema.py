@@ -106,13 +106,35 @@ def item_detail(expected):
     return detail
 
 
+def counts_views():
+    """(definition, sample) of every view counts/view_samples.json expects (#15512), and of every view a device keeps
+    or gets in counts/views.json (#15893)."""
+    for c in cases("counts/view_samples.json"):
+        yield "CountsView", f"counts/view_samples.json {c['name']}.expected.view", c["expected"]["view"]
+    for c in cases("counts/views.json"):
+        where = f"counts/views.json {c['name']}"
+        for part in ("given", "then"):
+            for i, k in enumerate(c[part]["kept"]):
+                yield "CountsView", f"{where}.{part}.kept[{i}].view", k["view"]
+        if "view" in c["when"]:
+            yield "CountsView", f"{where}.when.view", c["when"]["view"]
+
+
 def wire_ids():
     """(definition, sample) of every ID and AgentRef in ids/ids.json."""
     for where, c in domain_cases("ids"):
         yield c["expected"]["definition"], f"{where}.expected.value", c["expected"]["value"]
 
 
-SAMPLES = {"ids.schema.json": wire_ids, "recents.schema.json": recent_setups, "todo-view.schema.json": todo_views}
+def agent_views():
+    """(definition, sample) of every session's view agent-view expects (#15397)."""
+    for where, c in domain_cases("agent-view"):
+        for i, v in enumerate(c["expected"]["views"]):
+            yield "AgentView", f"{where}.expected.views[{i}] {v['id']}", v["view"]
+
+
+SAMPLES = {"agent-view.schema.json": agent_views, "counts.schema.json": counts_views, "ids.schema.json": wire_ids, "recents.schema.json": recent_setups,
+           "todo-view.schema.json": todo_views}
 
 
 def walk(doc, schema, value, at, reached):
@@ -122,6 +144,13 @@ def walk(doc, schema, value, at, reached):
         reached.add(name)
         return walk(doc, doc["$defs"][name], value, at, reached)
     unknown = []
+    if isinstance(value, dict) and "oneOf" in schema and schema.get("x-discriminator"):
+        disc = schema["x-discriminator"]  # a tagged union: the variant its tag names
+        for option in schema["oneOf"]:
+            variant = doc["$defs"][option["$ref"].rsplit("/", 1)[1]]
+            if variant.get("properties", {}).get(disc, {}).get("const") == value.get(disc):
+                return walk(doc, option, value, at, reached)
+        return [f"{at}.{disc}"]
     if isinstance(value, dict) and "properties" in schema:
         for k, v in value.items():
             if k in schema["properties"]:

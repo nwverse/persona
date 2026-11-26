@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/ai"
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/modelretry"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -670,17 +671,23 @@ func (s *Service) recheckOutageHolds(ctx context.Context, now time.Time) {
 	}
 }
 
+func outageLang(language string) i18n.Lang {
+	switch language {
+	case "English":
+		return i18n.En
+	// i18n-ignore: language identifier returned by answerLanguage
+	case "Japanese", "日本語":
+		return i18n.Ja
+	default:
+		return i18n.ZhHans
+	}
+}
+
 func (s *Service) outageLatestState(t Todo, agents []proto.Session, o *superviseOutage, language string) string {
+	l := outageLang(language)
 	var parts []string
 	if t.Supervision != nil && t.Supervision.state(t) == reviewRework && t.Supervision.Round > 0 {
-		switch language {
-		case "English":
-			parts = append(parts, fmt.Sprintf("rework round %d", t.Supervision.Round))
-		case "Japanese", "日本語":
-			parts = append(parts, fmt.Sprintf("やり直し第 %d ラウンド", t.Supervision.Round))
-		default:
-			parts = append(parts, fmt.Sprintf("返工第 %d 轮", t.Supervision.Round))
-		}
+		parts = append(parts, i18n.T(l, "assistant-supervise_outage.rework_round", i18n.Args{"round": t.Supervision.Round}))
 	}
 	var latest proto.Session
 	for _, c := range currentTaskAgents(agents, supersededAgents(t, agents)) {
@@ -712,68 +719,26 @@ func (s *Service) outageLatestState(t Todo, agents []proto.Session, o *supervise
 			parts = append(parts, outageStateLabel(language, "last_interrupted"))
 		}
 	}
-	sep := "，"
-	if language == "English" {
-		sep = ", "
-	} else if language == "Japanese" || language == "日本語" {
-		sep = "、"
-	}
-	return strings.Join(parts, sep)
+	return strings.Join(parts, i18n.T(l, "assistant-supervise_outage.sep"))
 }
 
 func outageStateLabel(language, key string) string {
-	switch language {
-	case "English":
-		switch key {
-		case "offline":
-			return "agent offline"
-		case "interrupted":
-			return "agent interrupted"
-		case "stopped_error":
-			return "agent stopped with error"
-		case "stopped":
-			return "agent stopped"
-		case "unjudged":
-			return "completion unjudged"
-		case "awaiting_judgment":
-			return "latest symptom: unjudged"
-		case "last_interrupted":
-			return "latest symptom: interrupted"
-		}
-	case "Japanese", "日本語":
-		switch key {
-		case "offline":
-			return "Agent オフライン"
-		case "interrupted":
-			return "Agent 中断"
-		case "stopped_error":
-			return "Agent エラー停止"
-		case "stopped":
-			return "Agent 停止中"
-		case "unjudged":
-			return "完了未判定"
-		case "awaiting_judgment":
-			return "最新事象：未判定"
-		case "last_interrupted":
-			return "最新事象：中断"
-		}
-	default:
-		switch key {
-		case "offline":
-			return "Agent 离线"
-		case "interrupted":
-			return "Agent 已中断"
-		case "stopped_error":
-			return "Agent 因错误停止"
-		case "stopped":
-			return "Agent 已停止"
-		case "unjudged":
-			return "完成状态未判定"
-		case "awaiting_judgment":
-			return "最近一次为未判定"
-		case "last_interrupted":
-			return "最近一次为中断"
-		}
+	l := outageLang(language)
+	switch key {
+	case "offline":
+		return i18n.T(l, "assistant-supervise_outage.offline")
+	case "interrupted":
+		return i18n.T(l, "assistant-supervise_outage.interrupted")
+	case "stopped_error":
+		return i18n.T(l, "assistant-supervise_outage.stopped_error")
+	case "stopped":
+		return i18n.T(l, "assistant-supervise_outage.stopped")
+	case "unjudged":
+		return i18n.T(l, "assistant-supervise_outage.unjudged")
+	case "awaiting_judgment":
+		return i18n.T(l, "assistant-supervise_outage.awaiting_judgment")
+	case "last_interrupted":
+		return i18n.T(l, "assistant-supervise_outage.last_interrupted")
 	}
 	return key
 }

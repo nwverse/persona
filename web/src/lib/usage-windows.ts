@@ -94,21 +94,53 @@ export interface TightestWindow {
   paused: boolean;
 }
 
+function windowTightness(w: UsageWindow): TightestWindow {
+  const remaining = remainingPercent(w.used_percent);
+  const rawReserve = protectReserve(w.protect_percent);
+  const reserve = rawReserve ?? 0;
+  const headroom = roundPct(remaining - reserve);
+  const paused = rawReserve !== null && headroom <= 0;
+  return { remaining, reserve, headroom, paused };
+}
+
+function tightestOf(windows: readonly UsageWindow[]): TightestWindow {
+  let best = windowTightness(windows[0]);
+  for (let i = 1; i < windows.length; i++) {
+    const cur = windowTightness(windows[i]);
+    if (
+      cur.headroom < best.headroom ||
+      (cur.headroom === best.headroom && (cur.remaining < best.remaining || (cur.remaining === best.remaining && cur.paused && !best.paused)))
+    ) {
+      best = cur;
+    }
+  }
+  return best;
+}
+
 /** Most constrained window of an account by headroom `h = r - R` (smallest first, then smallest `r`).
- *  Per-model windows do not override plan windows while plan windows exist. */
+ *  Per-model windows do not override plan windows while plan windows exist. When an account has only
+ *  per-model pools (no plan windows), each pool is constrained by its own tightest window and the account
+ *  takes the pool with the most headroom so one exhausted model pool does not hide healthy sibling pools. */
 export function tightestRemaining(a: Pick<UsageAccount, "windows">): TightestWindow {
-  const plan = a.windows.filter((w) => !w.model);
-  const scope = plan.length ? plan : a.windows;
-  if (!scope.length) return { remaining: 100, reserve: 0, headroom: 100, paused: false };
+  if (!a.windows.length) return { remaining: 100, reserve: 0, headroom: 100, paused: false };
+  const plan = a.windows.filter((w) => !w.model?.trim());
+  if (plan.length) return tightestOf(plan);
+  const byModel = new Map<string, UsageWindow[]>();
+  for (const w of a.windows) {
+    const k = w.model!.trim().toLowerCase();
+    const list = byModel.get(k);
+    if (list) list.push(w);
+    else byModel.set(k, [w]);
+  }
   let best: TightestWindow | null = null;
-  for (const w of scope) {
-    const remaining = remainingPercent(w.used_percent);
-    const rawReserve = protectReserve(w.protect_percent);
-    const reserve = rawReserve ?? 0;
-    const headroom = roundPct(remaining - reserve);
-    const paused = rawReserve !== null && headroom <= 0;
-    if (!best || headroom < best.headroom || (headroom === best.headroom && remaining < best.remaining)) {
-      best = { remaining, reserve, headroom, paused };
+  for (const pool of byModel.values()) {
+    const cur = tightestOf(pool);
+    if (
+      !best ||
+      cur.headroom > best.headroom ||
+      (cur.headroom === best.headroom && (cur.remaining > best.remaining || (cur.remaining === best.remaining && !cur.paused && best.paused)))
+    ) {
+      best = cur;
     }
   }
   return best!;
@@ -188,10 +220,18 @@ export function isBalanceAccount(a: UsageAccount): boolean {
 }
 
 /** The used percentage of an account's fullest window. A per-model allowance does not count while the plan's own windows
- *  are there: one model running out is not the account running out. */
+ *  are there: one model running out is not the account running out. With only per-model pools, each pool uses its own
+ *  fullest window and the account takes the least-used pool. */
 export function fullest(a: UsageAccount): number {
-  const plan = a.windows.filter((w) => !w.model);
-  return (plan.length ? plan : a.windows).reduce((m, w) => Math.max(m, w.used_percent), 0);
+  const plan = a.windows.filter((w) => !w.model?.trim());
+  if (plan.length) return plan.reduce((m, w) => Math.max(m, w.used_percent), 0);
+  if (!a.windows.length) return 0;
+  const byModel = new Map<string, number>();
+  for (const w of a.windows) {
+    const k = w.model!.trim().toLowerCase();
+    byModel.set(k, Math.max(byModel.get(k) ?? 0, w.used_percent));
+  }
+  return Math.min(...byModel.values());
 }
 
 /** Where an account was seen, for people: the computers that read it by name (an older hub only says "a computer"),

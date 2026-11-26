@@ -50,6 +50,25 @@ func (c needsYouCase) muted(s *proto.Session) bool {
 		s.SpaceName != "" && slices.Contains(m.Spaces, s.MachineID+"/"+s.SpaceName) && !slices.Contains(m.Allowed, key)
 }
 
+// fleet is the case's sessions and cards as the hub sends them, read through this adapter.
+func (c needsYouCase) fleet(t *testing.T) *Fleet {
+	t.Helper()
+	var f Fleet
+	for i := range c.Input.Sessions {
+		s := &c.Input.Sessions[i]
+		s.Quiet = slices.Contains(c.Input.Quiet, s.MachineID+"/"+s.SessionID)
+		if _, failed := outcome.Unpack(f.Agent("Mac", s, c.muted(s))); failed != nil {
+			t.Fatalf("session %s: %s", s.SessionID, Log(failed))
+		}
+	}
+	for i := range c.Input.Interactions {
+		if _, failed := outcome.Unpack(f.Card(&c.Input.Interactions[i], false)); failed != nil {
+			t.Fatalf("card %s: %s", c.Input.Interactions[i].ID, Log(failed))
+		}
+	}
+	return &f
+}
+
 // badgeRows is the Agents list as a test reads it from a tally: each row with its cards, and which rows count.
 type badgeRows struct {
 	f       *Fleet
@@ -88,34 +107,10 @@ func (r *badgeRows) VisitTotal(total fleetcount.RowCount) { r.total = total.Wire
 // The Agents list's rows, the badge's rows and the badge are fleetcount's, from the fixture's sessions and cards as
 // the hub sends them, read through this adapter: the server's replay of the definition the clients replay.
 func TestAgentsNeedsYouFollowsTheSharedFixtures(t *testing.T) {
-	b, err := os.ReadFile(needsYouFixtures)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var file struct {
-		Cases []needsYouCase `json:"cases"`
-	}
-	if err := json.Unmarshal(b, &file); err != nil || len(file.Cases) == 0 {
-		t.Fatalf("%s: %v (%d cases)", needsYouFixtures, err, len(file.Cases))
-	}
-	for _, c := range file.Cases {
+	for _, c := range needsYouCases(t) {
 		t.Run(c.Name, func(t *testing.T) {
-			var f Fleet
-			for i := range c.Input.Sessions {
-				s := &c.Input.Sessions[i]
-				s.Quiet = slices.Contains(c.Input.Quiet, s.MachineID+"/"+s.SessionID)
-				if _, failed := outcome.Unpack(f.Agent("Mac", s, c.muted(s))); failed != nil {
-					t.Logf("session %s: %s", s.SessionID, Log(failed))
-					t.FailNow()
-				}
-			}
-			for i := range c.Input.Interactions {
-				if _, failed := outcome.Unpack(f.Card(&c.Input.Interactions[i], false)); failed != nil {
-					t.Logf("card %s: %s", c.Input.Interactions[i].ID, Log(failed))
-					t.FailNow()
-				}
-			}
-			got := badgeRows{f: &f}
+			f := c.fleet(t)
+			got := badgeRows{f: f}
 			f.decide(fleetcount.SurfaceBadge()).Accept(&got)
 			var badge []needsYouRow
 			for i, row := range got.rows {
@@ -130,6 +125,22 @@ func TestAgentsNeedsYouFollowsTheSharedFixtures(t *testing.T) {
 			}
 		})
 	}
+}
+
+// needsYouCases are the cases of spec/fixtures/needs-you.
+func needsYouCases(t *testing.T) []needsYouCase {
+	t.Helper()
+	b, err := os.ReadFile(needsYouFixtures)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file struct {
+		Cases []needsYouCase `json:"cases"`
+	}
+	if err := json.Unmarshal(b, &file); err != nil || len(file.Cases) == 0 {
+		t.Fatalf("%s: %v (%d cases)", needsYouFixtures, err, len(file.Cases))
+	}
+	return file.Cases
 }
 
 func sameRows(a, b []needsYouRow) bool {

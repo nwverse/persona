@@ -4,6 +4,7 @@
 // for both built-in services and installed extensions. Strictly gated by integrations_v2.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { formatList, t } from "../../i18n";
+import { ConnectorExternalSourceSettings } from "../../features/external-sources/ExternalSourceSettingsEntry";
 import { enc, errorText } from "../../lib/api";
 import {
   connectorBrand, connectorState, connectorTone, listConnectors,
@@ -329,6 +330,7 @@ function FeishuBotBuiltinDetail({
         <ChannelDeliveryBlock ctl={channelCtl} onSettings={onSettings} />
         <FeishuBotDeliveryPanel ctl={feishuCtl} />
       </SectionBlock>
+      <ConnectorExternalSourceSettings ids={[channelId]} manager={manager} />
 
       {/* 3. Inbox & Sync */}
       {showInboxSection && larkcli && (
@@ -485,8 +487,8 @@ function BuiltinIntegrationDetail({
 
       {/* 1. Account & Connection */}
       <SectionBlock id="connection" title={t("settings-integrations.section_connection")}>
-        {isMail && <Mail hideInboxSwitch />}
-        {isLarkGateway && <Feishu />}
+        {isMail && <Mail hideInboxSwitch manager={manager} />}
+        {isLarkGateway && <Feishu manager={manager} />}
         {connectorId && (
           <>
             {connector ? (
@@ -530,6 +532,7 @@ function BuiltinIntegrationDetail({
           )}
         </SectionBlock>
       )}
+      {!isMail && !isLarkGateway && <ConnectorExternalSourceSettings ids={[connectorId ?? "", channelId ?? ""]} manager={manager} />}
     </div>
   );
 }
@@ -1031,6 +1034,7 @@ function ExtensionIntegrationDetail({
               )}
             </SectionBlock>
           )}
+          <ConnectorExternalSourceSettings ids={[...connectorIds, channelId ?? ""]} manager={manager} />
 
           {/* 4. Extension Settings (unsectioned legacy fields + folded advanced fields + secrets + UI pages) */}
           <SectionBlock id="extension-settings" title={t("settings-integrations.section_extension_settings")}>

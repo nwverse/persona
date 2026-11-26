@@ -275,3 +275,26 @@ func TestVersionCheckFollowsTheExecutable(t *testing.T) {
 		t.Fatalf("--version spawned %d times after the executable changed, want 2", version)
 	}
 }
+
+func TestFreshAuthStatusBypassesCache(t *testing.T) {
+	bin, log := countingCLI(t, "success")
+	r, _ := cachedRunner(t, Config{Bin: bin, Profile: "example", Timeout: 5 * time.Second})
+	ctx := context.Background()
+	if auth, err := r.AuthStatus(ctx); err != nil || !auth.LoggedIn {
+		t.Fatalf("warm cache: auth = %+v, err = %v", auth, err)
+	}
+	t.Setenv("LARKCLI_FAKE_SCENARIO", "not_logged_in")
+	if auth, err := r.FreshAuthStatus(ctx); err != nil || auth.LoggedIn {
+		t.Fatalf("live read after sign-out: auth = %+v, err = %v", auth, err)
+	}
+	t.Setenv("LARKCLI_FAKE_SCENARIO", "success")
+	if auth, err := r.FreshAuthStatus(ctx); err != nil || !auth.LoggedIn {
+		t.Fatalf("live read after sign-in: auth = %+v, err = %v", auth, err)
+	}
+	if auth, err := r.AuthStatus(ctx); err != nil || !auth.LoggedIn {
+		t.Fatalf("cached after live read: auth = %+v, err = %v", auth, err)
+	}
+	if _, auth := spawnCounts(t, log); auth != 3 {
+		t.Fatalf("auth status spawned %d times, want 3 (1 cached + 2 live)", auth)
+	}
+}

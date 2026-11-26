@@ -68,6 +68,7 @@ go server/internal/agentref core
 go server/internal/agentref/agentrefadapt core
 go server/internal/agents core
 go server/internal/agentsend core
+go server/internal/agentviewwire core
 go server/internal/ai core
 go server/internal/aiwire core
 go server/internal/apierr core
@@ -77,6 +78,7 @@ go server/internal/archguard core
 go server/internal/archguard/domainrules core
 go server/internal/archguard/wirecount core
 go server/internal/assistant core
+go server/internal/assistant/agentview core
 go server/internal/assistant/archiverecovery core
 go server/internal/assistant/chatsearch core
 go server/internal/assistant/externalbinding core
@@ -91,6 +93,8 @@ go server/internal/assistant/kernel/seam core
 go server/internal/assistant/repository core
 go server/internal/assistant/repositorystore core
 go server/internal/assistant/saved core
+go server/internal/assistant/supervisionrole core
+go server/internal/assistant/supervisionrole/supervisionroleadapt core
 go server/internal/assistant/todo/conflict core
 go server/internal/assistant/todo/mergetrain core
 go server/internal/assistant/todo/projection core
@@ -215,6 +219,7 @@ go server/internal/nodeproto core
 go server/internal/nodesign core
 go server/internal/nodeupdate core
 go server/internal/operations/backup core
+go server/internal/operations/recovery core
 go server/internal/osproc core
 go server/internal/osproc/osproctest core
 go server/internal/outboxcli core
@@ -381,6 +386,7 @@ web web/src/admin/pages core
 web web/src/components core
 web web/src/core core
 web web/src/features core
+web web/src/features/external-sources core
 web web/src/features/todos core
 web web/src/i18n core
 web web/src/i18n/locales core
