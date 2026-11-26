@@ -6,7 +6,9 @@ import { heldOnlyNeeds } from "./attention";
 import { supervisorHeldOnly, userCards } from "./supervisor-held";
 import { activityOf, backgroundWaiting, stateOf } from "./format";
 import { legacyAgentViews } from "./legacy-agent-view";
+import type { AgentView } from "./agent-view-wire";
 import { isMuted } from "./session-actions";
+import { sameValue } from "./stable-lines";
 import type { AgentMutes } from "./agent-groups";
 import { defaultManager } from "./manager-choice";
 import { agentKey } from "./pins";
@@ -32,6 +34,17 @@ export function directoryVisibleCards(cards: Interaction[]): Interaction[] {
 // Filter before folding: a hidden parent must not swallow a visible child, or a hidden child raise its parent’s state.
 const directoryVisible = (rows: Session[]) => rows.some((s) => s.hidden_by_directory) ? rows.filter((s) => !s.hidden_by_directory) : rows;
 
+// An unrelated fleet update must preserve memoized list rows. For an unchanged
+// session only its external cards, delegation and mute can change the view.
+const legacyRows = new WeakMap<Session, Session>();
+function withLegacyView(session: Session, view: AgentView): Session {
+  const previous = legacyRows.get(session);
+  if (previous && sameValue(previous.view, view)) return previous;
+  const row = { ...session, view };
+  legacyRows.set(session, row);
+  return row;
+}
+
 /** Apply the old-manager fallback before excluding hidden rows or folding children. */
 export function listedAgents(rows: Session[], cards: readonly Interaction[] = [], mutes?: AgentMutes): Session[] {
   let sessions = rows;
@@ -46,7 +59,7 @@ export function listedAgents(rows: Session[], cards: readonly Interaction[] = []
       const views = legacyAgentViews(own, pending, (s) => Boolean(mutes && isMuted(s, mutes)));
       for (const s of own) {
         const view = !s.view && views.get(agentKey(s));
-        if (view) resolved.set(s, { ...s, view });
+        if (view) resolved.set(s, withLegacyView(s, view));
       }
     }
     sessions = rows.map((s) => resolved.get(s) ?? s);
