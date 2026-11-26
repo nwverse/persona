@@ -28,6 +28,7 @@ import (
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/link"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -55,6 +56,9 @@ type nodeStateStore interface {
 
 // Options are what Devices needs from the manager it runs in.
 type Options struct {
+	// Edition is the edition this manager was built as (update.Build.Edition; the zero value is the full build): the
+	// only release manifests it reads, and the only edition of node build it fetches (packages.go).
+	Edition nodeproto.Edition
 	// ProjectState lets the owning manager retain transport identities independently of computers.
 	ProjectState func(devicewire.States) devicewire.States
 	// PackageHub supplies the bound address, TLS transport and manager credential for confirmed development packages.
@@ -327,6 +331,9 @@ func (d *Devices) Configure(cfg devicewire.Config) {
 		if first { // after a start from the own list: what its connections could not do without the hub
 			d.afterOwnList(ctx)
 		}
+		if cfg.AutoUpdateNodes && (!old.AutoUpdateNodes || old.HubVersion != cfg.HubVersion) {
+			go d.updateNodes(ctx)
+		}
 	}
 	d.fleetRegroup()
 	// Where the hub is, what it is called, whether the computer waits to be confirmed: Persona Link shows them.
@@ -382,6 +389,10 @@ func (d *Devices) config() devicewire.Config {
 }
 
 func (d *Devices) hubVersion() string { return d.config().HubVersion }
+
+// AdvertisedHubVersion is the last build advertised on the authenticated bus.
+// The service watcher also rechecks it after its own bus has shut down.
+func (d *Devices) AdvertisedHubVersion() string { return d.hubVersion() }
 
 // errPendingUnknown: the hub has not said which machines wait to be confirmed.
 var errPendingUnknown = errors.New("the hub has not said which computers wait to be confirmed")
@@ -878,7 +889,8 @@ func (d *Devices) List() []Summary {
 func (d *Devices) summaryOf(m *Machine) Summary {
 	m.mu.Lock()
 	s := Summary{ID: m.cfg.ID, Name: m.name(), Kind: m.cfg.Kind, SSHHost: m.cfg.SSHHost, Home: m.info.Home,
-		HomeReal: m.info.HomeReal, DataDir: m.info.DataDir, Online: m.online || m.warmLocked(time.Now())}
+		HomeReal: m.info.HomeReal, DataDir: m.info.DataDir, Executable: m.info.Executable,
+		Online: m.online || m.warmLocked(time.Now())}
 	m.mu.Unlock()
 	s.Trust = d.machineTrust(m)
 	s.Reachable = m.reachable()
@@ -980,7 +992,11 @@ func (d *Devices) Relist(ctx context.Context, id string) error {
 type Summary struct {
 	ID, Name, Kind, SSHHost, Home, DataDir, Trust string
 	// HomeReal is Home with its links followed, when the node says it is another path (proto.NodeInfo.HomeReal).
-	HomeReal          string
+	HomeReal string
+	// Executable is the file its node runs from (proto.NodeInfo.Executable), as the node.info its connection began with
+	// said: the same for as long as that connection lasts. "" from a node that does not say. The assistant names it to
+	// the Agents there without asking the node again (assistant/task_handoff.go, nodeExecutable).
+	Executable        string
 	Online, Reachable bool
 }
 
@@ -1010,6 +1026,28 @@ func (d *Devices) Shown(id string) (Shown, bool) {
 		s.Until = m.reloadUntil
 	}
 	return s, true
+}
+
+// CurrentConnectionListed reports whether id has a live node connection outside
+// warm/reload grace that has completed at least one sessions.list on this
+// connection (never satisfied by a retained pre-reconnect snapshot).
+func (d *Devices) CurrentConnectionListed(id string) bool {
+	m := d.machineByID(id)
+	if m == nil {
+		return false
+	}
+	now := time.Now()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.peer == nil || !m.online || !m.sessionsListed || now.Before(m.warmUntil) || now.Before(m.reloadUntil) {
+		return false
+	}
+	select {
+	case <-m.peer.Done():
+		return false
+	default:
+		return true
+	}
 }
 
 // Has reports whether id is one of the machines (an entry another one absorbed included).

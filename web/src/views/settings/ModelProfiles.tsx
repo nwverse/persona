@@ -545,6 +545,15 @@ function ModelProfilesForOwner({
       {data?.profiles.map((p) => (
         <Row key={p.id} label={p.name} hint={p.description} onClick={() => { setSelected(p.id); setEditing(false); setConfirmingApply(false); clearErrors(); }}>
           {p.active && <Pill>{t("settings-modelprofiles.active")}</Pill>}
+          {!p.active && p.trial && (
+            <span className="shrink-0 whitespace-nowrap text-submeta text-ink-3">
+              {t("settings-modelprofiles.trial_summary", {
+                days: p.trial.days,
+                dispatches: p.trial.dispatches,
+                would_switch: p.trial.would_switch,
+              })}
+            </span>
+          )}
         </Row>
       ))}
       {data?.rollback && (
@@ -635,6 +644,18 @@ function ModelProfilesForOwner({
               ))}
             </ul>
           )}
+          {!profile.active && profile.trial && (
+            <div data-testid="model-profile-trial" className="mb-4 rounded-control bg-inset px-3 py-2 text-label">
+              <p className="font-medium text-ink">
+                {t("settings-modelprofiles.trial_summary", {
+                  days: profile.trial.days,
+                  dispatches: profile.trial.dispatches,
+                  would_switch: profile.trial.would_switch,
+                })}
+              </p>
+              <p className="mt-0.5 text-submeta text-ink-3">{t("settings-modelprofiles.trial_definition")}</p>
+            </div>
+          )}
           <div className="mb-4 flex flex-col gap-2 rounded-control bg-inset px-3 py-2.5 text-label text-ink-2">
             <p className="leading-relaxed">
               {profile.active && profile.changes.length > 0
@@ -660,19 +681,55 @@ function ModelProfilesForOwner({
             <ul data-testid="model-profile-tiers" className="mb-4 flex flex-col gap-1.5">
               {tiers.map(([name, x]) => {
                 // the launcher by its display name, its startup ID after it in small mono (#5029); an rc alias by its ID
-                const l = namedLauncher(x.launcher, names);
-                const id = providerIdNote(l);
-                const speed = x.speed === "fast" || x.speed === "ultrafast" ? x.speed : "";
+                const multiCandidates = x.candidates && x.candidates.length > 1 ? x.candidates : null;
+                const renderCandidate = (c: { launcher: string; model?: string; effort?: string; permission_mode?: string; speed?: string }) => {
+                  const l = namedLauncher(c.launcher, names);
+                  const id = providerIdNote(l);
+                  const speed = c.speed === "fast" || c.speed === "ultrafast" ? c.speed : "";
+                  return (
+                    <>
+                      {providerTitle(l)}
+                      {id && <> <span className="font-mono text-submeta">{id}</span></>}
+                      {[c.model, c.effort, c.permission_mode && modeTitle(c.permission_mode), speed].filter(Boolean).map((v) => ` · ${v}`).join("")}
+                    </>
+                  );
+                };
                 return (
                   <li key={name} className="rounded-control bg-field px-3 py-2 text-label">
-                    <div className="flex min-w-0 items-baseline gap-2">
-                      <span className="shrink-0 font-mono text-ink">{name}</span>
-                      <span className="min-w-0 [overflow-wrap:anywhere] text-ink-3">
-                        {providerTitle(l)}
-                        {id && <> <span className="font-mono text-submeta">{id}</span></>}
-                        {[x.model, x.effort, x.permission_mode && modeTitle(x.permission_mode), speed].filter(Boolean).map((v) => ` · ${v}`).join("")}
-                      </span>
-                    </div>
+                    {multiCandidates ? (
+                      <>
+                        <div className="flex min-w-0 flex-wrap items-baseline gap-2">
+                          <span className="shrink-0 font-mono text-ink">{name}</span>
+                          {x.aliases && x.aliases.length > 0 && (
+                            <span data-testid="model-profile-tier-aliases" className="text-submeta text-ink-3">
+                              {t("settings-modelprofiles.tier_aliases_inline", { aliases: x.aliases.join(", ") })}
+                            </span>
+                          )}
+                        </div>
+                        <ol className="mt-1 flex flex-col gap-0.5 text-ink-3">
+                          {multiCandidates.map((cand, ci) => (
+                            <li key={ci} className="min-w-0 [overflow-wrap:anywhere]">
+                              <span className="mr-1.5 font-mono text-submeta text-ink-2">{ci + 1}.</span>
+                              {renderCandidate(cand)}
+                            </li>
+                          ))}
+                        </ol>
+                      </>
+                    ) : (
+                      <>
+                        <div className="flex min-w-0 items-baseline gap-2">
+                          <span className="shrink-0 font-mono text-ink">{name}</span>
+                          <span className="min-w-0 [overflow-wrap:anywhere] text-ink-3">
+                            {renderCandidate(x)}
+                          </span>
+                        </div>
+                        {x.aliases && x.aliases.length > 0 && (
+                          <p data-testid="model-profile-tier-aliases" className="mt-0.5 text-submeta text-ink-3">
+                            {t("settings-modelprofiles.tier_aliases_inline", { aliases: x.aliases.join(", ") })}
+                          </p>
+                        )}
+                      </>
+                    )}
                     {x.description && <p className="mt-0.5 text-ink-2">{x.description}</p>}
                   </li>
                 );

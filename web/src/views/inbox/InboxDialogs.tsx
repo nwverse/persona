@@ -1,14 +1,16 @@
 // What can be done with one item besides reading it (docs/assistant/inbox.md "Item actions"): "AI draft reply" (a reply in the
 // user's voice, edited and sent from here) and "Hand to AI" (the item as <persona-context> to Persona or a running agent;
 // Persona's main conversation may then write back to the item).
-import { ownerHeaders } from "../../lib/manager-choice";
+import { defaultManager, ownerHeaders } from "../../lib/manager-choice";
+import { BindingDialog } from "../../features/external-sources/BindingDialog";
+import type { ExternalSourceBindingEditorProps } from "../../features/external-sources/ExternalSourceBindingEditor";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, errorText } from "../../lib/api";
 import { startConversation } from "../../lib/assistant-start";
 import { adoptConversation, askPersonaOf, noteSent, sendToSession } from "../../lib/outbox";
 import { baseName, sessionTitle, stateOf, uuid } from "../../lib/format";
-import { agentDraft, connectorReference, conversationRoute, docChangeKey, handOffToMain, isLark, itemKey, itemPath, itemRequest, keepDropped, keptChanges, sendReply, useDroppedChanges, setDone, unsentReplies, type InboxItem } from "../../lib/inbox";
-import { docChangeLine, HANDOFF_PRESETS, handOffContext, handOffMessage, recordHandOff } from "../../lib/inbox-page";
+import { agentDraft, connectorReference, docChangeKey, handOffToMain, isLark, itemKey, itemPath, itemRequest, keepDropped, keptChanges, sendReply, useDroppedChanges, setDone, unsentReplies, type InboxItem } from "../../lib/inbox";
+import { docChangeLine, HANDOFF_PRESETS, handOffContext, handOffMessage, openInboxConversation, recordHandOff } from "../../lib/inbox-page";
 import { isTransient } from "../../lib/ops";
 import { hasFinePointer } from "../../lib/viewport";
 import { machineWithHub } from "../../lib/mesh";
@@ -23,7 +25,16 @@ import { Button, cx, Dialog, Loading, Spinner, toast } from "../../ui/atoms";
 import { StatusMark } from "../../ui/StatusMark";
 import { Icon } from "../../ui/icons";
 import { Spark } from "./InboxParts";
+import { useItemReadOnly } from "./item-write-gate";
 import { handOffAgents, Target, TARGET_SUB } from "./HandOffTargets";
+
+export function InboxExternalSourceDialog({ item, source, onClose }: {
+  item: InboxItem;
+  source: NonNullable<ExternalSourceBindingEditorProps["source"]>;
+  onClose: () => void;
+}) {
+  return <BindingDialog manager={item.manager ?? defaultManager()} source={source} onClose={onClose} />;
+}
 
 // A dialog's error under its controls.
 const ERROR = "mt-2 text-[12px] text-red";
@@ -45,8 +56,7 @@ export function DraftDialog(props: { item: InboxItem; onClose: () => void }) {
 }
 
 function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }) {
-  const sessions = useStore((s) => s.sessions);
-  const assistant = useStore((s) => s.assistant);
+  const readOnly = useItemReadOnly(item);
   const key = itemKey(item);
   const agentText = agentDraft(item);
   const [text, setText] = useState(() => unsentReplies.get(key) ?? agentText ?? "");
@@ -54,12 +64,17 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
   // with nothing to show yet it drafts as it opens (below): busy from the first frame, so the text is not offered before it
   const [loading, setLoading] = useState(() => !unsentReplies.has(key) && !agentText);
   const [error, setError] = useState("");
+  const larkCLI = item.source === "larkcli" && !!item.connector?.can_reply;
+  const [sender, setSender] = useState<"bot" | "user">();
+  const [checkingSender, setCheckingSender] = useState(larkCLI);
   // unticked proposed changes are kept with the text: the item's draft card shows and sends the same
   const dropped = useDroppedChanges(key);
   const proposed = agentText ? item.agent?.changes ?? [] : [];
   const kept = keptChanges(item, dropped);
   const generation = useRef(0);
   const agent = item.agent;
+  const mid = agent?.machine_id;
+  const sid = agent?.session_id;
   const box = useRef<HTMLTextAreaElement>(null);
   const focused = useRef(false);
 
@@ -94,6 +109,30 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key]);
 
+  useEffect(() => {
+    if (!larkCLI) return;
+    let request: AbortController | undefined;
+    const refresh = async () => {
+      request?.abort();
+      const controller = request = new AbortController();
+      setCheckingSender(true);
+      try {
+        const { identity } = await api<{ identity?: string }>("/assistant/outbound-messages", { headers: itemRequest({ manager: item.manager }), signal: controller.signal });
+        if (!controller.signal.aborted) setSender(identity === "bot" || identity === "user" ? identity : undefined);
+      } catch {
+        if (!controller.signal.aborted) setSender(undefined);
+      } finally {
+        if (!controller.signal.aborted) setCheckingSender(false);
+      }
+    };
+    void refresh();
+    window.addEventListener("focus", refresh);
+    return () => {
+      request?.abort();
+      window.removeEventListener("focus", refresh);
+    };
+  }, [item.manager, larkCLI]);
+
   // "Edit" is for changing the words: once they are in, the caret waits at their end (audit item 16). The dialog itself
   // takes the focus first (ui/atoms Dialog), which keeps a phone's keyboard down: a touch screen alone still taps in.
   useEffect(() => {
@@ -115,10 +154,14 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
   };
 
   const send = () => {
-    void sendReply(item, text.trim(), kept);
+    if (readOnly) return;
+    void sendReply(item, text.trim(), kept, sender);
     onClose();
   };
-  const canSend = !loading && (text.trim().length > 0 || kept.length > 0);
+  const canSend = !readOnly && !loading && !checkingSender && (text.trim().length > 0 || kept.length > 0);
+  const replyNote = larkCLI
+    ? t(sender === "bot" ? "inbox-inboxdialogs.lark_sender_bot" : sender === "user" ? "inbox-inboxdialogs.lark_sender_user" : "inbox-inboxdialogs.lark_sender_default", { chat: item.title })
+    : item.connector?.reply_to ? t("inbox-inboxdialogs.reply_goes", { how: item.connector.reply_to }) : "";
 
   return (
     <Dialog
@@ -129,20 +172,19 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
       footer={
         <>
           <Button tone="quiet" onClick={cancel}>{t("common.cancel")}</Button>
-          <Button tone="accent" icon="send" disabled={!canSend} onClick={send}>{t("inbox-inboxdialogs.send")}</Button>
+          {!readOnly && <Button tone="accent" icon="send" disabled={!canSend} onClick={send}>{t("inbox-inboxdialogs.send")}</Button>}
         </>
       }
     >
       {agentText && agent && (agent.note || agent.session_id) && (
         <div className="mb-3 rounded-[10px] bg-accent-tint px-3 py-2.5">
           {agent.note && <p className="text-[12px] leading-relaxed text-ink-2"><Spark />{agent.note}</p>}
-          {agent.machine_id && agent.session_id && (
+          {mid && sid && (
             <button
               type="button"
               onClick={() => {
                 onClose();
-                // The AI twin runs as the assistant (docs/assistant/inbox.md): its conversation is one of Persona's.
-                navigate(agent.machine_id === assistant?.machine_id ? conversationPage(agent.session_id!, agent.machine_id, item.manager) : conversationRoute(agent.machine_id!, agent.session_id!, sessions, assistant, item.manager));
+                openInboxConversation(mid, sid, item.manager);
               }}
               className="mt-1.5 flex items-center gap-1 text-[12px] font-medium whitespace-nowrap text-accent-ink hover:underline"
             >
@@ -171,7 +213,7 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
           })}
         </div>
       )}
-      {item.connector?.reply_to && <p className="mb-2 text-[11.5px] leading-relaxed text-ink-3">{t("inbox-inboxdialogs.reply_goes", { how: item.connector.reply_to })}</p>}
+      {replyNote && <p className="mb-2 text-[11.5px] leading-relaxed text-ink-3">{replyNote}</p>}
       <div className="relative">
         <textarea
           ref={box}

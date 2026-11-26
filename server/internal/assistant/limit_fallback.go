@@ -32,6 +32,10 @@ const (
 	// limitFallbackRecheck: how long a restore waits again while its original launcher still shows a failure with no
 	// later reset known, or its plan could not be read.
 	limitFallbackRecheck = 15 * time.Minute
+	// A return that lasts less than an hour raises the next return delay until it reaches six hours.
+	limitFallbackRepeatWindow  = time.Hour
+	limitFallbackMaxReturnWait = 6 * time.Hour
+	limitFallbackMaxRepeats    = 4
 	// limitFallbackContinueTries: how many times the continuation is handed over before it is left to the
 	// conversation's next input (which then carries the summary). Its client_msg_id makes every try the same message.
 	limitFallbackContinueTries = 5
@@ -52,6 +56,8 @@ type conversationSwitchFallback struct {
 	// (later while the original launcher still shows a limit).
 	ResetsAt  time.Time `json:"resets_at"`
 	RestoreAt time.Time `json:"restore_at"`
+	// ReturnRepeats counts quick recurrences of this launcher's limit after automatic returns.
+	ReturnRepeats int `json:"return_repeats,omitempty"`
 	// ContinueID is the continuation's client_msg_id. Continued: it was handed over, the owner spoke first, or it
 	// was given up after limitFallbackContinueTries tries.
 	ContinueID    string `json:"continue_id"`
@@ -61,6 +67,47 @@ type conversationSwitchFallback struct {
 	// moved, or nothing left to restore).
 	RestoreBatch string `json:"restore_batch,omitempty"`
 	Done         bool   `json:"done,omitempty"`
+}
+
+// limitFallbackReturnRepeats follows an accepted automatic restore of the same logical conversation and
+// activation. The durable operation's update time marks its acceptance, even if it waited for the owner's
+// first input or the manager restarted before it recorded the switched outcome.
+func limitFallbackReturnRepeats(ctx context.Context, store logicalSwitchStore, state conversationSwitchState, item conversationSwitchItem, now time.Time) int {
+	for _, restore := range slices.Backward(state.Batches) {
+		if restore.RestoreOf == "" || !restore.FirstTurn || len(restore.Items) != 1 {
+			continue
+		}
+		returned := restore.Items[0]
+		if returned.Outcome != conversationSwitchSwitched || returned.Machine != item.Machine ||
+			returned.ConversationID != item.ConversationID || returned.ExpectedEpoch+1 != item.ExpectedEpoch ||
+			returned.Target.Machine != item.Before.Machine || returned.Target.Launcher != item.Before.Launcher {
+			continue
+		}
+		original := slices.IndexFunc(state.Batches, func(batch conversationSwitchBatch) bool {
+			return batch.ID == restore.RestoreOf && batch.Fallback != nil && batch.Fallback.RestoreBatch == restore.ID
+		})
+		if original < 0 {
+			return 0
+		}
+		op, err := store.ConversationSwitch(ctx, returned.Machine, returned.ConversationID, returned.OperationID)
+		if err != nil || op == nil || op.Phase != "accepted" || op.UpdatedAt.IsZero() {
+			return 0
+		}
+		if elapsed := now.Sub(op.UpdatedAt); elapsed < 0 || elapsed >= limitFallbackRepeatWindow {
+			return 0
+		}
+		previous := state.Batches[original].Fallback.ReturnRepeats
+		return min(max(previous, 0), limitFallbackMaxRepeats-1) + 1
+	}
+	return 0
+}
+
+func limitFallbackReturnAt(reset, now time.Time, repeats int) time.Time {
+	if repeats <= 0 {
+		return limitContinueAt(reset, now)
+	}
+	wait := min(limitFallbackMaxReturnWait, limitFallbackRepeatWindow<<min(repeats-1, limitFallbackMaxRepeats-1))
+	return reset.Add(wait).UTC()
 }
 
 // limitFallbacksOf is assistant.limit_fallbacks as it applies: trimmed, without repeats or blanks, in order.
@@ -203,7 +250,7 @@ func (s *Service) limitFallbackStart(ctx context.Context, machine, sid string, r
 		s.logf("limit fallback %s/%s: %s", machine, short(sid), why)
 		return
 	}
-	row, err := resolve(ctx, sid)
+	row, err := resolve(ctx, machine, sid)
 	if err != nil {
 		return
 	}
@@ -227,8 +274,9 @@ func (s *Service) limitFallbackStart(ctx context.Context, machine, sid string, r
 		return
 	}
 	item.OperationID, item.Outcome = randomHex(16), conversationSwitchQueued
+	repeats := limitFallbackReturnRepeats(ctx, st, state, item, now)
 	batch := conversationSwitchBatch{ID: randomHex(16), CreatedAt: now.UTC(), Items: []conversationSwitchItem{item}, FirstTurn: true,
-		Fallback: &conversationSwitchFallback{ResetsAt: reset.UTC(), RestoreAt: limitContinueAt(reset, now)}}
+		Fallback: &conversationSwitchFallback{ResetsAt: reset.UTC(), RestoreAt: limitFallbackReturnAt(reset, now, repeats), ReturnRepeats: repeats}}
 	batch.Fallback.ContinueID = limitFallbackContinuePrefix + batch.ID
 	state.Batches = append(state.Batches, batch)
 	// The before-image and operation ID are durable before the switch starts (executeConversationSwitches).
@@ -245,10 +293,11 @@ func (s *Service) limitFallbackStart(ctx context.Context, machine, sid string, r
 	}
 }
 
-// conversationSwitchResolver finds machine's conversation for a batch the manager makes itself, as the full-role
-// HTTP route does.
-func (s *Service) conversationSwitchResolver(machine string) conversationSwitchResolver {
-	return func(ctx context.Context, id string) (proto.Session, error) {
+// conversationSwitchResolver finds a conversation on targetMachine (defaulting to defaultMachine) for a batch the
+// manager makes itself, as the full-role HTTP route does.
+func (s *Service) conversationSwitchResolver(defaultMachine string) conversationSwitchResolver {
+	return func(ctx context.Context, targetMachine, id string) (proto.Session, error) {
+		machine := cmp.Or(targetMachine, defaultMachine)
 		row, ok := s.session(ctx, machine, id)
 		if !ok {
 			return proto.Session{}, errors.New("conversation not found")
@@ -360,7 +409,7 @@ func (s *Service) limitFallbackRestore(ctx context.Context, state *conversationS
 	if h, found := s.launcherHealth(ctx, item.Before.Machine, item.Before.Launcher); found && h.unusable() {
 		next := now.Add(limitFallbackRecheck)
 		if reset, ok := h.limitReset(); ok && reset.After(now) {
-			next = limitContinueAt(reset, now)
+			next = limitFallbackReturnAt(reset, now, fb.ReturnRepeats)
 		}
 		s.logf("limit fallback %s/%s: %s still unusable (%s): back about %s", item.Machine, short(item.ConversationID),
 			item.Before.Launcher, cmp.Or(h.Kind, h.State), next.UTC().Format(time.RFC3339))

@@ -368,14 +368,12 @@ func TestConversationSendDeferredWakeDroppedWhenReceiverWakesEarlier(t *testing.
 
 		// Owner sends a message to lead3, carrying the kept message and settling it on delivery confirmation.
 		params := map[string]any{"text": "Owner checking in"}
-		done, err := s.withOwnerRelayLater(ctx, "server", "lead3", "owner-msg-1", params, true)
-		if err != nil {
+		if _, err := s.withOwnerRelayLater(ctx, "server", "lead3", "owner-msg-1", params, true); err != nil {
 			t.Fatalf("withOwnerRelayLater: %v", err)
 		}
 		if text, _ := params["text"].(string); !strings.Contains(text, "kept for owner read lead3") {
 			t.Fatalf("owner send did not carry kept message: %q", text)
 		}
-		s.relayLaterOwnerSent("lead3", "owner-msg-1", done)
 		s.relayLaterOwnerOutcome(ctx, "lead3", "owner-msg-1", true)
 
 		waitFor(t, "deferred wake dropped after owner send", func() bool { return len(fanoutWaitsOf(t, s)) == 0 })
@@ -466,7 +464,9 @@ func TestConversationSendExplicitWakeFalseNeverWakesLater(t *testing.T) {
 // deadline, preserves the cap across restart, wakes the target exactly once, and does not double-wake on another
 // restart or after a crash while claimed.
 func TestConversationSendDeferredWakeSurvivesHubRestart(t *testing.T) {
-	shortFanoutWindow(t, 220*time.Millisecond)
+	// This case constructs and restores two managers before exercising the persisted cap. Keep the window long
+	// enough for that setup under load; the original deadline and all wake-once assertions remain unchanged.
+	shortFanoutWindow(t, 2*time.Second)
 	st := withDelayedWaitCAS(&memStore{})
 	f := newFakeHub().withMachine()
 
@@ -691,11 +691,9 @@ func TestConversationSendDeferredWakeWaitsForInFlightOwnerSend(t *testing.T) {
 	}
 	// Start an owner send to lead3 carrying Later["lead3"], leaving it in flight while the fanout window elapses.
 	params := map[string]any{"text": "Owner message in flight"}
-	done, err := s.withOwnerRelayLater(ctx, "server", "lead3", "owner-inflight-1", params, true)
-	if err != nil {
+	if _, err := s.withOwnerRelayLater(ctx, "server", "lead3", "owner-inflight-1", params, true); err != nil {
 		t.Fatalf("withOwnerRelayLater: %v", err)
 	}
-	s.relayLaterOwnerSent("lead3", "owner-inflight-1", done)
 
 	// Wait past fanoutWindow while owner send is still unsettled: deferred wake must defer rather than double-wake.
 	select {

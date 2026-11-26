@@ -1,51 +1,55 @@
 package assistant
 
 import (
+	"cmp"
 	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // inboxBook is the inbox's state.
 type inboxBook struct {
-	lang        func() i18n.Lang // the user's language, for the reasons it writes on items (nil: the default)
-	larkAccount int              // lark.account (InboxConfig.LarkAccount); zero is primary account 1
-	mu          sync.Mutex
-	items       map[string]*InboxItem
-	once        sync.Once
-	loadMu      sync.Mutex              // one load at a time
-	loaded      atomic.Bool             // what the database keeps was read: until then nothing is taken or written
-	running     sync.Mutex              // one collection applied at a time
-	saving      sync.Mutex              // snapshots and writes in the same order
-	needsYouMu  sync.Mutex              // guards needsYou
-	needsYou    inboxTeller             // the "Needs you" count's teller (tellInboxNeedsYou)
-	mark        map[string]uint64       // bumped on each user parent/done mutation of an id, under mu: a rollback's identity check
-	filing      map[string]*inboxFiling // pending filing ownership, independent of an unrelated parent change
-	epoch       string                  // the hub's run and its last round applied (InboxRound.Epoch, Seq), under running
-	seq         uint64
-	triaging    sync.Mutex     // one triage pass at a time (inbox_triage.go)
-	titling     sync.WaitGroup // merged rows' titles being written (inbox_merge_title.go; tests wait for it)
-	handing     sync.Mutex     // one judge / agent pass at a time (inbox_agent.go)
-	handAgain   atomic.Bool    // a pass is asked for: the goroutine holding handing runs it (handInbox)
-	passHook    func()         // tests: runs as each pass starts
-	waitHook    func()         // tests: replaces the poll sleep while suggestFrom waits for startup
-	translating sync.Mutex     // one translation pass at a time (inbox_translate.go)
-	replies     sync.Map       // item id -> *inboxReply: replies to one item, one at a time (inbox_triage.go)
-	handingOff  sync.Map       // item id -> *sync.Mutex: hand-offs of one item, one at a time (inbox_handoff.go)
-	telling     sync.Map       // item id -> *sync.Mutex: deliveries to one item's conversation, one at a time (deliverNotes)
-	snapshots   inboxSnapshots // the lists answered with a cursor, for GET /api/v1/inbox?since (inbox_delta.go)
-	mutes       []InboxMute
-	mutesMu     sync.Mutex // one read-change-save of the kept mutes at a time
-	policies    []InboxPolicy
-	policiesMu  sync.Mutex // one read-change-save of the kept policies at a time (inbox_policies.go)
-	folderCfg   InboxFolderConfig
-	folderCfgMu sync.Mutex // one read-change-save of the folder settings at a time (inbox_folders.go)
-	foldering   sync.Mutex // one folder pass at a time
-	cardSends   cardLocks  // a message card's id → the lock its "Send" holds (sendFromCard)
+	lang                  func() i18n.Lang // the user's language, for the reasons it writes on items (nil: the default)
+	larkAccount           int              // lark.account (InboxConfig.LarkAccount); zero is primary account 1
+	mu                    sync.Mutex
+	items                 map[string]*InboxItem
+	once                  sync.Once
+	loadMu                sync.Mutex              // one load at a time
+	loaded                atomic.Bool             // what the database keeps was read: until then nothing is taken or written
+	running               sync.Mutex              // one collection applied at a time
+	saving                sync.Mutex              // snapshots and writes in the same order
+	needsYouMu            sync.Mutex              // guards needsYou
+	needsYou              inboxTeller             // the "Needs you" count's teller (tellInboxNeedsYou)
+	mark                  map[string]uint64       // bumped on each user parent/done mutation of an id, under mu: a rollback's identity check
+	filing                map[string]*inboxFiling // pending filing ownership, independent of an unrelated parent change
+	epoch                 string                  // the hub's run and its last round applied (InboxRound.Epoch, Seq), under running
+	seq                   uint64
+	triaging              sync.Mutex     // one triage pass at a time (inbox_triage.go)
+	titling               sync.WaitGroup // merged rows' titles being written (inbox_merge_title.go; tests wait for it)
+	handing               sync.Mutex     // one judge / agent pass at a time (inbox_agent.go)
+	handAgain             atomic.Bool    // a pass is asked for: the goroutine holding handing runs it (handInbox)
+	passHook              func()         // tests: runs as each pass starts
+	waitHook              func()         // tests: replaces the poll sleep while suggestFrom waits for startup
+	workbenchDraftHook    func()         // tests: runs after Workbench generation and before its card item is reloaded
+	onDemandDraftSaveHook func()         // tests: runs after an on-demand draft save attempt, before its failure tombstone
+	translating           sync.Mutex     // one translation pass at a time (inbox_translate.go)
+	replies               sync.Map       // item id -> *inboxReply: replies to one item, one at a time (inbox_triage.go)
+	handingOff            sync.Map       // item id -> *sync.Mutex: hand-offs of one item, one at a time (inbox_handoff.go)
+	telling               sync.Map       // item id -> *sync.Mutex: deliveries to one item's conversation, one at a time (deliverNotes)
+	snapshots             inboxSnapshots // the lists answered with a cursor, for GET /api/v1/inbox?since (inbox_delta.go)
+	mutes                 []InboxMute
+	mutesMu               sync.Mutex // one read-change-save of the kept mutes at a time
+	policies              []InboxPolicy
+	policiesMu            sync.Mutex // one read-change-save of the kept policies at a time (inbox_policies.go)
+	folderCfg             InboxFolderConfig
+	folderCfgMu           sync.Mutex // one read-change-save of the folder settings at a time (inbox_folders.go)
+	foldering             sync.Mutex // one folder pass at a time
+	cardSends             cardLocks  // a message card's id → the lock its "Send" holds (sendFromCard)
 	// translations are the translations made, by model, text or mail and language (inbox_translate.go).
 	translations translateCache
 
@@ -99,6 +103,11 @@ type inboxBook struct {
 
 	listMemo inboxListMemo // each listed item's JSON for GET /api/v1/inbox, under mu (inbox_list_memo.go)
 
+	// Scoped routing receives source arrivals under mu and wakes the outbox worker after persistence.
+	externalCapture bool
+	externalTriage  externalInboxTriager
+	externalWake    chan struct{}
+
 	// Deterministic PR/Issue to-do auto-forwarding state (inbox_forward.go).
 	forwarding      sync.Mutex
 	forwardAgain    atomic.Bool
@@ -122,6 +131,7 @@ type inboxVia struct {
 func (b *inboxBook) init() {
 	b.once.Do(func() {
 		b.items = map[string]*InboxItem{}
+		b.externalWake = make(chan struct{}, 1)
 		b.extensions, b.builtin, b.kinds, b.names = map[string]bool{}, map[string]bool{}, map[string]string{}, map[string]string{}
 		b.vias = map[string]inboxVia{}
 		b.retriaged, b.settleAsked, b.settleSeen = map[string]bool{}, map[string]time.Time{}, map[string]string{}
@@ -320,4 +330,34 @@ func (b *inboxBook) readSource(id, name string) {
 	if b.batch != nil {
 		b.batch.read[id] = name
 	}
+}
+
+// inboxChatTitle returns the best known display title for a Lark chat feed from Inbox items, or "".
+func (s *Service) inboxChatTitle(feed string) string {
+	if feed == "" {
+		return ""
+	}
+	ib := &s.inbox
+	ib.mu.Lock()
+	defer ib.mu.Unlock()
+	for _, it := range ib.items {
+		if it == nil {
+			continue
+		}
+		if it.Lark != nil && it.Lark.FeedID == feed {
+			if title := clip(oneLine(cmp.Or(it.Where, it.Title)), 60); title != "" {
+				return title
+			}
+		}
+		if it.Connector != nil {
+			for _, tag := range it.Connector.Tags {
+				if tag.Key == connector.TagChat && tag.Value == feed {
+					if title := clip(oneLine(cmp.Or(it.Where, it.Title)), 60); title != "" {
+						return title
+					}
+				}
+			}
+		}
+	}
+	return ""
 }

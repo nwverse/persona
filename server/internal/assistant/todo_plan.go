@@ -42,6 +42,7 @@ func (t *Todo) setPlan(row db.TodoRow) {
 	t.Responsible = cloneResponsible(row.Responsible)
 	t.Audience = row.Audience
 	t.DirectionID = row.DirectionID
+	t.ItemType = row.ItemType
 }
 
 // keepPlan writes t's plan, project and the owner's marks (seen, restored, Someday) into row: a row made in memory for a
@@ -63,6 +64,7 @@ func (t *Todo) keepPlan(row *db.TodoRow) {
 	row.Responsible = cloneResponsible(t.Responsible)
 	row.Audience = t.Audience
 	row.DirectionID = t.DirectionID
+	row.ItemType = t.ItemType
 }
 
 // todoRowOf is todo t as a row (what memory has of it; the store-less PATCH changes it).
@@ -111,6 +113,7 @@ type todoPlanIn struct {
 	Priority    *string         `json:"priority"`
 	Audience    *string         `json:"audience"`
 	DirectionID *string         `json:"direction_id"`
+	ItemType    *string         `json:"item_type"`
 }
 
 // edit puts the plan into e; an error says which field could not be read.
@@ -231,7 +234,7 @@ func (s *Service) createTodoFromWithImages(ctx context.Context, title, notes, in
 
 // createDirectionTodo makes a piece of leader's direction (#5846): a todo with plan's due date, reminder, priority and
 // project, opened by the leader and supervised by it, with no agent and no done_when, as a Lark topic opens one
-// (feishu_thread_open.go). So the direction tree lists it under that direction (as not started until an agent works on
+// (the lark module's thread_open.go). So the direction tree lists it under that direction (as not started until an agent works on
 // it, direction_tree.go), and task_plan's todo_id can run an agent on it later instead of opening a second todo.
 func (s *Service) createDirectionTodo(ctx context.Context, leader, title, notes string, plan db.TodoEdit, bindings ...*repository.CreateBindings) (Todo, error) {
 	now := time.Now().UTC()
@@ -272,8 +275,17 @@ func (s *Service) createPieceTodo(ctx context.Context, conversation, title, note
 // todo it closes has its outcome recorded and a question's to-do answered as dropped. db.ErrTodoNotFound when it is not
 // there.
 func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo, error) {
+	return s.editTodoWithCloseActivity(ctx, id, e, false)
+}
+
+func (s *Service) editTodoWithCloseActivity(ctx context.Context, id string, e db.TodoEdit, checkActivity bool) (Todo, error) {
 	if e.Audience != nil {
 		if err := db.ValidateTodoAudience(*e.Audience); err != nil {
+			return Todo{}, err
+		}
+	}
+	if e.ItemType != nil {
+		if err := db.ValidateTodoItemType(strings.TrimSpace(*e.ItemType)); err != nil {
 			return Todo{}, err
 		}
 	}
@@ -295,15 +307,44 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 		f(id)
 	}
 	reopening := e.Done != nil && !*e.Done
+	var fencedSessions [][2]string
 	if reopening {
-		// Keep a concurrent ledger writer from publishing an older state over the reopened row.
-		s.supervise.writeMu.Lock()
+		fencedSessions = todoProtectedSessions(cur, e.Responsible)
+	} else if e.SetResponsible && e.Responsible != nil && e.Responsible.Kind == db.ResponsibleSession && e.Responsible.SessionID != "" {
+		fencedSessions = [][2]string{{e.Responsible.MachineID, e.Responsible.SessionID}}
 	}
-	s.todos.writing.Lock()
+	for {
+		if reopening {
+			// Keep a concurrent ledger writer from publishing an older state over the reopened row.
+			s.supervise.writeMu.Lock()
+		}
+		s.todos.writing.Lock()
+		if ch := s.idleCloseFenceForSessions(fencedSessions); ch != nil {
+			s.todos.writing.Unlock()
+			if reopening {
+				s.supervise.writeMu.Unlock()
+			}
+			select {
+			case <-ch:
+				continue
+			case <-ctx.Done():
+				return Todo{}, ctx.Err()
+			}
+		}
+		break
+	}
 	unlock := func() {
 		s.todos.writing.Unlock()
 		if reopening {
 			s.supervise.writeMu.Unlock()
+		}
+	}
+	if e.Done != nil && *e.Done {
+		if current, ok := s.todoNow(id); ok && current.DoneAt == nil {
+			if err := s.investigationCloseError(ctx, current); err != nil {
+				unlock()
+				return Todo{}, err
+			}
 		}
 	}
 	if links {
@@ -317,6 +358,28 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 		e.PartOf, e.After = l.PartOf, l.After
 	}
 	now := time.Now().UTC()
+	var closeGuard func(Todo) error
+	if e.Done != nil && *e.Done {
+		closeGuard = func(live Todo) error {
+			if checkActivity {
+				return s.taskCloseSnapshotError(live, time.Now())
+			}
+			if work := s.unconfirmedTaskClose(ctx, live); work != nil {
+				return &taskCloseHoldError{todo: id, work: work}
+			}
+			return nil
+		}
+		e.CloseGuard = func() error {
+			if live, ok := s.todoNow(id); ok {
+				return closeGuard(live)
+			}
+			return db.ErrTodoNotFound
+		}
+		if err := e.CloseGuard(); err != nil {
+			unlock()
+			return Todo{}, err
+		}
+	}
 	var row *db.TodoRow
 	if st := s.todoDB(); st != nil {
 		var err error
@@ -336,8 +399,19 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 		e.Apply(&r, now)
 		row = &r
 	}
-	out, doneKeys, applied := s.setTodoRow(id, *row, nil)
+	var beforeWrite func(*Todo) bool
+	var hold error
+	if closeGuard != nil && s.todoDB() == nil {
+		beforeWrite = func(live *Todo) bool {
+			hold = closeGuard(*live)
+			return hold == nil
+		}
+	}
+	out, doneKeys, applied := s.setTodoRow(id, *row, beforeWrite)
 	unlock()
+	if hold != nil {
+		return Todo{}, hold
+	}
 	if applied {
 		s.todoRowSet(ctx, doneKeys)
 	}
@@ -345,6 +419,7 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 		// Done by the user: what the task came to goes in its decisions and its projects' timelines (#2820). cur
 		// still has the agents that were working on it.
 		s.goRecordTaskOutcome(cur, *row.DoneAt)
+		s.todoPushOver(id)
 		s.askTodoClosed(context.WithoutCancel(ctx), id, row.Title) // a question's to-do closed unanswered (ask_todo.go)
 		maySatisfyAfter := row.StartError == "" && row.DoneBy != db.DoneByCancelled
 		s.onTodoWorkspaceReleased(ctx, cur, maySatisfyAfter)
@@ -373,6 +448,7 @@ func (s *Service) deleteTodo(ctx context.Context, id string) error {
 	if err := s.removeTodo(ctx, id); err != nil {
 		return err
 	}
+	s.todoPushOver(id)
 	s.askTodoClosed(context.WithoutCancel(ctx), id, cur.Title) // a question's to-do deleted unanswered (ask_todo.go)
 	s.onTodoWorkspaceReleased(ctx, cur, false)
 	return nil

@@ -117,6 +117,9 @@ type Options struct {
 	// Lang and Timezone are the user's language and zone ("" when not known).
 	Lang     func() i18n.Lang
 	Timezone func() string
+	// Pages draws the assistant's pages (Dashboards, #15017) under the reserved extension id PagesExtension
+	// (pages_hook.go); nil: there are none (only the default manager has them).
+	Pages Pages
 }
 
 // Manager is the extensions, connectors and bots as the manager runs them.

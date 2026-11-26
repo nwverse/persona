@@ -31,8 +31,10 @@ var coreTools = []string{
 }
 
 // leaderCoreTools supplement the shared list for current direction supervisors. Loading
-// these definitions does not change each tool's caller authorization.
-var leaderCoreTools = []string{"leader_progress", "todo_create", "ask_escalate", "direction_name"}
+// these definitions does not change each tool's caller authorization. agent_transfer joins
+// them because a lead hands off its own open tasks with it (#13192): behind lazy loading,
+// leads only discover that path after an extra ToolSearch round.
+var leaderCoreTools = []string{"agent_transfer", "leader_progress", "todo_create", "ask_escalate", "direction_name"}
 
 // The operations taught by persona-work. Match built-in names exactly: an
 // extension sharing a prefix must keep its own loading policy.
@@ -57,6 +59,7 @@ func (s *Service) withToolLoading(ctx context.Context, self string, tools []prot
 	cleanRound := guide && s.cleanRoundSession(self)
 	deferring = deferring && !(settings.LoadAllTools != nil && *settings.LoadAllTools)
 	leader := deferring && s.isLeader(ctx, self)
+	pageRoutine := deferring && s.isPageRoutineSession(ctx, self)
 	out := slices.Clone(tools)
 	for i := range out {
 		// Keep planning and its allowed preflight reads directly available in a granted round.
@@ -64,7 +67,8 @@ func (s *Service) withToolLoading(ctx context.Context, self string, tools []prot
 		out[i].WorkGuideTool = guide && slices.Contains(workGuideTools, out[i].Name) &&
 			!(cleanRound && (out[i].Name == "task_plan" || grantSafeTools[out[i].Name]))
 		out[i].DeferLoading = deferring && !slices.Contains(coreTools, out[i].Name) &&
-			!(leader && slices.Contains(leaderCoreTools, out[i].Name))
+			!(leader && slices.Contains(leaderCoreTools, out[i].Name)) &&
+			!(pageRoutine && out[i].Name == pageToolName)
 	}
 	return out
 }

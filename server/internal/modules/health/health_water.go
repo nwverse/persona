@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -108,6 +109,10 @@ type waterReminderAttempt struct {
 func (s *Service) prepareWaterReminderLocked(ctx context.Context, now time.Time) (*waterReminderAttempt, error) {
 	c, err := s.healthIntakeSettings(ctx)
 	if err != nil || !c.Water.Remind {
+		return nil, err
+	}
+	items, err := s.healthItemsLocked(ctx)
+	if err != nil || !slices.Contains(items.Items, "water") {
 		return nil, err
 	}
 	st := s.h.IntakeStore()

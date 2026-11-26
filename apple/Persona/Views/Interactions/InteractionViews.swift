@@ -512,7 +512,7 @@ struct InteractionPanel: View {
                     .foregroundStyle(StatusPalette.needsYou.dot)
                 Text(panelTitle).font(Theme.Font.labelStrong).foregroundStyle(StatusPalette.needsYou.text)
                     .lineLimit(1)
-                VoiceAskMark(interaction: interaction) // Asking by Voice (docs/assistant/voice.md 1.2 H)
+                AppModel.shared.voice?.askMark(interaction) // Asking by Voice (the voice module) (docs/assistant/voice.md 1.2 H)
                 if collapsed {
                     Text(previewText).font(Theme.Font.secondary).foregroundStyle(.primary).lineLimit(1)
                         .layoutPriority(-1)
@@ -569,7 +569,7 @@ struct InteractionPanel: View {
                     .buttonStyle(.plain)
                     .accessibilityLabel("View plan full screen")
                 }
-                if interaction.toolName != "ask_user" {
+                if interaction.toolName != "ask_user" && interaction.noHandBack != true {
                     Menu {
                         Button { Task { await model.resolve(interaction, .dismissed) } } label: {
                             Label("Handle in Terminal on Computer", systemImage: Theme.Icon.machine)

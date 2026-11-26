@@ -11,6 +11,7 @@ vi.mock("../../lib/managers", () => ({
 vi.mock("../assistant/Persona", () => ({ usePersona: () => ({ name: "Persona" }), PersonaAvatar: () => null }));
 vi.mock("./Skills", () => ({ SkillsGroup: () => null }));
 vi.mock("./StandingAuthorizations", () => ({ StandingAuthorizations: () => null }));
+vi.mock("./OutboundMessages", () => ({ OutboundMessages: () => null }));
 vi.mock("../../lib/store", () => ({ useStore: () => [], refreshAssistant: vi.fn() }));
 import { initI18n, t } from "../../i18n";
 import { chooseManager, MANAGER_HEADER, resetManagerChoice, setRosterDefault } from "../../lib/manager-choice";
@@ -77,8 +78,8 @@ it("shows one correction and no periodic updates by default, without an extra re
   expect(control("interval")).toBeNull();
   expect(host.textContent).toContain("Names you set yourself are never replaced");
   expect(writes).toEqual([]);
-  // StrictMode rehearses the existing page read twice; the child does not add one.
-  expect(vi.mocked(fetch).mock.calls.filter(([path]) => String(path).endsWith("/assistant"))).toHaveLength(2);
+  // StrictMode's double mount shares the page's single in-flight /assistant read; the child does not add one.
+  expect(vi.mocked(fetch).mock.calls.filter(([path]) => String(path).endsWith("/assistant"))).toHaveLength(1);
 });
 it("disables correction and restores it without changing the other preferences", async () => {
   await render(); await click("");

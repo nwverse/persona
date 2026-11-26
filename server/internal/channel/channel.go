@@ -120,6 +120,16 @@ const (
 	ChatKindTopic  ChatKind = "topic"
 )
 
+// Known returns the supported chat kind, or empty for an unclassified message.
+func (k ChatKind) Known() ChatKind {
+	switch kind := ChatKind(strings.TrimSpace(string(k))); kind {
+	case ChatKindDirect, ChatKindGroup, ChatKindTopic:
+		return kind
+	default:
+		return ""
+	}
+}
+
 // ThreadMode controls how a channel maps IM chats and topics to Persona conversations when integrations_v2 is enabled.
 type ThreadMode string
 
@@ -142,8 +152,11 @@ func (m ThreadMode) Check() error {
 	}
 }
 
-// Normalized returns m, defaulting an unset value to channel_default.
-func (m ThreadMode) Normalized() ThreadMode {
+// Effective preserves an explicit choice. Thread-capable plugins inherit topic routing in the experiment.
+func (m ThreadMode) Effective(inheritTopics bool) ThreadMode {
+	if m == "" && inheritTopics {
+		return ThreadModePerTopic
+	}
 	if m == "" {
 		return ThreadModeChannelDefault
 	}
@@ -233,24 +246,24 @@ var DefaultFeatures = map[string]bool{FeatureAsks: true}
 
 // View is a channel as the app sees it (GET /api/v1/channels).
 type View struct {
-	ID           string       `json:"id"`
-	Name         string       `json:"name"`
-	Kind         Kind         `json:"kind"`
-	Source       Source       `json:"source"`
-	Plugin       string       `json:"plugin,omitempty"`
-	Market       string       `json:"market,omitempty"` // for a market's: the market's id
-	Installed    bool         `json:"installed"`
-	Enabled      bool         `json:"enabled"`
-	State        State        `json:"state"`
-	Error        string       `json:"error,omitempty"`
-	Account      *Account     `json:"account,omitempty"`
-	Description  string       `json:"description,omitempty"`
+	ID              string       `json:"id"`
+	Name            string       `json:"name"`
+	Kind            Kind         `json:"kind"`
+	Source          Source       `json:"source"`
+	Plugin          string       `json:"plugin,omitempty"`
+	Market          string       `json:"market,omitempty"` // for a market's: the market's id
+	Installed       bool         `json:"installed"`
+	Enabled         bool         `json:"enabled"`
+	State           State        `json:"state"`
+	Error           string       `json:"error,omitempty"`
+	Account         *Account     `json:"account,omitempty"`
+	Description     string       `json:"description,omitempty"`
 	Capabilities    Capabilities `json:"capabilities"`
 	Target          *Target      `json:"target,omitempty"`
 	ThreadMode      ThreadMode   `json:"thread_mode,omitempty"`
 	ThreadIdleHours int          `json:"thread_idle_hours,omitempty"`
 	Features        []Feature    `json:"features,omitempty"`
-	Bind         Bind         `json:"bind"`
+	Bind            Bind         `json:"bind"`
 	// Surfaces are the app channel's ends (iOS, Mac, …), for people.
 	Surfaces    []string  `json:"surfaces,omitempty"`
 	LastEventAt time.Time `json:"last_event_at,omitzero"`
@@ -262,6 +275,8 @@ type View struct {
 const (
 	// TargetOverrideTopics: group topic routing sends each topic to its own conversation.
 	TargetOverrideTopics = "topics"
+	// TargetOverrideGroupsAndTopics: each group and each topic has its own conversation.
+	TargetOverrideGroupsAndTopics = "groups_and_topics"
 	// TargetOverrideThreads: per-thread routing sends each thread to its own conversation.
 	TargetOverrideThreads = "threads"
 )
