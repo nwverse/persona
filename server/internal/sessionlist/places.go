@@ -58,7 +58,7 @@ func (i *Index) PlaceCounts(options Options) (PlaceCounts, error) {
 		}
 		out.Total++
 		needs := 0
-		if stateOf(r.item, f.Roots) == "needs_you" {
+		if stateOf(r.item, f.Roots, f.CrossMachineHierarchy) == "needs_you" {
 			needs = 1
 		}
 		for _, at := range [...]struct {

@@ -15,6 +15,19 @@ enum PersonaHostApp: ModuleHost {
     /// A Settings entry of a module is listed, searched and drawn as the core's own (`SettingsCatalog`).
     typealias SettingsInfo = SettingsEntry
 
+    /// What a module's shell page shares with the assistant's own pages (`ModuleSlot.shellPlaces`): a new conversation's
+    /// launcher, model, mode and effort as picked in the shell composer, whether a start is under way, and how to start one.
+    struct ShellContext {
+        /// A conversation is being started.
+        var disabled: Bool
+        @Binding var launcher: String?
+        @Binding var launcherModel: String?
+        @Binding var mode: String
+        @Binding var effort: String
+        /// Starts a conversation in the page's space with the message.
+        var send: (String, [ImagePayload]) -> Void
+    }
+
     /// Where a module's views go, each in one slot.
     nonisolated enum Place: Hashable {
         /// A chat's ··· menu and the assistant's top-bar menu (`ModuleSlot.toolbarItems`).
@@ -51,6 +64,9 @@ enum PersonaHostApp: ModuleHost {
 /// A view of an active module at one of the app's places.
 typealias ModulePlaceView = ModuleView<PersonaHostApp>
 
+/// A page of an active module in the app's shell (`ModuleSlot.shellPlaces`).
+typealias ModuleShellPlace = ModuleShellPage<PersonaHostApp>
+
 /// The active modules' views at `place` for `context`, those with something to draw (`ModuleView.shows`).
 struct ModuleViews: View {
     let place: PersonaHostApp.Place
@@ -66,6 +82,20 @@ struct ModuleViews: View {
     }
 }
 
+#if DEBUG
+/// The DEBUG sample sheets of the modules compiled into this build, for screenshots (`-showHealthTrends`). The one place
+/// the core names a module's DEBUG modifier; a build without the module has none.
+struct ModuleDebugSamples: ViewModifier {
+    func body(content: Content) -> some View {
+        #if PERSONA_MODULE_HEALTH && os(iOS)
+        content.healthTrendsSample()
+        #else
+        content
+        #endif
+    }
+}
+#endif
+
 /// A composer action of an active module (`ModuleSlot.composerActions`).
 typealias ModuleComposerAction = ComposerAction<PersonaHostApp>
 
@@ -78,6 +108,12 @@ enum Modules {
         // condition; apple/modules-core-only.yml (PERSONA_CORE_ONLY=YES) leaves every one of them out.
         #if PERSONA_MODULE_SCREEN_SHARE
         list.append(ScreenShareModule())
+        #endif
+        #if PERSONA_MODULE_HEALTH
+        list.append(HealthModule())
+        #endif
+        #if PERSONA_MODULE_VOICE
+        list.append(VoiceModule())
         #endif
         return list
     }
@@ -127,20 +163,26 @@ enum HubModuleMemory {
 /// when that hub's hello, or the pick of hub, changes the answer (#13849). Nothing else is observed.
 @MainActor @Observable
 final class ModuleState {
-    static let shared = ModuleState(group: UserDefaults.standard.string(forKey: AppModel.hubGroupKey) ?? "")
+    static let shared = ModuleState(group: UserDefaults.standard.string(forKey: AppModel.hubGroupKey) ?? "",
+                                    audioBroker: .shared)
 
     private(set) var registry: ModuleRegistry<PersonaHostApp>
     /// The hub group whose answer the registry follows.
     @ObservationIgnored private(set) var group: String
     /// The modules whose launch hooks ran; nil before launch.
     @ObservationIgnored private var launched: Set<ModuleID>?
+    /// Optional audio broker kept in sync with the active modules' `audio_leases` declarations.
+    @ObservationIgnored private let audioBroker: AudioSessionBroker?
 
     init(group: String, defaults: UserDefaults = .standard,
          modules: [any PersonaModule<PersonaHostApp>] = Modules.builtIn,
-         isEnabled: @escaping @MainActor (any PersonaModule<PersonaHostApp>) -> Bool = Modules.isEnabled) {
+         isEnabled: @escaping @MainActor (any PersonaModule<PersonaHostApp>) -> Bool = Modules.isEnabled,
+         audioBroker: AudioSessionBroker? = nil) {
         self.group = group
+        self.audioBroker = audioBroker
         registry = ModuleRegistry(modules: modules, isEnabled: isEnabled, hub: HubModuleMemory.remembered(group, in: defaults))
         assert(registry.problems.isEmpty, "module registrations refused: \(registry.problems)")
+        audioBroker?.syncDeclaredLeases(from: registry)
     }
 
     /// Runs the active modules' launch hooks, once, at launch.
@@ -167,6 +209,32 @@ final class ModuleState {
         guard hub != registry.hub else { return }
         registry = registry.rebuilt(hub: hub)
         assert(registry.problems.isEmpty, "module registrations refused: \(registry.problems)")
+        audioBroker?.syncDeclaredLeases(from: registry)
         if let done = launched { launched = registry.launch(after: done) }
+    }
+}
+
+extension AudioSessionBroker.LeaseKind {
+    nonisolated init(_ kind: AudioLeaseKind) {
+        switch kind {
+        case .call: self = .call
+        case .voiceConversation: self = .voiceConversation
+        case .meetingRecording: self = .meetingRecording
+        case .playback: self = .playback
+        }
+    }
+}
+
+extension AudioSessionBroker {
+    /// Acquires a lease declared by an active module in `ModuleRegistry.audioLeases` (#13849).
+    nonisolated func acquire(_ declared: ModuleAudioLease) -> Lease {
+        acquire(id: declared.id, module: declared.module.rawValue, kind: LeaseKind(declared.kind))
+    }
+
+    /// Syncs the active modules' declared `audio_leases` into the broker for inspection.
+    @MainActor func syncDeclaredLeases(from registry: ModuleRegistry<PersonaHostApp>) {
+        setDeclaredLeases(registry.audioLeases.map {
+            DeclaredLease(id: $0.id, module: $0.module.rawValue, kind: LeaseKind($0.kind))
+        })
     }
 }

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/fleetcount/fleetcountadapt"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/lazyre"
@@ -38,6 +39,7 @@ type fleetBook struct {
 	seen         map[[2]string]time.Time      // (machine, session) -> when the user last looked at it
 	seenLoaded   bool                         // seen holds the table's times (loadSeen succeeded once)
 	stateSince   map[[2]string]stateMark      // (machine, session) -> its state and when it entered it
+	stateListed  map[string]bool              // scratch ids for pruning stateSince, cleared and reused under mu
 	upstream     map[[2]string]upstreamStreak // (machine, session) -> consecutive no-work upstream 5xx turns (fleet_upstream.go)
 	notified     map[string]time.Time         // assistant conversation -> when it last pushed with notify_user
 	// reportSent: assistant conversation -> when a scheduled run or a task notice was sent into it (noteReportTurn):
@@ -45,6 +47,9 @@ type fleetBook struct {
 	reportSent map[string]time.Time
 	// cardTell serializes telling the hub a card with checking it is still held (fleet_ix.go tellCard).
 	cardTell sync.Mutex
+	// A card can be withdrawn while it is being told. Reconnect takes both locks to order its
+	// complete inventory with new cards and withdrawals on the same connection.
+	cardEnd sync.Mutex
 	// codexAnnounced: Codex card id -> when it was announced (fleet_ix_codex.go)
 	codexAnnounced map[string]time.Time
 	// codexEnded: Codex card id -> when the node stopped listing it (fleet_ix_codex.go)
@@ -90,6 +95,9 @@ type fleetBook struct {
 	enc    bytes.Buffer
 	// archived is what was told of each machine's archived rows (fleet.archived, tellArchived), under sentMu.
 	archived map[string]archivedSent
+	// views and archViews: the arrays the views of each list and of its archived rows told apart are decided in
+	// (fleet_views.go), under sentMu.
+	views, archViews fleetcountadapt.Views
 	// shown: the rows awaiting a reply of the list last told the hub for each machine, decorated (the reminders of
 	// agents awaiting a reply read them instead of decorating every list each minute, agents_reply.go).
 	shownMu sync.Mutex
@@ -100,9 +108,21 @@ type fleetBook struct {
 	// asks: what each session's last words ask, while they stay the same (fleet_asks.go).
 	asks asksMemo
 	// folds: what each machine's last complete list folded its children under (fleet_fold.go), for the rows and
-	// cards sent without the rest of the list.
-	foldMu sync.Mutex
-	folds  map[string]sessionFold
+	// cards sent without the rest of the list. foldMeta / crossParents / crossChildren track only machines
+	// participating in cross-machine subagent hierarchies so unrelated machines stay on the local fast path.
+	foldMu        sync.Mutex
+	folds         map[string]sessionFold
+	foldMeta      map[string][]foldEntry
+	crossParents  map[string]map[string]bool // childMachine -> referenced parentMachines
+	crossChildren map[string]map[string]bool // parentMachine -> referencing childMachines
+
+	// subagents: durable child (machine, session) -> parent/task provenance restored on demand by visible
+	// target identity from a2a_tasks, legacy dispatches, and task_spawn todo agents (subagent_index.go).
+	subagentsMu           sync.RWMutex
+	subagentsLegacyLoaded bool
+	subagents             map[[2]string]subagentLink
+	subagentsChecked      map[string]map[string]struct{} // machine -> checked sessionIDs
+	subagentsByTask       map[string][2]string
 
 	// rep is the last snapshot's parts the session lists show (fleetTakeSnapshot).
 	rep fleetReport
@@ -122,6 +142,8 @@ type fleetBook struct {
 	live liveState // the Live Activity's content as last told (fleet_live.go)
 
 	started sync.Once
+	// The first reconnect and the first arriving card both wait for prior-process cleanup.
+	restored sync.Once
 
 	q        fleetQueue // what the nodes' events start for the assistant, in order (fleet_follow.go)
 	followMu sync.Mutex
@@ -134,6 +156,7 @@ type fleetBook struct {
 type fleetReport struct {
 	mu        sync.RWMutex
 	got       bool
+	seq       uint64                 // highest sequenced Snapshot.Seq applied (0: none yet)
 	sessions  map[string]SessionView // by session id
 	work      map[[2]string]proto.WorkState
 	workOn    bool
@@ -182,6 +205,29 @@ func guard(err *error) {
 func (g guardedStore) InsertInteraction(ctx context.Context, ix proto.Interaction) (err error) {
 	defer guard(&err)
 	return g.st.InsertInteraction(ctx, ix)
+}
+
+// interactionDeadlineUpdater is the durable counterpart of publishing an extended prepared-approval deadline.
+// A store that keeps interaction history but cannot update it must not leave the database advertising a stale expiry.
+type interactionDeadlineUpdater interface {
+	UpdateInteractionDeadline(ctx context.Context, id string, created, expires time.Time) error
+}
+
+func (g guardedStore) UpdateInteractionDeadline(ctx context.Context, id string, created, expires time.Time) (err error) {
+	defer guard(&err)
+	st, ok := g.st.(interactionDeadlineUpdater)
+	if !ok {
+		return errNoTable
+	}
+	return st.UpdateInteractionDeadline(ctx, id, created, expires)
+}
+
+func (s *Service) updateInteractionDeadline(ctx context.Context, id string, created, expires time.Time) error {
+	st := s.fleetStore()
+	if st == nil {
+		return nil // no interaction table: the in-memory card is the only card
+	}
+	return st.(interactionDeadlineUpdater).UpdateInteractionDeadline(ctx, id, created, expires)
 }
 
 // resolvedInteractionInserter is the atomic history write and final outcome update used by reversible-setting
@@ -485,7 +531,13 @@ func (s *Service) fillStateMarks(machine string, list []proto.Session, now time.
 	// The list is the node's whole list, kept across a disconnect (devices.Machine.setSessions): a session no longer
 	// in it has ended. Forget its mark and its hook flag. A hook flag for a session never listed yet (its hook came
 	// before the node's next list) has no mark and stays.
-	listed := make(map[string]bool, len(list))
+	listed := s.fleet.stateListed
+	if listed == nil {
+		listed = make(map[string]bool, len(list))
+		s.fleet.stateListed = listed
+	} else {
+		clear(listed)
+	}
 	for _, sess := range list {
 		listed[sess.SessionID] = true
 	}

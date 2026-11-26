@@ -13,6 +13,9 @@ public protocol ModuleHost {
     associatedtype PlaceContext = Void
     /// What the host's Settings lists need of an entry (title, symbol, group, search words); the module fills it in.
     associatedtype SettingsInfo = Void
+    /// What the host hands a module's shell page (`ModuleRegistrar.shellPage`): the bindings and actions it shares with
+    /// the host's own pages.
+    associatedtype ShellContext = Void
     /// The slot a place belongs to.
     static func slot(for place: Place) -> ModuleSlot
 }
@@ -40,6 +43,23 @@ public struct ModuleView<Host: ModuleHost>: Identifiable {
     /// Whether the view has anything to draw here: a host that lays out around it (spacing, a divider) asks first.
     @MainActor public func shows(_ context: Host.PlaceContext) -> Bool { shows(context) }
     @MainActor public func view(_ context: Host.PlaceContext) -> AnyView { make(context) }
+}
+
+/// A page a module adds to the host's shell (`ModuleSlot.shellPlaces`): the host routes to it by `id` and lists its row
+/// only while a module provides it.
+public struct ModuleShellPage<Host: ModuleHost>: Identifiable {
+    /// Unique among all shell pages; the host's route names it.
+    public let id: String
+    public let module: ModuleID
+    private let make: @MainActor (Host.ShellContext) -> AnyView
+
+    init(id: String, module: ModuleID, make: @escaping @MainActor (Host.ShellContext) -> AnyView) {
+        self.id = id
+        self.module = module
+        self.make = make
+    }
+
+    @MainActor public func page(_ context: Host.ShellContext) -> AnyView { make(context) }
 }
 
 /// An entry in the host's Settings (`ModuleSlot.settings`): what its lists show (`info`), its row and its page.

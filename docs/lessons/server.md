@@ -1371,6 +1371,8 @@ Splitting a registry at its first colon reads `[::1]:5000` as `[`, selecting HTT
 ## persona-link passive mode and node service (docs/operations/link.md ("Passive mode", "Installing the node service"), 2026-11-02)
 
 - Link only relays node streams; remote updates belong in node RPC (#1158, `docs/operations/node-update.md`). Each attach creates a new `Node`, so update exclusion and installation transactions must belong to the resident process; closing the current RPC doesn't restart resident node. Shut down the resident service only after the success response is actually written; a separate recovery process rolls back if the new version can't start. Old nodes don't know the update protocol and need one local upgrade first; version mismatch alone mustn't enable a deployment button.
+- **Record the backup's version after executable drift** (#15686). A resident still running V1 can have V2 on disk.
+  Redeploy backs up V2 and records its self-reported version so V2 can clear the restart barrier after rollback.
 
 - Linux `setsid` detaches the process group, not the systemd service cgroup: when node startup fails, the manager kills rollback processes in the same cgroup (#1158). Recovery must run in a separate transient user service and be ready before binary replacement. Complete its readiness handshake before acquiring the update-directory lock, or the parent waits for readiness holding the lock while recovery waits for that lock. Tests use fake `systemd-run`, never installing recovery services on the development machine.
 - A missing identity and an unavailable identity need different fallback decisions (#2910). A Linux zombie keeps both its procfs start time and its `ps -o lstart=` result, so rejecting it in `osproc.Identify` alone still lets a watchdog check count it as alive. Preserve the difference between a live exact identity, a known exited process, and an unreadable identity; only the last needs a weaker reading. Check for known exit even for older markers without exact identities. Tests can hold a deterministic zombie with `waitid(WEXITED|WNOWAIT)` after SIGKILL, then reap it during cleanup.
@@ -2708,7 +2710,7 @@ On TestFlight 224 an extension's **Review** spun for two minutes and then failed
 
 ## What the port relay costs, hop by hop (2026-11-10, #3067)
 
-`server/cmd/vncbench relay` puts an echo server behind `…/ports/{port}/connect`. With everything on the hub machine
+`server/internal/modules/screen-share/vncbench relay` puts an echo server behind `…/ports/{port}/connect`. With everything on the hub machine
 (client, hub, manager, its own node) a small message's round trip is 1.6 ms, 0.8 ms more than a WebSocket ping to the
 hub, and a download runs at 88 MB/s: the hub, the bus, the manager and the stream mux are not where a live screen's
 latency goes. The hub → node leg (`ssh -T` over Tailscale on the LAN) is where it varies; plain `ssh host cat` shows the
@@ -2915,7 +2917,7 @@ computer every 2 s): the manager allocated 555 MB and used about 2.1 s of CPU a 
 `internal/assistant`'s `TestPlacesThatSealAreKnown` (`keyrotate_guard_test.go`) counts every `.Seal(`, `sealKey(`,
 `.encrypt(`, `SealWith(` and `secretkey.New` per file under `internal/` and `cmd/`, so nothing new seals with the
 manager's `secret.key` without the key rotation re-sealing it. It counts AEADs with keys of their own too, in packages
-that have nothing to do with the assistant: #7954 sealed the live screen's UDP packets in `internal/screenlink`, its
+that have nothing to do with the assistant: #7954 sealed the live screen's UDP packets in `internal/modules/screen-share/screenlink`, its
 tests and its importers passed, and the hub deploy failed on this guard. When code under `internal/` or `cmd/` seals,
 run `go test -run TestPlacesThatSealAreKnown ./internal/assistant` (no database needed) and record the file there:
 with `secret.key`, after putting where it keeps the sealed value into `db.sealedTables` or `db.sealedSettings`; with
@@ -3220,3 +3222,11 @@ is not evidence of isolation.
 - The hub’s MCP golden harness reconstructs the Agent tool list separately from the manager’s live discovery path. Add new manager-owned Agent tools to that helper as well as the per-tool goldens; otherwise production discovery can match its language snapshots while the hub’s legacy golden test still offers the old list. Full runner logs identify this as an index/leftover-file mismatch.
 
 - Register non-session runner RPCs through `nodeRPC` in the resource domain file. Adding a case to `Node.handleMethod` bypasses the domain registration rule and fails the central-list freeze even when the node package tests pass. Include the architecture-guard shard when adding a node RPC.
+
+## A switch outcome does not mean its sweep released every row lock (#15138)
+
+`logicalSweep` starts background reconciliation; a batch reaching `switched` does not join that goroutine.
+A fixture's next `SetConversationPick` can collide with its final `ClaimConversationInput` transaction even when no
+input remains. `FOR UPDATE NOWAIT` maps PostgreSQL lock contention to `ErrConversationSwitchBusy`. Use the existing
+bounded wait for that specific error, keep the original expected epoch, and fail immediately on other errors.
+Do not treat the error text as proof of an unfinished operation or wait for an unrelated batch state.

@@ -102,6 +102,10 @@ func (s *Service) taskSpawn(ctx context.Context, machine, session string, args j
 		stopErr := s.call(stopCtx, mid, deviceSessionStop, map[string]any{"session_id": sid}, nil)
 		return "", fmt.Errorf("child %s/%s was not linked: %w; stop result: %v; tell your supervisor", mid, sid, err, stopErr)
 	}
+	s.recordSubagentLink(mid, sid, machine, session, proto.SubagentOriginSpawned)
+	if s.fleetOn() {
+		go s.publishSessions(mid)
+	}
 	t, ok = s.ensureSupervisor(startCtx, t.ID)
 	if !ok {
 		return "", fmt.Errorf("child %s/%s was linked, but the task closed or lost its supervisor; tell your supervisor", mid, sid)

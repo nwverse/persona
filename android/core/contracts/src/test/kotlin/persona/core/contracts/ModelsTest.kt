@@ -135,6 +135,32 @@ class ModelsTest {
         assertEquals(said, JsonCodec.decodeFromString<SessionCapabilities>(encoded))
     }
 
+    @Test fun codexTakeoverCapabilityAndDtosDecodeSafelyAndRoundTrip() {
+        val withTakeover = JsonCodec.decodeFromString<SessionCapabilities>(
+            """{"read":true,"send":false,"takeover":{"running":true,"can_resume":false,"reason":"encrypted_context"}}""",
+        )
+        assertTrue(withTakeover.read && !withTakeover.send)
+        assertEquals(CodexTakeoverCapability(running = true, canResume = false, reason = "encrypted_context"), withTakeover.takeover)
+        val roundTripped = JsonCodec.decodeFromString<SessionCapabilities>(JsonCodec.encodeToString(withTakeover))
+        assertEquals(withTakeover, roundTripped)
+
+        // Malformed takeover drops only itself without discarding sibling capabilities.
+        val malformed = JsonCodec.decodeFromString<SessionCapabilities>("""{"read":true,"takeover":"bad"}""")
+        assertEquals(SessionCapabilities(read = true, takeover = null), malformed)
+
+        // Older hubs omit takeover.
+        val older = JsonCodec.decodeFromString<SessionCapabilities>("""{"read":true}""")
+        assertNull(older.takeover)
+
+        val info = JsonCodec.decodeFromString<CodexTakeoverInfo>(
+            """{"running":false,"can_resume":true,"token":"tok-1","cwd":"/work","transcript_path":"/tmp/t","continuation_prompt":"Continue"}""",
+        )
+        assertEquals(CodexTakeoverInfo(running = false, canResume = true, token = "tok-1", cwd = "/work", transcriptPath = "/tmp/t", continuationPrompt = "Continue"), info)
+        assertEquals("""{"token":"tok-1","confirm_stop":true}""", JsonCodec.encodeToString(CodexTakeoverRequest("tok-1", confirmStop = true)))
+        val response = JsonCodec.decodeFromString<CodexTakeoverResponse>("""{"session":{"machine_id":"m","session_id":"s","status":"working"}}""")
+        assertEquals(SessionKey("m", "s"), response.session.key)
+    }
+
     @Test fun agentLabelNamesEveryAgent() {
         fun label(json: String) = JsonCodec.decodeFromString<Session>("""{"session_id":"s",$json}""").agentLabel
         assertEquals("Claude", label(""""status":"idle""""))
@@ -160,7 +186,11 @@ class ModelsTest {
         }
         assertEquals("traex", builtIn.name)
         assertEquals("My CLI", builtIn.copy(displayName = "My CLI").title)
-        assertEquals("claude", builtIn.copy(name = "claude", agentType = "claude").title)
+        assertEquals("Claude Code", builtIn.copy(name = "claude", agentType = "claude").title)
+        assertEquals("Codex", builtIn.copy(name = "codex", agentType = "codex").title)
+        assertEquals("Claude Desktop", AgentLauncher(name = "claude-desktop", agentType = "claude").title)
+        assertEquals("Codex App", AgentLauncher(name = "codex-app", agentType = "codex").title)
+        assertEquals("Antigravity CLI", AgentLauncher(name = "agy", agentType = "agy").title)
         assertEquals("Custom Claude", HubLauncher(name = "traex", displayName = "Custom Claude").title)
     }
 
@@ -173,8 +203,8 @@ class ModelsTest {
         assertEquals("TRAE CLI", launcher.title)
         assertEquals("TRAE CLI", settings.title)
         assertEquals("My CLI", launcher.copy(displayName = "My CLI").title)
-        assertEquals("traex", launcher.copy(source = "persona").title)
-        assertEquals("traex", launcher.copy(baseUrl = null).title)
+        assertEquals("custom-cli", launcher.copy(name = "custom-cli", source = "persona").title)
+        assertEquals("TRAE CLI", launcher.copy(baseUrl = null).title)
     }
 
     @Test fun aPaseoProviderIsNamedByItsOwnNameNeverTheEngines() {

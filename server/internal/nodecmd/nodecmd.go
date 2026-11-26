@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/extension/sandbox"
-	"github.com/nwverse/persona/server/internal/iphone"
 	"github.com/nwverse/persona/server/internal/machineops"
 	"github.com/nwverse/persona/server/internal/mcpserver"
 	"github.com/nwverse/persona/server/internal/node"
@@ -62,8 +61,7 @@ const deviceUsage = `  personad resource status [resource]  shared runner status
                            words; docs/operations/link.md "Claude Code plugin")
   personad codex-start <file>
                            run the Codex launcher in file (written by the node, removed once read) with the first
-                           message as its last argument, no shell in between (docs/integrations/codex.md "Starting from the phone")
-` + iphone.Usage
+                           message as its last argument, no shell in between (docs/integrations/codex.md "Starting from the phone")`
 
 // SysmonUsage is `sysmon`'s line in the usage text.
 const SysmonUsage = `  personad sysmon [n]       print this machine's system info and 1 + n metric samples (n default 3, at most 8640,
@@ -106,7 +104,7 @@ func Run(ctx context.Context, stop func(), args []string, b Build) (handled bool
 	case "codex-start": // a Codex launcher with the phone's first message, read from a file (node/codex_start.go)
 		return true, node.CodexStart(rest)
 	case "tab-start": // a command a runtime gave to resume its session in a new tab (`pi --session …`, node/pi.go)
-		return true, node.CodexStart(rest)
+		return true, node.TabStart(rest)
 	case "mcp":
 		return true, mcpserver.Serve(ctx, b.Version, os.Stdin, os.Stdout)
 	case "tool": // a connector's tools and command line from the assistant's shell (internal/toolcli)
@@ -125,8 +123,6 @@ func Run(ctx context.Context, stop func(), args []string, b Build) (handled bool
 		os.Exit(machineops.Main(ctx, b.Version, rest, os.Stdin, os.Stdout, os.Stderr))
 	case "claude-plugin": // the Persona plugin for Claude Code here, as JSON (node/claudeplugin.go; persona-link plugin)
 		os.Exit(node.ClaudePluginCommand(ctx, rest, os.Stdout, os.Stderr))
-	case "iphone": // this computer's paired iPhones for phone control (internal/iphone)
-		os.Exit(iphone.Command(ctx, rest, os.Stdout, os.Stderr))
 	case "sysmon":
 		n, err := sysmonCount(rest)
 		if err != nil {

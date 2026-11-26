@@ -159,6 +159,8 @@ func TestMissingReplyOnFirstInventoryAfterRestart(t *testing.T) {
 			}
 			(&fleetTest{s: second, d: devs, f: f}).sessions(mid, row)
 			deadline := time.Now().Add(2 * time.Second)
+			tick := time.NewTicker(time.Millisecond)
+			defer tick.Stop()
 			for {
 				feed, err := second.feedItems(t.Context(), sid, time.Time{})
 				if err != nil {
@@ -167,7 +169,7 @@ func TestMissingReplyOnFirstInventoryAfterRestart(t *testing.T) {
 				if len(feed) > 0 || time.Now().After(deadline) {
 					break
 				}
-				time.Sleep(time.Millisecond)
+				<-tick.C
 			}
 			assertMissingReplyNotices(t, second, sid, 1)
 			if got := attempts.Load(); got != 1 {

@@ -32,6 +32,18 @@ off until explicitly enabled and is turned off whenever the source changes. An u
 accepted keeps its fixed candidate; source changes are refused until it ends. Repeated triggers
 join that attempt. A rolled-back development commit is never automatically tried again.
 
+When Web Settings opens on the idle Web development channel, it shows the cached status.
+If the Hub advertises `supports_preview`, Web posts `{"preview":true}` to
+`/api/v1/hub/update/check` once per visit. The preview refreshes the candidate without
+starting an automatic installation. A failed lookup keeps the last successful check time.
+
+Choosing **Latest version** and clicking **Update hub** posts `{"target":"latest"}` to
+`/api/v1/hub/update`. The Hub reserves the update and reports `resolving` while it looks
+up remote `main` and its commit time. It builds that exact revision, even if the branch
+moves again. A match with the running commit returns to idle. A lookup failure releases
+the reservation so the operator can retry. Older clients sending `{}` install the checked
+candidate. A selected backup still applies through its own endpoint.
+
 Development updates always use `https://github.com/nwverse/persona.git`, branch `main`.
 The Hub can pause its own writers for a snapshot of the Hub and built-in assistant.
 Remote assistants that keep their own databases and files fall outside that snapshot.
@@ -40,10 +52,12 @@ folder** and the number of **Snapshots to keep**. Operators configure external c
 commands on the Hub host.
 
 The recommended folder is `<runtime>/update/development-backups` (where the Hub has always
-kept these snapshots); it is shown as the placeholder and used when no folder is set. **Use
-recommended** and an empty field are an explicit Web choice of it, so they win over a
-`directory` in `hub.json`; leaving the field out of a request keeps whatever is set. A
-custom folder is validated on the Hub with the backup command's rules (`internal/operations/backup`):
+kept these snapshots). It appears as a wrapping placeholder in the full-width folder field.
+**Use recommended** appears for a custom folder and clears the field. **Save** is enabled
+when the folder or retention changes. Saving a change to an empty folder explicitly chooses
+the recommendation over a `directory` in `hub.json`. Omitting the folder from a request
+keeps the saved folder. The Hub validates a custom folder with the backup command's rules
+(`internal/operations/backup`):
 it must be an absolute path (a leading `~` is expanded), may not be inside data a snapshot
 collects (the knowledge base, `managers/assistant`, extensions, skills or
 `hub.machines_kept`), may not be the runtime directory or contain it (or an external
@@ -121,6 +135,19 @@ Git uses the
 installation user's existing HTTPS credential mechanism, with interactive prompts disabled.
 Updates execute build code from this project's repository.
 Docker Hubs and Windows Hubs retain their original update paths.
+
+In Settings › Hub the development pipeline runs **Build → Waiting for idle → Backup → Restart**.
+Build includes staging and verifying the programs. For a saved version, **Prepare backup** takes
+the place of Build. Choose **Cancel update** and confirm to stop before binary adoption.
+The hub interrupts resolution or a running build, or stops at a safe staging or idle boundary.
+During a snapshot it records the request in memory, finishes verification, resumes writers and
+saves the backup receipt. After cleanup the hub is idle, history shows **Cancelled**, and another
+update can start immediately.
+
+`GET /api/v1/hub/update` reports `can_cancel` and `cancelling`. The authenticated
+`POST /api/v1/hub/update/cancel` remains available during the built-in writer pause.
+Repeated requests during cancellation return the current status. Once the installer claims
+adoption, or when there is no cancellable attempt, cancel returns HTTP 409.
 
 Settings › Hub shows the current step and elapsed phase time during a development build,
 snapshot backup or saved-version preparation. Build progress covers the pinned checkout,
@@ -306,12 +333,13 @@ recovery procedure; use the offline procedure only when data recovery is actuall
    The destination must be absent or empty and cannot be a symlink. This command verifies the
    snapshot and applies the same canonical member/link checks before extraction on Python 3.9+.
    A restricted writer creates private directories, exclusively creates regular files, then
-   creates validated symlinks after all file writes. It preserves timestamps and safe file
-   permissions, removes special and group/other write bits, and never applies archive ownership.
-   It rejects absolute, drive/UNC, backslash, noncanonical
-   and duplicate paths, hard links and non-directory parents. A relative symlink must point
-   directly to a file or directory actually inside this archive; dangling links, link chains
-   and links used as parent directories are rejected. Snapshot creation also refuses hard links.
+   recreates validated hard links and symlinks after all file writes. It preserves timestamps and
+   safe file permissions, removes special and group/other write bits, and never applies archive ownership.
+   A hard link must name a regular file in the archive. A stored symlink must point directly to
+   an archived file or directory within its own root, using a canonical relative path. During
+   backup, absolute symlinks within the same collected root are converted to this relative form.
+   The extractor rejects absolute, drive/UNC, backslash, noncanonical and duplicate member paths,
+   dangling links, link chains and links used as parent directories.
    `manifest.json` maps `root-0`, `root-1`, etc. to their original roots.
    Inspect the archived configs privately to identify each database. Restore the dumps with
    `pg_restore` into fresh, empty databases, using a private `PGSERVICE`/`PGPASSFILE`; then select
@@ -325,7 +353,7 @@ recovery procedure; use the offline procedure only when data recovery is actuall
 
 `coordination-pending.json` means a pause/resume outcome needs inspection: run the original
 resume procedure and verify the writers before removing that exact marker. `.incomplete-*`
-directories remain for inspection. Normal cancellation signals the helper and its active child
+directories remain for inspection. Interrupting a helper process signals the helper and its active child
 group with SIGINT, then escalates child termination within bounded waits. The resume hook gets
 its own 60-second deadline; additional SIGINT/SIGTERM signals are deferred until it finishes.
 A failed/timed-out resume or a force-killed helper retains its coordination evidence and blocks
@@ -925,7 +953,7 @@ The programs (`update.ProgramNames`): `persona-hub` and `persona-manager`, the h
 - **Release build**:
   - The hub checks 1 minute after startup, then every hour (every 6 hours until 2026-11-07, when the user asked for hourly so a release reaches hubs sooner); the App can "Check now" (`POST /api/v1/hub/update/check`);
   - It only fetches the manifest (a few KB): there is an update only if the build number is larger than its own and not in the bad-version list; the result is broadcast to open Apps.
-  - While an install is running or the new process has not confirmed the update, checks refresh `latest` and `last_check` without changing `state`, `progress` or `error`. This applies to manual checks, the first check after startup and hourly checks, including responses to requests started before the install. A failed check advances `last_check` and keeps the previous `latest`; it still returns an error to the caller. Confirmation also prevents a check from starting another automatic install.
+  - While an install is running or the new process has not confirmed the update, checks refresh `latest` and `last_check` without changing `state`, `progress` or `error`. This applies to manual checks, the first check after startup and hourly checks, including responses to requests started before the install. A failed release check advances `last_check` and keeps the previous `latest`; it still returns an error to the caller. Confirmation also prevents a check from starting another automatic install.
 - **Docker build**:
   - Every hour, query the image repository's tags (anonymous GHCR `tags/list`), take the highest stable semver, and show a notice if it is newer;
   - The hub installs nothing; Docker pulls the image and verifies by digest;
@@ -949,6 +977,9 @@ Where a release hub reads `latest.json` and downloads from (#4522). v0.2.1's bin
 - **A source that stopped** (#8108): when the newest release a check reads is older than the hub's own build and older than the release its code contains (the `vX.Y.Z` its version starts with: `git describe` names a build after the newest tag in it), the source no longer takes releases, and the hub would otherwise find itself up to date at every check while its phones get no newer Android app. `GET /api/v1/hub/update` then carries `source_behind: true` (`latest` is the source's newest release), Settings › hub says so in place of "Up to date", naming the source and `update.url`, and the log says it once per source and release, not at every check. A source as new as the hub, newer, or holding the release the hub's code starts from (GitHub Releases for a hub deployed from `main` after that release) reports nothing. A version that names no release (`dev-…`, `master-<commit>-…`) cannot tell a stopped source from a quiet one, and reports nothing either.
 - **A hub deployed with `deploy.sh`** carries a non-empty environment `PERSONA_UPDATE_URL`, then the config's `publish.update_url`, else `<publish.site_url>/dl`: a config with only `site_url` pointing at the publish site gets the frozen `dl/` below, so the hub never sees a newer release or offers its phones the Android app. `deploy.sh` prints which source the hub will carry when `publish.update_url` is not set; set it (for example to the GitHub Releases base) before deploying, or `update.url` in the hub's `hub.json` afterwards.
 - **The default of official builds** is the GitHub Releases base (`https://github.com/nwverse/persona/releases/latest/download`, through `publish.update_url`), the same base the Release's `install.sh` downloads from; v0.5.2 and later carry it. Releases up to v0.4.0 were built with the publish site's `dl/`, which has stayed on the 2026-11-07 build since the repository history was rewritten (the rollback guard refuses to publish over it), so those hubs never see a newer release: set `update.url` to the GitHub base, or upgrade once by hand. The getting-started guide and the website's install command point new installs at the Release's `install.sh` for the same reason. `update.url` still lets a hub choose another source without a new build.
+
+On the web, **Settings › This hub** shows the latest version from the selected Release or Beta source and its publication time when available (#15710).
+With no result yet, it prompts for a check. If the installed build number is higher than the source's latest build, it explains that updating from that source would require a downgrade. A stopped-source warning takes precedence.
 
 ### Beta updates (opt-in)
 
@@ -1079,7 +1110,7 @@ Download → Verify → Prepare → Wait for idle → Replace → Restart → Co
   - **Update History**: last 10 attempts, result (updated / rolled back / **Update failed** / **Not installed automatically**), automatic attempts marked, from/to versions, time, rollback and held-update reasons.
   - Old hub (no `/api/v1/hub/update`): explain that install.sh must be run once on the hub machine to update it.
 - Android Settings has the same items (**Hub Version**, `HubUpdatePage`, see `../android/android.md`, "Hub version"); Android does not yet have the row at the top of Agents.
-- **A row at the top of Agents** (`HubNoticeRow`, same position and appearance as **Persona is signed in on your Mac**, hidden while searching): only one at a time, most important first:
+- **On Apple, a row at the top of Agents** (`HubNoticeRow`, same position and appearance as **Persona is signed in on your Mac**, hidden while searching): only one at a time, most important first:
   1. App too old (its build number is below the hub's `min_app_build`): "This app is too old for this hub. Update it in TestFlight", cannot dismiss;
   2. Hub too old (`protocol` below what the App requires; old hubs that do not report it count as 0): "The hub is out of date; some features won't work", dismissed with × and not shown again;
   3. Updating: e.g. "Hub updating: waiting for 2 busy chats to finish";
@@ -1088,9 +1119,11 @@ Download → Verify → Prepare → Wait for idle → Replace → Restart → Co
   6. New version with automatic updates off: "Hub update available: X", with **Update** and × (not shown again for this version). Not shown with automatic updates on; it will install itself;
      Docker hubs show "New hub image: X", with only ×. After dismissing one, the next appears as usual; the App remembers the most recently dismissed notices.
   Tapping elsewhere in the row opens the hub page (sheet). No popup or blocked interaction; button labels stay single-line, and each button handles only its own action (`.borderless`, `HubNoticeUITests`).
-  Only on Agents: the assistant page is a chat, and an extra top row would push it down; hub status belongs with machines and Agents.
-  On the web (#2897), it sits below the filter bar in the sidebar's Agents block (`web/src/views/agents/HubNoticeRow.tsx`); items, order and buttons match the App, and dismissals are stored in this browser (last 8, same keys as the App);
-  no items 1 or 2: the web is served by the hub itself, so their versions always match. Tapping the row opens Settings › hub.
+  On the web, the notice sits directly below Settings in the sidebar's Pages group. Folding Pages hides both rows.
+  Reopening it reads the current status. In the phone drawer the notice spans the width beneath the grid row containing Settings.
+  Tapping the text opens Settings › Hub. Each adjacent button performs its own action and keeps the sidebar open.
+  The web follows the same priority and remembers the last eight dismissals in this browser. It skips the app and hub
+  compatibility notices because the hub serves the web client.
 - **Notifications**: after an automatic update installs, push "Hub updated to X"; after rollback, push "Hub update failed" with the reason (hub's `updater.notify`). Manual updates are visible in the App and do not send an extra push.
 - **During restart**: disconnection is expected; the usual "Connecting…" title becomes "Hub updating…", and its explanation says the hub is restarting and will automatically return to the previous version if the new one cannot start; after reconnect, show the new version.
 - **Settings › Assistant › Skills** (`SkillsPage`): skills on the computer running the assistant (`GET /api/v1/skills`), read-only, marked as user-provided or built-in, explaining where to put them and when they take effect.
@@ -1108,15 +1141,15 @@ Download → Verify → Prepare → Wait for idle → Replace → Restart → Co
 
 | Method | Path | Description |
 | --- | --- | --- |
-| GET | `/api/v1/hub/update` | `{version, build, channel, can_update, latest?{version, build, released, notes, bad}, state, progress, busy[]{machine, session, title}, error, auto, auto_update_nodes, auto_notice, last_check, update_url?, update_url_from?, update_proxy?, source_behind?}` (the last four: "Update source"; `source_behind` only when true) |
-| POST | `/api/v1/hub/update/check` | Check immediately |
-| POST | `/api/v1/hub/update` | Start update (409 with a reason for non-release builds); `{"now": true}` is **Update Now** after the second confirmation, skipping the idle wait |
+| GET | `/api/v1/hub/update` | `{version, build, channel, can_update, supports_preview, latest?{version, build, released, notes, bad}, state, progress, busy[]{machine, session, title}, error, auto, auto_update_nodes, auto_notice, last_check, update_url?, update_url_from?, update_proxy?, source_behind?}` (the last four: "Update source"; `source_behind` only when true) |
+| POST | `/api/v1/hub/update/check` | Check immediately. An optional `{"preview": true}` refreshes status without automatic installation. |
+| POST | `/api/v1/hub/update` | Start update. On Web development, `{"target": "latest"}` resolves the latest commit under reservation. `{"now": true}` is **Update Now** after the second confirmation, skipping the idle wait |
 | PUT | `/api/v1/hub/update/settings` | `{auto}`; `{auto_notice_seen: true}`; `{auto_update_nodes: true\|false}` |
 | GET | `/api/v1/hub/update/history` | Update history, newest first |
 | GET | `/api/v1/skills` | Skills on the machine running the assistant: `[{name, description, source: user\|builtin}]` |
 | WS event | `hub_update` | Push to open Apps when state or progress changes |
 
-`state`: `idle` / `checking` / `available` / `downloading` / `waiting_idle` / `restarting` / `confirming` / `updated` / `rolled_back` / `failed`.
+`state`: `idle` / `checking` / `resolving` / `available` / `downloading` / `waiting_idle` / `restarting` / `confirming` / `updated` / `rolled_back` / `failed`.
 
 ### Runtime node update policy
 

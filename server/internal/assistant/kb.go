@@ -92,7 +92,7 @@ type kbState struct {
 	postsDirty       atomic.Bool                 // posts came in since the post archive's index was written (kb_posts.go)
 	retries          kb.Retries                  // the steps' backoffs, kept across the engines built one after another
 
-	history   kbHistoryShared  // the history import (kbhistory/history.go)
+	history   kbHistoryShared  // the history import's loop (kbhistory_service.go; the import is the knowledge-ui module's)
 	selection kbSelectionState // what is brought in and kept (kb_selection.go)
 }
 
@@ -235,6 +235,9 @@ func (s *Service) kbOpenLocked(ctx context.Context, set assistantwire.KBSettings
 	// The recording module's: the minutes' push, the live log's and meeting.json's changes, the day recordings' names
 	// and the day's push (none without it).
 	s.recordingHook(e)
+	// The Lark user sync's messages the Lark gateway already archived are received but not written again
+	// (kb/align_gateway.go); every other source's pass through untouched.
+	e.Align = kb.NewGatewayAligner(e.Store)
 	e.ObserveChanges()
 	e.ExtraDirs = kbReadDirs(set.ExtraDirs)
 	if !k.passed {
@@ -252,6 +255,9 @@ func (s *Service) kbOpenLocked(ctx context.Context, set assistantwire.KBSettings
 		}
 		if n := e.RetagMail(); n > 0 {
 			s.logf("kb: %d mail chat(s) queued to be tagged again under the current rules", n)
+		}
+		if n := e.DedupeLarkSyncChats(); n > 0 {
+			s.logf("kb: removed %d duplicate larksync message(s) already archived by the gateway", n)
 		}
 	}
 	k.cur.Store(&kbOpened{eng: e, set: set})
@@ -533,14 +539,16 @@ func (s *Service) kbArchiveLane(ctx context.Context, e *kb.Engine, r *kbRounds) 
 		}
 	})
 	// Recordings: those past recording_days go, or keep only their minutes until minutes_days (every run: a setting may
-	// just have shortened), complete ones get their summary (their minutes are the minutes lane's).
+	// just have shortened), complete ones get their summary (their minutes are the minutes lane's). The retention is
+	// the knowledge base's own and runs without the recording module too (kb.RetentionWithoutRecordingModule); the
+	// sweeps and the summaries are the module's and do nothing without it.
 	s.kbRun(ctx, func() {
 		if n := e.PruneRecordings(time.Now()); n > 0 {
 			s.logf("kb: pruned %d recording(s)", n)
 		}
 		s.meetingRoomsSweep(ctx, e) // the rooms of transcripts cut, and of recordings gone (meeting_room.go)
 		s.hubSweep(e)               // the audio sockets and jobs of transcripts cut (meeting_transcribe.go)
-		e.SummarizeRecordings(ctx, 3)
+		e.RecordingProvider().SummarizeRecordings(ctx, 3)
 	})
 	// Same work under two names, and the Moments (company feed) posts about each project: a few model calls every half hour.
 	if time.Since(r.links) >= kbItemsPoll {
@@ -631,16 +639,20 @@ func (s *Service) kbProjectBusy(ctx context.Context, e *kb.Engine) func(slug str
 	}
 	s.todos.mu.RUnlock()
 	open := map[string]bool{}
+	var projects *kb.ProjectLookup
+	if e != nil && len(filed) > 0 {
+		projects = e.ProjectLookup() // once per round, not once per to-do (#15539)
+	}
 	for _, slug := range filed {
 		open[slug] = true
-		if e == nil {
+		if projects == nil {
 			continue
 		}
-		if p := e.FindProject(slug); p != nil {
+		if p := projects.Find(slug); p != nil {
 			open[p.Slug] = true
 			continue
 		}
-		for p, ok := e.Store.Project(slug); ok && p.MergedInto != "" && !open[p.MergedInto]; p, ok = e.Store.Project(p.MergedInto) {
+		for p, ok := projects.Project(slug); ok && p.MergedInto != "" && !open[p.MergedInto]; p, ok = projects.Project(p.MergedInto) {
 			open[p.MergedInto] = true
 		}
 	}
