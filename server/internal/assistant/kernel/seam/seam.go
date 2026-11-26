@@ -50,15 +50,21 @@ type ModuleName struct{ name string }
 
 // NewModuleName is the module name name. An empty name, or one with a character outside [a-z0-9-], is a defect.
 func NewModuleName(name string) ModuleName {
+	checkName("seam.NewModuleName", "a module name", name)
+	return ModuleName{name: name}
+}
+
+// checkName raises op's defect unless name, what a constructor was handed for what ("a module name"), is lower-case
+// letters, digits and "-", and not empty.
+func checkName(op, what, name string) {
 	if name == "" {
-		defect.Raise("seam.NewModuleName", "a module name is not empty")
+		defect.Raise(op, what+" is not empty")
 	}
 	for _, c := range name {
 		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
-			defect.Raise("seam.NewModuleName", strconv.Quote(name)+" has a character outside [a-z0-9-]")
+			defect.Raise(op, strconv.Quote(name)+" has a character outside [a-z0-9-]")
 		}
 	}
-	return ModuleName{name: name}
 }
 
 // Route is one route the hub relays and the handler that serves it. The zero Route is no route; only NewRoute makes
@@ -98,9 +104,10 @@ func (r Route) made(op string) {
 	}
 }
 
-// Registry is one assistant Service's registrations: its ports, the modules, routes, bus methods and hooks registered
-// so far, and whether New has sealed it. Only NewRegistry makes one. Modules register only while New runs; the
-// Service reads what they registered (Answer and the hooks) once New has returned it, so nothing guards the tables.
+// Registry is one assistant Service's registrations: its ports, the modules, routes, bus methods, hooks and loops
+// registered so far, and whether New has sealed it. Only NewRegistry makes one. Modules register only while New runs;
+// the Service reads what they registered (Answer, the hooks and StartLoops) once New has returned it, so nothing guards
+// the tables.
 type Registry struct {
 	routes    RouteTable
 	access    Access
@@ -112,6 +119,7 @@ type Registry struct {
 	settled   hooks[func(context.Context, agentref.Ref)]
 	connected hooks[func(context.Context)]
 	parts     hooks[func(context.Context, *assistantwire.Snapshot)]
+	loops     []registeredLoop // loops.go
 	sealed    bool
 }
 
@@ -177,7 +185,8 @@ func (r *Registry) made(op string) {
 
 // Kernel is what one module registers through: the services every module uses (Route, Full, BodyError) and the
 // slots that each replace a central line of package assistant (Bus in bus.go; TurnSettled, Connected and Snapshot in
-// hooks.go). The zero Kernel belongs to no registry; only Registry.Register makes one, for the module it registers.
+// hooks.go; Loop in loops.go). The zero Kernel belongs to no registry; only Registry.Register makes one, for the module
+// it registers.
 type Kernel struct {
 	reg    *Registry
 	module ModuleName

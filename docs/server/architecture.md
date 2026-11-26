@@ -1083,8 +1083,8 @@ of entry goes through the same design. The central lists keep the entries they h
 
 - **The registry**: package `seam`, under `server/internal/assistant/kernel`, holds one registry per assistant
   `Service`, with a slot for each kind of entry. Routes (installed through `Service.handle`), bus methods, the hooks
-  for a settled turn and a new connection, and snapshot parts are there; tools (each placed after a named anchor
-  tool) and loops come with the steps below. `Kernel.Bus` is where any domain adds a new bus method, not only the
+  for a settled turn and a new connection, snapshot parts and loops are there; tools (each placed after a named
+  anchor tool) come with the step below. `Kernel.Bus` is where any domain adds a new bus method, not only the
   Inbox.
   Package `kernel` itself hosts the built-in feature modules (`docs/architecture/core-and-modules.md`), which a build
   may leave out and the owner may switch off; the modules registered here are part of Persona Core.
@@ -1109,7 +1109,8 @@ of entry goes through the same design. The central lists keep the entries they h
   1. the registry, with `saved` (S1, #15182);
   2. the Inbox's routes, bus methods, hooks and snapshot part (S4, #15418), as the module "inbox"
      (`server/internal/assistant/inbox_module.go`);
-  3. `registerRoutes` and `registerLoop` (#7891);
+  3. `registerRoutes` and `registerLoop`, with the `Loop` slot (#7891, #16163;
+     `server/internal/assistant/front_doors.go`);
   4. `registerTools`, with or just before the Inbox's tools (S5).
 
   Until a slot exists, its entries go where they went before. The route calls already in `New`, and the tools and
@@ -1148,7 +1149,7 @@ func (Module) Name() seam.ModuleName { return seam.NewModuleName("saved") }
   registered. Only their constructors make a `ModuleName` or a `Route`: a zero one is a defect wherever it is used.
 - **The Kernel.** Only `Registry.Register` makes one, for the module it registers, and any method of a zero `Kernel`
   is a defect. It offers the services every module uses (`Route`, `Full` and `BodyError`) and the slots that replace
-  central lines (`Bus`, `TurnSettled`, `Connected` and `Snapshot` below; tools and loops with later steps); never a
+  central lines (`Bus`, `TurnSettled`, `Connected`, `Snapshot` and `Loop` below; tools with a later step); never a
   store, an untyped event or a domain method. `Kernel.Publish(ctx, assistantwire.Event)`, the service that publishes
   contract events to the apps, comes with its first user, saved's events (#15222, with `assistantwire.Event` and a
   golden per event kind): no module of the kernel builds a `map[string]any` event yet. A module takes its own
@@ -1183,13 +1184,22 @@ func (Module) Name() seam.ModuleName { return seam.NewModuleName("saved") }
 - **One hook of a kind per module.** A hook has no name of its own, so its module is its key: a second hook of a
   kind from one module, or a nil one, is a defect. Hooks run in registration order; route handlers run under the
   catch site below, and bus methods and hooks run where the lines they replaced ran.
+- **Front doors.** `registerRoutes(seam.NewModuleName("x"), (*Service).xRoutes)` and
+  `registerLoop(seam.NewLoopName("x"), (*Service).xLoop)`, called from an `init()` in the domain's own file
+  (`server/internal/assistant/front_doors.go`), refuse a zero name, a name the same door took and a nil function at
+  that `init()` (`seam.NewLoopName` refuses what `seam.NewModuleName` does); `New` registers each routes door as the
+  module its name names, before the other modules, and the loops as the module `assistant-loops` through
+  `Kernel.Loop`, which refuses a loop name another module took; `Service.Run` starts the registry's loops with
+  `Registry.StartLoops` after the loops it lists and before `scheduleLoop`, with no recover around them, as the
+  listed ones have none.
 - **Route functions written before the kernel.** `routesThrough(k, routes)` runs a module's existing route functions
   with each `Service.handle` in them registering through `k`, so the Inbox's `inboxRoutes` stays as it was; a new
   module calls `Kernel.Route` itself. archguard's `TestCentralFilesNameNoInboxCode` keeps the Inbox's names out of
   `bus.go` and `handler.go`, and in `service.go` to a shrink-only list.
 - **Sealed.** `New` seals the registry before it returns. `Register`, any slot (`Route`, `Bus`, `TurnSettled`,
-  `Connected`, `Snapshot`) or `Seal` after that is a defect; `Full` and `BodyError` stay open, because requests use
-  them, and so do the `Registry` methods that run the slots (`Answer`, `TurnSettled`, `Connected`, `Snapshot`).
+  `Connected`, `Snapshot`, `Loop`) or `Seal` after that is a defect; `Full` and `BodyError` stay open, because
+  requests use them, and so do the `Registry` methods that run the slots (`Answer`, `TurnSettled`, `Connected`,
+  `Snapshot`, `StartLoops`).
 - **One catch site.** Each route registered through the kernel is served under `defer defect.Catch(…)` in
   `server/internal/assistant/kernel/seam/dispatch.go`: a defect raised while serving is reported (the assistant logs it
   with its stack) and answered with 500 (`internal`), so that request fails alone and the manager goes on. Any other
@@ -1275,7 +1285,9 @@ A central list with a seam takes no new name. `server/internal/archguard/central
   - the `assistantwire.Routes` literal, by each entry's source text (`"GET /api/v1/todos"`, `"GET " + StarredImportPath`);
   - the top-level declarations of `prompts/assistant.go`, a method as `Type.Method`;
   - the `proto.Features` literal, by each entry's source text (`"locale"`, `FeatureTodoSendState`);
-  - the keys of the `extwire.RouteScopes` literal in `extwire/scopes.go`, by their source text (`"GET /api/v1/kb/{kind}"`).
+  - the keys of the `extwire.RouteScopes` literal in `extwire/scopes.go`, by their source text (`"GET /api/v1/kb/{kind}"`);
+  - the top-level `s.X()` calls in the assistant's `New`, as `s.X` (`s.archiveRoutes`), and the `go` statements of
+    `Service.Run`, by what they call (`s.a2aLoop`): a domain uses `registerRoutes` and `registerLoop` instead.
 
   Each later seam's PR adds its own list's row. That PR shows a planted entry failing and a registered one passing.
 - **Pending names**: `python3 scripts/test/name_freezes.py pending` lists the names that open PRs add, read from their

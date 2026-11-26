@@ -1,0 +1,101 @@
+# The top-level s.X() calls server/internal/assistant/service.go's New may have, each as s.X, frozen (#16163):
+# server/internal/archguard/central_lists_test.go fails on any other. A domain in package assistant registers its
+# routes from an init() in its own file, func init() { registerRoutes(seam.NewModuleName("x"), (*Service).xRoutes) }
+# (server/internal/assistant/front_doors.go; docs/server/architecture.md "Registering a domain's entries"); a module
+# in a subpackage registers through reg.Register. Delete a line once the test's notice names it; add none.
+s.agentArchiveRoutes
+s.agentNamingRoutes
+s.agentRouteRoutes
+s.agentRoutes
+s.alwaysRoutes
+s.archiveRoutes
+s.attentionRoutes
+s.availabilityRoutes
+s.briefRoutes
+s.captureRoutes
+s.channelRoutes
+s.conversationDeleteRoutes
+s.conversationSwitchRoutes
+s.conversationTagRoutes
+s.directionNameRoutes
+s.directionNotesRoutes
+s.directionOutsideRoutes
+s.directionRoutes
+s.directionSessionRoutes
+s.directionTreeRoutes
+s.dispatchGuardRoutes
+s.dispatchPolicyRoutes
+s.entriesRoutes
+s.expireSupervisionHolds
+s.healthRoutes
+s.healthTellRoutes
+s.historyRoutes
+s.idleArchiveRoutes
+s.infoAccessRoutes
+s.kbInit
+s.kbRoutes
+s.launcherHealthRoutes
+s.launcherImportRoutes
+s.launcherQuotaRoutes
+s.launcherRoutes
+s.loadKnowledgeUI
+s.loadModules
+s.loadRecording
+s.logicalSwitchRoutes
+s.machineLauncherRoutes
+s.machineResourcesRoutes
+s.modelConfigRoutes
+s.modelPickRoutes
+s.modelProfileRoutes
+s.navigationRoutes
+s.northStarRoutes
+s.organizationSnapshotRoutes
+s.originRoutes
+s.placeRoutes
+s.placementRoutes
+s.profileRoutes
+s.providerCatalogRoutes
+s.providerProbeRoutes
+s.questionReadRoutes
+s.readinessRoutes
+s.remoteImageRoutes
+s.repoMirrorRoutes
+s.reporterRoutes
+s.repositoryRoutes
+s.resourceRoutes
+s.routeRoutes
+s.ruleSuggestionRoutes
+s.scheduleGrantRoutes
+s.scheduleRoutes
+s.searchRoutes
+s.sessionReviewRoutes
+s.setStore
+s.skillImportRoutes
+s.skillRoutes
+s.standingAuthorizationRoutes
+s.startDefaultsRoutes
+s.startPresetRoutes
+s.startRoutes
+s.taskRoutes
+s.todayRoutes
+s.todoRoutes
+s.trackRoutes
+s.undeliveredRoutes
+s.urgentCallRoutes
+s.viewActionRoutes
+s.workSessionStartRoutes
+s.workoutRoutes
+s.workspaceBoardRoutes
+
+# Pending: the names the PRs open when this freeze landed were adding, each with its PRs
+# (python3 scripts/test/name_freezes.py pending --write, 2026-11-26; drafts idle more than 14 days left out).
+# A name stays when its PR merges; a rerun of --write drops one whose PRs have all closed. No PR opened later gets a
+# line here.
+s.agentPresentationRoutes #7634
+s.intakeRoutes #14362 #15369
+s.mainModelRoutes #10048
+s.outboundMessageRoutes #9782
+s.partnerRoutes #13379
+s.todoSortRoutes #13796 #13914 #14029 #14104 #14362 #14630 #15320 #15369
+s.watchRoutes #13914 #14029 #14104 #14362 #15320 #15369
+s.webFontRoutes #14476 #14744
