@@ -388,6 +388,11 @@ func isAgyInterruptedStep(step agyStep) bool {
 	return agyInterruptedError.MatchString(strings.TrimSpace(text))
 }
 
+func isAgyCompactCommand(text string) bool {
+	fields := strings.Fields(strings.TrimSpace(text))
+	return len(fields) > 0 && strings.EqualFold(fields[0], "/compact")
+}
+
 func agyUserText(text string) string {
 	if m := agyUserRequest.FindStringSubmatch(text); m != nil {
 		text = m[1]
@@ -728,17 +733,28 @@ func mapAgySteps(steps []agyStep, fallback time.Time, receipts map[string]bool) 
 			notified = delivered != ""
 		case "USER_INPUT":
 			if step.Source == "" || step.Source == "USER_EXPLICIT" {
-				history.usage.turns++
 				delivered, notified = "", false
 				text := agyUserText(step.Content)
+				if isAgyCompactCommand(text) {
+					add("0", "system", proto.KindNotice, transcript.CompactNotice).ClientMsgID = step.ClientMsgID
+					break
+				}
+				history.usage.turns++
 				if text != "" {
 					add("0", "user", proto.KindText, text).ClientMsgID = step.ClientMsgID
 				}
 				addMedia("user", "", step.ClientMsgID, agyAttachedImagePaths(text))
 			}
 		case "CHECKPOINT":
+			pre := history.usage.contextTokens
+			if _, stepCtx, _, ok := step.tokenUsage(); ok && stepCtx > 0 {
+				pre = stepCtx
+			}
 			history.usage.observeCheckpoint()
-			add("0", "system", proto.KindNotice, transcript.CompactedNotice)
+			it := add("0", "system", proto.KindNotice, transcript.CompactedNotice)
+			if pre > 0 {
+				it.Compact = &proto.Compact{PreTokens: pre}
+			}
 		case "PLANNER_RESPONSE":
 			stepModel := step.normalizedModel()
 			stepUsage, hasUsage := history.usage.observePlanner(step)

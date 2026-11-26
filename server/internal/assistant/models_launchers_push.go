@@ -23,6 +23,10 @@ func (s *Service) managedNodeCalls(ctx context.Context, machine string) []device
 	if s.machinePending(ctx, machine) {
 		return nil
 	}
+	var calls []devicewire.NodeCall
+	if cfgCall, ok := s.agyNodeConfigureCall(ctx, machine); ok {
+		calls = append(calls, cfgCall)
+	}
 	s.models.mu.Lock()
 	stored, err := s.readStoredLaunchers(ctx)
 	var keys []machineKey
@@ -32,27 +36,27 @@ func (s *Service) managedNodeCalls(ctx context.Context, machine string) []device
 	s.models.mu.Unlock()
 	if err != nil {
 		s.logf("launchers: prepare node configuration: %v", err)
-		return nil
+		return calls
 	}
 	if _, err := s.nodeLaunchers(stored); err != nil {
 		s.logf("launchers: prepare node configuration: %v", err)
-		return nil
+		return calls
 	}
 	catalog, legacy, err := s.nodeLaunchersFor(ctx, stored, keys, machine)
 	if err != nil {
 		s.logf("launchers: prepare node configuration: %v", err)
-		return nil
+		return calls
 	}
 	c, err := json.Marshal(map[string]any{"launchers": catalog})
 	if err != nil {
-		return nil
+		return calls
 	}
 	l, err := json.Marshal(map[string]any{"launchers": legacy})
 	if err != nil {
-		return nil
+		return calls
 	}
-	return []devicewire.NodeCall{{MachineID: machine, Method: DeviceLaunchersCatalog, Params: c,
-		Fallback: &devicewire.NodeCall{MachineID: machine, Method: DeviceLaunchersManaged, Params: l}}}
+	return append(calls, devicewire.NodeCall{MachineID: machine, Method: DeviceLaunchersCatalog, Params: c,
+		Fallback: &devicewire.NodeCall{MachineID: machine, Method: DeviceLaunchersManaged, Params: l}})
 }
 
 // managedForNodes: the providers with their secrets as every node from before the catalog would get them (no scope

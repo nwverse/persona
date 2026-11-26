@@ -150,8 +150,23 @@ func (n *Node) runtimeStartOn(ctx context.Context, h *runtimeConn, p runtimeStar
 	}
 	if p.Resume == "" {
 		n.recordEngineStart(h, started, p.Cwd)
+		n.recordAgyStart(h, started, p.Cwd)
 	}
 	return started, cleanInstead(res.Instead), nil
+}
+
+func (n *Node) recordAgyStart(h *runtimeConn, s *proto.Session, cwd string) {
+	if h == nil || h.agent() != agyAgent || s == nil || s.SessionID == "" || n.state == nil {
+		return
+	}
+	if _, ok := n.state.get(s.SessionID); ok {
+		return
+	}
+	n.state.put(s.SessionID, sessionState{
+		Launcher:  cmp.Or(s.Launcher, agyAgent),
+		Cwd:       cmp.Or(s.Cwd, cwd),
+		StartedAt: time.Now().UTC(),
+	})
 }
 
 // recordEngineStart keeps the node's record of a session an engine runtime (Paseo, Cindy) has just started, as a
