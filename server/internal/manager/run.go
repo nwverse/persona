@@ -183,6 +183,7 @@ func (e *env) runBoundManager(ctx context.Context, build update.Build, dir, host
 		err := runManagerWith(run, build, dir, assistant.MainHooks{
 			HostDataDir: hostDataDir,
 			Ready:       func(p assistant.Idle) { idle.Store(&p) },
+			HubVersion:  watch.setHubVersion,
 			PendingRestart: func(fn func(bool)) {
 				pendingFn.Store(&fn)
 				if pendingState.Load() {
@@ -306,7 +307,8 @@ func runBuiltinBound(ctx context.Context, build update.Build, out io.Writer, hom
 			close(watched)
 		}
 		err = runAssistant(run, build, nil, assistant.MainHooks{
-			Ready: func(p assistant.Idle) { idle.Store(&p) },
+			Ready:      func(p assistant.Idle) { idle.Store(&p) },
+			HubVersion: watch.setHubVersion,
 			PendingRestart: func(fn func(bool)) {
 				pendingFn.Store(&fn)
 				if pendingState.Load() {

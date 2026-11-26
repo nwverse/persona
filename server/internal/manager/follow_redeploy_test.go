@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistant"
-	"github.com/nwverse/persona/server/internal/hubedge"
 	"github.com/nwverse/persona/server/internal/update"
 )
 
@@ -37,20 +36,6 @@ func TestCoLocatedManagerFollowsOnlyConfirmedHubExecutable(t *testing.T) {
 	t.Cleanup(func() { _ = listener.Close() })
 	var active atomic.Int64
 	active.Store(1)
-	go func() {
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				return
-			}
-			var msg hubedge.Msg
-			if json.NewDecoder(conn).Decode(&msg) == nil {
-				b := active.Load()
-				_ = json.NewEncoder(conn).Encode(hubedge.Msg{T: hubedge.MsgStatus, Version: fmt.Sprint("v", b), Build: b})
-			}
-			_ = conn.Close()
-		}
-	}()
 	path := filepath.Join(home, "bin", "persona-manager")
 	if err := os.WriteFile(path, []byte("#!/bin/sh\nprintf 'v1\\nchannel release, build 1\\n'\n"), 0o755); err != nil {
 		t.Fatal(err)
@@ -67,6 +52,7 @@ func TestCoLocatedManagerFollowsOnlyConfirmedHubExecutable(t *testing.T) {
 		t.Fatal(err)
 	}
 	watch := &binaryWatch{hostDataDir: home, path: path, seen: before, out: &syncBuffer{}}
+	watch.setHubVersion(func() string { return fmt.Sprint("v", active.Load()) })
 	if watch.prepareExitForNew(t.Context()) {
 		t.Fatal("manager followed a replacement while the old Hub still serves")
 	}

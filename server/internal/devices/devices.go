@@ -386,6 +386,10 @@ func (d *Devices) config() devicewire.Config {
 
 func (d *Devices) hubVersion() string { return d.config().HubVersion }
 
+// AdvertisedHubVersion is the last build advertised on the authenticated bus.
+// The service watcher also rechecks it after its own bus has shut down.
+func (d *Devices) AdvertisedHubVersion() string { return d.hubVersion() }
+
 // errPendingUnknown: the hub has not said which machines wait to be confirmed.
 var errPendingUnknown = errors.New("the hub has not said which computers wait to be confirmed")
 

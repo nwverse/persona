@@ -13,12 +13,12 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistant"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/compat"
-	"github.com/nwverse/persona/server/internal/hubedge"
 	"github.com/nwverse/persona/server/internal/managerconf"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/update"
@@ -594,6 +594,7 @@ type binaryWatch struct {
 	// waitUntilIdle, when true, never interrupts active turns past idleMost and cancels waiting if the file reverts.
 	waitUntilIdle bool
 	hostDataDir   string
+	hubVersion    atomic.Pointer[func() string]
 }
 
 // newBinaryWatch follows the file this process runs from; nil when it cannot tell which.
@@ -645,9 +646,23 @@ func (w *binaryWatch) confirmedReplacement(ctx context.Context) bool {
 	if info, err := os.Stat(control); err != nil || info.Mode()&os.ModeSocket == 0 {
 		return true // standalone host or a Hub without an edge
 	}
-	st, err := hubedge.Status(control)
-	return err == nil && st.Version != "" &&
-		update.CheckBinary(ctx, w.path, &update.Manifest{Version: st.Version, Build: st.Build}) == nil
+	hubVersion := w.hubVersion.Load()
+	if hubVersion == nil {
+		return false
+	}
+	want := (*hubVersion)()
+	if want == "" {
+		return false
+	}
+	got, err := update.BuildOf(ctx, w.path)
+	version, _, _ := strings.Cut(got, "\n")
+	return err == nil && version == want && (*hubVersion)() == want
+}
+
+func (w *binaryWatch) setHubVersion(version func() string) {
+	if w != nil {
+		w.hubVersion.Store(&version)
+	}
 }
 
 func (w *binaryWatch) readRestartRecord() (binaryRestartRecord, bool) {
