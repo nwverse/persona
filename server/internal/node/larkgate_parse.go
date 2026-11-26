@@ -924,11 +924,12 @@ func larkConstantNameOK(name string) bool {
 
 // larkLiteralConstants returns the variables provably constant over the whole command, for routes in loops and lists
 // that larkVariableScopeStable rejects (#16491). A constant is assigned exactly once, as `NAME=value` on its own, by a
-// top-level statement that always runs: a `;` / newline statement, or an `&&` operand after only `true`, `:` or `cd` to
-// an absolute directory that exists now and anyone may enter. Its value is a literal of [A-Za-z0-9_-], so it cannot
-// change which route a call reaches; its name is one the shell never sets itself (larkConstantNameOK); it is not used
-// before that statement, and no other assignment of it appears. Every command in it must be one that cannot set a
-// variable (larkConstantSafeCommands); otherwise there are no constants at all.
+// top-level statement that always runs: a `;` / newline statement, or an `&&` operand after only `true`, `:` or, in the
+// first statement, `cd` to an absolute directory that exists now and anyone may enter. Its value is a literal of
+// [A-Za-z0-9_-], so it cannot change which route a call reaches; its name is one the shell never sets itself
+// (larkConstantNameOK); it is not used before that statement, and no other assignment of it appears. Every command in
+// it must be one that cannot set a variable (larkConstantSafeCommands), and nothing in it may evaluate arithmetic or a
+// -v test; otherwise there are no constants at all.
 func larkLiteralConstants(cmd string, gates []proto.CommandGate) map[string]string {
 	out := map[string]string{}
 	tree, err := syntax.NewParser().Parse(strings.NewReader(cmd), "")
@@ -943,7 +944,7 @@ func larkLiteralConstants(cmd string, gates []proto.CommandGate) map[string]stri
 	assigned := map[string]int{} // every assignment of each name, anywhere
 	used := map[string][]syntax.Pos{}
 	opaque := false
-	alwaysRuns := func(st *syntax.Stmt) bool {
+	alwaysRuns := func(st *syntax.Stmt, first bool) bool {
 		call, ok := st.Cmd.(*syntax.CallExpr)
 		if !ok || st.Negated || st.Background || st.Coprocess || len(st.Redirs) > 0 || len(call.Assigns) > 0 {
 			return false
@@ -958,8 +959,9 @@ func larkLiteralConstants(cmd string, gates []proto.CommandGate) map[string]stri
 		switch {
 		case len(words) == 1 && (words[0] == "true" || words[0] == ":"):
 			return true
-		case len(words) == 2 && words[0] == "cd":
-			// An absolute literal directory anyone may enter: it does not depend on an earlier cd, CDPATH or who runs it.
+		case len(words) == 2 && words[0] == "cd" && first:
+			// An absolute literal directory anyone may enter, as the command's first statement: it does not depend on
+			// an earlier cd, CDPATH or who runs it, and nothing before it can remove or rename the directory.
 			dir := words[1]
 			if !filepath.IsAbs(dir) || strings.ContainsAny(dir, "~*?[]{}") || slices.Contains(strings.Split(dir, "/"), "..") {
 				return false
@@ -984,7 +986,7 @@ func larkLiteralConstants(cmd string, gates []proto.CommandGate) map[string]stri
 		}
 		candidates[a.Name.Value] = constant{value: value, at: st.Pos()}
 	}
-	for _, st := range tree.Stmts {
+	for si, st := range tree.Stmts {
 		// A top-level `a && b && NAME=v` is a left-nested chain; walk it in order.
 		var chain []*syntax.Stmt
 		for cur := st; ; {
@@ -997,7 +999,7 @@ func larkLiteralConstants(cmd string, gates []proto.CommandGate) map[string]stri
 			cur = b.X
 		}
 		for i, part := range chain {
-			if !slices.ContainsFunc(chain[:i], func(prev *syntax.Stmt) bool { return !alwaysRuns(prev) }) {
+			if !slices.ContainsFunc(chain[:i], func(prev *syntax.Stmt) bool { return !alwaysRuns(prev, si == 0) }) {
 				candidate(part)
 			}
 		}
@@ -1028,6 +1030,10 @@ func larkLiteralConstants(cmd string, gates []proto.CommandGate) map[string]stri
 		case *syntax.ArithmCmd, *syntax.ArithmExp:
 			// Arithmetic can assign (`$((N=1))`), also through a variable whose value is an expression.
 			opaque = true
+		case *syntax.UnaryTest:
+			if n.Op == syntax.TsVarSet || n.Op == syntax.TsRefVar {
+				opaque = true // zsh evaluates a subscript in -v's quoted operand, ${NAME::=…} included
+			}
 		case *syntax.BinaryTest:
 			switch n.Op {
 			case syntax.TsEql, syntax.TsNeq, syntax.TsLeq, syntax.TsGeq, syntax.TsLss, syntax.TsGtr:
@@ -1052,10 +1058,10 @@ func larkLiteralConstants(cmd string, gates []proto.CommandGate) map[string]stri
 				opaque = true
 			}
 			if name == "test" || name == "[" {
-				// zsh evaluates the operands of a numeric comparison as arithmetic.
+				// zsh evaluates a numeric comparison's operands as arithmetic, and -v's subscript.
 				opaque = opaque || slices.ContainsFunc(n.Args[1:], func(w *syntax.Word) bool {
 					s, _ := executionWord(w)
-					return slices.Contains([]string{"-eq", "-ne", "-lt", "-le", "-gt", "-ge"}, s)
+					return slices.Contains([]string{"-eq", "-ne", "-lt", "-le", "-gt", "-ge", "-v", "-R"}, s)
 				})
 			}
 		}
