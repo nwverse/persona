@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { installedMailbox, preloadMailbox } from "../../test/installed-mailbox";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -35,6 +36,7 @@ afterEach(() => {
 });
 
 const openMail = async (port: string) => {
+  await preloadMailbox("Settings");
   act(() => root.render(<Connectors open={null} onOpen={() => {}} />));
   await flush();
   const add = [...host.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === t("settings-connectors.add_mail"))!;
@@ -50,7 +52,7 @@ const openMail = async (port: string) => {
   return form;
 };
 
-describe("mail account SMTP submission (#4879)", () => {
+describe.skipIf(!installedMailbox)("mail account SMTP submission (#4879)", () => {
   it.each([["0587", 587, "starttls"], ["587", 587, "starttls"], ["465", 465, "tls"]])("submits %s with its numeric port and connection mode", async (text, port, security) => {
     const form = await openMail(String(text));
     act(() => form.requestSubmit());
@@ -75,7 +77,8 @@ describe("mail account SMTP submission (#4879)", () => {
 });
 
 describe("legacy integration destinations", () => {
-  it.each(["mail", "lark"])("opens the built-in %s section", async (id) => {
+  it.each(installedMailbox ? ["mail", "lark"] : ["lark"])("opens the built-in %s section", async (id) => {
+    if (id === "mail") await preloadMailbox("Settings");
     act(() => root.render(<Connectors open={id} onOpen={() => {}} />));
     await flush();
     expect(host.querySelector(`[data-settings-group="${id}"]`)).toBeTruthy();
@@ -92,7 +95,8 @@ describe("legacy integration destinations", () => {
       .some(([, init]) => new Headers(init.headers).get("X-Persona-Manager") === "work")).toBe(true);
   });
 
-  it("reads and updates the chosen assistant's mail switch", async () => {
+  it.skipIf(!installedMailbox)("reads and updates the chosen assistant's mail switch", async () => {
+    await preloadMailbox("InboxSwitch");
     chooseManager("work");
     try {
       fetcher.mockImplementation(async () => ({ ok: true, text: async () => JSON.stringify({
