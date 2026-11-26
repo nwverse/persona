@@ -46,10 +46,11 @@ import (
 // After preserving Antigravity modes (#16300), the packages measured 278,334 B. Filtering botmux marker
 // lines before shortening runtime previews adds 549 B (#16310).
 // Antigravity incremental transcript append (tail anchor + rolling SHA-256 + deferred/periodic verification),
-// sub-second fileMeta fast hit, watched-poll idle backoff, and bounded summary/cache weights add 1,837 B (280,720 B).
+// sub-second fileMeta fast hit, watched-poll idle backoff, and bounded summary/cache weights (with decoupled
+// raw-byte and object-weight transcriptCache caps) add 1,969 B (280,852 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 280_720
+	const budget = 280_852
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

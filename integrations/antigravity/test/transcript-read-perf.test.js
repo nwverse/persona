@@ -660,4 +660,165 @@ createInterface({ input: process.stdin }).on('line', async (line) => {
       rememberObservedWake(join(home, 'nonexistent-brain', `dir-${i}`), wakeSteps, 2)
     }
   })
+
+  it('caches 130k-step single transcript and two alternating transcripts under 64MiB raw with zero unchanged reads while still enforcing the object-weight ceiling', (t) => {
+    const writeBulkLines = (file, count, makeLine) => {
+      const fd = openSync(file, 'w')
+      try {
+        let buf = ''
+        for (let i = 0; i < count; i++) {
+          buf += makeLine(i)
+          if (buf.length >= 1 << 20) {
+            writeSync(fd, buf)
+            buf = ''
+          }
+        }
+        if (buf) writeSync(fd, buf)
+      } finally {
+        closeSync(fd)
+      }
+    }
+    const touchMsOf = (file) => {
+      const st = fs.statSync(file, { bigint: true })
+      return { size: Number(st.size), touchMs: Math.max(Number(st.mtimeMs), Number(st.ctimeMs)) }
+    }
+
+    // 1. Single high-step transcript (130k steps, ~36.4MB raw < 64MiB): unchanged polls read 0 B and appends stay O(delta).
+    {
+      const { root, file } = makeBrainDir(t)
+      const body = 'y'.repeat(150)
+      writeBulkLines(file, 130_000, (i) => line(makeStep(i, body)))
+      const { size, touchMs } = touchMsOf(file)
+      assert.ok(size > 34 * 1024 * 1024 && size < 64 * 1024 * 1024, `expected ~36.4MB raw fixture under 64MiB, got ${size}`)
+
+      const meter = installReadMeter(t, root)
+      const clock = installFakeNow(t, touchMs + 5000)
+
+      meter.reset()
+      const cold = readTranscript(root, true)
+      assert.equal(cold.steps.length, 130_000)
+      assert.equal(meter.stats.bytesRead, size)
+
+      meter.reset()
+      for (let k = 0; k < 5; k++) {
+        clock.advance(400)
+        const hit = readTranscript(root, true)
+        assert.equal(hit, cold, '130k-step transcript under 64MiB raw must remain cached')
+      }
+      assert.equal(meter.stats.bytesRead, 0, 'unchanged polls on 130k-step transcript must read 0 bytes')
+      assert.equal(meter.stats.opens, 0)
+      assert.equal(meter.stats.readFiles, 0)
+
+      // Incremental append on the same high-step transcript stays on the O(anchor + delta) fast path.
+      const added = line(makeStep(130_000, 'tail-delta'))
+      appendFileSync(file, added)
+      const afterMeta = touchMsOf(file)
+      clock.set(afterMeta.touchMs + 100)
+      meter.reset()
+      const next = readTranscript(root, true)
+      assert.equal(next.steps.length, 130_001)
+      assert.equal(next.steps[0], cold.steps[0])
+      assert.equal(next.steps[130_000].content, 'tail-delta')
+      assert.ok(
+        meter.stats.bytesRead <= 4096 + Buffer.byteLength(added) + 128,
+        `append on 130k-step transcript read ${meter.stats.bytesRead} bytes`,
+      )
+    }
+
+    // 2. Two alternating high-step transcripts (~56MB raw total < 64MiB): both stay cached with 0 bytes read.
+    {
+      const pairRoot = mkdtempSync(join(tmpdir(), 'agy-perf-pair-'))
+      t.after(() => rmSync(pairRoot, { recursive: true, force: true }))
+      const makeChild = (name) => {
+        const root = join(pairRoot, name)
+        const logs = join(root, '.system_generated', 'logs')
+        mkdirSync(logs, { recursive: true })
+        return { root, file: join(logs, 'transcript_full.jsonl') }
+      }
+      const a = makeChild('a')
+      const b = makeChild('b')
+      const body = 'y'.repeat(150)
+      writeBulkLines(a.file, 100_000, (i) => line(makeStep(i, body)))
+      writeBulkLines(b.file, 100_000, (i) => line(makeStep(i, body)))
+      const metaA = touchMsOf(a.file)
+      const metaB = touchMsOf(b.file)
+      const totalRaw = metaA.size + metaB.size
+      assert.ok(totalRaw > 50 * 1024 * 1024 && totalRaw < 64 * 1024 * 1024, `expected ~56MB raw pair under 64MiB, got ${totalRaw}`)
+
+      const meter = installReadMeter(t, pairRoot)
+      const clock = installFakeNow(t, Math.max(metaA.touchMs, metaB.touchMs) + 5000)
+
+      const coldA = readTranscript(a.root, true)
+      const coldB = readTranscript(b.root, true)
+      assert.equal(coldA.steps.length, 100_000)
+      assert.equal(coldB.steps.length, 100_000)
+
+      meter.reset()
+      for (let round = 0; round < 3; round++) {
+        clock.advance(1000)
+        assert.equal(readTranscript(a.root, true), coldA, `round ${round}: transcript A must not thrash`)
+        clock.advance(1000)
+        assert.equal(readTranscript(b.root, true), coldB, `round ${round}: transcript B must not thrash`)
+      }
+      assert.equal(meter.stats.bytesRead, 0, 'alternating reads on 56MB raw pair must read 0 bytes')
+      assert.equal(meter.stats.opens, 0)
+      assert.equal(meter.stats.readFiles, 0)
+    }
+
+    // 3. Object-weight hard upper bound (256MiB) still bounds degenerate low-byte/high-step transcripts.
+    {
+      const boundRoot = mkdtempSync(join(tmpdir(), 'agy-perf-weight-'))
+      t.after(() => rmSync(boundRoot, { recursive: true, force: true }))
+      const makeChild = (name) => {
+        const root = join(boundRoot, name)
+        const logs = join(root, '.system_generated', 'logs')
+        mkdirSync(logs, { recursive: true })
+        return { root, file: join(logs, 'transcript_full.jsonl') }
+      }
+      // Two 550k-line "{}\n" files: ~1.65MB raw each (3.3MB total << 64MiB), but ~136MiB weight each (>256MiB combined).
+      const d1 = makeChild('d1')
+      const d2 = makeChild('d2')
+      const tinyBlock = '{}\n'.repeat(10_000)
+      writeBulkLines(d1.file, 55, () => tinyBlock)
+      writeBulkLines(d2.file, 55, () => tinyBlock)
+      const meta1 = touchMsOf(d1.file)
+      const meta2 = touchMsOf(d2.file)
+      assert.ok(meta1.size + meta2.size < 4 * 1024 * 1024)
+
+      const meter = installReadMeter(t, boundRoot)
+      const clock = installFakeNow(t, Math.max(meta1.touchMs, meta2.touchMs) + 5000)
+
+      const first1 = readTranscript(d1.root, true)
+      assert.equal(first1.steps.length, 550_000)
+      meter.reset()
+      assert.equal(readTranscript(d1.root, true), first1, 'single 136MiB-weight transcript fits under 256MiB object budget')
+      assert.equal(meter.stats.bytesRead, 0)
+
+      // Loading d2 (~136MiB weight) pushes combined weight past 256MiB and must evict d1 even though raw total is 3.3MB.
+      const first2 = readTranscript(d2.root, true)
+      assert.equal(first2.steps.length, 550_000)
+      meter.reset()
+      assert.equal(readTranscript(d2.root, true), first2, 'newer 136MiB-weight transcript stays cached')
+      assert.equal(meter.stats.bytesRead, 0)
+
+      meter.reset()
+      const reloaded1 = readTranscript(d1.root, true)
+      assert.notEqual(reloaded1, first1, 'older degenerate transcript must be evicted by 256MiB object-weight budget')
+      assert.equal(meter.stats.bytesRead, meta1.size)
+
+      // A single degenerate file >256MiB weight (1.06M "{}\n" lines = 3.18MB raw << 64MiB) must be refused admission.
+      const huge = makeChild('huge')
+      writeBulkLines(huge.file, 106, () => tinyBlock)
+      const metaHuge = touchMsOf(huge.file)
+      assert.ok(metaHuge.size < 4 * 1024 * 1024)
+      clock.set(metaHuge.touchMs + 5000)
+
+      const h1 = readTranscript(huge.root, true)
+      assert.equal(h1.steps.length, 1_060_000)
+      meter.reset()
+      const h2 = readTranscript(huge.root, true)
+      assert.notEqual(h2, h1, 'single degenerate transcript exceeding 256MiB object-weight cap must not be admitted')
+      assert.equal(meter.stats.bytesRead, metaHuge.size)
+    }
+  })
 })
