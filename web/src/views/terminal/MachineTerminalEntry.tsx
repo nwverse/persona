@@ -24,8 +24,10 @@ export function MachineTerminalEntry({ target, machine, listing, canCreateSpace,
   const matches = (id: string, path?: string) => boundHost && workspaceId ? id === workspaceId : !cwd || sameDirectory(path || "", cwd);
   const workspaces = scoped.flatMap(h => (h.workspaces ?? []).filter(w => matches(w.id, w.cwd)).map(w => ({ h, w })));
   const workspace = workspaces.find(({ h }) => h.new_tab);
+  // Match the Terminals inventory: a live Agent owns its pane; a standalone shell can be resumed here.
   const existing = scoped.filter(h => h.stream).flatMap(h => (h.panes ?? []).filter(p =>
-    matches(p.workspace_id, p.cwd) || workspaces.some(({ h: owner, w }) => owner === h && w.id === p.workspace_id))).at(0);
+    !p.session_id && !p.agent && (matches(p.workspace_id, p.cwd) ||
+      workspaces.some(({ h: owner, w }) => owner === h && w.id === p.workspace_id)))).at(0);
   const id = existing && terminalId(existing);
   const ready = machine?.online && !listing?.error;
   useEffect(() => {

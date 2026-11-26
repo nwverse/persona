@@ -55,7 +55,8 @@ beforeEach(async () => {
       if (opts?.method === "POST") { posts.push([path, JSON.parse(String(opts.body))]); return json({ terminal: "pane:new" }); }
       return json({ hosts: [{ kind: "herdr", stream: true, new_tab: true, control: true,
         workspaces: [{ id: "active", cwd: "/projects/active" }], tabs: [],
-        panes: [{ pane: "one", terminal: "pane:one", cwd: "/projects/active", workspace_id: "active", tab_id: "tab" }] }] });
+        panes: [{ pane: "agent", terminal: "pane:agent", session_id: "session", cwd: "/projects/active", workspace_id: "active", tab_id: "agent" },
+          { pane: "one", terminal: "pane:one", cwd: "/projects/active", workspace_id: "active", tab_id: "tab" }] }] });
     }
     return json({});
   }));
@@ -91,7 +92,7 @@ it("opens a known workspace without sessions by inventory identity", async () =>
   expect(host.textContent).toContain(t("space-page.no_agents"));
 });
 
-it("opens an existing pane on this computer and keeps Engine under Configuration", async () => {
+it("opens an existing shell on this computer ahead of Agent panes and keeps Engine under Configuration", async () => {
   await detail();
   const engine = host.querySelector('[data-testid="engine-section"]')!;
   expect(engine.parentElement?.querySelector("h2")?.textContent).toBe("Configuration");
