@@ -5,7 +5,7 @@
 // phone app (its OAuth client is an iOS one whose callback only the app can catch), so the web form leaves it to the phone,
 // unless the hub has no such client (GET /mail/oauth/google/config): then Gmail goes in here with an app password.
 // Outlook too (Microsoft calls back to a custom scheme only the app catches), though its client ID can be set up here.
-import { useEffect, useLayoutEffect, useId, useState } from "react";
+import { useEffect, useLayoutEffect, useId, useRef, useState } from "react";
 import { managerHeaderFor, otherManager, ownedSub, parseOwnedSub, pinManagerAt, sameManager, useChosenManager } from "../../lib/manager-choice";
 import { clientIDError, EMPTY_MAIL_FORM, MAIL_KINDS, mailAccountLine, mailCodeGuide, mailErrors, mailProviderBadge, mailRequest, mailSummary, signsInOnPhone, type MailAccount, type MailForm, type MicrosoftConfig } from "../../lib/agent-settings";
 import { t } from "../../i18n";
@@ -91,18 +91,30 @@ export function Connectors({ open, onOpen, onChannel, headerBack, openBeside }: 
 
 // ── Mail ────────────────────────────────────────────────
 
-export function Mail({ hideInboxSwitch = false, manager }: { hideInboxSwitch?: boolean; manager?: string } = {}) {
+export function Mail({ hideInboxSwitch = false, manager, reloadKey, onHasAccounts }: {
+  hideInboxSwitch?: boolean; manager?: string; reloadKey?: number; onHasAccounts?: (hasAccounts: boolean) => void;
+} = {}) {
   const [accounts, setAccounts] = useState<MailAccount[] | null>(null);
   const [error, setError] = useState("");
   const [adding, setAdding] = useState(false);
   const [confirm, setConfirm] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
 
-  const load = () =>
-    api<{ accounts: MailAccount[] }>("/mail/accounts")
-      .then((r) => (setAccounts(r.accounts ?? []), setError("")))
-      .catch((e) => setError(errorText(e)));
-  useEffect(() => void load(), []);
+  const read = useRef(0);
+  const load = async () => {
+    const n = ++read.current;
+    try {
+      const r = await api<{ accounts: MailAccount[] }>("/mail/accounts");
+      if (n === read.current) {
+        setAccounts(r.accounts ?? []);
+        setError("");
+      }
+    } catch (e) {
+      if (n === read.current) setError(errorText(e));
+    }
+  };
+  useEffect(() => void load(), [reloadKey]);
+  useEffect(() => onHasAccounts?.(!!accounts?.length), [accounts, onHasAccounts]);
 
   const remove = async (a: MailAccount) => {
     setDeleting(a.id);
@@ -186,7 +198,7 @@ export function Mail({ hideInboxSwitch = false, manager }: { hideInboxSwitch?: b
 
 /** Mail's Add to Inbox (#5307): the same switch as Settings › Inbox Sources' mail page; off, no account's mail comes into
  *  the Inbox (search, replies and the knowledge base go on). Only a hub that has the switch lists it (`inbox`). */
-export function MailInboxSwitch({ manager }: { manager?: string } = {}) {
+export function MailInboxSwitch({ manager, grouped }: { manager?: string; grouped?: boolean } = {}) {
   const picked = useChosenManager();
   const [mail, setMail] = useState<HubConnector | null>(null);
   const [busy, setBusy] = useState(false);
@@ -213,13 +225,14 @@ export function MailInboxSwitch({ manager }: { manager?: string } = {}) {
       setBusy(false);
     }
   };
-  return (
+  const row = (
     <div className="flex items-center gap-3 px-4 py-2.5">
       <span className="min-w-0 flex-1 truncate text-[13px] text-ink">{title}</span>
       {busy && <Spinner />}
       <Switch on={mail.inbox} disabled={busy} label={title} onChange={(v) => void change(v)} />
     </div>
   );
+  return grouped ? <Group>{row}</Group> : row;
 }
 
 const fieldClass = "h-9 w-full rounded-control bg-field px-3 text-[13px] text-ink outline-none placeholder:text-ink-3 focus:shadow-[inset_0_0_0_1px_var(--accent)] disabled:opacity-60";
@@ -525,23 +538,25 @@ function LarkAccountRow({ a, isDefault }: { a: LarkAccount; isDefault: boolean }
   );
 }
 
-export function Feishu({ manager }: { manager?: string } = {}) {
+export function Feishu({ manager, reloadKey }: { manager?: string; reloadKey?: number } = {}) {
   const [st, setSt] = useState<LarkStatus | null>(null);
   const [accounts, setAccounts] = useState<LarkAccountList | null>(null);
   const [error, setError] = useState("");
   const [absent, setAbsent] = useState(false);
   const [loading, setLoading] = useState(true);
+  const read = useRef(0);
   const load = () => {
+    const n = ++read.current;
     setLoading(true);
     // the Feishu accounts on the hub's Lark gateway (docs/extensions/feishu.md "Multiple accounts"); a hub from before them has none to list
-    api<LarkAccountList>("/lark/accounts").then(setAccounts).catch(() => setAccounts(null));
+    api<LarkAccountList>("/lark/accounts").then((r) => n === read.current && setAccounts(r)).catch(() => n === read.current && setAccounts(null));
     api<LarkStatus>("/lark/status")
-      .then((r) => (setSt(r), setAbsent(false), setError("")))
+      .then((r) => n === read.current && (setSt(r), setAbsent(false), setError("")))
       // the current assistant has no such connector (its manager has no route for it): the group shows "not set up"
-      .catch((e) => (e instanceof ApiError && e.status === 404 ? (setSt({ configured: false, connected: false }), setAbsent(true), setError("")) : (setAbsent(false), setError(errorText(e)))))
-      .finally(() => setLoading(false));
+      .catch((e) => n === read.current && (e instanceof ApiError && e.status === 404 ? (setSt({ configured: false, connected: false }), setAbsent(true), setError("")) : (setAbsent(false), setError(errorText(e)))))
+      .finally(() => n === read.current && setLoading(false));
   };
-  useEffect(load, []);
+  useEffect(load, [reloadKey]);
 
   const state = !st ? (loading ? t("settings-connectors.checking") : t("settings-connectors.status_unknown")) : !st.configured ? t("settings-connectors.not_configured") : st.connected ? t("settings-connectors.connected") : t("settings-connectors.unreachable");
   const dot = !st ? "bg-line-strong" : st.connected ? "bg-green" : st.configured ? "bg-red" : "bg-line-strong";
