@@ -72,7 +72,7 @@ describe("assistant decisions", () => {
     const held = { ...child, id: "held", delegating: true };
     const lookup = makeSessionLookup([{ machine_id: agent.machine_id, session_id: agent.session_id,
       cwd: "/project", title: "Agent", status: "needs_you", todo: { id: tied.id, title: tied.title } }]);
-    const input = { conversation: "assistant", manager: "local", todos: [first, tied],
+    const input = { conversation: "assistant", conversationMachine: "machine", manager: "local", todos: [first, tied],
       interactions: [child, held], lookup, feed: [], plans: {} };
     expect(taskDecisionCards(input)).toEqual([{ interaction: child, taskTitle: tied.title }]);
     // The other conversation's task is outside this pager; the request still belongs to this conversation's task
@@ -84,6 +84,22 @@ describe("assistant decisions", () => {
     expect(taskDecisionCards({ ...input, interactions: [foldedIntoAssistant] })).toEqual([
       { interaction: foldedIntoAssistant, taskTitle: tied.title },
     ]);
+  });
+
+  it("keeps a task this conversation supervises when its origin is another conversation", () => {
+    const time = "2026-11-24T11:00:00Z";
+    const agent = { machine_id: "machine", session_id: "session", linked_at: time };
+    const todo = {
+      id: "supervised", title: "Review the change", origin: "other-conversation", manager: "local",
+      created_at: time, updated_at: time, agents: [agent],
+      supervision: { supervisor: "assistant", state: "user_check" as const },
+    };
+    const ask = question("supervised-ask", { manager: "local" });
+    const input = {
+      conversation: "assistant", main: "main", manager: "local", todos: [todo],
+      interactions: [ask], feed: [], plans: {}, lookup: makeSessionLookup([]),
+    };
+    expect(taskDecisionCards(input)).toEqual([{ interaction: ask, taskTitle: todo.title }]);
   });
 
   it("keeps terminal requests and approvals in their existing answer channels", () => {
