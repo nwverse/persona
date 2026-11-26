@@ -14,6 +14,7 @@ import { t } from "../i18n";
 vi.hoisted(() => {
   const g = globalThis as Record<string, unknown>;
   g.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
+  HTMLElement.prototype.scrollTo ??= () => {};
   const kept = new Map<string, string>();
   g.localStorage = { getItem: (k: string) => kept.get(k) ?? null, setItem: (k: string, v: string) => void kept.set(k, v), removeItem: (k: string) => void kept.delete(k) };
 });
