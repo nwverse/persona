@@ -463,4 +463,3 @@ describe("the running model while its list is not in", () => {
     expect(sessionPanel(session(), launchers, lists({})).providers.find((p) => p.id === "claude")!.models).toBeNull();
   });
 });
-

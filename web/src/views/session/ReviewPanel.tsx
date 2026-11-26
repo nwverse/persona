@@ -575,4 +575,3 @@ function Failed({ failure, cwd, target, onRetry, onScope }: { failure: Failure; 
   }
   return <Empty icon="info" title={t("review.failed")} detail={failure.message} action={<Button icon="retry" onClick={onRetry}>{t("review.retry")}</Button>} />;
 }
-
