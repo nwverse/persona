@@ -3,7 +3,8 @@
 // tell them apart: the main chat's row, every page of the sidebar's table (useNavPages, the optional ones turned on),
 // History (where its row is, by the hub's features), All Persona chats and New chat. Scheduled tasks and History both
 // drew `clock`, the main chat and Overview both `home`. The glyphs are compared as drawn (the svg's markup), so two
-// icon names with the same paths count as one glyph.
+// icon names with the same paths count as one glyph. The entries this issue changed, Overview and History, also draw no
+// glyph an extension's page can name: an extension may name any icon of the vocabulary for its nav_page.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -22,14 +23,29 @@ vi.mock("../lib/starred-summary", async (original) => ({
 }));
 import { t } from "../i18n";
 import { MODULES } from "../modules";
+import { ROW_ICONS, UI_ICONS } from "../lib/extension-ui";
+import { NAV_ICONS } from "../lib/extension-wire";
 import { href } from "../lib/router";
 import { connect, reset } from "../lib/store";
 import type { Session } from "../lib/types";
+import { Icon, type IconName } from "../ui/icons";
+import { navIcon } from "./extensions/ExtensionSlots";
+import { NEW_ICON_GLYPH } from "./extensions/icon-map";
+import { ROW_ICON } from "./extensions/ViewBody";
 import { type NavPage, Sidebar, SidebarRail, useNavPages } from "./Sidebar";
+import { HISTORY_ICON } from "./SidebarParts";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 // the modules' pages (Health, Messages) when this run has them: the core-only lane (#13932) runs with none
 const MODULE_PAGES = MODULES.flatMap((m) => m.navItems?.map((n) => n.key) ?? []);
+/** Every glyph an extension's icon name can draw on the web: a row's (ROW_ICON, with the UI version 6 names) and a
+ *  nav_page's (navIcon over every name the schema and each UI version know, and `map`). #16296 gives a nav_page the
+ *  rows' whole set, so all of it counts. */
+const EXTENSION_GLYPHS = new Set<IconName>([
+  ...Object.values(ROW_ICON),
+  ...Object.values(NEW_ICON_GLYPH),
+  ...[...NAV_ICONS, ...UI_ICONS, ...ROW_ICONS, "map"].map((name) => navIcon(name)),
+]);
 class FakeSocket {
   static all: FakeSocket[] = [];
   readyState = 0;
@@ -81,6 +97,17 @@ const glyph = (a: Element | null | undefined) => a?.querySelector("svg")?.innerH
 const linkTo = (path: string, text?: string) => [...host.querySelectorAll<HTMLAnchorElement>("a")]
   .find((a) => a.getAttribute("href") === path && (text === undefined || a.textContent?.trim() === text));
 
+/** Each icon's markup as drawn, to the icon's name. */
+function drawnGlyphs(names: Iterable<IconName>): Map<string, IconName> {
+  const list = [...names];
+  const box = document.createElement("div");
+  const drawn = createRoot(box);
+  act(() => drawn.render(<>{list.map((name) => <Icon key={name} name={name} />)}</>));
+  const out = new Map([...box.querySelectorAll("svg")].map((svg, i) => [svg.innerHTML, list[i]!]));
+  act(() => drawn.unmount());
+  return out;
+}
+
 /** The entries that draw the same glyph, as groups of their names: none when every one has its own. */
 function clashes(entries: Record<string, string | undefined>) {
   const by = new Map<string, string[]>();
@@ -125,6 +152,21 @@ describe("the sidebar's built-in entries (#16282)", () => {
     // every entry is drawn with an icon, so a missing row cannot pass as distinct
     expect(Object.entries(entries).filter(([, g]) => !g).map(([name]) => name)).toEqual([]);
     expect(clashes(entries)).toEqual([]);
+  });
+
+  it("Overview and History draw no glyph an extension's page can name", async () => {
+    await render([], <Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />);
+    expect(EXTENSION_GLYPHS.size).toBeGreaterThan(60);
+    const overview = pages.find((p) => p.k === "home")!;
+    expect({ overview: EXTENSION_GLYPHS.has(overview.icon), history: EXTENSION_GLYPHS.has(HISTORY_ICON) }).toEqual({ overview: false, history: false });
+    // as drawn too: no extension icon's markup is theirs under another name
+    const extension = drawnGlyphs(EXTENSION_GLYPHS);
+    const drawn = {
+      overview: glyph(linkTo(href(overview.to))),
+      history: glyph(linkTo(href({ name: "terminal" }), t("work-entry.title"))),
+    };
+    expect(drawn.overview && drawn.history).toBeTruthy();
+    expect({ overview: extension.get(drawn.overview!), history: extension.get(drawn.history!) }).toEqual({ overview: undefined, history: undefined });
   });
 
   it("draw pairwise distinct icons on the folded rail", async () => {

@@ -84,9 +84,10 @@ export type NavPage = { k: string; to: Route; icon: IconName; label: string; sho
  *  color, so Monochrome draws what it always drew. */
 export const pageIconStyle = (color: UIColor | undefined, active: boolean) => (color && !active ? { color: hue(color) } : undefined);
 
-/** History's icon (the Agents' sessions that are not running, by day, #10240) wherever its row is drawn. Each built-in
- *  entry has a glyph of its own (#16282): Scheduled tasks keeps `clock`, as iOS and Android draw it, and Recent has `history`. */
-export const HISTORY_ICON: IconName = "calendar";
+/** History's icon (the Agents' sessions that are not running, by day, #10240) wherever its row is drawn: an activity log.
+ *  Each built-in entry has a glyph of its own, outside the icons an extension's page can name (#16282): Scheduled tasks
+ *  keeps `clock`, as iOS and Android draw it; Recent has `history`; `calendar` is an extension icon. */
+export const HISTORY_ICON: IconName = "activity";
 
 /** A page's spoken name with its badge ("Inbox 3", "To-dos 2 to-dos need you"): the phone's grid, the rail and the folded
  *  titles say what the list's row says. */
@@ -125,8 +126,9 @@ export function useNavPages() {
 
   const main = assistant?.main ? assistant.conversations.find((c) => c.session_id === assistant.main) : undefined;
   const page: Record<(typeof NAV_PAGES)[number], NavPage | false> = {
-    // Overview: `gauge`, as the admin console's Overview; `home` is the main chat's alone, as on iOS and Android (#16282)
-    home: { k: "home", to: { name: "home" }, icon: "gauge", label: t("sidebar.nav_home"), short: t("sidebar.nav_home_short"), badge: counts.badge || undefined, badgeTone: "attention" },
+    // Overview: `grid`, a dashboard of cards (its Arrange button's glyph), outside the icons an extension's page can name;
+    // `home` is the main chat's, as on iOS and Android (#16282)
+    home: { k: "home", to: { name: "home" }, icon: "grid", label: t("sidebar.nav_home"), short: t("sidebar.nav_home_short"), badge: counts.badge || undefined, badgeTone: "attention" },
     inbox: { k: "inbox", to: { name: "inbox" }, icon: "inbox", label: t("sidebar.nav_inbox"), short: t("sidebar.nav_inbox_short"), badge: inbox || undefined, badgeTone: "attention", title: inbox ? t("sidebar.inbox_badge_title", { count: inbox }) : undefined },
     starred: stars != null && { k: "starred", to: { name: "starred" }, icon: "star", label: t("starred.title"), badge: stars || undefined, badgeLabel: t("starred.count", { count: stars }) },
     "workspace-board": boardOn && { k: "workspace-board", to: { name: "workspace-board" }, icon: "layers", label: t("sidebar.nav_board"), short: t("sidebar.nav_board_short") },
