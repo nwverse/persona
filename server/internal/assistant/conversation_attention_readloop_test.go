@@ -19,12 +19,11 @@ func TestMainConversationAttentionLeavesTheNodeReadLoop(t *testing.T) {
 	ft := newFleetTestNoStore(t)
 	ft.d.add("server", "server")
 	ft.f.sessions["server"] = nil
-	ft.f.settings = &Settings{Timezone: "Asia/Shanghai"}
-	withSettings(t, ft.f, ft.s)
 	ft.f.hello.Assistant.MachineID = "server"
-	// The main conversation runs on the hub machine's node. Set before the first list: without the hub's profile the
+	// The main conversation runs on the hub machine's node. In the first settings: without the hub's profile the
 	// inventory reads the route once (mainConversationRoute).
-	setSettings(t, ft.s, func(v *Settings) { v.Main, v.MachineID = "conv1", "server" })
+	ft.f.settings = &Settings{Timezone: "Asia/Shanghai", Main: "conv1", MachineID: "server"}
+	withSettings(t, ft.f, ft.s)
 	ft.f.known["conv1"] = true
 	at := time.Date(2026, 11, 26, 6, 16, 4, 0, time.UTC)
 	ft.f.setItems(attentionTestRenumber(attentionTestItems(at, at.Add(time.Minute))[3:])...) // one completed silent round
@@ -43,7 +42,7 @@ func TestMainConversationAttentionLeavesTheNodeReadLoop(t *testing.T) {
 
 	taken := make(chan struct{})
 	go func() {
-		ft.sessions("server", proto.Session{SessionID: "conv1", Assistant: true, Status: proto.StatusDone, Rev: 11})
+		ft.sessions("server", proto.Session{SessionID: "conv1", Cwd: "/home/u/.persona/assistant", Assistant: true, Status: proto.StatusDone, Rev: 11})
 		close(taken)
 	}()
 	select {
@@ -78,8 +77,8 @@ func TestMainConversationAttentionLeavesTheNodeReadLoop(t *testing.T) {
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("after the node answered: verdict %+v (cached %v), published state %q; want the silent round "+
-				"classified and the row published again as idle", entry, ok, row.State)
+			t.Fatalf("after the node answered: verdict %+v (cached %v), published row %+v; want the silent round "+
+				"classified and the row published again as idle", entry, ok, row)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
