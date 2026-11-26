@@ -56,6 +56,7 @@ beforeEach(() => {
   resetRoster();
   resetManagerChoice();
   metricsReplies = {};
+  localStorage.removeItem("persona.machines.view");
   fake.machines = [];
   fake.features = [];
   replies = [];
@@ -76,6 +77,28 @@ afterEach(() => {
 });
 
 describe("Machines", () => {
+  it("puts cards first, assistant resources last and fleet telemetry on the overview", async () => {
+    fake.machines = [{ id: "a", name: "Computer A", online: true }];
+    metricsReplies["/api/v1/metrics"] = [{
+      machine_id: "a", online: true, points: [], usage: { today: { in: 12 }, per_minute: 2, recent: [] },
+    }];
+    act(() => root.render(<Machines onToggleSidebar={() => {}} />));
+    await flush();
+    const views = [...host.querySelectorAll<HTMLButtonElement>('[role="radiogroup"] [role="radio"]')];
+    const tokens = () => host.querySelector('[data-testid="machines-tokens"]');
+    const hint = t("machines.refresh_interval", { seconds: 10 });
+    expect(views[0]?.textContent).toBe(t("machines.view_cards"));
+    expect(views.at(-1)?.textContent).toBe(t("resources.assistant_resources"));
+    expect(tokens()).not.toBeNull();
+    expect(host.textContent).toContain(hint);
+    for (const view of views.slice(1)) {
+      act(() => view.click());
+      expect(Boolean(tokens())).toBe(view.textContent === t("machines.view_capabilities"));
+      expect(host.textContent).not.toContain(hint);
+    }
+    await flush();
+  });
+
   it("keeps the last cards and says so in red when a refresh fails", async () => {
     fake.machines = [{ id: "mac", name: "电脑 A", online: true }];
     replies = [200, 503];

@@ -84,6 +84,7 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     const saved = storedValue(VIEW_KEY);
     return saved === "capabilities" || saved === "toolchain" || saved === "files" || saved === "services" || saved === "storage" ? saved : "cards";
   });
+  const fleetView = view === "cards" || view === "capabilities";
   const chooseView = (v: MachinesView) => {
     if (v === "cards" || v === "capabilities" || v === "toolchain" || v === "services" || v === "files" || v === "storage") storeValue(VIEW_KEY, v);
     setView(v);
@@ -165,24 +166,35 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
         <IconButton icon="sidebar" label={t("machines.sidebar")} onClick={onToggleSidebar} className="lg:hidden" />
         <h1 className="text-[14px] font-semibold text-ink">{t("machines.title")}</h1>
         <div className="flex-1" />
-        {<Segmented compact value={view} onChange={chooseView} label={t("machines.view_label")} options={[{ v: "resources", label: t("resources.title") }, { v: "cards", label: t("machines.view_cards") }, { v: "capabilities", label: t("machines.view_capabilities") }, { v: "procs", label: t("machines.view_procs") }, { v: "services", label: t("machines.view_services") }, { v: "files", label: t("machines.view_files") }, { v: "toolchain", label: t("machines.view_toolchain") }, { v: "network", label: t("machines-network.tab_label") }, { v: "storage", label: t("machines.view_storage") }]} />}
-        <span className="text-[11.5px] text-ink-3 max-sm:hidden">{t("machines.refresh_interval", { seconds: 10 })}</span>
         {machines.length > 0 && canAdd && add}
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto max-w-[1560px] px-5 pt-3 sm:px-8">
+          <Segmented<MachinesView> compact wrap value={view} onChange={chooseView} label={t("machines.view_label")} options={[
+            { v: "cards", label: t("machines.view_cards") },
+            { v: "capabilities", label: t("machines.view_capabilities") },
+            { v: "procs", label: t("machines.view_procs") },
+            { v: "services", label: t("machines.view_services") },
+            { v: "files", label: t("machines.view_files") },
+            { v: "toolchain", label: t("machines.view_toolchain") },
+            { v: "network", label: t("machines-network.tab_label") },
+            { v: "storage", label: t("machines.view_storage") },
+            { v: "resources", label: t("resources.assistant_resources") },
+          ]} />
+        </div>
         {/* two columns, three on a wide screen: the cards used to stop at 1000px and leave half a wide window empty; a full-row item takes col-span-full, since md:col-span-2 alone leaves a third of the row to the next card */}
         <div className="mx-auto grid max-w-[1560px] grid-cols-1 gap-3 px-5 py-6 sm:px-8 md:grid-cols-2 2xl:grid-cols-3">
-          {view !== "resources" && <TodayTokens machines={machines} metrics={metrics} />}
+          {fleetView && <TodayTokens machines={machines} metrics={metrics} />}
           {view === "resources" && <div className="col-span-full"><Suspense fallback={<Loading />}><ResourcesPanel /></Suspense></div>}
-          {!metrics && !error && <Loading />}
+          {fleetView && !metrics && !error && <Loading />}
           {/* a failed refresh says so even with the last numbers on screen (iOS / Android keep their notice up) */}
-          {error && (
+          {fleetView && error && (
             <p role="alert" className="flex items-start gap-2 rounded-[8px] bg-red-tint px-3 py-2 text-[12.5px] text-red col-span-full">
               <Icon name="warning" size={14} className="mt-px shrink-0" />
               <span className="min-w-0 break-words">{metrics ? t("machines.refresh_failed_stale", { error, seconds: 10 }) : t("machines.load_failed", { error })}</span>
             </p>
           )}
-          {loaded && machines.length === 0 && (metrics || error) && (
+          {view !== "resources" && loaded && machines.length === 0 && (!fleetView || metrics || error) && (
             <div className="col-span-full">
               <Empty icon="machine" title={error && !metrics ? t("machines.empty_unavailable") : t("machines.empty_title")} action={add}>
                 {t("machines.empty_body_add")}
@@ -235,6 +247,9 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
                 <StoragePanel machines={machines} focus={storageFocus} />
               </Suspense>
             </div>
+          )}
+          {view === "cards" && machines.length > 0 && (
+            <p className="col-span-full text-submeta text-ink-3">{t("machines.refresh_interval", { seconds: 10 })}</p>
           )}
           {view === "cards" && ordered.map((m, index) => (
               <MachineCard
@@ -342,7 +357,7 @@ const MachineCard = memo(function MachineCard({ m, index, metrics: mm, hub, rout
         {needsYou !== undefined && needsYou > 0 && (
           <a href={href(waiting)} onClick={(e) => onLinkClick(e, waiting)}
             className="inline-flex min-h-11 shrink-0 items-center rounded-control focus-visible:outline-accent">
-            <span className="whitespace-nowrap rounded-full bg-attention-tint px-2 py-1 text-submeta font-medium text-attention">
+            <span className="whitespace-nowrap rounded-full bg-field px-2 py-1 text-submeta font-medium text-attention">
               {stateCount("needs_you", needsYou)}
             </span>
           </a>
