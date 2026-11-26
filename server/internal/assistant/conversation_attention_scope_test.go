@@ -127,7 +127,13 @@ func TestMainConversationAttentionPrecomputedOnSessionList(t *testing.T) {
 	f.setItems(attentionTestRenumber(attentionTestItems(at, at.Add(time.Minute))[3:])...)
 	row := proto.Session{MachineID: "server", SessionID: "conv1", Assistant: true, Status: proto.StatusDone, State: proto.StateUnread, Rev: 11}
 	s.setSessions("server", []proto.Session{row})
+	// The scan runs off the node's read loop (#16214): wait for its verdict.
+	deadline := time.Now().Add(5 * time.Second)
 	entry, ok := s.conversationAttentionCached("server", "conv1", 11)
+	for !ok && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+		entry, ok = s.conversationAttentionCached("server", "conv1", 11)
+	}
 	if !ok || !entry.Silent {
 		t.Fatalf("setSessions did not precompute the silent classification: %+v, %v", entry, ok)
 	}
