@@ -89,17 +89,28 @@ func (rt *historyRuntime) page(_ string, raw json.RawMessage) (any, error) {
 
 func historyFixture(t *testing.T, logs ...func(string, ...any)) (*Service, *fakeHub, *db.DB, *historyRuntime) {
 	t.Helper()
-	database := todoTestDB(t)
 	logf := testLogf(t)
 	if len(logs) > 0 {
 		logf = logs[0]
 	}
+	return historyFixtureWithHub(t, logf, nil)
+}
+
+func historyFixtureWithHub(t *testing.T, logf func(string, ...any), wrapHub func(Hub) Hub) (*Service, *fakeHub, *db.DB, *historyRuntime) {
+	t.Helper()
+	database := todoTestDB(t)
 	f := newFakeHub().withMachine()
-	s := withSettings(t, f, New(Options{Hub: f, Store: func() Store { return database }, Logf: logf}))
+	var hub Hub = f
+	if wrapHub != nil {
+		hub = wrapHub(f)
+	}
+	s := withSettings(t, f, New(Options{Hub: hub, Store: func() Store { return database }, Logf: logf}))
 	setSettings(t, s, func(cfg *Settings) { cfg.Main = "main-chat"; cfg.Leaders = []string{"lead-chat"} })
+	f.mu.Lock()
 	for _, id := range []string{"main-chat", "lead-chat", "side-chat", "coding-agent"} {
 		f.known[id] = true
 	}
+	f.mu.Unlock()
 	f.setSessions("server",
 		proto.Session{SessionID: "main-chat", Assistant: true, Rev: 100},
 		proto.Session{SessionID: "lead-chat", Assistant: true, Rev: 100},

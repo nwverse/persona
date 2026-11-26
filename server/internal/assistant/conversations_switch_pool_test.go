@@ -16,7 +16,25 @@ import (
 
 func TestConversationSwitchBatchLeavesPoolAvailable(t *testing.T) {
 	const batchSize, poolSize, parallelism = 13, 8, 4
-	r := newConversationSwitchTestRig(t)
+	release := make(chan struct{})
+	var waiting, peak atomic.Int32
+	r := newConversationSwitchTestRigWithHub(t, func(inner Hub) Hub {
+		return &firstToolsTimingHub{Hub: inner, beforeCall: func(ctx context.Context, call DeviceCall) (json.RawMessage, error) {
+			if call.Method == "assistant.segment.prepare" {
+				n := waiting.Add(1)
+				defer waiting.Add(-1)
+				for prev := peak.Load(); prev < n && !peak.CompareAndSwap(prev, n); prev = peak.Load() {
+				}
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-release:
+				}
+			}
+			// The rig's prepare handler reads the batch through the same pool, like a node callback to the hub.
+			return inner.DeviceCall(ctx, call)
+		}}
+	})
 	var chats []string
 	for i := range batchSize {
 		chats = append(chats, fmt.Sprintf("idle-chat-%02d", i))
@@ -55,24 +73,6 @@ func TestConversationSwitchBatchLeavesPoolAvailable(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer observer.Close(context.Background())
-	release := make(chan struct{})
-	var waiting, peak atomic.Int32
-	inner := r.s.hub
-	r.s.hub = &firstToolsTimingHub{Hub: inner, beforeCall: func(ctx context.Context, call DeviceCall) (json.RawMessage, error) {
-		if call.Method == "assistant.segment.prepare" {
-			n := waiting.Add(1)
-			defer waiting.Add(-1)
-			for prev := peak.Load(); prev < n && !peak.CompareAndSwap(prev, n); prev = peak.Load() {
-			}
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-release:
-			}
-		}
-		// The rig's prepare handler reads the batch through the same pool, like a node callback to the hub.
-		return inner.DeviceCall(ctx, call)
-	}}
 	swept := make(chan struct{})
 	go func() {
 		defer close(swept)
@@ -115,7 +115,21 @@ func TestConversationSwitchCancelWhileWaitingForPreparation(t *testing.T) {
 		t.Run(method, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 			defer cancel()
-			r := newConversationSwitchTestRig(t)
+			entered, release := make(chan struct{}), make(chan struct{})
+			r := newConversationSwitchTestRigWithHub(t, func(inner Hub) Hub {
+				return &firstToolsTimingHub{Hub: inner, beforeCall: func(ctx context.Context, call DeviceCall) (json.RawMessage, error) {
+					if call.Method != method {
+						return inner.DeviceCall(ctx, call)
+					}
+					close(entered)
+					select {
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					case <-release:
+						return json.RawMessage(`{"session_id":"late-candidate","prepared":true}`), nil
+					}
+				}}
+			})
 			_, item := conversationSwitchTestStart(t, r)
 			if method == "assistant.segment.receipt" {
 				if err := r.d.PutConversationHandoff(ctx, item.Machine, item.ConversationID, item.OperationID, json.RawMessage(`{"summary":"saved handoff"}`)); err != nil {
@@ -125,20 +139,6 @@ func TestConversationSwitchCancelWhileWaitingForPreparation(t *testing.T) {
 					t.Fatalf("preparation claim: won=%t, err=%v", won, err)
 				}
 			}
-			entered, release := make(chan struct{}), make(chan struct{})
-			inner := r.s.hub
-			r.s.hub = &firstToolsTimingHub{Hub: inner, beforeCall: func(ctx context.Context, call DeviceCall) (json.RawMessage, error) {
-				if call.Method != method {
-					return inner.DeviceCall(ctx, call)
-				}
-				close(entered)
-				select {
-				case <-ctx.Done():
-					return nil, ctx.Err()
-				case <-release:
-					return json.RawMessage(`{"session_id":"late-candidate","prepared":true}`), nil
-				}
-			}}
 			r.s.logicalSweep(ctx)
 			defer func() {
 				cancel()
