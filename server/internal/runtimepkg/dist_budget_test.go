@@ -40,9 +40,10 @@ import (
 // Runtime package lifecycle support for preserving tools across upgrades (#16016) adds 4,368 B (270,629 B).
 // ACP instruction fitting to the mounted device tools and supervision role (#16052) adds 244 B (270,873 B).
 // Antigravity settled-turn recovery across delayed shifted-index exports and structured agy_turn_end turn_duration items (#15619) add 1,169 B (272,042 B).
+// Antigravity non-rewind negative cache for summary_behind GetCascadeTrajectory checks + summarizeTranscript prefix summary reuse (#13086) add 872 B (272,914 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 272_042
+	const budget = 272_914
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {
