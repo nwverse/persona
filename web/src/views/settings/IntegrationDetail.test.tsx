@@ -8,7 +8,7 @@ import { channelStateText, type ChannelDetail } from "../../lib/channels";
 import type { HubConnector } from "../../lib/connectors";
 import type { HubExtensionDetail } from "../../lib/extensions";
 import type { FeishuBotStatus } from "../../lib/feishu-bot";
-import { resetManagerChoice } from "../../lib/manager-choice";
+import { chosenManager, managerHeaderFor, resetManagerChoice } from "../../lib/manager-choice";
 import { setRoster } from "../../lib/managers";
 import { applyCompleteSessions } from "../../lib/store";
 import { FEATURES } from "./FeishuBot";
@@ -21,6 +21,7 @@ vi.mock("../../ui/atoms", async (original) => ({
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 interface RecordedRequest {
+  manager: string | null;
   url: string;
   method: string;
   body: unknown;
@@ -43,7 +44,7 @@ const ROSTER = {
   default: "assistant",
   managers: [
     { id: "assistant", name: "Default", builtin: true, online: true },
-    { id: "other", name: "Other", builtin: false, online: true },
+    { id: "work", name: "Work", builtin: false, online: true },
   ],
 };
 
@@ -241,7 +242,8 @@ beforeEach(() => {
     if (typeof init?.body === "string" && init.body) {
       try { body = JSON.parse(init.body); } catch { body = init.body; }
     }
-    requests.push({ url, method, body });
+    const manager = new Headers(init?.headers).get("X-Persona-Manager");
+    requests.push({ url, method, body, manager });
 
     if (url.includes("/mail/accounts")) {
       return ok({ accounts: currentMailAccounts });
@@ -258,7 +260,7 @@ beforeEach(() => {
     if (url.includes("/connectors/") && url.endsWith("/settings") && method === "PUT") {
       const m = /\/connectors\/([^/]+)\/settings/.exec(url);
       const cid = m ? decodeURIComponent(m[1]) : "";
-      const found = currentConnectors.find((c) => c.id === cid);
+      const found = currentConnectors.find((c) => c.id === cid && (c.manager ?? null) === manager);
       if (found && body && typeof body === "object") {
         Object.assign(found, body);
         return ok(found);
@@ -838,5 +840,47 @@ describe("Older Hub and legacy extension graceful degradation", () => {
     expect(repoBtn!.textContent).toContain(t("settings-integrations.saved_repositories_count", { count: 2 }));
     act(() => repoBtn!.click());
     expect(onSettings).toHaveBeenCalledWith("settings/persona#repositories");
+  });
+});
+
+describe("manager-owned integration links", () => {
+  it("scopes contributed and target connectors to the extension owner for the lifetime of the detail", async () => {
+    currentConnectors.push({ ...COMPOSITE_CONNECTOR, manager: "work" }, { id: "imessage", name: "Messages", status: "ok", manager: "work" });
+    await act(async () => root.render(
+      <IntegrationDetail integrationsV2 target={{ kind: "extension", id: "larkx", connectorId: "imessage", manager: "work" }} />,
+    ));
+    await flush();
+    const toggle = section("inbox")!.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${t("settings-hubconnector.to_inbox")}"]`)!;
+    await act(async () => toggle.click());
+
+    expect(requests.filter((r) => r.url.endsWith("/connectors/larkx_conn/settings"))).toEqual([
+      expect.objectContaining({ method: "PUT", body: { inbox: false }, manager: "work" }),
+    ]);
+    expect(requests).toContainEqual(expect.objectContaining({ url: "/api/v1/imessage", method: "GET", manager: "work" }));
+    expect(currentConnectors.find((c) => c.id === "larkx_conn" && c.manager === "work")?.inbox).toBe(false);
+    expect(currentConnectors.find((c) => c.id === "larkx_conn" && !c.manager)?.inbox).toBe(true);
+    expect(managerHeaderFor("/connectors/imessage/settings")).toBe("work");
+    expect(managerHeaderFor("/connectors/unrelated/settings")).toBeUndefined();
+    expect(chosenManager()).toBeNull();
+    act(() => root.render(null));
+    for (const path of ["/connectors/larkx_conn/settings", "/connectors/imessage/settings", "/imessage"]) {
+      expect(managerHeaderFor(path)).toBeUndefined();
+    }
+  });
+
+  it.each([
+    ["github", "saved-repositories-shortcut", "settings/persona#repositories"],
+    ["mail", "knowledge-scope-shortcut", "settings/knowledge#knowledge-items"],
+  ])("opens %s settings with the owner's assistant already selected", async (id, row, destination) => {
+    const onSettings = vi.fn(() => chosenManager());
+    await act(async () => root.render(<IntegrationDetail integrationsV2 target={{ kind: "builtin", id, manager: "work" }} onSettings={onSettings} />));
+    await flush();
+    expect(chosenManager()).toBeNull();
+    if (id === "github") {
+      expect(requests).toContainEqual(expect.objectContaining({ url: "/api/v1/assistant/repositories", manager: "work" }));
+    }
+    act(() => host.querySelector<HTMLButtonElement>(`[data-settings-row="${row}"]`)!.click());
+    expect(onSettings).toHaveBeenCalledWith(destination);
+    expect(onSettings).toHaveReturnedWith("work");
   });
 });

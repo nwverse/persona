@@ -271,10 +271,11 @@ test('refused auto automatically approves git status, rg and an MCP read without
   }, {
     mode: 'bypassPermissions',
     cards: [],
+    // An Assistant session answers once and never with allow_always (#16220), so no native grant outlives the command gate.
     answers: [
-      { id: 'read-permission-git-status', result: selected('always') },
-      { id: 'read-permission-mcp', result: selected('always') },
-      { id: 'read-permission-rg', result: selected('always') },
+      { id: 'read-permission-git-status', result: selected('allow') },
+      { id: 'read-permission-mcp', result: selected('allow') },
+      { id: 'read-permission-rg', result: selected('allow') },
     ],
   })
 })
