@@ -711,17 +711,18 @@ export class ClientModel {
     if (!keep) { this.draft = ''; this.sourceContext = ''; this.draftRevision = ''; this.localMessages = []; this.renderedMessages = []; this.echoedMessages.clear(); }
     await saved; if (!this.owns(generation, scope)) return;
     try { this.rememberedHubModules = parseStoredHubModules(await this.local.get(this.hubModulesKey(profile.id))); } catch (_) { this.rememberedHubModules = null; }
-    try {
-      const cachedDisplay = await this.local.get(this.agentsDisplayKey(profile.id));
-      if (cachedDisplay) {
+    let cachedDisplay = '';
+    try { cachedDisplay = await this.local.get(this.agentsDisplayKey(profile.id)); } catch (_) {}
+    if (!this.owns(generation, scope)) return;
+    if (cachedDisplay) {
+      try {
         const parsedDisplay = Wire.parse(cachedDisplay);
         if (typeof parsedDisplay['use_herdr_tab_name'] === 'boolean') {
           this.useHerdrTabName = parsedDisplay['use_herdr_tab_name'] === true;
           this.agentsDisplaySupported = true;
         }
-      }
-    } catch (_) {}
-    if (!this.owns(generation, scope)) return;
+      } catch (_) {}
+    }
     await this.saveProfiles(); if (!this.owns(generation, scope) || !this.foreground) return;
     let access: HubAccess | undefined;
     const token = await this.vault?.get(profile.id, (value: HubAccess | undefined): void => { access = value; });
@@ -1013,6 +1014,14 @@ export class ClientModel {
     } catch (error) { if (this.owns(generation, scope)) this.failure(error as Error); }
     finally { if (this.owns(generation, scope)) { this.busy = false; this.publishDirectory(); } }
   }
+  private syncViewsAgentsDisplay(profileId: string, supported: boolean, enabled: boolean): void {
+    for (const view of this.views.values()) {
+      if (view.profile.id === profileId && !view.retired) {
+        view.agentsDisplaySupported = supported;
+        view.useHerdrTabName = enabled;
+      }
+    }
+  }
   async refreshAgentsDisplay(repo: HubRepository, generation: number, scope: string): Promise<void> {
     if (this.demo || this.agentsDisplaySaving) return;
     const rev = this.agentsDisplayRevision;
@@ -1023,12 +1032,18 @@ export class ClientModel {
         const enabled = result['use_herdr_tab_name'] === true;
         this.agentsDisplaySupported = true;
         this.useHerdrTabName = enabled;
+        this.syncViewsAgentsDisplay(this.profile.id, true, enabled);
         this.local.put(this.agentsDisplayKey(this.profile.id), JSON.stringify(Wire.payload(['use_herdr_tab_name'], [enabled]))).catch(() => {});
+      } else {
+        this.agentsDisplaySupported = false;
+        this.useHerdrTabName = false;
+        this.syncViewsAgentsDisplay(this.profile.id, false, false);
       }
     } catch (error) {
       if (error instanceof HttpFailure && [404, 501].includes(error.status) && this.owns(generation, scope) && rev === this.agentsDisplayRevision) {
         this.agentsDisplaySupported = false;
         this.useHerdrTabName = false;
+        this.syncViewsAgentsDisplay(this.profile.id, false, false);
       }
     }
   }
@@ -1039,17 +1054,20 @@ export class ClientModel {
     const rev = ++this.agentsDisplayRevision;
     this.agentsDisplaySaving = true;
     this.useHerdrTabName = enabled;
+    this.syncViewsAgentsDisplay(profileId, true, enabled);
     try {
       const result = await repo.call('/api/v1/agents/display-settings', 'PUT', Wire.payload(['use_herdr_tab_name'], [enabled]));
       if (!this.owns(generation, scope) || this.repository !== repo || rev !== this.agentsDisplayRevision) return false;
       const acknowledged = typeof result['use_herdr_tab_name'] === 'boolean' ? result['use_herdr_tab_name'] === true : enabled;
       this.agentsDisplaySupported = true;
       this.useHerdrTabName = acknowledged;
+      this.syncViewsAgentsDisplay(profileId, true, acknowledged);
       await this.local.put(this.agentsDisplayKey(profileId), JSON.stringify(Wire.payload(['use_herdr_tab_name'], [acknowledged]))).catch(() => {});
       return true;
     } catch (error) {
       if (this.owns(generation, scope) && this.repository === repo && rev === this.agentsDisplayRevision) {
         this.useHerdrTabName = previous;
+        this.syncViewsAgentsDisplay(profileId, true, previous);
         this.failure(error as Error);
       }
       return false;

@@ -191,7 +191,8 @@ export struct FoldInspectorPanel {
   }
 
   private displaySessionTitle(row: ResourceRow, fallback: string = tr('agent_untitled')): string {
-    return sessionDisplayTitle(row.title, row.data(), this.model.useHerdrTabName) || fallback;
+    const preferTab = this.model.directoryOwnerFor(row)?.useHerdrTabName ?? this.activeOwner().useHerdrTabName;
+    return sessionDisplayTitle(row.title, row.data(), preferTab) || fallback;
   }
 
   private machineRows(): ResourceRow[] {

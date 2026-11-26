@@ -368,9 +368,24 @@ test('herdrTabName is projected once per raw update and rowTitle toggles cleanly
   page.model = { ...page.model, useHerdrTabName: true };
   assert.equal(page.rowTitle(binding), 'renamed-tab');
 
+  // Directory owner preference overrides root model preference when present.
+  page.model = { ...page.model, useHerdrTabName: true, directoryOwnerFor: () => ({ useHerdrTabName: false }) };
+  assert.equal(page.rowTitle(binding), 'Work on session 1a2b');
+  page.model = { ...page.model, useHerdrTabName: false, directoryOwnerFor: () => ({ useHerdrTabName: true }) };
+  assert.equal(page.rowTitle(binding), 'renamed-tab');
+  page.model = { ...page.model, useHerdrTabName: true, directoryOwnerFor: () => ({ machineName: id => 'Computer ' + id }) };
+
   bound.value = row({ slot_id: 'slot-1', space_kind: 'orca', slot_name: 'ignored' }, { title: '' });
   page.bindAgentRows(bindings, [bound], true);
   assert.equal(context.parseCount, 3);
   assert.equal(binding.presentation.herdrTabName, '');
   assert.equal(page.rowTitle(binding), 'agent_untitled');
+
+  const needsCardsBlock = source.slice(source.indexOf('  @Builder needsYouCards('), source.indexOf('  @Computed get orderedNeedsRows'));
+  assert.match(needsCardsBlock, /this\.rowTitle\(binding\)/);
+  assert.doesNotMatch(needsCardsBlock, /binding\.bound\.value\.title/);
+
+  const railBlock = source.slice(source.indexOf('  @Builder railAvatar('), source.indexOf('  @Builder resultList('));
+  assert.match(railBlock, /this\.rowTitle\(binding\)/);
+  assert.doesNotMatch(railBlock, /binding\.bound\.value\.title/);
 });

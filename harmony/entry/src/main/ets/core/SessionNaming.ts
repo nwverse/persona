@@ -19,7 +19,15 @@ export function herdrTabName(data: Record<string, Object>): string {
   const rawHost = typeof data['host'] === 'string' ? (data['host'] as string).trim() : '';
   const rawHostKind = typeof data['host_kind'] === 'string' ? (data['host_kind'] as string).trim()
     : typeof data['hostKind'] === 'string' ? (data['hostKind'] as string).trim() : '';
-  const kind = rawSpaceKind || rawHost || rawHostKind;
+  let kind = rawSpaceKind || rawHost || rawHostKind;
+  if (!kind) {
+    const rawPaneId = typeof data['pane_id'] === 'string' ? (data['pane_id'] as string).trim()
+      : typeof data['paneId'] === 'string' ? (data['paneId'] as string).trim() : '';
+    const colon = rawPaneId.indexOf(':');
+    if (colon > 0) {
+      kind = rawPaneId.slice(0, colon).trim();
+    }
+  }
   if (kind && kind !== 'herdr' && kind !== 'herdr-core') return '';
 
   const label = typeof data['slot_name'] === 'string' ? (data['slot_name'] as string).trim()

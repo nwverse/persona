@@ -6,7 +6,6 @@ import { Symbols } from '../design/Symbols';
 import { Tokens } from '../design/Tokens';
 import { tr } from '../design/Strings';
 import { deduplicateAgentPlace } from '../core/FoldPosture';
-import { sessionDisplayTitle } from '../core/SessionNaming';
 import { nativeEnvironment } from '../platform/NativeEnvironment';
 import { ProjectAgentPlaceLine } from './ProjectAgentPlaceLine';
 import { NeedsYouPulseDot, WorkingArcSpinner } from './StatusMotionMarks';
@@ -34,7 +33,7 @@ export struct AgentDirectoryRowContent {
   @Param useHerdrTabName: boolean = false;
 
   private displayTitle(): string {
-    return sessionDisplayTitle(this.agent.row.title, this.agent.row.data(), this.useHerdrTabName) || tr('agent_untitled');
+    return ((this.useHerdrTabName && this.agent.herdrTabName) ? this.agent.herdrTabName : this.agent.row.title) || tr('agent_untitled');
   }
 
   @Builder agentMark(agent:ProjectAgent) {

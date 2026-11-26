@@ -759,7 +759,7 @@ export struct AgentListPage {
                   Column({space:2}) {
                     Text(this.cardTitle(card,binding)).fontSize(17).maxFontScale(Tokens.interfaceFontMaxScale).fontWeight(600)
                       .lineHeight(PhoneStyle.settingsExampleLineHeight(20.33,27.67,this.environment.fontScale)).maxLines(2).fontColor(Colors.ink)
-                    if (!index) Text([binding.bound.value.title,this.model.machineName(card.machine)].filter((v:string)=>!!v).join(' · '))
+                    if (!index) Text([this.rowTitle(binding),this.model.machineName(card.machine)].filter((v:string)=>!!v).join(' · '))
                       .fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).lineHeight(PhoneStyle.settingsExampleLineHeight(14.33,21.67,this.environment.fontScale))
                       .fontColor(Colors.secondary).maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis})
                   }.layoutWeight(1).alignItems(HorizontalAlign.Start)
@@ -836,7 +836,7 @@ export struct AgentListPage {
           showsSource:!!binding.presentation.activitySource,sourceTitle:binding.presentation.activitySource ? tr(binding.presentation.activitySource) : '',
           narrow:this.listWidth>0 && this.listWidth<296,leftInset:(groupId.includes('/project/') ? 36 : 20)+16*depth,
           controlScale:Math.max(1,Math.min(this.environment.fontScale,67/51)),fontScale:this.environment.fontScale,
-          tint:this.rowStatusColor(binding.presentation),activityList:true,useHerdrTabName:this.model.useHerdrTabName})
+          tint:this.rowStatusColor(binding.presentation),activityList:true,useHerdrTabName:this.model.directoryOwnerFor(binding.bound.value)?.useHerdrTabName ?? this.model.useHerdrTabName})
       }.width('100%').backgroundColor(this.isRowSelected(binding) ? Colors.selection : this.displayedAgentStyle==='cards'?Colors.grouped:Colors.surface)
        .borderRadius({topLeft:this.startsSurface(binding,groupId) && !groupId.includes('/project/') ? 26:0,topRight:this.startsSurface(binding,groupId) && !groupId.includes('/project/') ? 26:0,
          bottomLeft:this.endsSurface(binding,groupId) && endOfSurface ? 26:0,bottomRight:this.endsSurface(binding,groupId) && endOfSurface ? 26:0})
@@ -961,7 +961,8 @@ export struct AgentListPage {
   }
 
   private rowTitle(binding: BoundAgentRow): string {
-    if (this.model.useHerdrTabName && binding.presentation.herdrTabName) {
+    const preferTab = this.model.directoryOwnerFor(binding.bound.value)?.useHerdrTabName ?? this.model.useHerdrTabName;
+    if (preferTab && binding.presentation.herdrTabName) {
       return binding.presentation.herdrTabName;
     }
     return binding.bound.value.title || tr('agent_untitled');
@@ -1272,8 +1273,8 @@ export struct AgentListPage {
               Image($r('app.media.project_agent_claude')).width(20).height(20).objectFit(ImageFit.Contain)
             } else if (binding.presentation.brand === 'codex') {
               Image($r('app.media.project_agent_openai')).width(20).height(20).objectFit(ImageFit.Contain).fillColor(Colors.ink)
-            } else if (binding.bound.value.title || binding.presentation.provider) {
-              Text((binding.bound.value.title || binding.presentation.provider).trim().slice(0, 1).toUpperCase())
+            } else if (this.rowTitle(binding) || binding.presentation.provider) {
+              Text((this.rowTitle(binding) || binding.presentation.provider).trim().slice(0, 1).toUpperCase())
                 .fontSize('15vp').fontWeight(FontWeight.Bold).fontColor(Colors.ink).maxLines(1)
             } else {
               SymbolGlyph(Symbols.agent).fontSize('18vp').fontColor([Colors.secondary])
@@ -1303,9 +1304,9 @@ export struct AgentListPage {
       .height(48)
       .padding(0)
       .backgroundColor(Color.Transparent)
-      .accessibilityText([binding.bound.value.title || tr('agent_untitled'), this.rowStatus(binding.presentation)].filter((s: string) => !!s).join(' · '))
+      .accessibilityText([this.rowTitle(binding), this.rowStatus(binding.presentation)].filter((s: string) => !!s).join(' · '))
       .accessibilitySelected(this.isRowSelected(binding))
-      .bindTips(binding.bound.value.title || tr('agent_untitled'))
+      .bindTips(this.rowTitle(binding))
       .onClick(() => {
         Haptics.selection();
         this.openRow(binding.bound.value);

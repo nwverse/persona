@@ -21,7 +21,6 @@ import { AgentDirectoryRowContent } from './AgentDirectoryRowContent';
 import { deviceLook } from '../models/DeviceLook';
 import { nativeEnvironment } from '../platform/NativeEnvironment';
 import { compactTreeInset, deduplicateAgentPlace } from '../core/FoldPosture';
-import { sessionDisplayTitle } from '../core/SessionNaming';
 import { Motion } from '../design/Motion';
 import { Haptics } from '../platform/Haptics';
 
@@ -625,18 +624,24 @@ export struct ProjectsPage {
     if(this.agentRepositories && this.agentActions){this.agentActions(agent.row,agent.spaceName)}
     else {this.actionMenu(treeKey)}
   }
+  private useHerdrTabFor(agent: ProjectAgent): boolean {
+    return this.model.directoryOwnerFor(agent.row)?.useHerdrTabName ?? this.model.useHerdrTabName;
+  }
+  private displayAgentTitle(agent: ProjectAgent): string {
+    return (this.useHerdrTabFor(agent) && agent.herdrTabName ? agent.herdrTabName : agent.row.title) || tr('agent_untitled');
+  }
   @Builder agentCell(agent:ProjectAgent, treeKey:string, level:number, paneName:string = '', starter:boolean = false) {
     Row() {
       AgentDirectoryRowContent({agent:agent,display:this.agentRepositories?
         (deviceLook.agentDisplay==='list'?'list':this.model.style==='beautiful'?'beautiful':deviceLook.agentDisplay):'avatar',
         activityList:!!this.agentRepositories,muted:this.agentRepositories?this.isMuted(agent.row):false, age:this.age(agent),
-        place:deduplicateAgentPlace(sessionDisplayTitle(agent.row.title, agent.row.data(), this.model.useHerdrTabName), paneName || agent.tab), showsSource:!!(agent.tab || agent.runtime),
+        place:deduplicateAgentPlace(this.displayAgentTitle(agent), paneName || agent.tab), showsSource:!!(agent.tab || agent.runtime),
         starter:starter,narrow:this.narrowOutline(),
         leftInset:this.agentRepositories && deviceLook.agentDisplay==='list' ? PhoneStyle.inset+6+18*this.outlineControlScale()*Math.min(level,3) : this.treeInset(level)+6,
         controlScale:this.outlineControlScale(),
-        fontScale:nativeEnvironment.fontScale,tint:this.tint(agent),useHerdrTabName:this.model.useHerdrTabName})
+        fontScale:nativeEnvironment.fontScale,tint:this.tint(agent),useHerdrTabName:this.useHerdrTabFor(agent)})
     }.width('100%')
-      .accessibilityGroup(true).accessibilityText([sessionDisplayTitle(agent.row.title, agent.row.data(), this.model.useHerdrTabName),agent.preview,tr(agent.stateLabel),this.agentContext(agent,paneName,starter),agent.todoTitle,this.age(agent)].filter((v:string) => !!v).join(' · '))
+      .accessibilityGroup(true).accessibilityText([this.displayAgentTitle(agent),agent.preview,tr(agent.stateLabel),this.agentContext(agent,paneName,starter),agent.todoTitle,this.age(agent)].filter((v:string) => !!v).join(' · '))
       .accessibilitySelected(this.adjacentItem === 'session:' + agent.row.key())
       .onClick(() => this.chooseAgent(agent)).bindContextMenu(this.cellActions(agent,treeKey),ResponseType.LongPress).id(this.agentRepositories ? 'agents.repo.session' : 'projects.inline_session')
   }
@@ -988,7 +993,7 @@ export struct ProjectsPage {
     GridCol({span:1}) {
       Column({space:8*this.spaceCardScale()}) {
         this.spaceSlot(agent,paneName)
-        Text(agent.row.title || tr('agent_untitled')).fontSize(15*this.spaceCardScale()).maxFontScale(Tokens.interfaceScaleFor(15)).fontWeight(600)
+        Text(this.displayAgentTitle(agent)).fontSize(15*this.spaceCardScale()).maxFontScale(Tokens.interfaceScaleFor(15)).fontWeight(600)
           .fontColor(Colors.ink).maxLines(this.narrowOutline() ? 4 : 2).textOverflow({overflow:TextOverflow.Ellipsis}).id('projects.space_title.'+agent.row.id)
         Text([tr(agent.stateLabel),starter ? tr('session_space_starter') : '',this.pendingDescription(agent)]
           .filter((part:string) => !!part).join(' · ')).fontSize(12*this.spaceCardScale()).maxFontScale(Tokens.interfaceScaleFor(12)).fontWeight(600).fontColor(agent.active ? this.tint(agent) : $r('app.color.project_card_secondary'))
