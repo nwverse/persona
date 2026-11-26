@@ -21,6 +21,7 @@ import { Tokens } from '../design/Tokens';
 import { PhoneStyle } from '../design/PhoneStyle';
 import { tr, trError } from '../design/Strings';
 import { nativeEnvironment } from '../platform/NativeEnvironment';
+import { Haptics } from '../platform/Haptics';
 import { readerLink } from '../platform/ReaderLink';
 import { relativeActivityDate } from '../core/PhoneDate';
 
@@ -1993,6 +1994,7 @@ export struct SessionTools {
   }
 
   @Monitor('workspace.tab') workspacePageChanged(): void {
+    Haptics.selection();
     if (this.workspace.tab === 0 && this.fileQuery.trim()) this.workspace.loadFileIndex();
     this.pathDraft = this.workspace.currentPath;
   }

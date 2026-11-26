@@ -3458,7 +3458,7 @@ struct Index {
     Column() {
       FloatingToastOverlay({
         reconnecting: !!this.model.profile.id && !this.model.demo && !this.model.connected,
-        topOffset: this.wide() ? 14 : Math.max(12, this.compactNavigationInset() + 6)
+        topOffset: this.wide() ? 14 : Math.max(58, this.compactNavigationInset() + 56)
       })
     }.width('100%').height('100%').alignItems(HorizontalAlign.Center).justifyContent(FlexAlign.Start).hitTestBehavior(HitTestMode.Transparent)
     }.width('100%').height('100%').backgroundColor(Colors.canvas)
