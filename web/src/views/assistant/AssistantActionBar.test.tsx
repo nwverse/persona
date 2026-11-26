@@ -175,6 +175,23 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(JSON.parse(String(sends[0][1]?.body))).toEqual({ asked_at: at, option: "Release only" });
   });
 
+  it("renders the projected PR and blockers in the waiting tray ahead of conflicting park evidence", async () => {
+    moreTodos = [{
+      id: "held", title: "Review the export", origin: conversation, created_at: at, updated_at: at,
+      supervision: { supervisor: conversation, state: "parked", parked: {
+        waiting_on: "date", reason: "Earlier plan", until: at, count: 1,
+      } },
+      wait: { kind: "pr_merge", waiting_on: "PR #77", pr_blockers: ["checks_failing"] },
+    }];
+    await act(async () => refreshTodos());
+    await act(async () => entry("parked").click());
+    const row = host.querySelector('[data-parked-task-row="held"]')!;
+    expect(row.querySelector("[data-wait-target]")?.textContent).toContain("PR #77");
+    await act(async () => row.querySelector<HTMLButtonElement>("[data-wait-toggle]")!.click());
+    expect(row.textContent).toContain(t("assistant-tasks.pr_blocker_checks_failed"));
+    expect(row.textContent).not.toContain("Earlier plan");
+  });
+
   it("Parked grouping: shows explicit waits and multi-PR waits once, outside active work, including on All", async () => {
     const pr = "https://github.com/example/demo/pull/52";
     const checked_at = new Date(now.getTime() - 60_000).toISOString();

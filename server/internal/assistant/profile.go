@@ -843,8 +843,9 @@ func stateDirOn(home, dataDir, name string) string {
 }
 
 type assistantView struct {
-	WorkspaceNamingVersion  string                `json:"workspace_naming_version"`
-	EffectiveWorkspaceRules workspacenaming.Rules `json:"effective_workspace_rules"`
+	WorkspaceNamingVersion  string                 `json:"workspace_naming_version"`
+	EffectiveWorkspaceRules workspacenaming.Rules  `json:"effective_workspace_rules"`
+	SystemDefaults          *workspacenaming.Rules `json:"system_defaults,omitempty"`
 	Settings
 	Manager                string             `json:"manager"`
 	PermissionDefaults     permissionDefaults `json:"permission_defaults"`
@@ -877,7 +878,7 @@ type assistantView struct {
 	MainBackgroundFolded    bool `json:"main_background_folded"`
 	FoldRoutineRelayReplies bool `json:"fold_routine_relay_replies"`
 	// RecentTaskChats is in effect, like DoneNeedsDelivery.
-	RecentTaskChats bool     `json:"recent_task_chats"`
+	RecentTaskChats              bool     `json:"recent_task_chats"`
 	WorkGuide                    bool     `json:"work_guide"`
 	TodosV2                      bool     `json:"todos_v2"`
 	TodosV2AutoSeen              string   `json:"todos_v2_auto_seen"`
@@ -885,7 +886,7 @@ type assistantView struct {
 	TodosV2CanWaitSLAHours       int      `json:"todos_v2_can_wait_sla_hours"`
 	TodosV2FoldChildren          bool     `json:"todos_v2_fold_children"`
 	IntegrationsV2               bool     `json:"integrations_v2"`
-	LabsSeen        []string `json:"labs_seen"`
+	LabsSeen                     []string `json:"labs_seen"`
 	// MeetingAttendanceDefault is in effect (off until changed).
 	MeetingAttendanceDefault      string   `json:"meeting_attendance_default"`
 	MeetingTranscriptionDefault   string   `json:"meeting_transcription_default"`
@@ -946,7 +947,7 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 	}
 	v.Launcher = s.launcherNow(ctx)
 	effectiveRules, _ := workspacenaming.Effective(v.WorkspaceRules, workspacenaming.Rules{})
-	out := assistantView{WorkspaceNamingVersion: workspacenaming.Version, EffectiveWorkspaceRules: effectiveRules, Settings: v, Manager: s.managerIdentity(), PermissionDefaults: s.permissionDefaults(), Conversations: []proto.Session{}, NotesEffective: s.notes(ctx), MainTasksQuiet: quietOn(v.MainTasksQuiet),
+	out := assistantView{WorkspaceNamingVersion: workspacenaming.Version, EffectiveWorkspaceRules: effectiveRules, SystemDefaults: new(workspacenaming.Defaults()), Settings: v, Manager: s.managerIdentity(), PermissionDefaults: s.permissionDefaults(), Conversations: []proto.Session{}, NotesEffective: s.notes(ctx), MainTasksQuiet: quietOn(v.MainTasksQuiet),
 		StartRequestedTasks: quietOn(v.StartRequestedTasks), RecordingDays: recordingDaysOf(v), MinutesDays: kb.MinutesDaysFor(minutesDaysSetting(v), recordingDaysOf(v)),
 		IdleAutoCompact: s.idleAutoCompact(ctx), IdleAutoCompactMinutes: s.idleAutoCompactMinutes(ctx), IdleAutoCompactTokens: s.idleAutoCompactTokens(ctx),
 		CacheKeepalive: cacheKeepaliveOf(v).Enabled, CacheKeepaliveMinutes: cacheKeepaliveOf(v).IntervalMinutes, CacheKeepaliveMax: cacheKeepaliveOf(v).MaxRequests,
@@ -954,10 +955,10 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		Dashboards:                  v.Dashboards != nil && *v.Dashboards,
 		MeetingTranscriptionDefault: meetingTranscriptionDefaultOf(v), MeetingGlossary: meetingGlossaryOf(v),
 		MeetingTranscriptionExtension: meetingTranscriptionExtensionOf(v), MeetingTranscriptionReady: s.transcriptionReadyNow(),
-		TaskWorkspacePreference: s.taskWorkspacePreference(ctx),
-		ReadonlyMode:            readonlyModeOf(v),
-		MainBackgroundFolded:    quietOn(v.MainBackgroundFolded),
-		FoldRoutineRelayReplies: v.foldRoutineRelayReplies(),
+		TaskWorkspacePreference:      s.taskWorkspacePreference(ctx),
+		ReadonlyMode:                 readonlyModeOf(v),
+		MainBackgroundFolded:         quietOn(v.MainBackgroundFolded),
+		FoldRoutineRelayReplies:      v.foldRoutineRelayReplies(),
 		WorkGuide:                    v.workGuideOn(),
 		TodosV2:                      v.todosV2On(),
 		TodosV2AutoSeen:              v.todosV2AutoSeenMode(),
@@ -965,10 +966,10 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		TodosV2CanWaitSLAHours:       v.todosV2CanWaitSLAHours(),
 		TodosV2FoldChildren:          v.todosV2FoldChildrenOn(),
 		IntegrationsV2:               v.integrationsV2On(),
-		LabsSeen:                append([]string{}, v.LabsSeen...),
-		RecentTaskChats:         v.RecentTaskChats != nil && *v.RecentTaskChats,
-		DeliveryGate:            deliveryGateOf(v),
-		DoneNeedsDelivery:       deliveryGateOf(v) == deliveryGateLive, IdleCloseHours: int(s.idleCloseAfter(ctx) / time.Hour),
+		LabsSeen:                     append([]string{}, v.LabsSeen...),
+		RecentTaskChats:              v.RecentTaskChats != nil && *v.RecentTaskChats,
+		DeliveryGate:                 deliveryGateOf(v),
+		DoneNeedsDelivery:            deliveryGateOf(v) == deliveryGateLive, IdleCloseHours: int(s.idleCloseAfter(ctx) / time.Hour),
 		ArchiveClosedDays:            int(s.archiveClosedAfter(ctx) / (24 * time.Hour)),
 		ReviewSamplePercent:          s.reviewSamplePercent(ctx),
 		InterjectBackground:          v.InterjectBackground != nil && *v.InterjectBackground,
