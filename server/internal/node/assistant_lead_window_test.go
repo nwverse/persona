@@ -107,6 +107,32 @@ func TestAssistantLeadCompactWindowRPC(t *testing.T) {
 	}
 }
 
+// A guest conversation (a Lark guest, a meeting's room) never takes the window, even when one comes with its start:
+// the node applies whatever window the manager sends with a conversation, so assistantSend keeps it from a guest. Here
+// a guest started on a managed 1M launcher with a 400000 window runs on the launcher's window and records none.
+func TestAssistantGuestTakesNoCompactWindow(t *testing.T) {
+	f := cliTestBash(t) // runs without zsh too
+	f.fakeLaunch(t)
+	f.n.setManaged([]proto.ManagedLauncher{{Name: "gw", Model: "big", Models: []proto.ProviderModel{{ID: "big", ContextWindow: 1_000_000}}}})
+	execution := cliExec()
+	execution.UseEffort, execution.MainCompactWindow = true, 400_000
+	id, err := f.n.assistantSend(withGuest(context.Background(), []string{"lark_agent_reply"}), "", t.TempDir(), "gw", "someone asks", nil, "", "", execution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := f.proc(id)
+	if p == nil {
+		t.Fatal("the guest did not start")
+	}
+	if env := p.cmd.Env; envValue(env, "CLAUDE_CODE_AUTO_COMPACT_WINDOW") != "1000000" || p.compactIdleAt != 750_000 {
+		t.Fatalf("a guest started with a window: AUTO %q, idle %d; want the launcher's 1000000 and 750000",
+			envValue(env, "CLAUDE_CODE_AUTO_COMPACT_WINDOW"), p.compactIdleAt)
+	}
+	if st, _ := f.n.state.get(id); st.Guest == nil || st.MainCompactWindow != 0 {
+		t.Fatalf("recorded guest %v, window %d; want a guest with no window", st.Guest != nil, st.MainCompactWindow)
+	}
+}
+
 // While no process runs, the context meter's auto-compact threshold is the window the conversation last ran with,
 // a leader conversation's as the main conversation's.
 func TestAssistantLeadCompactWindowThresholdWithoutProcess(t *testing.T) {
