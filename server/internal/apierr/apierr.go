@@ -91,6 +91,8 @@ func Body(status int, code string, err error) map[string]any {
 		body["retryable"] = false
 	case "input_draft", "dialog_open", "prompt_changed":
 		body["retryable"], body["delivered"] = false, "none"
+	case proto.CodeCodexNotLoggedIn: // refused before anything was typed; only a sign-in on that computer clears it
+		body["retryable"], body["delivered"] = false, "none"
 	}
 	if status == http.StatusUnauthorized || status == http.StatusForbidden {
 		body["delivered"] = "none"
@@ -209,7 +211,7 @@ func CallStatusBody(w http.ResponseWriter, status int, err error) map[string]any
 			body["error"] = re.Message
 		}
 		body["code"] = code
-		if _, ok := codeActions[code]; ok {
+		if hubWords(code) {
 			explain(body, code, re.Message, i18n.OfWriter(w))
 		}
 	}
@@ -230,7 +232,7 @@ func CallStatusBody(w http.ResponseWriter, status int, err error) map[string]any
 			key = notFoundKeys[reason]
 		}
 		body["error"] = i18n.T(l, key)
-	} else if _, explained := codeActions[code]; !explained {
+	} else if !hubWords(code) {
 		localizeFailure(body, status, err, i18n.OfWriter(w))
 	}
 	return body
@@ -489,6 +491,19 @@ var codeActions = map[string]string{
 	proto.TurnErrorNotLoggedIn: "connect_model",
 }
 
+// wordedWithoutAction are refusals the hub also words itself, naming the machine, but with nothing for a client to
+// offer: the fix is on that computer (Codex's sign-in, node/codex_start.go).
+var wordedWithoutAction = map[string]bool{
+	proto.CodeCodexNotLoggedIn: true,
+}
+
+// hubWords is whether the hub writes code's words itself (codeActions, wordedWithoutAction) instead of passing on
+// the caller's.
+func hubWords(code string) bool {
+	_, ok := codeActions[code]
+	return ok || wordedWithoutAction[code]
+}
+
 // OnMachine is err naming the machine (its display name) it was refused on, when it is one of the refusals the hub
 // words itself and does not name one yet: what the sentence says instead of "this computer". Anything else is err.
 func OnMachine(err error, name string) error {
@@ -496,7 +511,7 @@ func OnMachine(err error, name string) error {
 	if name == "" || !errors.As(err, &re) {
 		return err
 	}
-	if _, ok := codeActions[re.Code]; !ok {
+	if !hubWords(re.Code) {
 		return err
 	}
 	data := map[string]any{}
@@ -527,7 +542,9 @@ func explain(body map[string]any, code, message string, l i18n.Lang) {
 		body["detail"] = message
 	}
 	if a, _ := body["action"].(string); a == "" {
-		body["action"] = Action(code, body)
+		if a := Action(code, body); a != "" { // wordedWithoutAction: nothing for a client to offer
+			body["action"] = a
+		}
 	}
 	if s := Summary(l, code, body); s != "" {
 		body["summary"] = s
