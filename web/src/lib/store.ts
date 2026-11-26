@@ -6,7 +6,7 @@ import { compatibleEnvelope, setCompatibilityFeatures } from "./compatibility";
 // App-wide state: what the hub pushes over the WebSocket (machines, sessions, interactions), plus the assistant.
 // Views read it with useStore(selector); per-session item streams go to listeners (ChatView subscribes).
 
-import { chosenManager, defaultKnown, defaultManager, fromShownManager, noteConversation, noteItemManager, onDefaultManager, onManagerChoice, shownManager } from "./manager-choice";
+import { chosenManager, defaultKnown, defaultManager, fromShownManager, messageManager, noteConversation, noteItemManager, onDefaultManager, onManagerChoice, sameManager, shownManager } from "./manager-choice";
 import { BASE } from "./base";
 import { mainConversationMachine, clearMemoryPages, discardFeedCache, feedCacheScope, readFeedCache } from "./feed-cache";
 import { clearAssistantSnapshot, readAssistantSnapshot, writeAssistantSnapshot } from "./assistant-snapshot";
@@ -21,7 +21,7 @@ import { SESSIONS_SIDE_FOLD_FEATURE, setSideFold } from "./side-fold";
 import { applySessionDelta, SESSIONS_DELTA_FEATURE, sessionRefreshed, sessionSnapshot } from "./sessions-delta";
 import { dueMarks, heldRows, liveMarks, newMark, nextDue, seenCopy, settleMarks, unansweredMarks, unseen, type SeenMark, type SeenMarks } from "./seen-outbox";
 import { probeEdge } from "./edge-auth";
-import { api, ApiError, CLIENT_FEATURES, CLIENT_PONG_TIMEOUT, CLIENT_PLATFORM, CLIENT_VERSION, errorText, getToken, credentialOwner, sessionPath } from "./api";
+import { api, ApiError, CLIENT_FEATURES, CLIENT_PONG_TIMEOUT, CLIENT_PLATFORM, CLIENT_VERSION, errorText, getToken, credentialOwner, invalidateInFlightGets, sessionPath } from "./api";
 import { helloDeviceId } from "./device-id";
 import { currentLanguage } from "../i18n";
 import type { AgentMutes } from "./agent-groups";
@@ -99,6 +99,8 @@ export interface State {
   reanswered: Record<string, Reanswer>;
   assistant: AssistantInfo | null;
   assistantError: string | null;
+  /** Confirmed Labs receipts for the shown assistant. Null is an older hub, undefined is still loading. */
+  labsSeen: string[] | null | undefined;
   mutes: AgentMutes;
   /** Pinned spaces / agents (GET /pins): the top of the Agents list. */
   pins: AgentPins;
@@ -151,6 +153,7 @@ let state: State = {
   reanswered: {},
   assistant: initialAssistant?.assistant ?? null,
   assistantError: null,
+  labsSeen: initialAssistant?.assistant.labs_seen,
   mutes: { spaces: [], sessions: [], allowed: [] },
   pins: NO_PINS,
   loaded: false,
@@ -866,8 +869,8 @@ export function connect() {
     // The normal hello refresh still covers changes between these snapshots and the start of the event stream.
     sidebarTimer = setTimeout(() => {
       if (sockOwner !== credentialOwner()) return;
-      void refreshAssistant().catch(() => {});
-      void refreshTodos();
+      void refreshAssistant({ coalesce: true }).catch(() => {});
+      void refreshTodos({ coalesce: true });
     }, 250);
   }
   directionTreeAwaitsHello(true); // its hello reads the direction tree: the screens wait for that read
@@ -1074,8 +1077,13 @@ async function followDirections(changed = false) {
   const a = state.assistant;
   if (!ids || !a) return;
   const known = new Set(a.conversations.map((c) => c.session_id));
+  for (const s of state.sessions[a.machine_id] ?? []) {
+    if (s.assistant && !s.space && !s.archived && sameManager(s.manager, a.manager) && availableConversation(s)) known.add(s.session_id);
+  }
+  if (JSON.stringify(ids) !== JSON.stringify((a.leaders ?? []).filter((id) => id !== a.main))) {
+    set({ assistant: { ...a, leaders: ids } });
+  }
   if (ids.some((id) => !known.has(id) && !isExternalDirection(id))) void refreshAssistant().catch(() => {});
-  else if (JSON.stringify(ids) !== JSON.stringify((a.leaders ?? []).filter((id) => id !== a.main))) set({ assistant: { ...a, leaders: ids } });
 }
 
 const helloHooks = new Set<() => void>();
@@ -1145,6 +1153,7 @@ function onMessage(msg: Record<string, unknown>) {
       resendSeen();
       // resumed: the hub replays every broadcast missed since the cursor, nothing needs refetching
       if (!isResumed(msg)) {
+        invalidateInFlightGets();
         void followDirections(); // the direction tree again: a `directions` may have been missed while away
         void refresh();
         void refreshAgentSessions();
@@ -1162,6 +1171,11 @@ function onMessage(msg: Record<string, unknown>) {
       // the direction tree changed (#4352): a leader made or ended anywhere, a name, a task's state. The sidebar's 常驻
       // follow at once (#4331: a sixth leader stayed hidden until a reload); a read already out may predate the change
       void followDirections(true);
+      break;
+    case "assistant_labs_seen":
+      if (Array.isArray(msg.labs_seen) && msg.labs_seen.length <= 64 && msg.labs_seen.every((id) => typeof id === "string")) {
+        acceptLabsSeen(messageManager(msg), msg.labs_seen);
+      }
       break;
     case "hub_restarting":
       restartNotice = true; // the close that follows is a restart: retry at once, stay quiet longer
@@ -1642,14 +1656,14 @@ export function dropDelegated(id: string) {
 // Every request for a list the page keeps whole (/todos, /assistant), numbered: an answer to a request sent before the
 // one already applied is older than what the page shows (refresh() waits for /sessions too, seconds on a busy hub) and
 // must not put the old list back.
-function numbered<T>(path: string, read: () => Promise<T> = () => api<T>(path)) {
+function numbered<T>(path: string, read: (dedupe: boolean) => Promise<T> = (dedupe) => api<T>(path, { dedupe })) {
   let asked = 0;
   let applied = 0;
   return {
-    ask() {
+    ask(dedupe = false) {
       const n = ++asked;
       const owner = credentialOwner();
-      const answer = read();
+      const answer = read(dedupe);
       /** Whether this answer may be applied (no later request's answer is in place); if so it is the one in place now. */
       const fresh = () => {
         if (n < applied || owner !== credentialOwner()) return false;
@@ -1658,9 +1672,10 @@ function numbered<T>(path: string, read: () => Promise<T> = () => api<T>(path)) 
       };
       return { answer, fresh };
     },
-    /** Every answer still on its way is old now (another login). */
+    /** Every answer still on its way is old now (another login or confirmed mutation). */
     forget() {
       applied = ++asked;
+      invalidateInFlightGets(path);
     },
   };
 }
@@ -1683,12 +1698,13 @@ function validTodoBoard(raw: unknown): TodoBoardProjection | null {
 
 let keptTodos: { owner: string; etag: string; revision: string; answer: TodosListAnswer } | null = null;
 
-async function readTodos(): Promise<TodosListAnswer> {
+async function readTodos(dedupe = false): Promise<TodosListAnswer> {
   const owner = credentialOwner();
   const kept = keptTodos?.owner === owner ? keptTodos : null;
   let status = 0;
   let reply: Headers | undefined;
   const answer = await api<TodosListAnswer>("/todos", {
+    dedupe,
     headers: kept?.etag ? { "If-None-Match": kept.etag } : undefined,
     onResponse: (headers, code) => { status = code; reply = headers; },
   });
@@ -1737,11 +1753,11 @@ export async function refresh() {
   const [sessions, interactions, machines, mutes, pins] = await Promise.allSettled([
     state.features.includes(SESSIONS_LIST_FEATURE)
       ? runtimeSessions.load().then(() => null)
-      : state.loaded ? Promise.resolve(null) : api<{ sessions: Session[] }>("/sessions"),
-    api<{ interactions: Interaction[] }>("/interactions"),
-    api<{ machines: Machine[] }>("/machines"),
-    api<AgentMutes>("/mutes"),
-    api<Partial<AgentPins>>("/pins"),
+      : state.loaded ? Promise.resolve(null) : api<{ sessions: Session[] }>("/sessions", { dedupe: false }),
+    api<{ interactions: Interaction[] }>("/interactions", { dedupe: false }),
+    api<{ machines: Machine[] }>("/machines", { dedupe: false }),
+    api<AgentMutes>("/mutes", { dedupe: false }),
+    api<Partial<AgentPins>>("/pins", { dedupe: false }),
     assistantDone, // keep the cold-start loaded gate until the main reference or its error is known
   ]);
   if (gen < refreshes.applied) return todosDone;
@@ -1822,6 +1838,7 @@ let pushedHidden = false; // only a failed hidden import; the loaded loop owns i
 let resetPushedTodos: () => void = () => {};
 
 export function todosPushed() {
+  invalidateInFlightGets("/todos");
   const epoch = pushedEpoch;
   void import("./todo-pushes").catch(() => null).then((m) => {
     if (epoch !== pushedEpoch) return;
@@ -1842,8 +1859,8 @@ export function todosPushed() {
   });
 }
 
-export async function refreshTodos() {
-  const asked = todosAsked.ask();
+export async function refreshTodos(opts?: { coalesce?: boolean }) {
+  const asked = todosAsked.ask(opts?.coalesce === true);
   try {
     const res = await asked.answer;
     applyTodos({ status: "fulfilled", value: res }, asked.fresh);
@@ -1858,6 +1875,38 @@ export function patchAssistant(patch: Partial<Omit<AssistantInfo, "conversations
   if (a) set({ assistant: { ...a, ...patch } });
 }
 
+const labsSeenByManager = new Map<string, string[]>();
+
+// A GET started before a receipt or a replayed event can carry a smaller set.
+function keepLabsSeen(manager: string, ids: string[]): string[] {
+  const before = labsSeenByManager.get(manager);
+  if (before && ids.every((id) => before.includes(id))) return before;
+  const seen = before ? [...new Set([...before, ...ids])] : ids;
+  labsSeenByManager.set(manager, seen);
+  return seen;
+}
+
+export function acceptLabsSeen(manager: string, ids: string[]) {
+  const a = state.assistant;
+  if (a && (a.manager || shownManager()) === manager && state.labsSeen) keepLabsSeen(manager, state.labsSeen);
+  const seen = keepLabsSeen(manager, ids);
+  if (!a || (a.manager || shownManager()) !== manager || state.labsSeen === seen) return;
+  const cached = assistantByManager.get(cacheKey()) ?? currentAssistantSnapshot(pageOf())?.assistant;
+  if (cached) {
+    const assistant = { ...cached, labs_seen: seen };
+    assistantByManager.set(cacheKey(), assistant);
+    writeAssistantSnapshot(pageOf(), manager, assistant);
+  }
+  set({ labsSeen: seen });
+}
+
+function showAssistant(assistant: AssistantInfo | null, fetched = false) {
+  const labsSeen = assistant?.labs_seen
+    ? keepLabsSeen(assistant.manager || shownManager(), assistant.labs_seen)
+    : fetched ? null : undefined;
+  set({ assistant, assistantError: null, labsSeen });
+}
+
 /** A different default owns every no-header answer still on its way. Retire those reads and ask once for the new one. */
 function replaceDefaultAssistant() {
   const manager = defaultManager();
@@ -1867,20 +1916,20 @@ function replaceDefaultAssistant() {
   restoredAssistant = null;
   assistantByManager.delete("");
   clearAssistantSnapshot("");
-  set({ assistant: null, assistantError: null });
+  showAssistant(null);
   void refreshAssistant().catch(() => {});
 }
 
 /** Reads the page's assistant again; true when its answer is the one in place now (not one a later answer, or another
  *  manager's page, made old meanwhile). */
-export async function refreshAssistant(): Promise<boolean> {
+export async function refreshAssistant(opts?: { coalesce?: boolean }): Promise<boolean> {
   const from = pageOf();
   if (!state.assistant) {
     const kept = currentAssistantSnapshot(from);
     restoredAssistant = kept ? { page: from, manager: kept.manager } : null;
-    if (kept) set({ assistant: kept.assistant, assistantError: null });
+    if (kept) showAssistant(kept.assistant);
   }
-  const asked = assistantAsked.ask();
+  const asked = assistantAsked.ask(opts?.coalesce === true);
   try {
     const a = await asked.answer;
     if (!asked.fresh() || from !== pageOf()) return false;
@@ -1890,6 +1939,7 @@ export async function refreshAssistant(): Promise<boolean> {
       replaceDefaultAssistant();
       return false;
     }
+    if (assistant.labs_seen) assistant.labs_seen = keepLabsSeen(manager || shownManager(), assistant.labs_seen);
     defaultAssistantRetry = "";
     const scope = feedCacheScope();
     const cached = readFeedCache(scope);
@@ -1902,7 +1952,7 @@ export async function refreshAssistant(): Promise<boolean> {
     const owner = chosenManager() ?? undefined;
     for (const c of assistant.conversations) noteConversation(c.session_id, owner);
     if (assistant.main) noteConversation(assistant.main, owner);
-    set({ assistant, assistantError: null });
+    showAssistant(assistant, true);
     return true;
   } catch (err) {
     if (asked.fresh() && from === pageOf()) {
@@ -1938,12 +1988,13 @@ onManagerChoice(() => {
   assistantAsked.forget();
   restoredAssistant = null;
   let assistant = assistantByManager.get(cacheKey());
+  const fetched = !!assistant;
   if (!assistant) {
     const kept = currentAssistantSnapshot(page);
     assistant = kept?.assistant;
     if (kept) restoredAssistant = { page, manager: kept.manager };
   }
-  set({ assistant: assistant ?? null, assistantError: null });
+  showAssistant(assistant ?? null, fetched);
   void refreshAssistant().catch(() => {});
 });
 
@@ -2081,6 +2132,7 @@ function resendSeen() {
 }
 
 export function reset() {
+  invalidateInFlightGets();
   resetAgentsDisplay();
   resetSeenVisit();
   disconnect();
@@ -2099,6 +2151,7 @@ export function reset() {
   resetPushedTodos();
   assistantAsked.forget();
   assistantByManager.clear();
+  labsSeenByManager.clear();
   restoredAssistant = null;
   defaultAssistantRetry = "";
   // and so do the pins and mutes of a refresh() or a failed save still on its way
@@ -2133,6 +2186,7 @@ export function reset() {
     reanswered: {},
     assistant: null,
     assistantError: null,
+    labsSeen: undefined,
     launches: {},
     outbox: {},
     mutes: { spaces: [], sessions: [], allowed: [] },

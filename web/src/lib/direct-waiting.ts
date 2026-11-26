@@ -57,9 +57,10 @@ export function directUserWaiting(items: NeedsYouItem[], deferred: Record<string
     // already left out a step its parent carries): the tray, the To-dos badge and the hub say one number
     const hub = item.kind === "task" ? hubNeedsYou(item.todo, () => false) : undefined;
     if (item.kind === "task" && hub !== undefined) {
-      const quietDecision = item.todo.quiet && item.todo.view?.section === "needs_you" &&
-        taskReviewDecisionAsk(item.todo) && !deferred[decisionLaterKey(item.todo)];
-      if (hub || quietDecision) {
+      // assistantEntries already selects the explicit review asks that belong in this tray.
+      const quietOwnerAsk = item.todo.quiet && item.todo.view?.section === "needs_you" &&
+        (reviewState(item.todo) === "user_check" || taskReviewDecisionAsk(item.todo) && !deferred[decisionLaterKey(item.todo)]);
+      if (hub || quietOwnerAsk) {
         out.push({ ...item, asks: item.asks.filter((ix) => hubTaskInteraction(item.todo, ix)) });
         continue;
       }

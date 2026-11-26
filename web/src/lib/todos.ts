@@ -374,6 +374,12 @@ export function openAsk(todo: Pick<Todo, "ask">): TodoAsk | undefined {
   return a && a.verdict && a.asked_at ? a : undefined;
 }
 
+/** The current Pass round of a task its supervisor explicitly asked the owner to verify. */
+export function personalVerificationAsk(todo: Todo): TodoAsk | undefined {
+  const ask = openAsk(todo);
+  return reviewState(todo) === "user_check" && ask && !ask.outcome ? ask : undefined;
+}
+
 /** The open decision a supervisor raised for the owner through task_review. */
 export function taskReviewDecisionAsk(todo: Todo): TodoAsk | undefined {
   const ask = openAsk(todo);

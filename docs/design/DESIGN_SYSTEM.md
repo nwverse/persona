@@ -49,6 +49,16 @@ rows at the end of the assistant's group, with the module's own title and icon t
 nothing, and nothing is left greyed out (principle 2). No new component or token: rows and actions reuse `JRow` and
 `JAction`.
 
+## Stored data when its module is off (#13430, #15995)
+
+Audience: everyone on a hub whose owner turned a module off. What the user already has stays readable: the page shows the stored content with the
+module's controls left out, not greyed, and never an error or a Retry that cannot succeed. When part of the content
+is not stored (web, #15995: a mail's full body and attachments are fetched from the mail server each time), the
+stored part is followed by one plain line saying what is missing and why ("Mail is turned off on the hub machine, so
+the full message and its attachments can't be loaded…"), drawn as the page's existing quiet strip (the mail reader's
+translation strip: `bg-inset`, hairline, the `info` icon, `text-label`), neutral rather than caution: nothing went
+wrong and there is nothing for the person to do on this page.
+
 ## Product design principles
 
 The seven product design principles, with their rules, how to check each one and recent cases, live in `docs/design/PRINCIPLES.md`: 1 defaults first, 2 progressive disclosure, 3 user control, 4 consistency first, 5 model and product are separate, 6 rules are checkable, 7 fast, local-first and stateful. They decide product questions before any rule in this document applies. "Principle N" below refers to that numbering. Apple's Human Interface Guidelines are a source for this document, not its authority: what Persona takes from them is rewritten here as Persona rules (sections 2 to 6), and `docs/design/HIG_AUDIT.md` records where the code still falls short.
@@ -2461,6 +2471,19 @@ control when it sits lower in the row.
 
 - **Edit diffs use the existing side panel (#9160)**: an edit row opens a Changes panel at that file and call, not a modal that hides the conversation. The panel gives the exchange's edited files a tree and keeps the selected diff beside a scrollable conversation on wide screens; a scope switch reads the whole session, including folded history. Live edits never move the reader to another file: the current diff appends in place, and other files use a new-changes pill. The old modal had no room for that navigation and could not leave the explanation and diff visible together; the existing panel already supplies the container, narrow-screen return and session memory, so no second viewer remains.
 
+### 4.7.2 Web chat question rail
+
+People revisiting earlier exchanges in Assistant and Agents can browse the whole question index in the left gutter.
+The 44 px-wide track uses 8 px marks with a 7 px minimum pitch. The small rows work as one scrub strip, with a
+focusable keyboard entry, spoken positions and a preview of the selected question. This density makes older
+positions reachable in a single track. Short narrow chats use their ordinary message column. A phone-width pane
+with a long index gives the strip its own space so it cannot cover the message text.
+
+The wheel belongs to an overflowing track and leaves the transcript in place. The reading position uses a stronger
+mark and follows chat scrolling when the track is idle. Previews appear on demand with locally available excerpts
+first. Selecting a question opens and highlights its context. Jump to bottom restores the latest messages. The
+implementation and checks are in [User-input rail](../web/web.md#user-input-rail-15813).
+
 ### 4.8 Pending requests
 
 Task decisions on the web reuse the task-routing chip for **Answer in chat** (#5929). It identifies the task and
@@ -2992,6 +3015,7 @@ Current gaps against this contract are listed in `docs/design/HIG_AUDIT.md`. No 
 | Text size setting | Small/Standard/Large | same ratios | none | missing on Android |
 | Sidebar session preview | Long-press menu | Fine-pointer hover card (#15342) | Preview in the action sheet | platform-specific disclosure |
 | Composer references | Picker results use each client's existing composer | Inline references at the caret (#15409) | Picker results use each client's existing composer | platform-specific editing |
+| Chat question rail | Outside scope of #15813 | Dense scroll track and on-demand preview and jump | Outside scope of #15813 | Web interaction |
 | Assistant update status | Outside scope of #15687 | Live update and idle-restart notice in Assistant | Outside scope of #15687 | web change |
 | Tokens source | hand-written | hand-written | generated from `spec/tokens` | Apple and Android drift fails a test; the web is unchecked |
 
@@ -3230,6 +3254,11 @@ item states its own scope, then one configuration form per module. Where a featu
 (Terminal settings), it shows the current value read-only with a button that opens the same Labs page in a `Dialog` over
 the page (never navigating away, so nothing open behind it, such as a chat's unsent draft, is unmounted) instead of a
 second switch, so there is one place to change it.
+
+The Labs reminder (#15802) helps people who want to try a feature find it in Settings. The main sidebar's Settings
+entry and the Settings category list put a still accent dot beside their existing labels when an experiment is available,
+off and unseen. The labels include the reminder for screen readers. The dots clear on opening the Labs category. Each new
+card keeps a small `Pill` beside the experiment's title for that visit, using the existing description.
 
 Admit a temporary trial of a real feature or a choice between the stable and new implementations of one capability.
 Keep the stable default and a lossless rollback, with a linked tracking issue for graduation or removal. Put shipped
@@ -4563,3 +4592,32 @@ measure for a moment first, and one neutral offload provider; `-tab settings -op
   in its top leading corner: the same round `chromeSurface` button, the whole 44 pt corner answering
   (`tapTargetFrame`), and the same action named for VoiceOver (**Edit Avatar**, **Delete Avatar**). Never a context
   menu: the grid is one Form row (`docs/apple/persona.md` "Uploading an image").
+
+## Per-slot file drop targets (#15612)
+
+Audience: everyday people customizing Persona's avatar (web and iPad / Mac). Dragging is additive: the default click /
+tap path and keyboard-reachable **Choose** / **Change** buttons (on Apple, both **Choose from Photos** and **Choose
+Image File** via `AvatarPictureSourceButtons`) stay in place, each with a spoken label naming its slot (plus a localized
+VoiceOver drop hint on Apple).
+
+- **One target under the pointer**: each picture slot (main picture in new and edit flows, each of the five state rows,
+  an open state's crop box, and on the picker the Upload / New from Photo card and uploaded cards that offer Edit)
+  handles only its own drag events (`stopPropagation` on web; per-view `AvatarPictureDrop` `dropDestination` on Apple),
+  never another slot's. Built-in cards and uploaded cards without Edit do not highlight or accept drops (no
+  `dropDestination` attached on Apple).
+- **Same highlight, zero layout shift**: a targeted slot uses the existing drop-zone tokens in both light and dark,
+  without shifting layout:
+  - Web: dashed accent border and accent tint fill (`border-accent` / `outline-accent` + `bg-accent-tint`, or the crop
+    box's 2 px accent ring), with transparent resting borders or inset outlines.
+  - Apple (`AvatarPictureDrop`, `apple/Persona/Views/Settings/AvatarStatesPages.swift`): a non-hit-testing rounded
+    overlay (`Theme.Radius.card` on crop squares and picker cards, `Theme.Radius.control` on Form rows) filled with
+    `Theme.AvatarSheet.dropTint` (`Theme.accentTint`) and stroked with `Theme.AvatarSheet.dropStroke` (`Theme.accent`)
+    at `Theme.AvatarSheet.dropStrokeWidth` (`Theme.Size.rule`).
+- **Near-miss guard (web)**: while the dialog is open, a window-level guard swallows stray file drags/drops
+  (`preventDefault`, `dropEffect = "none"`), and the picker grid does the same, so a miss between slots, on the dialog's
+  title or footer, or on the backdrop never opens the file in the browser tab.
+- **Same validation and user control**: dropped files run through the exact same type/size validation and animated-image
+  decoder as chosen files (`DroppedAvatarImage` on Apple imports `.image` in its original bytes and reads off the main
+  actor so GIF, APNG and animated WebP keep all their frames). Dropping on a picker card only opens the upload or edit
+  dialog with the file ready to crop; nothing is saved until Upload / Save, and **Keep current** / **Keep Current
+  Picture** / Cancel reverts it (principle 3).
