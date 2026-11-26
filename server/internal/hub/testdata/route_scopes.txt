@@ -417,6 +417,7 @@ agents.read          GET /api/v1/sessions/{mid}/{sid}/screen
 -                    GET /api/v1/task-plans/{id}
 -                    GET /api/v1/task-trust
 todos.read           GET /api/v1/todos
+-                    GET /api/v1/todos/decisions/groups
 -                    GET /api/v1/todos/mergetrain
 todos.read           GET /api/v1/todos/places
 -                    GET /api/v1/todos/revision
