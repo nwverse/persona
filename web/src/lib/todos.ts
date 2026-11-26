@@ -115,6 +115,15 @@ export interface TodoActiveBlocker {
   attempts?: number;
 }
 
+/** Server-computed read-only direct child progress summary on parent goals under todos_v2 (#16432). */
+export interface TodoChildSummary {
+  total: number;
+  open: number;
+  needs_you: number;
+  working: number;
+  done: number;
+}
+
 /** Server-owned board projection section keys returned under todos_v2 (#15774, #15800). */
 export type TodoBoardSectionKey =
   | "needs_you"
@@ -300,6 +309,8 @@ export interface Todo {
   repo_gate?: TodoRepoGate;
   /** Active persistent blocker edges blocking this to-do, populated only when todos_v2 === true (#16135, #16138). */
   active_blockers?: TodoActiveBlocker[];
+  /** Read-only direct child progress summary on parent goals, populated only when todos_v2 === true (#16432). */
+  child_summary?: TodoChildSummary;
 }
 
 /** Whether this closed to-do was cancelled, including the legacy supervision-only representation. */
@@ -1046,6 +1057,119 @@ export async function submitTodoDecisionsBatch(
     results,
     succeeded: typeof res?.succeeded === "number" ? res.succeeded : results.filter((r) => r.ok).length,
     failed: typeof res?.failed === "number" ? res.failed : results.filter((r) => !r.ok).length,
+  };
+}
+
+/** One same-cause pending decision cluster returned by GET /api/v1/todos/decisions/groups (#16433). */
+export interface TodoDecisionGroup {
+  key: string;
+  cause_kind: string;
+  label: string;
+  url?: string;
+  todo_ids: string[];
+  count: number;
+}
+
+/** Response returned by GET /api/v1/todos/decisions/groups (#16433). */
+export interface TodoDecisionGroupsResponse {
+  groups: TodoDecisionGroup[];
+  total_pending: number;
+}
+
+/** Fetch server-computed same-cause decision groups; only call when todos_v2 === true (#16433). */
+export async function fetchTodoDecisionGroups(signal?: AbortSignal): Promise<TodoDecisionGroupsResponse> {
+  const res = await api<TodoDecisionGroupsResponse>("/todos/decisions/groups", {
+    headers: currentHeaders(),
+    signal,
+  });
+  const groups = Array.isArray(res?.groups) ? res.groups : [];
+  return {
+    groups,
+    total_pending:
+      typeof res?.total_pending === "number"
+        ? res.total_pending
+        : groups.reduce((acc, g) => acc + (g.count || g.todo_ids?.length || 0), 0),
+  };
+}
+
+/** One queued PR entry in GET /api/v1/todos/mergetrain (#16432, #16433). */
+export interface MergeTrainQueueItem {
+  todo_id: string;
+  pr_number?: number;
+  pr_url?: string;
+  state: string;
+  policy?: string;
+  approved?: boolean;
+  position: number;
+  rebase_failures?: number;
+  last_error?: string;
+}
+
+/** Per-to-do queue position badge in GET /api/v1/todos/mergetrain (#16432, #16433). */
+export interface MergeTrainTodoBadge {
+  repo_key: string;
+  position: number;
+  ahead_pr_url?: string;
+  state: string;
+}
+
+/** Per-repository merge-train queue snapshot in GET /api/v1/todos/mergetrain (#16432, #16433). */
+export interface MergeTrainRepoQueue {
+  repo_key: string;
+  head?: MergeTrainQueueItem;
+  queue: MergeTrainQueueItem[];
+  escalated?: MergeTrainQueueItem[];
+}
+
+/** Response returned by GET /api/v1/todos/mergetrain (#16432, #16433). */
+export interface TodoMergeTrainResponse {
+  repos: MergeTrainRepoQueue[];
+  by_todo: Record<string, MergeTrainTodoBadge>;
+}
+
+/** Fetch read-only same-repo merge-train queue positions; only call when todos_v2 === true (#16433). */
+export async function fetchTodoMergeTrain(signal?: AbortSignal): Promise<TodoMergeTrainResponse> {
+  const res = await api<TodoMergeTrainResponse>("/todos/mergetrain", {
+    headers: currentHeaders(),
+    signal,
+  });
+  return {
+    repos: Array.isArray(res?.repos) ? res.repos : [],
+    by_todo: res?.by_todo && typeof res.by_todo === "object" ? res.by_todo : {},
+  };
+}
+
+/** One read-only causal audit event returned by GET /api/v1/todos/{id}/trace (#16433). */
+export interface TodoCausalTraceEvent {
+  id: string;
+  at: string;
+  category: string;
+  kind: string;
+  summary: string;
+  ref?: string;
+  url?: string;
+}
+
+/** Response returned by GET /api/v1/todos/{id}/trace (#16433). */
+export interface TodoCausalTraceResponse {
+  todo_id: string;
+  title: string;
+  events: TodoCausalTraceEvent[];
+  count: number;
+}
+
+/** Fetch on-demand read-only causal audit trace for a to-do; only call when todos_v2 === true (#16433). */
+export async function fetchTodoCausalTrace(id: string, signal?: AbortSignal): Promise<TodoCausalTraceResponse> {
+  const res = await api<TodoCausalTraceResponse>(`/todos/${enc(id)}/trace`, {
+    headers: currentHeaders(),
+    signal,
+  });
+  const events = Array.isArray(res?.events) ? res.events : [];
+  return {
+    todo_id: typeof res?.todo_id === "string" ? res.todo_id : id,
+    title: typeof res?.title === "string" ? res.title : "",
+    events,
+    count: typeof res?.count === "number" ? res.count : events.length,
   };
 }
 

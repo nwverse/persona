@@ -140,6 +140,33 @@ umask 077
 ./persona-projects grant checkout engineering reader > engineering.token
 ~~~
 
+### Publish and review with the member CLI
+
+On each member's computer, set `TEAM_PROJECT_URL` to the project service URL and `TEAM_PROJECT_TOKEN_FILE` to the file containing that member's token. Use HTTPS for a remote service. For a single-host trial use `http://127.0.0.1:18082`. Each command also accepts `-url` and `-token-file`.
+
+1. The writer publishes the chosen UTF-8 file. Use expected version zero to create the document. To edit it, supply the current published version. The receipt identifies the new revision and its SHA-256.
+
+   ~~~sh
+   persona-projects publish -expected 0 -file refund.md checkout refund
+   ~~~
+
+2. The reviewer saves the numbered revision, then inspects the file. Reading succeeds only after the client verifies the identifier, revision and SHA-256. Standard output contains the exact bytes, including any final newline.
+
+   ~~~sh
+   persona-projects read -revision 1 checkout refund > review.md
+   ~~~
+
+3. After reviewing the text, calculate its digest and approve that version. The command checks the pinned revision against the supplied digest before submitting approval. If the author has already published a new head, review that version separately.
+
+   ~~~sh
+   digest=$(python3 -c 'import hashlib; print(hashlib.sha256(open("review.md", "rb").read()).hexdigest())')
+   persona-projects approve -revision 1 -sha256 "$digest" checkout refund
+   ~~~
+
+The project service returns the approved revision and approver in the receipt. Keep those details with the work that uses the document.
+
+### HTTP API
+
 Each member can use curl with their own token. In the examples below, each member saves their token as `member.token` on their own machine, runs the shared setup and performs their role's step. Use the local URL below for a single-host trial, or the team's HTTPS URL from another machine.
 
 ~~~sh
