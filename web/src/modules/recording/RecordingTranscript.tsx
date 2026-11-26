@@ -3,7 +3,7 @@ import { t } from "../../i18n";
 import { Button, cx, IconButton } from "../../ui/atoms";
 import { Card, Marked, SectionTitle } from "../../views/knowledge/KBParts";
 import type { RecordingView } from "./recording-view";
-import { exportTranscriptText, stepTranscriptMatch, transcriptMatches, transcriptRows, transcriptRowText, type TranscriptRow } from "./transcript-review";
+import { exportTranscriptText, stepTranscriptMatch, transcriptMatchParts, transcriptMatches, transcriptRows, transcriptRowText, type TranscriptRow } from "./transcript-review";
 
 function download(rows: TranscriptRow[], recordingId: string) {
   const link = document.createElement("a");
@@ -107,7 +107,9 @@ export function RecordingTranscript({ rec, recordingId, query, highlighted, onJu
               (highlighted === row.id || (match && selected === row.id)) && "bg-accent-tint")}>
             <span className={cx("w-[60px] shrink-0 pt-px text-[11.5px] tabular-nums", row.bookmark ? "font-semibold text-accent-ink" : "text-ink-3")}>{row.clock}</span>
             <span className={cx("min-w-0 flex-1 select-text [overflow-wrap:anywhere]", row.bookmark ? "font-medium text-accent-ink" : "text-ink")}>
-              {match ? <mark className="rounded bg-accent-tint text-ink">{transcriptRowText(row)}</mark>
+              {match ? transcriptMatchParts(transcriptRowText(row), search).map((part, i) => part.hit
+                ? <mark key={i} className="rounded bg-accent-tint font-semibold text-ink">{part.text}</mark>
+                : part.text)
                 : query && !row.bookmark ? <Marked text={row.text} query={query} /> : transcriptRowText(row)}
             </span>
           </li>;
