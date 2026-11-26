@@ -23,8 +23,8 @@ import (
 // way.
 //
 // Only a thread nothing has open: no app-server owns it (codex_remote.go: sends go there), no process holds its
-// rollout (a Codex CLI still running it, the Codex App's own app-server: a second writer would fork it), not the
-// Codex App's chat (codex_desktop.go), not a subagent or a program's run. And only in the default Codex home, whose
+// rollout (a Codex CLI still running it, the Codex App's own app-server: a second writer would fork it), no Codex App
+// still owns it (codex_desktop.go), not a subagent or a program's run. And only in the default Codex home, whose
 // thread ids are the session ids: a thread of another home is listed under an opaque key (codexSourceID).
 
 const codexResumeRefused = "codex_resume"
@@ -73,8 +73,15 @@ func (n *Node) codexResumableIn(ctx context.Context, id string, pass *codexListP
 	if o.exec || o.sub || o.parent != "" || o.guardian {
 		return false
 	}
-	if o.desktop {
-		// Refuse resuming a Codex App thread whenever the App bus is live or the App itself is running and could load it.
+	// A shared app-server stamp corroborated by the sidebar remains App-owned. Only an explicit desktop origin becomes
+	// eligible for terminal recovery after the App and every writer have stopped.
+	if o.sharedAppStamp() && pass.appState(src.home).listed(src.thread) {
+		return false
+	}
+	desktop := o.desktop
+	if desktop {
+		// Refuse resuming a Codex App thread whenever the App bus or native queue is live or the App itself is running
+		// and could load it.
 		if pass.desktopAvailable(src.home) {
 			return false
 		}
@@ -86,17 +93,10 @@ func (n *Node) codexResumableIn(ctx context.Context, id string, pass *codexListP
 			return false
 		}
 	}
-	var qm quickMeta
-	if st, err := pass.stat(src.path); err == nil {
-		qm = n.meta(src.path, st)
-	}
-	if n.codexEncryptedFailed(id, qm) {
+	m, ok := metaOfIn(src.home, src.path, pass)
+	if !ok || n.codexEncryptedFailed(id, m) || desktop && n.codexTurnRunning(src, m) {
 		return false
 	}
-	if o.desktop && n.codexTurnRunning(src, qm) {
-		return false
-	}
-	m := metaOf(src.home, src.path)
 	return !m.sub && m.cwd != ""
 }
 

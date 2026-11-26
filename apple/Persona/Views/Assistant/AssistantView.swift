@@ -341,11 +341,7 @@ struct AssistantView: View {
             DirectionPage(id: $0.id)
                 .modifier(InboxDestinationEnvironment(chat: inboxChatPush, openFeishu: { navPath.wrappedValue.append($0) }))
         }
-        .navigationDestination(isPresented: $showHealth) {
-            HealthView(disabled: shownStart != nil, launcher: healthLauncherPick, launcherModel: healthModelPick, mode: $starterMode, effort: $starterEffort) { text, images in
-                Task { await start(text, images, space: Session.healthSpace) }
-            }
-        }
+        .navigationDestination(isPresented: $showHealth) { healthPage }
         .navigationDestination(item: $openedSpace) { spacePage($0) }
         .modifier(ShellDestinations(path: $path, enabled: placesByValue && !embedded, inboxChat: inboxChatPush))
         .modifier(ClassicDestinations(path: $path, enabled: shell == nil && !padPlaces && !embedded))
@@ -458,6 +454,13 @@ struct AssistantView: View {
                 // A pushed inbox and its items belong to the old hub. Initial pairing (nil → a group) and reconnects stay.
                 if AssistantCurrentNavigation.clearsPushedPages(oldHub: old, newHub: new) { forgetPlaces() }
             }
+            #if os(iOS)
+            .onChange(of: model.hiddenNavigationPages) { _, hidden in
+                let current = embedded ? unified?.shownPlace : places.current
+                if let page = current?.navigationPage, hidden.contains(page) { leavePlace() }
+                if hidden.contains(.todos) { showTodos = false }
+            }
+            #endif
             .onChange(of: model.assistantManagerID) {
                 starterLauncher = nil // a launcher of the assistant shown before
                 starterModel = nil
@@ -499,7 +502,7 @@ struct AssistantView: View {
                 case "avatars": showAvatars = true
                 case "knowledge": showKnowledge = true
                 case "todos": showTodos = true
-                case "health": showHealth = true
+                case "health": showHealth = healthShellPage != nil
                 // `-openAssistantPage space:<slug>`: that space's home; `space-new`: the new space form (screenshots).
                 case .some(let p) where p.hasPrefix("space:"): present(.space(String(p.dropFirst("space:".count))))
                 case "space-new": present(.newSpace)
@@ -515,7 +518,7 @@ struct AssistantView: View {
                 case "routines": show(.routines)
                 case "knowledge": show(.knowledge)
                 case "profile": show(.profile)
-                case "health": backToRoot(); showHealth = true // the page itself, for its screenshots
+                case "health": backToRoot(); showHealth = healthShellPage != nil // the page itself, for its screenshots
                 case "recordings": show(.recordings)
                 default: break
                 }
@@ -582,6 +585,9 @@ struct AssistantView: View {
     /// animation, then the drawer closes: one motion, not a push and a slide while the drawer closes (#6599).
     private func show(_ page: ShellPage?) {
         guard let page else { return }
+        #if os(iOS)
+        if model.returnToStartIfHidden(page.navigationPage) { return }
+        #endif
         // A To-dos place the sidebar picked (#10465): To-dos opens on it at its root, what it kept being the place
         // before's. Its own row is All To-dos where To-dos is the place in front.
         let fresh = page == .todos && TodoWorkspace.shared.opening(inFront: todosInFront)
@@ -630,6 +636,9 @@ struct AssistantView: View {
     /// landed on the item's choice, so closing the item shows the list where the item lives (#9053, docs/assistant/inbox.md
     /// "Section bar"). What the Inbox kept open gives way to it. A page without places pushes the item alone, as before.
     private func openFromOutside(_ item: InboxItem) {
+        #if os(iOS)
+        if model.returnToStartIfHidden(.inbox) { return }
+        #endif
         guard placesByValue else { return navPath.wrappedValue.append(item) }
         // the item in front before the list beneath first appears, whichever of the two appears first
         InboxBarLanding.shared.appeared(item)
@@ -781,24 +790,28 @@ struct AssistantView: View {
     }
 
     /// The open conversation is the health space's.
-    private var currentIsHealth: Bool { HealthModel.newOpensHealth(current.flatMap { model.session($0) }) }
+    private var currentIsHealth: Bool { current.flatMap { model.session($0) }?.isHealth == true }
 
-    /// Health from the sidebar or the shell (#4329): back in the latest health conversation, as Codex does; the Health
-    /// page, its new conversation page, when it has none. `-openAssistantPage health` still shows the page.
-    private func enterHealth() {
-        Task {
-            switch await HealthModel.entry(deps: .live, live: model.healthConversations) {
-            case .open(let key):
-                #if os(iOS)
-                if embedded, let unified { unified.select(.conversation, path: navPath, contentChanged: true) }
-                #endif
-                backToRoot()
-                model.openAssistantConversation(key)
-            case .new:
-                backToRoot()
-                present(.health)
-            }
+    /// Health's page, from the `health` module (`ModuleSlot.shellPlaces`, #14278); nil while it is off.
+    private var healthShellPage: ModuleShellPlace? { Modules.registry.shellPage(id: SidebarRoute.healthPage) }
+
+    /// Health's home with what it shares with Persona's new conversation: the launcher, model, mode and effort picked in
+    /// the shell composer, and a start in the health space.
+    @ViewBuilder private var healthPage: some View {
+        if let page = healthShellPage {
+            page.page(PersonaHostApp.ShellContext(disabled: shownStart != nil, launcher: healthLauncherPick, launcherModel: healthModelPick,
+                                                  mode: $starterMode, effort: $starterEffort) { text, images in
+                Task { await start(text, images, space: Session.healthSpace) }
+            })
         }
+    }
+
+    /// Health from the sidebar or the shell opens its home, with the space's conversations listed (#13273); nothing
+    /// while the health module is off.
+    private func enterHealth() {
+        backToRoot()
+        guard healthShellPage != nil else { return }
+        present(.health)
     }
 
     /// The open conversation's domain space (#13500), when it is one other than health's.
@@ -811,7 +824,7 @@ struct AssistantView: View {
     /// (#4329); in a domain space's, that space's home (#13500); elsewhere the assistant's.
     private var newFromTopBar: () -> Void {
         if let slug = currentSpace { return { backToRoot(); present(.space(slug)) } }
-        if currentIsHealth { return { backToRoot(); present(.health) } }
+        if currentIsHealth, healthShellPage != nil { return { backToRoot(); present(.health) } }
         return newConversation
     }
 
@@ -880,9 +893,7 @@ struct AssistantView: View {
         case .messages:
             LarkConversationsView().modifier(InboxDestinationEnvironment(chat: inboxChatPush, openFeishu: { navPath.wrappedValue.append($0) }))
         case .health:
-            HealthView(disabled: shownStart != nil, launcher: healthLauncherPick, launcherModel: healthModelPick, mode: $starterMode, effort: $starterEffort) { text, images in
-                Task { await start(text, images, space: Session.healthSpace) }
-            }
+            healthPage
             .modifier(InboxDestinationEnvironment(chat: inboxChatPush, openFeishu: { navPath.wrappedValue.append($0) }))
         case .space(let slug):
             spacePage(.home(slug))

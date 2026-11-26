@@ -5,6 +5,7 @@
 import { act, useEffect, useReducer } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { LEGACY_SCHEME } from "../../lib/compatibility";
 import type { Item, Session } from "../../lib/types";
 
 // a mouse (fine pointer) or a touch screen alone, per test
@@ -229,6 +230,7 @@ describe("the error an Agent's chat stopped on", () => {
   it("leaves the host's failure note to say why the turn stopped: one card over the composer", async () => {
     captured.session = { ...IDLE, failure_reason: "⚠️ API Error: 529 overloaded" };
     await draw();
+    await act(async () => { await import("./BotmuxMessages"); });
     expect(host.querySelector('[data-chat-dock] [data-testid="chat-failure"]')).not.toBeNull();
     expect(banner()).toBeNull();
     expect(inChat()).not.toBeNull();
@@ -237,6 +239,7 @@ describe("the error an Agent's chat stopped on", () => {
   it("stays away after the failure note's Retry: the note goes, 继续 is sent, and no banner takes its place", async () => {
     captured.session = { ...IDLE, failure_reason: "⚠️ API Error: 529 overloaded" };
     await draw();
+    await act(async () => { await import("./BotmuxMessages"); });
     await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="chat-failure-retry"]')!.click());
     await flush();
     expect(bodies.map((b) => b.text)).toEqual(["继续"]);
@@ -398,8 +401,9 @@ describe("image-limit Compact and send again (#13045)", () => {
     act(() => upsertSession(captured.session!));
     await flush();
     expect(bodies).toHaveLength(1);
-    expect(bodies[0].text).toMatch(/<(?:persona|jarvis)-context kind="edit" title="Doc">line 1<\/(?:persona|jarvis)-context>/);
-    expect(bodies[0].text).toMatch(/<(?:persona|jarvis)-file kind="file" path="\/tmp\/a\.pdf" name="a\.pdf"\/>/);
+    const tag = `(?:persona|${LEGACY_SCHEME})`;
+    expect(bodies[0].text).toMatch(new RegExp(`<${tag}-context kind="edit" title="Doc">line 1</${tag}-context>`));
+    expect(bodies[0].text).toMatch(new RegExp(`<${tag}-file kind="file" path="/tmp/a\\.pdf" name="a\\.pdf"/>`));
     expect(bodies[0].text).toContain("帮我看看这张图");
     expect(bodies[0].images).toEqual([{ mime: "image/png", data: "UE5H" }]);
   });

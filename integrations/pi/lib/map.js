@@ -6,6 +6,7 @@
 // the branch, so moving to another one makes the app reload the page instead of splicing two branches together.
 
 import { customTypeMatches } from './compat.js'
+import { assistantPreview } from '../../runtime-sdk/lib/assistant-preview.js'
 import { appToolName, clipInput, snippet } from '../../runtime-sdk/index.js'
 
 // pi's tools under the names the apps draw: the SDK's common ones, plus pi's own (toolInput renames the arguments).
@@ -46,9 +47,13 @@ export function toolInput(name, args) {
     case 'write':
       return clipInput(dropUndefined({ file_path: a.path, content: a.content }))
     case 'edit': {
-      const edits = Array.isArray(a.edits) ? a.edits : []
-      if (edits.length === 1) return clipInput(dropUndefined({ file_path: a.path, old_string: edits[0].oldText, new_string: edits[0].newText }))
-      return clipInput(dropUndefined({ file_path: a.path, edits: edits.map((e) => ({ old_string: e.oldText, new_string: e.newText })) }))
+      if (!Array.isArray(a.edits)) {
+        return clipInput(dropUndefined({ file_path: a.path, old_string: a.oldText, new_string: a.newText }))
+      }
+      if (a.edits.length === 1) {
+        return clipInput(dropUndefined({ file_path: a.path, old_string: a.edits[0]?.oldText, new_string: a.edits[0]?.newText }))
+      }
+      return clipInput(dropUndefined({ file_path: a.path, edits: a.edits.map((e) => dropUndefined({ old_string: e?.oldText, new_string: e?.newText })) }))
     }
     default:
       return clipInput(a)
@@ -56,8 +61,8 @@ export function toolInput(name, args) {
 }
 
 /** The apps' tool name for a call, telling a multi-edit (Claude's MultiEdit) from a single one. */
-function callName(name, args) {
-  if (name === 'edit' && Array.isArray(args?.edits) && args.edits.length !== 1) return 'MultiEdit'
+export function callName(name, args) {
+  if (name === 'edit' && Array.isArray(args?.edits) && args.edits.length > 1) return 'MultiEdit'
   return toolName(name)
 }
 
@@ -195,7 +200,10 @@ export function lastText(branch) {
     const m = branch[i]?.message
     if (m?.role === 'assistant') {
       const t = textOf(m.content)
-      if (t) return snippet(t)
+      if (t) {
+        const preview = assistantPreview(t)
+        if (preview !== undefined) return preview
+      }
     }
   }
   return ''

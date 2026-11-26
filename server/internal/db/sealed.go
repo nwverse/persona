@@ -12,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/nwverse/persona/server/internal/larksyncwire"
 	"github.com/nwverse/persona/server/internal/mailwire"
 )
 
@@ -47,6 +48,10 @@ var sealedSettings = []SealedSetting{
 	{Key: "launchers.machine_keys", List: true, Fields: []string{"key_sealed"}},                                // internal/assistant machineKey
 	{Key: "bots.feishu", Fields: []string{"secret_enc", "registration_device_enc", "registration_secret_enc"}}, // internal/extmgr FeishuBotSettings
 	{Key: mailwire.MicrosoftClientSetting, Fields: []string{mailwire.MicrosoftClientSealedField}},              // internal/modules/mail sealedSetting
+	// internal/modules/lark/larksync: the user sync's primary-bot state, its extra bots and its bindings' user tokens.
+	{Key: larksyncwire.SettingPrefs, Fields: larksyncwire.SealedPrefsFields},
+	{Key: larksyncwire.SettingBots, List: true, Fields: larksyncwire.SealedBotsFields},
+	{Key: larksyncwire.SettingBindings, List: true, Fields: larksyncwire.SealedBindingsFields},
 }
 
 // SealedSettings are the settings values that hold sealed strings (the packages that write them check theirs is here).

@@ -8,6 +8,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/larkhost"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
@@ -48,6 +49,9 @@ func (s *Service) askAcceptanceRound(t Todo, machine, session, reply string, aga
 	}
 	b.asks[t.ID] = &acceptAsk{Earlier: earlier} // claimed: a second turn ending meanwhile does not ask twice
 	b.mu.Unlock()
+	if cur, ok := s.todoNow(t.ID); ok {
+		t = cur // read any delivery update written just before askAcceptance (advanceTaskReply / deploy_check)
+	}
 	a := s.acceptLines(ctx, t, machine, session, reply)
 	a.MachineID, a.SessionID, a.AskedAt, a.Earlier = machine, session, time.Now().UTC(), earlier
 	if !s.ownerVerifies(t) {
@@ -131,7 +135,7 @@ func (s *Service) postAsk(ctx context.Context, t Todo, a acceptAsk) bool {
 	var st FeishuStatus
 	var stErr error
 	if !a.ForBriefing {
-		st, stErr = s.feishuStatus(ctx)
+		st, stErr = s.chat().Status(ctx)
 	}
 	switch {
 	case a.ForBriefing:
@@ -142,7 +146,7 @@ func (s *Service) postAsk(ctx context.Context, t Todo, a acceptAsk) bool {
 	case stErr != nil:
 		s.logf("task %s: acceptance: %v (its card is tried again later)", t.ID, stErr)
 	case st.Ready && st.Features.Reports:
-		mid, err := s.botPostKeyed(ctx, "", s.acceptCard(ctx, t, a, false), askSummary(s.botLang(ctx), &a), acceptCardKey(t.ID, a.AskedAt))
+		mid, err := s.chat().Post(ctx, larkhost.Target{}, "", s.acceptCard(ctx, t, a, false), askSummary(s.botLang(ctx), &a), acceptCardKey(t.ID, a.AskedAt))
 		if err != nil {
 			s.logf("task %s: acceptance: %v (its card is tried again later)", t.ID, err)
 			break
@@ -243,7 +247,7 @@ func (s *Service) acceptCard(ctx context.Context, t Todo, a acceptAsk, again boo
 	if a.Link != "" {
 		link = "[" + botcard.EscapeMarkdown(clip(a.Link, 80)) + "](" + a.Link + ")"
 	}
-	c.Markdown("**" + botcard.EscapeMarkdown(verdictText(l, &a)) + "**")
+	c.Markdown("**" + botcard.EscapeMarkdown(verdictText(l, &a, currentDelivery(t))) + "**")
 	how := a.How
 	if how == "" {
 		how = i18n.T(l, "assistant-reports.accept_how_default")

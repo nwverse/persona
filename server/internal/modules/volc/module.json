@@ -3,5 +3,6 @@
   "id": "volc",
   "api": 1,
   "origin": "builtin",
-  "title": "Volcengine speech"
+  "title": "Volcengine speech",
+  "feature": "module.volc"
 }

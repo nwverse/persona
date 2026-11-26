@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -71,6 +72,9 @@ func (h *hub) serve(ctx context.Context) {
 		}
 		switch {
 		case f.Method != "":
+			if f.ID == "" {
+				continue
+			}
 			go h.answer(f)
 		case f.Event != "":
 			h.mu.Lock()
@@ -79,7 +83,7 @@ func (h *hub) serve(ctx context.Context) {
 			if _, ok := wire.Calls[f.Event]; ok {
 				h.holds(f.Event, wire.ValidateParams(f.Event, f.Params))
 			}
-		case f.ID != "":
+		case f.ID != "" && (f.Result != nil || f.Error != nil):
 			h.mu.Lock()
 			ch := h.pending[f.ID]
 			delete(h.pending, f.ID)
@@ -91,6 +95,19 @@ func (h *hub) serve(ctx context.Context) {
 	}
 }
 
+func wireError(err error) *ext.Error {
+	var e *ext.Error
+	if errors.As(err, &e) {
+		return e
+	}
+	var c ext.Coded
+	if errors.As(err, &c) {
+		code, data := c.WireError()
+		return &ext.Error{Message: c.Error(), Code: code, Data: data}
+	}
+	return &ext.Error{Message: err.Error()}
+}
+
 // answer answers one of the program's calls.
 func (h *hub) answer(f frame) {
 	if _, ok := wire.Calls[f.Method]; ok {
@@ -99,11 +116,7 @@ func (h *hub) answer(f frame) {
 	res, err := h.result(f.Method, f.Params)
 	out := frame{ID: f.ID}
 	if err != nil {
-		e, ok := err.(*ext.Error)
-		if !ok {
-			e = &ext.Error{Message: err.Error()}
-		}
-		out.Error = e
+		out.Error = wireError(err)
 	} else {
 		b, merr := json.Marshal(res)
 		if merr != nil {
@@ -217,7 +230,7 @@ func (h *hub) answerOf(f func(json.RawMessage) (any, error), method string, para
 }
 
 // refuses is the real hub's refusal of a program's call, or nil: a connector or channel the extension does not
-// contribute (no_contribution), a knowledge-base call or a gh token without the permission granted
+// contribute (no_contribution), a knowledge-base call, an assistant.event or a gh token without the permission granted
 // (permission_denied, data {scope}), a sent.record for a connector that does not declare sends_as_user
 // (permission_denied) or with a target that is not an object or no text (invalid_params), the knowledge base's connector calls of a connector without archive
 // (no_capability).
@@ -248,6 +261,11 @@ func refuses(m *wire.Manifest, method string, params json.RawMessage) error {
 		// hub_api is the legacy full grant only without scopes (the hub's FullHub).
 		if !(perms.HubAPI && len(perms.Hub) == 0) && !slices.Contains(perms.Hub, scope) {
 			return denied(scope)
+		}
+	case "assistant":
+		// assistant.event needs assistant.events (the hub's grant check; hub_api is the legacy full grant only without scopes).
+		if rest == "event" && !(perms.HubAPI && len(perms.Hub) == 0) && !slices.Contains(perms.Hub, "assistant.events") {
+			return denied("assistant.events")
 		}
 	case ext.SentNamespace:
 		// Only a connector of its own that declares sends_as_user (the hub's registry check), with a target that is an
@@ -332,6 +350,11 @@ func (h *hub) call(ctx context.Context, method string, params, out any) error {
 	h.mu.Lock()
 	h.pending[id] = ch
 	h.mu.Unlock()
+	defer func() {
+		h.mu.Lock()
+		delete(h.pending, id)
+		h.mu.Unlock()
+	}()
 	raw, err := json.Marshal(params)
 	if err != nil {
 		return err
@@ -349,9 +372,6 @@ func (h *hub) call(ctx context.Context, method string, params, out any) error {
 		}
 		return nil
 	case <-ctx.Done():
-		h.mu.Lock()
-		delete(h.pending, id)
-		h.mu.Unlock()
 		return fmt.Errorf("%s: no answer: %w", method, ctx.Err())
 	case <-h.closed:
 		return fmt.Errorf("%s: the program closed its stdout", method)
