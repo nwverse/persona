@@ -22,7 +22,7 @@ registerHooks({
    export class UIAbility {context={config:{fontSizeScale:1},resourceManager:{},getApplicationContext:()=>({setColorMode(){}})}}
    export const window={};export const Strings={bind(){},refresh(){}};
    export const XiaoYiRuntimeContext={bind(){s.contextBound=(s.contextBound||0)+1;}};
-   export const IntentSuggestionsService={async clearAll(){s.suggestionsCleared=(s.suggestionsCleared||0)+1;},scheduleStatusShare(p,w){s.scheduledSuggestions=s.scheduledSuggestions||[];s.scheduledSuggestions.push({p,w});},resetSchedule(){s.suggestionsScheduleReset=(s.suggestionsScheduleReset||0)+1;}};
+   export const IntentSuggestionsService={async clearAll(){s.suggestionsCleared=(s.suggestionsCleared||0)+1;},scheduleStatusShare(ctx,p,w){s.scheduledSuggestions=s.scheduledSuggestions||[];s.scheduledSuggestions.push({ctx,p,w});},resetSchedule(){s.suggestionsScheduleReset=(s.suggestionsScheduleReset||0)+1;}};
    export const ShareReceiver={isShareWant(w){return w?.action==='ohos.want.action.sendData';},async parseWant(w){const t=w?.parameters?.text||'';return t?{hasContent:true,title:'',text:t,url:'',draftText:t,route:{dest:'share',profile:'',manager:'',machine:'',session:'',autoStart:false,text:t,title:'',url:''}}:{hasContent:false,title:'',text:'',url:'',draftText:''};}};
    export const nativeMeetingServices={async initialize(){s.meetingRefreshes=(s.meetingRefreshes||0)+1},setRecordingEvent(){},
      receive(parameters){if(parameters.personaMeetingType==='persona.meeting.reminder' && parameters.occurrence)s.meetingOpens=(s.meetingOpens||0)+1}};
@@ -41,7 +41,7 @@ registerHooks({
 });
 const {default:EntryAbility}=await import('../entry/src/main/ets/entryability/EntryAbility.ets');
 const turn=()=>new Promise(resolve=>setTimeout(resolve,0));
-function reset(){Object.assign(state,{ready:true,foregrounded:0,background:0,activated:0,recordingStops:0,dictationStops:0,lookUnbinds:0,localeAnnouncements:0,language:'default',notifications:[],xiaoYiRoutes:[],query:Promise.resolve(),init:Promise.resolve()});}
+function reset(){Object.assign(state,{ready:true,foregrounded:0,background:0,activated:0,recordingStops:0,dictationStops:0,lookUnbinds:0,localeAnnouncements:0,language:'default',notifications:[],xiaoYiRoutes:[],scheduledSuggestions:[],suggestionsScheduleReset:0,query:Promise.resolve(),init:Promise.resolve()});}
 test('a foreground permission query cannot reopen a connection after background or destroy',async()=>{
  for(const stop of ['onBackground','onDestroy']){
   reset();let release;state.query=new Promise(resolve=>release=resolve);const ability=new EntryAbility();ability.onForeground();ability[stop]();release();await turn();
@@ -138,8 +138,9 @@ test('EntryAbility registers XiaoYi forget/status hooks onCreate and resets sugg
  ability.onCreate({}, {});
  assert.equal(typeof state.forgetHook, 'function');
  assert.equal(typeof state.statusHook, 'function');
- state.statusHook(2, 1, {});
- assert.deepEqual(state.scheduledSuggestions, [{ p: 2, w: 1 }]);
+ const ctx = { tag: 'ctx' };
+ state.statusHook(2, 1, ctx);
+ assert.deepEqual(state.scheduledSuggestions, [{ ctx, p: 2, w: 1 }]);
  ability.onDestroy();
  assert.equal(state.suggestionsScheduleReset, 1);
 });
