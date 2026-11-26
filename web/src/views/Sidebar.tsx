@@ -58,8 +58,7 @@ import { Icon } from "../ui/icons";
 import { HubNoticeLine as HubNoticeLineContent } from "./agents/HubNoticeRow";
 import { DeleteSessionDialog, RenameDialog, RenameSpaceDialog } from "./chat/SessionDialogs";
 import { AGENT_ARCHIVES_FEATURE } from "../lib/agent-archives";
-import { AgentRowMenu, MarkSeenDialog as MarkSeenDialogContent, SpaceMenu } from "./AgentMenus";
-import { NodeMenu } from "./NodeMenu";
+import { AgentRowMenu, MarkSeenDialog as MarkSeenDialogContent, NodeMenu, SpaceMenu } from "./AgentMenus";
 import { NodePrompt as NodePromptContent } from "./NodePrompt";
 import { SidebarUsage as SidebarUsageContent } from "./UsageBars";
 import type { MenuNode } from "../lib/node-actions";
@@ -85,7 +84,7 @@ import { SESSIONS_LIST_FEATURE, type ListCounts, type ListFilters } from "../lib
 import { heldCounts } from "../lib/seen-outbox";
 import { heldSidesOf, useHeldVersion } from "../lib/use-child-sessions";
 import { NoComputers, useAddComputer } from "./machines/AddComputerEntry";
-import { BADGE_CLASS, DOT_CLASS, type GoFn, GroupCount, holdsRow, morePagesMenu, type NavPage, type NodeMenuFn, pageIconStyle, pageLabel, type RegFn, rowKey, type RowMenuFn, Section, SidebarGroup, GroupFoldButton, useActiveKey, useGo, useNavPages } from "./SidebarParts";
+import { BADGE_CLASS, DOT_CLASS, type GoFn, GroupCount, HISTORY_ICON, holdsRow, morePagesMenu, type NavPage, type NodeMenuFn, pageIconStyle, pageLabel, type RegFn, rowKey, type RowMenuFn, Section, SidebarGroup, GroupFoldButton, useActiveKey, useGo, useNavPages } from "./SidebarParts";
 import { NavRow, PersonalAgents, PersonaRow, SessionRow, SubHeading } from "./SidebarRows";
 import { GroupBranch, LooseSection, MachineSection, RepoMachineSection, SessionTally, type SpaceMenuFn, type WorkspaceTreeActions, SpaceSection, TodoTreeView } from "./SidebarTree";
 import { CollapseButton, PagesTally } from "./SidebarRail";
@@ -550,7 +549,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
 
         {active && (workBrowserReady ? <PendingAgents route={route} reg={reg} hover={hover} go={go} onNewAgent={onNewAgent} onNavigate={onNavigate} />
           : !(narrow && route.name === "agent-list") && <AgentsBlock reg={reg} hover={hover} activeKey={activeKey} go={go} onNewAgent={onNewAgent} onNavigate={onNavigate} workspaceActions={workspaceActions} foldable onHoldsSeen={setHoldsSeen} />)}
-        {!workBrowserReady && <NavRow k="terminal" reg={reg} hover={hover} active={activeKey === "terminal"} to={{ name: "terminal" }} go={go} label={t("work-entry.title")} icon="clock" />}
+        {!workBrowserReady && <NavRow k="terminal" reg={reg} hover={hover} active={activeKey === "terminal"} to={{ name: "terminal" }} go={go} label={t("work-entry.title")} icon={HISTORY_ICON} />}
       </div>
       <SeenRowsNoticeHost shown={holdsSeen} onNavigate={onNavigate} />
       </div>
@@ -585,7 +584,7 @@ function PendingAgents({ route, reg, hover, go, onNewAgent, onNavigate }: {
           label={label} title={[label, machineWithHub(row.machineId, machines)].filter(Boolean).join(" · ")} icon="chat" dot="needs_you"
           badge={row.cards.length > 1 ? row.cards.length : undefined} badgeTone="attention" />;
       })}
-      <NavRow k="work:all" reg={reg} hover={hover} active={false} to={{ name: "terminal" }} go={go} label={t("work-entry.all")} icon="list" />
+      <NavRow k="work:all" reg={reg} hover={hover} active={false} to={{ name: "terminal" }} go={go} label={t("work-entry.all")} icon={HISTORY_ICON} />
     </Section>
   );
 }
@@ -609,7 +608,7 @@ export function AgentsList({ route, onNewAgent, workspaceActions }: { route: Rou
         <div ref={nav} onMouseLeave={() => hover(null)} className="relative mx-auto max-w-[640px] px-2.5 pb-6">
           {highlight}
           {none ? <NoComputers body={t("agentspage.no_computers_body")} onAdd={adding.open} /> : <AgentsBlock reg={reg} hover={hover} activeKey={activeKey} go={go} onNewAgent={onNewAgent} workspaceActions={workspaceActions} add={false} onHoldsSeen={setHoldsSeen} />}
-          <NavRow k="terminal" reg={reg} hover={hover} active={activeKey === "terminal"} to={{ name: "terminal" }} go={go} label={t("work-entry.title")} icon="clock" />
+          <NavRow k="terminal" reg={reg} hover={hover} active={activeKey === "terminal"} to={{ name: "terminal" }} go={go} label={t("work-entry.title")} icon={HISTORY_ICON} />
         </div>
         {adding.dialog}
       </div>
@@ -706,19 +705,21 @@ export function NavGrid({ showHubNotice, pages, more = [], activeKey, go, onNavi
 function MorePages({ more, reg, hover, activeKey, go }: { more: NavPage[]; reg: RegFn; hover: (k: string | null) => void; activeKey: string; go: GoFn }) {
   const [folded, toggle] = useFolded("pages-more", true, { all: false, holds: more.some((p) => p.k === activeKey) });
   const counted = more.filter((p) => p.badge !== undefined);
+  const moreLabel = t("sidebar.more_pages_count", { count: more.length });
+  const countedTitle = counted.map(pageLabel).join(t("sidebar.list_separator"));
   return (
     <>
       <button
         type="button"
         onClick={toggle}
         aria-expanded={!folded}
-        title={counted.map(pageLabel).join(t("sidebar.list_separator")) || undefined}
+        aria-label={moreLabel}
+        title={countedTitle || moreLabel}
         className="touch-hit relative z-10 flex w-full items-center gap-2 rounded-[7px] px-2 sidebar-row text-left transition-[background-color,transform] duration-150 hover:bg-hover active:scale-[0.98] [@media(pointer:coarse)]:min-h-11"
       >
         <span className="text-ink-3"><Icon name="more" size={14} stroke={1.8} /></span>
         <span className="min-w-0 flex-1 truncate text-[13px] text-ink-2">{t("sidebar.more_pages")}</span>
         {folded && counted.length > 0 && <span aria-hidden className={cx("size-1.5 rounded-full", DOT_CLASS[counted[0].badgeTone ?? "accent"])} />}
-        <span className="text-[11px] text-ink-3 tabular-nums">{more.length}</span>
         <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 text-ink-3 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
       </button>
       <Collapse open={!folded} sidebarFold>
