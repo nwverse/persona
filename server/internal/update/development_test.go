@@ -143,7 +143,7 @@ func TestDevelopmentBackupFailureRotation(t *testing.T) {
 		})
 		var failure backupFailure
 		if !errors.As(err, &failure) || failure.Reason != reason || strings.Join(steps, ",") != "preflight" {
-			t.Fatalf("unexpected failure or steps: %+v %v", failure, steps)
+			t.Fatalf("unexpected failure or steps: reason %q, want %q; steps %v; err %v", failure.Reason, reason, steps, err)
 		}
 	}
 	run("directory")
