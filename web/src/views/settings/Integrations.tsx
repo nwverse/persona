@@ -37,9 +37,6 @@ import { ExtensionLogo } from "../../ui/ExtensionLogo";
 import { Icon } from "../../ui/icons";
 import { Segmented } from "../assistant/parts";
 import { OfflineState, useShownOffline } from "../ManagerParts";
-import { MarketCatalog, MarketItem, Markets } from "./ExtensionMarket";
-import { ExtensionUI } from "./ExtensionView";
-import { IntegrationDetail } from "./IntegrationDetail";
 import { OwnerMark } from "./OwnerMark";
 import { SentSettings } from "./SentSettings";
 import { Group, Pill, Row, SettingsHint } from "./SettingsParts";
@@ -63,6 +60,12 @@ import {
   type IntegrationTone,
   type LarkGatewaySummary,
 } from "./integrations/catalog";
+
+const IntegrationDetail = lazyPage(() => import("./IntegrationDetail").then((m) => m.IntegrationDetail));
+const MarketCatalog = lazyPage(() => import("./ExtensionMarket").then((m) => m.MarketCatalog));
+const MarketItem = lazyPage(() => import("./ExtensionMarket").then((m) => m.MarketItem));
+const Markets = lazyPage(() => import("./ExtensionMarket").then((m) => m.Markets));
+const ExtensionUI = lazyPage(() => import("./ExtensionView").then((m) => m.ExtensionUI));
 
 // Lazily load SourcesUI (and its SourcesGraph chunk) only when opening the Data Flow view or a push source detail.
 const LazySourcesUI = lazyPage(() => import("../subscriptions/SourcesUI").then((m) => m.SourcesUI));
@@ -290,25 +293,32 @@ function IntegrationExtensionPage({
         <IconButton icon="retry" label={t("settings-extensions.redraw")} onClick={() => setReloadCount((x) => x + 1)} />
       </div>
       <ExtensionOwnerScope owner={id}>
-        <ExtensionUI key={reloadCount} extension={id} ui={ui} title={title} manager={manager} onWide={onWide} />
+        <Suspense fallback={<Loading />}>
+          <ExtensionUI key={reloadCount} extension={id} ui={ui} title={title} manager={manager} onWide={onWide} />
+        </Suspense>
       </ExtensionOwnerScope>
     </>
   );
 }
 
-export function Integrations({
+export function Integrations(props: IntegrationsProps) {
+  const picked = useChosenManager();
+  return <IntegrationsForManager key={picked ?? ""} {...props} picked={picked} />;
+}
+
+function IntegrationsForManager({
+  picked,
   open,
   onOpen,
   twoCol = false,
   headerBack = false,
   onSettings,
   onPageWide,
-}: IntegrationsProps) {
+}: IntegrationsProps & { picked: string | null }) {
   const route = useMemo(() => parseIntegrationsSub(open), [open]);
   const go = (next: IntegrationsRoute) => onOpen(formatIntegrationsSub(next));
   const drillDown = (next: IntegrationsRoute) => onOpen(formatIntegrationsSub(next), true);
 
-  const picked = useChosenManager();
   const owner = otherManager(picked ?? undefined);
   const effectiveManager = ("manager" in route ? route.manager : undefined) ?? owner;
   const scope = useScope();
@@ -335,86 +345,59 @@ export function Integrations({
   const [channels, setChannels] = useState<Channel[]>([]);
   const [connectors, setConnectors] = useState<HubConnector[]>([]);
   const [subscriptions, setSubscriptions] = useState<HubSubscription[]>([]);
-  const [mailAccounts, setMailAccounts] = useState<MailAccount[] | null>(null);
-  const [larkStatus, setLarkStatus] = useState<LarkGatewaySummary | null>(null);
+  const [mailAccounts, setMailAccounts] = useState<MailAccount[] | null>();
+  const [larkStatus, setLarkStatus] = useState<LarkGatewaySummary | null>();
   const [feishuBotStatus, setFeishuBotStatus] = useState<FeishuBotStatus | null>(null);
-  const [hasFeishuBot, setHasFeishuBot] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [partialErrors, setPartialErrors] = useState<string[]>([]);
   const [sourcesReload, setSourcesReload] = useState(0);
 
+  const seq = useRef(0);
   const loadSubscriptionsOnly = useCallback(async () => {
     if (!hasSubscriptions && !hasInboxSources) {
       setSubscriptions([]);
       return;
     }
+    const mine = seq.current;
     const list = await listSubscriptions(owner).catch(() => null);
-    if (list) setSubscriptions(list);
+    if (mine === seq.current && list) setSubscriptions(list);
   }, [hasSubscriptions, hasInboxSources, owner]);
 
-  const seq = useRef(0);
   const loadAll = useCallback(async () => {
     const mine = ++seq.current;
     setLoading(true);
-    const errors: string[] = [];
+    setPartialErrors([]);
+    // Publish each result on arrival. Only the empty state and final counts need every answer.
+    const publish = <T,>(apply: (result: T) => void) => (result: T) => {
+      if (mine === seq.current) apply(result);
+    };
+    const report = publish((error: unknown) => setPartialErrors((errors) => [...errors, errorText(error)]));
 
-    const [extRes, chRes, connRes, mailRes, larkRes, botRes, subsRes] = await Promise.all([
+    const applyExtensions = (extensions: HubExtension[], markets: boolean) => {
+      setExtensions(extensions);
+      setMarkets(markets);
+    };
+    await Promise.all([
       hasExtensions
-        ? listExtensionsInfo().catch((e) => {
-            errors.push(errorText(e));
-            return null;
-          })
-        : Promise.resolve(null),
-      hasChannels
-        ? listChannels(owner).catch((e) => {
-            errors.push(errorText(e));
-            return null;
-          })
-        : Promise.resolve(null),
-      hasConnectors
-        ? listConnectors().catch((e) => {
-            errors.push(errorText(e));
-            return null;
-          })
-        : Promise.resolve(null),
-      hasMail
-        ? loadMailAccounts(owner).catch(() => null)
-        : Promise.resolve(null),
-      hasLark
-        ? api<LarkGatewaySummary>("/lark/status").catch(() => null)
-        : Promise.resolve(null),
-      botStatus().catch(() => null),
-      hasSubscriptions || hasInboxSources
-        ? listSubscriptions(owner).catch(() => null)
-        : Promise.resolve(null),
+        ? listExtensionsInfo().then(publish((result) => applyExtensions(result.extensions, result.markets)), report)
+        : applyExtensions([], false),
+      hasChannels ? listChannels(owner).then(publish(setChannels), report) : setChannels([]),
+      hasConnectors ? listConnectors().then(publish(setConnectors), report) : setConnectors([]),
+      hasMail ? loadMailAccounts(owner).catch(() => null).then(publish(setMailAccounts)) : setMailAccounts(null),
+      hasLark ? api<LarkGatewaySummary>("/lark/status").catch(() => null).then(publish(setLarkStatus)) : setLarkStatus(null),
+      botStatus().catch(() => null).then(publish(setFeishuBotStatus)),
+      loadSubscriptionsOnly(),
     ]);
 
     if (mine !== seq.current) return;
-    if (extRes) {
-      setExtensions(extRes.extensions);
-      setMarkets(extRes.markets);
-    } else if (!hasExtensions) {
-      setExtensions([]);
-      setMarkets(false);
-    }
-    if (chRes) setChannels(chRes);
-    else if (!hasChannels) setChannels([]);
-    if (connRes) setConnectors(connRes);
-    else if (!hasConnectors) setConnectors([]);
-    if (subsRes) setSubscriptions(subsRes);
-    else if (!hasSubscriptions && !hasInboxSources) setSubscriptions([]);
-    setMailAccounts(mailRes);
-    setLarkStatus(larkRes);
-    setFeishuBotStatus(botRes);
-    setHasFeishuBot(botRes !== null);
-    setPartialErrors(errors);
     setLoaded(true);
     setLoading(false);
-  }, [hasExtensions, hasChannels, hasConnectors, hasMail, hasLark, hasSubscriptions, hasInboxSources, owner]);
+  }, [hasExtensions, hasChannels, hasConnectors, hasMail, hasLark, loadSubscriptionsOnly, owner]);
 
   useEffect(() => {
     void loadAll();
+    return () => { seq.current++; };
   }, [loadAll]);
 
   // Refresh subscriptions when a subscription state changes on the hub (at most once per second).
@@ -471,15 +454,15 @@ export function Integrations({
         channels,
         connectors: ownConnectors,
         subscriptions,
-        hasMail,
-        hasLark,
-        hasFeishuBot,
+        hasMail: hasMail && mailAccounts !== undefined,
+        hasLark: hasLark && larkStatus !== undefined,
+        hasFeishuBot: feishuBotStatus !== null,
         mailAccounts,
         larkStatus,
         feishuBotStatus,
         ownerManager: owner,
       }),
-    [ownExtensions, channels, ownConnectors, subscriptions, hasMail, hasLark, hasFeishuBot, mailAccounts, larkStatus, feishuBotStatus, owner],
+    [ownExtensions, channels, ownConnectors, subscriptions, hasMail, hasLark, mailAccounts, larkStatus, feishuBotStatus, owner],
   );
 
   const counts = useMemo(
@@ -513,32 +496,40 @@ export function Integrations({
   // Full-width subviews (Market catalog, Market item, Manage markets, Extension UI page, Sent records).
   if (route.kind === "catalog") {
     return (
-      <MarketCatalog
-        backLabel={t("settings-integrations.back")}
-        onBack={headerBack ? undefined : () => onOpen(null)}
-        onOpen={(it) => go({ kind: "item", market: it.market, id: it.id })}
-        onManageMarkets={() => go({ kind: "markets" })}
-      />
+      <Suspense fallback={<Loading />}>
+        <MarketCatalog
+          backLabel={t("settings-integrations.back")}
+          onBack={headerBack ? undefined : () => onOpen(null)}
+          onOpen={(it) => go({ kind: "item", market: it.market, id: it.id })}
+          onManageMarkets={() => go({ kind: "markets" })}
+        />
+      </Suspense>
     );
   }
   if (route.kind === "item") {
     return (
-      <MarketItem
-        key={open ?? ""}
-        market={route.market}
-        id={route.id}
-        manager={effectiveManager}
-        onBack={
-          headerBack
-            ? undefined
-            : () => go(route.manager ? { kind: "extension", id: route.id, manager: route.manager } : { kind: "catalog" })
-        }
-        onInstalled={(id) => go({ kind: "extension", id, manager: effectiveManager })}
-      />
+      <Suspense fallback={<Loading />}>
+        <MarketItem
+          key={open ?? ""}
+          market={route.market}
+          id={route.id}
+          manager={effectiveManager}
+          onBack={
+            headerBack
+              ? undefined
+              : () => go(route.manager ? { kind: "extension", id: route.id, manager: route.manager } : { kind: "catalog" })
+          }
+          onInstalled={(id) => go({ kind: "extension", id, manager: effectiveManager })}
+        />
+      </Suspense>
     );
   }
   if (route.kind === "markets") {
-    return <Markets onBack={headerBack ? undefined : () => go({ kind: "catalog" })} />;
+    return (
+      <Suspense fallback={<Loading />}>
+        <Markets onBack={headerBack ? undefined : () => go({ kind: "catalog" })} />
+      </Suspense>
+    );
   }
   if (route.kind === "page") {
     return (
@@ -739,7 +730,7 @@ export function Integrations({
         </div>
       )}
 
-      {!loaded && (
+      {!loaded && filtered.length === 0 && (
         <Group anchor="integrations">
           <div className="px-4 py-3">
             <Loading />
@@ -779,7 +770,7 @@ export function Integrations({
         </Group>
       )}
 
-      {loaded && builtins.length > 0 && (
+      {builtins.length > 0 && (
         <Group
           anchor="integrations"
           title={
@@ -793,7 +784,7 @@ export function Integrations({
         </Group>
       )}
 
-      {loaded && pushSources.length > 0 && (
+      {pushSources.length > 0 && (
         <Group
           anchor="push-sources"
           title={
@@ -807,7 +798,7 @@ export function Integrations({
         </Group>
       )}
 
-      {loaded && installedExtensions.length > 0 && (
+      {installedExtensions.length > 0 && (
         <Group
           anchor={builtins.length === 0 && pushSources.length === 0 ? "integrations" : "extensions"}
           title={
@@ -837,17 +828,19 @@ export function Integrations({
       onReload={() => setSourcesReload((n) => n + 1)}
     />
   ) : showDetail && resolvedTarget ? (
-    <IntegrationDetail
-      target={resolvedTarget}
-      integrationsV2={true}
-      onBack={headerBack || twoCol ? undefined : () => onOpen(null)}
-      onUninstalled={() => onOpen(null)}
-      onPage={(extId, uiId, manager) => go({ kind: "page", id: extId, ui: uiId, manager })}
-      onUpgrade={(market, extId, manager) => go({ kind: "item", market, id: extId, manager })}
-      onSettings={onSettings}
-      onOpenConnector={(id, manager) => drillDown({ kind: "connector", id, manager })}
-      onOpenSources={(sourceState, manager) => drillDown({ kind: "sources", ...(sourceState ? { state: sourceState } : {}), ...(manager ? { manager } : {}) })}
-    />
+    <Suspense fallback={<Loading />}>
+      <IntegrationDetail
+        target={resolvedTarget}
+        integrationsV2={true}
+        onBack={headerBack || twoCol ? undefined : () => onOpen(null)}
+        onUninstalled={() => onOpen(null)}
+        onPage={(extId, uiId, manager) => go({ kind: "page", id: extId, ui: uiId, manager })}
+        onUpgrade={(market, extId, manager) => go({ kind: "item", market, id: extId, manager })}
+        onSettings={onSettings}
+        onOpenConnector={(id, manager) => drillDown({ kind: "connector", id, manager })}
+        onOpenSources={(sourceState, manager) => drillDown({ kind: "sources", ...(sourceState ? { state: sourceState } : {}), ...(manager ? { manager } : {}) })}
+      />
+    </Suspense>
   ) : null;
 
   if (detailPane && !twoCol) {

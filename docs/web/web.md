@@ -1044,7 +1044,7 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
 
   Verification image removed; see the associated PR.
 
-- **Settings** (`/settings`, opened from the sidebar or top-left menu, `src/views/Settings.tsx`): categories are shown according to the hub's capabilities, using the same endpoints as the App's settings. Channels is its own category immediately before Connectors (#2196); Settings has no "Meet Persona" entry, and the profile page is still opened from the chat menu.
+- **Settings** (`/settings`, opened from the sidebar or top-left menu, `src/views/Settings.tsx`): categories are shown according to the hub's capabilities, using the same endpoints as the App's settings. With unified integrations off, Channels is its own category immediately before Connectors (#2196); Settings has no "Meet Persona" entry, and the profile page is still opened from the chat menu.
   Categories come in three groups, in this order (`NAV_GROUPS` in `settings/nav.ts`, `settings/SettingsGroups.tsx`; [managers.md](../assistant/managers.md) "The current assistant"):
   **"<name>'s settings"** (the current assistant's avatar with its status, its name, and **Switch**, which opens the sidebar's list of assistants: the same rows from `views/AssistantSwitcher.tsx` `useAssistantList`, shown with one assistant too, not on a hub without a roster): Models, Assistant profile (`?tab=persona`: About me, memory, skills, scheduled tasks, where it runs, then session triage), Channels, Connectors, Extensions, Knowledge selection and Agents (Claude Code / Codex on its computers), under the line "Only <name>'s own settings are shown. To change another assistant's, switch to it first.";
   **This device**: General (the default appearance, text size, language, the start page, sidebar pages, translation, agent preferences, the hubs this browser knows and This browser), Notifications, Shortcuts, and **Advanced** (› Appearance: the non-default looks — theme color, extension theme, interface/code fonts and colored sidebar icons, #13398);
@@ -1154,7 +1154,7 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
   **New and old APIs** (#1845, `lib/extension-api.ts`, [extensions.md](../extensions/extensions.md) ("Naming and compatibility")): when hello features contain `extensions`, request `/api/v1/extensions/…` (fields `extensions` / `extension` / `extension_name`);
   otherwise (old hub, or before hello) request `/api/v1/plugins/…` (`plugins` / `plugin` / `plugin_name`). Read both field sets; market previews send both keys in `{market, extension, plugin}`.
   Listen for `extension_ui`; a hub with the new API also sends the old `plugin_ui` for old Apps, and the web only reads `plugin_ui` on old hubs. Market signature status (#1848's `signature`) appears in the market row ("Signature verified", "Unsigned", and so on).
-  **Channels** (#1466, #2196, `settings/Channels.tsx`, logic in `lib/channels.ts`, [channels.md](../extensions/channels.md); shown only when hub features contain `channels`): its own category in Settings, before Connectors, no longer nested in the extension list.
+  **Channels** (#1466, #2196, `settings/Channels.tsx`, logic in `lib/channels.ts`, [channels.md](../extensions/channels.md); shown only when hub features contain `channels`): its own category in legacy Settings, before Connectors, no longer nested in the extension list.
   Open `?tab=channels`: three groups, Persona (clients), Connected, and Available to install (from markets, opens the market's details). Each row has the channel's mark (Lark uses its own, others an icon by kind), name, account or description, status dot and text.
   A single channel `?tab=channels&channel=<id>` (old links `?tab=extensions&extension=-channels[/<id>]`, `?tab=plugins&plugin=-channels[/<id>]` still open the corresponding channel): status, account, last message; Enabled; when unbound, Binding follows `bind` steps (fields, QR code drawn from the hub with Save QR code, or a large pairing code with polling); when bound, account and Unbind (confirmation first).
   Send messages to (Main chat / New chat / choose an assistant chat), toggles drawn from `features`, counts of answers and questions waiting, recently used chats, What it can do, Send test message (only to yourself), and an extra More settings row when `settings_url` exists (Lark bot opens its original dialog).
@@ -2413,6 +2413,12 @@ Settings search entries for Inbox Sources redirect cleanly into the unified view
 when enabled, and `/settings/integrations/...` links (including `-sources...`) fall back cleanly to the corresponding legacy tab
 (restoring the standalone `Inbox Sources` menu, routes, `manager`, and `state`) when disabled, with zero data migration or data
 loss. Older hubs that do not expose boolean `integrations_v2` degrade gracefully to a read-only row with an update hint.
+Under the trial, Assistant settings shows the state of `inbox_todo_forward` and links to its single editable switch in
+**Data flow** (#16190), preserving the assistant named in the link. GitHub detail opens saved Repositories in Assistant
+settings. Mail, Feishu and sources with history link to the sync scope in Knowledge. Turning off the trial restores the
+original forwarding switch. See the [split layout](../design/DESIGN_SYSTEM.md#integrations--extensions-in-web-settings),
+[channel settings](../extensions/channels.md#7-ui) and [connector overview](../extensions/connectors.md).
+
 Graduation (making the new experience the default for at least one release with rollback kept) or removal is tracked in #14802.
 
 **Terminal renderer** (`web/src/lib/labs-terminal.ts` over `web/src/lib/labs.ts`). Single pane terminals
@@ -3704,6 +3710,7 @@ Compared item by item with iOS as the reference and Android for comparison. #297
 | Connectors: Lark | Yes | #297 | Read-only status |
 | Connectors: Lark › Show messages on home screen | Yes | #1327 | Only applies to the current browser |
 | Lark anti-recall and edit history (Message display) | Yes | #2900 | The toggles are shared with the Lark gateway web page for the current account; encrypted old versions only show the public display (iOS can show the body after unlocking) |
+| Integrations & Extensions (Labs) | Web first | #14802, #16190 | One detail per service, channel routing and Data flow. Assistant links to its forwarding switch. GitHub and history-capable sources link to Repositories and Knowledge settings respectively. |
 | Connectors: Lark bot (status, credentials, pairing, what it can do) | Yes | #1325 | Settings › Connectors, opens as a dialog; copying the pairing code uses the clipboard (falls back to execCommand over http) |
 | hub version and updates (check, update, update now, auto-update, history, Docker commands) | Yes | #1325, #2897, #15240 | Settings › hub shows second-level local times and a stage and step pipeline during updates. The hub notice row below the filter bar in the Agents sidebar is chosen by `hubNotice` in `lib/hub-update.ts`. The hub hosts the web app itself, so the app and hub version compatibility notices are inapplicable here. |
 | Whole-install Recovery overview, offline bundle inspection, temporary-database verification | Web first | #12553 | Settings › Hub › Recovery, separate from update program backups and Machines. Full-credential, audited reads only; no create, restore, download, key export, or service-starting drill. Missing tools, Compose, unsafe inventory, changed bundles, and unavailable restore history stay explicitly unsupported or unverified. See [server.md](../server/server.md) "Settings → Hub → Recovery" |

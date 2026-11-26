@@ -45,6 +45,8 @@ func TestDevelopmentPreviewAndLatestTarget(t *testing.T) {
 				}
 				*result.(*update.DevelopmentCandidate) = remote
 				return resolveErr
+			case "preflight":
+				return nil
 			case "build":
 				built = append(built, *input["candidate"].(*update.DevelopmentCandidate))
 			default:
