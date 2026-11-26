@@ -27,7 +27,7 @@ const { MachineDetail } = await import("./MachineDetail");
 let host: HTMLDivElement;
 let root: Root;
 const flush = async () => {
-  for (let i = 0; i < 5; i++) await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+  await act(async () => { await vi.dynamicImportSettled(); });
 };
 
 beforeEach(() => {

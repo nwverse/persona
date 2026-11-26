@@ -408,7 +408,7 @@ describe("the launcher sheet", () => {
     expect($("[data-launcher=codex]")?.textContent).toContain("连续失败 3 次");
     expect($("[data-launcher=team]")?.textContent).toContain("Team relay");
     expect($("[data-launcher=team]")?.textContent).toContain("401 invalid x-api-key");
-    expect($("[data-testid=healthy-launchers]")?.textContent).toBe("claude");
+    expect($("[data-testid=healthy-launchers]")?.textContent).toBe("Claude Code");
     await click($("[data-launcher=team] [data-testid=test-again]"));
     expect(posts("/launchers/health/check").map((c) => c.path)).toEqual(["/api/v1/launchers/health/check?machine=laptop&launcher=team"]);
     expect(got).toEqual([[expect.objectContaining({ launcher: "team", state: "ok" })]]);
