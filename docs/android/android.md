@@ -1282,7 +1282,8 @@ project here: what they produced is shown by pages another module or the core dr
 same rule (`ModuleRegistry.isActive(HubModule, features)`) without listing them in `Modules.kt`, so
 `-Ppersona.modules` is unaffected. Off takes away the module's new activity and entry points and nothing else: what it
 produced earlier stays listed, readable and searchable (#13430). Today those are `HubModule.Recording`
-(`module.recording`) and `HubModule.Lark` (`module.lark`, below). For recordings:
+(`module.recording`), `HubModule.Lark` (`module.lark`) and `HubModule.Mail` (`module.mail`), the last two below. For
+recordings:
 
 - The Knowledge list, search, deep links and a recording's page (transcript, stored minutes, facts, copy, share) are
   as they are with the module on; they read the core's `kb` routes, which the hub keeps.
@@ -1314,6 +1315,26 @@ hands that down:
   and all stay with the module off. `/agent` in Lark (`lark_agent`) is the extension's channel and stays listed too.
 - On, or a hello without `modules`: unchanged; `LarkBotEntry.listing` hands back the same `ChannelManagement`.
   Tests: `ModuleRegistryTest`, `LarkBotModuleOffTest`, `LarkBotModuleOffShotsTest`.
+
+`HubModule.Mail` (#15995) is mail: accounts, a message read in full with its HTML and attachments, flags and sending
+are the module's routes (everything under `/api/v1/mail`), and each of those is fetched live from the mail server. What
+the hub stored of a mail is the Inbox item: sender, date, summary, a preview and up to 3,000 characters of the newest
+message's text (`context` of `GET /api/v1/inbox/{id}`), all core routes. The shell reads the flag once
+(`mailAccessOf` in `:app`, provided as `LocalMailAccess` beside `LocalLarkFeatures`; the demo is always live) into the
+closed `MailAccess` (`Live`, `StoredOnly`, in `:core:designsystem`), and pages read only that:
+
+- `StoredOnly`, Settings › Connectors has no Mail row and does not read the accounts; its pages (`mail`, `mail-add`,
+  reached by a link or a saved page) show their title, the way back and one line (`settings_mail_module_off`).
+- `StoredOnly`, a mail opened from the Inbox is `MailStoredScreen`, not the live page: it asks no mail route (no
+  message, accounts, flags or attachment, so opening it marks nothing read) and shows the item's sender, date and
+  summary, the stored text, and one line that the full message and its attachments cannot be loaded
+  (`inbox_mail_module_off`). The hub does not tell clients whether the stored text was clipped, so the line does not
+  claim it. Hand to AI and Done are the Inbox's own and stay.
+- `StoredOnly`, nothing that would send a mail is offered: New mail in the Inbox, reply / reply all / forward, the reply
+  sheet on a mail's event page, the AI's draft with its Send and a suggested reply for a mail
+  (`MailAccess.offersReply`). Other sources are untouched.
+- `Live` (the module on, no hello, or a hub without `modules`): unchanged, with the same requests as before.
+  Tests: `ModuleRegistryTest`, `HubMailTest`, `MailModuleOffTest`, `MailModuleOffSettingsTest`.
 
 ```sh
 cd android

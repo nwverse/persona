@@ -59,6 +59,20 @@
 | New hub, older manager | `agents.start_params` keeps the older synchronous model naming behavior. The older manager does not understand the completion event, so the new guarded late rename requires a manager upgrade too. |
 | Older hub, new manager | Start parameters carry the local placeholder without a model wait. An older hub does not emit the completion event for a synchronous start and retains its legacy asynchronous post-start behavior; upgrade the hub for the guarded completion path. |
 
+### On-demand assistant skills
+
+| Pair | What happens |
+| --- | --- |
+| New manager, older node | `assistant.prepare.claude_md` retains the complete work and rich-view procedures. The older node ignores `work_guide_md` and `views_guide_md`, so it never refers to a built-in skill its binary does not carry. |
+| Older manager, new node | An absent `views_guide_md` keeps the manager's complete rich-view procedure. Existing `work_guide_md` behavior is unchanged. |
+| New manager and node | The node syncs both native skill roots before writing instructions. It selects compact rich-view guidance only when both managed `persona-views` copies are ready; if work guidance was requested, its readiness is checked independently. |
+| Local same-name skill | A newly introduced built-in does not adopt or replace an existing `persona-views` directory. The node retains the complete instructions because that local directory is not a verified managed copy. The managed directory's marker and a separate ownership file must be hard links to the same inode, so copying and editing the directory revokes ownership. If a later per-send sync finds a user replacement, the node restores its saved complete instructions and stays on them until a new prepare verifies the managed guide. |
+| Node downgrade before the next prepare | The shared legacy inventory does not list `persona-views`. An older node therefore does not remove it as an unknown managed built-in, and a process resumed with compact instructions can still read the on-demand skill. A cached same-name extension disables compact selection because an older node may copy it over the managed guide; if that happens, the next runtime sync restores the saved complete instructions. The next prepare from an older manager also restores the complete inline procedure. |
+
+A working supervisor started with the legacy complete policy keeps that exact policy across a manager upgrade until an idle send. Main, background and side conversations without a direction record persist their selected role in `assistant.supervision_roles`; existing `direction.RoleInEffect` records remain authoritative. A new main or background conversation records its compact role only after the node accepts the start and returns the conversation id. Other role changes share the send's outcome settlement: a refused idle send restores the previous baseline, and a policy-only lookup cannot create one. Leader membership transitions inherit only a previously recorded role, before the new membership becomes visible; a pre-upgrade process without that evidence keeps the complete policy. A missing or unreadable baseline always fails closed rather than changing a working process's fingerprint.
+
+A manager downgrade while a role-filtered supervisor is working is a deliberate compatibility limit, not a seamless policy switch. The older manager presents the legacy complete fingerprint, so the node keeps the running process and its policy unchanged and refuses that send as busy; existing supervision delivery retry waits for idle, while a direct follow-up can receive the busy response. Once idle, the older manager's complete policy can be accepted normally. The node's supervision-policy fingerprint and busy guard are not relaxed for this downgrade case.
+
 ### MCP namespace / tools
 
 The hub sends its feature list in `devices.connected`, matching the capabilities advertised in `hello.features`.
@@ -130,6 +144,19 @@ unrecognized enum to `unknown`. The four terminal messages are a presentation ma
 `unknown | approval | answer | computer` is the entire wire state. Nothing is persisted, and removing the pending call
 before its final socket write prevents late updates after the answer. The peer-combination table and terminal messages
 are in [protocol.md](protocol.md) ("MCP tools (`personad mcp`)").
+
+### Task workspace sources
+
+The read-only `task.workspace.capabilities` probe adds optional `empty_repositories` and `local_git` fields.
+The base `task_workspace_v1` capability and the node protocol floor stay the same.
+
+| Pair or state | Behavior |
+| --- | --- |
+| New manager and capable node | New isolated task dispatches use node naming and preparation. A local Git source is frozen to its actual commit. A folder-only workspace uses the empty-container capability. |
+| New manager and older node | Ordinary dispatch keeps its engine checkout path when the probe omits local support or is unknown. A transport error remains a failure of that attempt. A bound-remote backend plan keeps using the original capability. |
+| Older manager and new node | The manager still sends the original preparation and launch fields or calls the engine's checkout methods. A legacy checkout keeps its existing path and ownership rules. |
+| Node rolled back after a workspace operation was saved | A retry keeps the saved operation and computer. If the peer cannot read the selected source, the operation can continue after the node is updated. The manager does not replay the start through the engine. |
+| Older client and new manager | Optional `system_defaults` and `branch_sources` can be ignored. The naming-plan digest and fields for existing remote plans are unchanged. |
 
 ### Assistant conversations on the CLI only (#9799)
 

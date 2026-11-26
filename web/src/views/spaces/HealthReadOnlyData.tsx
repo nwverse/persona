@@ -124,7 +124,7 @@ function ReadOnlyMemory() {
           <div className="divide-y divide-line">
             {entries.map((e) => (
               <button key={e.file.name} type="button" onClick={() => setOpen(e)} className="flex w-full min-w-0 flex-col items-start px-4 py-2.5 text-left transition-colors hover:bg-hover">
-                <span className="w-full truncate text-[13px] font-medium text-ink">{e.title}</span>
+                <span className="w-full truncate text-meta font-medium text-ink">{e.title}</span>
                 {e.detail && <span className="w-full truncate text-label text-ink-3">{e.detail}</span>}
               </button>
             ))}

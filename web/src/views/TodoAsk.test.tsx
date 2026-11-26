@@ -207,6 +207,21 @@ describe("a to-do's row", () => {
 });
 
 describe("a to-do's page", () => {
+  it("shows the verification summary and direct deliverable, with an empty fallback on older hubs", () => {
+    const summary = "Both routes have step-free access.";
+    const link = "https://docs.example.com/routes";
+    const ask = { verdict: "Please verify the result", asked_at: ASKED };
+    act(() => root.render(<TodoAskPanel todo={todo({ ask: { ...ask, summary, link } })} />));
+    expect(host.textContent).toContain(summary);
+    expect(host.querySelector("a")?.href).toBe(link);
+    for (const legacy of [ask, { ...ask, link: location.origin + "/s/node/worker" }]) {
+      act(() => root.render(<TodoAskPanel todo={todo({ ask: legacy })} />));
+      expect(host.textContent).toContain(ask.verdict);
+      expect(host.textContent).not.toContain(summary);
+      expect(host.querySelector("a")).toBeNull();
+    }
+  });
+
   it("lists parked work outside Done and counts it under the badge's name", async () => {
     await drawList([todo({
       seen_at: new Date(Date.now() + 1000).toISOString(),

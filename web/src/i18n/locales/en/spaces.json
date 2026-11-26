@@ -109,5 +109,6 @@
   "memory_empty": "No memories yet.",
   "memory_load_failed": "Couldn't load memory: {error}",
   "load_earlier": "Load earlier messages",
+  "close": "Close",
   "icon_sun": "Sun"
 }

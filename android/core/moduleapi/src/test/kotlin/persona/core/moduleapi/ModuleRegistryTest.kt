@@ -95,7 +95,26 @@ class ModuleRegistryTest {
         // Each hub module answers for itself.
         assertTrue(ModuleRegistry.isActive(HubModule.Recording, setOf("modules", "module.recording")))
         assertFalse(ModuleRegistry.isActive(HubModule.Recording, setOf("modules", "module.lark")))
-        assertEquals(listOf(HubModule.Recording, HubModule.Lark), HubModule.entries)
+        assertEquals(listOf(HubModule.Recording, HubModule.Lark, HubModule.Mail), HubModule.entries)
+    }
+
+    /** The hub's mail module (#15995): the same rule under its own flag. */
+    @Test fun theHubsMailModuleFollowsTheSameRule() {
+        assertEquals("mail", HubModule.Mail.id)
+        assertEquals("module.mail", HubModule.Mail.feature)
+        // No hello yet, demo mode and an older hub without the marker: on.
+        assertTrue(ModuleRegistry.isActive(HubModule.Mail, emptySet()))
+        assertTrue(ModuleRegistry.isActive(HubModule.Mail, setOf("extensions", "inbox_sources")))
+        // A flag without the marker changes nothing, and neither does its absence.
+        assertTrue(ModuleRegistry.isActive(HubModule.Mail, setOf("module.mail")))
+        assertTrue(ModuleRegistry.isActive(HubModule.Mail, setOf("module.lark")))
+        // A hub that publishes module flags: on with its flag, off without it, whatever the other modules are.
+        assertTrue(ModuleRegistry.isActive(HubModule.Mail, setOf("modules", "module.mail")))
+        assertFalse(ModuleRegistry.isActive(HubModule.Mail, setOf("modules")))
+        assertFalse(ModuleRegistry.isActive(HubModule.Mail, setOf("modules", "module.lark", "module.recording")))
+        // Each hub module answers for itself.
+        assertTrue(ModuleRegistry.isActive(HubModule.Lark, setOf("modules", "module.lark")))
+        assertFalse(ModuleRegistry.isActive(HubModule.Lark, setOf("modules", "module.mail")))
     }
 
     @Test fun aFlagWithoutTheMarkerChangesNothing() {

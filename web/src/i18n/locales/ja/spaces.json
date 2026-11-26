@@ -109,5 +109,6 @@
   "memory_empty": "メモリーはまだありません。",
   "memory_load_failed": "メモリーを読み込めませんでした：{error}",
   "load_earlier": "以前のメッセージを読み込む",
+  "close": "閉じる",
   "icon_sun": "太陽"
 }

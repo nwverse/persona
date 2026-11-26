@@ -8,7 +8,12 @@ import Foundation
 /// A closed set with an explicit unknown. Only `off` takes anything away: a phone from before the key (absent), a word
 /// a newer phone writes that this build doesn't know, and a value that is no string all leave the watch as it was.
 /// Foundation only: the watch's widget extension compiles this file for the Record complication.
-nonisolated enum PhoneRecordingAllowance: Hashable, Sendable {
+///
+/// The same word reaches the iPhone's own extensions (#15214): the Home Screen and Lock Screen widgets and the Control
+/// read it from the widgets' snapshot (`HomeSnapshot.recordingModule`), the recording's Live Activity from its content
+/// state (`RecordingActivityAttributes.ContentState.module`). There too absent means allowed, and it is decoded
+/// leniently: a word or a value this build doesn't know is unknown, never a failed file or state.
+nonisolated enum PhoneRecordingAllowance: Hashable, Sendable, Codable {
     /// The hub takes recordings, or says nothing about modules; also what an absent key means.
     case allowed
     /// The hub's recording module is off: a recording made now could never be synced.
@@ -51,6 +56,17 @@ nonisolated enum PhoneRecordingAllowance: Hashable, Sendable {
         case .off: Self.offWire
         case .unknown(let word): word
         }
+    }
+
+    /// As a single word (`wire`). Read leniently: a value that is no string is an unknown word, never a failed decode.
+    init(from decoder: Decoder) throws {
+        let container = try? decoder.singleValueContainer()
+        if let word = try? container?.decode(String.self) { self.init(wire: word) } else { self = .unknown("") }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(wire)
     }
 
     /// New recordings, and marks in a running one, are offered: everything but `off`.
