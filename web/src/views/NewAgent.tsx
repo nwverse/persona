@@ -368,7 +368,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
       setInWorktree(false);
       return;
     }
-    if (preset.machineId && online.some((m) => m.id === preset.machineId)) {
+    if (preset.machineId) {
       setMid(preset.machineId);
       if (preset.cwd !== undefined) {
         presetCwd.current = { mid: preset.machineId, cwd: preset.cwd };
@@ -393,8 +393,8 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   };
 
   useEffect(() => {
-    // a preset's computer (set just above, in the same commit) is not overridden by the first one online
-    if (open && !workspace && !preset?.workspace && !presetCwd.current && (!mid || !online.some((m) => m.id === mid)) && online[0]) setMid(online.find(m => m.id === preset?.machineId)?.id ?? online[0].id);
+    // Keep an explicit target if it disconnects. Starting elsewhere requires a new computer selection.
+    if (open && !workspace && !preset?.workspace && !preset?.machineId && !presetCwd.current && !online.some(m => m.id === mid) && online[0]) setMid(online[0].id);
   }, [open, online, mid, workspace, preset]);
 
   // The launcher a computer's pick puts in once its launchers are read, and the model that goes with it (#2134): a card's own

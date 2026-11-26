@@ -25,6 +25,7 @@ const launched = vi.hoisted(() => [] as Record<string, unknown>[]);
 vi.mock("../lib/new-agent", async (original) => ({ ...(await original<typeof import("../lib/new-agent")>()), launchAgent: (input: Record<string, unknown>) => { launched.push(input); return "local-1"; } }));
 
 import { NewAgent } from "./NewAgent";
+import { t } from "../i18n";
 import { resetModelListsForTests } from "../lib/session-models";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -146,6 +147,13 @@ it("uses the preset computer with its own saved folder when only the computer wa
   await open("machine-only", { machineId: "studio" });
   expect(machineChip("Studio").className).toContain("bg-ink");
   expect(folder()).toBe("/projects/notes");
+  expect(launched).toHaveLength(0);
+});
+
+it("keeps an unavailable preset computer selected until the user chooses another one", async () => {
+  await open("offline-target", { machineId: "nas", cwd: "/projects/notes" });
+  expect(machineChip("NAS").className).toContain("bg-ink");
+  expect(button(t("newagent.start"))!.disabled).toBe(true);
   expect(launched).toHaveLength(0);
 });
 
