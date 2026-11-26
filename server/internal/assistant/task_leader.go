@@ -274,23 +274,24 @@ type leaderScope struct {
 // leaderTaskIn is a worker task as a task leader may plan it: nothing else (no todo_id, attachments, project,
 // user_requested…) is read, an unknown field is refused. Every new worker declares role "worker".
 type leaderTaskIn struct {
-	Title         string   `json:"title"`
-	Prompt        string   `json:"prompt"`
-	Role          string   `json:"role"`
-	Machine       string   `json:"machine"`
-	MachinePolicy string   `json:"machine_policy"`
-	Cwd           string   `json:"cwd"`
-	Launcher      string   `json:"launcher"`
-	Model         string   `json:"model"`
-	Tier          string   `json:"tier"`
-	Effort        string   `json:"effort"`
-	Speed         string   `json:"speed"`
-	Permission    string   `json:"permission"`
-	Readonly      bool     `json:"readonly"`
-	DoneWhen      []string `json:"done_when"`
-	Goal          string   `json:"goal"`
-	ExpectMinutes int      `json:"expect_minutes"`
-	Why           string   `json:"why"`
+	Title            string   `json:"title"`
+	Prompt           string   `json:"prompt"`
+	Role             string   `json:"role"`
+	Machine          string   `json:"machine"`
+	MachinePolicy    string   `json:"machine_policy"`
+	Cwd              string   `json:"cwd"`
+	Launcher         string   `json:"launcher"`
+	Model            string   `json:"model"`
+	Tier             string   `json:"tier"`
+	Effort           string   `json:"effort"`
+	Speed            string   `json:"speed"`
+	Permission       string   `json:"permission"`
+	Readonly         bool     `json:"readonly"`
+	MultiIssueReport bool     `json:"multi_issue_report"`
+	DoneWhen         []string `json:"done_when"`
+	Goal             string   `json:"goal"`
+	ExpectMinutes    int      `json:"expect_minutes"`
+	Why              string   `json:"why"`
 }
 
 // workerTasks reads a leader's task_plan arguments as worker tasks beneath its task.
@@ -307,7 +308,7 @@ func (l *leaderScope) workerTasks(args json.RawMessage) ([]PlanTask, error) {
 	out := make([]PlanTask, 0, len(in.Tasks))
 	for _, t := range in.Tasks {
 		pt := PlanTask{Title: t.Title, Prompt: t.Prompt, Role: t.Role, Machine: t.Machine, MachinePolicy: t.MachinePolicy, Cwd: t.Cwd,
-			Launcher: t.Launcher, Model: t.Model, Tier: t.Tier, Effort: t.Effort, Speed: t.Speed, Permission: t.Permission, Readonly: t.Readonly,
+			Launcher: t.Launcher, Model: t.Model, Tier: t.Tier, Effort: t.Effort, Speed: t.Speed, Permission: t.Permission, Readonly: t.Readonly, MultiIssueReport: t.MultiIssueReport,
 			DoneWhen: t.DoneWhen, Goal: t.Goal, ExpectMinutes: t.ExpectMinutes, Why: t.Why, Parent: l.task.ID, Project: l.task.Project}
 		if strings.TrimSpace(pt.Machine) == "" {
 			pt.Machine = l.agent.MachineID
@@ -590,7 +591,7 @@ func (e leaderEscalated) Unwrap() error { return e.err }
 // batch, including members suppressed by delivered dedup history (#5732). sent determines the text actually carried;
 // receipts includes the filtered members whose turn receipts close on delivery.
 func (s *Service) sendToLeader(ctx context.Context, lead TodoAgent, text string, all, sent, receipts []superviseSignal, delivered func(context.Context)) error {
-	if !s.autoSupervisionOn(ctx) {
+	if !supervisionSignalsAllowed(s.supervisionMode(ctx), sent) {
 		return errSupervisionSuppressed // the last look before the send (supervise_switch.go)
 	}
 	ctx = supervisionSourceContext(ctx, sent)
@@ -648,7 +649,7 @@ func (s *Service) leaderDelivered(ctx context.Context, lead TodoAgent, entries [
 // sendToLeaderNow is one attempt to put text into the leader's session, resuming it if closed; it waits up to
 // leaderResumeTime. Each attempt has its own time, so it can be called from a goroutine that outlives any request.
 func (s *Service) sendToLeaderNow(ctx context.Context, lead TodoAgent, text string, kept []superviseSignal) error {
-	if !s.autoSupervisionOn(ctx) {
+	if !supervisionSignalsAllowed(s.supervisionMode(ctx), kept) {
 		return errSupervisionSuppressed // also a retry or resume that was already running
 	}
 	ctx = supervisionSourceContext(ctx, kept)
@@ -665,8 +666,8 @@ func (s *Service) sendToLeaderNow(ctx context.Context, lead TodoAgent, text stri
 // acknowledges the complete original batch, including filtered members (#5732, #9607).
 func (s *Service) escalateLeaderMessage(lead TodoAgent, all, sent, receipts []superviseSignal, text string, uncertain bool, delivered func(context.Context)) {
 	ctx := context.Background()
-	if !s.autoSupervisionOn(ctx) {
-		return // automatic supervision messages are off: no escalation and no retry loop
+	if !supervisionSignalsAllowed(s.supervisionMode(ctx), sent) {
+		return // the mode drops it (off, or only routine checks under outcomes): no escalation and no retry loop
 	}
 	for _, g := range sent {
 		if w, ok := s.todoNow(g.Todo); ok {
@@ -726,13 +727,14 @@ func (s *Service) leaderTaskReview(ctx context.Context, machine, session string,
 // and no other task is reachable: it is the leader's direct worker (its ledger names this leader) or nothing.
 func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.RawMessage) (string, error) {
 	var a struct {
-		TodoID     string        `json:"todo_id"`
-		Verdict    string        `json:"verdict"`
-		ReworkKind string        `json:"rework_kind"`
-		Checks     []ReviewCheck `json:"checks"`
-		Note       string        `json:"note"`
-		Reason     string        `json:"reason"`
-		Recommend  string        `json:"recommend"`
+		TodoID     string         `json:"todo_id"`
+		Verdict    string         `json:"verdict"`
+		ReworkKind string         `json:"rework_kind"`
+		Checks     []ReviewCheck  `json:"checks"`
+		Note       string         `json:"note"`
+		Reason     string         `json:"reason"`
+		Recommend  string         `json:"recommend"`
+		Findings   *findingReview `json:"findings_review"`
 	}
 	dec := json.NewDecoder(bytes.NewReader(args))
 	dec.DisallowUnknownFields()
@@ -742,9 +744,9 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 	a.Note = strings.TrimSpace(a.Note)
 	a.ReworkKind = strings.TrimSpace(a.ReworkKind)
 	switch a.Verdict {
-	case reviewAccepted, reviewRework, reviewNeedsUser, reviewCancelled:
+	case reviewAccepted, reviewRework, reviewNeedsUser, reviewCancelled, reviewFindings:
 	default:
-		return "", errors.New("verdict must be accepted, rework, needs_user or cancelled")
+		return "", errors.New("verdict must be accepted, rework, needs_user, cancelled or findings")
 	}
 	if a.ReworkKind != "" && a.Verdict != reviewRework {
 		return "", errors.New("rework_kind applies to rework only")
@@ -761,6 +763,15 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 	}
 	if cur, supervised, reachable := s.leaderSupervisor(t); !supervised || !reachable || cur.MachineID != lead.MachineID || cur.SessionID != lead.SessionID {
 		return "", fmt.Errorf("task %s is not one of your workers: you review the workers you handed out with task_plan, nothing else", t.ID)
+	}
+	if a.Verdict == reviewFindings {
+		return s.reviewInvestigationFindings(ctx, t, a.Findings, a.Checks, lead.SessionID, func(cur Todo) bool {
+			supervisor, supervised, reachable := s.leaderSupervisor(cur)
+			return supervised && reachable && supervisor.MachineID == lead.MachineID && supervisor.SessionID == lead.SessionID
+		})
+	}
+	if a.Findings != nil {
+		return "", errors.New("record findings_review with verdict findings before changing task state")
 	}
 	if t.DoneAt != nil && (a.Verdict == reviewRework || a.Verdict == reviewNeedsUser) {
 		return "", fmt.Errorf("task %s is done already (%s): hand out a new worker for what is left", t.ID, cmp.Or(t.DoneReason, "closed"))
@@ -797,7 +808,7 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 	}
 	verdict, note := a.Verdict, clip(a.Note, 2000)
 	over, overSafetyCap, overCount := false, false, 0
-	var criteriaErr error
+	var criteriaErr, findingErr error
 	var closing *taskReviewClose
 	if verdict == reviewAccepted || verdict == reviewCancelled {
 		reason := cmp.Or(clip(oneLine(note), 80), "验收通过") // i18n-ignore: done_reason, as a conversation's review writes it
@@ -806,7 +817,28 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 		}
 		closing = &taskReviewClose{reason: reason, accepted: verdict == reviewAccepted}
 	}
-	v, _, err := s.updateSupervisionWithClose(ctx, t.ID, func(v *Supervision) bool {
+	var cancelCheckedAgents []TodoAgent
+	cancelStaleAllowed := false
+	if verdict == reviewCancelled {
+		cancelCheckedAgents, cancelStaleAllowed = s.canBypassStaleInvestigationCancel(ctx, t)
+	}
+	var guard func(Todo) bool
+	if verdict == reviewAccepted || verdict == reviewCancelled {
+		guard = func(cur Todo) bool {
+			if !(verdict == reviewCancelled && cancelStaleAllowed && staleInvestigationCancelAllowed(cur, cancelCheckedAgents)) {
+				findingErr = s.investigationTransitionError(ctx, cur, cur.Supervision, nil)
+			}
+			if findingErr == nil {
+				var acceptedChecks []ReviewCheck
+				if verdict == reviewAccepted {
+					acceptedChecks = checks
+				}
+				findingErr = s.receivedFindingsCloseError(cur, acceptedChecks)
+			}
+			return findingErr == nil
+		}
+	}
+	v, _, err := s.updateSupervisionWithCloseGuarded(ctx, t.ID, guard, func(v *Supervision) bool {
 		if verdict == reviewAccepted {
 			if criteriaErr = completeReviewCriteriaError(v.DoneWhen, a.Checks); criteriaErr != nil {
 				return false
@@ -822,6 +854,9 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 			round, stalled := v.applyReworkAccounting(a.ReworkKind)
 			r.Round, r.ReworkKind, r.StalledReworkRounds = round, a.ReworkKind, stalled
 		}
+		if verdict == reviewAccepted && len(s.investigationReceivedFindings(t.ID)) > 0 {
+			v.applyChecks(checks, r.At, "supervisor:"+lead.SessionID)
+		}
 		v.State = verdict
 		v.Reviews = append(v.Reviews, r)
 		if len(v.Reviews) > 20 {
@@ -831,6 +866,9 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 	}, closing)
 	if err != nil {
 		return "", s.taskCloseToolError(ctx, s.deferTaskReview(ctx, t.ID, err))
+	}
+	if findingErr != nil {
+		return "", findingErr
 	}
 	if criteriaErr != nil {
 		return "", criteriaErr

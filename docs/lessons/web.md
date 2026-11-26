@@ -16,6 +16,12 @@ Build closed-task banner links with the router's `href` and handle clicks with `
 in-app, modified clicks retain native navigation, and native destinations retain the reverse-proxy base path.
 Test the rendered anchor and its click behavior at both the root and a nested base path, not only the router helper.
 
+## Reopening a model picker can reuse the computer's catalog (#15481)
+
+The browser's repeat read and the computer's forced discovery are separate. Use the opening read for fast results
+and send `refresh=1` for an explicit refresh or Retry. Keep the previous list visible while the request runs, and
+verify that a changed catalog replaces its rows in the same opening.
+
 ## A text shimmer needs an opaque source color (#15367)
 
 Setting `color: transparent` also clears any gradient stop that reads `currentColor`.
@@ -32,6 +38,13 @@ section of that name. When either is ambiguous, keep it apart. A fixture where e
 reaches this fallback, so test sessions with a removed tree's bare `cwd`. Check the folder is at the computer's home: a
 cwd in a folder of a repository's own tree (`/code/app/.worktrees/feature/src`) has the same shape, and joining by the
 tree's name moved its Agent into an unrelated repository's section.
+
+## Approval waiting is not delivery waiting (#9762)
+
+Settings and the Sent ledger can share a localization namespace. Keep the
+permission-card waiting message separate from a pending delivery outcome;
+reusing `pending` silently replaced the approval instructions with a delivery
+badge. Exercise the pending card and the outcome badge independently.
 
 ## A folded launcher must retain its identity (#10249)
 

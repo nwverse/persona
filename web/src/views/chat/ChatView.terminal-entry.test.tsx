@@ -6,10 +6,15 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-vi.hoisted(() => {
+const media = vi.hoisted(() => {
+  const state = { phone: false };
   globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
   globalThis.IntersectionObserver ??= class { observe() {} unobserve() {} disconnect() {} takeRecords() { return []; } } as unknown as typeof IntersectionObserver;
-  window.matchMedia ??= ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
+  window.matchMedia = ((query: string) => ({
+    get matches() { return state.phone && /max-width: (639|767|1023)px/.test(query); },
+    media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+  })) as typeof window.matchMedia;
+  return state;
 });
 vi.mock("../../lib/store", async (load) => ({
   ...(await load<typeof import("../../lib/store")>()),
@@ -32,6 +37,7 @@ let host: HTMLDivElement;
 let root: Root;
 beforeEach(async () => {
   await initI18n("en");
+  media.phone = false;
   localStorage.clear();
   vi.stubGlobal("fetch", vi.fn((url: string) => Promise.resolve(new Response(JSON.stringify(String(url).includes("/items") ? { items: [], to_seq: 0 } : {}), { status: 200, headers: { "Content-Type": "application/json" } }))));
   host = document.createElement("div");
@@ -66,6 +72,11 @@ it.each(["en", "zh-Hans", "ja"])("on the agent's page: localized terminal entrie
   await open(<ChatView mid="mac" sid="s1" inPage />);
   expect(terminalButton()).not.toBeNull();
   expect(dot()).toBeNull();
+  // The desktop's existing toolbar button owns Terminal; the phone puts it in ⋯.
+  expect((await menuItems()).some((x) => x.includes(t("lib-terminals.terminal")))).toBe(false);
+
+  media.phone = true;
+  await open(<ChatView key="phone" mid="mac" sid="s1" inPage />);
   expect((await menuItems()).some((x) => x.includes(t("lib-terminals.terminal")))).toBe(true);
 });
 
@@ -76,7 +87,7 @@ it("in the side panel: the terminal button opens the agent's page in its termina
   try {
     await open(<ChatView mid="mac" sid="s1" panel={{ onClose, items: [] }} />);
     expect(terminalButton()).not.toBeNull();
-    expect((await menuItems()).some((x) => x.includes(t("lib-terminals.terminal")))).toBe(true);
+    expect((await menuItems()).some((x) => x.includes(t("lib-terminals.terminal")))).toBe(false);
     act(() => terminalButton()!.click());
     expect(navigate).toHaveBeenCalledWith({ name: "session", mid: "mac", sid: "s1", view: "term" });
     expect(onClose).toHaveBeenCalled();
@@ -90,7 +101,10 @@ it("the side panel's localized terminal menu item opens the terminal page and cl
   const navigate = vi.spyOn(router, "navigate").mockImplementation(() => {});
   const onClose = vi.fn();
   try {
-    await open(<ChatView mid="mac" sid="s1" panel={{ onClose, items: [] }} />);
+  const phoneBefore = media.phone;
+  try {
+    media.phone = true;
+    await open(<ChatView key="phone" mid="mac" sid="s1" panel={{ onClose, items: [] }} />);
     act(() => host.querySelector<HTMLButtonElement>(`button[aria-label="${t("chat-chatview.more_actions")}"]`)!.click());
     await settle();
     const item = [...document.querySelectorAll<HTMLElement>('[role="menu"] [role="menuitem"]')]
@@ -100,6 +114,7 @@ it("the side panel's localized terminal menu item opens the terminal page and cl
     expect(navigate).toHaveBeenCalledWith({ name: "session", mid: "mac", sid: "s1", view: "term" });
     expect(onClose).toHaveBeenCalledOnce();
   } finally {
+    media.phone = phoneBefore;
     navigate.mockRestore();
   }
 });
