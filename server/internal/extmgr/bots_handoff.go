@@ -51,10 +51,10 @@ const (
 	botHandoffPerDay      = 60
 	botHandoffRunning     = 3
 
-	botHandoffDeliveryConfirm = "confirm"
-	botHandoffDeliveryDirect  = "direct"
+	botHandoffDeliveryConfirm = assistantwire.FeishuHandoffDeliveryConfirm
+	botHandoffDeliveryDirect  = assistantwire.FeishuHandoffDeliveryDirect
 
-	botHandoffStateAccepted = "accepted"
+	botHandoffStateAccepted = assistantwire.FeishuHandoffStateAccepted
 
 	// botHandoffCapability is what this build can do with a handoff, whatever the owner's policy.
 	botHandoffCapability = "proxy_reply"
@@ -88,7 +88,7 @@ func (s FeishuBotSettings) handoffView() *botHandoffView {
 
 // handoffDelivery says how a handoff for chatID is answered: direct, or confirm (the owner approves first). A refusal
 // is the error code (handoff_off, chat_blocked); delivery is then "".
-func (s FeishuBotSettings) handoffDelivery(chatID string) (delivery, refusal string) {
+func (s FeishuBotSettings) handoffDelivery(chatID string) (delivery assistantwire.FeishuHandoffDelivery, refusal string) {
 	h := s.Handoff
 	if h != nil && slices.Contains(h.BlockedChats, chatID) {
 		return "", "chat_blocked"
@@ -568,14 +568,14 @@ func (s FeishuBotSettings) handoffLauncher() string {
 	return s.Handoff.Launcher
 }
 
-func handoffDeliveryOf(src *BotAISource) string {
+func handoffDeliveryOf(src *BotAISource) assistantwire.FeishuHandoffDelivery {
 	if src.Confirm {
 		return botHandoffDeliveryConfirm
 	}
 	return botHandoffDeliveryDirect
 }
 
-func handoffAccepted(id, delivery string, expires time.Time) assistantwire.FeishuHandoffAccepted {
+func handoffAccepted(id string, delivery assistantwire.FeishuHandoffDelivery, expires time.Time) assistantwire.FeishuHandoffAccepted {
 	return assistantwire.FeishuHandoffAccepted{ID: assistantwire.FeishuHandoffID(id), State: botHandoffStateAccepted, Delivery: delivery,
 		ExpiresAt: expires.UTC().Format(time.RFC3339)}
 }

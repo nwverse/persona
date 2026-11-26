@@ -33,7 +33,11 @@ func TestHandoffPolicy(t *testing.T) {
 	if code, out := w.putHandoff(t, `{"direct_chats":["oc_direct"],"blocked_chats":["oc_direct","oc_blocked"]}`); code != 200 || out["handoff"] == nil {
 		t.Fatalf("put: %d %v", code, out)
 	}
-	for _, c := range []struct{ chat, delivery, refusal string }{
+	for _, c := range []struct {
+		chat     string
+		delivery assistantwire.FeishuHandoffDelivery
+		refusal  string
+	}{
 		{"oc_direct", "", "chat_blocked"},
 		{"oc_blocked", "", "chat_blocked"},
 		{"oc_other", botHandoffDeliveryConfirm, ""},

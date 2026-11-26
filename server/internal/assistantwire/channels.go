@@ -223,14 +223,14 @@ type OwnerApprovalProof struct {
 type FeishuHandoff struct {
 	ID         FeishuHandoffID `json:"id"`
 	ChatID     FeishuChatID    `json:"chat_id"`
-	ChatName   string    `json:"chat_name,omitempty"`
-	SenderName string    `json:"sender_name,omitempty"`
-	Question   string    `json:"question"`
-	Context    string    `json:"context,omitempty"`
-	Confirm    bool      `json:"confirm"`
-	Launcher   string    `json:"launcher,omitempty"`
-	By         string    `json:"by,omitempty"`
-	ExpiresAt  time.Time `json:"expires_at"`
+	ChatName   string          `json:"chat_name,omitempty"`
+	SenderName string          `json:"sender_name,omitempty"`
+	Question   string          `json:"question"`
+	Context    string          `json:"context,omitempty"`
+	Confirm    bool            `json:"confirm"`
+	Launcher   string          `json:"launcher,omitempty"`
+	By         string          `json:"by,omitempty"`
+	ExpiresAt  time.Time       `json:"expires_at"`
 }
 
 // FeishuHandoffID names one proxy-reply handoff ("bh_" and hex), chosen by the manager.
@@ -239,12 +239,31 @@ type FeishuHandoffID string
 // FeishuChatID is a Lark open-platform chat id (oc_…).
 type FeishuChatID string
 
+// FeishuHandoffState is the state of a handoff the hub answers with; it only ever answers once one is accepted.
+type FeishuHandoffState string
+
+const FeishuHandoffStateAccepted FeishuHandoffState = "accepted"
+
+func (s FeishuHandoffState) Valid() bool { return s == FeishuHandoffStateAccepted }
+
+// FeishuHandoffDelivery is how a handoff is answered: confirm (the owner approves the draft first) or direct.
+type FeishuHandoffDelivery string
+
+const (
+	FeishuHandoffDeliveryConfirm FeishuHandoffDelivery = "confirm"
+	FeishuHandoffDeliveryDirect  FeishuHandoffDelivery = "direct"
+)
+
+func (d FeishuHandoffDelivery) Valid() bool {
+	return d == FeishuHandoffDeliveryConfirm || d == FeishuHandoffDeliveryDirect
+}
+
 // FeishuHandoffAccepted is the handoff POST /api/v1/bots/feishu/handoffs took.
 type FeishuHandoffAccepted struct {
-	ID        FeishuHandoffID `json:"id"`
-	State     string          `json:"state"`
-	Delivery  string          `json:"delivery"`
-	ExpiresAt string          `json:"expires_at"`
+	ID        FeishuHandoffID       `json:"id"`
+	State     FeishuHandoffState    `json:"state"`
+	Delivery  FeishuHandoffDelivery `json:"delivery"`
+	ExpiresAt string                `json:"expires_at"`
 }
 
 // FeishuHandoffResponse is the body of POST /api/v1/bots/feishu/handoffs. Replayed: a repeat of an earlier ref.
