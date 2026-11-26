@@ -94,11 +94,14 @@ Paths in the server rows are under `server/internal`. Every row was checked at e
 
 ### 3.1 One definition per count, computed once in the manager
 
-- **A new pure package**, server/internal/assistant/fleetcount (D15), shaped like `assistant/todo/projection`: it takes
-  proto values as read-only input and returns records, so its tests run on their own (1.5 s against 118 s for package
-  assistant in a developer's own run), though check-fast gains nothing, since package assistant imports it. Each agents
-  count is one function over the inputs fleetInputsInto already builds, and the Live Activity and Persona Link call it;
-  the roster's Inbox count stays a function over the Inbox items' status(), as tellInboxNeedsYou computes it today.
+- **A new strict core**, server/internal/assistant/fleetcount (D15), under the domain rules (the "Domain model"
+  section that #12899 adds to `docs/server/architecture.md`): its adapter fleetcount/fleetcountadapt builds typed Agent
+  and Card values from proto, and its Tally reports through a visitor; no records, no proto inside. So its tests run on
+  their own (1.5 s against 118 s for package assistant in a developer's own run), though check-fast gains nothing,
+  since package assistant imports it. Each agents count is one domain service over the values the adapter builds from
+  the inputs fleetInputsInto already gathers, and the Live Activity and Persona Link call it; the roster's Inbox count
+  stays a function over the Inbox items' status(), as tellInboxNeedsYou computes it today.
+  *Revised 2026-11-22 in #10613:* a core with an adapter and a visitor in place of a package returning records.
 - **Each count has an id and a one-line definition** in a new doc, docs/protocol/counts.md (principle 3). An id starts
   with the rule of the client it replaces, so no number changes before its decision.
 - **The pilot is the Agents count.** `agents_needs_you` is `spec/fixtures/needs-you`'s badge rule as iOS computes it
@@ -135,7 +138,7 @@ CountsView {                       // per manager; schema/wire, generated for Go
 
 The first schema is only what today's rules and section 6 say. `held` lists the muted rows that `AgentsNeedsYou.rows`
 keeps and the badge leaves out, and the held cards (D11); the header draws them in uncounted groups (D6). Quiet rows are
-not in it: fleetInputsInto drops them before any input is built (`assistant/fleet_live.go:173`), so listing them would
+not in it: fleetInputsInto drops them before any input is built (its quiet line in `assistant/fleet_live.go`), so listing them would
 mean widening that function inside the repair PRs' hunks (and still keeping them out of FleetState and Link) or reading
 the lists a second time. So the header's quiet rows (D6) come from the client's own list, until a later optional
 `why: quiet` comes with that cost stated. There is no `surfaces: {<surface>: <id>}` map (D5): each client names the ids
@@ -230,8 +233,10 @@ Steps 2 to 7b change no number. Steps 2 to 4 waited on no decision; step 5 follo
 left `DESIGN_SYSTEM.md` 3.8 to D6, which leaves it as it is (section 6.3). Steps 8 on apply named decisions, whether or
 not they change a number: a client that draws views builds in D10's mixing rule and D13's handling of a missing view.
 Section 6.2 lists what each decision adds to a step, and the client fixes that come before the views. Each step
-re-checks open PRs on its files before it is pushed; the four automated "continue #8584 verification repair" PRs
-(#10564, #10593, #10599, #10920) touch many count files.
+re-checks open PRs on its files before it is pushed and leaves byte-identical the lines an open PR edits; the four
+automated "continue #8584 verification repair" PRs (#10564, #10593, #10599, #10920), which touched many count files,
+closed unmerged on 2026-11-22. *Revised 2026-11-22 in #10613:* the lines open PRs edit stay as they are, instead of
+steps waiting for those PRs.
 
 **1. This plan.** *Change:* this document, one CLAUDE.md index entry, comments on #10613 and #5974 (proposing that the
 fixtures of steps 3 and 4 carry #5974's planned count fixture; the definitions stay #5974's). *Conflict:* CLAUDE.md is
@@ -279,15 +284,54 @@ the guard, the report switch in the existing replays, the lane differ, and entri
 (`scripts/test/counts_agreement.py`: iOS agrees on every case, Android on all but its D1 mark) and check-fast's rule.
 `scripts/ci/paths.py` needed no entry: CI's lanes already select every file (`spec/**`, and `**` for scripts).
 
-**5. The pure manager package.** *Change:* move needsYou, liveCounts and cardStands out of `assistant/fleet_live.go` and
-linkAttention's predicate out of `assistant/fleet_attention.go`; add `agents_needs_you`, replaying the needs-you
-fixture. fleetInputsInto and foldSidesIn stay. *Conflict:* the four repair PRs' `fleet_live.go` hunks are in
-fleetInputsInto (lines 170 and 180); the moved functions start at line 254. `fleet_attention.go` has 0. *Gate:* D15 and
-the domain-package list (section 6.2). *Rollback:* revert. *Done:* TestLinkAttentionFollowsTheSharedFixtures,
-TestLiveActivityKeepsItsOwnCount, TestFleetCountsCodexRootsOnly, TestFleetCountsASideUnderItsParent and
-TestSnapshotNeedsYouIsTheState pass unchanged; FleetState and Link bytes are identical on the fixtures; the package's
-tests run on their own (`go test -p 4`, `GOFLAGS=-trimpath`); no added allocations in a benchmark; the known
-internal/assistant failures on main are unchanged.
+**5. The counting core.** *Change:* the rules of needsYou, liveCounts and cardStands (`assistant/fleet_live.go`) and
+linkAttention's predicate (`assistant/fleet_attention.go`) move into fleetcount, with fleetcountadapt building its
+inputs and rendering its Tally (section 6.2); add `agents_needs_you`, replaying the needs-you fixture through the
+adapter. fleetInputsInto and foldSidesIn stay. *Conflict:* the four repair PRs, whose `fleet_live.go` hunks were in
+fleetInputsInto (lines 170 and 180), closed unmerged on 2026-11-22; #12986 (a draft) edits needItem (line 485), one of
+the moved names; the moved functions start at line 254. `fleet_attention.go` has 0. *Gate:* D15, #12899's domain
+rules, and agentref, the shared session identity that follows them (section 6.2). *Rollback:* revert. *Done:*
+TestLinkAttentionFollowsTheSharedFixtures, TestLiveActivityKeepsItsOwnCount, TestFleetCountsCodexRootsOnly,
+TestFleetCountsASideUnderItsParent and TestSnapshotNeedsYouIsTheState pass unchanged; FleetState and Link bytes are
+identical on the fixtures; the core's tests run on their own (`go test -p 4`, `GOFLAGS=-trimpath`), and the core and
+its adapter pass their domain-rules hooks; the whole round's benchmark holds the gate in section 6.2; the known
+internal/assistant failures on main are unchanged. *Revised 2026-11-22 in #10613:* a core and its adapter, gated on
+the domain rules and agentref rather than a domain-package list, with an allocation gate on the whole round.
+
+*Landed (#15250):* `server/internal/assistant/fleetcount` (core) decides every surface's rows in `AgentsNeedsYou`,
+`fleetcount/fleetcountadapt` (adapter) builds its agents and cards from proto and fills `FleetState`'s and Persona
+Link's needs-you rows, `fleetcount/fleetcounttest` (testkit) writes a tally down for tests, and `assistant/fleetview`
+(library) writes the text the needs-you and working rows share. The needs-you fixture replays in `fleetcountadapt`
+(`TestAgentsNeedsYouFollowsTheSharedFixtures`, every case), and TestFleetMatchesOracle's 1500 random fleets keep
+FleetState and Persona Link's bytes on the agents `fleetInputsInto` hands over. What differs from section 6.2, and why:
+`fleetInputsInto`'s quiet line asks `fleetcountadapt.Visibility(sess).LeftOut()`, since the four repair PRs were still
+closed when this landed; Persona Link's summary types moved to a contract (`internal/linkwire`, aliased in `link`),
+because an adapter returns only contracts; `i18n`, `textfmt`, `compat`, `lazyre` and `deeplink` declare the `library`
+layer the adapter and `fleetview` import them as; `transcript` stays undeclared (it imports the legacy core `tokenuse`),
+so package assistant hands the renderers an agent's title before it is clipped; `Holding` has a third value,
+`HoldingHeldBySupervisor`, for the cards D11's 2026-11-23 confirmation keeps out of every row; the badge's rows tell
+their further cards (`VisitCardUnder`), which the fixture's rows list; an unknown update time is not refused (the kit's
+zero Instant is unknown, and an agent sent without one still waits); `Agent` has no `Turn` stage and the adapter's
+`Agent` no turn start, since `workingSince` stays here until step 11; the adapter's `Agent` and `Card` take the caller's
+place as an index and mint its Slot, since only an adapter or a testkit may mint one (`out-slot-mint`); `Agent`'s one
+exported predicate is `Counts(Surface)`: no caller asks whether one agent needs the owner (the Tally tells the rows, and
+the working rows and `foldSidesIn` read the wire state until step 11), so it has no `NeedsOwner()`, and `LeftOut()` is
+`Visibility`'s, since `fleetInputsInto` drops a session before it has an Agent and the exclusion reads the visibility
+alone; `Counts` asks it on the Live Activity's and Persona Link's surfaces, so the core leaves those agents and their
+cards out whatever it is handed and one list of agents serves every surface (the fixture replay does not apply it: the
+badge lists a quiet agent's row and leaves a directory-hidden one out itself); `Card`'s `Standing` stage also takes a
+`Telling` (`TellingTold`, `TellingUntold`) and the adapter's `Card` whether the owner was told, since Persona Link rings
+for an agent only once one of its cards is the owner's and was rung for, which `Holding` does not say (a card can be the
+owner's and not rung for yet); on Persona Link's surface `WhyHeld` is any row none of whose agent's cards was handed to
+the owner, a terminal dialog with no card included, since that summary keeps one bit per row, whether it rings, and
+carries no why word, while on the Agents list's surface `WhyHeld` is D11's held only; the fixture replay reads the
+badge's tally through a test visitor, since no wire shape carries those rows before steps 6 and 7a; the benchmark
+measures the core's copies instead of printing `unsafe.Sizeof`, which the domain rules refuse beside a core; and
+`agentKey` and `keyOf` stay with `foldSidesIn`, which reads the Live Activity's rule through `liveCounted`. The gate
+(`BenchmarkRound`, 60 agents, 12 cards, a kept round as `liveLoop` runs it): 284 to 255 allocs/op and 56,512 to 30,008
+B/op, the latter including the core's own copies (12,800 B/op: per surface 60 agents in a 5,376-byte block and 12 cards
+in a 1,024-byte one). `BenchmarkLiveRound` (500 agents, no card): 134 to 136 allocs/op and 62.8 to 161.8 KB/op, the two
+surfaces' copies of the agents (two 49,152-byte blocks) and nothing else.
 
 **6. The schema and generated types.** *Change:* schema/wire/counts.schema.json (`x-out` ts, swift, go, kotlin;
 `x-guard` arkts, rust), its four outputs, `.gitattributes` rows and a `schema/wire/README.md` row; samples from step 5's
@@ -296,11 +340,49 @@ Go output. The schema has no `surfaces` map (D5) and an optional `totals` (D12);
 0 open PRs. *Gate:* step 5. *Rollback:* revert; nothing reads the types. *Done:* `--check` and test_wire_schema.py pass;
 round trips pass in Go, Kotlin, Swift (`swift test` in PersonaWire) and the web.
 
+*Landed (#15512):* `schema/wire/counts.schema.json` with its four outputs (Go in `assistantwire`), the contract in
+`docs/protocol/counts.md` and the samples in `spec/fixtures/counts/view_samples.json`, which
+`TestViewSamplesAreFleetcountsRows` (`fleetcountadapt`) holds to fleetcount's rows for the needs-you cases they name.
+What differs from section 3.2, and why: each count id is a named, optional field of `counts` and of `totals`, not a
+`{<id>: …}` map, so every client reads a typed field (the generator keeps a map whose keys are not all required a map)
+while the JSON stays the same and a new id stays an optional addition; the view names its `build`, which D18's
+diagnostics read; a row's `id` and its cards are ID types (`CountsRowKey`, `CountsCardID`, since a wire schema cannot
+`$ref` `ids.schema.json` yet) and `why` the closed enum `CountsHeldReason` (`muted`, `held`) with an explicit unknown;
+`keys` may list fewer than 200 rows, `n` being the rows it lists plus `more`, because 200 rows of UUID-length session
+and card ids come to about 22 KB, past the 16 KB the hub is to keep (section 3.2), so step 7a or 7b settles the bound
+and the limit together; `held` has the same bound; `protocol.md` gets a pointer section only, since this step adds no
+message or feature (step 7b adds their rows).
+
 **7a. The manager tells the view.** *Change:* the capability constant in a new assistantwire/counts.go (avoiding
 `assistantwire/bus.go`, 9 open PRs), named in the hello's capability list in `assistant/bus.go` (10 open PRs; one
 identifier on one line); the tell from liveLoop. *Gate:* steps 5 and 6. *Rollback:* revert. *Done:* on one round,
 `agents_needs_you.n` equals the fixture rule over the same inputs; a quiet fleet tells nothing; a hub built from
 `origin/main` drops the event; the round benchmark stays within 5% of step 5's.
+
+*Landed (#15650):* `CapabilityCountsView` (`counts_view`), `EventCountsView` (`counts.view`) and `CountsViewMaxBytes` in
+`assistantwire/counts.go`; the capability on the hello's list; and the tell from liveLoop (`assistant/counts_view.go`):
+package assistant calls `fleetcount.AgentsNeedsYou` on the badge surface, then `fleetcountadapt`'s `Fleet.View`, a
+TallyVisitor of the adapter's own that writes `counts` and `totals` in one `Accept` pass (D12) and alone spells the
+`why` word (D11); package assistant adds the epoch (one per run), the rev (up one only when the counts change), `as_of`
+and `build`, tells nothing for a round that changed nothing, and tells the last view again after each handshake.
+`TestCountsViewFollowsTheSharedFixtures` holds `n` and the keys to the fixture's badge over a round's inputs,
+`TestTheCountsViewIsToldWhenItChanges` the rest; `busEvents` in `hub/bus.go` has no `counts.view`, so a hub from
+`origin/main` drops it. The bound and the limit are settled together: a view takes at most 16 KB, the most the hub will
+keep, and `keys` and `held` stop at 200 rows or at the first row past that bound, the counted rows first (`more` carries
+the rest). What differs, and why: `View` is a method of the adapter's `Fleet`, since a tally's Slots are places in that
+fleet; the view is decided on the fill Persona Link's summary uses (its cards ordered by time, then id), so the two
+share one copy of the core's values (`Fleet.Agents`, `Fleet.Cards`); `Tally.On(surface)` lets `View` refuse another
+surface's tally; a count's `producer` is keyed to the view's schema rather than to an empty `waits_on`: every count the
+schema carries names its producer and no other does, since `inbox_action` waits on no decision but joins the view only
+with step 12 and its fixture (`docs/protocol/counts.md`, "Later ids"), and `TestViewWritesTheCountsThatNameIt` is the
+code map's check; the Inbox's and the to-dos' counts enter as inputs of `View` once the schema carries them, so none is
+added here; and `badgeRows` now cuts its lists from four arrays (and makes none when nothing waits), which took the
+view's share of the round from 47 allocations to 11. The gate, measured against `origin/main` on one machine
+(`BenchmarkRound`, 60 agents and 12 cards, the round now building the view too): 255 to 266 allocs/op (+4.3%, within 5%)
+and 30,008 to 35,096 B/op (+17%, past 5%): the badge decision takes 4 allocations and 3,776 B (its tally and the scratch
+the core makes each round rather than keep between rounds) and `View` 7 and 1,312 B, measured apart.
+`BenchmarkLiveRound` (500 agents, none waiting): 136 to 139 allocs/op and about 161.8 KB/op either way. Telling an
+unchanged view allocates nothing.
 
 **7b. The hub relays it** (section 3.2). *Change:* a new hub/counts_view.go and one field in `hub/bus.go` (1 open PR,
 #6924d); one line each in bus_broadcast.go (3) and features() in extensions_link.go (5); the kept views go out in the
@@ -315,6 +397,20 @@ order hello, machines, counts, then session lists; TestBroadcastTypes, `test_doc
 guard pass, apart from `TestHubAnswersOnlyItsOwnRoutes`, which already fails on main (#9485) and is compared with
 `origin/main`.
 
+*Landed (#15893):* the relay (`hub/counts_view.go`): the hub keeps each manager's last view on its bus connection,
+compacted and checked only for its object, `epoch`, `rev` and bound, and sends it to full-role apps that ask, at connect
+between `machines` and the session lists, after a `client_hello` that names the feature, and as `view: null` when the
+connection ends; relays and connect-time sends share `h.mu`, so an app never gets a manager's view after a newer one.
+`spec/fixtures/counts/views.json` writes D13's cases as given, one transport event (`arrived`, `arrivedEmpty`,
+`wentOffline`, `restarted`, `leftRoster`, `signedOut`) and then, with its section in the fixtures' README;
+`TestTheHubReplaysTheRestartCases` replays its restart cases through the hub, and `test_wire_schema.py` holds each of
+its views to the schema. What differs, and why: the hub feature is appended from `proto/features_counts.go`, the proto
+feature seam (`docs/server/architecture.md` "Registering a domain's entries"), which heads features()' static list, so
+it is listed always and no line of `hub/extensions_link.go` changes; the roster carries the `counts_view` flag and not
+the view, so a client has one source of views, the WebSocket, and the roster read every `managers` push asks for does
+not grow by up to 16 KB per manager, which also leaves no view on the roster to keep from scoped, answer-only and
+extension tokens; the mock domain module waits for step 8, the first step that draws a view and screenshots it.
+
 **8. Android reads `agents_needs_you`.** *Change:* ShellCounts and the switcher's agents share read the view, with the
 overlay and the frozen fallback, and the switcher adds its Persona-conversation part by today's rule (section 3.3 item
 7), so a Persona conversation's card stays on it; HubManagers.kt decodes the generated type. Step 3's Android mark
@@ -325,13 +421,15 @@ lists while the app holds its 50-row window: sessions outside it that wait with 
 quiet tasks' agents or in muted spaces leave, and the switcher counts such a session once, not once per card. That is
 the written rule (the needs-you fixture, and `docs/protocol/protocol.md` ("Agent directory visibility") for hidden
 sessions), applied under D1, with a self-check. *Conflict:* `ShellCounts.kt` and `HubManagers.kt` 0;
-`Root.kt` (#11660d, #5969d) is not touched. *Gate:* steps 3 to 7b, D1, D10 (mixed support) and D13 (a missing view).
-*Rollback:* revert, or turn off the hub feature. *Done:* ShellCountsTest, with a paged case (a wait with no card
+`Root.kt` (#11660d, #5969d) is not touched. *Gate:* steps 3 to 7b, D1, D10 (mixed support) and D13 (a missing view),
+and the Inbox plan's step A4, which brings the Kotlin domain kit after the client domain guard and #13024 (section
+6.2). *Rollback:* revert, or turn off the hub feature. *Done:* ShellCountsTest, with a paged case (a wait with no card
 outside the window: counted from the view, not by the fallback), a hidden case (a directory-hidden session's card: left
 out by the view, counted by the fallback) and a switcher case (a Persona conversation's card counts with a view and
 without), AgentsNeedsYouFixtureTest (the marked case at today's value, the view-path case at the fixture's) and the
 surfaces replay pass; `scripts/app/android.sh shots` in three styles, light and dark, shows today's numbers where the
-list is complete and no hide rule matches a waiting session.
+list is complete and no hide rule matches a waiting session. *Revised 2026-11-22 in #10613:* it also waits for the
+Inbox step that brings the domain kit its reducer is built on.
 
 **9. iOS reads `agents_needs_you`.** *Change:* the tab badge and the switcher's agents share read the view, and the
 Home Agents widget's number, for the whole hub (D2), as is the app icon's; the switcher adds its
@@ -342,11 +440,13 @@ several assistants, the switcher: where a session and a child folded under it bo
 2, iOS switcher). Both are the written rule, applied under D1, with a self-check. *Conflict:*
 `AppModel.swift` 4 (#11456d, #11282, #7517, #2051), `AssistantScope.swift` the four repair PRs, `HomeWidgetWriter.swift`
 and `AppIconBadge.swift` 0; `AgentsNeedsYouRows.swift`, which the four repair PRs touch, stays as it is, since the
-fallback and the list's section keep reading it. *Gate:* steps 3 to 7b, D1, D10 and D13; D2 for the widget.
-*Rollback:* revert. *Done:* AgentsNeedsYouFixtureTests (any marked case at today's value, the view-path case at the
-fixture's), AppIconBadgeTests, AssistantBadgesTests (a Persona conversation's card counts with a view and without) and
+fallback and the list's section keep reading it. *Gate:* steps 3 to 7b, D1, D10 and D13, and PersonaDomainKit with
+the client domain guard (section 6.2); D2 for the widget. *Rollback:* revert. *Done:* AgentsNeedsYouFixtureTests
+(any marked case at today's value, the view-path case at the fixture's), AppIconBadgeTests, AssistantBadgesTests (a
+Persona conversation's card counts with a view and without) and
 HomeWidgetTests pass; the PR names the `docs/apple/performance.md` rules followed (P1, P4, P6) with countBadges timings
-before and after from an optimized build, light and dark screenshots, and the Xcode used.
+before and after from an optimized build, light and dark screenshots, and the Xcode used. *Revised 2026-11-22 in
+#10613:* it also waits for the domain kit its reducer is built on.
 
 **10. Web and desktop read `agents_needs_you`.** **Visible:** muted agents leave the tab title, favicon and Dock; cards
 on no session join; quiet agents leave on bounded hubs. Under D17 the same number also adds Persona's questions and
@@ -356,10 +456,11 @@ today's rule (section 3.3 item 7). Its rule already matches the view's otherwise
 number does not change. Separately, in a bug issue of its own, the Dock resets to 0 on sign-out and hub change.
 *Conflict:* `sessions.ts` and `current-assistant.ts` meet the repair PRs; `manager-attention.ts` has
 #10920, #10396d; `attention-signals.ts` #8290, #1995d; `SidebarParts.tsx` (12) is untouched. *Gate:* steps 3 to 7b,
-D1, D2, D10 and D13. *Rollback:* revert, or turn off the hub feature. *Done:* vitest through check-fast, with a
+D1, D2, D10 and D13, and the web's domain kit with its lint rules (section 6.2). *Rollback:* revert, or turn off the
+hub feature. *Done:* vitest through check-fast, with a
 switcher case (a Persona conversation's card counts with a view and without); `npm run build` after merging
 `origin/main` (FIRST_SCREEN_BUDGET); light and dark screenshots; the desktop e2e reads the Dock equal to the web's
-number, and 0 after sign-out.
+number, and 0 after sign-out. *Revised 2026-11-22 in #10613:* it also waits for the domain kit its reducer is built on.
 
 **11. Persona Link and the Live Activity on the same definition** (server only, **visible**). *Change:* Link's and
 FleetState's `needsYou` become `agents_needs_you`, with Persona conversations with a standing card as a named part (D4);
@@ -376,6 +477,24 @@ Persona tab, the app icon and the switchers' Persona-conversation part after D9;
 `assistant/todo_projection.go` and `todo/projection` have 4 open PRs (#11179, #11168, #10809d, #9823), `todo-triage.ts`
 3; draft PRs #10809 and #9777 change what Needs you holds and must be reconciled. *Gate:* the named decision.
 *Rollback:* revert. *Done:* the count's rows in surfaces.json turn `matches`; the lane differ is green.
+
+*Landed, the To-dos' server part (#15896):* `todos_needs_you` is an optional field of the view's `counts` and `totals`
+(`schema/wire/counts.schema.json`, its four outputs regenerated; no client reads it yet), written by `fleetcountadapt`'s
+`Fleet.View`, which `surfaces.json` names as its `producer`. Package assistant hands `Fleet.View` the counts of its last
+read of the whole to-do list, the `Counts()` `GET /api/v1/todos` answers with (`server/internal/assistant/counts_view.go`):
+every read of the list, of one to-do or of the places keeps them; when no read follows a `{"type":"todos"}` within a
+second, the manager reads the list itself, one read at a time; until a run has counted its to-dos, each round asks for
+a count, and the view leaves it out. `TestCountsViewCountsTheToDosAsTheListDoes` holds the view's number to the list's
+`counts.needs_you` on every `spec/fixtures/todo-counts` case, `TestCountsViewFollowsTheToDoList` to `GET /api/v1/todos`
+on a manager's own list, and `TestCountsViewRecountsOneReadAtATime` keeps a slow read from starting a second one.
+What differs, and why: the count lists no rows (`keys` absent, all of `n` is `more`), since `Counts()` gives numbers
+only; the to-do projection (`todo/projection`) is neither declared nor given a record or an exported field while #9823,
+#11168 and #11179 are open, and `assistant/todo_projection.go` is untouched; `Fleet.View` takes the counts as the wire
+has them (`assistantwire.TodoCounts`, in an `opt.Option`), and once the projection is a core they come in as its value,
+`Fleet.View` staying the producer. TodoCountsFallback's multi-manager case retires with the iOS client's step, and the
+clients' To-dos rows stay `differs` until each draws N. `BenchmarkRound` with the to-dos counted: 266 to 267 allocs/op
+and 35,096 to 35,184 B/op against `origin/main` on one machine, the to-dos count's one allocation; `BenchmarkLiveRound`
+(no to-dos counted) and telling an unchanged view are unchanged (139 allocs/op; 0).
 
 **13. Retire the fallbacks.** *Change:* when D14's window ends, delete each client's fallback file with its fixture
 replay and step-3 marks (the view-path cases stay); the hub keeps FleetState, `inbox_needs_you` and Link for old apps;
@@ -490,6 +609,14 @@ Section 6.2 says what the decisions change in the steps, and 6.3 which docs chan
   PR pins it counted, and step 5 gives it no held Why. A confirmation, or a decided bound on the hold, is a new line
   here; the state path then also leaves out a session whose needs_you comes only from a terminal dialog with a held
   screen card.
+  *2026-11-23 owner confirmed: routed terminal questions are held.* A card a task's supervisor holds (`delegating` on
+  any kind but `question`: a permission, a plan, or a routed terminal question of kind `screen`) is the supervisor's
+  until `ask_escalate` hands it to the owner: it is not listed in the owner's Needs you and counts nowhere (list, header,
+  filter and badges), the clients offer no way to answer it, and a session whose pending cards are all so held is no
+  row, the terminal dialog behind a held screen card included. A `delegating` question (the assistant deciding whether
+  it may answer for the owner) stays as decided above. `spec/fixtures/needs-you` pins it in
+  `a_routed_terminal_question_is_held` and `a_supervisor_held_card_beside_an_open_one_leaves_the_row`; iOS follows,
+  Android carries D11 marks until its own change.
 - **D12** Numbers outside the running app. *Decided 2026-11-22:* never a plain `aps.badge` (the relay's alert
   template carries none, and one push group's badge would overwrite the others' share); Android sets no notification
   number; the watch reads no views (`answerReads` unchanged; the phone fills WatchSummary from views at step 9). Numbers
@@ -513,10 +640,11 @@ Section 6.2 says what the decisions change in the steps, and 6.3 which docs chan
   switcher marks it, never a sum that silently leaves it out. `count_skew` stays for good.
 - **D15** The package's name and home. *Decided 2026-11-22:* server/internal/assistant/fleetcount, holding
   only the agents' and cards' count rules; "attention" already names Link's rule and fixture, the web's signals and the
-  To-dos proposal's composer payload. It is listed `deterministic encapsulated` in the domain-package list
-  (server/internal/archguard/testdata/domain.txt, which a later tooling PR adds) rather than pinned by a test of its
-  own; its shape is in 6.2, step 5. It gives check-fast nothing, since package assistant imports it; a developer's own
-  run of its tests took 1.5 s against 118 s for package assistant.
+  To-dos proposal's composer payload. It is declared `//persona:layer core`, with its adapter
+  fleetcount/fleetcountadapt declared `//persona:layer adapter`, rather than pinned by a test of its own; its shape is
+  in 6.2, step 5. It gives check-fast nothing, since package assistant imports it; a developer's own run of its tests
+  took 1.5 s against 118 s for package assistant. *Revised 2026-11-22 in #10613:* the layer declarations replace a
+  line in a list of domain packages; the name and home stay.
 - **D16** The direction tree's `needs_you`. *Decided 2026-11-22:* never a view id: the tree already computes
   its counts once in the manager and every client draws them as sent (`server/internal/assistant/direction_tree.go`). It
   converges in place in the To-dos rework PR that moves the tree onto the projection's phase; that PR adds a test that
@@ -537,6 +665,12 @@ Section 6.2 says what the decisions change in the steps, and 6.3 which docs chan
   accepted, since the built-in manager updates with the hub and diagnostics name an external manager's build. A change
   of unit, such as unread against action items, is a new id. Under D5 clients name their ids, so a new id for every
   refinement would cost a client release each time.
+- **D19** The main conversation's waiting count and its exact list (new with the owner's 2026-11-22 scope revision):
+  only current questions the user must answer, authorizations only the user can give and deliveries explicitly
+  requiring user acceptance count. Unstarted or failed-start tasks, agent permission requests, terminal dialogs and
+  superseded questions stay with the supervisor and do not inflate this number. Selecting it opens exactly those
+  counted items on iPhone and the shared web/Mac UI. This surface does not change D1's Agents-list badge, D8's To-dos
+  count or their rows, and it does not settle D11's open routed-terminal case for those other surfaces.
 
 ### 6.2 What the decisions change in the steps
 
@@ -558,40 +692,69 @@ Section 6.2 says what the decisions change in the steps, and 6.3 which docs chan
   - Web, Android in its three styles, and iOS, one PR each, after the fixture PR: the Needs you header and filter count
     the badge's rows, with the Muted and Assistant is looking groups (D6); `surfaces.json` gains a `web.agents_section`
     row. HarmonyOS is out of scope.
-- **Step 5** follows D15 and lands after the domain-package list. Agent is a record (Machine, Session, Muted, TurnStart;
-  no json tags) that fleetInput aliases, so no conversion slice is built per round. needer becomes the record Needer, an
-  Agent and a `*proto.Interaction` Card, with WaitingSince() (waitingSince moves in); agentKey and keyOf become KeyOf,
-  returning an `assistantwire.SessionRef` (the zero ref for a nil session); liveCounts, cardStands and Link's counts
-  predicate move too. AgentsNeedsYou returns a Tally record (the zero Tally is empty) of Row records: an ID (the
-  fixture's `agent:<machine>/<session>` or `card:<id>`), a Why, and the caller's Needer. Why is a closed type with held,
-  muted and quiet values, and Why.Counted() says whether a row counts (D11); a routed terminal question gets no held
-  value until D11's unconfirmed case is decided. It folds on its own, keying every session and card by `folded_under`,
-  children and sides alike (foldSidesIn folds only sides, so `a_childs_card_counts_under_its_parent` would get the
-  worker's key), and a card is a row of its own only when its `session_id` is empty, since quiet agents' cards survive
-  visiblePendingCards. The quiet and directory-hidden exclusion predicate is exported and applied by the fixture replay;
-  fleetInputsInto adopts it only after #10564, #10593, #10599 and #10920 close, since they rewrite its quiet line.
-  foldSidesIn and workingSince stay until step 11. archguard gets a names-only movedClusters row and no contracts.txt
-  entry; the benchmark of 60 agents and 12 cards keeps its allocations (12 allocs/op in a scratch run).
+- **Step 5** follows D15 and lands after #12899's domain rules and agentref, the session identity after them; the domain
+  slice scaffold writes both packages' skeletons first. fleetcount imports no proto and has no type parameters, and its
+  values are always valid: closed sets for State, Role, Lineage, Muting, Visibility, Placement (its own row, or under an
+  `agentref.Ref`), CardStanding, Holding, Why and Surface; Agent and Card are built only through staged builders that
+  start from an `agentref.Ref` or an interaction id and a Slot (the caller's place in its own list, which the core never
+  reads) and refuse every zero part; Agents and Cards copy their input, so the core owns its arrays. Why has
+  WhyNeedsYou(), WhyHeld(), WhyMuted() and WhyQuiet(), and Counted() says whether a row counts (D11); a routed terminal
+  question gets no held value until D11's unconfirmed case is decided. AgentsNeedsYou(surface, agents, cards) replaces
+  needsYou's callbacks with the Surface (badge, Live Activity, Link) and returns a Tally whose rows are unexported:
+  `Tally.Accept` tells each row, oldest first, with its Slots and Why, then `VisitTotal`. It folds on its own, keying
+  every session and card by `folded_under`, children and sides alike (foldSidesIn folds only sides, so
+  `a_childs_card_counts_under_its_parent` would get the worker's key), and a card is a row of its own only when it has
+  no asker (an empty `session_id`), since quiet agents' cards survive visiblePendingCards. The quiet and
+  directory-hidden exclusion is an Agent's LeftOut() and the fixture replay applies it. fleetcountadapt builds the
+  values from proto (a rejected session is logged and counted as skipped, never defaulted), and its renderer, a
+  TallyVisitor, fills FleetState's and `link.Attention`'s needs-you rows by Slot; the proto-to-contract formatting it
+  shares with package assistant's working rows moves to a small library package both import. The step leaves
+  fleetInputsInto's loop (`assistant/fleet_live.go` lines 167-185) byte-identical while an open PR edits it, the adapter
+  running on fleetInputsInto's result, and LeftOut replaces the quiet line once none does: the four repair PRs that did
+  closed on 2026-11-22, and the step re-measures with `git merge-tree` against its own head, as the Inbox plan's section
+  4 does. foldSidesIn and workingSince stay until step 11. archguard gets a names-only movedClusters row and no
+  contracts.txt entry. The fixture replay decodes `spec/fixtures/needs-you` into proto values and runs the adapter, the
+  core and the renderer, without compiling package assistant. **The gate:** one benchmark in package assistant runs the
+  whole round (build the values, decide, render FleetState and `link.Attention`) before and after, with 60 agents (a
+  third each needs-you, working and unread) and 12 cards. allocs/op must not rise. B/op must not rise except by the
+  core's own copies of its agents and cards, which the benchmark prints (`unsafe.Sizeof` of Agent times agents plus Card
+  times cards) and the PR shows. ns/op is not gated on a shared machine.
+  *Revised 2026-11-22 in #10613:* builders, Slots, closed sets and a Tally visitor in place of records and the
+  caller's values inside them; the open PRs' lines are left alone instead of waiting for them; the allocation gate is on
+  the whole round; agentref comes after #12899, not with it.
 - **Step 6** has no `surfaces` map (D5) and an optional top-level `totals` (D12); `held` carries the muted and held
   reasons (D11). Quiet rows reach the view only at section 3.2's cost, so until then a client draws them from its own
   list. docs/protocol/counts.md records each refinement with the manager build that applies it (D18).
-- **Step 7a:** one adapter in package assistant maps fleetcount's Tally, and the Inbox and to-do counts, to the
-  generated CountsView and computes `totals` from the same Tally (D12); it alone writes the wire `why` string (D11), and
-  neither fleetcount nor the hub knows the wire shape. Each count in `surfaces.json` gets a `producer` beside
-  `pinned_by`, naming the one function that produces it, and the step's test checks every producer against the adapter's
-  code map: a count with an empty `waits_on` and no producer fails, as do a code-map id the table lacks and a planted
-  table missing a producer (D18). `persona_cards`, `inbox_unread` and `todos_needs_you` wait on D9, D7 and D8's steps
-  and may have none until then.
+- **Step 7a:** fleetcountadapt, called from package assistant, maps fleetcount's Tally to the generated CountsView and
+  takes `totals` from the Tally's own `VisitTotal` in the same pass (D12); only it writes the wire `why` word (D11), and
+  neither fleetcount nor the hub knows the wire shape. Until the Inbox and the to-dos have cores of their own, their
+  counts enter as the adapter's own inputs (today's status() fold and the projection's Counts()), and no record is added
+  for them. Each count in `surfaces.json` gets a `producer` beside `pinned_by`, naming the one adapter function that
+  produces it, and the step's test checks every producer against the adapter's code map: a count with an empty
+  `waits_on` and no producer fails, as do a code-map id the table lacks and a planted table missing a producer (D18).
+  `persona_cards`, `inbox_unread` and `todos_needs_you` wait on D9, D7 and D8's steps and may have none until then.
+  *Revised 2026-11-22 in #10613:* the core's adapter, not package assistant, maps the Tally.
 - **Step 7b:** `counts_view` always listed, and the per-manager roster flag (D10). It creates
   spec/fixtures/counts/views.json with D13's four cases (a disconnect keeps the number, a removed manager drops it, a
   new epoch replaces it, a new device after a hub restart shows the fallback until the managers reconnect) and adds a
   section on it to `spec/fixtures/counts/README.md`; the hub's relay test replays the restart case.
-- **Steps 8 to 10:** each client keeps views through one small pure reducer that replays views.json (keep on null,
-  offline or a hub restart; replace on a new epoch; a lower rev loses; drop on roster removal or sign-out) and does not
-  create the file; it clears persisted views at sign-out (D13) and draws a surface from views only under D10. Step 9
-  also moves the app icon and the Home widgets to the whole hub (D2), or step 12 does. Step 10 also draws D17's number
-  on the Dock, the taskbar, the tab title and the favicon, and carries D3's Link part, since `spec/fixtures/attention`
-  and its web replay change there anyway, so the fixture is rewritten once (else step 11 carries it).
+- **Steps 8 to 10:** each client keeps views through a reducer that is a domain module beside its adapter (Android
+  :core:counts:domain in android/core/counts; Swift PersonaCountsDomain and PersonaCountsAdapt in
+  apple/Packages/PersonaCounts; the web and desktop's features/counts/domain and adapt), which replays views.json
+  through its adapter (keep on null, offline or a hub restart; replace on a new epoch; a lower rev loses; drop on roster
+  removal or sign-out) and does not create the file. The domain module alone builds its events, and each event gives the
+  next set of kept views; persisted views are data in the adapter, and one that fails to restore is dropped with the
+  `count_fallback` diagnostic. Each client clears persisted views at sign-out (D13) and draws a surface from views only
+  under D10. Step 9 also moves the app icon and the Home widgets to the whole hub (D2), or step 12 does. Step 10 also
+  draws D17's number on the Dock, the taskbar, the tab title and the favicon, and carries D3's Link part, since
+  `spec/fixtures/attention` and its web replay change there anyway, so the fixture is rewritten once (else step 11
+  carries it). Each step waits for its platform's domain kit and checks, which the Inbox plan's client steps bring
+  (`docs/plans/plan-inbox-vertical-slice.md`, sections 3.3 and 4): Android for :core:domainkit, which Inbox A4 creates
+  with :core:inbox:domain after A2, the client domain guard and #13024 (an unused result is a compile error in every
+  Android module); iOS for PersonaDomainKit (Inbox I1, after the same guard); the web and desktop for web/src/domain-kit
+  and its lint rules (Inbox W1).
+  *Revised 2026-11-22 in #10613:* domain modules with adapters in place of one small pure reducer, after their
+  platform's domain kit.
 - **Step 11:** D4's headline, with Lock Screen screenshots of a sessionless item.
 - **Step 12:** the Inbox after D7; To-dos after D8, the server's `todos_needs_you` after steps 5 to 7 and each client
   when it draws the hub's phases, with screenshots of the To-dos widget's new number and the outcome commented on

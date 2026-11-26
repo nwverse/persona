@@ -5,6 +5,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { seedAgentsDisplay } from "../lib/agents-display";
 // jsdom has no matchMedia (the sidebar's modules read it when they load) and no ResizeObserver (its highlight)
 vi.hoisted(() => {
   globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
@@ -51,7 +52,7 @@ const json = (body: unknown, status = 200) => Promise.resolve(new Response(JSON.
 /** fetch for a hub with `mac` and its one agent; GET /todos answers with `todos`. */
 const hub = (todos: () => Promise<Response>) =>
   vi.fn((url: string) => {
-    if (url.endsWith("/api/v1/todos")) return todos();
+    if (new URL(url, "http://hub").pathname.endsWith("/api/v1/todos")) return todos();
     if (url.endsWith("/api/v1/sessions")) return json({ sessions: [agent] });
     if (url.endsWith("/api/v1/machines")) return json({ machines: [mac] });
     return json({});
@@ -60,6 +61,7 @@ const hub = (todos: () => Promise<Response>) =>
 let host: HTMLDivElement;
 let root: Root;
 const flush = async () => {
+  await act(async () => { await vi.dynamicImportSettled(); });
   for (let i = 0; i < 5; i++) await act(async () => { await Promise.resolve(); });
 };
 const grouping = () => host.querySelector<HTMLElement>('[role="radiogroup"][aria-label="Agent 分组"]')!;
@@ -76,6 +78,8 @@ beforeEach(() => {
   localStorage.clear();
   sessionStorage.clear();
   reset();
+  // Settings › Agents: the Filter is on for these tests (it is off until the hub says so)
+  seedAgentsDisplay({ show_botmux: true, configured: true, show_filter: true });
   resetAgentListFilters();
   FakeSocket.all = [];
   vi.stubGlobal("WebSocket", FakeSocket);
@@ -125,7 +129,7 @@ describe("按待办 before the todos have loaded", () => {
 
   it("draws the todos as soon as GET /todos answers, while GET /sessions is still on its way", async () => {
     const slow = vi.fn((url: string) => {
-      if (url.endsWith("/api/v1/todos")) return json({ todos: [todo] });
+      if (new URL(url, "http://hub").pathname.endsWith("/api/v1/todos")) return json({ todos: [todo] });
       if (url.endsWith("/api/v1/sessions")) return new Promise<Response>(() => {});
       if (url.endsWith("/api/v1/machines")) return json({ machines: [mac] });
       return json({});
@@ -270,7 +274,7 @@ describe("按待办's 最近（未运行）", () => {
     const gone: Session = { ...agent, session_id: "s2", title: "旧的发布检查", status: "offline", state: "offline" };
     let sessions = [agent, gone];
     vi.stubGlobal("fetch", vi.fn((url: string) => {
-      if (url.endsWith("/api/v1/todos")) return json({ todos: [todo] });
+      if (new URL(url, "http://hub").pathname.endsWith("/api/v1/todos")) return json({ todos: [todo] });
       if (url.endsWith("/api/v1/sessions")) return json({ sessions });
       if (url.endsWith("/api/v1/machines")) return json({ machines: [mac] });
       return json({});
@@ -332,7 +336,7 @@ describe("relative-time Agents filters", () => {
     vi.setSystemTime(start);
     const aging = { ...agent, updated_at: new Date(start.getTime() - 24 * 60 * 60 * 1000 + 30_000).toISOString() };
     vi.stubGlobal("fetch", vi.fn((url: string) => {
-      if (url.endsWith("/api/v1/todos")) return json({ todos: [todo] });
+      if (new URL(url, "http://hub").pathname.endsWith("/api/v1/todos")) return json({ todos: [todo] });
       if (url.endsWith("/api/v1/sessions")) return json({ sessions: [aging] });
       if (url.endsWith("/api/v1/machines")) return json({ machines: [mac] });
       return json({});
@@ -500,7 +504,7 @@ describe("stable machine, workspace and tab order (#11801)", () => {
       sessions[0]!,
       placed("b1", "beta", { state: "needs_you" }),
       placed("c1", "gamma", { work: { phase: "done", just_finished: true } }),
-      placed("d1", "delta", { status: "working", state: "working", background_waiting: true }),
+      placed("d1", "delta", { status: "working", state: "working", background_working: true, background_waiting: true }),
     ];
     act(() => sessions.slice(1).forEach((session) => upsertSession(session)));
     await flush();

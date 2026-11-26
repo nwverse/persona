@@ -166,9 +166,12 @@ func (x *inboxTaskIndex) match(it *InboxItem, closes map[string][]uint64) string
 
 // inboxClosesIndex reads, off the GitHub pull request items the Inbox holds (open or done), which issues of their
 // repository each says it closes: issue ref → pull request numbers. Under b.mu.
-func inboxClosesIndex(items map[string]*InboxItem) map[string][]uint64 {
+func inboxClosesIndex(items map[string]*InboxItem, excluded func(*InboxItem) bool) map[string][]uint64 {
 	out := map[string][]uint64{}
 	for _, it := range items {
+		if excluded != nil && excluded(it) {
+			continue
+		}
 		pr := inboxItemNumber(it)
 		if pr == 0 || it.Connector == nil || !strings.Contains(it.Connector.URL, "/pull/") {
 			continue
@@ -195,13 +198,46 @@ func inboxClosesIndex(items map[string]*InboxItem) map[string][]uint64 {
 // existing link of a GitHub item to an open task that does not name its repository (inbox_task_scope.go, #6424) is
 // cleared instead: persisted like any item write, and nothing is told about it.
 func (s *Service) linkInboxTaskURLs(ctx context.Context) {
+	fullCfg, err := s.inboxConfigFresh(ctx)
+	if err != nil {
+		return
+	}
 	if s.ensureTodosLoaded(ctx) != nil {
 		return
 	}
+	visCfg := fullCfg.Visibility
+	var providerAllowed map[string]bool
+	if visCfg != nil && (visCfg.DirectChats || len(visCfg.Chats) > 0) {
+		b := &s.inbox
+		b.mu.Lock()
+		sources := map[string]struct{}{}
+		for _, it := range b.items {
+			sources[it.Source] = struct{}{}
+		}
+		b.mu.Unlock()
+		providerAllowed = make(map[string]bool, len(sources))
+		for src := range sources {
+			providerAllowed[src] = s.inboxVisibilityProviderAllowed(visCfg, src)
+		}
+	}
 	idx := &inboxTaskIndex{byRef: map[string][]string{}, bare: map[uint64][]Todo{}, open: map[string]Todo{}}
+	acceptedPRs := map[string]Todo{}
+	followAcceptedPRs := s.inboxSignalsOn(ctx)
 	s.todos.mu.RLock()
 	for _, t := range s.todos.todos {
-		if t.DoneAt != nil || t.Cancelled() || isAskTodo(t.ID) {
+		if t.Cancelled() || isAskTodo(t.ID) {
+			continue
+		}
+		if t.DoneAt != nil {
+			if followAcceptedPRs && taskAcceptedForFeedback(*t) {
+				for _, raw := range append(slices.Clone(t.PRs), t.PRURL) {
+					if u := triageNormalizePRURL(raw); u != "" {
+						if other, ok := acceptedPRs[u]; !ok || t.DoneAt.After(*other.DoneAt) {
+							acceptedPRs[u] = *t
+						}
+					}
+				}
+			}
 			continue
 		}
 		idx.add(*t)
@@ -215,9 +251,15 @@ func (s *Service) linkInboxTaskURLs(ctx context.Context) {
 	var unlinked []string
 	var closes map[string][]uint64
 	var done []*InboxItem
+	itemVisibilityExcludedLocked := func(it *InboxItem) bool {
+		if providerAllowed != nil && !providerAllowed[it.Source] {
+			return true
+		}
+		return inboxVisibilityWithMembersExcludedLocked(b, it, visCfg)
+	}
 	b.mu.Lock()
 	for _, it := range b.items {
-		if !inboxTaskLinkEligible(it) {
+		if itemVisibilityExcludedLocked(it) || it.externallyRouted() || !inboxTaskLinkEligible(it) {
 			continue
 		}
 		if !it.open() {
@@ -228,7 +270,7 @@ func (s *Service) linkInboxTaskURLs(ctx context.Context) {
 		}
 		if a := it.Agent; a != nil && a.TodoID != "" {
 			if sc := inboxScopeOf(it); sc.repo != "" {
-				if t, ok := open[a.TodoID]; ok && t.InboxItem != it.ID && !taskOfRepo(t, sc.repo) {
+				if t, ok := open[a.TodoID]; ok && t.InboxItem != it.ID && (it.TodoForward == nil || it.TodoForward.TodoID != a.TodoID) && !taskOfRepo(t, sc.repo) {
 					w := beginWrite(it)
 					unlinked = append(unlinked, it.ID+" from "+a.TodoID)
 					a.TodoID = ""
@@ -240,9 +282,17 @@ func (s *Service) linkInboxTaskURLs(ctx context.Context) {
 		}
 		if it.Agent == nil || it.Agent.TodoID == "" {
 			if closes == nil {
-				closes = inboxClosesIndex(b.items)
+				closes = inboxClosesIndex(b.items, itemVisibilityExcludedLocked)
 			}
 			id := idx.match(it, closes)
+			if id == "" {
+				if u := inboxOpenPR(it); u != "" {
+					repo, n := inboxScopeOf(it).repo, inboxItemNumber(it)
+					if n != 0 && len(idx.tasksOf(githubRef(repo, n), repo, n)) == 0 {
+						id = acceptedPRs[u].ID
+					}
+				}
+			}
 			if id != "" {
 				w := beginWrite(it)
 				if it.Agent == nil {
@@ -279,6 +329,7 @@ func (s *Service) linkInboxTaskURLs(ctx context.Context) {
 // suggestion stays. Saved like any item write; a failed save undoes it.
 func (s *Service) fileTaskDone(ctx context.Context, items []*InboxItem) {
 	b := &s.inbox
+	followAcceptedPRs := s.inboxSignalsOn(ctx)
 	pending := map[string]bool{}
 	s.todos.mu.RLock()
 	for _, task := range s.todos.todos {
@@ -303,7 +354,8 @@ func (s *Service) fileTaskDone(ctx context.Context, items []*InboxItem) {
 			continue
 		}
 		b.mu.Lock()
-		if b.items[it.ID] == it && taskDoneFileable(it) && it.Agent.TodoID == id {
+		if b.items[it.ID] == it && taskDoneFileable(it) && it.Agent.TodoID == id &&
+			(!followAcceptedPRs || !acceptedPRFeedback(t, inboxOpenPR(it))) {
 			now := time.Now()
 			w := beginWrite(it)
 			it.done(now, doneByManager)
@@ -322,7 +374,7 @@ func (s *Service) fileTaskDone(ctx context.Context, items []*InboxItem) {
 // twin (that one decides, and its judge links the item to the task carrying the work on), nothing handling it, no
 // suggestion waiting, and not filed for this to-do before (reopened by hand, or by new messages, it stays). Under b.mu.
 func taskDoneFileable(it *InboxItem) bool {
-	return it.open() && it.Agent != nil && it.Agent.TodoID != "" && it.Agent.SessionID == "" && !it.handled() &&
+	return !it.VisibilityExcluded && it.open() && it.Agent != nil && it.Agent.TodoID != "" && it.Agent.SessionID == "" && !it.handled() &&
 		currentSuggestion(it) == nil && it.SettledOf != taskDoneEvidence(it.Agent.TodoID)
 }
 

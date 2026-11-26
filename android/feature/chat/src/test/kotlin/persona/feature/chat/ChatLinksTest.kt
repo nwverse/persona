@@ -26,12 +26,12 @@ class ChatLinksTest {
 
     /** A whole native document goes as iOS and web send it: the whole-document marker iOS's quote row keys on. */
     @Test fun aWholeDocumentPickCarriesTheWholeMarker() {
-        val doc = persona.feature.inbox.LarkNativeLink.Document("https://example.feishu.cn/docx/a")
+        val doc = persona.core.inbox.LarkNativeLink.Document("https://example.feishu.cn/docx/a")
         val text = requireNotNull(ChatLinkContext.whole(doc, ""))
         val xml = ChatLinkContext(title = "排期", url = doc.url, text = text).xml()
         assertTrue(xml, xml.contains("\n（整篇）\n</persona-context>"))
         assertEquals("（整篇）", ChatLinkContext.parse(xml).first.single().text)
-        val post = persona.feature.inbox.LarkNativeLink.MomentsPost("p1")
+        val post = persona.core.inbox.LarkNativeLink.MomentsPost("p1")
         assertNull(ChatLinkContext.whole(post, null))
         assertEquals("帖子正文", ChatLinkContext.whole(post, "帖子正文"))
         assertNull(ChatLinkContext.whole(null, "x"))
@@ -86,6 +86,17 @@ class ChatLinksTest {
         assertEquals("新标签", renamed.single().text)
         assertEquals("看看", after)
         assertTrue(ChatLinkContext(title = "t", url = "u", text = "a </persona-context> b").xml().contains("\na  b\n"))
+        // Legacy context blocks and legacy forward blocks read back and strip cleanly via ProtocolCompatibility.
+        val legacyQuote = persona.core.contracts.ProtocolCompatibility.messageForHub(
+            ChatLinkContext.quote("旧引用", "Antigravity", "m9", ChatLinkContext.PART_SELECTION).xml() + "\n\n看下")
+        assertFalse(legacyQuote.contains("<persona-context"))
+        val (legacyParsed, legacyRest) = ChatLinkContext.parse(legacyQuote)
+        assertEquals(listOf("quote", "Antigravity", "m9", ChatLinkContext.PART_SELECTION, "旧引用"),
+            listOf(legacyParsed.single().kind, legacyParsed.single().title, legacyParsed.single().msg, legacyParsed.single().part, legacyParsed.single().text))
+        assertEquals("看下", legacyRest)
+        val legacyForward = persona.core.contracts.ProtocolCompatibility.messageForHub(
+            ChatLinkContext(ChatLinkContext.FORWARD, "Fwd", "persona://session/m/s?at=1", "orig", msg = "1").xml() + "\n\n备注")
+        assertEquals("备注", ChatLinkContext.withoutForwards(legacyForward))
     }
 
     @Test fun preloadsOnlyLinksInFreshReplies() {

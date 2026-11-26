@@ -202,12 +202,14 @@ func lookManifest(lp extwire.LookPackage, l extension.LookItem) map[string]any {
 
 // looks is every look, in the picker's order: the built-in ones, the hub's packages, the extensions'.
 func (h *Hub) looks() []lookView {
+	lookSwapMu.RLock()
+	defer lookSwapMu.RUnlock()
 	out := []lookView{}
 	for _, id := range extension.BuiltinLooks {
 		b := builtinLookNames[id]
 		out = append(out, lookView{ID: id, Source: "builtin", Name: b.name, Names: b.names, AppIcon: id})
 	}
-	for _, p := range h.personaPackages() {
+	for _, p := range h.personaPackagesLocked() {
 		info, err := h.personaInfo(p)
 		if err != nil {
 			h.logf("persona %s left out: %v", p.id, err)
@@ -291,6 +293,14 @@ func (h *Hub) looksGone(ctx context.Context, ids []string) {
 	if h.store == nil {
 		return
 	}
+	if !h.quiesce.beginOrDefer(func() {
+		h.looksGoneMu.Lock()
+		h.looksGonePending = append(h.looksGonePending, ids...)
+		h.looksGoneMu.Unlock()
+	}) {
+		return
+	}
+	defer h.quiesce.end()
 	chosen, err := h.lookChoice(ctx)
 	if err != nil {
 		h.logf("look: read choice after removal: %v", err)
@@ -306,6 +316,26 @@ func (h *Hub) looksGone(ctx context.Context, ids []string) {
 	if _, err := h.chooseLook(ctx, extension.DefaultLook, looks); err != nil {
 		h.logf("look: back to the default after %s went: %v", chosen.ID, err)
 	}
+}
+
+func (h *Hub) resumeLooksGone() {
+	if h.store == nil {
+		return
+	}
+	h.looksGoneMu.Lock()
+	ids := h.looksGonePending
+	h.looksGonePending = nil
+	h.looksGoneMu.Unlock()
+	if len(ids) == 0 {
+		return
+	}
+	h.nodeWorkers.Add(1)
+	go func() {
+		defer h.nodeWorkers.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		h.looksGone(ctx, ids)
+	}()
 }
 
 func (h *Hub) lookRoutes(api *http.ServeMux) {

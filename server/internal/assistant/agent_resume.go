@@ -23,14 +23,16 @@ import (
 //   - the same node call as the user's Resume: session.start with resume_session_id and a node-side recovery guard
 //     (node node.go fillResume: the session's own launcher, directory, model and permission mode; the shell it left
 //     when that is still there, else a new tab), the text as its first message;
-//   - never unsupervised: the agent is on an open task of this conversation already, or the call gives task (main
-//     conversation), which makes it one as agent_send with a task does, the card marked resumed (wakeResumed);
+//   - never unsupervised: the agent is on an open task of this conversation already, or the call gives task (the main
+//     conversation, or a direction's lead within leadTakeAllowed, #12953), which makes it one as agent_send with a
+//     task does, the card marked resumed (wakeResumed);
 //   - visible: the phone's confirmation and the task's card say which agent was resumed and why (resume_note);
 //   - compacted before the text goes in when its context is nearly full (#11137): resumed without a first message,
 //     then the text sent with compact_if_full, so the node runs the runtime's own /compact and sends once it is done
 //     (node compact_before_send.go). Only a failed compaction, or a runtime Persona cannot compact, falls back to a
 //     replacement, saying why;
-//   - refused for user/unknown stops, offline computers, or the node's own start refusals.
+//   - refused for the user's stops, archived Agents with no recorded non-user stop, offline computers, or the node's own
+//     start refusals. An unknown stop is resumable (#11528).
 
 // resumeRequest is what agent_send's resume asks for: why its context is needed.
 type resumeRequest struct {
@@ -43,7 +45,7 @@ func stoppedRefusal(c proto.Session) error {
 		"Nothing was sent. Choose how to go on: when the next work depends on what this agent already knows (it has just "+
 		"investigated this and should now fix it, rework of its own work, the user asked for the agent with the context), "+
 		"send again with resume true and resume_why, which resumes this same session with its context on its own "+
-		"launcher and permission mode (from the main conversation also give task, unless it is on an open task of yours). "+
+		"launcher and permission mode (also give task, unless it is on an open task of yours). "+
 		"A nearly full context is no reason to start over: the resume compacts it with the agent's own /compact before your "+
 		"text goes in. For unrelated work, or when it went off track, start a replacement and give it what "+
 		"it needs (read this one with agent_read): for its task, task_plan with continues (the task's todo id) and "+
@@ -71,9 +73,17 @@ func (s *Service) resumeAllowed(ctx context.Context, self string, am Device, c p
 		}
 		cause = info.StopCause
 	}
-	if !cause.AllowsSupervisorResume() {
-		return fmt.Errorf("%s cannot be resumed by the assistant: stop cause is %s. User stops and unknown causes require "+
-			"the user's Resume on its terminal page. Nothing was started or sent", agentLabel(c), cause)
+	// Every stop but the user's may be resumed (#11528): an unknown cause too, an Agent that quit by itself or that a
+	// restart of its machine cut off. An archived one only with a cause the node recorded as not the user's: archiving
+	// it was the user's (or the assistant's own close, which records its cause).
+	if c.Capabilities == nil && !c.Archived {
+		return fmt.Errorf("%s cannot be resumed by the assistant: its computer's node reports no stop cause (too old). "+
+			"The user's Resume on its terminal page can. Nothing was started or sent", agentLabel(c))
+	}
+	if c.Archived && !cause.AllowsSupervisorResume() || !cause.SupervisorMayResume() {
+		return fmt.Errorf("%s cannot be resumed by the assistant: stop cause is %s. %s require "+
+			"the user's Resume on its terminal page. Give that instruction separately from the choices on a decision card. Nothing was started or sent",
+			agentLabel(c), cause, userResumeOnly(c.Archived, cause))
 	}
 	if why == "" {
 		return fmt.Errorf("resume_why is required: say why this agent's own context is needed (the user sees it). Nothing was started or sent")
@@ -93,13 +103,145 @@ func (s *Service) resumeAllowed(ctx context.Context, self string, am Device, c p
 	}
 	t, ok := s.openTodoOfAgent(am.ID, c.SessionID)
 	if !ok {
-		return fmt.Errorf("%s is on no open task of yours: a resumed agent must be supervised. Give task (from the main "+
-			"conversation) to make it your task as you resume it. Nothing was started or sent", agentLabel(c))
+		if !s.supervises(ctx, self) {
+			return fmt.Errorf("%s is on no open task of yours: a resumed agent must be supervised, and only the main "+
+				"conversation and a direction's lead supervise agents. Nothing was started or sent", agentLabel(c))
+		}
+		return fmt.Errorf("%s is on no open task of yours: a resumed agent must be supervised. Give task to make it your "+
+			"task as you resume it. Nothing was started or sent", agentLabel(c))
 	}
 	if err := othersTask(c, t, self); err != nil {
 		return fmt.Errorf("%w; it is not yours to resume. Nothing was started or sent", err)
 	}
 	return nil
+}
+
+// resumeTodoForAgent prepares a same-session resume of stopped agent c back onto open to-do id: the to-do must be one
+// self opened or supervises, still open, with no active agent, and c its most recently released (not dismissed) agent.
+// The historical link is reactivated (released_at cleared) before resumeAllowed runs, so the resume keeps the original
+// to-do and its brief instead of adopting the agent onto a new supervised task (#13192). Nothing starts here: the
+// caller still goes through resumeAllowed and the node's session.start.
+func (s *Service) resumeTodoForAgent(ctx context.Context, self string, am Device, c proto.Session, id string) (Todo, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return Todo{}, errors.New("todo_id is empty")
+	}
+	if c.State == proto.StateNeedsYou || c.PendingInteractions > 0 {
+		return Todo{}, fmt.Errorf("%s is waiting for the user (a question, plan, permission or dialog): it is theirs to answer first", agentLabel(c))
+	}
+	if err := s.ensureTodosLoaded(ctx); err != nil {
+		return Todo{}, err
+	}
+	t, ok := s.todoNow(id)
+	if !ok {
+		return Todo{}, fmt.Errorf("todo_id %s: there is no such to-do", id)
+	}
+	if t.Origin != self && (t.Supervision == nil || t.Supervision.Supervisor != self) {
+		return Todo{}, fmt.Errorf("todo_id %s: it was not opened from this conversation, nor is it supervised by it", id)
+	}
+	if t.DoneAt != nil {
+		return Todo{}, fmt.Errorf("todo_id %s: it is already done; reopen it before resuming its Agent", id)
+	}
+	for _, a := range t.Agents {
+		if a.active() {
+			return Todo{}, fmt.Errorf("todo_id %s: an agent is already working on it; send that Agent instead of resuming another", id)
+		}
+	}
+	// Reject before the re-link when the session still serves another open to-do: writeTodoAgentLink would release that
+	// other active link, and rollbackResumeTodo only releases this to-do's link, so a later refusal/failed start would
+	// leave the other to-do with no Agent even though nothing was sent (#13225 QA).
+	if other, ok := s.openTodoOfAgent(am.ID, c.SessionID); ok && other.ID != t.ID {
+		return Todo{}, fmt.Errorf("todo_id %s: this Agent is still on to-do %s; resume it there, or hand that to-do over first", id, other.ID)
+	}
+	last := lastReleasedAgent(t)
+	if last == nil || last.MachineID != am.ID || last.SessionID != c.SessionID {
+		return Todo{}, fmt.Errorf("todo_id %s: this Agent is not the to-do's latest released Agent; resume onto a to-do only with the Agent that last worked on it", id)
+	}
+	agentName := c.Agent
+	if agentName == "" {
+		agentName = last.Agent
+	}
+	// The upsert clears released_at on the same (todo, machine, session) link and keeps its title/cwd history
+	// (db.linkTodoAgentWithSource); any active link elsewhere would be released first, which the checks above rule out.
+	if err := s.linkTodoAgentWithSource(ctx, t.ID, am.ID, c.SessionID, last.Title, last.Cwd, agentName,
+		"", "manual", "resume"); err != nil {
+		return Todo{}, fmt.Errorf("resume it on its to-do: %w", err)
+	}
+	relinked, _ := s.todoNow(t.ID)
+	s.logf("resume todo %s: re-linked agent %s/%s", t.ID, am.ID, short(c.SessionID))
+	return formatTodo(relinked), nil
+}
+
+// lastReleasedAgent is the to-do's most recently linked agent that was let go (released, not dismissed); nil when the
+// to-do never had one. A dismissed link is an explicit removal, not a stop the assistant may undo.
+func lastReleasedAgent(t Todo) *TodoAgent {
+	var last *TodoAgent
+	for i := range t.Agents {
+		a := &t.Agents[i]
+		if a.ReleasedAt == nil || a.DismissedAt != nil {
+			continue
+		}
+		if last == nil || a.LinkedAt.After(last.LinkedAt) {
+			last = a
+		}
+	}
+	return last
+}
+
+// rollbackResumeTodo undoes a resumeTodoForAgent re-link when the send does not happen (a refusal after the link, a
+// declined confirmation, or a node start that failed for a known reason): the link is released again so the to-do is
+// unassigned as before. A start whose result is unknown keeps the link, as the session may still come up. Best
+// effort: a failure here only logs, the caller's original error stands.
+func (s *Service) rollbackResumeTodo(ctx context.Context, todoID, mid, sid string) {
+	now := time.Now().UTC()
+	s.todos.writing.Lock()
+	if st, ok := s.todoDB().(todoAgentReleaser); ok {
+		if err := st.ReleaseTodoAgent(ctx, todoID, mid, sid, now); err != nil {
+			s.logf("resume todo %s: rollback release: %v", todoID, err)
+		}
+	}
+	s.todos.mu.Lock()
+	if t, ok := s.todos.todos[todoID]; ok {
+		for i := range t.Agents {
+			if t.Agents[i].MachineID == mid && t.Agents[i].SessionID == sid && t.Agents[i].ReleasedAt == nil {
+				t.Agents[i].ReleasedAt = &now
+				t.UpdatedAt = now
+			}
+		}
+	}
+	if key := [2]string{mid, sid}; s.todos.activeBySession[key] == todoID {
+		delete(s.todos.activeBySession, key)
+	}
+	s.todos.mu.Unlock()
+	s.todos.writing.Unlock()
+	s.linksChanged(ctx)
+	s.todosChanged(ctx)
+	s.logf("resume todo %s: rolled back the re-link of %s/%s", todoID, mid, short(sid))
+}
+
+// eventMayResume: an event Persona routes on its own (a PR's, an Inbox item's) may resume c only after a stop the node
+// recorded as not the user's. An unknown stop or a supervision timeout stop is left to the supervisor's deliberate
+// agent_send resume; an event does not decide that on its own (#11528). An archived one is left to resumeAllowed,
+// which reads the node's own cause.
+func eventMayResume(c proto.Session) error {
+	if c.Capabilities != nil && c.Capabilities.StopCause == proto.StopTimeout {
+		return fmt.Errorf("%s stopped on supervision timeout: an event does not resume it; its supervisor may", agentLabel(c))
+	}
+	if c.Archived || c.Capabilities != nil && c.Capabilities.StopCause.AllowsSupervisorResume() {
+		return nil
+	}
+	return fmt.Errorf("%s has no recorded non-user stop: an event does not resume it; its supervisor may", agentLabel(c))
+}
+
+// userResumeOnly names the stops that need the user's Resume, for resumeAllowed's refusal of one with cause.
+func userResumeOnly(archived bool, cause proto.StopCause) string {
+	switch {
+	case cause.UserStopped():
+		return "Stops by the user (Stop, Close, Archive and close, /exit)"
+	case archived:
+		return "Archived Agents without a recorded non-user stop"
+	}
+	return "Stop causes this hub does not know"
 }
 
 // contextFull: what the model saw in c's latest reply fills proto.ContextNearlyFullShare of its window (both known).
@@ -222,6 +364,9 @@ func (s *Service) resumeAndSend(ctx context.Context, self string, am Device, c p
 	} else if id, ok := params["client_msg_id"]; ok {
 		startParams["client_msg_id"] = id
 	}
+	if task != nil {
+		sctx = context.WithValue(sctx, placementTaskKey{}, task.todo.ID)
+	}
 	err = s.call(sctx, am.ID, DeviceSessionStart, startParams, &res)
 	if err != nil {
 		if full && sendUnknown(err) {
@@ -264,6 +409,7 @@ func (s *Service) resumeAndSend(ctx context.Context, self string, am Device, c p
 	} else {
 		sendNote.sent(sctx, err)
 	}
+	s.progressMade(am.ID, c.SessionID, time.Now())
 	s.logf("resume %s on %s for %s: %s", short(c.SessionID), am.ID, self, why)
 	note := s.resumeNote(sctx, c, am, why)
 	said := ""
@@ -271,9 +417,17 @@ func (s *Service) resumeAndSend(ctx context.Context, self string, am Device, c p
 		said = task.sent(sctx, s, told)
 		s.noteResume(sctx, self, task.todo.ID, am.ID, c.SessionID, note)
 		s.ensureSupervisor(sctx, task.todo.ID) // made or kept by adoptAgent; never left without a supervisor
+		if err := s.clearTimedOut(sctx, task.todo.ID); err != nil {
+			s.logf("task %s: clear timed_out on resume: %v", task.todo.ID, err)
+		}
 	} else if t, ok := s.openTodoOfAgent(am.ID, c.SessionID); ok {
 		s.ensureSupervisor(sctx, t.ID) // its task goes on with a supervisor, as a successor's does (tasks_successor.go)
 		s.releaseHold(sctx, t.ID)      // its supervisor sent it on: follow-ups go again (decision.go)
+		if t.Supervision != nil && t.Supervision.state(t) == reviewTimedOut {
+			if err := s.clearTimedOut(sctx, t.ID); err != nil {
+				s.logf("task %s: clear timed_out on resume: %v", t.ID, err)
+			}
+		}
 		if _, err := s.appendFeed(sctx, self, feedRouted, t.ID, map[string]string{"text": told, "from": routedFromAssistant,
 			"machine_id": am.ID, "session_id": c.SessionID}); err != nil {
 			s.logf("task %s: routed feed: %v", t.ID, err)

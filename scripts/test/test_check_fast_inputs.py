@@ -34,7 +34,13 @@ from test_check_fast import GUARD_SUITES, PASSING, copy_check_fast
 ROOT = Path(__file__).resolve().parents[2]
 
 
-FAKE_GO = '#!/bin/sh\nprintf "%s|%s\\n" "${PWD##*/}" "$*" >> "$FAKE_GO_LOG"\n'
+FAKE_GO = ('#!/bin/sh\nprintf "%s|%s%s%s\\n" "${PWD##*/}" "${GOOS:+GOOS=$GOOS }" "${CI_BASE_SHA:+CI_BASE_SHA=$CI_BASE_SHA }" '
+           '"$*" >> "$FAKE_GO_LOG"\n')
+# A gofmt that records each call ("<slot held>|<args>") and lists, as gofmt -l does, the named files that hold the
+# marker: a planted unformatted file.
+UNFORMATTED = "not gofmt-formatted"
+FAKE_GOFMT = ('#!/bin/sh\nprintf "%s|%s\\n" "${PERSONA_HEAVY_SLOT_HELD:-}" "$*" >> "$FAKE_GOFMT_LOG"\n'
+              '[ "$1" = -l ] && shift\nfor f in "$@"; do grep -l "' + UNFORMATTED + '" "$f"; done\nexit 0\n')
 # The package lists of check-fast's two repo-wide guard calls: whole packages, and the named guard and contract tests
 # (-run) of packages whose other tests are slow or need Postgres (#12842).
 GUARD_PACKAGES = "./internal/lazyre ./internal/archguard ./internal/tzguard ./plugins ./internal/i18n ./internal/prompts"
@@ -84,11 +90,16 @@ class CheckFastServerInputsTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, bin_dir)
         (bin_dir / "go").write_text(FAKE_GO)
         (bin_dir / "go").chmod(0o755)
+        (bin_dir / "gofmt").write_text(FAKE_GOFMT)
+        (bin_dir / "gofmt").chmod(0o755)
         (bin_dir / "npm").write_text("#!/bin/sh\n")  # passes npm ci, typecheck and vitest without running them
         (bin_dir / "npm").chmod(0o755)
         self.go_log = bin_dir / "calls.log"
-        self.env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
-                    "FAKE_GO_LOG": str(self.go_log)}
+        self.gofmt_log = bin_dir / "gofmt.log"
+        # The fake go records GOOS only as check-fast's Windows vet sets it.
+        self.env = {**{key: value for key, value in os.environ.items() if key not in ("GOOS", "GOARCH")},
+                    "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}", "FAKE_GO_LOG": str(self.go_log),
+                    "FAKE_GOFMT_LOG": str(self.gofmt_log)}
 
     def write(self, path, text):
         file = self.repo / path
@@ -98,11 +109,11 @@ class CheckFastServerInputsTests(unittest.TestCase):
     def git(self, *args):
         subprocess.run(["git", "-C", str(self.repo), *args], check=True, capture_output=True)
 
-    def check_fast(self):
+    def check_fast(self, code=0):
         run = subprocess.run(["bash", "scripts/test/check-fast.sh", "--base", "base"], cwd=self.repo, env=self.env,
                              capture_output=True, text=True, timeout=300)
         out = run.stdout + run.stderr
-        self.assertEqual(0, run.returncode, out)
+        self.assertEqual(code, run.returncode, out)
         calls = self.go_log.read_text().splitlines() if self.go_log.exists() else []
         # The package pattern is the last argument of each recorded "go test ... ./internal/<pkg>/..." call.
         return out, sorted(call.split()[-1] for call in calls if call.startswith("server|test "))
@@ -114,6 +125,12 @@ class CheckFastServerInputsTests(unittest.TestCase):
 
     def guard_calls(self):
         return [call for call in self.go_calls() if call.endswith((" " + GUARD_PACKAGES, " " + GUARD_RUN_PACKAGES))]
+
+    def vet_calls(self):
+        return [call for call in self.go_calls() if call.startswith(("server|vet ", "server|GOOS=windows vet "))]
+
+    def gofmt_calls(self):
+        return self.gofmt_log.read_text().splitlines() if self.gofmt_log.exists() else []
 
     def test_a_spec_fixture_runs_the_packages_that_read_it(self):
         self.write("spec/fixtures/x.json", '{"changed": true}\n')
@@ -282,7 +299,11 @@ class CheckFastServerInputsTests(unittest.TestCase):
         self.assertIn("./internal/foo/...", packages)
         calls = self.guard_calls()
         self.assertEqual(2, len(calls), out)
-        self.assertEqual("server|test -count=1 " + GUARD_PACKAGES, calls[0])
+        # The whole-package guards hold the domain counts to the merge base too (archguard's TestDomainLayers reads
+        # CI_BASE_SHA), as the sleep ratchet's --base does.
+        merge_base = subprocess.run(["git", "-C", str(self.repo), "merge-base", "HEAD", "base"], check=True,
+                                    capture_output=True, text=True).stdout.strip()
+        self.assertEqual("server|CI_BASE_SHA=%s test -count=1 %s" % (merge_base, GUARD_PACKAGES), calls[0])
         match = re.fullmatch(r"server\|test -count=1 -run \^\(([\w|.*]+)\)\$ " + re.escape(GUARD_RUN_PACKAGES), calls[1])
         self.assertIsNotNone(match, calls[1])
         # go test -run passes when a name matches nothing: test_check_fast_guards.py's CheckFastGoGuardListTests holds
@@ -301,6 +322,137 @@ class CheckFastServerInputsTests(unittest.TestCase):
         out, _ = self.check_fast()
         self.assertEqual(2, len(self.guard_calls()), out)
 
+    def test_a_server_go_change_runs_go_vet_and_gofmt_in_jobs_of_their_own(self):
+        # go vet checks the whole module, then the changed groups for Windows; gofmt reads just the changed .go files
+        # (#12894). Each is its own job, beside the package tests and the guards.
+        self.write("server/internal/foo/x.go", "package foo\n")
+        self.write("server/cmd/bar/main.go", "package main\n")
+        self.write("server/internal/foo/testdata/case.json", "{}\n")
+        out, packages = self.check_fast()
+        for line in ("PASS     server repo-wide guards", "PASS     server go vet", "PASS     gofmt (changed files)"):
+            self.assertIn(line, out)
+        self.assertLessEqual({"./cmd/bar/...", "./internal/foo/..."}, set(packages))
+        self.assertEqual(["server|vet -ldflags= ./...",
+                          "server|GOOS=windows vet -ldflags= ./cmd/bar/... ./internal/foo/..."], self.vet_calls())
+        self.assertEqual(["|-l server/cmd/bar/main.go server/internal/foo/x.go"], self.gofmt_calls())
+
+    def test_a_change_outside_every_group_vets_the_whole_module_for_windows(self):
+        for path, text in (("server/go.mod", "module example.com/server\n\ngo 1.27\n"), ("sdk/go/x.go", "package sdk\n"),
+                           ("server/plugins/plugins.go", "package plugins\n")):
+            with self.subTest(path=path):
+                self.go_log.unlink(missing_ok=True)
+                self.write(path, text)
+                out, _ = self.check_fast()
+                self.git("checkout", "-q", "base", "--", ".")
+                self.git("clean", "-fdq")
+                self.assertEqual(["server|vet -ldflags= ./...", "server|GOOS=windows vet -ldflags= ./..."],
+                                 self.vet_calls(), out)
+
+    def test_a_group_with_no_windows_package_is_left_out_of_the_windows_vet(self):
+        # Every file of server/scripts/fleetsoak is //go:build unix and server/cmd/password-wasm is js && wasm: given
+        # only such groups, GOOS=windows go vet says "no packages to vet" and exits 1, where CI's ./... passes over them.
+        # This go says so too, and its go list answers as the real one does for such a group. A group is left out only
+        # on that answer: a go list that fails, or lists nothing without the warning, leaves the group in.
+        (self.go_log.parent / "go").write_text(
+            FAKE_GO + 'case "$GOOS $*" in\n'
+            '  "windows list ./internal/unixonly/...") echo \'go: warning: "./internal/unixonly/..." matched no packages\' >&2'
+            ' ;;\n'
+            '  "windows list ./internal/broken/...") echo "internal/broken/x.go:1:1: expected package" >&2; exit 1 ;;\n'
+            '  "windows vet "*./internal/unixonly/...*) echo "no packages to vet" >&2; exit 1 ;;\n'
+            'esac\n')
+        left_out = "windows vet left out ./internal/unixonly/...: no package there builds for windows"
+        for path in ("server/internal/unixonly/soak.go", "server/internal/foo/x.go", "server/internal/broken/x.go"):
+            self.write(path, "//go:build unix\n\npackage x\n")
+        out, _ = self.check_fast()
+        self.assertIn("PASS     server go vet (", out)
+        self.assertIn("; " + left_out + ")", out)
+        self.assertEqual(["server|vet -ldflags= ./...",
+                          "server|GOOS=windows vet -ldflags= ./internal/broken/... ./internal/foo/..."], self.vet_calls())
+        # With no group left, the Windows step does not run, and the job still passes.
+        self.git("checkout", "-q", "base", "--", ".")
+        self.git("clean", "-fdq")
+        self.go_log.unlink()
+        self.write("server/internal/unixonly/soak.go", "//go:build unix\n\npackage soak\n")
+        out, _ = self.check_fast()
+        self.assertIn("PASS     server go vet (", out)
+        self.assertIn(left_out, out)
+        self.assertEqual(["server|vet -ldflags= ./..."], self.vet_calls())
+
+    def test_a_moved_tool_runs_tests_and_windows_vet_at_its_new_path(self):
+        (self.repo / "server/scripts").mkdir()
+        self.git("mv", "server/internal/bar", "server/scripts/bar")
+        out, packages = self.check_fast()
+        self.assertIn("./scripts/bar/...", packages, out)
+        self.assertNotIn("./internal/bar/...", packages, out)
+        self.assertNotIn("server|build ./...", self.go_calls(), out)
+        self.assertIn("PASS     server go vet (", out)
+        self.assertIn("; windows vet left out ./internal/bar/...: no package there builds for windows)", out)
+        self.assertEqual(["server|vet -ldflags= ./...", "server|GOOS=windows vet -ldflags= ./scripts/bar/..."],
+                         self.vet_calls())
+        self.assertNotIn("server|GOOS=windows list ./internal/bar/...", self.go_calls())
+
+    def test_an_unformatted_file_fails_the_gofmt_job_alone(self):
+        self.write("server/internal/foo/x.go", "package foo\n\n// " + UNFORMATTED + "\n")
+        self.write("server/internal/foo/y.go", "package foo\n")
+        out, _ = self.check_fast(code=1)
+        self.assertIn("FAIL     gofmt (changed files)", out)
+        self.assertIn("gofmt: needs formatting (run gofmt -w): server/internal/foo/x.go", out)
+        self.assertIn("rerun: python3 -B scripts/ci/gofmt.py server/internal/foo/x.go server/internal/foo/y.go", out)
+        for line in ("PASS     server go test ./internal/foo/...", "PASS     server repo-wide guards",
+                     "PASS     server go vet"):
+            self.assertIn(line, out)
+
+    def test_a_vet_error_fails_the_vet_job_alone_and_both_steps_run(self):
+        # Each vet step fails here: the second still runs, so one run names both, each with its rerun line.
+        (self.go_log.parent / "go").write_text(
+            FAKE_GO + 'case "$*" in vet*) echo "vet: x.go:3:2: undefined: syscall.Kill"; exit 1 ;; esac\n')
+        self.write("server/internal/foo/x.go", "package foo\n")
+        out, _ = self.check_fast(code=1)
+        self.assertIn("FAIL     server go vet", out)
+        self.assertEqual(2, len(self.vet_calls()), out)
+        self.assertIn("rerun: (cd server && go vet -ldflags= ./...)", out)
+        self.assertIn("rerun: (cd server && env GOOS=windows GOARCH=amd64 go vet -ldflags= ./internal/foo/...)", out)
+        for line in ("PASS     server go test ./internal/foo/...", "PASS     server repo-wide guards",
+                     "PASS     gofmt (changed files)"):
+            self.assertIn(line, out)
+
+    def test_a_vet_past_its_timeout_cannot_hide_a_guard_failure(self):
+        # The reason vet is a job of its own: a vet on a cold build cache can run past the go timeout, and a step that
+        # times out makes its whole job a TIMEOUT. In the guard job that would stand in for a contract test's FAIL.
+        (self.go_log.parent / "go").write_text(
+            FAKE_GO + 'case "$*" in\n  vet*) exec sleep 30 ;;\n'
+            '  "test -count=1 -timeout "*" -run "*) echo "--- FAIL: TestWireSamples (0.00s)"; echo FAIL; exit 1 ;;\n'
+            'esac\n')
+        self.env["CHECK_FAST_TIMEOUT_GO_TEST"] = "3"
+        self.write("server/internal/foo/x.go", "package foo\n")
+        out, _ = self.check_fast(code=1)  # a FAIL wins over a TIMEOUT in the exit code too
+        self.assertIn("TIMEOUT  server go vet", out)
+        self.assertIn("FAIL     server repo-wide guards", out)
+
+    def test_all_vets_and_formats_the_whole_trees_as_ci_does(self):
+        # --all vets the whole module on both platforms and runs gofmt over server/ and sdk/go/, as scripts/ci/server.sh
+        # does. Other checks of --all have nothing to run on in this tree; only these calls matter here.
+        subprocess.run(["bash", "scripts/test/check-fast.sh", "--all"], cwd=self.repo, env=self.env,
+                       capture_output=True, text=True, timeout=300)
+        self.assertEqual(["server|vet -ldflags= ./...", "server|GOOS=windows vet -ldflags= ./..."], self.vet_calls())
+        calls = self.gofmt_calls()
+        self.assertEqual(1, len(calls), calls)
+        self.assertIn(" server/internal/foo/foo_test.go", calls[0])
+
+    def test_a_deleted_go_file_is_not_handed_to_gofmt(self):
+        self.write("server/internal/foo/old.go", "package foo\n")
+        self.git("add", "-A")
+        self.git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "old")
+        self.git("tag", "-f", "base")
+        (self.repo / "server/internal/foo/old.go").unlink()
+        out, _ = self.check_fast()
+        self.assertIn("SKIP     gofmt (changed files)", out)
+        self.assertIn("every changed .go file is deleted", out)
+        self.assertEqual([], self.gofmt_calls())
+        self.write("server/internal/foo/x.go", "package foo\n")
+        out, _ = self.check_fast()
+        self.assertEqual(["|-l server/internal/foo/x.go"], self.gofmt_calls())
+
     def test_a_docs_or_web_change_runs_no_guard(self):
         self.write("docs/example-guide.md", "guide changed\n")  # a server test reads it: that package still runs
         self.write("web/src/x.ts", "export {}\n")
@@ -308,10 +460,12 @@ class CheckFastServerInputsTests(unittest.TestCase):
         self.assertEqual(["./internal/guide/conformance/..."], packages, out)
         self.assertEqual([], self.guard_calls(), out)
         self.assertNotIn("repo-wide guards", out)
+        self.assertEqual(([], []), (self.vet_calls(), self.gofmt_calls()), out)
+        self.assertNotIn("go vet", out)
 
     def test_the_assistant_group_runs_in_its_partitions_and_node_runs_as_given(self):
         # Every Go group goes through scripts/test/go_test_partitioned.py (#12765). ./internal/assistant/... covers a
-        # partitioned package: its tests run in go_partitions.py's three partitions beside its subpackages, each with
+        # partitioned package: its tests run in go_partitions.py's partitions beside its subpackages, each with
         # the group's flags and timeout. internal/node splits itself in its TestMain, so its group runs as given.
         (self.go_log.parent / "go").write_text(
             FAKE_GO + 'case "$*" in\n'
@@ -327,14 +481,19 @@ class CheckFastServerInputsTests(unittest.TestCase):
         out, _ = self.check_fast()
         self.assertIn("PASS     server go test ./internal/assistant/...", out)
         self.assertIn("PASS     server go test ./internal/node/...", out)
-        calls = [call for call in self.go_calls() if call not in self.guard_calls() and "|build " not in call]
+        # The vet job's go list of each group for Windows is its own; only the go test calls are counted here.
+        calls = [call for call in self.go_calls() if call not in self.guard_calls() + self.vet_calls()
+                 and "|build " not in call and "|GOOS=windows list " not in call]
+        spec = importlib.util.spec_from_file_location("go_partitions", ROOT / "scripts/test/go_partitions.py")
+        go_partitions = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(go_partitions)
+        runs = ["server|test -count=1 -run %s ./internal/assistant" % pattern for pattern in
+                go_partitions.patterns(["TestA", "TestB", "TestC", "TestD"], go_partitions.PACKAGES["./internal/assistant"])]
         self.assertEqual(sorted([
             "server|list ./internal/assistant/...",
             "server|test -list .* ./internal/assistant",
             "server|test -count=1 example.com/server/internal/assistant/inbox",
-            "server|test -count=1 -run ^(TestA|TestD)$ ./internal/assistant",
-            "server|test -count=1 -run ^(TestB)$ ./internal/assistant",
-            "server|test -count=1 -run ^(TestC)$ ./internal/assistant",
+            *runs,
             "server|test -count=1 ./internal/node/...",
         ]), sorted(calls), out)
         timeouts = {re.search(r" -timeout (\S+)", call).group(1)
@@ -358,7 +517,9 @@ class CheckFastServerInputsTests(unittest.TestCase):
         calls = [line.split("|", 2) for line in self.go_log.read_text().splitlines()]
         tests = [call for call in calls if call[0] == "server" and call[2].startswith("test ")]
         self.assertEqual(3, len(tests), calls)  # the package and the two guard calls
-        for _, goflags, _ in tests:
+        vets = [call for call in calls if call[0] == "server" and call[2].startswith("vet ")]
+        self.assertEqual(2, len(vets), calls)  # the module and the changed group for Windows
+        for _, goflags, _ in tests + vets:
             self.assertEqual("-mod=readonly -trimpath", goflags)
 
     @unittest.skipIf(fcntl is None, "heavy build slots need fcntl (not on Windows)")
@@ -382,6 +543,13 @@ class CheckFastServerInputsTests(unittest.TestCase):
         self.write("server/internal/foo/x.go", "package foo\n")
         self.write("web/src/x.ts", "export {}\n")
         self.check_fast()
+        # go vet compiles, so both of its steps take a go slot; gofmt only parses the changed files and takes none.
+        vets = [line.split("|", 3) for line in self.go_log.read_text().splitlines() if line.split("|", 3)[3][:4] == "vet "]
+        self.assertEqual(2, len(vets), vets)
+        for _, marker, grandparent, args in vets:
+            self.assertRegex(marker, r"^go:\d+$", args)
+            self.assertEqual(marker.split(":")[1], grandparent, args)
+        self.assertEqual(["|-l server/internal/foo/x.go"], self.gofmt_calls())
         calls = [line.split("|", 3) for line in self.go_log.read_text().splitlines()]
         tests = [call for call in calls if call[3].split()[0] == "test"]
         # The touched package's go test, the two guard calls and vitest, each checked on its own: the package's call
@@ -504,12 +672,12 @@ def load_paths(root=ROOT):
     return module
 
 
-# A fake node that reports major version 22 (check-fast.sh's gate) and passes anything else, and a fake npm and npx
-# that record each call ("<cwd basename>|<args>", npx's as "npx <args>") instead of installing or testing anything.
-FAKE_NODE = '#!/bin/sh\nif [ "$1" = -e ]; then echo 22; fi\n'
+# A fake node that reports major version 22 (check-fast.sh's gate) and records the supervised Vitest entry, and fake
+# npm/npx commands that record each call ("<cwd basename>|<args>", npx's as "npx <args>") instead of installing/testing.
+FAKE_NODE = '#!/bin/sh\nif [ "$1" = -e ]; then echo 22; elif [ "$1" = scripts/process-group.mjs ]; then printf "%s|node %s\\n" "${PWD##*/}" "$*" >> "$FAKE_NPM_LOG"; fi\n'
 FAKE_NPM = '#!/bin/sh\nprintf "%s|%s\\n" "${PWD##*/}" "$*" >> "$FAKE_NPM_LOG"\n'
 FAKE_NPX = '#!/bin/sh\nprintf "%s|npx %s\\n" "${PWD##*/}" "$*" >> "$FAKE_NPM_LOG"\n'
-VITEST_RELATED = "web|npx --no -- vitest related --run --passWithNoTests "
+VITEST_RELATED = "web|node scripts/process-group.mjs --timeout-ms 300000 -- npx --no -- vitest related --run --passWithNoTests "
 WEB_FULL = ["web|run check:deps", "web|run typecheck", "web|test"]
 
 # A web tree that reads files outside web/ in each form the scan knows (#10619). reads.test.ts reads through fs and a
@@ -837,7 +1005,8 @@ class CheckFastPlanTests(unittest.TestCase):
         self.write("server/internal/foo/foo.go", "package foo // changed\n")
         out = self.check_fast("--dry-run", "--base", "base")
         self.assertIn("queued: server go test ./internal/foo/...", out)
-        self.assertIn("check-fast: dry run, 3 check(s) planned; nothing ran.", out)
+        # The privacy scan, the package's tests, the guards, go vet and gofmt (#12894).
+        self.assertIn("check-fast: dry run, 5 check(s) planned; nothing ran.", out)
         self.assertNotIn("logs in", out)
         self.assertFalse(self.go_log.exists(), out)
 
@@ -861,12 +1030,44 @@ class CheckFastPlanTests(unittest.TestCase):
         self.assertIn("queued: server go test ./internal/foo/...", server)
         self.assertNotIn("android i18n", server)
 
+    def test_each_retains_unittest_classification(self):
+        # Both paths select the same table suite. Its file is classified once,
+        # while each path still gets its own queue or SKIP result.
+        self.write("scripts/ci/alpha.py", "VALUE = 1\n")
+        self.write("scripts/ci/other.py", "VALUE = 2\n")
+        self.write("listed.txt", "scripts/ci/alpha.py\nscripts/ci/other.py\n")
+        for text, expected in (("import unittest\n", "queued: scripts/test/test_doc_sections.py"),
+                               ("print('not a suite')\n", "SKIP  scripts/test/test_doc_sections.py (not a unittest suite)")):
+            with self.subTest(expected=expected):
+                self.write("scripts/test/test_doc_sections.py", text)
+                counter = self.repo / "grep-count.txt"
+                counter.write_text("")
+                bin_dir = self.repo / "counting-bin"
+                bin_dir.mkdir(exist_ok=True)
+                grep = bin_dir / "grep"
+                real_grep = shutil.which("grep")
+                grep.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> "{counter}"\nexec "{real_grep}" "$@"\n')
+                grep.chmod(0o755)
+                env = dict(self.env, PATH=f"{bin_dir}{os.pathsep}{self.env['PATH']}")
+                run = subprocess.run(["bash", str(self.repo / "scripts/test/check-fast.sh"), "--dry-run",
+                                      "--changed-from", "listed.txt", "--each"], cwd=self.repo, env=env,
+                                     capture_output=True, text=True, timeout=300)
+                self.assertEqual(0, run.returncode, run.stdout + run.stderr)
+                out = run.stdout + run.stderr
+                alpha, other = out.split("== scripts/ci/other.py\n")
+                self.assertIn(expected, alpha)
+                self.assertIn(expected, other)
+                calls = counter.read_text().splitlines()
+                self.assertEqual(1, sum(call == "-q unittest scripts/test/test_doc_sections.py" for call in calls), calls)
+
     def test_listed_paths_only_plan(self):
         for args in (("--changed-from", "-"), ("--dry-run", "--all", "--changed-from", "-"),
                      ("--dry-run", "--base", "base", "--changed-from", "-"), ("--dry-run", "--each")):
             with self.subTest(args=args):
                 self.check_fast(*args, stdin="server/go.mod\n", code=2)
         self.check_fast("--dry-run", "--changed-from", "missing.txt", code=2)
+        (self.repo / "scripts/ci/affected_drift.py").unlink()
+        self.check_fast("--dry-run", "--changed-from", "-", "--each", stdin="server/go.mod\n", code=2)
 
     def test_the_ci_lanes_it_runs_no_part_of_are_named(self):
         out = self.check_fast("--dry-run", "--changed-from", "-", stdin="android/app/build.gradle.kts\n")

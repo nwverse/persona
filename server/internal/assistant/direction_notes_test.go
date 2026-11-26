@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/supervisionrole"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -102,7 +103,7 @@ func TestDirectionNotesRoute(t *testing.T) {
 func TestDirectionNotesReachTheLeaderPolicy(t *testing.T) {
 	s, f := notesEnv(t)
 	ctx := context.Background()
-	policy := prompts.RenderSupervisionInstructions()
+	policy := mustSupervisionRole(t, supervisionrole.RoleLeader())
 	if got := dispatchedPolicy(t, s, "conv_lead"); got != policy {
 		t.Fatal("a leader without notes has a different policy")
 	}
@@ -191,8 +192,8 @@ func TestGoldenDirectionNotes(t *testing.T) {
 	}
 }
 
-// A leader's own task_plan (#10623): PlanTask.Supervisor stays empty, the supervision ledger names the leader, and the
-// task's Agent still starts with the direction's notes, wherever it works.
+// A leader's own task_plan (#10623): main supervises the new work (#5732), while the leader's origin still gives its
+// Agent the direction's notes, wherever it works.
 func TestDirectionNotesReachALeadersOwnTask(t *testing.T) {
 	s, f := newQuietService(t)
 	f.known["lead1"] = true
@@ -217,8 +218,8 @@ func TestDirectionNotesReachALeadersOwnTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, "the start", func() bool { f.mu.Lock(); defer f.mu.Unlock(); return len(f.starts) == 1 })
-	if v := onlyTodo(s).Supervision; v == nil || v.Supervisor != "lead1" {
-		t.Fatalf("supervision = %+v", v)
+	if v := onlyTodo(s).Supervision; v == nil || v.Supervisor != "lead1" || v.SupervisorSource != "plan" {
+		t.Fatalf("the planning lead must supervise its task: %+v", v)
 	}
 	f.mu.Lock()
 	p, _ := f.starts[0]["prompt"].(string)
@@ -248,5 +249,27 @@ func TestTaskSupervisorOf(t *testing.T) {
 	}
 	if got := s.taskSupervisorOf(&PlanTask{}); got != "" {
 		t.Fatalf("nobody: %q", got)
+	}
+}
+
+// A worker inherits its leader task's direction notes through the saved plan, while main remains its supervisor.
+func TestTaskDirectionOfKeepsNotesSeparateFromMainSupervision(t *testing.T) {
+	s, _, todo := newSupervisedService(t)
+	ctx := context.Background()
+	setSettings(t, s, func(v *Settings) { v.Leaders = []string{"lead1"} })
+	p, err := s.loadPlan(ctx, todo.PlanID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Tasks[0].Supervisor = "lead1"
+	if err := s.savePlan(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	worker := &PlanTask{Parent: todo.ID}
+	if got := s.taskSupervisorOf(worker); got != "conv1" {
+		t.Fatalf("worker supervision = %q, want main", got)
+	}
+	if got := s.taskDirectionOf(ctx, worker); got != "lead1" {
+		t.Fatalf("worker direction = %q, want the handed-over leader", got)
 	}
 }

@@ -5,7 +5,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { initI18n } from "../i18n";
-import { markAllSeenLabel, STATE_LABEL, stateCount, stateName, waitName, type StateName, type WaitReason } from "./state-labels";
+import { markAllSeenLabel, STATE_LABEL, stateCount, stateName, waitName, type StateName, type WaitReason, type LegacyWaitReason } from "./state-labels";
 
 const ZH = join(__dirname, "../i18n/locales/zh-Hans");
 
@@ -18,8 +18,9 @@ const NAMES = ["需要你", "工作中", "完成未看", "已看", "未运行", 
 /** Names a page used before #3415 for one of those states. */
 const OLD = ["等你", "在做", "待查看", "做完", "做完了", "做完了，还没看", "停着", "等你处理", "需要你处理", "正在工作", "待回答", "全部标为已读"];
 
-/** The same word meaning something else: an inbox item's tier. (A file marked viewed in a code review says 已查看, #6072.) */
-const OTHER_MEANING = new Set(["lib-inbox.tier_action"]);
+/** The same word meaning something else: an inbox item's tier, or a task waiting for its owner (#5732).
+ *  (A file marked viewed in a code review says 已查看, #6072.) */
+const OTHER_MEANING = new Set(["lib-inbox.tier_action", "todos.section_waiting"]);
 
 function others(): [string, string][] {
   const out: [string, string][] = [];
@@ -34,13 +35,13 @@ describe("state names", () => {
   beforeAll(() => initI18n("zh-Hans"));
 
   it("are the docs/protocol/i18n.md glossary's", () => {
-    expect(STATE_LABEL).toEqual({ needs_you: "需要你", working: "工作中", unread: "完成未看", idle: "已看", offline: "未运行", unknown: "未知" });
+    expect(STATE_LABEL).toEqual({ error: "出错", done: "已完成", needs_you: "需要你", working: "工作中", unread: "完成未看", idle: "已看", offline: "未运行", unknown: "未知" });
     const names: Record<StateName, string> = {
-      needs_you: "需要你", working: "工作中", unread: "完成未看", idle: "已看", offline: "未运行", unknown: "未知",
+      error: "出错", needs_you: "需要你", working: "工作中", unread: "完成未看", idle: "已看", offline: "未运行", unknown: "未知",
       waiting: "待唤醒", bg_waiting: "后台等待中", awaits_reply: "待你回复", just_finished: "刚做完待看", done: "已完成", interrupted: "中断了", follow_up: "待跟进", not_started: "未开始", failed: "没开起来",
     };
     for (const [s, name] of Object.entries(names)) expect(stateName(s as StateName)).toBe(name);
-    const waits: Record<WaitReason, string> = {
+    const waits: Record<LegacyWaitReason, string> = {
       owner: "等你", prerequisite: "等前置任务", delivery: "等合入 / 部署", external: "等外部", background: "等后台任务", retry: "等自动重试", unknown: "暂停中（不需要你）",
     };
     for (const [r, name] of Object.entries(waits)) expect(waitName(r as WaitReason)).toBe(name);

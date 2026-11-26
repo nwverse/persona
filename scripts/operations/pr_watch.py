@@ -29,6 +29,7 @@ import pr_watch_repair
 import pr_watch_recovery
 from pr_watch_review import review as semantic_review
 import pr_watch_human
+from pr_watch_local_gate import require_local_gate, LocalGateError
 from pr_watch_verify import verify
 
 FORMAT_VERSION = 1
@@ -36,6 +37,9 @@ VERIFICATION_POLICY_VERSION = 3
 REVIEW_POLICY_VERSION = 3
 REPAIR_LIMIT = 3
 INFRASTRUCTURE_ATTEMPT_LIMIT = 3
+# `gh pr list` returns the newest PRs first and pages through `--limit` itself,
+# so the bound must exceed the open PRs or the oldest are never polled (#14864).
+DISCOVERY_LIMIT = 2000
 
 
 def blocking_findings(findings):
@@ -315,9 +319,12 @@ class Watcher:
         try:
             for repo, config in self.repositories.items():
                 raw = gh_json(["pr", "list", "--repo", repo, "--state", "open", "--json",
-                               "number,headRefOid,isDraft,baseRefName,mergeable", "--limit", "200"])
+                               "number,headRefOid,isDraft,baseRefName,mergeable", "--limit", str(DISCOVERY_LIMIT)])
                 if not isinstance(raw, list):
                     raise WatchError("PR discovery did not return an array")
+                if len(raw) >= DISCOVERY_LIMIT:
+                    self.log("%s: discovery reached its bound of %d open PRs; older PRs are not polled"
+                             % (repo, DISCOVERY_LIMIT))
                 for item in raw:
                     if not isinstance(item, dict) or not isinstance(item.get("number"), int):
                         raise WatchError("invalid PR discovery entry")
@@ -407,7 +414,7 @@ class Watcher:
         with self.merge_locks_guard:
             lock = self.merge_locks.setdefault(repo, threading.Lock())
         with lock:
-            if repo == repository("nwverse/persona"):
+            if repo.casefold() == repository("nwverse/persona"):
                 yield
             else:
                 with pr_watch_merge.merge_lock(self.repositories[repo]["checkout"]):
@@ -655,7 +662,8 @@ class Watcher:
         if self.dry_run or not config["merge"]:
             self.log("%s#%s passed; merge disabled" % (repo, number))
             return False
-        if repo == repository("nwverse/persona"):
+        if repo.casefold() == repository("nwverse/persona"):
+            require_local_gate(repo, pr["headRefOid"], pr["baseRefOid"])
             # merge-pr.sh owns the shared lock for this path. Acquiring it in
             # another process while self.merging() holds it would deadlock.
             wrapper = str(Path(__file__).resolve().parents[2] / "scripts" / "hooks" / "merge-pr.sh")
@@ -1793,6 +1801,9 @@ query($owner: String!, $name: String!, $number: Int!, $pageSize: Int!,
                            merge_attempts=int(current.get("merge_attempts", 0)) + 1,
                            retry_after=retry, failure=str(error))
             self.log("%s#%s merge blocked: %s" % (repo, number, bounded(error, 700)))
+            if isinstance(error, LocalGateError) and current.get("local_gate_notice") != str(error) and not self.dry_run:
+                self.comment(repo, number, str(error))
+                self.state.put(repo, number, head, local_gate_notice=str(error))
 
     def worker(self):
         while True:

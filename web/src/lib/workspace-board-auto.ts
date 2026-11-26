@@ -1,10 +1,10 @@
 // Auto flow (#2648): the board's optional second view. The manual columns stay what they are; these lanes are
 // computed from the agents a card has, so a card moves as its agents change, and nothing is persisted for them.
 // Needs you → Working → To review → Idle; reviewing and clearing a card is the existing Archive action.
-import { stateOf } from "./format";
+import { activityOf, stateOf } from "./format";
 import { justFinished } from "./agent-groups";
-import { sameDirectory } from "./workspace-board";
-import { acceptedAtRest, awaitsReview, todoStatus, type SessionLookup, type Todo } from "./todos";
+import { sameDirectory } from "./workspace-directory";
+import { acceptedAtRest, awaitsReview, shownStatus, todoStatus, type SessionLookup, type Todo } from "./todos";
 import type { BoardCard } from "./workspace-board";
 import type { Session } from "./types";
 
@@ -15,7 +15,7 @@ export const AUTO_LANES: readonly AutoLane[] = ["needs_you", "working", "review"
 export function autoLaneOf(sessions: readonly Session[]): AutoLane {
   if (sessions.some((s) => stateOf(s) === "needs_you")) return "needs_you";
   if (sessions.some((s) => stateOf(s) === "working")) return "working";
-  if (sessions.some((s) => stateOf(s) === "unread" || justFinished(s))) return "review";
+  if (sessions.some((s) => activityOf(s) === "unread" || justFinished(s))) return "review";
   return "idle";
 }
 
@@ -81,14 +81,14 @@ export function workspaceItem(card: BoardCard, sessions: readonly Session[]): Wo
 }
 
 export function sessionItem(s: Session): WorkItem {
-  const st = stateOf(s);
+  const st = activityOf(s);
   const lane: WorkLane = st === "needs_you" ? "needs_you" : st === "working" ? "working" : st === "unread" || justFinished(s) ? "review" : "idle";
   return { kind: "session", id: `session:${s.machine_id}/${s.session_id}`, lane, title: s.title || s.session_id, activity: autoActivity([s]), pinned: false, session: s };
 }
 
 /** A to-do waits for review only while its owner review or finished-unseen result stands; accepted and closed work is history. */
 export function todoItem(t: Todo, lookup?: SessionLookup): WorkItem {
-  const st = todoStatus(t, lookup);
+  const st = shownStatus(t, todoStatus(t, lookup));
   const lane: WorkLane =
     st === "needs_you" || st === "interrupted" || st === "usage_limit" || st === "failed" ? "needs_you"
     : st === "working" ? "working"

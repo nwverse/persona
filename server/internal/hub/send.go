@@ -21,6 +21,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 // Sending a message from the phone (docs/protocol/protocol.md "Sending messages"). The app sends each message with its own
@@ -133,7 +134,7 @@ func sendTimingOf(ctx context.Context) *sendTiming {
 
 func (h *Hub) sendMessage(w http.ResponseWriter, r *http.Request, m *Machine) {
 	started := time.Now()
-	p, ok := optionalObject(w, r, 32<<20)
+	p, ok := optionalObject(w, r, proto.MessageBodyLimit)
 	if !ok {
 		return
 	}
@@ -144,6 +145,12 @@ func (h *Hub) sendMessage(w http.ResponseWriter, r *http.Request, m *Machine) {
 		return
 	}
 	sid := r.PathValue("sid")
+	// The pictures this message carries, never those before it in the conversation (#12973).
+	if images, _ := p["images"].([]any); len(images) > 0 {
+		if row, _ := m.session(sid); apierr.ImagesOverLimit(w, proto.HubImageLimits.For(row.Agent), len(images)) {
+			return
+		}
+	}
 	if terminalAgentSend(r.Context()) {
 		if _, ok := h.terminalAgentTarget(m, sid); !ok {
 			h.refuseTerminalAgent(w, r)
@@ -166,7 +173,7 @@ func (h *Hub) sendMessage(w http.ResponseWriter, r *http.Request, m *Machine) {
 
 	if caller := principalOf(r.Context()); caller.Role == roleScoped {
 		row, exists := m.session(sid)
-		if !exists || healthSession(&row) {
+		if !exists || spaceSession(&row) {
 			writeErr(w, http.StatusNotFound, errors.New("no such session"))
 			return
 		}
@@ -282,9 +289,11 @@ func (h *Hub) sendMessageOnce(w http.ResponseWriter, r *http.Request, m *Machine
 		return
 	}
 	text, isText := p["text"].(string)
-	if isText {
+	clientMsgID, _ := p["client_msg_id"].(string)
+	if isText && strings.TrimSpace(text) != "" || p["images"] != nil {
 		r = h.captureHumanSubmission(r, text)
 	}
+	indirect := viaMarked(p["via"]) // Siri or the share sheet: delivered, but not the owner's own input for project review
 	for _, reserved := range []string{"creation_id", "incarnation", "caller", "submission", "share_authority", "skill_owner"} {
 		delete(p, reserved)
 	}
@@ -297,10 +306,14 @@ func (h *Hub) sendMessageOnce(w http.ResponseWriter, r *http.Request, m *Machine
 			start, fresh = f, true
 		}
 	}
+	handoffAgent := ""
+	if c, ok := m.session(sid); ok {
+		handoffAgent = c.Agent
+	}
 	if todoID != "" {
 		// The manager checks the todo (404, 409, 503 assistant_offline while it is away); handed to the agent for it,
 		// the calls already made on it go first (#1618).
-		hand := assistantwire.TodoHandoff{TodoID: todoID, Text: text}
+		hand := assistantwire.TodoHandoff{TodoID: todoID, Text: text, Agent: handoffAgent}
 		if fresh {
 			hand.New, hand.MachineID, hand.Cwd = true, m.cfg.ID, start.cwd
 		}
@@ -316,7 +329,7 @@ func (h *Hub) sendMessageOnce(w http.ResponseWriter, r *http.Request, m *Machine
 		}
 	} else if fresh {
 		decided, images := h.todoStartText(r.Context(), assistantwire.TodoHandoff{TodoID: start.todoID, Text: text, New: true,
-			MachineID: m.cfg.ID, Cwd: start.cwd})
+			MachineID: m.cfg.ID, Cwd: start.cwd, Agent: handoffAgent})
 		p["text"] = decided
 		if strings.TrimSpace(decided) != "" {
 			mergeTodoImages(p, images)
@@ -328,9 +341,24 @@ func (h *Hub) sendMessageOnce(w http.ResponseWriter, r *http.Request, m *Machine
 	}
 	if spokeKnown && (!terminal && m.isAssistant(spokeSession) || isText && strings.TrimSpace(text) != "") {
 		// The manager also observes owner messages to Agents before delivery, so a task's decision default can pause.
-		spoke := assistantwire.UserSpokeParams{SessionRef: assistantwire.SessionRef{MachineID: m.cfg.ID, SessionID: sid}}
-		if (terminal || !m.isAssistant(spokeSession)) && isText && personSent(r.Context()) {
+		spoke := assistantwire.UserSpokeParams{
+			SessionRef: assistantwire.SessionRef{MachineID: m.cfg.ID, SessionID: sid},
+			At:         time.Now().UTC(),
+		}
+		// A person's own app supplies the text for every conversation, including a supervisor / direction
+		// conversation: its needs_user decision cards are answered there too, and this event reaches the manager
+		// before the message is persisted, so the text cannot be recovered from transcript history at this point.
+		// The text carries the send's client_msg_id, the same id its session.assistant_sent names: a choice that
+		// must not settle before delivery waits for it (#13041).
+		if isText && personSent(r.Context()) {
 			spoke.Text = text
+			spoke.ClientMsgID = wireids.ClientMsgID(clientMsgID)
+			// Owner provenance (#15641) marks owner input to an Agent only, never the assistant's own conversations.
+			if terminal {
+				spoke.Source = assistantwire.OwnerInputTerminal
+			} else if !m.isAssistant(spokeSession) {
+				spoke.Source = assistantwire.OwnerInputApp
+			}
 		}
 		h.asstOf(h.sessionOwner(m.cfg.ID, sid)).userSpoke(r.Context(), spoke)
 	}
@@ -352,6 +380,7 @@ func (h *Hub) sendMessageOnce(w http.ResponseWriter, r *http.Request, m *Machine
 			// Older owner messages to it are kept undelivered: this one is kept behind them, never sent first.
 			if id, _ := asSent["client_msg_id"].(string); id != "" && rpcCodeOf(err) == assistantwire.CodeUndeliveredAhead {
 				if status, body, ok := h.keepUndelivered(r.Context(), m, sid, asSent, assistantwire.CodeUndeliveredAhead, ""); ok {
+					h.recordAcceptedProjectReviewInput(r.Context(), r, m.cfg.ID, sid, id, nil, indirect)
 					writeRaw(w, status, body)
 					return
 				}
@@ -485,7 +514,17 @@ func (h *Hub) sendMessageOnce(w http.ResponseWriter, r *http.Request, m *Machine
 			}
 		}
 		if h.store != nil {
-			if err := h.store.SettleSend(context.WithoutCancel(ctx), id, outcome); err != nil {
+			commit := context.WithoutCancel(ctx)
+			recorded, err := h.settleProjectReviewOwner(commit, r, m.cfg.ID, sid, id, outcome, indirect)
+			if recorded && err != nil {
+				// The receipt outranks the review notice: left in "sending", a retry of this id would be answered
+				// "unknown" and a later drain could type the text again. Settle it alone; the notice is lost.
+				h.logf("send %s: project review owner input not queued: %v", id, err)
+			}
+			if !recorded || err != nil {
+				err = h.store.SettleSend(commit, id, outcome)
+			}
+			if err != nil {
 				h.logf("send %s: %v", id, err)
 			}
 		}
@@ -525,15 +564,28 @@ func (h *Hub) linkSentTodo(ctx context.Context, m *Machine, todoID, sid string, 
 func (h *Hub) deliverOnce(ctx context.Context, m *Machine, p map[string]any) (int, []byte, string) {
 	var out json.RawMessage
 	sendTimingOf(ctx).mark("dispatch_started", true)
+	sid, _ := p["session_id"].(string)
+	sentAt := time.Now()
+	if sid != "" {
+		// Arm before calling the node so fast streaming deltas emitted while session.send is still
+		// in flight are captured; definitive non-delivery or queued responses disarm below.
+		h.ttft.arm(m.cfg.ID, sid, sentAt)
+	}
 	err := m.call(ctx, "session.send", p, &out)
 	sendTimingOf(ctx).mark("node_returned", err == nil)
 	switch outcome := sendOutcome(err); {
 	case err == nil:
+		if sid != "" && sendReturnedQueued(out) {
+			h.ttft.disarm(m.cfg.ID, sid, sentAt)
+		}
 		if len(out) == 0 {
 			out = json.RawMessage("{}")
 		}
 		return http.StatusOK, append(out, '\n'), outcome
 	case rpcCodeOf(err) == devicewire.CodeHeld && holdOf(ctx) != nil:
+		if sid != "" {
+			h.ttft.disarm(m.cfg.ID, sid, sentAt)
+		}
 		// The machine's manager holds it until the computer is back (withHold, #10661): nothing was typed, it goes by
 		// itself, and a retry of the id is answered as kept (sendLater). Only for a send that asked to be held: any other
 		// held answer is an ordinary refusal, never a kept message its client cannot draw.
@@ -544,9 +596,22 @@ func (h *Hub) deliverOnce(ctx context.Context, m *Machine, p map[string]any) (in
 		status, body := callErrBytes(l, unknownDelivery(l, "hub-send.lost_during"))
 		return status, body, outcome
 	default:
+		if sid != "" && outcome == "" {
+			h.ttft.disarm(m.cfg.ID, sid, sentAt)
+		}
 		status, body := callErrBytes(h.contextLang(ctx), apierr.OnMachine(err, m.name())) // claude_missing on "<name>'s MacBook"
 		return status, body, outcome
 	}
+}
+
+func sendReturnedQueued(out json.RawMessage) bool {
+	if len(out) == 0 {
+		return false
+	}
+	var flag struct {
+		Queued bool `json:"queued"`
+	}
+	return json.Unmarshal(out, &flag) == nil && flag.Queued
 }
 
 // conversationSent tells the conversation's manager how an app's message to it went, delivered or not (the north
@@ -625,7 +690,13 @@ func (b *bufferedResponse) Header() http.Header         { return b.header }
 func (b *bufferedResponse) Write(p []byte) (int, error) { return b.body.Write(p) }
 func (b *bufferedResponse) WriteHeader(code int)        { b.status = code }
 
+// writeRaw writes a send's answer, which the hub built itself (callErrBytes, laterBody) or a node returned (a 200): a
+// server error's is the hub's own error, noted for its request line (apierr.NoteError) as WriteBody would.
 func writeRaw(w http.ResponseWriter, status int, body []byte) {
+	var e map[string]any
+	if status >= 500 && json.Unmarshal(body, &e) == nil {
+		apierr.NoteError(w, status, e)
+	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_, _ = w.Write(body)

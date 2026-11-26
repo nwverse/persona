@@ -10,6 +10,7 @@ import { openTask } from "../../lib/handoff";
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { t } from "../../i18n";
 import { ApiError, errorText } from "../../lib/api";
+import { EvidenceLink } from "./EvidenceLink";
 import { acceptBrief, setRoute, type AskAnswer } from "../../lib/feed";
 import { clock } from "../../lib/format";
 import { conversationPage } from "../../lib/conversation-page";
@@ -149,7 +150,15 @@ export function DecisionRow({ todo, ask, rowKey, admission, onBusyChange, blocke
   // A step that cannot be undone, or that other people will see, takes two presses: the first arms the option.
   const twoStep = ask.why_owner === "irreversible" || ask.why_owner === "visible_to_others";
   const [armed, setArmed] = useState<number | null>(null);
+  const terminal = ask.resume_terminal;
+  const openTerminal = () => {
+    if (terminal) navigate({ name: "session", mid: terminal.machine_id, sid: terminal.session_id, view: "term" });
+  };
   const choose = (o: AskOption, i: number) => {
+    if (terminal && ask.terminal_option === o.label) {
+      openTerminal();
+      return;
+    }
     if (twoStep && armed !== i) {
       setArmed(i);
       return;
@@ -178,6 +187,7 @@ export function DecisionRow({ todo, ask, rowKey, admission, onBusyChange, blocke
       <p data-decision-question className="text-[13.5px] font-medium select-text [overflow-wrap:anywhere]">
         {question}
       </p>
+      <EvidenceLink link={ask.link} todoId={todo.id} />
       {ask.background && (
         <p data-decision-background className="line-clamp-2 text-[12px] text-ink-2 [overflow-wrap:anywhere]" title={ask.background}>
           {ask.background}
@@ -205,6 +215,9 @@ export function DecisionRow({ todo, ask, rowKey, admission, onBusyChange, blocke
         <p data-decision-response={ask.response} className="truncate text-[12px] text-ink-2">
           {t("assistant-decisionrow.responded")}
         </p>
+      )}
+      {terminal && !ask.terminal_option && answering.state === "idle" && (
+        <Button tone="secondary" onClick={openTerminal}>{t("assistant-decisionrow.open_terminal")}</Button>
       )}
       {blocker && answering.state === "idle" && (
         <div data-decision-blocked role="alert" className="flex min-w-0 items-center gap-2 rounded-control bg-orange-tint px-2.5 py-1.5 text-label text-orange">

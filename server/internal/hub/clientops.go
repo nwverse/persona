@@ -8,8 +8,10 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
@@ -132,9 +134,11 @@ type clientOpWriter struct {
 	header http.Header
 	status int
 	body   bytes.Buffer
+	lang   i18n.Lang
 }
 
 func (w *clientOpWriter) Header() http.Header { return w.header }
+func (w *clientOpWriter) Lang() i18n.Lang     { return w.lang }
 func (w *clientOpWriter) WriteHeader(status int) {
 	if w.status == 0 {
 		w.status = status
@@ -150,30 +154,37 @@ type clientOpForgetter interface {
 	ForgetClientOp(ctx context.Context, id string) error
 }
 
-// clientOpRetry: an inbox reply or hand-off the manager never got (assistant_offline) or that was cut off on the way
-// to it (assistant_in_doubt) keeps no receipt: the same request asked again goes to the manager, whose send id has it
-// sent once (extmgr inbox_reply.go sendInboxOnce, a hand-off's session.send_once), instead of the stored refusal
-// coming back for good. A notification choice, a conversation's start and a to-do create release only a definitely offline receipt;
-// uncertain delivery stays recorded.
+// clientOpRetry: an operation of kind answered body keeps no receipt (ForgetClientOp), so the same request asked
+// again runs again instead of the stored refusal coming back for good. Each kind below lets go an answer the manager
+// never got (assistant_offline). A conversation's start, an approval question and an inbox hand-off also let go the
+// manager's answer that their node got nothing (#13360: delivered "none" and retryable, apierr.Body's for ErrOffline,
+// a start's 503 node_unreachable): nothing was started or sent, and what the manager did before the node's call makes
+// nothing twice. An inbox reply or hand-off and an approval question cut off on the way to the manager
+// (assistant_in_doubt) keep none either: the manager's send id has it sent once (extmgr inbox_reply.go sendInboxOnce,
+// session.send_once). Everything else stays recorded: a refusal that is not retryable (inbox_item_done,
+// conversation_busy), delivery that may have happened ("unknown", "yes"), an inbox reply's refusal by its source
+// (replayed as it is), a choice (the manager claims the card before its node is called), and a meeting's or a to-do's
+// answer, which their apps take as final for that op id (meeting_receipts.go, todo_receipts.go).
 func clientOpRetry(kind string, body []byte) bool {
-	if kind == meetingJustMeOp || kind == meetingFollowupOp || kind == todoAnswerOp || kind == todoRouteOp || kind == todoCreateOp { // never reached the manager: the same call runs again
-		var res struct {
-			Code string `json:"code"`
-		}
-		_ = json.Unmarshal(body, &res)
-		return res.Code == assistantwire.CodeAssistantOffline
-	}
-	if kind != "inbox_reply" && kind != "inbox_handoff" && kind != "choose" && kind != "assistant_start" && kind != "clarify" {
-		return false
-	}
 	var res struct {
-		Code string `json:"code"`
+		Code      string `json:"code"`
+		Delivered string `json:"delivered"`
+		Retryable bool   `json:"retryable"`
 	}
 	_ = json.Unmarshal(body, &res)
-	if kind == "choose" || kind == "assistant_start" || kind == "clarify" { // No request reached the manager; the same op can safely retry.
-		return res.Code == assistantwire.CodeAssistantOffline || kind == "clarify" && res.Code == assistantwire.CodeAssistantInDoubt
+	offline, inDoubt := res.Code == assistantwire.CodeAssistantOffline, res.Code == assistantwire.CodeAssistantInDoubt
+	gotNothing := res.Delivered == "none" && res.Retryable
+	switch kind {
+	case "choose", meetingJustMeOp, meetingFollowupOp, todoAnswerOp, todoRouteOp, todoCreateOp:
+		return offline
+	case "assistant_start":
+		return offline || gotNothing
+	case "clarify", "inbox_handoff":
+		return offline || inDoubt || gotNothing
+	case "inbox_reply":
+		return offline || inDoubt
 	}
-	return res.Code == assistantwire.CodeAssistantOffline || res.Code == assistantwire.CodeAssistantInDoubt
+	return false
 }
 
 // clientOpStoredKey carries a *bool that executeClientOp sets once it has stored the operation's receipt (or let it
@@ -195,7 +206,7 @@ func (h *Hub) executeClientOp(w http.ResponseWriter, r *http.Request, kind, id s
 			_ = persist() // A panic may have happened after the side effect.
 		}
 	}()
-	capture := &clientOpWriter{header: make(http.Header)}
+	capture := &clientOpWriter{header: make(http.Header), lang: i18n.OfWriter(w)}
 	next(capture, r)
 	capture.WriteHeader(http.StatusOK)
 	state = clientOpState(capture.status, capture.body.Bytes())
@@ -226,7 +237,7 @@ func (h *Hub) executeClientOp(w http.ResponseWriter, r *http.Request, kind, id s
 	for key, values := range capture.header {
 		w.Header()[key] = values
 	}
-	writeClientOpResult(w, saved)
+	writeClientOpResultForKind(w, kind, saved)
 }
 
 func clientOpState(status int, body []byte) string {
@@ -247,10 +258,17 @@ func clientOpState(status int, body []byte) string {
 }
 
 func writeClientOpResult(w http.ResponseWriter, result clientOpResult) {
+	writeClientOpResultForKind(w, "", result)
+}
+
+func writeClientOpResultForKind(w http.ResponseWriter, kind string, result clientOpResult) {
 	if result.ContentType != "" {
 		w.Header().Set("Content-Type", result.ContentType)
 	}
 	localized := i18n.InboxJSON(i18n.OfWriter(w), result.Body)
+	if (kind == "modes" || kind == "message") && result.Status >= 400 {
+		localized = apierr.LocalizeErrorJSON(i18n.OfWriter(w), localized)
+	}
 	if !bytes.Equal(localized, result.Body) {
 		w.Header().Del("Content-Length")
 	}
@@ -271,7 +289,7 @@ func (h *Hub) waitClientOp(w http.ResponseWriter, r *http.Request, op *db.Client
 				writeErrorBody(w, http.StatusServiceUnavailable, map[string]any{"state": "unknown"})
 				return
 			}
-			writeClientOpResult(w, result)
+			writeClientOpResultForKind(w, op.Kind, result)
 			return
 		case "unknown":
 			// Start, checkout and reply retries must not repeat side effects or replace a recorded HTTP outcome.
@@ -282,7 +300,7 @@ func (h *Hub) waitClientOp(w http.ResponseWriter, r *http.Request, op *db.Client
 				op.Kind == meetingJustMeOp || op.Kind == meetingFollowupOp || op.Kind == todoAnswerOp || op.Kind == todoRouteOp || op.Kind == todoCreateOp {
 				var result clientOpResult
 				if json.Unmarshal(op.Result, &result) == nil && result.Status >= 200 && result.Status <= 599 {
-					writeClientOpResult(w, result)
+					writeClientOpResultForKind(w, op.Kind, result)
 					return
 				}
 			}
@@ -330,23 +348,73 @@ func (h *Hub) getClientOp(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, op)
 }
 
+// clientOpsCleanupEvery bounds the periodic client_ops cleanup (var for tests).
+var clientOpsCleanupEvery = 24 * time.Hour
+
+type clientOpsWake struct {
+	mu       sync.Mutex
+	wake     chan struct{}
+	deferred bool
+}
+
+func (c *clientOpsWake) channel() chan struct{} {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.wake == nil {
+		c.wake = make(chan struct{}, 1)
+	}
+	return c.wake
+}
+
+func (h *Hub) cleanupClientOps(ctx context.Context) {
+	if h.store == nil {
+		return
+	}
+	if !h.quiesce.beginOrDefer(func() {
+		h.clientOps.mu.Lock()
+		h.clientOps.deferred = true
+		h.clientOps.mu.Unlock()
+	}) {
+		return
+	}
+	defer h.quiesce.end()
+	cleanCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	err := h.store.CleanupClientOps(cleanCtx, time.Now().UTC().AddDate(0, 0, -30))
+	cancel()
+	if err != nil && ctx.Err() == nil {
+		h.logf("clean client operations: %v", err)
+	}
+}
+
+func (h *Hub) wakeClientOps() {
+	h.clientOps.mu.Lock()
+	deferred := h.clientOps.deferred
+	h.clientOps.deferred = false
+	ch := h.clientOps.wake
+	h.clientOps.mu.Unlock()
+	if !deferred || ch == nil {
+		return
+	}
+	select {
+	case ch <- struct{}{}:
+	default:
+	}
+}
+
 func (h *Hub) startClientOps(ctx context.Context) error {
 	if err := h.store.RecoverClientOps(ctx); err != nil {
 		return err
 	}
+	wake := h.clientOps.channel()
 	go func() {
-		ticker := time.NewTicker(24 * time.Hour)
+		ticker := time.NewTicker(clientOpsCleanupEvery)
 		defer ticker.Stop()
 		for {
-			cleanCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-			err := h.store.CleanupClientOps(cleanCtx, time.Now().UTC().AddDate(0, 0, -30))
-			cancel()
-			if err != nil && ctx.Err() == nil {
-				h.logf("clean client operations: %v", err)
-			}
+			h.cleanupClientOps(ctx)
 			select {
 			case <-ctx.Done():
 				return
+			case <-wake:
 			case <-ticker.C:
 			}
 		}

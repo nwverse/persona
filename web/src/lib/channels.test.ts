@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { canBind, capabilityText, channelOf, channelSections, channelsSummary, channelStateText, channelSubtitle, conversationChannel, isPolled, settingsTarget, targetText, type Channel } from "./channels";
+import {
+  canBind, capabilityText, channelOf, channelSections, channelsSummary, channelStateText, channelSubtitle,
+  conversationChannel, isPolled, isValidThreadIdleHours, MAX_THREAD_IDLE_HOURS, normalizeThreadMode,
+  settingsTarget, supportsThreadRouting, targetText, type Channel,
+} from "./channels";
 
 const ch = (c: Partial<Channel> & Pick<Channel, "id">): Channel => ({
   name: c.id, kind: "im", source: "plugin", installed: true, enabled: true, state: "connected", capabilities: {}, bind: "qr", ...c,
@@ -60,12 +64,18 @@ describe("a channel's page", () => {
     expect(capabilityText({ images_in: true, voice_in: true, format: "plain", max_text: 3500, asks: "text", typing: true })).toEqual([
       "收文字、图片、语音", "回答是纯文字", "一条最多 3500 字，长的拆开发", "提问和批准回复序号或文字", "处理时显示「正在输入」",
     ]);
+    expect(capabilityText({ format: "plain", reply_only: true })).toEqual([
+      "收文字", "回答是纯文字", "仅回复收到的消息",
+    ]);
   });
 
   it("opens its own page in the settings", () => {
     expect(settingsTarget("settings/connectors/feishu-bot")).toEqual({ tab: "connectors", sub: "feishu-bot" });
     expect(settingsTarget("settings/plugins/wechat")).toEqual({ tab: "extensions", sub: "wechat" });
     expect(settingsTarget("settings/model-config")).toEqual({ tab: "model-config", sub: null });
+    expect(settingsTarget("settings/persona#repositories")).toEqual({ tab: "persona", sub: null, anchor: "repositories" });
+    expect(settingsTarget("settings/knowledge#knowledge-items")).toEqual({ tab: "knowledge", sub: null, anchor: "knowledge-items" });
+    expect(settingsTarget("settings/persona#bad anchor!")).toBeNull();
     expect(settingsTarget("https://example.com")).toBeNull();
   });
 });
@@ -85,5 +95,23 @@ describe("where a message came from", () => {
     expect(conversationChannel(["feishu", "wechat"], list)?.name).toBe("飞书机器人");
     expect(conversationChannel(["gone"], list)).toEqual({ id: "gone", name: "gone" });
     expect(conversationChannel([], list)).toBeUndefined();
+  });
+
+  it("normalizes thread_mode and validates thread_idle_hours for integrations_v2", () => {
+    expect(normalizeThreadMode(undefined)).toBe("channel_default");
+    expect(normalizeThreadMode("")).toBe("channel_default");
+    expect(normalizeThreadMode("future_mode")).toBe("channel_default");
+    expect(normalizeThreadMode("per_group_and_topic")).toBe("per_group_and_topic");
+    expect(normalizeThreadMode("per_topic")).toBe("per_topic");
+
+    expect(supportsThreadRouting({ thread_mode: "channel_default" })).toBe(true);
+    expect(supportsThreadRouting({ thread_mode: undefined })).toBe(false);
+
+    expect(isValidThreadIdleHours(0)).toBe(true);
+    expect(isValidThreadIdleHours(24)).toBe(true);
+    expect(isValidThreadIdleHours(MAX_THREAD_IDLE_HOURS)).toBe(true);
+    expect(isValidThreadIdleHours(-1)).toBe(false);
+    expect(isValidThreadIdleHours(1.5)).toBe(false);
+    expect(isValidThreadIdleHours(MAX_THREAD_IDLE_HOURS + 1)).toBe(false);
   });
 });

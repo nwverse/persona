@@ -26,18 +26,20 @@ export class HubRepository {
     if (local) this.mutations = MutationStore.shared(local, JSON.stringify([config.hubId, config.managerId]));
   }
   async call(path: string, method: string = 'GET', body: Record<string, Object> = {}, op: string = '', admit?: () => boolean, completedAsAck: boolean = false,
-    acknowledged?: (result: Record<string, Object>) => boolean): Promise<Record<string, Object>> {
+    acknowledged?: (result: Record<string, Object>) => boolean, emptyRequest: boolean = false,
+    messageRequestBytes?: number): Promise<Record<string, Object>> {
+    const payload=method==='GET' || emptyRequest && !Object.keys(body).length ? '' : JSON.stringify(body);
     if (method === 'GET' || !this.mutations) {
       if (admit && !admit()) throw new HttpFailure(0, 'request_updated', false);
-      const result = Wire.parse(await this.transport.request(path, method, method === 'GET' ? '' : JSON.stringify(body), op));
+      const result = Wire.parse(await this.transport.request(path, method, payload, op, messageRequestBytes));
       if (acknowledged && !acknowledged(result)) throw new HttpFailure(0, 'result_unknown', true);
       return result;
     }
-    const payload = JSON.stringify(body), record = await this.mutations.begin(path, method, payload, op); this.changed();
+    const record = await this.mutations.begin(path, method, payload, op); this.changed();
     let pendingReceipt = false;
     try {
       if (admit && !admit()) { await this.mutations.finish(record, 'failed'); throw new HttpFailure(0, 'request_updated', false); }
-      const result = Wire.parse(await this.transport.request(path, method, payload, record.id));
+      const result = Wire.parse(await this.transport.request(path, method, payload, record.id, messageRequestBytes));
       const state = Wire.text(result, 'state');
       if (state === 'pending' || state === 'unknown' || Wire.text(result, 'delivered') === 'unknown') {
         pendingReceipt = state === 'pending'; await this.mutations.finish(record, pendingReceipt ? 'pending' : 'unknown'); throw new HttpFailure(202, 'result_unknown', true, pendingReceipt);
@@ -52,12 +54,12 @@ export class HubRepository {
       throw new HttpFailure(0, 'result_unknown', true);
     } finally { this.changed(); }
   }
-  async upload(path: string, bytes: ArrayBuffer, admit?: () => boolean): Promise<Record<string, Object>> {
+  async upload(path: string, bytes: ArrayBuffer, admit?: () => boolean, requestLimit?: number): Promise<Record<string, Object>> {
     if (!this.mutations) throw new Error('storage_unavailable');
     const record = await this.mutations.begin(path, 'POST', ''); this.changed();
     try {
       if (admit && !admit()) { await this.mutations.finish(record, 'failed'); throw new HttpFailure(0, 'request_updated', false); }
-      const result = await this.transport.requestBytes(path, 'POST', bytes, 'application/octet-stream', record.id);
+      const result = await this.transport.requestBytes(path, 'POST', bytes, 'application/octet-stream', record.id, requestLimit);
       const receipt = Wire.parse(util.TextDecoder.create('utf-8', { fatal: true }).decodeToString(new Uint8Array(result.data)));
       if (!Wire.text(receipt, 'path') && !Wire.text(receipt, 'name')) throw new HttpFailure(0, 'result_unknown', true);
       await this.mutations.finish(record, 'done'); return receipt;
@@ -67,15 +69,17 @@ export class HubRepository {
       throw new HttpFailure(0, 'result_unknown', true);
     } finally { this.changed(); }
   }
-  async list(path: string, envelope: string, kind: string, merged: boolean = false): Promise<ResourceRow[]> {
+  async list(path: string, envelope: string, kind: string, merged: boolean = false, observe?: (source: Record<string,Object>) => void): Promise<ResourceRow[]> {
     const result = await this.call(path), rows = Wire.rows(result, envelope);
     // Only a complete session list can establish that a manager-held operation has disappeared.
     if (path === '/api/v1/sessions' && (!Array.isArray(result[envelope]) || Wire.bool(result, 'has_more') ||
       !rows.every(completeSessionRow))) throw new Error('incomplete_sessions');
+    if (observe) observe(result);
     return rows.map((item: Record<string, Object>) => { const row = ResourceRow.from(item, kind); if (!Wire.has(item, 'manager')) row.manager = merged ? this.defaultOwner : this.owner; return row; }).filter((row: ResourceRow) => !merged || row.manager === this.owner);
   }
   async sessions(): Promise<ResourceRow[]> { return this.list('/api/v1/sessions', 'sessions', 'session', true); }
   async machines(): Promise<ResourceRow[]> { return this.list('/api/v1/machines', 'machines', 'machine', true); }
+  isDefaultManager(): boolean { return !this.defaultOwner || this.owner === this.defaultOwner; }
   async todos(): Promise<ResourceRow[]> { return this.list('/api/v1/todos', 'todos', 'todo'); }
   async inbox(): Promise<ResourceRow[]> { return this.list('/api/v1/inbox?sources=all', 'items', 'inbox', true); }
   async knowledge(kind: string = 'projects', query: string = ''): Promise<ResourceRow[]> {
@@ -120,9 +124,9 @@ export class HubRepository {
     return this.call('/api/v1/sessions/' + segment(row.machine) + '/' + segment(row.session || row.id) + '/items?lines=80&fold_work=1&lazy_images=1');
   }
   async cards(row: ResourceRow): Promise<Record<string, Object>> { return this.call('/api/v1/assistant/conversations/' + segment(row.id) + '/feed'); }
-  async send(row: ResourceRow, text: string, op: string, context: string, images: Object[] = [], admit?: () => boolean): Promise<Record<string, Object>> {
+  async send(row: ResourceRow, text: string, op: string, context: string, images: Object[] = [], admit?: () => boolean, messageRequestBytes?: number): Promise<Record<string, Object>> {
     const body = Wire.payload(['text', 'client_msg_id'], [text, op]); if (images.length) body['images'] = images;
-    return this.call('/api/v1/sessions/' + segment(row.machine) + '/' + segment(row.session || row.id) + '/messages', 'POST', body, op, admit, true);
+    return this.call('/api/v1/sessions/' + segment(row.machine) + '/' + segment(row.session || row.id) + '/messages', 'POST', body, op, admit, true, undefined, false, messageRequestBytes);
   }
   async stop(row: ResourceRow, admit?: () => boolean): Promise<void> { await this.call('/api/v1/sessions/' + segment(row.machine) + '/' + segment(row.session || row.id) + '/interrupt', 'POST', {}, '', admit); }
   async decisions(): Promise<Record<string, Object>[]> {
@@ -152,10 +156,15 @@ export class HubRepository {
     const result = await this.call('/api/v1/inbox/' + segment(row.id) + '/done?manager=' + segment(row.manager), 'POST', Wire.payload(['done'], [!row.isDone()]));
     const item = Wire.object(result, 'item'); const next = ResourceRow.from(Object.keys(item).length ? item : result, 'inbox'); next.manager = row.manager; return next;
   }
-  async createAgent(prompt: string, machine: ResourceRow, cwd: string, launcher: string, op: string, todoId: string = '', admit?: () => boolean): Promise<ResourceRow> {
+  async createAgent(prompt: string, machine: ResourceRow, cwd: string, launcher: string, op: string, todoId: string = '', admit?: () => boolean, workspaceId: string = '', host: string = '', model: string = '', effort: string = '', tabName: string = ''): Promise<ResourceRow> {
     if (!machine.id || machine.manager && machine.manager !== this.owner || Wire.text(machine.data(), 'trust') === 'pending' ||
       !Wire.bool(machine.data(), 'online', true) || Wire.bool(machine.data(), 'pending_confirm') || Wire.bool(machine.data(), 'pending')) throw new Error('permission_denied');
     const body = Wire.payload(['machine_id', 'cwd', 'launcher', 'prompt'], [machine.id, cwd, launcher, prompt]);
+    if (model) body['model'] = model;
+    if (effort) body['effort'] = effort;
+    const name = tabName.trim();
+    if (name) body['tab_name'] = name;
+    if (workspaceId && host) { body['workspace_id'] = workspaceId; body['host'] = host; }
     if (todoId) body['todo_id'] = todoId;
     const result = await this.call('/api/v1/sessions', 'POST', body, op, admit);
     const row = ResourceRow.from(Wire.object(result, 'session'), 'session'); row.manager = this.owner; row.machine = row.machine || machine.id; row.session = row.session || row.id; return row;

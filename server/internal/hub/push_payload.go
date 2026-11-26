@@ -74,7 +74,7 @@ func interactionPayloadIn(l i18n.Lang, ix proto.Interaction, machine string) map
 		body += i18n.T(l, "push.delegate_recommend_suffix", i18n.Args{"answer": d.Recommend})
 	}
 	subtitle := transcript.Title(ix.SessionTitle)
-	if inHealth(ix.Cwd) { // a health conversation's card: the lock screen does not say what it is about (assistant.go)
+	if inSpace(ix.Cwd) { // a space conversation's card: the lock screen does not say what it is about (assistant.go)
 		subtitle, body = i18n.T(l, "push.health_title"), i18n.T(l, "push.health_body")
 	}
 	if ix.Private { // a Just me turn's card (proto.Interaction.Private): the room may see the phone
@@ -110,7 +110,7 @@ func interactionPayloadIn(l i18n.Lang, ix proto.Interaction, machine string) map
 // askQuestion selects cards a notification can answer without opening the app: the manager's view of a to-do lets
 // the same cards be answered from its row (proto.Interaction.OneTapQuestion).
 func askQuestion(ix proto.Interaction) (proto.Question, bool) {
-	if q, ok := ix.OneTapQuestion(); ok && !inHealth(ix.Cwd) {
+	if q, ok := ix.OneTapQuestion(); ok && !inSpace(ix.Cwd) {
 		return q, true
 	}
 	return proto.Question{}, false
@@ -288,11 +288,17 @@ func decidePayloadIn(owner, machineID, machine, sessionID, title, text string, t
 			td["lockscreen"], aps["category"] = assistantwire.OwnerAskLockscreenOpenOnly, decideOpenCategory
 		}
 	}
-	return map[string]any{
+	out := map[string]any{
 		"aps":        aps,
 		"machine_id": machineID, "session_id": sessionID,
 		"todo": td,
 	}
+	// Top-level todo_id (without interaction_id) lets iOS recall delivered to-do decision pushes on todo-ask:<id>
+	// without NotificationWithdrawal.stale ever sweeping unanswered decisions (#13916). Older apps ignore it.
+	if todo.ID != "" {
+		out["todo_id"] = todo.ID
+	}
+	return out
 }
 
 // decideOptions are the option labels a decision's push carries: whole (the extension offers a label it can show, or

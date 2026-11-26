@@ -10,7 +10,7 @@ import { shownManager } from "../../lib/manager-choice";
 import { navigate } from "../../lib/router";
 import {
   BYPASS, CRON_EXAMPLES, DAY_NAMES, everyLabel, fromLocalInput, grantKinds, INTERVALS, lastRunText, MAX_EVERY, MIN_EVERY, momentLabel, nextRun, normalizeDays,
-  parseTime, PERMISSION_MODES, repeatsLabel, runDetail, runStatusWord, sameTask, taskBody, taskStartsFresh, taskTitle, toLocalInput, untilLabel, validateTask,
+  parseTime, PERMISSION_MODES, repeatsLabel, sameTask, taskBody, taskStartsFresh, taskTitle, toLocalInput, untilLabel, validateTask,
   TASK_CRON_FEATURE, TASK_INBOX_FEATURE, TASK_PUSH_FEATURE, WEEKEND, withPush, withRepeat, WORKDAYS, type CronPreview, type GrantKind, type InboxMode, type Push, type Repeat, type Run, type Task,
 } from "../../lib/routines";
 import { hubHas, useStore } from "../../lib/store";
@@ -18,9 +18,13 @@ import { Button, cx, Dialog, Spinner, toast, useNow } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { scrollBehavior } from "../../ui/stream/motion";
 import { Field, inputClass, Segmented, SectionTitle, Switch, textareaClass } from "./parts";
+import { RunLine, RunMark } from "./RunLine";
 import { lazyPage } from "../../lib/lazy-page";
 import { formatDate, t } from "../../i18n";
 
+export { RunLine, RunMark };
+
+const TaskPromptEditor = lazyPage(() => import("./TaskPromptEditor").then((m) => m.TaskPromptEditor));
 const TaskExecutionFields = lazyPage(() => import("./TaskExecutionFields").then((m) => m.TaskExecutionFields));
 
 /** Brings an inline confirmation into view once, when it appears (stable, so not on every render). */
@@ -58,6 +62,7 @@ export function TaskEditor({
   const hasPush = useStore((s) => hubHas(s.features, TASK_PUSH_FEATURE)) || task.push === "asked";
   /** "When done, put it in the Inbox" shows when the hub takes it (task_inbox), or the task already has it. */
   const hasInbox = useStore((s) => hubHas(s.features, TASK_INBOX_FEATURE)) || !!task.inbox;
+  const hasInput = useStore((s) => hubHas(s.features, "task_input"));
   const hasExecution = useStore((s) => hubHas(s.features, "task_execution")) || !!task.execution || !!task.cwd || !!task.launcher || !!task.model;
   /** "Cron" shows when the hub runs cron tasks (task_cron), or the task already is one. */
   const hasCron = useStore((s) => hubHas(s.features, TASK_CRON_FEATURE)) || task.repeat === "cron";
@@ -293,14 +298,14 @@ export function TaskEditor({
 
           <section>
             <SectionTitle>{t("assistant-taskeditor.section_prompt")}</SectionTitle>
-            <textarea
+            {hasInput ? <Suspense fallback={<Spinner />}><TaskPromptEditor draft={draft} saved={saved} disabled={working} onChange={(prompt, prompt_selections) => set({ prompt, prompt_selections })} /></Suspense> : <textarea
               className={textareaClass}
               rows={6}
               value={draft.prompt}
               placeholder={t("assistant-taskeditor.prompt_placeholder")}
               aria-label={t("assistant-taskeditor.prompt_placeholder")}
               onChange={(e) => set({ prompt: e.target.value })}
-            />
+            />}
             <p className={HINT}>{t("assistant-taskeditor.prompt_hint")}</p>
           </section>
 
@@ -394,6 +399,7 @@ export function TaskEditor({
               <SectionTitle>{t("assistant-taskeditor.section_push")}</SectionTitle>
               <Segmented<Push>
                 label={t("assistant-taskeditor.section_push")}
+                wrap
                 value={draft.push ?? ""}
                 onChange={(p) => edit((d) => withPush(d, p))}
                 options={[
@@ -412,6 +418,7 @@ export function TaskEditor({
               <SectionTitle>{t("assistant-taskeditor.section_inbox")}</SectionTitle>
               <Segmented<InboxMode>
                 label={t("assistant-taskeditor.section_inbox")}
+                wrap
                 value={draft.inbox ?? ""}
                 onChange={(inbox) => set({ inbox })}
                 options={[
@@ -541,53 +548,6 @@ function LinkRow({ icon, label, onClick, busy, disabled, chevron = true }: { ico
       <span className="min-w-0 flex-1 truncate">{label}</span>
       {busy ? <Spinner /> : chevron ? <Icon name="chevronRight" size={12} stroke={2} className="text-ink-3" /> : null}
     </button>
-  );
-}
-
-/** One run in a task's history: when, how it went. */
-export function RunLine({ run, now, onOpen, showTitle }: { run: Run; now: Date; onOpen?: () => void; showTitle?: boolean }) {
-  const at = parseTime(run.at);
-  const failed = run.status !== "ok" && run.status !== "skipped";
-  const body = (
-    <>
-      <RunMark status={run.status} />
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-[13px] text-ink">{showTitle ? run.title : at ? momentLabel(at, now) : runStatusWord(run)}</span>
-        <span className={cx("block truncate text-[11.5px]", failed ? "text-red" : "text-ink-3")}>
-          {showTitle && at ? `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")} · ` : ""}
-          {runDetail(run)}
-        </span>
-      </span>
-      {onOpen && <Icon name="chevronRight" size={12} stroke={2} className="shrink-0 text-ink-3" />}
-    </>
-  );
-  return <div>{onOpen ? (
-    <button type="button" onClick={onOpen} title={t("assistant-taskeditor.open_run")} className="flex w-full items-center gap-2.5 px-3.5 py-2 text-left transition-colors hover:bg-hover">
-      {body}
-    </button>
-  ) : (
-    <div className="flex items-center gap-2.5 px-3.5 py-2">{body}</div>
-  )}
-    {run.execution && <details className="px-3.5 pb-2 text-[11.5px] text-ink-3">
-      <summary className="cursor-pointer">{t("assistant-taskeditor.execution_used")}</summary>
-      {run.conversation && <p>{t(`assistant-taskeditor.conversation_${run.conversation}`)}{run.conversation_reason ? ` · ${t("assistant-taskeditor.conversation_changed")}` : ""}</p>}
-      <p className="break-all">{[run.execution.agent, run.execution.launcher, run.execution.model || t("settings-modelconfiguration.provider_default"), run.execution.effort, run.execution.machine_id, run.execution.cwd, run.execution.permission_mode].filter(Boolean).join(" · ")}</p>
-    </details>}
-  </div>;
-}
-
-export function RunMark({ status }: { status: string }) {
-  if (status === "ok")
-    return (
-      <span aria-label={t("assistant-taskeditor.status_ok")} role="img" className="flex size-[18px] shrink-0 items-center justify-center rounded-full bg-green-tint text-green">
-        <Icon name="check" size={11} stroke={3} />
-      </span>
-    );
-  if (status === "skipped") return <span aria-label={t("assistant-taskeditor.status_skipped")} role="img" className="size-[18px] shrink-0 rounded-full border-[1.5px] border-line-strong" />;
-  return (
-    <span aria-label={t("assistant-taskeditor.status_failed")} role="img" className="flex size-[18px] shrink-0 items-center justify-center rounded-full bg-field text-red">
-      <Icon name="x" size={11} stroke={3} />
-    </span>
   );
 }
 

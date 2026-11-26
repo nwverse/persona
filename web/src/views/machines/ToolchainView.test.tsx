@@ -1,6 +1,5 @@
 // @vitest-environment jsdom
-// Regression test for review #6004294744 (comment 4651711398): the Toolchain view is strictly opt-in on click,
-// never persisted in localStorage, and never auto-restored on subsequent visits to Machines.
+// The route takes precedence over older saved tool preferences.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -29,6 +28,9 @@ vi.mock("../../lib/store", async (importOriginal) => {
 });
 
 const { Machines } = await import("../Machines");
+// Load the lazy Toolchain chunk up front (#12915). A fixed number of flushes does not cover a cold dynamic import: the
+// click below fetched nothing, and the "not restored" checks passed even when Machines restored the view.
+await import("./ToolchainPanel");
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -38,12 +40,16 @@ const json = (v: unknown, status = 200) =>
 let host: HTMLDivElement;
 let root: Root;
 
-const flush = async () => {
-  for (let i = 0; i < 8; i++) {
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 0));
-    });
-  }
+const waitUntil = async (predicate: () => boolean) => {
+  await vi.waitFor(
+    async () => {
+      await act(async () => {
+        await Promise.resolve();
+      });
+      expect(predicate()).toBe(true);
+    },
+    { timeout: 4000 },
+  );
 };
 
 beforeEach(async () => {
@@ -64,8 +70,8 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("Machines toolchain view opt-in persistence", () => {
-  it("never restores toolchain from storage and does not persist it when selected", async () => {
+describe("Machines toolchain view persistence", () => {
+  it("restores the bookmarked tool independently of the last fleet choice", async () => {
     const requested: string[] = [];
     vi.stubGlobal(
       "fetch",
@@ -93,29 +99,16 @@ describe("Machines toolchain view opt-in persistence", () => {
       }),
     );
 
-    // Pre-seed storage with "toolchain": Machines must ignore it and default to Cards without probing.
-    storage.set("persona.machines.view", "toolchain");
+    storage.set("persona.machines.view", "files");
+    history.replaceState(null, "", "/machines/dev-box/toolchain");
 
     act(() => root.render(<Machines onToggleSidebar={() => {}} />));
-    await flush();
+    await act(async () => { await vi.dynamicImportSettled(); });
+    await waitUntil(() => requested.some((u) => u.includes("/api/v1/machines/dev-box/toolchain")));
 
-    expect(requested.some((u) => u.includes("/toolchain"))).toBe(false);
-    expect(host.querySelector('[data-testid="toolchain-panel"]')).toBeNull();
+    expect(requested.some((u) => u.includes("/toolchain"))).toBe(true);
+    expect(host.querySelector('[data-testid="toolchain-panel"]')).not.toBeNull();
 
-    // Selecting Capabilities persists "capabilities".
-    const capBtn = [...host.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Capabilities");
-    expect(capBtn).toBeTruthy();
-    act(() => capBtn!.click());
-    await flush();
-    expect(storage.get("persona.machines.view")).toBe("capabilities");
-
-    // Clicking Toolchain triggers the probe on demand, but leaves storage at "capabilities".
-    const tcBtn = [...host.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Toolchain");
-    expect(tcBtn).toBeTruthy();
-    act(() => tcBtn!.click());
-    await flush();
-
-    expect(requested.some((u) => u.includes("/api/v1/machines/dev-box/toolchain"))).toBe(true);
-    expect(storage.get("persona.machines.view")).toBe("capabilities");
+    expect(storage.get("persona.machines.view")).toBe("files");
   });
 });

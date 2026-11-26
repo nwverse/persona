@@ -25,13 +25,17 @@ const (
 	MethodChannelUnbound = "channels.unbound"
 	// MethodFeishuMessage: FeishuMessage → {}: the owner's message in the Feishu bot's private chat, taken.
 	MethodFeishuMessage = "feishu.message"
-	// MethodFeishuAction: FeishuAction → the card callback's answer (feishubot.CardResponse): the owner pressed one
+	// MethodFeishuAction: FeishuAction → the card callback's answer (botcard.CardResponse): the owner pressed one
 	// of the bot's cards. Feishu waits 3 seconds for it.
 	MethodFeishuAction = "feishu.card_action"
 	// MethodFeishuView: {} → FeishuView, what GET /api/v1/bots/feishu shows of the bot's chat.
 	MethodFeishuView = "feishu.view"
 	// MethodFeishuMenu: FeishuMenu → {}: the owner pressed an entry of the bot's menu (its event key).
 	MethodFeishuMenu = "feishu.menu"
+	// MethodFeishuHandoff: FeishuHandoff → {}: a group question handed to the bot, accepted (not its run).
+	// An assistant that does not know it answers "unknown method", so an older one never treats the payload
+	// as one of the owner's messages.
+	MethodFeishuHandoff = "feishu.handoff"
 
 	// EventInteractionAnnounced: InteractionAnnounced, one way: a new card (not a quiet task's).
 	EventInteractionAnnounced = "interaction.announced"
@@ -41,7 +45,9 @@ const (
 	// EventSessionItems and EventSessionDelta: SessionItems / SessionDelta, one way: a conversation the assistant
 	// follows (DeviceSessionFollow) has new items, or is writing text.
 	EventSessionItems = "session.items"
-	EventSessionDelta = "session.delta"
+	// EventInlineViewPage carries candidate cards from a transcript page the hub read for an app (SessionItems).
+	EventInlineViewPage = "session.inline_view_page"
+	EventSessionDelta   = "session.delta"
 	// EventFeishuOwner: FeishuOwner, one way: the Feishu bot was paired with its owner, or unpaired.
 	EventFeishuOwner = "feishu.owner"
 	// EventFeishuRecalled: FeishuRecalled, one way: the owner recalled a message in the bot's private chat.
@@ -80,7 +86,7 @@ const (
 	// for a send that may be made again (a retried morning brief): the same key lands once, and a reply under it is
 	// not dropped as a repeat of another with the same words. It may be made of letters, digits, ":", "_" and "-" only
 	// (anything else is ignored, as if none was given) and is cut to 46 characters; without one a reply's key is made
-	// of its parent and content. no_detour? makes a reply whose parent was withdrawn or deleted fail (feishubot.MessageGone
+	// of its parent and content. no_detour? makes a reply whose parent was withdrawn or deleted fail (botcard.MessageGone
 	// tells why) in place of going into the chat as a message of its own.
 	// chat_id? names another chat to send into (and to fall back to when the parent was withdrawn) and in_thread? puts
 	// a reply in the parent's thread; the hub refuses any chat but the owner's private chat and the group chats the
@@ -93,11 +99,14 @@ const (
 	// 2000 characters, never a detour into the chat); a send into that group, or a reply to any other message in it,
 	// is refused as ever. With full_answer, the owner must enable full replies, a parent is required, and the
 	// answer is sent as literal rich text, or as a text attachment when too large for inline delivery.
+	// A feishu.text with handoff set is a proxy reply (bots_handoff.go) and skips the usual path: handoff is the
+	// hub's id, confirmed says the owner approved the draft, and the text goes under the handoff's anchor or,
+	// with none, into its chat. The chat does not become one the bot may send into.
 	FeishuText = "feishu.text"
 	// FeishuUpdateCard: {message_id, card} → {}.
 	FeishuUpdateCard = "feishu.update_card"
 	// FeishuCardCreate: {card} → {card_id}: a card entity (CardKit) made of the card (JSON 2.0); FeishuPost sends it with
-	// feishubot.CardEntityContent(card_id) as its card, and FeishuUpdateCard still updates that message whole.
+	// botcard.CardEntityContent(card_id) as its card, and FeishuUpdateCard still updates that message whole.
 	FeishuCardCreate = "feishu.card_create"
 	// FeishuCardUpdate: {card_id, card, sequence} → {}: the whole card written into an entity. FeishuCardStream:
 	// {card_id, element, text, sequence} → {}: an element's whole text streamed into it (feishubot.StreamClosed tells
@@ -115,7 +124,7 @@ const (
 	// FeishuCotCreate: {reply_to?, chat_id?, in_thread?} → {cot_id, message_id}: an agent message (the open
 	// platform's message_cot, a collapsible process) under the message replied to, in its topic when in_thread is set.
 	FeishuCotCreate = "feishu.cot_create"
-	// FeishuCotAppend: {cot_id, message_id, events: [feishubot.CotEvent]} → {}.
+	// FeishuCotAppend: {cot_id, message_id, events: [botcard.CotEvent]} → {}.
 	FeishuCotAppend = "feishu.cot_append"
 	// FeishuCotComplete: {cot_id, message_id, reason: done | error} → {}: one that will not get its RUN_FINISHED.
 	FeishuCotComplete = "feishu.cot_complete"
@@ -139,6 +148,8 @@ const (
 	FeishuConfigure = "feishu.configure"
 	// FeishuTest: {} → {}: the test card to the owner.
 	FeishuTest = "feishu.test"
+	// FeishuHandoffEnd: {handoff, outcome} → {}: a handoff is over without a post (declined, expired, no_reply, failed).
+	FeishuHandoffEnd = "feishu.handoff_end"
 
 	// AppChannels is the plugins' channel programs, and the list of every channel as the transport has it.
 	AppChannels = "channels"
@@ -211,13 +222,67 @@ type OwnerApprovalProof struct {
 	Text      string `json:"text"`
 }
 
+// FeishuHandoff is feishu.handoff's params: a group question an authorized caller handed to the bot. The
+// question, the context and the names are the caller's, untrusted, and are never stored with the bot's settings.
+type FeishuHandoff struct {
+	ID         FeishuHandoffID `json:"id"`
+	ChatID     FeishuChatID    `json:"chat_id"`
+	ChatName   string          `json:"chat_name,omitempty"`
+	SenderName string          `json:"sender_name,omitempty"`
+	Question   string          `json:"question"`
+	Context    string          `json:"context,omitempty"`
+	Confirm    bool            `json:"confirm"`
+	Launcher   string          `json:"launcher,omitempty"`
+	By         string          `json:"by,omitempty"`
+	ExpiresAt  time.Time       `json:"expires_at"`
+}
+
+// FeishuHandoffID names one proxy-reply handoff ("bh_" and hex), chosen by the manager.
+type FeishuHandoffID string
+
+// FeishuChatID is a Lark open-platform chat id (oc_…).
+type FeishuChatID string
+
+// FeishuHandoffState is the state of a handoff the hub answers with; it only ever answers once one is accepted.
+type FeishuHandoffState string
+
+const FeishuHandoffStateAccepted FeishuHandoffState = "accepted"
+
+func (s FeishuHandoffState) Valid() bool { return s == FeishuHandoffStateAccepted }
+
+// FeishuHandoffDelivery is how a handoff is answered: confirm (the owner approves the draft first) or direct.
+type FeishuHandoffDelivery string
+
+const (
+	FeishuHandoffDeliveryConfirm FeishuHandoffDelivery = "confirm"
+	FeishuHandoffDeliveryDirect  FeishuHandoffDelivery = "direct"
+)
+
+func (d FeishuHandoffDelivery) Valid() bool {
+	return d == FeishuHandoffDeliveryConfirm || d == FeishuHandoffDeliveryDirect
+}
+
+// FeishuHandoffAccepted is the handoff POST /api/v1/bots/feishu/handoffs took.
+type FeishuHandoffAccepted struct {
+	ID        FeishuHandoffID       `json:"id"`
+	State     FeishuHandoffState    `json:"state"`
+	Delivery  FeishuHandoffDelivery `json:"delivery"`
+	ExpiresAt string                `json:"expires_at"`
+}
+
+// FeishuHandoffResponse is the body of POST /api/v1/bots/feishu/handoffs. Replayed: a repeat of an earlier ref.
+type FeishuHandoffResponse struct {
+	Handoff  FeishuHandoffAccepted `json:"handoff"`
+	Replayed bool                  `json:"replayed"`
+}
+
 // FeishuFromElsewhere is FeishuMessage.From of a message the hub took from a group chat that is not opted in: the owner's
-// "@bot /ai …" and nothing else. The assistant opens a to-do for it in the home topic group, or in the owner's private chat when there is none (assistant/feishu_elsewhere.go).
+// "@bot /ai …" and nothing else. The assistant opens a to-do for it in the home topic group, or in the owner's private chat when there is none (modules/lark/elsewhere.go).
 const FeishuFromElsewhere = "elsewhere"
 
 // FeishuFromRead is FeishuMessage.From of the owner's "@bot /read <task>" from a group chat, opted in or not (#11803):
 // the assistant reads the group as the owner, then does the task, and answers under that message
-// (assistant/feishu_read.go). The hub lets it through only with the read_group switch on.
+// (modules/lark/read.go). The hub lets it through only with the read_group switch on.
 const FeishuFromRead = "read"
 
 // FeishuAction is feishu.card_action's params: card.action.trigger's event as Feishu sent it (the owner's press), and
@@ -305,6 +370,9 @@ type FeishuFeatures struct {
 	// ReadGroup: "@bot /read <task>" from the owner in a group reads the group before the task (#11803,
 	// FeishuFromRead).
 	ReadGroup bool `json:"read_group"`
+	// ReadGroupDirect: a /read's answer goes straight into the group under the owner's message. Off: it goes to the
+	// owner's private chat first, and into the group only when the owner presses its button (#14437).
+	ReadGroupDirect bool `json:"read_group_direct"`
 }
 
 // FeishuStatus is feishu.status's answer.
@@ -326,6 +394,8 @@ type FeishuStatus struct {
 	// HomeChat is the home topic group (#6146): the opted-in group the owner marked with "/topics home", else the first
 	// one opted in; "" while none is. It is one of Chats. Where a request from a group that is not opted in opens its topic.
 	HomeChat string `json:"home_chat,omitempty"`
+	// TopicTodoModes holds the non-default to-do policies of opted-in groups, keyed by chat ID.
+	TopicTodoModes map[string]TopicTodoMode `json:"topic_todo_modes,omitempty"`
 	// NudgeAfter is the bot's setting nudge_after (#6084): minutes a card waits unanswered before the one nudge under it,
 	// 0 off. nil (a status from before the setting) is NudgeAfterDefault.
 	NudgeAfter *int `json:"nudge_after,omitempty"`
@@ -333,6 +403,25 @@ type FeishuStatus struct {
 	SourceReportDelayMinutes *int `json:"source_report_delay_minutes,omitempty"`
 	// SourceReportFullReply is the owner's opt-in to posting the task's final answer in its source group.
 	SourceReportFullReply bool `json:"source_report_full_reply,omitempty"`
+}
+
+type TopicTodoMode string
+
+const (
+	TopicAnswerOnly  TopicTodoMode = "answer_only"
+	TopicMainDecides TopicTodoMode = "main_decides"
+	TopicAlwaysTodo  TopicTodoMode = "always_todo"
+)
+
+func (m TopicTodoMode) Valid() bool {
+	return m == TopicAnswerOnly || m == TopicMainDecides || m == TopicAlwaysTodo
+}
+
+func (m TopicTodoMode) Effective() TopicTodoMode {
+	if !m.Valid() {
+		return TopicAnswerOnly
+	}
+	return m
 }
 
 // NudgeAfterDefault is nudge_after when never set: minutes a card of the Lark bot waits before it is nudged.

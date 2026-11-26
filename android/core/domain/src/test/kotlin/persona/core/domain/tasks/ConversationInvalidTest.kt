@@ -33,7 +33,7 @@ class ConversationInvalidTest {
             assertTrue(on, replacement.waitsWithoutBackground())
             val sessions = listOf(old, replacement)
             val byKey = sessions.associateBy { it.key }
-            assertEquals(on, TriageStatus.FollowUp, todo.triageStatus({ byKey[it] }))
+            assertEquals(on, TriageStatus.Waiting, todo.triageStatus({ byKey[it] }))
             val entries = assistantEntries("main", "main", listOf(todo), sessions, emptyList(), emptyList(), emptyList(), 1_000L)
             assertTrue(on, entries.needsYou.isEmpty())
             assertEquals(on, listOf("task:t"), entries.running.map { it.key })
@@ -58,6 +58,6 @@ class ConversationInvalidTest {
         assertTrue(Interruption.of(staleInvalid)?.invalid == true)
         assertEquals(TriageStatus.Interrupted, invalidOnly.triageStatus({ staleByKey[it] }))
         val byKey = listOf(old, replacement).associateBy { it.key }
-        assertEquals(TriageStatus.FollowUp, todo.triageStatus({ byKey[it] }))
+        assertEquals(TriageStatus.Waiting, todo.triageStatus({ byKey[it] }))
     }
 }

@@ -3,6 +3,7 @@ package hub
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"slices"
 	"time"
@@ -46,19 +47,36 @@ func (u *updater) routes(api *http.ServeMux) {
 		}
 		writeJSON(w, u.viewIn(u.h.requestLang(r)))
 	})
+	api.HandleFunc("POST /api/v1/hub/update/cancel", func(w http.ResponseWriter, r *http.Request) {
+		if err := u.requestCancel(); err != nil {
+			writeErr(w, http.StatusConflict, err)
+			return
+		}
+		u.broadcastStatus()
+		writeJSON(w, u.viewIn(u.h.requestLang(r)))
+	})
 	api.HandleFunc("POST /api/v1/hub/update/check", func(w http.ResponseWriter, r *http.Request) {
 		if err := u.load(r.Context()); err != nil {
 			writeErr(w, http.StatusServiceUnavailable, i18n.Err("http-status.unavailable"))
 			return
 		}
-		if _, err := u.check(r.Context()); err != nil && !errors.Is(err, errNotRelease) {
+		var body struct {
+			Preview bool `json:"preview"`
+		}
+		if err := decodeJSONBody(w, r, &body, 4<<10); err != nil && !errors.Is(err, io.EOF) {
+			writeBodyErr(w, err, err)
+			return
+		}
+		if _, err := u.checkMode(r.Context(), body.Preview); err != nil && !errors.Is(err, errNotRelease) {
 			writeErr(w, http.StatusBadGateway, err)
 			return
 		}
-		if u.wantsAuto() {
-			go u.install(context.WithoutCancel(r.Context()), true)
-		} else {
-			u.noteHeld(r.Context())
+		if !body.Preview {
+			if u.wantsAuto() {
+				go u.install(context.WithoutCancel(r.Context()), true)
+			} else {
+				u.noteHeld(r.Context())
+			}
 		}
 		writeJSON(w, u.viewIn(u.h.requestLang(r)))
 	})
@@ -68,7 +86,8 @@ func (u *updater) routes(api *http.ServeMux) {
 			return
 		}
 		var body struct {
-			Now bool `json:"now"`
+			Now    bool   `json:"now"`
+			Target string `json:"target"`
 		}
 		// No body (or one that does not decode) is an ordinary update; only an oversized one is refused.
 		if err := decodeJSONBody(w, r, &body, 4<<10); bodyTooLarge(err) {
@@ -76,7 +95,7 @@ func (u *updater) routes(api *http.ServeMux) {
 			return
 		}
 		// The update outlives this request: it runs on the hub's own context.
-		if err := u.begin(context.WithoutCancel(r.Context()), body.Now); err != nil {
+		if err := u.beginTarget(context.WithoutCancel(r.Context()), body.Now, body.Target); err != nil {
 			writeErr(w, http.StatusConflict, err)
 			return
 		}
@@ -105,6 +124,15 @@ func (u *updater) routes(api *http.ServeMux) {
 			writeErr(w, http.StatusConflict, i18n.Err("hub-selfupdate.err_busy"))
 			return
 		}
+		if body.DevelopmentBackupDirectory != nil || body.DevelopmentBackupRetain != nil {
+			u.mu.Lock()
+			busy := u.updateActiveLocked() || u.checking
+			u.mu.Unlock()
+			if busy {
+				writeErr(w, http.StatusConflict, i18n.Err("hub-selfupdate.err_busy"))
+				return
+			}
+		}
 		// The folder is checked with the backup command's own rules before any
 		// setting changes (IO, so outside the lock). An explicitly empty folder
 		// is the Web choice of the recommended one: it is stored as that path so
@@ -126,18 +154,31 @@ func (u *updater) routes(api *http.ServeMux) {
 			writeErr(w, http.StatusConflict, i18n.Err("hub-selfupdate.err_development_backup_retain", i18n.Args{"max": developmentBackupRetainMax}))
 			return
 		}
+		var checkedCurrent string
+		var checkedOpGen uint64
+		var checkedRecovery bool
 		if backupDir != nil {
 			// Snapshots in the folder being left must not be stranded: the
 			// helper's coordination marker and its incomplete snapshots both
 			// stop any retry until someone looked at them.
 			u.mu.Lock()
-			current := u.developmentBackupConfigLocked().Directory
+			if u.updateActiveLocked() || u.checking {
+				u.mu.Unlock()
+				writeErr(w, http.StatusConflict, i18n.Err("hub-selfupdate.err_busy"))
+				return
+			}
+			checkedCurrent = u.developmentBackupConfigLocked().Directory
+			checkedOpGen = u.opGen
 			u.mu.Unlock()
-			if *backupDir != current {
-				if err := backup.UnrecoveredSnapshot(current); err != nil {
+			if !backup.SamePath(*backupDir, checkedCurrent) {
+				if err := backup.UnrecoveredSnapshot(checkedCurrent); err != nil {
 					writeErr(w, http.StatusConflict, i18n.Err("hub-selfupdate.err_development_backup_recovery", i18n.Args{"error": err.Error()}))
 					return
 				}
+				checkedRecovery = true
+			}
+			if hook := u.testAfterBackupRecoveryCheck; hook != nil {
+				hook()
 			}
 		}
 		u.mu.Lock()
@@ -154,7 +195,7 @@ func (u *updater) routes(api *http.ServeMux) {
 		}
 		if body.Auto != nil && *body.Auto && (u.developmentLocked() || (body.Source != nil && *body.Source == "web-dev")) && !u.developmentAvailable() {
 			u.mu.Unlock()
-			writeErr(w, http.StatusConflict, i18n.Err("hub-selfupdate.err_development_config"))
+			writeErr(w, http.StatusConflict, u.developmentUnavailableErr())
 			return
 		}
 		if body.Source != nil && *body.Source != u.settings.Source {
@@ -165,7 +206,7 @@ func (u *updater) routes(api *http.ServeMux) {
 			}
 			if *body.Source == "web-dev" && !u.developmentAvailable() {
 				u.mu.Unlock()
-				writeErr(w, http.StatusConflict, i18n.Err("hub-selfupdate.err_development_config"))
+				writeErr(w, http.StatusConflict, u.developmentUnavailableErr())
 				return
 			}
 			if *body.Source == update.ChannelBeta {
@@ -175,6 +216,38 @@ func (u *updater) routes(api *http.ServeMux) {
 					return
 				}
 			}
+		}
+		if backupDir != nil || body.DevelopmentBackupRetain != nil {
+			if u.updateActiveLocked() || u.checking {
+				u.mu.Unlock()
+				writeErr(w, http.StatusConflict, i18n.Err("hub-selfupdate.err_busy"))
+				return
+			}
+			if backupDir != nil {
+				current := u.developmentBackupConfigLocked().Directory
+				sameAsChecked := current == checkedCurrent || backup.SamePath(current, checkedCurrent)
+				if !sameAsChecked || (!backup.SamePath(*backupDir, current) && !checkedRecovery) {
+					u.mu.Unlock()
+					writeErr(w, http.StatusConflict, i18n.Err("hub-selfupdate.err_busy"))
+					return
+				}
+				if !backup.SamePath(*backupDir, current) {
+					// Re-check under u.mu so a failed update or helper marker
+					// created after the unlocked check cannot be stranded.
+					if err := backup.UnrecoveredSnapshot(current); err != nil {
+						u.mu.Unlock()
+						writeErr(w, http.StatusConflict, i18n.Err("hub-selfupdate.err_development_backup_recovery", i18n.Args{"error": err.Error()}))
+						return
+					}
+				}
+				if u.opGen != checkedOpGen {
+					u.mu.Unlock()
+					writeErr(w, http.StatusConflict, i18n.Err("hub-selfupdate.err_busy"))
+					return
+				}
+			}
+		}
+		if body.Source != nil && *body.Source != u.settings.Source {
 			u.settings.Source = *body.Source
 			u.settings.DevelopmentAuto = false // entering a channel never opts into automatic adoption
 			u.settings.DevelopmentBackup = nil
@@ -208,7 +281,7 @@ func (u *updater) routes(api *http.ServeMux) {
 		} else if u.settings.Source != prev.Source {
 			u.release, u.blocked, u.lastCheck = nil, nil, time.Time{}
 			u.releaseRead, u.refreshTried = time.Time{}, time.Time{}
-			u.state, u.progress, u.errText = "idle", "", ""
+			u.setLocked("idle", "", "")
 			u.androidNote, u.behindNote = "", ""
 		}
 		u.mu.Unlock()

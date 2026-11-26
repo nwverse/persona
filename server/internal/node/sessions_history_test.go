@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -75,39 +74,6 @@ func historyCall(t *testing.T, n *Node, params map[string]any) sessionhistory.An
 		t.Fatal(err)
 	}
 	return ans
-}
-
-// The extracted domain handler is the same pre-shared-params dispatch as Node.handle, including its own malformed-params error.
-func TestSessionsHistoryDispatchParity(t *testing.T) {
-	n := &Node{}
-	for _, tc := range []struct {
-		name    string
-		params  json.RawMessage
-		wantErr string
-	}{
-		{name: "valid", params: json.RawMessage(`{"since":"2026-01-01T00:00:00Z","source":"runtime","limit":1}`)},
-		{name: "malformed", params: json.RawMessage(`{"since":`), wantErr: "sessions.history: malformed params"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			dispatched, dispatchErr := n.handle(t.Context(), "sessions.history", tc.params)
-			forwarded, forwardErr := n.handleSessionsHistory(t.Context(), "sessions.history", tc.params)
-			if !reflect.DeepEqual(forwarded, dispatched) {
-				t.Fatalf("domain result %#v, dispatch result %#v", forwarded, dispatched)
-			}
-			errorText := func(err error) string {
-				if err == nil {
-					return ""
-				}
-				return err.Error()
-			}
-			if got := errorText(dispatchErr); got != tc.wantErr {
-				t.Fatalf("dispatch error %q, want %q", got, tc.wantErr)
-			}
-			if got, want := errorText(forwardErr), errorText(dispatchErr); got != want {
-				t.Fatalf("domain error %q, dispatch error %q", got, want)
-			}
-		})
-	}
 }
 
 // A runtime that declares caps.history is listed in full over a 90-day window, page by page, far past what it pushes
@@ -199,6 +165,37 @@ func TestSessionsHistoryPagesARuntimeInFullAndMarksOneWithoutIt(t *testing.T) {
 		if s.SessionID == "s100" {
 			t.Error("history rows never enter the live list")
 		}
+	}
+}
+
+// A history page is the runtime's snapshot in its requested time window. A marker there
+// cannot borrow words from a live snapshot updated after that window.
+func TestRuntimeHistoryBotmuxPreviewStaysInWindow(t *testing.T) {
+	n, _ := runtimeNode(t)
+	hello := dshHello()
+	hello["caps"].(map[string]any)["history"] = true
+	rt := dialRuntime(t, n, hello)
+	now := time.Now().UTC()
+	const id, marker = "sample", "BOTMUX_NOTHING_TO_SEND"
+	rt.mu.Lock()
+	rt.answer = historyRuntime([]map[string]any{{
+		"session_id": id, "rev": 5, "updated_at": now.Add(-24 * time.Hour).Format(time.RFC3339Nano),
+		"last_text": marker, "subagents": []map[string]any{{"id": "child", "last_text": marker}},
+	}})
+	rt.mu.Unlock()
+
+	live := proto.Session{SessionID: id, Rev: 9, LastText: "Today's reply", Subagents: []proto.Subagent{{ID: "child", LastText: "Today's child"}}}
+	if err := rt.peer.Notify("runtime.sessions", map[string]any{"sessions": []proto.Session{live}}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "live row", func() bool { return listed(t, n)[id].Rev == 9 })
+	ans := historyCall(t, n, map[string]any{"since": now.Add(-48 * time.Hour), "until": now.Add(-time.Hour), "source": "runtime"})
+	if len(ans.Rows) != 1 {
+		t.Fatalf("got %d historical rows, want one", len(ans.Rows))
+	}
+	s := ans.Rows[0].Session
+	if s.Rev != 5 || s.LastText != "" || len(s.Subagents) != 1 || s.Subagents[0].LastText != "" {
+		t.Fatalf("historical revision %d: got %q and children %+v", s.Rev, s.LastText, s.Subagents)
 	}
 }
 
