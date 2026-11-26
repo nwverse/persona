@@ -136,6 +136,97 @@ describe("the knowledge map", () => {
   });
 });
 
+describe("zooming and panning the map", () => {
+  const draw = async () => {
+    act(() => root.render(<KnowledgeMap onToggleSidebar={() => {}} />));
+    await answer("/api/v1/kb/topics", { items: [{ kind: "topics", id: "search", name: "Search", relevance: 0, extra: "3" }] });
+    await answer("/api/v1/assistant", {});
+    await answer("/api/v1/kb/topics/search", topic);
+    const svg = host.querySelector<SVGSVGElement>("svg[data-map]")!;
+    const view = svg.parentElement!.parentElement as HTMLDivElement;
+    const [, , width, height] = svg.getAttribute("viewBox")!.split(" ").map(Number);
+    return { svg, view, width, height };
+  };
+  const zoom = () => host.querySelector("span[aria-live=polite]")!.textContent;
+  const button = (name: string) => host.querySelector<HTMLButtonElement>(`button[aria-label="${name}"]`)!;
+  // jsdom lays nothing out: give the scroll view a size
+  const size = (el: HTMLElement, w: number, h: number) => {
+    Object.defineProperty(el, "clientWidth", { configurable: true, value: w });
+    Object.defineProperty(el, "clientHeight", { configurable: true, value: h });
+  };
+  const wheel = (el: Element, deltaY: number) => {
+    const e = new WheelEvent("wheel", { deltaY, ctrlKey: true, bubbles: true, cancelable: true });
+    act(() => el.dispatchEvent(e));
+    return e.defaultPrevented;
+  };
+  const gesture = (el: Element, type: string, scale: number) => act(() => el.dispatchEvent(Object.assign(new Event(type, { bubbles: true, cancelable: true }), { scale, clientX: 0, clientY: 0 })));
+  const pointer = (el: Element, type: string, x: number, y: number) => act(() => el.dispatchEvent(new PointerEvent(type, { pointerType: "mouse", pointerId: 1, button: 0, clientX: x, clientY: y, bubbles: true, cancelable: true })));
+  const panel = () => host.querySelector("aside")!.textContent ?? "";
+
+  it("zooms by a trackpad pinch (ctrl+wheel, Safari's gestures), and a mouse notch by one step", async () => {
+    const { svg } = await draw();
+    expect(zoom()).toBe("65%");
+    // Chrome sends a pinch as small ctrl+wheel deltas: deltaY = -100 ln(scale)
+    for (let i = 0; i < 4; i++) expect(wheel(svg, (-100 * Math.log(1.5)) / 4)).toBe(true);
+    expect(zoom()).toBe("98%");
+    gesture(svg, "gesturestart", 1);
+    gesture(svg, "gesturechange", 1 / 1.5);
+    expect(zoom()).toBe("65%");
+    // one notch of a mouse wheel (100 px) is one moderate step, not straight to the floor
+    wheel(svg, 100);
+    expect(zoom()).toBe("51%");
+  });
+
+  it("zooms out until the whole map fits, and Fit to view shows it whole", async () => {
+    const { view, width, height } = await draw();
+    size(view, 120, 90);
+    const fit = Math.max(0.05, Math.min((120 - 24) / width, (90 - 24) / height));
+    expect(fit).toBeLessThan(0.3);
+    for (let i = 0; i < 20; i++) act(() => button("Zoom out").click());
+    expect(zoom()).toBe(`${Math.round(fit * 100)}%`);
+    act(() => button("Zoom in").click());
+    expect(zoom()).toBe(`${Math.round(fit * 1.25 * 100)}%`);
+    act(() => button("Fit to view").click());
+    expect(zoom()).toBe(`${Math.round(fit * 100)}%`);
+  });
+
+  it("pans on a mouse drag without selecting where it started; a press that hardly moves still selects", async () => {
+    const { svg, view } = await draw();
+    size(view, 800, 600);
+    Element.prototype.setPointerCapture = vi.fn();
+    view.scrollLeft = 500;
+    view.scrollTop = 400;
+    const decision = [...svg.querySelectorAll("g[role=button][tabindex]")].find((g) => g.getAttribute("aria-label") === "Decision: Results are grouped by entry")!;
+    pointer(decision, "pointerdown", 100, 100);
+    pointer(decision, "pointermove", 160, 130);
+    pointer(decision, "pointerup", 160, 130);
+    act(() => decision.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect([view.scrollLeft, view.scrollTop]).toEqual([440, 370]);
+    expect(panel()).not.toContain("Lines alone could not be found again");
+    await act(async () => new Promise((r) => setTimeout(r, 0)));
+    pointer(decision, "pointerdown", 100, 100);
+    pointer(decision, "pointermove", 102, 101);
+    pointer(decision, "pointerup", 102, 101);
+    act(() => decision.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect([view.scrollLeft, view.scrollTop]).toEqual([440, 370]);
+    expect(panel()).toContain("Lines alone could not be found again");
+  });
+
+  it("brings what the side panel opens to the middle, straight there under reduced motion", async () => {
+    await draw();
+    const scrollTo = vi.mocked(Element.prototype.scrollTo);
+    const open = () => [...host.querySelectorAll<HTMLButtonElement>("aside button")].find((b) => b.textContent?.includes("Search"))!;
+    scrollTo.mockClear();
+    act(() => open().click());
+    expect(scrollTo).toHaveBeenLastCalledWith(expect.objectContaining({ behavior: "smooth" }));
+    vi.stubGlobal("matchMedia", (q: string) => ({ matches: q.includes("reduce"), addEventListener() {}, removeEventListener() {} }));
+    act(() => host.querySelector<SVGGElement>("svg[data-map] g[tabindex]")!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    scrollTo.mockClear();
+    act(() => open().click());
+    expect(scrollTo).toHaveBeenLastCalledWith(expect.objectContaining({ behavior: "auto" }));
+  });
+});
+
 describe("the knowledge points switch", () => {
   it("reads the setting as on when unset, and writes the change", async () => {
     act(() => root.render(<KnowledgeTopicsSwitch manager="assistant" />));
