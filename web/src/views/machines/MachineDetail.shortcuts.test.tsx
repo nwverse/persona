@@ -5,7 +5,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { initI18n, t } from "../../i18n";
 import { onOpenNewAgent } from "../../lib/new-agent";
 import { href, parse } from "../../lib/router";
-import { takeUsageFocus } from "../../lib/usage-map-link";
 import type { Machine, Session } from "../../lib/types";
 import { MachineDetail } from "./MachineDetail";
 import { TerminalPage } from "../terminal/TerminalPage";
@@ -71,6 +70,9 @@ it("shows waiting work once, links its to-do, and prefills machine and workspace
     const waiting = [...host.querySelectorAll("section")].find(s => s.querySelector("h2")?.textContent === "Needs you")!;
     const todo = waiting.querySelector<HTMLAnchorElement>('a[href="/todos?id=todo-a"]')!;
     expect(waiting.textContent).toContain("Review changes");
+    const management = host.querySelector('a[href="/machines/b/management"]')!;
+    expect(management.compareDocumentPosition(waiting) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(management.compareDocumentPosition(quiet()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(host.querySelectorAll('a[href="/s/b/session"]')).toHaveLength(1);
     await click(find(host, t("space-page.new_agent")));
     expect(preset).toHaveBeenLastCalledWith({ machineId: "b" });
@@ -94,8 +96,10 @@ it("opens a known workspace without sessions by inventory identity", async () =>
 
 it("opens an existing shell on this computer ahead of Agent panes and keeps Engine under Configuration", async () => {
   await detail();
+  await act(async () => root.render(<MachineDetail mid="b" subview="management" onToggleSidebar={noOp} />));
   const engine = host.querySelector('[data-testid="engine-section"]')!;
   expect(engine.parentElement?.querySelector("h2")?.textContent).toBe("Configuration");
+  await detail();
   await click(find(host, t("sidebar.nav_terminal"))); await terminal();
   expect(location.pathname + location.search).toBe(href({ name: "terminal", mid: "b", id: "pane:one", view: "terminals" }));
   expect(posts).toEqual([]);
@@ -113,8 +117,7 @@ it("offers a new terminal in a quiet workspace even when another workspace has a
 it("takes a disk warning straight to reclaim on the selected computer", async () => {
   await detail();
   await click([...host.querySelectorAll("button")].find(b => b.textContent?.includes(t("machines-usagemap.reclaim_open")))!);
-  expect(location.pathname).toBe("/machines");
-  expect(takeUsageFocus()).toEqual({ mid: "b", mode: "reclaim" });
+  expect(location.pathname + location.search).toBe("/machines/b/storage?mode=reclaim");
 });
 
 it("distinguishes pending and failed workspace discovery while keeping known rows", async () => {
@@ -138,4 +141,11 @@ it("retries a failed pane read before offering creation, and uses the folder-cap
   await click(find(host, t("terminal-terminalpage.retry")));
   await click(find(host, t("terminal-terminalpage.new_terminal")));
   expect(posts).toEqual([["/api/v1/machines/b/panes", { kind: "herdr", cwd: "/projects/quiet" }]]);
+});
+
+
+it("opens the quiet workspace folder on its own computer", async () => {
+  await detail();
+  await click(find(quiet().parentElement!, t("machines-machinedetail.files")));
+  expect(parse(location.pathname, location.search)).toEqual({ name: "machine", mid: "b", subview: "files", path: "/projects/quiet" });
 });

@@ -231,10 +231,10 @@ describe("settings sidebar groups", () => {
     expect(searchSettings("渠道", true).tabs).not.toContain("channels");
     expect(searchSettings("收件箱来源", false).tabs).toContain("sources");
     expect(searchSettings("收件箱来源", false).tabs).not.toContain("integrations");
-    expect(searchSettings("收件箱来源", true).tabs).toContain("integrations");
-    expect(searchSettings("收件箱来源", true).tabs).not.toContain("sources");
-    expect(searchSettings("收件箱来源", true).groups).toContainEqual(expect.objectContaining({ tab: "integrations", anchor: "inbox-sources", sub: "-sources" }));
-    expect(searchSettings("数据流向", true).groups).toContainEqual(expect.objectContaining({ tab: "integrations", anchor: "inbox-sources", sub: "-sources" }));
+    expect(searchSettings("收件箱来源", true, true).tabs).toContain("integrations");
+    expect(searchSettings("收件箱来源", true, true).tabs).not.toContain("sources");
+    expect(searchSettings("收件箱来源", true, true).groups).toContainEqual(expect.objectContaining({ tab: "integrations", anchor: "inbox-sources", sub: "-sources" }));
+    expect(searchSettings("数据流向", true, true).groups).toContainEqual(expect.objectContaining({ tab: "integrations", anchor: "inbox-sources", sub: "-sources" }));
     expect(searchSettings("邮箱", true).groups).toContainEqual(expect.objectContaining({ tab: "integrations", anchor: "mail", sub: "builtin:mail" }));
     expect(searchSettings("扩展市场", true).groups).toContainEqual(expect.objectContaining({ tab: "integrations", anchor: "market", sub: "-market" }));
     expect(searchSettings("以你的名义发出", true).groups).toContainEqual(expect.objectContaining({ tab: "integrations", anchor: "sent", sub: "-sent" }));
