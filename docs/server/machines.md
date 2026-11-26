@@ -363,6 +363,16 @@ machines, and one project's breakdown (`devices/usage_projects.go`, `devicewire/
   one remote in different case).
 - **Breakdown**: by computer, Agent, model, launcher and place (each working tree or folder on each computer, worktrees
   marked), the last 7 days by day and today by the hour, its share of every project's tokens, and its cache hit rate.
+- **The week before** (`node/usage_resplit.go`, `devices/usage_resplit.go`, `db.ResplitUsage`, table `usage_resplit`, migration
+  `manager/20261126162313_usage_resplit.sql`): once, a few minutes after connecting to a manager that keeps directories,
+  a node asks `usage.resplit.status`; unless done, it re-reads its transcripts from a week ago to where its live window
+  starts (the ten-minute rows the projects' week is summed from) by the ten minutes, with the live meter's rules and
+  each session's start directory, rate-limited like the backfill, and sends them with what their directories resolve to.
+  The manager splits each stored ten minutes, model, launcher and file-metered agent that has no directory in the
+  re-read shares, kind by kind (largest remainder), so every key's sums, and the calendar, stay exactly as they were.
+  Usage the transcripts no longer hold, a runtime's and an older node's stays not split; re-read usage with nothing
+  stored is left out. The manager records the last ten minutes sent and when it finished, so a cut re-split goes on
+  and one sent again changes nothing; a machine with nothing to split is done at once.
 - **Rolling upgrades**: the node splits by directory only after the manager answers `usage.features` with `dirs: true`;
   an older manager answers `unknown method`, and the node sends its buckets summed as before (there, several buckets of
   one minute, model, launcher and agent would replace each other). An older node sends no directories: its usage is
