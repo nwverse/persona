@@ -344,7 +344,8 @@ func (s *Service) refreshMainConversationAttention(sess proto.Session, mainSessi
 
 // runConversationAttention classifies the revisions refreshMainConversationAttention asks for, the newest each time,
 // until none is left. A cached verdict settles its revision; an open round does not, so the next list reads it again.
-// The scan bounds itself (15 s) as it did on the read loop.
+// The scan bounds itself (15 s) as it did on the read loop; one still in flight when the manager's run ends can reach
+// the closed store once, within those 15 s.
 func (s *Service) runConversationAttention(key string) {
 	for {
 		scan, ok := s.convAttention.scans.take(key)
