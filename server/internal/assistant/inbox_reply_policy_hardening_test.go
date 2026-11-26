@@ -16,8 +16,8 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-func replyPolicyTestConfig() assistantwire.InboxReplyPolicyConfig {
-	return assistantwire.InboxReplyPolicyConfig{
+func replyPolicyTestConfig() *assistantwire.InboxReplyPolicyConfig {
+	return &assistantwire.InboxReplyPolicyConfig{
 		Enabled: true, Revision: "test-v1", Sources: []string{"lark"},
 		Categories: map[string]string{
 			"personal_transaction": "owner_only", "security_compliance": "owner_only",
@@ -138,7 +138,7 @@ func TestInboxReplySuggestionSendGate(t *testing.T) {
 				replyPolicyTestSetRoute(it, "owner_only")
 			}
 		}}
-		h.store = func() Store { return st }
+		h.setStore(func() Store { return st })
 		if _, err := h.actOnSuggestion(context.Background(), it.ID, suggestionReq{Version: 1, Action: suggestConfirm}, true); err == nil {
 			t.Fatal("reply was confirmed after its policy became forbidden during persistence")
 		}
@@ -156,7 +156,7 @@ func TestInboxReplySuggestionSendGate(t *testing.T) {
 			h.in.cfg.ReplyPolicy = cfg
 			h.in.mu.Unlock()
 		}}
-		h.store = func() Store { return st }
+		h.setStore(func() Store { return st })
 		if _, err := h.actOnSuggestion(context.Background(), it.ID, suggestionReq{Version: 1, Action: suggestConfirm}, true); err == nil {
 			t.Fatal("reply was confirmed against a superseded policy revision during persistence")
 		}
@@ -171,7 +171,7 @@ func TestInboxReplySuggestionSendGate(t *testing.T) {
 			h.in.configErr = errors.New("synthetic configuration outage")
 			h.in.mu.Unlock()
 		}}
-		h.store = func() Store { return st }
+		h.setStore(func() Store { return st })
 		_, err := h.actOnSuggestion(context.Background(), it.ID, suggestionReq{Version: 1, Action: suggestConfirm}, true)
 		var rpcErr *rpc.Error
 		if !errors.As(err, &rpcErr) || rpcErr.Code != assistantwire.CodeInboxSendFailed {
@@ -200,7 +200,7 @@ func TestInboxReplySuggestionSendGate(t *testing.T) {
 					h.in.configRaw = tc.raw
 					h.in.mu.Unlock()
 				}}
-				h.store = func() Store { return st }
+				h.setStore(func() Store { return st })
 				_, err := h.actOnSuggestion(context.Background(), it.ID, suggestionReq{Version: 1, Action: suggestConfirm}, true)
 				var rpcErr *rpc.Error
 				if !errors.As(err, &rpcErr) || rpcErr.Code != assistantwire.CodeInboxSendFailed {
@@ -218,9 +218,9 @@ func TestInboxReplySuggestionSendGate(t *testing.T) {
 			before assistantwire.InboxConfig
 			after  assistantwire.InboxConfig
 		}{
-			{name: "nil to disabled", after: assistantwire.InboxConfig{ReplyPolicy: assistantwire.InboxReplyPolicyConfig{Enabled: false}}},
-			{name: "disabled revision", before: assistantwire.InboxConfig{ReplyPolicy: assistantwire.InboxReplyPolicyConfig{Revision: "unused-v1"}},
-				after: assistantwire.InboxConfig{ReplyPolicy: assistantwire.InboxReplyPolicyConfig{Revision: "unused-v2"}}},
+			{name: "nil to disabled", after: assistantwire.InboxConfig{ReplyPolicy: &assistantwire.InboxReplyPolicyConfig{Enabled: false}}},
+			{name: "disabled revision", before: assistantwire.InboxConfig{ReplyPolicy: &assistantwire.InboxReplyPolicyConfig{Revision: "unused-v1"}},
+				after: assistantwire.InboxConfig{ReplyPolicy: &assistantwire.InboxReplyPolicyConfig{Revision: "unused-v2"}}},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				h, lark, it := handledHub(t)
@@ -232,7 +232,7 @@ func TestInboxReplySuggestionSendGate(t *testing.T) {
 					h.in.configQueue = []assistantwire.InboxConfig{tc.before, tc.after}
 					h.in.mu.Unlock()
 				}}
-				h.store = func() Store { return st }
+				h.setStore(func() Store { return st })
 				if _, err := h.actOnSuggestion(context.Background(), it.ID, suggestionReq{Version: 1, Action: suggestConfirm}, true); err != nil {
 					t.Fatalf("inert disabled configuration rejected a legacy send: %v", err)
 				}
@@ -252,7 +252,7 @@ func TestInboxReplySuggestionSendGate(t *testing.T) {
 			h.in.configQueue = []assistantwire.InboxConfig{oldCfg, newCfg}
 			h.in.mu.Unlock()
 		}}
-		h.store = func() Store { return st }
+		h.setStore(func() Store { return st })
 		if _, err := h.actOnSuggestion(context.Background(), it.ID, suggestionReq{Version: 1, Action: suggestConfirm}, true); err == nil {
 			t.Fatal("reply used the pre-veto policy after the final fresh read changed")
 		}
@@ -263,7 +263,7 @@ func TestInboxReplySuggestionSendGate(t *testing.T) {
 	t.Run("a stale edit veto does not reject a newly legacy send", func(t *testing.T) {
 		h, lark, it := newDraft(t)
 		h.in.mu.Lock()
-		h.in.cfg.ReplyPolicy = assistantwire.InboxReplyPolicyConfig{}
+		h.in.cfg.ReplyPolicy = &assistantwire.InboxReplyPolicyConfig{}
 		h.in.mu.Unlock()
 		h.in.model = fakeModel(t, `{"category":"approval_permission"}`)
 		edited := "I approve the synthetic legacy request"
@@ -767,7 +767,7 @@ func TestInboxReplyPolicyDraftFailedWriteWithoutRollbackDoesNotReturnText(t *tes
 		h.inbox.touched(it.ID)
 		h.inbox.mu.Unlock()
 	}
-	h.store = func() Store { return st }
+	h.setStore(func() Store { return st })
 	text, err := h.draftReply(t.Context(), it.ID, "")
 	if err == nil || text != "" {
 		t.Fatalf("unpersisted intact mirror returned a successful draft: text=%q err=%v", text, err)
@@ -806,7 +806,7 @@ func TestInboxReplyPolicyDraftDoesNotReturnReplacedText(t *testing.T) {
 		it.Agent.State, it.Agent.Draft = AgentSkipped, ""
 		h.inbox.mu.Unlock()
 	}
-	h.store = func() Store { return st }
+	h.setStore(func() Store { return st })
 	text, err := h.draftReply(t.Context(), it.ID, "")
 	if !errors.Is(err, errSuggestionStale) || text != "" {
 		t.Fatalf("successful write returned text whose mirror was replaced: text=%q err=%v", text, err)
@@ -1007,10 +1007,10 @@ func TestInboxReplyPolicyCrossSourceMergeKeepsMemberScope(t *testing.T) {
 func TestInboxReplyPolicyLegacyDraftRejectedWhileSendWaits(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
-		policy assistantwire.InboxReplyPolicyConfig
+		policy *assistantwire.InboxReplyPolicyConfig
 	}{
 		{name: "nil policy"},
-		{name: "disabled policy", policy: assistantwire.InboxReplyPolicyConfig{Enabled: false, Revision: "unused-v1"}},
+		{name: "disabled policy", policy: &assistantwire.InboxReplyPolicyConfig{Enabled: false, Revision: "unused-v1"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h, lark, it := handledHub(t)

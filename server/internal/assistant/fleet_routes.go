@@ -61,6 +61,8 @@ func (s *Service) fleetHandler(next http.Handler) http.Handler {
 			switch {
 			case errors.Is(err, errHandoffElsewhere):
 				apierr.WriteCode(w, http.StatusForbidden, proto.CodeSecretHandoffElsewhere, err)
+			case errors.Is(err, errSecretRunEnv):
+				apierr.WriteCode(w, http.StatusForbidden, proto.CodeSecretRunEnvElsewhere, err)
 			case errors.Is(err, errNotPending):
 				s.writeEnded(r.Context(), w, id, res, err, r.Header.Get(RoleHeader) == roleExtension)
 			case errors.Is(err, errInvalidElicitation), errors.Is(err, errInvalidQuestionCancel), errors.Is(err, errInvalidEditedAnswer):
@@ -229,9 +231,17 @@ func (s *Service) localFleetDeviceCall(ctx context.Context, p DeviceCall) (json.
 		}
 		sess, ok := s.nodeSession(m.ID, a.SessionID)
 		if ok {
-			sess.Assistant = m.isAssistant(sess)
+			if !sess.LogicalPlaceholder {
+				sess.Assistant = m.isAssistant(sess)
+			}
 			if sess.Assistant && sess.Space == "" {
-				sess.Space = identity.SpaceOf(sess.Cwd)
+				if sess.LogicalPlaceholder {
+					if sp, known := s.logicalRowSpace(ctx, sess); known {
+						sess.Space = sp
+					}
+				} else {
+					sess.Space = identity.SpaceOf(sess.Cwd)
+				}
 			}
 			s.nameAgentRow(m.ID, &sess)
 			// The node fills in no unified state: the callers that ask whether it works or waits for the user

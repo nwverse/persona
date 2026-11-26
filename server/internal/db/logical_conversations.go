@@ -28,6 +28,7 @@ type ConversationSwitch struct {
 	Request       json.RawMessage `json:"request"`
 	Phase         string          `json:"phase"`
 	Error         string          `json:"error,omitempty"`
+	CreatedAt     time.Time       `json:"-"`
 	UpdatedAt     time.Time       `json:"-"`
 }
 
@@ -90,9 +91,9 @@ func readLogicalConversation(ctx context.Context, q conversationQuerier, machine
 	}
 	var op ConversationSwitch
 	var request []byte
-	err = q.QueryRow(ctx, `SELECT operation_id,expected_epoch,source_segment,coalesce(target_segment,''),request,phase,error
+	err = q.QueryRow(ctx, `SELECT operation_id,expected_epoch,source_segment,coalesce(target_segment,''),request,phase,error,created_at
 	 FROM conversation_switches WHERE logical_machine=$1 AND logical_session=$2 AND phase IN ('preparing','prepared','active','in_doubt')`, c.MachineID, c.SessionID).
-		Scan(&op.OperationID, &op.ExpectedEpoch, &op.SourceSegment, &op.TargetSegment, &request, &op.Phase, &op.Error)
+		Scan(&op.OperationID, &op.ExpectedEpoch, &op.SourceSegment, &op.TargetSegment, &request, &op.Phase, &op.Error, &op.CreatedAt)
 	if err == nil {
 		op.Request = json.RawMessage(request)
 		c.Switch = &op
@@ -511,11 +512,55 @@ func resolveConversationSwitch(ctx context.Context, tx pgx.Tx, machine, session,
 	return err
 }
 
+// CancelConversationSwitch settles an operation that has not activated its target as rejected, which keeps the
+// source segment active at the same epoch and abandons a prepared target for closure. It cancels nothing and reports
+// false once the operation activated, settled, or the conversation moved past expectedEpoch: the logical row lock
+// orders it with ActivateConversationSegment, so a concurrent activation either finds the switch rejected or
+// wins and is left alone.
+func (d *DB) CancelConversationSwitch(ctx context.Context, machine, session, operation string, expectedEpoch int64, reason string) (cancelled bool, err error) {
+	err = conversationTransaction(ctx, d, func(tx pgx.Tx) error {
+		var epoch int64
+		if err := tx.QueryRow(ctx, `SELECT epoch FROM logical_conversations WHERE machine_id=$1 AND session_id=$2 AND deleted_at IS NULL FOR UPDATE NOWAIT`, machine, session).Scan(&epoch); err != nil {
+			return err
+		}
+		var source, phase string
+		var opEpoch int64
+		if err := tx.QueryRow(ctx, `SELECT source_segment,phase,expected_epoch FROM conversation_switches WHERE logical_machine=$1 AND logical_session=$2 AND operation_id=$3`, machine, session, operation).Scan(&source, &phase, &opEpoch); err != nil {
+			return err
+		}
+		if phase != "preparing" && phase != "prepared" && phase != "in_doubt" || opEpoch != expectedEpoch || epoch != expectedEpoch {
+			return nil
+		}
+		var active bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM conversation_segments WHERE id=$1 AND state='active')`, source).Scan(&active); err != nil {
+			return err
+		}
+		if !active {
+			return nil
+		}
+		if err := resolveConversationSwitchTx(ctx, tx, machine, session, operation, "rejected", reason); err != nil {
+			return err
+		}
+		cancelled = true
+		return nil
+	})
+	return cancelled, err
+}
+
+// NoteConversationSwitchError keeps the latest failure of an operation that has not activated, so the outcome of
+// one that never finishes names its real cause. A settled or activated operation keeps its own error.
+func (d *DB) NoteConversationSwitchError(ctx context.Context, machine, session, operation, reason string) error {
+	_, err := d.pool.Exec(ctx, `UPDATE conversation_switches s SET error=$4 FROM logical_conversations c
+	 WHERE s.logical_machine=$1 AND s.logical_session=$2 AND s.operation_id=$3 AND s.phase IN ('preparing','prepared','in_doubt')
+	 AND c.machine_id=s.logical_machine AND c.session_id=s.logical_session AND c.epoch=s.expected_epoch`, machine, session, operation, reason)
+	return err
+}
+
 func (d *DB) ConversationSwitch(ctx context.Context, machine, session, operation string) (*ConversationSwitch, error) {
 	var op ConversationSwitch
 	var raw []byte
-	err := d.pool.QueryRow(ctx, `SELECT operation_id,expected_epoch,source_segment,coalesce(target_segment,''),request,phase,error,updated_at FROM conversation_switches WHERE logical_machine=$1 AND logical_session=$2 AND operation_id=$3`, machine, session, operation).
-		Scan(&op.OperationID, &op.ExpectedEpoch, &op.SourceSegment, &op.TargetSegment, &raw, &op.Phase, &op.Error, &op.UpdatedAt)
+	err := d.pool.QueryRow(ctx, `SELECT operation_id,expected_epoch,source_segment,coalesce(target_segment,''),request,phase,error,created_at,updated_at FROM conversation_switches WHERE logical_machine=$1 AND logical_session=$2 AND operation_id=$3`, machine, session, operation).
+		Scan(&op.OperationID, &op.ExpectedEpoch, &op.SourceSegment, &op.TargetSegment, &raw, &op.Phase, &op.Error, &op.CreatedAt, &op.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -869,6 +914,45 @@ func (d *DB) ConversationClosureDone(ctx context.Context, machine, session strin
 
 func (d *DB) ConversationInputPending(ctx context.Context, machine, session string) (bool, error) {
 	return conversationInputPending(ctx, d.pool, machine, session)
+}
+
+// MarkConversationSegmentDispatched records durable dispatch evidence on segment
+// before any physical send RPC is attempted on a non-root segment.
+func (d *DB) MarkConversationSegmentDispatched(ctx context.Context, machine, session, segment string) error {
+	if d.sets&ManagerSet == 0 {
+		return errors.New("manager database unavailable")
+	}
+	tag, err := d.pool.Exec(ctx, `UPDATE conversation_segments SET dispatched=true WHERE id=$1 AND logical_machine=$2 AND logical_session=$3 AND state='active'`, segment, machine, session)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrConversationEpoch
+	}
+	return nil
+}
+
+// ConversationSegmentDispatched reports whether segment has any durable dispatch
+// evidence (a direct send marker, or any sending/in_doubt/accepted input since
+// activation), or whether the segment or its activation switch cannot be verified.
+func (d *DB) ConversationSegmentDispatched(ctx context.Context, machine, session, segment string) (bool, error) {
+	if d.sets&ManagerSet == 0 {
+		return true, nil
+	}
+	var dispatched bool
+	err := d.pool.QueryRow(ctx, `SELECT
+		NOT EXISTS(SELECT 1 FROM conversation_segments WHERE id=$3 AND logical_machine=$1 AND logical_session=$2)
+		OR EXISTS(SELECT 1 FROM conversation_segments WHERE id=$3 AND logical_machine=$1 AND logical_session=$2 AND dispatched)
+		OR NOT EXISTS(SELECT 1 FROM conversation_switches WHERE logical_machine=$1 AND logical_session=$2 AND target_segment=$3)
+		OR EXISTS(
+			SELECT 1 FROM conversation_inputs i
+			JOIN conversation_switches s
+				ON s.logical_machine=i.logical_machine AND s.logical_session=i.logical_session
+			WHERE s.logical_machine=$1 AND s.logical_session=$2 AND s.target_segment=$3
+				AND i.epoch >= s.expected_epoch + 1
+				AND i.state IN ('sending', 'in_doubt', 'accepted')
+		)`, machine, session, segment).Scan(&dispatched)
+	return dispatched, err
 }
 
 func conversationInputPending(ctx context.Context, q conversationQuerier, machine, session string) (bool, error) {

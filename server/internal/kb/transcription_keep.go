@@ -15,25 +15,6 @@ import (
 // MeetingTranscription is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
 type MeetingTranscription = recordingwire.MeetingTranscription
 
-// transcriptionShown is what of t the apps read (TranscriptionView): PartTranscription moves when it changes, not
-// when only the timeline grows or the bookkeeping does.
-func transcriptionShown(t *MeetingTranscription) any {
-	if t == nil {
-		return nil
-	}
-	var gaps [][2]float64
-	if len(t.Gaps) > 0 {
-		gaps = t.Gaps
-	}
-	done, end, _ := t.FinalProgress()
-	return struct {
-		Mode, State, Problem string
-		Gaps                 [][2]float64
-		Fallback             bool
-		FinalDone, End       float64
-	}{t.Mode, t.State, t.Problem, gaps, t.Fallback, done, end}
-}
-
 // trimTranscription is the trim's part of recording id's transcription (PruneRecordings, under recMu): a trimmed
 // recording keeps its mode and state, with no gaps, problem, fallback or timeline, and its audio is gone. The parts
 // that changed, for MeetingChanged once the store's locks are let go.

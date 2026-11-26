@@ -1,4 +1,5 @@
 {
+  "new_badge": "新",
   "impact": "影响",
   "intro": "试用仍在完善的功能，或在某项功能的稳定版与新版之间切换。用着不顺手时，回到这里选回默认即可。",
   "scope_note": "这里的每一项都会说明其适用范围和生效时间。",
@@ -37,7 +38,7 @@
   "integrations_v2_hint": "开启统一的集成与扩展实验体验，后续相关实验能力将统一接入此开关（跟踪议题 #14802）。",
   "integrations_v2_scope": "适用于所有设备上的当前助手。",
   "integrations_v2_activation": "立即生效，在下一次视图刷新或请求时应用。",
-  "integrations_v2_rollback": "随时关闭即可零数据损失地恢复原有的连接器、频道与扩展页面及路由行为。",
+  "integrations_v2_rollback": "随时关闭即可零数据损失地恢复原有的连接器、频道、收件箱来源与扩展页面及路由行为。",
   "integrations_v2_saved": "已保存。更改将在下一次视图刷新或请求时立即生效。",
   "integrations_v2_unsupported": "请更新当前助手以使用此设置。"
 }

@@ -230,6 +230,10 @@ type assistantPrepareState struct {
 	// trackKind is the kind of the directory's track as the manager last said it (assistant.prepare track_kind):
 	// its processes' PERSONA_TRACK_KIND; "" from a manager that does not say it.
 	trackKind string
+	// categories is the comma-separated default information categories of the directory's track as the manager last
+	// said them (assistant.prepare categories): its processes' PERSONA_CATEGORIES when categoriesKnown is true.
+	categories      string
+	categoriesKnown bool
 }
 
 // assistantPrepareDir gives prepare and running sessions the same key, including symlinked data directories.
@@ -416,15 +420,11 @@ func (n *Node) syncRuntimeSkillDir(cwd, dir string) {
 	}
 }
 
-// syncAssistantSkills provisions native skills and connector commands during prepare.
-// Before switching to the compact instructions, both runtimes must have the guide.
+// syncAssistantSkills provisions native skills and connector commands during prepare. Both runtimes need the
+// always-available views guide before the node selects compact instructions; the optional work guide follows selection.
 func (n *Node) syncAssistantSkills(cwd string) error {
 	selection := n.skillSelection(cwd)
-	dirs := []string{filepath.Join(cwd, ".claude", "skills")}
-	agentDir := filepath.Join(cwd, ".agents", "skills")
-	if st, err := os.Stat(agentDir); selection.WorkGuide || (err == nil && st.IsDir()) {
-		dirs = append(dirs, agentDir)
-	}
+	dirs := []string{filepath.Join(cwd, ".claude", "skills"), filepath.Join(cwd, ".agents", "skills")}
 	var syncErr error
 	for _, d := range dirs {
 		if err := assistantskills.Sync(d, assistantskills.UserDir(), selection, n.logger.Printf); err != nil {

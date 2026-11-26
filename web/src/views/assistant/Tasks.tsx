@@ -28,7 +28,6 @@ import {
   startFailure,
   startInFlight,
   setRoute,
-  askRow,
   startPlan,
   todayFailedRow,
   useFeed,
@@ -52,12 +51,13 @@ import type { AgentState, Interaction, Machine, Session } from "../../lib/types"
 import { Button, Collapse, cx, IconButton, Loading, Menu, toast, useNow } from "../../ui/atoms";
 import { StatusMark } from "../../ui/StatusMark";
 import { Icon, type IconName } from "../../ui/icons";
-import { AcceptRow, BriefCard } from "./Brief";
 
+// A morning/evening briefing card (views/assistant/Brief.tsx) loads with the first `brief` item, not with the first
+// screen; a task's open acceptance ask loads its AcceptRow through NeedsYouPart (TaskDecision.tsx already imports it).
+const BriefCard = lazyPage(() => import("./Brief").then((m) => m.BriefCard));
 // A plan task's brief (#3822) comes with the first plan card that has one, as the decision row does.
 const PlanBrief = lazy(() => import("./TaskBrief").then((m) => ({ default: m.PlanBrief })));
 const TaskActivityDetail = lazyPage(() => import("./TaskActivityDetail").then((m) => m.TaskActivityDetail));
-const HeldPushesEntry = lazyPage(() => import("./HeldPushes").then((m) => m.HeldPushesEntry));
 
 // A decision's row comes with the tray's first decision, not with the first screen (startup-preload's budget); the
 // same chunk has a suggested rule's line (#5802), which comes with the first card that carries one, and a task whose
@@ -72,7 +72,7 @@ import { SentLine } from "./Sent";
 import { feedWake, HandoffCard, HandoffCards, TASK_LINE_SLACK_MS, taskHandoffs } from "./Handoff";
 import { acceptanceStands, latestReview, parkedLine, progressLine } from "../../lib/supervision";
 import { namedLauncher, providerIdNote, providerTitle, useProviderNames } from "../../lib/provider-names";
-import { useChosenManager, useLinkManager, useShownManager } from "../../lib/manager-choice";
+import { sameManager, useChosenManager, useLinkManager, useShownManager } from "../../lib/manager-choice";
 import { AnsweredSummary, InteractionCard, underCard } from "../chat/Interactions";
 import type { RuleCard } from "../../lib/rule-suggestion";
 import { cardLine } from "../chat/dock";
@@ -532,7 +532,7 @@ export const FeedLineView = memo(function FeedLineView({ item, simplified = fals
     case "today":
       return <TodayCard body={item.body as unknown as TodayBody} conversation={item.conversation} />;
     case "brief":
-      return <BriefCard item={item} />;
+      return <Suspense fallback={null}><BriefCard item={item} /></Suspense>;
     case "message":
       return item.ref && !isLater ? <MessageCard item={item} /> : null;
     case "inbox_suggestion":
@@ -783,10 +783,11 @@ export const DOCK_CAPSULE = "inline-flex h-8 shrink-0 items-center whitespace-no
 const DOCK_RANK: Partial<Record<TodoStatus, number>> = { needs_you: 0, interrupted: 0, usage_limit: 0, working: 1, waiting: 1, not_started: 1, unread: 2 };
 
 /** The dock's task pills, waiting first: each task going on, its status and what it waits on (#3463). */
-function dockTasksIn(s: State, conversation: string, plans: Record<string, TaskPlan>): { t: Todo; st: TodoStatus; ask?: string; limit?: string }[] {
-  const lookup = answeredLookup(taskSessionLookup(s), s.interactions, s.answered);
+function dockTasksIn(s: State, conversation: string, plans: Record<string, TaskPlan>, manager?: string): { t: Todo; st: TodoStatus; ask?: string; limit?: string }[] {
+  const interactions = manager ? s.interactions.filter((ix) => sameManager(ix.manager, manager)) : s.interactions;
+  const lookup = answeredLookup(taskSessionLookup(s), interactions, s.answered);
   return s.todos
-    .filter((t) => t.origin === conversation)
+    .filter((t) => t.origin === conversation && (!manager || sameManager(t.manager, manager)))
     .map((t) => ({ t, st: statusOf(t, lookup, plans) }))
     // a to-do nobody dispatched is not going on (#7552)
     .filter((x) => DOCK_RANK[x.st] !== undefined && (x.st !== "not_started" || startInFlight(x.t, plans)))
@@ -796,7 +797,7 @@ function dockTasksIn(s: State, conversation: string, plans: Record<string, TaskP
       return {
         t: todo,
         st,
-        ask: st === "needs_you" ? taskAsk(taskInteraction(todo, s.interactions, lead)) : undefined,
+        ask: st === "needs_you" ? taskAsk(taskInteraction(todo, interactions, lead)) : undefined,
         limit: st === "usage_limit" ? (usageLimitLabel(lead) ?? t("lib-usage-limit.short")) : undefined,
       };
     });
@@ -1093,7 +1094,12 @@ export function NeedsYouBody({ item, nested = false }: { item: NeedsYouItem; nes
         <NeedsYouPart key={todo.id + (todo.supervision?.reviews?.at(-1)?.at || todo.decision_review?.review_at || ask?.asked_at)} rowKey={rowKey} hideTitle={nested} decision={todo} />
       </Suspense>
     );
-  if (ask) return <div data-needs-row={rowKey} {...taskOpenAttr} className="min-w-0 rounded-control bg-field px-3 py-2.5"><AcceptRow stacked hideTitle={nested} key={todo.id + ask.asked_at} row={askRow(todo, ask)} /></div>;
+  if (ask)
+    return (
+      <Suspense fallback={<div data-needs-row={rowKey} {...taskOpenAttr} className="truncate rounded-control bg-field px-3 py-2.5 text-label text-ink-2">{todo.title}</div>}>
+        <NeedsYouPart key={todo.id + ask.asked_at} rowKey={rowKey} hideTitle={nested} accept={todo} ask={ask} countsOpenAttr={taskOpenAttr} />
+      </Suspense>
+    );
   if (status === "failed")
     return (
       <Suspense fallback={<div data-needs-row={item.key} {...taskOpenAttr} className="truncate rounded-control bg-danger-wash px-3 py-2 text-sm">{todo.title}</div>}>
@@ -1364,7 +1370,6 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
             </button>
           );
         })}
-        {main === conversation && <Suspense fallback={null}><HeldPushesEntry className={cx(DOCK_CAPSULE, "gap-2 bg-field font-medium text-ink-2 hover:bg-hover")} /></Suspense>}
       </div>
       {board && <Suspense fallback={null}><TaskBoard open conversation={conversation} onClose={() => setBoard(false)} /></Suspense>}
     </div>
@@ -1372,13 +1377,23 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
 });
 
 export const TaskDock = memo(function TaskDock({ conversation }: { conversation: string }) {
+  const manager = useShownManager();
   const plans = useFeed((s) => s.plans);
   const [menuFor, setMenuFor] = useState<{ todo: Todo; el: HTMLElement } | null>(null);
   const [board, setBoard] = useState(false);
   // rows of strings and the store's own objects: a push about an agent or a card none of them shows draws nothing
-  const agents = useStoreRows<DockAgent>((s) => dockAgents(answeredSessions(Object.values(s.sessions).flat(), s.interactions, s.answered), s.todos, conversation, s.assistant?.main));
-  const going = useStoreRows((s) => dockTasksIn(s, conversation, plans));
-  const mine = useStore((s) => s.todos.filter((t) => t.origin === conversation).length);
+  const agents = useStoreRows<DockAgent>((s) => dockAgents(
+    answeredSessions(
+      Object.values(s.sessions).flat().filter((row) => sameManager(row.manager, manager)),
+      s.interactions.filter((ix) => sameManager(ix.manager, manager)),
+      s.answered,
+    ),
+    s.todos.filter((t) => sameManager(t.manager, manager)),
+    conversation,
+    s.assistant?.main,
+  ));
+  const going = useStoreRows((s) => dockTasksIn(s, conversation, plans, manager));
+  const mine = useStore((s) => s.todos.filter((t) => t.origin === conversation && sameManager(t.manager, manager)).length);
   if (mine === 0 && agents.length === 0) return null;
   const capsule = DOCK_CAPSULE;
   const pill = cx(capsule, "max-w-[240px] gap-2 font-semibold");

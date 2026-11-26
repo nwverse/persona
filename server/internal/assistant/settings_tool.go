@@ -25,6 +25,14 @@ import (
 // every change is a card on the phone that says what changes (before → after) and is applied only when approved, except
 // the exact reversible-setting allowlist when the administrator's manager.json switch is on.
 
+// personaSettingsInput is the complete built-in call, shared by direct and exact-batch execution.
+type personaSettingsInput struct {
+	Action string          `json:"action"`
+	Key    string          `json:"key"`
+	Value  json.RawMessage `json:"value"`
+	ID     string          `json:"id"` // remove's, as the hub's own settings take it
+}
+
 // ownSetting is one of the assistant's own settings persona_settings offers.
 type ownSetting struct {
 	Setting
@@ -32,6 +40,8 @@ type ownSetting struct {
 	set func(ctx context.Context, v json.RawMessage) (*ownChange, error)
 	// cardTitle localizes a dynamic setting's title (direction.<id>.prompt); static keys use settingTitles instead.
 	cardTitle func(l i18n.Lang) string
+	// toolName is the managed wrapper's card name; empty is persona_settings.
+	toolName string
 	// change is a setting's other actions (a list's add and remove: tasks.trust), in place of set.
 	change func(ctx context.Context, action string, v json.RawMessage) (*ownChange, error)
 }
@@ -41,6 +51,13 @@ type ownChange struct {
 	summary  string                   // for the assistant: the change made nothing to do
 	cardText func(l i18n.Lang) string // what the card says, in the user's language
 	apply    func(ctx context.Context) (string, error)
+	// revision is the state revision captured for an exact owner-action batch,
+	// when this setter has one. modelProfileWrite marks one catalog increment;
+	// later items in that same batch expect the revision advanced by their own
+	// predecessors, while an external write still conflicts.
+	revision          *int64
+	modelProfileWrite bool
+	profileAfter      map[string]ModelProfile
 	// applyChecksProposal marks an apply that re-reads current state and
 	// atomically checks the exact card revision itself. Rebuilding such an
 	// operation would move its revision baseline forward and hide a conflict.
@@ -448,6 +465,11 @@ func (s *Service) allOwnSettings() []ownSetting {
 				return fmt.Sprint(machineFallbackMinutesOf(s.settings(ctx))), nil
 			},
 			set: s.setMachineFallbackMinutes},
+		{Setting: Setting{Key: modelProfileBindingsKey, Title: "Model profile purpose and launcher bindings", Actions: getSet,
+			About: "one model profile's purpose bindings and managed-launcher model fields; set atomically patches the named profile at the revision read for its approval card, without applying current settings or changing tiers",
+			Value: `{"profile": id from model_profiles_list, "purposes": {purpose id: {provider, model, effort, permission_mode} | null}, "launchers": {launcher name: {model field: string | null}}}; a purpose object replaces that whole binding, null or {} inherits on the next switch; omitted launcher fields stay unchanged, null or "" clears to the launcher default on the next switch (model cannot be cleared)`},
+			get: s.getModelProfileBindings,
+			set: s.setModelProfileBindings},
 		{Setting: Setting{Key: "model_profiles.tiers", Title: "Agent presets (the model profiles' tiers)", Actions: getSet,
 			About: "the Agent presets: each model profile's named tiers, what agent_start / task_plan's tier and the New Agent " +
 				"form's presets run on (launcher, model, effort) and when to use each; get lists every profile's, set adds, " +
@@ -478,27 +500,59 @@ func (s *Service) allOwnSettings() []ownSetting {
 	}
 }
 
-func (s *Service) toolPersonaSettings(ctx context.Context, call ToolCall, args json.RawMessage) proto.ToolResult {
-	var a struct {
-		Action string          `json:"action"`
-		Key    string          `json:"key"`
-		Value  json.RawMessage `json:"value"`
-		ID     string          `json:"id"` // remove's, as the hub's own settings take it
+func (s *Service) managedOwnSettings(ctx context.Context) []ownSetting {
+	own := append(s.ownSettings(), s.modelGroupOwnSettings()...)
+	return append(own, s.directionOwnSettings(ctx)...)
+}
+
+func (s *Service) lookupManagedOwnSetting(ctx context.Context, key string) (ownSetting, bool, error) {
+	for _, setting := range s.managedOwnSettings(ctx) {
+		if setting.Key == key {
+			return setting, true, nil
+		}
 	}
+	return s.orphanTaskOwnSetting(ctx, key)
+}
+
+func (s *Service) checkPersonaSettingLocation(ctx context.Context, call ToolCall, a personaSettingsInput) error {
+	if a.Key == standingAuthorizationsKey && a.Action == "set" && (call.SessionID == "" || call.SessionID != s.settings(ctx).Main || call.MachineID != s.settings(ctx).MachineID) {
+		return errors.New("only the main conversation may change standing authorizations")
+	}
+	if _, ok := directionPromptSettingID(a.Key); ok && a.Action == "set" && (call.SessionID == "" || call.SessionID != s.settings(ctx).Main) {
+		return errors.New("only the main conversation may change direction prompts")
+	}
+	return nil
+}
+
+func (s *Service) toolPersonaSettings(ctx context.Context, call ToolCall, args json.RawMessage) proto.ToolResult {
+	var a personaSettingsInput
 	if err := json.Unmarshal(args, &a); err != nil {
 		return proto.TextResult(fmt.Sprintf("invalid arguments: %v", err), true)
 	}
 	if a.Action == "remove" && len(a.Value) == 0 && a.ID != "" {
 		a.Value, _ = json.Marshal(a.ID)
 	}
-	if a.Key == standingAuthorizationsKey && a.Action == "set" && (call.SessionID == "" || call.SessionID != s.settings(ctx).Main || call.MachineID != s.settings(ctx).MachineID) {
-		return proto.TextResult("only the main conversation may change standing authorizations", true)
+	var execution *ownerActionExecution
+	if a.Action == "set" || a.Action == "add" || a.Action == "remove" {
+		var err error
+		execution, err = s.consumeOwnerBuiltin(ctx, call.MachineID, call.SessionID, "persona_settings", args)
+		if err != nil {
+			return proto.TextResult(err.Error(), true)
+		}
 	}
-	if _, ok := directionPromptSettingID(a.Key); ok && a.Action == "set" && (call.SessionID == "" || call.SessionID != s.settings(ctx).Main) {
-		return proto.TextResult("only the main conversation may change direction prompts", true)
+	fail := func(err error) proto.ToolResult {
+		if execution != nil {
+			_, finishErr := s.finishOwnerBuiltin(ctx, *execution, "", err)
+			if finishErr != nil {
+				return proto.TextResult(finishErr.Error(), true)
+			}
+		}
+		return proto.TextResult(err.Error(), true)
 	}
-	own := append(s.ownSettings(), s.modelGroupOwnSettings()...)
-	own = append(own, s.directionOwnSettings(ctx)...)
+	if err := s.checkPersonaSettingLocation(ctx, call, a); err != nil {
+		return fail(err)
+	}
+	own := s.managedOwnSettings(ctx)
 	if a.Action == "" || a.Action == "list" {
 		text, err := s.listSettings(ctx, own)
 		if err != nil {
@@ -506,17 +560,27 @@ func (s *Service) toolPersonaSettings(ctx context.Context, call ToolCall, args j
 		}
 		return proto.TextResult(text, false)
 	}
-	for _, o := range own {
-		if o.Key == a.Key {
-			text, err := s.ownSettingAction(ctx, call, o, a.Action, a.Value)
-			if err != nil {
-				return proto.TextResult(err.Error(), true)
-			}
-			return proto.TextResult(text, false)
+	setting, found, err := s.lookupManagedOwnSetting(ctx, a.Key)
+	if err != nil {
+		return fail(err)
+	}
+	if found {
+		text, err := s.ownSettingActionExact(ctx, call, setting, a.Action, a.Value, execution)
+		if err != nil {
+			return proto.TextResult(err.Error(), true)
 		}
+		return proto.TextResult(text, false)
+	}
+	if execution != nil {
+		return fail(fmt.Errorf("%s is no longer a managed built-in setting", a.Key))
 	}
 	if _, ok := directionPromptSettingID(a.Key); ok {
 		return proto.TextResult(errNoDirection.Error(), true)
+	}
+	// A disabled manager module still owns its stored setting. Its key does
+	// not become a hub or extension setting when the module is unavailable.
+	if moduleSettingKeys[a.Key] {
+		return proto.TextResult(unavailableModuleSetting(a.Key).Error(), true)
 	}
 	return s.appTool(ctx, AppSettings, call, args) // the hub's
 }
@@ -529,7 +593,9 @@ func (s *Service) listSettings(ctx context.Context, own []ownSetting) (string, e
 	if err := s.appCall(ctx, AppSettings, SettingsList, map[string]any{}, &res); err != nil {
 		return "", err
 	}
-	all := res.Settings
+	// The manager supplies its module keys when loaded and hides them when
+	// disabled, even if the hub returns an older copy of the catalog.
+	all := slices.DeleteFunc(res.Settings, func(st Setting) bool { return moduleSettingKeys[st.Key] })
 	for _, o := range own {
 		all = append(all, o.Setting)
 	}
@@ -551,27 +617,49 @@ func (s *Service) listSettings(ctx context.Context, own []ownSetting) (string, e
 // settingCardWait is how long a change's approval card waits for the user before it expires (and changes nothing).
 var settingCardWait = 15 * time.Minute
 
+// prepareOwnSettingAction runs a setter's validation without publishing a card or writing anything.
+func (s *Service) prepareOwnSettingAction(ctx context.Context, o ownSetting, action string, value json.RawMessage) (*ownChange, error) {
+	switch {
+	case action == "set" && o.set != nil:
+		return o.set(ctx, value)
+	case action != "set" && o.change != nil && slices.Contains(o.Actions, action):
+		return o.change(ctx, action, value)
+	default:
+		return nil, fmt.Errorf("%s does not take %q (it takes %s)", o.Key, action, strings.Join(o.Actions, ", "))
+	}
+}
+
 // ownSettingAction reads one of the assistant's settings, or changes it once the user approves on the phone.
 func (s *Service) ownSettingAction(ctx context.Context, call ToolCall, o ownSetting, action string, value json.RawMessage) (string, error) {
-	var change *ownChange
-	var err error
-	switch {
-	case action == "get":
+	return s.ownSettingActionExact(ctx, call, o, action, value, nil)
+}
+
+// ownSettingActionExact executes an optional grant already consumed by toolPersonaSettings. Consuming before setting
+// resolution and validation ensures that every failure of an approved item records its position and stops later items.
+// Without a grant the ordinary approval path is byte-for-byte unchanged.
+func (s *Service) ownSettingActionExact(ctx context.Context, call ToolCall, o ownSetting, action string, value json.RawMessage, execution *ownerActionExecution) (string, error) {
+	if action == "get" {
 		return o.get(ctx)
-	case action == "set" && o.set != nil:
-		change, err = o.set(ctx, value)
-	case action != "set" && o.change != nil && slices.Contains(o.Actions, action):
-		change, err = o.change(ctx, action, value)
-	default:
-		return "", fmt.Errorf("%s does not take %q (it takes %s)", o.Key, action, strings.Join(o.Actions, ", "))
 	}
+	change, err := s.prepareOwnSettingAction(ctx, o, action, value)
 	if err != nil {
+		if execution != nil {
+			return s.finishOwnerBuiltin(ctx, *execution, "", err)
+		}
 		return "", err
+	}
+	l := s.lang(ctx)
+	proposal := change.card(l)
+	if execution != nil {
+		if change.apply == nil || !ownerChangeMatches(change, proposal, execution.Item) {
+			return s.finishOwnerBuiltin(ctx, *execution, "", fmt.Errorf("the setting changed after the batch card was shown: %w", approvalops.ErrStale))
+		}
+		text, runErr := change.apply(ctx)
+		return s.finishOwnerBuiltin(ctx, *execution, text, runErr)
 	}
 	if change.apply == nil {
 		return change.summary, nil // nothing to change
 	}
-	l := s.lang(ctx)
 	title := o.Title
 	if o.cardTitle != nil {
 		title = o.cardTitle(l)
@@ -580,12 +668,15 @@ func (s *Service) ownSettingAction(ctx context.Context, call ToolCall, o ownSett
 	}
 	shown, _ := json.Marshal(map[string]string{"setting": title, "action": action})
 	now := time.Now().UTC()
-	proposal := change.card(l)
 	if action == "set" && s.hello(ctx).Assistant.AutoApproveReversibleSettings && reversibleSettingAutoApproved(o.Key) && change.reversible != nil {
 		return s.applyAutomaticReversibleSetting(ctx, call, o.Key, proposal, change.reversible)
 	}
+	toolName := o.toolName
+	if toolName == "" {
+		toolName = "persona_settings"
+	}
 	outcome, err := s.waitPreparedCard(ctx, proto.Interaction{ID: "ix_" + randomHex(6), MachineID: call.MachineID, SessionID: call.SessionID,
-		Kind: proto.IxPermission, ToolName: "persona_settings", Summary: proposal, ToolInput: shown, SessionTitle: "Persona",
+		Kind: proto.IxPermission, ToolName: toolName, Summary: proposal, ToolInput: shown, SessionTitle: "Persona",
 		CreatedAt: now, ExpiresAt: now.Add(settingCardWait)}, approvalops.Operation{
 		Replacement: call.MachineID + "\x00" + call.SessionID + "\x00setting\x00" + o.Key,
 		Denied:      "The user declined the change: nothing changed.",
@@ -598,16 +689,7 @@ func (s *Service) ownSettingAction(ctx context.Context, call ToolCall, o ownSett
 			}
 			// Rebuild from current state: only the exact visible proposal the owner
 			// approved may execute, and the freshly validated operation is used.
-			var fresh *ownChange
-			var err error
-			switch {
-			case action == "set" && o.set != nil:
-				fresh, err = o.set(ctx, value)
-			case action != "set" && o.change != nil && slices.Contains(o.Actions, action):
-				fresh, err = o.change(ctx, action, value)
-			default:
-				return "", approvalops.ErrStale
-			}
+			fresh, err := s.prepareOwnSettingAction(ctx, o, action, value)
 			if err != nil {
 				// The setter only rebuilds and validates a fresh operation here;
 				// fresh.apply below is the first possible side effect.
@@ -698,7 +780,7 @@ var settingTitles = map[string]string{modulesKey: "title_modules", standingAutho
 	"assistant.machine_fallbacks": "title_machine_fallbacks", "assistant.machine_fallback_minutes": "title_machine_fallback_minutes",
 	"assistant.recording_days": "title_recording_days", "assistant.delivery_gate": "title_delivery_gate", "assistant.done_needs_delivery": "title_done_needs_delivery",
 	"assistant.review_sample_percent": "title_review_sample_percent", "assistant.leaders": "title_leaders", "assistant.briefing_waits": "title_briefing_waits", "assistant.background_supervisor_keeps_context": "title_background_supervisor_keeps_context", "assistant.chat_reply_relay": "title_chat_reply_relay",
-	"assistant.interject_background": "title_interject_background", "assistant.claude_interactive": "title_claude_interactive", "assistant.agent_tasks": "title_agent_tasks", "assistant.task_lessons": "title_task_lessons", "assistant.close_ended_terminals": "title_close_ended_terminals", "assistant.inbox_signals": "title_inbox_signals", "assistant.auto_supervision_messages": "title_auto_supervision_messages", "inbox.todo_forward.enabled": "title_inbox_todo_forward", "assistant.pr_events_route_to_agent": "title_pr_events_route_to_agent", "assistant.main_supervises_own_tasks": "title_main_supervises_own_tasks", "assistant.supervision_batch_minutes": "title_supervision_batch_minutes", "model_profiles.tiers": "title_model_tiers",
+	"assistant.interject_background": "title_interject_background", "assistant.claude_interactive": "title_claude_interactive", "assistant.agent_tasks": "title_agent_tasks", "assistant.task_lessons": "title_task_lessons", "assistant.close_ended_terminals": "title_close_ended_terminals", "assistant.inbox_signals": "title_inbox_signals", "assistant.auto_supervision_messages": "title_auto_supervision_messages", "inbox.todo_forward.enabled": "title_inbox_todo_forward", "assistant.pr_events_route_to_agent": "title_pr_events_route_to_agent", "assistant.main_supervises_own_tasks": "title_main_supervises_own_tasks", "assistant.supervision_batch_minutes": "title_supervision_batch_minutes", modelProfileBindingsKey: "title_model_bindings", "model_profiles.tiers": "title_model_tiers",
 	"assistant.load_all_tools":                "title_load_all_tools",
 	"assistant.meeting_transcription_default": "title_meeting_transcription_default",
 	"assistant.meeting_attendance_default":    "title_meeting_attendance_default", "assistant.minutes_days": "title_minutes_days",

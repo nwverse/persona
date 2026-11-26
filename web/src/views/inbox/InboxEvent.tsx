@@ -30,6 +30,7 @@ import { useFoldScroll } from "../chat/fold-scroll";
 import { useInboxView } from "../../lib/inbox-view-memory";
 import { InboxLine } from "./InboxLine";
 import { Glyph, Spark, Tag } from "./InboxParts";
+import { useItemReadOnly } from "./item-write-gate";
 
 /** Where a tapped `source` entry (or "Original") opens the item's own page: at a Feishu position, a mail's uid, or a URL. */
 export type SourceAt = { position?: string; uid?: number; url?: string };
@@ -414,6 +415,8 @@ function TextSuggestion({ item, suggestion: s }: { item: InboxItem; suggestion: 
   const busy = useInbox((st) => st.sending.includes(itemKey(item)));
   const uncertain = useInbox((st) => st.uncertainReplies[uncertainReplyKey(item, s.version)]);
   const attempt = s.kind === "reply" ? uncertain ?? item.suggestion_attempts?.find((a) => a.version === s.version) : undefined;
+  const readOnly = useItemReadOnly(item);
+  const replyReadOnly = s.kind === "reply" && readOnly;
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(s.text);
   const [say, setSay] = useState("");
@@ -421,6 +424,7 @@ function TextSuggestion({ item, suggestion: s }: { item: InboxItem; suggestion: 
   useEffect(() => setText(s.text), [s.text]);
   const b = suggestionButtons(s);
   const act = async (action: "confirm" | "reject" | "instruct", body?: string) => {
+    if (replyReadOnly && action !== "reject") return;
     setActing(action);
     const ok = await suggestionAct(item, action, body);
     setActing("");
@@ -428,7 +432,7 @@ function TextSuggestion({ item, suggestion: s }: { item: InboxItem; suggestion: 
   };
   const edited = text.trim() && text !== s.text ? text : undefined;
   if (attempt) {
-    const retryable = attempt.status === "failed" && attempt.retryable && !isDone(item) && item.suggestion?.version === s.version;
+    const retryable = !replyReadOnly && attempt.status === "failed" && attempt.retryable && !isDone(item) && item.suggestion?.version === s.version;
     const label = attempt.status === "failed" ? "failed" : attempt.status === "sending" ? "sending" : attempt.status === "sent" ? "sent" : "uncertain";
     return (
       <section className="rounded-[14px] bg-surface p-3.5 shadow-card" data-suggestion={s.kind} data-delivery={attempt.status}>
@@ -461,28 +465,34 @@ function TextSuggestion({ item, suggestion: s }: { item: InboxItem; suggestion: 
             className="w-full resize-y rounded-control bg-field px-2.5 py-2 text-meta leading-relaxed text-ink outline-none focus:shadow-[inset_0_0_0_1px_var(--accent)]"
             data-suggestion-editor
           />
-          <label className="flex h-8 items-center gap-2 rounded-control bg-field px-2.5 focus-within:shadow-[inset_0_0_0_1px_var(--accent)]">
-            <Icon name="chat" size={13} className="shrink-0 text-ink-3" />
-            <input
-              value={say}
-              onChange={(e) => setSay(e.target.value)}
-              placeholder={t("inbox-inboxevent.say_placeholder")}
-              aria-label={t("inbox-inboxevent.say")}
-              className="min-w-0 flex-1 bg-transparent text-[12.5px] text-ink outline-none placeholder:text-ink-3"
-              data-suggestion-say
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.nativeEvent.isComposing && say.trim()) void act("instruct", say.trim());
-              }}
-            />
-          </label>
+          {!replyReadOnly && (
+            <label className="flex h-8 items-center gap-2 rounded-control bg-field px-2.5 focus-within:shadow-[inset_0_0_0_1px_var(--accent)]">
+              <Icon name="chat" size={13} className="shrink-0 text-ink-3" />
+              <input
+                value={say}
+                onChange={(e) => setSay(e.target.value)}
+                placeholder={t("inbox-inboxevent.say_placeholder")}
+                aria-label={t("inbox-inboxevent.say")}
+                className="min-w-0 flex-1 bg-transparent text-[12.5px] text-ink outline-none placeholder:text-ink-3"
+                data-suggestion-say
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.nativeEvent.isComposing && say.trim() && !replyReadOnly) void act("instruct", say.trim());
+                }}
+              />
+            </label>
+          )}
           <div className="flex flex-wrap justify-end gap-2">
             <Button tone="quiet" disabled={busy} onClick={() => { setEditing(false); setText(s.text); setSay(""); }}>{t("common.cancel")}</Button>
-            <Button tone={say.trim() ? "accent" : "secondary"} icon="spark" disabled={!say.trim() || (busy && acting !== "instruct")} busy={acting === "instruct"} onClick={() => void act("instruct", say.trim())}>
-              {t("inbox-inboxevent.say")}
-            </Button>
-            <Button tone={say.trim() ? "secondary" : "accent"} icon={s.kind === "reply" && !s.handback ? "send" : "check"} disabled={!text.trim() || (busy && acting !== "confirm")} busy={acting === "confirm"} onClick={() => void act("confirm", edited)}>
-              {b.confirm}
-            </Button>
+            {!replyReadOnly && (
+              <>
+                <Button tone={say.trim() ? "accent" : "secondary"} icon="spark" disabled={!say.trim() || (busy && acting !== "instruct")} busy={acting === "instruct"} onClick={() => void act("instruct", say.trim())}>
+                  {t("inbox-inboxevent.say")}
+                </Button>
+                <Button tone={say.trim() ? "secondary" : "accent"} icon={s.kind === "reply" && !s.handback ? "send" : "check"} disabled={!text.trim() || (busy && acting !== "confirm")} busy={acting === "confirm"} onClick={() => void act("confirm", edited)}>
+                  {b.confirm}
+                </Button>
+              </>
+            )}
           </div>
         </div>
       ) : (
@@ -497,10 +507,12 @@ function TextSuggestion({ item, suggestion: s }: { item: InboxItem; suggestion: 
           {s.note && <p className="mt-1.5 text-label leading-relaxed text-ink-3">{s.note}</p>}
           <div className="mt-3 flex flex-wrap justify-end gap-2">
             <Button tone="quiet" disabled={busy && acting !== "reject"} busy={acting === "reject"} onClick={() => void act("reject")}>{t("inbox-inboxevent.reject")}</Button>
-            {b.edit && <Button tone="secondary" icon="pencil" disabled={busy} onClick={() => setEditing(true)}>{t("inbox-inboxevent.edit")}</Button>}
-            <Button tone="accent" icon={s.kind === "reply" && !s.handback ? "send" : "check"} disabled={busy && acting !== "confirm"} busy={acting === "confirm"} onClick={() => void act("confirm")}>
-              {b.confirm}
-            </Button>
+            {!replyReadOnly && b.edit && <Button tone="secondary" icon="pencil" disabled={busy} onClick={() => setEditing(true)}>{t("inbox-inboxevent.edit")}</Button>}
+            {!replyReadOnly && (
+              <Button tone="accent" icon={s.kind === "reply" && !s.handback ? "send" : "check"} disabled={busy && acting !== "confirm"} busy={acting === "confirm"} onClick={() => void act("confirm")}>
+                {b.confirm}
+              </Button>
+            )}
           </div>
         </>
       )}
