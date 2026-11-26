@@ -26,6 +26,7 @@ import (
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/transcript"
 	"github.com/nwverse/persona/server/internal/update"
 )
 
@@ -252,7 +253,9 @@ func (m *Machine) snapshot() proto.Machine {
 	// The build its platform resolves to (packages.go: the hub's own, or the newest release this manager drives), and
 	// why none can be sent; before m.mu, as they read the hub's handover.
 	version, noPackage := d.hubVersion(), error(nil)
-	if m.cfg.Kind != "local" { // the hub's own machine runs the hub's binary: nothing to look up
+	// A local stdio process uses the manager's binary. Its resident relay,
+	// when present, can run a separate build and needs package lookup.
+	if m.cfg.Kind != "local" || info.NodeUpdate && nodeHas(info, nodeproto.NodeUpdate) {
 		version, noPackage = d.nodeTarget(info), d.packageBlocked(info)
 	}
 	clipboardOn := d.clipboardOn(m.cfg.ID)
@@ -913,15 +916,24 @@ func (m *Machine) forgetSeqLocked(id string) {
 
 // setSessions keeps the node's session list (the hub gets it as the node sent it, devices.event).
 func (m *Machine) setSessions(list []proto.Session) {
-	for i := range list {
-		list[i].MachineID = m.cfg.ID
-	}
+	m.takeRows(list)
 	m.mu.Lock()
 	m.sessions = list
 	m.sessionsListed = true
 	m.sessionRevision++
 	m.lastSeen = time.Now().UTC()
 	m.mu.Unlock()
+}
+
+// takeRows makes a node's listed rows the manager's, in place, before they are kept: on this machine, and each title
+// one a list can carry (transcript.ListTitle, #16343). A node from before that cut sends whatever its agents stored as
+// a title, a whole opening prompt among them; every reader of the kept list (the assistant, the archive, the list the
+// hub and the apps get) then has the cut one.
+func (m *Machine) takeRows(list []proto.Session) {
+	for i := range list {
+		list[i].MachineID = m.cfg.ID
+		list[i].Title = transcript.ListTitle(list[i].Title)
+	}
 }
 
 func (m *Machine) sessionList() []proto.Session {
@@ -1145,6 +1157,12 @@ func (m *Machine) onRequest(ctx context.Context, method string, params json.RawM
 		return map[string]any{"sessions": out}, nil
 	case "usage.features": // what this manager keeps of the usage a node meters (usage_projects.go)
 		return map[string]any{"dirs": true}, nil
+	case "usage.resplit.status": // the last week split by directory once (usage_resplit.go)
+		return m.d.usageResplitStatus(ctx, m.cfg.ID, time.Now())
+	case "usage.resplit":
+		sctx, cancel := m.storeCtx()
+		defer cancel()
+		return m.d.putUsageResplit(sctx, m.cfg.ID, params, time.Now())
 	case "usage.backfill.status": // the token usage backfill (usage_backfill.go)
 		return m.d.usageBackfillStatus(ctx, m.cfg.ID, params, time.Now())
 	case "usage.backfill":
