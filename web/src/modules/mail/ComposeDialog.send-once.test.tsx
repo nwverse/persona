@@ -18,7 +18,7 @@ vi.mock("../../ui/atoms", async (original) => ({
 }));
 import { t } from "../../i18n";
 import { ItemManager, MANAGER_HEADER } from "../../lib/manager-choice";
-import { sendBody, type ComposeDraft } from "../../lib/mail";
+import { sendBody, type ComposeDraft } from "./mail";
 import { ComposeDialog } from "./ComposeDialog";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;

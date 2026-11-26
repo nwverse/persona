@@ -2,11 +2,12 @@
 // The mail frame sizes itself with a ResizeObserver on the frame's body and catches link clicks on its document. The
 // observer lives in this window: left connected, it keeps every old frame document (and the frame's state) alive, one
 // more on each load of the frame and on each frame that goes (a new mail of the thread, Show translation, another item).
+import "./test-register";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { InboxItem } from "../../lib/inbox";
-import type { MailMessage } from "../../lib/mail";
+import type { MailMessage } from "./mail";
 
 const answers = new Map<string, (v: unknown) => void>();
 vi.mock("../../lib/api", async (orig) => ({
@@ -19,7 +20,7 @@ vi.mock("../../lib/api", async (orig) => ({
 }));
 vi.mock("../../lib/translate", async (orig) => ({ ...(await orig<typeof import("../../lib/translate")>()), useTranslatePrefs: () => ({ enabled: false, target: "zh-Hans" }) }));
 
-import { MailBody } from "./InboxBodies";
+import { FullMailBody as MailBody } from "./FullMailBody";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

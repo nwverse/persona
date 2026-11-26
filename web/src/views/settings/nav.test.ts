@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n";
+import { registerTestMailbox } from "../../test/mailbox-fixture";
 import { searchSettings } from "./search";
 import { ASSISTANT_TABS, categoryState, FROM_LIST, itemState, NAV_GROUPS, navGroups, openedFromList, redirectLegacySettings, resolveSettingsTarget, settingsAt, settingsHref, stepsToList, TAB_INFO, TABS } from "./nav";
 
@@ -235,6 +236,8 @@ describe("settings sidebar groups", () => {
     expect(searchSettings("收件箱来源", true, true).tabs).not.toContain("sources");
     expect(searchSettings("收件箱来源", true, true).groups).toContainEqual(expect.objectContaining({ tab: "integrations", anchor: "inbox-sources", sub: "-sources" }));
     expect(searchSettings("数据流向", true, true).groups).toContainEqual(expect.objectContaining({ tab: "integrations", anchor: "inbox-sources", sub: "-sources" }));
+    expect(searchSettings("邮箱", true).groups.some((g) => g.sub === "builtin:mail")).toBe(false);
+    registerTestMailbox();
     expect(searchSettings("邮箱", true).groups).toContainEqual(expect.objectContaining({ tab: "integrations", anchor: "mail", sub: "builtin:mail" }));
     expect(searchSettings("扩展市场", true).groups).toContainEqual(expect.objectContaining({ tab: "integrations", anchor: "market", sub: "-market" }));
     expect(searchSettings("以你的名义发出", true).groups).toContainEqual(expect.objectContaining({ tab: "integrations", anchor: "sent", sub: "-sent" }));

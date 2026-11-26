@@ -334,7 +334,8 @@ func (s *Service) settleDelay(ctx context.Context) time.Duration {
 }
 
 type tasksState struct {
-	mu sync.Mutex
+	mu             sync.Mutex
+	closedTurnLogs []closedTurnLog // least recently seen first, protected by mu
 	// recoverBefore excludes starts admitted by this service before its background loops begin.
 	recoverBefore time.Time
 	// completionMu serializes a resumed turn with committing an earlier judgment.
