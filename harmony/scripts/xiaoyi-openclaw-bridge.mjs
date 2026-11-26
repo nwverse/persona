@@ -40,6 +40,7 @@ export const DEFAULT_OPENCLAW_WS_URL = 'wss://hag.cloud.huawei.com/openclaw/v1/w
 export const DEFAULT_OPENCLAW_WS_URL_2 = 'wss://116.63.174.231/openclaw/v1/ws/link';
 export const DEFAULT_HEARTBEAT_MS = 20000;
 export const DEFAULT_ASK_TIMEOUT_MS = 24000;
+export const DEFAULT_STABLE_CONNECTION_MS = 10000;
 export const MAX_PROMPT_CHARS = 8000;
 const MAX_SESSION_CONTEXTS = 64;
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
@@ -1186,11 +1187,22 @@ export async function handleOpenClawRpc(
 }
 
 export class OpenClawBridge {
-  constructor(cfg, { WebSocketImpl = Rfc6455WebSocket, fetchImpl = globalThis.fetch, logger = console } = {}) {
+  constructor(
+    cfg,
+    {
+      WebSocketImpl = Rfc6455WebSocket,
+      fetchImpl = globalThis.fetch,
+      logger = console,
+      stableConnectionMs = DEFAULT_STABLE_CONNECTION_MS
+    } = {}
+  ) {
     this.cfg = cfg;
     this.WebSocketImpl = WebSocketImpl;
     this.hub = new PersonaHubClient(cfg, fetchImpl);
     this.logger = logger;
+    this.stableConnectionMs = Number.isFinite(stableConnectionMs) && stableConnectionMs >= 0
+      ? stableConnectionMs
+      : DEFAULT_STABLE_CONNECTION_MS;
     this.stopped = false;
     this.activeTasks = new Map();
     this.sessionContexts = new Map();
@@ -1207,6 +1219,7 @@ export class OpenClawBridge {
         attempt: 0,
         reconnectTimer: null,
         heartbeatTimer: null,
+        stableTimer: null,
         lastPongAt: 0
       });
     }
@@ -1236,6 +1249,10 @@ export class OpenClawBridge {
         clearInterval(serverState.heartbeatTimer);
         serverState.heartbeatTimer = null;
       }
+      if (serverState.stableTimer) {
+        clearTimeout(serverState.stableTimer);
+        serverState.stableTimer = null;
+      }
       if (serverState.ws) {
         try { serverState.ws.close(1000, 'shutdown'); } catch (_) {}
         serverState.ws = null;
@@ -1261,9 +1278,16 @@ export class OpenClawBridge {
 
     ws.addEventListener('open', () => {
       if (serverState.ws !== ws) return;
-      serverState.attempt = 0;
       serverState.lastPongAt = Date.now();
       this.logger.info(`[xiaoyi-openclaw] [${serverState.id}] connected to ${wsUrl.host}`);
+      if (serverState.stableTimer) clearTimeout(serverState.stableTimer);
+      serverState.stableTimer = setTimeout(() => {
+        if (serverState.ws === ws && !this.stopped) {
+          serverState.attempt = 0;
+        }
+      }, this.stableConnectionMs);
+      if (typeof serverState.stableTimer.unref === 'function') serverState.stableTimer.unref();
+
       ws.send(JSON.stringify({ msgType: 'clawd_bot_init', agentId: this.cfg.agentId }));
       if (serverState.heartbeatTimer) clearInterval(serverState.heartbeatTimer);
       serverState.heartbeatTimer = setInterval(() => {
@@ -1303,6 +1327,18 @@ export class OpenClawBridge {
       this.logger.info(`[xiaoyi-openclaw] [${serverState.id}] rpc method=${rpcMethod} session=${sessionId} task=${rpcTask}`);
 
       const sendReply = (reply) => {
+        if (reply?.msgType === 'agent_response') {
+          let detailKind = '';
+          let detailFinal = '';
+          try {
+            const parsedDetail = JSON.parse(reply.msgDetail || '{}');
+            detailKind = parsedDetail?.result?.kind || (parsedDetail?.error ? 'error' : 'rpc');
+            detailFinal = String(Boolean(parsedDetail?.result?.final));
+          } catch (_) {}
+          this.logger.info(
+            `[xiaoyi-openclaw] [${serverState.id}] sent msgType=agent_response task=${reply.taskId || ''} kind=${detailKind} final=${detailFinal}`
+          );
+        }
         if (serverState.ws === ws && ws.readyState === 1) {
           ws.send(JSON.stringify(reply));
           return;
@@ -1335,6 +1371,10 @@ export class OpenClawBridge {
       if (serverState.heartbeatTimer) {
         clearInterval(serverState.heartbeatTimer);
         serverState.heartbeatTimer = null;
+      }
+      if (serverState.stableTimer) {
+        clearTimeout(serverState.stableTimer);
+        serverState.stableTimer = null;
       }
       if (this.stopped) return;
       const delay = computeReconnectDelayMs(serverState.attempt++);
@@ -1486,10 +1526,10 @@ export async function runPreflightCheck(
     const results = await Promise.all(
       urls.map((u) => probeWsEndpoint(cfg, u, { WebSocketImpl, wsTimeoutMs, wsStayOpenMs }))
     );
-    const allOk = results.every((r) => r.ok);
+    const anyOk = results.some((r) => r.ok);
     report.checks.wsHandshake = {
-      ok: allOk,
-      detail: results.map((r, idx) => `server${idx + 1}: ${r.detail}`).join('; ')
+      ok: anyOk,
+      detail: results.map((r, idx) => `server${idx + 1} [${r.ok ? 'PASS' : 'FAIL'}]: ${r.detail}`).join('; ')
     };
   }
 

@@ -738,10 +738,47 @@ test('runPreflightCheck validates Hub + live WS stay-open handshake, catches pos
     assert.equal(droppedReport.ok, false);
     assert.equal(droppedReport.checks.wsHandshake.ok, false);
     assert.ok(droppedReport.checks.wsHandshake.detail.includes('closed after clawd_bot_init'));
+
+    const dualTolerantReport = await runPreflightCheck(
+      { ...cfg, wsUrl: badWsUrl, wsUrl2: goodWsUrl },
+      { checkWs: true, wsStayOpenMs: 250 }
+    );
+    assert.equal(dualTolerantReport.ok, true);
+    assert.equal(dualTolerantReport.checks.wsHandshake.ok, true);
+    assert.ok(dualTolerantReport.checks.wsHandshake.detail.includes('server1 [FAIL]'));
+    assert.ok(dualTolerantReport.checks.wsHandshake.detail.includes('server2 [PASS]'));
   } finally {
     await goodWsServer.close();
     await badWsServer.close();
     await hub.close();
+  }
+
+  // Verify OpenClawBridge stability threshold preserves attempt backoff when dropping early, and resets after stableConnectionMs
+  const flakyServer = createMockWsServer();
+  const flakyUrl = await flakyServer.listen();
+  const silentLogger = { info() {}, warn() {}, error() {} };
+  const flakyBridge = new OpenClawBridge({
+    ...cfg,
+    wsUrl: flakyUrl,
+    wsUrl2: '',
+    heartbeatMs: 5000,
+    askTimeoutMs: 2000
+  }, { logger: silentLogger, stableConnectionMs: 120 });
+  flakyBridge.start();
+  try {
+    const firstConn = await flakyServer.waitForConnections(1);
+    await firstConn.waitForMessage((m) => m.msgType === 'clawd_bot_init');
+    firstConn.closeSocket(1000);
+    await new Promise((r) => setTimeout(r, 40));
+    assert.equal(flakyBridge.servers.get('server1').attempt, 1);
+
+    const secondConn = await flakyServer.waitForConnections(2, 2500);
+    await secondConn.waitForMessage((m) => m.msgType === 'clawd_bot_init');
+    await new Promise((r) => setTimeout(r, 170));
+    assert.equal(flakyBridge.servers.get('server1').attempt, 0);
+  } finally {
+    flakyBridge.stop();
+    await flakyServer.close();
   }
 
   const badAuthHub = createMockHubServer({ rejectAuth: true });
