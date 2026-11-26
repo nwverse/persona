@@ -11,6 +11,7 @@ vi.hoisted(() => {
 });
 vi.mock("../lib/store", async (original) => ({
   ...(await original<typeof import("../lib/store")>()),
+  getState: () => ({ features: viewport.inboxSources ? ["inbox_sources"] : [] }),
   useStore: (select: (state: {
     features: string[];
     machines: unknown[];
@@ -693,7 +694,7 @@ describe("Settings category navigation", () => {
       box.dispatchEvent(new Event("input", { bubbles: true }));
     });
     const groupBtn = [...nav().querySelectorAll<HTMLButtonElement>("button")].find(
-      (b) => b.textContent?.includes(`${t("settings-nav.tab_integrations")}›${t("settings-nav.tab_sources")}`),
+      (b) => b.textContent?.includes(`${t("settings-nav.tab_integrations")}›${t("settings-integrations.view_sources")}`),
     )!;
     expect(groupBtn).toBeTruthy();
     await act(async () => groupBtn.click());

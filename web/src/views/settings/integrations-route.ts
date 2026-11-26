@@ -53,6 +53,7 @@ function decodePathPart(part: string): string {
 /** Parses `?tab=integrations&integration=<sub>` into a structured route. */
 export function parseIntegrationsSub(sub: string | null | undefined): IntegrationsRoute {
   if (!sub) return { kind: "list" };
+  if (sub.startsWith("extension:")) sub = "ext:" + sub.slice("extension:".length);
   if (sub === "-sent") return { kind: "sent" };
   if (sub === "-market") return { kind: "catalog" };
   if (sub === "-markets") return { kind: "markets" };
@@ -255,7 +256,7 @@ export function integrationsToLegacy(
     case "connector":
       return { tab: "connectors", sub: withManager(route.id, route.manager) };
     case "builtin":
-      if (route.id === "mail" || route.id === "lark") {
+      if (!route.manager && (route.id === "mail" || route.id === "lark")) {
         return { tab: "connectors", sub: null };
       }
       if (BUILTIN_CHANNEL_IDS.has(route.id)) {
@@ -278,16 +279,28 @@ export function parseSettingsPath(path: string): { tab: string; sub: string | nu
   if (!rest) return null;
   const slash = rest.indexOf("/");
   const head = decodePathPart(slash >= 0 ? rest.slice(0, slash) : rest);
-  const tail = slash >= 0 ? rest.slice(slash + 1).split("/").map(decodePathPart).join("/") : null;
+  const { id: tab, manager } = splitOwned(head);
   if (head === "sent") return { tab: "sent", sub: null };
-  if (head === "plugins") return { tab: "extensions", sub: tail || null };
-  if (head === "sources") return { tab: "sources", sub: tail || null };
-  if (head.startsWith("sources@")) {
-    const manager = head.slice("sources@".length);
-    return { tab: "sources", sub: tail || null, ...(manager ? { manager } : {}) };
+  if (head !== "plugins" && tab !== "integrations" && !isLegacyIntegrationTab(tab)) return null;
+
+  const parts = slash >= 0 ? rest.slice(slash + 1).split("/") : [];
+  const first = decodePathPart(parts[0] ?? "");
+  // The integration sub-codec owns the escaping inside a sources route. Other settings
+  // items (including legacy sources state) use decoded path components.
+  let sub = tab === "integrations" && splitOwned(first).id === "-sources"
+    ? [first, ...parts.slice(1)].join("/")
+    : parts.map(decodePathPart).join("/");
+
+  if (manager && sub && tab !== "sources") {
+    // Detail views read ownership from the item. Keep list ownership in the manager
+    // parameter and let an explicitly owned item override its tab's default owner.
+    const segments = sub.split("/");
+    const ownerIndex = segments[0] === "-market" ? 2 : segments[0] === "-channels" ? 1 : 0;
+    const item = segments[ownerIndex];
+    if (item && (!item.startsWith("-") || item === "-sources") && !splitOwned(item).manager) {
+      segments[ownerIndex] = withManager(item, manager);
+      sub = segments.join("/");
+    }
   }
-  if (head === "connectors" || head === "channels" || head === "extensions" || head === "integrations") {
-    return { tab: head, sub: tail || null };
-  }
-  return null;
+  return { tab: head === "plugins" ? "extensions" : tab, sub: sub || null, ...(manager ? { manager } : {}) };
 }

@@ -5,6 +5,7 @@
 // (apple/Shared/HubPageLink.swift) and Android read the same table; spec/fixtures/deep-links/cases.json is what every
 // client checks (lib/deep-links.test.ts for both kinds of link here). Only the keys a page lists are read: a link only
 // opens a page, it never signs in or acts.
+import { parseSettingsPath } from "../views/settings/integrations-route";
 import { machineLocation, machinePath, type MachineLocation } from "./machine-route";
 import { APP_SCHEMES, assistantPath } from "./compatibility";
 
@@ -101,14 +102,14 @@ export function pageOfPath(path: string, search = ""): DeepPage | null {
       const location = machineLocation(p, search);
       return location ? { page: "machine", id: p[1]!, ...location } : null;
     }
-    case "settings":
+    case "settings": {
       if (p.length === 2 && p[1] === "sent") return { page: "settings", tab: "connectors", item: SENT };
-      if (p.length >= 2 && (p[1] === "sources" || p[1]!.startsWith("sources@"))) {
-        const pathManager = p[1]!.startsWith("sources@") ? p[1]!.slice("sources@".length) || undefined : undefined;
-        const item = p.length > 2 ? p.slice(2).join("/") : v("state");
-        return clean({ page: "settings", tab: "sources", item, manager: v("manager") ?? pathManager });
-      }
-      return p.length === 1 ? settingsPage(q) : null;
+      if (p.length === 1) return settingsPage(q);
+      const route = parseSettingsPath(path);
+      if (!route || route.tab === "sent") return null;
+      const key = DEEP_SETTINGS_TABS[route.tab];
+      return clean({ page: "settings", tab: route.tab, item: route.sub ?? (key ? v(key) : undefined), manager: v("manager") ?? route.manager });
+    }
     case "extension":
     case "plugin":
       return p.length === 3 ? clean({ page: "extension", extension: p[1]!, ui: p[2]!, state: v("state") }) : null;
