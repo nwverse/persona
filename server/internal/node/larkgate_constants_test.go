@@ -48,6 +48,15 @@ func TestRouteVariableConstantOverTheCommand(t *testing.T) {
 		{"zsh match", `cd /tmp && match=x; [[ open =~ open ]]; ex GET "/links/$match"`, ""},
 		{"underscore", `cd /tmp && _=x; true open; ex GET "/links/$_"`, ""},
 		{"FUNCNAME", "FUNCNAME=x\nfor i in 1; do cd /tmp; ex GET \"/links/open$FUNCNAME\"; done", ""},
+		// zsh builtins and modifiers that set a variable with no assignment in the syntax tree: only known commands pass.
+		{"zsh print -v", `F=conversations; print -v F links; cd /tmp && ex GET "/$F/open"`, ""},
+		{"noglob eval", `F=conversations; noglob eval 'F=links'; cd /tmp && ex GET "/$F/open"`, ""},
+		{"emulate -c", `F=conversations; emulate zsh -c 'F=links'; cd /tmp && ex GET "/$F/open"`, ""},
+		{"repeat", `F=conversations; repeat 1 F=links; cd /tmp && ex GET "/$F/open"`, ""},
+		{"zstyle -s", `F=conversations; zstyle :x y links; zstyle -s :x y F; cd /tmp && ex GET "/$F/open"`, ""},
+		{"set -A", `cd /tmp && F=x; set -A F links; for i in 1; do ex GET "/$F/open"; done`, ""},
+		{"IFS", `IFS=z; F=userz-o; for i in 1; do ex GET "/conversations/$F/messages"; done`, ""},
+		{"{name}> redirect", `cd /tmp && F=x; exec {F}>/dev/null; for i in 1; do ex GET "/$F/open"; done`, ""},
 		// cd counts as always succeeding only into an absolute directory anyone may enter.
 		{"relative cd", `cd /usr; cd lib && ` + f + `; for i in 1; do ex GET "/conversations/$F/messages"; done`, ""},
 		{"cd with ..", `cd /tmp/.. && ` + f + `; for i in 1; do ex GET "/conversations/$F/messages"; done`, ""},

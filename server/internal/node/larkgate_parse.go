@@ -319,7 +319,7 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 	varsStable := larkVariableScopeStable(cmd, gates)
 	if !varsStable {
 		// Outside straight-line code only a variable constant over the whole command expands (#16491).
-		vars = larkLiteralConstants(cmd)
+		vars = larkLiteralConstants(cmd, gates)
 	}
 	executableEnv := false
 	// Text naming lark-cli is a call only where a program executes it (larkgate_text.go): flow notes each
@@ -893,6 +893,15 @@ var (
 		"langinfo": true, "keymaps": true, "widgets": true, "patchars": true, "words": true, "compstate": true}
 )
 
+// larkConstantSafeCommands: commands that cannot set a variable of the shell running them: programs that run in a
+// process of their own, and builtins that only print or test. Not printf / print (-v), read, set, or any modifier.
+var larkConstantSafeCommands = map[string]bool{"cd": true, "echo": true, "true": true, "false": true, ":": true,
+	"test": true, "[": true, "pwd": true, "cat": true, "tee": true, "ls": true, "head": true, "tail": true,
+	"grep": true, "egrep": true, "fgrep": true, "rg": true, "wc": true, "sort": true, "uniq": true, "cut": true,
+	"tr": true, "column": true, "jq": true, "awk": true, "sed": true, "paste": true, "seq": true, "date": true,
+	"sleep": true, "rm": true, "mkdir": true, "rmdir": true, "cp": true, "mv": true, "touch": true, "basename": true,
+	"dirname": true, "diff": true, "comm": true, "nl": true, "fold": true, "base64": true}
+
 // larkShellUppercase: bash's and zsh's uppercase parameters that the shell itself rewrites while a command runs (cd,
 // =~, read, getopts, every command or second). A literal binding of one says nothing about its later value.
 var larkShellUppercase = map[string]bool{"PWD": true, "OLDPWD": true, "FUNCNAME": true, "REPLY": true, "OPTARG": true,
@@ -918,9 +927,9 @@ func larkConstantNameOK(name string) bool {
 // top-level statement that always runs: a `;` / newline statement, or an `&&` operand after only `true`, `:` or `cd` to
 // an absolute directory that exists now and anyone may enter. Its value is a literal of [A-Za-z0-9_-], so it cannot
 // change which route a call reaches; its name is one the shell never sets itself (larkConstantNameOK); it is not used
-// before that statement, and nothing else in the command can assign it. Anything that can
-// assign a variable indirectly (eval, source, read, export, unset, functions, …) leaves no constants at all.
-func larkLiteralConstants(cmd string) map[string]string {
+// before that statement, and no other assignment of it appears. Every command in it must be one that cannot set a
+// variable (larkConstantSafeCommands); otherwise there are no constants at all.
+func larkLiteralConstants(cmd string, gates []proto.CommandGate) map[string]string {
 	out := map[string]string{}
 	tree, err := syntax.NewParser().Parse(strings.NewReader(cmd), "")
 	if err != nil {
@@ -998,6 +1007,8 @@ func larkLiteralConstants(cmd string) map[string]string {
 		case *syntax.Assign:
 			if n.Name != nil {
 				assigned[n.Name.Value]++
+				// IFS changes how every unquoted constant splits, PATH and the like what runs.
+				opaque = opaque || larkShellManaged(n.Name.Value) || larkExecutableEnv[n.Name.Value]
 			}
 		case *syntax.WordIter:
 			if n.Name != nil {
@@ -1023,25 +1034,23 @@ func larkLiteralConstants(cmd string) map[string]string {
 				}
 				return true
 			})
-		case *syntax.FuncDecl, *syntax.DeclClause, *syntax.LetClause:
+		case *syntax.FuncDecl, *syntax.DeclClause, *syntax.LetClause, *syntax.CoprocClause:
 			opaque = true
+		case *syntax.Redirect:
+			if n.N != nil && strings.Trim(n.N.Value, "0123456789") != "" {
+				opaque = true // {name}>file assigns name
+			}
 		case *syntax.CallExpr:
 			if len(n.Args) == 0 {
 				return true
 			}
+			// Only a program in a process of its own cannot set this shell's variables. bash and zsh have many builtins
+			// and precommand modifiers that can (print -v, zstyle -s, set -A, emulate -c, noglob eval, repeat, …):
+			// every command must be a gated one, lark-cli, or a name known to be one of those programs or an inert
+			// builtin; anything else leaves no constants.
 			name, dynamic := executionWord(n.Args[0])
-			if dynamic {
-				opaque = true // a command named by an expansion could be anything, eval included
-				return true
-			}
-			switch filepath.Base(name) {
-			case "eval", "source", ".", "read", "readarray", "mapfile", "getopts", "unset", "export", "declare", "typeset",
-				"local", "readonly", "let", "builtin", "command", "exec", "printf", "alias", "trap":
-				// printf -v, command/builtin wrapping one of the others: any could assign or replace a variable.
-				opaque = opaque || name != "printf" || slices.ContainsFunc(n.Args[1:], func(w *syntax.Word) bool {
-					s, dyn := executionWord(w)
-					return dyn || strings.HasPrefix(s, "-v")
-				})
+			if dynamic || gateOf(gates, name) < 0 && !isLarkCLI(name) && !larkConstantSafeCommands[name] {
+				opaque = true
 			}
 		}
 		return true
