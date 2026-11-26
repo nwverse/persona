@@ -1,3 +1,4 @@
+import { mailReading } from "../../lib/mail";
 import { getState } from "../../lib/store";
 import { INBOX_SOURCES_FEATURE } from "../../lib/subscriptions";
 import { t } from "../../i18n";
@@ -113,7 +114,7 @@ const SHARED_INDEX: SearchGroup[] = [
   },
   { tab: "persona", group: t("settings-standing.title"), anchor: "standing-authorizations" },
   { tab: "persona", group: t("settings-assistantsettings.meeting_attendance"), hint: t("settings-assistantsettings.meetings_title"), anchor: "meetings" },
-  { tab: "persona", group: t("settings-assistantsettings.recordings_title"), hint: words(t("settings-assistantsettings.recording_days"), t("settings-assistantsettings.minutes_days")), anchor: "recordings" },
+  { tab: "persona", group: t("settings-assistantsettings.recordings_title"), hint: words(t("settings-assistantsettings.recording_days"), t("settings-assistantsettings.recording_audio_days"), t("settings-assistantsettings.recording_text_days"), t("settings-assistantsettings.minutes_days")), anchor: "recordings" },
   { tab: "persona", group: t("settings-assistantsettings.knows_title"), hint: words(t("settings-assistantsettings.about_me"), t("settings-assistantsettings.memory")), anchor: "knows" },
   { tab: "persona", group: t("settings-directionnotes.title"), anchor: "direction-notes" },
   { tab: "persona", group: t("settings-assistantsettings.task_lessons"), hint: t("settings-assistantsettings.task_lessons_hint"), anchor: "task-lessons" },
@@ -273,8 +274,9 @@ export function searchSettings(query: string, integrationsV2 = false, hasInboxSo
     if (g.tab === "persona" && g.anchor === "inbox-todo-forward") return !showSources;
     return true;
   }) : SEARCH_INDEX;
+  const showMailbox = mailReading().kind === "full";
   return {
     tabs: searchableTabs.filter(tabMatches),
-    groups: [...indexed, ...featureEntries].filter((g) => has(g.group, g.hint)),
+    groups: [...indexed, ...featureEntries].filter((g) => (g.anchor !== "mail" || showMailbox) && has(g.group, g.hint)),
   };
 }

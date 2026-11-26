@@ -631,9 +631,9 @@ instead of writing the hub's data directory. The manager forwards it as the call
   `generated_at`, `when`, `start` and `end`) and `minutes.md` (the Markdown as given: what searches and `kb.get` read). Each action needs an `id` (at most 64 characters) that stays the same across writes:
   a to-do the user made of an action keeps its `todo_id` when the minutes are written again. `meta.minutes_rev` is the revision written, so `minutes_state` is `ready` and the recording module makes no
   minutes of its own. Minutes or a transcript is required.
-- **Retention**: the recording is a meeting (`kind: meeting`, complete). Past `recording_days` a recording with minutes is trimmed to them and kept until `minutes_days` (forever by default,
-  `docs/assistant/meeting-minutes.md` "Privacy"), like the phone's; one with only a transcript goes. A recording older than `recording_days` is accepted (an extension may write old meetings), but without
-  minutes the next retention round deletes it.
+- **Retention**: the recording is a meeting (`kind: meeting`, complete). Its text follows `recording_text_days` like the phone's (forever by default, #16412). Past a finite one a
+  recording with minutes is trimmed to them and kept until `minutes_days` (forever by default, `docs/assistant/meeting-minutes.md` "Privacy"); one with only a transcript goes. A recording
+  older than a finite `recording_text_days` is accepted (an extension may write old meetings), but without minutes the next retention round deletes it.
 - **The transcript** (`transcript: [{start, end, text}]`, at most 20000 segments) is optional; `n`, `source` and `echo` are the hub's and are dropped. Without minutes, the recording module makes minutes of it
   when it is on, at the user's model cost; the hub never writes the short summary of an extension's recording (`summarized_rev` is set), nor matches it to a calendar item itself.
 - **Links**: `projects` are slugs (or names) of existing projects; each gets `recordings/<id>` in its items, and a later write never removes a link (one the user removed is not made again). `meeting:

@@ -1335,6 +1335,7 @@ func (s *Service) messageParams(ctx context.Context, p SendParams, owner bool) (
 	} else {
 		_, said = p.Params["images"] // the node asking what its own message runs on carries neither (NodeAnswer)
 	}
+	hasContent := hasOwnerMessageContent(text, p.Params["images"])
 	sent, _ := p.Params["text"].(string)
 	id, _ := p.Params["client_msg_id"].(string)
 	// How the user's app sent it when not typed in the app itself ("intent", "share"): it never counts as their own
@@ -1373,8 +1374,24 @@ func (s *Service) messageParams(ctx context.Context, p SendParams, owner bool) (
 		}
 		s.endHeldChannelRuns(p.MachineID, p.SessionID)
 		s.ownerInterjects(p.SessionID, params)
+		if clarifyingCardOf(ctx) == "" && hasContent {
+			s.detachPendingApprovalsOnOwnerMessage(p.MachineID, p.SessionID)
+		}
 	}
 	return params, err
+}
+
+func hasOwnerMessageContent(text string, images any) bool {
+	if strings.TrimSpace(text) != "" {
+		return true
+	}
+	switch imgs := images.(type) {
+	case []proto.Image:
+		return len(imgs) > 0
+	case []any:
+		return len(imgs) > 0
+	}
+	return false
 }
 
 // ownerInterjects: params are the owner's own message to conversation id, ready to send. On a round they did not

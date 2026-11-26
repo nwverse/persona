@@ -417,6 +417,8 @@ agents.read          GET /api/v1/sessions/{mid}/{sid}/screen
 -                    GET /api/v1/task-plans/{id}
 -                    GET /api/v1/task-trust
 todos.read           GET /api/v1/todos
+-                    GET /api/v1/todos/decisions/groups
+-                    GET /api/v1/todos/mergetrain
 todos.read           GET /api/v1/todos/places
 -                    GET /api/v1/todos/revision
 todos.read           GET /api/v1/todos/{id}
@@ -427,6 +429,7 @@ todos.read           GET /api/v1/todos/{id}/decisions
 -                    GET /api/v1/todos/{id}/images/{image}
 todos.read           GET /api/v1/todos/{id}/repositories
 todos.read           GET /api/v1/todos/{id}/timeline
+-                    GET /api/v1/todos/{id}/trace
 todos.read           GET /api/v1/todos/{id}/workspace-naming/plans/{operation_id}
 todos.read           GET /api/v1/todos/{id}/workspace-rules
 -                    GET /api/v1/usage
@@ -605,6 +608,7 @@ market.refresh_own   POST /api/v1/extensions/-/self/market/refresh
 -                    POST /api/v1/hub/recovery/bundles/{id}/verify
 -                    POST /api/v1/hub/update
 -                    POST /api/v1/hub/update/backups/{id}/apply
+-                    POST /api/v1/hub/update/cancel
 -                    POST /api/v1/hub/update/check
 inbox.write          POST /api/v1/inbox/bulk
 inbox.write          POST /api/v1/inbox/done
