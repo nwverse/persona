@@ -32,6 +32,14 @@ func ProgramOf(path string) string {
 // holds now: no hub or manager service runs that file. A current file that cannot be read says nothing and does not
 // block.
 func CheckReplace(current, next string) error {
+	// An install keeps its edition (docs/operations/core-install.md "Updates stay core-only"): a core-only program
+	// is never replaced by a full build, nor a full one by a core-only build. Both are read from their build info; a
+	// file that cannot be read says nothing and does not block, as below.
+	if cur, ok := EditionOf(current); ok {
+		if nxt, ok := EditionOf(next); ok && nxt != cur {
+			return fmt.Errorf("%s is the %s edition: not replacing it with a %s build", current, cur, nxt)
+		}
+	}
 	if IsDeviceFile(current) {
 		return nil
 	}

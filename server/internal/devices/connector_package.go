@@ -41,7 +41,7 @@ var errNoConnector = errors.New("no Persona Link build for this platform")
 // makes one: what a node reports of itself cannot have it sent the connector as its build.
 func (d *Devices) connectorKey(goos, arch string) packageKey {
 	cfg := d.config()
-	return packageKey{goos: goos, arch: arch, program: programConnector, hub: cfg.HubVersion, base: cfg.NodePackagesURL}
+	return packageKey{goos: goos, arch: arch, program: programConnector, own: d.edition(), hub: cfg.HubVersion, base: cfg.NodePackagesURL}
 }
 
 // platformWord is an OS or architecture as Go names them (linux, arm64): it goes into a file name and a URL.
@@ -85,14 +85,14 @@ func (d *Devices) lookupConnector(ctx context.Context, k packageKey) (nodePackag
 		pkg.flat = flat
 		return pkg, nil
 	}
-	m, err := d.fetchManifest(ctx, k.base+"/"+url.PathEscape(k.hub)+"/manifest.json")
+	m, err := d.fetchManifest(ctx, k.base+"/"+url.PathEscape(k.hub)+"/"+update.ReleaseManifestName(d.edition()))
 	if err == nil {
 		return release(m, false)
 	}
 	if errors.Is(err, errNoManifest) {
 		// A source without dl/<version>/ (a GitHub repository's releases/latest/download) serves the release of the
 		// hub's version as its latest.json while that is the newest.
-		m, err = d.fetchManifest(ctx, k.base+"/latest.json")
+		m, err = d.fetchManifest(ctx, k.base+"/"+update.FeedName(d.edition()))
 		switch {
 		case err == nil && m.Version == k.hub:
 			return release(m, true)

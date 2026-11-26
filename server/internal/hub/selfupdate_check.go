@@ -145,7 +145,7 @@ func (u *updater) check(ctx context.Context) (*update.Published, error) {
 	u.setCheckState("checking", "")
 	cctx, cancel := context.WithTimeout(ctx, updateRequestLimit)
 	defer cancel()
-	r, err := update.CheckChannel(cctx, u.client, source, u.selectedChannel())
+	r, err := update.CheckChannel(cctx, u.client, source, u.selectedChannel(), u.h.build.Edition)
 	if err == nil && u.selectedBeta() {
 		// A pointer only names the newest prerelease; download its immutable
 		// tag, never the pointer's own placeholder binaries.
@@ -299,7 +299,7 @@ func (u *updater) freshRelease(ctx context.Context) {
 	}
 	cctx, cancel := context.WithTimeout(ctx, releaseRefreshLimit)
 	defer cancel()
-	r, err := update.CheckChannel(cctx, u.client, source, u.selectedChannel())
+	r, err := update.CheckChannel(cctx, u.client, source, u.selectedChannel(), u.h.build.Edition)
 	if err == nil && u.selectedBeta() {
 		r.Source = update.BetaReleaseBase(source, r.Manifest)
 		if r.Source == "" {

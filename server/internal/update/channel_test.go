@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/nwverse/persona/server/internal/nodeproto"
 )
 
 func TestBetaFeedIsIndependentAndPinsImmutableTag(t *testing.T) {
@@ -50,7 +52,7 @@ func TestCheckChannelRejectsStableAndBetaMixups(t *testing.T) {
 				_, _ = w.Write([]byte(test.manifest))
 			}))
 			defer srv.Close()
-			_, err := CheckChannel(context.Background(), srv.Client(), srv.URL+test.base, test.channel)
+			_, err := CheckChannel(context.Background(), srv.Client(), srv.URL+test.base, test.channel, nodeproto.EditionFull)
 			if (err == nil) != test.valid {
 				t.Fatalf("channel validation %v", err)
 			}
