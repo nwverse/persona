@@ -57,7 +57,11 @@ func launcherSpecificFailure(err error) bool {
 	if errors.As(err, &m) && (m.Key == "assistant-tasks.fixed_launcher_unhealthy" || m.Key == "assistant-tasks.launcher_not_on_machine") {
 		return true
 	}
-	switch classifyLauncherError(err.Error()) {
+	kind := codedLauncherErrorKind(err)
+	if kind == "" {
+		kind = classifyLauncherError(err.Error())
+	}
+	switch kind {
 	case errKindAuth, errKindModelRoute, errKindUsageLimit:
 		return true
 	}

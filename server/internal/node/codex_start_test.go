@@ -505,9 +505,11 @@ func TestCodexStartFailureShowsATopDialog(t *testing.T) {
 	t.Cleanup(func() { codexStartWait = old })
 	n, f, _, _ := codexStartHerdr(t, time.Hour)
 	tallPane(f, 51)
-	f.setScreen("w1:p2", "  Sign in with ChatGPT\n\n› 1. Sign in with ChatGPT\n  2. Sign in with Device Code\n  3. Sign in another way\n\n  Press enter to continue\n")
+	// A dialog the start does not answer: neither the trust dialog, an update offer nor the sign-in screen, which ends
+	// the start at once (TestCodexStartOnSignInScreenFailsAtOnce).
+	f.setScreen("w1:p2", "  Pick a color theme\n\n› 1. Dark\n  2. Light\n  3. Match the terminal\n\n  Press enter to continue\n")
 	_, err := request(t, n, "session.start", map[string]any{"cwd": "~/proj", "launcher": "codex", "prompt": "hi"})
-	if err == nil || !strings.Contains(err.Error(), "没认出它这次的会话") || !strings.Contains(err.Error(), "Sign in another way") {
+	if err == nil || !strings.Contains(err.Error(), "没认出它这次的会话") || !strings.Contains(err.Error(), "Match the terminal") {
 		t.Errorf("err %v", err)
 	}
 	if keys := f.trace("pane.send_keys"); len(keys) != 0 {
