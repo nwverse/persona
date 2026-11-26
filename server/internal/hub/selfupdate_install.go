@@ -21,6 +21,10 @@ import (
 
 // begin starts an update the user asked for; now skips waiting for idle ("Update now" in the second confirmation).
 func (u *updater) begin(ctx context.Context, now bool) error {
+	return u.beginTarget(ctx, now, "")
+}
+
+func (u *updater) beginTarget(ctx context.Context, now bool, target string) error {
 	if !u.h.selfUpdates() && !(u.selectedDevelopment() && u.developmentAvailable()) {
 		return u.whyNot()
 	}
@@ -39,6 +43,15 @@ func (u *updater) begin(ctx context.Context, now bool) error {
 	if u.adoptionUnresolved() {
 		u.mu.Unlock()
 		return i18n.Err("hub-selfupdate.err_development_recovery")
+	}
+	if target == "latest" && u.developmentLocked() {
+		u.running, u.now = true, now
+		u.opGen++
+		u.setLocked("resolving", "", "")
+		u.mu.Unlock()
+		u.broadcastStatus()
+		go u.installLatestDevelopment(ctx)
+		return nil
 	}
 	r := u.release
 	if !u.candidateNewer(r) {
@@ -79,6 +92,26 @@ func (u *updater) begin(ctx context.Context, now bool) error {
 	u.mu.Unlock()
 	go u.installCandidate(ctx, false, r)
 	return nil
+}
+
+// The reservation spans resolution and the build, so later checks cannot change its input.
+func (u *updater) installLatestDevelopment(ctx context.Context) {
+	r, err := u.resolveDevelopment(ctx)
+	u.mu.Lock()
+	if err == nil {
+		u.release, u.blocked, u.lastCheck = r, nil, time.Now()
+		if u.candidateNewer(r) {
+			u.mu.Unlock()
+			u.installCandidate(ctx, false, r)
+			return
+		}
+		u.setLocked("idle", "", "")
+	} else {
+		u.setLocked("failed", "", i18n.Localize(err, u.h.userLang()))
+	}
+	u.running, u.now = false, false
+	u.mu.Unlock()
+	u.broadcastStatus()
 }
 
 // install is one update: download, verify, wait for idle, swap, restart. It returns only when it did not restart.
@@ -131,7 +164,7 @@ func (u *updater) installCandidate(ctx context.Context, auto bool, candidate *up
 		}
 		u.setLocked("failed", "", why)
 		u.mu.Unlock()
-		u.h.broadcast(map[string]any{"type": "hub_update", "update": u.view()})
+		u.broadcastStatus()
 		u.h.logf("update to %s: %v", r.Manifest.Version, err)
 	}
 	if r.Development != nil {
