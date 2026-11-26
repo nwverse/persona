@@ -1,4 +1,6 @@
 {
+  "err_cannot_cancel": "現在、この更新はキャンセルできません。",
+  "err_cancel_history": "更新をキャンセルしましたが、履歴を保存できませんでした。",
   "err_development_step": "開発版の更新は「{step}」で停止しました。ハブの update/development/{phase}.log を確認してください。",
   "development_step_fetch": "コミットを取得",
   "development_step_npm_install": "Web の依存関係をインストール",
@@ -55,6 +57,7 @@
   "err_development_quiesce": "バックアップのためにhubの書き込みを停止できませんでした：{error}",
   "err_computer_packages": "hubは更新されましたが、コンピューター用パッケージを準備できませんでした。hub側に一時ファイルを保持しています。更新ログを確認してから再デプロイしてください。",
   "err_development_recovery": "中断した開発版更新の復旧が必要です。hub側のupdate/development/adopting.jsonと保持したスナップショットを確認してから更新元を変更・更新してください。",
+  "err_resolve_latest": "最新のコミットを確認できませんでした。もう一度お試しください。",
   "err_development_phase": "開発版更新の準備に失敗しました。hub側のupdate/development/{phase}.logを確認してください。元のビルドと検証済みスナップショットは保持しています。",
   "err_development_backup": "このプログラムバックアップは利用できません。バックアップ一覧を更新してください。",
   "err_development_backup_path": "このバックアップフォルダーは使えません：{error}",

@@ -39,6 +39,8 @@ import { useSyncExternalStore } from "react";
 import { addCatalogs, type CatalogLoaders } from "../i18n";
 import type { IconName } from "../ui/icons";
 import type { UIColor } from "../lib/extension-ui-v6";
+import type { InboxItem } from "../lib/inbox";
+import type { MailAccount } from "../lib/agent-settings";
 import type { FileContent } from "../lib/files";
 import type { Route } from "../lib/router";
 import type { KBDetail, KBEntry } from "../lib/kb";
@@ -237,8 +239,27 @@ export interface ModuleFilePreviewProps {
   onDownload: () => void;
 }
 
+export interface ModuleMailboxSettingsProps {
+  manager?: string;
+  hideInboxSwitch?: boolean;
+  reloadKey?: number;
+  onHasAccounts?: (hasAccounts: boolean) => void;
+}
+
+export interface ModuleMailboxInboxSwitchProps {
+  manager?: string;
+  grouped?: boolean;
+}
+
 /** A module's code, loaded on first use. */
 export interface ModuleCode {
+  mailbox?: {
+    Body: ComponentType<{ item: InboxItem; onLatest?: () => void }>;
+    Compose: ComponentType<{ accounts: MailAccount[]; onClose: () => void }>;
+    Settings: ComponentType<ModuleMailboxSettingsProps>;
+    InboxSwitch: ComponentType<ModuleMailboxInboxSwitchProps>;
+    accounts: (manager?: string) => Promise<MailAccount[]>;
+  };
   FilePreview?: ComponentType<ModuleFilePreviewProps>;
   /** The page its routes open. */
   Page?: ComponentType<ModulePageProps>;
@@ -292,6 +313,8 @@ export interface ModuleDescriptor {
   /** Knowledge entry kinds whose page it adds parts to (`kb.detail`, #13430 `shell_places`): `ModuleCode.KBDetail`.
    *  One module per kind. */
   kbKinds?: readonly string[];
+  /** Supplies live mailbox actions alongside archived Inbox items. Only one provider may own them. */
+  mailbox?: true;
   /** File kinds drawn by this module's FilePreview. Each kind has one owner. */
   filePreviews?: readonly ModuleFileKind[];
   /** Its Settings categories; its code's `settings` draws each. */
@@ -427,6 +450,7 @@ export function registerModule(d: ModuleDescriptor): void {
   checkUnique(d.extensionPages, "claims the extension page id", (m) => m.extensionPages);
   checkUnique(d.kbKinds, "claims the knowledge kind", (m) => m.kbKinds);
   checkUnique(d.filePreviews, "previews the file kind", (m) => m.filePreviews);
+  if (d.mailbox && registeredModules().some((m) => m.mailbox)) fail("the mailbox already has a provider");
   registry.set(d.id, d);
   changed();
 }
@@ -577,6 +601,7 @@ function checkCode(d: ModuleDescriptor, code: ModuleCode): ModuleCode {
   const miss = (keys: readonly string[] | undefined, have: Readonly<Record<string, unknown>> | undefined, what: string) =>
     (keys ?? []).filter((x) => !have?.[x]).map((x) => `the ${what} "${x}"`);
   const missing = [
+    ...(d.mailbox && !code.mailbox ? ["the mailbox"] : []),
     ...miss(d.chatSlots, code.chat as Readonly<Record<string, unknown>> | undefined, "chat slot"),
     ...(d.filePreviews?.length && !code.FilePreview ? ["the file preview"] : []),
     ...miss(d.settingsTabs?.map((x) => x.key), code.settings, "Settings category"),

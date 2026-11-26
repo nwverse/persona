@@ -32,6 +32,18 @@ off until explicitly enabled and is turned off whenever the source changes. An u
 accepted keeps its fixed candidate; source changes are refused until it ends. Repeated triggers
 join that attempt. A rolled-back development commit is never automatically tried again.
 
+When Web Settings opens on the idle Web development channel, it shows the cached status.
+If the Hub advertises `supports_preview`, Web posts `{"preview":true}` to
+`/api/v1/hub/update/check` once per visit. The preview refreshes the candidate without
+starting an automatic installation. A failed lookup keeps the last successful check time.
+
+Choosing **Latest version** and clicking **Update hub** posts `{"target":"latest"}` to
+`/api/v1/hub/update`. The Hub reserves the update and reports `resolving` while it looks
+up remote `main` and its commit time. It builds that exact revision, even if the branch
+moves again. A match with the running commit returns to idle. A lookup failure releases
+the reservation so the operator can retry. Older clients sending `{}` install the checked
+candidate. A selected backup still applies through its own endpoint.
+
 Development updates always use `https://github.com/nwverse/persona.git`, branch `main`.
 The Hub can pause its own writers for a snapshot of the Hub and built-in assistant.
 Remote assistants that keep their own databases and files fall outside that snapshot.
@@ -123,6 +135,19 @@ Git uses the
 installation user's existing HTTPS credential mechanism, with interactive prompts disabled.
 Updates execute build code from this project's repository.
 Docker Hubs and Windows Hubs retain their original update paths.
+
+In Settings › Hub the development pipeline runs **Build → Waiting for idle → Backup → Restart**.
+Build includes staging and verifying the programs. For a saved version, **Prepare backup** takes
+the place of Build. Choose **Cancel update** and confirm to stop before binary adoption.
+The hub interrupts resolution or a running build, or stops at a safe staging or idle boundary.
+During a snapshot it records the request in memory, finishes verification, resumes writers and
+saves the backup receipt. After cleanup the hub is idle, history shows **Cancelled**, and another
+update can start immediately.
+
+`GET /api/v1/hub/update` reports `can_cancel` and `cancelling`. The authenticated
+`POST /api/v1/hub/update/cancel` remains available during the built-in writer pause.
+Repeated requests during cancellation return the current status. Once the installer claims
+adoption, or when there is no cancellable attempt, cancel returns HTTP 409.
 
 Settings › Hub shows the current step and elapsed phase time during a development build,
 snapshot backup or saved-version preparation. Build progress covers the pinned checkout,
@@ -328,7 +353,7 @@ recovery procedure; use the offline procedure only when data recovery is actuall
 
 `coordination-pending.json` means a pause/resume outcome needs inspection: run the original
 resume procedure and verify the writers before removing that exact marker. `.incomplete-*`
-directories remain for inspection. Normal cancellation signals the helper and its active child
+directories remain for inspection. Interrupting a helper process signals the helper and its active child
 group with SIGINT, then escalates child termination within bounded waits. The resume hook gets
 its own 60-second deadline; additional SIGINT/SIGTERM signals are deferred until it finishes.
 A failed/timed-out resume or a force-killed helper retains its coordination evidence and blocks
@@ -928,7 +953,7 @@ The programs (`update.ProgramNames`): `persona-hub` and `persona-manager`, the h
 - **Release build**:
   - The hub checks 1 minute after startup, then every hour (every 6 hours until 2026-11-07, when the user asked for hourly so a release reaches hubs sooner); the App can "Check now" (`POST /api/v1/hub/update/check`);
   - It only fetches the manifest (a few KB): there is an update only if the build number is larger than its own and not in the bad-version list; the result is broadcast to open Apps.
-  - While an install is running or the new process has not confirmed the update, checks refresh `latest` and `last_check` without changing `state`, `progress` or `error`. This applies to manual checks, the first check after startup and hourly checks, including responses to requests started before the install. A failed check advances `last_check` and keeps the previous `latest`; it still returns an error to the caller. Confirmation also prevents a check from starting another automatic install.
+  - While an install is running or the new process has not confirmed the update, checks refresh `latest` and `last_check` without changing `state`, `progress` or `error`. This applies to manual checks, the first check after startup and hourly checks, including responses to requests started before the install. A failed release check advances `last_check` and keeps the previous `latest`; it still returns an error to the caller. Confirmation also prevents a check from starting another automatic install.
 - **Docker build**:
   - Every hour, query the image repository's tags (anonymous GHCR `tags/list`), take the highest stable semver, and show a notice if it is newer;
   - The hub installs nothing; Docker pulls the image and verifies by digest;
@@ -1116,15 +1141,15 @@ Download → Verify → Prepare → Wait for idle → Replace → Restart → Co
 
 | Method | Path | Description |
 | --- | --- | --- |
-| GET | `/api/v1/hub/update` | `{version, build, channel, can_update, latest?{version, build, released, notes, bad}, state, progress, busy[]{machine, session, title}, error, auto, auto_update_nodes, auto_notice, last_check, update_url?, update_url_from?, update_proxy?, source_behind?}` (the last four: "Update source"; `source_behind` only when true) |
-| POST | `/api/v1/hub/update/check` | Check immediately |
-| POST | `/api/v1/hub/update` | Start update (409 with a reason for non-release builds); `{"now": true}` is **Update Now** after the second confirmation, skipping the idle wait |
+| GET | `/api/v1/hub/update` | `{version, build, channel, can_update, supports_preview, latest?{version, build, released, notes, bad}, state, progress, busy[]{machine, session, title}, error, auto, auto_update_nodes, auto_notice, last_check, update_url?, update_url_from?, update_proxy?, source_behind?}` (the last four: "Update source"; `source_behind` only when true) |
+| POST | `/api/v1/hub/update/check` | Check immediately. An optional `{"preview": true}` refreshes status without automatic installation. |
+| POST | `/api/v1/hub/update` | Start update. On Web development, `{"target": "latest"}` resolves the latest commit under reservation. `{"now": true}` is **Update Now** after the second confirmation, skipping the idle wait |
 | PUT | `/api/v1/hub/update/settings` | `{auto}`; `{auto_notice_seen: true}`; `{auto_update_nodes: true\|false}` |
 | GET | `/api/v1/hub/update/history` | Update history, newest first |
 | GET | `/api/v1/skills` | Skills on the machine running the assistant: `[{name, description, source: user\|builtin}]` |
 | WS event | `hub_update` | Push to open Apps when state or progress changes |
 
-`state`: `idle` / `checking` / `available` / `downloading` / `waiting_idle` / `restarting` / `confirming` / `updated` / `rolled_back` / `failed`.
+`state`: `idle` / `checking` / `resolving` / `available` / `downloading` / `waiting_idle` / `restarting` / `confirming` / `updated` / `rolled_back` / `failed`.
 
 ### Runtime node update policy
 
