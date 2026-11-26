@@ -26,6 +26,8 @@ export struct HealthToday {
   @Local private amount: string = '';
   @Local private detail: boolean = false;
   @Local private detailClient: ClientModel | undefined = undefined;
+  @Local private demoWaterMl: number = 1500;
+  @Local private demoProteinGrams: number = 48;
   private amountOwner: string = '';
   private amountDialog: number = -1;
   private dialogEpoch: number = 0;
@@ -35,7 +37,7 @@ export struct HealthToday {
   aboutToDisappear(): void { this.mounted=false;this.syncDayClock();this.dismiss(); }
   @Monitor('env.foreground', 'intake.supported') syncDayClock(): void {
     if (this.clock!==-1) { clearInterval(this.clock);this.clock=-1; }
-    if (!this.mounted || !this.env.foreground || !this.intake.supported) return;
+    if (!this.mounted || !this.env.foreground || !this.intake.supported || this.model.demo) return;
     this.intake.refreshDay();this.clock=setInterval(() => this.intake.refreshDay(),60000);
   }
   @Monitor('model.profile', 'model.connected', 'intake.ownerKey') ownershipChanged(): void { this.dismiss(); }
@@ -54,6 +56,9 @@ export struct HealthToday {
   private unit(kind:string): string { return tr(kind==='water'?'intake_ml':'intake_g'); }
   // ArkUI retains the ring's child callbacks. Read the current traced snapshot inside each callback.
   private portion(kind: string): IntakePortion | undefined {
+    if (this.model?.demo) {
+      return kind === 'water' ? new IntakePortion(this.demoWaterMl, 2000) : new IntakePortion(this.demoProteinGrams, 60);
+    }
     return kind === 'water' ? this.intake.data?.water : this.intake.data?.protein;
   }
   private amountLabel(kind: string): string {
@@ -88,20 +93,31 @@ export struct HealthToday {
     this.detailClient=client;this.kind=kind;this.detail=true;
   }
   private async ask(kind:string): Promise<void> {
-    const client=this.intake.currentClient();if (!client || this.intake.busy || this.amountDialog!==-1) return;
+    const demo=this.model.demo, client=demo ? this.model : this.intake.currentClient();
+    if (!client || (!demo && this.intake.busy) || this.amountDialog!==-1) return;
     Haptics.tap();
-    this.kind=kind;this.amount='';this.amountOwner=this.intake.ownerKey;this.amountDialog=-2;
+    this.kind=kind;this.amount='';this.amountOwner=demo ? 'demo' : this.intake.ownerKey;this.amountDialog=-2;
     const version=++this.dialogEpoch,prompt=this.getUIContext().getPromptAction();
     try {
       const id=await prompt.openCustomDialog({builder:() => {this.amountEditor();},alignment:DialogAlignment.Center,
         autoCancel:true,onDidDisappear:() => {if (version===this.dialogEpoch) {this.amountDialog=-1;this.amount='';this.amountOwner='';}}});
-      if (!this.mounted || version!==this.dialogEpoch || client!==this.intake.currentClient()) { prompt.closeCustomDialog(id);return; }
+      const stillCurrent = demo ? this.model.demo && client===this.model : client===this.intake.currentClient();
+      if (!this.mounted || version!==this.dialogEpoch || !stillCurrent) { prompt.closeCustomDialog(id);return; }
       this.amountDialog=id;
     } catch (_) { if (version===this.dialogEpoch) this.amountDialog=-1; }
   }
   private submit(): void {
     const value=intakeAmount(this.kind,this.amount),kind=this.kind;
-    if (value===undefined || !this.amountOwner || this.amountOwner!==this.intake.ownerKey || !this.intake.currentClient() || this.intake.busy) return;
+    if (value===undefined) return;
+    if (this.model.demo) {
+      if (this.amountOwner!=='demo') return;
+      Haptics.success();
+      this.dismiss();
+      if (kind==='water') this.demoWaterMl=Math.round((this.demoWaterMl+value)*10)/10;
+      else this.demoProteinGrams=Math.round((this.demoProteinGrams+value)*10)/10;
+      return;
+    }
+    if (!this.amountOwner || this.amountOwner!==this.intake.ownerKey || !this.intake.currentClient() || this.intake.busy) return;
     Haptics.success();
     this.dismiss();this.intake.record(kind,value);
   }
@@ -113,11 +129,11 @@ export struct HealthToday {
         .onChange((text:string) => {this.amount=text;}).id('health.intake.amount').defaultFocus(true)
       Row({space:8}) {
         Button(tr('cancel')).layoutWeight(1).buttonStyle(ButtonStyleMode.TEXTUAL).onClick(() => { Haptics.tap(); this.dismiss(); }).id('health.intake.cancel')
-        Button(tr('intake_log')).layoutWeight(1).buttonStyle(ButtonStyleMode.TEXTUAL).enabled(intakeAmount(this.kind,this.amount)!==undefined && !this.intake.busy)
+        Button(tr('intake_log')).layoutWeight(1).buttonStyle(ButtonStyleMode.TEXTUAL).enabled(intakeAmount(this.kind,this.amount)!==undefined && (this.model.demo || !this.intake.busy))
           .onClick(() => this.submit()).id('health.intake.submit')
       }.width('100%')
     }.width('84%').constraintSize({maxWidth:360}).padding(20).backgroundColor(Colors.surface).borderRadius(24)
-      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:24})
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.env.dark),radius:24})
       .shadow(PhoneStyle.cardElevation(this.env.dark))
   }
   @Builder detailPage() {
@@ -162,7 +178,13 @@ export struct HealthToday {
         .maxLines(1).minFontSize('8vp').maxFontSize(Tokens.interfaceFontVp(12,this.env.fontScale)).textAlign(TextAlign.Center)
     }.layoutWeight(1).width('100%').height(this.metric(58,71.7)).padding({left:4,right:4})
       .backgroundColor(this.env.dark?'#38383A':'#FAFAFA').border({width:0.6,color:this.env.dark?'#25FFFFFF':'#13000000'})
-      .onClick(() => { if (id==='water') { Haptics.success(); this.intake.record('water'); } else this.ask(kind); }).id('health.intake.log.'+id)
+      .onClick(() => {
+        if (id==='water') {
+          Haptics.success();
+          if (this.model.demo) this.demoWaterMl+=250;
+          else this.intake.record('water');
+        } else this.ask(kind);
+      }).id('health.intake.log.'+id)
   }
   @Builder water() {
     Column({space:18}) {
@@ -177,7 +199,7 @@ export struct HealthToday {
       }.width('100%')
     }.width('100%').alignItems(HorizontalAlign.Center).padding({left:12,right:12,top:16,bottom:14})
       .backgroundColor(Colors.surface).borderRadius(22)
-      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:22})
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.env.dark),radius:22})
       .shadow(PhoneStyle.cardElevation(this.env.dark))
   }
   @Builder protein() {
@@ -186,14 +208,14 @@ export struct HealthToday {
       Row() { this.action('protein','intake_log_grams','protein') }.width('100%')
     }.width('100%').alignItems(HorizontalAlign.Center).padding({left:12,right:12,top:16,bottom:14})
       .backgroundColor(Colors.surface).borderRadius(22)
-      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:22})
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.env.dark),radius:22})
       .shadow(PhoneStyle.cardElevation(this.env.dark))
   }
   @Builder totals() {
     GridRow({columns:this.env.fontScale>=2.0 ? 1 : 2,gutter:{x:10,y:10}}) {
       GridCol({span:1}) { this.water() }
       GridCol({span:1}) { this.protein() }
-    }.width('100%').enabled(!this.intake.busy).id('health.intake.today')
+    }.width('100%').enabled(this.model.demo || !this.intake.busy).id('health.intake.today')
   }
   @Builder feedback() {
     if (this.intake.notice || this.intake.error) Row({space:8}) {
@@ -204,27 +226,30 @@ export struct HealthToday {
       else if (this.intake.error && !this.intake.data && this.intake.supported) Button(tr('retry')).buttonStyle(ButtonStyleMode.TEXTUAL)
         .onClick(() => { Haptics.tap(); this.intake.refresh(); }).id('health.intake.retry')
     }.width('100%').padding({left:14,right:10,top:8,bottom:8}).backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius)
-      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:PhoneStyle.cardRadius})
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.env.dark),radius:PhoneStyle.cardRadius})
       .shadow(PhoneStyle.cardElevation(this.env.dark)).animation(Motion.state(this.env.reduceMotion)).id('health.intake.feedback')
     if (this.intake.refreshError) Row({space:8}) {
       Text(tr(this.intake.refreshError)).fontSize(14).fontColor(Colors.secondary).layoutWeight(1)
       Button(tr('retry')).buttonStyle(ButtonStyleMode.TEXTUAL).onClick(() => { Haptics.tap(); this.intake.refresh(); }).id('health.intake.retry')
     }.width('100%').padding({left:14,right:10,top:6,bottom:6}).backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius)
-      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:PhoneStyle.cardRadius})
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.env.dark),radius:PhoneStyle.cardRadius})
+      .shadow(PhoneStyle.cardElevation(this.env.dark))
   }
   build() {
     Column({space:8}) {
       Text(tr('intake_today')).fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15)).fontWeight(FontWeight.Medium).fontColor(Colors.secondary)
         .height(this.metric(36,44)).width('100%').padding({left:12}).id('health.intake.heading')
-      if (!this.model.connected || this.model.demo || !this.model.features.includes('health_intake') || (!this.intake.available && !this.resolving) || (!this.intake.data && !this.intake.error)) {
+      if (this.model.demo) {
+        this.totals()
+      } else if (!this.model.connected || !this.model.features.includes('health_intake') || (!this.intake.available && !this.resolving) || (!this.intake.data && !this.intake.error)) {
         Column({space:8}) {
-          if (!this.model.connected || this.model.demo) Text(tr('offline')).fontSize(15).fontColor(Colors.secondary)
+          if (!this.model.connected) Text(tr('offline')).fontSize(15).fontColor(Colors.secondary)
           else if (!this.model.features.includes('health_intake')) Text(tr('health_intake_update')).fontSize(15).fontColor(Colors.secondary).id('health.intake.update')
           else if (!this.intake.available && !this.resolving) Text(tr(this.unavailable || 'health_default_manager_unavailable')).fontSize(15).fontColor(Colors.secondary)
           else LoadingProgress().width(30).height(30)
         }.width('100%').alignItems(HorizontalAlign.Start).padding({left:20,right:20,top:20,bottom:16})
           .backgroundColor(Colors.surface).borderRadius(22)
-          .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:22})
+          .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.env.dark),radius:22})
           .shadow(PhoneStyle.cardElevation(this.env.dark))
       } else if (this.intake.data) {
         this.totals()

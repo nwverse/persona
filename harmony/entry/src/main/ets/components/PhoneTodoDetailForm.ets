@@ -116,7 +116,7 @@ export struct PhoneTodoDetailForm {
       if (this.workspace.selected.doneReason) Text(this.workspace.selected.doneReason).fontSize(14).maxFontScale(Tokens.interfaceScaleFor(14)).fontColor(Colors.secondary)
     }.alignItems(HorizontalAlign.Start).width('100%').constraintSize({minHeight:this.metric(94.3,109)}).padding({left:20,right:20,top:19,bottom:15})
       .backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius)
-      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:PhoneStyle.cardRadius})
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(nativeEnvironment.dark),radius:PhoneStyle.cardRadius})
       .shadow(PhoneStyle.cardElevation(nativeEnvironment.dark)).id('todo.detail')
   }
   @Builder words(value: string) {
@@ -204,7 +204,7 @@ export struct PhoneTodoDetailForm {
         this.rule(60);this.choiceRow('priority')
         this.rule(60);this.choiceRow('project')
       }.width('100%').backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius)
-        .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:PhoneStyle.cardRadius})
+        .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(nativeEnvironment.dark),radius:PhoneStyle.cardRadius})
         .shadow(PhoneStyle.cardElevation(nativeEnvironment.dark)).clip(true)
         .animation(Motion.layout(nativeEnvironment.reduceMotion))
       if (this.workspace.selected.startError || this.workspace.selected.origin && !this.workspace.selected.agents.length)

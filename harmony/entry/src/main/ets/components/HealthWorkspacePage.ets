@@ -290,7 +290,7 @@ export struct HealthWorkspacePage {
       }
     }.width('100%').alignItems(HorizontalAlign.Start).padding(Tokens.inset)
       .backgroundColor($r('sys.color.comp_background_tertiary')).borderRadius(PhoneStyle.cardRadius)
-      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:PhoneStyle.cardRadius})
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:PhoneStyle.cardRadius})
       .animation(Motion.layout(this.environment.reduceMotion))
   }
 
@@ -313,7 +313,7 @@ export struct HealthWorkspacePage {
         .id('health.memory.index')
       if (this.workspace.selectedMemory) this.memoryDetail(UIUtils.makeBinding((): HealthMemoryFile => this.workspace.selectedMemory || new HealthMemoryFile()))
     }.width('100%').alignItems(HorizontalAlign.Start).padding(16).backgroundColor(Colors.surface).borderRadius(22)
-      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:22})
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:22})
       .shadow(PhoneStyle.cardElevation(this.environment.dark))
   }
 
@@ -338,10 +338,10 @@ export struct HealthWorkspacePage {
           }.width('100%')
         }.width('100%').alignItems(HorizontalAlign.Start).padding(Tokens.inset)
           .backgroundColor($r('sys.color.comp_background_tertiary')).borderRadius(PhoneStyle.cardRadius)
-          .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:PhoneStyle.cardRadius})
+          .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:PhoneStyle.cardRadius})
       }, (binding: BoundRow<HealthReport>) => binding.key)
     }.width('100%').alignItems(HorizontalAlign.Start).padding(16).backgroundColor(Colors.surface).borderRadius(22)
-      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:22})
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:22})
       .shadow(PhoneStyle.cardElevation(this.environment.dark))
   }
 
@@ -396,7 +396,7 @@ export struct HealthWorkspacePage {
             .onClick(() => this.send(tr(key))).id('health.suggestion.'+key)
         }, (key: string) => key)
       }.width('100%').alignItems(HorizontalAlign.Start).backgroundColor(Colors.surface).borderRadius(26)
-        .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:26})
+        .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:26})
         .shadow(PhoneStyle.cardElevation(this.environment.dark)).clip(true)
     }.width('100%').alignItems(HorizontalAlign.Start)
   }
@@ -412,7 +412,7 @@ export struct HealthWorkspacePage {
         .width('100%').id('health.privacy.note')
     }.width('100%').alignItems(HorizontalAlign.Start).padding({left:20,right:20,top:16,bottom:16})
       .backgroundColor(Colors.surface).borderRadius(26)
-      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:26})
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:26})
       .shadow(PhoneStyle.cardElevation(this.environment.dark)).id('health.privacy')
   }
 
@@ -497,7 +497,7 @@ export struct HealthWorkspacePage {
           }})
       }
     }.width('100%').padding({left:4,right:4,top:2,bottom:2}).backgroundColor(Colors.surface).borderRadius(this.composerControl()/2+2)
-      .outline({width:0.5,color:Colors.styleEdge || $r('sys.color.comp_divider'),radius:this.composerControl()/2+2})
+      .outline({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.floatingBorder(this.environment.dark),radius:this.composerControl()/2+2})
       .shadow(PhoneStyle.cardElevation(this.environment.dark))
     }.width('100%').padding({left:this.healthSidePadding(),right:this.healthSidePadding(),top:8,bottom:this.composerBottomPadding})
   }

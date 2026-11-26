@@ -126,7 +126,7 @@ export struct ResourcePage {
             Column() {
               ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: binding.value.title || binding.value.id, secondaryText: binding.value.detail || undefined }) })
             }.width('100%').padding({ left: 6, right: 6, top: 2, bottom: 2 }).backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius)
-              .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: Colors.styleEdge || Colors.divider, radius: PhoneStyle.cardRadius })
+              .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: PhoneStyle.cardRadius })
               .shadow(PhoneStyle.cardElevation(this.environment.dark))
           }.onClick(() => { Haptics.tap(); this.onOpen(binding.value); }).id('resource.' + binding.value.id)
         }, (binding: BoundRow<ResourceRow>) => binding.key)
@@ -143,7 +143,7 @@ export struct ResourcePage {
           Column() {
             MarkdownText({ text: this.model.selected.detail, onLink: (address: string) => this.onLink(address) })
           }.width('100%').padding(16).alignItems(HorizontalAlign.Start).backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius)
-            .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: Colors.styleEdge || Colors.divider, radius: PhoneStyle.cardRadius })
+            .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: PhoneStyle.cardRadius })
             .shadow(PhoneStyle.cardElevation(this.environment.dark))
           Row({ space: Tokens.gap }) {
             if (this.model.selected.kind === 'todo') {

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { registerHooks, stripTypeScriptTypes } from 'node:module';
 import {
   WORKSPACE_A11Y_SINGLE_COL_FONT_SCALE,
   WORKSPACE_ULTRA_WIDE_BREAKPOINT_VP,
@@ -9,6 +10,21 @@ import {
   workspaceGridGutter,
   workspaceHorizontalPadding
 } from '../entry/src/main/ets/core/WorkspaceGrid.ts';
+
+registerHooks({
+  resolve(specifier, context, next) {
+    if (specifier.endsWith('/Wire') && context.parentURL?.endsWith('/MachineDashboard.ets')) {
+      return { url: new URL(specifier + '.ets', context.parentURL).href, shortCircuit: true };
+    }
+    return next(specifier, context);
+  },
+  load(url, context, next) {
+    if (!url.endsWith('/MachineDashboard.ets') && !url.endsWith('/Wire.ets')) return next(url, context);
+    const raw = readFileSync(new URL(url), 'utf8').replace(/@ObservedV2\s*/g, '').replace(/@Trace\s+/g, '');
+    return { format: 'module', source: stripTypeScriptTypes(raw), shortCircuit: true };
+  }
+});
+const { formatMachineLoad } = await import('../entry/src/main/ets/models/MachineDashboard.ets');
 
 test('workspaceGridColumns adapts from straight phone to Mate X7 dual-fold and Mate XT tri-fold', () => {
   assert.equal(WORKSPACE_WIDE_BREAKPOINT_VP, 560);
@@ -82,4 +98,44 @@ test('all five secondary workspaces wire flagship elevation, haptics, and foldab
   assert.match(read('HealthToday.ets'), /PhoneStyle\.cardElevation\(/);
   assert.match(read('MachineSubscriptionCards.ets'), /PhoneStyle\.cardElevation\(/);
   assert.match(read('PhoneTodoDetailForm.ets'), /PhoneStyle\.cardElevation\(/);
+});
+
+test('all secondary workspace cards use borderless Liquid Glass PhoneStyle.cardBorder and support Mate XT 2 3-column grids', () => {
+  const read = (file) => readFileSync(new URL('../entry/src/main/ets/components/' + file, import.meta.url), 'utf8');
+  for (const file of [
+    'InboxWorkspacePage.ets',
+    'TodoWorkspacePage.ets',
+    'PhoneTodoDetailForm.ets',
+    'KnowledgeWorkspacePage.ets',
+    'KnowledgeRecordingView.ets',
+    'HealthWorkspacePage.ets',
+    'HealthToday.ets',
+    'MachineDirectory.ets',
+    'MachineSubscriptionCards.ets',
+    'ResourcePage.ets'
+  ]) {
+    const source = read(file);
+    assert.match(source, /PhoneStyle\.cardBorder\(/, file + ' uses PhoneStyle.cardBorder');
+    assert.doesNotMatch(source, /Colors\.styleEdge\s*\|\|\s*Colors\.divider/, file + ' removes hardcoded divider fallback border');
+  }
+  assert.match(read('MachineDirectory.ets'), /workspaceGridColumns\([^)]+,\s*3\)/);
+  assert.match(read('MachineSubscriptionCards.ets'), /workspaceGridColumns\([^)]+,\s*3\)/);
+  assert.match(read('KnowledgeWorkspacePage.ets'), /workspaceGridColumns\([^)]+,\s*3\)/);
+  assert.match(read('MachineDirectory.ets'), /formatMachineLoad\(/);
+  assert.match(read('MachineDirectory.ets'), /tr\('machine_load_per_core'\)/);
+  const healthToday = read('HealthToday.ets');
+  assert.match(healthToday, /demoWaterMl:\s*number\s*=\s*1500/);
+  assert.match(healthToday, /demoProteinGrams:\s*number\s*=\s*48/);
+  assert.match(healthToday, /if\s*\(this\.model\.demo\)\s*\{\s*this\.totals\(\)/);
+});
+
+test('formatMachineLoad formats raw and per-core load clearly and falls back when cores are unavailable', () => {
+  assert.equal(formatMachineLoad(2.4, 12, '{per}/core'), '2.4 · 0.2/core');
+  assert.equal(formatMachineLoad(25.4, 18, '{per}/core'), '25.4 · 1.4/core');
+  assert.equal(formatMachineLoad(2.4, 12, '{per}/核'), '2.4 · 0.2/核');
+  assert.equal(formatMachineLoad(2.4, 12, '{per}/コア'), '2.4 · 0.2/コア');
+  assert.equal(formatMachineLoad(2.45, 0, '{per}/core'), '2.45');
+  assert.equal(formatMachineLoad(12.0, -1, '{per}/core'), '12');
+  assert.equal(formatMachineLoad(-1, 8, '{per}/core'), '—');
+  assert.equal(formatMachineLoad(Number.NaN, 8, '{per}/core'), '—');
 });

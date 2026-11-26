@@ -848,7 +848,7 @@ export struct InboxWorkspacePage {
               }.layoutWeight(1).alignItems(HorizontalAlign.Start)
             }.width('100%').constraintSize({minHeight:PhoneStyle.formSize(86,108,this.environment.fontScale)}).alignItems(VerticalAlign.Top)
               .padding({left:14,right:14,top:12,bottom:12}).backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius)
-              .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:PhoneStyle.cardRadius})
+              .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:PhoneStyle.cardRadius})
               .shadow(PhoneStyle.cardElevation(this.environment.dark))
           }.onClick(() => this.openRow(binding.value)).accessibilityGroup(true).id('inbox.' + inboxLineKey(binding.value))
         }, (binding: BoundRow<ResourceRow>) => binding.key)
@@ -969,7 +969,7 @@ export struct InboxWorkspacePage {
       }
     }.width('100%').padding(Tokens.inset).alignItems(HorizontalAlign.Start)
       .backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius)
-      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: Colors.styleEdge || Colors.divider, radius: PhoneStyle.cardRadius })
+      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: PhoneStyle.cardRadius })
       .shadow(PhoneStyle.cardElevation(this.environment.dark))
       .onVisibleAreaChange([0, 1], (visible: boolean, ratio: number) => { if (visible && ratio > 0) this.workspace.markMessageVisible(message); })
   }
@@ -1040,7 +1040,7 @@ export struct InboxWorkspacePage {
       if (this.hasMailTranslation(message) && Wire.bool(this.workspace.mailTranslation, 'clipped')) Text(tr('inbox_translation_clipped')).fontSize(Tokens.meta).maxFontScale(Tokens.interfaceScaleFor(Tokens.meta)).fontColor($r('sys.color.font_secondary'))
     }.width('100%').padding(Tokens.inset).alignItems(HorizontalAlign.Start)
       .backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius)
-      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: Colors.styleEdge || Colors.divider, radius: PhoneStyle.cardRadius })
+      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: PhoneStyle.cardRadius })
       .shadow(PhoneStyle.cardElevation(this.environment.dark))
       .onVisibleAreaChange([0, 1], (visible: boolean, ratio: number) => { if (visible && ratio > 0) this.workspace.markMailVisible(message.uid); })
   }

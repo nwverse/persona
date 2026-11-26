@@ -787,8 +787,8 @@ export struct TodoWorkspacePage {
           {width:{left:PhoneStyle.surfaceEdgeWidth(0.5),right:PhoneStyle.surfaceEdgeWidth(0.5),
             top:section.rows[0]===binding ? PhoneStyle.surfaceEdgeWidth(0.5) : 0,
             bottom:section.rows[section.rows.length-1]===binding ? PhoneStyle.surfaceEdgeWidth(0.5) : 0},
-            color:Colors.styleEdge || Colors.divider} :
-          {width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:PhoneStyle.cardRadius})
+            color:PhoneStyle.cardBorder(nativeEnvironment.dark)} :
+          {width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(nativeEnvironment.dark),radius:PhoneStyle.cardRadius})
         .shadow(PhoneStyle.cardElevation(nativeEnvironment.dark))
     }.id('todo.'+binding.value.lead.manager+'.'+binding.value.lead.id)
   }
@@ -1228,7 +1228,9 @@ export struct TodoWorkspacePage {
           }.padding(0).backgroundColor(Color.Transparent).alignSelf(ItemAlign.Start).onClick(()=>this.workspace.setDueFilter('all')).id('todos.due.show_all')
         }.alignItems(HorizontalAlign.Start).layoutWeight(1)
       }.width('100%').padding({left:12,right:12,top:8,bottom:8}).alignItems(VerticalAlign.Top).margin({top:this.phoneMeasure(10.3,8)})
-        .backgroundColor($r('app.color.todo_notice_fill')).border({width:0.5,color:Colors.divider,radius:14}).id('todos.due.hidden')
+        .backgroundColor($r('app.color.todo_notice_fill'))
+        .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(nativeEnvironment.dark),radius:14})
+        .shadow(PhoneStyle.cardElevation(nativeEnvironment.dark)).id('todos.due.hidden')
     }.width('100%').padding({left:32,right:32,top:this.phoneMeasure(10,8),bottom:this.hiddenWaitingCount ? 8 : this.phoneMeasure(10.3,8)})
   }
   @Builder listContent() {
@@ -1359,7 +1361,7 @@ export struct TodoWorkspacePage {
           .fontColor(handoff ? Colors.onAction : Colors.ink).maxLines(1)
       }.justifyContent(FlexAlign.Center).width('100%')
     }.width('100%').height(this.detailFooterHeight()).padding({left:8,right:8}).backgroundColor(handoff ? Colors.action : Colors.surface)
-      .border({width:handoff ? 0 : PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:this.detailFooterHeight()/2})
+      .border({width:handoff ? 0 : PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(nativeEnvironment.dark),radius:this.detailFooterHeight()/2})
       .shadow(PhoneStyle.cardElevation(nativeEnvironment.dark)).enabled(this.workspace.detailEditable() && !this.workspace.saving)
       .onClick(() => { if (handoff) { Haptics.tap(); this.onCreateAgent(this.workspace.todoResource(this.workspace.selected)); } else this.changeCompletion(); })
       .id(handoff ? 'todo.handToAgent' : 'todo.toggleDone')
@@ -1392,7 +1394,7 @@ export struct TodoWorkspacePage {
             if (this.workspace.selected.notes) MarkdownText({text:this.workspace.selected.notes,onLink:(address:string) => this.onLink(address)})
             else Text(tr('todo_detail_empty_notes')).fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15)).fontColor(Colors.secondary)
           }.alignItems(HorizontalAlign.Start).width('100%').padding(16).backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius)
-            .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:PhoneStyle.cardRadius})
+            .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(nativeEnvironment.dark),radius:PhoneStyle.cardRadius})
             .shadow(PhoneStyle.cardElevation(nativeEnvironment.dark))
           if (this.workspace.selected.project) {
             Row() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: this.workspace.projectTitle(this.workspace.selected) }) }) }

@@ -126,7 +126,7 @@ struct KnowledgeLibraryRow {
       SymbolGlyph(Symbols.expand).fontSize('12vp').width(12).fontColor([Colors.secondary]).alignSelf(ItemAlign.Center)
     }.width('100%').alignItems(VerticalAlign.Top).padding({left:this.cardSurface ? 16 : 20,right:this.cardSurface ? 14 : 18,top:this.cardSurface ? 16 : 19,bottom:this.cardSurface ? 16 : 19}).constraintSize({minHeight:63})
       .backgroundColor(Colors.surface).borderRadius(this.cardSurface ? PhoneStyle.cardRadius : 0)
-      .border(this.cardSurface ? {width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:PhoneStyle.cardRadius} : {width:0})
+      .border(this.cardSurface ? {width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:PhoneStyle.cardRadius} : {width:0})
       .shadow(this.cardSurface ? PhoneStyle.cardElevation(this.environment.dark) : {radius:0,color:Color.Transparent})
       .accessibilityGroup(true).onClick(() => { Haptics.tap(); this.open(); }).id('knowledge.entry.'+this.row.path+'.'+this.row.id)
   }
@@ -154,7 +154,7 @@ struct RecordingProfileCard {
           if (Number.isFinite(height) && this.measuredHeight!==height) this.measuredHeight=height;
         })
     }.width('100%').borderRadius(29)
-      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:29})
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:29})
       .shadow(PhoneStyle.cardElevation(this.environment.dark)).id('knowledge.summary')
   }
 }
@@ -571,7 +571,7 @@ export struct KnowledgeWorkspacePage {
   }
 
   private knowledgeColumns(): number {
-    return workspaceGridColumns(this.rootWidth, this.environment.fontScale, 2);
+    return workspaceGridColumns(this.rootWidth, this.environment.fontScale, 3);
   }
   private knowledgeSidePadding(): number {
     return workspaceHorizontalPadding(this.rootWidth);
@@ -582,7 +582,7 @@ export struct KnowledgeWorkspacePage {
       .height(this.landingMenu ? PhoneStyle.formSize(44,58,this.environment.fontScale) : Math.max(44,Math.ceil(28*Math.min(this.environment.fontScale,Tokens.interfaceScaleFor(17)))+10))
       .margin({top:this.landingMenu ? 0 : 8,bottom:this.landingMenu ? 0 : 8}).textFont({size:17})
       .borderRadius(27).backgroundColor(meetings ? Colors.control : Colors.surface)
-      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:27})
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:27})
       .shadow(PhoneStyle.cardElevation(this.environment.dark))
       .onChange((value:string) => this.workspace.setQuery(value)).id('knowledge.search')
   }
@@ -598,7 +598,7 @@ export struct KnowledgeWorkspacePage {
       ForEach(hit.hits.slice(0,2), (line:string,index:number) => Text(line).fontSize(14).maxFontScale(Tokens.interfaceScaleFor(14)).fontColor(Colors.secondary)
         .maxLines(2).textOverflow({overflow:TextOverflow.Ellipsis}), (line:string,index:number) => JSON.stringify([index, line]))
     }.width('100%').padding(14).alignItems(HorizontalAlign.Start).backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius)
-      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:PhoneStyle.cardRadius})
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:PhoneStyle.cardRadius})
       .shadow(PhoneStyle.cardElevation(this.environment.dark))
       .onClick(() => { Haptics.tap(); this.workspace.openEntry(hit.entry).then((next:ResourceRow) => this.onOpenResource(next)).catch(() => undefined); })
       .id('knowledge.hit.' + hit.entry.path + '.' + hit.entry.id)
@@ -724,7 +724,7 @@ export struct KnowledgeWorkspacePage {
                     ListItem() { this.libraryRow(binding.value) }
                   }, (binding: BoundRow<ResourceRow>) => binding.key)
                 }.divider({strokeWidth:0.5,color:Colors.divider,startMargin:68,endMargin:20}).backgroundColor(Colors.surface).borderRadius(29)
-                  .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:29})
+                  .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:29})
                   .shadow(PhoneStyle.cardElevation(this.environment.dark)).clip(true)
               }
             }
@@ -749,7 +749,7 @@ export struct KnowledgeWorkspacePage {
               this.sectionEntries()
             }.divider({strokeWidth:0.5,color:Colors.divider,startMargin:this.workspace.query.trim() ? 56 : 68,endMargin:this.workspace.query.trim() ? 0 : 20})
               .backgroundColor(Colors.surface).borderRadius(this.workspace.query.trim() ? 14 : 29)
-              .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:this.workspace.query.trim() ? 14 : 29})
+              .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:this.workspace.query.trim() ? 14 : 29})
               .shadow(PhoneStyle.cardElevation(this.environment.dark)).clip(true)
           }
         }
@@ -852,7 +852,7 @@ export struct KnowledgeWorkspacePage {
                 .onClick(() => { this.setMeetingKind('meeting'); this.meetingTitle=event.title; this.selectedCalendarEvent=event.id; this.calendarEvents=[]; this.calendarState=''; })
             },(event:MeetingOccurrence) => event.key())
           }.width('100%').borderRadius(24).backgroundColor(Colors.surface)
-            .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:24})
+            .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:24})
             .shadow(PhoneStyle.cardElevation(this.environment.dark))
         }
         ListItem() {
@@ -903,7 +903,7 @@ export struct KnowledgeWorkspacePage {
                 .accessibilityText(tr('meeting_transcription_label')+' · '+(this.hubUnavailable() ? tr('meeting_hub_unavailable') : this.sourceName(false)))
                 .id('recordings.transcription')
           }.width('100%').alignItems(HorizontalAlign.Start).borderRadius(24).backgroundColor(Colors.surface)
-            .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:24})
+            .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:24})
             .shadow(PhoneStyle.cardElevation(this.environment.dark))
         }.margin({top:35})
         ListItem() {
@@ -921,7 +921,7 @@ export struct KnowledgeWorkspacePage {
               }.layoutWeight(1).alignItems(HorizontalAlign.Start)
               SymbolGlyph(Symbols.expand).fontSize('12vp').fontColor([Colors.secondary])
             }.width('100%').padding(14).borderRadius(PhoneStyle.cardRadius).backgroundColor(Colors.surface)
-              .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:PhoneStyle.cardRadius})
+              .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:PhoneStyle.cardRadius})
               .shadow(PhoneStyle.cardElevation(this.environment.dark))
               .onClick(() => { Haptics.tap(); this.openRecording(entry.id); }).id('recordings.local.' + entry.id)
           }.margin({top:10})
@@ -932,7 +932,7 @@ export struct KnowledgeWorkspacePage {
             Text(tr('phone_all_meetings')).fontSize(17).maxFontScale(Tokens.interfaceScaleFor(17)).fontColor(Colors.ink).layoutWeight(1)
             SymbolGlyph(Symbols.expand).fontSize('12vp').fontColor([Colors.secondary])
           }.width('100%').padding({left:20,right:20,top:6,bottom:6}).constraintSize({minHeight:this.recordingMetric(52.3,59.3)}).backgroundColor(Colors.surface).borderRadius(24)
-            .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:24})
+            .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:24})
             .shadow(PhoneStyle.cardElevation(this.environment.dark))
             .onClick(() => { Haptics.tap(); this.onAllMeetings(); }).id('recordings.all')
         }.margin({top:18})
@@ -1138,8 +1138,9 @@ export struct KnowledgeWorkspacePage {
         }.height(32).padding(0).backgroundColor(Color.Transparent).enabled(!this.workspace.busy)
           .accessibilityText(tr('ks_undo')).onClick(() => { this.undoFacts().catch(() => {}); }).id('knowledge.facts.undo')
       }.constraintSize({maxWidth:'94%',minHeight:44}).margin({top:8}).padding({left:16,right:16,top:4,bottom:4})
-        .backgroundColor(Colors.surface).borderRadius(28).border({width:0.5,color:Colors.divider})
-        .shadow({radius:6,color:Colors.subtle,offsetY:2}).hitTestBehavior(HitTestMode.Transparent).id('knowledge.facts.undo_notice')
+        .backgroundColor(Colors.surface).borderRadius(28)
+        .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.floatingBorder(this.environment.dark),radius:28})
+        .shadow(PhoneStyle.floatingElevation(this.environment.dark)).hitTestBehavior(HitTestMode.Transparent).id('knowledge.facts.undo_notice')
     }
   }
 
@@ -1260,7 +1261,7 @@ export struct KnowledgeWorkspacePage {
                 .fontSize(17).maxFontScale(Tokens.interfaceFontMaxScale).fontColor(Colors.link).layoutWeight(1).maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis})
             }.width('100%')
           }.width('100%').constraintSize({minHeight:44}).padding({left:20,right:20}).backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius)
-            .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:PhoneStyle.cardRadius})
+            .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:PhoneStyle.cardRadius})
             .shadow(PhoneStyle.cardElevation(this.environment.dark))
             .onClick(() => {
               Haptics.tap();
@@ -1283,7 +1284,7 @@ export struct KnowledgeWorkspacePage {
             .padding({left:20,right:20,top:0,bottom:0}).backgroundColor(Color.Transparent)
             .onClick(() => this.openFacts()).id('knowledge.facts.open')
         }.width('100%').alignItems(HorizontalAlign.Start).backgroundColor(Colors.surface).borderRadius(29)
-          .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:29})
+          .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:29})
           .shadow(PhoneStyle.cardElevation(this.environment.dark))
           .bindSheet(this.facts.open,this.recordingFactsEditor(),{height:this.facts.baseline ? SheetSize.MEDIUM : SheetSize.LARGE,
             detents:this.facts.baseline ? [SheetSize.MEDIUM,SheetSize.LARGE] : [SheetSize.LARGE,SheetSize.MEDIUM],
@@ -1302,7 +1303,7 @@ export struct KnowledgeWorkspacePage {
           this.recordingHeading('directory')
           Text(Wire.text(this.workspace.detail,'path')).fontFamily('monospace').fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.secondary).width('100%')
             .padding({left:20,right:20,top:15,bottom:15}).backgroundColor(Colors.surface).borderRadius(29)
-            .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:29})
+            .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:29})
             .shadow(PhoneStyle.cardElevation(this.environment.dark)).copyOption(CopyOptions.LocalDevice).id('knowledge.recording.directory')
           this.recordingFootnote('recording_detail_folder_access')
         }
@@ -1332,7 +1333,7 @@ export struct KnowledgeWorkspacePage {
           Column({ space: Tokens.gap }) { Text(tr(this.workspace.selected.path === 'recordings' ? 'knowledge_recording_summary' : 'knowledge_profile')).fontSize(Tokens.body).maxFontScale(Tokens.interfaceScaleFor(Tokens.body)).fontWeight(FontWeight.Medium)
             MarkdownText({ text: Wire.text(this.workspace.detail, 'summary'), onLink: (url: string) => this.openSafeLink(url) })
           }.width('100%').alignItems(HorizontalAlign.Start).padding(16).backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius)
-            .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:PhoneStyle.cardRadius})
+            .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:PhoneStyle.cardRadius})
             .shadow(PhoneStyle.cardElevation(this.environment.dark)).id('knowledge.summary')
         }
 
@@ -1350,7 +1351,7 @@ export struct KnowledgeWorkspacePage {
                   }
                 }, (source:Record<string,Object>) => JSON.stringify([Wire.text(source,'kind'),Wire.text(source,'id')]))
               }.width('100%').alignItems(HorizontalAlign.Start).padding(14).backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius)
-                .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:PhoneStyle.cardRadius})
+                .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:PhoneStyle.cardRadius})
                 .shadow(PhoneStyle.cardElevation(this.environment.dark))
                 .id('knowledge.point.' + Wire.text(point,'id'))
             }, (point:Record<string,Object>) => JSON.stringify(point))

@@ -139,7 +139,7 @@ export struct KnowledgeRecordingView {
         Text(tr('meeting_audio_withdraw_note')).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.secondary)
       }
     }.width('100%').alignItems(HorizontalAlign.Start).padding(15).backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius)
-      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:PhoneStyle.cardRadius})
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:PhoneStyle.cardRadius})
       .shadow(PhoneStyle.cardElevation(this.environment.dark)).id('recordings.hub')
   }
 
@@ -174,7 +174,7 @@ export struct KnowledgeRecordingView {
           .id('recordings.room.ask')
       }.width('100%')
     }.width('100%').alignItems(HorizontalAlign.Start).padding(15).backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius)
-      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:PhoneStyle.cardRadius})
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:PhoneStyle.cardRadius})
       .shadow(PhoneStyle.cardElevation(this.environment.dark)).id('recordings.room')
   }
   build() {
@@ -203,7 +203,7 @@ export struct KnowledgeRecordingView {
         if (this.model.hubAudio.phase==='device' && this.model.entry?.askedTranscription!=='hub') Text(tr('phone_record_audio_local')).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.secondary).width('100%')
       }.width('100%').alignItems(HorizontalAlign.Start).padding(15).backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius)
         .border({width:this.model.captureState === 'recording' ? 0.8 : PhoneStyle.surfaceEdgeWidth(0.5),
-          color:this.model.captureState === 'recording' ? Colors.danger : (Colors.styleEdge || Colors.divider),radius:PhoneStyle.cardRadius})
+          color:this.model.captureState === 'recording' ? Colors.danger : PhoneStyle.cardBorder(this.environment.dark),radius:PhoneStyle.cardRadius})
         .shadow(PhoneStyle.cardElevation(this.environment.dark))
         .animation(Motion.state(this.environment.reduceMotion))
       if (this.hasHubTranscription()) this.hubTranscription()
@@ -229,13 +229,13 @@ export struct KnowledgeRecordingView {
         if (this.model.canRetryUpload()) Button(tr('knowledge_recording_retry_upload'),{buttonStyle:ButtonStyleMode.TEXTUAL}).maxFontScale(Tokens.interfaceFontMaxScale)
           .onClick(() => { Haptics.tap(); this.model.retryUpload().catch(() => false); }).id('knowledge.recording.retry_upload')
       }.width('100%').padding(6).backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius)
-        .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:PhoneStyle.cardRadius})
+        .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:PhoneStyle.cardRadius})
         .shadow(PhoneStyle.cardElevation(this.environment.dark))
       if (this.model.entry?.transcript) Column({space:6}) {
         Text(tr('knowledge_transcript')).fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15)).fontWeight(FontWeight.Medium).fontColor(Colors.secondary)
         Text(this.model.entry!.transcript).fontSize(17).fontColor(Colors.ink).copyOption(CopyOptions.LocalDevice).id('knowledge.recording.transcript')
       }.width('100%').alignItems(HorizontalAlign.Start).padding(14).backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius)
-        .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:PhoneStyle.cardRadius})
+        .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:PhoneStyle.cardRadius})
         .shadow(PhoneStyle.cardElevation(this.environment.dark))
       if (this.model.canDeleteLocal()) Button(tr('knowledge_recording_delete_local'),{buttonStyle:ButtonStyleMode.TEXTUAL}).maxFontScale(Tokens.interfaceFontMaxScale).fontColor(Colors.danger)
         .onClick(() => { Haptics.attention(); this.onDeleteLocal(); }).id('knowledge.recording.delete_local')

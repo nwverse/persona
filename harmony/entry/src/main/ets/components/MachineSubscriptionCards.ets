@@ -154,7 +154,7 @@ export struct MachineSubscriptionCards {
   @Monitor('active') ticking():void {clearInterval(this.timer);if(this.active){this.now=Date.now();this.timer=setInterval(()=>{if(this.model.isAppInForeground())this.now=Date.now();},1000);}}
   @Computed get groups():SubscriptionProvider[] {return subscriptionGroups(this.source.accounts,this.now);}
   @Computed get visibleGroups():SubscriptionProvider[] {return this.groups.filter((g:SubscriptionProvider)=>!this.source.hidden.includes(g.provider));}
-  private cardColumns():number {return workspaceGridColumns(this.gridWidth,nativeEnvironment.fontScale,2);}
+  private cardColumns():number {return workspaceGridColumns(this.gridWidth,nativeEnvironment.fontScale,3);}
   private accent():ResourceColor {
     const palette=deviceLook.palette(this.model.style),dark=nativeEnvironment.dark;
     return deviceLookIconAccent(deviceLook.accentId,this.model.style,dark,dark ? palette.dark : palette.light);
@@ -218,7 +218,7 @@ export struct MachineSubscriptionCards {
         SubscriptionTimeline({accounts:g.accounts.filter((a:SubscriptionAccount)=>Number.isFinite(a.planReset(300,this.now)) || Number.isFinite(a.planReset(10080,this.now))),now:this.now,locale:this.locale()})
       }
     }.alignItems(HorizontalAlign.Start).width('100%').padding(14).backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius)
-      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:Colors.styleEdge || Colors.divider,radius:PhoneStyle.cardRadius})
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(nativeEnvironment.dark),radius:PhoneStyle.cardRadius})
       .shadow(PhoneStyle.cardElevation(nativeEnvironment.dark)).id('usage.card.'+g.provider)
   }
   @Builder filterIcon() {
