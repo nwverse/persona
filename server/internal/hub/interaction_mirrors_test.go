@@ -476,8 +476,8 @@ func TestApprovalMirrorsRequireClientCapabilityEverywhere(t *testing.T) {
 	stream := h.events.stream
 	replayLegacy := &client{out: make(chan []byte, 16)}
 	replayCapable := &client{out: make(chan []byte, 16), urlFeatures: map[string]bool{featureApprovalMirrors: true}}
-	h.helloLocked(replayLegacy, map[string]any{"type": "hello"}, stream, 0, true)
-	h.helloLocked(replayCapable, map[string]any{"type": "hello"}, stream, 0, true)
+	h.helloLocked(replayLegacy, wsHello{Type: "hello"}, stream, 0, true)
+	h.helloLocked(replayCapable, wsHello{Type: "hello"}, stream, 0, true)
 	h.mu.Unlock()
 	<-replayLegacy.out  // hello
 	<-replayCapable.out // hello
@@ -540,8 +540,8 @@ func TestMirrorResolutionRequiresClientCapabilityLiveAndReplay(t *testing.T) {
 	stream := h.events.stream
 	replayLegacy := &client{out: make(chan []byte, 16)}
 	replayCapable := &client{out: make(chan []byte, 16), urlFeatures: map[string]bool{featureApprovalMirrors: true}}
-	h.helloLocked(replayLegacy, map[string]any{"type": "hello"}, stream, 0, true)
-	h.helloLocked(replayCapable, map[string]any{"type": "hello"}, stream, 0, true)
+	h.helloLocked(replayLegacy, wsHello{Type: "hello"}, stream, 0, true)
+	h.helloLocked(replayCapable, wsHello{Type: "hello"}, stream, 0, true)
 	h.mu.Unlock()
 	<-replayLegacy.out
 	<-replayCapable.out

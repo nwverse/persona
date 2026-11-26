@@ -16,7 +16,7 @@ import (
 
 const (
 	approvalJournalKey           = "assistant.approval_clarifications"
-	approvalRestartCancelledText = "The assistant restarted, so the retained operation was cancelled without executing. Ask for a fresh approval if the change is still wanted."
+	approvalRestartCancelledText = "The assistant restarted, so nothing was applied and the retained operation was cancelled without executing. Ask for a fresh approval card if the change is still wanted."
 	invalidationSummaryRunes     = 200
 	invalidationLabelRunes       = 80
 )
@@ -298,12 +298,14 @@ func (s *Service) approvalJournalFinished(ctx context.Context, ix proto.Interact
 		return approvalJournalEntry{}
 	}
 	summary := safeInteractionSummary(ix)
+	prevSummary := ""
 	i := slices.IndexFunc(b.list, func(a approvalJournalEntry) bool { return approvalJournalMatches(a, ix) })
 	if i < 0 {
 		b.list = append(b.list, approvalJournalEntry{ID: ix.ID, MachineID: ix.MachineID, SessionID: ix.SessionID,
 			CreatedAt: createdAt, Fingerprint: fingerprint, Kind: ix.Kind, Summary: summary, Private: ix.Private})
 		i = len(b.list) - 1
 	} else {
+		prevSummary = b.list[i].Summary
 		if ix.Private {
 			// Upgrade a legacy or recovered entry before its terminal delivery.
 			b.list[i].Private = true
@@ -331,8 +333,12 @@ func (s *Service) approvalJournalFinished(ctx context.Context, ix proto.Interact
 		if b.list[i].Fingerprint == "" {
 			b.list[i].Fingerprint = fingerprint
 		}
+		preserveRecorded := b.list[i].Result != "" && b.list[i].Status == status &&
+			b.list[i].Result == approvalResultTextWithSummary(ix.ID, status, prevSummary, text)
 		b.list[i].Status = status
-		b.list[i].Result = approvalResultTextWithSummary(ix.ID, status, b.list[i].Summary, text)
+		if !preserveRecorded {
+			b.list[i].Result = approvalResultTextWithSummary(ix.ID, status, b.list[i].Summary, text)
+		}
 		b.list[i].Continuation = ix.Detachable && status == "approved"
 		b.list[i].UpdatedAt = time.Now().UTC()
 	}
@@ -558,16 +564,29 @@ func (s *Service) deliverApprovalResults() {
 	}
 }
 
+// approvalResultRetryDelay is how long a transient delivery failure waits before the next pass
+// (approvalBook.retryDelay shortens it for one manager in tests).
+const approvalResultRetryDelay = time.Minute
+
+// scheduleApprovalResultRetryLocked arms one retry pass. It belongs to the run that armed it: once that run has ended
+// (the manager stopped, its store and bus closed), the pass does nothing and arms no other; the next manager's Run
+// delivers what is left from the durable journal (recoverApprovalJournals, #16045). Before Run, with no run context,
+// it always retries.
 func (s *Service) scheduleApprovalResultRetryLocked() {
 	b := &s.approvals
 	if b.retry {
 		return
 	}
 	b.retry = true
-	time.AfterFunc(time.Minute, func() {
+	run := s.runCtx()
+	time.AfterFunc(cmp.Or(b.retryDelay, approvalResultRetryDelay), func() {
 		b.mu.Lock()
 		b.retry = false
 		b.mu.Unlock()
+		if run.Err() != nil {
+			s.logf("approval results: retry skipped, the manager's run ended; the next run delivers them from the journal")
+			return
+		}
 		s.deliverApprovalResults()
 	})
 }
@@ -765,8 +784,7 @@ func (s *Service) recordRestartInvalidation(ctx context.Context, ix proto.Intera
 	if ix.Kind == proto.IxQuestion {
 		result = questionInvalidationResultText(ix.ID, summary)
 	} else {
-		result = approvalResultTextWithSummary(ix.ID, "cancelled", summary,
-			"The assistant restarted, so nothing was applied and the retained operation was cancelled without executing. Ask for a fresh approval card if the change is still wanted.")
+		result = approvalResultTextWithSummary(ix.ID, "cancelled", summary, approvalRestartCancelledText)
 	}
 	b.list = append(b.list, approvalJournalEntry{
 		ID:        ix.ID,
@@ -961,7 +979,7 @@ func recoveredApprovalOutcome(a approvalJournalEntry) (historyStatus, journalSta
 		// finishPrepared adds the standard result prefix when it refreshes the
 		// journal. A terminal recovered entry already contains that prefix; strip
 		// exactly this occurrence's own prefix so delivery reproduces it once.
-		text = strings.TrimPrefix(text, approvalResultText(a.ID, journalStatus, ""))
+		text = strings.TrimPrefix(text, approvalResultTextWithSummary(a.ID, journalStatus, a.Summary, ""))
 	}
 	switch journalStatus {
 	case "approved", "resolved", "denied", "covered":
@@ -1065,7 +1083,7 @@ func (s *Service) finishRecoveredApproval(entry approvalJournalEntry) error {
 					if rec.Status == "resolved" {
 						matches = recoveredTerminalJournalStatus(rec.Interaction, rec.Status, rec.Resolution) == journalStatus
 					}
-					if !matches {
+					if !matches && !(journalStatus == "failed" && rec.Status == "cancelled") {
 						entry, err = s.adoptRecoveredTerminal(context.Background(), entry, rec.Interaction, rec.Status, rec.Resolution)
 						if err != nil {
 							s.fleet.mu.Unlock()

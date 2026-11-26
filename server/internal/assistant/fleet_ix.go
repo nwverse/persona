@@ -259,6 +259,7 @@ func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (pr
 	ix.ApprovalBatchID, ix.ApprovalItemID = "", ""
 	ix.OwnerProposal, ix.NoExpiry = false, false
 	ix.OwnerApprovalPhrases = nil
+	ix.OutwardWrite = ix.OutwardWrite && ix.Kind == proto.IxPermission
 	if reservedCard(ix) {
 		return proto.Resolution{}, errReservedCard
 	}

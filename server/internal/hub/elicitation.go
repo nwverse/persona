@@ -38,7 +38,7 @@ func (h *Hub) hasElicitationClient() bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for c := range h.clients {
-		if c.has("elicitation") {
+		if c.role != roleReadOnly && c.role != roleScoped && c.has("elicitation") {
 			return true
 		}
 	}
@@ -49,7 +49,7 @@ func (h *Hub) hasElicitationClient() bool {
 // Client headers alone never declare support, and legacy requests have no platform.
 func (h *Hub) requestHasElicitation(r *http.Request) bool {
 	who, rc := principalOf(r.Context()), requestClientOf(r.Context())
-	if rc.Platform == "" {
+	if rc.Platform == "" || who.Role == roleReadOnly || who.Role == roleScoped {
 		return false
 	}
 	h.mu.Lock()
@@ -131,8 +131,11 @@ func (h *Hub) sendPendingInteractionSelection(c *client, elicitationOnly, mirror
 		if ix.MirrorOf != "" && !c.wants(featureApprovalMirrors) {
 			continue
 		}
+		if c.role == roleReadOnly && h.hiddenFromReadOnly(ix) {
+			continue
+		}
 		if ix.Kind == proto.IxElicitation {
-			if !c.has("elicitation") {
+			if c.role == roleReadOnly || !c.has("elicitation") {
 				continue
 			}
 		} else if elicitationOnly {
