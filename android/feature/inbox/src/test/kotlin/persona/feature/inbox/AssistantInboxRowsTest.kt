@@ -51,6 +51,7 @@ import persona.core.navigation.AppTab
 import persona.core.navigation.Navigator
 import java.io.File
 import java.io.IOException
+import persona.core.inbox.*
 
 /** The assistant's own connector rows keep their conversation presentation rather than looking like external mail. */
 @RunWith(AndroidJUnit4::class)
@@ -82,7 +83,7 @@ class AssistantInboxRowsTest {
             return lookedUp
         }
         override suspend fun refresh() = Unit
-        override suspend fun personaContext(itemId: String) = context
+        override suspend fun personaContext(itemId: String) = context?.let { PersonaContext(it) }
         override fun conversation(feedId: String, startPosition: Long?) = flowOf(LarkConversation())
         override suspend fun loadOlder(feedId: String) = Unit
         override suspend fun refreshConversation(feedId: String) = Unit

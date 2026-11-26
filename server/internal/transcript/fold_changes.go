@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -17,7 +18,7 @@ const (
 )
 
 // clippedNote matches the exact and approximate byte counts at the end of clipped tool input.
-var clippedNote = regexp.MustCompile(regexp.QuoteMeta(clipNotePrefix) + `≈?\d+` + regexp.QuoteMeta(clipNoteSuffix) + "$")
+var clippedNote = lazyre.New(regexp.QuoteMeta(clipNotePrefix) + `≈?\d+` + regexp.QuoteMeta(clipNoteSuffix) + "$")
 
 var editTools = map[string]bool{"Edit": true, "Write": true, "MultiEdit": true}
 

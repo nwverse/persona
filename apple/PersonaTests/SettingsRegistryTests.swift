@@ -28,10 +28,12 @@ struct SettingsRegistryTests {
         #expect(Set(SettingsCatalog.core).isDisjoint(with: SettingsCatalog.advanced))
     }
 
-    /// The lists name catalog entries (Alarms only where AlarmKit is), so their rows have a title, a page and aliases.
+    /// The lists name catalog entries (Alarms only where AlarmKit is, Live Screen only while the screen-share module is
+    /// active, #14017), so their rows have a title, a page and aliases.
     @Test func everyListedIDIsACatalogEntry() {
         let ids = Set(SettingsCatalog.entries.map(\.id))
-        for id in SettingsCatalog.core + SettingsCatalog.advanced where id != "alarms" || AlarmsAccess.isSupported {
+        for id in SettingsCatalog.core + SettingsCatalog.advanced
+        where (id != "alarms" || AlarmsAccess.isSupported) && (id != "live-screen" || Modules.registry.isActive("screen-share")) {
             #expect(ids.contains(id), "\(id) is listed but not in SettingsCatalog.entries")
         }
     }

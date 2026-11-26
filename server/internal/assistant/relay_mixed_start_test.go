@@ -7,15 +7,16 @@ import (
 )
 
 // A plan can combine new work on the current hand-over with a continuation whose brief still names an older message.
-// Both start only when the current hand-over was verifiably delivered to this lead; neither an inherited brief nor a
-// started plan in another folder may substitute for that request.
+// Both keep user_requested only when the current hand-over was verifiably delivered to this lead; neither an inherited
+// brief nor a started plan in another folder may substitute for that request. Since decision rights the lead's plan
+// starts at once either way: user_requested only records where the work came from.
 func TestAMixedPlanStartsOnlyWithTheCurrentVerifiedHandover(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		change func(*handover)
-		starts bool
+		name     string
+		change   func(*handover)
+		verified bool
 	}{
-		{name: "delivered to this lead", starts: true},
+		{name: "delivered to this lead", verified: true},
 		{name: "a different lead", change: func(e *handover) { e.To = "another-lead" }},
 		{name: "not delivered", change: func(e *handover) { e.State = handoverQueued }},
 		{name: "a different message", change: func(e *handover) { e.MessageID = "m-other#1" }},
@@ -66,18 +67,10 @@ func TestAMixedPlanStartsOnlyWithTheCurrentVerifiedHandover(t *testing.T) {
 			if res.IsError {
 				t.Fatalf("task_plan: %s", out)
 			}
-			started := !waitsForStart(out)
-			if started != tc.starts {
-				t.Fatalf("started %v, want %v: %s", started, tc.starts, out)
+			if waitsForStart(out) {
+				t.Fatalf("the lead's plan waits for Start: %s", out)
 			}
-			if tc.starts {
-				waitFor(t, "both agents to start", func() bool { return d.startsSoFar() == before+2 })
-			} else {
-				waitFor(t, "the start reservation to settle", func() bool { return d.s.taskStarting.Load() == 0 })
-				if n := d.startsSoFar() - before; n != 0 {
-					t.Fatalf("%d agents started on a plan that waits", n)
-				}
-			}
+			waitFor(t, "both agents to start", func() bool { return d.startsSoFar() == before+2 })
 
 			plans, err := d.s.conversationPlans(context.Background(), d.leaderID)
 			if err != nil {
@@ -92,12 +85,14 @@ func TestAMixedPlanStartsOnlyWithTheCurrentVerifiedHandover(t *testing.T) {
 			if mixed == nil {
 				t.Fatal("the mixed plan was not saved")
 			}
-			if tc.starts {
-				if mixed.State != planStarted || !mixed.Tasks[0].UserRequested || !mixed.Tasks[1].UserRequested {
-					t.Fatalf("the mixed plan did not keep both verified requests: %+v", mixed)
-				}
-			} else if mixed.State == planStarted {
-				t.Fatalf("the unverified mixed plan started: %+v", mixed)
+			if mixed.State != planStarted {
+				t.Fatalf("the mixed plan did not start: %+v", mixed)
+			}
+			if tc.verified && (!mixed.Tasks[0].UserRequested || !mixed.Tasks[1].UserRequested) {
+				t.Fatalf("the mixed plan did not keep both verified requests: %+v", mixed)
+			}
+			if !tc.verified && (mixed.Tasks[0].UserRequested || mixed.Tasks[1].UserRequested) {
+				t.Fatalf("the unverified mixed plan kept a request: %+v", mixed)
 			}
 		})
 	}

@@ -456,7 +456,7 @@ export class TerminalFeed {
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
-    if (this.everSubscribed && this.view.mode === "stream") send({ type: "terminal_unsubscribe", ...this.ids() });
+    if (this.everSubscribed) send({ type: "terminal_unsubscribe", ...this.ids() });
     this.polling?.abort();
     clearTimeout(this.gridTimer);
     clearTimeout(this.wheelTimer);
@@ -591,7 +591,11 @@ export class TerminalFeed {
   }
 
   private onHello = () => {
-    if (this.view.mode !== "stream" || this.disposed) return;
+    if (this.disposed) return;
+    if (this.view.mode !== "stream") {
+      if (this.everSubscribed && this.live()) send({ type: "terminal_subscribe", ...this.ids() });
+      return;
+    }
     this.subscribed = false;
     this.linkLost();
     if (this.live()) this.subscribeNow(true);

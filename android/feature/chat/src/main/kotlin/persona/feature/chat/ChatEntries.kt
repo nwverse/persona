@@ -263,6 +263,7 @@ fun ChatDestination(
                 chrome = ChatChromeBindings(covered = openedPath != null,
                     actions = wiring?.actions.takeUnless { historyReadOnly },
                     forkActions = wiring?.actions,
+                    takeoverActions = wiring?.actions,
                     connection = wiring?.connection,
                     childSessionId = home.childSessionId.takeIf { landedSide == null },
                     lookupRows = home.rows,
@@ -271,6 +272,11 @@ fun ChatDestination(
                         if (historyReadOnly) onHistoryBack?.invoke()
                         navigator.navigate(ChatRoute(it.machineId, it.sessionId))
                     },
+                    decisionSource = route.decisionSource,
+                    onOpenDecisionSource = if (historyReadOnly) null else ({ chat, toolUseId ->
+                        navigator.navigate(ChatRoute(chat.machineId, chat.sessionId, persona.core.navigation.ConversationKind.Agent,
+                            subagentDetail = true, decisionSource = persona.core.navigation.DecisionSource(toolUseId)))
+                    }),
                     onOpenSide = if (historyReadOnly) null else ({ navigator.navigate(ChatRoute(it.machineId, it.sessionId,
                         persona.core.navigation.ConversationKind.Agent, side = true)) }),
                     onOpenAssistant = {
