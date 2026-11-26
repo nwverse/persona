@@ -1,5 +1,8 @@
 import Foundation
 import PersonaModuleAPI
+#if os(iOS)
+import WidgetKit
+#endif
 
 /// Whether this hub lets the app make or change recordings (#15214): the hub's `module.recording` flag, read by the one
 /// rule every module follows (`HubModules.allows`). Off only when the hub publishes module flags (`modules`) and not this
@@ -36,6 +39,39 @@ enum RecordingModule {
 extension RecordingAllowance {
     /// The allowance as the Apple Watch is told (`PhoneRecordingAllowance`): the phone only ever says allowed or off.
     nonisolated var forWatch: PhoneRecordingAllowance { self == .on ? .allowed : .off }
+}
+
+extension RecordingModule {
+    /// Everything outside the app's pages that draws from the allowance hears the hub's answer (#15214): the Apple
+    /// Watch (`tellWatch`), and on the iPhone the Home Screen and Lock Screen widgets (a snapshot write, which reloads
+    /// the Record widget when its part changed) and the Control Center control. The recording's Live Activity follows
+    /// by itself (`RecordingActivity` observes the registry). Called after each hello of the hub the app follows and
+    /// when another hub is picked. The watch push and the snapshot write skip a value already there; the control is
+    /// reloaded at the first call of a run and whenever the answer differs from the one last told.
+    @MainActor static func tellSurfaces() {
+        #if canImport(WatchConnectivity)
+        tellWatch()
+        #endif
+        #if os(iOS)
+        let now = allowance
+        // Once per run, then on every change. The first time whatever the answer: the last run may have ended with the
+        // module off, and the control would stay disabled until something else reloaded it.
+        guard now != toldSurfaces else { return }
+        toldSurfaces = now
+        Task {
+            // After the snapshot is on disk: the control reads it.
+            await HomeWidgetWriter.shared.flushAndWait()
+            ControlCenter.shared.reloadControls(ofKind: recordingControlKind)
+        }
+        #endif
+    }
+
+    #if os(iOS)
+    /// The allowance the widgets and the control were last told; nil until the first hello or pick of this run.
+    @MainActor private static var toldSurfaces: RecordingAllowance?
+    /// `MeetingRecordingControl.kind` (the widget extension's; the app does not compile it).
+    nonisolated static let recordingControlKind = "persona.control.meeting-recording"
+    #endif
 }
 
 #if canImport(WatchConnectivity)

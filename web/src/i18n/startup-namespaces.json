@@ -380,7 +380,6 @@
   "node-health.timeout_",
   "node-health.unreachable_",
   "node-health.version_",
-  "notify",
   "pageboundary",
   "paged-agents",
   "personaassistant",
