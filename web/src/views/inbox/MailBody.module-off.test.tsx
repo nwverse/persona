@@ -22,6 +22,7 @@ const world = vi.hoisted(() => ({
   calls: [] as ApiCall[],
   hub: { features: [] as string[], loaded: false },
   context: "" as string | undefined,
+  clipped: undefined as boolean | undefined, // the item page's mail_body_truncated; undefined: the hub does not say
   itemFails: false,
   translation: null as null | { subject: string; text: string },
   prefs: { enabled: false, mail: true, target: "zh-Hans", chats: [] as { id: string }[] },
@@ -40,7 +41,7 @@ vi.mock("../../lib/api", async (original) => ({
     }
     if (path.startsWith("/inbox/mail:")) {
       if (world.itemFails) throw new Error("HTTP 503");
-      return { ...mailItem(), context: world.context };
+      return { ...mailItem(), context: world.context, ...(world.clipped === undefined ? {} : { mail_body_truncated: world.clipped }) };
     }
     return {};
   },
@@ -53,13 +54,15 @@ vi.mock("../../lib/extension-slots", () => ({ useInboxItemPlace: () => undefined
 vi.mock("../../lib/translate", async (original) => ({ ...(await original<typeof import("../../lib/translate")>()), useTranslatePrefs: () => world.prefs }));
 vi.mock("../../ui/atoms", async (original) => ({ ...(await original<typeof import("../../ui/atoms")>()), toast: vi.fn() }));
 
-import { connectModuleHub, MODULES_FEATURE, resetModulesForTest } from "../../core/module-host";
+import { connectModuleHub, loadModule, registerModule, MODULES_FEATURE, resetModulesForTest } from "../../core/module-host";
 import { initI18n, t } from "../../i18n";
 import { resetInboxForTests, type InboxItem } from "../../lib/inbox";
 import { handOffContext } from "../../lib/inbox-page";
 import { loadMailAccounts, mailItemReadOnly, mailReading, resetMailForTests, type MailReading } from "../../lib/mail";
 import { resetManagerChoice, settleRosterDefault } from "../../lib/manager-choice";
 import { reset } from "../../lib/store";
+import { MODULES } from "../../modules";
+import { setModuleSwitchedOff } from "../../core/module-switch";
 import { MailBody } from "./InboxBodies";
 import { InboxDetail } from "./InboxDetail";
 import { EventBody } from "./InboxEvent";
@@ -88,6 +91,9 @@ const HUBS: Record<"off" | "on" | "noMarker" | "noHello", { features: string[]; 
 };
 const setHub = (hub: keyof typeof HUBS) => Object.assign(world.hub, { features: [...HUBS[hub].features], loaded: HUBS[hub].loaded });
 
+const descriptor = MODULES.find((m) => m.mailbox);
+const chunk = vi.fn();
+const catalog = vi.fn();
 let host: HTMLDivElement;
 let root: Root;
 const flush = async (times = 8) => {
@@ -101,6 +107,13 @@ beforeEach(async () => {
   await initI18n("en");
   localStorage.clear();
   resetModulesForTest();
+  chunk.mockClear();
+  catalog.mockClear();
+  if (descriptor) registerModule({
+    ...descriptor,
+    load: () => { chunk(); return descriptor.load(); },
+    locales: { en: () => { catalog(); return descriptor.locales!.en(); } },
+  });
   reset();
   setHub("noHello");
   connectModuleHub(() => world.hub, () => () => {});
@@ -108,7 +121,7 @@ beforeEach(async () => {
   resetMailForTests();
   resetManagerChoice();
   settleRosterDefault();
-  Object.assign(world, { calls: [], context: storedContext, itemFails: false, translation: null });
+  Object.assign(world, { calls: [], context: storedContext, clipped: undefined, itemFails: false, translation: null });
   world.prefs.enabled = false;
   Element.prototype.scrollIntoView = vi.fn();
   host = document.createElement("div");
@@ -126,6 +139,10 @@ afterEach(() => {
 describe("how a mail is read, decided once", () => {
   it("is stored only when the hello names modules and leaves mail out", () => {
     const kinds = (Object.keys(HUBS) as (keyof typeof HUBS)[]).map((k) => [k, mailReading(HUBS[k]).kind]);
+    if (!descriptor) {
+      expect(kinds.every(([, kind]) => kind === "stored")).toBe(true);
+      return;
+    }
     expect(kinds).toEqual([["off", "stored"], ["on", "full"], ["noMarker", "full"], ["noHello", "full"]]);
   });
 
@@ -150,6 +167,8 @@ describe("a mail item's body with mail off", () => {
     expect(world.calls).toEqual([{ path: "/inbox/mail:a1:thread:7", method: undefined }]);
     expect(host.querySelector("[data-mail-stored-text]")?.textContent).toBe(STORED);
     expect(notice()?.textContent).toBe(t("inbox-inboxbodies.mail_off_stored"));
+    expect(chunk).not.toHaveBeenCalled();
+    expect(catalog).not.toHaveBeenCalled();
     // the notice comes after the text
     expect(host.querySelector("[data-mail-stored-text]")!.compareDocumentPosition(notice()!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     // who and when stay, from the item
@@ -165,12 +184,31 @@ describe("a mail item's body with mail off", () => {
     expect(host.querySelectorAll("button")).toHaveLength(0);
   });
 
+  it("says the text is cut short only when the hub says so, nothing about it when it is whole, and 'may be' when the hub does not say", async () => {
+    const lines = { clipped: t("inbox-inboxbodies.mail_off_stored_clipped"), whole: t("inbox-inboxbodies.mail_off_stored_whole"), unknown: t("inbox-inboxbodies.mail_off_stored") };
+    expect(new Set(Object.values(lines)).size).toBe(3);
+    expect(lines.clipped).toContain("is cut short");
+    expect(lines.unknown).toContain("may be cut short");
+    expect(lines.whole).not.toMatch(/cut short/);
+    for (const line of Object.values(lines)) expect(line).toContain("the hub machine");
+    for (const [clipped, state] of [[true, "clipped"], [false, "whole"], [undefined, "unknown"]] as const) {
+      world.clipped = clipped;
+      await act(async () => root.render(<MailBody key={state} item={mailItem()} />));
+      await flush();
+      expect(notice()?.textContent, state).toBe(lines[state]);
+      expect(notice()?.getAttribute("data-mail-stored-clipping"), state).toBe(state);
+      expect(host.querySelector("[data-mail-stored-text]")?.textContent, state).toBe(STORED);
+    }
+    expect(mailCalls()).toEqual([]);
+  });
+
   it("falls back to the list's preview when the item cannot be read again, still without an error", async () => {
     world.itemFails = true;
-    await act(async () => root.render(<MailBody item={mailItem()} />));
+    world.clipped = false; // the page that would say so cannot be read: the list's copy says nothing
+    await act(async () => root.render(<MailBody item={mailItem({ mail_body_truncated: false } as Partial<InboxItem>)} />));
     await flush();
     expect(host.querySelector("[data-mail-stored-text]")?.textContent).toBe("Hi, the agenda for Thursday");
-    expect(notice()).not.toBeNull();
+    expect(notice()?.textContent).toBe(t("inbox-inboxbodies.mail_off_stored"));
     expect(host.textContent).not.toMatch(/HTTP|503/);
     expect(mailCalls()).toEqual([]);
   });
@@ -241,11 +279,15 @@ describe("a mail item's actions with mail off", () => {
   });
 });
 
-describe.each(["on", "noMarker", "noHello"] as const)("a mail item with the hub %s", (hub) => {
-  beforeEach(() => setHub(hub));
+describe.skipIf(!descriptor).each(["on", "noMarker", "noHello"] as const)("a mail item with the hub %s", (hub) => {
+  beforeEach(async () => {
+    setHub(hub);
+    await loadModule(descriptor!.id);
+  });
 
   it("is read from the mail server as before, with its replies, flags and attachments", async () => {
     await act(async () => root.render(<MailBody item={mailItem()} />));
+    await act(async () => { await vi.dynamicImportSettled(); });
     await flush();
 
     expect(world.calls).toEqual([
@@ -275,4 +317,31 @@ describe.each(["on", "noMarker", "noHello"] as const)("a mail item with the hub 
     await flush();
     expect(button(t("inbox-inboxevent.edit"))).not.toBeNull();
   });
+});
+
+it("keeps historical mail readable on a mail-capable hub with no provider or a local opt-out", async () => {
+  setHub("on");
+  if (descriptor) setModuleSwitchedOff(descriptor.id, true);
+  try {
+    await act(async () => root.render(<MailBody item={mailItem()} />));
+    await flush();
+    expect(host.querySelector("[data-mail-stored-text]")?.textContent).toBe(STORED);
+    expect(mailCalls()).toEqual([]);
+    expect(handOffContext(mailItem({ context: "kept" })).text).toBe("kept");
+    expect(chunk).not.toHaveBeenCalled();
+    expect(catalog).not.toHaveBeenCalled();
+    expect(notice()?.textContent).toBe(t("inbox-inboxbodies.saved"));
+    if (descriptor) {
+      await act(async () => { setModuleSwitchedOff(descriptor.id, false); await vi.dynamicImportSettled(); });
+      await act(async () => { await vi.dynamicImportSettled(); });
+      expect(button(t("inbox-inboxbodies.reply"))).not.toBeNull();
+      expect(chunk).toHaveBeenCalledOnce();
+      expect(catalog).toHaveBeenCalledOnce();
+      await act(async () => { setModuleSwitchedOff(descriptor.id, true); });
+      expect(host.querySelector("[data-mail-stored-text]")?.textContent).toBe(STORED);
+    }
+  } finally {
+    act(() => root.render(null));
+    if (descriptor) setModuleSwitchedOff(descriptor.id, false);
+  }
 });

@@ -346,6 +346,9 @@ func DevelopmentRequest(ctx context.Context, config *DevelopmentConfig, dir, ope
 			<-drained
 		}
 	}
+	if ctx.Err() != nil {
+		return ctx.Err() // The helper and its child group have exited before work is removed.
+	}
 	if err != nil {
 		return fmt.Errorf("development %s failed; inspect update/development/%s.log on the Hub", operation, operation)
 	}

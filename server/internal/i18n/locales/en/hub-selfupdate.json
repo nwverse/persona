@@ -1,4 +1,6 @@
 {
+  "err_cannot_cancel": "This update cannot be cancelled now.",
+  "err_cancel_history": "Update cancelled. Its history could not be saved.",
   "err_development_step": "The development update stopped at the “{step}” step. Check update/development/{phase}.log on the hub machine.",
   "development_step_fetch": "Fetch commit",
   "development_step_npm_install": "Install Web dependencies",
@@ -56,6 +58,7 @@
   "err_development_quiesce": "The hub could not pause its writers for the backup: {error}",
   "err_computer_packages": "The hub updated, but computer packages could not be prepared. Their staged files are retained on the hub machine; inspect the update logs before redeploying computers.",
   "err_development_recovery": "An interrupted development update needs recovery. Inspect update/development/adopting.json and the retained snapshot on the hub machine before updating or changing sources.",
+  "err_resolve_latest": "Could not check the latest commit. Try again.",
   "err_development_phase": "Could not prepare the development update. Inspect update/development/{phase}.log on the hub machine. The previous build and verified snapshots are retained.",
   "err_development_backup": "This program backup is no longer available. Refresh the backup versions.",
   "err_development_backup_path": "That backup folder can't be used: {error}",

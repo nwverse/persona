@@ -9,8 +9,8 @@ import { api, ApiError, errorText } from "../../lib/api";
 import { startConversation } from "../../lib/assistant-start";
 import { adoptConversation, askPersonaOf, noteSent, sendToSession } from "../../lib/outbox";
 import { baseName, sessionTitle, stateOf, uuid } from "../../lib/format";
-import { agentDraft, connectorReference, conversationRoute, docChangeKey, handOffToMain, isLark, itemKey, itemPath, itemRequest, keepDropped, keptChanges, sendReply, useDroppedChanges, setDone, unsentReplies, type InboxItem } from "../../lib/inbox";
-import { docChangeLine, HANDOFF_PRESETS, handOffContext, handOffMessage, recordHandOff } from "../../lib/inbox-page";
+import { agentDraft, connectorReference, docChangeKey, handOffToMain, isLark, itemKey, itemPath, itemRequest, keepDropped, keptChanges, sendReply, useDroppedChanges, setDone, unsentReplies, type InboxItem } from "../../lib/inbox";
+import { docChangeLine, HANDOFF_PRESETS, handOffContext, handOffMessage, openInboxConversation, recordHandOff } from "../../lib/inbox-page";
 import { isTransient } from "../../lib/ops";
 import { hasFinePointer } from "../../lib/viewport";
 import { machineWithHub } from "../../lib/mesh";
@@ -57,8 +57,6 @@ export function DraftDialog(props: { item: InboxItem; onClose: () => void }) {
 
 function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }) {
   const readOnly = useItemReadOnly(item);
-  const sessions = useStore((s) => s.sessions);
-  const assistant = useStore((s) => s.assistant);
   const key = itemKey(item);
   const agentText = agentDraft(item);
   const [text, setText] = useState(() => unsentReplies.get(key) ?? agentText ?? "");
@@ -75,6 +73,8 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
   const kept = keptChanges(item, dropped);
   const generation = useRef(0);
   const agent = item.agent;
+  const mid = agent?.machine_id;
+  const sid = agent?.session_id;
   const box = useRef<HTMLTextAreaElement>(null);
   const focused = useRef(false);
 
@@ -159,6 +159,9 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
     onClose();
   };
   const canSend = !readOnly && !loading && !checkingSender && (text.trim().length > 0 || kept.length > 0);
+  const replyNote = larkCLI
+    ? t(sender === "bot" ? "inbox-inboxdialogs.lark_sender_bot" : sender === "user" ? "inbox-inboxdialogs.lark_sender_user" : "inbox-inboxdialogs.lark_sender_default", { chat: item.title })
+    : item.connector?.reply_to ? t("inbox-inboxdialogs.reply_goes", { how: item.connector.reply_to }) : "";
 
   return (
     <Dialog
@@ -176,13 +179,12 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
       {agentText && agent && (agent.note || agent.session_id) && (
         <div className="mb-3 rounded-[10px] bg-accent-tint px-3 py-2.5">
           {agent.note && <p className="text-[12px] leading-relaxed text-ink-2"><Spark />{agent.note}</p>}
-          {agent.machine_id && agent.session_id && (
+          {mid && sid && (
             <button
               type="button"
               onClick={() => {
                 onClose();
-                // The AI twin runs as the assistant (docs/assistant/inbox.md): its conversation is one of Persona's.
-                navigate(agent.machine_id === assistant?.machine_id ? conversationPage(agent.session_id!, agent.machine_id, item.manager) : conversationRoute(agent.machine_id!, agent.session_id!, sessions, assistant, item.manager));
+                openInboxConversation(mid, sid, item.manager);
               }}
               className="mt-1.5 flex items-center gap-1 text-[12px] font-medium whitespace-nowrap text-accent-ink hover:underline"
             >
@@ -211,9 +213,7 @@ function DraftEditor({ item, onClose }: { item: InboxItem; onClose: () => void }
           })}
         </div>
       )}
-      {larkCLI ? (
-        <p className="mb-2 text-[11.5px] leading-relaxed text-ink-3">{t(sender === "bot" ? "inbox-inboxdialogs.lark_sender_bot" : sender === "user" ? "inbox-inboxdialogs.lark_sender_user" : "inbox-inboxdialogs.lark_sender_default", { chat: item.title })}</p>
-      ) : item.connector?.reply_to && <p className="mb-2 text-[11.5px] leading-relaxed text-ink-3">{t("inbox-inboxdialogs.reply_goes", { how: item.connector.reply_to })}</p>}
+      {replyNote && <p className="mb-2 text-[11.5px] leading-relaxed text-ink-3">{replyNote}</p>}
       <div className="relative">
         <textarea
           ref={box}

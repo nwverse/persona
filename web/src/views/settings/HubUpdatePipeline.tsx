@@ -1,8 +1,9 @@
+import { useState } from "react";
 import { formatNumber, t } from "../../i18n";
 import { bytes, duration } from "../../lib/format";
 import type { HubDevelopmentProgress, HubUpdateStatus } from "../../lib/hub-update";
 import { updateStateTitle, updateWorking } from "../../lib/hub-update-settings";
-import { Button, cx, Spinner } from "../../ui/atoms";
+import { Button, cx, Dialog, Spinner } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { Pill } from "./SettingsParts";
 
@@ -11,8 +12,8 @@ type Stage = DevelopmentPhase | "downloading" | "waiting_idle" | "restarting";
 type NodeState = "done" | "active" | "pending";
 
 const RELEASE_STAGES: readonly Stage[] = ["downloading", "waiting_idle", "restarting"];
-const BUILD_STAGES: readonly Stage[] = ["building", "backing_up", "waiting_idle", "restarting"];
-const RESTORE_STAGES: readonly Stage[] = ["backing_up", "applying_backup", "waiting_idle", "restarting"];
+const BUILD_STAGES: readonly Stage[] = ["building", "waiting_idle", "backing_up", "restarting"];
+const RESTORE_STAGES: readonly Stage[] = ["applying_backup", "waiting_idle", "backing_up", "restarting"];
 const stageLabels: Record<Stage, string> = {
   building: "settings-hubsettings.pipeline_build",
   backing_up: "settings-hubsettings.pipeline_backup",
@@ -48,6 +49,7 @@ function phaseElapsedMs(p?: HubDevelopmentProgress): number | undefined {
 
 export function observeHubUpdate(previous: PipelineRun | undefined, s: HubUpdateStatus, now: number): PipelineRun | undefined {
   if (!updateWorking(s)) return undefined;
+  if (s.state === "resolving") return s.can_cancel ? { restoringBackup: false } : undefined;
   const backupId = s.latest?.backup_id || previous?.backupId;
   const restoringBackup = Boolean(backupId || s.state === "applying_backup" || previous?.restoringBackup);
   // The wire drops the candidate across a restart. On a fresh connection during confirmation, the running build is the target.
@@ -64,20 +66,17 @@ function macroStages(s: HubUpdateStatus, restoringBackup: boolean) {
   const development = s.source === "web-dev" || s.state === "building" || s.state === "backing_up";
   const stages = restoringBackup ? RESTORE_STAGES : development ? BUILD_STAGES : RELEASE_STAGES;
   const first = restoringBackup ? "applying_backup" : development ? "building" : "downloading";
+  let active: Stage | undefined = first;
   switch (s.state) {
+    case "resolving": active = undefined; break;
     case "installing":
     case "restarting":
-    case "confirming":
-      return { stages, active: "restarting", done: stages.slice(0, -1) };
+    case "confirming": active = "restarting"; break;
     case "backing_up":
-      return { stages, active: s.state, done: [first, "waiting_idle"] };
-    case "waiting_idle":
-      // The Hub takes its backup after the idle wait. The strip keeps the same positions throughout the run.
-      return { stages, active: s.state, done: [first] };
-    default:
-      // Development downloads stage the artifacts of Build or Prepare backup.
-      return { stages, active: first, done: [] };
+    case "waiting_idle": active = s.state; break;
   }
+  const done = active ? stages.slice(0, stages.indexOf(active)) : [];
+  return { stages, active, done };
 }
 
 function Marker({ state, spinning }: { state: NodeState; spinning?: boolean }) {
@@ -191,9 +190,33 @@ function ActiveStep({ p, label }: { p: HubDevelopmentProgress; label: string }) 
   );
 }
 
-export function HubUpdatePipeline({ s, run, onNow }: { s: HubUpdateStatus; run: PipelineRun; onNow: () => void }) {
+function CancelUpdate({ cancelling, onCancel }: { cancelling: boolean; onCancel: () => Promise<void> }) {
+  const [confirm, setConfirm] = useState(false);
+  const [sending, setSending] = useState(false);
+  const label = t("settings-hubsettings.cancel_update");
+  async function submit() {
+    setConfirm(false);
+    setSending(true);
+    try { await onCancel(); }
+    finally { setSending(false); }
+  }
+  return <div className="flex justify-end">
+    <Button tone="quiet" className="pointer-coarse:min-h-11" busy={sending} disabled={sending || cancelling} onClick={() => setConfirm(true)}>{label}</Button>
+    <Dialog open={confirm && !cancelling} title={label} onClose={() => setConfirm(false)} footer={<>
+      <Button tone="quiet" onClick={() => setConfirm(false)}>{t("settings-hubsettings.keep_updating")}</Button>
+      <Button tone="danger" onClick={() => void submit()}>{label}</Button>
+    </>}>
+      <p className="text-meta text-ink-2">{t("settings-hubsettings.cancel_confirm")}</p>
+    </Dialog>
+  </div>;
+}
+
+export function HubUpdatePipeline({ s, run, onNow, onCancel }: {
+  s: HubUpdateStatus; run: PipelineRun; onNow: () => void; onCancel: () => Promise<void>;
+}) {
   const progress = activeProgress(s);
-  const title = updateStateTitle(s);
+  const title = s.cancelling ? t(s.state === "backing_up" ? "settings-hubsettings.stop_after_backup" : "settings-hubsettings.cancelling")
+    : s.state === "resolving" ? t("settings-hubsettings.resolving_latest") : updateStateTitle(s);
   const phaseElapsed = phaseElapsedMs(progress);
   const elapsed = run.elapsedMs !== undefined ? t("settings-hubsettings.progress_elapsed", { time: duration(run.elapsedMs) }) :
     phaseElapsed !== undefined ? t("settings-hubsettings.progress_phase_elapsed", { time: duration(phaseElapsed) }) : undefined;
@@ -232,11 +255,12 @@ export function HubUpdatePipeline({ s, run, onNow }: { s: HubUpdateStatus; run: 
               ))}
             </ul>
             <div className="mt-2 flex justify-end">
-              <Button tone="quiet" onClick={onNow} className="text-red enabled:hover:text-red pointer-coarse:min-h-11">{t("settings-hubsettings.update_now_ellipsis")}</Button>
+              <Button tone="quiet" disabled={s.cancelling} onClick={onNow} className="text-red enabled:hover:text-red pointer-coarse:min-h-11">{t("settings-hubsettings.update_now_ellipsis")}</Button>
             </div>
           </>
         )}
       </div>
+      {s.can_cancel && <CancelUpdate cancelling={Boolean(s.cancelling)} onCancel={onCancel} />}
     </section>
   );
 }

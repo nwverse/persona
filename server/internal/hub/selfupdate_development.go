@@ -277,10 +277,14 @@ func developmentPhaseError(operation, step string) error {
 
 func (u *updater) startDevelopmentPhase(p update.DevelopmentProgress, legacyProgress string) {
 	u.mu.Lock()
+	u.startDevelopmentPhaseLocked(p, legacyProgress)
+	u.mu.Unlock()
+	u.broadcastStatus()
+}
+
+func (u *updater) startDevelopmentPhaseLocked(p update.DevelopmentProgress, legacyProgress string) {
 	u.setLocked(p.Phase, legacyProgress, "")
 	u.developmentProgress, u.developmentStarted = &p, time.Now()
-	u.mu.Unlock()
-	u.h.broadcast(map[string]any{"type": "hub_update", "update": u.view()})
 }
 
 // quiesceDevelopmentWriters pauses the writers a snapshot must not see moving.
@@ -355,19 +359,26 @@ func (u *updater) waitDevelopmentQuiesced(ctx context.Context) error {
 }
 
 func (u *updater) checkDevelopment(ctx context.Context) (*update.Published, error) {
+	r, err := u.resolveDevelopment(ctx)
+	if err != nil {
+		return nil, err
+	}
+	u.mu.Lock()
+	if !u.updateActiveLocked() {
+		u.release, u.blocked, u.lastCheck = r, nil, time.Now()
+	}
+	u.mu.Unlock()
+	return r, nil
+}
+
+func (u *updater) resolveDevelopment(ctx context.Context) (*update.Published, error) {
 	if err := u.developmentUnavailableErr(); err != nil {
 		return nil, err
 	}
 	var candidate update.DevelopmentCandidate
 	err := u.runDevelopment(ctx, "resolve", nil, &candidate)
-	u.mu.Lock()
-	u.lastCheck = time.Now()
-	u.mu.Unlock()
-	if err != nil {
-		return nil, err
-	}
-	if !devicewire.ValidDevelopmentCommit(candidate.Commit) {
-		return nil, errors.New("development source did not resolve to a full commit")
+	if err != nil || !devicewire.ValidDevelopmentCommit(candidate.Commit) {
+		return nil, i18n.Err("hub-selfupdate.err_resolve_latest")
 	}
 	number := update.DevelopmentNumber(u.h.build.Number)
 	m := &update.Manifest{Version: fmt.Sprintf("web-dev-%s-%d", candidate.Commit[:12], number), Build: number,
@@ -380,6 +391,7 @@ func (u *updater) checkDevelopment(ctx context.Context) (*update.Published, erro
 		copy := *u.release
 		manifest := *copy.Manifest
 		copy.Manifest = &manifest
+		copy.Development = &candidate
 		r = &copy
 	}
 	for _, record := range u.settings.History {
@@ -387,9 +399,6 @@ func (u *updater) checkDevelopment(ctx context.Context) (*update.Published, erro
 			r.Manifest.Build = record.ToBuild
 			r.Manifest.Version = record.ToVersion
 		}
-	}
-	if !u.updateActiveLocked() {
-		u.release, u.blocked = r, nil
 	}
 	u.mu.Unlock()
 	return r, nil
@@ -450,6 +459,9 @@ func (u *updater) buildDevelopment(ctx context.Context, r *update.Published) err
 		return err
 	}
 	r.Source = (&url.URL{Scheme: "file", Path: built.Artifacts}).String()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	var ancestors string
 	if operation == "build" {
 		ancestors, err = update.EncodeAncestors(built.Ancestors)
@@ -488,8 +500,13 @@ func (u *updater) backupDevelopment(ctx context.Context, r *update.Published, ta
 	u.mu.Lock()
 	updatedAt := u.currentUpdatedAtLocked()
 	cfg := u.developmentBackupConfigLocked()
+	if u.attempt != nil && u.attempt.cancelling {
+		u.mu.Unlock()
+		return nil, context.Canceled
+	}
+	u.startDevelopmentPhaseLocked(update.DevelopmentStep("backup", "quiesce", cfg.Builtin), "")
 	u.mu.Unlock()
-	u.startDevelopmentPhase(update.DevelopmentStep("backup", "quiesce", cfg.Builtin), "")
+	u.broadcastStatus()
 	programs := map[string]string{"personad": target}
 	for _, name := range update.ProgramNames {
 		path := filepath.Join(filepath.Dir(target), name)
@@ -515,6 +532,7 @@ func (u *updater) backupDevelopment(ctx context.Context, r *update.Published, ta
 	if err != nil {
 		return nil, err
 	}
+	resume()
 	u.mu.Lock()
 	u.settings.DevelopmentBackup = &saved
 	err = u.saveLocked(ctx)
