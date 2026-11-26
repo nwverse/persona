@@ -332,7 +332,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     const show = (el: HTMLElement) => {
       clearTimeout(timer);
       const row = el.hasAttribute("data-settings-row");
-      el.scrollIntoView({ block: row ? "center" : "start" });
+      el.scrollIntoView?.({ block: row ? "center" : "start" });
       card = row ? el : el.querySelector<HTMLElement>(":scope > div") ?? el;
       prev = card.style.boxShadow;
       card.style.boxShadow = "inset 0 0 0 2px var(--accent)";
@@ -368,6 +368,12 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     const agent = g.tab === "agents" ? AGENT_KINDS.find((id) => g.anchor === `settings-${id}`) : undefined;
     pick(g.tab, g.sub ?? null, agent);
     setScrollAnchor(g.anchor);
+  };
+  const openSettingsUrl = (url: string) => {
+    const target = settingsTarget(url);
+    if (!target || !(isCoreTab(target.tab) || isModuleTab(target.tab))) return;
+    pick(target.tab as Tab, target.sub);
+    if (target.anchor) setScrollAnchor(target.anchor);
   };
   const onExtensionPage =
     (tab === "extensions" && extensionsRoute(sub).kind === "page") ||
@@ -471,10 +477,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
                     initialFilter={normalizeIntegrationFilter(new URLSearchParams(location.search).get("filter"))}
                     onOpen={(id) => pick("integrations", id)}
                     onPageWide={setExtensionPageWide}
-                    onSettings={(url) => {
-                      const target = settingsTarget(url);
-                      if (target && (isCoreTab(target.tab) || isModuleTab(target.tab))) pick(target.tab as Tab, target.sub);
-                    }}
+                    onSettings={openSettingsUrl}
                   />
                 </Suspense>
               ) : (
@@ -483,16 +486,10 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
               {tab === "channels" && (sub ? (twoCol ? (
                 <div className="flex gap-6">
                   <div className="w-[300px] shrink-0"><ChannelList openBeside={sub} onOpen={(id) => pick("channels", id)} onMarketItem={(market, id) => pick("extensions", routeSub({ kind: "item", market, id }))} /></div>
-                  <div className="min-w-0 flex-1"><ChannelPage key={sub} {...parseOwnedSub(sub)} onBack={() => pick("channels")} onSettings={(url) => {
-                    const target = settingsTarget(url);
-                    if (target && (isCoreTab(target.tab) || isModuleTab(target.tab))) pick(target.tab as Tab, target.sub);
-                  }} /></div>
+                  <div className="min-w-0 flex-1"><ChannelPage key={sub} {...parseOwnedSub(sub)} onBack={() => pick("channels")} onSettings={openSettingsUrl} /></div>
                 </div>
               ) : (
-                <ChannelPage key={sub} {...parseOwnedSub(sub)} onBack={() => pick("channels")} headerBack={phone} onSettings={(url) => {
-                  const target = settingsTarget(url);
-                  if (target && (isCoreTab(target.tab) || isModuleTab(target.tab))) pick(target.tab as Tab, target.sub);
-                }} />
+                <ChannelPage key={sub} {...parseOwnedSub(sub)} onBack={() => pick("channels")} headerBack={phone} onSettings={openSettingsUrl} />
               )) : (
                 <ChannelList onOpen={(id) => pick("channels", id)} onMarketItem={(market, id) => pick("extensions", routeSub({ kind: "item", market, id }))} />
               ))}

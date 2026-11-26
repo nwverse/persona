@@ -41,12 +41,12 @@ import (
 // ACP instruction fitting to the mounted device tools and supervision role (#16052) adds 244 B (270,873 B).
 // Antigravity settled-turn recovery across delayed shifted-index exports and structured agy_turn_end turn_duration items (#15619) add 1,169 B (272,042 B).
 // Antigravity non-rewind negative cache for summary_behind GetCascadeTrajectory checks + summarizeTranscript prefix summary reuse (#13086) add 872 B (272,914 B).
-// Later runtime changes on main (#15705) bring the total to 273,538 B.
+// Antigravity Desktop session.start (ConversationService/CreateConversation), model discovery, and lifecycle controls (#15994) add 4,922 B (277,836 B).
 // Following an Antigravity conversation past a rewind's abandoned export tail and rewinding a cut that hides ranges at
-// its matching visible step (#14297) add 299 B (273,837 B).
+// its matching visible step (#14297) add 304 B (278,140 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 273_837
+	const budget = 278_140
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

@@ -5,15 +5,23 @@ import { api, ApiError } from "../lib/api";
 import { useStore } from "../lib/store";
 import { loadTaskRepositories, repositoryRequestOptions, type RepositoryLayout, type TaskRepository } from "../lib/task-repositories";
 import { useRepositoryRequestContext } from "../lib/use-repository-request-context";
-import { loadWorkspaceRules, previewWorkspaceNaming, RULE_FIELDS, rulesPatch, sameRules, saveWorkspaceRules, WORKSPACE_NAMING_VERSION,
+import { legacyWorkspaceNamingDefaults, loadWorkspaceRules, previewWorkspaceNaming, RULE_FIELDS, rulesPatch, sameRules, saveWorkspaceRules, WORKSPACE_NAMING_VERSION,
   type NamingDiagnostic, type WorkspaceNamingPreview as Preview, type WorkspaceNamingSettings, type WorkspaceRules } from "../lib/workspace-naming";
 import { settingsInputClass } from "../views/settings/SettingsParts";
 import { Button, Loading } from "./atoms";
 
+function diagnosticCode(diagnostic: NamingDiagnostic, sources: Preview["branch_sources"]) {
+  if (diagnostic.code === "field_unavailable" && diagnostic.field === "branch_template" &&
+      sources?.some((source) => source.repo_id === diagnostic.repo_id && source.kind === "repository_default")) {
+    return "default_branch_unavailable";
+  }
+  return diagnostic.code;
+}
+
 /** An empty field removes its override; placeholders describe the current fallback without materializing it. */
-export function WorkspaceRulesEditor({ value, inherited, defaultSource = "system", disabled, diagnostics = [], onChange }: {
+export function WorkspaceRulesEditor({ value, inherited, defaultSource = "system", disabled, diagnostics = [], branchSources, onChange }: {
   value: WorkspaceRules; inherited: WorkspaceRules; defaultSource?: "system" | "assistant";
-  disabled?: boolean; diagnostics?: NamingDiagnostic[]; onChange: (value: WorkspaceRules) => void;
+  disabled?: boolean; diagnostics?: NamingDiagnostic[]; branchSources?: Preview["branch_sources"]; onChange: (value: WorkspaceRules) => void;
 }) {
   const id = useId();
   return <div className="space-y-3">
@@ -31,7 +39,7 @@ export function WorkspaceRulesEditor({ value, inherited, defaultSource = "system
             }} aria-invalid={!!error} aria-describedby={`${id}-${field}-help ${id}-${field}-default${error ? ` ${id}-${field}-error` : ""}`} />
           <span id={`${id}-${field}-default`} className="sr-only">{placeholder}</span>
           <p id={`${id}-${field}-help`} className="break-words text-label leading-relaxed text-ink-3">{t(`workspace-naming.help_${field}`)}</p>
-          {error && <p id={`${id}-${field}-error`} role="alert" className="break-words text-label text-red">{t(`workspace-naming.${error.code}`, { field: t(`workspace-naming.${field}`) })}</p>}
+          {error && <p id={`${id}-${field}-error`} role="alert" className="break-words text-label text-red">{t(`workspace-naming.${diagnosticCode(error, branchSources)}`, { field: t(`workspace-naming.${field}`) })}</p>}
         </div>
       </div>;
     })}
@@ -50,7 +58,7 @@ export function WorkspaceNamingPreview({ result, loading, error }: { result?: Pr
     {result && <>
       <p className="font-medium text-ink">{t(result.sample ? "workspace-naming.sample" : "workspace-naming.preview_title")}</p>
       {result.diagnostics.length > 0 && <div className="space-y-1">{result.diagnostics.map((d, index) => <p key={index} className={d.severity === "error" ? "text-red" : "text-ink-2"}>
-        {t(`workspace-naming.${d.code}`, { field: RULE_FIELDS.includes(d.field as typeof RULE_FIELDS[number]) ? t(`workspace-naming.${d.field}`) : t("workspace-naming.title") })}{d.repo_id ? ` (${d.repo_id})` : ""}
+        {t(`workspace-naming.${diagnosticCode(d, result.branch_sources)}`, { field: RULE_FIELDS.includes(d.field as typeof RULE_FIELDS[number]) ? t(`workspace-naming.${d.field}`) : t("workspace-naming.title") })}{d.repo_id ? ` (${d.repo_id})` : ""}
       </p>)}</div>}
       {plan && <>
         <div className="min-w-0 space-y-2 rounded-control bg-inset px-3 py-2.5">
@@ -127,7 +135,7 @@ function WorkspaceNamingSession({ manager, owner, todoId }: { manager: string; o
     // The freshly fetched rules are the dirty-comparison baseline even when the draft is kept, so a
     // clear the server did not persist stays visible as unsaved and can be retried.
     setSaved(rules);
-    setInherited(todoId ? info.effective_workspace_rules ?? {} : { base_directory: "{home}/workspace", task_directory_template: "task-{task-id}", branch_template: "persona/{task-id}" });
+    setInherited(todoId ? info.effective_workspace_rules ?? {} : info.system_defaults ?? legacyWorkspaceNamingDefaults);
     if (!keepDraft) setMachine(info.machine_id ?? "");
     setSupported(true); setLoaded(true);
   };
@@ -171,7 +179,8 @@ function WorkspaceNamingSession({ manager, owner, todoId }: { manager: string; o
       {busy && !loaded && <Loading />}
       {loaded && !supported && <p className="text-label text-ink-2">{t("workspace-naming.unsupported")}</p>}
       {loaded && supported && <>
-        <WorkspaceRulesEditor value={draft} inherited={inherited} defaultSource={todoId ? "assistant" : "system"} disabled={busy} diagnostics={result?.diagnostics} onChange={(value) => { invalidate(); setDraft(value); }} />
+        <WorkspaceRulesEditor value={draft} inherited={inherited} defaultSource={todoId ? "assistant" : "system"} disabled={busy}
+          diagnostics={result?.diagnostics} branchSources={result?.branch_sources} onChange={(value) => { invalidate(); setDraft(value); }} />
         <div className="workspace-naming-actions flex flex-wrap items-center gap-2">
           {!sameRules(draft, saved) && <span className="text-meta text-ink-3">{t("workspace-naming.unsaved")}</span>}
           <Button tone="primary" busy={busy} disabled={sameRules(draft, saved)} onClick={() => void save()}>{t("common.save")}</Button>
