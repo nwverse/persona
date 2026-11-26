@@ -946,11 +946,11 @@ func larkConstantNameOK(name string) bool {
 // larkLiteralConstants returns the variables provably constant over the whole command, for routes in loops and lists
 // that larkVariableScopeStable rejects (#16491). A constant is assigned exactly once, as `NAME=value` on its own, by a
 // top-level statement that always runs: a `;` / newline statement, or an `&&` operand after only `true`, `:` or, in the
-// first statement, `cd` to an absolute directory that exists now and anyone may enter. Its value is a literal of
+// first statement, `cd /tmp`. Its value is a literal of
 // [A-Za-z0-9_-], so it cannot change which route a call reaches; its name is one the shell never sets itself
 // (larkConstantNameOK); it is not used before that statement, and no other assignment of it appears. Every command in
-// it must be one that cannot set a variable (larkConstantSafeCommands), and nothing in it may evaluate arithmetic or a
-// -v test; otherwise there are no constants at all.
+// it must be one that cannot set a variable (larkConstantSafeCommands), every assignment in it must be to such a name,
+// and nothing in it may evaluate arithmetic, a subscript or a non-string test; otherwise there are no constants at all.
 func larkLiteralConstants(cmd string, gates []proto.CommandGate) map[string]string {
 	out := map[string]string{}
 	tree, err := syntax.NewParser().Parse(strings.NewReader(cmd), "")
@@ -980,15 +980,10 @@ func larkLiteralConstants(cmd string, gates []proto.CommandGate) map[string]stri
 		switch {
 		case len(words) == 1 && (words[0] == "true" || words[0] == ":"):
 			return true
-		case len(words) == 2 && words[0] == "cd" && first:
-			// An absolute literal directory anyone may enter, as the command's first statement: it does not depend on
-			// an earlier cd, CDPATH or who runs it, and nothing before it can remove or rename the directory.
-			dir := words[1]
-			if !filepath.IsAbs(dir) || strings.ContainsAny(dir, "~*?[]{}") || slices.Contains(strings.Split(dir, "/"), "..") {
-				return false
-			}
-			info, err := os.Stat(dir)
-			return err == nil && info.IsDir() && info.Mode().Perm()&0o001 != 0
+		case len(words) == 2 && words[0] == "cd" && words[1] == "/tmp" && first:
+			// Only /tmp, as the command's first statement: every user may enter it, and nothing before it runs.
+			info, err := os.Stat("/tmp")
+			return err == nil && info.IsDir()
 		}
 		return false
 	}
@@ -1031,8 +1026,9 @@ func larkLiteralConstants(cmd string, gates []proto.CommandGate) map[string]stri
 			opaque = opaque || n.Index != nil // a[expr]=v evaluates expr as arithmetic
 			if n.Name != nil {
 				assigned[n.Name.Value]++
-				// IFS changes how every unquoted constant splits, PATH and the like what runs.
-				opaque = opaque || larkShellManaged(n.Name.Value) || larkExecutableEnv[n.Name.Value]
+				// Only ordinary names: IFS changes how constants split, PATH what runs, and an assignment to one of zsh's
+				// integer specials (HISTSIZE=e) evaluates its value as arithmetic.
+				opaque = opaque || !larkConstantNameOK(n.Name.Value) || larkExecutableEnv[n.Name.Value]
 			}
 		case *syntax.WordIter:
 			if n.Name != nil {
@@ -1068,8 +1064,9 @@ func larkLiteralConstants(cmd string, gates []proto.CommandGate) map[string]stri
 		case *syntax.ExtGlob:
 			opaque = true // zsh glob qualifiers can run code
 		case *syntax.Lit:
-			// An unquoted or double-quoted [ is a glob or, after $name in zsh, a subscript evaluated as arithmetic.
-			if strings.Contains(n.Value, "[") && n.Value != "[" {
+			// An unquoted or double-quoted [ is a glob or, after $name in zsh, a subscript evaluated as arithmetic; a $
+			// left in a literal is an expansion the parser did not read ($~name turns on zsh's glob qualifiers).
+			if strings.Contains(n.Value, "[") && n.Value != "[" || strings.Contains(n.Value, "$") {
 				opaque = true
 			}
 		case *syntax.FuncDecl, *syntax.DeclClause, *syntax.LetClause, *syntax.CoprocClause:

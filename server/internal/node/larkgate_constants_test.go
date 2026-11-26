@@ -72,9 +72,12 @@ func TestRouteVariableConstantOverTheCommand(t *testing.T) {
 		{"operator from a variable", `F=x; o=-v; [ $o 'path[${F::=}1]' ]; for i in $(seq 1 2); do ex GET "/links$F/open"; done`, ""},
 		{"zsh modifier", `F=xopen; for i in $(seq 1 2); do ex GET "/links/$F:s/x//"; done`, ""},
 		{"zsh modifier after cd", `cd /tmp && F=x; for i in 1; do ex GET "/links/open$F:s/x//"; done`, ""},
+		{"zsh $~name", `F=x; g='/tmp(e:F=:)'; echo $~g; for i in 1; do ex GET "/links/open$F"; done`, ""},
+		{"zsh integer special", `cd /tmp && F=x; e='pipestatus[${F::=}1]'; HISTSIZE=e; for i in 1; do ex GET "/links${F}/open"; done`, ""},
 		{"IFS", `IFS=z; F=userz-o; for i in 1; do ex GET "/conversations/$F/messages"; done`, ""},
 		{"{name}> redirect", `cd /tmp && F=x; exec {F}>/dev/null; for i in 1; do ex GET "/$F/open"; done`, ""},
 		// cd counts as always succeeding only into an absolute directory anyone may enter.
+		{"cd elsewhere", `cd /usr && ` + f + `; for i in 1; do ex GET "/conversations/$F/messages"; done`, ""},
 		{"relative cd", `cd /usr; cd lib && ` + f + `; for i in 1; do ex GET "/conversations/$F/messages"; done`, ""},
 		{"cd after another statement", `rmdir /tmp/x; cd /tmp && ` + f + `; for i in 1; do ex GET "/conversations/$F/messages"; done`, ""},
 		{"cd with ..", `cd /tmp/.. && ` + f + `; for i in 1; do ex GET "/conversations/$F/messages"; done`, ""},
