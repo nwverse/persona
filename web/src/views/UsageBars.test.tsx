@@ -676,13 +676,16 @@ describe("user-selected pinned usage accounts (#12418)", () => {
       expect(stripBtn().textContent).toContain("Codex Pro");
       expect(document.querySelector("[data-usage-pinned-bar]")?.textContent).toContain("侧栏已固定 2 项");
 
-      // When only a missing window pin remains, strip falls back to automatic ranking and popover shows fallback notice
+      // When only a missing window pin remains, strip falls back to automatic ranking and popover shows fallback notice.
+      // Automatic ranking reads each account as a whole: Antigravity has only model pools, so it shows the pool with the
+      // most headroom (Claude and GPT models, 88% left), not Gemini's exhausted 5h window (#15669).
       await act(async () => document.querySelector<HTMLButtonElement>('[data-usage-pin="ds"]')!.click());
       await act(async () => document.querySelector<HTMLButtonElement>(`[data-usage-pin-window="${codex7dPin}"]`)!.click());
       expect(localStorage.getItem(PINNED_USAGE_ACCOUNTS_KEY)).toBe(JSON.stringify([gemini7dPin]));
       expect(document.querySelector("[data-usage-pinned-bar]")?.textContent).toContain("固定项暂不可用");
-      expect(stripBtn().textContent).toContain("剩 12%");
-      expect(stripBtn().textContent).toContain("剩 15%");
+      expect(stripBtn().textContent).toContain("Codex Pro剩 15%");
+      expect(stripBtn().textContent).toContain("Antigravity剩 88%");
+      expect(stripBtn().textContent).not.toContain("Gemini Models");
 
       // Reset to automatic clears stored pins
       await act(async () => document.querySelector<HTMLButtonElement>("[data-usage-reset-pins]")!.click());

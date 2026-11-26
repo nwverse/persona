@@ -151,7 +151,7 @@ describe("Overview computer monitoring cards", () => {
     expect(option("行").getAttribute("aria-checked")).toBe("true");
     expect(option("卡片").getAttribute("aria-checked")).toBe("false");
     expect(host.querySelector("[data-testid='machine-metrics-summary']")).toBeNull();
-    expect(host.querySelector("a[href='/machines/mac']")?.className).toBe("flex items-center gap-3 rounded-card bg-surface px-3 py-2.5 shadow-card transition-colors hover:bg-hover");
+    expect(host.querySelector("a[href='/machines/mac']")?.classList.contains("card-interactive")).toBe(true);
 
     await act(async () => { vi.advanceTimersByTime(10_000); });
     await flush();
