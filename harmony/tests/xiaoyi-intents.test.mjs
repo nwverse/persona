@@ -70,6 +70,22 @@ test('StartPersonaRecording, AssistantSkill, and Index deep-link enforce fail-cl
 
   const skillSrc = readFileSync(resolve(MAIN_DIR, '../../skills/persona-assistant/scripts/AssistantSkill.ets'), 'utf8');
   assert.ok(skillSrc.includes('prepareRecordingStart()'));
+
+  const recordingPageSrc = readFileSync(resolve(MAIN_DIR, 'ets/components/KnowledgeWorkspacePage.ets'), 'utf8');
+  assert.ok(recordingPageSrc.includes('isRecordingModuleAllowed()'));
+  assert.ok(recordingPageSrc.includes('recording.canStop()'));
+
+  const recordingViewSrc = readFileSync(resolve(MAIN_DIR, 'ets/components/KnowledgeRecordingView.ets'), 'utf8');
+  assert.ok(recordingViewSrc.includes('recordingAllowed'));
+  assert.ok(recordingViewSrc.includes('xiaoyi_recording_module_off'));
+
+  const clientModelSrc = readFileSync(resolve(MAIN_DIR, 'ets/models/ClientModel.ets'), 'utf8');
+  assert.ok(clientModelSrc.includes('static registerStatusHook('));
+  assert.ok(clientModelSrc.includes('notifyStatusHooks()'));
+
+  const suggestionsSrc = readFileSync(resolve(MAIN_DIR, 'ets/xiaoyi/IntentSuggestionsService.ets'), 'utf8');
+  assert.ok(suggestionsSrc.includes('static scheduleStatusShare('));
+  assert.ok(suggestionsSrc.includes('static resetSchedule('));
 });
 
 test('AppIntentEntity classes declare supportedQueryProperties and onQueryEntity', () => {

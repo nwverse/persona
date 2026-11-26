@@ -23,6 +23,10 @@ function clearXiaoYiSuggestionsOnForget(_hubId: string, context: common.Context)
   return IntentSuggestionsService.clearAll(context);
 }
 
+function syncXiaoYiSuggestionsOnStatus(pendingCount: number, workingCount: number, context: common.Context): void {
+  IntentSuggestionsService.scheduleStatusShare(context, pendingCount, workingCount);
+}
+
 export default class EntryAbility extends UIAbility {
   private lifecycle: number = 0;
   private shareGeneration: number = 0;
@@ -33,6 +37,7 @@ export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     XiaoYiRuntimeContext.bind(this.context);
     ClientModel.registerForgetHook(clearXiaoYiSuggestionsOnForget);
+    ClientModel.registerStatusHook(syncXiaoYiSuggestionsOnStatus);
     phoneTextSize.attach(this.context);
     nativeEnvironment.update(this.context.config);
     Strings.bind(this.context.resourceManager);
@@ -111,5 +116,5 @@ export default class EntryAbility extends UIAbility {
     }).catch(() => { if (this.visible && epoch === this.lifecycle) client.error = 'failed'; });
     deviceFeatures.foreground().catch(() => {});
   }
-  onDestroy(): void { this.destroyed = true; this.shareGeneration++; phoneTextSize.detach(); nativeEnvironment.foreground = false; NativeDictation.cancelActive(); nativeEnvironment.unbindWindow(); this.visible = false; this.lifecycle++; this.pendingNotification = undefined; this.pendingXiaoYiRoute = ''; deviceLook.bind(undefined).catch(() => {}); KnowledgeRecording.backgroundAll().catch(() => {}); deviceFeatures.background().catch(() => {}); client.shutdown().catch(() => {}); }
+  onDestroy(): void { this.destroyed = true; this.shareGeneration++; IntentSuggestionsService.resetSchedule(); phoneTextSize.detach(); nativeEnvironment.foreground = false; NativeDictation.cancelActive(); nativeEnvironment.unbindWindow(); this.visible = false; this.lifecycle++; this.pendingNotification = undefined; this.pendingXiaoYiRoute = ''; deviceLook.bind(undefined).catch(() => {}); KnowledgeRecording.backgroundAll().catch(() => {}); deviceFeatures.background().catch(() => {}); client.shutdown().catch(() => {}); }
 }

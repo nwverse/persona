@@ -75,6 +75,18 @@ export class ClientModel {
   static registerForgetHook(hook: (hubId: string, context: common.Context) => Promise<void>): void {
     ClientModel.forgetHooks.add(hook);
   }
+  private static statusHooks: Set<(pendingCount: number, workingCount: number, context: common.Context) => void> = new Set();
+  static registerStatusHook(hook: (pendingCount: number, workingCount: number, context: common.Context) => void): void {
+    ClientModel.statusHooks.add(hook);
+  }
+  private notifyStatusHooks(): void {
+    if (this.detached || this.demo || !this.connected || !this.context || ClientModel.statusHooks.size === 0) return;
+    const workingCount = this.sessions.filter((s: ResourceRow): boolean => s.state === 'working').length;
+    const pendingCount = this.phoneAgentBadge((): boolean => false);
+    for (const hook of ClientModel.statusHooks) {
+      try { hook(pendingCount, workingCount, this.context); } catch (_) {}
+    }
+  }
   pairingRevision(): number { return ClientModel.pairingEpochs.get(this.profile.id) || 0; }
   private retirePairing(id: string): void { ClientModel.pairingEpochs.set(id, (ClientModel.pairingEpochs.get(id) || 0) + 1); }
   retireHubConnections(id: string): void {
@@ -419,6 +431,7 @@ export class ClientModel {
     if (revision === this.attentionReadRevision && this.owns(generation, scope)) {
       this.attentionCards = agentAttentionCards(values, this.profile.manager);
       this.attentionOwner = JSON.stringify([generation, scope]);
+      this.notifyStatusHooks();
     }
     return values;
   }
@@ -927,6 +940,7 @@ export class ClientModel {
       sessions.forEach((row: ResourceRow) => row.group = this.profile.id); machines.forEach((row: ResourceRow) => row.group = this.profile.id);
       this.sessions = sessions; this.sessionsReady = true; this.machines = machines; this.managers = managers; this.rosterDefaultId = rosterDefault;
       this.updateSendFeedbackSessions(sessions);
+      this.notifyStatusHooks();
       if (owner.heldReceipts.length) owner.heldReceipts = owner.heldReceipts.filter((receipt: HeldActionReceipt) => {
         if (receipt.scope !== scope) return true;
         const row = sessions.find((item: ResourceRow) => this.target(item) === receipt.target);

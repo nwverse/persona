@@ -29,6 +29,44 @@ function readErrorCode(error: Error): number {
  * Off by default until the user enables it in XiaoYi settings; gracefully degrades in unsigned dev builds.
  */
 export class IntentSuggestionsService {
+  private static debounceTimer: number = -1;
+  private static lastSignature: string = '';
+
+  static resetSchedule(): void {
+    if (IntentSuggestionsService.debounceTimer !== -1) {
+      clearTimeout(IntentSuggestionsService.debounceTimer);
+      IntentSuggestionsService.debounceTimer = -1;
+    }
+    IntentSuggestionsService.lastSignature = '';
+  }
+
+  /** Debounce live Hub status updates before calling `shareIntent` when user opted in. */
+  static scheduleStatusShare(
+    context: common.Context,
+    pendingCount: number,
+    workingCount: number,
+    delayMs: number = 2000
+  ): void {
+    const signature = String(pendingCount) + ':' + String(workingCount);
+    if (signature === IntentSuggestionsService.lastSignature && IntentSuggestionsService.debounceTimer === -1) {
+      return;
+    }
+    if (IntentSuggestionsService.debounceTimer !== -1) {
+      clearTimeout(IntentSuggestionsService.debounceTimer);
+      IntentSuggestionsService.debounceTimer = -1;
+    }
+    IntentSuggestionsService.debounceTimer = setTimeout(() => {
+      IntentSuggestionsService.debounceTimer = -1;
+      IntentSuggestionsService.shareStatusSuggestions(context, pendingCount, workingCount)
+        .then((outcome: SuggestionShareOutcome) => {
+          if (outcome.shared || outcome.status === 'disabled') {
+            IntentSuggestionsService.lastSignature = signature;
+          }
+        })
+        .catch(() => {});
+    }, Math.max(0, delayMs));
+  }
+
   static async isEnabled(context: common.Context): Promise<boolean> {
     try {
       const store = await preferences.getPreferences(context, PREF_STORE);
@@ -48,6 +86,7 @@ export class IntentSuggestionsService {
       return false;
     }
     if (!enabled) {
+      IntentSuggestionsService.resetSchedule();
       await IntentSuggestionsService.clearAll(context);
     }
     return true;
@@ -98,6 +137,7 @@ export class IntentSuggestionsService {
   }
 
   static async clearAll(context: common.Context): Promise<void> {
+    IntentSuggestionsService.resetSchedule();
     if (!canIUse('SystemCapability.AI.InsightIntent')) return;
     for (let i = 0; i < XIAOYI_INTENT_CATALOG.length; i++) {
       try {

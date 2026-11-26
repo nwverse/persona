@@ -22,7 +22,7 @@ registerHooks({
    export class UIAbility {context={config:{fontSizeScale:1},resourceManager:{},getApplicationContext:()=>({setColorMode(){}})}}
    export const window={};export const Strings={bind(){},refresh(){}};
    export const XiaoYiRuntimeContext={bind(){s.contextBound=(s.contextBound||0)+1;}};
-   export const IntentSuggestionsService={async clearAll(){s.suggestionsCleared=(s.suggestionsCleared||0)+1;}};
+   export const IntentSuggestionsService={async clearAll(){s.suggestionsCleared=(s.suggestionsCleared||0)+1;},scheduleStatusShare(p,w){s.scheduledSuggestions=s.scheduledSuggestions||[];s.scheduledSuggestions.push({p,w});},resetSchedule(){s.suggestionsScheduleReset=(s.suggestionsScheduleReset||0)+1;}};
    export const ShareReceiver={isShareWant(w){return w?.action==='ohos.want.action.sendData';},async parseWant(w){const t=w?.parameters?.text||'';return t?{hasContent:true,title:'',text:t,url:'',draftText:t,route:{dest:'share',profile:'',manager:'',machine:'',session:'',autoStart:false,text:t,title:'',url:''}}:{hasContent:false,title:'',text:'',url:'',draftText:''};}};
    export const nativeMeetingServices={async initialize(){s.meetingRefreshes=(s.meetingRefreshes||0)+1},setRecordingEvent(){},
      receive(parameters){if(parameters.personaMeetingType==='persona.meeting.reminder' && parameters.occurrence)s.meetingOpens=(s.meetingOpens||0)+1}};
@@ -32,7 +32,7 @@ registerHooks({
    export const KnowledgeRecording={async backgroundAll(){s.recordingStops++;}};
    export const deviceLook={async initialize(){},async bind(owner){if(owner===undefined)s.lookUnbinds++;}};
    export const nativeEnvironment={update(){},bindWindow(){},unbindWindow(){}};
-   export const ClientModel={registerForgetHook(fn){s.forgetHook=fn;}};
+   export const ClientModel={registerForgetHook(fn){s.forgetHook=fn;},registerStatusHook(fn){s.statusHook=fn;}};
    export const client={get ready(){return s.ready;},set ready(value){s.ready=value;},appearance:0,get language(){return s.language;},announceLanguage(){s.localeAnnouncements++;},error:'',initialize:()=>s.init,activateForeground(){s.activated++;},async foregrounded(){s.foregrounded++;},async background(){s.background++;},async shutdown(){s.background++;},async openNotification(target){s.notifications.push(target);},openXiaoYiRoute(route){s.xiaoYiRoutes.push(route);}};
   `};
   if(url.endsWith('.ets')||url.endsWith('.ts'))return {format:'module',shortCircuit:true,source:stripTypeScriptTypes(readFileSync(new URL(url),'utf8').replace(/@ObservedV2\s*/g,'').replace(/@Trace\s+/g,''))};
@@ -130,4 +130,16 @@ test('an incoming system share Want stages a share draft route without auto-send
  const parsed = JSON.parse(state.xiaoYiRoutes[0]);
  assert.equal(parsed.dest, 'share');
  assert.equal(parsed.text, 'Shared article excerpt');
+});
+
+test('EntryAbility registers XiaoYi forget/status hooks onCreate and resets suggestion timers onDestroy', () => {
+ reset();
+ const ability = new EntryAbility();
+ ability.onCreate({}, {});
+ assert.equal(typeof state.forgetHook, 'function');
+ assert.equal(typeof state.statusHook, 'function');
+ state.statusHook(2, 1, {});
+ assert.deepEqual(state.scheduledSuggestions, [{ p: 2, w: 1 }]);
+ ability.onDestroy();
+ assert.equal(state.suggestionsScheduleReset, 1);
 });
