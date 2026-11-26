@@ -22,7 +22,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <title>Persona</title>
     <!-- --page, light and dark: the page before the CSS bundle is in (the script below sets .dark first) -->
-    <style>html{background:#f1f1f4}html.dark{background:#0b0b0c}</style>
+    <style>html{background:#f1f1f4}html.dark{background:#0b0b0c}html[data-surface-style="liquid-glass"]{background:transparent}</style>
     <script src="compatibility-bootstrap.js"></script>
     <script>
       // Pick the theme before the first paint so a dark page never flashes white.
@@ -40,7 +40,12 @@
         var size = localStorage.getItem("persona.text-size");
         if (size === "small" || size === "large") document.documentElement.dataset.textSize = size;
         // surface style (src/ui/look.ts): opt-in Liquid Glass before first paint.
-        if (localStorage.getItem("persona.surface-style") === "liquid-glass") document.documentElement.dataset.surfaceStyle = "liquid-glass";
+        if (localStorage.getItem("persona.surface-style") === "liquid-glass") {
+          document.documentElement.dataset.surfaceStyle = "liquid-glass";
+          var gt = Number(localStorage.getItem("persona.glass-translucency"));
+          var g = Number.isFinite(gt) && localStorage.getItem("persona.glass-translucency") ? Math.round(Math.min(100, Math.max(0, gt))) : 68;
+          document.documentElement.style.setProperty("--glass-t", (g / 100).toFixed(2));
+        }
       } catch (e) {}
     </script>
     <script>
