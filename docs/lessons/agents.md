@@ -144,6 +144,12 @@ can select the older checkout path. An uncertain prepare or start must retain th
 Use the same path check at preview and prepare so existing symlinks cannot pass one check
 and fail the other.
 
+On hosts with a symlinked home, Git records physical worktree paths (#16305).
+Resolve the configured home prefix before deriving the task and repository paths, and
+resolve the configured state prefix before appending control directories. Checking the
+remaining components as written preserves the distinction between host aliases and
+links inside the workspace.
+
 ## Task branch reuse is not forced worktree creation (#8357)
 
 An explicitly named task branch may already have a checkout outside the engine's usual directory. Discover it from Git,

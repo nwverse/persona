@@ -141,6 +141,9 @@ func (s *Service) todoBlockersRoutes() {
 			apierr.Write(w, http.StatusInternalServerError, err)
 			return
 		}
+		if matched.Kind == todoBlockerKindMergeTrain {
+			s.clearMergeTrainBlocker(todoID, matched.TargetRef, matched.ConditionJSON)
+		}
 		s.todosChanged(ctx)
 		if wasActive && !s.hasActiveTodoBlockers(ctx, todoID) {
 			var onUnblocked func(ctx context.Context, todoID string)
