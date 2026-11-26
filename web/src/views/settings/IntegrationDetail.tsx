@@ -1,11 +1,12 @@
 // Lazy-loaded unified Integration Detail view (integrations_v2, #14847 / Refs #14802).
 // Composes Account & Connection, Chat & Delivery (with thread_mode & thread_idle_hours),
-// Inbox & Sync, section-grouped Extension Settings, and Plugin Management on a single page
+// Inbox & Sync, section-grouped Extension Settings, and Extension management on a single page
 // for both built-in services and installed extensions. Strictly gated by integrations_v2.
 import { useMailboxEnabled } from "../../lib/mail";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { formatList, t } from "../../i18n";
 import { ConnectorExternalSourceSettings } from "../../features/external-sources/ExternalSourceSettingsEntry";
+import { ago } from "../../lib/format";
 import { api, enc, errorText } from "../../lib/api";
 import { canBind, isBound, settingsTarget, type ChannelDetail } from "../../lib/channels";
 import {
@@ -300,6 +301,12 @@ export default IntegrationDetail;
 
 // ── Built-in services (Mail, Feishu Bot, Lark Gateway, native hub connectors) ────────────
 
+function LastChannelEvent({ detail }: { detail: ChannelDetail | null }) {
+  return detail?.last_event_at
+    ? <span className="shrink-0">{t("settings-channels.last_event", { when: ago(detail.last_event_at) })}</span>
+    : null;
+}
+
 function BuiltinMark({ id, channel }: { id: string; channel?: ReturnType<typeof useChannelController>["detail"] }) {
   if (channel) return <ChannelMark c={channel} size={44} />;
   const brand = connectorBrand(id === "feishu-bot" ? "lark" : id);
@@ -391,13 +398,14 @@ function FeishuBotBuiltinDetail({
           <BuiltinMark id={target.id} channel={channelCtl.detail} />
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 items-center gap-2">
-              <h1 className="truncate text-card-title font-semibold text-ink">{title}</h1>
+              {title && <h1 className="truncate text-card-title font-semibold text-ink">{title}</h1>}
               <Pill>{t("settings-integrations.builtin_badge")}</Pill>
             </div>
             {channelCtl.detail && (
               <div className="mt-0.5 flex min-w-0 items-center gap-2 text-label text-ink-3">
                 <ChannelStateInline c={channelCtl.detail} />
                 {channelCtl.detail.account?.name && <span className="truncate">{channelCtl.detail.account.name}</span>}
+                <LastChannelEvent detail={channelCtl.detail} />
               </div>
             )}
           </div>
@@ -496,7 +504,7 @@ function BuiltinIntegrationDetail({
       ? t("settings-connectors.mail")
       : isLarkGateway
         ? t("settings-connectors.lark")
-        : connector?.name ?? (target.id === "github" ? "GitHub" : target.id));
+        : connector?.name ?? channelCtl.detail?.name ?? (target.id === "github" ? "GitHub" : undefined));
 
   const description =
     target.description ??
@@ -542,7 +550,7 @@ function BuiltinIntegrationDetail({
           <BuiltinMark id={target.id} channel={channelCtl.detail} />
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 items-center gap-2">
-              <h1 className="truncate text-card-title font-semibold text-ink">{title}</h1>
+              {title && <h1 className="truncate text-card-title font-semibold text-ink">{title}</h1>}
               <Pill>{t("settings-integrations.builtin_badge")}</Pill>
             </div>
             {connector && (
@@ -552,12 +560,14 @@ function BuiltinIntegrationDetail({
                   {connectorState(connector)}
                   {connector.account ? ` · ${connector.account}` : ""}
                 </span>
+                <LastChannelEvent detail={channelCtl.detail} />
               </div>
             )}
             {!connector && channelCtl.detail && (
               <div className="mt-0.5 flex min-w-0 items-center gap-2 text-label text-ink-3">
                 <ChannelStateInline c={channelCtl.detail} />
                 {channelCtl.detail.account?.name && <span className="truncate">{channelCtl.detail.account.name}</span>}
+                <LastChannelEvent detail={channelCtl.detail} />
               </div>
             )}
           </div>
@@ -1031,7 +1041,7 @@ function ExtensionIntegrationDetail({
           />
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 items-center gap-2">
-              <h1 className="truncate text-card-title font-semibold text-ink">{p?.name ?? target.name ?? id}</h1>
+              {(p?.name || target.name) && <h1 className="truncate text-card-title font-semibold text-ink">{p?.name || target.name}</h1>}
               <Pill>{t("settings-integrations.extension_badge")}</Pill>
             </div>
             <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-label text-ink-3">
@@ -1039,6 +1049,7 @@ function ExtensionIntegrationDetail({
               <span className="truncate">
                 {p ? stateLine(p) : loading ? t("settings-extensions.loading") : t("settings-extensions.unavailable")}
               </span>
+              <LastChannelEvent detail={channelCtl.detail} />
             </div>
           </div>
           {loading && !p && <Spinner />}

@@ -631,9 +631,9 @@ instead of writing the hub's data directory. The manager forwards it as the call
   `generated_at`, `when`, `start` and `end`) and `minutes.md` (the Markdown as given: what searches and `kb.get` read). Each action needs an `id` (at most 64 characters) that stays the same across writes:
   a to-do the user made of an action keeps its `todo_id` when the minutes are written again. `meta.minutes_rev` is the revision written, so `minutes_state` is `ready` and the recording module makes no
   minutes of its own. Minutes or a transcript is required.
-- **Retention**: the recording is a meeting (`kind: meeting`, complete). Past `recording_days` a recording with minutes is trimmed to them and kept until `minutes_days` (forever by default,
-  `docs/assistant/meeting-minutes.md` "Privacy"), like the phone's; one with only a transcript goes. A recording older than `recording_days` is accepted (an extension may write old meetings), but without
-  minutes the next retention round deletes it.
+- **Retention**: the recording is a meeting (`kind: meeting`, complete). Its text follows `recording_text_days` like the phone's (forever by default, #16412). Past a finite one a
+  recording with minutes is trimmed to them and kept until `minutes_days` (forever by default, `docs/assistant/meeting-minutes.md` "Privacy"); one with only a transcript goes. A recording
+  older than a finite `recording_text_days` is accepted (an extension may write old meetings), but without minutes the next retention round deletes it.
 - **The transcript** (`transcript: [{start, end, text}]`, at most 20000 segments) is optional; `n`, `source` and `echo` are the hub's and are dropped. Without minutes, the recording module makes minutes of it
   when it is on, at the user's model cost; the hub never writes the short summary of an extension's recording (`summarized_rev` is set), nor matches it to a calendar item itself.
 - **Links**: `projects` are slugs (or names) of existing projects; each gets `recordings/<id>` in its items, and a later write never removes a link (one the user removed is not made again). `meeting:
@@ -1393,7 +1393,7 @@ Nothing else is reachable: no other host or port, no direct connection, and no p
 | | Default |
 | --- | --- |
 | Installed package verified against an **official marketplace** entry signed by the final key id `3cce0f471911a1cf`, with that marketplace's catalog still verified | Off |
-| Everything else: other marketplaces (unsigned ones included), `dir:`, `file:`, `https://…`, uploads | On |
+| Everything else: other marketplaces (unsigned ones and private ones verified with owner keys included, see "Private market keys"), `dir:`, `file:`, `https://…`, uploads | On |
 | **Installed before #1856 was deployed** (when the hub first starts with the sandbox) | Recorded as "off" and runs as before; use the command below to turn it on |
 
 The verified installed key is saved atomically with the extension record in Postgres (`market_key`). It comes only from an unchanged, verified catalog entry and a checksum-checked package, not from manifest metadata or the market's current identity. Existing installs without this snapshot remain untrusted by default; moving their market to an official address cannot retroactively exempt them. An unsigned upgrade clears the snapshot. An upgrade keeps the replaced version's own origin and key (`previous_origin`, `previous_market_key`), and a rollback restores exactly those: going back to unsigned code never inherits the newer version's verified key, and a row upgraded before these columns existed rolls back with no key at all. Retired official keys never grant the default exemption; explicit owner choices, including recorded pre-sandbox choices, remain unchanged.
@@ -1702,11 +1702,15 @@ personad extension config <id> key=value …           Values that parse as JSON
 personad extension secret <id> <name> [--delete]     The value is read from stdin (not echoed in a terminal; first line from a pipe), never as a command-line argument; an empty one is refused (--delete removes it)
 personad extension uninstall <id> [--keep-data] [--cascade] [--members]   --members: also uninstall a bundle's members
 personad extension market list                       Registered marketplaces: id, name, extension count, signing, address (the official one is marked "official")
-personad extension market add <spec> [--token | --token-from=<marketplace id>]
-                                                     --token: read the token from stdin; --token-from: use the token of that registered marketplace (not shown)
+personad extension market add <spec> [--token | --token-from=<marketplace id>] [--key=ed25519:… …]
+                                                     --token: read the token from stdin; --token-from: use the token of that registered marketplace (not shown);
+                                                     --key (repeatable): a public key the index must be signed with, see "Private market keys"
 personad extension market set-spec <id> <spec>       The marketplace moved (repo renamed): the id stays, and what was installed from it still counts as its own, see "Naming and compatibility"
 personad extension market remove <id> | refresh <id>
 personad extension market token <id> [--clear]       Replace the token (read from stdin, not echoed) and reload; --clear removes it. Setting one helps even for a public GitHub marketplace, see "Extension marketplace", "GitHub rate limits"
+personad extension market key list <id>              A private marketplace's trusted public keys: key id and key
+personad extension market key add <id> <ed25519:…>   Trust one more key (rotation: add the new one, sign with both, remove the old one)
+personad extension market key remove <id> <key id>   Stop trusting a key; with none left the marketplace is unsigned again
 personad extension search [keyword]                  Each result printed as market:<marketplace id>/<extension id>, with installed / upgradable
 personad extension install market:<marketplace id>/<extension id>  Install from a marketplace; if already installed, this upgrades it
 personad extension auto-upgrade on|off [<id>]        Master switch for auto-upgrading marketplace extensions; with an id, the switch for that one extension
@@ -1715,6 +1719,9 @@ personad extension audit [<id>] [--limit=N]         The audit, newest first: who
 
 # Writing extensions (see "Writing extensions: SDK, templates and command line"); without <dir> it is the current directory
 personad extension new <id> [--template go|ts] [--name <name>] [--dir <dir>]   go template by default; name and dir both default to the id
+personad extension keygen --out <file>               A new Ed25519 market signing key: the private key to <file> (PKCS #8 PEM, 0600, never overwritten), the public key printed
+personad extension sign-index <persona-extensions.json> --key <file> [--key <file>…] [--out <file>]
+                                                     Sign a market index in the official envelope format (offline; re-signing keeps the exact payload bytes)
 personad extension dev [<dir>]                       Attach it to this hub to try it out; rebuilds and restarts on change; needs the hub running
 personad extension test [<dir>]                      Build for this machine and run it through the hub's checks
 personad extension pack [<dir>] [--platforms linux-amd64,…] [--out <dir>] [--split]
@@ -1797,12 +1804,15 @@ A GitHub marketplace can commit installable archives alongside its catalog: no R
 
 | Endpoint | What it does |
 | --- | --- |
-| `GET /api/v1/extensions/-/markets` | `{markets: [{id, spec, name, description, homepage, has_token, extensions (count), warnings, error, fetched_at, added_at, official?, signature: {state, key_id?}}]}` (`signature`, see "Signing" below, is also on the old path); the official marketplace comes first with `official: true`, the rest by registration time |
-| `POST /api/v1/extensions/-/markets` `{spec, token?, token_from?}` | Reads the index once first; if it cannot be read it is not registered (400, `error` gives the reason: bad address, private needs a token, wrong token); returns the marketplace. `token_from` is the id of another registered marketplace whose token to use (one account's token reading several private repos); the caller never sees the token, and only one of it and `token` may be given; on the command line `market add <spec> --token-from=<marketplace id>` |
+| `GET /api/v1/extensions/-/markets` | `{markets: [{id, spec, name, description, homepage, has_token, extensions (count), warnings, error, fetched_at, added_at, official?, signature: {state, key_id?}, trusted_keys?: {<key id>: "ed25519:…"}}]}` (`signature`, see "Signing" below, is also on the old path); the official marketplace comes first with `official: true`, the rest by registration time |
+| `POST /api/v1/extensions/-/markets` `{spec, token?, token_from?, keys?}` | Reads the index once first; if it cannot be read (or, with `keys`, does not verify with one of them) it is not registered (400, `error` gives the reason: bad address, private needs a token, wrong token); returns the marketplace. `token_from` is the id of another registered marketplace whose token to use (one account's token reading several private repos); the caller never sees the token, and only one of it and `token` may be given; on the command line `market add <spec> --token-from=<marketplace id>` |
 | `DELETE /api/v1/extensions/-/markets/{id}` | Stop reading this marketplace; extensions installed from it stay, but their auto-upgrade pauses with `auto_upgrade_paused: "market_removed"`. Add its original registration address again to restore upgrades under the saved settings |
 | `POST /api/v1/extensions/-/markets/{id}/refresh` | Re-read the index now; on a bad signature returns 400 `market_signature` (the last good index is kept) |
 | `POST /api/v1/extensions/-/self/market/refresh` | **Extension token with `market.refresh_own` only**, routed to that token's manager. The current install record alone chooses the market; there is no market parameter and no admin or legacy alias. An accepted call starts (or joins) the existing deduplicated background read and returns 202 at once. Missing scope returns 403; an install not from a market (including an attached one) returns 409 `not_from_market`; an origin market no longer registered returns 404 `not_found`. At most one self-refresh request per market is accepted every 10 minutes, shared by all its extensions; inside the window it returns 429 `rate_limited` with `Retry-After` in seconds. Scheduled and full-access reads keep their existing behavior |
 | `PUT /api/v1/extensions/-/markets/{id}/token` `{token}` | Replace the token (empty string removes it) and re-read |
+| `GET /api/v1/extensions/-/markets/{id}/keys` | `{keys: {<key id>: "ed25519:…"}}`: a private marketplace's trusted public keys (see "Private market keys") |
+| `POST /api/v1/extensions/-/markets/{id}/keys` `{key}` | Trust one more `ed25519:<base64>` key; re-verifies the saved catalog at once and re-reads it in the background; returns the marketplace. 400 `invalid_key` for a malformed key, the official key, more than 8 keys or the official marketplace |
+| `DELETE /api/v1/extensions/-/markets/{id}/keys/{key id}` | Stop trusting a key (by key id or the whole key); the saved catalog is re-verified at once, so a catalog signed only by it is quarantined immediately. 404 when the marketplace has no such key |
 | `GET /api/v1/extensions/-/catalog?q=&market=&refresh=1` | `{markets, extensions: [CatalogItem], platform}`. `q` searches id, name, description, publisher, tags and every translation's name and description (case-insensitive); indexes older than 6 hours are re-read in the background, `refresh=1` waits for all of them to be re-read |
 | `GET /api/v1/extensions/-/catalog/{mid}/{id}/icon?sha256=<package digest>` | Authenticated bundled PNG for a currently trusted registered catalog entry; lazily downloads/verifies the selected package through the existing package cache. Never installs or executes it. Missing, stale, invalid or unavailable artwork returns 404. |
 | `GET /api/v1/extensions/{id}/-/icon?v=<installed version>` | Authenticated PNG read from that installed/local extension root's regular `assets/icon.png`; no symlinks or escaping paths. Missing, stale or invalid artwork returns 404. |
@@ -1897,11 +1907,36 @@ The signature covers **the exact UTF-8 bytes of the JSON-decoded `payload` strin
 
 Only the official marketplace requires signature verification, using the compiled-in key rather than catalog-supplied keys. GitHub, git and direct HTTPS catalog aliases, token-bearing reads, manual re-registration and cached catalogs all use that gate. A failed signature blocks installation and upgrades, including the last good catalog and every bundle member. Only a catalog that was actually read counts: a missing envelope, a malformed one, a bad signature or another signer marks the market `invalid`. A read that gets no catalog (404, 401, another HTTP status, a timeout or network failure) records the error and changes nothing else: the last verified catalog and its `signed` state stay, and installs keep using it. The two are typed failures (`extension.ErrCatalogUnavailable`, `extension.ErrCatalogUnverified`), never told apart by message text; the refresh endpoint answers `market_unreachable` for the first and `market_signature` for the second, and a later network failure does not lift a quarantine. An official market cannot move to an unofficial address to bypass verification. Preview-time source and signing-key snapshots are checked again at commit.
 
-Nonofficial catalogs normally publish a plain index with **no `signatures` field**. Legacy `signing_key`, saved TOFU keys and key-change states are neither trust grants nor permanent locks. A structurally valid embedded nonofficial envelope may be parsed, but is reported as unsigned and acquires no saved key or sandbox exemption. There is no market trust CLI command or HTTP endpoint.
+Nonofficial catalogs normally publish a plain index with **no `signatures` field**. Legacy `signing_key`, saved TOFU keys and key-change states are neither trust grants nor permanent locks. A structurally valid embedded nonofficial envelope on a marketplace without owner keys may be parsed, but is reported as unsigned and acquires no saved key or sandbox exemption. The hub never learns a key from a catalog (no trust on first use): the only way a nonofficial marketplace becomes verified is the owner configuring its keys ("Private market keys" below).
 
 Postgres retains the complete envelope and payload string, not a regenerated index. Every manager restart re-verifies cached envelopes. Legacy official caches that cannot be verified remain isolated and refresh in the background. Unknown saved owner pins remain unchanged and isolated until an approved migration; failed database operations remain retryable. The once-added marker prevents deleted official marketplaces from being silently re-added.
 
 Release integration fixes the official key id at `3cce0f471911a1cf` and the final source address at `https://github.com/nwverse/persona-extensions`. Embedding signatures does not rotate that key. Publishing private keys stay outside repository files, logs and tests and are available only to the signing step. Repository cutover, package publication and visibility changes are separate release gates; a passing fixture is not final-key or production verification.
+
+### Private market keys
+
+A nonofficial marketplace the owner publishes (a private repository, a site of their own) can be given one or more Ed25519 public keys, at most 8, so that rotation can overlap (`market add --key`, `market key add|remove`, `POST /markets` `keys`, `POST|DELETE /markets/{id}/keys`, or the admin UI's **Signing keys**). They are stored per marketplace in `plugin_markets.trusted_keys` (a JSON array; empty for every marketplace that existed before, so an upgraded manager changes nothing) and shown whole, since they are public.
+
+**What verification covers.** While a marketplace has keys, its catalog must be the same embedded envelope as the official one, with a signature by any one of them over the exact payload bytes; the payload pins every package's sha256 and size, so a verified catalog covers the packages. This is enforced wherever the official catalog's signature is: registering (a catalog that does not verify is not added), refreshes, scheduled and extension-initiated reads, every manager restart (the saved envelope is verified again), the catalog's `problem`, previews (the entry must come unchanged from a catalog one of the current keys verified) and the commit (the key set is part of the preview's trust snapshot: changing keys between preview and install refuses the install). A catalog that was read and does not verify (a bad signature, another signer, a plain index) quarantines the marketplace like the official one: `signature.state` `invalid`, nothing installed or upgraded from it, not even from its last good catalog, and a restart keeps the quarantine. A read that gets nothing (404, timeout) changes nothing, as for the official marketplace. Installs and upgrades record the verifying key in `market_key`, exactly as for the official key; rollback restores the previous version's own key.
+
+**Changing keys.** A key change verifies the saved catalog with the new set at once, without a network read, then re-reads the marketplace in the background: removing the key the current catalog is signed with quarantines it immediately; adding it back verifies the saved catalog again. To rotate: add the new key, publish the catalog signed with both (`sign-index --key old.pem --key new.pem`), then publish it signed with the new key only and remove the old key. Installations verified with a removed key keep running and say so (`market_signature.state` `key_removed`) until their next upgrade records the new key. Removing every key returns the marketplace to unsigned, as before. The official marketplace never takes owner keys, and the official public key cannot be added to another marketplace.
+
+**Trust model.** A private key proves who published a catalog; it does not make the publisher as trusted as the official marketplace:
+
+| | Official marketplace | Private marketplace with owner keys | Marketplace without keys |
+| --- | --- | --- | --- |
+| Key | compiled into the manager | configured by the owner, per marketplace | none |
+| Catalog must verify | yes | yes | no |
+| Installs / upgrades | verified, key recorded | verified, key recorded | unsigned, no key recorded |
+| Catalog that fails verification | quarantined | quarantined | (plain indexes are expected) |
+| Default sandbox | off (final official key id only) | **on**: the owner may turn it off per extension | on |
+| Shown as | official signature | verified (key id) | unsigned |
+
+So the owner's keys protect against a changed catalog or package (someone with write access to the repository or site, a compromised mirror) but grant no extra capability: permissions are still reviewed and approved at install and upgrade, and the sandbox default stays on, because the key is only as trustworthy as wherever its private half is kept. `fromTrustedMarket` (`server/internal/extmgr/extension_sandbox.go`) still recognizes only the final official key id.
+
+**Signing.** `personad extension keygen --out market.pem` writes a new private key (PKCS #8 PEM, mode 0600; `openssl genpkey -algorithm ed25519` keys work too) and prints the public key and key id; `personad extension sign-index persona-extensions.json --key market.pem` replaces the file with the signed envelope (re-signing an envelope keeps its payload bytes). Both run offline and never contact a hub. Keep the private key out of the marketplace repository; a CI secret used only by the signing step is the usual place.
+
+**What installed extensions show.** `ExtensionView.market_signature` (`{state, key_id?}`, the same shape as a marketplace's `signature`; `GET /api/v1/extensions`, the admin list) says how a marketplace installation was verified: `official`, `signed` (with `key_id`, a key the marketplace still trusts), `key_removed` (verified with a key no longer trusted, or its marketplace is gone), `unsigned`, or `market_invalid` (verified at install, but its marketplace is quarantined now). Absent for extensions not from a marketplace and on older managers. Older managers ignore `trusted_keys` (and treat such a marketplace as unsigned); their upserts leave the column as it was.
 
 ### OCI packages and mirrors
 
