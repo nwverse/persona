@@ -4541,10 +4541,12 @@ People monitoring their computers see the number of waiting agents beside the co
 is known. The count opens the first waiting session. Fleet token usage belongs on Cards and Capabilities.
 The view bar starts with Cards, wraps to the available width and ends with assistant-scoped shared resources.
 
-Ports, Services, Files, Toolchain, Network and Storage share one computer selection. Their labeled native select
-lists available computers. A single choice becomes a compact name and status chip. If the current computer leaves
-or goes offline, tools select the first online computer. With all computers offline they show the offline state.
-A storage cleanup link opens reclaim mode only on its target computer.
+On the web, people working on one computer can bookmark its current view. Work leads with waiting Agents and
+workspace actions. The fleet shows one actionable card for a sole computer, and Add computer for an empty list.
+A wide detail pane keeps the fleet entry and a compact computer list beside the selected view. Each row shows
+connection state, waiting or working Agents when known, and the leading alert. Narrow panes keep one level visible.
+Use labeled links for subviews so people can open another tab or retrace their steps with Back and Forward.
+The URL identifies the computer even when it goes offline or disappears. Reclaim links open its Storage view.
 
 ## Usage treemap (#14576)
 
