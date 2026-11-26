@@ -82,8 +82,15 @@ function onRequest(msg) {
         turn.open.add(askPermission(sessionId, 'call-1', undefined, options))
       }
       if (mode.startsWith('ask-full ')) {
-        const { toolCall, options, waitFile } = JSON.parse(mode.slice('ask-full '.length))
-        if (waitFile) {
+        const { toolCall, options, waitFile, endOnAnswer, asks, askOnCancel, nextAsk } = JSON.parse(mode.slice('ask-full '.length))
+        turn.endOnAnswer = !!endOnAnswer
+        turn.askOnCancel = askOnCancel || null
+        turn.nextAsk = nextAsk || null
+        if (Array.isArray(asks) && asks.length) {
+          for (const spec of asks) {
+            turn.open.add(askPermission(sessionId, spec.toolCallId || `call-${nextId}`, spec.toolCall, spec.options ?? options))
+          }
+        } else if (waitFile) {
           const timer = setInterval(() => {
             if (!turns.has(sessionId) || turn.cancelled) {
               clearInterval(timer)
@@ -131,12 +138,29 @@ function onNotification(msg) {
   if (turn.mode === 'ignore-cancel') return
   turn.cancelled = true
   if (turn.mode === 'ask-on-cancel') turn.open.add(askPermission(sessionId, 'call-2'))
+  if (turn.askOnCancel) {
+    const spec = turn.askOnCancel
+    turn.askOnCancel = null
+    turn.open.add(askPermission(sessionId, spec.toolCallId || 'call-cancel', spec.toolCall, spec.options))
+  }
   endIfDone(sessionId)
 }
 
 function onAnswer(msg) {
   for (const [sessionId, turn] of turns) {
-    if (turn.open.delete(msg.id)) endIfDone(sessionId)
+    if (turn.open.delete(msg.id)) {
+      if (turn.nextAsk && !turn.cancelled) {
+        const spec = turn.nextAsk
+        turn.nextAsk = null
+        turn.open.add(askPermission(sessionId, spec.toolCallId || 'call-2', spec.toolCall, spec.options))
+      } else if (turn.endOnAnswer && !turn.cancelled && turn.open.size === 0) {
+        turns.delete(sessionId)
+        record({ ended: sessionId, stopReason: 'end_turn' })
+        send({ jsonrpc: '2.0', id: turn.id, result: { stopReason: 'end_turn' } })
+      } else {
+        endIfDone(sessionId)
+      }
+    }
   }
 }
 

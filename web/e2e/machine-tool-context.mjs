@@ -1,5 +1,5 @@
 // Review captures for the Machines overview and machine-specific routes. Run against the loopback mock hub
-// with MOCK_MANAGERS=0, two online computers named Computer A and Computer B, and a waiting session.
+// with MOCK_MANAGERS=0, MOCK_USAGE_MAP=1, two online computers named Computer A and Computer B, and a waiting session.
 // node web/e2e/machine-tool-context.mjs <local web URL> <output directory> (CHROME_BIN overrides Chrome).
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
@@ -29,14 +29,26 @@ async function verify(width, theme, textSize) {
     const errors = [];
     page.on("pageerror", (e) => errors.push(e.message));
     await page.route("**/api/v1/machines/studio/files/roots", r => r.fulfill({ json: { roots: [] } }));
-    await page.route("**/api/v1/machines/studio/files/list*", r => r.fulfill({ json: {
-      path: "/projects", canonical_path: "/projects", parent: "/", total: 1,
-      entries: [{ name: "Notes", path: "/projects/Notes", kind: "dir", mode: "drwxr-xr-x", size: 0 }],
-    } }));
+    await page.route("**/api/v1/machines/studio/files/list*", r => {
+      const requested = new URL(r.request().url()).searchParams.get("path");
+      const path = requested === "~" ? "/projects" : requested;
+      const name = path === "/projects" ? "Notes" : "Review.txt";
+      return r.fulfill({ json: { path, canonical_path: path, parent: "/", total: 1,
+        entries: [{ name, path: path + "/" + name, kind: path === "/projects" ? "dir" : "file", mode: "rw", size: 24 }] } });
+    });
     await page.route("**/api/v1/machines/studio/storage", r => r.fulfill({ json: {
-      supported: true, os: "darwin", mounts: [{ mount: "/", device: "Local disk", fs_type: "apfs",
-        total_bytes: 500e9, used_bytes: 200e9, avail_bytes: 300e9, used_percent: 40 }],
+      supported: true, os: "darwin", collected_ms: 8, mounts: [{ mount: "/", device: "Local disk", fs_type: "apfs",
+        total_bytes: 1000 * 2 ** 30, used_bytes: 930 * 2 ** 30, avail_bytes: 70 * 2 ** 30, used_percent: 93 }],
     } }));
+    const cache = { id: "persona-logs", path: "~/logs", bytes: 8000000 };
+    const previews = [];
+    await page.route("**/api/v1/machines/studio/storage/hotspots", r => r.fulfill({ json: {
+      duration_ms: 20, categories: [{ ...cache, status: "ok", cleanable: true, cleanup_target_id: cache.id }],
+    } }));
+    await page.route("**/api/v1/machines/studio/storage/cleanup", r => {
+      previews.push(r.request().postDataJSON());
+      return r.fulfill({ json: { estimated_bytes: cache.bytes, items: [{ ...cache, target_id: cache.id, status: "preview" }] } });
+    });
     await page.route("**/api/v1/machines/*/network", (r) => r.fulfill({ json: {
       interfaces: [{ name: "Ethernet", up: true, addresses: [] }], proxy: { active: false },
       probes: [{ name: "Hub connection", target: "example.com", protocol: "https", reachable: true, latency_ms: 24, status_code: 200 }],
@@ -75,7 +87,28 @@ async function verify(width, theme, textSize) {
       await detail.waitFor();
       await nav.locator('[aria-current="page"]').filter({ hasText: label }).waitFor();
       if (view === "storage") await page.getByText("Local disk", { exact: false }).first().waitFor();
-      if (view === "files") await page.getByTestId("machine-file-browser").getByText("Notes", { exact: true }).waitFor();
+      if (view === "files") {
+        await page.getByTestId("file-entry-Notes").click();
+        await page.waitForURL(u => u.searchParams.get("path") === "/projects/Notes");
+        await page.reload();
+        await page.getByTestId("file-entry-Review.txt").waitFor();
+        await detail.waitFor();
+        await capture("folder-reload");
+        await page.goBack();
+        await page.getByTestId("file-entry-Notes").waitFor();
+      }
+      if (view === "storage") {
+        assert.doesNotMatch(await page.getByTestId("storage-mounts-section").innerText(), /undefined/);
+        await page.getByTestId("usage-start").click();
+        await page.getByTestId("usage-crumbs").waitFor();
+        if (width === 390) {
+          await page.locator('[data-usage-side="cloud"]').waitFor();
+          const cloud = await page.getByTestId("usage-cloud").boundingBox();
+          const detail = await page.getByTestId("usage-detail").boundingBox();
+          assert(cloud && detail && cloud.y + cloud.height <= detail.y, "Storage status must follow the stacked cloud map");
+        }
+        await page.getByTestId("usage-map").evaluate(el => el.scrollIntoView({ block: "start" }));
+      }
       await capture(view);
     }
     await page.getByRole("link", { name: "Network", exact: true }).click();
@@ -98,8 +131,37 @@ async function verify(width, theme, textSize) {
       await page.waitForURL(u => u.pathname === "/machines");
       await computer.waitFor();
     }
+    await page.goto(new URL(workPath + "/storage/cleanup", url).href);
+    const suggestion = page.locator("[data-suggestion]").filter({ hasText: "Clean" }).first();
+    await suggestion.waitFor();
+    await detail.waitFor();
+    await page.getByTestId("usage-reclaim").evaluate(el => el.scrollIntoView({ block: "start" }));
+    await capture("reclaim");
+    await suggestion.click();
+    await page.getByTestId("usage-tray-clean").click();
+    await page.getByTestId("usage-clean-list").waitFor();
+    assert((await page.getByRole("dialog").innerText()).includes("Computer B"));
+    await capture("cleanup-confirm");
+    await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
+    await page.getByTestId("storage-hotspots-section").locator("summary").click();
+    await page.getByTestId("storage-scan-hotspots").click();
+    await page.getByTestId("storage-preview-cleanup").click();
+    await page.getByTestId("storage-preview-list").waitFor();
+    assert.deepEqual(previews, [{ targets: [cache.id], dry_run: true }]);
+    await capture("cleanup-preview");
+    await page.getByRole("dialog").getByRole("button", { name: "Cancel" }).click();
+    assert.equal(previews.length, 1);
+    await nav.getByRole("link", { name: "Management", exact: true }).click();
+    await page.waitForURL(u => u.pathname === workPath + "/management");
+    await page.reload();
+    await detail.waitFor();
+    await page.locator("#engine").waitFor();
+    await capture("management");
+    await page.goBack();
+    await suggestion.waitFor();
+    await detail.waitFor();
     assert.deepEqual(errors, []);
-    console.log(`PASS ${width}×${height} ${theme} ${textSize}: fleet, computer, Files, Storage, Diagnostics, Network, reload and history`);
+    console.log(`PASS ${width}×${height} ${theme} ${textSize}: fleet, computer, Files, Storage, Diagnostics, Network, Management, folder reload, reclaim confirmation and history`);
   } finally {
     await context.close();
   }

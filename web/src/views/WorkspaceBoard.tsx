@@ -55,7 +55,7 @@ export function WorkspaceBoard({ onToggleSidebar }: { onToggleSidebar?: () => vo
 /** The page while there is no board to show: its title, and what stands in for the board. */
 function BoardPage({ onToggleSidebar, children }: { onToggleSidebar?: () => void; children: React.ReactNode }) {
   return <div className="flex h-full flex-col bg-page">
-    <header className="flex shrink-0 items-center gap-3 border-b border-line bg-surface px-4 py-3">
+    <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line bg-surface px-3 sm:px-4">
       {onToggleSidebar && <IconButton icon="sidebar" label={t("workspace-board.sidebar")} onClick={onToggleSidebar} className="lg:hidden" />}
       <h1 className="min-w-0 flex-1 truncate text-base font-semibold text-ink">{t("workspace-board.title")}</h1>
     </header>
@@ -191,17 +191,17 @@ function Board({ onToggleSidebar }: { onToggleSidebar?: () => void }) {
   </BoardPage>;
   return <div ref={selection.containerRef} className="@container flex h-full flex-col bg-page">
     <span data-board-wide aria-hidden="true" className="pointer-events-none invisible absolute hidden @3xl:block" />
-    <header className="flex shrink-0 flex-wrap items-center gap-3 border-b border-line bg-surface px-4 py-3 @lg:flex-nowrap">
-      <div className="flex min-w-0 basis-full flex-1 items-center gap-3 @lg:basis-auto">
+    {/* every page's top bar (#16462): one row at every width, the title (and its line) taking what the controls leave */}
+    <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line bg-surface px-3 sm:px-4">
+      <div className="flex min-w-0 flex-1 items-center gap-2">
         {onToggleSidebar && <IconButton icon="sidebar" label={t("agents-agentsview.sidebar")} onClick={onToggleSidebar} className="lg:hidden" />}
         <div className="min-w-0 flex-1"><h1 className="truncate text-base font-semibold text-ink">{t("workspaceboard.title")}</h1><p className="truncate text-xs text-ink-3">{t("workspaceboard.subtitle")}</p></div>
       </div>
-      <div className="flex w-full shrink-0 items-center gap-3 @lg:w-auto">
+      <div className="flex shrink-0 items-center gap-2">
         <div className="flex shrink-0 items-center gap-1 rounded-control bg-field p-1" role="group" aria-label={t("workspaceboard.view_label")}>
           <Button tone={view === "manual" ? "primary" : "quiet"} className="!px-2 !py-1 text-xs" disabled={state.busy} onClick={() => changeView("manual")}>{t("workspaceboard.view_manual")}</Button>
           <Button tone={view === "auto" ? "primary" : "quiet"} className="!px-2 !py-1 text-xs" disabled={state.busy} onClick={() => changeView("auto")}>{t("workspaceboard.view_auto")}</Button>
         </div>
-        <span className="flex-1 @lg:hidden" />
         {board?.activity === true && <IconButton icon="history" label={t("workspaceboard.activity")} onClick={() => setActivityOpen(true)} />}
         {view === "manual" && <Button icon="plus" disabled={!board || disabled || selection.active} onClick={() => setEdit({ kind: "column", title: "" })}><span className="sr-only @lg:not-sr-only">{t("workspaceboard.add_column")}</span></Button>}
       </div>
@@ -335,7 +335,11 @@ export const WorkspaceCard = memo(function WorkspaceCard({ card, machine, worksp
 });
 function WorkspaceDetail({ card, column, machine, sessions, readonly, activity, onClose }: { card: BoardCard; column: string; machine?: Machine; sessions: readonly Session[]; readonly: boolean; activity: boolean; onClose: () => void }) {
   const [showActivity, setShowActivity] = useState(false);
-  const open = (kind: "files" | "git") => { onClose(); openPanel({ kind, mid: card.machine_id, sid: sessions[0]?.session_id ?? "", cwd: card.cwd }); };
+  const open = (kind: "files" | "git") => {
+    onClose();
+    if (kind === "files") navigate({ name: "machine", mid: card.machine_id, subview: "files", path: card.cwd });
+    else openPanel({ kind, mid: card.machine_id, sid: sessions[0]?.session_id ?? "", cwd: card.cwd });
+  };
   return <Dialog open title={card.title} onClose={onClose}><div className="space-y-4"><p className="text-xs text-ink-3">{[column, card.archived && t("workspaceboard.archived"), machine?.name || card.machine_id, machine?.online === false && t("workspaceboard.offline")].filter(Boolean).join(" · ")}</p><p className="break-all rounded-control bg-inset p-3 font-mono text-xs text-ink-2">{card.cwd}</p>{card.branch && <p className="text-xs text-ink-2">{t("workspaceboard.branch", { branch: card.branch })}</p>}
     <div className="flex flex-wrap gap-2"><Button icon="folder" disabled={!machine?.online} onClick={() => open("files")}>{t("workspaceboard.files")}</Button><Button icon="git" disabled={!machine?.online} onClick={() => open("git")}>Git</Button><Button icon="plus" disabled={readonly || !machine?.online} onClick={() => { onClose(); openNewAgent(boardAgentPreset(card)); }}>{t("workspaceboard.new_agent")}</Button></div>
     <div className="border-t border-line pt-3"><h3 className="mb-2 text-xs font-medium text-ink-3">{t("workspaceboard.agents_here")}</h3>{sessions.length ? <div className="space-y-1">{sessions.map((s) => <button type="button" key={s.session_id} className="flex w-full items-center gap-2 rounded-control px-2 py-2 text-left hover:bg-hover" onClick={() => { onClose(); openAgent(s.machine_id, s.session_id); }}><Icon name="agent" size={14} className="text-ink-3" /><span className="min-w-0 flex-1 truncate text-sm text-ink">{sessionTitle(s)}</span><StatePill state={stateOf(s)} /></button>)}</div> : <p className="text-sm text-ink-3">{t("workspaceboard.no_agents_detail")}</p>}</div>
