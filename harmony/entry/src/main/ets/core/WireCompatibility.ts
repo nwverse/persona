@@ -1,4 +1,7 @@
 /** Legacy wire identifiers are confined to this compatibility boundary. */
+export const legacyProduct: string = 'jarvis';
+export const legacyContextTag: string = 'jarvis-context';
+export const legacyFileTag: string = 'jarvis-file';
 export const legacyClientHeader: string = 'X-Jarvis-Client';
 export const legacyOperationHeader: string = 'X-Jarvis-Op-Id';
 export function isPairingScheme(value: string): boolean { return value === 'persona:' || value === 'jarvis:'; }

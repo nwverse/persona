@@ -116,7 +116,7 @@ private fun GlassQueueStrip(
     val active = enabled && !busy
     val line = type.micro.copy(fontWeight = FontWeight.SemiBold)
     Column(
-        modifier.fillMaxWidth().padding(horizontal = 10.dp.dense, vertical = Tokens.Space.xxs)
+        modifier.fillMaxWidth().padding(horizontal = 10.dp.dense).padding(top = Tokens.Space.xs, bottom = Tokens.Space.xxs)
             .floatingSurface(RoundedCornerShape(Tokens.Radius.panel)).animateContentSize(PersonaTheme.motion.size()),
     ) {
         Row(
@@ -196,8 +196,9 @@ private fun PlainQueueStrip(
     val style = PersonaTheme.style
     val shape = RoundedCornerShape(if (style == AppStyle.Brief) 20.dp.corner else 8.dp.corner)
     val outer = when (style) {
-        AppStyle.Brief -> Modifier.padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.xxs).clip(shape).background(palette.surface)
-        else -> Modifier.padding(horizontal = 10.dp.dense).padding(top = Tokens.Space.xxs, bottom = Tokens.Space.xs)
+        AppStyle.Brief -> Modifier.padding(start = Tokens.Space.m, end = Tokens.Space.m, top = Tokens.Space.xs, bottom = Tokens.Space.xxs)
+            .clip(shape).background(palette.surface)
+        else -> Modifier.padding(horizontal = 10.dp.dense).padding(top = Tokens.Space.xs, bottom = Tokens.Space.xxs)
             .clip(shape).background(palette.surface).border(1.dp, palette.line, shape)
     }
     val active = enabled && !busy

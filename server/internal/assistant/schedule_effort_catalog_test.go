@@ -22,6 +22,8 @@ func scheduledCatalogFixture(t *testing.T, assistantEfforts []string) (*Service,
 	f.ownModels = true // No HTTP model server: every exercised boundary is the fake node RPC.
 	f.launcherList = []proto.Launcher{{Name: "shared", Source: "zshrc", Agent: "claude"}}
 	s := newTestService(t, f)
+	// Workout admission appends to the schedule; unrelated default routines must not dispatch in this fixture.
+	setTasks(s)
 	f.answerNode(assistantwire.DeviceLaunchersModels, func(_ string, raw json.RawMessage) (any, error) {
 		var p struct{ Purpose string }
 		if err := json.Unmarshal(raw, &p); err != nil {
@@ -83,7 +85,7 @@ func TestScheduledAssistantUsesExecutionCatalog(t *testing.T) {
 					s.runDue(t.Context(), time.Now().Add(time.Second))
 				}
 				runs := waitRuns(t, s, 1)
-				if runs[0].Status != runOK || f.sent() != 1 {
+				if len(runs) != 1 || runs[0].RefID != task.ID || runs[0].Status != runOK || f.sent() != 1 {
 					t.Fatalf("scheduled dispatch: runs=%+v sends=%d", runs, f.sent())
 				}
 				got := f.lastSend(t)
@@ -120,6 +122,7 @@ func TestScheduledProviderOverrideKeepsItsOwnDefaults(t *testing.T) {
 	f.mu.Lock()
 	f.launcherList = append(f.launcherList, proto.Launcher{Name: "other", Source: "zshrc", Agent: "claude"})
 	f.mu.Unlock()
+	s.invalidateLauncherListCache("server")
 	setModel(t, s, "assistant", ModelBinding{Provider: "launcher.shared", Model: "shell-model", Effort: "xhigh"})
 	setTasks(s, Task{ID: "report", Prompt: "Report", Repeat: repeatInterval, EveryMinutes: 30, Enabled: true})
 	setModel(t, s, "task.report", ModelBinding{Provider: "launcher.other"})

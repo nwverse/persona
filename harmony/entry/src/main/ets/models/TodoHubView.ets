@@ -1,16 +1,29 @@
 import { Wire } from './Wire';
+import { TODO_LIST_SECTIONS, parseTodoListSection, type TodoListSection } from './TodoViewWire';
 
 // GET /api/v1/todos, as specified by schema/wire/todo-view.schema.json. The
 // Hub owns the rank and counts. New reason and line keys leave the row readable.
-export const TODO_HUB_SECTIONS: string[] = ['needs_you', 'can_wait', 'working', 'waiting', 'todo', 'just_finished', 'someday', 'done'];
+// The row's section is read key by key as the hub's text (TodoHubRow), so a
+// newer hub's section stays a string here and is drawn in no section.
+export const TODO_HUB_SECTIONS: TodoListSection[] = [...TODO_LIST_SECTIONS];
 export const TODO_HUB_CHOICES: string[] = ['all', 'needs_you', 'in_progress', 'todo', 'done'];
 
+const needsYou: TodoListSection = TODO_LIST_SECTIONS[0];
+const canWait: TodoListSection = TODO_LIST_SECTIONS[1];
+const working: TodoListSection = TODO_LIST_SECTIONS[2];
+const waiting: TodoListSection = TODO_LIST_SECTIONS[3];
+const todo: TodoListSection = TODO_LIST_SECTIONS[4];
+const justFinished: TodoListSection = TODO_LIST_SECTIONS[5];
+const someday: TodoListSection = TODO_LIST_SECTIONS[6];
+const done: TodoListSection = TODO_LIST_SECTIONS[7];
+
+// The label of a section or of a Filter choice ('in_progress' is no section).
 export function todoHubLabel(value: string): string {
   switch (value) {
-    case 'can_wait': return 'flow_todo_can_wait';
-    case 'someday': return 'flow_todo_someday';
-    case 'just_finished': return 'agent_group_just_finished';
-    case 'todo': return 'flow_todo_plain';
+    case canWait: return 'flow_todo_can_wait';
+    case someday: return 'flow_todo_someday';
+    case justFinished: return 'agent_group_just_finished';
+    case todo: return 'flow_todo_plain';
     case 'in_progress': return 'flow_inbox_progress';
     default: return value;
   }
@@ -18,10 +31,10 @@ export function todoHubLabel(value: string): string {
 
 export function todoHubChoiceIncludes(choice: string, section: string): boolean {
   switch (choice) {
-    case 'needs_you': return section === 'needs_you' || section === 'can_wait';
-    case 'in_progress': return ['working', 'waiting', 'just_finished'].includes(section);
-    case 'todo': return section === 'todo' || section === 'someday';
-    case 'done': return section === 'done';
+    case 'needs_you': return section === needsYou || section === canWait;
+    case 'in_progress': return section === working || section === waiting || section === justFinished;
+    case 'todo': return section === todo || section === someday;
+    case 'done': return section === done;
     default: return true;
   }
 }
@@ -77,7 +90,8 @@ export class TodoHubRow {
     row.section = Wire.text(view, 'section');
     row.phase = Wire.text(view, 'phase');
     row.rank = count(view, 'rank');
-    if (!TODO_HUB_SECTIONS.includes(row.section) || !row.phase || row.rank < 0) return undefined;
+    // No view, or a section this build does not know (parsed as unknown, and counted): the local rules file the row.
+    if (!row.section || typeof parseTodoListSection(row.section) !== 'string' || !row.phase || row.rank < 0) return undefined;
     const line = Wire.object(view, 'line');
     const args = Wire.object(line, 'args');
     const key = Wire.text(line, 'key');

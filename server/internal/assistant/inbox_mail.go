@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
@@ -75,10 +76,12 @@ func (s *Service) readMailBody(ctx context.Context, a assistantwire.InboxMailAcc
 	defer b.settleRound()
 	b.roundWrite(it)
 	it.BodyOf = last
-	it.MailBodyTruncated = &truncated
 	if text == "" {
+		// Nothing replaces the context: it stays the mailbox's snippet, and whether that is the whole mail is not known.
+		it.MailBodyTruncated = nil
 		return true
 	}
+	it.MailBodyTruncated = &truncated
 	it.Preview = clip(oneLine(text), 200)
 	var to []string
 	for _, t := range m.To {
@@ -310,6 +313,7 @@ func fillMail(it *InboxItem, a assistantwire.InboxMailAccount, msgs []assistantw
 		it.Mail.UIDs = append(it.Mail.UIDs, m.UID)
 	}
 	it.Mail.MessageID, it.Mail.From = newest.MessageID, newest.From
+	setInboxExternalPath(it, "", connector.InboxThing{})
 	it.Mail.Direct = false
 	for _, to := range newest.To {
 		if strings.EqualFold(to.Email, a.Email) {

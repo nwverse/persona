@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -180,10 +181,10 @@ func (s *Service) toolKB(ctx context.Context, name string, args json.RawMessage)
 		switch {
 		case a.Kind != kb.KindRecording || json.Unmarshal(d.Meta, &trimmed) != nil || trimmed.At == nil:
 		case trimmed.Kind == kb.RecordingDay:
-			fmt.Fprintf(&b, "\ntranscript.md: expired %s (assistant.recording_days); only the recap above is kept, until "+
+			fmt.Fprintf(&b, "\ntranscript.md: expired %s (assistant.recording_text_days); only the recap above is kept, until "+
 				"assistant.minutes_days after the day (0 means forever, the default), and it can't be written again.\n", trimmed.At.In(s.location(ctx)).Format("2006-01-02"))
 		default:
-			fmt.Fprintf(&b, "\ntranscript.md: expired %s (assistant.recording_days); only the minutes above are kept, until "+
+			fmt.Fprintf(&b, "\ntranscript.md: expired %s (assistant.recording_text_days); only the minutes above are kept, until "+
 				"assistant.minutes_days after the meeting (0 means forever, the default), and they can't be made again.\n", trimmed.At.In(s.location(ctx)).Format("2006-01-02"))
 		}
 		switch {
@@ -406,6 +407,9 @@ func (s *Service) answerApprovalCard(ctx context.Context, self string, ix proto.
 		verb = "Rejected the plan"
 	case !*allow:
 		verb = "Denied"
+	}
+	if todo == "" {
+		return fmt.Sprintf("%s for the agent. The agent sees that the assistant answered.", verb), nil
 	}
 	return fmt.Sprintf("%s for the agent, as its supervisor: kept as task %s's decision (yours, not the user's), and the agent sees it was not the user's answer.", verb, todo), nil
 }
@@ -741,7 +745,7 @@ func (s *Service) toolInboxDraft(ctx context.Context, self string, args json.Raw
 }
 
 // recordingsAt is what kb_get adds to calendar item kind/id (meetings or events, id as stored): the recordings matched
-// to it by time (kb/minutes.go matchRecordings), as their calendar item or their imported meeting (#8872), which hold
+// to it by time (modules/recording/writers/minutes.go matchRecordings), as their calendar item or their imported meeting (#8872), which hold
 // its minutes; "" when there are none.
 func (s *Service) recordingsAt(ctx context.Context, e *kb.Engine, kind, id string) string {
 	var at []kb.Entry
@@ -762,7 +766,7 @@ func (s *Service) recordingsAt(ctx context.Context, e *kb.Engine, kind, id strin
 }
 
 // matchedAt says whether ref names calendar item kind/id (id as stored).
-func matchedAt(ref *kb.MeetingRef, kind, id string) bool {
+func matchedAt(ref *recordingwire.MeetingRef, kind, id string) bool {
 	return ref != nil && ref.Kind == kind && kb.SafeID(ref.ID) == id
 }
 

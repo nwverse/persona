@@ -5,6 +5,7 @@ import { HttpFailure } from '../platform/HubTransport';
 import { todoDetailPatchAccepted } from './PhoneTodoDetailEditor';
 import { ResourceRow, Wire } from './Wire';
 import { TODO_HUB_CHOICES, TODO_HUB_SECTIONS, TodoHubCounts, TodoHubRow, todoHubChoiceIncludes, todoHubLabel } from './TodoHubView';
+import { TODO_LIST_SECTIONS, type TodoListSection } from './TodoViewWire';
 import type { TodoPhonePlacement } from './TodoPhoneSections';
 import { TODO_PHONE_SECTIONS, TodoPhoneRowContext, TodoPhoneSections, phoneTodoSeenCanFile, phoneTodoTitle } from './TodoPhoneSections';
 
@@ -581,7 +582,7 @@ export class TodoWorkspace {
       this.search = Wire.text(saved, 'search');
       this.statusFilter = ['all'].concat(TODO_STATES).includes(Wire.text(saved, 'status')) ? Wire.text(saved, 'status', 'all') : 'all';
       this.groupBy = ['status', 'project', 'thread', 'hub'].includes(Wire.text(saved, 'group')) ? Wire.text(saved, 'group', 'status') : 'status';
-      this.hubUnfolded = Wire.strings(saved, 'hubUnfolded').filter((key: string) => ['someday', 'can_wait', 'done'].includes(key));
+      this.hubUnfolded = Wire.strings(saved, 'hubUnfolded').filter((key: string) => TODO_LIST_SECTIONS.includes(key as TodoListSection) && ['someday', TODO_LIST_SECTIONS[1], 'done'].includes(key));
       const due=Wire.text(saved,'due'),order=Wire.text(saved,'order');
       this.dueFilter=TODO_DUE_FILTERS.includes(due) ? due : 'all'; this.order=TODO_LIST_ORDERS.includes(order) ? order : 'recent';
       this.calendarOpen=Wire.bool(saved,'calendar');
@@ -697,7 +698,7 @@ export class TodoWorkspace {
   }
 
   toggleHubFold(key: string): void {
-    if (!['someday', 'can_wait', 'done'].includes(key)) return;
+    if (!['someday', TODO_LIST_SECTIONS[1], 'done'].includes(key)) return;
     this.hubUnfolded = this.hubUnfolded.includes(key) ? this.hubUnfolded.filter((value: string) => value !== key) : this.hubUnfolded.concat([key]);
     this.saveViewLater();
   }

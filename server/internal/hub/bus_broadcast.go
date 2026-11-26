@@ -44,7 +44,7 @@ var managerMessageTypes = map[string]bool{
 	"assistant_view_block": true, "agents.triage": true, "direction_offer": true, "directions": true, "interaction_reanswered": true, "kb_selection": true, "launcher_health": true,
 	"model_profile": true, "navigation": true, "task_plan": true, "todos": true, "workspace_board": true, "workspace_board_settings": true,
 	"resources": true, "meeting_live": true, "urgent_call": true, "health_intake": true, "health_strength": true,
-	"health_items": true, "assistant_pages": true,
+	"health_items": true, "assistant_pages": true, "assistant_labs_seen": true,
 	// its extensions' manager
 	"agents": true, "agents.prefs": true, "inbox": true, "mail_accounts": true, "messaging": true,
 	"extension_auth": true, "extension_operation": true, "extension_ui": true, "plugin_ui": true,
@@ -60,12 +60,14 @@ var managerMessageTypes = map[string]bool{
 var hubMessageTypes = map[string]bool{
 	"hello": true, "client_hello_ack": true, "pong": true, "notify": true, "push_grading": true, "lock_test": true, "error": true,
 	"interaction": true, "interaction_resolved": true,
+	"counts":   true, // a manager's counts view as it told it (counts_view.go): only the hub relays it
 	"machines": true, "sessions": true, "sessions_delta": true, "sessions_list": true, "items": true, "revs": true,
 	"conversation_deleted": true,
 	"delta":                true, "live": true, proto.FeatureMessageSendState: true, proto.FeatureTodoSendState: true,
 	"screen": true, "tool_call": true, "hook_event": true, "fs_changed": true, "desktops": true, "endpoints": true,
 	"terminal": true, "terminal_control": true, "herdr_state": true, "herdr_focus": true, "herdr_end": true, "herdr_data": true,
 	"fleet": true, "liveactivity": true, "look": true, "personas": true, "managers": true, "hub_update": true,
+	"mutes": true, "pins": true,
 	"hub_restarting":      true,
 	"extension_ui_stream": true, // reserved targeted transport; never a manager broadcast
 }

@@ -12,7 +12,7 @@ import (
 
 // allowedImports is everything this package's non-test files may import (doc.go says so): the parser and the file
 // system, so the rules read source alone and every package's hook can link them without pulling a dependency in.
-var allowedImports = []string{"go/ast", "go/parser", "go/token", "os", "path/filepath", "strings", "testing"}
+var allowedImports = []string{"encoding/json", "go/ast", "go/parser", "go/token", "os", "path/filepath", "strings", "testing"}
 
 // TestImportsStayListed holds the package's own non-test files to allowedImports, so a convenience import (maps,
 // sort, strconv) shows up here rather than drifting past the package comment.

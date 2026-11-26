@@ -277,6 +277,35 @@ func (s *Service) checkProfilePermissionModes(ctx context.Context, p ModelProfil
 	return nil
 }
 
+// checkModelProfileForSave normalizes and validates the exact profile a save or approval card will store. saved tiers
+// are the pre-edit tiers: only added or changed tier models are held to the newer model-ID check.
+func (s *Service) checkModelProfileForSave(ctx context.Context, p *ModelProfile, saved map[string]ModelTier) error {
+	stored, err := s.readStoredLaunchers(ctx)
+	if err != nil {
+		return err
+	}
+	ctx = withManagedSnapshot(ctx, stored)
+	if p.Purposes, err = s.normalizeProfilePurposes(ctx, p.Purposes, map[string]modelRecord{}, stored); err != nil {
+		return err
+	}
+	if err := checkModelProfile(p, stored); err != nil {
+		return err
+	}
+	if err := s.checkProfilePermissionModes(ctx, *p); err != nil {
+		return err
+	}
+	for name, tier := range p.Tiers {
+		var before *ModelTier
+		if was, ok := saved[name]; ok {
+			before = &was
+		}
+		if err := checkTierModel(name, tier, before); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // ---- editing ----
 
 // saveModelProfile changes (or makes) profile id with edit, at the profiles' revision when one is given; the history
@@ -302,11 +331,10 @@ func (s *Service) saveModelProfileLocked(ctx context.Context, revision *int64, i
 	}
 	i := slices.IndexFunc(ps.Profiles, func(p ModelProfile) bool { return p.ID == id })
 	p := ModelProfile{ID: id}
-	var saved map[string]ModelTier // the tiers as they are: only the ones added or changed are held to checkTierModel
+	before := ModelProfile{}
 	if i >= 0 {
-		p, saved = ps.Profiles[i], ps.Profiles[i].Tiers
-		// the values are never written through: a copy of the maps is a copy
-		p.Purposes, p.Launchers, p.Tiers = maps.Clone(p.Purposes), maps.Clone(p.Launchers), maps.Clone(p.Tiers)
+		before = cloneModelProfile(ps.Profiles[i])
+		p = cloneModelProfile(before)
 	} else if len(ps.Profiles) >= maxModelProfiles {
 		return p, "", i18n.Err("assistant-model_profiles.err_profiles", i18n.Args{"max": maxModelProfiles})
 	}
@@ -314,29 +342,10 @@ func (s *Service) saveModelProfileLocked(ctx context.Context, revision *int64, i
 		return p, "", err
 	}
 	p.ID = id
-	stored, err := s.readStoredLaunchers(ctx)
-	if err != nil {
+	if err := s.checkModelProfileForSave(ctx, &p, before.Tiers); err != nil {
 		return p, "", err
 	}
-	ctx = withManagedSnapshot(ctx, stored)
-	if p.Purposes, err = s.normalizeProfilePurposes(ctx, p.Purposes, map[string]modelRecord{}, stored); err != nil {
-		return p, "", err
-	}
-	if err := checkModelProfile(&p, stored); err != nil {
-		return p, "", err
-	}
-	if err := s.checkProfilePermissionModes(ctx, p); err != nil {
-		return p, "", err
-	}
-	for name, t := range p.Tiers {
-		var before *ModelTier
-		if was, ok := saved[name]; ok {
-			before = &was
-		}
-		if err := checkTierModel(name, t, before); err != nil {
-			return p, "", err
-		}
-	}
+	changed := modelProfileChangedFields(before, p)
 	now := time.Now().UTC()
 	p.UpdatedAt = now
 	if i >= 0 {
@@ -352,7 +361,7 @@ func (s *Service) saveModelProfileLocked(ctx context.Context, revision *int64, i
 	if seeded {
 		state.seed()
 	}
-	state.record(ModelProfileEvent{At: now, Action: "save", To: id, By: by})
+	state.record(ModelProfileEvent{At: now, Action: "save", To: id, By: by, Changed: changed})
 	if err := s.putModelProfileSettings(ctx, map[string]any{modelProfilesKey: ps, modelProfileStateKey: state}); err != nil {
 		return p, "", err
 	}

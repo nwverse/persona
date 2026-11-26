@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -38,52 +37,12 @@ type PhotoRef = recordingwire.PhotoRef
 // PhotoText is declared in recordingwire (docs/plans/plan-kb-recording-port.md).
 type PhotoText = recordingwire.PhotoText
 
-// photoBook is photos.json.
-type photoBook struct {
-	Next   int           `json:"next"` // the next n; n is never reused
-	Rev    int64         `json:"rev"`  // PartPhotos' revision: only goes up
-	Photos []storedPhoto `json:"photos"`
-	// Deleted are the photos the owner deleted: deleting one again answers false, adding its id again ErrPhotoDeleted.
-	Deleted []PhotoRef `json:"deleted,omitempty"`
-	// Withdraw are the photos deleted after they went into the room, which the room is still to be told of.
-	Withdraw []PhotoRef `json:"withdraw,omitempty"`
-}
-
-// storedPhoto is a photo in photos.json: Photo without Cited (the minutes say that), with the request's digest and
-// Queued while it waits to go into the room (until its send succeeded: Queued and Forwarded is a send in doubt).
-type storedPhoto struct {
-	N         int       `json:"n"`
-	ID        string    `json:"id"`
-	At        float64   `json:"at"`
-	Mime      string    `json:"mime"`
-	Width     int       `json:"width"`
-	Height    int       `json:"height"`
-	Text      string    `json:"text,omitempty"`
-	Caption   string    `json:"caption,omitempty"`
-	Note      string    `json:"note,omitempty"`
-	Forwarded bool      `json:"forwarded,omitempty"`
-	Queued    bool      `json:"queued,omitempty"`
-	AddedAt   time.Time `json:"added_at"`
-	Digest    string    `json:"digest"`
-}
-
-func (p storedPhoto) photo(cited map[int]bool) Photo {
-	return Photo{N: p.N, ID: p.ID, At: p.At, Mime: p.Mime, Width: p.Width, Height: p.Height, Text: p.Text, Caption: p.Caption,
-		Note: p.Note, Cited: cited[p.N], Forwarded: p.Forwarded, AddedAt: p.AddedAt}
-}
-
-func (p storedPhoto) text() PhotoText {
-	return PhotoText{N: p.N, At: p.At, Caption: p.Caption, Text: p.Text, Note: p.Note}
-}
-
-// fileName is the photo's file in attachments/.
-func (p storedPhoto) fileName() string {
-	ext := ".jpg"
-	if p.Mime == PhotoPNG {
-		ext = ".png"
-	}
-	return "p" + strconv.Itoa(p.N) + ext
-}
+// photoBook is photos.json and storedPhoto a photo in it, declared in recordingwire (the photo intake, the recording
+// module's, writes them through the storage port).
+type (
+	photoBook   = recordingwire.PhotoBook
+	storedPhoto = recordingwire.StoredPhoto
+)
 
 // readPhotosLocked is recording id's photos.json, empty without one (exists false). The caller holds recFilesMu.
 func (s *Store) readPhotosLocked(id string) (b photoBook, exists bool, err error) {
@@ -137,7 +96,7 @@ func (s *Store) putPhotosTextLocked(id string, b *photoBook, start time.Time, zo
 	}
 	var out strings.Builder
 	for _, p := range b.Photos {
-		out.WriteString(photoLine(p.N, clockAt(start, p.At, zone), photoWords(p.text(), false)))
+		out.WriteString(photoLine(p.N, clockAt(start, p.At, zone), photoWords(p.Words(), false)))
 		out.WriteByte('\n')
 	}
 	if raw, err := os.ReadFile(md); err == nil && string(raw) == out.String() {
@@ -146,13 +105,8 @@ func (s *Store) putPhotosTextLocked(id string, b *photoBook, start time.Time, zo
 	return true, writeRecordingFile(md, []byte(out.String()))
 }
 
-// photoLabel marks a photo's line in photos.md and in the minutes' input.
-const photoLabel = "photo:"
-
 // photoLine is a photo as photos.md and the minutes' input have it: "[P3] 14:32:05 photo: caption · text · note".
-func photoLine(n int, clock, words string) string {
-	return strings.TrimRight("[P"+strconv.Itoa(n)+"] "+clock+" "+photoLabel+" "+words, " ")
-}
+func photoLine(n int, clock, words string) string { return recordingwire.PhotoLine(n, clock, words) }
 
 // photoWords is a photo's caption, recognized text and note on one line, " · " between those it has; clipped, each
 // at most what the minutes' input reads of it (the text as long as a transcript line). Other people's words: nothing
@@ -176,42 +130,7 @@ func photoWords(p PhotoText, clipped bool) string {
 
 // minutesPhotos are the photos m cites (all four sections, and the overview's bullets and conclusions, which cite only
 // photos an item cites too); empty without minutes.
-func minutesPhotos(m *Minutes) map[int]bool {
-	out := map[int]bool{}
-	if m == nil {
-		return out
-	}
-	add := func(n int) {
-		if n > 0 {
-			out[n] = true
-		}
-	}
-	for _, p := range m.Points {
-		add(p.Photo)
-	}
-	for _, d := range m.Decisions {
-		add(d.Photo)
-	}
-	for _, a := range m.Actions {
-		add(a.Photo)
-	}
-	for _, o := range m.Open {
-		add(o.Photo)
-	}
-	if o := m.Overview; o != nil {
-		for _, c := range o.Conclusions {
-			add(c.Photo)
-		}
-		for _, g := range o.Groups {
-			for _, t := range g.Topics {
-				for _, b := range t.Bullets {
-					add(b.Photo)
-				}
-			}
-		}
-	}
-	return out
-}
+func minutesPhotos(m *Minutes) map[int]bool { return recordingwire.MinutesPhotos(m) }
 
 // citedPhotos are the photos recording id's current minutes cite.
 func (s *Store) citedPhotos(id string) map[int]bool {
@@ -265,7 +184,7 @@ func (s *Store) trimPhotosLocked(r *Recording, zone *time.Location) (changed, re
 	}
 	keep := map[string]bool{}
 	for _, p := range b.Photos {
-		keep[p.fileName()] = true
+		keep[p.FileName()] = true
 	}
 	dir := s.path(KindRecording, r.ID, photosDir)
 	info, err := os.Lstat(dir)
@@ -295,4 +214,31 @@ func (s *Store) trimPhotosLocked(r *Recording, zone *time.Location) (changed, re
 		syncRecordingDir(dir)
 	}
 	return changed, rev, nil
+}
+
+// photosHereLocked: recording id may get photo files: not deleted, its meta.json there (a write must never bring a
+// deleted recording's directory back). The caller holds recFilesMu.
+func (s *Store) photosHereLocked(id string) bool {
+	if _, gone := s.tombstones()[id]; gone {
+		return false
+	}
+	_, err := os.Stat(s.path(KindRecording, id, "meta.json"))
+	return err == nil
+}
+
+// bumpPhotosRev moves recording id's PartPhotos revision (its minutes changed which photos they cite). The caller holds
+// recMu.
+func (s *Store) bumpPhotosRev(id string, start time.Time) error {
+	zone := s.Zone()
+	s.recFilesMu.Lock()
+	defer s.recFilesMu.Unlock()
+	if !s.photosHereLocked(id) {
+		return nil
+	}
+	b, _, err := s.readPhotosLocked(id)
+	if err != nil {
+		return err
+	}
+	b.Rev++
+	return s.putPhotosLocked(id, &b, start, zone)
 }

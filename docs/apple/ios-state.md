@@ -20,6 +20,14 @@ The general performance rules (main-thread IO, `@State`, images, launch, memory)
 Background: `docs/archive/apple/live-updates.md` (three instances of "push interrupts an action").
 The root causes, the staged plan and the measurements after each step are in `docs/archive/apple/ios-state-records.md`.
 
+## Switching hubs with reads in flight
+
+The sidebar can show cached conversations for the selected hub as soon as the owner switches. Inbox rows, counters, task sheets and pending actions belong to the visit that requested them. Leaving the hub clears the visible state and releases its in-flight work, so the new hub can start loading immediately.
+
+A saved Inbox list carries its source pairing. On cold launch the list can appear offline when that pairing belongs to the selected group. Older records with an address are usable when the address identifies that group unambiguously. A successful refresh replaces an unattributed record. Pending Agent handoffs also carry the source pairing so delivery to an Agent on another hub can file the original Inbox item.
+
+A group ID alone cannot identify a request after a quick switch from Home to Work and back to Home. Each completion must still belong to the current visit before publishing data, changing a badge, reporting an error, or releasing a pending operation. This also applies to a follow-up write scheduled after a successful request. The hub switch and Inbox store tests delay responses across the switch to exercise these cases.
+
 ## Current data flow
 
 ```
@@ -220,6 +228,8 @@ After any push sequence combined with any actions ends, the screen returns to hu
 ### Snapshot refresh ownership (#1634)
 
 Todo and session invalidations use `apple/Persona/App/CoalescedRefresh.swift`: one active read and one latest dirty follow-up, without a fixed cooldown or a new freshness delay. The hub's session lists add one bound while no Agents list is in sight (#9487, the web's #9042): their hint reads go at most once per 2 s window (`apple/Persona/App/HintWindow.swift`); the first hint after a quiet window reads at once, the hints inside a window share one read at its end, and a list coming into sight reads what waits at once (`RuntimeSessionLists.listInSight`, from `AgentsCoverWatch`). A list in sight reads every hint as before, so the timeliness table holds for what is on screen. A busy hub sends about one hint a second; out of sight that was a list read and a counts read for each. Hints received during a read merge; the trailing read reconciles them. A fast read that finishes before the next hint may still produce one GET per hint. Single-flight is not a request-rate quota, and reducing full todo bodies further depends on a compatibility-preserving manager-side delta/conditional protocol.
+
+Seen reconciliation has the same independent-read boundary (#12770). The first list that proves a mark recorded starts a 15-second settling window; `SeenOutbox` holds only rows with the pre-open `seen_at`, no send path resends it, and new activity ends it immediately. Expiry is evaluated by the existing landings and local actions, with no new timer. `SessionListPage.counts` is requested only for an unfiltered root or a filtered section on a `sessions_page_counts` hub, on first / initial `since` reads. `SessionListModel` publishes those counts with their row IDs and `keepSeen` adjusts only that coupled set; a filtered root keeps its separate all-state count read, and every standalone count remains unadjusted. Cursor continuations retain the first answer's coupled counts rather than replacing them with a separate read.
 
 Manual reads share an eligible active or queued read. Post-write confirmation cannot join a GET started before the write; todo publication is fenced by hub generation and local mutation revision. A cancelled UI waiter does not cancel another owner's shared read. Reset ends old waits and rejects late old-generation data. Session refresh preserves its frozen paging window and delta checkpoint; a manual refresh absorbs the existing short hint-merging task without swallowing its last invalidation.
 

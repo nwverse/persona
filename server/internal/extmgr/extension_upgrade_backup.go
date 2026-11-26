@@ -57,9 +57,14 @@ func (b *pendingBackups) take(key, to string) (pendingBackup, bool) {
 	return p, true
 }
 
-func (b *pendingBackups) drop(key string) {
+func (b *pendingBackups) drop(key, to string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if to != "" {
+		if p, ok := b.m[key]; !ok || p.to != to {
+			return
+		}
+	}
 	delete(b.m, key)
 }
 
@@ -112,7 +117,7 @@ func (ps *extensions) backupBeforeUpgrade(ctx context.Context, p *extension.Exte
 // restartAfterUpgradeFailed lets go of the snapshot taken for an upgrade of id that did not happen, and runs the
 // installed version again (backupBeforeUpgrade stopped it).
 func (ps *extensions) restartAfterUpgradeFailed(id string) {
-	ps.upgradeBackups.drop(ps.reg.StorageKeyOf(id))
+	ps.upgradeBackups.drop(ps.reg.StorageKeyOf(id), "")
 	ps.apply(ps.storageRuntimeContext(), id)
 }
 

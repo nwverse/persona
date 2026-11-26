@@ -23,9 +23,9 @@ const PagesExtension = "-pages"
 
 // Pages draws the assistant's pages.
 type Pages interface {
-	// Places are the pages' entries in the sidebar for placement ("" every one), titled in lang: none while the owner
-	// keeps them off.
-	Places(ctx context.Context, lang i18n.Lang, placement string) []UIPlace
+	// Places are the pages' entries in the sidebar (and Overview cards when overview is true) for placement
+	// ("" every one), titled in lang: none while the owner keeps them off.
+	Places(ctx context.Context, lang i18n.Lang, placement string, overview bool) []UIPlace
 	// UI draws page ui, or answers an action on it, for the owner's device (its id), in lang. A *PagesError says
 	// which HTTP status a refusal answers.
 	UI(ctx context.Context, lang i18n.Lang, ui string, in wire.UIRequest, device string) (extension.ActionResult, error)
@@ -45,16 +45,19 @@ func (e *PagesError) Unwrap() error { return e.Err }
 func reservedExtension(id string) bool { return strings.HasPrefix(id, "-") }
 
 // pagesPlaces are the assistant's pages' places for the request: only for one of the owner's own devices, never an
-// extension's token or a device that can only answer.
-func (h *Manager) pagesPlaces(r *http.Request, placement string) []UIPlace {
+// extension's token or a device that can only answer. Overview cards are included only when overview is true
+// (`?pages_overview=1`) and placement is empty or `overview_card`.
+func (h *Manager) pagesPlaces(r *http.Request, placement string, overview bool) []UIPlace {
 	p := principalOf(r.Context())
 	if h.opts.Pages == nil || p.Role != roleFull || p.Extension != "" {
 		return nil
 	}
-	if placement != "" && !extension.FullPage(placement) {
+	wantNav := placement == "" || extension.FullPage(placement)
+	wantOverview := overview && (placement == "" || placement == "overview_card")
+	if !wantNav && !wantOverview {
 		return nil
 	}
-	return h.opts.Pages.Places(r.Context(), h.requestLang(r), placement)
+	return h.opts.Pages.Places(r.Context(), h.requestLang(r), placement, overview)
 }
 
 // pagesUI answers POST /api/v1/extensions/-pages/-/ui/{ui}; the caller checked the device's role.

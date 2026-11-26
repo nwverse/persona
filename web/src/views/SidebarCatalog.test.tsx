@@ -6,13 +6,16 @@ vi.hoisted(() => {
   globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
   window.matchMedia ??= ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
 });
-const previews = vi.hoisted(() => new Map<string, number>());
-vi.mock("../lib/format", async (load) => {
-  const real = await load<typeof import("../lib/format")>();
-  return { ...real, sessionPreview: (s: Session) => {
-    previews.set(s.session_id, (previews.get(s.session_id) ?? 0) + 1);
-    return real.sessionPreview(s);
-  } };
+const draftReads = vi.hoisted(() => new Map<string, number>());
+vi.mock("../lib/drafts", async (load) => {
+  const real = await load<typeof import("../lib/drafts")>();
+  return {
+    ...real,
+    useLeftDraft: (key: string | null) => {
+      if (key) draftReads.set(key, (draftReads.get(key) ?? 0) + 1);
+      return real.useLeftDraft(key);
+    },
+  };
 });
 import { getState, refresh, reset, upsertSession } from "../lib/store";
 import { credentialOwner, setToken } from "../lib/api";
@@ -45,7 +48,7 @@ const disclosure = (name: string) => host.querySelector<HTMLButtonElement>(`butt
 const click = (el: HTMLElement) => act(() => el.click());
 
 beforeEach(() => {
-  previews.clear(); localStorage.clear(); reset(); setToken("catalog-fixture");
+  draftReads.clear(); localStorage.clear(); reset(); setToken("catalog-fixture");
   localStorage.setItem("persona.agentGrouping", "repo");
   inventory = [workspace("root", { is_main: true }), workspace("middle", { parent_source_id: "root" }), workspace("leaf", { parent_source_id: "middle", project_id: "project-b", project_name: "Project B" }), workspace("empty")];
   sessions = [agent("Leaf Agent", "leaf")]; pinned = [];
@@ -145,10 +148,10 @@ describe("By repo catalog integration", () => {
 
   it("does not rebuild Agent rows on an unchanged catalog refresh", async () => {
     await render();
-    const before = title("root"); previews.clear();
+    const before = title("root"); draftReads.clear();
     await act(() => refreshWorkspaceCatalog()); await flush();
     expect(title("root")).toBe(before);
-    expect([...previews.keys()]).toEqual([]);
+    expect([...draftReads.keys()]).toEqual([]);
   });
 
   it("loads independent of the board, exposes empty ancestry, hides standalone empties by default, and lets titles and arrows toggle the same disclosure", async () => {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/nwverse/persona/server/internal/kbwire"
 	"os"
 	"path/filepath"
 	"slices"
@@ -61,12 +62,7 @@ func fieldKey(field string) string {
 	return field
 }
 
-func taggingFieldLocked(t *Tagging, field string) bool {
-	if slices.Contains(t.LockedFields, field) {
-		return true
-	}
-	return t.Locked && (field == "importance" || field == "relevance" || field == "tags")
-}
+func taggingFieldLocked(t *Tagging, field string) bool { return kbwire.TaggingFieldLocked(t, field) }
 
 // putEntity rereads protected fields while holding the metadata lock. A stale pipeline object cannot
 // restore locked links or overwrite a hand edit made while a model or connector was running.
@@ -196,7 +192,7 @@ func protectedEntity(v any, t *Tagging, current map[string]json.RawMessage, manu
 		raw, _ := json.Marshal(current)
 		_ = json.Unmarshal(raw, &protected)
 		if !manual {
-			for _, field := range append([]string{"pinned", "locked_fields", "locked", "provenance", "excluded"}, protected.LockedFields...) {
+			for _, field := range append([]string{"pinned", "locked_fields", "locked", "provenance", "excluded", "held_off_projects"}, protected.LockedFields...) {
 				key := fieldKey(field)
 				if value, ok := current[key]; ok {
 					incoming[key] = value
@@ -375,7 +371,10 @@ func (e *Engine) unlink(kind, id string, u Update, le linkEdit) error {
 			}
 		}
 		for _, cid := range le.allow["chats"] {
-			if err := chat(cid, func(c *Chat) { taggingInclude(&c.Tagging, "projects", id) }); err != nil {
+			if err := chat(cid, func(c *Chat) {
+				taggingInclude(&c.Tagging, "projects", id)
+				c.HeldOffProjects = false
+			}); err != nil {
 				return err
 			}
 		}
