@@ -123,6 +123,25 @@ describe("the knowledge map", () => {
     expect([...svg.querySelectorAll("g[role=button]")].some((g) => g.getAttribute("aria-label") === "Collapse Cache")).toBe(true);
   });
 
+  it("wraps a point's English text between words and its Chinese text between any two characters", async () => {
+    const english = "Files changed within two seconds of each other are not cached until the next scan";
+    const chinese = "缓存在两秒内被改写的文件不会被缓存因为时间戳相同需要等到下一次扫描才会更新到索引里面"; // i18n-ignore: a point's text as curation writes it
+    const words: KBDetailResponse = { detail: { kind: "topics", id: "cache", path: "", meta: { name: "Cache" }, points: [{ id: "e", kind: "fact", text: english }, { id: "c", kind: "fact", text: chinese }] } };
+    act(() => root.render(<KnowledgeMap onToggleSidebar={() => {}} />));
+    await answer("/api/v1/kb/topics", { items: [{ kind: "topics", id: "cache", name: "Cache", relevance: 0 }] });
+    await answer("/api/v1/assistant", {});
+    await answer("/api/v1/kb/topics/cache", words);
+    // the card's lines, after its kind tag
+    const lines = (text: string) => [...host.querySelector(`svg[data-map] g[aria-label="Fact: ${text}"]`)!.querySelectorAll("text")].slice(1).map((t) => t.textContent!);
+    const en = lines(english);
+    expect(en.length).toBeGreaterThan(1);
+    expect(en.join(" ")).toBe(english); // every break falls between two words
+    const zh = lines(chinese);
+    expect(zh.length).toBeGreaterThan(1);
+    expect(zh.join("")).toBe(chinese);
+    expect(zh[0].length).toBeGreaterThan(en[0].length); // Chinese fills its lines to the edge, as before
+  });
+
   it("switches to the projects view", async () => {
     act(() => root.render(<KnowledgeMap onToggleSidebar={() => {}} />));
     await answer("/api/v1/kb/topics", empty);
