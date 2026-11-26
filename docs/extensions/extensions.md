@@ -3543,8 +3543,9 @@ extension sees that). One new component, `scene`, authoritative in `schema/exten
 its `Scene*` definitions, `x-since: 11`); the example is `schema/extension/examples/View.v11-scene-flat.json`. **An app sends
 11 only when it draws all of the below** (and all of 10). **iOS** (#12544) draws `scene` in
 `apple/Persona/Views/Settings/ExtensionScene.swift` (`ExtensionSceneGeometry.swift`, `ExtensionSceneModel.swift`) and sends `11`
-for pages and cards (`pageVersion` and `cardVersion`, including Share as Image's direct still snapshot); **web** (#12641) and
-**Android** (#12642) stay on `10` and get the downgrade below until their renderers land.
+for pages and cards (`pageVersion` and `cardVersion`, including Share as Image's direct still snapshot). **Android** (#12642)
+draws the scene in both places with Compose; `HttpExtensionManagement.UI_VERSION` is `11`. **Web** (#12641) still requests `10`
+and receives the downgrade below.
 
 Extensions still run no code in the app and send no model file: they say what the shapes are, and each app builds them with
 its own engine. A list of simple shapes is the contract because no 3D file format is drawn by every client (SceneKit reads

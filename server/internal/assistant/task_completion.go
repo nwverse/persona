@@ -14,9 +14,7 @@ import (
 )
 
 var (
-	sideConversationContext = lazyre.New(`<persona-context\b[^>]*\bkind\s*=\s*["']side-conversation["'][^>]*>`)
-	sideConversationMarker  = lazyre.New(`<persona-side-conversation\s*/>`)
-	loopInspectionRequest   = lazyre.New(`^/loop(?:\s|$)`)
+	loopInspectionRequest = lazyre.New(`^/loop(?:\s|$)`)
 )
 
 // A runtime's user role also carries peer messages and automated injections. Those
@@ -46,7 +44,7 @@ func taskTurnSource(t Todo, items []proto.Item) (from, source string) {
 		if it.Role == "user" && it.Kind == proto.KindText && loopInspectionRequest.MatchString(text) {
 			return from, "inspection"
 		}
-		if sideConversationContext.MatchString(text) || sideConversationMarker.MatchString(text) {
+		if prompts.IsSideConversation(text) {
 			return from, "side-conversation"
 		}
 		if strings.Contains(text, "<cross-session-message") || strings.Contains(text, "<teammate-message") {

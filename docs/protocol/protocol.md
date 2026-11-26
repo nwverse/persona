@@ -2085,6 +2085,8 @@ clients' fallbacks are in [counts.md](counts.md); the hub's part is its "The hub
 | PUT | `/api/v1/workspace-board/settings` | `{enabled}` → `{enabled,can_write}`; `full` only, missing `enabled` returns 400 |
 | GET | `/api/v1/navigation` | `{"start"?, "pages"?, "overview"?}`: the page the apps open on, the sidebar's arrangement (#9071) and Overview's extension cards (#9745) with its own sections (#10905), one per hub, so the owner's for all their devices; each is left out until something is stored, see "Navigation" |
 | PUT | `/api/v1/navigation` | `{start?, pages?, overview?}` → the record; `full` only; none of them, or one of another shape, returns 400 |
+| GET | `/api/v1/settings/web-fonts` | The default manager's shared web font choices `{sans, mono}`. Each choice is `{preset, family?}` and starts at `{"preset":"default"}` |
+| PUT | `/api/v1/settings/web-fonts` | Full access only. Send one of `{sans: {preset, family?}}` or `{mono: {preset, family?}}` and receive both choices. Only `custom` accepts a family name |
 | GET | `/api/v1/workspaces` | `{workspaces:[Workspace],errors?:[{machine_id,error}]}`; workspace discovery independent of Agents, keeps the last known info on failure, readable by `answer` |
 | POST | `/api/v1/machines/{mid}/reconnect` | Reconnect that machine's node |
 | GET · POST | `/api/v1/machines/{mid}/codex/{sid}/takeover` | Signed-in full-device route; generic device-call APIs are denied. GET → `{token,cwd,transcript_path,continuation_prompt}` with a single-use two-minute token. POST requires `{token,confirm_stop:true}` only while the original writer is running; `false` is accepted once it has exited. The manager verifies process identity and terminal instance, then sends one Ctrl+D only with empty composer and no modal or queued input. It waits for process exit, a complete stable transcript ending, and a fresh writer scan; any failed check or timeout refuses. No signals or forced termination. Takeover resumes the same thread/session ID in a new terminal tab. The separate continue option alone starts an independent session with context and attached to-do preserved. `encrypted_context` is continuation-only. |
@@ -3329,7 +3331,7 @@ Server → client:
 | `interaction_resolved` | `id`; when the assistant answered on the user's behalf, also `answered_by: "assistant"` (#1602), plus `reason` (why it answered that way) and `answers` (what it answered; re-answering starts from here, #3029) |
 | `interaction_reanswered` | `id`, `resolution` (`{answers}`): the user changed the assistant's answer, and the new answer has been sent to that Agent (#3029) |
 | `fleet` | `fleet` (the Live Activity summary, matching the content of HTTP `/api/v1/fleet`) |
-| `hook_event` | The node hook event's original fields; the hub adds `machine_id` and sets `type: hook_event`; used to refresh session run state; `Stop` carries `stop_sig` (a reply signature the hub uses to dedupe "done" pushes, see `agent-states.md` ("Hook turn signals")); global report-only hooks (`../integrations/claude-integration.md` ("Global report-only hooks")) carry `report_only: true`, so the hub doesn't take them to mean the session has Persona's hooks; `UserPromptSubmit` carries `prompt_source`, who the prompt is from (its message source's kind, such as `meeting` or `conversation`; `notification` for a background task's report; else `user`), never the prompt itself; otherwise as before |
+| `hook_event` | The node hook event's original fields; the hub adds `machine_id` and sets `type: hook_event`; used to refresh session run state; `Stop` carries `stop_sig` (a reply signature the hub uses to dedupe "done" pushes, see `agent-states.md` ("Hook turn signals")); global report-only hooks (`../integrations/claude-integration.md` ("Global report-only hooks")) carry `report_only: true`, so the hub doesn't take them to mean the session has Persona's hooks; `UserPromptSubmit` carries `prompt_source`, who the prompt is from (its message source's kind, such as `meeting` or `conversation`; `notification` for a background task's report; `side_conversation` for an unrelated `agent_send` wrapped by `RenderSideConversation`; else `user`), never the prompt itself; otherwise as before. An older node that still reports a side conversation as `user` is covered by the hub's own provenance check, so the new value needs no rolling-upgrade handling |
 | `tool_call` | `call_id`, `name`, `args` (only sent to phones that did `register_phone` and provide that tool) |
 | `desktops` | `desktops`: connected desktop clients (the Mac App), `[{"device","name","since"}]`; `device` is its device credential id (empty for those connected with a pairing credential, which can't be signed out individually). Sent once on connect, then pushed to all clients whenever a desktop client connects / disconnects (feature `desktops`). The iPhone uses it to show "Persona is signed in on a Mac"; it declares `desktops_link` for Persona Link entries ([ios.md](../apple/ios.md) "Mac signed in"). A client that lists `desktops_link` (feature `desktops_link`) also gets the active Persona Link desktops, `{"kind":"link","machine_id","device":"","name","since"}`: `machine_id` the computer, `name` what the hub calls it, `since` when this run of presence began (RFC 3339); entries without `kind` are the desktop App. Such a client gets the list again when one starts, ends or lapses, and once more when its `client_hello` adds `desktops_link`; a client that doesn't list it gets the list as before |
 | `notify` | `kind: interaction / done / assistant / alert`, `machine_id`, `session_id`, `title`, `subtitle`, `body`; a decision's push (an `assistant` notify) also carries `todo: {id, asked_at, recommend, manager, ask?, lockscreen?, options?}` (`TodoDecidePush`; the last three from a manager that says how the push may answer it, #10465; [todos.md](../assistant/todos.md) "Waiting for the owner"), a meeting's minutes push `recording_id` (the push payload too; "Recording sync"); interactions also carry `interaction_id`, alerts the caller's `id` when it gave one, an extension's as `ext:` and a hash (`POST /api/v1/notify`; Android replaces the earlier alert with the same `id`, #5614); a manager push may also carry `level` (`P0`/`P1`/`P2`) and `related_key` for the hub's push grading filter (held P1/P2/dedup alerts are withheld from APNs, `notify`, and Web Push while lists and held-push briefings keep updating); `quiet: true` when the device is inside its quiet hours (post it without sound); only sent to connections that declared `ws_notify`; one selected while a device without push was offline comes after its next `client_hello`, see below |
@@ -7057,6 +7059,63 @@ The Assistant view's `workspace_naming_version` advertises naming support and `s
 contains the built-in rules. A preview's `branch_sources` rows have `repo_id`, `kind`
 (`repository_default`, `explicit_branch` or `non_branch_ref`) and optional `branch`. A
 repository's default branch is left unnamed during preview.
+
+## BotMux messages
+
+A botmux session's transcript (`docs/integrations/engines.md` "botmux") holds what botmux handed the agent, wrapped in blocks for the model, and the
+agent's replies as `botmux send` shell calls. The node sets `botmux` on each decoded item in two layers — **structured turns first, wrapper parsing as
+per-turn fallback** — while `text` always keeps the transcript's words so clients can show the original:
+
+1. **Structured turns (`botmux.session-turns.v1`)**: when the local botmux dashboard serves `GET /api/sessions/:id/turns` (schema
+   `botmux.session-turns.v1`, `server/internal/node/hostbotmux_turns.go`, `server/internal/transcript/botmux_turns.go`), the node reads turns
+   incrementally by `seq` cursor and matches each turn to its transcript entry by `anchor.cliEntryId` or `anchor.inputSha256`. Matched turns populate
+   `botmux` from the structured record: inbound text, sender display name and type, attachment count and safe `attachment_meta`, placement (`thread`),
+   mentioned display names, and the full text of replies (including `--content-file` and `--card-file` replies whose body is not on the command line).
+   Only display names leave the node; `openId` and `messageId` are never forwarded.
+2. **Wrapper parsing fallback (`server/internal/transcript/botmux.go`)**: used whenever `GET /api/sessions/:id/turns` returns `404` (older botmux) or a
+   specific turn has no structured record (e.g., turns recorded before a botmux upgrade). Cases for both layers live in `spec/fixtures/botmux/cases.json`.
+
+```json
+{"role":"user","kind":"text","text":"<botmux_reminder>…</botmux_reminder>\n\n<user_message>\nship it\n</user_message>\n\n<sender … />",
+ "botmux":{"kind":"message","text":"ship it","sender":"Alex Chen","sender_type":"user","thread":true}}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `kind` | `message`: a Lark or `owner_actor` message; `trigger`: a turn handed to botmux's `/api/trigger` as an external event (`source` names who); `reply`: the agent's `botmux send` (on a `tool_use` item) |
+| `text` | The words without botmux's blocks and hint lines |
+| `sender`, `sender_type` | The Lark sender's display name and kind; never its `open_id` or email |
+| `quoted`, `topic_context` | The message quoted another one; the topic had messages before the agent joined it (botmux's hint lines, Chinese or English) |
+| `thread`, `attachments`, `attachment_meta`, `mentions` | Posted in a topic (`placement.kind: "thread"` / `<message_location placement="thread">`); attachment count and safe `{kind, name?, mime_type?}` metadata (no local paths or IDs); mentioned display names |
+| `final`, `voice` | A reply sent with `--response-kind final` (`responseKind: "final"`); as voice |
+| `truncated` | The item was clipped inside the words: `text` is their start |
+
+A fold that hides `botmux send` calls lists their replies in `fold.botmux`, in order (structured turns are applied before `FoldWork`, so file/card
+replies also appear in `fold.botmux`).
+
+**Version probe and sending (`botmux_external_trigger`).** The node probes capabilities through the read-only `GET /api/sessions/:id/turns` endpoint
+and caches the result per botmux instance (invalidated on dashboard restart, token rotation, or CLI binary upgrade). Session listing starts a
+background probe when capabilities are unknown or expired, keeping the last known result for that instance until the probe succeeds. It never probes with a real
+message and never retries a delivered turn. When `capabilities` includes `ownerActor`, `POST /api/trigger` sends top-level `actor: "owner"` with
+`target.kind: "turn"`, `botId`, and `sessionId` (omitting `envelope.payload` and `envelope.rawText`), and verifies the echoed `actor: "owner"` in the
+response. On older botmux instances (below 3.59.23, `404` or `ownerActor` absent), sends use the external-event trigger and the session row sets
+`botmux_external_trigger: true` so clients show a one-line upgrade notice (`3.59.23+`) in the composer.
+
+**Wrapper fallback rules** (checked against botmux 3.59.6 through 3.59.20):
+
+- A message is read from a `<user_message>` with only top-level blocks around it (each block ends at the closing tag of its own name, so nested
+  blocks such as `<identity>` are fine; facts come only from the top-level `<sender />`, `<mentions>`, `<attachments>` and `<message_location />`),
+  a trigger turn with a top-level `<botmux_task trusted="true">` (including the hook-mode prefix), or bare words followed by `<botmux_formatting>`.
+  A task tag inside `<user_message>` is message text. Trigger source attribution comes only from the top-level task block.
+- A reply is a single `botmux send` whose words are its arguments, or a here-document (also behind a lone `-`). Flags follow botmux's own table
+  (`src/cli/send-invocation.ts`): switches take no value, `--urgent` / `--attention` only `=value`, the others the next word or `=value`. A flag botmux
+  does not know, a missing value, `--`, `--help`, `--dry-run`, and a body from `--content-file`, `--card-file` or `--card-json` give no `botmux` in
+  wrapper-only mode, since botmux would refuse the send or its words are not in the command. Each `--image(s)`, `--file(s)` and `--video(s)` counts as one attachment.
+- Anything else, botmux 1.x's plain preamble, hook-mode lines (already bare), a reply read from a file or a pipe without a structured turn record, and
+  items from older nodes carry no `botmux`: clients show them as before.
+
+Web can show the raw transcript or decode it (the default): a message shows `botmux.text` with its facts as tags, a reply shows as the
+agent's message sent to Lark, and each can be opened to its original. Session visibility follows the shared Agents display setting.
 
 ## Backend task workspace RPC
 

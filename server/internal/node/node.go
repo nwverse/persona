@@ -2647,12 +2647,14 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		}
 		if p.ThroughSeq > 0 { // a fold being opened: the lines it stands for
 			page, more := f.Range(p.FromSeq, p.ThroughSeq, 1000)
+			page = n.applyBotmuxTurns(ctx, p.SessionID, f, page, false)
 			n.toolViews.attach(p.SessionID, page, false, f)
 			n.ttft.annotate(p.SessionID, page, false)
 			return map[string]any{"items": items(page), "more": more}, nil
 		}
 		// Pages counted back from the end fold the agent's work for callers that ask (transcript.FoldWork).
 		fold := func(page []proto.Item) []proto.Item {
+			page = n.applyBotmuxTurns(ctx, p.SessionID, f, page, false)
 			n.toolViews.attach(p.SessionID, page, p.BeforeSeq == 0, f)
 			n.ttft.annotate(p.SessionID, page, p.BeforeSeq == 0)
 			if p.FoldWork {
@@ -2663,6 +2665,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		if p.AfterSeq != nil {
 			// more_after: the 500 cap cut it short; the caller asks again after the last seq (or takes the latest page).
 			page, more, span := f.After(*p.AfterSeq, 500)
+			page = n.applyBotmuxTurns(ctx, p.SessionID, f, page, true)
 			n.toolViews.attach(p.SessionID, page, true, f)
 			n.ttft.annotate(p.SessionID, page, true)
 			return withSpan(map[string]any{"items": items(page), "has_more": false, "more_after": more}, span, true), nil

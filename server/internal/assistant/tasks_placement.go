@@ -481,6 +481,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		prompt += "\n\n" + prompts.RenderWorkspaceRepositories(string(rows), answerLanguage(s.hello(ctx).Locale))
 	}
 	var rules []string
+	if current, ok := s.todoNow(t.TodoID); t.MultiIssueReport || ok && current.Supervision != nil && current.Supervision.Investigation != nil {
+		rules = append(rules, prompts.RenderTaskInvestigation())
+	}
 	if strings.TrimSpace(t.Context) != "" {
 		prompt += "\n\n" + t.Context
 	}

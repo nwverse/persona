@@ -982,10 +982,18 @@ func (h *Hub) startSession(w http.ResponseWriter, r *http.Request) {
 		writeBodyErr(w, err, err)
 		return
 	}
-	h.startSessionWith(w, r, p, false)
+	// Read here, where the body is: "via" stays out of p, so the node never gets it. A marked start is delivered as
+	// usual but never counts as the owner's input (project_review.go).
+	var mark struct {
+		Via any `json:"via"`
+	}
+	_ = json.Unmarshal(body, &mark)
+	h.startSessionWith(w, r, p, false, viaMarked(mark.Via))
 }
 
-func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p sessionStartRequest, handoff bool) {
+// handoff: p carries generated context (context_handoff.go), not words someone typed; indirect: the request was
+// marked "via" (viaMarked). Neither counts as the owner's input.
+func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p sessionStartRequest, handoff, indirect bool) {
 	orig := p
 	replay := heldStartReplayOf(r.Context())
 	if strings.HasPrefix(p.ClientMsgID, proto.A2ADeliveryPrefix) {
@@ -1003,6 +1011,8 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 	if !handoff && replay == nil {
 		r = h.captureHumanSubmission(r, p.Prompt)
 	}
+	// Taken before the to-do handoff adds its own words and images: only the owner's own input counts.
+	firstInput := p.ResumeSessionID == "" && (strings.TrimSpace(p.Prompt) != "" || len(p.Images) > 0)
 	if p.TodoID != "" && principalOf(r.Context()).Role != roleFull {
 		writeErr(w, http.StatusForbidden, errors.New("read-only role cannot modify todos"))
 		return
@@ -1230,6 +1240,17 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 	if !async {
 		h.startEnded(m.cfg.ID, p.ResumeSessionID, params, nil)
 	}
+	recordFirstInput := func() {
+		// Before the machine lists it, the returned session says where it runs.
+		started := res.Session
+		started.Cwd = cmp.Or(started.Cwd, startCwd(m, p.Cwd))
+		h.recordAcceptedProjectReviewInput(ctx, r, m.cfg.ID, started.SessionID, "first-agent:"+started.SessionID, &started, indirect)
+	}
+	if firstInput && p.TodoID == "" {
+		// Recorded as soon as the node has the session, before the listing wait: a restart in between would lose it
+		// (project_review.go).
+		recordFirstInput()
+	}
 	if model, _ := params["model"].(string); p.Model != "" && p.ResumeSessionID == "" && model == strings.TrimSpace(p.Model) &&
 		(res.Instead == nil || res.Instead.Model == "") { // a model the launcher that ran does not offer did not run
 		launcher, _ := params["launcher"].(string) // the one it ran with: the manager filled it in
@@ -1261,6 +1282,10 @@ func (h *Hub) startSessionWith(w http.ResponseWriter, r *http.Request, p session
 			h.logf("startSession: link todo %s for %s/%s failed: %v", p.TodoID, m.cfg.ID, res.Session.SessionID, err)
 		} else {
 			res.Session.Todo = &proto.TodoRef{ID: p.TodoID, Title: linked.Title}
+		}
+		if firstInput {
+			// After the link, so the manager finds the task when the relay delivers it.
+			recordFirstInput()
 		}
 	}
 	m.mu.Lock()
