@@ -1246,7 +1246,7 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 			return ps.storageCall(ctx, p, method, params)
 		}
 		switch method {
-		case "kb.list", "kb.get", "kb.day", "kb.search", "kb.update", "kb.owner", "kb.recent":
+		case "kb.list", "kb.get", "kb.day", "kb.search", "kb.update", "kb.owner", "kb.recent", "kb.put_recording":
 			return ps.extensionKBCall(ctx, id, method, params)
 		case "assistant.conversations", "assistant.messages", "assistant.memory", assistantwire.MethodAssistantEntriesList: // assistant.read, assistant.memory.read (extension_assistant_read.go)
 			return ps.extensionAssistantCall(ctx, id, method, params)
