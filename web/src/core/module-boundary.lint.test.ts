@@ -31,7 +31,8 @@ describe("the module boundary", () => {
   });
 
   it("keeps the file viewer and other modules from importing the Office preview", async () => {
-    expect(await problems("src/views/session/files/FileView.tsx", 'import "../../../modules/office/OfficeView";')).toBeGreaterThan(0);
+    // linted one level under src, so the specifier stays inside web/ read from this file too (see the note at the top)
+    expect(await problems("src/views/FileView.tsx", 'import "../modules/office/OfficeView";')).toBeGreaterThan(0);
     expect(await problems("src/modules/health/Example.ts", 'export const f = () => import("../office/OfficeView");')).toBeGreaterThan(0);
     expect(await problems("src/modules/office/Example.ts", 'import "../health/module";')).toBeGreaterThan(0);
   });
