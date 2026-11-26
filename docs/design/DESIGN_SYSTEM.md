@@ -3548,6 +3548,8 @@ Apple reuses the pairing Form, Section, Picker, toolbar and Theme tokens.
 
 ## Meeting page (#3862)
 
+In a Web recording's transcript, keep search and bookmark navigation together behind a review control. Show the active match and match count where the owner moves between passages. Jumps stay inside the recording detail scroller. The local text download includes timestamps and follows the same transcript retention rules as the detail.
+
 ### The floating meeting window (#8731 V5)
 
 While a meeting records and its room is put away (the room's collapse, or swiped down), a small card floats over every
