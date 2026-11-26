@@ -2498,12 +2498,19 @@ change, removed when a hello lacks `modules` or on sign-out, #14431): on a reloa
 uses that remembered answer, so a module the hub switched off is never drawn and its chunk is never fetched while
 waiting for the hello. A hub never seen before, and an older hub whose hello has no `modules`, keep every module on so
 defaults never change and nothing waits on the hello to draw; a later hello that adds or drops a flag turns it on or off
-at once. Otherwise it is *off*, and an off module is absent:
+at once. Otherwise it is *off*. Most off modules are absent:
 
 - no sidebar entry, and no switch it could have left behind (the start page falls back as for a removed page);
-- its addresses route as unknown ones (`not-found`), aliases included;
-- neither its code chunk nor its catalog is requested. `loadModule` refuses an off module, and its page is a
+- their addresses route as unknown ones (`not-found`), aliases included;
+- neither their code chunk nor their catalog is requested. `loadModule` refuses an off module, and its page is a
   `lazyPage(…, { listed: false })`, which `loadPages` never preloads.
+
+The built-in Health space is the default-panel exception required by #13430: with its module off, and in a core-only
+build, `/health…` and `/tracks/health…` route to a read-only Health archive (`lib/health-archive.ts`,
+`views/spaces/HealthReadOnlyData.tsx`). Existing conversations keep transcript reads and in-chat search; reports and
+memory can be opened; no composer, new-chat, upload, edit, approval, archive or delete control is offered, and the
+Health module chunk and catalog are still not requested. The enabled module keeps the full Health home and write
+flows unchanged.
 
 An on module's page is warmed as the built-in pages are (`core/ModulePage.tsx`, `lib/lazy-page.ts` `preloadOnIntent`):
 when the pointer, the focus or a finger reaches a link to it (its sidebar entry); not with Data Saver on, and never for
@@ -2630,13 +2637,33 @@ unavailable (including a 404 from a hub before the list read moved into Core) hi
 flag is `module.recording`: off on a hub that publishes module flags without it, or where a browser switches it off.
 The recording settings (how long recordings and minutes are kept, Settings › Persona) stay in core for now.
 
+**Mail with the hub's mail module off** (#15995; mail has no web module of its own, the Inbox reads the hub flag
+`module.mail`). `lib/mail.ts` decides it once (`mailReading`: `full`, or `stored` when the hello names modules and
+leaves mail out) and everything else is handed that: Settings and compose already hide (`loadMailAccounts` asks
+nothing), and an opened mail item is `views/inbox/StoredMailBody.tsx` instead of the live reader. It asks no
+`/api/v1/mail/…` route, which the hub no longer has; it reads the item's own page (`GET /api/v1/inbox/{id}`, Core)
+and shows the mail's words out of the stored `context` (`lib/mail-stored.ts` takes off the heading and header lines
+the hub wrote for the model; at most 3,000 characters of the newest mail, or the list's preview), who it is from and
+when, and after the text one line: mail is off on the hub machine, so the full message and its attachments can't be
+loaded. The line ends by what the hub says about the stored text (`mail_body_truncated` on the item's page, read once
+as the closed `StoredMailClipping` by `storedMailClipping` in `lib/mail.ts`): `clipped`, the text is cut short;
+`whole`, nothing more; `unknown` (a hub from before it sent the flag, an item stored before the hub recorded it, a
+mail whose text it never read, or the list's copy when the page cannot be read), a long message may be cut short. A translation is shown only when the item
+lists one the hub kept (`POST /api/v1/translate/mail` answers from it without the mail server); a failure there is
+silent. Left out, because each needs the mail module: Reply and Reply all, marking the mail read, attachments and the
+HTML view, and sending a reply from the Inbox (AI draft reply, Send on a draft or a reply suggestion:
+`views/inbox/item-write-gate.ts`, beside Lark's gate; a draft already written stays readable). Hand to AI (without
+the line about `mail_read`), Done, mute, folders, rules and to-dos are the Inbox's and stay. With the module on, or a
+hub that names no modules, the reader and its requests are as before.
+
 **The pilot: health.** The Health page (`web/src/modules/health/`, docs/assistant/health.md) is the first module. Its
 route (`/health`, `/health/new`, `/health/<id>`, and `/tracks/health…`), its water and protein pages (the reserved
 extension-page id `-health-intake`, which routes as unknown while the module is off), its sidebar entry (right after Inbox, pink with
 Colored icons) and its `health` namespace come from its descriptor instead of the `Route` union, `App.tsx` and
 `SidebarParts.tsx`. Its flag is `module.health`: every hub before #13844 publishes no module flags and keeps it on, as
-the page always was, and a browser can still switch it off. Core code that needs one of its addresses writes the path (`/health/<id>`), which routes as
-unknown while the module is off.
+the page always was, and a browser can still switch it off. Core code that needs one of its addresses writes the path (`/health/<id>`).
+With the module off, that path does not become a dead link: the default-panel Health archive below reopens the stored data
+read-only, including in a core-only build.
 
 ### Adding a module
 
