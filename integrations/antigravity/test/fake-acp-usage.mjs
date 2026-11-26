@@ -10,6 +10,12 @@ const log = process.argv[process.argv.indexOf('--log-file') + 1]
 const calls = `${directory}/native-calls.jsonl`
 appendFileSync(`${directory}/acp-starts.jsonl`, `${JSON.stringify({ pid: process.pid })}\n`)
 const server = createServer(async (req, res) => {
+  // Agent port discovery probes listeners with GET / (User-Agent persona-ports, docs/lessons/testing.md); it is not a
+  // native call and must not kill the fake.
+  if (req.method !== 'POST') {
+    res.writeHead(404).end('{"message":"Unknown native method"}')
+    return
+  }
   const chunks = []
   for await (const chunk of req) chunks.push(chunk)
   const params = JSON.parse(Buffer.concat(chunks).toString())
