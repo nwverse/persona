@@ -10,8 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // These tests pin the way out of a batch switch that never activates its target (#15317): its retries are bounded
@@ -86,6 +88,77 @@ func conversationSwitchTestOnSource(t *testing.T, r *conversationSwitchTestRig, 
 	if !ok || c.Epoch != item.ExpectedEpoch || c.Switch != nil || a.MachineID != "server" || a.SessionID != "fresh-chat" || len(c.Segments) != segments {
 		t.Fatalf("the conversation left its source: %+v", c)
 	}
+}
+
+func TestConversationSwitchReceiptRetriesAfterDisconnect(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		err  error
+	}{
+		{"offline", apierr.ErrOffline},
+		{"request_not_sent", rpc.NotSent(rpc.ErrClosed)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			r := newConversationSwitchTestRig(t)
+			lostReply := errors.New("fake link reset after preparation")
+			var receipt any // Both handlers access the receipt under the fake hub's lock.
+			r.f.mu.Lock()
+			prepare := r.f.nodes["assistant.segment.prepare"]
+			r.f.mu.Unlock()
+			r.f.answerNode("assistant.segment.prepare", func(machine string, raw json.RawMessage) (any, error) {
+				var err error
+				receipt, err = prepare(machine, raw)
+				if err != nil {
+					return nil, err
+				}
+				return nil, lostReply
+			})
+			r.f.answerNode("assistant.segment.receipt", func(string, json.RawMessage) (any, error) {
+				return map[string]bool{"unknown": true}, nil
+			})
+			started, item := conversationSwitchTestStart(t, r)
+			conversationSwitchTestWaitSwitch(t, r, item, "in_doubt", lostReply.Error())
+			preparation := conversationSwitchTestPreparationFor(t, r, item)
+
+			r.f.answerNode("assistant.segment.receipt", func(string, json.RawMessage) (any, error) { return nil, tt.err })
+			var op *db.ConversationSwitch
+			waitFor(t, "failed receipt check to be recorded", func() bool {
+				r.s.logicalSweep(t.Context())
+				var err error
+				op, err = r.d.ConversationSwitch(t.Context(), item.Machine, item.ConversationID, item.OperationID)
+				return err == nil && op != nil && (op.Phase == "rejected" || op.Error == tt.err.Error())
+			})
+			if op.Phase != "in_doubt" {
+				t.Fatalf("receipt error %v left switch %q (%q), want in_doubt", tt.err, op.Phase, op.Error)
+			}
+
+			r.f.answerNode("assistant.segment.receipt", func(_ string, raw json.RawMessage) (any, error) {
+				var params struct {
+					OperationID string `json:"operation_id"`
+				}
+				if err := json.Unmarshal(raw, &params); err != nil {
+					return nil, err
+				}
+				if params.OperationID != preparation["operation_id"] {
+					return nil, errors.New("receipt queried a different preparation")
+				}
+				return receipt, nil
+			})
+			conversationSwitchTestDrive(t, r.s, started.BatchID, map[string]string{"fresh-chat": "switched"})
+			conversationSwitchTestPreparationFor(t, r, item)
+		})
+	}
+}
+
+func TestConversationSwitchInitialPrepareOfflineIsRefused(t *testing.T) {
+	r := newConversationSwitchTestRig(t)
+	r.f.answerNode("assistant.segment.prepare", func(string, json.RawMessage) (any, error) {
+		return nil, apierr.ErrOffline
+	})
+	started, item := conversationSwitchTestStart(t, r)
+	conversationSwitchTestWaitSwitch(t, r, item, "rejected", "preparation refused")
+	conversationSwitchTestDrive(t, r.s, started.BatchID, map[string]string{"fresh-chat": "refused"})
+	conversationSwitchTestOnSource(t, r, item, 1)
 }
 
 // A preparation whose receipt stays unknown keeps retrying within the limit, keeping its latest error; past the limit,
