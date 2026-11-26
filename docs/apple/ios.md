@@ -3291,10 +3291,11 @@ A chat's knowledge page and its Inbox items lead to each other, as on the web (#
 Inbox items"; `apple/Persona/Views/Knowledge/KBChatInbox.swift`, `apple/Persona/Views/Inbox/InboxKBChat.swift`).
 
 - **In Inbox** (`KBChatInboxSection`): the hub's `inbox` on `GET /api/v1/kb/chats/{id}`, after the place of a project's Agents. The
-  open items each draw the Inbox mark, the title and the summary (else the preview) on one line each, the section pill (the
-  Inbox's own words: an open item's `status`, else its `tier`; Needs You in its color while open; none for an item not sorted
-  yet) and when it last changed; the done ones are folded under **N done**, which opens to them and to Collapse. The header
-  counts the open ones. A tap opens the item.
+  open items each draw as a knowledge row (`KBInboxRow`, laid out as `KBRow`): the Inbox mark, the title (two lines at most)
+  and when it last changed, then the section pill (the Inbox's own words: an open item's `status`, else its `tier`; Needs
+  You in its color while open; none for an item not sorted yet) and the summary (else the preview), so the title keeps
+  the row's width at every text size; the done ones are folded under **N done**, which opens to them and to Collapse. The
+  header counts the open ones. A tap opens the item.
 - **Messages from the Last 7 Days** (`KBRecentText`): the text is cut into the hub's rows (`KBChatInbox.pieces`, read as the web's
   `parseRecent` and the hub's `kbRecentRows`: a `- ` line with its indented lines, or a line of its own; headings, blank lines
   and `…` in none), and a row whose day, time, sender and words match one an item's `messages` names becomes a link (the accent

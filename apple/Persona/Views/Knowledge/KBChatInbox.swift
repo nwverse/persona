@@ -170,26 +170,31 @@ struct KBChatInboxSection: View {
     }
 }
 
-/// An Inbox item on a chat's page: done or open, its title and summary, its section and when it last changed (was done).
+/// An Inbox item on a chat's page, laid out as a knowledge row (`KBRow`): done or open, its title and when it last
+/// changed (was done), then its section and its summary, so the title keeps the row's width at every text size.
 struct KBInboxRow: View {
     var item: KBInboxItem
 
     var body: some View {
         let done = item.doneAt != nil
-        HStack(spacing: Theme.Space.m) {
+        HStack(alignment: .firstTextBaseline, spacing: Theme.Space.m) {
             ThemedIcon(done ? Theme.Icon.done : Theme.Icon.inbox).font(Theme.Font.secondary).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                Text(item.title).font(Theme.Font.secondaryMedium).foregroundStyle(done ? .secondary : .primary).lineLimit(1)
-                if let line = KBChatInbox.line(item) {
-                    Text(line).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(1)
+                HStack(alignment: .firstTextBaseline, spacing: Theme.Space.sm) {
+                    Text(item.title).font(Theme.Font.secondaryMedium).foregroundStyle(done ? .secondary : .primary).lineLimit(2)
+                    Spacer(minLength: Theme.Space.xs)
+                    if let at = item.doneAt ?? item.updatedAt, at.isMeaningful {
+                        Text(Fmt.relative(at)).font(Theme.Font.label).foregroundStyle(.tertiary).lineLimit(1).fixedSize()
+                    }
                 }
-            }
-            Spacer(minLength: Theme.Space.xs)
-            if let tier = KBChatInbox.tier(item) {
-                KBPill(text: tier.title, tint: tier == .action && !done ? Theme.needsYou : nil)
-            }
-            if let at = item.doneAt ?? item.updatedAt, at.isMeaningful {
-                Text(Fmt.relative(at)).font(Theme.Font.label).foregroundStyle(.tertiary).lineLimit(1).fixedSize()
+                HStack(alignment: .firstTextBaseline, spacing: Theme.Space.sm) {
+                    if let tier = KBChatInbox.tier(item) {
+                        KBPill(text: tier.title, tint: tier == .action && !done ? Theme.needsYou : nil)
+                    }
+                    if let line = KBChatInbox.line(item) {
+                        Text(line).font(Theme.Font.label).foregroundStyle(.secondary).lineLimit(2)
+                    }
+                }
             }
         }
         .padding(.vertical, Theme.Space.xxs)
