@@ -126,7 +126,7 @@ export default function NeedsYouParts(props: NeedsYouPartProps) {
   if ("accept" in props) {
     return (
       <div data-needs-row={props.rowKey} {...props.countsOpenAttr} className="min-w-0 rounded-control bg-field px-3 py-2.5">
-        <AcceptRow stacked hideTitle={props.hideTitle} key={props.accept.id + props.ask.asked_at} row={askRow(props.accept, props.ask)} />
+        <AcceptRow stacked hideTitle={props.hideTitle} key={props.accept.id + props.ask.asked_at} verification={props.accept} row={askRow(props.accept, props.ask)} />
       </div>
     );
   }

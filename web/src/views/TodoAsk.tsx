@@ -3,6 +3,7 @@
 // POST /todos/{id}/accept, the route the briefing's Accept takes (Brief.tsx) — OK takes a decision's recommendation, Got it
 // acknowledges a conclusion, Accept verifies a deployed to-do. A decision that recommends nothing has no button: it is
 // answered in the conversation the task came from.
+import { VerificationFollowUp } from "./assistant/VerificationFollowUp";
 import { EvidenceLink } from "./assistant/EvidenceLink";
 import { useState } from "react";
 import { t } from "../i18n";
@@ -206,6 +207,7 @@ function AskPanel({ todo, ask, onOpenConversation = openConversation, ...control
                 {takeLabel(what, false)}
               </Button>
             ))}
+          {taking === "idle" && <VerificationFollowUp todo={todo} />}
           {decide && todo.origin && (
             // the conversation the task came from: the to-do's manager's, whichever assistant is current
             <Button icon="chat" onClick={() => onOpenConversation(todo, ask)}>

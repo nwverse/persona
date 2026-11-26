@@ -1275,9 +1275,14 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
       takeDirectWaitingRequest(conversation);
       setTray("needs");
     };
+    const followUp = (event: Event) => {
+      if ((event as CustomEvent).detail === conversation) setTray(null);
+    };
+    window.addEventListener("persona:verification-follow-up", followUp);
     window.addEventListener("persona:task-pending", needs);
     window.addEventListener("persona:task-start", needs);
     return () => {
+      window.removeEventListener("persona:verification-follow-up", followUp);
       window.removeEventListener("persona:task-pending", needs);
       window.removeEventListener("persona:task-start", needs);
     };
