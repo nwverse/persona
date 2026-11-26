@@ -1,7 +1,6 @@
 package assistant
 
 import (
-	"encoding/json"
 	"sync"
 	"testing"
 	"time"
@@ -13,28 +12,26 @@ import (
 // OnEvent, NodeEvent, setSessions), and only that loop reads the node's answers. The main conversation's attention
 // scan read the conversation from the same node inside setSessions, so after every finished main-chat turn it waited
 // for an answer nobody could read: 15 s until its deadline, with every other reply and event of the node held behind
-// it (pings, the apps' reads, item pushes, the turn's end) (#16214). Here every call to the node is held, as that loop
-// would hold its answers: the list must still be taken, and once the node answers the verdict lands and the row is
+// it (pings, the apps' reads, item pushes, the turn's end) (#16214). Here the node's answer to that read is held, as
+// that loop would hold it: the list must still be taken, and once the node answers the verdict lands and the row is
 // published again with it.
 func TestMainConversationAttentionLeavesTheNodeReadLoop(t *testing.T) {
 	ft := newFleetTaskTest(t)
+	setSettings(t, ft.s, func(v *Settings) { v.MachineID = "server" }) // the main conversation runs on the hub machine's node
 	at := time.Date(2026, 11, 26, 6, 16, 4, 0, time.UTC)
-	page := attentionTestRenumber(attentionTestItems(at, at.Add(time.Minute))[3:]) // one completed silent round
+	ft.f.setItems(attentionTestRenumber(attentionTestItems(at, at.Add(time.Minute))[3:])...) // one completed silent round
 	release := make(chan struct{})
 	var releaseOnce sync.Once
 	free := func() { releaseOnce.Do(func() { close(release) }) }
 	t.Cleanup(free)
 	held := make(chan string, 64)
-	ft.d.mu.Lock()
-	ft.d.machines["server"].call = func(method string, _ json.RawMessage) (any, error) {
-		held <- method
-		<-release
-		if method == DeviceSessionItems {
-			return map[string]any{"items": page, "has_more": false}, nil
+	ft.f.hookReads(receiptHooks{beforeCall: func(p DeviceCall) {
+		select {
+		case held <- p.Method:
+		default:
 		}
-		return map[string]any{}, nil
-	}
-	ft.d.mu.Unlock()
+		<-release
+	}})
 
 	taken := make(chan struct{})
 	go func() {
