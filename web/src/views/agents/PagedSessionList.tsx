@@ -545,7 +545,7 @@ export function PagedSessionList<T>({ root, path, identity, compare, removeIdent
             onChoose={chooseGroup} />}
           {personal && <SearchField value={providerQuery} onChange={setProviderQuery} placeholder={t("paged-agents.provider")} tone="inset" icon={false} className="min-w-0 flex-1" />}
         </div>}
-        <div className="flex min-w-0 items-center justify-between gap-2">
+        <div className="-mx-1 flex min-w-0 items-center justify-between gap-2 px-2">
           <p className="min-w-0 truncate text-xs text-ink-3" data-session-total>{shownTotal === null ? "\u00a0" : t("paged-agents.count", { count: shownTotal })}</p>
           {/* a display choice of the one flat list: its groups are sections of their own */}
           {activeAt && !sections && <ActiveWindowMenu value={win} onChange={chooseWindow} />}

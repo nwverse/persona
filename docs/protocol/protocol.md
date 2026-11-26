@@ -6604,6 +6604,7 @@ At most one quote block starts a message (the quoted words; for a task card, the
 > Quoted words                  ← quote block (optional)
 
 > Comment 1                     ← comment on selected text: number, original text (nested in another `> `), blank line, comment
+> Attached images for this comment (positions in this message): 2, 3
 > Selected text:
 > > The selected lines
 >
@@ -6634,6 +6635,9 @@ The user's typed text
 ```
 
 Limits: comments up to 4000 characters, attached code up to 60 lines (extra lines are counted in `Truncated` but not included); the fence has one more backtick than the longest run in the code. Numbers follow the order of comments above the input, starting at 1.
+Web selection comments with images (#14518) add the optional image line before `Selected text:`. Its numbers are
+one-based positions in the message's `images` array. Main composer images come first, followed by each inline
+comment's images in comment order. All images count toward the same message limits.
 On reading back, web only recognizes blocks after the first block whose first line is `Comment N` / `Code comment N` / `Element comment N` (`splitQuotes`), so ordinary `> ` quotes are unaffected; editing a sent message puts comments back above the input. The iOS app writes and reads the same blocks (`MessageComments`) and draws them as cards in sent bubbles; both are checked against `spec/fixtures/comments`.
 
 ### Message source (#2125)

@@ -1579,7 +1579,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
         return false;
       }
     }
-    return deliver(out, uuid(), out.edit?.clearDraft, 0, Boolean(out.edit));
+    return deliver(out, uuid(), out.edit?.clearDraft, 0, Boolean(out.edit || out.restoreCommentDraft));
   };
   const sendMessageNow = useRef(sendMessage);
   sendMessageNow.current = sendMessage;

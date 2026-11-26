@@ -706,19 +706,21 @@ export function NavGrid({ showHubNotice, pages, more = [], activeKey, go, onNavi
 function MorePages({ more, reg, hover, activeKey, go }: { more: NavPage[]; reg: RegFn; hover: (k: string | null) => void; activeKey: string; go: GoFn }) {
   const [folded, toggle] = useFolded("pages-more", true, { all: false, holds: more.some((p) => p.k === activeKey) });
   const counted = more.filter((p) => p.badge !== undefined);
+  const moreLabel = t("sidebar.more_pages_count", { count: more.length });
+  const countedTitle = counted.map(pageLabel).join(t("sidebar.list_separator"));
   return (
     <>
       <button
         type="button"
         onClick={toggle}
         aria-expanded={!folded}
-        title={counted.map(pageLabel).join(t("sidebar.list_separator")) || undefined}
+        aria-label={moreLabel}
+        title={countedTitle || moreLabel}
         className="touch-hit relative z-10 flex w-full items-center gap-2 rounded-[7px] px-2 sidebar-row text-left transition-[background-color,transform] duration-150 hover:bg-hover active:scale-[0.98] [@media(pointer:coarse)]:min-h-11"
       >
         <span className="text-ink-3"><Icon name="more" size={14} stroke={1.8} /></span>
         <span className="min-w-0 flex-1 truncate text-[13px] text-ink-2">{t("sidebar.more_pages")}</span>
         {folded && counted.length > 0 && <span aria-hidden className={cx("size-1.5 rounded-full", DOT_CLASS[counted[0].badgeTone ?? "accent"])} />}
-        <span className="text-[11px] text-ink-3 tabular-nums">{more.length}</span>
         <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 text-ink-3 transition-transform" style={{ ...sidebarFoldMotion(!folded), transform: folded ? "rotate(-90deg)" : "none" }} />
       </button>
       <Collapse open={!folded} sidebarFold>

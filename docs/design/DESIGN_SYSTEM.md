@@ -465,6 +465,11 @@ on-demand model panel, not the everyday Assistant home (#6887).
   length", and ✕. While the clipboard holds a picture not yet offered, the focused composer offers **Paste** (the accent's
   capsule on iOS, a Secondary button on Android) and ✕ **Don't paste** at its top, once per copy; the field itself pastes
   only text. Android: the video row in every style, the Paste chip on Glass (`ComposerPaste.kt`).
+- Web selection comments (#14518): while writing a comment on selected chat text, paste an image into its field or
+  use the labeled image button beside the keyboard hint. The card reuses the composer's attachment tiles and their
+  remove controls so the picture stays with the text it illustrates. Saving or reopening the note keeps its images.
+  Escape discards a new comment or restores the note and images from before the edit. All pictures in the draft share
+  the message's limits. Selecting text preloads the draft editor, which also loads when a saved comment opens.
 - Files (iOS `FileAttachmentsBar`, #8361): + › Files never types into the draft. Each file is a card in a row above the
   field that scrolls sideways like the photos' strip, 6 pt apart: `box56` tall and `box160` wide (a new size: a name of
   about 14 characters whole, and the next card showing) on `Fill.well` with the card radius,
@@ -3042,6 +3047,7 @@ Current gaps against this contract are listed in `docs/design/HIG_AUDIT.md`. No 
 | Spacing | 0-32 with `sm` 6 | Tailwind default | same scale | web differs |
 | Radius | 6/10/14/20/22 | 6/8/10 plus literals | 6/10/14/20/22, per-style variants | web and Android differ |
 | Min target | 44 | 44 hit area, 28-32 visuals | 48 dp touch targets, 32-40 visuals | violated on web visuals |
+| Inline selection comment images | Tracked in #5785 | Paste or pick, preview, remove | Outside #14518 scope | Web first |
 | Motion | token set | 150/220/300 ms | Glass: the iOS state and layout springs, the composer's send swap and press | web differs |
 | Reduce Motion | environment value | CSS strip, busy exempt | animator scale only | different policy |
 | Toast | capsule, top | dark capsule, bottom | capsule, top (`JToastHost`) | web differs |

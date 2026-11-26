@@ -254,7 +254,7 @@
    an icon and a short word (#4316). */
 @theme { --breakpoint-xs: 340px; }
 /* The task cards' type scale by role (docs/design/task-cards.md §4.1): the card and row title, the meta line, the chip / label, and secondary meta. The sizes the cards already used, now named; iOS Theme.Font bodyStrong / caption / label. */
-@theme { --text-card-title: 14.5px; --text-meta: 13px; --text-label: 12px; --text-submeta: 11.5px; }
+@theme { --text-card-title: 14.5px; --text-meta: 13px; --text-tree-row: 12.5px; --text-label: 12px; --text-submeta: 11.5px; }
 @theme inline {
   --color-page: var(--page);
   --color-canvas: var(--canvas);
@@ -445,6 +445,14 @@ body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; 
   }
 }
 @utility scrollbar-none { scrollbar-width: none; &::-webkit-scrollbar { display: none; } }
+/* Subtle thin scrollbar for sidebars and directory trees: transparent track, muted thumb. */
+@utility scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+  &::-webkit-scrollbar { width: 6px; height: 6px; }
+  &::-webkit-scrollbar-track { background: transparent; }
+  &::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 9999px; }
+}
 /* Conversation chrome: retain the native hit strip and drag behavior, with no opaque track or layout shift.
    Only enhanced browsers fade the thumb; forced colors and unsupported browsers keep the native bar. */
 :root { --chat-scrollbar-fade: 220ms; }
