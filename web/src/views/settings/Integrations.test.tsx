@@ -193,7 +193,6 @@ import type { HubExtension } from "../../lib/extensions";
 import type { SourcesGraph } from "../../lib/sources-graph";
 import { subscriptionSourceState, type HubSubscription } from "../../lib/subscriptions";
 import { navigate } from "../../lib/router";
-import { loadPages } from "../../lib/lazy-page";
 import { chooseManager, chosenManager, managerHeaderFor, resetManagerChoice } from "../../lib/manager-choice";
 import { resetRoster } from "../../lib/managers";
 import { Settings } from "../Settings";
@@ -319,7 +318,6 @@ let root: Root;
 
 beforeAll(async () => {
   await initI18n("zh-Hans");
-  await loadPages();
 });
 
 beforeEach(() => {
@@ -346,6 +344,7 @@ afterEach(() => {
 });
 
 const flush = async () => {
+  await act(async () => vi.dynamicImportSettled());
   for (let i = 0; i < 8; i++) {
     await act(async () => {
       await Promise.resolve();
@@ -846,6 +845,26 @@ describe("Integrations unified list view", () => {
     expect(host.querySelector("[data-mock-market-catalog]")).not.toBeNull();
   });
 
+  it("shows extensions while channels are pending and ignores a previous assistant's late response", async () => {
+    stubFullHubFetch();
+    const fetchNow = fetch;
+    let finish!: (response: Response) => void;
+    const pending = new Promise<Response>((resolve) => { finish = resolve; });
+    vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith("/channels")) {
+        return new Headers(init?.headers).has("X-Persona-Manager") ? Promise.resolve(json({ channels: [] })) : pending;
+      }
+      return fetchNow(input, init);
+    });
+    await act(async () => root.render(<Integrations open={null} onOpen={() => {}} />));
+    expect(host.querySelector('[data-integration-id="apps"]')).toBeNull();
+    expect(host.querySelector('[data-integration-id="nord-theme"]')).not.toBeNull();
+    expect(host.querySelector('[data-integrations-empty]')).toBeNull();
+    await act(async () => chooseManager("work"));
+    await act(async () => finish(json({ channels: SAMPLE_CHANNELS })));
+    expect(host.querySelector('[data-integration-id="apps"]')).toBeNull();
+  });
+
   it("degrades gracefully on older hubs without extension_manager, channels, or connectors", async () => {
     state.features = [];
     stubFullHubFetch({ markets: false, failMail: true, failBot: true });
@@ -991,9 +1010,11 @@ describe("Settings navigation collapse and bidirectional redirects under integra
     stubFullHubFetch({ subscriptions: SAMPLE_SUBSCRIPTIONS });
     history.replaceState(null, "", "/settings?tab=integrations&integration=-sources");
     await act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
+    await flush();
     const byText = (text: string) => [...document.querySelectorAll("button")].find(b => b.textContent?.includes(text))!;
     expect(host.querySelector("[data-integrations-view-switch]")).toBeNull();
     expect(host.querySelectorAll(`[role="radiogroup"][aria-label="${t("subscriptions.view")}"]`)).toHaveLength(1);
+    await act(async () => vi.dynamicImportSettled());
     await act(async () => byText("Team Wiki Updates").click());
     await act(async () => byText(t("subscriptions.graph_open")).click());
     expect(host.querySelector("[data-mock-extension-ui]")?.getAttribute("data-state")).toBe(subscriptionSourceState("sub_larkx_rate"));
@@ -1345,6 +1366,7 @@ describe("assistant isolation across integration routes", () => {
   }
 
   async function clickOption(group: string, label: string) {
+    await flush();
     const button = [...host.querySelectorAll<HTMLButtonElement>(`${group} [role="radio"]`)].find((el) => el.textContent === label);
     expect(button).toBeDefined();
     await act(async () => button!.click());
@@ -1377,6 +1399,7 @@ describe("assistant isolation across integration routes", () => {
     await flush();
     expect(headersFor("/subscriptions/-/graph", "GET")).toEqual(["work"]);
     await act(async () => root.render(<Integrations open="-market/official/demo-ext" onOpen={onOpen} />));
+    await flush();
     await act(async () => host.querySelector<HTMLButtonElement>("[data-mock-item-install]")!.click());
     expect(onOpen).toHaveBeenCalledWith("ext:demo-ext@work");
   });

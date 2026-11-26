@@ -35,6 +35,8 @@ export interface UIAction {
   confirm?: string;
   /** Send every field's value along. */
   submit?: boolean;
+  /** A full extension page may open an https URL or a persona session/task target in the app (#14617). */
+  open?: string;
   /** UI version 3: open another page of the extension on top of this one, without asking the extension first. */
   push?: UIPush;
   /** UI version 4: values the action carries, sent with the fields' and the component's (these win on a name). */
@@ -439,7 +441,7 @@ export interface UIPlace {
   placement: "plugin_page" | "launcher_section" | "nav_page" | "overview_card" | "machine_section" | "inbox_item" | string;
   /** compact (a card) or full (a page, a section). */
   size?: "compact" | "full" | string;
-  /** A nav_page's icon, from UI_ICONS. */
+  /** A nav_page's icon, from UI_ICONS (the row icons). */
   icon?: string;
   /** The page (nav_page or plugin_page of the same extension) an overview_card opens. */
   opens?: string;
@@ -1177,9 +1179,9 @@ export function refreshDelay(view: UIView | null | undefined): number {
 
 // ── slots ───────────────────────────────────────────────
 
-/** A nav_page's icons (docs/extensions/extensions.md "UI slots"); each app draws its own. `plugin` is `extension` under its name
- *  before #1844 (the hub still sends it). */
-export const UI_ICONS = ["extension", "plugin", "chart", "gauge", "list", "bell", "doc", "calendar", "money", "branch", "code", "pull_request", "merge", "map", ...NEW_ICONS_6] as const;
+/** A nav_page's icons (docs/extensions/extensions.md "UI slots"): a row's whole set, the schema's NavIcon (#16281), and `map`;
+ *  each app draws its own. `plugin` is `extension` under its name before #1844 (the hub still sends it). */
+export const UI_ICONS = [...ROW_ICONS, "map"] as const;
 export type UIIcon = (typeof UI_ICONS)[number];
 
 /** An icon the web knows, else extension. */

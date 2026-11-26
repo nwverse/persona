@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/agentprompt"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -422,7 +423,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if !t.preservePermission && t.CallerPermission != nil && t.Permission == "" && modes {
 		t.Permission = s.taskPermission(ctx, t.Machine, nil)
 	}
-	if !modes { // traex, omp…: no mode and no effort, whatever a default or a tier filled in (launcher_modes.go)
+	if !startTakesEffort(fit.agent) {
 		delete(params, "effort")
 		t.Effort = ""
 	}
@@ -469,7 +470,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	prompt := t.Prompt
 	if t.HandoffID != "" {
 		if handoffSummary := strings.TrimSpace(s.todoHandoffSummary(ctx, t.HandoffID)); handoffSummary != "" {
-			prompt = handoffSummary + "\n\n" + prompt
+			prompt = agentprompt.WithContext(fit.agent, prompt, handoffSummary)
 		}
 	}
 	if t.usesPreparedWorkspace() && len(t.WorkspaceResolved.Repositories) > 0 {

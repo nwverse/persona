@@ -21,7 +21,7 @@ import { ExtensionThemePicker } from "../ui/ExtensionThemePicker";
 import { setTheme, useTheme, type Theme } from "./theme";
 import { Group, Row, Pill, RowConfirm, Switch } from "./settings/SettingsParts";
 import { LanguageRow } from "./settings/LanguageRow";
-import { FontRows, RecentChatsRow, SidebarIconsRow, SidebarUsageRow, TextSizeRow, ThemeColorPicker } from "./settings/LookSettings";
+import { FontRows, RecentChatsRow, SidebarIconsRow, SidebarUsageRow, SurfaceStyleRow, TextSizeRow, ThemeColorPicker } from "./settings/LookSettings";
 import { setStarredEnabled, useStarredSetting } from "../lib/starred-summary";
 import { setReplyMotionEnabled, useReplyMotionSetting } from "../ui/stream/motion";
 import { setAgentDetails, useAgentDetails } from "../lib/context-usage";
@@ -413,7 +413,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     isIntegrationDetailRoute(parseIntegrationsSub(sub));
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
-      <header className="flex min-h-14 shrink-0 items-center gap-2 border-b border-line px-3 py-2 sm:px-4">
+      <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3 sm:px-4">
         {phone && at.tab ? (
           <>
             <IconButton icon="chevronLeft" label={up ? up.label : t("settings.back")} onClick={goBack} />
@@ -848,6 +848,7 @@ function General({ onModel }: { onModel: () => void }) {
 function Advanced() {
   return (
     <Group title={t("settings.appearance")} anchor="appearance">
+      <SurfaceStyleRow />
       <ThemeColorPicker />
       <ExtensionThemePicker />
       <FontRows />

@@ -174,7 +174,11 @@ type PlanTask struct {
 	PartOf      string   `json:"part_of,omitempty"`
 	After       []string `json:"after,omitempty"`
 	BlockedByPR []string `json:"blocked_by_pr,omitempty"`
-	RequestGate string   `json:"request_gate,omitempty"`
+	// UnlockStage and UnlockContracts are the validated stage gate for After, kept with the plan so a saved plan
+	// retains it across a manager restart. Empty means the dependency is mirrored as todo_done.
+	UnlockStage     string   `json:"unlock_stage,omitempty"`
+	UnlockContracts []string `json:"unlock_contracts,omitempty"`
+	RequestGate     string   `json:"request_gate,omitempty"`
 	// Project: the knowledge-base project the task's todo goes in (#2581, todo_project.go), checked and kept as its slug
 	// when the plan is made; "" for none.
 	Project string `json:"project,omitempty"`
@@ -236,6 +240,9 @@ type PlanTask struct {
 	rememberKind bool
 	// task_spawn preserves the caller's mode instead of applying a fresh task's Claude-family permission default.
 	preservePermission bool
+	// handoffLauncherSwitch marks a continuation whose launcher or agent kind changed (not only machine);
+	// cross-launcher / cross-provider switches always require explicit owner confirmation on the plan card.
+	handoffLauncherSwitch bool
 	// LauncherDefaultModel selects the launcher's own model instead of a matching Agents binding. It is hub-owned:
 	// task_spawn sets it for an explicitly empty parent model, and a launcher-only retry override sets it too. Its
 	// absence on a legacy plan keeps that row's opaque launch unchanged.
@@ -334,7 +341,8 @@ func (s *Service) settleDelay(ctx context.Context) time.Duration {
 }
 
 type tasksState struct {
-	mu sync.Mutex
+	mu             sync.Mutex
+	closedTurnLogs []closedTurnLog // least recently seen first, protected by mu
 	// recoverBefore excludes starts admitted by this service before its background loops begin.
 	recoverBefore time.Time
 	// completionMu serializes a resumed turn with committing an earlier judgment.
@@ -369,6 +377,10 @@ type tasksState struct {
 	// sendsAcceptedUnread: by task, the latest acceptance made before the sends kept before were read (sendsAccepted),
 	// applied to them as they are read (loadSendsOut); under mu.
 	sendsAcceptedUnread map[string]time.Time
+	// closedTurnLogged tracks ignored-turn diagnostic lines already emitted for closed tasks so reused long-lived
+	// sessions do not spam repeated "left closed" / "ended a turn: dropped" lines on every unrelated turn (#16421);
+	// keyed by (task, DoneAt, agent, start/end), guarded by mu, and capped in size.
+	closedTurnLogged map[closedTurnLogKey]struct{}
 	// retrying: the tasks whose agent is starting (again), one start at a time: a Retry after a failed start (#1396), a
 	// Continue, a new agent after all of the task's stopped (startTaskSuccessor), or a plan taking the to-do over
 	// (todo_id, takeTodoForTask: taking). A message on the card that would start another waits for that one and goes

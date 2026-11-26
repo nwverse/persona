@@ -94,6 +94,7 @@ type listedTodo struct {
 	Wait                 *assistantwire.TodoWait    `json:"wait,omitempty"`
 	RepoGate             *repoGate                  `json:"repo_gate,omitempty"`
 	ItemType             string                     `json:"item_type,omitempty"`
+	ChildSummary         *todoChildSummary          `json:"child_summary,omitempty"`
 }
 
 // askEvidenceLink returns raw when it is a valid http(s) URL and not merely the to-do's own /todos/<id> page.
@@ -296,11 +297,12 @@ func (s *Service) pushDecisionAbout(ctx context.Context, id, reason string) (boo
 		n.Title, n.Body = s.redactedNotice(ctx, l, space)
 		n.Todo.Options, n.Todo.Lockscreen = nil, assistantwire.OwnerAskLockscreenOpenOnly
 	}
-	s.noteCard(ctx, cardDecision, n)
-	if _, err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n}); err != nil {
+	res, err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n})
+	if err != nil {
 		s.logf("task %s: decision push: %v", id, err)
 		return false, err
 	}
+	s.noteCardResult(ctx, decisionCardSource(a.WhyOwner), n, res)
 	return true, nil
 }
 

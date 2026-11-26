@@ -793,4 +793,175 @@ test('permission cards forward always_label, honor always responses, and never s
     assert.equal('cwd' in n.asked[0], false)
     await n.peer.call('session.interrupt', { session_id: pid })
   })
+
+  await t.test('detached pending permission cancels the turn cleanly without executing, retrying, or recording an error', async (t) => {
+    const { n, record, start, status } = await agyRuntime(t, { node: { features: ['prefer_running', 'assistant_command_gate'] } })
+    const askSpec = {
+      toolCall: { name: 'run_command', rawInput: { CommandLine: `ol POST /conversations/c1/messages '{"text":"wait"}'` } },
+      options: fullOptions,
+    }
+    n.resolve = (ix) => ({ dismiss: true, pending: true, approval_id: ix.id, message: 'Still waiting for owner.' })
+    const pid = await start(`ask-full ${JSON.stringify(askSpec)}`, { assistant: true, permission_mode: 'bypassPermissions' })
+    await until('pending permission answered cancelled', () => permissionAnswers(record).length === 1, SLOW)
+    assert.deepEqual(permissionAnswers(record)[0].result, cancelled)
+    await until('turn ended cleanly via session/cancel', () => received(record).some((m) => m.ended === SESSION), SLOW)
+    await until('session no longer working', () => status(pid) !== 'working', SLOW)
+    const row = n.last('runtime.sessions')?.sessions.find((s) => s.session_id === pid)
+    assert.equal(row?.turn_error, undefined)
+    assert.equal(received(record).filter((m) => m.method === 'session/prompt').length, 1)
+    const items = await n.peer.call('session.items', { session_id: pid })
+    assert.equal(items.items.some((it) => it.kind === 'notice' && it.text === '已中断'), false)
+  })
+
+  await t.test('detached pending permission lets a queued clarification question run immediately after cancel', async (t) => {
+    const { n, record, start } = await agyRuntime(t, { node: { features: ['prefer_running', 'assistant_command_gate'] } })
+    const askSpec = {
+      toolCall: { name: 'run_command', rawInput: { CommandLine: `ol POST /conversations/c1/messages '{"text":"clarify"}'` } },
+      options: fullOptions,
+    }
+    const pendingGate = Promise.withResolvers()
+    n.resolve = () => pendingGate.promise
+    const pid = await start(`ask-full ${JSON.stringify(askSpec)}`, { assistant: true, permission_mode: 'bypassPermissions' })
+    await until('card waiting on hub', () => n.asked.length === 1, SLOW)
+    // Owner asks a clarification question while the approval detaches as pending.
+    const queued = await n.peer.call('session.send', { session_id: pid, text: 'reply', assistant: true })
+    assert.deepEqual(queued, { ok: true, queued: true })
+    pendingGate.resolve({ dismiss: true, pending: true, approval_id: n.asked[0].id, message: 'Owner asked a question.' })
+    await until('pending card answered cancelled', () => permissionAnswers(record).length === 1, SLOW)
+    assert.deepEqual(permissionAnswers(record)[0].result, cancelled)
+    const prompts = () => received(record).filter((m) => m.method === 'session/prompt')
+    await until('queued clarification question runs next', () => prompts().length === 2, SLOW)
+    assert.deepEqual(prompts()[1].params.prompt, [{ type: 'text', text: 'reply' }])
+    const row = () => n.last('runtime.sessions')?.sessions.find((s) => s.session_id === pid)
+    await until('clarification answer completed', () => row()?.last_text === 'Finished.', SLOW)
+    assert.equal(row()?.turn_error, undefined)
+  })
+
+  await t.test('explicit deny with owner note delivers refusal follow-up after turn ends while plain and gate_rule denies do not', async (t) => {
+    const { n, record, start, status } = await agyRuntime(t, { node: { features: ['prefer_running', 'assistant_command_gate'] } })
+    const askSpec = {
+      toolCall: { name: 'run_command', rawInput: { CommandLine: `ol POST /conversations/c1/messages '{"text":"verbose"}'` } },
+      options: fullOptions,
+      endOnAnswer: true,
+    }
+    const prompts = () => received(record).filter((m) => m.method === 'session/prompt')
+
+    // 1. Explicit deny WITH user-written note sends refusal note as follow-up turn.
+    n.resolve = () => ({ allow: false, message: '  Keep it under one line  ' })
+    const pid = await start(`ask-full ${JSON.stringify(askSpec)}`, { assistant: true, permission_mode: 'bypassPermissions' })
+    await until('deny-with-note answered reject_once', () => permissionAnswers(record).length === 1, SLOW)
+    assert.deepEqual(permissionAnswers(record)[0].result, { outcome: { outcome: 'selected', optionId: 'reject' } })
+    await until('refusal note delivered as follow-up prompt', () => prompts().length === 2, SLOW)
+    assert.deepEqual(prompts()[1].params.prompt, [{ type: 'text', text: '（没有执行）Keep it under one line' }])
+    // The follow-up turn is held by fake-acp-cancel (default hold mode); verify it never polluted row.queued, then interrupt it.
+    const row = () => n.last('runtime.sessions')?.sessions.find((s) => s.session_id === pid)
+    assert.equal(row()?.queued, undefined)
+    await n.peer.call('session.interrupt', { session_id: pid })
+    await until('follow-up settled after interrupt', () => status(pid) !== 'working', SLOW)
+
+    // 2. Plain deny WITHOUT note does not send an extra turn.
+    n.resolve = () => ({ allow: false })
+    await n.peer.call('session.send', { session_id: pid, text: `ask-full ${JSON.stringify(askSpec)}`, assistant: true })
+    await until('plain deny answered', () => permissionAnswers(record).length === 2, SLOW)
+    assert.deepEqual(permissionAnswers(record)[1].result, { outcome: { outcome: 'selected', optionId: 'reject' } })
+    await until('plain deny turn ended', () => received(record).filter((m) => m.ended === SESSION).length === 3, SLOW)
+    await until('session idle after plain deny', () => status(pid) !== 'working', SLOW)
+    assert.equal(prompts().length, 3, 'plain deny without note must not start a follow-up turn')
+
+    // 3. Gate-rule deny (reason: gate_rule) does not send an extra turn.
+    n.resolve = () => ({ allow: false, message: '这个操作按配置不允许', reason: 'gate_rule' })
+    await n.peer.call('session.send', { session_id: pid, text: `ask-full ${JSON.stringify(askSpec)}`, assistant: true })
+    await until('rule deny answered', () => permissionAnswers(record).length === 3, SLOW)
+    assert.deepEqual(permissionAnswers(record)[2].result, { outcome: { outcome: 'selected', optionId: 'reject' } })
+    await until('rule deny turn ended', () => received(record).filter((m) => m.ended === SESSION).length === 4, SLOW)
+    await until('session idle after rule deny', () => status(pid) !== 'working', SLOW)
+    assert.equal(prompts().length, 4, 'gate_rule deny must not start a follow-up turn')
+
+    // 4. Interrupting a turn that received a deny note drops the pending refusal follow-up.
+    const holdAskSpec = { ...askSpec, endOnAnswer: false }
+    n.resolve = () => ({ allow: false, message: 'Should be dropped on cancel' })
+    await n.peer.call('session.send', { session_id: pid, text: `ask-full ${JSON.stringify(holdAskSpec)}`, assistant: true })
+    await until('hold deny answered', () => permissionAnswers(record).length === 4, SLOW)
+    await n.peer.call('session.interrupt', { session_id: pid })
+    await until('cancelled turn settled', () => status(pid) !== 'working', SLOW)
+    assert.equal(prompts().length, 5, 'interrupted turn must drop its queued refusal note')
+  })
+
+  await t.test('detached pending permission withdraws sibling asks cleanly without executing either', async (t) => {
+    const { n, record, start, status } = await agyRuntime(t, { node: { features: ['prefer_running', 'assistant_command_gate'] } })
+    const askSpec = {
+      asks: [
+        { toolCallId: 'call-1', toolCall: { name: 'run_command', rawInput: { CommandLine: `ol POST /conversations/c1/messages '{"text":"first"}'` } } },
+        { toolCallId: 'call-2', toolCall: { name: 'run_command', rawInput: { CommandLine: `ol POST /conversations/c1/messages '{"text":"second"}'` } } },
+      ],
+      options: fullOptions,
+    }
+    const first = Promise.withResolvers()
+    const second = Promise.withResolvers()
+    let seen = 0
+    n.resolve = () => (++seen === 1 ? first.promise : second.promise)
+    const pid = await start(`ask-full ${JSON.stringify(askSpec)}`, { assistant: true, permission_mode: 'bypassPermissions' })
+    await until('both sibling cards waiting on hub', () => n.asked.length === 2, SLOW)
+    first.resolve({ dismiss: true, pending: true, approval_id: n.asked[0].id, message: 'Waiting on card 1.' })
+    await until('both permission asks answered cancelled', () => permissionAnswers(record).length === 2, SLOW)
+    assert.deepEqual(permissionAnswers(record).map((a) => a.result), [cancelled, cancelled])
+    await until('sibling card withdrawn via interaction.cancel', () => n.all('interaction.cancel').some((ev) => ev.id === n.asked[1].id), SLOW)
+    await until('turn ended cleanly', () => received(record).some((m) => m.ended === SESSION), SLOW)
+    await until('session settled', () => status(pid) !== 'working', SLOW)
+    assert.equal(n.last('runtime.sessions')?.sessions.find((s) => s.session_id === pid)?.turn_error, undefined)
+  })
+
+  await t.test('racing non-Bash ask in bypassPermissions is cancelled instead of auto-executing on pendingDetach', async (t) => {
+    const { n, record, start, status } = await agyRuntime(t, { node: { features: ['prefer_running', 'assistant_command_gate'] } })
+    const askSpec = {
+      toolCall: { name: 'run_command', rawInput: { CommandLine: `ol POST /conversations/c1/messages '{"text":"wait"}'` } },
+      options: fullOptions,
+      askOnCancel: {
+        toolCallId: 'call-race-write',
+        toolCall: { name: 'write_file', rawInput: { Path: '/tmp/race.txt', Content: 'must not run' } },
+        options: fullOptions,
+      },
+    }
+    n.resolve = (ix) => ({ dismiss: true, pending: true, approval_id: ix.id, message: 'Still waiting.' })
+    const pid = await start(`ask-full ${JSON.stringify(askSpec)}`, { assistant: true, permission_mode: 'bypassPermissions' })
+    await until('both pending ask and racing write_file answered', () => permissionAnswers(record).length === 2, SLOW)
+    assert.deepEqual(permissionAnswers(record).map((a) => a.result), [cancelled, cancelled])
+    assert.equal(n.asked.length, 1, 'racing write_file must neither auto-execute nor raise a card')
+    await until('turn ended cleanly', () => received(record).some((m) => m.ended === SESSION), SLOW)
+    await until('session settled', () => status(pid) !== 'working', SLOW)
+  })
+
+  await t.test('earlier deny-with-note followed by detached pending drops stale refusal ahead of queued clarification', async (t) => {
+    const { n, record, start } = await agyRuntime(t, { node: { features: ['prefer_running', 'assistant_command_gate'] } })
+    const askSpec = {
+      toolCall: { name: 'run_command', rawInput: { CommandLine: `ol POST /conversations/c1/messages '{"text":"first"}'` } },
+      options: fullOptions,
+      nextAsk: {
+        toolCallId: 'call-2',
+        toolCall: { name: 'run_command', rawInput: { CommandLine: `ol POST /conversations/c1/messages '{"text":"second"}'` } },
+        options: fullOptions,
+      },
+    }
+    const secondGate = Promise.withResolvers()
+    let calls = 0
+    n.resolve = () => {
+      calls += 1
+      if (calls === 1) return { allow: false, message: 'stale earlier note' }
+      return secondGate.promise
+    }
+    const pid = await start(`ask-full ${JSON.stringify(askSpec)}`, { assistant: true, permission_mode: 'bypassPermissions' })
+    await until('second card waiting on hub after first deny-with-note', () => n.asked.length === 2, SLOW)
+    assert.deepEqual(permissionAnswers(record)[0].result, { outcome: { outcome: 'selected', optionId: 'reject' } })
+    const queued = await n.peer.call('session.send', { session_id: pid, text: 'reply', assistant: true })
+    assert.deepEqual(queued, { ok: true, queued: true })
+    secondGate.resolve({ dismiss: true, pending: true, approval_id: n.asked[1].id, message: 'Clarifying card 2.' })
+    await until('second card answered cancelled', () => permissionAnswers(record).length === 2, SLOW)
+    assert.deepEqual(permissionAnswers(record)[1].result, cancelled)
+    const prompts = () => received(record).filter((m) => m.method === 'session/prompt')
+    await until('clarification prompt runs immediately next without stale refusal', () => prompts().length === 2, SLOW)
+    assert.deepEqual(prompts()[1].params.prompt, [{ type: 'text', text: 'reply' }])
+    const row = () => n.last('runtime.sessions')?.sessions.find((s) => s.session_id === pid)
+    await until('clarification finished cleanly', () => row()?.last_text === 'Finished.', SLOW)
+    assert.equal(prompts().length, 2, 'stale refusal note must never fire after pendingDetach')
+  })
 })

@@ -81,8 +81,8 @@ Transcribed text from phone recordings (and watch recordings relayed through the
 - Recovery assumes one writable store owns the archive directory. Individual file contents are synced before replacement and directory syncing is best effort where supported; subprocess interruption and replacement failures are tested, not arbitrary hardware or filesystem corruption. External filesystem readers must wait for writable recovery if a journal remains: raw files can contain unfinished replacements after interruption or failed restoration. The journal covers upload content, not a transaction with generated summaries, project links or the database index; that index remains rebuildable from files.
 - For completed transcripts (`complete: true`) whose current revision has not been summarized, each manager round makes at most 3 model calls for them, newest first, failed ones included (same purpose as chat compression, `kb.compress`, prompt `prompts/kb/recording.md`). A recording whose summary failed waits 10 minutes, doubled with each failure in a row up to 6 hours, and the next one goes on; a new revision of it is tried at once (#4246; before, the first failure stopped the round and that recording was sent again every round). A paused model connection, or no model set up, stops the round without counting:
   produces a summary, one-line description, title (used if neither the user nor a calendar named it; a meeting's minutes then settle the title, and a recording still recording is named by `meeting.title` once it has enough text, [meeting-minutes.md](meeting-minutes.md) "Titles (#8873)"), tags and mentioned projects, written in the recording's language (else the owner's; [meeting-minutes.md](meeting-minutes.md) "How the hub generates them"); projects are linked normally (a "Recording · Title" project timeline entry). At most 24k characters go to the model (keeping the beginning and end).
-- Retention follows assistant setting `recording_days` (default 14 days, independent of `text_days`): each round deletes directories and index rows whose start time predates retention; tombstones are retained equally long.
-  A recording with minutes is **trimmed** instead (#3780): past `recording_days` its directory keeps only `meta.json` (with `trimmed_at`), `minutes.json`, `minutes.md`, a meeting's `meeting.json` (its private mark and its room, which the manager deletes then; never searched, [meeting-minutes.md](meeting-minutes.md) "Upload fields") and the photos the minutes cite (their files in `attachments/`, their entries in `photos.json` and `photos.md`; [meeting-minutes.md](meeting-minutes.md) "Phase 3: photos"), and everything else (`segments.json`, `transcript.md`, `summary.md`, `live.json`, the other photos, a pending undo journal, which is restored first) is deleted; its index row stays. It is deleted like any other once it started before assistant setting `minutes_days` (forever by default: unset or `0`; otherwise 1–3650 days, never below `recording_days`). With forever, retention never deletes these minutes; the user can still delete the recording and its minutes together. A trimmed recording is still listed, read and searched by its minutes; it takes no upload (`expired`), gets no summary and no new minutes, and its attendance is off. Tombstones keep the `recording_days` window: an upload of anything older is expired anyway (`server/internal/kb/recordings_keep.go`, `PruneRecordings`).
+- Retention follows assistant setting `recording_text_days` (#16412; forever by default, or 1–3650 days; independent of `text_days`): each round deletes directories and index rows whose start time predates a finite window; tombstones are kept for `recording_audio_days` (14 days by default, old name `recording_days`; forever with it), the window the phone keeps its copies for.
+  A recording with minutes is **trimmed** instead (#3780): past a finite `recording_text_days` its directory keeps only `meta.json` (with `trimmed_at`), `minutes.json`, `minutes.md`, a meeting's `meeting.json` (its private mark and its room, which the manager deletes then; never searched, [meeting-minutes.md](meeting-minutes.md) "Upload fields") and the photos the minutes cite (their files in `attachments/`, their entries in `photos.json` and `photos.md`; [meeting-minutes.md](meeting-minutes.md) "Phase 3: photos"), and everything else (`segments.json`, `transcript.md`, `summary.md`, `live.json`, the other photos, a pending undo journal, which is restored first) is deleted; its index row stays. It is deleted like any other once it started before assistant setting `minutes_days` (forever by default: unset or `0`; otherwise 1–3650 days, never below `recording_text_days`, forever while the text is). With forever, retention never deletes these minutes; the user can still delete the recording and its minutes together. A trimmed recording is still listed, read and searched by its minutes; it takes no upload (`expired`), gets no summary and no new minutes, and its attendance is off. Tombstones keep the `recording_audio_days` window: the phone never uploads anything older (`server/internal/kb/recordings_keep.go`, `PruneRecordings`).
 - `kb_list` / `kb_get` / `kb_search` and the app's Knowledge page gain the `recordings` category; `kb_get` includes summary, bookmarks and any transcription still retained (up to 12k characters). Recording content cannot be edited via `kb_update` (the phone is authoritative); only tags can change.
 - A recording that is a meeting (`kind: meeting`, overlapping a calendar item, or minutes asked for) also gets structured minutes besides the short summary ([meeting-minutes.md](./meeting-minutes.md)): `minutes.json` and `minutes.md` in the same directory, from chunked calls to the Meeting minutes model (`meeting.minutes`, which follows Information processing until it is set apart; `kb.compress` before #7980, [model-config.md](model-config.md) "Meeting minutes and the in-meeting conversation (#7980)"), removed with the recording and kept past its transcript until `minutes_days` (above), returned as `detail.minutes`. `kb_get` prints them before the transcript, followed by where each action item stands (a suggestion, or its to-do open, done, cancelled or deleted); `kb_search` and the app search find them, and `kb_search kind=recordings` searches the recordings alone (finding a meeting by its title, the phone's calendar title or the matched calendar item's name). `kb_list` shows the start time of meetings and events as it does for recordings, and `kb_get` on a meeting or event lists the recordings matched to it.
 - An all-day recording (`kind: day`, #4741, [day-recap.md](day-recap.md)) grows by appends (`POST /api/v1/recordings/{id}/segments`) and gets a daily recap instead of a summary or minutes: `recap_notes.json` (notes per hour of its clock, which go with the transcript), `recap.json` and `recap.md` (kept past the transcript like minutes), written by the knowledge base's own recap lane, pushed once a day and told to the evening routine; `kb_get` prints the recap and where its suggested to-dos stand before the transcript (`server/internal/modules/recording/writers/day_recap.go`, `server/internal/modules/recording/kb_day.go`).
@@ -93,7 +93,7 @@ The recording module (`docs/architecture/core-and-modules.md` "Recording") can b
 What it wrote earlier stays the user's: stored recordings are still listed, opened (`GET /api/v1/kb/recordings/{id}`,
 `kb_get`: transcript, minutes, day recap, photo texts) and found by search, and their files are not touched. Their
 tags, pinned facts and projects can still be edited, they can still be deleted (`DELETE /api/v1/kb/recordings/{id}`,
-"App API" below), and retention (`recording_days`, `minutes_days`) keeps its schedule. What stops is everything that
+"App API" below), and retention (`recording_text_days`, `recording_audio_days`, `minutes_days`) keeps its schedule. What stops is everything that
 makes new data: uploads, appends, transcription, minutes, titles, recaps and summaries. The writers of a
 recording's minutes, recap, title, photos, audio and hub transcript are the module's code
 (`server/internal/modules/recording/writers`); the knowledge base keeps the readers, delete, retention with the trim
@@ -1095,10 +1095,10 @@ and a disabled knowledge base (`kb.enabled: false`) returns 503 as before.
 | Endpoint | Purpose |
 | --- | --- |
 | `GET /api/v1/kb/{kind}?tag=` | Sorted list (`items`) and common tags (`tags`); kind is projects / chats / people / docs / meetings / events / recordings / topics (topics: the most points first, `extra` is the count; docs, meetings and events: `extra` is the link and `source` the connector that supplied it, #8872) |
-| `GET /api/v1/kb/{kind}/{id}` | `detail` (meta, summary, project timeline, last 7 days' chat messages, a topic's `points`, the links the user removed as `removed`); projects also include `agents` |
+| `GET /api/v1/kb/{kind}/{id}` | `detail` (meta, summary, project timeline, last 7 days' chat messages, a topic's `points`, the links the user removed as `removed`); projects also include `agents`; a chat also `inbox`, its Inbox items ("A chat's Inbox items" below) |
 | `PUT /api/v1/kb/{kind}/{id}` | Edit (fields as in `kb_update`); create a project if absent |
 | `DELETE /api/v1/kb/projects/{id}` | Soft-delete a project ("Deleting a project" above); returns its trash entry (`id`, `kind`, `slug`, `name`, `deleted_at`, `unlinked`); 404 for unknown or merged projects |
-| `DELETE /api/v1/kb/recordings/{id}` | Delete a stored recording (files, index row, project links; a tombstone stays for `recording_days`); `{"deleted": bool}`, `false` when there was none; 400 for an id that is no UUID. The knowledge base's own route: it answers with or without the recording module ("Recordings without the recording module" above) |
+| `DELETE /api/v1/kb/recordings/{id}` | Delete a stored recording (files, index row, project links; a tombstone stays for `recording_audio_days`); `{"deleted": bool}`, `false` when there was none; 400 for an id that is no UUID. The knowledge base's own route: it answers with or without the recording module ("Recordings without the recording module" above) |
 | `GET /api/v1/kb-trash` | Deleted projects, newest first (`items`: trash entries) |
 | `POST /api/v1/kb-trash/{id}/restore` | Put a deleted project and its links back; returns the entry; 404 if there is no such entry, 409 if a project with its slug exists again |
 | `GET /api/v1/kb-search?q=&messages=0` | Full-text search (by line, for older apps; assistant `kb_search` does the same search through bus `kb.search`) |
@@ -1108,6 +1108,43 @@ and a disabled knowledge base (`kb.enabled: false`) returns 503 as before.
 | `GET /api/v1/kb/moments/{id}` | One archived Moments post (`post`, `markdown`: body + all comments), opened from a project's Related Moments |
 | `GET /api/v1/kb/chats/{id}/context` | What the knowledge base knows about a chat (`chat_id`, `chat_name`, `kind`, `summary`, first three projects as `projects: [{name, summary}]`), same context the hub puts in prompts; read-only, used by plugin /agent (#1484) |
 | `GET /api/v1/kb/chats/{id}/days/{day}` | All messages for a chat day (`messages[].n` is the file line number), and neighboring days with messages (`prev` / `next`) |
+
+## A chat's Inbox items
+
+A chat's page leads to the Inbox items that came from it, and an item leads back to the chat's page (#15356,
+`assistant/kb_inbox.go`). Neither side keeps a message id, so a message is matched on its time, sender and text.
+
+- **Which items**: an item is a chat's when its connector and thread are the chat's `connector` (in an older file, its
+  `source`) and `source_id`, whatever the connector, or when the chat is the one the AI twin reads for it (`kbChatOf` in
+  `assistant/inbox_agent.go`: a Feishu chat, a mail correspondent, a subscription's thread). The chat's `connector` is the
+  connector that wrote it whatever name it is filed under, its id or one of its manifest's archive sources, so a chat
+  filed under an archive source counts too. Nothing else relates an Inbox thread to an archive chat of another id. A row
+  merged into another counts for the one it was merged into, which is the row the Inbox lists: that one is listed on the
+  chat of each row it stands for, and on each it holds the messages the row of that chat received (a merged row keeps its
+  own chain and its source keeps collecting into it). An item the source visibility boundary quarantined
+  (`visibility_excluded`, [inbox.md](inbox.md) ("One item = one row")) is listed too, as the Inbox lists it: that boundary
+  keeps a chat's content from collection and the AI, not from the owner, and this page asks no model.
+- **`GET /api/v1/kb/chats/{id}`** adds `inbox`: the chat's items as the Inbox list has them (with `sources=all`: the open ones
+  and the done ones the list still carries), the open ones first, each group newest first, at most 50. Each has `id`,
+  `title`, `tier`, `status` (an open item's section), `summary`, `preview`, `updated_at`, `done_at` and `messages`: the rows
+  of the page's `recent` that it holds, each as `{day, line}`, the row's lines exactly as `recent` has them, so a client
+  finds the row by reading `line` as it reads `recent`. A row is an item's when its sender and text are a message the
+  item's chain received (a message the chain cut, ending in "…", by its start; spacing aside) and its minute, in the
+  chat's zone, is that message's own time or, for a message the chain keeps without one, within its batch: from the
+  received entry before it (the item's start for the first) to its own entry. A row goes to the newest item that holds it.
+  A chat with no items has no `inbox`.
+- **`GET /api/v1/inbox/{id}`** adds `kb_chat: {id, path}` when the knowledge base has the item's chat: the one its
+  connector archives the thread under (`<connector>-<thread>`, else a chat ending in `-<thread>` that it wrote under an
+  archive source) or the one the AI twin reads; `path` is its page
+  (`deeplink.KnowledgeEntry`). Not in the Inbox list: the apps read it when an item is opened.
+- **Who gets them**: only the user's own apps (a full-access device). An extension's token reads the knowledge base and
+  the Inbox by its own scopes (`kb.read`, `inbox.read`), so neither route tells it about the other; the watch reads
+  neither.
+- **The web**: a chat's page shows **In Inbox** with the open items (title, summary, tier pill, time), the done ones folded
+  under **N done**, each opening its item, and a row of its last 7 days that an item holds opens that item
+  (`web/src/views/knowledge/KBInbox.tsx`); an item's page has **Knowledge page** (`web/src/views/inbox/InboxKBChat.tsx`).
+  Both write their links with the route table's builder (`web/src/lib/deep-links.ts`). The iPhone follows in a later
+  change of #15356.
 
 ## Search
 

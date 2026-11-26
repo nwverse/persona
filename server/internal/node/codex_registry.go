@@ -48,6 +48,7 @@ type codexRegistry struct {
 	byPane            map[string]string
 	byPanePID         map[string]int
 	threads           map[string]codexSource
+	desktopAsks       map[string]codexSource
 	remotes           map[string]*codexRemote
 	retries           map[string]codexRetry // server id -> attempts that did not connect (codex_backoff.go)
 	report            func(proto.CodexConfig)
@@ -661,6 +662,9 @@ type codexListPass struct {
 	apps map[string]*codexAppState
 	// looks is the missLook by Codex home that rolloutPathIn checks each thread with no rollout against.
 	looks map[string]*missLook
+	// agentKinds maps a session id listed in this pass to its row's agent kind. Transcript lookup uses it to skip a TRAE
+	// probe for a row sessionListIn already knows belongs to another agent. Nil/untagged ids keep the probe.
+	agentKinds map[string]string
 }
 
 func (p *codexListPass) markHomeUnavailable(home string) {
@@ -791,6 +795,17 @@ func (p *codexListPass) paginatedThreadOf(src codexSource) (codexAppThread, bool
 	return t, ok
 }
 
+// knownNonTraexAgent reports whether this pass's list row for id is an agent other than TRAE, so a fresh cached
+// transcript path needs no TRAE database probe. A nil pass or an id the pass did not tag answers false and preserves
+// the probe, keeping every caller without list agent knowledge on the original lookup order.
+func (p *codexListPass) knownNonTraexAgent(id string) bool {
+	if p == nil || p.agentKinds == nil {
+		return false
+	}
+	kind := p.agentKinds[id]
+	return kind != "" && kind != traexAgent
+}
+
 func (p *codexListPass) assistantProject(n *Node) string {
 	if p == nil {
 		return n.assistantProject()
@@ -857,6 +872,7 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 		parent, root string
 	}
 	var adopted []adoption
+	desktopAsks := map[string]codexSource{}
 	emitUnavailable := func(id string, src codexSource) {
 		if last, ok := previous[id]; ok && !seen[id] && !pass.runtimeOf(src.thread).live &&
 			(!n.agentFiltered("codex", src.path) || n.keptSessions()[id]) {
@@ -1022,6 +1038,7 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 				s.Capabilities.Interrupt = false
 			}
 			if s.Capabilities.Send {
+				s.Capabilities.AnswerQuestions = true
 				s.ReadOnlyReason = ""
 				if busUp {
 					n.codexDesktopEffortRow(&s, src, m) // codex_desktop_effort.go
@@ -1032,6 +1049,9 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 							s.Effort = app.Effort
 						}
 					}
+				}
+				if time.Since(s.UpdatedAt) < codexAskMaxAge {
+					desktopAsks[id] = src
 				}
 			}
 		} else if o := codexThreadOrigin(src); o.desktop { // a subagent whose rollout is gone too: its database row (#8191)
@@ -1079,6 +1099,9 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 			} else {
 				s.Title = "Codex"
 			}
+		}
+		if !s.Capabilities.Send || s.IsSubagent {
+			delete(desktopAsks, id)
 		}
 		seen[id] = true
 		out = append(out, s)
@@ -1137,7 +1160,7 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 	}
 	n.codices.mu.Lock()
 	if seq > n.codices.savedSeq {
-		n.codices.lastRows, n.codices.savedSeq = saved, seq
+		n.codices.lastRows, n.codices.desktopAsks, n.codices.savedSeq = saved, desktopAsks, seq
 	}
 	n.codices.mu.Unlock()
 	return out
