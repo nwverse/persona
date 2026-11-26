@@ -1,9 +1,5 @@
-// Package briefing is the daily briefing module (docs/architecture/core-and-modules.md, #13408, #13845): the facts a
-// scheduled routine with facts on opens with, its evening all-day recording summary, its chat feed item, its
-// model-failure fallback, and its wait-row setting. It reaches the core only through modapi.
-//
-// What stays in internal/assistant for now: the Lark card renderer (briefing_card.go, pending a neutral Card model) and
-// the HTTP routes (briefRoutes in briefing_feed.go, pending hub_routes slot support).
+// Package briefing gathers scheduled routine facts, writes the conversation feed, renders the
+// delivery cards and handles the feed's deferred questions. It reaches the core through modapi.
 package briefing
 
 import (

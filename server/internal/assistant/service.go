@@ -15,8 +15,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/moduleswitch"
-
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistant/kernel"
 	"github.com/nwverse/persona/server/internal/assistant/kernel/seam"
@@ -30,6 +28,7 @@ import (
 	"github.com/nwverse/persona/server/internal/knowledgeuihost"
 	"github.com/nwverse/persona/server/internal/modapi"
 	"github.com/nwverse/persona/server/internal/modelhttp"
+	"github.com/nwverse/persona/server/internal/moduleswitch"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/remoteimage"

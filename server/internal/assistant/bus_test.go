@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"

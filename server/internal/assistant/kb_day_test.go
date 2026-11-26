@@ -3,7 +3,6 @@ package assistant
 import (
 	"context"
 	"encoding/json"
-	"github.com/nwverse/persona/server/internal/recordingwire"
 	"math"
 	"net/http"
 	"strings"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 )
 
 // All-day recordings through the manager's HTTP, their recap's push, to-dos, kb_get and the evening routine's facts

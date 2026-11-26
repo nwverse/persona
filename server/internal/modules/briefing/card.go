@@ -1,18 +1,17 @@
 package briefing
 
 import (
-	"encoding/json"
-	"fmt"
-	"strings"
-	"time"
+"encoding/json"
+"fmt"
+"strings"
+"time"
 
-	"github.com/nwverse/persona/server/internal/assistantwire"
-	"github.com/nwverse/persona/server/internal/botcard"
-	"github.com/nwverse/persona/server/internal/deeplink"
-	"github.com/nwverse/persona/server/internal/textfmt"
-
-	"github.com/nwverse/persona/server/internal/i18n"
-	"github.com/nwverse/persona/server/internal/modapi"
+"github.com/nwverse/persona/server/internal/assistantwire"
+"github.com/nwverse/persona/server/internal/botcard"
+"github.com/nwverse/persona/server/internal/deeplink"
+"github.com/nwverse/persona/server/internal/textfmt"
+"github.com/nwverse/persona/server/internal/i18n"
+"github.com/nwverse/persona/server/internal/modapi"
 )
 
 const (
@@ -36,10 +35,10 @@ type briefBlock struct {
 }
 
 // RenderCards renders one logical card, then paginates it after adding the conversation button.
-func (r *runner) RenderCards(f *modapi.BriefSnapshot, label, answer, header string, open map[string]any) ([]modapi.BriefCardPage, string, []string) {
+func (r *runner) RenderCards(f *modapi.BriefSnapshot, label, answer, header, openLabel, openURL string) ([]modapi.BriefCardPage, string, []string) {
 	card, plain, shown := r.briefCardWithHeader(f, label, answer, header)
-	if open != nil {
-		card.Buttons(open)
+	if openURL != "" {
+		card.Buttons(botcard.PageBtn(openLabel, openURL))
 	}
 	title := label
 	if header != "" {

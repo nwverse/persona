@@ -5,9 +5,29 @@ package assistantwire
 // a form submit it too (CardAction.Action.FormValue). 2.0 rejects unknown fields, so only documented ones are written.
 type BotCard struct {
 	Schema string         `json:"schema"`
-	Config map[string]any `json:"config"`
+	Config *BotCardConfig `json:"config"`
 	Header *BotCardHeader `json:"header,omitempty"`
 	Body   BotCardBody    `json:"body"`
+}
+
+// BotCardConfig uses the existing JSON key order so switching to typed fields preserves the card bytes.
+type BotCardConfig struct {
+	StreamingConfig *BotCardStreaming `json:"streaming_config,omitempty"`
+	StreamingMode   bool              `json:"streaming_mode,omitempty"`
+	Summary         *BotCardSummary   `json:"summary,omitempty"`
+	UpdateMulti     bool              `json:"update_multi,omitempty"`
+}
+
+type BotCardSummary struct {
+	Content string `json:"content"`
+}
+type BotCardStreaming struct {
+	PrintFrequencyMS BotCardPrintDefault `json:"print_frequency_ms"`
+	PrintStep        BotCardPrintDefault `json:"print_step"`
+	PrintStrategy    string              `json:"print_strategy"`
+}
+type BotCardPrintDefault struct {
+	Default int `json:"default"`
 }
 
 type BotCardHeader struct {

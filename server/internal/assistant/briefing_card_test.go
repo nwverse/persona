@@ -10,11 +10,10 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/botcard"
-
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// The Lark card of a routine with facts (briefing_card.go). All ids are placeholders.
+// The Lark card of a routine with facts (modules/briefing/card.go). All ids are placeholders.
 
 // briefRunEnv is a morning routine that has run once on a fake hub, with Feishu paired and its pushes on.
 type briefRunEnv struct {
@@ -448,6 +447,6 @@ const briefRowsMax = 10
 const briefKeep = 3 * time.Hour
 
 func (s *Service) briefCard(f *briefFacts, label, answer string) (*botcard.Card, string, []string) {
-	pages, plain, shown := s.scheduleCards(f, label, answer, "", nil)
+	pages, plain, shown := s.scheduleCards(f, label, answer, "", "", "")
 	return pages[0].card, plain, shown
 }

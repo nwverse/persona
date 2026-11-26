@@ -135,7 +135,8 @@ func (s *Service) briefingGrace(ctx context.Context, local time.Time, start int)
 // on top, the facts under it. Required owner waits continue onto more cards rather than crossing Feishu's physical
 // budget. mirrorSend's per-index key makes every continuation retry independently and idempotently.
 func (s *Service) briefMirror(ctx context.Context, machine, session, label string, run *briefRun, answer, turn string) {
-	cards, _, shown := s.scheduleCards(run.Facts, run.Label, answer, "", s.openButton(ctx, machine, session))
+	openLabel, openURL := s.openLink(ctx, machine, session)
+	cards, _, shown := s.scheduleCards(run.Facts, run.Label, answer, "", openLabel, openURL)
 	if len(cards) == 0 {
 		return
 	}
@@ -150,12 +151,12 @@ func (s *Service) briefMirror(ctx context.Context, machine, session, label strin
 }
 
 // scheduleCards adapts the loaded runner's pages for the existing mirror delivery and retry path.
-func (s *Service) scheduleCards(f *briefFacts, label, answer, header string, open botcard.Button) ([]botAnswerCard, string, []string) {
+func (s *Service) scheduleCards(f *briefFacts, label, answer, header, openLabel, openURL string) ([]botAnswerCard, string, []string) {
 	r, ok := s.briefingRunner()
 	if !ok {
 		return nil, "", nil
 	}
-	pages, plain, shown := r.RenderCards(f, label, answer, header, open)
+	pages, plain, shown := r.RenderCards(f, label, answer, header, openLabel, openURL)
 	cards := make([]botAnswerCard, len(pages))
 	for i, page := range pages {
 		cards[i] = botAnswerCard{card: (*botcard.Card)(page.Card), fallback: page.Fallback}

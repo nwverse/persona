@@ -1,7 +1,7 @@
 // Package modapi is the module contract of Persona Core (docs/architecture/core-and-modules.md): what a built-in
 // feature module declares about itself (Info, the manifest of schema/module.schema.json), what it is (Module), and the
-// one way it reaches the core (Host). It holds types, constants and the list of client-only module ids, imports nothing but the standard library and the
-// contract's ID types (internal/wireids),
+// one way it reaches the core (Host). It holds types, constants and the list of client-only module ids, imports nothing but the standard library and other
+// contract packages (internal/wireids and internal/assistantwire),
 // and is a contract package (internal/archguard/testdata/contracts.txt): the core (internal/assistant/kernel serves
 // Host) and the modules (internal/modules/<id>) both import it, never each other.
 package modapi

@@ -12,7 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// The `brief` item of a routine's conversation (briefing_feed.go): the apps' copy of the card, written whether or not the
+// The `brief` item of a routine's conversation (modules/briefing/feed.go): the apps' copy of the card, written whether or not the
 // Lark bot is on.
 
 func (e *briefRunEnv) briefItems() []FeedItem {

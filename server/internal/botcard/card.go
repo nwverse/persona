@@ -38,9 +38,9 @@ const (
 // NewCard starts a card; an empty title leaves the header out. summary is what the chat list shows for it (an
 // assistant card in it as its title or fallback, never its JSON).
 func NewCard(title, template, summary string) *Card {
-	cfg := map[string]any{"update_multi": true}
+	cfg := &assistantwire.BotCardConfig{UpdateMulti: true}
 	if s := strings.TrimSpace(wire.AssistantCardText(summary)); s != "" {
-		cfg["summary"] = map[string]any{"content": clipRunes(oneLine(s), 60)}
+		cfg.Summary = &assistantwire.BotCardSummary{Content: clipRunes(oneLine(s), 60)}
 	}
 	c := &Card{Schema: "2.0", Config: cfg, Body: cardBody{Elements: []any{}}}
 	if title != "" {

@@ -490,7 +490,8 @@ type briefDeliveryPort struct{ s *Service }
 func (p briefDeliveryPort) SendFallback(ctx context.Context, req modapi.BriefFallbackSend) {
 	s := p.s
 	l := i18n.Lang(req.Facts.Lang)
-	cards, plain, shown := s.scheduleCards(req.Facts, req.Label, "", req.Header, s.openButton(ctx, req.Device.ID, req.Run.SessionID))
+	openLabel, openURL := s.openLink(ctx, req.Device.ID, req.Run.SessionID)
+	cards, plain, shown := s.scheduleCards(req.Facts, req.Label, "", req.Header, openLabel, openURL)
 	st, err := s.chat().Status(ctx)
 	ready := err == nil && st.Ready
 	s.larkModule().WorkbenchOn(st.Features, ready)

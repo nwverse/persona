@@ -2,12 +2,13 @@ package briefing
 
 import (
 	"fmt"
-	"github.com/nwverse/persona/server/internal/botcard"
-	"github.com/nwverse/persona/server/internal/i18n"
-	"github.com/nwverse/persona/server/internal/modapi"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/botcard"
+	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/modapi"
 )
 
 func TestBriefCardsKeepEveryOwnerWaitWithinPhysicalBudget(t *testing.T) {

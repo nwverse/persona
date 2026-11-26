@@ -35,7 +35,7 @@ type boardRow struct {
 	link     string
 	nudged   bool // the bot nudged under its card in the chat (the lark module's nudge.go, #6084)
 	// machine and session are the chat a card or a question that can wait came from, empty when it came from none; the
-	// apps open it from the brief item (briefing_feed.go).
+	// apps open it from the brief item (modules/briefing/feed.go).
 	machine, session string
 	// asked is when the "Please verify" ask of a to-do waiting to be verified was made (its card, if it has one, went out then) (zero: the row is not one); id is the to-do.
 	asked time.Time

@@ -1,11 +1,11 @@
 package textfmt
 
 import (
-	"strings"
-	"unicode"
-	"unicode/utf8"
+"strings"
+"unicode"
+"unicode/utf8"
 
-	"github.com/nwverse/persona/sdk/go/wire"
+"github.com/nwverse/persona/sdk/go/wire"
 )
 
 // A receipt's summary is the agent's last reply cut for a client to render.

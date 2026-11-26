@@ -3,7 +3,6 @@ package assistant
 import (
 	"context"
 	"encoding/json"
-	"github.com/nwverse/persona/server/internal/db"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistant/kernel"
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/modapi"
 )
 
