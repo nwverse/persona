@@ -37,8 +37,8 @@ async function verify(width, theme, textSize) {
         entries: [{ name, path: path + "/" + name, kind: path === "/projects" ? "dir" : "file", mode: "rw", size: 24 }] } });
     });
     await page.route("**/api/v1/machines/studio/storage", r => r.fulfill({ json: {
-      supported: true, os: "darwin", mounts: [{ mount: "/", device: "Local disk", fs_type: "apfs",
-        total_bytes: 500e9, used_bytes: 200e9, avail_bytes: 300e9, used_percent: 40 }],
+      supported: true, os: "darwin", collected_ms: 8, mounts: [{ mount: "/", device: "Local disk", fs_type: "apfs",
+        total_bytes: 1000 * 2 ** 30, used_bytes: 930 * 2 ** 30, avail_bytes: 70 * 2 ** 30, used_percent: 93 }],
     } }));
     const cache = { id: "persona-logs", path: "~/logs", bytes: 8000000 };
     const previews = [];
@@ -98,8 +98,15 @@ async function verify(width, theme, textSize) {
         await page.getByTestId("file-entry-Notes").waitFor();
       }
       if (view === "storage") {
+        assert.doesNotMatch(await page.getByTestId("storage-mounts-section").innerText(), /undefined/);
         await page.getByTestId("usage-start").click();
         await page.getByTestId("usage-crumbs").waitFor();
+        if (width === 390) {
+          await page.locator('[data-usage-side="cloud"]').waitFor();
+          const cloud = await page.getByTestId("usage-cloud").boundingBox();
+          const detail = await page.getByTestId("usage-detail").boundingBox();
+          assert(cloud && detail && cloud.y + cloud.height <= detail.y, "Storage status must follow the stacked cloud map");
+        }
         await page.getByTestId("usage-map").evaluate(el => el.scrollIntoView({ block: "start" }));
       }
       await capture(view);
