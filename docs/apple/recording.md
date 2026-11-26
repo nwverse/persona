@@ -192,7 +192,8 @@ readable, searchable and the user's to delete. On the iPhone and iPad:
     (a meeting) and Stop always are. `RecordingActivity` reads the allowance where it builds the state, so the
     activity follows a hello by itself.
   - `RecordingModule.tellSurfaces` (after each hello of the hub the app follows, and when another hub is picked) tells
-    the watch, writes the snapshot and reloads the control, the last two only when the answer changed.
+    the watch, writes the snapshot and reloads the control, the last two once per run and then only when the answer
+    changed.
 - **Apple Watch.** The watch never talks to the hub about modules: the phone tells it. `RecordingModule.tellWatch`
   (after each hello of the hub the app follows, when another hub is picked, and when the watch session activates)
   puts the allowance into the WatchConnectivity application context under one key, `recordingModule`, as the word

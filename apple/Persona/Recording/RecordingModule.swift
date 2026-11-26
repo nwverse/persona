@@ -46,19 +46,18 @@ extension RecordingModule {
     /// Watch (`tellWatch`), and on the iPhone the Home Screen and Lock Screen widgets (a snapshot write, which reloads
     /// the Record widget when its part changed) and the Control Center control. The recording's Live Activity follows
     /// by itself (`RecordingActivity` observes the registry). Called after each hello of the hub the app follows and
-    /// when another hub is picked; each of the three skips a value it already has, but the control is reloaded only
-    /// when the answer differs from the one last told.
+    /// when another hub is picked. The watch push and the snapshot write skip a value already there; the control is
+    /// reloaded at the first call of a run and whenever the answer differs from the one last told.
     @MainActor static func tellSurfaces() {
         #if canImport(WatchConnectivity)
         tellWatch()
         #endif
         #if os(iOS)
         let now = allowance
+        // Once per run, then on every change. The first time whatever the answer: the last run may have ended with the
+        // module off, and the control would stay disabled until something else reloaded it.
         guard now != toldSurfaces else { return }
-        let first = toldSurfaces == nil
         toldSurfaces = now
-        // At launch with the module on nothing changed for the widgets: the control stays as placed.
-        guard !(first && now == .on) else { return }
         Task {
             // After the snapshot is on disk: the control reads it.
             await HomeWidgetWriter.shared.flushAndWait()
