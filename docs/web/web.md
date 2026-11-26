@@ -3128,9 +3128,9 @@ The web's controls for Claude Code's session-only ultracode switch (server and s
 
 ## Use an approved project document in New Agent
 
-A member of a [team project](../design/proposals/team-project-spaces.md) can bring an approved text revision into a new personal Agent session. In New Agent, choose the computer, folder and a supported Claude Code or Codex launcher. Open the project document control by the first message, enter the project and document identifiers and supply your project member token. Review the text, approver and revision, then attach it. You can add your own instructions before starting the session. The selected Agent receives the confirmed revision and digest even if someone subsequently approves a newer revision. Fetch a new preview to use that newer text.
+A member of a [team project](../design/proposals/team-project-spaces.md) can bring an approved text revision into a new personal Agent session. In New Agent, choose the computer, folder and a supported Claude Code or Codex launcher. Open the project document control by the first message, enter the project identifier and supply your project member token. Browse the approved documents and select a revision, or enter a known document identifier to preview its latest approval. Direct entry also works with earlier project services. Review the text, approver and revision, then attach it. You can add your own instructions before starting the session. The selected Agent receives the confirmed revision and digest even if someone subsequently approves a newer revision. Fetch a new preview to use that newer text.
 
-**Pilot deployment.** Run the [project document service](../server/server.md#team-project-documents-pilot) and expose its read endpoint on the same HTTPS origin as Persona Web. The browser reads `/v1/projects/{project}/documents/{document}/approved` from the origin root, including when the Web app is hosted in a subdirectory. A reverse proxy on the service host can route the project prefix to its loopback listener. For example, inside the Nginx HTTPS virtual host for Persona:
+**Pilot deployment.** Run the [project document service](../server/server.md#team-project-documents-pilot) and expose its document read endpoints on the same HTTPS origin as Persona Web. The browser reads under `/v1/projects/{project}/documents` from the origin root, including when the Web app is hosted in a subdirectory. A reverse proxy on the service host can route the project prefix to its loopback listener. For example, inside the Nginx HTTPS virtual host for Persona:
 
 ```nginx
 location ^~ /v1/projects/ {
@@ -3141,7 +3141,7 @@ location ^~ /v1/projects/ {
 }
 ```
 
-Keep authorization headers and document bodies out of proxy logs. Members use their project-issued tokens. The Web app sends the token only with the document read and checks the returned project, document, approval and SHA-256 before offering the text. The confirmed text becomes part of the personal session and reaches the selected model provider when the member starts it.
+Keep authorization headers and document bodies out of proxy logs. Members use their project-issued tokens. The Web app sends the token only with requests to the project document service and checks the returned project, document, approval and SHA-256 before offering the text. The confirmed text becomes part of the personal session and reaches the selected model provider when the member starts it.
 
 ## New Agent's model choice (#5104)
 

@@ -4026,6 +4026,10 @@ rule for every place keeps a provider recognizable wherever it is picked (princi
 fields and More options disclosure and the existing row and chip styles; it adds no setting, style or motion. The chat
 page's composer chip and model panel adopt the same module in their own change; iOS and Android have not caught up yet.
 
+## Choosing an approved document in New Agent
+
+For team members starting an Agent on the web, the first-message form keeps project documents behind its existing disclosure. After the member supplies the project and credential, they may browse document names, open a document's approved versions, or look up a known name. Fetch additional results on request. Opening a preview shows the selected revision's text, approver and digest. Attaching that preview requires a separate action, and the member can remove it before sending.
+
 ## New Agent's model choice (#5104)
 
 New Agent picks its model with the chat's model pill and unified model panel ("Model pill and unified model panel" in
