@@ -86,10 +86,17 @@ type Settings struct {
 	TaskWorkspacePreference string `json:"task_workspace_preference,omitempty"`
 	// ReadonlyMode leaves runtime protection unchanged unless the owner opts into prompt-only task constraints.
 	ReadonlyMode string `json:"readonly_mode,omitempty"`
-	// RecordingDays: how many days the phone's recordings stay in the knowledge base (#3235); nil is 14.
+	// RecordingDays is the old single retention of recordings (#3235): read as RecordingAudioDays while that is unset,
+	// and a write of it sets RecordingAudioDays (#16412).
 	RecordingDays *int `json:"recording_days,omitempty"`
-	// MinutesDays: how many days a meeting's minutes stay once its transcript went with RecordingDays (#3780,
-	// kb/recording_trim.go); nil or 0 means forever. Finite windows are never fewer than RecordingDays (kb.MinutesDaysFor).
+	// RecordingAudioDays: how many days a recording's audio is kept (the phone deletes its copies, audio and text, at
+	// it); 0 means forever, nil is RecordingDays or 14 (#16412).
+	RecordingAudioDays *int `json:"recording_audio_days,omitempty"`
+	// RecordingTextDays: how many days a recording's text (transcript, summary, live log, whoever wrote it) stays in the
+	// knowledge base; nil or 0 means forever (#16412).
+	RecordingTextDays *int `json:"recording_text_days,omitempty"`
+	// MinutesDays: how many days a meeting's minutes stay once its transcript went with RecordingTextDays (#3780,
+	// kb/recording_trim.go); nil or 0 means forever. Finite windows are never fewer than the text's (kb.MinutesDaysFor).
 	MinutesDays *int `json:"minutes_days,omitempty"`
 	// KBTopics: the knowledge base organizes knowledge points by topic (#3783, kb/topics.go). nil is on (the default).
 	KBTopics *bool `json:"kb_topics,omitempty"`
@@ -129,6 +136,12 @@ type Settings struct {
 	// TodosV2FoldChildren controls whether non-urgent child tasks fold under their top-level parent goal in board
 	// projection under todos_v2=true (#16098). nil is true (the default).
 	TodosV2FoldChildren *bool `json:"todos_v2_fold_children,omitempty"`
+	// TodosV2QuietHours is an optional 24-hour local-time quiet window ("HH:MM-HH:MM") under todos_v2=true during
+	// which routine non-card, non-P0, non-notify_user pushes downgrade to LevelP2 (#16433). Empty disables it.
+	TodosV2QuietHours string `json:"todos_v2_quiet_hours,omitempty"`
+	// TodosV2DigestWindowMinutes is an optional burst-coalescing window in minutes under todos_v2=true (#16433):
+	// 0 (default, disabled), 30, 60, or 120.
+	TodosV2DigestWindowMinutes *int `json:"todos_v2_digest_window_minutes,omitempty"`
 	// IntegrationsV2 enables the unified experimental Integrations & Extensions experience (#14802, #14805). nil is off (the default).
 	IntegrationsV2 *bool `json:"integrations_v2,omitempty"`
 	// LabsSeen is the set of experiment IDs acknowledged on any client of this assistant.
@@ -387,12 +400,14 @@ const (
 
 	todosV2DefaultPendingReviewSLAHours = 24
 	todosV2DefaultCanWaitSLAHours       = 48
+	todosV2DefaultDigestWindowMinutes   = 0
 )
 
 var (
 	todosV2AutoSeenModes           = []string{todosV2AutoSeenOff, todosV2AutoSeenSubtasks, todosV2AutoSeenAllAutonomous}
 	todosV2PendingReviewSLAOptions = []int{0, 12, 24, 48}
 	todosV2CanWaitSLAOptions       = []int{0, 24, 48, 72}
+	todosV2DigestWindowOptions     = []int{0, 30, 60, 120}
 )
 
 func (v Settings) workGuideOn() bool      { return v.WorkGuide != nil && *v.WorkGuide }
@@ -422,6 +437,24 @@ func (v Settings) todosV2CanWaitSLAHours() int {
 
 func (v Settings) todosV2FoldChildrenOn() bool {
 	return v.TodosV2FoldChildren == nil || *v.TodosV2FoldChildren
+}
+
+func (v Settings) todosV2QuietHours() string {
+	raw := strings.TrimSpace(v.TodosV2QuietHours)
+	if raw == "" {
+		return ""
+	}
+	if _, ok := parseTodosV2QuietHours(raw); !ok {
+		return ""
+	}
+	return raw
+}
+
+func (v Settings) todosV2DigestWindowMinutes() int {
+	if v.TodosV2DigestWindowMinutes != nil && slices.Contains(todosV2DigestWindowOptions, *v.TodosV2DigestWindowMinutes) {
+		return *v.TodosV2DigestWindowMinutes
+	}
+	return todosV2DefaultDigestWindowMinutes
 }
 
 // integrationsV2On reports whether assistant.integrations_v2 is enabled (off by default).
@@ -575,22 +608,44 @@ func (s *Service) startRequestedTasks(ctx context.Context) bool {
 	return quietOn(s.settings(ctx).StartRequestedTasks)
 }
 
-// Bounds of recording_days.
+// Bounds of recording_audio_days and recording_text_days (0: forever) and of the old recording_days (no forever).
 const (
-	minRecordingDays = 1
-	maxRecordingDays = 365
+	minRecordingDays = 0
+	maxRecordingDays = 3650
 )
 
-// recordingDays is how many days recordings stay in the knowledge base (recording_days, 14 by default).
-func (s *Service) recordingDays(ctx context.Context) int {
-	return recordingDaysOf(s.settings(ctx))
+// recordingDaysValid: d is a saved retention within bounds (the old recording_days had no forever).
+func recordingDaysValid(d *int, legacy bool) bool {
+	return d != nil && *d >= minRecordingDays && *d <= maxRecordingDays && (!legacy || *d > 0)
 }
 
-func recordingDaysOf(v Settings) int {
-	if d := v.RecordingDays; d != nil && *d >= minRecordingDays && *d <= maxRecordingDays {
-		return *d
+// recordingAudioDays is how many days a recording's audio is kept (recording_audio_days, else the old
+// recording_days, else 14); 0 means forever.
+func (s *Service) recordingAudioDays(ctx context.Context) int {
+	return recordingAudioDaysOf(s.settings(ctx))
+}
+
+func recordingAudioDaysOf(v Settings) int {
+	if recordingDaysValid(v.RecordingAudioDays, false) {
+		return *v.RecordingAudioDays
+	}
+	if recordingDaysValid(v.RecordingDays, true) {
+		return *v.RecordingDays
 	}
 	return kb.DefaultRecordingDays
+}
+
+// recordingTextDays is how many days a recording's text stays in the knowledge base (recording_text_days); 0, the
+// default, means forever.
+func (s *Service) recordingTextDays(ctx context.Context) int {
+	return recordingTextDaysOf(s.settings(ctx))
+}
+
+func recordingTextDaysOf(v Settings) int {
+	if recordingDaysValid(v.RecordingTextDays, false) {
+		return *v.RecordingTextDays
+	}
+	return kb.DefaultRecordingTextDays
 }
 
 // Bounds of minutes_days.
@@ -607,10 +662,11 @@ func minutesDaysSetting(v Settings) int {
 	return 0
 }
 
-// minutesDays is the effective minutes_days: 0 means forever (the default); otherwise never fewer than recording_days.
+// minutesDays is the effective minutes_days: 0 means forever (the default, and always while the text is kept
+// forever); otherwise never fewer than recording_text_days.
 func (s *Service) minutesDays(ctx context.Context) int {
 	v := s.settings(ctx)
-	return kb.MinutesDaysFor(minutesDaysSetting(v), recordingDaysOf(v))
+	return kb.MinutesDaysFor(minutesDaysSetting(v), recordingTextDaysOf(v))
 }
 
 // meetingRoles are the values of meeting_attendance_default, off (the default) first.
@@ -647,22 +703,34 @@ func (s *Service) settingsLastGood(ctx context.Context) (Settings, bool) {
 	return v, cached != nil
 }
 
-// recordingDaysNow is recordingDays for the knowledge base's engine, which has no context of its own. A transient
-// settings read failure keeps the value read last (settingsLastGood); only settings never successfully read fall back
-// to the default, so one locked-database round can never shorten the retention and prune recordings early.
-func (s *Service) recordingDaysNow() int {
+// recordingTextDaysNow is recordingTextDays for the knowledge base's engine, which has no context of its own. A
+// transient settings read failure keeps the value read last (settingsLastGood); settings never successfully read keep
+// the text forever, so one locked-database round can never shorten the retention and prune recordings early.
+func (s *Service) recordingTextDaysNow() int {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	v, ok := s.settingsLastGood(ctx)
-	if !ok || v.RecordingDays == nil || *v.RecordingDays < minRecordingDays || *v.RecordingDays > maxRecordingDays {
+	if !ok {
+		return 0
+	}
+	return recordingTextDaysOf(v)
+}
+
+// recordingAudioDaysNow is recordingAudioDays for the knowledge base's engine, read like recordingTextDaysNow; only
+// settings never successfully read fall back to the default.
+func (s *Service) recordingAudioDaysNow() int {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	v, ok := s.settingsLastGood(ctx)
+	if !ok {
 		return kb.DefaultRecordingDays
 	}
-	return *v.RecordingDays
+	return recordingAudioDaysOf(v)
 }
 
 // minutesDaysNow is minutes_days as saved for the knowledge base's engine (0: forever by default), read like
-// recordingDaysNow: a transient failure keeps the value read last, so it never deletes minutes the user kept for
-// longer. The engine raises only positive values to recording_days (kb.Engine.MinutesDays).
+// recordingTextDaysNow: a transient failure keeps the value read last, so it never deletes minutes the user kept for
+// longer. The engine raises only positive values to recording_text_days (kb.Engine.MinutesDays).
 func (s *Service) minutesDaysNow() int {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -864,11 +932,14 @@ type assistantView struct {
 	StartRequestedTasks     bool   `json:"start_requested_tasks"`
 	TaskWorkspacePreference string `json:"task_workspace_preference"`
 	ReadonlyMode            string `json:"readonly_mode"`
-	// RecordingDays, DeliveryGate and DoneNeedsDelivery are in effect, like MainTasksQuiet.
-	RecordingDays     int    `json:"recording_days"`
-	DeliveryGate      string `json:"delivery_gate"`
-	DoneNeedsDelivery bool   `json:"done_needs_delivery"`
-	// MinutesDays is in effect: 0 means forever (the default); otherwise never fewer than RecordingDays.
+	// RecordingDays, DeliveryGate and DoneNeedsDelivery are in effect, like MainTasksQuiet. RecordingDays is the old
+	// name of RecordingAudioDays, for clients from before #16412 (0: forever).
+	RecordingDays      int    `json:"recording_days"`
+	RecordingAudioDays int    `json:"recording_audio_days"`
+	RecordingTextDays  int    `json:"recording_text_days"`
+	DeliveryGate       string `json:"delivery_gate"`
+	DoneNeedsDelivery  bool   `json:"done_needs_delivery"`
+	// MinutesDays is in effect: 0 means forever (the default); otherwise never fewer than RecordingTextDays.
 	MinutesDays int `json:"minutes_days"`
 	// KBTopics is in effect, like MainTasksQuiet.
 	KBTopics bool `json:"kb_topics"`
@@ -885,6 +956,8 @@ type assistantView struct {
 	TodosV2PendingReviewSLAHours int      `json:"todos_v2_pending_review_sla_hours"`
 	TodosV2CanWaitSLAHours       int      `json:"todos_v2_can_wait_sla_hours"`
 	TodosV2FoldChildren          bool     `json:"todos_v2_fold_children"`
+	TodosV2QuietHours            string   `json:"todos_v2_quiet_hours"`
+	TodosV2DigestWindowMinutes   int      `json:"todos_v2_digest_window_minutes"`
 	IntegrationsV2               bool     `json:"integrations_v2"`
 	LabsSeen                     []string `json:"labs_seen"`
 	// MeetingAttendanceDefault is in effect (off until changed).
@@ -948,7 +1021,8 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 	v.Launcher = s.launcherNow(ctx)
 	effectiveRules, _ := workspacenaming.Effective(v.WorkspaceRules, workspacenaming.Rules{})
 	out := assistantView{WorkspaceNamingVersion: workspacenaming.Version, EffectiveWorkspaceRules: effectiveRules, SystemDefaults: new(workspacenaming.Defaults()), Settings: v, Manager: s.managerIdentity(), PermissionDefaults: s.permissionDefaults(), Conversations: []proto.Session{}, NotesEffective: s.notes(ctx), MainTasksQuiet: quietOn(v.MainTasksQuiet),
-		StartRequestedTasks: quietOn(v.StartRequestedTasks), RecordingDays: recordingDaysOf(v), MinutesDays: kb.MinutesDaysFor(minutesDaysSetting(v), recordingDaysOf(v)),
+		StartRequestedTasks: quietOn(v.StartRequestedTasks), RecordingDays: recordingAudioDaysOf(v), RecordingAudioDays: recordingAudioDaysOf(v),
+		RecordingTextDays: recordingTextDaysOf(v), MinutesDays: kb.MinutesDaysFor(minutesDaysSetting(v), recordingTextDaysOf(v)),
 		IdleAutoCompact: s.idleAutoCompact(ctx), IdleAutoCompactMinutes: s.idleAutoCompactMinutes(ctx), IdleAutoCompactTokens: s.idleAutoCompactTokens(ctx),
 		CacheKeepalive: cacheKeepaliveOf(v).Enabled, CacheKeepaliveMinutes: cacheKeepaliveOf(v).IntervalMinutes, CacheKeepaliveMax: cacheKeepaliveOf(v).MaxRequests,
 		IdleReleaseMinutes: s.idleReleaseMinutes(ctx), MeetingAttendanceDefault: meetingAttendanceOf(v), KBTopics: quietOn(v.KBTopics),
@@ -965,6 +1039,8 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		TodosV2PendingReviewSLAHours: v.todosV2PendingReviewSLAHours(),
 		TodosV2CanWaitSLAHours:       v.todosV2CanWaitSLAHours(),
 		TodosV2FoldChildren:          v.todosV2FoldChildrenOn(),
+		TodosV2QuietHours:            v.todosV2QuietHours(),
+		TodosV2DigestWindowMinutes:   v.todosV2DigestWindowMinutes(),
 		IntegrationsV2:               v.integrationsV2On(),
 		LabsSeen:                     append([]string{}, v.LabsSeen...),
 		RecentTaskChats:              v.RecentTaskChats != nil && *v.RecentTaskChats,
