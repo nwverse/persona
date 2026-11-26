@@ -1,4 +1,4 @@
-package extmgr
+package larksync
 
 import (
 	"context"
@@ -7,22 +7,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/kbwire"
 	"github.com/nwverse/persona/server/internal/larksyncwire"
 )
 
-// Mock suite B: two accounts × two bots are four bindings, each with its own reader, refresh lock and circuit. Three
-// of them fail in their own way (the refresh token refused, the rate limit, a scope the admin has not approved) and
-// the fourth reads in full: each ends with its own health, cursors and outbox rows, and the chat bot is untouched.
+// Mock suite B: two accounts × two bots are four bindings, each with its own reader, refresh lock and circuit.
 func TestLarkSyncBindingsFailOnTheirOwn(t *testing.T) {
-	w := newLarkWorld(t)
+	w := newServiceWorld(t)
 	ctx := context.Background()
-	_, botViewBefore := w.do(t, "GET", "/api/v1/bots/feishu", "")
-	feishuBefore := w.store.raw(botSettingsKey)
+	feishuBefore := w.store.raw("bots.feishu")
 
 	w.addSyncBot(t, "bsync", "cli_sync", larksyncwire.TierFull)
-	// A's access token ends within the refresh margin and its refresh token was revoked.
 	keyA, accA := w.adopt(t, larksyncwire.PrimaryBot, "ou_a", "acc-A", "ref-A", 5*time.Minute)
 	keyB, accB := w.adopt(t, larksyncwire.PrimaryBot, "ou_b", "acc-B", "ref-B", 2*time.Hour)
 	keyC, accC := w.adopt(t, "bsync", "ou_a", "acc-C", "ref-C", 2*time.Hour)
@@ -78,7 +73,7 @@ func TestLarkSyncBindingsFailOnTheirOwn(t *testing.T) {
 		}, nil
 	})
 
-	w.h.larkSyncTick(ctx)
+	w.svc.tickOnce(ctx)
 
 	if w.readers != 4 {
 		t.Fatalf("each binding has a reader of its own: %d readers", w.readers)
@@ -87,30 +82,26 @@ func TestLarkSyncBindingsFailOnTheirOwn(t *testing.T) {
 		t.Fatalf("refreshes: %d, want only A's", n)
 	}
 	now := w.now()
-	// A: the refresh token was refused: authorize again; nothing moved.
 	if b := w.binding(t, keyA); b.Health != larksyncwire.HealthNeedsReauth || b.LastError == "" || len(w.store.cursorsOf(keyA)) != 0 {
 		t.Fatalf("A: %+v cursors %v", b, w.store.cursorsOf(keyA))
 	}
-	// B: the rate limit stops one chat; the drive's progress and its document are kept, the chat's cursor is not.
-	if b := w.binding(t, keyB); b.Health != larksyncwire.HealthRateLimited || b.Failures != 0 || !b.NextRunAt.Equal(now.Add(larkSyncPartialNext)) || b.LastDocs != 1 {
+	if b := w.binding(t, keyB); b.Health != larksyncwire.HealthRateLimited || b.Failures != 0 || !b.NextRunAt.Equal(now.Add(partialNext)) || b.LastDocs != 1 {
 		t.Fatalf("B: %+v", b)
 	}
 	if c := w.store.cursorsOf(keyB); len(c) != 1 || c["drive"] != "100" {
 		t.Fatalf("B's cursors: %v", c)
 	}
-	// C: a scope is missing: nothing it staged reaches the index, its circuit counts one failure.
-	if b := w.binding(t, keyC); b.Health != larksyncwire.HealthScopeMissing || b.Failures != 1 || !b.NextRunAt.Equal(now.Add(larkSyncFailSoon)) {
+	if b := w.binding(t, keyC); b.Health != larksyncwire.HealthScopeMissing || b.Failures != 1 || !b.NextRunAt.Equal(now.Add(failSoon)) {
 		t.Fatalf("C: %+v", b)
 	}
 	if len(w.store.cursorsOf(keyC)) != 0 || w.store.index[larksyncwire.KeyDoc+"neverC"].Key != "" {
 		t.Fatalf("C committed: %v %v", w.store.cursorsOf(keyC), w.store.index)
 	}
-	// D: read in full.
 	b := w.binding(t, keyD)
 	if b.Health != larksyncwire.HealthOK || b.LastMessages != 3 || b.LastDocs != 1 || b.Failures != 0 || !b.LastRunAt.Equal(now) {
 		t.Fatalf("D: %+v", b)
 	}
-	if want := larkSyncNextSlot(now, larkSyncDefaultHour, keyD); !b.NextRunAt.Equal(want) || b.NextRunAt.Hour() != larkSyncDefaultHour || !b.NextRunAt.After(now) {
+	if want := nextSlot(now, defaultHour, keyD); !b.NextRunAt.Equal(want) || b.NextRunAt.Hour() != defaultHour || !b.NextRunAt.After(now) {
 		t.Fatalf("D's next run %v, want %v", b.NextRunAt, want)
 	}
 	if c := w.store.cursorsOf(keyD); len(c) != 2 || c["drive"] != "200" || c["im:oc_d"] != "1700000000000" {
@@ -122,11 +113,10 @@ func TestLarkSyncBindingsFailOnTheirOwn(t *testing.T) {
 	if rows := w.store.outboxOf(keyA); len(rows) != 0 {
 		t.Fatalf("A handed over %v", rows)
 	}
-	// The outbox: D's two chats (messages in time order, the attachment's ref kept) and both documents.
 	var chats []kbwire.SourceChat
 	byChat := map[string][]kbwire.SourceMessage{}
 	for _, o := range w.store.outbox {
-		if o.Kind != db.LarkSyncChat {
+		if o.Kind != larksyncwire.OutboxChat {
 			continue
 		}
 		var cb struct {
@@ -145,7 +135,7 @@ func TestLarkSyncBindingsFailOnTheirOwn(t *testing.T) {
 	if m := byChat["oc_d"]; len(m) != 2 || m[0].ID != "om_1" || !m[0].Mine || m[1].ID != "om_2" || len(m[1].Media) != 1 || m[1].Media[0] != keyD+"|om_2|img_1|image" {
 		t.Fatalf("oc_d: %+v", m)
 	}
-	items, err := larkSyncItems(larkSyncConnector{w.h}).Items(ctx)
+	items, err := syncItems(syncConnector{w.svc}).Items(ctx)
 	if err != nil || len(items) != 2 {
 		t.Fatalf("items: %+v %v", items, err)
 	}
@@ -158,19 +148,13 @@ func TestLarkSyncBindingsFailOnTheirOwn(t *testing.T) {
 		}
 	}
 
-	// The chat bot is untouched: its settings and its view.
-	if after := w.store.raw(botSettingsKey); after != feishuBefore {
+	if after := w.store.raw("bots.feishu"); after != feishuBefore {
 		t.Fatalf("bots.feishu changed: %s -> %s", feishuBefore, after)
 	}
-	_, botViewAfter := w.do(t, "GET", "/api/v1/bots/feishu", "")
-	if a, b := larkJSON(t, botViewBefore), larkJSON(t, botViewAfter); a != b {
-		t.Fatalf("the chat bot's view changed: %s -> %s", a, b)
-	}
 
-	// A, needing authorization again, is not run (nor refreshed) again, whatever the time.
 	w.advance(48 * time.Hour)
 	w.script("bsync", accC, nil)
-	w.h.larkSyncTick(ctx)
+	w.svc.tickOnce(ctx)
 	if n := refusedA.Load(); n != 1 || countOf(w.ran, keyA) != 1 {
 		t.Fatalf("A was refreshed %d times, ran %d times", n, countOf(w.ran, keyA))
 	}
@@ -179,10 +163,8 @@ func TestLarkSyncBindingsFailOnTheirOwn(t *testing.T) {
 	}
 }
 
-// A binding that keeps failing backs off (its circuit: 15 minutes twice, then 1h, 6h, 24h) while the others keep
-// their daily schedule; one good run closes the circuit.
 func TestLarkSyncCircuitBacksOff(t *testing.T) {
-	w := newLarkWorld(t)
+	w := newServiceWorld(t)
 	ctx := context.Background()
 	w.addSyncBot(t, "bsync", "cli_sync", larksyncwire.TierDocs)
 	bad, badAcc := w.adopt(t, "bsync", "ou_bad", "acc-bad", "ref-bad", 24*time.Hour)
@@ -196,7 +178,7 @@ func TestLarkSyncCircuitBacksOff(t *testing.T) {
 		if i > 0 {
 			w.advance(w.binding(t, bad).NextRunAt.Sub(w.now()))
 		}
-		w.h.larkSyncTick(ctx)
+		w.svc.tickOnce(ctx)
 		b := w.binding(t, bad)
 		if b.Failures != i+1 || b.Health != larksyncwire.HealthFailing || !b.NextRunAt.Equal(w.now().Add(want)) {
 			t.Fatalf("failure %d: %+v (want next in %v)", i+1, b, want)
@@ -207,25 +189,23 @@ func TestLarkSyncCircuitBacksOff(t *testing.T) {
 	}
 	w.script("bsync", badAcc, nil)
 	w.advance(w.binding(t, bad).NextRunAt.Sub(w.now()))
-	w.h.larkSyncTick(ctx)
-	if b := w.binding(t, bad); b.Failures != 0 || b.Health != larksyncwire.HealthOK || b.NextRunAt.Hour() != larkSyncDefaultHour {
+	w.svc.tickOnce(ctx)
+	if b := w.binding(t, bad); b.Failures != 0 || b.Health != larksyncwire.HealthOK || b.NextRunAt.Hour() != defaultHour {
 		t.Fatalf("closed: %+v", b)
 	}
 }
 
-// A member hub runs no binding: the hub it joined does.
 func TestLarkSyncMemberHubRunsNothing(t *testing.T) {
-	w := newLarkWorld(t)
+	w := newServiceWorld(t)
 	w.adopt(t, larksyncwire.PrimaryBot, "ou_a", "acc", "ref", time.Hour)
-	w.h.isMemberNow.Store(true)
-	w.h.larkSyncTick(context.Background())
+	w.host.member.Store(true)
+	w.svc.tickOnce(context.Background())
 	if len(w.ran) != 0 {
 		t.Fatalf("a member hub ran %v", w.ran)
 	}
 }
 
-// firstRun says whether key's reader runs for the first time.
-func (w *larkWorld) firstRun(key string) bool {
+func (w *serviceWorld) firstRun(key string) bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return countOf(w.ran, key) == 1
@@ -239,13 +219,4 @@ func countOf(xs []string, x string) int {
 		}
 	}
 	return n
-}
-
-func larkJSON(t *testing.T, v any) string {
-	t.Helper()
-	b, err := json.Marshal(v)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(b)
 }

@@ -2,6 +2,7 @@ package larksyncwire
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"time"
 
@@ -539,4 +540,47 @@ type Provider struct {
 type RegisterOptions struct {
 	UserScopes []string
 	AppID      string
+}
+
+// Settings keys for the Lark user sync (db.SealedSettings re-seals the *_enc fields on key rotation).
+const (
+	SettingPrefs    = "bots.feishu.sync"
+	SettingBots     = "bots.feishu.sync.bots"
+	SettingBindings = "bots.feishu.sync.bindings"
+	SettingAccounts = "bots.feishu.sync.accounts"
+)
+
+// Sealed setting field names re-sealed by key rotation (db.SealedSettings).
+var (
+	SealedPrefsFields    = []string{"registration_device_enc"}
+	SealedBotsFields     = []string{"secret_enc", "registration_device_enc"}
+	SealedBindingsFields = []string{"access_token_enc", "refresh_token_enc", "auth_verifier_enc", "auth_device_enc"}
+)
+
+// OutboxRow is one row of the lark_sync_outbox table: a chat batch (OutboxChat) or a document (OutboxDoc), its
+// payload the JSON the connector hands the knowledge base as it is. db.LarkSyncOutbox aliases this type.
+type OutboxRow struct {
+	Seq          int64
+	Kind         string
+	CanonicalKey string
+	Payload      json.RawMessage
+	CreatedAt    time.Time
+}
+
+// Outbox kinds (db.LarkSyncChat / db.LarkSyncDoc alias these).
+const (
+	OutboxChat = "chat"
+	OutboxDoc  = "doc"
+)
+
+// Store keeps what the sync's runs read and hand over (Postgres tables lark_sync_cursors, lark_sync_index and
+// lark_sync_outbox). A manager whose store does not implement it leaves the sync unavailable.
+type Store interface {
+	LarkSyncCursors(ctx context.Context, binding string) (map[string]string, error)
+	DeleteLarkSyncCursors(ctx context.Context, binding string) error
+	LarkSyncIndex(ctx context.Context, keys []string) (map[string]IndexRecord, error)
+	CommitLarkSyncRun(ctx context.Context, binding string, cursors map[string]string, recs []IndexRecord, outbox []OutboxRow) error
+	LarkSyncOutboxAfter(ctx context.Context, kind string, after int64, limit int) ([]OutboxRow, error)
+	LarkSyncDocsSince(ctx context.Context, since time.Time) ([]OutboxRow, error)
+	PruneLarkSyncOutbox(ctx context.Context, before time.Time) (int64, error)
 }
