@@ -2179,8 +2179,10 @@ The web Changes panel's secondary file tree (#10477) reuses the existing `Resize
 Settings › Hub shows a stage strip and an inset step list during updates (#15240). The
 strip borrows the task stage markers so users can see what is running and what remains
 even when a phase has no detailed progress. A development update takes the rollback
-snapshot after the idle wait, so the backup marker stays pending until the Hub reaches
-it. Use a green check for completed work, an accent mark for the current stage and a
+snapshot after the idle wait. Show Build (or Prepare backup), Waiting for idle, Backup
+and Restart in that order. For people updating their hub, the pipeline offers a secondary
+Cancel update button while the hub reports it can cancel. Confirm with the shared dialog.
+Keep the action disabled during cancellation and announce when a backup must finish first. Use a green check for completed work, an accent mark for the current stage and a
 hollow mark for pending work. The inset list pairs the localized step with the shared
 spinner, live status label and an accent bar when the Hub reports a percentage. The
 header shows the short target and elapsed time when the start of the update can be
@@ -4671,3 +4673,22 @@ VoiceOver drop hint on Apple).
   actor so GIF, APNG and animated WebP keep all their frames). Dropping on a picker card only opens the upload or edit
   dialog with the file ready to crop; nothing is saved until Upload / Save, and **Keep current** / **Keep Current
   Picture** / Cancel reverts it (principle 3).
+
+## Integrations & Extensions in web Settings
+
+People connecting a service can find its account, delivery and sync settings under one name. With
+the selected assistant’s Integrations experiment on, each service appears once. The capability chips
+(All, Chat channels, Data sources, Tools & appearance) filter those rows. A service can match more
+than one chip. Each chip exposes its selection with `aria-pressed` and shows its matching count.
+
+Opening a detail uses a single column on phones and narrow Settings hosts. On desktop the split
+starts at **740 CSS pixels of Settings content width**, measured after both sidebars. The
+`data-integrations-split` container reserves 300 px for the list and at least 440 px for the detail.
+Its list header stays visible, the chips can scroll horizontally within it, and the list and detail
+scroll vertically independently. Opening another detail returns that pane to the top.
+
+When Inbox Sources is available, the **Integrations | Data flow** segmented switcher opens either the
+catalog or a full-width view of where data goes. A `SubscriptionAlertBadge` belongs to the row that
+owns the subscription. A single alert names its state, multiple alerts show their count. The most
+severe state supplies the detail and tone (failure red, missing recipe, rate limit or disconnected
+source orange). Standalone push sources have their own rows. See [web Settings](../web/web.md#labs).

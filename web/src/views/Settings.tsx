@@ -2,7 +2,7 @@ import { managedProvider } from "../lib/compatibility";
 // Settings (docs/web/web.md): appearance, where the assistant runs, "Models" (every launcher: rc-file and PATH ones synced, the
 // built-in claude, Persona ones kept by the hub — docs/integrations/launchers.md), this browser and the other devices, about. The same data as the app's Settings.
 import { BASE, stripBase } from "../lib/base";
-import { href, useRoute } from "../lib/router";
+import { href, subscribeRoute } from "../lib/router";
 import { takeOverlayEntry } from "../lib/back-close";
 import { useScrollMemory } from "../lib/scroll-memory";
 import { Suspense, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -71,7 +71,7 @@ import { TerminalModeRow } from "./settings/TerminalModeSetting";
 import { AgentOpenRow } from "./settings/AgentOpenSetting";
 import { SeenRowsRow } from "./settings/SeenRowsSetting";
 import { AGENT_KINDS, ASSISTANT_TABS, categoryState, FROM_LIST, isCoreTab, isModuleTab, itemIsPage, itemState, navGroups, openedFromSub, redirectLegacySettings, resolveSettingsTarget, settingsAt, settingsHref, SENT_SUB, stepsToList, tabInfo, TAB_INFO, type AgentTab, type SettingsSection, type Tab } from "./settings/nav";
-import { formatIntegrationsSub, isIntegrationDetailRoute, isLegacyIntegrationTab, normalizeIntegrationFilter, parseIntegrationsSub } from "./settings/integrations-route";
+import { formatIntegrationsSub, isIntegrationDetailRoute, isLegacyIntegrationTab, parseIntegrationsSub } from "./settings/integrations-route";
 import { moduleFeaturesSource } from "../core/module-features";
 import { useModuleStates } from "../core/module-host";
 import { ModuleSettingsPage } from "../core/ModuleSettingsPage";
@@ -203,26 +203,12 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     setAt((was) => (was.tab === now.tab && was.sub === now.sub && was.section === now.section ? was : now));
   }, [integrationsMode, at.tab, at.sub]);
   // External in-app navigation to /settings (e.g. "Change in Settings" from the sidebar while Settings is already open).
-  const route = useRoute();
-  const initialRoute = useRef(true);
-  useEffect(() => {
-    if (initialRoute.current) { initialRoute.current = false; return; }
+  useEffect(() => subscribeRoute(() => {
     const path = stripBase(location.pathname);
-    if (path !== "/settings" && !path.startsWith("/settings/")) return;
-    const now = readSettingsLocation(integrationsModeRef.current);
-    setAt((was) => (was.tab === now.tab && was.sub === now.sub && was.section === now.section ? was : now));
-  }, [route]);
-  // Back from a category opened from the list: the URL went back, the page follows it.
-  useEffect(() => {
-    const back = () => {
-      const path = stripBase(location.pathname);
-      if (path !== "/settings" && !path.startsWith("/settings/")) return;
-      const now = readSettingsLocation(integrationsModeRef.current);
-      setAt((was) => (was.tab === now.tab && was.sub === now.sub && was.section === now.section ? was : now));
-    };
-    addEventListener("popstate", back);
-    return () => removeEventListener("popstate", back);
-  }, []);
+    if (path === "/settings" || path.startsWith("/settings/")) {
+      setAt(readSettingsLocation(integrationsModeRef.current));
+    }
+  }), []);
   const listed = phone && !at.tab;
   const tab: Tab = at.tab ?? "general";
   // one scroller shows the list and every page: each keeps its own spot, and Back to the list lands where it was (#5133).
@@ -231,6 +217,19 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const scroller = useRef<HTMLDivElement>(null);
   useScrollMemory(scroller, listed ? "settings" : `settings/${tab}/${itemIsPage(tab) ? (at.sub ?? "") : ""}`);
   const { sub } = at;
+  // The host excludes both the Settings navigation and the app sidebar (including a resized sidebar).
+  const [wideIntegrations, setWideIntegrations] = useState(false);
+  useLayoutEffect(() => {
+    const host = scroller.current;
+    if (!host || tab !== "integrations" || phone) return;
+    // Reserve 440px for the detail beside the 300px list, including its page padding.
+    const measure = () => setWideIntegrations(host.clientWidth >= 740);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(host);
+    return () => observer.disconnect();
+  }, [tab, phone]);
   const sourcesManager = tab === "sources" ? new URLSearchParams(location.search).get("manager") ?? picked ?? undefined : undefined;
   useLayoutEffect(() => (ASSISTANT_TABS.has(tab) ? pinManagerAt(ASSISTANT_PREFIXES, otherManager(picked ?? undefined)) : undefined), [tab, picked]);
   // Another assistant made current with one of the group's items open (a connector, an extension, a channel, a model
@@ -272,7 +271,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   };
   const contentId = useId();
   const configurationOwner = useRef<string | null>(new URLSearchParams(location.search).get("manager"));
-  const pick = (rawTab: Tab, rawId: string | null = null, section?: SettingsSection) => {
+  const pick = (rawTab: Tab, rawId: string | null = null, section?: SettingsSection, options?: { anchor?: string; drillDown?: boolean }) => {
     configurationOwner.current = new URLSearchParams(location.search).get("manager") ?? configurationOwner.current;
     const resolved = resolveSettingsTarget(rawTab, rawId, integrationsV2);
     const k = resolved.tab;
@@ -290,13 +289,19 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     setAt({ tab: k, sub: id, section: section ?? null });
     // the hub's page keeps its own choice of manager (the download mirrors); the current assistant's pages follow the pick
     let to = settingsHref(k, id, phone, k === "hub" ? configurationOwner.current : (resolved.manager ?? null), section);
-    if (k === "integrations" && !id && resolved.filter && resolved.filter !== "all") {
-      to += `${to.includes("?") ? "&" : "?"}filter=${encodeURIComponent(resolved.filter)}`;
+    if (options?.anchor) to += `#${options.anchor}`;
+    const filter = resolved.filter ?? (k === "integrations" && tab === k && id ? new URLSearchParams(location.search).get("filter") : null);
+    if (k === "integrations" && filter && filter !== "all") {
+      to += `${to.includes("?") ? "&" : "?"}filter=${encodeURIComponent(filter)}`;
     }
     // from the phone's list the category goes on top of it, and an item's page on top of its category's page, so Back
     // returns to each; another item of the category keeps the entry's way back, another category only the way to the list
     if (listed) history.pushState({ [FROM_LIST]: true }, "", BASE + to);
-    else if (k === tab && !sub && id && itemIsPage(k)) {
+    else if (phone && options?.drillDown && sub && id && sub !== id) {
+      const child = { ...itemState(state), integrationParent: sub };
+      if (takeOverlayEntry()) history.replaceState(child, "", BASE + to);
+      else history.pushState(child, "", BASE + to);
+    } else if (k === tab && !sub && id && itemIsPage(k)) {
       if (takeOverlayEntry()) history.replaceState(itemState(state), "", BASE + to);
       else history.pushState(itemState(state), "", BASE + to);
     } else history.replaceState(k === tab && sub && id && openedFromSub(state) ? state : categoryState(state), "", BASE + to);
@@ -313,7 +318,13 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   // or the market's, that page; from a category it goes to the list. The Lark bot's settings are a dialog over the
   // Connectors list, not a page, so its address leaves the top bar going to the list.
   const itemOpen = phone && !!sub && itemIsPage(tab) && !(tab === "connectors" && sub === "feishu-bot");
-  const up = itemOpen && sub ? itemParent(tab, sub) : null;
+  const parent = tab === "integrations" ? history.state?.integrationParent : null;
+  const up = itemOpen && sub ? itemParent(tab, sub, parent) : null;
+  const goBack = () => {
+    if (!up) toList();
+    else if (parent) history.back();
+    else pick(tab, up.sub);
+  };
   // Settings search: filters the sidebar categories, and jumps to a group or a setting's row inside a page (scroll +
   // brief highlight).
   const [query, setQuery] = useState("");
@@ -331,11 +342,21 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     let prev = "";
     let timer: ReturnType<typeof setTimeout> | undefined;
     let observer: MutationObserver | undefined;
+    let resize: ResizeObserver | undefined;
+    let settleTimer: ReturnType<typeof setTimeout> | undefined;
     // a group's card is lit, a row itself; a row is brought to the middle, a group to the top
     const show = (el: HTMLElement) => {
       clearTimeout(timer);
       const row = el.hasAttribute("data-settings-row");
-      el.scrollIntoView?.({ block: row ? "center" : "start" });
+      const align = () => el.scrollIntoView?.({ block: row ? "center" : "start" });
+      align();
+      if (typeof ResizeObserver !== "undefined") {
+        resize = new ResizeObserver(align);
+        resize.observe(el);
+        // The viewport can keep its height while async groups above the target grow.
+        if (box?.firstElementChild) resize.observe(box.firstElementChild);
+        settleTimer = setTimeout(() => resize?.disconnect(), 500);
+      }
       card = row ? el : el.querySelector<HTMLElement>(":scope > div") ?? el;
       prev = card.style.boxShadow;
       card.style.boxShadow = "inset 0 0 0 2px var(--accent)";
@@ -363,6 +384,8 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     return () => {
       observer?.disconnect();
       clearTimeout(timer);
+      resize?.disconnect();
+      clearTimeout(settleTimer);
       if (card) card.style.boxShadow = prev;
     };
   }, [scrollAnchor, tab]);
@@ -375,7 +398,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const openSettingsUrl = (url: string) => {
     const target = settingsTarget(url);
     if (!target || !(isCoreTab(target.tab) || isModuleTab(target.tab))) return;
-    pick(target.tab as Tab, target.sub);
+    pick(target.tab as Tab, target.sub, undefined, { anchor: target.anchor });
     if (target.anchor) setScrollAnchor(target.anchor);
   };
   const onExtensionPage =
@@ -384,7 +407,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const integrationsSplit =
     !listed &&
     !phone &&
-    twoCol &&
+    wideIntegrations &&
     tab === "integrations" &&
     integrationsV2 &&
     isIntegrationDetailRoute(parseIntegrationsSub(sub));
@@ -393,7 +416,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
       <header className="flex min-h-14 shrink-0 items-center gap-2 border-b border-line px-3 py-2 sm:px-4">
         {phone && at.tab ? (
           <>
-            <IconButton icon="chevronLeft" label={up ? up.label : t("settings.back")} onClick={up ? () => pick(tab, up.sub) : toList} />
+            <IconButton icon="chevronLeft" label={up ? up.label : t("settings.back")} onClick={goBack} />
             <h1 className="min-w-0 truncate text-[14px] font-semibold text-ink">{tabInfo(tab).label}</h1>
           </>
         ) : (
@@ -474,10 +497,9 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
                 <Suspense fallback={integrationsSplit ? <div className="p-6"><Loading /></div> : <Loading />}>
                   <Integrations
                     open={sub}
-                    twoCol={twoCol}
+                    twoCol={integrationsSplit}
                     headerBack={phone}
-                    initialFilter={normalizeIntegrationFilter(new URLSearchParams(location.search).get("filter"))}
-                    onOpen={(id) => pick("integrations", id)}
+                    onOpen={(id, drillDown) => pick("integrations", id, undefined, { drillDown })}
                     onPageWide={setExtensionPageWide}
                     onSettings={openSettingsUrl}
                   />
@@ -532,13 +554,17 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
  *  An extension's own page (one it draws) goes back to the extension, and a market's extension or the list of markets to
  *  the catalog, unless the market's extension was opened as another assistant's upgrade (MarketItem's Back); any other
  *  item's page goes to its category's page. */
-function itemParent(tab: Tab, sub: string): { sub: string | null; label: string } {
+function itemParent(tab: Tab, sub: string, parent: unknown): { sub: string | null; label: string } {
   if (tab === "extensions") {
     const r = extensionsRoute(sub);
     if (r.kind === "page" || (r.kind === "item" && r.manager)) return { sub: routeSub({ kind: "extension", id: r.id, manager: r.manager }), label: t("settings-extensionview.back") };
     if (r.kind === "item" || r.kind === "markets") return { sub: routeSub({ kind: "catalog" }), label: t("settings.back_to", { name: t("settings-extensionmarket.market_title") }) };
   }
   if (tab === "integrations") {
+    if (typeof parent === "string") {
+      const fromGraph = parseIntegrationsSub(parent).kind === "sources";
+      return { sub: parent, label: fromGraph ? t("settings.back_to", { name: t("subscriptions.view_graph") }) : t("settings-extensionview.back") };
+    }
     const r = parseIntegrationsSub(sub);
     if (r.kind === "page" || (r.kind === "item" && r.manager)) return { sub: formatIntegrationsSub({ kind: "extension", id: r.id, manager: r.manager }), label: t("settings-extensionview.back") };
     if (r.kind === "item" || r.kind === "markets") return { sub: formatIntegrationsSub({ kind: "catalog" }), label: t("settings.back_to", { name: t("settings-extensionmarket.market_title") }) };
