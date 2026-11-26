@@ -1,4 +1,5 @@
 {
+  "computer_label": "电脑",
   "reconnecting": "正在重新连接",
   "reconnect_failed": "重新连接失败：{error}",
   "sidebar": "侧边栏",

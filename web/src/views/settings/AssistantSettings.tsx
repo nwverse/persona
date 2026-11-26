@@ -6,9 +6,11 @@ import { Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore } 
 import { t } from "../../i18n";
 import { BASE } from "../../lib/base";
 import { settingsHref } from "./nav";
+import { formatIntegrationsSub } from "./integrations-route";
 import { SUPERVISE_PURPOSE } from "../../lib/background-supervisor";
 import { api, credentialOwner, enc, errorText, subscribeCredentialOwner } from "../../lib/api";
-import { MANAGER_HEADER, useKnownDefault } from "../../lib/manager-choice";
+import { defaultManager, MANAGER_HEADER, useKnownDefault } from "../../lib/manager-choice";
+import { useInboxSourcesShown } from "../../lib/subscriptions";
 import { mainRuntimeDetails, type MainExecution } from "../../lib/main-runtime";
 import { PERMISSION_MODES } from "../../lib/session-actions";
 import { ASSISTANT_PAGES_FEATURE } from "../../lib/extension-ui";
@@ -82,6 +84,8 @@ interface AssistantState extends AgentAutoNamingState, CacheKeepaliveState {
   /** Deterministic opt-in auto-forwarding of PR/Issue Inbox events to the bound open to-do's Agent (#12492): off by
    *  default; unset from a hub before it. */
   inbox_todo_forward?: boolean;
+  /** Unified Integrations & Extensions Labs trial (#14802): off by default; unset from a hub before it. */
+  integrations_v2?: boolean;
   /** "The main chat supervises its own tasks" (#4927, #5082, docs/assistant/unified-entry.md "Background supervisor"):
    *  off by default, which means the built-in background supervisor follows up the tasks no leader supervises; unset
    *  from a hub before it. */
@@ -137,6 +141,7 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
   const [directionNotes] = useState(() => directionNotesDeps(scopedApi));
   const persona = usePersona();
   const defaultId = useKnownDefault();
+  const hasInboxSources = useInboxSourcesShown() === true;
   const machines = useStore((s) => s.machines);
   const [info, setInfo] = useState<AssistantState | null>(null);
   // where and with what the main chat runs (docs/assistant/assistant.md "Main conversation execution on the web"): kept
@@ -434,6 +439,13 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
   const index = files?.find((f) => f.name === MEMORY_INDEX);
   const on = tasks?.filter((task) => task.enabled).length ?? 0;
   const next = tasks ? upcoming(tasks, 1)[0] : undefined;
+  const deduplicateInboxForward = info?.integrations_v2 === true && hasInboxSources;
+  const nonDefaultManager = manager && manager !== (defaultId || defaultManager()) ? manager : undefined;
+  const inboxForwardSourcesHref = settingsHref(
+    "integrations",
+    formatIntegrationsSub({ kind: "sources", ...(nonDefaultManager ? { manager: nonDefaultManager } : {}) }),
+    false,
+  );
 
   if (!info && !error) return <Loading />;
 
@@ -581,9 +593,31 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
             </Row>
           )}
           {typeof info.inbox_todo_forward === "boolean" && (
-            <Row anchor="inbox-todo-forward" label={t("settings-assistantsettings.inbox_todo_forward")} hint={t("settings-assistantsettings.inbox_todo_forward_hint")} wrapHint>
-              <Switch on={info.inbox_todo_forward} onChange={(on) => void setAgents({ inbox_todo_forward: on })} disabled={agentsBusy} label={t("settings-assistantsettings.inbox_todo_forward")} />
-            </Row>
+            deduplicateInboxForward ? (
+              <a
+                data-settings-row="inbox-todo-forward"
+                href={BASE + inboxForwardSourcesHref}
+                onClick={(e) => {
+                  if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+                  e.preventDefault();
+                  navigate(inboxForwardSourcesHref);
+                }}
+                className="flex items-center justify-between gap-3 px-4 py-2.5 text-left transition-colors hover:bg-hover pointer-coarse:min-h-11"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-meta text-ink">{t("settings-assistantsettings.inbox_todo_forward")}</div>
+                  <div className="mt-0.5 text-submeta leading-snug text-ink-3">{t("settings-assistantsettings.inbox_todo_forward_moved_hint")}</div>
+                </div>
+                <div className="flex shrink-0 items-center gap-2 text-label text-ink-2">
+                  <span>{t(info.inbox_todo_forward ? "settings-assistantsettings.inbox_todo_forward_on" : "settings-assistantsettings.inbox_todo_forward_off")}</span>
+                  <Icon name="chevronRight" size={12} stroke={2} className="shrink-0 text-ink-3" />
+                </div>
+              </a>
+            ) : (
+              <Row anchor="inbox-todo-forward" label={t("settings-assistantsettings.inbox_todo_forward")} hint={t("settings-assistantsettings.inbox_todo_forward_hint")} wrapHint>
+                <Switch on={info.inbox_todo_forward} onChange={(on) => void setAgents({ inbox_todo_forward: on })} disabled={agentsBusy} label={t("settings-assistantsettings.inbox_todo_forward")} />
+              </Row>
+            )
           )}
           {typeof info.idle_close_hours === "number" && (
             <Row label={t("settings-assistantsettings.idle_close")} hint={t("settings-assistantsettings.idle_close_hint")} wrapHint>

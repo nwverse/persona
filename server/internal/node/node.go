@@ -38,6 +38,7 @@ import (
 	"github.com/nwverse/persona/server/internal/quota"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/streams"
+	"github.com/nwverse/persona/server/internal/taskworkspace"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
 
@@ -859,7 +860,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		return n.handleUpdate(ctx, method, params)
 	}
 	if method == "task.workspace.capabilities" {
-		return map[string]any{"capability": "task_workspace_v1", "start": true}, nil
+		return taskworkspace.Capabilities{Capability: taskworkspace.Capability, Start: true, EmptyRepositories: true, LocalGit: true}, nil
 	}
 	if strings.HasPrefix(method, "task.workspace.") {
 		return n.taskWorkspace(ctx, strings.TrimPrefix(method, "task.workspace."), params, nil)

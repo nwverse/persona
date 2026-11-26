@@ -1147,7 +1147,7 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 		}
 		args["launcher"] = s.startLauncher(ctx, t.Launcher)
 	}
-	if !t.backendWorkspace() && t.RequestGate == "" && s.beginRemedy(ctx, planID, i, t, err, code, args, reason) {
+	if !t.usesPreparedWorkspace() && t.RequestGate == "" && s.beginRemedy(ctx, planID, i, t, err, code, args, reason) {
 		return
 	}
 	// A retry the assistant asked for that failed so its tab is gone: the start fails for good, and the supervisor and
@@ -1172,7 +1172,7 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 		var problem *taskworkspace.Problem
 		if errors.As(err, &problem) {
 			pt.WorkspaceError = problem
-		} else if t.backendWorkspace() && t.backendRequest != nil {
+		} else if t.usesPreparedWorkspace() && t.backendRequest != nil {
 			pt.WorkspaceError = taskworkspace.Failure("engine_start_failed", "start", t.backendRequest.OperationID, "", t.Cwd)
 		}
 		pt.ErrorCode, pt.ErrorArgs, pt.RetryWith = code, args, retryWith
