@@ -377,6 +377,21 @@ export function KnowledgeMap({ onToggleSidebar }: { onToggleSidebar: () => void 
     el.scrollTo({ left: o.px + (p.x + p.box.w / 2) * zoom - el.clientWidth / 2, top: o.py + p.y * zoom - el.clientHeight / 2, behavior: scrollBehavior() });
   }, [L, zoom]);
   const fitAll = () => L && zoomAt(Math.min(1, fits()), undefined, undefined, { mx: L.width / 2, my: L.height / 2 });
+  // Zoom keys, as in the other zoomable views (the image viewer, the extension graph): with a node focused and no ⌘, Ctrl or
+  // Alt held, + or = zooms in one step, - or _ out, 0 fits the whole map. A step zooms around the focused node (the
+  // nearest point of it in view), so it stays put. ⌘/Ctrl + =, - and 0 are left to the browser's and the desktop app's page
+  // zoom (lib/shortcuts.ts keeps them reserved).
+  const zoomKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    const el = host.current, focused = e.target instanceof Element ? e.target.closest("svg[data-map] [tabindex]") : null;
+    if (!el || !focused || e.metaKey || e.ctrlKey || e.altKey) return;
+    const step = e.key === "+" || e.key === "=" ? STEP : e.key === "-" || e.key === "_" ? 1 / STEP : e.key === "0" ? 0 : null;
+    if (step === null) return;
+    e.preventDefault();
+    if (!step) return fitAll();
+    const r = focused.getBoundingClientRect(), v = el.getBoundingClientRect();
+    const x = Math.min(Math.max(r.left + r.width / 2, v.left), v.left + el.clientWidth), y = Math.min(Math.max(r.top + r.height / 2, v.top), v.top + el.clientHeight);
+    zoomAt(zoom * step, x, y);
+  };
   const selected = (sel && byId.get(sel)) || root;
 
   return (
@@ -405,7 +420,7 @@ export function KnowledgeMap({ onToggleSidebar }: { onToggleSidebar: () => void 
       ) : (
         <div className="flex min-h-0 flex-1">
           <div className="relative min-w-0 flex-1">
-            <div ref={host} className="absolute inset-0 cursor-grab select-none overflow-auto bg-canvas active:cursor-grabbing"
+            <div ref={host} onKeyDown={zoomKey} className="absolute inset-0 cursor-grab select-none overflow-auto bg-canvas active:cursor-grabbing"
               style={{ backgroundImage: "radial-gradient(var(--line-strong) 1px, transparent 1px)", backgroundSize: "22px 22px", touchAction: "pan-x pan-y", overflowAnchor: "none" }}>
               {L && <MapCanvas key={view} L={L} shift={shift} title={load.root.title} sel={selected?.id ?? ""} zoom={zoom} onFit={setZoom} onSelect={select} onToggle={toggle} />}
             </div>
