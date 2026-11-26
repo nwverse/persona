@@ -1036,6 +1036,7 @@ func (s *Service) todoRoutes() {
 	s.todoRetitleRoute()
 	s.todoReorganizeRoute()
 	s.todoDecisionsBatchRoute()
+	s.todoBlockersRoutes()
 	s.todoImportRoutes()
 	s.todoViewRoutes()
 	s.todoHandoffRoutes()
@@ -1073,6 +1074,7 @@ func (s *Service) todoRoutes() {
 		if !isExtension {
 			sharedBlockers = p.sharedBlockers()
 			if cfg := s.settings(r.Context()); cfg.todosV2On() {
+				sharedBlockers = mergePersistedSharedBlockers(list, p, sharedBlockers)
 				board = buildTodoBoardProjectionWithOptions(list, s.todoBoardDirectionLabels(r.Context()), cfg.todosV2FoldChildrenOn())
 			}
 		}
