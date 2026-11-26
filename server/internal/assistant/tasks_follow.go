@@ -498,7 +498,7 @@ func (s *Service) settleTurnReporting(ctx context.Context, machine, sid, unheard
 	agents = currentTaskAgents(agents, supersededAgents(t, agents)) // not an agent it was handed over from (#6483)
 	var last, cut proto.Session
 	for _, c := range agents {
-		if c.State == proto.StateWorking || c.State == proto.StateNeedsYou || c.PendingInteractions > 0 {
+		if !taskAgentSettledIn(t, agents, c) { // as taskAgentsSettled read it: a done report's left-over shells do not hold it
 			return settleLater
 		}
 		if w := c.Work; w != nil && w.Phase == proto.WorkBlocked && w.On == proto.WaitTransient && w.WakeAt != nil {
