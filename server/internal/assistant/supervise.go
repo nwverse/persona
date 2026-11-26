@@ -104,6 +104,10 @@ type Supervision struct {
 	// names the review a task waits for.
 	Progress      *TaskProgress          `json:"progress,omitempty"`
 	Investigation *investigationFindings `json:"investigation_findings,omitempty"`
+	// OwnerWork is server-only evidence for the close guard (#15406): the latest owner-authored instruction and the
+	// latest Persona assignment per linked Agent session. Keeping it out of the wire shape prevents another Agent or
+	// an ordinary to-do reader from seeing an excerpt meant for the owner and the responsible supervisor.
+	OwnerWork []OwnerSessionWork `json:"-"`
 }
 
 // assigned records a current ownership decision, rather than a pre-policy legacy ledger.
@@ -251,6 +255,14 @@ func (v *Supervision) clone() *Supervision {
 		p := *v.Progress
 		out.Progress = &p
 	}
+	out.OwnerWork = make([]OwnerSessionWork, len(v.OwnerWork))
+	for i, w := range v.OwnerWork {
+		out.OwnerWork[i] = w
+		if w.Instruction != nil {
+			instruction := *w.Instruction
+			out.OwnerWork[i].Instruction = &instruction
+		}
+	}
 	if v.AutoReview != nil {
 		a := *v.AutoReview
 		out.AutoReview = &a
@@ -328,6 +340,9 @@ func supervisionFromRow(r db.TodoSupervisionRow) *Supervision {
 	v := &Supervision{Supervisor: r.Supervisor, SupervisorSource: r.SupervisorSource, DoneWhen: r.DoneWhen, Criteria: r.Criteria, ExpectMinutes: r.ExpectMinutes, State: r.State, Round: r.Round,
 		PendingSince: r.PendingSince, CardlessToldAt: r.CardlessToldAt, UpdatedAt: r.UpdatedAt}
 	_ = json.Unmarshal(r.Reviews, &v.Reviews)
+	if len(r.OwnerWork) > 0 {
+		_ = json.Unmarshal(r.OwnerWork, &v.OwnerWork)
+	}
 	v.StalledReworkRounds = v.stalledReworkRounds()
 	if len(r.InvestigationFindings) != 0 {
 		v.Investigation = &investigationFindings{}
@@ -414,6 +429,10 @@ func (v *Supervision) applyReworkAccounting(kind string) (round, stalled int) {
 func (v *Supervision) row(todoID string) db.TodoSupervisionRow {
 	raw, _ := json.Marshal(v.Reviews)
 	var auto, waits, investigation json.RawMessage
+	ownerWork, _ := json.Marshal(v.OwnerWork)
+	if len(v.OwnerWork) == 0 {
+		ownerWork = json.RawMessage("[]")
+	}
 	if v.AutoReview != nil {
 		auto, _ = json.Marshal(v.AutoReview)
 	}
@@ -424,7 +443,8 @@ func (v *Supervision) row(todoID string) db.TodoSupervisionRow {
 		investigation, _ = json.Marshal(v.Investigation)
 	}
 	return db.TodoSupervisionRow{TodoID: todoID, InvestigationFindings: investigation, Supervisor: v.Supervisor, SupervisorSource: v.SupervisorSource, DoneWhen: v.DoneWhen, Criteria: v.Criteria, ExpectMinutes: v.ExpectMinutes,
-		State: v.State, Round: v.Round, Reviews: raw, AutoReview: auto, Waits: waits, PendingSince: v.PendingSince, CardlessToldAt: v.CardlessToldAt, UpdatedAt: v.UpdatedAt}
+		State: v.State, Round: v.Round, Reviews: raw, AutoReview: auto, Waits: waits, OwnerWork: ownerWork,
+		PendingSince: v.PendingSince, CardlessToldAt: v.CardlessToldAt, UpdatedAt: v.UpdatedAt}
 }
 
 // cleanDoneWhen is a task's criteria as kept: trimmed, no empty or repeated ones, at most 6 of at most 200 characters.

@@ -24,6 +24,7 @@ const modules = import.meta.glob<Catalog>("./src/i18n/locales/*/_meta.json", { q
 const moduleCatalogs: Record<string, Record<string, () => Promise<Catalog>>> = {
   health: import.meta.glob<Catalog>("./src/i18n/locales/*/_meta.json", { query: "?catalog=module-health" }),
   voice: import.meta.glob<Catalog>("./src/i18n/locales/*/_meta.json", { query: "?catalog=module-voice" }),
+  mail: import.meta.glob<Catalog>("./src/i18n/locales/*/_meta.json", { query: "?catalog=module-mail" }),
   office: import.meta.glob<Catalog>("./src/i18n/locales/*/_meta.json", { query: "?catalog=module-office" }),
   recording: import.meta.glob<Catalog>("./src/i18n/locales/*/_meta.json", { query: "?catalog=module-recording" }),
   lark: import.meta.glob<Catalog>("./src/i18n/locales/*/_meta.json", { query: "?catalog=module-lark" }),
@@ -37,7 +38,11 @@ function expected(lang: string, kind: "client" | "admin"): Record<string, string
     name.endsWith(".json") && !name.startsWith("_") && name.startsWith("admin-") === (kind === "admin"));
   const read = (name: string) => JSON.parse(readFileSync(join(dir, name), "utf8")) as Record<string, string>;
   const resources = Object.fromEntries(files.map((name) => [`./${name}`, read(name)]));
-  if (kind === "client") resources["./office.json"] = JSON.parse(readFileSync(join(dir, "../../../modules/office/locales", lang, "office.json"), "utf8"));
+  if (kind === "client") {
+    for (const id of ["office", "mail"]) {
+      resources[`./${id}.json`] = JSON.parse(readFileSync(join(dir, "../../../modules", id, "locales", lang, `${id}.json`), "utf8"));
+    }
+  }
   return flatten(resources);
 }
 

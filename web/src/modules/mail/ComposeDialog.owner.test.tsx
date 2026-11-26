@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import "./test-register";
+import { resetMailForTests } from "../../lib/mail";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,9 +13,9 @@ import { t } from "../../i18n";
 import { api } from "../../lib/api";
 import type { InboxItem } from "../../lib/inbox";
 import { ItemManager, MANAGER_HEADER, resetManagerChoice, setRosterDefault } from "../../lib/manager-choice";
-import { newDraft, replyDraft, resetMailForTests, sendBody, type ComposeDraft, type MailMessage } from "../../lib/mail";
+import { newDraft, replyDraft, sendBody, type ComposeDraft, type MailMessage } from "./mail";
 import { ComposeDialog } from "./ComposeDialog";
-import { MailBody } from "./InboxBodies";
+import { FullMailBody as MailBody } from "./FullMailBody";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
