@@ -124,6 +124,14 @@ func (h *Hub) passwordLimited(w http.ResponseWriter, r *http.Request, count bool
 var pkceChallenge = lazyre.New(`^[A-Za-z0-9_-]{43}$`)
 var pkceVerifier = lazyre.New(`^[A-Za-z0-9._~-]{43,128}$`)
 
+type passwordStateResponse struct {
+	Enabled  bool   `json:"enabled"`
+	Suite    string `json:"suite"`
+	HubID    string `json:"hub_id"`
+	HubName  string `json:"hub_name"`
+	Replaces bool   `json:"replaces"`
+}
+
 func (h *Hub) passwordLoginRoutes(mux *http.ServeMux) {
 	open := http.NewServeMux()
 	open.HandleFunc("GET /api/v1/auth/password/state", func(w http.ResponseWriter, r *http.Request) {
@@ -136,7 +144,13 @@ func (h *Hub) passwordLoginRoutes(mux *http.ServeMux) {
 			writeErr(w, 503, err)
 			return
 		}
-		writeJSON(w, map[string]any{"enabled": p != nil && p.Enabled, "suite": passwordpake.Suite, "hub_id": h.hubID(), "hub_name": h.hubName(), "replaces": true})
+		writeJSON(w, passwordStateResponse{
+			Enabled:  p != nil && p.Enabled,
+			Suite:    passwordpake.Suite,
+			HubID:    h.hubID(),
+			HubName:  h.hubName(),
+			Replaces: true,
+		})
 	})
 	open.HandleFunc("POST /api/v1/auth/password/start", func(w http.ResponseWriter, r *http.Request) {
 		if h.passwordLimited(w, r, true) {

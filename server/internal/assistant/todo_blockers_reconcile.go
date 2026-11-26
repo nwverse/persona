@@ -135,7 +135,11 @@ func (s *Service) addTodoBlocker(ctx context.Context, row db.TodoBlockerRow) (*d
 }
 
 func todoBlockerID(todoID, kind, targetRef string) string {
-	sum := sha256.Sum256([]byte(todoID + "\x00" + kind + "\x00" + targetRef))
+	hashRef := targetRef
+	if kind == todoBlockerKindExternalPR {
+		hashRef = strings.ToLower(normalizeTodoBlockerPRRef(targetRef))
+	}
+	sum := sha256.Sum256([]byte(todoID + "\x00" + kind + "\x00" + hashRef))
 	return "blk_" + hex.EncodeToString(sum[:8])
 }
 
@@ -368,7 +372,10 @@ func (s *Service) reconcilePersistedTodoBlockersWithPRFact(ctx context.Context, 
 	}
 
 	for _, todoID := range result.UnblockedTodoIDs {
-		s.notifyTodoBlockerUnblocked(ctx, todoID, onUnblocked)
+		s.notifyTodoBlockerUnblockedOnly(ctx, todoID, onUnblocked)
+	}
+	if len(result.UnblockedTodoIDs) > 0 && s.settings(ctx).todosV2On() {
+		s.sweepAdmissionQueue(ctx)
 	}
 
 	return todoBlockerReconcileSummary{
@@ -380,7 +387,43 @@ func (s *Service) reconcilePersistedTodoBlockersWithPRFact(ctx context.Context, 
 	}, nil
 }
 
-func (s *Service) notifyTodoBlockerUnblocked(ctx context.Context, todoID string, hook func(ctx context.Context, todoID string)) {
+// activeTodoBlockerRefs returns the target_refs of all active persistent blockers for todoID
+// when todos_v2 is enabled, or nil when todos_v2 is off or no active blockers remain.
+func (s *Service) activeTodoBlockerRefs(ctx context.Context, todoID string) []string {
+	if s == nil || !s.settings(ctx).todosV2On() {
+		return nil
+	}
+	todoID = strings.TrimSpace(todoID)
+	if todoID == "" {
+		return nil
+	}
+	st := s.todoBlockerDB()
+	if st == nil {
+		return nil
+	}
+	rows, err := st.ListTodoBlockersByTodo(ctx, todoID)
+	if err != nil {
+		s.logf("todo_blockers: list active for %s: %v", todoID, err)
+		return nil
+	}
+	var refs []string
+	for _, r := range rows {
+		if r.State != db.TodoBlockerStateActive {
+			continue
+		}
+		if ref := strings.TrimSpace(r.TargetRef); ref != "" {
+			refs = append(refs, ref)
+		}
+	}
+	return refs
+}
+
+// hasActiveTodoBlockers reports whether todoID currently has at least one active persistent blocker under todos_v2.
+func (s *Service) hasActiveTodoBlockers(ctx context.Context, todoID string) bool {
+	return len(s.activeTodoBlockerRefs(ctx, todoID)) > 0
+}
+
+func (s *Service) notifyTodoBlockerUnblockedOnly(ctx context.Context, todoID string, hook func(ctx context.Context, todoID string)) {
 	key := "blockers_unblocked:" + todoID
 	to := ""
 	if t, ok := s.todoNow(todoID); ok {
@@ -395,6 +438,13 @@ func (s *Service) notifyTodoBlockerUnblocked(ctx context.Context, todoID string,
 	})
 	if hook != nil {
 		hook(ctx, todoID)
+	}
+}
+
+func (s *Service) notifyTodoBlockerUnblocked(ctx context.Context, todoID string, hook func(ctx context.Context, todoID string)) {
+	s.notifyTodoBlockerUnblockedOnly(ctx, todoID, hook)
+	if s.settings(ctx).todosV2On() {
+		s.sweepAdmissionQueue(ctx)
 	}
 }
 

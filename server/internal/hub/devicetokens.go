@@ -513,8 +513,13 @@ func (h *Hub) tokenRoutes(api *http.ServeMux) {
 		// push: per token, the way pushes reach the device it registered (Settings › Devices, #5998); phone: the primary
 		// device for phone calls and the devices that can be it (phone_primary.go); online: credentials with a live
 		// WebSocket or Persona Link right now (#15634).
-		writeJSON(w, map[string]any{"tokens": list, "current": principalOf(r.Context()).ID, "push": h.push.routesByCredential(),
-			"phone": h.phonePrimaryView(list), "online": h.onlineCredentials()})
+		writeJSON(w, deviceTokensResponse{
+			Tokens:  list,
+			Current: principalOf(r.Context()).ID,
+			Push:    h.push.routesByCredential(),
+			Phone:   h.phonePrimaryView(list),
+			Online:  h.onlineCredentials(),
+		})
 	})
 	api.HandleFunc("DELETE /api/v1/auth/tokens/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if h.store == nil {
@@ -535,6 +540,14 @@ func (h *Hub) tokenRoutes(api *http.ServeMux) {
 		h.sendRevocations(newlyReachable(nil, h.meshView()))
 		writeJSON(w, map[string]any{"ok": true})
 	})
+}
+
+type deviceTokensResponse struct {
+	Tokens  []db.DeviceToken     `json:"tokens"`
+	Current string               `json:"current"`
+	Push    map[string]pushRoute `json:"push"`
+	Phone   phonePrimaryView     `json:"phone"`
+	Online  []string             `json:"online"`
 }
 
 func replaceableKind(kind string) bool {
@@ -576,9 +589,16 @@ func (h *Hub) replaceDeviceToken(ctx context.Context, newID, kind, rawOld string
 }
 
 // revokeOtherLinkTokens revokes earlier live Persona Link credentials bound to the same machine_id so re-pairing a
-// computer does not leave stale link rows behind (#15634).
+// computer does not leave stale link rows behind (#15634). It does not run while a link switch is under way so
+// rollback revokes only the switch's own credential.
 func (h *Hub) revokeOtherLinkTokens(ctx context.Context, machine, keepID string) {
 	if machine == "" || h.store == nil {
+		return
+	}
+	if busy, err := h.linkSwitchUnderWay(ctx, machine); err != nil || busy {
+		if err != nil {
+			h.logf("device token %s: checking link switch for %s: %v", keepID, machine, err)
+		}
 		return
 	}
 	list, err := h.store.DeviceTokens(ctx)

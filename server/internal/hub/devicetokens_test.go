@@ -679,3 +679,46 @@ func TestSameKindReplacesAndLinkDedupAndOnlineCredentials(t *testing.T) {
 		t.Fatalf("unexpected online credentials: %v", rawOnline)
 	}
 }
+
+func TestLinkDedupSkipsWhileLinkSwitchUnderWay(t *testing.T) {
+	h := newTestHub(t)
+	h.cfg.Machines = []MachineConfig{
+		{ID: "mac-b", Name: "Mac B", Kind: kindLink},
+	}
+	h.store = &tokenStore{memStore: *newMemStore(), rows: map[string]db.DeviceToken{}, rev: map[string]bool{}}
+	mux := h.routes()
+	master := h.cfg.Token
+
+	if err := h.linkSwitch.claim("mac-b", &linkSwitchRun{operation: "op-1", until: time.Now().Add(time.Minute)}, time.Now()); err != nil {
+		t.Fatalf("claim link switch: %v", err)
+	}
+	code, link1 := call(t, mux, "POST", "/api/v1/auth/tokens", master, `{"kind":"link","machine":"mac-b"}`)
+	if code != 200 {
+		t.Fatalf("link1: %d %v", code, link1)
+	}
+	code, link2 := call(t, mux, "POST", "/api/v1/auth/tokens", master, `{"kind":"link","machine":"mac-b"}`)
+	if code != 200 {
+		t.Fatalf("link2: %d %v", code, link2)
+	}
+	if _, ok := h.authenticate(context.Background(), link1["token"].(string)); !ok {
+		t.Fatal("link1 should remain valid while link switch is under way")
+	}
+	if _, ok := h.authenticate(context.Background(), link2["token"].(string)); !ok {
+		t.Fatal("link2 should authenticate while link switch is under way")
+	}
+
+	h.linkSwitch.drop("mac-b", "op-1")
+	code, link3 := call(t, mux, "POST", "/api/v1/auth/tokens", master, `{"kind":"link","machine":"mac-b"}`)
+	if code != 200 {
+		t.Fatalf("link3: %d %v", code, link3)
+	}
+	if _, ok := h.authenticate(context.Background(), link1["token"].(string)); ok {
+		t.Fatal("link1 should be revoked after link switch finishes")
+	}
+	if _, ok := h.authenticate(context.Background(), link2["token"].(string)); ok {
+		t.Fatal("link2 should be revoked after link switch finishes")
+	}
+	if _, ok := h.authenticate(context.Background(), link3["token"].(string)); !ok {
+		t.Fatal("link3 should authenticate")
+	}
+}

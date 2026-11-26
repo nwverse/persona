@@ -126,7 +126,7 @@ describe("alert chips on the Machines page", () => {
   it("opens the sheet on the chip's alert and stays on the page", async () => {
     act(() => root.render(<Machines onToggleSidebar={() => {}} />));
     await flush();
-    await click(card("Build Box")!.querySelector("[data-alert=disk]"));
+    await click(card("Build Box")!.querySelector('[data-testid="disk-details"]'));
     expect(location.pathname).toBe("/machines");
     expect($("[data-testid=alert-sheet]")?.getAttribute("data-kind")).toBe("disk");
     expect($("[data-testid=alert-sheet]")?.getAttribute("data-machine")).toBe("box");

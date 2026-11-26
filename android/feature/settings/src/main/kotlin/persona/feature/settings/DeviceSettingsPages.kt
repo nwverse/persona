@@ -301,10 +301,10 @@ private fun DeviceGroupKind.titleRes(): Int = when (this) {
 }
 
 private fun PairedDevice.deviceIcon() = when (kind) {
-    "phone", "watch" -> PhIcons.DeviceMobile
-    "web" -> PhIcons.GlobeSimple
-    "link" -> PhIcons.Laptop
-    else -> PhIcons.Key
+    "phone", "watch" -> PersonaIcons.phone
+    "web" -> PersonaIcons.safari
+    "link" -> PersonaIcons.laptop
+    else -> PersonaIcons.credentials
 }
 
 @Composable
