@@ -28,8 +28,17 @@ func (s originErrorStore) Setting(ctx context.Context, key string, out any) (boo
 // connector running. Embedding keeps this test double small while ToolAccess and CallTool are the policy boundary.
 type policyExtensions struct {
 	ExtensionTools
-	read  map[string]bool
-	calls []string
+	read       map[string]bool
+	connectors map[string]bool
+	calls      []string
+}
+
+func (e *policyExtensions) ConnectorTool(name string) bool {
+	if e.connectors != nil {
+		return e.connectors[name]
+	}
+	_, known := e.read[name]
+	return known
 }
 
 func (e *policyExtensions) ToolAccess(name string) (bool, bool) {
@@ -67,14 +76,14 @@ func TestInboxModelOutboundToolsDenied(t *testing.T) {
 	h, _, _ := handledHub(t)
 	ext := &policyExtensions{read: map[string]bool{
 		"mail_send": false, "github_comment": false, "github_review": false,
-		"lark_agent_reply": false, "example_future_write": false, "computer_run": false,
+		"lark_image": false, "lark_agent_reply": false, "example_future_write": false, "computer_run": false,
 	}}
 	h.SetExtensions(ext)
 	h.originSet(t.Context(), "server", "s1", OriginInbox, "lark:f1:100", "")
 
 	own := []string{
 		"notify_user", "ask_user", "agent_start", "agent_send", "conversation_send",
-		"conversation_new", "task_plan", "schedule_followup", "urgent_call",
+		"conversation_new", "task_plan", "schedule_followup", "urgent_call", "model_probe", "launcher_import",
 	}
 	for _, name := range own {
 		t.Run(name, func(t *testing.T) {
@@ -82,7 +91,7 @@ func TestInboxModelOutboundToolsDenied(t *testing.T) {
 		})
 	}
 	extensionWrites := []string{
-		"mail_send", "github_comment", "github_review", "lark_agent_reply",
+		"mail_send", "github_comment", "github_review", "lark_agent_reply", "lark_image",
 		"example_future_write", "computer_run", "subscription_run", "future_unknown_tool",
 	}
 	for _, name := range extensionWrites {
@@ -111,11 +120,11 @@ func TestInboxModelOutboundToolsDenied(t *testing.T) {
 // entry point. The suggestion itself is stored; no reply is sent before the owner's action.
 func TestInboxModelReadOnlyInvestigationAndSuggestion(t *testing.T) {
 	h, lark, it := handledHub(t)
-	ext := &policyExtensions{read: map[string]bool{"lark_chats": true, "mail_search": true, "subscription_list": true}}
+	ext := &policyExtensions{read: map[string]bool{"lark_chats": true, "lark_image": true, "mail_search": true, "subscription_list": true}}
 	h.SetExtensions(ext)
 	h.originSet(t.Context(), "server", "s1", OriginInbox, it.ID, "")
 
-	for _, name := range []string{"lark_chats", "mail_search", "subscription_list"} {
+	for _, name := range []string{"lark_chats", "lark_image", "mail_search", "subscription_list"} {
 		res := h.mcpCallWithOrigin(t.Context(), "server", "s1", name, json.RawMessage(`{}`), true, OriginInbox)
 		if res.IsError || toolText(res) != "read "+name {
 			t.Fatalf("read-only %s: %+v", name, res)
@@ -149,6 +158,75 @@ func TestInboxModelReadOnlyInvestigationAndSuggestion(t *testing.T) {
 	h.inbox.mu.Unlock()
 	if suggestion == nil || suggestion.Text != "Suggested reply" || len(lark.got) != 0 {
 		t.Fatalf("suggestion=%+v, outbound replies=%v", suggestion, lark.got)
+	}
+}
+
+func TestSourceOnlyInboxToolPolicy(t *testing.T) {
+	h, _, it := handledHub(t)
+	ext := &policyExtensions{read: map[string]bool{"lark_messages": true, "lark_chats": true, "lark_search": true}}
+	h.SetExtensions(ext)
+	h.setConfig(func(c *assistantwire.InboxConfig) {
+		c.Agent.ReadProfile = "source_only"
+		c.Agent.ConnectorTools = []string{"lark_messages", "lark_search"}
+	})
+	h.originSet(t.Context(), "server", "s1", OriginInbox, it.ID, "")
+	for _, name := range []string{
+		"kb_search", "kb_get", "kb_update", "conversation_read", "agent_read", "agents_list",
+		"lark_search", "lark_chats", "phone_calendar_events", "inbox_folders",
+	} {
+		res := h.mcpCallWithOrigin(t.Context(), "server", "s1", name, json.RawMessage(`{}`), true, OriginInbox)
+		if !res.IsError {
+			t.Errorf("source_only allowed %s: %+v", name, res)
+		}
+	}
+	if len(ext.calls) != 0 {
+		t.Fatalf("refused source_only connector calls executed: %v", ext.calls)
+	}
+	for _, name := range []string{"inbox_suggest", "inbox_draft"} {
+		if _, refused := h.inboxModelRefusal(t.Context(), "server", "s1", OriginInbox, name); refused {
+			t.Errorf("source_only refused the suggestion tool %s", name)
+		}
+	}
+	res := h.mcpCallWithOrigin(t.Context(), "server", "s1", "lark_messages", json.RawMessage(`{"chat_id":"synthetic-group"}`), true, OriginInbox)
+	if res.IsError || toolText(res) != "read lark_messages" || len(ext.calls) != 1 {
+		t.Fatalf("allowlisted source read: %+v, calls=%v", res, ext.calls)
+	}
+}
+
+func TestSourceOnlyInboxToolPolicyRejectsSubscriptionReads(t *testing.T) {
+	h, _, it := handledHub(t)
+	ext := &policyExtensions{
+		read:       map[string]bool{"subscription_get": true},
+		connectors: map[string]bool{"subscription_get": false},
+	}
+	h.SetExtensions(ext)
+	h.setConfig(func(c *assistantwire.InboxConfig) {
+		c.Agent.ReadProfile = "source_only"
+		c.Agent.ConnectorTools = []string{"subscription_get"}
+	})
+	h.originSet(t.Context(), "server", "s1", OriginInbox, it.ID, "")
+	res := h.mcpCallWithOrigin(t.Context(), "server", "s1", "subscription_get", json.RawMessage(`{}`), true, OriginInbox)
+	if !res.IsError {
+		t.Fatalf("source_only allowed a non-connector subscription read: %+v", res)
+	}
+	if len(ext.calls) != 0 {
+		t.Fatalf("refused subscription read executed: %v", ext.calls)
+	}
+}
+
+func TestUnknownInboxReadProfileFailsClosed(t *testing.T) {
+	h, _, it := handledHub(t)
+	ext := &policyExtensions{read: map[string]bool{"lark_messages": true}}
+	h.SetExtensions(ext)
+	h.setConfig(func(c *assistantwire.InboxConfig) {
+		c.Agent.ReadProfile = "misspelled"
+		c.Agent.ConnectorTools = []string{"lark_messages"}
+	})
+	h.originSet(t.Context(), "server", "s1", OriginInbox, it.ID, "")
+	for _, name := range []string{"lark_messages", "kb_search", "inbox_folders"} {
+		if _, refused := h.inboxModelRefusal(t.Context(), "server", "s1", OriginInbox, name); !refused {
+			t.Errorf("an unknown read profile allowed %s", name)
+		}
 	}
 }
 
@@ -326,13 +404,15 @@ func TestInboxDeliverNotesReattestsSessionSendOrigin(t *testing.T) {
 // real session.send decoration omit the attestation so the node retains a persisted Inbox decision or fails closed.
 func TestInboxAttestationStoreErrorStaysUnknown(t *testing.T) {
 	h := agentHub(t)
+	noDirectionsTimers(h.Service)
 	const session = "inbox-origin-store-error"
 	h.f.setSessions("server", proto.Session{SessionID: session, Assistant: true, Status: proto.StatusWorking, Cwd: "/work"})
 	h.originSet(t.Context(), "server", session, OriginInbox, "lark:real-item:1", "")
+	waitFor(t, "the backfill's read of the to-dos", h.spaceBackfillScanIdle)
 	h.origins.mu.Lock()
 	h.origins.loaded, h.origins.m = false, nil
 	h.origins.mu.Unlock()
-	h.store = func() Store { return originErrorStore{h.st} }
+	h.setStore(func() Store { return originErrorStore{h.st} })
 	params, err := h.SendParams(t.Context(), SendParams{MachineID: "server", SessionID: session,
 		Params: map[string]any{"text": "Continue", "origin": OriginUser, "origin_known": true}})
 	if err != nil {

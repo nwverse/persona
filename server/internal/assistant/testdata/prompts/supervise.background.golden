@@ -1,5 +1,5 @@
 📋 督办：你派出去的任务有 2 个要你处理
-（这是 Persona 的督办消息，不是用户发的。这是旧后台任务的收尾消息；新任务归主对话。）
+（这是 Persona 的督办消息，不是用户发的。仅收尾旧任务；新任务归主管或主对话。）
 Question routing: timeout_minutes=5, low_distraction=false.
 <persona-supervision level="triage" />
 
@@ -9,6 +9,6 @@ Question routing: timeout_minutes=5, low_distraction=false.
      用哪个分支？
 
 2. 任务「修登录崩溃」（t1，signal=review）：待逐项复核，不代表完成；在 Mac session_id=a1b2c3d4
-   验收标准：PR 合并到 main
+   验收标准用 todo_get 取原文
    Agent 最后说的：
    做完了，PR 已合并

@@ -12,6 +12,7 @@ An enum-like value that names a host or URL (git.example.invalid:team/repo, http
 After running it, review the output by hand before committing: no internal domains / IPs, host names, people, emails,
 repository names or tokens. `--words` lists every string kept as is: vocabulary words on the first line, then one line
 each for object keys, enum values, versions, model names, the mcp__ prefix, tag and attribute names, file extensions.
+The output file is replaced only when the conversion finishes successfully.
 """
 from __future__ import annotations
 
@@ -22,7 +23,9 @@ import os
 import random
 import re
 import secrets
+import stat
 import sys
+import tempfile
 
 PNG_1x1 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 MAX_STR = 6000  # longer strings are cut (the parser's own clipping has unit tests)
@@ -30,7 +33,7 @@ MAX_STR = 6000  # longer strings are cut (the parser's own clipping has unit tes
 ENUM_KEYS = {
     "type", "subtype", "role", "kind", "phase", "status", "level", "commandMode", "operation", "userType", "entrypoint",
     "permissionMode", "stop_reason", "stop_sequence", "media_type", "effort", "mode", "source", "hookEvent", "approval_policy",
-    "change", "channel", "cronKind", "taskKind", "stop_type", "service_tier", "action",
+    "change", "channel", "cronKind", "taskKind", "stop_type", "service_tier", "action", "reasoning_effort",
 }
 VERSION_KEYS = {"version", "cli_version"}
 MODEL_RE = re.compile(r"(claude|gpt|o\d|codex)[A-Za-z0-9._\[\]-]*")
@@ -52,7 +55,7 @@ Background command event stream ended stopped was exit code finished started tim
 UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 PREFIXED_ID_RE = re.compile(r"\b((?:msg|toolu|srvtoolu|call|req|fc|rs|exec|ws)_?-?)[A-Za-z0-9]{8,}\b")
 IPV4_RE = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
-TS_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z")
+TS_RE = re.compile(r"\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})")
 TAG_RE = re.compile(r"</?([A-Za-z][A-Za-z0-9_-]*)((?:\s+[A-Za-z_-]+=\"[^\"]*\")*)\s*/?>")
 WORD_RE = re.compile(r"[A-Za-z0-9_]+|[^\x00-\x7f\s\W]+", re.UNICODE)
 
@@ -67,6 +70,7 @@ class Redactor:
         self.salt = secrets.token_hex(8)
         self.words: dict[str, str] = {}
         self.ids: dict[str, str] = {}
+        self.shifted_ts: set[str] = set()
         self.paths: dict[str, str] = {}
         self.kept: dict[str, set[str]] = {}  # why (word, key, enum, ...) -> strings kept as is, for --words
         self.shift: dt.timedelta | None = None
@@ -127,11 +131,16 @@ class Redactor:
 
     def ts(self, s: str) -> str:
         # Go writes 0–9 fraction digits; fromisoformat takes only 3 or 6 before Python 3.11.
+        s = re.sub(r"^(\d{4}-\d{2}-\d{2})[Tt]", r"\1T", s)
         s = re.sub(r"\.(\d+)", lambda m: "." + m.group(1)[:6].ljust(6, "0"), s)
-        t = dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
+        if s[-1] in ("Z", "z"):
+            s = s[:-1] + "+00:00"
+        t = dt.datetime.fromisoformat(s).astimezone(dt.timezone.utc)
         if self.shift is None:
             self.shift = dt.datetime(2026, 1, 1, tzinfo=dt.timezone.utc) - t.replace(microsecond=0)
-        return (t + self.shift).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        out = (t + self.shift).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        self.shifted_ts.add(out)
+        return out
 
     def text(self, s: str) -> str:
         if len(s) > MAX_STR:
@@ -154,9 +163,10 @@ class Redactor:
         return "".join(out)
 
     def words_in(self, s: str) -> str:
-        # Keep remapped ids (already random) intact; everything else word by word.
+        # Keep remapped ids and shifted timestamps intact; everything else word by word.
+        kept = [re.escape(v) for v in (*self.ids.values(), *self.shifted_ts)]
         parts, pos = [], 0
-        for m in re.finditer("|".join(re.escape(v) for v in self.ids.values()) or r"(?!x)x", s):
+        for m in re.finditer("|".join(kept) or r"(?!x)x", s):
             parts.append(WORD_RE.sub(lambda w: self.pseudo(w.group(0)), s[pos:m.start()]))
             parts.append(m.group(0))
             pos = m.end()
@@ -173,11 +183,15 @@ class Redactor:
             return v
         if key in DROP_KEYS:
             return ""
-        if key == "data" and parent is not None and parent.get("type") == "base64":
+        mime = (parent.get("mime") or parent.get("mimeType") or parent.get("media_type")) if parent is not None else None
+        if key == "data" and parent is not None and (
+            parent.get("type") in ("base64", "image")
+            or (isinstance(mime, str) and mime.startswith("image/"))
+        ):
             return PNG_1x1
         if v.startswith("data:image/"):
             return "data:image/png;base64," + PNG_1x1
-        if key in ("timestamp",) and TS_RE.fullmatch(v):
+        if key in ("timestamp", "created_at", "updated_at") and TS_RE.fullmatch(v):
             return self.ts(v)
         if UUID_RE.fullmatch(v) or PREFIXED_ID_RE.fullmatch(v):
             return self.new_id(v)
@@ -222,11 +236,41 @@ def parse_spec(spec: str):
     if not path or not re.fullmatch(r"[0-9,\-]+", ranges):
         return spec, None
     want = []
-    for r in ranges.split(","):
-        a, _, b = r.partition("-")
-        want.append(range(int(a), int(b or a) + 1))
+    for selection in ranges.split(","):
+        match = re.fullmatch(r"([0-9]+)(?:-([0-9]+))?", selection)
+        if not match:
+            raise ValueError("expected comma-separated line numbers or START-END ranges")
+        start, end = int(match[1]), int(match[2] or match[1])
+        if not 1 <= start <= end:
+            raise ValueError("line numbers must be positive and each range must be in ascending order")
+        want.append(range(start, end + 1))
     want.sort(key=lambda interval: interval.start)
     return path, want
+
+
+def redact_sources(sources, out, redactor, skip_types):
+    count = 0
+    for path, want in sources:
+        ranges = iter(want or ())
+        active = next(ranges, None)
+        with open(path, errors="replace") as f:
+            for i, line in enumerate(f, 1):
+                if want is not None:
+                    while active is not None and i >= active.stop:
+                        active = next(ranges, None)
+                    if active is None:
+                        break
+                    if i < active.start:
+                        continue
+                try:
+                    entry = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(entry, dict) or entry.get("type") in skip_types:
+                    continue
+                out.write(json.dumps(redactor.obj(entry), ensure_ascii=False, separators=(",", ":")) + "\n")
+                count += 1
+    return count
 
 
 def main():
@@ -235,35 +279,31 @@ def main():
     ap.add_argument("--words", action="store_true", help="print the words kept as is, for review")
     ap.add_argument("--skip-type", action="append", default=["api-request", "api-request-blob", "api-request-shape"],
                     help="drop lines of this type (default: the big api-request blobs)")
-    ap.add_argument("src", nargs="+", help="file.jsonl[:ranges] (1-based line numbers)")
+    ap.add_argument("src", nargs="+", help="file.jsonl[:ranges] (comma-separated 1-based lines or ascending START-END ranges)")
     args = ap.parse_args()
-    sources = [parse_spec(spec) for spec in args.src]
-    if os.path.exists(args.out) and any(os.path.samefile(args.out, path) for path, _ in sources):
-        ap.error("output must not refer to an input transcript")
-
+    try:
+        sources = [parse_spec(spec) for spec in args.src]
+    except ValueError as error:
+        ap.error(f"invalid line selection: {error}")
+    output = os.path.realpath(args.out)
     r = Redactor()
-    n = 0
-    with open(args.out, "w") as out:
-        for path, want in sources:
-            ranges = iter(want or ())
-            active = next(ranges, None)
-            with open(path, errors="replace") as f:
-                for i, line in enumerate(f, 1):
-                    if want is not None:
-                        while active is not None and i >= active.stop:
-                            active = next(ranges, None)
-                        if active is None:
-                            break
-                        if i < active.start:
-                            continue
-                    try:
-                        e = json.loads(line)
-                    except ValueError:
-                        continue
-                    if not isinstance(e, dict) or e.get("type") in args.skip_type:
-                        continue
-                    out.write(json.dumps(r.obj(e), ensure_ascii=False, separators=(",", ":")) + "\n")
-                    n += 1
+    try:
+        mode = None
+        if os.path.exists(output):
+            mode = os.stat(output).st_mode
+            if not stat.S_ISREG(mode):
+                ap.error("output must be a regular file")
+            if any(os.path.samefile(output, path) for path, _ in sources):
+                ap.error("output must not refer to an input transcript")
+        with tempfile.TemporaryDirectory(prefix=".redact-", dir=os.path.dirname(output)) as directory:
+            pending = os.path.join(directory, "output.jsonl")
+            with open(pending, "w") as out:
+                n = redact_sources(sources, out, r, args.skip_type)
+            if mode is not None:
+                os.chmod(pending, stat.S_IMODE(mode))
+            os.replace(pending, output)
+    except OSError as error:
+        ap.error(f"cannot redact transcript: {error}")
     print(f"wrote {n} lines to {args.out}", file=sys.stderr)
     if args.words:
         print(r.kept_report(), file=sys.stderr)

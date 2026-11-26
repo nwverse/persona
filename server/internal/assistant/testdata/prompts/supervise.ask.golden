@@ -1,10 +1,10 @@
 📋 督办：你派出去的任务有 1 个要你处理
-（这是 Persona 的督办消息，不是用户发的。这里只督办用户显式挂给你的手动 Agent；新 task_plan 任务归主对话。）
+（这是 Persona 的督办消息，不是用户发的。你督办自己派出和转交给你的任务；仅需用户决定时升级。）
 Question routing: timeout_minutes=5, low_distraction=false.
 <persona-supervision level="triage" />
 
 1. 任务「修登录崩溃」（todo_1，signal=ask）：它的 Agent 有卡片在等，先交给你处理，用户还没收到；在 box session_id=a1b2c3d4
-   验收标准：PR 合并到 main
+   验收标准用 todo_get 取原文
    - 卡片 interaction_id=ix_1（machine=box，问题，session_id=a1b2c3d4）：
      - 用哪个分支？（选项：main / feat/x）
    - 卡片 interaction_id=ix_2（machine=box，权限，session_id=e5f6a7b8，下一层没有及时处理，上交到你这里）：

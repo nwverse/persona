@@ -132,7 +132,7 @@ func (h *Hub) historySessions(w http.ResponseWriter, r *http.Request, named stri
 	states := make([][]sessionhistory.SourceState, len(machines))
 	var wg sync.WaitGroup
 	for i, m := range machines {
-		wg.Go(func() { parts[i], states[i] = h.machineHistory(r.Context(), m, q, after, restrictedAgentData(r)) })
+		wg.Go(func() { parts[i], states[i] = h.machineHistory(r.Context(), m, q, after, h.spacesHidden(r)) })
 	}
 	wg.Wait()
 	resp := historyResponse{Sessions: []sessionhistory.Row{}, History: historyMeta{

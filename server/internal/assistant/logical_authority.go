@@ -207,6 +207,11 @@ func (s *Service) NodeAnswer(ctx context.Context, machine, method string, params
 }
 
 func (s *Service) NodeRequest(ctx context.Context, machine, method string, params json.RawMessage) (any, bool, error) {
+	// A direction request's session_id names the outside coding Agent it reports for (#8236), never the calling
+	// conversation, so it is not remapped or refused as a logical caller.
+	if method == "direction.create" || method == "direction.progress" {
+		return s.nodeRequest(ctx, machine, method, params)
+	}
 	return s.logicalNodeRequest(ctx, machine, method, params, s.nodeRequest)
 }
 

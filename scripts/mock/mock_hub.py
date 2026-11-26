@@ -60,13 +60,15 @@ def features():
                 ["assistant_compact", "assistant_main_new", "assistant_main_clear"] if os.environ.get("MOCK_MAIN_ACTIONS") == "1" else []) + (
                 ["messaging"] if os.environ.get("MOCK_MESSAGING") == "1" else []) + (
                 ["conversation_origin"] if os.environ.get("MOCK_AUTO_CONVERSATIONS") == "1" else []) + (
-                ["sessions_list", "sessions_lookup", "sessions_hierarchy", "sessions_todo", "sessions_quick_filters", "sessions_just_finished", "sessions_agents_only"] if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
+                (["sessions_list", "sessions_lookup"] + (["sessions_hierarchy"] if NET["hierarchy"] else []) + ["sessions_todo", "sessions_quick_filters", "sessions_just_finished", "sessions_agents_only"]) if os.environ.get("MOCK_SESSIONS_LIST") == "1" else []) + (
                 ["sessions_catalog"] if CATALOG else []) + (
                 ["sessions_side_fold"] if SIDE_FOLD else []) + (
                 ["preview"] if os.environ.get("MOCK_PREVIEW") else []) + (
                 ["task_cron"] if os.environ.get("MOCK_CRON") == "1" else []) + (
                 [] if os.environ.get("MOCK_TODO_SEEN") == "off" else ["todo_seen"]) + (
-                [] if os.environ.get("MOCK_LOOK_UPLOADS") == "off" else ["look_uploads"]) + (
+                ([] if os.environ.get("MOCK_LOOK_UPLOADS") == "off" else
+                 ["look_uploads"] if os.environ.get("MOCK_LOOK_UPLOADS") == "basic" else
+                 ["look_uploads", "look_uploads_states"])) + (
                 [] if os.environ.get("MOCK_TODO_IMAGES") == "off" else ["todo_images"])
 
 
@@ -478,6 +480,7 @@ for _mid in filter(None, os.environ.get("MOCK_OFFLINE_MACHINES", "").split(","))
     for _m in MACHINES:
         if _m["id"] == _mid:
             _m.update(online=False, error="ssh: connect to host %s port 22: Operation timed out" % _mid, last_seen=ago(hours=1))
+# Load-queue selection and its help text live in machine_load_mock (a registered mock domain, #12519).
 # MOCK_LONG_OS=1: the server's OS has a long name, so its card's chips (OS, herdr, claude) do not fit on one line.
 if os.environ.get("MOCK_LONG_OS"):
     SYSTEMS["server"]["name"] = "Example GNU/Linux 2 (codename)"
@@ -546,6 +549,7 @@ def metric_at(mid, t):
     rx = max(0.0, {"server": 2.4e6, "macbook": 4.5e5, "studio": 1.2e6, "nas": 3e5}[template] * (1 + 0.6 * wave + 0.5 * h))
     tx = rx * {"server": 0.35, "macbook": 0.2, "studio": 0.6, "nas": 1.4}[template] * (0.7 + 0.6 * h)
     load = sys_["cores"] * cpu / 100 * (0.9 + 0.3 * h)
+    cpu, load = machine_alerts.queued(mid, cpu, load, sys_["cores"], h)
     disk_frac = {"server": 0.64, "macbook": 0.71, "studio": 0.38, "nas": 0.93}[template]
     if concern_level == "critical":
         disk_frac = 0.95
@@ -865,6 +869,16 @@ SESSIONS = [
     sess("macbook", RECIPE, "菜谱网站加搜索", "/Users/me/code/recipes", "offline", "offline", "", 0, "", 0, 60 * 26,
          "搜索做好了，支持按食材和用时筛选。", space_kind=None, space_id=None, space_name=None, slot_id=None, slot_name=None),
 ]
+
+# MOCK_CODEX_ROUTE=terminal: the Codex agent is a Codex 0.169 or later in its pane, so it offers its model and thinking
+# effort as an app-server thread does (#12572, docs/integrations/codex.md "On the terminal route"): capabilities.model
+# and the efforts of the model it runs; the node types Codex's own /model to apply a pick.
+if os.environ.get("MOCK_CODEX_ROUTE") == "terminal":
+    for _s in SESSIONS:
+        if _s["session_id"] == ORDERS:
+            _s.update(launcher="codex", effort="medium", efforts=["low", "medium", "high", "xhigh"],
+                      capabilities={"read": True, "send": True, "interrupt": True, "approve": True, "terminal": True,
+                                    "modes": False, "model": True})
 
 if os.environ.get("MOCK_NEXT_SUGGESTIONS") == "1":  # see NEXT_SUGGESTIONS
     for _s in SESSIONS:
@@ -2072,6 +2086,8 @@ LN = {"on": bool(os.environ.get("MOCK_LN"))}
 # Delete conversation (DELETE /api/v1/sessions/{mid}/{sid}): what was taken out, so /mock/reset puts it back.
 SESSION_DELETED = []
 PINS = {"spaces": ["macbook/weather"], "sessions": []}  # GET / PUT /api/v1/pins: what the Agents list keeps on top
+# GET / PUT /api/v1/agents/display-settings (server/internal/assistant/agents_display.go): both new switches are off by default
+AGENTS_DISPLAY = {"show_botmux": True, "configured": False, "use_herdr_tab_name": False, "sort_by_activity": False, "show_filter": False}
 
 
 def mark_seen(sid):
@@ -2155,10 +2171,10 @@ def mock_png(w=96, h=64):
 
 
 # MOCK_PERSONA_QUEUE=1 (#4342): the first Persona chat is at work with two of the user's messages queued (the second
-# went with a photo, so its words are the apps' stand-in) and one from another conversation, which the assistant holds
-# until the turn ends (`queued_relayed`: only shown and copied). POST …/queue answers the photos with the queue.
+# went with a photo, so its words are the apps' stand-in) and one from another conversation, kept for its next
+# message (`queued_relayed`: only shown and copied). POST …/queue answers the photos with the queue.
 QUEUED_PHOTOS = {"请看图片": [{"mime": "image/png", "data": mock_png()}]}
-PERSONA_QUEUE_MESSAGES = ["顺便把下周三的会也挪到下午", "请看图片", "来自「早报 · 周三」：会议纪要整理好了，要不要发给参会的人？"]
+PERSONA_QUEUE_MESSAGES = ["顺便把下周三的会也挪到下午", "请看图片", "来自「早报 · 周三」（不唤醒）：会议纪要整理好了，要不要发给参会的人？"]
 if os.environ.get("MOCK_PERSONA_QUEUE") == "1":
     ASSISTANT[0].update({"state": "working", "status": "working", "queued_relayed": 1,
                          "queued": list(PERSONA_QUEUE_MESSAGES)})
@@ -2285,6 +2301,8 @@ ASSISTANT += [] if os.environ.get("MOCK_HEALTH_EMPTY") else [
 # The health space's reports/ (docs/assistant/health.md"Health reports"): originals with their records, an original not summarized yet,
 # a record alone (a photo sent in a conversation).
 HEALTH_REPORT_RECORD = "报告日期：2026-10-28\n机构：示例体检中心\n类型：年度体检\n\n| 项目 | 结果 | 单位 | 参考范围 | 异常 |\n| --- | --- | --- | --- | --- |\n| 总胆固醇 | 5.8 | mmol/L | < 5.2 | 偏高 |\n| 低密度脂蛋白 | 3.6 | mmol/L | < 3.4 | 偏高 |\n| 空腹血糖 | 5.1 | mmol/L | 3.9–6.1 | |\n\n结论：血脂略高，建议三个月后复查。\n"
+
+
 HEALTH_REPORTS_DIR = "/home/me/.persona/health/reports/"
 HEALTH_REPORTS = [
     {"name": "2026 年度体检-20261106-093000.pdf", "title": "2026 年度体检", "path": HEALTH_REPORTS_DIR + "2026 年度体检-20261106-093000.pdf",
@@ -2648,6 +2666,8 @@ ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "A
                     # prefers (#3659); fixing unhelpful session names (#4965): on, at most once, no regular updates.
                     # Left out with MOCK_LEGACY_HUB (Agent Follow-Up, #7005).
                     "start_requested_tasks": True, "task_workspace_preference": "prefer-existing",
+                    # New conversations without an explicit choice start in Ask First until the owner changes this.
+                    "default_permission_mode": "default",
                     "agent_auto_naming": True, "agent_auto_naming_max": 1, "agent_auto_naming_interval_hours": 0,
                     # The role a meeting recording pre-selects (#2981; MOCK_MEETING_ATTENDANCE_DEFAULT=listener starts there)
                     "meeting_attendance_default": os.environ.get("MOCK_MEETING_ATTENDANCE_DEFAULT", "off"),
@@ -2684,6 +2704,7 @@ def assistant_state(space="", archived=False):
                    main_supervises_own_tasks=cfg["main_supervises_own_tasks"], next_suggestions=cfg["next_suggestions"],
                    claude_interactive=cfg["claude_interactive"],
                    start_requested_tasks=cfg["start_requested_tasks"], task_workspace_preference=cfg["task_workspace_preference"],
+                   default_permission_mode=cfg["default_permission_mode"],
                    agent_auto_naming=cfg["agent_auto_naming"], agent_auto_naming_max=cfg["agent_auto_naming_max"],
                    agent_auto_naming_interval_hours=cfg["agent_auto_naming_interval_hours"],
                    **({} if os.environ.get("MOCK_RECENT_TASK_CHATS") == "absent" else {"recent_task_chats": cfg["recent_task_chats"]}))
@@ -4245,7 +4266,7 @@ def recording_minutes_next(rid):
 
 
 def minutes_span(body):
-    """`when`, `start` and `end` as the hub writes them (server/internal/kb/minutes.go `minutesWhen`, #4713): the recording's
+    """`when`, `start` and `end` as the hub writes them (server/internal/modules/recording/writers/minutes.go `minutesWhen`, #4713): the recording's
     own start to its end (`duration`, or `ended_at` when later; at least a minute) in the local zone. `when` adds the end's
     date when it is another day; `start` / `end` are RFC 3339 with the offset, whole seconds, for the apps to format."""
     def at(v):
@@ -4477,7 +4498,7 @@ def minutes_overview(m, segs, lang):
 
 
 def minutes_markdown(m, body, lang, ov=None):
-    """minutes.md as the hub writes it (kb/minutes.go renderMinutes): with clock times in the local zone, sections with
+    """minutes.md as the hub writes it (modules/recording/writers/minutes.go renderMinutes): with clock times in the local zone, sections with
     nothing left out, the fixed words from the hub's kb-minutes.json in the minutes' language. With the overview ov (the
     overview shape's; a malformed one is never laid out) it follows the contract's "Markdown" (#6563): the headline, the
     core conclusions, the topics under their group headings (or as the sections with one untitled group) with decisions
@@ -4952,7 +4973,7 @@ def recording_named(out, body, rid=None):
 
 
 def recording_kind(body):
-    """An upload's kind as the hub's clean() reads it (kb/recordings.go): trimmed and lowercased, absent or "" a note;
+    """An upload's kind as the hub's clean() reads it (modules/recording/writers/recordings.go): trimmed and lowercased, absent or "" a note;
     None when it is neither (a 400)."""
     kind = body.get("kind")
     if kind is None: return "note"
@@ -4963,7 +4984,7 @@ def recording_kind(body):
 
 def meeting_attendance(body):
     """The role an upload puts in effect, the session it names (None: the main chat, and always when the role is off) and
-    why the role is off when another was asked for, as the hub's normalizeAttendance (kb/live.go) in its order: a role off
+    why the role is off when another was asked for, as the hub's normalizeAttendance (modules/recording/writers/live.go) in its order: a role off
     or absent says nothing whatever the session; then the role, the kind and the session are checked. A problem with these
     two fields never fails the upload (meeting-minutes.md "On PUT"). A watch recording is not refused: the phone never
     gives it a role."""
@@ -5193,7 +5214,7 @@ def meeting_ask(h, st, body, rec):
 
 
 # The meeting conversation (#3862, docs/assistant/meeting-minutes.md "Phase 1: the meeting conversation"), as the hub
-# branch has it (server/internal/assistant/meeting_*.go, server/internal/kb/meeting.go, hub/meeting_receipts.go): the
+# branch has it (server/internal/modules/recording/meeting_*.go, server/internal/modules/recording/writers/meeting.go, hub/meeting_receipts.go): the
 # feature `meeting_conversation` (only beside meeting_attendance); the upload's `room` and `private`, kept apart from the
 # #2981 fields as meeting.json is (a recording that once had `room` stays a room meeting, its role the room's); one room
 # conversation per attended room meeting (an assistant conversation, origin `meeting`, header first); …/ask answered in
@@ -5845,7 +5866,7 @@ def meeting_receipt(h, kind, raw, run):
     return h.send_json(out, status) or True
 
 
-# Handing a meeting to an Agent after it (#8852, assistant/meeting_handoff.go): POST /api/v1/recordings/{id}/handoff sends
+# Handing a meeting to an Agent after it (#8852, modules/recording/meeting_handoff.go): POST /api/v1/recordings/{id}/handoff sends
 # the meeting to an Agent listed here as the owner's own message, after its checks (503, 404 / 410, 400, 409
 # meeting_running, 409 no_material), and keeps each try in MEETING_HANDOFFS (oldest first, the last 20), shown as
 # detail.meta.handoffs. As attending's rules: a Persona conversation is not_agent; Allow All or a machine not listed
@@ -6731,6 +6752,9 @@ MEETING_TRANSCRIPTION = os.environ.get("MOCK_NO_MEETING_TRANSCRIPTION") != "1"
 TRANSCRIPTION_MODE = {"ready": os.environ.get("MOCK_MEETING_TRANSCRIPTION_READY") != "0", "upstream": "ok",
                       "fatal": "", "line_seconds": 4, "final_seconds": 2}
 TRANSCRIPTIONS = {}  # Protected by RECORDINGS_LOCK, including socket callbacks and final-pass timers.
+# The final pass's progress (#13461, docs/assistant/meeting-minutes.md "Gaps and the final pass"): while the mock's own
+# pass runs, transcription carries final_done (0: it replays in one step) and end. A pass in progress on a recording without
+# a transcription of its own, for shots of the minutes line, is MOCK_MEETING_FINISHING's (meeting_finishing_mock.py).
 TRANSCRIPTION_SCRIPT = ("我们先把 export cap 保持在 4 MB。", "Let's revisit pricing next week.",  # i18n-ignore: synthetic speech, never translated
                         "Alice 负责检查 export test。", "Bo will share the notes tomorrow.")  # i18n-ignore: synthetic speech
 
@@ -6786,7 +6810,7 @@ def transcription_union(spans, margin=0):
     return out
 
 
-# Persona's echo (#5905, meeting-minutes.md "Persona's echo"), the hub's rule (kb/echo.go) for its own sentences in hub
+# Persona's echo (#5905, meeting-minutes.md "Persona's echo"), the hub's rule (modules/recording/writers/echo.go) for its own sentences in hub
 # mode: a line overlapping a speaking span widened by 0.5 s whose words are the answer said there (60% of its distinct
 # character bigrams, after NFKC, lower case, letters and decimal digits only); a span without text keeps the time rule
 # from before (half of the line inside, no margin). Checked against spec/fixtures/meeting-echo by the transcription tests.
@@ -6875,11 +6899,14 @@ def transcription_gaps(t):
 
 def transcription_view(rid):
     t = TRANSCRIPTIONS.get(rid)
-    if not meeting_transcription_on() or not t: return None
+    if not meeting_transcription_on(): return None
+    if not t: return None
     if t["mode"] == "device": return {"mode": "device"}
     out = {"mode": "hub", "state": t["state"], "gaps": transcription_gaps(t) if rid not in RECORDINGS_TRIMMED else []}
     if t.get("problem"): out["problem"] = t["problem"]
     if t.get("fallback"): out["fallback"] = True
+    if t["state"] == "finishing" and t.get("final_started") and transcription_number(t.get("end")) and t["end"] > 0:
+        out["final_done"], out["end"] = min(t.get("final_done", 0), t["end"]), t["end"]
     return out
 
 
@@ -7100,11 +7127,13 @@ def transcription_finish_start(rid, force=False):
     if not t or t["mode"] != "hub" or t.get("final_started") or not t.get("complete_at"): return
     if not force and (t.get("socket") or transcription_gaps(t)): return
     t["final_started"] = True
+    t["final_done"] = 0
     t["final_gaps"] = transcription_gaps(t)
     if t.get("socket"): t["socket"]["fail"]("transcription_final")
     if not t["held"]:
         transcription_finish(rid, t)
         return
+    transcription_changed(rid)  # the pass's progress (final_done) from its start
     timer = threading.Timer(TRANSCRIPTION_MODE["final_seconds"], transcription_finish, args=(rid, t))
     timer.daemon = True; timer.start()
 
@@ -7134,7 +7163,9 @@ def transcription_finish(rid, expected):
 def transcription_configured():
     """What the switches make of the upstream now: the problem a job would have."""
     upstream = TRANSCRIPTION_MODE["upstream"]
+    # The kinds the hub passes on (#13446, spec/fixtures/meeting-transcription-problems): refused, busy, out of reach, failed.
     return ("upstream_unavailable" if not transcription_ready() or upstream == "unavailable" else
+            "upstream_forbidden" if upstream == "forbidden" else "upstream_busy" if upstream == "busy" else
             "upstream_failed" if upstream == "failed" else "no_interim" if upstream == "no_interim" else None)
 
 
@@ -7264,7 +7295,7 @@ def transcription_control(h, method):
         except ValueError: body = None
         if not isinstance(body, dict): return h.send_json({"code": "bad_request"}, 400) or True
         if any(k in body and type(body[k]) is not bool for k in ("on", "ready")) or \
-                ("upstream" in body and body["upstream"] not in ("ok", "unavailable", "failed", "no_interim")) or \
+                ("upstream" in body and body["upstream"] not in ("ok", "forbidden", "busy", "unavailable", "failed", "no_interim")) or \
                 ("fatal" in body and not isinstance(body["fatal"], str)) or \
                 any(k in body and (not transcription_number(body[k]) or body[k] < (1 / 16000 if k == "line_seconds" else 0)) for k in ("line_seconds", "final_seconds")):
             return h.send_json({"code": "bad_request"}, 400) or True
@@ -7371,7 +7402,7 @@ def transcription_socket(h, rid):
                     if end <= edge:
                         state["sentence"] = max(state["sentence"], edge)
                         continue
-                    if configured in ("upstream_unavailable", "upstream_failed"):
+                    if configured in ("upstream_forbidden", "upstream_busy", "upstream_unavailable", "upstream_failed"):
                         state["sentence"] = end
                         continue
                     if at < edge: state["sentence"] = max(state["sentence"], edge)
@@ -7513,6 +7544,7 @@ def recordings_route_locked(h, method, p):
             detail = dict(KB_DETAIL[("recordings", rid)], kind="recordings", id=rid,
                           path="/home/me/.persona/data/recordings/" + rid)
             out = {"detail": detail}
+            if not os.environ.get("MOCK_LEGACY_HUB"): out["supports_expected_pinned"] = True
             word = parse_qs(urlparse(h.path).query).get("q", [""])[0]
             if word: out["matches"] = day_recap_matches(rid, word)
             return h.send_json(out) or True
@@ -7695,7 +7727,7 @@ def recordings_route_locked(h, method, p):
     if have and (have.get("kind") == "day") != (kind == "day"):
         return h.send_json({"error": "recording kind cannot change to or from day", "code": "kind_changed"}, 409) or True
     if kind == "day": return day_put(h, rid, body)
-    if rid in RECORDINGS_TRIMMED:  # the hub takes no transcript back (kb/recordings.go putRecording)
+    if rid in RECORDINGS_TRIMMED:  # the hub takes no transcript back (modules/recording/writers/recordings.go putRecording)
         out = {"id": rid, "revision": body["revision"], "status": "expired"}
         if MEETING_ATTENDANCE: out["attendance"] = "off"
         if (v := upload_room_view(rid, body)) is not None: out["room"] = v
@@ -8594,6 +8626,12 @@ def live_step_page_sent(sid):
 # receipt, an answered card, a message routed straight to a task, a reminder done on the phone, and an open plan at the
 # end. Served at /api/v1/assistant/conversations/{id}/feed and /api/v1/task-plans/…; the tasks are todos with origin.
 MOCK_TASKS = os.environ.get("MOCK_TASKS") == "1"
+# MOCK_START_REMEDIES=1 (with MOCK_TASKS=1, #10365): coded start failures, a launcher alternative and both kinds of
+# startup question. The hello features and routes are wired below with the task area; the fixtures live here with the plans.
+START_REMEDIES = os.environ.get("MOCK_START_REMEDIES") == "1"
+TOOL_SEARCH = os.environ.get("MOCK_TOOL_SEARCH") == "1"
+START_REMEDY_LOG = []
+START_QUESTION_SESSION = "a1f3c2d4-0000-4000-8000-000000000104"
 TASK_PLANS = {}
 TASK_FEED = {}
 if MOCK_TASKS:
@@ -8790,6 +8828,41 @@ if MOCK_TASKS:
             "progress": [{"id": "todo_task_widget", "title": "小组件横屏崩溃", "stage": "develop"}, {"id": "todo_task_tests", "title": "补齐网络层的单元测试"}],
             "progress_total": 2}),
     ]
+    if START_REMEDIES:
+        # Three failed starts: a terminal launcher with another launcher suggested, a kept worktree on a to-do whose
+        # own plan_id is empty (the plan still names its todo_id), and a shell question answered by the task route.
+        _remedy_specs = [
+            ("launcher", "Start the release checks", "plan_remedy_launcher", "plan_remedy_launcher",
+             "launcher_missing", {"launcher": "cc_glm", "where": "terminal"}, ["codex"]),
+            ("worktree", "Open the release workspace", "plan_remedy_worktree", "",
+             "worktree_path_taken", {"path": "/Users/me/code/weather-release"}, []),
+            ("question", "Prepare the demo workspace", "plan_remedy_question", "plan_remedy_question",
+             "shell_waiting", {"line": "Run zsh-newuser-install now?", "choices": "y,n,q", "kind": "zsh_newuser",
+                               "default": "n", "kept_until": later(hours=2), "screen": "zsh-newuser-install: (y/n/q)"}, []),
+        ]
+        for _n, (_slug, _title, _pid, _todo_pid, _code, _args, _retry) in enumerate(_remedy_specs):
+            _tid = "todo_remedy_" + _slug
+            _raw = {"launcher_missing": "zsh:1: command not found: cc_glm",
+                    "worktree_path_taken": "worktree path already exists: /Users/me/code/weather-release",
+                    "shell_waiting": "the terminal is waiting for an answer"}[_code]
+            _todo = dict(_task_todo(_tid, _title, "Synthetic start remedy fixture.", "macbook", "",
+                                    "/Users/me/code/weather", 1 + _n / 10, _todo_pid),
+                         done_at=ago(minutes=1 + _n / 10), start_error=_raw, agents=[])
+            TODOS_INIT.append(_todo)
+            TODOS.append(copy.deepcopy(_todo))
+            _pt = dict(_ptask(_title, False, "Start-remedy visual fixture.", _tid), error=_raw,
+                       error_code=_code, error_args=_args)
+            if _retry:
+                _pt["retry_with"] = _retry
+            TASK_PLANS[_pid] = _plan(_pid, "started", 2 + _n / 10, [_pt])
+            TASK_FEED[ASK1] += [_feed("feed_remedy_plan_" + _slug, 0.31 - _n / 100, "plan", _pid),
+                                _feed("feed_remedy_task_" + _slug, 0.30 - _n / 100, "task", _tid)]
+        SESSIONS.append(sess("macbook", START_QUESTION_SESSION, "Answer the terminal setup question", "/Users/me/code/weather",
+                             "offline", "offline", "weather", 9, "remedy", 9, 1, "",
+                             start_error="the terminal is waiting for an answer", start_error_code="shell_waiting",
+                             start_error_args={"line": "Trust this new host key?", "choices": "yes,no", "kind": "ssh_host_key",
+                                               "kept_until": later(hours=2), "screen": "Host key fingerprint: SHA256:example"}))
+        ITEMS[START_QUESTION_SESSION] = []
     # MOCK_BRIEF_SETUP=1 (#5085, #5804, docs/assistant/assistant.md "Recommended setup"): the briefing is the week's
     # first, so its `brief` item carries the computed setup lines, in the hub's own words
     # (server/internal/i18n/locales/en/assistant-setup_suggest.json): one with a settings page in every app (the triage's
@@ -9221,6 +9294,14 @@ if MOCK_TASKS:
             it("user", "text", 4.8, text=_quiet, injected={"kind": "system", "state": "supervise", "level": "triage", "line": "督办：检查示例任务"}),
             it("assistant", "tool_use", 4.7, tool_use_id="mock-supervision-read", tool_name="Bash", tool_input={"command": "printf 'synthetic checks passed'", "description": "Inspect synthetic task checks"}),
             it("user", "tool_result", 4.6, tool_use_id="mock-supervision-read", text="synthetic checks passed"),
+        ]
+        ITEMS[ASK1] += tool("mcp__persona__agent_send", {"machine": "server", "session_id": TESTS, "text": "Continue the synthetic checks.", "task": {"title": "整理发布说明"}},
+                            "It is now your task todo_task_release.", 4.65)
+        ITEMS[ASK1] += tool("mcp__persona__conversation_send", {"id": "example-conversation", "text": "Synthetic checks are complete."},
+                            "Sent to the example conversation.", 4.62)
+        ITEMS[ASK1] += tool("mcp__persona__interaction_answer", {"interaction_id": "mock-supervision-question", "approve": True},
+                            "Answered on behalf of the user.", 4.58)
+        ITEMS[ASK1] += [
             it("assistant", "text", 4.5, text="示例任务的测试通过，无需你处理。"),
             it("assistant", "tool_use", 4.4, tool_use_id="mock-supervision-finish", tool_name="mcp__persona__supervision_finish", tool_input={"visibility": "silent", "summary": "Synthetic checks passed"}),
             it("user", "tool_result", 4.3, tool_use_id="mock-supervision-finish", text='{"visibility":"silent"}'),
@@ -9234,6 +9315,13 @@ if MOCK_TASKS:
         ITEMS[ASK1].sort(key=lambda x: x["ts"])
         for _i, _x in enumerate(ITEMS[ASK1]):
             _x["seq"] = _i + 1
+        TASK_FEED[ASK1] += [
+            _feed("feed_supervision_task", 4.64, "task", "todo_task_release", {"wake": "active"}),
+            _feed("feed_supervision_routed", 4.63, "routed", "todo_task_release", {"text": "Continue the synthetic checks.", "from": "assistant"}),
+            _feed("feed_supervision_answered", 4.57, "answered", "todo_task_release", {
+                "question": "Run the synthetic checks?", "answer": "Approved by the assistant.", "by": "assistant", "reason": "Routine review"}),
+        ]
+        TASK_FEED[ASK1].sort(key=lambda x: x["at"])
     # MOCK_RELAYED=1: a message another Persona conversation sent with conversation_send (prompts/assistant/relay.md),
     # then one you typed: only yours is the pale blue bubble (#2643).
     if os.environ.get("MOCK_RELAYED") == "1":
@@ -9454,6 +9542,18 @@ def retry_task(h, tid):
     t = next((x for x in TODOS if x["id"] == tid), None)
     if not t:
         return h.send_json({"error": "todo not found"}, 404)
+    raw_body = (h.last_body or b"").decode("utf-8", errors="replace")
+    try:
+        request_body = json.loads(raw_body) if raw_body else {}
+    except ValueError:
+        return h.send_json({"error": "invalid JSON", "code": "bad_request"}, 400)
+    if not isinstance(request_body, dict):
+        return h.send_json({"error": "a JSON object is required", "code": "bad_request"}, 400)
+    launcher = request_body.get("launcher")
+    if launcher is not None and (not isinstance(launcher, str) or not launcher.strip()):
+        return h.send_json({"error": "launcher must be a non-empty string", "code": "bad_request"}, 400)
+    launcher = launcher.strip() if launcher else ""
+    START_REMEDY_LOG.append({"route": "retry", "id": tid, "raw_body": raw_body, "body": request_body})
     mode = RETRY_MODE["mode"]
     cut = [x for x in SESSIONS if x.get("turn_error") and any(a["session_id"] == x["session_id"] for a in t.get("agents", []))]
     if cut and not t.get("done_at"):
@@ -9471,13 +9571,17 @@ def retry_task(h, tid):
 
         threading.Thread(target=finished, daemon=True).start()
         return h.send_json({"todo": format_todo(t)})
-    if not t.get("start_error"):
-        if t.get("done_at") or not t.get("plan_id"):
+    plan = TASK_PLANS.get(t.get("plan_id")) or next(
+        (p for p in TASK_PLANS.values() if p.get("state") != "dismissed"
+         and any(pt.get("todo_id") == tid for pt in p.get("tasks", []))), None)
+    plan_task = next((pt for pt in (plan or {}).get("tasks", []) if pt.get("todo_id") == tid), None)
+    if not t.get("start_error") and not (plan_task or {}).get("error"):
+        # A failed start is retryable through its plan's todo_id even when the to-do has no plan_id (#10365).
+        if t.get("done_at"):
             return h.send_json({"error": "只有助手派出、没开起来的任务能重试"}, 409)
         return h.send_json({"todo": format_todo(t)})
     if mode == "offline":
         return h.send_json({"error": "「MacBook」现在离线，等它连上再重试"}, 409)
-    plan = TASK_PLANS.get(t.get("plan_id"))
 
     def plan_error(err):
         if not plan:
@@ -9485,6 +9589,10 @@ def retry_task(h, tid):
         for pt in plan["tasks"]:
             if pt.get("todo_id") == tid:
                 pt["error"] = err
+                if not err:
+                    pt.pop("error_code", None)
+                    pt.pop("error_args", None)
+                    pt.pop("retry_with", None)
         for send, _ in list(LIVE):
             try: send(from_default({"type": "task_plan", "plan": plan}))
             except Exception: pass
@@ -9500,17 +9608,75 @@ def retry_task(h, tid):
             t.update(done_at=ago(), start_error=err, updated_at=ago())
             plan_error(err)
         else:
-            if not any(x["session_id"] == RETRY_TASK_STARTED for x in SESSIONS):
-                SESSIONS.append(sess("macbook", RETRY_TASK_STARTED, t["title"], "/Users/me/code/weather", "working", "working",
-                                     "weather", 1, "align", 9, 0, "在看设置页底部两个按钮的布局约束。"))
-            t["agents"] = [{"machine_id": "macbook", "session_id": RETRY_TASK_STARTED, "linked_at": ago(), "released_at": None,
-                            "title": t["title"], "cwd": "/Users/me/code/weather", "agent": "claude", "start_error": "",
-                            "source": "manual", "via": ""}]
+            sid = RETRY_TASK_STARTED if tid == "todo_task_align" else str(uuid.uuid5(uuid.NAMESPACE_URL, "persona mock retry " + tid))
+            if not any(x["session_id"] == sid for x in SESSIONS):
+                SESSIONS.append(sess("macbook", sid, t["title"], "/Users/me/code/weather", "working", "working",
+                                     "weather", 1, "align", 9, 0, "The retry started the agent.",
+                                     agent="codex" if launcher == "codex" else "claude", launcher=launcher or "claude"))
+            t["agents"] = [{"machine_id": "macbook", "session_id": sid, "linked_at": ago(), "released_at": None,
+                            "title": t["title"], "cwd": "/Users/me/code/weather", "agent": "codex" if launcher == "codex" else "claude",
+                            "start_error": "", "source": "manual", "via": ""}]
             push_machine("macbook")
         push_todos()
 
     threading.Thread(target=started, daemon=True).start()
     h.send_json({"todo": format_todo(t)})
+
+
+def answer_task_start(h, tid):
+    """POST /api/v1/todos/{id}/start/answer: accept only an offered choice, then restart the failed planned task."""
+    t = next((x for x in TODOS if x["id"] == tid), None)
+    if not t:
+        return h.send_json({"error": "todo not found"}, 404)
+    raw_body = (h.last_body or b"").decode("utf-8", errors="replace")
+    try:
+        body = json.loads(raw_body)
+    except ValueError:
+        return h.send_json({"error": "invalid JSON", "code": "bad_request"}, 400)
+    choice = body.get("choice") if isinstance(body, dict) else None
+    START_REMEDY_LOG.append({"route": "task_answer", "id": tid, "raw_body": raw_body, "body": body})
+    plan = TASK_PLANS.get(t.get("plan_id")) or next(
+        (p for p in TASK_PLANS.values() if any(pt.get("todo_id") == tid for pt in p.get("tasks", []))), None)
+    pt = next((pt for pt in (plan or {}).get("tasks", []) if pt.get("todo_id") == tid), None)
+    offered = (pt or {}).get("error_args", {}).get("choices", "").split(",")
+    if (pt or {}).get("error_code") != "shell_waiting" or choice not in offered:
+        return h.send_json({"error": "this startup answer is no longer available", "code": "start_answer_closed"}, 409)
+    t.update(done_at=None, start_error="", reopened_at=ago(), updated_at=ago())
+    for key in ("error", "error_code", "error_args", "retry_with"):
+        pt.pop(key, None)
+    sid = str(uuid.uuid5(uuid.NAMESPACE_URL, "persona mock start answer " + tid))
+    if not any(s["session_id"] == sid for s in SESSIONS):
+        SESSIONS.append(sess("macbook", sid, t["title"], "/Users/me/code/weather", "working", "working",
+                             "weather", 9, "answered", 9, 0, "The startup answer started the task."))
+        ITEMS[sid] = []
+    t["agents"] = [{"machine_id": "macbook", "session_id": sid, "linked_at": ago(), "released_at": None,
+                    "title": t["title"], "cwd": "/Users/me/code/weather", "agent": "claude", "start_error": "",
+                    "source": "manual", "via": ""}]
+    push_todos()
+    push_machine("macbook")
+    return h.send_json({"todo": format_todo(t)})
+
+
+def continue_session_start(h, mid, sid):
+    """POST /api/v1/sessions/{mid}/{sid}/start/continue: keep the session and answer its kept terminal question."""
+    s = next((x for x in SESSIONS if x["machine_id"] == mid and x["session_id"] == sid), None)
+    if not s:
+        return h.send_json({"error": "session not found"}, 404)
+    raw_body = (h.last_body or b"").decode("utf-8", errors="replace")
+    try:
+        body = json.loads(raw_body)
+    except ValueError:
+        return h.send_json({"error": "invalid JSON", "code": "bad_request"}, 400)
+    choice = body.get("choice") if isinstance(body, dict) else None
+    START_REMEDY_LOG.append({"route": "session_continue", "machine": mid, "id": sid, "raw_body": raw_body, "body": body})
+    offered = s.get("start_error_args", {}).get("choices", "").split(",")
+    if s.get("start_error_code") != "shell_waiting" or choice not in offered:
+        return h.send_json({"error": "this startup answer is no longer available", "code": "start_answer_closed"}, 409)
+    s.update(status="working", state="working", last_text="The terminal answer started the agent.", updated_at=ago())
+    for key in ("start_error", "start_error_code", "start_error_args"):
+        s.pop(key, None)
+    push_machine(mid)
+    return h.send_json({"session": decorated_session(s)})
 
 
 
@@ -9602,6 +9768,18 @@ def tasks_area(h, method, p, raw):
     """The unified entry's endpoints (MOCK_TASKS=1): the feed, starting / dismissing a plan, routing to a task."""
     if not MOCK_TASKS:
         return False
+    if START_REMEDIES and method == "GET" and p == "/mock/start-remedies":
+        h.send_json({"requests": START_REMEDY_LOG})
+        return True
+    if START_REMEDIES and method == "POST":
+        m = re.fullmatch(r"/api/v1/todos/([^/]+)/start/answer", p)
+        if m:
+            answer_task_start(h, unquote(m.group(1)))
+            return True
+        m = re.fullmatch(r"/api/v1/sessions/([^/]+)/([^/]+)/start/continue", p)
+        if m:
+            continue_session_start(h, unquote(m.group(1)), unquote(m.group(2)))
+            return True
     if method == "GET" and p.startswith("/api/v1/assistant/conversations/") and p.endswith("/feed"):
         conv = p.split("/")[5]
         items = TASK_FEED.get(conv, [])
@@ -10316,6 +10494,27 @@ if os.environ.get("MOCK_SECRET_RUN") in ("pending", "ran", "withheld", "long"):
             ensure_ascii=False), 1) + [
             it("assistant", "text", 0.5, text="第二条命令失败了（退出码 5）：launchd 没能加载这个任务。我先看看 plist 的权限再告诉你。")]
 
+# MOCK_SECRET_RUN=env: the explicit one-off non-sudo mode. Every command receives PERSONA_SECRET; the card warns
+# about it after showing the commands. It is separate so the original stdin fixtures stay byte for byte unchanged.
+if os.environ.get("MOCK_SECRET_RUN") == "env":
+    _env_input = {"machine": "studio", "machine_name": "Mac Studio", "delivery": "env",
+                  "purpose": "登录一次局域网设备，查看已连接客户端",
+                  "commands": ["/usr/bin/env sh -c 'test -n \"$PERSONA_SECRET\"'",
+                               "/usr/bin/curl -H \"Authorization: Bearer $PERSONA_SECRET\" https://example.test"]}
+    ITEMS[ASK1] = ITEMS[ASK1] + [
+        it("user", "text", 2, text="帮我登录一次局域网设备，看看现在连着哪些客户端，用一次就行"),
+        it("assistant", "text", 1.5, text="这次不用 sudo。每条命令都会通过 PERSONA_SECRET 拿到密码，请逐条核对后再运行。")]
+    ITEMS[ASK1].append(it("assistant", "tool_use", 1, tool_use_id="toolu_secret_run", tool_name="mcp__persona__secret_run",
+                          tool_input=_env_input))
+    INTERACTIONS.append(
+        {"id": "ix_secret_run", "machine_id": "server", "session_id": ASK1, "session_title": "Persona",
+         "kind": "permission", "created_at": ago(minutes=1), "expires_at": later(minutes=9),
+         "tool_name": "secret_run", "tool_use_id": "toolu_secret_run", "tool_input": _env_input,
+         "summary": "在 Mac Studio 上运行（%s）：\n" % _env_input["purpose"]
+                    + "\n".join("$ " + c for c in _env_input["commands"])
+                    + "\n警告：你输入的密码会通过 PERSONA_SECRET 直接传给上面列出的每一条命令。编码后的输出可能绕过脱敏。",
+         "fields": [{"key": "password", "label": "密码", "placeholder": "只用这一次，不会保存", "secret": True}]})
+
 # MOCK_SECRET_HANDOFF=1: the hand-off card (secret_handoff, #3962) in Persona's main conversation: the assistant asked to
 # start an Agent on the MacBook with two values from a made-up provider; nothing has been handed over. Its approval is
 # taken from the card alone (the app sends X-Persona-Features: secret_handoff with it).
@@ -10349,29 +10548,6 @@ if os.environ.get("MOCK_SCREEN_DIALOG"):
                         {"key": "1", "label": "Yes", "keys": ["1"]},
                         {"key": "2", "label": "Yes, and don't ask again for git push commands in /Users/me/code/weather", "keys": ["2"]},
                         {"key": "3", "label": "No, and tell Claude what to do differently (esc)", "keys": ["3"]}]}})
-
-# MOCK_DOCK=1 (#12831, with MOCK_TASKS): two more of the main conversation's tasks wait for the owner, so its To Decide
-# pager has several kinds: the widget fix asks to run a command (a tool approval) and the blog migration asks a question
-# read off its terminal (a screen card with no tool use id). /mock/reset puts both back unanswered, and the network
-# tests' question.
-DOCK_INTERACTIONS = []
-if os.environ.get("MOCK_DOCK") == "1":
-    DOCK_INTERACTIONS = [
-        {"id": "ix_dock_widget_bash", "machine_id": "macbook", "session_id": WIDGET, "session_title": "修小组件横屏崩溃",
-         "cwd": "/Users/me/code/weather", "kind": "permission", "created_at": ago(minutes=20), "expires_at": later(minutes=40),
-         "tool_name": "Bash", "tool_use_id": "toolu_dock_bash",
-         "tool_input": {"command": "xcodebuild test -scheme WeatherWidget -destination 'platform=iOS Simulator,name=iPhone 17'",
-                        "description": "跑小组件的测试"}},
-        {"id": "scr_studio_blog_6a1d0e9c", "machine_id": "studio", "session_id": BLOG, "session_title": "博客迁移到 Astro",
-         "cwd": "/Users/me/code/blog", "kind": "screen", "created_at": ago(minutes=10), "expires_at": later(hours=24),
-         "screen": " 旧文章的固定链接怎么处理？\n ❯ 1. 保留旧链接\n   2. 换成新格式并加跳转\n",
-         "dialog": {"question": "旧文章的固定链接怎么处理？", "detail": "", "rev": "6a1d0e9c", "options": [
-             {"key": "1", "label": "保留旧链接", "keys": ["1"]},
-             {"key": "2", "label": "换成新格式并加跳转", "keys": ["2"]}]}},
-    ]
-    INTERACTIONS.extend(copy.deepcopy(DOCK_INTERACTIONS))
-    # The network tests' question too: a test answers it in the pager, the next starts with it again.
-    DOCK_INTERACTIONS += [copy.deepcopy(x) for x in INTERACTIONS if x["id"] == "ix_tests"]
 
 # MOCK_SCREEN_DANGER=before|after: Claude Code 2.1.322's safety check on a command (bypass mode, #5265 / #5266) with
 # its countdown, on the review agent. "before": as a hub before #5265 read it at a narrow width (the command missing,
@@ -11951,6 +12127,7 @@ _CLAUDE_DIRS = [("~/.claude", "default", 0, 86), ("~/.config/claude/work", "conf
 # not there at all, as a node that blocks them lists none (#10053). A change pushes that computer's rows and replays
 # its pending cards, as the manager does; the cards never leave the inventory.
 AGENT_DIRS_HIDDEN = {}
+AGENT_DIRS_RULE_LOCK = threading.RLock()
 AGENT_DIRS_FAIL = {"n": 0}  # GET /mock/agent_dirs_fail?n=<count>: the next n reads of the list answer 503
 
 
@@ -11979,11 +12156,19 @@ def _hidden_by_directory(mid, cwd, action="hide"):
 
 
 def _agent_dirs_hidden_state(mid):
-    return {"rules": AGENT_DIRS_HIDDEN.get(mid, []), "home": _machine_home(mid)}
+    return {"rules": AGENT_DIRS_HIDDEN.get(mid, []), "home": _machine_home(mid),
+            **({} if os.environ.get("MOCK_LEGACY_HUB") else {"supports_expected_rules": True})}
 
 
 def _set_agent_dirs_hidden(mid, body):
     """PUT …/agent-dirs/hidden: the whole list, checked as the manager checks it; (state, None) or (None, error)."""
+    with AGENT_DIRS_RULE_LOCK:
+        if "expected_rules" in body and body["expected_rules"] != AGENT_DIRS_HIDDEN.get(mid, []):
+            return None, "agent directory rules changed"
+        return _apply_agent_dirs_hidden(mid, body)
+
+
+def _apply_agent_dirs_hidden(mid, body):
     rules = []
     for r in body.get("rules") or []:
         pat = (r.get("pattern") or "").strip()
@@ -17656,6 +17841,11 @@ ITEMS["hlth0001-0000-4000-8000-000000000001"] = (
                 "points": [{"label": d, "value": v} for d, v in zip(_hdays, [6.9, 6.4, 7.1, 6.2, 6.8, 6.5, 7.0])]}),
         "差得不多，但连着几天少于 7 小时白天容易犯困。可以先试两件事：每天同一时间起床（周末也是），睡前一小时把手机放远一点。"]))]
 )
+# Keep the report conversation listed above readable when the bundled demo is regenerated.
+ITEMS["hlth0002-0000-4000-8000-000000000002"] = [
+    it("user", "text", 60 * 26 + 1, text="帮我逐项看看这份体检报告。"),
+    it("assistant", "text", 60 * 26, text=HEALTH_REPORT_RECORD),
+]
 ITEMS["hlth0003-0000-4000-8000-000000000003"] = (
     [it("user", "text", 71, text="最近 7 天步数和上周比怎么样")]
     + tool("mcp__persona__phone_health_summary", {"metrics": ["steps"], "days": 14}, "14 天的步数（按天）", 71)
@@ -17724,7 +17914,7 @@ if os.environ.get("MOCK_TAB_PANES"):
              "summary": "go test ./auth/...", "tool_input": {"command": "go test ./auth/..."}})
 if MOCK_SIDE_SESSIONS:
     # #7944: the /btw question's card (with side folding the hub sends it folded_under the review, folded_as "side"), and
-    # what each side session said
+    # what each side session said (MOCK_SIDE_UNREAD, side_unread_mock.py, answers the card)
     INTERACTIONS.append(
         {"id": "ix_side_btw", "machine_id": "macbook", "session_id": SIDE_BTW, "session_title": "btw: 这个 PR 现在能合吗",
          "cwd": "/Users/me/code/weather", "kind": "question", "created_at": ago(minutes=4), "expires_at": later(minutes=26),
@@ -17830,10 +18020,12 @@ if os.environ.get("MOCK_CHAT_CONTENT") == "1":
     ]
 
 # MOCK_LONG_HISTORY=1 (or "oldest": the work line first): the weather chat with fifteen earlier exchanges in front, so its work line and thought sit in
-# the middle of a long chat and the list can scroll both ways around them (opening and closing them in place).
-if os.environ.get("MOCK_LONG_HISTORY") in ("1", "oldest"):
+# the middle of a long chat and the list can scroll both ways around them (opening and closing them in place). A number
+# above one chooses that many exchanges instead (90 exercises the web's deferred long-chat window).
+_long_history = os.environ.get("MOCK_LONG_HISTORY", "")
+if _long_history in ("1", "oldest") or (_long_history.isdigit() and int(_long_history) > 1):
     _hist = []
-    for _k in range(15):
+    for _k in range(15 if _long_history in ("1", "oldest") else int(_long_history)):
         _hist.append(it("user", "text", 600 - _k * 30, text="第 %d 个问题：顺便看一下这一块的写法有没有问题？" % (_k + 1)))
         _hist.append(it("assistant", "text", 599 - _k * 30, text="看过了，第 %d 块没有问题。命名可以再统一一点，"
                                                             "测试也覆盖到了主要的分支，我顺手把两处重复的判断合并了。" % (_k + 1)))
@@ -18657,7 +18849,8 @@ MODES_LOG = []  # POST …/modes requests, GET /mock/modes (the model picker's a
 
 
 def all_sessions():
-    rows = fold_hierarchy([decorated_session(s) for s in (SESSIONS + ASSISTANT)])
+    raw = [decorated_session(s) for s in (SESSIONS + ASSISTANT)]
+    rows = fold_hierarchy(raw) if NET["hierarchy"] else raw
     if not AGENT_DIRS_HIDDEN:
         return rows
     return [dict(r, hidden_by_directory=True) if not r.get("assistant") and _hidden_by_directory(r["machine_id"], r.get("cwd")) else r
@@ -19734,7 +19927,8 @@ def persona_file(rest):
     for base in PERSONA_ROOTS:
         root = os.path.realpath(os.path.join(base, pid))
         p = os.path.realpath(os.path.join(root, f))
-        if p.startswith(root + os.sep) and os.path.isfile(p) and not os.path.basename(p).startswith("."):
+        rel = os.path.relpath(p, root) if p.startswith(root + os.sep) else ""
+        if rel and os.path.isfile(p) and not any(part.startswith(".") for part in rel.split(os.sep)):
             return p
     return None
 
@@ -19797,10 +19991,13 @@ def ext_look_personas():
     return out
 
 
-# ---------- uploaded looks (docs/apple/persona.md "Uploading an image", #2404) ----------
+# ---------- uploaded looks (docs/apple/persona.md "Uploading an image", #2404, #15449) ----------
 # POST /api/v1/looks/uploads makes a package in a temporary directory, as the hub does in personas/u-<hex>; the mock
-# keeps the image as it came for every size and state (the hub scales it and draws the states). DELETE takes it away.
-# MOCK_LOOK_UPLOADS=off: a hub without them (no look_uploads feature, 404); =demo: one uploaded look at start.
+# keeps uploaded pictures as sent (so animated files play in browsers and UIImageView) and computes colors + source.
+# PATCH /api/v1/looks/uploads/{id} edits an uploaded look; DELETE takes it away.
+# MOCK_LOOK_UPLOADS=off: a hub without them (no look_uploads feature, 404);
+# =basic: an older hub (look_uploads only, no look_uploads_states, PATCH 404);
+# =demo: seeds u-demo0001 (legacy) and u-demo0002 (colors, animated marked working state, still unmarked offline state).
 # MOCK_LOOK_UPLOAD_FILES=fail: the looks POST makes are listed but their files answer 503, so the apps' "made but not
 # downloaded" path (Try Again) can be seen.
 UPLOADED_LOOKS = tempfile.mkdtemp(prefix="mock-look-uploads-")
@@ -19809,12 +20006,35 @@ PERSONA_ROOTS.append(UPLOADED_LOOKS)
 UPLOAD_STATES = ("idle", "thinking", "working", "needs_you", "offline")
 
 
+def _png_chunk(tag, data):
+    return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xffffffff)
+
+
 def _png_rgba(w, h, pixel):
     """A PNG of w×h, pixel(x, y) → (r, g, b, a), without Pillow."""
     rows = b"".join(b"\x00" + bytes(c for x in range(w) for c in pixel(x, y)) for y in range(h))
-    chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
-    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
-            + chunk(b"IDAT", zlib.compress(rows, 9)) + chunk(b"IEND", b""))
+    return (b"\x89PNG\r\n\x1a\n" + _png_chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
+            + _png_chunk(b"IDAT", zlib.compress(rows, 9)) + _png_chunk(b"IEND", b""))
+
+
+def _apng_rgba(w, h, frames, delay_num=160, delay_den=1000):
+    """A looping APNG of w×h from pixel(x, y) callables, without Pillow."""
+    out = bytearray(b"\x89PNG\r\n\x1a\n")
+    out += _png_chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
+    out += _png_chunk(b"acTL", struct.pack(">II", len(frames), 0))
+    seq = 0
+    for idx, pixel in enumerate(frames):
+        rows = b"".join(b"\x00" + bytes(c for x in range(w) for c in pixel(x, y)) for y in range(h))
+        zdata = zlib.compress(rows, 9)
+        out += _png_chunk(b"fcTL", struct.pack(">IIIIIHHBB", seq, w, h, 0, 0, delay_num, delay_den, 0, 0))
+        seq += 1
+        if idx == 0:
+            out += _png_chunk(b"IDAT", zdata)
+        else:
+            out += _png_chunk(b"fdAT", struct.pack(">I", seq) + zdata)
+            seq += 1
+    out += _png_chunk(b"IEND", b"")
+    return bytes(out)
 
 
 def _demo_upload_png(side=256):
@@ -19827,20 +20047,329 @@ def _demo_upload_png(side=256):
     return _png_rgba(side, side, px)
 
 
-def make_uploaded_look(name, image, subtitle="", lid=None):
+def _demo_mikan_png(side=144):
+    """A made-up blue-sky character picture for u-demo0002."""
+    half = side / 2.0
+    def px(x, y):
+        dx, dy = x + 0.5 - half, y + 0.5 - half
+        if dx * dx + dy * dy > half * half:
+            return (0, 0, 0, 0)
+        if ((x - side * 0.36) ** 2 + (y - side * 0.44) ** 2) ** 0.5 < side * 0.06 or ((x - side * 0.64) ** 2 + (y - side * 0.44) ** 2) ** 0.5 < side * 0.06:
+            return (24, 34, 54, 255)
+        t = min(1.0, y / float(side))
+        return (int(84 - 26 * t), int(152 - 30 * t), int(232 - 20 * t), 255)
+    return _png_rgba(side, side, px)
+
+
+def _demo_working_apng(side=144):
+    """A 4-frame animated APNG for u-demo0002's working state (moving orange rim dot)."""
+    half = side / 2.0
+    r_outer = half
+    r_inner = half * 0.86
+    r_orbit = half * 0.92
+    frames = []
+    for k in range(4):
+        ang = (k * math.pi / 2.0) - math.pi / 2.0
+        ox, oy = half + r_orbit * math.cos(ang), half + r_orbit * math.sin(ang)
+        def make_px(ox=ox, oy=oy):
+            def px(x, y):
+                dx, dy = x + 0.5 - half, y + 0.5 - half
+                dist = (dx * dx + dy * dy) ** 0.5
+                if dist > r_outer:
+                    return (0, 0, 0, 0)
+                if ((x + 0.5 - ox) ** 2 + (y + 0.5 - oy) ** 2) ** 0.5 < side * 0.09:
+                    return (240, 140, 30, 255)
+                if dist > r_inner:
+                    return (240, 140, 30, 110)
+                if ((x - side * 0.36) ** 2 + (y - side * 0.46) ** 2) ** 0.5 < side * 0.055 or ((x - side * 0.64) ** 2 + (y - side * 0.46) ** 2) ** 0.5 < side * 0.055:
+                    return (24, 34, 54, 255)
+                return (74, 144, 226, 255)
+            return px
+        frames.append(make_px())
+    return _apng_rgba(side, side, frames, delay_num=160, delay_den=1000)
+
+
+def _demo_offline_png(side=144):
+    """A distinct own still picture for u-demo0002's offline state (mark off)."""
+    half = side / 2.0
+    def px(x, y):
+        dx, dy = x + 0.5 - half, y + 0.5 - half
+        if dx * dx + dy * dy > half * half:
+            return (0, 0, 0, 0)
+        if abs(y - side * 0.50) < side * 0.025 and (side * 0.28 < x < side * 0.44 or side * 0.56 < x < side * 0.72):
+            return (36, 46, 62, 255)
+        return (110, 134, 168, 255)
+    return _png_rgba(side, side, px)
+
+
+def _look_hex_rgb(s):
+    s = s.strip().lstrip("#")
+    return (int(s[0:2], 16), int(s[2:4], 16), int(s[4:6], 16))
+
+
+def _look_rgb_hex(c):
+    return "#%02X%02X%02X" % tuple(max(0, min(255, int(round(v)))) for v in c)
+
+
+def _look_luminance(c):
+    def lin(v):
+        v /= 255.0
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+    return 0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2])
+
+
+def _look_contrast(a, b):
+    la, lb = _look_luminance(a), _look_luminance(b)
+    return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+
+
+def _look_shade(rgb, min_on_white, min_on_page, page):
+    import colorsys
+    r, g, b = rgb
+    h, l, s = colorsys.rgb_to_hls(r / 255.0, g / 255.0, b / 255.0)
+    if s < 0.08 or (max(r, g, b) - min(r, g, b)) < 8:
+        s = 0.0
+    else:
+        s = max(s, 0.65)
+    def to_rgb8(L):
+        return tuple(max(0, min(255, int(round(v * 255.0)))) for v in colorsys.hls_to_rgb(h, L, s))
+    def ok(cand):
+        return _look_contrast((255, 255, 255), cand) >= min_on_white and (min_on_page <= 0 or _look_contrast(cand, page) >= min_on_page)
+    for i in range(201):
+        cand = to_rgb8(l * (1.0 - i / 200.0))
+        if ok(cand):
+            return cand
+    for i in range(1, 201):
+        cand = to_rgb8(l + (1.0 - l) * (i / 200.0))
+        if ok(cand):
+            return cand
+    return (110, 110, 110)
+
+
+def _look_palette(seed_hex):
+    primary = _look_hex_rgb(seed_hex)
+    if max(primary) - min(primary) < 8:
+        secondary = (90, 90, 90)
+    else:
+        secondary = tuple(int(round(primary[i] * 0.3 + (60, 120, 200)[i] * 0.7)) for i in range(3))
+    al = _look_shade(primary, 4.55, 3.05, (255, 255, 255))
+    ad = _look_shade(primary, 3.65, 3.05, (0, 0, 0))
+    bl = _look_shade(al, 4.75, 0.0, (255, 255, 255))
+    bd = _look_shade(ad, 4.65, 0.0, (0, 0, 0))
+    return {
+        "light": {"primary": _look_rgb_hex(primary), "secondary": _look_rgb_hex(secondary),
+                  "accent": _look_rgb_hex(al), "bubble": _look_rgb_hex(bl), "bubble_text": "#FFFFFF"},
+        "dark": {"primary": _look_rgb_hex(primary), "secondary": _look_rgb_hex(secondary),
+                 "accent": _look_rgb_hex(ad), "bubble": _look_rgb_hex(bd), "bubble_text": "#FFFFFF"},
+    }
+
+
+def _look_auto_seed(image_bytes):
+    """Extract the automatic seed per spec/fixtures/look-colors for 8-bit RGB/RGBA PNGs; fixed fallback otherwise."""
+    if not image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "#E8A054"
+    pos, w, h, ctype = 8, 0, 0, -1
+    idat = bytearray()
+    while pos + 8 <= len(image_bytes):
+        length = struct.unpack(">I", image_bytes[pos:pos + 4])[0]
+        tag = image_bytes[pos + 4:pos + 8]
+        chunk = image_bytes[pos + 8:pos + 8 + length]
+        pos += 12 + length
+        if tag == b"IHDR" and len(chunk) == 13:
+            w, h, depth, ctype, comp, filt, interlace = struct.unpack(">IIBBBBB", chunk)
+            if depth != 8 or ctype not in (2, 6) or comp != 0 or filt != 0 or interlace != 0 or w * h > 4_000_000:
+                return "#E8A054"
+        elif tag == b"IDAT":
+            idat += chunk
+        elif tag == b"IEND":
+            break
+    if w <= 0 or h <= 0 or not idat:
+        return "#E8A054"
+    try:
+        raw = zlib.decompress(bytes(idat))
+    except Exception:
+        return "#E8A054"
+    bpp = 4 if ctype == 6 else 3
+    stride = w * bpp
+    if len(raw) < h * (stride + 1):
+        return "#E8A054"
+    prev = bytearray(stride)
+    kept = []
+    for y in range(h):
+        off = y * (stride + 1)
+        ftype = raw[off]
+        row = bytearray(raw[off + 1:off + 1 + stride])
+        if ftype == 1:
+            for i in range(bpp, stride):
+                row[i] = (row[i] + row[i - bpp]) & 0xFF
+        elif ftype == 2:
+            for i in range(stride):
+                row[i] = (row[i] + prev[i]) & 0xFF
+        elif ftype == 3:
+            for i in range(stride):
+                left = row[i - bpp] if i >= bpp else 0
+                row[i] = (row[i] + ((left + prev[i]) >> 1)) & 0xFF
+        elif ftype == 4:
+            for i in range(stride):
+                a = row[i - bpp] if i >= bpp else 0
+                b = prev[i]
+                c = prev[i - bpp] if i >= bpp else 0
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                pr = a if (pa <= pb and pa <= pc) else (b if pb <= pc else c)
+                row[i] = (row[i] + pr) & 0xFF
+        elif ftype != 0:
+            return "#E8A054"
+        prev = row
+        for x in range(0, stride, bpp):
+            r, g, b = row[x], row[x + 1], row[x + 2]
+            a = row[x + 3] if bpp == 4 else 255
+            if a <= 200:
+                continue
+            mx = max(r, g, b)
+            d = mx - min(r, g, b)
+            if mx < 90 or 10 * d <= 3 * mx:
+                continue
+            if mx == r:
+                num = (g - b) if g >= b else (g - b) + 6 * d
+            elif mx == g:
+                num = (b - r) + 2 * d
+            else:
+                num = (r - g) + 4 * d
+            kept.append((r, g, b, (6 * num) // d % 36))
+    if len(kept) < 50:
+        return "#787878"
+    counts = [0] * 36
+    for _, _, _, hb in kept:
+        counts[hb] += 1
+    peak = max(range(36), key=lambda i: counts[i])
+    near = {(peak + 35) % 36, peak, (peak + 1) % 36}
+    sel = [px for px in kept if px[3] in near]
+    idx = (len(sel) - 1) // 2
+    return "#%02X%02X%02X" % (
+        sorted(px[0] for px in sel)[idx],
+        sorted(px[1] for px in sel)[idx],
+        sorted(px[2] for px in sel)[idx],
+    )
+
+
+def _look_decode_image(data):
+    if not isinstance(data, str):
+        return None
+    data = data.strip()
+    if data.startswith("data:") and ";base64," in data:
+        data = data.split(";base64,", 1)[1]
+    if not data:
+        return None
+    try:
+        image = base64.b64decode(data + "=" * (-len(data) % 4))
+    except Exception:
+        return None
+    if not (image.startswith(b"\x89PNG") or image.startswith(b"\xff\xd8") or image[8:12] == b"WEBP" or image.startswith(b"GIF8")):
+        return None
+    return image
+
+
+def _look_check_crop(crop):
+    if crop is None:
+        return True
+    if not isinstance(crop, dict):
+        return False
+    for k in ("x", "y", "side"):
+        v = crop.get(k)
+        if not isinstance(v, int) or isinstance(v, bool):
+            return False
+    return crop["x"] >= 0 and crop["y"] >= 0 and crop["side"] >= 64
+
+
+def _look_check_color(val):
+    if not isinstance(val, str):
+        return None
+    v = val.strip()
+    if v == "auto":
+        return "auto"
+    if re.fullmatch(r"#[0-9a-fA-F]{6}", v):
+        return v.upper()
+    return None
+
+
+def _look_text_ok(s, limit):
+    if len(s) > limit:
+        return False
+    for ch in s:
+        o = ord(ch)
+        if o < 32 or o == 127 or (0x202A <= o <= 0x202E) or (0x2066 <= o <= 0x2069) or o in (0x061C, 0x200E, 0x200F):
+            return False
+    return True
+
+
+def _look_apng_meta(image_bytes):
+    """Returns (frames, fps) when image_bytes is an APNG with >1 frames, else (1, None)."""
+    if not image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return 1, None
+    pos = 8
+    while pos + 8 <= len(image_bytes):
+        length = struct.unpack(">I", image_bytes[pos:pos + 4])[0]
+        tag = image_bytes[pos + 4:pos + 8]
+        chunk = image_bytes[pos + 8:pos + 8 + length]
+        pos += 12 + length
+        if tag == b"acTL" and len(chunk) == 8:
+            nframes = struct.unpack(">II", chunk)[0]
+            if nframes > 1:
+                return nframes, 6
+        elif tag == b"IDAT":
+            break
+    return 1, None
+
+
+def make_uploaded_look(name, image, subtitle="", lid=None, color="auto", states=None, legacy=False):
     lid = lid or "u-" + uuid.uuid4().hex[:8]
     root = os.path.join(UPLOADED_LOOKS, lid)
-    os.makedirs(os.path.join(root, "avatar"))
-    os.makedirs(os.path.join(root, "dot"))
+    os.makedirs(os.path.join(root, "avatar"), exist_ok=True)
+    os.makedirs(os.path.join(root, "dot"), exist_ok=True)
+    os.makedirs(os.path.join(root, ".edit"), exist_ok=True)
+    open(os.path.join(root, ".edit", "main"), "wb").write(image)
     sizes = {}
     for side in (64, 128, 256, 512):
         open(os.path.join(root, "avatar", "%d.png" % side), "wb").write(image)
         sizes[str(side)] = "avatar/%d.png" % side
+    states = states or {}
+    dot_states = {}
+    source_states = {}
+    main_frames, main_fps = _look_apng_meta(image)
     for st in UPLOAD_STATES:
-        open(os.path.join(root, "dot", st + ".png"), "wb").write(image)
+        spec = states.get(st)
+        if spec:
+            st_bytes = spec["bytes"]
+            open(os.path.join(root, "dot", st + ".png"), "wb").write(st_bytes)
+            open(os.path.join(root, ".edit", "state_" + st), "wb").write(st_bytes)
+            entry = {"file": "dot/%s.png" % st}
+            nf, nfps = spec.get("frames"), spec.get("fps")
+            if not nf:
+                nf, nfps = _look_apng_meta(st_bytes)
+            if nf and nf > 1:
+                entry["fps"] = nfps or 6
+                entry["frames"] = nf
+            dot_states[st] = entry
+            source_states[st] = {"own": True, "mark": False if st == "idle" else bool(spec.get("mark", True))}
+        else:
+            open(os.path.join(root, "dot", st + ".png"), "wb").write(image)
+            entry = {"file": "dot/%s.png" % st}
+            if st != "offline" and main_frames > 1:
+                entry["fps"] = main_fps or 6
+                entry["frames"] = main_frames
+            dot_states[st] = entry
+    source = {"kind": "upload", "uploaded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
     m = {"format": 1, "id": lid, "name": name, "avatar": {"sizes": sizes, "safe": 1},
-         "dot": {"size": 144, "states": {st: {"file": "dot/%s.png" % st} for st in UPLOAD_STATES}},
-         "app_icon_fallback": "persona", "source": {"kind": "upload", "uploaded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}}
+         "dot": {"size": 144, "states": dot_states},
+         "app_icon_fallback": "persona", "source": source}
+    if not legacy:
+        is_auto = (color == "auto")
+        seed = _look_auto_seed(image) if is_auto else color
+        m["colors"] = _look_palette(seed)
+        source["color"] = {"seed": seed, "auto": is_auto}
+        if source_states:
+            source["states"] = source_states
     if subtitle:
         m["subtitle"] = subtitle
     json.dump(m, open(os.path.join(root, "persona.json"), "w"), ensure_ascii=False, indent=2)
@@ -19848,7 +20377,15 @@ def make_uploaded_look(name, image, subtitle="", lid=None):
 
 
 if os.environ.get("MOCK_LOOK_UPLOADS") == "demo":
-    make_uploaded_look("豆豆", _demo_upload_png(), lid="u-demo0001")
+    make_uploaded_look("豆豆", _demo_upload_png(), lid="u-demo0001", legacy=True)
+    make_uploaded_look(
+        "Mikan", _demo_mikan_png(), subtitle="Custom states and color", lid="u-demo0002",
+        color="#3A7BD5",
+        states={
+            "working": {"bytes": _demo_working_apng(), "mark": True, "fps": 6, "frames": 4},
+            "offline": {"bytes": _demo_offline_png(), "mark": False},
+        },
+    )
 
 
 def _push_live(msg):
@@ -19859,26 +20396,62 @@ def _push_live(msg):
             pass
 
 
+def _look_err(handler, status, code, message):
+    handler.send_json({"error": message, "code": code}, status)
+    return True
+
+
 def look_uploads_route(handler, method, p, raw):
-    if os.environ.get("MOCK_LOOK_UPLOADS") == "off" or not p.startswith("/api/v1/looks/uploads"):
+    mode = os.environ.get("MOCK_LOOK_UPLOADS", "")
+    if not p.startswith("/api/v1/looks/uploads"):
         return False
+    if mode == "off":
+        return _look_err(handler, 404, "not_found", "not found")
     if p == "/api/v1/looks/uploads" and method == "POST":
         body = json.loads(raw or b"{}")
         name = (body.get("name") or "").strip()
         if not name:
-            handler.send_json({"error": "给形象起个名字", "code": "no_name"}, 400)
-            return True
-        data = body.get("image") or ""
-        if data.startswith("data:") and ";base64," in data:
-            data = data.split(";base64,", 1)[1]
-        try:
-            image = base64.b64decode(data + "=" * (-len(data) % 4))
-        except Exception:
-            image = b""
-        if not (image.startswith(b"\x89PNG") or image.startswith(b"\xff\xd8") or image[8:12] == b"WEBP" or image.startswith(b"GIF8")):
-            handler.send_json({"error": "这个文件不是 Persona 能读的图片，请用 PNG、JPEG、WebP 或 GIF", "code": "not_image"}, 400)
-            return True
-        lid = make_uploaded_look(name, image, (body.get("subtitle") or "").strip())
+            return _look_err(handler, 400, "no_name", "Give the avatar a name")
+        if not _look_text_ok(name, 40):
+            return _look_err(handler, 400, "bad_name", "The name can be up to 40 characters, without control characters")
+        subtitle = (body.get("subtitle") or "").strip()
+        if not _look_text_ok(subtitle, 80):
+            return _look_err(handler, 400, "bad_subtitle", "The description can be up to 80 characters, without control characters")
+        if not (body.get("image") or "").strip():
+            return _look_err(handler, 400, "no_image", "Choose an image for the avatar")
+        image = _look_decode_image(body.get("image"))
+        if image is None:
+            return _look_err(handler, 400, "not_image", "This file isn't an image Persona can read. Use a PNG, JPEG, WebP or GIF")
+        if not _look_check_crop(body.get("crop")):
+            return _look_err(handler, 400, "bad_crop", "Invalid crop")
+        color_val = "auto"
+        if "color" in body and body["color"] is not None and body["color"] != "":
+            color_val = _look_check_color(body["color"])
+            if color_val is None:
+                return _look_err(handler, 400, "bad_color", "Use auto or a #RRGGBB color")
+        parsed_states = {}
+        if "states" in body and body["states"] is not None:
+            if not isinstance(body["states"], dict):
+                return _look_err(handler, 400, "bad_fields", "Invalid states")
+            for st, spec in body["states"].items():
+                if st not in UPLOAD_STATES:
+                    return _look_err(handler, 400, "bad_state", "Unknown state: " + str(st))
+                if not isinstance(spec, dict) or not spec:
+                    return _look_err(handler, 400, "bad_fields", "Invalid state entry")
+                if spec.get("auto"):
+                    return _look_err(handler, 400, "bad_fields", "auto is not valid on POST")
+                if not spec.get("image"):
+                    if "mark" in spec:
+                        return _look_err(handler, 400, "mark_without_image", "Choose a picture for this state before changing its mark")
+                    return _look_err(handler, 400, "bad_fields", "State entry requires an image")
+                st_img = _look_decode_image(spec.get("image"))
+                if st_img is None:
+                    return _look_err(handler, 400, "not_image", "This file isn't an image Persona can read. Use a PNG, JPEG, WebP or GIF")
+                if not _look_check_crop(spec.get("crop")):
+                    return _look_err(handler, 400, "bad_crop", "Invalid crop")
+                mark = True if "mark" not in spec or spec["mark"] is None else bool(spec["mark"])
+                parsed_states[st] = {"bytes": st_img, "mark": False if st == "idle" else mark}
+        lid = make_uploaded_look(name, image, subtitle, color=color_val, states=parsed_states, legacy=(mode == "basic"))
         MADE_LOOKS.add(lid)
         looks = looks_list()
         out = {"look": next(l for l in looks if l["id"] == lid)}
@@ -19890,14 +20463,156 @@ def look_uploads_route(handler, method, p, raw):
         handler.send_json(out)
         return True
     lid = p[len("/api/v1/looks/uploads/"):]
+    if method == "PATCH" and lid and "/" not in lid:
+        if mode == "basic":
+            return _look_err(handler, 404, "not_found", "not found")
+        root = os.path.join(UPLOADED_LOOKS, lid)
+        mpath = os.path.join(root, "persona.json")
+        if not os.path.isfile(mpath) or lid.startswith("."):
+            if any(x["id"] == lid for x in personas()):
+                return _look_err(handler, 409, "not_uploaded", "Only avatars made from an uploaded image can be edited here")
+            return _look_err(handler, 404, "not_found", "This avatar is no longer on the hub")
+        m = json.load(open(mpath))
+        if (m.get("source") or {}).get("kind") != "upload":
+            return _look_err(handler, 409, "not_uploaded", "Only avatars made from an uploaded image can be edited here")
+        body = json.loads(raw or b"{}")
+        if not isinstance(body, dict):
+            return _look_err(handler, 400, "bad_fields", "Invalid body")
+        has_any = any(k in body for k in ("name", "subtitle", "image", "states", "color"))
+        if not has_any or ("crop" in body and "image" not in body):
+            return _look_err(handler, 400, "bad_fields", "Nothing to update")
+        if "states" in body and isinstance(body["states"], dict) and not body["states"] and not any(k in body for k in ("name", "subtitle", "image", "color")):
+            return _look_err(handler, 400, "bad_fields", "Nothing to update")
+        name = m["name"]
+        if "name" in body:
+            name = (body["name"] or "").strip() if isinstance(body["name"], str) else ""
+            if not name:
+                return _look_err(handler, 400, "no_name", "Give the avatar a name")
+            if not _look_text_ok(name, 40):
+                return _look_err(handler, 400, "bad_name", "The name can be up to 40 characters, without control characters")
+        subtitle = m.get("subtitle", "")
+        if "subtitle" in body:
+            subtitle = (body["subtitle"] or "").strip() if isinstance(body["subtitle"], str) else ""
+            if not _look_text_ok(subtitle, 80):
+                return _look_err(handler, 400, "bad_subtitle", "The description can be up to 80 characters, without control characters")
+        new_main = None
+        if "image" in body:
+            new_main = _look_decode_image(body["image"])
+            if new_main is None:
+                return _look_err(handler, 400, "not_image", "This file isn't an image Persona can read. Use a PNG, JPEG, WebP or GIF")
+            if not _look_check_crop(body.get("crop")):
+                return _look_err(handler, 400, "bad_crop", "Invalid crop")
+        new_color = None
+        if "color" in body:
+            new_color = _look_check_color(body["color"])
+            if new_color is None:
+                return _look_err(handler, 400, "bad_color", "Use auto or a #RRGGBB color")
+        source = dict(m.get("source") or {"kind": "upload"})
+        src_states = {k: dict(v) for k, v in (source.get("states") or {}).items()}
+        state_updates = {}
+        if "states" in body:
+            if not isinstance(body["states"], dict):
+                return _look_err(handler, 400, "bad_fields", "Invalid states")
+            for st, spec in body["states"].items():
+                if st not in UPLOAD_STATES:
+                    return _look_err(handler, 400, "bad_state", "Unknown state: " + str(st))
+                if not isinstance(spec, dict) or not spec:
+                    return _look_err(handler, 400, "bad_fields", "Invalid state entry")
+                if spec.get("auto"):
+                    if any(k in spec for k in ("image", "crop", "mark")):
+                        return _look_err(handler, 400, "bad_fields", "auto cannot be combined with image, crop or mark")
+                    state_updates[st] = {"auto": True}
+                elif "image" in spec:
+                    st_img = _look_decode_image(spec.get("image"))
+                    if st_img is None:
+                        return _look_err(handler, 400, "not_image", "This file isn't an image Persona can read. Use a PNG, JPEG, WebP or GIF")
+                    if not _look_check_crop(spec.get("crop")):
+                        return _look_err(handler, 400, "bad_crop", "Invalid crop")
+                    mark = True if "mark" not in spec or spec["mark"] is None else bool(spec["mark"])
+                    state_updates[st] = {"bytes": st_img, "mark": False if st == "idle" else mark}
+                elif "crop" in spec:
+                    return _look_err(handler, 400, "bad_fields", "crop requires image")
+                elif "mark" in spec:
+                    if not (src_states.get(st) or {}).get("own"):
+                        return _look_err(handler, 400, "mark_without_image", "Choose a picture for this state before changing its mark")
+                    state_updates[st] = {"mark": False if st == "idle" else bool(spec["mark"])}
+                else:
+                    return _look_err(handler, 400, "bad_fields", "Invalid state entry")
+        os.makedirs(os.path.join(root, ".edit"), exist_ok=True)
+        edit_main = os.path.join(root, ".edit", "main")
+        if new_main is not None:
+            main_bytes = new_main
+            open(edit_main, "wb").write(main_bytes)
+            for side in (64, 128, 256, 512):
+                open(os.path.join(root, "avatar", "%d.png" % side), "wb").write(main_bytes)
+        elif os.path.isfile(edit_main):
+            main_bytes = open(edit_main, "rb").read()
+        else:
+            main_bytes = open(os.path.join(root, "avatar", "512.png"), "rb").read()
+        dot_states = dict((m.get("dot") or {}).get("states") or {})
+        main_frames, main_fps = _look_apng_meta(main_bytes)
+        for st, upd in state_updates.items():
+            st_edit = os.path.join(root, ".edit", "state_" + st)
+            if upd.get("auto"):
+                src_states.pop(st, None)
+                if os.path.isfile(st_edit):
+                    os.remove(st_edit)
+                open(os.path.join(root, "dot", st + ".png"), "wb").write(main_bytes)
+                entry = {"file": "dot/%s.png" % st}
+                if st != "offline" and main_frames > 1:
+                    entry["fps"], entry["frames"] = main_fps or 6, main_frames
+                dot_states[st] = entry
+            elif "bytes" in upd:
+                open(os.path.join(root, "dot", st + ".png"), "wb").write(upd["bytes"])
+                open(st_edit, "wb").write(upd["bytes"])
+                nf, nfps = _look_apng_meta(upd["bytes"])
+                entry = {"file": "dot/%s.png" % st}
+                if nf > 1:
+                    entry["fps"], entry["frames"] = nfps or 6, nf
+                dot_states[st] = entry
+                src_states[st] = {"own": True, "mark": upd["mark"]}
+            else:
+                src_states[st] = {"own": True, "mark": upd["mark"]}
+        if new_main is not None:
+            for st in UPLOAD_STATES:
+                if not (src_states.get(st) or {}).get("own"):
+                    open(os.path.join(root, "dot", st + ".png"), "wb").write(main_bytes)
+                    entry = {"file": "dot/%s.png" % st}
+                    if st != "offline" and main_frames > 1:
+                        entry["fps"], entry["frames"] = main_fps or 6, main_frames
+                    dot_states[st] = entry
+        m["name"] = name
+        if subtitle:
+            m["subtitle"] = subtitle
+        else:
+            m.pop("subtitle", None)
+        m["dot"] = {"size": 144, "states": dot_states}
+        if src_states:
+            source["states"] = src_states
+        else:
+            source.pop("states", None)
+        cur_color = source.get("color")
+        if new_color is not None:
+            is_auto = (new_color == "auto")
+            seed = _look_auto_seed(main_bytes) if is_auto else new_color
+            m["colors"] = _look_palette(seed)
+            source["color"] = {"seed": seed, "auto": is_auto}
+        elif new_main is not None and (cur_color is None or cur_color.get("auto")):
+            seed = _look_auto_seed(main_bytes)
+            m["colors"] = _look_palette(seed)
+            source["color"] = {"seed": seed, "auto": True}
+        m["source"] = source
+        json.dump(m, open(mpath, "w"), ensure_ascii=False, indent=2)
+        _push_live({"type": "personas"})
+        looks = looks_list()
+        handler.send_json({"look": next(l for l in looks if l["id"] == lid)})
+        return True
     if method == "DELETE" and lid and "/" not in lid:
         root = os.path.join(UPLOADED_LOOKS, lid)
         if not os.path.isdir(root) or lid.startswith("."):
             if any(x["id"] == lid for x in personas()):  # a package of the hub's not made from an upload
-                handler.send_json({"error": "这里只能删除用上传的图片做的形象", "code": "not_uploaded"}, 409)
-            else:
-                handler.send_json({"error": "这个形象已经不在 hub 上了", "code": "not_found"}, 404)
-            return True
+                return _look_err(handler, 409, "not_uploaded", "这里只能删除用上传的图片做的形象")
+            return _look_err(handler, 404, "not_found", "这个形象已经不在 hub 上了")
         shutil.rmtree(root)
         _push_live({"type": "personas"})
         if LOOK_CHOICE["id"] == lid:
@@ -20182,7 +20897,8 @@ def span(items, frm=None, to=None):
 #   GET /mock/delay?s=3   the same, from now on (0 turns it off)
 #   GET /mock/down?s=8    the hub is gone for that long: open WebSockets drop, new connections are closed unanswered
 #   GET /mock/reject?s=8  this device's credential is revoked for that long: open WebSockets drop, handshakes answer 401
-NET = {"delay": float(os.environ.get("MOCK_DELAY", "0")), "down_until": 0.0, "reject_until": 0.0}
+#   GET /mock/hierarchy?on=0|1  disable/enable sessions_hierarchy folding (folded_under), for pre-hierarchy client fallback tests
+NET = {"delay": float(os.environ.get("MOCK_DELAY", "0")), "down_until": 0.0, "reject_until": 0.0, "hierarchy": True}
 
 # ---------- frames lost, doubled, late or out of order (#1073) ----------
 # POST /mock/wire {"rules": [{"type": "items", "action": "drop" | "dup" | "delay" | "hold", "ms": 1500, "count": 1,
@@ -20289,8 +21005,10 @@ def case_route(h, method, p, q, body):
             case_json(h, {"error": str(e)}, 400)
             return True
         CASE.close()
-        # "now": its times moved to the present, for an app on the real clock (the iOS simulator's)
-        CASE = sync_case.CaseHub(case, shift=sync_case.shift_to(time.time()) if asked.get("now") else 0)
+        # "now": move fixture times to the present for an app on the real clock (the iOS simulator's).
+        live_time = time.time if asked.get("now") else None
+        shift = sync_case.shift_to(live_time()) if live_time else 0
+        CASE = sync_case.CaseHub(case, shift=shift, live_time=live_time)
         case_json(h, CASE.state())
         return True
     if method == "GET" and MOCK_WEB and not p.startswith(("/api/", "/mock/")):
@@ -20335,8 +21053,9 @@ def case_route(h, method, p, q, body):
     return True
 # /mock/paging?on=1: pages of history as the hub cuts them (node.go PageTurns): the latest page and the backlog of a
 # first subscribe hold the last 2 whole turns, an older page `turns` more; otherwise the whole history comes at once.
+# `first=60` gives the browser an already-windowed first page, while older pages still arrive two turns at a time.
 # ChatFollowTests' cold start at a saved place far up needs it (#597). /mock/reset turns it off.
-PAGING = {"on": False}
+PAGING = {"on": False, "first": 2}
 
 
 # MOCK_CHAT_SEARCH=1 (#6281, docs/design/proposals/assistant-search.md): the long Persona conversation (ASK4) is one whose
@@ -20403,6 +21122,7 @@ _SEARCH_DROP = [re.compile(r"(?s)<persona-view-errors\b[^>]*>.*?</persona-view-e
                 re.compile(r"<" + FILE_TAG_PATTERN + r"\b[^>]*?/?>(?:\s*</" + FILE_TAG_PATTERN + r">)?")]
 _SEARCH_PASTED = re.compile(r"(?s)<pasted_content\b[^>]*>(.*?)</pasted_content>")
 _SEARCH_IMAGES = [re.compile(r"(?s)<attached_images>.*?</attached_images>"), re.compile(r"\[Image #\d+\]\s?")]
+_SEARCH_INLINE_REFERENCE = re.compile(r"(?:^|\r?\n\r?\n)<!-- persona-inline-v1 \[[^\r\n]*", re.M)
 _SEARCH_ACTION = re.compile(r'\n<persona-action view="[^"<>]*" action="[^"<>]*">\{[^<>]*\}</persona-action>$')
 _SEARCH_CARD = re.compile(r"```(persona-view|persona-card)[^\n]*\n(.*?)\n```[^\n]*(?:\n|$)", re.S)
 
@@ -20435,7 +21155,7 @@ def search_index_text(item):
         text = _SEARCH_PASTED.sub(r"\1", text)
         for r in _SEARCH_IMAGES:
             text = r.sub("", text)
-        text = _SEARCH_ACTION.sub("", text.strip()).strip()
+        text = _SEARCH_ACTION.sub("", _SEARCH_INLINE_REFERENCE.sub("", text).strip()).strip()
     else:
         return None
     return text if text.strip() else None
@@ -21829,9 +22549,12 @@ def file_streamed(f, q):
 
 
 def net_control(path, q):
-    """Handles /mock/delay, /mock/down and /mock/reject; True if it was one of them."""
+    """Handles /mock/delay, /mock/down, /mock/reject and /mock/hierarchy; True if it was one of them."""
     if path == "/mock/delay":
         NET["delay"] = float(q.get("s", ["0"])[0])
+        return True
+    if path == "/mock/hierarchy":
+        NET["hierarchy"] = q.get("on", ["1"])[0] != "0"
         return True
     if path == "/mock/down":
         NET["down_until"] = time.time() + float(q.get("s", ["5"])[0])
@@ -23957,6 +24680,9 @@ def pins_route(handler, p):
 # switched off, incompatible), with feature plugin_manager; their pages, switches, settings and secrets work in memory.
 # The form of example-notes has every kind of field. A base_url that is not a URL is refused like the hub does.
 PLUGINS_MODE = os.environ.get("MOCK_EXTENSIONS", "")
+# Extension pages and overview cards a domain module adds to GET /api/v1/plugins/-/ui (each a catalog entry with its
+# "placement"); the domain answers the entry's own routes.
+EXTENSION_UI_EXTRA = []
 _NOTES_FORM = [
     {"name": "base_url", "type": "string", "title": "服务地址", "format": "uri", "default": "https://notes.example.com", "required": True},
     {"name": "folders", "type": "array", "title": "同步哪些文件夹", "items": {"name": "items", "type": "string"},
@@ -25090,12 +25816,8 @@ def markets_route(handler, p, body):
         if GRAPH_MODE and placement in ("", "overview_card"):
             ui += [{"plugin": "example-work", "plugin_name": "Example Work", "id": "work-card", "title": "Work",
                     "placement": "overview_card", "size": "compact", "opens": "work"}]
-        if SCENE_MODE and placement in ("", "nav_page"):
-            ui += [{"plugin": "example-home", "plugin_name": "Example Home", "id": "home-scene", "title": "Home",
-                    "placement": "nav_page", "size": "full", "icon": "home"}]
-        if SCENE_MODE and placement in ("", "overview_card"):
-            ui += [{"plugin": "example-home", "plugin_name": "Example Home", "id": "home-scene-card", "title": "Home",
-                    "placement": "overview_card", "size": "compact", "opens": "home-scene"}]
+        # The pages and cards domain modules add (scripts/mock/mock_domains.py), such as extension_scene_mock.py's.
+        ui += [dict(entry) for entry in EXTENSION_UI_EXTRA if placement in ("", entry["placement"])]
         if os.environ.get("MOCK_EXTENSION_SHOWCASE") == "1" and placement in ("", "nav_page"):
             from pathlib import Path
             snapshots = Path(__file__).resolve().parents[2] / "schema/extension/examples/showcase"
@@ -26547,6 +27269,7 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(mesh_state())
         if p == "/mock/paging":
             PAGING["on"] = q.get("on", ["0"])[0] == "1"
+            PAGING["first"] = int(q.get("first", ["2"])[0])
             return self.send_json({"ok": True, **PAGING})
         if p == "/mock/replay":
             n = int((parse_qs(urlparse(self.path).query).get("n") or ["1"])[0])
@@ -26571,7 +27294,7 @@ class H(BaseHTTPRequestHandler):
             HERDR_STOPPED.clear(); HERDR_STOPPED.update(herdr_env()); HERDR_STARTS.clear()  # the herdr row (#1916)
             HERDR_MODE["start"] = os.environ.get("MOCK_HERDR_START", ""); HERDR_MODE["gen"] += 1
             # A test that died before putting them back: the start-up delay (MOCK_DELAY), no paging.
-            NET["delay"], PAGING["on"] = float(os.environ.get("MOCK_DELAY", "0")), os.environ.get("MOCK_CHAT_SEARCH") == "1"
+            NET["delay"], PAGING["on"], PAGING["first"] = float(os.environ.get("MOCK_DELAY", "0")), os.environ.get("MOCK_CHAT_SEARCH") == "1", 2
             HISTORY_NOW["token"] = HISTORY
             # ExtensionMarketTests' update installed (#2988): example-gateway at 1.0.0 again, its newer version waiting.
             PLUGINS.pop("example-gateway-next", None); _UPGRADE_WHILE_ON.pop("example-gateway", None)
@@ -26615,7 +27338,7 @@ class H(BaseHTTPRequestHandler):
             BUMPED.pop("blocked", None)
             TODOS[:] = copy.deepcopy(TODOS_INIT); DECISION_DISMISSALS.clear()
             TODO_DECISIONS[:] = copy.deepcopy(TODO_DECISIONS_INIT)
-            again = CODEX_INTERACTIONS + SCREEN_MULTI_INTERACTIONS + ASK_LONG_INTERACTIONS + QUESTION_CANCEL_INTERACTIONS + DOCK_INTERACTIONS  # the cards back, unanswered
+            again = CODEX_INTERACTIONS + SCREEN_MULTI_INTERACTIONS + ASK_LONG_INTERACTIONS + QUESTION_CANCEL_INTERACTIONS  # the cards back, unanswered (dock_mock.py puts its own back)
             ids = {x["id"] for x in again}
             INTERACTIONS[:] = [x for x in INTERACTIONS if x["id"] not in ids] + copy.deepcopy(again)
             RESOLVED[:] = [r for r in RESOLVED if r["id"] not in ids]
@@ -26706,6 +27429,7 @@ class H(BaseHTTPRequestHandler):
             if PREFS_FAIL[0]: return self.send_json({"error": "mock: prefs unavailable"}, 503)  # #1860
             return self.send_json(PREFS)
         if p == "/api/v1/pins": return self.send_json(PINS)
+        if p == "/api/v1/agents/display-settings": return self.send_json(AGENTS_DISPLAY)
         if p == "/api/v1/mutes": return self.send_json({"spaces": [], "sessions": TREE_MUTED, "allowed": []})
         if p.startswith("/api/v1/assistant") and (other := assistant_for_manager(self)) is not None:
             if p == "/api/v1/assistant" or other[1] != 200: return self.send_json(*other)
@@ -27148,7 +27872,10 @@ class H(BaseHTTPRequestHandler):
             if b: items = [x for x in items if x["seq"] < int(b)]
             more = False
             if PAGING["on"]:
-                items, more = last_turns(items, int(q.get("turns", ["2"])[0] or 2))
+                # The web asks for two turns explicitly, so a configured long first page must override that value;
+                # older before_seq pages keep the requested (normally two-turn) size.
+                turns = PAGING["first"] if not b and PAGING["first"] != 2 else int(q.get("turns", ["2"])[0] or 2)
+                items, more = last_turns(items, turns)
             out = {"items": lazy_images(fold_work(items) if q.get("fold_work") == ["1"] else items), "has_more": more,
                    **span(items, None, int(b) - 1 if b else last)}
             served(sid, "page", out)
@@ -27240,6 +27967,7 @@ class H(BaseHTTPRequestHandler):
                       "summary": e.get("one_line")}, **KB_DETAIL.get((kind, e["id"]), {}))
             if kind == "recordings": d["meta"] = meeting_detail_meta(e["id"], d.get("meta") or {})
             out = {"detail": d}
+            if kind == "recordings" and not os.environ.get("MOCK_LEGACY_HUB"): out["supports_expected_pinned"] = True
             word = (q.get("q") or [""])[0]
             if word:
                 ms = [{"path": "%s/%s/summary.md" % (kind, e["id"]), "n": i + 1, "line": l.strip()}
@@ -28108,27 +28836,33 @@ class H(BaseHTTPRequestHandler):
             if os.environ.get("MOCK_KB_SAVE_FAIL") == "1": return self.send_json({"error": "知识库暂时写不进去"}, 502)
             kind, eid = p.split("/")[4:6]
             body = json.loads(self.last_body or b"{}")
-            e = next((e for e in KB.get(kind, []) if e["id"] == eid), None)
-            if e is None: return self.send_json({"error": "not found"}, 404)
-            for k in ("importance", "relevance", "tags"):
-                if k in body: e[k] = body[k]
-            if kind == "projects" and ("status" in body or "project_kind" in body):
-                pk, st = (e.get("extra") or "short · active").split(" · ")
-                e["extra"] = "%s · %s" % (body.get("project_kind") or pk, body.get("status") or st)
-            meta = KB_DETAIL.get((kind, eid), {}).get("meta")
-            if meta is not None:
-                meta.update({k: e[k] for k in ("importance", "relevance", "tags") if k in e})
-                if kind == "projects": meta["kind"], meta["status"] = e["extra"].split(" · ")
-            if isinstance(body.get("pinned"), str):  # confirmed facts: "" clears them
-                m = kb_meta(kind, eid)
-                if body["pinned"]: m["pinned"] = body["pinned"]
-                else: m.pop("pinned", None)
-            lock = body["lock_lists"] if "lock_lists" in body else body.get("lock") is not False
-            for field, lst in (("remove_people", "people"), ("remove_chats", "chats"), ("remove_projects", "projects")):
-                for oid in body.get(field) or []: kb_unlink(kind, eid, lst, oid, lock)
-            for field, lst in (("allow_people", "people"), ("allow_chats", "chats"), ("allow_projects", "projects")):
-                for oid in body.get(field) or []: kb_allow(kind, eid, lst, oid)
-            KB_UPDATES.append({"kind": kind, "id": eid, **body})
+            with RECORDINGS_LOCK:
+                e = next((e for e in KB.get(kind, []) if e["id"] == eid), None)
+                if e is None: return self.send_json({"error": "not found"}, 404)
+                if "expected_pinned" in body:
+                    if kind != "recordings" or not isinstance(body.get("pinned"), str) or not isinstance(body["expected_pinned"], str):
+                        return self.send_json({"error":"expected_pinned requires a recording pinned update"},400)
+                    if body["expected_pinned"] != (kb_meta(kind,eid) or {}).get("pinned", ""):
+                        return self.send_json({"error":"conflict"},409)
+                for k in ("importance", "relevance", "tags"):
+                    if k in body: e[k] = body[k]
+                if kind == "projects" and ("status" in body or "project_kind" in body):
+                    pk, st = (e.get("extra") or "short · active").split(" · ")
+                    e["extra"] = "%s · %s" % (body.get("project_kind") or pk, body.get("status") or st)
+                meta = KB_DETAIL.get((kind, eid), {}).get("meta")
+                if meta is not None:
+                    meta.update({k: e[k] for k in ("importance", "relevance", "tags") if k in e})
+                    if kind == "projects": meta["kind"], meta["status"] = e["extra"].split(" · ")
+                if isinstance(body.get("pinned"), str):  # confirmed facts: "" clears them
+                    m = kb_meta(kind, eid)
+                    if body["pinned"]: m["pinned"] = body["pinned"]
+                    else: m.pop("pinned", None)
+                lock = body["lock_lists"] if "lock_lists" in body else body.get("lock") is not False
+                for field, lst in (("remove_people", "people"), ("remove_chats", "chats"), ("remove_projects", "projects")):
+                    for oid in body.get(field) or []: kb_unlink(kind, eid, lst, oid, lock)
+                for field, lst in (("allow_people", "people"), ("allow_chats", "chats"), ("allow_projects", "projects")):
+                    for oid in body.get(field) or []: kb_allow(kind, eid, lst, oid)
+                KB_UPDATES.append({"kind": kind, "id": eid, **body})
             return self.send_json({"ok": True})
         if os.environ.get("MOCK_LARK_NATIVE_OLK") and (p == "/test/lark-encryption/reset" or p == "/api/v1/lark/encryption/unlock" or p.endswith(("/encryption/covers", "/encryption/prepare", "/encrypted-messages"))):
             body = json.loads(self.last_body or b"{}")
@@ -28729,6 +29463,13 @@ class H(BaseHTTPRequestHandler):
                 MOCK_LEADERS.remove(lead)
                 ENDED_LEADERS.add(lead)
             return self.send_json({"ended": ended})
+        if p == "/api/v1/agents/display-settings" and self.command == "PUT":  # exactly one boolean per request
+            body = json.loads(self.last_body or b"{}")
+            sent = [k for k in ("show_botmux", "use_herdr_tab_name", "sort_by_activity", "show_filter") if isinstance(body.get(k), bool)]
+            if len(sent) != 1: return self.send_json({"error": "send exactly one switch"}, 400)
+            AGENTS_DISPLAY[sent[0]] = body[sent[0]]
+            if sent[0] == "show_botmux": AGENTS_DISPLAY["configured"] = True
+            return self.send_json(AGENTS_DISPLAY)
         if p == "/api/v1/pins" and self.command == "PUT":  # the hub keeps them (the reply is what it kept)
             body = json.loads(self.last_body or b"{}")
             PINS.update(spaces=list(body.get("spaces") or []), sessions=list(body.get("sessions") or []))
@@ -28786,6 +29527,11 @@ class H(BaseHTTPRequestHandler):
                     return self.send_json({"error": "%s must be %d–%d" % (key, low, high)}, 400)
             if "task_workspace_preference" in body and body["task_workspace_preference"] not in ("prefer-existing", "prefer-new"):
                 return self.send_json({"error": "task_workspace_preference must be prefer-existing or prefer-new"}, 400)
+            if "default_permission_mode" in body:
+                mode = body["default_permission_mode"]
+                if mode not in ("default", "acceptEdits", "plan", "auto", "bypassPermissions"):
+                    return self.send_json({"error": "bad default_permission_mode"}, 400)
+                ASSISTANT_CONFIG["default_permission_mode"] = mode
             for key in ("start_requested_tasks", "agent_auto_naming"):
                 if isinstance(body.get(key), bool):
                     ASSISTANT_CONFIG[key] = body[key]
@@ -29001,7 +29747,12 @@ class H(BaseHTTPRequestHandler):
                 return self.send_json({"error": "the hub could not take this answer"}, 400)
             if RESOLVE_MODE[0] == "slow":
                 time.sleep(6)
-            RESOLVED.append({"id": p.split("/")[4], "resolution": json.loads(self.last_body or b"{}")})
+            _resolution = json.loads(self.last_body or b"{}")
+            if os.environ.get("MOCK_SECRET_RUN") == "env" and p.split("/")[4] == "ix_secret_run" and \
+                    _resolution.get("allow") is True and \
+                    "secret_run_env" not in [feature.strip() for feature in self.headers.get("X-Persona-Features", "").split(",")]:
+                return self.send_json({"error": "update the app to approve environment delivery", "code": "secret_run_env_elsewhere"}, 403)
+            RESOLVED.append({"id": p.split("/")[4], "resolution": _resolution})
             if os.environ.get("MOCK_CODEX") and p.split("/")[4] == "cxa_orders_curl" and \
                     sum(r["id"] == "cxa_orders_curl" for r in RESOLVED) == 1:
                 return self.send_json({"error": "电脑上 Codex 的输入框里有没发出去的内容：「先看下慢查询日志」。这次什么都没输入，免得和它拼在一起：在电脑上发出去或清空后再答。",
@@ -29017,7 +29768,7 @@ class H(BaseHTTPRequestHandler):
             return self.send_json({"ok": True})
         if p.startswith("/api/v1/machines/") and p.endswith("/agent-dirs/hidden") and self.command == "PUT":
             state, err = _set_agent_dirs_hidden(p.split("/")[4], json.loads(self.last_body or b"{}"))
-            return self.send_json({"error": err} if err else state, 400 if err else 200)
+            return self.send_json({"error": err} if err else state, 409 if err == "agent directory rules changed" else 400 if err else 200)
         if p.startswith("/api/v1/machines/") and p.endswith("/claude-dirs/blocked") and self.command == "PUT":
             body, mid = json.loads(self.last_body or b"{}"), p.split("/")[4]
             pats = []
@@ -29860,7 +30611,6 @@ MOCK_HELP.append("MOCK_NAVIGATION=no-overview  A default manager from before Ove
 MOCK_HELP.append("MOCK_OVERVIEW_CARDS=1  (with MOCK_EXTENSIONS=1) Three more made-up Overview cards beside the gateway's 今天的用量: Quota left (example-quota), Needs me and Agenda (example-today), for arranging them (#9745)")
 MOCK_HELP.append("MOCK_EXTENSION_COLUMNS=1  (with MOCK_EXTENSIONS=1) A made-up extension's Today page, UI version 8's columns layout (#9158): a full-width Needs me card with its rows two a line, then Calendar | Lark today and WeChat | Running Agents, each with an icon, a link beside its title, a summary and a link at the bottom")
 MOCK_HELP.append("MOCK_EXTENSION_GRAPH=1  (with MOCK_EXTENSIONS=1) A made-up Work page, UI version 10's graph (#9727): a 200-node tree of work in states with groups, progress, a folded part and a selected step; a node pushes its own page; each draw moves one step to Done; an overview card shows the graph as a still preview")
-MOCK_HELP.append("MOCK_EXTENSION_SCENE=1  (with MOCK_EXTENSIONS=1) A made-up Home page, UI version 11's scene (#12544): a two-room flat with floors, walls, windows, furniture, room labels and device pins in plain words; tapping a pin pushes its device page; each draw flips one lamp so a redraw changes state without moving the camera; an overview card shows the scene as a still preview")
 MOCK_HELP.append("MOCK_EXTENSION_GAUGE=1  (with MOCK_EXTENSIONS=1) A made-up gateway's Quota page, UI version 9's gauge (#9337): a row of status tiles, then a card of three rings (5 hours, This week, Fable this week; the last one low, in amber) with the reset times in its footer")
 MOCK_HELP.append("MOCK_EXTENSION_PICKERS=1  （配合 MOCK_EXTENSIONS=1）多一个扩展「Example 聊天」：设置里选一台电脑（format machine）、选启动器（format launcher，代答的那个已经不在了）、整数带步进（#2385）")
 MOCK_HELP.append("MOCK_EXTENSION_OPS=1|fail  （配合 MOCK_EXTENSIONS）扩展的安装 / 升级 / 卸载分步骤推进度（extension_operation 事件）：后台预览、停在等你同意、同意后同一个操作接着装；fail：每个扩展第一次安装停在「启动」、第一次卸载停在「删除」，都能重试；MOCK_EXTENSION_OPS_STEP=秒 每步的时长；MOCK_EXTENSION_INSTALL_DELAY=秒 没有分步骤的旧 hub 安装 / 卸载要这么久才回（#3307）")
@@ -30466,9 +31216,6 @@ def plugins_route(handler, p, body):
         return mock_work(handler, body, card=p.endswith("-card"))
     if PLUGINS_MODE and GRAPH_MODE and p == "/api/v1/extensions/example-work/-/ui/control-room":
         return mock_control_room(handler, body)
-    if PLUGINS_MODE and SCENE_MODE and p in ("/api/v1/extensions/example-home/-/ui/home-scene",
-                                             "/api/v1/extensions/example-home/-/ui/home-scene-card"):
-        return mock_home_scene(handler, body, card=p.endswith("-card"))
     if PLUGINS_MODE and p == "/api/v1/extensions/showcase/-/ui/motion":
         handler.send_json({"view": _motion_view(_MOTION_STEP[0])})
         return True
@@ -30731,128 +31478,6 @@ def mock_work(handler, body, card=False):
     view = _work_view(_WORK_DRAWS[0], node)
     if card:
         view = {"title": "Work", "sections": [{"key": "work", "items": [_work_graph(_WORK_DRAWS[0])]}]}
-    handler.send_json({"view": view})
-    return True
-
-
-# MOCK_EXTENSION_SCENE=1 (with MOCK_EXTENSIONS=1): UI version 11's scene (#12544), a made-up "Home" page: a two-room
-# flat with wood and tile floors, cutaway walls with a doorway and a glass window, a sofa, a round table, a TV and a
-# bed, room labels and five device pins in plain words. Tapping a pin pushes its device page; each draw toggles the
-# bedroom lamp so a redraw changes pin and light state while keeping the same key and shapes. All names are invented.
-SCENE_MODE = os.environ.get("MOCK_EXTENSION_SCENE") == "1"
-_HOME_DRAWS = [0]
-
-
-def _home_scene_component(draw):
-    bedroom_on = (draw % 2) == 1
-    shapes = [
-        {"kind": "prism", "points": [[-4.0, -2.6], [0.6, -2.6], [0.6, 2.6], [-4.0, 2.6]],
-         "bottom": 0.0, "top": 0.06, "color": "#C9AD8C", "material": "wood"},
-        {"kind": "prism", "points": [[0.6, -2.6], [4.0, -2.6], [4.0, 2.6], [0.6, 2.6]],
-         "bottom": 0.0, "top": 0.06, "color": "#D8D3CA", "material": "tile"},
-        {"kind": "box", "center": [0.0, 2.54], "size": [8.0, 0.12], "bottom": 0.06, "top": 2.5, "color": "#EAE6DF", "wall": True},
-        {"kind": "box", "center": [-3.94, 0.0], "size": [0.12, 5.2], "bottom": 0.06, "top": 2.5, "color": "#EAE6DF", "wall": True},
-        {"kind": "box", "center": [3.94, 0.0], "size": [0.12, 5.2], "bottom": 0.06, "top": 2.5, "color": "#EAE6DF", "wall": True},
-        {"kind": "box", "center": [-2.7, -2.54], "size": [2.6, 0.12], "bottom": 0.06, "top": 2.5, "color": "#EAE6DF", "wall": True},
-        {"kind": "box", "center": [-0.3, -2.54], "size": [2.2, 0.12], "bottom": 0.06, "top": 0.55, "color": "#EAE6DF", "wall": True},
-        {"kind": "box", "center": [-0.3, -2.54], "size": [2.2, 0.06], "bottom": 0.55, "top": 2.2,
-         "color": "#9EC4DC", "material": "glass"},
-        {"kind": "box", "center": [2.4, -2.54], "size": [3.2, 0.12], "bottom": 0.06, "top": 2.5, "color": "#EAE6DF", "wall": True},
-        # a wardrobe against the west wall: see-through while that wall is cut away (#13036)
-        {"kind": "box", "center": [-3.56, -0.9], "size": [0.6, 1.4], "bottom": 0.06, "top": 2.1, "color": "#EFEBE4", "material": "wood"},
-        {"kind": "box", "center": [0.6, 1.55], "size": [0.1, 2.1], "bottom": 0.06, "top": 2.5, "color": "#E2DDD4", "wall": True},
-        {"kind": "box", "center": [0.6, -1.55], "size": [0.1, 2.1], "bottom": 0.06, "top": 2.5, "color": "#E2DDD4", "wall": True},
-        {"kind": "box", "center": [-2.2, 1.4], "size": [2.1, 0.9], "round": 0.14, "bottom": 0.06, "top": 0.48, "color": "#788796"},
-        {"kind": "box", "center": [-2.2, 1.76], "size": [2.1, 0.2], "round": 0.08, "bottom": 0.48, "top": 0.84, "color": "#6E7D8C"},
-        {"kind": "cylinder", "center": [-2.1, 0.15], "radius": 0.46, "bottom": 0.06, "top": 0.44,
-         "color": "#B58E65", "material": "wood"},
-        {"kind": "box", "center": [-2.1, -1.75], "size": [1.7, 0.42], "round": 0.06, "bottom": 0.06, "top": 0.46,
-         "color": "#8E7358", "material": "wood"},
-        {"kind": "box", "center": [-2.1, -1.78], "size": [1.35, 0.06], "bottom": 0.5, "top": 1.24,
-         "color": "#20252D", "material": "screen"},
-        {"kind": "cylinder", "center": [-3.45, 1.95], "radius": 0.16, "bottom": 0.06, "top": 1.52,
-         "color": "#9BA2AA", "material": "metal"},
-        {"kind": "box", "center": [2.35, 1.05], "size": [2.0, 2.2], "round": 0.1, "bottom": 0.06, "top": 0.56, "color": "#DFD9CF"},
-        {"kind": "box", "center": [2.35, 1.95], "size": [1.85, 0.35], "round": 0.08, "bottom": 0.56, "top": 0.82, "color": "#C8C1B6"},
-    ]
-    pins = [
-        {"id": "living-lamp", "at": [-1.9, 0.3], "height": 2.35, "label": "Ceiling lamp", "state": "On",
-         "icon": "light", "tone": "positive", "light": {"on": True, "warmth": "warm"},
-         "action": {"id": "open", "values": {"id": "living-lamp"}, "push": {"ui": "home-scene", "state": "living-lamp"}}},
-        {"id": "living-ac", "at": [-3.75, 0.1], "height": 2.05, "label": "Air conditioner", "state": "26 °C",
-         "icon": "fan", "color": "blue",
-         "action": {"id": "open", "values": {"id": "living-ac"}, "push": {"ui": "home-scene", "state": "living-ac"}}},
-        {"id": "living-tv", "at": [-2.1, -1.78], "height": 1.0, "label": "TV", "state": "Not sure if on",
-         "icon": "video", "tone": "caution",
-         "action": {"id": "open", "values": {"id": "living-tv"}, "push": {"ui": "home-scene", "state": "living-tv"}}},
-        {"id": "bedroom-lamp", "at": [2.35, 0.35], "height": 2.35, "label": "Bedroom lamp",
-         "state": "On" if bedroom_on else "Off",
-         "icon": "light", **({"tone": "positive"} if bedroom_on else {}),
-         "light": {"on": bedroom_on, "warmth": "cool"},
-         "action": {"id": "open", "values": {"id": "bedroom-lamp"}, "push": {"ui": "home-scene", "state": "bedroom-lamp"}}},
-    ]
-    return {
-        "type": "scene",
-        "key": "home",
-        "alt": "Two-room flat with a living room on the west and a bedroom on the east.",
-        "caption": "Drag to turn, pinch to zoom, tap a device for its controls.",
-        "shapes": shapes,
-        "labels": [
-            {"text": "Living room", "at": [-0.9, -0.35], "height": 0.08},
-            {"text": "Bedroom", "at": [2.3, -1.2], "height": 0.08},
-        ],
-        "pins": pins,
-    }
-
-
-def _home_scene_downgrade(scene):
-    items = [{"type": "text", "text": scene["caption"]}]
-    for pin in scene["pins"]:
-        row = {"type": "row", "key": f"{scene['key']}:{pin['id']}", "title": pin["label"],
-               "icon": pin.get("icon"), "action": pin.get("action")}
-        if pin.get("tone"):
-            row["badge"] = {"text": pin.get("state", ""), "tone": pin["tone"]}
-        elif pin.get("state"):
-            row["value"] = pin["state"]
-        if pin.get("color"):
-            row["icon_color"] = pin["color"]
-        items.append(row)
-    return items
-
-
-def _home_scene_view(draw, device=None, ui_version=11):
-    if device:
-        return {"title": device, "sections": [{"key": "device", "items": [
-            {"type": "header", "title": device, "subtitle": "A made-up device", "badges": [{"text": "On", "tone": "positive"}]},
-            {"type": "text", "text": "This page stands for a device's own page: its switches, its temperature and its history."}]}]}
-    scene = _home_scene_component(draw)
-    body_items = [scene] if ui_version >= 11 else _home_scene_downgrade(scene)
-    lamp_count = 2 if (draw % 2) == 1 else 1
-    return {"title": "Home", "refresh_after": 30, "sections": [{"key": "home", "items": [
-        {"type": "header", "title": "Two-room flat", "subtitle": f"{lamp_count} of 2 lamps on · 26 °C",
-         "badges": [{"text": "Home", "tone": "positive"}]},
-        *body_items]}]}
-
-
-def mock_home_scene(handler, body, card=False):
-    request = json.loads(body) if body else {}
-    ctx = request.get("context") or {}
-    ui_version = ctx.get("ui_version", 11)
-    if os.environ.get("MOCK_EXTENSION_SCENE_DOWNGRADE") == "1":
-        ui_version = 10
-    state = request.get("state")
-    device = state if isinstance(state, str) and state else None
-    if request.get("action") == "open":
-        device = (request.get("values") or {}).get("id") or "living-lamp"
-        handler.send_json({"view": _home_scene_view(0, device, ui_version=ui_version)})
-        return True
-    if not card and not device:
-        _HOME_DRAWS[0] += 1
-    view = _home_scene_view(_HOME_DRAWS[0], device, ui_version=ui_version)
-    if card:
-        scene = _home_scene_component(_HOME_DRAWS[0])
-        items = [scene] if ui_version >= 11 else _home_scene_downgrade(scene)[:4]
-        view = {"title": "Home", "sections": [{"key": "home", "items": items}]}
     handler.send_json({"view": view})
     return True
 
@@ -31578,6 +32203,17 @@ MOCK_HELP.append("MOCK_ADD_COMPUTER=1|seed  机器 › 添加电脑（#287）：
                  "add.manager 把电脑加到那个助手名下（回包 manager；助手离线时 /machines 先不列它），MOCK_ADD_COMPUTER_NO_MANAGER=1 模拟不认它的旧 hub（回包没有 manager）")
 
 # ---------- area: the main conversation's readiness (#287, docs/assistant/onboarding.md 4.4–4.6, 5.1–5.4) ----------
+# MOCK_TOOL_SEARCH=1: the current main chat's turn failed because this gateway cannot load deferred tool references.
+# It is separate from the new-user readiness scenarios so the ordinary populated chat can show its dedicated Retry card.
+if TOOL_SEARCH:
+    _tool_search_text = ('API Error: 400 {"type":"error","error":{"type":"invalid_request_error",'
+                         '"message":"tool_reference blocks with defer_loading are not representable for this model"}}')
+    _tool_main = next((s for s in ASSISTANT if s["session_id"] == ASK1), None)
+    if _tool_main is not None:
+        _tool_main.update(turn_error=_tool_search_text, turn_error_code="tool_search_unsupported", turn_error_kind="user",
+                          last_text=_tool_search_text)
+        ITEMS[ASK1] = ITEMS.get(ASK1, []) + [it("assistant", "text", 0.2, text=_tool_search_text)]
+
 # MOCK_READINESS=<scenario> (docs/operations/testing.md "Readiness scenarios", scripts/mock/readiness_mock.py): a new user's hub in one of
 # the states the setup card shows, in the hub's shapes and words (its own catalogs, by Accept-Language): the features
 # assistant_readiness, machines_add, machine_trust, builtin_presets and launcher_auto_name; GET /api/v1/assistant/readiness[?probe=1],
@@ -32324,6 +32960,21 @@ _features_without_model_pick = features
 
 def features():
     return _features_without_model_pick() + (["assistant_model_pick", "assistant_start_service_tier"] if MODEL_PICK_MODE else [])
+
+
+_features_without_start_remedies = features
+
+
+def features():
+    base = _features_without_start_remedies()
+    extra = ("task_retry_launcher", "start_continue", "todo_start_answer") if START_REMEDIES else ()
+    return base + [f for f in extra if f not in base]
+
+
+MOCK_HELP.append("MOCK_START_REMEDIES=1  配合 MOCK_TASKS=1（#10365）：features 带 task_retry_launcher / start_continue / todo_start_answer；"
+                 "末尾三个失败任务分别是 launcher_missing + retry_with、无 plan_id 的 worktree_path_taken、todo_start_answer 的 shell_waiting；"
+                 "另有一个 start_continue 的 Agent 会话。Retry 记录空 body 或 launcher，回答两个 start 路由；GET /mock/start-remedies 看请求")
+MOCK_HELP.append("MOCK_TOOL_SEARCH=1  普通主对话的 tool_search_unsupported 原始 400 turn error，看专用 Retry 卡（#10365）")
 
 
 MOCK_HELP.append("MOCK_MODEL_PICK=1|picked|otherkind  Persona 对话自己的模型（#5033）：features 带 assistant_model_pick；主对话的启动器（?purpose=assistant）带默认和 unavailable"

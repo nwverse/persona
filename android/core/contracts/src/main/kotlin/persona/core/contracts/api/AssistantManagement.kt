@@ -51,6 +51,19 @@ interface AssistantManagement {
         throw UnsupportedOperationException("Model pick unavailable")
     /** The conversation follows the default again (`DELETE …/conversations/{id}/model`): Follow default, Undo pick. */
     suspend fun clearModelPick(session: SessionKey): Unit = throw UnsupportedOperationException("Model pick unavailable")
+    /**
+     * Logical-conversation segment state for explicit cross-engine / runtime switching
+     * (`GET /api/v1/assistant/conversations/{id}/segments?machine_id=...`, feature `assistant_segments`).
+     */
+    suspend fun conversationSwitchState(session: SessionKey): ConversationSwitchState =
+        throw UnsupportedOperationException("Conversation switch unavailable")
+    /**
+     * Requests an explicit logical-conversation switch (`POST /api/v1/assistant/conversations/{id}/switch`,
+     * feature `assistant_segments`). Retrying after an uncertain failure reuses the same [request] (`operation_id` and
+     * `expected_epoch`) so the hub treats it idempotently.
+     */
+    suspend fun submitConversationSwitch(session: SessionKey, request: ConversationSwitchRequest): Unit =
+        throw UnsupportedOperationException("Conversation switch unavailable")
     suspend fun endConversation(session: SessionKey)
     /**
      * Compacts an assistant conversation's context now (POST /api/v1/assistant/conversations/{id}/compact, hub feature
@@ -92,8 +105,8 @@ interface AssistantManagement {
      */
     suspend fun makeDirection(session: SessionKey): Unit = throw UnsupportedOperationException("Directions unavailable")
     /**
-     * Ends a conversation's leadership (POST /api/v1/assistant/directions/{id}/end, #4331): it leaves 常驻; the tasks it
-     * handed out keep their supervisor. The conversation itself stays, an ordinary chat now.
+     * Ends a conversation's leadership (POST /api/v1/assistant/directions/{id}/end, #4331): it leaves 常驻; its open
+     * tasks go to the main chat's supervision. The conversation itself stays, an ordinary chat now.
      */
     suspend fun endDirection(session: SessionKey): Unit = throw UnsupportedOperationException("Directions unavailable")
     /**
@@ -166,6 +179,36 @@ interface AssistantManagement {
      */
     suspend fun revokeStandingAuthorization(id: String): Unit =
         throw UnsupportedOperationException("Standing authorizations unavailable")
+
+    // Domain spaces (#13500, docs/assistant/health.md "Tracks and kinds"): the default manager's routes, so callers use
+    // forManager(null). The defaults keep transports and fakes written before them compiling.
+    /** Every track, built-in and archived ones included (GET …/tracks); [TracksUnsupported] from an assistant without them. */
+    suspend fun tracks(): List<Track> = throw TracksUnsupported()
+    /** The kinds a track may be of (GET …/track-kinds); empty when the answer has none. */
+    suspend fun trackKinds(): List<TrackKind> = throw UnsupportedOperationException("Track kinds unavailable")
+    /** Creates a space (POST …/tracks); answers it as the hub has it. */
+    suspend fun createTrack(track: TrackCreate): Track = throw UnsupportedOperationException("Tracks unavailable")
+    /** Changes a space (PUT …/tracks/{slug}): only the fields [change] gives; `archived = true` archives it. */
+    suspend fun changeTrack(slug: String, change: TrackChange): Track = throw UnsupportedOperationException("Tracks unavailable")
+    /** A space's SPACE.md (GET …/tracks/{slug}/space-md). */
+    suspend fun spaceMd(slug: String): SpaceMd = throw UnsupportedOperationException("SPACE.md unavailable")
+    /**
+     * Writes SPACE.md's human area (PUT …/space-md); [baseDigest] is the digest of the content the edit started from. A
+     * refusal throws the hub's failure with its status: 409 changed elsewhere, 400 a managed block changed, 503 offline.
+     */
+    suspend fun writeSpaceMd(slug: String, content: String, baseDigest: String): SpaceMd =
+        throw UnsupportedOperationException("SPACE.md unavailable")
+    /** The information categories a conversation holds (GET …/conversations/{id}/categories). */
+    suspend fun conversationCategories(session: SessionKey): ConversationCategories =
+        throw UnsupportedOperationException("Conversation categories unavailable")
+    /** Takes categories away from a conversation or puts removed ones back (PUT …/categories); only the user loosens. */
+    suspend fun changeConversationCategories(session: SessionKey, add: List<String> = emptyList(), remove: List<String> = emptyList()): ConversationCategories =
+        throw UnsupportedOperationException("Conversation categories unavailable")
+    /** What every extension the user decided about may read (GET …/extension-trust); null from an assistant without grants. */
+    suspend fun extensionTrust(): List<ExtensionTrust>? = null
+    /** Sets what extension [id] may read (PUT …/extension-trust/{id}); answers it as the hub kept it. */
+    suspend fun setExtensionTrust(id: String, trust: ExtensionTrust): ExtensionTrust =
+        throw UnsupportedOperationException("Extension trust unavailable")
 }
 
 /** One message a chat was found by (`docs/protocol/protocol.md` "Assistant chat search"). `ranges` are UTF-16 `[start, end)` in [snippet]. */
@@ -325,6 +368,34 @@ data class MemoryFile(val name: String = "", val content: String = "", @SerialNa
 
 /** What "New main chat" did: the conversation put away ([archived], empty when there was none) and whether any of it carries over. */
 data class NewMainResult(val archived: String = "", val carried: Boolean = false)
+
+/**
+ * Current logical-conversation segment state (`GET /api/v1/assistant/conversations/{id}/segments?machine_id=...`,
+ * feature `assistant_segments`).
+ */
+@Serializable
+data class ConversationSwitchState(
+    val enabled: Boolean = false,
+    val epoch: Long = 0,
+    @SerialName("supervision_required") val supervisionRequired: Boolean = false,
+)
+
+/**
+ * Explicit logical-conversation switch request (`POST /api/v1/assistant/conversations/{id}/switch`,
+ * feature `assistant_segments`). Preserved across retries after an uncertain failure so the hub handles replays
+ * idempotently.
+ */
+@Serializable
+data class ConversationSwitchRequest(
+    @SerialName("operation_id") val operationId: String,
+    @SerialName("expected_epoch") val expectedEpoch: Long,
+    @SerialName("source_machine_id") val sourceMachineId: String,
+    @SerialName("machine_id") val machineId: String,
+    val launcher: String,
+    val model: String? = null,
+    val effort: String? = null,
+    @SerialName("permission_mode") val permissionMode: String? = null,
+)
 
 /** The hub refused an assistant action (409 with a `code`); [message] is the hub's own words, fit to show as they are. */
 class AssistantRefused(val code: String, message: String) : Exception(message)

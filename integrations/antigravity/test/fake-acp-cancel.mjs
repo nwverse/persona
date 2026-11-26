@@ -8,7 +8,7 @@
 //   'ignore-cancel'  hold the prompt and never end it, even when cancelled (an agent that does not confirm the cancel)
 //   anything else    hold the prompt until it is cancelled
 // Every message it receives goes to the --record file as one JSON line, after a first {"started": <pid>} line.
-import { appendFileSync } from 'node:fs'
+import { appendFileSync, existsSync } from 'node:fs'
 import { createInterface } from 'node:readline'
 
 if (process.argv.includes('models')) { console.log('test-model\tTest Model'); process.exit(0) }
@@ -21,19 +21,20 @@ const send = (o) => process.stdout.write(`${JSON.stringify(o)}\n`)
 let nextId = 1
 const turns = new Map() // sessionId -> { id, mode, cancelled, open: Set of permission request ids }
 
-function askPermission(sessionId, toolCallId) {
+function askPermission(sessionId, toolCallId, toolCall = { title: 'run_command', rawInput: { command: 'ls' } }, options) {
   const id = `perm-${nextId++}`
+  record({ askedPermission: id, sessionId })
   send({
     jsonrpc: '2.0',
     id,
     method: 'session/request_permission',
     params: {
       sessionId,
-      toolCall: { toolCallId, title: 'run_command', rawInput: { command: 'ls' } },
-      options: [
+      toolCall: { toolCallId, ...toolCall },
+      options: options === undefined ? [
         { optionId: 'allow', name: 'Allow', kind: 'allow_once' },
         { optionId: 'reject', name: 'Reject', kind: 'reject_once' },
-      ],
+      ] : options,
     },
   })
   return id
@@ -72,7 +73,31 @@ function onRequest(msg) {
       }
       const turn = { id, mode, cancelled: false, open: new Set() }
       turns.set(sessionId, turn)
-      if (mode === 'ask') turn.open.add(askPermission(sessionId, 'call-1'))
+      if (mode === 'ask' || mode.startsWith('ask-shape ')) {
+        const toolCall = mode === 'ask' ? undefined : JSON.parse(mode.slice('ask-shape '.length))
+        turn.open.add(askPermission(sessionId, 'call-1', toolCall))
+      }
+      if (mode.startsWith('ask-options ')) {
+        const options = JSON.parse(mode.slice('ask-options '.length))
+        turn.open.add(askPermission(sessionId, 'call-1', undefined, options))
+      }
+      if (mode.startsWith('ask-full ')) {
+        const { toolCall, options, waitFile } = JSON.parse(mode.slice('ask-full '.length))
+        if (waitFile) {
+          const timer = setInterval(() => {
+            if (!turns.has(sessionId) || turn.cancelled) {
+              clearInterval(timer)
+              return
+            }
+            if (existsSync(waitFile)) {
+              clearInterval(timer)
+              turn.open.add(askPermission(sessionId, 'call-1', toolCall, options))
+            }
+          }, 10)
+        } else {
+          turn.open.add(askPermission(sessionId, 'call-1', toolCall, options))
+        }
+      }
       if (mode === 'updates' || mode === 'unrelated-updates') {
         let count = 0
         const timer = setInterval(() => {

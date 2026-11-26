@@ -25,7 +25,7 @@ vi.mock("../lib/store", async (importOriginal) => {
 });
 vi.mock("../lib/sessions", async (importOriginal) => {
   const real = await importOriginal<typeof import("../lib/sessions")>();
-  return { ...real, useAgentSessions: () => fake.sessions, useCounts: () => ({ ...real.stateCounts(fake.sessions), interactions: fake.interactions.length }), useAgentListStatus: () => ({ status: fake.list, whole: fake.list === "loaded" && !fake.partial }) };
+  return { ...real, useAgentSessions: () => fake.sessions, useCounts: () => ({ ...real.stateCounts(fake.sessions, fake.interactions), interactions: fake.interactions.length }), useAgentListStatus: () => ({ status: fake.list, whole: fake.list === "loaded" && !fake.partial }) };
 });
 
 // the extensions' overview cards are not this test's
@@ -40,6 +40,7 @@ vi.mock("../lib/ops", async (importOriginal) => ({ ...(await importOriginal<type
 const { Home, offlineLine, rowTags } = await import("./Home");
 const { answerCard } = await import("../lib/card-answer");
 const { allowBody } = await import("../lib/quick-answers");
+const { loadPages } = await import("../lib/lazy-page");
 const { t } = await import("../i18n");
 
 const mac: Machine = { id: "mac", name: "Mac", online: true };
@@ -209,6 +210,29 @@ describe("the overview", () => {
       expect(html).toContain("先接入一台电脑，再开始使用 Agent。");
       expect(html).not.toContain("没能读到 Agent 的状态");
     });
+  });
+
+  it("keeps the Computers row interaction style before and after the Rows view loads", async () => {
+    const row = /<a [^>]*href="\/machines\/mac"[^>]*class="[^"]*\bcard-interactive\b/;
+    expect(render([], [], { machines: [mac] })).toMatch(row);
+    await loadPages();
+    const { OVERVIEW_MACHINE_VIEW_KEY } = await import("./OverviewMachineView");
+    localStorage.setItem(OVERVIEW_MACHINE_VIEW_KEY, "rows");
+    try {
+      const html = render([], [], { machines: [mac] });
+      expect(html).toMatch(/role="radio" aria-checked="true" data-selected="true"[^>]*>行<\/button>/);
+      expect(html).toMatch(row);
+    } finally {
+      localStorage.removeItem(OVERVIEW_MACHINE_VIEW_KEY);
+    }
+  });
+
+  it("offers the Cards and Rows display switch on the Computers heading, with Cards selected by default", async () => {
+    await loadPages();
+    const html = render([], [], { machines: [mac] });
+    expect(html).toContain('role="radiogroup" aria-label="显示方式"');
+    expect(html).toMatch(/role="radio" aria-checked="true" data-selected="true"[^>]*>卡片<\/button>/);
+    expect(html).toMatch(/role="radio" aria-checked="false" data-selected="false"[^>]*>行<\/button>/);
   });
 
   it("never builds an empty sentence: with only a card whose agent is not counted, it says how many requests wait (audit item 30)", () => {
@@ -509,6 +533,42 @@ describe("tasks in progress", () => {
     const html = render([]);
     fake.todos = [];
     expect(heading(html, "进行中的任务")).toBe(-1);
+  });
+});
+
+describe("a card the task's supervisor holds (lib/supervisor-held.ts)", () => {
+  const dialog = { question: "Do you want to proceed?", detail: "rmdir build", options: [{ key: "1", label: "Yes" }, { key: "2", label: "No" }] };
+  const screen = (sid: string, o: Partial<Interaction> = {}) => ({ id: `screen-${sid}`, machine_id: "mac", session_id: sid, kind: "screen", dialog, ...o }) as Interaction;
+  const needsCount = (html: string) => html.match(/>需要你<\/h2><span[^>]*>(\d+)</)?.[1];
+
+  it("is neither listed nor counted in Needs you, and offers no Yes / No; its agent is listed Working", () => {
+    const a = agent(1, 0, "needs_you", { title: "清理构建目录" });
+    const html = render([a], [screen(a.session_id, { delegating: true })]);
+    expect(heading(html, "需要你")).toBe(-1);
+    expect(html).not.toContain("rmdir build");
+    expect(buttonLabels(html)).not.toContain("Yes");
+    expect(buttonLabels(html)).not.toContain("No");
+    expect(html).not.toContain("1 个 Agent 需要你");
+    // waiting on the supervisor, not stuck on the user
+    expect(heading(html, "卡住了，要你去看")).toBe(-1);
+    expect(heading(html, "工作中")).toBeGreaterThan(-1);
+    expect(html).toContain("清理构建目录");
+  });
+
+  it("leaves the agent's other card in Needs you, counted once", () => {
+    const a = agent(1, 0, "needs_you");
+    const html = render([a], [screen(a.session_id, { delegating: true }), { id: "p", kind: "permission", machine_id: "mac", session_id: a.session_id, tool_name: "Bash", tool_input: { command: "swift test" } } as Interaction]);
+    expect(needsCount(html)).toBe("1");
+    expect(html).toContain("swift test");
+    expect(html).not.toContain("rmdir build");
+  });
+
+  it("an unheld terminal dialog is listed, counted and answered on its row as before", () => {
+    const a = agent(1, 0, "needs_you");
+    const html = render([a], [screen(a.session_id)]);
+    expect(needsCount(html)).toBe("1");
+    expect(html).toContain("rmdir build");
+    expect(buttonLabels(html)).toEqual(expect.arrayContaining(["Yes", "No"]));
   });
 });
 

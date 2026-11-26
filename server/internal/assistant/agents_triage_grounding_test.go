@@ -85,7 +85,7 @@ func TestTriageReadsDurableAnswers(t *testing.T) {
 	// Fresh services read the same durable history; no in-memory decision cache is required.
 	for range 2 {
 		s, f := workService(t)
-		s.store = func() Store { return store }
+		s.setStore(func() Store { return store })
 		f.setSessions("box", stopped("s1", "收到，结果到了就发"))
 		f.triage = `{"phase":"blocked","on":"user","questions":[{"question":"Post on #123 now?"}]}`
 		triage(t, s, "s1")
@@ -120,10 +120,27 @@ func (brokenTriageHistory) Interactions(context.Context, string, string, int) ([
 
 func TestTriageHistoryFailureIsRetryable(t *testing.T) {
 	s, f := workService(t)
-	s.store = func() Store { return brokenTriageHistory{newFleetMem()} }
+	s.setStore(func() Store { return brokenTriageHistory{newFleetMem()} })
 	f.setSessions("box", stopped("s1", "Post now?"))
 	triage(t, s, "s1")
 	if _, ok := s.workEntry([2]string{"box", "s1"}); ok || len(f.triageAsked) != 0 || len(s.workCards()) != 0 {
 		t.Fatal("triage proceeded without decision history")
+	}
+}
+
+func TestReadOnlyTriageDoesNotStoreAnUnsupportedUserWait(t *testing.T) {
+	s, f := workService(t)
+	const reply = "The checks passed. The scheduled job will run next."
+	f.setItems(proto.Item{Kind: proto.KindText, Role: "assistant", Text: reply})
+	f.triage = `{"phase":"blocked","on":"user","line":"Approval needed","questions":[{"question":"Should I run the job?"}]}`
+	row := stopped("s1", reply)
+	row.ReadOnlyReason, row.Capabilities = "Read-only history", &proto.SessionCapabilities{Read: true}
+	f.setSessions("box", row)
+	triage(t, s, "s1")
+	if work := entryOf(t, s, "s1").Work; work.Phase != "" || work.On != "" {
+		t.Fatalf("read-only triage kept an unsupported wait: %+v", work)
+	}
+	if len(s.workCards()) != 0 || len(f.sentToAgents()) != 0 {
+		t.Fatal("read-only triage tried to act on the unsupported wait")
 	}
 }

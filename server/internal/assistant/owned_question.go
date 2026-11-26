@@ -11,6 +11,10 @@ import (
 // durable outcome belongs to this question ID; replay it to the owner, never ask
 // the user again. New IDs still go through the ordinary interaction lifecycle.
 func (s *Service) waitOwnedQuestion(ctx context.Context, ix proto.Interaction) (proto.Resolution, error) {
+	return s.waitOwnedQuestionReady(ctx, ix, nil)
+}
+
+func (s *Service) waitOwnedQuestionReady(ctx context.Context, ix proto.Interaction, ready chan<- struct{}) (proto.Resolution, error) {
 	if st := s.fleetStore(); st != nil {
 		readCtx, cancel := context.WithTimeout(ctx, historyTimeout)
 		status, kept, err := st.InteractionOutcome(readCtx, ix.ID)
@@ -33,9 +37,16 @@ func (s *Service) waitOwnedQuestion(ctx context.Context, ix proto.Interaction) (
 	// A resumable one (asked without waiting, ask_later.go) is claimed as a hook claims its card again: the grace
 	// period a restart started for it is called off there (waitInteraction).
 	reattach := p != nil && p.local == nil && !ix.Resumable
+	reattachPrepared := reattach && p.prepared != nil
 	s.fleet.mu.Unlock()
+	if reattach && ready != nil {
+		close(ready)
+	}
+	if reattachPrepared {
+		return s.awaitPrepared(ctx, p, true)
+	}
 	if reattach {
 		return s.await(ctx, p)
 	}
-	return s.waitInteraction(ctx, ix)
+	return s.waitInteractionReady(ctx, ix, nil, ready)
 }

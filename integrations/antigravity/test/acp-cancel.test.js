@@ -117,7 +117,7 @@ async function agyRuntime(t, options = {}) {
   // agy keeps each conversation in brain/<id>: the runtime lists the sessions it finds there.
   const agyDir = join(dir, 'config')
   mkdirSync(join(agyDir, 'brain', SESSION), { recursive: true })
-  const n = await startFakeNode(t)
+  const n = await startFakeNode(t, options.node)
   n.resolve = () => new Promise(() => {})
   options.beforeStart?.(agyDir)
   const runtime = createAgyRuntime({ agyBin, agyDir, home: dir, socketPath: n.path, log: () => {}, ...options.runtime })
@@ -390,6 +390,54 @@ test('permission cards use the runtime, session, kind and tool call key', async 
   assert.equal(n.asked[0].id, interactionId('agy', pid, 'permission', 'call-1'))
 })
 
+test('permission cards normalize canonical tool names before display titles', async (t) => {
+  const cases = [
+    ['_meta.toolName beats name and a raw-shell title',
+      { _meta: { toolName: 'run_command' }, name: 'view_file', kind: 'read', title: 'printf hello', rawInput: { CommandLine: 'printf hello' } },
+      'Bash', { command: 'printf hello', description: '' }, 'printf hello'],
+    ['name beats a raw-shell title',
+      { name: 'run_command', kind: 'execute', title: 'git status --short', rawInput: { command: 'git status --short' } },
+      'Bash', { command: 'git status --short', description: '' }, 'git status --short'],
+    ['name beats a File title for a write',
+      { name: 'write_to_file', kind: 'edit', title: 'File /tmp/result.txt', rawInput: { TargetFile: '/tmp/result.txt', CodeContent: 'new\n' } },
+      'Write', { file_path: '/tmp/result.txt', content: 'new\n' }, '/tmp/result.txt'],
+    ['execute kind normalizes a raw-shell title',
+      { kind: 'execute', title: 'npm test', rawInput: { command: 'npm test' } },
+      'Bash', { command: 'npm test', description: '' }, 'npm test'],
+    ['edit kind plus Content normalizes a File title to Write',
+      { kind: 'edit', title: 'File /tmp/draft.txt', rawInput: { Path: '/tmp/draft.txt', Content: 'draft', Overwrite: true } },
+      'Write', { file_path: '/tmp/draft.txt', content: 'draft' }, '/tmp/draft.txt'],
+    ['read kind remains Read',
+      { kind: 'read', title: 'File /tmp/input.txt', rawInput: { AbsolutePath: '/tmp/input.txt' } },
+      'Read', { file_path: '/tmp/input.txt' }, '/tmp/input.txt'],
+    ['command evidence cannot be downgraded by read presentation',
+      { kind: 'read', title: 'File /tmp/result.txt', rawInput: { CommandLine: 'cat /tmp/result.txt' } },
+      'Bash', { command: 'cat /tmp/result.txt', description: '' }, 'cat /tmp/result.txt'],
+    ['write evidence cannot be downgraded by read presentation',
+      { kind: 'read', title: 'File /tmp/draft.txt', rawInput: { TargetFile: '/tmp/draft.txt', Content: 'new' } },
+      'Write', { file_path: '/tmp/draft.txt', content: 'new' }, '/tmp/draft.txt'],
+    ['execute kind retains a command supplied only by the title',
+      { kind: 'execute', title: 'git diff --check', rawInput: {} },
+      'Bash', { command: 'git diff --check', description: '' }, 'git diff --check'],
+    ['edit kind retains a path supplied only by a File title',
+      { kind: 'edit', title: 'File /tmp/from-title.txt', rawInput: { Content: 'new' } },
+      'Write', { file_path: '/tmp/from-title.txt', content: 'new' }, '/tmp/from-title.txt'],
+    ['a distinct human title remains readable beside the command',
+      { name: 'run_command', kind: 'execute', title: 'Run focused tests', rawInput: { command: 'npm test' } },
+      'Bash', { command: 'npm test', description: 'Run focused tests' }, 'npm test'],
+  ]
+  for (const [name, toolCall, toolName, toolInput, summary] of cases) {
+    await t.test(name, async (t) => {
+      const { n, start } = await agyRuntime(t)
+      await start(`ask-shape ${JSON.stringify(toolCall)}`)
+      await until('permission card', () => n.asked.length === 1, SLOW)
+      assert.equal(n.asked[0].tool_name, toolName)
+      assert.deepEqual(n.asked[0].tool_input, toolInput)
+      assert.equal(n.asked[0].summary, summary)
+    })
+  }
+})
+
 
 test('cancelling before a prompt starts does not poison the next permission request', async (t) => {
   const { n, record, start } = await agyRuntime(t)
@@ -467,4 +515,282 @@ test('an uncancelled successor clears cancellation left by a preparing turn', as
   assert.equal(n.asked.length, 1)
   assert.deepEqual(permissionAnswers(record)[0].result, { outcome: { outcome: 'selected', optionId: 'allow' } })
   await n.peer.call('session.interrupt', { session_id: pid })
+})
+
+test('permission cards forward always_label, honor always responses, and never select reject options on allow or bypass', async (t) => {
+  const fullOptions = [
+    { optionId: 'once', name: 'Allow once', kind: 'allow_once' },
+    { optionId: 'always', name: 'Always allow run_command', kind: 'allow_always' },
+    { optionId: 'reject', name: 'Reject', kind: 'reject_once' },
+  ]
+
+  await t.test('allow_always exposes always_label and selects allow_always on { allow: true, always: true }', async (t) => {
+    const { n, record, start } = await agyRuntime(t)
+    n.resolve = () => ({ allow: true, always: true })
+    const pid = await start(`ask-options ${JSON.stringify(fullOptions)}`)
+    await until('permission answered', () => permissionAnswers(record).length === 1, SLOW)
+    assert.equal(n.asked[0].always_label, 'Always allow run_command')
+    assert.deepEqual(permissionAnswers(record)[0].result, { outcome: { outcome: 'selected', optionId: 'always' } })
+    await n.peer.call('session.interrupt', { session_id: pid })
+  })
+
+  await t.test('allow_once is selected on { allow: true, always: false } when both options exist', async (t) => {
+    const { n, record, start } = await agyRuntime(t)
+    n.resolve = () => ({ allow: true, always: false })
+    const pid = await start(`ask-options ${JSON.stringify(fullOptions)}`)
+    await until('permission answered', () => permissionAnswers(record).length === 1, SLOW)
+    assert.equal(n.asked[0].always_label, 'Always allow run_command')
+    assert.deepEqual(permissionAnswers(record)[0].result, { outcome: { outcome: 'selected', optionId: 'once' } })
+    await n.peer.call('session.interrupt', { session_id: pid })
+  })
+
+  await t.test('blank allow_always name falls back to Always allow', async (t) => {
+    const { n, record, start } = await agyRuntime(t)
+    n.resolve = () => ({ allow: true, always: true })
+    const opts = [
+      { optionId: 'once', name: 'Allow', kind: 'allow_once' },
+      { optionId: 'always', name: '   ', kind: 'allow_always' },
+    ]
+    const pid = await start(`ask-options ${JSON.stringify(opts)}`)
+    await until('permission answered', () => permissionAnswers(record).length === 1, SLOW)
+    assert.equal(n.asked[0].always_label, 'Always allow')
+    assert.deepEqual(permissionAnswers(record)[0].result, { outcome: { outcome: 'selected', optionId: 'always' } })
+    await n.peer.call('session.interrupt', { session_id: pid })
+  })
+
+  await t.test('without allow_always, always_label is omitted and always falls back to allow_once', async (t) => {
+    const { n, record, start } = await agyRuntime(t)
+    n.resolve = () => ({ allow: true, always: true })
+    const pid = await start('ask')
+    await until('permission answered', () => permissionAnswers(record).length === 1, SLOW)
+    assert.equal('always_label' in n.asked[0], false)
+    assert.deepEqual(permissionAnswers(record)[0].result, { outcome: { outcome: 'selected', optionId: 'allow' } })
+    await n.peer.call('session.interrupt', { session_id: pid })
+  })
+
+  await t.test('reject-only options cancel on allow instead of picking opts[0]', async (t) => {
+    const { n, record, start } = await agyRuntime(t)
+    n.resolve = () => ({ allow: true })
+    const rejectOnly = [{ optionId: 'reject', name: 'Reject', kind: 'reject_once' }]
+    const pid = await start(`ask-options ${JSON.stringify(rejectOnly)}`)
+    await until('permission answered', () => permissionAnswers(record).length === 1, SLOW)
+    assert.equal('always_label' in n.asked[0], false)
+    assert.deepEqual(permissionAnswers(record)[0].result, cancelled)
+    await n.peer.call('session.interrupt', { session_id: pid })
+  })
+
+  await t.test('bypassPermissions cancels reject-only options without prompting and still selects allow_always when offered', async (t) => {
+    const { n, record, start } = await agyRuntime(t)
+    const rejectOnly = [{ optionId: 'reject', name: 'Reject', kind: 'reject_once' }]
+    const pid = await start(`ask-options ${JSON.stringify(rejectOnly)}`, { permission_mode: 'bypassPermissions' })
+    await until('bypass reject-only answered', () => permissionAnswers(record).length === 1, SLOW)
+    assert.equal(n.asked.length, 0)
+    assert.deepEqual(permissionAnswers(record)[0].result, cancelled)
+    await n.peer.call('session.interrupt', { session_id: pid })
+
+    await n.peer.call('session.send', { session_id: pid, text: `ask-options ${JSON.stringify(fullOptions)}` })
+    await until('bypass allow_always answered', () => permissionAnswers(record).length === 2, SLOW)
+    assert.equal(n.asked.length, 0)
+    assert.deepEqual(permissionAnswers(record)[1].result, { outcome: { outcome: 'selected', optionId: 'always' } })
+    await n.peer.call('session.interrupt', { session_id: pid })
+  })
+
+  await t.test('dismissed or unanswered resolutions cancel instead of selecting reject_once or reject_always', async (t) => {
+    const rejectAlwaysOptions = [
+      { optionId: 'once', name: 'Allow', kind: 'allow_once' },
+      { optionId: 'reject-forever', name: 'Always reject', kind: 'reject_always' },
+    ]
+    for (const answer of [{ dismiss: true }, undefined]) {
+      const { n, record, start } = await agyRuntime(t)
+      n.resolve = () => answer
+      const pid = await start(`ask-options ${JSON.stringify(rejectAlwaysOptions)}`)
+      await until('dismissed permission answered', () => permissionAnswers(record).length === 1, SLOW)
+      assert.deepEqual(permissionAnswers(record)[0].result, cancelled)
+      await n.peer.call('session.interrupt', { session_id: pid })
+    }
+  })
+
+  await t.test('explicit deny selects reject_once even when always is set', async (t) => {
+    const { n, record, start } = await agyRuntime(t)
+    n.resolve = () => ({ allow: false, always: true })
+    const pid = await start(`ask-options ${JSON.stringify(fullOptions)}`)
+    await until('denied permission answered', () => permissionAnswers(record).length === 1, SLOW)
+    assert.deepEqual(permissionAnswers(record)[0].result, { outcome: { outcome: 'selected', optionId: 'reject' } })
+    await n.peer.call('session.interrupt', { session_id: pid })
+  })
+
+  await t.test('allow_always without allow_once does not escalate { allow: true, always: false }', async (t) => {
+    const alwaysOnly = [
+      { optionId: 'always', name: 'Always\n  allow\ttool', kind: 'allow_always' },
+      { optionId: 'reject', name: 'Reject', kind: 'reject_once' },
+    ]
+    const { n, record, start } = await agyRuntime(t)
+    n.resolve = () => ({ allow: true, always: false })
+    const pid = await start(`ask-options ${JSON.stringify(alwaysOnly)}`)
+    await until('single-use allow answered', () => permissionAnswers(record).length === 1, SLOW)
+    assert.equal(n.asked[0].always_label, 'Always allow tool')
+    assert.deepEqual(permissionAnswers(record)[0].result, cancelled)
+    await n.peer.call('session.interrupt', { session_id: pid })
+
+    n.resolve = () => ({ allow: true, always: true })
+    await n.peer.call('session.send', { session_id: pid, text: `ask-options ${JSON.stringify(alwaysOnly)}` })
+    await until('explicit always allow answered', () => permissionAnswers(record).length === 2, SLOW)
+    assert.deepEqual(permissionAnswers(record)[1].result, { outcome: { outcome: 'selected', optionId: 'always' } })
+    await n.peer.call('session.interrupt', { session_id: pid })
+  })
+
+  await t.test('Assistant sessions omit always_label and never pass allow_always to ACP', async (t) => {
+    const { n, record, start } = await agyRuntime(t)
+    n.resolve = () => ({ allow: true, always: true })
+    const pid = await start(`ask-options ${JSON.stringify(fullOptions)}`, { assistant: true })
+    await until('assistant permission answered', () => permissionAnswers(record).length === 1, SLOW)
+    assert.equal('always_label' in n.asked[0], false)
+    assert.deepEqual(permissionAnswers(record)[0].result, { outcome: { outcome: 'selected', optionId: 'once' } })
+    await n.peer.call('session.interrupt', { session_id: pid })
+  })
+
+  await t.test('Assistant run_command in bypassPermissions routes through rt.ask when node has assistant_command_gate, forwards resolved Cwd, and never selects allow_always', async (t) => {
+    const { n, record, start } = await agyRuntime(t, { node: { features: ['prefer_running', 'assistant_command_gate'] } })
+    const olCmd = `ol POST /conversations/c1/messages '{"text":"hello"}'`
+    const askSpec = {
+      toolCall: { name: 'run_command', rawInput: { CommandLine: olCmd, Cwd: 'subdir' } },
+      options: fullOptions,
+    }
+    n.resolve = () => ({ allow: true, always: true })
+    const pid = await start(`ask-full ${JSON.stringify(askSpec)}`, { assistant: true, permission_mode: 'bypassPermissions' })
+    await until('gated assistant bash allowed', () => permissionAnswers(record).length === 1, SLOW)
+    assert.equal(n.asked.length, 1)
+    assert.equal(n.asked[0].tool_name, 'Bash')
+    assert.equal(n.asked[0].tool_input.command, olCmd)
+    assert.equal(n.asked[0].cwd.endsWith('/subdir') || n.asked[0].cwd.endsWith('\\subdir'), true)
+    assert.equal('always_label' in n.asked[0], false)
+    assert.deepEqual(permissionAnswers(record)[0].result, { outcome: { outcome: 'selected', optionId: 'once' } })
+    await n.peer.call('session.interrupt', { session_id: pid })
+
+    // Explicit gate denial selects reject_once.
+    n.resolve = () => ({ allow: false, message: 'denied by gate' })
+    await n.peer.call('session.send', { session_id: pid, text: `ask-full ${JSON.stringify(askSpec)}`, assistant: true })
+    await until('gated assistant bash denied', () => permissionAnswers(record).length === 2, SLOW)
+    assert.equal(n.asked.length, 2)
+    assert.deepEqual(permissionAnswers(record)[1].result, { outcome: { outcome: 'selected', optionId: 'reject' } })
+    await n.peer.call('session.interrupt', { session_id: pid })
+
+    // Non-Bash tool in bypassPermissions still bypasses locally and selects allow_once (never allow_always).
+    const writeSpec = {
+      toolCall: { name: 'write_file', rawInput: { Path: '/tmp/a.txt', Content: 'ok' } },
+      options: fullOptions,
+    }
+    await n.peer.call('session.send', { session_id: pid, text: `ask-full ${JSON.stringify(writeSpec)}`, assistant: true })
+    await until('assistant non-Bash bypassed with allow_once', () => permissionAnswers(record).length === 3, SLOW)
+    assert.equal(n.asked.length, 2)
+    assert.deepEqual(permissionAnswers(record)[2].result, { outcome: { outcome: 'selected', optionId: 'once' } })
+    await n.peer.call('session.interrupt', { session_id: pid })
+
+    // allow_always-only without allow_once cancels instead of leaking native always grant on Assistant bypass.
+    const alwaysOnlyWrite = {
+      toolCall: { name: 'write_file', rawInput: { Path: '/tmp/b.txt', Content: 'ok' } },
+      options: [{ optionId: 'always', name: 'Always allow', kind: 'allow_always' }],
+    }
+    await n.peer.call('session.send', { session_id: pid, text: `ask-full ${JSON.stringify(alwaysOnlyWrite)}`, assistant: true })
+    await until('assistant allow_always-only cancelled', () => permissionAnswers(record).length === 4, SLOW)
+    assert.equal(n.asked.length, 2)
+    assert.deepEqual(permissionAnswers(record)[3].result, cancelled)
+    await n.peer.call('session.interrupt', { session_id: pid })
+  })
+
+  await t.test('Assistant run_command in bypassPermissions on an older node without assistant_command_gate bypasses locally with allow_once only', async (t) => {
+    const { n, record, start } = await agyRuntime(t)
+    const pid = await start(`ask-options ${JSON.stringify(fullOptions)}`, { assistant: true, permission_mode: 'bypassPermissions' })
+    await until('legacy node assistant bypass answered', () => permissionAnswers(record).length === 1, SLOW)
+    assert.equal(n.asked.length, 0)
+    assert.deepEqual(permissionAnswers(record)[0].result, { outcome: { outcome: 'selected', optionId: 'once' } })
+    await n.peer.call('session.interrupt', { session_id: pid })
+  })
+
+  await t.test('non-assistant run_command in bypassPermissions stays local even when node advertises assistant_command_gate', async (t) => {
+    const { n, record, start } = await agyRuntime(t, { node: { features: ['prefer_running', 'assistant_command_gate'] } })
+    const pid = await start(`ask-options ${JSON.stringify(fullOptions)}`, { permission_mode: 'bypassPermissions' })
+    await until('non-assistant bypass answered', () => permissionAnswers(record).length === 1, SLOW)
+    assert.equal(n.asked.length, 0)
+    assert.deepEqual(permissionAnswers(record)[0].result, { outcome: { outcome: 'selected', optionId: 'always' } })
+    await n.peer.call('session.interrupt', { session_id: pid })
+  })
+
+  await t.test('interrupting an Assistant turn while waiting on assistant_command_gate cancels cleanly', async (t) => {
+    const { n, record, start } = await agyRuntime(t, { node: { features: ['prefer_running', 'assistant_command_gate'] } })
+    const pid = await start(`ask-options ${JSON.stringify(fullOptions)}`, { assistant: true, permission_mode: 'bypassPermissions' })
+    await until('gated assistant card pending', () => n.asked.length === 1, SLOW)
+    await n.peer.call('session.interrupt', { session_id: pid })
+    await until('gated assistant card cancelled on interrupt', () => permissionAnswers(record).length === 1, SLOW)
+    assert.deepEqual(permissionAnswers(record)[0].result, cancelled)
+  })
+
+  await t.test('Assistant run_command over 24KB preserves the full unclipped command for node gate inspection', async (t) => {
+    const { n, record, start } = await agyRuntime(t, { node: { features: ['prefer_running', 'assistant_command_gate'] } })
+    const tail = `; lark-cli im +messages-send --chat-id oc_test --text "tail"`
+    const longCmd = `echo ${'A'.repeat(26 * 1024)} ${tail}`
+    const askSpec = {
+      toolCall: { name: 'run_command', rawInput: { CommandLine: longCmd, Cwd: '', cwd: 'sub-2' } },
+      options: fullOptions,
+    }
+    n.resolve = () => ({ allow: false, message: 'blocked' })
+    const pid = await start(`ask-full ${JSON.stringify(askSpec)}`, { assistant: true, permission_mode: 'bypassPermissions' })
+    await until('long assistant command denied by gate', () => permissionAnswers(record).length === 1, SLOW)
+    assert.equal(n.asked.length, 1)
+    assert.equal(n.asked[0].tool_input.command, longCmd)
+    assert.equal(n.asked[0].tool_input.command.endsWith(tail), true)
+    assert.equal(n.asked[0].cwd.endsWith('/sub-2') || n.asked[0].cwd.endsWith('\\sub-2'), true)
+    assert.deepEqual(permissionAnswers(record)[0].result, { outcome: { outcome: 'selected', optionId: 'reject' } })
+    await n.peer.call('session.interrupt', { session_id: pid })
+  })
+
+  await t.test('Assistant run_command in bypassPermissions does not fail open during a brief node disconnect', async (t) => {
+    const { n, record, start } = await agyRuntime(t, {
+      node: { features: ['prefer_running', 'assistant_command_gate'] },
+      runtime: { retryMs: 400 },
+    })
+    const pid = await start('reply', { assistant: true, permission_mode: 'bypassPermissions' })
+    await until('first reply settled', () => received(record).some((m) => m.method === 'session/prompt'), SLOW)
+    const triggerFile = `${record}.go`
+    const askSpec = {
+      toolCall: { name: 'run_command', rawInput: { CommandLine: `ol POST /conversations/c1/messages '{"text":"reconnect"}'` } },
+      options: fullOptions,
+      waitFile: triggerFile,
+    }
+    let releaseHello
+    n.holdHello = new Promise((resolve) => { releaseHello = resolve })
+    n.resolve = async () => {
+      await n.holdHello
+      return { allow: false }
+    }
+    const prevPeer = n.peer
+    await n.peer.call('session.send', { session_id: pid, text: `ask-full ${JSON.stringify(askSpec)}`, assistant: true })
+    await until('second prompt reached fake ACP', () => received(record).filter((m) => m.method === 'session/prompt').length === 2, SLOW)
+    // Disconnect the node and hold reconnect hello so rt.ready is guaranteed false when ACP asks permission.
+    prevPeer.close(new Error('node restart'))
+    await until('disconnected from fake node', () => !n.peers.has(prevPeer), SLOW)
+    writeFileSync(triggerFile, 'go')
+    await until('ACP emitted permission while node disconnected', () => received(record).some((m) => m.askedPermission), SLOW)
+    await delay(100)
+    assert.equal(permissionAnswers(record).length, 0, 'assistant run_command must not fail open while node is disconnected')
+    releaseHello()
+    await until('reconnected node received gated ask', () => n.asked.length >= 1, SLOW)
+    await until('denied after reconnect', () => permissionAnswers(record).length === 1, SLOW)
+    assert.deepEqual(permissionAnswers(record)[0].result, { outcome: { outcome: 'selected', optionId: 'reject' } })
+    await n.peer.call('session.interrupt', { session_id: pid })
+  })
+
+  await t.test('non-assistant run_command does not attach per-call cwd onto permission cards', async (t) => {
+    const { n, record, start } = await agyRuntime(t, { node: { features: ['prefer_running', 'assistant_command_gate'] } })
+    n.resolve = () => ({ allow: true })
+    const askSpec = {
+      toolCall: { name: 'run_command', rawInput: { CommandLine: 'ls', Cwd: '/tmp' } },
+      options: fullOptions,
+    }
+    const pid = await start(`ask-full ${JSON.stringify(askSpec)}`)
+    await until('non-assistant bash answered', () => permissionAnswers(record).length === 1, SLOW)
+    assert.equal(n.asked.length, 1)
+    assert.equal('cwd' in n.asked[0], false)
+    await n.peer.call('session.interrupt', { session_id: pid })
+  })
 })

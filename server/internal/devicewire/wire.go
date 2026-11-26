@@ -199,11 +199,16 @@ type Config struct {
 	WebURL string `json:"web_url,omitempty"`
 	// TailcatDERPMapURL is hub.json's tailcat.derp_map_url.
 	TailcatDERPMapURL string `json:"tailcat_derp_map_url,omitempty"`
+	// PrivateNetwork is hub.json's security.private_network_only (office network mode): the manager never dials
+	// tailcat and tells every node to stop its tailcat endpoint (node.configure private_network).
+	PrivateNetwork bool `json:"private_network,omitempty"`
 	// NodePackagesURL is where the manager fetches the node builds the hub has none of (docs/operations/node-update.md "Node
 	// packages"): a release's dl/ (hub.json's node_packages.url, else the hub build's update URL; "" none), through
 	// NodePackagesProxy (an http:// proxy, internal/netproxy; "" direct).
-	NodePackagesURL   string `json:"node_packages_url,omitempty"`
-	NodePackagesProxy string `json:"node_packages_proxy,omitempty"`
+	NodePackagesURL   string             `json:"node_packages_url,omitempty"`
+	NodePackagesProxy string             `json:"node_packages_proxy,omitempty"`
+	DevelopmentTarget *DevelopmentTarget `json:"development_target,omitempty"`
+	DevelopmentHold   bool               `json:"development_hold,omitempty"`
 	// LinkPingMS / LinkPingTimeoutMS: the heartbeats of the links and streams, hub.json's link section (0: the
 	// protocol's, link.PingEvery / PingTimeout; tests shorten them). The manager tells Persona Link them too.
 	LinkPingMS        int `json:"link_ping_ms,omitempty"`
@@ -467,6 +472,9 @@ var Routes = []string{
 	"GET /api/v1/machines/{mid}/herdr",
 	"PUT /api/v1/machines/{mid}/herdr",
 	"POST /api/v1/machines/{mid}/herdr/start",
+	// Named herdr sessions kept out of Persona (#14898, internal/devices herdrsessions.go).
+	"GET /api/v1/machines/{mid}/herdr/sessions",
+	"PUT /api/v1/machines/{mid}/herdr/sessions/blocked",
 	"GET /api/v1/machines/{mid}/botmux",
 	"PUT /api/v1/machines/{mid}/botmux",
 	"GET /api/v1/machines/{mid}/health/reports",
@@ -478,6 +486,11 @@ var Routes = []string{
 	// A computer's diagnosis and cache cleanup (#8037, internal/devices diagnosis.go).
 	"GET /api/v1/machines/{mid}/diagnosis",
 	"POST /api/v1/machines/{mid}/cleanup",
+	// A computer's disk usage map and its guarded trash (#14576, internal/devices usagemap.go).
+	"GET /api/v1/machines/{mid}/storage/usage",
+	"POST /api/v1/machines/{mid}/storage/trash",
+	"POST /api/v1/machines/{mid}/storage/trash/undo",
+	"POST /api/v1/machines/{mid}/storage/trash/purge",
 	"GET /api/v1/machines/{mid}/claude-dirs",
 	"PUT /api/v1/machines/{mid}/claude-dirs/blocked",
 	// Hidden Agent folders, beside the blocked Claude config folders (internal/devices agentdirs.go).
@@ -504,6 +517,8 @@ var TransferRoutes = []string{
 	"POST /api/v1/files/transfer",
 	"GET /api/v1/files/transfer/{id}",
 	"DELETE /api/v1/files/transfer/{id}",
+	// The audit of the Agents' file_transfer calls (internal/devices agent_transfer.go), full devices only.
+	"GET /api/v1/files/transfer-audit",
 }
 
 // MetricsRoutes are the machines' monitoring's routes (internal/devices metrics.go), relayed the same way: every
