@@ -38,7 +38,7 @@ export interface FeishuBotController {
 }
 
 /** Shared Feishu Bot state powering both Account & Connection and Chat & Delivery sections inline. */
-export function useFeishuBotController(enabled: boolean, reloadLarkcli?: () => Promise<void>): FeishuBotController {
+export function useFeishuBotController(enabled: boolean, reloadLarkcli: () => Promise<void>, reloadChannel: () => Promise<void>): FeishuBotController {
   const bot = useBot();
   const { status, accept, readStatus, loading, error, setError, load } = bot;
   const [form, setForm] = useState<BotCredentials>(() => (status ? credentialsOf(status) : { appID: "", appSecret: "", domain: "feishu" }));
@@ -90,16 +90,20 @@ export function useFeishuBotController(enabled: boolean, reloadLarkcli?: () => P
         if (result?.current()) adoptForm(result.status);
         return result;
       }),
-      reloadLarkcli ? reloadLarkcli().catch(() => {}) : Promise.resolve(),
+      reloadLarkcli().catch(() => {}),
+      reloadChannel(),
     ]);
     if (afterCreate && next?.current()) setCreated(true);
-  }, [readStatus, adoptForm, reloadLarkcli]);
+  }, [readStatus, adoptForm, reloadLarkcli, reloadChannel]);
 
   const run = useCallback(async (what: string, call: () => Promise<FeishuBotStatus>, done?: string, replace = false) => {
     setSaving(true);
     try {
       const next = await call();
-      if (accept(next)) adoptForm(next, replace);
+      if (accept(next)) {
+        adoptForm(next, replace);
+        void reloadChannel();
+      }
       setError("");
       if (done) toast(done, "ok");
       return true;
@@ -109,7 +113,7 @@ export function useFeishuBotController(enabled: boolean, reloadLarkcli?: () => P
     } finally {
       setSaving(false);
     }
-  }, [accept, adoptForm, setError]);
+  }, [accept, adoptForm, reloadChannel, setError]);
 
   const sendTest = useCallback(async () => {
     setSaving(true);

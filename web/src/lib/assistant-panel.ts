@@ -93,7 +93,7 @@ export function assistantPanel(setup: AssistantSetup, info: AssistantLaunchers |
     const e = listOf(setup.provider);
     const models = e.list ? e.list.models.map((m) => panelModel(m, engine, Boolean(o.starting))) : setup.model ? [{ id: setup.model, name: modelLabel(setup.model), efforts: [] }] : [];
     providers.unshift({
-      id: setup.provider, name: setup.provider, engine, models: claude && e.list === undefined && !e.error ? null : models,
+      id: setup.provider, name: providerTitle({ name: setup.provider }), engine, models: claude && e.list === undefined && !e.error ? null : models,
       ...(claude ? { loading: e.loading || (e.list === undefined && !e.error), error: e.error } : { unavailable: t("chat-modelpill.provider_gone") }),
     });
   }

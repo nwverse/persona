@@ -231,6 +231,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const scroller = useRef<HTMLDivElement>(null);
   useScrollMemory(scroller, listed ? "settings" : `settings/${tab}/${itemIsPage(tab) ? (at.sub ?? "") : ""}`);
   const { sub } = at;
+  const sourcesManager = tab === "sources" ? new URLSearchParams(location.search).get("manager") ?? picked ?? undefined : undefined;
   useLayoutEffect(() => (ASSISTANT_TABS.has(tab) ? pinManagerAt(ASSISTANT_PREFIXES, otherManager(picked ?? undefined)) : undefined), [tab, picked]);
   // Another assistant made current with one of the group's items open (a connector, an extension, a channel, a model
   // purpose): that item is the last assistant's, so the page goes back to its list, which then lists the new one's.
@@ -452,7 +453,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
               {tab === "prompts" && <SavedPrompts />}
               {tab === "sources" && (
                 <Suspense fallback={<Loading />}>
-                  <SourcesUI title={TAB_INFO.sources.label} state={sub ?? undefined} onGraph={setSourcesGraph} />
+                  <SourcesUI key={sourcesManager} manager={sourcesManager} title={TAB_INFO.sources.label} state={sub ?? undefined} onGraph={setSourcesGraph} />
                 </Suspense>
               )}
               {tab === "models" && <>
