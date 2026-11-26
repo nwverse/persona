@@ -185,7 +185,7 @@ it("waits for matching manager confirmation and preserves preference after a fai
   vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => String(input).endsWith("/assistant")
     ? new Promise<Response>((resolve) => { finish = resolve; }) : real(input, init)));
   await render(); expect(namingEntry()).toBeUndefined();
-  await act(async () => finish!(json({ manager: "other", task_workspace_preference: "prefer-new" })));
+  await act(async () => finish!(json({ manager: "other", workspace_naming_version: "workspace-naming/v1", task_workspace_preference: "prefer-new" })));
   await flush(); expect(namingEntry()).toBeUndefined();
   await current("work"); expect(namingEntry()).toBeUndefined();
   await act(async () => finish!(json({ manager: "work", task_workspace_preference: "prefer-existing" })));

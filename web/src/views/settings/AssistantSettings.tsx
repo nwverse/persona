@@ -557,7 +557,6 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
         </Group>
       )}
 
-
       {/* Who follows up the main chat's tasks (#5082), delivery closeout gate (#12034), following up agents, their tasks' new messages, stopping idle ones and tidying closed ones (#3617, #4293, #4754, #3618): each row only from a hub that has its setting */}
       {(supportsAgentAutoNaming(info) || typeof info?.main_supervises_own_tasks === "boolean" || typeof info?.delivery_gate === "string" || typeof info?.agent_tasks === "boolean" || typeof info?.close_ended_terminals === "boolean" || typeof info?.inbox_signals === "boolean" || typeof info?.auto_supervision_messages === "boolean" || typeof info?.inbox_todo_forward === "boolean" || typeof info?.idle_close_hours === "number" || typeof info?.archive_closed_days === "number") && info && (
         <Group anchor="agents" title={t("settings-assistantsettings.agents_title")}>

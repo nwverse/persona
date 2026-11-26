@@ -10,12 +10,6 @@ export type WorkspaceNamingSettings = {
   manager?: string; machine_id?: string; workspace_naming_version?: string;
   workspace_rules?: WorkspaceRules; effective_workspace_rules?: WorkspaceRules; system_defaults?: WorkspaceRules;
 };
-// Managers from before system_defaults keep the original v1 editor placeholders.
-export const legacyWorkspaceNamingDefaults: WorkspaceRules = {
-  base_directory: "{home}/workspace",
-  task_directory_template: "task-{task-id}",
-  branch_template: "persona/{task-id}",
-};
 export type WorkspaceRulesRecord = { todo_id: string; revision: number; workspace_rules: WorkspaceRules };
 export type NamingDiagnostic = { code: string; field: string; repo_id?: string; severity: "error" | "warning" };
 export type WorkspaceNamingPlan = {

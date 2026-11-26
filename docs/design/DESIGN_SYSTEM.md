@@ -3271,6 +3271,14 @@ hint styles. A choice with consequences can request confirmation for a specific 
 affected scope, impact, timing and an action-specific button. All dismissal paths preserve the edit. On success the
 field’s polite save status can explain when the choice takes effect. Show this receipt once, in the field footer.
 
+For people choosing where new task folders are created, **Workspace naming** uses
+a separate Settings group and the same editor on To-do detail. Each template has
+a label above a full-width field. Inherited values wrap when space is tight.
+The inline preview shows one task path and each repository’s branch and starting
+point. Its secondary disclosure holds the computer, layout and repository choices.
+The footer offers **Use defaults** when there are overrides and **Save** for
+pending edits. See [workspace naming](../assistant/todos.md#backend-workspace-naming).
+
 ## External source connections on web (#15518)
 
 Inbox and work open one binding editor so the owner can set the same destination, source scope and update policy
