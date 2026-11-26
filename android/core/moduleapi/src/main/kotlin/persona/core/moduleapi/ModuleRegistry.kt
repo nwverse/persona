@@ -70,7 +70,19 @@ class ModuleRegistry(val modules: List<PersonaModule>) {
  */
 enum class HubModule(val id: String) {
     /** Meeting recording: minutes, their to-dos and hand-offs are its routes; stored recordings are read through the core's. */
-    Recording("recording");
+    Recording("recording"),
+
+    /**
+     * Feishu / Lark (#15995): the Lark bot, which the hub connects only while this is on. Not the Lark extension's
+     * chats, readers and connector (`LarkFeatures`, the hello's `lark`): those are the extension's routes and stay.
+     */
+    Lark("lark"),
+
+    /**
+     * Mail (#15995): accounts, reading a message in full with its attachments, flags and sending are its routes. What
+     * the hub stored of a mail (the Inbox item, its text, its place in the knowledge base) is read through the core's.
+     */
+    Mail("mail");
 
     /** The hello feature that turns it on, `module.<id>`. */
     val feature: String get() = ModuleRegistry.moduleFeature(id)

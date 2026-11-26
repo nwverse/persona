@@ -36,9 +36,9 @@ const (
 	// admissionDirectionCap is the code default every direction falls back to when neither direction_cap_by_direction
 	// nor direction_cap_by_project names it. The counts are taken per supervising conversation, so the default must fit
 	// the busiest charter direction (the main product line's charter is 8); narrower lines are configured per direction.
-	admissionDirectionCap      = 8
-	admissionMinMemoryBytes    = int64(2) * 1024 * 1024 * 1024        // 2 GiB
-	admissionHubMinMemory      = int64(2.5 * float64(1024*1024*1024)) // 2.5 GiB
+	admissionDirectionCap   = 8
+	admissionMinMemoryBytes = int64(2) * 1024 * 1024 * 1024        // 2 GiB
+	admissionHubMinMemory   = int64(2.5 * float64(1024*1024*1024)) // 2.5 GiB
 	// recommendMinMemoryBytes is the healthy-candidate available memory floor (4 GiB) for automatic selection
 	// when the effective admission floor is lower.
 	recommendMinMemoryBytes = int64(4) * 1024 * 1024 * 1024 // 4 GiB
