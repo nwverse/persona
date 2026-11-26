@@ -256,10 +256,19 @@ WEB = {
         "chunks": [r"/assets/RecordingDetail-[\w-]+\.js", r"/src/modules/recording/"],
         "chunk_when_on": ["test"],
     },
-    # briefing, office, phone-extra, volc and knowledge-ui have no WEB row on purpose: the web app gates nothing on their
-    # flags. briefing and knowledge-ui change what the hub returns (a scheduled job, the knowledge history import);
-    # office and phone-extra run on the computers; volc is a hub-side speech extension. The gate prints a NOTE for each
-    # (a missing WEB row is not a failure). A browser assertion would have nothing of the module to look at (#16243).
+    # briefing, phone-extra, volc and knowledge-ui have no WEB row on purpose: the web app gates nothing on their flags.
+    # briefing and knowledge-ui change what the hub returns (a scheduled job, the knowledge history import); phone-extra
+    # runs on the computers; volc is a hub-side speech extension. The gate prints a NOTE for each (a missing WEB row is
+    # not a failure). A browser assertion would have nothing of the module to look at (#16243).
+    #
+    # office has a web module (`web/src/modules/office`, a FilePreview the composer opens from a file, #16289) but no
+    # address of its own: its chunk loads only when a session has an Office file, which this hub has none of. So it gets
+    # a chunks-only row (no entry): while off, none of its chunks may be requested, which is checked like any module's.
+    "office": {
+        "entries": [],
+        "chunks": [r"/assets/(OfficePreview|docx-preview|workbook\.worker)-[\w-]+\.js", r"/src/modules/office/"],
+        "chunk_when_on": [],  # nothing of it loads without an Office file, so it is not required while on
+    },
 }
 # Console lines that are not the app's errors. The test hub has no computer, so the assistant's memory (kept on the
 # assistant's computer) answers 409; the mock hub answers 404 for what it does not script. Chrome cancels loads in
