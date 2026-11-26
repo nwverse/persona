@@ -1,7 +1,9 @@
+import "./test-register";
+import { loadMailAccounts, resetMailForTests } from "../../lib/mail";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const calls = vi.hoisted(() => ({ list: [] as { path: string; init?: { json?: unknown } }[], fail: false }));
-vi.mock("./api", () => ({
+vi.mock("../../lib/api", () => ({
   api: vi.fn(async (path: string, init?: { json?: unknown }) => {
     calls.list.push({ path, init });
     if (calls.fail) throw new Error("boom");
@@ -10,21 +12,12 @@ vi.mock("./api", () => ({
   enc: encodeURIComponent,
 }));
 
-import { badAddresses, loadMailAccounts, markMailSeen, newDraft, parseAddresses, replyDraft, resetMailForTests, sendBody, sendMail, storedMailClipping } from "./mail";
+import { badAddresses, markMailSeen, newDraft, parseAddresses, replyDraft, sendBody, sendMail } from "./mail";
 
 beforeEach(() => {
   calls.list = [];
   calls.fail = false;
   resetMailForTests();
-});
-
-describe("storedMailClipping", () => {
-  it("reads the item page's flag as a closed state; anything but a boolean is unknown, never whole", () => {
-    expect(storedMailClipping({ mail_body_truncated: true })).toBe("clipped");
-    expect(storedMailClipping({ mail_body_truncated: false })).toBe("whole");
-    for (const item of [undefined, {}, { mail_body_truncated: undefined }, { mail_body_truncated: null }, { mail_body_truncated: "false" }, { mail_body_truncated: 0 }])
-      expect(storedMailClipping(item), JSON.stringify(item)).toBe("unknown");
-  });
 });
 
 describe("addresses", () => {

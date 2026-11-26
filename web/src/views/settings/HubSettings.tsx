@@ -8,7 +8,7 @@ import { formatDate, formatNumber, t } from "../../i18n";
 import { hubUpdate, setHubUpdateSettings, startHubUpdate, type HubUpdateBackup, type HubUpdateRecord, type HubUpdateStatus } from "../../lib/hub-update";
 import {
   applyHubUpdateBackup, channelTitle, checkHubUpdate, dockerSteps, hubUpdateBackups, hubUpdateHistory, latestWarning,
-  recordTitle, recordTone, updateFinished, updateView, updateWorking,
+  recordTitle, recordTone, startLatestHubUpdate, updateFinished, updateView, updateWorking,
 } from "../../lib/hub-update-settings";
 import { machineDeployment } from "../../lib/machine-deploy";
 import { managerOf, multiManager, useRoster } from "../../lib/managers";
@@ -64,13 +64,14 @@ function HubUpdates() {
   const [confirmBackup, setConfirmBackup] = useState(false);
   const last = useRef<string | undefined>(undefined);
   const revision = useRef(0);
+  const opened = useRef(false);
 
   const apply = useCallback((s: HubUpdateStatus) => {
     revision.current++;
     const finished = updateFinished(last.current, s.state);
     last.current = s.state;
     const now = Date.now();
-    setSnapshot(prev => ({ status: s, pipeline: observeHubUpdate(prev?.pipeline, s, now) }));
+    setSnapshot(prev => ({ status: s, pipeline: s.state === "resolving" ? undefined : observeHubUpdate(prev?.pipeline, s, now) }));
     if (finished) hubUpdateHistory().then(setHistory, () => {});
   }, []);
 
@@ -122,8 +123,21 @@ function HubUpdates() {
     };
   }, [apply, load]);
 
+  useEffect(() => {
+    if (!status || opened.current) return;
+    opened.current = true;
+    if (status.source !== "web-dev" || !status.supports_preview || status.state === "checking" || updateWorking(status)) return;
+    const before = revision.current;
+    setChecking(true);
+    checkHubUpdate(true).then(next => {
+      if (revision.current === before) apply(next);
+    }, e => {
+      if (revision.current === before) toast(t("settings-hubsettings.check_failed", { error: errorText(e) }), "error");
+    }).finally(() => setChecking(false));
+  }, [apply, status]);
+
   const phase = status?.state;
-  const streaming = phase === "building" || phase === "backing_up" || phase === "applying_backup";
+  const streaming = phase === "resolving" || phase === "building" || phase === "backing_up" || phase === "applying_backup";
   useEffect(() => {
     if (!streaming) return;
     let stopped = false;
@@ -161,7 +175,10 @@ function HubUpdates() {
   const update = async (now: boolean) => {
     setStarting(true);
     try {
-      apply(await startHubUpdate(now));
+      const before = revision.current;
+      const next = !now && status?.source === "web-dev" && status.supports_preview
+        ? await startLatestHubUpdate() : await startHubUpdate(now);
+      if (revision.current === before) apply(next);
       setConfirmNow(false);
     } catch (e) {
       toast(t("settings-hubsettings.start_failed", { error: errorText(e) }), "error");
@@ -322,11 +339,12 @@ function HubUpdates() {
         )}
         {!selectedBackup && view.kind === "newer" && !working && (
           <div className="flex justify-end px-4 py-2.5">
-            <Button tone="accent" busy={starting} disabled={starting} onClick={() => void update(false)}>
+            <Button tone="accent" busy={starting} disabled={starting || checking || status.state === "checking"} onClick={() => void update(false)}>
               {t("settings-hubsettings.update_hub")}
             </Button>
           </div>
         )}
+        {status.state === "resolving" && <div role="status"><SettingsHint>{t("settings-hubsettings.resolving_latest")}</SettingsHint></div>}
         {run && view.kind !== "docker" && (
           <HubUpdatePipeline s={status} run={run} onNow={() => setConfirmNow(true)} />
         )}

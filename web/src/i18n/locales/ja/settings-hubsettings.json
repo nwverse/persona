@@ -43,6 +43,7 @@
   "version": "バージョン",
   "channel": "チャネル",
   "last_check": "前回の確認",
+  "resolving_latest": "更新する前に最新バージョンを確認しています…",
   "checking": "確認中…",
   "check": "アップデートを確認",
   "update": "アップデート",

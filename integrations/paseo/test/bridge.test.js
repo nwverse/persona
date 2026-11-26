@@ -567,6 +567,9 @@ test("seen in Persona, no longer unread in Paseo: a loaded agent's mark cleared,
   const { fake, node, a, rows } = await setup(t)
   fake.handlers.clear_agent_attention = (msg) => ({ payload: { agentId: msg.agentId, agents: [] } })
   fake.handlers['workspace.clear_attention.request'] = (msg) => ({ payload: { workspaceId: msg.workspaceId, clearedAgentIds: [a.grok.id], results: [], success: true, error: null } })
+  // A legacy row with a past turn already says done before the bridge receives the attention flag.
+  fake.update(a.claude.id, { requiresAttention: false })
+  await until('seen in Paseo', () => rows().find((r) => r.session_id === SID)?.status === 'idle')
   fake.update(a.claude.id, { requiresAttention: true })
   await until('unread', () => rows().find((r) => r.session_id === SID)?.status === 'done')
   await call(node, 'session.seen', { session_id: SID })
@@ -574,7 +577,7 @@ test("seen in Persona, no longer unread in Paseo: a loaded agent's mark cleared,
   // Stored (closed): through its workspace, while it is the only one flagged there; not the agent's own (it would start it).
   fake.update(a.claude.id, { requiresAttention: false })
   fake.update(a.grok.id, { requiresAttention: true, status: 'closed' })
-  await until('the grok flagged', () => fake.agents.get(a.grok.id).agent.requiresAttention === true)
+  await until('the grok flagged', () => rows().find((r) => r.session_id === `paseo-${a.grok.id}`)?.status === 'done')
   await until('known flagged', () => rows().find((r) => r.session_id === SID)?.status === 'idle')
   await call(node, 'session.seen', { session_id: `paseo-${a.grok.id}` })
   assert.deepEqual(fake.requestsOf('workspace.clear_attention.request').map((r) => r.workspaceId), ['wks_1'])

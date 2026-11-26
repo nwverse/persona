@@ -39,6 +39,13 @@ describe("registering the list", () => {
     await expect(loadModule("documents")).rejects.toThrow(/does not draw/);
   });
 
+  it("requires a single live mailbox provider with an implementation", async () => {
+    resetModulesForTest();
+    registerModule(module("messages", { mailbox: true }));
+    expect(() => registerModule(module("other", { mailbox: true }))).toThrow(/mailbox/);
+    await expect(loadModule("messages")).rejects.toThrow(/mailbox/);
+  });
+
   it("registers each module once, however often it runs", () => {
     resetModulesForTest();
     registerModules();

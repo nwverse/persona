@@ -6,7 +6,9 @@ import { lazy, Suspense, useState } from "react";
 import { isRemovable, openAsk } from "../../lib/todos";
 import { statusWord } from "../../lib/todo-wait-reason";
 import { TodoAskLine } from "../TodoAsk";
-import { reportText } from "../../lib/supervision";
+import { VerificationReport } from "./VerificationReport";
+import { openPanel } from "../../lib/panel";
+import { reportText, reviewState } from "../../lib/supervision";
 import { TaskWaitInfo } from "./TaskWaitInfo";
 import { LatestReport } from "./Supervision";
 import { useStore } from "../../lib/store";
@@ -47,6 +49,14 @@ export function TaskPanel({ todoId, onClose }: { todoId: string; onClose: () => 
         <div className="p-6 text-[13px] text-ink-2">{t("assistant-taskpanel.gone")}</div>
       </>
     );
+  }
+  if (reviewState(todo) === "user_check") {
+    return <>
+      <PanelHeader icon="todo" title={todo.title} subtitle={t("assistant-taskpanel.report")} onClose={onClose} />
+      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        <VerificationReport todo={todo} onOpenWorker={(mid, sid) => openPanel({ kind: "agent", mid, sid }, { push: true })} />
+      </div>
+    </>;
   }
   const agents = (todo.agents ?? []).filter((a) => !a.released_at);
   const lead = st.lead;
