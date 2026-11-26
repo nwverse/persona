@@ -120,6 +120,24 @@ describe("steps carried by an open request", () => {
     expect(result.needsYou).toMatchObject([{ key: "task:verify", todo: { ask: step.ask } }]);
     expect(result.running).toEqual([]);
   });
+
+  it("keeps a verification step visible when its open parent is quiet", () => {
+    const quietParent: Todo = { ...parent, quiet: true };
+    const result = entries([quietParent, verification]);
+    expect(result.needsYou).toMatchObject([{ key: "task:verify", todo: { ask: verification.ask } }]);
+    expect(result.running.map((item) => item.key)).toEqual(["task:request"]);
+  });
+
+  it("places a parent carrying a direction user_check step in Main's own Needs you group", () => {
+    const mainEntries = assistantEntries({
+      conversation: "main", main: "main", todos: [parent, verification],
+      sessions: [], interactions: [], plans: {}, feed: [], now: Date.parse(at),
+    });
+    expect(mainEntries.needsYou).toMatchObject([{ key: "task:request", steps: [{ key: "task:verify" }] }]);
+    expect(needsYouBySupervisor(mainEntries.needsYou, "main", true)).toEqual([
+      { supervisor: "main", items: mainEntries.needsYou },
+    ]);
+  });
 });
 
 // Android reads the same fixture (AssistantEntriesFixtureTest): the two entries split the same input the same way.
