@@ -448,7 +448,7 @@ function Storage({ machine, focus }: { machine?: Machine; focus?: StorageFocus }
 
   return (
     <div className="space-y-4" data-testid="storage-panel">
-      {machine && <UsageMap key={machine.id} machine={machine} focus={focus && focus.mid === machine.id ? { mode: focus.mode, seq: focus.seq } : undefined} />}
+      {machine && <UsageMap key={String(machine.online)} machine={machine} focus={focus && focus.mid === machine.id ? { mode: focus.mode, seq: focus.seq } : undefined} />}
 
       {/* Per-mount capacity & inode utilization */}
       <section className="rounded-card bg-surface px-4 py-3.5 shadow-card" data-testid="storage-mounts-section">

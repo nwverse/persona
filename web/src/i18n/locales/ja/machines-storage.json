@@ -1,6 +1,4 @@
 {
-  "title": "ストレージとクリーンアップ",
-  "subtitle": "マウントごとの容量・inode使用率と、オンデマンドの有界ホットスポット分析を確認します。",
   "refresh_mounts": "マウントを更新",
   "mounts_title": "マウント済みファイルシステム",
   "collected_ms": "{ms} ms で取得",

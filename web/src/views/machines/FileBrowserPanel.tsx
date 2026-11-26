@@ -433,8 +433,9 @@ function FileBrowser({ machine, path, routed }: { machine?: Machine } & Director
     }
   }, [resetEditor]);
 
-  // Load roots and initial $HOME listing whenever the active online machine changes.
+  // List the requested folder immediately. Optional root shortcuts load independently.
   useEffect(() => {
+    setLegacy(false);
     select(null);
     setInfo(null);
     setPermissions(null);
@@ -907,10 +908,10 @@ function FileBrowser({ machine, path, routed }: { machine?: Machine } & Director
         {ops.ui}
         {menu && <Menu anchor={menu.anchor} align="right" onClose={() => setMenu(null)} items={[
           ...ops.rowItems(target(menu.entry), () => openEntry(menu.entry))
-            .filter(item => !["open", "rename", "move", "upload"].includes(item.key)),
+            .filter(item => writable ? !["open", "rename", "move", "upload"].includes(item.key) : ["copy", "download"].includes(item.key)),
           { key: "info", icon: "info", label: t("files-info.info"), onSelect: () => setInfo(menu.entry) },
           ...(!isNavigableDir(menu.entry) ? [{ key: "preview", icon: "read" as const, label: t("files-ops.open"),
-            onSelect: () => openPanel({ kind: "file", mid: machine.id, cwd: folder, path: menu.entry.path }) }] : []),
+            onSelect: () => openPanel({ kind: "file", mid: machine.id, cwd: folder, path: menu.entry.path, readOnly: true }) }] : []),
           ...(canChmod ? [{ key: "permissions", icon: "shield" as const, label: t("files-perm.menu"), onSelect: () => setPermissions(menu.entry.path) }] : []),
         ]} />}
         {info && <FileInfoDialog mid={machine.id} cwd={folder} path={info.path}
@@ -1307,7 +1308,7 @@ function FileBrowser({ machine, path, routed }: { machine?: Machine } & Director
               )}
             </div>
 
-            {dir && routed && <div className="border-b border-line">
+            {dir && writable && routed && <div className="border-b border-line">
               {selected ? <SelectionBar ops={ops} selected={selected} onClear={() => select(null)} /> :
                 <Button tone="quiet" onClick={() => select([])}>{t("files-ops.select")}</Button>}
             </div>}
@@ -1401,7 +1402,7 @@ function FileBrowser({ machine, path, routed }: { machine?: Machine } & Director
                           </span>
                         </span>
                       </button>
-                      {routed && <IconButton icon="more" label={t("files-ops.row_more", { name: entry.name })}
+                      {routed && <IconButton icon="more" size={44} label={t("files-ops.row_more", { name: entry.name })}
                         onClick={e => setMenu({ entry, anchor: e.currentTarget })} />}
                       <IconButton
                         icon="pencil"
