@@ -7,8 +7,9 @@
 // don't count; a line that has to keep CJK text (it matches what someone else writes, like a hub's output) says
 // `i18n-ignore` in a comment.
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { basename, join, relative } from "node:path";
 import ts from "typescript";
+import { catalogFiles } from "../../i18n-catalogs";
 import { describe, expect, it } from "vitest";
 import { adminCatalog } from "../admin/catalog";
 import { FALLBACK_LANG, LANG_NAMES, LANGS, SOURCE_LANG } from "./index";
@@ -36,8 +37,9 @@ function catalogs(): Record<string, Record<string, Catalog>> {
   const out: Record<string, Record<string, Catalog>> = {};
   for (const lang of LANGS) {
     out[lang] = {};
-    for (const f of readdirSync(join(LOCALES, lang)).filter((f) => f.endsWith(".json") && !f.startsWith("_")).sort()) {
-      out[lang][f.replace(/\.json$/, "")] = JSON.parse(readFileSync(join(LOCALES, lang, f), "utf8"));
+    const meta = join(LOCALES, lang, "_meta.json");
+    for (const f of [...catalogFiles(meta, "client"), ...catalogFiles(meta, "admin")]) {
+      out[lang][basename(f, ".json")] = JSON.parse(readFileSync(f, "utf8"));
     }
   }
   return out;

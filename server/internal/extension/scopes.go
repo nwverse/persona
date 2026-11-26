@@ -43,13 +43,14 @@ const (
 	ScopeTranscription           = extwire.ScopeTranscription
 	ScopeMarketRefreshOwn        = extwire.ScopeMarketRefreshOwn
 	ScopeAssistantEvents         = extwire.ScopeAssistantEvents
+	ScopeLarkMessagesRead        = extwire.ScopeLarkMessagesRead
 )
 
 // HubScopes are the scopes, in the order the install screen lists them.
 var HubScopes = []string{ScopeKBRead, ScopeKBWrite, ScopeSentRead, ScopeInboxRead, ScopeInboxWrite, ScopeAgentsRead, ScopeAgentsControl,
 	ScopeAgentsArchiveIdle, ScopeAgentsPermissionMode, ScopeMachinesRead, ScopeMachinesPair, ScopeBrowserRun, ScopeNotify, ScopePushGrading, ScopeAssistantAsk, ScopeSpaces, ScopeAssistantRead, ScopeAssistantMemoryRead, ScopeAssistantEntriesRead,
 	ScopeTodosRead, ScopeTodosWrite, ScopeTasksSchedule, ScopeDecisionsRaise, ScopeLeadersRead, ScopeLeadersWrite, ScopeAssistantDispatchPolicy, ScopeAssistantStartDefaults, ScopeDispatchGuard, ScopeModels,
-	ScopeTranscription, ScopeMarketRefreshOwn, ScopeAssistantEvents}
+	ScopeTranscription, ScopeMarketRefreshOwn, ScopeAssistantEvents, ScopeLarkMessagesRead}
 
 // InEveryScope says whether a token of every scope (an extension granted the hub's full token the old way, hub_api,
 // that gets one of every scope instead) has scope s. Scopes whose authority must be agreed to by name are left out:
@@ -59,10 +60,11 @@ var HubScopes = []string{ScopeKBRead, ScopeKBWrite, ScopeSentRead, ScopeInboxRea
 // interrupt the owner with a new decision), dispatch.guard (which changes which conversations may hand work out),
 // machines.pair (which can issue one-time pairing links for new pending computers),
 // browser.run (which runs scripts in a paired computer's browser),
-// tasks.schedule (which assigns target computers for pending tasks), and
-// market.refresh_own (which spends the source marketplace's API quota).
+// tasks.schedule (which assigns target computers for pending tasks),
+// market.refresh_own (which spends the source marketplace's API quota), and
+// lark.messages.read (which receives newly synced Lark message metadata events).
 func InEveryScope(s string) bool {
-	return s != ScopeAgentsArchiveIdle && s != ScopeAgentsPermissionMode && s != ScopePushGrading && s != ScopeAssistantStartDefaults && s != ScopeDecisionsRaise && s != ScopeDispatchGuard && s != ScopeMachinesPair && s != ScopeBrowserRun && s != ScopeMarketRefreshOwn && s != ScopeSpaces && s != ScopeTasksSchedule
+	return s != ScopeAgentsArchiveIdle && s != ScopeAgentsPermissionMode && s != ScopePushGrading && s != ScopeAssistantStartDefaults && s != ScopeDecisionsRaise && s != ScopeDispatchGuard && s != ScopeMachinesPair && s != ScopeBrowserRun && s != ScopeMarketRefreshOwn && s != ScopeSpaces && s != ScopeTasksSchedule && s != ScopeLarkMessagesRead
 }
 
 // EveryScope is the scopes of a token of every scope (InEveryScope), in HubScopes' order.
@@ -103,6 +105,7 @@ var scopeTitles = map[string]string{
 	ScopeTranscription:           "scope_transcription",
 	ScopeMarketRefreshOwn:        "scope_market_refresh_own",
 	ScopeAssistantEvents:         "scope_assistant_events",
+	ScopeLarkMessagesRead:        "scope_lark_messages_read",
 }
 
 // ScopeTitle is how the install screen says scope s; ok false for what is not a scope.

@@ -3,6 +3,7 @@ import { currentHeaders, noteItemManager } from "./manager-choice";
 import { acceptanceStands, decisionDismissed, linkedParkInteraction, linkedParkOwnerAsk, parkInteractionID, reviewState, type Supervision } from "./supervision";
 import type { LineageStep, TaskBrief } from "./brief";
 import type { RuleSuggestion } from "./rule-suggestion";
+import type { TodoWait } from "./todo-wait-wire";
 import type { TodoSummary } from "./todo-view-wire";
 import { api, ApiError, enc } from "./api";
 import { parseAPIError, retryable, unrecoverableError } from "./api-errors";
@@ -191,6 +192,8 @@ export interface TodoBoardProjection {
 }
 
 export interface Todo {
+  /** Hub projection on list and detail reads. Older hubs omit it. */
+  wait?: TodoWait | null;
   id: string;
   title: string;
   notes?: string;
@@ -323,6 +326,7 @@ export interface TodoAsk {
   questions?: Question[];
   outcome?: "done" | "cannot" | "decide" | string;
   verdict: string;
+  summary?: string;
   recommend?: string;
   /** Direct evidence/PR/MR URL when present and not merely the to-do's own page (#14659). */
   link?: string;
