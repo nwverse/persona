@@ -452,7 +452,7 @@ func (i *Index) ReplaceOwned(source, owner string, items []Item) {
 	for id, c := range changes {
 		if c.before != nil {
 			if !c.before.item.HiddenByDirectory {
-				addCount(&i.counts, c.before.item, false, false, -1)
+				addCount(&i.counts, c.before.item, filters{}, -1)
 			}
 			if c.before.searchDocument == nil {
 				i.undecoded--
@@ -460,7 +460,7 @@ func (i *Index) ReplaceOwned(source, owner string, items []Item) {
 		}
 		if c.after != nil {
 			if !c.after.item.HiddenByDirectory {
-				addCount(&i.counts, c.after.item, false, false, 1)
+				addCount(&i.counts, c.after.item, filters{}, 1)
 			}
 			i.undecoded++ // a new record: its document is decoded by the first search that reads it
 		}

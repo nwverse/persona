@@ -361,6 +361,9 @@ type FeishuFeatures struct {
 	// ReadGroup: "@bot /read <task>" from the owner in a group reads the group before the task (#11803,
 	// FeishuFromRead).
 	ReadGroup bool `json:"read_group"`
+	// ReadGroupDirect: a /read's answer goes straight into the group under the owner's message. Off: it goes to the
+	// owner's private chat first, and into the group only when the owner presses its button (#14437).
+	ReadGroupDirect bool `json:"read_group_direct"`
 }
 
 // FeishuStatus is feishu.status's answer.

@@ -40,11 +40,11 @@ export function useMainWaiting(main?: Session) {
   const lookup = useMemo(() => answeredLookup(taskSessionLookup({ sessions, sessionSummaries, taskRows }), interactions, answered),
     [sessions, sessionSummaries, taskRows, interactions, answered]);
   const entries = useMemo(() => conversation ? assistantEntries({
-    conversation, main: mainId, manager, todos, sessions: answeredSessions(sessionRows, interactions, answered),
+    conversation, conversationMachine: main?.machine_id, main: mainId, manager, todos, sessions: answeredSessions(sessionRows, interactions, answered),
     interactions, plans, feed, cards: metadata, deferred, lookup, restored, now: Date.now(),
   }) : EMPTY_ENTRIES,
     // eslint-disable-next-line react-hooks/exhaustive-deps -- tick refreshes time-based buckets once a minute
-    [conversation, mainId, manager, todos, sessionRows, interactions, answered, plans, feed, metadata, deferred, lookup, restored, tick]);
+    [conversation, main?.machine_id, mainId, manager, todos, sessionRows, interactions, answered, plans, feed, metadata, deferred, lookup, restored, tick]);
   const waiting = useMemo(() => directUserWaiting(entries.needsYou, deferred), [entries.needsYou, deferred]);
   const ownInteractions = useMemo(() => {
     if (!main) return EMPTY_ASKS;

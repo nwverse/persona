@@ -1175,11 +1175,11 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
                 "expires_at":"...",          // Monitor: stops by itself at this time (the "expires in 30m" in the result); absent if not stated
                 "run_id":"wf_c1d9daf8-cd2",  // workflow: which run in workflows it is; only running workflows are here (old clients still treat it as a background task)
                 "moved_from_foreground":true}], // shell: a foreground command Claude Code's timeout moved to the background, not one started there or backgrounded by hand; the node judges it stalled sooner (#16418). Omitted otherwise and by older nodes
- "background_ended":[{"id":"b85polnoj","kind":"shell|monitor","description":"…","command":"…", // recent ended shell / Monitor outcomes, oldest first, at most 8 and from the last day
+ "background_ended":[{"id":"b85polnoj","kind":"shell|agent|monitor|workflow","description":"…","command":"…", // outcomes from the last day, oldest first. Claude Code retains up to 8 shell and Monitor outcomes. Antigravity retains up to 20 outcomes across all four kinds
                       "output_file":"/private/tmp/…/b85polnoj.output","started_at":"...","ended_at":"...",
                       "status":"completed|failed|stopped|killed|ended","exit_code":0}], // exit_code only when the transcript states it; stopped work need not have one
  // Full session info only; bounded / summary list rows omit background_ended. Older nodes and hubs omit it: clients must not infer an outcome when a task only leaves background.
- // Agents and workflows keep their existing history fields. Ended entries never count as running background work.
+ // Claude Code subagents and workflows use their own history fields. Ended entries never count as running background work.
  // Claude Code workflows (multi-agent scripts the Workflow tool runs in the background, #2935, docs/protocol/agent-states.md "Background workflows"): the last day's, newest first.
  // Running ones (running=true) count as background work: the hub computes state as working, doesn't push "done", doesn't judge the to-do complete or auto-close this Agent. Old nodes don't have this field
  // phase_stats follows phases order, including phases with no agents yet, then appends undeclared phases; title="" means unknown. done counts journal results only; failed counts the journal's failed lines (#5511, omitted when 0; older nodes counted them as done); agents stopped when the run ended are in none of done / failed / running.
@@ -3933,7 +3933,9 @@ The web's paged Agents list draws **By to-do** with it (`docs/web/web.md` "By to
 
 #### Quick filters (`sessions_quick_filters`, #6662)
 
-`hello.features` advertises **`sessions_quick_filters`**. Only then does a runtime page or counts read take **`waiting=0|1`** and **`exclude_pane_source=<origin>`**. The web's paged Agents list draws the complete list's quick filters with them (`docs/web/web.md` "Paging hubs"): Needs you `state=needs_you`, Unread `state=unread`, Working `state=working&waiting=0`, Waiting in the background `state=working&waiting=1`, Lark group `pane_source=feishu`, Terminal `pane_source=terminal`, their numbers from one counts read (Working is `state.working` less `background_waiting`); hiding botmux adds `exclude_pane_source=feishu` to every read. Older hubs ignore both keys, so clients send them only when the feature is advertised and otherwise keep the state chips.
+`hello.features` advertises **`sessions_quick_filters`**. Only then does a runtime page or counts read take **`waiting=0|1`** and **`exclude_pane_source=<origin>`**. The web's paged Agents list draws the complete list's quick filters with them (`docs/web/web.md` "Paging hubs"): Needs you `state=needs_you`, Unread `state=unread`, Working `state=working&waiting=0`, Waiting in the background `state=working&waiting=1`, Lark group `pane_source=feishu`, In a tab `pane_source=terminal`. Their numbers come from one counts read (Working is `state.working` less `background_waiting`). Hiding botmux adds `exclude_pane_source=feishu` to every read. Older hubs ignore both keys, so clients send them only when the feature is advertised and otherwise keep the state chips.
+
+With `agents_only=1`, the `terminal` filter and its count omit rows whose effective state is `offline`, even if a saved terminal reference remains. Those sessions still appear in unfiltered results and retain their origin in general session queries.
 
 #### Just finished rows (`sessions_just_finished`, #9751)
 

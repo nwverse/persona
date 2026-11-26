@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import fixture from "../../../spec/fixtures/entries/cases.json";
-import { assistantEntries, decisionLaterKey, needsYouBySupervisor, type NeedsYouItem } from "./assistant-entries";
+import { assistantEntries, decisionLaterKey, needsYouBySupervisor, taskRequestRouting, type NeedsYouItem } from "./assistant-entries";
 import { triageTodos } from "./todo-triage";
 import { makeSessionLookup } from "./todos";
 import type { FeedItem, TaskPlan } from "./feed";
@@ -16,6 +16,21 @@ it("keeps an Agent interaction on a verifying task under its original conversati
   expect(needsYouBySupervisor([item], "main", true)).toEqual([
     { supervisor: "main", items: [] }, { supervisor: "dispatch-chat", items: [item] },
   ]);
+});
+
+it("does not rehome a conversation request when a task agent shares its session id", () => {
+  const at = "2026-11-10T08:00:00Z";
+  const todo: Todo = {
+    id: "task", title: "Task", origin: "conversation", created_at: at, updated_at: at,
+    agents: [{ machine_id: "hub", session_id: "shared", linked_at: at }],
+  };
+  const request: Interaction = {
+    id: "own", kind: "question", machine_id: "hub", session_id: "shared",
+    folded_under: "shared", folded_under_machine_id: "other", created_at: at,
+  };
+  const { asksOf } = taskRequestRouting([todo], [request], makeSessionLookup([]), "shared", "hub");
+  expect(asksOf.get("hub/shared")).toBeUndefined();
+  expect(asksOf.get("other/shared")).toEqual([request]);
 });
 
 describe("steps carried by an open request", () => {

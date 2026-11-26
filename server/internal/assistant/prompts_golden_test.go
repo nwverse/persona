@@ -265,20 +265,27 @@ func TestGoldenStandingActions(t *testing.T) {
 }
 
 // What the main conversation gets for the owner's "@bot /read …" in a Lark group (bot/read_group, #11803): in each
-// language, in a topic, and with no words after the command.
+// language, in a topic, and with no words after the command; the answer held for the owner (#14437), and with the
+// read_group_direct switch posted straight into the group.
 func TestGoldenBotReadGroup(t *testing.T) {
 	// The prompt as the lark module fills it for a /read (its read.go; readPrompt checks it is these).
-	readPrompt := func(owner, lang, chat, message, thread, task string) prompts.BotReadGroup {
+	readPrompt := func(owner, lang, chat, message, thread, task string, direct bool) prompts.BotReadGroup {
 		return prompts.BotReadGroup{Owner: owner, Language: lang, ChatID: chat, MessageID: message, ThreadID: thread, Task: task,
-			Dir: "~/.persona/lark-read/" + message, Default: 40, Most: 500, FileMB: 50, TotalMB: 200, Images: 20}
+			Dir: "~/.persona/lark-read/" + message, Default: 40, Most: 500, FileMB: 50, TotalMB: 200, Images: 20, Direct: direct}
 	}
-	in := readPrompt("示例用户", "", "oc_example", "om_example", "", "看下这几条告警是不是同一个原因")
-	golden(t, "bot_read_group", prompts.RenderBotReadGroup(in))
-	in.Language, in.Owner, in.Task = "English", "Example User", "Are these alerts the same cause?"
-	golden(t, "bot_read_group.en", prompts.RenderBotReadGroup(in))
-	in.Language, in.Owner, in.Task = "日本語", "サンプルユーザー", "これらのアラートは同じ原因ですか"
-	golden(t, "bot_read_group.ja", prompts.RenderBotReadGroup(in))
-	in = readPrompt("", "", "oc_example", "om_example", "omt_example", "")
+	for _, direct := range []bool{false, true} {
+		suffix := ""
+		if direct {
+			suffix = ".direct"
+		}
+		in := readPrompt("示例用户", "", "oc_example", "om_example", "", "看下这几条告警是不是同一个原因", direct)
+		golden(t, "bot_read_group"+suffix, prompts.RenderBotReadGroup(in))
+		in.Language, in.Owner, in.Task = "English", "Example User", "Are these alerts the same cause?"
+		golden(t, "bot_read_group"+suffix+".en", prompts.RenderBotReadGroup(in))
+		in.Language, in.Owner, in.Task = "日本語", "サンプルユーザー", "これらのアラートは同じ原因ですか"
+		golden(t, "bot_read_group"+suffix+".ja", prompts.RenderBotReadGroup(in))
+	}
+	in := readPrompt("", "", "oc_example", "om_example", "omt_example", "", false)
 	golden(t, "bot_read_group.topic_no_task", prompts.RenderBotReadGroup(in))
 }
 

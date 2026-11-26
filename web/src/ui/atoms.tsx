@@ -1129,6 +1129,7 @@ export function Dialog({
   footer,
   labelledBy,
   describedBy,
+  closeOnBack = false,
 }: {
   open: boolean;
   onClose: () => void;
@@ -1140,11 +1141,13 @@ export function Dialog({
   labelledBy?: string;
   /** The id of the text that says what the dialog asks. */
   describedBy?: string;
+  /** A drill-down is a history entry even on wider screens. */
+  closeOnBack?: boolean;
 }) {
   const panel = useRef<HTMLDivElement>(null);
   const titleId = useId();
   const sheet = useMedia(SHEET_QUERY);
-  useCloseOnBack(open, onClose, sheet);
+  useCloseOnBack(open, onClose, sheet || closeOnBack);
   useEscapeClose(open, onClose);
   // The dialog itself takes the focus, so a phone's keyboard does not come up for its first field (one with autoFocus
   // took it already). On close it goes back to the opener, unless the close moved it outside on purpose.

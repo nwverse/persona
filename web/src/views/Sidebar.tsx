@@ -1344,8 +1344,8 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
     setKept((cur) => removeKept(cur, keys));
     hover(null);
   }, [hover]);
-  // Settings › Appearance › Show terminals in sidebar (off): the plain shells of each machine's terminal host, under its agents in "By machine"
-  const showTerminals = useSidebarTerminals() && shownGrouping === "machine";
+  // Shells belong under their computer in "By machine". The tab filter lists only the Agents it counts.
+  const showTerminals = useSidebarTerminals() && shownGrouping === "machine" && filter !== "terminal";
   const { listing: panes, refresh: refreshPanes } = usePanes(machines, showTerminals);
   const shellTrees = useMemo(() => {
     if (!showTerminals) return undefined;

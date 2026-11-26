@@ -1,4 +1,7 @@
 {
+  "to_decide": "選択待ち",
+  "previous_decision": "前のカード",
+  "next_decision": "次のカード",
   "workspace": "ワークスペース",
   "workspace_new": "新規作成",
   "workspace_existing": "既存を使用",

@@ -1018,7 +1018,7 @@ func (n *Node) agyPaneSessionInfo(id, pane string) map[string]any {
 				delete(info, "usage_unknown")
 			}
 			row := proto.Session{SessionID: id, Model: u.model}
-			n.setAgyTranscriptContext(&row, u)
+			n.setAgyTranscriptContext(&row, u.agyTranscriptUsage)
 			breakdown = row.ContextBreakdown()
 		}
 		if breakdown != nil {

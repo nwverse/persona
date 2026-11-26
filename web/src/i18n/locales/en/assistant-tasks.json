@@ -1,4 +1,7 @@
 {
+  "to_decide": "To Decide",
+  "previous_decision": "Previous card",
+  "next_decision": "Next card",
   "workspace": "Workspace",
   "workspace_new": "New",
   "workspace_existing": "Use existing",
