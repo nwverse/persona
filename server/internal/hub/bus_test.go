@@ -352,8 +352,8 @@ func TestBusRejectsTokens(t *testing.T) {
 		}
 	}
 	other := "jb_" + randomHex(24)
-	if err := store.SaveBusIdentity(ctx, db.BusIdentity{ID: "later", Role: "app"}, hashToken(other)); err != nil {
-		t.Fatal(err)
+	if err := store.SaveBusIdentity(ctx, db.BusIdentity{ID: "later", Role: "app"}, hashToken(other)); err == nil {
+		t.Fatal("the storage constraint must refuse an unsupported bus role")
 	}
 	if _, err := bus.Dial(ctx, srv.URL, other, nil); !errors.Is(err, bus.ErrRejected) {
 		t.Fatalf("a token of another role: %v", err)
