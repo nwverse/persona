@@ -4,7 +4,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Todo } from "../lib/todos";
+import type { Todo, TodoBoardProjection } from "../lib/todos";
 import type { TodoSummary } from "../lib/todo-view-wire";
 
 vi.hoisted(() => {
@@ -42,7 +42,8 @@ const flush = async () => {
 };
 const seed = (patch: Record<string, unknown>) => Object.assign(getState() as unknown as Record<string, unknown>, patch);
 
-const view = (section: string, reason: string, phase: string, rank = 0): TodoSummary => ({ phase, section, reason, rank });
+// The view as the wire carries it: raw strings, which may be a newer hub's values the closed types do not know.
+const view = (section: string, reason: string, phase: string, rank = 0): TodoSummary => ({ phase, section, reason, rank }) as TodoSummary;
 
 const sampleTodos: Todo[] = [
   // Personal to-do without project
@@ -127,6 +128,7 @@ afterEach(async () => {
 const render = async ({
   todos = sampleTodos,
   sharedBlockers = [],
+  todoBoard = null,
   sessions = {},
   todosV2,
   assistantManager,
@@ -137,18 +139,20 @@ const render = async ({
 }: {
   todos?: Todo[];
   sharedBlockers?: unknown[];
+  todoBoard?: TodoBoardProjection | null;
   sessions?: Record<string, unknown[]>;
   todosV2?: boolean;
   assistantManager?: string;
   leaders?: string[];
   conversations?: unknown[];
-  grouping?: "status" | "folder";
+  grouping?: "status" | "folder" | "direction";
   selectedId?: string;
 } = {}) => {
   localStorage.setItem("persona.todos.grouping", grouping);
   seed({
     todos,
     sharedBlockers,
+    todoBoard,
     todosLoaded: true,
     sessions,
     interactions: [],
@@ -1101,5 +1105,317 @@ describe("TodosView slim header & left pane under todos_v2 (#14830)", () => {
     expect(host.querySelector("[data-testid=todos-v2-toolbar]")).toBeNull();
     expect(host.querySelector("[data-testid=todos-summary]")).toBeTruthy();
     expect(host.querySelector("[data-testid=todos-list-column]")?.className).toContain("md:w-[380px]");
+  });
+});
+
+describe("TodoDetail single-item Change direction control under todos_v2 (#15653)", () => {
+  const dirTodos: Todo[] = [
+    {
+      id: "goal_main",
+      title: "Ship direction wiring",
+      direction_id: "dir-platform",
+      created_at: iso(6 * HOUR),
+      updated_at: iso(1 * HOUR),
+      view: view("working", "agent_running", "working", 0),
+    },
+    {
+      id: "sub_task",
+      title: "Update direction picker tests",
+      part_of: "goal_main",
+      direction_id: "dir-platform",
+      agents: [{ machine_id: "m1", session_id: "s-run", linked_at: iso(2 * HOUR) }],
+      created_at: iso(4 * HOUR),
+      updated_at: iso(1 * HOUR),
+      view: view("working", "agent_running", "working", 1),
+    },
+  ];
+
+  const leaders = ["dir-platform", "dir-growth"];
+  const conversations = [
+    { machine_id: "m1", session_id: "dir-platform", title: "Platform" },
+    { machine_id: "m1", session_id: "dir-growth", title: "Growth" },
+  ];
+
+  it("renders no Change direction button when todos_v2 is false or omitted", async () => {
+    await render({ todos: dirTodos, todosV2: undefined, selectedId: "goal_main", leaders, conversations });
+    expect(host.querySelector("[data-testid=todo-detail-change-direction]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-detail-direction-panel]")).toBeNull();
+    const legacyDetail = host.querySelector("[data-testid=todo-detail]")?.innerHTML;
+
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await render({ todos: dirTodos, todosV2: false, selectedId: "goal_main", leaders, conversations });
+    expect(host.querySelector("[data-testid=todo-detail-change-direction]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-detail]")?.innerHTML).toBe(legacyDetail);
+  });
+
+  it("submits POST /api/v1/todos/reorganize with transfer_supervision=false by default, optional include_children, and refreshes immediately", async () => {
+    let currentTodos = dirTodos;
+    api.mockImplementation(async (path: string, init?: unknown) => {
+      if (path.includes("/kb")) return { items: kbProjects };
+      if (path === "/todos/reorganize") {
+        const body = (init as { json?: { direction_id?: string; include_children?: boolean } })?.json;
+        currentTodos = currentTodos.map((td) =>
+          td.id === "goal_main" || (body?.include_children && td.part_of === "goal_main")
+            ? { ...td, direction_id: body?.direction_id || undefined }
+            : td,
+        );
+        return { updated: currentTodos };
+      }
+      if (path === "/todos") return { todos: currentTodos };
+      return {};
+    });
+
+    await render({ todos: dirTodos, todosV2: true, selectedId: "goal_main", leaders, conversations });
+
+    const trigger = host.querySelector<HTMLButtonElement>("[data-testid=todo-detail-change-direction]")!;
+    expect(trigger).toBeTruthy();
+    expect(trigger.textContent).toContain(t("todos.detail_change_direction"));
+    expect(host.querySelector("[data-testid=todo-detail-direction-panel]")).toBeNull();
+
+    // Open picker panel
+    await act(async () => trigger.click());
+    await flush();
+    expect(host.querySelector("[data-testid=todo-detail-direction-panel]")).toBeTruthy();
+
+    // Parent goal has 1 child -> include_children checkbox is shown and defaults to false
+    const includeBox = host.querySelector<HTMLInputElement>("[data-testid=todo-detail-direction-include-children]")!;
+    expect(includeBox).toBeTruthy();
+    expect(includeBox.checked).toBe(false);
+
+    // Apply disabled while selection equals current direction
+    const applyBtn = host.querySelector<HTMLButtonElement>("[data-testid=todo-detail-direction-apply]")!;
+    expect(applyBtn.disabled).toBe(true);
+
+    // Select another active direction -> transfer_supervision appears and defaults to false
+    const select = host.querySelector<HTMLSelectElement>("[data-testid=todo-detail-direction-select]")!;
+    await act(async () => {
+      select.value = "dir-growth";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await flush();
+
+    const transferBox = host.querySelector<HTMLInputElement>("[data-testid=todo-detail-direction-transfer-supervision]")!;
+    expect(transferBox).toBeTruthy();
+    expect(transferBox.checked).toBe(false);
+    expect(applyBtn.disabled).toBe(false);
+
+    // Opt into include_children, keep transfer_supervision unchecked
+    await act(async () => includeBox.click());
+    await flush();
+    expect(includeBox.checked).toBe(true);
+
+    await act(async () => applyBtn.click());
+    await flush();
+
+    expect(api).toHaveBeenCalledWith(
+      "/todos/reorganize",
+      expect.objectContaining({
+        method: "POST",
+        json: {
+          ids: ["goal_main"],
+          direction_id: "dir-growth",
+          include_children: true,
+          transfer_supervision: false,
+        },
+      }),
+    );
+    expect(api).toHaveBeenCalledWith("/todos", expect.anything());
+    // Panel closes and updated direction name renders immediately
+    expect(host.querySelector("[data-testid=todo-detail-direction-panel]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-detail-direction]")?.textContent).toContain("Growth");
+  });
+
+  it("hides include_children on leaf tasks, shows inline error on failure, and unmounts immediately when todos_v2 turns off", async () => {
+    api.mockImplementation(async (path: string) => {
+      if (path.includes("/kb")) return { items: kbProjects };
+      if (path === "/todos/reorganize") throw new Error("reorganize denied");
+      return {};
+    });
+
+    await render({ todos: dirTodos, todosV2: true, selectedId: "sub_task", leaders, conversations });
+
+    const trigger = host.querySelector<HTMLButtonElement>("[data-testid=todo-detail-change-direction]")!;
+    await act(async () => trigger.click());
+    await flush();
+
+    // Leaf task has no children -> include_children is omitted
+    expect(host.querySelector("[data-testid=todo-detail-direction-include-children]")).toBeNull();
+
+    // Choose "Remove from direction" -> transfer_supervision hides
+    const select = host.querySelector<HTMLSelectElement>("[data-testid=todo-detail-direction-select]")!;
+    await act(async () => {
+      select.value = "";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await flush();
+    expect(host.querySelector("[data-testid=todo-detail-direction-transfer-supervision]")).toBeNull();
+
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-testid=todo-detail-direction-apply]")!.click());
+    await flush();
+
+    // Inline error shown, panel stays open
+    expect(host.querySelector("[data-testid=todo-detail-direction-error]")?.textContent).toContain("reorganize denied");
+    expect(host.querySelector("[data-testid=todo-detail-direction-panel]")).toBeTruthy();
+
+    // Switching todos_v2 off removes both trigger and panel immediately
+    await act(async () => patchAssistant({ todos_v2: false }));
+    await flush();
+    expect(host.querySelector("[data-testid=todo-detail-change-direction]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-detail-direction-panel]")).toBeNull();
+  });
+});
+
+describe("TodosView server-owned board projection consumption (#15800)", () => {
+  const boardTodos: Todo[] = [
+    {
+      id: "order_second",
+      title: "Second by client timestamp",
+      created_at: iso(20 * HOUR),
+      updated_at: iso(20 * HOUR),
+      view: view("needs_you", "owner_decides", "needs_you", 2),
+    },
+    {
+      id: "order_first",
+      title: "First by client timestamp",
+      created_at: iso(1 * HOUR),
+      updated_at: iso(1 * HOUR),
+      view: view("needs_you", "owner_decides", "needs_you", 0),
+    },
+    {
+      id: "goal_parent",
+      title: "Launch Q4 Milestone",
+      direction_id: "dir-platform",
+      created_at: iso(5 * HOUR),
+      updated_at: iso(2 * HOUR),
+      view: view("working", "agent_running", "working", 0),
+    },
+    {
+      id: "goal_child_folded",
+      title: "Hidden folded subtask",
+      part_of: "goal_parent",
+      direction_id: "dir-platform",
+      created_at: iso(4 * HOUR),
+      updated_at: iso(2 * HOUR),
+      view: view("working", "agent_running", "working", 1),
+    },
+    {
+      id: "goal_child_surfaced",
+      title: "Blocked child needing approval",
+      part_of: "goal_parent",
+      direction_id: "dir-platform",
+      created_at: iso(3 * HOUR),
+      updated_at: iso(1 * HOUR),
+      view: view("needs_you", "owner_decides", "needs_you", 1),
+    },
+  ];
+
+  // Deliberately order `order_second` before `order_first` and give `counts.needs_you = 9`
+  // so the test proves TodosView renders directly from server `board` instead of re-deriving locally.
+  const serverBoard: TodoBoardProjection = {
+    status_groups: [
+      {
+        key: "needs_you",
+        total_count: 3,
+        visible_count: 3,
+        entries: [
+          { todo_id: "order_second" },
+          { todo_id: "goal_child_surfaced" },
+          { todo_id: "order_first" },
+        ],
+      },
+      {
+        key: "in_progress",
+        total_count: 2,
+        visible_count: 1,
+        entries: [
+          {
+            todo_id: "goal_parent",
+            folded_child_ids: ["goal_child_folded"],
+            surfaced_child_ids: ["goal_child_surfaced"],
+            folded_count: 1,
+          },
+        ],
+      },
+    ],
+    direction_groups: [
+      {
+        direction_id: "dir-platform",
+        label: "Platform Server Label",
+        counts: { needs_you: 1, in_progress: 2, pending_review: 0, waiting: 0, done: 0, total: 3 },
+        todo_ids: ["goal_child_surfaced", "goal_parent", "goal_child_folded"],
+      },
+      {
+        direction_id: "",
+        counts: { needs_you: 2, in_progress: 0, pending_review: 0, waiting: 0, done: 0, total: 2 },
+        todo_ids: ["order_second", "order_first"],
+      },
+    ],
+    sidebar_tree: [],
+    counts: {
+      needs_you: 9,
+      in_progress: 2,
+      pending_review: 0,
+      waiting: 0,
+      someday: 0,
+      done: 0,
+      open_total: 11,
+    },
+  };
+
+  it("strictly renders status sections, goal folding, surfaced blockers, and header count from server board under todos_v2=true", async () => {
+    await render({ todos: boardTodos, todoBoard: serverBoard, todosV2: true, grouping: "status" });
+
+    const sections = host.querySelector("[data-testid=todos-sections]")!;
+    expect(sections.getAttribute("data-todo-source")).toBe("board");
+
+    // Header attention count reads directly from board.counts.needs_you (9)
+    expect(host.querySelector("[data-testid=todos-header-attention]")?.getAttribute("data-count")).toBe("9");
+
+    // Waiting (needs_you) section renders in exact server order: order_second, goal_child_surfaced, order_first
+    const waitingSection = host.querySelector('[data-testid=todo-section][data-section="waiting"]')!;
+    const waitingIds = [...waitingSection.querySelectorAll("[data-todo]")].map((el) => el.getAttribute("data-todo"));
+    expect(waitingIds).toEqual(["order_second", "goal_child_surfaced", "order_first"]);
+
+    // Working (in_progress) section keeps goal_parent visible and folds goal_child_folded
+    const workingSection = host.querySelector('[data-testid=todo-section][data-section="working"]')!;
+    const workingIds = [...workingSection.querySelectorAll("[data-todo]")].map((el) => el.getAttribute("data-todo"));
+    expect(workingIds).toEqual(["goal_parent"]);
+    expect(workingSection.textContent).not.toContain("Hidden folded subtask");
+  });
+
+  it("renders direction grouping directly from server board.direction_groups under todos_v2=true", async () => {
+    await render({ todos: boardTodos, todoBoard: serverBoard, todosV2: true, grouping: "direction" });
+
+    const groups = [...host.querySelectorAll("[data-testid=todo-group]")];
+    expect(groups.map((el) => el.getAttribute("data-group"))).toEqual([
+      "direction:dir-platform",
+      "direction:secretary",
+    ]);
+    expect(groups[0]!.textContent).toContain("Platform Server Label");
+    const platformIds = [...groups[0]!.querySelectorAll("[data-todo]")].map((el) => el.getAttribute("data-todo"));
+    expect(platformIds).toEqual(["goal_child_surfaced", "goal_parent", "goal_child_folded"]);
+  });
+
+  it("ignores server board completely when todos_v2 is false (100% legacy behavior)", async () => {
+    await render({ todos: boardTodos, todoBoard: serverBoard, todosV2: false, grouping: "status" });
+
+    const sections = host.querySelector("[data-testid=todos-sections]")!;
+    expect(sections.getAttribute("data-todo-source")).not.toBe("board");
+    expect(host.querySelector("[data-testid=todos-header-attention]")).toBeNull();
+    expect(host.querySelector("[data-testid=todos-summary]")).not.toBeNull();
+    // Legacy path keeps folded child unfolded at top level in working
+    const workingSection = host.querySelector('[data-testid=todo-section][data-section="working"]')!;
+    expect(workingSection.textContent).toContain("Hidden folded subtask");
+  });
+
+  it("falls back cleanly to client goal folding when todos_v2=true and server omits board (older Hub)", async () => {
+    await render({ todos: boardTodos, todoBoard: null, todosV2: true, grouping: "status" });
+
+    const sections = host.querySelector("[data-testid=todos-sections]")!;
+    expect(sections.getAttribute("data-todo-source")).toBe("view");
+    // Client fallback still folds goal_child_folded under goal_parent
+    const workingSection = host.querySelector('[data-testid=todo-section][data-section="working"]')!;
+    expect(workingSection.textContent).not.toContain("Hidden folded subtask");
   });
 });

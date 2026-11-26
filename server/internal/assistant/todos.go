@@ -117,6 +117,9 @@ type Todo struct {
 	// DirectionID: optional organizational direction membership, decoupled from runtime supervision.supervisor and
 	// origin; omitted when unset (#14660).
 	DirectionID string `json:"direction_id,omitempty"`
+	// ItemType: stored explicit 2-type classification ("personal" or "task"), or "" when unset (#15758).
+	// Emitted only on listedTodo when todos_v2=true so legacy/mobile wire payloads remain byte-identical when off.
+	ItemType string `json:"-"`
 	// When it is due (DueAt a moment, DueDate a day "2006-01-02" in the user's time zone; at most one), when the phone
 	// is reminded of it and whether it was, and its priority ("" normal, high, low): #1683, todo_plan.go. Clients that do
 	// not know them show the todo as ever.
@@ -521,6 +524,7 @@ func (s *Service) todosPushSoon() {
 		p.armed = false
 		p.mu.Unlock()
 		s.todoViewPushed() // every app reads the list again from here (todo_view_push.go)
+		s.todosCountSoon() // and the counts view's to-dos follow, read by the manager if no app does (counts_view.go)
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		s.event(ctx, map[string]any{"type": "todos"})
@@ -634,7 +638,18 @@ func (s *Service) insertTodo(ctx context.Context, row db.TodoRow, bindings ...*r
 	var out Todo
 	var err error
 	if row.PartOf != "" || len(row.After) > 0 {
+		if row.Responsible != nil && row.Responsible.Kind == db.ResponsibleSession && row.Responsible.SessionID != "" {
+			if err := s.waitIdleCloseFence(ctx, row.Responsible.MachineID, row.Responsible.SessionID); err != nil {
+				return Todo{}, err
+			}
+		}
 		out, err = s.insertPiece(ctx, row, bindings...)
+	} else if row.Responsible != nil && row.Responsible.Kind == db.ResponsibleSession && row.Responsible.SessionID != "" {
+		if err := s.lockTodoWritingWithIdleFence(ctx, row.Responsible.MachineID, row.Responsible.SessionID); err != nil {
+			return Todo{}, err
+		}
+		out, err = s.putNewTodo(ctx, row, bindings...)
+		s.todos.writing.Unlock()
 	} else {
 		out, err = s.putNewTodo(ctx, row, bindings...)
 	}
@@ -651,7 +666,13 @@ func (s *Service) insertPiece(ctx context.Context, row db.TodoRow, bindings ...*
 	if f := s.pieceWriteHook; f != nil {
 		f(row.ID)
 	}
-	s.todos.writing.Lock()
+	if row.Responsible != nil && row.Responsible.Kind == db.ResponsibleSession && row.Responsible.SessionID != "" {
+		if err := s.lockTodoWritingWithIdleFence(ctx, row.Responsible.MachineID, row.Responsible.SessionID); err != nil {
+			return Todo{}, err
+		}
+	} else {
+		s.todos.writing.Lock()
+	}
 	defer s.todos.writing.Unlock()
 	e, err := s.recheckPieces("", db.TodoEdit{PartOf: &row.PartOf, After: &row.After})
 	if err != nil {
@@ -664,6 +685,9 @@ func (s *Service) insertPiece(ctx context.Context, row db.TodoRow, bindings ...*
 // putNewTodo is insertTodo's store write and memory, without telling anyone.
 func (s *Service) putNewTodo(ctx context.Context, row db.TodoRow, bindings ...*repository.CreateBindings) (Todo, error) {
 	if err := db.ValidateTodoAudience(row.Audience); err != nil {
+		return Todo{}, err
+	}
+	if err := db.ValidateTodoItemType(row.ItemType); err != nil {
 		return Todo{}, err
 	}
 	row.DirectionID = strings.TrimSpace(row.DirectionID)
@@ -1011,6 +1035,7 @@ func (s *Service) todoRoutes() {
 	s.todoMarkRoutes()
 	s.todoRetitleRoute()
 	s.todoReorganizeRoute()
+	s.todoDecisionsBatchRoute()
 	s.todoImportRoutes()
 	s.todoViewRoutes()
 	s.todoHandoffRoutes()
@@ -1044,14 +1069,18 @@ func (s *Service) todoRoutes() {
 			s.tagTodoRevision(w, writes, p)
 		}
 		var sharedBlockers []projection.SharedBlocker
+		var board *todoBoardProjection
 		if !isExtension {
 			sharedBlockers = p.sharedBlockers()
+			if s.settings(r.Context()).todosV2On() {
+				board = buildTodoBoardProjection(list, s.todoBoardDirectionLabels(r.Context()))
+			}
 		}
 		if paged {
 			writeTodoPage(w, list, p, sharedBlockers, limit, after)
 			return
 		}
-		apierr.WriteJSON(w, todosList{Todos: list, Counts: p.counts(), SharedBlockers: sharedBlockers})
+		apierr.WriteJSON(w, todosList{Todos: list, Counts: p.counts(), SharedBlockers: sharedBlockers, Board: board})
 	})
 	s.handle("GET /api/v1/todos/revision", s.todoRevisionRead)
 
@@ -1118,6 +1147,14 @@ func (s *Service) todoRoutes() {
 		if err := in.todoPlanIn.edit(&plan); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
+		}
+		if s.settings(r.Context()).todosV2On() && in.ItemType != nil {
+			it, err := todoItemType(*in.ItemType)
+			if err != nil {
+				apierr.Write(w, http.StatusBadRequest, err)
+				return
+			}
+			plan.ItemType = &it
 		}
 		if err := s.setTodoProject(r.Context(), in.Project, &plan); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
@@ -1209,6 +1246,14 @@ func (s *Service) todoRoutes() {
 		if err := in.todoPlanIn.edit(&e); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
+		}
+		if s.settings(r.Context()).todosV2On() && in.ItemType != nil {
+			it, err := todoItemType(*in.ItemType)
+			if err != nil {
+				apierr.Write(w, http.StatusBadRequest, err)
+				return
+			}
+			e.ItemType = &it
 		}
 		if err := s.setTodoProject(r.Context(), in.Project, &e); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
@@ -1855,7 +1900,13 @@ func (s *Service) linkTodoAgentWithSourceAllowingDone(ctx context.Context, todoI
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return err
 	}
-	s.todos.writing.Lock()
+	if !allowDone {
+		if err := s.lockTodoWritingWithIdleFence(ctx, mid, sid); err != nil {
+			return err
+		}
+	} else {
+		s.todos.writing.Lock()
+	}
 	err := s.writeTodoAgentLink(ctx, todoID, mid, sid, title, cwd, agent, startError, source, via, allowDone)
 	s.todos.writing.Unlock()
 	if err != nil {
@@ -1869,7 +1920,9 @@ func (s *Service) linkTodoAgentWithSourceAllowingDone(ctx context.Context, todoI
 // linkTodoSpaceAgent retires fanout when a newer move/unlink published while the
 // session lookup was in flight. Check and write share the ownership write boundary.
 func (s *Service) linkTodoSpaceAgent(ctx context.Context, todoID, mid, key string, linkedAt time.Time, c proto.Session) (bool, error) {
-	s.todos.writing.Lock()
+	if err := s.lockTodoWritingWithIdleFence(ctx, mid, c.SessionID); err != nil {
+		return false, err
+	}
 	s.todos.mu.RLock()
 	current := false
 	if target := s.todos.todos[todoID]; target != nil && s.todos.spacesByKey[key] == todoID {
@@ -2150,7 +2203,9 @@ func (s *Service) reopenFailedTodo(ctx context.Context, id string) (Todo, bool, 
 	if !ok {
 		return Todo{}, false, db.ErrTodoNotFound
 	}
-	s.todos.writing.Lock()
+	if err := s.lockTodoWritingForSessions(ctx, todoProtectedSessions(cur, nil)); err != nil {
+		return Todo{}, false, err
+	}
 	now := time.Now().UTC()
 	row := db.TodoRow{ID: cur.ID, Title: cur.Title, Notes: cur.Notes, CreatedAt: cur.CreatedAt, UpdatedAt: now,
 		Origin: cur.Origin, PlanID: cur.PlanID, ReopenedAt: &now}

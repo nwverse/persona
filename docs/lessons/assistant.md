@@ -18,6 +18,7 @@
   without authorizing an unrelated conversation or taking over a real supervisor's offline queue; test direct, busy
   and restart-restored delivery with the assignment unchanged.
 
+
 - A scheduled-workout fixture must clear unrelated default routines before admission (#15442). `acceptWorkout`
   appends its task to the existing schedule; unlike `setTasks`, it does not replace the morning and evening routines.
   Near their due time, a catalog test can count both the workout report and a briefing, while waiting for only the
@@ -784,6 +785,10 @@ routes read as typed (`writeDelivered`, `server/internal/assistant/todo_write_ou
 pitfalls from the Agent-send side at the same time, and the two changes now share `sendUnknown` and that type. The
 to-do routes read a little more as in doubt than `sendUnknown` does (a connection that ended mid-answer, any other
 network error). A refusal said "nothing typed" wrongly is the unsafe side: when in doubt, say `unknown`.
+
+After a conversation switch claims segment preparation, a failed receipt lookup can only tell us about that lookup
+(#16066). Keep checking the same operation until its preparation deadline. Starting a replacement before confirming
+the original could leave two prepared segments.
 
 ## Name the thing an event is about, and keep what was done for it (#5718)
 

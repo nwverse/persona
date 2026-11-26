@@ -1331,3 +1331,30 @@ the one repeated line the benchmarks used before, the 4M index is 22 MB and buil
 - Names allow two lines (documents and meetings differ in the second half of their titles).
 - Document / meeting / event details show time and **Open document** (in-app), with source chat among associations; project associations include documents, meetings and events (up to 30 each, newest first).
 - If a profile is empty after removing content already in the page header, do not show an empty card.
+
+### Equivalent Lark archive representations
+
+Gateway alignment also recognizes Markdown links versus `label (URL)` (including self-labeled and empty-label links),
+escaped text entities, bold rich-text titles, card prefixes, emoji codes, `@all` versus `@所有人`, named file
+wrappers, standalone card/sticker placeholders, and Chinese/English inline or explicit media placeholders backed by
+media references. This additional path requires exact receipt timestamps on both sides (within the existing
+two-second bucket window), equal attachment counts, a non-empty equivalent body (or matching explicit media-kind
+placeholders on both sides) and exactly one matching gateway line. Unpaired same-name chats also require the same
+known sender and exactly one matching chat before a crosswalk is written; chats already paired in `.crosswalk.json`
+allow an unknown sender (`?`) to match a non-owner gateway line so bot/app and pre-backfill external-member lines
+still deduplicate. URL destinations and case, file names and code stay literal. Minute-only, attachment-only,
+changed-content and ambiguous matches are retained. Repair version 3 rechecks archived sync lines even when earlier
+repair versions completed, preserving all receipt IDs and connector ownership. Regression cases live in
+`server/internal/kb/align_gateway_test.go`.
+
+A loose tier (`server/internal/kb/align_loose.go`) then catches four kinds of difference the format tier refuses, inside
+the same frame (same chat, same known sender or the paired-chat unknown-sender rule, exact receipt times in neighbouring
+two-second buckets, exactly one candidate line): a media placeholder on one side only, whatever the attachment counts;
+a leading @mention written otherwise, spaced otherwise or left out (at most 40 characters, followed by the same text of
+at least four characters); a card or rich post one side gives only as its title (the shorter text is the longer one's
+first lines); and long texts at least 98 % alike (both at least 40 characters, at most one differing character per 50,
+the same numbers and links, so template alerts that differ by a host index or build number stay apart). The fuller copy
+stays: when the gateway's line holds less (a card title only), the sync message is written and the gateway line is
+dropped, keeping its receipt ID so a replay never writes it again; a gateway line that cannot be told from an identical
+line of its day is never dropped, and both copies stay. Repair version 4 applies the same tier to archived lines.
+No model-based match is used. Regression cases live in `server/internal/kb/align_loose_test.go`.

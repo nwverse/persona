@@ -33,6 +33,17 @@ type Profile struct {
 	Attention *Attention `json:"attention,omitempty"`
 }
 
+// LabsEventType is the client event discriminator for Labs receipts.
+type LabsEventType string
+
+const LabsSeenEventType LabsEventType = "assistant_labs_seen"
+
+// LabsSeenEvent is the committed read-receipt set sent to connected clients via ws.broadcast.
+type LabsSeenEvent struct {
+	Type     LabsEventType `json:"type"`
+	LabsSeen []string      `json:"labs_seen"`
+}
+
 // MainRouteMachine keeps legacy profiles usable while preferring the confirmed main binding.
 func (p Profile) MainRouteMachine() string {
 	if p.MainMachineID != "" {
