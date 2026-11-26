@@ -3,17 +3,17 @@
 // bot, credentials), where its messages go, what it does, a test message to the owner — and, for a market's, the way
 // to install it. Read-only ones (the apps, /agent, voice) say where they are set up.
 import { OwnerMark } from "./OwnerMark";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { t } from "../../i18n";
 import { errorText } from "../../lib/api";
 import {
-  bindChannel, bindTitle, useChannels, canBind, capabilityText, channelDetail, channelSections, channelStateText, channelSubtitle,
-  channelTone, forgetChannels, isBound, isPolled, listChannels, targetText, testChannel, unbindChannel, updateChannel,
-  type Channel, type ChannelDetail, type ChannelPrompt, type ChannelTarget, type ChannelTargetOverride, type ChannelTone,
+  bindChannel, bindTitle, useChannels, canBind, capabilityText, channelSections, channelStateText, channelSubtitle,
+  channelTone, forgetChannels, isBound, isPolled, listChannels, targetText,
+  type Channel, type ChannelPrompt, type ChannelTarget, type ChannelTargetOverride, type ChannelTone,
 } from "../../lib/channels";
 import { canSendStep, fieldInput } from "../../lib/connectors";
 import { ConnectorExternalSourceSettings } from "../../features/external-sources/ExternalSourceSettingsEntry";
-import { otherManager, ownedSub, pinManager, useChosenManager } from "../../lib/manager-choice";
+import { otherManager, ownedSub, useChosenManager } from "../../lib/manager-choice";
 import { isOpenBeside } from "./open-beside";
 import { ago } from "../../lib/format";
 import { useStore } from "../../lib/store";
@@ -22,6 +22,7 @@ import { ChannelMark } from "../../ui/ChannelMark";
 import { Icon } from "../../ui/icons";
 import { QRStep, useStepPolling } from "./LoginSteps";
 import { Group, Pill, Row, SettingsHint, Switch } from "./SettingsParts";
+import { useChannelController, type ChannelController } from "./useChannelController";
 import { byTime } from "../../lib/times";
 
 const DOT: Record<ChannelTone, string> = { green: "bg-green", red: "bg-red", idle: "bg-line-strong" };
@@ -39,9 +40,9 @@ function targetOverrideText(override: ChannelTargetOverride): string {
 }
 
 /** `compact`: under the name in the narrow column beside an open channel, in the size the other lists use there. */
-function StateLabel({ c, compact }: { c: Channel; compact?: boolean }) {
+export function ChannelStateInline({ c, compact }: { c: Channel; compact?: boolean }) {
   return (
-    <span className={cx("flex items-center gap-1.5 whitespace-nowrap", compact ? "min-w-0 text-submeta" : "shrink-0 text-[12px]", c.state === "error" ? "text-red" : "text-ink-2")}>
+    <span className={cx("flex items-center gap-1.5 whitespace-nowrap", compact ? "min-w-0 text-submeta" : "shrink-0 text-label", c.state === "error" ? "text-red" : "text-ink-2")}>
       <span aria-hidden className={cx("size-1.5 shrink-0 rounded-full", DOT[channelTone(c)])} />
       <span className={cx(compact && "truncate")}>{channelStateText(c)}</span>
     </span>
@@ -145,7 +146,7 @@ export function ChannelList({ onOpen, onMarketItem, openBeside }: { onOpen: (id:
             const state = c.source === "market" ? (
               <span className={cx("shrink-0 whitespace-nowrap text-accent-ink", compact ? "text-submeta" : "text-[12px]")}>{t("settings-channels.install")}</span>
             ) : (
-              c.kind !== "app" && <StateLabel c={c} compact={compact} />
+              c.kind !== "app" && <ChannelStateInline c={c} compact={compact} />
             );
             return (
               <button
@@ -180,117 +181,95 @@ export function ChannelList({ onOpen, onMarketItem, openBeside }: { onOpen: (id:
 
 // ── one channel ──────────────────────────────────────────
 
-/** `manager`: whose channel (another manager's, opened from its extension's page): the page's requests name it while it
- *  is open; none: the current assistant's. */
-/** `headerBack`: the page's top bar has the way back (a phone), so it draws no Back of its own. */
-export function ChannelPage({ id, manager: named, onBack, onSettings, headerBack }: { id: string; manager?: string; onBack: () => void; onSettings: (url: string) => void; headerBack?: boolean }) {
-  // a route that names none (written by hand, or before several managers): the current assistant's, as for an extension
-  const manager = named ?? otherManager(useChosenManager() ?? undefined);
-  useLayoutEffect(() => pinManager(`/channels/${encodeURIComponent(id)}`, otherManager(manager)), [id, manager]);
-  const [d, setD] = useState<ChannelDetail | null>(null);
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState("");
-  const [picking, setPicking] = useState(false);
+/** Binding card rendered for editable channels that bind directly (used by ChannelPage and IntegrationDetail). */
+export function ChannelBindingBlock({ ctl, showAccountMark = true }: { ctl: ChannelController; showAccountMark?: boolean }) {
   const [unbinding, setUnbinding] = useState(false);
-  const [testFeedback, setTestFeedback] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
-  useEffect(() => setTestFeedback(null), [id]);
-  // Every read and change of the detail takes the next number; only the newest one's answer is shown, since each is the
-  // hub's whole detail and an older one would put back what a later request already changed.
-  const seq = useRef(0);
-  // One change at a time: the page's switches, target, unbind and test message wait while one is with the hub.
-  const saving = useRef(false);
-  const load = useCallback(async () => {
-    const n = ++seq.current;
-    try {
-      const next = await channelDetail(id);
-      if (n !== seq.current) return;
-      setD(next);
-      setError("");
-    } catch (e) {
-      if (n === seq.current) setError(errorText(e));
-    }
-  }, [id]);
-  useEffect(() => void load(), [load]);
-
-  /** Runs one change at a time (a switch, the target, unbinding, a test message), showing `what` as busy. When `save`
-   * answers with the detail and a later read was sent while it was out, that read may have been served before the change
-   * landed, so the page reads the detail again instead of keeping the older answer. */
-  const exclusive = async (what: string, save: () => Promise<ChannelDetail | void>, done?: () => void) => {
-    if (saving.current) return;
-    saving.current = true;
-    const n = ++seq.current;
-    setBusy(what);
-    let stale = false;
-    try {
-      const next = await save();
-      if (next) {
-        forgetChannels();
-        if (n === seq.current) setD(next);
-        else stale = true;
-      }
-      done?.();
-    } catch (e) {
-      toast(errorText(e), "error");
-    } finally {
-      saving.current = false;
-      setBusy("");
-    }
-    if (stale) void load();
-  };
-  const change = (what: string, body: Parameters<typeof updateChannel>[1]) => exclusive(what, () => updateChannel(id, body));
-
-  const head = (
-    <div className="mb-3 flex items-center gap-2">
-      {!headerBack && <Button tone="quiet" icon="chevronLeft" onClick={onBack} className="-ml-2">{t("settings-channels.title")}</Button>}
-      <OwnerMark manager={manager} />
-      <span className="flex-1" />
-      <IconButton icon="retry" label={t("settings-channels.refresh")} onClick={() => void load()} />
-    </div>
-  );
-  if (!d) {
-    return (
-      <>
-        {head}
-        <Group>
-          <div className="px-4 py-3">{error ? <p className="text-[12.5px] text-red">{t("settings-channels.channel_load_failed", { error })}</p> : <Loading />}</div>
-        </Group>
-      </>
-    );
-  }
+  const d = ctl.detail;
+  useEffect(() => {
+    setUnbinding(false);
+  }, [d?.id]);
+  if (!d) return null;
   const editable = !d.read_only && d.source !== "market";
-  const replyOnly = !!d.capabilities.reply_only;
-  const runTest = () =>
-    void exclusive("test", async () => {
-      setTestFeedback(null);
-      try {
-        const res = await testChannel(id);
-        const text = replyOnly || res?.reply_only
-          ? (res?.note || t("settings-channels.connection_ok", { name: d.name }))
-          : (res?.note || t("settings-channels.test_sent", { name: d.name }));
-        setTestFeedback({ tone: "ok", text });
-        toast(text, "ok");
-      } catch (e) {
-        setTestFeedback({ tone: "error", text: errorText(e) });
-        throw e;
-      }
-    });
+  if (!editable) return null;
+
   return (
     <>
-      {head}
-      <div className="mb-5 flex items-center gap-3 px-1">
-        <ChannelMark c={d} size={44} />
-        <div className="min-w-0 flex-1">
-          <h1 className="truncate text-[17px] font-semibold text-ink">{d.name}</h1>
-          <div className="mt-0.5 flex min-w-0 items-center gap-2 text-[12px] text-ink-3">
-            {d.kind !== "app" && <StateLabel c={d} />}
-            {d.account?.name && <span className="truncate">{d.account.name}</span>}
-            {d.last_event_at && <span className="shrink-0">{t("settings-channels.last_event", { when: ago(d.last_event_at) })}</span>}
+      {canBind(d) && <BindSteps c={d} onDone={ctl.load} />}
+      {isBound(d) && (
+        <Group title={t("settings-channels.binding")} footer={t("settings-channels.binding_footer")}>
+          <Row label={t("settings-channels.bound_account")}>
+            {showAccountMark ? (
+              <span className="flex items-center gap-2">
+                <ChannelMark c={d} size={18} />
+                <span className="truncate">{d.account?.name ?? t("settings-channels.bound")}</span>
+              </span>
+            ) : (
+              d.account?.name ?? t("settings-channels.bound")
+            )}
+          </Row>
+          <div className="px-4 py-2.5">
+            <Button tone="quiet" icon="logout" onClick={() => setUnbinding(true)} disabled={!!ctl.busy} className="-ml-2 text-red">
+              {t("settings-channels.unbind")}
+            </Button>
           </div>
-        </div>
-      </div>
-      {d.description && <p className="-mt-2 mb-5 px-1 text-[12.5px] leading-relaxed text-ink-3">{d.description}</p>}
+        </Group>
+      )}
+      <Dialog
+        open={unbinding}
+        onClose={() => setUnbinding(false)}
+        title={t("settings-channels.unbind_title", { name: d.name })}
+        footer={
+          <>
+            <Button tone="quiet" onClick={() => setUnbinding(false)}>{t("common.cancel")}</Button>
+            <Button
+              tone="danger"
+              busy={ctl.busy === "unbind"}
+              disabled={!!ctl.busy && ctl.busy !== "unbind"}
+              onClick={() =>
+                void ctl.unbind().then((ok) => {
+                  if (!ok) return;
+                  setUnbinding(false);
+                  toast(t("settings-channels.unbound"), "ok");
+                })
+              }
+            >
+              {t("settings-channels.unbind")}
+            </Button>
+          </>
+        }
+      >
+        <p className="px-5 py-4 text-meta leading-relaxed text-ink-2">{t("settings-channels.unbind_body", { name: d.name })}</p>
+      </Dialog>
+    </>
+  );
+}
+
+/** Shared channel controls: error alert, enable switch, target picker, features, recent activity, capabilities, and test action. */
+export function ChannelDeliveryControls({
+  ctl,
+  onSettings,
+  afterEnable,
+  afterTarget,
+}: {
+  ctl: ChannelController;
+  onSettings?: (url: string) => void;
+  afterEnable?: ReactNode;
+  afterTarget?: ReactNode;
+}) {
+  const [picking, setPicking] = useState(false);
+  const d = ctl.detail;
+  useEffect(() => {
+    setPicking(false);
+  }, [d?.id]);
+  if (!d) return null;
+
+  const editable = !d.read_only && d.source !== "market";
+  const replyOnly = !!d.capabilities.reply_only;
+
+  return (
+    <>
       {d.state === "error" && d.error && (
-        <div role="alert" className="mb-5 flex items-start gap-2 rounded-card bg-red-tint px-3.5 py-2.5 text-[12.5px] text-red">
+        <div role="alert" className="mb-4 flex items-start gap-2 rounded-card bg-red-tint px-3.5 py-2.5 text-meta text-red">
           <Icon name="info" size={14} className="mt-px shrink-0" />
           <span className="min-w-0 break-words">{d.error}</span>
         </div>
@@ -299,30 +278,27 @@ export function ChannelPage({ id, manager: named, onBack, onSettings, headerBack
       {editable && (
         <Group footer={d.source === "plugin" ? t("settings-channels.disable_footer") : undefined}>
           <Row label={t("settings-channels.enable", { name: d.name })}>
-            <Switch on={d.enabled} onChange={(on) => void change("enabled", { enabled: on })} disabled={!!busy} label={t("settings-channels.enable", { name: d.name })} />
+            <Switch
+              on={d.enabled}
+              onChange={(on) => void ctl.change("enabled", { enabled: on })}
+              disabled={!!ctl.busy}
+              label={t("settings-channels.enable", { name: d.name })}
+            />
           </Row>
         </Group>
       )}
 
-      {editable && canBind(d) && <BindSteps c={d} onDone={load} />}
-      {editable && isBound(d) && (
-        <Group title={t("settings-channels.binding")} footer={t("settings-channels.binding_footer")}>
-          <Row label={t("settings-channels.bound_account")}>{d.account?.name ?? t("settings-channels.bound")}</Row>
-          <div className="px-4 py-2.5">
-            <Button tone="quiet" icon="logout" onClick={() => setUnbinding(true)} disabled={!!busy} className="-ml-2 text-red">{t("settings-channels.unbind")}</Button>
-          </div>
-        </Group>
-      )}
+      {afterEnable}
 
       {editable && d.target && (
         <Group title={t("settings-channels.target_title")} footer={t("settings-channels.target_footer")}>
-          <Row label={t("settings-channels.target_row")} onClick={() => !busy && setPicking(true)}>
+          <Row label={t("settings-channels.target_row")} onClick={() => !ctl.busy && setPicking(true)}>
             <span className="max-w-[220px] truncate">{targetText(d.target)}</span>
           </Row>
           {d.target_override && (
             <SettingsHint>
               {targetOverrideText(d.target_override)}
-              {d.settings_url && (
+              {d.settings_url && onSettings && (
                 <>
                   {" "}
                   <button
@@ -341,11 +317,18 @@ export function ChannelPage({ id, manager: named, onBack, onSettings, headerBack
         </Group>
       )}
 
+      {afterTarget}
+
       {editable && (d.features?.length ?? 0) > 0 && (
         <Group title={t("settings-channels.features")}>
           {d.features!.map((f) => (
-            <Row key={f.id} label={f.title} hint={f.description}>
-              <Switch on={f.on} onChange={(on) => void change("f:" + f.id, { features: { [f.id]: on } })} disabled={!!busy} label={f.title} />
+            <Row key={f.id} label={f.title} hint={f.description} wrapHint>
+              <Switch
+                on={f.on}
+                onChange={(on) => void ctl.change(`f:${f.id}`, { features: { [f.id]: on } })}
+                disabled={!!ctl.busy}
+                label={f.title}
+              />
             </Row>
           ))}
         </Group>
@@ -355,23 +338,32 @@ export function ChannelPage({ id, manager: named, onBack, onSettings, headerBack
         <Group title={t("settings-channels.recent")}>
           {(d.waiting.answers > 0 || d.waiting.asks > 0) && (
             <Row label={t("settings-channels.waiting")}>
-              {[d.waiting.answers > 0 && t("settings-channels.waiting_answers", { count: d.waiting.answers }), d.waiting.asks > 0 && t("settings-channels.waiting_asks", { count: d.waiting.asks })].filter(Boolean).join(" · ")}
+              {[
+                d.waiting.answers > 0 && t("settings-channels.waiting_answers", { count: d.waiting.answers }),
+                d.waiting.asks > 0 && t("settings-channels.waiting_asks", { count: d.waiting.asks }),
+              ].filter(Boolean).join(" · ")}
             </Row>
           )}
           {d.conversations?.map((cv) => (
-            <Row key={cv.session_id} label={cv.title || t("settings-channels.a_chat")} hint={t("settings-channels.chat_hint", { when: ago(cv.at) })} />
+            <Row
+              key={cv.session_id}
+              label={cv.title || t("settings-channels.a_chat")}
+              hint={t("settings-channels.chat_hint", { when: ago(cv.at) })}
+            />
           ))}
         </Group>
       )}
 
       <Group title={t("settings-channels.capabilities")}>
         {capabilityText(d.capabilities).map((cap) => (
-          <div key={cap} className="flex items-center gap-2 px-4 py-2 text-[12.5px] text-ink-2">
+          <div key={cap} className="flex items-center gap-2 px-4 py-2 text-meta text-ink-2">
             <Icon name="check" size={12} stroke={2.2} className="shrink-0 text-ink-3" />
             {cap}
           </div>
         ))}
-        {d.surfaces && d.surfaces.length > 0 && <Row label={t("settings-channels.surfaces")}>{d.surfaces.join(t("settings-channels.list_separator"))}</Row>}
+        {d.surfaces && d.surfaces.length > 0 && (
+          <Row label={t("settings-channels.surfaces")}>{d.surfaces.join(t("settings-channels.list_separator"))}</Row>
+        )}
       </Group>
 
       {editable && d.state === "connected" && (d.capabilities.push || replyOnly) && (
@@ -380,23 +372,85 @@ export function ChannelPage({ id, manager: named, onBack, onSettings, headerBack
             <Button
               tone="secondary"
               icon={replyOnly ? "check" : "send"}
-              busy={busy === "test"}
-              disabled={!!busy && busy !== "test"}
-              onClick={runTest}
+              busy={ctl.busy === "test"}
+              disabled={!!ctl.busy && ctl.busy !== "test"}
+              onClick={() => void ctl.runTest()}
             >
               {replyOnly ? t("settings-channels.check_connection") : t("settings-channels.send_test")}
             </Button>
-            {testFeedback && (
+            {ctl.testFeedback && (
               <p
-                role={testFeedback.tone === "error" ? "alert" : "status"}
-                className={cx("mt-2 text-submeta break-words", testFeedback.tone === "error" ? "text-red" : "text-ink-2")}
+                role={ctl.testFeedback.tone === "error" ? "alert" : "status"}
+                className={cx("mt-2 text-submeta break-words", ctl.testFeedback.tone === "error" ? "text-red" : "text-ink-2")}
               >
-                {testFeedback.text}
+                {ctl.testFeedback.text}
               </p>
             )}
           </div>
         </Group>
       )}
+
+      <TargetPicker
+        open={picking}
+        current={d.target}
+        onClose={() => setPicking(false)}
+        onPick={(target) => {
+          setPicking(false);
+          void ctl.change("target", { target });
+        }}
+      />
+    </>
+  );
+}
+
+/** `manager`: whose channel (another manager's, opened from its extension's page): the page's requests name it while it
+ *  is open; none: the current assistant's. */
+/** `headerBack`: the page's top bar has the way back (a phone), so it draws no Back of its own. */
+export function ChannelPage({ id, manager: named, onBack, onSettings, headerBack }: { id: string; manager?: string; onBack: () => void; onSettings: (url: string) => void; headerBack?: boolean }) {
+  // a route that names none (written by hand, or before several managers): the current assistant's, as for an extension
+  const manager = named ?? otherManager(useChosenManager() ?? undefined);
+  const ctl = useChannelController(id, manager);
+  const d = ctl.detail;
+
+  const head = (
+    <div className="mb-3 flex items-center gap-2">
+      {!headerBack && <Button tone="quiet" icon="chevronLeft" onClick={onBack} className="-ml-2">{t("settings-channels.title")}</Button>}
+      <OwnerMark manager={manager} />
+      <span className="flex-1" />
+      <IconButton icon="retry" label={t("settings-channels.refresh")} onClick={() => void ctl.load()} />
+    </div>
+  );
+  if (!d) {
+    return (
+      <>
+        {head}
+        <Group>
+          <div className="px-4 py-3">{ctl.error ? <p className="text-meta text-red">{t("settings-channels.channel_load_failed", { error: ctl.error })}</p> : <Loading />}</div>
+        </Group>
+      </>
+    );
+  }
+  return (
+    <>
+      {head}
+      <div className="mb-5 flex items-center gap-3 px-1">
+        <ChannelMark c={d} size={44} />
+        <div className="min-w-0 flex-1">
+          <h1 className="truncate text-[17px] font-semibold text-ink">{d.name}</h1>
+          <div className="mt-0.5 flex min-w-0 items-center gap-2 text-label text-ink-3">
+            {d.kind !== "app" && <ChannelStateInline c={d} />}
+            {d.account?.name && <span className="truncate">{d.account.name}</span>}
+            {d.last_event_at && <span className="shrink-0">{t("settings-channels.last_event", { when: ago(d.last_event_at) })}</span>}
+          </div>
+        </div>
+      </div>
+      {d.description && <p className="-mt-2 mb-5 px-1 text-meta leading-relaxed text-ink-3">{d.description}</p>}
+
+      <ChannelDeliveryControls
+        ctl={ctl}
+        onSettings={onSettings}
+        afterEnable={<ChannelBindingBlock ctl={ctl} showAccountMark={false} />}
+      />
 
       {d.settings_url && (
         <Group footer={d.read_only ? t("settings-channels.settings_elsewhere") : undefined}>
@@ -405,32 +459,6 @@ export function ChannelPage({ id, manager: named, onBack, onSettings, headerBack
       )}
 
       {d.installed && d.kind !== "app" && <ConnectorExternalSourceSettings ids={[d.id]} manager={manager} />}
-      <TargetPicker open={picking} current={d.target} onClose={() => setPicking(false)} onPick={(target) => (setPicking(false), void change("target", { target }))} />
-      <Dialog
-        open={unbinding}
-        onClose={() => setUnbinding(false)}
-        title={t("settings-channels.unbind_title", { name: d.name })}
-        footer={
-          <>
-            <Button tone="quiet" onClick={() => setUnbinding(false)}>{t("common.cancel")}</Button>
-            <Button
-              tone="danger"
-              busy={busy === "unbind"}
-              disabled={!!busy && busy !== "unbind"}
-              onClick={() =>
-                void exclusive("unbind", () => unbindChannel(id), () => {
-                  setUnbinding(false);
-                  toast(t("settings-channels.unbound"), "ok");
-                })
-              }
-            >
-              {t("settings-channels.unbind")}
-            </Button>
-          </>
-        }
-      >
-        <p className="px-5 py-4 text-[13px] leading-relaxed text-ink-2">{t("settings-channels.unbind_body", { name: d.name })}</p>
-      </Dialog>
     </>
   );
 }

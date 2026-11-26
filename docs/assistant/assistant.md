@@ -424,6 +424,18 @@ feature-dev, frontend-design, mattpocock, gopls, context7 and HUD plugins, with 
 skills. User/project setting sources, auto-memory, Persona and connector skills are not disabled. Guest conversations
 keep their stricter `--tools ""` and `--strict-mcp-config` behavior. No setting is required.
 
+### Manage which updates reach your work
+
+In the main Persona conversation, ask which work receives updates from a source, or ask to change it. For example,
+“Which to-do gets updates from this pull request?” or “Send updates from the release group to the Launch direction
+and ask me before creating a to-do.” Reading your routing rules needs no approval. Before changing them, Persona
+shows the source, destination and proposed behavior on the usual approval card. New automatic forwarding and
+automatic to-do creation require your approval.
+
+Ask Persona to restore the previous rule, or use the same routing controls in Inbox, work details or Settings.
+Direction supervisors continue managing their work in their own conversations. The main conversation manages rules
+that can affect multiple directions. See [moving existing forwarding rules](inbox.md#move-existing-forwarding-rules).
+
 ## Extension MCP servers (Claude assistant only)
 
 Extensions can contribute `mcp_servers` (`docs/extensions/extensions.md` ("MCP servers")): when the named CLI is installed on the assistant computer, node attaches it as another MCP server for the **Claude assistant**
@@ -2895,6 +2907,12 @@ repeated. Retired callers lose manager tool authority immediately. Physical appr
 activation; the node's retirement latch prevents recovery and idle-compaction work on that segment. Closure is retried
 when offline nodes reconnect. Deleting a conversation cascades through segment history and queue content, retaining
 only deletion markers and minimal offline closure identities.
+
+Each manager advances at most four conversations at a time, rotating across the remaining work on later sweeps.
+Preparation and receipt calls run after Postgres releases its connection. The durable start claim and operation ID
+prevent duplicate starts, and mapping the candidate rechecks the current operation and epoch under the row lock.
+If a cancellation or deletion wins during a node call, the sweep uses the saved candidate identity to close the
+unused session.
 
 `conversations_switch` and `POST /api/v1/assistant/conversation-switches` coordinate an explicit set of these logical
 switches without adding another engine protocol. The settings-backed batch stores each conversation's before-image,

@@ -52,8 +52,46 @@ nonisolated struct TodoRowContent: Equatable, Sendable {
     /// The row in words, for VoiceOver: the title, the state its mark draws, its line (with how many asks), line 3, then
     /// its time said in full ("Due Saturday", "16 minutes ago").
     var spoken = ""
+    /// What `spoken` says before and after its line, so a search's result found by its notes says the sentence it was
+    /// found by in the line's place without the row's words worked out again (`spoken(_:)`).
+    var spokenAround = TodoSpokenAround()
     /// The tick's value: Done or Not done (its label is the title).
     var tickValue = ""
+
+    /// Line 2 of a search's result (`TodosListModel.Row.search`): the sentence of the notes it was found by, unless line 2
+    /// says this device's own word on a write; nil for one found by its title, which keeps its own line.
+    func found(by search: TodoSearchHit?) -> TodoFoundLine? {
+        unsaved ? nil : search?.found
+    }
+
+    /// Whether line 2 ends in Mark Done: never on a search's result, which is found to be opened, its words half read
+    /// beside it; its tick, the row's one deliberate control, stays.
+    func offersMarkDone(_ search: TodoSearchHit?) -> Bool {
+        markDone && search == nil
+    }
+
+    /// Its answers as the row draws them and VoiceOver offers them: none on a search's result, as no Mark Done
+    /// (`offersMarkDone`), so no OK or Retry, no Options or its card and no Undo; they come back once the field is
+    /// cleared. What this device did with the ask (`answers?.mark`) is not an answer but a fact: line 2 keeps saying it.
+    func answers(_ search: TodoSearchHit?) -> TodoRowAnswers? {
+        search == nil ? answers : nil
+    }
+
+    /// The row in words as it is drawn: `spoken`, the line or the answer given here kept on a result found by its
+    /// title; one found by its notes says the sentence in the line's place: the title, the state its mark draws, the
+    /// sentence, line 3, the time.
+    func spoken(_ search: TodoSearchHit?) -> String {
+        guard let found = found(by: search) else { return spoken }
+        return [spokenAround.head, found.text, spokenAround.tail].filter { !$0.isEmpty }.joined(separator: spokenAround.separator)
+    }
+}
+
+/// The words `TodoRowContent.spoken` says around its line: the title, High priority and the state before it; line 3 and
+/// the time after it.
+nonisolated struct TodoSpokenAround: Equatable, Sendable {
+    var head = ""
+    var tail = ""
+    var separator = ""
 }
 
 /// What a To-dos row offers besides opening it (#10465): its swipe, its long press and VoiceOver's actions.
@@ -164,9 +202,12 @@ nonisolated enum TodosListLayout {
         var sort: TodosListSort = .suggested
         /// The folds the owner opened.
         var unfolded: Set<String> = []
-        /// The search field's words: while there are any, the list is All's open rows whose title or notes hold them,
+        /// The search field's words: while there are any, the list is All's rows, open and closed, that `hits` holds,
         /// every fold open, and the choice waits until the field is cleared.
         var query = ""
+        /// What the search found for `query`, by to-do id: the model's look, off the main actor (`TodoSearch.find`), so
+        /// the layout never looks through the to-dos itself (P4).
+        var hits: [String: TodoSearchHit] = [:]
         var now = Date()
         var calendar = Calendar.current
         var projectName: (String) -> String = { $0 }
@@ -205,13 +246,11 @@ nonisolated enum TodosListLayout {
         out.doneToday = rows.count(where: { $0.section == TodoListSection.done && closedToday($0) })
         let present = Set(rows.map(\.section))
         out.calm = TodosFilter.calm(Array(present))
-        // A search looks through every open row whatever the choice, its folds open; closed to-dos and the hub's own
-        // matches come with the search's next step in #10465.
-        let query = input.query.trimmingCharacters(in: .whitespacesAndNewlines)
-        out.searching = !query.isEmpty
-        if out.searching {
-            rows = rows.filter { $0.section != TodoListSection.done && input.items[$0.id].map { matches($0, query) } == true }
-        }
+        // A search looks through every row, open and closed, whatever the choice, its folds open. The device holds every
+        // to-do (`GET /api/v1/todos` returns them all), so it is the whole answer: there is nothing for the hub to add.
+        let words = TodoSearch.words(input.query)
+        out.searching = !words.isEmpty
+        if out.searching { rows = rows.filter { input.hits[$0.id] != nil } }
         let choice: TodosChoice = out.calm || out.searching ? .all : input.choice
         let opened = { (section: TodoListSection) in out.searching || input.unfolded.contains(section.rawValue) }
         let shown = Set(choice.sections)
@@ -236,11 +275,15 @@ nonisolated enum TodosListLayout {
         let someday = fold(TodoListSection.someday, title: StateName.todoSomeday, bySection[TodoListSection.someday] ?? [])
         let doneToday = fold(TodoListSection.done, title: String(localized: "Done today [To-dos List]"),
                              (bySection[TodoListSection.done] ?? []).filter(closedToday))
+        // What closed: Done today folded under All; while searching, every closed match last, by the day it closed as
+        // the Filter's Done lists them, its headings saying Done.
+        let done = out.searching ? byDay(bySection[TodoListSection.done] ?? [], input, titles: searchedDays)
+            : [tail(doneToday)].compactMap { $0 }
 
         if out.calm {
-            // One headerless card; Someday and Done today close the list as their own folds.
+            // One headerless card; Someday and Done today (a search's closed matches) close the list as their own groups.
             out.groups = [TodosListGroup(id: "plain", keys: sorted(bySection[TodoListSection.todo] ?? []))]
-                + [tail(someday), tail(doneToday)].compactMap { $0 }
+                + [tail(someday)].compactMap { $0 } + done
             return out
         }
         if choice == .done {
@@ -268,15 +311,11 @@ nonisolated enum TodosListLayout {
                 }
             }
         }
-        // Someday, then (under All) Done today: folds of their own after the last card.
-        groups += [tail(someday), choice == .all ? tail(doneToday) : nil].compactMap { $0 }
+        // Someday, then (under All) Done today: folds of their own after the last card; while searching, the closed
+        // matches by day.
+        groups += [tail(someday)].compactMap { $0 } + (choice == .all ? done : [])
         out.groups = groups
         return out
-    }
-
-    /// Whether a to-do's title or notes hold `query`, as the system's search matches: case, accents and width aside.
-    static func matches(_ item: TodoItem, _ query: String) -> Bool {
-        item.title.localizedStandardContains(query) || (item.notes?.localizedStandardContains(query) ?? false)
     }
 
     static func title(_ section: TodoListSection) -> String {
@@ -351,14 +390,24 @@ nonisolated enum TodosListLayout {
         }
     }
 
+    /// The Filter's Done's headings: the Filter names Done.
+    private static var filterDays: [(id: String, title: String)] {
+        [("today", String(localized: "Today [To-dos Done]")), ("yesterday", String(localized: "Yesterday [To-dos Done]")),
+         ("week", String(localized: "This week [To-dos Done]")), ("earlier", String(localized: "Earlier [To-dos Done]"))]
+    }
+
+    /// The same days' headings in a search's results, which name Done themselves: "Today" alone there reads as the
+    /// Today place.
+    private static var searchedDays: [(id: String, title: String)] {
+        [("today", String(localized: "Done today [To-dos List]")), ("yesterday", String(localized: "Done yesterday [To-dos List]")),
+         ("week", String(localized: "Done this week [To-dos List]")), ("earlier", String(localized: "Done earlier [To-dos List]"))]
+    }
+
     /// Done by when each closed: today, yesterday, this week, earlier; in each, the newest first under every sort.
-    private static func byDay(_ list: [TodoFiled], _ input: Input) -> [TodosListGroup] {
+    private static func byDay(_ list: [TodoFiled], _ input: Input, titles days: [(id: String, title: String)] = filterDays)
+        -> [TodosListGroup] {
         let cal = input.calendar
         let today = cal.startOfDay(for: input.now)
-        let days: [(id: String, title: String)] = [
-            ("today", String(localized: "Today [To-dos Done]")), ("yesterday", String(localized: "Yesterday [To-dos Done]")),
-            ("week", String(localized: "This week [To-dos Done]")), ("earlier", String(localized: "Earlier [To-dos Done]")),
-        ]
         var rows: [String: [TodoFiled]] = [:]
         for row in list {
             let at = input.items[row.id]?.doneAt ?? .distantPast
@@ -480,17 +529,18 @@ nonisolated enum TodoRowContentLogic {
         }
         if c.closed { c.highPriority = false } // closed, or ticked a moment ago: nothing to put first
         if c.saving || c.struck { c.answers = nil } // nothing to answer on a row being saved or ticked a moment ago
-        c.spoken = spoken(c, heard: heard, words: words)
+        (c.spoken, c.spokenAround) = spoken(c, heard: heard, words: words)
         c.tickValue = c.closed ? StateName.done.text : words("Not done [To-dos Actions]")
         return c
     }
 
     /// The row in words: the title; High priority, where it is; the state its mark draws (its line may already say it);
-    /// the line, with how many asks; line 3; the time.
-    private static func spoken(_ c: TodoRowContent, heard: [String], words: TodoWords) -> String {
+    /// the line, with how many asks, or the answer given here in its place; line 3; the time. And what it says around the
+    /// line, the state always (a search's sentence does not say it).
+    private static func spoken(_ c: TodoRowContent, heard: [String], words: TodoWords) -> (String, TodoSpokenAround) {
         let separator = words.listSeparator
-        var parts = [c.title]
-        if c.highPriority { parts.append(words("High priority [To-dos Spoken]")) }
+        var head = [c.title]
+        if c.highPriority { head.append(words("High priority [To-dos Spoken]")) }
         let state: String? = switch c.mark {
         case .needs: StateName.todoNeedsYou
         case .working: StateName.taskWorking
@@ -498,6 +548,8 @@ nonisolated enum TodoRowContentLogic {
         case .waiting: StateName.taskWaiting.text
         case nil: c.struck || (c.closed && heard.isEmpty) ? StateName.done.text : nil
         }
+        let tail = [c.caption].compactMap { $0 } + heard
+        var parts = head
         if let state, c.said?.lead != state { parts.append(state) }
         switch c.answers?.mark {
         case .chosen(let label, _)?: parts.append(label)
@@ -505,8 +557,9 @@ nonisolated enum TodoRowContentLogic {
         case .unsure?: parts.append(words("Not sure your answer went through [To-dos Answers]"))
         default: if let said = c.said { parts.append(said.spoken(separator: separator)) }
         }
-        if let caption = c.caption { parts.append(caption) }
-        return (parts + heard).joined(separator: separator)
+        return ((parts + tail).joined(separator: separator),
+                TodoSpokenAround(head: (head + [state].compactMap { $0 }).joined(separator: separator),
+                                 tail: tail.joined(separator: separator), separator: separator))
     }
 
     /// The request's title for a run's plan or tool approval (DESIGN_SYSTEM 5.6); nil for any other ask.

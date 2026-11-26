@@ -75,6 +75,8 @@ export interface IntegrationsProps {
   initialFilter?: IntegrationFilter;
   /** Navigate to a Settings URL linked from a channel override notice. */
   onSettings?: (url: string) => void;
+  /** Report whether an open extension plugin_page needs the wide page container. */
+  onPageWide?: (wide: boolean) => void;
 }
 
 const DOT_CLASS: Record<IntegrationTone, string> = {
@@ -258,11 +260,13 @@ function IntegrationExtensionPage({
   ui,
   manager,
   onBack,
+  onWide,
 }: {
   id: string;
   ui: string;
   manager?: string;
   onBack?: () => void;
+  onWide?: (wide: boolean) => void;
 }) {
   useLayoutEffect(() => pinManagerAt([`/extensions/${enc(id)}`, `/plugins/${enc(id)}`], manager), [id, manager]);
   const [detail, setDetail] = useState<HubExtensionDetail | null>(null);
@@ -270,6 +274,7 @@ function IntegrationExtensionPage({
   useEffect(() => {
     extensionDetail(id).then(setDetail, () => {});
   }, [id]);
+  useEffect(() => () => onWide?.(false), [onWide]);
   const title = detail?.ui?.find((u) => u.id === ui)?.title;
   return (
     <>
@@ -283,7 +288,7 @@ function IntegrationExtensionPage({
         <IconButton icon="retry" label={t("settings-extensions.redraw")} onClick={() => setReloadCount((x) => x + 1)} />
       </div>
       <ExtensionOwnerScope owner={id}>
-        <ExtensionUI key={reloadCount} extension={id} ui={ui} title={title} manager={manager} />
+        <ExtensionUI key={reloadCount} extension={id} ui={ui} title={title} manager={manager} onWide={onWide} />
       </ExtensionOwnerScope>
     </>
   );
@@ -296,6 +301,7 @@ export function Integrations({
   headerBack = false,
   initialFilter = "all",
   onSettings,
+  onPageWide,
 }: IntegrationsProps) {
   const route = useMemo(() => parseIntegrationsSub(open), [open]);
   const go = useCallback((next: IntegrationsRoute) => onOpen(formatIntegrationsSub(next)), [onOpen]);
@@ -536,6 +542,7 @@ export function Integrations({
         ui={route.ui}
         manager={route.manager ?? owner}
         onBack={headerBack ? undefined : () => go({ kind: "extension", id: route.id, manager: route.manager })}
+        onWide={onPageWide}
       />
     );
   }

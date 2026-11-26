@@ -114,6 +114,7 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 	s.availSweep(machine, list, now) // the waits of conversations no longer listed (availability.go)
 	s.pruneGoneQuiet(machine)        // the verdicts and Stops of task Agents no longer listed (silent_turns.go)
 	s.pruneGoneUpstream(machine, list)
+	s.observeIdleSessions(machine, list, connected)
 	s.fleetKeep(machine, list, connected, unsure)
 	for _, ref := range a2aIdleRefs {
 		s.inOrder(func() { s.a2aRecipientIdle(context.Background(), ref) })
@@ -574,7 +575,13 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 			list[i].Assistant = true
 		}
 		if list[i].Assistant && list[i].Space == "" {
-			list[i].Space = identity.SpaceOf(list[i].Cwd)
+			if list[i].LogicalPlaceholder {
+				if sp, known := s.logicalRowSpace(context.Background(), list[i]); known {
+					list[i].Space = sp
+				}
+			} else {
+				list[i].Space = identity.SpaceOf(list[i].Cwd)
+			}
 		}
 		if t := shown[list[i].SessionID].Title; t != "" && list[i].Assistant {
 			list[i].Title = t // "MMDD | type | topic", the user's own, "Persona" for the main one (titles.go)

@@ -345,6 +345,7 @@ type fleetMem struct {
 	resolvedInsertGate    chan struct{}
 	resolvedInsertStarted chan struct{}
 	resolvedOutcomeErr    error
+	deadlineErr           error
 }
 
 func newFleetMem() *fleetMem {
@@ -367,6 +368,24 @@ func (m *fleetMem) InsertInteraction(ctx context.Context, ix proto.Interaction) 
 		m.recs = append(m.recs, db.InteractionRecord{Interaction: ix, Status: "pending"})
 	}
 	return nil
+}
+
+func (m *fleetMem) UpdateInteractionDeadline(_ context.Context, id string, created, expires time.Time) error {
+	m.fmu.Lock()
+	defer m.fmu.Unlock()
+	if m.deadlineErr != nil {
+		return m.deadlineErr
+	}
+	if m.status[id] != "pending" {
+		return errors.New("interaction deadline was not recorded")
+	}
+	for i := range m.recs {
+		if m.recs[i].Interaction.ID == id && m.recs[i].Interaction.CreatedAt.Equal(created) {
+			m.recs[i].Interaction.ExpiresAt = expires
+			return nil
+		}
+	}
+	return errors.New("interaction deadline was not recorded")
 }
 
 func (m *fleetMem) InsertResolvedInteraction(ctx context.Context, ix proto.Interaction, res *proto.Resolution) error {

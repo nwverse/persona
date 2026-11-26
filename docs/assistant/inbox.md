@@ -72,6 +72,27 @@ has enabled automatic to-do creation for its owning direction. An update to work
 existing owner. The Inbox can receive the update before it is routed. Digest sources wait for their configured window.
 See [External source bindings](../protocol/protocol.md#external-source-bindings) for configuration and source identities.
 
+### Move existing forwarding rules
+
+Existing Lark topic links and the Inbox option to forward matching GitHub pull-request and issue updates continue
+working. The option is saved as `inbox.todo_forward.enabled` in Assistant settings. Existing repository links
+are available to the new routing rules. Persona also recognizes an already linked Lark topic when you inspect that
+topic. You can continue opening work and replying to it through the Lark bot as before.
+
+1. Ask Persona in the main conversation to inspect a specific source and check whether the destination you expect
+   is already linked. For an older rule that matched a link in message text, add an explicit source link if you want
+   that source to use scoped routing.
+2. Start with one pull request, issue or topic. Set how often updates should arrive and who handles them. Keep
+   **Ask before creating a to-do** if you want to decide about new work. Review the approval card when changing a
+   rule through chat.
+3. Verify where a new update goes before configuring a wider source. Leave the legacy forwarding switch enabled
+   while you still want its behavior for sources you have yet to configure.
+
+To restore the old behavior for new updates, remove the overrides that set a forwarding mode on that path or
+restore the original policy. If a parent still sets a mode, the source inherits it. **Off** and **On request**
+keep automatic routing off for that source. An update already admitted has a receipt, so changing the rule does
+not send it a second time. Items still in Inbox can be handled there. [Routing and compatibility details](../protocol/protocol.md#legacy-routing-compatibility).
+
 ### Send failures (2026-11-16, #9125)
 
 A reply that did not go out says why, on `POST /api/v1/inbox/{id}/reply` and on a confirmed reply suggestion (`…/suggestion`), instead of a bare 502.

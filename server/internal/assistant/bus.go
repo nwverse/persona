@@ -162,11 +162,11 @@ func NewBusHub(o BusOptions) *BusHub {
 			b.mu.Unlock()
 			params := map[string]any{"id": id, "host": host, "os": runtime.GOOS, "arch": runtime.GOARCH,
 				"deploy": o.Deploy, "version": o.Version, "capabilities": withPages(withHealth(withRecording([]string{assistantwire.CapabilityConfigOwn, assistantwire.CapabilityAgentSessionArchives,
-					assistantwire.CapabilityAgentSessionArchiveClose, assistantwire.CapabilityAgentNaming, assistantwire.CapabilityAgentAutoname, assistantwire.CapabilityMachinesOwn,
+					assistantwire.CapabilityAgentSessionArchiveClose, assistantwire.CapabilityAgentSessionIdleArchive, assistantwire.CapabilityAgentNaming, assistantwire.CapabilityAgentAutoname, assistantwire.CapabilityMachinesOwn,
 					assistantwire.CapabilityMeetingAttendance, assistantwire.CapabilityMeetingConversation, assistantwire.CapabilityMeetingPhotos, assistantwire.CapabilityMeetingLiveView,
 					assistantwire.CapabilityMeetingHighlights, assistantwire.CapabilityMeetingNotes, assistantwire.CapabilityMeetingEcho, assistantwire.CapabilityMeetingTranscription,
 					assistantwire.CapabilityTaskInput, assistantwire.CapabilityRecordingDay, assistantwire.CapabilityAssistantSearch, assistantwire.CapabilityHealthIntake, assistantwire.CapabilityHealthItems, assistantwire.CapabilityHealthStrength, assistantwire.CapabilityHealthTell, assistantwire.CapabilityAssistantSegments, assistantwire.CapabilityDirectionSessions, assistantwire.CapabilityHTTPBodyStream, assistantwire.CapabilityAssistantStartServiceTier,
-					assistantwire.CapabilityMCPWait, assistantwire.CapabilitySessionsSideFold, assistantwire.CapabilityRemoteImages, assistantwire.CapabilityTodoView,
+					assistantwire.CapabilityMCPWait, assistantwire.CapabilitySessionsSideFold, assistantwire.CapabilityCountsView, assistantwire.CapabilityRemoteImages, assistantwire.CapabilityTodoView,
 					assistantwire.CapabilityTodoRevision, assistantwire.CapabilityTodoPlaces, assistantwire.CapabilityTodoAsks, assistantwire.CapabilityTodoTimeline, assistantwire.CapabilityTodoImages, devicewire.SharingCapability, devicewire.DevelopmentPackagesCapability}, svc), svc), id, svc)}
 			if uid := b.machineUID(); uid != "" {
 				params["machine_uid"] = uid
@@ -342,11 +342,11 @@ func (b *BusHub) onHello(res json.RawMessage) error {
 				svc.Resync(context.WithoutCancel(ctx))
 			}
 		}()
-		// The inbox's "Needs you" count, which the hub keeps of this connection only (inbox_store.go): what is stored
-		// is read now if nothing read it yet, so the roster has the number before the first round.
+		// The modules' handshake hooks (kernel/seam: the Inbox's "Needs you" count, which the hub keeps of this
+		// connection only), once the connection counts as up.
 		go func() {
-			if b.client.Wait(ctx) == nil && svc.inboxReady(context.WithoutCancel(ctx)) == nil {
-				svc.tellInboxNeedsYou()
+			if b.client.Wait(ctx) == nil {
+				svc.kernel.Connected(context.WithoutCancel(ctx))
 			}
 		}()
 		// The conversations the channels follow (channels_handler.go).
@@ -756,7 +756,7 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 	if out, ok, err := s.extensionEventRequest(ctx, method, params); ok { // extensions' assistant.event (extension_event.go)
 		return out, err
 	}
-	if out, ok, err := inboxRequest(ctx, s, method, decode); ok { // the inbox's (inbox_bus.go)
+	if out, ok, err := s.kernel.Answer(ctx, method, params); ok { // the modules' (kernel/seam: the Inbox's)
 		return out, err
 	}
 	if e := b.opts.Extensions; e != nil {

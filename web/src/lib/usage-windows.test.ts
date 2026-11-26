@@ -195,6 +195,80 @@ describe("accounts with several sources and per-model windows (#2595)", () => {
     expect(fullest(account({ windows: [scoped] }))).toBe(100); // nothing else to go by
     expect(topAccounts([account({ id: "x", windows: [scoped, win("7d", 10080, 10, 24 * H)] }), account({ id: "y" })], 1)[0].id).toBe("y");
   });
+  it("keeps healthy sibling model pools from reading 0% when one model pool is exhausted", () => {
+    const multiPool: UsageAccount = account({
+      id: "acct-alpha",
+      provider: "antigravity",
+      name: "Antigravity",
+      windows: [
+        { ...win("5h", 300, 100, 2 * H), model: "model-a" },
+        { ...win("7d", 10080, 100, 48 * H), model: "model-a" },
+        { ...win("5h", 300, 20, 3 * H), model: "model-b" },
+        { ...win("7d", 10080, 38, 72 * H), model: "model-b" },
+      ],
+    });
+    expect(tightestRemaining(multiPool)).toEqual({ remaining: 62, reserve: 0, headroom: 62, paused: false });
+    expect(fullest(multiPool)).toBe(38);
+
+    // Exhausted model-a does not hijack topAccounts ahead of genuinely tighter accounts.
+    const tighterA = account({ id: "acct-beta", provider: "codex", name: "Codex", windows: [win("7d", 10080, 75, 24 * H)] }); // 25% left
+    const tighterB = account({ id: "acct-gamma", provider: "claude", name: "Claude", windows: [win("7d", 10080, 60, 24 * H)] }); // 40% left
+    expect(topAccounts([multiPool, tighterA, tighterB]).map((a) => a.id)).toEqual(["acct-beta", "acct-gamma"]);
+
+    // Within one model pool, 5h exhaustion still constrains that pool (case/whitespace normalized) without leaking its 7d remaining.
+    const partialDepleted: UsageAccount = account({
+      id: "acct-delta",
+      provider: "antigravity",
+      name: "Antigravity",
+      windows: [
+        { ...win("5h", 300, 100, 2 * H), model: "Model-A" },
+        { ...win("7d", 10080, 10, 48 * H), model: " model-a " }, // same pool as 5h -> pool tightest is 0%
+        { ...win("5h", 300, 30, 3 * H), model: "model-b" },
+        { ...win("7d", 10080, 15, 72 * H), model: "model-b" }, // pool tightest is 70%
+      ],
+    });
+    expect(tightestRemaining(partialDepleted)).toEqual({ remaining: 70, reserve: 0, headroom: 70, paused: false });
+    expect(fullest(partialDepleted)).toBe(30);
+
+    // When a single model pool or every model pool is exhausted, the account reads 0%.
+    const singlePool = account({
+      id: "acct-single",
+      windows: [
+        { ...win("5h", 300, 100, 2 * H), model: "model-a" },
+        { ...win("7d", 10080, 20, 48 * H), model: "model-a" },
+      ],
+    });
+    expect(tightestRemaining(singlePool)).toEqual({ remaining: 0, reserve: 0, headroom: 0, paused: false });
+    const allDepleted = account({
+      id: "acct-empty",
+      windows: [
+        { ...win("5h", 300, 100, 2 * H), model: "model-a" },
+        { ...win("5h", 300, 100, 3 * H), model: "model-b" },
+        { ...win("7d", 10080, 20, 72 * H), model: "model-b" },
+      ],
+    });
+    expect(tightestRemaining(allDepleted)).toEqual({ remaining: 0, reserve: 0, headroom: 0, paused: false });
+    expect(fullest(allDepleted)).toBe(100);
+
+    // Protected model pools: one paused pool does not mark the account paused while another pool has headroom.
+    const onePaused = account({
+      id: "acct-prot",
+      windows: [
+        { ...win("7d", 10080, 96, 48 * H), model: "model-a", protect_percent: 95 }, // r=4, R=5, h=-1, paused
+        { ...win("7d", 10080, 20, 48 * H), model: "model-b", protect_percent: 95 }, // r=80, R=5, h=75
+      ],
+    });
+    expect(tightestRemaining(onePaused)).toEqual({ remaining: 80, reserve: 5, headroom: 75, paused: false });
+
+    const allPaused = account({
+      id: "acct-all-paused",
+      windows: [
+        { ...win("7d", 10080, 98, 48 * H), model: "model-a", protect_percent: 95 }, // r=2, R=5, h=-3, paused
+        { ...win("7d", 10080, 96, 48 * H), model: "model-b", protect_percent: 95 }, // r=4, R=5, h=-1, paused
+      ],
+    });
+    expect(tightestRemaining(allPaused)).toEqual({ remaining: 4, reserve: 5, headroom: -1, paused: true });
+  });
   it("names where an account was seen", () => {
     expect(sourceNames(account({ local: true, machines: ["MacBook", "Studio"], sources: ["Relay"] }))).toEqual(["MacBook", "Studio", "Relay"]);
     expect(sourceNames(account({ local: true, sources: ["Relay"] }))).toEqual(["电脑", "Relay"]); // an older hub: no names, never "this computer" (#1907)

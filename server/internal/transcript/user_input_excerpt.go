@@ -11,11 +11,6 @@ import (
 	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
-const (
-	userInputPreviewRunes = 100
-	userInputAnswerRunes  = 180
-)
-
 var (
 	indexMetadata          = lazyre.New(`(?s)<ADDITIONAL_METADATA\b[^>]*>.*?(?:</ADDITIONAL_METADATA>|$)`)
 	indexFeedback          = lazyre.New(`(?s)<persona-view-errors\b[^>]*>.*?(?:</persona-view-errors>|$)`)
@@ -37,9 +32,9 @@ func withoutIndexMetadata(s string) string {
 	return dropTagged(indexReminder, "<system-reminder", s)
 }
 
-// inputIndexBody separates the user's text from attachment references as in the chat bubble.
+// inputIndexText unwraps the human input and decides whether it occupies a position.
 // An attributed context still occupies an input position even when there are no words to preview.
-func inputIndexBody(raw string) (body string, present bool, attachments int) {
+func inputIndexText(raw string) (body string, present bool) {
 	raw = withoutIndexMetadata(dropTagged(indexComment, "<!--", raw))
 	body = StripInjected(raw)
 	if request, ok := strings.CutPrefix(body, "<USER_REQUEST>"); ok {
@@ -47,6 +42,12 @@ func inputIndexBody(raw string) (body string, present bool, attachments int) {
 	}
 	body = strings.TrimSpace(body)
 	present = body != "" || (strings.Contains(raw, "-context") && indexAttributedContext.MatchString(raw))
+	return body, present
+}
+
+// inputIndexBody separates the user's text from attachment references as in the chat bubble.
+func inputIndexBody(body string) (string, int) {
+	attachments := 0
 	if strings.Contains(body, "<attached_images>") {
 		photos := map[string]struct{}{}
 		body = indexPhotoBlock.ReplaceAllStringFunc(body, func(block string) string {
@@ -71,7 +72,7 @@ func inputIndexBody(raw string) (body string, present bool, attachments int) {
 		})
 	}
 	body = dropTagged(indexImageChip, "[Image #", body)
-	return strings.TrimSpace(withoutIndexImages(body)), present, attachments
+	return strings.TrimSpace(withoutIndexImages(body)), attachments
 }
 
 func inputIndexPreview(body string) string {
@@ -80,8 +81,8 @@ func inputIndexPreview(body string) string {
 		if line == "" || strings.HasPrefix(line, ">") {
 			continue
 		}
-		if textfmt.Cut(line, userInputPreviewRunes) != line {
-			line = textfmt.Clip(line, userInputPreviewRunes-1)
+		if textfmt.Cut(line, proto.InputPreviewRunes) != line {
+			line = textfmt.Clip(line, proto.InputPreviewRunes-1)
 		}
 		return strings.Clone(line)
 	}
@@ -90,7 +91,7 @@ func inputIndexPreview(body string) string {
 
 func inputIndexAnswer(items []proto.Item) string {
 	var answer strings.Builder
-	left := userInputAnswerRunes
+	left := proto.InputAnswerRunes
 	progress := ""
 	for _, it := range items {
 		if it.Wake {
@@ -108,7 +109,7 @@ func inputIndexAnswer(items []proto.Item) string {
 			continue
 		}
 		if it.Narration {
-			progress = strings.TrimSpace(textfmt.Cut(prose, userInputAnswerRunes))
+			progress = strings.TrimSpace(textfmt.Cut(prose, proto.InputAnswerRunes))
 			continue
 		}
 		if answer.Len() > 0 {

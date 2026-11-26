@@ -7,11 +7,14 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/db"
 )
 
 const (
-	pushGradingBaseSettingKey  = "hub.push_grading"
-	pushGradingLayerSettingKey = "hub.push_grading_layer"
+	pushGradingBaseSettingKey        = "hub.push_grading"
+	pushGradingLayerSettingKey       = "hub.push_grading_layer"
+	pushGradingExtensionSourcePrefix = "extension:"
 )
 
 var errPushGradingLayerTaken = errors.New("layer_taken")
@@ -39,9 +42,14 @@ type pushGradingSnapshot struct {
 type pushGradingStoreAPI interface {
 	Settings(ctx context.Context, keys ...string) (map[string]json.RawMessage, error)
 	PutPushGradingBase(ctx context.Context, baseKey, layerKey, mirrorKey string, value any) error
+	SetPushGradingSwitch(ctx context.Context, baseKey, mirrorKey string, enabled bool) error
 	PutPushGradingLayer(ctx context.Context, baseKey, layerKey, mirrorKey, manager, source string, value any, out any) (bool, error)
 	DeletePushGradingLayer(ctx context.Context, baseKey, layerKey, mirrorKey, manager, source string, revision int64) (bool, error)
+	ClearPushGradingLayer(ctx context.Context, layerKey, manager, source string) (bool, error)
+	PrunePushGradingLayer(ctx context.Context, layerKey, manager string, keepSources []string) (bool, error)
 }
+
+var _ pushGradingStoreAPI = (*db.DB)(nil)
 
 func pushGradingStore(store Store) (pushGradingStoreAPI, error) {
 	if store == nil {
@@ -54,8 +62,16 @@ func pushGradingStore(store Store) (pushGradingStoreAPI, error) {
 	return storeAPI, nil
 }
 
+func pushGradingExtensionSource(ext string) string {
+	ext = strings.TrimSpace(ext)
+	if ext == "" {
+		return ""
+	}
+	return pushGradingExtensionSourcePrefix + ext
+}
+
 func validPushGradingOwner(manager, source string) bool {
-	return strings.TrimSpace(manager) != "" && strings.HasPrefix(source, "extension:") && len(source) > len("extension:")
+	return strings.TrimSpace(manager) != "" && strings.HasPrefix(source, pushGradingExtensionSourcePrefix) && len(source) > len(pushGradingExtensionSourcePrefix)
 }
 
 func readPushGradingSnapshot(ctx context.Context, store Store) (pushGradingSnapshot, error) {
@@ -107,6 +123,7 @@ func writePushGradingLayer(ctx context.Context, store Store, layer pushGradingLa
 	if !validPushGradingOwner(layer.Manager, layer.Source) {
 		return pushGradingLayer{}, errors.New("push grading layer has no authenticated owner")
 	}
+	layer.Manager = strings.TrimSpace(layer.Manager)
 	if err := layer.Config.validate(true); err != nil {
 		return pushGradingLayer{}, err
 	}
@@ -137,7 +154,39 @@ func deletePushGradingLayer(ctx context.Context, store Store, manager, source st
 	if !validPushGradingOwner(manager, source) || revision < 0 {
 		return false, errors.New("push grading layer delete needs an exact owner")
 	}
+	manager = strings.TrimSpace(manager)
 	return storeAPI.DeletePushGradingLayer(ctx, pushGradingBaseSettingKey, pushGradingLayerSettingKey, gradingSwitchSettingKey, manager, source, revision)
+}
+
+func clearPushGradingLayer(ctx context.Context, store Store, manager, source string) (bool, error) {
+	storeAPI, err := pushGradingStore(store)
+	if err != nil {
+		return false, err
+	}
+	manager = strings.TrimSpace(manager)
+	source = strings.TrimSpace(source)
+	if source != "" && (!strings.HasPrefix(source, pushGradingExtensionSourcePrefix) || len(source) == len(pushGradingExtensionSourcePrefix)) {
+		return false, errors.New("push grading layer clear has an invalid extension source")
+	}
+	return storeAPI.ClearPushGradingLayer(ctx, pushGradingLayerSettingKey, manager, source)
+}
+
+func prunePushGradingLayer(ctx context.Context, store Store, manager string, activeExtensions []string) (bool, error) {
+	storeAPI, err := pushGradingStore(store)
+	if err != nil {
+		return false, err
+	}
+	manager = strings.TrimSpace(manager)
+	if manager == "" {
+		return false, errors.New("push grading layer prune needs a manager")
+	}
+	keepSources := make([]string, 0, len(activeExtensions))
+	for _, ext := range activeExtensions {
+		if src := pushGradingExtensionSource(ext); src != "" {
+			keepSources = append(keepSources, src)
+		}
+	}
+	return storeAPI.PrunePushGradingLayer(ctx, pushGradingLayerSettingKey, manager, keepSources)
 }
 
 func writePushGradingBase(ctx context.Context, store Store, base pushGradingConfig) error {

@@ -153,6 +153,12 @@ attachments included), Drive, Docs, Sheets, Base, Wiki and Minutes. It is the bu
    - **Paste once**: if that fails too, the page shows the redirect URL with a copy button and a link straight to the app's
      security settings; after pasting it there, **Continue** opens the authorization page.
 
+The iPhone and iPad app and the Android app have the same section on their Lark bot page (#15392), on the same routes.
+For the browser way they show Lark's authorization page in an in-app web view with the hub's own address plus
+`/lark-oauth` as the redirect URL, stop that view when it reaches the address (the web page never loads), and hand
+`state` and `code` to `POST /api/v1/bots/feishu/sync/oauth` themselves. The device flow and the paste-once way work as
+on the web. A hub without the sync (404, or `available: false`) hides the section.
+
 So a new owner confirms twice on one page (scan to create, then agree); an app that already has the scopes needs only
 the second. The tokens are sealed with `secret.key` (settings `bots.feishu.sync.bindings`, re-sealed by the key rotation),
 never shown and never logged.
@@ -200,11 +206,86 @@ Wiki links resolve via `GET /open-apis/wiki/v2/spaces/get_node`, metadata is bat
 `POST /open-apis/drive/v1/metas/batch_query`, `docx` / `sheet` / `bitable` convert to Markdown with the existing readers,
 readable text files (`.md`, `.txt`, `.csv`, `.json`, `.yaml`, etc.) download via
 `GET /open-apis/drive/v1/files/{file_token}/download` using the user token, and non-text files keep metadata only. Every
-linked document deduplicates by `obj_token` + revision and records `message_link` in `sources[]`; unreadable documents
-(403, export disabled, oversized file) record the reason in `Note` at revision 0 without blocking the run. All required
-scopes (`drive:drive:readonly`, `docx:document:readonly`, `docs:document.content:read`, `sheets:spreadsheet:readonly`,
-`bitable:app:readonly`, `wiki:wiki:readonly`, `wiki:node:retrieve`, plus `drive:file:download` and `im:*` in `full_with_im`)
-are already covered by the existing packs.
+linked document deduplicates by `obj_token` + revision and records `message_link` in `sources[]`; unfetched links when a
+run hits its budget or rate limit are persisted per binding in `lark_sync_cursors` (`links_queue`, deduplicated by
+`obj_token`) and drained on subsequent runs (including 15-minute `ModeIM` runs) with recent live links prioritized ahead
+of historical backfill links. Unreadable documents (403, missing scope, export disabled, oversized file) record the
+reason in `Note` at revision 0 without blocking the run, and 403 / `scope_missing` links remain queued for automatic
+retry once permissions recover. The scope packs and all three manual setup guides include the API permissions below.
+
+#### Sync API scope audit
+
+Checked against the official Feishu Open Platform API pages on 2026-11-25. Each row lists a sufficient read
+permission from that endpoint's alternatives, not every possible broader permission or unused response-field scope.
+The API access permission for contacts and its name-field permission are both needed. A document's own sharing,
+export restrictions and the tenant's contact visibility still apply after scopes are granted.
+
+| Reader (official API reference) | Sufficient requested user scope | Tier |
+| --- | --- | --- |
+| [Drive listing](https://open.feishu.cn/document/server-docs/docs/drive-v1/folder/list) | `drive:drive:readonly` | Both |
+| [Linked file metadata](https://open.feishu.cn/document/server-docs/docs/drive-v1/file/batch_query) | `drive:drive.metadata:readonly` | Both |
+| [Readable text download](https://open.feishu.cn/document/server-docs/docs/drive-v1/download/download) | `drive:drive:readonly` or `drive:file:download` | Both |
+| [Docx metadata](https://open.feishu.cn/document/server-docs/docs/docs/docx-v1/document/get) | `docx:document:readonly` | Both |
+| [Docx blocks](https://open.feishu.cn/document/server-docs/docs/docs/docx-v1/document/list) | `docx:document:readonly` | Both |
+| [Docx raw content fallback](https://open.feishu.cn/document/server-docs/docs/docs/docx-v1/document/raw_content) | `docx:document:readonly` | Both |
+| [Sheet list](https://open.feishu.cn/document/server-docs/docs/sheets-v3/spreadsheet-sheet/query) | `sheets:spreadsheet:readonly` or `drive:drive:readonly` | Both |
+| [Sheet values](https://open.feishu.cn/document/server-docs/docs/sheets-v3/data-operation/reading-a-single-range) | `sheets:spreadsheet:readonly` or `drive:drive:readonly` | Both |
+| [Base tables](https://open.feishu.cn/document/server-docs/docs/bitable-v1/app-table/list) | `bitable:app:readonly` | Both |
+| [Base records](https://open.feishu.cn/document/server-docs/docs/bitable-v1/app-table-record/list) | `bitable:app:readonly` | Both |
+| [Wiki spaces](https://open.feishu.cn/document/server-docs/docs/wiki-v2/space/list) | `wiki:wiki:readonly` or `wiki:space:retrieve` | Both |
+| [Wiki children](https://open.feishu.cn/document/server-docs/docs/wiki-v2/space-node/list) | `wiki:wiki:readonly` or `wiki:node:retrieve` | Both |
+| [Wiki link resolution](https://open.feishu.cn/document/server-docs/docs/wiki-v2/space-node/get_node) | `wiki:wiki:readonly` | Both |
+| [Minutes metadata](https://open.feishu.cn/document/server-docs/minutes-v1/minute/get) | `minutes:minutes:readonly` | Both |
+| [Minutes transcript](https://open.feishu.cn/document/minutes-v1/minute-transcript/get) | `minutes:minutes.transcript:export` | Both |
+| [Message search and p2p discovery](https://open.feishu.cn/document/server-docs/search-v2/suite-search/create) | `search:message` | Full |
+| [Chat listing](https://open.feishu.cn/document/server-docs/group/chat/list) | `im:chat:read` or `im:chat:readonly` | Full |
+| [Chat name fallback](https://open.feishu.cn/document/server-docs/group/chat/get) | `im:chat:readonly` | Full |
+| [Chat history](https://open.feishu.cn/document/server-docs/im-v1/message/list) | `im:message:readonly` | Full |
+| [Search hit message](https://open.feishu.cn/document/server-docs/im-v1/message/get) | `im:message:readonly` | Full |
+| [Lazy message attachment](https://open.feishu.cn/document/server-docs/im-v1/message/get-2) | `im:message:readonly` | Full |
+| [Sender name API access](https://open.feishu.cn/document/server-docs/contact-v3/user/get) | `contact:contact.base:readonly` | Full |
+| [Sender name field](https://open.feishu.cn/document/server-docs/contact-v3/user/get) | `contact:user.base:readonly` | Full |
+
+Full also requests `im:message.group_msg:get_as_user` and `im:message.p2p_msg:get_as_user` for the
+[owner's group and direct-message history](https://open.feishu.cn/document/ukTMukTMukTM/uYTM5UjL2ETO14iNxkTN/scope-list).
+Both tiers request `offline_access` for refresh authorization; `docs:document.content:read` remains in the document
+pack for compatibility. Full retains `drive:file:download`; the document tier's existing `drive:drive:readonly`
+already covers the readable-file download endpoint. `wiki:node:retrieve` covers child listing, while
+`wiki:wiki:readonly` covers resolving a wiki link; these are different API requirements.
+
+`drive:drive:readonly` does **not** cover the batch metadata endpoint, which needs
+`drive:drive.metadata:readonly` (or the broader write scope). `contact:user.base:readonly` grants the name field,
+but querying another user's contact record also needs `contact:contact.base:readonly`. The p2p chat-name fallback
+needs `im:chat:readonly`, even though `im:chat:read` is sufficient for listing chats.
+
+A missing permission appears as **Reauthorize to add missing permissions**, with **Authorize Again** available
+even when the grant is far from expiry. First publish/approve the app permissions, then authorize the expanded
+user scope pack. Refreshing an old grant does not expand it. When the owner explicitly starts authorization for a
+`scope_missing` binding, the manager attempts to configure the current scopes even if the redirect URL is unchanged;
+without the patch permission it uses the existing device/manual fallbacks. See the official
+[permission application guide](https://open.feishu.cn/document/faq/trouble-shooting/how-to-fix-the-99991672-error).
+
+Sender lookup scope errors are reported separately from readable messages, so message content and cursors can
+still commit. A failed sender-name repair remains pending (`backfill_version` does not advance), including when
+some names were resolved. Reauthorization preserves cursors and the pending repair marker and makes the binding
+due now; the next scheduler tick runs the sync and retries repair automatically. Disabled bindings remain disabled.
+The repair marks its version complete only after it finishes, so later ticks are idempotent.
+
+Senders that `contact/v3` cannot see (external members) are looked up in the chat's member list, read on demand: only
+while a sender of that chat is still unnamed, resuming where it stopped, up to 500 pages of 100. A member who left the
+group is in no list; the binding's name book (`sender_names` cursor, at most 5,000 names, the oldest learned dropped
+first) keeps the names the sync learned from contacts, member lists and @mentions, and the sender-name backfill
+(version 3) also reads the chat around such a sender's message for an @mention of them. Another app's bot is named only
+when a message mentions it: the API that names an app by its id
+([application/v6](https://open.feishu.cn/document/server-docs/application-v6/application/get)) takes a tenant token,
+an admin scope and a custom app of the same enterprise, none of which a user's sync has. A system message without a
+`sender_id` stays unnamed.
+
+Regression coverage: `server/internal/larksyncwire/scopes_test.go` checks the audited permission alternatives;
+`scripts/test/test_lark_sync_scope_guides.py` checks every locale of the three setup guides against both packs;
+`server/internal/extmgr/larksync_impoll_test.go` covers scope refusal followed by authorization and scheduler recovery;
+client sync model/component tests cover the reauthorization prompt and action.
+
 
 Requests are rate-limited per binding and per API family, and a 429, `99991400`, `230020` or `1061045` waits as the platform
 asks before trying again. **A read that fails leaves its cursor where it was**: the cursors, the dedup index and what the

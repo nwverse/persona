@@ -183,6 +183,33 @@ func (r *Runner) AuthStatus(ctx context.Context) (AuthStatus, error) {
 	return r.authResult(v.([]byte), nil)
 }
 
+// FreshAuthStatus reads the live user identity bypassing the auth status cache, then updates the cache if the
+// request does not race an invalidation or cancellation. Used where mid-operation identity drift must fail closed.
+func (r *Runner) FreshAuthStatus(ctx context.Context) (AuthStatus, error) {
+	profile, err := r.resolveProfile(ctx)
+	if err != nil {
+		return AuthStatus{}, err
+	}
+	r.cache.mu.Lock()
+	gen := r.cache.authGen
+	r.cache.mu.Unlock()
+	out, err := r.execute(ctx, []string{"auth", "status"}, outputAuth)
+	if err == nil && !json.Valid(out) {
+		out, err = nil, cliError(KindOther, errors.New("invalid auth status JSON"))
+	}
+	if ctx.Err() == nil {
+		r.cache.mu.Lock()
+		if r.cache.authGen == gen {
+			r.cache.auth = authEntry{set: true, profile: profile, gen: gen, out: out, err: err, at: r.cacheNow()}
+		}
+		r.cache.mu.Unlock()
+	}
+	if err != nil {
+		return AuthStatus{}, err
+	}
+	return r.authResult(out, nil)
+}
+
 func (r *Runner) authResult(out []byte, err error) (AuthStatus, error) {
 	if err != nil {
 		return AuthStatus{}, err

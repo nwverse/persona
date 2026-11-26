@@ -7,6 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Machine, MachineMetrics } from "../lib/types";
 import { chooseManager, resetManagerChoice } from "../lib/manager-choice";
 import { currentRoster, resetRoster, setRoster } from "../lib/managers";
+import { getState } from "../lib/store";
+import { t } from "../i18n";
 
 vi.hoisted(() => {
   const g = globalThis as Record<string, unknown>;
@@ -34,6 +36,7 @@ function hub(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   if (init?.method === "POST") posts.push(path);
   if (path.endsWith("/confirm") || path.endsWith("/reject")) return Promise.resolve(json({ ok: true }));
   if (path.endsWith("/reconnect")) return Promise.resolve(json({ ok: true }));
+  if (path.endsWith("/deploy")) return Promise.resolve(json({ ok: true }));
   if (path === "/api/v1/managers" && currentRoster()) return Promise.resolve(json(currentRoster()));
   if (path !== "/api/v1/metrics") return Promise.resolve(json({ error: "not found" }, 404));
   const reply = metricsReplies[String(input)];
@@ -142,6 +145,56 @@ describe("Machines", () => {
     await flush();
     expect(location.pathname).toBe("/machines");
     expect(vi.mocked(fetch).mock.calls.map(([u]) => String(u))).toContain("/api/v1/machines/mac/reconnect");
+  });
+
+  it("names every active phase and disables Redeploy on that card until the update ends", async () => {
+    const node: Machine = { id: "mac", name: "Example computer", online: true, can_deploy: true, node_mismatch: true };
+    const show = (deploy_phase?: Machine["deploy_phase"]) => {
+      fake.machines = [{ ...node, deploy_phase }];
+      act(() => root.render(<Machines onToggleSidebar={() => {}} />));
+    };
+    show();
+    await flush();
+    expect(buttons(t("lib-machine-deploy.redeploy"))[0]?.disabled).toBe(false);
+    for (const phase of ["waiting_idle", "transferring", "restarting", "confirming"] as const) {
+      show(phase); // phase alone is sufficient, including when an older hub omits `deploying`
+      const [redeploy] = buttons(t(`lib-machine-deploy.${phase}`));
+      expect(redeploy?.disabled).toBe(true);
+      redeploy!.click();
+      expect(posts).toEqual([]);
+      expect(location.pathname).toBe("/machines");
+    }
+    show();
+    expect(buttons(t("lib-machine-deploy.redeploy"))[0]?.disabled).toBe(false);
+  });
+
+  it("admits one Redeploy request even when two clicks arrive before the card renders", async () => {
+    fake.machines = [{ id: "mac", name: "Example computer", online: true, node_mismatch: true, can_deploy: true }];
+    act(() => root.render(<Machines onToggleSidebar={() => {}} />));
+    await flush();
+    const [redeploy] = buttons(t("lib-machine-deploy.redeploy"));
+    expect(redeploy?.disabled).toBe(false);
+    act(() => { redeploy!.click(); redeploy!.click(); });
+    await flush();
+    expect(posts).toEqual(["/api/v1/machines/mac/deploy"]);
+  });
+
+  it("checks the hub's current phase before posting from a card that still shows Redeploy", async () => {
+    const node: Machine = { id: "mac", name: "Example computer", online: true, node_mismatch: true, can_deploy: true };
+    fake.machines = [node];
+    act(() => root.render(<Machines onToggleSidebar={() => {}} />));
+    await flush();
+    const [redeploy] = buttons(t("lib-machine-deploy.redeploy"));
+    expect(redeploy?.disabled).toBe(false);
+    const before = getState().machines;
+    try {
+      getState().machines = [{ ...node, deploy_phase: "transferring" }];
+      act(() => redeploy!.click());
+      await flush();
+      expect(posts).toEqual([]);
+    } finally {
+      getState().machines = before;
+    }
   });
 
   it("does not open the machine while text on the card is being selected", async () => {
