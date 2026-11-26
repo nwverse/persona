@@ -179,7 +179,8 @@ nonisolated enum TokenCalendarText {
         return d.formatted(Date.FormatStyle(locale: locale, calendar: cal, timeZone: .gmt).month(.abbreviated).day().weekday(.abbreviated))
     }
 
-    /// A day said briefly, for a chart's axis: its month and day in numbers ("11/23"; "11月23日" in Chinese).
+    /// A day said briefly, for a chart's axis: its month and day in numbers ("11/23" in English; in Chinese the same
+    /// numbers, each followed by its month or day sign).
     static func shortDay(_ date: String, locale: Locale = .autoupdatingCurrent) -> String {
         let cal = TokenCalendarLayout.calendar(locale: locale)
         guard let d = TokenCalendarLayout.date(date, cal) else { return date }
