@@ -286,6 +286,11 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			continue
 		}
 		t.TodoID = todo.ID
+		if s.settings(ctx).todosV2On() && len(t.BlockedByPR) > 0 {
+			if err := s.persistExternalPRBlockers(ctx, todo.ID, t.BlockedByPR); err != nil {
+				s.logf("task %s: persist external_pr blockers: %v", todo.ID, err)
+			}
+		}
 		if t.RequestGate != "" {
 			// Persist the approved edges, including edges inherited from a reused to-do.
 			t.After = cleanIDs(slices.Concat(t.After, todo.After))
@@ -1067,6 +1072,13 @@ func (s *Service) runPlanTaskStart(planID, conversation string, i int, t PlanTas
 		s.closeDeferredTaskStart(ctx, &t, mid, sid)
 	}
 	if err == nil {
+		if !linkedDone && s.settings(ctx).todosV2On() {
+			rctx, rcancel := context.WithTimeout(context.WithoutCancel(ctx), taskFailTimeout)
+			if recErr := s.RecordSupervisedTaskActive(rctx, t.TodoID, mid, sid, s.runtimeBootEpoch()); recErr != nil {
+				s.logf("task %s: record todos_v2 active checkpoint: %v", t.TodoID, recErr)
+			}
+			rcancel()
+		}
 		if t.HandoffID != "" {
 			hctx, hcancel := context.WithTimeout(context.WithoutCancel(ctx), taskFailTimeout)
 			_, _ = s.recordTodoHandoffDelivery(hctx, t.HandoffID, mid, sid, t.startedAgent, handoffDeliveryAccepted, "")
