@@ -784,7 +784,9 @@ todos.write          POST /api/v1/todos
 todos.write          POST /api/v1/todos/{id}/decisions
 -                    POST /api/v1/todos/{id}/done-check
 -                    POST /api/v1/todos/{id}/handoff
+-                    POST /api/v1/todos/{id}/merge
 -                    POST /api/v1/todos/{id}/retry
+-                    POST /api/v1/todos/{id}/split
 -                    POST /api/v1/todos/{id}/start/answer
 todos.write          POST /api/v1/todos/{id}/workspace-naming/plans
 todos.write          POST /api/v1/todos/{id}/workspace-naming/preview

@@ -41,6 +41,10 @@ func (s *Service) toolTodo(ctx context.Context, machine, self, name string, args
 		return s.toolTodoDone(ctx, machine, self, name, args)
 	case "todo_delete":
 		return s.toolTodoDelete(ctx, machine, self, args)
+	case "todo_split":
+		return s.toolTodoSplit(ctx, args)
+	case "todo_merge":
+		return s.toolTodoMerge(ctx, args)
 	}
 	return "", fmt.Errorf("unknown tool %s", name)
 }
