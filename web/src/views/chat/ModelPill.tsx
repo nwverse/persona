@@ -20,7 +20,7 @@ import { effortTitle } from "../../lib/session-actions";
 import { dropPick, launcherOffered, pickFast, usePickedEffort, usePickedFast, usePickedLauncher, usePickedModel } from "../../lib/assistant-chat";
 import { isBackgroundSupervisor } from "../../lib/background-supervisor";
 import { launcherTitle } from "../../lib/provider-names";
-import { ASSISTANT_MODEL_PICK_FEATURE, ASSISTANT_START_SERVICE_TIER_FEATURE, assistantPickKey, assistantPillView, assistantSetup, type AssistantChat } from "../../lib/assistant-models";
+import { ASSISTANT_MODEL_PICK_FEATURE, ASSISTANT_START_SERVICE_TIER_FEATURE, assistantModelHost, assistantPickKey, assistantPillView, assistantSetup, canonicalLauncher, findAssistantLauncher, type AssistantChat } from "../../lib/assistant-models";
 import {
   agentCatalogScope, assistantCatalogScope, assistantLaunchers, machineLauncherList, modelList, pendingView, pillView, readAgentLauncherNames, readAssistantLaunchers, readForPanel, readModels, readMainDefault, mainDefault, readSuperviseDefault, sessionModelHost, useRevisionReread, sessionSwitches, superviseDefault, useModelLists, currentModelRow, type PillSetup,
 } from "../../lib/session-models";
@@ -330,6 +330,8 @@ export const AssistantModelPill = memo(function AssistantModelPill({ session, ma
     toast(t("chat-modelpill.pick_dropped", { launcher: picked }), "info");
   }, [key, picked, info, session, kept]);
   const setup = assistantSetup(chat, info);
+  const catalogLauncher = findAssistantLauncher(info, setup.provider)?.name ?? canonicalLauncher(setup.provider);
+  const modelHost = assistantModelHost(session, catalogLauncher);
   // A hub or native catalog that can't honor Fast disarms the draft even while the lazy panel is closed. A manager
   // change disarms it in the store, before this pill or its destination catalog answers.
   useEffect(() => {
@@ -338,13 +340,13 @@ export const AssistantModelPill = memo(function AssistantModelPill({ session, ma
       pickFast(false);
       return;
     }
-    const list = modelList(mid, setup.provider, "assistant").list;
+    const list = modelList(mid, catalogLauncher, "assistant", modelHost).list;
     if (!list) return;
     if (!modelSupportsFast(currentModelRow(list.models, setup.model))) pickFast(false);
-  }, [key, mid, session, setup.provider, setup.model, tier, startServiceTier, version]);
+  }, [key, mid, session, catalogLauncher, modelHost, setup.model, tier, startServiceTier, version]);
   useEffect(() => {
-    if (mid) void readModels(mid, setup.provider, { purpose: "assistant", first: true });
-  }, [mid, scope, setup.provider]);
+    if (mid) void readModels(mid, catalogLauncher, { purpose: "assistant", first: true, host: modelHost });
+  }, [mid, scope, catalogLauncher, modelHost]);
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const button = useRef<HTMLButtonElement>(null);
   const close = useCallback(() => setAnchor(null), []);
@@ -356,17 +358,17 @@ export const AssistantModelPill = memo(function AssistantModelPill({ session, ma
   // every list again behind the one shown, once per opening
   useEffect(() => {
     if (!shown) return;
-    void readModels(mid, setup.provider, { purpose: "assistant", again: true, first: true });
+    void readModels(mid, catalogLauncher, { purpose: "assistant", again: true, first: true, host: modelHost });
     if (isMain) void readMainDefault(mid, { again: true });
     if (supervisor) void readSuperviseDefault(mid, { again: true });
     void readAssistantLaunchers(mid, { again: true }).then(() => {
       if (scope !== assistantCatalogScope()) return;
-      for (const l of assistantLaunchers(mid).info?.launchers ?? []) if (l.name !== setup.provider) void readModels(mid, l.name, { purpose: "assistant", again: true });
+      for (const l of assistantLaunchers(mid).info?.launchers ?? []) if (l.name !== catalogLauncher) void readModels(mid, l.name, { purpose: "assistant", again: true, host: assistantModelHost(session, l.name) });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per opening
   }, [shown, mid, scope]);
   if (!mid) return null;
-  const view = assistantPillView(chat, setup, info, modelList(mid, setup.provider, "assistant"));
+  const view = assistantPillView(chat, setup, info, modelList(mid, catalogLauncher, "assistant", modelHost));
   const workflow = view.engine === "codex" && view.effort === CODEX_ULTRA ? { label: t("ultracode.codex_ultra_title"), title: t("ultracode.codex_ultra_title") } : undefined;
   return (
     <>

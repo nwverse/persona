@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -59,6 +60,9 @@ type runtimeRegistry struct {
 	// agyWork: per-conversation Antigravity companion driving state, so the non-Linux presence fallback distinguishes
 	// the companion's own turns and settling transcript exports from an external terminal agy (#14561).
 	agyWork map[string]*agyCompanionTurn
+	// lastInstance: runtime id -> most recent non-empty hello.Instance, used to distinguish same-instance reconnects
+	// (whose persistent Assistant workers stay alive) from restarts/preemptions by a different instance.
+	lastInstance map[string]string
 }
 
 // startedSession is who started a session for the hub, and when (runtimeRegistry.started).
@@ -110,7 +114,8 @@ const maxKnown = 8192
 func newRuntimeRegistry() *runtimeRegistry {
 	return &runtimeRegistry{conns: map[int]*runtimeConn{}, owner: map[string]*runtimeConn{}, watching: map[string]int{},
 		lastHistory: map[string]string{}, watchParents: map[string]context.Context{}, known: map[string]knownSession{},
-		remoteSessions: map[string]struct{}{}, unclaimed: map[string]unclaimedID{}, warned: map[string]bool{}}
+		remoteSessions: map[string]struct{}{}, unclaimed: map[string]unclaimedID{}, warned: map[string]bool{},
+		lastInstance: map[string]string{}}
 }
 
 // setHostOff replaces how launcher ownership excludes engine runtimes the serving node does not enable.
@@ -180,6 +185,11 @@ func shellLauncherNames() map[string]bool {
 // daemon whose id a runtime on the socket already has stays out until that one leaves (it is dialed again). A daemon's
 // link says hello with the config's id and an instance of its own, so its next connection is its own again.
 func (b *runtimeRegistry) hello(h *runtimeConn, hello runtimeHello, reserved func(string) bool, preempt func(o *runtimeConn, hello runtimeHello) bool) (stale []*runtimeConn, err error) {
+	stale, _, err = b.registerHello(h, hello, reserved, preempt)
+	return stale, err
+}
+
+func (b *runtimeRegistry) registerHello(h *runtimeConn, hello runtimeHello, reserved func(string) bool, preempt func(o *runtimeConn, hello runtimeHello) bool) (stale []*runtimeConn, replacedSessions []string, err error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	h.mu.Lock()
@@ -187,11 +197,12 @@ func (b *runtimeRegistry) hello(h *runtimeConn, hello runtimeHello, reserved fun
 	h.mu.Unlock()
 	switch {
 	case daemon != "" && hello.Runtime != daemon:
-		return nil, &rpc.Error{Code: "runtime_conflict", Message: fmt.Sprintf("daemon %s said hello as %q", daemon, hello.Runtime)}
+		return nil, nil, &rpc.Error{Code: "runtime_conflict", Message: fmt.Sprintf("daemon %s said hello as %q", daemon, hello.Runtime)}
 	case daemon == "" && reserved != nil && reserved(hello.Runtime):
-		return nil, &rpc.Error{Code: "runtime_conflict",
+		return nil, nil, &rpc.Error{Code: "runtime_conflict",
 			Message: fmt.Sprintf("runtime id %q is reserved by a daemon in daemons.json; give this runtime another id", hello.Runtime)}
 	}
+	prevInstance := b.lastInstance[hello.Runtime]
 	for _, o := range b.conns {
 		if o == h {
 			continue
@@ -205,10 +216,13 @@ func (b *runtimeRegistry) hello(h *runtimeConn, hello runtimeHello, reserved fun
 			continue
 		}
 		if daemon != "" && onSocket {
-			return nil, &rpc.Error{Code: "runtime_conflict",
+			return nil, nil, &rpc.Error{Code: "runtime_conflict",
 				Message: fmt.Sprintf("runtime id %q is in use by a runtime on this machine's socket", hello.Runtime)}
 		}
 		if preempt != nil && preempt(o, hello) {
+			if instance != "" {
+				prevInstance = instance
+			}
 			stale = append(stale, o)
 			continue
 		}
@@ -216,19 +230,79 @@ func (b *runtimeRegistry) hello(h *runtimeConn, hello runtimeHello, reserved fun
 			continue
 		}
 		if instance != hello.Instance {
-			return nil, &rpc.Error{Code: "runtime_conflict",
+			return nil, nil, &rpc.Error{Code: "runtime_conflict",
 				Message: fmt.Sprintf("another process is connected to this node as runtime %q", hello.Runtime)}
 		}
 		stale = append(stale, o)
 	}
+	if prevInstance != "" && hello.Instance != "" && prevInstance != hello.Instance {
+		drop := map[string]struct{}{}
+		for _, o := range stale {
+			for sid, owner := range b.owner {
+				if owner == o {
+					drop[sid] = struct{}{}
+				}
+			}
+		}
+		for sid, k := range b.known {
+			if k.runtime == hello.Runtime {
+				if owner := b.owner[sid]; owner == nil || slices.Contains(stale, owner) {
+					drop[sid] = struct{}{}
+				}
+			}
+		}
+		if len(drop) > 0 {
+			replacedSessions = make([]string, 0, len(drop))
+			for sid := range drop {
+				replacedSessions = append(replacedSessions, sid)
+			}
+		}
+	}
 	for _, o := range stale {
 		o.superseded = true
+	}
+	if hello.Instance != "" {
+		if b.lastInstance == nil {
+			b.lastInstance = map[string]string{}
+		}
+		b.lastInstance[hello.Runtime] = hello.Instance
 	}
 	h.mu.Lock()
 	h.hello, h.ready = hello, true
 	h.assistantPIDs = nil
 	h.mu.Unlock()
-	return stale, nil
+	return stale, replacedSessions, nil
+}
+
+func (b *runtimeRegistry) activeInstance(id string) (string, bool) {
+	if id == "" {
+		return "", false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	h := b.byRuntime(id)
+	if h == nil {
+		return "", false
+	}
+	h.mu.Lock()
+	inst := h.hello.Instance
+	h.mu.Unlock()
+	return inst, true
+}
+
+func (b *runtimeRegistry) unownedSessions(sessions []string) []string {
+	if len(sessions) == 0 {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]string, 0, len(sessions))
+	for _, sid := range sessions {
+		if sid != "" && b.owner[sid] == nil {
+			out = append(out, sid)
+		}
+	}
+	return out
 }
 
 // startedHere: a row of a session the runtime has, not one it lists only while it is starting it or after that start
@@ -582,7 +656,7 @@ func (b *runtimeRegistry) add(peer *rpc.Peer) *runtimeConn {
 	return h
 }
 
-func (b *runtimeRegistry) remove(h *runtimeConn) {
+func (b *runtimeRegistry) remove(h *runtimeConn) []string {
 	id := h.id()
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -590,11 +664,43 @@ func (b *runtimeRegistry) remove(h *runtimeConn) {
 	h.mu.Lock()
 	h.assistantPIDs = nil
 	h.mu.Unlock()
+	var owned []string
+	if !h.superseded {
+		for sid, o := range b.owner {
+			if o == h {
+				owned = append(owned, sid)
+			}
+		}
+	}
 	b.leftUnlisted(id)
 	b.leftRows(h, id)
 	b.leftCodexClaims(id)
 	b.agyWorkRemoveConnLocked(h, agyPresenceNow())
 	b.recomputeOwners()
+	if h.superseded {
+		return nil
+	}
+	drop := map[string]struct{}{}
+	for _, sid := range owned {
+		if b.owner[sid] == nil {
+			drop[sid] = struct{}{}
+		}
+	}
+	if id != "" && b.byRuntime(id) == nil {
+		for sid, k := range b.known {
+			if k.runtime == id && b.owner[sid] == nil {
+				drop[sid] = struct{}{}
+			}
+		}
+	}
+	if len(drop) == 0 {
+		return nil
+	}
+	released := make([]string, 0, len(drop))
+	for sid := range drop {
+		released = append(released, sid)
+	}
+	return released
 }
 
 // recomputeOwners picks, for every listed session, the connection that answers for it. Two runtimes can list the
@@ -654,6 +760,7 @@ func (b *runtimeRegistry) setSessions(h *runtimeConn, list []proto.Session) (map
 	defer b.mu.Unlock()
 	h.mu.Lock()
 	h.sessions = list
+	h.sessionsListed = true
 	rt := h.hello.Runtime
 	agent := h.hello.Agent
 	if agent == "" {
@@ -695,6 +802,52 @@ func (b *runtimeRegistry) setSessions(h *runtimeConn, list []proto.Session) (map
 	}
 	h.mu.Unlock()
 	return rewatch, driven
+}
+
+// assistantRuntimeByPrefix returns the newest ready assistant runtime whose runtime id prefixes id ("<runtime>-...").
+func (b *runtimeRegistry) assistantRuntimeByPrefix(id string) (*runtimeConn, bool) {
+	if b == nil || id == "" {
+		return nil, false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var best *runtimeConn
+	for _, h := range b.conns {
+		h.mu.Lock()
+		ok := h.ready && h.hello.Caps.Assistant && h.hello.Runtime != "" && strings.HasPrefix(id, h.hello.Runtime+"-")
+		h.mu.Unlock()
+		if ok && (best == nil || h.serial > best.serial) {
+			best = h
+		}
+	}
+	return best, best != nil
+}
+
+// unlistedAssistantRuntime reports a ready assistant runtime that has not yet pushed its first runtime.sessions list.
+func (b *runtimeRegistry) unlistedAssistantRuntime() (string, bool) {
+	if b == nil {
+		return "", false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var first *runtimeConn
+	var label string
+	for _, h := range b.conns {
+		h.mu.Lock()
+		pending := h.ready && h.hello.Caps.Assistant && !h.sessionsListed
+		name := h.hello.Name
+		if name == "" {
+			name = h.hello.Runtime
+		}
+		h.mu.Unlock()
+		if pending && (first == nil || h.serial < first.serial) {
+			first, label = h, name
+		}
+	}
+	if first == nil {
+		return "", false
+	}
+	return label, true
 }
 
 func (b *runtimeRegistry) ownerOf(id string) *runtimeConn {

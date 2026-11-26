@@ -35,7 +35,7 @@ async function settledPosition(chat) {
 
 // Intercept the same before_seq response for each case. Observe real scroll offsets after the
 // prepend, including the frames where a stale seek would scroll or light its row.
-export async function checkInterruptedJump({ page, url, run, output, target, second, secondOrdinal, source, action, release, append }) {
+export async function checkInterruptedJump({ page, url, run, output, target, targetOrdinal, second, secondOrdinal, source, action, release, append }) {
   if (source === "link") url.searchParams.set("at", target.id);
   await page.goto(url.href);
   const chat = page.locator("[data-chat-scroll]");
@@ -52,8 +52,9 @@ export async function checkInterruptedJump({ page, url, run, output, target, sec
     await wheel(-1200);
     await page.waitForFunction(() => document.querySelector("[data-jump-pill]"));
     await rail.focus();
-    await page.keyboard.press("Home");
-    await rail.locator('[data-tick="0"]').click();
+    await page.keyboard.press("End");
+    for (let i = Number(await rail.getAttribute("data-nav-total")); i > targetOrdinal; i--) await page.keyboard.press("ArrowUp");
+    await rail.locator(`[data-tick="${targetOrdinal - 1}"]`).click();
   }
   await page.locator("[data-loading-earlier]").waitFor();
   assert.equal(run.olderReads, 1);
@@ -91,7 +92,7 @@ export async function checkInterruptedJump({ page, url, run, output, target, sec
   run.after = await settledPosition(chat);
   run.action = `${source} then ${action}`;
   console.log(`${run.action}: ${JSON.stringify(run.before)} -> ${JSON.stringify(run.after)}`);
-  assert.equal(await chat.locator("[data-search-hit]").count(), 0, "The cancelled link must not light its row");
+  assert.equal(await chat.locator(`[data-line="seg:${target.id}"] [data-search-hit]`).count(), 0, "The cancelled jump must not light its row");
   if (end) {
     assert.equal(run.after.gap, 0);
     assert.equal(await page.locator("[data-jump-pill]").count(), 0, "Still following live messages");

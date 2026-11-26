@@ -15,6 +15,9 @@ ci_run 'Fixed sleeps' 60 python3 scripts/ci/sleep_ratchet.py
 ci_run 'Web font sizes' 60 python3 scripts/ci/web_font_ratchet.py
 # Disables of web/src's feature-module boundary (web/eslint.modules.config.mjs) may stay or fall, never rise (#13434).
 ci_run 'Web module boundary disables' 60 python3 scripts/ci/web_module_boundary_ratchet.py
+# Enum-like text columns without a CHECK and JSON columns with neither a shape CHECK nor an "opaque: <reason>" note
+# may only go, never come: a new one fails (docs/operations/testing.md "Count ratchets", #15397). No Go needed.
+ci_run 'Migration enum and JSON checks' 60 python3 scripts/ci/migration_enum_check.py
 ci_run 'Prompt language migration' 60 python3 scripts/ci/prompt_language_ratchet.py
 # Weak types in the contract packages and the hub's handlers may stay or fall, never rise, and with a base no
 # exception may add room (docs/operations/testing.md "Count ratchets", #15397). Needs Go: the hosted runner's go fetches

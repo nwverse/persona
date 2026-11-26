@@ -56,7 +56,7 @@ vi.mock("./chat-actions", async (load) => {
 vi.mock("../../lib/panel", async (load) => ({ ...(await load<typeof import("../../lib/panel")>()), usePanel: () => null }));
 vi.mock("../assistant/Persona", () => ({ usePersona: () => ({ name: "Persona" }) }));
 
-import { applyCompleteSessions, getState, reset, type ItemsEvent } from "../../lib/store";
+import { applyCompleteSessions, applyMachine, getState, refreshTodos, reset, type ItemsEvent } from "../../lib/store";
 import { whenComposer } from "../../lib/links";
 import { closePanel, getPanel, openPanel } from "../../lib/panel";
 import { currentPlatform } from "../../lib/shortcuts";
@@ -65,7 +65,10 @@ import { ITEM_COALESCE_MS } from "../../lib/item-coalescer";
 import { withContexts } from "../../lib/context-xml";
 import { inlineBody } from "../../lib/inline-message";
 import { skillContext } from "../../lib/skill-mentions";
-import type { Item, Session } from "../../lib/types";
+import { currentRoster, resetRoster, setRoster } from "../../lib/managers";
+import { resetManagerChoice } from "../../lib/manager-choice";
+import type { Item, Machine, Session } from "../../lib/types";
+import type { Todo } from "../../lib/todos";
 import { t } from "../../i18n";
 import { ChatView } from "./ChatView";
 
@@ -80,6 +83,11 @@ const push = (seq: number, x: Partial<Item> = {}) => act(async () => {
   await new Promise((resolve) => setTimeout(resolve, ITEM_COALESCE_MS));
 });
 const zero = () => Object.assign(renders, { info: 0, chips: 0, modes: 0 });
+const updateNotice = () => host.querySelector<HTMLElement>("[data-assistant-update]");
+const waitForUpdateNotice = (label: string) => vi.waitFor(async () => {
+  await act(async () => { await vi.dynamicImportSettled(); });
+  expect(updateNotice()?.textContent).toContain(label);
+});
 
 let host: HTMLDivElement;
 let root: Root;
@@ -97,7 +105,7 @@ beforeEach(() => {
   opened = "";
   localStorage.clear();
   // the first page has one reply already, so the assistant's face starts from what the pushes keep showing
-  fetcher = vi.fn((url: string) => Promise.resolve(new Response(JSON.stringify(String(url).includes("/items") ? { items: [item(0)], to_seq: 0 } : {}), { status: 200, headers: { "Content-Type": "application/json" } })));
+  fetcher = vi.fn((url: string) => Promise.resolve(new Response(JSON.stringify(String(url).includes("/items") ? { items: [item(0)], to_seq: 0 } : String(url).endsWith("/managers") ? currentRoster() ?? {} : {}), { status: 200, headers: { "Content-Type": "application/json" } })));
   vi.stubGlobal("fetch", fetcher);
   host = document.createElement("div");
   document.body.append(host);
@@ -109,6 +117,8 @@ afterEach(() => {
   host.remove();
   live.listeners.clear();
   reset();
+  resetRoster();
+  resetManagerChoice();
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
@@ -121,7 +131,7 @@ async function open(view: React.ReactElement<{ assistant?: boolean }>, session =
     root = createRoot(host);
   }
   opened = session.session_id;
-  act(() => root.render(view));
+  await act(async () => root.render(view));
   for (let i = 0; i < 6; i++) await settle();
   const title = view.props.assistant && getState().assistant?.main === session.session_id ? "Persona" : "Checks";
   await vi.waitFor(() => expect(host.querySelector("h1")?.textContent).toBe(title)); // session-derived props are stable
@@ -134,6 +144,49 @@ async function open(view: React.ReactElement<{ assistant?: boolean }>, session =
   zero();
 }
 const posted = (path: string) => fetcher.mock.calls.filter(([url, init]) => String(url).endsWith(path) && (init as RequestInit | undefined)?.method === "POST");
+
+it("shows and answers the linked task's current decision above the Agent composer", async () => {
+  const round = "2026-11-24T09:00:00Z";
+  const task: Todo = {
+    id: "task1", title: "Release checks", created_at: round, updated_at: round,
+    agents: [{ machine_id: "mac", session_id: "s1", linked_at: round }],
+    ask: { outcome: "decide", asked_at: round, verdict: "Needs your decision", question: "How should the release proceed?",
+      recommend: "Try a staged rollout", options: [{ label: "Try a staged rollout" }, { label: "Wait for verification" }] },
+  };
+  let todos: Todo[] = [{ ...task, id: "task2", ask: { ...task.ask!, question: "A different task's decision" } }];
+  const fallback = fetcher.getMockImplementation() as typeof fetch;
+  fetcher.mockImplementation(async (url: string, init?: RequestInit) => {
+    const path = String(url);
+    if (path.endsWith("/todos/task1/accept") && init?.method === "POST") {
+      todos = [{ ...task, ask: undefined }];
+      return Response.json({});
+    }
+    return path.endsWith("/todos") ? Response.json({ todos }) : fallback(url, init);
+  });
+  const card = () => host.querySelector("[data-chat-dock-above] [data-decision-row]");
+  const reload = () => act(async () => { await refreshTodos(); });
+
+  await open(<ChatView mid="mac" sid="s1" inPage />, row({ manager: "remote-manager", todo: { id: task.id, title: task.title } }));
+  await reload();
+  expect(card()).toBeNull(); // a stale association on the to-do list cannot show another task's decision
+  todos = [{ ...task, agents: task.agents?.map((a) => ({ ...a, released_at: round })) }];
+  await reload();
+  expect(card()).toBeNull();
+
+  todos = [task];
+  await reload();
+  await act(async () => { await import("../assistant/TaskDecision"); });
+  await vi.waitFor(() => expect(card()?.querySelector("[data-decision-question]")?.textContent).toBe(task.ask?.question));
+  expect(card()?.textContent).toContain("Try a staged rollout");
+  expect(card()?.textContent).toContain(t("chat-interactions.recommended"));
+  const alternate = [...card()!.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "Wait for verification");
+  expect(alternate).toBeDefined();
+  await act(async () => { alternate!.click(); });
+  const sends = posted("/todos/task1/accept");
+  expect(sends).toHaveLength(1);
+  expect(JSON.parse((sends[0][1] as RequestInit).body as string)).toEqual({ asked_at: round, option: "Wait for verification" });
+  await vi.waitFor(() => expect(card()).toBeNull());
+});
 
 it("a completed task remains a labelled, clickable owner, not a prompt to link it again", async () => {
   const router = await import("../../lib/router");
@@ -305,6 +358,78 @@ it("the assistant: the header draws again only when what its face reads changes"
   await push(11, { role: "user" });
   expect(renders.info).toBe(1);
   expect(renders.chips).toBe(0);
+});
+
+it("follows the conversation owner's computer update and pending restart without drawing the chat chrome again", async () => {
+  const owner = { id: "work", name: "Work assistant", online: true, machine_uid: "work-host", host: "work-box" };
+  const other = { id: "assistant", name: "Personal assistant", online: true, pending_restart: true };
+  const node: Machine = { id: "linked", name: "Work computer", online: true, machine_uid: "work-host" };
+  const lookalike: Machine = { id: "different", name: "Other computer", online: true, hostname: "work-box", deploy_phase: "transferring" };
+  const roster = (pending_restart: boolean) => ({ managers: [other, { ...owner, pending_restart }], default: other.id });
+  act(() => {
+    setRoster(roster(false));
+    getState().machines = [lookalike, node];
+  });
+  await open(<ChatView mid="mac" sid="s1" assistant />, row({ manager: owner.id }));
+  const update = (deploy_phase?: Machine["deploy_phase"]) => act(async () => { applyMachine({ ...node, deploy_phase }); });
+  expect(updateNotice()).toBeNull();
+  await act(async () => {
+    applyMachine({ ...lookalike, deploy_phase: "restarting" });
+    setRoster(roster(false));
+  });
+  expect(updateNotice()).toBeNull();
+  expect(renders).toEqual({ info: 0, chips: 0, modes: 0 });
+
+  for (const phase of ["waiting_idle", "transferring"] as const) {
+    await update(phase);
+    await waitForUpdateNotice(t(`chat-assistantupdate.${phase}`));
+    expect(updateNotice()?.getAttribute("role")).toBe("status");
+    expect(updateNotice()?.textContent).toContain(t("chat-assistantupdate.reconnect"));
+  }
+  await update("draining");
+  await waitForUpdateNotice(t("chat-assistantupdate.draining"));
+  expect(updateNotice()?.getAttribute("role")).toBe("status");
+  expect(updateNotice()?.textContent).toContain(t("chat-assistantupdate.restart_when_idle"));
+  expect(updateNotice()?.textContent).not.toContain(t("chat-assistantupdate.reconnect"));
+  for (const phase of ["restarting", "confirming"] as const) {
+    await update(phase);
+    await waitForUpdateNotice(t(`chat-assistantupdate.${phase}`));
+    expect(updateNotice()?.getAttribute("role")).toBe("status");
+    expect(updateNotice()?.textContent).toContain(t("chat-assistantupdate.reconnect"));
+  }
+  act(() => setRoster(roster(true)));
+  expect(updateNotice()?.textContent).toContain(t("chat-assistantupdate.confirming"));
+  await update();
+  expect(updateNotice()?.textContent).toContain(t("chat-assistantupdate.pending_restart"));
+  expect(updateNotice()?.textContent).toContain(t("chat-assistantupdate.restart_when_idle"));
+  act(() => setRoster(roster(false)));
+  expect(updateNotice()).toBeNull();
+  expect(renders).toEqual({ info: 0, chips: 0, modes: 0 });
+});
+
+it("matches a legacy host by hostname and keeps the notice out of Agent sessions", async () => {
+  const manager = { id: "work", name: "Work assistant", online: true, host: "work-box" };
+  const node: Machine = { id: "linked", name: "Work computer", online: true, hostname: "WORK-BOX", deploy_phase: "transferring" };
+  act(() => {
+    setRoster({ managers: [manager], default: manager.id });
+    getState().machines = [node];
+  });
+  await open(<ChatView mid="mac" sid="s1" inPage />, row({ manager: manager.id }));
+  expect(updateNotice()).toBeNull();
+  await open(<ChatView mid="mac" sid="s2" assistant />, row({ session_id: "s2", manager: manager.id }));
+  await waitForUpdateNotice(t("chat-assistantupdate.transferring"));
+});
+
+it("follows a conversation's own computer on a hub that predates the roster and deploy phases", async () => {
+  const node: Machine = { id: "mac", name: "Example computer", online: true };
+  getState().machines = [node];
+  await open(<ChatView mid="mac" sid="s1" assistant />);
+  expect(updateNotice()).toBeNull();
+  await act(async () => { applyMachine({ ...node, deploying: true }); });
+  await waitForUpdateNotice(t("chat-assistantupdate.updating"));
+  act(() => applyMachine({ ...node, deploying: false }));
+  expect(updateNotice()).toBeNull();
+  expect(renders).toEqual({ info: 0, chips: 0, modes: 0 });
 });
 
 it("the main conversation's composer has the model pill, without an effort chip (#5032, #5033)", async () => {

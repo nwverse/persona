@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/taskworkspace"
@@ -53,7 +54,9 @@ type PlanTask struct {
 	InboxHandoff string `json:"inbox_handoff,omitempty"`
 	// MachinePolicy defaults to fixed; only explicit flexible tasks may move to another machine.
 	MachinePolicy string `json:"machine_policy,omitempty"`
-	Cwd           string `json:"cwd"`
+	// PlacementConstraints restricts automatic machine selection when Machine is omitted.
+	PlacementConstraints *assistantwire.PlacementConstraints `json:"placement_constraints,omitempty"`
+	Cwd                  string                              `json:"cwd"`
 	// Repo: the Git repository the task runs in on Machine (taskRunDir: the workspace it resolved to, which can be
 	// another repository than Cwd's), named by its main checkout, so that every worktree of one repository is one kind
 	// the user can let start without asking (trustKey, #8259). "" when that folder is in no repository or the machine
@@ -170,6 +173,7 @@ type PlanTask struct {
 	// a to-do (todo_id) keeps that to-do's own. Not what the apps send back with an edit.
 	PartOf      string   `json:"part_of,omitempty"`
 	After       []string `json:"after,omitempty"`
+	BlockedByPR []string `json:"blocked_by_pr,omitempty"`
 	RequestGate string   `json:"request_gate,omitempty"`
 	// Project: the knowledge-base project the task's todo goes in (#2581, todo_project.go), checked and kept as its slug
 	// when the plan is made; "" for none.
@@ -215,6 +219,8 @@ type PlanTask struct {
 	inPane    string
 	planID    string
 	planIndex int
+	// The preview is metadata-only until admission saves its naming operation.
+	dispatchedWorkspace *dispatchedWorkspacePlan
 	// cwdStatus: what worktree.status said of cwdStatusOf (machine NUL cleaned cwd) in this resolve, kept so that
 	// resolveTaskRepo does not ask the machine twice for that folder. Never serialized.
 	cwdStatus   *proto.WorktreeStatus
@@ -259,7 +265,8 @@ type PlanTask struct {
 	// admissionRelease, once the admission gate passed, releases this start's held machine/direction slot. It is kept
 	// across the whole start (not the session.start RPC alone) and run when the agent is linked or the start failed for
 	// good, so the slot stays counted through the metrics/ledger gap. Never serialized (admission.go).
-	admissionRelease func()
+	admissionRelease      func()
+	admissionClaimMachine string
 }
 
 // Keep the default protection unless the owner opted into instructions only. Spawned helpers keep their caller's mode.
@@ -327,7 +334,8 @@ func (s *Service) settleDelay(ctx context.Context) time.Duration {
 }
 
 type tasksState struct {
-	mu sync.Mutex
+	mu             sync.Mutex
+	closedTurnLogs []closedTurnLog // least recently seen first, protected by mu
 	// recoverBefore excludes starts admitted by this service before its background loops begin.
 	recoverBefore time.Time
 	// completionMu serializes a resumed turn with committing an earlier judgment.
@@ -362,6 +370,10 @@ type tasksState struct {
 	// sendsAcceptedUnread: by task, the latest acceptance made before the sends kept before were read (sendsAccepted),
 	// applied to them as they are read (loadSendsOut); under mu.
 	sendsAcceptedUnread map[string]time.Time
+	// closedTurnLogged tracks ignored-turn diagnostic lines already emitted for closed tasks so reused long-lived
+	// sessions do not spam repeated "left closed" / "ended a turn: dropped" lines on every unrelated turn (#16421);
+	// keyed by (task, DoneAt, agent, start/end), guarded by mu, and capped in size.
+	closedTurnLogged map[closedTurnLogKey]struct{}
 	// retrying: the tasks whose agent is starting (again), one start at a time: a Retry after a failed start (#1396), a
 	// Continue, a new agent after all of the task's stopped (startTaskSuccessor), or a plan taking the to-do over
 	// (todo_id, takeTodoForTask: taking). A message on the card that would start another waits for that one and goes

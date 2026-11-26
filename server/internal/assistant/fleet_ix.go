@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -81,7 +82,20 @@ type pending struct {
 	// when the user views the card in an app (owner_card_expiry.go).
 	seenTTL         time.Duration
 	deadlineChanged chan struct{}
+	// remindTimer fires once after pendingReminderDelay to re-push an unanswered owner-facing card (#16159).
+	remindTimer *time.Timer
+	reminded    bool
 }
+
+func (p *pending) stopReminderLocked() {
+	if p != nil && p.remindTimer != nil {
+		p.remindTimer.Stop()
+		p.remindTimer = nil
+	}
+}
+
+// pendingReminderDelay is how long an unanswered owner-facing approval card waits before one follow-up push (#16159).
+var pendingReminderDelay = 30 * time.Minute
 
 // resumeGrace is how long a resumable interaction outlives its node: a little longer than hooks keep reconnecting
 // (nodeclient.ResumeWait).
@@ -164,6 +178,7 @@ func (s *Service) tellApps(ix proto.Interaction) proto.Interaction {
 	s.tellCard(ix)
 	s.publishSessions(ix.MachineID)
 	s.liveChanged(false) // whether it is told counts for Persona Link's summary, not for the list
+	s.cardStateChanged(ix)
 	return ix
 }
 
@@ -176,9 +191,59 @@ func (s *Service) tellUser(ix proto.Interaction, push bool) {
 	s.recordConfirmationNotification(ix)
 	if push && !s.muted(ix.MachineID, ix.SessionID) {
 		s.notifyInteraction(ix, s.machineName(ix.MachineID), s.linkCovers(ix))
+		s.armPendingReminder(ix)
 		go s.threadAgentAsks(ix) // and the topic of the todo this agent works on, if it has one
 	}
 	s.InteractionAnnounced(context.Background(), InteractionAnnounced{Interaction: ix}) // the Feishu bot, the channels
+}
+
+// reminderEligible reports whether an owner-facing card should receive one follow-up push when left unanswered (#16159).
+func reminderEligible(ix proto.Interaction) bool {
+	return ix.Kind == proto.IxPermission || ix.Kind == proto.IxQuestion || ix.Kind == proto.IxPlan
+}
+
+// armPendingReminder schedules at most one follow-up push after pendingReminderDelay for a pending, told
+// approval card whose remaining lifetime exceeds the delay (#16159).
+func (s *Service) armPendingReminder(ix proto.Interaction) {
+	delay := pendingReminderDelay
+	if delay <= 0 || !reminderEligible(ix) {
+		return
+	}
+	if !ix.NoExpiry && !ix.ExpiresAt.IsZero() && time.Until(ix.ExpiresAt) <= delay {
+		return
+	}
+	s.fleet.mu.Lock()
+	p := s.fleet.interactions[ix.ID]
+	if p == nil || p.claimed || p.graceEnded || !p.told || p.reminded || p.remindTimer != nil {
+		s.fleet.mu.Unlock()
+		return
+	}
+	p.remindTimer = time.AfterFunc(delay, func() { s.firePendingReminder(ix.ID, p) })
+	s.fleet.mu.Unlock()
+}
+
+func (s *Service) firePendingReminder(id string, p *pending) {
+	s.fleet.mu.Lock()
+	if s.fleet.interactions[id] != p || p.claimed || p.graceEnded || !p.told || p.reminded {
+		s.fleet.mu.Unlock()
+		return
+	}
+	if a := p.prepared; a != nil && (a.terminal || a.paused) {
+		p.remindTimer = nil
+		s.fleet.mu.Unlock()
+		return
+	}
+	p.reminded = true
+	p.remindTimer = nil
+	ix := p.ix
+	s.fleet.mu.Unlock()
+	if !ix.NoExpiry && !ix.ExpiresAt.IsZero() && !time.Now().Before(ix.ExpiresAt) {
+		return
+	}
+	if s.directoryHiddenSession(ix.MachineID, ix.SessionID) || s.muted(ix.MachineID, ix.SessionID) || s.quietSession(ix.MachineID, ix.SessionID) {
+		return
+	}
+	s.notifyInteraction(ix, s.machineName(ix.MachineID), s.linkCovers(ix))
 }
 
 // show puts a card on every app without a push: one they were told about already (a way back), or one that is not the
@@ -186,9 +251,11 @@ func (s *Service) tellUser(ix proto.Interaction, push bool) {
 // user's (pending.told): only tell does.
 func (s *Service) show(ix proto.Interaction) {
 	s.taskPlanApproval()
-	s.tellCard(s.withTask(ix))
+	shown := s.withTask(ix)
+	s.tellCard(shown)
 	s.publishSessions(ix.MachineID)
 	s.liveChanged(false) // the card, and whether the assistant decides on it, count for Persona Link's summary
+	s.cardStateChanged(shown)
 }
 
 // tellCard gives the hub card ix (fleet.interaction), as tellApps and show do. A card can end while it is on its way:
@@ -234,6 +301,8 @@ func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (pr
 	ix.ApprovalBatchID, ix.ApprovalItemID = "", ""
 	ix.OwnerProposal, ix.NoExpiry = false, false
 	ix.OwnerApprovalPhrases = nil
+	ix.NoHandBack = false
+	ix.OutwardWrite = ix.OutwardWrite && ix.Kind == proto.IxPermission
 	if reservedCard(ix) {
 		return proto.Resolution{}, errReservedCard
 	}
@@ -241,10 +310,14 @@ func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (pr
 	if ix.Kind == proto.IxQuestion && proto.HasDuplicateQuestionText(ix.Questions) {
 		return proto.Resolution{}, i18n.Err("hub-hub.duplicate_question")
 	}
-	// Plan mode enforces a read-only task's launch constraint. Its supervisor report may run once,
-	// but exiting plan mode must still be denied. Neither path registers a card or grants permissions.
+	// Plan mode enforces a read-only task's launch constraint. Its supervisor report and strictly read-only
+	// inspection Bash commands may run once without a card, while exiting plan mode stays denied and any write,
+	// ambiguous, credential-touching or inbox-origin Bash command still asks. Neither path registers a card or grants permissions.
 	report := ix.Kind == proto.IxPermission && slices.Contains(compat.MCPToolNames([]string{"report_to_supervisor"}), ix.ToolName)
-	if ix.Kind == proto.IxPlan && ix.ToolName == "ExitPlanMode" || report {
+	safeReadonlyBash := ix.Kind == proto.IxPermission && ix.ToolName == "Bash" &&
+		!s.isInboxOrigin(ctx, ix.MachineID, ix.SessionID, false) &&
+		readonlyTaskSafeBash(ix.ToolInput, ix.Cwd)
+	if ix.Kind == proto.IxPlan && ix.ToolName == "ExitPlanMode" || report || safeReadonlyBash {
 		if todo, ok := s.taskOf(ctx, ix.MachineID, ix.SessionID); ok {
 			plans, err := s.conversationPlans(ctx, todo.Origin)
 			if err != nil {
@@ -260,6 +333,10 @@ func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (pr
 							if todo.Supervision == nil || todo.Supervision.Supervisor == "" {
 								continue
 							}
+							allow := true
+							return proto.Resolution{Allow: &allow}, nil
+						}
+						if safeReadonlyBash {
 							allow := true
 							return proto.Resolution{Allow: &allow}, nil
 						}
@@ -287,6 +364,9 @@ func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (pr
 	}
 	ix.Detachable = ix.Detachable && ix.Kind == proto.IxPermission && ix.SessionID != "" && inAssistant &&
 		len(ix.ToolInput) > 0 && ix.ExecutionCwd != ""
+	if ix.Kind == proto.IxPermission {
+		ix.NoHandBack = s.permissionNoHandBack(ix, inAssistant)
+	}
 	if ix.Detachable && ix.Resumable {
 		// The original request is never its own continuation. In particular it
 		// must not spend its unused grant or re-enter through a newly stored
@@ -349,6 +429,9 @@ func (s *Service) waitRegisteredInteraction(ctx context.Context, ix proto.Intera
 	ix = cleanTitle(ix)
 	// Only an operation registered by this process can advertise clarification.
 	ix.CanClarify = prepared != nil
+	if ix.Kind == proto.IxPermission && (prepared != nil || ix.OwnerProposal) {
+		ix.NoHandBack = true
+	}
 	// A Just me turn's card, the node's or the manager's own (ask_user, a confirmation): pushed without its content,
 	// never to Lark or a channel (meeting_justme.go).
 	ix.Private = ix.Private || s.justMeNow(ix.MachineID, ix.SessionID)
@@ -366,6 +449,8 @@ func (s *Service) waitRegisteredInteraction(ctx context.Context, ix proto.Intera
 	again := false
 	if ix.Resumable && !freshLogical {
 		restartPrepared := false
+		upgradedNoHandBack := false
+		var updatedIx proto.Interaction
 		s.fleet.mu.Lock()
 		if p := s.fleet.interactions[ix.ID]; p != nil && p.local == nil {
 			if !p.claimed && len(p.ix.AlwaysKeys) > 0 && len(ix.AlwaysKeys) == 0 && ix.AlwaysHonored != nil && !*ix.AlwaysHonored {
@@ -373,6 +458,10 @@ func (s *Service) waitRegisteredInteraction(ctx context.Context, ix proto.Intera
 				// retain a previously stripped/disallowed Always option (#15267).
 				p.ix.AlwaysKeys = nil
 				p.ix.AlwaysHonored = ix.AlwaysHonored
+			}
+			if !p.claimed && ix.NoHandBack && !p.ix.NoHandBack {
+				p.ix.NoHandBack = true
+				upgradedNoHandBack = true
 			}
 			if p.prepared != nil {
 				// The reconnecting hook is now the caller whose lifetime governs the
@@ -406,7 +495,13 @@ func (s *Service) waitRegisteredInteraction(ctx context.Context, ix proto.Intera
 				}
 				restartPrepared = true
 			}
+			if upgradedNoHandBack {
+				updatedIx = p.ix
+			}
 			s.fleet.mu.Unlock()
+			if upgradedNoHandBack {
+				s.show(updatedIx)
+			}
 			if restartPrepared {
 				s.startPreparedTimer(p)
 			}
@@ -938,6 +1033,7 @@ func (s *Service) resolveActiveAnswer(ctx context.Context, id string, r proto.Re
 		return fmt.Errorf("standing authorizations require a hook-waited card")
 	}
 	if p != nil && p.local != nil {
+		p.stopReminderLocked()
 		delete(s.fleet.interactions, id) // claimed: a second answer to the same card is not pending any more
 		if p.ix.Kind == proto.IxScreen && !r.Dismiss {
 			// Marked before the keys go: the node's next list may come while they are on the way (#4391).
@@ -993,7 +1089,7 @@ func (s *Service) resolveActiveAnswer(ctx context.Context, id string, r proto.Re
 			back := s.fleet.interactions[id] == p
 			s.fleet.mu.Unlock()
 			if back { // a Codex card the node could not answer is open again (codexPending): it is not over
-				go s.InteractionResolved(context.Background(), InteractionResolved{Interaction: p.ix, Resolution: told, Status: status})
+				s.interactionResolvedSoon(context.Background(), InteractionResolved{Interaction: p.ix, Resolution: told, Status: status})
 				return err
 			}
 		} else {
@@ -1006,7 +1102,7 @@ func (s *Service) resolveActiveAnswer(ctx context.Context, id string, r proto.Re
 		}
 		s.recordEndBy(id, status, by, &kept)
 		s.finished(p)
-		go s.InteractionResolved(context.Background(), InteractionResolved{Interaction: p.ix, Resolution: told, Status: status})
+		s.interactionResolvedSoon(context.Background(), InteractionResolved{Interaction: p.ix, Resolution: told, Status: status})
 		return err
 	}
 	if authorization != nil {
@@ -1024,7 +1120,7 @@ func (s *Service) resolveActiveAnswer(ctx context.Context, id string, r proto.Re
 	if ownerOnlyTimedCard(p.ix) {
 		s.clearOwnerActionCardWait(p.ix)
 	}
-	go s.InteractionResolved(context.Background(), InteractionResolved{Interaction: p.ix, Resolution: told, Status: status})
+	s.interactionResolvedSoon(context.Background(), InteractionResolved{Interaction: p.ix, Resolution: told, Status: status})
 	if remember {
 		s.keepAlways(p.ix, r) // kept before the hook hears: its next card may follow at once
 	}
@@ -1130,8 +1226,11 @@ func (s *Service) finishInteraction(id string) {
 	s.fleet.mu.Lock()
 	p, ok := s.fleet.interactions[id]
 	delete(s.fleet.interactions, id)
-	if ok && p.orphaned != nil {
-		p.orphaned.Stop()
+	if ok {
+		if p.orphaned != nil {
+			p.orphaned.Stop()
+		}
+		p.stopReminderLocked()
 	}
 	s.fleet.mu.Unlock()
 	if ok {
@@ -1161,6 +1260,7 @@ func (s *Service) finished(p *pending) {
 	// the app marks a question the assistant answered, and why (docs/assistant/assistant.md)
 	s.tellResolved(done)
 	s.publishSessions(p.ix.MachineID)
+	s.cardStateChanged(p.ix)
 }
 
 // The hub treats omissions from a reconnect inventory as resolutions. Order the read and the
@@ -1268,18 +1368,160 @@ func (s *Service) refreshPendingCards() {
 
 // pendingOf are the pending interactions of the sessions in want (by computer, the session ids), by computer and
 // session, as they are held, in no order: without the task each agent works for (withTask), which a to-do's view
-// does not read. A list read copies only its runs' few cards this way, never the whole fleet's.
+// does not read. Claimed cards are skipped, machine IDs are canonicalized, and folded sub-agent / side-session cards
+// are resolved to their folded parent outside fleet.mu so to-do projections see supervisor-held child cards.
 func (s *Service) pendingOf(want map[string]map[string]bool) map[[2]string][]proto.Interaction {
 	out := map[[2]string][]proto.Interaction{}
+	if len(want) == 0 {
+		return out
+	}
 	s.fleet.mu.Lock()
-	defer s.fleet.mu.Unlock()
+	snap := make([]proto.Interaction, 0, len(s.fleet.interactions))
 	for _, p := range s.fleet.interactions {
-		if want[p.ix.MachineID][p.ix.SessionID] {
-			k := [2]string{p.ix.MachineID, p.ix.SessionID}
-			out[k] = append(out[k], p.ix)
+		if !p.claimed {
+			snap = append(snap, p.ix)
+		}
+	}
+	s.fleet.mu.Unlock()
+	if len(snap) == 0 {
+		return out
+	}
+	canonWant := make(map[string]map[string]bool, len(want))
+	for m, ids := range want {
+		cm := s.canonical(m)
+		if canonWant[cm] == nil {
+			canonWant[cm] = map[string]bool{}
+		}
+		for sid, ok := range ids {
+			if ok {
+				canonWant[cm][sid] = true
+			}
+		}
+	}
+	seen := map[[2]string]map[string]bool{}
+	emit := func(m, sid string, ix proto.Interaction) {
+		if !canonWant[m][sid] {
+			return
+		}
+		k := [2]string{m, sid}
+		if seen[k] == nil {
+			seen[k] = map[string]bool{}
+		}
+		if ix.ID != "" && seen[k][ix.ID] {
+			return
+		}
+		if ix.ID != "" {
+			seen[k][ix.ID] = true
+		}
+		out[k] = append(out[k], ix)
+	}
+	for _, ix := range snap {
+		mid := s.canonical(ix.MachineID)
+		ix.MachineID = mid
+		if ix.FoldedUnder == "" {
+			underMid, under, as, side := s.foldedUnderWithMachine(mid, ix.SessionID)
+			if under != "" {
+				ix.FoldedUnder = under
+				ix.FoldedAs = as
+				ix.FoldedSide = side
+				if underMid != "" {
+					ix.FoldedUnderMachineID = s.canonical(underMid)
+				}
+			}
+		} else if ix.FoldedUnderMachineID != "" {
+			ix.FoldedUnderMachineID = s.canonical(ix.FoldedUnderMachineID)
+		}
+		emit(mid, ix.SessionID, ix)
+		if ix.FoldedUnder != "" {
+			emit(cmp.Or(ix.FoldedUnderMachineID, mid), ix.FoldedUnder, ix)
+		}
+		if ix.FoldedSide != "" {
+			emit(mid, ix.FoldedSide, ix)
 		}
 	}
 	return out
+}
+
+// heldOnlySessions returns canonical (machine, session) keys whose pending cards (direct or folded) are all held by a
+// supervisor or assistant (Delegating == true), with at least one pending card and zero non-delegating owner cards.
+func (s *Service) heldOnlySessions() map[[2]string]bool {
+	s.fleet.mu.Lock()
+	snap := make([]proto.Interaction, 0, len(s.fleet.interactions))
+	for _, p := range s.fleet.interactions {
+		if !p.claimed {
+			snap = append(snap, p.ix)
+		}
+	}
+	s.fleet.mu.Unlock()
+	if len(snap) == 0 {
+		return nil
+	}
+	type flags struct {
+		held bool
+		user bool
+	}
+	bySession := map[[2]string]flags{}
+	mark := func(m, sid string, delegating bool) {
+		if m == "" || sid == "" {
+			return
+		}
+		k := [2]string{m, sid}
+		st := bySession[k]
+		if delegating {
+			st.held = true
+		} else {
+			st.user = true
+		}
+		bySession[k] = st
+	}
+	for _, ix := range snap {
+		mid := s.canonical(ix.MachineID)
+		underMid, under, _, side := s.foldedUnderWithMachine(mid, ix.SessionID)
+		if under == "" && ix.FoldedUnder != "" {
+			under, underMid, side = ix.FoldedUnder, ix.FoldedUnderMachineID, ix.FoldedSide
+		}
+		mark(mid, ix.SessionID, ix.Delegating)
+		if under != "" {
+			mark(s.canonical(cmp.Or(underMid, mid)), under, ix.Delegating)
+		}
+		if side != "" {
+			mark(mid, side, ix.Delegating)
+		}
+	}
+	out := map[[2]string]bool{}
+	for k, st := range bySession {
+		if st.held && !st.user {
+			out[k] = true
+		}
+	}
+	return out
+}
+
+// cardStateChanged refreshes todo views and the direction tree when a card is routed, escalated, or resolved, even if
+// the machine's serialized session list did not change (for example, flipping Delegating on a pending card or updating
+// a cross-machine folded sub-agent's card).
+func (s *Service) cardStateChanged(ix proto.Interaction) {
+	mid := s.canonical(ix.MachineID)
+	underMid, under, _, _ := s.foldedUnderWithMachine(mid, ix.SessionID)
+	if under == "" && ix.FoldedUnder != "" {
+		under, underMid = ix.FoldedUnder, ix.FoldedUnderMachineID
+	}
+	notify := func(machine string) {
+		if machine == "" {
+			return
+		}
+		s.todoRunsChanged(machine)
+		if s.todoRunsOn(machine) {
+			s.directionTreeSoon()
+		}
+	}
+	notify(mid)
+	if under != "" {
+		parentMid := s.canonical(cmp.Or(underMid, mid))
+		if parentMid != mid {
+			notify(parentMid)
+		}
+	}
 }
 
 // pendingIx is one pending interaction; false when it is not pending.
@@ -1433,17 +1675,79 @@ func honest(ix proto.Interaction, r proto.Resolution) proto.Resolution {
 
 // ownCard is a permission card the manager asks itself (its tools', the extensions', the hub's persona_settings): its
 // Always is kept only where the card says what it keeps (AlwaysLabel: the apps a computer may use, LCU's own scopes),
-// nowhere else, and the tool gets its name for people when the catalog has one.
+// nowhere else, and the tool gets its name for people when the catalog has one. Manager-owned permission cards have no
+// computer terminal to hand back to, so NoHandBack is always set.
 func (s *Service) ownCard(ctx context.Context, ix proto.Interaction) proto.Interaction {
 	if ix.Kind != proto.IxPermission {
 		return ix
 	}
+	ix.NoHandBack = true
 	kept := strings.TrimSpace(ix.AlwaysLabel) != ""
 	ix.AlwaysHonored = &kept
 	if ix.ToolTitle == "" {
 		ix.ToolTitle = toolTitle(s.lang(ctx), ix.ToolName)
 	}
 	return ix
+}
+
+// permissionNoHandBack reports whether a node permission card has no interactive computer terminal or UI to hand
+// back to: headless assistant conversations (Claude -p, Codex app-server, AGY ACP), command-gate approvals
+// (Detachable / OutwardWrite), and headless ACP companions (Antigravity, Grok / grok-chat, builtin OpenCode
+// companion) where dismiss cancels or denies instead of handing the request back to a terminal.
+func (s *Service) permissionNoHandBack(ix proto.Interaction, inAssistant bool) bool {
+	if ix.Kind != proto.IxPermission {
+		return false
+	}
+	if inAssistant || ix.Detachable || ix.OutwardWrite {
+		return true
+	}
+	if row, ok := s.nodeSession(ix.MachineID, ix.SessionID); ok {
+		if row.PaneID == "" {
+			if row.Assistant {
+				return true
+			}
+			if m, ok := s.fleetMachine(ix.MachineID); ok && m.isAssistant(row) {
+				return true
+			}
+		}
+		if row.SourceKind == proto.SourceRuntime && row.SourceInstanceID != "" {
+			if interactivePermissionRuntimeHost(row.SourceInstanceID) {
+				return false
+			}
+			if headlessPermissionRuntimeInstance(row.SourceInstanceID) {
+				return true
+			}
+			return headlessPermissionAgent(row.Agent) || headlessPermissionAgent(ix.Agent)
+		}
+		if headlessPermissionAgent(row.Agent) {
+			return true
+		}
+	}
+	return headlessPermissionAgent(ix.Agent)
+}
+
+// interactivePermissionRuntimeHost reports runtime hosts with a local computer TUI, desktop app, or web UI
+// where handing a permission card back (dismiss) lets the user answer it there instead of cancelling the call.
+func interactivePermissionRuntimeHost(instanceID string) bool {
+	switch instanceID {
+	case "paseo", "orca", "cindy", "dsh", "managed-agents":
+		return true
+	}
+	return strings.HasPrefix(instanceID, "opencode-") || strings.HasPrefix(instanceID, "dsh-")
+}
+
+// headlessPermissionRuntimeInstance reports runtime instance IDs whose own permission bridge is headless ACP.
+func headlessPermissionRuntimeInstance(instanceID string) bool {
+	switch instanceID {
+	case "agy", "grok", "grok-chat", "opencode":
+		return true
+	}
+	return false
+}
+
+// headlessPermissionAgent reports agents whose non-hosted permission cards come from a headless ACP companion.
+func headlessPermissionAgent(agent string) bool {
+	return agent == "agy" || agent == "grok"
 }
 
 // toolTitle is one of the manager's own tools by its name for people ("iPhone control"), "" for any other.
@@ -1698,6 +2002,19 @@ func (s *Service) restoreStoredInteractions(ctx context.Context, st staleInterac
 			resumable[i].AlwaysKeys = nil
 			notKept := false
 			resumable[i].AlwaysHonored = &notKept
+		}
+		if resumable[i].Kind == proto.IxPermission {
+			inAssistant := false
+			if resumable[i].Cwd != "" {
+				inAssistant = s.ixInAssistant(ctx, resumable[i])
+			} else {
+				lookupCtx, cancel := context.WithTimeout(ctx, historyTimeout)
+				inAssistant = s.ixInAssistant(lookupCtx, resumable[i])
+				cancel()
+			}
+			if resumable[i].OwnerProposal || resumable[i].Detachable || s.permissionNoHandBack(resumable[i], inAssistant) {
+				resumable[i].NoHandBack = true
+			}
 		}
 	}
 	if recStore, ok := s.store().(interactionRecorder); ok && len(cancelled) > 0 {

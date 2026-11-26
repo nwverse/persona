@@ -196,6 +196,9 @@ export function triage(todo: Todo, lookup: SessionLookup | undefined, now: numbe
   // a decision the owner chose Don't handle on no longer waits on them (decisionDismissed)
   if (!decisionDismissed(todo) && waitsForOwner(todo)) return at("waiting", "owner_decides");
   if (heldDelivery(todo)?.unblock === "user") return at("waiting", "delivery_ok");
+  // A projected wait includes run, step and active-blocker waits that have no local park or PR record.
+  // Live owner requests above still have an actionable home.
+  if (todo.wait != null && !todo.done_at) return at("parked", todo.wait.kind === "pr_merge" ? "pr_open" : "parked");
   // rule 8's signals, read here so rule 9 yields to them: a turn or review still awaiting acceptance stays Just finished
   const finished = status === "unread" || review === "pending_review" || (ask && !ask.outcome) || ask?.outcome === "done";
   const acceptanceRequired = review === "pending_review" || Boolean(todo.supervision?.supervisor);
@@ -314,9 +317,38 @@ export function viewWaitsOnOwner(todo: Todo): OwnerWait | null | undefined {
     case "interrupted":
     case "stopped_unfinished":
       return "agent_asks";
-    default:
+    case "owner_decides":
+    case "verify":
+    case "steps_proposed":
+    case "signin":
+    case "can_wait":
+    case "awaits_reply":
+    case "persona_working":
+    case "agent_running":
+    case "starting":
+    case "queued":
+    case "background":
+    case "closed_unseen":
+    case "completed":
+    case "canceled":
+    case "reported":
+    case "superseded":
+    case "parked":
+    case "finished_unseen":
+    case "finished_recent":
+    case "pr_open":
+    case "usage_limit":
+    case "computer_offline":
+    case "scheduled_report":
+    case "someone_else":
+    case "finished_seen":
+    case "deferred":
+    case "rest":
       return "owner_decides";
   }
+  // TodoReason is closed and VIEW_REASONS let through only its values: a new one fails to compile above.
+  const exhaustive: never = v.reason;
+  return exhaustive;
 }
 
 /**

@@ -111,12 +111,16 @@ func (s *Service) logicalCall(ctx context.Context, machine, method string, raw j
 		}
 		return nil, true, logicalRefusal(ctx, "message_id_required")
 	}
-	if method == DeviceSessionItems || method == "session.item" || method == "session.image" || method == DeviceAssistantHandoff {
+	navigation := method == proto.MethodSessionInputPreviews || method == proto.MethodSessionItemsWindow
+	if method == DeviceSessionItems || method == "session.item" || method == "session.image" || method == DeviceAssistantHandoff || navigation {
 		var out json.RawMessage
 		for attempt := 0; attempt < 3; attempt++ {
 			out, err = s.logicalHistoryCall(ctx, st, c, method, raw)
 			if !errors.Is(err, db.ErrConversationHistoryChanged) {
 				break
+			}
+			if navigation {
+				return nil, true, &rpc.Error{Code: proto.CodeNavigationChanged, Message: i18n.T(i18n.From(ctx), "chat-navigation.history_changed")}
 			}
 			if attempt == 2 {
 				break
@@ -134,6 +138,23 @@ func (s *Service) logicalCall(ctx context.Context, machine, method string, raw j
 	active, ok := c.Active()
 	if !ok {
 		return nil, true, logicalRefusal(ctx, "unavailable")
+	}
+	if logicalSendMethod(method) && c.Switch == nil && s.isVanishedZeroTurnSegment(ctx, c, active) {
+		client, _ := p["client_msg_id"].(string)
+		if client == "" {
+			client, _ = p["once_id"].(string)
+		}
+		if _, external := ctx.Value(logicalTransportKey{}).(devicewire.NodeCall); !external || client != "" {
+			recovered, err := s.beginZeroTurnRecoverySwitch(ctx, st, c, active)
+			if err != nil {
+				return nil, true, err
+			}
+			c = recovered
+			active, ok = c.Active()
+			if !ok {
+				return nil, true, logicalRefusal(ctx, "unavailable")
+			}
+		}
 	}
 	if method == "session.watch" || method == "session.unwatch" {
 		s.logical.mu.Lock()
@@ -276,6 +297,15 @@ func (s *Service) logicalCall(ctx context.Context, machine, method string, raw j
 				}
 			}
 			physical["history"] = active.SourceHistory
+		}
+		if active.Ordinal > 1 && (logicalSendMethod(method) || method == assistantwire.DeviceAssistantAnswerAgain) {
+			marker, ok := s.store().(logicalSegmentInputStore)
+			if !ok {
+				return logicalRefusal(ctx, "unavailable")
+			}
+			if err := marker.MarkConversationSegmentDispatched(ctx, machine, id, active.ID); err != nil {
+				return err
+			}
 		}
 		var e error
 		dispatched = true

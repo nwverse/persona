@@ -13,7 +13,7 @@ import (
 )
 
 // LookupExternalBindings returns all matches, starting with the most specific node of a canonical path.
-// Repository links follow explicit bindings for the same node.
+// Existing repository and Lark topic links follow explicit bindings for the same node.
 func (s *Store) LookupExternalBindings(ctx context.Context, path []assistantwire.ExternalRef) (assistantwire.ExternalBindingLookup, error) {
 	out := assistantwire.ExternalBindingLookup{Path: path}
 	if len(path) == 0 {
@@ -37,22 +37,53 @@ func lookupMatches(ctx context.Context, tx pgx.Tx, path []assistantwire.External
 		return nil, err
 	}
 	item := path[0]
-	if item.Provider != assistantwire.ExternalProviderGitHub || item.Item == (assistantwire.ExternalRefNode{}) {
+	if item.Item == (assistantwire.ExternalRefNode{}) {
 		return matches, nil
 	}
-	repo, link, err := externalbindingadapt.RepositoryLinkIdentity(item)
-	if err != nil {
-		return nil, err
+	var projected []assistantwire.ExternalBindingMatch
+	switch {
+	case item.Provider == assistantwire.ExternalProviderGitHub:
+		repo, link, err := externalbindingadapt.RepositoryLinkIdentity(item)
+		if err != nil {
+			return nil, err
+		}
+		projected, err = projectedMatches(ctx, tx, &repo.InstanceURL, &repo.Path, &link)
+		if err != nil {
+			return nil, err
+		}
+	case item.Provider == "lark" && item.Channel == "":
+		match, err := legacyLarkTopic(ctx, tx, item)
+		if err != nil {
+			return nil, err
+		}
+		if match != nil {
+			projected = append(projected, *match)
+		}
 	}
-	projected, err := projectedMatches(ctx, tx, &repo.InstanceURL, &repo.Path, &link)
-	if err != nil {
-		return nil, err
+	if len(projected) == 0 {
+		return matches, nil
 	}
 	afterItem := 0
 	for afterItem < len(matches) && matches[afterItem].ExternalRef == item {
 		afterItem++
 	}
 	return slices.Insert(matches, afterItem, projected...), nil
+}
+
+// The legacy bot has one pairing and its topic link carries no account selector.
+// Only the default Lark channel can use it. The native link remains authoritative.
+func legacyLarkTopic(ctx context.Context, tx pgx.Tx, ref assistantwire.ExternalRef) (*assistantwire.ExternalBindingMatch, error) {
+	match := assistantwire.ExternalBindingMatch{
+		ExternalRef: ref, Source: assistantwire.ExternalBindingLarkTopic, TargetKind: assistantwire.ExternalTargetTodo,
+	}
+	err := tx.QueryRow(ctx, `
+		SELECT id FROM todos WHERE thread IS NOT NULL
+		AND thread->>'channel' = 'feishu' AND thread->>'chat_id' = $1 AND thread->>'thread_id' = $2`,
+		ref.Container.ID, ref.Item.ID).Scan(&match.TargetID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	return &match, err
 }
 
 // ExternalSourceSummary describes saved data flows, including read-only repository projections.
