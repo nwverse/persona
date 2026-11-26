@@ -7006,12 +7006,13 @@ Manager routes and the operation snapshot contract are documented in
 
 | Node method | Input and result |
 | --- | --- |
-| `workspace.naming.resolve` | `workspacenaming.Source` → `Preview {status, sample, plan?, diagnostics[]}`. The target supplies `NodeContext`; paths may be absent on disk. Version `workspace-naming/v1`. Local format validation only, with no resource creation, Git network access or Engine call. |
+| `workspace.naming.resolve` | `workspacenaming.Source` → `Preview {status, sample, plan?, diagnostics[], system_defaults?, branch_sources?}`. The target supplies `NodeContext`. Existing path components use the same symlink and scope checks as prepare. Missing paths are valid. Version `workspace-naming/v1`. |
+| `workspace.naming.local-source` | `{cwd, task_branch?}` → `{repository?, existing_path?, error?}`. Read-only discovery of the selected computer's local Git store, exact commit, and starting ref. A plain directory returns no repository even with Git unavailable. A checkout that Git cannot read returns `source_unavailable`. An explicitly named branch with a checkout returns its path for existing-checkout admission. Other source codes include `no_commits` and `source_invalid`. |
 
-Legacy workspace resolution and `new/existing/none` do not call this method.
-The new Assistant view field `workspace_naming_version` advertises manager
-support; an unavailable computer or unsupported method never falls back to an
-Engine naming path.
+The Assistant view's `workspace_naming_version` advertises naming support and `system_defaults`
+contains the built-in rules. A preview's `branch_sources` rows have `repo_id`, `kind`
+(`repository_default`, `explicit_branch` or `non_branch_ref`) and optional `branch`. A
+repository's default branch is left unnamed during preview.
 
 ## Backend task workspace RPC
 
@@ -7024,16 +7025,19 @@ are stable and independent of transport IDs and engine workspace IDs.
 
 | Node method | Contract |
 | --- | --- |
-| `task.workspace.capabilities` | Read-only probe → `{capability: "task_workspace_v1"}`. |
-| `task.workspace.prepare` | Adopt or resume the exact saved naming plan and operation. Returns actual repository paths, private Git locations, frozen source commits, phases and structured errors. Every selected repository must be verified before ready. |
+| `task.workspace.capabilities` | Read-only probe → `{capability: "task_workspace_v1", start?, empty_repositories?, local_git?}`. |
+| `task.workspace.prepare` | Adopt or resume the exact saved naming plan and operation. Returns actual repository paths, Git locations, frozen source commits, phases and structured errors. A local source carries an optional `local` object on its preparation repository and is valid only with one repository at the root. An empty container verifies ownership of the task root before ready. |
 | `task.workspace.inspect` | Read-only physical observation. It does not fetch, reset, repair or adopt an unrelated directory. |
 | `task.workspace.cancel` | Prevent the operation from preparing again; retain physical resources. |
 | `task.workspace.cleanup` | Explicit worktree cleanup using `force?` and `delete_branch?`, both false by default. Returns removed flags and retained Git paths. |
 | `task.workspace.acquire` | Register `use_id` against ready resources after physical inspection; prevent cleanup. |
 | `task.workspace.release` | Release the exact `use_id` after use stops. |
+| `session.start.backend_workspace` | An ordinary start request with an admitted `backend_workspace` use and the plan's `cwd`. Optional `task_dispatch` in the workspace request keeps the ordinary task's launcher and terminal placement. The node keeps a launch receipt before forwarding startup. |
 
-The Manager checks the capability before adopting a preparation operation. Older Nodes return an
-explicit unsupported result; legacy workspace creation remains available through its original paths.
+The manager checks the capability before adopting preparation. New automatic isolation uses the
+node path when the probe advertises `local_git` and `start`. A peer without that support uses the
+existing engine path for ordinary dispatch. After an operation is saved, failure or disconnect keeps that
+operation for recovery. Explicit backend preparation requires the capabilities for its selected sources.
 A cancel or cleanup can reach the Node before prepare. Under the workspace and root locks, the
 Node records a durable cancelled or removed receipt only when both the root and private storage
 show that it owns no resources. A late prepare for that operation returns its recorded state.
