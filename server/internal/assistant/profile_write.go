@@ -132,9 +132,15 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if d := in.RecordingDays; d != nil && (*d < minRecordingDays || *d > maxRecordingDays) {
-		apierr.Write(w, http.StatusBadRequest, errors.New("recording_days must be 1–365"))
+	if d := in.RecordingDays; d != nil && !recordingDaysValid(d, true) {
+		apierr.Write(w, http.StatusBadRequest, errors.New("recording_days must be 1–3650"))
 		return
+	}
+	for _, d := range []*int{in.RecordingAudioDays, in.RecordingTextDays} {
+		if d != nil && !recordingDaysValid(d, false) {
+			apierr.Write(w, http.StatusBadRequest, i18n.Err("assistant-profile.bad_recording_days"))
+			return
+		}
 	}
 	var conversationTagFilters []string
 	tagFiltersWritten := len(in.ConversationTagFilters) > 0
@@ -352,8 +358,14 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		if in.Readonly != nil {
 			v.ReadonlyMode = in.ReadonlyMode
 		}
-		if in.RecordingDays != nil {
-			v.RecordingDays = in.RecordingDays
+		if in.RecordingDays != nil { // the old name: a client from before #16412 sets the audio's days
+			v.RecordingAudioDays = in.RecordingDays
+		}
+		if in.RecordingAudioDays != nil {
+			v.RecordingAudioDays = in.RecordingAudioDays
+		}
+		if in.RecordingTextDays != nil {
+			v.RecordingTextDays = in.RecordingTextDays
 		}
 		if in.MinutesDays != nil {
 			v.MinutesDays = in.MinutesDays
