@@ -247,6 +247,7 @@ internal/osproc app-exported-record 1
 internal/osproc/osproctest app-exported-record 2
 internal/pgdocker app-exported-record 4
 internal/promptcontent app-exported-record 1
+internal/prompts app-named-primitive SupervisionRole #16052
 internal/protectedapps app-exported-record 4
 internal/protectedapps app-named-primitive 2
 internal/proxyproto app-exported-record 3
