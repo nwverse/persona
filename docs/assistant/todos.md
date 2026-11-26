@@ -833,7 +833,10 @@ completed-task retirement. Change feedback records a new work round before relay
 the old Pass can no longer complete that round. Failed delivery is shown as failed, not as successful rework.
 The same applies to the owner's next message from the task card or directly in its Agent chat. A recorded Pass
 interrupted by a hub restart is completed by the acceptance recovery sweep, not left waiting for a second Pass.
-An accepted review without `user_check` still completes the task immediately as before.
+An accepted review without `user_check` normally completes the task immediately. An open, owner-requested read-only
+task or a task linked to a group Inbox item needs an owner-facing result first. Use personal verification for a result
+or `needs_user` for a decision. A recorded owner option in the current decision round lets the supervisor accept.
+An internal read-only inspection without a group Inbox source can still close on supervisor review.
 
 (#2056, `assistant/todo_ask.go`.) A to-do whose result waits for the owner carries that ask on itself, so the apps can show it in the to-do list and take it with one tap, not only the briefing and the Lark card.
 
