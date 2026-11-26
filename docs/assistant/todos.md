@@ -1575,23 +1575,22 @@ belong to the workspace preparation service.
 
 ## Backend workspace naming
 
-People configuring coding tasks can open **Workspace naming** inside Assistant
-settings’ **Starting tasks** group after choosing **New workspaces**.
-The entry waits for the matching assistant’s confirmed preference; other, missing
-or unknown preferences hide it without deleting saved rules. A to-do’s details
-keep an independent naming entry. Template help appears beneath each field by
-default; preview options open on request. Labels and fields form compact desktop
-rows and stack on narrow screens. Unset inputs are blank, with localized
-placeholders showing the system default (Assistant settings) or the effective
-Assistant default (task overrides). Clearing and saving removes that override;
-there are no inheritance status labels or reset buttons. A preview shows the task
-folder once, then a labeled branch for a root repository or each repository's
-folder-to-branch mapping for a container, without repeating the parent path. The
-computer and layout selectors and the preview action form one compact row that
-stacks on phones; a task's repository choices sit above it. Routine planning
-time, time zone and disclaimer text are left out of the result.
-These rules name newly isolated task workspaces on supported computers, including explicitly prepared workspaces.
-Selecting an existing workspace keeps its actual path and branch. [Task workspace policy](unified-entry.md#task-workspace-policy-3659)
+People who want to choose where Persona puts new task folders can open **Workspace
+naming** in Assistant settings or on an individual to-do. Settings shows a separate
+entry whenever the manager supports naming, for either workspace preference.
+Reusing an existing folder keeps its path and current branch.
+
+The base folder, task folder template and branch template each have a full-width
+field. An unset field shows the server's system default in Settings or the effective
+Assistant default on a to-do. Clear a field to remove its override, or choose
+**Use defaults** to clear all three. Save appears in the footer when edits are pending.
+
+**Preview naming** shows the task folder once. A task without repositories gets
+only that folder. With Git repositories, the preview lists the new branches and
+their starting points. **Preview options** changes the computer and layout and,
+on a to-do, selects the repositories to include. The Settings example uses one
+repository at the root or two in subfolders.
+[Task workspace policy](unified-entry.md#task-workspace-policy-3659)
 describes the dispatch policy and older-computer fallback.
 
 The fields are `base_directory` (default `{home}/workspace`),

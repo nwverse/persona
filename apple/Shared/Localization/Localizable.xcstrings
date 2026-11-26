@@ -406,6 +406,75 @@
         }
       }
     },
+    "Browsers": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Browsers"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ブラウザー"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "浏览器"
+          }
+        }
+      }
+    },
+    "Integrations": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Integrations"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "連携・制限付きアクセス"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "集成与受限访问"
+          }
+        }
+      }
+    },
+    "Scoped Access": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scoped Access"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アクセス制限"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "受限访问"
+          }
+        }
+      }
+    },
     "\"%@\" is %@ long and still over 200 MB at 540p, so it can't be sent. Trim it in Photos first.": {
       "localizations": {
         "zh-Hans": {
@@ -240541,6 +240610,72 @@
           "stringUnit": {
             "state": "translated",
             "value": "「%@」"
+          }
+        }
+      }
+    },
+    "Handed off from Inbox [Action Bar]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Handed off from Inbox"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "受信箱から引き継ぎ"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "从收件箱移交当前对话"
+          }
+        }
+      }
+    },
+    "Nothing to wrap up [Action Bar]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nothing to wrap up"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "まとめる項目はありません"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "当前没有待收尾的收件箱条目"
+          }
+        }
+      }
+    },
+    "Wrap Up [Action Bar]": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wrap Up"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "まとめる"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "收尾"
           }
         }
       }

@@ -37,7 +37,7 @@ import { PageBoundary } from "../PageBoundary";
 
 const StandingAuthorizations = lazyPage(() => import("./StandingAuthorizations").then((m) => m.StandingAuthorizations));
 const Repositories = lazyPage(() => import("./Repositories").then((m) => m.Repositories));
-const WorkspaceNaming = lazyPage(() => import("../../ui/WorkspaceNaming").then((m) => m.WorkspaceNaming));
+const WorkspaceNaming = lazyPage(() => import("../../ui/WorkspaceNaming").then((m) => m.WorkspaceNamingSettingsGroup));
 
 interface AssistantState extends AgentAutoNamingState, CacheKeepaliveState {
   manager?: string;
@@ -57,6 +57,7 @@ interface AssistantState extends AgentAutoNamingState, CacheKeepaliveState {
   main_tasks_quiet?: boolean;
   /** "Start what I asked for in the chat right away" (#2559): on by default; tasks the user asked for start without the plan card's "Start". */
   start_requested_tasks?: boolean;
+  workspace_naming_version?: string;
   task_workspace_preference?: "prefer-existing" | "prefer-new";
   /** "Fold background rounds" (#4314, docs/assistant/assistant.md "Background rounds"): on by default; unset from a hub before it (on). */
   main_background_folded?: boolean;
@@ -542,13 +543,18 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
             <option value="prefer-new">{t("settings-assistantsettings.workspace_prefer_new")}</option>
           </select>
         </Row>
-        {info?.manager === manager && info.task_workspace_preference === "prefer-new" && <PageBoundary page="workspace-naming">
-          <Suspense fallback={<Loading />}>
-            <WorkspaceNaming manager={manager} owner={owner} />
-          </Suspense>
-        </PageBoundary>}
         <TaskTrust manager={manager} machineName={(id) => machines.find((machine) => machine.id === id)?.name || id} />
       </Group>
+
+      {info?.manager === manager && info.workspace_naming_version && (
+        <div data-settings-group="workspace-naming">
+          <PageBoundary page="workspace-naming">
+            <Suspense fallback={<Loading />}>
+              <WorkspaceNaming manager={manager} owner={owner} version={info.workspace_naming_version} />
+            </Suspense>
+          </PageBoundary>
+        </div>
+      )}
 
       {/* Who follows up the main chat's tasks (#5082), delivery closeout gate (#12034), following up agents, their tasks' new messages, stopping idle ones and tidying closed ones (#3617, #4293, #4754, #3618): each row only from a hub that has its setting */}
       {(supportsAgentAutoNaming(info) || typeof info?.main_supervises_own_tasks === "boolean" || typeof info?.delivery_gate === "string" || typeof info?.agent_tasks === "boolean" || typeof info?.close_ended_terminals === "boolean" || typeof info?.inbox_signals === "boolean" || typeof info?.auto_supervision_messages === "boolean" || typeof info?.inbox_todo_forward === "boolean" || typeof info?.idle_close_hours === "number" || typeof info?.archive_closed_days === "number") && info && (

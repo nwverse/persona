@@ -537,6 +537,22 @@ on-demand model panel, not the everyday Assistant home (#6887).
   rows the relayed line is the card's first thing, with no hairline over it (#9749). Four rows or fewer show in full; from five, three and a centered 12 px **N more** / **Show less**
   with a chevron under a `line` divider. On a phone on its side the queue is one "N queued" line beside the run's status
   that opens the same rows. Spec: `docs/web/web.md` ("Queued messages").
+- Queued messages (iOS Assistant conversations, #16165; aligned with Web #5327): in an Assistant conversation using
+  `ShellComposerBar`, queued messages (`ComposerQueuedTop`) and task routing (`ComposerRouteTop`) sit in the
+  composer's `top` slot (`ComposerTopSlot`), fused into the top edge of `ComposerSurface` above a `Theme.Size.hairline`
+  divider (`Theme.Shell.composerStroke`), while floating answer cards (`QuestionDock`) stay above the status bar. The
+  collapsed queue is one concise row (clock icon, `N queued`, first-message preview, expand chevron, and one-tap
+  **Send Now** when the session steers queued messages; stacking **Send Now** onto a second line via `ViewThatFits` at
+  `Theme.interfaceLargestTypeSize` so button text never wraps). Tapping the header expands the scrollable list (up to
+  three visible rows) inside the same top edge with edit/reorder/copy/delete menus, folded relayed messages, and
+  in-flight sending rows. Agent chats (`.dev`) keep the standalone `QueueStrip`.
+- Single-slot advisory banner arbitration (iOS Assistant conversations, #16165, `ComposerBannerCoordinator`): secondary
+  advisories above the Assistant composer (`ModelFallbackCard`, `UltracodeLostNote`, `CompactionSlot`,
+  `PushHealthNotice`, ended voice call line, and `SuggestionPill`) share a single slot in priority order. Critical
+  prompts (stopped agent, terminal-only / read-only / missing session, live retries, offline computer or manager,
+  startup errors and shell questions, attention/failure notes, blocking readiness cards, and pending confirmations) are
+  never gated or suppressed, and lower-priority advisories (`PushHealthNotice`, ended voice call, `SuggestionPill`)
+  yield whenever any critical prompt is active.
 - Duplicates: four composer implementations exist (DS-19).
 
 #### Large-window hardware input (Android)
@@ -2710,7 +2726,7 @@ The task cards follow `docs/design/task-cards.md`, which holds the state tables 
 
 - **One card per task, when it is handed out** (#8237, replacing #5569's conclusion cards): the hand-off card is a task's only card in the chat, and it updates in place: its state word follows the task, and a start that failed or a turn the model service cut off reads as such on it, in the danger color, with why in plain words (a raw error stays in the task's details; one naming no known cause reads "Didn't start. Open it for details."). Receipts (done, stopped, failed to start, interrupted), reviews and reports are not drawn, old ones in the history neither, and nothing in the chat says where progress went. The task's row says it: In Progress and Needs You below. iOS, the web and Android since #8237 (Android: #8312). A failed start's and an interrupted task's Needs you row keeps `--danger-wash` with `--ink` words, as the conclusion cards had (contrast in D10 of `docs/design/task-cards.md`).
 - **Rows that act** (#8237): a failed start's row in Needs You carries Retry and Remove, an interrupted one Continue (so does a usage limit nothing continues by itself, in In Progress), right under its words and aligned with them, as buttons of their own, never inside the row's tap. An unrecoverable conversation is the exception: its row says Invalid conversation, shows the full new-conversation guidance and has no Continue. A tap elsewhere on the row opens the task.
-- **Finished** (#10922, replacing #8237's Just Finished group under In Progress): an entry of its own after the unfinished work's (on the web after Parked and Persona reviewing; zh-Hans 已完成, ja 完了, the To-dos page's word for Done) listing the handed-out tasks that finished in the last 24 hours, seen or not, newest finished first: a row each with the done mark, the title, Done and what it did (its accepting review's note, why it closed, its receipt's summary, else its Agent's last words). A row nobody has opened since it finished (the To-dos page's Just Finished) is new: the unread green as a plain dot and the state word Just finished, as the Agents list's Just finished rows. Opening a row opens the task and counts as seeing it; it stays, as Done, until its 24 hours pass. The entry is there only while it has rows or its tray is open, drawn quiet (secondary words; the done check's green as its mark on the web and Android), and its number is its rows: finished work, never added to the open-work counts of section 4.8. Why not keep the group: it listed only the unseen rows, so opening one took it out of the tray and only the board had it. Why 24 hours: the window the To-dos page keeps Just finished by, so tasks have one "recent". The entries' row scrolls sideways when they do not fit, on every client (iOS since #10922).
+- **Finished** (#10922, replacing #8237's Just Finished group under In Progress): an entry of its own after the unfinished work's (on the web after Parked and Persona reviewing; zh-Hans 已完成, ja 完了, the To-dos page's word for Done) listing the handed-out tasks that finished in the last 24 hours, seen or not, newest finished first: a row each with the done mark, the title, Done and what it did (its accepting review's note, why it closed, its receipt's summary, else its Agent's last words). A row nobody has opened since it finished (the To-dos page's Just Finished) is new: the unread green as a plain dot and the state word Just finished, as the Agents list's Just finished rows. Opening a row opens the task and counts as seeing it; it stays, as Done, until its 24 hours pass. On the web and Android the entry is there while it has rows or its tray is open, drawn quiet (secondary words; the done check's green as its mark), and its number is its rows: finished work, never added to the open-work counts of section 4.8. On iOS Assistant conversations (#16165), the collapsed bar keeps **Needs You** always visible (the only blue capsule on the collapsed row when non-zero), **In Progress**, and a neutral **Wrap Up** capsule (`WrapUpEntry` + `WrapUpTray`, folding main-chat Inbox hand-off wrap-up items into the same row and shared tray slot instead of a second row of blue chips); **Finished** is no longer persistent on the collapsed bar and opens from a quiet capsule in any open tray's header (`action-tray.finished-link`, showing the unread green dot while any finished row is unseen) while appearing on the bar only while its tray is open. Why not keep the group: it listed only the unseen rows, so opening one took it out of the tray and only the board had it. Why 24 hours: the window the To-dos page keeps Just finished by, so tasks have one "recent". The entries' row scrolls sideways when they do not fit, on every client (iOS since #10922).
 - **Accept and decision rows** stack when their container is narrow (a container query, not the viewport): the words take the whole width, the secondary buttons one row, the primary its own full-width line. Never a menu.
 - **Progress rows.** The status word is its own right-aligned column, then a fixed end slot: `›` where the row opens something, a check once finished, an info mark for a usage limit. A task whose Agent is not up says Starting. A usage limit's second line says when it resets. A stopped task that is not done says "Stopped, not done yet · <why>" from its completion check (#3180; iOS too since #8237), else its Agent's last words. The column and the row's leading mark say only what the task's Agent itself is doing (#6492, `web/src/lib/task-row-status.ts`): Working, Needs you, Done not seen, Idle, Stopped (its lead session is gone), Interrupted, Usage limit, Couldn't start, Starting (only while a start is in flight, #7594; a to-do nobody dispatched says Not started); the mark is that Agent's `StatusMark`, the one mark set for Agent states. What the to-do itself is at (parked, waiting to merge, awaiting review, rework, the owner's call, accepted, cancelled, waiting for Start) is a chip after the title, "To-do: Parked"; a to-do with nothing to add has none. Before, one column mixed both, so a parked to-do whose Agent had stopped read Parked.
 - **Agent metadata on task rows** (#10904): where a row already counts Agents (the web Overview and the native To-dos lists), a known linked session replaces that count with its computer's display name, its model's existing friendly short name and any reported effort, with "+N" for the other unreleased Agents. The working Agent leads (the most recently moved when several work), otherwise the most recently moved by `max(updated_at, state_since)`. While no linked row is known, the localized "N Agents" fallback stays. Existing delivery/hold text remains before this metadata, and no per-row request is started.
@@ -3272,6 +3288,14 @@ An experiment can supply a note under its introduction or beside a field, using 
 hint styles. A choice with consequences can request confirmation for a specific change. Use the shared Dialog, with the
 affected scope, impact, timing and an action-specific button. All dismissal paths preserve the edit. On success the
 field’s polite save status can explain when the choice takes effect. Show this receipt once, in the field footer.
+
+For people choosing where new task folders are created, **Workspace naming** uses
+a separate Settings group and the same editor on To-do detail. Each template has
+a label above a full-width field. Inherited values wrap when space is tight.
+The inline preview shows one task path and each repository’s branch and starting
+point. Its secondary disclosure holds the computer, layout and repository choices.
+The footer offers **Use defaults** when there are overrides and **Save** for
+pending edits. See [workspace naming](../assistant/todos.md#backend-workspace-naming).
 
 ## External source connections on web (#15518)
 
@@ -4541,10 +4565,12 @@ People monitoring their computers see the number of waiting agents beside the co
 is known. The count opens the first waiting session. Fleet token usage belongs on Cards and Capabilities.
 The view bar starts with Cards, wraps to the available width and ends with assistant-scoped shared resources.
 
-Ports, Services, Files, Toolchain, Network and Storage share one computer selection. Their labeled native select
-lists available computers. A single choice becomes a compact name and status chip. If the current computer leaves
-or goes offline, tools select the first online computer. With all computers offline they show the offline state.
-A storage cleanup link opens reclaim mode only on its target computer.
+On the web, people working on one computer can bookmark its current view. Work leads with waiting Agents and
+workspace actions. The fleet shows one actionable card for a sole computer, and Add computer for an empty list.
+A wide detail pane keeps the fleet entry and a compact computer list beside the selected view. Each row shows
+connection state, waiting or working Agents when known, and the leading alert. Narrow panes keep one level visible.
+Use labeled links for subviews so people can open another tab or retrace their steps with Back and Forward.
+The URL identifies the computer even when it goes offline or disappears. Reclaim links open its Storage view.
 
 ## Usage treemap (#14576)
 
