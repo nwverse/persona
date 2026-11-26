@@ -121,14 +121,23 @@ func createAndStartBlockedPlan(t *testing.T, s *Service, st *memBlockerQueueStor
 
 func waitForCondition(t *testing.T, timeout time.Duration, desc string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
+	if cond() {
+		return
 	}
-	t.Fatalf("timed out waiting for %s", desc)
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-deadline.C:
+			t.Fatalf("timed out waiting for %s", desc)
+		case <-ticker.C:
+			if cond() {
+				return
+			}
+		}
+	}
 }
 
 func doBlockerHTTP(s *Service, method, path, role, body string) *httptest.ResponseRecorder {
