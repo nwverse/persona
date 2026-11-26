@@ -455,12 +455,7 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 			// variable may be a flag value of a read, never a command word, an api route or anything of a write.
 			args := make([]string, len(words)-1)
 			for i, a := range words[1:] {
-				args[i] = shellVarRef.ReplaceAllStringFunc(a, func(m string) string {
-					if val, ok := vars[strings.Trim(m, "${}")]; ok {
-						return val
-					}
-					return m
-				})
+				args[i] = expandKnownVars(a, vars)
 			}
 			dynamic := strings.ContainsAny(strings.Join(args, " "), "$`")
 			c, deny, ok := parseLarkCLI(args, risk)
@@ -893,6 +888,32 @@ var (
 		"langinfo": true, "keymaps": true, "widgets": true, "patchars": true, "words": true, "compstate": true}
 )
 
+// larkPlainTest: test / [ arguments that are only string and file tests, as in [[ ]]; zsh evaluates the operands of
+// the others (-t, -v, -eq, …) as arithmetic or a subscript. An expansion is only an operand, right after a literal
+// operator, never in an operator's place.
+func larkPlainTest(args []*syntax.Word) bool {
+	unary := []string{"-n", "-z", "-e", "-f", "-d", "-s", "-r", "-w", "-x"}
+	binary := []string{"=", "==", "!="}
+	words := make([]string, len(args))
+	dynamic := make([]bool, len(args))
+	for i, w := range args {
+		words[i], dynamic[i] = executionWord(w)
+	}
+	for i, w := range words {
+		switch {
+		case dynamic[i]:
+			prevOp := i > 0 && !dynamic[i-1] && (slices.Contains(unary, words[i-1]) || slices.Contains(binary, words[i-1]))
+			nextOp := i+1 < len(words) && !dynamic[i+1] && slices.Contains(binary, words[i+1])
+			if !prevOp && !nextOp {
+				return false
+			}
+		case strings.HasPrefix(w, "-") && !slices.Contains(unary, w) && w != "-a" && w != "-o":
+			return false
+		}
+	}
+	return true
+}
+
 // larkConstantSafeCommands: commands that cannot set a variable of the shell running them: programs that run in a
 // process of their own, and builtins that only print or test. Not printf / print (-v), read, set, or any modifier.
 var larkConstantSafeCommands = map[string]bool{"cd": true, "echo": true, "true": true, "false": true, ":": true,
@@ -1070,11 +1091,7 @@ func larkLiteralConstants(cmd string, gates []proto.CommandGate) map[string]stri
 				opaque = true
 			}
 			if name == "test" || name == "[" {
-				// As in [[ ]], only string and file tests: zsh evaluates the others' operands.
-				opaque = opaque || slices.ContainsFunc(n.Args[1:], func(w *syntax.Word) bool {
-					s, _ := executionWord(w)
-					return strings.HasPrefix(s, "-") && !slices.Contains([]string{"-n", "-z", "-e", "-f", "-d", "-s", "-r", "-w", "-x", "-a", "-o"}, s)
-				})
+				opaque = opaque || !larkPlainTest(n.Args[1:])
 			}
 		}
 		return true
@@ -1225,19 +1242,42 @@ func gateUnmatchedReadQuery(args []*syntax.Word, index int) bool {
 	return err == nil && len(matches) == 0
 }
 
+// expandKnownVars replaces $NAME and ${NAME} with their values in vars. A bare $NAME followed by `:` or `[` stays: zsh
+// applies a modifier ($F:s/x/y/) or a subscript there, so the value is not what the shell would use.
+func expandKnownVars(s string, vars map[string]string) string {
+	if !strings.Contains(s, "$") {
+		return s
+	}
+	var out strings.Builder
+	last := 0
+	for _, m := range shellVarRef.FindAllStringIndex(s, -1) {
+		ref := s[m[0]:m[1]]
+		val, ok := vars[strings.Trim(ref, "${}")]
+		if bare := !strings.HasPrefix(ref, "${"); bare && m[1] < len(s) && (s[m[1]] == ':' || s[m[1]] == '[') {
+			ok = false
+		}
+		if strings.HasPrefix(ref, "${") && !strings.HasSuffix(ref, "}") {
+			ok = false // ${NAME followed by an operator, not a plain reference
+		}
+		out.WriteString(s[last:m[0]])
+		if ok {
+			out.WriteString(val)
+		} else {
+			out.WriteString(ref)
+		}
+		last = m[1]
+	}
+	out.WriteString(s[last:])
+	return out.String()
+}
+
 // parseGateCall reads `METHOD PATH [BODY] [curl flags]` after a gated command.
 func parseGateCall(g proto.CommandGate, args []string, vars map[string]string, cwd string) (larkCall, string, bool) {
 	expand := func(s string) (string, bool) {
 		if !strings.Contains(s, "$") {
 			return s, true
 		}
-		out := shellVarRef.ReplaceAllStringFunc(s, func(m string) string {
-			k := strings.Trim(m, "${}")
-			if val, ok := vars[k]; ok {
-				return val
-			}
-			return m
-		})
+		out := expandKnownVars(s, vars)
 		return out, !strings.Contains(out, "$")
 	}
 	// A literal method is part of the call's identity: even a previously
