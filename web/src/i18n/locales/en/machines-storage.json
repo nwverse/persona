@@ -2,7 +2,6 @@
   "title": "Storage & Cleanup",
   "subtitle": "Per-mount capacity and inode utilization, plus on-demand bounded hotspot analysis.",
   "refresh_mounts": "Refresh mounts",
-  "machine_picker": "Select computer",
   "mounts_title": "Mounted filesystems",
   "collected_ms": "Collected in {ms} ms",
   "mounts_unsupported": "Per-mount statfs monitoring is not supported on {os}.",

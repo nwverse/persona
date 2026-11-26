@@ -120,3 +120,33 @@ it("saves attention preferences without expected_todos_v2, updates store, and re
   expect(patchAssistant).toHaveBeenCalledWith(saved);
   expect(refreshTodos).toHaveBeenCalledTimes(1);
 });
+
+it("sends explicit MANAGER_HEADER for secondary assistants without mutating the shown assistant or accepting mismatched manager responses", async () => {
+  chooseManager("primary");
+  const request = vi.mocked(api);
+  request.mockResolvedValueOnce({
+    manager: "secondary",
+    todos_v2: true,
+    todos_v2_auto_seen: "off",
+    todos_v2_pending_review_sla_hours: 48,
+    todos_v2_can_wait_sla_hours: 24,
+    todos_v2_fold_children: false,
+  });
+
+  const saved = await saveTodosV2AttentionPrefs("secondary", { todos_v2_auto_seen: "off" });
+  expect(request).toHaveBeenCalledWith("/assistant", {
+    method: "PUT",
+    headers: { [MANAGER_HEADER]: "secondary" },
+    json: { todos_v2_auto_seen: "off" },
+  });
+  expect(saved.todos_v2_auto_seen).toBe("off");
+  expect(patchAssistant).not.toHaveBeenCalled();
+  expect(refreshTodos).not.toHaveBeenCalled();
+
+  request.mockResolvedValueOnce({
+    manager: "primary",
+    todos_v2: true,
+  });
+  await expect(saveTodosV2AttentionPrefs("secondary", { todos_v2_fold_children: true }))
+    .rejects.toMatchObject({ code: "configuration_unavailable" });
+});

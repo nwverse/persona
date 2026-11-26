@@ -1,6 +1,10 @@
 package assistantwire
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"github.com/nwverse/persona/server/internal/wireids"
+)
 
 // The Inbox's bus methods are its kernel module's (module_methods.go), in the order its own switch had them.
 func init() {
@@ -12,9 +16,6 @@ func init() {
 // manager decodes and encodes them through these, so their JSON is the shape each method's comment gives. InboxRound,
 // InboxRepoMutes, InboxTriagePreview and InboxItemResult are the others.
 
-// InboxItemID is an Inbox item's id as the bus carries it (InboxItemParams).
-type InboxItemID string
-
 // InboxMuteID is a mute's id as the bus carries it (InboxUnmuteParams; InboxMute.ID lists the same).
 type InboxMuteID string
 
@@ -23,7 +24,7 @@ type InboxAck struct{}
 
 // InboxItemParams are MethodInboxItem's params: the item's id.
 type InboxItemParams struct {
-	ID InboxItemID `json:"id"`
+	ID wireids.InboxItemID `json:"id"`
 }
 
 // InboxForgetParams are MethodInboxForget's params: the source whose data the user deleted.

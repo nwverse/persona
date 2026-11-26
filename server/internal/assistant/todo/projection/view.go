@@ -23,6 +23,7 @@ import (
 // Someday; a zero time is none.
 type placement struct {
 	assistantwire.TodoSummary
+	wait                 *assistantwire.TodoWait
 	deadline, wake, back time.Time
 }
 
@@ -537,6 +538,7 @@ func (r *reading) parked() (placement, bool) {
 	if rv := latestReview(sv); rv != nil && rv.Verdict == reviewParked {
 		p.Since = utc(rv.At)
 	}
+	p.wait = buildParkedWait(sv)
 	p.wake = sv.Parked.Until
 	return p, true
 }
@@ -620,6 +622,7 @@ func (r *reading) waiting() (placement, bool) {
 	if prs := openPRs(r.f, r.now); len(prs) > 0 && !r.settled() {
 		p := r.at(assistantwire.TodoPhaseWaiting, assistantwire.TodoListSectionWaiting, assistantwire.TodoReasonPrOpen)
 		p.Line = line(assistantwire.TodoLineKeyPrOpen)
+		p.wait = buildPRWait(prs[0])
 		return p, true
 	}
 	if rn, ok := firstRun(r.runs, runLimited); ok {
@@ -629,6 +632,7 @@ func (r *reading) waiting() (placement, bool) {
 			p.Line = line(assistantwire.TodoLineKeyUsageLimit, "run", rn.title(), assistantwire.TodoLineArgResetsAt, stamp(*reset))
 			p.wake = reset.Add(usageLimitGrace)
 		}
+		p.wait = buildUsageLimitWait(rn)
 		return p, true
 	}
 	if rn, ok := firstRun(r.runs, runWaits); ok {
@@ -638,6 +642,7 @@ func (r *reading) waiting() (placement, bool) {
 		if w := rn.s.Work.WakeAt; w != nil {
 			p.wake = *w
 		}
+		p.wait = buildRunWaitsWait(rn)
 		return p, true
 	}
 	return placement{}, false
@@ -763,6 +768,10 @@ func (r *reading) withSteps(own placement) placement {
 	out.Seen = r.seenSince(latest(r.last, latestOf(parts)))
 	if lead.step != nil {
 		out.Line = withArg(out.Line, "step", lead.step.Title)
+		if out.wait != nil {
+			out.wait = cloneWait(out.wait)
+			out.wait.Step = lead.step.Title
+		}
 		out.Inactive, out.Steps, out.back = time.Time{}, own.Steps, time.Time{}
 	}
 	return out
