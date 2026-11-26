@@ -6371,6 +6371,14 @@
     {
       "name": "chat_history_failed",
       "value": "加载失败，点按重试"
+    },
+    {
+      "name": "agent_default_effort",
+      "value": "Agent 默认"
+    },
+    {
+      "name": "minimal",
+      "value": "最低"
     }
   ]
 }
