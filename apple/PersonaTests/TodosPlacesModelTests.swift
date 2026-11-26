@@ -649,14 +649,19 @@ struct TodosPlacesModelTests {
         await store.refresh(api: hub.client)
         try await waitForPlacesTest { list.ready && list.hasRows }
         list.place = .project("kyoto")
+        let counts = list.filterOptions, needsYou = list.needsYou
         #expect(!list.groups.flatMap(\.drawnKeys).contains("/t03"))
         list.query = "t03"
+        try await waitForPlacesTest { list.searchedWords == "t03" }
         #expect(list.searching && list.groups.flatMap(\.drawnKeys) == ["/t03"], "Weather App's, from Kyoto trip")
         #expect(list.hiddenNeeds == 0 && !list.placeIsEmpty)
+        #expect(list.place == .project("kyoto") && list.filterOptions == counts && list.needsYou == needsYou,
+                "the place is set aside, never changed: its numbers stay")
         list.query = "nothing like it"
+        try await waitForPlacesTest { list.searchedWords == "nothing like it" }
         #expect(list.isEmpty && !list.placeIsEmpty, "the search's own empty state")
         list.query = ""
-        #expect(list.groups.flatMap(\.drawnKeys) == ["/t01"] && list.hiddenNeeds == 1)
+        #expect(list.groups.flatMap(\.drawnKeys) == ["/t01"] && list.hiddenNeeds == 1, "the place, at once")
     }
 
     /// A list made on Upcoming counts what needs the owner elsewhere once it starts, whatever the page draws first: its

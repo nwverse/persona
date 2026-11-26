@@ -49,6 +49,8 @@ export type BindingMatch = ExternalTarget & { external_ref: ExternalRef } & (
   | { source: "repository_link"; repository_role: "delivery" | "reference" }
 );
 
+type LookupMatch = BindingMatch | (ExternalTarget & { external_ref: ExternalRef; source: "lark_topic" });
+
 export type PolicySource = "default" | "channel" | "container" | "item" | "binding";
 export interface PolicyOrigin {
   source: PolicySource;
@@ -107,7 +109,7 @@ export function deleteExternalBinding(manager: string, id: string) {
 }
 
 export function lookupExternalBindings(manager: string, ref: ExternalRef, signal?: AbortSignal) {
-  return api<{ path: ExternalRef[]; matches: BindingMatch[] }>(
+  return api<{ path: ExternalRef[]; matches: LookupMatch[] }>(
     withQuery(`${BINDINGS}/lookup`, { external_ref: JSON.stringify(ref) }),
     { headers: stampedHeaders(manager), signal },
   );

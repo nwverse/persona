@@ -14,6 +14,7 @@ import { t } from "../../i18n";
 import { Button, cx, IconButton, Spinner } from "../../ui/atoms";
 import { ComposeDialog } from "./ComposeDialog";
 import { DetailPlaceholder, InboxDetail } from "./InboxDetail";
+import { LarkWriteGate } from "./lark-write-gate";
 import { InboxList } from "./InboxList";
 import { PolicyDialogHost } from "./PolicyDialog";
 import { FolderDialogHost } from "./InboxFolders";
@@ -86,6 +87,7 @@ export function Inbox({ id, manager, onToggleSidebar }: { id?: string; manager?:
     return () => window.removeEventListener("keydown", onKey);
   }, [id]);
   return (
+    <LarkWriteGate>
     <InboxViewMemoryContext.Provider value={view}>
     <div className="@container flex h-full flex-col">
       <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3 sm:px-4">
@@ -124,6 +126,7 @@ export function Inbox({ id, manager, onToggleSidebar }: { id?: string; manager?:
       )}
     </div>
     </InboxViewMemoryContext.Provider>
+    </LarkWriteGate>
   );
 }
 

@@ -154,6 +154,7 @@ type ExternalRepositoryRole string
 const (
 	ExternalBindingExplicit       ExternalBindingSource = "explicit"
 	ExternalBindingRepositoryLink ExternalBindingSource = "repository_link"
+	ExternalBindingLarkTopic      ExternalBindingSource = "lark_topic"
 )
 
 type ExternalBindingMatch struct {

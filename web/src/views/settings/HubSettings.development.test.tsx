@@ -108,6 +108,29 @@ async function pushUpdate(next: Partial<HubUpdateStatus>) {
   await act(async () => events.get("hub_update")!({ update: status }));
 }
 
+function historyGroup() {
+  return [...host.querySelectorAll("section")].find(section => section.querySelector("h2")?.textContent === "Update history");
+}
+
+function releaseHistory(count: number): HubUpdateRecord[] {
+  return Array.from({ length: count }, (_, i) => ({
+    from_version: "previous",
+    to_version: `release-${i + 1}`,
+    to_build: 1000 - i,
+    started: installedAt,
+    result: "updated",
+    auto: false,
+  }));
+}
+
+async function editBackupFolder(folder: HTMLInputElement, value: string) {
+  const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+  await act(async () => {
+    setValue.call(folder, value);
+    folder.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
 it("polls active development phases and replaces the step and metrics", async () => {
   vi.useFakeTimers();
   await mount("building", { development_progress: {
@@ -348,10 +371,97 @@ it("shows second-level local times on commits, version options, backup details a
   await act(async () => { version.value = "snapshot-fixture"; version.dispatchEvent(new Event("change", { bubbles: true })); });
   expect(host.textContent).toContain(`Target commit${backup} · ${"c".repeat(12)}`);
   expect(host.textContent).toContain(`Backed up at${created}`);
-  const historyGroup = [...host.querySelectorAll("section")].find(s => s.querySelector("h2")?.textContent === "Update history")!;
-  expect([...historyGroup.querySelectorAll(".tabular-nums")].map(el => el.textContent)).toEqual([
-    installed, `${installed} · ${"d".repeat(12)}`, backup,
+  expect([...historyGroup()!.querySelectorAll("time")].map(el => el.textContent)).toEqual([installed, backup]);
+});
+
+it("compacts history and shows a short commit only when the target version omits it", async () => {
+  const commit = "abcdef0123456789abcdef0123456789abcdef01";
+  const shortCommit = commit.slice(0, 12);
+  const [updated, failed, rolledBack, held] = releaseHistory(4);
+  history = [
+    { ...updated, source: "web-dev", to_version: `web-dev-${shortCommit.toUpperCase()}`, commit, auto: true },
+    { ...failed, source: "web-dev", commit, result: "failed", reason: "Could not build the update." },
+    { ...rolledBack, result: "rolled_back", reason: "The new version did not start." },
+    { ...held, result: "held", reason: "Waiting for a compatible version." },
+  ];
+  await mount("idle");
+  const entries = historyGroup()!.querySelector(".divide-y")!.children;
+  const [normal, failure, rollback, hold] = entries;
+  expect([...normal.children].map(line => line.textContent)).toEqual([
+    `UpdatedAutoWeb development${localTime.format(new Date(installedAt))}`,
+    `previous → web-dev-${shortCommit.toUpperCase()}`,
   ]);
+  expect(failure.children[2].textContent).toBe(shortCommit);
+  expect(failure.querySelectorAll("time")).toHaveLength(1);
+  expect(failure.textContent).toContain("Could not build the update.");
+  expect(rollback.textContent).toContain("The new version did not start.");
+  expect(hold.textContent).toContain("Waiting for a compatible version.");
+  expect(historyGroup()!.querySelector("nav")).toBeNull();
+});
+
+it("shows five history entries without navigation when they all fit", async () => {
+  history = releaseHistory(5);
+  await mount("idle");
+  expect(historyGroup()!.querySelectorAll("time")).toHaveLength(5);
+  expect(historyGroup()!.querySelector("nav")).toBeNull();
+});
+
+it("pages through all returned history and disables navigation at the bounds", async () => {
+  history = releaseHistory(13);
+  await mount("idle");
+  const group = historyGroup()!;
+  const [previous, next] = group.querySelectorAll<HTMLButtonElement>("nav button");
+  const visibleVersions = () => [...group.querySelectorAll("time")].map(time => time.parentElement!.nextElementSibling!.textContent);
+  expect(previous.textContent).toBe("Previous");
+  expect(next.textContent).toBe("Next");
+  expect(previous.disabled).toBe(true);
+  expect(next.disabled).toBe(false);
+  expect(group.querySelector("nav [role=status]")!.textContent).toBe("Page 1 / 3 · 13 total");
+  expect(visibleVersions()).toEqual(history.slice(0, 5).map(record => `previous → ${record.to_version}`));
+
+  await act(async () => next.click());
+  expect(previous.disabled).toBe(false);
+  expect(group.textContent).toContain("Page 2 / 3 · 13 total");
+  expect(visibleVersions()).toEqual(history.slice(5, 10).map(record => `previous → ${record.to_version}`));
+
+  await act(async () => next.click());
+  expect(next.disabled).toBe(true);
+  expect(group.textContent).toContain("Page 3 / 3 · 13 total");
+  expect(visibleVersions()).toEqual(history.slice(10).map(record => `previous → ${record.to_version}`));
+
+  await act(async () => previous.click());
+  expect(group.textContent).toContain("Page 2 / 3 · 13 total");
+  await act(async () => previous.click());
+  expect(previous.disabled).toBe(true);
+});
+
+it("clamps history to the last valid page on refresh and stays there when it grows", async () => {
+  history = releaseHistory(13);
+  await mount("idle");
+  const group = historyGroup()!;
+  const next = group.querySelectorAll<HTMLButtonElement>("nav button")[1];
+  await act(async () => next.click());
+  await act(async () => next.click());
+  expect(group.textContent).toContain("Page 3 / 3 · 13 total");
+
+  history = releaseHistory(7);
+  await act(async () => events.get("hello")!({}));
+  expect(group.textContent).toContain("Page 2 / 2 · 7 total");
+  expect(group.querySelectorAll("time")).toHaveLength(2);
+  expect(next.disabled).toBe(true);
+
+  history = releaseHistory(13);
+  await act(async () => events.get("hello")!({}));
+  expect(group.textContent).toContain("Page 2 / 3 · 13 total");
+  expect(next.disabled).toBe(false);
+
+  history = [];
+  await act(async () => events.get("hello")!({}));
+  expect(historyGroup()).toBeUndefined();
+
+  history = releaseHistory(6);
+  await act(async () => events.get("hello")!({}));
+  expect(historyGroup()!.textContent).toContain("Page 1 / 2 · 6 total");
 });
 
 it.each(["invalid", "2026-02-30T10:00:00Z", "2026-11-14"])("shows Unknown for omitted timestamps and %s", async updatedAt => {
@@ -462,40 +572,79 @@ it.each(["building", "backing_up", "applying_backup"])("keeps channel and duplic
   }
 });
 
-it("saves a declarative backup folder and retention, and resets to the recommended folder", async () => {
+it("keeps the folder label, hint and full-width field together and the snapshot note with retention", async () => {
+  const recommended = "/home/persona/.persona/update/development-backups";
+  await mount("idle", {
+    development: {
+      configured: true, branch: "main", backup_directory: recommended, backup_default_directory: recommended,
+      backup_directory_is_default: true, backup_retain: 3, builtin_quiesce: true,
+    },
+  });
+  const group = host.querySelector('[data-settings-group="hub-dev-backup"]')!;
+  const folder = group.querySelector<HTMLInputElement>("input")!;
+  const retain = group.querySelector<HTMLSelectElement>('select[aria-label="Snapshots to keep"]')!;
+  const [folderBlock, retainBlock] = group.querySelector(".divide-y")!.children;
+  expect(group.querySelector(".divide-y")!.children).toHaveLength(2);
+  expect(folderBlock.contains(folder)).toBe(true);
+  expect(folder.labels?.[0].textContent).toBe("Backup folder");
+  expect(folderBlock.contains(document.getElementById(folder.getAttribute("aria-describedby")!))).toBe(true);
+  expect(folder.classList.contains("w-full")).toBe(true);
+  expect(folder.classList.contains("font-mono")).toBe(true);
+  expect(folder.placeholder).toBe(recommended);
+  expect(folder.value).toBe("");
+  const quiesceHint = document.getElementById(retain.getAttribute("aria-describedby")!);
+  expect(retainBlock.contains(quiesceHint)).toBe(true);
+  expect(quiesceHint?.textContent).toContain("The hub pauses its own writers");
+
+  const buttons = () => [...group.querySelectorAll("button")].map(button => button.textContent);
+  const save = () => [...group.querySelectorAll("button")].find(button => button.textContent === "Save")!;
+  expect(buttons()).toEqual(["Save"]);
+  expect(save().disabled).toBe(true);
+  await editBackupFolder(folder, recommended);
+  expect(buttons()).toEqual(["Save"]);
+  expect(save().disabled).toBe(true);
+
+  await editBackupFolder(folder, "~/snapshots");
+  expect(buttons()).toEqual(["Use recommended", "Save"]);
+  expect(save().disabled).toBe(false);
+  await act(async () => group.querySelector<HTMLButtonElement>("button")!.click());
+  expect(folder.value).toBe("");
+  expect(document.activeElement).toBe(folder);
+  expect(buttons()).toEqual(["Save"]);
+  expect(save().disabled).toBe(true);
+  expect(saved).toEqual([]);
+});
+
+it("saves changed backup settings and can restore the recommended folder", async () => {
   await mount();
   const group = host.querySelector('[data-settings-group="hub-dev-backup"]')!;
-  expect(group.textContent).toContain("Development backup");
-  expect(group.textContent).toContain("The hub pauses its own writers");
-  const folder = group.querySelector('input[aria-label="Backup folder"]') as HTMLInputElement;
+  const folder = group.querySelector<HTMLInputElement>("input")!;
   const retain = group.querySelector('select[aria-label="Snapshots to keep"]') as HTMLSelectElement;
-  expect(folder.placeholder).toBe("/home/persona/.persona/update/development-backups");
   expect(folder.value).toBe("/var/snapshots");
-  const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
-  await act(async () => {
-    setValue.call(folder, "/srv/persona-snapshots");
-    folder.dispatchEvent(new Event("input", { bubbles: true }));
-  });
-  await act(async () => { retain.value = "10"; retain.dispatchEvent(new Event("change", { bubbles: true })); });
   const save = () => [...group.querySelectorAll("button")].find((b) => b.textContent === "Save")!;
+  expect(save().disabled).toBe(true);
+  expect(save().classList.contains("bg-accent-ink")).toBe(true);
+  await editBackupFolder(folder, " /srv/persona-snapshots ");
+  await act(async () => { retain.value = "10"; retain.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(save().disabled).toBe(false);
   await act(async () => save().click());
   expect(saved).toContainEqual({ development_backup_directory: "/srv/persona-snapshots", development_backup_retain: 10 });
+  expect(folder.value).toBe("/srv/persona-snapshots");
+  expect(save().disabled).toBe(true);
   await act(async () => [...group.querySelectorAll("button")].find((b) => b.textContent === "Use recommended")!.click());
-  expect((group.querySelector('input[aria-label="Backup folder"]') as HTMLInputElement).value).toBe("");
+  expect(folder.value).toBe("");
+  expect(save().disabled).toBe(false);
   await act(async () => save().click());
   expect(saved).toContainEqual({ development_backup_directory: "", development_backup_retain: 10 });
+  expect(save().disabled).toBe(true);
 });
 
 it("reloads the snapshot list after the folder changes", async () => {
   await mount();
   expect(backupReads).toBe(1);
   const group = host.querySelector('[data-settings-group="hub-dev-backup"]')!;
-  const folder = group.querySelector('input[aria-label="Backup folder"]') as HTMLInputElement;
-  const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
-  await act(async () => {
-    setValue.call(folder, "/srv/persona-snapshots");
-    folder.dispatchEvent(new Event("input", { bubbles: true }));
-  });
+  const folder = group.querySelector<HTMLInputElement>("input")!;
+  await editBackupFolder(folder, "/srv/persona-snapshots");
   const save = [...group.querySelectorAll("button")].find((b) => b.textContent === "Save")!;
   await act(async () => save.click());
   // A snapshot listed from the old folder cannot be found in the new one.
@@ -504,10 +653,16 @@ it("reloads the snapshot list after the folder changes", async () => {
 
 it("omits development_backup_directory when only snapshot retention changed", async () => {
   await mount();
+  await pushUpdate({ development: { ...status.development!, backup_retain: 4 } });
   const group = host.querySelector('[data-settings-group="hub-dev-backup"]')!;
   const retain = group.querySelector('select[aria-label="Snapshots to keep"]') as HTMLSelectElement;
-  await act(async () => { retain.value = "10"; retain.dispatchEvent(new Event("change", { bubbles: true })); });
   const save = [...group.querySelectorAll("button")].find((b) => b.textContent === "Save")!;
+  expect(save.disabled).toBe(true);
+  await act(async () => { retain.value = "10"; retain.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(save.disabled).toBe(false);
+  await act(async () => { retain.value = "4"; retain.dispatchEvent(new Event("change", { bubbles: true })); });
+  expect(save.disabled).toBe(true);
+  await act(async () => { retain.value = "10"; retain.dispatchEvent(new Event("change", { bubbles: true })); });
   await act(async () => save.click());
   expect(saved).toEqual([{ development_backup_retain: 10 }]);
 });
@@ -524,10 +679,10 @@ it("uses backup_directory_is_default even when symlinked raw paths differ", asyn
     },
   } }));
   const group = host.querySelector('[data-settings-group="hub-dev-backup"]')!;
-  const folder = group.querySelector('input[aria-label="Backup folder"]') as HTMLInputElement;
-  const useRecommended = [...group.querySelectorAll("button")].find((b) => b.textContent === "Use recommended") as HTMLButtonElement;
+  const folder = group.querySelector<HTMLInputElement>("input")!;
+  const useRecommended = [...group.querySelectorAll("button")].find((b) => b.textContent === "Use recommended");
   expect(folder.value).toBe("");
-  expect(useRecommended.disabled).toBe(true);
+  expect(useRecommended).toBeUndefined();
   const retain = group.querySelector('select[aria-label="Snapshots to keep"]') as HTMLSelectElement;
   await act(async () => { retain.value = "5"; retain.dispatchEvent(new Event("change", { bubbles: true })); });
   const save = [...group.querySelectorAll("button")].find((b) => b.textContent === "Save")!;

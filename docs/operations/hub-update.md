@@ -40,10 +40,12 @@ folder** and the number of **Snapshots to keep**. Operators configure external c
 commands on the Hub host.
 
 The recommended folder is `<runtime>/update/development-backups` (where the Hub has always
-kept these snapshots); it is shown as the placeholder and used when no folder is set. **Use
-recommended** and an empty field are an explicit Web choice of it, so they win over a
-`directory` in `hub.json`; leaving the field out of a request keeps whatever is set. A
-custom folder is validated on the Hub with the backup command's rules (`internal/operations/backup`):
+kept these snapshots). It appears as a wrapping placeholder in the full-width folder field.
+**Use recommended** appears for a custom folder and clears the field. **Save** is enabled
+when the folder or retention changes. Saving a change to an empty folder explicitly chooses
+the recommendation over a `directory` in `hub.json`. Omitting the folder from a request
+keeps the saved folder. The Hub validates a custom folder with the backup command's rules
+(`internal/operations/backup`):
 it must be an absolute path (a leading `~` is expanded), may not be inside data a snapshot
 collects (the knowledge base, `managers/assistant`, extensions, skills or
 `hub.machines_kept`), may not be the runtime directory or contain it (or an external
@@ -949,6 +951,9 @@ Where a release hub reads `latest.json` and downloads from (#4522). v0.2.1's bin
 - **A source that stopped** (#8108): when the newest release a check reads is older than the hub's own build and older than the release its code contains (the `vX.Y.Z` its version starts with: `git describe` names a build after the newest tag in it), the source no longer takes releases, and the hub would otherwise find itself up to date at every check while its phones get no newer Android app. `GET /api/v1/hub/update` then carries `source_behind: true` (`latest` is the source's newest release), Settings › hub says so in place of "Up to date", naming the source and `update.url`, and the log says it once per source and release, not at every check. A source as new as the hub, newer, or holding the release the hub's code starts from (GitHub Releases for a hub deployed from `main` after that release) reports nothing. A version that names no release (`dev-…`, `master-<commit>-…`) cannot tell a stopped source from a quiet one, and reports nothing either.
 - **A hub deployed with `deploy.sh`** carries a non-empty environment `PERSONA_UPDATE_URL`, then the config's `publish.update_url`, else `<publish.site_url>/dl`: a config with only `site_url` pointing at the publish site gets the frozen `dl/` below, so the hub never sees a newer release or offers its phones the Android app. `deploy.sh` prints which source the hub will carry when `publish.update_url` is not set; set it (for example to the GitHub Releases base) before deploying, or `update.url` in the hub's `hub.json` afterwards.
 - **The default of official builds** is the GitHub Releases base (`https://github.com/nwverse/persona/releases/latest/download`, through `publish.update_url`), the same base the Release's `install.sh` downloads from; v0.5.2 and later carry it. Releases up to v0.4.0 were built with the publish site's `dl/`, which has stayed on the 2026-11-07 build since the repository history was rewritten (the rollback guard refuses to publish over it), so those hubs never see a newer release: set `update.url` to the GitHub base, or upgrade once by hand. The getting-started guide and the website's install command point new installs at the Release's `install.sh` for the same reason. `update.url` still lets a hub choose another source without a new build.
+
+On the web, **Settings › This hub** shows the latest version from the selected Release or Beta source and its publication time when available (#15710).
+With no result yet, it prompts for a check. If the installed build number is higher than the source's latest build, it explains that updating from that source would require a downgrade. A stopped-source warning takes precedence.
 
 ### Beta updates (opt-in)
 

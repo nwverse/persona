@@ -710,3 +710,69 @@ it("keeps the actual engine connection until a same-kind runtime default is expl
   expect(getSession(mid(), "c1")?.model_pick).toBeUndefined();
   expect(defaultSetup).toEqual({ provider: "claude", model: "opus", effort: "high" });
 });
+
+it("shows the actual AGY engine and Gemini model on main chat under default Claude config instead of Claude Default (recommended), and loads and switches models in the panel from a cold cache", async () => {
+  defaultSetup = { provider: "claude", model: "", effort: "high" };
+  mainSetup = { provider: "claude", model: "", effort: "high" };
+  const agyCalls: string[] = [];
+  const origFetch = globalThis.fetch;
+  vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.includes("/launchers?purpose=assistant") && !url.includes("purpose=assistant.main") && !url.includes("purpose=assistant.supervise")) {
+      return json({
+        launchers: [
+          { name: "claude", source: "builtin" },
+          { name: "agy", source: "agy", agent: "agy", assistant: true },
+        ],
+        default: defaultSetup,
+        unavailable: [],
+      });
+    }
+    if (url.includes("/agy/models")) {
+      agyCalls.push(url);
+      if (!url.includes("host=agy")) {
+        return json({ agent: "agy", models: [] });
+      }
+      return json({
+        agent: "agy",
+        models: [
+          { id: "gemini-3-pro-high", name: "Gemini 3 Pro (High)", default_effort: "high", efforts: ["low", "medium", "high"] },
+          { id: "gemini-3-flash", name: "Gemini 3 Flash", efforts: ["low", "medium", "high"] },
+        ],
+      });
+    }
+    return origFetch(input, init);
+  }));
+  await show(chat({
+    agent: "agy",
+    launcher: undefined,
+    source_kind: "runtime",
+    source_instance_id: "agy",
+    model: "gemini-3-pro-high",
+    effort: "high",
+  }));
+  expect(pill().querySelector("[data-pill-engine]")?.getAttribute("data-pill-engine")).toBe("agy");
+  expect(pill().textContent).toContain("Gemini 3 Pro");
+  expect(pill().textContent).not.toContain("Default (recommended)");
+  expect(agyCalls.some((url) => url.includes("/launchers/agy/models") && url.includes("host=agy"))).toBe(true);
+
+  // Opening the panel on a cold cache must read the same host=agy cache key (never stuck in loading) and allow switching models.
+  await open();
+  const agyProvider = panel.props!.providers.find((p) => p.id === "agy")!;
+  expect(agyProvider).toBeDefined();
+  expect(agyProvider.loading).toBeFalsy();
+  expect(agyProvider.models?.map((m) => m.id)).toEqual(["gemini-3-pro-high", "gemini-3-flash"]);
+  expect(panel.props!.state.current).toEqual({ provider: "agy", model: "gemini-3-pro-high", effort: "high" });
+
+  expect(await act(() => panel.props!.onPick({ provider: "agy", model: "gemini-3-flash", effort: "medium" }))).toBe(true);
+  expect(sent("PUT")).toEqual([{ launcher: "agy", model: "gemini-3-flash", effort: "medium", machine_id: mid() }]);
+  expect(getSession(mid(), "c1")?.model_pick).toEqual({ launcher: "agy", model: "gemini-3-flash", effort: "medium" });
+
+  // Reloading AGY from the panel must also keep the host=agy cache key.
+  const beforeReload = agyCalls.length;
+  await act(async () => {
+    panel.props!.onReload!("agy");
+  });
+  await flush();
+  expect(agyCalls.slice(beforeReload).some((url) => url.includes("/launchers/agy/models") && url.includes("host=agy"))).toBe(true);
+});

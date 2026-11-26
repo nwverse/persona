@@ -65,7 +65,7 @@ export function DeploySection({ machine, agents }: { machine: Machine; agents: r
   const [started, setStarted] = useState(false);
   const sawBusy = useRef(false);
   const furthest = useRef(0);
-  const busy = !!(machine.deploying || machine.deploy_phase);
+  const { busy } = deployment;
   if (busy && started) sawBusy.current = true;
   if (machine.deploy_phase) furthest.current = Math.max(furthest.current, STEPS.indexOf(machine.deploy_phase));
   const progress = deployProgress(machine, started || busy, sawBusy.current || busy, furthest.current, pending, error);
@@ -74,10 +74,11 @@ export function DeploySection({ machine, agents }: { machine: Machine; agents: r
   const gap = buildGap(hubVersion, nodeVersion);
   // a stepper already under way (another device pressed it) shows as well
   useEffect(() => {
-    if (busy && !started) {
-      sawBusy.current = true;
-      setStarted(true);
-    }
+    if (!busy) return;
+    setAsking(false);
+    if (started) return;
+    sawBusy.current = true;
+    setStarted(true);
   }, [busy, started]);
 
   const run = async () => {
@@ -153,7 +154,7 @@ export function DeploySection({ machine, agents }: { machine: Machine; agents: r
         ) : null}
       </SheetPart>
       <Dialog
-        open={asking}
+        open={asking && !busy}
         onClose={() => setAsking(false)}
         title={t("machines-alerts.redeploy_confirm_title", { machine: machine.name })}
         footer={
@@ -161,7 +162,7 @@ export function DeploySection({ machine, agents }: { machine: Machine; agents: r
             <Button tone="quiet" onClick={() => setAsking(false)}>
               {t("common.cancel")}
             </Button>
-            <Button tone="primary" onClick={() => void run()} testId="redeploy-confirm">
+            <Button tone="primary" disabled={!deployment.canDeploy || pending} onClick={() => void run()} testId="redeploy-confirm">
               {t("lib-machine-deploy.redeploy")}
             </Button>
           </>

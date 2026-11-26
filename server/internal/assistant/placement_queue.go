@@ -18,6 +18,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 // Two-layer automatic machine placement kernel mechanism:
@@ -328,7 +329,7 @@ func (s *Service) emitPlacementPending(planID, todoID string, batchSize int) {
 	if planID == "" || todoID == "" || batchSize <= 0 {
 		return
 	}
-	ev := assistantwire.PlacementPendingEvent{PlanID: assistantwire.PlanID(planID), TodoID: assistantwire.TodoID(todoID), BatchSize: batchSize}
+	ev := assistantwire.PlacementPendingEvent{PlanID: assistantwire.PlanID(planID), TodoID: wireids.TodoID(todoID), BatchSize: batchSize}
 	if pub, ok := s.hub.(placementEventPublisher); ok {
 		if err := pub.PlacementEvent(assistantwire.EventPlacementPending, ev); err != nil {
 			s.logf("placement: event %s: %v", todoID, err)
@@ -649,6 +650,10 @@ func (s *Service) assignPendingPlacement(
 		}
 		configuredMode, _ := fitParams["permission_mode"].(string)
 		if !candidate.preservePermission {
+			if candidate.CallerPermission != nil {
+				candidate.Permission = *candidate.CallerPermission
+				candidate.normalizeReadonlyPermission(readonlyModeOf(s.settings(ctx)))
+			}
 			switch {
 			case candidate.Readonly:
 				if fit.allowAll() {
@@ -732,6 +737,11 @@ func (s *Service) assignPendingPlacement(
 	}
 	candidate.Placement = pl
 
+	var blockerRefs []string
+	if s.settings(ctx).todosV2On() {
+		blockerRefs = s.activeTodoBlockerRefs(ctx, pt.TodoID)
+	}
+
 	wasRetry := false
 	casResult := "not_pending"
 	currentVersion := 0
@@ -770,7 +780,15 @@ func (s *Service) assignPendingPlacement(
 		live.Permission = candidate.Permission
 		live.Why = candidate.Why
 		live.Placement = pl
-		live.Queue = nil
+		if len(blockerRefs) > 0 {
+			q := s.blockerWaitQueue(blockerRefs)
+			q.Retry = wasRetry
+			live.Queue = q
+			live.Placement = queuedPlacement(*live, q)
+			pl = live.Placement
+		} else {
+			live.Queue = nil
+		}
 		casResult = "ok"
 	}); err != nil {
 		return nil, err
@@ -791,6 +809,16 @@ func (s *Service) assignPendingPlacement(
 	}
 
 	s.savePlacement(ctx, pl)
+	if len(blockerRefs) > 0 {
+		s.logf("task %s: placed on %s but deferred until active todo blockers clear (%d active)", pt.TodoID, m.ID, len(blockerRefs))
+		return &placementAssignResult{
+			PlanID:      planID,
+			TodoID:      pt.TodoID,
+			Machine:     m.ID,
+			Cwd:         candidate.Cwd,
+			PlacementID: pl.ID,
+		}, nil
+	}
 	candidate.Queue = nil
 	candidate.admissionRelease = release
 	candidate.admissionClaimMachine = m.ID
@@ -1007,7 +1035,7 @@ func (s *Service) placementRoutes() {
 			}
 			tasks = append(tasks, assistantwire.PlacementPendingTask{
 				PlanID:               assistantwire.PlanID(item.planID),
-				TodoID:               assistantwire.TodoID(item.pt.TodoID),
+				TodoID:               wireids.TodoID(item.pt.TodoID),
 				Version:              ver,
 				Role:                 assistantwire.PlacementTaskRole(item.pt.Role),
 				Readonly:             item.pt.Readonly,
