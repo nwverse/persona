@@ -429,6 +429,78 @@
         }
       }
     },
+    "3 Days [Token Project]": {
+      "comment": "Token usage by project: the range of the last 3 days",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "3 Days"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "3日間"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "近 3 天"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "7 Days [Token Project]": {
+      "comment": "Token usage by project: the range of the last 7 days",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "7 Days"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "7日間"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "近 7 天"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Assistant [Token Project]": {
+      "comment": "Token usage by project: the Persona assistant's own conversations",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Assistant"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "アシスタント"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "助手"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "Browsers": {
       "extractionState": "manual",
       "localizations": {
@@ -451,6 +523,198 @@
           }
         }
       }
+    },
+    "By Agent": {
+      "comment": "Token usage by project: each coding agent's tokens",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "By Agent"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Agent別"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "按 Agent"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "By Computer": {
+      "comment": "Token usage by project: each computer's tokens",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "By Computer"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "コンピューター別"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "按电脑"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "By Hour": {
+      "comment": "Token usage by project: today's tokens by the hour",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "By Hour"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1時間ごと"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "每小时"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "By Launcher": {
+      "comment": "Token usage by project: each launcher's tokens",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "By Launcher"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ランチャー別"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "按启动器"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Cache Hits": {
+      "comment": "Token usage by project: cache reads over all input",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cache Hits"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "キャッシュヒット"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "缓存命中"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Development [Token Project]": {
+      "comment": "Token usage by project: git repositories",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Development"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "開発"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "开发"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Folders and Worktrees": {
+      "comment": "Token usage by project: each folder or git worktree the project's sessions started in",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Folders and Worktrees"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "フォルダーとワークツリー"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "目录与 worktree"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Home Folder [Token Project]": {
+      "comment": "Token usage by project: sessions started in the home folder itself",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Home Folder"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ホームフォルダー"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "主目录"
+          }
+        }
+      },
+      "extractionState": "manual"
     },
     "In Inbox": {
       "extractionState": "manual",
@@ -521,6 +785,102 @@
         }
       }
     },
+    "Linked Worktree": {
+      "comment": "Token usage by project: a git worktree that is not the main checkout",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Linked Worktree"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "リンクされたワークツリー"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "关联的 worktree"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Non-development": {
+      "comment": "Token usage by project: folders, the home folder and the assistant, not in a git repository",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non-development"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "開発以外"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "非开发"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Nothing Used in These Days": {
+      "comment": "Token usage by project: the range has no usage",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nothing Used in These Days"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "この期間の使用量はありません"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这几天没有用量"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Nothing Used Today Yet": {
+      "comment": "Token usage by project: today has no usage",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nothing Used Today Yet"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "今日の使用量はまだありません"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "今天还没有用量"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "Open in Inbox: %@": {
       "extractionState": "manual",
       "localizations": {
@@ -543,6 +903,78 @@
           }
         }
       }
+    },
+    "Opened in a Terminal [Launcher]": {
+      "comment": "Token usage by project: sessions typed in a terminal, with no launcher",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Opened in a Terminal"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ターミナルで開いたもの"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "终端里打开的"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Range [Token Project]": {
+      "comment": "Token usage by project: the range picker's label",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Range"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "期間"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "时间范围"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Requests [Token Project]": {
+      "comment": "Token usage by project: how many model replies",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Requests"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "リクエスト"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请求"
+          }
+        }
+      },
+      "extractionState": "manual"
     },
     "Scoped Access": {
       "extractionState": "manual",
@@ -161079,6 +161511,30 @@
       },
       "extractionState": "manual"
     },
+    "Share [Token Project]": {
+      "comment": "Token usage by project: the project's part of every project's tokens",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Share"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "全体比"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "占全部"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "SMS": {
       "localizations": {
         "en": {
@@ -185972,6 +186428,30 @@
           "stringUnit": {
             "state": "translated",
             "value": "临时码"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Temporary Folders": {
+      "comment": "Token usage by project: sessions started in a temporary folder",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Temporary Folders"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "一時フォルダー"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "临时文件夹"
           }
         }
       },
@@ -214405,6 +214885,30 @@
           "stringUnit": {
             "state": "translated",
             "value": "未知错误"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "Unknown Folder": {
+      "comment": "Token usage by project: usage whose folder no computer could tell",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unknown Folder"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不明なフォルダー"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未知目录"
           }
         }
       },

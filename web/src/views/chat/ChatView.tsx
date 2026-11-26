@@ -507,7 +507,8 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
     const out = launch?.outgoing;
     if (!launch || !out || (!out.text && !out.images.length)) return [];
     const id = launch.messageId;
-    return [{ id, raw: out.text, images: out.images, before: [], at: Date.now(), msg: { id: `pending:${id}`, ...parseUserText(out.text), images: out.images.map((image, i) => ({ id: `pending:${id}#${i}`, seq: 0, role: "user", kind: "image", image })) } }];
+    const at = launch.handoffAt ?? Date.now();
+    return [{ id, raw: out.text, images: out.images, before: [], at, acceptedAt: at, msg: { id: `pending:${id}`, ...parseUserText(out.text), images: out.images.map((image, i) => ({ id: `pending:${id}#${i}`, seq: 0, role: "user", kind: "image", image })) } }];
   });
   const [draftRefusal, setDraftRefusal] = useState<{ id: string; draft: string; clearable?: string } | null>(null);
   // what other pages sent here ("Ask Persona", "Hand to AI"…): shown like this page's own sending bubbles (lib/outbox.ts)
@@ -2383,14 +2384,18 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
     const live = lines.flatMap((l) => l.kind === "supervision" ? l.lines : [l]).findLast((l) => l.kind === "segment" && l.live);
     return live?.kind === "segment" ? live.seg : undefined;
   }, [lines]);
+  const waitingPending = shownPending.some((p) => p.waits);
+  const postingPending = shownPending.some((p) => p.posting);
+  const acceptedPending = !postingPending && shownPending.length > 0 && state !== "working" && !liveSeg;
   const hasFeedback = Boolean(
-    shownPending.some((p) => p.waits) ||
-    (sendFeedback !== undefined ? Boolean(sendFeedback) : shownPending.length > 0 || outbox.some((e) => e.state === "sending") || (starting && outgoing > 0)),
+    waitingPending ||
+    (sendFeedback !== undefined ? Boolean(sendFeedback) : postingPending || acceptedPending || outbox.some((e) => e.state === "sending") || (starting && outgoing > 0)),
   );
   // Keep empty-transcript "Loading chat" and inline "Processing…" mutually exclusive so at most one loader shows.
   const loadingChat = tr.loading && !tr.items.length && !opening && !hasFeedback;
   const processing = !hasFeedback && !loadingChat && Boolean(assistant || session?.assistant) && state === "working" && !backgroundOnly &&
     !liveSeg && (tr.loading || (opening && !tr.streaming));
+  const feedbackProcessing = sendFeedback === "processing" || processing || (sendFeedback === undefined && acceptedPending);
   const runStart = (liveSeg ? turnStart(liveSeg) : undefined) ?? stateSince;
   // what the turn is doing, for the bar's words (cindy's status): kept as it was while it says the same
   const lastStep = useRef<RunStep | undefined>(undefined);
@@ -2826,7 +2831,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
             {/* what is on its way, and failed messages with nothing sent after them, in the order they were written */}
             {!detached && [...shownPending.map((p) => ({ at: p.at, el: (
               <div key={p.id} className="flex flex-col gap-3">
-                <UserBubble msg={p.msg} mid={mid} sid={sid} pending sendState="sending" />
+                <UserBubble msg={p.msg} mid={mid} sid={sid} pending={Boolean(p.posting)} sendState={p.posting ? "sending" : "sent"} />
               </div>
             ) })), ...placed.rest.map((e) => ({ at: e.at, el: <OutboxBubbles key={`outbox:${e.id}`} mid={mid} sid={sid} entries={[e]} canRetry={!refusedNoRow} /> })),
               ...keptUndelivered.map((m) => ({ at: Date.parse(m.at) || 0, el: (
@@ -2839,8 +2844,8 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
               .sort((a, b) => a.at - b.at)
               .map((x) => x.el)}
             {!detached && !loadingChat && (hasFeedback || processing) && (
-              <div className="flex items-center gap-2.5" data-message-feedback={sendFeedback || (processing ? "processing" : "sending")}>
-                {sendFeedback === "unknown" ? <span role="status" className="text-ink-3">{t("lib-outbox.delivery_unknown")}</span> : <Loading label={shownPending.some((p) => p.waits) ? t("ultracode.send_waits") : sendFeedback === "processing" || processing ? t("chat-segmentview.processing") : starting ? t("chat-chatview.preparing") : online ? t("chat-segmentview.sending") : t("chat-chatview.waiting_for_hub")} />}
+              <div className="flex items-center gap-2.5" data-message-feedback={sendFeedback || (feedbackProcessing ? "processing" : "sending")}>
+                {sendFeedback === "unknown" ? <span role="status" className="text-ink-3">{t("lib-outbox.delivery_unknown")}</span> : <Loading label={waitingPending ? t("ultracode.send_waits") : feedbackProcessing ? t("chat-segmentview.processing") : starting ? t("chat-chatview.preparing") : online ? t("chat-segmentview.sending") : t("chat-chatview.waiting_for_hub")} />}
               </div>
             )}
             {detached ? hasLater && (
