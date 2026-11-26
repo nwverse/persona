@@ -34,14 +34,19 @@ func handoffReady(t *testing.T) (*Service, *[]map[string]any) {
 
 func waitHandoff(t *testing.T, s *Service, id string) {
 	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if len(s.handoffs().started) > 0 {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
+	// The guest starts on the module's worker; waiting for the workers waits for the whole run, bind included.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := s.chat().t.wait(ctx); err != nil {
+		t.Fatalf("handoff %s: the run did not finish: %v", id, err)
 	}
-	t.Fatalf("handoff %s never started a guest", id)
+	d := s.handoffs()
+	s.tmu.Lock()
+	n := len(d.started)
+	s.tmu.Unlock()
+	if n == 0 {
+		t.Fatalf("handoff %s never started a guest", id)
+	}
 }
 
 // Handoff starts a guest and never a channel run. The untrusted text stays inside the prompt's context block.
