@@ -325,7 +325,7 @@ func (s *Service) compactRecoveryPins(ctx context.Context, p ContextParams) []pr
 	if s.call(readCtx, p.MachineID, DeviceSessionItems, map[string]any{"session_id": p.SessionID, "turns": 4}, &recent) == nil {
 		for i := len(recent.Items) - 1; i >= 0 && len(pins) < 3; i-- {
 			it := recent.Items[i]
-			if it.Role != "user" || it.Kind != proto.KindText || it.From != "" || it.FullSize > 0 || it.Stored != nil || prompts.ItemSource(it) != nil || contextTagRe.MatchString(it.Text) {
+			if it.Role != "user" || it.Kind != proto.KindText || it.From != "" || it.FullSize > 0 || it.Stored != nil || prompts.ItemSource(it) != nil || contextTagRe.MatchString(it.Text) || slashCommandRe.MatchString(strings.TrimSpace(it.Text)) {
 				continue
 			}
 			pins = append(pins, prompts.RecoveryEntry{Source: fmt.Sprintf("session/%s/%s/item/%s seq=%d", p.MachineID, p.SessionID, it.ID, it.Seq), Text: it.Text})

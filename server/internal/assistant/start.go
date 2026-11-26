@@ -1358,6 +1358,7 @@ func (s *Service) messageParams(ctx context.Context, p SendParams, owner bool) (
 	if id, _ := p.Params["client_msg_id"].(string); id != "" {
 		s.availOwnerSent(p.MachineID, p.SessionID, id, time.Now()) // a replay opens no reply wait (availability.go)
 	}
+	s.noteMainAutoCompactInput(p.MachineID, p.SessionID)
 	text, said := p.Params["text"].(string)
 	if said {
 		p.Params["text"] = prompts.ProtectUserMessage(text)

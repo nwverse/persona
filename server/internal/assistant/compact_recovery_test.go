@@ -195,3 +195,25 @@ func TestCompactRecoveryNativeHookUsesPreparedScopedRecords(t *testing.T) {
 		t.Fatalf("native hook context: %+v", got)
 	}
 }
+
+func TestCompactRecoveryPinsSkipSlashCommands(t *testing.T) {
+	f := newFakeHub().withMachine()
+	s := newTestService(t, f)
+	ctx := context.Background()
+	setSettings(t, s, func(v *Settings) { v.Main = "main" })
+	f.setItems(
+		proto.Item{ID: "u1", Seq: 1, Role: "user", Kind: proto.KindText, Text: "Keep real request."},
+		proto.Item{ID: "u2", Seq: 2, Role: "user", Kind: proto.KindText, Text: "/compact"},
+		proto.Item{ID: "u3", Seq: 3, Role: "user", Kind: proto.KindText, Text: "/compact focus on open tasks"},
+		proto.Item{ID: "u4", Seq: 4, Role: "user", Kind: proto.KindText, Text: "/clear"},
+	)
+	got := s.Context(ctx, ContextParams{MachineID: "server", SessionID: "main", RecoveryID: "cp-slash"})
+	if !strings.Contains(got.Recovery, "Keep real request.") {
+		t.Fatalf("missing real user quote in recovery: %s", got.Recovery)
+	}
+	for _, cmd := range []string{"/compact", "/clear"} {
+		if strings.Contains(got.Recovery, cmd) {
+			t.Fatalf("slash command %q leaked into compact recovery pins: %s", cmd, got.Recovery)
+		}
+	}
+}

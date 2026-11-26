@@ -1130,6 +1130,29 @@ finished or failed and preserves Claude Code's reason when available. Both relea
   never compacted. A Codex main chat follows the release time but, as before, is not compacted before release. An
   older node ignores both fields; an older manager sends neither. Both must be updated to use it.
 
+### Post-turn idle automatic compaction for the main conversation (#14686)
+
+Because Antigravity (`agy`) and other external runtimes do not run Claude Code's node-side idle reaper or
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW` injection, the manager (`server/internal/assistant/main_auto_compact.go`) also
+evaluates the main conversation's context load once a turn finishes and settles idle (and re-checks if delayed
+transcript/usage updates arrive shortly after turn end while the conversation stays idle):
+
+- **Thresholds**: when `context_tokens` is reported and plausible, the trigger is 75% of the effective compaction
+  window — the smaller positive of `context_window` and `assistant.main_compact_window` (`400,000` by default; `0`
+  follows `context_window`) — or an explicitly saved `assistant.idle_auto_compact_tokens`. When `context_tokens` is
+  unreported or remains unchanged across turns, the fallback checks incremental steps (`160`), uncompacted item byte
+  volume (`512 KiB` after the latest compaction notice via `session.items`), or cumulative output token growth
+  (`80,000`) since the last compaction.
+- **Safety and silence**: the manager triggers `assistant.compact` only for the active main conversation while it is
+  confirmed idle (no running turn, background work, queued or undelivered messages, queued relays, pending interactions,
+  usage-limit/unrecoverable turn errors, or post-turn input within the quiet window). An in-flight latch prevents
+  re-entrancy, cooldowns bound retries (`15` minutes after completion, `10` minutes after failure, `1` minute after a
+  `busy`/`compacting` refusal), and `assistant.idle_auto_compact = false` disables automatic triggering.
+- **Antigravity runtime path**: `node/assistant_runtime_compact.go` sends bare `/compact` with the runtime's dedicated
+  assistant environment (`caps.assistant_environment`) and preserves the pre-compaction session status in published
+  session lists while `compaction.state == "running"` so compaction stays silent. `integrations/antigravity/lib/runtime.js`
+  treats `CHECKPOINT` as exported work and excludes standalone `/compact` turns from empty-response retry/failure.
+
 ### Impossible gateway usage (2026-11-06, #3300)
 
 Claude Code estimates context from the last reply's `usage`. Some gateways report zero for every reply in a turn, then total all request inputs in the last reply (85k-token chat reported 1.7M):
@@ -1179,7 +1202,7 @@ Web, iOS and Android offer it when the hub advertises `assistant_compact`; progr
 screen. "Clear context" and "New main chat" remain main-only. This manual action does not change automatic compaction
 windows or any main-only automatic policy.
 
-- Same path as idle compaction: write `/compact` into an existing process, or start with `--resume` (chat's previous launcher / model); Codex uses `thread/compact/start`; runtime chats unsupported.
+- Same path as idle compaction: write `/compact` into an existing process, or start with `--resume` (chat's previous launcher / model); Codex uses `thread/compact/start`; assistant-capable runtimes such as Antigravity receive bare `/compact` via `session.send` (`node/assistant_runtime_compact.go`) and refuse `only_running: true`.
   A Codex Agent on an app-server takes the same call when sent `/compact` alone (#10188, [codex.md](../integrations/codex.md) "Sessions on the daemon (app-server route)").
   A guest conversation (a meeting's room too, which the manager compacts in long meetings: [meeting-minutes.md](meeting-minutes.md) "Long meetings: lean batches and compaction (#8253)") resumes as on any message, with its guest flags and settings from its record; one whose launcher runs another agent by now is refused, nothing started (#8253). The manager compacting a room sends `only_running: true`: a process that is not running is refused with `not_running` instead of being started only to be compacted (an older node ignores the field).
   Answering or already compacting returns 409, not queued: users can't see when a `/compact` queued behind a turn begins.

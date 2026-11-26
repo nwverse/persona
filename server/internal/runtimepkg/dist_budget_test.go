@@ -56,9 +56,10 @@ import (
 // Claude Code plugin 0.3.1 reports classic hook pass-over and disables permission bridging under managed settings
 // (#15546), adding 1,397 B (282,660 B).
 // Antigravity form elicitation (#16645) and background task and schedule tracking (#13594) bring the total to 286,816 B.
+// Antigravity silent /compact handling, /compact notice mapping, and truncated phantom /compact tail cleanup (#14686) add 451 B (287,267 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 286_816
+	const budget = 287_267
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {
