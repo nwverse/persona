@@ -304,14 +304,14 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		// The host's record of the answer (botmux's reply in the topic), unless the transcript has words well after it:
 		// the session went on outside the host (a `claude --resume` in a terminal). Text written in the same turn
 		// right after the reply (the sentinel, a closing line) comes within minutes.
-		if a.LastText != "" && (a.LastTextAt.IsZero() || !textAt.After(a.LastTextAt.Add(hostTextSlack))) {
-			s.LastText = snippet(a.LastText)
+		if words := transcript.WithoutBotmuxSentinel(a.LastText); words != "" && (a.LastTextAt.IsZero() || !textAt.After(a.LastTextAt.Add(hostTextSlack))) {
+			s.LastText = snippet(words)
 			// A message to the agent after the host's answer answered its question (#5096); a host that gives no time
 			// for its answer is taken as the latest word.
 			if !a.LastTextAt.IsZero() && promptAt.After(a.LastTextAt) {
 				s.Asks = ""
 			} else {
-				s.Asks = closeout.AskOf(a.LastText)
+				s.Asks = closeout.AskOf(words)
 			}
 			s.AsksRead = true
 		}
