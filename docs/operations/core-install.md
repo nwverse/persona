@@ -53,13 +53,15 @@ DATABASE_URL='postgres://persona:<password>@127.0.0.1:5432/persona?sslmode=disab
 `fetch='wget -qO-'` does the same on a machine without curl. `$SITE/install.sh` is the installer and `$SITE/dl/` the
 downloads.
 
-Write the hub's configuration, with a token of its own ([config.md](config.md)):
+Write the hub's configuration, with a token of its own ([config.md](config.md)). The TLS listener lets Persona Link
+pair later; with no certificate files, the hub manages its own self-signed identity ([network.md](network.md), "TLS
+and public-key pinning"):
 
 ```sh
 mkdir -p ~/.persona && chmod 700 ~/.persona
 TOKEN="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 cat > ~/.persona/hub.json <<JSON
-{"listen": "127.0.0.1:18660", "token": "$TOKEN", "public_url": "http://127.0.0.1:18660", "database_url": "$DATABASE_URL", "machines": []}
+{"listen": "127.0.0.1:18660", "token": "$TOKEN", "public_url": "http://127.0.0.1:18660", "database_url": "$DATABASE_URL", "machines": [], "public": {"tls_listen": "127.0.0.1:18662"}}
 JSON
 chmod 600 ~/.persona/hub.json
 ```
@@ -106,13 +108,34 @@ does not have.
 
 ## A computer's node
 
+On the hub machine, make a pairing link for the new computer, then copy it to the computer:
+
 ```sh
-curl -fsSL <the publisher's site>/install.sh | sh -s -- --core --node --pair '<link from personad hub pair --machine <id>>'
+~/.persona/bin/personad hub pair --machine <machine id> --add
 ```
 
-installs `persona-node` and `persona-link` of the core edition, as `--node` does for the full one
+Install the node's programs and pair them with the printed link (kept in `$PAIR_URL` in this example):
+
+```sh
+PAIR_URL='<the printed pairing link>'
+$fetch "$SITE/install.sh" | PERSONA_SKIP_HERDR=1 sh -s -- --core --node --pair "$PAIR_URL"
+```
+
+This installs `persona-node` and `persona-link` of the core edition, as `--node` does for the full one
 ([link.md](link.md), "Install the node service"). The node's modules (Messages, iPhone control, screen sharing, the
 Office commands) are not in it.
+
+On a machine without a service manager, such as the install check's clean container, the installer still installs and
+pairs the programs, then exits 1 and prints these alternatives. Run them now:
+
+```sh
+nohup ~/.persona/bin/persona-node node --attach > ~/.persona/node.log 2>&1 &
+nohup ~/.persona/bin/persona-link run --log ~/.persona/link.log > /dev/null 2>&1 &
+```
+
+`persona-link status --json` reports the pairing and connection; the computer appears in the hub's **Machines** list
+([link.md](link.md), "Without systemd"). A real machine needs a supervisor that starts both programs again after a
+restart, as that section explains.
 
 ## Updates stay core-only
 
@@ -174,13 +197,16 @@ edition; a core-only image is not built yet.
 2. starts a disposable Postgres and a clean container (Alpine with Python 3) that holds no checkout, only what it
    downloads;
 3. runs the commands of "Install the hub by hand" above, read from this file, in that container;
-4. checks the hub, the manager's `modules: loaded none`, the edition of every installed program, and that the
-   installer asked for `core-` names only;
-5. checks the update feed: the hub reports the core edition's newer release and never the full one's, and refuses a
+4. checks the hub, the manager's `modules: loaded none`, the hello's `modules` marker with no built-in module's
+   `module.<id>` flag (a client-only flag such as `module.glasses` may stay), the edition of every installed program,
+   and that the installer asked for `core-` names only;
+5. completes the browser sign-in handshake and uses its web credential, then follows "A computer's node" in an
+   isolated home and checks the core-only node is paired and online;
+6. checks the update feed: the hub reports the core edition's newer release and never the full one's, and refuses a
    full manifest served as `core-latest.json`;
-6. runs the installer again without `--core` and checks the install is still core-only;
-7. installs the full edition from the same directory in a second clean container and checks it asked for no `core-`
+7. runs the installer again without `--core` and checks the install is still core-only;
+8. installs the full edition from the same directory in a second clean container and checks it asked for no `core-`
    name and loads its modules.
 
-It prints one line: `PASS`, `FAIL` or `TIMEOUT`. `scripts/ci/server.sh build` runs it ('Core-only install from
+It prints one line: `PASS`, `FAIL` or `TIMEOUT`. `scripts/ci/server.sh core-other` runs it ('Core-only install from
 packages'). It needs Go, Docker (`DOCKER` names another client) and Python 3, and no private configuration.

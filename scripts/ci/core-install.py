@@ -5,10 +5,13 @@ Builds this machine's packages of both editions the way a release does (scripts/
 edition, the same go build line as scripts/release/publish.sh for the full one), serves them from one flat directory
 as a publisher's site does (install.sh, dl/latest.json, dl/core-latest.json, ...), starts a disposable Postgres 18
 container and a clean container (Alpine with Python 3) that holds no checkout, and runs in it the commands of the document's
-"Install the hub by hand" section, read from the document itself: only its three settings lines (SITE, fetch,
-DATABASE_URL) are given this run's values. Then it checks:
+"Install the hub by hand" and "A computer's node" sections, read from the document itself: only the three settings
+lines (SITE, fetch, DATABASE_URL), the node id and its pairing link are given this run's values. Then it checks:
 
 - the document's own check commands pass (health, the manager's `modules: loaded none`, the edition file);
+- the hello keeps the `modules` marker and has no built-in module's `module.<id>` flag (a client-only flag may stay);
+- the document's node commands install and pair a core node in an isolated home, and the hub lists it online;
+- the browser sign-in flow issues a web credential that can read the machines API;
 - every installed program is the core edition's build, byte for byte, and its build info says persona_core_only;
 - the installer asked the site for core- names only;
 - the hub's update check reads core-latest.json only: it reports the core edition's newer release, never the newer
@@ -123,13 +126,25 @@ def sha256(path):
 
 # --- the document ----------------------------------------------------------------------------------------------------
 
+def section_blocks(section):
+    """The sh blocks of one section of the document, in order."""
+    text = DOC.read_text()
+    m = re.search(rf"^## {re.escape(section)}\n(.*?)(?=^## )", text, re.M | re.S)
+    check(m, f"{DOC.name} has no section '{section}'")
+    return re.findall(r"^```sh\n(.*?)^```", m.group(1), re.M | re.S)
+
+
 def doc_blocks():
     """The sh blocks of the document's install section, in order."""
-    text = DOC.read_text()
-    m = re.search(rf"^## {re.escape(SECTION)}\n(.*?)(?=^## )", text, re.M | re.S)
-    check(m, f"{DOC.name} has no section '{SECTION}'")
-    blocks = re.findall(r"^```sh\n(.*?)^```", m.group(1), re.M | re.S)
+    blocks = section_blocks(SECTION)
     check(len(blocks) == 5, f"'{SECTION}' has {len(blocks)} sh blocks, this check knows 5 (settings, hub.json, install, start, check)")
+    return blocks
+
+
+def node_doc_blocks():
+    """The node's pairing, install and no-service-manager start commands, exactly as the document gives them."""
+    blocks = section_blocks("A computer's node")
+    check(len(blocks) == 3, f"'A computer's node' has {len(blocks)} sh blocks, this check knows 3")
     return blocks
 
 
@@ -236,11 +251,11 @@ class Site:
 
 
 def core_names(paths):
-    return [p for p in paths if p.startswith("/dl/core-")]
+    return [p for p in paths if p.startswith("/dl/") and p.rsplit("/", 1)[-1].startswith("core-")]
 
 
 def full_names(paths):
-    return [p for p in paths if p.startswith("/dl/") and not p.startswith("/dl/core-")]
+    return [p for p in paths if p.startswith("/dl/") and not p.rsplit("/", 1)[-1].startswith("core-")]
 
 
 # --- machines --------------------------------------------------------------------------------------------------------
@@ -291,6 +306,90 @@ def api(machine, method, path, timeout=60):
     return r.returncode, r.stdout, r.stderr
 
 
+def browser_sign_in(machine):
+    """Run the real browser sign-in handshake, then use its web credential; print no credential."""
+    script = r"""python3 - <<'PY'
+import json
+import os
+import urllib.parse
+import urllib.request
+
+home = os.path.expanduser("~")
+assert home == "/root", home
+with open(os.path.join(home, ".persona", "hub.json")) as f:
+    config = json.load(f)
+base = "http://127.0.0.1:18660"
+assert config["public_url"] == base, config["public_url"]
+
+def call(method, path, body=None, token=None):
+    headers = {}
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode()
+        headers["Content-Type"] = "application/json"
+    if token:
+        headers["Authorization"] = "Bearer " + token
+    request = urllib.request.Request(base + path, data=data, headers=headers, method=method)
+    with urllib.request.urlopen(request, timeout=20) as response:
+        assert response.status == 200, response.status
+        return json.load(response)
+
+# The read-only check comes first and proves this is the disposable hub and home before any credential write.
+assert call("GET", "/api/v1/health")["ok"] is True
+phone = call("POST", "/api/v1/auth/tokens", {"name": "CI phone", "kind": "phone"}, config["token"])
+started = call("POST", "/api/v1/auth/browser-login/start", {"name": "CI browser"})
+hub = urllib.parse.parse_qs(urllib.parse.urlparse(started["url"]).query)["hub"][0]
+approval = call("POST", "/api/v1/auth/browser-login/approve",
+                {"id": started["id"], "hub": hub, "allow": True, "show_number": True}, phone["token"])
+signed_in = call("POST", "/api/v1/auth/browser-login/confirm",
+                 {"id": started["id"], "secret": started["secret"], "number": approval["number"]})
+assert signed_in["token"].startswith("jd_")
+machines = call("GET", "/api/v1/machines", token=signed_in["token"])
+assert isinstance(machines.get("machines"), list), sorted(machines)
+print("browser sign-in: full web credential issued; GET /api/v1/machines 200")
+PY
+"""
+    return machine.must(script, "browser sign-in", timeout=90).strip()
+
+
+def pair_node(machine, head, blocks, release, work, env):
+    """Follow the node section in an isolated home on the clean machine; no checkout or host configuration."""
+    # Read-only status in the same environment immediately before the pairing command writes the new computer.
+    code, body, err = api(machine, "GET", "/api/v1/health")
+    check(code == 0 and json.loads(body).get("ok") is True, f"node pairing's status check: {err or body}")
+    pair = machine.sh(blocks[0].replace("<machine id>", "ci-node"), 60)
+    check(pair.returncode == 0, f"make the node pairing link: {(pair.stdout + pair.stderr)[-1000:]}")
+    pair_url = pair.stdout.strip()
+    check(pair_url.startswith("persona://link?"), "the pairing command did not print only a computer pairing link")
+
+    # One clean container, two isolated homes: the node cannot read the hub's home or its master token. Its pairing
+    # link's loopback address therefore reaches the disposable hub, exactly as it would on one computer.
+    node_home = "export HOME=/root/core-install-node\nexport PERSONA_HOME=$HOME/.persona\n"
+    install_block = blocks[1].replace("'<the printed pairing link>'", json.dumps(pair_url))
+    r = machine.sh(node_home + head + install_block, 600)
+    check(r.returncode == 1, f"the node install without a service manager should install, pair and exit 1: "
+                             f"exit {r.returncode}\n{(r.stdout + r.stderr)[-2000:]}")
+    machine.must(node_home + "test -x ~/.persona/bin/persona-node && test -x ~/.persona/bin/persona-link && "
+                             "test -s ~/.persona/link.json && test ! -e ~/.persona/hub.json", "the paired node files")
+    machine.must(node_home + blocks[2], "start the node as the document's no-service-manager block says")
+
+    def online():
+        code, body, _ = api(machine, "GET", "/api/v1/machines")
+        if code != 0:
+            return None
+        machines = json.loads(body).get("machines") or []
+        return next((m for m in machines if m.get("id") == "ci-node" and m.get("online") is True
+                     and m.get("node_version") == release["version"]), None)
+
+    found = wait_for("the paired core node in the hub's machine list", 150, online)
+    check(found.get("kind") == "link" and found.get("transport") == "link", f"the node's transport: {found}")
+    for program in ("persona-node", "persona-link"):
+        got = machine.copy_out(f"/root/core-install-node/.persona/bin/{program}", work / f"installed-core-{program}")
+        check(sha256(got) == sha256(release["core"] / f"{program}-{PLAT}"), f"the installed {program} is not the core build")
+        check(has_core_tag(got, env), f"the installed {program} lacks {CORE_TAG}")
+    return found
+
+
 def manifest(release, version, build, edition):
     """A release manifest as a hub's update check reads it; its downloads are never fetched by the checks below."""
     m = {"version": version, "build": build, "commit": release["commit"], "released": "2026-01-01T00:00:00Z", "protocol": 1,
@@ -327,6 +426,7 @@ def main():
     site, machines, verdict, started = None, [], "FAIL", time.monotonic()
     try:
         blocks = doc_blocks()
+        node_blocks = node_doc_blocks()
         env = clean_env(home)
         r = docker("network", "create", network)
         check(r.returncode == 0, f"docker network: {r.stderr.strip()}")
@@ -386,6 +486,24 @@ def main():
         version = core.must("~/.persona/bin/personad version -v", "personad version")
         check(version.splitlines()[0] == release["version"] and f"channel release, build {release['build']}" in version,
               f"personad version -v: {version!r}")
+        health = json.loads(r.stdout.splitlines()[0])
+        features = set(health.get("features") or [])
+        check("modules" in features, "the hello lacks the modules marker")
+        built_in = {p.parent.name for p in (SERVER / "internal/modules").glob("*/module.json")}
+        module_flags = sorted(f for f in features if f.startswith("module.") and f.removeprefix("module.") in built_in)
+        check(not module_flags, f"the core-only hello announces built-in module flags: {module_flags}")
+        client_flags = sorted(f for f in features if f.startswith("module.") and f.removeprefix("module.") not in built_in)
+        print(f"hello: modules marker present, no built-in module.<id> flag (client-only: {', '.join(client_flags) or 'none'})",
+              flush=True)
+        print(browser_sign_in(core), flush=True)
+        mark = site.mark()
+        node = pair_node(core, head, node_blocks, release, work, env)
+        asked = site.since(mark)
+        check(not full_names(asked), f"the core node install asked for a full edition file: {full_names(asked)}")
+        check(f"/dl/core-persona-node-{PLAT}.gz" in asked and f"/dl/core-persona-link-{PLAT}.gz" in asked
+              and f"/dl/{release['version']}/core-manifest.json" in asked,
+              f"the core node install asked for {asked}")
+        print(f"node: {node['id']} paired and online over Persona Link; core persona-node and persona-link", flush=True)
         print("core edition: installed by the document, hub and manager run, modules: loaded none", flush=True)
 
         # 2. Updates stay core-only. A newer release of each edition appears; the hub sees only its own.
