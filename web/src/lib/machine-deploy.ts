@@ -26,7 +26,7 @@ export function machineDeployment(m: Machine) {
   const linked = m.kind === "link" || m.kind === "service";
   const supported = m.kind !== "local" && (m.can_deploy ?? !linked);
   const phase = m.deploy_phase && PHASES[m.deploy_phase];
-  const busy = !!(m.deploying || phase);
+  const busy = !!(m.deploying || m.deploy_phase);
   const canDeploy = supported && (!linked || m.online);
   const reason = !supported
     ? m.deploy_reason || (m.kind === "local"

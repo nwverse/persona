@@ -340,11 +340,49 @@ Go output. The schema has no `surfaces` map (D5) and an optional `totals` (D12);
 0 open PRs. *Gate:* step 5. *Rollback:* revert; nothing reads the types. *Done:* `--check` and test_wire_schema.py pass;
 round trips pass in Go, Kotlin, Swift (`swift test` in PersonaWire) and the web.
 
+*Landed (#15512):* `schema/wire/counts.schema.json` with its four outputs (Go in `assistantwire`), the contract in
+`docs/protocol/counts.md` and the samples in `spec/fixtures/counts/view_samples.json`, which
+`TestViewSamplesAreFleetcountsRows` (`fleetcountadapt`) holds to fleetcount's rows for the needs-you cases they name.
+What differs from section 3.2, and why: each count id is a named, optional field of `counts` and of `totals`, not a
+`{<id>: …}` map, so every client reads a typed field (the generator keeps a map whose keys are not all required a map)
+while the JSON stays the same and a new id stays an optional addition; the view names its `build`, which D18's
+diagnostics read; a row's `id` and its cards are ID types (`CountsRowKey`, `CountsCardID`, since a wire schema cannot
+`$ref` `ids.schema.json` yet) and `why` the closed enum `CountsHeldReason` (`muted`, `held`) with an explicit unknown;
+`keys` may list fewer than 200 rows, `n` being the rows it lists plus `more`, because 200 rows of UUID-length session
+and card ids come to about 22 KB, past the 16 KB the hub is to keep (section 3.2), so step 7a or 7b settles the bound
+and the limit together; `held` has the same bound; `protocol.md` gets a pointer section only, since this step adds no
+message or feature (step 7b adds their rows).
+
 **7a. The manager tells the view.** *Change:* the capability constant in a new assistantwire/counts.go (avoiding
 `assistantwire/bus.go`, 9 open PRs), named in the hello's capability list in `assistant/bus.go` (10 open PRs; one
 identifier on one line); the tell from liveLoop. *Gate:* steps 5 and 6. *Rollback:* revert. *Done:* on one round,
 `agents_needs_you.n` equals the fixture rule over the same inputs; a quiet fleet tells nothing; a hub built from
 `origin/main` drops the event; the round benchmark stays within 5% of step 5's.
+
+*Landed (#15650):* `CapabilityCountsView` (`counts_view`), `EventCountsView` (`counts.view`) and `CountsViewMaxBytes` in
+`assistantwire/counts.go`; the capability on the hello's list; and the tell from liveLoop (`assistant/counts_view.go`):
+package assistant calls `fleetcount.AgentsNeedsYou` on the badge surface, then `fleetcountadapt`'s `Fleet.View`, a
+TallyVisitor of the adapter's own that writes `counts` and `totals` in one `Accept` pass (D12) and alone spells the
+`why` word (D11); package assistant adds the epoch (one per run), the rev (up one only when the counts change), `as_of`
+and `build`, tells nothing for a round that changed nothing, and tells the last view again after each handshake.
+`TestCountsViewFollowsTheSharedFixtures` holds `n` and the keys to the fixture's badge over a round's inputs,
+`TestTheCountsViewIsToldWhenItChanges` the rest; `busEvents` in `hub/bus.go` has no `counts.view`, so a hub from
+`origin/main` drops it. The bound and the limit are settled together: a view takes at most 16 KB, the most the hub will
+keep, and `keys` and `held` stop at 200 rows or at the first row past that bound, the counted rows first (`more` carries
+the rest). What differs, and why: `View` is a method of the adapter's `Fleet`, since a tally's Slots are places in that
+fleet; the view is decided on the fill Persona Link's summary uses (its cards ordered by time, then id), so the two
+share one copy of the core's values (`Fleet.Agents`, `Fleet.Cards`); `Tally.On(surface)` lets `View` refuse another
+surface's tally; a count's `producer` is keyed to the view's schema rather than to an empty `waits_on`: every count the
+schema carries names its producer and no other does, since `inbox_action` waits on no decision but joins the view only
+with step 12 and its fixture (`docs/protocol/counts.md`, "Later ids"), and `TestViewWritesTheCountsThatNameIt` is the
+code map's check; the Inbox's and the to-dos' counts enter as inputs of `View` once the schema carries them, so none is
+added here; and `badgeRows` now cuts its lists from four arrays (and makes none when nothing waits), which took the
+view's share of the round from 47 allocations to 11. The gate, measured against `origin/main` on one machine
+(`BenchmarkRound`, 60 agents and 12 cards, the round now building the view too): 255 to 266 allocs/op (+4.3%, within 5%)
+and 30,008 to 35,096 B/op (+17%, past 5%): the badge decision takes 4 allocations and 3,776 B (its tally and the scratch
+the core makes each round rather than keep between rounds) and `View` 7 and 1,312 B, measured apart.
+`BenchmarkLiveRound` (500 agents, none waiting): 136 to 139 allocs/op and about 161.8 KB/op either way. Telling an
+unchanged view allocates nothing.
 
 **7b. The hub relays it** (section 3.2). *Change:* a new hub/counts_view.go and one field in `hub/bus.go` (1 open PR,
 #6924d); one line each in bus_broadcast.go (3) and features() in extensions_link.go (5); the kept views go out in the
@@ -358,6 +396,20 @@ allowlist, so the role check is tested on its own) and the roster refusing scope
 order hello, machines, counts, then session lists; TestBroadcastTypes, `test_doc_wire.py` and the hub's architecture
 guard pass, apart from `TestHubAnswersOnlyItsOwnRoutes`, which already fails on main (#9485) and is compared with
 `origin/main`.
+
+*Landed (#15893):* the relay (`hub/counts_view.go`): the hub keeps each manager's last view on its bus connection,
+compacted and checked only for its object, `epoch`, `rev` and bound, and sends it to full-role apps that ask, at connect
+between `machines` and the session lists, after a `client_hello` that names the feature, and as `view: null` when the
+connection ends; relays and connect-time sends share `h.mu`, so an app never gets a manager's view after a newer one.
+`spec/fixtures/counts/views.json` writes D13's cases as given, one transport event (`arrived`, `arrivedEmpty`,
+`wentOffline`, `restarted`, `leftRoster`, `signedOut`) and then, with its section in the fixtures' README;
+`TestTheHubReplaysTheRestartCases` replays its restart cases through the hub, and `test_wire_schema.py` holds each of
+its views to the schema. What differs, and why: the hub feature is appended from `proto/features_counts.go`, the proto
+feature seam (`docs/server/architecture.md` "Registering a domain's entries"), which heads features()' static list, so
+it is listed always and no line of `hub/extensions_link.go` changes; the roster carries the `counts_view` flag and not
+the view, so a client has one source of views, the WebSocket, and the roster read every `managers` push asks for does
+not grow by up to 16 KB per manager, which also leaves no view on the roster to keep from scoped, answer-only and
+extension tokens; the mock domain module waits for step 8, the first step that draws a view and screenshots it.
 
 **8. Android reads `agents_needs_you`.** *Change:* ShellCounts and the switcher's agents share read the view, with the
 overlay and the frozen fallback, and the switcher adds its Persona-conversation part by today's rule (section 3.3 item
@@ -425,6 +477,24 @@ Persona tab, the app icon and the switchers' Persona-conversation part after D9;
 `assistant/todo_projection.go` and `todo/projection` have 4 open PRs (#11179, #11168, #10809d, #9823), `todo-triage.ts`
 3; draft PRs #10809 and #9777 change what Needs you holds and must be reconciled. *Gate:* the named decision.
 *Rollback:* revert. *Done:* the count's rows in surfaces.json turn `matches`; the lane differ is green.
+
+*Landed, the To-dos' server part (#15896):* `todos_needs_you` is an optional field of the view's `counts` and `totals`
+(`schema/wire/counts.schema.json`, its four outputs regenerated; no client reads it yet), written by `fleetcountadapt`'s
+`Fleet.View`, which `surfaces.json` names as its `producer`. Package assistant hands `Fleet.View` the counts of its last
+read of the whole to-do list, the `Counts()` `GET /api/v1/todos` answers with (`server/internal/assistant/counts_view.go`):
+every read of the list, of one to-do or of the places keeps them; when no read follows a `{"type":"todos"}` within a
+second, the manager reads the list itself, one read at a time; until a run has counted its to-dos, each round asks for
+a count, and the view leaves it out. `TestCountsViewCountsTheToDosAsTheListDoes` holds the view's number to the list's
+`counts.needs_you` on every `spec/fixtures/todo-counts` case, `TestCountsViewFollowsTheToDoList` to `GET /api/v1/todos`
+on a manager's own list, and `TestCountsViewRecountsOneReadAtATime` keeps a slow read from starting a second one.
+What differs, and why: the count lists no rows (`keys` absent, all of `n` is `more`), since `Counts()` gives numbers
+only; the to-do projection (`todo/projection`) is neither declared nor given a record or an exported field while #9823,
+#11168 and #11179 are open, and `assistant/todo_projection.go` is untouched; `Fleet.View` takes the counts as the wire
+has them (`assistantwire.TodoCounts`, in an `opt.Option`), and once the projection is a core they come in as its value,
+`Fleet.View` staying the producer. TodoCountsFallback's multi-manager case retires with the iOS client's step, and the
+clients' To-dos rows stay `differs` until each draws N. `BenchmarkRound` with the to-dos counted: 266 to 267 allocs/op
+and 35,096 to 35,184 B/op against `origin/main` on one machine, the to-dos count's one allocation; `BenchmarkLiveRound`
+(no to-dos counted) and telling an unchanged view are unchanged (139 allocs/op; 0).
 
 **13. Retire the fallbacks.** *Change:* when D14's window ends, delete each client's fallback file with its fixture
 replay and step-3 marks (the view-path cases stay); the hub keeps FleetState, `inbox_needs_you` and Link for old apps;

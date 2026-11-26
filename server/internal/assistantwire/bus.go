@@ -520,9 +520,8 @@ var Routes = []string{
 	"POST /api/v1/recordings/{id}/followup",
 	// A meeting handed to an Agent after it (meeting_handoff.go there, #8852).
 	"POST /api/v1/recordings/{id}/handoff",
-	// Its photos (meeting_photos.go there, "Phase 3: photos").
+	// Its photo writes (the read-only GETs are the knowledge base's own, kb_recordings.go).
 	"POST /api/v1/recordings/{id}/photos",
-	"GET /api/v1/recordings/{id}/photos",
 	"DELETE /api/v1/recordings/{id}/photos/{n}",
 	// Hub transcription's gap uploads (meeting_transcribe.go there, "Phase 5: hub transcription"); its audio socket is
 	// one of SocketRoutes.

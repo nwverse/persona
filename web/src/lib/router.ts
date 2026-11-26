@@ -5,6 +5,7 @@ import { takeOverlayEntry } from "./back-close";
 import { BASE, stripBase } from "./base";
 import { decodeURIComponentSafe } from "./uri";
 import { moduleExtensionAt, moduleKBKindAt, modulePath, moduleRouteAt } from "../core/module-host";
+import { healthReadOnlyRoute } from "./health-archive";
 
 // Persona's main conversation is the front door (like the app, which opens on the assistant): `/` and `/persona` open it, `/persona/<id>` is
 // one conversation, `/persona/new` starts a one-off one, and "Overview" lives at `/overview`. `/extension/<id>/<ui>` is an extension's page
@@ -65,7 +66,7 @@ export type Route =
   | { name: "compare"; id: string }
   // view=calendar: the to-dos' calendar (#2029), its mode and the day it shows ("YYYY-MM-DD"); view=board: the read-only
   // progress board (#12713). Either view keeps the open to-do beside it.
-  | { name: "todos"; id?: string; view?: "calendar" | "board"; mode?: "day" | "week" | "month"; date?: string }
+  | { name: "todos"; id?: string; direction?: string; manager?: string; view?: "calendar" | "board"; mode?: "day" | "week" | "month"; date?: string }
   | { name: "extension"; extension: string; ui: string }
   // the source subscription pages (#2041), their first state in ?state=
   | { name: "subscriptions" }
@@ -115,6 +116,10 @@ export function parse(path: string, search = ""): Route {
   if (p[0] === "lark-oauth" && !p[1]) return { name: "lark-oauth" };
   if (p[0] === "history") return p[1] ? { name: "history", origin: p[1] } : { name: "history" };
   const module = moduleRouteAt(p);
+  // Existing Health data has a default-panel read-only route both when its module is switched off and when a
+  // core-only build has no descriptor for it. Other absent modules keep their not-found behavior.
+  const healthArchive = healthReadOnlyRoute(p);
+  if (healthArchive) return healthArchive;
   if (module === "absent") return notFound(path, search);
   if (module) return module;
   if (p[0] === "tracks" && p[1] === "new" && !p[2]) return { name: "track-new" };
@@ -152,7 +157,11 @@ export function parse(path: string, search = ""): Route {
   if (p[0] === "todos") {
     // the link's own query (#9930): reading the page's made routeAt() on a /todos?id= link open the to-do on screen
     const q = new URLSearchParams(search);
-    const r: Route = { name: "todos", id: p[1] || q.get("id") || undefined };
+    const id = p[1] || q.get("id") || undefined;
+    const manager = q.get("manager");
+    const direction = q.get("direction");
+    if (!id && direction) return { name: "todos", direction, ...(manager && { manager }) };
+    const r: Route = { name: "todos", id, ...(id && manager && { manager }) };
     if (q.get("view") === "board") return { ...r, view: "board" };
     if (q.get("view") === "calendar") {
       const mode = q.get("mode");
@@ -261,6 +270,8 @@ export function routePath(r: Route): string {
         if (r.date) q.set("date", r.date);
       }
       if (r.id) q.set("id", r.id);
+      else if (r.direction) q.set("direction", r.direction);
+      if ((r.id || r.direction) && r.manager) q.set("manager", r.manager);
       const s = q.toString();
       return s ? `/todos?${s}` : "/todos";
     }

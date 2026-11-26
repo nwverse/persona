@@ -4,6 +4,7 @@ package writers
 
 import (
 	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"testing"
 	"time"
 )
@@ -20,7 +21,7 @@ func dayUpload(rev int64, texts ...string) RecordingUpload {
 	for i, t := range texts {
 		u.Segments = append(u.Segments, RecordingSegment{Start: float64(60 * i), End: float64(60*i + 5), Text: t})
 	}
-	u.Coverage = &kb.RecordingCoverage{To: float64(60 * len(texts))}
+	u.Coverage = &recordingwire.RecordingCoverage{To: float64(60 * len(texts))}
 	return u
 }
 
@@ -35,27 +36,27 @@ func dayEngine(t *testing.T, m kb.Model, now *time.Time) *testEngine {
 func ptr[T any](v T) *T { return &v }
 
 // dayAppend is an append of base at revision rev from position from.
-func dayAppend(base, rev int64, from int, segs ...RecordingSegment) kb.RecordingAppend {
-	return kb.RecordingAppend{Base: base, Revision: rev, From: ptr(from), Segments: segs}
+func dayAppend(base, rev int64, from int, segs ...RecordingSegment) RecordingAppend {
+	return RecordingAppend{Base: base, Revision: rev, From: ptr(from), Segments: segs}
 }
 
 func seg(start float64, text string) RecordingSegment {
 	return RecordingSegment{Start: start, End: start + 5, Text: text}
 }
 
-func mustPut(t *testing.T, e *testEngine, id string, u RecordingUpload, now time.Time) kb.RecordingPut {
+func mustPut(t *testing.T, e *testEngine, id string, u RecordingUpload, now time.Time) recordingwire.RecordingPut {
 	t.Helper()
 	put, err := e.PutRecording(id, u, now)
-	if err != nil || put.Status != kb.RecordingStored {
+	if err != nil || put.Status != recordingwire.RecordingStored {
 		t.Fatalf("put %s: %+v %v", id, put, err)
 	}
 	return put
 }
 
-func mustAppend(t *testing.T, e *testEngine, id string, a kb.RecordingAppend) kb.RecordingAppended {
+func mustAppend(t *testing.T, e *testEngine, id string, a RecordingAppend) RecordingAppended {
 	t.Helper()
 	got, err := e.AppendRecording(id, a)
-	if err != nil || got.Status != kb.RecordingStored {
+	if err != nil || got.Status != recordingwire.RecordingStored {
 		t.Fatalf("append %s: %+v %v", id, got, err)
 	}
 	return got

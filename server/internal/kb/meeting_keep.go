@@ -4,7 +4,6 @@ package kb
 // section 1; docs/architecture/core-and-modules.md "Recording").
 
 import (
-	"bytes"
 	"encoding/json"
 	"os"
 
@@ -47,60 +46,11 @@ func (s *Store) putMeeting(id string, m *Meeting) (bool, error) {
 	return true, writeRecordingFile(s.path(KindRecording, id, meetingFile), append(raw, '\n'))
 }
 
-// meetingParts are the parts of m that differ from before, in a fixed order.
-func meetingParts(before, after Meeting) []string {
-	var out []string
-	same := func(a, b any) bool {
-		x, _ := json.Marshal(a)
-		y, _ := json.Marshal(b)
-		return bytes.Equal(x, y)
-	}
-	if !same(roomShown(before.Room), roomShown(after.Room)) {
-		out = append(out, PartRoom)
-	}
-	if !same(before.Private, after.Private) {
-		out = append(out, PartPrivate)
-	}
-	if !same(before.Followup, after.Followup) {
-		out = append(out, PartFollowup)
-	}
-	if !same(transcriptionShown(before.Transcription), transcriptionShown(after.Transcription)) {
-		out = append(out, PartTranscription)
-	}
-	return out
-}
-
-// roomShown is room without what only the manager reads (its batching and a lean room's bookkeeping, #8253), whose
-// changes raise no revision: the apps see nothing new of it.
-func roomShown(room *MeetingRoom) *MeetingRoom {
-	if room == nil {
-		return nil
-	}
-	r := *room
-	r.Batching, r.Lean = 0, MeetingRoomLean{}
-	return &r
-}
-
-// meetingSame: a and b are the same meeting.json (also where no part the apps read differs: the timeline, the final
-// pass's bookkeeping, a lean room's bookkeeping).
-func meetingSame(a, b Meeting) bool {
-	x, _ := json.Marshal(a)
-	y, _ := json.Marshal(b)
-	return bytes.Equal(x, y)
-}
-
-// bumpRevs raises the revisions of parts in m.
-func bumpRevs(m *Meeting, parts []string) {
-	if len(parts) == 0 {
-		return
-	}
-	if m.Revs == nil {
-		m.Revs = map[string]int64{}
-	}
-	for _, p := range parts {
-		m.Revs[p]++
-	}
-}
+// The rules of meeting.json's parts and revisions, which the upload (the recording module's) applies too
+// (recordingwire/rules.go).
+func meetingParts(before, after Meeting) []string { return recordingwire.MeetingParts(before, after) }
+func meetingSame(a, b Meeting) bool               { return recordingwire.MeetingSame(a, b) }
+func bumpRevs(m *Meeting, parts []string)         { recordingwire.BumpRevs(m, parts) }
 
 // meetingChanged tells the engine's MeetingChanged of recording id's changed parts.
 func (e *Engine) meetingChanged(id string, parts []string) {

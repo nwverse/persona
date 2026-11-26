@@ -93,6 +93,8 @@ type TodoRow struct {
 	// DirectionID is the optional organizational direction this to-do belongs to (#14660), decoupled from runtime
 	// supervision (supervision.supervisor) and origin. Empty for ungrouped/legacy to-dos.
 	DirectionID string `json:"direction_id,omitempty"`
+	// ItemType is the optional explicit 2-type classification ("personal" or "task"), or "" (SQL NULL) when unset (#15758).
+	ItemType string `json:"item_type,omitempty"`
 	// Images are the to-do's pictures, in the order the client supplied them. CreateTodo stores Data atomically with
 	// the row; ListTodos reconstructs only their metadata.
 	Images []TodoImage `json:"images,omitempty"`
@@ -161,6 +163,32 @@ func ValidateTodoAudience(audience string) error {
 	}
 }
 
+// A todo's explicit item type besides unset ("") (#15758).
+const (
+	ItemTypePersonal = "personal"
+	ItemTypeTask     = "task"
+)
+
+// ErrInvalidTodoItemType is returned when a to-do's item_type is not "", ItemTypePersonal, or ItemTypeTask.
+var ErrInvalidTodoItemType = errors.New(`item_type must be "", "personal", or "task"`)
+
+// ValidateTodoItemType reports whether itemType is "", ItemTypePersonal, or ItemTypeTask.
+func ValidateTodoItemType(itemType string) error {
+	switch itemType {
+	case "", ItemTypePersonal, ItemTypeTask:
+		return nil
+	default:
+		return fmt.Errorf("%w: %q", ErrInvalidTodoItemType, itemType)
+	}
+}
+
+func nullableItemType(itemType string) any {
+	if itemType == "" {
+		return nil
+	}
+	return itemType
+}
+
 // DoneByAuto marks a todo the hub closed because its task's work was judged finished (docs/assistant/todos.md "Automatic completion").
 const DoneByAuto = "auto"
 
@@ -194,13 +222,13 @@ type TodoAgentRow struct {
 }
 
 const todoColumns = `id, title, notes, done_at, created_at, updated_at, origin, plan_id, start_error, done_by, done_reason, reopened_at, quiet,
-	due_at, due_date, remind_at, reminded_at, priority, project, kind, seen_at, auto_seen_undone, inbox_item, part_of, after_ids, restored_at, someday_until, require_accepted_after, responsible, audience, direction_id`
+	due_at, due_date, remind_at, reminded_at, priority, project, kind, seen_at, auto_seen_undone, inbox_item, part_of, after_ids, restored_at, someday_until, require_accepted_after, responsible, audience, direction_id, COALESCE(item_type, '')`
 
 // todoDest is where a row of todoColumns is scanned to.
 func todoDest(r *TodoRow) []any {
 	return []any{&r.ID, &r.Title, &r.Notes, &r.DoneAt, &r.CreatedAt, &r.UpdatedAt, &r.Origin, &r.PlanID, &r.StartError, &r.DoneBy,
 		&r.DoneReason, &r.ReopenedAt, &r.Quiet, &r.DueAt, &r.DueDate, &r.RemindAt, &r.RemindedAt, &r.Priority, &r.Project, &r.Kind,
-		&r.SeenAt, &r.AutoSeenUndone, &r.InboxItem, &r.PartOf, &r.After, &r.RestoredAt, &r.SomedayUntil, &r.RequireAcceptedAfter, &r.Responsible, &r.Audience, &r.DirectionID}
+		&r.SeenAt, &r.AutoSeenUndone, &r.InboxItem, &r.PartOf, &r.After, &r.RestoredAt, &r.SomedayUntil, &r.RequireAcceptedAfter, &r.Responsible, &r.Audience, &r.DirectionID, &r.ItemType}
 }
 
 // ListTodos returns all todos ordered by created_at DESC, with image metadata but without image bytes.
@@ -344,15 +372,18 @@ func createTodo(ctx context.Context, executor interface {
 	if err := ValidateTodoAudience(t.Audience); err != nil {
 		return err
 	}
+	if err := ValidateTodoItemType(t.ItemType); err != nil {
+		return err
+	}
 	resp, err := responsibleParam(t.Responsible)
 	if err != nil {
 		return err
 	}
 	_, err = executor.Exec(ctx, `INSERT INTO todos (id, title, notes, done_at, created_at, updated_at, origin, plan_id, start_error, done_by,
-		done_reason, reopened_at, quiet, due_at, due_date, remind_at, reminded_at, priority, project, kind, inbox_item, part_of, after_ids, require_accepted_after, responsible, audience, direction_id)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)`,
+		done_reason, reopened_at, quiet, due_at, due_date, remind_at, reminded_at, priority, project, kind, inbox_item, part_of, after_ids, require_accepted_after, responsible, audience, direction_id, item_type)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28)`,
 		t.ID, t.Title, t.Notes, t.DoneAt, t.CreatedAt, t.UpdatedAt, t.Origin, t.PlanID, t.StartError, t.DoneBy, t.DoneReason, t.ReopenedAt, t.Quiet,
-		t.DueAt, t.DueDate, t.RemindAt, t.RemindedAt, t.Priority, t.Project, t.Kind, t.InboxItem, t.PartOf, nonNilIDs(t.After), t.RequireAcceptedAfter, resp, t.Audience, strings.TrimSpace(t.DirectionID))
+		t.DueAt, t.DueDate, t.RemindAt, t.RemindedAt, t.Priority, t.Project, t.Kind, t.InboxItem, t.PartOf, nonNilIDs(t.After), t.RequireAcceptedAfter, resp, t.Audience, strings.TrimSpace(t.DirectionID), nullableItemType(t.ItemType))
 	if err != nil {
 		return err
 	}
@@ -402,6 +433,8 @@ type TodoEdit struct {
 	// DirectionID updates organizational direction membership ("" clears it, trimmed of surrounding whitespace)
 	// without touching origin, supervision, or todo_agents (#14660).
 	DirectionID *string
+	// ItemType updates explicit item_type ("" clears it to SQL NULL); validated against "", ItemTypePersonal, ItemTypeTask (#15758).
+	ItemType *string
 }
 
 // Apply makes the edit to cur at the moment at: done stamps done_at (once), not done reopens it (reopened_at, no
@@ -473,6 +506,9 @@ func (e TodoEdit) Apply(cur *TodoRow, at time.Time) {
 	if e.DirectionID != nil {
 		cur.DirectionID = strings.TrimSpace(*e.DirectionID)
 	}
+	if e.ItemType != nil {
+		cur.ItemType = strings.TrimSpace(*e.ItemType)
+	}
 	cur.UpdatedAt = at
 }
 
@@ -493,6 +529,11 @@ func sameMoment(a, b *time.Time) bool {
 func (d *DB) EditTodo(ctx context.Context, id string, e TodoEdit, updatedAt time.Time) (*TodoRow, error) {
 	if e.Audience != nil {
 		if err := ValidateTodoAudience(*e.Audience); err != nil {
+			return nil, err
+		}
+	}
+	if e.ItemType != nil {
+		if err := ValidateTodoItemType(strings.TrimSpace(*e.ItemType)); err != nil {
 			return nil, err
 		}
 	}
@@ -525,10 +566,10 @@ func (d *DB) EditTodo(ctx context.Context, id string, e TodoEdit, updatedAt time
 		_, err = tx.Exec(ctx, `UPDATE todos SET title = $2, notes = $3, done_at = $4, updated_at = $5, start_error = $6,
 			done_by = $7, done_reason = $8, reopened_at = $9, due_at = $10, due_date = $11, remind_at = $12, reminded_at = $13,
 			priority = $14, project = $15, origin = $16, part_of = $17, after_ids = $18, inbox_item = $19,
-			someday_until = $20, require_accepted_after = $21, responsible = $22, audience = $23, direction_id = $24 WHERE id = $1`,
+			someday_until = $20, require_accepted_after = $21, responsible = $22, audience = $23, direction_id = $24, item_type = $25 WHERE id = $1`,
 			cur.ID, cur.Title, cur.Notes, cur.DoneAt, cur.UpdatedAt, cur.StartError, cur.DoneBy, cur.DoneReason, cur.ReopenedAt,
 			cur.DueAt, cur.DueDate, cur.RemindAt, cur.RemindedAt, cur.Priority, cur.Project, cur.Origin, cur.PartOf, nonNilIDs(cur.After), cur.InboxItem,
-			cur.SomedayUntil, cur.RequireAcceptedAfter, resp, cur.Audience, cur.DirectionID)
+			cur.SomedayUntil, cur.RequireAcceptedAfter, resp, cur.Audience, cur.DirectionID, nullableItemType(cur.ItemType))
 		if err != nil {
 			return err
 		}

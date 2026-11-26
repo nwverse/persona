@@ -12,7 +12,7 @@ import (
 func TestRuntimeUserInputsDrainsPagesAndDeduplicates(t *testing.T) {
 	n := &Node{}
 	calls := []int{}
-	index, err := n.runtimeUserInputs(context.Background(), "synthetic", 0, func(params any) (json.RawMessage, error) {
+	index, err := n.runtimeUserInputs(context.Background(), "synthetic", 0, false, func(params any) (json.RawMessage, error) {
 		p := params.(map[string]any)
 		before, _ := p["before_seq"].(int)
 		calls = append(calls, before)
@@ -52,7 +52,7 @@ func TestRuntimeUserInputsDrainsPagesAndDeduplicates(t *testing.T) {
 
 func TestRuntimeUserInputsBoundsFrozenHistory(t *testing.T) {
 	n := &Node{}
-	index, err := n.runtimeUserInputs(t.Context(), "synthetic", 9, func(params any) (json.RawMessage, error) {
+	index, err := n.runtimeUserInputs(t.Context(), "synthetic", 9, false, func(params any) (json.RawMessage, error) {
 		if p := params.(map[string]any); p["before_seq"] != 9 {
 			t.Fatalf("unbounded source request: %v", p)
 		}
@@ -74,7 +74,7 @@ func TestRuntimeUserInputsRefusesPartialOrRewrittenTotals(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			n := &Node{}
 			calls := 0
-			_, err := n.runtimeUserInputs(context.Background(), "synthetic", 0, func(any) (json.RawMessage, error) {
+			_, err := n.runtimeUserInputs(context.Background(), "synthetic", 0, false, func(any) (json.RawMessage, error) {
 				calls++
 				history := "first"
 				if scenario == "rewrite" && calls > 1 {

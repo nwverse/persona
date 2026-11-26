@@ -72,7 +72,7 @@ A single binary `personad`, four modes:
 ## The hub is only a communication center
 
 The hub only handles communication: app and other clients ↔ managers, hub ↔ hub (linked hubs), connections (WebSocket, node / connector links), pairing and auth, the admin UI, push delivery, and various relays.
-Business logic lives in the managers (`server/internal/assistant`, `devices`, `extmgr`; see `docs/server/machines.md`, `docs/extensions/extensions.md` ("Who owns what"), `docs/assistant/assistant.md`):
+Business logic lives in the managers (`server/internal/assistant`, `devices`, `extmgr`; see `docs/server/machines.md`, `docs/extensions/extensions.md` ("Who owns what"), `docs/assistant/assistant.md`, and `docs/architecture/server-first-logic.md` for the server-first / thin-client boundary):
 the data for the assistant, Inbox, to-dos, usage limits, board, extensions and devices, plus model calls (triage, titles, summaries, judgments). The hub forwards these endpoints to the managers as-is (`assistantwire.Routes`, `devicewire.Routes`, `extwire.Routes`), except the merged lists, which it joins, adding up the to-dos' `counts` and joining their places over the JSON as the managers send it (`server/internal/hub/ownership_lists.go`, `server/internal/hub/todo_view.go`); it never works out a to-do's phase. A few relayed writes keep an operation receipt at the hub (`client_ops`): a meeting's Just me and follow-up (`server/internal/hub/meeting_receipts.go`), and the answer to a to-do's ask and a message to a to-do on its conversation's route (`server/internal/hub/todo_receipts.go`); the hub keeps the manager's reply for the same op id, while the manager decides the answer. For the two to-do writes the hub also says on the socket that it has the write (`todo_send_state`) before the manager answers, as it does for a session's message (`message_send_state`): transport only, never the to-do's state.
 An ordinary route goes as one `http.request` on the bus, its body read whole (a body of 1 MiB or more goes on a relay stream of its own beside the bus, `http.request_streamed`, so the bus is not held up behind it: `docs/protocol/protocol.md` "Forwarding App requests"); a route that upgrades to a WebSocket cannot, so the extensions' routes and the assistant's
 WebSocket routes (`assistantwire.SocketRoutes`: a meeting's audio socket, `docs/assistant/meeting-minutes.md` "Audio from the phone") go over a relay stream instead
@@ -90,6 +90,26 @@ WebSocket routes (`assistantwire.SocketRoutes`: a meeting's audio socket, `docs/
 - **Store** methods = `testdata/hub_store_methods.txt`: new business tables go in the manager's own storage, not in `hub.Store`.
 
 The lists are edited by hand, with no auto-rewrite switch: the changed line shows up in the PR diff, so a reviewer can see whether it really belongs to the hub.
+
+### External source bindings
+
+The assistant manager owns external source bindings and forwarding policies for people who want to connect incoming
+updates to their work. The hub relays the full-credential routes through `assistantwire`. The manager's
+`externalbinding` core validates canonical paths and resolves policy inheritance. Its adapter uses the existing
+repository identity contract to normalize GitHub references. [External source bindings](../protocol/protocol.md#external-source-bindings)
+
+The manager migration stores canonical reference keys and sparse policies in PostgreSQL. Each reference can have
+multiple target bindings, and each target can have multiple references. A GIN index on the existing
+`todo_repository_sets.repositories` data supplies the GitHub issue and pull request projection. This indexes existing
+rows and follows committed edits, including role changes, without maintaining a second copy of repository links.
+The lookup reads explicit bindings and projected links from one snapshot. The repository write paths and delivery
+gate keep their own existing contracts.
+
+For opted-in sources, the manager commits Inbox writes and routing receipts together. The receipt uses the
+canonical object and provider event identity. The worker resolves a policy from the store snapshot, reserves a
+single action owner, and uses the existing conversation relay or task activity feed for delivery. Each routed
+source version bypasses the automatic legacy task routes. The worker owns its Postgres journal and schedules
+digest work independently of the hub's source collections.
 
 ## Contract packages
 
@@ -816,7 +836,9 @@ their names, never through a list, so a module is checked from the day it exists
 is named like a domain module the manifests do not declare fails (`swift-discovery`, `kotlin-discovery`) rather than
 passing unseen, and so does a Swift target that ends in `Domain` or `Adapt` without the `Persona<Ctx>` form, which is
 checked all the same. No client has a domain module yet: #10613 plans the first ones (items 6.1 for the web, 6.5 for
-Swift and 6.11 for Kotlin), and until then the guard finds none and says so.
+Swift and 6.11 for Kotlin), and until then the guard finds none and says so. Client domain modules hold only bounded
+client-side logic that cannot live on the server (offline or low-latency UX per
+`docs/architecture/server-first-logic.md`); shared product truth and cross-client rules belong in the Go server first.
 
 | | Swift | Kotlin | TypeScript |
 | --- | --- | --- | --- |

@@ -149,7 +149,7 @@ describe("navRailMark", () => {
       previous = left;
     }
     expect(previous.width).toBeLessThan(7);
-    expect(previous.opacity).toBeLessThan(0.42);
+    expect(previous.opacity).toBeLessThan(M.tailOpacity + 0.02);
   });
 
   it("moves the bell with hover without independently widening the viewport owner's marker", () => {
@@ -174,22 +174,21 @@ describe("navRailMark", () => {
 });
 
 describe("planNavRailTicks", () => {
-  it("keeps the normal pitch while the ticks fit", () => {
-    expect(planNavRailTicks(10, 200)).toEqual({ start: 0, pitch: 15, hidden: 0, count: 10 });
-    expect(planNavRailTicks(0, 0)).toEqual({ start: 0, pitch: 15, hidden: 0, count: 0 });
+  it("uses one 8 px row per input while the ticks fit", () => {
+    expect(planNavRailTicks(10, 200)).toEqual({ start: 0, pitch: 8, count: 10, content: 80, viewport: 80 });
+    expect(planNavRailTicks(0, 0)).toEqual({ start: 0, pitch: 8, count: 0, content: 0, viewport: 0 });
   });
 
-  it("compresses the pitch before windowing ticks", () => {
-    expect(planNavRailTicks(20, 240)).toEqual({ start: 0, pitch: 12, hidden: 0, count: 20 });
+  it("compresses to a 7 px pitch in a short pane", () => {
+    expect(planNavRailTicks(20, 140)).toEqual({ start: 0, pitch: 7, count: 20, content: 140, viewport: 140 });
   });
 
-  it("keeps every selected input accessible in a bounded moving window", () => {
-    expect(planNavRailTicks(30, 40)).toEqual({ start: 27, pitch: 40 / 3, hidden: 27, count: 3 });
-    expect(planNavRailTicks(1000, 1000)).toEqual({ start: 972, pitch: 15, hidden: 972, count: 28 });
+  it("mounts only the viewport plus overscan while every input has a scroll position", () => {
     for (let focus = 0; focus < 1000; focus++) {
-      const plan = planNavRailTicks(1000, 200, focus);
-      expect(plan.count).toBe(16);
-      expect(plan.pitch).toBeGreaterThanOrEqual(12);
+      const plan = planNavRailTicks(1000, 200, focus * M.minTickPitch);
+      expect(plan.content).toBe(7000);
+      expect(plan.viewport).toBe(200);
+      expect(plan.count).toBeLessThanOrEqual(Math.ceil(plan.viewport / plan.pitch) + M.overscan * 2 + 1);
       expect(plan.start).toBeLessThanOrEqual(focus);
       expect(plan.start + plan.count).toBeGreaterThan(focus);
     }

@@ -26,13 +26,12 @@ func TestAssistantEventFromTheSDK(t *testing.T) {
 		}
 		return wire.AssistantEventResult{Delivery: wire.AssistantEventDeliveryQueued}, nil
 	})
-	replace := false
 	res, err := c.hub.AssistantEvent(ctx, wire.AssistantEventParams{Key: "disk-full", Severity: wire.AssistantEventSeverityWarning,
-		Title: "Disk almost full", Body: "92% used", ActionHint: "Clear the cache", State: "firing", Replace: &replace})
+		Title: "Disk almost full", Body: "92% used", ActionHint: "Clear the cache", State: "firing", Replace: wire.AssistantEventReplaceFalse})
 	if err != nil || res.Delivery != wire.AssistantEventDeliveryQueued {
 		t.Fatalf("assistant.event: %+v %v", res, err)
 	}
-	if got.Key != "disk-full" || got.Severity != "warning" || got.Replace == nil || *got.Replace || got.ActionHint != "Clear the cache" {
+	if got.Key != "disk-full" || got.Severity != "warning" || got.Replace != wire.AssistantEventReplaceFalse || got.State != "firing" || got.ActionHint != "Clear the cache" {
 		t.Fatalf("the hub got %+v", got)
 	}
 	// The codes the real hub answers.

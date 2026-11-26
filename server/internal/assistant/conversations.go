@@ -974,9 +974,12 @@ func (s *Service) sendRelay(ctx context.Context, machine, to string, msg relayMs
 	if msg.Tool == superviseTool {
 		if hold {
 			// Register only after admission, but before dispatch: a fast MCP call may precede assistant.send's answer.
-			s.holdPushes(ctx, to)
+			err = s.holdPushesFor(ctx, to, msg)
 		} else {
-			s.noteSideSupervisionPush(ctx, to, msg)
+			err = s.noteSideSupervisionPush(ctx, to, msg)
+		}
+		if err != nil {
+			return superviseRoundReply{}, false, beforeNodeWrite(DeviceAssistantSend, err)
 		}
 	}
 	// A supervision message rendered as a round starts from the first turn (supervise_round.go): what the text says
@@ -1784,7 +1787,7 @@ func (s *Service) toolConversationSend(ctx context.Context, self string, args js
 	if c.SessionID == self {
 		return "", errors.New("that is this conversation: you can't send a message to yourself")
 	}
-	if c.LogicalPlaceholder {
+	if c.LogicalPlaceholder && !s.isZeroTurnPlaceholderConversation(ctx, c.MachineID, c.SessionID) {
 		// Its active physical segment is gone. Keep the durable conversation readable, but never manufacture a new
 		// execution segment or queue a message for an identity that no longer exists.
 		return "", logicalRefusal(ctx, "unavailable")
