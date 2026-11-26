@@ -914,7 +914,7 @@ data class Session(
             else -> UsageLimitWhen.Resets(at)
         }
     }
-    val folderName: String get() = cwd.trimEnd('/').substringAfterLast('/')
+    val folderName: String get() = compactFolderName(cwd)
     val displayTitle: String get() = if (title.isEmpty() || title == "Claude Code") folderName.ifEmpty { sessionId.take(8) } else title
     /** Codex in a terminal, or a thread from a Codex app-server / Codex history. */
     val isCodex: Boolean get() = agent == "codex" || sourceKind == "codex_app_server" || sourceKind == "codex_history"
@@ -1416,6 +1416,8 @@ data class Interaction(
     @SerialName("delegating") val delegating: Boolean = false,
     /** What the assistant filled in when it handed the question to the user. */
     @SerialName("delegate") val delegate: Delegate? = null,
+    /** True when the card has no interactive computer terminal or UI to hand back to; absent/false keeps "Leave to computer". */
+    @SerialName("no_hand_back") val noHandBack: Boolean = false,
 ) {
     val sessionKey: SessionKey get() = SessionKey(machineId, sessionId)
     /** The one exact reply this card advertises. Anything else stays an ordinary card action. */

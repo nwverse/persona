@@ -38,7 +38,7 @@ import (
 
 // codexAppHistoryVersion changes when already-written JSONL no longer matches what the converter produces. A mark
 // without it is a legacy cache and is rebuilt once, even when the App database has not changed.
-const codexAppHistoryVersion = 2
+const codexAppHistoryVersion = 3
 
 // codexAppHistoryWait bounds one read of the history database; a long chat's turns stream in well under it.
 const codexAppHistoryWait = 30 * time.Second
@@ -84,8 +84,11 @@ func codexHistoryDBPath(home string) string {
 	return codexNumberedDB(home, "thread_history_")
 }
 
+// codexNumberedDBGlob is what codexNumberedDB globs with, indirected so a test can count the history/log Globs.
+var codexNumberedDBGlob = filepath.Glob
+
 func codexNumberedDB(home, prefix string) string {
-	paths, _ := filepath.Glob(filepath.Join(home, prefix+"*.sqlite"))
+	paths, _ := codexNumberedDBGlob(filepath.Join(home, prefix+"*.sqlite"))
 	best, bestN := "", -1
 	for _, p := range paths {
 		n, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(filepath.Base(p), prefix), ".sqlite"))
@@ -625,6 +628,8 @@ func codexRolloutItem(kind string, raw []byte) map[string]any {
 		} `json:"content"`
 		Text             string          `json:"text"`
 		Phase            string          `json:"phase"`
+		Delivery         string          `json:"delivery"`
+		Questions        json.RawMessage `json:"questions"`
 		Summary          []string        `json:"summary"`
 		Command          string          `json:"command"`
 		Status           string          `json:"status"`
@@ -684,6 +689,9 @@ func codexRolloutItem(kind string, raw []byte) map[string]any {
 		item["type"], item["content"] = "UserMessage", content
 	case "agentMessage":
 		item["type"], item["content"], item["phase"] = "AgentMessage", []map[string]string{{"type": "text", "text": v.Text}}, v.Phase
+		if v.Delivery == "async" && len(v.Questions) > 0 {
+			item["delivery"], item["questions"] = v.Delivery, v.Questions
+		}
 	case "reasoning":
 		item["type"], item["summary_text"] = "Reasoning", v.Summary
 	case "commandExecution":

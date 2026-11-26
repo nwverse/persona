@@ -91,9 +91,11 @@ type BusHub struct {
 	helloed   chan struct{}
 	helloOnce sync.Once
 
-	events  chan busEvent // the hub's events, taken in the order they came
+	events  *eventQueue   // the hub's events, taken in the order they came (bus_events.go)
 	conns   atomic.Uint64 // the connections whose hello was answered: the current one's number (busEvent.conn)
 	pending atomic.Int64  // events received and not yet taken
+	// taking, when set, sees each event as it is taken out of the line, before it is handled (tests).
+	taking func(busEvent)
 	// answering: the hub's requests being answered now (a tool call, an app's call): idle (idle.go) waits for them.
 	answering atomic.Int64
 	// pendingRestart: true while this manager has detected a replaced binary on disk and is waiting for idle before
@@ -113,6 +115,8 @@ type busEvent struct {
 	name   string
 	params json.RawMessage
 	conn   uint64 // the connection it came on (BusHub.conns as it was read)
+	key    string // of one that says the whole of something and came while the line was long (eventKey); else ""
+	lost   int    // not an event of the hub's: the note of this many that the full line did not keep (eventsLost)
 }
 
 // hubConnKey holds, in a ctx, the connection to the hub an event came on (busEvent.conn).
@@ -136,7 +140,7 @@ func NewBusHub(o BusOptions) *BusHub {
 	if o.Logf == nil {
 		o.Logf = func(string, ...any) {}
 	}
-	b := &BusHub{opts: o, events: make(chan busEvent, 1024), helloed: make(chan struct{}), out: newOutbox(o.Outbox)}
+	b := &BusHub{opts: o, events: newEventQueue(), helloed: make(chan struct{}), out: newOutbox(o.Outbox)}
 	if own, err := readOwnConfig(o.ConfigFile); err == nil { // it read as the manager started (moveConfig)
 		b.own = own
 	}
@@ -167,7 +171,7 @@ func NewBusHub(o BusOptions) *BusHub {
 					assistantwire.CapabilityMeetingHighlights, assistantwire.CapabilityMeetingNotes, assistantwire.CapabilityMeetingEcho, assistantwire.CapabilityMeetingTranscription,
 					assistantwire.CapabilityTaskInput, assistantwire.CapabilityRecordingDay, assistantwire.CapabilityAssistantSearch, assistantwire.CapabilityHealthIntake, assistantwire.CapabilityHealthItems, assistantwire.CapabilityHealthStrength, assistantwire.CapabilityHealthTell, assistantwire.CapabilityAssistantSegments, assistantwire.CapabilityDirectionSessions, assistantwire.CapabilityHTTPBodyStream, assistantwire.CapabilityAssistantStartServiceTier,
 					assistantwire.CapabilityMCPWait, assistantwire.CapabilitySessionsSideFold, assistantwire.CapabilityCountsView, assistantwire.CapabilityRemoteImages, assistantwire.CapabilityTodoView,
-					assistantwire.CapabilityTodoRevision, assistantwire.CapabilityTodoPlaces, assistantwire.CapabilityTodoAsks, assistantwire.CapabilityTodoTimeline, assistantwire.CapabilityTodoImages, devicewire.SharingCapability, devicewire.DevelopmentPackagesCapability}, svc), svc), id, svc)}
+					assistantwire.CapabilityTodoRevision, assistantwire.CapabilityTodoPlaces, assistantwire.CapabilityTodoAsks, assistantwire.CapabilityTodoTimeline, assistantwire.CapabilityTodoImages, devicewire.SharingCapability, devicewire.DevelopmentPackagesCapability, devicewire.PublishedPackagesCapability}, svc), svc), id, svc)}
 			if uid := b.machineUID(); uid != "" {
 				params["machine_uid"] = uid
 			}
@@ -342,11 +346,11 @@ func (b *BusHub) onHello(res json.RawMessage) error {
 				svc.Resync(context.WithoutCancel(ctx))
 			}
 		}()
-		// The inbox's "Needs you" count, which the hub keeps of this connection only (inbox_store.go): what is stored
-		// is read now if nothing read it yet, so the roster has the number before the first round.
+		// The modules' handshake hooks (kernel/seam: the Inbox's "Needs you" count, which the hub keeps of this
+		// connection only), once the connection counts as up.
 		go func() {
-			if b.client.Wait(ctx) == nil && svc.inboxReady(context.WithoutCancel(ctx)) == nil {
-				svc.tellInboxNeedsYou()
+			if b.client.Wait(ctx) == nil {
+				svc.kernel.Connected(context.WithoutCancel(ctx))
 			}
 		}()
 		// The conversations the channels follow (channels_handler.go).
@@ -670,16 +674,15 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 		}
 		if target, _ := params[ownerApprovalHandledParam].(string); target != "" {
 			s.notesOwnerRefused(ctx, carry) // an approval is not a model turn or a conversation message
+			s.forgetUnusedOwnerRelayLater(ctx, p.SessionID, msg)
 			return map[string]any{"params": params}, nil
 		}
-		laterDone, err := s.withOwnerRelayLater(ctx, p.MachineID, p.SessionID, msg, params, true)
-		if err != nil {
+		if _, err := s.withOwnerRelayLater(ctx, p.MachineID, p.SessionID, msg, params, true); err != nil {
 			s.notesOwnerRefused(ctx, carry)
 			s.appSendRefused(p.MachineID, p.SessionID, err)
 			return nil, err
 		}
 		s.notesOwnerSent(ctx, carry, msg)
-		s.relayLaterOwnerSent(p.SessionID, msg, laterDone)
 		if *note != "" {
 			return map[string]any{"params": params, "launcher_note": *note}, nil
 		}
@@ -727,6 +730,12 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 			return nil, err
 		}
 		return s.FeishuAction(ctx, p)
+	case assistantwire.MethodFeishuHandoff:
+		var p assistantwire.FeishuHandoff
+		if err := decode(&p); err != nil {
+			return nil, err
+		}
+		return map[string]any{}, s.larkModule().Handoff(ctx, p)
 	case assistantwire.MethodFeishuView:
 		return s.FeishuView(ctx), nil
 	case assistantwire.MethodFleetAsk:
@@ -756,7 +765,7 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 	if out, ok, err := s.extensionEventRequest(ctx, method, params); ok { // extensions' assistant.event (extension_event.go)
 		return out, err
 	}
-	if out, ok, err := inboxRequest(ctx, s, method, decode); ok { // the inbox's (inbox_bus.go)
+	if out, ok, err := s.kernel.Answer(ctx, method, params); ok { // the modules' (kernel/seam: the Inbox's)
 		return out, err
 	}
 	if e := b.opts.Extensions; e != nil {
@@ -922,23 +931,36 @@ func (b *BusHub) Settle() {
 	}
 }
 
-// takeEvents takes the hub's events one at a time, in order. A turn's end runs on its own: naming a conversation
-// asks a model and a task waits for its agents to settle, and the events after it must not wait for that.
+// takeEvents takes the hub's events one at a time, in order, until ctx ends: nothing else waits on the line, so
+// nothing is left waiting then. A turn's end runs on its own: naming a conversation asks a model and a task waits
+// for its agents to settle, and the events after it must not wait for that.
 func (b *BusHub) takeEvents(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case ev := <-b.events:
-			b.waitHello(ctx)
-			if ev.name == assistantwire.EventSessionDelta {
-				ev.params = b.takeDelta(ev.params)
+	for ctx.Err() == nil {
+		ev, ok := b.events.take()
+		if !ok {
+			select {
+			case <-ctx.Done():
+				return
+			case <-b.events.wake:
 			}
-			if err := b.event(ctx, ev); err != nil {
-				b.opts.Logf("assistant: %s: %v", ev.name, err)
-			}
-			b.pending.Add(-1)
+			continue
 		}
+		if f := b.taking; f != nil {
+			f(ev)
+		}
+		if ev.lost > 0 {
+			b.eventsLost(ev)
+			b.pending.Add(-1)
+			continue
+		}
+		b.waitHello(ctx)
+		if ev.name == assistantwire.EventSessionDelta {
+			ev.params = b.takeDelta(ev.params)
+		}
+		if err := b.event(ctx, ev); err != nil {
+			b.opts.Logf("assistant: %s: %v", ev.name, err)
+		}
+		b.pending.Add(-1)
 	}
 }
 
@@ -961,6 +983,9 @@ func (b *BusHub) event(ctx context.Context, ev busEvent) error {
 		var p assistantwire.UserSpokeParams
 		if err := decode(&p); err != nil {
 			return err
+		}
+		if p.Source != "" {
+			s.noteOwnerInstruction(ctx, p.SessionRef, p.Text, p.Source, p.ClientMsgID.String(), p.At)
 		}
 		s.userSpokeText(ctx, p.SessionRef, p.Text)
 	case assistantwire.EventUserStopped:

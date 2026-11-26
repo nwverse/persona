@@ -135,6 +135,21 @@ message on the node until it ends; count a turn the node just started as running
 sends in a row steer the second into the first's turn. On Codex's own app-server, steer with `turn/steer` and the
 observed turn id instead; never send both a steer and a start for one message.
 
+## Task workspace sources and ownership (#16161)
+
+For a local linked checkout, keep the source Git directory's identity separate from the
+owned task path. Otherwise a generic delete guard can claim the user's source repository.
+Save the chosen commit and operation before dispatching a side effect. A missing capability
+can select the older checkout path. An uncertain prepare or start must retain the same operation.
+Use the same path check at preview and prepare so existing symlinks cannot pass one check
+and fail the other.
+
+On hosts with a symlinked home, Git records physical worktree paths (#16305).
+Resolve the configured home prefix before deriving the task and repository paths, and
+resolve the configured state prefix before appending control directories. Checking the
+remaining components as written preserves the distinction between host aliases and
+links inside the workspace.
+
 ## Task branch reuse is not forced worktree creation (#8357)
 
 An explicitly named task branch may already have a checkout outside the engine's usual directory. Discover it from Git,
@@ -1692,7 +1707,9 @@ terminal never saw it, and the companion's turn overwrote the stored steps from 
 probe it by taking even a shared `flock` (`LOCK_SH|LOCK_NB`), because a starting `agy` tries `LOCK_EX|LOCK_NB` once and
 runs its whole session without a lock if that fails (#14561). On Linux, read `/proc/locks` for the file's device and
 inode; where no lock table can be read, fall back to the presence file plus recent transcript writes by another process.
-Calls that drive the conversation go to the pane, or are refused (`agy_in_terminal`) while held.
+Calls that drive the conversation go to the pane, or are refused (`agy_in_terminal`) while held. So every engine that can
+run agy must list it as a pane and learn the pane's conversation: Orca did neither, and every message to an agy open in
+an Orca terminal was refused (#16531).
 
 ## First tool discovery can precede the session list (#14855)
 
