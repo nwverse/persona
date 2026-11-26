@@ -554,9 +554,13 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.Main != "" && in.Main != "-" && in.Main != before.Main {
 		if before.Main != "" {
-			s.handOverMainTasks(context.WithoutCancel(ctx), before.Main, in.Main) // its open tasks follow the main conversation (main_handover.go)
+			s.handOverMainTasks(context.WithoutCancel(ctx), before.Main, in.Main)  // its open tasks follow the main conversation (main_handover.go)
+			s.handOverMainAlways(context.WithoutCancel(ctx), before.Main, in.Main) // its Always-allow grants follow once (#16158)
 		} else {
 			s.handOverFormerMainTasks(context.WithoutCancel(ctx)) // after newMain / clearMain, old main sits in Former
+			if len(before.Former) > 0 && before.Former[0].SessionID != "" && before.Former[0].SessionID != in.Main {
+				s.handOverMainAlways(context.WithoutCancel(ctx), before.Former[0].SessionID, in.Main)
+			}
 		}
 	}
 	apierr.WriteJSON(w, s.view(ctx, false))

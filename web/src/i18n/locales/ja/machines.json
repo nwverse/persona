@@ -1,4 +1,5 @@
 {
+  "computer_label": "コンピュータ",
   "reconnecting": "再接続しています",
   "reconnect_failed": "再接続できませんでした：{error}",
   "sidebar": "サイドバー",

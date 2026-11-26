@@ -670,16 +670,15 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 		}
 		if target, _ := params[ownerApprovalHandledParam].(string); target != "" {
 			s.notesOwnerRefused(ctx, carry) // an approval is not a model turn or a conversation message
+			s.forgetUnusedOwnerRelayLater(ctx, p.SessionID, msg)
 			return map[string]any{"params": params}, nil
 		}
-		laterDone, err := s.withOwnerRelayLater(ctx, p.MachineID, p.SessionID, msg, params, true)
-		if err != nil {
+		if _, err := s.withOwnerRelayLater(ctx, p.MachineID, p.SessionID, msg, params, true); err != nil {
 			s.notesOwnerRefused(ctx, carry)
 			s.appSendRefused(p.MachineID, p.SessionID, err)
 			return nil, err
 		}
 		s.notesOwnerSent(ctx, carry, msg)
-		s.relayLaterOwnerSent(p.SessionID, msg, laterDone)
 		if *note != "" {
 			return map[string]any{"params": params, "launcher_note": *note}, nil
 		}

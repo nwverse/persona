@@ -2,7 +2,6 @@
   "title": "ストレージとクリーンアップ",
   "subtitle": "マウントごとの容量・inode使用率と、オンデマンドの有界ホットスポット分析を確認します。",
   "refresh_mounts": "マウントを更新",
-  "machine_picker": "コンピューターを選択",
   "mounts_title": "マウント済みファイルシステム",
   "collected_ms": "{ms} ms で取得",
   "mounts_unsupported": "{os} ではマウントごとの statfs 監視に対応していません。",

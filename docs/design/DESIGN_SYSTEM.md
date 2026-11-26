@@ -4549,6 +4549,17 @@ nothing. iOS draws the close mark before the words, where every `Chip` draws its
 button after them), and the menu's label is a finger's height (`tapTargetHeight`). A chip the user may not take away carries the lock mark and is read as set by its owner. What was removed comes
 back from a + menu at the end of the row. The change shows at once and rolls back with a toast when the hub refuses it.
 
+## Computer selection in web machine tools
+
+People monitoring their computers see the number of waiting agents beside the computer name when the session list
+is known. The count opens the first waiting session. Fleet token usage belongs on Cards and Capabilities.
+The view bar starts with Cards, wraps to the available width and ends with assistant-scoped shared resources.
+
+Ports, Services, Files, Toolchain, Network and Storage share one computer selection. Their labeled native select
+lists available computers. A single choice becomes a compact name and status chip. If the current computer leaves
+or goes offline, tools select the first online computer. With all computers offline they show the offline state.
+A storage cleanup link opens reclaim mode only on its target computer.
+
 ## Usage treemap (#14576)
 
 A computer's disk usage map (`docs/server/machine-usage-map.md`, "The map") is a squarified treemap: every box's area is
