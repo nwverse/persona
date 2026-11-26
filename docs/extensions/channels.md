@@ -308,7 +308,8 @@ if the assistant is disconnected, return `503 assistant_offline`; fields are unc
 
 ## 7. UI
 
-- **Entry point**: Apple (iOS / iPadOS / macOS, #2195), web, and Android (#2196) have a separate "Channels" item in Settings, before "Connectors"; the extension page no longer repeats it. Apple shows the connected count, red if any errors; hidden when hub lacks the `channels` feature.
+- **Unified web Settings** (Labs, `integrations_v2`). Open **Integrations & Extensions**, choose **Chat channels**, then open a service. Its account and binding sit beside chat delivery and sync settings. Installed plugin IM and mention channels offer a routing mode and idle timeout. Feishu has one destination picker and its own bot controls. Turning the trial off restores the separate Settings pages and retains saved choices.
+- **Legacy entry point**: Apple (iOS / iPadOS / macOS, #2195), web with the trial off, and Android (#2196) have a separate "Channels" item in Settings, before "Connectors"; the extension page no longer repeats it. Apple shows the connected count, red if any errors; hidden when hub lacks the `channels` feature.
 - **List**: each row has the channel icon (brand mark, `Theme.Brand` / the equivalent token on each client; name initial if no mark), name, bound account (or one sentence of description), and state on the right: Connected (green dot) /
   Not connected (gray) / Error (red, with a reason) / Disabled. Three sections: "Persona" (`app`: iOS, Mac, watch, Android, web, Siri, simply telling users all are available), "Connected", "Available" (market entries open extension market details).
 - **Individual channel**:
@@ -337,6 +338,7 @@ if the assistant is disconnected, return `503 assistant_offline`; fields are unc
 - **Telegram bot** (Bot API, different from the current Telegram connector): with the `channel` extension point, only sending and receiving need to be written; deferred.
 - **Siri polling**: "Ask Persona" waits for the turn to finish in the App itself (24 seconds), not through hub's pipeline. To use it, hub would add a long-poll API to "send one message, wait for its answer, then return", called by Siri.
 - **Voice**: a different shape, listed in the channel table and configured where it was, not using this pipeline. Lark `/agent` can now use the host's `mention` contract and explicit main target; the Lark extension's adoption of that contract is outside this host change.
-- One owner per channel; group chats in `im` channels are not handled. A public mention turn is the exception: only the owner's own request enters main, while a non-owner request uses a guest conversation.
+- Each channel still has one owner. With the trial on, plugin IM channels can route each group and each topic to a separate conversation, or split topics only. A public mention turn is the exception: only the owner's own request enters main, while a non-owner request uses a guest conversation.
+- Before graduation, track read-only `target_override` presentation and the `settings/integrations` deep link on iOS, Android and HarmonyOS. Their partial channel writes preserve routing preferences. [Graduation tracker](https://github.com/nwverse/persona/issues/14802)
 - Once `text` questions have been answered elsewhere, already-sent text can't be withdrawn.
 - Extension channel `progress` (send progress, then edit it with `channel.edit`): in the protocol, but the pipeline still draws progress cards only for the Lark bot; extension channels currently only have "typing".

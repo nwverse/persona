@@ -105,7 +105,7 @@ func (n *Node) withCodexAppLauncher(list []proto.Launcher) (out []proto.Launcher
 	if _, err := codexAppCLI(); err != nil {
 		return list, false
 	}
-	return append(slices.Clone(list), proto.Launcher{Name: codexAppLauncher, Source: codexAppSource, Agent: "codex"}), true
+	return append(slices.Clone(list), proto.Launcher{Name: codexAppLauncher, Source: codexAppSource, Agent: "codex", DisplayName: "Codex App"}), true
 }
 
 // startInCodexApp starts a new chat in the Codex App for a start with its launcher; handled false for any other start
