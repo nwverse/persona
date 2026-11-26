@@ -454,6 +454,12 @@ fun TodoDetailScreen(
                 }
             }
 
+            todo.wait?.let { wait ->
+                item(key = "wait") {
+                    TodoWaitSection(wait, now, onOpenTodo)
+                }
+            }
+
             if (failedStart) {
                 item(key = "start-failure") {
                     Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {

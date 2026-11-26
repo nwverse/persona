@@ -1096,6 +1096,7 @@ func TestRemoteAgentMemoryToolsAndPlanMode(t *testing.T) {
 }
 
 func TestRemoteAgentGateWriteRequiresConfirmEvenInBypass(t *testing.T) {
+	needsLarkGate(t)
 	n, hub := runtimeNode(t)
 	assistantHub(hub)
 

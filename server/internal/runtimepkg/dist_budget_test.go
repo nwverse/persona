@@ -49,10 +49,14 @@ import (
 // Antigravity native usage account name and subscription plan enrichment via GetUserStatus (#16277) adds 286 B (279,605 B).
 // Main then measured 280,046 B (#16595): #16490 (+21 B), #15678 (+406 B) and #16027 (+22 B) grew the packages without raising
 // the budget, and #16285 adds 278 B on main (its 286 B was measured on its own branch).
-// Native workflow command preservation (#16591 on main) and Antigravity /compact divider mapping + retry exemption (#16604) bring the total to 281,092 B.
+// Later runtime changes on main (#16591, #16122) bring the total to 280,892 B.
+// Following an Antigravity conversation past a rewind's abandoned export tail and rewinding a cut that hides ranges at
+// its matching visible step (#14297) add 304 B (281,196 B).
+// Applying the configured Antigravity model before the first prompt after ACP resume (#15537) adds 67 B (281,263 B).
+// Antigravity /compact divider mapping, CHECKPOINT pre_tokens, and empty-prompt retry exemption (#16604) add 201 B (281,464 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 281_092
+	const budget = 281_464
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

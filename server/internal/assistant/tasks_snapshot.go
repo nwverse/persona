@@ -296,7 +296,13 @@ func (s *Service) snapshotTasks(ctx context.Context, web string) []prompts.Snaps
 		if t.Supervision != nil {
 			task.DoneWhen = len(t.Supervision.DoneWhen)
 			if p := t.Supervision.Progress; p != nil {
-				reported(&task, p, taskLead(st, agents), now)
+				// A completed round's last reply says more than its earlier progress.
+				// Explicit conclusions and outstanding questions still have their own line.
+				resultReady := st == "done" || st == "auto_done" || st == "awaiting_review" ||
+					(t.Supervision.state(t) == reviewUserCheck && (st == "owner_wait" || st == "followup"))
+				if p.Kind != upReportProgress || task.Last == "" || !resultReady {
+					reported(&task, p, taskLead(st, agents), now)
+				}
 			}
 		}
 		all = append(all, ranked{task: task, rank: rank, open: t.DoneAt == nil})

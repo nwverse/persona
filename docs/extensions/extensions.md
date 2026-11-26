@@ -1684,6 +1684,21 @@ An option the command does not take, a missing argument or an extra one is refus
 `new`, `test` and `pack` below do not need the hub; everything else needs the hub running.
 What the commands print reads in the terminal's language (`PERSONA_LANG`, else `LC_ALL` / `LC_MESSAGES` / `LANG`; English when none is set or it is `C`), and they ask the hub for its text (errors, permission lines, statuses) in the same language, not in the user language an app last set ([i18n.md](../protocol/i18n.md), "Command line"). `show` stays JSON. The quotes below are the English text.
 
+Commands that can change an extension (`install`, `upgrade`, `rollback`, `attach` / `detach`, `enable` / `disable`,
+`sandbox`, `auth login` / `logout`, `config`, `secret`, `auto-upgrade`, `contribution`, `market` writes, `dev` and
+`uninstall`) print the resolved state directory and loopback hub before their preview or first request:
+
+```text
+PERSONA_HOME: /absolute/path/to/state
+Hub: http://127.0.0.1:18660
+```
+
+`--yes` skips the confirmation, not this target line. For scripts, add `--expect-home <absolute path>` and/or
+`--expect-hub <host:port>` to make a wrong target impossible: a mismatch fails before any preview, HTTP request or
+filesystem change, and the error names both the expected and actual target. Without either flag, an ordinary install
+keeps its existing behavior apart from the extra target line. The old `JARVIS_HOME` environment name is still accepted;
+when neither variable is set, the default is `$HOME/.persona` (or the old state directory when that is what exists).
+
 ```text
 personad extension list                              One line each: id, version, source, status, name; errors are shown on failing ones, and ones needing setup show "; still needs: …"
 personad extension show <id>                         Details as JSON: permissions, settings, whether secrets are set, its data directory (data_dir)
@@ -2598,6 +2613,13 @@ extension needs no prefix, rename or migration; existing page links and saved sw
 Extensions **do not run code in the app**: they return a View (a few fixed kinds of items), which iOS, Mac, Android and web each draw with their own design system (correct in every interface style and in light and dark),
 and button actions go back to the extension. Views and components are defined in `schema/extension/view.schema.json` (the types on all four clients are generated from it, see [schema/extension/README.md](../../schema/extension/README.md));
 the hub first checks against the schema (`wire.Validate`, `sdk/go/wire`), then checks what the schema cannot express (item count per page, no duplicate field names, consistent labels across chart series), in `server/internal/extension/ui.go`.
+
+A full page (`nav_page`, `extension_page`) may also use an action's `open` to navigate to an existing Persona **session**
+(`persona://session/<machine>/<session>`) or **to-do** (`persona://task/<id>`). A tap only routes, using the same validated
+targets and in-app routes as assistant cards: it sends no message, changes no destination data, returns no destination
+content to the extension, and Back returns to the page with its state. Every other `open` target (https, knowledge files,
+machine files) and the other assistant-only action fields (`reply`, `pop`, a page `push`) stay unavailable to extensions;
+cards (`overview_card`, `capsule_card`) keep no `open` at all.
 
 **Where it goes** (the `placement` of a `ui` contribution): see the slot table in the next section, "UI slots". The first two:
 
@@ -3521,8 +3543,9 @@ extension sees that). One new component, `scene`, authoritative in `schema/exten
 its `Scene*` definitions, `x-since: 11`); the example is `schema/extension/examples/View.v11-scene-flat.json`. **An app sends
 11 only when it draws all of the below** (and all of 10). **iOS** (#12544) draws `scene` in
 `apple/Persona/Views/Settings/ExtensionScene.swift` (`ExtensionSceneGeometry.swift`, `ExtensionSceneModel.swift`) and sends `11`
-for pages and cards (`pageVersion` and `cardVersion`, including Share as Image's direct still snapshot); **web** (#12641) and
-**Android** (#12642) stay on `10` and get the downgrade below until their renderers land.
+for pages and cards (`pageVersion` and `cardVersion`, including Share as Image's direct still snapshot). **Android** (#12642)
+draws the scene in both places with Compose; `HttpExtensionManagement.UI_VERSION` is `11`. **Web** (#12641) still requests `10`
+and receives the downgrade below.
 
 Extensions still run no code in the app and send no model file: they say what the shapes are, and each app builds them with
 its own engine. A list of simple shapes is the contract because no 3D file format is drawn by every client (SceneKit reads

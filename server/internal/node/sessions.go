@@ -161,7 +161,14 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			seen[id] = true
 			continue
 		}
-		viaBotmux := host.ParsePane(a.PaneID).Kind == host.Botmux
+		pane := host.ParsePane(a.PaneID)
+		viaBotmux := pane.Kind == host.Botmux
+		if viaBotmux {
+			if h, ok := n.hosts.Get(host.Botmux).(*botmuxHost); ok {
+				s.SetBotmuxExternalTrigger(h.externalTriggerNotice())
+				h.refreshCapsAsync(pane.ID)
+			}
+		}
 		switch {
 		case viaBotmux && (a.Agent == "codex" || a.Agent == traexAgent):
 			// The thread's name, else botmux's title of the topic; messages go through botmux, neither route.
@@ -325,6 +332,8 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		}
 		if a.Agent == "codex" {
 			n.codexPaneControls(&s, rollout)
+		} else if a.Agent == "claude" {
+			n.claudeTerminalSpeedRow(&s, rollout)
 		}
 		if piFamily(a.Agent) {
 			n.mergePiRow(&s) // its conversation is the extension's (pi.go)
@@ -538,6 +547,10 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		if s.Status == proto.StatusWorking && (s.Agent == "" || s.Agent == "claude" || s.Agent == "codex") {
 			s.ToolLoop = n.toolLoopOf(s.SessionID)
 		}
+		// The row leaves with a title it can show (#16343): whatever source named it (a Codex thread name, a runtime's
+		// own title, a terminal's) may hold a whole opening prompt, which the list would otherwise carry everywhere.
+		// Every lookup by title above has read the whole one already.
+		s.Title = transcript.ListTitle(s.Title)
 		if pass == nil || !pass.unavailable[s.SessionID] {
 			s.WorkspaceCwd = n.sessionWorkspaceCwd(s.Cwd)
 			fillGitPlace(s)            // project, worktree and branch for the apps' tree (gitplace.go)
