@@ -209,6 +209,7 @@ assistant.start_defaults GET /api/v1/assistant/start-defaults
 -                    GET /api/v1/assistant/tasks/cron
 spaces               GET /api/v1/assistant/track-kinds
 spaces               GET /api/v1/assistant/tracks
+spaces               GET /api/v1/assistant/tracks/{slug}/conversations
 spaces               GET /api/v1/assistant/tracks/{slug}/space-md
 -                    GET /api/v1/assistant/urgent-call
 assistant.start_defaults GET /api/v1/assistant/worker-presets

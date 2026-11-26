@@ -573,3 +573,87 @@ test('desktop.mjs CLI forwards runtime, launcher, display-name, and model flags 
   const [code] = await new Promise(resolve => child.once('exit', (...args) => resolve(args)))
   assert.equal(code, 0)
 })
+
+test('desktop merges trajectory-only sessions when ListConversations returns empty or omits them, while keeping archived/probe rows excluded', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'desktop-agy-merge-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const legacyId = 'aaaaaaaa-1111-4222-8333-444444444444'
+  const probeId = 'bbbbbbbb-1111-4222-8333-444444444444'
+  const archivedId = 'cccccccc-1111-4222-8333-444444444444'
+  const legacySession = 'desktop-agy-' + legacyId
+  const nowIso = new Date().toISOString()
+  const cascadeConfig = { plannerConfig: { planModel: 'gemini-4-neon-high' } }
+  const sent = []
+  let conversations = []
+  const node = await startFakeNode(t)
+
+  const runtime = createDesktopRuntime({
+    dir,
+    socketPath: node.path,
+    workingPollMs: 0,
+    discover: async () => ({ httpPort: 12345, csrfToken: 'tok' }),
+    conversationCall: async (_, method) => {
+      if (method === 'ListConversations') return { conversations }
+      return {}
+    },
+    call: async (_, method, params) => {
+      if (method === 'GetAllCascadeTrajectories') {
+        return {
+          trajectorySummaries: {
+            [legacyId]: {
+              summary: 'Desktop UI conversation',
+              lastModifiedTime: nowIso,
+              stepCount: 2,
+              workspaces: [{ workspaceFolderAbsoluteUri: 'file:///workspace/desktop-repo' }],
+            },
+            [probeId]: { summary: 'Probe trajectory', lastModifiedTime: nowIso, stepCount: 1 },
+            [archivedId]: { summary: 'Archived trajectory', lastModifiedTime: nowIso, stepCount: 1 },
+          },
+        }
+      }
+      if (method === 'GetCascadeTrajectorySteps') {
+        return { steps: [{ userInput: { userConfig: cascadeConfig } }] }
+      }
+      if (method === 'SendUserCascadeMessage') {
+        sent.push(params)
+        return {}
+      }
+      return {}
+    },
+  })
+  t.after(() => runtime.stop())
+  await runtime.start()
+  await node.ready
+
+  // Case 1: ListConversations returns [] while trajectories are non-empty.
+  await waitUntil('trajectory sessions merged when ListConversations is empty', () =>
+    node.last('runtime.sessions')?.sessions?.some(s => s.session_id === legacySession))
+  const row = node.last('runtime.sessions').sessions.find(s => s.session_id === legacySession)
+  assert.equal(row.title, 'Desktop UI conversation')
+  assert.equal(row.cwd, '/workspace/desktop-repo')
+
+  // Existing Desktop-UI session remains attachable and sendable with its cascadeConfig.
+  await node.peer.call('session.send', { session_id: legacySession, text: 'hello legacy', client_msg_id: 'legacy-1' })
+  assert.deepEqual(sent, [
+    { cascadeId: legacyId, items: [{ text: 'hello legacy' }], cascadeConfig, clientMessageId: 'legacy-1' },
+  ])
+
+  // Case 2: Probe and archived rows returned by ListConversations are excluded even if still in trajectories.
+  conversations = [
+    { id: probeId, metadata: { tags: ['persona-probe'], createTime: nowIso }, state: { runState: 'RUN_STATE_IDLE', updateTime: nowIso } },
+    { id: archivedId, annotations: { archived: true }, metadata: { createTime: nowIso }, state: { runState: 'RUN_STATE_IDLE', updateTime: nowIso } },
+  ]
+  await runtime.pushNow()
+  await waitUntil('probe and archived rows filtered while legacy trajectory remains', () => {
+    const ids = node.last('runtime.sessions')?.sessions?.map(s => s.session_id) || []
+    return ids.length === 1 && ids[0] === legacySession
+  })
+
+  // Case 3: Archiving legacySession keeps it hidden even though it stays in trajectorySummaries; unarchiving restores it.
+  await node.peer.call('session.archive', { session_id: legacySession })
+  await waitUntil('archived trajectory session hidden', () => node.last('runtime.sessions')?.sessions?.length === 0)
+  await node.peer.call('session.unarchive', { session_id: legacySession })
+  await waitUntil('unarchived trajectory session restored', () =>
+    node.last('runtime.sessions')?.sessions?.length === 1 &&
+    node.last('runtime.sessions').sessions[0].session_id === legacySession)
+})

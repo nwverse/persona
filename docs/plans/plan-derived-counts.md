@@ -478,6 +478,24 @@ Persona tab, the app icon and the switchers' Persona-conversation part after D9;
 3; draft PRs #10809 and #9777 change what Needs you holds and must be reconciled. *Gate:* the named decision.
 *Rollback:* revert. *Done:* the count's rows in surfaces.json turn `matches`; the lane differ is green.
 
+*Landed, the To-dos' server part (#15896):* `todos_needs_you` is an optional field of the view's `counts` and `totals`
+(`schema/wire/counts.schema.json`, its four outputs regenerated; no client reads it yet), written by `fleetcountadapt`'s
+`Fleet.View`, which `surfaces.json` names as its `producer`. Package assistant hands `Fleet.View` the counts of its last
+read of the whole to-do list, the `Counts()` `GET /api/v1/todos` answers with (`server/internal/assistant/counts_view.go`):
+every read of the list, of one to-do or of the places keeps them; when no read follows a `{"type":"todos"}` within a
+second, the manager reads the list itself, one read at a time; until a run has counted its to-dos, each round asks for
+a count, and the view leaves it out. `TestCountsViewCountsTheToDosAsTheListDoes` holds the view's number to the list's
+`counts.needs_you` on every `spec/fixtures/todo-counts` case, `TestCountsViewFollowsTheToDoList` to `GET /api/v1/todos`
+on a manager's own list, and `TestCountsViewRecountsOneReadAtATime` keeps a slow read from starting a second one.
+What differs, and why: the count lists no rows (`keys` absent, all of `n` is `more`), since `Counts()` gives numbers
+only; the to-do projection (`todo/projection`) is neither declared nor given a record or an exported field while #9823,
+#11168 and #11179 are open, and `assistant/todo_projection.go` is untouched; `Fleet.View` takes the counts as the wire
+has them (`assistantwire.TodoCounts`, in an `opt.Option`), and once the projection is a core they come in as its value,
+`Fleet.View` staying the producer. TodoCountsFallback's multi-manager case retires with the iOS client's step, and the
+clients' To-dos rows stay `differs` until each draws N. `BenchmarkRound` with the to-dos counted: 266 to 267 allocs/op
+and 35,096 to 35,184 B/op against `origin/main` on one machine, the to-dos count's one allocation; `BenchmarkLiveRound`
+(no to-dos counted) and telling an unchanged view are unchanged (139 allocs/op; 0).
+
 **13. Retire the fallbacks.** *Change:* when D14's window ends, delete each client's fallback file with its fixture
 replay and step-3 marks (the view-path cases stay); the hub keeps FleetState, `inbox_needs_you` and Link for old apps;
 the guard fails if a fallback file returns, as a branch that edited it can keep it through the delete (#11476).
