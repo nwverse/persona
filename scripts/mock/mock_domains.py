@@ -57,6 +57,7 @@ DOMAINS = [
     "desktops_mock",  # desktop client registration (hub/desktops.go), GET /mock/desktops, MOCK_DESKTOPS
     "bg_stalled_mock",  # an Agent whose background work stalled, still Working (#13744), MOCK_BG_STALLED
     "side_unread_mock",  # side sessions with unseen replies for the sidebar's Unread row (#13496), MOCK_SIDE_UNREAD
+    "project_headings_mock",  # same-named projects for the native By Project headings (#13558), MOCK_PROJECT_HEADINGS
     "github_mock",  # GitHub's sign-ins and MOCK_GITHUB_INBOX's thread page (/api/v1/connectors/github/…)
     "kb_selection_mock",  # Settings › Knowledge selection (/api/v1/kb/selection), MOCK_KB_SELECTION
     "project_lessons_mock",  # a project's lessons from finished tasks (/api/v1/kb/projects/{id}/lessons…), MOCK_PROJECT_LESSONS
@@ -79,6 +80,7 @@ DOMAINS = [
     "hub_modules_mock",  # a hub that publishes module flags: `modules` and `module.<id>` (#13849), MOCK_HUB_MODULES
     "usage_map_mock",  # the disk usage map: scan, trash, cleanup and an offload provider (#14576), MOCK_USAGE_MAP
     "machine_load_mock",  # moderate CPU with work queued on some cores: MOCK_LOAD_QUEUE (#12519)
+    "todo_wait_reasons_mock",  # to-dos waiting for different reasons with the hub's typed `wait` (#16168), MOCK_TODO_WAIT_REASONS
     "dashboards_mock",  # Dashboards: the -pages places and pages, the `dashboards` switch (#15017), MOCK_DASHBOARDS
 ]
 

@@ -21,6 +21,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 // Sending a message from the phone (docs/protocol/protocol.md "Sending messages"). The app sends each message with its own
@@ -288,9 +289,11 @@ func (h *Hub) sendMessageOnce(w http.ResponseWriter, r *http.Request, m *Machine
 		return
 	}
 	text, isText := p["text"].(string)
-	if isText {
+	clientMsgID, _ := p["client_msg_id"].(string)
+	if isText && strings.TrimSpace(text) != "" || p["images"] != nil {
 		r = h.captureHumanSubmission(r, text)
 	}
+	indirect := viaMarked(p["via"]) // Siri or the share sheet: delivered, but not the owner's own input for project review
 	for _, reserved := range []string{"creation_id", "incarnation", "caller", "submission", "share_authority", "skill_owner"} {
 		delete(p, reserved)
 	}
@@ -303,10 +306,14 @@ func (h *Hub) sendMessageOnce(w http.ResponseWriter, r *http.Request, m *Machine
 			start, fresh = f, true
 		}
 	}
+	handoffAgent := ""
+	if c, ok := m.session(sid); ok {
+		handoffAgent = c.Agent
+	}
 	if todoID != "" {
 		// The manager checks the todo (404, 409, 503 assistant_offline while it is away); handed to the agent for it,
 		// the calls already made on it go first (#1618).
-		hand := assistantwire.TodoHandoff{TodoID: todoID, Text: text}
+		hand := assistantwire.TodoHandoff{TodoID: todoID, Text: text, Agent: handoffAgent}
 		if fresh {
 			hand.New, hand.MachineID, hand.Cwd = true, m.cfg.ID, start.cwd
 		}
@@ -322,7 +329,7 @@ func (h *Hub) sendMessageOnce(w http.ResponseWriter, r *http.Request, m *Machine
 		}
 	} else if fresh {
 		decided, images := h.todoStartText(r.Context(), assistantwire.TodoHandoff{TodoID: start.todoID, Text: text, New: true,
-			MachineID: m.cfg.ID, Cwd: start.cwd})
+			MachineID: m.cfg.ID, Cwd: start.cwd, Agent: handoffAgent})
 		p["text"] = decided
 		if strings.TrimSpace(decided) != "" {
 			mergeTodoImages(p, images)
@@ -334,9 +341,17 @@ func (h *Hub) sendMessageOnce(w http.ResponseWriter, r *http.Request, m *Machine
 	}
 	if spokeKnown && (!terminal && m.isAssistant(spokeSession) || isText && strings.TrimSpace(text) != "") {
 		// The manager also observes owner messages to Agents before delivery, so a task's decision default can pause.
-		spoke := assistantwire.UserSpokeParams{SessionRef: assistantwire.SessionRef{MachineID: m.cfg.ID, SessionID: sid}}
+		spoke := assistantwire.UserSpokeParams{
+			SessionRef: assistantwire.SessionRef{MachineID: m.cfg.ID, SessionID: sid},
+			At:         time.Now().UTC(),
+		}
 		if (terminal || !m.isAssistant(spokeSession)) && isText && personSent(r.Context()) {
 			spoke.Text = text
+			spoke.ClientMsgID = wireids.ClientMsgID(clientMsgID)
+			spoke.Source = assistantwire.OwnerInputApp
+			if terminal {
+				spoke.Source = assistantwire.OwnerInputTerminal
+			}
 		}
 		h.asstOf(h.sessionOwner(m.cfg.ID, sid)).userSpoke(r.Context(), spoke)
 	}
@@ -358,6 +373,7 @@ func (h *Hub) sendMessageOnce(w http.ResponseWriter, r *http.Request, m *Machine
 			// Older owner messages to it are kept undelivered: this one is kept behind them, never sent first.
 			if id, _ := asSent["client_msg_id"].(string); id != "" && rpcCodeOf(err) == assistantwire.CodeUndeliveredAhead {
 				if status, body, ok := h.keepUndelivered(r.Context(), m, sid, asSent, assistantwire.CodeUndeliveredAhead, ""); ok {
+					h.recordAcceptedProjectReviewInput(r.Context(), r, m.cfg.ID, sid, id, nil, indirect)
 					writeRaw(w, status, body)
 					return
 				}
@@ -491,7 +507,17 @@ func (h *Hub) sendMessageOnce(w http.ResponseWriter, r *http.Request, m *Machine
 			}
 		}
 		if h.store != nil {
-			if err := h.store.SettleSend(context.WithoutCancel(ctx), id, outcome); err != nil {
+			commit := context.WithoutCancel(ctx)
+			recorded, err := h.settleProjectReviewOwner(commit, r, m.cfg.ID, sid, id, outcome, indirect)
+			if recorded && err != nil {
+				// The receipt outranks the review notice: left in "sending", a retry of this id would be answered
+				// "unknown" and a later drain could type the text again. Settle it alone; the notice is lost.
+				h.logf("send %s: project review owner input not queued: %v", id, err)
+			}
+			if !recorded || err != nil {
+				err = h.store.SettleSend(commit, id, outcome)
+			}
+			if err != nil {
 				h.logf("send %s: %v", id, err)
 			}
 		}

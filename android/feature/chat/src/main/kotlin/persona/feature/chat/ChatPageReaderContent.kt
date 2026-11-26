@@ -6,6 +6,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.layoutId
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -229,6 +230,7 @@ internal fun ChatPageReaderContent(
                                     line.recordedDuration(snapshot.recordedTurnDurations),
                                     onToggle, onExpand, folding, foldErrors,
                                     lastUserId = lastUserId,
+                                    showToolViews = line !is ChatLine.Step || line.groupId !in contentWorkGroups,
                                     turnFix = turnFix?.takeIf { line.contentKey == lines.firstOrNull()?.contentKey },
                                     turnLauncher = turnLauncher,
                                     onLastLine = { extent -> chatList.reportLastLine(line.contentKey, extent) }, onFullText = onFullText,
@@ -322,7 +324,8 @@ private fun ChatPageReaderNavigation(
     // An open sheet keeps the last plan if its work line folds away.
     if (planSheet.value && activePlan != null) SideEffect { sheetPlan.value = activePlan }
     if (showJump || showPlanPill) Row(
-        Modifier.fillMaxWidth().padding(horizontal = horizontalPadding).padding(bottom = Tokens.Space.s),
+        Modifier.fillMaxWidth().padding(horizontal = horizontalPadding).padding(bottom = Tokens.Space.s)
+            .then(if (showPlanPill) Modifier.layoutId(PlanReaderFooter) else Modifier),
         horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s),
         verticalAlignment = Alignment.CenterVertically,
     ) {

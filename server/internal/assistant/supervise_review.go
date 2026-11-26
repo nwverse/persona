@@ -102,9 +102,10 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 		// conclusion card or push, its decision card closed as superseded (never recorded as the owner's choice).
 		WithdrawNeedsUser bool `json:"withdraw_needs_user"`
 		// parked (parked.go): until when it waits (a duration or a time; reason says for what), and on what kind of thing.
-		Until     string        `json:"until"`
-		WaitingOn string        `json:"waiting_on"`
-		Evidence  *ParkEvidence `json:"evidence"`
+		Until     string         `json:"until"`
+		WaitingOn string         `json:"waiting_on"`
+		Evidence  *ParkEvidence  `json:"evidence"`
+		Findings  *findingReview `json:"findings_review"`
 	}
 	if err := json.Unmarshal(args, &a); err != nil {
 		return "", fmt.Errorf("arguments: %v", err)
@@ -113,8 +114,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	a.ReworkKind = strings.TrimSpace(a.ReworkKind)
 	switch a.Verdict {
 	case reviewAccepted, reviewRework, reviewNeedsUser, reviewParked, reviewCancelled:
+	case reviewFindings:
 	default:
-		return "", fmt.Errorf("verdict must be accepted, rework, needs_user, parked or cancelled")
+		return "", fmt.Errorf("verdict must be accepted, rework, needs_user, parked, cancelled or findings")
 	}
 	if a.ReworkKind != "" && a.Verdict != reviewRework {
 		return "", fmt.Errorf("rework_kind applies to rework only")
@@ -196,6 +198,14 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	if !s.canReviewLedger(ctx, self, t, t.Supervision) {
 		return "", fmt.Errorf("task %s was not handed out from this conversation", t.ID)
 	}
+	if a.Verdict == reviewFindings {
+		return s.reviewInvestigationFindings(ctx, t, a.Findings, a.Checks, self, func(cur Todo) bool {
+			return s.canReviewLedger(ctx, self, cur, cur.Supervision)
+		})
+	}
+	if a.Findings != nil {
+		return "", errors.New("record findings_review with verdict findings before changing task state")
+	}
 	if withdraw {
 		if err := withdrawNeedsUserError(t, self, isMain); err != nil {
 			return "", err
@@ -246,6 +256,11 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 				return "", err
 			}
 		}
+		if t.DoneAt == nil && !a.UserCheck {
+			if err := s.checkOwnerResultBeforeAccept(ctx, t); err != nil {
+				return "", err
+			}
+		}
 		if deliveryNote, err = s.acceptedDeliveryError(ctx, t, strings.TrimSpace(a.Link), a.Outcome); err != nil {
 			return "", err
 		}
@@ -267,6 +282,12 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	// are deliberate closures the guards let through. A withdrawn needs_user is exactly a task the owner was asked
 	// about: its supervisor took that back and decided it itself, so the owner-blocker words in the agent's own replies
 	// do not refuse it.
+	if verdict == reviewAccepted && t.DoneAt == nil && !a.UserCheck {
+		if _, why := s.ownerInstructionBlock(ctx, t); why != "" {
+			return "", errors.New("bare accepted refused: " + why + ". Ask the Agent to address it and report, revise " +
+				"done_when with task_scope and re-review, or use accepted with user_check so the owner explicitly confirms the result")
+		}
+	}
 	if verdict == reviewAccepted && !a.UserCheck && a.Outcome != outcomeCannot && !withdraw {
 		evidence := s.acceptGuardEvidence(ctx, t, note, strings.TrimSpace(a.Reason), checks)
 		if matched, _ := acceptGuardBlock(evidence); matched != "" {
@@ -316,10 +337,39 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	var criteriaErr error
 	unauthorized := false
 	var v Supervision
+	var findingErr error
 	var reviewedAt time.Time
 	withdrawGone := false // withdraw_needs_user, but the task stopped waiting for the user meanwhile: nothing is written
+	var cancelCheckedAgents []TodoAgent
+	cancelStaleAllowed := false
+	if ledger && verdict == reviewCancelled {
+		cancelCheckedAgents, cancelStaleAllowed = s.canBypassStaleInvestigationCancel(ctx, t)
+	}
 	if ledger {
-		v, _, err = s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
+		var guard func(Todo) bool
+		if verdict == reviewParked || verdict == reviewAccepted && !a.UserCheck || verdict == reviewCancelled {
+			guard = func(cur Todo) bool {
+				if !s.canReviewLedger(ctx, self, cur, cur.Supervision) {
+					unauthorized = true
+					return false
+				}
+				if cur.DoneAt != nil {
+					return true
+				}
+				if !(verdict == reviewCancelled && cancelStaleAllowed && staleInvestigationCancelAllowed(cur, cancelCheckedAgents)) {
+					findingErr = s.investigationTransitionError(ctx, cur, cur.Supervision, park.Evidence)
+				}
+				if findingErr == nil && verdict != reviewParked {
+					var acceptedChecks []ReviewCheck
+					if verdict == reviewAccepted && a.Outcome != outcomeCannot {
+						acceptedChecks = checks
+					}
+					findingErr = s.receivedFindingsCloseError(cur, acceptedChecks)
+				}
+				return findingErr == nil
+			}
+		}
+		v, _, err = s.updateSupervisionGuarded(ctx, t.ID, guard, func(v *Supervision) bool {
 			if !s.canReviewLedger(ctx, self, t, v) {
 				unauthorized = true
 				return false
@@ -367,6 +417,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 				}
 			}
 			r := TaskReview{At: time.Now().UTC(), Verdict: verdict, Checks: checks, Note: note, UserCheck: a.UserCheck, WithdrewNeedsUser: withdraw}
+			if r.UserCheck {
+				r.Reason, r.Link = strings.TrimSpace(a.Reason), validWebURL(a.Link)
+			}
 			reviewedAt = r.At
 			v.applyChecks(checks, r.At, "supervisor:"+self)
 			if verdict == reviewNeedsUser {
@@ -410,6 +463,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 	}
 	if err != nil {
 		return "", err
+	}
+	if findingErr != nil {
+		return "", findingErr
 	}
 	if unauthorized {
 		return "", fmt.Errorf("task %s was not handed out from this conversation", t.ID)
@@ -506,7 +562,7 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 			}
 			return fmt.Sprintf("Task %s is accepted by you and remains open awaiting the owner's verification (user_check). "+
 				"Its Agent stays available. The owner's \"Pass\" completes it; change feedback returns it to ongoing work. "+
-				"A \"Please verify\" card waits for them: don't ask them again. Terminal cleanup: skipped.", t.ID) + result.words() + deliveryNote, nil
+				"They can find the verification under Needs you in Persona. Don't ask them again. Terminal cleanup: skipped.", t.ID) + result.words() + deliveryNote, nil
 		}
 		reason := cmp.Or(clip(oneLine(note), 80), "验收通过")
 		if verdict == reviewCancelled {
@@ -829,7 +885,26 @@ func (s *Service) reviewDoneTodo(ctx context.Context, id, reason string, accepte
 	if t, ok := s.todoNow(id); ok && t.isConcern() {
 		return false, nil // only its report closes a concern (concerns.go)
 	}
+	var cancelCheckedAgents []TodoAgent
+	cancelStaleAllowed := false
+	if !accepted {
+		if cur, ok := s.todoNow(id); ok {
+			cancelCheckedAgents, cancelStaleAllowed = s.canBypassStaleInvestigationCancel(ctx, cur)
+		}
+	}
 	s.todos.writing.Lock() // memory takes the rows in the order the store committed them (todoBook.writing)
+	if current, ok := s.todoNow(id); ok && current.DoneAt == nil {
+		var err error
+		if !accepted && cancelStaleAllowed && staleInvestigationCancelAllowed(current, cancelCheckedAgents) {
+			err = s.receivedFindingsCloseError(current, nil)
+		} else {
+			err = s.investigationCloseError(ctx, current)
+		}
+		if err != nil {
+			s.todos.writing.Unlock()
+			return false, err
+		}
+	}
 	now := time.Now().UTC()
 	var row db.TodoRow
 	if st := s.supervisionDB(); st != nil && s.todoDB() != nil {
@@ -881,6 +956,16 @@ func (s *Service) reviewDoneTodo(ctx context.Context, id, reason string, accepte
 		if accepted && row.DoneAt != nil {
 			s.evaluateTodoAfterDependents(ctx, id)
 			s.evaluateParentCloseoutForChild(ctx, id)
+		}
+		if s.settings(ctx).todosV2On() {
+			if recErr := s.ResetSupervisedTaskRecovery(ctx, id); recErr != nil {
+				s.logf("task %s: reset todos_v2 restart recovery: %v", id, recErr)
+			}
+			if accepted && row.DoneAt != nil {
+				if _, blkErr := s.ReconcileTodoBlockers(ctx, id); blkErr != nil {
+					s.logf("task %s: reconcile todos_v2 blockers: %v", id, blkErr)
+				}
+			}
 		}
 		if t, now := s.todoNow(id); ok && now {
 			// A side conversation's task the main conversation supervised: the planning conversation hears it ended (#4669).

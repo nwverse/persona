@@ -36,9 +36,9 @@ const (
 	// admissionDirectionCap is the code default every direction falls back to when neither direction_cap_by_direction
 	// nor direction_cap_by_project names it. The counts are taken per supervising conversation, so the default must fit
 	// the busiest charter direction (the main product line's charter is 8); narrower lines are configured per direction.
-	admissionDirectionCap      = 8
-	admissionMinMemoryBytes    = int64(2) * 1024 * 1024 * 1024        // 2 GiB
-	admissionHubMinMemory      = int64(2.5 * float64(1024*1024*1024)) // 2.5 GiB
+	admissionDirectionCap   = 8
+	admissionMinMemoryBytes = int64(2) * 1024 * 1024 * 1024        // 2 GiB
+	admissionHubMinMemory   = int64(2.5 * float64(1024*1024*1024)) // 2.5 GiB
 	// recommendMinMemoryBytes is the healthy-candidate available memory floor (4 GiB) for automatic selection
 	// when the effective admission floor is lower.
 	recommendMinMemoryBytes = int64(4) * 1024 * 1024 * 1024 // 4 GiB
@@ -833,15 +833,14 @@ func (s *Service) setAdmission(ctx context.Context, v json.RawMessage) (*ownChan
 	if s.store() == nil {
 		return nil, errors.New("no database on this hub")
 	}
-	before, _ := json.Marshal(s.admissionSettings(ctx))
+	was := s.admissionSettings(ctx)
+	before, _ := json.Marshal(was)
 	after, _ := json.Marshal(in)
 	if bytes.Equal(before, after) {
 		return &ownChange{summary: "assistant.admission did not change"}, nil
 	}
-	return &ownChange{cardText: func(l i18n.Lang) string {
-		return i18n.T(l, "assistant-settings_tool.change_admission", i18n.Args{
-			"before": clipped(l, string(before)), "after": clipped(l, string(after))})
-	},
+	hubMachine := s.settings(ctx).MachineID
+	return &ownChange{cardText: func(l i18n.Lang) string { return admissionChangeCard(l, was, in, hubMachine) },
 		apply: func(ctx context.Context) (string, error) {
 			if err := s.putSetting(ctx, admissionSettingsKey, &in); err != nil {
 				return "", err

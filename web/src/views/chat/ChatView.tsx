@@ -1,11 +1,11 @@
 // One conversation: an agent in herdr on one of your computers, or a Persona assistant conversation.
 import { useAssistantIdentity } from "../../lib/assistant-identity";
 import { useAssistantTitle, useManagerOffline } from "../ManagerParts";
-import { LinkManager, useShownManager } from "../../lib/manager-choice";
-import { alsoOpenText } from "../../lib/engines";
+import { defaultManager, LinkManager, useShownManager } from "../../lib/manager-choice";
+import { decisionLaterKey } from "../../lib/assistant-entries";
 import { lazy, memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, errorText, pastHub, sessionPath } from "../../lib/api";
-import { attentionReason, externalLink, failureReason, isStoppedAgent, resumeCommand, sessionCan, sessionCanRename, sessionDisplayTab, sessionMenuActions, sourceSubtitle, sessionTitle, sessionTitleDetail, shortPath, stateOf, tabLabel, uuid } from "../../lib/format";
+import { attentionReason, externalLink, failureReason, isStoppedAgent, resumeCommand, sessionCan, sessionCanRename, sessionDisplayTab, sessionMenuActions, sourceSubtitle, sessionTitle, sessionTitleDetail, shortPath, activityOf, stateOf, tabLabel, uuid } from "../../lib/format";
 import { useHerdrTabName } from "../../lib/agents-display";
 import { conversationPage } from "../../lib/conversation-page";
 import { navigate, type Route, type SessionView } from "../../lib/router";
@@ -25,7 +25,7 @@ import { useRuntimeSession } from "../../lib/runtime-session";
 import { ArchivedNotice, SessionDetailNotice } from "../../ui/SessionDetailNotice";
 import { isBackgroundSupervisor } from "../../lib/background-supervisor";
 import { getSession, getState, hubHas, listenSession, refresh, refreshTodos, saveMutes, upsertSession, useStore, viewSession } from "../../lib/store";
-import { codexThreadOf, waitsForFirstMessage } from "../../lib/codex-waiting";
+import { useCodexThread, waitsForFirstMessage } from "../../lib/codex-waiting";
 import { foldRows } from "../../lib/folded-rows";
 import { PREVIEW_FEATURE } from "../../lib/preview-link";
 import { buildTaskIndex, loopCadence, loopNext, stableSubagents, STOP_LOOP_MESSAGE, subagentCall, subagentCardKey, subagentTitle, terminalCalls, type TaskIndex } from "../../lib/tasks";
@@ -40,7 +40,7 @@ import { apiOp } from "../../lib/ops";
 import { beginMessageSend, observeMessageItems, settleMessageEcho, stopMessageFeedback, useMessageFeedback } from "../../lib/message-send";
 import { conversationKey, pickedLauncher, pickedModel, usePickedLauncher } from "../../lib/assistant-chat";
 import { splitSkillDraft } from "../../lib/skill-mentions";
-import { unlinkAgentFromTodo } from "../../lib/todos";
+import { openAsk, unlinkAgentFromTodo, waitsForOwner } from "../../lib/todos";
 import { t as tr } from "../../i18n";
 import { lastEditablePrompt, promptsOf, rewindBlock, rewindDone, rewindSession, rewindTarget, type RewindRestore } from "../../lib/rewind";
 import { EDIT_SEND_SETTLE_MS } from "../../lib/edit-last-key";
@@ -52,10 +52,7 @@ import { REVIEW_FEATURE } from "../../lib/types";
 import { anchoredScroll, followsAgain, isScrollbarPress, jumpLabel, leavesOnKey, leavesOnScrollbarDrag, leavesOnTouch, leavesOnWheel, followsAfterUnfold, UNFOLD_PAUSE, type ScrollAnchor } from "../../lib/disclosure";
 import { Button, copyText, cx, Dialog, IconButton, Loading, Menu, toast, useMenu, useNow, type MenuItem } from "../../ui/atoms";
 import { BackgroundStallHint } from "../../ui/BackgroundStallHint";
-import { StatusMark } from "../../ui/StatusMark";
 import { Icon } from "../../ui/icons";
-import { StoppedAgentLine } from "./StoppedAgentLine";
-import { CodexReadOnlyLine } from "./CodexReadOnlyLine";
 const TakeoverAction = lazy(() => import("./TakeoverAction"));
 import { scrollBehavior } from "../../ui/stream/motion";
 import { segmentChanges, shiftAbove, type SizeChange } from "./offscreen";
@@ -70,7 +67,7 @@ import { PendingCards, TurnCards } from "./Interactions";
 import { splitTurnAsks } from "../../lib/turn-asks";
 import { focusedCard, focusedFirst } from "../../lib/card-focus";
 import { COMPOSER_INPUT, lostWith } from "../../lib/dock-focus";
-import { FailureNote, showsFailureNote } from "./FailureNote";
+import { showsFailureNote } from "./failure-note-state";
 import { LazyCloseoutCard } from "./closeout-chunks";
 import { shownCloseout } from "../../lib/closeout";
 import { AWAIT_MS, awaitingTurn, COMMAND_DOCK_MAX, DOCK_MAX, pickupStateForWait, RETRY_IDLE_GRACE_MS, turnStart } from "./dock";
@@ -174,6 +171,7 @@ const InboxBack = lazy(() => import("./InboxBack").then((m) => ({ default: m.Inb
 const PlanPill = lazy(() => import("./PlanCard").then((m) => ({ default: m.PlanPill })));
 // "Wrap up: <item>" over the main conversation's composer (#5932): with the hand-off card's chunk, not the first screen's
 const LazyWrapUpChips = lazy(() => import("../assistant/HandoffCard").then((m) => ({ default: m.WrapUpChips })));
+const TaskDecision = lazy(() => import("../assistant/TaskDecision"));
 // a chat that is nowhere (a stale or mistyped link): rare, so its notice and words are a chunk of their own
 const LazyNotFoundNotice = lazy(() => import("./NotFoundNotice").then((m) => ({ default: m.NotFoundNotice })));
 const ContextRestartNotice = lazyPage(() => import("./ContextRestartNotice").then((m) => m.ContextRestartNotice));
@@ -182,6 +180,9 @@ const CommandWaitingNotice = lazyPage(() => import("./CommandWaitingNotice").the
 const ShellQuestion = lazy(() => import("../ShellQuestionCard"));
 // only in a conversation that moved between Claude Code and Codex (#5054): its earlier sessions, read above the live one
 const EarlierStretches = lazy(() => import("./EarlierStretches"));
+const BotmuxComposerNotes = lazy(() => import("./BotmuxMessages").then((m) => ({ default: m.BotmuxComposerNotes })));
+const StoppedAgentLine = lazy(() => import("./StoppedAgentLine").then((m) => ({ default: m.StoppedAgentLine })));
+const CodexReadOnlyLine = lazy(() => import("./CodexReadOnlyLine").then((m) => ({ default: m.CodexReadOnlyLine })));
 const ChatNavRail = lazy(() => import("./ChatNavRail").then((m) => ({ default: m.ChatNavRail })));
 const TranscriptWindowPager = lazy(() => import("./TranscriptWindowPager"));
 // Recovery cards are rare: their rendering and words load only when the session actually carries a fallback record.
@@ -386,6 +387,16 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   }, [embeddedSub, embeddedParent, mid, sid]);
   const session = syntheticEmbedded ?? (detail.missing && heldSubRow ? heldSubRow : runtimeSession ?? heldSubRow);
   const known = Boolean(syntheticEmbedded) || runtimeKnown || Boolean(heldSubRow);
+  // Read the same ask as Needs you. The session's current task link wins after a move, including across managers.
+  const decisionTodo = useStore((s) => {
+    if (!inPage || assistant || embedded || !session) return undefined;
+    const manager = session.manager || defaultManager();
+    const todo = s.todos.find((todo) => !todo.done_at &&
+      (session.todo ? todo.id === session.todo.id : (todo.manager || defaultManager()) === manager) &&
+      todo.agents?.some((a) => !a.released_at && !a.dismissed_at && a.machine_id === mid && a.session_id === sid));
+    return todo && openAsk(todo)?.outcome === "decide" && !todo.ask?.questions?.length && waitsForOwner(todo) ? todo : undefined;
+  });
+  const decisionDeferred = useFeed((s) => decisionTodo ? Boolean(s.later[decisionLaterKey(decisionTodo)]) : false);
   // The main conversation is always Persona (#1313): not its first message, the node's title for it.
   const mainConversation = useStore((s) => s.assistant?.main);
   const isMain = Boolean(assistant && (mainCache || sid === mainConversation));
@@ -422,7 +433,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   useEffect(() => {
     if (waitsFirst && session) setWaitingRow(session);
   }, [waitsFirst, session]);
-  const becameThread = useStore((s) => (waitingRow && waitingRow.session_id === sid ? codexThreadOf(s.sessions[mid] ?? [], waitingRow)?.session_id : undefined));
+  const becameThread = useCodexThread(waitingRow?.session_id === sid && waitingRow.machine_id === mid ? waitingRow : undefined);
   useEffect(() => {
     if (becameThread && inPage) navigate({ name: "session", mid, sid: becameThread }, true);
   }, [becameThread, inPage, mid]);
@@ -450,7 +461,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   // a side session's own chat (in its parent's panel): its own children fold under that parent, naming it (folded_side)
   const sideParent = session && isSide(session) ? session.folded_under : undefined;
   // the space's other agents, its child sessions folded into their parents (#5120: a child is never one of them)
-  const siblings = useStore((s) => (session?.space_id ? foldRows(s.sessions[mid] ?? []).filter((x) => x.space_id === session.space_id && stateOf(x) !== "offline") : []));
+  const siblings = useStore((s) => (session?.space_id ? foldRows(s.sessions[mid] ?? []).filter((x) => x.space_id === session.space_id && activityOf(x) !== "offline") : []));
   // its own requests and those of the child sessions folded under it (#5120, including cross-machine children via
   // folded_under_machine_id): a child's are answered here, in the order they came, each saying which child asks; a
   // side session's chat (#7944) takes the cards of the rows that belong to it
@@ -502,7 +513,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   // what other pages sent here ("Ask Persona", "Hand to AI"…): shown like this page's own sending bubbles (lib/outbox.ts)
   const outbox = useStore((s) => s.outbox[outboxKey(mid, sid)] ?? []);
   const online = useStore((s) => s.conn === "online");
-  const state = session ? stateOf(session) : "unknown";
+  const state = session ? activityOf(session) : "unknown";
   const canQueueSend = queuesWhileWorking(session);
   useEffect(() => {
     if (canQueueSend) void preloadQueuePanel().catch(() => {});
@@ -557,7 +568,6 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   const streamEnded = live.streamEnded && !inputAfterPreview;
   const replyPreview = inputAfterPreview ? "" : live.streaming;
   const [awaitNow, setAwaitNow] = useState(() => Date.now());
-  const turnFailure = session?.failure_reason || session?.turn_error || lastSeg?.cut ? { since: session?.state_since } : undefined;
   // a message whose wait the hub took a stop for (#2450): it is no longer worked on, so Working… and Interrupt go at
   // once instead of after AWAIT_MS; a turn the hub reports later still shows through `state`
   const [stoppedInput, setStoppedInput] = useState<{ chat: string; id: string }>();
@@ -569,7 +579,29 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
     lastSeg?.steps.some((step) => step.kind === "thinking" || (step.kind === "tool" && !step.result)));
   const pickupState = pickupStateForWait(state, session?.background_working, foregroundActive);
   const inputKey = lastSeg?.user ? `${mid}/${sid}/${lastSeg.user.id}` : undefined;
-  const hubStateAt = Date.parse(session?.state_since ?? "");
+  const status = {
+    chat: `${mid}/${sid}`, inputKey, since: session?.state_since, updatedAt: session?.updated_at, seenAt: session?.seen_at,
+    foreground: state === "working" && !session?.background_working, idle: state === "idle" || state === "unread",
+  };
+  const previousStatus = useRef<(typeof status & { priorWorking: boolean; priorExit: boolean; outcomeSince?: string }) | undefined>(undefined);
+  const previous = previousStatus.current?.chat === status.chat ? previousStatus.current : undefined;
+  const newInput = Boolean(inputKey && inputKey !== previous?.inputKey && !lastSeg?.user?.queued);
+  // A new echo while the same foreground run is still working does not take ownership of that run.
+  const priorWorking = Boolean(status.foreground && previous?.foreground && status.since === previous.since &&
+    (newInput || previous.priorWorking));
+  // Marking a finished session seen can advance state_since without changing the underlying outcome.
+  const sameOutcome = status.idle && previous?.idle &&
+    (status.since === previous.since || (state === "idle" && status.seenAt && status.seenAt !== previous.seenAt &&
+      status.updatedAt === previous.updatedAt));
+  const outcomeSince = sameOutcome ? previous.outcomeSince : status.since;
+  // The first exit belongs to the prior run unless this input already has transcript evidence of its own.
+  const priorExit = Boolean(status.idle && previous?.foreground && (newInput || previous.priorWorking) &&
+    !lastSeg?.answer && !lastSeg?.steps.length && !lastSeg?.blankReply) || Boolean(sameOutcome && previous.priorExit);
+  useLayoutEffect(() => {
+    previousStatus.current = { ...status, priorWorking, priorExit, outcomeSince };
+  });
+  const turnFailure = session?.failure_reason || session?.turn_error || lastSeg?.cut ? { since: outcomeSince } : undefined;
+  const hubStateAt = Date.parse(outcomeSince ?? "");
   const [observedInput, setObservedInput] = useState<{ key: string; hubStateAt: number; seenAt: number }>();
   const observedKey = observedInput?.key;
   useLayoutEffect(() => {
@@ -579,11 +611,11 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   }, [inputKey, hubStateAt, observedKey]);
   // The hub can deliver its idle update with the echo or just after it. Wait for it to stay idle
   // through the handoff before offering a retry, since the input and status come from separate streams.
-  const idleAt = observedInput && observedKey === inputKey && !live.streaming && (state === "idle" || state === "unread") &&
+  const idleAt = observedInput && observedKey === inputKey && !priorExit && !live.streaming && status.idle &&
     (hubStateAt > observedInput.hubStateAt || hubStateAt > Date.parse(lastSeg?.user?.ts ?? ""))
     ? observedInput.seenAt + RETRY_IDLE_GRACE_MS : undefined;
   const settled = idleAt !== undefined && awaitNow >= idleAt;
-  const awaitedTurn = awaitingTurn(lastSeg, pickupState, awaitNow, turnFailure, settled) ? lastSeg?.user?.id : undefined;
+  const awaitedTurn = awaitingTurn(lastSeg, pickupState, awaitNow, priorExit && !lastSeg?.cut ? undefined : turnFailure, settled) ? lastSeg?.user?.id : undefined;
   const awaiting = awaitedTurn !== undefined && awaitedTurn !== stoppedTurn && !streamEnded;
   const awaitingNow = useRef<string | undefined>(undefined);
   awaitingNow.current = awaiting ? awaitedTurn : undefined;
@@ -1567,7 +1599,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
         return false;
       }
     }
-    return deliver(out, uuid(), out.edit?.clearDraft, 0, Boolean(out.edit));
+    return deliver(out, uuid(), out.edit?.clearDraft, 0, Boolean(out.edit || out.restoreCommentDraft));
   };
   const sendMessageNow = useRef(sendMessage);
   sendMessageNow.current = sendMessage;
@@ -1742,9 +1774,13 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
     foldsBackgroundRounds(sid, s.assistant ?? (mainCache ? { main: mainCache.scope } : undefined)));
   const foldRoutineRelayReplies = useStore((s) => assistant && sid === s.assistant?.main && s.assistant.fold_routine_relay_replies);
   const latestReplyNeedsAttention = Boolean(turnFailure || relayNeedsAttention(session));
+  // A reload shows the cached page before the hub's newest page comes (a stalled hub held that read across several
+  // reloads, #16214), or keeps it when the read failed: its unanswered last turn may have a reply the page has not read
+  // yet, and Retry there sent the question again (#16286).
+  const stale = !detached && (!live.firstRead || Boolean(live.error));
   const allLines = useMemo(
-    () => stabilizeLines(lastLines.current, chatLines(earlier.liveItems, { live: lastLive && !outgoing, background: foldBackground, main: isMain, foldRoutineRelayReplies, latestReplyNeedsAttention })),
-    [earlier.liveItems, lastLive, outgoing, foldBackground, isMain, foldRoutineRelayReplies, latestReplyNeedsAttention],
+    () => stabilizeLines(lastLines.current, chatLines(earlier.liveItems, { live: lastLive && !outgoing, background: foldBackground, main: isMain, foldRoutineRelayReplies, latestReplyNeedsAttention, stale })),
+    [earlier.liveItems, lastLive, outgoing, foldBackground, isMain, foldRoutineRelayReplies, latestReplyNeedsAttention, stale],
   );
   lastLines.current = allLines;
   // The timeline split and the assistant display use the same history boundary: one feed walk per items change.
@@ -2219,6 +2255,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   const [retriedOn, setRetried] = useState<{ chat: string; reason?: string }>();
   const retried = retriedOn?.chat === `${mid}/${sid}` ? retriedOn.reason : undefined;
   const failureNote = Boolean(session && !assistant && showsFailureNote(session, { retried }));
+  const botmuxNotes = Boolean(session && !assistant && (failureNote || attentionReason(session) || session.also_open_in?.length));
   // a turn that failed on the refusal fallback's missing model (#2528): "Continue" would send it to the same model; the
   // main conversation's setup gate would only open its missing step, as it does for every send while it holds (`deliver`)
   const canRetry =
@@ -2407,8 +2444,8 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   // the permission picker after the + (#5324), where the mode can be switched: a Persona conversation whatever its state
   // (the hub applies it, #2416), an agent with modes while it runs; Plan mode is the + panel's check row. An agent that
   // lists its own modes (#8261) gets the picker with those two, and no Plan mode.
-  const modesOn = Boolean(session) && (Boolean(assistant) || (hasModes(session) && stateOf(session!) !== "offline"));
-  const listedOn = Boolean(session) && !assistant && Boolean(listedModesOf(session)) && stateOf(session!) !== "offline";
+  const modesOn = Boolean(session) && (Boolean(assistant) || (hasModes(session) && activityOf(session!) !== "offline"));
+  const listedOn = Boolean(session) && !assistant && Boolean(listedModesOf(session)) && activityOf(session!) !== "offline";
   const leading = useMemo(() => (session && (modesOn || listedOn) ? <PermissionPicker session={session} assistant={assistant} /> : null), [session, modesOn, listedOn, assistant]);
   const planMode = usePlanMode(modesOn ? session : undefined, assistant);
   // the model pill: an Agent's (#5032), a Persona conversation's (#5033, its pick kept for the conversation)
@@ -2866,6 +2903,11 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
           </>
         )}
         {pendingCards}
+        {decisionTodo && !decisionDeferred && (
+          <Suspense fallback={null}>
+            <TaskDecision key={`${decisionTodo.manager}/${decisionTodo.id}/${decisionTodo.ask?.asked_at}`} decision={decisionTodo} rowKey={`task:${decisionTodo.id}`} />
+          </Suspense>
+        )}
         {!assistant && session?.model_fallback && <Suspense fallback={null}><ModelFallbackCard session={session} headless={false} /></Suspense>}
         {assistant && session && <CompactionStrip session={session} />}
         {session?.context_restart_recommended && !archivedHere && (
@@ -2877,24 +2919,20 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
         {failure ? <FailureCard failure={failure} onClose={() => setSendFailure(null)} onHelp={gate.help} onConfirm={gate.confirm} /> : <ReadinessCard gate={gate} />}
         <ChatOnlyNote gate={gate} />
         {gate.dialog}
-        {session && !assistant && <AttentionNote session={session} />}
-        {session && !assistant && <ConflictNote session={session} />}
-        {/* a resume turned ultracode off (#3428): one line with "Turn back on" */}
-        {session && !assistant && <UltracodeLostNote session={session} />}
-        {session && failureNote && (
-          <FailureNote
-            session={session}
-            onRetry={() => {
+        {session && botmuxNotes && (
+          <Suspense fallback={null}>
+            <BotmuxComposerNotes session={session} retry={failureNote ? () => {
               const chat = `${mid}/${sid}`;
               const reason = failureReason(session);
               setRetried({ chat, reason });
-              // a retry that did not go brings the note back
               void retryError().then((went) => {
-                if (!went) setRetried((r) => (r?.chat === chat && r.reason === reason ? undefined : r));
+                if (!went) setRetried((retry) => retry?.chat === chat && retry.reason === reason ? undefined : retry);
               });
-            }}
-          />
+            } : undefined} />
+          </Suspense>
         )}
+        {/* a resume turned ultracode off (#3428): one line with "Turn back on" */}
+        {session && !assistant && <UltracodeLostNote session={session} />}
         {chatBar.bar("dock")}
         {/* the error the chat stopped on, right over the composer as cindy places it (#5313); keyed by the error, so a new
             one opens with its details folded */}
@@ -2935,19 +2973,21 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
           </Suspense>
         )}
         {session && (codexFooterTakeover || takeoverPending) && (
-          <CodexReadOnlyLine
-            session={session}
-            visible={codexFooterTakeover}
-            stopped={codexStoppedTakeover ? { mid, sid, onTerminal: openTerminal } : undefined}
-            takeOverRequested={takeOverRequested}
-            onTakeOverConsumed={consumeTakeOver}
-            continueRequested={continueTakeoverRequested}
-            onContinueConsumed={consumeContinueTakeover}
-            onPendingChange={setTakeoverPending}
-          />
+          <Suspense fallback={null}>
+            <CodexReadOnlyLine
+              session={session}
+              visible={codexFooterTakeover}
+              stopped={codexStoppedTakeover ? { mid, sid, onTerminal: openTerminal } : undefined}
+              takeOverRequested={takeOverRequested}
+              onTakeOverConsumed={consumeTakeOver}
+              continueRequested={continueTakeoverRequested}
+              onContinueConsumed={consumeContinueTakeover}
+              onPendingChange={setTakeoverPending}
+            />
+          </Suspense>
         )}
         {stoppedLine && !codexStoppedTakeover ? (
-          <StoppedAgentLine mid={mid} sid={sid} onTerminal={openTerminal} />
+          <Suspense fallback={null}><StoppedAgentLine mid={mid} sid={sid} onTerminal={openTerminal} /></Suspense>
         ) : !codexFooterTakeover && !assistant && !offlineLine && !refusedNoRow && session && !canCompose && (embedded || session.is_subagent || Boolean(embeddedSub)) ? (
           <div role="status" data-subagent-readonly-line className="flex flex-wrap items-center gap-x-2 gap-y-1.5 rounded-card bg-inset px-3 py-2 text-xs text-ink-2">
             <span className="min-w-0 flex-1 break-words">{sourceSubtitle(session) || session.read_only_reason || t("chat-chatview.view_only")}</span>
@@ -3164,44 +3204,12 @@ export function footerRows(session: Session, assistant?: boolean): MenuItem[] {
   return rows.filter(([, , v]) => v).map(([key, what, v]) => ({ key, label: v!, hint: what, wrap: true, onSelect: key === "source" ? () => {} : () => void copyText(key === "folder" ? session.cwd! : v!) }));
 }
 
-/** The session is live in another engine host too (#2576): this one owns it, and messages go here only. */
-function ConflictNote({ session }: { session: Session }) {
-  const text = alsoOpenText(session);
-  if (!text) return null;
-  return (
-    <div role="status" data-testid="chat-also-open" className="flex items-start gap-2 rounded-[12px] bg-orange-tint px-3 py-2 text-[12.5px]" style={{ animation: "fade-up 200ms ease-out both" }}>
-      <span className="flex h-[18px] shrink-0 items-center text-orange"><Icon name="warning" size={13} /></span>
-      <span className="line-clamp-2 min-w-0 flex-1 text-ink-2">{text}</span>
-    </div>
-  );
-}
-
-/** Above the composer while a session needs you and its host says why (a botmux attention, iOS AttentionNote):
- *  the reason and "Open in Lark" its topic. */
-function AttentionNote({ session }: { session: Session }) {
-  const reason = attentionReason(session);
-  if (!reason) return null;
-  const link = externalLink(session);
-  return (
-    <div role="status" data-testid="chat-attention" className="flex items-start gap-2 rounded-[12px] border-l-2 border-attention bg-inset px-3 py-2 text-[12.5px]" style={{ animation: "fade-up 200ms ease-out both" }}>
-      <span className="flex h-[18px] shrink-0 items-center"><StatusMark state="needs_you" /></span>
-      <span className="line-clamp-3 min-w-0 flex-1 text-ink-2">{reason}</span>
-      {link && (
-        <a href={link} target="_blank" rel="noopener noreferrer" className="flex shrink-0 items-center gap-1 whitespace-nowrap font-medium text-accent hover:underline">
-          <Icon name="external" size={12} />
-          {t("chat-chatview.open_in_lark")}
-        </a>
-      )}
-    </div>
-  );
-}
-
 // memo: a chat renders again for each transcript item, and the header shows none of them
 // One line, as cindy's session header (`SessionContentHeader`, #5421): left to right the pin mark, the /loop mark (cindy's
-// schedule badge), the Agent's mark ("Agent runs on {computer}"), the title (double-click renames it in place), ⋯ and the
-// git branch; at the right end the side panels' buttons (Background tasks, Team, Files) and the terminal view, where
-// cindy keeps its right sidebar's. The state is said above the composer (the running status bar) and in the sidebar,
-// the model is the composer's pill, the permission mode the composer's picker; the rest is in ⋯ and Session info.
+// schedule badge), the Agent's mark ("Agent runs on {computer}"), and the title (double-click renames it in place); at the
+// right end the side panels' buttons (Background tasks, Team, Files), the terminal view, and ⋯. The state is said above the
+// composer (the running status bar) and in the sidebar, the git branch in the composer footer, the model is the composer's
+// pill, the permission mode the composer's picker; the rest is in ⋯ and Session info.
 export const Header = memo(function Header({
   session,
   starting = false,
@@ -3394,7 +3402,7 @@ export const Header = memo(function Header({
     .map((s) => ({
       key: s.session_id,
       label: `${tabLabel(s) || sessionTitle(s)} · ${sessionTitle(s)}`,
-      state: stateOf(s),
+      state: activityOf(s),
       checked: s.session_id === session?.session_id,
       onSelect: () => navigate({ name: "session", mid: s.machine_id, sid: s.session_id }),
     }));
@@ -3453,10 +3461,10 @@ export const Header = memo(function Header({
               ]
             : []),
         ...(allowed.includes("attach") ? [{ key: "attach", label: t("chat-chatview.attach"), icon: "link" as const, onSelect: () => void attach() }] : []),
-        // its Side sessions panel (#7944), as the header's button
-        ...(sides ? [{ key: "sides", label: t("chat-chatview.side_sessions_count", { count: sides.count }), icon: "sideSessions" as const, checked: sides.open, onSelect: sides.onToggle }] : []),
-        ...(showTerminal ? [{ key: "terminal", label: t("chat-chatview.terminal"), icon: "terminal" as const, checked: view === "term", onSelect: flipView }] : []),
-        ...(jumpTerminal ? [{ key: "terminal", label: t("chat-chatview.terminal"), icon: "terminal" as const, onSelect: openTerminalPage }] : []),
+        // Panel entries already visible as right-toolbar buttons on desktop stay in ⋯ only on phone viewports.
+        ...(sides && phone ? [{ key: "sides", label: t("chat-chatview.side_sessions_count", { count: sides.count }), icon: "sideSessions" as const, checked: sides.open, onSelect: sides.onToggle }] : []),
+        ...(showTerminal && phone ? [{ key: "terminal", label: t("chat-chatview.terminal"), icon: "terminal" as const, checked: view === "term", onSelect: flipView }] : []),
+        ...(jumpTerminal && phone ? [{ key: "terminal", label: t("chat-chatview.terminal"), icon: "terminal" as const, onSelect: openTerminalPage }] : []),
         ...(resumeOffer !== "hidden"
           ? [{ key: "resume-terminal", label: t("chat-chatview.resume_in_terminal"), icon: "play" as const, disabled: resumeOffer === "no_engine", detail: resumeOffer === "no_engine" ? t("chat-chatview.resume_no_engine", { computer: machineName }) : undefined, onSelect: resumeHere }]
           : []),
@@ -3466,7 +3474,11 @@ export const Header = memo(function Header({
         ...(onContinueTakeover && takeoverLabels
           ? [{ key: "takeover-continue", label: takeoverLabels.continueNew, icon: "compose" as const, disabled: takeoverBusy, onSelect: onContinueTakeover }]
           : []),
-        ...(showFiles ? [{ key: "files", label: t("chat-chatview.files"), icon: "folder" as const, checked: here(panel, "files"), onSelect: openFiles }, { key: "git", label: "Git", icon: "git" as const, checked: here(panel, "git"), onSelect: openGit }, ...(reviews ? [{ key: "review", label: t("chat-chatview.review_changes"), icon: "pullRequest" as const, checked: here(panel, "review"), onSelect: openReview }] : [])] : []),
+        ...(showFiles && phone ? [
+          { key: "files", label: t("chat-chatview.files"), icon: "folder" as const, checked: here(panel, "files"), onSelect: openFiles },
+          { key: "git", label: "Git", icon: "git" as const, checked: here(panel, "git"), onSelect: openGit },
+        ] : []),
+        ...(showFiles && reviews ? [{ key: "review", label: t("chat-chatview.review_changes"), icon: "pullRequest" as const, checked: here(panel, "review"), onSelect: openReview }] : []),
         ...tasksItem,
         ...sessionReviewItems,
         // a run of a comparison (#8916): back to its runs' page
@@ -3496,16 +3508,28 @@ export const Header = memo(function Header({
   // a side panel's own rows (Open in new window, Remove task…) at the top of ⋯
   const panelItems = chrome?.items ?? [];
   const items: MenuItem[] = panelItems.length > 0 && own.length > 0 ? [...panelItems, { ...own[0], divider: true }, ...own.slice(1)] : [...panelItems, ...own];
-  // ⋯ follows the title (cindy's "More actions"); on a narrow page whose middle is the shell's switch the title is hidden,
-  // and ⋯ goes to the right end instead
-  const more = (where: "title" | "end") =>
-    items.length > 0 && (
-      <span className={cx("relative flex shrink-0", where === "end" ? "lg:hidden" : Boolean(topCenter) && "max-lg:hidden")}>
-        <IconButton icon="more" label={t("chat-chatview.more_actions")} onClick={menu.open} active={Boolean(menu.anchor)} className="text-ink-3" />
-        {othersNeed && <span aria-hidden className="pointer-events-none absolute top-0.5 right-0.5 size-2 rounded-full bg-attention shadow-[0_0_0_2px_var(--page)]" />}
-      </span>
-    );
-  const branch = !assistant ? session?.branch?.trim() : "";
+  // ⋯ sits at the right end of the header toolbar; on the main assistant page desktop uses the title pill on the left,
+  // so ⋯ only appears on narrow screens when the shell switch hides the title.
+  const assistantTitleMenu = Boolean(assistant && main);
+  const showMore = items.length > 0 && (!assistantTitleMenu || Boolean(topCenter));
+  const moreHiddenOnWide = assistantTitleMenu && Boolean(topCenter);
+  const showTakeoverButton = Boolean(
+    !assistant && !hideTakeoverButtons && session &&
+      (session.agent === "codex" || session.source_kind === "codex_history" || session.source_kind === "codex_app_server"),
+  );
+  const showNewChatButton = Boolean(assistant && !chrome && session?.space !== "health");
+  const hasAlwaysVisibleToolbar = Boolean(
+    overview || team || sides || showTerminal || jumpTerminal || (!chrome && actions) || showTakeoverButton,
+  );
+  const hasSmToolbar = Boolean(showFiles || tasks);
+  const moreDividerClass = hasAlwaysVisibleToolbar || (hasSmToolbar && showNewChatButton)
+    ? moreHiddenOnWide ? "lg:hidden" : undefined
+    : hasSmToolbar
+      ? moreHiddenOnWide ? "hidden sm:block lg:hidden" : "hidden sm:block"
+      : showNewChatButton
+        ? "lg:hidden"
+        : null;
+  const menuAlign = assistantTitleMenu && !(topCenter && mediaMatches(NARROW)) ? "left" : "right";
   const titleClass = "min-w-0 text-[14px] font-medium text-ink";
   const sideLabel = sides ? [t("chat-chatview.side_sessions_count", { count: sides.count }), sides.needs ? t("chat-chatview.side_sessions_needs_you") : ""].filter(Boolean).join(" · ") : "";
 
@@ -3542,13 +3566,6 @@ export const Header = memo(function Header({
           </h1>
         )}
         {!editing && chrome?.beside}
-        {!editing && !(assistant && main) && more("title")}
-        {!editing && branch && (
-          <span title={t("chat-chatview.branch_title", { branch })} data-chat-branch className="ml-1.5 flex min-w-0 max-w-44 shrink items-center gap-1 rounded-full px-1.5 py-0.5 text-[12px] text-ink-3 @max-[800px]:hidden">
-            <Icon name="branch" size={12} className="shrink-0" />
-            <span className="truncate">{branch}</span>
-          </span>
-        )}
         {!editing && session && !assistant && <BackgroundStallHint session={session} className="ml-1.5 max-w-56 shrink rounded-full px-1.5 py-0.5 text-label @max-[800px]:hidden" />}
       </div>
       {topCenter && <div className="flex min-w-0 flex-1 justify-center lg:hidden">{topCenter}</div>}
@@ -3613,21 +3630,29 @@ export const Header = memo(function Header({
         </span>
       )}
       {/* wide screens have New chat at the top of the sidebar; a phone's sidebar is a drawer */}
-      {assistant && !chrome && session?.space !== "health" && <IconButton icon="compose" label={t("chat-chatview.new_chat")} onClick={() => navigate({ name: "persona-new" })} className="lg:hidden" />}
+      {showNewChatButton && <IconButton icon="compose" label={t("chat-chatview.new_chat")} onClick={() => navigate({ name: "persona-new" })} className="lg:hidden" />}
       {tasks && <IconButton icon="todo" label={t("sidepanel.conversation_tasks")} active={tasks.open} onClick={tasks.onToggle} className="hidden sm:flex" />}
       {!chrome && actions}
-      {!assistant && !hideTakeoverButtons && session && (session.agent === "codex" || session.source_kind === "codex_history" || session.source_kind === "codex_app_server") &&
+      {showTakeoverButton && session &&
         <Suspense fallback={null}><TakeoverAction key={`${session.machine_id}:${session.session_id}`} session={session} /></Suspense>}
-      {Boolean(topCenter) && more("end")}
+      {showMore && moreDividerClass !== null && (
+        <span aria-hidden data-header-divider className={cx("mx-0.5 h-3.5 w-px shrink-0 bg-line", moreDividerClass)} />
+      )}
+      {showMore && (
+        <span className={cx("relative flex shrink-0", moreHiddenOnWide && "lg:hidden")}>
+          <IconButton icon="more" label={t("chat-chatview.more_actions")} onClick={menu.open} active={Boolean(menu.anchor)} className="text-ink-3" />
+          {othersNeed && <span aria-hidden className="pointer-events-none absolute top-0.5 right-0.5 size-2 rounded-full bg-attention shadow-[0_0_0_2px_var(--page)]" />}
+        </span>
+      )}
       {chrome?.page && <IconButton icon="chat" label={t("chat-chatview.open_agent_page")} onClick={openAgentPage} />}
       {chrome && <IconButton icon="x" label={t("sidepanel.close")} onClick={chrome.onClose} />}
       </div>
-      {menu.anchor && <Menu anchor={menu.anchor} onClose={menu.close} align={topCenter && mediaMatches(NARROW) ? "right" : "left"} items={items} />}
+      {menu.anchor && <Menu anchor={menu.anchor} onClose={menu.close} align={menuAlign} items={items} />}
       {tabs.anchor && (
         <Menu
           anchor={tabs.anchor}
           onClose={tabs.close}
-          align={topCenter && mediaMatches(NARROW) ? "right" : "left"}
+          align={menuAlign}
           width={360}
           header={session?.space_name ? t("chat-chatview.space_header", { name: session.space_name }) : undefined}
           headerAsWritten

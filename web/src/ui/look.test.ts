@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { contrast, pageToken } from "./extension-theme";
 import {
   ACCENT_PRESETS, accentChoice, accentCSS, accentTokens, applyLook, personaAccent, PRESET_COLORS, savedPersonaAccent, setAccentChoice,
-  setExtensionThemeActive, setPersonaAccent, setTextSize, textSize,
+  setExtensionThemeActive, setPersonaAccent, setSurfaceStyle, setTextSize, surfaceStyle, textSize,
 } from "./look";
 
 const BACKGROUNDS = ["page", "canvas", "surface", "inset", "hover", "hover-2", "field"];
@@ -37,8 +37,8 @@ describe("主题色", () => {
   it("keeps the app's accents as they are where they already meet the floor", () => {
     expect(accentTokens(PRESET_COLORS.lavender.accent).light["--accent"]).toBe("#7a5af8");
     expect(accentTokens(PRESET_COLORS.teal.accent).dark["--accent"]).toBe("#2a9798");
-    // "Coral" is a hair short of 3:1 on the hover background in light: one step darker
-    expect(accentTokens(PRESET_COLORS.coral.accent).light["--accent"]).toBe("#d2673e");
+    // "Coral" is a hair short of 3:1 on the hover background in light: a few steps darker
+    expect(accentTokens(PRESET_COLORS.coral.accent).light["--accent"]).toBe("#c9633c");
   });
 
   it("puts the choice on the page and takes it off again", () => {
@@ -46,7 +46,7 @@ describe("主题色", () => {
     expect(localStorage.getItem("persona.accent")).toBe("coral");
     expect(document.documentElement.dataset.accent).toBe("coral");
     const css = document.getElementById("persona-accent")!.textContent!;
-    expect(css).toContain(":root[data-accent] { --accent: #d2673e;");
+    expect(css).toContain(":root[data-accent] { --accent: #c9633c;");
     expect(css).toContain(":root.dark[data-accent] { --accent: #cd6e45;");
     setAccentChoice("default");
     expect(localStorage.getItem("persona.accent")).toBeNull();
@@ -57,7 +57,7 @@ describe("主题色", () => {
   it("leaves my bubble to an extension theme laid over a fixed color", () => {
     expect(accentCSS("coral", null)).toContain("--user-bubble");
     expect(accentCSS("coral", null, true)).not.toContain("--user-bubble");
-    expect(accentCSS("coral", null, true)).toContain("--accent: #d2673e;");
+    expect(accentCSS("coral", null, true)).toContain("--accent: #c9633c;");
     setAccentChoice("coral");
     setExtensionThemeActive(true);
     expect(document.getElementById("persona-accent")!.textContent).not.toContain("--user-bubble");
@@ -100,5 +100,25 @@ describe("字号", () => {
     setTextSize("standard");
     expect(localStorage.getItem("persona.text-size")).toBeNull();
     expect(document.documentElement.dataset.textSize).toBeUndefined();
+  });
+});
+
+describe("窗口外观风格", () => {
+  it("defaults to opaque default style and toggles opt-in liquid-glass cleanly", () => {
+    const setSurface = vi.fn();
+    Object.assign(window, { personaDesktop: { setSurfaceStyle: setSurface } });
+    expect(surfaceStyle()).toBe("default");
+    expect(document.documentElement.dataset.surfaceStyle).toBeUndefined();
+
+    setSurfaceStyle("liquid-glass");
+    expect(localStorage.getItem("persona.surface-style")).toBe("liquid-glass");
+    expect(document.documentElement.dataset.surfaceStyle).toBe("liquid-glass");
+    expect(setSurface).toHaveBeenLastCalledWith("liquid-glass");
+
+    setSurfaceStyle("default");
+    expect(localStorage.getItem("persona.surface-style")).toBeNull();
+    expect(document.documentElement.dataset.surfaceStyle).toBeUndefined();
+    expect(setSurface).toHaveBeenLastCalledWith("default");
+    delete (window as { personaDesktop?: unknown }).personaDesktop;
   });
 });

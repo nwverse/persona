@@ -211,6 +211,29 @@ they are not listed. No relational table or connector acknowledgement protocol i
   Inbox has stay as they are (and its accounts' read errors as last read); search, replies and the knowledge base go on. Turned on again, the
   next round is a full one and reads mail at once. `mail` declares no inbox capability: `Manifest.InboxSwitch` gives it the switch.
 
+### Duplicate group mentions from Lark connectors
+
+The Inbox list shows one row when the built-in CLI connector and the Lark
+companion connector report an unambiguous copy of the same latest group mention.
+The connectors can use different message, chat, and sender IDs, so the manager
+compares the chat name, sender name, message minute, and complete message text
+from both sources. It ignores background messages and allows the known
+difference in how the sources render a trailing emoji. Short messages, clipped
+text, multiple matches, and a CLI batch with other new messages stay visible.
+
+The companion row keeps its own reply target and state, including a confirmed
+reply. When the CLI row has the only reply route, separate work, or an open
+request that the companion row would downgrade, both rows stay visible. The
+companion's related items link to the original CLI record and its history.
+Neither connector changes its collection, stored records, or sign-in. The list
+rechecks the match as each source moves. A later distinct message becomes
+visible on its own, and the original is still accessible by its ID.
+
+Different groups or people with identical display names can send identical
+text in the same minute. Without a shared upstream ID, the manager cannot tell
+these cases apart when only one candidate per source is present. The match
+therefore affects list visibility only and keeps each original record.
+
 ## Docs: mentions in sheets, bases, and documents (2026-10-31)
 
 Handled by the Lark plugin (formerly hub `inbox_docs.go`). Mentions / comments to me in Lark documents, sheets, and bases do not enter the IM chat list, only the **document notification center**
@@ -1280,3 +1303,28 @@ serves: everyone reading the Inbox on the Assistant side; it adds no setting and
   iPhone's Watch summary carries up to 20 items (`WatchSummary.inbox`); while open, Watch fetches `/api/v1/inbox` directly every 8 seconds. New items vibrate.
 - Open `WatchInboxItemView`: summary, latest message; AI reply drafts first and displays it, then Send (`/reply`); Done.
 - DEBUG: Watch `-openInboxFirst YES` opens the first item.
+
+
+### Chat-created tasks and recent Inbox topics (#15557)
+
+For people turning a chat request or screenshot into a task, `task_plan` also looks for a recent matching group item
+when `inbox_item` is omitted. An explicit validated handoff takes priority; `inbox_item: "none"` disables this lookup.
+Main chat, an explicit supervisor assignment and a direction receiving the owner's verified quote use the same path.
+Only the title, prompt and manager-verified original request are evidence; generated context and image pixels are not.
+
+The manager considers open, visible action group items that arrived within 24 hours (legacy rows fall back to their
+source update time), excluding merged members, mutes and existing task links. The normalized group name must match
+as a complete name, together with a sender, full non-root URL or a distinguishing verbatim passage. Group-only matches,
+short stock phrases and ambiguous topics yield suggestions rather than a link. URL matching never collapses a domain.
+
+Two sources remain separate. A shared source-local message position is usable only in its account and conversation;
+cross-source equivalence needs an individual received message's sender, exact distinguishing text or complete URL,
+and timestamps within two minutes. Mere context overlap or a general Related link is not proof. A unique pairwise
+verified topic uses a deterministic primary item and existing Related navigation; both reply routes and per-source
+processing states survive. Neither planning nor binding files the item or sends a source reply.
+
+The plan stores manager-owned evidence and a content fingerprint. Start checks freshness, visibility, ownership,
+uniqueness and source changes again, including after a restart and card edits. An invalid soft link is removed and a
+localized notice is recorded in the conversation; the task can still start. Admission repeats the ownership check
+under the Inbox lock, so competing automatic links cannot replace a winner. The existing task/Inbox rollback handles
+failed persistence. Explicit handoffs retain their existing admission and legacy-link correction behavior.

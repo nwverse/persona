@@ -16,6 +16,7 @@ import (
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 // hostTextSlack: the transcript's words this long after the host's record of the answer still belong to that turn.
@@ -77,6 +78,14 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	onList := n.onAgentsList // replaced whole with n.agents (setAgentsAt), never changed in place
 	n.mu.Unlock()
 
+	// Hand the row agents to the pass so per-row transcript lookup can skip the TRAE probe for non-TRAE rows.
+	if pass != nil {
+		pass.agentKinds = make(map[string]string, len(agents))
+		for id, a := range agents {
+			pass.agentKinds[id] = a.Agent
+		}
+	}
+
 	agyConversations := map[string]string{}
 	agyRuntimeIDs := map[string]string{}
 	for id, agent := range agents {
@@ -98,7 +107,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	livePanes := map[string]bool{} // the resting Claudes' panes, whose screens are read for a dialog
 	liveBusyAgy := map[string]bool{}
 	now := time.Now()
-	paneDeadline := now.Add(codexHomeListWait)
+	paneDeadline := now.Add(n.codexHomeListBudget())
 	// In id order, not the map's: the list is sorted by UpdatedAt with a stable sort, and rows that tie on it (live panes
 	// with no transcript yet all have none) came out in a new order on every pass, each one a whole new list for the hub.
 	for _, id := range slices.Sorted(maps.Keys(agents)) {
@@ -152,7 +161,14 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			seen[id] = true
 			continue
 		}
-		viaBotmux := host.ParsePane(a.PaneID).Kind == host.Botmux
+		pane := host.ParsePane(a.PaneID)
+		viaBotmux := pane.Kind == host.Botmux
+		if viaBotmux {
+			if h, ok := n.hosts.Get(host.Botmux).(*botmuxHost); ok {
+				s.SetBotmuxExternalTrigger(h.externalTriggerNotice())
+				h.refreshCapsAsync(pane.ID)
+			}
+		}
 		switch {
 		case viaBotmux && (a.Agent == "codex" || a.Agent == traexAgent):
 			// The thread's name, else botmux's title of the topic; messages go through botmux, neither route.
@@ -303,19 +319,21 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		// The host's record of the answer (botmux's reply in the topic), unless the transcript has words well after it:
 		// the session went on outside the host (a `claude --resume` in a terminal). Text written in the same turn
 		// right after the reply (the sentinel, a closing line) comes within minutes.
-		if a.LastText != "" && (a.LastTextAt.IsZero() || !textAt.After(a.LastTextAt.Add(hostTextSlack))) {
-			s.LastText = snippet(a.LastText)
+		if words := transcript.WithoutBotmuxSentinel(a.LastText); words != "" && (a.LastTextAt.IsZero() || !textAt.After(a.LastTextAt.Add(hostTextSlack))) {
+			s.LastText = snippet(words)
 			// A message to the agent after the host's answer answered its question (#5096); a host that gives no time
 			// for its answer is taken as the latest word.
 			if !a.LastTextAt.IsZero() && promptAt.After(a.LastTextAt) {
 				s.Asks = ""
 			} else {
-				s.Asks = closeout.AskOf(a.LastText)
+				s.Asks = closeout.AskOf(words)
 			}
 			s.AsksRead = true
 		}
 		if a.Agent == "codex" {
 			n.codexPaneControls(&s, rollout)
+		} else if a.Agent == "claude" {
+			n.claudeTerminalSpeedRow(&s, rollout)
 		}
 		if piFamily(a.Agent) {
 			n.mergePiRow(&s) // its conversation is the extension's (pi.go)
@@ -372,6 +390,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				} else {
 					n.mergeAgyTranscript(&s, agyConversations[id])
 				}
+				n.agyPaneControls(&s, id)
 				n.agyPaneTitle(&s, agyConversations[id]) // its conversation's title, not the terminal's (agytitle.go)
 				if s.Status == proto.StatusWorking || s.Status == proto.StatusBlocked {
 					liveBusyAgy[a.PaneID] = true
@@ -430,6 +449,8 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			if m := n.assistantModeOf(s.SessionID); m != "" {
 				s.PermissionMode = m
 			}
+		} else if s.Agent == agyAgent {
+			s.PermissionMode = agyShownMode(s.PermissionMode, n.agyRuntimeMode(s.SessionID))
 		}
 		// A conversation in a Claude transcript here (runtimetranscript.go): what it says, and its own row goes. Under
 		// an id of its own, the ids it went by go too, named on the row for the manager's archive (runtimealiases.go).
@@ -526,6 +547,10 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		if s.Status == proto.StatusWorking && (s.Agent == "" || s.Agent == "claude" || s.Agent == "codex") {
 			s.ToolLoop = n.toolLoopOf(s.SessionID)
 		}
+		// The row leaves with a title it can show (#16343): whatever source named it (a Codex thread name, a runtime's
+		// own title, a terminal's) may hold a whole opening prompt, which the list would otherwise carry everywhere.
+		// Every lookup by title above has read the whole one already.
+		s.Title = transcript.ListTitle(s.Title)
 		if pass == nil || !pass.unavailable[s.SessionID] {
 			s.WorkspaceCwd = n.sessionWorkspaceCwd(s.Cwd)
 			fillGitPlace(s)            // project, worktree and branch for the apps' tree (gitplace.go)

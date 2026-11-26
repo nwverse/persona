@@ -76,6 +76,9 @@ const subscriptionKickWait = 10 * time.Second
 // connector's thread); a write the gate leaves to the user is asked on the phone like mail_send, in that conversation.
 func (h *Manager) callConnector(ctx context.Context, by asker, name string, args json.RawMessage) proto.ToolResult {
 	h.requestLarkCLIRecovery(ctx)
+	if by.machine == "" || by.session == "" {
+		ctx = connector.WithoutOwnerCaller(ctx)
+	}
 	if inSpace(h.askerCwd(by)) { // a space conversation's writes: on the phone each time (hubglue.go inSpace)
 		ctx = connector.ConfirmEach(ctx)
 	}
