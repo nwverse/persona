@@ -2580,6 +2580,19 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		}
 		f, err := read(p.SessionID)
 		if err != nil {
+			if !p.StrictRead {
+				if conv, ok := strings.CutPrefix(p.SessionID, agyAgent+"-"); ok && uuidRe.MatchString(conv) {
+					dir := n.agyDataRoot()
+					if root, rerr := agyBrain(dir, conv); rerr == nil {
+						defer root.Close()
+						if h, _, aerr := n.agyRead(root, filepath.Join(dir, conv), conv, nil); aerr == nil {
+							var ap agyPageParams
+							_ = json.Unmarshal(params, &ap)
+							return h.pageWith(ap, p.SessionID, &n.toolViews), nil
+						}
+					}
+				}
+			}
 			if !p.StrictRead && n.startingSession(p.SessionID) { // nothing written yet: an empty chat; else not_found with its reason
 				if p.UserInputs {
 					return proto.UserInputIndex{Inputs: []proto.UserInputPosition{}}, nil
