@@ -40,10 +40,11 @@ func (l *Layer) TodoReminder(to assistantwire.SessionRef, reminder assistantwire
 	s := l.chat()
 	expires := time.Now().Add(time.Hour).Round(0)
 	send := &todoReminderSend{todo: reminder.Todo}
+	at, scheduled := reminder.Schedule.Occurrence()
 	key := ""
-	if reminder.At != nil {
+	if scheduled {
 		// Identity is the occurrence and card index. Later reminders and other to-dos get independent keys.
-		sum := sha256.Sum256([]byte(reminder.Todo + "\x00" + reminder.At.UTC().Format(time.RFC3339Nano)))
+		sum := sha256.Sum256([]byte(reminder.Todo + "\x00" + at.UTC().Format(time.RFC3339Nano)))
 		key = "t" + hex.EncodeToString(sum[:16]) + ":"
 	}
 	for attempt := 0; time.Now().Before(expires); attempt++ {
@@ -55,7 +56,7 @@ func (l *Layer) TodoReminder(to assistantwire.SessionRef, reminder assistantwire
 		if err == nil || botcard.Refused(err) {
 			return
 		}
-		if attempt >= mirrorRetries || reminder.At == nil {
+		if attempt >= mirrorRetries || !scheduled {
 			s.logf("bots: todo reminder: given up after %d tries: %v", attempt+1, err)
 			return
 		}

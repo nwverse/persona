@@ -237,6 +237,15 @@ func TestFeishuTodoReminderOccurrenceKeys(t *testing.T) {
 	if send(todo) == first {
 		t.Fatal("different to-do reused the first to-do's key")
 	}
+	todo.RemindAt = nil
+	if key := send(todo); key != "" {
+		t.Fatalf("unscheduled reminder got a key: %q", key)
+	}
+	zero := time.Time{}
+	todo.RemindAt = &zero
+	if key := send(todo); key == "" {
+		t.Fatal("scheduled zero timestamp lost its key")
+	}
 }
 
 func TestFeishuTodoReminderStopsObsoleteOccurrence(t *testing.T) {

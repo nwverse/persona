@@ -56,9 +56,8 @@ func (s *Service) larkReminder(ctx context.Context, to assistantwire.SessionRef,
 		noticeTitle, noticeBody = spaceNotice(s.botLang(ctx))
 	}
 	private = private || !known
-	return assistantwire.LarkReminder{
+	reminder := assistantwire.LarkReminder{
 		Todo: todo.ID,
-		At:   todo.RemindAt,
 		Copy: func(ctx context.Context) (string, string, bool) {
 			if !private && todo.Origin != "" {
 				space, known = s.selfSpace(ctx, todo.Origin)
@@ -72,12 +71,17 @@ func (s *Service) larkReminder(ctx context.Context, to assistantwire.SessionRef,
 			}
 			return noticeTitle, noticeBody, true
 		},
-		Current: func() bool {
-			cur, ok := s.todoNow(todo.ID)
-			return ok && cur.DoneAt == nil && cur.RemindAt != nil && cur.RemindAt.Equal(*todo.RemindAt)
-		},
 		Delivered: func() { s.markPushed(channel.Feishu, to.MachineID, to.SessionID) },
 	}
+	if todo.RemindAt != nil {
+		at := *todo.RemindAt
+		reminder.Schedule = assistantwire.LarkReminderAt(at)
+		reminder.Current = func() bool {
+			cur, ok := s.todoNow(todo.ID)
+			return ok && cur.DoneAt == nil && cur.RemindAt != nil && cur.RemindAt.Equal(at)
+		}
+	}
+	return reminder
 }
 
 // feishuMirror selects a turn the Lark module may mirror. Core owns the conversation and privacy rules,

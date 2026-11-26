@@ -13,13 +13,38 @@ type LarkPushCopy struct {
 }
 
 // LarkReminder is one claimed to-do reminder. Copy rechecks Core's privacy decision before each
-// attempt and supplies the permitted text. Current checks that the occurrence has not been changed.
+// attempt and supplies the permitted text. A scheduled reminder uses Current to check whether the
+// occurrence is still due before retrying.
 type LarkReminder struct {
 	Todo      string
-	At        *time.Time
+	Schedule  LarkReminderSchedule
 	Copy      func(context.Context) (title, body string, private bool)
 	Current   func() bool
 	Delivered func()
+}
+
+type larkReminderTiming uint8
+
+const (
+	larkReminderOnce larkReminderTiming = iota
+	larkReminderScheduled
+)
+
+// LarkReminderSchedule distinguishes a single send from a scheduled occurrence. Its zero value
+// is a single send, even though a scheduled occurrence can itself have a zero timestamp.
+type LarkReminderSchedule struct {
+	timing larkReminderTiming
+	at     time.Time
+}
+
+// LarkReminderAt identifies a scheduled occurrence by its timestamp.
+func LarkReminderAt(at time.Time) LarkReminderSchedule {
+	return LarkReminderSchedule{timing: larkReminderScheduled, at: at}
+}
+
+// Occurrence returns the timestamp of a scheduled occurrence and whether there is one.
+func (s LarkReminderSchedule) Occurrence() (time.Time, bool) {
+	return s.at, s.timing == larkReminderScheduled
 }
 
 // LarkReminderPairing binds a reminder post to the owner and pairing generation it first attempted.
