@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   FOLD_DISPLAY_MODE_FULL,
   FOLD_DISPLAY_MODE_MAIN,
@@ -10,9 +11,11 @@ import {
   FOLD_STATUS_UNKNOWN,
   classifyFoldPosture,
   compactTreeInset,
+  deduplicateAgentPlace,
   isHalfFoldedStatus,
   isTriFoldExpandedStatus,
-  resolveFoldLayout
+  resolveFoldLayout,
+  resolveFoldShortcut
 } from '../entry/src/main/ets/core/FoldPosture.ts';
 
 test('straight phone (Mate 90 Pro) stays compact stack with tight tree indentation', () => {
@@ -116,4 +119,77 @@ test('Mate XT tri-fold unlocks 3-pane command center (master + chat + auto inspe
     nativeHoverAvailable: false
   });
   assert.equal(dualIntermediate, 'dual_unfolded');
+});
+
+test('hardware keyboard shortcuts resolve Ctrl/Meta+K/N/I and Escape across fold postures', () => {
+  assert.equal(resolveFoldShortcut('k', true, true), 'search');
+  assert.equal(resolveFoldShortcut('K', true, false), 'search');
+  assert.equal(resolveFoldShortcut('n', true, true), 'new_chat');
+  assert.equal(resolveFoldShortcut('N', true, false), 'new_chat');
+  assert.equal(resolveFoldShortcut('i', true, true), 'toggle_inspector');
+  assert.equal(resolveFoldShortcut('I', true, false), 'none');
+  assert.equal(resolveFoldShortcut('escape', false, false), 'dismiss');
+  assert.equal(resolveFoldShortcut('Esc', true, true), 'dismiss');
+  // Bare letters without Ctrl/Meta never steal text input.
+  assert.equal(resolveFoldShortcut('k', false, true), 'none');
+  assert.equal(resolveFoldShortcut('n', false, true), 'none');
+  assert.equal(resolveFoldShortcut('i', false, true), 'none');
+  assert.equal(resolveFoldShortcut('', true, true), 'none');
+  assert.equal(resolveFoldShortcut('x', true, true), 'none');
+});
+
+test('deduplicateAgentPlace suppresses redundant title echoes while keeping distinct place metadata', () => {
+  assert.equal(deduplicateAgentPlace('Review release checks', 'Review release checks'), '');
+  assert.equal(deduplicateAgentPlace('Review release checks', 'review release checks'), '');
+  assert.equal(deduplicateAgentPlace('Review release checks', '  Review release checks  '), '');
+  assert.equal(deduplicateAgentPlace('Review release checks', 'Review release checks · Mac Studio'), 'Mac Studio');
+  assert.equal(deduplicateAgentPlace('Review release checks', 'Review release checks › Claude 1'), 'Claude 1');
+  assert.equal(deduplicateAgentPlace('Fix login flow', 'main'), 'main');
+  assert.equal(deduplicateAgentPlace('Fix login flow', 'Claude 1'), 'Claude 1');
+  assert.equal(deduplicateAgentPlace('', 'main'), 'main');
+  assert.equal(deduplicateAgentPlace('Fix login flow', ''), '');
+});
+
+test('64vp icon rail, 3-dot header, 3-chip inspector, and elevated repository cards maintain structural invariants', () => {
+  const index = readFileSync(new URL('../entry/src/main/ets/pages/Index.ets', import.meta.url), 'utf8');
+  const agents = readFileSync(new URL('../entry/src/main/ets/components/AgentListPage.ets', import.meta.url), 'utf8');
+  const rowContent = readFileSync(new URL('../entry/src/main/ets/components/AgentDirectoryRowContent.ets', import.meta.url), 'utf8');
+  const projects = readFileSync(new URL('../entry/src/main/ets/components/ProjectsPage.ets', import.meta.url), 'utf8');
+  const inspector = readFileSync(new URL('../entry/src/main/ets/components/FoldInspectorPanel.ets', import.meta.url), 'utf8');
+
+  // Rebuilt 64vp rail in Index.ets: no truncated toolbarConfiguration expand text; clean railShell + expand circle.
+  assert.match(index, /\.toolbarConfiguration\(\[\]\)/);
+  assert.doesNotMatch(index, /ohos_ic_public_arrow_right/);
+  assert.match(index, /@Builder railShell\(\)[\s\S]*id\('shell\.rail\.persona'\)[\s\S]*id\('shell\.rail\.agents'\)[\s\S]*id\('shell\.rail\.expand'\)/);
+  // Clean 3-dot menu button replaces ohos_ic_public_more in destinationMenus.
+  const destMenus = index.slice(index.indexOf('  @Builder destinationMenus('), index.indexOf('  private openSettingsRoot('));
+  assert.match(destMenus, /Row\(\{ space: 3 \}\)[\s\S]*Circle\(\)\.width\(3\.5\)\.height\(3\.5\)/);
+  // Hardware keyboard shortcuts wired into root Stack.
+  assert.match(index, /\.onKeyEvent\(\(event: KeyEvent\) => this\.handleFoldKeyEvent\(event\)\)/);
+  assert.match(index, /resolveFoldShortcut\(/);
+  // Inspector onOpenToolsTab wired to open or switch tabs live.
+  assert.match(index, /onOpenToolsTab:\s*\(tab: number\) =>/);
+
+  // Rebuilt AgentListPage rail mode: 40x40 avatars with status marks & bindTips, zero repo outline in rail mode.
+  assert.match(agents, /@Builder railAvatar\(binding: BoundAgentRow\)[\s\S]*\.width\(40\)[\s\S]*\.height\(40\)[\s\S]*\.bindTips\(/);
+  const resultList = agents.slice(agents.indexOf('  @Builder resultList()'), agents.indexOf('  build()'));
+  assert.match(resultList, /if \(this\.rail\) \{[\s\S]*this\.railAvatar\(rowBinding\)[\s\S]*id\('agents\.rail\.list'\)[\s\S]*\} else \{[\s\S]*AgentRepositoryRows\(/);
+  // Wide split agentRow uses live motion marks instead of static dot.
+  const wideRow = agents.slice(agents.indexOf('  @Builder agentRow('), agents.indexOf('  @Builder rowContext('));
+  assert.match(wideRow, /NeedsYouPulseDot\(/);
+  assert.match(wideRow, /WorkingArcSpinner\(/);
+
+  // Duplicate place suppression in AgentDirectoryRowContent & ProjectsPage + worktree dividers & card elevation.
+  assert.match(rowContent, /private displayPlace\(\): string \{\s*return deduplicateAgentPlace\(this\.agent\.row\.title, this\.place\);/);
+  assert.match(projects, /deduplicateAgentPlace\(agent\.row\.title, paneName \|\| agent\.tab\)/);
+  assert.match(projects, /outlineItemNeedsDivider\(entry\)[\s\S]*Divider\(\)\.strokeWidth\(0\.5\)/);
+  assert.match(projects, /PhoneStyle\.cardElevation\(nativeEnvironment\.dark\)/);
+
+  // Supercharged FoldInspectorPanel: posture pill + 3-chip Workspace launcher + Fleet Pulse counters.
+  assert.match(inspector, /id\('fold\.inspector\.posture'\)/);
+  assert.match(inspector, /this\.toolChip\('files', 0, 'fold\.inspector\.tools\.files'/);
+  assert.match(inspector, /this\.toolChip\('git', 1, 'fold\.inspector\.tools\.git'/);
+  assert.match(inspector, /this\.toolChip\('terminal', 2, 'fold\.inspector\.tools\.terminal'\)/);
+  assert.match(inspector, /onOpenToolsTab\(tab\)/);
+  assert.match(inspector, /id\('fold\.inspector\.count\.needs'\)|'fold\.inspector\.count\.needs'/);
 });

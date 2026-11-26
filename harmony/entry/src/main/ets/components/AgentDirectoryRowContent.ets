@@ -5,6 +5,7 @@ import { PhoneStyle } from '../design/PhoneStyle';
 import { Symbols } from '../design/Symbols';
 import { Tokens } from '../design/Tokens';
 import { tr } from '../design/Strings';
+import { deduplicateAgentPlace } from '../core/FoldPosture';
 import { ProjectAgentPlaceLine } from './ProjectAgentPlaceLine';
 import { NeedsYouPulseDot, WorkingArcSpinner } from './StatusMotionMarks';
 
@@ -91,6 +92,9 @@ export struct AgentDirectoryRowContent {
       if(Number.isFinite(width)&&width>0&&Math.abs(width-this.titleRoom)>.25)this.titleRoom=width;
     })
   }
+  private displayPlace(): string {
+    return deduplicateAgentPlace(this.agent.row.title, this.place);
+  }
   @Builder avatarRow() {
     Row({space:12}) {
       this.agentMark(this.agent)
@@ -110,11 +114,11 @@ export struct AgentDirectoryRowContent {
           if (this.agent.state === 'needs_you' && !this.narrow) this.needsReply()
         }.width('100%').alignItems(VerticalAlign.Top)
         if (this.agent.state === 'needs_you' && (!this.agent.preview || this.narrow)) this.needsReply()
-        ProjectAgentPlaceLine({place:this.place,modelName:this.agent.model,showsSource:this.showsSource,sourceTitle:this.sourceTitle,
+        ProjectAgentPlaceLine({place:this.displayPlace(),modelName:this.agent.model,showsSource:this.showsSource,sourceTitle:this.sourceTitle,
           todoTitle:this.agent.todoTitle,sessionId:this.agent.row.id,starter:this.starter,fontScale:this.fontScale})
       }.alignItems(HorizontalAlign.Start).layoutWeight(1)
-    }.width('100%').alignItems(VerticalAlign.Top).constraintSize({minHeight:58}).padding({
-      left:this.previewRow?0:this.leftInset,right:this.previewRow?0:20,top:this.previewRow?4:19,bottom:this.previewRow?4:19
+    }.width('100%').alignItems(VerticalAlign.Top).constraintSize({minHeight:56}).padding({
+      left:this.previewRow?0:this.leftInset,right:this.previewRow?0:20,top:this.previewRow?4:15,bottom:this.previewRow?4:15
     })
   }
   @Builder tinyBrand() {
@@ -132,7 +136,7 @@ export struct AgentDirectoryRowContent {
   }
   private compactPreview():string {
     const status=this.reviewWord() || (!this.muted && !this.hideState && this.agent.rank===4 ? tr(this.agent.stateLabel) : '');
-    return [status,this.agent.preview || this.place].filter((part:string)=>!!part).join(' · ');
+    return [status,this.agent.preview || this.displayPlace()].filter((part:string)=>!!part).join(' · ');
   }
   @Builder dot() {
     if(!this.hideState && !this.muted && this.agent.state!=='unknown')
@@ -189,7 +193,7 @@ export struct AgentDirectoryRowContent {
           if(!this.hideState && !this.muted && this.agent.state!=='unknown' && (this.agent.state!=='idle' || !!this.reviewWord()))
             Text(tr(this.agent.stateLabel)).fontSize(13).fontWeight(FontWeight.Medium).maxFontScale(Tokens.interfaceScaleFor(13))
               .fontColor(this.tint).maxLines(1)
-          ProjectAgentPlaceLine({place:this.place,modelName:this.agent.model,showsSource:this.showsSource,sourceTitle:this.sourceTitle,
+          ProjectAgentPlaceLine({place:this.displayPlace(),modelName:this.agent.model,showsSource:this.showsSource,sourceTitle:this.sourceTitle,
             todoTitle:this.agent.todoTitle,sessionId:this.agent.row.id,starter:this.starter,fontScale:this.fontScale})
         }.width('100%')
       }.width('100%').alignItems(HorizontalAlign.Start).padding({left:16,right:12,top:8,bottom:8})
@@ -208,7 +212,7 @@ export struct AgentDirectoryRowContent {
         .fontWeight(this.agent.state==='unread'?600:FontWeight.Regular).fontColor(Colors.ink)
         .maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis}).layoutWeight(1)
       if(this.starter)Text(tr('session_space_starter')).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor(Colors.secondary).maxLines(1)
-      if(this.place)Text(this.place).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor(Colors.secondary)
+      if(this.displayPlace())Text(this.displayPlace()).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor(Colors.secondary)
         .constraintSize({maxWidth:'26%'}).maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis})
       if(this.agent.todoTitle)SymbolGlyph($r('sys.symbol.list_checkmark')).fontSize(Tokens.interfaceFontVp(14,this.fontScale)).fontColor([Colors.link]).accessibilityText(this.agent.todoTitle)
       if(this.reviewWord())Text(this.reviewWord()).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontWeight(FontWeight.Medium).fontColor(this.tint).maxLines(1)
@@ -226,7 +230,7 @@ export struct AgentDirectoryRowContent {
           .maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.ink).maxLines(2).textOverflow({overflow:TextOverflow.Ellipsis})
         if(this.agent.preview)Text(this.agent.preview).fontSize(12.5).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.secondary)
           .maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis})
-        Text([this.agent.runtime,this.place,this.agent.todoTitle].filter((part:string)=>!!part).join(' · '))
+        Text([this.agent.runtime,this.displayPlace(),this.agent.todoTitle].filter((part:string)=>!!part).join(' · '))
           .fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor(Colors.tertiary).maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis})
       }.layoutWeight(1).alignItems(HorizontalAlign.Start)
       Column({space:4}){

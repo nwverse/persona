@@ -202,3 +202,60 @@ export function compactTreeInset(level: number, windowWidthVp: number, controlSc
   }
   return Math.round(14 + 20 * scale * clamped);
 }
+
+export type FoldShortcutAction =
+  | 'search'
+  | 'new_chat'
+  | 'toggle_inspector'
+  | 'dismiss'
+  | 'none';
+
+/**
+ * Resolves hardware keyboard shortcuts for foldable, tri-fold, MatePad, and MateBook sessions.
+ * - Ctrl/Meta + K -> open search
+ * - Ctrl/Meta + N -> new chat or agent
+ * - Ctrl/Meta + I -> toggle Live Inspector when supported by the current fold posture
+ * - Escape -> dismiss active overlay, sheet, or inspector
+ */
+export function resolveFoldShortcut(
+  key: string,
+  ctrlOrMeta: boolean,
+  supportsInspector: boolean
+): FoldShortcutAction {
+  const normalized = (key || '').trim().toLowerCase();
+  if (!normalized) return 'none';
+  if (normalized === 'escape' || normalized === 'esc') {
+    return 'dismiss';
+  }
+  if (!ctrlOrMeta) return 'none';
+  if (normalized === 'k') return 'search';
+  if (normalized === 'n') return 'new_chat';
+  if (normalized === 'i') return supportsInspector ? 'toggle_inspector' : 'none';
+  return 'none';
+}
+
+/**
+ * Suppresses redundant subtitle place/pane labels that verbatim duplicate an agent row title
+ * (case-insensitive), including matching segments inside compound ` · ` / ` › ` place strings.
+ */
+export function deduplicateAgentPlace(title: string, place: string): string {
+  const cleanPlace = (place || '').trim();
+  if (!cleanPlace) return '';
+  const cleanTitle = (title || '').trim();
+  if (!cleanTitle) return cleanPlace;
+  const normalizedTitle = cleanTitle.toLocaleLowerCase();
+  if (cleanPlace.toLocaleLowerCase() === normalizedTitle) return '';
+
+  const dotParts = cleanPlace
+    .split(' · ')
+    .map((part: string) => {
+      const subParts = part
+        .split(' › ')
+        .map((sub: string) => sub.trim())
+        .filter((sub: string) => !!sub && sub.toLocaleLowerCase() !== normalizedTitle);
+      return subParts.join(' › ');
+    })
+    .filter((part: string) => !!part);
+
+  return dotParts.join(' · ');
+}
