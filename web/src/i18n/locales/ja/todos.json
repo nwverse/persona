@@ -437,5 +437,17 @@
   "active_blocker_kind_write_conflict": "書き込み競合",
   "active_blocker_kind_owner_decision": "判断待ち",
   "active_blocker_kind_other": "ブロッカー",
-  "active_blocker_attempts": "再試行 {count} 回"
+  "active_blocker_attempts": "再試行 {count} 回",
+  "active_blocker_add_pr": "PR 待ち",
+  "active_blocker_pr_placeholder": "https://github.com/org/repo/pull/123",
+  "active_blocker_pr_input_aria": "外部 PR の URL",
+  "active_blocker_pr_submit": "追加",
+  "active_blocker_pr_cancel": "キャンセル",
+  "active_blocker_pr_url_invalid": "有効な https:// の PR URL を入力してください。",
+  "active_blocker_added": "外部 PR ブロッカーを追加しました",
+  "active_blocker_add_failed": "ブロッカーを追加できませんでした：{error}",
+  "active_blocker_cancel": "ブロッカーを解除",
+  "active_blocker_cancel_aria": "ブロッカー {target} を解除",
+  "active_blocker_cancelled": "ブロッカーを解除しました",
+  "active_blocker_cancel_failed": "ブロッカーを解除できませんでした：{error}"
 }

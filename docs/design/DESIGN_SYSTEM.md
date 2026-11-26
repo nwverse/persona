@@ -1196,6 +1196,8 @@ A herdr tab's workers are the same (web, #5180; the owner asked on 2026-11-12 th
 
 A row read from Unread or Just finished and held in that place ("Rows read during a visit" below) does not need the user: it is drawn and counted as Seen, so it never stands in for, or hides, one that does.
 
+On the web, people opening a computer see waiting Agents first. Each session has a conversation link and, when the hub supplies it, a separate to-do link. Workspaces with active sessions precede other known workspaces. Files, Terminal and New agent carry the selected computer and workspace. Configuration holds engine and session visibility controls (#16196).
+
 #### Finished work nobody has seen
 
 With Session Triage on, a turn the triage found done leaves Unread, but while it is new it is not filed with the
@@ -3270,6 +3272,14 @@ An experiment can supply a note under its introduction or beside a field, using 
 hint styles. A choice with consequences can request confirmation for a specific change. Use the shared Dialog, with the
 affected scope, impact, timing and an action-specific button. All dismissal paths preserve the edit. On success the
 field’s polite save status can explain when the choice takes effect. Show this receipt once, in the field footer.
+
+For people choosing where new task folders are created, **Workspace naming** uses
+a separate Settings group and the same editor on To-do detail. Each template has
+a label above a full-width field. Inherited values wrap when space is tight.
+The inline preview shows one task path and each repository’s branch and starting
+point. Its secondary disclosure holds the computer, layout and repository choices.
+The footer offers **Use defaults** when there are overrides and **Save** for
+pending edits. See [workspace naming](../assistant/todos.md#backend-workspace-naming).
 
 ## External source connections on web (#15518)
 

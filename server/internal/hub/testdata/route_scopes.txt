@@ -107,6 +107,7 @@ push.grading         DELETE /api/v1/push/grading/layer
 -                    DELETE /api/v1/task-trust
 -                    DELETE /api/v1/todos/{id}
 todos.write          DELETE /api/v1/todos/{id}/agents/{mid}/{sid}
+-                    DELETE /api/v1/todos/{id}/blockers/{blockerId}
 -                    DELETE /api/v1/todos/{id}/seen
 -                    DELETE /api/v1/todos/{id}/someday
 todos.write          DELETE /api/v1/todos/{id}/spaces/{mid}/{space...}
@@ -771,6 +772,7 @@ todos.write          POST /api/v1/todos
 -                    POST /api/v1/todos/{id}/backend-workspace/cleanup
 -                    POST /api/v1/todos/{id}/backend-workspace/prepare
 -                    POST /api/v1/todos/{id}/backend-workspace/start
+-                    POST /api/v1/todos/{id}/blockers
 -                    POST /api/v1/todos/{id}/decision-dismiss
 -                    POST /api/v1/todos/{id}/decision-undo-dismiss
 todos.write          POST /api/v1/todos/{id}/decisions
