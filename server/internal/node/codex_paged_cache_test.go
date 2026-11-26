@@ -220,7 +220,7 @@ func TestSessionListInMixedSessionsConstantTraexLookups(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	installCountedDBGlobs(t, traexHome)
+	historyGlobs, stateGlobs := installCountedDBGlobs(t, traexHome)
 	lookups := installMissingSQLite(t)
 
 	var snapshotLoads atomic.Int64
@@ -286,6 +286,16 @@ func TestSessionListInMixedSessionsConstantTraexLookups(t *testing.T) {
 	if got := lookups.Load(); got > 1 {
 		t.Fatalf("sqlite3 LookPath ran %d times across all rounds, want 1", got)
 	}
+	// The cold first pass resolves the two numbered databases once; the missing-sqlite backoff and refresh TTL skip
+	// every later Glob across all rounds.
+	if got := historyGlobs.Load(); got > 2 {
+		t.Fatalf("thread_history Glob ran %d times for %d mixed sessions x %d rounds, want a small constant", got, nSessions, rounds)
+	}
+	if got := stateGlobs.Load(); got > 2 {
+		t.Fatalf("state Glob ran %d times for %d mixed sessions x %d rounds, want a small constant", got, nSessions, rounds)
+	}
+	t.Logf("500 mixed sessions x %d rounds: TRAE snapshot loads=%d LookPath=%d historyGlobs=%d stateGlobs=%d",
+		rounds, snapshotLoads.Load(), lookups.Load(), historyGlobs.Load(), stateGlobs.Load())
 }
 
 // Two TRAE-thread probes through one pass build the home's snapshot once and reuse pass.paginated.
