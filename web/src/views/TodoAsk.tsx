@@ -190,7 +190,7 @@ function AskPanel({ todo, ask, onOpenConversation = openConversation, ...control
         <span className="text-[12.5px] font-semibold text-ink-2">{stateName("needs_you")}</span>
       </div>
       <p className={cx("mt-2 text-[13.5px] font-medium leading-[1.55] select-text [overflow-wrap:anywhere]", TONE[tone])}>{ask.verdict}</p>
-      {!ask.outcome && ask.summary && <p className="mt-1 line-clamp-4 text-sm leading-relaxed text-ink-2 select-text [overflow-wrap:anywhere]" title={ask.summary}>{ask.summary}</p>}
+      {!ask.outcome && ask.summary && <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-ink-2 select-text [overflow-wrap:anywhere]" title={ask.summary}>{ask.summary}</p>}
       {!ask.outcome && <EvidenceLink verification link={ask.link} todoId={todo.id} />}
       {ask.recommend && <p className="mt-1 text-[13px] leading-[1.55] text-ink select-text [overflow-wrap:anywhere]">{t("assistant-brief.recommend", { option: ask.recommend })}</p>}
       {!what && <p className="mt-1 text-[12.5px] leading-[1.6] text-ink-3">{t("todos.ask_answer_hint")}</p>}

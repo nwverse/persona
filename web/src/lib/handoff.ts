@@ -14,6 +14,7 @@ import { REPIN_AT_BOTTOM } from "./disclosure";
 import { openPanel, type Panel } from "./panel";
 import { navigate, routeAt, type Route } from "./router";
 import { getState, taskSessionLookup, type State } from "./store";
+import { reviewState } from "./supervision";
 import { mostUrgentAgent } from "./todos";
 
 const FROM = "handoff";
@@ -162,6 +163,7 @@ export function chatPlaceOf(sc: HTMLElement): ChatPlace {
  *  not start has no page to show). */
 export function taskRoute(id: string, s: State = getState()): Route {
   const todo = s.todos.find((x) => x.id === id);
+  if (todo && reviewState(todo) === "user_check") return { name: "todos", id };
   const lead = todo ? mostUrgentAgent({ ...todo, agents: todo.agents?.filter((a) => !a.start_error) }, taskSessionLookup(s))?.agent : undefined;
   return lead ? { name: "session", mid: lead.machine_id, sid: lead.session_id } : { name: "todos", id };
 }
