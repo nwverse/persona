@@ -165,6 +165,8 @@ data class AgentModel(
     val description: String? = null,
     /** The concrete model an alias stands for with this launcher's settings (opus → its model id). */
     val resolved: String? = null,
+    /** Other spellings the hub folded into this row; a saved alias selects this row, not a duplicate. */
+    val aliases: List<String> = emptyList(),
     /** What the agent runs when it is given no model: picking it is the same as picking none. */
     @SerialName("default") val isDefault: Boolean = false,
     /** The thinking efforts it takes, weakest first; empty: no effort setting. */
@@ -178,13 +180,13 @@ data class AgentModel(
 
 private val gptModelId = Regex("^gpt-([a-z0-9]+(?:\\.[a-z0-9]+)*(?:-[a-z0-9]+(?:\\.[a-z0-9]+)*)*)$", RegexOption.IGNORE_CASE)
 
-/** Display only: explicit names win, and GPT versions and variants retain every component of their id. */
+/** Display only: explicit names win, and GPT versions and variants preserve the GPT- prefix and every component. */
 fun modelName(id: String?, name: String? = null): String {
     val raw = id.orEmpty()
     if (!name.isNullOrBlank() && !name.equals(raw, ignoreCase = true)) return name
     val label = name?.takeIf { it.isNotBlank() } ?: raw
     val model = gptModelId.matchEntire(label)?.groupValues?.get(1) ?: return label
-    return model.split('-').mapIndexed { index, part ->
+    return "GPT-" + model.split('-').mapIndexed { index, part ->
         if (index == 0) part else part.replaceFirstChar { it.titlecase(java.util.Locale.ROOT) }
     }.joinToString(" ")
 }
@@ -216,6 +218,8 @@ data class AgentLauncher(
     @SerialName("permission_modes") val permissionModes: List<String>? = null,
     /** Where the computer found the launcher, for example path, zshrc, or a managed provider. */
     val source: String? = null,
+    /** Whether a runtime launcher can receive separate task follow-up supervision instructions. */
+    @SerialName("supervision_policy") val supervisionPolicy: Boolean = false,
 ) {
     /** What people read for it: its display name, else its startup name (the web's `providerTitle`). */
     val title: String get() = launcherTitle(name, agentType, displayName?.trim()?.takeIf(String::isNotEmpty), baseUrl, source)
@@ -301,6 +305,20 @@ data class UnavailableLauncher(
     val title: String get() = launcherTitle(name, agent, displayName?.trim()?.takeIf(String::isNotEmpty))
 }
 
+private val BUILTIN_LAUNCHER_TITLES = mapOf(
+    "claude" to "Claude Code",
+    "codex" to "Codex",
+    "claude-desktop" to "Claude Desktop",
+    "codex-app" to "Codex App",
+    "traex" to TraeCliDisplayName,
+    "traecli" to TraeCliDisplayName,
+    "trae-cli" to TraeCliDisplayName,
+    "agy" to "Antigravity CLI",
+    "omp" to "Oh My Pi",
+    "cursor" to "Cursor",
+    "gemini" to "Gemini CLI",
+)
+
 internal fun launcherTitle(
     name: String, agent: String?, displayName: String?, baseUrl: String? = null, source: String? = null,
 ): String {
@@ -311,7 +329,8 @@ internal fun launcherTitle(
         agent == PaseoAgent && isTraeCliId(name) -> unknownAgentName(agent, displayName, name)
         (legacyMachineCli || isTraeCliId(agent)) && isTraeCliId(name) &&
             (displayName == null || isTraeCliLabel(displayName)) -> TraeCliDisplayName
-        else -> displayName ?: name
+        displayName != null && !displayName.equals(name, ignoreCase = true) -> displayName
+        else -> BUILTIN_LAUNCHER_TITLES[name.lowercase(java.util.Locale.ROOT)] ?: displayName ?: name
     }
 }
 

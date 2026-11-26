@@ -6,6 +6,8 @@
 
 import { t } from "../i18n";
 import { normalizeTraeCliName } from "./agent-kind";
+import { listedKeys, rowKey } from "./child-sessions";
+import { foldRows } from "./folded-rows";
 import { baseName, shortPath } from "./format";
 import type { Item, Session } from "./types";
 import { byTime } from "./times";
@@ -19,10 +21,10 @@ export interface MentionToken {
   query: string;
 }
 
-/** The `@word` being typed just before the caret: at the start or after whitespace, so an e-mail address is not one. */
+/** A typed `@word` at a word boundary. Object replacement characters mark atomic editor tokens. */
 export function mentionAt(text: string, caret: number): MentionToken | null {
   const before = text.slice(0, caret);
-  const m = /(^|\s)@([^\s@]*)$/.exec(before);
+  const m = /(^|[\s\uFFFC\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}])@([^\s@\uFFFC]*)$/u.exec(before);
   if (!m) return null;
   const start = before.length - m[2].length - 1;
   return { start, end: caret, query: m[2] };
@@ -106,6 +108,16 @@ export function folderName(cwd?: string): string {
 export function displayTitle(s: Pick<Session, "title" | "cwd">): string {
   const title = s.title?.trim();
   return !title || title === "Claude Code" ? folderName(s.cwd) || t("lib-format.untitled_session") : title;
+}
+
+/** The sessions this page holds, each once (#12983): the chats opened here as their complete rows (the store's
+ *  `sessions`), then the Agents list's rows of the others (`sessionSummaries`). A paging hub pushes no `sessions`
+ *  (docs/lessons/web.md), so an Agent nobody opened here is only in the list. Child sessions fold into their parent,
+ *  as in every list (#5120). */
+export function pageSessions(sessions: Record<string, Session[]>, listed: readonly Session[]): Session[] {
+  const complete = Object.values(sessions).flat();
+  const opened = listedKeys(complete);
+  return foldRows([...complete, ...listed.filter((s) => !opened.has(rowKey(s.machine_id, s.session_id)))]);
 }
 
 /** Other agents' sessions, most recently active first, at most `limit` (PromptItems.sessions). */

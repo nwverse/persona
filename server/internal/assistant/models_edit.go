@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -77,6 +78,9 @@ func patchModel(b ModelBinding, in modelPatch) (ModelBinding, error) {
 func (s *Service) modelProviderCompatible(p ModelPurpose, v ModelProvider, stored []storedLauncher) bool {
 	if externalProvider(v.ID) {
 		return false // a persisted main-chat pick is not a purpose configuration
+	}
+	if compat.Source(v.Source) == proto.SourceClaudeDesktop {
+		return p.ID == "agent.new" // a new session in Claude's desktop app: Agents' only (models_desktop.go)
 	}
 	compatible := v.Kind == p.Kind
 	if p.Kind == "launcher" && v.Kind == "api" { // a direct Messages API provider starts Claude on its gateway (#2455)
@@ -183,15 +187,18 @@ func effortLevelsForPurpose(kind string, provider *ModelProvider, agent string) 
 }
 
 // permissionModesForAgent returns the permission modes supported by an agent launcher.
-// When the launcher explicitly declares its supported modes (e.g. Paseo ACP providers), those govern.
-// Otherwise Claude Code, Codex and Antigravity (agy) support all standard modes, while no-mode/legacy
-// work agents (omp, traex, pi, cursor) take no permission mode.
+// Claude Code always has Persona's five modes; proto.Launcher.PermissionModes describes other agents.
+// For them an explicitly declared list governs. Otherwise Codex and Antigravity (agy) support all standard
+// modes, while no-mode/legacy work agents (omp, traex, pi, cursor) take no permission mode.
 func permissionModesForAgent(agent string, listed proto.PermissionModeSet) []string {
+	if agent == "" || agent == "claude" {
+		return proto.PermissionModes
+	}
 	if listed != 0 {
 		return listed.List()
 	}
 	switch agent {
-	case "", "claude", "codex", "agy":
+	case "codex", "agy":
 		return proto.PermissionModes
 	case "omp", "traex", "pi", "cursor":
 		return nil
@@ -370,12 +377,19 @@ func (s *Service) validateModel(ctx context.Context, p ModelPurpose, b ModelBind
 		if p.Kind != "launcher" {
 			return i18n.Err("assistant-models.err_permission_mode_launcher_only")
 		}
+		if p.ID == purposeAgent && b.PermissionMode == proto.ModePlan {
+			// Plan rejects the Persona MCP allowlist before investigation and inbox_suggest can run.
+			return i18n.Err("assistant-models.err_permission_mode_unsupported")
+		}
 		if !slices.Contains(proto.PermissionModes, b.PermissionMode) {
 			return i18n.Err("assistant-models.err_permission_mode_unsupported")
 		}
 		name := strings.TrimPrefix(b.Provider, "launcher.")
 		if !slices.Contains(s.permissionModesForLauncher(ctx, p.MachineID, name, provider), b.PermissionMode) {
 			return i18n.Err("assistant-models.err_permission_mode_unsupported")
+		}
+		if b.PermissionMode == "plan" && s.desktopAppProvider(ctx, b.Provider) {
+			return i18n.Err("assistant-models.err_permission_mode_unsupported") // the app runs no read-only plan start
 		}
 	}
 	if p.Kind == "api" {
@@ -403,7 +417,9 @@ func (s *Service) validateModel(ctx context.Context, p ModelPurpose, b ModelBind
 		if provider != nil && len(provider.Machines) > 0 && p.MachineID != "" && !slices.Contains(provider.Machines, p.MachineID) {
 			return i18n.Err("assistant-models.err_launcher_not_on_machine")
 		}
-		if b.Model != "" {
+		// Claude's desktop app has no command to probe: its node checks the model id at the start, and the app takes
+		// the model through its session's settings (models_desktop.go).
+		if b.Model != "" && !s.desktopAppProvider(ctx, b.Provider) {
 			machine := ""
 			if p.MachineID == "" {
 				// Like the model picker, unbound purposes use an online candidate;

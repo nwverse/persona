@@ -71,6 +71,7 @@ func TestGatewayQuotaWaitParksBeforeAdmissionAndResumes(t *testing.T) {
 		s.admission.machineClaims["busy"] != 0 || s.admission.groupClaims["pool"] != 0 {
 		t.Fatalf("deferral reached admission, reported failure, or reached a node: %+v", todo)
 	}
+	checkPlacementGolden(t, p.Tasks[0].Placement, "v1 enforce busy ->  (assistant-tasks.gateway_quota_wait) | busy assistant-tasks.gateway_quota_wait")
 	card := queuedCard(t, s, p.ID)
 	if card.State != "waiting" || !strings.Contains(card.Reason, q.Reason) {
 		t.Fatalf("the card must explain the wait: %+v", card)
@@ -249,7 +250,7 @@ func TestGatewayQuotaWaitRestartsAndClaimsOnceInPostgres(t *testing.T) {
 func testGatewayClaimOnce(t *testing.T, resourceWait bool) {
 	t.Helper()
 	ctx := context.Background()
-	database, err := db.Open(ctx, newDatabase(t), db.ManagerSet)
+	database, err := db.Open(ctx, newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,7 +306,7 @@ func testGatewayClaimOnce(t *testing.T, resourceWait bool) {
 
 func TestGatewayQuotaWaitKeepsUnconfirmedClaimAcrossRestart(t *testing.T) {
 	ctx := context.Background()
-	database, err := db.Open(ctx, newDatabase(t), db.ManagerSet)
+	database, err := db.Open(ctx, newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +341,7 @@ func TestGatewayQuotaWaitChecksPeerCancellationAndLink(t *testing.T) {
 		for _, phase := range []string{"before claim", "before dispatch"} {
 			t.Run(how+"/"+phase, func(t *testing.T) {
 				ctx := context.Background()
-				database, err := db.Open(ctx, newDatabase(t), db.ManagerSet)
+				database, err := db.Open(ctx, newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 				if err != nil {
 					t.Fatal(err)
 				}

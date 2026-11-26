@@ -6,8 +6,10 @@ import { t } from "../../i18n";
 import { api, ApiError, enc, errorText, isAbort, pastHub } from "../../lib/api";
 import { bytesBin, percent } from "../../lib/machine-detail";
 import type { Machine } from "../../lib/types";
+import { MachineTool, type MachineToolProps } from "./MachinePicker";
 import { Button, cx, Dialog, Loading } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
+import { UsageMap } from "./UsageMap";
 
 export interface MountStat {
   mount: string;
@@ -193,23 +195,23 @@ function UsageBar({ pct, label }: { pct: number; label: string }) {
   );
 }
 
-export function StoragePanel({ machines, initialMachineId }: { machines: Machine[]; initialMachineId?: string }) {
-  const orderedMachines = useMemo(() => {
-    return [...machines].sort((a, b) => Number(b.online) - Number(a.online) || a.name.localeCompare(b.name));
-  }, [machines]);
+/** A request to open the disk map (#14576): on `mid`, in reclaim mode; `seq` changes on every request. */
+export interface StorageFocus {
+  mid: string;
+  mode: "reclaim";
+  seq: number;
+}
 
-  const [selectedId, setSelectedId] = useState<string>(() => {
-    if (initialMachineId && machines.some((m) => m.id === initialMachineId)) return initialMachineId;
-    return orderedMachines[0]?.id ?? "";
-  });
+export function StoragePanel({ focus, ...props }: MachineToolProps & { focus?: StorageFocus }) {
+  return (
+    <MachineTool {...props} key={focus?.seq} initialMachineId={focus?.mid ?? props.initialMachineId}>
+      {(machine) => <Storage machine={machine} focus={focus} />}
+    </MachineTool>
+  );
+}
 
-  useEffect(() => {
-    if (!machines.some((m) => m.id === selectedId)) {
-      setSelectedId(orderedMachines[0]?.id ?? "");
-    }
-  }, [machines, orderedMachines, selectedId]);
-
-  const machine = useMemo(() => machines.find((m) => m.id === selectedId), [machines, selectedId]);
+function Storage({ machine, focus }: { machine?: Machine; focus?: StorageFocus }) {
+  const selectedId = machine?.id ?? "";
 
   // Mount stats state (fast statfs read-only)
   const [mountsLoading, setMountsLoading] = useState(false);
@@ -225,8 +227,9 @@ export function StoragePanel({ machines, initialMachineId }: { machines: Machine
   // Selective cleanup state (preview -> confirmation dialog -> execute)
   const [selectedTargets, setSelectedTargets] = useState<Set<string>>(new Set());
   const [previewBusy, setPreviewBusy] = useState(false);
-  const [previewResult, setPreviewResult] = useState<StorageCleanupResult | null>(null);
-  const [confirmOpen, setConfirmOpen] = useState(false);
+  // Frozen snapshot of the dry-run preview and exact target IDs being confirmed so rescans
+  // or selection edits cannot cause confirmCleanup to delete a different target set.
+  const [confirmState, setConfirmState] = useState<{ targets: string[]; preview: StorageCleanupResult } | null>(null);
   const [cleanupBusy, setCleanupBusy] = useState(false);
   const [cleanupResult, setCleanupResult] = useState<StorageCleanupResult | null>(null);
   const [cleanupError, setCleanupError] = useState<StorageError | null>(null);
@@ -238,7 +241,7 @@ export function StoragePanel({ machines, initialMachineId }: { machines: Machine
   const previewCtrlRef = useRef<AbortController | null>(null);
   const cleanupCtrlRef = useRef<AbortController | null>(null);
 
-  // Abort in-flight per-machine requests and reset hotspot & cleanup state when switching machines or unmounting.
+  // Abort in-flight per-machine requests and reset mount, hotspot & cleanup state when switching machines or unmounting.
   useEffect(() => {
     hotspotsCtrlRef.current?.abort();
     hotspotsCtrlRef.current = null;
@@ -246,13 +249,14 @@ export function StoragePanel({ machines, initialMachineId }: { machines: Machine
     previewCtrlRef.current = null;
     cleanupCtrlRef.current?.abort();
     cleanupCtrlRef.current = null;
+    setMountsReport(null);
+    setMountsError(null);
     setHotspotsLoading(false);
     setHotspotsReport(null);
     setHotspotsError(null);
     setSelectedTargets(new Set());
     setPreviewBusy(false);
-    setPreviewResult(null);
-    setConfirmOpen(false);
+    setConfirmState(null);
     setCleanupBusy(false);
     setCleanupResult(null);
     setCleanupError(null);
@@ -264,7 +268,7 @@ export function StoragePanel({ machines, initialMachineId }: { machines: Machine
       cleanupCtrlRef.current?.abort();
       cleanupCtrlRef.current = null;
     };
-  }, [selectedId]);
+  }, [selectedId, machine?.online]);
 
   // Fetch fast per-mount statfs report when machine changes or refresh is clicked.
   useEffect(() => {
@@ -278,29 +282,41 @@ export function StoragePanel({ machines, initialMachineId }: { machines: Machine
       setMountsReport(null);
       setMountsError({ kind: "offline", text: t("machines-storage.err_offline") });
       setMountsLoading(false);
+      setConfirmState(null);
       return;
     }
+    const mid = machine.id;
     const ctrl = new AbortController();
+    setMountsReport((prev) => (prev && prev.machine_id === mid ? prev : null));
     setMountsLoading(true);
     setMountsError(null);
-    api<MachineStorageReport>(`/machines/${enc(machine.id)}/storage`, { signal: ctrl.signal, timeout: pastHub(15_000) })
+    api<MachineStorageReport>(`/machines/${enc(mid)}/storage`, { signal: ctrl.signal, timeout: pastHub(15_000) })
       .then((res) => {
-        if (ctrl.signal.aborted) return;
-        setMountsReport({ ...res, mounts: res.mounts ?? [] });
+        if (ctrl.signal.aborted || mid !== selectedIdRef.current) return;
+        setMountsReport({ ...res, machine_id: res.machine_id || mid, mounts: res.mounts ?? [] });
         setMountsLoading(false);
       })
       .catch((e) => {
-        if (ctrl.signal.aborted || isAbort(e)) return;
+        if (ctrl.signal.aborted || isAbort(e) || mid !== selectedIdRef.current) return;
         setMountsError(classifyStorageError(e));
         setMountsLoading(false);
       });
     return () => ctrl.abort();
   }, [machine?.id, machine?.online, mountRefreshTick]);
 
+  const activeMountsReport = useMemo(
+    () => (machine?.online && mountsReport && mountsReport.machine_id === selectedId ? mountsReport : null),
+    [machine?.online, mountsReport, selectedId],
+  );
+
   const scanHotspots = useCallback(async (preserveCleanupResult = false) => {
     if (!machine || !machine.online) return;
     const mid = machine.id;
     hotspotsCtrlRef.current?.abort();
+    previewCtrlRef.current?.abort();
+    previewCtrlRef.current = null;
+    setPreviewBusy(false);
+    setConfirmState(null);
     const ctrl = new AbortController();
     hotspotsCtrlRef.current = ctrl;
     setHotspotsLoading(true);
@@ -324,6 +340,7 @@ export function StoragePanel({ machines, initialMachineId }: { machines: Machine
         }
       }
       setSelectedTargets(nextPicked);
+      setConfirmState(null);
     } catch (e) {
       if (ctrl.signal.aborted || isAbort(e) || mid !== selectedIdRef.current) return;
       setHotspotsError(classifyStorageError(e));
@@ -351,6 +368,10 @@ export function StoragePanel({ machines, initialMachineId }: { machines: Machine
   );
 
   const toggleTarget = (targetId: string) => {
+    previewCtrlRef.current?.abort();
+    previewCtrlRef.current = null;
+    setPreviewBusy(false);
+    setConfirmState(null);
     setSelectedTargets((prev) => {
       const next = new Set(prev);
       if (next.has(targetId)) next.delete(targetId);
@@ -360,8 +381,9 @@ export function StoragePanel({ machines, initialMachineId }: { machines: Machine
   };
 
   const requestPreview = async () => {
-    if (!machine || chosenTargetIds.length === 0) return;
+    if (!machine?.online || chosenTargetIds.length === 0) return;
     const mid = machine.id;
+    const targets = [...chosenTargetIds];
     previewCtrlRef.current?.abort();
     const ctrl = new AbortController();
     previewCtrlRef.current = ctrl;
@@ -370,13 +392,12 @@ export function StoragePanel({ machines, initialMachineId }: { machines: Machine
     try {
       const res = await api<StorageCleanupResult>(`/machines/${enc(mid)}/storage/cleanup`, {
         method: "POST",
-        json: { targets: chosenTargetIds, dry_run: true },
+        json: { targets, dry_run: true },
         signal: ctrl.signal,
         timeout: pastHub(30_000),
       });
       if (ctrl.signal.aborted || mid !== selectedIdRef.current) return;
-      setPreviewResult({ ...res, items: res.items ?? [] });
-      setConfirmOpen(true);
+      setConfirmState({ targets, preview: { ...res, items: res.items ?? [] } });
     } catch (e) {
       if (ctrl.signal.aborted || isAbort(e) || mid !== selectedIdRef.current) return;
       setCleanupError(classifyStorageError(e));
@@ -389,8 +410,9 @@ export function StoragePanel({ machines, initialMachineId }: { machines: Machine
   };
 
   const confirmCleanup = async () => {
-    if (!machine || chosenTargetIds.length === 0) return;
+    if (!machine?.online || !confirmState || confirmState.targets.length === 0) return;
     const mid = machine.id;
+    const targets = [...confirmState.targets];
     cleanupCtrlRef.current?.abort();
     const ctrl = new AbortController();
     cleanupCtrlRef.current = ctrl;
@@ -399,19 +421,19 @@ export function StoragePanel({ machines, initialMachineId }: { machines: Machine
     try {
       const res = await api<StorageCleanupResult>(`/machines/${enc(mid)}/storage/cleanup`, {
         method: "POST",
-        json: { targets: chosenTargetIds, dry_run: false, confirm: true },
+        json: { targets, dry_run: false, confirm: true },
         signal: ctrl.signal,
         timeout: pastHub(120_000),
       });
       if (ctrl.signal.aborted || mid !== selectedIdRef.current) return;
       setCleanupResult({ ...res, items: res.items ?? [] });
-      setConfirmOpen(false);
+      setConfirmState(null);
       setMountRefreshTick((n) => n + 1);
       await scanHotspots(true);
     } catch (e) {
       if (ctrl.signal.aborted || isAbort(e) || mid !== selectedIdRef.current) return;
       setCleanupError(classifyStorageError(e));
-      setConfirmOpen(false);
+      setConfirmState(null);
     } finally {
       if (cleanupCtrlRef.current === ctrl) {
         cleanupCtrlRef.current = null;
@@ -420,61 +442,29 @@ export function StoragePanel({ machines, initialMachineId }: { machines: Machine
     }
   };
 
-  if (machines.length === 0) {
+  if (!machine) {
     return null;
   }
 
   return (
     <div className="space-y-4" data-testid="storage-panel">
-      {/* Machine selector */}
-      <section className="rounded-card bg-surface px-4 py-3 shadow-card">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h2 className="text-sm font-semibold text-ink">{t("machines-storage.title")}</h2>
-            <p className="text-submeta text-ink-3">{t("machines-storage.subtitle")}</p>
-          </div>
-          {machine?.online && (
-            <Button tone="secondary" icon="retry" busy={mountsLoading} onClick={() => setMountRefreshTick((n) => n + 1)} testId="storage-refresh-mounts">
-              {t("machines-storage.refresh_mounts")}
-            </Button>
-          )}
-        </div>
-        <div className="mt-3 flex flex-wrap gap-1.5" role="tablist" aria-label={t("machines-storage.machine_picker")}>
-          {orderedMachines.map((m) => {
-            const active = m.id === selectedId;
-            return (
-              <button
-                key={m.id}
-                type="button"
-                role="tab"
-                aria-selected={active}
-                data-storage-machine={m.id}
-                onClick={() => setSelectedId(m.id)}
-                className={cx(
-                  "inline-flex items-center gap-1.5 rounded-control px-2.5 py-1 text-meta transition-colors",
-                  active ? "bg-accent-tint font-medium text-accent-ink shadow-hairline" : "bg-inset text-ink-2 hover:bg-hover hover:text-ink",
-                )}
-              >
-                <span className={cx("size-1.5 rounded-full", m.online ? "bg-green" : "bg-ink-3")} aria-hidden />
-                <span className="truncate">{m.name}</span>
-              </button>
-            );
-          })}
-        </div>
-      </section>
+      {machine && <UsageMap key={String(machine.online)} machine={machine} focus={focus && focus.mid === machine.id ? { mode: focus.mode, seq: focus.seq } : undefined} />}
 
       {/* Per-mount capacity & inode utilization */}
       <section className="rounded-card bg-surface px-4 py-3.5 shadow-card" data-testid="storage-mounts-section">
         <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
           <h3 className="text-sm font-medium text-ink">{t("machines-storage.mounts_title")}</h3>
-          {mountsReport && mountsReport.supported && (
+          {machine.online && <Button tone="secondary" icon="retry" busy={mountsLoading} onClick={() => setMountRefreshTick(n => n + 1)} testId="storage-refresh-mounts">
+            {t("machines-storage.refresh_mounts")}
+          </Button>}
+          {activeMountsReport && activeMountsReport.supported && (
             <span className="text-submeta text-ink-3 tabular-nums">
-              {t("machines-storage.collected_ms", { ms: mountsReport.collected_ms })}
+              {t("machines-storage.collected_ms", { ms: activeMountsReport.collected_ms })}
             </span>
           )}
         </div>
 
-        {mountsLoading && !mountsReport && (
+        {mountsLoading && !activeMountsReport && (
           <div className="py-4">
             <Loading />
           </div>
@@ -487,19 +477,19 @@ export function StoragePanel({ machines, initialMachineId }: { machines: Machine
           </p>
         )}
 
-        {mountsReport && !mountsReport.supported && (
+        {activeMountsReport && !activeMountsReport.supported && (
           <p className="text-meta text-ink-3" data-testid="storage-mounts-unsupported">
-            {t("machines-storage.mounts_unsupported", { os: mountsReport.os })}
+            {t("machines-storage.mounts_unsupported", { os: activeMountsReport.os })}
           </p>
         )}
 
-        {mountsReport && mountsReport.supported && mountsReport.mounts.length === 0 && (
+        {activeMountsReport && activeMountsReport.supported && activeMountsReport.mounts.length === 0 && (
           <p className="text-meta text-ink-3">{t("machines-storage.mounts_empty")}</p>
         )}
 
-        {mountsReport && mountsReport.supported && mountsReport.mounts.length > 0 && (
+        {activeMountsReport && activeMountsReport.supported && activeMountsReport.mounts.length > 0 && (
           <ul className="divide-y divide-line" data-testid="storage-mounts-list">
-            {mountsReport.mounts.map((mt) => {
+            {activeMountsReport.mounts.map((mt) => {
               const inodePct = mt.inodes_percent;
               const inodeWarn = inodePct !== undefined && inodePct >= 80;
               const inodeCritical = inodePct !== undefined && inodePct >= 90;
@@ -563,13 +553,13 @@ export function StoragePanel({ machines, initialMachineId }: { machines: Machine
       </section>
 
       {/* On-demand hotspot analysis & selective safe cleanup */}
-      <section className="rounded-card bg-surface px-4 py-3.5 shadow-card" data-testid="storage-hotspots-section">
+      <details className="rounded-card bg-surface px-4 py-3.5 shadow-card" data-testid="storage-hotspots-section">
+        <summary className="cursor-pointer py-2 text-label font-medium text-ink">{t("machines-storage.hotspots_title")}</summary>
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
-            <h3 className="text-sm font-medium text-ink">{t("machines-storage.hotspots_title")}</h3>
             <p className="text-submeta text-ink-3">{t("machines-storage.hotspots_hint")}</p>
           </div>
-          <Button tone="primary" icon="search" disabled={!machine?.online || hotspotsLoading} busy={hotspotsLoading} onClick={() => void scanHotspots()} testId="storage-scan-hotspots">
+          <Button tone="primary" icon="search" disabled={!machine?.online || hotspotsLoading || cleanupBusy} busy={hotspotsLoading} onClick={() => void scanHotspots()} testId="storage-scan-hotspots">
             {hotspotsReport ? t("machines-storage.rescan_hotspots") : t("machines-storage.scan_hotspots")}
           </Button>
         </div>
@@ -702,20 +692,20 @@ export function StoragePanel({ machines, initialMachineId }: { machines: Machine
             </ul>
           </div>
         )}
-      </section>
+      </details>
 
-      {/* Confirmation dialog populated from server dry-run preview */}
+      {/* Confirmation dialog populated from frozen server dry-run preview */}
       <Dialog
-        open={confirmOpen}
-        onClose={() => !cleanupBusy && setConfirmOpen(false)}
+        open={confirmState !== null}
+        onClose={() => !cleanupBusy && setConfirmState(null)}
         title={t("machines-storage.confirm_title")}
         footer={
           <>
-            <Button tone="quiet" disabled={cleanupBusy} onClick={() => setConfirmOpen(false)}>
+            <Button tone="quiet" disabled={cleanupBusy} onClick={() => setConfirmState(null)}>
               {t("common.cancel")}
             </Button>
             <Button tone="danger" busy={cleanupBusy} onClick={() => void confirmCleanup()} testId="storage-confirm-cleanup">
-              {t("machines-storage.confirm_action", { size: bytesBin(previewResult?.estimated_bytes ?? estimatedSelectedBytes) })}
+              {t("machines-storage.confirm_action", { size: bytesBin(confirmState?.preview.estimated_bytes ?? estimatedSelectedBytes) })}
             </Button>
           </>
         }
@@ -723,12 +713,12 @@ export function StoragePanel({ machines, initialMachineId }: { machines: Machine
         <p className="text-meta leading-relaxed text-ink-2">
           {t("machines-storage.confirm_body", {
             machine: machine?.name ?? "",
-            size: bytesBin(previewResult?.estimated_bytes ?? estimatedSelectedBytes),
+            size: bytesBin(confirmState?.preview.estimated_bytes ?? estimatedSelectedBytes),
           })}
         </p>
-        {previewResult && (
+        {confirmState && (
           <ul className="mt-2.5 space-y-1.5" data-testid="storage-preview-list">
-            {previewResult.items.map((it) => (
+            {confirmState.preview.items.map((it) => (
               <li key={it.target_id} className="rounded-control bg-inset px-2.5 py-1.5 text-meta">
                 <div className="flex items-baseline justify-between gap-2">
                   <span className="font-medium text-ink">{targetTitle(it.target_id)}</span>

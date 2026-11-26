@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/acceptloop"
@@ -166,17 +167,21 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 	}
 
 	var resp any
+	var recoveryDelivered *compactRecoveryHookOutput
 	var waitID string
 	var wait *pendingMCPWait
 	switch req.Kind {
 	case "hook":
 		out, err := n.handleHook(ctx, req)
+		recoveryDelivered, _ = out.(*compactRecoveryHookOutput)
 		if errors.Is(err, errNodeGone) {
 			// This node is going away under a pending question: the hook asks the next one (runHook).
 			resp = map[string]any{"retry": true}
 		} else {
 			resp = map[string]any{"output": out}
 		}
+	case nodeclient.AgyHookKind: // an Antigravity CLI hook's report of the pane's conversation (agyhooks.go)
+		resp = n.agyHookKind(req)
 	case "hook.decided": // another PermissionRequest hook answered a call (hookdecided.go)
 		var in hookInput
 		if json.Unmarshal(req.Input, &in) == nil && in.HookEventName == "PermissionRequest" && validID(in.SessionID) {
@@ -186,7 +191,14 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 	case "claude-plugin.status": // which sessions' Persona plugin polls this node (ccplugin.go): installers, doctor
 		resp = n.ccPluginStatusNow()
 	case "ping": // personad node doctor, persona-link node switch: a round trip that changes nothing
-		resp = map[string]any{"ok": true, "program": n.Program, "version": n.Version}
+		n.mu.Lock()
+		machine := n.machineID
+		n.mu.Unlock()
+		pong := map[string]any{"ok": true, "program": n.Program, "version": n.Version}
+		if machine != "" {
+			pong["machine_id"] = machine
+		}
+		resp = pong
 	case "update.inventory":
 		var target nodeclient.UpdateInventoryTarget
 		if err := json.Unmarshal(req.Input, &target); err != nil {
@@ -202,6 +214,15 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 		resp = n.handleAsk(ctx, req)
 	case "notify": // personad notify (scriptcli.go)
 		resp = n.handleNotify(ctx, req)
+	case "direction.create", "direction.progress": // personad create-direction / write-progress
+		var out map[string]any
+		if err := n.peer.Call(ctx, req.Kind, req.Input, &out); err != nil {
+			resp = map[string]any{"status": "unavailable", "error": err.Error()}
+		} else if out == nil {
+			resp = map[string]any{"status": "unavailable", "error": "unknown kind"}
+		} else {
+			resp = out
+		}
 	case assistantwire.MethodDecisionRaise, assistantwire.MethodDecisionGet, assistantwire.MethodDecisionWithdraw:
 		resp = n.handleDecision(ctx, req) // personad decision: non-blocking, never spooled
 	case "launcher.env": // personad launch <name>
@@ -218,12 +239,16 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 		var res map[string]any
 		// The assistant's only when the node says so too (clicall.go mcpSession).
 		session, assistant, rt := n.mcpSession(c, req)
+		if assistant {
+			session = n.canonicalAssistantSession(session)
+		}
 		if session == "" && !assistant {
 			session = n.paneCaller(req.Pane) // an agent's: the hub tells a task leader's tools from any other's by it
 		}
 		// A guest's (its MCP server says so, or this node knows it is one): the hub gives it only its own tools.
 		guest := req.Guest || n.guestOf(session) != nil
 		params := mcpToolsParams(req.Input, session, assistant, guest)
+		n.putMCPCallerCwd(c, params, session)
 		// A supervision round's process asks for its narrower set (assistant_round.go); a manager that does not know
 		// it gives the whole list.
 		if req.ToolSet != "" {
@@ -257,13 +282,20 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 		}
 		var res proto.ToolResult
 		session, assistant, rt := n.mcpSession(c, req)
+		if assistant {
+			session = n.canonicalAssistantSession(session)
+		}
 		sid := n.mcpCaller(req.Name, session, req.Pane, assistant)
-		if assistantwire.IsA2ATool(req.Name) {
+		if assistantwire.IsA2ATool(req.Name) || req.Name == "secret_store" {
 			sid, assistant = n.a2aCaller(c, req, sid)
 			if sid == "" {
 				resp = proto.TextResult("A2A requires a verified local session", true)
 				break
 			}
+		}
+		viewSession := sid
+		if viewSession == "" && !assistant && req.Pane != "" {
+			viewSession = n.paneCaller(req.Pane)
 		}
 		guest := req.Guest || n.guestOf(sid) != nil
 		if req.Name == toolMailSaveAttachment { // writes on this machine (mailattachment.go)
@@ -280,6 +312,7 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 		}
 		params := map[string]any{"name": req.Name, "args": req.Args, "session_id": sid,
 			"assistant": assistant, "guest": guest}
+		n.putMCPCallerCwd(c, params, sid)
 		n.putSourcePermission(c, params, sid, req.Name, req.Args)
 		if origin := n.assistantOrigin(sid); origin != "" {
 			params["origin"] = origin
@@ -293,6 +326,7 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 		if err := n.peer.Call(ctx, "mcp.call", params, &res); err != nil {
 			res = proto.TextResult("Persona hub error: "+err.Error(), true)
 		}
+		n.toolViews.stripResult(viewSession, req.Name, &res)
 		resp = res
 	default:
 		resp = map[string]any{"error": "unknown kind"}
@@ -302,7 +336,9 @@ func (n *Node) serveSock(ctx context.Context, c net.Conn) {
 		return
 	}
 	b, _ := json.Marshal(resp)
-	_, _ = c.Write(append(b, '\n'))
+	if written, err := c.Write(append(b, '\n')); err == nil && written == len(b)+1 && recoveryDelivered != nil {
+		n.compactRecoveryHookDelivered(recoveryDelivered)
+	}
 }
 
 type hookInput struct {
@@ -404,6 +440,10 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 		ctx = withHookCall(ctx, req)
 	}
 	defer n.hookFlights.enter(in.SessionID)() // its process waits on this call: not idle (model_restore.go)
+	if sess := n.paneHerdrSession(req.Pane); n.herdrSessionBlocked(sess) && !n.isAssistantSession(in.SessionID) && !n.keptSessions()[in.SessionID] {
+		n.noteHerdrSessionID(in.SessionID, sess)
+		return nil, nil // a blocked named herdr session (herdrsessions.go): nothing reported, no card; Claude Code asks itself
+	}
 	if n.sessionBlocked(in.SessionID, in.Cwd) {
 		return nil, nil // a blocked Agent folder (agentdirs.go): nothing reported, no card; Claude Code asks itself
 	}
@@ -428,6 +468,9 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 		n.rememberTranscript(in)
 		n.notifyHookEvent(ctx, req, in, stopSig)
 		return nil, nil
+	}
+	if validID(in.SessionID) {
+		n.ccPlugins.notePersonaHook(in.SessionID, req.AgentPID)
 	}
 	// An Orca pane is bound only on a machine that enables Orca: elsewhere nothing could drive it, and the hook
 	// reported no pane for it before Orca was a host (a herdr machine behaves as it did).
@@ -484,6 +527,9 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 
 	switch {
 	case in.HookEventName == "SessionStart":
+		if recovery := n.compactRecoveryStart(ctx, req, in); recovery != nil {
+			return recovery, nil
+		}
 		// Reported and bound above; what is left is the closeout's form as its starting context (closeout_start.go).
 		if brief := n.closeoutStart(ctx, req, in); brief != nil {
 			return brief, nil
@@ -627,8 +673,22 @@ func (n *Node) handleHook(ctx context.Context, req sockRequest) (any, error) {
 		// Assistant grants live at the hub so revocation applies to the next request. File grants cover
 		// only the file's directory; terminal Agents retain Claude's own whole-tool session rules.
 		assistant := n.isAssistantSession(in.SessionID)
+		if assistant && n.ownWorkspaceCall(in) { // its own directory, however the path spells it (assistant_workspace_allow.go)
+			n.logf("assistant %s: %s in its own directory allowed without a card", short(in.SessionID), in.ToolName)
+			var input map[string]any
+			_ = json.Unmarshal(in.ToolInput, &input)
+			return permissionDecision(map[string]any{"behavior": "allow", "updatedInput": input}), nil
+		}
+		if assistant && n.readOutsideCall(in) { // a read elsewhere, not of a space or a credential (assistant_read_outside.go)
+			n.logf("assistant %s: %s outside its directory allowed without a card", short(in.SessionID), in.ToolName)
+			var input map[string]any
+			_ = json.Unmarshal(in.ToolInput, &input)
+			return permissionDecision(map[string]any{"behavior": "allow", "updatedInput": input}), nil
+		}
 		rule := map[string]any{"toolName": in.ToolName}
-		if assistant {
+		// Inbox handling conversations process untrusted external input, so never offer a whole-tool
+		// Bash session grant that would auto-approve arbitrary later shell mutations (#15267).
+		if assistant && !(in.ToolName == "Bash" && n.assistantOrigin(in.SessionID) == originInbox) {
 			alwaysKey := "tool:" + in.ToolName
 			if scope := fileRuleScope(in.ToolName, in.ToolInput); scope != "" {
 				// Claude Code matches path rules on Read and Edit only; Edit(path) covers every file-editing tool,
@@ -887,10 +947,19 @@ func (n *Node) askOnce(ctx context.Context, ix proto.Interaction) (proto.Resolut
 	if n.peer == nil { // no hub: nobody to ask
 		return proto.Resolution{}, false, nil
 	}
+	if ix.SessionID != "" {
+		defer n.enterActiveAsk(ctx, ix)()
+	}
 	ctx, cancel := context.WithDeadline(ctx, ix.ExpiresAt)
 	defer cancel()
 	var res proto.Resolution
-	err := n.peer.Call(ctx, "interaction.create", map[string]any{"interaction": ix}, &res)
+	params := map[string]any{"interaction": ix}
+	if ix.SessionID != "" {
+		if origin := n.assistantOrigin(ix.SessionID); origin != "" {
+			params["origin"] = origin
+		}
+	}
+	err := n.peer.Call(ctx, "interaction.create", params, &res)
 	if err != nil {
 		select {
 		case <-n.peer.Done():
@@ -916,10 +985,107 @@ func (n *Node) askOnce(ctx context.Context, ix proto.Interaction) (proto.Resolut
 	if res.Dismiss {
 		return res, false, nil
 	}
-	if ix.EditableText != "" && res.EditedText != "" {
-		n.editedAnswers.Store(ix.ID, res.EditedText)
-	}
 	return res, true, nil
+}
+
+type activeAskKey struct {
+	session, toolUseID string
+}
+
+// activeAskTracker counts in-flight interaction.create RPCs per session (so fallback claudeSessions rows keep
+// Capabilities.Approve = true for any active hook card) and per AskUserQuestion call (so outsideAskCards suppresses
+// only a duplicate transcript card for that same question, never hiding an open question behind an unrelated tool
+// permission hook).
+type activeAskTracker struct {
+	mu           sync.Mutex
+	bySession    map[string]int
+	askByCall    map[activeAskKey]int
+	askWithoutID map[string]int
+}
+
+func (a *activeAskTracker) enter(ix proto.Interaction) (firstForSession bool, leave func() bool) {
+	sid := ix.SessionID
+	isAsk := ix.Kind == proto.IxQuestion || ix.ToolName == askTool
+	a.mu.Lock()
+	if a.bySession == nil {
+		a.bySession = map[string]int{}
+	}
+	a.bySession[sid]++
+	firstForSession = a.bySession[sid] == 1
+	if isAsk {
+		if ix.ToolUseID != "" {
+			if a.askByCall == nil {
+				a.askByCall = map[activeAskKey]int{}
+			}
+			a.askByCall[activeAskKey{session: sid, toolUseID: ix.ToolUseID}]++
+		} else {
+			if a.askWithoutID == nil {
+				a.askWithoutID = map[string]int{}
+			}
+			a.askWithoutID[sid]++
+		}
+	}
+	a.mu.Unlock()
+	var once sync.Once
+	return firstForSession, func() bool {
+		lastForSession := false
+		once.Do(func() {
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			if a.bySession[sid]--; a.bySession[sid] <= 0 {
+				delete(a.bySession, sid)
+				lastForSession = true
+			}
+			if isAsk {
+				if ix.ToolUseID != "" {
+					k := activeAskKey{session: sid, toolUseID: ix.ToolUseID}
+					if a.askByCall[k]--; a.askByCall[k] <= 0 {
+						delete(a.askByCall, k)
+					}
+				} else {
+					if a.askWithoutID[sid]--; a.askWithoutID[sid] <= 0 {
+						delete(a.askWithoutID, sid)
+					}
+				}
+			}
+		})
+		return lastForSession
+	}
+}
+
+func (a *activeAskTracker) active(session string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.bySession[session] > 0
+}
+
+// coversAsk reports whether an active AskUserQuestion hook interaction already covers (session, toolUseID).
+func (a *activeAskTracker) coversAsk(session, toolUseID string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.askWithoutID[session] > 0 {
+		return true
+	}
+	return toolUseID != "" && a.askByCall[activeAskKey{session: session, toolUseID: toolUseID}] > 0
+}
+
+// enterActiveAsk marks ix's session as holding an in-flight interaction.create RPC. When the session is currently
+// listed via claudeSessions (outside Persona's managed panes), entering flushes sessions.changed (Capabilities.Approve
+// = true) to the wire before interaction.create reaches the hub so clients do not lock the card, and leaving pokes a
+// refresh once the last active interaction for that session finishes.
+func (n *Node) enterActiveAsk(ctx context.Context, ix proto.Interaction) func() {
+	id := ix.SessionID
+	first, leave := n.activeAsks.enter(ix)
+	if first && n.isOutsideListed(id) {
+		n.outsideListGen.Add(1)
+		n.flushOutsideSessions(ctx)
+	}
+	return func() {
+		if leave() && n.isOutsideListed(id) {
+			n.outsideListGen.Add(1)
+			n.pokeOutsideSessionsAsync()
+		}
+	}
 }
 
 // fileRuleScope is the permission rule content for a file tool's call: its file's directory and below
@@ -986,10 +1152,11 @@ func toolSummary(name string, input json.RawMessage) string {
 // callerTools are the agents' own tools that act for the agent calling them: the manager's
 // (assistantwire.AgentToolNames: reporting to its supervisor; the decisions, thread, repositories and links of the
 // todo it works on), handing a subtask to another computer and reading it back (assistant/dispatch.go), and a task
-// leader's task_plan and task_review (assistant/task_leader.go) and task_spawn. The manager's come from the list it
+// leader's task_plan and task_review (assistant/task_leader.go), task_spawn, and file_transfer (its audit names
+// the Agent that moved a file, assistant/file_transfer.go). The manager's come from the list it
 // reads itself, so a tool it adds there gets its caller here too (#9089: the repository tools were added to one list
 // only, and every agent's call of them reached the hub with no session).
-var callerTools = slices.Concat(assistantwire.AgentToolNames, assistantwire.A2AToolNames, []string{"dispatch_start", "dispatch_read", "task_plan", "task_review", "task_spawn"})
+var callerTools = slices.Concat(assistantwire.AgentToolNames, assistantwire.A2AToolNames, []string{"resource_status", "resource_acquire", "resource_get", "resource_renew", "resource_release", "resource_cancel", "dispatch_start", "dispatch_read", "task_plan", "task_review", "task_spawn", "secret_store", "file_transfer"})
 
 // mcpCaller is the session an MCP call of tool name goes to the hub with: the one it names, else, for an agent's
 // tools that need to know whose call it is (callerTools), the session its pane runs. The rest go on as before, with

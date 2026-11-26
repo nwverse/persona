@@ -57,9 +57,28 @@ var centralLists = []centralList{
 		seam: "give a new prompt's types and Render function a file of their own, prompts/assistant_<topic>.go, " +
 			"as assistant_answer_again.go does",
 	},
+	{
+		id:     "extwire_route_scopes",
+		source: "internal/extwire/scopes.go",
+		what:   "key of the RouteScopes literal",
+		names:  literalEntries("RouteScopes"),
+		seam: "give a route opened to extensions its scope from an init() in its domain's own file, " +
+			"extwire/<domain>_scopes.go, func init() { addRouteScopes(map[string]string{…}) }, as inbox_scopes.go does",
+	},
 }
 
 func (l centralList) file() string { return "testdata/central_lists/" + l.id + ".txt" }
+
+// centralListByID is the row of centralLists with this id. A test names the list it plants in by id, not by its place
+// in centralLists, so a row added beside it moves nothing the test reads.
+func centralListByID(t *testing.T, id string) centralList {
+	t.Helper()
+	i := slices.IndexFunc(centralLists, func(l centralList) bool { return l.id == id })
+	if i < 0 {
+		t.Fatalf("no central list %q", id)
+	}
+	return centralLists[i]
+}
 
 func TestCentralListsTakeNoNewName(t *testing.T) {
 	for _, l := range centralLists {
@@ -317,6 +336,18 @@ var Other = []string{"GET /api/v1/other"}
 
 func init() { Routes = append(Routes, "GET /api/v1/appended") }
 `
+	// The route scopes' list is read like the routes' one, from a literal, but by its keys. A route given its scope from
+	// a domain's init() is no key of the literal, so it passes.
+	scopes := centralListByID(t, "extwire_route_scopes")
+	const scope = `package extwire
+
+var RouteScopes = map[string]string{
+	"GET /api/v1/a": ScopeA,
+	"PUT /api/v1/b": ScopeB, // a comment
+}
+
+func init() { addRouteScopes(map[string]string{"GET /api/v1/registered": ScopeA}) }
+`
 	const prompt = `package prompts
 
 type Snapshot struct{}
@@ -339,6 +370,7 @@ func (s Snapshot) Up() int { return 0 }
 func (b *B[T]) Down() int { return 0 }
 `
 	const routesList = "# a header\n\"GET \" + P\n\"GET /api/v1/a\"\n\"POST /api/v1/c\"\n\"PUT /api/v1/b\"\n"
+	const scopesList = "\"GET /api/v1/a\"\n\"PUT /api/v1/b\"\n"
 	const promptsList = "A\nB\nB.Down\nC\nRenderA\nSnapshot\nSnapshot.Up\nv\n"
 
 	check := func(l centralList, src, list string) ([]string, []string) {
@@ -358,6 +390,8 @@ func (b *B[T]) Down() int { return 0 }
 		name, seam string // what the failure names
 	}{
 		{routes, bus, routesList, "var Routes = []string{\n", "\t\"DELETE /api/v1/planted\",\n", `"DELETE /api/v1/planted"`, routeSeam},
+		{scopes, scope, scopesList, "var RouteScopes = map[string]string{\n", "\t\"DELETE /api/v1/planted\": ScopeA,\n",
+			`"DELETE /api/v1/planted"`, "extwire/<domain>_scopes.go"},
 		{prompts, prompt, promptsList, "func init() {}\n", "func RenderPlanted() string { return \"\" }\n", "RenderPlanted", promptSeam},
 		{prompts, prompt, promptsList, "func init() {}\n", "func (s Snapshot) Planted() int { return 0 }\n", "Snapshot.Planted", promptSeam},
 		{prompts, prompt, promptsList, "func init() {}\n", "type Planted struct{}\n", "Planted", promptSeam},

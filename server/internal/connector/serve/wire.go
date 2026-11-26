@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/extension"
@@ -186,12 +187,16 @@ type (
 	CallParams struct {
 		Name string          `json:"name"`
 		Args json.RawMessage `json:"args,omitempty"`
+		CallFrom
 	}
 	CallResult struct {
 		Text string `json:"text,omitempty"`
 		// Images are tools.call's pictures for the model, after the text (connector.ToolResult holds them to its limits);
 		// actions.do and catalog.call have none.
 		Images []connector.ToolImage `json:"images,omitempty"`
+		// Views are out-of-band declarative views from tools.call rendered inline alongside the turn; actions.do and
+		// catalog.call have none.
+		Views []wire.View `json:"views,omitempty"`
 		// MessageRef is actions.do's: the id of the message the write made on the other side
 		// (connector.DoResult.MessageRef), when the connector knows one.
 		MessageRef string `json:"message_ref,omitempty"`
@@ -225,6 +230,7 @@ type (
 		Name      string          `json:"name"`
 		Args      json.RawMessage `json:"args,omitempty"`
 		RequestID string          `json:"request_id"`
+		CallFrom
 	}
 	// RecallParams is a message to take back (connector.Recaller): what the ledger row of the send says, none of what the
 	// message said. At is when the row was written, right after the send.

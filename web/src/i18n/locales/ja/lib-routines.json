@@ -20,6 +20,7 @@
   "in_hours_other": "{count}時間後",
   "in_days_other": "{count}日後",
   "scheduled_follow_up": "定期フォローアップ",
+  "scheduled_task": "スケジュールタスク",
   "once_same_chat": "1回 · 元のチャットで続ける",
   "once_new_chat": "1回 · 新しいチャット",
   "every_workday": "平日毎日",

@@ -91,7 +91,6 @@ class ChatComposerStateTest {
         val finish = CompletableDeferred<Unit>()
         fun upload(attachment: ComposerAttachment) = async(Dispatchers.Default + SupervisorJob()) {
             // Each upload used to read and later replace this whole list. Per-id updates must keep the other result.
-            state.attachments.map { if (it.id == attachment.id) it.copy(uploadState = DraftUploadState.Uploading) else it }
             state.updateAttachment(attachment.id) { it.copy(uploadState = DraftUploadState.Uploading) }
             firstRead.complete(Unit)
             finish.await()

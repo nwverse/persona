@@ -220,7 +220,7 @@ struct ElicitationForm: View {
                     .themedButton(prominent: true)
                     .disabled(!ready)
                     .accessibilityIdentifier(isLink ? "elicitation.continue" : "elicitation.submit")
-                } else {
+                } else if interaction.noHandBack != true {
                     Button { handBack() } label: {
                         Text("Hand Back to Computer").lineLimit(1).minimumScaleFactor(0.8).frame(maxWidth: .infinity)
                     }
@@ -230,9 +230,6 @@ struct ElicitationForm: View {
             }
             .controlSize(.large)
             Button { act(.cancel) } label: { Text("Cancel").lineLimit(1) }
-                #if os(macOS)
-                .buttonStyle(.link)
-                #endif
                 .font(Theme.Font.caption)
                 .frame(maxWidth: .infinity)
                 .accessibilityIdentifier("elicitation.cancel")

@@ -119,12 +119,14 @@ type Machine struct {
 	kick      chan struct{}
 	// deploying: the manager is sending this machine the hub's node build (deploy.go); deployErr: why the last try
 	// failed. deployRun ties each waiter to one run's outcome, including one the card does not retain.
-	deploying       bool
-	deployErr       string
-	deployPhase     string
-	deployRun       *deployRun
-	deployPreflight *nodeDeployPreflight
-	updateHandoff   bool // grace expired while waiting for idle: no new headless turns until the update settles
+	deploying     bool
+	deployErr     string
+	deployPhase   string
+	deploySource  string
+	deployVersion string
+	deployRun     *deployRun
+	deployWatch   *nodeDeployWatch
+	updateHandoff bool // grace expired while waiting for idle: no new headless turns until the update settles
 	// via is how the connection runs (local | ssh | tailcat | link | service | hub), path how tailcat's packets go.
 	via, path                  string
 	directFailed, switchedBack time.Time
@@ -171,6 +173,8 @@ type Machine struct {
 	claudeDirsMu sync.Mutex
 	// hiddenDirs is the machine's hidden Agent folders, cached (agentdirs.go).
 	hiddenDirs hiddenDirsCache
+	// herdrSessionsBlocked is the machine's blocked named herdr sessions, cached (herdrsessions.go).
+	herdrSessionsBlocked herdrSessionsCache
 	// nodeCmd replaces the node command (tests).
 	nodeCmd func(context.Context) *exec.Cmd
 	// localNote is why the last start of a local node passed a program beside it over (localNode), said once until it
@@ -297,6 +301,10 @@ func (m *Machine) snapshot() proto.Machine {
 	if m.link != nil {
 		link = m.link.info()
 	}
+	source := m.deploySource
+	if m.deployVersion != version || !m.deploying && m.info.Version != m.deployVersion && deployErr == "" {
+		source = ""
+	}
 	return proto.Machine{
 		ID: m.cfg.ID, Name: m.name(), Kind: m.cfg.Kind, Icon: icon, SSHHost: m.cfg.SSHHost, Online: m.online || warm, Error: m.err,
 		Hostname: m.info.Hostname, OS: m.info.OS, Arch: m.info.Arch, Home: m.info.Home,
@@ -304,7 +312,7 @@ func (m *Machine) snapshot() proto.Machine {
 		NodeVersion: m.info.Version, NodeMismatch: m.online && nodeMismatch(version, m.info),
 		NodeProtocol: m.info.Protocol, NodeIncompatible: incompatible,
 		Deploying: m.deploying, DeployError: deployErr,
-		CanDeploy: &canDeploy, DeployReason: deployReason, DeployNoPackage: onlyPackage, DeployPhase: m.deployPhase,
+		DeploySource: source, CanDeploy: &canDeploy, DeployReason: deployReason, DeployNoPackage: onlyPackage, DeployPhase: m.deployPhase,
 		Transport: m.via, TailcatPath: m.path, Tailcat: m.cfg.TailcatAddr != "",
 		Engine: engine, Engines: engines, EngineHosts: choice.Hosts, EngineDefault: choice.Default,
 		EngineSuggested: suggested, EngineSetsUnsupported: setsUnsupported, Link: link, System: d.metrics.system(m.cfg.ID),
@@ -586,6 +594,20 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-ultracode.node_outdated")}
 		}
 	}
+	if !nodeHas(info, nodeproto.TaskInput) || !nodeHas(info, nodeproto.TaskExecution) {
+		requires := method == "assistant.content" || method == "fs.task.list"
+		if method == "assistant.send" {
+			raw, _ := json.Marshal(params)
+			var send struct {
+				TaskInput bool `json:"task_input"`
+			}
+			_ = json.Unmarshal(raw, &send)
+			requires = send.TaskInput
+		}
+		if requires {
+			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_task_input")}
+		}
+	}
 	if method == "assistant.directory" && !nodeHas(info, nodeproto.TaskExecution) {
 		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_task_execution"), Data: json.RawMessage(`{"capability":"task_execution"}`)}
 	}
@@ -619,6 +641,23 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 		if strings.TrimSpace(fields.Goal) != "" { // its own code: the caller starts again without the goal
 			return &rpc.Error{Code: proto.CodeStartGoalUnsupported, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_start_goal")}
 		}
+	}
+	if method == "assistant.prepare" && !nodeHas(info, nodeproto.TrackSpaces) {
+		raw, _ := json.Marshal(params)
+		var fields struct {
+			Space json.RawMessage `json:"space"`
+		}
+		_ = json.Unmarshal(raw, &fields)
+		if len(fields.Space) > 0 && string(fields.Space) != "null" {
+			// A track's directory (#13472): an older node would write its instructions without the track's SPACE.md
+			// or folders. The manager asks only a node it saw announce it; this holds when the node changed since.
+			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "rpc-errors.node_outdated")}
+		}
+	}
+	if method == "assistant.space_md" && !nodeHas(info, nodeproto.TrackSpaceMD) {
+		// A track's SPACE.md (#13472): an older node does not know the method. The manager asks only a node it saw
+		// announce it; this holds when the node changed since.
+		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "rpc-errors.node_outdated")}
 	}
 	if devicewire.IsSessionStart(method) && !nodeHas(info, nodeproto.ResumeOutsideHealth) {
 		raw, _ := json.Marshal(params)
@@ -688,9 +727,22 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 		// The same for an API purpose that runs on a launcher there.
 		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_model_run")}
 	}
-	if method == proto.MethodSecretRun && !nodeHas(info, nodeproto.SecretRun) {
-		// An older node would answer "unknown method"; this says what to do about it before the user types anything.
-		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_secret_run")}
+	if method == proto.MethodSecretRun {
+		if !nodeHas(info, nodeproto.SecretRun) {
+			// An older node would answer "unknown method"; this says what to do about it before the user types anything.
+			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_secret_run")}
+		}
+		if !nodeHas(info, nodeproto.SecretRunEnv) {
+			raw, _ := json.Marshal(params)
+			var fields struct {
+				Delivery string `json:"delivery"`
+			}
+			_ = json.Unmarshal(raw, &fields)
+			if fields.Delivery == proto.SecretRunDeliveryEnv {
+				// An older node would ignore delivery and run without the secret the card promised (#11945).
+				return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_secret_run")}
+			}
+		}
 	}
 	if ctx.Err() != nil {
 		return rpc.NotSent(ctx.Err()) // waited for the connection or the resident handover: nothing went out
@@ -932,6 +984,12 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 	}
 	m.noteClosed(event, params)
 	switch event {
+	case nodeproto.EventUpdateDraining:
+		m.nodeUpdateDraining(params)
+		return
+	case nodeproto.EventRestarting:
+		m.nodeUpdateHandover(params)
+		return
 	case nodeproto.EventUpdatePreflightFailed:
 		m.nodeUpdatePreflightFailed(params)
 		return
@@ -940,7 +998,8 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 		defer m.sessionsEventMu.Unlock() // held through OnEvent and forward below
 		if list, ok := m.decodeSessions(params); ok {
 			m.setSessions(list)
-			m.d.heldWake(m.cfg.ID) // a message held for a session listed now goes (held.go)
+			m.d.heldWake(m.cfg.ID)      // a message held for a session listed now goes (held.go)
+			m.d.heldStartWake(m.cfg.ID) // held new-Agent starts for this computer go now (held_starts.go)
 		}
 	case "sessions.revs":
 		var p struct {
@@ -1084,6 +1143,8 @@ func (m *Machine) onRequest(ctx context.Context, method string, params json.RawM
 			}
 		}
 		return map[string]any{"sessions": out}, nil
+	case "usage.features": // what this manager keeps of the usage a node meters (usage_projects.go)
+		return map[string]any{"dirs": true}, nil
 	case "usage.backfill.status": // the token usage backfill (usage_backfill.go)
 		return m.d.usageBackfillStatus(ctx, m.cfg.ID, params, time.Now())
 	case "usage.backfill":

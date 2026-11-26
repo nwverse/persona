@@ -102,7 +102,7 @@
       "required": ["ok"]
     },
     "HubRole": {"type": "string", "enum": ["center", "member"]},
-    "HubCapability": {"type": "string", "enum": ["inbox_group", "inbox_group_state", "tool_images"]},
+    "HubCapability": {"type": "string", "enum": ["inbox_group", "inbox_group_state", "tool_images", "tool_views"]},
     "InitializeParams": {
       "description": "What the hub sends first. The extension is under extension; hubs before the rename (#1844) send it as plugin, newer hubs send both.",
       "type": "object",
@@ -112,6 +112,7 @@
         "extension": {"$ref": "#/$defs/ExtensionInfo"},
         "plugin": {"$ref": "#/$defs/ExtensionInfo"},
         "config": {"description": "The configuration with the schema's defaults filled in."},
+        "inbox_visibility": {"description": "The manager's source-privacy boundary, sent only to an extension contributing a selected connector. Runtime authorization input, not extension settings persisted in the extension registry."},
         "secrets": {"type": "object", "additionalProperties": {"type": "string"}},
         "granted": {"$ref": "manifest.schema.json#/$defs/Permissions"},
         "active": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}},
@@ -268,6 +269,12 @@
         "locale": {"type": "string"},
         "platform": {"$ref": "view.schema.json#/$defs/Platform"},
         "ui_version": {"type": "integer"},
+        "unsupported": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {"type": "string", "minLength": 1, "maxLength": 64},
+          "description": "Component types this client cannot draw even within ui_version (such as [\"scene\"] while rendering v12 \"map\"). The hub downgrades each listed type in place."
+        },
         "stream": {"$ref": "stream.schema.json#/$defs/UIStreamCapability",
           "description": "Explicit stream opt-in, independent of ui_version. Absent means snapshot-only. Contract only: no current client or hub advertises it."}
       }
@@ -572,6 +579,147 @@
         "value": {"type": "string", "minLength": 1, "maxLength": 16384}
       },
       "required": ["value"]
+    },
+    "SecretStoreField": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "STRING",
+            "CONCEALED"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "type"
+      ],
+      "description": "A public field name/type; never a value or source path."
+    },
+    "SecretStoreTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "operation": {
+          "type": "string",
+          "enum": [
+            "create",
+            "edit"
+          ]
+        },
+        "vault": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "item": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "category": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SecretStoreField"
+          },
+          "minItems": 1,
+          "maxItems": 16
+        }
+      },
+      "required": [
+        "operation",
+        "vault",
+        "fields"
+      ],
+      "description": "The canonical public target approved on the secret storage card."
+    },
+    "SecretStoreParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "contribution": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "phase": {
+          "type": "string",
+          "enum": [
+            "describe",
+            "prepare",
+            "commit"
+          ]
+        },
+        "target": {
+          "$ref": "#/$defs/SecretStoreTarget"
+        },
+        "machine": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "session": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "key_id": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "sealed": {
+          "type": "string",
+          "maxLength": 550000
+        }
+      },
+      "required": [
+        "phase",
+        "target",
+        "machine",
+        "session"
+      ],
+      "description": "secrets.store: describe metadata, prepare an expiring node HPKE key after explicit approval, commit one encrypted payload."
+    },
+    "SecretStoreResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "target": {
+          "$ref": "#/$defs/SecretStoreTarget"
+        },
+        "vault_name": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "key": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "key_id": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "references": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 1024
+          }
+        }
+      },
+      "required": [
+        "target"
+      ],
+      "description": "Metadata and a recipient key, or references of written fields. Never values."
     },
     "SecretsUsedEvent": {
       "description": "secrets.used (an event to the provider, no answer): a reference it resolved was used, for the usage record its own page shows. Never the value.",

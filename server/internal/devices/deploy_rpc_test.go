@@ -2,6 +2,7 @@ package devices
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -81,7 +82,7 @@ func (n *updatingNode) handle(_ context.Context, method string, params json.RawM
 			return nil, err
 		}
 		sum := sha256.Sum256(n.expected)
-		if p.Size != int64(len(n.expected)) || p.SHA256 != hex.EncodeToString(sum[:]) || p.Version != "new-build" {
+		if p.Size != int64(len(n.expected)) || p.SHA256 != hex.EncodeToString(sum[:]) || p.Version != cmp.Or(n.target, "new-build") {
 			return nil, errors.New("wrong update metadata")
 		}
 		n.begin++
@@ -126,7 +127,7 @@ func (n *updatingNode) handle(_ context.Context, method string, params json.RawM
 		}
 		if !n.stayOld {
 			n.machine.mu.Lock()
-			n.machine.info.Version = "new-build"
+			n.machine.info.Version = cmp.Or(n.target, "new-build")
 			n.machine.mu.Unlock()
 		}
 		if n.committed != nil {
@@ -203,7 +204,7 @@ func TestStaleDeployErrorClearsWhenTheNodeMatches(t *testing.T) {
 }
 
 func TestLinkedDeployCapabilities(t *testing.T) {
-	hubNodeBinary(t, "linux", "amd64")
+	hubNodeBinary(t, "linux", "amd64", "new-build")
 	for _, kind := range []string{kindLink, kindService} {
 		t.Run(kind, func(t *testing.T) {
 			_, m, _, _ := linkedDeployFixture(t, kind)
@@ -259,7 +260,7 @@ func TestLinkedDeployTransfersAndConfirms(t *testing.T) {
 // Redeploy sends the kind of program the node says it runs: persona-node to persona-node, personad to the rest; so
 // does an update the hub queued before it restarted, when the node comes back (nodeUpdateConnected).
 func TestRedeployBringsTheProgramTheNodeRuns(t *testing.T) {
-	fullBuild := updatetest.Program(t, nodeproto.ProgramPersonad, "linux", "amd64")
+	fullBuild := updatetest.VersionedProgram(t, nodeproto.ProgramPersonad, "linux", "amd64", "new-build") // linkedDeployFixture's hub
 	nodeBuild := updatetest.Program(t, nodeproto.ProgramPersonaNode, "linux", "amd64")
 	for _, tc := range []struct{ program, via, path string }{
 		{nodeproto.ProgramPersonaNode, "redeploy", ""},

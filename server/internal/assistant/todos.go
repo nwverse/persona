@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/nwverse/persona/server/internal/compat"
 	"net/http"
 	"slices"
 	"sort"
@@ -13,11 +12,15 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/compat"
+
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistant/repository"
+	"github.com/nwverse/persona/server/internal/assistant/todo/projection"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
+	"github.com/nwverse/persona/server/internal/larkhost"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -105,6 +108,18 @@ type Todo struct {
 	// Source: where the todo was asked for when that is another chat (#6146, todo_source.go): the outcome is told
 	// there once; nil for any other todo.
 	Source *TodoSource `json:"source,omitempty"`
+	// Responsible: an external responsible party that is not a Persona-started agent (#12712, todo_responsible.go):
+	// a long-running session or a person; nil while none is set.
+	Responsible *TodoResponsible `json:"responsible,omitempty"`
+	// Audience: optional routing hint distinguishing human-facing deliverables ("human") from autonomous engineering
+	// tasks ("autonomous"); omitted when unset (#14619).
+	Audience string `json:"audience,omitempty"`
+	// DirectionID: optional organizational direction membership, decoupled from runtime supervision.supervisor and
+	// origin; omitted when unset (#14660).
+	DirectionID string `json:"direction_id,omitempty"`
+	// ItemType: stored explicit 2-type classification ("personal" or "task"), or "" when unset (#15758).
+	// Emitted only on listedTodo when todos_v2=true so legacy/mobile wire payloads remain byte-identical when off.
+	ItemType string `json:"-"`
 	// When it is due (DueAt a moment, DueDate a day "2006-01-02" in the user's time zone; at most one), when the phone
 	// is reminded of it and whether it was, and its priority ("" normal, high, low): #1683, todo_plan.go. Clients that do
 	// not know them show the todo as ever.
@@ -122,6 +137,9 @@ type Todo struct {
 	// SeenAt: when the owner last looked at it in Just finished, by Got it or by opening it (#5707, todo_seen.go); a to-do
 	// seen since it got there is filed under Done (todo_triage.go). Absent when never seen.
 	SeenAt *time.Time `json:"seen_at,omitempty"`
+	// AutoSeenUndone: internal undo guard set when the owner explicitly calls DELETE /api/v1/todos/{id}/seen (#14639).
+	// Never emitted on the wire.
+	AutoSeenUndone bool `json:"-"`
 	// RestoredAt: when the owner last brought it back from Inactive; SomedayUntil: when a to-do the owner put off to
 	// Someday comes back, the year 9999 for no date (#10226, todo_marks.go). Absent when never restored, and while not
 	// put off. Clients that do not know them show the to-do as ever.
@@ -155,6 +173,7 @@ type todoStore interface {
 	UpdateTodo(ctx context.Context, id string, title *string, notes *string, done *bool, updatedAt time.Time) (*db.TodoRow, error)
 	EditTodo(ctx context.Context, id string, e db.TodoEdit, updatedAt time.Time) (*db.TodoRow, error)
 	SeeTodo(ctx context.Context, id string, at *time.Time) (*db.TodoRow, error)
+	AutoSeeTodo(ctx context.Context, id string, at time.Time) (*db.TodoRow, bool, error)
 	RestoreTodo(ctx context.Context, id string, at time.Time) (*db.TodoRow, error)
 	SetTodoSomeday(ctx context.Context, id string, until *time.Time) (*db.TodoRow, error)
 	ClaimTodoReminder(ctx context.Context, id string, remindAt, now time.Time) (bool, error)
@@ -239,6 +258,21 @@ type todoBook struct {
 	// remindWake wakes remindLoop when the todos change (todo_plan.go).
 	remindOnce sync.Once
 	remindWake chan struct{}
+
+	// readyWakes persists idempotent todo_ready wake markers per open dependent to-do (todo_after_ready.go).
+	readyWakeMu      sync.Mutex
+	readyWakes       map[string]todoReadyWakeMarker
+	readyWakesLoaded bool
+
+	// prMergeWakes persists idempotent (todo_id, pr_url, merged) wake markers for unparked open tasks (pr_merge_wake.go).
+	prMergeWakeMu      sync.Mutex
+	prMergeWakes       map[string]prMergeWakeMarker
+	prMergeWakesLoaded bool
+
+	// parentCloseoutWakes persists idempotent parent_closeout wake markers per open parent to-do (todo_parent_closeout.go).
+	parentCloseoutMu          sync.Mutex
+	parentCloseoutWakes       map[string]parentCloseoutWakeMarker
+	parentCloseoutWakesLoaded bool
 }
 
 // spaceKey computes the unified space key string ("machineID/space").
@@ -262,6 +296,11 @@ func sessionSpaceKey(machineID string, c proto.Session) string {
 func (s *Service) ensureTodosLoaded(ctx context.Context) error {
 	loaded, err := s.loadTodoInventory(ctx)
 	if loaded {
+		s.backfillPlanSupervisors(ctx)
+		s.restoreSupervisePending(ctx)
+		s.migrateOwnerWaits(ctx) // waits earlier versions pushed straight to the owner go to the supervisor
+		// The links as read are the ones the marks go by from now on: one that goes away later syncs its machine
+		// again (syncLinkedTodoTokens), even before any of the links changed.
 		s.syncLinkedTodoTokens()
 		s.sweepSourceReports()
 	}
@@ -444,6 +483,7 @@ func (s *Service) todosLoaded() bool {
 // todosChanged tells the apps to read the todos again ({"type":"todos"}), once the rest of the write is in
 // (todosPushSoon).
 func (s *Service) todosChanged(ctx context.Context) {
+	s.trevision.changed() // seen/restored/Someday come through here too, without moving updated_at
 	s.todosPushSoon()
 	s.todoChangedSoon()
 	s.remindSoon()        // a reminder set, moved or done (todo_plan.go)
@@ -484,6 +524,7 @@ func (s *Service) todosPushSoon() {
 		p.armed = false
 		p.mu.Unlock()
 		s.todoViewPushed() // every app reads the list again from here (todo_view_push.go)
+		s.todosCountSoon() // and the counts view's to-dos follow, read by the manager if no app does (counts_view.go)
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		s.event(ctx, map[string]any{"type": "todos"})
@@ -522,7 +563,7 @@ func (s *Service) quietTask(ctx context.Context, origin string) bool {
 
 // removeTodo deletes todo id from the store and from memory (its agents' and spaces' links with it) and tells the
 // apps; db.ErrTodoNotFound when it is not there. The DELETE route and the code that must take back a todo it just
-// made (a topic that turned out to be taken, feishu_thread_open.go) both go through it.
+// made (a topic that turned out to be taken, the lark module's thread_open.go) both go through it.
 func (s *Service) removeTodo(ctx context.Context, id string) error {
 	s.todos.writing.Lock()
 	if st := s.todoDB(); st != nil {
@@ -567,13 +608,13 @@ func (s *Service) createTodo(ctx context.Context, title, notes, origin, planID s
 
 // createTaskTodo is createTodo for a plan's task, in the knowledge-base project the task names (a slug; "" for none).
 func (s *Service) createTaskTodo(ctx context.Context, title, notes, origin, planID, project string) (Todo, error) {
-	return s.createTaskTodoAs(ctx, "todo_"+randomHex(8), title, notes, origin, planID, project, "")
+	return s.createTaskTodoAs(ctx, "todo_"+randomHex(8), title, notes, origin, planID, project, "", "", "")
 }
 
-func (s *Service) createTaskTodoAs(ctx context.Context, id, title, notes, origin, planID, project, inboxItem string) (Todo, error) {
+func (s *Service) createTaskTodoAs(ctx context.Context, id, title, notes, origin, planID, project, inboxItem, audience, directionID string) (Todo, error) {
 	now := time.Now().UTC()
 	return s.insertTodo(ctx, db.TodoRow{ID: id, Title: title, Notes: notes, CreatedAt: now, UpdatedAt: now,
-		Origin: origin, PlanID: planID, Quiet: s.quietTask(ctx, origin), Project: project, InboxItem: inboxItem})
+		Origin: origin, PlanID: planID, Quiet: s.quietTask(ctx, origin), Project: project, InboxItem: inboxItem, Audience: audience, DirectionID: strings.TrimSpace(directionID)})
 }
 
 // newTodo is createTodo, quiet or not as given (a launcher repair's has no conversation and is quiet,
@@ -597,7 +638,18 @@ func (s *Service) insertTodo(ctx context.Context, row db.TodoRow, bindings ...*r
 	var out Todo
 	var err error
 	if row.PartOf != "" || len(row.After) > 0 {
+		if row.Responsible != nil && row.Responsible.Kind == db.ResponsibleSession && row.Responsible.SessionID != "" {
+			if err := s.waitIdleCloseFence(ctx, row.Responsible.MachineID, row.Responsible.SessionID); err != nil {
+				return Todo{}, err
+			}
+		}
 		out, err = s.insertPiece(ctx, row, bindings...)
+	} else if row.Responsible != nil && row.Responsible.Kind == db.ResponsibleSession && row.Responsible.SessionID != "" {
+		if err := s.lockTodoWritingWithIdleFence(ctx, row.Responsible.MachineID, row.Responsible.SessionID); err != nil {
+			return Todo{}, err
+		}
+		out, err = s.putNewTodo(ctx, row, bindings...)
+		s.todos.writing.Unlock()
 	} else {
 		out, err = s.putNewTodo(ctx, row, bindings...)
 	}
@@ -614,7 +666,13 @@ func (s *Service) insertPiece(ctx context.Context, row db.TodoRow, bindings ...*
 	if f := s.pieceWriteHook; f != nil {
 		f(row.ID)
 	}
-	s.todos.writing.Lock()
+	if row.Responsible != nil && row.Responsible.Kind == db.ResponsibleSession && row.Responsible.SessionID != "" {
+		if err := s.lockTodoWritingWithIdleFence(ctx, row.Responsible.MachineID, row.Responsible.SessionID); err != nil {
+			return Todo{}, err
+		}
+	} else {
+		s.todos.writing.Lock()
+	}
 	defer s.todos.writing.Unlock()
 	e, err := s.recheckPieces("", db.TodoEdit{PartOf: &row.PartOf, After: &row.After})
 	if err != nil {
@@ -626,6 +684,13 @@ func (s *Service) insertPiece(ctx context.Context, row db.TodoRow, bindings ...*
 
 // putNewTodo is insertTodo's store write and memory, without telling anyone.
 func (s *Service) putNewTodo(ctx context.Context, row db.TodoRow, bindings ...*repository.CreateBindings) (Todo, error) {
+	if err := db.ValidateTodoAudience(row.Audience); err != nil {
+		return Todo{}, err
+	}
+	if err := db.ValidateTodoItemType(row.ItemType); err != nil {
+		return Todo{}, err
+	}
+	row.DirectionID = strings.TrimSpace(row.DirectionID)
 	if len(bindings) > 0 && bindings[0] != nil {
 		st, ok := s.store().(todoRepositoryStore)
 		if !ok {
@@ -701,6 +766,7 @@ func copyTodoLocked(t *Todo) Todo {
 		src := *t.Source
 		out.Source = &src
 	}
+	out.Responsible = cloneResponsible(t.Responsible)
 	return out
 }
 
@@ -715,9 +781,25 @@ func formatTodo(t Todo) Todo {
 		source.ReportText = "" // the delivery payload is not part of the to-do list
 		out.Source = &source
 	}
-	// Existing clients use review for cancellation labels and reasons. Keep that wire value;
-	// the stored marker distinguishes cancellation even for tasks without a supervision ledger.
-	if out.DoneBy == db.DoneByCancelled {
+	// Existing clients use review for cancellation labels and reasons. Keep that wire value; Cancelled covers both the
+	// stored marker and legacy review rows whose supervision verdict records the cancellation (#5732).
+	if out.Cancelled() {
+		// Cancellation is stored as a closed row. Derive its independent outcome at the API boundary so every client,
+		// including one without a supervision ledger, can keep it out of Completed (#5732).
+		if out.CancelledAt == nil {
+			out.CancelledAt = out.DoneAt
+		}
+		if out.CancelledReason == "" {
+			out.CancelledReason = out.DoneReason
+			if out.Supervision != nil {
+				for i := len(out.Supervision.Reviews) - 1; i >= 0; i-- {
+					if r := out.Supervision.Reviews[i]; r.Verdict == reviewCancelled && r.Note != "" {
+						out.CancelledReason = r.Note
+						break
+					}
+				}
+			}
+		}
 		out.DoneBy = db.DoneByReview
 	}
 	if out.Spaces == nil {
@@ -747,7 +829,7 @@ func formatTodo(t Todo) Todo {
 	})
 	out.Agents = append(out.Agents, curr...)
 	out.Agents = append(out.Agents, past...)
-	if ownerDecisionReturned(out.Supervision) {
+	if out.Supervision != nil && out.Supervision.State == reviewNeedsUser && triageReviewState(out) != reviewNeedsUser {
 		out.Supervision = out.Supervision.clone()
 		out.Supervision.State = "" // its old review stays in history; only a fresh review may ask the owner again
 	}
@@ -825,8 +907,8 @@ func (t Todo) Cancelled() bool {
 	if t.DoneBy == db.DoneByCancelled {
 		return true
 	}
-	if t.Supervision != nil && t.Supervision.state(t) == reviewCancelled {
-		return true
+	if t.DoneBy == db.DoneByReview && t.Supervision != nil && t.Supervision.state(t) == reviewCancelled {
+		return true // legacy cancellation: the compatible review marker plus its supervision verdict (#5732)
 	}
 	return false
 }
@@ -952,25 +1034,60 @@ func (s *Service) todoRoutes() {
 	s.todoSeenRoutes()
 	s.todoMarkRoutes()
 	s.todoRetitleRoute()
+	s.todoReorganizeRoute()
+	s.todoDecisionsBatchRoute()
+	s.todoBlockersRoutes()
+	s.todoMergeTrainRoutes()
+	s.todoTopologyOpsRoutes()
 	s.todoImportRoutes()
 	s.todoViewRoutes()
+	s.todoHandoffRoutes()
 	s.todoAskRoutes()
 	s.todoTimelineRoutes()
+	s.todoCausalTraceRoutes()
 	// GET /api/v1/todos: list all todos (newest created_at first), agents sorted (active first, then released); a todo
 	// waiting for the owner carries its ask (todo_ask.go), an open one nobody works on why (tasks_orphan.go); each its
 	// view, and the list its counts (todo_view_routes.go); to an extension's token without the to-dos it is not shown
-	// (todo_scope.go)
+	// (todo_scope.go). With ?limit or ?cursor it answers one page and how to read the next (todo_pagination.go); no
+	// parameter keeps the complete answer, its fields and its revision header unchanged.
 	s.handle("GET /api/v1/todos", func(w http.ResponseWriter, r *http.Request) {
+		limit, after, paged, err := todoListPageQuery(r.URL.Query())
+		if err != nil {
+			code := "invalid_todo_limit"
+			if errors.Is(err, errTodoPageCursor) {
+				code = "invalid_todo_cursor"
+			}
+			apierr.WriteCode(w, http.StatusBadRequest, code, err)
+			return
+		}
+		writes := s.trevision.writes.Load()
 		list, p, err := s.todosViewed(r.Context(), true)
 		if err != nil {
 			apierr.Write(w, http.StatusServiceUnavailable, errTodosUnavailable)
 			return
 		}
-		if r.Header.Get(RoleHeader) == roleExtension {
+		isExtension := r.Header.Get(RoleHeader) == roleExtension
+		if isExtension {
 			list = s.extensionRows(r.Context(), list, p)
+		} else if !paged {
+			s.tagTodoRevision(w, writes, p)
 		}
-		apierr.WriteJSON(w, todosList{Todos: list, Counts: p.counts()})
+		var sharedBlockers []projection.SharedBlocker
+		var board *todoBoardProjection
+		if !isExtension {
+			sharedBlockers = p.sharedBlockers()
+			if cfg := s.settings(r.Context()); cfg.todosV2On() {
+				sharedBlockers = mergePersistedSharedBlockers(list, p, sharedBlockers)
+				board = buildTodoBoardProjectionWithOptions(list, s.todoBoardDirectionLabels(r.Context()), cfg.todosV2FoldChildrenOn())
+			}
+		}
+		if paged {
+			writeTodoPage(w, list, p, sharedBlockers, limit, after)
+			return
+		}
+		apierr.WriteJSON(w, todosList{Todos: list, Counts: p.counts(), SharedBlockers: sharedBlockers, Board: board})
 	})
+	s.handle("GET /api/v1/todos/revision", s.todoRevisionRead)
 
 	// POST /api/v1/todos: create todo {title, notes, due_at | due_date, remind_at, priority, project, kind}; kind concern
 	// records one of the owner's concerns (concerns.go): it closes only once its outcome is reported (…/decisions
@@ -992,6 +1109,7 @@ func (s *Service) todoRoutes() {
 			Kind                 string               `json:"kind"`
 			RequireAcceptedAfter *bool                `json:"require_accepted_after"`
 			RepositoryBindings   json.RawMessage      `json:"repository_bindings"`
+			Responsible          json.RawMessage      `json:"responsible"`
 			todoPlanIn
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -1014,6 +1132,12 @@ func (s *Service) todoRoutes() {
 			return
 		}
 		var plan db.TodoEdit
+		if setResp, respVal, err := parseResponsiblePatch(in.Responsible); err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		} else if setResp {
+			plan.SetResponsible, plan.Responsible = true, respVal
+		}
 		if in.RequireAcceptedAfter != nil {
 			if !fullRole(r) {
 				apierr.Write(w, http.StatusForbidden, errors.New("only the owner can change request prerequisite enforcement"))
@@ -1028,6 +1152,14 @@ func (s *Service) todoRoutes() {
 		if err := in.todoPlanIn.edit(&plan); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
+		}
+		if s.settings(r.Context()).todosV2On() && in.ItemType != nil {
+			it, err := todoItemType(*in.ItemType)
+			if err != nil {
+				apierr.Write(w, http.StatusBadRequest, err)
+				return
+			}
+			plan.ItemType = &it
 		}
 		if err := s.setTodoProject(r.Context(), in.Project, &plan); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
@@ -1063,7 +1195,8 @@ func (s *Service) todoRoutes() {
 	})
 
 	// PATCH /api/v1/todos/{id}: update title, notes, done, due_at | due_date, remind_at, priority, project ("" clears it),
-	// part_of ("" clears it) and after ([] clears it), checked as todo_pieces.go says
+	// part_of ("" clears it), after ([] clears it), and responsible (null clears it), checked as todo_pieces.go and
+	// todo_responsible.go say
 	s.handle("PATCH /api/v1/todos/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if !todoWriter(r) {
 			apierr.Write(w, http.StatusForbidden, errors.New("read-only role cannot modify todos"))
@@ -1088,6 +1221,7 @@ func (s *Service) todoRoutes() {
 			PartOf               json.RawMessage `json:"part_of"`
 			After                json.RawMessage `json:"after"`
 			RequireAcceptedAfter *bool           `json:"require_accepted_after"`
+			Responsible          json.RawMessage `json:"responsible"`
 			todoPlanIn
 		}
 		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -1108,9 +1242,23 @@ func (s *Service) todoRoutes() {
 			}
 			e.Title = &t
 		}
+		if setResp, respVal, err := parseResponsiblePatch(in.Responsible); err != nil {
+			apierr.Write(w, http.StatusBadRequest, err)
+			return
+		} else if setResp {
+			e.SetResponsible, e.Responsible = true, respVal
+		}
 		if err := in.todoPlanIn.edit(&e); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
+		}
+		if s.settings(r.Context()).todosV2On() && in.ItemType != nil {
+			it, err := todoItemType(*in.ItemType)
+			if err != nil {
+				apierr.Write(w, http.StatusBadRequest, err)
+				return
+			}
+			e.ItemType = &it
 		}
 		if err := s.setTodoProject(r.Context(), in.Project, &e); err != nil {
 			apierr.Write(w, http.StatusBadRequest, err)
@@ -1267,7 +1415,7 @@ func (s *Service) todoRoutes() {
 		if found {
 			title, cwd, agent = c.Title, c.Cwd, c.Agent
 		}
-		// An extension's token takes no run it cannot be shown (todo_scope.go): one in the health space or one off a
+		// An extension's token takes no run it cannot be shown (todo_scope.go): one in a hidden space or one off a
 		// to-do it is not shown answers 404; one the computer does not list yet, whose space cannot be told, 409
 		// agent_not_listed, to be tried again (a session just started is answered before its computer lists it).
 		if r.Header.Get(RoleHeader) == roleExtension {
@@ -1330,10 +1478,12 @@ func (s *Service) todoRoutes() {
 		}
 
 		now := time.Now().UTC()
+		var unlinkedCwd string
 		s.todos.mu.Lock()
 		if target, ok := s.todos.todos[todoID]; ok {
 			for i := range target.Agents {
 				if target.Agents[i].MachineID == mid && target.Agents[i].SessionID == sid {
+					unlinkedCwd = target.Agents[i].Cwd
 					target.Agents[i].ReleasedAt = &now
 					target.Agents[i].DismissedAt = &now
 					break
@@ -1349,6 +1499,9 @@ func (s *Service) todoRoutes() {
 
 		s.linksChanged(r.Context())
 		s.todosChanged(r.Context())
+		if unlinkedCwd != "" {
+			s.drainWorkspaceQueue(r.Context(), mid, unlinkedCwd)
+		}
 		apierr.WriteJSON(w, map[string]any{"ok": true})
 	})
 }
@@ -1374,14 +1527,14 @@ func (s *Service) linkTodoSpace(ctx context.Context, todoID, mid, space string) 
 	spKey := spaceKey(mid, space)
 
 	var oldTodoID string
-	// The links in the health space of the to-do it takes the space from stay (healthLinksOf), in the same write: memory
+	// The links in an assistant space of the to-do it takes the space from stay (spaceLinksOf), in the same write: memory
 	// is the store's while todoBook.writing is held.
 	s.todos.mu.RLock()
 	holder := s.todos.spacesByKey[spKey]
 	s.todos.mu.RUnlock()
 	var keep db.KeptLinks
 	if holder != "" && holder != todoID {
-		keep = s.healthLinksOf(holder, mid, spKey, now)
+		keep = s.spaceLinksOf(holder, mid, spKey, now)
 	}
 	if st := s.todoDB(); st != nil {
 		var err error
@@ -1538,7 +1691,7 @@ func (s *Service) setTodoRow(id string, row db.TodoRow, guard func(*Todo) bool) 
 		s.workEvent("", "", todoReopenedEvent, reopenedEvent) // a wrong "done" in the work stats (agents_work_wrong_done.go)
 	}
 	if closing != nil {
-		s.threadPost(id, *closing) // after the lock: it looks the todo up again
+		s.chat().ThreadPost(id, *closing) // after the lock: it looks the todo up again
 		s.sourceReportSoon(id, sourceReportWait)
 	}
 	return out, doneKeys, true
@@ -1576,7 +1729,7 @@ func (s *Service) unlinkTodoSpace(ctx context.Context, todoID, mid, space string
 		return db.ErrTodoNotFound
 	}
 	now := time.Now().UTC()
-	keep := s.healthLinksOf(todoID, mid, spKey, now) // they stay, in the same write
+	keep := s.spaceLinksOf(todoID, mid, spKey, now) // they stay, in the same write
 
 	if st := s.todoDB(); st != nil {
 		if err := st.UnlinkTodoSpace(ctx, todoID, mid, space, keep); err != nil {
@@ -1634,11 +1787,11 @@ func (s *Service) TodoSpaceRenamed(ctx context.Context, r TodoSpaceRenamed) {
 	_, voided := s.todos.spacesByKey[spaceKey(r.MachineID, r.New)]
 	holder := s.todos.spacesByKey[oldKey]
 	s.todos.mu.RUnlock()
-	// The holder's links in the health space stay when the rename voids the space, in the same write (the store
+	// The holder's links in an assistant space stay when the rename voids the space, in the same write (the store
 	// decides whether it does).
 	var keep db.KeptLinks
 	if holder != "" {
-		keep = s.healthLinksOf(holder, r.MachineID, oldKey, time.Now().UTC())
+		keep = s.spaceLinksOf(holder, r.MachineID, oldKey, time.Now().UTC())
 	}
 	if st := s.todoDB(); st != nil {
 		var err error
@@ -1752,7 +1905,13 @@ func (s *Service) linkTodoAgentWithSourceAllowingDone(ctx context.Context, todoI
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return err
 	}
-	s.todos.writing.Lock()
+	if !allowDone {
+		if err := s.lockTodoWritingWithIdleFence(ctx, mid, sid); err != nil {
+			return err
+		}
+	} else {
+		s.todos.writing.Lock()
+	}
 	err := s.writeTodoAgentLink(ctx, todoID, mid, sid, title, cwd, agent, startError, source, via, allowDone)
 	s.todos.writing.Unlock()
 	if err != nil {
@@ -1766,7 +1925,9 @@ func (s *Service) linkTodoAgentWithSourceAllowingDone(ctx context.Context, todoI
 // linkTodoSpaceAgent retires fanout when a newer move/unlink published while the
 // session lookup was in flight. Check and write share the ownership write boundary.
 func (s *Service) linkTodoSpaceAgent(ctx context.Context, todoID, mid, key string, linkedAt time.Time, c proto.Session) (bool, error) {
-	s.todos.writing.Lock()
+	if err := s.lockTodoWritingWithIdleFence(ctx, mid, c.SessionID); err != nil {
+		return false, err
+	}
 	s.todos.mu.RLock()
 	current := false
 	if target := s.todos.todos[todoID]; target != nil && s.todos.spacesByKey[key] == todoID {
@@ -1792,13 +1953,13 @@ func (s *Service) linkTodoSpaceAgent(ctx context.Context, todoID, mid, key strin
 // Callers release it before notifying the hub or contacting nodes.
 func (s *Service) writeTodoAgentLink(ctx context.Context, todoID, mid, sid, title, cwd, agent, startError, source, via string, allowDone bool) error {
 	now := time.Now().UTC()
-	// A link keeps a directory in the health space: a run's directory follows its shell's cd, and where it worked tells
-	// the to-do's history as the space's for good (todosHidden, #10941).
-	if cwd != "" && !identity.InHealthSpace(cwd) {
+	// A link keeps a directory in a space (identity.InSpace): a run's directory follows its shell's cd, and where it
+	// worked tells the to-do's history as the space's for good (todosHidden, #10941).
+	if cwd != "" && !identity.InSpace(cwd) {
 		s.todos.mu.RLock()
 		if t := s.todos.todos[todoID]; t != nil {
 			for _, a := range t.Agents {
-				if a.MachineID == mid && a.SessionID == sid && identity.InHealthSpace(a.Cwd) {
+				if a.MachineID == mid && a.SessionID == sid && identity.InSpace(a.Cwd) {
 					cwd = a.Cwd
 				}
 			}
@@ -1867,6 +2028,12 @@ func (s *Service) writeTodoAgentLink(ctx context.Context, todoID, mid, sid, titl
 				Agent: agent, StartError: startError, Source: source, Via: via})
 		}
 		target.UpdatedAt = now
+		if target.Supervision != nil && target.Supervision.Progress != nil && target.Supervision.Progress.Kind == upReportDone &&
+			(target.Supervision.Progress.machine != mid || target.Supervision.Progress.session != sid) {
+			v := target.Supervision.clone()
+			v.Progress = nil
+			target.Supervision = v
+		}
 		if target.DoneAt == nil { // as loadTodosLocked has it: only an open todo's agents work for it
 			s.todos.activeBySession[[2]string{mid, sid}] = todoID
 		}
@@ -1914,9 +2081,11 @@ func (s *Service) failTodoIf(ctx context.Context, id, reason string, keep func(T
 	}
 	s.todos.mu.Lock()
 	t := s.todos.todos[id]
+	var before Todo
 	var failKeys [][2]string
-	var closing *threadEvent
+	var closing *larkhost.ThreadEvent
 	if t != nil {
+		before = copyTodoLocked(t)
 		closing = threadClosing(t.DoneAt == nil, reason, "")
 		if t.DoneAt == nil {
 			t.DoneAt = &doneAt
@@ -1937,7 +2106,7 @@ func (s *Service) failTodoIf(ctx context.Context, id, reason string, keep func(T
 		return false, db.ErrTodoNotFound
 	}
 	if closing != nil {
-		s.threadPost(id, *closing)
+		s.chat().ThreadPost(id, *closing)
 		s.sourceReportSoon(id, threadPostSettle) // no outcome is coming for a start that failed
 	}
 	if len(failKeys) > 0 {
@@ -1945,6 +2114,7 @@ func (s *Service) failTodoIf(ctx context.Context, id, reason string, keep func(T
 	}
 	s.linksChanged(ctx)
 	s.todosChanged(ctx)
+	s.onTodoWorkspaceReleased(ctx, before, false)
 	return true, nil
 }
 
@@ -2008,6 +2178,9 @@ func (s *Service) autoDoneTodo(ctx context.Context, id, reason string, work time
 	s.todoRowSet(ctx, doneKeys)
 	if row.DoneAt != nil {
 		s.goRecordTaskOutcome(before, *row.DoneAt) // what the task came to (todo_outcome.go, #2820)
+		s.onTodoWorkspaceReleased(ctx, before, true)
+		s.evaluateTodoAfterDependents(ctx, id)
+		s.evaluateParentCloseoutForChild(ctx, id)
 	}
 	return ok, nil
 }
@@ -2041,7 +2214,9 @@ func (s *Service) reopenFailedTodo(ctx context.Context, id string) (Todo, bool, 
 	if !ok {
 		return Todo{}, false, db.ErrTodoNotFound
 	}
-	s.todos.writing.Lock()
+	if err := s.lockTodoWritingForSessions(ctx, todoProtectedSessions(cur, nil)); err != nil {
+		return Todo{}, false, err
+	}
 	now := time.Now().UTC()
 	row := db.TodoRow{ID: cur.ID, Title: cur.Title, Notes: cur.Notes, CreatedAt: cur.CreatedAt, UpdatedAt: now,
 		Origin: cur.Origin, PlanID: cur.PlanID, ReopenedAt: &now}
@@ -2065,6 +2240,9 @@ func (s *Service) reopenFailedTodo(ctx context.Context, id string) (Todo, bool, 
 	if applied {
 		s.todoRowSet(ctx, doneKeys)
 	}
+	s.resetTodoReadyWake(ctx, id)
+	s.resetParentCloseoutWake(ctx, id)
+	s.resolveCard(taskFailedCardID(id)) // started again: the failure's push is over
 	return out, true, nil
 }
 
@@ -2151,4 +2329,16 @@ func cleanPromptTitle(prompt string) string {
 		}
 	}
 	return ""
+}
+
+// threadClosing is what the topic is told when a todo became done (nil when it did not): why, when the hub's judge
+// closed it or its agent never started.
+func threadClosing(becameDone bool, startError, doneReason string) *larkhost.ThreadEvent {
+	switch {
+	case !becameDone:
+		return nil
+	case startError != "":
+		return &larkhost.ThreadEvent{Kind: larkhost.ThreadTodoFailed, Text: clip(oneLine(startError), 80)}
+	}
+	return &larkhost.ThreadEvent{Kind: larkhost.ThreadTodoDone, Text: clip(oneLine(doneReason), 80)}
 }

@@ -23,7 +23,7 @@ import { directoryVisibleCards } from "../../lib/sessions";
 import type { Interaction } from "../../lib/types";
 import { t } from "../../i18n";
 import { requestRoute } from "../../lib/card-focus";
-import { requestHome } from "../../lib/child-sessions";
+import { requestHome, requestHomeMachine } from "../../lib/child-sessions";
 import { Button, Collapse, cx, Dialog, IconButton, Loading, Menu, toast, useMenu, type MenuItem } from "../../ui/atoms";
 import { errorText } from "../../lib/api";
 import { contextMenuProps } from "../../ui/context-menu";
@@ -37,13 +37,15 @@ import { DraftDialog } from "./InboxDialogs";
 import { TriageBanner } from "./TriageBanner";
 import { UnreadNotice } from "./UnreadNotice";
 import { EventMark } from "./InboxEvent";
+import { todoForwardLabel } from "./InboxTaskLinks";
 import { canMerge, mergeItems } from "../../lib/inbox-actions";
 import { openTodoDialog } from "./InboxTodoDialog";
 import { FolderBar, FolderLine, FolderSettingsDialog, openFolderDialog, useFoldersShown } from "./InboxFolders";
 import { folderCrumbs, UNFILED } from "../../lib/inbox-folders";
 import { AgentWorking, Chip, Count, DraftCard, Glyph, ItemAvatar, Spark, StatusMenu, Tag, type GlyphName } from "./InboxParts";
+import { useItemReadOnly } from "./item-write-gate";
 import { CheckMark } from "../settings/ProviderFields";
-import { InboxBar } from "./InboxBar";
+import { barFade, InboxBar } from "./InboxBar";
 import { groupClear, type GroupClear } from "./group-clear";
 import { OfflineState, useShownOffline } from "../ManagerParts";
 
@@ -194,10 +196,27 @@ export function InboxList({ selected, routed, picked = null, onPicked, listBesid
   const chipsOn = Boolean(source || kind || folder);
   // "Clear filters" under a filtered list that shows nothing open: back to the whole Inbox (the chips are kept on this
   // device, so a list left filtered last time opens filtered). The button goes with the empty state, so the keyboard
-  // moves first to All, the chip that now says what the list shows (a button: no phone keyboard comes up for it).
+  // moves to the first filter chip in the toolbar (a button: no phone keyboard comes up for it).
   const filtersBar = useRef<HTMLDivElement>(null);
+  const [filtersFade, setFiltersFade] = useState({ left: 0, right: 0 });
+  const measureFilters = useCallback(() => {
+    const el = filtersBar.current;
+    if (!el) return;
+    const left = Math.max(0, Math.round(el.scrollLeft));
+    const right = Math.max(0, Math.round(el.scrollWidth - el.clientWidth - el.scrollLeft));
+    setFiltersFade((prev) => (prev.left === left && prev.right === right ? prev : { left, right }));
+  }, []);
+  useLayoutEffect(measureFilters, [measureFilters, chips.length, connectors.length, source, kind]);
+  useEffect(() => {
+    const el = filtersBar.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measureFilters);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [measureFilters]);
+  const filtersMask = barFade(filtersFade.left, filtersFade.right);
   const clearFilters = () => {
-    filtersBar.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    filtersBar.current?.querySelector<HTMLButtonElement>("button[aria-pressed]")?.focus();
     setSource("");
     setKind("");
     setFolder("");
@@ -473,17 +492,48 @@ export function InboxList({ selected, routed, picked = null, onPicked, listBesid
     {/* `overflow-y-auto` alone makes this a scroll container on both axes, so a row or a long chip (a connector's name)
         wider than the 380px column let the whole list scroll sideways and cut off every card (#3262); `overflow-x-clip`
         clips that overflow instead, and is not a scroll container, so `scrollIntoView` above cannot shift it either. */}
-    <div ref={listBox} className="min-h-0 flex-1 overflow-y-auto overflow-x-clip" data-picking={picking || undefined} data-inbox-list-scroll>
+    <div ref={listBox} className="@container/inbox-list min-h-0 flex-1 overflow-y-auto overflow-x-clip" data-picking={picking || undefined} data-inbox-list-scroll>
       <div className="mx-auto max-w-[760px] px-3 pt-2.5 pb-16 sm:px-4">
         <label className="flex h-8 items-center gap-2 rounded-control bg-surface px-2.5 shadow-btn focus-within:shadow-[inset_0_0_0_1px_var(--accent)]">
           <Icon name="search" size={13} stroke={2} className="shrink-0 text-ink-3" />
           <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("inbox-inboxlist.search_placeholder")} aria-label={t("inbox-inboxlist.search_label")} className="min-w-0 flex-1 bg-transparent text-[12.5px] text-ink outline-none placeholder:text-ink-3" />
           {query && <IconButton icon="x" label={t("inbox-inboxlist.clear")} size={20} iconSize={11} onClick={() => setQuery("")} />}
         </label>
-        {/* A phone: the chips in one row that scrolls sideways, Clean up all in the ⋯ menu at its end. */}
+        {/* One horizontally scrollable row of toggleable source/kind filters: InboxBar above owns the section scope (All),
+            so no second "All" button sits here, and Clean up all stays outside the scrolling strip (hidden in narrow split panes,
+            where it remains first in the ⋯ menu). */}
         <div className="mt-2.5 flex items-center gap-1.5">
-        <div ref={filtersBar} className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5 max-sm:-my-1 max-sm:flex-nowrap max-sm:overflow-x-auto max-sm:py-1 max-sm:scrollbar-none max-sm:[&>*]:shrink-0" role="toolbar" aria-label={t("inbox-inboxlist.filters")}>
-          <Chip on={!source && !kind} onClick={() => { setSource(""); setKind(""); }}>{t("inbox-inboxlist.all")}</Chip>
+        <div
+          ref={filtersBar}
+          onScroll={measureFilters}
+          onWheel={(ev) => {
+            const box = filtersBar.current;
+            if (box && box.scrollWidth > box.clientWidth && Math.abs(ev.deltaY) > Math.abs(ev.deltaX)) {
+              box.scrollLeft += ev.deltaY * (ev.deltaMode === 1 ? 16 : 1);
+            }
+          }}
+          style={filtersMask ? { maskImage: filtersMask, WebkitMaskImage: filtersMask } : undefined}
+          className="-my-1 flex min-w-0 flex-1 flex-nowrap items-center gap-1.5 overflow-x-auto py-1 scrollbar-none [&>*]:shrink-0"
+          role="toolbar"
+          aria-label={t("inbox-inboxlist.filters")}
+        >
+          {(source || kind) && (
+            <button
+              type="button"
+              data-clear-filters
+              aria-label={t("inbox-inboxlist.clear_filters")}
+              title={t("inbox-inboxlist.clear_filters")}
+              onClick={() => {
+                setSource("");
+                setKind("");
+                filtersBar.current?.querySelector<HTMLButtonElement>("button[aria-pressed]")?.focus();
+              }}
+              className="touch-hit inline-flex h-7 items-center gap-1 rounded-control bg-field px-2 text-label whitespace-nowrap text-ink-2 transition-colors duration-150 hover:bg-hover hover:text-ink"
+            >
+              <Icon name="x" size={11} stroke={2.4} />
+              {t("inbox-inboxlist.clear")}
+            </button>
+          )}
           <Chip on={source === "feishu"} onClick={() => pickSource("feishu")}>{t("inbox-inboxlist.source_lark")}</Chip>
           {chips.map((a) => (
             <Chip key={a.id} on={source === a.id} onClick={() => pickSource(a.id)} title={a.email}>{mailShort(a.email)}</Chip>
@@ -495,19 +545,19 @@ export function InboxList({ selected, routed, picked = null, onPicked, listBesid
           {KIND_FILTERS.map((k) => (
             <Chip key={k.key} on={kind === k.key} onClick={() => pickKind(k.key)}>{k.label}</Chip>
           ))}
-          <button
-            type="button"
-            disabled={!openInView.length || picking}
-            title={scope ? t("inbox-inboxlist.clean_all_scope", { scope }) : undefined}
-            onClick={runBulk}
-            data-clean-all
-            className="ml-auto inline-flex h-7 items-center gap-1.5 rounded-control bg-surface px-2.5 text-label whitespace-nowrap text-ink-2 shadow-btn transition-colors duration-150 hover:bg-hover hover:text-ink disabled:pointer-events-none disabled:opacity-45 max-sm:hidden"
-          >
-            <Icon name="check" size={12} stroke={2.6} />
-            {t("inbox-inboxlist.clean_all")}
-            {scope && <span className="text-ink-3">{scope}</span>}
-          </button>
         </div>
+        <button
+          type="button"
+          disabled={!openInView.length || picking}
+          title={scope ? t("inbox-inboxlist.clean_all_scope", { scope }) : undefined}
+          onClick={runBulk}
+          data-clean-all
+          className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-control bg-surface px-2.5 text-label whitespace-nowrap text-ink-2 shadow-btn transition-colors duration-150 hover:bg-hover hover:text-ink disabled:pointer-events-none disabled:opacity-45 max-sm:hidden @max-[520px]/inbox-list:hidden"
+        >
+          <Icon name="check" size={12} stroke={2.6} />
+          {t("inbox-inboxlist.clean_all")}
+          {scope && <span className="text-ink-3">{scope}</span>}
+        </button>
         <IconButton icon="more" label={t("inbox-inboxlist.more")} onClick={more.open} active={Boolean(more.anchor)} />
         </div>
         {more.anchor && (
@@ -860,6 +910,7 @@ export async function markFromRow(it: InboxItem, done: boolean, touch = isNoHove
  * (#2059): with `pick` the row is a checkbox that picks it instead of opening it; `off`: it cannot be picked (a done item).
  */
 const ItemRow = memo(function ItemRow({ it, selected, showAccount, folder, onEdit, pick, picked = false, off = false }: { it: InboxItem; selected: boolean; showAccount: boolean; /** the folder picked; undefined: folders are not shown */ folder?: string; onEdit: (it: InboxItem) => void; pick?: (it: InboxItem) => void; picked?: boolean; off?: boolean }) {
+  const readOnly = useItemReadOnly(it);
   const to = itemRoute(it);
   const done = isDone(it);
   const label = kindLabel(it);
@@ -885,6 +936,7 @@ const ItemRow = memo(function ItemRow({ it, selected, showAccount, folder, onEdi
             <span className={cx("truncate text-[13.5px] group-focus-within:pr-11 group-hover:pr-11", done ? "text-ink-2" : "font-semibold text-ink")}>{translated?.subject || it.title}</span>
             {translated && <span role="img" aria-label={t("inbox-inboxlist.translated")} title={t("inbox-inboxlist.translated")} className="shrink-0 text-ink-3"><Icon name="translate" size={12} /></span>}
             {label && <Tag urgent={labelIsUrgent(it)}>{label}</Tag>}
+            {it.todo_forward && <Tag urgent={it.todo_forward.status === "fallback" || it.todo_forward.status === "failed"}><span data-inbox-forward-badge={it.todo_forward.status}>{todoForwardLabel(it.todo_forward.status)}</span></Tag>}
             <span className="flex-1" />
             <span className={cx("shrink-0 text-[11.5px] text-ink-3 tabular-nums group-focus-within:invisible group-hover:invisible", TOUCH_DONE_ROOM)}>{shortTime(it.updated_at)}</span>
           </span>
@@ -899,7 +951,7 @@ const ItemRow = memo(function ItemRow({ it, selected, showAccount, folder, onEdi
               ) : (
                 <span className="line-clamp-2 text-[12.5px] leading-[1.5] break-words text-ink-2">{from}</span>
               )}
-              {it.merged_from && it.merged_from.length > 0 && <span className="mt-0.5 block truncate text-[11px] text-ink-3" data-merged>{t("inbox-inboxlist.merged_from", { count: it.merged_from.length + 1 })}</span>}
+              {it.merged_from && it.merged_from.length > 0 && <span className="mt-0.5 block truncate text-label text-ink-3" data-merged>{t("inbox-inboxlist.merged_from", { count: it.merged_from.length + 1 })}</span>}
               {showAccount && !isLark(it) && !it.connector && <span className="mt-0.5 block truncate text-[11px] text-ink-3">{it.account_name}</span>}
               {folder !== undefined && <FolderLine it={it} folder={folder} />}
             </span>
@@ -911,8 +963,8 @@ const ItemRow = memo(function ItemRow({ it, selected, showAccount, folder, onEdi
   return (
     // selecting: a click anywhere on the card picks it (its draft and the rest under it are inert, so clicks there land here)
     <div data-item={it.id} data-manager={it.manager} data-picked={picked || undefined} onClick={pick ? () => pick(it) : undefined} {...(picking ? {} : contextMenuProps((at) => setMenu(at)))}
-      className={cx("group relative scroll-my-3 rounded-[14px] transition-[background-color,box-shadow,opacity] duration-150 has-[a:focus-visible]:shadow-[0_0_0_1.5px_var(--accent)]", !off && "hover:bg-inset", off && "opacity-45",
-        picked ? "bg-accent-tint shadow-[0_0_0_1.5px_var(--accent)]" : selected && !picking ? "bg-inset shadow-[0_0_0_1.5px_var(--accent)]" : "bg-surface shadow-card")}>
+      className={cx("group relative scroll-my-3 rounded-[14px] transition-[background-color,box-shadow,opacity] duration-150 has-[a:focus-visible]:shadow-[0_0_0_1.5px_var(--accent)]", off && "opacity-45",
+        picked ? "bg-accent-tint shadow-[0_0_0_1.5px_var(--accent)]" : selected && !picking ? "bg-surface shadow-[0_0_0_1.5px_var(--accent)]" : cx("bg-surface shadow-card", !off && "card-interactive"))}>
       {pick ? (
         <button type="button" role="checkbox" aria-checked={picked} className="flex w-full gap-3 rounded-[14px] p-3 text-left outline-offset-[-2px]">{head}</button>
       ) : off ? (
@@ -930,7 +982,7 @@ const ItemRow = memo(function ItemRow({ it, selected, showAccount, folder, onEdi
               {rows.length > 1 && <span className="shrink-0 text-ink-3">{t("inbox-inboxlist.more_rows", { count: rows.length - 1 })}</span>}
             </div>
           )}
-          {draft && <DraftCard it={it} onEdit={() => onEdit(it)} onSend={(text, changes) => void sendReply(it, text, changes)} />}
+          {draft && <DraftCard it={it} onEdit={() => onEdit(it)} onSend={(text, changes) => { if (!readOnly) void sendReply(it, text, changes); }} />}
           {working && <AgentWorking it={it} />}
           {mark}
         </div>
@@ -1078,13 +1130,13 @@ const IX_GLYPH: Record<Interaction["kind"], GlyphName | "list" | "terminal"> = {
 const AgentRow = memo(function AgentRow({ ix, off = false }: { ix: Interaction; off?: boolean }) {
   // a child session's card opens its parent's page, where it is answered (#5120); a side session's its parent's page
   // with the side shown (#7944, requestRoute)
-  const to = useStore((s) => ix.session_id === "" || ix.folded_as === "side" || ix.folded_side ? requestRoute(ix) : conversationRoute(ix.machine_id, requestHome(ix), s.sessions, s.assistant));
+  const to = useStore((s) => ix.session_id === "" || ix.folded_as === "side" || ix.folded_side ? requestRoute(ix) : conversationRoute(requestHomeMachine(ix), requestHome(ix), s.sessions, s.assistant));
   const persona = to.name === "persona";
   const where = useStore((s) => (persona ? "Persona" : machineWithHub(ix.machine_id, s.machines)));
   const ask = interactionAsk(ix);
   const glyph = IX_GLYPH[ix.kind];
   return (
-    <a href={href(to)} onClick={(e) => onLinkClick(e, to)} inert={off} className={cx("flex gap-3 rounded-[14px] bg-surface p-3 shadow-card transition-[background-color,opacity] duration-150 hover:bg-inset", off && "opacity-45")}>
+    <a href={href(to)} onClick={(e) => onLinkClick(e, to)} inert={off} className={cx("flex gap-3 rounded-[14px] bg-surface p-3 shadow-card transition-opacity duration-150", off ? "opacity-45" : "card-interactive")}>
       <span className="flex size-10 shrink-0 items-center justify-center rounded-[10px] bg-field text-attention">
         {glyph === "list" || glyph === "terminal" ? <Icon name={glyph} size={18} stroke={2} /> : <Glyph name={glyph} size={18} stroke={2} />}
       </span>

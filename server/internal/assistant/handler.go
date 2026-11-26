@@ -5,8 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/nwverse/persona/server/internal/assistantwire"
-	"github.com/nwverse/persona/server/internal/feishubot"
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -80,7 +79,7 @@ type Handler interface {
 	// FeishuMessage is feishu.message: the owner's message to the Feishu bot.
 	FeishuMessage(ctx context.Context, p FeishuMessage) error
 	// FeishuAction is feishu.card_action: the owner pressed one of the bot's cards.
-	FeishuAction(ctx context.Context, p FeishuAction) (*feishubot.CardResponse, error)
+	FeishuAction(ctx context.Context, p FeishuAction) (*botcard.CardResponse, error)
 	// FeishuView is feishu.view: what the bot's settings page shows of its chat.
 	FeishuView(ctx context.Context) FeishuView
 	// FeishuOwner is feishu.owner: the bot was paired or unpaired.
@@ -94,19 +93,13 @@ type Handler interface {
 	SessionDelta(ctx context.Context, p SessionDelta)
 	// ChannelNoted is channels.noted: a channel's message went in through the apps' routes.
 	ChannelNoted(ctx context.Context, p ChannelNoted)
-	// The inbox (inbox.go).
-	// InboxCollected is inbox.collected: what one collection of the sources read.
-	InboxCollected(ctx context.Context, r assistantwire.InboxRound) error
-	// InboxItemJSON is inbox.item: one item as it is stored.
-	InboxItemJSON(ctx context.Context, id string) (json.RawMessage, bool)
-	// InboxForget is inbox.forget: a source's data was deleted; its items go.
-	InboxForget(ctx context.Context, source string) (int, error)
-	// InboxRepoMutes is inbox.repo_mutes: a source's muted repositories (set first when asked).
-	InboxRepoMutes(ctx context.Context, p assistantwire.InboxRepoMutes) ([]string, error)
 }
 
 // roleFull is a device that may do everything (an answer-only watch may not).
 const roleFull = "full"
+
+// roleAnswer is the watch's answer-only device credential.
+const roleAnswer = "answer"
 
 // roleExtension is an extension's token (ExtensionHeader says which).
 const roleExtension = "extension"

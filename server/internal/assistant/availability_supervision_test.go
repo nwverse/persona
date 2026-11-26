@@ -106,11 +106,14 @@ func TestSummarizeSupervision(t *testing.T) {
 // for it, else what its purpose is set to. A round's event carries the model, the effort and the output count too.
 func TestTaskReviewIsRecordedByTheSupervisorsModel(t *testing.T) {
 	s, f, todo := newBackgroundService(t)
+	setSettings(t, s, func(v *Settings) { v.BackgroundSupervisor, v.BackgroundSupervisorMachineID = "bg1", "server" })
+	f.known["bg1"] = true
+	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{SessionID: "bg1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, "做完了", 0)
-	bg := backgroundID(t, s)
-	listBackground(t, s, f, bg)
-	waitFor(t, "the background supervisor's message", func() bool { return len(f.noticesTo(bg)) == 1 })
+	bg := "bg1"
+	waitFor(t, "main's supervision message", func() bool { return len(f.noticesTo("conv1")) == 1 })
 	reviews := func() []map[string]any {
 		var out []map[string]any
 		for _, e := range testEvents(s) {
@@ -130,6 +133,7 @@ func TestTaskReviewIsRecordedByTheSupervisorsModel(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	tellLegacyBackground(t, s, f, todo.ID, bg)
 	review(bg, reviewRework)
 	review("conv1", reviewRework)
 	review(bg, reviewAccepted)
@@ -297,10 +301,9 @@ func (m planUpdateStore) UpdateTaskPlan(_ context.Context, id, from, to string, 
 	return true, nil
 }
 
-// superviseRun is one run of the background supervisor's work on a fresh manager, with patch saved for its model
-// purpose first ("" for none): what it was started and sent with, what its reviews answered and wrote, and how the
-// task ended. models are the model, effort and launcher its start and each message to it carried, taken out of the
-// rest with model_fingerprint, the binding's own hash (models_resolve.go modelBindingFingerprint).
+// superviseRun is main's task flow plus one legacy background supervisor's work on a fresh manager, with patch saved
+// for that background purpose first ("" for none). No background conversation is started for the new task (#5732).
+// models are the model, effort and launcher each legacy background message carried, including model_fingerprint.
 func superviseRun(t *testing.T, patch string) (run map[string]any, models []map[string]any) {
 	t.Helper()
 	s, f, todo := newSupervisedServiceOn(t, planUpdateStore{&planMemStore{memStore: &memStore{}, plans: map[string]db.TaskPlanRow{}}})
@@ -314,11 +317,16 @@ func superviseRun(t *testing.T, patch string) (run map[string]any, models []map[
 			t.Fatalf("saving %s: %d %s", patch, r.Code, r.Body.String())
 		}
 	}
+	setSettings(t, s, func(v *Settings) { v.BackgroundSupervisor, v.BackgroundSupervisorMachineID = "bg1", "server" })
+	f.known["bg1"] = true
+	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
+		proto.Session{SessionID: "bg1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, "做完了，PR https://github.com/o/r/pull/7 已合并", 0)
-	bg := backgroundID(t, s)
-	listBackground(t, s, f, bg)
-	waitFor(t, "the background supervisor's message", func() bool { return len(f.noticesTo(bg)) == 1 })
+	bg := "bg1"
+	waitFor(t, "main's supervision message", func() bool { return len(f.noticesTo("conv1")) == 1 })
+	// A legacy background conversation may still finish work assigned to it; no new one is started (#5732).
+	tellLegacyBackground(t, s, f, todo.ID, bg)
 	plain := func(v string) string { return strings.ReplaceAll(strings.ReplaceAll(v, todo.ID, "<todo>"), bg, "<bg>") }
 	run = map[string]any{}
 	review := func(verdict, note string) {
@@ -340,7 +348,7 @@ func superviseRun(t *testing.T, patch string) (run map[string]any, models []map[
 	f.mu.Lock()
 	var sent []map[string]any
 	for _, a := range f.sends {
-		if id, _ := a["session_id"].(string); id == "" || id == bg { // its start, and the messages to it
+		if id, _ := a["session_id"].(string); id == bg { // messages to the legacy background supervisor
 			sent = append(sent, maps.Clone(a))
 		}
 	}
@@ -364,7 +372,11 @@ func superviseRun(t *testing.T, patch string) (run map[string]any, models []map[
 		run["sent "+string(rune('a'+i))] = plain(string(raw))
 	}
 	run["to the agent"] = sentToAgent(f)
-	run["to the main conversation"] = f.noticesTo("conv1")
+	var mainNotices []string
+	for _, n := range f.noticesTo("conv1") {
+		mainNotices = append(mainNotices, plain(n))
+	}
+	run["to the main conversation"] = mainNotices
 	cfg := s.settings(ctx)
 	run["routing"] = []any{s.ownSupervisor(cfg) == bg, s.isLeader(ctx, bg), slices.Contains(cfg.Leaders, bg), s.supervising(bg)}
 	done := todoNow(s, todo.ID)
@@ -396,7 +408,7 @@ func superviseRun(t *testing.T, patch string) (run map[string]any, models []map[
 func TestSwitchingTheSuperviseModelChangesOnlyTheModel(t *testing.T) {
 	inherit, base := superviseRun(t, "")
 	own, picked := superviseRun(t, `{"revision":0,"model":"another-model","effort":"low"}`)
-	if len(inherit["sent a"].(string)) == 0 || len(base) < 2 {
+	if len(inherit["sent a"].(string)) == 0 || len(base) == 0 {
 		t.Fatalf("the run sent nothing to compare: %v", inherit)
 	}
 	for _, k := range slices.Sorted(maps.Keys(own)) {
@@ -423,11 +435,11 @@ func TestSwitchingTheSuperviseModelChangesOnlyTheModel(t *testing.T) {
 	}
 }
 
-// The main chat's rule for a task's model (#5086) speaks of tiers and names no provider's model, and says what to do
-// when the tiers cannot be told apart.
+// The main chat's rule for a task's model (#5086) picks a preset by the kind of work, not by strength (#14700), names
+// no provider's model, and says what to do when no preset fits.
 func TestTaskModelRuleNamesNoModel(t *testing.T) {
 	md := prompts.RenderAssistantClaudeMD(prompts.AssistantClaudeMD{})
-	_, rest, ok := strings.Cut(md, "任务用哪一档模型")
+	_, rest, ok := strings.Cut(md, "任务用哪个 Agent 预设")
 	if !ok {
 		t.Fatal("CLAUDE.md has no rule for a task's model")
 	}
@@ -435,7 +447,7 @@ func TestTaskModelRuleNamesNoModel(t *testing.T) {
 	if !ok {
 		t.Fatal("the rule does not end with stating the choice in why")
 	}
-	for _, want := range []string{"低一档", "`medium`", "日常主力那一档", "最高一档", "先提高 `effort`", "`effort` 留空", "`tier`、`model`、`effort` 都留空", "而不是「模型设置」里 Agents 的默认", "永远优先"} {
+	for _, want := range []string{"按活的类型来选", "不按强弱排档", "`medium`", "先提高 `effort`", "`effort` 留空", "`tier`、`model`、`effort` 都留空", "而不是「模型设置」里 Agents 的默认", "永远优先"} {
 		if !strings.Contains(rule, want) {
 			t.Errorf("the rule lacks %q", want)
 		}

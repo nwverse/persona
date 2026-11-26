@@ -34,7 +34,7 @@ func setupCounted(ev setupEvidence) map[string]setupNumber {
 // boxScope puts every to-do in /code/app on box.
 func boxScope(string) (string, string, bool) { return "box", "/code/app", true }
 
-func TestSetupCountLeadersIsTheMainChatsSupervisionRounds(t *testing.T) {
+func TestSetupCountRetiredLeaderRecommendation(t *testing.T) {
 	round := func(daysAgo float64, source string, main bool, seconds any) db.WorkEvent {
 		return setupEvent(roundEvent, daysAgo, map[string]any{"source": source, "main": main, "seconds": seconds})
 	}
@@ -46,8 +46,8 @@ func TestSetupCountLeadersIsTheMainChatsSupervisionRounds(t *testing.T) {
 		round(3, proto.SourceSupervision, false, 90.0),
 		round(8, proto.SourceSupervision, true, 90.0), // before the window
 	}})
-	if c := got[setupLeaders]; c.n != 2 || c.seconds != 180 {
-		t.Fatalf("leaders: %+v", c)
+	if c := got[setupLeaders]; c.n != 0 || c.seconds != 0 {
+		t.Fatalf("retired leaders recommendation still counts main's required rounds: %+v", c)
 	}
 }
 
@@ -194,7 +194,7 @@ func setupReviewed(id string, daysAgo float64, change func(*Todo)) Todo {
 	return t
 }
 
-func TestSetupCountSampleIsFirstReviewsTheJudgeCouldHaveMade(t *testing.T) {
+func TestSetupCountRetiredReviewSampleRecommendation(t *testing.T) {
 	reopened := setupAt(1)
 	got := setupCounted(setupEvidence{todos: []Todo{
 		setupReviewed("t1", 1, nil),
@@ -215,8 +215,8 @@ func TestSetupCountSampleIsFirstReviewsTheJudgeCouldHaveMade(t *testing.T) {
 		setupReviewed("t13", 1, func(t *Todo) { t.Supervision.DoneWhen, t.Supervision.Reviews[0].Checks = nil, nil }),
 		{ID: "t14", Title: "unsupervised", Origin: "conv1"},
 	}})
-	if c := got[setupSample]; c.n != 2 {
-		t.Fatalf("review sample: %+v", c)
+	if c := got[setupSample]; c.n != 0 {
+		t.Fatalf("retired review-sample recommendation still counts required main reviews: %+v", c)
 	}
 }
 
@@ -234,13 +234,11 @@ func TestSetupCountIndependentReviewIsReworksAfterTheJudgesDone(t *testing.T) {
 
 // A mechanism that is on, or whose count is under its threshold, is never named.
 func TestSetupSuggestsOnlyWhatIsOffAndCounted(t *testing.T) {
-	off := setupState{samplePercent: 100, triage: TriageSwitches{Enabled: true}, triageKnown: true, helloKnown: true}
+	off := setupState{triage: TriageSwitches{Enabled: true}, triageKnown: true, helloKnown: true}
 	for _, id := range setupOrder {
 		enough := setupNumber{n: setupMin}
 		under := setupNumber{}
 		switch id {
-		case setupLeaders:
-			enough.n = setupLeaderMin
 		case setupSupervisorTier: // its own number: settled acceptances, with a lower tier known (setup_suggest_tier_test.go)
 			enough = setupNumber{n: setupTierMin, lower: "mid-model"}
 			under.lower = enough.lower
@@ -252,12 +250,17 @@ func TestSetupSuggestsOnlyWhatIsOffAndCounted(t *testing.T) {
 			t.Errorf("%s: suggested under its threshold", id)
 		}
 	}
-	on := setupState{leaders: true, delegate: true, review: true, samplePercent: 20, triageKnown: true, helloKnown: true,
+	on := setupState{delegate: true, review: true, triageKnown: true, helloKnown: true,
 		triage: TriageSwitches{Enabled: true, Decide: true, AutoContinue: true, Wake: true}}
 	many := setupNumber{n: 100}
 	for _, id := range []string{setupLeaders, setupDelegate, setupReview, setupSample, setupDecide, setupAutoContinue, setupWake} {
 		if on.suggests(id, many) {
 			t.Errorf("%s: suggested while it is on", id)
+		}
+	}
+	for _, id := range []string{setupLeaders, setupSample} {
+		if off.suggests(id, many) || on.suggests(id, many) {
+			t.Errorf("%s: retired recommendation returned", id)
 		}
 	}
 	// The triage's actions do nothing without the triage, and are not guessed at when its switches cannot be read.
@@ -270,7 +273,7 @@ func TestSetupSuggestsOnlyWhatIsOffAndCounted(t *testing.T) {
 	}
 	// A hello that could not be read does not say delegate and the independent review are off.
 	for _, id := range []string{setupDelegate, setupReview} {
-		if (setupState{samplePercent: 100}).suggests(id, many) {
+		if (setupState{}).suggests(id, many) {
 			t.Errorf("%s: suggested without the hub's hello", id)
 		}
 	}
@@ -375,10 +378,6 @@ func TestSetupBlockLeavesOutWhatIsOn(t *testing.T) {
 	s.rules.evidence = ev
 	now := time.Now()
 	setupDelegateEvidence(ev, now, 4)
-	for i := range setupLeaderMin {
-		ev.events = append(ev.events, db.WorkEvent{At: now.Add(-time.Duration(i+1) * time.Hour), Kind: roundEvent,
-			Detail: map[string]any{"source": proto.SourceSupervision, "main": true, "seconds": 90.0}})
-	}
 	for i := range 3 {
 		at := now.Add(-time.Duration(i+1) * time.Hour)
 		ev.events = append(ev.events,
@@ -388,20 +387,16 @@ func TestSetupBlockLeavesOutWhatIsOn(t *testing.T) {
 	loc := s.location(ctx)
 
 	// Everything off, the triage itself off too: its actions cannot be counted on, the rest is named.
-	if got := setupIDs(s.setupFor(ctx, now, loc, i18n.En, testWeb)); !slices.Equal(got, []string{setupDelegate, setupLeaders, setupReview}) {
+	if got := setupIDs(s.setupFor(ctx, now, loc, i18n.En, testWeb)); !slices.Equal(got, []string{setupDelegate, setupReview}) {
 		t.Fatalf("all off: %v", got)
-	}
-	b := s.setupFor(ctx, now, loc, i18n.En, testWeb)
-	if sg := b.Suggestions[1]; sg.Count != setupLeaderMin || sg.Minutes != 15 || !strings.Contains(sg.Text, "15 min") {
-		t.Fatalf("leaders: %+v", sg)
 	}
 
 	// With the triage on and wake off, the hand resumes name wake, with the page Session triage is on.
 	if err := s.putTriageSwitches(ctx, TriageSwitches{Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
-	b = s.setupFor(ctx, now, loc, i18n.En, testWeb)
-	if got := setupIDs(b); !slices.Equal(got, []string{setupDelegate, setupWake, setupLeaders, setupReview}) {
+	b := s.setupFor(ctx, now, loc, i18n.En, testWeb)
+	if got := setupIDs(b); !slices.Equal(got, []string{setupDelegate, setupWake, setupReview}) {
 		t.Fatalf("triage on: %v", got)
 	}
 	if sg := b.Suggestions[1]; sg.Setting != "agents.triage.wake" || sg.Link != testWeb+"/settings?tab=persona" {
@@ -415,7 +410,6 @@ func TestSetupBlockLeavesOutWhatIsOn(t *testing.T) {
 	on := true
 	f.hello.Agents.Delegate.Enabled = &on
 	f.hello.Agents.Review.Launcher = "reviewer"
-	setSettings(t, s, func(v *Settings) { v.Leaders = []string{"lead1"} })
 	if err := s.putTriageSwitches(ctx, TriageSwitches{Enabled: true, Wake: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -449,18 +443,18 @@ func TestSetupBlockSwitchesNothingOn(t *testing.T) {
 		}
 		return out
 	}
-	before, puts := snapshot(), store.puts
+	before, puts := snapshot(), store.putCount()
 
 	b := s.setupFor(ctx, now, s.location(ctx), i18n.En, testWeb)
 	if got := setupIDs(b); !slices.Equal(got, []string{setupDelegate, setupAutoContinue}) {
 		t.Fatalf("block: %v", got)
 	}
-	if store.puts != puts {
-		t.Fatalf("computing the block wrote %d settings", store.puts-puts)
+	if after := store.putCount(); after != puts {
+		t.Fatalf("computing the block wrote %d settings", after-puts)
 	}
 	s.setupTold(b, now)
-	if store.puts != puts+1 {
-		t.Fatalf("telling the block wrote %d settings, want its own book only", store.puts-puts)
+	if after := store.putCount(); after != puts+1 {
+		t.Fatalf("telling the block wrote %d settings, want its own book only", after-puts)
 	}
 	after := snapshot()
 	if len(after) != len(before) {
@@ -604,13 +598,31 @@ func TestSetupLinesAreLocalized(t *testing.T) {
 			if strings.Contains(sg.Text, setupSettings[id]) != inFile || strings.Contains(strings.ToLower(sg.Text), "manager") {
 				t.Errorf("%s %s: raw setting names in %q", l, id, sg.Text)
 			}
-			if id == setupLeaders && !strings.Contains(sg.Text, "41") {
-				t.Errorf("%s leaders: no minutes in %q", l, sg.Text)
-			}
 			if seen[sg.Text] {
 				t.Errorf("%s %s: the same line as another mechanism", l, id)
 			}
 			seen[sg.Text] = true
+		}
+	}
+}
+
+// Retired ids keep accurate legacy copy: direct rendering cannot promise fewer main reviews or automatic closure.
+func TestSetupLinesDescribeCurrentSupervisorOwnership(t *testing.T) {
+	for _, tc := range []struct {
+		lang                  i18n.Lang
+		leaders, reviewSample string
+	}{
+		{i18n.En, "supervises the tasks it plans or starts", "not closed automatically"},
+		{i18n.ZhHans, "督办自己派出的任务", "不会自动关闭"},
+		{i18n.Ja, "自分で計画・開始したタスク", "自動ではクローズされず"},
+	} {
+		leaders := setupWord(tc.lang, "", setupLeaders, setupNumber{}).Text
+		sample := setupWord(tc.lang, "", setupSample, setupNumber{}).Text
+		if !strings.Contains(leaders, tc.leaders) || strings.Contains(leaders, "{") {
+			t.Errorf("%s leaders copy = %q", tc.lang, leaders)
+		}
+		if !strings.Contains(sample, tc.reviewSample) || !strings.Contains(sample, "task_review") || strings.Contains(sample, "{") {
+			t.Errorf("%s review-sample copy = %q", tc.lang, sample)
 		}
 	}
 }
@@ -621,36 +633,37 @@ func TestSetupBlockIsOnTheCardTheItemAndTheFacts(t *testing.T) {
 	e := newBriefEnv(t)
 	now := e.clk.Now()
 	f := e.s.briefFactsAt(context.Background(), now, "")
+	l := i18n.Lang(f.Lang)
 	plainCard, _, _ := e.s.briefCard(f, "Morning", "")
-	if strings.Contains(string(plainCard.JSON()), i18n.T(f.l, "assistant-setup_suggest.heading")) || f.body(e.s, "Morning").Setup != nil ||
-		strings.Contains(f.modelText(), "建议的设置") {
+	if strings.Contains(string(plainCard.JSON()), i18n.T(l, "assistant-setup_suggest.heading")) || e.s.briefBodyOf(f, "Morning").Setup != nil ||
+		strings.Contains(e.s.briefModelText(f), "建议的设置") {
 		t.Fatal("a briefing without a block shows one")
 	}
 
-	f.Setup = &setupBlock{Week: "2026-W46", Suggestions: []setupSuggestion{
-		setupWord(f.l, testWeb, setupDelegate, setupNumber{n: 4}), setupWord(f.l, testWeb, setupWake, setupNumber{n: 3})}}
+	f.Setup = toBriefSetup(&setupBlock{Week: "2026-W46", Suggestions: []setupSuggestion{
+		setupWord(l, testWeb, setupDelegate, setupNumber{n: 4}), setupWord(l, testWeb, setupWake, setupNumber{n: 3})}})
 	card, fallback, _ := e.s.briefCard(f, "Morning", "")
 	raw := string(card.JSON())
-	if !strings.Contains(raw, i18n.T(f.l, "assistant-setup_suggest.heading")) || !strings.Contains(fallback, f.Setup.Suggestions[0].Text) ||
-		!strings.Contains(fallback, f.Setup.Suggestions[1].Text) || !strings.Contains(fallback, i18n.T(f.l, "assistant-setup_suggest.intro")) {
+	if !strings.Contains(raw, i18n.T(l, "assistant-setup_suggest.heading")) || !strings.Contains(fallback, f.Setup.Suggestions[0].Text) ||
+		!strings.Contains(fallback, f.Setup.Suggestions[1].Text) || !strings.Contains(fallback, i18n.T(l, "assistant-setup_suggest.intro")) {
 		t.Fatalf("card without the block: %s\n%s", raw, fallback)
 	}
 	if !strings.Contains(raw, testWeb+"/settings?tab=persona") {
 		t.Fatalf("card without the settings link: %s", raw)
 	}
-	body := f.body(e.s, "Morning")
+	body := e.s.briefBodyOf(f, "Morning")
 	if len(body.Setup) != 2 || body.Setup[0].ID != setupDelegate || body.Setup[0].Count != 4 || body.Setup[1].Link == "" {
 		t.Fatalf("brief item: %+v", body.Setup)
 	}
-	text := f.modelText()
+	text := e.s.briefModelText(f)
 	if !strings.Contains(text, f.Setup.Suggestions[0].Text) || !strings.Contains(text, f.Setup.Suggestions[1].Text) || !strings.Contains(text, "不要替用户打开") {
 		t.Fatalf("model facts: %s", text)
 	}
 	// A block that names nothing adds no section anywhere.
-	f.Setup = &setupBlock{Week: "2026-W46"}
+	f.Setup = toBriefSetup(&setupBlock{Week: "2026-W46"})
 	empty, _, _ := e.s.briefCard(f, "Morning", "")
-	if strings.Contains(string(empty.JSON()), i18n.T(f.l, "assistant-setup_suggest.heading")) || f.body(e.s, "Morning").Setup != nil ||
-		strings.Contains(f.modelText(), "建议的设置") {
+	if strings.Contains(string(empty.JSON()), i18n.T(l, "assistant-setup_suggest.heading")) || e.s.briefBodyOf(f, "Morning").Setup != nil ||
+		strings.Contains(e.s.briefModelText(f), "建议的设置") {
 		t.Fatal("an empty block shows a section")
 	}
 }
@@ -659,6 +672,7 @@ func TestSetupBlockIsOnTheCardTheItemAndTheFacts(t *testing.T) {
 // conversation open, it is muted, the task pushes only what its runs send); the push itself marks nothing, and a run
 // that failed leaves the block for its retry or the next briefing.
 func TestSetupBlockIsMarkedWhenTheRunEndsNotWhenItIsPushed(t *testing.T) {
+	needsBriefingModule(t)
 	// The bubble's fixed clock keeps the next briefing in the same ISO week without expiring the run.
 	synctest.Test(t, func(t *testing.T) {
 		ctx := context.Background()
@@ -669,7 +683,7 @@ func TestSetupBlockIsMarkedWhenTheRunEndsNotWhenItIsPushed(t *testing.T) {
 		if len(setupIDs(b)) != 1 {
 			t.Fatalf("block: %+v", b)
 		}
-		s.brief.bySession = map[string]*briefRun{"sess1": {facts: &briefFacts{At: now, l: i18n.En, loc: s.location(ctx), Setup: b}}}
+		s.briefSetSessionRun("sess1", &briefRun{Facts: &briefFacts{At: now, Lang: string(i18n.En), Loc: s.location(ctx), Setup: toBriefSetup(b)}})
 		if s.briefPush("sess1", i18n.En, true) == "" {
 			t.Fatal("no push text")
 		}
@@ -693,6 +707,7 @@ func TestSetupBlockIsMarkedWhenTheRunEndsNotWhenItIsPushed(t *testing.T) {
 // The watcher of a scheduled run tells the block when the run's turn ends normally with no push at all, and not when
 // the turn ends in an error.
 func TestScheduledRunEndTellsTheSetupBlock(t *testing.T) {
+	needsBriefingModule(t)
 	for _, failed := range []bool{false, true} {
 		synctest.Test(t, func(t *testing.T) {
 			f := newFakeHub().withMachine()
@@ -703,7 +718,7 @@ func TestScheduledRunEndTellsTheSetupBlock(t *testing.T) {
 				MachineID: "server", Facts: true}
 			setTasks(s, task)
 			block := &setupBlock{Week: "2026-W46", Suggestions: []setupSuggestion{{ID: setupDelegate, Count: 4, Text: "line"}}}
-			s.brief.bySession = map[string]*briefRun{"s1": {facts: &briefFacts{At: time.Now(), l: i18n.En, loc: time.UTC, Setup: block}}}
+			s.briefSetSessionRun("s1", &briefRun{Facts: &briefFacts{At: time.Now(), Lang: string(i18n.En), Loc: time.UTC, Setup: toBriefSetup(block)}})
 			f.items = []proto.Item{{ID: "ask", Role: "user", Kind: proto.KindText, Text: "⏰ Brief me"}}
 			f.setSessions("server", proto.Session{SessionID: "s1", Status: proto.StatusWorking, State: proto.StateWorking, Assistant: true})
 			run := ScheduleRun{RefID: task.ID, Status: runOK, SessionID: "s1", Retried: true}
@@ -741,7 +756,7 @@ func TestScheduledRunEndTellsTheSetupBlock(t *testing.T) {
 func TestGoldenBriefFactsSetup(t *testing.T) {
 	lines := []string{
 		setupWord(i18n.ZhHans, "", setupDelegate, setupNumber{n: 4}).Text,
-		setupWord(i18n.ZhHans, "", setupLeaders, setupNumber{n: 12, seconds: 31 * 60}).Text,
+		setupWord(i18n.ZhHans, "", setupWake, setupNumber{n: 12}).Text,
 		setupWord(i18n.ZhHans, "", setupSupervisorTier, setupNumber{n: 24, reopened: 1, model: "big-model", lower: "mid-model"}).Text,
 	}
 	golden(t, "routine_facts.setup", prompts.RenderBriefFacts(prompts.BriefFacts{Hours: 12, Setup: lines}))

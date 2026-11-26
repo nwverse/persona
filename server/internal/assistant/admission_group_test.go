@@ -215,6 +215,7 @@ func pastBounds(t *testing.T, s *Service, planID string, ago time.Duration) {
 func TestAdmissionQueueWaitsOnFullLauncherGroupPastTheBounds(t *testing.T) {
 	s, f, d := admissionHub(t)
 	p := fullPoolQueued(t, s, d)
+	checkPlacementGolden(t, p.Tasks[0].Placement, "v1 enforce busy ->  (assistant-tasks.admission_launcher_group_full) | busy assistant-tasks.admission_launcher_group_full")
 	pastBounds(t, s, p.ID, 3*admissionQueueMaxWait)
 	s.sweepAdmissionQueue(context.Background())
 	waitFor(t, "the over-bounds group wait to be retried and queued again", func() bool {
@@ -273,7 +274,7 @@ func TestAdmissionQueueOtherLinesKeepTheirBoundsWithGroups(t *testing.T) {
 // The queue record lives in the plan, so a restarted hub (a fresh service on the same database, with empty claim books)
 // still waits on the group past the bounds and starts the task once there is room.
 func TestAdmissionQueueGroupWaitSurvivesRestart(t *testing.T) {
-	url := newDatabase(t)
+	url := newMigratedDatabase(t, db.ManagerSet)
 	database, err := db.Open(context.Background(), url, db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)

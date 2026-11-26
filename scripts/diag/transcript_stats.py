@@ -72,20 +72,20 @@ def collect(dirs):
             "kinds": kinds, "versions": versions}, where
 
 
-def read_baseline(path):
+def read_snapshot(path):
     with open(path, encoding="utf-8") as stream:
-        baseline = json.load(stream)
+        snapshot = json.load(stream)
 
     def count(value):
         return type(value) is int and value >= 0
 
-    if (not isinstance(baseline, dict) or type(baseline.get("schema_version")) is not int
-            or baseline["schema_version"] != SNAPSHOT_VERSION
-            or not all(count(baseline.get(key)) for key in ("files", "lines"))
-            or not all(isinstance(baseline.get(key), dict) and all(count(value) for value in baseline[key].values())
+    if (not isinstance(snapshot, dict) or type(snapshot.get("schema_version")) is not int
+            or snapshot["schema_version"] != SNAPSHOT_VERSION
+            or not all(count(snapshot.get(key)) for key in ("files", "lines"))
+            or not all(isinstance(snapshot.get(key), dict) and all(count(value) for value in snapshot[key].values())
                        for key in ("kinds", "versions"))):
         raise ValueError(f"expected a version {SNAPSHOT_VERSION} transcript statistics snapshot with nonnegative counts")
-    return baseline
+    return snapshot
 
 
 def print_changes(baseline, current):
@@ -114,12 +114,23 @@ def main():
     output = parser.add_mutually_exclusive_group()
     output.add_argument("--json", action="store_true", help="write a baseline of counts without sample paths")
     output.add_argument("--compare", metavar="BASELINE", help="compare the current counts with a saved JSON baseline")
+    parser.add_argument("--against", metavar="SNAPSHOT",
+                        help="compare with a second saved JSON snapshot instead of scanning (requires --compare)")
     args = parser.parse_args()
+    if args.against is not None and (args.compare is None or args.dirs):
+        parser.error("--against requires --compare and no transcript directories")
     if args.compare is not None:
         try:
-            baseline = read_baseline(args.compare)
+            baseline = read_snapshot(args.compare)
         except (OSError, ValueError) as error:
             parser.error(f"cannot read baseline: {error}")
+        if args.against is not None:
+            try:
+                current = read_snapshot(args.against)
+            except (OSError, ValueError) as error:
+                parser.error(f"cannot read comparison snapshot: {error}")
+            print_changes(baseline, current)
+            return
     dirs = args.dirs or ["~/.claude/projects", os.path.join(os.environ.get("CLAUDE_CONFIG_DIR", "~/.claude"), "projects"),
                          "~/.codex/sessions"]
     snapshot, where = collect(dirs)

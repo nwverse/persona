@@ -81,6 +81,16 @@ class ModelsTest {
         assertEquals(java.time.Instant.parse("2026-10-31T05:58:40.205893083Z"), parseTime("2026-10-31T13:58:40.205893083+08:00"))
         assertEquals(java.time.Instant.parse("2026-10-31T05:58:40.205893083Z"), parseTime("2026-10-31T05:58:40.205893083Z"))
         assertNull(parseTime("not a time"))
+        // Fast-path edge cases: negative & sub-hour offsets, leap years, non-leap Feb 29, lowercase t/z, fractional lengths, 2000 boundary.
+        assertEquals(java.time.Instant.parse("2024-02-29T23:59:59Z"), parseTime("2024-02-29T23:59:59Z"))
+        assertEquals(java.time.Instant.parse("2000-02-29T00:00:00Z"), parseTime("2000-02-29t00:00:00z"))
+        assertNull(parseTime("2025-02-29T00:00:00Z"))
+        assertNull(parseTime("2100-02-29T00:00:00Z"))
+        assertEquals(java.time.Instant.parse("2026-11-02T14:00:00.123456Z"), parseTime("2026-11-02T08:30:00.123456-05:30"))
+        assertEquals(java.time.Instant.parse("2000-01-01T00:00:00Z"), parseTime("2000-01-01T08:00:00+08:00"))
+        assertNull(parseTime("2000-01-01T07:59:59+08:00"))
+        assertNull(parseTime("2026-13-02T08:30:00Z"))
+        assertNull(parseTime("2026-11-02T08:30:00+25:00"))
     }
 
     @Test fun resolutionOmitsUnsetFields() {
@@ -125,6 +135,32 @@ class ModelsTest {
         assertEquals(said, JsonCodec.decodeFromString<SessionCapabilities>(encoded))
     }
 
+    @Test fun codexTakeoverCapabilityAndDtosDecodeSafelyAndRoundTrip() {
+        val withTakeover = JsonCodec.decodeFromString<SessionCapabilities>(
+            """{"read":true,"send":false,"takeover":{"running":true,"can_resume":false,"reason":"encrypted_context"}}""",
+        )
+        assertTrue(withTakeover.read && !withTakeover.send)
+        assertEquals(CodexTakeoverCapability(running = true, canResume = false, reason = "encrypted_context"), withTakeover.takeover)
+        val roundTripped = JsonCodec.decodeFromString<SessionCapabilities>(JsonCodec.encodeToString(withTakeover))
+        assertEquals(withTakeover, roundTripped)
+
+        // Malformed takeover drops only itself without discarding sibling capabilities.
+        val malformed = JsonCodec.decodeFromString<SessionCapabilities>("""{"read":true,"takeover":"bad"}""")
+        assertEquals(SessionCapabilities(read = true, takeover = null), malformed)
+
+        // Older hubs omit takeover.
+        val older = JsonCodec.decodeFromString<SessionCapabilities>("""{"read":true}""")
+        assertNull(older.takeover)
+
+        val info = JsonCodec.decodeFromString<CodexTakeoverInfo>(
+            """{"running":false,"can_resume":true,"token":"tok-1","cwd":"/work","transcript_path":"/tmp/t","continuation_prompt":"Continue"}""",
+        )
+        assertEquals(CodexTakeoverInfo(running = false, canResume = true, token = "tok-1", cwd = "/work", transcriptPath = "/tmp/t", continuationPrompt = "Continue"), info)
+        assertEquals("""{"token":"tok-1","confirm_stop":true}""", JsonCodec.encodeToString(CodexTakeoverRequest("tok-1", confirmStop = true)))
+        val response = JsonCodec.decodeFromString<CodexTakeoverResponse>("""{"session":{"machine_id":"m","session_id":"s","status":"working"}}""")
+        assertEquals(SessionKey("m", "s"), response.session.key)
+    }
+
     @Test fun agentLabelNamesEveryAgent() {
         fun label(json: String) = JsonCodec.decodeFromString<Session>("""{"session_id":"s",$json}""").agentLabel
         assertEquals("Claude", label(""""status":"idle""""))
@@ -150,7 +186,11 @@ class ModelsTest {
         }
         assertEquals("traex", builtIn.name)
         assertEquals("My CLI", builtIn.copy(displayName = "My CLI").title)
-        assertEquals("claude", builtIn.copy(name = "claude", agentType = "claude").title)
+        assertEquals("Claude Code", builtIn.copy(name = "claude", agentType = "claude").title)
+        assertEquals("Codex", builtIn.copy(name = "codex", agentType = "codex").title)
+        assertEquals("Claude Desktop", AgentLauncher(name = "claude-desktop", agentType = "claude").title)
+        assertEquals("Codex App", AgentLauncher(name = "codex-app", agentType = "codex").title)
+        assertEquals("Antigravity CLI", AgentLauncher(name = "agy", agentType = "agy").title)
         assertEquals("Custom Claude", HubLauncher(name = "traex", displayName = "Custom Claude").title)
     }
 
@@ -163,8 +203,8 @@ class ModelsTest {
         assertEquals("TRAE CLI", launcher.title)
         assertEquals("TRAE CLI", settings.title)
         assertEquals("My CLI", launcher.copy(displayName = "My CLI").title)
-        assertEquals("traex", launcher.copy(source = "persona").title)
-        assertEquals("traex", launcher.copy(baseUrl = null).title)
+        assertEquals("custom-cli", launcher.copy(name = "custom-cli", source = "persona").title)
+        assertEquals("TRAE CLI", launcher.copy(baseUrl = null).title)
     }
 
     @Test fun aPaseoProviderIsNamedByItsOwnNameNeverTheEngines() {
@@ -373,5 +413,27 @@ class ModelsTest {
             """{"id":"ix_malformed","kind":"permission","can_clarify":"yes"}""",
         )
         assertFalse(JsonCodec.encodeToString(malformed).contains("can_clarify"))
+    }
+
+    @Test fun noHandBackRoundTripsAndDefaultsFalseForOlderHubs() {
+        val headless = JsonCodec.decodeFromString<Interaction>(
+            """{"id":"ix_headless","machine_id":"computer","session_id":"chat","kind":"permission","no_hand_back":true}""",
+        )
+        assertTrue(headless.noHandBack)
+        val wire = JsonCodec.encodeToString(headless)
+        assertTrue(wire, wire.contains(""""no_hand_back":true"""))
+        assertEquals(headless, JsonCodec.decodeFromString<Interaction>(wire))
+
+        val legacy = JsonCodec.decodeFromString<Interaction>("""{"id":"ix_legacy","kind":"permission"}""")
+        assertFalse(legacy.noHandBack)
+        val legacyWire = JsonCodec.encodeToString(legacy)
+        assertFalse(legacyWire, legacyWire.contains("no_hand_back"))
+        assertEquals(legacy, JsonCodec.decodeFromString<Interaction>(legacyWire))
+
+        val malformed = JsonCodec.decodeFromString<Interaction>(
+            """{"id":"ix_malformed_hb","kind":"permission","no_hand_back":"yes"}""",
+        )
+        assertFalse(malformed.noHandBack)
+        assertFalse(JsonCodec.encodeToString(malformed).contains("no_hand_back"))
     }
 }

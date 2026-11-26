@@ -17,7 +17,7 @@ import { basename } from 'node:path'
 import { readFileSync, statSync } from 'node:fs'
 import { createRuntime, installCurrent, interactionId, light, page, RpcError, snippet, summaryOf, verifyPackage } from '../../runtime-sdk/index.js'
 import { a2aTools } from '../../runtime-sdk/lib/a2a.js'
-import { ALLOW_ENTRY, alwaysAllowed, branchItems, branchKey, entryItems, firstText, HOST_ENTRY, imageOf, lastHost, lastText, partialText, toolInput, toolName } from './map.js'
+import { ALLOW_ENTRY, alwaysAllowed, branchItems, branchKey, callName, entryItems, firstText, HOST_ENTRY, imageOf, lastHost, lastText, partialText, toolInput, toolName } from './map.js'
 
 export const RUNTIME_VERSION = '0.4.0'
 const DISK_EVERY = 30_000 // ms: list the sessions on disk at most this often (pi-web)
@@ -53,11 +53,14 @@ const BROWSERS_EVERY = 10_000 // ms: how often pi-web is asked which sessions a 
  *   agent: the agent this host serves (pi; omp for the pi fork of the same extension API). name: the agent's name in
  *   the apps. instancePrefix: the `<prefix>-<pid>` the runtime and, when instance is not given, the instance take.
  *   interactionPrefix: what a card's id starts with. resumeCommand: how its terminal resumes a session on disk.
+ *   settleEvents: which events end a turn for this agent (pi's agent_settled, which also covers its automatic retry,
+ *   compaction and queued continuation; omp's pi compatibility layer dispatches only the loop's agent_end).
  *   interruptSettleMs: how long an interrupt waits for the turn to end (tests).
  */
 export function createPiHost(deps, options = {}) {
   const web = deps.web
   const agent = options.agent ?? 'pi'
+  const settleEvents = options.settleEvents ?? ['agent_settled']
   const instancePrefix = options.instancePrefix ?? 'pi'
   const interactionPrefix = options.interactionPrefix ?? 'pi'
   // --approve: the resume runs in a herdr tab nobody watches, where pi's project Trust prompt would hold it (#9462).
@@ -79,6 +82,9 @@ export function createPiHost(deps, options = {}) {
   let installing = false
   let retired = false // stopped to hand this process over to a new version
   let idleTimer
+  let updateRetry
+  let updateRetryHash = ''
+  let updateOfferHash = ''
   const settleMs = options.interruptSettleMs ?? INTERRUPT_SETTLE
   // pi-web: the sessions a browser has open (its event streams), as its debug snapshot said last; undefined: not known.
   let browsers = { at: 0, open: undefined, asking: undefined }
@@ -112,7 +118,7 @@ export function createPiHost(deps, options = {}) {
     log,
     connect: deps.connect,
     instance: options.instance ?? (options.instancePrefix ? `${instancePrefix}-${pid}` : undefined),
-    ...(update ? { package: { name: update.name, hash: update.hash }, onUpdate: (offer) => void takeUpdate(offer) } : {}),
+    ...(update ? { package: { name: update.name, hash: update.hash }, onHello: helloUpdate, onUpdate: (offer) => void takeUpdate(offer) } : {}),
     retryMs: options.retryMs,
     pushDelayMs: options.pushDelayMs,
     // Listing sessions only on disk is safe only where the runtime running a session answers for it.
@@ -508,7 +514,10 @@ export function createPiHost(deps, options = {}) {
       track(ctx).running = true
       rt.sessionsChanged(0)
     })
-    pi.on('agent_settled', (_e, ctx) => {
+    // settleEvents: pi's agent_settled, or the agent's own word for a turn that is over (omp's agent_end; the events
+    // of an agent that dispatches more than one of them settle on the first, as the same turn's later ones change
+    // nothing).
+    for (const event of settleEvents) pi.on(event, (_e, ctx) => {
       const s = track(ctx)
       s.running = false
       wakeSettled(s)
@@ -600,7 +609,7 @@ export function createPiHost(deps, options = {}) {
     const askPhone = async () => {
       const res = await rt.ask({
         id: interactionId(interactionPrefix, s.id, 'permission', e.toolCallId), kind: 'permission', session_id: s.id,
-        tool_name: toolName(name), tool_use_id: e.toolCallId, tool_input: toolInput(name, input), summary,
+        tool_name: callName(name, input), tool_use_id: e.toolCallId, tool_input: toolInput(name, input), summary,
         // Offered only where it can be kept: the grant is written into the session (ALLOW_ENTRY).
         ...(typeof s.pi.appendEntry === 'function' ? { always_label: `本会话不再问 ${toolName(name)}` } : {}),
       }, { signal: ctx.signal })
@@ -645,14 +654,58 @@ export function createPiHost(deps, options = {}) {
     return ![...live.values()].some((s) => s.running) && !rt.busy()
   }
 
-  async function takeUpdate(offer) {
-    if (!update || installing || retired || offer?.name !== update.name || offer.hash === update.hash || bad.has(offer.hash)) return
+  function helloUpdate(res) {
+    const offer = res?.update
+    updateOfferHash = offer?.name === update.name && typeof offer.hash === 'string' && offer.hash !== update.hash ? offer.hash : ''
+    clearUpdateRetry()
+  }
+
+  function currentUpdate(offer) {
+    return !retired && started && rt.ready && offer?.hash === updateOfferHash
+  }
+
+  function clearUpdateRetry() {
+    clearTimeout(updateRetry)
+    updateRetry = undefined
+    updateRetryHash = ''
+  }
+
+  function retryUpdate(offer, pkg) {
+    if (!currentUpdate(offer)) return
+    clearTimeout(updateRetry)
+    updateRetryHash = offer.hash
+    updateRetry = setTimeout(() => takeUpdate(offer, pkg), options.retryMs ?? 1000)
+    updateRetry.unref?.()
+  }
+
+  async function takeUpdate(offer, pkg) {
+    if (offer?.hash !== updateRetryHash) clearUpdateRetry()
+    if (!currentUpdate(offer) || offer.name !== update.name || offer.hash === update.hash || bad.has(offer.hash)) return
+    if (installing) {
+      retryUpdate(offer, pkg)
+      return
+    }
     installing = true
     try {
-      const { hash, files } = verifyPackage(await rt.fetchPackage(update.name), update.name)
-      if (hash === update.hash || bad.has(hash)) return
-      installCurrent(update.store, hash, files)
+      if (!pkg) {
+        let fetched
+        try {
+          fetched = await rt.fetchPackage(update.name)
+          if (!currentUpdate(offer)) return
+        } catch (err) {
+          if (currentUpdate(offer)) {
+            log(`persona: ${update.name} package fetch failed: ${err.message}; retrying`)
+            retryUpdate(offer)
+          }
+          return
+        }
+        pkg = verifyPackage(fetched, update.name)
+      }
+      const { hash, files } = pkg
+      if (!currentUpdate(offer) || hash !== offer.hash || hash === update.hash || bad.has(hash)) return
+      installCurrent(update.store, hash, files, { keep: [update.hash] })
       log(`persona: ${update.name} ${hash.slice(0, 12)} from the node is installed (running ${update.hash.slice(0, 12)})`)
+      clearUpdateRetry()
       if (update.exit) {
         rt.stop()
         update.exit(hash)
@@ -664,8 +717,14 @@ export function createPiHost(deps, options = {}) {
       idleTimer.unref?.()
       maybeReload()
     } catch (err) {
-      bad.add(offer.hash)
-      log(`persona: ${update.name} update to ${offer.hash.slice(0, 12)} failed: ${err.message}`)
+      if (!currentUpdate(offer)) return
+      if (err.code === 'ERR_RUNTIME_STORE_BUSY') {
+        retryUpdate(offer, pkg)
+        log(`persona: ${update.name} update store is busy; retrying ${offer.hash.slice(0, 12)}`)
+      } else {
+        bad.add(offer.hash)
+        log(`persona: ${update.name} update to ${offer.hash.slice(0, 12)} failed: ${err.message}`)
+      }
     } finally {
       installing = false
     }
@@ -684,10 +743,12 @@ export function createPiHost(deps, options = {}) {
       bad.add(want)
       want = ''
       clearInterval(idleTimer)
+      clearTimeout(updateRetry)
       return
     }
     retired = true
     clearInterval(idleTimer)
+    clearTimeout(updateRetry)
     log(`persona: switching ${sessions.length} session(s) to ${update.name} ${want.slice(0, 12)}`)
     rt.stop()
     for (const s of sessions) {
@@ -793,6 +854,7 @@ export function createPiHost(deps, options = {}) {
     },
     stop() {
       clearInterval(idleTimer)
+      clearTimeout(updateRetry)
       rt.stop()
       started = false
     },

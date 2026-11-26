@@ -49,7 +49,7 @@ nonisolated struct PlaceMapResult: Hashable, Sendable {
 
     /// The calls drawn this way, by the tool's own name (an MCP name ends in it: mcp__<server>__<name>).
     static func kind(of name: String) -> Kind? {
-        switch name.components(separatedBy: "__").last ?? name {
+        switch HubNaming.canonicalMCPTool(name).components(separatedBy: "__").last ?? name {
         case "phone_location_current": .here
         case "phone_location_search", "phone_maps_search_nearby": .places
         case "phone_maps_route": .route
@@ -63,7 +63,7 @@ nonisolated struct PlaceMapResult: Hashable, Sendable {
 
     init?(_ call: ToolCall) {
         guard let kind = Self.kind(of: call.name), let result = call.result, result.isError != true,
-              let data = result.text?.data(using: .utf8),
+              let data = result.text.map(HubNaming.stripToolResultTimestampHeaders)?.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
         let found: [Place]
         switch kind {
@@ -222,15 +222,10 @@ nonisolated final class PlaceMapSnapshot: @unchecked Sendable {
         let options = MKMapSnapshotter.Options()
         options.region = result.region()
         options.size = size
-        #if os(macOS)
-        // The Mac's snapshot options have no trait collection: light or dark is an appearance there (#5662).
-        options.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
-        #else
         options.traitCollection = UITraitCollection { traits in
             traits.userInterfaceStyle = dark ? .dark : .light
             traits.displayScale = scale
         }
-        #endif
         options.pointOfInterestFilter = .excludingAll
         guard let shot = try? await MKMapSnapshotter(options: options).start() else { return nil }
         func spot(_ coordinate: CLLocationCoordinate2D) -> CGPoint {

@@ -1,6 +1,6 @@
 # Lock Screen / Dynamic Island Live Activity (Fleet)
 
-The whole phone has a single Live Activity, "Fleet": it rolls up every Agent that needs you, is working, or finished unseen onto the Lock Screen and the Dynamic Island. The manager that talks to computers computes the content (`server/internal/assistant/fleet_live.go`, delivered to the hub over the bus as `fleet.live`); the hub fills in each device's fields and pushes over APNs at a set pace.
+The whole phone has a single Live Activity, "Fleet": it rolls up every Agent that needs you, is working, or finished unseen onto the Lock Screen and the Dynamic Island. The manager that talks to computers computes the content (`server/internal/assistant/fleet_live.go`, which agents and cards need you decided in `server/internal/assistant/fleetcount`; delivered to the hub over the bus as `fleet.live`); the hub fills in each device's fields and pushes over APNs at a set pace.
 The App starts the activity and reports tokens; the Widget extension (source `apple/PersonaWidgets`, module still `PersonaWidgets`) draws it. The design rationale is in the lane notes (an analysis of the ChatGPT Codex / Sand activities);
 this page covers only implementation and conventions.
 
@@ -31,7 +31,11 @@ Custom              pick each side: Status Counts / Tokens per Minute / Tokens T
 - The gear doesn't spin: `symbolEffect(.rotate, options: .repeating)` doesn't animate in a Live Activity (two shots 0.4 s apart differ by ≤1 pixel in the gear area, same as static areas), so the gear is static; the same goes for pulses and other repeating animations.
 - No cost display (user decision, 2026-10-29): "equivalent API cost" would mislead subscription users, so only token metrics are offered.
 - Settings: **Settings › Notifications › Live Activities › Dynamic Island** (`IslandSettingsView`), topped by three previews: Normally / When an Agent Needs You / Shared with Other Apps; stored on the hub per device (`prefs.island`, `notify.go IslandPrefs`).
-  When Machine Load is chosen you can pick which machine; if none is picked it's the busiest one.
+  When Machine Load is chosen you can pick which machine; if none is picked it's the busiest one. It shows that machine's load per core, as Machines does
+  ("1.1" beside the CPU symbol; "Load 1.1 per core", or "<name> 1.1 per core" for a chosen machine, on the expanded island and the Lock Screen; `FleetText.perCore`, #12519):
+  it is not a CPU percentage and passes 1 when threads wait for a core (`docs/server/machines.md`, "What load counts"). VoiceOver reads the compact island's "1.1" as
+  "Load 1.1 per core" (`IslandPair.spoken`). The words are about twice as wide as the percent they replaced: where they don't fit whole beside a second number (the
+  expanded island's corner, about 125 pt), `FleetStatsLine` draws load as the CPU symbol and "1.1" instead (`ViewThatFits`; `IslandFitTests.statsLineFitsTheExpandedCorner`).
 
 ### Sharing the Dynamic Island with other apps
 
@@ -228,7 +232,7 @@ Go `hub.FleetState` and Swift `FleetState` (`apple/Shared/FleetState.swift`) mat
 - Every field on the Swift side is decoded leniently (unknown phase / kind values don't error), so adding hub fields won't break the activity.
 - `attributes-type` is `PersonaActivityAttributes`, and `attributes` is `{"kind":"fleet"}` (used by push-to-start); neither name may change.
 - Dynamic Island fields: `left` / `right` (this device's sides, `status|tpm|tokens|requests|assistant|load|timer|none`), `assistant` (assistant replying),
-  `stats` (`{tpm, tokens, requests, loads:[{id, name, percent}]}`). The hub only fills the fields each device displays (`FleetState.forDevice`),
+  `stats` (`{tpm, tokens, requests, loads:[{id, name, percent}]}`; `percent` is load per core × 100, so 110 is 1.1 per core). The hub only fills the fields each device displays (`FleetState.forDevice`),
   so changes to things it doesn't display consume no pushes. The `fleet` event received by the App carries all numbers, trimmed to its own settings (`FleetState.tailored`).
 
 ## Pushes (`hub/liveactivity.go`)
@@ -286,8 +290,9 @@ Each received push redraws both the Dynamic Island and the Lock Screen, so the h
 - The node reports changed minutes to the hub (`usage` event, full value for each minute, repeated reports just overwrite); the first report after connecting sends everything with `full: true`.
   The node keeps nothing: restarting either side recomputes the same numbers from files. The manager also writes them to Postgres for the Machines page's week of charts.
 - The manager (`devices/metrics.go`) aggregates all machines: TPM = output tokens in the last 2–3 minutes (from the beginning of the minute two minutes ago to now) ÷ minutes elapsed; Tokens Today includes cache reads and writes,
-  with "today" in the phone's time zone (reported in assistant settings); load = 1-minute load average ÷ core count; machines silent for 2 minutes are excluded from load.
-- Before pushing to the Dynamic Island, round to two significant digits (12345 → 12000; load to 5% increments), so small fluctuations don't create new content.
+  with "today" in the phone's time zone (reported in assistant settings); load = 1-minute load average ÷ core count (load per core, the figure Machines and the alerts use); machines silent for 2 minutes are excluded from load.
+- Before pushing to the Dynamic Island, round to two significant digits (12345 → 12000; load to the tenth of a core the apps print, `percent` in steps of 10, `loadPercent`), so small fluctuations don't create new content.
+  The apps show that percent as load per core with one decimal (`FleetText.perCore`: 110 is "1.1", not "110%"), on the island, the Lock Screen and the Computers widget.
 
 ## Push budget
 
@@ -306,18 +311,33 @@ Each received push redraws both the Dynamic Island and the Lock Screen, so the h
 - Tapping the activity itself (compact, Lock Screen): with one Agent, open it (`persona://open?machine=…&session=…`); with several, simply return to the App (`persona://open`), at the page and position where you left (a list stays a list, a chat stays the same chat and line; if the system ended the App, cold launch restores the last chat and the reading position recorded on backgrounding). Each expanded-view row opens its own session. Before 2026-10-29 it always opened the first item; the user reported "tapping the Dynamic Island goes into some Agent".
 - When the Lock Screen draws a single request (the one with buttons, or the one nameless line such as "A permission request is waiting" when details are hidden), tapping the Lock Screen opens that request's session (`FleetLink.lockScreen`, #4318): it opens what is drawn, not a guess. With several rows or only counts, as above. The Apple Watch Smart Stack (`.small`) still taps as the whole activity.
 - Simulator automation (`-pairURL`) doesn't report tokens, so the hub won't mistake the real device's activity for the simulator's.
+- **One card** (#12982): before applying a fleet (and once at launch) `keepOne` ends every Fleet activity but one, of either
+  attribute type, ended ones included: the running one updated last stays (latest stale date). iOS ends an activity after about
+  eight hours but leaves it on the Lock Screen, stale, for hours; the app no longer saw it and started a new one beside it, then
+  only ever updated the first of the two. The hub does its part: when a phone reports a new activity's token it ends the activity
+  that token replaces, and it ends an activity `fleetRetireBefore` (20 minutes) before `fleetMaxAge`, so the next start never sits
+  beside a card iOS ended.
+- **No push route, no card in the background** (#12982): going to the background while the first group's hub has no push route
+  to this phone (`PushRoute.route == "none"`, e.g. the relay refusing its topic), the app ends the activity: nothing could update
+  or end it any more, and it would keep old counts and an old request for hours. It starts again when the app is back in front.
 
 ## Buttons (`apple/LiveActivity/FleetIntents.swift`)
 
 - The first request actionable with buttons (permission, plan) has them: permission Deny / Allow; plan View (opens chat) / Approve. Rejecting a plan requires feedback, so that's left to the App.
-  A card with fields (the password card, adding a mail account) is filled in in the App: the manager leaves its row's `interaction` empty (`server/internal/assistant/fleet_live.go`), so it is not actionable (`FleetState.firstActionable`): another agent's permission or plan behind it takes the buttons, and with none the row shows without them and a tap opens its conversation.
+  A card with fields (the password card, adding a mail account) is filled in in the App: the manager leaves its row's `interaction` empty (`needItem` in `server/internal/assistant/fleetcount/fleetcountadapt/render.go`), so it is not actionable (`FleetState.firstActionable`): another agent's permission or plan behind it takes the buttons, and with none the row shows without them and a tap opens its conversation.
   The Lock Screen and expanded view only show this item + buttons + "+N" (a second item won't fit vertically).
 - Allow and Approve use `authenticationPolicy = .requiresAuthentication` (Face ID first on the Lock Screen), Deny uses `.alwaysAllowed`, as with notification buttons.
   Approving a plan from the Lock Screen uses `acceptEdits` (you haven't read the full plan, so commands still require individual permission).
 - `LiveActivityIntent`'s `perform` runs in the App process (the system starts it in the background if needed), so the extension only compiles the types, with empty `perform`
   (`WIDGET_EXTENSION` compilation condition). The App implementation is in `FleetActions`: call resolve, immediately remove this item from the activity (optimistic update; the hub push follows),
   and on failure send a local notification explaining why (410 "already handled" still removes it).
-- Stale content (`isStale`, no hub push for 15 minutes) has no buttons, to avoid tapping Allow on a request already handled.
+- Stale content (`isStale`, no hub push for 15 minutes) has no buttons, to avoid tapping Allow on a request already handled. Since
+  #12982 the stale Lock Screen draws only the persona and "Waiting for hub…": no counts and no rows, which are no longer known to be true.
+- **Buttons only with context** (#12982): Allow / Deny or Approve appear only when the card can say who asks, what, and what
+  approving does. The manager leaves `interaction` empty for a permission without a summary (a bare tool name), a plan without a
+  title and a private ("Just me") permission or plan (`decidable` in `server/internal/assistant/fleetcount/fleetcountadapt/render.go`); with Lock Screen
+  details off (rows read "A permission request is waiting") both the hub (`forDevice`) and the app (`FleetState.tailored`) drop it
+  from every permission and plan row. Questions and terminal cards never have buttons and keep their `interaction`. Without buttons a tap on the request opens it in the app.
 
 ## Settings (Settings › Notifications › Live Activities)
 
@@ -334,6 +354,7 @@ A second, independent activity while the phone records (docs/apple/recording.md,
 
 - `apple/LiveActivity/RecordingActivityAttributes.swift` (app and extension): `recordingID` in the attributes; `ContentState` is `phase` (`recording` / `paused` / `interrupted` by a call; `stopped` is drawn only, below), `runningSince` (Unix seconds, while recording), `elapsed` (where the time stands while paused), `title`, `meeting`, `marks`, `aliveAt` (while recording, the minute the app last confirmed it). A few hundred bytes. The name is the system's identity: never rename it.
 - `RecordingActivity` (`apple/Persona/Recording/`, iOS only) follows `RecordingCapture` and the recording's entry with `withObservationTracking`: one activity per recording, requested when recording starts (`pushType: nil`, local only), updated on pause, a call, a bookmark or a new title, ended at once when it stops; one left over from a killed app is ended. The time is `Text(timerInterval:)` from `runningSince`, so each segment and transcript save recomputes the content, which keeps the earlier `runningSince` and so compares equal.
+- The hub's recording module (#15214, [recording.md](recording.md) "With the hub's recording module off (#15214)"): `ContentState.module` is `off` while the hub has the module off, and then Bookmark and Ask Persona / Talk are not drawn (they would do nothing); End and Stop always are. Absent with the module on and in a state from before; an unknown word reads as allowed.
 - Stale once the app is gone (#9108): a killed app can't end its activity, and iOS ends a recording app in the background without a word (CPU or memory). So while it records, the content carries `aliveAt`, the minute the app last confirmed it (`RecordingActivity.alive`, one update a minute: `aliveEvery`), and the activity's `staleDate` is `staleAfter` (150 s) past it; paused, both are nil. Once stale, the widget draws the state as `drawn(stale:)` gives it: `phase` `stopped` (never sent by the app), the stop sign as its mark, the time standing at `aliveAt`, "Stopped · Open Persona to see the recording" under the name, no answer or role, and End (a meeting's, which asks nothing then) or Stop alone, whose tap opens the app, which ends the activity. Before, the island counted on for as long as the app stayed dead. A state from before has no `aliveAt` and never goes stale. Shots: `-showMeetingSample stopped` sends a recording's activity stale at once (`PERSONA_MEETING_PHASE=stopped`).
 - `relevanceScore` 2 (Fleet's are at most 1): while recording, the Dynamic Island shows the recording, and Fleet stays on the Lock Screen below it.
 - Drawn by `apple/PersonaWidgets/RecordingLiveActivity.swift`, a meeting's as a meeting app's (#8731 V4).
@@ -398,14 +419,14 @@ rang but its countdown was not shown anywhere.
 - **Dynamic Island**: compact, the mark and the time (at limited width only the mark, matching `RecordingLiveActivity`); expanded, the label and the same buttons; minimal, the mark. The watch's Smart Stack gets the
   glance (mark, label, time). The alarm activity uses its own `IslandMetrics.alarm*` sizes so recording redesigns do not affect it.
 - **Buttons** are `LiveActivityIntent`s in `apple/LiveActivity/AlarmActivity.swift` (`PauseAlarmIntent`, `ResumeAlarmIntent`, `StopAlarmIntent`),
-  allowed without unlocking, that call `AlarmManager` in the app with the alarm's id; they only reach Persona's own alarms.
+  allowed without unlocking, routed through `AlarmIntentRouter` to `AlarmManager` in the app with the alarm's id; they only reach Persona's own alarms. In DEBUG builds, taps targeting the ActivityKit-only timer sample below are intercepted by `AlarmsTool.handleSampleAction` and never call `AlarmManager` (#13269).
 - The tint is the one the app gave the alarm (`AlarmAttributes.tintColor`, the app's accent resolved once: a dynamic colour encodes to about 5.7 KB);
   nothing is read from the App Group or the keychain. A timer's attributes still come to about 5.7 KB (each string carries its bundle and a sandbox
   token, each colour an archived UIColor, about 0.5 KB apiece), and every byte of the label counts about seven times (three titles, each with a key and
   a default value, and the metadata). An activity the app requests itself takes at most 4 KB of attributes (liveactivitiesd: "Request attribute size
-  … exceeds maximum size of 4096"), which only the DEBUG sample below does. AlarmKit's daemon (`mobiletimerd`) starts the real ones, and it holds
+  … exceeds maximum size of 4096"), which only the DEBUG sample below does. `AlarmPresentation` encodes both timer states when they are present, so the sample must retain only the state it draws (#12248). AlarmKit's daemon (`mobiletimerd`) starts the real ones, and it holds
   `com.apple.private.activitykit.allowOversizedPayloads`, which liveactivitiesd checks before that limit (read from the iOS 27.0 simulator runtime, #11058):
   a real timer is not held to 4 KB. Whether a longer cap applies to it is not known; it needs a device or an authorized AlarmKit.
 - The activities live in their own `LiveActivityBundle` inside `PersonaWidgetsBundle` (a widget bundle's builder takes ten at most), with `AlarmLiveActivity` gated by `if #available(iOS 26.0, *)`.
 - **Screenshots**: `-showAlarmSample timer|paused` (DEBUG) starts a 25-minute "Focus" timer as the tool does on a device, and `PersonaUITests/AlarmLiveActivityShots`
-  (`PERSONA_ALARM_SAMPLE=timer|paused`) photographs the island and the Lock Screen. On the simulator (`#if targetEnvironment(simulator)`), `AlarmsTool.showSample` goes straight to ActivityKit using the tool's own `attributes(label:timer:only:)`, cut to the state it draws so it fits in 4 KB (#11058; `PhoneSystemToolsTests.theTimerSampleFitsInsideActivityKitsLimit`), so shots never depend on a system prompt; `TerminationActivities` ends only that sample activity on SIGTERM (leaving real AlarmKit timers alone). That it rings through silent mode needs a device.
+  (`PERSONA_ALARM_SAMPLE=timer|paused`) photographs the island and the Lock Screen. On the simulator (`#if targetEnvironment(simulator)`), `AlarmsTool.showSample` goes straight to ActivityKit with `sampleAttributes(label:paused:)`: it retains the tool's label, resolved accent and the current state's Pause or Resume marker. Its `LocalizedStringResource` titles use the label as their default value and need no app-resource lookup: the custom widget never reads their app-bundle localization, so repeating the app path and sandbox token is unnecessary. The AlarmKit Alert keeps its required Stop configuration on iOS 26.0; iOS 26.1 deprecates that field and newer SDKs omit it when encoding. `AlarmButtons` draws Pause / Resume / Stop with its own words and colours from the unchanged `AlarmPresentationState` plus that marker. The simulator sample has its own alarm ID, tags `PersonaAlarmData.isSample = true` (DEBUG only) and schedules no `AlarmManager` timer. Its buttons still render `PauseAlarmIntent`, `ResumeAlarmIntent` and `StopAlarmIntent` so the widget UI matches real timers, and in DEBUG builds `AlarmIntentRouter` routes any sample ID to `AlarmsTool.handleSampleAction`: Pause and Resume update the sample ActivityKit activity's countdown/paused state directly (replacing a paused-only sample with a running one on Resume so Pause stays available under the 4 KB limit), Stop ends only that sample activity, and `AlarmManager` is never called with the unscheduled sample UUID (#13269). This is the only part made smaller; real timers keep `isSample == nil` (omitted in Release), still get both states and the app's localized resources from `attributes(label:timer:)`, and route directly to `AlarmManager` with AlarmKit owning their updates. `PhoneSystemToolsTests.theTimerSampleFitsInsideActivityKitsLimit` encodes and decodes both actual `ActivityContent` variants below 4 KB, as well as the attributes, and pins the decoded selected-state and opposite-state rules, Pause / Resume symbols, Stop configuration, `isSample` separation and original-to-decoded tint archives / RGBA (#12248); `theTimerSampleButtonsStayOffAlarmManagerAndUpdateTheSampleActivity` and `realTimerButtonsStillRouteToAlarmManagerAlongsideASample` verify the separated sample and real-timer button routing (#13269). Shots never depend on a system prompt; `TerminationActivities` ends only that sample activity on SIGTERM (leaving real AlarmKit timers alone). That it rings through silent mode needs a device.

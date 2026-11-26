@@ -21,9 +21,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.MeasurePolicy
+import androidx.compose.ui.layout.Placeable
+import androidx.compose.ui.layout.layoutId
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.constrainHeight
+import androidx.compose.ui.unit.constrainWidth
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -33,7 +39,12 @@ import persona.core.chatlist.*
 import persona.core.contracts.*
 import persona.core.contracts.api.*
 import persona.core.designsystem.*
+import persona.core.designsystem.icons.PhIcons
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.hideFromAccessibility
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import persona.core.domain.ChatTaps
 import persona.core.domain.chatBubbles
 import persona.core.domain.shownUndelivered
@@ -45,6 +56,7 @@ import persona.core.domain.sort.READ_ONLY
 import persona.core.domain.sort.canApprove
 import persona.core.domain.sort.canChangeEffortOnly
 import persona.core.domain.sort.canChangeModes
+import persona.core.domain.sort.canContinueCodex
 import persona.core.domain.sort.canSwitchListedModes
 import persona.core.domain.sort.canInterrupt
 import persona.core.domain.sort.canSend
@@ -53,6 +65,7 @@ import persona.core.domain.sort.TerminalResume
 import persona.core.domain.sort.terminalResume
 import persona.core.domain.sort.canTerminal
 import persona.core.domain.sort.canTypeClaudeCommands
+import persona.core.domain.sort.displayTitle
 import persona.core.domain.sort.shownCloseout
 import persona.feature.chat.media.ChatImageViewer
 import persona.core.domain.rewind.Rewind
@@ -60,6 +73,7 @@ import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.internal.GeneratedComponentManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
@@ -71,6 +85,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import persona.core.designsystem.R as DesignR
 
 // Finish the fade in the existing gap below the tab strip, without changing the chat's content padding.
 private val TabbedChatScrollEdgeStyle = ScrollEdgeStyle.Gradient.copy(overlap = Tokens.Space.Standard.s)
@@ -280,6 +295,10 @@ private fun ChatPage(
     val placedForwards = ForwardPlacements.waiting(key)
     // /model in the "/" list asked for the "Mode" sheet: a one-off, cleared once the sheet opened (not replayed when the bar returns).
     var openModes by remember { mutableStateOf(false) }
+    // The model-route card opens only Persona's model picker, never Brief/Board's separate Mode sheet as well.
+    var openModelRoutePicker by remember { mutableStateOf(false) }
+    // The model-route card asks the existing Persona pill to clear its kept pick with the pill's optimistic rollback.
+    var clearModelPick by remember { mutableStateOf(false) }
     // `/permissions` in the "/" list asked for the permission mode menu (#6513): Glass's mode button, the others' "Mode" sheet
     var openPermissions by remember { mutableStateOf(false) }
     // The host's failure notice whose "Retry" went out: hidden until the list catches up; back if that send failed.
@@ -310,6 +329,17 @@ private fun ChatPage(
         rememberUpdatedState(readOnly), statusSheetState,
         deliveryActions, clearingPaneState, pageCloseout.drawnSwitch, switchSession, tasks, timelineFollow, submittedContextState)
     var notice by interactionController.notice
+    val takeoverClient = remember(chrome.takeoverActions, chrome.hubScope) {
+        chrome.takeoverActions?.let { CodexTakeoverClient.of(it, chrome.hubScope) }
+    }
+    val takeoverCoordinator = rememberCodexTakeoverCoordinator(
+        client = takeoverClient,
+        sessions = sessions,
+        onOpenSession = if (historyOnly) null else chrome.onOpenSession,
+        onFallbackNotice = { notice = it },
+        onCompleted = if (historyOnly) ({ _, adopted -> chrome.onOpenSession?.invoke(adopted.key) }) else null,
+    )
+    val pageTakeover = takeoverCoordinator.takeIf { takeoverClient != null && renderStyle != ChatRenderStyle.Assistant && child == null && workflowAgent == null }
     var submittedDraft by interactionController.submittedDraft
     var submittedContexts by submittedContextState
     var sending by interactionController.sending
@@ -428,7 +458,9 @@ private fun ChatPage(
     }).collectAsStateWithLifecycle()
     // The chat jumps to a task's notice through the task host's navigation.
     // The message a hub link named (`?at=`, #2194) while it is being landed on: like a search hit, its drawer opens.
-    val childCards = rememberChatChildren(key, session, sessionList, chrome, repository)
+    var overviewOpen by remember(key) { mutableStateOf(false) }
+    var openSubagentsPending by rememberSaveable(key.path, chrome.openSubagents) { mutableStateOf(chrome.openSubagents) }
+    val childCards = rememberChatChildren(key, session, sessionList, chrome, repository, forceRead = overviewOpen)
     val modeChangeStore = remember(key, repository, scope) { ModeChangeStore(scope) { repository.modeChanges(it) } }
     DisposableEffect(modeChangeStore) { onDispose(modeChangeStore::close) }
     LaunchedEffect(key, repository, renderStyle, session != null, session?.permissionMode, session?.bypassPending) {
@@ -436,7 +468,7 @@ private fun ChatPage(
     }
     val modeChangesUntil = remember(timelineVersion, projection) { modeChangesCutoff(timeline.isFrozen(), projection.lines) }
     val pageLines = rememberChatPageLines(key, renderStyle, snapshot, session, foldsBackground, supervisingConversation, tasks, taskTodos, search,
-        openWork, projection, feed, taskPlans, taskCardProjection, childCards.rows.values.toList(), modeChanges = modeChangeStore.changes,
+        openWork, projection, feed, taskPlans, taskCardProjection, childCards.list, modeChanges = modeChangeStore.changes,
         modeChangesUntil = modeChangesUntil)
     var jumpItem by pageLines.jumpItem
     val assistantPresentation = pageLines.assistantPresentation
@@ -494,7 +526,8 @@ private fun ChatPage(
     var reportedSeen by pageReader.reportedSeen
     val readThrough = pageReader.readThrough
     val context = pageReader.context
-    LaunchedEffect(placedForwards, readOnly, canSend) {
+    val imageLimits = rememberSessionImageLimits(chrome.connection, session?.agent)
+    LaunchedEffect(placedForwards, readOnly, canSend, imageLimits) {
         if (placedForwards == null || readOnly || !canSend) return@LaunchedEffect
         val fresh = mutableListOf<ForwardPlacement>()
         val duplicates = mutableListOf<RestoredPhotos>()
@@ -506,14 +539,20 @@ private fun ChatPage(
                 fresh += placement
             }
         }
-        duplicates.forEach { discardForwardedPhotos(context, it) }
-        val rejected = attachForwardedPhotos(context, composer, fresh.map(ForwardPlacement::photos))
-        val lost = fresh.sumOf { it.photos.lost } + rejected.size
-        if (lost > 0) {
-            val message = forwardedPhotoNotice(res, lost)
-            if (feedback?.notice(message) != true) notice = message
+        // `take(key)` clears `placedForwards`, which cancels this LaunchedEffect on recomposition; finish the
+        // taken handoff on the page scope so IO measurement and cleanup are not aborted mid-flight.
+        scope.launch {
+            duplicates.forEach { discardForwardedPhotos(context, it) }
+            val rejected = attachForwardedPhotos(context, composer, fresh.map(ForwardPlacement::photos),
+                limits = imageLimits, canSpill = composerService != null,
+                onNotice = { message -> if (feedback?.notice(message) != true) notice = message })
+            val lost = fresh.sumOf { it.photos.lost } + rejected.size
+            if (lost > 0) {
+                val message = forwardedPhotoNotice(res, lost)
+                if (feedback?.notice(message) != true) notice = message
+            }
+            composer.focusRequest++
         }
-        composer.focusRequest++
     }
     val pairingLoader = pageReader.pairingLoader
     val loader = pageReader.loader
@@ -564,10 +603,20 @@ private fun ChatPage(
     }
     fun toggle(id: String) {
         val (next, opened) = toggleWork(WorkOpenState(openWork.toSet()), id)
+        val rowId = lines.firstOrNull { it.id == id }?.contentKey ?: id
+        val anchored = when {
+            opened -> chatList.beginToggle(rowId, riseToTop = chatList.followsEnd)
+            // Closing while the newest end is followed leaves the list there; elsewhere keep the header under the tap.
+            !chatList.followsEnd -> chatList.beginToggle(rowId, riseToTop = false)
+            else -> false
+        }
+        if (!anchored) chatList.endExpansion()
         chatList.setExpanded(next.open)
         if (opened) (projection.lines.firstOrNull { it.id == id } as? ChatLine.Work)?.steps
             ?.filterIsInstance<persona.core.domain.lines.WorkItem.Folded>()?.forEach { expand(it.item.item) }
+        if (opened) chatList.noteExpansionLoading(folding.isNotEmpty())
     }
+    LaunchedEffect(folding) { chatList.noteExpansionLoading(folding.isNotEmpty()) }
     // Restored open lines and folds arriving while expanded load just as a manual tap does.
     LaunchedEffect(projection) {
         openFoldsToFetch(projection.lines, folding, foldErrors.keys).forEach(::expand)
@@ -588,8 +637,7 @@ private fun ChatPage(
         wireText = command ?: linkMessage(composer.message(), linkContexts, context.resources), paneId = session?.paneId,
         conversationLauncher = conversationLauncher, conversationModel = conversationModel, glassAgent = glass && agentChat,
         onFailed = onFailed, onCleared = { refs -> linkContexts = linkContexts.filterNot { ref -> refs.any { it.id == ref.id } } })
-    // Chat content (group A): the message menu, the image viewer, photos and paths in messages, the API error retry.
-    val messageMenu = remember(key) { MessageMenuState() }
+    // Chat content (group A): the message menu, quote and context actions.
     // A swipe to the left quotes (iOS #1058) wherever the long-press menu's "Quote" is offered.
     val quoteTarget: (MessageTarget) -> Unit = { target ->
         // Over the box as a quote that goes with the next message, the draft left as it is (iOS #986).
@@ -603,23 +651,26 @@ private fun ChatPage(
         composer.focusRequest++
     }
     val pickedQuote by rememberUpdatedState(quoteWords)
+    val messageMenuState = remember(key) { MessageMenuState() }
     val menuWrites = messageMenuWrites(readOnly, session)
     LaunchedEffect(menuWrites) {
-        messageMenu.quote = if (menuWrites) ({ target: MessageTarget -> swipeQuote(target) }) else null
-        messageMenu.quoteWords = if (menuWrites) ({ target: MessageTarget, words: String -> pickedQuote(target, words) }) else null
+        messageMenuState.quote = if (menuWrites) ({ target: MessageTarget -> swipeQuote(target) }) else null
+        messageMenuState.quoteWords = if (menuWrites) ({ target: MessageTarget, words: String -> pickedQuote(target, words) }) else null
     }
     // "Branch to new chat" (#2137) from a reply, "Rewind to here" (#2436) on your message: the menu's session-wide extras (web ⋯).
     var forking by remember { mutableStateOf(false) }
     var rewindBusy by remember { mutableStateOf(false) }
     val actionsService = chrome.actions
+    val forkService = actionsService ?: chrome.forkActions
     val openFork = chrome.forkOpener(renderStyle)
-    val onFork: ((String) -> Unit)? = if (actionsService != null && openFork != null && session?.canFork == true && !readOnly) { itemId ->
+    val canForkHere = !readOnly || (historyReadOnly && !pageSession.managerOffline && child == null && workflowAgent == null && !key.sessionId.contains('@'))
+    val onFork: ((String) -> Unit)? = if (forkService != null && openFork != null && session?.canFork == true && !session.archived && canForkHere) { itemId ->
         val from = session
         if (!forking) {
             forking = true
             scope.launch {
                 try {
-                    val id = actionsService.fork(from, itemId)
+                    val id = forkService.fork(from, itemId)
                     notice = res.getString(R.string.chat_menu_forked)
                     try { sessions.refresh() } catch (e: CancellationException) { throw e } catch (_: Exception) { }
                     openFork(SessionKey(from.machineId, id))
@@ -686,47 +737,17 @@ private fun ChatPage(
         chrome.childSessionId?.let { subagentFolds.open(persona.core.domain.lines.ChildSessionCards.call(it)) }
     }
     val workflowCards = pageSubagents.workflowCards
-    val viewerState = remember { mutableStateOf<ViewerRequest?>(null) }
+    val messageActions = rememberChatRowActionPreparation(key, repository, chrome, scope, renderStyle, session,
+        projection, readOnly, canSend, session?.status == "working" || messages.isNotEmpty(), currentItems, messageMenuState) { send(it) }
+    val messageMenu = messageMenuState
+    val viewerState = messageActions.viewer
     var viewer by viewerState
-    val photos = remember(chrome.files, key, session?.cwd) { chrome.files?.let { AttachedPhotos(it, key.machineId, session?.cwd.orEmpty()) } }
-    val localCacheDir = androidx.compose.ui.platform.LocalContext.current.cacheDir
-    val localImages = remember(chrome.files, chrome.hubScope, key.machineId, session?.cwd, localCacheDir) {
-        chrome.files?.let { LocalMarkdownImages(it, chrome.hubScope, key.machineId, session?.cwd.orEmpty(), localCacheDir) }
-    }
-    // A "Continue" already on its way counts as working: the card offers no second one.
-    // A turn that failed on the refusal fallback's missing model (#2528): "Continue" would go to the same model.
-    // Every model of a main or leader conversation's recovery chain failed (#7824): the turn's last error card names
-    // the cause and when the configured model is back, and keeps "Retry" whatever the error says.
-    val exhausted = exhaustedRecovery(projection.lines, session?.modelFallback)
-    val retryId = retryLine(projection.lines, session?.status == "working" || messages.isNotEmpty(),
-        !readOnly && canSend && session?.turnErrorCode != FALLBACK_UNAVAILABLE, exhausted = exhausted != null)
-    val currentOpenPath by rememberUpdatedState(chrome.onOpenPath)
-    // Paths in messages link only when there on the machine (PathLinks.kt): asked of the session's directory.
-    val pathPresence = remember(chrome.files, key, session?.cwd, chrome.onOpenPath != null) {
-        val files = chrome.files
-        val cwd = session?.cwd.orEmpty().ifBlank { "~" }
-        if (files == null || key.machineId.isBlank() || chrome.onOpenPath == null) null
-        else PathPresence(scope, { paths -> files.stat(key.machineId, cwd, paths) })
-    }
-    val currentSend by rememberUpdatedState<(String) -> Unit>({ send(it) })
-    // Stays the same object while the conversation streams: rows read it, and a new one would redraw them all.
+    val lastUserId = snapshot.items.lastOrNull { it.role == "user" && it.kind == "text" }?.id
     val continueText = stringResource(R.string.chat_screen_continue_message)
-    val imageDescription = stringResource(R.string.chat_content_image)
-    val replyImages = remember(key, repository) { (repository as? ChatLocalStorage)?.replyImages(key) }
-        ?.collectAsStateWithLifecycle(initialValue = null)?.value
-    val rowActions = remember(key, repository, replyImages, localImages, photos, retryId, exhausted, chrome.onOpenPath != null, pathPresence, chrome.files, session?.cwd) {
-        ChatRowActions(key, fullText = { item -> repository.fullText(key, item.id) },
-            openPath = if (chrome.onOpenPath != null) ({ path, line -> currentOpenPath?.invoke(path, line) }) else null,
-            paths = pathPresence,
-            photos = photos, pictures = { chatViewerImages(key, currentItems(), repository, imageDescription) },
-            openImages = { images, index -> viewer = ViewerRequest(images, index) },
-            menu = messageMenu, retryLineId = retryId, onRetry = { currentSend(continueText) }, imageDescription = imageDescription,
-            thumbnails = chrome.files?.let { files ->
-                val cwd = session?.cwd.orEmpty().ifBlank { "~" }
-                ({ path -> "${key.machineId}\n$cwd\n$path" to { pixels: Int -> files.thumbnail(key.machineId, cwd, path, pixels) } })
-            }, viewerImage = { item, description -> chatViewerImage(key, item, repository, description) }, exhausted = exhausted,
-            replyImages = replyImages, localImages = localImages)
-    }
+    val rowActions = messageActions.actions
+    val exhausted = messageActions.exhausted
+    val retryId = messageActions.retryId
+    val turnFix = messageActions.turnFix
     val currentMarkdownPaths by rememberUpdatedState(rowActions.paths?.takeIf { rowActions.openPath != null })
     LaunchedEffect(liveItems) {
         liveItems.revisions.collect { revision ->
@@ -797,11 +818,34 @@ private fun ChatPage(
     LaunchedEffect(allRequests) {
         taps = taps.pending(allRequests.map { it.id }.toSet())
     }
-    val lastUserId = snapshot.items.lastOrNull { it.role == "user" && it.kind == "text" }?.id
-    // Persona's last turn ended on a model set-up error the hub named: the fix replaces the error line (#4339 C18, iOS
-    // `turnFix`). Persona's conversations only, as iOS and the web.
-    val turnFix = if (renderStyle == ChatRenderStyle.Assistant) TurnErrorFix.of(session?.turnErrorCode) else null
     val fixModel = chrome.onFixModel?.let { open -> { action: persona.core.designsystem.ReadinessActionId -> open(action, session?.launcher, session?.manager) } }
+    val ownModelPicker = switchSession != null && chrome.assistantManagement != null &&
+        (glass || (!readOnly && (canSend || turnFix == TurnErrorFix.ModelRoute)))
+    val clearModelAction: (() -> Unit)? = session?.takeIf {
+        it.modelPick != null && persona.core.domain.models.PersonaModelPanel.MODEL_PICK in persona.core.designsystem.LocalHubFeatures.current &&
+            chrome.assistantManagement != null
+    }?.let { current ->
+        {
+            if (glass && ownModelPicker) clearModelPick = true
+            else scope.launch {
+                try {
+                    chrome.assistantManagement?.clearModelPick(current.key)
+                    sessions.refresh()
+                } catch (cancelled: CancellationException) { throw cancelled }
+                catch (error: Exception) { notice = operationFeedback(error).text.resolve(res) }
+            }
+        }
+    }
+    val turnModelActions = if (turnFix != TurnErrorFix.ModelRoute) null else when {
+        ownModelPicker -> TurnErrorModelActions(openPicker = { openModelRoutePicker = true }, clearPick = clearModelAction,
+            clearLabel = if (session != null && (session.sessionId == chrome.mainConversation ||
+                session.sessionId in chrome.leaderConversations || session.origin == "task")) {
+                R.string.chat_modelpill_follow_default
+            } else R.string.chat_modelpill_undo_pick)
+        fixModel != null -> TurnErrorModelActions(
+            openPicker = { fixModel(persona.core.designsystem.ReadinessActionId.PickModel) }, clearPick = clearModelAction)
+        else -> null
+    }
     // Nothing is up over the page: the header may fold by itself (iOS waits while a sheet or menu is presented).
     val pageCovered = chrome.covered || overlay || linkVisible || statusSheet || activitySheet != null || terminalHelp ||
         taskPageVisible || fullText != null || search.visible || pushedDetail != null
@@ -891,11 +935,13 @@ private fun ChatPage(
     } else null
     val replyUsage = rememberReplyUsage(snapshot.items, projection.lines,
         persona = renderStyle == ChatRenderStyle.Assistant, hideAnswerId = liveAnswerId, catalog = actionsService)
+    val starredChat = rememberStarredChat(key, renderStyle, session, personaName)
     CompositionLocalProvider(LocalChatMarkdownCache provides markdownCache, LocalChatRowActions provides rowActions,
         LocalContentColor provides PersonaTheme.palette.ink, LocalChatPorts provides chatPorts,
         persona.core.designsystem.LocalAssistantCards provides cardsHost, LocalChatSubagents provides subagentLinks, LocalSubagentFolds provides subagentFolds, LocalChatWorkflows provides workflowCards,
         LocalChatTaskIndex provides projection.tasks, LocalChatJumpToCall provides callJumps::jump, LocalToolNames provides toolNames,
         LocalReplyUsage provides replyUsage, LocalChatChildren provides childCards,
+        LocalStarredChatContext provides starredChat,
         LocalSubagentHarness provides session?.let { subagentHarness(it, res) }) {
         // Under the files pane or the terminal's cover: hidden from screen readers too.
         ChatLinkHost(Modifier.fillMaxSize().background(PersonaTheme.palette.background)
@@ -911,9 +957,35 @@ private fun ChatPage(
             }, onVisibilityChanged = { linkVisible = it; if (it) { fullText = null; statusSheet = false } }, manager = linkManager) { linkInset ->
             val windowHeightPx = LocalWindowInfo.current.containerSize.height
             val pageDensity = LocalDensity.current
+            val footerChrome = LocalChromeInsets.current
+            val navigationInsets = WindowInsets.navigationBars
+            val imeInsets = WindowInsets.ime
+            val trayFooterBudget = remember { AssistantTrayFooterBudget() }
             // Until the page is measured (its first frame) the window's height stands in.
             val pageHeight: () -> Dp = { with(pageDensity) { (if (pageHeightPx >= 0) pageHeightPx else windowHeightPx).toDp() } }
-            val trayMax: () -> Dp = { pageHeight() * AssistantTrayTokens.maximumHeightFraction }
+            val trayMaxForChrome: (Dp) -> Dp = { trayChromeHeight ->
+                with(pageDensity) {
+                    val measuredPagePx = pageHeightPx
+                    val page = (if (trayFooterBudget.pageHeightPx >= 0) trayFooterBudget.pageHeightPx
+                        else if (measuredPagePx >= 0) measuredPagePx
+                        else windowHeightPx).toDp()
+                    val header = footerChrome.top + topBarHeight.toDp()
+                    val bottomInset = if (footerChrome.handlesNavigationBar) footerChrome.bottom
+                        else (navigationInsets.getBottom(pageDensity) - imeInsets.getBottom(pageDensity)).coerceAtLeast(0).toDp()
+                    val keyboardOpen = imeInsets.getBottom(pageDensity) > 0
+                    val hasPending = trayFooterBudget.pendingSlots > 0
+                    val floor = if (keyboardOpen && !hasPending) Tokens.Space.flush else Tokens.Space.xl
+                    val pendingReserve = Tokens.MinTouch.android * trayFooterBudget.pendingSlots
+                    assistantTrayMaxHeight(
+                        page = page,
+                        header = header,
+                        occupied = trayFooterBudget.fixedHeightPx.toDp() + pendingReserve + trayChromeHeight,
+                        bottomInset = bottomInset,
+                        floor = floor,
+                    )
+                }
+            }
+            val trayMax: () -> Dp = { trayMaxForChrome(Tokens.Space.flush) }
             Box(Modifier.fillMaxSize().padding(bottom = linkInset).onSizeChanged { pageHeightPx = it.height }
                 // The chat under a page a wide window pushed into this column: drawn as it was, and out of screen readers' way.
                 .then(if (pushedDetail != null) Modifier.clearAndSetSemantics {} else Modifier)) {
@@ -922,6 +994,7 @@ private fun ChatPage(
                     RuleSuggestionLine("card:${card.id}", card.suggestion, tasks, { notice = operationFeedback(it).text.resolve(res) },
                         card.manager, enabled = canApprove)
                 }
+                val cardHeight = rememberCardHeightStore()
                 // The pending cards above the composer (DESIGN_SYSTEM.md 4.8, iOS PendingCards and TaskQuestions), in two places:
                 // [task] Persona's task question above its entries, else the stack. Each takes at most half the page and never so
                 // much that the composer leaves it; with the keyboard up, what the conversation has above the rest of the
@@ -931,27 +1004,53 @@ private fun ChatPage(
                     val density = LocalDensity.current
                     val above = LocalChromeInsets.current.top
                     val otherShown = if (task) stackCards.isNotEmpty() else taskAsk != null
-                    // The window's height is a key too: it stands in for the page's until the page is measured, and the
-                    // lambda this derived state keeps must see the window's current one after a resize.
-                    val cap by remember(keyboard, density, above, task, otherShown, windowHeightPx) {
+                    val lone = cards.singleOrNull()
+                    val canResize = !keyboard && lone != null && (task || taskAsk == null)
+                    val resizeRange by remember(canResize, density, above, task, otherShown, windowHeightPx) {
                         derivedStateOf {
-                            with(density) {
-                                PendingStack.cap(pageHeight(), keyboard, rest = (footerHeight - taskHeight - stackHeight).coerceAtLeast(0).toDp(),
+                            if (!canResize) null else with(density) {
+                                PendingStack.resizeRange(pageHeight(), rest = (footerHeight - taskHeight - stackHeight).coerceAtLeast(0).toDp(),
                                     header = above + topBarHeight.toDp(), floor = Tokens.Space.xl,
                                     other = if (!otherShown) null else (if (task) stackHeight else taskHeight).toDp())
                             }
                         }
                     }
+                    val resize = if (canResize && lone != null && resizeRange != null) {
+                        CardResize(
+                            id = lone.id,
+                            height = { with(density) { (if (task) taskHeight else stackHeight).toDp() } },
+                            range = resizeRange!!,
+                            store = cardHeight,
+                        )
+                    } else null
+                    // The window's height is a key too: it stands in for the page's until the page is measured, and the
+                    // lambda this derived state keeps must see the window's current one after a resize.
+                    val cap by remember(keyboard, density, above, task, otherShown, windowHeightPx, resize, cardHeight) {
+                        derivedStateOf {
+                            val defaultCap = with(density) {
+                                PendingStack.cap(pageHeight(), keyboard, rest = (footerHeight - taskHeight - stackHeight).coerceAtLeast(0).toDp(),
+                                    header = above + topBarHeight.toDp(), floor = Tokens.Space.xl,
+                                    other = if (!otherShown) null else (if (task) stackHeight else taskHeight).toDp())
+                            }
+                            if (resize != null && !requestFolds.isFolded(resize.id)) {
+                                cardHeight.cap(defaultCap, resize.range, resize.id)
+                            } else defaultCap
+                        }
+                    }
                     // In a box of its own: with no cards it is nothing, and its height reads 0 again.
-                    Box(Modifier.onSizeChanged { if (task) taskHeight = it.height else stackHeight = it.height }) {
+                    Box(Modifier
+                        .then(if (cards.isNotEmpty()) Modifier.layoutId(PendingCardsFooterSlot) else Modifier)
+                        .onSizeChanged { if (task) taskHeight = it.height else stackHeight = it.height }) {
                         InteractionPanel(cards, machine, cap, taps.busyId, taps.uncertain, { interaction, resolution ->
                             interactionController.answer(interaction, resolution)
                         }, terminal, { if (task) taskOverlay = it else stackOverlay = it }, linkVisible = linkVisible,
                             folds = requestFolds,
                             blockedReason = if (canApprove) null else approvalBlockedReason(res, session),
+                            answerSession = session,
                             terminalHelp = canTerminal, onDiscardLocal = interactionController::discard, keyboard = keyboard,
                             labels = if (task) taskAsk?.let { mapOf(it.card.id to it.label) }.orEmpty() else emptyMap(),
-                            first = if (task) null else chrome.requestId, counted = !task, suggestion = ruleLine)
+                            first = if (task) null else chrome.requestId, counted = !task, suggestion = ruleLine,
+                            resize = resize, commandInputErrors = interactionController.commandInputErrors)
                     }
                 }
                 val onOpenSibling = chrome.onOpenSession
@@ -964,8 +1063,9 @@ private fun ChatPage(
                     if (activityInHeader && openBackgroundList != null && backgroundOwner != null && ChatActivity.shown(backgroundOwner))
                         ({ ChatActivityPill(backgroundOwner, openBackgroundList) }) else null
                 val tabs = session != null && onOpenSibling != null && siblingSessions.size > 1
+                val preferHerdrTabName = renderStyle != ChatRenderStyle.Assistant && chrome.preferHerdrTabName
                 JPage(
-                    title = session?.displayTitle ?: stringResource(R.string.chat_screen_untitled),
+                    title = session?.displayTitle(preferHerdrTabName) ?: stringResource(R.string.chat_screen_untitled),
                     scrollEdgeStyle = ScrollEdgeStyle.Gradient,
                     topScrollEdgeStyle = if (tabs || activityPill != null) TabbedChatScrollEdgeStyle else ScrollEdgeStyle.Gradient,
                     topBar = {
@@ -983,7 +1083,21 @@ private fun ChatPage(
                                         onResumeInTerminal = resumeInTerminal,
                                         turnStart = runningSince,
                                         sides = childCards.sides, sideRollup = childCards.sideRollup, onOpenSide = chrome.onOpenSide,
-                                        menuOpen = headerMenuOpen)
+                                        onForkSession = if (onFork != null && session?.canFork == true) ({ onFork("") }) else null,
+                                        forking = forking,
+                                        takeover = pageTakeover,
+                                        menuOpen = headerMenuOpen,
+                                        preferHerdrTabName = preferHerdrTabName,
+                                        machines = machines,
+                                        childRows = childCards.list,
+                                        onOpenSubagent = chrome.onOpenSubagent ?: chrome.onOpenSession,
+                                        onOpenBackgroundDestination = openBackground,
+                                        onStopLoop = if (readOnly || !canSend) null else ({ send(ChatActivity.STOP_LOOP) }),
+                                        overviewActions = chrome.actions,
+                                        overviewConnection = chrome.connection,
+                                        openSubagentsRequested = openSubagentsPending,
+                                        onOpenSubagentsHandled = { openSubagentsPending = false },
+                                        onOverviewVisible = { overviewOpen = it })
                                     // The space's other tabs under the title (iOS SiblingTabs); not for the assistant's conversation.
                                     if (tabs && session != null && onOpenSibling != null) {
                                         ChatSiblingTabs(session, siblingSessions, onOpenSibling, trailing = activityPill)
@@ -998,6 +1112,7 @@ private fun ChatPage(
                                 full = header, compact = {
                                     ChatSlimHeader(session, status, connection, onBack,
                                         onMore = if (compactGlassAgent) ({ headerMenuOpen.value = true }) else null,
+                                        preferHerdrTabName = preferHerdrTabName,
                                         onOpen = headerFold::open)
                                 })
                             else header()
@@ -1006,8 +1121,9 @@ private fun ChatPage(
                                 onFreeze = { timeline.freeze(currentItems()); timelineVersion++ },
                                 onVisibilityChanged = { taskPageVisible = it },
                                 onExpandFold = ::expand, foldErrors = foldErrors,
-                                // While the link card peeks, the composer needs the room more (glass laid them over each other).
-                                showBar = linkInset.value <= 0f, callJumps = callJumps)
+                                // Glass agent chats surface the plan via the floating PlanPill above the composer (matching iOS)
+                                // instead of a top full-width progress bar; also hide while the link card peeks.
+                                showBar = linkInset.value <= 0f && !(glass && agentChat), callJumps = callJumps)
                         }
                     },
                     bottomBar = footer@ {
@@ -1015,7 +1131,7 @@ private fun ChatPage(
                             ForwardPickFooter(messageMenu.forwardPick, snapshot.items, Modifier.onSizeChanged { footerHeight = it.height })
                             return@footer
                         }
-                        Column(Modifier.onSizeChanged { footerHeight = it.height }) {
+                        ChatFooterColumn(trayFooterBudget, Modifier.onSizeChanged { footerHeight = it.height }) {
                             if (renderStyle == ChatRenderStyle.Assistant && (status.submitting || status.processing ||
                                     (status.unconfirmed && sendReceipts.isNotEmpty()))) StatusLine(status)
                             if (renderStyle != ChatRenderStyle.Assistant) ChatSessionStatusLine(status, session, snapshot.turnDurationSeconds, projection.turns.lastOrNull()?.toolCount ?: 0,
@@ -1045,7 +1161,8 @@ private fun ChatPage(
                             (if (feedback == null) notice ?: composerError else composerError)?.let {
                                 Text(it, Modifier.padding(horizontal = Tokens.Space.m), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
                             }
-                            if (!historyOnly && !readOnly) ChatStartingNote(session)
+                            if (!historyOnly && !readOnly) ChatStartFailure(session, chrome.actions, sender, sessions,
+                                (chrome.connection?.lastHello?.features ?: persona.core.designsystem.LocalHubFeatures.current).toSet())
                             // The host's own word on it: why it waits for you, or what stopped it, with a retry.
                             // ultracode went off when it resumed (#582, iOS UltracodeLostNote): one line to turn it back on or dismiss.
                             if (!historyOnly && !readOnly && session != null) UltracodeLostNote(session, controls, canSend)
@@ -1061,29 +1178,54 @@ private fun ChatPage(
                             if (!historyOnly && !readOnly && session != null) ModelFallbackCard(session, chrome.actions)
                             if (historyOnly) footer?.invoke()
                             else if (readOnly) Text(stringResource(R.string.chat_screen_subagent_read_only), Modifier.padding(Tokens.Space.m), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2)
-                            else if (session?.isStoppedAgent == true && machine?.online != false) ChatStoppedNote(agentTerminal,
-                                resumeInTerminal?.takeIf { terminalResume(session, machine) == TerminalResume.Available })
-                            else {
+                            else if (session?.isStoppedAgent == true && machine?.online != false) {
+                                if (session.canContinueCodex && pageTakeover != null) {
+                                    ChatSourceNote(
+                                        session = session,
+                                        takeover = pageTakeover,
+                                        takeoverEnabled = (connection == null || connection == ConnectionState.Online) && machine?.online != false,
+                                    )
+                                }
+                                ChatStoppedNote(agentTerminal,
+                                    resumeInTerminal?.takeIf { terminalResume(session, machine) == TerminalResume.Available })
+                            }
+                            else if (!canSend && session != null && session.canContinueCodex && pageTakeover != null) {
+                                // Replace the disabled read-only composer with a single actionable bar (no duplicate notice).
+                                ChatSourceNote(
+                                    session = session,
+                                    takeover = pageTakeover,
+                                    takeoverEnabled = (connection == null || connection == ConnectionState.Online) && machine?.online != false,
+                                )
+                            } else {
                                 // What waits in the agent's queue sits right above the composer, while the composer shows (Persona's further down).
                                 // Not while a "/" quick message is being picked: the list opens above the field, and with the
                                 // keyboard up the queue, the list and the status line together climbed over the top bar.
                                 if (renderStyle != ChatRenderStyle.Assistant && SlashCommand.suggestions(composer.value.text, clear = true).isEmpty())
-                                    ChatQueueStrip(session, chrome.actions, composer, { notice = it }, sessions::refresh)
+                                    ChatQueueStrip(session, chrome.actions, composer, { notice = it }, sessions::refresh, imageLimits = imageLimits)
                                 // A source that only lets the phone read says so where the typing would be.
                                 if (!canSend && session != null) ChatSourceNote(session)
                                 if (assistantChat) taskHost?.let { host ->
                                     val namespace = GroupKeys.namespaceOf(key.machineId)
                                     val owner = session?.manager ?: managerChoice.shown
-                                    val trayRequests = taps.shown(allRequests).filter { request ->
-                                        GroupKeys.namespaceOf(request.machineId) == namespace &&
-                                            (request.sessionKey == key || request.sessionKey in taskKeys ||
-                                                host.sessions.any { it.key == GroupKeys.rawKey(request.sessionKey) && !it.assistant && (it.manager ?: managerChoice.defaultId) == owner })
+                                    val trayRequests = remember(allRequests, taps, namespace, key, taskKeys, host.sessions, owner, managerChoice.defaultId) {
+                                        val ownedAgents = host.sessions.asSequence()
+                                            .filter { !it.assistant && (it.manager ?: managerChoice.defaultId) == owner }
+                                            .map { it.key }
+                                            .toHashSet()
+                                        taps.shown(allRequests).filter { request ->
+                                            GroupKeys.namespaceOf(request.machineId) == namespace &&
+                                                (request.sessionKey == key || request.sessionKey in taskKeys ||
+                                                    GroupKeys.rawKey(request.sessionKey) in ownedAgents)
+                                        }
+                                    }
+                                    val trayInboxDrafts = remember(inboxDrafts, owner, managerChoice.defaultId) {
+                                        inboxDrafts.filter { (it.manager ?: managerChoice.defaultId) == owner }
                                     }
                                     // What its tasks ask, at the bottom where the user is: the oldest question above the entries and the
                                     // tray, answered there (iOS taskFooter, TaskQuestions).
                                     taskAsk?.let { pendingCards(listOf(it.card), true, keyboard) }
                                     AssistantTrays(host, assistantTrays, trayRequests,
-                                        inboxDrafts.filter { (it.manager ?: managerChoice.defaultId) == owner }, traySchedules,
+                                        trayInboxDrafts, traySchedules,
                                         maximumHeight = trayMax,
                                         busy = trayApproving || traySending || taps.busy, enabled = canSend,
                                         onApprove = ::approveTray, onReview = { interaction ->
@@ -1097,8 +1239,10 @@ private fun ChatPage(
                                                 ?.let { todo -> openTask(host, todo) } ?: run { host.sheet.value = TaskSheet.Agent(raw) }
                                         }, onSend = ::sendTray, onSchedule = { pageTrays.traySchedule.value = it }, onPlan = { pageTrays.trayPlan.value = it },
                                         backgroundRecords = host.backgroundRecords.isNotEmpty(), onBackground = host.onOpenBackground,
-                                        under = computerPill?.let { pill -> { pill(Modifier) } },
-                                        groupByOrigin = foldsBackground)
+                                        groupByOrigin = foldsBackground,
+                                        modifier = Modifier.layoutId(AssistantTrayFooterSlot),
+                                        maximumHeightForChrome = trayMaxForChrome,
+                                        under = computerPill?.let { pill -> { pill(Modifier) } })
                                     // Where the next message goes, never only inside the In progress tray (iOS RouteChip, #4339 C15).
                                     TaskRouteChip(host)
                                 }
@@ -1115,7 +1259,7 @@ private fun ChatPage(
                                 if (renderStyle == ChatRenderStyle.Assistant && SlashCommand.mainSuggestions(composer.value.text,
                                         clear = canSend && LocalMainChatClear.current != null,
                                         permissions = SessionModes.offersPermissions(session, glass, modeSheet), resources = res).isEmpty())
-                                    ChatQueueStrip(session, chrome.actions, composer, { notice = it }, sessions::refresh)
+                                    ChatQueueStrip(session, chrome.actions, composer, { notice = it }, sessions::refresh, imageLimits = imageLimits)
                                 if (embedded && assistantChat) LocalMainChatGuidance.current?.invoke()
                                 val offlineHint = if (agentChat) offlineAgentPlaceholder(session, machine, heldActions != null) else null
                                 LargeWindowComposer(key, composer, session?.status == "working" && !(agentChat && machine?.online == false),
@@ -1154,6 +1298,16 @@ private fun ChatPage(
                                         else -> null
                                     },
                                     modeHint = if (glass) null else chatModeHint(session, includeModes = modeSheet),
+                                    // Brief and Board share one wrapping row for the launcher and mode chips; Glass's pill does its work (#5055).
+                                    hintChips = if (!glass && renderStyle == ChatRenderStyle.Assistant && chrome.assistantManagement != null &&
+                                        !readOnly && (canSend || turnFix == TurnErrorFix.ModelRoute)) ({
+                                        ConversationLauncherChip(chrome.assistantManagement, key.machineId, key.sessionId, session?.launcher,
+                                            conversationLauncher, conversationModel, openRequested = openModes || openModelRoutePicker,
+                                            onOpenHandled = { openModes = false; openModelRoutePicker = false }) { launcher, model ->
+                                            conversationLauncher = launcher
+                                            conversationModel = model
+                                        }
+                                    }) else null,
                                     // The model pill (#5055, the web's ModelPill): Glass's, in an Agent's chat and a Persona chat.
                                     modelPill = if (!glass || switchSession == null) null else ({ width ->
                                         val online = connection == null || connection == ConnectionState.Online
@@ -1175,17 +1329,20 @@ private fun ChatPage(
                                             onPagePick = { pick -> conversationLauncher = pick?.launcher; conversationModel = pick?.model },
                                             onNotice = { notice = it }, enabled = online, onOverlay = { pillOverlay = it },
                                             onConfigure = chrome.onFixModel?.let { fix -> { fix(persona.core.designsystem.ReadinessActionId.EditProvider, null, switchSession.manager) } },
-                                            onEffort = { effort -> controls.run(switchSession, ChatAction.Modes(effort = effort)) })
+                                            onEffort = { effort -> controls.run(switchSession, ChatAction.Modes(effort = effort)) },
+                                            openRequested = openModes || openModelRoutePicker,
+                                            onOpenHandled = { openModes = false; openModelRoutePicker = false },
+                                            clearRequested = clearModelPick, onClearHandled = { clearModelPick = false },
+                                            leaderConversations = chrome.leaderConversations,
+                                            onSwitched = {
+                                                scope.launch {
+                                                    try { sessions.refresh() }
+                                                    catch (cancelled: CancellationException) { throw cancelled }
+                                                    catch (_: Exception) { }
+                                                }
+                                            })
                                     }),
                                     accessory = {
-                                        // Brief and Board keep the launcher chip; Glass's pill does its work (#5055).
-                                        if (!glass && renderStyle == ChatRenderStyle.Assistant && !readOnly && canSend && chrome.assistantManagement != null) {
-                                            ConversationLauncherChip(chrome.assistantManagement, key.machineId, key.sessionId, session?.launcher,
-                                                conversationLauncher, conversationModel) { launcher, model ->
-                                                conversationLauncher = launcher
-                                                conversationModel = model
-                                            }
-                                        }
                                         if (linkContexts.isEmpty()) ComposerSuggestion(session, composer, onSend = { text -> send(text) })
                                         // One line each while the link card peeks: the whole cards left no room for the composer.
                                         if (linkContexts.isNotEmpty()) ComposerContextCards(linkContexts, compact = linkInset.value > 0f) { removed ->
@@ -1201,7 +1358,8 @@ private fun ChatPage(
                                     // web's `canPickPermissions`: Claude's sessions and Persona's while they can change it (#6513)
                                     onPermissions = if (SessionModes.offersPermissions(session, glass, modeSheet)) ({ openPermissions = true }) else null,
                                     // (on Glass /model opens the pill's panel, where the model is picked)
-                                    loop = claudeCommands)
+                                    loop = claudeCommands,
+                                    imageLimits = imageLimits)
                             }
                         }
                     },
@@ -1222,12 +1380,13 @@ private fun ChatPage(
                         contentWorkGroups = contentWorkGroups, contentLastSteps = contentLastSteps,
                         contentSourceLabels = contentSourceLabels, waitingOnYou = waitingOnYou,
                         foldsBackground = foldsBackground, onTerminal = agentTerminal, lastUserId = lastUserId, turnFix = turnFix,
-                        fixModel = fixModel, openRecap = openRecap, taskHost = taskHost, folding = folding, foldErrors = foldErrors,
+                        fixModel = fixModel, turnModelActions = turnModelActions, openRecap = openRecap, taskHost = taskHost, folding = folding, foldErrors = foldErrors,
                         onToggle = ::toggle, onExpand = ::expand,
                         onFullText = { item -> readFullText(key, item) }, loader = loader, session = session,
                         earlierEngines = earlierEngines, onReadEarlierText = ::readFullText,
                         machineName = machines.firstOrNull { it.id == key.machineId }?.name, subagentCards = subagentCards,
-                        messageMenu = messageMenu, turnLauncher = session?.launcher)
+                        messageMenu = messageMenu, turnLauncher = session?.launcher,
+                        hasPendingCards = requests.isNotEmpty() || taskAsk != null)
                 }
             }
             ChatPageOverlays(pushedDetail, taskHost, search, searchableItems, projection.turns.size, snapshot.hasOlder,
@@ -1237,15 +1396,104 @@ private fun ChatPage(
                 terminal, snapshot.turnDurationSeconds, notice ?: snapshot.error, recovery, machine,
                 statusBindings.draftSaveError, fullTextState, sheetPlanState, planSheetState, renderStyle, composer,
                 messageMenu, quoteTarget,
-                onContext = { text -> linkContexts = linkContexts + messageContext(session?.displayTitle ?: res.getString(R.string.chat_screen_untitled), text, context.resources)
+                onContext = { text -> linkContexts = linkContexts + messageContext(session?.displayTitle(renderStyle != ChatRenderStyle.Assistant && chrome.preferHerdrTabName) ?: res.getString(R.string.chat_screen_untitled), text, context.resources)
                     notice = res.getString(R.string.chat_screen_added_context) },
                 onNotice = { notice = it }, onFork = onFork, rewindMenu = rewindMenu,
                 onDelete = { target -> messages.firstOrNull { it.clientMessageId == target.id }?.let { message ->
                     deliveryAction(message, if (message.state.allows(DeliveryAction.Cancel)) DeliveryAction.Cancel else DeliveryAction.Delete)
                 } }, viewerState, chatList, backgroundActions = chrome.actions,
-                backgroundConnection = chrome.connection, backgroundFiles = chrome.files)
+                backgroundConnection = chrome.connection, backgroundFiles = chrome.files,
+                imageLimits = imageLimits, canUploadPhotos = composerService != null)
+            pageTakeover?.let { CodexTakeoverDialogs(it) }
         }
     }
+}
+
+private object AssistantTrayFooterSlot
+private object PendingCardsFooterSlot
+
+private class AssistantTrayFooterBudget {
+    var fixedHeightPx: Int = 0
+    var pageHeightPx: Int = -1
+    var pendingSlots: Int = 0
+}
+
+private fun chatFooterMeasurePolicy(budget: AssistantTrayFooterBudget) = MeasurePolicy { measurables, constraints ->
+    val loose = constraints.copy(minWidth = 0, minHeight = 0)
+    val placeables = arrayOfNulls<Placeable>(measurables.size)
+    var trayIndex = -1
+    val pendingIndices = ArrayList<Int>(2)
+    var fixedHeight = 0
+    // 1. Measure non-tray, non-pending children bottom-up first so the composer, route chip, and queue strip
+    //    always claim their full natural height before expandable cards/trays take what remains.
+    for (index in measurables.lastIndex downTo 0) {
+        val measurable = measurables[index]
+        when (measurable.layoutId) {
+            AssistantTrayFooterSlot -> { trayIndex = index; continue }
+            PendingCardsFooterSlot -> { pendingIndices.add(index); continue }
+        }
+        val childMaxHeight = if (constraints.hasBoundedHeight) {
+            (constraints.maxHeight - fixedHeight).coerceAtLeast(0)
+        } else {
+            constraints.maxHeight
+        }
+        val placeable = measurable.measure(loose.copy(maxHeight = childMaxHeight))
+        placeables[index] = placeable
+        fixedHeight += placeable.height
+    }
+    budget.fixedHeightPx = fixedHeight
+    budget.pageHeightPx = if (constraints.hasBoundedHeight) constraints.maxHeight else -1
+    budget.pendingSlots = pendingIndices.size
+    var usedHeight = fixedHeight
+    // 2. Measure AssistantTrays next (reserving each active pending-card slot's minimum touch floor in trayMax)
+    //    so an open tray takes its room before pending cards yield via PendingStack.cap.
+    if (trayIndex >= 0) {
+        val pendingReservePx = Tokens.MinTouch.android.roundToPx() * pendingIndices.size
+        val trayMaxHeight = if (constraints.hasBoundedHeight) {
+            (constraints.maxHeight - usedHeight - pendingReservePx).coerceAtLeast(0)
+        } else {
+            constraints.maxHeight
+        }
+        val placeable = measurables[trayIndex].measure(loose.copy(maxHeight = trayMaxHeight))
+        placeables[trayIndex] = placeable
+        usedHeight += placeable.height
+    }
+    // 3. Measure active pending-card slots last within whatever height remains.
+    for (index in pendingIndices) {
+        val childMaxHeight = if (constraints.hasBoundedHeight) {
+            (constraints.maxHeight - usedHeight).coerceAtLeast(0)
+        } else {
+            constraints.maxHeight
+        }
+        val placeable = measurables[index].measure(loose.copy(maxHeight = childMaxHeight))
+        placeables[index] = placeable
+        usedHeight += placeable.height
+    }
+    val totalWidth = placeables.maxOfOrNull { it?.width ?: 0 } ?: 0
+    val totalHeight = placeables.sumOf { it?.height ?: 0 }
+    layout(constraints.constrainWidth(totalWidth), constraints.constrainHeight(totalHeight)) {
+        var y = 0
+        for (placeable in placeables) {
+            if (placeable != null) {
+                placeable.placeRelative(0, y)
+                y += placeable.height
+            }
+        }
+    }
+}
+
+/**
+ * Inline vertical chat footer layout (matching [Column]'s zero extra RecomposeScope overhead during IME slides)
+ * that measures the composer and fixed chrome before [AssistantTrays] and pending cards in a single pass.
+ */
+@Composable
+private inline fun ChatFooterColumn(
+    budget: AssistantTrayFooterBudget,
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    val policy = remember(budget) { chatFooterMeasurePolicy(budget) }
+    Layout(content = content, modifier = modifier, measurePolicy = policy)
 }
 
 @Composable
@@ -1288,13 +1536,32 @@ internal fun ChatJumpToLatest(
     newestVisibleItem: State<Item?>,
     readThrough: Item?,
     deferCount: Boolean,
+    agentChat: Boolean,
     onClick: () -> Unit,
 ) {
     // A changing visible row only invalidates this button. Freeze and follow change the timeline in place.
     val count by remember(timeline, timelineVersion, items, newestVisibleItem, readThrough, deferCount) {
         derivedStateOf { timeline.newMessageCount(items, newestVisibleItem.value, readThrough, defer = deferCount) }
     }
-    JumpToLatest(count, onClick, Modifier.sizeIn(minWidth = Tokens.MinTouch.android, minHeight = Tokens.MinTouch.android))
+    if (agentChat) AgentChatJumpToLatest(count, onClick)
+    else JumpToLatest(count, onClick, Modifier.sizeIn(minWidth = Tokens.MinTouch.android, minHeight = Tokens.MinTouch.android))
+}
+
+@Composable
+internal fun AgentChatJumpToLatest(count: Int, onClick: () -> Unit) {
+    val label = if (count > 0) pluralStringResource(DesignR.plurals.designsystem_jump_latest_new, count, count)
+        else stringResource(DesignR.string.designsystem_jump_latest)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Tokens.Space.xs),
+    ) {
+        if (count > 0) {
+            Text("$count", Modifier.semantics { hideFromAccessibility() },
+                style = PersonaTheme.type.micro.copy(fontWeight = FontWeight.Bold),
+                color = PersonaTheme.palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        JHomeNavigationIconButton(PhIcons.ArrowDown, label, onClick)
+    }
 }
 
 private val composerContextMaxHeight = 140.dp

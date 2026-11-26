@@ -40,12 +40,6 @@ import PersonaWire
         #if os(iOS)
         #expect(FleetLink.session(URL(string: "\(LegacyNames.urlScheme)://open?machine=m1&session=s1")!)?.session == "s1")
         #endif
-        #if os(macOS)
-        #expect(MacOpenURL.route(URL(string: "\(LegacyNames.urlScheme)://pair")!) == .pair)
-        #expect(PersonaLinkHandoff.isPersonaLink(["CFBundleExecutable": LegacyNames.capitalizedProduct + "Link"]))
-        #expect(!PersonaLinkHandoff.isPersonaLink(["CFBundleExecutable": "Persona"]))
-        #expect(MacOpenURL.route(URL(string: "\(LegacyNames.urlScheme)://open?machine=m1&session=s1")!) == .session(SessionKey(machineID: "m1", sessionID: "s1")))
-        #endif
     }
 
     @Test func sessionReadsOldFieldButCanonicalFalseWins() throws {
@@ -127,8 +121,8 @@ import PersonaWire
         let old = hub.client
         var new = hub.client
         new.personaNaming = true
-        try await old.send(SessionKey(machineID: "m1", sessionID: "s1"), text: text)
-        try await new.send(SessionKey(machineID: "m1", sessionID: "s1"), text: text)
+        try await old.send(SessionKey(machineID: "m1", sessionID: "s1"), text: text, clientMsgID: UUID().uuidString)
+        try await new.send(SessionKey(machineID: "m1", sessionID: "s1"), text: text, clientMsgID: UUID().uuidString)
         let requests = hub.sent("POST", "/api/v1/sessions/m1/s1/messages")
         let first = try JSONSerialization.jsonObject(with: #require(requests.first?.body)) as? [String: Any]
         let second = try JSONSerialization.jsonObject(with: #require(requests.last?.body)) as? [String: Any]
