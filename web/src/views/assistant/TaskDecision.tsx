@@ -9,7 +9,7 @@ import { askRow, later } from "../../lib/feed";
 import { defaultManager, MANAGER_HEADER, shownManager } from "../../lib/manager-choice";
 import { getState, putTodo, refreshTodos } from "../../lib/store";
 import { latestReview } from "../../lib/supervision";
-import { askOptions, openAsk, type Todo } from "../../lib/todos";
+import { askOptions, openAsk, type Todo, type TodoAsk } from "../../lib/todos";
 import { Button, toast } from "../../ui/atoms";
 import { AcceptRow } from "./Brief";
 import { BriefingMark } from "./BriefingMark";
@@ -110,16 +110,25 @@ export function TaskDecision({ todo, rowKey, hideTitle = false }: { todo: Todo; 
 export type NeedsYouPartProps =
   /** A task's decision in the tray. */
   | { decision: Todo; rowKey?: string; hideTitle?: boolean }
+  /** A task's open acceptance ask in the tray (not a decision review). */
+  | { accept: Todo; ask: TodoAsk; rowKey?: string; hideTitle?: boolean; countsOpenAttr: { "data-counts-open"?: string } }
   /** A task whose Agent did not start, in the tray (#10365). */
   | { failed: Todo; rowKey: string; countsOpenAttr: { "data-counts-open"?: string } }
   /** The suggested rule of a plan card or a passed-up question, under it. */
   | { rule: RuleCard };
 
 /** What views/assistant/Tasks loads, with the first card that draws one and not with the first screen
- *  (startup-preload's budget): a decision's row, a failed start's row (#10365), or a suggested rule's line (#5802). One
- *  chunk behind one component, so the first screen names one file for all. */
+ *  (startup-preload's budget): a decision's row, an open acceptance ask's row, a failed start's row (#10365), or a
+ *  suggested rule's line (#5802). One chunk behind one component, so the first screen names one file for all. */
 export default function NeedsYouParts(props: NeedsYouPartProps) {
   if ("decision" in props) return <TaskDecision todo={props.decision} rowKey={props.rowKey} hideTitle={props.hideTitle} />;
+  if ("accept" in props) {
+    return (
+      <div data-needs-row={props.rowKey} {...props.countsOpenAttr} className="min-w-0 rounded-control bg-field px-3 py-2.5">
+        <AcceptRow stacked hideTitle={props.hideTitle} key={props.accept.id + props.ask.asked_at} row={askRow(props.accept, props.ask)} />
+      </div>
+    );
+  }
   if ("failed" in props) return <FailedTaskRow todo={props.failed} rowKey={props.rowKey} countsOpenAttr={props.countsOpenAttr} />;
   return <RuleSuggestionLine of={props.rule} />;
 }

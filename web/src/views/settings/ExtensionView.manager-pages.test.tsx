@@ -9,6 +9,7 @@ const gate = vi.hoisted(() => ({
   ready: false,
   features: [] as string[],
   listeners: new Set<() => void>(),
+  hubEvents: new Map<string, Set<(m: Record<string, unknown>) => void>>(),
   draws: vi.fn(),
   acts: vi.fn(),
   view: { title: "Morning run", sections: [{ items: [{ type: "text", text: "Legacy whole page" }] }] } as Record<string, unknown>,
@@ -18,6 +19,11 @@ vi.mock("../../lib/store", async (original) => ({
   useStore: (select: (state: { features: string[] }) => unknown) => select({ features: gate.features }),
   appSocketReady: () => gate.ready,
   onAppSocket: (listener: () => void) => { gate.listeners.add(listener); return () => { gate.listeners.delete(listener); }; },
+  onHubEvent: (type: string, listener: (m: Record<string, unknown>) => void) => {
+    if (!gate.hubEvents.has(type)) gate.hubEvents.set(type, new Set());
+    gate.hubEvents.get(type)!.add(listener);
+    return () => { gate.hubEvents.get(type)?.delete(listener); };
+  },
 }));
 vi.mock("../../lib/extension-ui", async (original) => ({
   ...(await original<typeof import("../../lib/extension-ui")>()),
@@ -36,7 +42,7 @@ async function streamHello() {
 }
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-  gate.ready = false; gate.features = []; gate.listeners.clear(); gate.draws.mockClear(); gate.acts.mockClear(); native.mockClear();
+  gate.ready = false; gate.features = []; gate.listeners.clear(); gate.hubEvents.clear(); gate.draws.mockClear(); gate.acts.mockClear(); native.mockClear();
   gate.view = { title: "Morning run", sections: [{ items: [{ type: "text", text: "Legacy whole page" }] }] };
   localStorage.setItem("persona.token", "synthetic-token");
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
@@ -52,7 +58,7 @@ describe("ids starting with '-' are HTTP only (#15017)", () => {
     expect(httpOnlyUI("pages")).toBe(false);
   });
 
-  it.each([["-pages", "pg_3f9a1c0d5e7b2a41"], ["-pages", "index"], ["-subscriptions", "list"]])("draws %s/%s over HTTP on a hub that offers the stream", async (extension, ui) => {
+  it.each([["-pages", "pg_3f9a1c0d5e7b2a41"], ["-pages", "g_1a2b3c4d5e6f7081"], ["-pages", "index"], ["-subscriptions", "list"]])("draws %s/%s over HTTP on a hub that offers the stream", async (extension, ui) => {
     await streamHello();
     await act(async () => root.render(<ExtensionUI extension={extension} ui={ui} remember />));
     await flush();
@@ -117,5 +123,27 @@ describe("a Dashboards page tells the page around it what it is", () => {
     expect(gate.draws).toHaveBeenCalledTimes(2); // its own stack: the rename form drawn here
     expect(gate.draws.mock.calls[1]!.slice(0, 2)).toEqual(["-pages", "index"]);
     expect(gate.acts).not.toHaveBeenCalled();
+  });
+
+  it("reloads a -pages g_ Overview card on extension_ui invalidations for its g_ id only (#13020)", async () => {
+    const emit = (type: string, msg: Record<string, unknown>) => gate.hubEvents.get(type)?.forEach((l) => l({ type, ...msg }));
+    gate.view = { title: "Elm Street rent", sections: [{ key: "persona.watch", items: [{ type: "metric", key: "persona.reading", label: "Rent", value: "2,150 USD", detail: "Checked today 08:02" }] }] };
+    await act(async () => root.render(<ExtensionUI extension="-pages" ui="g_1a2b3c4d5e6f7081" context={{ size: "compact" }} compact remember />));
+    await flush();
+    expect(gate.draws).toHaveBeenCalledTimes(1);
+    expect(host.textContent).toContain("2,150 USD");
+
+    // an invalidation for another page id leaves this Overview card alone
+    gate.view = { title: "Elm Street rent", sections: [{ key: "persona.watch", items: [{ type: "metric", key: "persona.reading", label: "Rent", value: "1,985.5 USD", detail: "Below 2,000 USD · Checked today 08:02", tone: "caution", icon: "warning" }] }] };
+    await act(async () => emit("extension_ui", { extension: "-pages", id: "pg_1a2b3c4d5e6f7081", invalidate: true }));
+    await flush();
+    expect(gate.draws).toHaveBeenCalledTimes(1);
+
+    // an invalidation for the card's own g_ id reloads it in place
+    await act(async () => emit("extension_ui", { extension: "-pages", id: "g_1a2b3c4d5e6f7081", invalidate: true }));
+    await flush();
+    expect(gate.draws).toHaveBeenCalledTimes(2);
+    expect(host.textContent).toContain("Below 2,000 USD · Checked today 08:02");
+    expect(host.querySelector(".text-orange")).not.toBeNull();
   });
 });

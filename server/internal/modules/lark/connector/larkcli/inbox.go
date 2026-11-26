@@ -846,7 +846,7 @@ func (c *Connector) thingForGroup(ctx context.Context, group *inboxGroup, me str
 		link, err := url.Parse(message.MessageAppLink)
 		if err == nil && link.Scheme == "https" && link.User == nil &&
 			(link.Host == "applink.feishu.cn" || link.Host == "applink.larksuite.com") &&
-			(link.Path == "/client/chat/open" || link.Path == "/client/thread/open") {
+			isSourceAppLinkPath(link.Path) {
 			thing.OpenURL = message.MessageAppLink
 		}
 		break

@@ -140,6 +140,7 @@ type receiptHooks struct {
 	before     func(read int)
 	beforeCall func(DeviceCall) // only a test that must distinguish the node from the main conversation's relay reads
 	after      func(read int)
+	afterCall  func(DeviceCall)
 	receipt    func(FeedItem)
 }
 

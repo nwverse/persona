@@ -62,6 +62,37 @@ or the manager restarts and retries). A previous interrupted send (hub stopped o
 - Immediately after restart, before a round lists sources, the manager still knows plugin-provided connectors (`extensions` in `inbox.config`). Their items still have no fallback and must wait for the model;
   unknown sources behave likewise, never defaulting to unimportant.
 
+### Route external updates to work
+
+Inbox source routing is for people who want specific chats, repositories, mail or subscriptions to update their work.
+Forwarding starts after the owner configures a source mode. Persona uses the closest applicable binding and sends
+actionable updates to one owner. FYI updates are kept in the target's activity. When a source serves several topics,
+Persona can sort short summaries against the bound work. New work appears as a to-do confirmation unless the owner
+has enabled automatic to-do creation for its owning direction. An update to work already in progress goes to the
+existing owner. The Inbox can receive the update before it is routed. Digest sources wait for their configured window.
+See [External source bindings](../protocol/protocol.md#external-source-bindings) for configuration and source identities.
+
+### Move existing forwarding rules
+
+Existing Lark topic links and the Inbox option to forward matching GitHub pull-request and issue updates continue
+working. The option is saved as `inbox.todo_forward.enabled` in Assistant settings. Existing repository links
+are available to the new routing rules. Persona also recognizes an already linked Lark topic when you inspect that
+topic. You can continue opening work and replying to it through the Lark bot as before.
+
+1. Ask Persona in the main conversation to inspect a specific source and check whether the destination you expect
+   is already linked. For an older rule that matched a link in message text, add an explicit source link if you want
+   that source to use scoped routing.
+2. Start with one pull request, issue or topic. Set how often updates should arrive and who handles them. Keep
+   **Ask before creating a to-do** if you want to decide about new work. Review the approval card when changing a
+   rule through chat.
+3. Verify where a new update goes before configuring a wider source. Leave the legacy forwarding switch enabled
+   while you still want its behavior for sources you have yet to configure.
+
+To restore the old behavior for new updates, remove the overrides that set a forwarding mode on that path or
+restore the original policy. If a parent still sets a mode, the source inherits it. **Off** and **On request**
+keep automatic routing off for that source. An update already admitted has a receipt, so changing the rule does
+not send it a second time. Items still in Inbox can be handled there. [Routing and compatibility details](../protocol/protocol.md#legacy-routing-compatibility).
+
 ### Send failures (2026-11-16, #9125)
 
 A reply that did not go out says why, on `POST /api/v1/inbox/{id}/reply` and on a confirmed reply suggestion (`…/suggestion`), instead of a bare 502.
@@ -725,14 +756,15 @@ A merge carries every member's source and truncation state into the survivor's a
   This uses the existing archive flag on every client, without a new setting, migration or separate Agent workflow.
   It sends no completion push (`notifyFinished` skips it); the result is the Inbox suggestion.
 
-**Suggestion tool `inbox_suggest`** (`assistant/inbox_suggest.go`, description `prompts/mcp/inbox/inbox_suggest.md`; accepts the handling chat started for an item, and with `item` a
+**Suggestion tool `inbox_suggest`** (`assistant/inbox_suggest.go`, `assistant/inbox_handoff_suggest.go`, description `prompts/mcp/inbox/inbox_suggest.md`; accepts the handling chat started for an item, and with `item` a
 conversation the item was handed to ("Item actions", Hand to AI), rejecting other chats):
-`{item?, processing_turn?, kind, text, note?, handback?, outcome?, recap?, title?, summary?, machine?, cwd?, related?, changes?, follow?, reported?}`.
+`{item?, processing_turn?, kind, text, note?, handback?, outcome?, recap?, title?, summary?, machine?, session?, cwd?, related?, changes?, follow?, reported?}`.
 
 | kind | Meaning | After confirmation |
 | --- | --- | --- |
 | `reply` | A reply (`text` sent verbatim, no 【…】 blanks for users to fill; Docs may include `changes`) | Send through `/reply`'s send-once path (`send_id`), **without marking the item done**. `handling.state = waiting` (Working, awaiting response) with the default 24-hour follow until the chat supplies one; chain records your confirmation and the send, then `waiting` with `via=user`, and tells the chat the user confirmed and it was sent |
 | `agent` | Assign an Agent (`text` is its instruction; optional `machine` / `cwd` default to assistant computer / home directory) | Code starts an Agent with that instruction (like the chat calling `agent_start`: `agent` chain entry links to it; completion reports back), `handling.state = agent` |
+| `handoff` | Hand the item to an existing eligible conversation on this manager (`machine` + `session` from the main conversation, an active leader conversation, or the linked open task's conversation, with `text` as the note for that conversation; processing chat only; #13562) | Re-validates the target and delivers the item + note through the existing Hand to AI path (`session.send_once`, `prompts/inbox/handoff.md`), records the conversation in `handoffs` and the chain (linked to that session), leaves the item open (`handling.state = done`), and allows that conversation to write back with `inbox_suggest` `item`. Refuses archived, deleted, unknown, ineligible, or other-manager targets with a clear error back to the model (and returns `409 handoff_target_unavailable` if the target became unavailable before confirmation). Processing chats still cannot delegate directly (`agent_start`, `conversation_send`, scheduling remain refused). `now` is `confirm_handoff`, and the listed suggestion includes `machine_id`, `session_id` and `target_title`; client UI rendering follows separately |
 | `conclusion` | Conclusion: `outcome: fyi` (move to FYI with the conclusion; OK marks done) or `done` (review found no action needed; immediately done, `done_by=manager`) | OK marks done (`done_by=user`) |
 
 - The manager includes a new `processing_turn` in a processing conversation's first prompt and each subsequent Inbox delivery while the item is open. The call echoes its prompt's value. The manager checks it under the Inbox lock before changing the item, so a delayed write from a superseded prompt cannot replace a suggestion or change follow-up or handling. Existing processing chats without a value can omit it until their next Inbox delivery. Handed-off conversations still write back using `item`.
@@ -767,7 +799,7 @@ conversation the item was handed to ("Item actions", Hand to AI), rejecting othe
 - `reject`: record rejection, clear the suggestion, and return to the handling chat to reconsider. `instruct` requires `text` (such as "Do not reply this way; ask about timing first"; absent text returns 400), records your words, clears the suggestion, and asks the chat for a new one.
   Without a current suggestion, `instruct` with `version: 0` records your words and wakes or queues the handling chat; `confirm`, `reject`, and nonzero versions still return `suggestion_stale`.
 - Responses: `200` item; `409 {"code":"suggestion_stale","error":"建议已更新","item":{…}}` ("Suggestion updated": version is no longer current or no suggestion exists; App shows the notice and redraws from the returned item,
-  including the second tap on the same suggestion); `409 inbox_item_done`; `409 mail_reply_target_changed` (the message the reply suggestion answered is no longer the item's target; nothing was sent); `400`; `403`: reply-only devices (Watch) may confirm only replies / conclusions, as text (no Agent creation, handback, rejection, instructions, document-status changes, or `/agent …` sends;
+  including the second tap on the same suggestion); `409 inbox_item_done`; `409 mail_reply_target_changed` (the message the reply suggestion answered is no longer the item's target; nothing was sent); `409 handoff_target_unavailable` (a `handoff` suggestion's target was archived, deleted or became ineligible before confirmation; nothing was sent); `400`; `403`: reply-only devices (Watch) may confirm only replies / conclusions, as text (no Agent creation, handoff, handback, rejection, instructions, document-status changes, or `/agent …` sends;
   hub allows the route for Watch, while the manager checks the actual suggestion); `502 assistant_in_doubt` (as `/reply`: it may already have sent; another confirmation cannot bypass the attempt outcome); a send that did not go out answers its reason ("Send failures": `409 inbox_cannot_reply`, `429 inbox_send_rate_limited`, `502`/`503 inbox_*`, `delivered: "none"`); other 502 errors.
 - **Direct reply**: `POST /api/v1/inbox/{id}/reply` without a card keeps an item with a processing conversation open in `waiting` with the default 24-hour follow, records `sent` then `waiting` (`via=user`), clears any remaining suggestion and its old-App draft mirror, and queues `NoteSent` without waking that conversation. Without a processing conversation it still files as replied; new messages arriving while the send is out keep the existing kept-open behavior. This mode does not change old-App card sends or replies confirmed in a handed-off conversation.
 - **Execution failure**: a confirmed reply retains its versioned attempt and the safe retry/unknown state above; it stays Needs you. Agent-start and other non-reply failures keep `handling.state = failed` without a suggestion and the existing `failed` chain entry.

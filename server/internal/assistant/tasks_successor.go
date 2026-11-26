@@ -56,6 +56,7 @@ func (s *Service) startTaskSuccessor(ctx context.Context, t Todo, last proto.Ses
 	if err := s.applyModel(sctx, "agent.new", params); err != nil {
 		return proto.Session{}, err
 	}
+	dispatchAllowAll(sctx, s, m, last.Launcher, params)
 	var res struct {
 		Session proto.Session `json:"session"`
 	}

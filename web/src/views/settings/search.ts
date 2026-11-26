@@ -1,6 +1,7 @@
 import { t } from "../../i18n";
 import { LOCAL_SHORTCUTS, SHORTCUTS } from "../../lib/shortcuts";
-import { enabledSettingsTabs, registeredModules } from "../../core/module-host";
+import { registeredModules } from "../../core/module-host";
+import { enabledSettingsTabs } from "../../core/module-settings";
 import { MODULE_FEATURES_ID } from "../../core/module-features";
 import { isLegacyIntegrationTab } from "./integrations-route";
 import { tabInfo, TABS, type Tab } from "./nav";
@@ -57,6 +58,7 @@ export const SEARCH_INDEX: SearchGroup[] = [
   // General › Agents
   { tab: "general", group: t("settings.agent_preferences"), hint: words(t("terminal-full.mode_group"), t("settings.sidebar_terminals")), anchor: "agent-preferences" },
   { tab: "general", group: t("settings-agentopen.label"), hint: words(t("settings-agentopen.panel"), t("settings-agentopen.page")), anchor: "agent-open" },
+  { tab: "general", group: t("seen-rows.label"), hint: words(t("seen-rows.stay"), t("seen-rows.leave")), anchor: "seen-rows" },
   { tab: "general", group: t("context.details"), anchor: "agent-details" },
   // General › hubs, this browser, about
   { tab: "general", group: t("hubs.group_title"), hint: t("hubs.add_hub"), anchor: "hubs" },
@@ -163,7 +165,12 @@ export const SEARCH_INDEX: SearchGroup[] = [
   // Connectors
   { tab: "connectors", group: t("settings-connectors.mail"), anchor: "mail" },
   { tab: "connectors", group: t("settings-connectors.lark"), anchor: "lark" },
+  // the daily sync to the knowledge base (LarkSyncSection.tsx), inside the Lark settings: found by its heading, opens the Lark row
+  { tab: "connectors", group: t("settings-larksync.title"), hint: words(t("settings-larksync.add"), t("settings-larksync.schedule_label")), anchor: "lark" },
   { tab: "connectors", group: t("settings-sent.entry_label"), hint: t("settings-sent.hint"), anchor: "sent" },
+  // Inbox Sources (folded into Integrations Data Flow `-sources` when integrations_v2 is enabled)
+  { tab: "sources", group: t("settings-nav.tab_sources"), hint: t("settings-nav.hint_sources"), anchor: "inbox-sources" },
+  { tab: "sources", group: t("settings-assistantsettings.inbox_todo_forward"), hint: t("settings-assistantsettings.inbox_todo_forward_hint"), anchor: "inbox-todo-forward" },
   // Extensions: an extension's secrets are on its page, opened from the list; a market's token under Manage markets
   { tab: "extensions", group: t("settings-extensions.title"), anchor: "extensions" },
   { tab: "extensions", group: t("settings-extensions.secrets_title"), anchor: "extensions" },
@@ -182,6 +189,7 @@ export const SEARCH_INDEX: SearchGroup[] = [
   { tab: "labs", group: path(t("settings-labs.work_area"), t("settings-labs.integrations_v2_title")), anchor: "configuration-assistant-integrations-v2-integrations_v2" },
   { tab: "labs", group: path(t("settings-labs.area_agents"), t("settings-labs.terminal_renderer")), hint: words(t("settings-labs.terminal_renderer_standard"), t("settings-labs.terminal_renderer_webgl")), anchor: "configuration-terminal-renderer" },
   // This hub
+  { tab: "hub", group: t("settings-recovery.title"), hint: t("settings-recovery.entry_hint"), anchor: "hub-recovery" },
   { tab: "hub", group: t("settings-hubsettings.version"), hint: words(t("settings-hubsettings.last_check"), t("settings-hubsettings.branch"), t("settings-hubsettings.current_commit"), t("settings-hubsettings.latest_commit")), anchor: "hub-version" },
   { tab: "hub", group: t("settings-hubsettings.channel"), hint: words(t("settings-hubsettings.source"), t("settings-hubsettings.web_dev")), anchor: "hub-channel" },
   { tab: "hub", group: t("settings-hubsettings.update"), hint: words(t("settings-hubsettings.update_version"), t("settings-hubsettings.target_commit"), t("settings-hubsettings.backup_created_at")), anchor: "hub-update" },
@@ -218,10 +226,12 @@ const INTEGRATIONS_ANCHOR_SUB: Record<string, string | undefined> = {
   lark: "builtin:lark",
   sent: "-sent",
   market: "-market",
+  "inbox-sources": "-sources",
+  "inbox-todo-forward": "-sources",
 };
 
 /** The search box's matches: categories by label / hint, and page groups and settings by their heading or label.
- *  When `integrationsV2` is true, collapses `channels`/`connectors`/`extensions` into `integrations` and remaps
+ *  When `integrationsV2` is true, collapses `channels`/`connectors`/`extensions`/`sources` into `integrations` and remaps
  *  their indexed groups so quick search jumps directly to the unified Integrations & Extensions view. */
 export function searchSettings(query: string, integrationsV2 = false): { tabs: Tab[]; groups: SearchGroup[] } {
   const q = fold(query);
@@ -239,14 +249,18 @@ export function searchSettings(query: string, integrationsV2 = false): { tabs: T
   const tabMatches = (k: Tab) => {
     const info = tabInfo(k);
     if (has(info.label, info.hint)) return true;
-    // When integrations_v2 is enabled, searching legacy tab names ("Channels", "Connectors", "Extensions") still finds Integrations.
+    // When integrations_v2 is enabled, searching legacy tab names ("Channels", "Connectors", "Extensions", "Inbox Sources") still finds Integrations.
     if (integrationsV2 && k === "integrations") {
-      return (["channels", "connectors", "extensions"] as const).some((old) => has(tabInfo(old).label, tabInfo(old).hint));
+      return (["channels", "connectors", "extensions", "sources"] as const).some((old) => has(tabInfo(old).label, tabInfo(old).hint));
     }
     return false;
   };
   const indexed = integrationsV2
-    ? SEARCH_INDEX.map((g) => (isLegacyIntegrationTab(g.tab) ? { ...g, tab: "integrations" as Tab, sub: INTEGRATIONS_ANCHOR_SUB[g.anchor] } : g))
+    ? SEARCH_INDEX.map((g) => {
+        if (!isLegacyIntegrationTab(g.tab)) return g;
+        const hint = g.anchor === "inbox-sources" ? words(g.hint ?? "", t("settings-integrations.view_sources")) : g.hint;
+        return { ...g, tab: "integrations" as Tab, sub: INTEGRATIONS_ANCHOR_SUB[g.anchor], ...(hint ? { hint } : {}) };
+      })
     : SEARCH_INDEX;
   return {
     tabs: searchableTabs.filter(tabMatches),

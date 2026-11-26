@@ -204,10 +204,18 @@ func routable(ix proto.Interaction) bool {
 	return false
 }
 
+// supervisorConversation: session is one of the assistant's supervising conversations, the main conversation, the
+// background supervisor or a leader. Their own cards stay the user's: no conversation above them is woken for a card
+// and can hand it up (ask_escalate takes a task), and the main conversation's would wait on itself. Neither askLadder
+// nor handNonOwnerCard routes them (#15360).
+func (v Settings) supervisorConversation(session string) bool {
+	return session != "" && (session == v.Main || session == v.BackgroundSupervisor || slices.Contains(v.Leaders, session))
+}
+
 // askLadder is where a card of machine/sid's goes first: the conversations supervising its task, nearest first, the
 // task, and the machine those conversations are on (the assistant's: its leaders and its main conversation). None when
-// the agent is no supervised task's, the task already waits for the user, or the agent is a supervising conversation.
-// Only parsed terminal questions go to a supervisor even when no leader is configured.
+// the agent is no supervised task's, the task already waits for the user, or the agent is a supervising conversation
+// (supervisorConversation). Only parsed terminal questions go to a supervisor even when no leader is configured.
 //
 // A task no leader supervises has one rung: the background supervisor, then the user, as a leader's card goes to the
 // leader, then the main conversation; the main conversation while the background supervisor is off or not made yet
@@ -215,7 +223,7 @@ func routable(ix proto.Interaction) bool {
 func (s *Service) askLadder(ctx context.Context, ix proto.Interaction) (ladder []string, todo, home string, ok bool) {
 	machine, sid := ix.MachineID, ix.SessionID
 	cfg := s.settings(ctx)
-	if (len(cfg.Leaders) == 0 && ix.Kind != proto.IxScreen) || cfg.Main == "" || sid == cfg.Main || sid == cfg.BackgroundSupervisor || slices.Contains(cfg.Leaders, sid) {
+	if (len(cfg.Leaders) == 0 && ix.Kind != proto.IxScreen) || cfg.Main == "" || sid == "" || cfg.supervisorConversation(sid) {
 		return nil, "", "", false
 	}
 	home = cfg.MachineID

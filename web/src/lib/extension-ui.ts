@@ -486,7 +486,7 @@ export interface UIContext {
 export interface UIContextSent extends UIContext {
   tz?: string;
   locale?: string;
-  platform: "web";
+  platform: "web" | "desktop";
   ui_version: number;
   /** Component types in the current UI version that the web client does not render (scene requires native 3D). */
   unsupported?: string[];
@@ -501,7 +501,8 @@ export function uiContext(context?: UIContext): UIContextSent {
     tz = undefined;
   }
   const locale = typeof navigator !== "undefined" ? navigator.language || undefined : undefined;
-  const out: UIContextSent = { platform: "web", ui_version: UI_VERSION, unsupported: ["scene"] };
+  const platform = typeof window !== "undefined" && window.personaDesktop ? "desktop" : "web";
+  const out: UIContextSent = { platform, ui_version: UI_VERSION, unsupported: ["scene"] };
   if (tz) out.tz = tz;
   if (locale) out.locale = locale;
   if (context?.launcher) out.launcher = context.launcher;
@@ -515,9 +516,12 @@ export function uiContext(context?: UIContext): UIContextSent {
 // ── the hub ─────────────────────────────────────────────
 
 /** The extensions' places of a placement; no placement: every slot's but launcher sections' (nav, overview, machines).
+ *  Asks with `pages_overview=1` when Overview cards are in scope so Dashboards watch cards (`-pages`, `g_<hex>`) are
+ *  listed for Overview (docs/assistant/dashboards.md "Overview (web)").
  *  `manager`: whose extensions (several managers, docs/assistant/managers.md "Clients"); none: the default's. */
 export function uiPlaces(placement: string, launcher?: string, machine?: string, manager?: string): Promise<UIPlace[]> {
   const q = new URLSearchParams(placement ? { placement } : {});
+  if (!placement || placement === "overview_card") q.set("pages_overview", "1");
   if (launcher) q.set("launcher", launcher);
   if (machine) q.set("machine", machine);
   return api<{ ui?: UIPlace[] }>(`${extRoot()}/-/ui${q.size ? `?${q}` : ""}`, { headers: itemHeaders(manager) }).then((r) => (Array.isArray(r.ui) ? r.ui.map(placeOf) : []));

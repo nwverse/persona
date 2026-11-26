@@ -69,16 +69,29 @@ const (
 	defaultNever = "never"
 )
 
+// todoActiveBlockerView is a persistent active blocker edge attached to a listedTodo under todos_v2.
+type todoActiveBlockerView struct {
+	ID        string `json:"id"`
+	Kind      string `json:"kind"`
+	TargetRef string `json:"target_ref"`
+	State     string `json:"state"`
+	Attempts  int    `json:"attempts,omitempty"`
+}
+
 // listedTodo is a to-do as GET /api/v1/todos lists it: with its ask while one waits (none: no `ask`, which a client that
 // does not know it never reads), and, while it is open and nobody works on it, why (`orphaned`, tasks_orphan.go); on
 // the routes, its view (todo_view_routes.go).
 type listedTodo struct {
 	Todo
 	PrerequisiteBlockers []string                   `json:"prerequisite_blockers,omitzero"`
+	ActiveBlockers       []todoActiveBlockerView    `json:"active_blockers,omitempty"`
 	Ask                  *todoAsk                   `json:"ask,omitempty"`
 	DecisionReview       *decisionReview            `json:"decision_review,omitempty"`
 	Orphaned             *TodoOrphan                `json:"orphaned,omitempty"`
 	View                 *assistantwire.TodoSummary `json:"view,omitempty"`
+	Wait                 *assistantwire.TodoWait    `json:"wait,omitempty"`
+	RepoGate             *repoGate                  `json:"repo_gate,omitempty"`
+	ItemType             string                     `json:"item_type,omitempty"`
 }
 
 // askEvidenceLink returns raw when it is a valid http(s) URL and not merely the to-do's own /todos/<id> page.
@@ -171,6 +184,7 @@ func (s *Service) askChanged(context.Context) {
 	s.trevision.changed()
 	s.todosPushSoon() // with the rest of the write that changed it
 	s.boardChanged()
+	s.directionTreeSoon()
 }
 
 // pushDecision pushes task id's decision that waits for the owner and recommends an option (a "decide" push): what is to
@@ -250,8 +264,8 @@ func (s *Service) pushDecisionAbout(ctx context.Context, id, reason string) (boo
 
 // todoPushOver: to-do id no longer waits on the owner (its decision answered, superseded or withdrawn by its
 // supervisor, its owner wait over, the to-do closed). Its card is over (resolveCard): the hub lets the next push about it
-// ring (assistantwire.TodoPushKey) and takes the decision's push, which names the card as card_id, off the devices it
-// went to. Nothing is pushed.
+// ring (assistantwire.TodoPushKey) and takes the decision or needs-user push (which carries card_id and todo_id, never
+// interaction_id) off the devices it went to (#13916, #14388). Nothing is pushed.
 func (s *Service) todoPushOver(id string) {
 	if id != "" {
 		s.resolveCard(assistantwire.TodoAskCardID(id))

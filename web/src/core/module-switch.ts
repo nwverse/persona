@@ -12,39 +12,32 @@ export const MODULE_SWITCH_KEY = "persona.modules.off";
 
 const listeners = new Set<() => void>();
 
-function readOff(): string[] {
+export function readStoredJson(key: string): unknown {
   try {
-    const raw = localStorage.getItem(MODULE_SWITCH_KEY);
-    if (raw === null) return [];
-    const v: unknown = JSON.parse(raw);
-    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+    return JSON.parse(localStorage.getItem(key) ?? "null");
   } catch {
-    return [];
+    return null;
   }
+}
+
+function readOff(): string[] {
+  const v = readStoredJson(MODULE_SWITCH_KEY);
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
 }
 
 // read once per change, not per call: the router asks on every render
 let cache: string[] | null = null;
-const off = () => (cache ??= readOff());
+export const readModuleSwitches = () => (cache ??= readOff());
 
 /** Whether this browser switched the module off. */
 export function moduleSwitchedOff(id: string): boolean {
-  return off().includes(id);
+  return readModuleSwitches().includes(id);
 }
 
-/** Switches a module on or off here; false when the browser does not keep it. */
-export function setModuleSwitchedOff(id: string, value: boolean): boolean {
-  const next = value ? [...new Set([...off(), id])] : off().filter((x) => x !== id);
-  try {
-    if (next.length) localStorage.setItem(MODULE_SWITCH_KEY, JSON.stringify(next));
-    else localStorage.removeItem(MODULE_SWITCH_KEY);
-    cache = null;
-    if (moduleSwitchedOff(id) !== value) return false;
-  } catch {
-    return false;
-  }
-  listeners.forEach((l) => l());
-  return true;
+/** Clears the cached switch list, and tells subscribers when `notify` is true (core/module-switch-write.ts). */
+export function forgetModuleSwitches(notify = false): void {
+  cache = null;
+  if (notify) listeners.forEach((l) => l());
 }
 
 /** Called when a switch may have changed: here, or in another tab of this browser. */
@@ -56,14 +49,12 @@ export function subscribeModuleSwitches(l: () => void): () => void {
       l();
     }
   };
-  if (typeof window !== "undefined") window.addEventListener("storage", storage);
+  const w = typeof window < "u" ? window : undefined;
+  w?.addEventListener("storage", storage);
   return () => {
     listeners.delete(l);
-    if (typeof window !== "undefined") window.removeEventListener("storage", storage);
+    w?.removeEventListener("storage", storage);
   };
 }
 
-/** Tests only: read storage again. */
-export function forgetModuleSwitches(): void {
-  cache = null;
-}
+export { setModuleSwitchedOff } from "./module-switch-write";

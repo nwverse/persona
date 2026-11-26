@@ -34,7 +34,7 @@ func autoSupervisionOf(v Settings) bool {
 // autoSupervisionOn reports whether automatic supervision messages are on. A settings read that fails serves the last
 // good ones (settings), and none at all reads as on.
 func (s *Service) autoSupervisionOn(ctx context.Context) bool {
-	if s.store == nil {
+	if s.storeAccessor() == nil {
 		return true // a Service that was never set up has no settings to turn anything off
 	}
 	return autoSupervisionOf(s.settings(ctx))

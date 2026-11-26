@@ -28,7 +28,6 @@ import {
   startFailure,
   startInFlight,
   setRoute,
-  askRow,
   startPlan,
   todayFailedRow,
   useFeed,
@@ -39,7 +38,7 @@ import {
   type TodayBody,
 } from "../../lib/feed";
 import { backgroundWorkLine, type BackgroundWork } from "../../lib/background-work";
-import { acceptedAtRest, dockAgents, type DockAgent, isRemovable, mostUrgentAgent, openAsk, orphanedLine, stoppedReason, taskNow, todoStatus, TODO_STATUS_INFO, waitingLine, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
+import { acceptedAtRest, dockAgents, type DockAgent, isRemovable, mostUrgentAgent, openAsk, orphanedLine, personalVerificationAsk, stoppedReason, taskNow, todoStatus, TODO_STATUS_INFO, waitingLine, type SessionLookup, type Todo, type TodoStatus } from "../../lib/todos";
 import { hasActiveAgentWork } from "../../lib/todo-triage";
 import { usageLimitLabel } from "../../lib/usage-limit";
 import { openAgent, openTask } from "../../lib/handoff";
@@ -52,12 +51,13 @@ import type { AgentState, Interaction, Machine, Session } from "../../lib/types"
 import { Button, Collapse, cx, IconButton, Loading, Menu, toast, useNow } from "../../ui/atoms";
 import { StatusMark } from "../../ui/StatusMark";
 import { Icon, type IconName } from "../../ui/icons";
-import { AcceptRow, BriefCard } from "./Brief";
 
+// A morning/evening briefing card (views/assistant/Brief.tsx) loads with the first `brief` item, not with the first
+// screen; a task's open acceptance ask loads its AcceptRow through NeedsYouPart (TaskDecision.tsx already imports it).
+const BriefCard = lazyPage(() => import("./Brief").then((m) => m.BriefCard));
 // A plan task's brief (#3822) comes with the first plan card that has one, as the decision row does.
 const PlanBrief = lazy(() => import("./TaskBrief").then((m) => ({ default: m.PlanBrief })));
 const TaskActivityDetail = lazyPage(() => import("./TaskActivityDetail").then((m) => m.TaskActivityDetail));
-const HeldPushesEntry = lazyPage(() => import("./HeldPushes").then((m) => m.HeldPushesEntry));
 
 // A decision's row comes with the tray's first decision, not with the first screen (startup-preload's budget); the
 // same chunk has a suggested rule's line (#5802), which comes with the first card that carries one, and a task whose
@@ -70,9 +70,9 @@ const ruleLine = (of: RuleCard) => (of.suggestion || underCard.made?.has(of.id!)
 underCard.line = ruleLine;
 import { SentLine } from "./Sent";
 import { feedWake, HandoffCard, HandoffCards, TASK_LINE_SLACK_MS, taskHandoffs } from "./Handoff";
-import { acceptanceStands, latestReview, parkedLine, progressLine } from "../../lib/supervision";
+import { acceptanceStands, latestReview, parkedLine, progressLine, reviewState } from "../../lib/supervision";
 import { namedLauncher, providerIdNote, providerTitle, useProviderNames } from "../../lib/provider-names";
-import { useChosenManager, useLinkManager, useShownManager } from "../../lib/manager-choice";
+import { sameManager, useChosenManager, useLinkManager, useShownManager } from "../../lib/manager-choice";
 import { AnsweredSummary, InteractionCard, underCard } from "../chat/Interactions";
 import type { RuleCard } from "../../lib/rule-suggestion";
 import { cardLine } from "../chat/dock";
@@ -85,6 +85,7 @@ import { lazyPage } from "../../lib/lazy-page";
 const PlanEditDialog = lazyPage(() => import("./PlanEdit").then((m) => m.PlanEditDialog));
 // "All" opens it: its code and its lib/task-board load then, not with the first screen (#4656)
 const TaskBoard = lazyPage(() => import("./TaskBoard").then((m) => m.TaskBoard));
+const TaskWaitInfo = lazyPage(() => import("./TaskWaitInfo").then((m) => m.TaskWaitInfo));
 const ParkedTasks = lazyPage(() => import("./ParkedTaskRow").then((m) => m.ParkedTaskRows));
 // the Finished tray's rows, seeing one and its empty line come with its first opening, in the Parked rows' chunk (#10922)
 const FinishedTasks = lazyPage(() => import("./ParkedTaskRow").then((m) => m.FinishedTaskRows));
@@ -95,7 +96,7 @@ import { machineStartBlocked, ULTRACODE_FEATURE } from "../../lib/ultracode";
 import { UltracodeChip } from "../chat/Ultracode";
 import { byTime } from "../../lib/times";
 import { requestHome, requestHomeMachine } from "../../lib/child-sessions";
-import { stateName, type WaitReason } from "../../lib/state-labels";
+import { stateName, waitSummary, type WaitReason } from "../../lib/state-labels";
 import { statusWord, waitOf } from "../../lib/todo-wait-reason";
 import { EDITABLE } from "../../lib/shortcuts";
 
@@ -532,7 +533,7 @@ export const FeedLineView = memo(function FeedLineView({ item, simplified = fals
     case "today":
       return <TodayCard body={item.body as unknown as TodayBody} conversation={item.conversation} />;
     case "brief":
-      return <BriefCard item={item} />;
+      return <Suspense fallback={null}><BriefCard item={item} /></Suspense>;
     case "message":
       return item.ref && !isLater ? <MessageCard item={item} /> : null;
     case "inbox_suggestion":
@@ -783,10 +784,11 @@ export const DOCK_CAPSULE = "inline-flex h-8 shrink-0 items-center whitespace-no
 const DOCK_RANK: Partial<Record<TodoStatus, number>> = { needs_you: 0, interrupted: 0, usage_limit: 0, working: 1, waiting: 1, not_started: 1, unread: 2 };
 
 /** The dock's task pills, waiting first: each task going on, its status and what it waits on (#3463). */
-function dockTasksIn(s: State, conversation: string, plans: Record<string, TaskPlan>): { t: Todo; st: TodoStatus; ask?: string; limit?: string }[] {
-  const lookup = answeredLookup(taskSessionLookup(s), s.interactions, s.answered);
+function dockTasksIn(s: State, conversation: string, plans: Record<string, TaskPlan>, manager?: string): { t: Todo; st: TodoStatus; ask?: string; limit?: string }[] {
+  const interactions = manager ? s.interactions.filter((ix) => sameManager(ix.manager, manager)) : s.interactions;
+  const lookup = answeredLookup(taskSessionLookup(s), interactions, s.answered);
   return s.todos
-    .filter((t) => t.origin === conversation)
+    .filter((t) => t.origin === conversation && (!manager || sameManager(t.manager, manager)))
     .map((t) => ({ t, st: statusOf(t, lookup, plans) }))
     // a to-do nobody dispatched is not going on (#7552)
     .filter((x) => DOCK_RANK[x.st] !== undefined && (x.st !== "not_started" || startInFlight(x.t, plans)))
@@ -796,8 +798,8 @@ function dockTasksIn(s: State, conversation: string, plans: Record<string, TaskP
       return {
         t: todo,
         st,
-        ask: st === "needs_you" ? taskAsk(taskInteraction(todo, s.interactions, lead)) : undefined,
-        limit: st === "usage_limit" ? (usageLimitLabel(lead) ?? t("lib-usage-limit.short")) : undefined,
+        ask: st === "needs_you" ? taskAsk(taskInteraction(todo, interactions, lead)) : undefined,
+        limit: todo.wait != null ? waitSummary(todo.wait) : st === "usage_limit" ? (usageLimitLabel(lead) ?? t("lib-usage-limit.short")) : undefined,
       };
     });
 }
@@ -879,7 +881,7 @@ export function ProgressTaskRow({ card, conversation, activity, countsOpen, supe
   const agentActive = !finished && state !== "cancelled" && task?.active;
   const active = liveWork || agentActive || ["working", "waiting", "unread"].includes(state);
   // parked by its supervisor (#3804): the row says so, until when and why, ahead of what its agent last did
-  const parked = active || finished || state === "cancelled" ? undefined : parkedLine(todo);
+  const parked = todo?.wait != null || active || finished || state === "cancelled" ? undefined : parkedLine(todo);
   // the status column is the Agent's own state, drawn with the Agents' marks; the to-do's own state is its chip (#6492)
   const agentKey = agentRowKey({ live: !!liveWork, status: state, lead: task?.lead, todo: !!todo, starting });
   const rowIsFinished = !countsOpen && finished;
@@ -891,7 +893,7 @@ export function ProgressTaskRow({ card, conversation, activity, countsOpen, supe
   const reviewing = !!supervisorReview && !liveWork && !finished && state !== "cancelled";
   const ask = useStore((s) => taskAsk(todo ? taskInteraction(todo, s.interactions, task?.lead) : undefined));
   // what a waiting task waits for (#3274): its agent's own line for it
-  const waits = useStore((s) => (todo && state === "waiting" ? waitingLine(todo, taskSessionLookup(s)) : undefined));
+  const waits = useStore((s) => (todo && todo.wait == null && state === "waiting" ? waitingLine(todo, taskSessionLookup(s)) : undefined));
   // stopped and not done: the hub's completion check says why (#3180); an agent's open question or waiting line says more
   const why = ask || waits ? undefined : stoppedReason(todo, state);
   const stopped = why === undefined ? undefined : why ? t("assistant-tasks.progress_stopped_reason", { reason: why }) : t("assistant-tasks.progress_stopped");
@@ -899,11 +901,11 @@ export function ProgressTaskRow({ card, conversation, activity, countsOpen, supe
   const orphan = todo && !ask ? orphanedLine(todo) : undefined;
   const nobody = orphan && (orphan.reason ? `${orphan.lead} · ${orphan.reason}` : orphan.lead);
   // a usage limit says what stopped it and when it goes on (the status word on the right says only that it did)
-  const limit = state === "usage_limit" ? usageLimitLabel(task?.lead, clock) : undefined;
+  const limit = todo?.wait == null && state === "usage_limit" ? usageLimitLabel(task?.lead, clock) : undefined;
   const detail = finished || state === "cancelled"
     ? latestReview(todo?.supervision)?.note ?? todo?.done_reason ?? (receipt && field(receipt, "summary"))
     : limit ?? liveLine ?? parked ?? waits ?? nobody ?? stopped ?? progressLine(todo?.supervision) ?? ask ?? task?.lead?.plan?.current ?? progressOf(task?.lead)?.text ?? (report && field(report, "text"));
-  return (
+  const row = (
     <button type="button" data-task-slot={card.id} data-counts-open={countsOpen ? "true" : "false"} disabled={!todo && !card.plan_id} onClick={() => {
       onOpen?.();
       if (card.todo_id) openTask(card.todo_id);
@@ -917,7 +919,7 @@ export function ProgressTaskRow({ card, conversation, activity, countsOpen, supe
           <span className="min-w-0 truncate text-sm font-semibold" title={title}>{title}</span>
           {chip && <span data-task-todo-state className="max-w-1/2 shrink-0 truncate rounded-full bg-field px-1.5 text-xs text-ink-2">{todoChipLabel(chip)}</span>}
         </div>
-        <Suspense fallback={null}><TaskActivityDetail activity={liveWork} detail={detail} pr={prNumber ? t("assistant-tasks.progress_pr", { number: prNumber }) : undefined} todo={active && todo?.supervision?.parked?.waiting_on === "date" ? todo : undefined} /></Suspense>
+        {(todo?.wait == null || liveWork) && <Suspense fallback={null}><TaskActivityDetail activity={liveWork} detail={detail} pr={prNumber ? t("assistant-tasks.progress_pr", { number: prNumber }) : undefined} todo={todo?.wait == null && active && todo?.supervision?.parked?.waiting_on === "date" ? todo : undefined} /></Suspense>}
         {!finished && state !== "cancelled" && meter && <TaskProgressMeter value={meter.value} total={meter.total} blocked={blocked} title={title} />}
       </div>
       {/* the status in its own right-aligned column (the rows' states scan down it), then the row's end: › where it opens
@@ -930,6 +932,8 @@ export function ProgressTaskRow({ card, conversation, activity, countsOpen, supe
       </span>
     </button>
   );
+  if (todo?.wait == null) return row;
+  return <div>{row}<div className="px-3 pb-2.5"><Suspense fallback={null}><TaskWaitInfo todo={todo} /></Suspense></div></div>;
 }
 
 /** An honest count meter with a readable value and a larger hover target on its task row. */
@@ -948,6 +952,7 @@ function TaskProgressMeter({ value, total, blocked, title }: { value: number; to
 /** The task's line in Needs you when no card of its agent stands for it: what it waits for (a waiting one's, `wait`,
  *  #11090). */
 export function waitsLabel(todo: Todo, status: TodoStatus, wait?: WaitReason): string {
+  if (todo.wait != null) return waitSummary(todo.wait);
   if (todo.supervision?.state === "pending_review") return t("assistant-tasks.review_pending");
   if (todo.supervision?.state === "needs_user") return t("assistant-tasks.review_needs_user");
   return TODO_STATUS_INFO[status] ? statusWord(status, wait) : t("assistant-tasks.review_needs_user");
@@ -970,6 +975,7 @@ function foldedRow(item: NeedsYouItem): { title: string; line?: string; kicker: 
   if (item.kind === "message") return { title: [field(item.item, "sender"), field(item.item, "chat")].filter(Boolean).join(" · ") || t("assistant-tasks.task_fallback"), line: field(item.item, "text"), kicker: stateName("needs_you") };
   if (item.kind === "agent") return item.asks.length ? { title: sessionTitle(item.session), line: cardLine(item.asks[0]), kicker: interactionKicker(item.asks[0]) } : undefined;
   if (item.asks.length) return { title: item.todo.title, line: cardLine(item.asks[0]), kicker: interactionKicker(item.asks[0]) };
+  if (reviewState(item.todo) === "user_check" && !personalVerificationAsk(item.todo)) return undefined;
   const ask = openAsk(item.todo);
   // a decision held for the briefing says so folded too (#5803): why it did not ring
   if (isDecision(item.todo) || ask) return { title: item.todo.title, line: ask?.verdict, kicker: ask?.for_briefing === true ? t("todos.ask_held") : stateName("needs_you") };
@@ -1085,7 +1091,15 @@ export function NeedsYouBody({ item, nested = false }: { item: NeedsYouItem; nes
   // Unfolded task rows carry the open flag themselves; a nested one's opened head already has it.
   const taskOpenAttr = !nested ? { "data-counts-open": item.countsOpen ? "true" : "false" } : {};
   if (asks.length) return <div data-needs-row={rowKey} {...taskOpenAttr}>{!nested && <button type="button" onClick={() => openTask(todo.id)} className="block max-w-full truncate px-1 text-left text-sm font-semibold hover:underline">{todo.title}</button>}{asks.map((ix) => <InteractionCard key={ix.id} ix={ix} />)}{nested && <OpenEntry title={todo.title} onOpen={() => openTask(todo.id)} />}</div>;
-  const ask = openAsk(todo);
+  const verifying = reviewState(todo) === "user_check";
+  const ask = verifying ? personalVerificationAsk(todo) : openAsk(todo);
+  if (verifying && !ask) return (
+    <button type="button" data-needs-row={rowKey} {...taskOpenAttr} onClick={() => openTask(todo.id)} className="flex min-w-0 items-center gap-2 rounded-control bg-field px-3 py-2 text-left text-sm hover:bg-hover">
+      <StatusMark state="needs_you" />
+      <span className="min-w-0 flex-1 truncate">{todo.title}</span>
+      <span className="shrink-0 text-xs text-ink-2">{t("assistant-tasks.review_user_check")}</span>
+    </button>
+  );
   // Both structured decisions and older review-only decisions have the same deferral controls.
   if (isDecision(todo))
     return (
@@ -1093,7 +1107,12 @@ export function NeedsYouBody({ item, nested = false }: { item: NeedsYouItem; nes
         <NeedsYouPart key={todo.id + (todo.supervision?.reviews?.at(-1)?.at || todo.decision_review?.review_at || ask?.asked_at)} rowKey={rowKey} hideTitle={nested} decision={todo} />
       </Suspense>
     );
-  if (ask) return <div data-needs-row={rowKey} {...taskOpenAttr} className="min-w-0 rounded-control bg-field px-3 py-2.5"><AcceptRow stacked hideTitle={nested} key={todo.id + ask.asked_at} row={askRow(todo, ask)} /></div>;
+  if (ask)
+    return (
+      <Suspense fallback={<div data-needs-row={rowKey} {...taskOpenAttr} className="truncate rounded-control bg-field px-3 py-2.5 text-label text-ink-2">{todo.title}</div>}>
+        <NeedsYouPart key={todo.id + ask.asked_at} rowKey={rowKey} hideTitle={nested} accept={todo} ask={ask} countsOpenAttr={taskOpenAttr} />
+      </Suspense>
+    );
   if (status === "failed")
     return (
       <Suspense fallback={<div data-needs-row={item.key} {...taskOpenAttr} className="truncate rounded-control bg-danger-wash px-3 py-2 text-sm">{todo.title}</div>}>
@@ -1196,7 +1215,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
   // switch off, or every row this conversation's, the tray is as it was.
   const foldBackground = useStore((s) => s.assistant?.main_background_folded) !== false;
   const conversations = useStore((s) => s.assistant?.conversations);
-  const groups = foldBackground ? needsYouBySupervisor(waiting, conversation) : [{ supervisor: conversation, items: waiting }];
+  const groups = foldBackground ? needsYouBySupervisor(waiting, conversation, directWaiting) : [{ supervisor: conversation, items: waiting }];
   const own = groups[0].items;
   const asking = own.filter(isAsking);
   const rest = own.filter((item) => !asking.includes(item));
@@ -1364,7 +1383,6 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
             </button>
           );
         })}
-        {main === conversation && <Suspense fallback={null}><HeldPushesEntry className={cx(DOCK_CAPSULE, "gap-2 bg-field font-medium text-ink-2 hover:bg-hover")} /></Suspense>}
       </div>
       {board && <Suspense fallback={null}><TaskBoard open conversation={conversation} onClose={() => setBoard(false)} /></Suspense>}
     </div>
@@ -1372,13 +1390,23 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
 });
 
 export const TaskDock = memo(function TaskDock({ conversation }: { conversation: string }) {
+  const manager = useShownManager();
   const plans = useFeed((s) => s.plans);
   const [menuFor, setMenuFor] = useState<{ todo: Todo; el: HTMLElement } | null>(null);
   const [board, setBoard] = useState(false);
   // rows of strings and the store's own objects: a push about an agent or a card none of them shows draws nothing
-  const agents = useStoreRows<DockAgent>((s) => dockAgents(answeredSessions(Object.values(s.sessions).flat(), s.interactions, s.answered), s.todos, conversation, s.assistant?.main));
-  const going = useStoreRows((s) => dockTasksIn(s, conversation, plans));
-  const mine = useStore((s) => s.todos.filter((t) => t.origin === conversation).length);
+  const agents = useStoreRows<DockAgent>((s) => dockAgents(
+    answeredSessions(
+      Object.values(s.sessions).flat().filter((row) => sameManager(row.manager, manager)),
+      s.interactions.filter((ix) => sameManager(ix.manager, manager)),
+      s.answered,
+    ),
+    s.todos.filter((t) => sameManager(t.manager, manager)),
+    conversation,
+    s.assistant?.main,
+  ));
+  const going = useStoreRows((s) => dockTasksIn(s, conversation, plans, manager));
+  const mine = useStore((s) => s.todos.filter((t) => t.origin === conversation && sameManager(t.manager, manager)).length);
   if (mine === 0 && agents.length === 0) return null;
   const capsule = DOCK_CAPSULE;
   const pill = cx(capsule, "max-w-[240px] gap-2 font-semibold");

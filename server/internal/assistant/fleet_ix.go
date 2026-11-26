@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -81,7 +82,20 @@ type pending struct {
 	// when the user views the card in an app (owner_card_expiry.go).
 	seenTTL         time.Duration
 	deadlineChanged chan struct{}
+	// remindTimer fires once after pendingReminderDelay to re-push an unanswered owner-facing card (#16159).
+	remindTimer *time.Timer
+	reminded    bool
 }
+
+func (p *pending) stopReminderLocked() {
+	if p != nil && p.remindTimer != nil {
+		p.remindTimer.Stop()
+		p.remindTimer = nil
+	}
+}
+
+// pendingReminderDelay is how long an unanswered owner-facing approval card waits before one follow-up push (#16159).
+var pendingReminderDelay = 30 * time.Minute
 
 // resumeGrace is how long a resumable interaction outlives its node: a little longer than hooks keep reconnecting
 // (nodeclient.ResumeWait).
@@ -164,6 +178,7 @@ func (s *Service) tellApps(ix proto.Interaction) proto.Interaction {
 	s.tellCard(ix)
 	s.publishSessions(ix.MachineID)
 	s.liveChanged(false) // whether it is told counts for Persona Link's summary, not for the list
+	s.cardStateChanged(ix)
 	return ix
 }
 
@@ -176,9 +191,59 @@ func (s *Service) tellUser(ix proto.Interaction, push bool) {
 	s.recordConfirmationNotification(ix)
 	if push && !s.muted(ix.MachineID, ix.SessionID) {
 		s.notifyInteraction(ix, s.machineName(ix.MachineID), s.linkCovers(ix))
+		s.armPendingReminder(ix)
 		go s.threadAgentAsks(ix) // and the topic of the todo this agent works on, if it has one
 	}
 	s.InteractionAnnounced(context.Background(), InteractionAnnounced{Interaction: ix}) // the Feishu bot, the channels
+}
+
+// reminderEligible reports whether an owner-facing card should receive one follow-up push when left unanswered (#16159).
+func reminderEligible(ix proto.Interaction) bool {
+	return ix.Kind == proto.IxPermission || ix.Kind == proto.IxQuestion || ix.Kind == proto.IxPlan
+}
+
+// armPendingReminder schedules at most one follow-up push after pendingReminderDelay for a pending, told
+// approval card whose remaining lifetime exceeds the delay (#16159).
+func (s *Service) armPendingReminder(ix proto.Interaction) {
+	delay := pendingReminderDelay
+	if delay <= 0 || !reminderEligible(ix) {
+		return
+	}
+	if !ix.NoExpiry && !ix.ExpiresAt.IsZero() && time.Until(ix.ExpiresAt) <= delay {
+		return
+	}
+	s.fleet.mu.Lock()
+	p := s.fleet.interactions[ix.ID]
+	if p == nil || p.claimed || p.graceEnded || !p.told || p.reminded || p.remindTimer != nil {
+		s.fleet.mu.Unlock()
+		return
+	}
+	p.remindTimer = time.AfterFunc(delay, func() { s.firePendingReminder(ix.ID, p) })
+	s.fleet.mu.Unlock()
+}
+
+func (s *Service) firePendingReminder(id string, p *pending) {
+	s.fleet.mu.Lock()
+	if s.fleet.interactions[id] != p || p.claimed || p.graceEnded || !p.told || p.reminded {
+		s.fleet.mu.Unlock()
+		return
+	}
+	if a := p.prepared; a != nil && (a.terminal || a.paused) {
+		p.remindTimer = nil
+		s.fleet.mu.Unlock()
+		return
+	}
+	p.reminded = true
+	p.remindTimer = nil
+	ix := p.ix
+	s.fleet.mu.Unlock()
+	if !ix.NoExpiry && !ix.ExpiresAt.IsZero() && !time.Now().Before(ix.ExpiresAt) {
+		return
+	}
+	if s.directoryHiddenSession(ix.MachineID, ix.SessionID) || s.muted(ix.MachineID, ix.SessionID) || s.quietSession(ix.MachineID, ix.SessionID) {
+		return
+	}
+	s.notifyInteraction(ix, s.machineName(ix.MachineID), s.linkCovers(ix))
 }
 
 // show puts a card on every app without a push: one they were told about already (a way back), or one that is not the
@@ -186,9 +251,11 @@ func (s *Service) tellUser(ix proto.Interaction, push bool) {
 // user's (pending.told): only tell does.
 func (s *Service) show(ix proto.Interaction) {
 	s.taskPlanApproval()
-	s.tellCard(s.withTask(ix))
+	shown := s.withTask(ix)
+	s.tellCard(shown)
 	s.publishSessions(ix.MachineID)
 	s.liveChanged(false) // the card, and whether the assistant decides on it, count for Persona Link's summary
+	s.cardStateChanged(shown)
 }
 
 // tellCard gives the hub card ix (fleet.interaction), as tellApps and show do. A card can end while it is on its way:
@@ -234,6 +301,7 @@ func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (pr
 	ix.ApprovalBatchID, ix.ApprovalItemID = "", ""
 	ix.OwnerProposal, ix.NoExpiry = false, false
 	ix.OwnerApprovalPhrases = nil
+	ix.OutwardWrite = ix.OutwardWrite && ix.Kind == proto.IxPermission
 	if reservedCard(ix) {
 		return proto.Resolution{}, errReservedCard
 	}
@@ -241,10 +309,14 @@ func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (pr
 	if ix.Kind == proto.IxQuestion && proto.HasDuplicateQuestionText(ix.Questions) {
 		return proto.Resolution{}, i18n.Err("hub-hub.duplicate_question")
 	}
-	// Plan mode enforces a read-only task's launch constraint. Its supervisor report may run once,
-	// but exiting plan mode must still be denied. Neither path registers a card or grants permissions.
+	// Plan mode enforces a read-only task's launch constraint. Its supervisor report and strictly read-only
+	// inspection Bash commands may run once without a card, while exiting plan mode stays denied and any write,
+	// ambiguous, credential-touching or inbox-origin Bash command still asks. Neither path registers a card or grants permissions.
 	report := ix.Kind == proto.IxPermission && slices.Contains(compat.MCPToolNames([]string{"report_to_supervisor"}), ix.ToolName)
-	if ix.Kind == proto.IxPlan && ix.ToolName == "ExitPlanMode" || report {
+	safeReadonlyBash := ix.Kind == proto.IxPermission && ix.ToolName == "Bash" &&
+		!s.isInboxOrigin(ctx, ix.MachineID, ix.SessionID, false) &&
+		readonlyTaskSafeBash(ix.ToolInput, ix.Cwd)
+	if ix.Kind == proto.IxPlan && ix.ToolName == "ExitPlanMode" || report || safeReadonlyBash {
 		if todo, ok := s.taskOf(ctx, ix.MachineID, ix.SessionID); ok {
 			plans, err := s.conversationPlans(ctx, todo.Origin)
 			if err != nil {
@@ -263,6 +335,10 @@ func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (pr
 							allow := true
 							return proto.Resolution{Allow: &allow}, nil
 						}
+						if safeReadonlyBash {
+							allow := true
+							return proto.Resolution{Allow: &allow}, nil
+						}
 						approve := false
 						return proto.Resolution{Approve: &approve, Feedback: prompts.RenderReadonlyTaskPlanExit()}, nil
 					}
@@ -271,7 +347,13 @@ func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (pr
 		}
 	}
 	inAssistant := s.ixInAssistant(ctx, ix)
-	ix = nodeCard(ix, s.fleetStore() != nil, s.ixPolicy(ctx, ix).ConfirmOutbound, inAssistant)
+	inboxWholeBash := s.isInboxWholeBashAlways(ctx, ix)
+	if inboxWholeBash {
+		ix.AlwaysKeys = nil
+	}
+	confirms := s.ixPolicy(ctx, ix).ConfirmOutbound || inboxWholeBash ||
+		(ix.ToolName == "Bash" && len(ix.AlwaysKeys) == 0 && s.isInboxOrigin(ctx, ix.MachineID, ix.SessionID, false))
+	ix = nodeCard(ix, s.fleetStore() != nil, confirms, inAssistant)
 	if ix.Kind == proto.IxPermission {
 		l := s.lang(ctx)
 		ix.ToolTitle = personaToolTitle(l, ix.ToolName, ix.ToolInput)
@@ -329,6 +411,17 @@ func (s *Service) waitInteractionPrepared(ctx context.Context, ix proto.Interact
 // notification for server-owned proposal groups. The notification is closed
 // after the pending entry and its announcement exist, before this waiter blocks.
 func (s *Service) waitInteractionReady(ctx context.Context, ix proto.Interaction, prepared *preparedApproval, ready chan<- struct{}) (proto.Resolution, error) {
+	var registered func(*pending)
+	if ready != nil {
+		registered = func(*pending) { close(ready) }
+	}
+	return s.waitRegisteredInteraction(ctx, ix, prepared, registered)
+}
+
+func (s *Service) waitRegisteredInteraction(ctx context.Context, ix proto.Interaction, prepared *preparedApproval, registered func(*pending)) (proto.Resolution, error) {
+	// The node may send its first request while FleetUp is still restoring the last manager's cards.
+	// Do not let that recovery cancel a card this process is about to persist.
+	s.restoreInteractions(ctx)
 	ix = cleanTitle(ix)
 	// Only an operation registered by this process can advertise clarification.
 	ix.CanClarify = prepared != nil
@@ -351,6 +444,12 @@ func (s *Service) waitInteractionReady(ctx context.Context, ix proto.Interaction
 		restartPrepared := false
 		s.fleet.mu.Lock()
 		if p := s.fleet.interactions[ix.ID]; p != nil && p.local == nil {
+			if !p.claimed && len(p.ix.AlwaysKeys) > 0 && len(ix.AlwaysKeys) == 0 && ix.AlwaysHonored != nil && !*ix.AlwaysHonored {
+				// Reclaiming a resumable card after origin registration or a manager upgrade must not
+				// retain a previously stripped/disallowed Always option (#15267).
+				p.ix.AlwaysKeys = nil
+				p.ix.AlwaysHonored = ix.AlwaysHonored
+			}
 			if p.prepared != nil {
 				// The reconnecting hook is now the caller whose lifetime governs the
 				// initial wait. The disconnected context must not expire a card its
@@ -390,8 +489,8 @@ func (s *Service) waitInteractionReady(ctx context.Context, ix proto.Interaction
 			if ix.Kind == proto.IxElicitation && !s.elicitationReachable(ix) {
 				_ = s.resolve(ix.ID, proto.Resolution{Dismiss: true})
 			}
-			if ready != nil {
-				close(ready)
+			if registered != nil {
+				registered(p)
 			}
 			// Resumable node cards reconnect through reporter-less interaction.create requests; MCP elicitation cards
 			// are not resumable, so this branch never has a wait reporter to restore.
@@ -483,8 +582,8 @@ func (s *Service) waitInteractionReady(ctx context.Context, ix proto.Interaction
 	if prepared != nil {
 		s.startPreparedTimer(p)
 	}
-	if ready != nil {
-		close(ready)
+	if registered != nil {
+		registered(p)
 	}
 	resume := pushMCPInteraction(ctx, ix)
 	defer resume()
@@ -858,6 +957,11 @@ func (s *Service) resolveActiveAnswer(ctx context.Context, id string, r proto.Re
 		s.fleet.mu.Unlock()
 		return errHandoffElsewhere // a channel, the assistant, a remembered answer, an older hub: a no only
 	}
+	if p != nil && proto.SecretRunEnvInteraction(p.ix) && !proto.SecretHandoffDeclines(r) &&
+		(approver == nil || approver.DeviceID == "" || authorization != nil) {
+		s.fleet.mu.Unlock()
+		return errSecretRunEnv // an older specialized client would show no env warning before its Run
+	}
 	if p != nil && r.Cancel && (!p.ix.CanCancel || p.ix.Kind != proto.IxQuestion || !r.IsQuestionCancel()) {
 		s.fleet.mu.Unlock()
 		return errInvalidQuestionCancel
@@ -910,6 +1014,7 @@ func (s *Service) resolveActiveAnswer(ctx context.Context, id string, r proto.Re
 		return fmt.Errorf("standing authorizations require a hook-waited card")
 	}
 	if p != nil && p.local != nil {
+		p.stopReminderLocked()
 		delete(s.fleet.interactions, id) // claimed: a second answer to the same card is not pending any more
 		if p.ix.Kind == proto.IxScreen && !r.Dismiss {
 			// Marked before the keys go: the node's next list may come while they are on the way (#4391).
@@ -1102,8 +1207,11 @@ func (s *Service) finishInteraction(id string) {
 	s.fleet.mu.Lock()
 	p, ok := s.fleet.interactions[id]
 	delete(s.fleet.interactions, id)
-	if ok && p.orphaned != nil {
-		p.orphaned.Stop()
+	if ok {
+		if p.orphaned != nil {
+			p.orphaned.Stop()
+		}
+		p.stopReminderLocked()
 	}
 	s.fleet.mu.Unlock()
 	if ok {
@@ -1131,8 +1239,25 @@ func (s *Service) finished(p *pending) {
 	}
 	s.channelsEnded(p.ix, how)
 	// the app marks a question the assistant answered, and why (docs/assistant/assistant.md)
-	s.hub.Tell(assistantwire.EventFleetResolved, done)
+	s.tellResolved(done)
 	s.publishSessions(p.ix.MachineID)
+	s.cardStateChanged(p.ix)
+}
+
+// The hub treats omissions from a reconnect inventory as resolutions. Order the read and the
+// write together so a delayed snapshot cannot remove a new card or restore a withdrawn one.
+func (s *Service) tellPendingInteractions() {
+	s.fleet.cardTell.Lock()
+	defer s.fleet.cardTell.Unlock()
+	s.fleet.cardEnd.Lock()
+	defer s.fleet.cardEnd.Unlock()
+	s.hub.Tell(assistantwire.EventFleetInteractions, assistantwire.FleetInteractions{Interactions: s.pendingInteractions()})
+}
+
+func (s *Service) tellResolved(done assistantwire.FleetResolved) {
+	s.fleet.cardEnd.Lock()
+	defer s.fleet.cardEnd.Unlock()
+	s.hub.Tell(assistantwire.EventFleetResolved, done)
 }
 
 // pendingInteractions is the authoritative pending inventory for transport and lifecycle operations.
@@ -1224,18 +1349,160 @@ func (s *Service) refreshPendingCards() {
 
 // pendingOf are the pending interactions of the sessions in want (by computer, the session ids), by computer and
 // session, as they are held, in no order: without the task each agent works for (withTask), which a to-do's view
-// does not read. A list read copies only its runs' few cards this way, never the whole fleet's.
+// does not read. Claimed cards are skipped, machine IDs are canonicalized, and folded sub-agent / side-session cards
+// are resolved to their folded parent outside fleet.mu so to-do projections see supervisor-held child cards.
 func (s *Service) pendingOf(want map[string]map[string]bool) map[[2]string][]proto.Interaction {
 	out := map[[2]string][]proto.Interaction{}
+	if len(want) == 0 {
+		return out
+	}
 	s.fleet.mu.Lock()
-	defer s.fleet.mu.Unlock()
+	snap := make([]proto.Interaction, 0, len(s.fleet.interactions))
 	for _, p := range s.fleet.interactions {
-		if want[p.ix.MachineID][p.ix.SessionID] {
-			k := [2]string{p.ix.MachineID, p.ix.SessionID}
-			out[k] = append(out[k], p.ix)
+		if !p.claimed {
+			snap = append(snap, p.ix)
+		}
+	}
+	s.fleet.mu.Unlock()
+	if len(snap) == 0 {
+		return out
+	}
+	canonWant := make(map[string]map[string]bool, len(want))
+	for m, ids := range want {
+		cm := s.canonical(m)
+		if canonWant[cm] == nil {
+			canonWant[cm] = map[string]bool{}
+		}
+		for sid, ok := range ids {
+			if ok {
+				canonWant[cm][sid] = true
+			}
+		}
+	}
+	seen := map[[2]string]map[string]bool{}
+	emit := func(m, sid string, ix proto.Interaction) {
+		if !canonWant[m][sid] {
+			return
+		}
+		k := [2]string{m, sid}
+		if seen[k] == nil {
+			seen[k] = map[string]bool{}
+		}
+		if ix.ID != "" && seen[k][ix.ID] {
+			return
+		}
+		if ix.ID != "" {
+			seen[k][ix.ID] = true
+		}
+		out[k] = append(out[k], ix)
+	}
+	for _, ix := range snap {
+		mid := s.canonical(ix.MachineID)
+		ix.MachineID = mid
+		if ix.FoldedUnder == "" {
+			underMid, under, as, side := s.foldedUnderWithMachine(mid, ix.SessionID)
+			if under != "" {
+				ix.FoldedUnder = under
+				ix.FoldedAs = as
+				ix.FoldedSide = side
+				if underMid != "" {
+					ix.FoldedUnderMachineID = s.canonical(underMid)
+				}
+			}
+		} else if ix.FoldedUnderMachineID != "" {
+			ix.FoldedUnderMachineID = s.canonical(ix.FoldedUnderMachineID)
+		}
+		emit(mid, ix.SessionID, ix)
+		if ix.FoldedUnder != "" {
+			emit(cmp.Or(ix.FoldedUnderMachineID, mid), ix.FoldedUnder, ix)
+		}
+		if ix.FoldedSide != "" {
+			emit(mid, ix.FoldedSide, ix)
 		}
 	}
 	return out
+}
+
+// heldOnlySessions returns canonical (machine, session) keys whose pending cards (direct or folded) are all held by a
+// supervisor or assistant (Delegating == true), with at least one pending card and zero non-delegating owner cards.
+func (s *Service) heldOnlySessions() map[[2]string]bool {
+	s.fleet.mu.Lock()
+	snap := make([]proto.Interaction, 0, len(s.fleet.interactions))
+	for _, p := range s.fleet.interactions {
+		if !p.claimed {
+			snap = append(snap, p.ix)
+		}
+	}
+	s.fleet.mu.Unlock()
+	if len(snap) == 0 {
+		return nil
+	}
+	type flags struct {
+		held bool
+		user bool
+	}
+	bySession := map[[2]string]flags{}
+	mark := func(m, sid string, delegating bool) {
+		if m == "" || sid == "" {
+			return
+		}
+		k := [2]string{m, sid}
+		st := bySession[k]
+		if delegating {
+			st.held = true
+		} else {
+			st.user = true
+		}
+		bySession[k] = st
+	}
+	for _, ix := range snap {
+		mid := s.canonical(ix.MachineID)
+		underMid, under, _, side := s.foldedUnderWithMachine(mid, ix.SessionID)
+		if under == "" && ix.FoldedUnder != "" {
+			under, underMid, side = ix.FoldedUnder, ix.FoldedUnderMachineID, ix.FoldedSide
+		}
+		mark(mid, ix.SessionID, ix.Delegating)
+		if under != "" {
+			mark(s.canonical(cmp.Or(underMid, mid)), under, ix.Delegating)
+		}
+		if side != "" {
+			mark(mid, side, ix.Delegating)
+		}
+	}
+	out := map[[2]string]bool{}
+	for k, st := range bySession {
+		if st.held && !st.user {
+			out[k] = true
+		}
+	}
+	return out
+}
+
+// cardStateChanged refreshes todo views and the direction tree when a card is routed, escalated, or resolved, even if
+// the machine's serialized session list did not change (for example, flipping Delegating on a pending card or updating
+// a cross-machine folded sub-agent's card).
+func (s *Service) cardStateChanged(ix proto.Interaction) {
+	mid := s.canonical(ix.MachineID)
+	underMid, under, _, _ := s.foldedUnderWithMachine(mid, ix.SessionID)
+	if under == "" && ix.FoldedUnder != "" {
+		under, underMid = ix.FoldedUnder, ix.FoldedUnderMachineID
+	}
+	notify := func(machine string) {
+		if machine == "" {
+			return
+		}
+		s.todoRunsChanged(machine)
+		if s.todoRunsOn(machine) {
+			s.directionTreeSoon()
+		}
+	}
+	notify(mid)
+	if under != "" {
+		parentMid := s.canonical(cmp.Or(underMid, mid))
+		if parentMid != mid {
+			notify(parentMid)
+		}
+	}
 }
 
 // pendingIx is one pending interaction; false when it is not pending.
@@ -1452,10 +1719,46 @@ func alwaysCard(ix proto.Interaction) bool {
 		len(ix.AlwaysKeys) <= maxAlwaysKeys && len(ix.Fields) == 0
 }
 
+type interactionOriginKey struct{}
+
+func withInteractionOrigin(ctx context.Context, origin string) context.Context {
+	return context.WithValue(ctx, interactionOriginKey{}, origin)
+}
+
+func interactionOrigin(ctx context.Context) string {
+	origin, _ := ctx.Value(interactionOriginKey{}).(string)
+	return origin
+}
+
+// isInboxOrigin checks the node's attested interaction.create origin hint first (covering the
+// first-turn window before Start records the origin and transient store errors), then the
+// manager's origin book. When failClosed is true, an unreadable origin book is treated as Inbox.
+func (s *Service) isInboxOrigin(ctx context.Context, machine, session string, failClosed bool) bool {
+	if interactionOrigin(ctx) == OriginInbox {
+		return true
+	}
+	b := &s.origins
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !s.originsLocked(ctx) {
+		return failClosed
+	}
+	o := b.m[session]
+	return o != nil && o.Origin == OriginInbox && (o.MachineID == "" || s.sameMachine(machine, o.MachineID))
+}
+
+// isInboxWholeBashAlways reports whether ix asks for a whole-tool "tool:Bash" session grant on an
+// Inbox handling conversation. Inbox turns process untrusted external messages, so a single Always
+// click on a benign read command must never auto-approve arbitrary later shell mutations (#15267).
+func (s *Service) isInboxWholeBashAlways(ctx context.Context, ix proto.Interaction) bool {
+	return slices.Contains(ix.AlwaysKeys, "tool:Bash") &&
+		s.isInboxOrigin(ctx, ix.MachineID, ix.SessionID, true)
+}
+
 // alwaysAllowed: every key ix names was granted with "Always allow in this session" in its conversation.
 func (s *Service) alwaysAllowed(ctx context.Context, ix proto.Interaction) (proto.Resolution, bool) {
 	st := s.fleetStore()
-	if st == nil || !alwaysCard(ix) {
+	if st == nil || !alwaysCard(ix) || s.isInboxWholeBashAlways(ctx, ix) {
 		return proto.Resolution{}, false
 	}
 	ok, err := st.AlwaysAllowed(ctx, ix.SessionID, ix.AlwaysKeys)
@@ -1480,6 +1783,10 @@ func (s *Service) keepAlways(ix proto.Interaction, r proto.Resolution) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), historyTimeout)
+	if s.isInboxWholeBashAlways(ctx, ix) {
+		cancel()
+		return
+	}
 	err := st.AllowAlways(ctx, ix.SessionID, ix.ToolName, ix.AlwaysKeys)
 	cancel()
 	if err != nil {
@@ -1579,12 +1886,17 @@ func (s *Service) cancelSessionInteractions(machineID, sessionID string) {
 // question asked again (#4568). A card that was on its way up to the user finds its route again (restoreRoute); one
 // the assistant was deciding on goes on (resumeDelegations). Both before the hub gets the full list (FleetUp).
 func (s *Service) restoreInteractions(ctx context.Context) {
-	st, ok := s.store().(interface {
-		ExpireStaleInteractions(ctx context.Context) ([]proto.Interaction, []string, error)
-	})
-	if !ok {
-		return
+	st, ok := s.store().(staleInteractionStore)
+	if ok {
+		s.fleet.restored.Do(func() { s.restoreStoredInteractions(context.WithoutCancel(ctx), st) })
 	}
+}
+
+type staleInteractionStore interface {
+	ExpireStaleInteractions(context.Context) ([]proto.Interaction, []string, error)
+}
+
+func (s *Service) restoreStoredInteractions(ctx context.Context, st staleInteractionStore) {
 	resumable, cancelled, err := func() (out []proto.Interaction, cancelled []string, err error) {
 		defer guard(&err) // a test's store may not keep the table
 		return st.ExpireStaleInteractions(ctx)
@@ -1602,7 +1914,31 @@ func (s *Service) restoreInteractions(ctx context.Context) {
 		}
 	}
 	for _, id := range cancelled {
-		s.hub.Tell(assistantwire.EventFleetResolved, assistantwire.FleetResolved{ID: id})
+		s.tellResolved(assistantwire.FleetResolved{ID: id})
+	}
+	for i := range resumable {
+		if s.isInboxWholeBashAlways(ctx, resumable[i]) {
+			resumable[i].AlwaysKeys = nil
+			notKept := false
+			resumable[i].AlwaysHonored = &notKept
+		}
+	}
+	if recStore, ok := s.store().(interactionRecorder); ok && len(cancelled) > 0 {
+		for _, id := range cancelled {
+			readCtx, cancel := context.WithTimeout(ctx, historyTimeout)
+			rec, err := func() (rec *db.InteractionRecord, err error) {
+				defer guard(&err)
+				return recStore.InteractionRecord(readCtx, id)
+			}()
+			cancel()
+			if err != nil {
+				s.logf("read invalidated interaction %s: %v", id, err)
+				continue
+			}
+			if rec != nil {
+				s.recordRestartInvalidation(ctx, rec.Interaction)
+			}
+		}
 	}
 	var back []proto.Interaction
 	s.fleet.mu.Lock()

@@ -59,6 +59,23 @@ func reversibleResultText(r proto.ToolResult) string {
 	return strings.Join(out, "\n")
 }
 
+func requireUnavailableBriefingAction(t *testing.T, s *Service, action, value string) {
+	t.Helper()
+	const key = "assistant.briefing_waits"
+	f := s.hub.(*fakeHub)
+	f.answerAppBlocking(AppSettings, AppTool, func(json.RawMessage) (any, error) {
+		return proto.TextResult("unexpected settings call to the hub", true), nil
+	})
+	before := len(f.appParams(AppSettings, AppTool))
+	r := callReversibleSettingAction(t.Context(), s, action, key, value, "conv1")
+	if got := len(f.appParams(AppSettings, AppTool)); got != before {
+		t.Fatalf("manager sent its unavailable setting to the hub: %d additional calls", got-before)
+	}
+	if !r.IsError || !strings.Contains(reversibleResultText(r), key) {
+		t.Fatalf("unavailable briefing setting %s = %+v", action, r)
+	}
+}
+
 func requireAutomaticReversibleSet(t *testing.T, s *Service, key, value string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -224,8 +241,11 @@ func TestReversibleSettingCandidatesRequireApprovalByDefault(t *testing.T) {
 			if tc.key == "assistant.briefing_waits" {
 				needsBriefingModule(t)
 			}
-			s, _ := newReversibleSettingService(t, false)
+			s, st := newReversibleSettingService(t, false)
+			requireReversibleApproval(t, s, tc.key, tc.value, false)
+			requireReversibleRaw(t, st, tc, `null`)
 			q := requireReversibleApproval(t, s, tc.key, tc.value, true)
+			requireReversibleRaw(t, st, tc, tc.value)
 			if !strings.Contains(q.Summary, "16") && tc.key == "assistant.briefing_waits" {
 				t.Fatalf("briefing proposal does not show the new value: %q", q.Summary)
 			}

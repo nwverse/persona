@@ -158,6 +158,7 @@ func memoryExtensionMerge(reads []extmgr.MemorySourceRead) (memoryExtensionBatch
 			continue
 		}
 		b := memoryExtensionBatchOf(r.Pages)
+		out.StandingBytes = max(out.StandingBytes, b.StandingBytes)
 		added := false
 		for _, e := range b.Entries {
 			if seen[e.ID] {
@@ -180,7 +181,7 @@ func memoryExtensionMerge(reads []extmgr.MemorySourceRead) (memoryExtensionBatch
 // standingOnly is b with its standing entries only: only those are meant for a standing channel; the others come in
 // by relevance in a recall, a hand-off or the Inbox.
 func (b memoryExtensionBatch) standingOnly() memoryExtensionBatch {
-	out := memoryExtensionBatch{Tagged: b.Tagged, Names: b.Names}
+	out := memoryExtensionBatch{Tagged: b.Tagged, Names: b.Names, StandingBytes: b.StandingBytes}
 	for _, e := range b.Entries {
 		if e.Standing {
 			out.Entries = append(out.Entries, e)
@@ -197,7 +198,7 @@ func (b memoryExtensionBatch) about(tag string) memoryExtensionBatch {
 	if len(terms) == 0 {
 		return b
 	}
-	out := memoryExtensionBatch{Tagged: b.Tagged, Names: b.Names}
+	out := memoryExtensionBatch{Tagged: b.Tagged, Names: b.Names, StandingBytes: b.StandingBytes}
 	for _, e := range b.Entries {
 		fields := []string{strings.ToLower(e.Text), strings.ToLower(e.Facet)}
 		for _, values := range [][]string{e.Tags, e.Categories} {
@@ -230,6 +231,7 @@ func (s *Service) assembleExtension(ctx context.Context, f assembleFor, b memory
 	if len(all) == 0 {
 		return assembled{}
 	}
+	f.ExtensionStanding = b.standingBudget()
 	return assembleEntries(all, f, info)
 }
 

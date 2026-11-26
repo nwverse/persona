@@ -94,6 +94,7 @@ import persona.core.contracts.api.TasksApi
 import persona.core.designsystem.AppStyle
 import persona.core.designsystem.AssistantTrayTokens
 import persona.core.designsystem.ChromeInsets
+import persona.core.designsystem.JChipTokens
 import persona.core.designsystem.JPage
 import persona.core.designsystem.LocalChromeInsets
 import persona.core.designsystem.PersonaTheme
@@ -393,7 +394,10 @@ class AssistantTrayImeVisibilityTest {
             val routeChip = rule.onNodeWithTag("assistant-route-chip").getUnclippedBoundsInRoot()
             val photo = rule.onNodeWithContentDescription("Photo 1").getUnclippedBoundsInRoot()
             val field = rule.onNode(hasSetTextAction()).getUnclippedBoundsInRoot()
-            val add = rule.onNodeWithContentDescription("Add attachments and quick messages").getUnclippedBoundsInRoot()
+            val addNode = rule.onNodeWithContentDescription("Add attachments and quick messages")
+            val add = addNode.getUnclippedBoundsInRoot()
+            val addTouch = addNode.fetchSemanticsNode().touchBoundsInRoot
+            val minTouchPx = with(rule.density) { Tokens.MinTouch.android.toPx() }
             val label = "$currentStyle dark=$isDark"
 
             rule.onNodeWithTag("assistant-tray-needs").assertIsDisplayed()
@@ -409,7 +413,8 @@ class AssistantTrayImeVisibilityTest {
             assertTrue("$label: photo preview sits above input field (${photo.bottom} <= ${field.top})", photo.bottom <= field.top + 1.dp)
             assertTrue("$label: input field has usable height (${field.height})", field.height >= Tokens.Space.l)
             assertTrue("$label: input field sits above bottom toolbar (${field.bottom} <= ${add.top})", field.bottom <= add.top + 1.dp)
-            assertTrue("$label: bottom toolbar keeps 48dp touch height (${add.height})", add.height >= Tokens.MinTouch.android)
+            assertTrue("$label: bottom toolbar keeps balanced visual height (${add.height})", add.height >= JChipTokens.height)
+            assertTrue("$label: bottom toolbar keeps 48dp touch height (${addTouch.height})", addTouch.height >= minTouchPx - 0.5f)
             assertTrue("$label: bottom toolbar stays inside visible area above IME (${add.bottom} <= $visibleBottom)", add.bottom <= visibleBottom + 1.dp)
 
             saveShot("tray-ime-${currentStyle.name.lowercase()}-${if (isDark) "dark" else "light"}")

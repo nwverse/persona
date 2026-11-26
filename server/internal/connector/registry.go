@@ -38,6 +38,9 @@ type Registry struct {
 	// run is what Start was given, to start a connector switched on later; stop cancels a running one's Run / Watch.
 	run  *starter
 	stop map[string]context.CancelFunc
+	// lifecycle orders whole-registry starts and stops. workers includes a removed connector until it returns.
+	lifecycle sync.Mutex
+	workers   sync.WaitGroup
 	// sent is told of every gated write that went out (SetSent).
 	sent func(ctx context.Context, s Sent)
 }

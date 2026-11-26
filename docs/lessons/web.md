@@ -1,5 +1,10 @@
 # Lessons: web UI and interactions
 
+## A text shimmer needs an opaque source color (#15367)
+
+Setting `color: transparent` also clears any gradient stop that reads `currentColor`.
+Use a transparent glyph fill for the animated gradient and check the painted text in a browser.
+
 ## A folder of trees names its repository, it is not one (#13453)
 
 Path inference keys a tree in a folder kept apart from its repository (herdr's `~/.herdr/worktrees/<repository>/<tree>`)
@@ -618,7 +623,7 @@ The supervision feed's `body.evidence` is a separate array, not part of `body.te
 
 ## Full-history positions are not a tail-window count (#2338)
 
-The web's `turns=2` initial page and two-turn cache deliberately preserve a small first screen; projecting ticks from those lines cannot enumerate the conversation. Fetch only server count/identity/sequence metadata for the rail, and wait for selection before loading older bodies. Keep backward coverage contiguous; do not merge isolated target windows into live coverage. Count genuine queued inputs by identity, deduplicate text/image siblings, and never use model-role `user` or `session.info.turns` alone as the total. If a richer independent navigation API is being developed elsewhere, keep the temporary adapter narrow and document its migration boundary rather than taking over that task.
+The web's `turns=2` initial page and two-turn cache deliberately preserve a small first screen; projecting ticks from those lines cannot enumerate the conversation. Fetch only server count/identity/sequence metadata for the rail, and wait for selection before loading older bodies. Keep backward coverage contiguous; do not merge isolated target windows into live coverage. Count genuine queued inputs by identity, deduplicate text/image siblings, and never use model-role `user` or `session.info.turns` alone as the total. The compact index and its per-history excerpt cache can now sit in the lazy rail chunk. Keep a selected historical window's cursors separate from the live subscription. Using the live view's last sequence for either direction can silently skip records or cause an unbounded continuity pull (#15813).
 
 ## Render-count tests must separate store pushes from live clocks (#1989)
 
@@ -1559,3 +1564,9 @@ the heading takes the row's marks and menu. A host that does not say which works
 `is_main`) leaves it to the folder, the workspace at the repository's own folder, and that guess may only mark and
 order the tree: actions keep reading what the host said. Guess only for a host that names no project: a desktop app's
 project lists each of its folders as its own `project_path`, so the section's first folder wore the home mark (#14497).
+
+## Keep a native select's label separate from its choices (#15518)
+
+Use a label linked by ID, with the select beside it. When a label wraps the native select, browser label lookup can
+include the option text in the label. Check the label in a real browser and attach any inherited-policy hint with
+`aria-describedby` so it stays available without changing the control's name.

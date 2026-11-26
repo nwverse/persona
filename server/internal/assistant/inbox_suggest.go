@@ -33,6 +33,7 @@ type suggestIn struct {
 	Title    string           `json:"title"`
 	Summary  string           `json:"summary"`
 	Machine  string           `json:"machine"`
+	Session  string           `json:"session"`
 	Cwd      string           `json:"cwd"`
 	Due      string           `json:"due"`
 	Related  []string         `json:"related"`
@@ -60,8 +61,9 @@ var errTodoFromHandoff = errSuggestion{"a to-do is suggested by the conversation
 // check holds a suggestion to the rules before anything is kept.
 func (in *suggestIn) check() error {
 	in.Kind, in.Text, in.Outcome = strings.TrimSpace(in.Kind), strings.TrimSpace(in.Text), strings.TrimSpace(in.Outcome)
+	in.Machine, in.Session = strings.TrimSpace(in.Machine), strings.TrimSpace(in.Session)
 	if in.Kind != "" && in.Follow != nil {
-		return errSuggestion{"give either kind (reply, agent or conclusion) or follow, not both: follow says this turn only waits on the other side"}
+		return errSuggestion{"give either kind (reply, agent, handoff, conclusion or todo) or follow, not both: follow says this turn only waits on the other side"}
 	}
 	if in.Reported != nil {
 		in.Reported.Text = clip(oneLine(strings.TrimSpace(in.Reported.Text)), 120)
@@ -80,12 +82,15 @@ func (in *suggestIn) check() error {
 	switch in.Kind {
 	case "":
 		if strings.TrimSpace(in.Recap) == "" && in.Reported == nil {
-			return errSuggestion{"give kind (reply, agent, conclusion or todo) with text, at least recap, or a reported step"}
+			return errSuggestion{"give kind (reply, agent, handoff, conclusion or todo) with text, at least recap, or a reported step"}
+		}
+		if in.Session != "" {
+			return errSuggestion{"session goes with kind handoff only"}
 		}
 		return nil
-	case SuggestReply, SuggestAgent, SuggestConclusion, SuggestTodo:
+	case SuggestReply, SuggestAgent, SuggestHandoff, SuggestConclusion, SuggestTodo:
 	default:
-		return errSuggestion{fmt.Sprintf("kind %q: one of reply, agent, conclusion, todo", in.Kind)}
+		return errSuggestion{fmt.Sprintf("kind %q: one of reply, agent, handoff, conclusion, todo", in.Kind)}
 	}
 	if in.Text == "" {
 		return errSuggestion{"text is required"}
@@ -95,6 +100,16 @@ func (in *suggestIn) check() error {
 		if p := draftPlaceholder(in.Text); p != "" {
 			return errSuggestion{fmt.Sprintf("the reply leaves %s to fill in, and it goes out as it is: leave out what you could not find (say so in note) and submit again", p)}
 		}
+	}
+	if in.Kind == SuggestHandoff {
+		if strings.TrimSpace(in.Item) != "" {
+			return errSuggestion{"a handoff is suggested by the conversation that processes the item, not one it was handed to"}
+		}
+		if in.Machine == "" || in.Session == "" {
+			return errSuggestion{"handoff requires both machine and session: choose an eligible conversation listed in the prompt, or fall back to reply/agent"}
+		}
+	} else if in.Session != "" {
+		return errSuggestion{"session goes with kind handoff only"}
 	}
 	in.Due = strings.TrimSpace(in.Due)
 	if in.Kind == SuggestTodo {
@@ -258,6 +273,37 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 	if in.Reported != nil && !it.open() {
 		b.mu.Unlock()
 		return "", nil, nil, false, errReportedFiled
+	}
+	var handoffTarget inboxHandoffTarget
+	if in.Kind == SuggestHandoff {
+		itemID, todoID := it.ID, ""
+		if it.Agent != nil {
+			todoID = it.Agent.TodoID
+		}
+		b.mu.Unlock()
+		var err error
+		handoffTarget, err = s.validateHandoffTarget(ctx, todoID, sessionID, in.Machine, in.Session)
+		if err != nil {
+			return "", nil, nil, false, err
+		}
+		b.mu.Lock()
+		it = b.items[itemID]
+		if it == nil || it.Agent == nil || it.Agent.SessionID != sessionID {
+			b.mu.Unlock()
+			return "", nil, nil, false, errNotProcessing
+		}
+		if in.ProcessingTurn != it.Agent.ProcessingTurn {
+			b.mu.Unlock()
+			return "", nil, nil, false, errStaleInboxTurn
+		}
+		if !it.open() {
+			b.mu.Unlock()
+			return "", nil, nil, false, errSuggestFiled
+		}
+		if handoffTarget.Role == handoffRoleTask && it.Agent.TodoID != todoID {
+			b.mu.Unlock()
+			return "", nil, nil, false, errSuggestion{"the item's linked task changed while validating the handoff target: choose an eligible target or fall back to reply/agent"}
+		}
 	}
 	instructionID := ""
 	if (in.Kind == SuggestReply || in.Kind == SuggestAgent) && legacyReplyPolicyConfig(replyPolicy) && replyPolicyItemApplies(replyPolicy, it) {
@@ -448,6 +494,11 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 				g.MachineID = m.ID
 			}
 		}
+		if in.Kind == SuggestHandoff {
+			g.MachineID = handoffTarget.MachineID
+			g.SessionID = handoffTarget.SessionID
+			g.TargetTitle = handoffTarget.Title
+		}
 		if samePendingReply(it, g) {
 			// The reply and its authority/target are unchanged. Keep its card/version and any failed or uncertain
 			// attempt, while still saving this call's independently supplied recap/title/relationship updates.
@@ -479,15 +530,26 @@ func (s *Service) suggestFrom(ctx context.Context, sessionID string, in suggestI
 				it.Tier = TierFYI
 			}
 		default:
-			key := "suggested_reply"
-			if in.Handback {
-				key = "suggested_handback"
-			} else if in.Kind == SuggestAgent {
-				key = "suggested_agent"
-			} else if in.Kind == SuggestTodo {
-				key = "suggested_todo"
+			var chainText string
+			switch {
+			case in.Handback:
+				chainText = i18n.T(l, "assistant-inbox_chain.suggested_handback")
+			case in.Kind == SuggestHandoff:
+				if handoffTarget.Main {
+					chainText = i18n.T(l, "assistant-inbox_chain.suggested_handoff_main")
+				} else if title := clip(oneLine(handoffTarget.Title), 40); title != "" {
+					chainText = i18n.T(l, "assistant-inbox_chain.suggested_handoff", i18n.Args{"title": title})
+				} else {
+					chainText = i18n.T(l, "assistant-inbox_chain.suggested_handoff_generic")
+				}
+			case in.Kind == SuggestAgent:
+				chainText = i18n.T(l, "assistant-inbox_chain.suggested_agent")
+			case in.Kind == SuggestTodo:
+				chainText = i18n.T(l, "assistant-inbox_chain.suggested_todo")
+			default:
+				chainText = i18n.T(l, "assistant-inbox_chain.suggested_reply")
 			}
-			b.chainAdd(it, InboxChainEntry{Kind: ChainHandling, At: now, Text: i18n.T(l, "assistant-inbox_chain."+key), Detail: clip(in.Text, 600), Link: link})
+			b.chainAdd(it, InboxChainEntry{Kind: ChainHandling, At: now, Text: chainText, Detail: clip(in.Text, 600), Link: link})
 		}
 		if in.Kind == SuggestReply && from == nil {
 			card = messageCardOf(it)

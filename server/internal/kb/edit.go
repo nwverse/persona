@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/nwverse/persona/server/internal/kbwire"
 	"os"
 	"path/filepath"
 	"slices"
@@ -61,12 +62,7 @@ func fieldKey(field string) string {
 	return field
 }
 
-func taggingFieldLocked(t *Tagging, field string) bool {
-	if slices.Contains(t.LockedFields, field) {
-		return true
-	}
-	return t.Locked && (field == "importance" || field == "relevance" || field == "tags")
-}
+func taggingFieldLocked(t *Tagging, field string) bool { return kbwire.TaggingFieldLocked(t, field) }
 
 // putEntity rereads protected fields while holding the metadata lock. A stale pipeline object cannot
 // restore locked links or overwrite a hand edit made while a model or connector was running.

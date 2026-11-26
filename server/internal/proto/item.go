@@ -457,6 +457,8 @@ const (
 	// SourceMeeting is a batch of a recorded meeting the session attends (docs/assistant/meeting-minutes.md "Feeding
 	// the attending session"): other people's words, never the user's; Title is the meeting's name.
 	SourceMeeting = "meeting"
+	// SourceExtension: an event an extension observed and reported (assistant.event). Title is the extension's name.
+	SourceExtension = "extension"
 )
 
 // SourceFromInjected upgrades existing metadata without guessing from ordinary text.

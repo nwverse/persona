@@ -823,7 +823,7 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 	b.mu.Lock()
 	b.init()
 	var keys []string
-	for _, k := range []string{sigReview, sigIdle, sigUnjudged, sigNeedsYou, sigStalled, sigNoProgress, sigTimedOut, sigOrphaned, sigRecovered, sigEstimateDue} {
+	for _, k := range []string{sigReview, sigIdle, sigUnjudged, sigOutageRecovery, sigNeedsYou, sigStalled, sigNoProgress, sigTimedOut, sigOrphaned, sigRecovered, sigEstimateDue} {
 		key := t.ID + "|" + k
 		delete(b.pending, key) // reviewed: what waited is answered
 		keys = append(keys, key)
@@ -968,7 +968,7 @@ func (s *Service) rehomeWorker(ctx context.Context, t Todo) (cur Todo, cancelled
 		return t, false
 	}
 	if pending {
-		s.signal(superviseSignal{Todo: t.ID, Kind: sigReview, Key: reviewKey(&v), Detail: "它的 task leader 已经不在，这个任务交给你验收"}) // i18n-ignore: the supervision message is the assistant's prompt
+		s.signalHandedOverReview(t.ID, up, reviewKey(&v), "它的 task leader 已经不在，这个任务交给你验收") // i18n-ignore: the supervision message is the assistant's prompt
 	}
 	cur, _ = s.todoNow(t.ID)
 	return cur, false

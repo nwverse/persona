@@ -40,7 +40,7 @@ export function useQuestionMarks({ mid, sid, on, lines, busy, ticks, scroller }:
   /** A jump to a question opens its answer. */
   const opened = useCallback((tickId: string) => {
     const tick = now.current.ticks.find((x) => x.id === tickId);
-    const m = now.current.marks?.get(tick?.lineId ?? tickId);
+    const m = now.current.marks?.get(tick?.lineId ?? tick?.retainedLineId ?? tickId);
     if (m?.state === "unread") markRead([m.key]);
   }, [markRead]);
 

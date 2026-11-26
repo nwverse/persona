@@ -481,3 +481,8 @@ func (r *Recording) CalendarTitle() string {
 	}
 	return ""
 }
+
+// UploadCleaner checks an upload and puts its segments in order (empty ones dropped, Persona's echo marked) before it
+// is stored: the recording module's rule of an upload, which the core's track recordings run on an upload the module's
+// route hands them (recordinghost.Host.PutSpaceRecordingRoute).
+type UploadCleaner func(u *RecordingUpload) error

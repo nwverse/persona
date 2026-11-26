@@ -25,6 +25,8 @@ import persona.core.domain.answer.Delegated
 import persona.core.domain.lines.tokenCount
 import persona.core.domain.sort.canSend
 import persona.core.domain.sort.listedModes
+import persona.core.domain.sort.displayTitle
+import persona.core.domain.sort.displayTitleDetail
 import persona.core.domain.sort.resumeCommand
 import java.time.Instant
 import java.time.ZoneId
@@ -181,6 +183,7 @@ internal fun ChatSessionInfoSheet(
     machine: Machine?,
     state: ChatChromeState,
     onOpenTodo: ((String) -> Unit)? = null,
+    preferHerdrTabName: Boolean = false,
     onDismiss: () -> Unit,
 ) {
     val copyText = rememberCopy()
@@ -199,8 +202,12 @@ internal fun ChatSessionInfoSheet(
     }
     JSheet(onDismiss = onDismiss, title = stringResource(R.string.chat_info_title), scrollable = true) {
         Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
-            Text(session.displayTitle, style = PersonaTheme.type.headline, color = PersonaTheme.palette.ink, maxLines = 2,
+            Text(session.displayTitle(preferHerdrTabName), style = PersonaTheme.type.headline, color = PersonaTheme.palette.ink, maxLines = 2,
                 overflow = TextOverflow.Ellipsis)
+            session.displayTitleDetail(preferHerdrTabName)?.let { cliTitle ->
+                Text(cliTitle, style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis)
+            }
             val status = Status.entries.firstOrNull { it.name == session.agentState.name }
             Text(listOfNotNull(status?.localizedLabel, machine?.displayName ?: session.machineId, session.spaceName?.takeIf(String::isNotBlank))
                 .joinToString(" / "), style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink2, maxLines = 1,

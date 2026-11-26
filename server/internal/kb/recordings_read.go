@@ -6,14 +6,12 @@ package kb
 import (
 	"cmp"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/kbwire"
-	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/recordingwire"
 )
 
@@ -30,7 +28,7 @@ import (
 // recordings/.deleted.json is the tombstones: a late upload of a deleted one is refused. Kept recordingDays.
 
 // KindRecording is the recordings' kind and directory.
-const KindRecording = "recordings"
+const KindRecording = recordingwire.KindRecording
 
 // DefaultRecordingDays is how long recordings are kept unless the user says otherwise (assistant.recording_days).
 const DefaultRecordingDays = 14
@@ -54,17 +52,13 @@ type Recording = recordingwire.Recording
 
 var (
 	// ErrRecordingDeleted: the recording was deleted (a tombstone); the phone must not upload it again.
-	ErrRecordingDeleted = errors.New("this recording was deleted")
+	ErrRecordingDeleted = recordingwire.ErrRecordingDeleted
 	// ErrBadRecording wraps what is wrong with an upload.
-	ErrBadRecording = errors.New("invalid recording")
-	uuidRe          = lazyre.New(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	ErrBadRecording = recordingwire.ErrBadRecording
 )
 
 // RecordingID is id as stored (lowercase), false when it is not a UUID.
-func RecordingID(id string) (string, bool) {
-	id = strings.ToLower(strings.TrimSpace(id))
-	return id, uuidRe.MatchString(id)
-}
+func RecordingID(id string) (string, bool) { return recordingwire.RecordingID(id) }
 
 func badRecording(f string, a ...any) error {
 	return fmt.Errorf("%w: %s", ErrBadRecording, fmt.Sprintf(f, a...))

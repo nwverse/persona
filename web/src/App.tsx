@@ -58,7 +58,8 @@ import { sidebarRail, sidebarShown, useLayout } from "./lib/layout";
 import { SIDEBAR_LABEL, useShortcuts } from "./lib/use-shortcuts";
 import { Sidebar, SidebarRail } from "./views/Sidebar";
 import { SidebarResize } from "./views/SidebarResize";
-import { SidePanel } from "./views/SidePanel";
+import { SidebarRowHoverHost } from "./views/SidebarRowHover";
+import { closePanel, usePanel } from "./lib/panel";
 import { ExtensionNavPage } from "./views/extensions/ExtensionSlots";
 import { useExtensionPlace } from "./lib/extension-slots";
 import { AttentionSignals } from "./lib/attention-signals";
@@ -66,6 +67,7 @@ import { clearDesktopIsland, DesktopIslandSignals } from "./lib/desktop-island";
 import { openStartPage } from "./lib/start-page";
 import { conversationRoute } from "./lib/conversation-page";
 import { useTrackTitle } from "./lib/tracks";
+import { healthReadOnly } from "./lib/health-archive";
 import { connectModuleHub, moduleExtensionAt, moduleTitle, useModuleStates } from "./core/module-host";
 import { ModuleExtensionPage, ModulePage } from "./core/ModulePage";
 
@@ -83,10 +85,10 @@ const AgentArchives = lazyPage(() => import("./views/agents/AgentArchives").then
 const CompareRuns = lazyPage(() => import("./views/CompareRuns").then((m) => m.CompareRuns), { routes: ["compare"] });
 const RequestPage = lazyPage(() => import("./views/RequestPage").then((m) => m.RequestPage), { routes: ["request"] });
 const WorkspaceBoard = lazyPage(() => import("./views/WorkspaceBoard").then((m) => m.WorkspaceBoard), { routes: ["workspace-board"] });
-const Machines = lazyPage(() => import("./views/Machines").then((m) => m.Machines), { routes: ["machines"] });
+const Machines = lazyPage(() => import("./views/Machines").then((m) => m.Machines), { routes: ["machines", "machine"] });
 const TerminalPage = lazyPage(() => import("./views/terminal/TerminalPage").then((m) => m.TerminalPage), { routes: ["terminal"] });
+const LarkOAuthReturn = lazyPage(() => import("./views/settings/LarkOAuthReturn").then((m) => m.LarkOAuthReturn), { routes: ["lark-oauth"] });
 const SubscriptionsPage = lazyPage(() => import("./views/subscriptions/SubscriptionsPage").then((m) => m.SubscriptionsPage), { routes: ["subscriptions"] });
-const MachineDetail = lazyPage(() => import("./views/machines/MachineDetail").then((m) => m.MachineDetail), { routes: ["machine"] });
 const SpacePage = lazyPage(() => import("./views/SpacePage").then((m) => m.SpacePage), { routes: ["space"] });
 const Settings = lazyPage(() => import("./views/Settings").then((m) => m.Settings), { routes: ["settings"] });
 const SpaceExtensionEntry = lazyPage(() => import("./views/spaces/SpaceExtensionEntry").then((m) => m.SpaceExtensionEntry), { routes: ["track", "track-new"] });
@@ -101,6 +103,19 @@ const TodosView = lazyPage(() => import("./views/Todos").then((m) => m.TodosView
 // an address that is no page (lib/router.ts "not-found"): loaded only by one
 const NotFound = lazyPage(() => import("./views/NotFound").then((m) => m.NotFound));
 // Keep the shortcut palette warm. The new-agent dialog loads only when opened.
+// A closed side panel is not part of startup. Keep it mounted after first use so its hooks preserve focus and layout.
+const SidePanel = lazyPage(() => import("./views/SidePanel").then((m) => m.SidePanel));
+function SidePanelHost() {
+  const open = Boolean(usePanel());
+  if (!useOpened(open)) return null;
+  return (
+    <OverlayBoundary open={open} onClose={closePanel}>
+      <Suspense fallback={open && <div className="fixed right-4 top-4 z-40"><Loading /></div>}>
+        <SidePanel />
+      </Suspense>
+    </OverlayBoundary>
+  );
+}
 const Palette = lazyPage(() => import("./views/Palette").then((m) => m.Palette), { idle: true });
 // Where the toasts sit on a narrow screen (ui/toast-lift.tsx): off the first screen and out of the idle tier, which a
 // wide screen loads too; Shell loads it once the screen is narrow. A load that fails leaves the toasts at the bottom of
@@ -318,7 +333,7 @@ function pageTarget(s: State, route: Route): PageTarget | undefined {
     if (route.at || route.standalone) return exact();
     const parentRow = pageRows(s, route.mid).find((r) => r.session_id === sub.parent);
     const dest = parentRow?.assistant
-      ? conversationRoute(route.mid, sub.parent, s.sessions, s.assistant, parentRow.manager)
+      ? conversationRoute(route.mid, sub.parent, s.sessions, s.assistant, parentRow)
       : { ...route, sid: sub.parent };
     return { link: undefined, to: routePath(dest), mid: route.mid, sid: undefined, parent: sub.parent, subagent: { mid: route.mid, sid: route.sid } };
   }
@@ -326,7 +341,7 @@ function pageTarget(s: State, route: Route): PageTarget | undefined {
   const row = rows.find((r) => r.session_id === route.sid);
   // a Persona conversation's `/s/…` link (a push, a copied address): its own page, which draws its plan cards, questions
   // and tasks; the agent chat here shows none of them
-  if (row?.assistant && !route.at) return { link: undefined, to: routePath(conversationRoute(route.mid, route.sid, s.sessions, s.assistant, row.manager)), mid: route.mid, sid: undefined };
+  if (row?.assistant && !route.at) return { link: undefined, to: routePath(conversationRoute(route.mid, route.sid, s.sessions, s.assistant, row)), mid: route.mid, sid: undefined };
   // a lead's worker's (#5180): the lead's page, the worker in its Team panel
   const worker = workerTarget(rows, route.mid, row, inWorkView(route));
   if (worker && !route.standalone) return worker;
@@ -340,7 +355,7 @@ function pageTarget(s: State, route: Route): PageTarget | undefined {
     if (route.at || route.standalone) return exact();
     const parentRow = pageRows(s, parentMid).find((r) => r.session_id === parent);
     const dest = parentRow?.assistant
-      ? conversationRoute(parentMid, parent, s.sessions, s.assistant, parentRow.manager)
+      ? conversationRoute(parentMid, parent, s.sessions, s.assistant, parentRow)
       : withWorkView({ name: "session", mid: parentMid, sid: parent }, inWorkView(route));
     return { link: undefined, to: routePath(dest), mid: parentMid, sid: undefined, parent, subagent: { mid: route.mid, sid: route.sid } };
   }
@@ -532,7 +547,7 @@ function Shell() {
   const extensionTitle = useExtensionPlace(route.name === "extension" ? route.extension : "", route.name === "extension" ? route.ui : "")?.title;
   const title =
     inWorkView(route) || route.name === "terminal" ? t("work-entry.title") : pane ? agentTitle || "Agent" : route.name === "persona" ? "Persona" : route.name === "persona-new" ? t("app.title_new_chat") : route.name === "history" ? t("app.title_history") : route.name === "module" ? moduleTitle(route) ?? t("app.title_home") : route.name === "track" ? trackTitle || t("app.title_space") : route.name === "track-new" ? t("app.title_new_space") : route.name === "profile" ? t("app.title_profile") : route.name === "inbox" ? t("app.title_inbox") : route.name === "starred" ? t("starred.title")
-      : route.name === "request" ? t("app.title_request") : route.name === "routines" ? t("app.title_routines") : route.name === "kb" ? t("app.title_kb") : route.name === "workspace-board" ? t("app.title_workspace_board") : route.name === "todos" ? t("app.title_todos") : route.name === "machines" || route.name === "machine" ? t("app.title_machines") : route.name === "space" ? route.space : route.name === "settings" ? t("app.title_settings")
+      : route.name === "request" ? t("app.title_request") : route.name === "routines" ? t("app.title_routines") : route.name === "kb" ? t("app.title_kb") : route.name === "workspace-board" ? t("app.title_workspace_board") : route.name === "todos" ? t("app.title_todos") : route.name === "machines" || route.name === "machine" ? t("app.title_machines") : route.name === "space" ? route.space : route.name === "settings" || route.name === "lark-oauth" ? t("app.title_settings")
       : route.name === "agents" ? t("app.title_agents") : route.name === "agent-list" ? "Agents" : route.name === "agent-archives" ? t("app.title_agent_archives") : route.name === "compare" ? t("app.title_compare_runs") : route.name === "extension" ? extensionTitle || t("app.title_extension") : route.name === "subscriptions" ? t("app.title_subscriptions") : route.name === "not-found" ? t("app.title_not_found") : t("app.title_home");
 
   // never reached the hub: say so with a way to try again, instead of pages loading forever (kept through a retry); the
@@ -568,9 +583,13 @@ function Shell() {
     case "module":
       main = <ModulePage key={route.module} route={route} onToggleSidebar={toggle} />;
       break;
-    case "track":
-      main = route.sid ? <Space key={`${route.slug}/${route.sid}`} slug={route.slug} sid={route.sid} onToggleSidebar={toggle} /> : <SpaceExtensionEntry slug={route.slug} />;
+    case "track": {
+      // Health's existing data stays in the default panel without its module (including a core-only build), rather
+      // than depending on the optional Space Conversations extension or opening an editable new-conversation home.
+      const archive = healthReadOnly(route.slug);
+      main = route.sid || archive ? <Space key={`${route.slug}/${route.sid ?? "home"}`} slug={route.slug} sid={route.sid} fresh={route.fresh || archive} onToggleSidebar={toggle} /> : <SpaceExtensionEntry slug={route.slug} />;
       break;
+    }
     case "track-new":
       main = <SpaceExtensionEntry fresh />;
       break;
@@ -593,7 +612,7 @@ function Shell() {
       main = <WorkspaceBoard onToggleSidebar={toggle} />;
       break;
     case "todos":
-      main = <TodosView selectedId={route.id} view={route.view} mode={route.mode} date={route.date} onToggleSidebar={toggle} />;
+      main = <TodosView selectedId={route.id} directionId={route.direction} manager={route.manager} view={route.view} mode={route.mode} date={route.date} onToggleSidebar={toggle} />;
       break;
     case "agents":
       main = <AgentsView key={route.id ?? ""} id={route.id} onToggleSidebar={toggle} />;
@@ -607,23 +626,24 @@ function Shell() {
     case "compare":
       main = <CompareRuns id={route.id} onToggleSidebar={toggle} />;
       break;
+    case "machine":
     case "machines":
       main = <Machines onToggleSidebar={toggle} />;
       break;
     case "terminal":
       main = <TerminalPage route={route} onToggleSidebar={toggle} onNewAgent={openNewAgent} />;
       break;
-    case "machine":
-      main = <MachineDetail key={route.mid} mid={route.mid} onToggleSidebar={toggle} />;
-      break;
     case "space":
-      main = <SpacePage key={`${route.mid}/${route.space}`} mid={route.mid} space={route.space} onToggleSidebar={toggle} />;
+      main = <SpacePage key={`${route.mid}/${route.workspace ?? route.space}`} workspaceId={route.workspace} mid={route.mid} space={route.space} onToggleSidebar={toggle} />;
       break;
     case "settings":
       main = <Settings onToggleSidebar={toggle} />;
       break;
     case "subscriptions":
       main = <SubscriptionsPage onToggleSidebar={toggle} />;
+      break;
+    case "lark-oauth":
+      main = <LarkOAuthReturn onToggleSidebar={toggle} />;
       break;
     case "extension":
       // a reserved extension-page id a feature module draws (the health module's water and protein pages, #13176)
@@ -640,7 +660,7 @@ function Shell() {
 
   return (
     // #root is 100dvh (index.html); with a soft keyboard up (iOS) the shell is only the part above it (lib/viewport.ts)
-    <div ref={shell} data-app-shell className="flex h-full overflow-hidden bg-page">
+    <div ref={shell} data-app-shell data-sidebar-hidden={!sidebarShown(layout) || undefined} className="flex h-full overflow-hidden bg-page">
       {/* wide: a fixed column; narrow: a drawer over the page, clear of a landscape notch and the home indicator */}
       <div
         ref={drawerBox}
@@ -659,7 +679,7 @@ function Shell() {
         )}
         style={{ transitionTimingFunction: EASE }}
       >
-        {rail ? <SidebarRail route={route} onSearch={() => openPalette("jump")} onNewAgent={openNewAgent} /> : <Sidebar route={route} onSearch={searchFromSidebar} onNewAgent={openNewAgent} onNavigate={close} workspaceActions={workspaceActions} />}
+        {rail ? <SidebarRail route={route} onSearch={() => openPalette("jump")} onNewAgent={openNewAgent} /> : <Sidebar active={narrow ? drawer : sidebarShown(layout)} route={route} onSearch={searchFromSidebar} onNewAgent={openNewAgent} onNavigate={close} workspaceActions={workspaceActions} />}
         {!narrow && !rail && <SidebarResize column={sidebarId} />}
       </div>
       {/* the scrim fades out as well as in; a drag sets its opacity as it goes (lib/drawer.ts) */}
@@ -682,7 +702,8 @@ function Shell() {
           <PageBoundary page={href(route)}><Suspense fallback={<PageLoading />}><PerAssistant route={route}>{main}</PerAssistant></Suspense></PageBoundary>
         </div>
       </main>
-      <SidePanel />
+      <SidebarRowHoverHost />
+      <SidePanelHost />
       {paletteOpened && (
         <OverlayBoundary open={palette.open} onClose={closePalette}>
           <Suspense fallback={null}>

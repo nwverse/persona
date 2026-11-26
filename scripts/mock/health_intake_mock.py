@@ -84,12 +84,21 @@ health_items_reset()
 def health_items_route(h, method, path, query, body=b""):
     """GET and PUT /api/v1/assistant/health/items as the hub answers them: the whole list at a revision, 409 with the
     current list for a stale one, one `health_items` message per save. /mock/health-items?mode=existing|fresh|off starts
-    the owner over (reload the page for the hello's features)."""
+    the owner over (reload the page for the hello's features). The control route also accepts reset=1, items=a,b and
+    saved=0|1 for native-client scenarios; setting items advances the revision."""
     global HEALTH_ITEMS_MODE
     if path == "/mock/health-items":
         if query.get("mode", [""])[0] in ("existing", "fresh", "off"):
             HEALTH_ITEMS_MODE = query["mode"][0]
             health_items_reset()
+        with HEALTH_INTAKE_LOCK:
+            if query.get("reset") == ["1"]:
+                health_items_reset()
+            if "items" in query:
+                HEALTH_ITEMS.update(items=[i for i in query["items"][0].split(",") if i],
+                                    revision=HEALTH_ITEMS["revision"] + 1)
+            if query.get("saved") in (["0"], ["1"]):
+                HEALTH_ITEMS["saved"] = query["saved"] == ["1"]
         h.send_json({"mode": HEALTH_ITEMS_MODE, **health_items_state()})
         return True
     if HEALTH_ITEMS_MODE == "off" or not HEALTH_INTAKE_ENABLED:

@@ -14,6 +14,7 @@ import (
 )
 
 // Not-ready skips are neutral even between genuine failures, and the distinction survives storage in any locale.
+// With no main conversation configured, the streak still reaches the owner as a push.
 func TestNotReadySkipsNeitherCountNorEndAStreak(t *testing.T) {
 	for _, lang := range []i18n.Lang{i18n.En, i18n.ZhHans, i18n.Ja} {
 		t.Run(string(lang), func(t *testing.T) {
@@ -48,6 +49,20 @@ func TestNotReadySkipsNeitherCountNorEndAStreak(t *testing.T) {
 				t.Fatalf("three genuine failures are still told once: %+v", p)
 			}
 		})
+	}
+}
+
+// scheduleStore hands each test a database without the settings an earlier test in the process saved: a main
+// conversation left behind sent TestNotReadySkipsNeitherCountNorEndAStreak's streak to the relay instead of the push
+// it checks, whenever schedule_ready_test.go ran first (#15278).
+func TestScheduleStoreForgetsEarlierSettings(t *testing.T) {
+	first := scheduleStore(t)
+	f := newFakeHub()
+	f.settings = &Settings{Timezone: "UTC", Main: "main-left-behind"}
+	newServiceOn(t, f, first)
+	s := newServiceOn(t, newFakeHub(), scheduleStore(t))
+	if got := s.settings(context.Background()).Main; got != "" {
+		t.Fatalf("a fresh schedule store kept an earlier test's main conversation %q", got)
 	}
 }
 

@@ -15,6 +15,7 @@ import { Button, copyText, cx, IconButton, Spinner, toast } from "../../../ui/at
 import { Icon } from "../../../ui/icons";
 import { BindSteps } from "../Channels";
 import { FEATURES, LarkReadSection, SOURCE_REPORT_DELAYS, STEPS, TopicGroups, useBot } from "../FeishuBot";
+import { LarkSyncSection } from "../LarkSyncSection";
 import { Disclosure } from "../ProviderFields";
 import { Group, Row, settingsInputClass, Switch } from "../SettingsParts";
 
@@ -165,6 +166,8 @@ export function FeishuBotConnectionPanel({
           onOpen={() => onOpenConnector?.("larkcli")}
         />
       )}
+
+      <LarkSyncSection appID={status?.app_id} />
 
       <Group title={larkcli ? t("settings-feishubot.bot_section") : undefined} footer={t("settings-feishubot.footer")}>
         <div className="flex items-center gap-3 px-4 py-3">
