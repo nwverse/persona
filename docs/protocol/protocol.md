@@ -1370,6 +1370,7 @@ Provider responses carry only the description and `has_key`, never secrets. Defa
  "always_keys":["tool:Bash"],  // node → hub: what "Always Allow" on an assistant chat's permission card lets through; the hub records it and answers the same card itself (docs/assistant/assistant.md "Always allow in this session"); not used by clients
  "always_honored":false,       // manager → clients: whether answering Always is kept; see "Always allow" below
  "can_clarify":true,           // manager → clients: this prepared assistant approval accepts owner questions; additive, absent on older managers
+ "no_hand_back":true,          // manager → clients: no interactive computer terminal/UI can take this card back; clients hide "Leave to computer" (dismiss)
  "owner_proposal":true,         // manager → clients: server-owned exact connector proposal; never infer this from tool_name
  "approval_batch_id":"oab_…", "approval_item_id":"oai_…", // durable batch and optional item target; batch cards omit item
  "owner_approval_phrases":["发","同意"], // complete exact replies accepted for this proposal; empty/absent means no reply button
@@ -1446,6 +1447,10 @@ this call does (a report's kind), `tool_name_title` names the tool alone ("Repor
 Always covers, every call of the tool, uses it, else `tool_title`, else the tool's name in words. Both are in the
 hub's language (the manager's `lang`, from the hub's locale) like the rest of the text it writes, whatever language
 the app is in. A node's value for either is dropped.
+
+### Hand back to computer (`no_hand_back`)
+
+`no_hand_back:true` marks a card that has no interactive computer terminal or desktop UI to hand back to, where sending `{"dismiss":true}` would cancel or deny the call instead of leaving it to a terminal: manager-owned permission cards, headless assistant conversations (Claude `-p`, Codex app-server, AGY ACP, and command gates), and headless ACP companions such as Antigravity (`agy` and custom-runtime AGY instances), Grok (`grok` / `grok-chat`), and the builtin OpenCode companion (`opencode`, distinct from the `opencode-<pid>` TUI plugin). Only the manager sets `no_hand_back`; any value sent by a node is dropped. The field is additive and omitted when false: interactive terminal permission cards, UI/TUI-backed runtime hosts (such as Paseo, Orca, Cindy, DSH, Managed Agents, and `opencode-<pid>`), and older managers omit it, and clients hide "Leave to computer" / "Handle in Terminal on Computer" only when `no_hand_back` is `true`. Older clients ignore the field and keep their existing behavior.
 
 ### Approval clarification
 
