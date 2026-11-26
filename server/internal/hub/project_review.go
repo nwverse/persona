@@ -193,7 +193,7 @@ func (h *Hub) relayProjectReviewOwners(ctx context.Context) (retry time.Duration
 			bound, cancel := context.WithTimeout(ctx, time.Second)
 			p := assistantwire.ProjectReviewOwnerInput{
 				SessionRef: assistantwire.SessionRef{MachineID: row.Machine, SessionID: row.Session},
-				MessageID:  row.MessageID, At: row.At, Unscoped: row.Unscoped,
+				MessageID:  assistantwire.ProjectReviewMessageID(row.MessageID), At: row.At, Unscoped: row.Unscoped,
 			}
 			err := h.asstOf(row.Manager).call(bound, assistantwire.MethodProjectReviewOwnerInput, p, nil)
 			cancel()

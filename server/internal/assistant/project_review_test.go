@@ -209,7 +209,7 @@ func TestProjectReviewDynamicScope(t *testing.T) {
 	reviewNewTask(t, s, "beta", "todo_beta", beta)
 	for i, ref := range []SessionRef{reviewTarget, {MachineID: "box", SessionID: "main"}, beta} {
 		if err := s.projectReviewOwnerInput(ctx, assistantwire.ProjectReviewOwnerInput{
-			SessionRef: ref, MessageID: fmt.Sprintf("msg-%d", i), At: reviewTestTime,
+			SessionRef: ref, MessageID: assistantwire.ProjectReviewMessageID(fmt.Sprintf("msg-%d", i)), At: reviewTestTime,
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -399,7 +399,7 @@ func TestProjectReviewOwnerInputAssignmentEpoch(t *testing.T) {
 		{strings.Repeat("x", 300), linked, true},
 	}
 	for _, c := range cases {
-		if err := s.projectReviewOwnerInput(ctx, assistantwire.ProjectReviewOwnerInput{SessionRef: reviewSource, MessageID: c.id, At: c.at}); err != nil {
+		if err := s.projectReviewOwnerInput(ctx, assistantwire.ProjectReviewOwnerInput{SessionRef: reviewSource, MessageID: assistantwire.ProjectReviewMessageID(c.id), At: c.at}); err != nil {
 			t.Fatal(err)
 		}
 		next, ok, err := store.NextProjectReview(ctx, string(target))

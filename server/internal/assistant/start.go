@@ -1216,7 +1216,7 @@ func (s *Service) startRoutes() {
 			ref := SessionRef{MachineID: sess.MachineID, SessionID: sess.SessionID}
 			bound, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 			err := s.projectReviewOwnerInput(bound, assistantwire.ProjectReviewOwnerInput{
-				SessionRef: ref, MessageID: "first-assistant:" + sess.SessionID, At: sess.UpdatedAt, Unscoped: true,
+				SessionRef: ref, MessageID: assistantwire.ProjectReviewMessageID("first-assistant:" + sess.SessionID), At: sess.UpdatedAt, Unscoped: true,
 			})
 			cancel()
 			if err != nil {

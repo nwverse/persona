@@ -152,7 +152,7 @@ func (s *Service) projectReviewOwnerInput(ctx context.Context, in assistantwire.
 	// its quiet task when a turn ends, agent_tasks.go), so like any input from a session without a task it is a
 	// review signal only.
 	at := in.At
-	if in.MessageID == "first-agent:"+in.SessionID {
+	if string(in.MessageID) == "first-agent:"+in.SessionID {
 		at = time.Time{}
 	} else if at.IsZero() {
 		in.Unscoped = true
@@ -164,7 +164,7 @@ func (s *Service) projectReviewOwnerInput(ctx context.Context, in assistantwire.
 			}
 		}
 	}
-	return p.record(ctx, b, "owner_input", projectReviewOwnerRef(in.MessageID), "", time.Time{})
+	return p.record(ctx, b, "owner_input", projectReviewOwnerRef(string(in.MessageID)), "", time.Time{})
 }
 
 func (s *Service) projectReviewTurn(ctx context.Context, task Todo, row proto.Session, end turnClose, state string) {
