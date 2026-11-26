@@ -837,6 +837,11 @@ workbench, topics and pushes, about 10k lines) is moving into the `lark` module 
 
 ### How to add a module
 
+These steps move a feature of this repository into an in-tree module, and step 3 changes Core paths (the
+registration in `server/internal/modules/all`, a `module <id>` line in `schema/module-classification.txt`). To add a
+feature to a core-only install without changing Core code, write an extension instead:
+`docs/extensions/core-only-features.md`, with the sample `sdk/examples/quicknotes`.
+
 1. Pick the id from #13430 section 2 and check its manifest needs only slots the kernel serves; if it needs another,
    add the `Host` method and the kernel's support first, in their own PR, and update "Slots" above.
 2. Create `server/internal/modules/<id>/` with `module.json` (validated by `schema/module.schema.json`), a `Module` whose
