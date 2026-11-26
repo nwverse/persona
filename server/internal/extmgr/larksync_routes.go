@@ -20,6 +20,7 @@ import (
 type larkSyncView struct {
 	Available    bool                  `json:"available"`
 	ScheduleHour int                   `json:"schedule_hour"`
+	IMPoll       bool                  `json:"im_poll"`
 	Accounts     []larkSyncAccountView `json:"accounts"`
 	Bots         []larkSyncBotView     `json:"bots"`
 	Bindings     []larkSyncBindingView `json:"bindings"`
@@ -72,7 +73,7 @@ func (h *Manager) larkSyncView(ctx context.Context) (larkSyncView, error) {
 		return larkSyncView{}, err
 	}
 	now := h.bots.sync.clock()
-	v := larkSyncView{Available: h.larkSyncAvailable(), ScheduleHour: st.scheduleHour(),
+	v := larkSyncView{Available: h.larkSyncAvailable(), ScheduleHour: st.scheduleHour(), IMPoll: st.imPollEnabled(),
 		Accounts: []larkSyncAccountView{}, Bots: []larkSyncBotView{}, Bindings: []larkSyncBindingView{}}
 	for _, a := range st.accounts {
 		v.Accounts = append(v.Accounts, larkSyncAccountView{ID: a.AccountID, Label: a.Label, Brand: a.Brand, Name: a.Name})
@@ -188,7 +189,8 @@ func (h *Manager) larkSyncRoutes(api *http.ServeMux) {
 			return
 		}
 		var in struct {
-			ScheduleHour *int `json:"schedule_hour"`
+			ScheduleHour *int  `json:"schedule_hour"`
+			IMPoll       *bool `json:"im_poll"`
 		}
 		if !larkSyncDecode(w, r, &in) {
 			return
@@ -197,15 +199,21 @@ func (h *Manager) larkSyncRoutes(api *http.ServeMux) {
 			writeErrCode(w, http.StatusBadRequest, "bad_hour", errors.New("schedule_hour is 0 to 23"))
 			return
 		}
-		if in.ScheduleHour != nil {
+		if in.ScheduleHour != nil || in.IMPoll != nil {
 			now := h.bots.sync.clock()
 			if _, err := h.larkSyncChange(r.Context(), func(st *larkSyncState) error {
-				v := *in.ScheduleHour
-				st.prefs.ScheduleHour = &v
-				for i := range st.bindings {
-					if b := &st.bindings[i]; b.authorized() && b.Failures == 0 && b.NextRunAt.After(now) {
-						b.NextRunAt = larkSyncNextSlot(now, v, b.Key)
+				if in.ScheduleHour != nil {
+					v := *in.ScheduleHour
+					st.prefs.ScheduleHour = &v
+					for i := range st.bindings {
+						if b := &st.bindings[i]; b.authorized() && b.Failures == 0 && b.NextRunAt.After(now) {
+							b.NextRunAt = larkSyncNextSlot(now, v, b.Key)
+						}
 					}
+				}
+				if in.IMPoll != nil {
+					v := *in.IMPoll
+					st.prefs.IMPoll = &v
 				}
 				return nil
 			}); err != nil {

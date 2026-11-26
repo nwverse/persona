@@ -31,6 +31,9 @@ func (e *Engine) Ingest(ctx context.Context, src Source, sc SourceChat, msgs []S
 	// run while a connector downloads, so reread their metadata before commit.
 	e.Store.ingestMu.Lock()
 	defer e.Store.ingestMu.Unlock()
+	// After every other deferred unlock (chatMu below), still under ingestMu: gateway lines a fuller sync message
+	// supersedes go once that message is written (align_loose.go).
+	defer e.settleSuperseded(ChatID(src.Name(), sc.ID))
 	cut := e.textCutoff()
 	e.Store.chatMu.Lock()
 	c, exists, r, err := e.Store.ingestState(src.Name(), sc, cut)
@@ -73,11 +76,18 @@ func (e *Engine) Ingest(ctx context.Context, src Source, sc SourceChat, msgs []S
 	var picks []pick
 	// dups: messages another source already archived (Engine.Align), by ID: received, never written.
 	var dups map[string]time.Time
+	// repairs: already-received larksync messages arriving with a resolved SenderName to backfill pre-#15486 "?:" lines.
+	var repairs []SourceMessage
 	for _, m := range msgs {
 		if err := ctx.Err(); err != nil {
 			return 0, err
 		}
 		if _, seen := r.IDs[m.ID]; m.ID != "" && seen {
+			if exists && syncSource(src) && !m.Mine && strings.TrimSpace(m.SenderName) != "" {
+				if lr, hasLine := r.Lines[m.ID]; hasLine && !lr.Mine && lr.Hash != "" {
+					repairs = append(repairs, m)
+				}
+			}
 			continue
 		}
 		if e.Align != nil && e.Align(src, sc, m) {
@@ -149,6 +159,15 @@ func (e *Engine) Ingest(ctx context.Context, src Source, sc SourceChat, msgs []S
 			r.IDs[m.ID] = m.At
 		}
 		kept = append(kept, m)
+	}
+	needChatNameFill := exists && syncSource(src) && sc.Name != "" && c.Name == ""
+	if len(repairs) > 0 || needChatNameFill {
+		if err := e.repairLarkSyncSenders(src, sc, cut, repairs); err != nil {
+			return 0, err
+		}
+		if needChatNameFill {
+			c.Name = sc.Name
+		}
 	}
 	if len(lines) == 0 {
 		if err := saveWindow(); err != nil {

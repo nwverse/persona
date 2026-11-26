@@ -146,7 +146,7 @@ func agyNativeInputText(text, sent string) string {
 	return text
 }
 
-func (n *Node) confirmAgySend(ctx context.Context, id, pane, text string, typedAt time.Time, watch *agySendWatch) error {
+func (n *Node) confirmAgySend(ctx context.Context, id, pane, text string, typedAt time.Time, watch *agySendWatch, beforeQueued int) error {
 	ticker := time.NewTicker(agySendPoll)
 	defer ticker.Stop()
 	timer := time.NewTimer(agySendWait)
@@ -166,6 +166,14 @@ func (n *Node) confirmAgySend(ctx context.Context, id, pane, text string, typedA
 		}
 		if watch != nil && watch.lost {
 			return uncertain(errors.New(agySendUnconfirmed))
+		}
+		// While agy is busy, it buffers follow-ups in TUI memory and shows `<preview>... (alt+m to send immediately)`
+		// instead of appending USER_INPUT to transcript.jsonl immediately (#14871).
+		if screen, err := n.readPane(ctx, pane, "visible", 80); err == nil {
+			if lines := parseAgyQueuedLines(screen); agyScreenShowsQueued(lines, text, beforeQueued) {
+				n.recordAgyQueued(id, pane, text, watch, lines)
+				return nil
+			}
 		}
 		select {
 		case <-ctx.Done():

@@ -1,13 +1,18 @@
 package recordingwire
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/kbwire"
 )
@@ -222,6 +227,13 @@ func SortDaySegments(segs []kbwire.RecordingSegment) {
 // MinutesTaskKey is what makes an action the same task in minutes made again: who and what.
 func MinutesTaskKey(a MinutesAction) string { return a.Who + "\x00" + a.What }
 
+// ErrRecordingDeleted: the recording was deleted (its tombstone is there); ErrBadRecording wraps what is wrong with a
+// request about one.
+var (
+	ErrRecordingDeleted = errors.New("this recording was deleted")
+	ErrBadRecording     = errors.New("invalid recording")
+)
+
 // ErrTranscriptExpired: the recording was trimmed; only its minutes are kept.
 var ErrTranscriptExpired = errors.New("the transcript expired; only the minutes are kept")
 
@@ -231,6 +243,14 @@ const (
 	PurposeMeetingMinutes = "meeting.minutes"
 	PurposeMeetingAnswer  = "meeting.answer"
 	PurposeMeetingRoom    = "meeting.room"
+	// PurposeMeetingTitle is the live title's: Information processing's, as chat titles are.
+	PurposeMeetingTitle = "meeting.title"
+)
+
+// What an upload and the hub's transcript hold at most: segments, and bytes of text.
+const (
+	MaxRecordingSegments = 20000
+	MaxRecordingText     = 4 << 20
 )
 
 // RecordingID is id as stored (lowercase), false when it is not a UUID (8-4-4-4-12 hexadecimal digits).
@@ -318,4 +338,179 @@ func earlier(a, b time.Time) time.Time {
 		return b
 	}
 	return a
+}
+
+// SettleTranscription keeps t's own rules after a change: a hub-mode transcription has a state; once final or failed the final
+// pass has started and ended; no empty gaps or timeline.
+func SettleTranscription(t *MeetingTranscription, now time.Time) {
+	if t.Mode != TranscriptionHub {
+		*t = MeetingTranscription{Mode: t.Mode}
+		return
+	}
+	if t.State == "" {
+		t.State = TranscriptionLive
+	}
+	if t.Done() {
+		if t.FinalAt.IsZero() {
+			t.FinalAt = now.UTC()
+		}
+		if t.FinalFrom.IsZero() {
+			t.FinalFrom = t.FinalAt
+		}
+		t.FinalDone = 0
+	}
+	if len(t.Gaps) == 0 {
+		t.Gaps = nil
+	}
+	if t.Timeline != nil && len(t.Timeline.Roles) == 0 && len(t.Timeline.Speaking) == 0 {
+		t.Timeline = nil
+	}
+}
+
+// CleanLive is a sentence as the live log keeps it: a bad one is mended, never refused, since positions stay
+// contiguous. A negative start is 0, an end before the start the start; the text is one line, cut to MaxLiveText bytes
+// at a character boundary.
+func CleanLive(sg LiveSegment) LiveSegment {
+	if math.IsNaN(sg.Start) || math.IsInf(sg.Start, 0) || sg.Start < 0 {
+		sg.Start = 0
+	}
+	if math.IsNaN(sg.End) || math.IsInf(sg.End, 0) || sg.End < sg.Start {
+		sg.End = sg.Start
+	}
+	sg.Text = cutBytes(strings.Join(strings.Fields(strings.ToValidUTF8(sg.Text, "�")), " "), MaxLiveText)
+	return sg
+}
+
+// MaxLiveText is the bytes of one sentence of the live log: longer ones are cut at a character boundary.
+const MaxLiveText = 4000
+
+// MeetingLines is segs without Persona's echo: what the summary, the minutes and the follow-up read.
+func MeetingLines(segs []kbwire.RecordingSegment) []kbwire.RecordingSegment {
+	out := make([]kbwire.RecordingSegment, 0, len(segs))
+	for _, sg := range segs {
+		if !sg.Echo {
+			out = append(out, sg)
+		}
+	}
+	return out
+}
+
+// RecordChars is how many characters segs have without Persona's echo, which is not the meeting's text (meta.json's
+// chars: in hub mode the transcript of record's). A meeting of only Persona's echo has none, so it gets no minutes.
+func RecordChars(segs []kbwire.RecordingSegment) int {
+	n := 0
+	for _, sg := range MeetingLines(segs) {
+		n += utf8.RuneCountInString(sg.Text)
+	}
+	return n
+}
+
+// MeetingParts are the parts of m that differ from before, in a fixed order.
+func MeetingParts(before, after Meeting) []string {
+	var out []string
+	same := func(a, b any) bool {
+		x, _ := json.Marshal(a)
+		y, _ := json.Marshal(b)
+		return bytes.Equal(x, y)
+	}
+	if !same(roomShown(before.Room), roomShown(after.Room)) {
+		out = append(out, PartRoom)
+	}
+	if !same(before.Private, after.Private) {
+		out = append(out, PartPrivate)
+	}
+	if !same(before.Followup, after.Followup) {
+		out = append(out, PartFollowup)
+	}
+	if !same(transcriptionShown(before.Transcription), transcriptionShown(after.Transcription)) {
+		out = append(out, PartTranscription)
+	}
+	return out
+}
+
+// roomShown is room without what only the manager reads (its batching and a lean room's bookkeeping, #8253), whose
+// changes raise no revision: the apps see nothing new of it.
+func roomShown(room *MeetingRoom) *MeetingRoom {
+	if room == nil {
+		return nil
+	}
+	r := *room
+	r.Batching, r.Lean = 0, MeetingRoomLean{}
+	return &r
+}
+
+// MeetingSame: a and b are the same meeting.json (also where no part the apps read differs: the timeline, the final
+// pass's bookkeeping, a lean room's bookkeeping).
+func MeetingSame(a, b Meeting) bool {
+	x, _ := json.Marshal(a)
+	y, _ := json.Marshal(b)
+	return bytes.Equal(x, y)
+}
+
+// BumpRevs raises the revisions of parts in m.
+func BumpRevs(m *Meeting, parts []string) {
+	if len(parts) == 0 {
+		return
+	}
+	if m.Revs == nil {
+		m.Revs = map[string]int64{}
+	}
+	for _, p := range parts {
+		m.Revs[p]++
+	}
+}
+
+// transcriptionShown is what of t the apps read (TranscriptionView): PartTranscription moves when it changes, not
+// when only the timeline grows or the bookkeeping does.
+func transcriptionShown(t *MeetingTranscription) any {
+	if t == nil {
+		return nil
+	}
+	var gaps [][2]float64
+	if len(t.Gaps) > 0 {
+		gaps = t.Gaps
+	}
+	done, end, _ := t.FinalProgress()
+	return struct {
+		Mode, State, Problem string
+		Gaps                 [][2]float64
+		Fallback             bool
+		FinalDone, End       float64
+	}{t.Mode, t.State, t.Problem, gaps, t.Fallback, done, end}
+}
+
+// TranscriptOfRecord is a recording's text of record: in device mode the upload's segments; in hub mode the hub's
+// sentences, and each upload segment the hub's sentences, taken together (their union), cover no more than half of,
+// in time order (the hub's first at the same start), with Source set (SourceHub, SourceDevice). The phone's text is
+// made on the device in the recording's language only, so in hub mode it fills only where the hub has none. Persona's
+// echo stays in it, marked (Echo: the hub's by the echo rule, the phone's as uploaded); what is built from the meeting
+// reads it through MeetingLines.
+func TranscriptOfRecord(hubMode bool, device, hub []kbwire.RecordingSegment) []kbwire.RecordingSegment {
+	if !hubMode {
+		return slices.Clone(device)
+	}
+	out := make([]kbwire.RecordingSegment, 0, len(hub)+len(device))
+	spans := make([][2]float64, 0, len(hub))
+	for _, sg := range hub {
+		sg.Source = SourceHub
+		out = append(out, sg)
+		spans = append(spans, [2]float64{sg.Start, sg.End})
+	}
+	union := UnionSpans(spans)
+	for _, sg := range device {
+		if CoveredByUnion(sg.Start, sg.End, union) <= 0.5 {
+			sg.Source = SourceDevice
+			out = append(out, sg)
+		}
+	}
+	slices.SortStableFunc(out, func(a, b kbwire.RecordingSegment) int {
+		switch {
+		case a.Start < b.Start:
+			return -1
+		case a.Start > b.Start:
+			return 1
+		}
+		return 0
+	})
+	return out
 }

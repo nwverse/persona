@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"slices"
@@ -14,6 +15,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/screen"
 )
 
 // Work agents (docs/integrations/launchers.md "Work agents"): pi, the Cursor CLI (cursor-agent) and the Antigravity
@@ -227,7 +229,7 @@ func (n *Node) startWorkAgent(ctx context.Context, launch host.Launcher, cwd, la
 			return nil, n.abandonStart(ctx, created, kind, err)
 		}
 	}
-	n.noteWorkAgent(ctx, launch, pane, id, cwd, launcher, kind, model, effort, mode)
+	n.noteWorkAgent(ctx, launch, pane, id, cwd, launcher, kind, model, effort, mode, promptTitle(prompt))
 	if prompt != "" {
 		// Typed once, then checked in the background until the agent is seen taking it (workagent_first.go, #11345).
 		if err := n.workAgentFirst(ctx, pane, id, herdrName, prompt); err != nil {
@@ -279,8 +281,12 @@ func (n *Node) finishPiStart(ctx context.Context, launch host.Launcher, created 
 
 // noteWorkAgent records the session as Persona's, bound to its pane, so herdr resumes it the way it was started. An agy's
 // mode is its row's permission_mode (AppMode, modes.go currentModes): the mode its flags started it in.
-func (n *Node) noteWorkAgent(ctx context.Context, launch host.Launcher, pane, id, cwd, launcher, kind, model, effort, mode string) {
-	n.putAgentState(ctx, launch, id, sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, Model: model, ModelEffort: effort, AppMode: mode, StartedAt: time.Now().UTC()})
+func (n *Node) noteWorkAgent(ctx context.Context, launch host.Launcher, pane, id, cwd, launcher, kind, model, effort, mode string, startTitle ...string) {
+	title := ""
+	if len(startTitle) > 0 {
+		title = startTitle[0]
+	}
+	n.putAgentState(ctx, launch, id, sessionState{Pane: pane, Launcher: launcher, Cwd: cwd, Model: model, ModelEffort: effort, AppMode: mode, StartTitle: title, StartedAt: time.Now().UTC()})
 	n.bindPane(pane, id)
 	n.holdResume(ctx, launch, pane, id, agentLaunch{Agent: kind, Launcher: launcher, Model: model, Effort: effort, Mode: mode, ID: id})
 }
@@ -486,14 +492,29 @@ func (n *Node) workAgentCalls(ctx context.Context, method, id string, a host.Age
 		}
 		typedAt := time.Now()
 		var delivery *agySendWatch
+		beforeQueued := -1
+		var beforeScreen string
 		if a.Agent == agyAgent {
 			delivery = n.watchAgySend(id, a.PaneID, msg.Text, typedAt)
+			if a.AgentStatus == proto.StatusWorking || a.AgentStatus == proto.StatusBlocked || n.workSent.recent(a.PaneID, typedAt) {
+				if screen, err := n.readPane(ctx, a.PaneID, "visible", 80); err == nil {
+					beforeScreen = screen
+					beforeQueued = len(parseAgyQueuedLines(screen))
+				}
+			}
 		}
 		if err := n.hostPrompt(ctx, a.PaneID, msg.Text); err != nil {
+			if r := deliveryRefusal(err); r != nil {
+				if (errors.Is(err, host.ErrDialogOpen) || errors.Is(err, host.ErrAgentBlocked)) && beforeScreen != "" && screen.Choosing(beforeScreen) {
+					r = dialogRefusalOf(beforeScreen, false)
+				}
+				log.Printf("send %s: the host refused it, nothing typed: %v", id, err)
+				return nil, r, true
+			}
 			return nil, fmt.Errorf("send: %w", err), true
 		}
 		if a.Agent == agyAgent {
-			if err := n.confirmAgySend(ctx, id, a.PaneID, msg.Text, typedAt, delivery); err != nil {
+			if err := n.confirmAgySend(ctx, id, a.PaneID, msg.Text, typedAt, delivery, beforeQueued); err != nil {
 				return nil, err, true
 			}
 		}

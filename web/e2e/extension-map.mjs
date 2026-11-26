@@ -63,6 +63,8 @@ try {
     await p.locator('[data-map-route="r-alt"]').click();
     const altSelected = await p.locator('[data-map-route-line="r-alt"]').getAttribute("data-selected");
     check(`1440 ${theme}: switching route selects r-alt polyline`, altSelected === "true", altSelected);
+    check(`1440 ${theme}: selecting a route enables an overview reset`, !(await p.locator('button[aria-label="Reset view"]').isDisabled()));
+    await p.screenshot({ path: join(shots, `map-selected-1440-${theme}.png`) });
     await p.locator('[data-map-route="r-fastest"]').click();
 
     // Zoom in enables Reset view, clicking Reset view disables it
