@@ -3337,6 +3337,7 @@ A declared list of extension accounts, gateways or similar entries (#9504) belon
 Dashboards are pages a conversation drafts and the owner keeps with one tap on Keep; where they live is 4.1, the line under
 a page's title is "Ownership line (#15017)" below. What the iPhone and iPad do of their own:
 
+- **Version history.** Open history from a kept page’s footer. Mark the current version, label earlier versions by time and writer, and keep the preview read-only. Restoring requires confirmation and pauses updates until the owner chooses Resume updates.
 - **No new host.** The hub lists Dashboards as ordinary extension places under the reserved id `-pages` (the index, then up
   to three pinned pages); the drawer and the iPad sidebar draw them with the extension rows they have, and a page opens in
   `ExtensionNavPage` / `ExtensionPageView` like any extension page. Settings › Extensions leaves them out: they are the
@@ -4027,6 +4028,10 @@ it). Reason: the ID is an engineering detail that a person should not have to in
 rule for every place keeps a provider recognizable wherever it is picked (principle 4). This reuses the wizard's
 fields and More options disclosure and the existing row and chip styles; it adds no setting, style or motion. The chat
 page's composer chip and model panel adopt the same module in their own change; iOS and Android have not caught up yet.
+
+## Choosing an approved document in New Agent
+
+For team members starting an Agent on the web, the first-message form keeps project documents behind its existing disclosure. After the member supplies the project and credential, they may browse document names, open a document's approved versions, or look up a known name. Fetch additional results on request. Opening a preview shows the selected revision's text, approver and digest. Attaching that preview requires a separate action, and the member can remove it before sending.
 
 ## New Agent's model choice (#5104)
 
