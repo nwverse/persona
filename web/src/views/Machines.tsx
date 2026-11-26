@@ -153,7 +153,7 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
             <Icon name="chevronLeft" size={14} />{t("machines.title")}
           </a>
           {ordered.map(m => {
-            const to = { ...route, mid: m.id, mode: undefined };
+            const to = { ...route, mid: m.id, mode: undefined, path: m.id === route.mid ? route.path : undefined };
             const counts = agents.get(m.id);
             const alert = machineAlerts({ machine: m, metrics: metrics?.find(mm => mm.machine_id === m.id),
               launchers: launcherIssues(m.id), managerOffline: !!offlineManagerOf(roster, m) })[0];

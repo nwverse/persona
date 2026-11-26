@@ -44,7 +44,6 @@ import { classifyConnection } from "../../lib/node-health";
 import { SCREEN_PAGE, screenPath, showsScreen } from "../../lib/computer";
 import { standaloneOn, useModuleStates } from "../../core/module-host";
 import { osFamily } from "../../lib/machine-capabilities";
-import { openPanel } from "../../lib/panel";
 import { MachineToolView, MachineViewLinks } from "./MachineViews";
 import type { MachineSubview } from "../../lib/machine-route";
 import { useScrollMemory } from "../../lib/scroll-memory";
@@ -339,7 +338,7 @@ export function MachineDetail({ mid, subview = "work", mode, onToggleSidebar }: 
         {work && online && <div className="flex flex-wrap items-center gap-2 px-4 pb-3">
           <Button tone="primary" className="min-h-11" icon="plus" onClick={() => openNewAgent({ machineId: mid })}>{t("space-page.new_agent")}</Button>
           {panesOn && <Button className="min-h-11" icon="terminal" onClick={() => openMachineTerminal({ mid })}>{t("sidebar.nav_terminal")}</Button>}
-          <Button className="min-h-11" icon="folder" onClick={() => openPanel({ kind: "files", mid, sid: "", cwd: "~" })} title={t("machines-machinedetail.files_hint")}>{t("machines.home_folder")}</Button>
+          <Button className="min-h-11" icon="folder" onClick={() => navigate({ name: "machine", mid, subview: "files" })} title={t("machines-machinedetail.files_hint")}>{t("machines.home_folder")}</Button>
         </div>}
         {work && disk && <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-line px-4 py-1">
           <span className="inline-flex items-center gap-2 text-sm font-medium text-ink"><Icon name="archive" size={14} className="text-orange" />{alertLabel(disk)}</span>
@@ -564,7 +563,7 @@ export function MachineDetail({ mid, subview = "work", mode, onToggleSidebar }: 
         {/* the extensions' sections (docs/extensions/extensions.md "UI slots" machine_section), after the machine's own */}
         <MachineExtensionSections mid={mid} heading={(title, right) => <Heading title={title} right={right} />} />
       </>}
-      <MachineToolView machine={m} view={subview} mode={mode} />
+      <MachineToolView machine={m} view={subview} mode={mode} path={address.name === "machine" && address.mid === mid ? address.path : undefined} />
     </Page>
   );
 }
@@ -578,7 +577,7 @@ function WorkspaceActions({ mid, cwd, workspace, panesOn, online }: {
   return <div className="flex shrink-0 items-center">
     <IconButton icon="plus" size={44} label={t("space-page.new_agent")} disabled={disabled}
       onClick={() => openNewAgent(workspace ? boardAgentPreset(workspace) : { machineId: mid, cwd })} />
-    <IconButton icon="folder" size={44} label={t("machines-machinedetail.files")} disabled={disabled} onClick={() => openPanel({ kind: "files", mid, cwd, sid: "" })} />
+    <IconButton icon="folder" size={44} label={t("machines-machinedetail.files")} disabled={disabled} onClick={() => navigate({ name: "machine", mid, subview: "files", path: cwd })} />
     {panesOn && <IconButton icon="terminal" size={44} label={t("sidebar.nav_terminal")} disabled={disabled} onClick={() => openMachineTerminal({ mid, cwd, ...binding })} />}
   </div>;
 }

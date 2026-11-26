@@ -41,9 +41,10 @@ export function MachineViewLinks({ mid, view }: { mid: string; view: MachineSubv
   </div>;
 }
 
-export function MachineToolView({ machine, view, mode }: { machine: Machine; view: MachineSubview; mode?: "reclaim" }) {
-  const Panel = isDiagnostic(view) ? tools[view] : view === "files" ? FileBrowserPanel : null;
+export function MachineToolView({ machine, view, mode, path }: { machine: Machine; view: MachineSubview; path?: string; mode?: "reclaim" }) {
+  const Panel = isDiagnostic(view) ? tools[view] : null;
   return <Suspense fallback={<Loading />}>
+    {view === "files" && <FileBrowserPanel key={path} machine={machine} path={path} routed />}
     {Panel && <Panel machine={machine} />}
     {view === "storage" && <StoragePanel machine={machine} focus={mode && { mid: machine.id, mode, seq: 1 }} />}
   </Suspense>;
