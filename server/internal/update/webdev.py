@@ -117,7 +117,7 @@ def defer_cancellation():
     previous = {s: signal.getsignal(s) for s in (signal.SIGINT, signal.SIGTERM)}
     try:
         for s in previous:
-            signal.signal(s, lambda *_: pending.append(True))
+            signal.signal(s, lambda signum, _: pending.append(signum))
         yield pending
     finally:
         for s, handler in previous.items():
@@ -133,9 +133,17 @@ def interrupt(*_):
 
 def run(argv, cwd=None, env=None, output=False, timeout=1800, on_tick=None):
     # Do not echo argv: Git credentials, database URLs and hooks can be private.
-    with subprocess.Popen(argv, cwd=cwd, env=env, start_new_session=True,
-                          stdout=subprocess.PIPE if output else None, text=output) as process:
+    process = None
+    with contextlib.ExitStack() as stack:
         try:
+            # A cancellation during Popen must reach the cleanup below once the
+            # child group exists and its leader is available to signal and reap.
+            with defer_cancellation() as pending:
+                process = stack.enter_context(subprocess.Popen(
+                    argv, cwd=cwd, env=env, start_new_session=True,
+                    stdout=subprocess.PIPE if output else None, text=output))
+            if pending:
+                signal.raise_signal(pending[0])
             deadline = time.monotonic() + timeout
             while True:
                 remaining = max(0, deadline - time.monotonic())
@@ -147,6 +155,8 @@ def run(argv, cwd=None, env=None, output=False, timeout=1800, on_tick=None):
                         raise
                     on_tick()
         except BaseException:
+            if process is None:
+                raise
             with defer_cancellation():
                 # Signal the whole child group, first allowing hook cleanup.
                 # Timeout and cancellation share the same bounded escalation.

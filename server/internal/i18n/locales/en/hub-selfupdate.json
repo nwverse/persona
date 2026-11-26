@@ -1,4 +1,6 @@
 {
+  "err_cannot_cancel": "This update cannot be cancelled now.",
+  "err_cancel_history": "Update cancelled. Its history could not be saved.",
   "err_development_step": "The development update stopped at the “{step}” step. Check update/development/{phase}.log on the hub machine.",
   "development_step_fetch": "Fetch commit",
   "development_step_npm_install": "Install Web dependencies",

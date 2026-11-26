@@ -1,4 +1,6 @@
 {
+  "err_cannot_cancel": "当前无法取消更新。",
+  "err_cancel_history": "更新已取消，但未能保存历史记录。",
   "err_development_step": "开发版更新在「{step}」步骤中断。请在 Hub 机器上检查 update/development/{phase}.log。",
   "development_step_fetch": "获取提交",
   "development_step_npm_install": "安装 Web 依赖",

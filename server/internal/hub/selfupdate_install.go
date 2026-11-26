@@ -47,10 +47,12 @@ func (u *updater) beginTarget(ctx context.Context, now bool, target string) erro
 	if target == "latest" && u.developmentLocked() {
 		u.running, u.now = true, now
 		u.opGen++
+		u.reserveDevelopmentLocked(ctx)
+		resolveCtx := u.attempt.ctx
 		u.setLocked("resolving", "", "")
 		u.mu.Unlock()
 		u.broadcastStatus()
-		go u.installLatestDevelopment(ctx)
+		go u.installLatestDevelopment(ctx, resolveCtx)
 		return nil
 	}
 	r := u.release
@@ -84,6 +86,7 @@ func (u *updater) beginTarget(ctx context.Context, now bool, target string) erro
 	u.running = true
 	u.opGen++
 	if r.Development != nil {
+		u.reserveDevelopmentLocked(ctx)
 		u.setLocked("building", "", "")
 	} else {
 		u.setLocked("downloading", "", "")
@@ -95,10 +98,13 @@ func (u *updater) beginTarget(ctx context.Context, now bool, target string) erro
 }
 
 // The reservation spans resolution and the build, so later checks cannot change its input.
-func (u *updater) installLatestDevelopment(ctx context.Context) {
-	r, err := u.resolveDevelopment(ctx)
+func (u *updater) installLatestDevelopment(ctx, resolveCtx context.Context) {
+	started := time.Now()
+	r, err := u.resolveDevelopment(resolveCtx)
 	u.mu.Lock()
-	if err == nil {
+	if u.attempt.cancelling {
+		u.recordCancelledLocked(ctx, updateRecord{FromVersion: u.h.version, Source: "web-dev", Started: started})
+	} else if err == nil {
 		u.release, u.blocked, u.lastCheck = r, nil, time.Now()
 		if u.candidateNewer(r) {
 			u.mu.Unlock()
@@ -109,6 +115,7 @@ func (u *updater) installLatestDevelopment(ctx context.Context) {
 	} else {
 		u.setLocked("failed", "", i18n.Localize(err, u.h.userLang()))
 	}
+	u.finishDevelopmentLocked()
 	u.running, u.now = false, false
 	u.mu.Unlock()
 	u.broadcastStatus()
@@ -124,11 +131,20 @@ func (u *updater) install(ctx context.Context, auto bool) {
 	u.running = true
 	u.opGen++
 	r := u.release
+	if r.Development != nil {
+		u.reserveDevelopmentLocked(ctx)
+	}
 	u.mu.Unlock()
 	u.installCandidate(ctx, auto, r)
 }
 
-func (u *updater) installCandidate(ctx context.Context, auto bool, candidate *update.Published) {
+func (u *updater) installCandidate(parent context.Context, auto bool, candidate *update.Published) {
+	ctx := parent
+	u.mu.Lock()
+	if u.attempt != nil {
+		ctx = u.attempt.ctx
+	}
+	u.mu.Unlock()
 	copy := *candidate
 	manifest := *candidate.Manifest
 	copy.Manifest = &manifest
@@ -140,8 +156,9 @@ func (u *updater) installCandidate(ctx context.Context, auto bool, candidate *up
 	var backup *update.DevelopmentBackup
 	var adoption update.Pending
 	swapped := false
-	defer u.removeDevelopmentBuild(r)
+
 	fail := func(err error) {
+		u.removeDevelopmentBuild(r)
 		if !swapped {
 			update.ClearDevelopmentAdoption(u.dir, adoption)
 		}
@@ -155,14 +172,21 @@ func (u *updater) installCandidate(ctx context.Context, auto bool, candidate *up
 		}
 		u.mu.Lock()
 		// Finish this attempt's history before a phone sees the failure or starts another install.
-		u.recordLocked(ctx, updateRecord{FromVersion: u.h.version, ToVersion: r.Manifest.Version, ToBuild: r.Manifest.Build,
-			Started: started, Ended: time.Now(), Result: "failed", Reason: why, Auto: auto, Source: pendingSource(update.Pending{Development: r.Development}), Commit: r.Manifest.Commit, Backup: backup})
+		record := updateRecord{FromVersion: u.h.version, ToVersion: r.Manifest.Version, ToBuild: r.Manifest.Build,
+			Started: started, Ended: time.Now(), Result: "failed", Reason: why, Auto: auto, Source: pendingSource(update.Pending{Development: r.Development}), Commit: r.Manifest.Commit, Backup: backup}
+		// A failed snapshot still needs its real error and recovery instructions.
+		if u.attempt != nil && u.attempt.cancelling && !recoveryRetained && (u.state != "backing_up" || errors.Is(err, context.Canceled)) {
+			u.recordCancelledLocked(parent, record)
+		} else {
+			u.recordLocked(parent, record)
+			u.setLocked("failed", "", why)
+		}
+		u.finishDevelopmentLocked()
 		u.running, u.now = false, false
 		u.busy = nil
 		if r.Development != nil && r.Development.BackupID != "" {
 			u.release = nil // A failed restore is not the latest main candidate.
 		}
-		u.setLocked("failed", "", why)
 		u.mu.Unlock()
 		u.broadcastStatus()
 		u.h.logf("update to %s: %v", r.Manifest.Version, err)
@@ -234,6 +258,10 @@ func (u *updater) installCandidate(ctx context.Context, auto bool, candidate *up
 		// Every program and Node package has an independent verified copy in
 		// staged. Only the disposable checkout/build output is removed here;
 		// staged survives idle waiting and exec until confirmation/rollback.
+		if err := ctx.Err(); err != nil {
+			fail(err)
+			return
+		}
 		if err := u.stageDevelopmentPackages(r, staged); err != nil {
 			fail(err)
 			return
@@ -246,6 +274,10 @@ func (u *updater) installCandidate(ctx context.Context, auto bool, candidate *up
 	// Wait until nothing the restart would interrupt is going on (or the user said "Update now").
 	waitStarted := time.Now()
 	for {
+		if err := ctx.Err(); err != nil {
+			fail(err)
+			return
+		}
 		busy := u.h.updateBusy()
 		u.mu.Lock()
 		u.busy = busy
@@ -287,7 +319,7 @@ func (u *updater) installCandidate(ctx context.Context, auto bool, candidate *up
 			fail(errUpdateAgain)
 			return
 		}
-		if backup, err = u.backupDevelopment(ctx, r, target); err != nil {
+		if backup, err = u.backupDevelopment(parent, r, target); err != nil {
 			fail(err)
 			return
 		}
@@ -296,10 +328,16 @@ func (u *updater) installCandidate(ctx context.Context, auto bool, candidate *up
 		Target: target, Started: started, Online: u.onlineIDs(), Auto: auto, PID: os.Getpid(), Args: os.Args,
 		HealthURL: u.healthURL(), Nodes: nodes, Development: r.Development, Backup: backup}
 	if r.Development != nil {
+		if err := u.claimDevelopmentAdoption(); err != nil {
+			fail(err)
+			return
+		}
+		ctx = parent
 		if err := update.BeginDevelopmentAdoption(u.dir, p); err != nil {
 			fail(err)
 			return
 		}
+		u.broadcastStatus()
 		adoption = p
 		for _, name := range update.ProgramNames {
 			if _, ok := programs[name]; ok {

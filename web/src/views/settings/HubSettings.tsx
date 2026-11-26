@@ -7,7 +7,7 @@ import { ago } from "../../lib/format";
 import { formatDate, formatNumber, t } from "../../i18n";
 import { hubUpdate, setHubUpdateSettings, startHubUpdate, type HubUpdateBackup, type HubUpdateRecord, type HubUpdateStatus } from "../../lib/hub-update";
 import {
-  applyHubUpdateBackup, channelTitle, checkHubUpdate, dockerSteps, hubUpdateBackups, hubUpdateHistory, latestWarning,
+  applyHubUpdateBackup, cancelHubUpdate, channelTitle, checkHubUpdate, dockerSteps, hubUpdateBackups, hubUpdateHistory, latestWarning,
   recordTitle, recordTone, startLatestHubUpdate, updateFinished, updateView, updateWorking,
 } from "../../lib/hub-update-settings";
 import { machineDeployment } from "../../lib/machine-deploy";
@@ -71,7 +71,7 @@ function HubUpdates() {
     const finished = updateFinished(last.current, s.state);
     last.current = s.state;
     const now = Date.now();
-    setSnapshot(prev => ({ status: s, pipeline: s.state === "resolving" ? undefined : observeHubUpdate(prev?.pipeline, s, now) }));
+    setSnapshot(prev => ({ status: s, pipeline: observeHubUpdate(prev?.pipeline, s, now) }));
     if (finished) hubUpdateHistory().then(setHistory, () => {});
   }, []);
 
@@ -184,6 +184,17 @@ function HubUpdates() {
       toast(t("settings-hubsettings.start_failed", { error: errorText(e) }), "error");
     } finally {
       setStarting(false);
+    }
+  };
+
+  const cancel = async () => {
+    const before = revision.current;
+    try {
+      const next = await cancelHubUpdate();
+      if (before === revision.current) apply(next);
+    } catch (e) {
+      toast(errorText(e), "error");
+      void load();
     }
   };
 
@@ -344,9 +355,9 @@ function HubUpdates() {
             </Button>
           </div>
         )}
-        {status.state === "resolving" && <div role="status"><SettingsHint>{t("settings-hubsettings.resolving_latest")}</SettingsHint></div>}
+        {status.state === "resolving" && !run && <div role="status"><SettingsHint>{t("settings-hubsettings.resolving_latest")}</SettingsHint></div>}
         {run && view.kind !== "docker" && (
-          <HubUpdatePipeline s={status} run={run} onNow={() => setConfirmNow(true)} />
+          <HubUpdatePipeline s={status} run={run} onCancel={cancel} onNow={() => setConfirmNow(true)} />
         )}
         {sourceWarning && (
           <p role="status" className="flex items-start gap-1.5 px-4 py-3 text-meta leading-snug break-words text-orange">
@@ -429,7 +440,7 @@ function UpdateHistory({ records }: { records: HubUpdateRecord[] }) {
         const time = record.ended || record.started;
         const commit = record.commit?.slice(0, 12);
         const showCommit = commit && !record.to_version.toLowerCase().includes(commit.toLowerCase());
-        const tone = { green: "text-green", orange: "text-orange", red: "text-red" }[recordTone(record.result)];
+        const tone = { neutral: "text-ink-2", green: "text-green", orange: "text-orange", red: "text-red" }[recordTone(record.result)];
         const label = record.result === "held" ? t("settings-hubsettings.history_held")
           : record.result === "failed" ? t("settings-hubsettings.history_failed")
             : recordTitle(record.result);
@@ -445,7 +456,7 @@ function UpdateHistory({ records }: { records: HubUpdateRecord[] }) {
             </div>
             <div className="mt-0.5 flex gap-1 font-mono text-submeta text-ink-3">
               <span className="truncate" title={record.from_version}>{record.from_version}</span>
-              <span className="shrink-0">{" → "}</span>
+              {record.to_version && <span className="shrink-0">{" → "}</span>}
               <span className="truncate" title={record.to_version}>{record.to_version}</span>
             </div>
             {showCommit && <div className="mt-0.5 font-mono text-submeta text-ink-3">{commit}</div>}

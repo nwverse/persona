@@ -425,13 +425,13 @@ nonisolated enum SessionModes {
         }
     }
 
-    /// GPT display names only: keep the version and every variant, without changing the id used by the agent.
+    /// GPT display names only: preserve the GPT- prefix, version, and every variant without changing the agent wire id.
     static func gptModelName(_ model: String?) -> String? {
         guard let raw = Fmt.model(model)?.trimmingCharacters(in: .whitespacesAndNewlines),
               raw.lowercased().hasPrefix("gpt-") else { return nil }
         let parts = raw.dropFirst(4).split(separator: "-", omittingEmptySubsequences: false)
         guard !parts.isEmpty, parts.allSatisfy({ !$0.isEmpty }) else { return nil }
-        return parts.map { part in
+        return "GPT-" + parts.map { part in
             guard let first = part.first, first.isLetter else { return String(part) }
             return String(first).uppercased() + part.dropFirst().lowercased()
         }.joined(separator: " ")
