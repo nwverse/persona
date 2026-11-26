@@ -34,14 +34,14 @@ const (
 )
 
 var (
-	quotaPause          = 30 * time.Minute // without a Retry-After
-	busyFirst           = 5 * time.Second  // the first busy pause; each busy answer in a row doubles it
-	busyMost            = 5 * time.Minute
-	afterMost           = 24 * time.Hour // a Retry-After longer than this is taken as this
-	growAfter           = 10             // successes under a cap before it is raised by one
-	capLift             = 8              // a cap raised past this is lifted
-	now                 = time.Now
-	logf                = log.Printf
+	quotaPause = 30 * time.Minute // without a Retry-After
+	busyFirst  = 5 * time.Second  // the first busy pause; each busy answer in a row doubles it
+	busyMost   = 5 * time.Minute
+	afterMost  = 24 * time.Hour // a Retry-After longer than this is taken as this
+	growAfter  = 10             // successes under a cap before it is raised by one
+	capLift    = 8              // a cap raised past this is lifted
+	now        = time.Now
+	logf       = log.Printf
 )
 
 // SetBusyPauseForTest makes a busy answer's first pause d instead of five seconds until t ends, for another package's
