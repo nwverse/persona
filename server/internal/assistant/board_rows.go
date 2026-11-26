@@ -3,7 +3,6 @@ package assistant
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"slices"
 	"sort"
 	"strings"
@@ -199,12 +198,7 @@ func boardRowMarkdown(l i18n.Lang, n int, r boardRow) string {
 	return b.String()
 }
 
-// boardLinkOK: u is an http(s) address with a host that a Markdown link can hold (card links are documented for
-// http(s) only, as safeLinkButton checks).
-func boardLinkOK(u string) bool {
-	p, err := url.Parse(u)
-	return err == nil && u != "" && (p.Scheme == "http" || p.Scheme == "https") && p.Host != "" && !strings.ContainsAny(u, "() \t\r\n")
-}
+var boardLinkOK = botcard.MarkdownLinkOK
 
 // boardCard is the board and the same as plain text (the fallback when Feishu refuses the card): one line a thing,
 // with what is waiting and a note of when it was written; when nothing is, it says so. said is the card without that
