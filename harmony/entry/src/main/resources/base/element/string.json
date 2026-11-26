@@ -6387,6 +6387,14 @@
     {
       "name": "chat_history_failed",
       "value": "Couldn't load. Tap to retry"
+    },
+    {
+      "name": "agent_default_effort",
+      "value": "Agent default"
+    },
+    {
+      "name": "minimal",
+      "value": "Minimal"
     }
   ]
 }

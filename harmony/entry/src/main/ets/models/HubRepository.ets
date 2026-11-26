@@ -236,12 +236,13 @@ export class HubRepository {
     const path = '/api/v1/machines/' + segment(machine) + '/launchers/' + segment(launcher) + '/models';
     return new SessionModelCatalog(await this.call(path + (refresh ? '?refresh=1' : '')));
   }
-  async createAgent(prompt: string, machine: ResourceRow, cwd: string, launcher: string, op: string, todoId: string = '', admit?: () => boolean, agent: string = '', model: string = ''): Promise<ResourceRow> {
+  async createAgent(prompt: string, machine: ResourceRow, cwd: string, launcher: string, op: string, todoId: string = '', admit?: () => boolean, agent: string = '', model: string = '', effort: string = ''): Promise<ResourceRow> {
     if (!machine.id || machine.manager && machine.manager !== this.owner || Wire.text(machine.data(), 'trust') === 'pending' ||
       !Wire.bool(machine.data(), 'online', true) || Wire.bool(machine.data(), 'pending_confirm') || Wire.bool(machine.data(), 'pending')) throw new Error('permission_denied');
     const body = Wire.payload(['machine_id', 'cwd', 'launcher', 'prompt'], [machine.id, cwd, launcher, prompt]);
     if (launcher && agent) body['agent_type'] = agent;
     if (launcher && model) body['model'] = model;
+    if (launcher && effort) body['effort'] = effort; // without one, the hub runs Agents' configured effort
     if (todoId) body['todo_id'] = todoId;
     const result = await this.call('/api/v1/sessions', 'POST', body, op, admit, false, (reply: Record<string,Object>): boolean => {
       const session = Wire.object(reply,'session');

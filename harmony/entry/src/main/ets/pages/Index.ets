@@ -1,3 +1,4 @@
+import { launcherModelLabel, startEfforts } from '../core/ModelLabel';
 import { IconActions } from '../design/IconActions';
 import { ThemeScope } from '../design/ThemeScope';
 import { util } from '@kit.ArkTS';
@@ -120,6 +121,7 @@ struct Index {
   @Local launchersFailed: boolean = false;
   @Local startModels: Record<string, Object>[] = [];
   @Local startModel: string = '';
+  @Local startEffort: string = '';
   @Local modelsLoading: boolean = false;
   @Local modelsFailed: boolean = false;
   @Local modelLocked: boolean = false;
@@ -921,7 +923,7 @@ struct Index {
               .onSelect((index: number) => {
                 const row = this.agentMachines()[index]; if (!row || this.isAgentMachine(row)) return;
                 const owner = this.model.directoryOwnerFor(row); if (!owner) return;
-                this.agentModel = owner; this.agentMachineId = row.id; this.directory = ''; this.launcher = ''; this.startModel = ''; this.saveAgentDraft(); void this.readSessionLaunchers();
+                this.agentModel = owner; this.agentMachineId = row.id; this.directory = ''; this.launcher = ''; this.startModel = ''; this.startEffort = ''; this.saveAgentDraft(); void this.readSessionLaunchers();
               }).id('agent.machine')
           }.width('100%').constraintSize({minHeight:Tokens.touch})
           Divider().color(Colors.divider)
@@ -937,7 +939,7 @@ struct Index {
               .value(this.launchersLoading ? tr('loading') : this.chosenLauncher()?.label || tr('agent_machine_default'))
               .attributeModifier(SelectStyles.inline).constraintSize({maxWidth:'65%'}).enabled(!this.creatingAgent && !this.launchersLoading && !!this.agentMachine())
               .onSelect((index:number) => {
-                this.launcher = this.sessionLaunchers[index-1]?.name || ''; this.startModel = ''; this.saveAgentDraft(); void this.readStartModels();
+                this.launcher = this.sessionLaunchers[index-1]?.name || ''; this.startModel = ''; this.startEffort = ''; this.saveAgentDraft(); void this.readStartModels();
               }).id('agent.launcher')
           }.width('100%').constraintSize({minHeight:Tokens.touch})
           if (this.launchersFailed) {
@@ -972,6 +974,19 @@ struct Index {
             }
             if (this.modelsFailed) Text(tr('agent_models_unavailable')).width('100%').fontSize(Tokens.caption).fontColor(Colors.secondary)
               .margin({bottom:Tokens.gap})
+            if (!this.modelLocked && this.offeredEfforts().length > 0) {
+              Divider().color(Colors.divider)
+              Row({space:Tokens.gap}) {
+                this.setupLabel('reasoning_effort')
+                Blank()
+                Select(this.startEffortOptions())
+                  .selected(this.offeredEfforts().indexOf(this.startEffort) + 1)
+                  .value(this.startEffort ? this.effortName(this.startEffort) : tr('agent_default_effort'))
+                  .attributeModifier(SelectStyles.inline).constraintSize({maxWidth:'64%'})
+                  .enabled(!this.creatingAgent && !this.modelsLoading)
+                  .onSelect((index:number) => {this.startEffort = this.offeredEfforts()[index - 1] || ''; this.saveAgentDraft();}).id('agent.effort')
+              }.width('100%').constraintSize({minHeight:Tokens.touch})
+            }
           }
         }.padding({left:Tokens.page,right:Tokens.page}).backgroundColor(Colors.planSurface).border({width:Tokens.divider,color:Colors.planBorder}).borderRadius(Tokens.card)
         Column({space:Tokens.gap}) {
@@ -1001,20 +1016,32 @@ struct Index {
   }
   private startModelOptions(): SelectOption[] {
     const options: SelectOption[] = [{value:tr('agent_default_model')}];
-    this.startModels.forEach(item => options.push({value:Wire.text(item,'name') || Wire.text(item,'id')}));
+    this.startModels.forEach(item => options.push({value:launcherModelLabel(item)}));
     if (this.canTypeStartModel()) options.push({value:tr('agent_custom_model')});
     return options;
   }
+  private offeredEfforts(): string[] { return startEfforts(this.startModels, this.startModel, this.typingStartModel); }
+  private startEffortOptions(): SelectOption[] {
+    const options: SelectOption[] = [{value:tr('agent_default_effort')}];
+    this.offeredEfforts().forEach(item => options.push({value:this.effortName(item)}));
+    return options;
+  }
+  private effortName(effort: string): string { const name = tr(effort); return name === effort ? effort : name; }
+  /** Keeps a picked effort only while the model in the form lists it, so a start never asks for one the agent lacks. */
+  /** The effort a start sends: the pick, while the model in the form lists it; '' runs the agent's own default. */
+  private chosenEffort(): string { return !this.modelLocked && this.offeredEfforts().includes(this.startEffort) ? this.startEffort : ''; }
+  private keepStartEffort(): void { if (this.startEffort && !this.offeredEfforts().includes(this.startEffort)) this.startEffort = ''; }
   private pickStartModel(index: number): void {
     this.typingStartModel = this.canTypeStartModel() && index === this.startModels.length + 1;
     const model = this.startModels[index - 1];
     this.startModel = model ? Wire.text(model,'id') : '';
+    this.keepStartEffort();
     this.saveAgentDraft();
   }
   private modelLabel(): string {
     if (this.typingStartModel) return tr('agent_custom_model');
     const match = this.startModels.find(item => Wire.text(item,'id') === this.startModel);
-    return match ? Wire.text(match,'name') || this.startModel : tr('agent_default_model');
+    return match ? launcherModelLabel(match) : tr('agent_default_model');
   }
   private async readStartModels(refresh: boolean = false): Promise<void> {
     const ticket = ++this.modelRequest, owner = this.agentModel, machine = this.agentMachine(), launcher = this.chosenLauncher();
@@ -1032,6 +1059,7 @@ struct Index {
       const listed = this.startModels.some(item => Wire.text(item,'id') === this.startModel);
       this.typingStartModel = this.canTypeStartModel() && !listed && (!!this.startModel || this.typingStartModel);
       if (this.modelLocked || !listed && !this.typingStartModel) this.startModel = '';
+      this.keepStartEffort();
     } catch (_) {
       if (current()) {
         this.modelsFailed = true;
@@ -1054,7 +1082,7 @@ struct Index {
       const raw = await owner.loadView(this.agentDraftKey());
       if (revision !== this.agentFormRevision || !this.model.owns(generation, scope)) return;
       const saved = Wire.parse(raw); this.newTask = Wire.text(saved, 'task', todo ? todo.title + (Wire.text(todo.data(), 'notes') ? '\n\n' + Wire.text(todo.data(), 'notes') : '') : '');
-      this.startModel = Wire.text(saved, 'model'); this.directory = Wire.text(saved, 'directory'); this.launcher = Wire.text(saved, 'launcher');
+      this.startModel = Wire.text(saved, 'model'); this.startEffort = Wire.text(saved, 'effort'); this.directory = Wire.text(saved, 'directory'); this.launcher = Wire.text(saved, 'launcher');
       const savedMachine = Wire.text(saved, 'machine');
       const available = this.agentMachines();
       const savedScope = Wire.text(saved,'machine_scope',owner.scope());
@@ -1063,7 +1091,7 @@ struct Index {
       if (selected) this.agentModel = this.model.directoryOwnerFor(selected) || owner;
       this.agentMachineId = this.fixedAgentMachine || selected?.id || '';
       if (savedMachine && (savedMachine !== this.agentMachineId || this.agentModel.scope() !== savedScope)) {
-        this.launcher = ''; this.startModel = ''; this.directory = '';
+        this.launcher = ''; this.startModel = ''; this.startEffort = ''; this.directory = '';
       }
       this.sheetKind = 'newagent'; this.showSheet = true; void this.readSessionLaunchers();
     } catch (error) { if (revision === this.agentFormRevision && this.model.owns(generation, scope)) this.model.reportError(error as Error); }
@@ -1071,8 +1099,8 @@ struct Index {
   private saveAgentDraft(): void {
     if (this.sheetKind !== 'newagent' || !this.showSheet) return;
     const owner = this.agentDraftOwner(), generation = owner.connectionGeneration(), scope = owner.scope();
-    owner.saveView(this.agentDraftKey(), JSON.stringify(Wire.payload(['task','directory','launcher','machine','model','machine_scope'],
-      [this.newTask,this.directory,this.launcher,this.agentMachineId,this.startModel,this.agentModel.scope()])))
+    owner.saveView(this.agentDraftKey(), JSON.stringify(Wire.payload(['task','directory','launcher','machine','model','effort','machine_scope'],
+      [this.newTask,this.directory,this.launcher,this.agentMachineId,this.startModel,this.startEffort,this.agentModel.scope()])))
       .catch(() => { if (owner.owns(generation, scope)) owner.error = 'cache_unavailable'; });
   }
   private agentDraftOwner(): ClientModel { return this.agentTodo || this.fixedAgentMachine ? this.agentModel : this.model; }
@@ -1103,16 +1131,16 @@ struct Index {
       const choices = await owner.repo().sessionLaunchers(machine.id);
       if (!current()) return;
       this.sessionLaunchers = choices;
-      if (!this.chosenLauncher()) { this.launcher = ''; this.startModel = ''; }
+      if (!this.chosenLauncher()) { this.launcher = ''; this.startModel = ''; this.startEffort = ''; }
       void this.readStartModels();
     } catch (_) { if (current()) { this.launchersFailed = true; this.startModel = ''; } }
     finally { if (ticket === this.launcherRequest) this.launchersLoading = false; }
   }
-  private agentFingerprint(): string { return JSON.stringify([this.agentModel.scope(), this.agentTodo?.id || '', this.agentMachine()?.id || '', this.newTask, this.directory, this.launcher, this.startModel]); }
+  private agentFingerprint(): string { return JSON.stringify([this.agentModel.scope(), this.agentTodo?.id || '', this.agentMachine()?.id || '', this.newTask, this.directory, this.launcher, this.startModel, this.chosenEffort()]); }
   private confirmCreateAgent(): void {
     const machine = this.agentMachine(); if (!machine || !this.readyToStart()) return;
     const revision = this.agentFormRevision, fingerprint = this.agentFingerprint(), owner = this.agentModel, generation = owner.connectionGeneration(), scope = owner.scope();
-    this.getUIContext().showAlertDialog({ title: tr('agent_new_session'), message: owner.profile.name + ' · ' + owner.profile.manager + '\n' + (machine.title || machine.id) + ' · ' + (this.chosenLauncher()?.label || this.launcher || tr('agent_machine_default')) + (this.startModel ? ' · ' + (this.typingStartModel ? this.startModel : this.modelLabel()) : '') + (this.directory ? '\n' + this.directory : '') + (this.newTask ? '\n\n' + this.newTask : ''),
+    this.getUIContext().showAlertDialog({ title: tr('agent_new_session'), message: owner.profile.name + ' · ' + owner.profile.manager + '\n' + (machine.title || machine.id) + ' · ' + (this.chosenLauncher()?.label || this.launcher || tr('agent_machine_default')) + (this.startModel ? ' · ' + (this.typingStartModel ? this.startModel : this.modelLabel()) : '') + (this.chosenEffort() ? ' · ' + this.effortName(this.chosenEffort()) : '') + (this.directory ? '\n' + this.directory : '') + (this.newTask ? '\n\n' + this.newTask : ''),
       primaryButton: { value: tr('cancel'), action: () => {} }, secondaryButton: { value: tr('create'), action: () => {
         if (revision === this.agentFormRevision && owner.owns(generation, scope) && fingerprint === this.agentFingerprint()) this.createAgent();
       } } });
@@ -1123,7 +1151,7 @@ struct Index {
     const valid = (): boolean => owner.owns(generation, scope) && this.model.owns(rootGeneration, rootScope) && revision === this.agentFormRevision && this.showSheet && this.sheetKind === 'newagent' && fingerprint === this.agentFingerprint();
     this.creatingAgent = true;
     try {
-      const row = await owner.createAgent(this.newTask, machine, this.directory, this.launcher, this.agentTodo?.id || '', valid, this.chosenLauncher()?.agent || '', this.startModel);
+      const row = await owner.createAgent(this.newTask, machine, this.directory, this.launcher, this.agentTodo?.id || '', valid, this.chosenLauncher()?.agent || '', this.startModel, this.chosenEffort());
       if (!valid()) return;
       this.showSheet = false; this.newTask = ''; this.agentDraftOwner().saveView(draftKey, '').catch(() => {}); this.openRow(row);
     } catch (error) { if (valid()) owner.reportError(error as Error); }

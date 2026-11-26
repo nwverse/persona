@@ -1851,10 +1851,10 @@ export class ClientModel {
   async saveView(key: string, value: string, expectedEpoch: number = this.viewRevision(key)): Promise<void> { await this.local.put(this.viewKey(key), value, expectedEpoch); }
   async loadView(key: string): Promise<string> { return this.local.get(this.viewKey(key)); }
   removeContext(): void { this.sourceContext = ''; this.draftRevision = util.generateRandomUUID(); this.persistDraft().catch(() => this.error = 'failed'); }
-  async createAgent(prompt: string, machine: ResourceRow, directory: string, launcher: string, todoId: string = '', admit?: () => boolean, agent: string = '', model: string = ''): Promise<ResourceRow> {
+  async createAgent(prompt: string, machine: ResourceRow, directory: string, launcher: string, todoId: string = '', admit?: () => boolean, agent: string = '', model: string = '', effort: string = ''): Promise<ResourceRow> {
     if (machine.manager !== this.profile.manager) throw new Error('request_updated');
     const generation = this.generation, scope = this.scope(), repo = this.repo();
-    const row = await repo.createAgent(prompt, machine, directory, launcher, util.generateRandomUUID(), todoId, (): boolean => this.owns(generation, scope) && (!admit || admit()), agent, model);
+    const row = await repo.createAgent(prompt, machine, directory, launcher, util.generateRandomUUID(), todoId, (): boolean => this.owns(generation, scope) && (!admit || admit()), agent, model, effort);
     if (!this.owns(generation, scope)) throw new Error('request_updated');
     try { await this.refresh(); } catch (_) { if (this.owns(generation, scope)) this.error = 'failed'; }
     if (!this.owns(generation, scope)) throw new Error('request_updated'); row.group = this.profile.id; return row;
