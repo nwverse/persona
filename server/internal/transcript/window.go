@@ -504,12 +504,17 @@ func (f *File) loadOlder() int64 {
 	if f.tree == nil {
 		f.tree = &branchTree{}
 	}
-	if len(f.tree.prepend(pre.recs)) > 0 || len(pre.hidden) > 0 {
+	if f.coldInputs != nil {
+		older = withoutLines(older, f.tree.hidden)
+	} else if len(f.tree.prepend(pre.recs)) > 0 || len(pre.hidden) > 0 {
 		older = withoutLines(older, f.tree.hidden)
 		f.items = withoutLines(f.items, f.tree.hidden)
 	}
 	f.items = append(older, f.items...)
 	f.base = b - 1
+	if f.base == 0 {
+		f.coldInputs = nil
+	}
 	if f.base == 0 && !f.partialMeta {
 		f.win = nil
 	}

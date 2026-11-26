@@ -20,8 +20,8 @@ import (
 // before escalating to supervision (#15733).
 const maxRestartRecoveryAttempts = 2
 
-// RestartRecoveryResult reports what a startup restart recovery sweep acted on.
-type RestartRecoveryResult struct {
+// restartRecoveryResult reports what a startup restart recovery sweep acted on.
+type restartRecoveryResult struct {
 	RecoveredTodoIDs []string
 	EscalatedTodoIDs []string
 	SkippedTodoIDs   []string
@@ -237,24 +237,24 @@ func (s *Service) ResetSupervisedTaskRecovery(ctx context.Context, todoID string
 // RunRestartRecoverySweep scans persisted active checkpoints from earlier boot epochs and
 // automatically resumes restart-interrupted supervised tasks up to maxRestartRecoveryAttempts,
 // escalating cleanly once capped. Strictly bypassed (100% no-op) when todos_v2 is off.
-func (s *Service) RunRestartRecoverySweep(ctx context.Context, currentBootEpoch string, sessions []proto.Session) (RestartRecoveryResult, error) {
+func (s *Service) RunRestartRecoverySweep(ctx context.Context, currentBootEpoch string, sessions []proto.Session) (restartRecoveryResult, error) {
 	if s == nil || !s.settings(ctx).todosV2On() {
-		return RestartRecoveryResult{}, nil
+		return restartRecoveryResult{}, nil
 	}
 	currentBootEpoch = strings.TrimSpace(currentBootEpoch)
 	if currentBootEpoch == "" {
-		return RestartRecoveryResult{}, nil
+		return restartRecoveryResult{}, nil
 	}
 	st := s.todoRecoveryStore()
 	if st == nil {
-		return RestartRecoveryResult{}, nil
+		return restartRecoveryResult{}, nil
 	}
 	states, err := st.ListTodoRecoveryStates(ctx)
 	if err != nil {
-		return RestartRecoveryResult{}, err
+		return restartRecoveryResult{}, err
 	}
 	if len(states) == 0 {
-		return RestartRecoveryResult{}, nil
+		return restartRecoveryResult{}, nil
 	}
 
 	sessByKey := make(map[[2]string]proto.Session, len(sessions))
@@ -275,7 +275,7 @@ func (s *Service) RunRestartRecoverySweep(ctx context.Context, currentBootEpoch 
 	asks := s.todoAsks(ctx)
 	now := time.Now().UTC()
 
-	var result RestartRecoveryResult
+	var result restartRecoveryResult
 	for _, rec := range states {
 		if rec.LastActiveBootEpoch == currentBootEpoch {
 			result.SkippedTodoIDs = append(result.SkippedTodoIDs, rec.TodoID)

@@ -31,6 +31,7 @@ type todosList struct {
 	Todos          []listedTodo               `json:"todos"`
 	Counts         assistantwire.TodoCounts   `json:"counts"`
 	SharedBlockers []projection.SharedBlocker `json:"shared_blockers,omitempty"`
+	Board          *todoBoardProjection       `json:"board,omitempty"`
 }
 
 // listedTodos are the to-dos as GET /api/v1/todos lists them, newest created first: each formatted, with its decision
@@ -135,6 +136,7 @@ func (s *Service) todosViewed(ctx context.Context, briefs bool) ([]listedTodo, t
 	if s.todoViewsSeen(gen, p, nil) {
 		s.todoViewDiffers()
 	}
+	s.todosCounted(gen, p) // the counts view's to-dos (counts_view.go)
 	return list, p, nil
 }
 

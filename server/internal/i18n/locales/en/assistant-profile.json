@@ -1,4 +1,6 @@
 {
+  "bad_labs_seen_id": "Use 1–64 lowercase letters, digits, hyphens or underscores for each experiment ID. Start with a letter or digit.",
+  "too_many_labs_seen": "The seen list holds up to 64 Labs experiments.",
   "bad_readonly_mode": "Read-only task protection must be sandbox or prompt.",
   "launcher_agent": "{launcher} runs {agent}. The assistant can only use a launcher that starts Claude Code, Codex, or a runtime that can act as the assistant.",
   "manager_required": "Choose an assistant before changing its settings.",
