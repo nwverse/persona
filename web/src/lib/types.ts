@@ -29,7 +29,7 @@ export interface Machine {
   deploying?: boolean;
   can_deploy?: boolean;
   deploy_reason?: string;
-  deploy_phase?: "waiting_idle" | "transferring" | "restarting" | "confirming";
+  deploy_phase?: "waiting_idle" | "transferring" | "draining" | "restarting" | "confirming";
   deploy_error?: string;
   /** Where the owning assistant obtained the program for this deployment, when known. */
   deploy_source?: "hub_package" | "local_build";

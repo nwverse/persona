@@ -3256,6 +3256,7 @@ func (n *Node) info(ctx context.Context) proto.NodeInfo {
 		Capabilities:       n.capabilities(), // secret_env only from a resident node (secretenv.go)
 		NodeUpdate:         canUpdate,
 		NodeUpdateReason:   updateReason,
+		UpdateDraining:     n.reload.UpdateDraining(),
 		ModelConfiguration: true,
 		Hostname:           host,
 		OS:                 runtime.GOOS,
