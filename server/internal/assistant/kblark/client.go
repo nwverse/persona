@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/larkcli"
+	"github.com/nwverse/persona/server/internal/cliwire"
 )
 
 const (
@@ -51,15 +51,22 @@ type Reader interface {
 	SearchDocs(ctx context.Context, query string) ([]Doc, error)
 }
 
+// Runner is what a client runs lark-cli through: the lark module's adapter, which the core reaches through its port
+// (cliport.Runner, internal/cliport), or a fake in tests.
+type Runner interface {
+	Run(ctx context.Context, args ...string) ([]byte, error)
+	InspectDocument(ctx context.Context, link string) (cliwire.Document, error)
+}
+
 // Client reads through lark-cli, as the logged-in user.
 type Client struct {
-	runner *larkcli.Runner
+	runner Runner
 	zone   *time.Location
 }
 
 // NewClient returns a client on runner; a wall-clock time lark-cli prints without a zone is read in zone (nil:
 // time.Local).
-func NewClient(runner *larkcli.Runner, zone *time.Location) *Client {
+func NewClient(runner Runner, zone *time.Location) *Client {
 	if zone == nil {
 		zone = time.Local
 	}

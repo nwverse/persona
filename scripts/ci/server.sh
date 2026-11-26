@@ -74,8 +74,9 @@ if [ "$lane" = all ] || [ "$lane" = core-node ]; then
   if [ -d server/internal/modules/lark ]; then
     # The Feishu / Lark module (#13404, docs/architecture/core-and-modules.md "Provider seams"): left out, the binaries
     # build, the extension host has no bot client (internal/botport) and no lark-cli adapter or connector
-    # (internal/cliport), and their tests skip; the rest of the extension host and the assistant's Feishu paths still pass.
-    ci_run 'Builds without the Lark module' 900 bash -c 'cd server && for t in persona_without_lark; do go test -tags "$t" -count=1 -timeout=6m ./internal/botport/... ./internal/botcard/... ./internal/larkhost/... ./internal/cliport/... ./internal/cliwire/... ./cmd/personad/... ./cmd/persona-manager/... && go test -tags "$t" -count=1 -timeout=8m -run "Lark|Feishu|Bot|Card|Connector|Inbox|Builtin|SelfSettings|Golden" ./internal/extmgr/ && go test -tags "$t" -count=1 -timeout=6m -run "Feishu|Bot|Card|Golden" ./internal/assistant/ || exit 1; done'
+    # (internal/cliport), and their tests skip; the knowledge base's Lark import (internal/assistant/kblark) skips its
+    # runs; the rest of the extension host and the assistant's Feishu paths still pass.
+    ci_run 'Builds without the Lark module' 900 bash -c 'cd server && for t in persona_without_lark; do go test -tags "$t" -count=1 -timeout=6m ./internal/botport/... ./internal/botcard/... ./internal/larkhost/... ./internal/cliport/... ./internal/cliwire/... ./internal/assistant/kblark/... ./cmd/personad/... ./cmd/persona-manager/... && go test -tags "$t" -count=1 -timeout=8m -run "Lark|Feishu|Bot|Card|Connector|Inbox|Builtin|SelfSettings|Golden" ./internal/extmgr/ && go test -tags "$t" -count=1 -timeout=6m -run "Feishu|Bot|Card|Golden|KBLark" ./internal/assistant/ || exit 1; done'
   fi
 fi
 if [ "$lane" = all ] || [ "$lane" = core-node ]; then

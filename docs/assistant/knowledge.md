@@ -671,9 +671,11 @@ Replies go through `server/internal/i18n/locales/*/assistant-kb_history.json`; w
 ### Lark minutes and documents (`kb.lark_minutes`, 2026-11-21)
 
 The manager can bring the owner's Feishu / Lark **meeting minutes** and **document titles** into the knowledge base
-through `lark-cli` on the manager's computer, with the adapter the Lark connector uses (`server/internal/larkcli`,
+through `lark-cli` on the manager's computer, with the adapter the Lark connector uses (the Lark module's
+`server/internal/modules/lark/larkcli`, reached through the core's port `server/internal/cliport`;
 `server/internal/assistant/kblark`). It runs in the archive lane (`kb_lark.go`), inside the manager process — not as an
-external timer — and is **off by default**.
+external timer — and is **off by default**. A build without the Lark module, or with it switched off, logs that lark-cli
+is not part of the build and skips the run.
 
 What it does, each run:
 

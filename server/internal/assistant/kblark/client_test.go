@@ -8,8 +8,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/larkcli"
+	"github.com/nwverse/persona/server/internal/cliport"
+	"github.com/nwverse/persona/server/internal/cliwire"
+	"github.com/nwverse/persona/server/internal/moduleswitch"
 )
+
+// needsLarkCLI skips a test that runs lark-cli in a build without the lark module (internal/cliport).
+func needsLarkCLI(t testing.TB) {
+	t.Helper()
+	if !cliport.Available(moduleswitch.Set{}) {
+		t.Skip("the lark module is not in this build")
+	}
+}
 
 // stubCLI writes a fake lark-cli that answers each command with the given JSON and exits 0; fail, when set, is what it
 // prints to stderr and exits 1 with.
@@ -50,7 +60,8 @@ esac
 
 func testClient(t *testing.T, bin string) *Client {
 	t.Helper()
-	return NewClient(larkcli.New(larkcli.Config{Bin: bin, Timeout: 5 * time.Second}), time.FixedZone("CST", 8*3600))
+	needsLarkCLI(t)
+	return NewClient(cliport.NewRunner(cliwire.Config{Bin: bin, Timeout: 5 * time.Second}), time.FixedZone("CST", 8*3600))
 }
 
 func TestClientSearchMinutesAndDetail(t *testing.T) {
@@ -110,11 +121,11 @@ func TestClientFailsWhenNotLoggedIn(t *testing.T) {
 	if err == nil {
 		t.Fatal("no error")
 	}
-	if kind := larkcli.KindOf(err); kind != larkcli.KindNotLoggedIn {
+	if kind := cliwire.KindOf(err); kind != cliwire.KindNotLoggedIn {
 		t.Fatalf("kind %q (%v)", kind, err)
 	}
-	var adapterErr *larkcli.Error
+	var adapterErr *cliwire.Error
 	if !errors.As(err, &adapterErr) {
-		t.Fatalf("not a larkcli error: %T", err)
+		t.Fatalf("not a lark-cli adapter error: %T", err)
 	}
 }

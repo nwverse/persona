@@ -215,7 +215,7 @@ What switched off means, by seam (each port follows `Set.On`; a build without th
 | `server/internal/builtinext` (`ProvideVolc`, `ProvideVoice`) | `volc`, `voice` | The built-in extension is not registered or started; no meeting transcribes with it |
 | `server/internal/builtinext` (`AddProgram`) | `volc`, `voice` | The extension host starts no `personad volc` / `personad voice`, a `hub.json` entry's included (`ProgramOff`: it fails as the unknown subcommand would). The subcommand stays in the binary |
 | `server/internal/botport` | `lark` | No bot client is made: the bot cannot be bound, registered or started |
-| `server/internal/cliport` | `lark` | `lark.cli` is not read (logged at start) and the extension host's lark-cli integration is off |
+| `server/internal/cliport` | `lark` | `lark.cli` is not read (logged at start), the extension host's lark-cli integration is off and the knowledge base's Lark import (`kb.lark_minutes`) logs that and skips its runs |
 | `server/internal/larkhost` | `lark` | The outbound channel port is `larkhost.None`, as without the module; the core's pushes to the chat return `nil` without a log or a retry, and `notify_user`'s copy report records the Feishu copy as `skipped` (told nowhere in its answer) |
 | `server/internal/knowledgeuihost` | `knowledge-ui` | No layer: no `kb_history_*` tool or import, the selection page's chat list answers as a source without history, days carry no sent marks |
 | `server/internal/healthhost` | `health` | No layer: the intake and items routes answer 404, no `health_intake` tool, no `health_intake` or `health_items` capability, no water reminders |
@@ -381,8 +381,9 @@ leaf library the core's cards are built with), and `server/internal/modules/all/
 `server/internal/modules/lark/connector/larkcli`) are reached the same way through `server/internal/cliport`, with their
 values in the contract `server/internal/cliwire`; the connector builds on the connector SPI (`connectorwire`). Without the
 module `botport.Available()` and `cliport.Available()` are false: the bot cannot be bound, registered or started (the
-setting answers that it is not part of this build), `lark.cli` is not read (a warning at start), and the extension
-host's tests of them skip (`needsLarkModule`, `needsLarkCLI`). `scripts/ci/server.sh build` builds and tests with `persona_core_only` and with
+setting answers that it is not part of this build), `lark.cli` is not read (a warning at start), the knowledge base's
+Lark import (`server/internal/assistant/kblark`, through the same runner) skips its runs, and the extension host's and
+the import's tests of them skip (`needsLarkModule`, `needsLarkCLI`). `scripts/ci/server.sh build` builds and tests with `persona_core_only` and with
 `persona_without_lark`. The assistant's own Feishu layer reaches the module through `server/internal/larkhost` ("Lark" below).
 
 ### The node's modules

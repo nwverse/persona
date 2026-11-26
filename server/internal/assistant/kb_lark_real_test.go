@@ -13,8 +13,9 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistant/kblark"
+	"github.com/nwverse/persona/server/internal/cliport"
+	"github.com/nwverse/persona/server/internal/cliwire"
 	"github.com/nwverse/persona/server/internal/kb"
-	"github.com/nwverse/persona/server/internal/larkcli"
 )
 
 // TestRealLarkImportShowsOnTheRoutes imports through the real lark-cli into a temporary knowledge base, then reads it
@@ -24,6 +25,7 @@ func TestRealLarkImportShowsOnTheRoutes(t *testing.T) {
 	if os.Getenv("KB_LARK_REAL") != "1" {
 		t.Skip("set KB_LARK_REAL=1 to run against the real lark-cli")
 	}
+	needsLarkCLI(t)
 	// testhome gives the package a throw-away HOME; lark-cli's login is under the owner's real one, which is set
 	// only for the import below.
 	home := ""
@@ -63,7 +65,7 @@ func TestRealLarkImportShowsOnTheRoutes(t *testing.T) {
 	if home != "" {
 		t.Setenv("HOME", home)
 	}
-	client := kblark.NewClient(larkcli.New(larkcli.Config{Bin: os.Getenv("KB_LARK_BIN"), Timeout: time.Minute}), e.Store.Zone())
+	client := kblark.NewClient(cliport.NewRunner(cliwire.Config{Bin: os.Getenv("KB_LARK_BIN"), Timeout: time.Minute}), e.Store.Zone())
 	run := func() kblark.Result {
 		res, err := kblark.Run(context.Background(), e, client, kblark.Config{}, time.Now(), t.Logf)
 		if err != nil {
