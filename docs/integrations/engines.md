@@ -119,7 +119,10 @@ iOS / Android have both entry points (Android Machines is under Agents: **List s
 Windows: herdr has native Windows support since 0.9.5; except live terminal, capabilities match above. Orca works too. See [windows.md](../operations/windows.md), "herdr."
 
 **Antigravity CLI panes** show chat history once the pane's conversation ID is known. Two sources report it, and either is
-enough: Persona's own hooks (below) and the hook installed by `herdr integration install antigravity-cli`. Persona reads
+enough: Persona's own hooks (below) and the hook installed by `herdr integration install antigravity-cli`. On Linux the
+node also reads it from the `presence/<conversation>.lock` the pane's foreground agy holds open, in herdr, Herdr App and
+Orca panes (#16531), so a pane is known before its first hook fires and after a node restart; a pane whose agy processes
+hold two conversations' locks stays unknown. Persona reads
 that conversation's local `transcript.jsonl` from the node's Antigravity data directory, or `transcript_full.jsonl` when
 the compact export is absent. Switching export sources resets the history cursor. The node uses the conversation ID to
 restore Persona-started panes with `agy --conversation`. The pane's row is then titled after that conversation, as the Antigravity
@@ -389,10 +392,17 @@ Typical use: work Agents in botmux, personal Agents in herdr, viewed together.
   Without matching rollout, omit: newly opened sessions before initial prompt enters rollout (next refresh finds them), or custom bot-specific `CODEX_HOME` / `TRAE_HOME` directories unknown to node
   (Codex reads known homes, compatible fork only `~/.trae/cli`). `codex-app` (botmux drives Codex through app-server, without session-ID prompts) and other CLIs omitted.
   Space is cwd (like Herdr App terminals outside spaces; trim trailing `/` to avoid duplicates), named by final directory component. If it matches parent case-insensitively, include parent (`Botmux/botmux`, #1836). Derive only from its own path, not other listed sessions, so name-based pin / mute / group-to-do bindings stay stable.
-- **Sending**: same for all three, delivered through botmux dashboard `POST /api/trigger` targeting the session, not terminal input. Botmux queues while busy,
+- **Sending**: same for all three, delivered through botmux dashboard `POST /api/trigger` targeting the session (`target.kind: "turn"`, `botId`, `sessionId`), not terminal input. Botmux queues while busy,
   resumes suspended sessions itself (no separate herdr `claude --resume`, also for suspended beyond 7 days / unlisted), and sends replies back to Lark topics.
-  Node gets dashboard token through `botmux dashboard current`, memory-only, connecting only to local 127.0.0.1. Claude receives botmux task tags and an external-event explanation.
+  Node gets the dashboard token through `botmux dashboard current`, memory-only, connecting only to local 127.0.0.1.
+  Before sending, the node checks capabilities via the read-only `GET /api/sessions/:id/turns` probe (cached per botmux instance and re-probed after dashboard restart, token rotation, or CLI upgrade; never probed with a real message and never retried after delivery).
+  When `capabilities` includes `ownerActor`, `POST /api/trigger` sends top-level `actor: "owner"` (with no `envelope.payload` or `envelope.rawText`) and confirms the echoed `actor: "owner"` in the response, so botmux delivers the turn as the bot owner with `<sender>` and `<message_location>`.
+  On older botmux versions (below 3.59.23, where the endpoint returns `404` or `ownerActor` is absent), the node sends the existing external-event trigger and sets `botmux_external_trigger: true` on the session so the composer shows a one-line upgrade notice (`3.59.23+`).
 - **Unsupported**: screen reads, keys, dialogs (answer in Lark), close, rename, create, live terminal; app hides or explains by capabilities.
+- **Showing it as in Lark**: **structured turns first, wrapper parsing as per-turn fallback.**
+  When the local botmux dashboard serves `GET /api/sessions/:id/turns` (`botmux.session-turns.v1`, `server/internal/node/hostbotmux_turns.go`, `server/internal/transcript/botmux_turns.go`), the node reads turns incrementally by `seq` cursor and matches each turn to its transcript entry by `anchor.cliEntryId` or `anchor.inputSha256`, filling `Item.botmux` with the inbound text, sender display name, attachment metadata, thread placement, mentions, and full reply text (including `--content-file` and `--card-file` replies).
+  When the endpoint returns `404` (older botmux) or a turn has no structured record (e.g., turns before a botmux upgrade), the node falls back per turn to wrapper and `botmux send` parsing (`server/internal/transcript/botmux.go`).
+  The transcript text is always unchanged so the original stays one tap away, and only display names leave the node (never `open_id` or `messageId`). Formats and fallbacks: `docs/protocol/protocol.md` ("BotMux messages").
 - **Why it needs you / open in Lark**: reason from `botmux send --attention` goes into `attention_reason` while Needs you;
   app shows it in list rows / chat top. Raw observe topic link (`feishuThreadLink`, HTTPS only) becomes `external_url` for "Open in Lark."
   Both are raw botmux fields, not stable APIs; omit if absent.

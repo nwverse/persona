@@ -108,8 +108,9 @@ type Settings struct {
 	MainBackgroundFolded *bool `json:"main_background_folded,omitempty"`
 	// FoldRoutineRelayReplies opts the main chat into quiet completed relay reports when its background rounds fold.
 	FoldRoutineRelayReplies *bool `json:"fold_routine_relay_replies,omitempty"`
-	// MainCompactWindow: the compaction window, in tokens, the main conversation is held to when its launcher declares a
-	// larger one (#7314, main_compact_window.go); nil is 400000, 0 follows the launcher.
+	// MainCompactWindow: the compaction window, in tokens, the main conversation and each leader conversation are held to
+	// when their launcher declares a larger one (#7314, #15318, main_compact_window.go); nil is 400000, 0 follows the
+	// launcher.
 	MainCompactWindow *int `json:"main_compact_window,omitempty"`
 	// RecentTaskChats: the apps' sidebar Recent lists the chats a scheduled task or the background supervisor started
 	// too, by last activity with the others (#8324; since #6228 they are only in All chats). Display only, one value
@@ -282,6 +283,9 @@ type Settings struct {
 	// ChatReplyHinted: the one-time hint that the feature exists was given to a conversation (chat_reply.go). The
 	// assistant writes it itself; PUT /api/v1/assistant does not.
 	ChatReplyHinted bool `json:"chat_reply_hinted,omitempty"`
+	// ChatReplyMutedChats are Lark chats (by feed ID) where chat_reply relays are stopped even while
+	// assistant.chat_reply_relay is on (chat_reply.go). Written through persona_settings; PUT /api/v1/assistant does not.
+	ChatReplyMutedChats []chatReplyMutedChat `json:"chat_reply_muted_chats,omitempty"`
 	// BackgroundSupervisor is the background supervisor's conversation, on BackgroundSupervisorMachineID, started at
 	// BackgroundSupervisorAt: made on first use, "" until then. BackgroundSupervisorAnnounced: the main conversation
 	// was told once that it follows up its tasks. The assistant writes these itself; PUT /api/v1/assistant does not.
@@ -289,6 +293,13 @@ type Settings struct {
 	BackgroundSupervisorMachineID string     `json:"background_supervisor_machine_id,omitempty"`
 	BackgroundSupervisorAt        *time.Time `json:"background_supervisor_at,omitempty"`
 	BackgroundSupervisorAnnounced bool       `json:"background_supervisor_announced,omitempty"`
+}
+
+// chatReplyMutedChat is one Lark chat excluded from chat_reply relays (chat_reply.go,
+// persona_settings assistant.chat_reply_relay_muted_chats).
+type chatReplyMutedChat struct {
+	Chat  string `json:"chat"`
+	Title string `json:"title,omitempty"`
 }
 
 // FormerMain is a main conversation that was replaced, and until when it was the main one.

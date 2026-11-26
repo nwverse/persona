@@ -1377,6 +1377,12 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 		if t.Supervision == nil && t.DoneAt == nil {
 			// A legacy completion judged while no main existed deliberately stayed unjudged. Once main is configured,
 			// recover that exact ledger turn instead of leaving it outside every future supervised sweep (#5732).
+			if _, reporting := s.reporterOf(ctx, t.Origin); reporting {
+				if e, ok := s.turnOf(ctx, t.ID); ok && e.State == turnDone && e.Judged == nil {
+					s.watchTurn(ctx, t, s.taskAgentsIn(ctx, t, lists))
+				}
+				continue
+			}
 			main := s.settings(ctx).Main
 			if main == "" {
 				continue
@@ -1437,6 +1443,7 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 		allStopped := false
 		stalled := map[string]bool{}
 		for _, g := range watchSignals(t, agents, now, group) {
+			s.projectReviewStall(ctx, g, agents)
 			allStopped = allStopped || g.Kind == sigAllStopped
 			stalled[g.Session] = stalled[g.Session] || g.Kind == sigStalled
 			if g.Kind == sigStalled {
@@ -1452,6 +1459,7 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 		if !allStopped && t.Supervision.state(t) == "" { // going on: neither parked nor with the owner nor waiting for review
 			for _, c := range currentTaskAgents(agents, supersededAgents(t, agents)) {
 				if g, ok := s.noProgressSignal(t, c, now); ok && !stalled[c.SessionID] {
+					s.projectReviewStall(ctx, g, []proto.Session{c})
 					if handled, known := s.stalledHandled(ctx, g.Todo, sigNoProgress, g.Session, g.Key); known && handled {
 						continue
 					}

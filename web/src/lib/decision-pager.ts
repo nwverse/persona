@@ -1,6 +1,6 @@
 import { taskRequestRouting, type AssistantEntriesInput } from "./assistant-entries";
 import { sameManager } from "./manager-choice";
-import { taskCardSlots } from "./task-cards";
+import { taskCardSlots, taskInConversation } from "./task-cards";
 import { byTime } from "./times";
 import type { Interaction } from "./types";
 import type { SessionLookup } from "./todos";
@@ -11,7 +11,7 @@ export function decisionKey(ix: Interaction): string {
   return JSON.stringify([ix.manager ?? "", ix.machine_id, ix.session_id, ix.id]);
 }
 
-type TaskDecisionInput = Pick<AssistantEntriesInput, "conversation" | "main" | "manager" | "todos" | "interactions" | "feed" | "plans" | "cards"> & { lookup: SessionLookup };
+type TaskDecisionInput = Pick<AssistantEntriesInput, "conversation" | "conversationMachine" | "main" | "manager" | "todos" | "interactions" | "feed" | "plans" | "cards"> & { lookup: SessionLookup };
 
 export function taskDecisionCards(input: TaskDecisionInput): DecisionCard[] {
   const { conversation, main, manager, feed, plans, cards, lookup } = input;
@@ -24,10 +24,9 @@ export function taskDecisionCards(input: TaskDecisionInput): DecisionCard[] {
     const todo = card.todo_id ? byTodo.get(card.todo_id) : undefined;
     return todo ? [todo] : [];
   });
-  // In the main conversation taskCardSlots also returns other conversations' tasks; route only this conversation's
-  // tasks so another task sharing an Agent cannot take the request's home away from it.
-  const scopedTasks = orderedTasks.filter((todo) => todo.origin === conversation);
-  const { requestsFor } = taskRequestRouting(scopedTasks, interactions, lookup, conversation);
+  // Route only the tasks that belong here; a task merely watched by the main conversation cannot take a request's home.
+  const scopedTasks = orderedTasks.filter((todo) => taskInConversation(todo, conversation));
+  const { requestsFor } = taskRequestRouting(scopedTasks, interactions, lookup, conversation, input.conversationMachine);
   return scopedTasks.flatMap((todo) =>
     requestsFor(todo).asks.map((interaction) => ({ interaction, taskTitle: todo.title })));
 }
