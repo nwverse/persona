@@ -244,7 +244,7 @@ Dynamic Type behavior:
 - The interface's cap is `Theme.interfaceLargestTypeSize` (`.xxxLarge`, section 6.2); reading content lifts it (`.readingContent()`). Named caps below it: `Theme.Shell.topBarLargestTypeSize` is `.xxxLarge` (`apple/Shared/Design/Theme.swift:865`), for the top bars and the Agents search field that rises into their row (#10165); `compactSwitchLargestTypeSize` is `.large`. Other caps are literal at the call site: `xxLarge` for a glyph inside a 44 pt button, `xLarge` for badges (DS-14).
 - Documented fixed-size exceptions: Dynamic Island (`apple/Shared/Design/IslandMetrics.swift`), watch face (`apple/Shared/Design/WatchFaceTokens.swift`), Lark rich content that carries sender sizes, and the browser sign-in number (`Theme.Font.signInNumber`, 64 pt rounded bold with fixed-width digits, `apple/Shared/Design/BrowserLoginTokens.swift`, #10293): two digits read off the iPhone to be typed in a browser, already far above the interface's cap at every size.
 
-Web Appearance also offers opt-in interface/code font choices (#10243), independent of text size. Reuse settings rows and native selectors; reveal a single installed-family field only for Custom. Both Default values preserve the original stacks, and resets restore each family independently. User choices precede theme defaults while retaining the existing CJK/symbol fallbacks. No remote fonts are added; terminal size and CJK width correction stay separate. Details: `docs/web/web.md`, “Theme color and text size”.
+Web Appearance offers interface and code font choices (#10243, #14456), independent of text size. The defaults use Hub-hosted Inter and JetBrains Mono for Latin characters and the existing fallback stacks for other glyphs. The reading serif preset applies to rendered prose, and the Georgia preset still applies to the interface. Reuse settings rows, native selectors, the switch, and the chat prose and code styles. The live preview shows how the choices work together and flags possible fallback. Custom reveals an installed-family field and, on browsers that support it, a button to browse local fonts. Share choices across the owner's browsers by default, with an explicit browser override for machine-specific choices. Details in `docs/web/web.md`, “Theme color and text size”.
 
 ### 2.3 Spacing
 
@@ -1709,12 +1709,12 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   mark of the Agent the launcher runs (#5497: `AgentMark` at 15 px, `ink-2` for the one-colour marks, 4 px before the
   name; an Agent with no mark of its own gets the generic `agent` icon, never a letter, unless its runtime names it
   (#8142), when it is drawn as the Agents list draws it), the model name (truncates), the canonical effort label in the
-  text colour 4 px after it, a filled bolt for Fast and the workflow
-  `UltraMark` (`ink-2`), a 14 px chevron (`ink-2`). Widths by the composer card (`@container/composer`): ≥ 600 px 72–320 px;
+  text colour 4 px after it, the shared speed mark when present, the workflow
+  `UltraMark` (`ink-2`), and a 14 px chevron (`ink-2`). Widths by the composer card (`@container/composer`): ≥ 600 px 72–320 px;
   < 600 px the width its words need (name ≤ 108 px without a trailing bracketed qualifier, a context size kept as a short
   mark, "Opus 5.5 1M"; the whole name in the tooltip;
   shrinking only when the row is short, the name truncating first, the effort only once the name has no room); < 520 px 12 px text, marks a step smaller; < 420 px 64 px, the
-  mark and chevron only. States: loading (a 13 px `Spinner` and "Loading model…"), failed (the `warning` icon in `--red`),
+  engine mark, speed mark when set, and chevron. States: loading (a 13 px `Spinner` and "Loading model…"), failed (the `warning` icon in `--red`),
   pending (#5035, a switch to another launcher that the next message carries out: a 12 px clock in `ink-3` first, then
   the target engine's mark and the launcher's name in `ink-3` up to 96 px, hidden under 600 px, before the target's model and
   effort; the engine's name in its place when the engine changes; the tooltip "Current: …" over "Next message: …"),
@@ -1770,9 +1770,10 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   (160 px; entries 32 px high with the mark, the launcher's own name, an accent dot on the current one, the quota
   percentage and an ⓘ whose tooltip says why one can't take a pick), the models (single-line rows, a check on the one
   that runs, no effort word), and the thinking efforts of the model picked (156 px; one 32 px button per level, a check
-  on the one in use, "Recommended" after the default). The footer gives that model's speed as a two-segment Standard /
-  Fast control on `--hover-2` and Claude Code's ultracode where offered. A pick there keeps the panel open; outside or
-  Esc closes it. The reason a launcher can't take a pick shows once, above its models, never as a line under each one. Customize opens a 264 px flyout to the panel's left: the effort slider, Fast, the engine, an exact catalog
+  on the one in use, "Recommended" after the default). The footer gives the model an ordered speed selector on
+  `--hover-2` when the session offers choices, and Claude Code's ultracode where offered. Standard / Fast stay a
+  compact pair, and Ultrafast and other advertised tiers get their own segments. A pick there keeps the panel open; outside or
+  Esc closes it. The reason a launcher can't take a pick shows once, above its models, never as a line under each one. Customize opens a 264 px flyout to the panel's left: the effort slider, the same speed selector, the engine, an exact catalog
   reference-price line where known, and a footer that says whether the setup is the recommended one, customized or
   saved. A launcher summary adds its weekly-remaining bar only when the existing launcher quota answer supplies a
   weekly ratio; its tooltip names the window and reset time.
@@ -2568,7 +2569,7 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   On the web, a card the conversation's own turn waits on (its own session's request, not one of a worker or side
   session folded under it: `lib/turn-asks.ts`, #11794) is never folded: each stands open above the Needs you / In
   progress capsules, all of them at once, and Needs you neither counts nor lists it again. The cards of sessions folded
-  under the conversation keep the stack and the tray as above. iOS and Android keep the stack for both until they follow.
+  under the conversation keep the stack and the tray as above.
   The stack holds the conversation's own cards alone, as one slot on the web: its first card with "2 / 6" (where it stands in the run), the next taking its place when it is answered, and what was just answered one line over it that goes 3 seconds after the last answer (details with the interaction cards in `docs/web/web.md`).
   **To Decide** (iOS and iPadOS, #12831): in an assistant conversation the conversation's own cards and its tasks'
   questions and approvals are one pager over the composer (`QuestionDock`), opened from a **To Decide** entry (zh-Hans
@@ -2586,14 +2587,18 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   pager and a tray show one at a time, the pager stepping aside while a tray is open. The pager is capped as a lone
   question card (#6277), owns the grabber (#12306), and in a voice call stays open at half the page. The three numbers
   are To Decide (the pager's cards), Needs you (its rows) and, in an Agent's chat, "N pending". An Agent's chat keeps the
-  stack; the wrap-up chips stay chips after the entries. The two paragraphs below are the web and Android, and iOS
-  before #12831.
+  stack; the wrap-up chips stay chips after the entries.
+  **Android** (#12858) uses the same pager order, collapsed selection, and Skip rules with `AssistantTrayEntry`,
+  `DecisionDock`, and `RequestEditor`. Its task source opens over the Assistant tab, where Back restores the pager.
+  The existing message jump highlights the source. A card from a terminal without a tool ID goes to the latest question
+  in its source chat when available. Agent conversations use their existing pending stack.
   Android command-input requests (#14568) show the command and its linkable output in the existing chat card and Agents
   request sheet. The field starts masked when the request calls for it, offers Show / Hide, and stays out of Autofill.
   Send hands the line to the command and clears the field. Not now replies without a line. At standard text sizes the
   existing decision footer keeps both actions visible while the command, output and field scroll. At large sizes they
   scroll with the form. The keyboard action puts the keyboard away. A refusal stays attached to the pending request.
-  What the conversation's tasks ask is a card of its own above the entries (iOS `TaskQuestions` until #12831, #4339 C10): the oldest
+  Before the native pager, what the conversation's tasks asked was a card of its own above the entries (iOS
+  `TaskQuestions`, #4339 C10): the oldest
   question of their Agents, under its task's name with the ask mark in the needs-you tone and, at the end of that line,
   "N more" for the tasks' other questions; it is answered there, and the next comes up once it is. The three numbers
   count three things and say so: "N pending" the conversation's own cards in the stack, "N more" the tasks' other
@@ -2601,15 +2606,8 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   drafts). An open plan is also a card among the conversation's lines (iOS `FeedLine`, web `FeedLineView` #8193, Android on Glass `GlassPlanCard`), at the
   end of the exchange it happened in: its tasks, where each would run, "Start these directly", then Start, Edit and Don't start;
   once started the hand-off cards take its place, and a dismissed one reads "Not started · N tasks". A task's or an Agent's row in the tray opens that task's or Agent's detail, as iOS's rows do, where its page
-  and its cards are; it never brings a card into the stack, which is the conversation's own. The two places of cards
-  share the room the footer leaves above the composer: on Android each takes at most half the page, and with both on
-  screen each has at least half of that room, a card that needs less leaving the rest to the other, so the composer
-  stays on the page. iOS (#9392) caps the task question as it caps the stack (`FooterRoom.cardsRoom`): alone, as a lone
-  question card (#6277), with the conversation's own cards on screen half of that room each, and with the keyboard down a
-  place that takes less (a folded card, #12306) leaves the rest to the other, as on Android; its card fits itself to its
-  share and scrolls inside, its task's name and title row in view. It was uncapped, and on iPad and the open iPhone Duo
-  it took the whole page, its top under the top bar. Before #12306 a folded card kept its half empty, and on the open
-  iPhone Duo held sideways the task's question showed one option and the start of its description.
+  and its cards are. In the former native layout the two places of cards shared the footer room above the composer.
+  Each had half the room when both were open. A shorter card left its unused space to the other (#9392, #12306).
   **Card height by hand** (iOS and iPadOS, #12306): with the keyboard down, a lone question card over the composer (the
   task's question, or the conversation's own lone question; beside each other the task's question) has a grabber on its
   top edge, the sheets' grabber in a strip the card's width (`interaction-grabber`). Dragged, the card follows the finger
@@ -3526,11 +3524,15 @@ changing (principle 3).
 
 ## Codex speed controls (#3865)
 
-An Agent's Codex thread sets its speed with Fast in the model panel's flyout of the model it runs (#5032, the model pill
-and unified model panel in 3.8); a Persona chat running Codex does the same since #5033, its effort chip and Speed
-submenu retired. Fast is a toggle showing the current value, and its label explains the increased usage. A change
-waits for native acknowledgment and the session push; turning Fast off is the reversible choice. Settings > Agents >
-Codex uses the existing agent-settings row for the native default. No account or session is automatically switched to Fast.
+In the web model panel, Agents can change the speed of a writable Codex thread or a supported Claude Code
+terminal session. The same segmented control sits in the wide footer and the narrow flyout. The track sizes to its
+labels and wraps whole segments if space runs out. It lists only advertised choices and keeps the acknowledged
+selection visible while a change is pending. The composer pill, model row and speed selector share `SpeedMark`.
+Standard has no mark. Fast uses the filled `bolt`, and Ultrafast uses `bolt-double`, two offset filled bolts drawn in
+one icon. Both icons share the same height and stroke weight. The pill names Fast and Ultrafast in its tooltip and
+accessible label. A faster option explains the extra usage, and Claude Code's Fast detail explains that the runtime
+may save the preference for future sessions. To undo a speed change, pick the previous option. Settings > Agents > Codex still owns the
+native default for new Codex sessions.
 
 The iOS main Assistant conversation offers the same current-session choice inside its existing composer Model / Thinking
 Effort menu (#10244), not in Settings and not on other chats. A native **Speed** section is present only when the session
@@ -3544,10 +3546,10 @@ component, style or navigation pattern.
 
 A new Persona conversation on the web reuses that same model flyout (#6240), inside Agents-facing customization rather
 than adding an everyday-facing setting. While the default manager is in use, the hub feature
-`assistant_start_service_tier` comes from that manager's hello, and a selected model whose native `service_tiers`
-advertise `priority` has its Fast toggle available before the first message; other models, managers and older hubs do not
-show it. The local Fast choice and reasoning effort are independent (principle 5), enabling Fast pins the displayed
-launcher, model and effort, and an untouched start preserves the native default (principle 1). The first request carries
+`assistant_start_service_tier` comes from that manager's hello, and a selected Codex model whose native `service_tiers`
+advertise Fast or Ultrafast offers those speeds before the first message. Other models, managers and older hubs do not
+show it. The local speed choice and reasoning effort are independent (principle 5). Picking a faster speed pins the displayed
+launcher, model and effort. An untouched start preserves the native default (principle 1). The first request carries
 only an explicit choice, which must be natively acknowledged before the first turn; a refusal is recoverable and never
 silently means Standard (principles 3 and 7). A successful start, Follow default, a dropped pick or a manager change
 clears the one-off draft; a refused start retains it. New Agent has no start speed control.
@@ -4546,6 +4548,8 @@ New copy ships in English, Simplified Chinese and Japanese. Evidence:
 ## Lark topic group policy (#10238)
 
 Settings › Connectors › Lark bot › Topic groups serves owners who want one group to require their explicit bot mention. It reuses Group, Row, Switch, Button, the native select and settings input styles; policy defaults off. Each group shows its saved switch. Enrollment allows choosing the policy before adding the group; a strict first enrollment stays separate from the home choice. The home select shows the effective home or the private-chat fallback. Both writes wait for the existing acknowledged save; failures preserve saved values and enrollment drafts. No primary chat screen or model setting changes.
+
+Each enrolled group on the web has a labeled native select for when to open a to-do (#11813). It defaults to **Answer only** and uses the same acknowledged save as the mention switch. The home choice is saved separately.
 
 ## Shared botmux display setting (#10241)
 

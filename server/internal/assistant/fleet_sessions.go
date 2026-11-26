@@ -52,6 +52,7 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 		s.noteUpstreamRow(machine, sess, now) // consecutive upstream 5xx / pool-exhaustion turns (fleet_upstream.go)
 		s.availSeen(machine, &sess, was, now) // the owner's wait for a reply (availability.go)
 		prev := was.Status
+		s.projectReviewSession(s.runCtx(), sess, prev)
 		wasWorking := prev == proto.StatusWorking || was.WorkingBeforeUnknown
 		reconnectStop := reconnected || was.ReconnectedBeforeUnknown
 		if a2aIdle(sess) && (!was.A2AIdle || reconnected) {

@@ -728,6 +728,14 @@ select:not([multiple], [size], .appearance-none) {
 
 /* ── macOS unified titlebar + 44 px co-linear Apple G2 control bay (#16607) ────────────────────────────────── */
 @media (width >= 64rem) {
+  [data-app-shell][data-mac-chrome="windowed"] {
+    position: relative;
+  }
+  [data-app-shell] [data-mac-bay-tools],
+  [data-app-shell] [data-mac-bay-tools] * {
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
+  }
   [data-app-shell][data-mac-bay="expanded"] [data-sidebar-root] {
     position: relative;
     padding-top: 38px;
@@ -764,10 +772,10 @@ select:not([multiple], [size], .appearance-none) {
     -webkit-app-region: no-drag;
   }
   [data-app-shell][data-mac-bay="rail"] > main > .min-h-0 header.h-14 {
-    padding-left: 124px;
+    padding-left: 130px;
   }
   [data-app-shell][data-mac-bay="hidden"] > main > .min-h-0 header.h-14 {
-    padding-left: 174px;
+    padding-left: 180px;
   }
   [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"]) > main > .min-h-0 > * > :not(:first-child) header.h-14 {
     padding-left: 1rem;

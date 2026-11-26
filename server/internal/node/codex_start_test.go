@@ -378,15 +378,19 @@ func TestCodexStartBypassLauncherArguments(t *testing.T) {
 	}
 }
 
-func TestCodexStartRefusals(t *testing.T) {
+func TestCodexStartAsyncRequestReturnsTheRealThread(t *testing.T) {
 	withCodexLaunchers(t, map[string][]string{"codex": {"codex"}})
-	n, _, _, cmds := codexStartHerdr(t, 0)
-	_, err := request(t, n, "session.start", map[string]any{"cwd": "~/proj", "launcher": "codex", "prompt": "hi", "async": true})
-	if code, _ := refusalOf(t, err); code != "codex_needs_prompt" {
-		t.Errorf("async: %v", err)
+	n, _, cwd, cmds := codexStartHerdr(t, 100*time.Millisecond)
+	res, err := request(t, n, "session.start", map[string]any{"cwd": "~/proj", "launcher": "codex", "prompt": "hi", "async": true})
+	if err != nil {
+		t.Fatalf("Codex async request: %v", err)
 	}
-	if len(*cmds) != 0 {
-		t.Errorf("ran %q", *cmds)
+	s := decodeSessions(t, []any{res["session"]})[0]
+	if s.SessionID != startThread || s.Agent != "codex" || s.Cwd != cwd || s.Starting {
+		t.Fatalf("answered %+v, want the completed Codex thread %s", s, startThread)
+	}
+	if len(*cmds) != 1 || !slices.Equal(ran, []string{"codex"}) {
+		t.Fatalf("Codex commands %q, argv %q", *cmds, ran)
 	}
 }
 
