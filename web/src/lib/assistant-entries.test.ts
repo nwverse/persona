@@ -1,11 +1,22 @@
 import { describe, expect, it } from "vitest";
 import fixture from "../../../spec/fixtures/entries/cases.json";
-import { assistantEntries, decisionLaterKey, needsYouBySupervisor } from "./assistant-entries";
+import { assistantEntries, decisionLaterKey, needsYouBySupervisor, type NeedsYouItem } from "./assistant-entries";
 import { triageTodos } from "./todo-triage";
 import { makeSessionLookup } from "./todos";
 import type { FeedItem, TaskPlan } from "./feed";
 import type { Todo } from "./todos";
 import type { Interaction, Session } from "./types";
+
+it("keeps an Agent interaction on a verifying task under its original conversation in Main", () => {
+  const at = "2026-11-10T08:00:00Z";
+  const todo: Todo = { id: "verify", title: "Review the result", origin: "dispatch-chat", created_at: at, updated_at: at,
+    supervision: { state: "user_check", supervisor: "direction-lead" }, ask: { verdict: "Please verify", asked_at: at } };
+  const card: Interaction = { id: "question", kind: "question", machine_id: "machine", session_id: "agent", created_at: at };
+  const item: NeedsYouItem = { kind: "task", key: "task:verify", todo, status: "needs_you", asks: [card], countsOpen: true };
+  expect(needsYouBySupervisor([item], "main", true)).toEqual([
+    { supervisor: "main", items: [] }, { supervisor: "dispatch-chat", items: [item] },
+  ]);
+});
 
 // Android reads the same fixture (AssistantEntriesFixtureTest): the two entries split the same input the same way.
 describe("the Assistant's Needs you and In progress entries (spec/fixtures/entries)", () => {
@@ -540,5 +551,37 @@ describe("multi-manager scoping (#15645)", () => {
     });
     expect(primary.running.map((item) => item.key)).toEqual(["task:todo-default", "agent:box-a/s-def-solo"]);
     expect(primary.needsYou.map((item) => item.key)).toEqual(["agent:box-a/s-unstamped-solo", "plan:pDef", "task:todo-unstamped"]);
+  });
+});
+
+describe("delegating cards stay out of Needs you for both tasks and standalone agents", () => {
+  const at = "2026-11-10T08:00:00Z";
+  const now = Date.parse("2026-11-10T09:00:00Z");
+
+  it("keeps non-supervised delegating task cards and standalone delegating dock agents in running", () => {
+    const todo: Todo = {
+      id: "todo-alpha",
+      title: "Inspect dir-alpha logs",
+      origin: "main",
+      created_at: at,
+      updated_at: at,
+      agents: [{ machine_id: "box-a", session_id: "s-task-ro", linked_at: at }],
+    } as Todo;
+    const sessions: Session[] = [
+      { machine_id: "box-a", session_id: "s-task-ro", title: "Task reader", cwd: "/work", state: "needs_you", status: "blocked", pending_interactions: 1, updated_at: at } as Session,
+      { machine_id: "box-a", session_id: "s-solo-ro", title: "Solo reader", cwd: "/work", state: "needs_you", status: "blocked", pending_interactions: 1, updated_at: at } as Session,
+      { machine_id: "box-a", session_id: "s-solo-mixed", title: "Solo mixed", cwd: "/work", state: "needs_you", status: "blocked", pending_interactions: 2, updated_at: at } as Session,
+    ];
+    const interactions: Interaction[] = [
+      { id: "ix-task-ro", machine_id: "box-a", session_id: "s-task-ro", kind: "permission", tool_name: "Read", delegating: true, created_at: at } as Interaction,
+      { id: "ix-solo-ro", machine_id: "box-a", session_id: "s-solo-ro", kind: "permission", tool_name: "Read", delegating: true, created_at: at } as Interaction,
+      { id: "ix-solo-held", machine_id: "box-a", session_id: "s-solo-mixed", kind: "permission", tool_name: "Read", delegating: true, created_at: at } as Interaction,
+      { id: "ix-solo-esc", machine_id: "box-a", session_id: "s-solo-mixed", kind: "question", questions: [{ question: "Confirm branch?" }], delegating: false, created_at: at } as Interaction,
+    ];
+
+    const got = assistantEntries({ conversation: "main", main: "main", todos: [todo], sessions, interactions, plans: {}, feed: [], now });
+    expect(got.needsYou.map((item) => item.key)).toEqual(["agent:box-a/s-solo-mixed"]);
+    expect(got.needsYou[0]).toMatchObject({ kind: "agent", asks: [interactions[3]] });
+    expect(got.running.map((item) => item.key).sort()).toEqual(["agent:box-a/s-solo-ro", "task:todo-alpha"]);
   });
 });

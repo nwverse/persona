@@ -1876,6 +1876,19 @@ every platform are described from #13430; this section is the Apple side.
   `apple/Persona/CarPlay`) and the call intents. `-openVoice silent`'s audio (`SilentVoiceAudio`) is core, since a call to
   Persona takes it too. The ratchet counts `apple/Modules/Voice` (and `apple/PersonaCallIntents`); the voice directories
   still in `apple/Persona` count as the core until they move (`guarded_dirs` in `scripts/test/test_apple_module_refs.py`).
+- **`recording`, a flag without a packaged module** (#15214): the recording code is still core app code
+  (`apple/Persona/Recording`), so nothing is registered and `Modules.builtIn` does not list it. The app still follows
+  the hub's `module.recording` flag: `RecordingModule.allowance` asks the registry's hub answer with the descriptor id
+  `recording` (the same `HubModules.allows`). What goes and what stays when it is off: `docs/apple/recording.md`,
+  "With the hub's recording module off (#15214)".
+- **`lark`, the same kind of flag** (#15995): the hub's Lark module is what connects the Lark bot, so the bot's entry
+  points follow `module.lark`. `LarkModule.botEntry` (`apple/Persona/App/LarkModule.swift`) answers the closed
+  `LarkBotEntry` (`offered`, `moduleOff`) from the registry's hub answer with the descriptor id `lark`. With the module
+  off the Lark Bot row leaves Settings › Connectors (and its status is not read), the bot's channel (`feishu`) is not
+  listed or counted in Settings › Channels, and a link or saved place that lands on the bot's page or its channel's page
+  shows the page's title and one line (`ModuleOffPage`) without asking the hub anything. This is not `LarkFeatures`:
+  those are the installed Lark extension's (`lark`, `lark_moments`, …) and keep deciding Settings › Connectors › Lark,
+  Messages, the Inbox's Lark chats and the readers, which use `/api/v1/lark/…` and stay as they are with the module off.
 - **Adding a module.** Give its sources a directory of their own, classify that directory with the module id in
   `schema/module-classification.txt` (`docs/architecture/core-and-modules.md`, "Classification") and add the id to
   `GUARDED` in the ratchet; write a type
@@ -2325,16 +2338,34 @@ built in stages behind the hub's `todo_view`; this section grows with it.
     (`TodosGuardLine`, `TodosListModel.hiddenNeeds`) is the first line while a choice hides what needs the owner;
     once its frame in the list is under what the bars cover (`onGeometryChange` against the list's top inset;
     `onScrollVisibilityChange` never said a list row had gone under a bar), `TodosSubtitle` puts `TodosListModel.subtitle`
-    under the title (`navigationSubtitleWhenSupported`, iOS 26 and later). The search (`TodosListModel.query`) matches the
-    open rows' titles and notes with `localizedStandardContains`, opens every fold and sets the choice aside; its last
-    row presents `AssistantFullSearch` (Persona's chats only) with the words, and a chat picked there opens through
-    `AppModel.openAssistantConversation` once the cover is gone; while it searches the folds are drawn open and do
-    nothing, and the Needs you heading counts its matches in a plain number, so the blue badge only says N. A choice
-    scrolls the list to its top: its first line or row is put at the foot of what is in sight (`anchor: .bottom`), which
-    the list cannot reach, so it stops at its top; a heading's own id put its rows at the top, the heading under the
-    bar. Each view reads
-    only what it draws (the toolbar, the subtitle, the top lines, the headers), so a count or a choice redraws those
-    alone (P5).
+    under the title (`navigationSubtitleWhenSupported`, iOS 26 and later). The search (`TodosListModel.query`) looks
+    through the current assistant's to-dos, open and closed, off the main actor at each key (`TodoSearch.find`,
+    `@concurrent`: the title with `localizedStandardContains`, else the sentence of the notes around
+    `localizedStandardRange`; a newer key cancels a look under way, which stops early), and the layout takes what it
+    found (`TodosListLayout.Input.hits`); until then the page keeps what it drew (`searchedWords`), and a cleared field
+    is the list again at once. A push while it searches compares the cached to-dos' titles and notes (all a search
+    reads) with the ones it looked through and looks through those that changed, on the main actor up to 64, more off
+    it again (`refreshHits`); a look the store started lands as a push does, held while the list is held (`landed`).
+    What was found is each row's own (`TodosListModel.Row.search`), apart from its inputs and `content`, so a key or a
+    cleared field works no row's words out again (P4); while the list is held, the drawn rows keep the hits they were
+    laid out with (`drawnHits`). The results open every fold, set the place and the choice aside, list what closed last
+    under the Filter's Done's days with headings that name Done, and offer no Mark Done
+    (`TodoRowContent.offersMarkDone`); a notes match's sentence is line 2 (`TodoRowContent.found(by:)`, spoken in the
+    line's place, `spoken(_:)`; `TodoFoundText`, two lines, cut about a line's worth before the words,
+    `TodoFoundText.lead(for:)`, and marked by `AssistantSearchMerge.marked`, the chat search's cut and clip, the words
+    in the primary on `Theme.accentTint`). A result draws no answers and offers none among the row's accessibility
+    actions, the row's search state deciding as it does for Mark Done (`TodoRowContent.answers(_:)`: no answers' line,
+    no card, no Undo), while line 2 still says an answer given here and VoiceOver reads it so (`answers?.mark`,
+    `spoken(_:)`). A scroll that rests on the results leaves the place's kept position alone (`TodoWorkspace.rested`);
+    clearing the field brings the place and the choice back, not where the place's list had rested. Its last row
+    presents `AssistantFullSearch` (Persona's chats only) with the words, and a chat picked there opens through
+    `AppModel.openAssistantConversation` once the cover is gone; its identifier is `todos.searchChats` once the results
+    drawn are the field's words' (`todos.searchChats.looking` until the look lands), which the UI tests wait for. While
+    it searches the folds are drawn open and do nothing, and the Needs you heading counts its matches in a plain number,
+    so the blue badge only says N. A choice scrolls the list to its top: its first line or row is put at the foot of
+    what is in sight (`anchor: .bottom`), which the list cannot reach, so it stops at its top; a heading's own id put
+    its rows at the top, the heading under the bar. Each view reads only what it draws (the toolbar, the subtitle, the
+    top lines, the headers), so a count or a choice redraws those alone (P5).
   - **The container and the row.** `.sectionCards()` (the design system's, `listStyle(.insetGrouped)` today) on
     `themedPage()`; rows and Can wait keep the system's cells (`TodoListCell.insets`: `Space.l` at the sides, none
     above or below, set on the row's outermost view in `TodoListView.row`, after its `.id`: set inside the cell, under
@@ -2348,10 +2379,15 @@ built in stages behind the hub's `todo_view`; this section grows with it.
     `TodoTimeWords.separator`, a no-break space before "·". Tests: `TodosFilterTests`, `TodosListLayoutTests`,
     `TodoListContainerTests` (no row background of the list's own), `TodoLineTextTests`, `TodosListModelTests`
     (`theFilterAndItsGuardLine`, `theSortOrdersInsideEachSection`, `aChoiceGoesWithTheFilter`,
-    `aFoldTappedWhileSearchingStaysAsItWas`, `aRowKeepsItsProjectWhereNoHeadingSaysIt`) and the UI suite's
-    `testTheFilterSearchAndNewToDo` and `testTheRowsAreCompact` against `MOCK_TODO_VIEW=1`. `-openTodosChoice <choice>`
-    (DEBUG, `todo`, `in_progress`, …) opens the list on a Filter choice once it draws the Filter, to measure a glide
-    with the guard line in the list.
+    `aFoldTappedWhileSearchingStaysAsItWas`, `aRowKeepsItsProjectWhereNoHeadingSaysIt`), `TodoSearchTests` and
+    `TodoSearchModelTests` (closed matches by day, notes sentences and their marks, no inline action, keys in a burst
+    landing once, a push while searching, a space typed while a large push is looked through, 2,000 to-dos with notes
+    timed in the look, the layout and the model's main-actor landing, push and clear, `TodosListModel.searchCosts`,
+    DEBUG) and the UI suites' `testTheFilterSearchAndNewToDo`, `testTheSearchFindsClosedToDosAndBackKeepsTheWords` (the
+    mock's `done_hours` closes a to-do two days back) and `testTheRowsAreCompact`, and the places suite's
+    `testOpeningASearchResultKeepsThePlace`, against `MOCK_TODO_VIEW=1`.
+    `-openTodosChoice <choice>` (DEBUG, `todo`, `in_progress`, …) opens the list on a Filter choice once it draws the
+    Filter, to measure a glide with the guard line in the list.
   `TodoWorkspace` (one for the app, `TodoWorkspace.shared`, outside the pages' trees) keeps the place and where each
   place's list came to rest, written only while the scene is active and only from the tree the window shows; a page
   made anew puts its list back there once, and a page a to-do popped back to keeps its own place. A list that rested

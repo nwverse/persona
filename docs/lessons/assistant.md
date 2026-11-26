@@ -1,5 +1,10 @@
 # Lessons: assistant (headless Claude / Codex)
 
+- Node preparation can call back into the hub for settings (#16065). Release the database connection before the RPC
+  and use the existing durable start claim and candidate receipt to reconcile it. Recheck the epoch when mapping the
+  receipt and keep late candidate identities for cleanup. A batch larger than the pool should exercise a real
+  same-pool read while the node is still waiting.
+
 - A supervision transcript fixture must not use push policy as its write switch (#15498). Side conversations can
   receive user-level supervision with `hold_pushes=false`; it still writes a user item. Select fake writes by message
   source, keep missing-item injection independent, and name push-held fixtures explicitly. Test both notification
@@ -17,6 +22,7 @@
   direction can retain its recorded assignment while its review reminder goes to main. Authorize that same reviewer
   without authorizing an unrelated conversation or taking over a real supervisor's offline queue; test direct, busy
   and restart-restored delivery with the assignment unchanged.
+
 
 - A scheduled-workout fixture must clear unrelated default routines before admission (#15442). `acceptWorkout`
   appends its task to the existing schedule; unlike `setTasks`, it does not replace the morning and evening routines.
@@ -784,6 +790,10 @@ routes read as typed (`writeDelivered`, `server/internal/assistant/todo_write_ou
 pitfalls from the Agent-send side at the same time, and the two changes now share `sendUnknown` and that type. The
 to-do routes read a little more as in doubt than `sendUnknown` does (a connection that ended mid-answer, any other
 network error). A refusal said "nothing typed" wrongly is the unsafe side: when in doubt, say `unknown`.
+
+After a conversation switch claims segment preparation, a failed receipt lookup can only tell us about that lookup
+(#16066). Keep checking the same operation until its preparation deadline. Starting a replacement before confirming
+the original could leave two prepared segments.
 
 ## Name the thing an event is about, and keep what was done for it (#5718)
 

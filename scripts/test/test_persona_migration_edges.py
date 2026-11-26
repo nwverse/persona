@@ -107,7 +107,7 @@ class PersonaMigrationEdgesTests(unittest.TestCase):
             + "replace github.com/nwverse/persona/sdk/go => ./sdk/go\n")
         shutil.copytree(ROOT / "sdk/go", source / "sdk/go",
                         ignore=shutil.ignore_patterns("*_test.go"), dirs_exist_ok=True)
-        for package in ("compat", "nodeproto", "proto", "dialogwire", "aiwire"):
+        for package in ("compat", "nodeproto", "proto", "dialogwire", "aiwire", "agentviewwire"):
             shutil.copytree(ROOT / "server/internal" / package, source / "internal" / package,
                             ignore=shutil.ignore_patterns("*_test.go"), dirs_exist_ok=True)
         for name in ('paths.go', 'env.go'):
