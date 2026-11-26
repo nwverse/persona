@@ -288,10 +288,49 @@ type Plan struct {
 	Digest       string           `json:"digest"`
 }
 type Preview struct {
-	Status      string    `json:"status"`
-	Sample      bool      `json:"sample"`
-	Plan        *Plan     `json:"plan,omitempty"`
-	Diagnostics []Problem `json:"diagnostics"`
+	Status         string         `json:"status"`
+	Sample         bool           `json:"sample"`
+	Plan           *Plan          `json:"plan,omitempty"`
+	Diagnostics    []Problem      `json:"diagnostics"`
+	SystemDefaults *Rules         `json:"system_defaults,omitempty"`
+	BranchSources  []BranchSource `json:"branch_sources,omitempty"`
+}
+
+type BranchSourceKind string
+
+const (
+	BranchRepositoryDefault BranchSourceKind = "repository_default"
+	BranchExplicit          BranchSourceKind = "explicit_branch"
+	BranchOtherRef          BranchSourceKind = "non_branch_ref"
+)
+
+// BranchSource describes the input available to the branch template, even when
+// preview cannot produce a plan. A default ref does not name a branch yet.
+type BranchSource struct {
+	RepoID string           `json:"repo_id"`
+	Kind   BranchSourceKind `json:"kind"`
+	Branch string           `json:"branch,omitempty"`
+}
+
+func branchSource(repo repositorywire.PreparationRepository) BranchSource {
+	switch repo.RequestedRef.Kind {
+	case "default", "":
+		return BranchSource{RepoID: repo.RepoID, Kind: BranchRepositoryDefault}
+	case "branch":
+		return BranchSource{RepoID: repo.RepoID, Kind: BranchExplicit, Branch: strings.TrimPrefix(repo.RequestedRef.Value, "refs/heads/")}
+	default:
+		return BranchSource{RepoID: repo.RepoID, Kind: BranchOtherRef}
+	}
+}
+
+// Describe supplies preview metadata independently of the target Node version.
+func (p *Preview) Describe(s Source) {
+	p.SystemDefaults = new(Defaults())
+	p.BranchSources = nil
+	for _, repo := range s.Repositories.Repositories {
+		p.BranchSources = append(p.BranchSources, branchSource(repo))
+	}
+	slices.SortFunc(p.BranchSources, func(a, b BranchSource) int { return strings.Compare(a.RepoID, b.RepoID) })
 }
 
 func (p *Preview) add(code, field, repo, severity string) {
@@ -325,6 +364,7 @@ func InPrivateState(path, state string) bool { return within(state, path) }
 // supplies its own path context. Paths are lexical, not ownership attestation.
 func Resolve(s Source, n NodeContext) Preview {
 	p := Preview{Status: "complete", Diagnostics: []Problem{}}
+	p.Describe(s)
 	rules := s.Rules
 	if len(s.Repositories.Repositories) == 0 {
 		rules.BranchTemplate = ""
@@ -442,8 +482,7 @@ func Resolve(s Source, n NodeContext) Preview {
 		v["repo"] = alias
 		v["branch"] = ""
 		v["base-branch"] = ""
-		if repo.RequestedRef.Kind == "branch" {
-			branch := strings.TrimPrefix(repo.RequestedRef.Value, "refs/heads/")
+		if branch := branchSource(repo).Branch; branch != "" {
 			v["branch"] = fragment(branch, 0)
 			v["base-branch"] = v["branch"]
 			if v["branch"] != branch && (strings.Contains(s.Rules.BranchTemplate, "{branch}") || strings.Contains(s.Rules.BranchTemplate, "{base-branch}")) {

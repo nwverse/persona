@@ -8,6 +8,7 @@ import { credentialOwner, setToken } from "../lib/api";
 import { WorkspaceNaming, WorkspaceNamingPreview } from "./WorkspaceNaming";
 import type { WorkspaceNamingPreview as Preview } from "../lib/workspace-naming";
 import type { TaskRepository } from "../lib/task-repositories";
+import previewMetadata from "../../../spec/fixtures/workspace-naming/preview-metadata.json";
 
 vi.mock("../lib/store", () => ({ useStore: (select: (state: { machines: { id: string; name: string }[] }) => unknown) => select({ machines: [
   { id: "box", name: "First computer" }, { id: "other-box", name: "Second computer" },
@@ -16,7 +17,7 @@ vi.mock("../lib/store", () => ({ useStore: (select: (state: { machines: { id: st
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 type Call = { path: string; init: RequestInit; answer: (body: unknown, status?: number) => void };
 let root: Root, host: HTMLDivElement, calls: Call[];
-const defaults = { base_directory: "{home}/workspace", task_directory_template: "task-{task-id}", branch_template: "persona/{task-id}" };
+const defaults = previewMetadata.system_defaults;
 const settings = { manager: "assistant", machine_id: "box", workspace_naming_version: "workspace-naming/v1", workspace_rules: {}, effective_workspace_rules: defaults };
 const button = (label: string) => [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.trim() === label)!;
 const click = (label: string) => act(async () => { expect(button(label), label).toBeTruthy(); button(label).click(); });
@@ -60,6 +61,33 @@ it("loads blank defaults on demand and clears a custom override with null", asyn
   await render(); await click("Workspace naming"); await answer(calls.at(-1)!, settings);
   expect(document.querySelectorAll("input")[1].value).toBe("");
   expect(document.querySelectorAll("input")[1].placeholder).toBe(`System default: ${defaults.task_directory_template}`);
+});
+
+it("shows the manager's system defaults independently of saved assistant values", async () => {
+  const serverDefaults = { ...defaults, base_directory: "{home}/projects" };
+  await render();
+  await click("Workspace naming");
+  await answer(calls[0], {
+    ...settings,
+    system_defaults: serverDefaults,
+    workspace_rules: { base_directory: "{home}/custom" },
+    effective_workspace_rules: { ...defaults, base_directory: "{home}/custom" },
+  });
+  const base = document.querySelector<HTMLInputElement>("input")!;
+  expect(base.value).toBe("{home}/custom");
+  expect(base.placeholder).toBe("System default: {home}/projects");
+});
+
+it("explains a missing default branch from the preview without displaying a guessed branch", async () => {
+  await render();
+  await click("Workspace naming");
+  await answer(calls[0], { ...settings, system_defaults: defaults });
+  await click("Preview naming");
+  await answer(calls.at(-1)!, { ...previewMetadata, sample: true, status: "incomplete",
+    diagnostics: [{ code: "field_unavailable", field: "branch_template", repo_id: "api", severity: "error" }] });
+  expect(document.querySelector("input[aria-invalid=true]")?.getAttribute("value")).toBe("");
+  expect(document.querySelector("[role=alert]")?.textContent).toContain("The preview uses the repository’s default branch.");
+  expect(document.querySelector("[data-naming-branch]")).toBeNull();
 });
 
 it("keeps failed drafts and refreshes saved values without discarding local edits", async () => {
