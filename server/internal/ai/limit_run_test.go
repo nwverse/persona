@@ -95,8 +95,7 @@ func TestRunTimeoutBudgetAndConsecutiveFailures(t *testing.T) {
 }
 
 func TestRunGateIdentity(t *testing.T) {
-	cfg := runConfig(t)
-	cfg.ViaMachine, cfg.RunLauncher = "a/b", "c"
+	cfg := Config{ViaMachine: "a/b", RunLauncher: "c", Model: t.Name()}
 	t.Cleanup(func() { gates.Delete(runKey(cfg)) })
 	other := cfg
 	other.ReasoningEffort = "high"
@@ -126,9 +125,10 @@ func TestRunGateIdentity(t *testing.T) {
 	if err := call(c); err != nil || Held(c.Config()) != nil {
 		t.Fatalf("HTTP connection: %v, pause = %v", err, Held(c.Config()))
 	}
-	cfg.RunLauncher = ""
+	ungated := cfg
+	ungated.RunLauncher = ""
 	for range 3 {
-		if err := runResult(t.Context(), cfg, context.DeadlineExceeded); err != context.DeadlineExceeded {
+		if err := runResult(t.Context(), ungated, context.DeadlineExceeded); err != context.DeadlineExceeded {
 			t.Fatalf("callback without a launcher = %v", err)
 		}
 	}
