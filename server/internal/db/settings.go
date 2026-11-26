@@ -239,27 +239,39 @@ func (d *DB) PutSetting(ctx context.Context, key string, v any) error {
 // categories it sets, the launchers and what it replaced together, docs/assistant/model-profiles.md). Only keys of this
 // database's own: a hub key, kept for an older hub too, goes through PutSetting.
 func (d *DB) PutSettings(ctx context.Context, values map[string]any) error {
+	keys, raws, err := encodeSettings(values)
+	if err != nil {
+		return err
+	}
+	return pgx.BeginFunc(ctx, d.pool, func(tx pgx.Tx) error {
+		return putSettings(ctx, tx, d.settingsTable(), keys, raws)
+	})
+}
+
+func encodeSettings(values map[string]any) ([]string, [][]byte, error) {
 	keys := slices.Sorted(maps.Keys(values)) // one lock order
 	raws := make([][]byte, len(keys))
 	for i, key := range keys {
 		if isHubKey(key) {
-			return fmt.Errorf("put settings: %s is a hub key", key)
+			return nil, nil, fmt.Errorf("put settings: %s is a hub key", key)
 		}
 		raw, err := json.Marshal(values[key])
 		if err != nil {
-			return err
+			return nil, nil, err
 		}
 		raws[i] = raw
 	}
-	return pgx.BeginFunc(ctx, d.pool, func(tx pgx.Tx) error {
-		for i, key := range keys {
-			if _, err := tx.Exec(ctx, `INSERT INTO `+d.settingsTable()+` (key, value, updated_at) VALUES ($1, $2, now())
-				ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = now()`, key, raws[i]); err != nil {
-				return err
-			}
+	return keys, raws, nil
+}
+
+func putSettings(ctx context.Context, q execer, table string, keys []string, raws [][]byte) error {
+	for i, key := range keys {
+		if _, err := q.Exec(ctx, `INSERT INTO `+table+` (key, value, updated_at) VALUES ($1, $2, now())
+			ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = now()`, key, raws[i]); err != nil {
+			return err
 		}
-		return nil
-	})
+	}
+	return nil
 }
 
 // execer is a pool or a transaction.
@@ -308,13 +320,16 @@ func (d *DB) CompareSetting(ctx context.Context, key string, revision int64, val
 	if err != nil {
 		return false, err
 	}
-	table := d.settingsTable()
-	tag, err := d.pool.Exec(ctx, `INSERT INTO `+table+` AS s (key, value, updated_at)
+	return compareSetting(ctx, d.pool, d.settingsTable(), key, revision, raw)
+}
+
+func compareSetting(ctx context.Context, q execer, table, key string, revision int64, raw json.RawMessage) (bool, error) {
+	tag, err := q.Exec(ctx, `INSERT INTO `+table+` AS s (key, value, updated_at)
 		SELECT $1, $2::jsonb, now() WHERE $3::bigint = 0
 		ON CONFLICT (key) DO UPDATE SET value = $2::jsonb, updated_at = now()
 		WHERE COALESCE((s.value->>'revision')::bigint, 0) = $3`, key, raw, revision)
 	if revision != 0 && err == nil && tag.RowsAffected() == 0 {
-		tag, err = d.pool.Exec(ctx, `UPDATE `+table+` SET value = $2::jsonb, updated_at = now()
+		tag, err = q.Exec(ctx, `UPDATE `+table+` SET value = $2::jsonb, updated_at = now()
 			WHERE key = $1 AND COALESCE((value->>'revision')::bigint, 0) = $3`, key, raw, revision)
 	}
 	return tag.RowsAffected() == 1, err

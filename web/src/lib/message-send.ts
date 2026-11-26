@@ -3,10 +3,10 @@ import { onConversationDeleted } from "./conversation-deleted";
 import { useSyncExternalStore } from "react";
 import { credentialOwner, getToken, onCredentialChange, sessionPath } from "./api";
 import { BASE } from "./base";
-import { stateOf } from "./format";
+import { activityOf } from "./format";
 import { MANAGER_HEADER, managerHeaderFor, onManagerChoice, shownManager } from "./manager-choice";
 import type { Item, Session } from "./types";
-import { sameMessage } from "./queue";
+import { sameMessage } from "./echo";
 
 interface FeedbackDeps {
   getSession(mid: string, sid: string): Session | undefined;
@@ -78,7 +78,7 @@ function create(mid: string, sid: string, id: string, old = flights.get(key(mid,
     flights.delete(key(first.mid, first.sid, first.id));
   }
   const row = deps.getSession(mid, sid);
-  const e: Flight = { mid, sid, id, scope: scope(), phase: "sending", feedback: "sending", since: row?.state_since, state: row && stateOf(row), queued: row?.queued ?? [], failure: row?.failure_reason, at: old?.at, retry: Boolean(old) };
+  const e: Flight = { mid, sid, id, scope: scope(), phase: "sending", feedback: "sending", since: row?.state_since, state: row && activityOf(row), queued: row?.queued ?? [], failure: row?.failure_reason, at: old?.at, retry: Boolean(old) };
   const page = pages.get(key(mid, sid, ""));
   e.baseSeq = page?.scope === e.scope ? page.seq : undefined;
   e.work = row?.work?.phase;
@@ -157,15 +157,15 @@ export function stopMessageFeedback(mid: string, sid: string) {
   for (const e of flights.values()) if (e.mid === mid && e.sid === sid && current(e) && (e.phase === "delivered" || e.echoed)) { e.settled = true; end(e); }
   publish();
 }
-export function messageFeedback(mid: string, sid: string, id?: string): SendFeedback | undefined {
+export function messageFeedback(mid: string, sid: string, id?: string, exclude?: ReadonlySet<string>): SendFeedback | undefined {
   const entries = id !== undefined ? [flights.get(key(mid, sid, id))] : flights.values();
   let feedback: SendFeedback | undefined;
   // Later nonempty feedback wins; keep "" when all matching flights have ended.
-  for (const e of entries) if (e && e.mid === mid && e.sid === sid && current(e)) feedback = e.feedback || feedback || "";
+  for (const e of entries) if (e && e.mid === mid && e.sid === sid && !exclude?.has(e.id) && current(e)) feedback = e.feedback || feedback || "";
   return feedback;
 }
-export function useMessageFeedback(mid: string, sid: string, id?: string) {
-  return useSyncExternalStore((f) => { listeners.add(f); return () => { listeners.delete(f); }; }, () => messageFeedback(mid, sid, id), () => undefined);
+export function useMessageFeedback(mid: string, sid: string, id?: string, exclude?: ReadonlySet<string>) {
+  return useSyncExternalStore((f) => { listeners.add(f); return () => { listeners.delete(f); }; }, () => messageFeedback(mid, sid, id, exclude), () => undefined);
 }
 export function observeMessageItems(mid: string, sid: string, items: Item[]) {
   const owner = scope();
@@ -216,7 +216,7 @@ function handoffAuthority() {
     if (!e.feedback || !current(e)) continue;
     const row = deps.getSession(e.mid, e.sid);
     if (!row) continue;
-    const state = stateOf(row);
+    const state = activityOf(row);
     const queued = e.text && (row.queued ?? []).filter(q => sameMessage(q, e.text!)).length > e.queued.filter(q => sameMessage(q, e.text!)).length;
     const fresh = e.state !== "working" && (row.state_since !== e.since || state !== e.state);
     const executing = (fresh || e.phase === "delivered" || e.echoed) && (state === "working" || state === "needs_you");

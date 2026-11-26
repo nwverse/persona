@@ -1,4 +1,5 @@
-// Start an agent on one of your computers: machine, folder (recent ones first), the first message, and at the right of its
+// Start an agent on one of your computers: machine, folder (browse-first breadcrumb path picker with secondary Recent view,
+// #14595), the first message, and at the right of its
 // box the model pill (#5104, as Cindy's new task: the user picks a model in the unified model panel, the launcher and its
 // engine come with it; views/NewAgentModel.tsx), where the profile's presets (#2225), the thinking effort and Claude Code's
 // ultracode switch (#3428: off each time, never remembered) also are. On top, the recent setups (#2134): a tap fills every
@@ -20,6 +21,7 @@ import { startCompare } from "../lib/compare-runner";
 import { MAX_RUNS } from "../lib/compare-runs";
 import type { WorkspaceTarget } from "../lib/workspace-target";
 import { useWorkspaceCatalog, workspaceTarget, type HostWorkspace } from "../lib/workspace-catalog";
+import { directoryKey } from "../lib/workspace-directory";
 import { startChoices, startGroups } from "../lib/workspace-start";
 import { WorkspaceChoices } from "./NewAgentWorkspaces";
 import { AttachmentTray } from "../ui/AttachmentTray";
@@ -27,7 +29,7 @@ import { agentId, providerAgent } from "../lib/agent-kind";
 import { modelPurpose, modelSummary, type ModelBinding } from "../lib/model-config";
 import { formatFollowDetail, resolveFollowBinding, resolvedStartModel } from "../lib/new-agent-follow";
 import {
-  effortChoices, effortRule, fitEffort, followedBinding, inlineTextStart, launcherAgent, listedModes, machineLaunchers, nativeOmpStart, pickerLauncher, startCatalogHost, startPicks, takesEffort, tierLeftOut, type PickerTier,
+  effortChoices, effortRule, fitEffort, followedBinding, inlineTextStart, launcherAgent, listedModes, machineLaunchers, nativeOmpStart, pickerLauncher, startCatalogHost, startPicks, tierLeftOut, type PickerTier,
   type UnavailableLauncher,
 } from "../lib/launcher-models";
 import { choiceCarries, type ModelChoice } from "../lib/new-agent-panel";
@@ -37,11 +39,13 @@ import {
   clearRecentSetups, forgetSetup, formHolds, loadRecentSetups, machineModel, recentCards, rememberSetup, setupKey, setupTime, type RecentCard, type RecentSetup,
 } from "../lib/recent-setups";
 import { baseName, shortPath } from "../lib/format";
+import { orderRecentFolders, pathBreadcrumbs } from "../lib/folder-picker";
 import { startingWith, typedFolder } from "../lib/typed-folder";
 import { addAgentWorktree, agentBranch, agentNameHint, suggestedPath, worktreeStatus, type WorktreeStatus } from "../lib/worktree";
 import { getState, useStore } from "../lib/store";
 import type { Launcher, Machine } from "../lib/types";
 import { Button, cx, Dialog, IconButton, Menu, Spinner, Switch, toast, useMenu } from "../ui/atoms";
+import { SegmentedTrack } from "../ui/Segmented";
 import { Pill } from "./settings/SettingsParts";
 import { startBlocked, ultracodeStartOffered } from "../lib/ultracode";
 import { UltracodeStartRow } from "./chat/Ultracode";
@@ -164,6 +168,9 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   // the listed folder's subfolders kept: those starting with this ("": all), for a typed path naming no folder yet
   const [dirsPrefix, setDirsPrefix] = useState("");
   const [browse, setBrowse] = useState("");
+  // Browse-first path picker (#14595): Recent folders sit behind a secondary toggle rather than crowding the browser.
+  const [folderView, setFolderView] = useState<"browse" | "recent">("browse");
+  const breadcrumbRef = useRef<HTMLElement>(null);
   // The folder the list follows (#9452, lib/typed-folder.ts): the folder field's text, filled in (the last start's, a card's, a
   // recent row's) or typed once typing pauses. Browsing from the list takes over until the field changes again.
   const [follow, setFollow] = useState({ text: "", typed: false });
@@ -171,17 +178,31 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   useEffect(() => () => clearTimeout(typing.current), []);
   const typeCwd = (text: string) => {
     pickCwd(text);
+    setFolderView("browse");
     clearTimeout(typing.current);
     typing.current = setTimeout(() => {
       setFollow({ text, typed: true });
       setBrowse("");
     }, 250);
   };
-  // the list shows a folder filled in: its subfolders, under the recent folders
+  // the list shows a folder filled in: its subfolders in Browse view
   const followFilled = (dir: string) => {
     clearTimeout(typing.current);
     setFollow({ text: dir, typed: false });
     setBrowse("");
+    setFolderView("browse");
+  };
+  // Single-state folder navigation (#14595): navigating in the picker always keeps cwd, breadcrumbs, and subfolders in lockstep.
+  const navigateFolder = (dir: string) => {
+    clearTimeout(typing.current);
+    pickCwd(dir);
+    setBrowse(dir);
+    setFolderView("browse");
+  };
+  const clearCwd = () => {
+    setCwd("");
+    setCwdPicked(false);
+    followFilled("");
   };
   const [loadingDirs, setLoadingDirs] = useState(false);
   const [prompt, setPrompt] = useState(() => localStorage.getItem("draft:new-agent") ?? "");
@@ -277,6 +298,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     setWtBranch("");
     setWtError("");
     setRunTimes(1);
+    setFolderView("browse");
   }, [open]);
   // a worktree of its own (#6115): offered for a folder in a Git repository (what the computer says of it), off each
   // time the sheet opens
@@ -293,7 +315,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     setWtBusy(false);
     setWtError("");
     return retirePreparation;
-  }, [open, preset, mid, cwd, workspace, manager, credential, targetOnline]);
+  }, [open, preset, mid, cwd, cwdPicked, workspace, manager, credential, targetOnline]);
   useLayoutEffect(() => {
     if (!open) setProjectDocument(null);
   }, [open]);
@@ -367,10 +389,12 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
       setInWorktree(false);
       return;
     }
-    if (preset.machineId && preset.cwd && online.some((m) => m.id === preset.machineId)) {
-      presetCwd.current = { mid: preset.machineId, cwd: preset.cwd };
+    if (preset.machineId) {
       setMid(preset.machineId);
-      pickCwd(preset.cwd);
+      if (preset.cwd !== undefined) {
+        presetCwd.current = { mid: preset.machineId, cwd: preset.cwd };
+        pickCwd(preset.cwd);
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, preset]);
@@ -390,8 +414,8 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   };
 
   useEffect(() => {
-    // a preset's computer (set just above, in the same commit) is not overridden by the first one online
-    if (open && !workspace && !preset?.workspace && !presetCwd.current && (!mid || !online.some((m) => m.id === mid)) && online[0]) setMid(online[0].id);
+    // Keep an explicit target if it disconnects. Starting elsewhere requires a new computer selection.
+    if (open && !workspace && !preset?.workspace && !preset?.machineId && !presetCwd.current && !online.some(m => m.id === mid) && online[0]) setMid(online[0].id);
   }, [open, online, mid, workspace, preset]);
 
   // The launcher a computer's pick puts in once its launchers are read, and the model that goes with it (#2134): a card's own
@@ -475,6 +499,12 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
           if (card) pendingSetup.current = null;
           carrying.current = null;
           restoreLauncher(mid, card, ls, effective, carry);
+          const expectedSource = preset?.launcher === "codex-app" ? "codex_app" : preset?.launcher === "claude-desktop" ? "claude_desktop" : undefined;
+          if (!card && !carry && !touched.current && preset?.machineId === mid && preset.launcher && ls.some((l) => l.name === preset.launcher && (!expectedSource || l.source === expectedSource))) {
+            setLauncher(preset.launcher);
+            setModel("");
+            setEffort("");
+          }
         })
         // the computer read last only: another one picked meanwhile aborted this read
         .catch((e) => { if (!signal.aborted) setUnread({ mid, reason: errorText(e) }); })
@@ -517,7 +547,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   const listLauncher = launchersOf === mid ? pickerLauncher(launcher, followed) : "";
   const listEntry = launchers.find((l) => l.name === listLauncher);
   const desktopStart = startsInDesktopApp(listEntry);
-  const opensIn = workspace?.host ?? (desktopStart ? undefined : host || undefined);
+  const opensIn = desktopStart ? undefined : workspace?.host ?? (host || undefined);
   const picked = online.find((m) => m.id === mid);
   const hosts = picked ? startHosts(picked) : [];
   const hostDefault = picked ? currentHosts(picked).default : "";
@@ -559,7 +589,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     const targetLauncher = launchers.find((l) => l.name === x.launcher);
     const targetListed = listedModes(targetLauncher);
     const targetAgent = launcherAgent(x.launcher, launchers, undefined);
-    const targetClaudeModes = takesEffort(targetAgent) && !targetListed;
+    const targetClaudeModes = effortRule(targetAgent) === "any" && !targetListed;
     if (targetListed) {
       setMode(base.mode);
       setProviderMode(x.permission_mode && targetListed.includes(x.permission_mode) ? x.permission_mode : "");
@@ -599,13 +629,12 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     }
   }, [open, opensIn, nativeOmp, listLauncher, agent]);
   // what a start on it takes besides the model (#8261): Claude Code's modes and efforts, or the permission modes a
-  // launcher lists (Paseo's other providers) and the efforts its model lists, or neither (Codex keeps its own)
-  const claudeModes = takesEffort(agent) && !listedModes(listEntry);
+  // launcher lists (Paseo's other providers) and the efforts its model lists, or Codex's reported efforts alone
+  const claudeModes = effortRule(agent) === "any" && !listedModes(listEntry);
   const providerModes = claudeModes || nativeOmp ? undefined : listedModes(listEntry);
-  // Codex takes its first message with the start (lib/new-agent.ts); a computer that can opens it without one too
-  // (prompt_optional, docs/integrations/codex.md "Starting without a first message"), an older one needs it
+  // Codex CLI can omit the first message when prompt_optional is advertised. The App needs one to expose its new chat.
   const codex = agent === "codex";
-  const needsFirst = codex && launchers.find((l) => l.name === listLauncher)?.prompt_optional !== true;
+  const needsFirst = codex && (desktopStart || listEntry?.prompt_optional !== true);
   const documentHost = opensIn ?? hostDefault;
   // An explicit launcher family must agree with the catalog. Older Claude entries use launcherAgent's default.
   const documentAgent = listEntry?.agent_type || listEntry?.agent || agent;
@@ -636,8 +665,23 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   // A start in a desktop app (lib/desktop-start.ts, #5480 Claude's, #5726 the Codex App): no folder picked is a temporary
   // session, browsing starts in the folder holding the app's projects (worked out when the computer or the launcher
   // changes, not on every push), and a new folder may be named.
-  const codexApp = listEntry?.source === CODEX_APP_SOURCE;
-  const desktopScratch = desktopStart && !cwdPicked && !workspace;
+  const desktopSource = listEntry?.source;
+  const codexApp = desktopSource === CODEX_APP_SOURCE;
+  const desktopScratch = desktopStart && (!cwdPicked || !cwd.trim()) && !workspace;
+  const presetProject = desktopStart && preset?.machineId === mid && preset.launcher === listLauncher ? preset.desktopProjectId : undefined;
+  const projectRoots = catalog.owner === credential && catalog.manager === manager
+    ? catalog.workspaces.filter((w) => w.machine_id === mid && w.source === desktopSource && w.source_id === presetProject).map((w) => w.cwd) : [];
+  const projectForDirectory = (directory: string) => {
+    const selectedDirectory = directoryKey(directory);
+    return presetProject && selectedDirectory && (projectRoots.length ? projectRoots : [preset?.cwd ?? ""]).some((path) => {
+      const root = directoryKey(path);
+      return root !== null && (selectedDirectory === root || selectedDirectory.startsWith(root.endsWith("/") ? root : `${root}/`));
+    }) ? presetProject : undefined;
+  };
+  const desktopProjectId = projectForDirectory(desktopScratch ? "" : cwd.trim());
+  const presetSource = preset?.launcher === "codex-app" ? "codex_app" : preset?.launcher === "claude-desktop" ? "claude_desktop" : undefined;
+  const presetUnavailable = Boolean(presetSource && preset?.machineId === mid && !loadingModels && !touched.current
+    && !launchers.some((l) => l.name === preset.launcher && l.source === presetSource));
   // not for a start handed in for something of its own (Inbox's "New agent…", #5933): that waits for one Agent
   const runsOffered = inWorktree && worktreeOffered && !desktopScratch && !preset?.onStarted;
   const runCount = runsOffered ? runTimes : 1;
@@ -681,6 +725,14 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     return () => controller.abort();
   }, [open, mid, listing, nearPath, nearPrefix, workspace, manager, credential]);
   useEffect(() => { if (!desktopStart) setNaming(false); }, [desktopStart]);
+  const recentFolders = useMemo(() => orderRecentFolders(dirs?.recent), [dirs?.recent]);
+  const showRecent = folderView === "recent" && recentFolders.length > 0;
+  const breadcrumbs = useMemo(() => pathBreadcrumbs(dirs?.path ?? ""), [dirs?.path]);
+  const visibleEntries = useMemo(() => startingWith(dirs?.entries, dirsPrefix), [dirs?.entries, dirsPrefix]);
+  useLayoutEffect(() => {
+    const nav = breadcrumbRef.current;
+    if (nav) nav.scrollLeft = nav.scrollWidth;
+  }, [dirs?.path, showRecent]);
   const defaultRuns = unified && launchersOf === mid ? pickerLauncher("", followedBinding("", configured)) : "";
   const defaultEntry = launchers.find((l) => l.name === defaultRuns);
   const defaultBlock = defaultRuns ? launcherBlock(defaultEntry) : null;
@@ -688,11 +740,15 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   const helpBlock = helpLauncher ? launcherBlock(helpLauncher) : null;
   // what a launcher ID is called (#5029): this computer's launchers first, then the model configuration's providers
   const names: Named[] = [...launchers, ...providerNames];
-  const efforts = effortChoices(models.list, model, followed, effortRule(agent, listEntry));
+  const rule = effortRule(agent, listEntry);
+  const efforts = effortChoices(models.list, model, followed, rule);
   const effortsKey = efforts.join(" ");
-  useEffect(() => { setEffort((e) => fitEffort(e, effortsKey ? effortsKey.split(" ") : [])); }, [effortsKey]);
+  const effortsSettled = rule !== "listed" || models.list !== undefined || Boolean(models.error);
+  useEffect(() => {
+    if (effortsSettled) setEffort((e) => fitEffort(e, effortsKey ? effortsKey.split(" ") : []));
+  }, [effortsKey, effortsSettled]);
   // offered with Claude Code whose effort can be set here; grayed when this computer's Claude Code is known to be too old
-  const ultracodeShown = !loadingModels && efforts.length > 0 && ultracodeStartOffered(features, agent);
+  const ultracodeShown = !desktopStart && !loadingModels && efforts.length > 0 && ultracodeStartOffered(features, agent);
   // what of the picked preset this launcher can't take, said once its list is in
   const startModelOptions = { agent, list: models.list, followed, launcher: listEntry, nativeOmp };
   const tierMissed = tier && listLauncher === tier.launcher && (models.list !== undefined || (agent === "omp" && models.error)) ? tierLeftOut(tier, startModelOptions) : [];
@@ -704,7 +760,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   // The recent setups' cards (#2134): not when another page opened the sheet on a folder of its own (a space's or a
   // knowledge entry's New agent), which a card would replace.
   const cards = useMemo(() => recentCards(recents, machines), [recents, machines]);
-  const presetFolder = Boolean(preset?.machineId && preset.cwd);
+  const presetFolder = Boolean(preset?.machineId && preset.cwd !== undefined);
   const settled = launchersOf === mid && !loadingModels;
   const pickedCard = pickedSetup ? cards.find((c) => setupKey(c.setup) === pickedSetup) : undefined;
   const pickedShown = pickedCard && (!settled || formHolds(pickedCard.setup, { machine: mid, cwd, launcher, model, mode, effort })) ? pickedSetup : "";
@@ -736,7 +792,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   };
 
   const start = () => {
-    if (!open || submitted.current || loadingModels || !workspaceCurrent || !online.some((m) => m.id === mid) || !(cwd.trim() || desktopScratch)) return;
+    if (!open || submitted.current || loadingModels || presetUnavailable || !workspaceCurrent || !online.some((m) => m.id === mid) || !(cwd.trim() || desktopScratch) || (needsFirst && !prompt.trim() && !projectDocument)) return;
     if (documentBlocked || (projectDocument && (projectDocument.owner !== credentialOwner()
       || projectDocument.manager !== (getState().machines.find((m) => m.id === mid)?.manager || defaultManager())))) return;
     // Read ownership at admission too: credential/store changes can precede React's next render.
@@ -781,7 +837,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
       : undefined;
     // what every start of this sheet goes with (each run of a comparison too)
     const launcherDefaultEffort = agent === "agy" && !!launcher && !picks.effort;
-    const target = { launcher: projectDocument ? listLauncher : launcher, ...picks,
+    const target = { launcher: projectDocument || desktopStart ? listLauncher : launcher, ...picks,
       nameHint: projectDocument ? `${projectDocument.snapshot.project}/${projectDocument.snapshot.document} r${projectDocument.snapshot.revision}` : undefined,
       launcherDefaultEffort: launcherDefaultEffort || undefined, permissionMode: permissionMode || undefined,
       host: projectDocument ? documentHost : opensIn, ultracode: ultra,
@@ -796,7 +852,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
       // The launch owns its previews; removing or unmounting the editable draft cannot revoke them.
       const sent = snapshot.attachments.map((a) => ({ ...a, url: a.url ? URL.createObjectURL(a.file) : undefined }));
       rememberSetup({ ...setup, at: setupTime() });
-      const id = launchAgent({ machineId: mid, cwd: dir, workspaceId, ...target, ...launchDisplay, text: snapshot.text, attachments: sent });
+      const id = launchAgent({ machineId: mid, cwd: dir, workspaceId: desktopStart ? undefined : workspaceId, desktopProjectId: projectForDirectory(dir), ...target, ...launchDisplay, text: snapshot.text, attachments: sent });
       if (onStarted) whenStarted(id, onStarted);
       const ids = new Set(snapshot.attachments.map((a) => a.id));
       releaseAttachments(attachmentsRef.current.filter((a) => ids.has(a.id)));
@@ -912,13 +968,15 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
             <Button tone="quiet" onClick={dismiss}>
               {t("common.cancel")}
             </Button>
-            <Button tone="primary" busy={wtBusy} disabled={loadingModels || !workspaceCurrent || !targetOnline || !(cwd.trim() || desktopScratch) || Boolean(documentBlocked) || (needsFirst && !prompt.trim() && !projectDocument)} onClick={start}>
+            <Button tone="primary" busy={wtBusy} disabled={loadingModels || presetUnavailable || !workspaceCurrent || !targetOnline || !(cwd.trim() || desktopScratch) || Boolean(documentBlocked) || (needsFirst && !prompt.trim() && !projectDocument)} onClick={start}>
               {runCount > 1 ? t("newagent.start_runs", { count: runCount }) : t("newagent.start")}
             </Button>
           </>
         }
       >
         <div ref={formTop} className="flex flex-col gap-4">
+          {presetUnavailable && <p role="alert" className="text-xs text-red">{t("newagent.desktop_unavailable", { app: presetSource === "codex_app" ? "Codex" : "Claude" })}</p>}
+          {presetProject && !desktopProjectId && <p role="status" className="text-xs text-ink-3">{t("newagent.desktop_project_detached")}</p>}
           {cards.length > 0 && !presetFolder && (
             <RecentSetups
               names={names}
@@ -974,40 +1032,136 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
           </Field>}
           <Field label={t("newagent.folder")}>
             {desktopScratch && <Suspense fallback={null}><DesktopTemporaryRow codex={codexApp} /></Suspense>}
-            <input
-              value={desktopScratch ? "" : cwd}
-              onChange={(e) => typeCwd(e.target.value)}
-              placeholder={t("newagent.folder_placeholder")}
-              spellCheck={false}
-              className="h-9 w-full rounded-control bg-inset px-3 font-mono text-[12.5px] text-ink shadow-hairline outline-none placeholder:font-sans placeholder:text-ink-3 focus:shadow-[0_0_0_1px_var(--line-strong)]"
-            />
-            <div className="mt-1.5 max-h-52 overflow-y-auto rounded-control bg-surface p-1 shadow-hairline">
-              {!browse && !(following && follow.typed) && (dirs?.recent?.length ?? 0) > 0 && (
-                <>
-                  <div className="px-2 pt-1 pb-0.5 text-[10.5px] font-medium tracking-[0.06em] text-ink-3 uppercase">{t("newagent.recent")}</div>
-                  {dirs!.recent!.slice(0, 6).map((d) => (
-                    <DirRow key={d.path} name={d.name || baseName(d.path)} path={d.path} sub={shortPath(d.path)} selected={!desktopScratch && cwd === d.path} onPick={() => { pickCwd(d.path); followFilled(d.path); }} />
-                  ))}
-                </>
-              )}
-              <div className="flex items-center gap-1 px-2 pt-1.5 pb-0.5 text-[10.5px] font-medium tracking-[0.06em] text-ink-3 uppercase">
-                {listing && dirs?.parent !== undefined && (
-                  <button type="button" aria-label={t("newagent.parent_folder")} onClick={() => setBrowse(dirs!.parent!)} className="-ml-1 flex size-4.5 items-center justify-center rounded-[4px] hover:bg-hover hover:text-ink">
-                    <Icon name="chevronLeft" size={12} stroke={2.4} />
-                  </button>
+            <div className="relative">
+              <input
+                value={desktopScratch ? "" : cwd}
+                onChange={(e) => typeCwd(e.target.value)}
+                placeholder={t("newagent.folder_placeholder")}
+                spellCheck={false}
+                className={cx(
+                  "h-9 w-full rounded-control bg-inset px-3 font-mono text-[12.5px] text-ink shadow-hairline outline-none placeholder:font-sans placeholder:text-ink-3 focus:shadow-[0_0_0_1px_var(--line-strong)]",
+                  !desktopScratch && cwd && "pr-8",
                 )}
-                <span className="min-w-0 flex-1 truncate normal-case tracking-normal">{dirs?.path ? shortPath(dirs.path) : t("newagent.home_folder")}</span>
-                {loadingDirs && <Spinner size={10} />}
-                {desktopStart && dirs?.path && !naming && <Suspense fallback={null}><NewFolderButton onClick={() => setNaming(true)} /></Suspense>}
-              </div>
-              {naming && dirs?.path && (
-                <Suspense fallback={null}>
-                  <NewFolderNaming key={dirs.path} folder={dirs.path} onCancel={() => setNaming(false)} onUse={(made) => { pickCwd(made); setNaming(false); }} />
-                </Suspense>
+              />
+              {!desktopScratch && cwd && (
+                <button
+                  type="button"
+                  aria-label={t("newagent.clear_folder")}
+                  onClick={clearCwd}
+                  className="touch-hit absolute top-1/2 right-1.5 flex size-6 -translate-y-1/2 items-center justify-center rounded-[4px] text-ink-3 hover:bg-hover hover:text-ink"
+                >
+                  <Icon name="x" size={12} stroke={2.2} />
+                </button>
               )}
-              {startingWith(dirs?.entries, dirsPrefix).map((d) => (
-                <DirRow key={d.path} name={d.name} path={d.path} git={d.is_git} selected={!desktopScratch && cwd === d.path} onPick={() => pickCwd(d.path)} onOpen={() => setBrowse(d.path)} />
-              ))}
+            </div>
+            <div className="mt-1.5 flex max-h-52 flex-col overflow-hidden rounded-control bg-surface shadow-hairline">
+              <div className="flex shrink-0 items-center gap-1.5 border-b border-line px-2 py-1">
+                {showRecent ? (
+                  <span className="min-w-0 flex-1 truncate text-submeta font-medium text-ink-3">{t("newagent.recent_folders")}</span>
+                ) : (
+                  <div className="flex min-w-0 flex-1 items-center gap-1">
+                    {dirs?.parent && dirs.parent !== dirs.path && (
+                      <button
+                        type="button"
+                        aria-label={t("newagent.parent_folder")}
+                        onClick={() => navigateFolder(dirs.parent!)}
+                        className="touch-hit -ml-1 flex size-5 shrink-0 items-center justify-center rounded-[4px] text-ink-3 hover:bg-hover hover:text-ink"
+                      >
+                        <Icon name="chevronLeft" size={12} stroke={2.4} />
+                      </button>
+                    )}
+                    {breadcrumbs.length > 0 ? (
+                      <nav ref={breadcrumbRef} aria-label={t("newagent.folder_path")} className="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto text-label">
+                        {breadcrumbs.map((seg, i) => {
+                          const last = i === breadcrumbs.length - 1;
+                          return (
+                            <span key={seg.path} className="flex shrink-0 items-center gap-0.5">
+                              {i > 0 && <span aria-hidden className="px-0.5 text-ink-3">/</span>}
+                              <button
+                                type="button"
+                                data-breadcrumb-path={seg.path}
+                                aria-current={last ? "location" : undefined}
+                                title={seg.path}
+                                onClick={() => navigateFolder(seg.path)}
+                                className={cx(
+                                  "touch-hit rounded-[4px] px-1 py-0.5 whitespace-nowrap transition-colors hover:bg-hover hover:text-ink",
+                                  last ? "font-medium text-ink" : "text-ink-2",
+                                )}
+                              >
+                                {seg.label}
+                              </button>
+                            </span>
+                          );
+                        })}
+                      </nav>
+                    ) : (
+                      <span className="min-w-0 flex-1 truncate text-label text-ink-3">{t("newagent.home_folder")}</span>
+                    )}
+                  </div>
+                )}
+                {loadingDirs && <Spinner size={10} />}
+                {!showRecent && desktopStart && dirs?.path && !naming && <Suspense fallback={null}><NewFolderButton onClick={() => setNaming(true)} /></Suspense>}
+                {recentFolders.length > 0 && (
+                  <SegmentedTrack
+                    role="tablist"
+                    label={t("newagent.folder_view")}
+                    data-testid="folder-view-toggle"
+                    className="flex h-6 shrink-0 items-center rounded-[6px] p-0.5"
+                    thumbClassName="rounded-[4px]"
+                  >
+                    {(["browse", "recent"] as const).map((view) => {
+                      const selected = (showRecent ? "recent" : "browse") === view;
+                      return (
+                        <button
+                          key={view}
+                          type="button"
+                          role="tab"
+                          aria-selected={selected}
+                          data-selected={selected}
+                          onClick={() => setFolderView(view)}
+                          className={cx(
+                            "touch-hit relative z-[1] h-5 whitespace-nowrap rounded-[4px] px-1.5 text-submeta font-medium transition-colors duration-150",
+                            selected ? "text-ink" : "text-ink-3 hover:text-ink",
+                          )}
+                        >
+                          {t(view === "browse" ? "newagent.browse" : "newagent.recent")}
+                        </button>
+                      );
+                    })}
+                  </SegmentedTrack>
+                )}
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto p-1">
+                {showRecent ? (
+                  recentFolders.map((d) => (
+                    <DirRow
+                      key={d.path}
+                      name={d.name || baseName(d.path)}
+                      path={d.path}
+                      sub={shortPath(d.path)}
+                      selected={!desktopScratch && cwd === d.path}
+                      onPick={() => navigateFolder(d.path)}
+                    />
+                  ))
+                ) : (
+                  <>
+                    {naming && dirs?.path && (
+                      <Suspense fallback={null}>
+                        <NewFolderNaming key={dirs.path} folder={dirs.path} onCancel={() => setNaming(false)} onUse={(made) => { navigateFolder(made); setNaming(false); }} />
+                      </Suspense>
+                    )}
+                    {visibleEntries.length > 0 ? (
+                      visibleEntries.map((d) => (
+                        <DirRow key={d.path} name={d.name} path={d.path} git={d.is_git} selected={!desktopScratch && cwd === d.path} drillable onPick={() => navigateFolder(d.path)} />
+                      ))
+                    ) : (
+                      !loadingDirs && dirs && !naming && (
+                        <div className="px-2 py-2 text-center text-label text-ink-3">{t("newagent.no_subfolders")}</div>
+                      )
+                    )}
+                  </>
+                )}
+              </div>
             </div>
             {desktopStart && <Suspense fallback={null}><DesktopFolderNote codex={codexApp} scratch={desktopScratch} onUseTemporary={() => setCwdPicked(false)} /></Suspense>}
           </Field></>}
@@ -1057,7 +1211,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
             </div>
           )}
 
-          {!workspace && !desktopStart && hosts.length > 1 && (
+          {!desktopStart && !workspace && hosts.length > 1 && (
             <Field label={t("lib-engines.start_in")}>
               <div role="radiogroup" aria-label={t("lib-engines.start_in")} data-testid="start-host" className="flex flex-wrap gap-1.5">
                 {hosts.map((h) => (
@@ -1363,20 +1517,23 @@ function Choice({ selected, onClick, title, radio, children }: { selected: boole
   );
 }
 
-// A folder to start in: picked with a click, opened with a double click or its chevron.
-function DirRow({ name, path, sub, git, selected, onPick, onOpen }: { name: string; path: string; sub?: string; git?: boolean; selected: boolean; onPick: () => void; onOpen?: () => void }) {
+// A folder to start in: single-click navigates into it and updates cwd in lockstep (#14595).
+function DirRow({ name, path, sub, git, selected, drillable, onPick }: { name: string; path: string; sub?: string; git?: boolean; selected: boolean; drillable?: boolean; onPick: () => void }) {
   return (
-    <div className={cx("group/dir flex h-8 items-center gap-2 rounded-[6px] px-2 transition-colors pointer-coarse:min-h-11", selected ? "bg-accent-tint" : "hover:bg-hover")}>
-      <button type="button" onClick={onPick} onDoubleClick={onOpen} className="flex min-w-0 flex-1 items-center gap-2 self-stretch text-left" title={path}>
-        <Icon name={git ? "git" : "folder"} size={13} className={selected ? "text-accent-ink" : "text-ink-3"} />
-        <span className={cx("shrink-0 truncate text-[12.5px]", selected ? "font-medium text-accent-ink" : "text-ink")}>{name}</span>
-        {sub && <span className="min-w-0 truncate font-mono text-[11px] text-ink-3">{sub}</span>}
-      </button>
-      {onOpen && (
-        <button type="button" aria-label={t("newagent.open_folder", { name })} onClick={onOpen} className="touch-hit flex size-5 items-center justify-center rounded-[4px] text-ink-3 opacity-0 transition-opacity group-hover/dir:opacity-100 hover:bg-hover-2 hover:text-ink focus-visible:opacity-100 [@media(hover:none)]:opacity-100">
-          <Icon name="chevronRight" size={12} stroke={2.4} />
-        </button>
+    <button
+      type="button"
+      data-dir-row
+      onClick={onPick}
+      title={path}
+      className={cx(
+        "group/dir flex h-8 w-full items-center gap-2 rounded-[6px] px-2 text-left transition-colors pointer-coarse:min-h-11",
+        selected ? "bg-accent-tint" : "hover:bg-hover",
       )}
-    </div>
+    >
+      <Icon name={git ? "git" : "folder"} size={13} className={cx("shrink-0", selected ? "text-accent-ink" : "text-ink-3")} />
+      <span className={cx("shrink-0 truncate text-[12.5px]", selected ? "font-medium text-accent-ink" : "text-ink")}>{name}</span>
+      {sub && <span className="min-w-0 truncate font-mono text-[11px] text-ink-3">{sub}</span>}
+      {drillable && <Icon name="chevronRight" size={12} stroke={2.4} className="ml-auto shrink-0 text-ink-3 transition-colors group-hover/dir:text-ink" />}
+    </button>
   );
 }

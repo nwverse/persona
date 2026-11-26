@@ -24,11 +24,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.flow.MutableStateFlow
 import persona.core.contracts.AgentState
 import persona.core.contracts.CoreText
 import persona.core.contracts.PlanTask
@@ -42,8 +46,11 @@ import persona.core.designsystem.JActionSheet
 import persona.core.designsystem.JButton
 import persona.core.designsystem.JButtonKind
 import persona.core.designsystem.JButtonSize
+import persona.core.designsystem.JCard
 import persona.core.designsystem.JChip
+import persona.core.designsystem.JCodeBlock
 import persona.core.designsystem.JDialog
+import persona.core.designsystem.JDivider
 import persona.core.designsystem.JEmptyState
 import persona.core.designsystem.JGroupItem
 import persona.core.designsystem.JIconButton
@@ -52,12 +59,15 @@ import persona.core.designsystem.JRow
 import persona.core.designsystem.JSectionHeader
 import persona.core.designsystem.JSheet
 import persona.core.designsystem.JStatusDot
+import persona.core.designsystem.JTextButton
 import persona.core.designsystem.JTextField
 import persona.core.designsystem.PersonaTheme
 import persona.core.designsystem.Status
 import persona.core.designsystem.Tokens
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
 import persona.core.designsystem.pagePadding
+import persona.core.designsystem.startFailureCodeLine
 import persona.core.designsystem.text
 import persona.core.domain.answer.askLine
 import persona.core.domain.answer.askingLine
@@ -66,6 +76,8 @@ import persona.core.domain.tasks.TaskNow
 import persona.core.domain.tasks.TaskState
 import persona.core.domain.tasks.isRemovable
 import persona.core.domain.tasks.orphanedLine
+import persona.core.domain.tasks.planTaskOf
+import persona.core.domain.tasks.retryLauncher
 
 // A task's detail, the dock's "All" and the plan's "Edit" (iOS TaskSheets.swift / PlanEditSheet; web TaskPanel): what a
 // tap on a task opens instead of leaving the conversation for its agent's page.
@@ -181,11 +193,16 @@ private fun TaskDetailPage(todoId: String, host: AssistantTaskHost, onDismiss: (
  * runs on, what it asks of its owner, what its agent last reported, and the agent's summary or why it has none. The sheet
  * stacks them as it always has; the page puts [gap] between them, as a page of its own spaces its parts.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ColumnScope.TaskDetail(
     todo: Todo, state: TaskState, host: AssistantTaskHost, onDismiss: () -> Unit, onRemove: () -> Unit, gap: Dp = Tokens.Space.flush,
 ) {
     val busy by host.tasks.busy.collectAsStateWithLifecycle()
+    val plans by host.tasks.plans.collectAsStateWithLifecycle()
+    val features by (host.tasks.features ?: remember { MutableStateFlow(emptySet<String>()) }).collectAsStateWithLifecycle()
+    val failedTask = planTaskOf(todo, plans)
+    val instead = if (state == TaskState.Failed) retryLauncher(failedTask, features) else null
     val agents = host.tasks.agentsOf(todo, host.sessions)
     val lead = host.tasks.lead(todo, host.sessions)
     var picked by remember(todo.id) { mutableStateOf<SessionKey?>(null) }
@@ -199,25 +216,61 @@ private fun ColumnScope.TaskDetail(
             }
         }
     }
-    Spacer(Modifier.height(Tokens.Space.l))
-    TaskOwnerDecision(todo, host)
-    Spacer(Modifier.height(gap))
-    TaskLifecycleDetails(todo, host)
-    Spacer(Modifier.height(gap))
-    LatestReport(todo, Modifier.padding(bottom = Tokens.Space.m))
-    Spacer(Modifier.height(gap))
-    val failure = todo.startFailure
-    when {
-        shown != null -> AgentSummary(shown, host, routeTo = todo.id, onDismiss = onDismiss)
-        failure != null -> JEmptyState(stringResource(R.string.chat_task_detail_failed), failure.trim(), icon = PhIcons.WarningCircle, action = {
-            Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-                JButton(stringResource(R.string.chat_tasks_retry), { host.tasks.retryTask(todo, host.onError) }, kind = JButtonKind.Secondary,
-                    size = JButtonSize.Medium, icon = PhIcons.ArrowClockwise, loading = persona.core.domain.tasks.TasksStore.retryKey(todo.id) in busy)
-                JButton(stringResource(R.string.chat_task_detail_remove), onRemove,
-                    kind = JButtonKind.Destructive, size = JButtonSize.Medium, icon = PhIcons.Trash)
-            }
-        })
-        else -> JEmptyState(stringResource(R.string.chat_task_detail_starting), stringResource(R.string.chat_task_detail_starting_body), icon = PhIcons.GearSix)
+    val sectionGap = if (gap > Tokens.Space.m) gap else Tokens.Space.m
+    val lifecyclePrUrl = taskLifecyclePrUrl(todo, host)
+    val hasPrimaryDecision = todo.hasOwnerPrimaryAction()
+    Column(
+        Modifier.fillMaxWidth().padding(top = Tokens.Space.m),
+        verticalArrangement = Arrangement.spacedBy(sectionGap),
+    ) {
+        TaskOwnerDecision(todo, host, prUrl = lifecyclePrUrl)
+        TaskLifecycleDetails(todo, host)
+        LatestReport(todo)
+        val failure = todo.startFailure
+        val codedFailure = if (failure == null) null else startFailureCodeLine(failedTask?.errorCode, failedTask?.errorArgs)
+        var failureDetails by remember(todo.id, failure, failedTask?.errorCode) { mutableStateOf(false) }
+        when {
+            shown != null -> AgentSummary(shown, host, routeTo = todo.id, onDismiss = onDismiss, hasPrimaryAbove = hasPrimaryDecision)
+            failure != null -> JEmptyState(stringResource(R.string.chat_task_detail_failed), codedFailure ?: failure.trim(), icon = PhIcons.WarningCircle, action = {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    if (codedFailure != null) {
+                        // Plain words lead; the hub's codes, paths and exit status stay behind the existing disclosure.
+                        Column(Modifier.padding(bottom = Tokens.Space.m), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+                            JTextButton(
+                                stringResource(if (failureDetails) persona.core.designsystem.R.string.designsystem_details_collapse
+                                else persona.core.designsystem.R.string.designsystem_details_expand),
+                                { failureDetails = !failureDetails },
+                                modifier = Modifier.testTag("assistant-task-start-failure-details"),
+                            )
+                            if (failureDetails) JCodeBlock(failure.trim(), small = true)
+                        }
+                    }
+                    if (state == TaskState.Failed) TaskShellQuestion(
+                        todo, failedTask, host.tasks, Modifier.padding(bottom = Tokens.Space.m),
+                    )
+                    val actions: @Composable () -> Unit = {
+                        if (instead != null) JButton(
+                            stringResource(persona.core.designsystem.R.string.designsystem_use_launcher_instead, instead),
+                            { host.tasks.retryTaskOnLauncher(todo, instead, host.onError) },
+                            kind = JButtonKind.Primary,
+                            size = JButtonSize.Medium,
+                            icon = PersonaIcons.retry,
+                            loading = persona.core.domain.tasks.TasksStore.retryKey(todo.id) in busy,
+                        )
+                        JButton(stringResource(R.string.chat_tasks_retry), { host.tasks.retryTask(todo, host.onError) },
+                            kind = JButtonKind.Secondary,
+                            size = JButtonSize.Medium, icon = PhIcons.ArrowClockwise,
+                            loading = persona.core.domain.tasks.TasksStore.retryKey(todo.id) in busy)
+                        JButton(stringResource(R.string.chat_task_detail_remove), onRemove,
+                            kind = JButtonKind.Destructive, size = JButtonSize.Medium, icon = PhIcons.Trash)
+                    }
+                    if (instead == null) Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) { actions() }
+                    else FlowRow(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s),
+                        verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) { actions() }
+                }
+            })
+            else -> JEmptyState(stringResource(R.string.chat_task_detail_starting), stringResource(R.string.chat_task_detail_starting_body), icon = PhIcons.GearSix)
+        }
     }
 }
 
@@ -296,27 +349,157 @@ private fun AgentDetail(session: Session?, host: AssistantTaskHost, onDismiss: (
 
 /** Where the agent runs, what it is on now, and the ways on: its whole page, or a word to it from the conversation. */
 @Composable
-private fun AgentSummary(session: Session, host: AssistantTaskHost, routeTo: String?, onDismiss: () -> Unit) {
+private fun AgentSummary(
+    session: Session,
+    host: AssistantTaskHost,
+    routeTo: String?,
+    onDismiss: () -> Unit,
+    hasPrimaryAbove: Boolean = false,
+) {
     val now = when (session.agentState) {
         AgentState.NeedsYou -> session.askingLine(host.cards[session.key])?.text() ?: stringResource(R.string.chat_tasks_now_needs_you)
         else -> TaskNow.of(session, session.agentState == AgentState.Working)?.text ?: session.lastText?.takeIf(String::isNotBlank)
             ?: stringResource(R.string.chat_tasks_now_quiet)
     }
-    Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
-        JGroupItem(GroupPosition.Single) {
-            JRow(session.displayTitle.ifBlank { session.agentLabel },
-                subtitle = listOf(listOfNotNull(host.machineName(session.machineId), session.folderName.takeIf(String::isNotBlank), session.agentLabel)
-                    .joinToString(" · "), now).joinToString("\n"),
-                subtitleLines = 6, leading = { JStatusDot(session.agentState.designStatus) })
+    val metadata = agentMetadataLine(host.machineName(session.machineId), session.cwd, session.agentLabel)
+    val subagents = TaskNow.subagents(session)
+    val body: @Composable () -> Unit = {
+        Column(
+            Modifier.fillMaxWidth().testTag("task-detail-agent-summary"),
+            verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s),
+            ) {
+                JStatusDot(session.agentState.designStatus)
+                Text(
+                    session.displayTitle.ifBlank { session.agentLabel },
+                    Modifier.weight(1f),
+                    style = PersonaTheme.type.bodyStrong,
+                    color = PersonaTheme.palette.ink,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            if (metadata.isNotEmpty()) {
+                Text(
+                    metadata,
+                    Modifier.padding(start = Tokens.Space.l).testTag("task-detail-agent-meta"),
+                    style = PersonaTheme.type.caption,
+                    color = PersonaTheme.palette.ink3,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Text(
+                summaryWords(now),
+                Modifier.padding(start = Tokens.Space.l).testTag("task-detail-agent-now"),
+                style = PersonaTheme.type.callout,
+                color = PersonaTheme.palette.ink2,
+                maxLines = 4,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (subagents.isNotEmpty()) {
+                Text(
+                    stringResource(R.string.chat_tasks_subagents, subagents.joinToString(stringResource(R.string.chat_tasks_list_separator))),
+                    Modifier.padding(start = Tokens.Space.l),
+                    style = PersonaTheme.type.caption,
+                    color = PersonaTheme.palette.ink3,
+                )
+            }
         }
-        val subagents = TaskNow.subagents(session)
-        if (subagents.isNotEmpty()) Text(stringResource(R.string.chat_tasks_subagents, subagents.joinToString(stringResource(R.string.chat_tasks_list_separator))),
-            style = PersonaTheme.type.caption, color = PersonaTheme.palette.ink3)
-        Row(horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-            JButton(stringResource(R.string.chat_task_detail_open_chat), { onDismiss(); host.onOpen(session.key) }, Modifier.weight(1f),
-                size = JButtonSize.Medium, icon = PhIcons.ChatCircle)
-            if (routeTo != null) JButton(stringResource(R.string.chat_tasks_say), { host.tasks.setRoute(host.conversation, routeTo); onDismiss() },
-                kind = JButtonKind.Secondary, size = JButtonSize.Medium, icon = PhIcons.PaperPlaneTilt)
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
+        if (hasPrimaryAbove) {
+            JDivider()
+            body()
+        } else {
+            JCard(Modifier.fillMaxWidth(), padding = Tokens.Space.l) { body() }
+        }
+        TaskDetailActionRow(
+            openKind = if (hasPrimaryAbove) JButtonKind.Secondary else JButtonKind.Primary,
+            equalWhenSideBySide = hasPrimaryAbove,
+            openChat = { modifier ->
+                JButton(
+                    stringResource(R.string.chat_task_detail_open_chat),
+                    { onDismiss(); host.onOpen(session.key) },
+                    modifier.testTag("task-detail-open-chat"),
+                    kind = if (hasPrimaryAbove) JButtonKind.Secondary else JButtonKind.Primary,
+                    size = JButtonSize.Medium,
+                    icon = PersonaIcons.message,
+                )
+            },
+            say = routeTo?.let { target ->
+                { modifier ->
+                    JButton(
+                        stringResource(R.string.chat_tasks_say),
+                        { host.tasks.setRoute(host.conversation, target); onDismiss() },
+                        modifier.testTag("task-detail-say"),
+                        kind = JButtonKind.Secondary,
+                        size = JButtonSize.Medium,
+                        icon = PersonaIcons.handToAI,
+                    )
+                }
+            },
+        )
+    }
+}
+
+/**
+ * Places Open chat and Message side by side while both labels fit on one line, and stacks them full-width when
+ * narrow viewports or large text scales would otherwise truncate a label (DESIGN_SYSTEM.md 1.2 rule 3, 3.7).
+ */
+@Composable
+private fun TaskDetailActionRow(
+    openKind: JButtonKind,
+    equalWhenSideBySide: Boolean,
+    openChat: @Composable (Modifier) -> Unit,
+    say: (@Composable (Modifier) -> Unit)?,
+) {
+    if (say == null) {
+        openChat(Modifier.fillMaxWidth())
+        return
+    }
+    val gap = Tokens.Space.s
+    Layout(
+        content = {
+            openChat(Modifier.fillMaxWidth())
+            say(Modifier.fillMaxWidth())
+        },
+        modifier = Modifier.fillMaxWidth().testTag("task-detail-actions-${openKind.name.lowercase()}"),
+    ) { measurables, constraints ->
+        val maxW = constraints.maxWidth
+        val gapPx = gap.roundToPx()
+        val w1 = measurables[0].maxIntrinsicWidth(Constraints.Infinity)
+        val w2 = measurables[1].maxIntrinsicWidth(Constraints.Infinity)
+        val fitsRow = maxW != Constraints.Infinity && w1 + gapPx + w2 <= maxW
+        if (fitsRow) {
+            val half = ((maxW - gapPx) / 2).coerceAtLeast(0)
+            val (firstW, secondW) = when {
+                equalWhenSideBySide && w1 <= half && w2 <= half -> half to (maxW - gapPx - half)
+                equalWhenSideBySide -> {
+                    val extra = (maxW - gapPx - w1 - w2).coerceAtLeast(0)
+                    (w1 + extra / 2) to (maxW - gapPx - (w1 + extra / 2))
+                }
+                else -> (maxW - gapPx - w2).coerceAtLeast(w1) to w2
+            }
+            val first = measurables[0].measure(Constraints.fixedWidth(firstW))
+            val second = measurables[1].measure(Constraints.fixedWidth(secondW))
+            val h = maxOf(first.height, second.height)
+            layout(maxW, h) {
+                first.placeRelative(0, (h - first.height) / 2)
+                second.placeRelative(firstW + gapPx, (h - second.height) / 2)
+            }
+        } else {
+            val widthConstraint = if (maxW == Constraints.Infinity) Constraints() else Constraints.fixedWidth(maxW)
+            val first = measurables[0].measure(widthConstraint)
+            val second = measurables[1].measure(widthConstraint)
+            val w = if (maxW == Constraints.Infinity) maxOf(first.width, second.width) else maxW
+            layout(w, first.height + gapPx + second.height) {
+                first.placeRelative(0, 0)
+                second.placeRelative(0, first.height + gapPx)
+            }
         }
     }
 }
@@ -386,7 +569,7 @@ private fun boardSubtitle(todo: Todo, state: TaskState, host: AssistantTaskHost,
 
 /** An agent's row in "All" (iOS agentSubtitle): computer · folder · agent · its last words. */
 private fun agentSubtitle(session: Session, host: AssistantTaskHost): String =
-    listOfNotNull(host.machineName(session.machineId), session.folderName, session.agentLabel, session.lastText?.trim())
+    listOfNotNull(host.machineName(session.machineId), session.folderName, session.agentLabel, plainSummaryText(session.lastText))
         .filter(String::isNotBlank).joinToString(" · ")
 
 /** "Edit" (iOS PlanEditSheet): each task's title, computer, folder, model, permission and first message before it starts. */

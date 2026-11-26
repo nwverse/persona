@@ -21,6 +21,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.*
@@ -122,6 +123,22 @@ internal fun Modifier.clipDrawing(shape: Shape): Modifier = drawWithCache {
     onDrawWithContent { clipPath(outline) { this@onDrawWithContent.drawContent() } }
 }
 
+/**
+ * Suppresses Material 3's layout-inflating [minimumInteractiveComponentSize] padding for densely stacked bottom
+ * chrome while keeping Compose UI's 48dp minimum touch target expansion on every clickable child
+ * (`docs/design/DESIGN_SYSTEM.md` section 6.3, DS-06).
+ */
+@Composable
+internal fun CompactTouchLayout(content: @Composable () -> Unit) {
+    CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides Dp.Unspecified, content = content)
+}
+
+/**
+ * Layout height for unraised [JIconButton]s inside compact bars such as the expanded Brief/Board composer toolbar.
+ * Width stays [Tokens.MinTouch.android] and [clipDrawing] preserves Compose's full 48dp vertical touch target.
+ */
+internal val LocalCompactIconHeight = compositionLocalOf { Tokens.MinTouch.android }
+
 enum class JButtonKind { Primary, Secondary, Quiet, Destructive }
 
 enum class JButtonSize(val height: Dp, val padding: Dp) { Large(48.dp, 20.dp), Medium(40.dp, 16.dp), Small(32.dp, 12.dp) }
@@ -198,8 +215,14 @@ fun JButton(
 }
 
 @Composable
-fun JTextButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, icon: PhIcon? = null) =
-    JButton(text, onClick, modifier, kind = JButtonKind.Quiet, size = JButtonSize.Medium, icon = icon, enabled = enabled)
+fun JTextButton(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    icon: PhIcon? = null,
+    loading: Boolean = false,
+) = JButton(text, onClick, modifier, kind = JButtonKind.Quiet, size = JButtonSize.Medium, icon = icon, enabled = enabled, loading = loading)
 
 /**
  * Plain icons sit in bars; [raised] ones are standalone controls (a glass circle, a wash disc, a bordered square).
@@ -293,8 +316,17 @@ private fun JIconButtonBox(
             Modifier.size(40.dp).clip(shape).background(palette.surface).border(1.dp, palette.line, shape)
         }
     }
+    val targetHeight = if (raised) Tokens.MinTouch.android else LocalCompactIconHeight.current
+    val compactHeight = targetHeight < Tokens.MinTouch.android
     Box(
-        modifier.size(48.dp).then(if (interactive && expandOnHomePress) Modifier else Modifier.clip(CircleShape))
+        modifier.width(Tokens.MinTouch.android).height(targetHeight)
+            .then(
+                when {
+                    interactive && expandOnHomePress -> Modifier
+                    compactHeight -> Modifier.clipDrawing(CircleShape)
+                    else -> Modifier.clip(CircleShape)
+                },
+            )
             .clickable(interactionSource = pressSource, indication = LocalIndication.current, enabled = enabled, role = Role.Button, onClick = onClick)
             .semantics { if (contentDescription != null) this.contentDescription = contentDescription }
             .stableAlpha(if (enabled) 1f else 0.4f),
@@ -401,13 +433,17 @@ fun JTextField(
  * this app's. The keyboard's action key only puts the keyboard away; nothing is sent from the keyboard.
  */
 @Composable
-fun JSecretField(value: String, onValueChange: (String) -> Unit, label: String, modifier: Modifier = Modifier, enabled: Boolean = true) {
+fun JSecretField(
+    value: String, onValueChange: (String) -> Unit, label: String, modifier: Modifier = Modifier, enabled: Boolean = true,
+    masked: Boolean = true, trailing: (@Composable () -> Unit)? = null,
+) {
     val focus = LocalFocusManager.current
     JTextField(
         value, onValueChange, modifier, label = label, singleLine = true, enabled = enabled,
+        trailing = trailing,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false, imeAction = ImeAction.Done),
         keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
-        visualTransformation = PasswordVisualTransformation(), autofill = false,
+        visualTransformation = if (masked) PasswordVisualTransformation() else VisualTransformation.None, autofill = false,
     )
 }
 

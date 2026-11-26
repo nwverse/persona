@@ -20,11 +20,12 @@ import (
 type modelExecution struct {
 	Source modelhttp.Source `json:"ModelSource,omitzero"`
 
-	Strict           bool   `json:",omitempty"` // scheduled execution never substitutes another model or agent
-	TaskInstructions string `json:"-"`
-	TaskAttachments  string `json:"-"`
-	Model            string
-	Effort           string
+	CodexEffortFallback string `json:"-"`
+	Strict              bool   `json:",omitempty"` // scheduled execution never substitutes another model or agent
+	TaskInstructions    string `json:"-"`
+	TaskAttachments     string `json:"-"`
+	Model               string
+	Effort              string
 	// Speed is a one-shot Agent start choice, resolved only against the actual terminal dispatch. FastMode is the
 	// Claude Code form. Neither is kept as process state or included in the execution fingerprint.
 	Speed    string `json:"-"`
@@ -49,10 +50,10 @@ type modelExecution struct {
 	// worker Agent conversations have neither flag.
 	FollowsSetting bool   `json:",omitempty"`
 	ConfigDir      string `json:"-"` // a conversation's directory, not its model; retained across process restarts
-	// MainCompactWindow: the compaction window the manager holds the main conversation to (assistant.main_compact_window,
-	// #7314), sent with is_main; 0 (another conversation, a launcher Persona does not manage, an older manager, the
-	// setting at 0) leaves the launcher's (assistantCompactionPolicy). Omitted when 0, so a fingerprint from before it
-	// stays the same.
+	// MainCompactWindow: the compaction window the manager holds the main conversation (sent with is_main) and each leader
+	// conversation to (assistant.main_compact_window, #7314, #15318); 0 (another conversation, a guest, a launcher Persona
+	// does not manage, an older manager, the setting at 0) leaves the launcher's (assistantCompactionPolicy). Omitted
+	// when 0, so a fingerprint from before it stays the same.
 	MainCompactWindow int `json:",omitempty"`
 	// SupervisionInstructions is manager-authorized role policy, never task or event data.
 	// It changes the execution fingerprint so a role change resumes in a fresh process.
@@ -68,6 +69,10 @@ type modelExecution struct {
 	// InboxPermissionMode is the manager-only AI-twin choice, carried separately from caller-controlled mode. It is
 	// per-send authorization metadata, never a model fingerprint or a persisted process setting.
 	InboxPermissionMode string `json:"-"`
+	// DefaultPermissionMode is the manager's current default, not a per-conversation choice. PermissionModeExplicit
+	// distinguishes an explicit generic mode on a start/send; neither changes the execution fingerprint.
+	DefaultPermissionMode  string `json:"-"`
+	PermissionModeExplicit bool   `json:"-"`
 	// OriginDecisionRequired marks the RPC and autonomous-resume entries that must fail closed on a legacy unknown
 	// origin. Trusted in-process model plumbing may carry an existing execution without setting this per-entry gate.
 	OriginDecisionRequired bool `json:"-"`
@@ -84,6 +89,13 @@ type modelExecution struct {
 	// NewModelChoice classifies this request against the previous recovery chain. It is per-turn provenance, never
 	// persisted or included in the execution fingerprint, and is committed only when the input is delivered.
 	NewModelChoice bool `json:"-"`
+	// PersistedModel marks a model restored from sessionState.Model when the caller supplied no model choice on this
+	// turn (for example after cross-engine launcher fallback cleared options). Per-turn provenance only: never
+	// persisted or included in the execution fingerprint.
+	PersistedModel bool `json:"-"`
+	// FromRecovery marks a model chosen by automatic recovery or a temporary fallback hold rather than an explicit
+	// user/hub choice. Per-turn provenance only: never persisted or included in the execution fingerprint.
+	FromRecovery bool `json:"-"`
 	// SecretTicket: the hand-off a new Claude Code start puts in its environment (secretenv.go). Per start, never
 	// part of a fingerprint, never kept for a resume.
 	SecretTicket string `json:"-"`
@@ -256,13 +268,15 @@ func (n *Node) assistantModelDecision(ctx context.Context, id string) (string, m
 		Origin                  string                        `json:"origin"`
 		OriginKnown             bool                          `json:"origin_known"`
 		InboxPermissionMode     string                        `json:"inbox_permission_mode"`
+		DefaultPermissionMode   string                        `json:"default_permission_mode"`
+		PermissionModeExplicit  bool                          `json:"permission_mode_explicit"`
 		SupervisionInstructions *string                       `json:"supervision_instructions"`
 		ClaudeInteractive       bool                          `json:"claude_interactive"` // #10058: a send's own flag, here for starts no send makes
 	}
 	if n.peer == nil || n.peer.Call(ctx, "assistant.model", map[string]any{"session_id": id}, &res) != nil {
 		return "", modelExecution{}, false
 	}
-	return res.Launcher, (modelExecution{Source: res.Source, Model: res.Model, Effort: res.Effort, UseEffort: res.ModelFingerprint != "", Fingerprint: res.ModelFingerprint, Runtime: n.externalRuntime(id, res.Launcher, res.Runtime), IsMain: res.IsMain, CacheKeepalive: res.CacheKeepalive, MainCompactWindow: res.MainCompact, External: res.External, Origin: res.Origin, OriginKnown: res.OriginKnown, InboxPermissionMode: res.InboxPermissionMode, Interactive: res.ClaudeInteractive}).withSupervision(res.SupervisionInstructions), true
+	return res.Launcher, (modelExecution{Source: res.Source, Model: res.Model, Effort: res.Effort, UseEffort: res.ModelFingerprint != "", Fingerprint: res.ModelFingerprint, Runtime: n.externalRuntime(id, res.Launcher, res.Runtime), IsMain: res.IsMain, CacheKeepalive: res.CacheKeepalive, MainCompactWindow: res.MainCompact, External: res.External, Origin: res.Origin, OriginKnown: res.OriginKnown, InboxPermissionMode: res.InboxPermissionMode, DefaultPermissionMode: res.DefaultPermissionMode, PermissionModeExplicit: res.PermissionModeExplicit, Interactive: res.ClaudeInteractive}).withSupervision(res.SupervisionInstructions), true
 }
 
 // strictProtectedExecution identifies owner-facing conversations without changing worker/task retry policy.

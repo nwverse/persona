@@ -12,14 +12,15 @@ import (
 	"github.com/nwverse/persona/server/internal/nodeproto"
 )
 
-// spaceDevs are the manager's computers, whose nodes keep track directories unless old says otherwise.
+// spaceDevs are the manager's computers, whose nodes keep track directories and their SPACE.md unless old (neither)
+// or noSpaceMD (not SPACE.md) says otherwise.
 type spaceDevs struct {
 	*fleetDevs
-	old bool
+	old, noSpaceMD bool
 }
 
 func (d spaceDevs) NodeAnnounced(_, capability string) bool {
-	return !d.old && capability == nodeproto.TrackSpaces
+	return !d.old && (capability == nodeproto.TrackSpaces || capability == nodeproto.TrackSpaceMD && !d.noSpaceMD)
 }
 
 // spaceTrackService is the health hub's assistant on a registry with a space track (qa-plain) and tracks that have

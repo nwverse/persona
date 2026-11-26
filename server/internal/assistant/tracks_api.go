@@ -45,6 +45,8 @@ func (s *Service) trackRoutes() {
 	s.handle("GET /api/v1/assistant/track-kinds", s.trackKindList)
 	s.handle("POST /api/v1/assistant/track-kinds", s.trackKindCreate)
 	s.handle("PUT /api/v1/assistant/track-kinds/{slug}", s.trackKindChange)
+	s.trackSpaceMDRoutes()      // track_space_md.go
+	s.trackConversationRoutes() // track_conversations.go
 }
 
 // wireTrack is e as the apps see it.
@@ -137,7 +139,7 @@ func (s *Service) trackList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) trackCreate(w http.ResponseWriter, r *http.Request) {
-	if !userOnly(w, r) {
+	if !spacesWriter(w, r) {
 		return
 	}
 	var in assistantwire.TrackCreate
@@ -191,11 +193,17 @@ func (s *Service) trackCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.prepareTrackSoon(in.Slug)
+	if e, ok := s.trackEntryOf(ctx, in.Slug); ok {
+		// Its rhythms become its scheduled tasks once, now (track_rhythms.go); the track stands either way.
+		if err := s.createTrackRhythms(ctx, e); err != nil {
+			s.logf("tracks: %q: rhythms: %v", in.Slug, err)
+		}
+	}
 	s.answerTrack(ctx, w, in.Slug, http.StatusCreated)
 }
 
 func (s *Service) trackChange(w http.ResponseWriter, r *http.Request) {
-	if !userOnly(w, r) {
+	if !spacesWriter(w, r) {
 		return
 	}
 	slug := r.PathValue("slug")
@@ -322,7 +330,7 @@ func (s *Service) trackKindList(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) trackKindCreate(w http.ResponseWriter, r *http.Request) {
-	if !userOnly(w, r) {
+	if !spacesWriter(w, r) {
 		return
 	}
 	var in assistantwire.TrackKindCreate
@@ -331,6 +339,10 @@ func (s *Service) trackKindCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	if !validKindSlug(in.Slug) {
 		apierr.Write(w, http.StatusBadRequest, errors.New("slug: 2-32 lowercase letters, digits or dashes, starting with a letter, and not a built-in kind or a reserved name"))
+		return
+	}
+	if _, ok := kindOf(s.trackKinds(r.Context()), in.Slug); ok {
+		apierr.Write(w, http.StatusConflict, fmt.Errorf("kind %q is already provided", in.Slug))
 		return
 	}
 	if err := checkTrackText(in.Title, "", ""); err != nil {
@@ -362,7 +374,7 @@ func (s *Service) trackKindCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Service) trackKindChange(w http.ResponseWriter, r *http.Request) {
-	if !userOnly(w, r) {
+	if !spacesWriter(w, r) {
 		return
 	}
 	slug := r.PathValue("slug")
@@ -376,7 +388,7 @@ func (s *Service) trackKindChange(w http.ResponseWriter, r *http.Request) {
 		apierr.Write(w, http.StatusNotFound, db.ErrTrackNotFound)
 		return
 	}
-	if k.Builtin {
+	if k.Builtin || k.Extension {
 		apierr.Write(w, http.StatusForbidden, errors.New("a built-in kind is not changed"))
 		return
 	}

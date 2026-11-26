@@ -8,10 +8,10 @@ has already closed the connection, so over TLS the write returns a bare `net.Err
 connection"). Retrying the whole operation on a new login sends the search again, and the server ends that connection
 too: two QQ accounts' `mail_search` failed on every try with `fetch: use of closed network connection`, and nothing
 was logged. What a try already got (the search's UIDs) has to survive into the retry, so the retry only does what
-failed (`listOne` in `server/internal/mail/imap_list.go`). Tell a dead connection by `Client.State() ==
+failed (`listOne` in `server/internal/modules/mail/imap_list.go`). Tell a dead connection by `Client.State() ==
 ConnStateLogout`: the reader sets it before it fails the waiting commands, so a command that failed sees it already,
 and `Client.Close()` then returns the reader's own error, the reason to log. A proxy that closes after a chosen tagged
-answer reproduces it (`server/internal/mail/closed_conn_test.go`).
+answer reproduces it (`server/internal/modules/mail/closed_conn_test.go`).
 
 ## Under a full-tunnel VPN the default route's address is the tunnel's (#11125)
 
@@ -169,6 +169,14 @@ or one of this machine's, never a name or an address the machine no longer has, 
 `managerconf.CLIDial` dials it from loopback, which the kernel delivers locally; the hub's trust rules stay as they were.
 A new client of the hub on its own machine uses both, and its test runs against a listener on a non-loopback address of
 the machine that refuses other sources (`server/internal/hub/cli_listen_test.go`).
+
+## Handover notifications follow the machine state they announce (#6819)
+
+A configured machine's durable assignment and its cached `Machine.owner` are updated in separate steps. Publish the
+forced viewer refresh only after the cached owner and offline state are updated, even when the scoped report already
+uses the new assignment. A test with only a configured entry never exercises the cached machine's handover; create
+that machine too, and block the first notification write to check its state instead of accepting any later matching
+report.
 
 ## A token does not say whose it is, and a thread does not say whose item (2026-11-15, #7832)
 
@@ -406,6 +414,22 @@ in bus order, but one worker persists only the latest pending report, with a bou
 write is logged and left for the next report, never retried in a tight loop. Both kinds of worker join the hub's
 `nodeWorkers`, whose shutdown wait is bounded. Tests hold the node or `PutSetting`, prove a later message or bus event
 is still handled, then release the dependency and join the workers before checking the final value and call count.
+
+## A node's event handler in the manager must not wait for that node (2026-11-26, #16214)
+
+The manager takes a node's events on the read loop of that node's connection: `rpc.Peer.Serve` calls `OnEvent` in
+place, and devices pass the event to the assistant's `NodeEvent` from there. Only that loop reads the node's answers.
+`setSessions` (a `sessions.changed`) classified the main conversation's latest round by reading its history from the
+same node, so after every finished main-chat turn the read waited for an answer nobody could read and ran into its
+15 s deadline. Meanwhile nothing else the node sent was read: pongs, answers to the apps' reads, item pushes, the
+reply's live text and the turn's end. The log shows it as one `session.items result=deadline took=14.998s` followed by
+a burst of answers that each took about 15 s, with `ping` deadlines in between. The transcript's size played no part:
+the pages it read took under a millisecond on a 100 MB transcript.
+
+Anything a node's event needs from that node runs on a goroutine of its own: one at a time per conversation, taking the
+newest revision asked for, and the list is published again when its result changes a row. Test it as the hub's read
+loops are tested: hold every call to the node, check that the event is still taken, then release it and wait for the
+result (`server/internal/assistant/conversation_attention_readloop_test.go`).
 
 ## App connection bookkeeping uses ordered background snapshots (2026-11-15, #6889)
 
@@ -645,6 +669,11 @@ Treat a node binary directory symlink as publisher-owned. Swapping files or
 removing version markers through it corrupts the immutable release manifest.
 Protect both enabled installs and disabled-policy cleanup, and let the publisher
 activate its verified directory after Hub health confirmation.
+
+When a managed program is atomically replaced, the installed path can point to the new
+inode while the service runs the old one. Inspect the live executable and its supervisor's
+main PID. Send a resident node's idle reload once per observed pair of inodes, and let a
+manager's service watcher wait for the confirmed Hub build and its own idle boundary (#16517).
 
 ## Durable storage receipts do not extend authority (#1187)
 
@@ -1371,6 +1400,8 @@ Splitting a registry at its first colon reads `[::1]:5000` as `[`, selecting HTT
 ## persona-link passive mode and node service (docs/operations/link.md ("Passive mode", "Installing the node service"), 2026-11-02)
 
 - Link only relays node streams; remote updates belong in node RPC (#1158, `docs/operations/node-update.md`). Each attach creates a new `Node`, so update exclusion and installation transactions must belong to the resident process; closing the current RPC doesn't restart resident node. Shut down the resident service only after the success response is actually written; a separate recovery process rolls back if the new version can't start. Old nodes don't know the update protocol and need one local upgrade first; version mismatch alone mustn't enable a deployment button.
+- **Record the backup's version after executable drift** (#15686). A resident still running V1 can have V2 on disk.
+  Redeploy backs up V2 and records its self-reported version so V2 can clear the restart barrier after rollback.
 
 - Linux `setsid` detaches the process group, not the systemd service cgroup: when node startup fails, the manager kills rollback processes in the same cgroup (#1158). Recovery must run in a separate transient user service and be ready before binary replacement. Complete its readiness handshake before acquiring the update-directory lock, or the parent waits for readiness holding the lock while recovery waits for that lock. Tests use fake `systemd-run`, never installing recovery services on the development machine.
 - A missing identity and an unavailable identity need different fallback decisions (#2910). A Linux zombie keeps both its procfs start time and its `ps -o lstart=` result, so rejecting it in `osproc.Identify` alone still lets a watchdog check count it as alive. Preserve the difference between a live exact identity, a known exited process, and an unreadable identity; only the last needs a weaker reading. Check for known exit even for older markers without exact identities. Tests can hold a deterministic zombie with `waitid(WEXITED|WNOWAIT)` after SIGKILL, then reap it during cleanup.
@@ -2128,6 +2159,40 @@ A connection that outlives its transport (protocol.md "Resuming") changes what s
   Callbacks that outlive a route (a planned switch, an RTT ping or a tailcat probe) carry its generation and check it
   before acting. Path failure and SSH flap timing use the current route's own start, not the whole connection's.
 
+## A large session over a slow link (2026-11-23, #13677)
+
+A computer on Persona Link at about 100 KB/s with a 300 ms round trip went offline (`node exited`) every few minutes
+while a chat had one of its sessions open: 4.9 MB of transcript, most of it screenshots. Lanes were on, and still:
+
+- **What a pong waits behind is what was written without credit.** The node's `session.items` pushes were events and
+  its answers to `session.items` answers: neither waits for credit, so a catch-up of megabytes went to the transport at
+  once, and Persona Link's WebSocket ping on the stream (10 s / 5 s, the hub's end) timed out behind it. The hub closed
+  the stream, the manager read the end of the connection as the node exiting, and a link computer gets no grace. The
+  pushes now go on the bulk lane with credit and those answers wait for credit on the interactive lane, ahead of bulk:
+  a person's page read is not held behind a background catch-up. Only the node's own pushes: a runtime's are forwarded
+  from that runtime's read loop, which must not wait for credit.
+- **A watch that answers after its catch-up looks like a dead node.** The hub gives `session.watch` 10 s; a catch-up
+  of 5 MB at 100 KB/s is 50 s. The node now reads the file, answers, and then pushes. A page read used to wait for the
+  push lock the catch-up holds, which was the whole catch-up again (29.5 s and a 502, as in the hub's log); it reads
+  the file as it is now, since what the catch-up read is on its way.
+- **Putting the data back for subscribers that want none.** The catch-up put every image's data back
+  (`File.WithImages`, "the hub sends them to every subscriber, lazy or not"), and every app subscribes with
+  `lazy_images`, whose data the hub strips again. Catch-ups carry placeholders now; a batch of new lines carries images
+  whole only up to 128 KiB each and 256 KiB together, the newest first; a push is cut at about 256 KiB at line
+  boundaries. The 5 MB session's catch-up went from 6.4 MB
+  over the link (55 s) to 0.3 MB (1 s) in the slow link soak (testing.md "Slow link soak").
+- **A reproduction has to know how far the hub has read.** A catch-up only happens with `since_seq`, which the hub
+  learns from a push: an app that opened the session, saw no new line and closed it leaves nothing to catch up on,
+  and a soak that does so passes on the broken code. The soak shows a line while the session is open, then grows it.
+- **Resuming hides the drop, not the cause.** On a node that resumes (#10663) the same stream drops three times and
+  comes back within a second each; a 0.9.1 node, without resuming, goes offline and the catch-up never arrives. Count
+  the drops (`connection over link lost`), not only the offline transitions.
+- **The web app multiplied it.** Its stale-page pull asked again every 10 s however often it failed (and at once
+  when an ask took longer than that), the user-input index retried forever, two views of one session asked side by
+  side, and none of it looked at archiving. One gate per session and read in the tab now (`web/src/lib/pull-gate.ts`):
+  one ask out at a time, the next after a failure waiting 3 s doubling to 5 minutes, and no stale pull for an archived
+  session. Archiving does not end the hub's watch while a view has the session open: the watch follows open views.
+
 ## A new value for an existing RPC parameter may be silently ignored by an old node (2026-11-06, #4858)
 
 Uploads already had a `dest` parameter (`terminal`, `health`), but older nodes never read it: given `dest=dir&dir=~/proj`, they still put the file in the system temp directory and returned a successful path.
@@ -2674,7 +2739,7 @@ On TestFlight 224 an extension's **Review** spun for two minutes and then failed
 
 ## What the port relay costs, hop by hop (2026-11-10, #3067)
 
-`server/cmd/vncbench relay` puts an echo server behind `…/ports/{port}/connect`. With everything on the hub machine
+`server/internal/modules/screen-share/vncbench relay` puts an echo server behind `…/ports/{port}/connect`. With everything on the hub machine
 (client, hub, manager, its own node) a small message's round trip is 1.6 ms, 0.8 ms more than a WebSocket ping to the
 hub, and a download runs at 88 MB/s: the hub, the bus, the manager and the stream mux are not where a live screen's
 latency goes. The hub → node leg (`ssh -T` over Tailscale on the LAN) is where it varies; plain `ssh host cat` shows the
@@ -2881,7 +2946,7 @@ computer every 2 s): the manager allocated 555 MB and used about 2.1 s of CPU a 
 `internal/assistant`'s `TestPlacesThatSealAreKnown` (`keyrotate_guard_test.go`) counts every `.Seal(`, `sealKey(`,
 `.encrypt(`, `SealWith(` and `secretkey.New` per file under `internal/` and `cmd/`, so nothing new seals with the
 manager's `secret.key` without the key rotation re-sealing it. It counts AEADs with keys of their own too, in packages
-that have nothing to do with the assistant: #7954 sealed the live screen's UDP packets in `internal/screenlink`, its
+that have nothing to do with the assistant: #7954 sealed the live screen's UDP packets in `internal/modules/screen-share/screenlink`, its
 tests and its importers passed, and the hub deploy failed on this guard. When code under `internal/` or `cmd/` seals,
 run `go test -run TestPlacesThatSealAreKnown ./internal/assistant` (no database needed) and record the file there:
 with `secret.key`, after putting where it keeps the sealed value into `db.sealedTables` or `db.sealedSettings`; with
@@ -3186,3 +3251,11 @@ is not evidence of isolation.
 - The hub’s MCP golden harness reconstructs the Agent tool list separately from the manager’s live discovery path. Add new manager-owned Agent tools to that helper as well as the per-tool goldens; otherwise production discovery can match its language snapshots while the hub’s legacy golden test still offers the old list. Full runner logs identify this as an index/leftover-file mismatch.
 
 - Register non-session runner RPCs through `nodeRPC` in the resource domain file. Adding a case to `Node.handleMethod` bypasses the domain registration rule and fails the central-list freeze even when the node package tests pass. Include the architecture-guard shard when adding a node RPC.
+
+## A switch outcome does not mean its sweep released every row lock (#15138)
+
+`logicalSweep` starts background reconciliation; a batch reaching `switched` does not join that goroutine.
+A fixture's next `SetConversationPick` can collide with its final `ClaimConversationInput` transaction even when no
+input remains. `FOR UPDATE NOWAIT` maps PostgreSQL lock contention to `ErrConversationSwitchBusy`. Use the existing
+bounded wait for that specific error, keep the original expected epoch, and fail immediately on other errors.
+Do not treat the error text as proof of an unfinished operation or wait for an unrelated batch state.
