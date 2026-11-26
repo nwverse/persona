@@ -106,7 +106,7 @@ import { tr, trError } from '../design/Strings';
 import { KeyCode } from '@kit.InputKit';
 import { Motion } from '../design/Motion';
 import { Haptics } from '../platform/Haptics';
-import { FOLD_DISPLAY_MODE_GLOBAL_FULL, pickRelaySessionIndex, resolveFoldLayout, resolveFoldShortcut, widthClassFromBreakpoint } from '../core/FoldPosture';
+import { pickRelaySessionIndex, resolveFoldLayout, resolveFoldShortcut, widthClassFromBreakpoint } from '../core/FoldPosture';
 import type { FoldAdaptiveLayout } from '../core/FoldPosture';
 import { FoldInspectorPanel } from '../components/FoldInspectorPanel';
 import { FloatingToastOverlay } from '../components/FloatingToastOverlay';
@@ -166,6 +166,7 @@ struct Index {
   @Local foldWorkbenchTab: number = 0;
   @Local foldWorkbenchTabSignal: number = 0;
   private foldInspectorCollapsedRail: boolean = false;
+  private lastFoldPosture: string = '';
   @Local foldWindowWidthVp: number = 0;
   @Local foldWindowHeightVp: number = 0;
   @Local drawerSearch: string = '';
@@ -977,8 +978,7 @@ struct Index {
   }
   private isTriFoldPosture(): boolean {
     return this.foldLayout.posture === 'trifold_unfolded' ||
-      this.foldLayout.posture === 'trifold_angled' ||
-      this.environment.foldDisplayMode === FOLD_DISPLAY_MODE_GLOBAL_FULL;
+      this.foldLayout.posture === 'trifold_angled';
   }
   private stepFoldRelay(direction: 1 | -1): void {
     const rows = (this.model.directoryReady && this.model.directorySessions.length
@@ -1161,6 +1161,10 @@ struct Index {
         onConnect: () => { if (this.pairByPassword) this.passwordConnect(); else this.connect(); } })
     } else this.pairingForm()
   }
+  @Monitor('environment.foldStatus', 'environment.foldDisplayMode', 'environment.windowWidthPx', 'environment.windowHeightPx')
+  foldEnvironmentChanged(): void {
+    this.updateBreakpoint();
+  }
   private updateBreakpoint(): void {
     const oldWide = this.wide();
     const ui = this.getUIContext();
@@ -1168,8 +1172,18 @@ struct Index {
     if (this.environment.windowWidthPx > 0) this.foldWindowWidthVp = ui.px2vp(this.environment.windowWidthPx);
     if (this.environment.windowHeightPx > 0) this.foldWindowHeightVp = ui.px2vp(this.environment.windowHeightPx);
     this.environment.syncPosture(this.foldWindowWidthVp || this.phoneWidth, this.foldWindowHeightVp || this.phoneHeight, Number(this.breakpoint));
+    const posture = this.foldLayout.posture;
     hilog.info(0x0000, 'PersonaLayout', 'widthBreakpoint=%{public}s posture=%{public}s wide=%{public}s',
-      String(this.breakpoint), this.foldLayout.posture, String(this.wide()));
+      String(this.breakpoint), posture, String(this.wide()));
+    if (this.lastFoldPosture && posture !== this.lastFoldPosture) {
+      const wasTriFold = this.lastFoldPosture === 'trifold_unfolded' || this.lastFoldPosture === 'trifold_angled';
+      const isNowTriFold = posture === 'trifold_unfolded' || posture === 'trifold_angled';
+      if (wasTriFold !== isNowTriFold) {
+        this.foldInspectorUserToggled = false;
+        this.foldInspectorOpen = this.foldLayout.autoShowInspector;
+      }
+    }
+    this.lastFoldPosture = posture;
     if (!this.foldLayout.supportsInspector) {
       this.foldInspectorUserToggled = false;
       this.foldInspectorOpen = false;
@@ -1304,10 +1318,10 @@ struct Index {
     }
     if (dest === 'dictate') { this.openSpace('persona'); this.newConversation(); return; }
     if (dest === 'settings_xiaoyi') {
-      if (!this.wide()) {
+      if (!this.wide() || !this.model.profile.id) {
         this.phoneSettingsQuery = '';
         this.phoneSettingsTrail = pushPhoneSetting([], 'phone_xiaoyi');
-        if (this.model.profile.id) this.spacesShown = true;
+        if (this.model.profile.id && !this.wide()) this.spacesShown = true;
         this.phoneSettingsShown = true;
       } else {
         this.openSettings('phone_xiaoyi');
@@ -3723,17 +3737,19 @@ struct Index {
           if (!this.wide()) PhoneFirstRun({error:this.model.error ? trError(this.model.error) : '',pendingCleanup:this.model.pendingCleanupCount>0,
             onScan:()=>this.openSheet('connect', 'scan'),
             onManual:()=>this.openSheet('connect', 'manual'),onDemo:()=>this.model.useDemo(),onCleanup:()=>this.model.retryCleanup()})
-          else Column({ space: 12 }) {
-            Image($r('app.media.foreground')).width(72).height(72).objectFit(ImageFit.Contain).borderRadius(18)
-            Text(tr('persona')).fontSize(34).fontWeight(FontWeight.Bold).fontColor(Colors.ink)
-            Text(tr('phone_welcome_intro')).fontSize(16).fontColor(Colors.secondary).textAlign(TextAlign.Center).margin({bottom:24})
-            if (this.model.error) Text(trError(this.model.error)).fontSize(14).fontColor(Colors.danger)
-            Button(tr('phone_connect_hub')).width('100%').height(48).fontSize(17).backgroundColor(Colors.action).fontColor(Colors.onAction)
-              .onClick(() => this.openSheet('connect')).id('welcome.connect')
-            Button(tr('phone_local_demo')).width('100%').height(46).fontSize(16).backgroundColor(Colors.surface).fontColor(Colors.link)
-              .onClick(() => this.model.useDemo()).id('welcome.demo')
-            if (this.model.pendingCleanupCount > 0) Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('retry_cleanup')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('retry_cleanup', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('retry_cleanup')).bindTips(tr('retry_cleanup')).onClick(() => this.model.retryCleanup())
-          }.justifyContent(FlexAlign.Center).width('100%').height('100%').padding({left:32,right:32}).backgroundColor(Colors.grouped)
+          else Column() {
+            Column({ space: 12 }) {
+              Image($r('app.media.foreground')).width(72).height(72).objectFit(ImageFit.Contain).borderRadius(18)
+              Text(tr('persona')).fontSize(34).fontWeight(FontWeight.Bold).fontColor(Colors.ink)
+              Text(tr('phone_welcome_intro')).fontSize(16).fontColor(Colors.secondary).textAlign(TextAlign.Center).margin({bottom:24})
+              if (this.model.error) Text(trError(this.model.error)).fontSize(14).fontColor(Colors.danger)
+              Button(tr('phone_connect_hub')).width('100%').height(48).fontSize(17).backgroundColor(Colors.action).fontColor(Colors.onAction)
+                .onClick(() => this.openSheet('connect')).id('welcome.connect')
+              Button(tr('phone_local_demo')).width('100%').height(46).fontSize(16).backgroundColor(Colors.surface).fontColor(Colors.link)
+                .onClick(() => this.model.useDemo()).id('welcome.demo')
+              if (this.model.pendingCleanupCount > 0) Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('retry_cleanup')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('retry_cleanup', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('retry_cleanup')).bindTips(tr('retry_cleanup')).onClick(() => this.model.retryCleanup())
+            }.width('100%').constraintSize({ maxWidth: 440 }).alignItems(HorizontalAlign.Center)
+          }.justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center).width('100%').height('100%').padding({left:32,right:32}).backgroundColor(Colors.grouped)
         }.width('100%').height('100%')
           .bindSheet($$this.showSheet, this.sheetContent(), { title: this.sheetKind === 'newagent' || this.compactPairing() ? undefined : {title:this.sheetTitle()}, height: this.sheetKind === 'newagent' || this.compactPairing() ? this.compactFormHeight() : SheetSize.LARGE, keyboardAvoidMode: this.sheetKind === 'newagent' ? SheetKeyboardAvoidMode.RESIZE_ONLY : undefined, showClose: this.sheetKind !== 'newagent' && !this.compactPairing(), onWillDismiss:(d:DismissSheetAction) => { if (this.sheetKind === 'newagent' && this.agentPanel) this.closeAgentPanel(); else if (!this.creatingAgent) d.dismiss(); } })
       } else {
@@ -3798,7 +3814,14 @@ struct Index {
       .backgroundColor(this.compactInsetSurface())
       .blur(this.messageLift.current ? this.getUIContext().vp2px(3) : 0)
       .accessibilityLevel(this.messageLift.current ? 'no-hide-descendants' : 'auto')
-      .onAreaChange((_old:Area,now:Area) => { this.phoneWidth = Number(now.width); this.phoneHeight = Number(now.height); })
+      .onAreaChange((_old:Area,now:Area) => {
+        const nextWidth = Number(now.width);
+        const nextHeight = Number(now.height);
+        const changed = nextWidth !== this.phoneWidth || nextHeight !== this.phoneHeight;
+        this.phoneWidth = nextWidth;
+        this.phoneHeight = nextHeight;
+        if (changed) this.updateBreakpoint();
+      })
       .parallelGesture(PanGesture({fingers:1,direction:PanDirection.Horizontal,distance:12}).tag('phone.shell.pan')
         .onActionStart((event:GestureEvent) => this.startPhonePan(event))
         .onActionUpdate((event:GestureEvent) => this.movePhonePan(event.offsetX))
@@ -3810,8 +3833,10 @@ struct Index {
         onAppear: () => { this.spacesLayoutReady = true; this.measureSpaces(); }, onDisappear: () => { this.spacesLayoutReady = false; if (this.wide()) this.spacesShown = false; } })
     }
     }
-    Column().width(0).height(0).bindSheet(!this.model.profile.id && !this.wide() && this.phoneSettingsShown, this.phoneSettings(), {
-      height: this.compactFormHeight(), showClose: false, dragBar: false, backgroundColor: Colors.sheetBackground,
+    Column().width(0).height(0).bindSheet(!this.model.profile.id && this.phoneSettingsShown, this.phoneSettings(), {
+      height: this.wide() ? SheetSize.LARGE : this.compactFormHeight(),
+      preferType: this.wide() ? SheetType.CENTER : SheetType.BOTTOM,
+      showClose: false, dragBar: false, backgroundColor: Colors.sheetBackground,
       onWillDismiss: (dismiss: DismissSheetAction) => {
         if (dismiss.reason === DismissReason.PRESS_BACK && this.phoneSettingsPage) this.backPhoneSetting();
         else { this.phoneSettingsShown = false; dismiss.dismiss(); }

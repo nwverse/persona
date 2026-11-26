@@ -82,7 +82,8 @@ export function isTriFoldExpandedStatus(foldStatus: number): boolean {
 export function isTriFoldAngledStatus(foldStatus: number): boolean {
   return (
     foldStatus === FOLD_STATUS_EXPANDED_WITH_SECOND_HALF_FOLDED ||
-    foldStatus === FOLD_STATUS_HALF_FOLDED_WITH_SECOND_EXPANDED
+    foldStatus === FOLD_STATUS_HALF_FOLDED_WITH_SECOND_EXPANDED ||
+    foldStatus === FOLD_STATUS_HALF_FOLDED_WITH_SECOND_HALF_FOLDED
   );
 }
 
@@ -97,32 +98,38 @@ export function widthClassFromBreakpoint(bp: number): FoldWidthClass {
 
 export function classifyFoldPosture(input: FoldPostureInput): FoldPostureKind {
   const width = Number.isFinite(input.windowWidthVp) ? Math.max(0, input.windowWidthVp) : 0;
+  // Narrow split-screen or floating windows must stay compact stack even when hardware reports tri-fold.
+  if (width > 0 && width < 560) {
+    return input.isFoldable ? 'cover' : 'straight';
+  }
   if (input.isFoldable && isTriFoldAngledStatus(input.foldStatus) && width >= 820) {
     return 'trifold_angled';
   }
   if (input.isFoldable && isHalfFoldedStatus(input.foldStatus) && input.nativeHoverAvailable) {
     return 'hover_tabletop';
   }
+  const allowsTriFold = width === 0 || width >= 820;
   if (
-    input.foldDisplayMode === FOLD_DISPLAY_MODE_GLOBAL_FULL ||
-    isTriFoldExpandedStatus(input.foldStatus) ||
-    (input.isFoldable && width >= 920) ||
-    input.widthClass === 'xl'
+    allowsTriFold &&
+    (input.foldDisplayMode === FOLD_DISPLAY_MODE_GLOBAL_FULL ||
+      isTriFoldExpandedStatus(input.foldStatus) ||
+      (input.isFoldable && width >= 920) ||
+      input.widthClass === 'xl' ||
+      (!input.isFoldable && input.widthClass === 'lg'))
   ) {
     return 'trifold_unfolded';
   }
   if (input.isFoldable) {
     if (
-      input.foldStatus === FOLD_STATUS_FOLDED ||
-      input.foldDisplayMode === FOLD_DISPLAY_MODE_MAIN ||
-      input.foldDisplayMode === FOLD_DISPLAY_MODE_SUB ||
-      width < 560
+      width === 0 &&
+      (input.foldStatus === FOLD_STATUS_FOLDED ||
+        input.foldDisplayMode === FOLD_DISPLAY_MODE_MAIN ||
+        input.foldDisplayMode === FOLD_DISPLAY_MODE_SUB)
     ) {
       return 'cover';
     }
     return 'dual_unfolded';
   }
-  if (input.widthClass === 'lg') return 'trifold_unfolded';
   if (input.widthClass === 'md' && width >= 640) return 'dual_unfolded';
   return 'straight';
 }
@@ -138,23 +145,24 @@ export function resolveFoldLayout(input: FoldPostureInput): FoldAdaptiveLayout {
   const hoverMode = posture === 'hover_tabletop';
 
   if (posture === 'trifold_unfolded') {
-    const masterWidth = width >= 1160 ? 312 : 288;
-    const inspectorWidth = width >= 1160 ? 356 : 316;
+    const compactTriFold = width > 0 && width < 960;
+    const masterWidth = width >= 1160 ? 312 : compactTriFold ? 256 : 288;
+    const inspectorWidth = width >= 1160 ? 356 : compactTriFold ? 288 : 316;
     return {
       posture: posture,
       navigationMode: 'split',
       isFoldableSplit: input.isFoldable,
       masterWidth: masterWidth,
-      masterMin: 256,
+      masterMin: compactTriFold ? 244 : 256,
       masterMax: 420,
       detailMin: 340,
       supportsInspector: true,
       autoShowInspector: true,
-      collapseRailForInspector: false,
+      collapseRailForInspector: compactTriFold,
       inspectorWidth: inspectorWidth,
       readingMaxWidth: 740,
       hoverMode: false,
-      cardColumns: width >= 960 ? 3 : 2
+      cardColumns: width === 0 || width >= 960 ? 3 : 2
     };
   }
 

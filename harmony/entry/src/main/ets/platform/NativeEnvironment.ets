@@ -2,7 +2,7 @@ import { ConfigurationConstant } from '@kit.AbilityKit';
 import type { Configuration } from '@kit.AbilityKit';
 import { display, window } from '@kit.ArkUI';
 import { accessibility } from '@kit.AccessibilityKit';
-import { classifyFoldPosture, FOLD_DISPLAY_MODE_GLOBAL_FULL, widthClassFromBreakpoint } from '../core/FoldPosture';
+import { classifyFoldPosture, widthClassFromBreakpoint } from '../core/FoldPosture';
 import type { FoldPostureKind } from '../core/FoldPosture';
 
 /** Native application configuration, shared by workspace and detached views. */
@@ -94,6 +94,7 @@ export class NativeEnvironment {
       if (nextWidth !== this.windowWidthPx || nextHeight !== this.windowHeightPx) {
         this.lastWidthVp = 0;
         this.lastHeightVp = 0;
+        this.lastWidthBreakpoint = -1;
       }
       this.windowWidthPx = nextWidth;
       this.windowHeightPx = nextHeight;
@@ -128,13 +129,22 @@ export class NativeEnvironment {
     }
     this.syncPosture();
   }
+  private displayDensity(): number {
+    try {
+      const density = display.getDefaultDisplaySync().densityPixels;
+      if (Number.isFinite(density) && density > 0) return density;
+    } catch (_) {}
+    return 3.2;
+  }
   syncPosture(widthVp: number = 0, heightVp: number = 0, widthBreakpoint: number = -1): void {
     if (widthVp > 0) this.lastWidthVp = widthVp;
     if (heightVp > 0) this.lastHeightVp = heightVp;
     if (widthBreakpoint >= 0) this.lastWidthBreakpoint = widthBreakpoint;
-    const fallbackWidth = widthVp > 0 ? widthVp : (this.lastWidthVp > 0 ? this.lastWidthVp : (this.windowWidthPx > 0 ? this.windowWidthPx / 3.2 : 0));
-    const fallbackHeight = heightVp > 0 ? heightVp : (this.lastHeightVp > 0 ? this.lastHeightVp : (this.windowHeightPx > 0 ? this.windowHeightPx / 3.2 : 0));
-    const resolvedBreakpoint = widthBreakpoint >= 0 ? widthBreakpoint : (this.lastWidthBreakpoint >= 0 ? this.lastWidthBreakpoint : 1);
+    const density = this.displayDensity();
+    const fallbackWidth = widthVp > 0 ? widthVp : (this.lastWidthVp > 0 ? this.lastWidthVp : (this.windowWidthPx > 0 ? this.windowWidthPx / density : 0));
+    const fallbackHeight = heightVp > 0 ? heightVp : (this.lastHeightVp > 0 ? this.lastHeightVp : (this.windowHeightPx > 0 ? this.windowHeightPx / density : 0));
+    const inferredBreakpoint = fallbackWidth >= 1440 ? 4 : fallbackWidth >= 840 ? 3 : fallbackWidth >= 600 ? 2 : fallbackWidth >= 320 ? 1 : 0;
+    const resolvedBreakpoint = widthBreakpoint >= 0 ? widthBreakpoint : (this.lastWidthBreakpoint >= 0 ? this.lastWidthBreakpoint : (fallbackWidth > 0 ? inferredBreakpoint : 1));
     this.foldPosture = classifyFoldPosture({
       widthClass: widthClassFromBreakpoint(resolvedBreakpoint),
       windowWidthVp: fallbackWidth,
@@ -145,8 +155,7 @@ export class NativeEnvironment {
       nativeHoverAvailable: this.nativeHoverAvailable
     });
     this.isTriFold = this.foldPosture === 'trifold_unfolded' ||
-      this.foldPosture === 'trifold_angled' ||
-      this.foldDisplayMode === FOLD_DISPLAY_MODE_GLOBAL_FULL;
+      this.foldPosture === 'trifold_angled';
   }
   update(configuration: Configuration): void {
     if (configuration.colorMode === ConfigurationConstant.ColorMode.COLOR_MODE_DARK) this.dark = true;

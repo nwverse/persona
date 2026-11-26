@@ -331,3 +331,112 @@ test('64vp icon rail, 3-dot header, 3-tab Live Workbench, relay wiring, and bord
   assert.match(inspector, /onOpenToolsTab\(tab\)/);
   assert.match(inspector, /id\('fold\.inspector\.count\.needs'\)|'fold\.inspector\.count\.needs'/);
 });
+
+test('Mate XT / Mate XT 2 portrait 3-screen, floating/split windows, outward-fold MAIN, angled 23, and 820-960vp fit safely', () => {
+  // 3-screen portrait (744x1061 vp) with hardware GLOBAL_FULL still uses 2-pane dual_unfolded so center chat is never crushed.
+  const portraitTriFold = resolveFoldLayout({
+    widthClass: 'md',
+    windowWidthVp: 744,
+    windowHeightVp: 1061,
+    isFoldable: true,
+    foldStatus: FOLD_STATUS_EXPANDED_WITH_SECOND_EXPANDED,
+    foldDisplayMode: FOLD_DISPLAY_MODE_GLOBAL_FULL,
+    nativeHoverAvailable: true
+  });
+  assert.equal(portraitTriFold.posture, 'dual_unfolded');
+  assert.equal(portraitTriFold.navigationMode, 'split');
+  assert.equal(portraitTriFold.autoShowInspector, false);
+  assert.equal(portraitTriFold.collapseRailForInspector, true);
+  assert.equal(portraitTriFold.cardColumns, 2);
+
+  // Floating window / narrow split-screen (< 560vp) on tri-fold stays compact cover stack.
+  for (const widthVp of [420, 520]) {
+    const narrow = resolveFoldLayout({
+      widthClass: 'sm',
+      windowWidthVp: widthVp,
+      windowHeightVp: 800,
+      isFoldable: true,
+      foldStatus: FOLD_STATUS_EXPANDED_WITH_SECOND_EXPANDED,
+      foldDisplayMode: FOLD_DISPLAY_MODE_GLOBAL_FULL,
+      nativeHoverAvailable: true
+    });
+    assert.equal(narrow.posture, 'cover', `width ${widthVp}vp`);
+    assert.equal(narrow.navigationMode, 'stack');
+    assert.equal(narrow.supportsInspector, false);
+    assert.equal(narrow.cardColumns, 1);
+  }
+
+  // 880vp GLOBAL_FULL tri-fold fits 3 panes cleanly by collapsing the 64vp rail when inspector is open.
+  const midTriFold = resolveFoldLayout({
+    widthClass: 'lg',
+    windowWidthVp: 880,
+    windowHeightVp: 744,
+    isFoldable: true,
+    foldStatus: FOLD_STATUS_EXPANDED_WITH_SECOND_EXPANDED,
+    foldDisplayMode: FOLD_DISPLAY_MODE_GLOBAL_FULL,
+    nativeHoverAvailable: false
+  });
+  assert.equal(midTriFold.posture, 'trifold_unfolded');
+  assert.equal(midTriFold.collapseRailForInspector, true);
+  assert.equal(midTriFold.masterWidth, 256);
+  assert.equal(midTriFold.inspectorWidth, 288);
+  assert.ok(64 + midTriFold.detailMin + midTriFold.inspectorWidth <= 880);
+  assert.equal(midTriFold.cardColumns, 2);
+
+  // Z-stand half-folded (23) resolves to trifold_angled at wide widths (>= 820vp), keeping 707vp as hover_tabletop.
+  assert.equal(isTriFoldAngledStatus(FOLD_STATUS_HALF_FOLDED_WITH_SECOND_HALF_FOLDED), true);
+  assert.equal(classifyFoldPosture({
+    widthClass: 'lg',
+    windowWidthVp: 880,
+    windowHeightVp: 744,
+    isFoldable: true,
+    foldStatus: FOLD_STATUS_HALF_FOLDED_WITH_SECOND_HALF_FOLDED,
+    foldDisplayMode: FOLD_DISPLAY_MODE_GLOBAL_FULL,
+    nativeHoverAvailable: true
+  }), 'trifold_angled');
+
+  // Outward-fold / Mate XT 2-screen reporting FOLD_DISPLAY_MODE_MAIN at 682vp uses dual_unfolded, while 346vp stays cover.
+  assert.equal(classifyFoldPosture({
+    widthClass: 'md',
+    windowWidthVp: 682,
+    windowHeightVp: 744,
+    isFoldable: true,
+    foldStatus: FOLD_STATUS_FOLDED_WITH_SECOND_EXPANDED,
+    foldDisplayMode: FOLD_DISPLAY_MODE_MAIN,
+    nativeHoverAvailable: false
+  }), 'dual_unfolded');
+  assert.equal(classifyFoldPosture({
+    widthClass: 'sm',
+    windowWidthVp: 346,
+    windowHeightVp: 782,
+    isFoldable: true,
+    foldStatus: FOLD_STATUS_FOLDED,
+    foldDisplayMode: FOLD_DISPLAY_MODE_MAIN,
+    nativeHoverAvailable: false
+  }), 'cover');
+});
+
+test('wide XiaoYi settings, SettingsDirectory tint, module.json5 window modes, and Index posture transitions stay aligned', () => {
+  const index = readFileSync(new URL('../entry/src/main/ets/pages/Index.ets', import.meta.url), 'utf8');
+  const settingsDir = readFileSync(new URL('../entry/src/main/ets/components/SettingsDirectory.ets', import.meta.url), 'utf8');
+  const xiaoyiPage = readFileSync(new URL('../entry/src/main/ets/components/XiaoYiSettingsPage.ets', import.meta.url), 'utf8');
+  const moduleJson = JSON.parse(readFileSync(new URL('../entry/src/main/module.json5', import.meta.url), 'utf8'));
+
+  assert.match(index, /@Monitor\('environment\.foldStatus',\s*'environment\.foldDisplayMode',\s*'environment\.windowWidthPx',\s*'environment\.windowHeightPx'\)/);
+  assert.match(index, /wasTriFold\s*!==\s*isNowTriFold/);
+  assert.match(index, /constraintSize\(\{\s*maxWidth:\s*440\s*\}\)/);
+  assert.match(index, /if \(!this\.wide\(\) \|\| !this\.model\.profile\.id\)[\s\S]*phone_xiaoyi/);
+  assert.match(index, /bindSheet\(!this\.model\.profile\.id && this\.phoneSettingsShown/);
+
+  const tintBlock = settingsDir.slice(settingsDir.indexOf('function settingTint('), settingsDir.indexOf('function settingArtwork('));
+  assert.match(tintBlock, /case 'phone_xiaoyi':[\s\S]*return Colors\.ai;/);
+
+  assert.match(xiaoyiPage, /PhoneStyle\.cardBorder\(this\.environment\.dark\)/);
+  assert.match(xiaoyiPage, /PhoneStyle\.cardElevation\(this\.environment\.dark\)/);
+  assert.match(xiaoyiPage, /constraintSize\(\{\s*maxWidth:\s*740\s*\}\)/);
+  assert.match(xiaoyiPage, /workspaceHorizontalPadding\(/);
+  assert.match(xiaoyiPage, /Haptics\./);
+
+  const entryAbility = moduleJson.module.abilities.find((a) => a.name === 'EntryAbility');
+  assert.deepEqual(entryAbility.supportWindowMode, ['fullscreen', 'split', 'floating']);
+});
