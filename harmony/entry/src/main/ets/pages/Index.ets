@@ -105,7 +105,7 @@ import { tr, trError } from '../design/Strings';
 import { KeyCode } from '@kit.InputKit';
 import { Motion } from '../design/Motion';
 import { Haptics } from '../platform/Haptics';
-import { resolveFoldLayout, resolveFoldShortcut, widthClassFromBreakpoint } from '../core/FoldPosture';
+import { FOLD_DISPLAY_MODE_GLOBAL_FULL, pickRelaySessionIndex, resolveFoldLayout, resolveFoldShortcut, widthClassFromBreakpoint } from '../core/FoldPosture';
 import type { FoldAdaptiveLayout } from '../core/FoldPosture';
 import { FoldInspectorPanel } from '../components/FoldInspectorPanel';
 import { FloatingToastOverlay } from '../components/FloatingToastOverlay';
@@ -161,6 +161,8 @@ struct Index {
   @Local collapsed: boolean = false;
   @Local foldInspectorOpen: boolean = false;
   @Local foldInspectorUserToggled: boolean = false;
+  @Local foldWorkbenchTab: number = 0;
+  @Local foldWorkbenchTabSignal: number = 0;
   private foldInspectorCollapsedRail: boolean = false;
   @Local foldWindowWidthVp: number = 0;
   @Local foldWindowHeightVp: number = 0;
@@ -966,9 +968,39 @@ struct Index {
   private foldPostureLabel(): string {
     const p = this.foldLayout.posture;
     if (p === 'trifold_unfolded') return tr('fold_posture_trifold');
+    if (p === 'trifold_angled') return tr('fold_posture_trifold_angled');
     if (p === 'dual_unfolded') return tr('fold_posture_dual');
     if (p === 'hover_tabletop') return tr('fold_posture_hover');
     return '';
+  }
+  private isTriFoldPosture(): boolean {
+    return this.foldLayout.posture === 'trifold_unfolded' ||
+      this.foldLayout.posture === 'trifold_angled' ||
+      this.environment.foldDisplayMode === FOLD_DISPLAY_MODE_GLOBAL_FULL;
+  }
+  private stepFoldRelay(direction: 1 | -1): void {
+    const rows = (this.model.directoryReady && this.model.directorySessions.length
+      ? this.model.directorySessions
+      : this.model.sessions).filter((row: ResourceRow) => {
+        if (row.kind !== 'session') return false;
+        const data = row.data();
+        return !Wire.bool(data, 'archived') && !Wire.bool(data, 'assistant') && !Wire.bool(data, 'hidden_by_directory');
+      });
+    const states = rows.map((row: ResourceRow) => {
+      const data = row.data();
+      const raw = row.state || Wire.text(data, 'status');
+      if (Wire.bool(data, 'needs_you') || raw === 'needs_you' || raw === 'blocked') return 'needs_you';
+      if (Wire.bool(data, 'working') || raw === 'working' || raw === 'running') return 'working';
+      if (raw === 'done' || raw === 'unread' || Wire.bool(data, 'unread')) return 'unread';
+      return 'idle';
+    });
+    const currentKey = this.detailModel.selected?.key() || this.model.selected?.key() || '';
+    const currentIndex = rows.findIndex((row: ResourceRow) => row.key() === currentKey);
+    const nextIndex = pickRelaySessionIndex(states, currentIndex, direction);
+    if (nextIndex >= 0 && rows[nextIndex]) {
+      Haptics.selection();
+      this.openPickedChat(rows[nextIndex]);
+    }
   }
   private expandRail(): void {
     Haptics.tap();
@@ -986,6 +1018,11 @@ struct Index {
     if (event.keyCode === KeyCode.KEYCODE_K) return 'k';
     if (event.keyCode === KeyCode.KEYCODE_N) return 'n';
     if (event.keyCode === KeyCode.KEYCODE_I) return 'i';
+    if (event.keyCode === KeyCode.KEYCODE_1) return '1';
+    if (event.keyCode === KeyCode.KEYCODE_2) return '2';
+    if (event.keyCode === KeyCode.KEYCODE_3) return '3';
+    if (event.keyCode === KeyCode.KEYCODE_LEFT_BRACKET) return '[';
+    if (event.keyCode === KeyCode.KEYCODE_RIGHT_BRACKET) return ']';
     return '';
   }
   private isCtrlOrMetaPressed(event: KeyEvent): boolean {
@@ -1016,6 +1053,12 @@ struct Index {
     if (this.showFoldInspector()) { this.setFoldInspectorOpen(false); return true; }
     return false;
   }
+  private switchFoldWorkbenchTab(tab: number): void {
+    Haptics.selection();
+    if (!this.showFoldInspector()) this.setFoldInspectorOpen(true);
+    this.foldWorkbenchTab = tab;
+    this.foldWorkbenchTabSignal++;
+  }
   private handleFoldKeyEvent(event: KeyEvent): void {
     if (event.type !== KeyType.Down || !this.model.profile.id) return;
     const action = resolveFoldShortcut(
@@ -1034,6 +1077,21 @@ struct Index {
       event.stopPropagation();
     } else if (action === 'toggle_inspector') {
       this.toggleFoldInspector();
+      event.stopPropagation();
+    } else if (action === 'workbench_pulse') {
+      this.switchFoldWorkbenchTab(0);
+      event.stopPropagation();
+    } else if (action === 'workbench_code') {
+      this.switchFoldWorkbenchTab(1);
+      event.stopPropagation();
+    } else if (action === 'workbench_machines') {
+      this.switchFoldWorkbenchTab(2);
+      event.stopPropagation();
+    } else if (action === 'next_unread') {
+      this.stepFoldRelay(1);
+      event.stopPropagation();
+    } else if (action === 'prev_unread') {
+      this.stepFoldRelay(-1);
       event.stopPropagation();
     } else if (action === 'dismiss') {
       if (this.dismissTopOverlay()) event.stopPropagation();
@@ -1113,6 +1171,13 @@ struct Index {
     if (!this.foldLayout.supportsInspector) {
       this.foldInspectorUserToggled = false;
       this.foldInspectorOpen = false;
+    }
+    if (this.showFoldInspector() && this.foldLayout.collapseRailForInspector && !this.collapsed && !this.foldInspectorUserToggled) {
+      this.collapsed = true;
+      this.foldInspectorCollapsedRail = true;
+    } else if (!this.foldLayout.collapseRailForInspector && this.foldInspectorCollapsedRail) {
+      this.collapsed = false;
+      this.foldInspectorCollapsedRail = false;
     }
     if (!this.wide() && (this.collapsed || this.foldInspectorCollapsedRail)) {
       this.collapsed = false;
@@ -3611,6 +3676,9 @@ struct Index {
         detailModel: this.detailModel,
         panelWidth: this.foldLayout.inspectorWidth,
         postureLabel: this.foldPostureLabel(),
+        isTriFold: this.isTriFoldPosture(),
+        initialTab: this.foldWorkbenchTab,
+        tabSignal: this.foldWorkbenchTabSignal,
         onClose: () => {
           this.setFoldInspectorOpen(false);
         },
@@ -3619,7 +3687,9 @@ struct Index {
           if (this.shownName === 'tools') this.detailModel.selectWorkspaceTab(tab);
           else this.openTools('', tab);
         },
-        onOpenSession: (row: ResourceRow) => this.openPickedChat(row)
+        onOpenSession: (row: ResourceRow) => this.openPickedChat(row),
+        onStepRelay: (direction: 1 | -1) => this.stepFoldRelay(direction),
+        onOpenLink: (address: string) => this.openReader(address)
       })
     }
     }.width('100%').height('100%')

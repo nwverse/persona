@@ -825,7 +825,7 @@ export struct ProjectsPage {
               left: PhoneStyle.surfaceEdgeWidth(0.5),
               right: PhoneStyle.surfaceEdgeWidth(0.5)
             },
-            color: Colors.divider,
+            color: PhoneStyle.cardBorder(nativeEnvironment.dark),
             radius: {
               topLeft: entry.item.first ? PhoneStyle.cardRadius : 0,
               topRight: entry.item.first ? PhoneStyle.cardRadius : 0,
@@ -997,7 +997,8 @@ export struct ProjectsPage {
         if (agent.model) this.spaceModel(agent,true)
       }.width('100%').constraintSize({minHeight:174*this.spaceCardScale()}).padding(12*this.spaceCardScale()).alignItems(HorizontalAlign.Start)
     }.backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius)
-      .border({width:agent.state === 'needs_you' ? 1.5 : 0.5,color:agent.state === 'needs_you' ? $r('app.color.project_card_needs_border') : Colors.divider,radius:PhoneStyle.cardRadius})
+      .border({width:agent.state === 'needs_you' ? 1.5 : PhoneStyle.surfaceEdgeWidth(0.5),color:agent.state === 'needs_you' ? $r('app.color.project_card_needs_border') : PhoneStyle.cardBorder(nativeEnvironment.dark),radius:PhoneStyle.cardRadius})
+      .shadow(PhoneStyle.cardElevation(nativeEnvironment.dark))
       .overlay(this.spaceFooter(agent),{align:Alignment.BottomStart})
       .accessibilityGroup(true).accessibilityDescription(agent.model).onClick(() => this.openSpaceCard(treeKey,agent.row.key())).id('projects.session')
   }
@@ -1029,6 +1030,8 @@ export struct ProjectsPage {
           }, (child: ProjectWorktree) => JSON.stringify([child.key,child.title,child.branch,child.cwd]))
         }.divider({strokeWidth:0.5,color:Colors.divider,startMargin:56})
           .backgroundColor(Colors.surface).borderRadius(PhoneStyle.cardRadius).clip(true)
+          .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(nativeEnvironment.dark), radius: PhoneStyle.cardRadius })
+          .shadow(PhoneStyle.cardElevation(nativeEnvironment.dark))
       }
     }.width('100%').layoutWeight(1).maintainVisibleContentPosition(true)
       .padding({left:PhoneStyle.page,right:PhoneStyle.page,top:8,bottom:12}).id('projects.sessions')

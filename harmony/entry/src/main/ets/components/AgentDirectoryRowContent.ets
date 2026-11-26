@@ -6,6 +6,7 @@ import { Symbols } from '../design/Symbols';
 import { Tokens } from '../design/Tokens';
 import { tr } from '../design/Strings';
 import { deduplicateAgentPlace } from '../core/FoldPosture';
+import { nativeEnvironment } from '../platform/NativeEnvironment';
 import { ProjectAgentPlaceLine } from './ProjectAgentPlaceLine';
 import { NeedsYouPulseDot, WorkingArcSpinner } from './StatusMotionMarks';
 
@@ -202,7 +203,8 @@ export struct AgentDirectoryRowContent {
         Row().width(4*this.controlScale).height(this.measuredCardHeight-16).backgroundColor(this.tint).borderRadius(3).position({x:4,y:8})
     }.width('100%').borderRadius(14)
       .backgroundColor(this.agent.state==='needs_you'&&!this.muted?Colors.selection:Colors.sheetCard)
-      .border({width:0.5,color:Colors.divider,radius:14}).id('agents.display.card')
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(nativeEnvironment.dark),radius:14})
+      .shadow(PhoneStyle.cardElevation(nativeEnvironment.dark)).id('agents.display.card')
   }
   @Builder singleLine() {
     Row({space:8}){
@@ -241,7 +243,9 @@ export struct AgentDirectoryRowContent {
         if(this.muted)this.mutedMark()
       }.alignItems(HorizontalAlign.End).constraintSize({maxWidth:'32%'})
     }.width('100%').alignItems(VerticalAlign.Top).padding(10).constraintSize({minHeight:44})
-      .borderRadius(22).backgroundColor(Colors.sheetCard).border({width:0.5,color:Colors.divider,radius:22})
+      .borderRadius(22).backgroundColor(Colors.sheetCard)
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(nativeEnvironment.dark),radius:22})
+      .shadow(PhoneStyle.cardElevation(nativeEnvironment.dark))
   }
   build() {
     if(this.display==='list'){this.singleLine()}

@@ -778,7 +778,7 @@ export struct AgentListPage {
             $r('app.color.phone_agent_session_separator') : Colors.divider).margin({left:20,right:20})
         }
       }.width('100%').alignItems(HorizontalAlign.Start).backgroundColor(Colors.surface)
-        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: Colors.divider, radius: this.detachedDecisionRows || this.startsSurface(binding,'state/needs') ? 26 : 0 })
+        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: this.detachedDecisionRows || this.startsSurface(binding,'state/needs') ? 26 : 0 })
         .shadow(this.detachedDecisionRows || this.startsSurface(binding,'state/needs') ? PhoneStyle.cardElevation(this.environment.dark) : { radius: 0, color: Color.Transparent })
         .borderRadius({topLeft:this.detachedDecisionRows || this.startsSurface(binding,'state/needs') ? 26:0,
           topRight:this.detachedDecisionRows || this.startsSurface(binding,'state/needs') ? 26:0,
@@ -923,7 +923,7 @@ export struct AgentListPage {
           left: PhoneStyle.surfaceEdgeWidth(0.5),
           right: PhoneStyle.surfaceEdgeWidth(0.5)
         },
-        color: Colors.divider,
+        color: PhoneStyle.cardBorder(this.environment.dark),
         radius: {
           topLeft: this.startsSurface(binding, groupId) ? PhoneStyle.cardRadius : 0,
           topRight: this.startsSurface(binding, groupId) ? PhoneStyle.cardRadius : 0,
@@ -1143,7 +1143,7 @@ export struct AgentListPage {
       .width('100%')
       .padding(0)
       .backgroundColor(Colors.surface)
-      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: Colors.divider, radius: this.compactRoot && !this.rail ? 22 : 13 })
+      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: this.compactRoot && !this.rail ? 22 : 13 })
       .shadow(PhoneStyle.cardElevation(this.environment.dark))
       .borderRadius(this.compactRoot && !this.rail ? 22 : 13)
       .enabled(!this.workspace.busy)

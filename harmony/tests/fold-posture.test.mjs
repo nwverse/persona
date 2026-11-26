@@ -3,17 +3,25 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   FOLD_DISPLAY_MODE_FULL,
+  FOLD_DISPLAY_MODE_GLOBAL_FULL,
   FOLD_DISPLAY_MODE_MAIN,
   FOLD_STATUS_EXPANDED,
   FOLD_STATUS_EXPANDED_WITH_SECOND_EXPANDED,
+  FOLD_STATUS_EXPANDED_WITH_SECOND_HALF_FOLDED,
   FOLD_STATUS_FOLDED,
+  FOLD_STATUS_FOLDED_WITH_SECOND_EXPANDED,
+  FOLD_STATUS_FOLDED_WITH_SECOND_HALF_FOLDED,
   FOLD_STATUS_HALF_FOLDED,
+  FOLD_STATUS_HALF_FOLDED_WITH_SECOND_EXPANDED,
+  FOLD_STATUS_HALF_FOLDED_WITH_SECOND_HALF_FOLDED,
   FOLD_STATUS_UNKNOWN,
   classifyFoldPosture,
   compactTreeInset,
   deduplicateAgentPlace,
   isHalfFoldedStatus,
+  isTriFoldAngledStatus,
   isTriFoldExpandedStatus,
+  pickRelaySessionIndex,
   resolveFoldLayout,
   resolveFoldShortcut
 } from '../entry/src/main/ets/core/FoldPosture.ts';
@@ -88,16 +96,21 @@ test('Mate X7 transitions seamlessly between cover stack, 707vp dual-pane split,
   assert.equal(isHalfFoldedStatus(FOLD_STATUS_HALF_FOLDED), true);
 });
 
-test('Mate XT tri-fold unlocks 3-pane command center (master + chat + auto inspector)', () => {
+test('Mate XT / Mate XT 2 tri-fold unlocks 3-pane live workbench and angled stand mode across all 6 dual-axis FoldStatus values', () => {
+  assert.equal(FOLD_DISPLAY_MODE_GLOBAL_FULL, 5);
   assert.equal(isTriFoldExpandedStatus(FOLD_STATUS_EXPANDED_WITH_SECOND_EXPANDED), true);
+  assert.equal(isTriFoldAngledStatus(FOLD_STATUS_EXPANDED_WITH_SECOND_HALF_FOLDED), true);
+  assert.equal(isTriFoldAngledStatus(FOLD_STATUS_HALF_FOLDED_WITH_SECOND_EXPANDED), true);
+  assert.equal(isTriFoldAngledStatus(FOLD_STATUS_EXPANDED_WITH_SECOND_EXPANDED), false);
 
+  // 11: FOLD_STATUS_EXPANDED_WITH_SECOND_EXPANDED -> full 3-column workbench (1061vp)
   const trifold = resolveFoldLayout({
     widthClass: 'lg',
     windowWidthVp: 1061,
     windowHeightVp: 744,
     isFoldable: true,
     foldStatus: FOLD_STATUS_EXPANDED_WITH_SECOND_EXPANDED,
-    foldDisplayMode: FOLD_DISPLAY_MODE_FULL,
+    foldDisplayMode: FOLD_DISPLAY_MODE_GLOBAL_FULL,
     nativeHoverAvailable: true
   });
   assert.equal(trifold.posture, 'trifold_unfolded');
@@ -105,37 +118,148 @@ test('Mate XT tri-fold unlocks 3-pane command center (master + chat + auto inspe
   assert.equal(trifold.supportsInspector, true);
   assert.equal(trifold.autoShowInspector, true);
   assert.equal(trifold.collapseRailForInspector, false);
-  assert.ok(trifold.inspectorWidth >= 276);
+  assert.equal(trifold.masterWidth, 288);
+  assert.equal(trifold.inspectorWidth, 316);
+  assert.equal(trifold.cardColumns, 3);
   assert.ok(trifold.masterWidth + trifold.detailMin + trifold.inspectorWidth <= 1061);
 
-  // Dual-screen intermediate posture on Mate XT stays 2-pane without crowding the chat.
-  const dualIntermediate = classifyFoldPosture({
+  // 11 at >=1160vp (Mate XT 2 landscape / MatePad XL): expanded master & code workbench columns
+  const wideTrifold = resolveFoldLayout({
+    widthClass: 'xl',
+    windowWidthVp: 1280,
+    windowHeightVp: 800,
+    isFoldable: true,
+    foldStatus: FOLD_STATUS_EXPANDED_WITH_SECOND_EXPANDED,
+    foldDisplayMode: FOLD_DISPLAY_MODE_GLOBAL_FULL,
+    nativeHoverAvailable: false
+  });
+  assert.equal(wideTrifold.posture, 'trifold_unfolded');
+  assert.equal(wideTrifold.masterWidth, 312);
+  assert.equal(wideTrifold.inspectorWidth, 356);
+  assert.equal(wideTrifold.cardColumns, 3);
+
+  // FOLD_DISPLAY_MODE_GLOBAL_FULL (5) triggers trifold_unfolded even before width reaches 920vp
+  assert.equal(classifyFoldPosture({
+    widthClass: 'md',
+    windowWidthVp: 880,
+    windowHeightVp: 744,
+    isFoldable: true,
+    foldStatus: FOLD_STATUS_EXPANDED,
+    foldDisplayMode: FOLD_DISPLAY_MODE_GLOBAL_FULL,
+    nativeHoverAvailable: false
+  }), 'trifold_unfolded');
+
+  // 12: FOLD_STATUS_FOLDED_WITH_SECOND_EXPANDED -> 2-screen intermediate split
+  assert.equal(classifyFoldPosture({
     widthClass: 'md',
     windowWidthVp: 682,
     windowHeightVp: 744,
     isFoldable: true,
-    foldStatus: FOLD_STATUS_EXPANDED,
+    foldStatus: FOLD_STATUS_FOLDED_WITH_SECOND_EXPANDED,
     foldDisplayMode: FOLD_DISPLAY_MODE_FULL,
     nativeHoverAvailable: false
+  }), 'dual_unfolded');
+
+  // 21 & 13: angled 3rd pane (Stand mode) when width >= 820vp
+  const angled21 = resolveFoldLayout({
+    widthClass: 'lg',
+    windowWidthVp: 880,
+    windowHeightVp: 744,
+    isFoldable: true,
+    foldStatus: FOLD_STATUS_EXPANDED_WITH_SECOND_HALF_FOLDED,
+    foldDisplayMode: FOLD_DISPLAY_MODE_GLOBAL_FULL,
+    nativeHoverAvailable: true
   });
-  assert.equal(dualIntermediate, 'dual_unfolded');
+  assert.equal(angled21.posture, 'trifold_angled');
+  assert.equal(angled21.navigationMode, 'split');
+  assert.equal(angled21.autoShowInspector, true);
+  assert.equal(angled21.collapseRailForInspector, true);
+  assert.equal(angled21.inspectorWidth, 304);
+  assert.equal(angled21.hoverMode, false);
+  assert.equal(angled21.cardColumns, 2);
+
+  const angled13 = resolveFoldLayout({
+    widthClass: 'lg',
+    windowWidthVp: 980,
+    windowHeightVp: 744,
+    isFoldable: true,
+    foldStatus: FOLD_STATUS_HALF_FOLDED_WITH_SECOND_EXPANDED,
+    foldDisplayMode: FOLD_DISPLAY_MODE_FULL,
+    nativeHoverAvailable: true
+  });
+  assert.equal(angled13.posture, 'trifold_angled');
+  assert.equal(angled13.collapseRailForInspector, false);
+
+  // 22 & 23: half-folded secondary with nativeHoverAvailable -> hover_tabletop
+  assert.equal(classifyFoldPosture({
+    widthClass: 'md',
+    windowWidthVp: 707,
+    windowHeightVp: 744,
+    isFoldable: true,
+    foldStatus: FOLD_STATUS_FOLDED_WITH_SECOND_HALF_FOLDED,
+    foldDisplayMode: FOLD_DISPLAY_MODE_FULL,
+    nativeHoverAvailable: true
+  }), 'hover_tabletop');
+
+  assert.equal(classifyFoldPosture({
+    widthClass: 'md',
+    windowWidthVp: 707,
+    windowHeightVp: 744,
+    isFoldable: true,
+    foldStatus: FOLD_STATUS_HALF_FOLDED_WITH_SECOND_HALF_FOLDED,
+    foldDisplayMode: FOLD_DISPLAY_MODE_FULL,
+    nativeHoverAvailable: true
+  }), 'hover_tabletop');
 });
 
-test('hardware keyboard shortcuts resolve Ctrl/Meta+K/N/I and Escape across fold postures', () => {
+test('hardware keyboard shortcuts resolve Ctrl/Meta+K/N/I/1/2/3/[/] and Escape across fold postures', () => {
   assert.equal(resolveFoldShortcut('k', true, true), 'search');
   assert.equal(resolveFoldShortcut('K', true, false), 'search');
   assert.equal(resolveFoldShortcut('n', true, true), 'new_chat');
   assert.equal(resolveFoldShortcut('N', true, false), 'new_chat');
   assert.equal(resolveFoldShortcut('i', true, true), 'toggle_inspector');
   assert.equal(resolveFoldShortcut('I', true, false), 'none');
+  assert.equal(resolveFoldShortcut('1', true, true), 'workbench_pulse');
+  assert.equal(resolveFoldShortcut('2', true, true), 'workbench_code');
+  assert.equal(resolveFoldShortcut('3', true, true), 'workbench_machines');
+  assert.equal(resolveFoldShortcut('1', true, false), 'none');
+  assert.equal(resolveFoldShortcut('2', true, false), 'none');
+  assert.equal(resolveFoldShortcut('3', true, false), 'none');
+  assert.equal(resolveFoldShortcut(']', true, false), 'next_unread');
+  assert.equal(resolveFoldShortcut('[', true, false), 'prev_unread');
   assert.equal(resolveFoldShortcut('escape', false, false), 'dismiss');
   assert.equal(resolveFoldShortcut('Esc', true, true), 'dismiss');
-  // Bare letters without Ctrl/Meta never steal text input.
+  // Bare letters/brackets/digits without Ctrl/Meta never steal text input.
   assert.equal(resolveFoldShortcut('k', false, true), 'none');
   assert.equal(resolveFoldShortcut('n', false, true), 'none');
   assert.equal(resolveFoldShortcut('i', false, true), 'none');
+  assert.equal(resolveFoldShortcut('1', false, true), 'none');
+  assert.equal(resolveFoldShortcut('2', false, true), 'none');
+  assert.equal(resolveFoldShortcut('3', false, true), 'none');
+  assert.equal(resolveFoldShortcut(']', false, true), 'none');
+  assert.equal(resolveFoldShortcut('[', false, true), 'none');
   assert.equal(resolveFoldShortcut('', true, true), 'none');
   assert.equal(resolveFoldShortcut('x', true, true), 'none');
+});
+
+test('pickRelaySessionIndex cycles needs_you and unread first, falls back to working, or -1 if clear', () => {
+  const mixed = ['idle', 'needs_you', 'working', 'unread', 'idle'];
+  assert.equal(pickRelaySessionIndex(mixed, -1, 1), 1);
+  assert.equal(pickRelaySessionIndex(mixed, 1, 1), 3);
+  assert.equal(pickRelaySessionIndex(mixed, 3, 1), 1);
+  assert.equal(pickRelaySessionIndex(mixed, 2, 1), 3);
+  assert.equal(pickRelaySessionIndex(mixed, -1, -1), 3);
+  assert.equal(pickRelaySessionIndex(mixed, 3, -1), 1);
+  assert.equal(pickRelaySessionIndex(mixed, 1, -1), 3);
+
+  const workingOnly = ['idle', 'working', 'idle', 'working'];
+  assert.equal(pickRelaySessionIndex(workingOnly, -1, 1), 1);
+  assert.equal(pickRelaySessionIndex(workingOnly, 1, 1), 3);
+  assert.equal(pickRelaySessionIndex(workingOnly, 3, 1), 1);
+  assert.equal(pickRelaySessionIndex(workingOnly, 1, -1), 3);
+
+  assert.equal(pickRelaySessionIndex(['idle', 'idle'], 0, 1), -1);
+  assert.equal(pickRelaySessionIndex([], -1, 1), -1);
 });
 
 test('deduplicateAgentPlace suppresses redundant title echoes while keeping distinct place metadata', () => {
@@ -150,7 +274,7 @@ test('deduplicateAgentPlace suppresses redundant title echoes while keeping dist
   assert.equal(deduplicateAgentPlace('Fix login flow', ''), '');
 });
 
-test('64vp icon rail, 3-dot header, 3-chip inspector, and elevated repository cards maintain structural invariants', () => {
+test('64vp icon rail, 3-dot header, 3-tab Live Workbench, relay wiring, and borderless grouped cards maintain structural invariants', () => {
   const index = readFileSync(new URL('../entry/src/main/ets/pages/Index.ets', import.meta.url), 'utf8');
   const agents = readFileSync(new URL('../entry/src/main/ets/components/AgentListPage.ets', import.meta.url), 'utf8');
   const rowContent = readFileSync(new URL('../entry/src/main/ets/components/AgentDirectoryRowContent.ets', import.meta.url), 'utf8');
@@ -164,29 +288,43 @@ test('64vp icon rail, 3-dot header, 3-chip inspector, and elevated repository ca
   // Clean 3-dot menu button replaces ohos_ic_public_more in destinationMenus.
   const destMenus = index.slice(index.indexOf('  @Builder destinationMenus('), index.indexOf('  private openSettingsRoot('));
   assert.match(destMenus, /Row\(\{ space: 3 \}\)[\s\S]*Circle\(\)\.width\(3\.5\)\.height\(3\.5\)/);
-  // Hardware keyboard shortcuts wired into root Stack.
+  // Hardware keyboard shortcuts wired into root Stack, including Ctrl/Cmd+1/2/3 and [/] + trifold_angled label.
   assert.match(index, /\.onKeyEvent\(\(event: KeyEvent\) => this\.handleFoldKeyEvent\(event\)\)/);
   assert.match(index, /resolveFoldShortcut\(/);
-  // Inspector onOpenToolsTab wired to open or switch tabs live.
+  assert.match(index, /KEYCODE_1[\s\S]*KEYCODE_2[\s\S]*KEYCODE_3[\s\S]*KEYCODE_LEFT_BRACKET[\s\S]*KEYCODE_RIGHT_BRACKET/);
+  assert.match(index, /fold_posture_trifold_angled/);
+  assert.match(index, /pickRelaySessionIndex\(/);
+  // Inspector onOpenToolsTab and onStepRelay wired live.
   assert.match(index, /onOpenToolsTab:\s*\(tab: number\) =>/);
+  assert.match(index, /onStepRelay:\s*\(direction: 1 \| -1\) =>/);
 
   // Rebuilt AgentListPage rail mode: 40x40 avatars with status marks & bindTips, zero repo outline in rail mode.
   assert.match(agents, /@Builder railAvatar\(binding: BoundAgentRow\)[\s\S]*\.width\(40\)[\s\S]*\.height\(40\)[\s\S]*\.bindTips\(/);
   const resultList = agents.slice(agents.indexOf('  @Builder resultList()'), agents.indexOf('  build()'));
   assert.match(resultList, /if \(this\.rail\) \{[\s\S]*this\.railAvatar\(rowBinding\)[\s\S]*id\('agents\.rail\.list'\)[\s\S]*\} else \{[\s\S]*AgentRepositoryRows\(/);
-  // Wide split agentRow uses live motion marks instead of static dot.
+  // Wide split agentRow uses live motion marks & PhoneStyle.cardBorder.
   const wideRow = agents.slice(agents.indexOf('  @Builder agentRow('), agents.indexOf('  @Builder rowContext('));
   assert.match(wideRow, /NeedsYouPulseDot\(/);
   assert.match(wideRow, /WorkingArcSpinner\(/);
+  assert.match(agents, /PhoneStyle\.cardBorder\(/);
 
-  // Duplicate place suppression in AgentDirectoryRowContent & ProjectsPage + worktree dividers & card elevation.
+  // Duplicate place suppression in AgentDirectoryRowContent & ProjectsPage + worktree dividers & borderless card styling.
   assert.match(rowContent, /private displayPlace\(\): string \{\s*return deduplicateAgentPlace\(this\.agent\.row\.title, this\.place\);/);
   assert.match(projects, /deduplicateAgentPlace\(agent\.row\.title, paneName \|\| agent\.tab\)/);
   assert.match(projects, /outlineItemNeedsDivider\(entry\)[\s\S]*Divider\(\)\.strokeWidth\(0\.5\)/);
   assert.match(projects, /PhoneStyle\.cardElevation\(nativeEnvironment\.dark\)/);
+  assert.match(projects, /PhoneStyle\.cardBorder\(nativeEnvironment\.dark\)/);
 
-  // Supercharged FoldInspectorPanel: posture pill + 3-chip Workspace launcher + Fleet Pulse counters.
+  // Mate XT 2 Tri-Fold 3-Tab Live Workbench in FoldInspectorPanel.
   assert.match(inspector, /id\('fold\.inspector\.posture'\)/);
+  assert.match(inspector, /fold_workbench_pulse[\s\S]*fold_workbench_code[\s\S]*fold_workbench_machines/);
+  assert.match(inspector, /fold_relay_queue[\s\S]*fold_relay_clear[\s\S]*fold_relay_prev[\s\S]*fold_relay_next/);
+  assert.match(inspector, /SessionTools\(\{/);
+  assert.match(inspector, /fold_workbench_expand_tools/);
+  assert.match(inspector, /fold_workbench_pick_session/);
+  assert.match(inspector, /\/api\/v1\/metrics/);
+  assert.match(inspector, /\/api\/v1\/usage\/windows/);
+  assert.match(inspector, /machine_load_per_core/);
   assert.match(inspector, /this\.toolChip\('files', 0, 'fold\.inspector\.tools\.files'/);
   assert.match(inspector, /this\.toolChip\('git', 1, 'fold\.inspector\.tools\.git'/);
   assert.match(inspector, /this\.toolChip\('terminal', 2, 'fold\.inspector\.tools\.terminal'\)/);
