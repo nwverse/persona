@@ -117,6 +117,18 @@ type Settings struct {
 	WorkGuide              *bool    `json:"work_guide,omitempty"`
 	// TodosV2 enables the unified experimental New To-dos & Tasks experience (#14538, #14584). nil is off (the default).
 	TodosV2 *bool `json:"todos_v2,omitempty"`
+	// TodosV2AutoSeen controls whether autonomously completed to-dos auto-clear unseen badges under todos_v2=true (#16098):
+	// "off", "subtasks" (part_of children only), or "all_autonomous" (default when empty).
+	TodosV2AutoSeen string `json:"todos_v2_auto_seen,omitempty"`
+	// TodosV2PendingReviewSLAHours controls how many hours pending_review stays quiet in working under todos_v2=true
+	// before escalating to needs_you (#16098): 0 (off — immediate needs_you), 12, 24 (default when nil), or 48.
+	TodosV2PendingReviewSLAHours *int `json:"todos_v2_pending_review_sla_hours,omitempty"`
+	// TodosV2CanWaitSLAHours controls how many hours non-critical can_wait decisions wait under todos_v2=true
+	// before aging into active needs_you (#16098): 0 (off — never auto-escalate), 24, 48 (default when nil), or 72.
+	TodosV2CanWaitSLAHours *int `json:"todos_v2_can_wait_sla_hours,omitempty"`
+	// TodosV2FoldChildren controls whether non-urgent child tasks fold under their top-level parent goal in board
+	// projection under todos_v2=true (#16098). nil is true (the default).
+	TodosV2FoldChildren *bool `json:"todos_v2_fold_children,omitempty"`
 	// IntegrationsV2 enables the unified experimental Integrations & Extensions experience (#14802, #14805). nil is off (the default).
 	IntegrationsV2 *bool `json:"integrations_v2,omitempty"`
 	// LabsSeen is the set of experiment IDs acknowledged on any client of this assistant.
@@ -368,9 +380,49 @@ func (s *Service) updateSettingsSaveChecked(ctx context.Context, fn func(*Settin
 	return v, nil
 }
 
+const (
+	todosV2AutoSeenOff           = "off"
+	todosV2AutoSeenSubtasks      = "subtasks"
+	todosV2AutoSeenAllAutonomous = "all_autonomous"
+
+	todosV2DefaultPendingReviewSLAHours = 24
+	todosV2DefaultCanWaitSLAHours       = 48
+)
+
+var (
+	todosV2AutoSeenModes           = []string{todosV2AutoSeenOff, todosV2AutoSeenSubtasks, todosV2AutoSeenAllAutonomous}
+	todosV2PendingReviewSLAOptions = []int{0, 12, 24, 48}
+	todosV2CanWaitSLAOptions       = []int{0, 24, 48, 72}
+)
+
 func (v Settings) workGuideOn() bool      { return v.WorkGuide != nil && *v.WorkGuide }
 func (v Settings) todosV2On() bool        { return v.TodosV2 != nil && *v.TodosV2 }
 func (v Settings) integrationsV2On() bool { return v.IntegrationsV2 != nil && *v.IntegrationsV2 }
+
+func (v Settings) todosV2AutoSeenMode() string {
+	if slices.Contains(todosV2AutoSeenModes, v.TodosV2AutoSeen) {
+		return v.TodosV2AutoSeen
+	}
+	return todosV2AutoSeenAllAutonomous
+}
+
+func (v Settings) todosV2PendingReviewSLAHours() int {
+	if v.TodosV2PendingReviewSLAHours != nil && slices.Contains(todosV2PendingReviewSLAOptions, *v.TodosV2PendingReviewSLAHours) {
+		return *v.TodosV2PendingReviewSLAHours
+	}
+	return todosV2DefaultPendingReviewSLAHours
+}
+
+func (v Settings) todosV2CanWaitSLAHours() int {
+	if v.TodosV2CanWaitSLAHours != nil && slices.Contains(todosV2CanWaitSLAOptions, *v.TodosV2CanWaitSLAHours) {
+		return *v.TodosV2CanWaitSLAHours
+	}
+	return todosV2DefaultCanWaitSLAHours
+}
+
+func (v Settings) todosV2FoldChildrenOn() bool {
+	return v.TodosV2FoldChildren == nil || *v.TodosV2FoldChildren
+}
 
 // integrationsV2On reports whether assistant.integrations_v2 is enabled (off by default).
 // Uses settingsLastGood so hot receive/routing paths never trigger a hub hello RPC.
@@ -826,9 +878,13 @@ type assistantView struct {
 	FoldRoutineRelayReplies bool `json:"fold_routine_relay_replies"`
 	// RecentTaskChats is in effect, like DoneNeedsDelivery.
 	RecentTaskChats bool     `json:"recent_task_chats"`
-	WorkGuide       bool     `json:"work_guide"`
-	TodosV2         bool     `json:"todos_v2"`
-	IntegrationsV2  bool     `json:"integrations_v2"`
+	WorkGuide                    bool     `json:"work_guide"`
+	TodosV2                      bool     `json:"todos_v2"`
+	TodosV2AutoSeen              string   `json:"todos_v2_auto_seen"`
+	TodosV2PendingReviewSLAHours int      `json:"todos_v2_pending_review_sla_hours"`
+	TodosV2CanWaitSLAHours       int      `json:"todos_v2_can_wait_sla_hours"`
+	TodosV2FoldChildren          bool     `json:"todos_v2_fold_children"`
+	IntegrationsV2               bool     `json:"integrations_v2"`
 	LabsSeen        []string `json:"labs_seen"`
 	// MeetingAttendanceDefault is in effect (off until changed).
 	MeetingAttendanceDefault      string   `json:"meeting_attendance_default"`
@@ -902,9 +958,13 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		ReadonlyMode:            readonlyModeOf(v),
 		MainBackgroundFolded:    quietOn(v.MainBackgroundFolded),
 		FoldRoutineRelayReplies: v.foldRoutineRelayReplies(),
-		WorkGuide:               v.workGuideOn(),
-		TodosV2:                 v.todosV2On(),
-		IntegrationsV2:          v.integrationsV2On(),
+		WorkGuide:                    v.workGuideOn(),
+		TodosV2:                      v.todosV2On(),
+		TodosV2AutoSeen:              v.todosV2AutoSeenMode(),
+		TodosV2PendingReviewSLAHours: v.todosV2PendingReviewSLAHours(),
+		TodosV2CanWaitSLAHours:       v.todosV2CanWaitSLAHours(),
+		TodosV2FoldChildren:          v.todosV2FoldChildrenOn(),
+		IntegrationsV2:               v.integrationsV2On(),
 		LabsSeen:                append([]string{}, v.LabsSeen...),
 		RecentTaskChats:         v.RecentTaskChats != nil && *v.RecentTaskChats,
 		DeliveryGate:            deliveryGateOf(v),

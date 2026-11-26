@@ -233,6 +233,10 @@ type Service struct {
 	prepared     map[string]preparedState
 
 	epoch string
+	// todosV2BootEpoch is the stable per-process boot epoch for todos_v2 restart recovery (#16099).
+	// Lazily initialized when a zero-value Service{} is constructed in tests.
+	todosV2BootEpoch     atomic.Pointer[string]
+	todosV2RecoverySwept atomic.Bool
 	// born is when this manager started: a background supervisor started before it may be in a profile with no login
 	// (backgroundSignedOut).
 	born  time.Time
@@ -433,6 +437,8 @@ func New(o Options) *Service {
 	s := &Service{moduleSwitch: moduleswitch.Off(o.ModulesOff...), hub: o.Hub, logf: o.Logf, mux: http.NewServeMux(), epoch: randomHex(8), tasks: newTasksState(), born: time.Now(),
 		devs: o.Devices, trustSrc: o.Trust, agentDirs: o.AgentDirs, herdrSessions: o.HerdrSessions, id: o.ID, build: o.Build, repositoryConfig: o.RepositoryConfig, urgentWake: make(chan struct{}, 1),
 		a2aWake: make(chan struct{}, 1), a2aLogicalWrites: make(chan struct{}, 4)}
+	bootEpoch := "boot_" + randomHex(8)
+	s.todosV2BootEpoch.Store(&bootEpoch)
 	s.setStore(o.Store)
 	s.inbox.lang = func() i18n.Lang { return s.lang(context.Background()) }
 	s.remoteImages = remoteimage.New(remoteimage.Options{CacheDir: o.RemoteImageCache, Logf: o.Logf, DoH: s.remoteImageDoH})
