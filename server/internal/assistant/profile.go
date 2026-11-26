@@ -108,8 +108,9 @@ type Settings struct {
 	MainBackgroundFolded *bool `json:"main_background_folded,omitempty"`
 	// FoldRoutineRelayReplies opts the main chat into quiet completed relay reports when its background rounds fold.
 	FoldRoutineRelayReplies *bool `json:"fold_routine_relay_replies,omitempty"`
-	// MainCompactWindow: the compaction window, in tokens, the main conversation is held to when its launcher declares a
-	// larger one (#7314, main_compact_window.go); nil is 400000, 0 follows the launcher.
+	// MainCompactWindow: the compaction window, in tokens, the main conversation and each leader conversation are held to
+	// when their launcher declares a larger one (#7314, #15318, main_compact_window.go); nil is 400000, 0 follows the
+	// launcher.
 	MainCompactWindow *int `json:"main_compact_window,omitempty"`
 	// RecentTaskChats: the apps' sidebar Recent lists the chats a scheduled task or the background supervisor started
 	// too, by last activity with the others (#8324; since #6228 they are only in All chats). Display only, one value
@@ -258,11 +259,16 @@ type Settings struct {
 	// MainSupervisesOwnTasks: the main conversation follows up the tasks no leader supervises itself. nil is off (the
 	// default, #4927): the background supervisor does (supervise_background.go).
 	MainSupervisesOwnTasks *bool `json:"main_supervises_own_tasks,omitempty"`
-	// AutoSupervisionMessages: the assistant sends its automatic supervision messages (the follow-up messages that wake
-	// the main, leader or background supervisor conversation). nil is on (the default); false stops them from being
-	// made, queued or sent, and withdraws the ones still waiting (supervise_switch.go). The task ledger, the owner's own
-	// questions and acceptance, permission cards and approval answers do not depend on it.
+	// AutoSupervisionMessages is the older on/off form of AutoSupervisionMode, read only while the mode is unset: nil
+	// or true is all, false is off. A write of the mode keeps it in step (mode != off) for older readers and downgrades.
 	AutoSupervisionMessages *bool `json:"auto_supervision_messages,omitempty"`
+	// AutoSupervisionMode: which automatic supervision messages (the follow-up messages that wake the main, leader or
+	// background supervisor conversation) the assistant sends (supervise_switch.go). all (the default) sends every one;
+	// outcomes only a task's terminal handoff, stop, failure, explicit done/blocked/question report and decisions, not
+	// the routine checks made while it runs; off none, and what still waits is withdrawn. "" falls back to
+	// AutoSupervisionMessages. The task ledger, the owner's own questions and acceptance, permission cards and approval
+	// answers do not depend on it.
+	AutoSupervisionMode string `json:"auto_supervision_mode,omitempty"`
 	// SupervisionBatchMinutes independently batches routine supervision per final recipient, anchored at its first
 	// routine signal. Nil or 0 preserves the legacy shared gather and spacing. Immediate signals bypass the batch.
 	SupervisionBatchMinutes *int `json:"supervision_batch_minutes,omitempty"`
@@ -1001,8 +1007,10 @@ type assistantView struct {
 	// the tasks no leader supervises.
 	MainSupervisesOwnTasks  bool `json:"main_supervises_own_tasks"`
 	SupervisionBatchMinutes int  `json:"supervision_batch_minutes"`
-	// AutoSupervisionMessages is in effect (true unless the owner turned the automatic supervision messages off).
+	// AutoSupervisionMessages is in effect (true unless the mode is off), for clients that know only the switch.
 	AutoSupervisionMessages bool `json:"auto_supervision_messages"`
+	// AutoSupervisionMode is in effect: all, outcomes or off.
+	AutoSupervisionMode string `json:"auto_supervision_mode"`
 }
 
 // view is GET /api/v1/assistant; withArchived lists archived conversations too (flagged `archived`). It lists the
@@ -1065,6 +1073,7 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		MainSupervisesOwnTasks:       !s.backgroundOn(v),
 		SupervisionBatchMinutes:      supervisionBatchMinutesOf(v),
 		AutoSupervisionMessages:      autoSupervisionOf(v),
+		AutoSupervisionMode:          supervisionModeOf(v),
 		NextSuggestions:              v.NextSuggestions != nil && *v.NextSuggestions}
 	if d, ok := s.device(ctx, v.MachineID); ok {
 		out.Cwd = s.spaceCwd(ctx, d, sp)

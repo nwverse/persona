@@ -10,6 +10,7 @@ registerHooks({
     if (specifier === '@kit.AbilityKit') return { url: 'native-environment:ability', shortCircuit: true };
     if (specifier === '@kit.AccessibilityKit') return {url:'native-environment:accessibility',shortCircuit:true};
     if (specifier === '@kit.ArkUI') return { url: 'native-environment:display', shortCircuit: true };
+    if (specifier.endsWith('/core/FoldPosture')) return { url: new URL('../core/FoldPosture.ts', context.parentURL).href, shortCircuit: true };
     return next(specifier, context);
   },
   load(url, context, next) {

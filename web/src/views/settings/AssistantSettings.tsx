@@ -2,7 +2,7 @@
 // AssistantMemoryView, Android's assistant settings): what Persona does on its own (a line into "Scheduled tasks"), what it knows about you
 // ("About me" = `notes`, saved on "Save" or when leaving; "Memory" = its memory files: read, edit the whole file, delete), and where
 // it runs (read-only here). Its model is Settings › Models › Main chat, not here (#1291).
-import { Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { t } from "../../i18n";
 import { BASE } from "../../lib/base";
 import { settingsHref } from "./nav";
@@ -36,6 +36,7 @@ import { CacheKeepaliveSettings, type CacheKeepaliveState } from "./CacheKeepali
 import { PageBoundary } from "../PageBoundary";
 
 const StandingAuthorizations = lazyPage(() => import("./StandingAuthorizations").then((m) => m.StandingAuthorizations));
+const OutboundMessages = lazyPage(() => import("./OutboundMessages").then((m) => m.OutboundMessages));
 const Repositories = lazyPage(() => import("./Repositories").then((m) => m.Repositories));
 const WorkspaceNaming = lazyPage(() => import("../../ui/WorkspaceNaming").then((m) => m.WorkspaceNamingSettingsGroup));
 
@@ -98,9 +99,12 @@ interface AssistantState extends AgentAutoNamingState, CacheKeepaliveState {
    *  off by default, which means the built-in background supervisor follows up the tasks no leader supervises; unset
    *  from a hub before it. */
   main_supervises_own_tasks?: boolean;
-  /** "Automatic supervision messages": on by default; off stops the follow-up messages that wake the supervising
-   *  conversations on their own; unset from a hub before it. */
+  /** "Automatic supervision messages" as the older on/off switch (true unless the mode is off); a hub before
+   *  `auto_supervision_mode` sends only this one, a hub before both neither. */
   auto_supervision_messages?: boolean;
+  /** Which automatic supervision messages are sent (#16417, docs/assistant/unified-entry.md): "all" (default),
+   *  "outcomes" (results and decisions, no routine check-ins) or "off"; unset from a hub before it. */
+  auto_supervision_mode?: string;
   /** Three-tier PR/Issue delivery closeout gate (#12034): "off", "merged" (default), or "live"; unset from a hub before it. */
   delivery_gate?: string;
   /** Days a closed session stays listed before it archives itself (#3618, docs/assistant/todos.md "Closed sessions
@@ -133,6 +137,16 @@ const MAX_IDLE_HOURS = 8760;
 const MEETING_ROLES = ["off", "listener", "participant"] as const;
 /** `delivery_gate`'s values, in the picker's order. */
 const DELIVERY_GATES = ["off", "merged", "live"] as const;
+/** `auto_supervision_mode`'s values, in the picker's order; a hub that has only the older switch offers the first and last. */
+const SUPERVISION_MODES = ["all", "outcomes", "off"] as const;
+const LEGACY_SUPERVISION_MODES = ["all", "off"] as const;
+
+/** The automatic supervision mode a hub answered: its mode, else its older switch read as all / off, else none. */
+function supervisionModeOf(info: Pick<AssistantState, "auto_supervision_mode" | "auto_supervision_messages"> | null | undefined): string | undefined {
+  if (typeof info?.auto_supervision_mode === "string") return info.auto_supervision_mode;
+  if (typeof info?.auto_supervision_messages === "boolean") return info.auto_supervision_messages ? "all" : "off";
+  return undefined;
+}
 
 /** Finite day bounds (docs/protocol/protocol.md). All but the old `recording_days` also accept 0, selected as Forever
  *  rather than typed. */
@@ -150,6 +164,8 @@ export function AssistantSettings({ bare }: { /** Without its header (the profil
 }
 
 function AssistantSettingsForManager({ manager, owner, bare }: { manager: string; owner: string; bare?: boolean }) {
+  const [outboundRevision, setOutboundRevision] = useState(0);
+  const outboundChanged = useCallback(() => setOutboundRevision(n => n + 1), []);
   const [notesSaves] = useState(() => aboutMeSaves(manager, owner));
   const scopedApi: typeof api = (path, init) => api(path, { ...init, headers: { ...Object.fromEntries(new Headers(init?.headers)), [MANAGER_HEADER]: manager } });
   const [directionNotes] = useState(() => directionNotesDeps(scopedApi));
@@ -214,6 +230,22 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
     } catch (e) {
       toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
     } finally { setDeliveryBusy(false); }
+  };
+
+  const [supervisionBusy, setSupervisionBusy] = useState(false);
+  const supervisionMode = supervisionModeOf(info);
+  const supervisionChoices: readonly string[] = typeof info?.auto_supervision_mode === "string" ? SUPERVISION_MODES : LEGACY_SUPERVISION_MODES;
+  // A hub with the mode takes the mode; one with only the older switch takes the switch (all / off).
+  const setSupervisionMode = async (mode: string) => {
+    setSupervisionBusy(true);
+    try {
+      const body = typeof info?.auto_supervision_mode === "string" ? { auto_supervision_mode: mode } : { auto_supervision_messages: mode !== "off" };
+      const r = await scopedApi<AssistantState>("/assistant", { method: "PUT", json: body });
+      if (r.manager !== manager || supervisionModeOf(r) !== mode) throw new Error(t("settings-assistantsettings.auto_supervision_mode_unconfirmed"));
+      setInfo((i) => i ? { ...i, auto_supervision_mode: r.auto_supervision_mode, auto_supervision_messages: r.auto_supervision_messages } : i);
+    } catch (e) {
+      toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
+    } finally { setSupervisionBusy(false); }
   };
 
   const [meetingBusy, setMeetingBusy] = useState(false);
@@ -397,16 +429,16 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
 
   const [agentsBusy, setAgentsBusy] = useState(false);
   // One field of the Agents group (#3617, #3618, #4293, #5082, #12492): shown as chosen at once, taken back with the reason when the hub refuses.
-  const setAgents = async (patch: { agent_tasks: boolean } | { close_ended_terminals: boolean } | { inbox_signals: boolean } | { inbox_todo_forward: boolean } | { main_supervises_own_tasks: boolean } | { auto_supervision_messages: boolean } | { archive_closed_days: number } | { idle_close_hours: number }) => {
+  const setAgents = async (patch: { agent_tasks: boolean } | { close_ended_terminals: boolean } | { inbox_signals: boolean } | { inbox_todo_forward: boolean } | { main_supervises_own_tasks: boolean } | { archive_closed_days: number } | { idle_close_hours: number }) => {
     const before = info;
     setAgentsBusy(true);
     setInfo((i) => (i ? { ...i, ...patch } : i));
     try {
       const r = await scopedApi<AssistantState>("/assistant", { method: "PUT", json: patch });
       // what the hub saved, when it says
-      setInfo((i) => (i ? { ...i, agent_tasks: r.agent_tasks ?? i.agent_tasks, close_ended_terminals: r.close_ended_terminals ?? i.close_ended_terminals, inbox_signals: r.inbox_signals ?? i.inbox_signals, inbox_todo_forward: r.inbox_todo_forward ?? i.inbox_todo_forward, main_supervises_own_tasks: r.main_supervises_own_tasks ?? i.main_supervises_own_tasks, auto_supervision_messages: r.auto_supervision_messages ?? i.auto_supervision_messages, archive_closed_days: r.archive_closed_days ?? i.archive_closed_days, idle_close_hours: r.idle_close_hours ?? i.idle_close_hours } : i));
+      setInfo((i) => (i ? { ...i, agent_tasks: r.agent_tasks ?? i.agent_tasks, close_ended_terminals: r.close_ended_terminals ?? i.close_ended_terminals, inbox_signals: r.inbox_signals ?? i.inbox_signals, inbox_todo_forward: r.inbox_todo_forward ?? i.inbox_todo_forward, main_supervises_own_tasks: r.main_supervises_own_tasks ?? i.main_supervises_own_tasks, archive_closed_days: r.archive_closed_days ?? i.archive_closed_days, idle_close_hours: r.idle_close_hours ?? i.idle_close_hours } : i));
     } catch (e) {
-      setInfo((i) => (i && before ? { ...i, agent_tasks: before.agent_tasks, close_ended_terminals: before.close_ended_terminals, inbox_signals: before.inbox_signals, inbox_todo_forward: before.inbox_todo_forward, main_supervises_own_tasks: before.main_supervises_own_tasks, auto_supervision_messages: before.auto_supervision_messages, archive_closed_days: before.archive_closed_days, idle_close_hours: before.idle_close_hours } : i));
+      setInfo((i) => (i && before ? { ...i, agent_tasks: before.agent_tasks, close_ended_terminals: before.close_ended_terminals, inbox_signals: before.inbox_signals, inbox_todo_forward: before.inbox_todo_forward, main_supervises_own_tasks: before.main_supervises_own_tasks, archive_closed_days: before.archive_closed_days, idle_close_hours: before.idle_close_hours } : i));
       toast(t("settings-assistantsettings.save_failed", { error: errorText(e) }), "error");
     } finally {
       setAgentsBusy(false);
@@ -573,7 +605,7 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
       )}
 
       {/* Who follows up the main chat's tasks (#5082), delivery closeout gate (#12034), following up agents, their tasks' new messages, stopping idle ones and tidying closed ones (#3617, #4293, #4754, #3618): each row only from a hub that has its setting */}
-      {(supportsAgentAutoNaming(info) || typeof info?.main_supervises_own_tasks === "boolean" || typeof info?.delivery_gate === "string" || typeof info?.agent_tasks === "boolean" || typeof info?.close_ended_terminals === "boolean" || typeof info?.inbox_signals === "boolean" || typeof info?.auto_supervision_messages === "boolean" || typeof info?.inbox_todo_forward === "boolean" || typeof info?.idle_close_hours === "number" || typeof info?.archive_closed_days === "number") && info && (
+      {(supportsAgentAutoNaming(info) || typeof info?.main_supervises_own_tasks === "boolean" || typeof info?.delivery_gate === "string" || typeof info?.agent_tasks === "boolean" || typeof info?.close_ended_terminals === "boolean" || typeof info?.inbox_signals === "boolean" || supervisionMode !== undefined || typeof info?.inbox_todo_forward === "boolean" || typeof info?.idle_close_hours === "number" || typeof info?.archive_closed_days === "number") && info && (
         <Group anchor="agents" title={t("settings-assistantsettings.agents_title")}>
           {supportsAgentAutoNaming(info) && <AgentAutoNaming info={info} manager={manager} owner={owner}
             onSaved={(patch) => setInfo((current) => current ? { ...current, ...patch } : current)} />}
@@ -582,9 +614,15 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
               <Switch on={info.main_supervises_own_tasks} onChange={(on) => void setAgents({ main_supervises_own_tasks: on })} disabled={agentsBusy} label={t("settings-assistantsettings.main_supervises")} />
             </Row>
           )}
-          {typeof info.auto_supervision_messages === "boolean" && (
-            <Row label={t("settings-assistantsettings.auto_supervision_messages")} hint={t("settings-assistantsettings.auto_supervision_messages_hint")} wrapHint>
-              <Switch on={info.auto_supervision_messages} onChange={(on) => void setAgents({ auto_supervision_messages: on })} disabled={agentsBusy} label={t("settings-assistantsettings.auto_supervision_messages")} />
+          {supervisionMode !== undefined && (
+            <Row label={t("settings-assistantsettings.auto_supervision_mode")} hint={t("settings-assistantsettings.auto_supervision_mode_hint")} wrapHint stackOnNarrow anchor="auto-supervision-mode">
+              <select aria-label={t("settings-assistantsettings.auto_supervision_mode")} value={supervisionMode}
+                disabled={info.manager !== manager || supervisionBusy}
+                className="min-w-0 max-w-full rounded-control bg-field px-3 py-2 text-meta text-ink shadow-inset-field pointer-coarse:min-h-11"
+                onChange={(e) => void setSupervisionMode(e.target.value)}>
+                {!supervisionChoices.includes(supervisionMode) && <option value={supervisionMode} disabled>{supervisionMode}</option>}
+                {supervisionChoices.map((m) => <option key={m} value={m}>{t(`settings-assistantsettings.auto_supervision_mode_${m}`)}</option>)}
+              </select>
             </Row>
           )}
           {typeof info.delivery_gate === "string" && (
@@ -691,6 +729,11 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
         </Row>
       </Group>
 
+      <PageBoundary page="outbound-messages">
+        <Suspense fallback={<Loading />}>
+          <OutboundMessages manager={manager} changed={outboundChanged} />
+        </Suspense>
+      </PageBoundary>
       {typeof info?.owner_reply_approval === "boolean" && typeof info.persistent_owner_action_cards === "boolean" && Array.isArray(info.owner_reply_approval_phrases) && (
         <Group anchor="owner-reply-approval" title={t("settings-assistantsettings.owner_approval_title")} footer={t("settings-assistantsettings.owner_approval_footer")}>
           <Row label={t("settings-assistantsettings.owner_approval_switch")} hint={t("settings-assistantsettings.owner_approval_switch_hint")} wrapHint>
@@ -705,7 +748,7 @@ function AssistantSettingsForManager({ manager, owner, bare }: { manager: string
 
       <PageBoundary page="standing-authorizations">
         <Suspense fallback={<Group anchor="standing-authorizations" title={t("settings-standing.title")}><Loading /></Group>}>
-          <StandingAuthorizations manager={manager} />
+          <StandingAuthorizations key={outboundRevision} manager={manager} />
         </Suspense>
       </PageBoundary>
 
