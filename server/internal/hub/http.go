@@ -194,41 +194,6 @@ func (m *markedWriter) FlushError() error {
 // Unwrap lets the handlers reach the underlying writer's Hijacker and deadlines.
 func (m *markedWriter) Unwrap() http.ResponseWriter { return m.ResponseWriter }
 
-func outsideDecisionConsume(r *http.Request) bool {
-	if r.Method != http.MethodPost {
-		return false
-	}
-	for _, prefix := range []string{"/api/v1/decisions/odc_", "/api/v1/connector-decisions/odc_act"} {
-		id, ok := strings.CutPrefix(r.URL.Path, prefix)
-		if !ok {
-			continue
-		}
-		id, ok = strings.CutSuffix(id, "/consume")
-		if ok && id != "" && !strings.Contains(id, "/") && len(id) <= 64 {
-			return true
-		}
-	}
-	return false
-}
-
-func (h *Hub) outsideDecisionOwner(ctx context.Context, r *http.Request) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 4*time.Second)
-	defer cancel()
-	lookup := extwire.DecisionOwner{ID: r.PathValue("id"), Action: strings.HasPrefix(r.URL.Path, "/api/v1/connector-decisions/")}
-	for _, manager := range h.listManagers(ctx) {
-		var answer extwire.DecisionOwnerAnswer
-		if err := h.callBus(ctx, manager, extwire.MethodDecisionOwner, lookup, &answer); err != nil {
-			return "", err
-		}
-		if answer.Found {
-			return manager, nil
-		}
-	}
-	// No manager claimed the id. Keep the ordinary not-found response from the
-	// default manager; a lookup error above never turns into this fallback.
-	return h.defaultOwner(ctx), nil
-}
-
 func (h *Hub) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		public := h.sourceOf(r) == sourcePublic
@@ -288,11 +253,7 @@ func (h *Hub) auth(next http.Handler) http.Handler {
 		}
 		var p principal
 		var ok, sure bool
-		if outsideDecisionConsume(r) {
-			// The random decision id is a one-request capability. The manager checks the owner answer and exact
-			// request fingerprint and consumes it atomically; no hub or extension credential is needed here.
-			p, ok = principal{ID: "agent-write-decision", Role: roleDecision}, true
-		} else if ext {
+		if ext {
 			p, ok, p.extOpens, p.extScope, sure = h.authorizeExtension(r.Context(), tok, r)
 		} else {
 			var err error
@@ -386,7 +347,7 @@ func (h *Hub) auth(next http.Handler) http.Handler {
 			if !h.authorizeReadOnly(w, r, p) {
 				return
 			}
-		} else if p.Role != roleDecision && !allowed(p, r.Method, r.URL.Path) {
+		} else if !allowed(p, r.Method, r.URL.Path) {
 			msg := "this device can only read and answer"
 			if p.Role == roleLink || p.Role == roleLinkPair {
 				msg = "a Persona Link credential only opens its machine's link"

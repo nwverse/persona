@@ -231,7 +231,7 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 			// Loop expansion proves reads only. Writes (including GET deletion
 			// routes) keep the whole-command approval and proxy restrictions.
 			for _, call := range child.calls {
-				v.unknown = v.unknown || !larkRead(call) || !larkBypassSafe(call)
+				v.unknown = v.unknown || !larkCallRead(gates, call) || !larkBypassSafe(call)
 			}
 		}
 		return v
@@ -356,7 +356,7 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 				v.other = true
 			}
 			formatting := larkFilterSubstitution(nested) || resultAssignment && larkAssignmentFormattingSubstitution(nested)
-			readResult := resultAssignment && larkClassifiedReadSubstitution(child)
+			readResult := resultAssignment && larkClassifiedReadSubstitution(gates, child)
 			nestedUnsure = nestedUnsure || !formatting && !readResult || child.unknown || child.unparsed || child.unsure
 			fileReads = fileReads && (larkFilterSubstitution(nested) || larkFileReadSubstitution(nested)) &&
 				len(child.calls) == 0 && !child.unknown && !child.unparsed && !child.unsure
@@ -571,9 +571,9 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 // or prints data. Other programs keep the enclosing gated call conservative.
 // larkClassifiedReadSubstitution is a command substitution made solely of calls already proven to be reads. Its
 // output can be stored or formatted as data; the enclosing executable and any eval/shell use are checked separately.
-func larkClassifiedReadSubstitution(v larkVerdict) bool {
+func larkClassifiedReadSubstitution(gates []proto.CommandGate, v larkVerdict) bool {
 	return len(v.calls) > 0 && !v.other && !v.unknown && !v.unparsed && !v.unsure &&
-		!slices.ContainsFunc(v.calls, func(c larkCall) bool { return !larkRead(c) || !larkBypassSafe(c) })
+		!slices.ContainsFunc(v.calls, func(c larkCall) bool { return !larkCallRead(gates, c) || !larkBypassSafe(c) })
 }
 
 func larkFilterSubstitution(cmd string) bool {

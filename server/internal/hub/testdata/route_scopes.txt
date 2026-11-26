@@ -568,14 +568,12 @@ todos.write          POST /api/v1/assistant/workspace-naming/preview
 -                    POST /api/v1/bots/feishu/test
 -                    POST /api/v1/channels/{id}/bind
 -                    POST /api/v1/channels/{id}/test
--                    POST /api/v1/connector-decisions/{id}/consume
 -                    POST /api/v1/connectors/sent/chat-rules
 -                    POST /api/v1/connectors/sent/{id}/recall
 -                    POST /api/v1/connectors/{id}/login
 -                    POST /api/v1/connectors/{id}/logout
 -                    POST /api/v1/connectors/{id}/thread/reply
 decisions.raise      POST /api/v1/decisions
--                    POST /api/v1/decisions/{id}/consume
 decisions.raise      POST /api/v1/decisions/{id}/withdraw
 -                    POST /api/v1/devices
 -                    POST /api/v1/devices/{id}/live-activity

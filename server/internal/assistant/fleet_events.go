@@ -196,15 +196,6 @@ func (s *Service) nodeRequest(ctx context.Context, machine, method string, param
 	case "assistant.lark":
 		out, err := s.assistantLark(ctx, machine)
 		return out, true, err
-	case proto.MethodLarkApprove:
-		r, ok := s.ext.(interface {
-			RecordNodeActionApproval(ctx context.Context, machine string, params json.RawMessage) (any, error)
-		})
-		if !ok {
-			return nil, true, errors.New("lark.approve: no extensions here")
-		}
-		out, err := r.RecordNodeActionApproval(ctx, machine, params)
-		return out, true, err
 	case proto.MethodLarkSent: // a write the gate proxy forwarded and the API took (node/gateproxy.go)
 		if s.ext == nil {
 			return nil, true, errors.New("lark.sent: no extensions, there is no ledger")

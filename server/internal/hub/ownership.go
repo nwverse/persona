@@ -470,15 +470,6 @@ func (h *Hub) owner(w http.ResponseWriter, r *http.Request, by ownerOf) (string,
 
 // forwardOwned is forwardHTTP to the manager by resolves.
 func (h *Hub) forwardOwned(w http.ResponseWriter, r *http.Request, by ownerOf) {
-	if outsideDecisionConsume(r) && namedManager(r) == "" {
-		id, err := h.outsideDecisionOwner(r.Context(), r)
-		if err != nil {
-			writeErrCode(w, http.StatusServiceUnavailable, assistantwire.CodeAssistantOffline, err)
-			return
-		}
-		h.forwardHTTP(w, r, id)
-		return
-	}
 	if id, ok := h.owner(w, r, by); ok {
 		h.forwardHTTP(w, r, id)
 	}

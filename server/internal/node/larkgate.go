@@ -175,7 +175,7 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 			title := wholeCommandTitle(cfg.Gates, v, analysisCommand, g, write)
 			if title != "" {
 				what := "写"
-				if wholeCommandReads(v, write) {
+				if wholeCommandReads(cfg.Gates, v, write) {
 					what = "读"
 				}
 				ix.ToolName, ix.Summary = title, "以你的身份在"+title+"上"+what+"（命令较复杂，整条显示）\n"+prettyBody(command)
@@ -184,7 +184,7 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 				// which could be anything, the CLI included. Still asked, as the ordinary Bash card it is (#4890).
 				ix.ToolName, ix.Summary = cmp.Or(ix.ToolName, "Bash"), prettyBody(command)
 			}
-			ix.OutwardWrite = wholeCommandOutwardWrite(v, write, title)
+			ix.OutwardWrite = wholeCommandOutwardWrite(cfg.Gates, v, write, title)
 			decision, reason, _, err := n.confirmLark(ctx, session, ix, nil, confirmWrites, title)
 			return decision, reason, err
 		}
@@ -245,7 +245,7 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 	if confirmWrites || bypass {
 		remember = nil // hard boundaries are confirmed each time
 	}
-	ix.OutwardWrite = slices.ContainsFunc(ask, larkCallOutwardWrite)
+	ix.OutwardWrite = slices.ContainsFunc(ask, func(c larkCall) bool { return larkCallOutwardWrite(cfg.Gates, c) })
 	decision, reason, card, err := n.confirmLark(ctx, session, ix, remember, confirmWrites, ix.ToolName)
 	if decision == "allow" {
 		n.grantGateCalls(cfg, session, ask, card)
@@ -343,11 +343,11 @@ func callTitle(gates []proto.CommandGate, c larkCall) string {
 // wholeCommandReads says whether every call the gate identified is an ordinary read. An opaque non-Lark part may
 // still need the whole-command card, but does not turn those identified reads into writes. Zero calls, an explicit
 // write, an outbound/delete action, an unknown CLI risk or an expanded command name keeps the existing wording.
-func wholeCommandReads(v larkVerdict, write bool) bool {
+func wholeCommandReads(gates []proto.CommandGate, v larkVerdict, write bool) bool {
 	if write || v.cliWrite || v.dynamic || len(v.calls) == 0 {
 		return false
 	}
-	return !slices.ContainsFunc(v.calls, func(c larkCall) bool { return !larkRead(c) || !larkBypassSafe(c) })
+	return !slices.ContainsFunc(v.calls, func(c larkCall) bool { return !larkCallRead(gates, c) || !larkBypassSafe(c) })
 }
 
 // wholeCommandTitle is what a whole-command card names as the place the command acts on, from what the command

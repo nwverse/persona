@@ -582,18 +582,6 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 		return nil
 	}
 	switch method {
-	case assistantwire.MethodDecisionOwner:
-		var in struct {
-			ID string `json:"id"`
-		}
-		if err := decode(&in); err != nil {
-			return nil, err
-		}
-		if in.ID == "" || len(in.ID) > 64 {
-			return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: method + ": a bounded decision id is required"}
-		}
-		found, err := s.hasOutsideDecision(ctx, in.ID)
-		return map[string]any{"found": found}, err
 	case assistantwire.MethodHTTP:
 		var p assistantwire.HTTPRequest
 		if err := decode(&p); err != nil {

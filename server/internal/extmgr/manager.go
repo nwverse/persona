@@ -150,7 +150,6 @@ type Manager struct {
 
 	mail               Mail
 	connectors         *connector.Registry
-	actionApprovals    actionApprovalBook
 	larkCLIRefreshMu   sync.Mutex
 	larkCLIRecovery    larkCLIRecovery
 	imessageSettingsMu imessageContextLock

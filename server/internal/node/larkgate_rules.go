@@ -46,8 +46,16 @@ func larkDecision(cfg proto.AssistantLark, c larkCall) string {
 			pathMatches(candidate.Path, c.Path)
 	})
 	if action, ok := matchLark(rules, c); ok {
+		rule, _ := firstLark(rules, c)
+		// A blanket read allow is the common default, not an authorization for
+		// the Agent API's side-effecting GET/HEAD routes. An exact or narrower
+		// route rule still has its explicit, first-match meaning.
+		if !read && action == "allow" && strings.Trim(rule.Path, "/") == "**" && len(rule.Body) == 0 &&
+			(c.Method == http.MethodGet && strings.EqualFold(rule.Method, http.MethodGet) ||
+				c.Method == http.MethodHead && strings.EqualFold(rule.Method, http.MethodHead)) {
+			return "confirm"
+		}
 		if read && action == "confirm" {
-			rule, _ := firstLark(rules, c)
 			if rule.Method == "*" && strings.Trim(rule.Path, "/") == "**" && len(rule.Body) == 0 && !bodyScoped {
 				return "allow"
 			}
@@ -71,27 +79,12 @@ func larkRead(c larkCall) bool {
 	return c.Method == "GET" || c.Method == "HEAD"
 }
 
-// Agent API's NOT_READ_ONLY_GET_ROUTES: these GET/HEAD routes mint or hand
-// out credentials, export the local database, or sign in as the user. Ordinary
-// GET/HEAD routes remain card-free; only this explicit contract is a write.
-var agentAPIWriteGETRoutes = []string{
-	"/conversations/*/qr-code",
-	"/calendar/event/*/share-link",
-	"/contacts/my-link",
-	"/documents/share/password",
-	"/links/open",
-	"/meetings/participants/*/audio",
-	"/maintenance/export",
-}
-
+// Agent API's NOT_READ_ONLY_GET_ROUTES are shared with the manager's ledger
+// through proto.AgentAPIWriteGET. Ordinary GET/HEAD routes remain card-free.
 func larkGateRead(g proto.CommandGate, c larkCall) bool {
 	if larkRead(c) && (c.Method == http.MethodGet || c.Method == http.MethodHead) {
-		if _, ok := gateAgentToken(g); ok {
-			for _, route := range agentAPIWriteGETRoutes {
-				if pathMatches(route, c.Path) {
-					return false
-				}
-			}
+		if _, ok := gateAgentToken(g); ok && proto.AgentAPIWriteGET(c.Method, c.Path) {
+			return false
 		}
 	}
 	return larkRead(c)
@@ -291,8 +284,8 @@ func larkBypassSafe(c larkCall) bool {
 
 // larkCallOutwardWrite reports whether c is a gated connector write acting as the owner
 // (not a read-only call and not an explicit lark-cli --as bot call).
-func larkCallOutwardWrite(c larkCall) bool {
-	if larkRead(c) {
+func larkCallOutwardWrite(gates []proto.CommandGate, c larkCall) bool {
+	if larkCallRead(gates, c) {
 		return false
 	}
 	if c.CLI && c.Method == "CLI" && flagValue(c.Args, "--as") == "bot" {
@@ -303,12 +296,12 @@ func larkCallOutwardWrite(c larkCall) bool {
 
 // wholeCommandOutwardWrite reports whether a complex-command gate card for title is an outward
 // write as the owner, matching the gate's write wording and excluding read-only or bot-only calls.
-func wholeCommandOutwardWrite(v larkVerdict, write bool, title string) bool {
-	if title == "" || wholeCommandReads(v, write) {
+func wholeCommandOutwardWrite(gates []proto.CommandGate, v larkVerdict, write bool, title string) bool {
+	if title == "" || wholeCommandReads(gates, v, write) {
 		return false
 	}
 	if write || len(v.calls) == 0 || v.unknown || v.dynamic || v.unparsed {
 		return true
 	}
-	return slices.ContainsFunc(v.calls, larkCallOutwardWrite)
+	return slices.ContainsFunc(v.calls, func(c larkCall) bool { return larkCallOutwardWrite(gates, c) })
 }

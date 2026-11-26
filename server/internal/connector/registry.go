@@ -43,9 +43,6 @@ type Registry struct {
 	workers   sync.WaitGroup
 	// sent is told of every gated write that went out (SetSent).
 	sent func(ctx context.Context, s Sent)
-	// actionApprovals records the one action its gate just let through, for a
-	// downstream service that independently enforces owner-approved writes.
-	actionApprovals ActionApprovalRegistrar
 }
 
 type starter struct {
@@ -58,14 +55,6 @@ type starter struct {
 // NewRegistry holds no connector yet; rules are the write gate's (hub.json connector_gate, ValidateRules).
 func NewRegistry(rules []Rule) *Registry {
 	return &Registry{rules: rules, off: map[string]bool{}, feedsOff: map[string]map[Feed]bool{}, stop: map[string]context.CancelFunc{}}
-}
-
-// SetActionApprovals registers each action only after its gate let it through.
-// It is nil for connectors whose downstream service has no second write gate.
-func (r *Registry) SetActionApprovals(register ActionApprovalRegistrar) {
-	r.mu.Lock()
-	r.actionApprovals = register
-	r.mu.Unlock()
 }
 
 // SetUserRules sets the rules the user made from the ledger ("don't ask again in this chat", ChatRuleFor), replacing
@@ -419,12 +408,6 @@ func (r *Registry) call(ctx context.Context, name string, args json.RawMessage, 
 			return *res
 		}
 		through = how
-	}
-	r.mu.RLock()
-	registerApproval := r.actionApprovals
-	r.mu.RUnlock()
-	if registerApproval != nil {
-		ctx = WithActionApprovalRegistrar(ctx, registerApproval)
 	}
 	done, err := Write(ctx, a, name, args)
 	if gated && err == nil {

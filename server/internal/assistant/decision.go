@@ -66,8 +66,10 @@ var (
 	decisionSettle = 10 * time.Minute
 )
 
-// DecisionOption is one option of a decision: its label, and what choosing it leads to.
+// DecisionOption is one option of a decision: its optional stable id, its
+// localizable label, and what choosing it leads to.
 type DecisionOption struct {
+	ID      string `json:"id,omitempty"`
 	Label   string `json:"label"`
 	LeadsTo string `json:"leads_to"`
 }

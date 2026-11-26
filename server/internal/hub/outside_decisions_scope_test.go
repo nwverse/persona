@@ -10,22 +10,6 @@ import (
 // Raising an owner interruption needs its own named grant. Broad to-do access
 // and a legacy every-scope token do not implicitly include it; the scope never
 // opens the owner's answer routes.
-func TestOutsideWriteConsumeIsCapabilityOnly(t *testing.T) {
-	h := newTestHub(t)
-	status, body := call(t, h.routes(), "POST", "/api/v1/decisions/odc_missing/consume", "", `{}`)
-	if status != http.StatusServiceUnavailable || body["code"] != "assistant_offline" {
-		t.Fatalf("consume with the random decision id only: %d %v", status, body)
-	}
-	status, body = call(t, h.routes(), "POST", "/api/v1/connector-decisions/odc_act0123456789abcdef0123456789abcdef/consume", "", `{}`)
-	if status != http.StatusServiceUnavailable || body["code"] != "assistant_offline" {
-		t.Fatalf("action consume with the random request id only: %d %v", status, body)
-	}
-	status, body = call(t, h.routes(), "POST", "/api/v1/decisions/odc_missing/withdraw", "", `{}`)
-	if status != http.StatusUnauthorized {
-		t.Fatalf("the capability route did not open withdrawal: %d %v", status, body)
-	}
-}
-
 func TestOutsideDecisionRoutesRequireTheirScope(t *testing.T) {
 	h := newTestHub(t)
 	mux := h.routes()

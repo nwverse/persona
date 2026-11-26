@@ -75,6 +75,26 @@ func editedAllow(ix proto.Interaction, text string) proto.Resolution {
 	return res
 }
 
+func TestLarkEditGrantKeepsTheApprovedAgentAccount(t *testing.T) {
+	n := &Node{}
+	gate := proxiedGate("http://example.invalid")
+	gate.PathPrefix = "/agent/v1"
+	cfg := proto.AssistantLark{Gates: []proto.CommandGate{gate}}
+	call := larkCall{Gate: 0, Method: http.MethodPost, Path: "/conversations/F1/messages", Body: `{"text":"edited"}`, Account: "2"}
+	if err := n.grantEdited(cfg, testThread, call, proto.LarkLetThrough{Kind: proto.LarkThroughCard}); err != nil {
+		t.Fatal(err)
+	}
+	p := n.gates()
+	t.Cleanup(p.close)
+	key := gateKey{command: gate.Command, session: testThread}
+	if _, ok := p.take(key, http.MethodPost, call.Path, "", "", []byte(call.Body), true); ok {
+		t.Fatal("an edited added-account grant was taken by the primary account")
+	}
+	if _, ok := p.take(key, http.MethodPost, call.Path, "", "2", []byte(call.Body), true); !ok {
+		t.Fatal("the edited added-account request lost its grant")
+	}
+}
+
 func TestLarkEditHookRetiresOriginalAndGrantsOnlyEditedCallOnce(t *testing.T) {
 	const original = "original text"
 	edited := "Edited $HOME `printf nope` $(printf nope) \\\" ' ;\n第二行 😀"

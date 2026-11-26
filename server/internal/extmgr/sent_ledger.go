@@ -58,7 +58,6 @@ type sentTrace struct {
 func (h *Manager) newConnectors(rules []connector.Rule) *connector.Registry {
 	r := connector.NewRegistry(rules)
 	r.SetSent(h.recordSent)
-	r.SetActionApprovals(h.registerActionApproval)
 	return r
 }
 
@@ -403,26 +402,6 @@ func recordedTarget(fields map[string]any) (map[string]any, string, error) {
 	return target, strings.Join(brief, ", "), nil
 }
 
-// RecordNodeActionApproval answers lark.approve before a gate-approved write is
-// forwarded. The connected machine is authenticated here; no request body or
-// raw credential crosses the RPC, only the Agent credential's audience hash.
-func (h *Manager) RecordNodeActionApproval(ctx context.Context, machineID string, raw json.RawMessage) (any, error) {
-	if h.machineByID(machineID) == nil {
-		return nil, &rpc.Error{Code: extension.CodePermissionDenied, Message: "lark.approve: not from a computer of this manager"}
-	}
-	var p proto.LarkActionApproval
-	if err := json.Unmarshal(raw, &p); err != nil {
-		return nil, &rpc.Error{Code: "invalid_params", Message: "lark.approve: " + err.Error()}
-	}
-	if !validAgentAPIAudience(p.Audience) {
-		return nil, &rpc.Error{Code: "invalid_params", Message: "lark.approve: an Agent API audience is required"}
-	}
-	if err := h.actionApprovals.registerForAgent(p.ID, p.ExpiresAt, p.Audience, p.Account); err != nil {
-		return nil, &rpc.Error{Code: "invalid_params", Message: "lark.approve: " + err.Error()}
-	}
-	return map[string]any{"ok": true}, nil
-}
-
 // RecordNodeSent answers a node's lark.sent (proto.MethodLarkSent, node/gateproxy.go): its gate proxy forwarded a write
 // as the user and the API took it. The node's gate decided before the command ran and cannot see whether it sent, so
 // this is where such a write gets its row. machineID is the connection the request came in on, a computer of this
@@ -442,8 +421,8 @@ func (h *Manager) RecordNodeSent(ctx context.Context, machineID string, raw json
 	}
 	method := strings.ToUpper(strings.TrimSpace(p.Method))
 	path := cutRunes(strings.TrimSpace(cleanText(p.Path)), sentValueMost)
-	if !nodeWriteMethods[method] || !strings.HasPrefix(path, "/") {
-		return nil, &rpc.Error{Code: "invalid_params", Message: "lark.sent: method and path of a write (POST, PUT, PATCH, DELETE or OPTIONS, and a path from /)"}
+	if !nodeSentWrite(method, path) || !strings.HasPrefix(path, "/") {
+		return nil, &rpc.Error{Code: "invalid_params", Message: "lark.sent: method and path must name a write or an Agent API side-effecting GET/HEAD"}
 	}
 	through, err := nodeLetThrough(p.LetThrough)
 	if err != nil {
@@ -496,6 +475,12 @@ func (h *Manager) isUserLarkRule(r *proto.LarkRule) bool {
 	}
 	return slices.ContainsFunc(connector.LarkRules(h.connectors.UserRules(), nil), same) &&
 		!slices.ContainsFunc(connector.LarkRules(h.cfg.ConnectorGate, h.cfg.LarkGate), same)
+}
+
+// nodeSentWrite matches the gate's write classification. Ordinary GET/HEAD
+// reports are refused; the Agent API's explicit side-effecting routes are writes.
+func nodeSentWrite(method, path string) bool {
+	return nodeWriteMethods[method] || proto.AgentAPIWriteGET(method, path)
 }
 
 // nodeWriteMethods are the methods the gate treats as writes (node/larkgate_rules.go larkRead: all but GET and HEAD).

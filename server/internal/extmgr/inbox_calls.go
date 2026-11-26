@@ -151,9 +151,7 @@ func (h *Manager) inboxAppCall(ctx context.Context, p assistantwire.AppCall) (js
 				return nil, true, inboxSendRefusal(errCannotReply) // its connector is not here (the plugin switched off)
 			}
 			var sent assistantwire.InboxSent
-			sent.Already, err = h.sendInboxOnce(ctx, a.SendID, a.Source, func(ctx context.Context) error {
-				return in.Reply(connector.WithActionApprovalRegistrar(ctx, h.registerActionApproval), a.Reply)
-			})
+			sent.Already, err = h.sendInboxOnce(ctx, a.SendID, a.Source, func(ctx context.Context) error { return in.Reply(ctx, a.Reply) })
 			out = sent
 		}
 	case assistantwire.AppInbox + " " + assistantwire.InboxSettle:

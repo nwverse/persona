@@ -26,10 +26,9 @@ import (
 // fakeManager is a manager on the bus that answers every http.request with who it is and a list of one item of its
 // own under each list key, and every devices.call with who it is.
 type fakeManager struct {
-	id          string
-	bus         *rawBus
-	got         chan string // "METHOD path" of each http.request
-	decisionIDs map[string]bool
+	id  string
+	bus *rawBus
+	got chan string // "METHOD path" of each http.request
 }
 
 func connectFakeManager(t *testing.T, h *Hub, srv *httptest.Server, id string) *fakeManager {
@@ -57,24 +56,9 @@ func connectFakeManager(t *testing.T, h *Hub, srv *httptest.Server, id string) *
 			case f.got <- req.Method + " " + req.Path:
 			default:
 			}
-			if strings.HasPrefix(req.Path, "/api/v1/decisions/") || strings.HasPrefix(req.Path, "/api/v1/connector-decisions/") {
-				parts := strings.Split(req.Path, "/")
-				if len(parts) >= 5 && !f.decisionIDs[parts[4]] {
-					body, _ := json.Marshal(map[string]any{"code": "decision_not_found"})
-					return assistantwire.HTTPResponse{Status: http.StatusNotFound, Header: map[string][]string{"Content-Type": {"application/json"}}, Body: body}, nil
-				}
-			}
 			item := []map[string]any{{"id": "item-" + id}}
 			body, _ := json.Marshal(map[string]any{"who": id, "items": item, "todos": item, "as_of": "t"})
 			return assistantwire.HTTPResponse{Status: http.StatusOK, Header: map[string][]string{"Content-Type": {"application/json"}}, Body: body}, nil
-		case "extensions.decision_owner":
-			var in struct {
-				ID string `json:"id"`
-			}
-			if err := json.Unmarshal(params, &in); err != nil {
-				return nil, err
-			}
-			return map[string]any{"found": f.decisionIDs[in.ID]}, nil
 		case devicewire.MethodCall:
 			return map[string]any{"who": id}, nil
 		}
@@ -116,29 +100,6 @@ func ownershipGet(t *testing.T, h *Hub, srv *httptest.Server, method, path strin
 	var out map[string]any
 	_ = json.Unmarshal(b, &out)
 	return resp.StatusCode, out
-}
-
-func TestDecisionConsumeRoutesToTheManagerThatOwnsTheCapability(t *testing.T) {
-	h, srv, _ := newBusHub(t)
-	a := connectFakeManager(t, h, srv, assistantwire.AssistantID)
-	b := connectFakeManager(t, h, srv, "m-0a0b0c")
-	outsideID := "odc_0123456789abcdef"
-	actionID := "odc_act0123456789abcdef0123456789abcdef"
-	b.decisionIDs = map[string]bool{outsideID: true, actionID: true}
-	for _, id := range []string{outsideID, actionID} {
-		prefix := "/api/v1/decisions/"
-		if id == actionID {
-			prefix = "/api/v1/connector-decisions/"
-		}
-		code, out := ownershipGet(t, h, srv, http.MethodPost, prefix+id+"/consume", nil)
-		if code != http.StatusOK || out["who"] != b.id {
-			t.Fatalf("consume %s: %d %v, want the owning manager %q, default requests=%v", id, code, out, b.id, a.got)
-		}
-	}
-	code, out := ownershipGet(t, h, srv, http.MethodPost, "/api/v1/decisions/odc_missing/consume", nil)
-	if code != http.StatusNotFound || out["code"] != "decision_not_found" {
-		t.Fatalf("an id no manager owns: %d %v", code, out)
-	}
 }
 
 // With two managers on the bus, a request goes to the manager its thing belongs to, or the one it names, else the

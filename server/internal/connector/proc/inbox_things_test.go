@@ -67,41 +67,6 @@ func chatThings() []connector.InboxThing {
 
 func (chatProgram) Collect(context.Context) ([]connector.InboxThing, error) { return chatThings(), nil }
 
-func TestEmptyClientIDReplyKeepsThePluginStableApprovalSeed(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	cfg := program(t, &memSecrets{}, "PERSONA_PROC_KIND=chat")
-	cfg.ID, cfg.Name = "lark", "Lark"
-	c := New(cfg)
-	go c.Run(ctx)
-	waitUntil(t, "the chat program", func() bool { return c.Status(ctx).State == connector.StateOK })
-
-	var approvals []string
-	ctx = connector.WithActionApprovalRegistrar(ctx, func(_ context.Context, id string, _ time.Time) error {
-		approvals = append(approvals, id)
-		return nil
-	})
-	reply := connector.InboxReply{Thread: "chat:a1", Last: "m12", Text: "approved"}
-	if err := c.Reply(ctx, reply); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.Reply(ctx, reply); err != nil {
-		t.Fatal(err)
-	}
-	want := connector.ActionApprovalID("reply:" + reply.Thread + "\x00" + reply.Last + "\x00" + reply.Text)
-	if len(approvals) != 2 || approvals[0] != want || approvals[1] != want {
-		t.Fatalf("empty ClientID approval ids = %v, want the plugin's stable %q twice", approvals, want)
-	}
-	other := reply
-	other.Text = "a different reply"
-	if err := c.Reply(ctx, other); err != nil {
-		t.Fatal(err)
-	}
-	if approvals[2] == want {
-		t.Fatal("different empty-ClientID replies shared one approval id")
-	}
-}
-
 // oneSource is the subscriptions' registry with only c in it.
 type oneSource struct{ c *Conn }
 

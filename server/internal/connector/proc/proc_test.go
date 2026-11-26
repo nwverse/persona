@@ -329,18 +329,6 @@ func TestProgramAsPlugin(t *testing.T) {
 func exercise(t *testing.T, c *Conn, sec *memSecrets) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	var approvalMu sync.Mutex
-	var approvals []string
-	ctx = connector.WithActionApprovalRegistrar(ctx, func(_ context.Context, id string, expires time.Time) error {
-		if !strings.HasPrefix(id, "odc_act") || len(id) != len("odc_act")+32 ||
-			!expires.After(time.Now()) || expires.After(time.Now().Add(15*time.Minute)) {
-			t.Errorf("invalid action approval %q, %s", id, expires)
-		}
-		approvalMu.Lock()
-		approvals = append(approvals, id)
-		approvalMu.Unlock()
-		return nil
-	})
 	if st := c.Status(ctx); st.State != connector.StateError {
 		t.Fatalf("before Run: %+v", st)
 	}
@@ -402,11 +390,6 @@ func exercise(t *testing.T, c *Conn, sec *memSecrets) {
 			t.Fatalf("do %d: %q %v", i, out, err)
 		}
 	}
-	approvalMu.Lock()
-	if len(approvals) != 2 || approvals[0] == approvals[1] {
-		t.Fatalf("action approvals %v", approvals)
-	}
-	approvalMu.Unlock()
 	// A thread's page and a media's bytes over the wire, every field as the program gave it.
 	page, err := c.Thread(ctx, "g1", "", 20)
 	if err != nil || page.Chat.Reply != "example_send" || len(page.Messages) != 1 || page.Before != "6" {

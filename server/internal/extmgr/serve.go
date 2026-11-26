@@ -125,7 +125,6 @@ func (h *Manager) registerRoutes(api *http.ServeMux) {
 	h.botRoutes(api)
 	h.agentRoutes(api)
 	h.connectorRoutes(api)
-	h.actionApprovalRoutes(api)
 	h.extensionRoutes(api)
 	h.messagingRoutes(api)
 	h.adminExtensionRoutes(api) // with the old /api/v1/admin/plugins paths
@@ -418,22 +417,6 @@ func (h *Manager) Request(ctx context.Context, method string, params json.RawMes
 			return nil, true, errAssistantOffline
 		}
 		return h.authorize(a), true, nil
-	case extwire.MethodDecisionOwner:
-		var in extwire.DecisionOwner
-		if err := json.Unmarshal(params, &in); err != nil || in.ID == "" || len(in.ID) > 64 {
-			return nil, true, &rpc.Error{Code: bus.CodeInvalidParams, Message: "extensions.decision_owner needs a bounded decision id"}
-		}
-		if !h.ready(ctx) {
-			return nil, true, errAssistantOffline
-		}
-		if in.Action {
-			return extwire.DecisionOwnerAnswer{Found: h.actionApprovals.has(in.ID)}, true, nil
-		}
-		var out extwire.DecisionOwnerAnswer
-		if err := h.callAssistant(ctx, assistantwire.MethodDecisionOwner, in, &out); err != nil {
-			return nil, true, err
-		}
-		return out, true, nil
 	case extwire.MethodHubCall:
 		var c extwire.HubCall
 		if err := json.Unmarshal(params, &c); err != nil {
