@@ -20,6 +20,21 @@ import {
 } from '../lib/map.js'
 
 describe('antigravity transcript and tool mapping', () => {
+  it('keeps botmux marker lines out of reply previews within the current turn', () => {
+    const marker = 'BOTMUX_NOTHING_TO_SEND'
+    const reply = (content) => ({ type: 'PLANNER_RESPONSE', content })
+    const mention = `The guide mentions ${marker}.`
+    const mixed = reply(`${mention}\n${marker}`)
+    const steps = [mixed, reply(marker)]
+    for (const summaryOnly of [false, true]) {
+      const result = stepsToItems(steps, { summaryOnly })
+      assert.equal(result.lastText, mention)
+      if (!summaryOnly) assert.deepEqual(result.items.map((item) => item.text), [mixed.content, marker])
+      const next = { type: 'USER_INPUT', source: 'USER_EXPLICIT', content: 'Next question' }
+      assert.equal(stepsToItems([...steps, next, reply(marker)], { summaryOnly }).lastText, '')
+    }
+  })
+
   it('keeps reply previews within the latest explicit user turn', () => {
     const question = { type: 'PLANNER_RESPONSE', content: 'Which configuration should I use?' }
     const prompt = { type: 'USER_INPUT', source: 'USER_EXPLICIT', content: 'What were the results?' }
