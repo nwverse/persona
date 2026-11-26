@@ -1022,7 +1022,7 @@ function NeedsYouRow({ item, open, onToggle }: { item: NeedsYouItem; open: boole
   const openTitle = item.kind === "agent" ? () => openAgent(item.session.machine_id, item.session.session_id)
     : item.kind === "task" ? () => {
       const ask = item.asks[0];
-      if (ask) openAgent(ask.machine_id, ask.session_id);
+      if (ask && reviewState(item.todo) !== "user_check") openAgent(ask.machine_id, ask.session_id);
       else openTask(item.todo.id);
     } : undefined;
   const label = <>
@@ -1092,25 +1092,10 @@ export function NeedsYouBody({ item, nested = false }: { item: NeedsYouItem; nes
   const taskOpenAttr = !nested ? { "data-counts-open": item.countsOpen ? "true" : "false" } : {};
   if (asks.length) return <div data-needs-row={rowKey} {...taskOpenAttr}>{!nested && <button type="button" onClick={() => openTask(todo.id)} className="block max-w-full truncate px-1 text-left text-sm font-semibold hover:underline">{todo.title}</button>}{asks.map((ix) => <InteractionCard key={ix.id} ix={ix} />)}{nested && <OpenEntry title={todo.title} onOpen={() => openTask(todo.id)} />}</div>;
   const verifying = reviewState(todo) === "user_check";
-  const ask = verifying ? personalVerificationAsk(todo) : openAsk(todo);
-  if (verifying && !ask) return (
-    <button type="button" data-needs-row={rowKey} {...taskOpenAttr} onClick={() => openTask(todo.id)} className="flex min-w-0 items-center gap-2 rounded-control bg-field px-3 py-2 text-left text-sm hover:bg-hover">
-      <StatusMark state="needs_you" />
-      <span className="min-w-0 flex-1 truncate">{todo.title}</span>
-      <span className="shrink-0 text-xs text-ink-2">{t("assistant-tasks.review_user_check")}</span>
-    </button>
-  );
-  // Both structured decisions and older review-only decisions have the same deferral controls.
-  if (isDecision(todo))
+  if (verifying || isDecision(todo) || openAsk(todo))
     return (
       <Suspense fallback={<div data-needs-row={rowKey} {...taskOpenAttr} className="truncate rounded-control bg-field px-3 py-2.5 text-label text-ink-2">{todo.title}</div>}>
-        <NeedsYouPart key={todo.id + (todo.supervision?.reviews?.at(-1)?.at || todo.decision_review?.review_at || ask?.asked_at)} rowKey={rowKey} hideTitle={nested} decision={todo} />
-      </Suspense>
-    );
-  if (ask)
-    return (
-      <Suspense fallback={<div data-needs-row={rowKey} {...taskOpenAttr} className="truncate rounded-control bg-field px-3 py-2.5 text-label text-ink-2">{todo.title}</div>}>
-        <NeedsYouPart key={todo.id + ask.asked_at} rowKey={rowKey} hideTitle={nested} accept={todo} ask={ask} countsOpenAttr={taskOpenAttr} />
+        <NeedsYouPart rowKey={rowKey} hideTitle={nested} task={todo} countsOpenAttr={taskOpenAttr} />
       </Suspense>
     );
   if (status === "failed")

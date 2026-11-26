@@ -159,11 +159,10 @@ export function chatPlaceOf(sc: HTMLElement): ChatPlace {
   return { end: false, ...firstLineInView(sc) };
 }
 
-/** Where a task opens: its most pressing Agent's page, or the to-do's own page while no Agent is on it (one that did
- *  not start has no page to show). */
+/** Full-page hand-off: the owner reviews a personal verification on the task page. Other tasks open their active worker when available. */
 export function taskRoute(id: string, s: State = getState()): Route {
   const todo = s.todos.find((x) => x.id === id);
-  if (todo && reviewState(todo) === "user_check") return { name: "todos", id };
+  if (todo && reviewState(todo) === "user_check") return { name: "todos", id, manager: todo.manager };
   const lead = todo ? mostUrgentAgent({ ...todo, agents: todo.agents?.filter((a) => !a.start_error) }, taskSessionLookup(s))?.agent : undefined;
   return lead ? { name: "session", mid: lead.machine_id, sid: lead.session_id } : { name: "todos", id };
 }
