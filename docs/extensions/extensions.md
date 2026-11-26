@@ -130,6 +130,8 @@ What an extension contributes where is written in the manifest's `contributes`: 
 | `api` (version 1) | `api.` | `id`, `prefix` (one path segment), `features?`, `events?`, `receipts?` (`[{method, path, kind}]`: writes that need send receipts) | `runtime.http`, `on_startup`; with `events`, the process must speak the protocol | A block of App-facing API `/api/v1/<prefix>/…`, see "App API" below |
 | `assistant` (version 1) | `assistant.` | `id`, `skills?` (directories in the package, each with `SKILL.md`), `instructions?` (an `.md` in the package), `gate?` (a `.json` in the package: the gate for one command in a skill) | These files exist in the package; `gate` requires `skills`, and when credentials are needed the process speaks the protocol | The assistant's skills, instructions and command gates, see "Assistant" below |
 | `mcp_servers` (version 1) | `mcp.` | `id` (`a-z0-9_-`, cannot be `persona` or the legacy server name), `command`, `env?`, `args?`, `requires?`, `allow?`, `deny?` | Declarative is enough; the command is installed on the computer that runs the assistant | One more MCP server for the Claude assistant (tool names `mcp__<id>__*`), see "MCP servers" below |
+| `mcp_tools` (version 1, #13401) | `mcp_tools.` | `id` (the tool's name: the extension's id without `-`, then `_`, first, e.g. `examplenotes_find`; `a-z0-9_`, at most 64 characters), `description` (1–2000 characters, translated in `l10n`), `input_schema` (a JSON Schema with `type: object`, at most 16 KB, no empty enum and no empty string in one), `access` (`read` / `write`), `agents?` | Process speaks the protocol; a name another installed extension or the hub has fails the install | Tools for the assistant, listed on the install page and in the permission digest; **not served to any conversation yet** (#13401 PR 2), see "Assistant tools and prompt sections" below |
+| `prompt_sections` (version 1, #13401) | `prompt_sections.` | `id`, `files` (language → an `.md` in the package; `zh-Hans` or `en` at least; each UTF-8 and at most 6 KB), `tools?` (names of this extension's `mcp_tools`); at most 3 per extension | Declarative is enough; the files exist in the package | Sections of the assistant's instructions, one file per language; **not added to any conversation yet** (#13401 PR 3), see "Assistant tools and prompt sections" below |
 | `ui` (version 12) | `ui.` | `id`, `title`, `placement` (slot, see "UI slots": `extension_page` (old name `plugin_page`) / `launcher_section` / `nav_page` / `overview_card` / `capsule_card` / `machine_section` / `inbox_item` / `widget`), `hosts?` (only for `launcher_section`: gateway host names, may start with `*.`; omitted means any launcher, the extension decides), `icon?` and `icon_color?` (only `nav_page`), `opens?` (only `overview_card`, `capsule_card` and `widget`), `connector?` (only `inbox_item`, and required: the id of a connector contributed by the same extension), `group?` (only `nav_page`: `{"id", "title"}`, the sidebar group the page goes in, see "UI slots"), `families` / `refresh_minutes?` (only `widget`; `families` is required, see "System-level placements") | Process speaks the protocol; `launcher_section` needs permission `launcher_keys` | A page in the extension's details, a section on the launcher page, main navigation, overview, machine details, the details of an Inbox item, widgets and watch faces outside the App; see "Declarative UI", "UI slots", "System-level placements" below |
 | `agent_sources` (version 1) | `agentsrc.` | `id` (`a-z0-9_-`, also the source segment of session ids `<id>:<sessionKey>`), `name`, `providers?` (`a-z0-9_`, e.g. `grok_bot`) | Process speaks the protocol, `on_startup` | Personal Agents on the Agents page (the hub has no sources of its own; all come from extensions), see "Personal Agent sources" below |
 | `channel` (version 1) | `channel.` | `id` (`^[a-z][a-z0-9_]{0,31}$`, cannot be 8 hex digits), `name`, `kind` (`im`), `connector?` (binding and status come from this connector of the same extension), `bind?` (`qr` / `code` / `fields`), `description?`, `capabilities` (receive images / files / voice, `format`, `max_text`, `asks`, `push`, `typing`, `progress`, `threads`) | Process speaks the protocol; `on_startup` when there is no `connector` | A channel for talking to Persona: the hub runs the shared pipeline (into the chat, tracking the turn, sending the answer back, questions), and the extension only talks to the IM; see [channels.md](channels.md) |
@@ -247,7 +249,7 @@ would make the extension uninstallable on older hubs, while files they do not re
 
 - Every key is optional and a blank string is no translation. `configuration.<property>`: `title`, `description`, `confirm` (translates `x-confirm`,
   never adds one), `choices` (labels by value: a string choice by the string, a number as JSON writes it; on an array, its items' choices) and
-  `properties` (an object's own properties, in the same shape). For an entry list, `configuration.<list>.properties.<entry-field>` translates its flat item fields directly (there is no `items.properties` key), and `secrets.<x-secret.name>` translates the list's secret text. `secrets.<name>`: `title`, `description`. Keys the hub does not know are ignored.
+  `properties` (an object's own properties, in the same shape). For an entry list, `configuration.<list>.properties.<entry-field>` translates its flat item fields directly (there is no `items.properties` key), and `secrets.<x-secret.name>` translates the list's secret text. `secrets.<name>`: `title`, `description`. `mcp_tools.<tool name>.description` (#13401): a tool's description for the model (see "Assistant tools and prompt sections"). Keys the hub does not know are ignored.
 - **Which text**: string by string, the request's language (`X-Persona-Lang` / `Accept-Language`), then English unless the request is
   Simplified Chinese, then the manifest's own text.
 - **Where**: the extension list and details (name, description, the settings form, secrets and the "Missing: …" line), dependency names,
@@ -2470,6 +2472,68 @@ one more MCP server when it starts the **Claude assistant**, with tool names `mc
 - If the command cannot be found, is turned off by `env`, or `requires` is not met, nothing is added and the assistant simply lacks this set of tools. After the extension is disabled or uninstalled, they are gone the next time the assistant process starts.
 - Older hubs do not recognize this extension point; it just has no effect (see the end of "Extension points" above), so there is no need to raise `engines` for it.
 - Example: the Lark extension uses it to attach the upstream personal Agent control tool; the exact tool names and switches are in the extension's own docs.
+
+## Assistant tools and prompt sections
+
+Two extension points let an extension give the assistant tools and sections of its instructions that every runtime gets
+alike (#13401), instead of an MCP server only the Claude assistant starts (`mcp_servers`) or a connector contributed only
+to carry tools. The names are those of a built-in module's `modapi.Info` (`MCPTools`, `PromptSections`, #13430), so a
+module can later become an extension, or the other way round, without renaming anything.
+
+**What this hub does with them today.** It reads and checks them when the extension installs, lists the tools on the
+install page and holds them in the permission digest. It does not yet offer the tools to a conversation or put the sections
+into the assistant's instructions: that comes next in #13401 (PR 2 serves the tools through `personad mcp` to Claude, Codex
+and the other runtimes; PR 3 adds the sections). An extension can declare them now; nothing it does changes until then.
+
+```json
+"contributes": {
+  "mcp_tools": [{
+    "id": "examplenotes_find",
+    "description": "Find notes whose title or text has the words.",
+    "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+    "access": "read",
+    "agents": true
+  }],
+  "prompt_sections": [{
+    "id": "notes",
+    "files": {"zh-Hans": "assistant/notes.md", "en": "assistant/notes.en.md", "ja": "assistant/notes.ja.md"},
+    "tools": ["examplenotes_find"]
+  }]
+}
+```
+
+`mcp_tools` (version 1; the program speaks the protocol):
+
+| Field | Meaning |
+| --- | --- |
+| `id` | The tool's name, the one the model calls: the extension's id without `-`, then `_`, first (`example-notes` → `examplenotes_`), then at least one more character; `a-z0-9_`, a letter first, at most 64 characters. A name another installed extension has (`ab` and `a-b` share a prefix) or that the hub reserved (`Registry.Reserve`; the hub reserves its own tools' names from PR 2) fails the preview, as for any contribution's id; the hub's own tools' older names are refused already |
+| `description` | What the tool does, for the model: 1–2000 characters. Translated in `l10n/<language>.json` as `{"mcp_tools": {"<id>": {"description": "…"}}}` (see "Translations: `l10n/`") |
+| `input_schema` | Its parameters: a JSON Schema whose root has `type: object`, at most 16 KB as written. A schema with an empty `enum` or an empty string in one is refused at install (`server/internal/toolschema`): Gemini refuses every request of a session that has such a tool, and a schema mended on the way out would not be the one the user was shown |
+| `access` | `read` (it only reads) or `write` (it acts on the user's behalf: sends, changes, deletes). Required; the install page names the tools that write |
+| `agents?` | `true`: coding Agents get the tool too; without it, only the assistant's main conversation does |
+
+There is no `output_schema`: Persona's MCP server answers with text and images, not structured content, so one would
+not be used. A manifest that names one does not install, so a later hub can add it with a meaning.
+
+`prompt_sections` (version 1; declarative):
+
+| Field | Meaning |
+| --- | --- |
+| `id` | `a-z0-9_-` |
+| `files` | The section's text by language (`zh-Hans`, `en`, `ja`): an `.md` file in the package, static Markdown (no template). `zh-Hans` or `en` is required; the others fall back as translations do. Each file must be in the package (a link out of it is refused), UTF-8 and at most 6 KB |
+| `tools?` | Tools of this extension's `mcp_tools` the section is about: it is to go in only while they are on. A name it does not declare fails the install |
+
+At most 3 sections per extension. The manifest and its files are checked at install; the text itself is held to the
+assistant's rules when it is added (PR 3).
+
+**Permissions.** Installing shows one line listing the tools, naming those that write, and another listing the tools coding
+Agents get too. The permission digest holds each tool's name, its `access` and whether `agents` is on (an extension without
+tools digests as before). An upgrade asks again when it adds a tool, turns a `read` tool into a `write` one or gives one
+to coding Agents; one that only takes something away does not. Sections are not something to agree to, like
+`assistant.instructions`: the user sees and switches each contribution in the extension's details ("Turning contributions on and off (#1854)").
+
+Older hubs do not know either point: the extension still installs there, with a warning, and the points have no effect
+(see the end of "Extension points" above). Code: `server/internal/extension/assistant_tools.go`.
 
 ## Usage quota
 

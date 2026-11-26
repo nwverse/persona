@@ -1,0 +1,12 @@
+{
+  "manifest_version": 1,
+  "id": "example-notes",
+  "name": "Example Notes",
+  "version": "1.0.0",
+  "contributes": {"prompt_sections": [
+    {"id": "a", "files": {"en": "a.md"}},
+    {"id": "b", "files": {"en": "b.md"}},
+    {"id": "c", "files": {"en": "c.md"}},
+    {"id": "d", "files": {"en": "d.md"}}
+  ]}
+}

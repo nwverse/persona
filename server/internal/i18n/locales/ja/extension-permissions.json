@@ -132,5 +132,12 @@
   "disk_offload_title": "コンピューターの項目を別の場所に移す",
   "disk_offload_detail": "各コンピューターについて、すでに預かっている項目を一覧にできます。Persona がファイルやフォルダーを渡すのは、コンピューターのディスクマップで選んで確認した後だけです。そのコンピューターに何かをインストールする前には、もう一度確認します",
   "assistant_data_title": "拡張機能が書いた内容をアシスタントが読む内容に加える",
-  "assistant_data_detail": "プログラムが書いたテキストを、アシスタントの指示とスキル、Agent のプロジェクト背景、受信箱の仕分けと下書きに、サイズ上限の範囲で加えられます。各項目は詳細画面で個別にオフにできます"
+  "assistant_data_detail": "プログラムが書いたテキストを、アシスタントの指示とスキル、Agent のプロジェクト背景、受信箱の仕分けと下書きに、サイズ上限の範囲で加えられます。各項目は詳細画面で個別にオフにできます",
+  "mcp_tools_title": "アシスタントにツールを追加",
+  "mcp_tools_more_title": "アシスタントにツールをさらに追加",
+  "mcp_tools_detail": "{tools}",
+  "mcp_tools_write_detail": "{tools}。このうち、あなたの代わりに操作するもの：{writes}",
+  "mcp_tools_agents_title": "コーディング Agent もこれらのツールを使用",
+  "mcp_tools_agents_more_title": "コーディング Agent が使えるツールを追加",
+  "mcp_tools_agents_detail": "{tools}"
 }

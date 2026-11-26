@@ -1,0 +1,21 @@
+{
+  "manifest_version": 1,
+  "id": "example-notes",
+  "name": "Example Notes",
+  "version": "1.0.0",
+  "description": "Gives the assistant tools to find and save notes, with a short section on when to use them.",
+  "engines": {"extension_protocol": 1},
+  "runtime": {"command": {"linux-amd64": "bin/notes-linux-amd64", "darwin-arm64": "bin/notes-darwin-arm64"}},
+  "activation_events": ["on_call"],
+  "contributes": {
+    "mcp_tools": [
+      {"id": "examplenotes_find", "description": "Find notes whose title or text has the words.", "access": "read", "agents": true,
+       "input_schema": {"type": "object", "properties": {"query": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 50}}, "required": ["query"]}},
+      {"id": "examplenotes_save", "description": "Save a new note.", "access": "write",
+       "input_schema": {"type": "object", "properties": {"title": {"type": "string"}, "text": {"type": "string"}}, "required": ["title", "text"]}}
+    ],
+    "prompt_sections": [
+      {"id": "notes", "files": {"zh-Hans": "assistant/notes.md", "en": "assistant/notes.en.md", "ja": "assistant/notes.ja.md"}, "tools": ["examplenotes_find"]}
+    ]
+  }
+}

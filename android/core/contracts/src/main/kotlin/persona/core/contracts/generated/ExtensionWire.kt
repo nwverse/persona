@@ -424,6 +424,8 @@ data class ExtensionContributes(
     val api: List<ExtensionAPIItem>? = null,
     val assistant: List<ExtensionAssistantItem>? = null,
     @SerialName("mcp_servers") val mcpServers: List<ExtensionMCPServerItem>? = null,
+    @SerialName("mcp_tools") val mcpTools: List<ExtensionMCPToolItem>? = null,
+    @SerialName("prompt_sections") val promptSections: List<ExtensionPromptSectionItem>? = null,
     val ui: List<ExtensionUIItem>? = null,
     @SerialName("track_kinds") val trackKinds: List<ExtensionTrackKindItem>? = null,
     @SerialName("agent_sources") val agentSources: List<ExtensionAgentSourceItem>? = null,
@@ -463,6 +465,8 @@ private data class ExtensionContributesKnown(
     val api: List<ExtensionAPIItem>? = null,
     val assistant: List<ExtensionAssistantItem>? = null,
     @SerialName("mcp_servers") val mcpServers: List<ExtensionMCPServerItem>? = null,
+    @SerialName("mcp_tools") val mcpTools: List<ExtensionMCPToolItem>? = null,
+    @SerialName("prompt_sections") val promptSections: List<ExtensionPromptSectionItem>? = null,
     val ui: List<ExtensionUIItem>? = null,
     @SerialName("track_kinds") val trackKinds: List<ExtensionTrackKindItem>? = null,
     @SerialName("agent_sources") val agentSources: List<ExtensionAgentSourceItem>? = null,
@@ -487,7 +491,7 @@ private data class ExtensionContributesKnown(
 
 object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
     private val known = ExtensionContributesKnown.serializer()
-    private val keys = setOf<String>("connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "disk_offload", "messaging")
+    private val keys = setOf<String>("connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "mcp_tools", "prompt_sections", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "disk_offload", "messaging")
     override val descriptor: SerialDescriptor = known.descriptor
 
     override fun deserialize(decoder: Decoder): ExtensionContributes {
@@ -509,6 +513,8 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
             api = fields.api,
             assistant = fields.assistant,
             mcpServers = fields.mcpServers,
+            mcpTools = fields.mcpTools,
+            promptSections = fields.promptSections,
             ui = fields.ui,
             trackKinds = fields.trackKinds,
             agentSources = fields.agentSources,
@@ -549,6 +555,8 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
             api = value.api,
             assistant = value.assistant,
             mcpServers = value.mcpServers,
+            mcpTools = value.mcpTools,
+            promptSections = value.promptSections,
             ui = value.ui,
             trackKinds = value.trackKinds,
             agentSources = value.agentSources,
@@ -1204,6 +1212,60 @@ data class ExtensionMCPServerItem(
      * Tools never callable. Any other tool goes by the conversation's permission mode.
      */
     val deny: List<String>? = null,
+)
+
+/**
+ * A tool the extension gives the assistant, declared in the manifest so the install page can list it (docs "Assistant
+ * tools and prompt sections", #13401). Its id is the tool's name; the program speaks the protocol.
+ */
+@Serializable
+data class ExtensionMCPToolItem(
+    /**
+     * The tool's name: the extension's id without - and then _ first (example-notes: examplenotes_find), a-z0-9_, at
+     * most 64 characters; not a name another extension or the hub already has.
+     */
+    val id: String = "",
+    /**
+     * What the tool does, for the model; translated in l10n's mcp_tools.<id>.description.
+     */
+    val description: String = "",
+    /**
+     * The tool's parameters as a JSON Schema object (type object), at most 16 KB, with no enum the stricter model
+     * APIs refuse (an empty one, or one with an empty string).
+     */
+    @SerialName("input_schema") val inputSchema: JsonElement = JsonNull,
+    val access: String = "",
+    /**
+     * Coding Agents get the tool too; without it, only the assistant's main conversation does.
+     */
+    val agents: Boolean? = null,
+)
+
+/**
+ * What an assistant tool does: read only reads; write acts on the user's behalf (sends, changes, deletes).
+ */
+object ExtensionMCPToolAccess {
+    const val READ = "read"
+    const val WRITE = "write"
+    val ALL = listOf("read", "write")
+}
+
+/**
+ * A section of the assistant's instructions, static Markdown in one file per language (docs "Assistant tools and
+ * prompt sections", #13401). At most 3 per extension.
+ */
+@Serializable
+data class ExtensionPromptSectionItem(
+    val id: String = "",
+    /**
+     * The section's .md file in the package by language (zh-Hans, en, ja); zh-Hans or en at least. Each file is UTF-8
+     * and at most 6 KB.
+     */
+    val files: Map<String, String> = emptyMap(),
+    /**
+     * Tools of this extension's mcp_tools the section is about: it goes in only while they are on.
+     */
+    val tools: List<String>? = null,
 )
 
 /**

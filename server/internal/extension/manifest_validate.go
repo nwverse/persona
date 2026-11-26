@@ -75,6 +75,7 @@ func (m *Manifest) Validate() error {
 	}
 	errs = append(errs, m.validateModel()...)
 	errs = append(errs, m.validateTools()...)
+	errs = append(errs, m.checkAssistantTools()...)
 	if u := m.Upgrade; u != nil {
 		if u.Backup != "" && u.Backup != BackupAuto && u.Backup != BackupRequired {
 			bad("upgrade.backup %q: auto or required", u.Backup)

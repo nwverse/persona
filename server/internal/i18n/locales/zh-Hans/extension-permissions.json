@@ -132,5 +132,12 @@
   "disk_offload_title": "把电脑上的东西移到别处存放",
   "disk_offload_detail": "它可以列出它已经替每台电脑存放的东西。只有你在电脑的磁盘地图上选中文件和文件夹并确认后，Persona 才会交给它；它要在那台电脑上安装任何东西前，还会再问你一次",
   "assistant_data_title": "往助手读的内容里加它写的东西",
-  "assistant_data_detail": "它的程序写的文字可以进助手的说明和技能、Agent 的项目背景，或收件箱的分拣和起草，各有大小上限。每一项都能在它的详情里单独关掉"
+  "assistant_data_detail": "它的程序写的文字可以进助手的说明和技能、Agent 的项目背景，或收件箱的分拣和起草，各有大小上限。每一项都能在它的详情里单独关掉",
+  "mcp_tools_title": "为助手添加工具",
+  "mcp_tools_more_title": "为助手添加更多工具",
+  "mcp_tools_detail": "{tools}",
+  "mcp_tools_write_detail": "{tools}。其中会代你执行操作的：{writes}",
+  "mcp_tools_agents_title": "编码 Agent 也能用这些工具",
+  "mcp_tools_agents_more_title": "编码 Agent 也能用更多工具",
+  "mcp_tools_agents_detail": "{tools}"
 }

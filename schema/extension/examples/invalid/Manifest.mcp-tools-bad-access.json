@@ -1,0 +1,9 @@
+{
+  "manifest_version": 1,
+  "id": "example-notes",
+  "name": "Example Notes",
+  "version": "1.0.0",
+  "engines": {"extension_protocol": 1},
+  "runtime": {"command": {"linux-amd64": "bin/notes"}},
+  "contributes": {"mcp_tools": [{"id": "examplenotes_find", "description": "Find notes.", "access": "admin", "input_schema": {"type": "object"}}]}
+}
