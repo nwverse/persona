@@ -2,6 +2,9 @@ package assistant
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -9,9 +12,11 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"weak"
 
 	"github.com/nwverse/persona/server/internal/assistant/todo/mergetrain"
+	"github.com/nwverse/persona/server/internal/db"
 )
 
 // mergeTrainOutcome captures the deterministic result of feeding a PR status observation
@@ -29,20 +34,44 @@ type mergeTrainConflictTrack struct {
 	lastHead   string
 }
 
+type mergeTrainBlockerCondition struct {
+	RepoKey     string `json:"repo_key,omitempty"`
+	PRURL       string `json:"pr_url,omitempty"`
+	LastHeadOID string `json:"last_head_oid,omitempty"`
+	MaxAttempts int    `json:"max_attempts,omitempty"`
+}
+
+type mergeTrainDBAction struct {
+	persistConflict bool
+	hadActiveRow    bool
+	attempts        int
+	headOID         string
+	resolveBlocker  bool
+}
+
+func mergeTrainBlockerID(todoID, normURL string) string {
+	sum := sha256.Sum256([]byte(todoID + "\x00" + todoBlockerKindMergeTrain + "\x00" + normURL))
+	return "mt_" + hex.EncodeToString(sum[:8])
+}
+
 // mergeTrainCoordinator wraps the pure mergetrain.Train state machine with concurrency-safe
 // conflict-cycle tracking and escalation deduplication for live PR status polling.
 type mergeTrainCoordinator struct {
-	mu        sync.Mutex
-	train     *mergetrain.Train
-	conflicts map[string]*mergeTrainConflictTrack
-	escalated map[string]struct{}
+	mu               sync.Mutex
+	train            *mergetrain.Train
+	conflicts        map[string]*mergeTrainConflictTrack
+	escalated        map[string]struct{}
+	hydrated         map[string]bool
+	hasActiveBlocker map[string]bool
 }
 
 func newMergeTrainCoordinator() *mergeTrainCoordinator {
 	return &mergeTrainCoordinator{
-		train:     mergetrain.New(),
-		conflicts: make(map[string]*mergeTrainConflictTrack),
-		escalated: make(map[string]struct{}),
+		train:            mergetrain.New(),
+		conflicts:        make(map[string]*mergeTrainConflictTrack),
+		escalated:        make(map[string]struct{}),
+		hydrated:         make(map[string]bool),
+		hasActiveBlocker: make(map[string]bool),
 	}
 }
 
@@ -52,6 +81,77 @@ func (c *mergeTrainCoordinator) reset() {
 	c.train = mergetrain.New()
 	clear(c.conflicts)
 	clear(c.escalated)
+	clear(c.hydrated)
+	clear(c.hasActiveBlocker)
+}
+
+func (c *mergeTrainCoordinator) isHydrated(trackKey string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.hydrated[trackKey]
+}
+
+func (c *mergeTrainCoordinator) setHasActiveBlocker(trackKey string, active bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if active {
+		c.hasActiveBlocker[trackKey] = true
+	} else {
+		delete(c.hasActiveBlocker, trackKey)
+	}
+}
+
+func (c *mergeTrainCoordinator) hydrateIfNeeded(trackKey, todoID, repoKey string, prNumber int, normURL string, status TodoPRStatus, activeRow *db.TodoBlockerRow) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.hydrated[trackKey] {
+		return
+	}
+	c.hydrated[trackKey] = true
+	if activeRow == nil {
+		return
+	}
+	c.hasActiveBlocker[trackKey] = true
+
+	var cond mergeTrainBlockerCondition
+	if strings.TrimSpace(activeRow.ConditionJSON) != "" {
+		_ = json.Unmarshal([]byte(activeRow.ConditionJSON), &cond)
+	}
+	lastHead := strings.TrimSpace(cond.LastHeadOID)
+
+	if !strings.EqualFold(strings.TrimSpace(status.State), "open") || activeRow.Attempts <= 0 {
+		return
+	}
+	if c.train == nil {
+		c.train = mergetrain.New()
+	}
+	policy := mergeTrainPolicyForStatus(status)
+	approved := policy == mergetrain.PolicyAutoMerge
+	if _, err := c.train.Enqueue(mergetrain.Entry{
+		TodoID:   todoID,
+		RepoKey:  repoKey,
+		PRNumber: prNumber,
+		PRURL:    normURL,
+		Policy:   policy,
+		Approved: approved,
+	}); err != nil {
+		return
+	}
+	replay := min(activeRow.Attempts, mergetrain.DefaultMaxRebaseFailures)
+	errMsg := "restored prior merge conflict"
+	if lastHead != "" {
+		errMsg = fmt.Sprintf("merge conflicts at head %s", lastHead)
+	}
+	for range replay {
+		_, _ = c.train.RecordRebaseFailure(repoKey, todoID, errMsg)
+	}
+	c.conflicts[trackKey] = &mergeTrainConflictTrack{
+		inConflict: true,
+		lastHead:   lastHead,
+	}
+	if activeRow.Attempts >= mergetrain.DefaultMaxRebaseFailures && lastHead != "" {
+		c.escalated[todoID+"|"+normURL+"|"+lastHead] = struct{}{}
+	}
 }
 
 func (c *mergeTrainCoordinator) snapshot() mergetrain.Snapshot {
@@ -63,7 +163,7 @@ func (c *mergeTrainCoordinator) snapshot() mergetrain.Snapshot {
 	return c.train.Snapshot()
 }
 
-func (c *mergeTrainCoordinator) observe(todoID string, status TodoPRStatus, repoKey string, prNumber int, normURL string) mergeTrainOutcome {
+func (c *mergeTrainCoordinator) observe(todoID string, status TodoPRStatus, repoKey string, prNumber int, normURL string) (mergeTrainOutcome, mergeTrainDBAction) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -73,23 +173,30 @@ func (c *mergeTrainCoordinator) observe(todoID string, status TodoPRStatus, repo
 
 	trackKey := todoID + "|" + normURL
 	state := strings.ToLower(strings.TrimSpace(status.State))
+	var dbAct mergeTrainDBAction
 
 	switch state {
 	case "merged":
 		delete(c.conflicts, trackKey)
+		if c.hasActiveBlocker[trackKey] {
+			dbAct.resolveBlocker = true
+		}
 		dec, err := c.train.RecordMerged(repoKey, todoID)
 		if errors.Is(err, mergetrain.ErrEntryNotFound) {
-			return mergeTrainOutcome{RepoKey: repoKey, Decision: dec}
+			return mergeTrainOutcome{RepoKey: repoKey, Decision: dec}, dbAct
 		}
-		return mergeTrainOutcome{Tracked: true, RepoKey: repoKey, Decision: dec}
+		return mergeTrainOutcome{Tracked: true, RepoKey: repoKey, Decision: dec}, dbAct
 
 	case "closed":
 		delete(c.conflicts, trackKey)
+		if c.hasActiveBlocker[trackKey] {
+			dbAct.resolveBlocker = true
+		}
 		dec, err := c.train.Cancel(repoKey, todoID)
 		if errors.Is(err, mergetrain.ErrEntryNotFound) {
-			return mergeTrainOutcome{RepoKey: repoKey, Decision: dec}
+			return mergeTrainOutcome{RepoKey: repoKey, Decision: dec}, dbAct
 		}
-		return mergeTrainOutcome{Tracked: true, RepoKey: repoKey, Decision: dec}
+		return mergeTrainOutcome{Tracked: true, RepoKey: repoKey, Decision: dec}, dbAct
 
 	case "open":
 		policy := mergeTrainPolicyForStatus(status)
@@ -103,7 +210,7 @@ func (c *mergeTrainCoordinator) observe(todoID string, status TodoPRStatus, repo
 			Approved: approved,
 		})
 		if err != nil {
-			return mergeTrainOutcome{RepoKey: repoKey}
+			return mergeTrainOutcome{RepoKey: repoKey}, dbAct
 		}
 
 		if strings.EqualFold(strings.TrimSpace(status.Review), "approved") && !status.Draft && !entry.Approved && entry.State != mergetrain.StateEscalated {
@@ -132,6 +239,16 @@ func (c *mergeTrainCoordinator) observe(todoID string, status TodoPRStatus, repo
 					errMsg = fmt.Sprintf("merge conflicts at head %s", headOID)
 				}
 				dec, failErr := c.train.RecordRebaseFailure(repoKey, todoID, errMsg)
+				if failErr == nil {
+					attempts := 1
+					if latest, ok := c.train.Entry(repoKey, todoID); ok && latest.RebaseFailures > 0 {
+						attempts = latest.RebaseFailures
+					}
+					dbAct.persistConflict = true
+					dbAct.hadActiveRow = c.hasActiveBlocker[trackKey]
+					dbAct.attempts = attempts
+					dbAct.headOID = headOID
+				}
 				if failErr == nil && dec.Action == mergetrain.ActionEscalateNeedsUser {
 					dedupKey := todoID + "|" + normURL + "|" + headOID
 					escalate := false
@@ -146,14 +263,14 @@ func (c *mergeTrainCoordinator) observe(todoID string, status TodoPRStatus, repo
 						Decision: dec,
 						Escalate: escalate,
 						Detail:   detail,
-					}
+					}, dbAct
 				}
 				if failErr == nil {
 					return mergeTrainOutcome{
 						Tracked:  true,
 						RepoKey:  repoKey,
 						Decision: dec,
-					}
+					}, dbAct
 				}
 			}
 			if latest, ok := c.train.Entry(repoKey, todoID); ok && latest.State == mergetrain.StateEscalated {
@@ -167,7 +284,7 @@ func (c *mergeTrainCoordinator) observe(todoID string, status TodoPRStatus, repo
 						State:   mergetrain.StateEscalated,
 						Reason:  latest.LastError,
 					},
-				}
+				}, dbAct
 			}
 			return mergeTrainOutcome{
 				Tracked: true,
@@ -179,13 +296,16 @@ func (c *mergeTrainCoordinator) observe(todoID string, status TodoPRStatus, repo
 					State:   entry.State,
 					Reason:  "waiting on merge conflict resolution",
 				},
-			}
+			}, dbAct
 		}
 
 		// Conflicts cleared: reset consecutive failure streak for non-escalated entries.
 		if track := c.conflicts[trackKey]; track != nil {
 			track.inConflict = false
 			track.lastHead = ""
+		}
+		if c.hasActiveBlocker[trackKey] {
+			dbAct.resolveBlocker = true
 		}
 		_ = c.train.RecordRebaseSuccess(repoKey, todoID)
 
@@ -210,7 +330,7 @@ func (c *mergeTrainCoordinator) observe(todoID string, status TodoPRStatus, repo
 					State:   mergetrain.StateEscalated,
 					Reason:  reason,
 				},
-			}
+			}, dbAct
 		}
 		// Only evaluate the repository head using this PR's own checks; queued entries wait their turn.
 		if entry.State == mergetrain.StateActive || entry.State == mergetrain.StateAwaitingApproval {
@@ -226,7 +346,7 @@ func (c *mergeTrainCoordinator) observe(todoID string, status TodoPRStatus, repo
 				Tracked:  true,
 				RepoKey:  repoKey,
 				Decision: dec,
-			}
+			}, dbAct
 		}
 		return mergeTrainOutcome{
 			Tracked: true,
@@ -238,9 +358,9 @@ func (c *mergeTrainCoordinator) observe(todoID string, status TodoPRStatus, repo
 				State:   entry.State,
 				Reason:  "queued behind active repository head",
 			},
-		}
+		}, dbAct
 	default:
-		return mergeTrainOutcome{RepoKey: repoKey}
+		return mergeTrainOutcome{RepoKey: repoKey}, dbAct
 	}
 }
 
@@ -355,7 +475,9 @@ func (s *Service) mergeTrainSnapshot(ctx context.Context) mergetrain.Snapshot {
 }
 
 // onPRStatusMergeTrain updates the in-memory per-repository merge train from a persisted PR status
-// observation when todos_v2 is enabled, and bypasses/resets immediately when todos_v2 is off.
+// observation when todos_v2 is enabled, persists consecutive conflict counts in todo_blockers
+// (kind="merge_train", zero new migrations) so counts survive Hub restarts, and bypasses/resets
+// immediately when todos_v2 is off.
 func (s *Service) onPRStatusMergeTrain(ctx context.Context, t Todo, status TodoPRStatus) mergeTrainOutcome {
 	if s == nil || !s.settings(ctx).todosV2On() {
 		s.resetMergeTrain()
@@ -372,7 +494,40 @@ func (s *Service) onPRStatusMergeTrain(ctx context.Context, t Todo, status TodoP
 	if coord == nil {
 		return mergeTrainOutcome{}
 	}
-	outcome := coord.observe(t.ID, status, repoKey, prNumber, normURL)
+
+	trackKey := t.ID + "|" + normURL
+	blockerID := mergeTrainBlockerID(t.ID, normURL)
+	st := s.todoBlockerDB()
+	if st != nil && !coord.isHydrated(trackKey) {
+		if rows, err := st.ListTodoBlockersByTodo(ctx, t.ID); err == nil {
+			var activeRow *db.TodoBlockerRow
+			for i := range rows {
+				if rows[i].ID == blockerID && rows[i].Kind == todoBlockerKindMergeTrain && rows[i].State == db.TodoBlockerStateActive {
+					cp := rows[i]
+					activeRow = &cp
+					break
+				}
+			}
+			coord.hydrateIfNeeded(trackKey, t.ID, repoKey, prNumber, normURL, status, activeRow)
+		}
+	}
+
+	outcome, dbAct := coord.observe(t.ID, status, repoKey, prNumber, normURL)
+	if st != nil {
+		if dbAct.persistConflict {
+			if err := s.persistMergeTrainConflictBlocker(ctx, st, blockerID, t.ID, repoKey, normURL, dbAct.headOID, dbAct.attempts, dbAct.hadActiveRow); err != nil {
+				s.logf("todos_v2 mergetrain persist conflict blocker %s: %v", t.ID, err)
+			} else {
+				coord.setHasActiveBlocker(trackKey, true)
+			}
+		} else if dbAct.resolveBlocker {
+			if _, err := st.ResolveTodoBlocker(ctx, blockerID, time.Now().UTC()); err != nil {
+				s.logf("todos_v2 mergetrain resolve conflict blocker %s: %v", t.ID, err)
+			} else {
+				coord.setHasActiveBlocker(trackKey, false)
+			}
+		}
+	}
 	if outcome.Escalate && status.State == "open" && status.Conflicts && status.URL == t.PRURL &&
 		status.HeadOID != "" && t.Supervision != nil && !parkWaitsOnPR(t.Supervision.parking(), status.URL) {
 		s.signal(superviseSignal{
@@ -383,4 +538,51 @@ func (s *Service) onPRStatusMergeTrain(ctx context.Context, t Todo, status TodoP
 		})
 	}
 	return outcome
+}
+
+func (s *Service) persistMergeTrainConflictBlocker(
+	ctx context.Context,
+	st todoBlockerStore,
+	blockerID, todoID, repoKey, normURL, headOID string,
+	attempts int,
+	hadActiveRow bool,
+) error {
+	now := time.Now().UTC()
+	condBytes, err := json.Marshal(mergeTrainBlockerCondition{
+		RepoKey:     repoKey,
+		PRURL:       normURL,
+		LastHeadOID: headOID,
+		MaxAttempts: mergetrain.DefaultMaxRebaseFailures,
+	})
+	if err != nil {
+		return err
+	}
+	condJSON := string(condBytes)
+	if hadActiveRow {
+		if incRow, incErr := st.IncrementTodoBlockerAttempts(ctx, blockerID, now); incErr == nil && incRow != nil {
+			incRow.ConditionJSON = condJSON
+			incRow.State = db.TodoBlockerStateActive
+			incRow.TargetRef = repoKey
+			incRow.UpdatedAt = now
+			incRow.ResolvedAt = nil
+			_, err = st.UpsertTodoBlocker(ctx, *incRow)
+			return err
+		}
+	}
+	if attempts < 1 {
+		attempts = 1
+	}
+	_, err = st.UpsertTodoBlocker(ctx, db.TodoBlockerRow{
+		ID:            blockerID,
+		TodoID:        todoID,
+		Kind:          todoBlockerKindMergeTrain,
+		TargetRef:     repoKey,
+		ConditionJSON: condJSON,
+		State:         db.TodoBlockerStateActive,
+		Attempts:      attempts,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+		ResolvedAt:    nil,
+	})
+	return err
 }
