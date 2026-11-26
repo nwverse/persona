@@ -22,7 +22,7 @@ import {
   setExtensionEnabled, setupSecret, stateLine, valueAt,
   type ExtensionField, type ExtensionSecret, type HubExtensionDetail, type Json, type JsonObject,
 } from "../../lib/extensions";
-import { defaultManager, itemHeaders, otherManager, pinManagerAt, sameManager, useChosenManager } from "../../lib/manager-choice";
+import { chooseManager, defaultManager, ownerHeaders, otherManager, pinManagerAt, sameManager, useChosenManager } from "../../lib/manager-choice";
 import { useRoster } from "../../lib/managers";
 import { isResumed } from "../../lib/reconnect";
 import { navigate } from "../../lib/router";
@@ -116,7 +116,8 @@ function SectionBlock({ id, title, children }: { id: IntegrationSectionId; title
   );
 }
 
-function openSettingsTarget(url: string, onSettings?: (url: string) => void) {
+function openSettingsTarget(url: string, manager: string | undefined, onSettings?: (url: string) => void) {
+  chooseManager(manager ?? null);
   if (onSettings) {
     onSettings(url);
     return;
@@ -134,7 +135,7 @@ function SavedRepositoriesShortcut({ manager, onSettings }: { manager?: string; 
   const [count, setCount] = useState<number | null>(null);
   useEffect(() => {
     let alive = true;
-    api<{ repositories?: unknown[] }>("/assistant/repositories", manager ? { headers: itemHeaders(manager) } : undefined)
+    api<{ repositories?: unknown[] }>("/assistant/repositories", { headers: ownerHeaders(manager) })
       .then((res) => {
         if (alive && Array.isArray(res?.repositories)) setCount(res.repositories.length);
       })
@@ -152,7 +153,7 @@ function SavedRepositoriesShortcut({ manager, onSettings }: { manager?: string; 
         label={t("settings-integrations.saved_repositories_title")}
         hint={t("settings-integrations.saved_repositories_hint")}
         wrapHint
-        onClick={() => openSettingsTarget("settings/persona#repositories", onSettings)}
+        onClick={() => openSettingsTarget("settings/persona#repositories", manager, onSettings)}
       >
         {count !== null ? (
           <span className="tabular-nums">
@@ -166,7 +167,7 @@ function SavedRepositoriesShortcut({ manager, onSettings }: { manager?: string; 
   );
 }
 
-function KnowledgeScopeShortcut({ onSettings }: { onSettings?: (url: string) => void }) {
+function KnowledgeScopeShortcut({ manager, onSettings }: { manager?: string; onSettings?: (url: string) => void }) {
   return (
     <Group anchor="integration-knowledge-scope">
       <Row
@@ -175,7 +176,7 @@ function KnowledgeScopeShortcut({ onSettings }: { onSettings?: (url: string) => 
         label={t("settings-integrations.knowledge_scope_title")}
         hint={t("settings-integrations.knowledge_scope_hint")}
         wrapHint
-        onClick={() => openSettingsTarget("settings/knowledge#knowledge-items", onSettings)}
+        onClick={() => openSettingsTarget("settings/knowledge#knowledge-items", manager, onSettings)}
       />
     </Group>
   );
@@ -414,7 +415,7 @@ function FeishuBotBuiltinDetail({
             )}
           </>
         )}
-        <KnowledgeScopeShortcut onSettings={onSettings} />
+        <KnowledgeScopeShortcut manager={manager} onSettings={onSettings} />
       </SectionBlock>
     </div>
   );
@@ -609,7 +610,7 @@ function BuiltinIntegrationDetail({
               onOpen={onOpenSources ? (st) => onOpenSources(st, manager) : undefined}
             />
           )}
-          {showKnowledgeScope && <KnowledgeScopeShortcut onSettings={onSettings} />}
+          {showKnowledgeScope && <KnowledgeScopeShortcut manager={manager} onSettings={onSettings} />}
         </SectionBlock>
       )}
       {!isMail && !isLarkGateway && <ConnectorExternalSourceSettings ids={[connectorId ?? "", channelId ?? ""]} manager={manager} />}
@@ -639,7 +640,6 @@ function ExtensionIntegrationDetail({
   onOpenSources?: (state?: string, manager?: string) => void;
 }) {
   const id = target.id;
-  useLayoutEffect(() => pinManagerAt([`/extensions/${enc(id)}`, `/plugins/${enc(id)}`], manager), [id, manager]);
 
   const roster = useRoster();
   const offline = roster?.managers.find((m) => m.id === (manager || defaultManager()))?.online === false;
@@ -733,6 +733,14 @@ function ExtensionIntegrationDetail({
     }
     return [...ids];
   }, [target.connectorId, detail?.contributes?.connectors]);
+  useLayoutEffect(() => {
+    const ids = new Set([...connectorIds, ...connectors.map((c) => c.id)]);
+    const prefixes = [`/extensions/${enc(id)}`, `/plugins/${enc(id)}`];
+    for (const cid of ids) prefixes.push(`/connectors/${enc(cid)}`);
+    if (ids.has("imessage")) prefixes.push("/imessage");
+    return pinManagerAt(prefixes, manager);
+  }, [id, manager, connectorIds, connectors]);
+
   const connectorKey = connectorIds.join(",");
 
   const loadConnectors = useCallback(async () => {
@@ -1118,7 +1126,7 @@ function ExtensionIntegrationDetail({
                   fieldProps={sharedFieldProps}
                 />
               )}
-              {showKnowledgeScope && <KnowledgeScopeShortcut onSettings={onSettings} />}
+              {showKnowledgeScope && <KnowledgeScopeShortcut manager={manager} onSettings={onSettings} />}
             </SectionBlock>
           )}
           <ConnectorExternalSourceSettings ids={[...connectorIds, channelId ?? ""]} manager={manager} />
