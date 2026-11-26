@@ -81,19 +81,10 @@ func TestMainConversationAttentionLeavesTheNodeReadLoop(t *testing.T) {
 	}
 
 	free()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
+	waitFor(t, "the silent round to be classified and the row published again as idle", func() bool {
 		entry, ok := ft.s.conversationAttentionCached("server", "conv1", 11)
-		row := listedRow(ft.lastList("server"), "conv1")
-		if ok && entry.Silent && row.State == proto.StateIdle {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("after the node answered: verdict %+v (cached %v), published row %+v; want the silent round "+
-				"classified and the row published again as idle", entry, ok, row)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+		return ok && entry.Silent && listedRow(ft.lastList("server"), "conv1").State == proto.StateIdle
+	})
 }
 
 // Every revision of the main conversation gets its verdict, one read each, off the read loop (#16214 review). Each
