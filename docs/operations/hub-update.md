@@ -40,10 +40,12 @@ folder** and the number of **Snapshots to keep**. Operators configure external c
 commands on the Hub host.
 
 The recommended folder is `<runtime>/update/development-backups` (where the Hub has always
-kept these snapshots); it is shown as the placeholder and used when no folder is set. **Use
-recommended** and an empty field are an explicit Web choice of it, so they win over a
-`directory` in `hub.json`; leaving the field out of a request keeps whatever is set. A
-custom folder is validated on the Hub with the backup command's rules (`internal/operations/backup`):
+kept these snapshots). It appears as a wrapping placeholder in the full-width folder field.
+**Use recommended** appears for a custom folder and clears the field. **Save** is enabled
+when the folder or retention changes. Saving a change to an empty folder explicitly chooses
+the recommendation over a `directory` in `hub.json`. Omitting the folder from a request
+keeps the saved folder. The Hub validates a custom folder with the backup command's rules
+(`internal/operations/backup`):
 it must be an absolute path (a leading `~` is expanded), may not be inside data a snapshot
 collects (the knowledge base, `managers/assistant`, extensions, skills or
 `hub.machines_kept`), may not be the runtime directory or contain it (or an external
@@ -950,6 +952,9 @@ Where a release hub reads `latest.json` and downloads from (#4522). v0.2.1's bin
 - **A hub deployed with `deploy.sh`** carries a non-empty environment `PERSONA_UPDATE_URL`, then the config's `publish.update_url`, else `<publish.site_url>/dl`: a config with only `site_url` pointing at the publish site gets the frozen `dl/` below, so the hub never sees a newer release or offers its phones the Android app. `deploy.sh` prints which source the hub will carry when `publish.update_url` is not set; set it (for example to the GitHub Releases base) before deploying, or `update.url` in the hub's `hub.json` afterwards.
 - **The default of official builds** is the GitHub Releases base (`https://github.com/nwverse/persona/releases/latest/download`, through `publish.update_url`), the same base the Release's `install.sh` downloads from; v0.5.2 and later carry it. Releases up to v0.4.0 were built with the publish site's `dl/`, which has stayed on the 2026-11-07 build since the repository history was rewritten (the rollback guard refuses to publish over it), so those hubs never see a newer release: set `update.url` to the GitHub base, or upgrade once by hand. The getting-started guide and the website's install command point new installs at the Release's `install.sh` for the same reason. `update.url` still lets a hub choose another source without a new build.
 
+On the web, **Settings › This hub** shows the latest version from the selected Release or Beta source and its publication time when available (#15710).
+With no result yet, it prompts for a check. If the installed build number is higher than the source's latest build, it explains that updating from that source would require a downgrade. A stopped-source warning takes precedence.
+
 ### Beta updates (opt-in)
 
 **Stable remains the default.** Settings › hub lets a person choose the beta update source explicitly; nothing about an existing installation switches it to prereleases. Choosing **Release** returns to the stable source. A running check, download or confirmation must finish before changing channels, and switching discards the other channel's candidate rather than installing it. The existing `web-dev` private build/backup channel stays separate.
@@ -1079,7 +1084,7 @@ Download → Verify → Prepare → Wait for idle → Replace → Restart → Co
   - **Update History**: last 10 attempts, result (updated / rolled back / **Update failed** / **Not installed automatically**), automatic attempts marked, from/to versions, time, rollback and held-update reasons.
   - Old hub (no `/api/v1/hub/update`): explain that install.sh must be run once on the hub machine to update it.
 - Android Settings has the same items (**Hub Version**, `HubUpdatePage`, see `../android/android.md`, "Hub version"); Android does not yet have the row at the top of Agents.
-- **A row at the top of Agents** (`HubNoticeRow`, same position and appearance as **Persona is signed in on your Mac**, hidden while searching): only one at a time, most important first:
+- **On Apple, a row at the top of Agents** (`HubNoticeRow`, same position and appearance as **Persona is signed in on your Mac**, hidden while searching): only one at a time, most important first:
   1. App too old (its build number is below the hub's `min_app_build`): "This app is too old for this hub. Update it in TestFlight", cannot dismiss;
   2. Hub too old (`protocol` below what the App requires; old hubs that do not report it count as 0): "The hub is out of date; some features won't work", dismissed with × and not shown again;
   3. Updating: e.g. "Hub updating: waiting for 2 busy chats to finish";
@@ -1088,9 +1093,11 @@ Download → Verify → Prepare → Wait for idle → Replace → Restart → Co
   6. New version with automatic updates off: "Hub update available: X", with **Update** and × (not shown again for this version). Not shown with automatic updates on; it will install itself;
      Docker hubs show "New hub image: X", with only ×. After dismissing one, the next appears as usual; the App remembers the most recently dismissed notices.
   Tapping elsewhere in the row opens the hub page (sheet). No popup or blocked interaction; button labels stay single-line, and each button handles only its own action (`.borderless`, `HubNoticeUITests`).
-  Only on Agents: the assistant page is a chat, and an extra top row would push it down; hub status belongs with machines and Agents.
-  On the web (#2897), it sits below the filter bar in the sidebar's Agents block (`web/src/views/agents/HubNoticeRow.tsx`); items, order and buttons match the App, and dismissals are stored in this browser (last 8, same keys as the App);
-  no items 1 or 2: the web is served by the hub itself, so their versions always match. Tapping the row opens Settings › hub.
+  On the web, the notice sits directly below Settings in the sidebar's Pages group. Folding Pages hides both rows.
+  Reopening it reads the current status. In the phone drawer the notice spans the width beneath the grid row containing Settings.
+  Tapping the text opens Settings › Hub. Each adjacent button performs its own action and keeps the sidebar open.
+  The web follows the same priority and remembers the last eight dismissals in this browser. It skips the app and hub
+  compatibility notices because the hub serves the web client.
 - **Notifications**: after an automatic update installs, push "Hub updated to X"; after rollback, push "Hub update failed" with the reason (hub's `updater.notify`). Manual updates are visible in the App and do not send an extra push.
 - **During restart**: disconnection is expected; the usual "Connecting…" title becomes "Hub updating…", and its explanation says the hub is restarting and will automatically return to the previous version if the new one cannot start; after reconnect, show the new version.
 - **Settings › Assistant › Skills** (`SkillsPage`): skills on the computer running the assistant (`GET /api/v1/skills`), read-only, marked as user-provided or built-in, explaining where to put them and when they take effect.

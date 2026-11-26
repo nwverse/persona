@@ -36,6 +36,7 @@ type placementCandidate struct {
 	Hits        []placementHit `json:"filters,omitempty"`
 	LoadPerCore *float64       `json:"load_per_core,omitempty"`
 	FreeBytes   *int64         `json:"free_bytes,omitempty"`
+	SlotRatio   *float64       `json:"slot_ratio,omitempty"`
 	HealthRank  *int           `json:"health_rank,omitempty"`
 }
 
@@ -50,7 +51,9 @@ type placementTaskKey struct{}
 
 func newPlacement(machine, mode string) *placement {
 	p := &placement{ID: randomHex(16), At: time.Now().UTC(), PolicyVersion: 1, Mode: mode, Requested: machine, ReasonKey: "requested_machine"}
-	p.candidate(machine)
+	if machine != "" && machine != "auto" {
+		p.candidate(machine)
+	}
 	return p
 }
 
@@ -265,7 +268,7 @@ func (s *Service) placeStart(ctx context.Context, t *PlanTask, stage placementSt
 func queuedPlacement(task PlanTask, q *TaskQueue) *placement {
 	p := task.Placement
 	if p == nil || p.TaskID != task.TodoID {
-		p = newPlacement(task.Machine, "enforce")
+		p = newPlacement(firstNonEmpty(task.Machine, "auto"), "enforce")
 		p.TaskID = task.TodoID
 	} else {
 		cp := *p
@@ -273,7 +276,9 @@ func queuedPlacement(task PlanTask, q *TaskQueue) *placement {
 		p = &cp
 	}
 	p.ReasonKey = q.Key
-	p.hit(task.Machine, q.Key, nil)
+	if task.Machine != "" {
+		p.hit(task.Machine, q.Key, nil)
+	}
 	p.WaitAt, p.Reason = q.NextAt, q.Reason
 	return p
 }
@@ -327,11 +332,21 @@ func (s *Service) placePlanStart(ctx context.Context, t *PlanTask, own startPick
 	// The resource/direction admission gate (admission.go): fixed tasks are refused here, flexible tasks may have
 	// been moved to a less loaded machine. The claim is stored on the task and held until its agent is linked or the
 	// start fails for good (runPlanTaskStart), so it still counts while metrics and the ledger catch up.
-	release, err := s.admitTaskStart(ctx, t)
-	if err != nil {
-		return Device{}, err
+	// If automatic placement assignment already claimed the slot for this exact machine, reuse that claim instead of
+	// double-claiming.
+	if t.admissionRelease != nil && t.admissionClaimMachine != "" && t.admissionClaimMachine != m.ID {
+		t.admissionRelease()
+		t.admissionRelease = nil
+		t.admissionClaimMachine = ""
 	}
-	t.admissionRelease = release
+	if t.admissionRelease == nil {
+		release, err := s.admitTaskStart(ctx, t)
+		if err != nil {
+			return Device{}, err
+		}
+		t.admissionRelease = release
+		t.admissionClaimMachine = t.Machine
+	}
 	if m.ID != t.Machine { // a flexible reroute inside the gate: every later step must use the machine it landed on
 		m, ok = s.machineByName(ctx, t.Machine)
 		if !ok {

@@ -66,6 +66,11 @@ func (b *inboxBook) restore(w *inboxWrite) {
 		return
 	}
 	cur, agent, handling := w.it, w.it.Agent, w.it.Handling
+	if cur.Last != p.Last {
+		// An Inbox version whose transaction failed cannot leave a receipt
+		// behind for a later, unrelated save.
+		cur.externalMoves, cur.externalChecking = nil, false
+	}
 	cv, pv := reflect.ValueOf(cur).Elem(), reflect.ValueOf(&p).Elem()
 	for i := range cv.NumField() {
 		switch name := cv.Type().Field(i).Name; name {

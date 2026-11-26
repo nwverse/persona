@@ -198,6 +198,8 @@ func TestModelProbeTerminalOutcomes(t *testing.T) {
 		errorContains string
 	}{
 		{name: "Messages HTTP 200 error", api: "messages", response: `{"type":"error","message":"overloaded"}`, errorContains: "overloaded"},
+		{name: "Messages null", api: "messages", response: `null`, errorContains: "missing content"},
+		{name: "Messages missing content", api: "messages", response: `{}`, errorContains: "missing content"},
 		{name: "Messages refusal", api: "messages", response: `{"type":"message","stop_reason":"refusal","content":[]}`, errorContains: "refusal"},
 		{name: "Messages token limit", api: "messages", response: `{"type":"message","stop_reason":"max_tokens","content":[{"type":"text","text":"partial"}]}`, ok: true, truncated: true},
 		{name: "Chat DONE without a reply", api: "chat", response: "data: [DONE]\n\n", errorContains: "without a reply"},
@@ -223,6 +225,66 @@ func TestModelProbeTerminalOutcomes(t *testing.T) {
 			}
 			if !tc.ok && (out.Succeeded != 0 || out.Failed != 1 || !strings.Contains(got.Error, tc.errorContains)) {
 				t.Fatalf("terminal failure = %+v", out)
+			}
+		})
+	}
+}
+
+func TestModelProbeRedactsProviderControlledMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		api            string
+		status         int
+		response       string
+		retryAfter     string
+		wantTypes      []string
+		wantUsage      map[string]int
+		wantRetryAfter string
+	}{
+		{
+			name: "Messages block type and usage key", api: "messages", status: http.StatusOK,
+			response:  `{"type":"message","content":[{"type":"` + fakeKey + `"},{"type":"text","text":"ok"}],"usage":{"input_tokens":3,"` + "hdr-secret-value" + `":4}}`,
+			wantTypes: []string{"***", "text"}, wantUsage: map[string]int{"input_tokens": 3},
+		},
+		{
+			name: "Chat usage key", api: "chat", status: http.StatusOK,
+			response: "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n" +
+				"data: {\"usage\":{\"prompt_tokens\":4,\"" + fakeKey + "\":2}}\n\ndata: [DONE]\n\n",
+			wantTypes: []string{"text"}, wantUsage: map[string]int{"prompt_tokens": 4},
+		},
+		{
+			name: "Retry-After", api: "messages", status: http.StatusTooManyRequests,
+			response: `{"error":{"message":"slow down"}}`, retryAfter: fakeKey, wantRetryAfter: "***",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tc.retryAfter != "" {
+					w.Header().Set("Retry-After", tc.retryAfter)
+				}
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.response))
+			}))
+			defer gateway.Close()
+			s, _ := modelProbeTestService(t, tc.api, gateway.URL)
+			out, _ := runModelProbeTest(t, s, `{"provider":"managed","samples":[{"user":"ping"}]}`)
+			if len(out.Results) != 1 {
+				t.Fatalf("metadata result = %+v", out)
+			}
+			got := out.Results[0]
+			if got.OK != (tc.status == http.StatusOK) || !slices.Equal(got.BlockTypes, tc.wantTypes) || got.RetryAfter != tc.wantRetryAfter {
+				t.Fatalf("metadata sample = %+v", got)
+			}
+			if len(got.Usage) != len(tc.wantUsage) {
+				t.Fatalf("usage = %v, want %v", got.Usage, tc.wantUsage)
+			}
+			for key, want := range tc.wantUsage {
+				if got.Usage[key] != want {
+					t.Fatalf("usage = %v, want %v", got.Usage, tc.wantUsage)
+				}
+			}
+			if _, present := got.Usage["***"]; present {
+				t.Fatalf("redacted usage keys collided instead of being omitted: %v", got.Usage)
 			}
 		})
 	}

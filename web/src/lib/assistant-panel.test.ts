@@ -61,16 +61,91 @@ describe("the setup a Persona chat's next message runs on", () => {
   it("a Main chat default of another agent kind keeps what the conversation runs; same-kind and unknown defaults stay unchanged", () => {
     const running = chat({ isMain: true, session: session({ agent: "codex", launcher: "codex", model: "gpt-5.5" }) });
     expect(assistantSetup(running, info)).toEqual({ provider: "codex", model: "gpt-5.5", effort: "medium", source: "own" });
-    expect(assistantPillView(running, assistantSetup(running, info), info, listOf("codex"))).toMatchObject({ engine: "codex", provider: "codex", model: "5.5" });
+    expect(assistantPillView(running, assistantSetup(running, info), info, listOf("codex"))).toMatchObject({ engine: "codex", provider: "Codex", model: "GPT-5.5" });
     const fastRunning = chat({ isMain: true, session: session({ agent: "codex", launcher: "codex", model: "gpt-5.5", service_tier: "priority" }) });
     expect(assistantSetup(fastRunning, info)).toEqual({ provider: "codex", model: "gpt-5.5", effort: "medium", fast: true, source: "own" });
-    expect(assistantPillView(fastRunning, assistantSetup(fastRunning, info), info, listOf("codex"))).toMatchObject({ engine: "codex", model: "5.5", fast: true });
+    expect(assistantPillView(fastRunning, assistantSetup(fastRunning, info), info, listOf("codex"))).toMatchObject({ engine: "codex", model: "GPT-5.5", fast: true });
     const sameKind = { ...info, def: { provider: "codex" } };
     expect(assistantSetup(running, sameKind)).toEqual({ provider: "codex", model: "gpt-5.5", effort: "medium", source: "default" });
     const sameProviderID = { ...info, launchers: [{ name: "launcher.codex", source: "builtin" }], def: { provider: "launcher.codex" } };
     expect(assistantSetup(running, sameProviderID)).toEqual({ provider: "launcher.codex", model: undefined, effort: "medium", source: "default" });
     const unknown = { ...info, def: { provider: "gone" } };
     expect(assistantSetup(running, unknown)).toEqual({ provider: "gone", model: undefined, effort: "medium", source: "default" });
+  });
+
+  it("keeps a running non-Claude runtime main or leader conversation on its actual engine even while launchers load or default is Claude", () => {
+    const agySession = session({
+      agent: "agy",
+      launcher: undefined,
+      source_kind: "runtime",
+      source_instance_id: "agy",
+      model: "gemini-3-pro-high",
+      effort: "high",
+    });
+    const mainAgy = chat({ isMain: true, config: "claude", def: { provider: "claude", model: "", effort: "high" }, session: agySession });
+    // Before /launchers?purpose=assistant resolves (info === undefined), never fall back to Claude + Default (recommended).
+    const loadingSetup = assistantSetup(mainAgy, undefined);
+    expect(loadingSetup).toEqual({ provider: "agy", model: "gemini-3-pro-high", effort: "high", source: "own" });
+    expect(assistantPillView(mainAgy, loadingSetup, undefined, {})).toMatchObject({
+      engine: "agy",
+      provider: "Antigravity CLI",
+      model: "gemini-3-pro-high",
+      effort: "high",
+    });
+
+    // Even when Claude is absent from the assistant catalog (e.g. unavailable), keep the running AGY session.
+    const agyOnlyInfo: AssistantLaunchers = {
+      launchers: [{ name: "agy", source: "agy", assistant: true }],
+      def: { provider: "claude", model: "", effort: "high" },
+      unavailable: [{ name: "claude", kind: "launcher", agent: "claude", reason: "unavailable" }],
+    };
+    const agyCatalog: ModelList = {
+      list: { agent: "agy", models: [{ id: "gemini-3-pro-high", name: "Gemini 3 Pro (High)", default_effort: "high" }] },
+    };
+    const loadedSetup = assistantSetup(mainAgy, agyOnlyInfo);
+    expect(loadedSetup).toEqual({ provider: "agy", model: "gemini-3-pro-high", effort: "high", source: "own" });
+    expect(assistantPillView(mainAgy, loadedSetup, agyOnlyInfo, agyCatalog)).toMatchObject({
+      engine: "agy",
+      provider: "Antigravity CLI",
+      model: "Gemini 3 Pro",
+      effort: "high",
+    });
+
+    // A leader/direction chat running on AGY also keeps its own engine when Main chat defaults to Claude.
+    const leaderAgy = chat({ isMain: false, followsDefault: true, config: "claude", session: agySession });
+    expect(assistantSetup(leaderAgy, info)).toEqual({ provider: "agy", model: "gemini-3-pro-high", effort: "high", source: "own" });
+  });
+
+  it("resolves a default-following main chat to its concrete model instead of vague Default (recommended)", () => {
+    const emptyModelDefault: AssistantLaunchers = {
+      launchers: [{ name: "claude", source: "builtin" }, { name: "agy", source: "agy", agent: "agy", assistant: true }],
+      def: { provider: "claude", model: "", effort: "high" },
+      unavailable: [],
+    };
+    // No running session yet: resolve the catalog's default row to its concrete model name.
+    const freshMain = chat({ isMain: true, session: undefined });
+    const freshSetup = assistantSetup(freshMain, emptyModelDefault);
+    expect(assistantPillView(freshMain, freshSetup, emptyModelDefault, { list: claudeList })).toMatchObject({
+      engine: "claude",
+      model: "Opus 5.5",
+      effort: "high",
+    });
+    // Running Gemini main chat following launcher.gemini default with empty model keeps Gemini icon and running model.
+    const geminiInfo: AssistantLaunchers = {
+      launchers: [{ name: "gemini", source: "builtin", agent: "gemini" }],
+      def: { provider: "launcher.gemini", model: "", effort: "high" },
+      unavailable: [],
+    };
+    const geminiChat = chat({ isMain: true, session: session({ agent: "gemini", launcher: "gemini", model: "gemini-2.5-pro", effort: "high" }) });
+    const geminiSetup = assistantSetup(geminiChat, geminiInfo);
+    expect(assistantPillView(geminiChat, geminiSetup, geminiInfo, {
+      list: { agent: "gemini", models: [{ id: "gemini-2.5-pro", name: "Gemini 2.5 Pro" }] },
+    })).toMatchObject({
+      engine: "gemini",
+      provider: "Gemini CLI",
+      model: "Gemini 2.5 Pro",
+      effort: "high",
+    });
   });
 
   it("an older hub keeps this page's pick; the new-conversation page has its own, the default otherwise", () => {
@@ -86,10 +161,10 @@ describe("the setup a Persona chat's next message runs on", () => {
 
   it("the pill: the provider's name for people, its list's name for the model (none set: the default entry, else the model it is set up with)", () => {
     const view = (c: AssistantChat) => assistantPillView(c, assistantSetup(c, info), info, listOf(assistantSetup(c, info).provider));
-    expect(view(chat({ isMain: true }))).toMatchObject({ engine: "claude", provider: "claude", model: "Opus 5.5", effort: "high" });
+    expect(view(chat({ isMain: true }))).toMatchObject({ engine: "claude", provider: "Claude Code", model: "Opus 5.5", effort: "high" });
     expect(view(chat({ session: session({ model_pick: { launcher: "team-api" } }) }))).toMatchObject({ provider: "Team API", model: "sonnet 5.5" });
     expect(view(chat({ session: session({ model_pick: { launcher: "claude" } }) })).model).toBe("Default (recommended)");
-    expect(view(chat({ session: session({ model_pick: { launcher: "codex", model: "gpt-5.5" } }) }))).toMatchObject({ engine: "codex", model: "5.5" });
+    expect(view(chat({ session: session({ model_pick: { launcher: "codex", model: "gpt-5.5" } }) }))).toMatchObject({ engine: "codex", model: "GPT-5.5" });
     // A side conversation whose session model carries a gateway route prefix keeps the route on the pill while matching the panel row.
     const gwInfo: AssistantLaunchers = { launchers: [{ name: "gw", source: "persona" }], def: { provider: "claude", model: "opus" }, unavailable: [] };
     const gwList: ModelList = { list: { agent: "claude", models: [{ id: "gemini-4-carbon", name: "Gemini 4 Carbon" }] } };
@@ -145,10 +220,10 @@ describe("the panel's providers", () => {
   it("what can run Persona chats, each with its list; what can't, off with the hub's reason (not hidden)", () => {
     const { providers, state } = assistantPanel(assistantSetup(chat({ isMain: true }), info), info, listOf, { typed: true });
     expect(providers.map((p) => [p.id, p.name, p.engine, p.unavailable ?? ""])).toEqual([
-      ["claude", "claude", "claude", ""],
+      ["claude", "Claude Code", "claude", ""],
       ["relay", "relay", "claude", ""],
       ["team-api", "Team API", "claude", ""],
-      ["codex", "codex", "codex", ""],
+      ["codex", "Codex", "codex", ""],
       ["gpt-direct", "GPT direct", "claude", "直连 API 用的是 Responses 协议，跑不了主对话"],
       ["far-gw", "far-gw", "claude", "这个服务商不对这台电脑开放"],
     ]);

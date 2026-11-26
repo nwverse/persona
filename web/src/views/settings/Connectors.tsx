@@ -5,10 +5,11 @@
 // phone app (its OAuth client is an iOS one whose callback only the app can catch), so the web form leaves it to the phone,
 // unless the hub has no such client (GET /mail/oauth/google/config): then Gmail goes in here with an app password.
 // Outlook too (Microsoft calls back to a custom scheme only the app catches), though its client ID can be set up here.
-import { useEffect, useId, useState } from "react";
-import { otherManager, parseOwnedSub, useChosenManager } from "../../lib/manager-choice";
+import { useEffect, useLayoutEffect, useId, useState } from "react";
+import { managerHeaderFor, otherManager, ownedSub, parseOwnedSub, pinManagerAt, sameManager, useChosenManager } from "../../lib/manager-choice";
 import { clientIDError, EMPTY_MAIL_FORM, MAIL_KINDS, mailAccountLine, mailCodeGuide, mailErrors, mailProviderBadge, mailRequest, mailSummary, signsInOnPhone, type MailAccount, type MailForm, type MicrosoftConfig } from "../../lib/agent-settings";
 import { t } from "../../i18n";
+import { ExternalSourceSettingsEntry } from "../../features/external-sources/ExternalSourceSettingsEntry";
 import { api, ApiError, enc, errorText } from "../../lib/api";
 import { listConnectors, setConnector, type HubConnector } from "../../lib/connectors";
 import { ago } from "../../lib/format";
@@ -45,28 +46,41 @@ export function Connectors({ open, onOpen, onChannel, headerBack, openBeside }: 
   const lark = useLarkOn();
   const picked = useChosenManager();
   const [larkcli, setLarkcli] = useState<HubConnector | null | undefined>();
-  // "feishu-bot" is not a hub connector: FeishuBot reads it and opens its own dialog.
-  // `<id>@<manager>`: another manager's connector, opened from its extension's page (docs/assistant/managers.md "Clients")
-  if (open === SENT_SUB) return (
+  const { id, manager } = parseOwnedSub(open ?? "");
+  const owner = manager ?? otherManager(picked ?? undefined);
+  useLayoutEffect(() => {
+    if (!manager) return;
+    if (id === "feishu-bot") return pinManagerAt(["/bots/feishu", "/channels/feishu", "/connectors/larkcli"], manager);
+    if (id === "mail") return pinManagerAt(["/mail", "/connectors/mail"], manager);
+    if (id === "lark") return pinManagerAt(["/lark"], manager);
+  }, [id, manager]);
+  if (open === SENT_SUB || id === "mail" || id === "lark") return (
     <>
       {!headerBack && <Button tone="quiet" icon="chevronLeft" onClick={() => onOpen(null)} className="-ml-2 mb-3">{t("settings-hubconnector.back")}</Button>}
-      <h2 className="mb-2 px-1 text-[15px] font-semibold text-ink">{t("settings-sent.entry_label")}</h2>
-      <SentSettings />
+      {id === "mail" && <Mail key={open} manager={owner} />}
+      {id === "lark" && <Feishu key={open} manager={owner} />}
+      {open === SENT_SUB && <>
+        <h2 className="mb-2 px-1 text-[15px] font-semibold text-ink">{t("settings-sent.entry_label")}</h2>
+        <SentSettings />
+      </>}
     </>
   );
-  if (open && open !== "feishu-bot") {
-    const { id, manager } = parseOwnedSub(open);
-    // no `@manager` in the address: the current assistant's copy, as for an extension
-    return <ConnectorDetail key={`${open}@${manager ?? ""}`} id={id} manager={manager ?? otherManager(picked ?? undefined)} onBack={headerBack ? undefined : () => onOpen(null)} onChannel={onChannel} />;
+  if (open && id !== "feishu-bot") {
+    return <ConnectorDetail key={open} id={id} manager={owner} onBack={headerBack ? undefined : () => onOpen(null)} onChannel={onChannel} />;
   }
+  const bot = <FeishuBot key={owner} manager={owner} onChannel={onChannel}
+    larkcli={manager ? undefined : larkcli} onOpen={(next) => onOpen(ownedSub(next, owner))}
+    onRouteClose={id === "feishu-bot" ? () => onOpen(null) : undefined} />;
+  if (id === "feishu-bot" && manager) return bot;
+  const beside = parseOwnedSub(openBeside ?? "").id;
   return (
     <>
       <p className="mb-5 px-1 text-[12.5px] leading-relaxed text-ink-3">
         {t("settings-connectors.intro")}
       </p>
-      {mail && <Mail />}
-      {lark && <Feishu />}
-      <FeishuBot onChannel={onChannel} larkcli={larkcli} onOpen={onOpen} />
+      {mail && beside !== "mail" && <Mail />}
+      {lark && beside !== "lark" && <Feishu />}
+      {beside !== "feishu-bot" && bot}
       {hasConnectors && <ConnectorList onOpen={onOpen} onLarkCli={setLarkcli} openBeside={openBeside} />}
       <Group anchor="sent">
         <Row icon="send" label={t("settings-sent.entry_label")} hint={t("settings-sent.hint")} onClick={() => onOpen(SENT_SUB)} />
@@ -77,7 +91,7 @@ export function Connectors({ open, onOpen, onChannel, headerBack, openBeside }: 
 
 // ── Mail ────────────────────────────────────────────────
 
-export function Mail({ hideInboxSwitch = false }: { hideInboxSwitch?: boolean } = {}) {
+export function Mail({ hideInboxSwitch = false, manager }: { hideInboxSwitch?: boolean; manager?: string } = {}) {
   const [accounts, setAccounts] = useState<MailAccount[] | null>(null);
   const [error, setError] = useState("");
   const [adding, setAdding] = useState(false);
@@ -153,8 +167,10 @@ export function Mail({ hideInboxSwitch = false }: { hideInboxSwitch?: boolean } 
             />
           </div>
         ))}
-        {!hideInboxSwitch && accounts && accounts.length > 0 && <MailInboxSwitch />}
+        {!hideInboxSwitch && accounts && accounts.length > 0 && <MailInboxSwitch manager={manager} />}
       </Group>
+      {!!accounts?.length && <ExternalSourceSettingsEntry provider="mail" manager={manager}
+        accounts={accounts.map((account) => ({ channel: account.id, name: account.email }))} />}
       <AddMail
         open={adding}
         onClose={() => setAdding(false)}
@@ -170,24 +186,27 @@ export function Mail({ hideInboxSwitch = false }: { hideInboxSwitch?: boolean } 
 
 /** Mail's Add to Inbox (#5307): the same switch as Settings › Inbox Sources' mail page; off, no account's mail comes into
  *  the Inbox (search, replies and the knowledge base go on). Only a hub that has the switch lists it (`inbox`). */
-export function MailInboxSwitch() {
-  const [on, setOn] = useState<boolean | null>(null);
+export function MailInboxSwitch({ manager }: { manager?: string } = {}) {
+  const picked = useChosenManager();
+  const [mail, setMail] = useState<HubConnector | null>(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     let alive = true;
+    const owner = manager ?? managerHeaderFor("/connectors/mail") ?? picked ?? undefined;
+    setMail(null);
     listConnectors(true).then(
-      (list) => alive && setOn(list.find((c) => c.id === "mail")?.inbox ?? null),
+      (list) => alive && setMail(list.find((c) => c.id === "mail" && sameManager(c.manager, owner)) ?? null),
       () => {}, // an older hub, or none to say: no switch
     );
     return () => void (alive = false);
-  }, []);
-  if (on === null) return null;
+  }, [manager, picked]);
+  if (mail?.inbox == null) return null;
   const title = t("settings-hubconnector.to_inbox");
   const change = async (v: boolean) => {
     setBusy(true);
     try {
-      const c = await setConnector("mail", { inbox: v });
-      setOn(c.inbox ?? v);
+      const c = await setConnector("mail", { inbox: v }, mail.manager);
+      setMail((current) => current === mail ? { ...mail, inbox: c.inbox ?? v } : current);
     } catch (e) {
       toast(t("settings-connectors.mail_inbox_failed", { error: errorText(e) }), "error");
     } finally {
@@ -198,7 +217,7 @@ export function MailInboxSwitch() {
     <div className="flex items-center gap-3 px-4 py-2.5">
       <span className="min-w-0 flex-1 truncate text-[13px] text-ink">{title}</span>
       {busy && <Spinner />}
-      <Switch on={on} disabled={busy} label={title} onChange={(v) => void change(v)} />
+      <Switch on={mail.inbox} disabled={busy} label={title} onChange={(v) => void change(v)} />
     </div>
   );
 }
@@ -506,7 +525,7 @@ function LarkAccountRow({ a, isDefault }: { a: LarkAccount; isDefault: boolean }
   );
 }
 
-export function Feishu() {
+export function Feishu({ manager }: { manager?: string } = {}) {
   const [st, setSt] = useState<LarkStatus | null>(null);
   const [accounts, setAccounts] = useState<LarkAccountList | null>(null);
   const [error, setError] = useState("");
@@ -529,6 +548,7 @@ export function Feishu() {
   const last = st?.last_event_at ? ago(new Date(st.last_event_at * 1000).toISOString()) : "";
 
   return (
+    <>
     <Group
       anchor="lark"
       title={t("settings-connectors.lark")}
@@ -575,5 +595,8 @@ export function Feishu() {
         </div>
       ))}
     </Group>
+    {st?.configured && <ExternalSourceSettingsEntry provider="lark" manager={manager}
+      accounts={accounts?.accounts.map((account) => ({ channel: account.id > 1 ? String(account.id) : "", name: accountTitle(account) }))} />}
+    </>
   );
 }

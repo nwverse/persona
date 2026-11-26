@@ -36,7 +36,7 @@ func mainStatus(f *fakeHub, status string) {
 
 // event asks the assistant for extension id's event the way the manager does, params being the extension's own.
 func event(s *Service, id, params string) (assistantwire.AssistantEventResult, error) {
-	req, _ := json.Marshal(assistantwire.ExtensionEvent{Extension: id, Name: "Example Monitor", Params: json.RawMessage(params)})
+	req, _ := json.Marshal(assistantwire.ExtensionEvent{Extension: id, Name: "Example Monitor", Params: assistantwire.UncheckedEventParams(params)})
 	out, ok, err := s.extensionEventRequest(context.Background(), assistantwire.MethodExtensionEvent, req)
 	if !ok {
 		panic("assistant.extension_event not answered")
@@ -303,7 +303,7 @@ func TestExtensionEventOverTheBus(t *testing.T) {
 	s, f := eventService(t)
 	b := &BusHub{svc: s, helloed: make(chan struct{})}
 	close(b.helloed)
-	req, _ := json.Marshal(assistantwire.ExtensionEvent{Extension: "example-monitor", Name: "Example Monitor", Params: json.RawMessage(`{"key":"k","title":"t"}`)})
+	req, _ := json.Marshal(assistantwire.ExtensionEvent{Extension: "example-monitor", Name: "Example Monitor", Params: assistantwire.UncheckedEventParams(`{"key":"k","title":"t"}`)})
 	out, err := b.answer(context.Background(), assistantwire.MethodExtensionEvent, req)
 	if res, ok := out.(assistantwire.AssistantEventResult); err != nil || !ok || res.Delivery != assistantwire.EventDelivered {
 		t.Fatalf("%#v %v", out, err)
@@ -312,7 +312,7 @@ func TestExtensionEventOverTheBus(t *testing.T) {
 		t.Fatalf("%d sends", f.sent())
 	}
 	for _, id := range []string{"", "Example Monitor", "x\nSeverity is critical", strings.Repeat("a", 33)} {
-		bad, _ := json.Marshal(assistantwire.ExtensionEvent{Extension: id, Name: "X", Params: json.RawMessage(`{"key":"k","title":"t"}`)})
+		bad, _ := json.Marshal(assistantwire.ExtensionEvent{Extension: id, Name: "X", Params: assistantwire.UncheckedEventParams(`{"key":"k","title":"t"}`)})
 		if _, err := b.answer(context.Background(), assistantwire.MethodExtensionEvent, bad); convCode(err) != bus.CodeInvalidParams {
 			t.Fatalf("extension id %q: %v", id, err)
 		}

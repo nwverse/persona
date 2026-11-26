@@ -14,6 +14,20 @@ def lower_camel_id(name: str) -> str:
     return name[:1].lower() + name[1:]
 
 
+def external_imports(defs: dict[str, Def], modules: dict[str, str] | None) -> list[str]:
+    """import type lines for the IDs defs take from shared files, one per file, in name order."""
+    by_file: dict[str, list[str]] = {}
+    for d in defs.values():
+        if d.external:
+            by_file.setdefault(d.external, []).append(d.name)
+    out = []
+    for f, names in sorted(by_file.items()):
+        if f not in (modules or {}):
+            raise SchemaError(f"{', '.join(names)} of {f}: no module to import them from")
+        out.append(f"import type {{ {', '.join(sorted(names))} }} from {json.dumps(modules[f])};")
+    return out + [""] if out else []
+
+
 def ts_calls(calls: list[Call]) -> list[str]:
     if not calls:
         return []
@@ -34,11 +48,12 @@ def ts_calls(calls: list[Call]) -> list[str]:
 
 
 def gen_ts(defs: dict[str, Def], calls: list[Call] | None = None, header: list[str] | None = None, *,
-           defects: str = "ExtensionWire", flavor: str = "ts") -> str:
+           defects: str = "ExtensionWire", flavor: str = "ts", modules: dict[str, str] | None = None) -> str:
     """TypeScript, or with flavor "arkts" the subset HarmonyOS's ArkTS accepts (an ID is a plain string alias there:
     ArkTS has no intersection types to brand it with). defects names the class whose unknownEnum hook closed enums
-    with x-unknown "count" call."""
+    with x-unknown "count" call. modules: the module each shared file's IDs (Def.external) are imported from."""
     out = [*(header or DEFAULT_HEADER), ""]
+    out += external_imports(defs, modules)
     if any(d.count_unknown for d in defs.values()):
         out += [f"/** Called with a closed enum's name and the raw value each time a parse function with x-unknown",
                 " * \"count\" meets a value this app does not know. null: nothing is called. */",
@@ -81,6 +96,8 @@ def gen_ts(defs: dict[str, Def], calls: list[Call] | None = None, header: list[s
         return ["/**"] + comment(" * ", text) + [" */"]
 
     for d in defs.values():
+        if d.external:
+            continue
         if d.kind == "enum" and d.closed:
             if f"Unknown{d.name}" in defs:
                 raise SchemaError(f"{d.name}: Unknown{d.name} is the name of its unknown values")
@@ -104,6 +121,10 @@ def gen_ts(defs: dict[str, Def], calls: list[Call] | None = None, header: list[s
             out += [f"export type {d.name} = string{brand};", f"/** A {d.name} from its raw string. */",
                     f"export function {lower_camel_id(d.name)}(raw: string): {d.name} {{",
                     f"  return raw{'' if flavor != 'ts' else f' as {d.name}'};", "}", ""]
+        elif d.kind == "text":
+            # A plain alias, not a brand: callers keep passing string literals.
+            out += doc(" ".join(x for x in (d.doc or f"A label: {d.name}.", "Free text, not a closed set.") if x))
+            out += [f"export type {d.name} = string;", ""]
         elif d.kind == "opaque":
             out += doc(" ".join(x for x in (d.doc, f"Opaque JSON: {sentence(d.reason)}") if x))
             out += [f"export type {d.name} = unknown;", ""]
@@ -148,4 +169,3 @@ def gen_ts(defs: dict[str, Def], calls: list[Call] | None = None, header: list[s
             out.append("")
     out += ts_calls(calls or [])
     return "\n".join(out)
-

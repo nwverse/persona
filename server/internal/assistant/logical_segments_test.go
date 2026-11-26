@@ -42,7 +42,7 @@ func logicalPair(t *testing.T, engine string, source ...string) (*Service, *fake
 	if err := d.PutConversationHandoff(ctx, "server", "side-chat", "operation", json.RawMessage(`{"summary":"fake source summary","recent":[{"role":"user","text":"same conversation"}]}`)); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.PrepareConversationSegment(ctx, "server", "side-chat", "operation", conversationlog.Segment{ID: "two", MachineID: "server", SessionID: "target-chat", Engine: engine, SourceHistory: "h2", Launcher: engine, Model: "target-model", Effort: "medium"}, 6); err != nil {
+	if err := d.PrepareConversationSegment(ctx, "server", "side-chat", "operation", logicalFixtureTarget(engine), 6); err != nil {
 		t.Fatal(err)
 	}
 	c, err := d.LogicalConversation(ctx, "server", "side-chat")
@@ -51,6 +51,11 @@ func logicalPair(t *testing.T, engine string, source ...string) (*Service, *fake
 	}
 	return s, f, d, c
 }
+
+func logicalFixtureTarget(engine string) conversationlog.Segment {
+	return conversationlog.Segment{ID: "two", MachineID: "server", SessionID: "target-chat", Engine: engine, SourceHistory: "h2", Launcher: engine, Model: "target-model", Effort: "medium"}
+}
+
 func activatePair(t *testing.T, d *db.DB) *db.LogicalConversation {
 	t.Helper()
 	ctx := t.Context()

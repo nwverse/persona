@@ -8,5 +8,6 @@ from .model import Def
 from .ts import gen_ts
 
 
-def gen_arkts(defs: dict[str, Def], header: list[str] | None = None, *, defects: str = "ExtensionWire") -> str:
-    return gen_ts(defs, header=header, defects=defects, flavor="arkts")
+def gen_arkts(defs: dict[str, Def], header: list[str] | None = None, *, defects: str = "ExtensionWire",
+              modules: dict[str, str] | None = None) -> str:
+    return gen_ts(defs, header=header, defects=defects, flavor="arkts", modules=modules)

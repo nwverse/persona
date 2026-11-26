@@ -158,7 +158,7 @@ func (h *Hub) ChannelStatus(ctx context.Context, p wire.ChannelStatusParams) err
 // hub does not try again.
 func CannotSend(why string) error { return &Error{Code: wire.ChannelErrorCodeCannotSend, Message: why} }
 
-// The knowledge base (docs/extensions/extensions.md "Knowledge base RPC"): the permission kb.read (kb.write for KBUpdate) in
+// The knowledge base (docs/extensions/extensions.md "Knowledge base RPC"): the permission kb.read (kb.write for KBUpdate and KBPutRecording) in
 // the manifest's permissions.hub, granted by the user. Errors carry wire.KBErrorCode* or permission_denied.
 
 // KBList is one kind's entities, a page at a time (next_offset).
@@ -189,6 +189,12 @@ func (h *Hub) KBSearch(ctx context.Context, p wire.KBSearchParams) (wire.KBSearc
 // KBUpdate changes an entity's fields (kb.write).
 func (h *Hub) KBUpdate(ctx context.Context, p wire.KBUpdateParams) (wire.KBUpdateResult, error) {
 	return callHub[wire.KBUpdateResult](ctx, h, "kb.update", p)
+}
+
+// KBPutRecording creates or updates the extension's own recording with its minutes and, optionally, its transcript
+// (kb.write; docs/extensions/extensions.md "Writing recordings and minutes"). The same params again change nothing.
+func (h *Hub) KBPutRecording(ctx context.Context, p wire.KBPutRecordingParams) (wire.KBPutRecordingResult, error) {
+	return callHub[wire.KBPutRecordingResult](ctx, h, "kb.put_recording", p)
 }
 
 // KBOwner is the user's name, aliases and identities.
@@ -257,7 +263,7 @@ func (h *Hub) BrowserRun(ctx context.Context, p wire.BrowserRunParams) (wire.Bro
 // AssistantEvent tells the assistant's main conversation what the extension observed (permission assistant.events,
 // docs/extensions/extensions.md "Assistant events"). The assistant gets it as an extension's report, never as the
 // user's words, and decides what to tell the user. An event with the same Key as one of this extension's still waiting
-// behind a running turn replaces it, unless Replace is false. Errors carry wire.AssistantErrorCode* or
+// behind a running turn replaces it, unless Replace is wire.AssistantEventReplaceFalse. Errors carry wire.AssistantErrorCode* or
 // permission_denied: no_main_conversation (nothing was started: do not retry until the user has one), rate_limited
 // (data {retry_after}), queue_full and invalid_params; assistant_offline and machine_offline are worth trying again.
 func (h *Hub) AssistantEvent(ctx context.Context, p wire.AssistantEventParams) (wire.AssistantEventResult, error) {

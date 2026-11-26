@@ -120,7 +120,7 @@ func positionAfter(a, b string) bool {
 // settleCandidate: an open "Needs you" event of a grouping connector, not handled by its conversation, with no
 // suggestion waiting, whose newest message from someone else is known (the group tool's anchor). Under b.mu.
 func settleCandidate(it *InboxItem) bool {
-	return it.open() && !it.VisibilityExcluded && it.Tier == TierAction && it.Group != nil && it.Lark != nil && it.Lark.ReplyTo != "" && it.Last != "" &&
+	return it.open() && !it.VisibilityExcluded && !it.externallyRouted() && it.Tier == TierAction && it.Group != nil && it.Lark != nil && it.Lark.ReplyTo != "" && it.Last != "" &&
 		!it.handled() && currentSuggestion(it) == nil
 }
 

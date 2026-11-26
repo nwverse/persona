@@ -3,6 +3,7 @@ package assistantwire
 import (
 	jsonv2 "encoding/json/v2"
 	"errors"
+	"time"
 )
 
 const (
@@ -153,6 +154,7 @@ type ExternalRepositoryRole string
 const (
 	ExternalBindingExplicit       ExternalBindingSource = "explicit"
 	ExternalBindingRepositoryLink ExternalBindingSource = "repository_link"
+	ExternalBindingLarkTopic      ExternalBindingSource = "lark_topic"
 )
 
 type ExternalBindingMatch struct {
@@ -171,4 +173,61 @@ type ExternalBindingLookup struct {
 
 type ExternalSourceSummary struct {
 	Bindings []ExternalBindingMatch `json:"bindings"`
+}
+
+type ExternalEventID string
+type ExternalInboxItemID string
+
+// ExternalInboxEvent is the durable routing input for one observed source event.
+type ExternalInboxEvent struct {
+	Key      string              `json:"key"`
+	Ref      ExternalRef         `json:"ref"`
+	EventID  ExternalEventID     `json:"event_id"`
+	Path     []ExternalRef       `json:"path"`
+	InboxID  ExternalInboxItemID `json:"inbox_id"`
+	Cursor   string              `json:"cursor"`
+	Title    string              `json:"title"`
+	Summary  string              `json:"summary"`
+	Senders  []string            `json:"senders,omitempty"`
+	Mentions []string            `json:"mentions,omitempty"`
+	URL      string              `json:"url,omitempty"`
+}
+
+// ExternalInboxTarget names a recipient selected from the effective bindings.
+type ExternalInboxTarget struct {
+	ID   ExternalTargetID   `json:"id"`
+	Kind ExternalTargetKind `json:"kind"`
+}
+
+// ExternalInboxDelivery pins a routing decision and, once resolved, its recipient.
+type ExternalInboxDelivery struct {
+	Target    ExternalInboxTarget `json:"target"`
+	Scope     ExternalInboxTarget `json:"scope"` // authorizing target, including a created to-do's direction
+	AutoTodo  bool                `json:"auto_todo,omitempty"`
+	Method    string              `json:"method,omitempty"`
+	Machine   string              `json:"machine,omitempty"`
+	Session   string              `json:"session,omitempty"`
+	Tried     bool                `json:"tried,omitempty"`
+	Delivered bool                `json:"delivered,omitempty"`
+}
+
+// ExternalInboxPlan is the resumable routing decision kept in Postgres.
+type ExternalInboxPlan struct {
+	Owner *ExternalInboxDelivery  `json:"owner,omitempty"`
+	FYI   []ExternalInboxDelivery `json:"fyi,omitempty"`
+	Ask   bool                    `json:"ask,omitempty"`
+}
+
+// ExternalInboxWork pairs an event with the outbox's clock and resumable decision.
+type ExternalInboxWork struct {
+	ExternalInboxEvent
+	ReceivedAt time.Time
+	Plan       *ExternalInboxPlan
+}
+
+// ExternalRoutingConfiguration reads lookup matches and policy inputs from one snapshot.
+type ExternalRoutingConfiguration struct {
+	Lookup   ExternalBindingLookup
+	Policies []ExternalScopedPolicy
+	Bindings []ExternalBinding
 }

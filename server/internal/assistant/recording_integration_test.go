@@ -639,7 +639,7 @@ func TestJustMeMarkHoldsThroughBackgroundWork(t *testing.T) {
 		if tr == nil {
 			t.Fatal("no turn tracked")
 		}
-		ft.s.notifyFinishedNow("mac", "s1", tr.gen, ft.s.notifyTimings())
+		ft.s.notifyFinishedNow("mac", "s1", tr.gen, ft.s.notifyTimings(), supervisionEnd{})
 	}
 	work := proto.Session{SessionID: "s1", Title: "Main", Cwd: "/code/app", Agent: "claude", Assistant: true, Status: proto.StatusWorking,
 		PaneID: "p1", UpdatedAt: now()}
