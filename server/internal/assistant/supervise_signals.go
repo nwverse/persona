@@ -1369,6 +1369,9 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 	s.backfillBriefs(ctx, tasks)   // tasks from before briefs get one from what they still have (task_brief.go)
 	groups := allStoppedTaskGroups(tasks)
 	todosV2 := s.settings(ctx).todosV2On()
+	if todosV2 {
+		s.maybeRunStartupRestartRecovery(ctx, lists)
+	}
 	backfilled := 0
 	for _, t := range tasks {
 		if t.Supervision == nil && t.DoneAt == nil {
@@ -1402,6 +1405,16 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 		for _, c := range agents {
 			if c.State == proto.StateWorking {
 				s.observeProgress(c, now)
+			}
+			if todosV2 && (c.State == proto.StateWorking || strings.EqualFold(strings.TrimSpace(c.Status), proto.StatusWorking)) {
+				if err := s.RecordSupervisedTaskActive(ctx, t.ID, c.MachineID, c.SessionID, s.runtimeBootEpoch()); err != nil {
+					s.logf("todos_v2 restart recovery checkpoint %s: %v", t.ID, err)
+				}
+			}
+		}
+		if todosV2 && ((t.Check != nil && t.Check.Verdict == verdictDone) || (t.Supervision != nil && t.Supervision.Progress != nil && t.Supervision.Progress.Kind == "done")) {
+			if err := s.ResetSupervisedTaskRecovery(ctx, t.ID); err != nil {
+				s.logf("todos_v2 restart recovery reset %s: %v", t.ID, err)
 			}
 		}
 		s.closeStalledTask(ctx, t, agents, now)
@@ -1474,6 +1487,11 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 	}
 	if s.todosLoaded() {
 		s.pruneHandledStalls(ctx, openIDs)
+	}
+	if todosV2 {
+		if _, err := s.ReconcileTodoBlockers(ctx, ""); err != nil {
+			s.logf("todos_v2 blocker reconcile sweep: %v", err)
+		}
 	}
 }
 
