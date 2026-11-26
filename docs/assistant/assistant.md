@@ -1814,13 +1814,16 @@ operation then read as accepted and the bubble waited for the transcript and wen
   or kept undelivered retries). It starts no turn of its own, costs no hop and no place in the relay rate, and is
   dropped (publishing the refreshed queue state immediately) only once the message carrying it went in. Before a manager
   send with a `once_id`, its quiet-message context (including an empty one) is saved in `relayState.LaterSends` for
-  seven days and reused on retries, including after restart. For an owner send (`client_msg_id`), a reservation is saved
+  seven days and reused on retries, including after restart. For an owner send with a `client_msg_id` (unnamed sends
+  without a `client_msg_id` leave `Later` untouched so every carry has a durable settlement key), a reservation is saved
   only when quiet messages are actually waiting to be carried (empty queues do zero relay writes), is deleted in the
   same save once delivery is confirmed (or when a kept undelivered message is deleted), and expires after 24 hours
-  (`ownerLaterKeep`, matching `undeliveredGiveUp`) if never settled; an owner Retry of an earlier in-doubt kept send
-  only reuses an existing reservation without picking up later arrivals. If the relay state cannot be read on an owner
-  send, the send degrades and delivers the owner's own message without quiet context (leaving `Later` untouched), while
-  saving a carry reservation for waiting quiet messages stays fail-closed. Nothing is guessed from
+  (`ownerLaterKeep`, matching `undeliveredGiveUp`) if never settled; reusing a `client_msg_id` for a non-carrying send
+  (such as a slash command or approval reply) clears any unkept stale reservation without dropping `Later`, and an owner
+  Retry of an earlier in-doubt kept send only reuses an existing reservation without picking up later arrivals. If the
+  relay state cannot be read on an owner send, the send degrades and delivers the owner's own message without quiet
+  context (leaving `Later` untouched even if storage recovers before settlement), while saving a carry reservation for
+  waiting quiet messages stays fail-closed. Nothing is guessed from
   the words: only the explicit argument decides. A `quote` (the owner's request) always wakes, so the two together are
   refused. While kept, the message shows above the composer (`queuedRelays`) and disappears once consumed.
 - **Per-sender wake cap and deferred wakes** (#13888, #14352, `server/internal/assistant/conversation_fanout.go`,
