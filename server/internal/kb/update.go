@@ -157,9 +157,13 @@ func (e *Engine) Ingest(ctx context.Context, src Source, sc SourceChat, msgs []S
 		}
 		kept = append(kept, m)
 	}
-	if len(repairs) > 0 {
+	needChatNameFill := exists && syncSource(src) && sc.Name != "" && c.Name == ""
+	if len(repairs) > 0 || needChatNameFill {
 		if err := e.repairLarkSyncSenders(src, sc, cut, repairs); err != nil {
 			return 0, err
+		}
+		if needChatNameFill {
+			c.Name = sc.Name
 		}
 	}
 	if len(lines) == 0 {
