@@ -161,8 +161,11 @@ func Digest(m *Manifest) string {
 		// RepositoryHosts: being asked about the repositories and links on these hosts is agreed to like a permission
 		// (empty for any other extension, so their digests are what they were).
 		RepositoryHosts []string `json:"repository_hosts,omitempty"`
+		// MCPTools: each assistant tool, whether it writes and whether coding Agents get it (empty for an extension
+		// without tools, so their digests are what they were).
+		MCPTools []string `json:"mcp_tools,omitempty"`
 	}{m.Runtime != nil, m.Permissions.normalized(), m.Topics(), m.Surfaces(), m.NodeProgram().consent(), m.ToolsConsent(), sendsAsUserIDs(m),
-		hostIntegrationConsent(m), sortedSchemes(m), sortedRepositoryHosts(m)})
+		hostIntegrationConsent(m), sortedSchemes(m), sortedRepositoryHosts(m), mcpToolConsent(m)})
 	sum := sha256.Sum256(b)
 	return hex.EncodeToString(sum[:])
 }
@@ -433,6 +436,13 @@ func ExplainWith(l i18n.Lang, m *Manifest, config json.RawMessage) []PermissionL
 	if sends := m.SendsAsUser(); len(sends) > 0 {
 		out = append(out, sendsAsUserLine(l, permissionText(l, "sends_as_user_title"), sends))
 	}
+	var agentTools []MCPToolItem
+	for _, t := range m.MCPTools() {
+		if t.Agents {
+			agentTools = append(agentTools, t)
+		}
+	}
+	out = append(out, mcpToolLines(l, m.MCPTools(), agentTools, false)...)
 	// What it can take back is shown, not agreed to: only here, never in the digest, in AddedIn or in MorePermissions, as a
 	// recall happens only once the user asked for it on their own device.
 	if recalls := m.Recalls(); len(recalls) > 0 {
@@ -497,8 +507,8 @@ func ExplainWith(l i18n.Lang, m *Manifest, config json.RawMessage) []PermissionL
 
 // Added is what upgrading from old to m adds to what the plugin may do, in Explain's words: running a program when old
 // ran none, the hosts and secrets old did not have, the hub's token or launchers' keys when old did not get them, the
-// channels and the extensions it contributes to that old did not have, and the connectors that send as the user
-// that old did not. Nil when nothing is added.
+// channels and the extensions it contributes to that old did not have, the connectors that send as the user that old
+// did not, and the assistant tools that are new, now write or are now open to coding Agents. Nil when nothing is added.
 func Added(old, m *Manifest) []PermissionLine { return AddedIn(i18n.Default, old, m) }
 
 // AddedIn generates only the permissions added by an upgrade, in the requested language.
@@ -606,6 +616,7 @@ func AddedWith(l i18n.Lang, old, m *Manifest, config json.RawMessage) []Permissi
 	if sends := newSendsAsUser(old, m); len(sends) > 0 {
 		out = append(out, sendsAsUserLine(l, permissionText(l, "sends_as_user_more_title"), sends))
 	}
+	out = append(out, mcpToolLines(l, newMCPTools(old, m), newAgentMCPTools(old, m), true)...)
 	var topics []string
 	for _, t := range m.Topics() {
 		if !slices.Contains(old.Topics(), t) {

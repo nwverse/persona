@@ -833,6 +833,8 @@ public nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
     public var api: [ExtensionAPIItem]?
     public var assistant: [ExtensionAssistantItem]?
     public var mcpServers: [ExtensionMCPServerItem]?
+    public var mcpTools: [ExtensionMCPToolItem]?
+    public var promptSections: [ExtensionPromptSectionItem]?
     public var ui: [ExtensionUIItem]?
     public var trackKinds: [ExtensionTrackKindItem]?
     public var agentSources: [ExtensionAgentSourceItem]?
@@ -856,7 +858,7 @@ public nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
     /// Extra keys stay at this object's level on the wire; declared fields always win.
     public var additionalProperties: [String: JSONValue]
 
-    public init(connectors: [ExtensionConnectorItem]? = nil, voice: [ExtensionNamedItem]? = nil, transcription: [ExtensionNamedItem]? = nil, speech: [ExtensionNamedItem]? = nil, computer: [ExtensionNamedItem]? = nil, browser: [ExtensionNamedItem]? = nil, iphone: [ExtensionNamedItem]? = nil, quota: [ExtensionQuotaItem]? = nil, usage: [ExtensionUsageItem]? = nil, providers: [ExtensionProviderItem]? = nil, api: [ExtensionAPIItem]? = nil, assistant: [ExtensionAssistantItem]? = nil, mcpServers: [ExtensionMCPServerItem]? = nil, ui: [ExtensionUIItem]? = nil, trackKinds: [ExtensionTrackKindItem]? = nil, agentSources: [ExtensionAgentSourceItem]? = nil, channel: [ExtensionChannelItem]? = nil, events: [ExtensionEventsItem]? = nil, shortcuts: [ExtensionShortcutItem]? = nil, skills: [ExtensionSkillItem]? = nil, prompts: [ExtensionPromptItem]? = nil, themes: [ExtensionThemeItem]? = nil, looks: [ExtensionLookItem]? = nil, triageTemplates: [ExtensionTriageTemplateItem]? = nil, agentFilters: [ExtensionAgentFilterItem]? = nil, tunnels: [ExtensionTunnelItem]? = nil, errorReports: [ExtensionErrorReportsItem]? = nil, authRelay: [ExtensionAuthRelayItem]? = nil, secretProviders: [ExtensionSecretProviderItem]? = nil, repositoryProviders: [ExtensionRepositoryProviderItem]? = nil, memorySources: [ExtensionMemorySourceItem]? = nil, diskOffload: [ExtensionDiskOffloadItem]? = nil, messaging: [ExtensionMessagingItem]? = nil, additionalProperties: [String: JSONValue] = [:]) {
+    public init(connectors: [ExtensionConnectorItem]? = nil, voice: [ExtensionNamedItem]? = nil, transcription: [ExtensionNamedItem]? = nil, speech: [ExtensionNamedItem]? = nil, computer: [ExtensionNamedItem]? = nil, browser: [ExtensionNamedItem]? = nil, iphone: [ExtensionNamedItem]? = nil, quota: [ExtensionQuotaItem]? = nil, usage: [ExtensionUsageItem]? = nil, providers: [ExtensionProviderItem]? = nil, api: [ExtensionAPIItem]? = nil, assistant: [ExtensionAssistantItem]? = nil, mcpServers: [ExtensionMCPServerItem]? = nil, mcpTools: [ExtensionMCPToolItem]? = nil, promptSections: [ExtensionPromptSectionItem]? = nil, ui: [ExtensionUIItem]? = nil, trackKinds: [ExtensionTrackKindItem]? = nil, agentSources: [ExtensionAgentSourceItem]? = nil, channel: [ExtensionChannelItem]? = nil, events: [ExtensionEventsItem]? = nil, shortcuts: [ExtensionShortcutItem]? = nil, skills: [ExtensionSkillItem]? = nil, prompts: [ExtensionPromptItem]? = nil, themes: [ExtensionThemeItem]? = nil, looks: [ExtensionLookItem]? = nil, triageTemplates: [ExtensionTriageTemplateItem]? = nil, agentFilters: [ExtensionAgentFilterItem]? = nil, tunnels: [ExtensionTunnelItem]? = nil, errorReports: [ExtensionErrorReportsItem]? = nil, authRelay: [ExtensionAuthRelayItem]? = nil, secretProviders: [ExtensionSecretProviderItem]? = nil, repositoryProviders: [ExtensionRepositoryProviderItem]? = nil, memorySources: [ExtensionMemorySourceItem]? = nil, diskOffload: [ExtensionDiskOffloadItem]? = nil, messaging: [ExtensionMessagingItem]? = nil, additionalProperties: [String: JSONValue] = [:]) {
         self.connectors = connectors
         self.voice = voice
         self.transcription = transcription
@@ -870,6 +872,8 @@ public nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
         self.api = api
         self.assistant = assistant
         self.mcpServers = mcpServers
+        self.mcpTools = mcpTools
+        self.promptSections = promptSections
         self.ui = ui
         self.trackKinds = trackKinds
         self.agentSources = agentSources
@@ -907,6 +911,8 @@ public nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
         case api
         case assistant
         case mcpServers = "mcp_servers"
+        case mcpTools = "mcp_tools"
+        case promptSections = "prompt_sections"
         case ui
         case trackKinds = "track_kinds"
         case agentSources = "agent_sources"
@@ -944,6 +950,8 @@ public nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
         self.api = ExtensionWireJSON.decode([ExtensionAPIItem].self, from: raw["api"])
         self.assistant = ExtensionWireJSON.decode([ExtensionAssistantItem].self, from: raw["assistant"])
         self.mcpServers = ExtensionWireJSON.decode([ExtensionMCPServerItem].self, from: raw["mcp_servers"])
+        self.mcpTools = ExtensionWireJSON.decode([ExtensionMCPToolItem].self, from: raw["mcp_tools"])
+        self.promptSections = ExtensionWireJSON.decode([ExtensionPromptSectionItem].self, from: raw["prompt_sections"])
         self.ui = ExtensionWireJSON.decode([ExtensionUIItem].self, from: raw["ui"])
         self.trackKinds = ExtensionWireJSON.decode([ExtensionTrackKindItem].self, from: raw["track_kinds"])
         self.agentSources = ExtensionWireJSON.decode([ExtensionAgentSourceItem].self, from: raw["agent_sources"])
@@ -964,12 +972,12 @@ public nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
         self.memorySources = ExtensionWireJSON.decode([ExtensionMemorySourceItem].self, from: raw["memory_sources"])
         self.diskOffload = ExtensionWireJSON.decode([ExtensionDiskOffloadItem].self, from: raw["disk_offload"])
         self.messaging = ExtensionWireJSON.decode([ExtensionMessagingItem].self, from: raw["messaging"])
-        let known: Set<String> = ["connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "disk_offload", "messaging"]
+        let known: Set<String> = ["connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "mcp_tools", "prompt_sections", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "disk_offload", "messaging"]
         additionalProperties = raw.filter { !known.contains($0.key) }
     }
 
     public func encode(to encoder: Encoder) throws {
-        let known: Set<String> = ["connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "disk_offload", "messaging"]
+        let known: Set<String> = ["connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "mcp_tools", "prompt_sections", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "disk_offload", "messaging"]
         var fields = additionalProperties.filter { !known.contains($0.key) }
         if let value = connectors { fields["connectors"] = try ExtensionWireJSON.encode(value) }
         if let value = voice { fields["voice"] = try ExtensionWireJSON.encode(value) }
@@ -984,6 +992,8 @@ public nonisolated struct ExtensionContributes: Codable, Hashable, Sendable {
         if let value = api { fields["api"] = try ExtensionWireJSON.encode(value) }
         if let value = assistant { fields["assistant"] = try ExtensionWireJSON.encode(value) }
         if let value = mcpServers { fields["mcp_servers"] = try ExtensionWireJSON.encode(value) }
+        if let value = mcpTools { fields["mcp_tools"] = try ExtensionWireJSON.encode(value) }
+        if let value = promptSections { fields["prompt_sections"] = try ExtensionWireJSON.encode(value) }
         if let value = ui { fields["ui"] = try ExtensionWireJSON.encode(value) }
         if let value = trackKinds { fields["track_kinds"] = try ExtensionWireJSON.encode(value) }
         if let value = agentSources { fields["agent_sources"] = try ExtensionWireJSON.encode(value) }
@@ -2291,6 +2301,84 @@ public nonisolated struct ExtensionMCPServerItem: Codable, Hashable, Sendable {
         self.requires = try? c.decodeIfPresent([String].self, forKey: .requires)
         self.allow = try? c.decodeIfPresent([String].self, forKey: .allow)
         self.deny = try? c.decodeIfPresent([String].self, forKey: .deny)
+    }
+}
+
+/// A tool the extension gives the assistant, declared in the manifest so the install page can list it (docs
+/// "Assistant tools and prompt sections", #13401). Its id is the tool's name; the program speaks the protocol.
+public nonisolated struct ExtensionMCPToolItem: Codable, Hashable, Sendable {
+    /// The tool's name: the extension's id without - and then _ first (example-notes: examplenotes_find), a-z0-9_, at
+    /// most 64 characters; not a name another extension or the hub already has.
+    public var id: String
+    /// What the tool does, for the model; translated in l10n's mcp_tools.<id>.description.
+    public var description: String
+    /// The tool's parameters as a JSON Schema object (type object), at most 16 KB, with no enum the stricter model
+    /// APIs refuse (an empty one, or one with an empty string).
+    public var inputSchema: JSONValue
+    public var access: String
+    /// Coding Agents get the tool too; without it, only the assistant's main conversation does.
+    public var agents: Bool?
+
+    public init(id: String = "", description: String = "", inputSchema: JSONValue = .null, access: String = "", agents: Bool? = nil) {
+        self.id = id
+        self.description = description
+        self.inputSchema = inputSchema
+        self.access = access
+        self.agents = agents
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case description
+        case inputSchema = "input_schema"
+        case access
+        case agents
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = (try? c.decodeIfPresent(String.self, forKey: .id)) ?? ""
+        self.description = (try? c.decodeIfPresent(String.self, forKey: .description)) ?? ""
+        self.inputSchema = (try? c.decodeIfPresent(JSONValue.self, forKey: .inputSchema)) ?? .null
+        self.access = (try? c.decodeIfPresent(String.self, forKey: .access)) ?? ""
+        self.agents = try? c.decodeIfPresent(Bool.self, forKey: .agents)
+    }
+}
+
+/// What an assistant tool does: read only reads; write acts on the user's behalf (sends, changes, deletes).
+public nonisolated enum ExtensionMCPToolAccess {
+    public static let read = "read"
+    public static let write = "write"
+    public static let all = ["read", "write"]
+}
+
+/// A section of the assistant's instructions, static Markdown in one file per language (docs "Assistant tools and
+/// prompt sections", #13401). At most 3 per extension.
+public nonisolated struct ExtensionPromptSectionItem: Codable, Hashable, Sendable {
+    public var id: String
+    /// The section's .md file in the package by language (zh-Hans, en, ja); zh-Hans or en at least. Each file is
+    /// UTF-8 and at most 6 KB.
+    public var files: [String: String]
+    /// Tools of this extension's mcp_tools the section is about: it goes in only while they are on.
+    public var tools: [String]?
+
+    public init(id: String = "", files: [String: String] = [:], tools: [String]? = nil) {
+        self.id = id
+        self.files = files
+        self.tools = tools
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case files
+        case tools
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = (try? c.decodeIfPresent(String.self, forKey: .id)) ?? ""
+        self.files = (try? c.decodeIfPresent([String: String].self, forKey: .files)) ?? [:]
+        self.tools = try? c.decodeIfPresent([String].self, forKey: .tools)
     }
 }
 

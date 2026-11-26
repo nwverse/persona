@@ -132,5 +132,12 @@
   "disk_offload_title": "Offload items from your computers",
   "disk_offload_detail": "It can list what it already holds of each computer. Persona hands it files and folders only after you pick them on a computer's disk map and confirm, and it asks you again before installing anything on that computer",
   "assistant_data_title": "Add what it writes to what your assistant reads",
-  "assistant_data_detail": "Text its program writes can go into the assistant's instructions and skills, an Agent's project background or Inbox triage and drafts, within size limits. You can switch each part off in its details"
+  "assistant_data_detail": "Text its program writes can go into the assistant's instructions and skills, an Agent's project background or Inbox triage and drafts, within size limits. You can switch each part off in its details",
+  "mcp_tools_title": "Add tools to the assistant",
+  "mcp_tools_more_title": "Add more tools to the assistant",
+  "mcp_tools_detail": "{tools}",
+  "mcp_tools_write_detail": "{tools}. These act on your behalf: {writes}",
+  "mcp_tools_agents_title": "Let coding Agents use these tools too",
+  "mcp_tools_agents_more_title": "Let coding Agents use more tools",
+  "mcp_tools_agents_detail": "{tools}"
 }

@@ -293,6 +293,8 @@ type Contributes struct {
 	API                 []APIItem                `json:"api,omitempty"`
 	Assistant           []AssistantItem          `json:"assistant,omitempty"`
 	McpServers          []MCPServerItem          `json:"mcp_servers,omitempty"`
+	McpTools            []MCPToolItem            `json:"mcp_tools,omitempty"`
+	PromptSections      []PromptSectionItem      `json:"prompt_sections,omitempty"`
 	UI                  []UIItem                 `json:"ui,omitempty"`
 	TrackKinds          []TrackKindItem          `json:"track_kinds,omitempty"`
 	AgentSources        []AgentSourceItem        `json:"agent_sources,omitempty"`
@@ -323,7 +325,7 @@ func (v *Contributes) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	declared := map[string]json.RawMessage{}
-	for _, key := range []string{"connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "disk_offload", "messaging"} {
+	for _, key := range []string{"connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "mcp_tools", "prompt_sections", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "disk_offload", "messaging"} {
 		if value, ok := extra[key]; ok {
 			declared[key] = value
 			delete(extra, key)
@@ -355,7 +357,7 @@ func (v Contributes) MarshalJSON() ([]byte, error) {
 	}
 	for key, value := range v.AdditionalProperties {
 		switch key {
-		case "connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "disk_offload", "messaging":
+		case "connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "mcp_tools", "prompt_sections", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "disk_offload", "messaging":
 			continue
 		}
 		fields[key] = value
@@ -842,6 +844,43 @@ type MCPServerItem struct {
 	Allow []string `json:"allow,omitempty"`
 	// Tools never callable. Any other tool goes by the conversation's permission mode.
 	Deny []string `json:"deny,omitempty"`
+}
+
+// MCPToolItem: A tool the extension gives the assistant, declared in the manifest so the install page can list it
+// (docs "Assistant tools and prompt sections", #13401). Its id is the tool's name; the program speaks the protocol.
+type MCPToolItem struct {
+	// The tool's name: the extension's id without - and then _ first (example-notes: examplenotes_find), a-z0-9_, at
+	// most 64 characters; not a name another extension or the hub already has.
+	ID string `json:"id"`
+	// What the tool does, for the model; translated in l10n's mcp_tools.<id>.description.
+	Description string `json:"description"`
+	// The tool's parameters as a JSON Schema object (type object), at most 16 KB, with no enum the stricter model APIs
+	// refuse (an empty one, or one with an empty string).
+	InputSchema json.RawMessage `json:"input_schema"`
+	Access      string          `json:"access"`
+	// Coding Agents get the tool too; without it, only the assistant's main conversation does.
+	Agents bool `json:"agents,omitempty"`
+}
+
+// MCPToolAccess: what an assistant tool does: read only reads; write acts on the user's behalf (sends, changes,
+// deletes).
+const (
+	MCPToolAccessRead  = "read"
+	MCPToolAccessWrite = "write"
+)
+
+// MCPToolAccesses are the values of MCPToolAccess, in order.
+var MCPToolAccesses = []string{"read", "write"}
+
+// PromptSectionItem: A section of the assistant's instructions, static Markdown in one file per language (docs
+// "Assistant tools and prompt sections", #13401). At most 3 per extension.
+type PromptSectionItem struct {
+	ID string `json:"id"`
+	// The section's .md file in the package by language (zh-Hans, en, ja); zh-Hans or en at least. Each file is UTF-8
+	// and at most 6 KB.
+	Files map[string]string `json:"files"`
+	// Tools of this extension's mcp_tools the section is about: it goes in only while they are on.
+	Tools []string `json:"tools,omitempty"`
 }
 
 // UIItem: A place in the apps the extension draws (docs "UI slots").
@@ -7978,6 +8017,8 @@ var newDef = map[string]func() any{
 	"APIReceipt":                    func() any { return new(APIReceipt) },
 	"AssistantItem":                 func() any { return new(AssistantItem) },
 	"MCPServerItem":                 func() any { return new(MCPServerItem) },
+	"MCPToolItem":                   func() any { return new(MCPToolItem) },
+	"PromptSectionItem":             func() any { return new(PromptSectionItem) },
 	"UIItem":                        func() any { return new(UIItem) },
 	"UIGroup":                       func() any { return new(UIGroup) },
 	"AgentSourceItem":               func() any { return new(AgentSourceItem) },

@@ -152,6 +152,8 @@ var catalogItemTypes = map[string]reflect.Type{
 
 	"repository_providers": reflect.TypeFor[RepositoryProviderItem](),
 	"disk_offload":         reflect.TypeFor[DiskOffloadItem](),
+	"mcp_tools":            reflect.TypeFor[MCPToolItem](),
+	"prompt_sections":      reflect.TypeFor[PromptSectionItem](),
 }
 
 // Include the parsed projection as well as the signed entry fields: callers may

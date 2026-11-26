@@ -40,6 +40,8 @@ type Translation struct {
 	UI map[string]string `json:"ui,omitempty"`
 	// Groups: the titles of the sidebar groups its nav_pages name (UIGroup), by group id.
 	Groups map[string]string `json:"groups,omitempty"`
+	// MCPTools: the descriptions of its mcp_tools, by tool name.
+	MCPTools map[string]*mcpToolText `json:"mcp_tools,omitempty"`
 }
 
 // FieldText is a configuration property's text: its title, description and confirmation (x-confirm), its choices'
@@ -93,6 +95,13 @@ func ParseTranslation(raw []byte) (*Translation, error) {
 	for _, id := range sortedKeys(t.Groups) {
 		if n := utf8.RuneCountInString(strings.TrimSpace(t.Groups[id])); n > 40 {
 			return nil, fmt.Errorf("groups.%s: at most 40 characters", id)
+		}
+	}
+	for _, name := range sortedKeys(t.MCPTools) {
+		if tt := t.MCPTools[name]; tt != nil {
+			if err := checkText("mcp_tools."+name+".description", tt.Description); err != nil {
+				return nil, err
+			}
 		}
 	}
 	for _, name := range sortedKeys(t.Secrets) {

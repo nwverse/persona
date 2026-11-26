@@ -359,6 +359,8 @@
         "api": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/APIItem"}},
         "assistant": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/AssistantItem"}},
         "mcp_servers": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/MCPServerItem"}},
+        "mcp_tools": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/MCPToolItem"}},
+        "prompt_sections": {"type": "array", "minItems": 1, "maxItems": 3, "items": {"$ref": "#/$defs/PromptSectionItem"}},
         "ui": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/UIItem"}},
         "track_kinds": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/TrackKindItem"}},
         "agent_sources": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/AgentSourceItem"}},
@@ -840,6 +842,39 @@
         "deny": {"type": "array", "items": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$"}, "description": "Tools never callable. Any other tool goes by the conversation's permission mode."}
       },
       "required": ["id", "command"]
+    },
+    "MCPToolItem": {
+      "description": "A tool the extension gives the assistant, declared in the manifest so the install page can list it (docs \"Assistant tools and prompt sections\", #13401). Its id is the tool's name; the program speaks the protocol.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$", "description": "The tool's name: the extension's id without - and then _ first (example-notes: examplenotes_find), a-z0-9_, at most 64 characters; not a name another extension or the hub already has."},
+        "description": {"type": "string", "minLength": 1, "maxLength": 2000, "description": "What the tool does, for the model; translated in l10n's mcp_tools.<id>.description."},
+        "input_schema": {"description": "The tool's parameters as a JSON Schema object (type object), at most 16 KB, with no enum the stricter model APIs refuse (an empty one, or one with an empty string)."},
+        "access": {"$ref": "#/$defs/MCPToolAccess"},
+        "agents": {"type": "boolean", "description": "Coding Agents get the tool too; without it, only the assistant's main conversation does."}
+      },
+      "required": ["id", "description", "input_schema", "access"]
+    },
+    "MCPToolAccess": {
+      "description": "What an assistant tool does: read only reads; write acts on the user's behalf (sends, changes, deletes).",
+      "type": "string",
+      "enum": ["read", "write"]
+    },
+    "PromptSectionItem": {
+      "description": "A section of the assistant's instructions, static Markdown in one file per language (docs \"Assistant tools and prompt sections\", #13401). At most 3 per extension.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/$defs/ID"},
+        "files": {"type": "object", "minProperties": 1,
+          "propertyNames": {"type": "string", "pattern": "^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$"},
+          "additionalProperties": {"type": "string", "pattern": "\\.md$"},
+          "description": "The section's .md file in the package by language (zh-Hans, en, ja); zh-Hans or en at least. Each file is UTF-8 and at most 6 KB."},
+        "tools": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
+          "description": "Tools of this extension's mcp_tools the section is about: it goes in only while they are on."}
+      },
+      "required": ["id", "files"]
     },
     "UIItem": {
       "description": "A place in the apps the extension draws (docs \"UI slots\").",

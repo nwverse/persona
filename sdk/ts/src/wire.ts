@@ -346,6 +346,8 @@ export interface Contributes {
   api?: APIItem[];
   assistant?: AssistantItem[];
   mcp_servers?: MCPServerItem[];
+  mcp_tools?: MCPToolItem[];
+  prompt_sections?: PromptSectionItem[];
   ui?: UIItem[];
   track_kinds?: TrackKindItem[];
   agent_sources?: AgentSourceItem[];
@@ -854,6 +856,49 @@ export interface MCPServerItem {
   allow?: string[];
   /** Tools never callable. Any other tool goes by the conversation's permission mode. */
   deny?: string[];
+}
+
+/**
+ * A tool the extension gives the assistant, declared in the manifest so the install page can list it (docs "Assistant
+ * tools and prompt sections", #13401). Its id is the tool's name; the program speaks the protocol.
+ */
+export interface MCPToolItem {
+  /**
+   * The tool's name: the extension's id without - and then _ first (example-notes: examplenotes_find), a-z0-9_, at
+   * most 64 characters; not a name another extension or the hub already has.
+   */
+  id: string;
+  /** What the tool does, for the model; translated in l10n's mcp_tools.<id>.description. */
+  description: string;
+  /**
+   * The tool's parameters as a JSON Schema object (type object), at most 16 KB, with no enum the stricter model APIs
+   * refuse (an empty one, or one with an empty string).
+   */
+  input_schema: unknown;
+  access: MCPToolAccess;
+  /** Coding Agents get the tool too; without it, only the assistant's main conversation does. */
+  agents?: boolean;
+}
+
+/**
+ * What an assistant tool does: read only reads; write acts on the user's behalf (sends, changes, deletes).
+ */
+export type MCPToolAccess = "read" | "write" | (string & {});
+export const MCPTOOL_ACCESSES = ["read", "write"] as const;
+
+/**
+ * A section of the assistant's instructions, static Markdown in one file per language (docs "Assistant tools and
+ * prompt sections", #13401). At most 3 per extension.
+ */
+export interface PromptSectionItem {
+  id: string;
+  /**
+   * The section's .md file in the package by language (zh-Hans, en, ja); zh-Hans or en at least. Each file is UTF-8
+   * and at most 6 KB.
+   */
+  files: Record<string, string>;
+  /** Tools of this extension's mcp_tools the section is about: it goes in only while they are on. */
+  tools?: string[];
 }
 
 /**
