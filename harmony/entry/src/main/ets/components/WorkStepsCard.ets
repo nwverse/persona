@@ -88,18 +88,21 @@ export struct WorkStepTimeline {
             .fontWeight(FontWeight.Medium)
             .fontFamily('monospace')
             .fontColor(Colors.diffAdded)
+            .padding({ left: 5, right: 5, top: 2, bottom: 2 })
+            .backgroundColor(Colors.codeAddedFill)
+            .borderRadius(6)
         }
         if (del > 0) {
-          Text('-' + String(del))
+          Text('−' + String(del))
             .fontSize(Tokens.interfaceFontVp(11, this.env.fontScale))
             .fontWeight(FontWeight.Medium)
             .fontFamily('monospace')
             .fontColor(Colors.diffRemoved)
+            .padding({ left: 5, right: 5, top: 2, bottom: 2 })
+            .backgroundColor(Colors.codeRemovedFill)
+            .borderRadius(6)
         }
       }
-      .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-      .backgroundColor(Colors.subtle)
-      .borderRadius(6)
     }
   }
 

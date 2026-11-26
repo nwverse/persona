@@ -514,3 +514,35 @@ export function extractTurnChangesFromRaw(raw: string): TurnChangeSet | undefine
 }
 
 export const TURN_CHANGES_INITIAL_VISIBLE = 3;
+
+export interface UnifiedDiffSummary {
+  readonly hunks: number;
+  readonly additions: number;
+  readonly deletions: number;
+}
+
+export function summarizeUnifiedDiff(patch: string): UnifiedDiffSummary {
+  if (!patch) return { hunks: 0, additions: 0, deletions: 0 };
+  const lines = patch.replace(/\r\n?/g, '\n').split('\n');
+  let hunks = 0;
+  let additions = 0;
+  let deletions = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.startsWith('@@')) {
+      hunks++;
+    } else if (line.startsWith('+') && !line.startsWith('+++')) {
+      additions++;
+    } else if (line.startsWith('-') && !line.startsWith('---')) {
+      deletions++;
+    }
+  }
+  return { hunks: hunks, additions: additions, deletions: deletions };
+}
+
+export function gitMarkBadgeLabel(mark: string): string {
+  const trimmed = (mark || '').trim();
+  if (!trimmed) return 'M';
+  if (trimmed === '??' || trimmed === '?' || trimmed === 'U') return '?';
+  return trimmed.slice(0, 1).toUpperCase();
+}

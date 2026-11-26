@@ -594,7 +594,19 @@ export struct InteractionDecisionForm {
         Text(this.deferred ? tr('interaction_question_later') : this.statusLabel()).fontSize(Tokens.meta).fontWeight(FontWeight.Medium).layoutWeight(1)
         if (this.readOnly) Text(tr('read_only')).fontSize(Tokens.meta).fontColor(Colors.secondary)
       }.width('100%')
-      if (this.headerPrompt()) Text(this.headerPrompt()).fontSize(Tokens.title).fontWeight(FontWeight.Medium).fontColor(Colors.ink).width('100%')
+      if (this.request.kind === 'plan' && this.taskPlanSource()) {
+        Column() {
+          MarkdownText({ text: this.taskPlanSource(), chatReply: true, onLink: this.onLink })
+        }
+          .width('100%')
+          .alignItems(HorizontalAlign.Start)
+          .padding(12)
+          .backgroundColor(this.headerEnvironment.dark ? '#16FFFFFF' : Colors.subtle)
+          .borderRadius(12)
+          .border({ width: 0.5, color: this.headerEnvironment.dark ? '#24FFFFFF' : Colors.divider, radius: 12 })
+      } else if (this.headerPrompt()) {
+        Text(this.headerPrompt()).fontSize(Tokens.title).fontWeight(FontWeight.Medium).fontColor(Colors.ink).width('100%')
+      }
     }.width('100%').alignItems(HorizontalAlign.Start)
 
   }
@@ -690,22 +702,68 @@ export struct InteractionDecisionForm {
     }.width('100%').padding(12).alignItems(VerticalAlign.Top).backgroundColor(Colors.control).borderRadius(12)
       .accessibilityGroup(true).id('interaction.supervisor-held')
   }
+  private headerSemanticColor(): ResourceColor {
+    if (this.request.kind === 'plan') return Colors.ai;
+    if (this.request.kind === 'permission') return Colors.working;
+    if (this.request.kind === 'question') return Colors.link;
+    return Colors.needsMark;
+  }
+  private headerPillFill(): ResourceColor {
+    const dark = this.headerEnvironment.dark;
+    if (this.request.kind === 'plan') return dark ? '#24B0A8FF' : '#145B4FD6';
+    if (this.request.kind === 'permission') return dark ? '#24FFB224' : '#16E8890C';
+    if (this.request.kind === 'question') return dark ? '#220A84FF' : '#12007AFF';
+    return Colors.accentWell;
+  }
+  private headerPillBorder(): ResourceColor {
+    const dark = this.headerEnvironment.dark;
+    if (this.request.kind === 'plan') return dark ? '#44B0A8FF' : '#2C5B4FD6';
+    if (this.request.kind === 'permission') return dark ? '#44FFB224' : '#30E8890C';
+    if (this.request.kind === 'question') return dark ? '#400A84FF' : '#28007AFF';
+    return Colors.divider;
+  }
+  private secondaryButtonFill(): ResourceColor {
+    return this.headerEnvironment.dark ? '#2C2C2E' : '#F4F5F8';
+  }
+  private secondaryButtonBorder(): ResourceColor {
+    return this.headerEnvironment.dark ? '#48484A' : Colors.divider;
+  }
+  private secondaryButtonInk(): ResourceColor {
+    return this.headerEnvironment.dark ? '#F5F5F7' : Colors.ink;
+  }
+  private cardRimColor(): ResourceColor {
+    return this.headerEnvironment.dark ? '#2EFFFFFF' : (Colors.styleEdge || Colors.divider);
+  }
+  @Builder moreDotsGlyph(tint: ResourceColor) {
+    Row({ space: 3.5 }) {
+      ForEach([0, 1, 2], (_dot: number) => {
+        Circle().width(4).height(4).fill(tint)
+      }, (dot: number) => String(dot))
+    }.accessibilityLevel('no')
+  }
   @Builder taskHeader() {
     Row({space:this.docked ? 6 : 5}) {
       Button({type:ButtonType.Normal}) {
         Row({space:this.docked ? 6 : 5}) {
-          if (this.docked && this.request.kind==='plan') {
-            Stack() {
-              PhoneOutlineIcon({name:'decisionClipboard',color:this.systemDockHeader ? Colors.needsMark : Colors.link})
-                .scale({x:this.dockGlyphScale(12),y:this.dockGlyphScale(12)})
-            }.width(13*this.dockGlyphScale(12)).height(this.headerControlSide()).accessibilityLevel('no')
-          } else {
-            SymbolGlyph(this.request.kind==='plan' ? Symbols.document : this.request.kind==='question' ? $r('sys.symbol.ellipsis_bubble') : $r('sys.symbol.hand_raised_fingers_spread'))
-              .fontSize(this.agentCard || this.docked ? Tokens.interfaceFontVp(13,this.headerEnvironment.fontScale) : '13vp').fontColor([Colors.link])
-          }
-          Text(this.cardHeading()).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontWeight(600)
-            .fontColor(this.systemDockHeader ? $r('app.color.decision_header_title') : Colors.link).maxLines(1)
-            .layoutWeight(this.docked && !this.cardFolded ? 1 : 0).textOverflow({overflow:TextOverflow.Ellipsis})
+          Row({space:this.docked ? 6 : 5}) {
+            if (this.docked && this.request.kind==='plan') {
+              Stack() {
+                PhoneOutlineIcon({name:'decisionClipboard',color:this.systemDockHeader ? Colors.needsMark : this.headerSemanticColor()})
+                  .scale({x:this.dockGlyphScale(12),y:this.dockGlyphScale(12)})
+              }.width(13*this.dockGlyphScale(12)).height(this.headerControlSide()-4).accessibilityLevel('no')
+            } else {
+              SymbolGlyph(this.request.kind==='plan' ? Symbols.document : this.request.kind==='question' ? $r('sys.symbol.ellipsis_bubble') : $r('sys.symbol.hand_raised_fingers_spread'))
+                .fontSize(this.agentCard || this.docked ? Tokens.interfaceFontVp(13,this.headerEnvironment.fontScale) : '13vp').fontColor([this.headerSemanticColor()])
+            }
+            Text(this.cardHeading()).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontWeight(600)
+              .fontColor(this.systemDockHeader ? $r('app.color.decision_header_title') : this.headerSemanticColor()).maxLines(1)
+              .layoutWeight(this.docked && !this.cardFolded ? 1 : 0).textOverflow({overflow:TextOverflow.Ellipsis})
+          }.padding({left:8,right:9,top:2,bottom:2}).borderRadius(12)
+            .backgroundColor(this.headerPillFill())
+            .border({width:0.5,color:this.headerPillBorder(),radius:12})
+            .alignItems(VerticalAlign.Center)
+            .layoutWeight(this.docked && !this.cardFolded ? 1 : 0)
+            .flexShrink(1)
           if (this.cardFolded && this.foldPreview()) Text(this.foldPreview()).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13))
             .fontColor(Colors.ink).maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis}).layoutWeight(1)
         }.align(Alignment.Start).width('100%').padding({right:this.docked ? 4 : 0}).clip(this.docked)
@@ -775,12 +833,23 @@ export struct InteractionDecisionForm {
     return this.model.style==='system' ? Colors.ink : Colors.onAction;
   }
   @Builder dockSecondary(label:string,id:string,edits:boolean) {
-    Button(tr(label),{type:ButtonType.Capsule}).layoutWeight(1).height(this.dockActionSize(false)).padding({left:8,right:8})
-      .fontSize(17).maxFontScale(19/17).fontWeight(FontWeight.Normal).fontColor(Colors.link).backgroundColor($r('app.color.persona_dock_secondary_surface'))
-      .border({width:Tokens.divider,color:Colors.divider,radius:this.dockActionSize(false)/2})
-      .shadow({radius:3,color:nativeEnvironment.dark ? '#30000000' : '#16000000',offsetY:1})
+    Button(tr(label),{type:ButtonType.Capsule}).layoutWeight(1).height(this.dockActionSize(false)).padding({left:10,right:10})
+      .fontSize(16).maxFontScale(19/17).fontWeight(FontWeight.Medium)
+      .fontColor(this.secondaryButtonInk())
+      .backgroundColor(this.secondaryButtonFill())
+      .border({width:this.headerEnvironment.dark ? 1 : 0.75,color:this.secondaryButtonBorder(),radius:this.dockActionSize(false)/2})
+      .shadow({radius:4,color:this.headerEnvironment.dark ? '#38000000' : '#14000000',offsetY:1})
+      .scale({x:this.pressedButton===id ? MotionTokens.pressScale : 1,y:this.pressedButton===id ? MotionTokens.pressScale : 1})
+      .animation(Motion.release(this.headerEnvironment.reduceMotion))
+      .onTouch((event:TouchEvent) => {
+        if (event.type===TouchType.Down) this.pressedButton=id;
+        else if (event.type===TouchType.Up || event.type===TouchType.Cancel) { if (this.pressedButton===id) this.pressedButton=''; }
+      })
       .responseRegion({x:0,y:(this.dockActionSize(false)-44)/2,width:'100%',height:Math.max(44,this.dockActionSize(false))})
-      .enabled(this.canRespond()).onClick(() => { if (edits) this.approveTaskPlan('acceptEdits'); else this.selected='deny'; }).id(id)
+      .enabled(this.canRespond()).onClick(() => {
+        Haptics.tap();
+        if (edits) this.approveTaskPlan('acceptEdits'); else this.selected='deny';
+      }).id(id)
   }
 
   @Builder beautifulPlanChoice(label:string,detail:string,mode:string,id:string) {
@@ -844,6 +913,12 @@ export struct InteractionDecisionForm {
               .fontColor(this.dockActionInk()).fontWeight(FontWeight.Medium).maxLines(1)
           }
         }.width('100%').height(this.dockActionSize(true)).padding({left:8,right:8}).backgroundColor(Colors.action)
+          .scale({x:this.pressedButton==='plan_approve' ? MotionTokens.pressScale : 1,y:this.pressedButton==='plan_approve' ? MotionTokens.pressScale : 1})
+          .animation(Motion.release(this.headerEnvironment.reduceMotion))
+          .onTouch((event:TouchEvent) => {
+            if (event.type===TouchType.Down) this.pressedButton='plan_approve';
+            else if (event.type===TouchType.Up || event.type===TouchType.Cancel) { if (this.pressedButton==='plan_approve') this.pressedButton=''; }
+          })
           .accessibilityText(tr(recordedPlanMode(this.request) ? 'approve' : 'session_task_approve_run')).enabled(this.canRespond())
           .onClick(() => this.approveTaskPlan(recordedPlanMode(this.request) || 'bypassPermissions')).id('interaction.task.approve')
         Row({space:8}) {
@@ -854,17 +929,41 @@ export struct InteractionDecisionForm {
         Button({type:ButtonType.Capsule}) {
           Row({space:6}) {
             SymbolGlyph($r('sys.symbol.play_fill')).fontSize('14vp').fontColor([Colors.onAction])
-            Text(tr(recordedPlanMode(this.request) ? 'approve' : 'session_task_approve_run')).fontSize(16).maxFontScale(Tokens.interfaceScaleFor(16)).fontColor(Colors.onAction)
+            Text(tr(recordedPlanMode(this.request) ? 'approve' : 'session_task_approve_run')).fontSize(16).maxFontScale(Tokens.interfaceScaleFor(16)).fontWeight(FontWeight.Medium).fontColor(Colors.onAction)
           }
         }.width('100%').constraintSize({minHeight:44}).accessibilityText(tr(recordedPlanMode(this.request) ? 'approve' : 'session_task_approve_run'))
           .backgroundColor(Colors.action).enabled(this.canRespond())
+          .scale({x:this.pressedButton==='plan_approve' ? MotionTokens.pressScale : 1,y:this.pressedButton==='plan_approve' ? MotionTokens.pressScale : 1})
+          .animation(Motion.release(this.headerEnvironment.reduceMotion))
+          .onTouch((event:TouchEvent) => {
+            if (event.type===TouchType.Down) this.pressedButton='plan_approve';
+            else if (event.type===TouchType.Up || event.type===TouchType.Cancel) { if (this.pressedButton==='plan_approve') this.pressedButton=''; }
+          })
           .onClick(() => this.approveTaskPlan(recordedPlanMode(this.request) || 'bypassPermissions')).id('interaction.task.approve')
-        Row({space:6}) {
-          if (!recordedPlanMode(this.request)) Button(tr('session_task_auto_edits')).layoutWeight(1).fontSize(13).maxFontScale(Tokens.navigationTextMaxScale)
-            .constraintSize({minHeight:38}).backgroundColor(Colors.control).fontColor(Colors.link).enabled(this.canRespond())
+        Row({space:8}) {
+          if (!recordedPlanMode(this.request)) Button(tr('session_task_auto_edits'),{type:ButtonType.Capsule}).layoutWeight(1).fontSize(14).maxFontScale(Tokens.navigationTextMaxScale)
+            .fontWeight(FontWeight.Medium).constraintSize({minHeight:40})
+            .backgroundColor(this.secondaryButtonFill()).fontColor(this.secondaryButtonInk())
+            .border({width:this.headerEnvironment.dark ? 1 : 0.75,color:this.secondaryButtonBorder(),radius:20})
+            .scale({x:this.pressedButton==='plan_edits' ? MotionTokens.pressScale : 1,y:this.pressedButton==='plan_edits' ? MotionTokens.pressScale : 1})
+            .animation(Motion.release(this.headerEnvironment.reduceMotion))
+            .onTouch((event:TouchEvent) => {
+              if (event.type===TouchType.Down) this.pressedButton='plan_edits';
+              else if (event.type===TouchType.Up || event.type===TouchType.Cancel) { if (this.pressedButton==='plan_edits') this.pressedButton=''; }
+            })
+            .enabled(this.canRespond())
             .onClick(() => this.approveTaskPlan('acceptEdits')).id('interaction.task.edits')
-          Button(tr('session_task_return')).layoutWeight(1).fontSize(13).maxFontScale(Tokens.navigationTextMaxScale).constraintSize({minHeight:38})
-            .backgroundColor(Colors.control).fontColor(Colors.link).enabled(this.canRespond()).onClick(() => this.selected='deny').id('interaction.task.return')
+          Button(tr('session_task_return'),{type:ButtonType.Capsule}).layoutWeight(1).fontSize(14).maxFontScale(Tokens.navigationTextMaxScale)
+            .fontWeight(FontWeight.Medium).constraintSize({minHeight:40})
+            .backgroundColor(this.secondaryButtonFill()).fontColor(this.secondaryButtonInk())
+            .border({width:this.headerEnvironment.dark ? 1 : 0.75,color:this.secondaryButtonBorder(),radius:20})
+            .scale({x:this.pressedButton==='plan_return' ? MotionTokens.pressScale : 1,y:this.pressedButton==='plan_return' ? MotionTokens.pressScale : 1})
+            .animation(Motion.release(this.headerEnvironment.reduceMotion))
+            .onTouch((event:TouchEvent) => {
+              if (event.type===TouchType.Down) this.pressedButton='plan_return';
+              else if (event.type===TouchType.Up || event.type===TouchType.Cancel) { if (this.pressedButton==='plan_return') this.pressedButton=''; }
+            })
+            .enabled(this.canRespond()).onClick(() => { Haptics.tap(); this.selected='deny'; }).id('interaction.task.return')
         }.width('100%')
       }
       if (this.taskQueue?.error) Text(tr(this.taskQueue.error)).fontSize(12).fontColor(Colors.danger)
@@ -927,7 +1026,10 @@ export struct InteractionDecisionForm {
     Column({space:12}) {
       Row({space:8}) {
         Button(tr('deny'),{type:ButtonType.Capsule}).layoutWeight(1).height(this.agentActionHeight()).constraintSize({minHeight:this.agentActionHeight()}).fontSize(17)
-          .maxFontScale(Tokens.interfaceScaleFor(17)).backgroundColor(Colors.control).fontColor(Colors.link).enabled(this.canRespond())
+          .maxFontScale(Tokens.interfaceScaleFor(17)).fontWeight(FontWeight.Medium)
+          .backgroundColor(this.secondaryButtonFill()).fontColor(this.secondaryButtonInk())
+          .border({width:this.headerEnvironment.dark ? 1 : 0.75,color:this.secondaryButtonBorder(),radius:this.agentActionHeight()/2})
+          .enabled(this.canRespond())
           .scale({x:this.pressedButton==='deny'?MotionTokens.pressScale:1,y:this.pressedButton==='deny'?MotionTokens.pressScale:1})
           .animation(Motion.release(this.headerEnvironment.reduceMotion))
           .onTouch((event:TouchEvent) => {
@@ -1001,17 +1103,42 @@ export struct InteractionDecisionForm {
   }
   @Builder agentQuestionActions() {
     Row({space:8}) {
-      if (this.questionPage>0 || this.reviewingQuestions) Button(tr('decision_previous')).layoutWeight(1).fontSize(15)
+      if (this.questionPage>0 || this.reviewingQuestions) Button(tr('decision_previous'),{type:ButtonType.Capsule}).layoutWeight(1).fontSize(15)
+        .fontWeight(FontWeight.Medium).constraintSize({minHeight:42})
+        .backgroundColor(this.secondaryButtonFill()).fontColor(this.secondaryButtonInk())
+        .border({width:this.headerEnvironment.dark ? 1 : 0.75,color:this.secondaryButtonBorder(),radius:21})
+        .scale({x:this.pressedButton==='q_prev'?MotionTokens.pressScale:1,y:this.pressedButton==='q_prev'?MotionTokens.pressScale:1})
+        .animation(Motion.release(this.headerEnvironment.reduceMotion))
+        .onTouch((event:TouchEvent) => {
+          if (event.type===TouchType.Down) this.pressedButton='q_prev';
+          else if (event.type===TouchType.Up || event.type===TouchType.Cancel) { if (this.pressedButton==='q_prev') this.pressedButton=''; }
+        })
         .enabled(this.canRespond()).onClick(() => {
+          Haptics.tap();
           if (this.reviewingQuestions) this.reviewingQuestions=false;
           else this.questionPage--;
         }).id('interaction.question.previous')
       if (this.reviewingQuestions || this.request.fields.length===1)
-        Button(tr('answer'),{type:ButtonType.Capsule}).layoutWeight(1).fontSize(16).backgroundColor(Colors.action).fontColor(Colors.onAction)
-          .enabled(this.canSubmit()).onClick(() => this.submit('answer')).id('interaction.submit')
-      else if (this.request.fields.length>0) Button(tr(this.questionPage+1<this.request.fields.length ? 'decision_next' : 'review'))
-        .layoutWeight(1).fontSize(15).enabled(this.canRespond() && !!this.pickedAnswer(this.request.fields[this.questionPage]))
-        .onClick(() => { if (this.questionPage+1<this.request.fields.length) this.questionPage++;else this.reviewingQuestions=true; })
+        Button(tr('answer'),{type:ButtonType.Capsule}).layoutWeight(1).fontSize(16).fontWeight(FontWeight.Medium).constraintSize({minHeight:42})
+          .backgroundColor(Colors.action).fontColor(Colors.onAction)
+          .scale({x:this.pressedButton==='q_submit'?MotionTokens.pressScale:1,y:this.pressedButton==='q_submit'?MotionTokens.pressScale:1})
+          .animation(Motion.release(this.headerEnvironment.reduceMotion))
+          .onTouch((event:TouchEvent) => {
+            if (event.type===TouchType.Down) this.pressedButton='q_submit';
+            else if (event.type===TouchType.Up || event.type===TouchType.Cancel) { if (this.pressedButton==='q_submit') this.pressedButton=''; }
+          })
+          .enabled(this.canSubmit()).onClick(() => { Haptics.tap(); this.submit('answer'); }).id('interaction.submit')
+      else if (this.request.fields.length>0) Button(tr(this.questionPage+1<this.request.fields.length ? 'decision_next' : 'review'),{type:ButtonType.Capsule})
+        .layoutWeight(1).fontSize(15).fontWeight(FontWeight.Medium).constraintSize({minHeight:42})
+        .backgroundColor(Colors.action).fontColor(Colors.onAction)
+        .scale({x:this.pressedButton==='q_next'?MotionTokens.pressScale:1,y:this.pressedButton==='q_next'?MotionTokens.pressScale:1})
+        .animation(Motion.release(this.headerEnvironment.reduceMotion))
+        .onTouch((event:TouchEvent) => {
+          if (event.type===TouchType.Down) this.pressedButton='q_next';
+          else if (event.type===TouchType.Up || event.type===TouchType.Cancel) { if (this.pressedButton==='q_next') this.pressedButton=''; }
+        })
+        .enabled(this.canRespond() && !!this.pickedAnswer(this.request.fields[this.questionPage]))
+        .onClick(() => { Haptics.tap(); if (this.questionPage+1<this.request.fields.length) this.questionPage++;else this.reviewingQuestions=true; })
         .id('interaction.question.next')
     }.width('100%')
   }
@@ -1060,7 +1187,10 @@ export struct InteractionDecisionForm {
           })
       }
     }.width('100%').alignItems(HorizontalAlign.Start).padding({left:16,right:16,top:12,bottom:16})
-      .backgroundColor(Colors.surface).border({width:0.6,color:Colors.divider,radius:20}).borderRadius(20).id('interaction.card')
+      .backgroundColor(Colors.surface)
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.6),color:this.cardRimColor(),radius:20}).borderRadius(20)
+      .shadow(PhoneStyle.cardElevation(this.headerEnvironment.dark))
+      .id('interaction.card')
       .bindSheet($$this.fullPlan,this.planReader(),{height:SheetSize.LARGE,showClose:false,dragBar:false,preferType:SheetType.BOTTOM})
   }
 
@@ -1074,7 +1204,7 @@ export struct InteractionDecisionForm {
             .onClick(() => { this.deferred = true; this.onLater(); }).id('interaction.later')
           if (interactionScreenCanCancel(this.request) && !this.pinFooter && !this.docked) Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('cancel')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('cancel', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('cancel')).bindTips(tr('cancel')).flexShrink(0).margin({ end: LengthMetrics.vp(Tokens.gap) })
             .enabled(this.canRespond()).onClick(() => this.submit('cancel')).id('interaction.cancel')
-          if (interactionScreenCanCancel(this.request) && this.pinFooter) Button({ type: ButtonType.Circle }) { Image(Symbols.more).width(Tokens.symbol).height(Tokens.symbol).fillColor(Colors.ink) }
+          if (interactionScreenCanCancel(this.request) && this.pinFooter) Button({ type: ButtonType.Circle }) { this.moreDotsGlyph(Colors.ink) }
             .attributeModifier(ButtonStyles.chrome).enabled(this.canRespond()).accessibilityText(tr('more'))
             .margin({ end: LengthMetrics.vp(Tokens.gap) }).bindMenu([{ value: tr('interaction_question_cancel'), action: () => this.submit('cancel') }]).flexShrink(0).id('interaction.more')
           Button(tr('answer'), { type: ButtonType.Capsule }).fontSize(16).fontWeight(FontWeight.Medium)
@@ -1221,8 +1351,8 @@ export struct InteractionDecisionForm {
     }.width('100%').padding({left:16,right:16,top:this.resizeDock && !this.cardFolded ? 0 : 12,bottom:16})
       .alignItems(HorizontalAlign.Start).backgroundColor(Colors.surface).borderRadius(22)
       .background(this.dockBacklight)
-      .outline({width:PhoneStyle.surfaceEdgeWidth(Tokens.divider),color:Colors.styleEdge || Colors.divider,radius:22})
-      .shadow(PhoneStyle.surfaceShadow({radius:8,color:nativeEnvironment.dark ? '#36000000' : '#15000000',offsetY:2})).id('interaction.card')
+      .outline({width:PhoneStyle.surfaceEdgeWidth(Tokens.divider),color:this.cardRimColor(),radius:22})
+      .shadow(PhoneStyle.cardElevation(this.headerEnvironment.dark)).id('interaction.card')
       .bindSheet($$this.fullPlan,this.planReader(),{height:SheetSize.LARGE,showClose:false,dragBar:false,preferType:SheetType.BOTTOM})
   }
   private inlineSpace(): number {
@@ -1234,7 +1364,8 @@ export struct InteractionDecisionForm {
       this.taskHeader()
       if (!this.cardFolded) this.supervisorNote()
     }.width('100%').padding({left:16,right:16,top:12,bottom:16}).alignItems(HorizontalAlign.Start)
-      .backgroundColor(Colors.surface).border({width:0.6,color:Colors.divider,radius:20}).borderRadius(20).id('interaction.card')
+      .backgroundColor(Colors.surface).border({width:PhoneStyle.surfaceEdgeWidth(0.6),color:this.cardRimColor(),radius:20}).borderRadius(20)
+      .shadow(PhoneStyle.cardElevation(this.headerEnvironment.dark)).id('interaction.card')
       .bindSheet($$this.fullPlan,this.planReader(),{height:SheetSize.LARGE,showClose:false,dragBar:false,preferType:SheetType.BOTTOM})
     else if (this.agentCard) this.agentDecisionCard()
     else if (this.docked) this.dockPanel()
@@ -1247,10 +1378,14 @@ export struct InteractionDecisionForm {
           if (this.docked && interactionSkipReason(this.request)) Text(tr(interactionSkipReason(this.request)))
             .fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.secondary).width('100%').id('interaction.task.skip_reason')
           if (!this.docked && !this.taskQueue) Row({space: 6}) {
-            Circle().width(7).height(7).fill(Colors.needs)
-            Text(tr(this.request.kind === 'question' ? 'question' : this.request.kind === 'plan' ? 'plan' : 'needs_you'))
-              .fontSize(13).fontWeight(FontWeight.Medium).fontColor(Colors.secondary)
-          }.width('100%')
+            Circle().width(7).height(7).fill(this.headerSemanticColor())
+            Text(this.cardHeading())
+              .fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontWeight(600).fontColor(this.headerSemanticColor())
+          }
+            .padding({left:9,right:10,top:4,bottom:4})
+            .backgroundColor(this.headerPillFill())
+            .borderRadius(12)
+            .border({width:0.5,color:this.headerPillBorder(),radius:12})
           if (this.taskQueue && this.request.kind==='plan') MarkdownText({text:this.taskPlanSource(),chatReply:true,onLink:this.onLink})
           else this.formBody()
         }.width('100%').alignItems(HorizontalAlign.Start).onAreaChange((_before: Area, area: Area) => {
@@ -1266,8 +1401,9 @@ export struct InteractionDecisionForm {
         const h = Number(area.height);
         if (Number.isFinite(h) && h > 0 && Math.abs(this.inlineFooterHeight - h) > 0.5) this.inlineFooterHeight = h;
       })
-    }.width('100%').padding({left:this.docked ? 16 : 12,right:this.docked ? 16 : 12,top:8,bottom:8}).alignItems(HorizontalAlign.Start)
-      .backgroundColor(Colors.surface).border({width:0.6,color:Colors.divider,radius:16}).borderRadius(16).id('interaction.card')
+    }.width('100%').padding({left:this.docked ? 16 : 14,right:this.docked ? 16 : 14,top:10,bottom:12}).alignItems(HorizontalAlign.Start)
+      .backgroundColor(Colors.surface).border({width:PhoneStyle.surfaceEdgeWidth(0.6),color:this.cardRimColor(),radius:18}).borderRadius(18)
+      .shadow(PhoneStyle.cardElevation(this.headerEnvironment.dark)).id('interaction.card')
       .bindSheet($$this.fullPlan,this.planReader(),{height:SheetSize.LARGE,showClose:false,dragBar:false,preferType:SheetType.BOTTOM})
     else if (this.fillAvailable && !this.pinFooter && this.request.kind !== 'question') Scroll() {
       Column({ space: Tokens.gap }) { this.formBody(); this.responseFooter() }
