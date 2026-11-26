@@ -1,7 +1,9 @@
 package node
 
 import (
+	"bytes"
 	"encoding/json"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -525,5 +527,98 @@ func TestBackendWorkspaceCorrectsUnresolvedDefaultToExplicitBranch(t *testing.T)
 	ready := workspaceCall(t, n, "prepare", req)
 	if ready.State != "ready" || ready.Repositories[0].ResolvedRef != "refs/heads/trunk" {
 		t.Fatal(ready)
+	}
+}
+
+func TestBackendWorkspaceLogsGitStderrOnFailure(t *testing.T) {
+	t.Run("ls-remote failure", func(t *testing.T) {
+		home := workspaceTemp(t)
+		var logs bytes.Buffer
+		n := &Node{home: home, dir: filepath.Join(home, ".persona"), logger: log.New(&logs, "", 0)}
+		missing := filepath.Join(workspaceTemp(t), "missing-remote.git")
+		req := taskworkspace.Request{
+			WorkspaceID: "ws_stderr",
+			OperationID: "op_stderr",
+			Plan:        workspacePlan(t, home, repository.LayoutRoot, missing),
+		}
+		failed := workspaceCall(t, n, "prepare", req)
+		if failed.Error == nil || failed.Error.Code != "source_unavailable" {
+			t.Fatalf("expected source_unavailable, got %+v", failed)
+		}
+		logged := logs.String()
+		if !strings.Contains(logged, "git ls-remote failed") || !strings.Contains(logged, "ws_stderr") || !strings.Contains(logged, "op_stderr") ||
+			!strings.Contains(strings.ToLower(logged), "fatal:") {
+			t.Fatalf("expected git stderr in node log, got %q", logged)
+		}
+		// Returned Problem and persisted receipt must keep no raw stderr.
+		receiptPath := filepath.Join(n.dir, "task-workspaces", taskworkspace.Hash(req.WorkspaceID), "receipt.json")
+		rawReceipt, err := os.ReadFile(receiptPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(strings.ToLower(string(rawReceipt)), "fatal:") {
+			t.Fatalf("receipt leaked raw git stderr: %s", rawReceipt)
+		}
+	})
+
+	t.Run("fetch failure", func(t *testing.T) {
+		home := workspaceTemp(t)
+		var logs bytes.Buffer
+		n := &Node{home: home, dir: filepath.Join(home, ".persona"), logger: log.New(&logs, "", 0)}
+		remote := workspaceRemote(t, "trunk")
+		// Keep the objects directory present so Git recognizes the remote for ls-remote,
+		// while removing the commit/tree objects so upload-pack fails during fetch.
+		objectsDir := filepath.Join(remote, ".git", "objects")
+		entries, err := os.ReadDir(objectsDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, entry := range entries {
+			if err := os.RemoveAll(filepath.Join(objectsDir, entry.Name())); err != nil {
+				t.Fatal(err)
+			}
+		}
+		fetchReq := taskworkspace.Request{
+			WorkspaceID: "ws_fetch_stderr",
+			OperationID: "op_fetch_stderr",
+			Plan:        workspacePlan(t, home, repository.LayoutRoot, remote),
+		}
+		fetchFailed := workspaceCall(t, n, "prepare", fetchReq)
+		if fetchFailed.Error == nil || fetchFailed.Error.Code != "source_fetch_failed" {
+			t.Fatalf("expected source_fetch_failed, got %+v", fetchFailed)
+		}
+		fetchLogged := logs.String()
+		if !strings.Contains(fetchLogged, "git fetch failed") || !strings.Contains(fetchLogged, "ws_fetch_stderr") ||
+			!strings.Contains(fetchLogged, "op_fetch_stderr") || !strings.Contains(strings.ToLower(fetchLogged), "fatal:") {
+			t.Fatalf("expected git fetch stderr in node log, got %q", fetchLogged)
+		}
+	})
+}
+
+func TestSanitizeGitStderrScrubsCredentialsAndKeepsTail(t *testing.T) {
+	raw := "hint: using default branch\nfatal: unable to access 'https://user:top-secret@git.example.com/org/repo.git/': " +
+		"Received HTTP code 407 from proxy http://proxy-user:proxy-pass@proxy.example.com:8118 (contact ops@example.com)\n"
+	got := sanitizeGitStderr(raw)
+	if strings.Contains(got, "top-secret") || strings.Contains(got, "proxy-pass") {
+		t.Fatalf("credentials leaked into sanitized stderr: %q", got)
+	}
+	if !strings.Contains(got, "https://<redacted>@git.example.com/org/repo.git/") ||
+		!strings.Contains(got, "http://<redacted>@proxy.example.com:8118") ||
+		!strings.Contains(got, "ops@example.com") {
+		t.Fatalf("unexpected sanitized stderr: %q", got)
+	}
+
+	var buf workspaceStderr
+	buf.limit = 64
+	_, _ = buf.Write([]byte(strings.Repeat("x", 100)))
+	_, _ = buf.Write([]byte("fatal: tail error"))
+	if !strings.HasSuffix(buf.String(), "fatal: tail error") || len(buf.String()) != 64 {
+		t.Fatalf("tail buffer lost error suffix: len=%d val=%q", len(buf.String()), buf.String())
+	}
+
+	long := strings.Repeat("hint: verbose line ", 60) + "fatal: final reason"
+	truncated := sanitizeGitStderr(long)
+	if !strings.HasPrefix(truncated, "...") || !strings.HasSuffix(truncated, "fatal: final reason") || len([]rune(truncated)) > workspaceStderrLogLimit {
+		t.Fatalf("truncated stderr lost final reason: len=%d val=%q", len([]rune(truncated)), truncated)
 	}
 }
