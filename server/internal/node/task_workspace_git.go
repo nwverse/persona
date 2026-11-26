@@ -684,6 +684,7 @@ func (n *Node) workspaceSourceAllowed(input repository.PreparationRepository) bo
 		local = u.Path
 	}
 	if filepath.IsAbs(local) {
+		local = n.resolveHomeAlias(local)
 		return n.offLimits(local) == nil && workspaceNoLinks(local) == nil
 	}
 	_, err := repository.CloneTransport(transport, input.SourceSnapshot.Identity)

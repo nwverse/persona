@@ -18,7 +18,11 @@ func (n *Node) lockBackendReceipt(workspace, stage, repo string) (*workspaceExec
 	if !workspacenaming.ValidOperationID(workspace) {
 		return nil, nil, taskworkspace.Failure("invalid_input", stage, "", repo, "")
 	}
-	control := filepath.Join(n.dir, "task-workspaces")
+	stateDir, err := n.workspaceStateDir()
+	if err != nil {
+		return nil, nil, err
+	}
+	control := filepath.Join(stateDir, "task-workspaces")
 	key := taskworkspace.Hash(workspace)
 	path := filepath.Join(control, key, "receipt.json")
 	if err := workspaceNoLinks(path); err != nil {
@@ -43,7 +47,11 @@ func (n *Node) lockBackendReceipt(workspace, stage, repo string) (*workspaceExec
 // The index only locates a receipt. After release, the old session must no
 // longer reopen a checkout now used by another plan or removed by its owner.
 func (n *Node) backendSessionIndex(id string) string {
-	return filepath.Join(n.dir, "task-workspaces", "sessions", taskworkspace.Hash(id)+".json")
+	dir := n.dir
+	if resolved, err := n.workspaceStateDir(); err == nil {
+		dir = resolved
+	}
+	return filepath.Join(dir, "task-workspaces", "sessions", taskworkspace.Hash(id)+".json")
 }
 func (e *workspaceExecutor) rememberLaunch(id string) error {
 	path := e.n.backendSessionIndex(id)
