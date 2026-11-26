@@ -22,6 +22,7 @@ const world = vi.hoisted(() => ({
   calls: [] as ApiCall[],
   hub: { features: [] as string[], loaded: false },
   context: "" as string | undefined,
+  clipped: undefined as boolean | undefined, // the item page's mail_body_truncated; undefined: the hub does not say
   itemFails: false,
   translation: null as null | { subject: string; text: string },
   prefs: { enabled: false, mail: true, target: "zh-Hans", chats: [] as { id: string }[] },
@@ -40,7 +41,7 @@ vi.mock("../../lib/api", async (original) => ({
     }
     if (path.startsWith("/inbox/mail:")) {
       if (world.itemFails) throw new Error("HTTP 503");
-      return { ...mailItem(), context: world.context };
+      return { ...mailItem(), context: world.context, ...(world.clipped === undefined ? {} : { mail_body_truncated: world.clipped }) };
     }
     return {};
   },
@@ -108,7 +109,7 @@ beforeEach(async () => {
   resetMailForTests();
   resetManagerChoice();
   settleRosterDefault();
-  Object.assign(world, { calls: [], context: storedContext, itemFails: false, translation: null });
+  Object.assign(world, { calls: [], context: storedContext, clipped: undefined, itemFails: false, translation: null });
   world.prefs.enabled = false;
   Element.prototype.scrollIntoView = vi.fn();
   host = document.createElement("div");
@@ -165,12 +166,31 @@ describe("a mail item's body with mail off", () => {
     expect(host.querySelectorAll("button")).toHaveLength(0);
   });
 
+  it("says the text is cut short only when the hub says so, nothing about it when it is whole, and 'may be' when the hub does not say", async () => {
+    const lines = { clipped: t("inbox-inboxbodies.mail_off_stored_clipped"), whole: t("inbox-inboxbodies.mail_off_stored_whole"), unknown: t("inbox-inboxbodies.mail_off_stored") };
+    expect(new Set(Object.values(lines)).size).toBe(3);
+    expect(lines.clipped).toContain("is cut short");
+    expect(lines.unknown).toContain("may be cut short");
+    expect(lines.whole).not.toMatch(/cut short/);
+    for (const line of Object.values(lines)) expect(line).toContain("the hub machine");
+    for (const [clipped, state] of [[true, "clipped"], [false, "whole"], [undefined, "unknown"]] as const) {
+      world.clipped = clipped;
+      await act(async () => root.render(<MailBody key={state} item={mailItem()} />));
+      await flush();
+      expect(notice()?.textContent, state).toBe(lines[state]);
+      expect(notice()?.getAttribute("data-mail-stored-clipping"), state).toBe(state);
+      expect(host.querySelector("[data-mail-stored-text]")?.textContent, state).toBe(STORED);
+    }
+    expect(mailCalls()).toEqual([]);
+  });
+
   it("falls back to the list's preview when the item cannot be read again, still without an error", async () => {
     world.itemFails = true;
-    await act(async () => root.render(<MailBody item={mailItem()} />));
+    world.clipped = false; // the page that would say so cannot be read: the list's copy says nothing
+    await act(async () => root.render(<MailBody item={mailItem({ mail_body_truncated: false } as Partial<InboxItem>)} />));
     await flush();
     expect(host.querySelector("[data-mail-stored-text]")?.textContent).toBe("Hi, the agenda for Thursday");
-    expect(notice()).not.toBeNull();
+    expect(notice()?.textContent).toBe(t("inbox-inboxbodies.mail_off_stored"));
     expect(host.textContent).not.toMatch(/HTTP|503/);
     expect(mailCalls()).toEqual([]);
   });

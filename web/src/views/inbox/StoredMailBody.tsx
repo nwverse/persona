@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { api, isAbort } from "../../lib/api";
 import { clock } from "../../lib/format";
 import { itemPath, itemRequest, type InboxItem } from "../../lib/inbox";
-import { addressText } from "../../lib/mail";
+import { addressText, storedMailClipping, type StoredMailClipping } from "../../lib/mail";
 import { storedMailText } from "../../lib/mail-stored";
 import { hubTranslation, languageName, translateMail, useTranslatePrefs, type MailTranslation } from "../../lib/translate";
 import { t } from "../../i18n";
@@ -13,7 +13,16 @@ import { Button, Loading } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 
 /** What is drawn where the mail would be: nothing yet, or the hub's stored words. */
-type StoredBody = { kind: "loading" } | { kind: "stored"; text: string };
+type StoredBody = { kind: "loading" } | { kind: "stored"; text: string; clipping: StoredMailClipping };
+
+/** The line after the text: why the rest is not here, and what the hub said about the text being cut short. */
+function notice(clipping: StoredMailClipping): string {
+  switch (clipping) {
+    case "clipped": return t("inbox-inboxbodies.mail_off_stored_clipped");
+    case "whole": return t("inbox-inboxbodies.mail_off_stored_whole");
+    case "unknown": return t("inbox-inboxbodies.mail_off_stored");
+  }
+}
 
 /** `onLatest`: an older message from the handling chain was asked for; the hub keeps only the newest mail's text. */
 export function StoredMailBody({ item, onLatest }: { item: InboxItem; onLatest?: () => void }) {
@@ -31,9 +40,9 @@ export function StoredMailBody({ item, onLatest }: { item: InboxItem; onLatest?:
     const abort = new AbortController();
     setBody({ kind: "loading" });
     api<InboxItem>(itemPath(item.id), { headers: itemRequest(item), signal: abort.signal })
-      .then((r) => live && setBody({ kind: "stored", text: storedMailText(r.context, r.preview || item.preview) }))
-      // the item could not be read again: the list's own words of it are stored text too
-      .catch((e) => { if (live && !isAbort(e)) setBody({ kind: "stored", text: storedMailText(item.context, item.preview) }); });
+      .then((r) => live && setBody({ kind: "stored", text: storedMailText(r.context, r.preview || item.preview), clipping: storedMailClipping(r) }))
+      // the item could not be read again: the list's own words of it are stored text too, and nothing says how much
+      .catch((e) => { if (live && !isAbort(e)) setBody({ kind: "stored", text: storedMailText(item.context, item.preview), clipping: "unknown" }); });
     return () => {
       live = false;
       abort.abort();
@@ -82,9 +91,9 @@ export function StoredMailBody({ item, onLatest }: { item: InboxItem; onLatest?:
       <div className="mt-4 text-meta leading-relaxed break-words whitespace-pre-wrap text-ink select-text" data-mail-stored-text>
         {(shown ? shown.text : body.text) || t("inbox-inboxbodies.no_body")}
       </div>
-      <p className="mt-4 flex items-start gap-2 rounded-control bg-inset px-3 py-2 text-label leading-relaxed text-ink-2 shadow-hairline" role="note" data-mail-off-notice>
+      <p className="mt-4 flex items-start gap-2 rounded-control bg-inset px-3 py-2 text-label leading-relaxed text-ink-2 shadow-hairline" role="note" data-mail-off-notice data-mail-stored-clipping={body.clipping}>
         <Icon name="info" size={13} className="mt-0.5 shrink-0 text-ink-3" />
-        <span className="min-w-0">{t("inbox-inboxbodies.mail_off_stored")}</span>
+        <span className="min-w-0">{notice(body.clipping)}</span>
       </p>
     </div>
   );

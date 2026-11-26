@@ -45,6 +45,19 @@ export function mailReading(s?: Parameters<typeof hubServes>[1]): MailReading {
   return hubServes(moduleFeature("mail"), s) ? FULL : STORED;
 }
 
+/** Whether the text the hub stored for a mail is all of the newest mail (#15995), from the item's own page:
+ *  - `clipped`: the hub cut it at the 3,000 characters it stores;
+ *  - `whole`: the stored text is the whole text;
+ *  - `unknown`: the hub did not say: a hub from before it sent `mail_body_truncated`, an item stored before the hub
+ *    recorded it, a mail whose text the hub never read, or the list's own copy of the item (which never carries it). */
+export type StoredMailClipping = "clipped" | "whole" | "unknown";
+
+/** `mail_body_truncated` of GET /inbox/{id} as the closed type; anything but a boolean is `unknown`, never `whole`. */
+export function storedMailClipping(item?: { mail_body_truncated?: unknown }): StoredMailClipping {
+  const v = item?.mail_body_truncated;
+  return v === true ? "clipped" : v === false ? "whole" : "unknown";
+}
+
 /** Whether `item`'s replies would be mail the hub can no longer send (`reading` is `stored`). */
 export function mailItemReadOnly(reading: MailReading, item?: { source: string; mail?: unknown }): boolean {
   return reading.kind === "stored" && Boolean(item && (item.mail || item.source === "mail"));

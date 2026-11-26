@@ -2645,8 +2645,10 @@ nothing), and an opened mail item is `views/inbox/StoredMailBody.tsx` instead of
 and shows the mail's words out of the stored `context` (`lib/mail-stored.ts` takes off the heading and header lines
 the hub wrote for the model; at most 3,000 characters of the newest mail, or the list's preview), who it is from and
 when, and after the text one line: mail is off on the hub machine, so the full message and its attachments can't be
-loaded, and a long message may be cut short. The hub does not send whether the text was clipped
-(`mail_body_truncated` is not listed), so the line says it for every mail. A translation is shown only when the item
+loaded. The line ends by what the hub says about the stored text (`mail_body_truncated` on the item's page, read once
+as the closed `StoredMailClipping` by `storedMailClipping` in `lib/mail.ts`): `clipped`, the text is cut short;
+`whole`, nothing more; `unknown` (a hub from before it sent the flag, an item stored before the hub recorded it, a
+mail whose text it never read, or the list's copy when the page cannot be read), a long message may be cut short. A translation is shown only when the item
 lists one the hub kept (`POST /api/v1/translate/mail` answers from it without the mail server); a failure there is
 silent. Left out, because each needs the mail module: Reply and Reply all, marking the mail read, attachments and the
 HTML view, and sending a reply from the Inbox (AI draft reply, Send on a draft or a reply suggestion:
