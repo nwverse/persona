@@ -2908,6 +2908,12 @@ activation; the node's retirement latch prevents recovery and idle-compaction wo
 when offline nodes reconnect. Deleting a conversation cascades through segment history and queue content, retaining
 only deletion markers and minimal offline closure identities.
 
+Each manager advances at most four conversations at a time, rotating across the remaining work on later sweeps.
+Preparation and receipt calls run after Postgres releases its connection. The durable start claim and operation ID
+prevent duplicate starts, and mapping the candidate rechecks the current operation and epoch under the row lock.
+If a cancellation or deletion wins during a node call, the sweep uses the saved candidate identity to close the
+unused session.
+
 `conversations_switch` and `POST /api/v1/assistant/conversation-switches` coordinate an explicit set of these logical
 switches without adding another engine protocol. The settings-backed batch stores each conversation's before-image,
 target, expected epoch and operation ID before starting anything. Busy items wait for their current turn and pending

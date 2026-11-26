@@ -38,10 +38,11 @@ import (
 // Antigravity launchers.check honoring explicit params.model (#15905) adds 1 B (266,213 B).
 // Antigravity withoutStaleWorking coverage for send policy, fork, rewind, modes, and native error reads (#15924) adds 48 B (266,261 B).
 // Runtime package lifecycle support for preserving tools across upgrades (#16016) adds 4,368 B (270,629 B).
-// Preserving delivered replies across live Antigravity background wakes, in-place RUNNING->DONE updates and runtime-sdk catch-up/batch delta ordering (#14920) adds 1,032 B (271,661 B).
+// ACP instruction fitting to the mounted device tools and supervision role (#16052) adds 244 B (270,873 B).
+// Preserving delivered replies across live Antigravity background wakes, in-place RUNNING->DONE updates and runtime-sdk catch-up/batch delta ordering (#14920) adds 1,032 B (271,905 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 271_661
+	const budget = 271_905
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {
