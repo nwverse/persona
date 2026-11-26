@@ -258,6 +258,8 @@ export struct LiveViewSettingsCard {
             Button({ type: ButtonType.Capsule }) {
               Text(this.modeTitle(mode))
                 .fontSize(Tokens.interfaceFontVp(11.5, this.env.fontScale))
+                .minFontSize('9vp')
+                .maxFontSize(Tokens.interfaceFontVp(11.5, this.env.fontScale))
                 .fontWeight(this.previewMode === mode ? FontWeight.Bold : FontWeight.Medium)
                 .fontColor(this.previewMode === mode ? Colors.ink : Colors.secondary)
                 .maxLines(1)
@@ -265,7 +267,7 @@ export struct LiveViewSettingsCard {
             }
             .layoutWeight(1)
             .height(30)
-            .padding({ left: 6, right: 6 })
+            .padding({ left: 3, right: 3 })
             .backgroundColor(this.previewMode === mode ? Colors.surface : Color.Transparent)
             .scale({ x: this.pressedId === mode ? MotionTokens.pressScale : 1, y: this.pressedId === mode ? MotionTokens.pressScale : 1 })
             .animation(Motion.state(this.env.reduceMotion))
