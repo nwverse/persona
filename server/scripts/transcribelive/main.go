@@ -14,7 +14,7 @@
 // Run it from server/:
 //
 //	cd server
-//	go run ./internal/transcribelive -hub http://127.0.0.1:18660 -token-file <file> -kb <PERSONA_HOME>/data -lang zh-CN -out /tmp/live-zh
+//	go run ./scripts/transcribelive -hub http://127.0.0.1:18660 -token-file <file> -kb <PERSONA_HOME>/data -lang zh-CN -out /tmp/live-zh
 //
 // Use a test hub: the meeting is made up and marked private, and the recording is deleted at the end (-keep keeps it).
 package main

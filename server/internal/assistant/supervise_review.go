@@ -367,6 +367,9 @@ func (s *Service) toolTaskReview(ctx context.Context, self string, args json.Raw
 				}
 			}
 			r := TaskReview{At: time.Now().UTC(), Verdict: verdict, Checks: checks, Note: note, UserCheck: a.UserCheck, WithdrewNeedsUser: withdraw}
+			if r.UserCheck {
+				r.Reason, r.Link = strings.TrimSpace(a.Reason), validWebURL(a.Link)
+			}
 			reviewedAt = r.At
 			v.applyChecks(checks, r.At, "supervisor:"+self)
 			if verdict == reviewNeedsUser {
