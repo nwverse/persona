@@ -219,6 +219,8 @@ type PlanTask struct {
 	inPane    string
 	planID    string
 	planIndex int
+	// The preview is metadata-only until admission saves its naming operation.
+	dispatchedWorkspace *dispatchedWorkspacePlan
 	// cwdStatus: what worktree.status said of cwdStatusOf (machine NUL cleaned cwd) in this resolve, kept so that
 	// resolveTaskRepo does not ask the machine twice for that folder. Never serialized.
 	cwdStatus   *proto.WorktreeStatus
@@ -332,7 +334,8 @@ func (s *Service) settleDelay(ctx context.Context) time.Duration {
 }
 
 type tasksState struct {
-	mu sync.Mutex
+	mu             sync.Mutex
+	closedTurnLogs []closedTurnLog // least recently seen first, protected by mu
 	// recoverBefore excludes starts admitted by this service before its background loops begin.
 	recoverBefore time.Time
 	// completionMu serializes a resumed turn with committing an earlier judgment.

@@ -3,6 +3,7 @@ import { currentHeaders, noteItemManager } from "./manager-choice";
 import { acceptanceStands, decisionDismissed, linkedParkInteraction, linkedParkOwnerAsk, parkInteractionID, reviewState, type Supervision } from "./supervision";
 import type { LineageStep, TaskBrief } from "./brief";
 import type { RuleSuggestion } from "./rule-suggestion";
+import type { TodoWait } from "./todo-wait-wire";
 import type { TodoSummary } from "./todo-view-wire";
 import { api, ApiError, enc } from "./api";
 import { parseAPIError, retryable, unrecoverableError } from "./api-errors";
@@ -191,6 +192,8 @@ export interface TodoBoardProjection {
 }
 
 export interface Todo {
+  /** Hub projection on list and detail reads. Older hubs omit it. */
+  wait?: TodoWait | null;
   id: string;
   title: string;
   notes?: string;
@@ -323,6 +326,7 @@ export interface TodoAsk {
   questions?: Question[];
   outcome?: "done" | "cannot" | "decide" | string;
   verdict: string;
+  summary?: string;
   recommend?: string;
   /** Direct evidence/PR/MR URL when present and not merely the to-do's own page (#14659). */
   link?: string;
@@ -1116,6 +1120,24 @@ export async function unseeTodo(id: string): Promise<Todo | undefined> {
     headers: currentHeaders(),
   });
   return r?.todo;
+}
+
+/** Adds an external PR blocker edge to an open to-do under todos_v2 (#16198, #16199). */
+export async function addTodoExternalPRBlocker(id: string, targetRef: string): Promise<TodoActiveBlocker> {
+  const r = await api<{ blocker: TodoActiveBlocker }>(`/todos/${enc(id)}/blockers`, {
+    method: "POST",
+    headers: currentHeaders(),
+    json: { kind: "external_pr", target_ref: targetRef.trim() },
+  });
+  return r.blocker;
+}
+
+/** Cancels an active blocker edge on a to-do under todos_v2 (#16198, #16199). */
+export async function cancelTodoBlocker(id: string, blockerId: string): Promise<void> {
+  await api<{ ok?: boolean }>(`/todos/${enc(id)}/blockers/${enc(blockerId)}`, {
+    method: "DELETE",
+    headers: currentHeaders(),
+  });
 }
 
 export async function deleteTodo(id: string): Promise<void> {

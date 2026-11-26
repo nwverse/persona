@@ -107,6 +107,45 @@ while not pathlib.Path(os.environ["FIXTURE_DUMP_CONTINUE"]).exists():
 	}
 }
 
+func TestDevelopmentBackupFailureRotation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("development helper needs Unix")
+	}
+	dir, home := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "hub.json"), []byte(`{"database_url":"fixture"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &DevelopmentConfig{Backup: DevelopmentBackupConfig{Builtin: true, Directory: "relative"}}
+	input := map[string]any{"runtime": home}
+	run := func(reason string) {
+		t.Helper()
+		var steps []string
+		err := DevelopmentRequest(context.Background(), cfg, dir, "backup", input, &DevelopmentBackup{}, func(p DevelopmentProgress) {
+			steps = append(steps, p.Step)
+		})
+		var failure backupFailure
+		if !errors.As(err, &failure) || failure.Reason != reason || strings.Join(steps, ",") != "preflight" {
+			t.Fatalf("unexpected failure or steps: %+v %v", failure, steps)
+		}
+	}
+	run("directory")
+	old, err := os.ReadFile(filepath.Join(dir, "backup.log"))
+	if err != nil || !strings.Contains(string(old), "invalid backup directory") {
+		t.Fatal("missing first failure", err)
+	}
+	cfg.Backup.Directory = ""
+	input["hub_database"] = "password=fixture-secret invalid-key=private"
+	run("database")
+	previous, err := os.ReadFile(filepath.Join(dir, "backup.prev.log"))
+	if err != nil || string(previous) != string(old) {
+		t.Fatal("previous log was not preserved", err)
+	}
+	current, err := os.ReadFile(filepath.Join(dir, "backup.log"))
+	if err != nil || !strings.Contains(string(current), "invalid database connection parameters") || strings.Contains(string(current), "fixture-secret") {
+		t.Fatal("incorrect current log", err)
+	}
+}
+
 func TestDevelopmentWebRecoveryPreservesConflictingOverride(t *testing.T) {
 	dir := t.TempDir()
 	p := Pending{RecoveryReady: true, Web: filepath.Join(dir, "web"), WebPrev: filepath.Join(dir, "previous")}
@@ -242,5 +281,67 @@ func TestDevelopmentBackupConfigCoordinatedRequiresHooksForExtras(t *testing.T) 
 				t.Fatalf("ExternalQuiesce() = %v, want %v", got, tc.external)
 			}
 		})
+	}
+}
+
+func TestCancelDevelopmentBuildReapsProcessGroupAndRemovesWork(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	if runtime.GOOS == "windows" || err != nil {
+		t.Skip("development helper needs Python on Unix")
+	}
+	dir, bin := t.TempDir(), t.TempDir()
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("FIXTURE_SIGNALS", bin)
+	// The grandchild exits only on SIGTERM. Its parent waits for the child
+	// before exiting so the test observes both group delivery and reaping.
+	git := `import os, pathlib, signal, time
+root = pathlib.Path(os.environ["FIXTURE_SIGNALS"])
+signal.signal(signal.SIGINT, lambda *_: (root / ("int-" + str(os.getpid()))).touch())
+child = os.fork()
+if child:
+    signal.signal(signal.SIGTERM, lambda *_: None)
+    os.waitpid(child, 0)
+else:
+    signal.signal(signal.SIGTERM, lambda *_: exit(0))
+    (root / "ready").write_text(str(os.getpid()))
+    while True:
+        signal.pause()
+`
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte("#!"+python+"\n"+git), 0700); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- DevelopmentRequest(ctx, &DevelopmentConfig{}, dir, "build", map[string]any{
+			"candidate": DevelopmentCandidate{Commit: strings.Repeat("a", 40)},
+		}, &struct{}{}, nil)
+	}()
+	for {
+		if _, err := os.Stat(filepath.Join(bin, "ready")); err == nil {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("helper exited before launching its child: %v", err)
+		case <-time.After(10 * time.Millisecond):
+		case <-ctx.Done():
+			t.Fatal("child group did not start")
+		}
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("cancel did not reap the helper")
+	}
+	signals, _ := filepath.Glob(filepath.Join(bin, "int-*"))
+	work, _ := filepath.Glob(filepath.Join(dir, "build-*"))
+	if len(signals) != 2 || len(work) != 0 {
+		t.Fatalf("signal recipients %v, residual work %v", signals, work)
 	}
 }
