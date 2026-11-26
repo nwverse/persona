@@ -40,7 +40,7 @@ import { resolveSidebarDirections, sidebarConversations, SidebarDirectionsSectio
 import { conversationPage } from "../lib/conversation-page";
 import { href, navigate, onLinkClick, showsSession, type Route } from "../lib/router";
 import { useScrollMemory } from "../lib/scroll-memory";
-import { retryFullAgentSessions, useAgentSessions, useFullAgentSessions } from "../lib/sessions";
+import { hasAgentViews, retryFullAgentSessions, useAgentSessions, useFullAgentSessions } from "../lib/sessions";
 import { heldAsWorking, rowCards } from "../lib/supervisor-held";
 import { isInFlightLaunch } from "../lib/launch-handoff";
 import { getState, refresh, refreshTodos, useHubUnreachable, useStore } from "../lib/store";
@@ -779,7 +779,8 @@ function AgentsBlock(props: AgentsBlockProps) {
   // every session, and By to-do only on a hub that lists sessions by to-do; pins need the complete list too.
   // A filter or view the hub's paged list cannot ask for (model, pinned, search scope, several computers, the chat list…)
   // is answered by the complete list, which has every one of them: never a filter that half works
-  const paged = pagedAgentList({ bounded, byTodo, todosSupported, pins, stored, several }) && !chatList && pagedFilterOf(dimFilters) !== null;
+  const typedViews = useStore(hasAgentViews);
+  const paged = shown !== "state" && !(typedViews && showFilter) && pagedAgentList({ bounded, byTodo, todosSupported, pins, stored, several }) && !chatList && pagedFilterOf(dimFilters) !== null;
   const display: AgentsDisplayProps = { showFilter, dimFilters, chatList, displayValue };
   const chooseGrouping = useCallback((g: AgentGrouping) => {
     storeValue("persona.agentGrouping", g);
@@ -973,7 +974,7 @@ function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate,
   const listMenu = useMenu();
   const machineOrder = useMemo(() => machines.map((m) => m.id), [machines]);
   const rowOrder = useMemo(() => machineSessionPresentation(machines), [machines]);
-  const rowNeedsYou = useCallback((s: Session) => runtimeNeedsYou(s) && !rowCards(getState().interactions, s.machine_id, s.session_id).heldOnly, []);
+  const rowNeedsYou = useCallback((s: Session) => s.view ? s.view.counted === true : runtimeNeedsYou(s) && !rowCards(getState().interactions, s.machine_id, s.session_id).heldOnly, []);
   const listItems = agentListItems({ archives, hover, onNavigate, display: { value: displayValue, sort: sortByActivity, filter: showFilter } });
   const pagedHeldRows = useMemo(() => {
     if (listQuery.trim()) return [];
@@ -1273,7 +1274,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   const groups = useMemo(() => {
     if (shownGrouping === "space" || shownGrouping === "repo" || shownGrouping === "machine") return [];
     if (shownGrouping === "todo") return [];
-    return buildAgentGroups(unpinned, machines, "state", mutes, rowOrder, heldOrder);
+    return buildAgentGroups(unpinned, machines, "state", mutes, undefined, heldOrder);
   }, [unpinned, machines, shownGrouping, mutes, todos, rowOrder, heldOrder]);
   // by todo waits for the first GET /todos: the socket pushes the sessions before it answers, and a tree drawn without
   // the todos puts every agent under No to-do for a moment, then moves them under their todos (#2812); the chat list's
@@ -1669,7 +1670,7 @@ function AgentSection({ group, byTodo, showHost, reg, hover, activeKey, go, onRo
   );
 
   const heldRows = stay ? (group.heldSeen ?? []) : [];
-  const counted = stay ? Math.max(0, group.sessions.length - heldRows.length) : group.sessions.length;
+  const counted = group.state === "needs_you" ? group.sessions.filter((s) => s.view ? s.view.counted : true).length : stay ? Math.max(0, group.sessions.length - heldRows.length) : group.sessions.length;
   const countNode = <GroupCount n={counted} label={t("sidebar.agent_count", { count: counted })} />;
   const rightNode = group.todoStatus ? (
     <span className={cx("text-[11px] font-semibold tracking-normal normal-case", statusTone)}>

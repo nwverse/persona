@@ -5,6 +5,7 @@
   "cancelling": "正在取消…",
   "stop_after_backup": "将在备份完成后停止…",
   "cancelled": "已取消",
+  "progress_step_preflight": "检查备份设置",
   "pipeline_title": "更新流程",
   "pipeline_stages": "更新阶段",
   "pipeline_steps": "当前阶段的步骤",

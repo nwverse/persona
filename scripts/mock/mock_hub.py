@@ -2650,6 +2650,8 @@ ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "A
                     "agent_tasks": False, "inbox_signals": False, "archive_closed_days": 3,
                     # Close an Agent's terminal when its session ends (#10355), off by default.
                     "close_ended_terminals": False,
+                    # Which automatic supervision messages are sent (#16417): all (default), outcomes or off.
+                    "auto_supervision_mode": "all",
                     # Learn from finished tasks (#12295), off by default; a project's lessons: project_lessons_mock.py.
                     "task_lessons": False,
                     # The manager's next-message suggestions (#4644), off by default; MOCK_NEXT_SUGGESTIONS=1 starts on.
@@ -2673,17 +2675,21 @@ ASSISTANT_CONFIG = {"machine_id": "server", "launcher": "claude", "timezone": "A
                     "meeting_attendance_default": os.environ.get("MOCK_MEETING_ATTENDANCE_DEFAULT", "off"),
                     "meeting_transcription_default": os.environ.get("MOCK_MEETING_TRANSCRIPTION_DEFAULT", "device"),
                     "meeting_glossary": [], "meeting_transcription_extension": "",
-                    # How long recordings stay (#3235, MOCK_RECORDING_DAYS) and a meeting's minutes after its transcript
-                    # went (#3780, MOCK_MINUTES_DAYS): 0 means forever; finite windows are never fewer than the recordings'.
-                    "recording_days": int(os.environ.get("MOCK_RECORDING_DAYS", "14")),
+                    # How long recording audio stays (#16412, formerly recording_days; MOCK_RECORDING_DAYS), a recording's
+                    # text (forever until a PUT changes it) and a meeting's minutes after its transcript went (#3780,
+                    # MOCK_MINUTES_DAYS): 0 means forever; finite minutes windows are never fewer than the text's.
+                    "recording_audio_days": int(os.environ.get("MOCK_RECORDING_DAYS", "14")),
+                    "recording_text_days": 0,
                     "minutes_days": int(os.environ.get("MOCK_MINUTES_DAYS", "0")),
                     # Knowledge points by topic (#3783), on by default; MOCK_KB_TOPICS_OFF=1 starts it off (#7251's empty map).
                     "kb_topics": os.environ.get("MOCK_KB_TOPICS_OFF") != "1",
                     # The sidebar's Recent lists the scheduled tasks' chats too (#8324), off by default;
                     # MOCK_RECENT_TASK_CHATS=1 starts on; =absent is a hub from before it. Left out with MOCK_LEGACY_HUB.
                     "recent_task_chats": os.environ.get("MOCK_RECENT_TASK_CHATS") == "1"}
-# What PUT /api/v1/assistant takes for the two retentions, as the hub's profile_write.go.
-RETENTION_BOUNDS = {"recording_days": (1, 365), "minutes_days": (0, 3650)}
+# What PUT /api/v1/assistant takes for the retentions, as the hub's profile_write.go; recording_days is the old name of
+# recording_audio_days.
+RETENTION_BOUNDS = {"recording_days": (1, 3650), "recording_audio_days": (0, 3650), "recording_text_days": (0, 3650),
+                    "minutes_days": (0, 3650)}
 
 
 def assistant_state(space="", archived=False):
@@ -2695,7 +2701,9 @@ def assistant_state(space="", archived=False):
     out = {"manager": MANAGERS["default"], "machine_id": cfg["machine_id"], "launcher": cfg["launcher"],
            "cwd": home + "/.persona/" + (space or "assistant") if home else "",
            "timezone": cfg["timezone"], "notes_effective": notes.strip(), "main_tasks_quiet": cfg["main_tasks_quiet"],
-           "recording_days": cfg["recording_days"], "minutes_days": 0 if cfg["minutes_days"] == 0 else max(cfg["minutes_days"], cfg["recording_days"]),
+           "recording_days": cfg["recording_audio_days"], "recording_audio_days": cfg["recording_audio_days"],
+           "recording_text_days": cfg["recording_text_days"],
+           "minutes_days": 0 if cfg["minutes_days"] == 0 or cfg["recording_text_days"] == 0 else max(cfg["minutes_days"], cfg["recording_text_days"]),
            "conversations": [s for s in ASSISTANT if s["machine_id"] == cfg["machine_id"] and s.get("space", "") == space
                              and (archived or not s.get("archived"))]}
     if not os.environ.get("MOCK_LEGACY_HUB"):
@@ -2703,6 +2711,7 @@ def assistant_state(space="", archived=False):
         out.update(work_guide=MANAGER_WORK_GUIDES.get(MANAGERS["default"], False), agent_tasks=cfg["agent_tasks"], task_lessons=cfg["task_lessons"], close_ended_terminals=cfg["close_ended_terminals"], inbox_signals=cfg["inbox_signals"], archive_closed_days=cfg["archive_closed_days"],
                    idle_close_hours=cfg["idle_close_hours"], kb_topics=cfg["kb_topics"],
                    main_supervises_own_tasks=cfg["main_supervises_own_tasks"], next_suggestions=cfg["next_suggestions"],
+                   auto_supervision_mode=cfg["auto_supervision_mode"], auto_supervision_messages=cfg["auto_supervision_mode"] != "off",
                    claude_interactive=cfg["claude_interactive"],
                    start_requested_tasks=cfg["start_requested_tasks"], task_workspace_preference=cfg["task_workspace_preference"],
                    default_permission_mode=cfg["default_permission_mode"],
@@ -4022,7 +4031,7 @@ def day_fields(body):
 
 
 def day_expired(rid, body):
-    days = ASSISTANT_CONFIG["recording_days"]
+    days = ASSISTANT_CONFIG["recording_text_days"]
     return rid in RECORDINGS_TRIMMED or bool(days and day_time(body["started_at"]) < datetime.now(timezone.utc) - timedelta(days=days))
 
 
@@ -4736,7 +4745,8 @@ def assistant_for_manager(h):
     st = assistant_state("", False)
     notes = MANAGER_NOTES.get(mid, "")
     # Another manager is one from before meeting attendance and the retention settings: none of their fields.
-    st = {k: v for k, v in st.items() if k not in ("main", "notes", "meeting_attendance_default", "recording_days", "minutes_days",
+    st = {k: v for k, v in st.items() if k not in ("main", "notes", "meeting_attendance_default", "recording_days", "recording_audio_days",
+                                                           "recording_text_days", "minutes_days",
                                                            "meeting_transcription_default", "meeting_glossary", "meeting_transcription_extension", "meeting_transcription_ready")}
     if "work_guide" in st:
         st["work_guide"] = MANAGER_WORK_GUIDES.get(mid, False)
@@ -7660,7 +7670,9 @@ def recordings_route_locked(h, method, p):
     if os.environ.get("MOCK_RECORDINGS_DOWN") == "1":
         return h.send_json({"error": "知识库暂时不可用", "code": "kb_unavailable"}, 503) or True
     if p == "/api/v1/recordings" and method == "GET":
-        return h.send_json({"days": ASSISTANT_CONFIG["recording_days"], "deleted": sorted(RECORDINGS_DELETED),
+        audio = ASSISTANT_CONFIG["recording_audio_days"]  # phones take 1–365 as days (#16412)
+        return h.send_json({"days": audio if 0 < audio <= 365 else 365, "audio_days": audio,
+                            "text_days": ASSISTANT_CONFIG["recording_text_days"], "deleted": sorted(RECORDINGS_DELETED),
                             "recordings": [{"id": k, "revision": v["revision"], "complete": v.get("complete", False),
                                             "started_at": v["started_at"],
                                             **({f: v[f] for f in ("kind", "day", "part", "next", "base", "recap_state", "recap_final", "recap_final_at") if f in v}
@@ -29575,6 +29587,10 @@ class H(BaseHTTPRequestHandler):
                 ASSISTANT_CONFIG["task_lessons"] = body["task_lessons"]
             if isinstance(body.get("inbox_signals"), bool):
                 ASSISTANT_CONFIG["inbox_signals"] = body["inbox_signals"]
+            if body.get("auto_supervision_mode") in ("all", "outcomes", "off"):
+                ASSISTANT_CONFIG["auto_supervision_mode"] = body["auto_supervision_mode"]
+            elif isinstance(body.get("auto_supervision_messages"), bool):
+                ASSISTANT_CONFIG["auto_supervision_mode"] = "all" if body["auto_supervision_messages"] else "off"
             if isinstance(body.get("main_supervises_own_tasks"), bool) and not os.environ.get("MOCK_LEGACY_HUB"):
                 ASSISTANT_CONFIG["main_supervises_own_tasks"] = body["main_supervises_own_tasks"]
             if isinstance(body.get("kb_topics"), bool):
@@ -29605,7 +29621,7 @@ class H(BaseHTTPRequestHandler):
             if MEETING_ATTENDANCE and "meeting_attendance_default" in body:
                 ASSISTANT_CONFIG["meeting_attendance_default"] = body["meeting_attendance_default"]
             for key in RETENTION_BOUNDS:
-                if key in body: ASSISTANT_CONFIG[key] = body[key]
+                if key in body: ASSISTANT_CONFIG["recording_audio_days" if key == "recording_days" else key] = body[key]
             ASSISTANT_CONFIG.update(transcription_config)
             return self.send_json(assistant_state())
         if "/health/reports/" in p and p.startswith("/api/v1/machines/") and self.command == "DELETE":

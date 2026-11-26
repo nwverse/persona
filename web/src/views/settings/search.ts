@@ -94,7 +94,7 @@ const SHARED_INDEX: SearchGroup[] = [
     group: t("settings-assistantsettings.agents_title"),
     hint: words(
       t("settings-assistantsettings.auto_naming"), t("settings-assistantsettings.auto_naming_max"), t("settings-assistantsettings.auto_naming_periodic"),
-      t("settings-assistantsettings.auto_naming_interval"), t("settings-assistantsettings.main_supervises"), t("settings-assistantsettings.auto_supervision_messages"), t("settings-assistantsettings.delivery_gate"), t("settings-assistantsettings.agent_tasks"), t("settings-assistantsettings.close_ended_terminals"),
+      t("settings-assistantsettings.auto_naming_interval"), t("settings-assistantsettings.main_supervises"), t("settings-assistantsettings.auto_supervision_mode"), t("settings-assistantsettings.delivery_gate"), t("settings-assistantsettings.agent_tasks"), t("settings-assistantsettings.close_ended_terminals"),
       t("settings-assistantsettings.inbox_signals"), t("settings-assistantsettings.idle_close"), t("settings-assistantsettings.archive_closed"),
     ),
     anchor: "agents",
@@ -114,7 +114,7 @@ const SHARED_INDEX: SearchGroup[] = [
   },
   { tab: "persona", group: t("settings-standing.title"), anchor: "standing-authorizations" },
   { tab: "persona", group: t("settings-assistantsettings.meeting_attendance"), hint: t("settings-assistantsettings.meetings_title"), anchor: "meetings" },
-  { tab: "persona", group: t("settings-assistantsettings.recordings_title"), hint: words(t("settings-assistantsettings.recording_days"), t("settings-assistantsettings.minutes_days")), anchor: "recordings" },
+  { tab: "persona", group: t("settings-assistantsettings.recordings_title"), hint: words(t("settings-assistantsettings.recording_days"), t("settings-assistantsettings.recording_audio_days"), t("settings-assistantsettings.recording_text_days"), t("settings-assistantsettings.minutes_days")), anchor: "recordings" },
   { tab: "persona", group: t("settings-assistantsettings.knows_title"), hint: words(t("settings-assistantsettings.about_me"), t("settings-assistantsettings.memory")), anchor: "knows" },
   { tab: "persona", group: t("settings-directionnotes.title"), anchor: "direction-notes" },
   { tab: "persona", group: t("settings-assistantsettings.task_lessons"), hint: t("settings-assistantsettings.task_lessons_hint"), anchor: "task-lessons" },

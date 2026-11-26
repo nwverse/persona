@@ -967,6 +967,9 @@ func (b *BusHub) event(ctx context.Context, ev busEvent) error {
 		if err := decode(&p); err != nil {
 			return err
 		}
+		if p.Source != "" {
+			s.noteOwnerInstruction(ctx, p.SessionRef, p.Text, p.Source, p.ClientMsgID, p.At)
+		}
 		s.userSpokeText(ctx, p.SessionRef, p.Text)
 	case assistantwire.EventUserStopped:
 		var p SessionRef
