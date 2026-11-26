@@ -37,6 +37,16 @@ const DismissedInChat = "replied_in_chat"
 // their Reason dropped (assistant/fleet_routes.go).
 const DismissedExpired = "expired"
 
+// DismissedWithdrawn is the Reason of a Dismiss the manager hands the one waiting on a card that ended because the
+// asker went away before anyone answered it: its call ended, its hook disconnected and did not come back. Nobody
+// answered it: it is no decline (Resolution.Outcome). Only the manager sets it.
+const DismissedWithdrawn = "withdrawn"
+
+// DismissedCleared is the Reason of a Dismiss for a card that ended because it was cleared before anyone answered it:
+// a newer card replaced it, or it was no longer the one pending under its id. Nobody answered it: it is no decline
+// (Resolution.Outcome). Only the manager sets it.
+const DismissedCleared = "cleared"
+
 // AskedWithoutWaiting: ix is the assistant's ask_user raised with wait false (#4928, docs/assistant/assistant.md
 // "Asking without holding the turn"): its turn ended when the card went up, so no turn is held behind it. It is the
 // one ask_user card that is Resumable (a waiting one lives in the manager's memory and is not).
@@ -45,8 +55,8 @@ func (ix Interaction) AskedWithoutWaiting() bool { return ix.ToolName == "ask_us
 // OneTapQuestion is the question ix asks when one tap may answer it without opening the app (a notification's
 // options, a to-do's row): a question card with exactly one question, options to choose from and no fields to fill in,
 // not raised in a Just me turn (whose push says nothing of what it asks), and whose asker did not say going ahead
-// cannot be undone (cannotUndo: an answer that cannot be taken back needs a look first). A health conversation's card
-// is never answered so either; only the hub and the manager can tell one (identity.InHealthSpace on its cwd), and each
+// cannot be undone (cannotUndo: an answer that cannot be taken back needs a look first). A space conversation's card
+// is never answered so either; only the hub and the manager can tell one (identity.InSpace on its cwd), and each
 // checks it beside this. False otherwise.
 func (ix Interaction) OneTapQuestion() (Question, bool) {
 	if ix.Kind != IxQuestion || ix.ToolName == "persona_session_review" || len(ix.Questions) != 1 || len(ix.Fields) > 0 || len(ix.Questions[0].Options) == 0 ||
@@ -85,20 +95,24 @@ type Interaction struct {
 	Manager string `json:"manager,omitempty"`
 	// Private: a Just me turn raised it (docs/assistant/meeting-minutes.md "Just me"): its push and the Fleet Live
 	// Activity say nothing of what it asks, as a health conversation's card, and it never goes to Lark or a channel.
-	Private      bool       `json:"private,omitempty"`
-	ID           string     `json:"id"`
-	MachineID    string     `json:"machine_id"`
-	SessionID    string     `json:"session_id"`
-	SessionTitle string     `json:"session_title,omitempty"`
-	TaskTitle    string     `json:"task_title,omitempty"` // the task its agent works for (docs/assistant/unified-entry.md), set when sent to clients
-	Cwd          string     `json:"cwd,omitempty"`
-	Kind         string     `json:"kind"`
-	CreatedAt    time.Time  `json:"created_at"`
-	ExpiresAt    time.Time  `json:"expires_at"`
-	ToolName     string     `json:"tool_name,omitempty"`
-	ToolUseID    string     `json:"tool_use_id,omitempty"`
-	Questions    []Question `json:"questions,omitempty"`
-	Plan         string     `json:"plan,omitempty"`
+	Private      bool      `json:"private,omitempty"`
+	ID           string    `json:"id"`
+	MachineID    string    `json:"machine_id"`
+	SessionID    string    `json:"session_id"`
+	SessionTitle string    `json:"session_title,omitempty"`
+	TaskTitle    string    `json:"task_title,omitempty"` // the task its agent works for (docs/assistant/unified-entry.md), set when sent to clients
+	Cwd          string    `json:"cwd,omitempty"`
+	Kind         string    `json:"kind"`
+	CreatedAt    time.Time `json:"created_at"`
+	ExpiresAt    time.Time `json:"expires_at"`
+	// SeenAt is when the user first viewed an owner-only timed card in an app; nil while unseen.
+	SeenAt *time.Time `json:"seen_at,omitempty"`
+	// SeenTTLSeconds is the countdown length (in seconds) that starts once SeenAt is recorded.
+	SeenTTLSeconds int        `json:"seen_ttl_seconds,omitempty"`
+	ToolName       string     `json:"tool_name,omitempty"`
+	ToolUseID      string     `json:"tool_use_id,omitempty"`
+	Questions      []Question `json:"questions,omitempty"`
+	Plan           string     `json:"plan,omitempty"`
 	// An explicit independent session review (tool persona_session_review) keeps the report beside its ordinary
 	// question-card fallback. Older clients ignore these additive fields and retain every other card's decoding.
 	ReviewReport      string          `json:"review_report,omitempty"`
@@ -107,9 +121,14 @@ type Interaction struct {
 	ToolInput         json.RawMessage `json:"tool_input,omitempty"`
 	// PlanThen is the permission mode recorded at a plan-mode start to use after approval; empty on legacy cards.
 	PlanThen string `json:"plan_then,omitempty"`
-	// EditableText is the outgoing body text a Claude Code Lark send/reply approval card may let the user edit before
-	// allowing. It is set only by that command gate; runtimes and other cards cannot declare it.
+	// EditableText is the outgoing body text an eligible Lark send/reply approval card (Claude Code Bash PreToolUse or a
+	// local assistant_environment runtime command gate) may let the user edit before allowing. Only those command gates
+	// set it; untrusted runtimes and other cards cannot declare it.
 	EditableText string `json:"editable_text,omitempty"`
+	// OutwardWrite marks a permission card raised by a trusted connector gate for an outward write acting as
+	// the owner (node/larkgate.go). Runtimes cannot declare it (node/runtimes_events.go clears it), and the
+	// manager honors it only on permission cards.
+	OutwardWrite bool `json:"outward_write,omitempty"`
 	// Format is a script ask's opt-in card rendering. Only "markdown" is emitted; absent keeps literal text.
 	Format          string       `json:"format,omitempty"`
 	Summary         string       `json:"summary,omitempty"`
@@ -124,6 +143,12 @@ type Interaction struct {
 	// CanClarify advertises an assistant-owned prepared approval whose owner may ask a question without resolving it.
 	// Only the authoritative creation path sets it; older clients ignore it and keep their existing Allow/Deny behavior.
 	CanClarify bool `json:"can_clarify,omitempty"`
+	// NoHandBack marks a card that has no interactive computer terminal or UI to hand back to (manager-owned approvals,
+	// headless assistant conversations and command gates, and headless ACP companions such as Antigravity (agy),
+	// Grok (grok / grok-chat), and the builtin OpenCode companion (opencode, distinct from the opencode-<pid> TUI
+	// plugin) where dismiss cancels or denies instead of handing back). Only the manager sets it; absent or false
+	// preserves the existing "Leave to computer" action for interactive terminal cards and older hubs.
+	NoHandBack bool `json:"no_hand_back,omitempty"`
 	// Detachable is a node command gate's request to release its initial hook while the owner decides. The manager
 	// honors it only for a permission in one of its assistant conversations with complete input and ExecutionCwd;
 	// a later Allow creates a one-time grant for the exact original call rather than executing it in another process.
@@ -202,6 +227,9 @@ type Interaction struct {
 	// FoldedUnder is its session's Session.FoldedUnder: the listed session whose chat shows the card when the asking
 	// session is a child folded under it (docs/protocol/protocol.md "Session hierarchy"). Set when sent to clients.
 	FoldedUnder string `json:"folded_under,omitempty"`
+	// FoldedUnderMachineID is its session's Session.FoldedUnderMachineID: the machine of FoldedUnder when the parent
+	// lives on another computer; empty when on the same machine. Set beside FoldedUnder when sent to clients.
+	FoldedUnderMachineID string `json:"folded_under_machine_id,omitempty"`
 	// FoldedAs is its session's Session.FoldedAs: "worker" when the asking session is a tab's worker folded under its
 	// lead (#5180), "side" when it is a side session (#7944). Set beside FoldedUnder when sent to clients.
 	FoldedAs string `json:"folded_as,omitempty"`

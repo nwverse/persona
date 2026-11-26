@@ -12,8 +12,9 @@
 //
 // Only the hub's own times are compared with each other (its `seen_at`, the machine's `updated_at`): the page's clock
 // only says when to try again and when to give up.
-import { stateOf } from "./format";
+import { activityOf } from "./format";
 import { runtimeIdentity } from "./runtime-list";
+import { countSides, foldedStateWith } from "./side-fold";
 import type { ListCounts } from "./session-list";
 import { timeMs } from "./times";
 import type { Session } from "./types";
@@ -52,13 +53,17 @@ const expired = (m: SeenMark, now: number) => now - m.markedAt > SEEN_KEEP_MS ||
 
 /** Finished and not seen yet: Unread, or Just finished (seen as far as its state goes, but nobody looked, #9751). */
 export function unseen(s: Session): boolean {
-  const st = stateOf(s);
+  if (s.view) {
+    const reason = s.view.reason;
+    return !s.locallySeen && s.view.phase === "done" && (reason?.kind === "unseen" || reason?.kind === "just_finished" || (reason?.kind === "asks" && reason.unseen === true));
+  }
+  const st = activityOf(s);
   return st === "unread" || (st === "idle" && Boolean(s.work?.just_finished));
 }
 
 /** `s` as seen: no longer Unread, nor Just finished. */
 export function seenCopy(s: Session): Session {
-  return { ...s, state: "idle", ...(s.work?.just_finished ? { work: { ...s.work, just_finished: false } } : {}) };
+  return { ...s, state: "idle", ...(s.view ? { locallySeen: true } : {}), ...(s.work?.just_finished ? { work: { ...s.work, just_finished: false } } : {}) };
 }
 
 /** A mark for `s` as the page has it now; only an unseen one (Unread or Just finished) waits for the hub. */
@@ -76,7 +81,7 @@ export function markRecorded(s: Session, m: SeenMark): boolean {
  *  too old: the mark is done with, whatever any list says. */
 export function markEnded(s: Session, m: SeenMark, now: number): boolean {
   const newTurn = timeMs(s.updated_at) > m.updatedBefore + SEEN_SAME_TURN_MS;
-  const st = stateOf(s);
+  const st = activityOf(s);
   return newTurn || st === "working" || st === "needs_you" || expired(m, now);
 }
 
@@ -111,14 +116,22 @@ export function settleMarks(rows: Iterable<Session>, marks: SeenMarks, now: numb
 }
 
 /** `counts` as the page shows them, read with `rows` (as the list read them): an agent those rows still have Unread
- *  (or Just finished) that a mark holds seen is no longer counted so; the same object when none is. */
-export function heldCounts(counts: ListCounts, rows: readonly Session[], marks: SeenMarks, now: number): ListCounts {
+ *  (or Just finished) that a mark holds seen is no longer counted so; the same object when none is. A parent is counted
+ *  by its folded state (lib/side-fold.ts): its own mark leaves it Unread while one of its side sessions is, and
+ *  `sidesOf` (the side rows an open chat or the sidebar holds, each seen by its own mark) takes it out of Unread once
+ *  none of them is, before the hub's next read says so. */
+export function heldCounts(counts: ListCounts, rows: readonly Session[], marks: SeenMarks, now: number,
+  sidesOf?: (s: Session) => readonly Session[] | undefined): ListCounts {
   let unread = 0, finished = 0;
   for (const s of rows) {
     const m = marks[runtimeIdentity(s)];
-    if (!m || heldSeen(s, m, now) === s) continue;
-    if (s.state === "unread") unread++;
-    else if (s.work?.just_finished) finished++;
+    const own = m ? heldSeen(s, m, now) : s;
+    const sides = s.children?.sides ? sidesOf?.(s) : undefined;
+    if (own === s && !sides) continue;
+    // what the hub counted it as, and what the page shows
+    const counted = foldedStateWith(s);
+    if (counted === "unread" && foldedStateWith(own, sides && countSides(sides)) !== "unread") unread++;
+    else if (own !== s && counted !== "unread" && s.work?.just_finished) finished++;
   }
   if (!unread && !finished) return counts;
   const state = { ...counts.state };

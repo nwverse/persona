@@ -71,7 +71,13 @@ func testScheduledUsageLimitRetryRestoredAfterRestart(t *testing.T, st Store) {
 	}
 	t.Cleanup(func() {
 		close(releaseOld)
-		<-oldExited
+		// Only a watcher parked at its deadline is waited for. A test that failed before one got there must stay a
+		// failure, not hang its partition; one that arrives later passes the closed releaseOld and exits (#16028).
+		select {
+		case <-oldAtDeadline:
+			<-oldExited
+		default:
+		}
 	})
 
 	limitRun(t, n, first, nil)
@@ -182,7 +188,7 @@ func testTaskReceiptRecheckRestoredAfterRestart(t *testing.T, st Store) {
 	first := newServiceOn(t, f, st)
 	startedTask(t, first, f)
 	ctx := context.Background()
-	first.taskWorking(ctx, "box", "s1")
+	first.taskWorking(ctx, "box", "s1", startRow{})
 	f.setItems(turnPage("turn-1", "Delivery verified", true)...)
 	f.setSessions("box", proto.Session{MachineID: "box", SessionID: "s1", Agent: "codex", Status: proto.StatusDone,
 		State: proto.StateIdle, LastText: "Delivery verified", UpdatedAt: time.Now(), Rev: 1})

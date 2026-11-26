@@ -84,6 +84,10 @@ struct MeetingPage: View {
 
     private var paused: Bool { capture.state == .paused }
 
+    /// What the page offers for this recording on this hub (`MeetingRoomOffers`): everything, a replayed tape's little, or,
+    /// with the hub's recording module off (#15214), reading only.
+    private var offers: MeetingRoomOffers { .of(id, module: RecordingModule.allowance) }
+
     var body: some View {
         Group {
             if let entry = library.entry(id) {
@@ -114,7 +118,8 @@ struct MeetingPage: View {
     }
 
     private func watch(_ recording: UUID) {
-        guard watching == nil else { return }
+        // Not with the hub's recording module off (#15214): `GET …/live` is gone with it, and the page reads without it.
+        guard watching == nil, MeetingRoomOffers.of(recording, module: RecordingModule.allowance).liveWatch else { return }
         watching = recording
         conversation.watch(recording, by: owner)
     }
@@ -134,7 +139,7 @@ struct MeetingPage: View {
             .safeAreaInset(edge: .bottom, spacing: Theme.Space.flush) {
                 VStack(spacing: Theme.Space.flush) {
                     if showsStopSpeaking { stopSpeaking }
-                    MeetingPageBar(entry: entry, mode: .live, paused: paused, justMe: $justMe, focus: $writing)
+                    MeetingPageBar(entry: entry, mode: .live, paused: paused, offers: offers, justMe: $justMe, focus: $writing)
                 }
             }
             .onChange(of: exchanges.compactMap(\.answer)) { old, new in
@@ -228,10 +233,10 @@ struct MeetingPage: View {
                     .accessibilityAddTraits(.isHeader)
                     .accessibilityIdentifier("recording-now-title")
                 // A replayed tape (#10589): where the tape is of its length, and its speed.
-                if MeetingRoomOffers.of(entry.id).replayClock { MeetingReplayStateLine(paused: paused) } else { stateLine() }
+                if offers.replayClock { MeetingReplayStateLine(paused: paused) } else { stateLine() }
             }
             .frame(maxWidth: .infinity)
-            if MeetingRoomOffers.of(entry.id).pageMenu {
+            if offers.pageMenu {
                 pageMenu(entry)
             } else {
                 // The menu's room, so the title stays in the middle.
@@ -424,7 +429,8 @@ struct MeetingPage: View {
     }
 
     private func thread(_ entry: RecordingEntry) -> some View {
-        MeetingThreadView(entry: entry, mode: mode, justMe: mode == .live && justMe, exchanges: exchanges, shown: $shown)
+        MeetingThreadView(entry: entry, mode: mode, justMe: mode == .live && justMe, exchanges: exchanges,
+                          photoDelete: offers.photoDelete, shown: $shown)
     }
 
     /// A scroll view that follows its newest end until the reader's finger takes it (`larkFollowsEnd`, as the live
@@ -579,8 +585,18 @@ struct MeetingPage: View {
         .animation(reduceMotion ? nil : Theme.Motion.state, value: writing)
         // In the sheet its ✕ at the leading corner (#9653, `SheetClose`); pushed, the back button there. The ⋯ trailing.
         .toolbar {
-            if let close { SheetClose(id: "recording-wrapup-done") { close() } }
-            if MeetingRoomOffers.of(entry.id).handOff { ToolbarItem(placement: .topBarTrailing) { afterMenu(entry) } }
+            if let close {
+                SheetClose(id: "recording-wrapup-done") { close() }
+            } else {
+                ToolbarItem(placement: .principal) {
+                    Text("Meeting")
+                        .font(Theme.Font.heading)
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .accessibilityAddTraits(.isHeader)
+                }
+            }
+            if offers.afterMenu { ToolbarItem(placement: .topBarTrailing) { afterMenu(entry) } }
         }
         .toolbar(.visible, for: .navigationBar)
         .fullScreenCover(isPresented: $mapFull) { mapPage(entry) }
@@ -594,7 +610,7 @@ struct MeetingPage: View {
         .onChange(of: writing) { _, now in if now { afterPart = .conversation } }
         .onChange(of: minutes.ready, initial: true) { _, ready in cardsFollow(ready, entry: entry) }
         .safeAreaInset(edge: .bottom, spacing: Theme.Space.flush) {
-            if MeetingRoomOffers.of(entry.id).followup { afterBar(entry) }
+            if offers.followup { afterBar(entry) }
         }
         .voiceUnavailableAlert($voiceNote, model: model)
         // Whether the follow-up's hub has a voice to call (at most once a minute, `VoiceSupport`). The id says whether the
@@ -633,7 +649,7 @@ struct MeetingPage: View {
             MeetingAfterHeader(entry: entry)
             // Its latest hand-off to an Agent (#8852): where it went, or why it didn't.
             if let h = MeetingHandoff.newer(handed, minutes.handoff) {
-                MeetingHandoffRow(handoff: h, mayRetry: handoffMaterial(entry), open: { openHandedAgent(h) }) {
+                MeetingHandoffRow(handoff: h, mayRetry: offers.handOff && handoffMaterial(entry), open: { openHandedAgent(h) }) {
                     handing = MeetingHandoffAsk(again: h)
                 }
             }
@@ -648,7 +664,7 @@ struct MeetingPage: View {
                 MeetingSummaryCard(summary: minutes.ready.flatMap(MeetingAfterSummary.make)) { minutesLine }
             }
             if let cards = minutesCards, let actions = cards.cards.first(where: { $0.kind == .actions }) {
-                MinutesCard(card: actions, recording: id, offered: cards.offered, addable: cards.addable, asking: minutes.asking,
+                MinutesCard(card: actions, recording: id, offered: cards.offered && minutes.offersWrites, addable: cards.addable, asking: minutes.asking,
                             add: { ids in addTodos(ids, entry: entry) }, show: { _ in afterPart = .transcript })
                     .environment(\.minutesBoxed, true)
             }
@@ -696,10 +712,10 @@ struct MeetingPage: View {
     /// Agent (#8852) for someone with an Agent to take it.
     private func afterMenu(_ entry: RecordingEntry) -> some View {
         Menu {
-            Button { renaming = id } label: { Label("Rename", systemImage: Theme.Icon.edit) }
+            if offers.rename { Button { renaming = id } label: { Label("Rename", systemImage: Theme.Icon.edit) } }
             Button { opening = true } label: { Label("Recording Details", systemImage: Theme.Icon.recording) }
                 .accessibilityIdentifier("meeting-after-details")
-            MeetingHandoffMenuItem(material: handoffMaterial(entry)) { handing = MeetingHandoffAsk(again: nil) }
+            if offers.handOff { MeetingHandoffMenuItem(material: handoffMaterial(entry)) { handing = MeetingHandoffAsk(again: nil) } }
         } label: {
             ThemedIcon(Theme.Icon.more).font(Theme.Font.heading)
                 .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
@@ -756,15 +772,17 @@ struct MeetingPage: View {
     /// chat's way: docs/assistant/voice.md 6.2), with the line a call that ended by itself leaves over it.
     @ViewBuilder private func afterBar(_ entry: RecordingEntry) -> some View {
         let key = conversation.followupKey(id)
-        let call = key.flatMap { key in calls.current.flatMap { $0.key == key ? $0 : nil } }
+        // The bar and the ended line are the voice module's (`ConversationVoice`); without it no call starts here.
+        let voice = model.voice
+        let inCall = key.map { voice?.isLive(on: $0) ?? false } ?? false
         VStack(spacing: Theme.Space.s) {
-            if let call, call.isOver, case .ended(let end) = call.phase, let note = VoiceEndNote.make(end, extensionID: call.extensionID) {
-                VoiceEndedStrip(call: call, note: note)
+            if let voice, let key, !inCall, voice.showsEnded(on: key) {
+                voice.endedLine(key: key)
                     .padding(.horizontal, Theme.Space.page)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            if let call, let key, !call.isOver {
-                VoiceBar(call: call, key: key, label: model.persona.name)
+            if let voice, let key, inCall {
+                voice.bar(key: key, label: model.persona.name)
                     .padding(.horizontal, Theme.Space.page)
                     .padding(.vertical, Theme.Space.s)
                     .frame(maxWidth: .infinity)
@@ -780,7 +798,7 @@ struct MeetingPage: View {
     /// Voice Chat bound to the follow-up: only once it exists (with none yet the first request is typed, so no turn runs on
     /// the meeting's material alone), while nothing records (the microphone is the recording's) and the hub has a voice.
     private func voiceStart(_ key: SessionKey?, entry: RecordingEntry) -> (() -> Void)? {
-        guard let key, capture.state == .idle, conversation.followupHold(entry) == nil,
+        guard let key, capture.state == .idle, conversation.followupHold(entry) == nil, model.voice != nil,
               VoiceSupport.shared.availability(for: model.session(key), group: key.group).isAvailable else { return nil }
         return { voiceNote = VoiceEntry.start(key, model: model) { voiceNote = $0 } }
     }
@@ -839,7 +857,8 @@ struct MeetingPage: View {
         if case .ready = minutes.state { true } else { false }
     }
 
-    /// Where the minutes are, in the wrap-up's words: a spinner while they are written, a check once ready.
+    /// Where the minutes are, in the wrap-up's words: a spinner while they are written (or while the hub checks the
+    /// whole recording first, with how far it is: #13461), a check once ready.
     @ViewBuilder private var minutesLine: some View {
         if minutesAsked {
             Group {
@@ -847,7 +866,7 @@ struct MeetingPage: View {
                 case .writing:
                     HStack(spacing: Theme.Space.s) {
                         ProgressView()
-                        Text("Writing the minutes…")
+                        Text(MinutesWaitLine.of(minutes.transcription).title)
                     }
                 case .ready:
                     Label { Text("Minutes ready") } icon: { ThemedIcon(Theme.Icon.successFilled).foregroundStyle(Theme.positive) }
@@ -857,6 +876,10 @@ struct MeetingPage: View {
                     Label { Text("Waiting for the hub") } icon: { ThemedIcon(Theme.Icon.time).foregroundStyle(.secondary) }
                 case .failed:
                     Label { Text("The minutes couldn't be written.") } icon: { ThemedIcon(Theme.Icon.errorFilled).foregroundStyle(Theme.danger) }
+                case .paused:
+                    // The hub's recording module is off (#15214): a calm line, nothing to tap.
+                    Label { Text("Minutes paused") } icon: { ThemedIcon(Theme.Icon.pause).foregroundStyle(.secondary) }
+                        .accessibilityHint(Text(RecordingPausedNote.detail))
                 case .none, .unsupported:
                     EmptyView()
                 }
@@ -916,6 +939,7 @@ struct MeetingLiveBox: View {
 
     @State private var capture = RecordingCapture.shared
     @State private var transcription = MeetingTranscription.shared
+    @State private var phone = RecordingTranscription.shared
     @State private var rows: [LiveRow] = []
 
     private var paused: Bool { capture.state == .paused }
@@ -923,6 +947,9 @@ struct MeetingLiveBox: View {
     var body: some View {
         let hub = transcription.meeting(entry.id)
         let shown = transcription.shown(entry.id, role: entry.attendance?.role ?? .off)
+        // This iPhone can't transcribe the meeting (#13385): said where its own lines would show, instead of "Listening…".
+        let cannot = shown.hubLines ? nil : phone.cannot[entry.id]
+        let phoneWords = cannot.map { MeetingTranscriptionWords.phoneCannot($0, locale: entry.locale, fellBack: shown.fellBack) }
         // The hub's newest lines, keyed by their place in its live log (never renumbered): three, so cheap here.
         let lines = shown.hubLines ? hub.lines.suffix(Theme.Recording.liveLines).map {
             LiveRow(id: "hub-\($0.n)", start: $0.start, end: $0.end, text: $0.text)
@@ -933,10 +960,15 @@ struct MeetingLiveBox: View {
                 Text("Live").font(Theme.Font.captionStrong).foregroundStyle(.secondary)
                     .accessibilityAddTraits(.isHeader)
                 Spacer(minLength: Theme.Space.s)
-                // A caption is what is said now: nothing is behind.
-                if caption == nil { behind(lines.last) }
+                // A caption is what is said now: nothing is behind. A phone that can't transcribe isn't listening.
+                if caption == nil, cannot == nil { behind(lines.last) }
             }
-            if shown.fellBack { MeetingTranscriptionFallbackNotice(words: MeetingTranscriptionWords.fallback(hub)) }
+            if shown.fellBack {
+                let notice = MeetingTranscriptionWords.fallbackNotice(hub, service: transcription.service, phoneCannot: phoneWords)
+                MeetingTranscriptionFallbackNotice(words: notice.words, phone: notice.phone)
+            } else if let phoneWords {
+                MeetingTranscriptionFallbackNotice(words: phoneWords, identifier: "meeting-phone-cannot-transcribe")
+            }
             // Folded, only the newest: the caption when there is one, else the last line.
             ForEach(folded ? (caption == nil ? Array(lines.suffix(1)) : []) : lines) { row in
                 liveRow(row).accessibilityIdentifier(shown.hubLines ? "meeting-live-hub-line" : "meeting-live-line")

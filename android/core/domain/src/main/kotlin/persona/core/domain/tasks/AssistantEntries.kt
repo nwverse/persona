@@ -96,9 +96,11 @@ const val REVIEW_OVERDUE_MS = 60 * 60 * 1000L
 /**
  * The task waits for its supervisor's review, which is not the owner's to do yet: open, in `pending_review` for less than
  * [REVIEW_OVERDUE_MS] at [now] (epoch ms). False past that, and when the hub does not say since when (an older hub): the
- * review is then the owner's, as it was. An open ask or an asking Agent is the owner's whatever this says.
+ * review is then the owner's, as it was. An open ask or an asking Agent is the owner's whatever this says. An owner hold
+ * its Agent reported that the supervisor has not read yet (`unblock` supervisor, #13191) is the supervisor's however old.
  */
 fun Todo.supervisorReviewing(now: Long): Boolean {
+    if (hold?.unblock == HoldUnblock.Supervisor) return true // an owner hold its supervisor reads first (#13191)
     if (isDone || supervision?.state != "pending_review") return false
     val since = parseTime(supervision?.pendingSince)?.toEpochMilli() ?: return false
     return now - since < REVIEW_OVERDUE_MS

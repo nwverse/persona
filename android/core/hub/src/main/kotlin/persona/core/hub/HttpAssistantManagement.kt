@@ -33,6 +33,8 @@ class HttpAssistantManagement private constructor(
     private val runHttp = http.newBuilder().readTimeout(130, TimeUnit.SECONDS).build()
     /** Compacting may start the conversation's process first, and "New main chat" reads what the old one left: the hub allows a minute. */
     private val compactHttp = http.newBuilder().readTimeout(70, TimeUnit.SECONDS).build()
+    /** Switching or clearing a conversation's model allows up to 30 s on the hub (`model_pick.go`). */
+    private val modelPickHttp = http.newBuilder().readTimeout(MODEL_PICK_TIMEOUT_SECONDS, TimeUnit.SECONDS).build()
 
     override fun forManager(manager: String?): AssistantManagement =
         HttpAssistantManagement(base.toString(), token, http, isCurrent, manager.orEmpty())
@@ -85,6 +87,60 @@ class HttpAssistantManagement private constructor(
         require(id.isNotBlank())
         // One path segment, so a slash or a question mark in an id cannot change the route.
         assistant("DELETE", "standing-authorizations", id)
+    }
+
+    // Domain spaces (#13500, docs/web/web.md "Domain spaces (#13500)"): a slug or id is one path segment, so a slash in it cannot
+    // change the route. A hub before tracks answers 404 / 405, or a list without `tracks`.
+    override suspend fun tracks(): List<Track> {
+        val answer = try { assistant("GET", "tracks") } catch (failure: HubFailure) {
+            if (failure.status == 404 || failure.status == 405) throw TracksUnsupported() else throw failure
+        }
+        if (answer["tracks"] !is JsonArray) throw TracksUnsupported()
+        return answer.list("tracks")
+    }
+    override suspend fun trackKinds(): List<TrackKind> = assistant("GET", "track-kinds").list("kinds")
+    override suspend fun createTrack(track: TrackCreate): Track = JsonCodec.decodeFromJsonElement(
+        assistant("POST", "tracks", body = JsonCodec.encodeToJsonElement(TrackCreate.serializer(), track)))
+    override suspend fun changeTrack(slug: String, change: TrackChange): Track {
+        require(slug.isNotBlank())
+        return JsonCodec.decodeFromJsonElement(
+            assistant("PUT", "tracks", slug, body = JsonCodec.encodeToJsonElement(TrackChange.serializer(), change)))
+    }
+    override suspend fun spaceMd(slug: String): SpaceMd {
+        require(slug.isNotBlank())
+        return JsonCodec.decodeFromJsonElement(assistant("GET", "tracks", slug, "space-md"))
+    }
+    override suspend fun writeSpaceMd(slug: String, content: String, baseDigest: String): SpaceMd {
+        require(slug.isNotBlank())
+        return JsonCodec.decodeFromJsonElement(assistant("PUT", "tracks", slug, "space-md", body = buildJsonObject {
+            put("content", content)
+            put("base_digest", baseDigest)
+        }))
+    }
+    override suspend fun conversationCategories(session: SessionKey): ConversationCategories {
+        require(session.sessionId.isNotBlank())
+        return JsonCodec.decodeFromJsonElement(assistant("GET", "conversations", session.sessionId, "categories"))
+    }
+    override suspend fun changeConversationCategories(session: SessionKey, add: List<String>, remove: List<String>): ConversationCategories {
+        require(session.sessionId.isNotBlank())
+        return JsonCodec.decodeFromJsonElement(assistant("PUT", "conversations", session.sessionId, "categories", body = buildJsonObject {
+            if (add.isNotEmpty()) put("add", JsonArray(add.map { JsonPrimitive(it) }))
+            if (remove.isNotEmpty()) put("remove", JsonArray(remove.map { JsonPrimitive(it) }))
+        }))
+    }
+    override suspend fun extensionTrust(): List<ExtensionTrust>? {
+        val answer = try { assistant("GET", "extension-trust") } catch (failure: HubFailure) {
+            if (failure.status == 404 || failure.status == 405) return null else throw failure
+        }
+        if (answer["items"] !is JsonArray) return null
+        return answer.list("items")
+    }
+    override suspend fun setExtensionTrust(id: String, trust: ExtensionTrust): ExtensionTrust {
+        require(id.isNotBlank())
+        return JsonCodec.decodeFromJsonElement(assistant("PUT", "extension-trust", id, body = buildJsonObject {
+            put("trust", trust.trust)
+            put("categories", JsonArray(trust.categories.map { JsonPrimitive(it) }))
+        }))
     }
     // The hub waits up to 12 s for the computer's self-check, and a probe runs a real one-word turn on top of it.
     override suspend fun readiness(probe: Boolean): AssistantReadiness = JsonCodec.decodeFromJsonElement(
@@ -145,17 +201,61 @@ class HttpAssistantManagement private constructor(
     }
     override suspend fun setModelPick(session: SessionKey, pick: persona.core.contracts.ModelPick): persona.core.contracts.ModelPick {
         require(session.sessionId.isNotBlank() && pick.launcher.isNotBlank())
-        val answer = assistant("PUT", "conversations", session.sessionId, "model", body = buildJsonObject {
-            put("launcher", pick.launcher)
-            pick.model?.takeIf(String::isNotBlank)?.let { put("model", it) }
-            pick.effort?.takeIf(String::isNotBlank)?.let { put("effort", it) }
-            if (session.machineId.isNotBlank()) put("machine_id", session.machineId)
-        })
+        val answer = request(
+            method = "PUT",
+            segments = listOf("api", "v1", "assistant", "conversations", session.sessionId, "model"),
+            body = buildJsonObject {
+                put("launcher", pick.launcher)
+                pick.model?.takeIf(String::isNotBlank)?.let { put("model", it) }
+                pick.effort?.takeIf(String::isNotBlank)?.let { put("effort", it) }
+                if (session.machineId.isNotBlank()) put("machine_id", session.machineId)
+            },
+            client = modelPickHttp,
+        )
         return (answer["model_pick"] as? JsonObject)?.let { JsonCodec.decodeFromJsonElement<persona.core.contracts.ModelPick>(it) } ?: pick
     }
     override suspend fun clearModelPick(session: SessionKey) {
         require(session.sessionId.isNotBlank())
-        assistant("DELETE", "conversations", session.sessionId, "model")
+        val _ = request(
+            method = "DELETE",
+            segments = listOf("api", "v1", "assistant", "conversations", session.sessionId, "model"),
+            client = modelPickHttp,
+        )
+    }
+    override suspend fun conversationSwitchState(session: SessionKey): ConversationSwitchState {
+        require(session.machineId.isNotBlank() && session.sessionId.isNotBlank())
+        return JsonCodec.decodeFromJsonElement(
+            request(
+                "GET",
+                listOf("api", "v1", "assistant", "conversations", session.sessionId, "segments"),
+                query = mapOf("machine_id" to session.machineId),
+            ),
+        )
+    }
+    override suspend fun submitConversationSwitch(session: SessionKey, request: ConversationSwitchRequest) {
+        require(
+            session.sessionId.isNotBlank() &&
+                request.operationId.isNotBlank() &&
+                request.expectedEpoch >= 1 &&
+                request.sourceMachineId.isNotBlank() &&
+                request.machineId.isNotBlank() &&
+                request.launcher.isNotBlank(),
+        )
+        request(
+            "POST",
+            listOf("api", "v1", "assistant", "conversations", session.sessionId, "switch"),
+            body = buildJsonObject {
+                put("operation_id", request.operationId)
+                put("expected_epoch", request.expectedEpoch)
+                put("source_machine_id", request.sourceMachineId)
+                put("machine_id", request.machineId)
+                put("launcher", request.launcher)
+                request.model?.takeIf(String::isNotBlank)?.let { put("model", it) }
+                request.effort?.takeIf(String::isNotBlank)?.let { put("effort", it) }
+                request.permissionMode?.takeIf(String::isNotBlank)?.let { put("permission_mode", it) }
+            },
+            client = compactHttp,
+        )
     }
     override suspend fun archiveConversation(session: SessionKey) {
         require(session.sessionId.isNotBlank())
@@ -291,5 +391,22 @@ class HttpAssistantManagement private constructor(
         require(days in 1..7) { "days is 1 to 7" }
         val answer = request("GET", listOf("api", "v1", "usage", "hours"), query = mapOf("days" to days.toString()))
         return JsonCodec.decodeFromJsonElement(answer.getValue("usage"))
+    }
+
+    override suspend fun usageProjects(): UsageProjects? = try {
+        val answer = request("GET", listOf("api", "v1", "usage", "projects"))
+        JsonCodec.decodeFromJsonElement<UsageProjects>(answer.getValue("usage")).takeIf { it.ranges.isNotEmpty() }
+    } catch (failure: HubFailure) {
+        if (failure.status == 404) null else throw failure
+    }
+
+    override suspend fun usageProjectDetail(key: String): UsageProjectDetail {
+        require(key.isNotBlank()) { "project key is required" }
+        val answer = request("GET", listOf("api", "v1", "usage", "projects", "detail"), query = mapOf("key" to key))
+        return JsonCodec.decodeFromJsonElement(answer.getValue("usage"))
+    }
+
+    companion object {
+        internal const val MODEL_PICK_TIMEOUT_SECONDS = 40L
     }
 }

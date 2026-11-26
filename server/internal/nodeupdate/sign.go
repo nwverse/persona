@@ -27,7 +27,10 @@ func (m *Manager) signedStage(ctx context.Context, u *upload) (string, string) {
 	if m.signer == nil {
 		return u.Path, u.Spec.SHA256
 	}
-	check := func(path string) error { return selfCheck(ctx, path, u.Spec, m.requireResidentHandover) }
+	check := func(path string) error {
+		_, err := selfCheck(ctx, path, u.Spec, m.requireResidentHandover)
+		return err
+	}
 	for _, adhoc := range []bool{false, true} {
 		path, err := m.signedCopy(ctx, u.Path, adhoc, check)
 		var sum string
@@ -108,8 +111,8 @@ func (m *Manager) signInstalledLocked(ctx context.Context) (string, error) {
 		_ = os.Remove(signed)
 		return "", err
 	}
-	// The file is another one now: a later Commit compares the program with this one (errSuperseded).
-	if st, err := os.Stat(m.exe); err == nil {
+	// Keep the installed identity after signing so a later Commit can detect external replacements.
+	if st, err := executableInfo(m.exe); err == nil {
 		m.identity = st
 	}
 	return "sha256 " + newSum, nil

@@ -44,6 +44,8 @@ type SessionCapabilities struct {
 	// Absent/false keeps the conservative non-capable runtime routing and refusal behavior (#10338, #11121).
 	SupervisionPolicy bool `json:"supervision_policy,omitempty"`
 	Fork              bool `json:"fork,omitempty"`
+	// AnswerQuestions permits asynchronous question replies without granting permission approvals.
+	AnswerQuestions bool `json:"answer_questions,omitempty"`
 	// Close is independent of terminal access. Absent on older nodes, where clients retain terminal-only closing.
 	Close *bool `json:"close,omitempty"`
 	// Rename permits session.rename's title without a terminal (a runtime's session, #6294). Absent on older nodes,
@@ -77,3 +79,13 @@ func CanModes(on bool) *bool { return &on }
 
 // Bool returns a pointer to on for optional capability flags.
 func Bool(on bool) *bool { return &on }
+
+// CodeCodexEffortTerminal is a pre-launch refusal until the task card explains the fallback.
+const CodeCodexEffortTerminal = "codex_effort_terminal"
+
+// Session starts from a task card first request a notice. Only the acknowledged retry
+// pins the terminal route, so a change in daemon availability cannot stale the notice.
+const (
+	CodexFallbackNotify    = "notify"
+	CodexFallbackAnnounced = "announced"
+)

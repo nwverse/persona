@@ -7,10 +7,41 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/feishubot"
+	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/botcard"
 )
 
+func TestTopicTodoModeReadbackAndLegacyUpdate(t *testing.T) {
+	needsLarkModule(t)
+	w := newBotWorld(t)
+	w.pair(t)
+	put := func(body string, mode assistantwire.TopicTodoMode) {
+		t.Helper()
+		code, out := w.do(t, "PUT", "/api/v1/bots/feishu", body)
+		if code != 200 || out["topic_chats"].([]any)[0].(map[string]any)["todo_mode"] != string(mode) {
+			t.Fatalf("PUT %d: %v, want %s", code, out, mode)
+		}
+	}
+	put(`{"topic_chats":[{"chat_id":"oc_example"}]}`, assistantwire.TopicAnswerOnly)
+	put(`{"topic_chats":[{"chat_id":"oc_example","todo_mode":"main_decides"}]}`, assistantwire.TopicMainDecides)
+	put(`{"topic_chats":[{"chat_id":"oc_example","name":"Renamed"}]}`, assistantwire.TopicMainDecides)
+	code, out := w.do(t, "PUT", "/api/v1/bots/feishu", `{"topic_chats":[{"chat_id":"oc_example","todo_mode":"invalid"}]}`)
+	if code != 400 {
+		t.Fatalf("invalid mode: PUT %d: %v", code, out)
+	}
+	st := w.feishu(t, assistantwire.FeishuStatusGet, nil)
+	if modes, _ := st["topic_todo_modes"].(map[string]any); modes["oc_example"] != "main_decides" {
+		t.Fatalf("assistant status: %v", st)
+	}
+	put(`{"topic_chats":[{"chat_id":"oc_example","todo_mode":"always_todo"}]}`, assistantwire.TopicAlwaysTodo)
+	put(`{"topic_chats":[{"chat_id":"oc_example","todo_mode":"answer_only"}]}`, assistantwire.TopicAnswerOnly)
+	if st := w.feishu(t, assistantwire.FeishuStatusGet, nil); st["topic_todo_modes"] != nil {
+		t.Fatalf("assistant status did not return to default: %v", st)
+	}
+}
+
 func TestTopicStrictPolicyReadbackAndLegacyUpdate(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	w.pair(t)
 	put := func(body string) map[string]any {
@@ -49,6 +80,7 @@ func TestTopicStrictPolicyReadbackAndLegacyUpdate(t *testing.T) {
 }
 
 func TestTopicStrictPolicyBeforeCommandsAndHandoff(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	w.pair(t)
 	if code, out := w.do(t, "PUT", "/api/v1/bots/feishu", `{"topic_chats":[{"chat_id":"oc_strict","require_owner_mention":true},{"chat_id":"oc_topic"}]}`); code != 200 {
@@ -77,6 +109,7 @@ func TestTopicStrictPolicyBeforeCommandsAndHandoff(t *testing.T) {
 // Text, rich text and attachment captions all use the event's structured identity,
 // never a display name, textual @, or the binding of an existing topic.
 func TestTopicStrictPolicyMentionMatrix(t *testing.T) {
+	needsLarkModule(t)
 	for _, kind := range []string{"text", "post", "image", "file"} {
 		t.Run(kind, func(t *testing.T) {
 			w := newBotWorld(t)
@@ -136,6 +169,7 @@ func TestTopicStrictPolicyMentionMatrix(t *testing.T) {
 }
 
 func TestTopicStrictPolicyUnknownIdentityAndQueuedSettings(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	w.pair(t)
 	w.topicsOn(t, topicChat, "oc_strict")
@@ -159,7 +193,7 @@ func TestTopicStrictPolicyUnknownIdentityAndQueuedSettings(t *testing.T) {
 	w.api.botInfoFail = true
 	w.api.mu.Unlock()
 	w.h.bots.mu.Lock()
-	w.h.bots.info = feishubot.BotInfo{}
+	w.h.bots.info = botcard.BotInfo{}
 	w.h.bots.mu.Unlock()
 	before := len(w.handed())
 	w.send(t, botMessageEvent("om_unknown", "ou_me", "text", textContent("@_user_1 /topics home"), map[string]any{"chat_type": "group", "chat_id": "oc_strict", "thread_id": "omt_bound", "mentions": []any{map[string]any{"key": "@_user_1", "id": map[string]string{"open_id": "ou_bot"}}}}))
@@ -178,6 +212,7 @@ func (s topicPolicyFailStore) PutSetting(context.Context, string, any) error {
 }
 
 func TestTopicStrictPolicyDurabilityAndFailedSave(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	w.pair(t)
 	w.do(t, "PUT", "/api/v1/bots/feishu", `{"topic_chats":[{"chat_id":"oc_strict","require_owner_mention":true}]}`)
@@ -202,6 +237,7 @@ func TestTopicStrictPolicyDurabilityAndFailedSave(t *testing.T) {
 }
 
 func TestTopicStrictPolicyKeepsLegacyImplicitHome(t *testing.T) {
+	needsLarkModule(t)
 	w := newBotWorld(t)
 	w.pair(t)
 	w.topicsOn(t, topicChat)
