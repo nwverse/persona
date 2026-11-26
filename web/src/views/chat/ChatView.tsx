@@ -569,7 +569,6 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   const streamEnded = live.streamEnded && !inputAfterPreview;
   const replyPreview = inputAfterPreview ? "" : live.streaming;
   const [awaitNow, setAwaitNow] = useState(() => Date.now());
-  const turnFailure = session?.failure_reason || session?.turn_error || lastSeg?.cut ? { since: session?.state_since } : undefined;
   // a message whose wait the hub took a stop for (#2450): it is no longer worked on, so Working… and Interrupt go at
   // once instead of after AWAIT_MS; a turn the hub reports later still shows through `state`
   const [stoppedInput, setStoppedInput] = useState<{ chat: string; id: string }>();
@@ -581,7 +580,29 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
     lastSeg?.steps.some((step) => step.kind === "thinking" || (step.kind === "tool" && !step.result)));
   const pickupState = pickupStateForWait(state, session?.background_working, foregroundActive);
   const inputKey = lastSeg?.user ? `${mid}/${sid}/${lastSeg.user.id}` : undefined;
-  const hubStateAt = Date.parse(session?.state_since ?? "");
+  const status = {
+    chat: `${mid}/${sid}`, inputKey, since: session?.state_since, updatedAt: session?.updated_at, seenAt: session?.seen_at,
+    foreground: state === "working" && !session?.background_working, idle: state === "idle" || state === "unread",
+  };
+  const previousStatus = useRef<(typeof status & { priorWorking: boolean; priorExit: boolean; outcomeSince?: string }) | undefined>(undefined);
+  const previous = previousStatus.current?.chat === status.chat ? previousStatus.current : undefined;
+  const newInput = Boolean(inputKey && inputKey !== previous?.inputKey && !lastSeg?.user?.queued);
+  // A new echo while the same foreground run is still working does not take ownership of that run.
+  const priorWorking = Boolean(status.foreground && previous?.foreground && status.since === previous.since &&
+    (newInput || previous.priorWorking));
+  // Marking a finished session seen can advance state_since without changing the underlying outcome.
+  const sameOutcome = status.idle && previous?.idle &&
+    (status.since === previous.since || (state === "idle" && status.seenAt && status.seenAt !== previous.seenAt &&
+      status.updatedAt === previous.updatedAt));
+  const outcomeSince = sameOutcome ? previous.outcomeSince : status.since;
+  // The first exit belongs to the prior run unless this input already has transcript evidence of its own.
+  const priorExit = Boolean(status.idle && previous?.foreground && (newInput || previous.priorWorking) &&
+    !lastSeg?.answer && !lastSeg?.steps.length && !lastSeg?.blankReply) || Boolean(sameOutcome && previous.priorExit);
+  useLayoutEffect(() => {
+    previousStatus.current = { ...status, priorWorking, priorExit, outcomeSince };
+  });
+  const turnFailure = session?.failure_reason || session?.turn_error || lastSeg?.cut ? { since: outcomeSince } : undefined;
+  const hubStateAt = Date.parse(outcomeSince ?? "");
   const [observedInput, setObservedInput] = useState<{ key: string; hubStateAt: number; seenAt: number }>();
   const observedKey = observedInput?.key;
   useLayoutEffect(() => {
@@ -591,11 +612,11 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   }, [inputKey, hubStateAt, observedKey]);
   // The hub can deliver its idle update with the echo or just after it. Wait for it to stay idle
   // through the handoff before offering a retry, since the input and status come from separate streams.
-  const idleAt = observedInput && observedKey === inputKey && !live.streaming && (state === "idle" || state === "unread") &&
+  const idleAt = observedInput && observedKey === inputKey && !priorExit && !live.streaming && status.idle &&
     (hubStateAt > observedInput.hubStateAt || hubStateAt > Date.parse(lastSeg?.user?.ts ?? ""))
     ? observedInput.seenAt + RETRY_IDLE_GRACE_MS : undefined;
   const settled = idleAt !== undefined && awaitNow >= idleAt;
-  const awaitedTurn = awaitingTurn(lastSeg, pickupState, awaitNow, turnFailure, settled) ? lastSeg?.user?.id : undefined;
+  const awaitedTurn = awaitingTurn(lastSeg, pickupState, awaitNow, priorExit && !lastSeg?.cut ? undefined : turnFailure, settled) ? lastSeg?.user?.id : undefined;
   const awaiting = awaitedTurn !== undefined && awaitedTurn !== stoppedTurn && !streamEnded;
   const awaitingNow = useRef<string | undefined>(undefined);
   awaitingNow.current = awaiting ? awaitedTurn : undefined;
