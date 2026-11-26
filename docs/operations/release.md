@@ -415,6 +415,11 @@ curl -fsSL <publish.site_url>/install.sh | sh   # install to ~/.persona/bin/pers
   too, so sessions appear in Agents after the first install. Failure only prints one warning and doesn't affect `personad`; computers using Orca / Herdr App can skip it with `PERSONA_SKIP_HERDR=1`.
   `deploy.sh` does the same when installing `personad` on each computer (`scripts/deploy/ensure-herdr.sh`; keep the two sets of steps aligned).
 
+- **Two editions.** The same run builds the core edition (Persona Core alone, `persona_core_only`) for the same
+  platforms into `build-publish/core` (`scripts/release/core_edition.sh`), checks it and both editions against each
+  other, and lays it out as served: `core-<name>.gz`, `core-latest.json`, `core-SHA256SUMS`, `core-VERSION`.
+  `PERSONA_CORE_PACKAGES=0` leaves it out. A deploying run uploads it only with `PERSONA_PUBLISH_CORE=1`; the GitHub
+  release workflows do not attach it yet ([core-install.md](core-install.md)). `install.sh --core` installs it.
 - `release.sh` runs this after uploading TestFlight. The version is `<commit>-<build number>`, matching that TestFlight release; `NO_PUBLISH=1` only releases TestFlight,
   and no publish happens without `publish.site_url` in config. Standalone: `./scripts/release/publish.sh`; `NO_DEPLOY=1` only builds and checks (outputs in `build-publish/`). When the tag coordinator supplies `PERSONA_RELEASE_VERSION`, `publish.sh` instead uses that exact tag version, and the coordinator rejects a different manifest version before uploading assets.
 - Website-only changes (`site/`): `SITE_ONLY=1 ./scripts/release/publish.sh` skips a new build, fetches the small files of the currently published version (`VERSION`, `SHA256SUMS`, `latest.json`, `SLOT`, `install.sh`) and deploys them with the committed `site/`, leaving archives in R2 unchanged. Afterwards it checks the live small files are unchanged and every archive still exists (`HEAD` size). It refuses if there's no live `dl/SLOT` yet (a release from before R2); do one full publish first. **Don't run `wrangler deploy` directly in `site/`**: it makes `/dl/` and `install.sh` return 404 (`docs/lessons/server.md`).

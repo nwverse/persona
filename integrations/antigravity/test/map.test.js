@@ -20,6 +20,21 @@ import {
 } from '../lib/map.js'
 
 describe('antigravity transcript and tool mapping', () => {
+  it('keeps botmux marker lines out of reply previews within the current turn', () => {
+    const marker = 'BOTMUX_NOTHING_TO_SEND'
+    const reply = (content) => ({ type: 'PLANNER_RESPONSE', content })
+    const mention = `The guide mentions ${marker}.`
+    const mixed = reply(`${mention}\n${marker}`)
+    const steps = [mixed, reply(marker)]
+    for (const summaryOnly of [false, true]) {
+      const result = stepsToItems(steps, { summaryOnly })
+      assert.equal(result.lastText, mention)
+      if (!summaryOnly) assert.deepEqual(result.items.map((item) => item.text), [mixed.content, marker])
+      const next = { type: 'USER_INPUT', source: 'USER_EXPLICIT', content: 'Next question' }
+      assert.equal(stepsToItems([...steps, next, reply(marker)], { summaryOnly }).lastText, '')
+    }
+  })
+
   it('keeps reply previews within the latest explicit user turn', () => {
     const question = { type: 'PLANNER_RESPONSE', content: 'Which configuration should I use?' }
     const prompt = { type: 'USER_INPUT', source: 'USER_EXPLICIT', content: 'What were the results?' }
@@ -70,6 +85,15 @@ describe('antigravity transcript and tool mapping', () => {
       ['similar scheme', 'Content of persona-context-extra:///snapshot.txt:\n' + context + user, 'Content of persona-context-extra:///snapshot.txt:\n' + user],
       ['quoted label', 'Example:\n' + label + user, 'Example:\n' + label + user],
       ['incomplete envelope', label + '<persona-context>unfinished', label + '<persona-context>unfinished'],
+      ['leading resource with literal context tags', label + '<persona-context><persona-context>inner</persona-context>outer</persona-context>' + user, user],
+      ['leading resource with nested prose', label + '<persona-context>outer\n<persona-context>inner</persona-context>\n\nGenerated prose\n</persona-context>\n' + user, user],
+      ['trailing resource', user + '\n\n' + label + context, user],
+      ['trailing resource with literal context tags', user + '\n\n' + label + '<persona-context><persona-context>inner</persona-context>outer</persona-context>', user],
+      ['trailing resource before user prose', user + '\n\n' + label + '<persona-context>generated</persona-context>\n\nMy example: <persona-context>user</persona-context>', user + '\n\nMy example:'],
+      ['resources around user prose', user + '\n\n' + label + context + '\n\nkeep me\n\n' + label + context, user + '\n\nkeep me'],
+      ['trailing view errors', user + '\n\n<persona-view-errors>bad</persona-view-errors>', user],
+      ['malformed trailing URI', user + '\n\nContent of persona-context:// /snapshot.txt:\n' + context, user + '\n\nContent of persona-context:// /snapshot.txt:'],
+      ['quoted trailing label', 'Example: ' + label + context, 'Example: Content of persona-context:///snapshot.txt:'],
     ]
     for (const [name, content, expected] of cases) {
       const steps = [{ step_index: 0, type: 'USER_INPUT', source: 'USER_EXPLICIT', content }]

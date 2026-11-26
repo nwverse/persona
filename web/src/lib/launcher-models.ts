@@ -234,13 +234,13 @@ export function listedModes(l: Pick<Launcher, "permission_modes"> | undefined): 
 }
 
 /** How a start takes a thinking effort: `any` (Claude Code, Antigravity: its model's levels, all of them while its list
- *  doesn't say), `listed` (Codex and launchers that list permission modes, `listedModes`: only the levels its model
+ *  doesn't say), `listed` (Codex, TRAE CLI and launchers that list permission modes: only the levels its model
  *  reports, #8261, #13764), `none` (the rest keep their own). */
 export type EffortRule = "any" | "listed" | "none";
 
 export function effortRule(agent: string, l?: Pick<Launcher, "permission_modes">): EffortRule {
   if (agent === "claude" || agent === "agy") return "any";
-  return agent === "codex" || listedModes(l) ? "listed" : "none";
+  return agent === "codex" || agent === "traex" || listedModes(l) ? "listed" : "none";
 }
 
 /** Claude Code and Antigravity start with a thinking effort, and Codex or a launcher that lists its modes starts with
@@ -251,13 +251,13 @@ export function defaultModel(models: AgentModel[]): AgentModel | undefined {
   return models.find((m) => m.default);
 }
 
-/** Display only: explicit aliases win; raw GPT ids lose the prefix and separate their variant words. */
+/** Display only: explicit aliases win; raw GPT ids keep the GPT- prefix and separate their variant words. */
 export function modelName(m: { id: string; name?: string }): string {
   const name = m.name?.trim() ? m.name : m.id;
   if (name.toLowerCase() !== m.id.toLowerCase()) return name;
   const gpt = /^gpt-([a-z0-9]+(?:\.[a-z0-9]+)*(?:-[a-z0-9]+(?:\.[a-z0-9]+)*)*)$/i.exec(name);
   if (!gpt) return name;
-  return gpt[1].split("-").map((part, i) => i ? part[0].toUpperCase() + part.slice(1) : part).join(" ");
+  return `GPT-${gpt[1].split("-").map((part, i) => i ? part[0].toUpperCase() + part.slice(1) : part).join(" ")}`;
 }
 
 /** A catalog variant encodes its default effort in its model ID. */
@@ -314,7 +314,7 @@ export function effortChoices(list: LauncherModels | null | undefined, model: st
   const m = (id ? listedModel(list.models, id) : undefined) ?? (id ? undefined : defaultModel(list.models));
   // a typed ID (listed as typed before, or not at all): what it takes is not known
   const raw = m && !m.custom ? (m.efforts ?? []) : unknown;
-  return list.agent === "codex" ? raw.filter((e) => CODEX_LEVELS.has(e)) : raw;
+  return list.agent === "codex" || list.agent === "traex" ? raw.filter((e) => CODEX_LEVELS.has(e)) : raw;
 }
 
 /** The effort kept when the choices change: one they no longer offer goes back to "Launcher default". */

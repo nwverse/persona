@@ -47,6 +47,8 @@ type Node struct {
 	segmentStarts segmentStarts
 	segmentInputs segmentInputs
 	runtimeUsage  runtimeUsageReports
+	// usageDirs resolves the directories the usage names, while this connection's manager keeps them (usage_dirs.go).
+	usageDirs usageDirsOn
 
 	// Only the manager's initial node.info can negotiate source delivery on this connection.
 	managerInfoOnce sync.Once
@@ -125,6 +127,8 @@ type Node struct {
 	uid          string // the computer's own id (machineuid.go); empty when it could not be read or made
 	// Program is what bin is (nodeproto.ProgramPersonad / ProgramPersonaNode), for node.info; "" says nothing.
 	Program string
+	// Edition is the edition bin was built as (nodeproto.EditionFull when nothing says), for node.info.
+	Edition nodeproto.Edition
 	// managed: launchers kept by the hub (managed.go)
 	managed managedLaunchers
 	// external is registered only by this node's trusted local configuration.
@@ -391,8 +395,6 @@ type Node struct {
 	larkCfgAt    time.Time
 	larkCfgTryAt time.Time // the last attempt to refresh it, kept even when that failed
 	larkAllowed  map[string]bool
-	// editedAnswers carries an editable card's answer from askOnce to larkGateWithEdit, keyed by interaction id.
-	editedAnswers sync.Map
 	// secrets is a test's own hand-offs; nil: the process's, shared by every connection (secretenv.go handoffs).
 	secrets *secretStage
 	// gp is the proxy that adds the gates' credentials, made at its first use (gateproxy.go, #1317).
@@ -650,6 +652,7 @@ func (n *Node) Serve(ctx context.Context, r io.Reader, w io.Writer) error {
 	}
 	go n.meterUsage(ctx, n.stateReady)
 	go n.backfillUsage(ctx, n.stateReady) // the days before the hub's history, once (usage_backfill.go)
+	go n.resplitUsage(ctx, n.stateReady)  // the last week split by directory, once (usage_resplit.go)
 	go n.runUsageWindows(ctx)
 	go n.sampleMetrics(ctx)
 	go n.watchPorts(ctx)
@@ -1006,7 +1009,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		ResumeOnly       bool                          `json:"resume_only"`
 		OnlyRunning      bool                          `json:"only_running"` // assistant.compact: refuse not_running rather than start the process
 		IsMain           bool                          `json:"is_main"`
-		MainCompact      int                           `json:"main_compact_window"` // assistant.send, session.send, assistant.warm: with is_main (model_config.go)
+		MainCompact      int                           `json:"main_compact_window"` // assistant.send, session.send, assistant.warm: the main or a leader conversation's (model_config.go)
 		FollowsSetting   bool                          `json:"follows_setting"`
 		Interject        bool                          `json:"interject_background"`
 		Public           bool                          `json:"public"` // a public mention turn: no owner live snapshot on this input
@@ -1984,8 +1987,10 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	case "assistant.execution":
 		return n.assistantExecution(ctx, p.SessionID), nil
 	case "assistant.send", assistantwire.DeviceAssistantAnswerAgain:
-		if p.ResumeOnly && !n.assistantResumable(p.SessionID) {
-			return nil, fmt.Errorf("conversation %s is gone", p.SessionID)
+		if p.ResumeOnly {
+			if err := n.checkAssistantResumable(ctx, p.SessionID, p.Launcher); err != nil {
+				return nil, err
+			}
 		}
 		sctx := withSkillOwner(ctx, p.SkillOwner)
 		if p.TaskInput {
@@ -3251,11 +3256,13 @@ func (n *Node) info(ctx context.Context) proto.NodeInfo {
 	return proto.NodeInfo{
 		Protocol:           nodeproto.Version,
 		Program:            n.Program,
-		Executable:         cmp.Or(n.exe, n.bin), // the update target: the file, never a link to it
+		Edition:            nodeproto.Edition(n.Edition.Marker()), // left out by a full build
+		Executable:         cmp.Or(n.exe, n.bin),                  // the update target: the file, never a link to it
 		ProtocolMin:        nodeproto.MinManagerVersion,
 		Capabilities:       n.capabilities(), // secret_env only from a resident node (secretenv.go)
 		NodeUpdate:         canUpdate,
 		NodeUpdateReason:   updateReason,
+		UpdateDraining:     n.reload.UpdateDraining(),
 		ModelConfiguration: true,
 		Hostname:           host,
 		OS:                 runtime.GOOS,
