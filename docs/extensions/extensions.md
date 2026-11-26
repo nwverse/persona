@@ -565,7 +565,7 @@ Scopes cover what an extension calls with its token. The owner's own answers tha
 
 ### Knowledge base RPC (#1908)
 
-An extension's program can call the seven methods below directly, without passing a token over HTTP. Permissions are still declared only in `permissions.hub`; the hub checks against the permissions actually granted,
+An extension's program can call the eight methods below directly, without passing a token over HTTP. Permissions are still declared only in `permissions.hub`; the hub checks against the permissions actually granted,
 not the ones requested in the manifest. `kb.write` does not imply `kb.read`. The legacy `hub_api` full access stays compatible. Every call is forwarded by the hub to the manager's knowledge base,
 so the extension does not need to read the hub's or the manager's data directory.
 
@@ -578,15 +578,16 @@ so the extension does not need to read the hub's or the manager's data directory
 | `kb.search` | `{query,messages?,limit?}` | `{hits}` | `kb.read` |
 | `kb.update` | `{kind,id,...fields to update,evidence?,unlock?}` | `{id,before?,ignored?}` | `kb.write` |
 | `kb.owner` | `{}` | `{name,aliases,handles:[{kind,value}]}` | `kb.read` |
+| `kb.put_recording` | `{id,started_at,title?,ended_at?,language?,minutes?,transcript?,projects?,meeting?}` | `{id,revision,created?,unchanged?,minutes_version?}`: the extension's own recording ("Writing recordings and minutes" below) | `kb.write` |
 
-The params, answers, error codes and events are described in `schema/extension/kb.schema.json`; the Go SDK has them as `ext.Hub`'s `KBList`, `KBRecent`, `KBGet`, `KBDay`, `KBSearch`, `KBUpdate` and `KBOwner`.
+The params, answers, error codes and events are described in `schema/extension/kb.schema.json`; the Go SDK has them as `ext.Hub`'s `KBList`, `KBRecent`, `KBGet`, `KBDay`, `KBSearch`, `KBUpdate`, `KBPutRecording` and `KBOwner`.
 
 kind is `projects`, `chats`, `people`, `docs`, `meetings`, `events`, `recordings` or `topics` (knowledge points by subject; `kb.get` adds `points`, `docs/assistant/knowledge.md` "Topics"). list returns 30 by default, at most 200, with offset starting at 0;
 if not finished, continue with next_offset. Paging is not a snapshot when things change between requests, so extensions should deduplicate and re-read when needed. search searches messages by default, 40 by default, at most 200;
 get includes a chat's most recent 12000 bytes of messages by default, cut at a message or line start, or inside a long line at a whole character when the next start would drop more than half of them (a recording's transcript: its first 12000 characters); recent_chars may be 0, at most 20000. Empty lists return `[]`.
 `kb.get` does not include live Agents; reading Agent state still needs the matching permission. A missing scope returns `permission_denied` with `scope` in the error data;
-unknown fields, missing required fields or bad formats return `invalid_params`, a missing entity returns `not_found`, a write touching what someone else holds returns `conflict`, a manager that is offline returns `assistant_offline`, and a knowledge base that isn't ready returns `kb_unavailable`.
-Internal methods such as `kb.forget`, `kb.context`, `kb.posts_*` are not on this allowlist, and even extensions with full access can't call them this way.
+unknown fields, missing required fields or bad formats return `invalid_params`, a missing entity returns `not_found`, a write touching what someone else holds returns `conflict`, `kb.put_recording` of a recording that is not the extension's returns `permission_denied` (no data) and of one the user deleted `deleted`, a manager that is offline returns `assistant_offline`, and a knowledge base that isn't ready returns `kb_unavailable`.
+Internal methods such as `kb.forget`, `kb.context`, `kb.posts_*`, `kb.extension_update` and `kb.extension_put_recording` are not on this allowlist, and even extensions with full access can't call them this way.
 
 `since` / `until` are RFC 3339 times (an entity's update time: a chat's last message, a document's, meeting's or event's time, a recording's start). `kb.recent` defaults to chats, docs, meetings, events and recordings,
 50 a page, at most 200; list entries for chats carry `source` (lark, mail, wechat, github…), so one pass covers every source; read a chat's text with `kb.day` and the rest with `kb.get`.
@@ -612,6 +613,30 @@ The locked fields it writes become its own with `evidence` (`[{chat, day, n?, no
 
 The update fields follow the existing knowledge base update API, plus `pinned`, `lock` and `remove_people/remove_chats/remove_aliases/remove_projects`.
 A link the user removed (`excluded` in the entity's meta, `removed` in `kb.get`) is not made again: it is dropped from `people` / `chats` / `projects` and named in `ignored`, and the rest applies ("Removed links" in `docs/assistant/knowledge.md`).
+
+### Writing recordings and minutes
+
+An extension that takes meeting notes elsewhere (a minutes service, an imported call) stores them with `kb.put_recording` (`kb.write`) as a recording of the knowledge base, next to the phone's,
+instead of writing the hub's data directory. The manager forwards it as the calling extension's (internally `kb.extension_put_recording`, which an extension cannot call), and the knowledge base
+(`server/internal/kb/recording_extension.go`) writes it through the same commit as a phone's upload:
+
+- **Whose it is**: the recording keeps `writer: {by: "ext:<id>", sum, at}` in its `meta.json`. Only that extension may write it again. A recording the phone uploaded (no `writer`) or another extension's
+  answers `permission_denied` and nothing is written. One the user deleted keeps its tombstone and answers `deleted`: it is not made again. The user can rename, tag or delete it like any recording.
+- **The id** is a UUID the extension picks: derive it from its own source id (a UUID v5, say) so a retry or a rerun lands on the same recording. The hub keeps `revision`: 1 when created, one more for each
+  write that changed something. The same params again answer `unchanged: true` and write nothing (`sum` is the digest of the normalized params), so retries are safe.
+- **The minutes** (`minutes: {markdown, title?, where?, attendees?, points?, decisions?, actions?, open?, language?}`) become `minutes.json` (`recordingwire.Minutes`; the hub sets `version`, `revision`,
+  `generated_at`, `when`, `start` and `end`) and `minutes.md` (the Markdown as given: what searches and `kb.get` read). Each action needs an `id` (at most 64 characters) that stays the same across writes:
+  a to-do the user made of an action keeps its `todo_id` when the minutes are written again. `meta.minutes_rev` is the revision written, so `minutes_state` is `ready` and the recording module makes no
+  minutes of its own. Minutes or a transcript is required.
+- **Retention**: the recording is a meeting (`kind: meeting`, complete). Past `recording_days` a recording with minutes is trimmed to them and kept until `minutes_days` (forever by default,
+  `docs/assistant/meeting-minutes.md` "Privacy"), like the phone's; one with only a transcript goes. A recording older than `recording_days` is accepted (an extension may write old meetings), but without
+  minutes the next retention round deletes it.
+- **The transcript** (`transcript: [{start, end, text}]`, at most 20000 segments) is optional; `n`, `source` and `echo` are the hub's and are dropped. Without minutes, the recording module makes minutes of it
+  when it is on, at the user's model cost; the hub never writes the short summary of an extension's recording (`summarized_rev` is set), nor matches it to a calendar item itself.
+- **Links**: `projects` are slugs (or names) of existing projects; each gets `recordings/<id>` in its items, and a later write never removes a link (one the user removed is not made again). `meeting:
+  {kind: "events" | "meetings", id}` names the calendar item or imported meeting it was, which must exist; it replaces the previous one.
+- **Search**: the files are found by the searches at once (the search index reads changed files), the entity index is updated, and the apps are told (`metadata`, `messages`, `summary`).
+- **Bounds**: the params are at most 1 MiB, strict (an unknown field is `invalid_params`), at most 20 projects and 200 items in each minutes list; `ended_at` is not before `started_at`.
 
 Project list rows and detail include `freshness`, canonical `sources`, and `project_mode` when the owner made the
 project reference-only. Check `freshness.needs_review` before relying on a conclusion, and inspect the field's own
@@ -4181,7 +4206,16 @@ and the node follows (`node/plugins.go`). Reconciliation runs on computer connec
   with caller identity ("The hub's API", "The caller on forwarded requests");
   full-access devices only, only on extension-enabled machines; missing extension or not enabled there 404, offline machine 409, program not running / not responding 502.
 - **Calls and events**: the hub-side program calls `nodes.call {machine, method, params}`, forwarded to that computer program's extension-protocol method (enabled computers only);
-  computer-program events are passed to the hub program as `node.event {machine_id, event, params}`. Computer programs calling hub methods always get `unknown_method`.
+  computer-program events are passed to the hub program as `node.event {machine_id, event, params}`.
+- **Programs on computers calling the hub** (`plugin.node.hub_call`): a program on a computer has no `hub_api` and no token, but it may call the hub's knowledge-base methods `kb.list`, `kb.recent`,
+  `kb.get`, `kb.day`, `kb.search`, `kb.owner`, `kb.update` and `kb.put_recording` exactly as its extension's program on the hub would ("Knowledge base RPC"). Its node relays the call on its own
+  connection as `plugin.node.hub_call {id, identity_revision, method, params}`; the manager (`extmgr/extension_node_calls.go`) answers it only when the method is on the allowlist
+  (`proto.PluginNodeHubMethod`, checked on both sides), the connection is one of the hub's computers, the extension exists at the identity revision the hub started the program with, and the extension
+  is on, set up and switched on for that computer (`nodeRunsOn`). Then it is the same call as from the hub: the same granted scopes (`kb.read` / `kb.write`, never the manifest's request), the writes
+  attributed to the extension. Any other method answers `unknown_method` on the node without reaching the hub. Security: the machine is the connection the request came in on and the extension is
+  the program the node started, never fields the program sets, so a program cannot speak for another extension or computer; a program left running after it was switched off for that computer, its
+  lease ran out, or it was replaced is refused; the allowlist carries only knowledge-base calls, none of which reaches another computer (`nodes.call`), the extension's storage, models, secrets, the
+  hub's token or an Agent, so a computer's program gets no more than its extension was granted. An older hub answers that it does not know `plugin.node.hub_call`.
 - **In the app**: extension details include `node_machines` (computer-selector field name); enabled rows show the program's state there ("Program running · version", "Program error: reason", "Offline: starts on connection", "personad on this computer is too old…").
   For program errors, Go `exit status N` displays as "Exit code N", `signal: X` as "Terminated by signal (X)" (converted by app/web, including reports from old nodes);
   disabled rows still show just online / offline. Enabling a computer asks first (the hub adds field `confirm`: "Runs the ‘…’ program on this computer…", unless supplied by the manifest).
