@@ -381,6 +381,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				} else {
 					n.mergeAgyTranscript(&s, agyConversations[id])
 				}
+				n.agyPaneControls(&s, id)
 				n.agyPaneTitle(&s, agyConversations[id]) // its conversation's title, not the terminal's (agytitle.go)
 				if s.Status == proto.StatusWorking || s.Status == proto.StatusBlocked {
 					liveBusyAgy[a.PaneID] = true

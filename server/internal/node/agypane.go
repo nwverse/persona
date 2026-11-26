@@ -979,6 +979,23 @@ func (n *Node) agyPaneSessionInfo(id, pane string) map[string]any {
 			info["context_breakdown"] = breakdown
 		}
 	}
+	if cur, _ := info["model"].(string); cur != "" {
+		if shown := n.shownModel(id, cur); shown != "" {
+			info["model"] = shown
+		}
+	} else if shown := n.shownModel(id, ""); shown != "" {
+		info["model"] = shown
+	}
+	n.mu.Lock()
+	if m, ok := n.modes[id]; ok && m.Effort != "" && time.Since(m.EffortAt) <= pendingModelTTL {
+		info["effort"] = m.Effort
+	}
+	n.mu.Unlock()
+	if cur, _ := info["model"].(string); info["effort"] == nil && cur != "" {
+		if e := agyModelEffort(cur); e != "" {
+			info["effort"] = e
+		}
+	}
 	return info
 }
 

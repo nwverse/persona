@@ -381,6 +381,8 @@ may legitimately repeat an earlier answer, so retirement follows the landed stre
   Drop the reported id only when the index knows that thread under a different name, and never under a name it gave the thread before (a rename leaves the earlier line in the index, and the node keeps only the latest); a remembered pane binding is still dropped.
   Check the name of the thread herdr reported, not of the main chat a sub-Agent id was replaced with: that name says nothing about the reported thread.
   Claude panes likewise: pane bindings for Persona-started sessions live in hub's database and reload after node restart, but can be stale; `sessions/<pid>.json` takes priority.
+  Pane ids are reused too: herdr numbers its workspaces again after its server restarts, so a new tab can get the id (`wD:p1`) of a tab that closed days
+  ago, and the binding of the session that ran there comes back on every hub connection. A tab Persona opens forgets every binding of its id first (#14682).
   After changing pane identification logic, rerun verification after deployment (restart); pre- and post-restart results may differ.
 - herdr `agent.prompt` pastes, then waits about 300 ms before Enter: serialize sends to the same session, or the second screen read mistakes the first message for an input draft. Sending deduplication lives in hub Postgres (`sent_messages`):
   node's in-memory deduplication disappears on reconnect / hub restart, exactly when the App auto-retries. Full session-reading and sending verification, with per-hop timings: `docs/archive/integrations/session-verify.md`.
