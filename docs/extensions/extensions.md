@@ -92,10 +92,12 @@ so the old extension-system terms **keep working** where listed below. This does
 
 **Manager-configuration `plugins` retirement (#2656)**: the release that introduces the deprecation warning keeps reading legacy `plugins` entries for that one release, preserving the merge order and `extensions`-wins behavior. The next release stops reading `plugins` and uses only `extensions`; the release after that removes the alias and its merge code. This schedule applies only to the manager-configuration key, not to the other compatibility entries in this table.
 
+**Manager-configuration `trusted_extension_markets` retirement (#2656)**: the release that introduces the deprecation warning keeps decoding legacy `trusted_extension_markets` entries for that one release while logging a startup warning whenever entries are present (they continue to grant no sandbox exemption; see "Sandbox"). The next release stops decoding `trusted_extension_markets`, and the release after that removes the legacy field from manager configuration and migration key lists.
+
 **Marketplace move**: after a marketplace repository is renamed or moved (for example, `<org>/<old repository>` → `<org>/<new repository>`), extensions installed from it have the source `market:<market id>/<extension id>`, and the market id must not change.
 Use `personad extension market set-spec <market id> <new URL>` (API `PUT /api/v1/extensions/-/markets/{id}` `{spec}`) to change the URL in place. It first reads the new URL once with the market's existing token; if that fails, nothing changes.
 
-**How long the other compatibility items stay**: apart from the manager-configuration `plugins` schedule above, the compatibility layer stays at least until **2027-05-05** (six months, covering the 90-day lifetime of released TestFlight builds and old Android versions), and until the hub logs show **30 consecutive days with no calls** to the old API.
+**How long the other compatibility items stay**: apart from the manager-configuration retirement schedules above, the compatibility layer stays at least until **2027-05-05** (six months, covering the 90-day lifetime of released TestFlight builds and old Android versions), and until the hub logs show **30 consecutive days with no calls** to the old API.
 The hub counts every call to an old path per route (`legacyCalls` in `extension_compat.go`; on the first call each day it logs the previous day's counts as one line, `extensions: old plugin API calls since …`; step 7 wires this into the admin UI).
 That decides whether it can be removed. Removal gets its own issue: drop the items in the table above one by one, and rewrite stored manifests to `extension_protocol`.
 The `persona-plugin.json` generated in packages follows the same deadline: after 2027-05-05, and once nobody runs a pre-rename hub anymore, `personad extension pack` and the package.sh packaging scripts of the two extension repositories stop generating it.
@@ -516,6 +518,7 @@ To call the hub's HTTP API, an extension lists the scopes it uses in `permission
 | `assistant.entries.read` | Read unified ledger entries | `assistant.entries.list` RPC and `GET /api/v1/assistant/entries`; see "Unified entries ledger" |
 | `assistant.memory.read` | Read what Persona remembers about you (read-only; another track's memory only as the user lets this extension read it) | No HTTP route: the `assistant.memory` RPC (see "Assistant memory"). Writing and deleting memory stay with full credentials; `assistant.read` does not include it |
 | `assistant.events` | Tell your Persona main chat what it observes (events it can pass on to you; it cannot start or change chats) | No HTTP route: the `assistant.event` RPC (see "Assistant events"). Neither `assistant.ask` nor `assistant.read` includes it |
+| `lark.messages.read` | Receive newly synced Lark message metadata events | No HTTP route: gates the `lark.messages` event (see "Lark message events"). Carries binding, chat ID, message ID, sender open ID, time and type — never message bodies. Granted by name only, not covered by the legacy `hub_api` or every-scope grant |
 | `models` | Use the model you pick for it in Settings › Model configuration (never the key) | No HTTP route: the `model.complete` RPC (see "Model calls"). Not covered by the legacy `hub_api` full access |
 | `transcription` | Turn its own audio into text with the transcription you chose for meetings (never the key, never other audio) | No HTTP route: the `transcription.*` RPC (see "Transcription for extensions"). Not covered by the legacy `hub_api` full access |
 | `market.refresh_own` | Refresh the extension marketplace it was installed from | `POST /api/v1/extensions/-/self/market/refresh` only. Not covered by an all-scope token or the legacy `hub_api` grant: the manifest must name it and the owner must approve it |
@@ -557,7 +560,7 @@ Scopes cover what an extension calls with its token. The owner's own answers tha
 - **Compatibility**: old extensions with `hub_api: true` still get the hub's full token (only in env vars), with an extra warning on install and upgrade, "hub_api is the legacy form"; extensions in manager.json still get the full token. On a manager other than the built-in one, both get a token of every scope instead (none of the routes open to full credentials only): that manager has no token of the hub's to hand on. Every other extension's token there opens the scopes it asked for and no more.
   An attached package ("Attaching an installed package") granted `hub_api` gets a token of every scope too, on any manager, in `initialize` only: its program is not the manager's child, so it never gets the hub's own token.
   One installed from `remote:` and granted `hub_api` gets no hub token (one granted scopes gets a token of those).
-  A token of every scope has every scope but `agents.archive_idle`, `agents.permission_mode`, `assistant.start_defaults`, `bots.feishu.handoff`, `decisions.raise`, `dispatch.guard`, `push.grading`, `tasks.schedule` and `market.refresh_own`, which an extension gets only by naming them in `permissions.hub` (`extension.EveryScope`). A manifest that names any scope gets a token of exactly the named scopes, even with `hub_api` set (`Permissions.FullHub`), so an extension that needs one of them lists every scope it uses.
+  A token of every scope has every scope but `agents.archive_idle`, `agents.permission_mode`, `assistant.start_defaults`, `bots.feishu.handoff`, `decisions.raise`, `dispatch.guard`, `lark.messages.read`, `push.grading`, `tasks.schedule` and `market.refresh_own`, which an extension gets only by naming them in `permissions.hub` (`extension.EveryScope`). A manifest that names any scope gets a token of exactly the named scopes, even with `hub_api` set (`Permissions.FullHub`), so an extension that needs one of them lists every scope it uses.
   The `hub_api` grant covers every scope but those named-only scopes: upgrading from `hub_api` to a new version that asks for only a few scopes needs no new consent, unless one of them is one of those named-only scopes (which `added_permissions` then lists); the reverse does.
 - The permission summary includes the scopes (normalized: sorted, deduplicated); for extensions without `hub` the summary is the same as before. An upgrade that adds scopes needs consent again, and `added_permissions` shows "Use more of the hub's features".
 
@@ -3707,6 +3710,7 @@ Extensions contribute `events` to subscribe to things happening on the hub. Thes
 | `leader.changed` | `id`, `title`, `project?`, `ended?`: a direction was made, retitled, filed under another project, ended or made current again (needs `leaders.read`, see "Leader events") |
 | `leader.report` | `id`, `leader`, `kind`, `todo`, `text`, `link?`, `at`: a direction's task reached its goal, needs the owner's decision or is stuck, or the direction reported progress (needs `leaders.read`) |
 | `placement.pending` | `plan_id`, `todo_id`, `batch_size`: one-way wake notification that a planned task is awaiting machine placement (needs `tasks.schedule`, granted by name only; carries no prompts or private fields and is never emitted for hidden privacy-space tasks) |
+| `lark.messages` | `binding`, `page`, `pages`, `total`, `messages`: batched metadata for new Lark messages committed to the sync outbox in a round (`messages[]` carries `chat_id`, `message_id`, `sender_open_id?`, `at`, `type?`, never message bodies; needs `lark.messages.read`, granted by name only; see "Lark message events") |
 
 SDK programs receive them in `Namespaces["event"]` (method name is the event name).
 
@@ -3772,6 +3776,21 @@ no Persona conversation. Either kind has one stable direction id. Schema: `schem
 - **Leaders made before the extension**: `GET /api/v1/assistant/leaders` (`leaders.read`) lists every direction as
   `leader.changed` would tell it now, with `by` (`assistant` or `user`), `at` and `ended_at?`; current leaders first.
 - They share the to-do events' queue and its limits.
+
+### Lark message events
+
+`lark.messages` notifies an extension right after a Lark user sync round (`ModeIM` incremental poll or `ModeFull` daily sync) commits new messages to the outbox, so the extension can react without waiting for knowledge-base ingestion (`kb.changed`) or polling on a timer.
+
+```json
+{"permissions":{"hub":["lark.messages.read"]},"activation_events":["on_startup"],
+ "contributes":{"events":[{"id":"lark","subscribe":["lark.messages"]}]}}
+```
+
+- **Who is told**: an extension that is enabled, has that contribution on, has its program running, subscribed to `lark.messages`, **and** was explicitly granted `lark.messages.read`. `lark.messages.read` is granted by name only: `kb.read`, `inbox.read` and legacy `hub_api` full access are not enough.
+- **Payload**: `{binding, page, pages, total, messages}` (`larksyncwire.MessagesEvent`). `binding` is the sync binding key; `page` (1-based), `pages` and `total` describe the round's pagination; each entry in `messages` (`larksyncwire.MessageEventItem`) carries only `{chat_id, message_id, sender_open_id?, at, type?}`. `sender_open_id` is the sender's Lark `open_id` from `im/v1/messages` (`user_id_type=open_id`; for app/bot senders Lark reports the sender's app ID, omitted when absent); `at` is the message timestamp in UTC RFC 3339; `type` is Lark's `msg_type` (`text`, `post`, `interactive`, `image`, `file`, …).
+- **No message bodies**: message text, attachments, chat names and sender display names are never included. An extension reads message content on its own within whatever permissions it holds.
+- **Batching and pagination**: emitted per sync round rather than once per message, sorted chronologically by `at`. Rounds with more than 100 new messages are split into sequential pages of up to 100 messages each (`page: 1..pages`, all sharing `total`). Rounds with zero new messages, failed runs/commits, and sender-name backfill repairs emit nothing.
+- **Queue**: delivered through a dedicated queue (`larkEvents`, capacity 512) separate from `kb.changed` and to-do events, so a large sync batch cannot crowd out other extension events. Like other hub events, notifications are not persisted for redelivery across restarts.
 
 ## Error reports
 

@@ -281,11 +281,26 @@ when a message mentions it: the API that names an app by its id
 an admin scope and a custom app of the same enterprise, none of which a user's sync has. A system message without a
 `sender_id` stays unnamed.
 
+The sender-name backfill runs in rounds, one after each sync run until it is done. A round has its own budget
+(`larkSyncNamesBudget`, 90 seconds, apart from the run's) and starts only after the run's messages are committed, so it
+never holds up message sync. Every lookup is paced at five requests a second, so a backlog of external senders (one
+`contact/v3` call each) and a few large groups (up to 500 member pages each) can need more than one round. When the
+budget runs out, the round stops and saves how far it got in the `sender_names:progress` cursor: each large group's
+next member page and which senders the pages already read were checked for, plus the lookups that found nothing. Those
+are tried again after a week. The next round picks up from there, and `backfill_version` advances only once a round
+finishes everything. A timeout, rate limit or passing failure in this step only degrades naming. The binding's health
+stays `ok`, the run is not counted as failed, and the reason goes into `names_warning`, with `names_rounds` counting the
+rounds. Only what the owner has to fix shows in health: a missing contact scope (`scope_missing`) or a refused grant
+(`needs_reauth`). Coverage: `server/internal/modules/lark/larksync/names_progress_test.go`,
+`server/internal/extmgr/larksync_names_test.go`.
+
 Regression coverage: `server/internal/larksyncwire/scopes_test.go` checks the audited permission alternatives;
 `scripts/test/test_lark_sync_scope_guides.py` checks every locale of the three setup guides against both packs;
 `server/internal/extmgr/larksync_impoll_test.go` covers scope refusal followed by authorization and scheduler recovery;
 client sync model/component tests cover the reauthorization prompt and action.
 
+
+The sync's runs commit cursors, the dedup index and the outbox rows together in one transaction; once committed, any round that wrote new messages emits batched, paginated `lark.messages` metadata events (no message bodies) to enabled extensions subscribed to `lark.messages` and explicitly granted `lark.messages.read` (`docs/extensions/extensions.md` "Events").
 
 Requests are rate-limited per binding and per API family, and a 429, `99991400`, `230020` or `1061045` waits as the platform
 asks before trying again. **A read that fails leaves its cursor where it was**: the cursors, the dedup index and what the
