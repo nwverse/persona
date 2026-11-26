@@ -193,7 +193,21 @@ function useStickyTop(ref: React.RefObject<HTMLElement | null>) {
     if (!nav || !pinned) return;
     const observer = new ResizeObserver(([e]) => nav.style.setProperty("--sidebar-sticky-top", `${e?.borderBoxSize?.[0]?.blockSize ?? pinned.getBoundingClientRect().height}px`));
     observer.observe(pinned);
-    return () => { observer.disconnect(); nav.style.removeProperty("--sidebar-sticky-top"); };
+    let scrolled = nav.scrollTop > 0;
+    nav.toggleAttribute("data-scrolled", scrolled);
+    const onScroll = () => {
+      const next = nav.scrollTop > 0;
+      if (next === scrolled) return;
+      scrolled = next;
+      nav.toggleAttribute("data-scrolled", next);
+    };
+    nav.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      observer.disconnect();
+      nav.removeEventListener("scroll", onScroll);
+      nav.removeAttribute("data-scrolled");
+      nav.style.removeProperty("--sidebar-sticky-top");
+    };
   }, [ref]);
 }
 

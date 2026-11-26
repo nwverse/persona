@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 // The sidebar's Persona row (#5581): pinned at the top of the list while the rest scrolls, with a fog under it once rows
 // go beneath, and its shortcut (Mod+Alt+P by default, "Open Persona") shown on the row and following a rebinding.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -74,6 +76,27 @@ describe("the pinned Persona row", () => {
     await flush();
     expect(row().getAttribute("aria-current")).toBeNull();
     expect(row().className).toContain("hover:bg-hover");
+  });
+
+  it("toggles data-scrolled on the list only while scrolled past 0 and shields Liquid Glass sticky headers (#16663)", async () => {
+    act(() => root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />));
+    await flush();
+    const list = host.querySelector<HTMLElement>("[data-sidebar-rows]")!;
+    expect(list.hasAttribute("data-scrolled")).toBe(false);
+    act(() => {
+      list.scrollTop = 48;
+      list.dispatchEvent(new Event("scroll"));
+    });
+    expect(list.hasAttribute("data-scrolled")).toBe(true);
+    act(() => {
+      list.scrollTop = 0;
+      list.dispatchEvent(new Event("scroll"));
+    });
+    expect(list.hasAttribute("data-scrolled")).toBe(false);
+
+    const css = readFileSync(join(__dirname, "../styles.css"), "utf8");
+    expect(css).not.toMatch(/:root\[data-surface-style="liquid-glass"\]\s+\[data-sidebar-rows\]\s*\{[^}]*mask-image/);
+    expect(css).toMatch(/\[data-sidebar-rows\]\[data-scrolled\]\s*>\s*\[data-sidebar-sticky\],[\s\S]*?\.sidebar-group-heading\[data-pinned\]\s*\{[^}]*background:\s*var\(--glass-sticky-bg\)/);
   });
 });
 
