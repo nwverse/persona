@@ -20,4 +20,8 @@ build_rc=0
 wait "$build_pid" || build_rc=$?
 cat "$log"
 if [ "$build_rc" -ne 0 ]; then exit "$build_rc"; fi
-exit "$tests_rc"
+if [ "$tests_rc" -ne 0 ]; then exit "$tests_rc"; fi
+# Persona Core alone (#13932, docs/web/web.md "Modules"): built and tested with zero feature modules. Fails when a file
+# outside web/src/modules reaches a module's files, or a core test only passes with a module registered.
+ci_run 'Web core-only build' 600 bash -c 'cd web && npm run build:core-only'
+ci_run 'Web core-only tests' 900 bash -c 'cd web && npm run test:core-only'

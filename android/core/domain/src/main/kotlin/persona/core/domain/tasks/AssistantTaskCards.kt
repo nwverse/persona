@@ -161,14 +161,15 @@ object AssistantTaskCards {
                 }
             }
         }
-        val feedByRef = HashMap<String, MutableList<FeedItem>>()
-        val feedById = HashMap<String, FeedItem>()
-        for (item in feed) {
+        val feedByRef = HashMap<String, MutableList<IndexedFeedItem>>()
+        val feedById = HashMap<String, IndexedFeedItem>()
+        for ((order, item) in feed.withIndex()) {
             if (item.kind !in lifecycle || item.kind == "plan") continue
-            if (item.id !in feedById) feedById[item.id] = item
+            val indexed = IndexedFeedItem(order, item)
+            if (item.id !in feedById) feedById[item.id] = indexed
             val ref = item.ref
             if (!ref.isNullOrBlank()) {
-                feedByRef.getOrPut(ref) { ArrayList() } += item
+                feedByRef.getOrPut(ref) { ArrayList() } += indexed
                 if (ref !in byTodo) {
                     val todo = todoById[ref]
                     val id = "todo:$ref"
@@ -187,15 +188,18 @@ object AssistantTaskCards {
         return canonical.map { card ->
             val plan = card.planId?.let(planById::get)
             val todo = card.todoId?.let(todoById::get)
-            val matched = LinkedHashMap<String, FeedItem>()
-            card.todoId?.let(feedByRef::get)?.forEach { item ->
-                if (item.id !in matched) matched[item.id] = item
+            val matched = LinkedHashMap<String, IndexedFeedItem>()
+            fun consider(entry: IndexedFeedItem?) {
+                if (entry == null) return
+                val existing = matched[entry.item.id]
+                if (existing == null || entry.order < existing.order) {
+                    matched[entry.item.id] = entry
+                }
             }
-            val receipt = card.receiptId?.let(feedById::get)
-            if (receipt != null && receipt.id !in matched) matched[receipt.id] = receipt
-            val report = card.reportId?.let(feedById::get)
-            if (report != null && report.id !in matched) matched[report.id] = report
-            val records = matched.values.sortedWith(compareBy({ AssistantLines.time(it.at) }, { it.id }))
+            card.todoId?.let(feedByRef::get)?.forEach(::consider)
+            card.receiptId?.let(feedById::get)?.let(::consider)
+            card.reportId?.let(feedById::get)?.let(::consider)
+            val records = matched.values.map { it.item }.sortedWith(compareBy({ AssistantLines.time(it.at) }, { it.id }))
             MergedTaskCard(card, plan, todo, records)
         }.sortedWith(compareBy({ AssistantLines.time(it.identity.at) }, { it.identity.id }))
     }
@@ -247,3 +251,5 @@ object AssistantTaskCards {
         }
     }
 }
+
+private data class IndexedFeedItem(val order: Int, val item: FeedItem)

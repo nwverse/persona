@@ -14,13 +14,10 @@ ALLOWED = {
     "Persona/Recording/RecordingMinutesSummary.swift": "the same for minutes' points and transcript lines",
     "Persona/Recording/RecordingMinutesOverview.swift": "puts a topic's icon tile above its title at the reading size (#6563)",
     "Persona/Recording/RecordingMinutesView.swift": "the same for the minutes' points",
+    "Persona/Views/Chat/TurnChangesCard.swift": "stacks the Changed Files reading rows and review action at the reading size",
     "Persona/Views/Chat/BubbleFold.swift": "the user bubble folds by the reading size it is given",
     "Shared/Design/RecordingTokens.swift": "the recording timer's own cap",
     "PersonaWatch/PersonaWatchApp.swift": "the watch's showLargeText launch switch",
-    "Persona/DesignSystem/ActivityRings.swift": "stacks the rings above their values, a reading container (.readingContent), "
-                                                "at the reading size (#13251)",
-    "Persona/Views/Health/HealthTodaySection.swift": "stacks the intake actions at the system's accessibility sizes "
-                                                     "(WindowTextSize.system), beside the Activity rings (#13251)",
 }
 
 USE = re.compile(r"isAccessibilitySize|\.accessibility[1-5]\b")

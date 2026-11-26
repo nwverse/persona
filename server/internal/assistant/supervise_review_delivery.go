@@ -85,7 +85,7 @@ func (s *Service) acceptedDeliveryError(ctx context.Context, t Todo, link, outco
 		}
 	}
 
-	repoPRs, repoIssues, err := s.todoLinkedDeliveryRefs(ctx, t.ID)
+	repoPRs, repoIssues, referencePRs, err := s.todoLinkedDeliveryRefs(ctx, t.ID)
 	if err != nil {
 		s.logf("task %s: linked repository delivery status temporarily unverifiable: %v", t.ID, err)
 		return "", fmt.Errorf("%s", i18n.T(s.lang(ctx), "assistant-reports.delivery_verification_unavailable",
@@ -95,7 +95,7 @@ func (s *Service) acceptedDeliveryError(ctx context.Context, t Todo, link, outco
 	seenPR := map[string]bool{}
 	addPR := func(u string) {
 		u = strings.TrimSpace(u)
-		if u == "" {
+		if u == "" || referencePRs[normalizePRKey(u)] {
 			return
 		}
 		key := u
@@ -157,6 +157,7 @@ func (s *Service) checkGitHubPRDelivery(ctx context.Context, t Todo, pr, gate, o
 		if err != nil {
 			if errors.Is(err, errGitHubUnconfigured) {
 				s.logf("task %s: delivery %s not checked: GitHub is not connected (%v)", t.ID, pr, err)
+				recordFollowupWatchHint(ctx, pr, repository.PRFollowupWatchHostNotConnected, repository.PRFollowupReasonHostNotConnected)
 				return i18n.T(s.lang(ctx), "assistant-reports.delivery_host_not_connected", i18n.Args{"pr": pr, "host": "github.com"}), nil
 			}
 			if allowNonPRCleanup {
@@ -320,18 +321,20 @@ func (s *Service) otherHostIssueDelivery(ctx context.Context, t Todo, issueURL s
 	return "", issueOpenError(s, t, issueURL, d.State)
 }
 
-// todoLinkedDeliveryRefs reads saved repository pull_request and issue links for task id. Only delivery-role links are
-// returned for gate verification; reference links are display-only. A pull_request still stored with the default
-// delivery role that the forge can prove was opened by someone else is downgraded to reference first, so a merely
+// todoLinkedDeliveryRefs reads saved repository pull_request and issue links for task id. Only delivery-role links,
+// issues included (#14050), are returned for gate verification; reference links are display-only. referencePRs carries
+// their normalized keys too, so acceptance cannot re-add a reference PR from legacy stage tracking. A pull_request still
+// stored with the default delivery role that the forge can prove was opened by someone else is downgraded to reference first, so a merely
 // referenced foreign PR no longer blocks acceptance.
-func (s *Service) todoLinkedDeliveryRefs(ctx context.Context, id string) (prs, issues []string, err error) {
+func (s *Service) todoLinkedDeliveryRefs(ctx context.Context, id string) (prs, issues []string, referencePRs map[string]bool, err error) {
 	if _, ok := s.store().(todoRepositoryStore); !ok {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	set, err := s.savedTodoRepositories(ctx, id)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
+	referencePRs = map[string]bool{}
 	seenIssue := map[string]bool{}
 	for _, row := range set.Repositories {
 		for _, l := range row.Links {
@@ -352,10 +355,17 @@ func (s *Service) todoLinkedDeliveryRefs(ctx context.Context, id string) (prs, i
 						role = repository.LinkRoleReference
 					}
 				}
-				if role == repository.LinkRoleDelivery {
+				if role == repository.LinkRoleReference {
+					referencePRs[normalizePRKey(u)] = true
+				} else if role == repository.LinkRoleDelivery {
 					prs = append(prs, u)
 				}
 			case "issue":
+				// A reference issue is related work, never this task's delivery: only a delivery (or role-less) issue
+				// has to be closed (#14050).
+				if role, _ := repository.NormalizeLinkRole(l.Role); role == repository.LinkRoleReference {
+					continue
+				}
 				key := strings.ToLower(u)
 				if !seenIssue[key] {
 					seenIssue[key] = true
@@ -364,7 +374,7 @@ func (s *Service) todoLinkedDeliveryRefs(ctx context.Context, id string) (prs, i
 			}
 		}
 	}
-	return prs, issues, nil
+	return prs, issues, referencePRs, nil
 }
 
 // provenForeignPR reports whether u is a GitHub PR the forge can prove was opened by someone other than the
@@ -482,7 +492,9 @@ func issueOpenError(s *Service, t Todo, issueURL, state string) error {
 		"tasks open until linked issues are closed. Keep it open: park it with waiting_on external_event or someone_else "+
 		"until the PR merges and closes the issue (or close the issue once verified), send what is missing to its agent "+
 		"(rework / agent_send), or cancel it if the work is dropped. If nothing could be delivered at all, accept it with "+
-		"outcome cannot", t.ID, issueURL, st)
+		"outcome cannot. If the work is delivered and only the issue was left open (a follow-up PR merged without closing "+
+		"it, or it is broader than this task), ask its maintainer to close it, or set that issue link's role to reference "+
+		"with todo_repository_links_set and accept again: a reference issue is not checked", t.ID, issueURL, st)
 }
 
 // notLiveError refuses accepting t while its PR pr is held as r says.
@@ -522,6 +534,9 @@ func (s *Service) otherHostDelivery(ctx context.Context, t Todo, pr, gate string
 	lang := s.lang(ctx)
 	if h == nil {
 		s.logf("task %s: delivery %s not checked: no code host reads %s", t.ID, pr, host)
+		if s.repoExt == nil || s.providersListed() {
+			recordFollowupWatchHint(ctx, pr, repository.PRFollowupWatchHostNotConnected, repository.PRFollowupReasonUnsupportedHost)
+		}
 		return i18n.T(lang, "assistant-reports.delivery_host_not_connected", i18n.Args{"pr": pr, "host": host}), nil
 	}
 	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
@@ -530,8 +545,16 @@ func (s *Service) otherHostDelivery(ctx context.Context, t Todo, pr, gate string
 	switch {
 	case errors.Is(err, errReviewUnsupported):
 		s.logf("task %s: delivery %s not checked: %s cannot read its state", t.ID, pr, h.Name())
+		recordFollowupWatchHint(ctx, pr, repository.PRFollowupWatchHostNotConnected, repository.PRFollowupReasonUnsupportedHost)
 		return i18n.T(lang, "assistant-reports.delivery_host_not_connected", i18n.Args{"pr": pr, "host": host}), nil
 	case err != nil:
+		var pe *repository.ProviderError
+		var ce *repository.CheckError
+		if errors.Is(err, errGitLabTokenUnreadable) ||
+			(errors.As(err, &ce) && ce.Code == "authentication") ||
+			(errors.As(err, &pe) && (pe.Code == "no_provider" || pe.Code == "provider_off" || pe.Code == "not_signed_in")) {
+			recordFollowupWatchHint(ctx, pr, repository.PRFollowupWatchHostNotConnected, repository.PRFollowupReasonHostNotConnected)
+		}
 		s.logf("task %s: delivery %s not checked on %s: %v", t.ID, pr, h.Name(), err)
 		return i18n.T(lang, "assistant-reports.delivery_host_unchecked", i18n.Args{"pr": pr, "host": host, "reason": err.Error()}), nil
 	case status.Merged():

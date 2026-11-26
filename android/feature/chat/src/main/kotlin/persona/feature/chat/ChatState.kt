@@ -74,6 +74,8 @@ internal class ChatTimeline(
         val frozen: Boolean = false,
         val freezeToken: Long = 0L,
         val frozenLiveId: String? = null,
+        val frozenLiveSeq: Long = 0L,
+        val frozenLiveTargetSeq: Long = 0L,
         val frozenLivePending: Boolean = false,
         val frozenItemsRef: List<Item>? = null,
         val expanded: Map<String, ExpandedFold> = emptyMap(),
@@ -98,7 +100,9 @@ internal class ChatTimeline(
     private val liveBackfillDone = memoLock.newCondition()
     @Volatile private var control = ControlState()
     @Volatile private var shownLiveId: String? = null
-    private var inFlightLiveLines = 0
+    private var shownLiveSeq = 0L
+    private var nextLivePassSeq = 0L
+    private val inFlightLivePassSeqs = HashSet<Long>()
     private var nextFreezeToken = 0L
     @Volatile private var lastLines: LinesCache? = null
 
@@ -116,11 +120,15 @@ internal class ChatTimeline(
         synchronized(stateLock) {
             if (control.frozen) return false
             window.freeze(items)
+            val targetSeq = inFlightLivePassSeqs.maxOrNull() ?: 0L
+            val pending = targetSeq > shownLiveSeq
             control = control.copy(
                 frozen = true,
                 freezeToken = ++nextFreezeToken,
                 frozenLiveId = shownLiveId,
-                frozenLivePending = inFlightLiveLines > 0,
+                frozenLiveSeq = shownLiveSeq,
+                frozenLiveTargetSeq = if (pending) targetSeq else 0L,
+                frozenLivePending = pending,
                 frozenItemsRef = items,
             )
             return true
@@ -140,6 +148,8 @@ internal class ChatTimeline(
             control = control.copy(
                 frozen = false,
                 frozenLiveId = null,
+                frozenLiveSeq = 0L,
+                frozenLiveTargetSeq = 0L,
                 frozenLivePending = false,
                 frozenItemsRef = null,
             )
@@ -227,25 +237,48 @@ internal class ChatTimeline(
         return out
     }
 
-    private fun finishUnfrozenUnderMemoLock(liveTurnId: String?) {
+    /**
+     * Records a completed unfrozen pass under [memoLock]. Returns true when this pass is the newest completed
+     * unfrozen pass (so callers do not overwrite [lastLines] with an older pass's snapshot).
+     */
+    private fun finishUnfrozenUnderMemoLock(passSeq: Long, liveTurnId: String?): Boolean {
+        var shouldSignal = false
+        var isNewest = false
         synchronized(stateLock) {
+            if (passSeq >= shownLiveSeq) {
+                shownLiveId = liveTurnId
+                shownLiveSeq = passSeq
+                isNewest = true
+            }
             val current = control
-            if (!current.frozen) {
-                shownLiveId = liveTurnId
-            } else if (current.frozenLivePending) {
-                // Freeze raced an unfrozen lines() pass: preserve the live turn that was running when it froze.
-                shownLiveId = liveTurnId
-                control = current.copy(frozenLiveId = liveTurnId, frozenLivePending = false)
+            if (current.frozen && current.frozenLivePending && passSeq <= current.frozenLiveTargetSeq) {
+                // Keep the freshest completed pass up to the freeze target, and clear pending only once the
+                // newest pass that was in flight at freeze finishes.
+                val updatedId = if (passSeq > current.frozenLiveSeq) liveTurnId else current.frozenLiveId
+                val updatedSeq = if (passSeq > current.frozenLiveSeq) passSeq else current.frozenLiveSeq
+                val reachedTarget = passSeq >= current.frozenLiveTargetSeq
+                control = current.copy(
+                    frozenLiveId = updatedId,
+                    frozenLiveSeq = updatedSeq,
+                    frozenLiveTargetSeq = if (reachedTarget) 0L else current.frozenLiveTargetSeq,
+                    frozenLivePending = !reachedTarget,
+                )
+                shouldSignal = reachedTarget
             }
         }
-        liveBackfillDone.signalAll()
+        if (shouldSignal) liveBackfillDone.signalAll()
+        return isNewest
     }
 
     /** [live]: the agent is at work; [open] is the same persisted choice for live and historical lines. */
     fun lines(items: List<Item>, live: Boolean, open: Set<String>): persona.core.domain.lines.ChatSnapshot {
+        var passSeq = 0L
         val stateBefore = synchronized(stateLock) {
             val current = control
-            if (!current.frozen) inFlightLiveLines++
+            if (!current.frozen) {
+                passSeq = ++nextLivePassSeq
+                val _ = inFlightLivePassSeqs.add(passSeq)
+            }
             current
         }
         try {
@@ -284,7 +317,9 @@ internal class ChatTimeline(
                     cached.open == open &&
                     cached.expanded === stateBefore.expanded
                 ) {
-                    if (!stateBefore.frozen) finishUnfrozenUnderMemoLock(cached.snapshot.liveTurnId)
+                    if (!stateBefore.frozen) {
+                        val _ = finishUnfrozenUnderMemoLock(passSeq, cached.snapshot.liveTurnId)
+                    }
                     return@withLock cached.snapshot
                 }
                 beforeMemo?.invoke()
@@ -304,11 +339,14 @@ internal class ChatTimeline(
                     source += if (anchor != null) lineItem.copy(exchangeId = anchor) else lineItem
                 }
                 val built = memo.lines(source, options)
-                if (!stateBefore.frozen) {
-                    finishUnfrozenUnderMemoLock(built.liveTurnId)
+                val isNewestUnfrozen = if (!stateBefore.frozen) {
+                    finishUnfrozenUnderMemoLock(passSeq, built.liveTurnId)
+                } else {
+                    true
                 }
                 val stateAfter = control
-                if (stateAfter.frozen == stateBefore.frozen &&
+                if (isNewestUnfrozen &&
+                    stateAfter.frozen == stateBefore.frozen &&
                     stateAfter.freezeToken == stateBefore.freezeToken &&
                     (!stateBefore.frozen || stateAfter.frozenLiveId == effectiveLiveId)
                 ) {
@@ -328,11 +366,21 @@ internal class ChatTimeline(
         } finally {
             if (!stateBefore.frozen) {
                 val clearedPending = synchronized(stateLock) {
-                    inFlightLiveLines--
+                    val _ = inFlightLivePassSeqs.remove(passSeq)
                     val current = control
-                    if (inFlightLiveLines == 0 && current.frozen && current.frozenLivePending) {
-                        control = current.copy(frozenLivePending = false)
-                        true
+                    if (current.frozen && current.frozenLivePending && passSeq == current.frozenLiveTargetSeq) {
+                        // Target pass aborted before reaching finishUnfrozenUnderMemoLock: fall back to the newest
+                        // remaining in-flight pass up to the target, or release waiters with the freshest available ID.
+                        val fallbackTarget = inFlightLivePassSeqs.asSequence()
+                            .filter { it <= current.frozenLiveTargetSeq && it > current.frozenLiveSeq }
+                            .maxOrNull()
+                        if (fallbackTarget != null) {
+                            control = current.copy(frozenLiveTargetSeq = fallbackTarget)
+                            false
+                        } else {
+                            control = current.copy(frozenLivePending = false, frozenLiveTargetSeq = 0L)
+                            true
+                        }
                     } else {
                         false
                     }

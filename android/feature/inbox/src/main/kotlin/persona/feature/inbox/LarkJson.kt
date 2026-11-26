@@ -6,6 +6,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.longOrNull
+import persona.core.inbox.*
 
 // The pages' readers of the Lark gateway's JSON, the same as :core:inbox's own (LarkMessageMapping.kt).
 internal fun JsonObject.text(key: String) = (get(key) as? JsonPrimitive)?.contentOrNull.orEmpty()

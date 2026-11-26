@@ -345,6 +345,242 @@ class ChatStateTest {
         assertSame(frozen, cachedAgain)
     }
 
+    private fun awaitBlocked(thread: Thread, label: String) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (thread.state != Thread.State.WAITING &&
+            thread.state != Thread.State.TIMED_WAITING &&
+            thread.state != Thread.State.BLOCKED &&
+            System.nanoTime() < deadline
+        ) {
+            Thread.yield()
+        }
+        assertTrue(
+            "$label did not reach lock wait: ${thread.state}",
+            thread.state == Thread.State.WAITING ||
+                thread.state == Thread.State.TIMED_WAITING ||
+                thread.state == Thread.State.BLOCKED,
+        )
+    }
+
+    @Test fun overlappingUnfrozenPassesWaitForNewestTargetWhenOlderFinishesFirst() {
+        val enteredOlder = CountDownLatch(1)
+        val releaseOlder = CountDownLatch(1)
+        val enteredNewer = CountDownLatch(1)
+        val releaseNewer = CountDownLatch(1)
+        val olderWorkerRef = AtomicReference<Thread?>(null)
+        val newerWorkerRef = AtomicReference<Thread?>(null)
+        val olderError = AtomicReference<Throwable?>(null)
+        val newerError = AtomicReference<Throwable?>(null)
+        val frozenError = AtomicReference<Throwable?>(null)
+        val olderResult = AtomicReference<persona.core.domain.lines.ChatSnapshot?>(null)
+        val newerResult = AtomicReference<persona.core.domain.lines.ChatSnapshot?>(null)
+        val frozenResult = AtomicReference<persona.core.domain.lines.ChatSnapshot?>(null)
+
+        val timeline = ChatTimeline(beforeMemo = {
+            when (Thread.currentThread()) {
+                olderWorkerRef.get() -> {
+                    enteredOlder.countDown()
+                    assertTrue(releaseOlder.await(5, TimeUnit.SECONDS))
+                }
+                newerWorkerRef.get() -> {
+                    enteredNewer.countDown()
+                    assertTrue(releaseNewer.await(5, TimeUnit.SECONDS))
+                }
+            }
+        })
+
+        val turn1 = listOf(
+            Item("u1#0", 1, role = "user", kind = "text", text = "First question"),
+            Item("t1#0", 2, role = "assistant", kind = "thinking", text = "First thought"),
+        )
+        val turn2 = turn1 + listOf(
+            Item("a1#0", 3, role = "assistant", kind = "text", text = "First answer"),
+            Item("u2#0", 4, role = "user", kind = "text", text = "Second question"),
+            Item("t2#0", 5, role = "assistant", kind = "thinking", text = "Second thought"),
+        )
+        val newerReply = Item("a2#0", 6, role = "assistant", kind = "text", text = "Arrived after freeze")
+        val withNewer = turn2 + newerReply
+
+        val olderWorker = Thread {
+            try {
+                olderResult.set(timeline.lines(turn1, live = true, open = emptySet()))
+            } catch (t: Throwable) {
+                olderError.set(t)
+            }
+        }
+        val newerStarted = CountDownLatch(1)
+        val newerWorker = Thread {
+            try {
+                newerStarted.countDown()
+                newerResult.set(timeline.lines(turn2, live = true, open = emptySet()))
+            } catch (t: Throwable) {
+                newerError.set(t)
+            }
+        }
+        val frozenStarted = CountDownLatch(1)
+        val frozenWorker = Thread {
+            try {
+                frozenStarted.countDown()
+                frozenResult.set(timeline.lines(withNewer, live = false, open = emptySet()))
+            } catch (t: Throwable) {
+                frozenError.set(t)
+            }
+        }
+        olderWorkerRef.set(olderWorker)
+        newerWorkerRef.set(newerWorker)
+
+        olderWorker.start()
+        try {
+            assertTrue("older pass did not enter memoLock", enteredOlder.await(5, TimeUnit.SECONDS))
+
+            // Start a newer unfrozen pass so both older (seq 1) and newer (seq 2) are in flight before freeze.
+            newerWorker.start()
+            assertTrue(newerStarted.await(5, TimeUnit.SECONDS))
+            awaitBlocked(newerWorker, "newer unfrozen pass")
+
+            // Freeze while both passes are in flight: target must be the newer pass (seq 2), not whichever finishes first.
+            assertTrue(timeline.freezeChanged(turn2))
+
+            // Start the frozen lines() waiter before releasing either unfrozen pass.
+            frozenWorker.start()
+            assertTrue(frozenStarted.await(5, TimeUnit.SECONDS))
+            awaitBlocked(frozenWorker, "frozen pass")
+
+            // Let the older pass finish FIRST while holding the newer pass inside beforeMemo.
+            releaseOlder.countDown()
+            olderWorker.join(5_000)
+            assertFalse("older worker did not finish", olderWorker.isAlive)
+            assertTrue("newer pass did not enter memoLock after older pass finished", enteredNewer.await(5, TimeUnit.SECONDS))
+
+            // The frozen waiter must still be waiting for the newer target pass rather than settling on turn 1.
+            assertNull("frozen pass settled prematurely on older pass", frozenResult.get())
+            assertTrue("frozen waiter must remain blocked until newer target pass completes", frozenWorker.isAlive)
+        } finally {
+            releaseOlder.countDown()
+            releaseNewer.countDown()
+            olderWorker.join(5_000)
+            newerWorker.join(5_000)
+            frozenWorker.join(5_000)
+        }
+
+        assertFalse("newer worker did not finish", newerWorker.isAlive)
+        assertFalse("frozen worker did not finish", frozenWorker.isAlive)
+        assertNull(olderError.get())
+        assertNull(newerError.get())
+        assertNull(frozenError.get())
+
+        val olderLiveId = checkNotNull(olderResult.get()?.liveTurnId)
+        val newerLiveId = checkNotNull(newerResult.get()?.liveTurnId)
+        assertNotEquals(olderLiveId, newerLiveId)
+
+        val frozen = checkNotNull(frozenResult.get())
+        assertEquals("frozen snapshot must use the newest in-flight pass's liveTurnId", newerLiveId, frozen.liveTurnId)
+        assertFalse(frozen.lines.any { it.holds(newerReply.id) })
+        val works = frozen.lines.filterIsInstance<ChatLine.Work>()
+        assertEquals(2, works.size)
+        assertFalse("turn 1 work line must not stay live", works.first().live)
+        assertTrue("turn 2 work line must use the newer pass's live turn", works.last().live)
+        assertSame(frozen, timeline.lines(withNewer, live = false, open = emptySet()))
+    }
+
+    @Test fun failingNewestTargetPassReleasesFrozenWaiterWithoutDeadlock() {
+        val enteredOlder = CountDownLatch(1)
+        val releaseOlder = CountDownLatch(1)
+        val olderWorkerRef = AtomicReference<Thread?>(null)
+        val newerWorkerRef = AtomicReference<Thread?>(null)
+        val olderError = AtomicReference<Throwable?>(null)
+        val newerError = AtomicReference<Throwable?>(null)
+        val frozenError = AtomicReference<Throwable?>(null)
+        val olderResult = AtomicReference<persona.core.domain.lines.ChatSnapshot?>(null)
+        val frozenResult = AtomicReference<persona.core.domain.lines.ChatSnapshot?>(null)
+
+        val timeline = ChatTimeline(beforeMemo = {
+            when (Thread.currentThread()) {
+                olderWorkerRef.get() -> {
+                    enteredOlder.countDown()
+                    assertTrue(releaseOlder.await(5, TimeUnit.SECONDS))
+                }
+                newerWorkerRef.get() -> throw IllegalStateException("simulated projection failure")
+            }
+        })
+
+        val turn1 = listOf(
+            Item("u1#0", 1, role = "user", kind = "text", text = "First question"),
+            Item("t1#0", 2, role = "assistant", kind = "thinking", text = "First thought"),
+        )
+        val turn2 = turn1 + listOf(
+            Item("a1#0", 3, role = "assistant", kind = "text", text = "First answer"),
+            Item("u2#0", 4, role = "user", kind = "text", text = "Second question"),
+            Item("t2#0", 5, role = "assistant", kind = "thinking", text = "Second thought"),
+        )
+        val newerReply = Item("a2#0", 6, role = "assistant", kind = "text", text = "Arrived after freeze")
+        val withNewer = turn2 + newerReply
+
+        val olderWorker = Thread {
+            try {
+                olderResult.set(timeline.lines(turn1, live = true, open = emptySet()))
+            } catch (t: Throwable) {
+                olderError.set(t)
+            }
+        }
+        val newerStarted = CountDownLatch(1)
+        val newerWorker = Thread {
+            try {
+                newerStarted.countDown()
+                val _ = timeline.lines(turn2, live = true, open = emptySet())
+            } catch (t: Throwable) {
+                newerError.set(t)
+            }
+        }
+        val frozenStarted = CountDownLatch(1)
+        val frozenWorker = Thread {
+            try {
+                frozenStarted.countDown()
+                frozenResult.set(timeline.lines(withNewer, live = false, open = emptySet()))
+            } catch (t: Throwable) {
+                frozenError.set(t)
+            }
+        }
+        olderWorkerRef.set(olderWorker)
+        newerWorkerRef.set(newerWorker)
+
+        olderWorker.start()
+        try {
+            assertTrue("older pass did not enter memoLock", enteredOlder.await(5, TimeUnit.SECONDS))
+            newerWorker.start()
+            assertTrue(newerStarted.await(5, TimeUnit.SECONDS))
+            awaitBlocked(newerWorker, "newer unfrozen pass")
+
+            assertTrue(timeline.freezeChanged(turn2))
+
+            frozenWorker.start()
+            assertTrue(frozenStarted.await(5, TimeUnit.SECONDS))
+            awaitBlocked(frozenWorker, "frozen pass")
+
+            releaseOlder.countDown()
+            olderWorker.join(5_000)
+            newerWorker.join(5_000)
+            frozenWorker.join(5_000)
+        } finally {
+            releaseOlder.countDown()
+            olderWorker.join(5_000)
+            newerWorker.join(5_000)
+            frozenWorker.join(5_000)
+        }
+
+        assertFalse("older worker did not finish", olderWorker.isAlive)
+        assertFalse("newer worker did not finish", newerWorker.isAlive)
+        assertFalse("frozen worker deadlocked after target pass failed", frozenWorker.isAlive)
+        assertNull(olderError.get())
+        assertTrue("newer pass should have failed as simulated", newerError.get() is IllegalStateException)
+        assertNull(frozenError.get())
+
+        val olderLiveId = checkNotNull(olderResult.get()?.liveTurnId)
+        val frozen = checkNotNull(frozenResult.get())
+        assertEquals("frozen waiter falls back to the freshest completed pass when target fails", olderLiveId, frozen.liveTurnId)
+        assertFalse(frozen.lines.any { it.holds(newerReply.id) })
+    }
+
     @Test fun concurrentSearchItemsAndUiControlsNeverDeadlockOrThrow() {
         val timeline = ChatTimeline()
         val base = (1..200).map { seq ->

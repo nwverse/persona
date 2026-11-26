@@ -109,21 +109,20 @@ internal fun rememberChatPageRequests(key: SessionKey, chrome: ChatChromeBinding
         chatPageCards(taps.shown(allRequests), key, taskKeys, sideFold, sidePage)
             .sortedBy { if (it.id == chrome.requestId) 0 else 1 }
     }
-    // The cards above the composer, as iOS's footer has them. An Agent's chat: the stack holds every card it waits on.
-    // Persona's conversation: the oldest question of its tasks is a card of its own above the Needs you / In progress
-    // entries (iOS TaskQuestions), under its task's name with "N more"; the stack below them holds the conversation's own
-    // cards alone (#4883), so its "N pending" counts only them (DESIGN_SYSTEM.md 4.8, #4339 C10).
+    // Agent chats keep their stack. The Assistant's pager combines its own cards and its tasks' entries (#12858).
     val assistantChat = renderStyle == ChatRenderStyle.Assistant
-    val taskAsk = remember(assistantChat, requests, taskKeys, taskTodos, sessionList) {
-        if (!assistantChat) null else taskQuestion(requests, taskKeys) { card ->
+    val decisions = remember(assistantChat, requests, taps, allRequests, key, taskKeys, taskTodos, sessionList) {
+        if (!assistantChat) emptyList() else toDecideCards(
+            // Own cards come from the unfiltered home list: side-folded or task-homed requests must still surface in
+            // To Decide instead of being dropped by the page/task filter applied to `requests` (review P1).
+            taps.shown(allRequests).filter { it.homeKey == key },
+            taps.shown(allRequests), taskKeys,
+        ) { card ->
             val raw = GroupKeys.rawKey(card.sessionKey)
             taskTodos.firstOrNull { todo -> todo.activeAgents.any { it.key == raw } }?.title?.takeIf(String::isNotBlank)
                 ?: card.taskTitle?.takeIf(String::isNotBlank) ?: card.sessionTitle?.takeIf(String::isNotBlank)
                 ?: sessionList.firstOrNull { it.key == card.sessionKey }?.displayTitle
         }
-    }
-    val stackCards = remember(assistantChat, requests, key) {
-        if (assistantChat) requests.filter { it.homeKey == key } else requests
     }
     val messages = remember(allMessages, key, snapshot.items) {
         chatBubbles(allMessages, key, snapshot.items)
@@ -132,7 +131,7 @@ internal fun rememberChatPageRequests(key: SessionKey, chrome: ChatChromeBinding
         kotlinx.coroutines.flow.MutableStateFlow(emptyMap<String, ComposerDelivery>())
     }).collectAsStateWithLifecycle()
     return ChatPageRequests(machine, tapsState, interactionFeedbackState, answeredHereState, offerNextState, tasks,
-        taskTodosState, taskKeys, taskAgentSessionsState, requests, assistantChat, taskAsk, stackCards, messages,
+        taskTodosState, taskKeys, taskAgentSessionsState, requests, assistantChat, decisions, messages,
         composerDeliveriesState)
 }
 
@@ -149,8 +148,7 @@ internal class ChatPageRequests(
     val taskAgentSessions: State<Map<SessionKey, Session>>,
     val requests: List<Interaction>,
     val assistantChat: Boolean,
-    val taskAsk: TaskQuestion?,
-    val stackCards: List<Interaction>,
+    val decisions: List<ToDecideCard>,
     val messages: List<OutboxMessage>,
     val composerDeliveries: State<Map<String, ComposerDelivery>>,
 )
@@ -389,17 +387,11 @@ internal fun rememberChatPageLines(key: SessionKey, renderStyle: ChatRenderStyle
             .let { if (modelChanges) persona.core.domain.lines.ModelChanges.mark(it) else it }
             .let { if (renderStyle == ChatRenderStyle.Agent) persona.core.domain.lines.EngineChanges.mark(it) else it }
     }
-    val modeEarliest = remember(renderStyle, modeChanges.isNotEmpty(), snapshot.hasOlder, snapshot.items) {
-        if (renderStyle == ChatRenderStyle.Assistant || modeChanges.isEmpty() || !snapshot.hasOlder) null
-        else snapshot.items.firstNotNullOfOrNull { item ->
-            persona.core.contracts.parseTime(item.ts)
-        } ?: java.time.Instant.MAX
-    }
-    val applicableModeChanges = remember(renderStyle, modeChanges, modeEarliest, modeChangesUntil) {
+    val applicableModeChanges = remember(renderStyle, modeChanges, earliest, modeChangesUntil) {
         if (renderStyle == ChatRenderStyle.Assistant || modeChanges.isEmpty()) emptyList()
         else modeChanges.filter { change ->
             val at = persona.core.contracts.parseTime(change.at) ?: return@filter false
-            (modeEarliest == null || !at.isBefore(modeEarliest)) &&
+            (earliest == null || !at.isBefore(earliest)) &&
                 (modeChangesUntil == null || !at.isAfter(modeChangesUntil))
         }
     }
@@ -457,12 +449,13 @@ internal fun rememberChatPageSubagents(
     key: SessionKey, chrome: ChatChromeBindings, readOnly: Boolean, session: Session?,
     openBackground: ((BackgroundDestination) -> Unit)?,
 ): ChatPageSubagents {
-    val subagentLinks = remember(session?.subagents, chrome.onOpenSession, readOnly, key.machineId) {
+    val subagentLinks = remember(session?.subagents, chrome.onOpenSubagent, chrome.onOpenSession, readOnly, key.machineId) {
         val listed = session?.subagents.orEmpty()
+        val opener = chrome.onOpenSubagent ?: chrome.onOpenSession
         if (listed.isEmpty()) null
         else ChatSubagents(listed.filter { !it.toolUseId.isNullOrBlank() && it.sessionId.isNotBlank() }
             .associate { it.toolUseId!! to SessionKey(key.machineId, it.sessionId) },
-            chrome.onOpenSession?.takeIf { !readOnly }, listed.associateBy(persona.core.domain.lines.Subagents::callOf))
+            opener?.takeIf { !readOnly }, listed.associateBy(persona.core.domain.lines.Subagents::callOf))
     }
     val subagentFolds = remember(key) { SubagentFolds() }
     // A Workflow call draws its run's card (#3435): the session's runs by the call that launched them, their agents

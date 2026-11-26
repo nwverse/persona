@@ -240,13 +240,31 @@ class AssistantLinesTest {
             "2026-11-23T12:34:56.789Z",
             "2026-11-23T12:34:56.123456789Z",
             "2026-11-23T12:34:56z",
-            "1999-12-31T23:59:59Z",
             "2026-11-23T20:34:56+08:00",
         )) {
             assertEquals(iso, Instant.parse(iso), AssistantLines.time(iso))
         }
-        for (invalid in listOf(null, "", "   ", "not-a-timestamp", "2026-13-40T99:00:00Z")) {
+        for (invalid in listOf(null, "", "   ", "not-a-timestamp", "0001-01-01T00:00:00Z", "1999-12-31T23:59:59Z", "2026-13-40T99:00:00Z")) {
             assertNull(invalid.toString(), AssistantLines.time(invalid))
         }
+    }
+
+    @Test fun lineItemTimeReturnsNullForMalformedOrBlankTimestampWithoutThrowing() {
+        val valid = persona.core.domain.lines.LineItem(
+            persona.core.contracts.Item(id = "a", kind = "assistant", seq = 1, text = "ok", ts = "2026-11-25T10:00:00Z"),
+        )
+        val blank = persona.core.domain.lines.LineItem(
+            persona.core.contracts.Item(id = "b", kind = "assistant", seq = 2, text = "blank", ts = ""),
+        )
+        val bad = persona.core.domain.lines.LineItem(
+            persona.core.contracts.Item(id = "c", kind = "assistant", seq = 3, text = "bad", ts = "2026-13-40T99:00:00Z"),
+        )
+        val garbage = persona.core.domain.lines.LineItem(
+            persona.core.contracts.Item(id = "d", kind = "assistant", seq = 4, text = "garbage", ts = "not-a-timestamp"),
+        )
+        org.junit.Assert.assertEquals(java.time.Instant.parse("2026-11-25T10:00:00Z"), valid.time)
+        org.junit.Assert.assertNull(blank.time)
+        org.junit.Assert.assertNull(bad.time)
+        org.junit.Assert.assertNull(garbage.time)
     }
 }

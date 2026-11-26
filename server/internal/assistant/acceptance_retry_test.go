@@ -123,8 +123,10 @@ func waitingForCard(t *testing.T, s *Service, id string) *acceptAsk {
 	if got, total := s.snapshotUnaccepted(ctx, s.location(ctx)); total != 1 || len(got) != 1 || got[0].Changed != a.Changed {
 		t.Fatalf("snapshot: %+v total=%d", got, total)
 	}
-	if facts := s.briefFactsAt(ctx, time.Now(), ""); len(facts.Accept) != 1 || facts.Accept[0].id != id {
-		t.Fatalf("briefing: %+v", facts.Accept)
+	if s.briefingOn() {
+		if facts := s.briefFactsAt(ctx, time.Now(), ""); len(facts.Accept) != 1 || facts.Accept[0].ID != id {
+			t.Fatalf("briefing: %+v", facts.Accept)
+		}
 	}
 	return a
 }
@@ -132,6 +134,7 @@ func waitingForCard(t *testing.T, s *Service, id string) *acceptAsk {
 // The repro: the first card fails to go out; the ask is kept, and the next tick posts its one card, under the same key.
 // Later ticks post nothing more, and the card passes the task as one sent at once does.
 func TestAcceptanceCardRetriedAfterAFailedSend(t *testing.T) {
+	needsLarkLayer(t)
 	ctx := context.Background()
 	s, f, lark, id := retryService(t, acceptSend{err: errLarkDown})
 	deployedCardless(t, s, f, id)
@@ -160,6 +163,7 @@ func TestAcceptanceCardRetriedAfterAFailedSend(t *testing.T) {
 // A send that timed out may have landed: the retry goes under the same key, which Feishu takes as the same send, so the
 // ask gets that card's id and there is still one card.
 func TestAcceptanceRetryAfterATimeoutPostsOneCard(t *testing.T) {
+	needsLarkLayer(t)
 	s, f, lark, id := retryService(t, acceptSend{err: context.DeadlineExceeded, lost: true})
 	deployedCardless(t, s, f, id)
 	waitingForCard(t, s, id)
@@ -179,6 +183,7 @@ func TestAcceptanceRetryAfterATimeoutPostsOneCard(t *testing.T) {
 // Every try is bounded by acceptPostWindow from the ask: within it a failing send waits for the next tick; past it no
 // send is made and the ask is kept card-less (NoCard), still listed. An unreadable status the whole time ends the same.
 func TestAcceptanceRetryIsBounded(t *testing.T) {
+	needsLarkLayer(t)
 	t.Run("sends that keep failing", func(t *testing.T) {
 		s, f, lark, id := retryService(t, acceptSend{err: errLarkDown})
 		deployedCardless(t, s, f, id)
@@ -200,7 +205,7 @@ func TestAcceptanceRetryIsBounded(t *testing.T) {
 	t.Run("a status that cannot be read", func(t *testing.T) {
 		s, f, lark, id := retryService(t)
 		f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) { return nil, errors.New("manager away") })
-		s.feishuForgetStatus()
+		s.larkModule().ForgetStatus()
 		deployedCardless(t, s, f, id)
 		a := askOf(s, id)
 		s.retryAcceptance(a.AskedAt.Add(10 * time.Minute))
@@ -233,6 +238,7 @@ func cardlessAndListed(t *testing.T, s *Service, id string) {
 // The bot found off (or its reports off) when the card is tried again: no card is due, so the ask is card-less (NoCard),
 // as one made with the bot off is, and nothing is sent.
 func TestAcceptanceRetryWithTheBotOffIsCardless(t *testing.T) {
+	needsLarkLayer(t)
 	for _, c := range []struct {
 		name string
 		st   FeishuStatus
@@ -247,7 +253,7 @@ func TestAcceptanceRetryWithTheBotOffIsCardless(t *testing.T) {
 			st := c.st
 			st.PublicURL = cardlessWeb
 			f.answerApp(AppFeishu, FeishuStatusGet, func(json.RawMessage) (any, error) { return st, nil })
-			s.feishuForgetStatus()
+			s.larkModule().ForgetStatus()
 			s.retryAcceptance(time.Now())
 			if _, keys := lark.sent(); len(keys) != 1 {
 				t.Fatalf("%d sends, want only the first", len(keys))
@@ -262,6 +268,7 @@ func TestAcceptanceRetryWithTheBotOffIsCardless(t *testing.T) {
 // their cards dead (Earlier) through a failed send and its retry, and a new round asked while a sweep looks is not
 // posted as the old one.
 func TestAcceptanceRetryRoundGuards(t *testing.T) {
+	needsLarkLayer(t)
 	ctx := context.Background()
 	dropped := func(t *testing.T, s *Service, lark *acceptLark, id string) {
 		t.Helper()
@@ -388,6 +395,7 @@ func TestAcceptanceRetryRoundGuards(t *testing.T) {
 // never dereferenced, and no longer keep their task from being asked; an ask waiting for its card is posted by the
 // next tick; one with its card is left alone.
 func TestAcceptanceReloadedAsks(t *testing.T) {
+	needsLarkLayer(t)
 	ctx := context.Background()
 	f := newFakeHub()
 	f.settings = &Settings{Timezone: "Asia/Shanghai"}

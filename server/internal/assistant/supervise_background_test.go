@@ -949,8 +949,8 @@ func TestDigestToWithBackgroundSupervisor(t *testing.T) {
 	if _, _, err := s.updateSupervision(ctx, waits.ID, func(v *Supervision) bool { v.State = reviewNeedsUser; return true }); err != nil {
 		t.Fatal(err)
 	}
-	for conv, want := range map[string]string{"side1": "conv1", "bg1": "conv1", "gone": "conv1"} {
-		// What the background supervisor hands out keeps the main conversation on its ledger, as every task it follows up.
+	for conv, want := range map[string]string{"side1": "side1", "bg1": "conv1", "gone": "conv1"} {
+		// Live side conversations own what they plan (#13657); the background supervisor and gone conversations fall back to main.
 		if got, ok := s.defaultPlanSupervisor(ctx, conv, ""); !ok || got != want {
 			t.Errorf("a task %s plans is supervised by %q %v, want %q", conv, got, ok, want)
 		}
@@ -1069,18 +1069,46 @@ func TestAsksOfMainSupervisedTasksUseMainLadder(t *testing.T) {
 	}
 }
 
-// Without leader conversations a card is the user's as it comes, background supervisor or not.
+// Without leader conversations askLadder still never routes to the background supervisor: open supervised-task
+// non-six-class cards route to main (ownSupervisor) via active sigAsk wake-up rather than bg1 or keepRelayLater,
+// while the background supervisor's own cards stay unrouted (#5732, #16291).
 func TestBackgroundSupervisorAloneDoesNotRouteAsks(t *testing.T) {
 	e := newRouteEnv(t, nil, false)
+	ctx := context.Background()
 	e.s.noBackground = false
+	e.f.known["bg1"] = true
+	convs := []proto.Session{
+		{SessionID: "conv1", MachineID: "server", Cwd: assistantHome, Assistant: true, Status: proto.StatusIdle},
+		{SessionID: "lead1", MachineID: "server", Cwd: assistantHome, Assistant: true, Status: proto.StatusIdle},
+		{SessionID: "bg1", MachineID: "server", Cwd: assistantHome, Assistant: true, Status: proto.StatusIdle},
+	}
+	e.sessions("server", convs...)
+	e.f.setSessions("server", convs...)
 	setSettings(t, e.s, func(v *Settings) { v.BackgroundSupervisor, v.BackgroundSupervisorMachineID = "bg1", "server" })
-	if _, _, _, ok := e.s.askLadder(context.Background(), proto.Interaction{MachineID: "mac", SessionID: "worker-1", Kind: proto.IxQuestion}); ok {
-		t.Fatal("a card is routed with no leader conversation")
+	if ladder, _, _, ok := e.s.askLadder(ctx, proto.Interaction{MachineID: "mac", SessionID: "worker-1", Kind: proto.IxQuestion}); !ok || !slices.Equal(ladder, []string{"conv1"}) {
+		t.Fatalf("ladder = %v %v, want [conv1]", ladder, ok)
+	}
+	if _, _, _, ok := e.s.askLadder(ctx, proto.Interaction{MachineID: "server", SessionID: "bg1", Kind: proto.IxQuestion}); ok {
+		t.Fatal("the background supervisor's own cards are routed")
 	}
 	e.raise(askPermission("ix1", "worker-1"))
-	waitFor(t, "the push", func() bool { return e.pushesOf("ix1") == 1 })
-	if e.lastShown("ix1").Delegating {
-		t.Fatal("the card is shown as delegating")
+	n := e.noticeWith("conv1", "interaction_id=ix1")
+	if !strings.Contains(n, "signal=ask") {
+		t.Fatalf("main's notice lacks signal=ask:\n%s", n)
+	}
+	e.settle()
+	if !e.lastShown("ix1").Delegating || e.pushesOf("ix1") != 0 {
+		t.Fatal("non-owner permission pushed to the owner instead of routing")
+	}
+	if len(e.f.noticesTo("bg1")) != 0 {
+		t.Fatalf("background supervisor was handed asks: %q", e.f.noticesTo("bg1"))
+	}
+	for _, to := range []string{"conv1", "bg1"} {
+		for _, m := range laterFor(e.s, to) {
+			if m.From == cardAgentPermission && strings.Contains(m.Text, "interaction_id=ix1") {
+				t.Fatalf("supervised permission fell into %s keepRelayLater queue", to)
+			}
+		}
 	}
 }
 

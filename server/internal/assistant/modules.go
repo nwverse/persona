@@ -15,8 +15,10 @@ import (
 	"github.com/nwverse/persona/server/internal/assistant/kernel"
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/larkhost"
 	"github.com/nwverse/persona/server/internal/modapi"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 // The built-in feature modules (docs/architecture/core-and-modules.md): the assistant reaches them only through its
@@ -35,7 +37,8 @@ type ModuleSwitch struct {
 	Disabled []string `json:"disabled"`
 }
 
-// ReadModuleSwitch reads the modules settings row: the ids of the built-in modules switched off. The manager reads it
+// ReadModuleSwitch reads the modules settings row: the ids of the modules switched off, built-in ones and client-only
+// ones (modapi.ClientModules). The manager reads it
 // once, when it starts (main.go), and hands it to New, so the switch takes effect at the next start; New itself reads
 // no database. A row that cannot be read switches nothing off.
 func ReadModuleSwitch(ctx context.Context, st Store, logf func(format string, args ...any)) []string {
@@ -94,8 +97,8 @@ func (s *Service) setModuleSwitch(ctx context.Context, raw json.RawMessage) (*ow
 	}
 	seen := map[string]bool{}
 	for _, id := range next.Disabled {
-		if !s.modules.Loaded(id) && s.modules.Skipped(id) == "" {
-			return nil, errors.New("unknown module " + strconv.Quote(id))
+		if !s.modules.Loaded(id) && s.modules.Skipped(id) == "" && !slices.Contains(modapi.ClientModules(), id) {
+			return nil, errors.New("unknown module " + strconv.Quote(id) + "; client-only modules: " + strings.Join(modapi.ClientModules(), ", "))
 		}
 		if seen[id] {
 			return nil, errors.New("duplicate module " + strconv.Quote(id))
@@ -133,6 +136,7 @@ func (s *Service) loadModules(mods []modapi.Module, off []string) {
 		mods = kernel.Builtin()
 	}
 	coreTools := reservedCoreToolNames()
+	coreRoutes := slices.Concat(s.routes, s.routeFallbacks)
 	var acceptedRoutes []string
 	check := func(routes, tools []string) error {
 		for _, name := range tools {
@@ -140,7 +144,7 @@ func (s *Service) loadModules(mods []modapi.Module, off []string) {
 				return fmt.Errorf("tool %q is a core tool's", name)
 			}
 		}
-		if err := checkModuleRoutes(s.routes, acceptedRoutes, routes); err != nil {
+		if err := checkModuleRoutes(coreRoutes, acceptedRoutes, routes); err != nil {
 			return err
 		}
 		// The kernel commits this module immediately after a nil result, so these routes belong to the next check's
@@ -148,10 +152,20 @@ func (s *Service) loadModules(mods []modapi.Module, off []string) {
 		acceptedRoutes = append(acceptedRoutes, routes...)
 		return nil
 	}
-	s.modules = kernel.NewWithOptions(mods, kernel.LoadOptions{Off: func(id string) bool { return slices.Contains(off, id) }, Logf: s.logf, Check: check})
+	s.modulesOff = slices.Clone(off)
+	s.modules = kernel.NewWithOptions(mods, kernel.LoadOptions{
+		Off:   func(id string) bool { return slices.Contains(off, id) },
+		Logf:  s.logf,
+		Check: check,
+		Ports: s.modulePorts(),
+	})
 	for _, pattern := range s.modules.HubRoutes() {
 		handler, _ := s.modules.HubRoute(pattern)
-		s.handle(pattern, handler)
+		s.handle(pattern, func(w http.ResponseWriter, r *http.Request) {
+			// A module's handler is the kernel's, shared by every manager in the process: the request says which
+			// manager's lark layer it is for (larkhost.WithLayer).
+			handler(w, r.WithContext(larkhost.WithLayer(r.Context(), s.larkModule)))
+		})
 	}
 	s.logf("modules: loaded %s", loadedModules(s.modules))
 }
@@ -159,7 +173,7 @@ func (s *Service) loadModules(mods []modapi.Module, off []string) {
 // reservedCoreToolNames are names a module may not take, whether a conditional core tool is enabled now or later.
 func reservedCoreToolNames() map[string]bool {
 	out := map[string]bool{}
-	for _, name := range append(slices.Clone(toolNames), ownerActionPrepareTool, "urgent_call", knowledgeSearchTool, knowledgeReadTool, spaceStateTool,
+	for _, name := range append(slices.Clone(toolNames), ownerActionPrepareTool, "todo_split", "todo_merge", "health_intake", "health_strength", "urgent_call", knowledgeSearchTool, knowledgeReadTool, spaceStateTool, externalSourcesReadTool, externalSourcesWriteTool,
 		"resource_acquire", "resource_get", "resource_renew", "resource_release", "resource_cancel") {
 		out[name] = true
 	}
@@ -207,13 +221,24 @@ func loadedModules(k *kernel.Kernel) string {
 	return strings.Join(ids, ", ")
 }
 
-// moduleFeatures are the module protocol marker and the loaded modules' wire feature flags, in load order. An off or
-// excluded module announces no flag of its own; the marker remains so clients know the absence means off.
+// moduleFeatures are the module protocol marker, the loaded modules' wire feature flags in load order, then the flags
+// of the client-only modules (modapi.ClientModules) that the modules setting leaves on. An off or excluded module
+// announces no flag of its own; the marker remains so clients know the absence means off. An id that is also compiled
+// in as a built-in module is that module's to announce; the list never holds one (internal/modules/all tests it), since
+// a module built out is unknown to the kernel and the list would announce it.
 func (s *Service) moduleFeatures() []string {
 	out := []string{modulesFeature}
 	for _, m := range s.modules.Modules() {
 		if m.Feature != "" && !slices.Contains(out, m.Feature) {
 			out = append(out, m.Feature)
+		}
+	}
+	for _, id := range modapi.ClientModules() {
+		if slices.Contains(s.modulesOff, id) || s.modules.Loaded(id) || s.modules.Skipped(id) != "" {
+			continue
+		}
+		if f := "module." + id; !slices.Contains(out, f) {
+			out = append(out, f)
 		}
 	}
 	return out
@@ -223,19 +248,21 @@ func (s *Service) moduleFeatures() []string {
 func (s *Service) moduleTools() []proto.Tool {
 	var out []proto.Tool
 	for _, tool := range s.modules.MCPTools() {
-		out = append(out, proto.Tool{Name: tool.Name, Description: tool.Description, InputSchema: tool.InputSchema})
+		out = append(out, proto.Tool{Name: tool.Name, Description: tool.Description, InputSchema: json.RawMessage(tool.InputSchema)})
 	}
 	return out
 }
 
-// runModuleTool dispatches a loaded module's tool; ok is false for an off or unknown tool.
+// runModuleTool dispatches a loaded module's tool; ok is false for an off or unknown tool. The caller's bare machine
+// and session strings become the contract's ID types here, once, and the module's result becomes the text every
+// tool returns.
 func (s *Service) runModuleTool(ctx context.Context, machine, self, name string, args json.RawMessage) (out string, err error, ok bool) {
 	tool, ok := s.modules.MCPTool(name)
 	if !ok {
 		return "", nil, false
 	}
-	out, err = tool.Run(ctx, machine, self, args)
-	return out, err, true
+	res, err := tool.Run(ctx, modapi.ToolCall{Machine: wireids.MachineID(machine), Session: wireids.SessionID(self), Args: modapi.ToolArgs(args)})
+	return res.Text, err, true
 }
 
 // runModuleJobs starts every loaded module's loop under the Service Run context. Cancellation is normal shutdown.
@@ -293,12 +320,16 @@ func moduleStore(v *Settings, key string, raw json.RawMessage) error {
 	return errors.New(key + " has no place in the assistant's settings")
 }
 
+func unavailableModuleSetting(key string) error {
+	return errors.New(key + " is not available: its module is off")
+}
+
 // moduleSettingGet is persona_settings' get of a module setting: the value in force.
 func (s *Service) moduleSettingGet(key string) func(ctx context.Context) (string, error) {
 	return func(ctx context.Context) (string, error) {
 		m, ok := s.modules.Setting(key)
 		if !ok {
-			return "", errors.New(key + " is not available: its module is off")
+			return "", unavailableModuleSetting(key)
 		}
 		return string(m.Value(moduleStored(s.settings(ctx), key))), nil
 	}
@@ -312,7 +343,7 @@ func (s *Service) moduleSettingSet(key, cardKey, applied string) func(ctx contex
 	return func(ctx context.Context, raw json.RawMessage) (*ownChange, error) {
 		m, ok := s.modules.Setting(key)
 		if !ok {
-			return nil, errors.New(key + " is not available: its module is off")
+			return nil, unavailableModuleSetting(key)
 		}
 		next, err := m.Check(raw)
 		if err != nil {
@@ -372,4 +403,13 @@ func (s *Service) briefingWaits(v Settings) (modapi.WaitRules, bool) {
 func (s *Service) briefingOn() bool {
 	_, ok := s.modules.ScheduleFacts()
 	return ok
+}
+
+// briefingRunner returns the loaded briefing module's runtime runner, or false when the module is off or built out.
+func (s *Service) briefingRunner() (modapi.ScheduleFactsRunner, bool) {
+	f, ok := s.modules.ScheduleFacts()
+	if !ok || f.Runner == nil {
+		return nil, false
+	}
+	return f.Runner, true
 }

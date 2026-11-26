@@ -203,6 +203,7 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
     var handingOff by remember { mutableStateOf<String?>(null) }
     var composeDraft by remember { mutableStateOf<MailDraft?>(null) }
     val mailTransport by repository.mailTransport.collectAsStateWithLifecycle()
+    val mailAccess = LocalMailAccess.current
 
     val haptics = rememberHaptics()
     // Tap-driven row motion only (#9600). A hub refresh changes the rows with the flag clear.
@@ -279,12 +280,15 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
             return
         }
         // The large title comes back on this frame, with no spring (InboxView.swift:152-153). The
-        // removal waits until that frame has been laid out, then fades in its new place
-        // (InboxView.swift:632-634). Doing both here draws the fading row on top of the next one.
+        // removal waits until that frame has been laid out, then prepares `exitFade` for one frame
+        // without arming placement yet so a hub push cannot steal the removal's tap (InboxView.swift:632-634).
         after?.invoke()
         val job = scope.launch {
             try {
                 androidx.compose.runtime.withFrameNanos { }
+                androidx.compose.runtime.withFrameNanos { }
+                listTapMotion.prepareExitFade()
+                androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
                 androidx.compose.runtime.withFrameNanos { }
                 listTapMotion.arm(ListTapMotionKind.State)
                 asked.forEach { pending[it.id] = done }
@@ -298,11 +302,13 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
             kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.NonCancellable).launch { send() }
         }
     }
-    /** [ListTapMotion.arm], then the list write on the next frame, so the spec is already measured. */
+    /** Prepares exit fade for one frame, then arms and writes on the next frame so a hub push cannot steal the tap. */
     fun animateChange(block: () -> Unit) {
-        listTapMotion.arm(ListTapMotionKind.State)
+        listTapMotion.prepareExitFade()
+        androidx.compose.runtime.snapshots.Snapshot.sendApplyNotifications()
         scope.launch {
             androidx.compose.runtime.withFrameNanos { }
+            listTapMotion.arm(ListTapMotionKind.State)
             block()
         }
     }
@@ -520,7 +526,10 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
             androidx.compose.runtime.withFrameNanos { }
             androidx.compose.runtime.withFrameNanos { }
             // Jump to (InboxView.swift:924, :1099) scrolls with Theme.Motion.standard. The row swap itself stays instant.
-            listIndex.positions[key]?.let { at -> scroll.animateScrollToItem((scroll.layoutInfo.totalItemsCount - listIndex.counted).coerceAtLeast(0) + at) }
+            listIndex.positions[key]?.let { at ->
+                listTapMotion.onProgrammaticScroll()
+                scroll.animateScrollToItem((scroll.layoutInfo.totalItemsCount - listIndex.counted).coerceAtLeast(0) + at)
+            }
             jumpTo = null
         }
         BindListTapMotion(listTapMotion)
@@ -551,7 +560,7 @@ fun InboxScreen(repository: InboxRepository, navigator: Navigator, onOpenCard: (
                     size = JButtonSize.Small, enabled = pickedTargets.isNotEmpty())
                 if (picked.size == 1) JIconButton(PhIcons.DotsThree, stringResource(R.string.inbox_more), { pickedMenu = true })
             }) else ({
-                if (mailTransport != null) {
+                if (mailTransport != null && mailAccess == MailAccess.Live) {
                     JIconButton(PhIcons.PencilSimple, stringResource(R.string.inbox_compose_mail), {
                         composeDraft = MailDraft(accountId = "")
                     })
