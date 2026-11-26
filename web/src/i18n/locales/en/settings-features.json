@@ -1,4 +1,6 @@
 {
+  "module_mail": "Mail",
+  "module_mail_hint": "Read and send email from your connected accounts.",
   "module_office": "Office previews",
   "module_office_hint": "Preview documents, spreadsheets and presentations.",
   "area_features": "Features",
