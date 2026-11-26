@@ -146,6 +146,7 @@ func TestInboxVisibilitySelectedIMessageCannotEnableAI(t *testing.T) {
 
 	h.store = newMemStore()
 	h.connectors = connector.NewRegistry(nil)
+	needsIMessageModule(t) // the enablement route and its connector below belong to this module
 	imessageNode(t, h, func(method string, _ json.RawMessage) (any, error) {
 		return json.RawMessage(`{"connectors":[{"id":"imessage","status":"ok"}]}`), nil
 	})

@@ -69,7 +69,7 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
         val side = landedSide ?: return@LaunchedEffect
         if (sideShown) return@LaunchedEffect
         sideShown = true
-        val chat = ChatRoute(side.machineId, side.sessionId, ConversationKind.Agent, side = true)
+        val chat = ChatRoute(side.machineId, side.sessionId, ConversationKind.Agent, side = true, decisionSource = route.decisionSource)
         navigator.navigate(requestId?.let { InteractionRoute(chat, it) } ?: chat)
     }
     val key = home.key
@@ -81,8 +81,11 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
     }
     // The hub's leader conversations drive the chat's background-round fold (#6595), scoped to this manager.
     val assistantSnapshot by session.assistant.assistant.collectAsStateWithLifecycle()
+    val agentPreferences by remember(session) { session.preferences.snapshots }
+        .collectAsStateWithLifecycle(persona.feature.agents.AgentsPreferencesSnapshot())
     val waiting = rememberWaitingRequests(session, sessions)
     val assistant = route.kind == ConversationKind.Assistant || metadata?.assistant == true
+    val preferHerdrTabName = !assistant && persona.core.contracts.GroupKeys.namespaceOf(route.machineId) in agentPreferences.herdrTabNameHubs
     val editor = rememberChatDraftEditor(wiring, key)
     val storedComposer by (editor?.composer ?: remember { MutableStateFlow<ChatComposerState?>(null) }).collectAsStateWithLifecycle()
     val draftError by (editor?.error ?: remember { MutableStateFlow<Int?>(null) }).collectAsStateWithLifecycle()
@@ -140,6 +143,11 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
                         val target = waitingRoute(chat, request)
                         if (target.card != null) onOpenCard(target) else navigator.navigate(target.key)
                     },
+                    decisionSource = route.decisionSource,
+                    onOpenDecisionSource = { chat, toolUseId ->
+                        navigator.navigate(ChatRoute(chat.machineId, chat.sessionId, ConversationKind.Agent, subagentDetail = true,
+                            decisionSource = DecisionSource(toolUseId)))
+                    },
                     onOpenAssistant = { navigator.navigate(persona.feature.chat.conversationRoute(it, assistant = true)) },
                     onConnectionDetails = { navigator.navigate(SettingsPageRoute(SettingsPage.Diagnostics)) },
                     files = session.files, hubScope = wiring?.scope?.path ?: session.identity, ports = wiring?.ports,
@@ -163,7 +171,8 @@ internal fun ShellChat(route: ChatRoute, session: ShellSession, navigator: Navig
                             persona.core.contracts.BriefSetupPage.StandingAuthorizations ->
                                 SettingsPageRoute(SettingsPage.StandingAuthorizations)
                         })
-                    }),
+                    },
+                    preferHerdrTabName = preferHerdrTabName),
                 renderStyle = if (assistant) ChatRenderStyle.Assistant else ChatRenderStyle.Agent,
                 composerState = composer, composerService = wiring?.composer,
                 onDraftChanged = editor?.let { it::changed },

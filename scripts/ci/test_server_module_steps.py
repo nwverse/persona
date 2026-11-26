@@ -18,6 +18,7 @@ class ServerModuleSteps(unittest.TestCase):
                 (root / name).parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(ROOT / name, root / name)
             (root / "scripts/ci/common.sh").write_text('''CI_IMPLEMENTATION_ROOT=$PWD
+ci_run() { ci_run_step "$@"; }
 ci_run_step() {
     printf '%s\\t%s\\t%s\\t%s\\t%s\\n' "$lane" "$1" "$2" "$GOFLAGS" "${*:3}" >> "$TEST_STEPS"
 }
@@ -66,6 +67,7 @@ ci_run_step() {
                     self.assertEqual(where["Builds without the mail module"], "node")
                     self.assertEqual(where["Builds without the speech modules"], "core-node")
                     self.assertEqual(where["Core-only hub smoke"], "build")
+                    self.assertEqual(where["Core-only install from packages"], "core-other")
                     self.assertEqual(where["Builds without each module"], "build")
                     self.assertEqual(where["Non-root extension container isolation"], "other")
                     for label, lane in (("Builds without the node modules", "node"),

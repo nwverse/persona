@@ -17,10 +17,12 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
-// fakePages is the assistant's pages as a test gives them: two places, and every call it was asked.
+// fakePages is the assistant's pages as a test gives them: nav_pages plus an overview_card when overview is asked,
+// and every call it was asked.
 type fakePages struct {
 	mu         sync.Mutex
 	placements []string
+	overviews  []bool
 	langs      []i18n.Lang
 	calls      []fakePagesCall
 	refuse     error
@@ -32,15 +34,24 @@ type fakePagesCall struct {
 	in         wire.UIRequest
 }
 
-func (f *fakePages) Places(_ context.Context, lang i18n.Lang, placement string) []UIPlace {
+func (f *fakePages) Places(_ context.Context, lang i18n.Lang, placement string, overview bool) []UIPlace {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.placements = append(f.placements, placement)
+	f.overviews = append(f.overviews, overview)
 	f.langs = append(f.langs, lang)
-	return []UIPlace{
-		{Extension: PagesExtension, ExtensionName: "Persona", ID: "index", Title: "Dashboards", Placement: "nav_page", Size: "full", Icon: "chart"},
-		{Extension: PagesExtension, ExtensionName: "Persona", ID: "pg_0123456789abcdef", Title: "Morning run", Placement: "nav_page", Size: "full", Icon: "heart"},
+	var out []UIPlace
+	if placement == "" || extension.FullPage(placement) {
+		out = append(out,
+			UIPlace{Extension: PagesExtension, ExtensionName: "Persona", ID: "index", Title: "Dashboards", Placement: "nav_page", Size: "full", Icon: "chart"},
+			UIPlace{Extension: PagesExtension, ExtensionName: "Persona", ID: "pg_0123456789abcdef", Title: "Morning run", Placement: "nav_page", Size: "full", Icon: "heart"},
+		)
 	}
+	if overview && (placement == "" || placement == "overview_card") {
+		out = append(out, UIPlace{Extension: PagesExtension, ExtensionName: "Persona", ID: "g_0123456789abcdef", Title: "Elm Street rent",
+			Placement: "overview_card", Size: "compact", Opens: "pg_0123456789abcdef"})
+	}
+	return out
 }
 
 func (f *fakePages) UI(_ context.Context, lang i18n.Lang, ui string, in wire.UIRequest, device string) (extension.ActionResult, error) {
@@ -113,6 +124,39 @@ func TestPagesHook(t *testing.T) {
 			t.Fatalf("the hook is told the placement: %v", after)
 		}
 	}
+	// pages_overview=1 gates watch Overview cards g_<hex>: omitted never lists them, passed lists them for empty and
+	// overview_card placements only, and never for an answer-only device or another placement.
+	pagesIDs := func(list []any, extKey string) []string {
+		var out []string
+		for _, item := range list {
+			m := item.(map[string]any)
+			if fmt.Sprint(m[extKey]) == PagesExtension {
+				out = append(out, fmt.Sprint(m["id"]))
+			}
+		}
+		return out
+	}
+	if ids := pagesIDs(list, "extension"); slices.Contains(ids, "g_0123456789abcdef") {
+		t.Fatalf("without ?pages_overview=1, no overview_card is listed: %v", ids)
+	}
+	if _, out := call(t, mux, "GET", "/api/v1/extensions/-/ui?pages_overview=1", phone, ""); !slices.Equal(pagesIDs(out["ui"].([]any), "extension"), []string{"index", "pg_0123456789abcdef", "g_0123456789abcdef"}) {
+		t.Fatalf("with ?pages_overview=1, overview_card follows nav_pages: %v", out["ui"])
+	}
+	if _, out := call(t, mux, "GET", "/api/v1/extensions/-/ui?placement=overview_card&pages_overview=1", phone, ""); !slices.Equal(pagesIDs(out["ui"].([]any), "extension"), []string{"g_0123456789abcdef"}) {
+		t.Fatalf("placement=overview_card&pages_overview=1 lists only overview_card: %v", out["ui"])
+	}
+	if _, out := call(t, mux, "GET", "/api/v1/extensions/-/ui?placement=nav_page&pages_overview=1", phone, ""); slices.Contains(pagesIDs(out["ui"].([]any), "extension"), "g_0123456789abcdef") {
+		t.Fatalf("placement=nav_page&pages_overview=1 omits overview_card: %v", out["ui"])
+	}
+	if _, out := call(t, mux, "GET", "/api/v1/extensions/-/ui?placement=machine_section&pages_overview=1", phone, ""); len(pagesIDs(out["ui"].([]any), "extension")) != 0 {
+		t.Fatalf("placement=machine_section&pages_overview=1 lists no pages: %v", out["ui"])
+	}
+	if _, out := call(t, mux, "GET", "/api/v1/plugins/-/ui?placement=overview_card&pages_overview=1", phone, ""); !slices.Equal(pagesIDs(out["ui"].([]any), "plugin"), []string{"g_0123456789abcdef"}) {
+		t.Fatalf("legacy /plugins/-/ui keeps pages_overview=1: %v", out["ui"])
+	}
+	if _, out := call(t, mux, "GET", "/api/v1/extensions/-/ui?placement=overview_card&pages_overview=1", watch, ""); len(pagesIDs(out["ui"].([]any), "extension")) != 0 {
+		t.Fatalf("answer-only device gets no overview_card: %v", out["ui"])
+	}
 	// a device that can only answer and an extension's token see none of it
 	before, _ := pages.asked()
 	if _, out := call(t, mux, "GET", "/api/v1/extensions/-/ui", watch, ""); slices.Contains(owners(out["ui"].([]any), "extension"), PagesExtension) {
@@ -127,7 +171,7 @@ func TestPagesHook(t *testing.T) {
 	}
 	for _, p := range []principal{{ID: "extension:example-all", Role: roleExtension, Extension: "example-all"}, {ID: "x", Role: roleFull, Extension: "example-all"}, {ID: "watch", Role: roleAnswer}} {
 		r := httptest.NewRequest("GET", "/api/v1/extensions/-/ui", nil).WithContext(withPrincipal(context.Background(), p))
-		if out := h.pagesPlaces(r, ""); out != nil {
+		if out := h.pagesPlaces(r, "", true); out != nil {
 			t.Fatalf("%+v listed pages: %v", p, out)
 		}
 	}

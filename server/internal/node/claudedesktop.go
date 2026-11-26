@@ -147,6 +147,7 @@ type claudeDesktopEntry struct {
 	parent      string   // the local_<uuid> this one came from (spawnedFrom.sessionId, else forkedFromSessionId), or ""
 	task        string   // the scheduled task this session is a run of (scheduledTaskId), or ""
 	created     int64    // when the app made the session (createdAt, ms; 0 unknown): the newest run of a task heads it
+	activity    int64    // when the session was last active (lastActivityAt, ms; 0 unknown): the newest entry of a session describes it
 
 	// focused and turnEdge (ms, 0 unknown): when the app last brought the session into view (lastFocusedAt), and when a
 	// turn of it last began or ended (lastTurnEdgeAt). claudedesktop_unread.go reads them.
@@ -542,6 +543,7 @@ func readClaudeDesktopEntry(path string) claudeDesktopEntry {
 		TurnEdge    float64         `json:"lastTurnEdgeAt"`
 		Task        string          `json:"scheduledTaskId"`
 		Created     float64         `json:"createdAt"`
+		Activity    float64         `json:"lastActivityAt"`
 		Detached    bool            `json:"lineageDetached"` // moved to the sidebar's top level: the old lineage stays, unnested
 		// The transcript of the session's last answer: until a session that went on in a new transcript answers there,
 		// the one it went on from (#14394). Read on its own, as spawnedFrom.
@@ -583,7 +585,7 @@ func readClaudeDesktopEntry(path string) claudeDesktopEntry {
 	}
 	return claudeDesktopEntry{transcript: raw.Transcript, archived: raw.Archived, prior: raw.Prior, title: raw.Title, cwd: cwd, originCwd: origin, environment: environment,
 		local: localID(raw.Local), parent: localID(parent), focused: int64(raw.Focused), turnEdge: int64(raw.TurnEdge),
-		task: raw.Task, created: int64(raw.Created)}
+		task: raw.Task, created: int64(raw.Created), activity: int64(raw.Activity)}
 }
 
 // mentionedIDs are the session ids in the first 64 KB of an entry that cannot be read (cut short while the app wrote
@@ -625,9 +627,17 @@ func localID(id string) string {
 // list does whatever its age (up to maxDesktopOffline, the newest first), on a count of its own (#3304).
 func (x claudeDesktopIndex) listed(id string) bool { return x.visible[id] }
 
-// maxDesktopOffline bounds the desktop app's sessions the offline list shows (the newest, whatever their age); they are
-// counted on their own, not toward the 80 of the others.
-const maxDesktopOffline = 100
+// maxDesktopOffline bounds the desktop app's top-level sessions the offline list shows (the newest, whatever their age);
+// they are counted on their own, not toward the 80 of the others. It only guards against a runaway index: the list
+// follows the sidebar, which keeps every unarchived session. It was 100, and a sidebar outgrows that (one Mac had 208
+// top-level sessions): the ones quiet for a week or more were cut, newest transcript first, while the sidebar still
+// showed them (#15522). Folded sessions have their own bound below (#15279).
+const maxDesktopOffline = 1000
+
+// maxDesktopFolded bounds the desktop app's sessions the offline list shows under another row (the index gives them a
+// parent, claudeDesktopIndex.parents): the newest, counted apart from maxDesktopOffline. A daily scheduled task leaves
+// one a day, and they took the places of the top-level sessions (#15279).
+const maxDesktopFolded = 300
 
 // hidden: the offline list leaves transcript id out as the desktop app's sidebar does. shown are the transcripts the
 // list has shown so far (newest first, so a session's current one normally comes before its earlier ones; the list

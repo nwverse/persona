@@ -72,6 +72,14 @@ describe("an exchange's guessed height", () => {
     expect(estimate()).toBe(without);
   });
 
+  it("estimates a promoted relay's collapsed source row, not its hidden original text", () => {
+    const relayed: Item = { ...user, text: "Synthetic relay transport details\n".repeat(8).trim(), source: { kind: "conversation", title: "Synthetic source" } };
+    const ordinary = segments([relayed])[0].user;
+    const promoted = { ...ordinary!, promotedRelay: true };
+    expect(segmentHeight(promoted, [])).toBeLessThan(segmentHeight(ordinary, []));
+    expect(segmentHeight(promoted, [])).toBe(72);
+  });
+
   it("includes compact tool_views height and gap in segmentHeight estimate", () => {
     const nodes = [{ kind: "group", id: "g", children: [] }] as never[];
     const msg = segments([user])[0].user;

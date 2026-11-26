@@ -11,7 +11,10 @@ import (
 )
 
 // Profile tools expose the same operations as settings, without copying credentials into model context.
-func (s *Service) toolModelProfile(ctx context.Context, self, name string, args json.RawMessage) (string, error) {
+func (s *Service) toolModelProfile(ctx context.Context, machine, self, name string, args json.RawMessage) (string, error) {
+	if name == "model_profile_capture" {
+		return s.captureModelProfile(ctx, ToolCall{MachineID: machine, SessionID: self}, args)
+	}
 	var a struct {
 		ID string `json:"id"`
 	}
@@ -19,21 +22,45 @@ func (s *Service) toolModelProfile(ctx context.Context, self, name string, args 
 		return "", err
 	}
 	by := ProfileActor{Kind: "assistant"}
-	switch name {
-	case "model_profile_switch":
-		if a.ID == "" {
-			return "", fmt.Errorf("id is required; use model_profiles_list")
-		}
-		if _, err := s.applyModelProfile(ctx, a.ID, by); err != nil {
-			return "", err
-		}
-	case "model_profile_rollback":
-		if _, err := s.rollbackModelProfile(ctx, by); err != nil {
+	var execution *ownerActionExecution
+	var err error
+	if name == "model_profile_switch" || name == "model_profile_rollback" {
+		execution, err = s.consumeOwnerBuiltin(ctx, machine, self, name, args)
+		if err != nil {
 			return "", err
 		}
 	}
+	switch name {
+	case "model_profile_switch":
+		if a.ID == "" {
+			if execution != nil {
+				return s.finishOwnerBuiltin(ctx, *execution, "", fmt.Errorf("id is required; use model_profiles_list"))
+			}
+			return "", fmt.Errorf("id is required; use model_profiles_list")
+		}
+		if execution != nil {
+			_, err = s.applyApprovedModelProfileSwitch(ctx, a.ID, by, execution.Item)
+		} else {
+			_, err = s.applyModelProfile(ctx, a.ID, by)
+		}
+	case "model_profile_rollback":
+		if execution != nil {
+			_, err = s.applyApprovedModelProfileRollback(ctx, by, execution.Item)
+		} else {
+			_, err = s.rollbackModelProfile(ctx, by)
+		}
+	}
+	if err != nil {
+		if execution != nil {
+			return s.finishOwnerBuiltin(ctx, *execution, "", err)
+		}
+		return "", err
+	}
 	v, err := s.modelProfilesView(ctx)
 	if err != nil {
+		if execution != nil {
+			return s.finishOwnerBuiltin(ctx, *execution, "", ownerActionCompletedError{err: err})
+		}
 		return "", err
 	}
 	var result any = v
@@ -45,6 +72,12 @@ func (s *Service) toolModelProfile(ctx context.Context, self, name string, args 
 		result = v.Profiles[i]
 	}
 	raw, err := json.Marshal(result)
+	if execution != nil {
+		if err != nil {
+			err = ownerActionCompletedError{err: err}
+		}
+		return s.finishOwnerBuiltin(ctx, *execution, string(raw), err)
+	}
 	return string(raw), err
 }
 

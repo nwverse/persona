@@ -120,7 +120,8 @@ func (f *fakeRoutingStore) ModelRoutingSamples(_ context.Context, tier string, s
 func TestCandidateTierStatsReadsFourteenDays(t *testing.T) {
 	now := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
 	store := &fakeRoutingStore{samples: []db.ModelRoutingSample{{Tier: "dev", Launcher: "a", Model: "m", ActualMinutes: 12, FirstPass: true}}}
-	s := &Service{store: func() Store { return store }, logf: func(string, ...any) {}}
+	s := &Service{logf: func(string, ...any) {}}
+	s.setStore(func() Store { return store })
 	got := s.candidateTierStats(context.Background(), "dev", now)
 	if store.asked != "dev" || !store.since.Equal(now.AddDate(0, 0, -14)) {
 		t.Fatalf("asked %q since %v", store.asked, store.since)
@@ -132,7 +133,9 @@ func TestCandidateTierStatsReadsFourteenDays(t *testing.T) {
 	if got := s.candidateTierStats(context.Background(), "dev", now); got.Prior.N != 0 {
 		t.Fatalf("a failed read is no data, got %+v", got)
 	}
-	if got := (&Service{store: func() Store { return nil }}).candidateTierStats(context.Background(), "dev", now); got.Prior.N != 0 {
+	emptySvc := &Service{}
+	emptySvc.setStore(func() Store { return nil })
+	if got := emptySvc.candidateTierStats(context.Background(), "dev", now); got.Prior.N != 0 {
 		t.Fatalf("no store is no data, got %+v", got)
 	}
 }

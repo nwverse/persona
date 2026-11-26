@@ -7,6 +7,7 @@ package assistant
 import (
 	"context"
 	"errors"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"maps"
 	"net/http"
 	"strconv"
@@ -180,11 +181,14 @@ func (h recordingHost) PutSetting(ctx context.Context, key string, v any) error 
 }
 
 func (h recordingHost) Notify(ctx context.Context, n Notification) error {
-	_, err := h.s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n})
+	res, err := h.s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n})
+	if err == nil && n.ID != "" {
+		h.s.rememberNotifyHeld(n.ID, res)
+	}
 	return err
 }
 func (h recordingHost) NoteCard(ctx context.Context, source string, n Notification) {
-	h.s.noteCard(ctx, source, n)
+	h.s.noteCardResult(ctx, source, n, h.s.consumeNotifyHeld(n.ID))
 }
 func (h recordingHost) Answered(err error) bool { return answered(err) }
 
@@ -346,8 +350,8 @@ func (h recordingHost) TranscriptionReadyAwait() bool { return h.s.transcription
 func (h recordingHost) InSpaceRecording(ctx context.Context, rawID string) bool {
 	return h.s.inSpaceRecording(ctx, rawID)
 }
-func (h recordingHost) PutSpaceRecordingRoute(w http.ResponseWriter, r *http.Request, u kb.RecordingUpload) {
-	h.s.putSpaceRecordingRoute(w, r, u)
+func (h recordingHost) PutSpaceRecordingRoute(w http.ResponseWriter, r *http.Request, u recordingwire.RecordingUpload, clean recordingwire.UploadCleaner) {
+	h.s.putSpaceRecordingRoute(w, r, u, clean)
 }
 
 // DeleteSpaceRecording answers DELETE /api/v1/recordings/{id} for recording id when it was saved into a track
@@ -365,7 +369,7 @@ func (h recordingHost) DeleteSpaceRecording(w http.ResponseWriter, r *http.Reque
 	apierr.WriteJSON(w, map[string]any{"deleted": deleted})
 	return true
 }
-func (h recordingHost) SpaceRecordingStates(ctx context.Context) (kept []kb.RecordingState, deleted []string) {
+func (h recordingHost) SpaceRecordingStates(ctx context.Context) (kept []recordingwire.RecordingState, deleted []string) {
 	return h.s.spaceRecordingStates(ctx)
 }
 

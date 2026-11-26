@@ -261,7 +261,13 @@ func (s *Service) setModelTiers(ctx context.Context, v json.RawMessage) (*ownCha
 		return nil, errors.New("no database on this hub")
 	}
 	revision := ps.Revision
-	return &ownChange{applyChecksProposal: true, cardText: func(l i18n.Lang) string {
+	profileAfter := map[string]ModelProfile{}
+	for _, change := range changes {
+		if i := slices.IndexFunc(ps.Profiles, func(p ModelProfile) bool { return p.ID == change.ID }); i >= 0 {
+			profileAfter[change.ID] = cloneModelProfile(ps.Profiles[i])
+		}
+	}
+	return &ownChange{applyChecksProposal: true, revision: &revision, modelProfileWrite: true, profileAfter: profileAfter, cardText: func(l i18n.Lang) string {
 		lines := make([]string, 0, len(changes))
 		for _, c := range changes {
 			lines = append(lines, i18n.T(l, "assistant-settings_tool.change_model_tier", i18n.Args{"profile": c.Name, "tier": c.Tier,

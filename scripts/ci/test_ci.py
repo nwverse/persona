@@ -623,7 +623,8 @@ class PostgresCleanupTests(unittest.TestCase):
                 shutil.copyfile(Path(__file__).with_name("server.sh"), root / "server.sh")
                 copy_go_trimpath(root)
                 # Run the real entrypoint and EXIT trap without starting Docker or Go tests.
-                (root / "common.sh").write_text("""ci_run_step() {
+                (root / "common.sh").write_text("""ci_run() { ci_run_step "$@"; }
+ci_run_step() {
   local label="$1"
   shift 2
   case "$label" in
@@ -699,7 +700,8 @@ class ServerGoFlagsTests(unittest.TestCase):
             shutil.copyfile(Path(__file__).with_name("server.sh"), root / "server.sh")
             copy_go_trimpath(root)
             log = root / "steps"
-            (root / "common.sh").write_text("""ci_run_step() {
+            (root / "common.sh").write_text("""ci_run() { ci_run_step "$@"; }
+ci_run_step() {
   printf '%s|%s|%s\\n' "$1" "$GOFLAGS" "$*" >> "$FIXTURE_STEPS"
 }
 """)

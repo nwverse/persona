@@ -63,6 +63,10 @@ class NativeColors {
   readonly ai: ResourceColor = $r('app.color.persona_ai');
   readonly teal: ResourceColor = $r('app.color.persona_teal');
   readonly subtle: ResourceColor = $r('app.color.persona_subtle');
+  readonly glassRim: ResourceColor = $r('app.color.persona_glass_rim');
+  readonly glassSurface: ResourceColor = $r('app.color.persona_glass_surface');
+  readonly heroGlow: ResourceColor = $r('app.color.persona_hero_glow');
+  readonly heroGlowAlt: ResourceColor = $r('app.color.persona_hero_glow_alt');
 }
 
 export const Colors: NativeColors = new NativeColors();

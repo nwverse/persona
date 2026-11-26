@@ -175,11 +175,17 @@ class ComposerHintChipsRowTest {
             val container = rule.onNodeWithTag("composer-container").getBoundsInRoot()
             val launcherNode = rule.onNodeWithText("Default: agy").assertIsDisplayed()
             val modeNode = rule.onNodeWithText("Full access").assertIsDisplayed()
+            val modePillNode = rule.onNodeWithTag("chat-composer-mode-hint").assertIsDisplayed()
             val launcherBounds = launcherNode.getBoundsInRoot()
             val modeBounds = modeNode.getBoundsInRoot()
+            val modePillBounds = modePillNode.getBoundsInRoot()
             assertUnclippedInside(launcherBounds, launcherNode.getUnclippedBoundsInRoot(), container, "$targetStyle launcher")
             assertUnclippedInside(modeBounds, modeNode.getUnclippedBoundsInRoot(), container, "$targetStyle modeHint")
+            assertUnclippedInside(modePillBounds, modePillNode.getUnclippedBoundsInRoot(), container, "$targetStyle modeHint pill")
             assertSameHorizontalRow(launcherBounds, modeBounds, "$targetStyle/${if (night) "dark" else "light"}")
+            assertEquals("$targetStyle: side-by-side mode chip matches launcher height", launcherBounds.height.value, modePillBounds.height.value, 0.5f)
+            assertEquals("$targetStyle: side-by-side mode chip top aligns with launcher", launcherBounds.top.value, modePillBounds.top.value, 0.5f)
+            assertEquals("$targetStyle: side-by-side mode chip bottom aligns with launcher", launcherBounds.bottom.value, modePillBounds.bottom.value, 0.5f)
             maybeSaveShot("composer-container", "composer-chips-${targetStyle.name.lowercase()}-${if (night) "dark" else "light"}.png")
         }
     }
@@ -430,7 +436,11 @@ class ComposerHintChipsRowTest {
             }
             val launcherBounds = rule.onNodeWithText("Default: agy").assertIsDisplayed().getBoundsInRoot()
             val modeBounds = rule.onNodeWithText("Full access").assertIsDisplayed().getBoundsInRoot()
+            val modePillBounds = rule.onNodeWithTag("chat-composer-mode-hint").assertIsDisplayed().getBoundsInRoot()
             assertSameHorizontalRow(launcherBounds, modeBounds, "ChatScreen $targetStyle")
+            assertEquals("ChatScreen $targetStyle: mode chip matches launcher height", launcherBounds.height.value, modePillBounds.height.value, 0.5f)
+            assertEquals("ChatScreen $targetStyle: mode chip top aligns with launcher", launcherBounds.top.value, modePillBounds.top.value, 0.5f)
+            assertEquals("ChatScreen $targetStyle: mode chip bottom aligns with launcher", launcherBounds.bottom.value, modePillBounds.bottom.value, 0.5f)
         }
 
         // Glass renders neither the Brief/Board launcher chip nor the modeHint chip.

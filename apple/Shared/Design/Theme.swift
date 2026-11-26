@@ -310,6 +310,20 @@ nonisolated enum Theme {
         static var edge: Color { Theme.accent.opacity(0.45) }
         static let dash: [CGFloat] = [Theme.Space.xs, Theme.Space.xs]
     }
+
+    /// The avatar sheet's Theme Color, Pictures for Each State and image drop highlight (#15449, #15612, `AvatarStatesPages`).
+    enum AvatarSheet {
+        /// A theme color's swatch, round, beside its name.
+        static let swatch = Size.iconS
+        /// The edge around a swatch, so a white or a black one still reads on the row.
+        static let swatchEdge = Color.primary.opacity(0.15)
+        /// A state's picture in its row, as it will move: the size of the top bar's dot.
+        static let preview = Size.avatarL
+        /// The accent border and tint drawn over a picture slot or avatar card while an image is dragged over it (#15612).
+        static var dropStroke: Color { Theme.accent }
+        static let dropStrokeWidth = Size.rule
+        static var dropTint: Color { Theme.accentTint }
+    }
     #endif
 
     /// The image viewer's backdrop (`ImageViewer`), as Photos has it: the page's own color while its bars show (white
@@ -525,6 +539,10 @@ nonisolated enum Theme {
         static let workflowShare: CGFloat = 0.38
         /// The smallest thing a finger should hit.
         static let tapTarget: CGFloat = 44
+        /// The widest a To-dos row's "OK: ‹option›" is drawn (#10465; DESIGN_SYSTEM 2.5): past it, at the text size in use,
+        /// it says "OK" alone, since line 2 already names the recommendation and a button's words are never cut. Not
+        /// scaled: the label's length and the text size decide (`TodoRowAnswers.okTitle`).
+        static let todoAnswerMax: CGFloat = 260
         /// A search field's band under a navigation bar, as the system's drawer draws it (`AgentsHeader`).
         static let searchBand: CGFloat = 54
         /// The field in it, at its top.
@@ -797,6 +815,8 @@ nonisolated enum Theme {
         /// Today's outline and the picked square's.
         static let todayLine: CGFloat = 1.5
         static let pickedLine: CGFloat = 2
+        /// A chart's columns other than the one its line reads (Token usage by project's days, #16530; the web's 55%).
+        static let unpicked: Double = 0.55
 
         /// A square at step `level`: 0 is no usage, 1 to 4 the theme color's steps.
         static func fill(_ level: Int) -> Color {

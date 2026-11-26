@@ -268,6 +268,36 @@ func cloneLauncherModels(m LauncherModels) LauncherModels {
 	return out
 }
 
+func cloneModelProfiles(ps modelProfiles) modelProfiles {
+	out := modelProfiles{Revision: ps.Revision, Profiles: make([]ModelProfile, len(ps.Profiles))}
+	for i, profile := range ps.Profiles {
+		out.Profiles[i] = cloneModelProfile(profile)
+	}
+	return out
+}
+
+// cloneModelProfile detaches every mutable map, pointer and slice before a managed edit or an exact before/after check.
+func cloneModelProfile(p ModelProfile) ModelProfile {
+	p.Purposes = maps.Clone(p.Purposes)
+	if p.Launchers != nil {
+		launchers := make(map[string]LauncherModels, len(p.Launchers))
+		for name, fields := range p.Launchers {
+			launchers[name] = cloneLauncherModels(fields)
+		}
+		p.Launchers = launchers
+	}
+	if p.Tiers != nil {
+		tiers := make(map[string]ModelTier, len(p.Tiers))
+		for name, tier := range p.Tiers {
+			tier.Candidates = slices.Clone(tier.Candidates)
+			tier.Aliases = slices.Clone(tier.Aliases)
+			tiers[name] = tier
+		}
+		p.Tiers = tiers
+	}
+	return p
+}
+
 func cloneProfileImage(img modelProfileImage) modelProfileImage {
 	out := img
 	if img.Purposes != nil {
@@ -645,6 +675,19 @@ func (s *Service) putModelProfileSettings(ctx context.Context, values map[string
 // modelProfilesLocked reads profiles or builds two templates from the current configuration (models.mu held).
 // The caller persists templates only after its operation has passed all checks, with the state seed() marks.
 func (s *Service) modelProfilesLocked(ctx context.Context) (modelProfiles, bool, error) {
+	if plan := ownerProfilePlanFrom(ctx); plan != nil {
+		if !plan.loaded {
+			ps, _, err := s.modelProfilesLocked(withoutOwnerProfilePlan(ctx))
+			if err != nil {
+				return modelProfiles{}, false, err
+			}
+			plan.profiles = cloneModelProfiles(ps)
+			plan.loaded = true
+		}
+		// Every preparation receives its own deep copy. Only an explicit planned
+		// catalog write advances the shared batch snapshot.
+		return cloneModelProfiles(plan.profiles), false, nil
+	}
 	ps, ok, err := s.readModelProfiles(ctx)
 	if err != nil || ok {
 		return ps, false, err

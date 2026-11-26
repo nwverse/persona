@@ -2,6 +2,7 @@ package persona.core.hub
 
 import persona.core.contracts.*
 import persona.core.contracts.api.*
+import persona.core.contracts.generated.ExtensionHubCapability
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -143,7 +144,7 @@ class HubChatTransport internal constructor(
                 }
             }
         }.build()
-        return get(url.encodedPath + "?" + url.encodedQuery)
+        return get(url.encodedPath + "?" + url.encodedQuery, ToolViewsHeader)
     }
 
     override suspend fun modeChanges(session: SessionKey): List<ModeChange> {
@@ -173,11 +174,16 @@ class HubChatTransport internal constructor(
     override suspend fun resolveOutcome(id: String, resolution: Resolution): ResolveOutcome =
         resolveOutcome(id, resolution, handoffCard = false)
 
-    override suspend fun resolveOutcome(id: String, resolution: Resolution, handoffCard: Boolean): ResolveOutcome {
+    override suspend fun resolveOutcome(id: String, resolution: Resolution, handoffCard: Boolean): ResolveOutcome =
+        resolveOutcome(id, resolution, handoffCard, secretRunEnv = false)
+
+    override suspend fun resolveOutcome(id: String, resolution: Resolution, handoffCard: Boolean, secretRunEnv: Boolean): ResolveOutcome {
         val path = api("interactions", id, "resolve")
         val body = JsonCodec.encodeToString(resolution)
         val headers = ProtocolCompatibility.operationHeaders(newOpId()) +
-            if (handoffCard && resolution.allow == true) mapOf("X-Persona-Features" to "secret_handoff") else emptyMap()
+            if (handoffCard && resolution.allow == true) {
+                mapOf("X-Persona-Features" to if (secretRunEnv) "secret_run_env" else "secret_handoff")
+            } else emptyMap()
         val deadline = clockMillis() + resolveRetryMillis
         while (true) {
             try {
@@ -246,9 +252,10 @@ class HubChatTransport internal constructor(
             .use { it.body!!.bytes() }
 
     override suspend fun fullItem(session: SessionKey, itemId: String): Item =
-        get(api("sessions", session.machineId, session.sessionId, "items", itemId, "full"))
+        get(api("sessions", session.machineId, session.sessionId, "items", itemId, "full"), ToolViewsHeader)
 
     companion object {
+        private val ToolViewsHeader = mapOf("X-Persona-Features" to ExtensionHubCapability.TOOL_VIEWS)
         private val MODE_CHANGE_KINDS = setOf("set", "restart_done", "restart_failed", "restart_dropped")
         const val OP_ID_HEADER = "X-Persona-Op-Id"
         const val RESOLVE_RETRY_MILLIS = 60_000L
@@ -283,7 +290,7 @@ class HubChatTransport internal constructor(
         }
     }
 
-    private suspend inline fun <reified T> get(path: String): T = request(path, "GET", null).use {
+    private suspend inline fun <reified T> get(path: String, headers: Map<String, String> = emptyMap()): T = send(path, "GET", null, headers).use {
         try { JsonCodec.decodeFromString<T>(it.body!!.string()) }
         catch (error: Exception) { throw HubFailure(HubError.Protocol, retryable = false, cause = error) }
     }
