@@ -79,6 +79,8 @@ type chatReplyBook struct {
 	meta           map[string]chatReplyMeta // by feed ID
 	takeover       map[string]time.Time     // by feed ID: latest time the owner personally spoke there
 	takeoverLoaded bool
+	takeoverDirty  bool
+	takeoverSaveMu sync.Mutex
 	wg             sync.WaitGroup // the rounds being told
 }
 
@@ -240,21 +242,43 @@ func (s *Service) noteChatMeta(feed, title string, group bool, now time.Time) {
 	b.mu.Unlock()
 }
 
-func (s *Service) ensureChatReplyTakeoverLoaded(ctx context.Context) {
+// ensureChatReplyTakeoverLoaded ensures persisted takeover stops are loaded into b.takeover and flushes any
+// in-memory entries recorded while an earlier store read failed. Returns false if the store is absent or its read
+// fails so callers avoid overwriting previously persisted entries with an incomplete in-memory map.
+func (s *Service) ensureChatReplyTakeoverLoaded(ctx context.Context) bool {
 	b := &s.chatReplies
 	b.mu.Lock()
-	if b.takeoverLoaded {
+	if b.takeoverLoaded && !b.takeoverDirty {
 		b.mu.Unlock()
-		return
+		return true
 	}
+	alreadyLoaded := b.takeoverLoaded
 	b.mu.Unlock()
+
 	st := s.store()
-	var saved map[string]time.Time
-	loaded := st == nil
-	if st != nil {
-		_, err := st.Setting(ctx, chatReplyTakeoverKey, &saved)
-		loaded = err == nil
+	if st == nil {
+		b.mu.Lock()
+		if b.takeover == nil {
+			b.takeover = map[string]time.Time{}
+		}
+		b.mu.Unlock()
+		return false
 	}
+
+	var saved map[string]time.Time
+	if !alreadyLoaded {
+		if _, err := st.Setting(ctx, chatReplyTakeoverKey, &saved); err != nil {
+			s.logf("chat replies: takeover state could not be loaded: %v", err)
+			b.mu.Lock()
+			if b.takeover == nil {
+				b.takeover = map[string]time.Time{}
+			}
+			b.mu.Unlock()
+			return false
+		}
+	}
+
+	needFlush := false
 	b.mu.Lock()
 	if !b.takeoverLoaded {
 		if b.takeover == nil {
@@ -265,11 +289,32 @@ func (s *Service) ensureChatReplyTakeoverLoaded(ctx context.Context) {
 				b.takeover[feed] = at
 			}
 		}
-		if loaded {
-			b.takeoverLoaded = true
-		}
+		b.takeoverLoaded = true
 	}
+	needFlush = b.takeoverDirty
 	b.mu.Unlock()
+
+	if needFlush {
+		s.saveChatReplyTakeover(ctx, st, time.Now())
+	}
+	return true
+}
+
+func (s *Service) saveChatReplyTakeover(ctx context.Context, st Store, now time.Time) {
+	b := &s.chatReplies
+	b.takeoverSaveMu.Lock()
+	defer b.takeoverSaveMu.Unlock()
+	b.mu.Lock()
+	b.pruneLocked(now)
+	snap := maps.Clone(b.takeover)
+	b.takeoverDirty = false
+	b.mu.Unlock()
+	if err := st.PutSetting(ctx, chatReplyTakeoverKey, snap); err != nil {
+		b.mu.Lock()
+		b.takeoverDirty = true
+		b.mu.Unlock()
+		s.logf("chat replies: takeover state could not be saved: %v", err)
+	}
 }
 
 func (s *Service) chatReplyTakenOver(ctx context.Context, feed string, sent, now time.Time) bool {
@@ -289,7 +334,7 @@ func (s *Service) recordChatReplyTakeover(ctx context.Context, feed string, at, 
 	if feed == "" || at.IsZero() {
 		return
 	}
-	s.ensureChatReplyTakeoverLoaded(ctx)
+	loaded := s.ensureChatReplyTakeoverLoaded(ctx)
 	b := &s.chatReplies
 	b.mu.Lock()
 	if b.takeover == nil {
@@ -299,12 +344,16 @@ func (s *Service) recordChatReplyTakeover(ctx context.Context, feed string, at, 
 		b.takeover[feed] = at
 	}
 	b.pruneLocked(now)
-	snap := maps.Clone(b.takeover)
+	if !loaded {
+		// Store was unavailable or failed to read: keep in memory and flush once a read succeeds so persisted
+		// stops for other chats are never clobbered by a partial map.
+		b.takeoverDirty = true
+		b.mu.Unlock()
+		return
+	}
 	b.mu.Unlock()
 	if st := s.store(); st != nil {
-		if err := st.PutSetting(ctx, chatReplyTakeoverKey, snap); err != nil {
-			s.logf("chat replies: takeover state could not be saved: %v", err)
-		}
+		s.saveChatReplyTakeover(ctx, st, now)
 	}
 }
 
@@ -452,6 +501,7 @@ type chatWriter struct {
 	session string
 	at      time.Time
 	ref     string
+	rowID   int64
 }
 
 // chatWriters are the conversations of machine that wrote a message into chat feed as the user, by the ledger's rows,
@@ -470,12 +520,16 @@ func chatWriters(rows []db.SentAsUser, machine, feed string) []chatWriter {
 			continue
 		}
 		if i := slices.IndexFunc(out, func(w chatWriter) bool { return w.session == o.Session }); i < 0 {
-			out = append(out, chatWriter{session: o.Session, at: r.At, ref: r.MessageRef})
+			out = append(out, chatWriter{session: o.Session, at: r.At, ref: r.MessageRef, rowID: r.ID})
 		} else if r.At.After(out[i].at) {
 			out[i].at = r.At
 			out[i].ref = r.MessageRef
-		} else if r.At.Equal(out[i].at) && r.MessageRef != "" {
-			out[i].ref = r.MessageRef
+			out[i].rowID = r.ID
+		} else if r.At.Equal(out[i].at) && (r.MessageRef != "" || out[i].rowID == 0) {
+			if r.MessageRef != "" {
+				out[i].ref = r.MessageRef
+			}
+			out[i].rowID = r.ID
 		}
 	}
 	return out
@@ -562,51 +616,161 @@ func (s *Service) fetchChatMessagesAround(ctx context.Context, thread, messageID
 }
 
 // ownerSpokeAfterSend checks structured chat history around the latest batch message for any non-recalled message
-// written personally by the owner after assistant send w (reconciled against sent_as_user ledger rows so assistant sends
-// and replies never trigger a false takeover).
+// written personally by the owner after assistant send w (reconciled 1-to-1 against sent_as_user ledger rows so
+// recorded sends and replies are excluded once without swallowing subsequent personal messages).
 func ownerSpokeAfterSend(msgs []settleMsg, feed string, rows []db.SentAsUser, w chatWriter) (time.Time, bool) {
-	sentRefs := map[string]bool{}
-	for _, r := range rows {
-		if r.MessageRef != "" {
-			sentRefs[r.MessageRef] = true
+	msgAt := make([]time.Time, len(msgs))
+	msgHasAt := make([]bool, len(msgs))
+	msgNorm := make([]string, len(msgs))
+	for i, m := range msgs {
+		if t, err := time.Parse(time.RFC3339Nano, m.At); err == nil {
+			msgAt[i], msgHasAt[i] = t, true
+		}
+		msgNorm[i] = normalizeSentText(m.Text)
+	}
+
+	claimedMsg := make([]bool, len(msgs))
+	claimedRow := make([]bool, len(rows))
+	var wPos string
+	var wMsgAt time.Time
+	isWriterRow := func(r db.SentAsUser) bool {
+		if w.rowID != 0 {
+			return r.ID == w.rowID
+		}
+		if w.ref != "" {
+			return r.MessageRef == w.ref
+		}
+		return wroteInto(r, feed) && r.At.Equal(w.at)
+	}
+	noteAnchor := func(ri, mi int) {
+		if !isWriterRow(rows[ri]) {
+			return
+		}
+		if msgs[mi].Pos != "" {
+			wPos = msgs[mi].Pos
+		}
+		if msgHasAt[mi] {
+			wMsgAt = msgAt[mi]
 		}
 	}
-	var wPos string
-	if w.ref != "" {
-		for _, m := range msgs {
-			if m.ID == w.ref && m.Pos != "" {
-				wPos = m.Pos
+
+	// Pass 1: exact MessageRef match on Lark rows.
+	for ri, r := range rows {
+		if r.Connector != connector.Lark || r.MessageRef == "" {
+			continue
+		}
+		for mi, m := range msgs {
+			if claimedMsg[mi] || !m.Mine || m.Text == recalledText || m.ID != r.MessageRef {
+				continue
+			}
+			claimedRow[ri] = true
+			claimedMsg[mi] = true
+			noteAnchor(ri, mi)
+			break
+		}
+	}
+	// Populate the writer's own anchor even if matched above by an earlier duplicate ref or recalled.
+	if w.ref != "" && wPos == "" && wMsgAt.IsZero() {
+		for mi, m := range msgs {
+			if m.ID == w.ref {
+				if m.Pos != "" {
+					wPos = m.Pos
+				}
+				if msgHasAt[mi] {
+					wMsgAt = msgAt[mi]
+				}
 				break
 			}
 		}
 	}
+
+	// Pass 2a: unreferenced Lark reply rows (/messages/<id>/replies) matched 1-to-1 by ReplyTo (+ optional text).
+	for ri, r := range rows {
+		if claimedRow[ri] || r.Connector != connector.Lark || r.RecalledAt != nil || r.MessageRef != "" {
+			continue
+		}
+		var t map[string]any
+		if json.Unmarshal(r.Target, &t) != nil {
+			continue
+		}
+		replyMsg, _ := t["message"].(string)
+		if replyMsg == "" {
+			continue
+		}
+		rNorm := normalizeSentText(r.Text)
+		if mi, ok := matchUnreferencedRow(r, msgs, msgAt, msgHasAt, claimedMsg, false, func(i int, m settleMsg) bool {
+			if m.ReplyTo != replyMsg {
+				return false
+			}
+			return rNorm == "" || msgNorm[i] == "" || rNorm == msgNorm[i]
+		}); ok {
+			claimedRow[ri] = true
+			claimedMsg[mi] = true
+			noteAnchor(ri, mi)
+		}
+	}
+
+	// Pass 2b: unreferenced Lark chat rows with non-empty text matched 1-to-1 by normalized text.
+	for ri, r := range rows {
+		if claimedRow[ri] || r.Connector != connector.Lark || r.RecalledAt != nil || r.MessageRef != "" || !wroteInto(r, feed) {
+			continue
+		}
+		rNorm := normalizeSentText(r.Text)
+		if rNorm == "" {
+			continue
+		}
+		if mi, ok := matchUnreferencedRow(r, msgs, msgAt, msgHasAt, claimedMsg, false, func(i int, _ settleMsg) bool {
+			return msgNorm[i] == rNorm
+		}); ok {
+			claimedRow[ri] = true
+			claimedMsg[mi] = true
+			noteAnchor(ri, mi)
+		}
+	}
+
+	// Pass 2c: conservative 1-to-1 fallback for writer w's own unreferenced textless row (e.g. file/image upload).
+	for ri, r := range rows {
+		if claimedRow[ri] || r.Connector != connector.Lark || r.RecalledAt != nil || r.MessageRef != "" ||
+			!wroteInto(r, feed) || normalizeSentText(r.Text) != "" || !isWriterRow(r) {
+			continue
+		}
+		if mi, ok := matchUnreferencedRow(r, msgs, msgAt, msgHasAt, claimedMsg, true, func(_ int, m settleMsg) bool {
+			return m.ReplyTo == ""
+		}); ok {
+			claimedRow[ri] = true
+			claimedMsg[mi] = true
+			noteAnchor(ri, mi)
+		}
+	}
+
 	var latest time.Time
-	for _, m := range msgs {
-		if !m.Mine || m.Text == recalledText {
-			continue
-		}
-		if m.ID != "" && sentRefs[m.ID] {
-			continue
-		}
-		mAt, atErr := time.Parse(time.RFC3339Nano, m.At)
-		hasAt := atErr == nil
-		if isUnreferencedAssistantSend(m, mAt, hasAt, feed, rows, w.ref != "") {
+	for mi, m := range msgs {
+		if claimedMsg[mi] || !m.Mine || m.Text == recalledText {
 			continue
 		}
 		var cand time.Time
-		if wPos != "" && m.Pos != "" {
+		switch {
+		case wPos != "" && m.Pos != "":
 			if !positionAfter(m.Pos, wPos) {
 				continue
 			}
 			cand = w.at
-			if hasAt && mAt.After(cand) {
-				cand = mAt
+			if msgHasAt[mi] && msgAt[mi].After(cand) {
+				cand = msgAt[mi]
 			}
-		} else {
-			if !hasAt || !mAt.After(w.at.Add(chatReplyClockSkew)) {
+		case !wMsgAt.IsZero() && msgHasAt[mi]:
+			if !msgAt[mi].After(wMsgAt) {
 				continue
 			}
-			cand = mAt
+			cand = w.at
+			if msgAt[mi].After(cand) {
+				cand = msgAt[mi]
+			}
+		default:
+			if !msgHasAt[mi] || !msgAt[mi].After(w.at.Add(chatReplyClockSkew)) {
+				continue
+			}
+			cand = msgAt[mi]
 		}
 		if cand.After(latest) {
 			latest = cand
@@ -615,33 +779,35 @@ func ownerSpokeAfterSend(msgs []settleMsg, feed string, rows []db.SentAsUser, w 
 	return latest, !latest.IsZero()
 }
 
-func isUnreferencedAssistantSend(m settleMsg, mAt time.Time, hasAt bool, feed string, rows []db.SentAsUser, hasRef bool) bool {
-	mText := normalizeSentText(m.Text)
-	for _, r := range rows {
-		if r.MessageRef != "" {
+func matchUnreferencedRow(r db.SentAsUser, msgs []settleMsg, msgAt []time.Time, msgHasAt, claimedMsg []bool,
+	requireTime bool, match func(mi int, m settleMsg) bool) (int, bool) {
+	best, bestDelta := -1, time.Duration(0)
+	timedCount, untimedCount, untimedIdx := 0, 0, -1
+	for mi, m := range msgs {
+		if claimedMsg[mi] || !m.Mine || m.Text == recalledText || !match(mi, m) {
 			continue
 		}
-		var t map[string]any
-		if json.Unmarshal(r.Target, &t) != nil {
+		if !msgHasAt[mi] {
+			untimedCount++
+			untimedIdx = mi
 			continue
 		}
-		replyMsg, _ := t["message"].(string)
-		inReply := m.ReplyTo != "" && replyMsg == m.ReplyTo
-		inChat := wroteInto(r, feed)
-		if !inReply && !inChat {
+		d := absDuration(msgAt[mi].Sub(r.At))
+		if d > chatReplyClockSkew {
 			continue
 		}
-		if hasAt {
-			if absDuration(mAt.Sub(r.At)) <= chatReplyClockSkew {
-				return true
-			}
-			continue
-		}
-		if inReply || (r.Text != "" && mText != "" && normalizeSentText(r.Text) == mText) || !hasRef {
-			return true
+		timedCount++
+		if best < 0 || d < bestDelta {
+			best, bestDelta = mi, d
 		}
 	}
-	return false
+	if best >= 0 {
+		return best, true
+	}
+	if !requireTime && timedCount == 0 && untimedCount == 1 {
+		return untimedIdx, true
+	}
+	return -1, false
 }
 
 func normalizeSentText(s string) string { return strings.Join(strings.Fields(s), "") }

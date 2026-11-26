@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -617,6 +618,33 @@ func TestChatReplyMutedChatsSetting(t *testing.T) {
 	}
 }
 
+func TestChatReplyMutedChatsCapEnforcedOnApply(t *testing.T) {
+	h := newChatReplyHarness(t, replyConv("conv-a"), replyConv("c1"))
+	seed := make([]chatReplyMutedChat, chatReplyMutedChatsMax-1)
+	for i := range seed {
+		seed[i] = chatReplyMutedChat{Chat: fmt.Sprintf("feed-%03d", i)}
+	}
+	setSettings(t, h.s, func(v *Settings) { v.ChatReplyMutedChats = seed })
+
+	// Fill the remaining slot while the confirmation card is waiting for approval.
+	answerPhoneSettingsCard(t, h.s, true, func(proto.Interaction) {
+		setSettings(t, h.s, func(v *Settings) {
+			v.ChatReplyMutedChats = append(slices.Clone(seed), chatReplyMutedChat{Chat: "feed-concurrent"})
+		})
+	})
+
+	res := settingsTool(h.s, `{"action":"add","key":"`+chatReplyMutedChatsKey+`","value":"`+replyChat+`"}`)
+	if res.IsError || len(res.Content) == 0 ||
+		!strings.Contains(res.Content[0].Text, "not applied") ||
+		!strings.Contains(res.Content[0].Text, fmt.Sprintf("at most %d", chatReplyMutedChatsMax)) {
+		t.Fatalf("expected cap rejection message on apply, got %+v", res)
+	}
+	cfg := h.s.settings(context.Background())
+	if len(cfg.ChatReplyMutedChats) != chatReplyMutedChatsMax || chatReplyChatMuted(cfg, replyChat) {
+		t.Fatalf("cap exceeded or mutated on apply: len=%d muted=%+v", len(cfg.ChatReplyMutedChats), cfg.ChatReplyMutedChats)
+	}
+}
+
 func TestChatReplyStaleChecksMutedAndTakeover(t *testing.T) {
 	h := newChatReplyHarness(t, replyConv("conv-a"))
 	now := time.Now()
@@ -807,6 +835,108 @@ func TestChatReplyAutoStopOnOwnerTakeover(t *testing.T) {
 		h.round(migratedConnectorID, replyBatch(replyChat, KindDM, now, "m2"))
 		if len(h.told("conv-a")) != 2 {
 			t.Fatalf("expected fail-open relay when messages_around errors: %q", h.told("conv-a"))
+		}
+	})
+
+	t.Run("owner reply within 2m of unreferenced send stops immediately", func(t *testing.T) {
+		// Unreferenced send with text + owner message with different text 20s later.
+		h := newChatReplyHarness(t, replyConv("conv-a"))
+		now := time.Now()
+		sendAt := now.Add(-time.Hour)
+		h.wrote(t, "server", "conv-a", replyChat, sendAt).Text = "sent report zip"
+		h.answerAround(func(string, string) (any, error) {
+			return map[string]any{"messages": []settleMsg{
+				{ID: "m-asst-unref", Pos: "100", At: sendAt.Add(3 * time.Second).Format(time.RFC3339), Sender: "Me", Text: "sent report zip", Mine: true},
+				{ID: "m1", Pos: "101", At: sendAt.Add(15 * time.Second).Format(time.RFC3339), Sender: "Sam", Text: "got it", Mine: false},
+				{ID: "m-owner-20s", Pos: "102", At: sendAt.Add(20 * time.Second).Format(time.RFC3339), Sender: "Me", Text: "I will take it from here", Mine: true},
+				{ID: "m2", Pos: "103", At: sendAt.Add(30 * time.Second).Format(time.RFC3339), Sender: "Sam", Text: "sounds good", Mine: false},
+			}}, nil
+		})
+		h.round(migratedConnectorID, replyBatch(replyChat, KindDM, sendAt.Add(30*time.Second), "m2"))
+		if len(h.told("conv-a")) != 0 {
+			t.Fatalf("expected owner message 20s after unreferenced text send to stop relay: %q", h.told("conv-a"))
+		}
+
+		// Unreferenced textless send (e.g. file/image) + owner message 20s later, even when messages have no Pos.
+		h2 := newChatReplyHarness(t, replyConv("conv-a"))
+		h2.wrote(t, "server", "conv-a", replyChat, sendAt) // MessageRef == "", Text == ""
+		h2.answerAround(func(string, string) (any, error) {
+			return map[string]any{"messages": []settleMsg{
+				{ID: "m-file", At: sendAt.Add(2 * time.Second).Format(time.RFC3339), Sender: "Me", Text: "[file] bundle.zip", Mine: true},
+				{ID: "m1", At: sendAt.Add(15 * time.Second).Format(time.RFC3339), Sender: "Sam", Text: "thanks", Mine: false},
+				{ID: "m-owner-20s", At: sendAt.Add(20 * time.Second).Format(time.RFC3339), Sender: "Me", Text: "let me follow up", Mine: true},
+				{ID: "m2", At: sendAt.Add(30 * time.Second).Format(time.RFC3339), Sender: "Sam", Text: "ok", Mine: false},
+			}}, nil
+		})
+		h2.round(migratedConnectorID, replyBatch(replyChat, KindDM, sendAt.Add(30*time.Second), "m2"))
+		if len(h2.told("conv-a")) != 0 {
+			t.Fatalf("expected owner message 20s after textless unreferenced send to stop relay: %q", h2.told("conv-a"))
+		}
+	})
+
+	t.Run("unreferenced assistant reply claims only one match and ignores non-Lark rows", func(t *testing.T) {
+		h := newChatReplyHarness(t, replyConv("conv-a"))
+		now := time.Now()
+		sendAt := now.Add(-time.Hour)
+		h.wrote(t, "server", "conv-a", replyChat, sendAt).MessageRef = "m-asst"
+		replyActionPath := "/messages/m-peer-0/replies"
+		h.add(db.SentAsUser{
+			At:        sendAt.Add(10 * time.Second),
+			Connector: connector.Lark,
+			Action:    "POST " + replyActionPath,
+			Target:    replyJSON(t, map[string]string{"method": "POST", "path": replyActionPath, "message": "m-peer-0"}),
+			Text:      "ack",
+			Origin:    replyJSON(t, map[string]string{"machine_id": "server", "session_id": "conv-a"}),
+		})
+		// Non-Lark ledger row sharing same text must not exclude Lark owner messages.
+		h.add(db.SentAsUser{
+			At:        sendAt.Add(30 * time.Second),
+			Connector: "mail",
+			Action:    "mail_send",
+			Target:    replyJSON(t, map[string]string{"conversation": replyChat}),
+			Text:      "I will take over",
+		})
+		h.answerAround(func(string, string) (any, error) {
+			return map[string]any{"messages": []settleMsg{
+				{ID: "m-asst", Pos: "100", At: sendAt.Format(time.RFC3339), Sender: "Me", Text: "init", Mine: true},
+				{ID: "m-asst-reply", Pos: "101", At: sendAt.Add(12 * time.Second).Format(time.RFC3339), Sender: "Me", Text: "ack", ReplyTo: "m-peer-0", Mine: true},
+				{ID: "m-owner-reply", Pos: "102", At: sendAt.Add(30 * time.Second).Format(time.RFC3339), Sender: "Me", Text: "I will take over", ReplyTo: "m-peer-0", Mine: true},
+				{ID: "m1", Pos: "103", At: sendAt.Add(40 * time.Second).Format(time.RFC3339), Sender: "Sam", Text: "noted", Mine: false},
+			}}, nil
+		})
+		h.round(migratedConnectorID, replyBatch(replyChat, KindGroup, sendAt.Add(40*time.Second), "m1"))
+		if len(h.told("conv-a")) != 0 {
+			t.Fatalf("expected owner reply after unreferenced assistant reply to stop relay: %q", h.told("conv-a"))
+		}
+	})
+
+	t.Run("transient takeover load failure retries without overwriting persisted takeovers", func(t *testing.T) {
+		h := newChatReplyHarness(t, replyConv("conv-a"))
+		now := time.Now()
+		raw, _ := json.Marshal(map[string]time.Time{replyChat: now.Add(-20 * time.Minute)})
+		h.st.setRawSetting(chatReplyTakeoverKey, raw)
+		h.st.failKey(chatReplyTakeoverKey, errors.New("transient read error"))
+
+		h.wrote(t, "server", "conv-a", replyChat, now.Add(-30*time.Minute)).MessageRef = "m-a"
+		h.wrote(t, "server", "conv-a", replyOtherChat, now.Add(-30*time.Minute)).MessageRef = "m-b"
+
+		// While load fails, recording a takeover on replyOtherChat stays dirty in memory and must not overwrite replyChat in DB.
+		h.s.recordChatReplyTakeover(context.Background(), replyOtherChat, now.Add(-5*time.Minute), now)
+		if savedRaw, ok := h.st.rawSetting(chatReplyTakeoverKey); !ok || !strings.Contains(string(savedRaw), replyChat) {
+			t.Fatalf("persisted takeover overwritten during load failure: ok=%v raw=%s", ok, savedRaw)
+		}
+
+		// Once DB read recovers, next check loads replyChat AND merges/flushes both takeovers.
+		h.st.failKey(chatReplyTakeoverKey, nil)
+		if !h.s.chatReplyTakenOver(context.Background(), replyChat, now.Add(-30*time.Minute), now) {
+			t.Fatal("expected persisted takeover to recover after transient read error")
+		}
+		if !h.s.chatReplyTakenOver(context.Background(), replyOtherChat, now.Add(-30*time.Minute), now) {
+			t.Fatal("expected dirty in-memory takeover to remain stopped after reload")
+		}
+		savedRaw, ok := h.st.rawSetting(chatReplyTakeoverKey)
+		if !ok || !strings.Contains(string(savedRaw), replyChat) || !strings.Contains(string(savedRaw), replyOtherChat) {
+			t.Fatalf("expected merged takeovers persisted after recovery, got ok=%v raw=%s", ok, savedRaw)
 		}
 	})
 }

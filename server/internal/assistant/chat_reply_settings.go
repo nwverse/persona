@@ -235,6 +235,9 @@ func (s *Service) changeChatReplyMutedChats(ctx context.Context, action string, 
 					if chatReplyChatMuted(*v, feed) {
 						return nil
 					}
+					if len(v.ChatReplyMutedChats) >= chatReplyMutedChatsMax {
+						return fmt.Errorf("at most %d muted chats are allowed", chatReplyMutedChatsMax)
+					}
 					v.ChatReplyMutedChats = append(slices.Clone(v.ChatReplyMutedChats), chatReplyMutedChat{Chat: feed, Title: title})
 					return nil
 				}); err != nil {
