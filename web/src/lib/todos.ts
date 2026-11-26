@@ -105,6 +105,15 @@ export interface TodoRepoGate {
   reason?: string;
 }
 
+/** Active persistent blocker edge projected on a to-do under todos_v2 (#16135, #16138). */
+export interface TodoActiveBlocker {
+  id: string;
+  kind: string;
+  target_ref: string;
+  state: string;
+  attempts?: number;
+}
+
 /** Server-owned board projection section keys returned under todos_v2 (#15774, #15800). */
 export type TodoBoardSectionKey =
   | "needs_you"
@@ -286,6 +295,8 @@ export interface Todo {
   view?: TodoSummary;
   /** Server-computed weakest-link Target Repo delivery gate summary, populated only when todos_v2 === true (#15699). */
   repo_gate?: TodoRepoGate;
+  /** Active persistent blocker edges blocking this to-do, populated only when todos_v2 === true (#16135, #16138). */
+  active_blockers?: TodoActiveBlocker[];
 }
 
 /** Whether this closed to-do was cancelled, including the legacy supervision-only representation. */
@@ -372,6 +383,19 @@ export type AskTake = "take" | "ack" | "accept";
 export function openAsk(todo: Pick<Todo, "ask">): TodoAsk | undefined {
   const a = todo.ask;
   return a && a.verdict && a.asked_at ? a : undefined;
+}
+
+/** The current Pass round of a task its supervisor explicitly asked the owner to verify. */
+export function personalVerificationAsk(todo: Todo): TodoAsk | undefined {
+  const ask = openAsk(todo);
+  return reviewState(todo) === "user_check" && ask && !ask.outcome ? ask : undefined;
+}
+
+/** The open decision a supervisor raised for the owner through task_review. */
+export function taskReviewDecisionAsk(todo: Todo): TodoAsk | undefined {
+  const ask = openAsk(todo);
+  return !todo.done_at && reviewState(todo) === "needs_user" && !decisionDismissed(todo) &&
+    ask?.outcome === "decide" && !ask.questions?.length ? ask : undefined;
 }
 
 /** What the ask's button does; none for a decision that recommends nothing: nothing for one tap to take, so it is
@@ -1073,6 +1097,8 @@ export interface TodoPatch {
   project?: string;
   /** A responsible party that is not a Persona-started agent (#12712); null clears it. */
   responsible?: TodoResponsible | null;
+  /** Explicit 2-type classification under todos_v2 (#15758, #16100). */
+  item_type?: "personal" | "task";
 }
 
 export async function updateTodo(id: string, patch: TodoPatch): Promise<Todo> {
@@ -1081,6 +1107,15 @@ export async function updateTodo(id: string, patch: TodoPatch): Promise<Todo> {
     json: patch,
   });
   return r.todo;
+}
+
+/** Clears `seen_at` and persists server-side `AutoSeenUndone` anti-rebound protection (#14658, #16100). */
+export async function unseeTodo(id: string): Promise<Todo | undefined> {
+  const r = await api<{ todo?: Todo }>(`/todos/${enc(id)}/seen`, {
+    method: "DELETE",
+    headers: currentHeaders(),
+  });
+  return r?.todo;
 }
 
 export async function deleteTodo(id: string): Promise<void> {

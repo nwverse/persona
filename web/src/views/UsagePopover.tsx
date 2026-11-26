@@ -7,33 +7,9 @@ import { sendDraft } from "../lib/drafts";
 import { navigate } from "../lib/router";
 import { getState } from "../lib/store";
 import { balanceEmpty, balanceText } from "../lib/usage-balance";
-import {
-  canonicalUsageProvider,
-  groupByProvider,
-  isBalanceAccount,
-  isPinnableUsageAccount,
-  planNote,
-  protectReserve,
-  providerTitle,
-  remainingPercent,
-  remainingText,
-  remainingTone,
-  resetLabel,
-  resetPinnedUsageAccounts,
-  sampleAge,
-  sourceNames,
-  TIMELINE_CAP_MS,
-  TIMELINE_TICKS_HOURS,
-  timelinePosition,
-  togglePinnedUsageAccount,
-  usePinnedUsageAccounts,
-  windowKey,
-  type ProviderGroup,
-  type UnconnectedProvider,
-  type UsageAccount,
-  type UsageWindow,
-} from "../lib/usage-windows";
-import { isWindowPaused, unifiedTimeline, type TimelineLane, type UnifiedTimelineRow } from "../lib/usage-timeline";
+import { useCloseOnBack } from "../lib/back-close";
+import { accountPace } from "../lib/usage-pace";
+import { groupByProvider, planNote, providerTitle, remainingText, TIMELINE_CAP_MS, TIMELINE_TICKS_HOURS, timelinePosition, type ProviderGroup } from "../lib/usage-popover";
 import {
   buildUsageTable,
   detectLocalExternalOverlaps,
@@ -48,8 +24,8 @@ import {
   type UsageTableSort,
   type UsageViewMode,
 } from "../lib/usage-popover-model";
-import { accountPace } from "../lib/usage-pace";
-import { useCloseOnBack } from "../lib/back-close";
+import { isWindowPaused, unifiedTimeline, type TimelineLane, type UnifiedTimelineRow } from "../lib/usage-timeline";
+import { canonicalUsageProvider, isBalanceAccount, isPinnableUsageAccount, protectReserve, remainingPercent, remainingTone, resetLabel, resetPinnedUsageAccounts, sampleAge, selectSidebarUsageItems, sourceNames, togglePinnedUsageAccount, usageWindowPinId, usePinnedUsageAccounts, windowKey, type UnconnectedProvider, type UsageAccount, type UsageWindow } from "../lib/usage-windows";
 import { Collapse, cx } from "../ui/atoms";
 import { Icon } from "../ui/icons";
 import { reducedMotion } from "../ui/motion";
@@ -517,7 +493,8 @@ export function UsagePopover({
   const hasAnyWindows = useMemo(() => accounts.some((a) => a.windows.length > 0), [accounts]);
   const pinnedIds = usePinnedUsageAccounts();
   const pinnedSet = new Set(pinnedIds);
-  const livePinnedCount = accounts.reduce((n, a) => n + (isPinnableUsageAccount(a) && pinnedSet.has(a.id) ? 1 : 0), 0);
+  const { items: selectedPins, custom: hasLivePins } = selectSidebarUsageItems(accounts, pinnedIds);
+  const livePinnedCount = hasLivePins ? selectedPins.length : 0;
   useEffect(() => {
     if (fixed !== undefined || phase !== "open") return;
     const t = setInterval(() => setTick(Date.now()), 1000);
@@ -623,7 +600,6 @@ export function UsagePopover({
     const onStarter = typeof location !== "undefined" && (location.pathname === "/persona/new" || (location.pathname === "/persona" && !getState().assistant?.main));
     if (!onStarter) navigate("/persona/new");
   };
-
   const bodyStyle = {
     "--usage-cols": String(layout.cols),
     "--usage-col-w": `${layout.colWidth}px`,
@@ -703,7 +679,7 @@ export function UsagePopover({
                 </div>
               </header>
             )}
-            {pinnedIds.length > 0 && accounts.length > 0 && (
+            {pinnedIds.length > 0 && (accounts.length > 0 || unconnected.length > 0) && (
               <div data-usage-pinned-bar className="usage-popover-span usage-popover-pinned flex items-center justify-between gap-2 border-b border-line pb-2 text-submeta">
                 <span className="min-w-0 truncate text-ink-3">
                   {livePinnedCount > 0 ? tr("usage.pinned_summary", { count: livePinnedCount }) : tr("usage.pinned_fallback")}
@@ -748,7 +724,7 @@ export function UsagePopover({
                       <AccountSection
                         a={a}
                         now={now}
-                        pinned={pinnedSet.has(a.id)}
+                        pinnedSet={pinnedSet}
                         showAge={g.accounts.length > 1 || Boolean(a.stale)}
                         overlapWith={overlaps.get(a.id)}
                       />
@@ -783,21 +759,52 @@ export function UsagePopover({
   return anchor && typeof document !== "undefined" ? createPortal(dialog, document.body) : dialog;
 }
 
-function PinButton({ a, pinned }: { a: UsageAccount; pinned: boolean }) {
+function windowPinLabel(name: string, w: UsageWindow, pinned: boolean): string {
+  const scope = w.model?.trim()
+    || (w.title?.trim() && w.title.trim().toLowerCase() !== w.label.trim().toLowerCase() ? w.title.trim() : "")
+    || w.group?.trim()
+    || "";
+  if (scope) {
+    return pinned
+      ? tr("usage.unpin_window_model", { name, window: w.label, model: scope })
+      : tr("usage.pin_window_model", { name, window: w.label, model: scope });
+  }
+  return pinned ? tr("usage.unpin_window", { name, window: w.label }) : tr("usage.pin_window", { name, window: w.label });
+}
+
+function PinToggle({
+  pinned,
+  label,
+  onClick,
+  pinAttr,
+  windowAttr,
+  iconSize = 12,
+  className,
+}: {
+  pinned: boolean;
+  label: string;
+  onClick: () => void;
+  pinAttr?: string;
+  windowAttr?: string;
+  iconSize?: number;
+  className?: string;
+}) {
   return (
     <button
       type="button"
-      data-usage-pin={a.id}
+      data-usage-pin={pinAttr}
+      data-usage-pin-window={windowAttr}
       aria-pressed={pinned}
-      aria-label={pinned ? tr("usage.unpin_account", { name: a.name }) : tr("usage.pin_account", { name: a.name })}
+      aria-label={label}
       title={pinned ? tr("usage.unpin_title") : tr("usage.pin_title")}
-      onClick={() => togglePinnedUsageAccount(a.id)}
+      onClick={onClick}
       className={cx(
         "inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-control transition-colors",
         pinned ? "bg-hover-2 text-accent-ink" : "text-ink-3 hover:bg-hover hover:text-ink",
+        className,
       )}
     >
-      <Icon name="pin" size={12} />
+      <Icon name="pin" size={iconSize} />
     </button>
   );
 }
@@ -805,18 +812,19 @@ function PinButton({ a, pinned }: { a: UsageAccount; pinned: boolean }) {
 function AccountSection({
   a,
   now,
-  pinned,
+  pinnedSet,
   showAge = true,
   overlapWith,
 }: {
   a: UsageAccount;
   now: number;
-  pinned: boolean;
+  pinnedSet: ReadonlySet<string>;
   showAge?: boolean;
   overlapWith?: string;
 }) {
   const from = sourceNames(a);
   const plan = planNote(a);
+  const pinned = pinnedSet.has(a.id);
   const showPin = isPinnableUsageAccount(a) || pinned;
   // A balance's failure is about the provider's balance route, not a usage gateway's stored windows (#11825).
   const problem = isBalanceAccount(a) ? balanceProblemText(a) : problemText(a);
@@ -833,7 +841,14 @@ function AccountSection({
               {plan}
             </span>
           )}
-          {showPin && <PinButton a={a} pinned={pinned} />}
+          {showPin && (
+            <PinToggle
+              pinned={pinned}
+              pinAttr={a.id}
+              label={pinned ? tr("usage.unpin_account", { name: a.name }) : tr("usage.pin_account", { name: a.name })}
+              onClick={() => togglePinnedUsageAccount(a.id)}
+            />
+          )}
         </div>
         {(from.length > 0 || showAge) && (
           <div className="flex min-w-0 items-baseline justify-between gap-2 text-submeta text-ink-3">
@@ -876,13 +891,15 @@ function AccountSection({
         if (section.kind === "plain") {
           return (
             <div key={`plain:${idx}`} className="flex flex-col gap-1.5">
-              {section.windows.map((w) => (
-                <WindowRow key={windowKey(w)} name={a.name} w={w} stale={Boolean(a.stale)} now={now} />
-              ))}
+              {section.windows.map((w) => {
+                const pinId = usageWindowPinId(a.id, w);
+                return <WindowRow key={windowKey(w)} name={a.name} w={w} stale={Boolean(a.stale)} now={now} pinId={pinId} pinned={pinnedSet.has(pinId)} />;
+              })}
             </div>
           );
         }
         if (section.kind === "inline-model") {
+          const pinId = usageWindowPinId(a.id, section.window);
           return (
             <WindowRow
               key={windowKey(section.window)}
@@ -891,6 +908,8 @@ function AccountSection({
               inlineModel={section.model}
               stale={Boolean(a.stale)}
               now={now}
+              pinId={pinId}
+              pinned={pinnedSet.has(pinId)}
             />
           );
         }
@@ -905,9 +924,10 @@ function AccountSection({
               {section.title}
             </div>
             <div className="flex flex-col gap-1">
-              {section.windows.map((w) => (
-                <WindowRow key={windowKey(w)} name={a.name} w={w} groupContext={section.title} stale={Boolean(a.stale)} now={now} />
-              ))}
+              {section.windows.map((w) => {
+                const pinId = usageWindowPinId(a.id, w);
+                return <WindowRow key={windowKey(w)} name={a.name} w={w} groupContext={section.title} stale={Boolean(a.stale)} now={now} pinId={pinId} pinned={pinnedSet.has(pinId)} />;
+              })}
             </div>
           </div>
         );
@@ -1044,7 +1064,14 @@ function UsageTable({
                       {a.headline?.trim() && <div data-usage-headline className="text-submeta leading-snug text-ink-2">{a.headline.trim()}</div>}
                       {!row.noticeOnly && a.notice?.trim() && <div data-usage-notice className="text-submeta leading-snug text-ink-3">{a.notice.trim()}</div>}
                     </div>
-                    {showPin && <PinButton a={a} pinned={pinnedSet.has(a.id)} />}
+                    {showPin && (
+                      <PinToggle
+                        pinned={pinnedSet.has(a.id)}
+                        pinAttr={a.id}
+                        label={pinnedSet.has(a.id) ? tr("usage.unpin_account", { name: a.name }) : tr("usage.pin_account", { name: a.name })}
+                        onClick={() => togglePinnedUsageAccount(a.id)}
+                      />
+                    )}
                   </div>
                 </td>
                 {row.bareBalance ? (
@@ -1072,16 +1099,21 @@ function UsageTable({
                         <td key={col.key} data-table-col={col.key} className={cx("px-2 py-2 align-top", rowBorder)}>
                           {list.length > 0 ? (
                             <div className="flex flex-col gap-1.5">
-                              {list.map((w) => (
-                                <TableWindowCell
-                                  key={windowKey(w)}
-                                  name={a.name}
-                                  w={w}
-                                  subLabel={tableWindowSubLabel(w, col.head, list.length, tr("usage.table_plan_window"))}
-                                  stale={Boolean(a.stale)}
-                                  now={now}
-                                />
-                              ))}
+                              {list.map((w) => {
+                                const pinId = usageWindowPinId(a.id, w);
+                                return (
+                                  <TableWindowCell
+                                    key={windowKey(w)}
+                                    name={a.name}
+                                    w={w}
+                                    subLabel={tableWindowSubLabel(w, col.head, list.length, tr("usage.table_plan_window"))}
+                                    stale={Boolean(a.stale)}
+                                    now={now}
+                                    pinId={pinId}
+                                    pinned={pinnedSet.has(pinId)}
+                                  />
+                                );
+                              })}
                             </div>
                           ) : (
                             <span aria-hidden className="text-ink-3">—</span>
@@ -1092,19 +1124,24 @@ function UsageTable({
                     {model.hasOther && (
                       <td data-table-col="other" className={cx("px-2 py-2 align-top", rowBorder)}>
                         <div className="flex flex-col gap-1.5">
-                          {row.other.map((w) => (
-                            <TableWindowCell
-                              key={windowKey(w)}
-                              name={a.name}
-                              w={w}
-                              subLabel={{
-                                text: w.title?.trim() || (w.model?.trim() ? `${w.label} · ${w.model.trim()}` : w.label),
-                                full: [w.group?.trim(), w.model?.trim(), w.title?.trim(), w.label].filter(Boolean).join(" · "),
-                              }}
-                              stale={Boolean(a.stale)}
-                              now={now}
-                            />
-                          ))}
+                          {row.other.map((w) => {
+                            const pinId = usageWindowPinId(a.id, w);
+                            return (
+                              <TableWindowCell
+                                key={windowKey(w)}
+                                name={a.name}
+                                w={w}
+                                subLabel={{
+                                  text: w.title?.trim() || (w.model?.trim() ? `${w.label} · ${w.model.trim()}` : w.label),
+                                  full: [w.group?.trim(), w.model?.trim(), w.title?.trim(), w.label].filter(Boolean).join(" · "),
+                                }}
+                                stale={Boolean(a.stale)}
+                                now={now}
+                                pinId={pinId}
+                                pinned={pinnedSet.has(pinId)}
+                              />
+                            );
+                          })}
                           {a.balance && (
                             <div data-usage-balance className="text-submeta font-medium tabular-nums text-ink">
                               {balanceText(a.balance)}
@@ -1130,12 +1167,16 @@ function TableWindowCell({
   subLabel,
   stale,
   now,
+  pinId,
+  pinned,
 }: {
   name: string;
   w: UsageWindow;
   subLabel: { text: string; full: string };
   stale: boolean;
   now: number;
+  pinId: string;
+  pinned: boolean;
 }) {
   const p = accountPace({ stale }, w, now);
   const remaining = remainingPercent(w.used_percent);
@@ -1154,14 +1195,15 @@ function TableWindowCell({
     ? tr("usage.window_model_remaining_label", { name, window: w.label, model: scope, percent: shown(remaining) })
     : tr("usage.window_remaining_label", { name, window: w.label, percent: shown(remaining) });
   const inlineReset = !subLabel.text;
+  const pinLabel = windowPinLabel(name, w, pinned);
   return (
     <div data-window-row={w.label} data-window-paused={paused ? "true" : undefined} className="flex min-w-0 flex-col gap-1" title={tip}>
-      <div className="flex min-w-0 items-baseline justify-between gap-1.5">
+      <div className="flex min-w-0 items-center justify-between gap-1">
         {subLabel.text ? (
           <>
             <span
               data-usage-model={w.model?.trim() ? w.model.trim() : undefined}
-              className="min-w-0 truncate text-submeta text-ink-2"
+              className="min-w-0 flex-1 truncate text-submeta text-ink-2"
               title={subLabel.full}
             >
               {subLabel.text}
@@ -1175,15 +1217,25 @@ function TableWindowCell({
             <span data-usage-percent className={cx("shrink-0 whitespace-nowrap font-medium tabular-nums", stale ? "text-ink-2" : TONE_TEXT[tone])}>
               {shown(remaining)}
             </span>
-            {(shortReset || paused) && (
-              <span data-usage-reset data-usage-paused={paused ? "true" : undefined} className="min-w-0 truncate text-right text-submeta text-ink-3">
+            {(shortReset || paused) ? (
+              <span data-usage-reset data-usage-paused={paused ? "true" : undefined} className="min-w-0 flex-1 truncate text-right text-submeta text-ink-3">
                 {paused && <span className="font-medium text-red">{pausedLabel}</span>}
                 {paused && shortReset && <span aria-hidden> · </span>}
                 {shortReset}
               </span>
+            ) : (
+              <span className="flex-1" />
             )}
           </>
         )}
+        <PinToggle
+          pinned={pinned}
+          windowAttr={pinId}
+          label={pinLabel}
+          onClick={() => togglePinnedUsageAccount(pinId)}
+          iconSize={10}
+          className="h-4 w-4"
+        />
       </div>
       <div className={cx("min-w-0", stale && "opacity-70", reserve !== null && "pt-0.5")}>
         <Meter
@@ -1442,6 +1494,8 @@ function WindowRow({
   groupContext,
   stale,
   now,
+  pinId,
+  pinned,
 }: {
   name: string;
   w: UsageWindow;
@@ -1449,6 +1503,8 @@ function WindowRow({
   groupContext?: string;
   stale: boolean;
   now: number;
+  pinId: string;
+  pinned: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const p = accountPace({ stale }, w, now);
@@ -1473,85 +1529,96 @@ function WindowRow({
     : tr("usage.window_remaining_label", { name, window: windowLabelForAria, percent: shown(remaining) });
   const meterLabel = paceVerdict ? `${meterBaseLabel}, ${paceVerdict}` : meterBaseLabel;
   const rowTitle = [display.primary, display.spanBadge, display.modelTag, shown(remaining), paceVerdict, fullResetWithPaused, display.note].filter(Boolean).join(" · ");
+  const pinLabel = windowPinLabel(name, w, pinned);
   return (
     <div className="flex flex-col">
-      <button
-        type="button"
-        data-window-row={w.label}
-        data-window-paused={paused ? "true" : undefined}
-        data-window-inline-model={display.modelTag ? "true" : undefined}
-        aria-expanded={hasDetail ? expanded : undefined}
-        aria-label={rowTitle}
-        title={rowTitle}
-        disabled={!hasDetail}
-        onClick={() => hasDetail && setExpanded((v) => !v)}
-        className={cx(
-          "grid w-full items-center gap-x-1.5 rounded-sm text-left text-submeta [@media(pointer:coarse)]:min-h-11",
-          customLabel
-            ? "grid-cols-[minmax(1.75rem,auto)_minmax(2.5rem,1fr)_auto_minmax(0,auto)_auto]"
-            : "grid-cols-[1.75rem_minmax(2.5rem,1fr)_auto_minmax(0,auto)_auto]",
-          hasProtect && "mt-3.5",
-          hasDetail && "hover:bg-hover/60",
-        )}
-      >
-        {customLabel ? (
-          <span className="flex max-w-32 min-w-7 items-baseline gap-1">
-            {display.modelTag ? (
-              <>
-                <span className="shrink-0 text-ink-2">{display.primary}</span>
-                <span aria-hidden className="shrink-0 text-ink-3">·</span>
-                <span data-usage-model className="min-w-0 truncate text-ink-3" title={display.modelTag}>
-                  {display.modelTag}
-                </span>
-              </>
-            ) : (
-              <>
-                <span data-usage-window-title className="min-w-0 truncate text-ink-2" title={display.primary}>
-                  {display.primary}
-                </span>
-                {display.spanBadge && <span className="shrink-0 text-ink-3">{display.spanBadge}</span>}
-              </>
-            )}
+      <div className="flex items-center gap-1">
+        <button
+          type="button"
+          data-window-row={w.label}
+          data-window-paused={paused ? "true" : undefined}
+          data-window-inline-model={display.modelTag ? "true" : undefined}
+          aria-expanded={hasDetail ? expanded : undefined}
+          aria-label={rowTitle}
+          title={rowTitle}
+          disabled={!hasDetail}
+          onClick={() => hasDetail && setExpanded((v) => !v)}
+          className={cx(
+            "grid min-w-0 flex-1 items-center gap-x-1.5 rounded-sm text-left text-submeta [@media(pointer:coarse)]:min-h-11",
+            customLabel
+              ? "grid-cols-[minmax(1.75rem,auto)_minmax(2.5rem,1fr)_auto_minmax(0,auto)_auto]"
+              : "grid-cols-[1.75rem_minmax(2.5rem,1fr)_auto_minmax(0,auto)_auto]",
+            hasProtect && "mt-3.5",
+            hasDetail && "hover:bg-hover/60",
+          )}
+        >
+          {customLabel ? (
+            <span className="flex max-w-32 min-w-7 items-baseline gap-1">
+              {display.modelTag ? (
+                <>
+                  <span className="shrink-0 text-ink-2">{display.primary}</span>
+                  <span aria-hidden className="shrink-0 text-ink-3">·</span>
+                  <span data-usage-model className="min-w-0 truncate text-ink-3" title={display.modelTag}>
+                    {display.modelTag}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span data-usage-window-title className="min-w-0 truncate text-ink-2" title={display.primary}>
+                    {display.primary}
+                  </span>
+                  {display.spanBadge && <span className="shrink-0 text-ink-3">{display.spanBadge}</span>}
+                </>
+              )}
+            </span>
+          ) : (
+            <span className="w-7 truncate text-ink-2">{display.primary}</span>
+          )}
+          <span className={cx("block min-w-0", stale && "opacity-70")}>
+            <Meter
+              remaining={remaining}
+              expectedRemaining={expectedRemaining}
+              reserve={reserve ?? undefined}
+              barClass={TONE_BG[tone]}
+              reserveTop={false}
+              label={meterLabel}
+              tall
+            />
           </span>
-        ) : (
-          <span className="w-7 truncate text-ink-2">{display.primary}</span>
-        )}
-        <span className={cx("block min-w-0", stale && "opacity-70")}>
-          <Meter
-            remaining={remaining}
-            expectedRemaining={expectedRemaining}
-            reserve={reserve ?? undefined}
-            barClass={TONE_BG[tone]}
-            reserveTop={false}
-            label={meterLabel}
-            tall
-          />
-        </span>
-        <span data-usage-percent className={cx("shrink-0 whitespace-nowrap text-right font-medium tabular-nums", stale ? "text-ink-2" : TONE_TEXT[tone])}>
-          {shown(remaining)}
-        </span>
-        {fullResetWithPaused ? (
-          <span data-usage-reset data-usage-paused={paused ? "true" : undefined} className="min-w-0 truncate text-right text-ink-3" title={fullResetWithPaused}>
-            {paused && <span className="font-medium text-red">{pausedLabel}</span>}
-            {paused && fullReset && <span aria-hidden> · </span>}
-            {fullReset && (
-              <>
-                <span data-reset-full className="hidden @[300px]:inline">{fullReset}</span>
-                <span data-reset-short className="@[300px]:hidden">{shortReset}</span>
-              </>
-            )}
+          <span data-usage-percent className={cx("shrink-0 whitespace-nowrap text-right font-medium tabular-nums", stale ? "text-ink-2" : TONE_TEXT[tone])}>
+            {shown(remaining)}
           </span>
-        ) : (
-          <span aria-hidden />
-        )}
-        {hasDetail ? (
-          <span aria-hidden data-window-chevron className={cx("inline-flex shrink-0 items-center text-ink-3 transition-transform", expanded ? "rotate-180" : "-rotate-90")}>
-            <Icon name="chevron" size={10} />
-          </span>
-        ) : (
-          <span aria-hidden />
-        )}
-      </button>
+          {fullResetWithPaused ? (
+            <span data-usage-reset data-usage-paused={paused ? "true" : undefined} className="min-w-0 truncate text-right text-ink-3" title={fullResetWithPaused}>
+              {paused && <span className="font-medium text-red">{pausedLabel}</span>}
+              {paused && fullReset && <span aria-hidden> · </span>}
+              {fullReset && (
+                <>
+                  <span data-reset-full className="hidden @[300px]:inline">{fullReset}</span>
+                  <span data-reset-short className="@[300px]:hidden">{shortReset}</span>
+                </>
+              )}
+            </span>
+          ) : (
+            <span aria-hidden />
+          )}
+          {hasDetail ? (
+            <span aria-hidden data-window-chevron className={cx("inline-flex shrink-0 items-center text-ink-3 transition-transform", expanded ? "rotate-180" : "-rotate-90")}>
+              <Icon name="chevron" size={10} />
+            </span>
+          ) : (
+            <span aria-hidden />
+          )}
+        </button>
+        <PinToggle
+          pinned={pinned}
+          windowAttr={pinId}
+          label={pinLabel}
+          onClick={() => togglePinnedUsageAccount(pinId)}
+          iconSize={11}
+          className={hasProtect ? "mt-3.5" : undefined}
+        />
+      </div>
       {display.note && (
         <div data-usage-window-note className="pl-7 pt-0.5 text-submeta leading-snug text-ink-3">
           {display.note}

@@ -1,13 +1,11 @@
 // Popover-only grouping, table-layout, overlap-hint, and browser-local display preferences for UsagePopover.
 // Kept out of usage-windows.ts so the cold first screen (UsageBars) never pays for popover logic (FIRST_SCREEN_BUDGET).
 import { useSyncExternalStore } from "react";
+import { planNote, sortedWindows, type ProviderGroup } from "./usage-popover";
 import {
   canonicalUsageProvider,
   isBalanceAccount,
-  planNote,
-  sortedWindows,
   windowMinutes,
-  type ProviderGroup,
   type UsageAccount,
   type UsageWindow,
 } from "./usage-windows";

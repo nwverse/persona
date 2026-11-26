@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { groupByProvider, type UsageAccount, type UsageWindow } from "./usage-windows";
+import { groupByProvider } from "./usage-popover";
+import { type UsageAccount, type UsageWindow } from "./usage-windows";
 import { unifiedTimeline } from "./usage-timeline";
 import {
   buildUsageTable,
