@@ -223,14 +223,25 @@ func strictJSON(raw []byte) error {
 // document; Payload is exactly the decoded UTF-8 string, never trimmed or marshaled.
 // Every failure is ErrCatalogUnverified.
 func ParseCatalog(raw []byte, trusted string) (*Fetched, error) {
-	f, err := parseCatalog(raw, trusted)
+	var keys []string
+	if trusted != "" {
+		keys = []string{trusted}
+	}
+	return ParseCatalogKeys(raw, keys)
+}
+
+// ParseCatalogKeys is ParseCatalog for a market that trusts any one of keys (a private market's owner-configured keys,
+// several during a rotation). No keys: the catalog is parsed but not verified, as for an unsigned market. With keys,
+// one valid signature by any of them verifies it, and Fetched.SignedBy is the first key (in keys' order) that signed.
+func ParseCatalogKeys(raw []byte, keys []string) (*Fetched, error) {
+	f, err := parseCatalog(raw, keys)
 	if err != nil {
 		return nil, catalogFailure(ErrCatalogUnverified, err)
 	}
 	return f, nil
 }
 
-func parseCatalog(raw []byte, trusted string) (*Fetched, error) {
+func parseCatalog(raw []byte, keys []string) (*Fetched, error) {
 	if len(raw) > IndexMost {
 		return nil, i18n.Err("extension-market_security.catalog")
 	}
@@ -278,21 +289,24 @@ func parseCatalog(raw []byte, trusted string) (*Fetched, error) {
 			}
 		}
 	}
-	if trusted != "" {
-		key, err := ParseSigningKey(trusted)
+	trusted := ""
+	for _, k := range keys {
+		key, err := ParseSigningKey(k)
 		if err != nil {
 			return nil, err
 		}
-		valid := false
 		for _, s := range signatures {
 			b, _ := base64.StdEncoding.DecodeString(s.Sig)
-			if s.KeyID == KeyID(key) && ed25519.Verify(key, payload, b) {
-				valid = true
+			if trusted == "" && s.KeyID == KeyID(key) && ed25519.Verify(key, payload, b) {
+				trusted = k
 			}
 		}
-		if !valid {
+	}
+	if len(keys) > 0 && trusted == "" {
+		if len(keys) == 1 && keys[0] == Official.SigningKey {
 			return nil, i18n.Err("extension-market_security.signature")
 		}
+		return nil, i18n.Err("extension-market_security.private_signature")
 	}
 	if err := catalogFields(payload, reflect.TypeFor[MarketIndex]()); err != nil {
 		return nil, err
@@ -307,5 +321,5 @@ func parseCatalog(raw []byte, trusted string) (*Fetched, error) {
 			e.verifiedKey, e.verifiedEntry = trusted, entryFingerprint(e)
 		}
 	}
-	return &Fetched{Index: ix, Warnings: warnings, Raw: append([]byte(nil), raw...), Payload: payload}, nil
+	return &Fetched{Index: ix, Warnings: warnings, Raw: append([]byte(nil), raw...), Payload: payload, SignedBy: trusted}, nil
 }

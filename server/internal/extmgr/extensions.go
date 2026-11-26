@@ -104,6 +104,8 @@ type ExtensionView struct {
 	// Attached: an extension running on its own that the manager reaches on its sockets (a remote: install), and how it
 	// is connected.
 	Attached *ExtensionAttached `json:"attached,omitempty"`
+	// MarketSignature: how an extension installed from a market was verified (extension_market_keys.go).
+	MarketSignature *ExtensionSignatureView `json:"market_signature,omitempty"`
 }
 
 // ExtensionAttached is how an attached extension is connected (docs/extensions/extensions.md "Attached extensions").
@@ -419,6 +421,7 @@ func (ps *extensions) view(ctx context.Context, p *extension.Extension) Extensio
 	if ps.h != nil {
 		ps.h.extensionUpgrades().decorate(ctx, &v, p)
 		ps.h.decorateMarketMetadata(ctx, &v, p)
+		v.MarketSignature = ps.h.marketSignatureOf(ctx, p)
 		ps.h.decorateInstalledLogo(&v, p)
 	}
 	if m.NodeProgram() != nil {
