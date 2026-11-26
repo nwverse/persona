@@ -1736,7 +1736,18 @@ final class AppModel {
         do {
             if let main = assistantMain { // an ended one is resumed by the hub
                 assistantCurrent = main
-                try await api.send(main, text: text)
+                let retryKey = DirectSendRetryKey(key: main, text: text, imageFingerprints: [])
+                let id = directSendID(for: retryKey)
+                let socket = socket(main.group)
+                do {
+                    try await OpRetry.untilDelivered(keepTrying: { socket?.takesWrites == true }) {
+                        try await api.send(main, text: text, clientMsgID: id.uuidString, opID: id)
+                    }
+                    directSendRetries.sent(retryKey)
+                } catch {
+                    if Self.directSendDidNotDeliver(error) { directSendRetries.sent(retryKey) }
+                    throw error
+                }
             } else {
                 // Settings not read yet: whether it has a main conversation is unknown, and a plain one replaces none.
                 let makesMain = assistantConfig != nil
@@ -4169,14 +4180,45 @@ final class AppModel {
             settleSend(key, msg.id, outcome)
         }
     }
-    func send(_ key: SessionKey, text: String, images: [ImagePayload] = [], haptic: Bool = true) async -> Bool {
+    private struct DirectSendRetryKey: Hashable {
+        var key: SessionKey
+        var text: String
+        var imageFingerprints: [String]
+    }
+    /// Failed direct sends (`askPersona`, `send`) whose delivery is uncertain keep their id on retry so the hub
+    /// deduplicates delivery; cleared once delivered or definitively refused without typing.
+    @ObservationIgnored private var directSendRetries = RetryIDs<DirectSendRetryKey>()
+
+    private func directSendID(for key: DirectSendRetryKey) -> UUID {
+        UUID(uuidString: directSendRetries.id(for: key)) ?? UUID()
+    }
+
+    private nonisolated static func directSendDidNotDeliver(_ error: Error) -> Bool {
+        guard let api = error as? APIError else { return false }
+        if api.fields["delivered"] == "none" { return true }
+        if (400..<500).contains(api.status), api.status != 408, api.status != 429,
+           api.fields["delivered"] != "unknown", api.fields["delivered"] != "yes" {
+            return true
+        }
+        return false
+    }
+
+    func send(_ key: SessionKey, text: String, images: [ImagePayload] = [], haptic: Bool = true, clientMsgID: UUID? = nil) async -> Bool {
         guard allowSend(key), let api = api(key.group) else { return false }
         readiness.failure = nil // the refusal card goes with the next try
+        let retryKey = DirectSendRetryKey(key: key, text: text, imageFingerprints: images.map { DeviceCredentialTrade.fingerprint($0.mime + ":" + $0.data) })
+        let id = clientMsgID ?? directSendID(for: retryKey)
+        let socket = socket(key.group)
         do {
-            try await api.send(key, text: text, images: images, launcher: assistantLaunchers[key], model: assistantModels[key])
+            try await OpRetry.untilDelivered(keepTrying: { socket?.takesWrites == true }) {
+                try await api.send(key, text: text, images: images, launcher: assistantLaunchers[key], model: assistantModels[key],
+                                   clientMsgID: id.uuidString, opID: id)
+            }
+            if clientMsgID == nil { directSendRetries.sent(retryKey) }
             if haptic { Haptics.tap() }
             return true
         } catch {
+            if clientMsgID == nil, Self.directSendDidNotDeliver(error) { directSendRetries.sent(retryKey) }
             show(error)
             return false
         }
