@@ -965,7 +965,7 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
   - **Lark read when visible** (#433, `lib/lark-read.ts`, following iOS `LarkPager.readReport`): a message counts as seen only when at least half of it is in the list, the page is in the foreground, the first screen has been positioned, and no dialog covers it; 450 ms after the last one is seen, reports are merged and sent
     (`POST /lark/conversations/{id}/read`: position + `badge_count` + ids of others' unread messages); going to the background / leaving reports immediately. Reports only move forward; failures are retried next time; topic groups do not report.
     When opened from the Inbox, what is seen on the first screen is also reported (from this item's first new message), per the 2026-10-31 decision in `docs/assistant/inbox.md` (the iOS code still has the old behavior of not reporting the first screen).
-  - **Compose / reply** (`ComposeDialog.tsx`, `lib/mail.ts`, `POST /mail/send`): **New email** in the top bar, **Reply** in mail details (Re: subject, In-Reply-To / References, quoting the first 40 lines); plain text, no attachments (as on iOS);
+  - **Compose / reply** (`ComposeDialog.tsx`, `modules/mail/mail.ts`, `POST /mail/send`): **New email** in the top bar, **Reply** in mail details (Re: subject, In-Reply-To / References, quoting the first 40 lines); plain text, no attachments (as on iOS);
     To, Cc and Bcc accept the same address lists; at least one parsed recipient is required, and every entered address must be valid. Cancel discards the matching manager/item draft, while Esc / clicking outside or unmounting keeps edits, including Bcc-only edits (in page memory only). A failed send retains them for retry; success clears them. `references` is sent as the hub's string.
   - **Opening mail marks it read**: unhandled, unread mail sends `POST /mail/messages/{aid}/{uid}/flags {seen:true}` on open; failures are ignored (as on iOS).
   - **Translation** (`lib/translate.ts`): with translation on, opening mail that is not in the target language sends `POST /translate/mail`, the body is replaced by the translation, with "Translated to… · Show original" above it; translations the hub prepared in advance (`translations[target]`) are used directly in list rows and titles.
@@ -2645,24 +2645,18 @@ unavailable (including a 404 from a hub before the list read moved into Core) hi
 flag is `module.recording`: off on a hub that publishes module flags without it, or where a browser switches it off.
 The recording settings (how long recordings and minutes are kept, Settings › Persona) stay in core for now.
 
-**Mail with the hub's mail module off** (#15995; mail has no web module of its own, the Inbox reads the hub flag
-`module.mail`). `lib/mail.ts` decides it once (`mailReading`: `full`, or `stored` when the hello names modules and
-leaves mail out) and everything else is handed that: Settings and compose already hide (`loadMailAccounts` asks
-nothing), and an opened mail item is `views/inbox/StoredMailBody.tsx` instead of the live reader. It asks no
-`/api/v1/mail/…` route, which the hub no longer has; it reads the item's own page (`GET /api/v1/inbox/{id}`, Core)
-and shows the mail's words out of the stored `context` (`lib/mail-stored.ts` takes off the heading and header lines
-the hub wrote for the model; at most 3,000 characters of the newest mail, or the list's preview), who it is from and
-when, and after the text one line: mail is off on the hub machine, so the full message and its attachments can't be
-loaded. The line ends by what the hub says about the stored text (`mail_body_truncated` on the item's page, read once
-as the closed `StoredMailClipping` by `storedMailClipping` in `lib/mail.ts`): `clipped`, the text is cut short;
-`whole`, nothing more; `unknown` (a hub from before it sent the flag, an item stored before the hub recorded it, a
-mail whose text it never read, or the list's copy when the page cannot be read), a long message may be cut short. A translation is shown only when the item
-lists one the hub kept (`POST /api/v1/translate/mail` answers from it without the mail server); a failure there is
-silent. Left out, because each needs the mail module: Reply and Reply all, marking the mail read, attachments and the
-HTML view, and sending a reply from the Inbox (AI draft reply, Send on a draft or a reply suggestion:
-`views/inbox/item-write-gate.ts`, beside Lark's gate; a draft already written stays readable). Hand to AI (without
-the line about `mail_read`), Done, mute, folders, rules and to-dos are the Inbox's and stay. With the module on, or a
-hub that names no modules, the reader and its requests are as before.
+**Mail** (#13434, #15995). Inbox readers can open, reply to and compose mail, and manage their connected accounts in
+Settings. The `mailbox` contribution in `web/src/modules/mail/` provides the live client and UI. The host loads its
+code and the current language's `mail.json` catalog on demand. The live reader, composer and account settings each
+load when opened. Settings › General › Optional features controls this browser's switch. Hubs that publish module
+flags must also advertise `module.mail`. Older hubs retain the default live reader.
+
+With mail off on the hub or in the browser, or omitted from the build, Inbox keeps its historical items and account
+filters. `views/inbox/StoredMailBody.tsx` reads the archived item from `GET /api/v1/inbox/{id}`.
+`lib/mail-stored.ts` extracts the saved text, falling back to the list preview, and interprets the hub's
+`mail_body_truncated` flag. The reader can display an already saved translation. Draft text, Hand to AI, Done,
+folders and other Inbox actions remain available. Live account requests, message reads, attachments and sending
+require the enabled provider.
 
 **The pilot: health.** The Health page (`web/src/modules/health/`, docs/assistant/health.md) is the first module. Its
 route (`/health`, `/health/new`, `/health/<id>`, and `/tracks/health…`), its water and protein pages (the reserved

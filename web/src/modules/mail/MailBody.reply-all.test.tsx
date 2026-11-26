@@ -1,13 +1,15 @@
 // @vitest-environment jsdom
 // Exercise the real reader, composer and HTTP serializer; only the synthetic transport is intercepted.
+import "./test-register";
+import { resetMailForTests } from "../../lib/mail";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { t } from "../../i18n";
 import type { InboxItem, MailAccount } from "../../lib/inbox";
-import { resetMailForTests, type MailMessage } from "../../lib/mail";
+import { type MailMessage } from "./mail";
 import { ItemManager, MANAGER_HEADER, resetManagerChoice, setRosterDefault } from "../../lib/manager-choice";
-import { MailBody } from "./InboxBodies";
+import { FullMailBody as MailBody } from "./FullMailBody";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

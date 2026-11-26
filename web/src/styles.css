@@ -434,6 +434,17 @@ body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; 
 /* In the base layer: unlayered, it beat every utility, so `scrollbar-none` rows kept a thin, always-on bar (#1381). */
 @layer base { * { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; } }
 /* A row that scrolls sideways without a bar (still by wheel, trackpad and touch); WebKit before 18.2 needs the pseudo. */
+/* Keep the native horizontal scrollbar. Fade the trailing chips only while more can scroll into view. */
+@supports (animation-timeline: scroll(self x)) {
+  .integrations-chip-scroll {
+    animation: integrations-chip-edge auto steps(1, end);
+    animation-timeline: scroll(self x);
+  }
+  @keyframes integrations-chip-edge {
+    from { mask-image: linear-gradient(to right, black calc(100% - 1rem), transparent); }
+    to { mask-image: none; }
+  }
+}
 @utility scrollbar-none { scrollbar-width: none; &::-webkit-scrollbar { display: none; } }
 /* Conversation chrome: retain the native hit strip and drag behavior, with no opaque track or layout shift.
    Only enhanced browsers fade the thumb; forced colors and unsupported browsers keep the native bar. */

@@ -3279,6 +3279,11 @@ item states its own scope, then one configuration form per module. Where a featu
 the page (never navigating away, so nothing open behind it, such as a chat's unsent draft, is unmounted) instead of a
 second switch, so there is one place to change it.
 
+For people updating their Hub on the web, Pages shows one compact update notice directly beneath Settings (#16380).
+It follows Settings when pages are reordered and folds away with Pages. In the phone drawer it occupies a full row
+below the row of icons containing Settings. Status text wraps and inline actions keep their single-line labels.
+Opening the status takes the user to Settings › Hub.
+
 The Labs reminder (#15802) helps people who want to try a feature find it in Settings. The main sidebar's Settings
 entry and the Settings category list put a still accent dot beside their existing labels when an experiment is available,
 off and unseen. The labels include the reminder for screen readers. The dots clear on opening the Labs category. Each new
