@@ -210,6 +210,44 @@ it("a completed task remains a labelled, clickable owner, not a prompt to link i
   }
 });
 
+it.each([false, true])("a closed task has a persistent ownership banner and keeps its composer (cancelled: %s)", async (cancelled) => {
+  await open(<ChatView mid="mac" sid="s1" inPage />, row({
+    status: "idle", state: "idle", completed_todo: { id: "done-task", title: "Disposable task", cancelled },
+  }));
+  await act(async () => { await vi.dynamicImportSettled(); });
+  const notice = host.querySelector("[data-completed-todo]")!;
+  expect(notice.textContent).toContain(t(cancelled ? "chat-closed.cancelled" : "chat-closed.completed"));
+  expect(notice.textContent).toContain("Disposable task");
+  expect(notice.textContent).toContain(t("chat-closed.continue"));
+  expect(notice.closest("[data-chat-scroll]")).toBeNull();
+  expect(notice.querySelector("a")?.getAttribute("href")).toBe("/todos?id=done-task");
+  expect(host.querySelector("textarea")).not.toBeNull();
+  expect(host.querySelector("[data-stopped-agent]")).toBeNull();
+});
+
+it("active task ownership suppresses a stale completed association", async () => {
+  await open(<ChatView mid="mac" sid="s1" inPage />, row({
+    todo: { id: "active", title: "Current task" },
+    completed_todo: { id: "done-task", title: "Old task", cancelled: true },
+  }));
+  expect(host.querySelector("[data-completed-todo]")).toBeNull();
+});
+
+it("a stopped closed-task session says why and does not promise it can receive messages", async () => {
+  const reason = "Stopped because its to-do was closed. Resume from the terminal to continue.";
+  act(() => applyCompleteSessions([row({
+    status: "offline", state: "offline", read_only_reason: reason,
+    capabilities: { read: true, terminal: true },
+    completed_todo: { id: "done-task", title: "Disposable task", cancelled: true },
+  })]));
+  act(() => root.render(<ChatView mid="mac" sid="s1" inPage />));
+  await act(async () => { await vi.dynamicImportSettled(); });
+  for (let i = 0; i < 6; i++) await settle();
+  expect(host.querySelector("[data-stopped-agent]")?.textContent).toContain(reason);
+  expect(host.querySelector("[data-completed-todo]")?.textContent).not.toContain(t("chat-closed.continue"));
+  expect(host.querySelector("textarea")).toBeNull();
+});
+
 // Rename…, Rename space… and Delete… open dialogs from a chunk of their own (#10382): the ⋯ menu starts it as it opens, so
 // the click draws the dialog in its own render, with no wait for the chunk and no empty frame.
 it("the ⋯ menu starts the Rename and Delete dialogs' chunk, so Rename… draws its dialog on the click", async () => {

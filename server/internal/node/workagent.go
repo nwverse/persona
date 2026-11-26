@@ -403,7 +403,7 @@ func (n *Node) abandonStart(ctx context.Context, created *host.Created, kind str
 		if h == nil {
 			return err
 		}
-		stopped, quitErr := n.quitAgentRound(cctx, id, pane, h, true)
+		stopped, quitErr := n.quitAgentRound(cctx, id, pane, h, true, nil)
 		if quitErr != nil {
 			log.Printf("abandon start in pane %s: quit %s: %v", pane, kind, quitErr)
 			return err

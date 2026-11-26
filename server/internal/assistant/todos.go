@@ -179,7 +179,7 @@ type todoStore interface {
 	ClaimTodoReminder(ctx context.Context, id string, remindAt, now time.Time) (bool, error)
 	RetitleTodo(ctx context.Context, id, from, to string, at time.Time) (*db.TodoRow, bool, error)
 	FailTodo(ctx context.Context, id, startError string, at time.Time) (*db.TodoRow, error)
-	AutoDoneTodo(ctx context.Context, id, reason string, at, workSince time.Time) (*db.TodoRow, bool, error)
+	AutoDoneTodo(ctx context.Context, id, reason string, at, workSince time.Time, guard func() error) (*db.TodoRow, bool, error)
 	RetryTodo(ctx context.Context, id string, at time.Time) (*db.TodoRow, bool, error)
 	DeleteTodo(ctx context.Context, id string) error
 	LinkTodoSpace(ctx context.Context, todoID, machineID, space string, linkedAt time.Time, keep db.KeptLinks) (string, error)
@@ -2119,6 +2119,8 @@ func (s *Service) autoDoneTodo(ctx context.Context, id, reason string, work time
 	if t, ok := s.todoNow(id); ok && t.isConcern() {
 		return false, nil
 	}
+	s.loadSeen(ctx)
+	_ = s.loadTaskActivity(ctx)
 	s.todos.writing.Lock() // no other store write lands between the store's close and memory's
 	unlocked := false
 	unlock := func() {
@@ -2128,11 +2130,20 @@ func (s *Service) autoDoneTodo(ctx context.Context, id, reason string, work time
 		}
 	}
 	defer unlock()
+	guard := func() error {
+		if t, ok := s.todoNow(id); ok {
+			return s.taskCloseActivitySnapshotError(t, time.Now())
+		}
+		return nil
+	}
+	if err := guard(); err != nil {
+		return false, err
+	}
 	now := time.Now().UTC()
 	var row db.TodoRow
 	st := s.todoDB()
 	if st != nil {
-		r, ok, err := st.AutoDoneTodo(ctx, id, reason, now, work)
+		r, ok, err := st.AutoDoneTodo(ctx, id, reason, now, work, guard)
 		if errors.Is(err, db.ErrTodoNotFound) {
 			return false, nil
 		}
@@ -2151,7 +2162,13 @@ func (s *Service) autoDoneTodo(ctx context.Context, id, reason string, work time
 		t.keepPlan(&row)
 	}
 	var before Todo
+	var activityErr error
 	_, doneKeys, ok := s.setTodoRow(id, row, func(t *Todo) bool {
+		if st == nil {
+			if activityErr = s.taskCloseActivitySnapshotError(*t, time.Now()); activityErr != nil {
+				return false
+			}
+		}
 		// With a store its conditional write decided it (open, not reopened since work began) and, writing held, no
 		// writer that stores a row committed after it (all of them take writing): memory takes the stored row even
 		// when an in-memory bump (an agent's title synced) moved updated_at past it. Memory alone has only its own
@@ -2163,6 +2180,9 @@ func (s *Service) autoDoneTodo(ctx context.Context, id, reason string, work time
 		return true
 	})
 	unlock() // the notifications run without writing, as for the other writers
+	if activityErr != nil {
+		return false, activityErr
+	}
 	if !ok {
 		return false, nil
 	}

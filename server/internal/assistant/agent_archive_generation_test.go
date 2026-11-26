@@ -630,8 +630,21 @@ func TestAgentArchiveGenerationCancelledTaskPublishesAfterMetadataFailure(t *tes
 	store := &archiveGenerationCloseFailureStore{fleetMem: ft.st}
 	ft.s.setStore(func() Store { return store })
 	t.Cleanup(func() { archiveGenerationDrainNative(ft.s, row.SessionID) })
+	ctx := t.Context()
+	todo, err := ft.s.createTodo(ctx, "Cancelled task", "", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ft.s.linkTodoAgent(ctx, todo.ID, "mac", row.SessionID, row.Title, "/code", row.Agent); err != nil {
+		t.Fatal(err)
+	}
+	if closed, err := ft.s.reviewDoneTodo(ctx, todo.ID, "Cancelled", false); err != nil || !closed {
+		t.Fatalf("cancel: %v, %v", closed, err)
+	}
 	before := len(ft.toldOf(assistantwire.EventFleetSessions))
-	ft.s.stopCancelledAgent(context.Background(), "todo-close-metadata", "mac", row.SessionID)
+	ft.s.archiveRetiredTaskAgent(ctx, doneTaskAgent{
+		todo: todo.ID, machine: "mac", session: row.SessionID, doneAt: *todoNow(ft.s, todo.ID).DoneAt,
+	}, row)
 	after := len(ft.toldOf(assistantwire.EventFleetSessions))
 	if after != before+1 {
 		t.Fatalf("fleet publishes after committed archive = %d, want %d (metadata error must not suppress publish)", after-before, 1)

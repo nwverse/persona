@@ -214,7 +214,8 @@ func archiveSnapshot(s proto.Session) proto.Session {
 		SourceKind: s.SourceKind, SourceThreadID: s.SourceThreadID, SourceInstanceID: s.SourceInstanceID,
 		ParentThreadID: s.ParentThreadID, ParentSessionID: s.ParentSessionID, RootSessionID: s.RootSessionID, IsSubagent: s.IsSubagent,
 		UpdatedAt: s.UpdatedAt, LastText: string(preview),
-		Status: proto.StatusOffline, State: proto.StateOffline,
+		ReadOnlyReason: s.ReadOnlyReason,
+		Status:         proto.StatusOffline, State: proto.StateOffline,
 		Capabilities: caps,
 	}
 }
@@ -433,6 +434,16 @@ func markAgentArchives(machine string, list []proto.Session, records map[string]
 		}
 		list[i].Archived = rec.Archived && !restoring && !active
 		list[i].ArchiveChangedAt = archiveChangedAt(rec.ChangedAt)
+		if list[i].Archived && !rec.ClosedAt.IsZero() && rec.Session.ReadOnlyReason != "" && !agentArchiveBusy(list[i]) {
+			list[i].ReadOnlyReason = rec.Session.ReadOnlyReason
+			list[i].Status, list[i].State = proto.StatusOffline, proto.StateOffline
+			caps := &proto.SessionCapabilities{Read: true, Terminal: list[i].PaneID != ""}
+			if current := list[i].Capabilities; current != nil {
+				caps.Terminal = caps.Terminal || current.Terminal
+				caps.StopCause = current.StopCause
+			}
+			list[i].Capabilities = caps
+		}
 	}
 	return listed.String()
 }

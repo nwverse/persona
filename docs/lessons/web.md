@@ -15,6 +15,12 @@ is not retried. When code needs to know whether a request reached the hub, use `
 Setting `color: transparent` also clears any gradient stop that reads `currentColor`.
 Use a transparent glyph fill for the animated gradient and check the painted text in a browser.
 
+## Closed-task links keep native navigation and the app base (#6819)
+
+Build closed-task banner links with the router's `href` and handle clicks with `onLinkClick`. Plain clicks stay
+in-app, modified clicks retain native navigation, and native destinations retain the reverse-proxy base path.
+Test the rendered anchor and its click behavior at both the root and a nested base path, not only the router helper.
+
 ## A folder of trees names its repository, it is not one (#13453)
 
 Path inference keys a tree in a folder kept apart from its repository (herdr's `~/.herdr/worktrees/<repository>/<tree>`)

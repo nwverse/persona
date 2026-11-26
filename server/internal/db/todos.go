@@ -734,20 +734,37 @@ func (d *DB) RetryTodo(ctx context.Context, id string, at time.Time) (*TodoRow, 
 
 // AutoDoneTodo marks a task done by the hub (DoneByAuto, with why) when it is still open and the user has not
 // reopened it since workSince, the start of the work that was judged; false (and no error) when either changed, or it
-// is a concern (never closed on its own).
-func (d *DB) AutoDoneTodo(ctx context.Context, id, reason string, at, workSince time.Time) (*TodoRow, bool, error) {
+// is a concern (never closed on its own). A final guard can roll back activity arriving during the write.
+func (d *DB) AutoDoneTodo(ctx context.Context, id, reason string, at, workSince time.Time, guard func() error) (*TodoRow, bool, error) {
+	tx, err := d.pool.Begin(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	defer tx.Rollback(context.WithoutCancel(ctx))
 	var r TodoRow
-	err := d.pool.QueryRow(ctx, `UPDATE todos SET done_at = $2, done_by = $3, done_reason = $4, updated_at = $2
+	err = tx.QueryRow(ctx, `UPDATE todos SET done_at = $2, done_by = $3, done_reason = $4, updated_at = $2
 		WHERE id = $1 AND done_at IS NULL AND (reopened_at IS NULL OR reopened_at < $5) AND kind <> 'concern'
 		RETURNING `+todoColumns, id, at, DoneByAuto, reason, workSince).
 		Scan(todoDest(&r)...)
 	if errors.Is(err, pgx.ErrNoRows) {
-		if _, gerr := d.GetTodo(ctx, id); gerr != nil {
-			return nil, false, gerr
+		var exists bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM todos WHERE id = $1)`, id).Scan(&exists); err != nil {
+			return nil, false, err
+		}
+		if !exists {
+			return nil, false, ErrTodoNotFound
 		}
 		return nil, false, nil
 	}
 	if err != nil {
+		return nil, false, err
+	}
+	if guard != nil {
+		if err := guard(); err != nil {
+			return nil, false, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return nil, false, err
 	}
 	return &r, true, nil

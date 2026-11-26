@@ -3204,6 +3204,17 @@ This requested HarmonyOS presentation uses compact icon submissions while retain
 8. Make drift visible: extend the Android ratchet to the design system, add a web literal ratchet, and a test that compares the Swift scales with the shared JSON (DS-30, DS-35).
 9. Prune dead tokens and views, and replace the remaining `SecureField` uses (DS-31, DS-32).
 
+## Closed task conversation ownership
+
+The Agents web conversation keeps a quiet, persistent ownership line below its header after its to-do is completed or
+cancelled (#6819). It reuses the inset surface, secondary text and inline-link tokens; it is outside the transcript
+scroll area, so a long conversation cannot hide it. It names the completed/cancelled state and links to the to-do;
+while the session remains writable it says the user can keep chatting. Active task ownership suppresses this historical
+line. A stopped Agent instead gives its explicit stop reason beside the existing Terminal and Resume actions, never a
+promise that another message can be sent. There is no new setting, style, notification, count or automatic confirmation.
+The ownership notice and stopped/archived-session recovery controls load only when needed, keeping them out of the
+first-screen startup budget without changing their layout, text or actions. Session-detail load errors stay eager.
+
 ## UI change self-check
 
 Run this before opening a PR that adds or changes UI or an interaction, and paste the list into the PR with each item marked

@@ -1377,6 +1377,12 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 		if t.Supervision == nil && t.DoneAt == nil {
 			// A legacy completion judged while no main existed deliberately stayed unjudged. Once main is configured,
 			// recover that exact ledger turn instead of leaving it outside every future supervised sweep (#5732).
+			if _, reporting := s.reporterOf(ctx, t.Origin); reporting {
+				if e, ok := s.turnOf(ctx, t.ID); ok && e.State == turnDone && e.Judged == nil {
+					s.watchTurn(ctx, t, s.taskAgentsIn(ctx, t, lists))
+				}
+				continue
+			}
 			main := s.settings(ctx).Main
 			if main == "" {
 				continue
