@@ -37,6 +37,7 @@
     <string name="agents_subtitle_two">%1$s，%2$s。</string>
     <string name="agents_action_todos">待办</string>
     <string name="agents_action_new_session">新建会话</string>
+    <string name="agents_new_agent_in_project">在%1$s中新建 Agent</string>
     <string name="agents_action_list_settings">列表设置</string>
     <string name="agents_search_placeholder">搜索空间、会话或最新消息</string>
     <string name="agents_action_search">搜索</string>
@@ -406,6 +407,15 @@
     <string name="agents_todo_state_working">进行中</string>
     <string name="agents_todo_state_follow_up">待跟进</string>
     <string name="agents_todo_state_not_started">未开始</string>
+    <string name="agents_todo_state_pr_conflicts">存在合并冲突</string>
+    <string name="agents_todo_state_pr_changes_requested">需要修改</string>
+    <string name="agents_todo_state_pr_checks_failed">检查未通过</string>
+    <string name="agents_todo_state_pr_in_review">评审中</string>
+    <string name="agents_todo_state_pr_checks_pending">检查中</string>
+    <string name="agents_todo_state_pr_waiting_merge">等合入</string>
+    <string name="agents_todo_state_parked_merge_review">等评审或合并</string>
+    <string name="agents_todo_state_parked">已搁置</string>
+    <string name="agents_todo_state_tracking">跟进中</string>
     <string name="agents_todo_detail">待办详情</string>
     <string name="agents_todo_gone">待办已不存在</string>
     <string name="agents_todo_gone_hint">该待办可能已被删除。</string>

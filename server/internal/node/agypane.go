@@ -934,6 +934,9 @@ func (n *Node) agyPaneSessionInfo(id, pane string) map[string]any {
 		if st.Model != "" {
 			info["model"] = st.Model
 		}
+		if st.AppMode != "" {
+			info["permission_mode"] = st.AppMode
+		}
 	}
 	if conversation := n.agyConversation(id, pane); conversation != "" {
 		if workers := n.agySwarmWorkers(conversation); len(workers) > 0 {
@@ -944,7 +947,7 @@ func (n *Node) agyPaneSessionInfo(id, pane string) map[string]any {
 			if runtimeRow.Model != "" {
 				info["model"] = runtimeRow.Model
 			}
-			if runtimeRow.PermissionMode != "" {
+			if _, hasMode := info["permission_mode"]; !hasMode && runtimeRow.PermissionMode != "" {
 				info["permission_mode"] = runtimeRow.PermissionMode
 			}
 			if runtimeRow.Effort != "" {
@@ -974,6 +977,23 @@ func (n *Node) agyPaneSessionInfo(id, pane string) map[string]any {
 		}
 		if breakdown != nil {
 			info["context_breakdown"] = breakdown
+		}
+	}
+	if cur, _ := info["model"].(string); cur != "" {
+		if shown := n.shownModel(id, cur); shown != "" {
+			info["model"] = shown
+		}
+	} else if shown := n.shownModel(id, ""); shown != "" {
+		info["model"] = shown
+	}
+	n.mu.Lock()
+	if m, ok := n.modes[id]; ok && m.Effort != "" && time.Since(m.EffortAt) <= pendingModelTTL {
+		info["effort"] = m.Effort
+	}
+	n.mu.Unlock()
+	if cur, _ := info["model"].(string); info["effort"] == nil && cur != "" {
+		if e := agyModelEffort(cur); e != "" {
+			info["effort"] = e
 		}
 	}
 	return info
