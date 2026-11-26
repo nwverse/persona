@@ -2,10 +2,11 @@ import { Suspense, memo, useCallback, useEffect, useMemo, useRef, useState, useS
 import { api, credentialOwner, enc, errorText, subscribeCredentialOwner } from "../lib/api";
 import { sessionTitle, stateOf } from "../lib/format";
 import { stateName } from "../lib/state-labels";
-import { openNewAgent, type NewAgentPreset } from "../lib/new-agent";
+import { openNewAgent } from "../lib/new-agent";
 import { openPanel } from "../lib/panel";
 import { useAgentSessions } from "../lib/sessions";
 import { onHubEvent, refreshTodos, useStore } from "../lib/store";
+import { boardAgentPreset } from "../lib/workspace-agent-preset";
 import { BoardModel, boundCard, columnCards, selectedColumn, type BoardCard, type BoardColumn, type BoardMutation, type BoardState, type Workspace } from "../lib/workspace-board";
 import { autoFocusSession, sessionItem, todoItem, unboundSessions, workLanes, workspaceItem, type WorkItem, type WorkLane } from "../lib/workspace-board-auto";
 import { makeSessionLookup } from "../lib/todos";
@@ -26,11 +27,7 @@ import { useWorkspaceBoardSetting } from "../lib/workspace-board-setting";
 import { CATALOG_POLL_MS, refreshWorkspaceCatalog } from "../lib/workspace-catalog";
 import { isResumed } from "../lib/reconnect";
 const field = "w-full rounded-control bg-field px-3 py-2 text-sm text-ink outline-none focus:ring-2 focus:ring-accent";
-export function boardAgentPreset(card: BoardCard): NewAgentPreset {
-  const launcher = card.source === "codex_app" ? "codex-app" : card.source === "claude_desktop" ? "claude-desktop" : undefined;
-  return { machineId: card.machine_id, cwd: card.cwd,
-    ...(launcher ? { launcher, ...(card.source_id ? { desktopProjectId: card.source_id } : {}) } : {}) };
-}
+export { boardAgentPreset } from "../lib/workspace-agent-preset";
 const VIEW_KEY = "persona.workspace-board.view";
 // The lanes that are an agent state take the one canonical state name; only To review and Idle are board-only words.
 const laneTitle = (lane: WorkLane) => lane === "needs_you" || lane === "working" ? stateName(lane) : t(`workspaceboard.auto_lane_${lane}`);

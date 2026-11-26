@@ -1118,6 +1118,24 @@ export async function unseeTodo(id: string): Promise<Todo | undefined> {
   return r?.todo;
 }
 
+/** Adds an external PR blocker edge to an open to-do under todos_v2 (#16198, #16199). */
+export async function addTodoExternalPRBlocker(id: string, targetRef: string): Promise<TodoActiveBlocker> {
+  const r = await api<{ blocker: TodoActiveBlocker }>(`/todos/${enc(id)}/blockers`, {
+    method: "POST",
+    headers: currentHeaders(),
+    json: { kind: "external_pr", target_ref: targetRef.trim() },
+  });
+  return r.blocker;
+}
+
+/** Cancels an active blocker edge on a to-do under todos_v2 (#16198, #16199). */
+export async function cancelTodoBlocker(id: string, blockerId: string): Promise<void> {
+  await api<{ ok?: boolean }>(`/todos/${enc(id)}/blockers/${enc(blockerId)}`, {
+    method: "DELETE",
+    headers: currentHeaders(),
+  });
+}
+
 export async function deleteTodo(id: string): Promise<void> {
   await api(`/todos/${enc(id)}`, { method: "DELETE" });
   noteItemManager(`/todos/${encodeURIComponent(id)}`, undefined);

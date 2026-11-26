@@ -56,6 +56,7 @@ beforeEach(() => {
   resetRoster();
   resetManagerChoice();
   metricsReplies = {};
+  localStorage.removeItem("persona.machines.view");
   fake.machines = [];
   fake.features = [];
   replies = [];
@@ -76,6 +77,76 @@ afterEach(() => {
 });
 
 describe("Machines", () => {
+  it("puts cards first, assistant resources last and fleet telemetry on the overview", async () => {
+    fake.machines = [{ id: "a", name: "Computer A", online: true }];
+    metricsReplies["/api/v1/metrics"] = [{
+      machine_id: "a", online: true, points: [], usage: { today: { in: 12 }, per_minute: 2, recent: [] },
+    }];
+    act(() => root.render(<Machines onToggleSidebar={() => {}} />));
+    await flush();
+    const views = [...host.querySelectorAll<HTMLButtonElement>('[role="radiogroup"] [role="radio"]')];
+    const tokens = () => host.querySelector('[data-testid="machines-tokens"]');
+    const hint = t("machines.refresh_interval", { seconds: 10 });
+    expect(views[0]?.textContent).toBe(t("machines.view_cards"));
+    expect(views.at(-1)?.textContent).toBe(t("resources.assistant_resources"));
+    expect(tokens()).not.toBeNull();
+    expect(host.textContent).toContain(hint);
+    for (const view of views.slice(1)) {
+      await act(async () => view.click());
+      expect(Boolean(tokens())).toBe(view.textContent === t("machines.view_capabilities"));
+      expect(host.textContent).not.toContain(hint);
+    }
+    await flush();
+  });
+
+  it("retains the computer across all six tools and falls back when it goes offline", async () => {
+    fake.machines = ["a", "b"].map((id) => ({ id, name: `Computer ${id}`, online: true }));
+    const show = () => root.render(<Machines onToggleSidebar={() => {}} />);
+    await act(async () => show());
+    const picker = () => host.querySelector<HTMLSelectElement>('[data-testid="machine-picker"]');
+    const open = async (label: string) => {
+      await act(async () => buttons(label)[0]!.click());
+      await vi.waitFor(async () => {
+        await flush();
+        expect(picker() ?? host.querySelector('[data-testid="machine-chip"]')).not.toBeNull();
+      });
+    };
+    await open(t("machines.view_files"));
+    act(() => {
+      picker()!.value = "b";
+      picker()!.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    for (const key of ["machines.view_toolchain", "machines.view_services", "machines.view_procs", "machines-network.tab_label", "machines.view_storage"]) {
+      await open(t(key));
+      expect(picker()?.value).toBe("b");
+    }
+    const reads = vi.mocked(fetch).mock.calls.map(([url]) => String(url));
+    expect(reads).toContain("/api/v1/machines/b/storage");
+    fake.machines = fake.machines.map((m) => ({ ...m, online: m.id === "a" }));
+    await act(async () => show());
+    await open(t("machines.view_files"));
+    expect(picker()).toBeNull();
+    expect(host.querySelector('[data-testid="machine-chip"]')?.textContent).toBe("Computer a" + t("machines.online"));
+    fake.machines = fake.machines.map((m) => ({ ...m, online: true }));
+    await act(async () => show());
+    expect(picker()?.value).toBe("a");
+  });
+
+  it("carries a disk cleanup link's computer into the next tool", async () => {
+    fake.machines = ["a", "b"].map((id) => ({ id, name: id, online: true }));
+    history.replaceState({ usage_focus: { mid: "b", mode: "reclaim" } }, "", "/machines");
+    await act(async () => root.render(<Machines onToggleSidebar={() => {}} />));
+    await vi.waitFor(async () => {
+      await flush();
+      expect(host.querySelector('[data-testid="storage-panel"]')).not.toBeNull();
+    });
+    expect(host.querySelector<HTMLSelectElement>('[data-testid="machine-picker"]')?.value).toBe("b");
+    expect(history.state.usage_focus).toBeUndefined();
+    await act(async () => buttons(t("machines.view_services"))[0]!.click());
+    await flush();
+    expect(host.querySelector<HTMLSelectElement>('[data-testid="machine-picker"]')?.value).toBe("b");
+  });
+
   it("keeps the last cards and says so in red when a refresh fails", async () => {
     fake.machines = [{ id: "mac", name: "电脑 A", online: true }];
     replies = [200, 503];
@@ -154,8 +225,10 @@ describe("Machines", () => {
       act(() => root.render(<Machines onToggleSidebar={() => {}} />));
     };
     show();
-    await flush();
-    expect(buttons(t("lib-machine-deploy.redeploy"))[0]?.disabled).toBe(false);
+    await vi.waitFor(async () => {
+      await flush();
+      expect(buttons(t("lib-machine-deploy.redeploy"))[0]?.disabled).toBe(false);
+    });
     for (const phase of ["waiting_idle", "transferring", "restarting", "confirming"] as const) {
       show(phase); // phase alone is sufficient, including when an older hub omits `deploying`
       const [redeploy] = buttons(t(`lib-machine-deploy.${phase}`));

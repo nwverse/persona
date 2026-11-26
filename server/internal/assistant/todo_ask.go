@@ -89,6 +89,7 @@ type listedTodo struct {
 	DecisionReview       *decisionReview            `json:"decision_review,omitempty"`
 	Orphaned             *TodoOrphan                `json:"orphaned,omitempty"`
 	View                 *assistantwire.TodoSummary `json:"view,omitempty"`
+	Wait                 *assistantwire.TodoWait    `json:"wait,omitempty"`
 	RepoGate             *repoGate                  `json:"repo_gate,omitempty"`
 	ItemType             string                     `json:"item_type,omitempty"`
 }

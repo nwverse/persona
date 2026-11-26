@@ -243,6 +243,16 @@ describe("catalogs", () => {
     }
   });
 
+  it("keeps workspace template tokens literal in field hints across languages", () => {
+    for (const lang of LANGS) {
+      const hints = all[lang]["workspace-naming"];
+      const tokens = (key: string) => hints[key].match(/\{[\w-]+\}/g)?.sort();
+      expect(tokens("help_base_directory")).toEqual(["{home}"]);
+      expect(tokens("help_task_directory_template")).toEqual(["{mmdd}", "{task-id}", "{task-slug}", "{yyyy}"]);
+      expect(tokens("help_branch_template")).toEqual(["{base-branch}", "{repo}"]);
+    }
+  });
+
   it("gives every plural an _other form and no empty text", () => {
     for (const lang of LANGS) {
       for (const [ns, cat] of Object.entries(all[lang])) {
