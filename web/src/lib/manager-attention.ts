@@ -34,7 +34,12 @@ export function waitingAgents(list: ManagerList, sessions: readonly Session[], i
   const counted = (s: Session) => !s.quiet && !isMuted(s, mutes);
   // an agent waiting only on cards its task's supervisor holds, and those cards, are not the user's yet (lib/supervisor-held.ts)
   const held = supervisorHeldOnly(interactions);
-  for (const s of sessions) if (!s.assistant && counted(s) && stateOf(s) === "needs_you" && !held.has(keyOf(s.machine_id, s.session_id))) add(s.manager, keyOf(s.machine_id, s.session_id));
+  for (const s of sessions) {
+    if (s.assistant) continue;
+    const key = keyOf(s.machine_id, s.session_id);
+    const waits = s.view ? s.view.counted : counted(s) && stateOf(s) === "needs_you" && !held.has(key);
+    if (waits) add(s.manager, key);
+  }
   for (const ix of interactions) {
     if (supervisorHeld(ix)) continue;
     if (!ix.session_id) {
@@ -47,6 +52,7 @@ export function waitingAgents(list: ManagerList, sessions: readonly Session[], i
     const key = keyOf(homeMid, home);
     const s = byKey.get(key);
     // a session not in the list (not read yet): muted by its own switch only, as interactionMuted does
+    if (s?.view && !s.assistant) continue;
     if (s ? !counted(s) : isMuted({ machine_id: homeMid, session_id: home }, mutes)) continue;
     add(ix.manager, key);
   }
