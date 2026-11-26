@@ -786,6 +786,15 @@ func failingUsageLimit(machine, launcher string) *LauncherHealth {
 	}
 }
 
+// failingOther is a fresh non-usage-limit failure: launcherUnusableNow re-probes it on the spot, so the test can
+// exercise the stale-record recovery path deterministically through the fake node's health check answer.
+func failingOther(machine, launcher string) *LauncherHealth {
+	return &LauncherHealth{
+		Machine: machine, Launcher: launcher, State: healthFailing, Kind: errKindOther,
+		Error: "something broke", CheckedAt: time.Now(),
+	}
+}
+
 // TestPlacementFallbackChecksResolvedLauncherHealthAndPresence covers #15953: when a deferred task names no launcher,
 // the kernel fallback must resolve the effective launcher (default agent.new / claude, or the per-machine tier
 // candidate) on every candidate and enforce launcherOn + launcherUnusable there, instead of recommending a computer
@@ -870,6 +879,47 @@ func TestPlacementFallbackChecksResolvedLauncherHealthAndPresence(t *testing.T) 
 		got := placementAuditHitKeys(t, p.Tasks[0].Placement, "linux-idle")
 		if slices.Contains(got, "launcher_unhealthy") || slices.Contains(got, "launcher_missing") {
 			t.Fatalf("linux-idle audit hits = %v, want no launcher failure", got)
+		}
+	})
+
+	t.Run("missing default launcher on every machine still starts through the assignment swap", func(t *testing.T) {
+		e := newPlacementTestEnv(t)
+		ctx := context.Background()
+		setModel(t, e.s, "agent.new", ModelBinding{Provider: "launcher.codex"})
+		// No candidate machine offers codex: fitLauncher swaps a missing default launcher rather than refusing, so
+		// the fallback must not starve the task at the queue deadline (it keeps preferring machines that offer it).
+		e.f.zshrc = map[string][]proto.Launcher{
+			"linux-idle":  {{Name: "claude"}},
+			"linux-heavy": {{Name: "claude"}},
+		}
+		planID := createFallbackPlan(t, e, queuedFallbackTask(t, nil))
+
+		e.s.sweepPendingPlacement(ctx)
+		waitFor(t, "task starts despite the missing default launcher", func() bool { return len(taskStartMachines(e.f.fakeHub)) == 1 })
+		if starts := taskStartMachines(e.f.fakeHub); starts[0] != "linux-idle" {
+			t.Fatalf("fallback picked %v, want [linux-idle]", starts)
+		}
+		p, _ := e.s.loadPlan(ctx, planID)
+		if p.Tasks[0].Queue != nil {
+			t.Fatalf("task must not starve in the queue: %+v", p.Tasks[0].Queue)
+		}
+	})
+
+	t.Run("stale failing launcher record is probed on the spot and cleared", func(t *testing.T) {
+		e := newPlacementTestEnv(t)
+		ctx := context.Background()
+		// The fake node answers a passing launchers.check, so launcherUnusableNow clears the stale record instead of
+		// requeuing a task this healthy machine can start.
+		e.s.health.recs = map[string]*LauncherHealth{"linux-idle/claude": failingOther("linux-idle", "claude")}
+		_ = createFallbackPlan(t, e, queuedFallbackTask(t, nil))
+
+		e.s.sweepPendingPlacement(ctx)
+		waitFor(t, "fallback starts on the probed machine", func() bool { return len(taskStartMachines(e.f.fakeHub)) == 1 })
+		if starts := taskStartMachines(e.f.fakeHub); starts[0] != "linux-idle" {
+			t.Fatalf("fallback picked %v, want [linux-idle]", starts)
+		}
+		if !slices.Contains(e.f.fakeHub.checked, "linux-idle/claude") {
+			t.Fatalf("no on-the-spot health probe ran for linux-idle/claude: %v", e.f.fakeHub.checked)
 		}
 	})
 

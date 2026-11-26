@@ -505,50 +505,64 @@ func (s *Service) runPlacementFallback(ctx context.Context, p *TaskPlan, idx int
 	pl.TaskID = pt.TodoID
 	pctx := context.WithValue(ctx, placementKey{}, pl)
 
-	alt, ok := s.recommendMachine(pctx, "", func(d Device) bool {
-		if err := s.leaderOnWorkMachine(&pt, d); err != nil {
-			pl.hit(d.ID, "leader_work_machine", nil)
-			return false
-		}
-		if hitKey, err := s.machineMatchesPlacementConstraints(pctx, pt, d); err != nil {
-			pl.hit(d.ID, hitKey, nil)
-			return false
-		}
-		if strings.HasPrefix(pt.Cwd, "~") && d.Home == "" {
-			pl.hit(d.ID, "directory_missing", nil)
-			return false
-		}
-		dir := proto.ExpandHome(pt.Cwd, d.Home)
-		if assistantWorkspace(d, dir) {
-			pl.hit(d.ID, "assistant_workspace", nil)
-			return false
-		}
-		// Resolve the effective launcher on this computer even when the task names no launcher: a default- or
-		// tier-launcher task otherwise skips both checks here and gets rejected by assignPendingPlacement on every
-		// retry, livelocking until the 30m deadline (#15953).
-		resolved, err := s.fallbackTaskLauncher(pctx, pt, d.ID)
-		if err != nil {
-			var line *i18n.Message
-			if errors.As(err, &line) {
-				pl.violation(d.ID, line)
-			} else {
-				pl.hit(d.ID, "tier_unavailable", i18n.Args{"tier": pt.Tier})
+	// Candidate filtering must match what assignPendingPlacement enforces. checkPresence is only relaxed on a second
+	// pass for tasks without any launcher or tier: fitLauncher swaps a default launcher a computer lacks instead of
+	// refusing, so a missing default alone must not starve the task when no computer offers it. A failing launcher is
+	// always a refusal there and stays one here.
+	suitable := func(checkPresence bool) func(Device) bool {
+		return func(d Device) bool {
+			if err := s.leaderOnWorkMachine(&pt, d); err != nil {
+				pl.hit(d.ID, "leader_work_machine", nil)
+				return false
 			}
-			return false
+			if hitKey, err := s.machineMatchesPlacementConstraints(pctx, pt, d); err != nil {
+				pl.hit(d.ID, hitKey, nil)
+				return false
+			}
+			if strings.HasPrefix(pt.Cwd, "~") && d.Home == "" {
+				pl.hit(d.ID, "directory_missing", nil)
+				return false
+			}
+			dir := proto.ExpandHome(pt.Cwd, d.Home)
+			if assistantWorkspace(d, dir) {
+				pl.hit(d.ID, "assistant_workspace", nil)
+				return false
+			}
+			// Resolve the effective launcher on this computer even when the task names no launcher: a default- or
+			// tier-launcher task otherwise skips both checks here and gets rejected by assignPendingPlacement on every
+			// retry, livelocking until the 30m deadline (#15953).
+			resolved, err := s.fallbackTaskLauncher(pctx, pt, d.ID)
+			if err != nil {
+				var line *i18n.Message
+				if errors.As(err, &line) {
+					pl.violation(d.ID, line)
+				} else {
+					pl.hit(d.ID, "tier_unavailable", i18n.Args{"tier": pt.Tier})
+				}
+				return false
+			}
+			if checkPresence && !s.launcherOn(pctx, d.ID, resolved) {
+				pl.hit(d.ID, "launcher_missing", nil)
+				return false
+			}
+			// The same on-the-spot probe assignPendingPlacement runs: a stale failing record clears here too instead
+			// of requeuing a task a healthy computer could start.
+			if h, bad := s.launcherUnusableNow(pctx, d.ID, resolved); bad {
+				pl.hit(d.ID, "launcher_unhealthy", i18n.Args{"launcher": resolved, "kind": h.Kind})
+				return false
+			}
+			if dir != "" && !pt.backendWorkspace() && !s.taskDirectoryExists(pctx, d.ID, dir) {
+				return false
+			}
+			return true
 		}
-		if !s.launcherOn(pctx, d.ID, resolved) {
-			pl.hit(d.ID, "launcher_missing", nil)
-			return false
-		}
-		if h, bad := s.launcherUnusable(pctx, d.ID, resolved); bad {
-			pl.hit(d.ID, "launcher_unhealthy", i18n.Args{"launcher": resolved, "kind": h.Kind})
-			return false
-		}
-		if dir != "" && !pt.backendWorkspace() && !s.taskDirectoryExists(pctx, d.ID, dir) {
-			return false
-		}
-		return true
-	})
+	}
+	alt, ok := s.recommendMachine(pctx, "", suitable(true))
+	if !ok && pt.Launcher == "" && pt.Tier == "" {
+		// No computer offers the resolved default: keep the pre-#15953 behavior and let the assignment swap to a
+		// launcher the chosen computer has rather than failing at the queue deadline. Health stays enforced.
+		alt, ok = s.recommendMachine(pctx, "", suitable(false))
+	}
 
 	var failReason string
 	if ok {
