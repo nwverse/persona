@@ -141,8 +141,16 @@ WEB = {
     },
     "health": {
         "entries": [
+            # Off, /health is not a removed page: #15704 (2026-11-26) makes it the default panel's read-only Health
+            # archive (#13430), so existing conversations, reports and memory stay readable and none of the module's
+            # write entries is on it. The same page a core-only build shows.
             {"name": "sidebar entry", "hubs": ["test", "mock"], "page": "/", "ready": {"selector": "a[href='/inbox']"},
-             "selector": "a[href='/health']", "opens": {"url": r"/health"}, "off_page": {"path": "/health", "text": NOT_FOUND}},
+             "selector": "a[href='/health']", "opens": {"url": r"/health"},
+             "off_stays": {"path": "/health",
+                           "shows": [{"name": "the read-only line", "selector": "[data-testid='health-readonly-note']"},
+                                     {"name": "reports", "selector": "[data-testid='health-readonly-reports']"},
+                                     {"name": "memory", "selector": "[data-testid='health-readonly-memory']"}],
+                           "hides": [{"name": "a composer", "selector": "textarea"}]}},
         ],
         "chunks": [r"/assets/(Health|HealthReports|HealthIntakePage)-[\w-]+\.js", r"/src/modules/health/"],
         "chunk_when_on": ["test", "mock"],

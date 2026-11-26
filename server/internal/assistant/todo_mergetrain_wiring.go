@@ -101,6 +101,131 @@ func (c *mergeTrainCoordinator) setHasActiveBlocker(trackKey string, active bool
 	}
 }
 
+func (c *mergeTrainCoordinator) clearBlocker(todoID, targetRef, conditionJSON string) {
+	todoID = strings.TrimSpace(todoID)
+	if todoID == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	var cond mergeTrainBlockerCondition
+	if strings.TrimSpace(conditionJSON) != "" {
+		_ = json.Unmarshal([]byte(conditionJSON), &cond)
+	}
+
+	repoKey := mergetrain.NormalizeRepoKey(cond.RepoKey)
+	normURL := triageNormalizePRURL(cond.PRURL)
+	if rk, _, u, ok := parseMergeTrainPRURL(targetRef); ok {
+		if repoKey == "" {
+			repoKey = rk
+		}
+		if normURL == "" {
+			normURL = u
+		}
+	} else if repoKey == "" {
+		repoKey = mergetrain.NormalizeRepoKey(targetRef)
+	}
+	if repoKey == "" && normURL != "" {
+		if rk, _, _, ok := parseMergeTrainPRURL(normURL); ok {
+			repoKey = rk
+		}
+	}
+	if normURL == "" && c.train != nil && repoKey != "" {
+		if entry, ok := c.train.Entry(repoKey, todoID); ok && strings.TrimSpace(entry.PRURL) != "" {
+			normURL = triageNormalizePRURL(entry.PRURL)
+		}
+	}
+
+	if normURL != "" {
+		trackKey := todoID + "|" + normURL
+		delete(c.hasActiveBlocker, trackKey)
+		delete(c.conflicts, trackKey)
+		delete(c.hydrated, trackKey)
+		escPrefix := todoID + "|" + normURL + "|"
+		for k := range c.escalated {
+			if strings.HasPrefix(k, escPrefix) {
+				delete(c.escalated, k)
+			}
+		}
+	} else {
+		todoPrefix := todoID + "|"
+		matchesKey := func(k string) bool {
+			if !strings.HasPrefix(k, todoPrefix) {
+				return false
+			}
+			if repoKey == "" {
+				return true
+			}
+			rest := strings.TrimPrefix(k, todoPrefix)
+			prPart, _, _ := strings.Cut(rest, "|")
+			rk, _, _, ok := parseMergeTrainPRURL(prPart)
+			return ok && rk == repoKey
+		}
+		for k := range c.hasActiveBlocker {
+			if matchesKey(k) {
+				delete(c.hasActiveBlocker, k)
+			}
+		}
+		for k := range c.conflicts {
+			if matchesKey(k) {
+				delete(c.conflicts, k)
+			}
+		}
+		for k := range c.hydrated {
+			if matchesKey(k) {
+				delete(c.hydrated, k)
+			}
+		}
+		for k := range c.escalated {
+			if matchesKey(k) {
+				delete(c.escalated, k)
+			}
+		}
+	}
+
+	if c.train != nil && repoKey != "" {
+		_, _ = c.train.Cancel(repoKey, todoID)
+		c.train = rebuildMergeTrainWithout(c.train, repoKey, todoID)
+	}
+}
+
+func rebuildMergeTrainWithout(old *mergetrain.Train, dropRepoKey, dropTodoID string) *mergetrain.Train {
+	if old == nil {
+		return mergetrain.New()
+	}
+	snap := old.Snapshot()
+	next := mergetrain.New()
+	for _, rs := range snap.Repos {
+		var entries []mergetrain.Entry
+		if rs.Head != nil {
+			entries = append(entries, *rs.Head)
+		}
+		entries = append(entries, rs.Queue...)
+		entries = append(entries, rs.Escalated...)
+		for _, e := range entries {
+			if rs.RepoKey == dropRepoKey && e.TodoID == dropTodoID {
+				continue
+			}
+			_, _ = next.Enqueue(mergetrain.Entry{
+				TodoID:            e.TodoID,
+				RepoKey:           e.RepoKey,
+				PRNumber:          e.PRNumber,
+				PRURL:             e.PRURL,
+				Priority:          e.Priority,
+				Policy:            e.Policy,
+				Approved:          e.Approved,
+				MaxRebaseFailures: e.MaxRebaseFailures,
+				ConflictReasons:   e.ConflictReasons,
+			})
+			for range e.RebaseFailures {
+				_, _ = next.RecordRebaseFailure(e.RepoKey, e.TodoID, e.LastError)
+			}
+		}
+	}
+	return next
+}
+
 func (c *mergeTrainCoordinator) hydrateIfNeeded(trackKey, todoID, repoKey string, prNumber int, normURL string, status TodoPRStatus, activeRow *db.TodoBlockerRow) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -457,6 +582,12 @@ func (s *Service) peekMergeTrainCoordinator() *mergeTrainCoordinator {
 func (s *Service) resetMergeTrain() {
 	if coord := s.peekMergeTrainCoordinator(); coord != nil {
 		coord.reset()
+	}
+}
+
+func (s *Service) clearMergeTrainBlocker(todoID, targetRef, conditionJSON string) {
+	if coord := s.peekMergeTrainCoordinator(); coord != nil {
+		coord.clearBlocker(todoID, targetRef, conditionJSON)
 	}
 }
 
