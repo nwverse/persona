@@ -128,3 +128,29 @@ func (n *Node) setSessionSpeed(ctx context.Context, id, tier string) error {
 	n.notifyCodex()
 	return nil
 }
+
+// setCodexTerminalSpeed uses the same checked input and rollout acknowledgment as terminal model changes.
+func (n *Node) setCodexTerminalSpeed(ctx context.Context, id, tier string) error {
+	t, why, live := n.codexOnTerminalCtx(ctx, id, true)
+	if !live {
+		return fmt.Errorf("this session does not support Codex speed changes")
+	}
+	if why != nil {
+		return why
+	}
+	n.forgetMeta(t.rollout)
+	now := n.codexTerminalSettingsOf(id, t, n.metaOf(id))
+	model, _ := codexModelEffortsIn(t.home, now.model)
+	if !proto.ValidModelID(tier) || len(model.tiers) == 0 || tier != "default" && !slices.ContainsFunc(model.tiers, func(t proto.ServiceTier) bool { return t.ID == tier }) {
+		return fmt.Errorf("this model does not advertise the requested Codex speed")
+	}
+	native := tier
+	switch tier {
+	case "default":
+		native = "standard"
+	case "priority":
+		native = "fast"
+	}
+	_, err := n.applyCodexTerminalSettings(ctx, id, t, "/model --speed="+native, codexTerminalSettings{tier: tier})
+	return err
+}

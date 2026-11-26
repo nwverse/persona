@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/agentprompt"
 	"github.com/nwverse/persona/server/internal/compat"
 
 	"github.com/nwverse/persona/server/internal/apierr"
@@ -1037,11 +1038,14 @@ func (s *Service) todoRoutes() {
 	s.todoReorganizeRoute()
 	s.todoDecisionsBatchRoute()
 	s.todoBlockersRoutes()
+	s.todoMergeTrainRoutes()
+	s.todoTopologyOpsRoutes()
 	s.todoImportRoutes()
 	s.todoViewRoutes()
 	s.todoHandoffRoutes()
 	s.todoAskRoutes()
 	s.todoTimelineRoutes()
+	s.todoCausalTraceRoutes()
 	// GET /api/v1/todos: list all todos (newest created_at first), agents sorted (active first, then released); a todo
 	// waiting for the owner carries its ask (todo_ask.go), an open one nobody works on why (tasks_orphan.go); each its
 	// view, and the list its counts (todo_view_routes.go); to an extension's token without the to-dos it is not shown
@@ -2025,6 +2029,12 @@ func (s *Service) writeTodoAgentLink(ctx context.Context, todoID, mid, sid, titl
 				Agent: agent, StartError: startError, Source: source, Via: via})
 		}
 		target.UpdatedAt = now
+		if target.Supervision != nil && target.Supervision.Progress != nil && target.Supervision.Progress.Kind == upReportDone &&
+			(target.Supervision.Progress.machine != mid || target.Supervision.Progress.session != sid) {
+			v := target.Supervision.clone()
+			v.Progress = nil
+			target.Supervision = v
+		}
 		if target.DoneAt == nil { // as loadTodosLocked has it: only an open todo's agents work for it
 			s.todos.activeBySession[[2]string{mid, sid}] = todoID
 		}
@@ -2253,14 +2263,20 @@ func (s *Service) TodoHandoff(ctx context.Context, h TodoHandoff) (TodoHandoffRe
 	}
 	text := h.Text
 	if strings.TrimSpace(text) != "" {
-		text = s.withTodoDecisions(ctx, h.TodoID, text)
+		var context []string
 		if h.New {
 			lead := ""
 			if t.Supervision != nil {
 				lead = t.Supervision.Supervisor
 			}
-			text = s.withProjectContextForTodo(ctx, h.MachineID, h.Cwd, lead, t, text) // a new agent: its project's background first
+			if background := s.projectBackgroundForTodo(ctx, h.MachineID, h.Cwd, lead, t, text); background != "" {
+				context = append(context, background)
+			}
 		}
+		if decisions := s.todoHandoffDecisionsContext(ctx, h.TodoID); decisions != "" {
+			context = append(context, decisions)
+		}
+		text = agentprompt.WithContext(h.Agent, text, strings.Join(context, "\n\n"))
 	}
 	res := TodoHandoffResult{Found: true, Title: t.Title, DoneAt: t.DoneAt, Text: text}
 	if t.DoneAt == nil && len(t.Images) > 0 {

@@ -100,8 +100,11 @@ export function ModelPill({
   const speedLabel = pillSpeedLabel(shown.speed);
   const unknown = !shown.model;
   const name = pillDisplayName(shown) ?? (loading ? t("chat-modelpill.loading") : failed ? t("chat-modelpill.failed") : t("chat-modelpill.default_model"));
-  const describe = (x: PillSetup) =>
-    [agentName(x.engine, x.engineLabel), pillDisplayName(x) ?? name, x.launcherName || x.provider, x.effort && effortTitle(x.effort), pillSpeedLabel(x.speed)].filter(Boolean).join(" · ");
+  const describe = (x: PillSetup) => {
+    const engine = agentName(x.engine, x.engineLabel);
+    const provider = x.launcherName || x.provider;
+    return [engine, pillDisplayName(x) ?? name, provider && provider !== engine ? provider : "", x.effort && effortTitle(x.effort), pillSpeedLabel(x.speed)].filter(Boolean).join(" · ");
+  };
   const title = pending
     ? t("chat-modelpill.current_and_next", { current: describe(current), next: describe(pending) })
     : [describe(current), failed && !unknown ? t("chat-modelpill.failed") : ""].filter(Boolean).join(" · ");
