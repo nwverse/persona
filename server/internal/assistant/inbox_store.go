@@ -374,8 +374,10 @@ func (s *Service) tellInboxNeedsYou() {
 		for {
 			n := 0
 			b.mu.Lock()
+			cutoff := time.Now().Add(-inboxKeepDone)
+			duplicates := b.larkDuplicates(cutoff, b.listedDoneCut(cutoff, true), true)
 			for _, it := range b.items {
-				if it.status() == StatusAction {
+				if !duplicates.hidden[it.ID] && it.status() == StatusAction {
 					n++
 				}
 			}

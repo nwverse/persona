@@ -178,7 +178,6 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 	if !ok {
 		return nil, errPlanNotOpen
 	}
-	unlockRules := s.takePlanUnlockRules(p.ID)
 	planOwners := map[string]Todo{}
 	planQueuedKeys := map[string]bool{}
 	pendingPlacementBatchSize := 0
@@ -296,13 +295,7 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			}
 			afterIDs := cleanIDs(slices.Concat(t.After, todo.After))
 			if len(afterIDs) > 0 {
-				var unlockStage string
-				var unlockContracts []string
-				if i < len(unlockRules) {
-					unlockStage = unlockRules[i].stage
-					unlockContracts = unlockRules[i].contracts
-				}
-				s.syncAfterBlockers(ctx, todo.ID, afterIDs, unlockStage, unlockContracts)
+				s.syncAfterBlockers(ctx, todo.ID, afterIDs, t.UnlockStage, t.UnlockContracts)
 			}
 		}
 		if t.RequestGate != "" {

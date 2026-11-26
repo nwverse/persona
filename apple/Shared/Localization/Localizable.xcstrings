@@ -113547,6 +113547,28 @@
       },
       "extractionState": "manual"
     },
+    "New Agent in %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New Agent in %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ にエージェントを作成"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在%@中新建 Agent"
+          }
+        }
+      }
+    },
     "New Agent [Mac Quick Open 0587b9]": {
       "localizations": {
         "en": {

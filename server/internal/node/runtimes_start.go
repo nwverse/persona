@@ -150,22 +150,36 @@ func (n *Node) runtimeStartOn(ctx context.Context, h *runtimeConn, p runtimeStar
 	}
 	if p.Resume == "" {
 		n.recordEngineStart(h, started, p.Cwd)
-		n.recordAgyStart(h, started, p.Cwd)
+		n.recordAgyRuntimeStart(h, started, p)
 	}
 	return started, cleanInstead(res.Instead), nil
 }
 
-func (n *Node) recordAgyStart(h *runtimeConn, s *proto.Session, cwd string) {
-	if h == nil || h.agent() != agyAgent || s == nil || s.SessionID == "" || n.state == nil {
+// recordAgyRuntimeStart persists an explicit permission mode chosen when Persona starts a non-assistant Antigravity
+// companion session. The companion keeps per-session modes in memory only, so without a persisted record a companion,
+// node or machine restart falls back to local settings.json (losing bypassPermissions or escalating read-only plan).
+// Starts that left permission_mode empty stay unrecorded here so they continue to follow local settings.json.
+func (n *Node) recordAgyRuntimeStart(h *runtimeConn, s *proto.Session, p runtimeStartParams) {
+	if h == nil || h.agent() != agyAgent || s == nil || s.SessionID == "" || n.state == nil || p.PermissionMode == "" {
 		return
 	}
-	if _, ok := n.state.get(s.SessionID); ok {
+	mode := cmp.Or(s.PermissionMode, p.PermissionMode)
+	if n.state.update(s.SessionID, func(st *sessionState) bool {
+		if st.AppMode == mode {
+			return false
+		}
+		st.AppMode = mode
+		return true
+	}) {
 		return
 	}
 	n.state.put(s.SessionID, sessionState{
-		Launcher:  cmp.Or(s.Launcher, agyAgent),
-		Cwd:       cmp.Or(s.Cwd, cwd),
-		StartedAt: time.Now().UTC(),
+		Launcher:    cmp.Or(s.Launcher, p.Launcher, agyAgent),
+		Cwd:         cmp.Or(s.Cwd, p.Cwd),
+		Model:       cmp.Or(s.Model, p.Model),
+		ModelEffort: cmp.Or(s.Effort, p.Effort),
+		AppMode:     mode,
+		StartedAt:   time.Now().UTC(),
 	})
 }
 

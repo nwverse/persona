@@ -3572,6 +3572,8 @@ An interactive 2D geographic map showing routes, points of interest, markers and
 
 **Coordinates**: WGS-84 decimal degrees everywhere (`lat` in `[-90, 90]`, `lon` in `[-180, 180]`), regardless of vendor coordinate systems (for example, an extension reading GCJ-02 or BD-09 converts to WGS-84 before returning). Renderers draw with native map views matching the shell's light and dark appearance.
 
+Android draws the supplied points and routes on its own map canvas. An inline view opens the full-screen controls for pan, zoom, route selection and camera reset. The same renderer draws read-only tool views in the transcript, including views on folded work. The Android client declares `tool_views` for both HTTP transcript reads and the live socket. It advertises UI version 12 and requests fallback components for `scene`.
+
 | Field | What it does |
 | --- | --- |
 | `alt` (required, 1–200) | Sentence summary of what the map shows; used for accessibility and fallback |

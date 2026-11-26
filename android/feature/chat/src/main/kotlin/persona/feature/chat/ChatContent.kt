@@ -425,6 +425,8 @@ internal fun ChatLineContent(
     turnLauncher: String? = null,
     /** Opens the session's terminal: the live work line's mark on Glass ([ChatTerminalPlaces.onWorkLine]). */
     onTerminal: (() -> Unit)? = null,
+    /** A work group's attached views are already shown above its expanded steps. */
+    showToolViews: Boolean = true,
 ) {
     val res = LocalResources.current
     if (turnFix != null) {
@@ -438,7 +440,7 @@ internal fun ChatLineContent(
             return TurnErrorFixCard(turnFix, raw, turnLauncher, retry)
         }
     }
-    when (line) {
+    val content: @Composable () -> Unit = { when (line) {
         is ChatLine.Row -> when (line.row.type) {
             "user" -> line.row.item?.item?.let { item ->
                 val source = persona.core.domain.sourceOf(item)
@@ -521,6 +523,13 @@ internal fun ChatLineContent(
         is ChatLine.End -> TimelineMark(pluralStringResource(R.plurals.chat_content_collapse_steps, line.count, line.count),
             Modifier.heightIn(min = 44.dp.row).clickable(role = Role.Button) { onToggle(line.groupId) })
         is ChatLine.Wakes -> ChatSystemLine(pluralStringResource(R.plurals.chat_content_wakes, line.turn.wakes.size, line.turn.wakes.size))
+    } }
+    val blocks = LocalViewBlocks.current
+    val views = remember(line, showToolViews) { if (showToolViews) line.toolViews() else emptyList() }
+    if (blocks == null || views.isEmpty()) content()
+    else Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+        content()
+        for (view in views) DisableSelection { InterfaceContent { blocks.toolView(view) } }
     }
 }
 

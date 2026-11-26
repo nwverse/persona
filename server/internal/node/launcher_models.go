@@ -150,6 +150,9 @@ func (n *Node) launcherModels(ctx context.Context, name, agentType string, refre
 		}
 		launcherModelsCache.at[key], launcherModelsCache.got[key] = time.Now(), res
 		launcherModelsCache.Unlock()
+		if agent == agyAgent && n.hasLiveAgyPane() {
+			n.notifySessionsSoon()
+		}
 		return res, nil
 	}
 	if ok && !refresh {
@@ -390,6 +393,7 @@ func discoverAgyModels(ctx context.Context, cmd *exec.Cmd, name string) ([]proto
 		return nil, fmt.Errorf("%s models returned no models", name)
 	}
 	recordAgyModelWindows(windows)
+	recordAgyModelCatalog(models)
 	return models, nil
 }
 
