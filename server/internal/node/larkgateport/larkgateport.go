@@ -1,4 +1,4 @@
-// Package larkgateport is how the Lark module's node-side CLI gate and Feishu message card context reach the node
+// Package larkgateport is how the Lark module's node-side CLI gate, action rules and Feishu message card context reach the node
 // (docs/architecture/core-and-modules.md "The node's modules", #13404). The node's composition root
 // (internal/modules/all/node) provides the module's gate; a build without the lark module (persona_without_lark,
 // persona_core_only) provides none, and neither does a node whose hub announced the module switched off
@@ -16,6 +16,12 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
+const (
+	BoundaryOrdinary = 0
+	BoundaryOutbound = 1
+	BoundaryDeletion = 2
+)
+
 // MissingRisk is the risk level of a command lark-cli reports it does not have: running it only fails with
 // "unknown subcommand", so the gate treats it as a read.
 const MissingRisk = "missing"
@@ -29,7 +35,7 @@ type RiskLookup func(words []string) string
 // ShellOutput runs script in the user's login shell and returns what it printed to stdout.
 type ShellOutput func(ctx context.Context, script string) []byte
 
-// Gate is the Lark module's node-side lark-cli gate and Feishu message card context provider.
+// Gate is the Lark module's node-side lark-cli gate, action rules and Feishu message card context provider.
 type Gate interface {
 	// IsCLI reports whether name invokes lark-cli.
 	IsCLI(name string) bool
@@ -48,6 +54,18 @@ type Gate interface {
 	RiskNote(method, risk string) string
 	// ActorLabel returns the card actor label ("以机器人身份" vs "以你的身份") for args.
 	ActorLabel(args []string) string
+	// CLIRead reports whether a lark-cli call only reads.
+	CLIRead(method, risk string) bool
+	// ClassifyAction matches Feishu/Lark-specific action patterns for method and path.
+	ClassifyAction(method, path string) (what string, boundary int, matched bool)
+	// CLIBypassSafe reports whether a lark-cli subcommand may bypass phone confirmation.
+	CLIBypassSafe(path, risk string, args []string) bool
+	// CLIBotActor reports whether args explicitly select --as bot under pflag's last-value rules.
+	CLIBotActor(args []string) bool
+	// CLISummary renders the phone card text for a lark-cli write.
+	CLISummary(method, path, risk string, args []string, what string) string
+	// DefaultTitle is the default service title shown on lark-cli permission cards.
+	DefaultTitle() string
 	// FlagOn reports whether any of names is enabled in pflag-style flags.
 	FlagOn(flags []string, names ...string) bool
 	// FlagValue returns the last effective value of name in pflag-style flags.

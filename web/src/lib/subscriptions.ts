@@ -148,4 +148,3 @@ export type SubscriptionsScope = { ext: string } | { c: string } | undefined;
 export function subscriptionsHref(scope?: SubscriptionsScope): string {
   return scope ? `/subscriptions?state=${encodeURIComponent(JSON.stringify(scope))}` : "/subscriptions";
 }
-

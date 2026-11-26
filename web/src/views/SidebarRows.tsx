@@ -200,6 +200,86 @@ export const NavRow = memo(function NavRow({ k, reg, hover, active, to, go, icon
   );
 }, sameProps);
 
+type ShellRowProps = {
+  k: string;
+  reg: RegFn;
+  hover: (k: string | null) => void;
+  active: boolean;
+  to: Route;
+  go: GoFn;
+  label: string;
+  hint?: string;
+  title?: string;
+  onMenu?: (at: MenuAt, el: HTMLElement, button: boolean) => void;
+  menuLabel?: string;
+};
+
+/** An active non-Agent shell tab row inside a workspace group. Reserves the exact same leading column width as
+ *  SessionRow (`14px` framed terminal mark + `gap-2` + `14px` status-dot slot + `gap-2`) so shell titles and
+ *  Agent titles start on the exact same vertical X pixel. */
+export const ShellRow = memo(function ShellRow({ k, reg, hover, active, to, go, label, hint, title, onMenu, menuLabel }: ShellRowProps) {
+  const ref = useMemo(() => reg(k), [reg, k]);
+  const link = (
+    <a
+      ref={ref}
+      {...(onMenu ? contextMenuProps((at, el) => onMenu(at, el, false)) : {})}
+      href={href(to)}
+      title={title}
+      onClick={go(to)}
+      onMouseEnter={() => hover(k)}
+      onFocus={() => hover(k)}
+      onBlur={() => hover(null)}
+      aria-current={active ? "page" : undefined}
+      data-shell-row={k}
+      className={cx(
+        "relative z-10 flex w-full items-center gap-2 rounded-[7px] px-2 sidebar-row transition-transform duration-150 active:scale-[0.98] [@media(pointer:coarse)]:min-h-11",
+        active && CURRENT_ROW,
+        onMenu && active && "pr-8",
+        onMenu && "[@media(hover:none)]:pr-11",
+      )}
+    >
+      <span
+        aria-hidden
+        data-shell-mark
+        className={cx(
+          "inline-flex size-3.5 shrink-0 items-center justify-center rounded-[3px] border border-line bg-inset",
+          active ? "text-ink" : "text-ink-3",
+        )}
+      >
+        <Icon name="terminal" size={10} stroke={2} />
+      </span>
+      <span aria-hidden data-shell-status className="flex size-3.5 shrink-0 items-center justify-center">
+        <span className="size-1.5 rounded-full bg-ink-3/50" />
+      </span>
+      <span className={cx("min-w-0 flex-1 truncate text-meta", active ? "font-medium text-ink" : "text-ink-2")}>{label}</span>
+      {hint && <span className={cx("max-w-[72px] min-w-6 shrink-[20] truncate text-[11px] text-ink-3", !active && "group-hover/row:invisible")}>{hint}</span>}
+    </a>
+  );
+  if (!onMenu) return link;
+  return (
+    <div className="group/row relative">
+      {link}
+      <button
+        type="button"
+        aria-label={menuLabel}
+        aria-haspopup="menu"
+        title={t("sidebar.more")}
+        tabIndex={-1}
+        onClick={(e) => {
+          const box = e.currentTarget.parentElement ?? e.currentTarget;
+          onMenu({ anchor: box }, box, true);
+        }}
+        className={cx(
+          "absolute top-1/2 right-1 z-20 size-6 -translate-y-1/2 items-center justify-center rounded-[6px] text-ink-3 hover:text-ink group-hover/row:flex [@media(hover:none)]:right-0 [@media(hover:none)]:flex [@media(hover:none)]:size-11 [@media(hover:none)]:bg-transparent",
+          active ? "flex hover:bg-hover" : "hidden bg-hover hover:bg-hover-2",
+        )}
+      >
+        <Icon name="more" size={14} />
+      </button>
+    </div>
+  );
+}, sameProps);
+
 // The list's one-line notes (loading, no match), as each writes it.
 const NOTE = "px-2 py-1 text-label text-ink-3";
 

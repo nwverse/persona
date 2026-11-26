@@ -48,7 +48,7 @@ func TestPhoneExtraFollowsTheBuildTags(t *testing.T) {
 	}
 }
 
-// The node-side Lark CLI gate and card-context provider come from the lark module exactly when the build tags keep it.
+// The node-side Lark CLI gate rules and card-context provider come from the lark module exactly when the build tags keep it.
 func TestLarkGateFollowsTheBuildTags(t *testing.T) {
 	if got, want := larkgateport.Get(moduleswitch.Set{}) != nil, slices.Contains(want, "lark"); got != want {
 		t.Fatalf("lark gate provided to the node: %v, want %v for this build's tags", got, want)
