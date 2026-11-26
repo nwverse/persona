@@ -17,7 +17,8 @@ import { handoffFrom } from "../../lib/handoff";
 import { applyCompleteSessions, getState, refreshTodos, reset } from "../../lib/store";
 import { TODO_STATUS_INFO, type Todo } from "../../lib/todos";
 import type { Session } from "../../lib/types";
-import { loadFeed, type TaskPlan } from "../../lib/feed";
+import { later, loadFeed, type TaskPlan } from "../../lib/feed";
+import { decisionLaterKey } from "../../lib/assistant-entries";
 import { SidePanel } from "../SidePanel";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -114,6 +115,11 @@ it("answers a rolled-up step's decision from its task panel", async () => {
   };
   await open({ kind: "task", todo: step.id }, step);
   await expect.poll(() => host.querySelector("aside [data-decision-question]")?.textContent).toBe(step.ask?.question);
+  const laterButton = [...host.querySelectorAll<HTMLButtonElement>("aside button")].find((button) => button.textContent === t("assistant-task-actions.later"));
+  expect(laterButton).toBeDefined();
+  await act(async () => laterButton!.click());
+  expect(host.querySelector("aside [data-decision-question]")).toBeNull();
+  await act(async () => later(decisionLaterKey(step), false));
   const option = [...host.querySelectorAll<HTMLButtonElement>("aside button")].find((button) => button.textContent === "Stable");
   expect(option).toBeDefined();
   await act(async () => option!.click());

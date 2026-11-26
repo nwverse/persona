@@ -4,6 +4,7 @@
 
 import { lazy, Suspense, useState } from "react";
 import { isRemovable, openAsk, todoStatusLabel } from "../../lib/todos";
+import { decisionLaterKey } from "../../lib/assistant-entries";
 import { statusWord } from "../../lib/todo-wait-reason";
 import { TodoAskLine } from "../TodoAsk";
 import { decisionDismissed, reportText } from "../../lib/supervision";
@@ -38,6 +39,7 @@ export function TaskPanel({ todoId, onClose }: { todoId: string; onClose: () => 
   const retrying = useRetrying(todoId);
   const { task: failedTask, instead } = useFailedStart(todo);
   const plans = useFeed((s) => s.plans);
+  const deferred = useFeed((s) => todo?.part_of ? s.later[decisionLaterKey(todo)] : undefined);
   const planned = Object.values(plans).flatMap((p) => p.tasks).find((t) => t.todo_id === todoId);
   if (!todo || !st) {
     return (
@@ -55,7 +57,7 @@ export function TaskPanel({ todoId, onClose }: { todoId: string; onClose: () => 
   const shown = chosen ? (sessions[chosen.machine_id] ?? []).find((x) => x.session_id === chosen.session_id) : undefined;
   // The chat header prepends the usage-limit line of the agent it shows, so the status word is not said twice.
   const ask = openAsk(todo);
-  const hasStepAction = todo.part_of && todo.view?.section === "needs_you" && ask && !decisionDismissed(todo);
+  const hasStepAction = todo.part_of && todo.view?.section === "needs_you" && ask && !deferred && !decisionDismissed(todo);
   const head = hasStepAction ? todoStatusLabel(todo, "needs_you") :
     st.status === "usage_limit" && usageLimitLabel(shown ?? lead) ? "" : starting ? t("assistant-tasks.status_starting") : statusWord(st.status, st.wait);
   const subtitle = [head, chosen ? place({ ...todo, agents: [chosen] }, shown ?? lead) : place(todo, lead)].filter(Boolean).join(" · ");
