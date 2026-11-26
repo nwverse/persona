@@ -380,6 +380,7 @@ type Service struct {
 	viewEvents viewNotifications // views.go: only coalesced notifications; contents are stored first
 	pages      pagesRuntime      // pages_actions.go, pages_events.go: the pages' events, taps and turns (Dashboards)
 	viewMemo   viewMemo          // views.go: encoded cards for the feed snapshot, checked against the database
+	inlineFull inlineFullBook    // views_inline.go: truncated replies whose full text was already scanned
 
 	devs                 Devices // the computers (devices.go); nil: no fleet
 	mcpWaitMu            sync.Mutex
