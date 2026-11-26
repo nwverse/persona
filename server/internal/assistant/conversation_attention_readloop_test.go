@@ -16,8 +16,16 @@ import (
 // that loop would hold it: the list must still be taken, and once the node answers the verdict lands and the row is
 // published again with it.
 func TestMainConversationAttentionLeavesTheNodeReadLoop(t *testing.T) {
-	ft := newFleetTaskTest(t)
-	setSettings(t, ft.s, func(v *Settings) { v.MachineID = "server" }) // the main conversation runs on the hub machine's node
+	ft := newFleetTestNoStore(t)
+	ft.d.add("server", "server")
+	ft.f.sessions["server"] = nil
+	ft.f.settings = &Settings{Timezone: "Asia/Shanghai"}
+	withSettings(t, ft.f, ft.s)
+	ft.f.hello.Assistant.MachineID = "server"
+	// The main conversation runs on the hub machine's node. Set before the first list: without the hub's profile the
+	// inventory reads the route once (mainConversationRoute).
+	setSettings(t, ft.s, func(v *Settings) { v.Main, v.MachineID = "conv1", "server" })
+	ft.f.known["conv1"] = true
 	at := time.Date(2026, 11, 26, 6, 16, 4, 0, time.UTC)
 	ft.f.setItems(attentionTestRenumber(attentionTestItems(at, at.Add(time.Minute))[3:])...) // one completed silent round
 	release := make(chan struct{})
