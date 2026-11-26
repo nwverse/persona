@@ -48,6 +48,8 @@ export struct FoldInspectorPanel {
   };
   @Event onOpenSession: (row: ResourceRow) => void = () => {};
   @Event onStepRelay: (direction: 1 | -1) => void = () => {};
+  @Event onInterruptSession: (row: ResourceRow) => void = () => {};
+  @Event onOpenXiaoYi: () => void = () => {};
   @Event onOpenLink: (address: string) => void = () => {};
   @Local private env: NativeEnvironment = nativeEnvironment;
   @Local private liveView: NativeLiveView = nativeLiveView;
@@ -181,6 +183,10 @@ export struct FoldInspectorPanel {
       .slice()
       .sort((a: ResourceRow, b: ResourceRow) => rank(a) - rank(b))
       .slice(0, 6);
+  }
+
+  private urgentSession(): ResourceRow | undefined {
+    return this.activeFleetSessions().find((row: ResourceRow) => this.normalizedRowState(row) === 'needs_you');
   }
 
   private machineRows(): ResourceRow[] {
@@ -413,6 +419,45 @@ export struct FoldInspectorPanel {
     .id(identity)
   }
 
+  @Builder urgentNeedsYouCard(row: ResourceRow) {
+    Row({ space: 10 }) {
+      NeedsYouPulseDot({ dotSize: 9, tint: Colors.needs, surface: Colors.surface, bordered: false })
+      Column({ space: 2 }) {
+        Text(row.title || tr('agent_untitled'))
+          .fontSize(Tokens.interfaceFontVp(13, this.env.fontScale))
+          .fontWeight(FontWeight.Bold)
+          .fontColor(Colors.ink)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+        Text([this.model.machineName(row.machine) || row.machine, tr('needs_you')].filter((v: string) => !!v).join(' · '))
+          .fontSize(Tokens.interfaceFontVp(11, this.env.fontScale))
+          .fontColor(Colors.needs)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+
+      Button(tr('fold_urgent_review'), { type: ButtonType.Capsule })
+        .height(28)
+        .padding({ left: 10, right: 10 })
+        .fontSize(Tokens.interfaceFontVp(11, this.env.fontScale))
+        .fontWeight(FontWeight.Medium)
+        .backgroundColor(Colors.action)
+        .fontColor(Colors.onAction)
+        .onClick(() => {
+          Haptics.selection();
+          this.onOpenSession(row);
+        })
+        .id('fold.inspector.urgent.review')
+    }
+    .width('100%')
+    .padding({ left: 12, right: 10, top: 10, bottom: 10 })
+    .backgroundColor(Colors.selection)
+    .borderRadius(16)
+    .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: 16 })
+    .shadow(PhoneStyle.cardElevation(this.env.dark))
+    .id('fold.inspector.urgent')
+  }
+
   @Builder relayBar() {
     Row({ space: 8 }) {
       Row({ space: 6 }) {
@@ -521,43 +566,62 @@ export struct FoldInspectorPanel {
       if (this.prioritizedSessions().length > 0) {
         Column({ space: 6 }) {
           ForEach(this.prioritizedSessions(), (row: ResourceRow) => {
-            Button({ type: ButtonType.Normal }) {
-              Row({ space: 8 }) {
-                this.statusMark(this.normalizedRowState(row))
-                Column({ space: 2 }) {
-                  Text(row.title || tr('agent_untitled'))
-                    .fontSize(Tokens.interfaceFontVp(13, this.env.fontScale))
-                    .fontWeight(this.activeOwner().selected.key() === row.key() ? FontWeight.Bold : FontWeight.Medium)
-                    .fontColor(Colors.ink)
-                    .maxLines(1)
-                    .textOverflow({ overflow: TextOverflow.Ellipsis })
-                  Text([
-                    this.model.machineName(row.machine) || row.machine,
-                    tr(this.stateLabelKey(this.normalizedRowState(row)))
-                  ].filter((part: string) => !!part).join(' · '))
-                    .fontSize(Tokens.interfaceFontVp(11, this.env.fontScale))
-                    .fontColor(Colors.secondary)
-                    .maxLines(1)
-                    .textOverflow({ overflow: TextOverflow.Ellipsis })
-                }.layoutWeight(1).alignItems(HorizontalAlign.Start)
-                SymbolGlyph(Symbols.expand).fontSize('11vp').fontColor([Colors.tertiary])
-              }.width('100%').padding({ left: 10, right: 10, top: 8, bottom: 8 })
-            }
-            .width('100%')
-            .padding(0)
-            .backgroundColor(this.activeOwner().selected.key() === row.key() ? Colors.selection : Colors.control)
-            .borderRadius(12)
-            .border({
-              width: this.activeOwner().selected.key() === row.key() ? 1 : 0,
-              color: this.activeOwner().selected.key() === row.key() ? Colors.link : Color.Transparent,
-              radius: 12
-            })
-            .animation(Motion.state(this.env.reduceMotion))
-            .onClick(() => {
-              Haptics.selection();
-              this.onOpenSession(row);
-            })
-            .id('fold.inspector.session.' + row.id)
+            Row({ space: 6 }) {
+              Button({ type: ButtonType.Normal }) {
+                Row({ space: 8 }) {
+                  this.statusMark(this.normalizedRowState(row))
+                  Column({ space: 2 }) {
+                    Text(row.title || tr('agent_untitled'))
+                      .fontSize(Tokens.interfaceFontVp(13, this.env.fontScale))
+                      .fontWeight(this.activeOwner().selected.key() === row.key() ? FontWeight.Bold : FontWeight.Medium)
+                      .fontColor(Colors.ink)
+                      .maxLines(1)
+                      .textOverflow({ overflow: TextOverflow.Ellipsis })
+                    Text([
+                      this.model.machineName(row.machine) || row.machine,
+                      tr(this.stateLabelKey(this.normalizedRowState(row)))
+                    ].filter((part: string) => !!part).join(' · '))
+                      .fontSize(Tokens.interfaceFontVp(11, this.env.fontScale))
+                      .fontColor(Colors.secondary)
+                      .maxLines(1)
+                      .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+                  SymbolGlyph(Symbols.expand).fontSize('11vp').fontColor([Colors.tertiary])
+                }.width('100%').padding({ left: 10, right: 10, top: 8, bottom: 8 })
+              }
+              .layoutWeight(1)
+              .padding(0)
+              .backgroundColor(this.activeOwner().selected.key() === row.key() ? Colors.selection : Colors.control)
+              .borderRadius(12)
+              .border({
+                width: this.activeOwner().selected.key() === row.key() ? 1 : 0,
+                color: this.activeOwner().selected.key() === row.key() ? Colors.link : Color.Transparent,
+                radius: 12
+              })
+              .animation(Motion.state(this.env.reduceMotion))
+              .onClick(() => {
+                Haptics.selection();
+                this.onOpenSession(row);
+              })
+              .id('fold.inspector.session.' + row.id)
+
+              if (this.normalizedRowState(row) === 'working' && !this.model.demo) {
+                Button({ type: ButtonType.Circle }) {
+                  SymbolGlyph(Symbols.stop).fontSize('10vp').fontColor([Colors.danger])
+                }
+                .width(30)
+                .height(30)
+                .padding(0)
+                .backgroundColor(Colors.control)
+                .accessibilityText(tr('fold_interrupt_agent'))
+                .bindTips(tr('fold_interrupt_agent'))
+                .onClick(() => {
+                  Haptics.attention();
+                  this.onInterruptSession(row);
+                })
+                .id('fold.inspector.interrupt.' + row.id)
+              }
+            }.width('100%').alignItems(VerticalAlign.Center)
           }, (row: ResourceRow) => row.key() + ':' + this.normalizedRowState(row) + ':' + row.title)
         }.width('100%')
       }
@@ -570,9 +634,46 @@ export struct FoldInspectorPanel {
     .shadow(PhoneStyle.cardElevation(this.env.dark))
   }
 
+  @Builder xiaoYiChip() {
+    Button({ type: ButtonType.Normal }) {
+      Column({ space: 4 }) {
+        SymbolGlyph(Symbols.persona)
+          .fontSize('15vp')
+          .fontColor([Colors.ai])
+        Text(tr('phone_xiaoyi'))
+          .fontSize(Tokens.interfaceFontVp(11, this.env.fontScale))
+          .fontWeight(FontWeight.Medium)
+          .fontColor(Colors.ai)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      }
+      .width('100%')
+      .height('100%')
+      .justifyContent(FlexAlign.Center)
+      .alignItems(HorizontalAlign.Center)
+      .padding({ left: 4, right: 4 })
+    }
+    .layoutWeight(1)
+    .height(52)
+    .padding(0)
+    .backgroundColor(Colors.selection)
+    .borderRadius(12)
+    .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: 12 })
+    .accessibilityText(tr('phone_xiaoyi'))
+    .bindTips(tr('phone_xiaoyi'))
+    .onClick(() => {
+      Haptics.tap();
+      this.onOpenXiaoYi();
+    })
+    .id('fold.inspector.tools.xiaoyi')
+  }
+
   @Builder pulseTabContent() {
     Scroll() {
       Column({ space: 12 }) {
+        if (this.urgentSession()) {
+          this.urgentNeedsYouCard(this.urgentSession()!)
+        }
         this.relayBar()
         if (this.selectedSession()) {
           Column({ space: 8 }) {
@@ -605,6 +706,7 @@ export struct FoldInspectorPanel {
                 this.toolChip('files', 0, 'fold.inspector.tools.files', Symbols.folder)
                 this.toolChip('git', 1, 'fold.inspector.tools.git', $r('sys.symbol.arrow_triangle_merge'))
                 this.toolChip('terminal', 2, 'fold.inspector.tools.terminal')
+                this.xiaoYiChip()
               }.width('100%').id('fold.inspector.workspace')
             }
           }

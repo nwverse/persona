@@ -9087,6 +9087,18 @@
     {
       "name": "xiaoyi_failed",
       "value": "Unable to complete the request. Open Persona to check details."
+    },
+    {
+      "name": "fold_urgent_review",
+      "value": "Review"
+    },
+    {
+      "name": "fold_hover_deck_title",
+      "value": "Tabletop Deck"
+    },
+    {
+      "name": "fold_interrupt_agent",
+      "value": "Interrupt"
     }
   ]
 }

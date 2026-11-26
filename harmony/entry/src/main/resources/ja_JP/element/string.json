@@ -9091,6 +9091,18 @@
     {
       "name": "xiaoyi_failed",
       "value": "リクエストを完了できませんでした。Persona で詳細を確認してください。"
+    },
+    {
+      "name": "fold_urgent_review",
+      "value": "確認"
+    },
+    {
+      "name": "fold_hover_deck_title",
+      "value": "テーブルトップデッキ"
+    },
+    {
+      "name": "fold_interrupt_agent",
+      "value": "中断"
     }
   ]
 }
