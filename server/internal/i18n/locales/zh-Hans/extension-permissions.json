@@ -85,6 +85,8 @@
   "scope_tasks_schedule": "为待选机任务分配目标电脑（仅限约束与元数据，不含任务提示词或隐藏空间）",
   "scope_agents_archive_idle": "按闲置时长受控归档并关闭长时闲置的编程 Agent 会话并记录审计（绝不触碰工作中、主对话、方向主管、未结待办或未结卡片会话）",
   "scope_decisions_raise": "请你作决定，并读取或撤回它自己发起的请求",
+  "scope_bots_feishu_identity": "查看已配对的飞书机器人的公开身份（名称、应用 ID、能否回复）",
+  "scope_bots_feishu_handoff": "把群里的问题交给飞书机器人，由它在群里回复",
   "scope_leaders_read": "查看方向和它们的上报",
   "scope_leaders_write": "创建方向并上报进展",
   "scope_assistant_dispatch_policy": "读取和修改助手派活策略（哪些对话可以派活）",
