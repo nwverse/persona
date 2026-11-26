@@ -701,6 +701,141 @@ describe("CompareRuns controlled mode", () => {
     expect(card(1).querySelector("[data-run-retry-error]")).toBeNull();
   });
 
+  it("keeps an in-flight controlled retry alive across normal failed -> waiting progress updates and only aborts on run removal/replacement", async () => {
+    let currentGroup = makeGroup({
+      id: "g1",
+      runs: [
+        { n: 1, branch: "b/g1-1", phase: "failed", error: "Worktree busy" },
+        { n: 2, branch: "b/g1-2", phase: "waiting" },
+      ],
+    });
+    let currentRunner: CompareRunnerState = { active: false, holds: true };
+    const groupListeners = new Set<() => void>();
+    const runnerListeners = new Set<() => void>();
+    const emitGroup = () => groupListeners.forEach((l) => l());
+    const emitRunner = () => runnerListeners.forEach((l) => l());
+    const store: CompareRunsStoreState = { machines: [makeMachine()], sessions: {}, reviews: false };
+
+    let attempt = 0;
+    const signals: AbortSignal[] = [];
+    const deferreds: Array<ReturnType<typeof deferred<void>>> = [];
+    const completions: Array<{ attempt: number; aborted: boolean }> = [];
+
+    const retryRun = vi.fn(async (_groupId: string, _runNumber: number, signal: AbortSignal) => {
+      const idx = ++attempt;
+      signals.push(signal);
+      const d = deferred<void>();
+      deferreds.push(d);
+      // Simulate the controlled runner publishing normal progress (failed -> waiting) while still awaiting the network call.
+      currentGroup = {
+        ...currentGroup,
+        runs: currentGroup.runs.map((r) => (r.n === 1 ? { ...r, phase: "waiting", error: undefined } : r)),
+      };
+      currentRunner = { active: true, holds: true };
+      emitGroup();
+      emitRunner();
+      await d.promise;
+      completions.push({ attempt: idx, aborted: signal.aborted });
+    });
+
+    const deps: CompareRunsDeps = {
+      group: () => ({ ...currentGroup, runs: currentGroup.runs.map((r) => ({ ...r })) }),
+      subscribeGroup: (l) => {
+        groupListeners.add(l);
+        return () => groupListeners.delete(l);
+      },
+      store,
+      runner: () => ({ ...currentRunner }),
+      subscribeRunner: (l) => {
+        runnerListeners.add(l);
+        return () => runnerListeners.delete(l);
+      },
+      retryRun,
+      now: FIXED_NOW,
+    };
+
+    await act(async () => {
+      root.render(<CompareRuns id="g1" onToggleSidebar={() => {}} deps={deps} />);
+    });
+
+    // Attempt 1: Retry emits failed -> waiting, signal must remain un-aborted and complete normally.
+    await act(async () => {
+      buttonIn(card(1), t("compare-runs.retry"))!.click();
+    });
+    await flush();
+
+    expect(card(1).dataset.runStatus).toBe("waiting");
+    expect(signals).toHaveLength(1);
+    expect(signals[0]!.aborted).toBe(false);
+
+    // Advance further to worktree while the same retry promise is still pending.
+    currentGroup = {
+      ...currentGroup,
+      runs: currentGroup.runs.map((r) => (r.n === 1 ? { ...r, phase: "worktree" } : r)),
+    };
+    await act(async () => emitGroup());
+    expect(card(1).dataset.runStatus).toBe("worktree");
+    expect(signals[0]!.aborted).toBe(false);
+
+    deferreds[0]!.resolve(undefined);
+    await flush();
+    expect(completions).toEqual([{ attempt: 1, aborted: false }]);
+
+    // Attempt 2: Retry emits failed -> waiting and then rejects; error must be preserved (not dropped by stale abort).
+    currentGroup = {
+      ...currentGroup,
+      runs: currentGroup.runs.map((r) => (r.n === 1 ? { ...r, phase: "failed", error: "Worktree busy" } : r)),
+    };
+    currentRunner = { active: false, holds: true };
+    await act(async () => {
+      emitGroup();
+      emitRunner();
+    });
+
+    await act(async () => {
+      buttonIn(card(1), t("compare-runs.retry"))!.click();
+    });
+    await flush();
+    expect(card(1).dataset.runStatus).toBe("waiting");
+    expect(signals[1]!.aborted).toBe(false);
+
+    currentGroup = {
+      ...currentGroup,
+      runs: currentGroup.runs.map((r) => (r.n === 1 ? { ...r, phase: "failed", error: "Worktree busy" } : r)),
+    };
+    currentRunner = { active: false, holds: true };
+    deferreds[1]!.reject(new Error("Upstream network timeout"));
+    await act(async () => {
+      emitGroup();
+      emitRunner();
+    });
+    await flush();
+    expect(signals[1]!.aborted).toBe(false);
+    expect(card(1).querySelector("[data-run-retry-error]")!.textContent).toBe("Upstream network timeout");
+    expect(buttonIn(card(1), t("compare-runs.retry"))!.disabled).toBe(false);
+
+    // Attempt 3: Replacing/removing run 1 while retry is pending DOES abort its AbortSignal and discards late rejection.
+    await act(async () => {
+      buttonIn(card(1), t("compare-runs.retry"))!.click();
+    });
+    await flush();
+    expect(signals[2]!.aborted).toBe(false);
+
+    currentGroup = {
+      ...currentGroup,
+      runs: currentGroup.runs.map((r) => (r.n === 1 ? { n: 1, branch: "b/g1-1-replaced", phase: "failed", error: "Replaced" } : r)),
+    };
+    currentRunner = { active: false, holds: true };
+    await act(async () => {
+      emitGroup();
+      emitRunner();
+    });
+    expect(signals[2]!.aborted).toBe(true);
+    deferreds[2]!.reject(new Error("Stale replaced run error"));
+    await flush();
+    expect(card(1).querySelector("[data-run-retry-error]")).toBeNull();
+  });
+
   it("keeps 100% backward-compatible default behavior when deps is omitted", async () => {
     const group = makeGroup();
     addGroup(group);

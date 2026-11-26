@@ -450,8 +450,8 @@ function RunsBody({
 }: RunsBridgeBaseProps & { store: ResolvedStore; runner: CompareRunnerState }) {
   const runsScopeKey = JSON.stringify([deps?.scopeKey ?? null, group.id]);
   const [scope, setScope] = useState<{ key: string; epoch: number }>(() => ({ key: runsScopeKey, epoch: 1 }));
-  const [retryingRuns, setRetryingRuns] = useState<Record<number, { seq: number; target: string }>>({});
-  const [retryErrors, setRetryErrors] = useState<Record<number, { target: string; message: string }>>({});
+  const [retryingRuns, setRetryingRuns] = useState<Record<number, { seq: number; identity: string }>>({});
+  const [retryErrors, setRetryErrors] = useState<Record<number, { identity: string; message: string }>>({});
   if (scope.key !== runsScopeKey) {
     setScope({ key: runsScopeKey, epoch: scope.epoch + 1 });
     setRetryingRuns({});
@@ -460,16 +460,17 @@ function RunsBody({
 
   const activeEpochRef = useRef(0);
   const retrySeqRef = useRef(0);
-  const pendingRetriesRef = useRef<Map<number, { epoch: number; seq: number; target: string; controller: AbortController }>>(new Map());
+  const pendingRetriesRef = useRef<Map<number, { epoch: number; seq: number; identity: string; controller: AbortController }>>(new Map());
 
   const ctx = { sessions: store.sessions, launches: store.launches, active: runner.active, holds: runner.holds };
   const evaluatedRuns = group.runs.map((run) => {
     const status = runStatus(run, group, ctx);
-    const retryTag = status.kind === "failed" ? (status.retry ?? "") : status.kind === "stopped" && status.retry ? "stopped" : "";
-    const retryTarget = retryTag ? `${run.phase}:${status.kind}:${retryTag}:${run.launch ?? ""}` : "";
-    return { run, status, retryTarget };
+    const retryable = (status.kind === "failed" && Boolean(status.retry)) || (status.kind === "stopped" && status.retry);
+    // Keep operation identity (run slot + branch within scope.epoch) separate from mutable progress phase/eligibility.
+    const identity = run.branch;
+    return { run, status, retryable, identity };
   });
-  const retryTargetsKey = JSON.stringify(evaluatedRuns.map((entry) => [entry.run.n, entry.retryTarget]));
+  const runLifecycleKey = JSON.stringify(evaluatedRuns.map((entry) => [entry.run.n, entry.identity, entry.status.kind]));
 
   useLayoutEffect(() => {
     activeEpochRef.current = scope.epoch;
@@ -482,10 +483,12 @@ function RunsBody({
   }, [scope.epoch]);
 
   useLayoutEffect(() => {
-    const activeTargets = new Map(evaluatedRuns.map((entry) => [entry.run.n, entry.retryTarget]));
+    const activeRuns = new Map(evaluatedRuns.map((entry) => [entry.run.n, entry]));
     let prunedPending = false;
     for (const [n, pending] of pendingRetriesRef.current) {
-      if (!activeTargets.get(n) || activeTargets.get(n) !== pending.target) {
+      const current = activeRuns.get(n);
+      // Only cancel an in-flight retry if the run was removed or replaced; normal lifecycle progress stays alive.
+      if (!current || current.identity !== pending.identity) {
         pending.controller.abort();
         pendingRetriesRef.current.delete(n);
         prunedPending = true;
@@ -494,11 +497,12 @@ function RunsBody({
     if (prunedPending) {
       setRetryingRuns((prev) => {
         let changed = false;
-        const next: Record<number, { seq: number; target: string }> = {};
+        const next: Record<number, { seq: number; identity: string }> = {};
         for (const [k, entry] of Object.entries(prev)) {
           const n = Number(k);
           const pending = pendingRetriesRef.current.get(n);
-          if (pending && pending.seq === entry.seq && activeTargets.get(n) === entry.target) next[n] = entry;
+          const current = activeRuns.get(n);
+          if (pending && pending.seq === entry.seq && current?.identity === entry.identity) next[n] = entry;
           else changed = true;
         }
         return changed ? next : prev;
@@ -506,26 +510,32 @@ function RunsBody({
     }
     setRetryErrors((prev) => {
       let changed = false;
-      const next: Record<number, { target: string; message: string }> = {};
+      const next: Record<number, { identity: string; message: string }> = {};
       for (const [k, err] of Object.entries(prev)) {
         const n = Number(k);
-        if (activeTargets.get(n) === err.target) next[n] = err;
+        const current = activeRuns.get(n);
+        const inFlight = pendingRetriesRef.current.has(n);
+        const movedPastFailure = current && (
+          current.status.kind === "started"
+          || (!inFlight && (current.status.kind === "waiting" || current.status.kind === "worktree" || current.status.kind === "starting"))
+        );
+        if (current && current.identity === err.identity && !movedPastFailure) next[n] = err;
         else changed = true;
       }
       return changed ? next : prev;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scope.epoch, retryTargetsKey]);
+  }, [scope.epoch, runLifecycleKey]);
 
-  const runModels: CompareRunViewModel[] = evaluatedRuns.map(({ run, status, retryTarget }) => {
+  const runModels: CompareRunViewModel[] = evaluatedRuns.map(({ run, status, retryable, identity }) => {
     const session = status.kind === "started" ? status.session : undefined;
-    const err = retryTarget && retryErrors[run.n]?.target === retryTarget ? retryErrors[run.n].message : undefined;
+    const err = status.kind !== "started" && retryErrors[run.n]?.identity === identity ? retryErrors[run.n].message : undefined;
     return {
       run,
       status,
       awaiting: session ? awaitsReply(session, store.mutes) : false,
       finished: session ? justFinished(session, store.mutes) : false,
-      retrying: Boolean(retryTarget && retryingRuns[run.n]?.target === retryTarget),
+      retrying: Boolean(retryable && retryingRuns[run.n]?.identity === identity),
       retryError: err,
     };
   });
@@ -544,11 +554,12 @@ function RunsBody({
   };
   const handleRetryRun = async (run: CompareRun) => {
     const runEpoch = scope.epoch;
-    const target = evaluatedRuns.find((entry) => entry.run.n === run.n)?.retryTarget ?? "";
-    if (!target || activeEpochRef.current !== runEpoch || pendingRetriesRef.current.has(run.n)) return;
+    const entry = evaluatedRuns.find((item) => item.run.n === run.n);
+    if (!entry || !entry.retryable || activeEpochRef.current !== runEpoch || pendingRetriesRef.current.has(run.n)) return;
+    const identity = entry.identity;
     const controller = new AbortController();
     const runSeq = ++retrySeqRef.current;
-    pendingRetriesRef.current.set(run.n, { epoch: runEpoch, seq: runSeq, target, controller });
+    pendingRetriesRef.current.set(run.n, { epoch: runEpoch, seq: runSeq, identity, controller });
     const isCurrent = () =>
       !controller.signal.aborted
       && activeEpochRef.current === runEpoch
@@ -571,12 +582,12 @@ function RunsBody({
         return;
       }
       asyncStarted = true;
-      setRetryingRuns((prev) => ({ ...prev, [run.n]: { seq: runSeq, target } }));
+      setRetryingRuns((prev) => ({ ...prev, [run.n]: { seq: runSeq, identity } }));
       await result;
       if (!isCurrent()) return;
     } catch (e) {
       if (!isCurrent()) return;
-      setRetryErrors((prev) => ({ ...prev, [run.n]: { target, message: safeFormatError(depsRef.current?.formatError, e) } }));
+      setRetryErrors((prev) => ({ ...prev, [run.n]: { identity, message: safeFormatError(depsRef.current?.formatError, e) } }));
     } finally {
       if (pendingRetriesRef.current.get(run.n)?.seq === runSeq) pendingRetriesRef.current.delete(run.n);
       if (asyncStarted && activeEpochRef.current === runEpoch) {
