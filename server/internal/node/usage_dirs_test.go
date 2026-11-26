@@ -278,8 +278,10 @@ func TestUsageDirKey(t *testing.T) {
 func TestUsageDirsResolver(t *testing.T) {
 	u := newUsageDirs("/home/me")
 	calls := map[string]int{}
+	resolved := make(chan string, 8)
 	u.resolve = func(_ context.Context, _, dir string) (proto.UsageDir, bool) {
 		calls[dir]++
+		defer func() { resolved <- dir }()
 		return proto.UsageDir{Dir: dir, Project: "folder:" + dir[2:]}, dir != "~/gone"
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -288,12 +290,14 @@ func TestUsageDirsResolver(t *testing.T) {
 	for _, d := range []string{"~/a", "~/b", "~/a", "~/gone", proto.UsageDirAssistant, ""} {
 		u.want(d)
 	}
-	deadline := time.Now().Add(5 * time.Second)
-	var got []proto.UsageDir
-	for len(got) < 2 && time.Now().Before(deadline) {
-		got = append(got, u.take(false)...)
-		time.Sleep(10 * time.Millisecond)
+	for range 3 { // ~/a, ~/b and ~/gone, each once
+		select {
+		case <-resolved:
+		case <-time.After(5 * time.Second):
+			t.Fatal("not resolved")
+		}
 	}
+	got := u.take(false)
 	if len(got) != 2 || got[0].Dir != "~/a" || got[1].Dir != "~/b" {
 		t.Fatalf("taken %+v", got)
 	}
