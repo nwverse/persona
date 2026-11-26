@@ -10,13 +10,14 @@ import { later } from "../../lib/feed";
 import { defaultManager, MANAGER_HEADER, shownManager } from "../../lib/manager-choice";
 import { getState, putTodo, refreshTodos } from "../../lib/store";
 import { latestReview, reviewState } from "../../lib/supervision";
-import { askOptions, openAsk, personalVerificationAsk, type Todo } from "../../lib/todos";
+import { askOptions, openAsk, personalVerificationAsk, type Todo, type TodoStatus } from "../../lib/todos";
 import { StatusMark } from "../../ui/StatusMark";
 import { Button, toast } from "../../ui/atoms";
 import { AcceptRow } from "./Brief";
 import { BriefingMark } from "./BriefingMark";
 import { DecisionRow } from "./DecisionRow";
 import { ExpiredQuestion } from "./ExpiredQuestion";
+import WaitingTaskRow from "./WaitingTaskRow";
 import { FailedTaskRow } from "./FailedTaskRow";
 import RuleSuggestionLine from "./RuleSuggestionLine";
 import type { RuleCard } from "../../lib/rule-suggestion";
@@ -111,9 +112,7 @@ export function TaskDecision({ todo, rowKey, hideTitle = false }: { todo: Todo; 
 
 export type NeedsYouPartProps =
   | { decision: Todo; rowKey?: string }
-  | { task: Todo; rowKey?: string; hideTitle?: boolean; countsOpenAttr: { "data-counts-open"?: string } }
-  /** A task whose Agent did not start, in the tray (#10365). */
-  | { failed: Todo; rowKey: string; countsOpenAttr: { "data-counts-open"?: string } }
+  | { task: Todo; status: TodoStatus; rowKey?: string; hideTitle?: boolean; countsOpenAttr: { "data-counts-open"?: string } }
   /** The suggested rule of a plan card or a passed-up question, under it. */
   | { rule: RuleCard };
 
@@ -137,12 +136,13 @@ export default function NeedsYouParts(props: NeedsYouPartProps) {
       const round = task.supervision?.reviews?.at(-1)?.at || task.decision_review?.review_at || ask?.asked_at;
       return <TaskDecision key={task.id + round} todo={task} rowKey={rowKey} hideTitle={hideTitle} />;
     }
-    return ask && (
+    if (ask) return (
       <div data-needs-row={rowKey} {...countsOpenAttr} className="min-w-0 rounded-control bg-field px-3 py-2.5">
         <AcceptRow stacked hideTitle={hideTitle} key={task.id + ask.asked_at} verification={task} row={askRow(task, ask)} />
       </div>
     );
+    if (props.status === "failed") return <FailedTaskRow todo={task} rowKey={rowKey ?? `task:${task.id}`} countsOpenAttr={countsOpenAttr} />;
+    return <WaitingTaskRow todo={task} status={props.status} rowKey={rowKey} countsOpenAttr={countsOpenAttr} />;
   }
-  if ("failed" in props) return <FailedTaskRow todo={props.failed} rowKey={props.rowKey} countsOpenAttr={props.countsOpenAttr} />;
   return <RuleSuggestionLine of={props.rule} />;
 }
