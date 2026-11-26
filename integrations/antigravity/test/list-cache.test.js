@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
 import fs, { appendFileSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
@@ -391,4 +392,174 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     node.all('session.items').slice(watchedItems).some((event) =>
       event.items?.some((item) => item.text === 'Session-0')
     ), 5_000)
+})
+
+// P1-1 (#16001): a lagging summary_behind row must be list-cacheable once its state is provably
+// static, and the .persona-turn-completion stat has to be part of the cache key (review CaC033).
+const BEHIND_RAW = '77777777-4444-4444-8444-777777777777'
+const BEHIND_SESSION = `agy-${BEHIND_RAW}`
+const behindRecords = [
+  { step_index: 0, type: 'USER_INPUT', source: 'USER_EXPLICIT', content: 'First question' },
+  { step_index: 1, type: 'PLANNER_RESPONSE', content: 'First answer' },
+  { step_index: 2, type: 'USER_INPUT', source: 'USER_EXPLICIT', content: 'Second question' },
+  { step_index: 3, type: 'PLANNER_RESPONSE', content: 'Second answer' },
+].map((step) => ({ ...step, status: 'DONE', created_at: '2026-01-01T00:00:00.000Z' }))
+
+const BEHIND_FAKE_AGY = `
+import { readFileSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:http'
+import { createInterface } from 'node:readline'
+if (process.argv.includes('models')) { console.log('test-model\\tTest Model'); process.exit(0) }
+const dir = process.argv[2]
+const logFile = process.argv[process.argv.indexOf('--log-file') + 1]
+const send = (message) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...message }) + '\\n')
+const server = createServer(async (request, response) => {
+  const chunks = []
+  for await (const chunk of request) chunks.push(chunk)
+  const method = request.url.split('/').at(-1)
+  if (method === 'GetCascadeTrajectory') {
+    response.end(JSON.stringify(JSON.parse(readFileSync(dir + '/trajectory.json', 'utf8'))))
+    return
+  }
+  response.writeHead(404).end('{}')
+})
+await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+writeFileSync(logFile, 'Language server listening on random port at ' + server.address().port + ' for HTTP\\n')
+createInterface({ input: process.stdin }).on('line', (line) => {
+  const request = JSON.parse(line)
+  if (request.id !== undefined) send({ id: request.id, result: {} })
+})
+`
+
+async function setupBehindListCache(t) {
+  const home = mkdtempSync(join(tmpdir(), 'agy-p11-list-cache-'))
+  const agyDir = join(home, 'config')
+  const logs = join(agyDir, 'brain', BEHIND_RAW, '.system_generated', 'logs')
+  mkdirSync(logs, { recursive: true })
+  const fullFile = join(logs, 'transcript_full.jsonl')
+  writeFileSync(fullFile, behindRecords.map((step) => line(step)).join(''))
+  const old = new Date(Date.now() - 60_000)
+  utimesSync(fullFile, old, old)
+
+  const db = new DatabaseSync(join(agyDir, 'conversation_summaries.db'))
+  db.exec('CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, status TEXT, not_fully_idle INTEGER, killed INTEGER, step_count INTEGER, title TEXT, workspace_uris TEXT, last_modified_time TEXT)')
+  db.prepare('INSERT INTO conversation_summaries VALUES (?, ?, 0, 0, ?, ?, ?, ?)')
+    .run(BEHIND_RAW, 'CASCADE_RUN_STATUS_IDLE', 2, 'P11', '[]', '2026-01-01T00:00:10Z')
+  writeFileSync(join(home, 'trajectory.json'), JSON.stringify({ trajectory: { cascadeId: BEHIND_RAW, steps: [] } }))
+  const agyBinScript = join(home, 'fake-agy.mjs')
+  writeFileSync(agyBinScript, BEHIND_FAKE_AGY)
+
+  const counts = { fullReadFile: 0 }
+  const originalReadFileSync = fs.readFileSync
+  fs.readFileSync = function (path, ...args) {
+    if (String(path) === fullFile) counts.fullReadFile += 1
+    return originalReadFileSync.call(this, path, ...args)
+  }
+  syncBuiltinESMExports()
+  t.after(() => {
+    fs.readFileSync = originalReadFileSync
+    syncBuiltinESMExports()
+  })
+
+  const mapLib = await import('../lib/map.js')
+  const { createAgyRuntime } = await import('../lib/runtime.js')
+  const node = await startFakeNode(t)
+  const runtime = createAgyRuntime({
+    home, agyDir, agyBin: process.execPath, agyArgs: [agyBinScript, home],
+    socketPath: node.path, listDays: 14, maxSessions: 10, log: () => {},
+  })
+  t.after(async () => {
+    await runtime.stop()
+    try { db.close() } catch {}
+    rmSync(home, { recursive: true, force: true })
+  })
+  await delay(1100) // transcript must be older than the 1s settled window
+  runtime.start()
+  await node.ready
+  await until('behind fixture listed', () =>
+    node.last('runtime.sessions')?.sessions.some((row) => row.session_id === BEHIND_SESSION), 15_000)
+
+  // session.items awaits the authoritative GetCascadeTrajectory negative cache (retryAt === 0).
+  const items = await node.peer.call('session.items', { session_id: BEHIND_SESSION })
+  const history = String(items.history).replace(/:projected:[0-9a-f]{8}$/, '')
+  const markerFile = join(agyDir, 'brain', BEHIND_RAW, '.persona-turn-completion')
+  const writeMarker = (suffix = '') => {
+    const full = createHash('sha256').update(`${history}|3|Second answer`).digest('hex')
+    writeFileSync(markerFile, full + suffix)
+  }
+  const setStepCount = (stepCount) =>
+    db.prepare('UPDATE conversation_summaries SET step_count = ? WHERE conversation_id = ?').run(stepCount, BEHIND_RAW)
+  // The listed summary cache is separate from map's 128-entry transcript cache; evict the latter so a
+  // zero read can only come from listedTranscriptCache.
+  const evictTranscriptCache = () => {
+    for (let index = 0; index < 140; index += 1) {
+      const other = join(home, `evict-${index}`, '.system_generated', 'logs')
+      mkdirSync(other, { recursive: true })
+      const target = join(other, 'transcript_full.jsonl')
+      writeFileSync(target, line({ step_index: 0, type: 'PLANNER_RESPONSE', status: 'DONE', created_at: old.toISOString(), content: `evict ${index}` }))
+      mapLib.readTranscript(join(home, `evict-${index}`), true)
+    }
+  }
+  const refresh = async (title) => {
+    const before = node.all('runtime.sessions').length
+    await node.peer.call('session.rename', { session_id: BEHIND_SESSION, title })
+    await until('behind list refreshed', () => node.all('runtime.sessions').length > before, 15_000)
+    return node.last('runtime.sessions').sessions.find((row) => row.session_id === BEHIND_SESSION)
+  }
+  return { counts, markerFile, writeMarker, setStepCount, evictTranscriptCache, refresh }
+}
+
+test('a completion-marker-restored done summary_behind row lists once and invalidates when the marker changes', { timeout: 30_000 }, async (t) => {
+  const api = await setupBehindListCache(t)
+
+  api.writeMarker()
+  api.evictTranscriptCache()
+  api.counts.fullReadFile = 0
+  const first = await api.refresh('completion-marker-first')
+  assert.equal(first.status, 'done', 'the valid .persona-turn-completion marker restores done via #15782')
+  assert.ok(api.counts.fullReadFile >= 1, 'the key change to a present marker is a listed-cache miss that reads once')
+
+  api.evictTranscriptCache()
+  api.counts.fullReadFile = 0
+  const second = await api.refresh('completion-marker-second')
+  assert.equal(second.status, 'done')
+  assert.equal(api.counts.fullReadFile, 0, 'consecutive unchanged lists hit listedTranscriptCache and never re-read the transcript')
+
+  // Change the marker's size: its (size, mtimeMs, ino) key changes immediately, forcing recompute.
+  api.writeMarker(':edge-bytes-changed')
+  api.evictTranscriptCache()
+  api.counts.fullReadFile = 0
+  const changed = await api.refresh('completion-marker-mutated')
+  assert.equal(changed.status, 'done')
+  assert.ok(api.counts.fullReadFile >= 1, 'modifying .persona-turn-completion must invalidate the listed cache (CaC033)')
+})
+
+test('a negatively checked static summary_behind row lists with zero reads and invalidates on step_count or marker changes', { timeout: 30_000 }, async (t) => {
+  const api = await setupBehindListCache(t)
+
+  // One list after the authoritative noCutChecks entry is settled admits the static unknown row.
+  await api.refresh('summary-behind-prime')
+  api.evictTranscriptCache()
+  api.counts.fullReadFile = 0
+  const cached = await api.refresh('summary-behind-hit')
+  assert.equal(cached.status, 'unknown')
+  assert.equal(api.counts.fullReadFile, 0, 'a settled noCutChecks summary_behind row must hit listedTranscriptCache with no transcript read')
+
+  // conversation_summaries.step_count is part of nativeKey, so changing it invalidates at once.
+  api.setStepCount(7)
+  api.evictTranscriptCache()
+  api.counts.fullReadFile = 0
+  const nativeChanged = await api.refresh('summary-behind-step-count')
+  assert.ok(api.counts.fullReadFile >= 1, 'a step_count change must invalidate the listed cache')
+  assert.ok(nativeChanged, 'a recomputed row is returned')
+
+  // Restore a lagging count, re-prime the static row, then add the completion marker: keyed invalidation.
+  api.setStepCount(2)
+  await api.refresh('summary-behind-reprime')
+  api.writeMarker()
+  api.evictTranscriptCache()
+  api.counts.fullReadFile = 0
+  const markerAdded = await api.refresh('summary-behind-marker-added')
+  assert.ok(api.counts.fullReadFile >= 1, 'creating .persona-turn-completion must invalidate the static summary_behind cache')
+  assert.equal(markerAdded.status, 'done')
 })

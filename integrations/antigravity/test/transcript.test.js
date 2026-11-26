@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 import { appendFileSync, closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync, writeSync } from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
@@ -614,3 +616,87 @@ test('same-inode growth detects an in-place same-length prefix edit anywhere in 
   assert.equal(after.steps[200].content, 'TAIL-200')
   assert.notEqual(after.revision, before.revision)
 })
+
+// P1-1 (#16001): multi-MB pure-append growth verifies fixed head/tail boundary samples instead of
+// re-hashing the whole existing prefix with SHA-256; head or old-tail overwrites must still force a
+// full reparse.
+function largeAppendFixture(t) {
+  const { brain, directory } = logs(t)
+  const file = join(directory, 'transcript_full.jsonl')
+  const row = (index, tag) => JSON.stringify({
+    step_index: index,
+    source: 'MODEL',
+    type: 'PLANNER_RESPONSE',
+    status: 'DONE',
+    created_at: '2026-11-20T10:00:00Z',
+    content: `${tag}-${String(index).padStart(5, '0')}-${'z'.repeat(900)}`,
+  }) + '\n'
+  const count = 3000
+  const rows = Array.from({ length: count }, (_, index) => row(index, 'ORIG'))
+  writeFileSync(file, rows.join(''))
+  assert.ok(statSync(file).size > 2 * 1024 * 1024, 'fixture should be multi-MB')
+  assert.equal(readTranscript(brain, true).steps.length, count) // cold parse populates the cache entry
+  return { brain, file, row, rows, count }
+}
+
+function spyFsMethod(method, onCall) {
+  const original = fs[method]
+  fs[method] = function (...args) {
+    onCall(args)
+    return original.apply(this, args)
+  }
+  syncBuiltinESMExports()
+  return () => {
+    fs[method] = original
+    syncBuiltinESMExports()
+  }
+}
+
+test('a multi-MB pure append verifies from fixed samples with only delta hashing', (t) => {
+  const { brain, file, row, count } = largeAppendFixture(t)
+  let readBytes = 0
+  const restore = spyFsMethod('readSync', ([, buffer, offset, length]) => {
+    readBytes += length || buffer?.length || 0
+  })
+  try {
+    appendFileSync(file, row(count, 'TAIL'))
+    const after = readTranscript(brain, true)
+    assert.equal(after.steps.length, count + 1)
+    assert.ok(after.steps[count].content.startsWith('TAIL-'), 'appended step is parsed incrementally')
+    assert.ok(readBytes < 128 * 1024, `append verification read ${readBytes} B; expected fixed samples + delta, not the multi-MB prefix`)
+  } finally {
+    restore()
+  }
+})
+
+for (const where of ['head', 'boundary']) {
+  test(`an in-place ${where} overwrite before a large append is detected and fully reparsed`, (t) => {
+    const { brain, file, row, rows, count } = largeAppendFixture(t)
+    const index = where === 'head' ? 0 : count - 1
+    const offset = Buffer.byteLength(rows.slice(0, index).join(''))
+    const replacement = Buffer.from(row(index, 'EDIT'))
+    assert.equal(replacement.length, Buffer.byteLength(rows[index]), 'overwrite must be same length')
+
+    let fullReads = 0
+    const restore = spyFsMethod('readFileSync', ([path]) => {
+      if (String(path) === file) fullReads += 1
+    })
+    try {
+      const fd = openSync(file, 'r+')
+      try {
+        writeSync(fd, replacement, 0, replacement.length, offset)
+      } finally {
+        closeSync(fd)
+      }
+      appendFileSync(file, row(count, 'TAIL'))
+
+      const after = readTranscript(brain, true)
+      assert.equal(after.steps.length, count + 1)
+      assert.ok(after.steps[index].content.startsWith('EDIT-'), `${where} overwrite must not be hidden by the append fast path`)
+      assert.ok(after.steps[count].content.startsWith('TAIL-'))
+      assert.equal(fullReads, 1, 'a failed boundary sample must fall back to one full read and reparse')
+    } finally {
+      restore()
+    }
+  })
+}
