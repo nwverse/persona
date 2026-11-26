@@ -51,7 +51,7 @@ export type Route =
   | { name: "machines" }
   | { name: "machine"; mid: string }
   // one space of a machine by its name (lib/space-page.ts): its agents, the todos it hangs on, what can be done to it
-  | { name: "space"; mid: string; space: string }
+  | { name: "space"; mid: string; space: string; workspace?: string }
   // the terminal browser (docs/integrations/terminal.md "Standalone terminal"): every pane of every machine; `id` is the terminal opened (an agent
   // session's id, or "pane:<pane>" for a plain shell); `view` is the list beside it, `?view=sessions|terminals`
   // (lib/terminal-list.ts): without it the one this browser chose last
@@ -137,7 +137,10 @@ export function parse(path: string, search = ""): Route {
   // An entry of a kind only a feature module draws is unknown while that module is off. Existing recordings are the
   // exception: their data and Core read-only detail stay available.
   if (p[0] === "kb") return p[1] && p[1] !== "recordings" && p[2] && moduleKBKindAt(p[1]) === "absent" ? notFound(path, search) : { name: "kb", kind: p[1], id: p[2] };
-  if (p[0] === "space" && p[1] && p[2]) return { name: "space", mid: p[1], space: p[2] };
+  if (p[0] === "space" && p[1] && p[2]) {
+    const workspace = new URLSearchParams(search).get("workspace");
+    return { name: "space", mid: p[1], space: p[2], ...(workspace && { workspace }) };
+  }
   if (p[0] === "machines") return p[1] ? { name: "machine", mid: p[1] } : { name: "machines" };
   if (p[0] === "terminal") {
     const list = new URLSearchParams(search).get("view");
@@ -243,7 +246,7 @@ export function routePath(r: Route): string {
     case "machine":
       return `/machines/${encodeURIComponent(r.mid)}`;
     case "space":
-      return `/space/${encodeURIComponent(r.mid)}/${encodeURIComponent(r.space)}`;
+      return `/space/${encodeURIComponent(r.mid)}/${encodeURIComponent(r.space)}` + (r.workspace ? "?" + new URLSearchParams({ workspace: r.workspace }) : "");
     case "terminal": {
       const path = r.mid && r.id ? `/terminal/${encodeURIComponent(r.mid)}/${encodeURIComponent(r.id)}` : "/terminal";
       return r.view ? `${path}?view=${r.view}` : path;
