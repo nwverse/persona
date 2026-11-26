@@ -262,6 +262,9 @@ func (s *Service) taskWorks(ctx context.Context, t Todo) {
 	s.tasks.mu.Lock()
 	s.tasks.working[t.ID] = time.Now()
 	s.tasks.mu.Unlock()
+	if err := s.recordTodoCloseDecline(ctx, t.ID, time.Time{}); err != nil {
+		s.logf("task %s: clearing close decline: %v", t.ID, err)
+	}
 	s.interruptsSoon()          // an interrupted receipt of it reads resumed now (interruptions.go)
 	s.clearTaskCheck(ctx, t.ID) // it judged the work before this turn (task_check.go)
 	s.setTaskStage(ctx, t.ID, "develop", "")

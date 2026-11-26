@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
@@ -328,9 +329,19 @@ func (s *Service) FleetEvent(ctx context.Context, name string, params json.RawMe
 		var c assistantwire.Clients
 		if json.Unmarshal(params, &c) == nil {
 			s.fleet.mu.Lock()
+			before := s.fleet.clients.Viewing
 			wasOnline := s.fleet.clients.AppOnline
 			s.fleet.clients = c
 			s.fleet.mu.Unlock()
+			for _, ref := range c.Viewing {
+				s.cancelSessionRetirement(ref.MachineID, ref.SessionID)
+			}
+			for _, ref := range before {
+				if !slices.Contains(c.Viewing, ref) {
+					// Leaving a quiet page is the last owner activity, not its old transcript time.
+					s.rememberSessionActivity(ctx, ref.MachineID, ref.SessionID)
+				}
+			}
 			if c.AppOnline && !wasOnline {
 				go s.ownerAppeared(context.WithoutCancel(ctx), "app_online", "")
 			}

@@ -58,6 +58,12 @@ herdr pane ──observe(pane size)──▶ node (one observe process per pane,
 - **Compatibility**: old Apps don't send the new subscription and keep polling `/screen`; old node / herdr that don't recognize `terminal.watch` (or can't start observe) make the hub return
   `unsupported`. The App falls back to screen polling (`format=ansi` snapshots retain colors, but no cursor and one refresh per second).
 
+Viewer presence follows the visible page, not the stream transport. Android and iOS send a read-only
+`terminal_subscribe` even when the first hub hello omits `terminal_stream`; screen polling continues without a grid,
+control or takeover request. An unsupported stream keeps that presence. Leaving the page sends `terminal_unsubscribe`,
+and a still-visible page registers again after reconnect. This lets automatic task retirement distinguish reading
+from inactivity without tying the owner's presence to a working stream.
+
 ## 3. iOS emulator choice
 
 | | SwiftTerm | libghostty (GhosttyKit) | Custom VT subset |

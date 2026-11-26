@@ -1279,19 +1279,30 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		}
 		return map[string]any{"closed": done, "guard_verified": true}, nil
 	}
-	if method == "session.stop" {
+	if method == "session.stop" || method == nodeproto.StopIfIdle {
 		var a struct {
-			Retire    bool            `json:"retire"`
-			StopCause proto.StopCause `json:"stop_cause"`
+			Retire        bool            `json:"retire"`
+			CloseTerminal bool            `json:"close_terminal"`
+			StopCause     proto.StopCause `json:"stop_cause"`
 		}
 		_ = json.Unmarshal(params, &a)
+		if method == nodeproto.StopIfIdle && (!a.Retire || !a.StopCause.AllowsSupervisorResume()) {
+			return nil, refusal(notRetirable, "an automatic stop needs retire and an automatic stop cause", nil)
+		}
+		if method == nodeproto.StopIfIdle && a.CloseTerminal && a.StopCause != proto.StopTaskCompleted && a.StopCause != proto.StopIdle {
+			return nil, refusal(notRetirable, "automatic terminal close requires a completed task or idle stop", nil)
+		}
 		cause := proto.StopUser
 		if a.Retire && a.StopCause.AllowsSupervisorResume() {
 			cause = a.StopCause
 		} else if !a.Retire && a.StopCause == proto.StopTimeout {
 			cause = proto.StopTimeout
 		}
-		stopped, err := n.stopWithCause(ctx, p.SessionID, a.Retire, cause)
+		if method == nodeproto.StopIfIdle && a.CloseTerminal {
+			stopped, closed, err := n.closeIdleTerminal(ctx, p.SessionID, cause)
+			return map[string]any{"stopped": stopped, "closed": closed}, err
+		}
+		stopped, err := n.stopWithGuard(ctx, p.SessionID, a.Retire, cause, method == nodeproto.StopIfIdle)
 		return map[string]any{"stopped": stopped}, err
 	}
 	if method == "session.restore_model" { // model_restore.go (#2528): closes an idle headless process, sends nothing

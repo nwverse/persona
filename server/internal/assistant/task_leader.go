@@ -719,9 +719,10 @@ func (s *Service) leaderTaskReview(ctx context.Context, machine, session string,
 	return proto.TextResult(res, false)
 }
 
-// leaderReview is the leader agent's task_review on one of its direct workers: accepted closes it, cancelled closes and
-// stops it, rework sends what is missing back to the worker (two rounds, then it goes up), needs_user sends the
-// question to whoever handed the leader its task. No conclusion card, "Please verify" or other card goes to the user,
+// leaderReview is the leader agent's task_review on one of its direct workers: accepted or cancelled closes it and
+// leaves its agent usable until idle after owner inactivity. Rework sends what is missing back to the worker (two
+// rounds, then it goes up); needs_user sends the question to whoever handed the leader its task.
+// No conclusion card, "Please verify" or other card goes to the user,
 // and no other task is reachable: it is the leader's direct worker (its ledger names this leader) or nothing.
 func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.RawMessage) (string, error) {
 	var a struct {
@@ -764,10 +765,20 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 	if t.DoneAt != nil && (a.Verdict == reviewRework || a.Verdict == reviewNeedsUser) {
 		return "", fmt.Errorf("task %s is done already (%s): hand out a new worker for what is left", t.ID, cmp.Or(t.DoneReason, "closed"))
 	}
-	if a.Verdict == reviewAccepted && t.DoneAt == nil {
-		if _, why := s.ownerInstructionBlock(ctx, t); why != "" {
-			return "", errors.New("accepted refused: " + why + ". Send the instruction back with rework, or ask the " +
-				"conversation above to collect the owner's explicit confirmation")
+	if a.Verdict == reviewAccepted {
+		if err := s.todoCloseDeclineError(ctx, t); err != nil {
+			return "", err
+		}
+		if t.DoneAt == nil {
+			if _, why := s.ownerInstructionBlock(ctx, t); why != "" {
+				return "", errors.New("accepted refused: " + why + ". Send the instruction back with rework, or ask the " +
+					"conversation above to collect the owner's explicit confirmation")
+			}
+		}
+	}
+	if a.Verdict == reviewAccepted || a.Verdict == reviewCancelled {
+		if err := s.taskCloseActivityError(ctx, t, time.Now()); err != nil {
+			return "", s.taskCloseToolError(ctx, s.deferTaskReview(ctx, t.ID, err))
 		}
 	}
 	var up string // the conversation a needs_user goes to: whoever handed the leader its task
@@ -787,7 +798,15 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 	verdict, note := a.Verdict, clip(a.Note, 2000)
 	over, overSafetyCap, overCount := false, false, 0
 	var criteriaErr error
-	v, _, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
+	var closing *taskReviewClose
+	if verdict == reviewAccepted || verdict == reviewCancelled {
+		reason := cmp.Or(clip(oneLine(note), 80), "验收通过") // i18n-ignore: done_reason, as a conversation's review writes it
+		if verdict == reviewCancelled {
+			reason = "取消：" + cmp.Or(clip(oneLine(note), 80), "不做了") // i18n-ignore: done_reason, as a conversation's review writes it
+		}
+		closing = &taskReviewClose{reason: reason, accepted: verdict == reviewAccepted}
+	}
+	v, _, err := s.updateSupervisionWithClose(ctx, t.ID, func(v *Supervision) bool {
 		if verdict == reviewAccepted {
 			if criteriaErr = completeReviewCriteriaError(v.DoneWhen, a.Checks); criteriaErr != nil {
 				return false
@@ -809,9 +828,9 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 			v.Reviews = v.Reviews[len(v.Reviews)-20:]
 		}
 		return true
-	})
+	}, closing)
 	if err != nil {
-		return "", err
+		return "", s.taskCloseToolError(ctx, s.deferTaskReview(ctx, t.ID, err))
 	}
 	if criteriaErr != nil {
 		return "", criteriaErr
@@ -838,17 +857,9 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 	b.mu.Unlock()
 	switch verdict {
 	case reviewAccepted, reviewCancelled:
-		reason := cmp.Or(clip(oneLine(note), 80), "验收通过") // i18n-ignore: done_reason, as a conversation's review writes it
-		if verdict == reviewCancelled {
-			reason = "取消：" + cmp.Or(clip(oneLine(note), 80), "不做了") // i18n-ignore: done_reason, as a conversation's review writes it
-		}
 		if t.DoneAt == nil || t.StartError != "" {
 			wasOpen := t.DoneAt == nil
-			closed, err := s.reviewDoneTodo(ctx, t.ID, reason, verdict == reviewAccepted)
-			if err != nil {
-				return "", err
-			}
-			if wasOpen && closed && verdict == reviewAccepted { // a failed start was closed already: no acceptance to count
+			if wasOpen && closing.closed && verdict == reviewAccepted { // a failed start was closed already: no acceptance to count
 				s.leaderTaskReviewed(lead, t.ID, verdict, v)
 			}
 		}
@@ -856,8 +867,8 @@ func (s *Service) leaderReview(ctx context.Context, lead TodoAgent, args json.Ra
 			s.sendsAccepted(ctx, t.ID, time.Now()) // what was sent its agent before is answered: closed already, too (#7539)
 		}
 		if verdict == reviewCancelled {
-			s.stopTaskAgents(ctx, t)
-			return fmt.Sprintf("Worker task %s is cancelled and closed; its agent is being stopped (its terminal stays) and archived.", t.ID), nil
+			return fmt.Sprintf("Worker task %s is cancelled and closed; its conversation stays usable until its Agent is idle "+
+				"and the user has been inactive for 10 minutes, then it is stopped and archived (its terminal stays).", t.ID), nil
 		}
 		return fmt.Sprintf("Worker task %s is accepted and closed; its agent is stopped once it stays still (its terminal stays).", t.ID), nil
 	case reviewNeedsUser:
@@ -937,17 +948,23 @@ func (s *Service) rehomeWorker(ctx context.Context, t Todo) (cur Todo, cancelled
 	}
 	up, _ := s.supervisorAboveTask(ctx, t)
 	if up == "" || s.isLeaderRef(up) {
-		reason := "its task leader is gone, and there is no conversation above it to take it over" // i18n-ignore: done_reason
-		s.logf("task %s: %s; cancelled", t.ID, reason)
-		if _, _, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool { v.State = reviewCancelled; return true }); err != nil {
-			s.logf("task %s: rehome: %v", t.ID, err)
+		if err := s.taskCloseActivityError(ctx, t, time.Now()); err != nil {
+			s.logf("task %s: rehome deferred: %v", t.ID, err)
+			return t, false
 		}
-		if _, err := s.reviewDoneTodo(ctx, t.ID, reason, false); err != nil {
+		reason := "its task leader is gone, and there is no conversation above it to take it over" // i18n-ignore: done_reason
+		closing := &taskReviewClose{reason: reason}
+		if _, _, err := s.updateSupervisionWithClose(ctx, t.ID,
+			func(v *Supervision) bool { v.State = reviewCancelled; return true }, closing); err != nil {
 			s.logf("task %s: rehome: %v", t.ID, err)
+			cur, _ = s.todoNow(t.ID)
+			return cur, false
 		}
 		cur, _ = s.todoNow(t.ID)
-		s.stopTaskAgents(ctx, cur)
-		return cur, true
+		if closing.closed {
+			s.logf("task %s: %s; cancelled", t.ID, reason)
+		}
+		return cur, closing.closed
 	}
 	s.logf("task %s: its task leader is gone; %s takes it over", t.ID, up)
 	if _, err := s.editTodo(ctx, t.ID, db.TodoEdit{Origin: &up}); err != nil {

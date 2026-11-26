@@ -95,7 +95,11 @@ func (s *Service) briefRoutes() {
 		case in.Option != "":
 			result, err = s.chooseOption(r.Context(), r.PathValue("id"), in.AskedAt, in.Option)
 		default:
-			result, err = s.acceptTryFromBrief(r.Context(), r.PathValue("id"), in.AskedAt)
+			result, err = s.acceptTryFromApp(r.Context(), r.PathValue("id"), in.AskedAt)
+		}
+		if errors.Is(err, errCloseNotConfirmed) {
+			writeTypedNothing(w, http.StatusUnprocessableEntity, "todo_close_not_confirmed", err)
+			return
 		}
 		if errors.Is(err, errDecisionOption) {
 			apierr.Write(w, http.StatusBadRequest, err)

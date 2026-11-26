@@ -213,9 +213,14 @@ func (s *Service) agentDecisionSpoke(ctx context.Context, r SessionRef, at time.
 	if id == "" {
 		return
 	}
+	t, ok := s.todoNow(id)
+	state := t.Supervision.state(t)
+	if !ok || t.DoneAt != nil || state != reviewUserCheck && state != reviewNeedsUser {
+		return // input can only answer a round that is already waiting on the owner
+	}
 	s.reviewDismissals.actions.acquire(id)
 	defer s.reviewDismissals.actions.release(id)
-	t, ok := s.todoNow(id)
+	t, ok = s.todoNow(id)
 	if ok && t.Supervision.state(t) == reviewUserCheck {
 		a, err := s.acceptAskLocked(id)
 		if err != nil || a == nil || !at.After(a.AskedAt) || acceptAskStale(a, t) {
