@@ -530,7 +530,7 @@ function KeysDialog({ market, onClose, onChanged }: { market: Market | null; onC
                 <ConfirmButton
                   label={t("admin-pages-extensionmarket.remove_key_label", { key: k.key_id })}
                   confirm={t("admin-pages-extensionmarket.remove")}
-                  onConfirm={() => market && run("remove:" + k.key_id, () => removeMarketKey(market.id, k.key_id))}
+                  onConfirm={() => (market ? run("remove:" + k.key_id, () => removeMarketKey(market.id, k.key_id)) : undefined)}
                 />
               </li>
             ))}
