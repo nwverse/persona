@@ -2195,11 +2195,11 @@ function ClosedHistoryMore({ active, hasMore, loading, error, onLoad }: ClosedHi
         data-testid="todos-closed-history-more"
         disabled={loading}
         onClick={onLoad}
-        className="touch-hit rounded-control px-3 py-1 text-[12px] font-medium text-accent-ink transition-colors hover:bg-hover disabled:text-ink-3"
+        className="touch-hit rounded-control px-3 py-1 text-label font-medium text-accent-ink transition-colors hover:bg-hover disabled:text-ink-3"
       >
         {loading ? t("todos.closed_loading") : error ? t("todos.closed_retry") : t("todos.closed_more")}
       </button>
-      {error && <span className="max-w-full text-center text-[11.5px] text-ink-3">{error}</span>}
+      {error && <span className="max-w-full text-center text-submeta text-ink-3">{error}</span>}
     </div>
   );
 }
@@ -2259,7 +2259,7 @@ const TodoTriageSection = memo(function TodoTriageSection({
       <button type="button" aria-expanded={!folded} onClick={() => {
         if (folded && closedHistory?.hasMore) closedHistory.onLoad();
         toggle();
-      }} className="flex h-8 w-full min-w-0 items-center gap-1.5 rounded-control px-2 text-left text-[12px] hover:bg-hover">
+      }} className="flex h-8 w-full min-w-0 items-center gap-1.5 rounded-control px-2 text-left text-label hover:bg-hover">
         <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 text-ink-3 opacity-60 transition-transform" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
         <span className={cx("shrink-0 truncate font-semibold whitespace-nowrap", !(slim && folded && section === "parked") && "min-w-0 flex-1", SECTION_TONE[section])}>{title}</span>
         {slim && folded && section === "parked" && (
