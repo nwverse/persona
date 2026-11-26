@@ -84,6 +84,14 @@ type Facts struct {
 	Loc *time.Location `json:"-"`
 	// TodosV2 gates experimental New To-dos & Tasks projection rules (#14620); false preserves legacy behavior identically.
 	TodosV2 bool `json:"-"`
+	// PendingReviewSLAHours overrides the default 24h pending_review quiet window under todos_v2=true when > 0 (#16098).
+	// PendingReviewSLADisabled disables pending_review quiet sinking so it surfaces immediately to needs_you.
+	PendingReviewSLAHours    int  `json:"-"`
+	PendingReviewSLADisabled bool `json:"-"`
+	// CanWaitSLAHours overrides the default 48h can_wait auto-escalation window under todos_v2=true when > 0 (#16098).
+	// CanWaitSLADisabled disables automatic aging of can_wait decisions into active needs_you.
+	CanWaitSLAHours    int  `json:"-"`
+	CanWaitSLADisabled bool `json:"-"`
 }
 
 // Agent is one of the to-do's runs (an Agent session) as the list links it (agents[]).
@@ -191,6 +199,7 @@ const (
 	reviewPending   = "pending_review"
 	reviewAccepted  = "accepted"
 	reviewNeedsUser = "needs_user"
+	reviewUserCheck = "user_check"
 	reviewCancelled = "cancelled"
 	reviewParked    = "parked"
 

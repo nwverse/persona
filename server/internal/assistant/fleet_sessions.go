@@ -114,6 +114,7 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 	s.availSweep(machine, list, now) // the waits of conversations no longer listed (availability.go)
 	s.pruneGoneQuiet(machine)        // the verdicts and Stops of task Agents no longer listed (silent_turns.go)
 	s.pruneGoneUpstream(machine, list)
+	s.observeIdleSessions(machine, list, connected)
 	s.fleetKeep(machine, list, connected, unsure)
 	for _, ref := range a2aIdleRefs {
 		s.inOrder(func() { s.a2aRecipientIdle(context.Background(), ref) })
@@ -343,6 +344,7 @@ func (s *Service) publishListAtArchiveMark(machine string, fixed ...uint64) []pr
 	}
 	// Whether told now or the same as told last: when its first Just finished row runs out (republishFinished).
 	s.noteFinishedDue(machine, finishedDue(list, justFinishedFor(s.triageCfg(context.Background()))))
+	s.attachViews(machine, list) // Session.view (fleet_views.go)
 	msg := assistantwire.FleetSessions{MachineID: machine, Sessions: list, Muted: s.mutedSessions(machine, list)}
 	// json.Marshal's bytes, encoded into the one buffer and compared with the list told last by length and SHA-256: a
 	// list that is the same (most of them) is not told again, and none of them is kept (#3197: 3.6 MB at 20 computers
@@ -435,6 +437,7 @@ func (s *Service) tellArchived(machine string, part archivedPart, hide map[[2]st
 		f.archived = map[string]archivedSent{}
 	}
 	f.archived[machine] = sent
+	s.attachArchivedViews(machine, rows) // Session.view on the archived rows too (fleet_views.go)
 	s.hub.Tell(assistantwire.EventFleetArchived, assistantwire.FleetArchived{MachineID: machine, Sessions: rows})
 }
 
@@ -572,7 +575,13 @@ func (s *Service) decorateInventory(machine string, list []proto.Session, comple
 			list[i].Assistant = true
 		}
 		if list[i].Assistant && list[i].Space == "" {
-			list[i].Space = identity.SpaceOf(list[i].Cwd)
+			if list[i].LogicalPlaceholder {
+				if sp, known := s.logicalRowSpace(context.Background(), list[i]); known {
+					list[i].Space = sp
+				}
+			} else {
+				list[i].Space = identity.SpaceOf(list[i].Cwd)
+			}
 		}
 		if t := shown[list[i].SessionID].Title; t != "" && list[i].Assistant {
 			list[i].Title = t // "MMDD | type | topic", the user's own, "Persona" for the main one (titles.go)

@@ -316,7 +316,7 @@ The browser check opens Overview, permission/plan cards, green/orange/AI workflo
   End-to-end check of the user-input rail (#2060, #15336): start an isolated mock hub and Vite against it, then run
   `node web/e2e/user-navigation.mjs <loopback web URL> <artifact directory>` for left-gutter placement, hover and drag
   previews, keyboard access, every input in a 240-turn history, and light/dark captures at 1440 and 390 px. The
-  progressive history runner in [the browser test guide](../../web/e2e/README.md) covers server previews, full-history
+  on-demand history runner in [the browser test guide](../../web/e2e/README.md) covers server previews, full-history
   ordinals and jumping to older messages with two initial bodies.
   End-to-end check that new content shows up in a chat without reloading (#3036: new replies appear in the chat view, after switching terminal ⇄ chat several times, when pushed while on the terminal page, and after the page refetches because the `history` token changed): start the mock hub with `MOCK_TERMINAL_STREAM=1 MOCK_TERMINAL_CONTROL=1 MOCK_TERMINAL_PANES=1` (`GET /mock/say?user=…&text=…[&history=<token>]` adds a reply to every chat a page is subscribed to and can also change `history`), run `python3 scripts/test/web_chat_live_e2e.py <web URL> --hub <mock hub URL> [--shots <dir>]`.
   End-to-end check of the main chat's task dock ("All N" is the same height as the pills with top and bottom edges aligned; the pill row has no scrollbar but still scrolls sideways; Chrome runs with always-visible scrollbars, WebKit optional): start the mock hub with
@@ -869,14 +869,16 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
   - **Avatar** (#433, `lib/persona.ts`, `views/assistant/Persona.tsx`, `docs/apple/persona.md`): the hub's `/personas` avatar packs; which one is chosen is stored in the current browser. It is used for the large icon on the new-chat page, the state-dependent dot left of the chat top-bar title
     (states as in iOS `personaState`; the browser plays the APNG itself, and with reduced motion the first frame is drawn on a canvas), the header of Settings › Assistant, and the "Ask xxx…" placeholder. With the default avatar (or an old hub, or no pack), everything looks as before;
     the avatar's colors do not change the web app's tokens. It is chosen in Settings › Avatar and on the profile page.
-  - **Avatar from an image** (#2404, #15449, `views/assistant/PersonaPicker.tsx`, `views/assistant/LookUpload.tsx`, `views/assistant/LookUploadExtras.tsx`, `lib/look-upload.ts`, `lib/look-upload-states.ts`, `lib/look-colors.ts`, `docs/apple/persona.md` "Uploading an image"): on a hub with the `look_uploads` feature the picker ends with an **Upload** card (none on an older hub).
+  - **Avatar from an image** (#2404, #15449, #15612, `views/assistant/PersonaPicker.tsx`, `views/assistant/LookUpload.tsx`, `views/assistant/LookUploadExtras.tsx`, `views/assistant/lookDrop.ts`, `lib/look-upload.ts`, `lib/look-upload-states.ts`, `lib/look-colors.ts`, `docs/apple/persona.md` "Uploading an image"): on a hub with the `look_uploads` feature the picker ends with an **Upload** card (none on an older hub).
     Its dialog takes a PNG, JPEG, WebP or GIF (picked or dropped), decoded upright (`createImageBitmap` with `imageOrientation: "from-image"`; a GIF's first frame), and a square crop with the avatar's circle over it: drag to move, the slider,
     the wheel (about the pointer) or a pinch to zoom, the arrow keys and + / − from the keyboard; the crop never leaves the image nor gets under 64 px. The crop box draws the crop itself into a canvas at its own resolution, so what it shows is what is sent.
     A name (1–40 characters, counted as the hub counts) and an optional description (up to 80). **Upload** draws the crop at its own size, at most 1024 px, as a PNG (a JPEG on white past 6 MB) and sends it with `choose: true` over XHR so the footer shows the bytes sent,
     then "Making the avatar…" while the hub works; a second click sends nothing, and a refusal is shown as the hub words it. Cancel, or leaving the page under the dialog, stops a request still going out. The answer's look is listed (before the extensions' looks) and chosen at once; the `personas` and `look` pushes that follow change nothing, and a list read that left before the upload or a delete is dropped for a new one.
     The choice in an upload's or a delete's answer is taken only when no other came since the request left (the hub pushes its own `look` before it answers): when another device chose meanwhile, the look on screen stays and a fresh read of `/looks` settles it.
     Uploaded looks (`"uploaded": true`) say the user's description, or "Your image", where others show their colors, and have **Delete** in the card's corner (on hover and keyboard focus, always on touch screens). It asks first, says when the look is the current one that Persona goes back to the default, and takes the hub's `current` from `DELETE /looks/uploads/{id}`.
-    When the hub also lists `look_uploads_states` (#15449), the dialog keeps the default upload path unchanged and adds two collapsed entries below the fields — **Theme color** (Automatic, previewing the dominant swatch extracted from the crop with the shared integer method in `spec/fixtures/look-colors/README.md`, replayed by `lib/look-colors.test.ts`, or a picked color) and **Pictures for each state** (five rows: Idle, Thinking, Working, Needs you, Offline, Automatic by default; each can pick a picture with its own square crop, show a playing preview when animated while respecting `prefers-reduced-motion` with frame 0 only, toggle the status mark for non-Idle own pictures, and return to Automatic). Animated files detected by bytes (multi-frame GIF, PNG with `acTL`, WebP with `ANIM`) send the original file base64 with an integer `crop` (`{x, y, side}`); still pictures export as cropped PNGs (main ≤ 1024 px, states ≤ 512 px). Uploaded cards also gain **Edit** beside Delete (same hover / keyboard focus / touch rules), which opens the same dialog filled from the package (playing dots from the hub, own vs automatic and marks from `manifest.source`, and color), sends only changed fields via `PATCH /looks/uploads/{id}`, updates Match Avatar when chosen, and refreshes the list. Without `look_uploads_states`, the single-image sheet and cards stay unchanged (no color, no state rows, no Edit; Delete keeps its default 28 / 15 `IconButton` size). The picker (`views/assistant/PersonaPicker.tsx`, its `assistant-persona` copy beyond `hub_unsupported` / `load_failed`), `lib/look-upload.ts`, and all new upload/edit code stay lazy off the cold first screen. When an uploaded avatar carries `colors` and is chosen, Settings › Advanced › Appearance offers and applies **Match avatar** as for any other package.
+    When the hub also lists `look_uploads_states` (#15449), the dialog keeps the default upload path unchanged and adds two collapsed entries below the fields — **Theme color** (Automatic, previewing the dominant swatch extracted from the crop with the shared integer method in `spec/fixtures/look-colors/README.md`, replayed by `lib/look-colors.test.ts`, or a picked color) and **Pictures for each state** (five rows: Idle, Thinking, Working, Needs you, Offline, Automatic by default; each can pick a picture with its own square crop, show a playing preview when animated while respecting `prefers-reduced-motion` with frame 0 only, toggle the status mark for non-Idle own pictures, and return to Automatic). Animated files detected by bytes (multi-frame GIF, PNG with `acTL`, WebP with `ANIM`) send the original file base64 with an integer `crop` (`{x, y, side}`); still pictures export as cropped PNGs (main ≤ 1024 px, states ≤ 512 px). Uploaded cards also gain **Edit** beside Delete (same hover / keyboard focus / touch rules), which opens the same dialog filled from the package (playing dots from the hub, own vs automatic and marks from `manifest.source`, and color), sends only changed fields via `PATCH /looks/uploads/{id}`, updates Match Avatar when chosen, and refreshes the list. Without `look_uploads_states`, the single-image sheet and cards stay unchanged (no color, no state rows, no Edit; Delete keeps its default 28 / 15 `IconButton` size).
+    Every picture slot accepts a dropped image as well as a keyboard-reachable file picker button (#15612, `views/assistant/lookDrop.ts`): the main picture (empty drop zone, crop box, edit preview), each of the five state rows (whose Choose / Change button carries a state-specific accessible label), and an open state's crop sub-view (replacing that state's picture). Each targeted slot highlights with the accent dashed border and accent tint (or the crop box's accent ring) with no layout shift, stops propagation so only the innermost slot reacts, and routes dropped files through the same validation and animated-image decoder as chosen files; while the dialog is open a window-level guard (`useWindowFileDropGuard`), and on the picker a guard on the grid, keep a file dropped outside a slot (the dialog's title, footer or backdrop included) from opening in the tab. In the picker, dragging onto the **Upload** card highlights it and opens the upload dialog with that file as the main picture; dragging onto an uploaded card that offers Edit (`look_uploads_states`) highlights it and opens that look's Edit dialog with the file as its new main picture (nothing is saved until Save, and **Keep current** reverts); built-in cards and uploaded cards without Edit ignore drops.
+    The picker (`views/assistant/PersonaPicker.tsx`, its `assistant-persona` copy beyond `hub_unsupported` / `load_failed`), `views/assistant/lookDrop.ts`, `lib/look-upload.ts`, and all new upload/edit code stay lazy off the cold first screen. When an uploaded avatar carries `colors` and is chosen, Settings › Advanced › Appearance offers and applies **Match avatar** as for any other package.
     End-to-end check: `python3 scripts/test/web_avatar_upload_e2e.py <web URL> [--basic <basic web URL>] [--shots <directory>]`.
   - **Profile page** (`/assistant`, `views/assistant/Profile.tsx`, following `AssistantProfileView`): avatar, name, where it runs, online / next item, up next (scheduled tasks), avatar, proactive work / knowing you / runs on, access.
     Entries: **Data** at the top right of the new-chat page, and **Details** in the chat's ⋯ menu (the ⋯ menu also has knowledge base, back to main chat, copy info).
@@ -892,6 +894,7 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
   A failed read says so with **Retry** in place of the list when the page has nothing else to show; when it already lists chats from the sidebar's data it shows one line instead (some chats, such as archived ones, may be missing) with **Retry**, never the error over the list. It reads again on a hello: always after a failed read, otherwise when the hub could not resume (#4954).
 - **Scheduled tasks** (`/routines`, `src/views/assistant/Routines.tsx`, `docs/assistant/assistant.md` "Scheduled tasks"): two sections, scheduled tasks and one-off follow-ups, with a toggle at the row end to enable / disable directly. Under each row are up to three chat entries (the task's own chat first, then ones from run records, excluding the chat the task came from), labeled with the time of the most recent run into it ("Chat n" when the run records lack it); clicking opens that chat. The main chat and chats the user opened do not count (even if the task ran into them before) (in the sidebar they are under **Automatic**, #2824);
   the edit popover changes repeat, prompt and run mode (allow everything confirms first), with save / delete / run now (jumps to that chat) / new chat next time. Right-clicking a row (or the menu key) gives "Run now / Edit / Delete", like the Mac context menu; on the web, delete needs a second click in the menu to confirm (Mac deletes directly), and the note under one-off follow-ups mentions right-click only when there is a mouse (hover) (#2975); **New** can start from a template, and the popover only has "Cancel / Add";
+  **Scenario templates** (`lib/scenario-routines.ts`, `ScenarioTemplateDialog.tsx`, #12554): Daily digest, Inbox triage and PR review & follow-up first ask for a plain-language source, scope and daily / interval cadence, then open this same editor with the generated prompt for review. These drafts start disabled in Plan mode, push only alerts and add no Inbox row; their prompts forbid writes, public comments, merges, outbound messages and destructive actions. Model, effort and other execution overrides stay in **Advanced** where the hub supports them. Connector choices require the needed read-only tools in the cached subscription catalog; unavailable or failed discovery explains the gap and offers the built-in Persona / conversation source instead. Review and Cancel perform no writes, and Add uses the ordinary `POST /assistant/tasks` route. `web/e2e/scenario-templates.mjs` exercises all three flows and the missing-capability fallback with synthetic HTTP / WebSocket responses, including phone / desktop, light / dark and enlarged text.
   the right column has **Up next** and run records grouped by day. The real hub's `PUT /assistant/tasks/{id}` replaces fields wholesale, so even the toggle sends the full task;
   if run history fails to load, including on refresh, show "Couldn't load run history: <reason>" and **Retry** while keeping the task list visible. Retry reloads both tasks and run history; success clears the error and shows the records or the normal empty state (#4494).
   Times of day are written one way on the whole page, 24-hour in every language (`hm` / `clockLabel` in `src/lib/routines.ts`): a daily rule ("Every weekday at 09:00") reads like its next and last run, Up next, the run history and the hub's cron words. The editor's hints for a daily time and a cron expression name the time zone the hub reads them in (`timezone` from `/assistant`, as the list's footer does), and say "your time zone" only when the hub names none. A new task says what is missing (in red, beside Add) only once a field has changed; until then Add is just disabled. Its hints use everyday words (no tool names) and name the permission option as the menu above them does.
@@ -1235,6 +1238,10 @@ use it only on the intranet / VPN, and put an HTTPS reverse proxy in front befor
 - **Machines**: a card per computer, with current CPU / memory / disk values and CPU chart for the last hour (`/api/v1/metrics`, refresh every 10 seconds; gaps mean disconnections). Offline machines can reconnect; clicking the name or Details › opens the machine page.
   Load is load per core everywhere, one decimal (`perCoreText` / `perCoreLabel` in `src/lib/machine-alerts.ts`, #12519): the card's line under CPU ("Load 1.4 per core", the raw value only without a core count), the chip, the alert sheet and the machine page's Load tile (the raw value, the per-core figure under it).
   What load counts is one sentence (`lib-machine-alerts.load_definition`, [machines.md](../server/machines.md) ("What load counts")) under the cards, under the machine page's monitor and in the load alert sheet. The used-memory chip says "Memory used", not the operating system's memory pressure.
+  - **Redeploy in progress** (#15687) uses the existing phase label and disabled busy button on the card and detail page.
+    At narrow widths the controls can wrap below the phase description as a group. An update that starts elsewhere
+    withdraws the open confirmation and shows the current step. The card, detail and alert sheet admit one request per
+    computer until the request and its refresh settle. They check the latest machine state again before posting.
   - **Alerts and what fixes them** (#8037, `src/lib/machine-alerts.ts`, `src/views/machines/MachineAlertSheet.tsx` and its `Alert*.tsx` sections): each card has one chip per alert, worst first (offline with its classified reason, a failed update, memory, disk, CPU, load per core, failing launchers, the version), from the thresholds in [machines.md](../server/machines.md) ("App"), the latest metric sample and `GET /api/v1/launchers/health` (kept current by `launcher_health`, read again every minute). A chip is a `<button>` with icon and words (the icon's color says how bad, red only for critical; its `aria-label` starts with the severity), so the card's own click leaves it alone. Pending and never-connected computers keep their notices and get no chips; an offline card keeps its one red notice and its chip reads "Offline · What to check"; the version and a failed update stay in the deployment strip, which gains **Details**. Cards are ordered as the apps' `MachineConcern`: pending, offline, critical, warning, needs you, version, then the hub's order.
     A chip opens the alert sheet (one `Dialog` for the page, outside every card: a centred card on a desktop, a sheet on a phone), with the computer's alerts as tabs and three parts in a fixed order: what is wrong, why, what you can do. Memory, CPU and load: the numbers, the node's largest process groups (`GET /api/v1/machines/{mid}/diagnosis?sections=processes`, share of memory or of the cores, tagged Agent / engine / Persona / other; read only when the sheet opens, so the cards never shift), the computer's Agents as needs you / working / idle with how long; **Stop idle Agents** (a confirmation lists each one; only idle or finished Agents with nothing running, never working or needs-you ones; one at a time through `POST /sessions/{mid}/{sid}/close`, the conversation stays; then "Stopped N of M" with each failure) and **Hand work to another computer**. Disk: volumes, the largest folders under home (and that the scan was cut short), the rebuildable caches by name with their path (in-use ones disabled, the rest picked); **Clean selected** → a confirmation naming every folder and the total → `POST …/cleanup {ids}` → the bytes the volume really gained (`freed_bytes`) and each item's outcome, then the diagnosis again. Version / failed update: the hub's build (hello `server_version`) and the node's side by side with their build times and how far apart they are, how many Agents are working; **Redeploy** behind a confirmation, then a stepper the pushed `deploy_phase` drives (waiting for idle → transferring → restarting → confirming → done with the node's new build), or the error and **Try again**; the hub's reason when it cannot deploy. Offline: the reason, last seen, a numbered checklist per reason, the raw error under **Details**, **Reconnect** and, for a version reason, Redeploy. Launchers: each failing or blocked one (kind, error line, when checked, failures in a row, a usage limit's reset), the ones that work there, **Test again** (`POST /api/v1/launchers/health/check?machine=&launcher=`, the new record in place); the hub has no per-computer default launcher, so the sheet links to Settings › Models instead of switching it.
     A diagnosis the computer or hub cannot give says why and keeps every other action: 409 `node_outdated` "update Persona on this computer" (with Redeploy when the hub can), a 404 without a code "update the hub", 403 "only a fully trusted device", and Retry for the rest (`src/lib/machine-diagnosis.ts`).
@@ -1443,6 +1450,33 @@ in the list beside three extension nav pages. `node web/e2e/dashboards-watch.mjs
 `MOCK_DASHBOARDS=watch`: the four displays (empty, normal, alert), index rows, footer states, Overview watch cards,
 `zh-Hans` / `ja`, desktop platform context, and pixel-identical sidebar and Overview against `origin/main` in `off` and
 phase-1 (`1`) modes.
+
+### External sources (#15518)
+
+People who follow work in Inbox can connect updates from a chat, repository, mail account or subscription to a
+direction or to-do. On To-dos, **Direction details** opens any current direction, including one with no to-dos.
+The Pinned conversation's sidebar menu reaches the same detail. Directions and both to-do layouts show
+**External sources**. The section lists explicit connections and uses **Repositories and work** for the to-do's
+projected pull requests and issues, so each saved repository link appears once and keeps its work role.
+
+**Connect external source** opens the same editor from work and Inbox. Work preselects its destination. Inbox
+preselects the hub's most specific source on the message's `external_path`. The scope picker offers its parents
+and the same editable fields are available from each entry. A source already in Inbox can be picked by name.
+Expanding **Source details** shows the exact identity when needed. Older or internal Inbox items without a
+canonical path have no direct connect action.
+
+Forwarding is off until the owner opts in. The editor shows the inherited value and its source for each policy
+field when the hub supplies one. Choosing **Inherit** clears the override. The digest interval can be set while
+inheriting the forwarding mode, and choosing custom filters with their three lists empty clears an inherited
+filter. Explicit connections can be edited or disconnected on the destination. Use **Manage links** for saved
+repository links.
+
+Legacy Sources, Channels and Extensions and unified Integrations detail and Data Flow offer **Channel defaults**
+and **Connected work** links. The settings editor writes only the service and account scope, and **Restore defaults**
+followed by Save sends an empty policy. Connected work includes repository projections and opens the matching
+direction or to-do for the same assistant. The browser uses `/todos?direction=<id>` for a direction and can
+carry `manager` on either work link. The capability works in both presentations. The binding editor, channel
+policy panel and HTTP client load on demand. See [External source bindings](../protocol/protocol.md#external-source-bindings).
 
 ### Message sources (#2125)
 
@@ -1737,53 +1771,23 @@ Refetch on page entry, machine online / offline / confirmed, and window return t
 
 Screenshots use an isolated test hub (real readiness for zero computers) plus Playwright API substitutes (offline, not signed in, wrong Key, everything ready, rejected chat open).
 
-### User-input rail (#1739, #2060)
+### User-input rail (#15813)
 
-The chat pane's left gutter offers quick selection of genuine user inputs, including instructions and attachment-only messages.
+The left gutter helps people using Assistant and Agents return to their own questions, instructions and attachments in a long chat.
 
-- **Progressive input index** (#4836): `items?user_inputs=1` returns a lightweight index of genuine own inputs. Navigation
-  initially exposes the latest 50 positions, or all positions in a shorter conversation. Loading older transcript pages or
-  reaching the top of a restored cache extends the range to the earliest input reached. Ordinals count across the entire
-  conversation. Hover uses the metadata, and selecting an unloaded turn requests ordinary contiguous backward pages.
-  Changing conversations or history resets the range. For unsupported or incomplete indexes, the rail uses the newest 50
-  loaded inputs initially and counts those it can navigate. A computer's 404 `not_found` with a `reason` keeps that fallback.
-  A 404 with only `detail` may recover when the runtime reconnects and retries through the session's read gate
-  (3 seconds doubling to 5 minutes, one read at a time, #11450, #11470, #13677).
-- **Left gutter** (#15336): `src/views/chat/NavRail.tsx` measures the margin beside the centered transcript inside the chat pane. The rail sits 16 px from the pane edge, after the app sidebar, and stays visible at rest while its 44 px hit strip and 12 px gap fit. If the pane narrows or a panel takes up the gutter, the rail and its Tab stop disappear. The centered column keeps its regular symmetric padding, and the scrollbar keeps its own hit area on the right.
-  The rail loads its tick and preview projection with its own chunk (#15410). The transcript can show messages before
-  the rail builds previews from loaded items or the hub's input index.
-- **Bell-shaped marks** (#2168, #4792): at rest, the current tick is stronger and longer than the short, muted ticks around it. While previewing, every tick's width follows the same bell, growing to the right from a fixed left edge. Current-position color and thickness remain visible even when its width follows the bell's tail.
-- **Viewport ownership**: the last genuine input whose anchor starts above the scroller's top plus the shared active offset owns the high-contrast mark (`aria-current`). Hover/keyboard previews are separate from viewport ownership and never independently lengthen its mark. Missing anchors are unknown, not treated as already read.
-- **Preview and selection**: the right-opening card aligns with its mark and stays within the chat pane's height. Its bold query fits on one line, with question state beside it when available. The muted reply takes up to three lines. The query and reply each prefer the parsed local exchange, then the optional `preview` and `answer` from the Hub index (#15335). `attachments` supplies the label for an attachment-only indexed input. A bare position from an older Hub uses its localized ordinal. The card's hover area extends to the tick strip, so moving into the card keeps it open and selecting its text leaves the chat in place. Click, drag and release, or Enter/Space lands on the actual input through `ChatView.railJump` and pauses tail following. A drag keeps its targets by identity across prepends, and cancellation or Escape leaves the transcript in place.
-- **Bounded window**: the rail renders up to 28 marks at a 15 px pitch, compressing to a minimum 12 px pitch in a short pane. Arrow keys and Home/End reach earlier or later positions. The wheel moves the window in overlapping steps. The focusable landmark keeps its localized label, key instructions, preview description and keyboard-only announcements.
-- **Question states** (#13021): Persona chats derive question state from loaded exchanges, the exchange at work and the
-  Hub's read marks (`src/lib/question-states.ts`, `src/lib/question-reads.ts`). **Not started** is fainter.
-  **In progress** uses the busy animation, which slows under Reduced Motion. **Unread** adds a red dot to the left of
-  the tick. **Read** uses the plain tick. Jumping to a tick or seeing half of its exchange (or half the view for a taller
-  exchange) in the foreground marks the answer read locally and syncs to the Hub. A **follow-up** draws a shorter tick
-  when it quotes at least eight characters of an earlier answer or was sent before the previous answer arrived.
-  The state appears in the preview title row, accessible label and keyboard announcement. On a touch-only screen,
-  Persona chats with a wide enough gutter support tapping or dragging on the marked rail. `useQuestionSummary`
-  counts in-progress and unread turns from the same marks while the chat is open.
-- **Scroll cost**: observers refresh cached anchor offsets when tracked rows or layout change. They read the line wrappers
-  from the direct children of `[data-chat-content]` (#2914). Preview-only updates reuse those offsets, as do passive
-  scroll frames, which binary-search the cache. Hidden rails skip row geometry. Shared geometry lives in
-  `src/ui/nav-rail-metrics.ts`, and labels use the existing English, Simplified Chinese and Japanese catalogs.
+- **Independent index.** The rail requests `items?user_inputs=1&meta_only=1` and uses its full count and sorted positions, including those outside the transcript window. Ordinals run from the start. In a conversation that returned to an earlier engine session, the engine stretches keep their existing scope and the rail follows the live stretch. A complete older index with excerpts works as-is. An incomplete or unavailable index leaves the loaded questions navigable and retries through the session's read gate. A computer's 404 `not_found` with a `reason` keeps that fallback, while a detail-only 404 can recover after reconnecting (#11450, #11470, #13677).
+- **Left gutter.** The rail uses the measured natural margin beside the centered transcript, 16 px from the pane edge when its 44 px strip and clearance fit. A phone-width pane from 320 to 480 px reserves a compact left margin once the rail has 16 positions. The transcript and its right scrollbar keep distinct hit areas. Other constrained panes and short narrow chats omit the rail and its Tab stop.
+- **Scrolling and focus.** Fine marks sit 8 px apart, tightening to 7 px in a shorter pane. The track scrolls independently and mounts only its viewport plus overscan. Chat scrolling keeps the reading position's mark in view while the track is idle. Hover and scrubbing hold their own position. The mark of the last loaded input at or above the active offset has stronger color and thickness. Hover and keyboard preview use the existing right-expanding bell, independent of the current-position state.
+- **Previews.** The right-opening card aligns with the selected mark and stays within the pane. It uses a single-line question, up to three lines of reply and any question state. Loaded text or legacy excerpts appear immediately. Otherwise hover or keyboard focus shows a short loading label and asks for up to nine neighboring excerpts. The cache deduplicates overlapping requests for the same history; missing and unsupported excerpts leave an ordinal and a selectable mark. The preview hit area reaches the rail, so selecting its text leaves the conversation in place.
+- **Jump and return.** Click, captured drag and release, or Enter and Space select a question. Arrow keys and Home or End preview across the whole track. Escape dismisses a preview or cancels a scrub. A loaded question lands and highlights in place. An unloaded question opens a context window with 40 source lines on either side. Load earlier messages and Load later messages follow that window's cursors. Jump to bottom returns to the live view, which keeps receiving updates while the earlier window is open. The existing backward paging path handles older hubs and nodes without window support. A changed history generation refreshes the position list and transcript together. The wire details are in [Chat navigation reads](../protocol/protocol.md#chat-navigation-reads).
+- **Question states.** Persona chats use question state from loaded exchanges, the working turn and the Hub's read marks. Not started is fainter, In progress uses the busy animation, Answer not read yet adds a dot, and Read keeps the plain mark. Follow-ups have a shorter mark. Opening an answer or seeing enough of its exchange marks it read. State words are available in the preview, spoken labels and keyboard announcement. Touch-only Persona chats can tap or scrub on the active strip.
+- **Scroll cost.** The rail, index and preview cache load together off the first screen. The track caches measured transcript anchors and binary-searches them during chat scrolls. Rail scrolls update only the mounted marks and reuse the cached anchors. Geometry lives in `src/ui/nav-rail-metrics.ts`.
 
-Mock-only browser acceptance is `web/e2e/user-navigation.mjs`. It covers the resting and hovered rail at 1440 px, the
-hidden rail at 390 px, and wheel, keyboard and drag navigation in light and dark. Runtime artifacts stay outside Git.
-The historical hover fixtures for #4792 are `docs/web/screenshots/user-nav-hover/light.png` and
-`docs/web/screenshots/user-nav-hover/dark.png`.
-
-`web/e2e/user-history-navigation.mjs <loopback origin> <artifact directory> [input-count] [main|session]` covers
-progressive loading against the production build. The default 678-input fixture verifies the 28-tick render cap,
-local and indexed previews, full-history ordinals and unloaded-target landing in wide light and dark. Its raw
-runtime artifacts stay outside Git. The historical #4836
-main-conversation pair is `docs/web/screenshots/user-input-pages/light.png` and
-`docs/web/screenshots/user-input-pages/dark.png`; the same 50-mark range's first input is still globally numbered 629
-in `docs/web/screenshots/user-input-pages/hover-light.png` and `docs/web/screenshots/user-input-pages/hover-dark.png`.
-Largest-text counterparts are `docs/web/screenshots/user-input-pages/large-light.png` and
-`docs/web/screenshots/user-input-pages/large-dark.png`.
+Mock-only browser acceptance is `web/e2e/user-navigation.mjs` for legacy loaded questions, hover, drag, keyboard and the
+usual left and right gutters. The [browser test guide](../../web/e2e/README.md#on-demand-user-input-history-15813)
+covers the 120-turn Phase 2 fixture, 1440 px and 390 px light and dark, with screenshots of the dense rail, a fetched
+preview, and a landed context window. The older `docs/web/screenshots/user-input-pages/light.png` and
+`docs/web/screenshots/user-input-pages/dark.png` preserve the earlier design's historical evidence.
 
 ### Terminal ⇄ chat (#2419)
 
@@ -2341,6 +2345,12 @@ Settings › Labs (#9877, #14468, `web/src/views/settings/Labs.tsx`) holds tempo
 sidebar group after the hub's. The page explains Labs and renders each experiment's injected configuration source,
 which explains where the choice applies and when it takes effect.
 
+An available experiment is new until it is enabled or seen (#15802). Settings and the Labs category show a dot while any
+experiment is new. Opening Settings › Labs records the available experiments as seen and preserves the new card labels
+for that visit. The selected assistant's `labs_seen` receipts sync over the hub. Web uses browser storage when the
+assistant's settings omit the field. The renderer choice itself is still per browser. The sidebar reads the lightweight
+`web/src/lib/labs-catalog.ts` and assistant state. The configuration forms load only when needed.
+
 Each entry must meet all three admission criteria.
 
 1. It trials a real feature to validate stability or usability, or lets the user try a new implementation of the same
@@ -2428,12 +2438,13 @@ leaves the page.
 
 ### Adding, graduating and removing an entry
 
-1. **Add** an entry that meets the admission criteria and link its tracking issue. Register a source in `Labs.tsx`
-   with scope, activation and rollback in `en`, `zh-Hans` and `ja`. Add a search entry and test both paths and the
+1. **Add** an entry that meets the admission criteria and link its tracking issue. Register its ID and enabled check in
+   `labs-catalog.ts` and its source in `Labs.tsx` with scope, activation and rollback in `en`, `zh-Hans` and `ja`.
+   Add a search entry and test both paths and the
    fallback. Preserve security fixes and keep the stable path available throughout the trial.
 2. **Graduate** when the new path is ready for everyone: make it the default in a PR linked to the entry's issue, say so
    in the release notes, and keep the entry for at least one release so people can still go back.
-3. **Remove** after that release: delete the module's source, its words and the old path. Stop reading its key; leave
+3. **Remove** after that release: delete the catalog entry, the module's source, its words and the old path. Stop reading its key; leave
    stored values alone (they are ignored). An entry whose new path is abandoned is removed the same way with the old path kept.
 
 ## Modules
@@ -2487,12 +2498,19 @@ change, removed when a hello lacks `modules` or on sign-out, #14431): on a reloa
 uses that remembered answer, so a module the hub switched off is never drawn and its chunk is never fetched while
 waiting for the hello. A hub never seen before, and an older hub whose hello has no `modules`, keep every module on so
 defaults never change and nothing waits on the hello to draw; a later hello that adds or drops a flag turns it on or off
-at once. Otherwise it is *off*, and an off module is absent:
+at once. Otherwise it is *off*. Most off modules are absent:
 
 - no sidebar entry, and no switch it could have left behind (the start page falls back as for a removed page);
-- its addresses route as unknown ones (`not-found`), aliases included;
-- neither its code chunk nor its catalog is requested. `loadModule` refuses an off module, and its page is a
+- their addresses route as unknown ones (`not-found`), aliases included;
+- neither their code chunk nor their catalog is requested. `loadModule` refuses an off module, and its page is a
   `lazyPage(…, { listed: false })`, which `loadPages` never preloads.
+
+The built-in Health space is the default-panel exception required by #13430: with its module off, and in a core-only
+build, `/health…` and `/tracks/health…` route to a read-only Health archive (`lib/health-archive.ts`,
+`views/spaces/HealthReadOnlyData.tsx`). Existing conversations keep transcript reads and in-chat search; reports and
+memory can be opened; no composer, new-chat, upload, edit, approval, archive or delete control is offered, and the
+Health module chunk and catalog are still not requested. The enabled module keeps the full Health home and write
+flows unchanged.
 
 An on module's page is warmed as the built-in pages are (`core/ModulePage.tsx`, `lib/lazy-page.ts` `preloadOnIntent`):
 when the pointer, the focus or a finger reaches a link to it (its sidebar entry); not with Data Saver on, and never for
@@ -2568,10 +2586,12 @@ one are also listed in `web/src/modules/standalone.ts`, the part of the module l
 the module's strings, then its code, and returns what `ModuleCode.Standalone(address)` draws, which `main.tsx` renders
 as the whole page; that function takes from the address what must not stay there (the app's token in the fragment)
 before App could read it, and returns null for an address that is not its page after all, which then opens the app.
-Before it loads anything of the module it reads one hello on a socket of its own (`hubServesHere`, at most 2.5 s; none
-in time is "no hello yet", so on). While the module is off (this browser's switch, or a hello with the `modules`
-marker and without its flag) the address is absent: its fragment is dropped, so a token meant for the page is never
-taken for a sign-in, the app routes it as an unknown address, and the module's chunk and strings are never requested. That file reaches the descriptors, the switch and the strings loader, never the host or the whole
+Before it loads anything of the module it reads one hello on a socket of its own (`hubServesHere`, at most 2.5 s).
+The hub's remembered per-origin/subpath flags apply while it waits and when none arrives in time; only a first-seen hub,
+or an older one without the `modules` marker, defaults to on. While the module is off (this browser's switch, remembered
+hub flags, or a hello with the `modules` marker and without its flag) the address is absent: its fragment is dropped, so
+a token meant for the page is never taken for a sign-in, the app routes it as an unknown address, and the module's chunk
+and strings are never requested. That file reaches the descriptors, the switch and the strings loader, never the host or the whole
 list: what `main.tsx` reaches is split out of App's chunks, and the whole list made the first screen about 30 KB
 heavier (so `moduleFeature` and `MODULES_FEATURE` live in `web/src/core/module-flags.ts`, which the host re-exports).
 Inside the app the host serves the field like the others: `registerModule` refuses a segment that is a core address,
@@ -2580,7 +2600,7 @@ another module's page of its own, or a route of any module; `loadModule` refuses
 `standaloneOn(base)`, which follows the hub flag like any module entry (the machine page's **View screen**). The code is
 the module's `standalone.tsx`: the build (`vite.config.ts`, `src/startup-preload.ts` `standalonePages`) reads
 `standalonePages` from each `module.ts`, preloads that file's chunks on its addresses (not while this browser switched
-the module off), and lets its import run without waiting for the rest of the catalog, as `main.tsx`'s own imports do;
+the module off or its remembered per-hub flags say it is off), and lets its import run without waiting for the rest of the catalog, as `main.tsx`'s own imports do;
 so that file and what it imports statically may read only the first screen's core strings and the module's own (the
 build checks it).
 
@@ -2617,13 +2637,33 @@ unavailable (including a 404 from a hub before the list read moved into Core) hi
 flag is `module.recording`: off on a hub that publishes module flags without it, or where a browser switches it off.
 The recording settings (how long recordings and minutes are kept, Settings › Persona) stay in core for now.
 
+**Mail with the hub's mail module off** (#15995; mail has no web module of its own, the Inbox reads the hub flag
+`module.mail`). `lib/mail.ts` decides it once (`mailReading`: `full`, or `stored` when the hello names modules and
+leaves mail out) and everything else is handed that: Settings and compose already hide (`loadMailAccounts` asks
+nothing), and an opened mail item is `views/inbox/StoredMailBody.tsx` instead of the live reader. It asks no
+`/api/v1/mail/…` route, which the hub no longer has; it reads the item's own page (`GET /api/v1/inbox/{id}`, Core)
+and shows the mail's words out of the stored `context` (`lib/mail-stored.ts` takes off the heading and header lines
+the hub wrote for the model; at most 3,000 characters of the newest mail, or the list's preview), who it is from and
+when, and after the text one line: mail is off on the hub machine, so the full message and its attachments can't be
+loaded. The line ends by what the hub says about the stored text (`mail_body_truncated` on the item's page, read once
+as the closed `StoredMailClipping` by `storedMailClipping` in `lib/mail.ts`): `clipped`, the text is cut short;
+`whole`, nothing more; `unknown` (a hub from before it sent the flag, an item stored before the hub recorded it, a
+mail whose text it never read, or the list's copy when the page cannot be read), a long message may be cut short. A translation is shown only when the item
+lists one the hub kept (`POST /api/v1/translate/mail` answers from it without the mail server); a failure there is
+silent. Left out, because each needs the mail module: Reply and Reply all, marking the mail read, attachments and the
+HTML view, and sending a reply from the Inbox (AI draft reply, Send on a draft or a reply suggestion:
+`views/inbox/item-write-gate.ts`, beside Lark's gate; a draft already written stays readable). Hand to AI (without
+the line about `mail_read`), Done, mute, folders, rules and to-dos are the Inbox's and stay. With the module on, or a
+hub that names no modules, the reader and its requests are as before.
+
 **The pilot: health.** The Health page (`web/src/modules/health/`, docs/assistant/health.md) is the first module. Its
 route (`/health`, `/health/new`, `/health/<id>`, and `/tracks/health…`), its water and protein pages (the reserved
 extension-page id `-health-intake`, which routes as unknown while the module is off), its sidebar entry (right after Inbox, pink with
 Colored icons) and its `health` namespace come from its descriptor instead of the `Route` union, `App.tsx` and
 `SidebarParts.tsx`. Its flag is `module.health`: every hub before #13844 publishes no module flags and keeps it on, as
-the page always was, and a browser can still switch it off. Core code that needs one of its addresses writes the path (`/health/<id>`), which routes as
-unknown while the module is off.
+the page always was, and a browser can still switch it off. Core code that needs one of its addresses writes the path (`/health/<id>`).
+With the module off, that path does not become a dead link: the default-panel Health archive below reopens the stored data
+read-only, including in a core-only build.
 
 ### Adding a module
 
@@ -3628,6 +3668,7 @@ Compared item by item with iOS as the reference and Android for comparison. #297
 | Connector items (GitHub, Telegram, Messages, extensions): source filter, chat page, reply or "Open in X", hand to AI | Yes | #1324, #2990 | GitHub timelines and Telegram bubbles are read-only plus reply; images in chats open in the image viewer (#2990); reactions, forwarding, and downloading attachments are not done |
 | Mute this repository / chat / sender, a "Muted" list and unmute | Yes | #2968 | The App uses long press on a row; the web uses right click on a row, or the mute button next to the item page title (for touch); "Muted" is in the list's ⋯ menu, as a dialog |
 | Rule for this repository / chat / sender (tier and AI twin), a "Rules" list with edit and remove | Yes | #2140 | The App's entries sit after the mute options: long press on a row (iOS, Android), right click (Mac), the item page's ⋯ (iOS); "Rules" is in the list's ⋯ menu (Mac: the toolbar and the Inbox menu). The App lists the default manager's rules only |
+| Connect an Inbox source to a direction or to-do | Web first | #15518 | Inbox and work details share the same editor. Legacy and unified Settings show channel defaults and read-only links to work. |
 
 ### Machines and settings
 
@@ -3663,6 +3704,7 @@ Compared item by item with iOS as the reference and Android for comparison. #297
 | Lark anti-recall and edit history (Message display) | Yes | #2900 | The toggles are shared with the Lark gateway web page for the current account; encrypted old versions only show the public display (iOS can show the body after unlocking) |
 | Connectors: Lark bot (status, credentials, pairing, what it can do) | Yes | #1325 | Settings › Connectors, opens as a dialog; copying the pairing code uses the clipboard (falls back to execCommand over http) |
 | hub version and updates (check, update, update now, auto-update, history, Docker commands) | Yes | #1325, #2897, #15240 | Settings › hub shows second-level local times and a stage and step pipeline during updates. The hub notice row below the filter bar in the Agents sidebar is chosen by `hubNotice` in `lib/hub-update.ts`. The hub hosts the web app itself, so the app and hub version compatibility notices are inapplicable here. |
+| Whole-install Recovery overview, offline bundle inspection, temporary-database verification | Web first | #12553 | Settings › Hub › Recovery, separate from update program backups and Machines. Full-credential, audited reads only; no create, restore, download, key export, or service-starting drill. Missing tools, Compose, unsafe inventory, changed bundles, and unavailable restore history stay explicitly unsupported or unverified. See [server.md](../server/server.md) "Settings → Hub → Recovery" |
 | Assistant Skills | Yes | #1325 | Settings › Assistant, read-only (same as iOS) |
 | Connectors: GitHub (sign-in source, device code sign-in, permissions, Inbox options) | Yes | #1324 | |
 | Connectors: Telegram, connectors provided by extensions (toggle, step-by-step sign-in, into knowledge base / into Inbox, sign out, delete) | Yes | #1324, #1425 | Brand, footer, and "Reply in X" are looked up by connector id in a table in `lib/connectors.ts`; extension connectors not in the table use a generic icon and generic copy (with their own name); WeChat's brand image is not decided yet, so it uses the generic icon for now |
