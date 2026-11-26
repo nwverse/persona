@@ -1005,6 +1005,7 @@ func larkLiteralConstants(cmd string, gates []proto.CommandGate) map[string]stri
 	syntax.Walk(tree, func(node syntax.Node) bool {
 		switch n := node.(type) {
 		case *syntax.Assign:
+			opaque = opaque || n.Index != nil // a[expr]=v evaluates expr as arithmetic
 			if n.Name != nil {
 				assigned[n.Name.Value]++
 				// IFS changes how every unquoted constant splits, PATH and the like what runs.
@@ -1015,6 +1016,9 @@ func larkLiteralConstants(cmd string, gates []proto.CommandGate) map[string]stri
 				assigned[n.Name.Value] += 2 // a loop variable is never a constant
 			}
 		case *syntax.ParamExp:
+			if n.Index != nil || n.Slice != nil {
+				opaque = true // a subscript or offset is arithmetic
+			}
 			if n.Param != nil {
 				if n.Exp != nil || n.Excl || n.Names != 0 {
 					assigned[n.Param.Value] += 2 // ${NAME:=x}, ${!NAME}: assigns or reads indirectly
@@ -1022,18 +1026,13 @@ func larkLiteralConstants(cmd string, gates []proto.CommandGate) map[string]stri
 				used[n.Param.Value] = append(used[n.Param.Value], n.Pos())
 			}
 		case *syntax.ArithmCmd, *syntax.ArithmExp:
-			// Arithmetic can assign (`$((N=1))`, `((N++))`): no name in it is a constant.
-			syntax.Walk(n, func(inner syntax.Node) bool {
-				switch w := inner.(type) {
-				case *syntax.Lit:
-					assigned[w.Value] += 2
-				case *syntax.ParamExp:
-					if w.Param != nil {
-						assigned[w.Param.Value] += 2
-					}
-				}
-				return true
-			})
+			// Arithmetic can assign (`$((N=1))`), also through a variable whose value is an expression.
+			opaque = true
+		case *syntax.BinaryTest:
+			switch n.Op {
+			case syntax.TsEql, syntax.TsNeq, syntax.TsLeq, syntax.TsGeq, syntax.TsLss, syntax.TsGtr:
+				opaque = true // [[ a -eq b ]] evaluates both sides as arithmetic
+			}
 		case *syntax.FuncDecl, *syntax.DeclClause, *syntax.LetClause, *syntax.CoprocClause:
 			opaque = true
 		case *syntax.Redirect:
@@ -1051,6 +1050,13 @@ func larkLiteralConstants(cmd string, gates []proto.CommandGate) map[string]stri
 			name, dynamic := executionWord(n.Args[0])
 			if dynamic || gateOf(gates, name) < 0 && !isLarkCLI(name) && !larkConstantSafeCommands[name] {
 				opaque = true
+			}
+			if name == "test" || name == "[" {
+				// zsh evaluates the operands of a numeric comparison as arithmetic.
+				opaque = opaque || slices.ContainsFunc(n.Args[1:], func(w *syntax.Word) bool {
+					s, _ := executionWord(w)
+					return slices.Contains([]string{"-eq", "-ne", "-lt", "-le", "-gt", "-ge"}, s)
+				})
 			}
 		}
 		return true

@@ -55,6 +55,13 @@ func TestRouteVariableConstantOverTheCommand(t *testing.T) {
 		{"repeat", `F=conversations; repeat 1 F=links; cd /tmp && ex GET "/$F/open"`, ""},
 		{"zstyle -s", `F=conversations; zstyle :x y links; zstyle -s :x y F; cd /tmp && ex GET "/$F/open"`, ""},
 		{"set -A", `cd /tmp && F=x; set -A F links; for i in 1; do ex GET "/$F/open"; done`, ""},
+		// Arithmetic can assign wherever it is evaluated.
+		{"[[ -eq ]]", `F=7; [[ F=5 -eq 5 ]]; for i in 1; do ex GET "/conversations/$F/messages"; done`, ""},
+		{"test -eq", `F=7; [ 5 -eq F=5 ]; for i in 1; do ex GET "/conversations/$F/messages"; done`, ""},
+		{"subscript", `F=7; echo ${a[F=5]}; for i in 1; do ex GET "/conversations/$F/messages"; done`, ""},
+		{"offset", `F=7; : ${PATH:F=0}; for i in 1; do ex GET "/conversations/$F/messages"; done`, ""},
+		{"array assignment", `F=7; a[F=5]=x; for i in 1; do ex GET "/conversations/$F/messages"; done`, ""},
+		{"arithmetic elsewhere", `F=7; i=0; for x in $(seq 1 2); do i=$((i+1)); ex GET "/conversations/$F/messages"; done`, ""},
 		{"IFS", `IFS=z; F=userz-o; for i in 1; do ex GET "/conversations/$F/messages"; done`, ""},
 		{"{name}> redirect", `cd /tmp && F=x; exec {F}>/dev/null; for i in 1; do ex GET "/$F/open"; done`, ""},
 		// cd counts as always succeeding only into an absolute directory anyone may enter.
