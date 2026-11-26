@@ -9103,6 +9103,18 @@
     {
       "name": "fold_interrupt_agent",
       "value": "中断"
+    },
+    {
+      "name": "knowledge_minutes_checking",
+      "value": "録音全体を確認しています…"
+    },
+    {
+      "name": "knowledge_minutes_checking_progress",
+      "value": "録音全体を確認しています（{done}/{total}分）…"
+    },
+    {
+      "name": "knowledge_minutes_writing",
+      "value": "議事録を作成中…"
     }
   ]
 }

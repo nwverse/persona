@@ -9099,6 +9099,18 @@
     {
       "name": "fold_interrupt_agent",
       "value": "Interrupt"
+    },
+    {
+      "name": "knowledge_minutes_checking",
+      "value": "Checking the whole recording…"
+    },
+    {
+      "name": "knowledge_minutes_checking_progress",
+      "value": "Checking the whole recording ({done} of {total} min)…"
+    },
+    {
+      "name": "knowledge_minutes_writing",
+      "value": "Writing the minutes…"
     }
   ]
 }

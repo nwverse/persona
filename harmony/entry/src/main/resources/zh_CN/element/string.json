@@ -9103,6 +9103,18 @@
     {
       "name": "fold_interrupt_agent",
       "value": "中断"
+    },
+    {
+      "name": "knowledge_minutes_checking",
+      "value": "正在复核整场录音…"
+    },
+    {
+      "name": "knowledge_minutes_checking_progress",
+      "value": "正在复核整场录音（{done}/{total} 分钟）…"
+    },
+    {
+      "name": "knowledge_minutes_writing",
+      "value": "正在整理纪要…"
     }
   ]
 }
