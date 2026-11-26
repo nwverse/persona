@@ -494,7 +494,11 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 		_ = ext.Run(ctx) // after ctx: stops the extensions' programs (they are the manager's children)
 	}()
 	var developmentDone chan *managerupdate.DevelopmentImage
-	if o.ID != "assistant" {
+	if o.ID != assistantwire.AssistantID || o.Deploy == DeployService {
+		updateDir := home
+		if o.ID == assistantwire.AssistantID {
+			updateDir = managerconf.DefaultDir(home)
+		}
 		developmentDone = make(chan *managerupdate.DevelopmentImage, 1)
 		go func() {
 			var image *managerupdate.DevelopmentImage
@@ -503,7 +507,7 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 				if err := managerupdate.MarkReady(home, build); err != nil {
 					logf("manager update readiness: %v", err)
 				}
-				image = followDevelopment(ctx, home, build, devs, func(ctx context.Context) (bool, string) {
+				image = followDevelopment(ctx, updateDir, o.HostDataDir, build, devs, func(ctx context.Context) (bool, string) {
 					return managerIdle(ctx, bh, svc, ext)
 				}, logf)
 				if image != nil {

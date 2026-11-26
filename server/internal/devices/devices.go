@@ -327,6 +327,9 @@ func (d *Devices) Configure(cfg devicewire.Config) {
 		if first { // after a start from the own list: what its connections could not do without the hub
 			d.afterOwnList(ctx)
 		}
+		if cfg.AutoUpdateNodes && (!old.AutoUpdateNodes || old.HubVersion != cfg.HubVersion) {
+			go d.updateNodes(ctx)
+		}
 	}
 	d.fleetRegroup()
 	// Where the hub is, what it is called, whether the computer waits to be confirmed: Persona Link shows them.

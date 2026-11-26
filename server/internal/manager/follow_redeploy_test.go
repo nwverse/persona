@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,8 +14,77 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistant"
+	"github.com/nwverse/persona/server/internal/hubedge"
 	"github.com/nwverse/persona/server/internal/update"
 )
+
+func TestCoLocatedManagerFollowsOnlyConfirmedHubExecutable(t *testing.T) {
+	home, err := os.MkdirTemp("", "pmgr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(home) })
+	control := filepath.Join(home, "run", "hub-edge.sock")
+	for _, dir := range []string{"run", "bin", "update"} {
+		if err := os.Mkdir(filepath.Join(home, dir), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	listener, err := net.Listen("unix", control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	var active atomic.Int64
+	active.Store(1)
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			var msg hubedge.Msg
+			if json.NewDecoder(conn).Decode(&msg) == nil {
+				b := active.Load()
+				_ = json.NewEncoder(conn).Encode(hubedge.Msg{T: hubedge.MsgStatus, Version: fmt.Sprint("v", b), Build: b})
+			}
+			_ = conn.Close()
+		}
+	}()
+	path := filepath.Join(home, "bin", "persona-manager")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nprintf 'v1\\nchannel release, build 1\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	temp := filepath.Join(t.TempDir(), "manager")
+	if err := os.WriteFile(temp, []byte("#!/bin/sh\nprintf 'v2\\nchannel release, build 2\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := update.InstallPrepared(path, temp); err != nil {
+		t.Fatal(err)
+	}
+	watch := &binaryWatch{hostDataDir: home, path: path, seen: before, out: &syncBuffer{}}
+	if watch.prepareExitForNew(t.Context()) {
+		t.Fatal("manager followed a replacement while the old Hub still serves")
+	}
+	active.Store(2)
+	pending := update.PendingPath(filepath.Join(home, "update"))
+	if err := update.Save(pending, update.Pending{ToBuild: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if watch.prepareExitForNew(t.Context()) {
+		t.Fatal("manager followed the Hub before self-update confirmation")
+	}
+	if err := os.Remove(pending); err != nil {
+		t.Fatal(err)
+	}
+	if !watch.prepareExitForNew(t.Context()) {
+		t.Fatal("manager refused to follow the confirmed replacement")
+	}
+}
 
 func TestShouldWatchBinary(t *testing.T) {
 	cases := []struct {
@@ -425,9 +495,17 @@ func TestManagerRunRestartLoopGuard(t *testing.T) {
 }
 
 // Unsupervised runs (manual CLI, tests, development worker) do not watch or exit when the binary is replaced.
-func TestManagerRunUnsupervisedIgnoresBinaryReplacement(t *testing.T) {
+func TestManagerRunUnsupervisedReexecsWhenIdle(t *testing.T) {
 	dir, _, write := boundBinaryEnv(t)
 	release := make(chan struct{})
+	old := restart
+	t.Cleanup(func() { restart = old })
+	var reexecs atomic.Int64
+	restart = func([]string) error {
+		reexecs.Add(1)
+		close(release)
+		return nil
+	}
 	out, runs, err := runBoundInTest(
 		t, dir,
 		map[string]string{}, // PERSONA_ASSISTANT_DEPLOY unset
@@ -435,11 +513,10 @@ func TestManagerRunUnsupervisedIgnoresBinaryReplacement(t *testing.T) {
 		nil,
 		func(int) {
 			write(goodBinary+"# v2\n", 0o755)
-			time.AfterFunc(40*time.Millisecond, func() { close(release) })
 		},
 		release,
 	)
-	if err != nil || runs != 1 || strings.Contains(out, "replaced") || strings.Contains(out, "exiting gracefully") {
+	if err != nil || reexecs.Load() != 1 || !strings.Contains(out, "replaced") {
 		t.Fatalf("err=%v runs=%d\n%s", err, runs, out)
 	}
 }

@@ -12,6 +12,60 @@ import (
 	"github.com/nwverse/persona/server/internal/update"
 )
 
+func TestPublishedPackagesArePinnedToServingHubBuild(t *testing.T) {
+	h := newTestHub(t)
+	h.bus.idents = &memIdents{}
+	token, err := h.createBusToken(t.Context(), "remote", "Remote manager")
+	if err != nil {
+		t.Fatal(err)
+	}
+	version, number, commit := "v2", int64(202611270123), strings.Repeat("a", 40)
+	h.build = update.Build{Version: version, Number: number, Commit: commit, Channel: update.Release}
+	h.version = version
+	target := devicewire.PublishedBuild(commit, version, number)
+	dir, staged := t.TempDir(), t.TempDir()
+	t.Setenv("PERSONA_NODE_BINARIES", dir)
+	for _, name := range []string{"personad-linux-amd64", "persona-manager-linux-amd64", "persona-node-linux-amd64"} {
+		if err := os.WriteFile(filepath.Join(staged, name), []byte(name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := update.PublishPackages(staged, dir, h.build); err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	h.busRoutes(mux)
+	request := func(file, credential string, want int) string {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodGet, target.Packages+"/"+file, nil)
+		r.RemoteAddr = "127.0.0.1:12345"
+		if credential != "" {
+			r.Header.Set("Authorization", "Bearer "+credential)
+		}
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%s returned %d, want %d", file, w.Code, want)
+		}
+		return w.Body.String()
+	}
+	h.upd.confirmed = false
+	request("manifest.json", token, http.StatusGone)
+	h.upd.confirmed = true
+	request("manifest.json", "", http.StatusUnauthorized)
+	manifest, err := update.ParseManifest([]byte(request("manifest.json", token, http.StatusOK)))
+	if err != nil || manifest.Version != version || manifest.Commit != commit || manifest.Build != number {
+		t.Fatalf("manifest %+v, %v", manifest, err)
+	}
+	name := manifest.Programs["persona-manager"]["linux-amd64"].Name
+	if got := request(name, token, http.StatusOK); name == "" || got != name {
+		t.Fatalf("requested program %q, received %q", name, got)
+	}
+	request("private.txt", token, http.StatusNotFound)
+	h.build.Number++
+	request("manifest.json", token, http.StatusNotFound)
+}
+
 func TestDevelopmentPackagesRequireConfirmedAdoptionAndManagerAuth(t *testing.T) {
 	h := newTestHub(t)
 	h.bus.idents = &memIdents{}

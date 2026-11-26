@@ -18,6 +18,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistant"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/hubedge"
 	"github.com/nwverse/persona/server/internal/managerconf"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/update"
@@ -534,10 +535,11 @@ var runningBinary = func() (path string, fi os.FileInfo, ok bool) {
 	if err != nil {
 		return "", nil, false
 	}
+	exe = strings.TrimSuffix(exe, " (deleted)")
 	if r, err := filepath.EvalSymlinks(exe); err == nil {
 		exe = r
 	}
-	fi, err = os.Stat(exe)
+	fi, err = runningBinaryInfo(exe)
 	if err != nil {
 		return "", nil, false
 	}
@@ -591,6 +593,7 @@ type binaryWatch struct {
 	guardPath string
 	// waitUntilIdle, when true, never interrupts active turns past idleMost and cancels waiting if the file reverts.
 	waitUntilIdle bool
+	hostDataDir   string
 }
 
 // newBinaryWatch follows the file this process runs from; nil when it cannot tell which.
@@ -619,6 +622,32 @@ func (w *binaryWatch) prefix() string {
 		return w.logPrefix
 	}
 	return "assistant"
+}
+
+// A service using the Hub's installed programs follows the slot that
+// actually took over. This also holds it back during a self-update trial.
+func (w *binaryWatch) confirmedReplacement(ctx context.Context) bool {
+	if w.hostDataDir == "" {
+		return true
+	}
+	bin, err := filepath.EvalSymlinks(filepath.Join(w.hostDataDir, "bin"))
+	if err != nil || filepath.Dir(w.path) != bin {
+		return true
+	}
+	pending := update.PendingPath(filepath.Join(w.hostDataDir, "update"))
+	if _, err := os.Lstat(pending); !errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	if _, err := os.Lstat(update.DevelopmentAdoptionPath(filepath.Dir(pending))); !errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	control := filepath.Join(w.hostDataDir, "run", "hub-edge.sock")
+	if info, err := os.Stat(control); err != nil || info.Mode()&os.ModeSocket == 0 {
+		return true // standalone host or a Hub without an edge
+	}
+	st, err := hubedge.Status(control)
+	return err == nil && st.Version != "" &&
+		update.CheckBinary(ctx, w.path, &update.Manifest{Version: st.Version, Build: st.Build}) == nil
 }
 
 func (w *binaryWatch) readRestartRecord() (binaryRestartRecord, bool) {
@@ -688,7 +717,7 @@ func (w *binaryWatch) nextWith(ctx context.Context, idle func() assistant.Idle, 
 		case <-t.C:
 		}
 		fi, err := os.Stat(w.path)
-		if err != nil || sameFile(fi, w.seen) {
+		if err != nil || sameFile(fi, w.seen) || !w.confirmedReplacement(ctx) {
 			continue
 		}
 		if w.loopGuarded(fi) {
@@ -839,6 +868,8 @@ func (w *binaryWatch) prepareExitForNew(ctx context.Context) bool {
 	switch {
 	case ctx.Err() != nil:
 		return false
+	case !w.confirmedReplacement(ctx):
+		return false
 	case err != nil:
 		fmt.Fprintf(w.out, "%s: the new %s is gone (%v): going on with this one\n", w.prefix(), w.path, err)
 		return false
@@ -869,6 +900,8 @@ func (w *binaryWatch) restartOnNew(ctx context.Context, env []string) {
 	fi, err := os.Stat(w.path)
 	switch {
 	case ctx.Err() != nil:
+		return
+	case !w.confirmedReplacement(ctx):
 		return
 	case err != nil:
 		fmt.Fprintf(w.out, "assistant: the new %s is gone (%v): going on with this one\n", w.path, err)

@@ -352,6 +352,16 @@ On an upgraded install the manager's `secret.key` began as the same bytes as the
 An independent assistant runs its own manager executable and deploys the node programs
 on the computers it owns. Each installation confirms its own update.
 
+Independent managers on Linux and macOS can follow a confirmed release or direct Hub deploy
+when automatic node updates are enabled. A co-located manager with its own executable can also
+follow the confirmed build when Redeploy installs that build on its host's node. The manager
+verifies its package and waits for idle before the supervised trial. Existing managers from
+before package negotiation use their installed service's replacement watcher or release bootstrap.
+
+On a shared Hub state root the service watcher uses the inode of the running executable and
+checks which build the Hub serves. It waits through a Hub self-update trial. Built-in child
+managers start with the Hub, while independent services wait for their own active work to finish.
+
 ### Following a Web development commit
 
 When a Linux or macOS Hub with a built-in child assistant confirms a Web development

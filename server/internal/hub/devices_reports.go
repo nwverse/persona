@@ -671,19 +671,3 @@ func (h *Hub) machineConnected(ctx context.Context, m *Machine, at time.Time) de
 	}
 	return out
 }
-
-// updateNodes has each manager that carries machines redeploy its own whose node is not this build (selfupdate.go):
-// the carrier always, the others connected now.
-func (h *Hub) updateNodes(ctx context.Context) {
-	owners := []string{devicesOwner}
-	for _, mc := range h.knownEntries() {
-		if o := h.machineOwner(mc.ID); !slices.Contains(owners, o) && h.busConnOf(o) != nil {
-			owners = append(owners, o)
-		}
-	}
-	for _, o := range owners {
-		if err := h.callBus(ctx, o, devicewire.MethodUpdateNodes, map[string]any{}, nil); err != nil {
-			h.logf("update: [%s] redeploys its machines: %v", o, err)
-		}
-	}
-}
