@@ -533,6 +533,9 @@ const (
 	SourceMeeting = "meeting"
 	// SourceExtension: an event an extension observed and reported (assistant.event). Title is the extension's name.
 	SourceExtension = "extension"
+	// SourceSideConversation is an agent_send request wrapped by RenderSideConversation: another conversation's
+	// request to an Agent that already holds a task, never the owner answering that task (prompts/assistant/side_conversation.md).
+	SourceSideConversation = "side_conversation"
 )
 
 // SourceFromInjected upgrades existing metadata without guessing from ordinary text.

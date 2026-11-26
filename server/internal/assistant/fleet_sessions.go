@@ -127,6 +127,9 @@ func (s *Service) setSessions(machine string, list []proto.Session) {
 	for _, sess := range list {
 		s.refreshMainConversationAttention(sess, mainSession, mainMachine)
 	}
+	if len(list) > 0 && (len(before) == 0 || reconnected) {
+		go s.recheckMissingReplies(context.Background(), machine, list)
+	}
 	for _, ref := range inlineUpdates {
 		s.inOrder(func() { go s.registerInlineTurn(context.Background(), ref) })
 	}

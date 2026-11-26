@@ -1,7 +1,7 @@
 // Settings › Advanced › Appearance's "Theme color", "Font" and "Sidebar icons" (#13398), and General's "Text size"
 // (ui/look.ts; the app's ThemeColorPicker and StyleSettingsPage's "Text size"), plus General's "Recent chats in the
 // sidebar" (lib/sidebar-recent.ts). Moving the rows changed no component and no browser storage key.
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { t } from "../../i18n";
 import { Button, cx } from "../../ui/atoms";
 import { pageToken } from "../../ui/extension-theme";

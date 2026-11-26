@@ -1030,6 +1030,17 @@ to-do's no-progress decision quoted another task. Find the run's own prompt by i
 reply after it, up to the next message that opened a turn. Refuse turns that a queued message mixed. Test with real
 transcript pages (`runChat`), not bare item lists.
 
+## Direct reply recovery across a hub switch (#10427)
+
+A node can lose a live conversation during a hub switch without publishing a normal turn end. Claude can append a
+synthetic placeholder only when the conversation resumes. Keep the latest verified app input ID alongside the
+recovery claim, and check that input when the node lists the conversation again. Read the current transcript,
+since indexed history can predate the echo that identifies the app input. A guarded send that finds the same
+transcript but no process leaves a retry notice. A Stop or later owner input makes the earlier attempt obsolete.
+An accepted Assistant input supersedes an older explicit Stop or Exit. Clear only the mark captured before the send,
+since an interrupt can record its intent before it gets the typing lock. Session metadata saved during delivery must
+preserve that newer mark.
+
 ## A node's own session rows never carry the assistant mark (#13879)
 
 `Session.Assistant` is set only when the hub decorates a list for the apps (`hub/assistant_link.go`). The manager's
