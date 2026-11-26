@@ -43,6 +43,7 @@
   "version": "版本",
   "channel": "渠道",
   "last_check": "上次检查",
+  "resolving_latest": "正在确认要更新到的最新版本…",
   "checking": "正在检查…",
   "check": "检查更新",
   "update": "更新",

@@ -43,6 +43,7 @@
   "version": "Version",
   "channel": "Channel",
   "last_check": "Last checked",
+  "resolving_latest": "Checking the latest version before updating…",
   "checking": "Checking…",
   "check": "Check for updates",
   "update": "Update",

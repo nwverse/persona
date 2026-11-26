@@ -2336,6 +2336,8 @@ Requested: "Generate titles after starting new chats; standardize as ‘MMDD | T
 
 ## Guest conversations (2026-11-06, #5195)
 
+A proxy reply the bot writes for a group is one of these too: the hub starts it itself, with a single hub-owned tool, `bot_group_reply`, and the question never enters a conversation of the owner's (`docs/extensions/bots.md`).
+
 A conversation an extension opens to answer **someone else** for the user (for example a Lark extension's opt-in auto replies to @-mentions). Someone else's message goes into it and its answer goes out as the user, so it must have none of the assistant's powers.
 An ordinary extension conversation is an assistant conversation (the assistant directory, its CLAUDE.md and memory, every `mcp__persona` tool allowed up front, `agent_start` / `agent_send` asking the phone only in the health space), where only the prompt stands between the message and those tools; hence this kind.
 
