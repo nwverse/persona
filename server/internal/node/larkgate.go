@@ -172,7 +172,7 @@ func (n *Node) larkCheck(ctx context.Context, session, cwd, command string, ix p
 		g, write := gateWrite(cfg.Gates, analysisCommand)
 		// Text naming lark-cli in a command with no call is not one: classifyLark marks unknown what could run it
 		// (larkgate_text.go), so a grep pattern or a note written to a file is no card (#8119).
-		if write || boundary || v.cliWrite || v.unknown || larkCLIRe.MatchString(analysisCommand) && !classified {
+		if write || boundary || v.cliWrite || v.unknown || larkMentionsCLI(analysisCommand) && !classified {
 			ix.Kind = proto.IxPermission
 			title := wholeCommandTitle(cfg.Gates, v, analysisCommand, g, write)
 			if title != "" {
@@ -359,7 +359,7 @@ func wholeCommandTitle(gates []proto.CommandGate, v larkVerdict, command string,
 	if write {
 		return g.Title
 	}
-	if v.cliWrite || larkCLINamed.MatchString(command) || slices.ContainsFunc(v.calls, func(c larkCall) bool { return c.CLI }) {
+	if v.cliWrite || larkNamesCLI(command) || slices.ContainsFunc(v.calls, func(c larkCall) bool { return c.CLI }) {
 		return callTitle(gates, larkCall{Gate: -1})
 	}
 	if len(v.calls) > 0 {

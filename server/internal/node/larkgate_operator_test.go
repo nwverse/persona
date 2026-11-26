@@ -5,6 +5,7 @@ import "testing"
 // Higher-order operator helpers can recover os.system from sys.modules while every dangerous name is inside a
 // string literal. These harmless commands are only classified; neither the commands nor lark-cli is executed.
 func TestInlinePythonHigherOrderOperatorRequiresApproval(t *testing.T) {
+	needsLarkGate(t)
 	for _, tc := range []struct {
 		name, payload string
 	}{

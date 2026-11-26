@@ -59,7 +59,7 @@ func larkInlineGroup(stmt *syntax.Stmt, gates []proto.CommandGate) bool {
 		return false
 	}
 	var text bytes.Buffer
-	if syntax.NewPrinter().Print(&text, only) != nil || larkCLIRe.MatchString(text.String()) || gateNamed(gates, text.String()) {
+	if syntax.NewPrinter().Print(&text, only) != nil || larkMentionsCLI(text.String()) || gateNamed(gates, text.String()) {
 		return false
 	}
 	stmt.Cmd, stmt.Redirs = only.Cmd, only.Redirs
@@ -277,7 +277,7 @@ func inertPythonCode(words []string) bool {
 		}
 	}
 	bare, ok := pythonWithoutStrings(code)
-	if code == "" || !ok || larkCodeRuns.MatchString(bare) || larkPythonReach.MatchString(bare) || larkCLIRe.MatchString(bare) ||
+	if code == "" || !ok || larkCodeRuns.MatchString(bare) || larkPythonReach.MatchString(bare) || larkMentionsCLI(bare) ||
 		strings.Contains(bare, "*") && regexp.MustCompile(`\bimport\s+\*`).MatchString(bare) {
 		return false
 	}

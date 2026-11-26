@@ -293,6 +293,7 @@ func TestLarkLiteralQueryAndSedAddresses(t *testing.T) {
 }
 
 func TestLarkContactSearchIsARead(t *testing.T) {
+	needsLarkGate(t)
 	assertAssistantBypassClassification(t, `lark-cli contact +search-user --as user --query example`, 0)
 	// Risk metadata remains authoritative when it says a same-named command writes.
 	v := classifyLark(`lark-cli contact +search-user --as user --query example`, nil, "", func([]string) string { return "write" })

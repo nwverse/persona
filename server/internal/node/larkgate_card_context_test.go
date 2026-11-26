@@ -12,6 +12,7 @@ import (
 )
 
 func TestLarkSummaryShowsMessageContextNotInternalFields(t *testing.T) {
+	needsLarkGate(t)
 	calls := []larkCall{
 		{Method: "POST", Path: "/conversations/oc_1/messages", Body: `{"text":"I will check the build","clientId":"internal-client","expectedSenderId":"internal-sender"}`},
 		{Method: "POST", Path: "/messages/om_1/replies", Body: `{"text":"I will check it too","replyMode":"thread"}`},
@@ -44,6 +45,7 @@ func TestLarkSummaryMetadataFailureKeepsOldSummary(t *testing.T) {
 }
 
 func TestLarkCardContextFromReadOnlyCLI(t *testing.T) {
+	needsLarkGate(t)
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "lark-cli")
 	script := `#!/bin/sh
