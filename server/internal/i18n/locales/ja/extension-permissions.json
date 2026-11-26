@@ -85,6 +85,8 @@
   "scope_tasks_schedule": "配置待ちのタスクにコンピューターを割り当て（制約とメタデータのみ。プロンプトや非公開スペースは含みません）",
   "scope_agents_archive_idle": "長時間アイドルのコーディング Agent セッションを監査付きでアーカイブ・終了（作業中・メイン会話・方向リーダー・進行中 To-do・未解決カードのあるセッションは対象外）",
   "scope_decisions_raise": "あなたに判断を求め、自分の依頼を読み取り・取り下げ",
+  "scope_bots_feishu_identity": "ペアリング済みの Lark ボットの公開情報を見る（名前、アプリ ID、返信できるか）",
+  "scope_bots_feishu_handoff": "グループの質問を Lark ボットに渡し、そこで返信させる",
   "scope_leaders_read": "方向とその報告を表示",
   "scope_leaders_write": "方向を作成して進捗を報告",
   "scope_assistant_dispatch_policy": "アシスタントのディスパッチポリシー（どの会話が作業を割り当てられるか）の読み取りと変更",

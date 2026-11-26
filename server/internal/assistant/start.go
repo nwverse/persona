@@ -652,7 +652,12 @@ func (s *Service) startConversationOn(ctx context.Context, p StartParams, main b
 		}
 		// The conversation's MCP server can discover its tools before assistant.send returns. Register the guest's
 		// restriction first, as roomCreate does, so that first discovery is the declared list rather than an empty one.
-		if err := s.guestSet(ctx, machine, guestID, p.GuestTools); err != nil {
+		if p.GuestHandoff != "" {
+			err = s.guestSetHandoff(ctx, machine, guestID, p.GuestHandoff, p.GuestTools)
+		} else {
+			err = s.guestSet(ctx, machine, guestID, p.GuestTools)
+		}
+		if err != nil {
 			return proto.Session{}, err
 		}
 		defer func() {

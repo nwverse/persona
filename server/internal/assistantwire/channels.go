@@ -30,6 +30,10 @@ const (
 	MethodFeishuAction = "feishu.card_action"
 	// MethodFeishuView: {} → FeishuView, what GET /api/v1/bots/feishu shows of the bot's chat.
 	MethodFeishuView = "feishu.view"
+	// MethodFeishuHandoff: FeishuHandoff → {}: a group question handed to the bot, accepted (not its run).
+	// An assistant that does not know it answers "unknown method", so an older one never treats the payload
+	// as one of the owner's messages.
+	MethodFeishuHandoff = "feishu.handoff"
 
 	// EventInteractionAnnounced: InteractionAnnounced, one way: a new card (not a quiet task's).
 	EventInteractionAnnounced = "interaction.announced"
@@ -91,6 +95,9 @@ const (
 	// 2000 characters, never a detour into the chat); a send into that group, or a reply to any other message in it,
 	// is refused as ever. With full_answer, the owner must enable full replies, a parent is required, and the
 	// answer is sent as literal rich text, or as a text attachment when too large for inline delivery.
+	// A feishu.text with handoff set is a proxy reply (bots_handoff.go) and skips the usual path: handoff is the
+	// hub's id, confirmed says the owner approved the draft, and the text goes under the handoff's anchor or,
+	// with none, into its chat. The chat does not become one the bot may send into.
 	FeishuText = "feishu.text"
 	// FeishuUpdateCard: {message_id, card} → {}.
 	FeishuUpdateCard = "feishu.update_card"
@@ -137,6 +144,8 @@ const (
 	FeishuConfigure = "feishu.configure"
 	// FeishuTest: {} → {}: the test card to the owner.
 	FeishuTest = "feishu.test"
+	// FeishuHandoffEnd: {handoff, outcome} → {}: a handoff is over without a post (declined, expired, no_reply, failed).
+	FeishuHandoffEnd = "feishu.handoff_end"
 
 	// AppChannels is the plugins' channel programs, and the list of every channel as the transport has it.
 	AppChannels = "channels"
@@ -207,6 +216,21 @@ type OwnerApprovalProof struct {
 	ParentID  string `json:"parent_id"`
 	ChatID    string `json:"chat_id"`
 	Text      string `json:"text"`
+}
+
+// FeishuHandoff is feishu.handoff's params: a group question an authorized caller handed to the bot. The
+// question, the context and the names are the caller's, untrusted, and are never stored with the bot's settings.
+type FeishuHandoff struct {
+	ID         string    `json:"id"`
+	ChatID     string    `json:"chat_id"`
+	ChatName   string    `json:"chat_name,omitempty"`
+	SenderName string    `json:"sender_name,omitempty"`
+	Question   string    `json:"question"`
+	Context    string    `json:"context,omitempty"`
+	Confirm    bool      `json:"confirm"`
+	Launcher   string    `json:"launcher,omitempty"`
+	By         string    `json:"by,omitempty"`
+	ExpiresAt  time.Time `json:"expires_at"`
 }
 
 // FeishuFromElsewhere is FeishuMessage.From of a message the hub took from a group chat that is not opted in: the owner's
