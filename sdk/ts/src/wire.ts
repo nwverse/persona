@@ -5464,10 +5464,11 @@ export const KBKINDS = ["projects", "chats", "people", "docs", "meetings", "even
  * error.code of a knowledge-base call besides permission_denied (data {scope}, the one missing): invalid_params,
  * not_found, assistant_offline (the manager is away), kb_unavailable (not open yet), conflict (kb.update touches
  * fields the user or another extension holds; data KBConflict, nothing was written). assistant_offline and
- * kb_unavailable are worth trying again; conflict is for the user to decide.
+ * kb_unavailable are worth trying again; conflict is for the user to decide. deleted: kb.put_recording of a recording
+ * the user deleted, which is not made again.
  */
-export type KBErrorCode = "invalid_params" | "not_found" | "assistant_offline" | "kb_unavailable" | "conflict" | (string & {});
-export const KBERROR_CODES = ["invalid_params", "not_found", "assistant_offline", "kb_unavailable", "conflict"] as const;
+export type KBErrorCode = "invalid_params" | "not_found" | "assistant_offline" | "kb_unavailable" | "conflict" | "deleted" | (string & {});
+export const KBERROR_CODES = ["invalid_params", "not_found", "assistant_offline", "kb_unavailable", "conflict", "deleted"] as const;
 
 /**
  * The data of a conflict error: field → who holds it (user, or ext:<extension id>); a linked entity's field is
@@ -5932,6 +5933,110 @@ export interface KBUpdateResult {
 }
 
 /**
+ * kb.put_recording (kb.write): create or update the extension's own recording with its minutes and, optionally, its
+ * transcript (docs/extensions/extensions.md "Writing recordings and minutes"). It is the extension's: no other
+ * extension may write it, and no extension a recording the phone uploaded (permission_denied). The same params again
+ * change nothing; a recording the user deleted is not made again (deleted). A recording with minutes is kept past
+ * recording_days, its minutes until minutes_days.
+ */
+export interface KBPutRecordingParams {
+  /** A UUID the extension picks; one derived from its own source id makes a retry land on the same recording. */
+  id: string;
+  title?: string;
+  /** An RFC 3339 time. */
+  started_at: string;
+  /** An RFC 3339 time, not before started_at. */
+  ended_at?: string;
+  /** An i18n code (zh-Hans, en, ja). */
+  language?: string;
+  minutes?: KBRecordingMinutes;
+  /**
+   * Optional; n, source and echo are the hub's and are dropped. Without minutes, the hub makes minutes of it when the
+   * recording module is on.
+   */
+  transcript?: KBRecordingSegment[];
+  /** Slugs of existing projects to link it to; a later write never removes a link. */
+  projects?: string[];
+  meeting?: KBRecordingMeeting;
+}
+
+/**
+ * The minutes the extension wrote, stored as minutes.json and minutes.md. The hub sets version, revision,
+ * generated_at, when, start and end. Minutes or a transcript is required.
+ */
+export interface KBRecordingMinutes {
+  title?: string;
+  where?: string;
+  attendees?: string[];
+  points?: KBMinutesPoint[];
+  decisions?: KBMinutesItem[];
+  actions?: KBMinutesAction[];
+  open?: KBMinutesItem[];
+  /** An i18n code: what the minutes are written in. */
+  language?: string;
+  /** The minutes as Markdown: minutes.md, what searches and kb.get read. Required, not blank. */
+  markdown: string;
+}
+
+/**
+ * A decision or an open question of the minutes.
+ */
+export interface KBMinutesItem {
+  text: string;
+  /** Seconds from the recording's start. */
+  at: number;
+  photo?: number;
+}
+
+/**
+ * A point discussed; who only when the source names the person.
+ */
+export interface KBMinutesPoint {
+  text: string;
+  /** Seconds from the recording's start. */
+  at: number;
+  photo?: number;
+  who?: string;
+}
+
+/**
+ * An action item. id is the extension's, stable across writes (at most 64 characters): a to-do the user made of it
+ * stays on it.
+ */
+export interface KBMinutesAction {
+  id: string;
+  who?: string;
+  what: string;
+  /** The deadline as said. */
+  by?: string;
+  /** YYYY-MM-DD, when by is one date. */
+  due_date?: string;
+  /** Seconds from the recording's start. */
+  at: number;
+  photo?: number;
+  /** The hub's: the to-do made of it. */
+  todo_id?: string;
+}
+
+/**
+ * The calendar item (events) or imported meeting (meetings) the recording was; it must exist.
+ */
+export interface KBRecordingMeeting {
+  kind: string;
+  id: string;
+}
+
+export interface KBPutRecordingResult {
+  id: string;
+  /** The hub's revision of the recording: 1 when created, one more for each write that changed it. */
+  revision: number;
+  created?: boolean;
+  /** The write was the same as the last one; nothing was written. */
+  unchanged?: boolean;
+  minutes_version?: number;
+}
+
+/**
  * kb.owner takes nothing.
  */
 export interface KBOwnerParams {
@@ -6235,13 +6340,16 @@ export interface ModelRefusal {
 
 /**
  * error.code of the assistant calls besides permission_denied (data {scope: "assistant.read"}, or
- * "assistant.memory.read" for assistant.memory, or "assistant.entries.read" for assistant.entries.list):
- * invalid_params; not_found (assistant.messages: no such conversation in the assistant's own space);
- * assistant_offline (the manager is away: try again); machine_offline (the assistant's computer is not connected or
- * not set up: try again).
+ * "assistant.memory.read" for assistant.memory, or "assistant.entries.read" for assistant.entries.list, or
+ * "assistant.events" for assistant.event): invalid_params; not_found (assistant.messages: no such conversation in the
+ * assistant's own space); assistant_offline (the manager is away: try again); machine_offline (the assistant's
+ * computer is not connected or not set up: try again); assistant.event only: no_main_conversation (the user has no
+ * main conversation: nothing was started or changed, do not retry until they have one); rate_limited (data
+ * {retry_after} in seconds: too many events from this extension); queue_full (this extension already has the most
+ * events waiting behind a running turn: try again later).
  */
-export type AssistantErrorCode = "invalid_params" | "not_found" | "assistant_offline" | "machine_offline" | (string & {});
-export const ASSISTANT_ERROR_CODES = ["invalid_params", "not_found", "assistant_offline", "machine_offline"] as const;
+export type AssistantErrorCode = "invalid_params" | "not_found" | "assistant_offline" | "machine_offline" | "no_main_conversation" | "rate_limited" | "queue_full" | (string & {});
+export const ASSISTANT_ERROR_CODES = ["invalid_params", "not_found", "assistant_offline", "machine_offline", "no_main_conversation", "rate_limited", "queue_full"] as const;
 
 /**
  * assistant.conversations (assistant.read): the conversations last active at or after since, newest first.
@@ -6439,6 +6547,55 @@ export interface AssistantEntriesChangedEvent {
   id: string;
   record_id: string;
   status: "wrong";
+}
+
+/**
+ * How much the user should care. info: tell them only if it matters to what they are doing; warning: they should hear
+ * about it; critical: they need to know now.
+ */
+export type AssistantEventSeverity = "info" | "warning" | "critical" | (string & {});
+export const ASSISTANT_EVENT_SEVERITIES = ["info", "warning", "critical"] as const;
+
+/**
+ * Where the thing an event's key names is now, in the extension's own words (firing, resolved, ...): a label each
+ * extension chooses. Free text, not a closed set.
+ */
+export type AssistantEventState = string;
+
+/**
+ * assistant.event (assistant.events): one event for the assistant's main conversation. The assistant gets it as
+ * something an extension observed, never as the user's words, and decides what to tell the user. An event with the
+ * same key as one of this extension's still waiting behind a running turn replaces it, unless replace is false.
+ * Lengths are in characters.
+ */
+export interface AssistantEventParams {
+  /**
+   * What the event is about (one monitored thing). The same extension and key replace an event not yet delivered.
+   */
+  key: string;
+  severity?: AssistantEventSeverity;
+  /** One line saying what happened. */
+  title: string;
+  /** The details. */
+  body?: string;
+  /** What the extension suggests be done about it: a suggestion for the assistant to weigh, not an order. */
+  action_hint?: string;
+  /** Where the thing the key names is now, in the extension's words (firing, resolved, ...). */
+  state?: AssistantEventState;
+  /** false keeps an earlier event with the same key as its own message instead of replacing it. Absent is true. */
+  replace?: boolean;
+}
+
+/**
+ * What happened to the event. delivered: sent into the idle main conversation now. queued: the conversation is
+ * running (or not reachable just now), so it goes in when its turn ends. replaced: it took the place of an earlier
+ * event with the same key that was still queued.
+ */
+export type AssistantEventDelivery = "delivered" | "queued" | "replaced" | (string & {});
+export const ASSISTANT_EVENT_DELIVERIES = ["delivered", "queued", "replaced"] as const;
+
+export interface AssistantEventResult {
+  delivery: AssistantEventDelivery;
 }
 
 /**
@@ -7760,6 +7917,7 @@ export const CALLS: Record<string, Call> = {
   "kb.update": { from: "program", params: "KBUpdateParams", result: "KBUpdateResult" },
   "kb.owner": { from: "program", params: "KBOwnerParams", result: "KBOwner" },
   "kb.recent": { from: "program", params: "KBRecentParams", result: "KBRecentResult" },
+  "kb.put_recording": { from: "program", params: "KBPutRecordingParams", result: "KBPutRecordingResult" },
   "event.kb.changed": { from: "hub", params: "KBChangedEvent", event: true },
   "event.kb.forgotten": { from: "hub", params: "KBForgottenEvent", event: true },
   "event.todo.changed": { from: "hub", params: "TodoChangedEvent", event: true },
@@ -7771,6 +7929,7 @@ export const CALLS: Record<string, Call> = {
   "assistant.messages": { from: "program", params: "AssistantMessagesParams", result: "AssistantMessagesResult" },
   "assistant.memory": { from: "program", params: "AssistantMemoryParams", result: "AssistantMemoryResult" },
   "assistant.entries.list": { from: "program", params: "AssistantEntriesParams", result: "AssistantEntriesResult" },
+  "assistant.event": { from: "program", params: "AssistantEventParams", result: "AssistantEventResult" },
   "event.assistant.entries.changed": { from: "hub", params: "AssistantEntriesChangedEvent", event: true },
   "assistant.data_status": { from: "program", params: "AssistantDataStatusParams", result: "AssistantDataStatusResult" },
   "machines.pair_link": { from: "program", params: "MachinesPairLinkParams", result: "MachinesPairLinkResult" },

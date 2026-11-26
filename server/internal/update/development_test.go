@@ -244,3 +244,65 @@ func TestDevelopmentBackupConfigCoordinatedRequiresHooksForExtras(t *testing.T) 
 		})
 	}
 }
+
+func TestCancelDevelopmentBuildReapsProcessGroupAndRemovesWork(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	if runtime.GOOS == "windows" || err != nil {
+		t.Skip("development helper needs Python on Unix")
+	}
+	dir, bin := t.TempDir(), t.TempDir()
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("FIXTURE_SIGNALS", bin)
+	// The grandchild exits only on SIGTERM. Its parent waits for the child
+	// before exiting so the test observes both group delivery and reaping.
+	git := `import os, pathlib, signal, time
+root = pathlib.Path(os.environ["FIXTURE_SIGNALS"])
+signal.signal(signal.SIGINT, lambda *_: (root / ("int-" + str(os.getpid()))).touch())
+child = os.fork()
+if child:
+    signal.signal(signal.SIGTERM, lambda *_: None)
+    os.waitpid(child, 0)
+else:
+    signal.signal(signal.SIGTERM, lambda *_: exit(0))
+    (root / "ready").write_text(str(os.getpid()))
+    while True:
+        signal.pause()
+`
+	if err := os.WriteFile(filepath.Join(bin, "git"), []byte("#!"+python+"\n"+git), 0700); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- DevelopmentRequest(ctx, &DevelopmentConfig{}, dir, "build", map[string]any{
+			"candidate": DevelopmentCandidate{Commit: strings.Repeat("a", 40)},
+		}, &struct{}{}, nil)
+	}()
+	for {
+		if _, err := os.Stat(filepath.Join(bin, "ready")); err == nil {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("helper exited before launching its child: %v", err)
+		case <-time.After(10 * time.Millisecond):
+		case <-ctx.Done():
+			t.Fatal("child group did not start")
+		}
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("cancel did not reap the helper")
+	}
+	signals, _ := filepath.Glob(filepath.Join(bin, "int-*"))
+	work, _ := filepath.Glob(filepath.Join(dir, "build-*"))
+	if len(signals) != 2 || len(work) != 0 {
+		t.Fatalf("signal recipients %v, residual work %v", signals, work)
+	}
+}

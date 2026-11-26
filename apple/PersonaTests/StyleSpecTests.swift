@@ -262,6 +262,28 @@ struct StyleSpecTests {
         #expect(Set(Theme.Hue.minutesGroups.map { Self.hex($0) }).count == Theme.Hue.minutesGroups.count)
     }
 
+    /// A to-do's ask card (#10465, `AskCard`) sits on the inset well (`Theme.Fill.well`) inside a To-dos row, whose cell
+    /// is the system's grouped cell in every style (`sectionCards()`): its exits' words in the accent ≥ 3:1 (the link
+    /// floor) and its own words ≥ 4.5:1 on that well, in every style and color, light and dark (DESIGN_SYSTEM 6.3: a
+    /// composite ground is tested).
+    @Test func anAskCardsWordsReadOnItsWell() {
+        let cell = Color(light: 0xFFFFFF, dark: 0x1C1C1E)
+        var found: [String] = []
+        for style in AppStyle.allCases {
+            for (name, colors) in Self.colors {
+                let spec = StyleSpec(style.component, colors)
+                for (look, ui) in Self.appearances {
+                    let well = Self.over(Theme.Fill.well, Self.rgb(cell, ui), ui)
+                    for (what, ink, floor) in [("accent", spec.accent, 3.0), ("words", Theme.primaryText, 4.5)] {
+                        let c = Self.contrast(Self.rgb(ink, ui), well)
+                        if c < floor { found.append("\(style.rawValue)+\(name) \(look) \(what): \(String(format: "%.2f", c))") }
+                    }
+                }
+            }
+        }
+        #expect(found.isEmpty, "an ask card's words under their floor on its well: \(found)")
+    }
+
     /// The colored canvases stay darker than the system's grouped cells in dark (#1C1C1E): Clay's at #1D1A23 was one
     /// color with them (1.01:1); Island's own #0A1110 is 1.13:1.
     @Test func darkWashesSitUnderTheCells() {

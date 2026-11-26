@@ -40,9 +40,14 @@ type Session struct {
 	LastError *string
 	Name string
 	Typed StateName
+	Opaque Unchecked
+	Flag Tristate
 	Inner struct{ Mode string; OwnerID string }
 }
 type StateName string
+// A named opaque type and a closed three-state type are the fix for raw-json and ptr-bool: neither counts.
+type Unchecked json.RawMessage
+type Tristate uint8
 `)
 	want := map[string][]string{
 		"bare-enum-state":  {"Session.State", "Session.PhaseStatus"},

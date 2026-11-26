@@ -26,13 +26,16 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def _counts_table_files(root=ROOT):
     """Every file the counts surface table names (spec/fixtures/counts/surfaces.json, #11900): each surface's code and
-    tests, and a hub-fed surface's fallback. Its guard reads them all, so a rename in any of them runs it. Read on each
-    run, so a new row needs no edit here; a missing or unreadable table names none, and its own rule still runs the
-    guard."""
+    tests, a hub-fed surface's fallback and the function that writes each count into the manager's view (its
+    producer). Its guard reads them all, so a rename in any of them runs it. Read on each run, so a new row needs no
+    edit here; a missing or unreadable table names none, and its own rule still runs the guard."""
     try:
-        rows = json.loads((root / "spec/fixtures/counts/surfaces.json").read_text(encoding="utf-8"))["surfaces"]
+        table = json.loads((root / "spec/fixtures/counts/surfaces.json").read_text(encoding="utf-8"))
+        rows = table["surfaces"]
         files = {entry["file"] for row in rows for key in ("code", "tests") for entry in row.get(key, ())}
         files |= {row["view"]["fallback"]["file"] for row in rows if isinstance(row.get("view"), dict)}
+        files |= {count["producer"]["file"] for count in table.get("counts", {}).values()
+                  if isinstance(count, dict) and isinstance(count.get("producer"), dict)}
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return ()
     return tuple(sorted(path for path in files if isinstance(path, str) and path))
@@ -250,11 +253,14 @@ TABLE = (
         (("scripts/ci/ratchet_base.py",),
          ("scripts/ci/test_changed_ratchets.py", "scripts/test/test_merge_pr_sh.py", "scripts/ci/test_sleep_ratchet.py",
           "scripts/ci/test_web_font_ratchet.py", "scripts/test/test_prompt_language_ratchet.py",
-          "scripts/ci/test_web_module_boundary_ratchet.py", "scripts/ci/test_wire_types_ratchet.py")),
+          "scripts/ci/test_web_module_boundary_ratchet.py", "scripts/ci/test_wire_types_ratchet.py",
+          "scripts/ci/test_migration_enum_check.py")),
         (("scripts/ci/prompt_language_ratchet.py",), ("scripts/test/test_prompt_language_ratchet.py",)),
         (("scripts/ci/web_module_boundary_ratchet.py",), ("scripts/ci/test_web_module_boundary_ratchet.py",)),
-        (("scripts/ci/wire_types_ratchet.py", "scripts/ci/wire_types_baseline.json",
+        (("scripts/ci/wire_types_ratchet.py", "scripts/ci/merge_wire_types.py", "scripts/ci/wire_types_baseline.json",
           "server/internal/archguard/wirecount/*"), ("scripts/ci/test_wire_types_ratchet.py",)),
+        (("scripts/ci/migration_enum_baseline.json", "server/internal/db/migrations/*"),
+         ("scripts/ci/test_migration_enum_check.py",)),
         (("scripts/test/go_trimpath.sh",), ("scripts/ci/test_ci.py", "scripts/test/test_check_fast_inputs.py")),
         (("scripts/heavy_slot.py",), ("scripts/test/test_check_fast_inputs.py", "scripts/test/test_android_sh.py")),
         (("scripts/check-fast.sh", "scripts/test/check-fast.sh", "scripts/test/test_check_fast.py",
@@ -325,7 +331,8 @@ TABLE = (
     (
         (("spec/fixtures/counts/*", "spec/fixtures/needs-you/*"),
          ("scripts/test/test_counts_surfaces.py", "scripts/test/test_counts_agreement.py")),
-        (("docs/plans/plan-derived-counts.md", *_counts_table_files()), ("scripts/test/test_counts_surfaces.py",)),
+        (("docs/plans/plan-derived-counts.md", "schema/wire/counts.schema.json", *_counts_table_files()),
+         ("scripts/test/test_counts_surfaces.py",)),
     ),
 )
 

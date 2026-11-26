@@ -1,15 +1,18 @@
-"""The wire generator's opt-in typed keywords (#15397): x-enum "closed" with x-unknown "count", x-id, enum-keyed maps
-made structs, x-decode "strict", x-opaque and the Rust target, in every language, from
+"""The wire generator's opt-in typed keywords (#15397): x-enum "closed" with x-unknown "count", x-id, x-text,
+x-tristate, enum-keyed maps made structs, x-decode "strict", x-opaque and the Rust target, in every language, from
 scripts/test/fixtures/wiregen/typed.schema.json. Where a toolchain is on this machine the generated code is also
 compiled and run (Go: go vet and go test; Rust: cargo test --offline; TypeScript: tsc --noEmit; Swift: swiftc -parse;
 Kotlin is never compiled here, it needs the Android build); a missing one is reported as a skip, not a pass.
 
-No existing schema uses these keywords yet, so scripts/gen/extension_schema.py --check (test_extension_schema.py,
-test_wire_schema.py) is what proves their outputs did not change."""
+Shared IDs (a property's x-id naming one of ids.schema.json's) and x-typed-except are covered here too.
+schema/wire/todo-view.schema.json is the first schema to use them (typed core plan P4); for every other schema
+scripts/gen/extension_schema.py --check (test_extension_schema.py, test_wire_schema.py) is what proves their outputs did
+not change."""
 
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -69,10 +72,19 @@ class Model(unittest.TestCase):
         defs = fixture_defs()
         self.assertEqual(defs["SessionID"].kind, "id")
         self.assertEqual(defs["ToolInput"].kind, "opaque")
+        self.assertEqual(defs["Label"].kind, "text")
+        self.assertEqual(defs["Replace"].kind, "tristate")
+        signal = {f.name: f.type for f in defs["Signal"].fields}
+        self.assertEqual((signal["label"].kind, signal["label"].ref), ("ref", "Label"))
+        self.assertEqual((signal["note"].kind, signal["note"].ref), ("ref", "Label"))
+        # Every language but Go reads a three-state boolean as an optional bool.
+        self.assertEqual((signal["replace"].kind, signal["replace"].ref), ("bool", "Replace"))
+        self.assertEqual((signal["keep"].kind, signal["keep"].ref), ("bool", "Replace"))
         self.assertIn("tool's own arguments", defs["ToolInput"].reason)
         self.assertTrue(defs["Phase"].closed and defs["Phase"].count_unknown)
         self.assertTrue(defs["Section"].closed and not defs["Section"].count_unknown)
         self.assertFalse(defs["Legacy"].closed)
+        self.assertTrue(defs["Cause"].closed and not defs["Event"].closed)
         self.assertTrue(defs["View"].strict)
         self.assertFalse(defs["Lenient"].strict)
         fields = {f.name: f.type for f in defs["View"].fields}
@@ -112,10 +124,29 @@ class Model(unittest.TestCase):
             "not a string definition with that x-id": {
                 "X": {"type": "object", "properties": {"a": {"type": "string", "x-id": "Missing"}}}},
             "go on a string enum": {"X": {"type": "string", "x-unknown": "count"}},
+            "x-text goes on a string definition": {"X": {"type": "string", "enum": ["a"], "x-text": "X"}},
+            "x-text goes on a string definition and repeats": {"X": {"type": "string", "x-text": "Y"}},
+            "not a string definition with that x-text": {
+                "X": {"type": "object", "properties": {"a": {"type": "string", "x-text": "Missing"}}}},
+            "x-tristate goes on a boolean definition": {"X": {"type": "string", "x-tristate": "X"}},
+            "not a boolean definition with that x-tristate": {
+                "T": {"type": "boolean", "x-tristate": "T"},
+                "X": {"type": "object", "properties": {"a": {"type": "string", "x-tristate": "T"}}}},
+            "x-tristate field is optional": {
+                "T": {"type": "boolean", "x-tristate": "T"},
+                "X": {"type": "object", "required": ["a"], "properties": {"a": {"$ref": "#/$defs/T"}}}},
+            "takes no x-go-pointer": {
+                "T": {"type": "boolean", "x-tristate": "T"},
+                "X": {"type": "object", "properties": {"a": {"$ref": "#/$defs/T", "x-go-pointer": True}}}},
             "x-enum 'open'": {"X": {"type": "string", "enum": ["a"], "x-enum": "open"}},
             "x-unknown 'drop'": {"X": {"type": "string", "enum": ["a"], "x-enum": "closed", "x-unknown": "drop"}},
             "make a name": {"X": {"type": "string", "enum": ["1st"], "x-enum": "closed"}},
             "same name": {"X": {"type": "string", "enum": ["a_b", "a-b"], "x-enum": "closed"}},
+            "only closed": {"X": {"oneOf": [{"$ref": "#/$defs/A"}], "x-discriminator": "k", "x-enum": "open"},
+                            "A": {"type": "object", "required": ["k"], "properties": {"k": {"const": "a"}}}},
+            "x-unknown go on a string enum": {
+                "X": {"oneOf": [{"$ref": "#/$defs/A"}], "x-discriminator": "k", "x-unknown": "count"},
+                "A": {"type": "object", "required": ["k"], "properties": {"k": {"const": "a"}}}},
             "on an object": {"X": {"type": "string", "enum": ["a"], "x-decode": "strict"}},
             "additionalProperties is not": {"X": {"type": "object", "additionalProperties": True, "x-decode": "strict"}},
         }
@@ -126,6 +157,13 @@ class Model(unittest.TestCase):
 
 class Languages(unittest.TestCase):
     """What each keyword turns into, language by language (2.1, 2.3, 2.4, 2.5 of the typed core plan)."""
+
+    def test_outputs_have_no_extra_terminal_blank_line(self):
+        for language in ("go", "ts", "arkts", "swift", "kotlin", "rust"):
+            with self.subTest(language):
+                generated = generate(language)
+                self.assertTrue(generated.endswith("\n"))
+                self.assertFalse(generated.endswith("\n\n"))
 
     def test_go(self):
         go = generate("go")
@@ -151,8 +189,30 @@ class Languages(unittest.TestCase):
         self.assertIn("type ToolInput json.RawMessage", go)
         self.assertIn("func (v ToolInput) MarshalJSON() ([]byte, error)", go)
         self.assertIn("It stays opaque: a tool's own arguments", go)
+        # x-enum closed on a union: a named tag type with typed constants, its ordered list and Valid; an open
+        # union keeps its string tag
+        self.assertRegex(go, r'Kind CauseKind `json:"kind"`')
+        self.assertIn("type CauseKind string", go)
+        self.assertRegex(go, r'CauseLate\s+CauseKind = "late"')
+        self.assertIn("var CauseKinds = []CauseKind{CauseLate, CauseLost}", go)
+        self.assertIn("func (v CauseKind) Valid() bool {", go)
+        self.assertRegex(go, r'Type\s+string\s+`json:"type"`')
+        self.assertIn('var EventTypes = []string{"changed", "gone"}', go)
         # a union's field of a closed enum keeps the type
         self.assertRegex(go, r'Phase\s+Phase\s+`json:"phase,omitempty"`')
+        # x-text: a named string, no closed set
+        self.assertIn("type Label string", go)
+        self.assertIn("It is free text, not a closed set of values.", go)
+        self.assertRegex(go, r'Label\s+Label\s+`json:"label"`')
+        self.assertRegex(go, r'Note\s+Label\s+`json:"note,omitempty"`')
+        # x-tristate: three values, absent stays absent
+        self.assertIn("type Replace uint8", go)
+        self.assertRegex(go, r"ReplaceDefault Replace = iota")
+        self.assertIn("func (v Replace) IsZero() bool { return v == ReplaceDefault }", go)
+        self.assertIn("func (v *Replace) UnmarshalJSON(data []byte) error {", go)
+        self.assertRegex(go, r'Replace\s+Replace\s+`json:"replace,omitzero"`')
+        self.assertRegex(go, r'Keep\s+Replace\s+`json:"keep,omitzero"`')
+        self.assertIn('"errors"', go)
 
     def test_typescript_and_arkts(self):
         for flavor in ("ts", "arkts"):
@@ -170,6 +230,13 @@ class Languages(unittest.TestCase):
                 self.assertIn("loose?: Record<string, number>;", ts)
                 self.assertIn("export type ToolInput = unknown;", ts)
                 self.assertIn("related?: SessionID[];", ts)
+                # x-text: a plain alias, so string literals still type-check; x-tristate: an optional boolean
+                self.assertIn("export type Label = string;", ts)
+                self.assertIn("label: Label;", ts)
+                self.assertIn("note?: Label;", ts)
+                self.assertIn("replace?: boolean;", ts)
+                self.assertIn("keep?: boolean;", ts)
+                self.assertNotIn("Replace =", ts)
         self.assertIn('export type SessionID = string & { readonly __brand: "SessionID" };', generate("ts"))
         self.assertIn("export type SessionID = string;", generate("arkts"))  # ArkTS has no intersection types
 
@@ -185,11 +252,22 @@ class Languages(unittest.TestCase):
         self.assertIn("public nonisolated struct SessionID: RawRepresentable, Codable, Hashable, Sendable", swift)
         self.assertIn("public var counts: ViewCounts", swift)
         self.assertIn("public typealias ToolInput = JSONValue", swift)
+        # x-text: the shape of an ID; x-tristate: an optional Bool
+        self.assertIn("public nonisolated struct Label: RawRepresentable, Codable, Hashable, Sendable", swift)
+        self.assertIn("public var label: Label", swift)
+        self.assertIn("public var note: Label?", swift)
+        self.assertIn("public var replace: Bool?", swift)
+        self.assertNotIn("struct Replace", swift)
         # x-decode strict throws; the lenient struct still defaults, a closed enum to .unknown("")
         self.assertIn("self.phase = try c.decode(Phase.self, forKey: .phase)", swift)
         self.assertIn("self.previous = try c.decodeIfPresent(Phase.self, forKey: .previous)", swift)
         self.assertIn('self.phase = (try? c.decodeIfPresent(Phase.self, forKey: .phase)) ?? .unknown("")', swift)
         self.assertIn('self.id = (try? c.decodeIfPresent(SessionID.self, forKey: .id)) ?? SessionID("")', swift)
+        # an enum-keyed struct is read and written by its key; an unknown key reads 0 and is never written
+        self.assertIn("    public subscript(_ key: Section) -> Int {", swift)
+        self.assertIn("            case .later: later = newValue", swift)
+        self.assertIn("            case .unknown: 0", swift)
+        self.assertIn("            case .unknown: break", swift)
 
     def test_kotlin(self):
         kotlin = generate("kotlin")
@@ -202,11 +280,18 @@ class Languages(unittest.TestCase):
         self.assertIn("import kotlinx.serialization.descriptors.PrimitiveKind", kotlin)
         self.assertIn("@JvmInline\nvalue class SessionID(val raw: String) {", kotlin)
         self.assertIn("typealias ToolInput = JsonElement", kotlin)
+        self.assertIn("@JvmInline\nvalue class Label(val raw: String) {", kotlin)
+        self.assertIn('val label: Label = Label(""),', kotlin)
+        self.assertIn("val replace: Boolean? = null,", kotlin)
+        self.assertNotIn("class Replace", kotlin)
         self.assertIn("val counts: ViewCounts,", kotlin)  # strict: no default
         self.assertIn("val phase: Phase,", kotlin)
         self.assertIn('val phase: Phase = Phase.Unknown(""),', kotlin)  # lenient
         self.assertIn('val id: SessionID = SessionID(""),', kotlin)
         self.assertIn('    const val A = "a"', kotlin)  # the open enum as before
+        self.assertIn("    operator fun get(key: Section): Int = when (key) {", kotlin)
+        self.assertIn("        Section.Later -> later", kotlin)
+        self.assertIn("        is Section.Unknown -> 0", kotlin)
 
     def test_rust(self):
         rust = generate("rust")
@@ -217,6 +302,10 @@ class Languages(unittest.TestCase):
         self.assertIn("pub static TYPED_WIRE_UNKNOWN_ENUM: std::sync::OnceLock<fn(&str, &str)>", rust)
         self.assertIn("#[serde(transparent)]\npub struct SessionID(pub String);", rust)
         self.assertIn("pub type ToolInput = serde_json::Value;", rust)
+        self.assertIn("#[serde(transparent)]\npub struct Label(pub String);", rust)
+        self.assertIn("pub label: Label,", rust)
+        self.assertIn("pub replace: Option<bool>,", rust)
+        self.assertNotIn("struct Replace", rust)
         self.assertIn("pub counts: ViewCounts,", rust)
         self.assertIn("pub loose: Option<std::collections::BTreeMap<String, i64>>,", rust)
         self.assertIn("pub type Legacy = String;", rust)
@@ -247,6 +336,88 @@ class Languages(unittest.TestCase):
         self.assertIn("AGENT_VIEW_WIRE_UNKNOWN_ENUM", rust)
         self.assertIn("export class AgentViewWireDefects {", ts)
         self.assertTrue(rust.startswith("// Generated by scripts/gen/extension_schema.py from schema/wire/"))
+
+
+class SharedIDs(unittest.TestCase):
+    """A property's x-id may name an ID of a shared file (ids.schema.json, SHARED_WIRE): the generators refer to it and
+    import it where the language needs, and never write it again."""
+
+    IDS = {"$defs": {"MachineID": {"type": "string", "x-id": "MachineID", "description": "A computer."},
+                     "SessionID": {"type": "string", "x-id": "SessionID"}}}
+    USER = {"$defs": {"Ref": {"type": "object", "required": ["machine"], "properties": {
+        "machine": {"type": "string", "x-id": "MachineID"}, "session": {"type": "string", "x-id": "SessionID"},
+        "note": {"type": "string"}}}}}
+
+    def load(self, typed=True):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "ids.schema.json").write_text(json.dumps(self.IDS))
+            (Path(tmp) / "user.schema.json").write_text(json.dumps(self.USER))
+            return GEN._model.load(Path(tmp), ["user.schema.json"], shared=("ids.schema.json",), typed=typed)
+
+    def test_the_shared_ids_are_referred_to_not_written(self):
+        defs = self.load()
+        self.assertEqual((defs["MachineID"].kind, defs["MachineID"].external), ("id", "ids.schema.json"))
+        self.assertEqual({f.name: f.type.ref for f in defs["Ref"].fields}, {"machine": "MachineID", "session": "SessionID",
+                                                                             "note": ""})
+        modules = {"ids.schema.json": "./ids-wire"}
+        ts = GEN.gen_ts(defs, header=["// t"], modules=modules)
+        self.assertIn('import type { MachineID, SessionID } from "./ids-wire";', ts)
+        self.assertIn("  machine: MachineID;", ts)
+        self.assertNotIn("export type MachineID", ts)
+        self.assertIn('import type { MachineID, SessionID } from "./ids-wire";', GEN.gen_arkts(defs, header=["// t"], modules=modules))
+        swift = GEN.gen_swift(defs, header=["// t"], prefix="")
+        self.assertIn("public var machine: MachineID", swift)
+        self.assertNotIn("struct MachineID", swift)
+        kotlin = GEN.gen_kotlin(defs, header=["// t"], prefix="", package="persona.test")
+        self.assertIn('val machine: MachineID = MachineID(""),', kotlin)
+        self.assertNotIn("value class MachineID", kotlin)
+        go = GEN.gofmt(GEN.gen_go(defs, header=["// t"], package="user", package_doc="", registry="userDefs",
+                                  packages={"ids.schema.json": ("example.com/server/internal/wireids", "wireids")}))
+        self.assertIn('"example.com/server/internal/wireids"', go)
+        self.assertRegex(go, r"Machine\s+wireids\.MachineID\s+`json:\"machine\"`")
+        self.assertNotIn("type MachineID", go)
+        with self.assertRaisesRegex(GEN.SchemaError, "no Go package"):
+            GEN.gen_go(defs, header=["// t"], package="user", package_doc="", registry="userDefs")
+        with self.assertRaisesRegex(GEN.SchemaError, "no module to import"):
+            GEN.gen_ts(defs, header=["// t"])
+        with self.assertRaisesRegex(GEN.SchemaError, "Rust does not take"):
+            GEN.gen_rust(defs, header=["// t"])
+
+    def test_untyped_reads_them_as_strings(self):
+        defs = self.load(typed=False)
+        self.assertNotIn("MachineID", defs)
+        self.assertEqual(defs["Ref"].fields[0].type.kind, "string")
+
+
+class TypedExcept(unittest.TestCase):
+    """x-typed-except: the targets a schema names generate as if it had none of the typed keywords, while their callers
+    still read strings and maps (todo-view's Go until P4b); the others are typed."""
+
+    def outputs(self, doc):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "agent-view.schema.json").write_text(json.dumps(doc))
+            with patch.object(GEN, "WIRE_DIR", Path(tmp)):
+                return GEN.wire_outputs()
+
+    def test_an_excepted_target_is_what_the_schema_without_the_keywords_makes(self):
+        doc = json.loads((FIXTURES / FIXTURE).read_text())
+        doc["x-out"] = {"go": "server/internal/typedwire/typed_gen.go", "ts": "out/typed.ts"}
+        doc["x-typed-except"] = ["go"]
+        files = self.outputs(doc)
+        go, ts = files[GEN.ROOT / doc["x-out"]["go"]], files[GEN.ROOT / "out/typed.ts"]
+        self.assertNotIn("type Phase string", go)
+        self.assertIn("Phase string `json:", go)
+        self.assertIn("export function parsePhase(raw: string)", ts)
+        plain = GEN._model.untyped(doc)
+        del plain["x-typed-except"]
+        self.assertEqual(go, self.outputs(plain)[GEN.ROOT / doc["x-out"]["go"]], "byte for byte the untyped schema's")
+
+    def test_it_names_targets_the_schema_generates(self):
+        doc = json.loads((FIXTURES / FIXTURE).read_text())
+        doc["x-out"] = {"ts": "out/typed.ts"}
+        doc["x-typed-except"] = ["go"]
+        with self.assertRaisesRegex(GEN.SchemaError, "x-typed-except lists targets of its x-out"):
+            self.outputs(doc)
 
 
 GO_TEST = """package typed
@@ -293,6 +464,45 @@ func TestOpaqueIDsAndKeyedStructRoundTrip(t *testing.T) {
 }
 """
 
+GO_TEST += """
+func TestTextAndTristateRoundTripByteForByte(t *testing.T) {
+	for in, want := range map[string]Replace{
+		`{"label":"firing"}`:                                ReplaceDefault,
+		`{"label":"firing","replace":true}`:                ReplaceTrue,
+		`{"label":"resolved","note":"n","replace":false}`:  ReplaceFalse,
+		`{"label":"","replace":false,"keep":true}`:         ReplaceFalse,
+	} {
+		var v Signal
+		if err := json.Unmarshal([]byte(in), &v); err != nil {
+			t.Fatal(in, err)
+		}
+		if v.Replace != want || v.Replace.Or(true) != (want != ReplaceFalse) {
+			t.Fatalf("%s: %+v", in, v)
+		}
+		out, err := json.Marshal(v)
+		if err != nil || string(out) != in {
+			t.Fatalf("%s: %s %v", in, out, err)
+		}
+	}
+	var v Signal
+	if err := json.Unmarshal([]byte(`{"label":"x","replace":null}`), &v); err != nil || v.Replace != ReplaceDefault {
+		t.Fatalf("null is absent: %+v %v", v, err)
+	}
+	for _, bad := range []string{`{"label":"x","replace":"no"}`, `{"label":"x","replace":1}`, `{"label":1}`} {
+		if err := json.Unmarshal([]byte(bad), &v); err == nil {
+			t.Fatalf("%s decoded", bad)
+		}
+	}
+	if _, err := json.Marshal(Replace(7)); err == nil {
+		t.Fatal("a value out of the three marshaled")
+	}
+	var label Label = "free words"
+	if string(label) != "free words" {
+		t.Fatal(label)
+	}
+}
+"""
+
 RUST_TEST = r"""
 #[cfg(test)]
 mod tests {
@@ -331,6 +541,16 @@ mod tests {
         let later: Event = serde_json::from_str(r#"{"type":"moved","to":1}"#).unwrap();
         assert_eq!(later.r#type(), "moved");
         assert_eq!(serde_json::to_value(&later).unwrap(), serde_json::json!({"type": "moved", "to": 1}));
+    }
+
+    #[test]
+    fn text_and_tristate_round_trip() {
+        for input in [r#"{"label":"firing"}"#, r#"{"label":"firing","replace":true}"#, r#"{"label":"resolved","replace":false}"#] {
+            let v: Signal = serde_json::from_str(input).unwrap();
+            assert_eq!(serde_json::to_string(&v).unwrap(), input);
+        }
+        let v: Signal = serde_json::from_str(r#"{"label":"x","replace":false}"#).unwrap();
+        assert_eq!((v.label.as_str(), v.replace), ("x", Some(false)));
     }
 
     #[test]
@@ -373,7 +593,8 @@ class Compiles(unittest.TestCase):
             (Path(tmp) / "src").mkdir()
             (Path(tmp) / "src/typed.rs").write_text(generate("rust"))
             (Path(tmp) / "src/lib.rs").write_text("#[rustfmt::skip]\npub mod typed;\n" + RUST_TEST)
-            env = {**os.environ, "RUSTFLAGS": "-D warnings"}
+            channel = re.search(r'^channel = "([^"]+)"$', (ROOT / "native/app-core/rust-toolchain.toml").read_text(), re.M)[1]
+            env = {**os.environ, "RUSTFLAGS": "-D warnings", "RUSTUP_TOOLCHAIN": channel}
             code, out = run([cargo, "test", "--offline", "--quiet"], tmp, env)
             if code != 0 and ("offline" in out and ("failed to" in out or "no matching package" in out)):
                 self.skipTest("serde and serde_json are not in this machine's cargo cache (--offline)")
@@ -388,7 +609,9 @@ class Compiles(unittest.TestCase):
             (Path(tmp) / "typed.ts").write_text(generate("ts"))
             (Path(tmp) / "typed_arkts.ts").write_text(generate("arkts"))  # the ArkTS flavour is TypeScript too
             (Path(tmp) / "use.ts").write_text(
-                'import { parsePhase, sessionID, type Phase, type SessionID, type View } from "./typed";\n'
+                'import { parsePhase, sessionID, type Label, type Phase, type SessionID, type Signal, type View } from "./typed";\n'
+                'const label: Label = "firing";\n'
+                'const signal: Signal = { label: "resolved", note: label, replace: false };\n'
                 'const p = parsePhase("resting");\n'
                 'const known: Phase | null = typeof p === "string" ? p : null;\n'
                 'const id: SessionID = sessionID("s");\n'
@@ -401,7 +624,7 @@ class Compiles(unittest.TestCase):
                 '    default: { const never: never = v.phase; return never; }\n'
                 '  }\n'
                 '}\n'
-                'export { known, id, raw, phaseWord };\n')
+                'export { known, id, raw, phaseWord, signal };\n')
             code, out = run([node, tsc, "--noEmit", "--strict", "--target", "es2022", "--module", "esnext",
                              "--moduleResolution", "bundler", "typed.ts", "typed_arkts.ts", "use.ts"], tmp)
             self.assertEqual(code, 0, out)

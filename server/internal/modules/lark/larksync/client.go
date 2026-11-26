@@ -19,8 +19,9 @@ import (
 
 // Open-platform answer codes the readers act on.
 const (
-	codeRateLimited     = 99991400 // the gateway's frequency limit (often on an HTTP 400)
-	codeChatRateLimited = 230020   // a chat's own limit
+	codeRateLimited              = 99991400 // the gateway's frequency limit (often on an HTTP 400)
+	codeChatRateLimited          = 230020   // a chat's own limit
+	codeDriveDownloadRateLimited = 1061045  // drive/v1/files/:file_token/download frequency limit (5 QPS)
 )
 
 // tokenGoneCodes are answers that mean the user access token itself was refused (expired, invalid, revoked or for
@@ -218,12 +219,12 @@ func classify(op string, a answer, raw bool, out any) *larksyncwire.Error {
 		if msg == "" {
 			msg = "HTTP " + strconv.Itoa(a.status)
 		}
-		return &larksyncwire.Error{Kind: kind, Op: op, Code: env.Code, Msg: msg, RetryAfter: after}
+		return &larksyncwire.Error{Kind: kind, Op: op, Code: env.Code, HTTPStatus: a.status, Msg: msg, RetryAfter: after}
 	}
 	switch {
 	case a.status == http.StatusUnauthorized || tokenGoneCodes[env.Code]:
 		return fail(larksyncwire.ErrKindAuth)
-	case a.status == http.StatusTooManyRequests || env.Code == codeRateLimited || env.Code == codeChatRateLimited:
+	case a.status == http.StatusTooManyRequests || env.Code == codeRateLimited || env.Code == codeChatRateLimited || env.Code == codeDriveDownloadRateLimited:
 		return fail(larksyncwire.ErrKindRateLimited)
 	case a.status >= 500:
 		return fail(larksyncwire.ErrKindTransient)
@@ -255,10 +256,10 @@ func retryWait(h http.Header, status, code int) time.Duration {
 			after = max(after, time.Duration(secs)*time.Second)
 		}
 	}
-	if code == codeChatRateLimited {
+	if code == codeChatRateLimited || code == codeDriveDownloadRateLimited {
 		after = max(after, time.Second)
 	}
-	if status != http.StatusTooManyRequests && code != codeRateLimited && code != codeChatRateLimited {
+	if status != http.StatusTooManyRequests && code != codeRateLimited && code != codeChatRateLimited && code != codeDriveDownloadRateLimited {
 		return 0
 	}
 	return after

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"net/http"
 	"strings"
 	"testing"
@@ -153,7 +154,7 @@ func TestTrimmedRecordingRoutes(t *testing.T) {
 	if recs := list["recordings"].([]any); len(recs) != 1 || recs[0].(map[string]any)["trimmed_at"] == nil || list["days"] != float64(14) {
 		t.Fatalf("reconciliation %v", list)
 	}
-	if out := m.upload(id, 2, map[string]any{"complete": true, "segments": segments}); out["status"] != kb.RecordingExpired {
+	if out := m.upload(id, 2, map[string]any{"complete": true, "segments": segments}); out["status"] != recordingwire.RecordingExpired {
 		t.Fatalf("an upload of a trimmed recording: %v", out)
 	}
 	if out := m.do("POST", path+"/minutes/todos", "", map[string]any{"version": 1, "actions": []string{"a1"}}, http.StatusOK); len(out["todos"].([]any)) != 1 {

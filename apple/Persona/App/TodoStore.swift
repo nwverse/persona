@@ -117,6 +117,8 @@ final class TodoStore {
         var now: @MainActor () -> Date = { Date() }
         /// The list's writes still on this device (`TodoOutbox.pending`): the rows and the numbers show them at once.
         var pending: @MainActor () -> [String: TodoCountsSource.Pending] = { [:] }
+        /// The answers still on this device (`TodoOutbox.answering`): their asks count as answered at once.
+        var answering: @MainActor () -> [String: Set<String>] = { [:] }
         /// The hub answered read `n` of the list (`readsBegun`), which has landed: the list's writes it shows are let go,
         /// those that could not reach it go again. Only while V1 is on: no write is made without it.
         var answered: @MainActor (_ read: Int) -> Void = { _ in }
@@ -152,6 +154,7 @@ final class TodoStore {
                       if let cache { StateCache.save(TodoStore.viewStateName, cache) } else { StateCache.remove(TodoStore.viewStateName) }
                   },
                   pending: { TodoOutbox.shared.pending },
+                  answering: { TodoOutbox.shared.answering },
                   answered: { TodoOutbox.shared.hubAnswered(read: $0) })
         }
     }
@@ -224,7 +227,8 @@ final class TodoStore {
         self.managers = managers
         self.v1 = v1
         viewSaver = Throttle(first: v1.timing.saveFirst, gap: v1.timing.saveGap)
-        countsSource = TodoCountsSource(scope: managers.scope, lookup: v1.lookup, now: v1.now, pending: v1.pending)
+        countsSource = TodoCountsSource(scope: managers.scope, lookup: v1.lookup, now: v1.now, pending: v1.pending,
+                                        answering: v1.answering)
         let initial = cachedTodos ?? StateCache.load(Self.stateName, as: [TodoItem].self) ?? []
         let initialIndex = Self.index(initial)
         todos = initial
@@ -621,6 +625,16 @@ final class TodoStore {
         byID[id]
     }
 
+    /// The id to-do `id`'s view lists for its decision asked at `round` (the accept route's `asked_at`), so an answer
+    /// from the Needs You tray moves the numbers as one from its row does; "" when its view lists none.
+    func askID(todo id: String, round: String) -> String {
+        let moment = JSON.parseDate(round)
+        return views[id]?.asks?.first { ask in
+            guard let r = ask.round else { return false }
+            return r == round || (moment != nil && JSON.parseDate(r) == moment)
+        }?.id ?? ""
+    }
+
     /// A new to-do is the current assistant's (or `owner`'s): its manager is named, and the answer stamped with it.
     func create(title: String, notes: String? = nil, due: APIClient.TodoPlanChange.Due? = nil, owner: Owner = .current,
                 api injected: APIClient? = nil) async throws -> TodoItem {
@@ -883,9 +897,54 @@ final class TodoStore {
             guard generation == targetGeneration else { return res.id }
             created = res.id
             replace(res)
+        case .answer(let a):
+            try await answer(a, todo: id, opID: opID, api: api)
+            answered(.init(read: readsBegun))
+            guard generation == targetGeneration else { return nil }
         }
         await confirmWrite(api: api)
         return created
+    }
+
+    /// An answer to one of to-do `id`'s own asks (#10465; proposal 3.7): through the asks route while the hub lists
+    /// `todo_asks`, else today's accept route (a decision, by its round) or retry route. A manager that reconnected at an
+    /// older version answers the asks route 404 or 405 without the route's codes (`TodoAskRefusal.routeMissing`): today's
+    /// routes then, which take no op id. A step's ask lifted onto its parent's row goes to the asks route on the parent,
+    /// which names it, and to today's routes on the step itself. The view that shows it comes with the read after it.
+    private func answer(_ a: TodoOutbox.AskAnswer, todo id: String, opID: UUID, api: APIClient) async throws {
+        if v1.features().asks, !a.ask.isEmpty {
+            do {
+                _ = try await api.answerAsk(todo: id, ask: a.ask, a.body, opID: opID)
+                return
+            } catch where TodoAskRefusal.routeMissing(error) {}
+        }
+        let target = a.step ?? id
+        if a.kind == OwnerAskKind.retry {
+            _ = try await api.retryTodo(target)
+            return
+        }
+        guard let round = a.round else {
+            // No round to answer by (an ask from a newer manager the accept route cannot name): nothing went.
+            throw APIError(status: 409, message: String(localized: "Already handled"), fields: ["code": TodoAskRefusal.stale])
+        }
+        try await api.acceptTodo(target, askedAt: round, option: a.option, response: a.response)
+    }
+
+    /// A fixed answer from the Needs You tray ("You Decide", …) to to-do `id`'s decision asked at `round`, which is not
+    /// held: through the asks route with an op id of its own while the hub lists `todo_asks` and the view names the
+    /// decision, else (or where the manager lacks the route) today's accept route.
+    func respond(todo id: String, round: String, response: String, api injected: APIClient? = nil) async throws {
+        guard let api = (injected ?? AppModel.shared.api)?.manager(managers.naming(byID[id]?.manager)) else {
+            throw APIError(status: 0, message: String(localized: "Not connected to a hub [Todo Store 04f822]"))
+        }
+        let ask = askID(todo: id, round: round)
+        if v1.features().asks, !ask.isEmpty {
+            do {
+                _ = try await api.answerAsk(todo: id, ask: ask, TodoAskAnswer(response: response), opID: UUID())
+                return
+            } catch where TodoAskRefusal.routeMissing(error) {}
+        }
+        try await api.acceptTodo(id, askedAt: round, response: response)
     }
 
     /// `item` in its row's place, a new one first; a read already in flight cannot put the old one back.

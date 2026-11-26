@@ -1,11 +1,10 @@
 package writers
 
 import (
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"slices"
 	"testing"
 	"time"
-
-	"github.com/nwverse/persona/server/internal/kb"
 )
 
 // final_done is kept in meeting.json and moves the transcription's revision (the apps hear of it in meeting_live); it
@@ -31,18 +30,18 @@ func TestFinalDoneMovesTheRevision(t *testing.T) {
 		}
 		return tr
 	}
-	upd(func(t *MeetingTranscription) { t.State, t.End = kb.TranscriptionFinishing, 600 })
+	upd(func(t *MeetingTranscription) { t.State, t.End = recordingwire.TranscriptionFinishing, 600 })
 	parts()
 	upd(func(t *MeetingTranscription) { t.FinalDone = 300 })
 	if p := parts(); len(p) != 0 {
 		t.Fatalf("progress before the pass started moved %v", p)
 	}
 	upd(func(t *MeetingTranscription) { t.FinalFrom = now })
-	if p := parts(); !slices.Equal(p, []string{kb.PartTranscription}) {
+	if p := parts(); !slices.Equal(p, []string{recordingwire.PartTranscription}) {
 		t.Fatalf("the pass's start told %v", p)
 	}
 	upd(func(t *MeetingTranscription) { t.FinalDone = 450 })
-	if p := parts(); !slices.Equal(p, []string{kb.PartTranscription}) {
+	if p := parts(); !slices.Equal(p, []string{recordingwire.PartTranscription}) {
 		t.Fatalf("a window told %v", p)
 	}
 	if tr := transcriptionNow(t, e, recID); tr.FinalDone != 450 {
@@ -52,7 +51,7 @@ func TestFinalDoneMovesTheRevision(t *testing.T) {
 	if v := m.TranscriptionView(nil); v.FinalDone == nil || *v.FinalDone != 450 || v.End == nil || *v.End != 600 {
 		t.Fatalf("view %+v", v)
 	}
-	tr := upd(func(t *MeetingTranscription) { t.State = kb.TranscriptionFinal })
+	tr := upd(func(t *MeetingTranscription) { t.State = recordingwire.TranscriptionFinal })
 	if tr.FinalDone != 0 {
 		t.Fatalf("final keeps its progress: %+v", tr)
 	}

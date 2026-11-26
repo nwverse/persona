@@ -162,7 +162,7 @@ internal/hubedge app-exported-record 4
 internal/i18n app-exported-record 1
 internal/i18n app-named-primitive 2
 internal/imageorient app-exported-record 1
-internal/kb app-exported-record 51
+internal/kb app-exported-record 49
 internal/kb app-exported-record Milestone #13784 #13891 #13914 #14029 #14104 #14362 #14934
 internal/kb app-exported-record MilestoneEdit #13784 #13891 #13914 #14029 #14104 #14362 #14934
 internal/kb app-exported-record ProjectRef #13784 #13891 #13914 #14029 #14104 #14362 #14934

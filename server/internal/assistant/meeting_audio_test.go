@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"io"
 	"net/http"
 	"slices"
@@ -191,11 +192,11 @@ func wholeTimeline(t *testing.T, said string) {
 	}
 	var m kb.Meeting
 	waitFor(t, "the timeline in meeting.json", func() bool { // joined after ready
-		m, _, _ = h.engine().MeetingRead(meetingRec)
+		m, _, _ = recW(h.engine()).MeetingRead(meetingRec)
 		return m.Transcription != nil && m.Transcription.Timeline != nil
 	})
 	if got := m.Transcription.Timeline; len(got.Roles) != kb.MaxTimelineRoles || len(got.Speaking) != kb.MaxTimelineSpans ||
-		got.Speaking[999] != (kb.SpokenSpan{Start: 9990, End: 9995, Text: said}) {
+		got.Speaking[999] != (recordingwire.SpokenSpan{Start: 9990, End: 9995, Text: said}) {
 		t.Fatalf("the timeline has %d roles and %d spans", len(got.Roles), len(got.Speaking))
 	}
 }
@@ -228,7 +229,7 @@ func TestAudioSocketReplacedAndEnd(t *testing.T) {
 	if len(acks) == 0 || acks[len(acks)-1]["at"] != 2.0 {
 		t.Fatalf("acks: %v", acks)
 	}
-	m, _, err := h.engine().MeetingRead(meetingRec)
+	m, _, err := recW(h.engine()).MeetingRead(meetingRec)
 	if err != nil || m.Transcription.End != 2 {
 		t.Fatalf("the end: %+v %v", m.Transcription, err)
 	}

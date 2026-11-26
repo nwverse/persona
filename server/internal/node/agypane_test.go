@@ -108,6 +108,24 @@ func TestAgyPaneUserImagesAndCheckpoints(t *testing.T) {
 	if frozen.Total != 1 || frozen.Inputs[0] != wantFrozen || frozen.History != index.History {
 		t.Fatalf("frozen user inputs: %+v", frozen)
 	}
+	compact := agyTestCall(t, node, "session.items", agyTestRow, map[string]any{"user_inputs": true, "meta_only": true}).(proto.UserInputIndex)
+	if compact.Total != index.Total || compact.History != index.History || compact.Inputs[0] != index.Inputs[0].WithoutExcerpts() ||
+		compact.Inputs[1] != index.Inputs[1].WithoutExcerpts() {
+		t.Fatalf("compact user inputs: %+v", compact)
+	}
+	previews := agyTestCall(t, node, proto.MethodSessionInputPreviews, agyTestRow, map[string]any{
+		"positions": []proto.UserInputRef{index.Inputs[0].Ref(), index.Inputs[1].Ref()}, "before_seq": 2,
+	}).(proto.InputPreviews)
+	if len(previews.Inputs) != 1 || previews.Inputs[0] != wantFrozen || previews.History != index.History {
+		t.Fatalf("retired preview: %+v", previews)
+	}
+	window := agyTestCall(t, node, proto.MethodSessionItemsWindow, agyTestRow, map[string]any{
+		"from_seq": 3, "through_seq": 3, "history": index.History,
+	}).(proto.ItemsWindow)
+	if window.FromSeq != 2 || window.ToSeq != 3 || !window.HasMore || !window.MoreAfter ||
+		len(window.Items) != 2 || window.Items[0].Image == nil || window.Items[0].Image.Data != "" {
+		t.Fatalf("target window: %+v", window)
+	}
 	recent, page := agyTestItems(t, node, agyTestRow, map[string]any{"turns": 1})
 	if page["has_more"] != true || len(recent) != 3 || index.Inputs[1].ID != recent[0].ID {
 		t.Fatalf("latest turn: %+v", page)
