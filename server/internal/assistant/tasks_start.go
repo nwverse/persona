@@ -177,6 +177,7 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 	if !ok {
 		return nil, errPlanNotOpen
 	}
+	unlockRules := s.takePlanUnlockRules(p.ID)
 	planOwners := map[string]Todo{}
 	planQueuedKeys := map[string]bool{}
 	pendingPlacementBatchSize := 0
@@ -286,9 +287,21 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 			continue
 		}
 		t.TodoID = todo.ID
-		if s.settings(ctx).todosV2On() && len(t.BlockedByPR) > 0 {
-			if err := s.persistExternalPRBlockers(ctx, todo.ID, t.BlockedByPR); err != nil {
-				s.logf("task %s: persist external_pr blockers: %v", todo.ID, err)
+		if s.settings(ctx).todosV2On() {
+			if len(t.BlockedByPR) > 0 {
+				if err := s.persistExternalPRBlockers(ctx, todo.ID, t.BlockedByPR); err != nil {
+					s.logf("task %s: persist external_pr blockers: %v", todo.ID, err)
+				}
+			}
+			afterIDs := cleanIDs(slices.Concat(t.After, todo.After))
+			if len(afterIDs) > 0 {
+				var unlockStage string
+				var unlockContracts []string
+				if i < len(unlockRules) {
+					unlockStage = unlockRules[i].stage
+					unlockContracts = unlockRules[i].contracts
+				}
+				s.syncAfterBlockers(ctx, todo.ID, afterIDs, unlockStage, unlockContracts)
 			}
 		}
 		if t.RequestGate != "" {

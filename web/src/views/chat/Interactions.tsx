@@ -453,7 +453,7 @@ export function QuestionCard({ ix, canApprove, onAnswer }: { ix: Interaction; ca
       looking={looking}
       cardKeys={keys}
       tapGuard={tapGuard}
-      onDismiss={onAnswer ? undefined : () => resolve(ix, { dismiss: true })}
+      onDismiss={onAnswer || ix.no_hand_back ? undefined : () => resolve(ix, { dismiss: true })}
       skip={canSkip ? { run: skip, error: skipError } : undefined}
       busy={busy}
       footer={
@@ -571,7 +571,7 @@ function PlanCard({ ix }: { ix: Interaction }) {
       title={t("chat-interactions.plan_title")}
       cardKeys={keys}
       tapGuard={tapGuard}
-      onDismiss={() => go({ dismiss: true })}
+      onDismiss={ix.no_hand_back ? undefined : () => go({ dismiss: true })}
       busy={busy}
       footer={
         rejecting ? (
@@ -983,7 +983,7 @@ function PlainScreenCard({ ix }: { ix: Interaction }) {
       title={d?.question || t("chat-interactions.screen_title")}
       cardKeys={keys}
       tapGuard={tapGuard}
-      onDismiss={() => go({ dismiss: true }, "dismiss")}
+      onDismiss={ix.no_hand_back ? undefined : () => go({ dismiss: true }, "dismiss")}
       busy={busy !== null}
       footer={<div className="flex w-full min-w-0 flex-col gap-2">
         <div className="flex min-w-0 items-center gap-2">
@@ -1103,7 +1103,7 @@ function MultiScreenCard({ ix }: { ix: Interaction }) {
       title={d.question || t("chat-interactions.multi_title")}
       cardKeys={keys}
       tapGuard={tapGuard}
-      onDismiss={() => go({ dismiss: true }, "dismiss")}
+      onDismiss={ix.no_hand_back ? undefined : () => go({ dismiss: true }, "dismiss")}
       busy={busy !== null}
       footer={
         <>
@@ -1209,7 +1209,7 @@ function ElicitationCard({ ix }: { ix: Interaction }) {
       title={url ? t("chat-interactions.url_title") : t("chat-interactions.form_title")}
       cardKeys={keys}
       tapGuard={tapGuard}
-      onDismiss={() => go({ dismiss: true }, "dismiss")}
+      onDismiss={ix.no_hand_back ? undefined : () => go({ dismiss: true }, "dismiss")}
       busy={busy !== null}
       footer={
         <>
