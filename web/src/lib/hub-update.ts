@@ -17,6 +17,7 @@ export interface HubDevelopmentProgress {
   step: string;
   step_index: number;
   step_total: number;
+  steps?: string[];
   elapsed_seconds: number;
   item_label?: string;
   item_done?: number;

@@ -106,7 +106,7 @@ wins.
 
 ### Built-in writer pause
 
-Without hooks the Hub pauses the writers itself for the whole snapshot: request writes are
+Without hooks the Hub pauses its writers while capturing mutable data: request writes are
 refused with `503` until resume — the apps' API, signing in with a password or a browser, a
 manager trading its install code, and the admin pages — writes already under way finish, and
 the built-in child manager is stopped and kept stopped until resume. Background writers (app
@@ -139,8 +139,8 @@ In Settings › Hub the development pipeline runs **Build → Waiting for idle �
 Build includes staging and verifying the programs. For a saved version, **Prepare backup** takes
 the place of Build. Before these stages, the hub checks the backup settings. Choose **Cancel update** and confirm to stop before binary adoption. Cancelling during this first check stops the attempt before the build.
 The hub interrupts resolution or a running build, or stops at a safe staging or idle boundary.
-During a snapshot it records the request in memory, finishes verification, resumes writers and
-saves the backup receipt. After cleanup the hub is idle, history shows **Cancelled**, and another
+During a snapshot it records the request in memory. Writers resume after data capture. Program
+packaging, verification and saving the backup receipt finish before cancellation takes effect. After cleanup the hub is idle, history shows **Cancelled**, and another
 update can start immediately.
 
 `GET /api/v1/hub/update` reports `can_cancel` and `cancelling`. The authenticated
@@ -157,15 +157,15 @@ The backup checks its settings and storage before pausing writers. Database prog
 cumulative bytes written by `pg_dump`; the final dump size is unknown while it runs.
 Before writing `files.tar.gz`, the helper scans the included trees for regular file counts
 and sizes using the archive exclusions. The archive reports completed files and uncompressed
-file bytes read. Program and Node package archiving, external writer resume when configured,
-and snapshot verification have their own steps. Applying a saved version shows the snapshot
+file bytes read. Writer resume, program and Node package archiving, and snapshot verification
+each have a step, in that order, for both writer coordination modes. Applying a saved version shows the snapshot
 checksum scan and the copy of compressed program and Node packages into staging. The byte
 totals describe each step's inputs. A percentage describes that step's bytes or completed build
 targets. The Web uses its standard file-size units and shows a smoothed rate in MB/s.
 
 `GET /api/v1/hub/update` adds the optional `development_progress` object while these phases
 run. It carries `phase` (`building`, `backing_up` or `applying_backup`), `step`, the one-based
-`step_index`, `step_total` and `elapsed_seconds`. When available it also carries `item_label`,
+`step_index`, `step_total` and `elapsed_seconds`. Newer Hubs include the ordered step names in `steps`. When available it also carries `item_label`,
 `item_done`, `item_total`, `bytes_done`, `bytes_total`, `bytes_per_second` and `percent`.
 The page polls for counters about once per second. The helper reports counter samples at most
 about every 750 ms, with an immediate event at step changes and when totals become available.
@@ -253,16 +253,28 @@ a recovery point in the configured backup folder (the recommended default is
   in `managers/*/manager.json` (shared databases deduplicated), plus `extra_databases`.
 - The runtime tree's configuration, encryption keys, knowledge/history, attachments and other
   ordinary data files, plus configured external knowledge directories and `extra_roots`.
-  Only `update`, `bin`, `cache`, `logs`, sockets and FIFOs are excluded. Escaping/absolute
-  symlinks fail closed; they need an explicit storage layout change before this path is usable.
+  The runtime's top-level `update`, `bin`, `cache` and `logs`, the snapshot store, sockets and
+  FIFOs are omitted. The top-level `web.prev/` directory is a previous standalone Web bundle.
+  Recovery uses the captured active `web/` override or the saved program's embedded Web.
+  The previous bundle is kept if the active override resolves into it or it contains an explicitly
+  inventoried knowledge directory or extra root. A nested directory named `web.prev` stays in
+  the archive. Unknown runtime directories are included. Links must satisfy the offline
+  extraction rules below.
 - Separate compressed copies of the current `personad` and existing Hub/Manager programs,
   with hashes, original paths, installed version/build/commit and installation/backup times.
   All matching locally available Node packages are saved, including platforms with no currently
   registered computer; symlinks and packages marked as another version are excluded. Each snapshot
-  retains its own matching programs rather than depending on the single latest `.prev`.
+  retains its own matching programs. If the host Node and installed `personad` have identical
+  native SHA-256 hashes, their original `node-<platform>.gz` and `program-personad.gz` names
+  share one compressed file through a hard link. Stores without hard links receive a copy.
+  Both layouts use the original manifest and both names work independently after copying.
 
 Writers remain paused across **all** database dumps and the file archive. A dump must have its
-PostgreSQL header and pass `pg_restore --list`; archives and dumps have SHA-256 checksums.
+PostgreSQL header and pass `pg_restore --list`. Once the helper saves the effective database
+connections and opens the selected program files, it runs the resume hook or requests and
+waits for the Hub's built-in resume acknowledgement. The open files preserve the selected
+binaries across atomic replacements. Compression, SHA-256 hashing of staged data and programs,
+verification, publication and retention all run with writers resumed under the snapshot lock.
 Each private snapshot directory is synced, published and verified before cleanup. Credentials
 remain inside private config/key backups (0700 directories, 0600 files), never in receipts or
 the API. `database-0.dump` is the Hub; subsequent dumps follow sorted manager config paths,
@@ -349,9 +361,11 @@ recovery procedure; use the offline procedure only when data recovery is actuall
    those databases in the restored configuration. Preserve the failed databases until recovery
    is confirmed. Put the matching config, encryption keys, history and attachments back together.
 4. Decompress the snapshot's `program-*.gz` files to the recorded program paths, verifying
-   their native hashes in `manifest.json`; the immediate previous transaction also retains
-   `.prev` files. Restore `web_prev` when present; do not overwrite a subsequently changed Web
-   directory. Start the original version, check history/data and node connectivity, then enable
+   their native hashes in `manifest.json`. Restore each saved Node artifact from the manifest's
+   `nodes` mapping to the installation's Node binary directory and verify its native hash.
+   Use the extracted active `web/` for a whole-install restore. For an immediate transaction
+   rollback, the journal records the program preimages and any detached override in `web_prev`.
+   Preserve a subsequently changed Web directory. Start the original version, check history/data and node connectivity, then enable
    only the automation you want.
 
 `coordination-pending.json` means a pause/resume outcome needs inspection: run the original
