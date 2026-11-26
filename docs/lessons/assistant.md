@@ -1055,3 +1055,13 @@ Keep the deduplication key independent of the Inbox row and the binding that mat
 the same comment, and the row can collect a later comment while the first is waiting for its digest. Commit the
 source receipt with the Inbox write. Reserve only one action owner and pin the delivery before contacting the
 Agent. Record uncertain delivery against that recipient so a restarted worker does not try another one.
+
+## Check-time `@file` content is not what an Auth-less gate sends (#8413)
+
+A command gate without `Auth` has no local proxy to inspect the HTTP body at send time, so check-time `@file` content
+cannot grant a silent body-scoped `allow` or bypass an earlier body-scoped restriction in default mode. Read `@file`
+bodies and `--url-query @file` inputs through a pinned `os.OpenRoot` with `openKnowledgeFile` (`O_NONBLOCK|O_NOFOLLOW`),
+reject final symlinks, non-regular files, files over 1 MiB, and lexical or resolved `/proc`, `/dev` and `/sys` paths.
+Output-filter whitelists also need argument checks: `sort -o` / `--output` / `--compress-program`, `date -s` / `--set` /
+positional timestamp operands, and `uniq IN OUT` write files, execute programs, or mutate system state rather than only
+formatting output.
