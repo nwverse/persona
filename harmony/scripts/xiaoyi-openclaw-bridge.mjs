@@ -21,22 +21,28 @@
  *   PERSONA_HUB_TOKEN Persona Hub device/API bearer token
  *
  * Optional config:
- *   XIAOYI_WS_URL        Default: wss://hag.cloud.huawei.com/openclaw/v1/ws/link
- *   XIAOYI_AUTH_MODE     "huawei" (default: x-access-key/x-ts/x-sign/x-agent-id) or "hag"
- *   PERSONA_MANAGER      Optional Persona manager ID header
- *   XIAOYI_HEARTBEAT_MS  Default: 25000
+ *   XIAOYI_WS_URL         Primary WS endpoint (default: wss://hag.cloud.huawei.com/openclaw/v1/ws/link)
+ *   XIAOYI_WS_URL_2       Secondary WS endpoint (default: wss://116.63.174.231/openclaw/v1/ws/link when using default primary; "none" to disable)
+ *   XIAOYI_AUTH_MODE      "huawei" (default: x-access-key/x-ts/x-sign/x-agent-id) or "hag"
+ *   PERSONA_MANAGER       Optional Persona manager ID header
+ *   XIAOYI_HEARTBEAT_MS   Default: 20000
  *   XIAOYI_ASK_TIMEOUT_MS Default: 24000
  */
 
-import { createHmac, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import http from 'node:http';
+import https from 'node:https';
+import { isIP } from 'node:net';
 import { pathToFileURL } from 'node:url';
 
 export const DEFAULT_OPENCLAW_WS_URL = 'wss://hag.cloud.huawei.com/openclaw/v1/ws/link';
-export const DEFAULT_HEARTBEAT_MS = 25000;
+export const DEFAULT_OPENCLAW_WS_URL_2 = 'wss://116.63.174.231/openclaw/v1/ws/link';
+export const DEFAULT_HEARTBEAT_MS = 20000;
 export const DEFAULT_ASK_TIMEOUT_MS = 24000;
 export const MAX_PROMPT_CHARS = 8000;
 const MAX_SESSION_CONTEXTS = 64;
+const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const RECORDING_OFF_MESSAGE = 'Meeting recording is off on this hub.';
 const HEALTH_INTAKE_ROUTE = '/api/v1/assistant/health/intake?space=health';
 
@@ -53,6 +59,335 @@ export function parseCliArgs(argv = process.argv.slice(2)) {
   return opts;
 }
 
+/** Returns true strictly for `wss://` URLs targeting a raw IPv4 or IPv6 literal hostname. */
+export function isWssIpLiteralUrl(urlString) {
+  try {
+    const url = new URL(urlString);
+    if (url.protocol !== 'wss:') return false;
+    const rawHost = url.hostname || '';
+    const host = rawHost.startsWith('[') && rawHost.endsWith(']') ? rawHost.slice(1, -1) : rawHost;
+    return isIP(host) !== 0;
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * Zero-dependency RFC 6455 WebSocket client built on `node:http` / `node:https`.
+ * Intentionally avoids `Sec-WebSocket-Extensions: permessage-deflate` (which Huawei ELB closes
+ * after the first client frame on Node 24's built-in `WebSocket`), supports protocol-level
+ * Ping/Pong (`0x9` / `0xA`), and skips TLS cert checks strictly for explicit `wss://` IP literals.
+ */
+export class Rfc6455WebSocket {
+  constructor(urlString, options = {}) {
+    this.url = urlString;
+    this.readyState = 0; // CONNECTING
+    this._listeners = new Map();
+    this._socket = null;
+    this._req = null;
+    this._closedEmitted = false;
+    this._closeTimer = null;
+    this._recvBuf = Buffer.alloc(0);
+    this._fragOpcode = 0;
+    this._fragChunks = [];
+
+    let parsed;
+    try {
+      parsed = new URL(urlString);
+    } catch (err) {
+      queueMicrotask(() => {
+        this._emit('error', err);
+        this._emitClose(1006, err?.message || 'invalid url');
+      });
+      return;
+    }
+
+    const isTls = parsed.protocol === 'wss:';
+    if (!isTls && parsed.protocol !== 'ws:') {
+      const err = new Error(`Unsupported WebSocket protocol: ${parsed.protocol}`);
+      queueMicrotask(() => {
+        this._emit('error', err);
+        this._emitClose(1006, err.message);
+      });
+      return;
+    }
+
+    const secKey = randomBytes(16).toString('base64');
+    const reqHeaders = {};
+    if (options.headers && typeof options.headers === 'object') {
+      for (const [k, v] of Object.entries(options.headers)) {
+        if (k.toLowerCase() === 'sec-websocket-extensions') continue;
+        if (v !== undefined && v !== null) reqHeaders[k] = String(v);
+      }
+    }
+    reqHeaders.Connection = 'Upgrade';
+    reqHeaders.Upgrade = 'websocket';
+    reqHeaders['Sec-WebSocket-Key'] = secKey;
+    reqHeaders['Sec-WebSocket-Version'] = '13';
+
+    const transport = isTls ? https : http;
+    const reqOpts = {
+      protocol: isTls ? 'https:' : 'http:',
+      hostname: parsed.hostname,
+      port: parsed.port || (isTls ? 443 : 80),
+      path: `${parsed.pathname || '/'}${parsed.search || ''}`,
+      method: 'GET',
+      headers: reqHeaders
+    };
+    if (isTls) {
+      reqOpts.rejectUnauthorized = options.rejectUnauthorized !== undefined
+        ? Boolean(options.rejectUnauthorized)
+        : !isWssIpLiteralUrl(urlString);
+    }
+
+    const req = transport.request(reqOpts);
+    this._req = req;
+
+    req.on('upgrade', (res, socket, head) => {
+      const expectedAccept = createHash('sha1').update(`${secKey}${WS_GUID}`).digest('base64');
+      const actualAccept = String(res.headers['sec-websocket-accept'] || '').trim();
+      if (actualAccept !== expectedAccept) {
+        const err = new Error('Invalid Sec-WebSocket-Accept header from server');
+        socket.destroy();
+        this._emit('error', err);
+        this._emitClose(1006, err.message);
+        return;
+      }
+
+      this._socket = socket;
+      this.readyState = 1; // OPEN
+      if (typeof socket.setNoDelay === 'function') socket.setNoDelay(true);
+
+      socket.on('data', (chunk) => this._onData(chunk));
+      socket.on('error', (err) => {
+        this._emit('error', err);
+      });
+      socket.on('close', () => {
+        this._emitClose(this._pendingCloseCode ?? 1006, this._pendingCloseReason ?? '');
+      });
+      socket.on('end', () => {
+        if (!this._closedEmitted && this._pendingCloseCode !== undefined) {
+          this._emitClose(this._pendingCloseCode, this._pendingCloseReason ?? '');
+        }
+      });
+
+      this._emit('open', {});
+      if (head && head.length > 0) {
+        this._onData(head);
+      }
+    });
+
+    req.on('response', (res) => {
+      res.resume();
+      const err = new Error(`WebSocket upgrade failed with HTTP ${res.statusCode}`);
+      this._emit('error', err);
+      this._emitClose(1006, err.message);
+    });
+
+    req.on('error', (err) => {
+      if (!this._socket) {
+        this._emit('error', err);
+        this._emitClose(1006, err?.message || 'socket error');
+      }
+    });
+
+    req.end();
+  }
+
+  addEventListener(type, fn) {
+    if (typeof fn !== 'function') return;
+    let set = this._listeners.get(type);
+    if (!set) {
+      set = new Set();
+      this._listeners.set(type, set);
+    }
+    set.add(fn);
+  }
+
+  removeEventListener(type, fn) {
+    const set = this._listeners.get(type);
+    if (set) set.delete(fn);
+  }
+
+  _emit(type, event) {
+    const set = this._listeners.get(type);
+    if (!set) return;
+    for (const fn of Array.from(set)) {
+      try {
+        fn(event);
+      } catch (_) {
+        // Keep listener dispatch resilient.
+      }
+    }
+  }
+
+  _emitClose(code, reason) {
+    if (this._closedEmitted) return;
+    this._closedEmitted = true;
+    this.readyState = 3; // CLOSED
+    if (this._closeTimer) {
+      clearTimeout(this._closeTimer);
+      this._closeTimer = null;
+    }
+    this._emit('close', { code, reason });
+  }
+
+  _sendFrame(opcode, payloadBuf) {
+    if (!this._socket || this._socket.destroyed || !this._socket.writable) return;
+    const payload = Buffer.isBuffer(payloadBuf) ? payloadBuf : Buffer.from(payloadBuf || '');
+    const len = payload.length;
+    const mask = randomBytes(4);
+    let headerLen = 2;
+    if (len >= 126 && len < 65536) headerLen = 4;
+    else if (len >= 65536) headerLen = 10;
+
+    const frame = Buffer.allocUnsafe(headerLen + 4 + len);
+    frame[0] = 0x80 | (opcode & 0x0f);
+    if (len < 126) {
+      frame[1] = 0x80 | len;
+    } else if (len < 65536) {
+      frame[1] = 0x80 | 126;
+      frame.writeUInt16BE(len, 2);
+    } else {
+      frame[1] = 0x80 | 127;
+      frame.writeBigUInt64BE(BigInt(len), 2);
+    }
+    mask.copy(frame, headerLen);
+    for (let i = 0; i < len; i++) {
+      frame[headerLen + 4 + i] = payload[i] ^ mask[i & 3];
+    }
+    this._socket.write(frame);
+  }
+
+  send(data) {
+    if (this.readyState !== 1) return;
+    if (Buffer.isBuffer(data) || data instanceof Uint8Array) {
+      this._sendFrame(0x2, Buffer.from(data));
+    } else {
+      this._sendFrame(0x1, Buffer.from(String(data), 'utf8'));
+    }
+  }
+
+  ping(data = '') {
+    if (this.readyState !== 1) return;
+    const buf = Buffer.isBuffer(data) ? data : Buffer.from(String(data), 'utf8');
+    this._sendFrame(0x9, buf);
+  }
+
+  close(code = 1000, reason = '') {
+    if (this.readyState === 2 || this.readyState === 3) return;
+    if (this.readyState === 0) {
+      this.readyState = 3;
+      try { this._req?.destroy(); } catch (_) {}
+      this._emitClose(code, reason);
+      return;
+    }
+    this.readyState = 2; // CLOSING
+    this._pendingCloseCode = code;
+    this._pendingCloseReason = reason;
+    try {
+      const reasonBuf = Buffer.from(String(reason || ''), 'utf8').subarray(0, 123);
+      const body = Buffer.allocUnsafe(2 + reasonBuf.length);
+      body.writeUInt16BE(Number(code) || 1000, 0);
+      reasonBuf.copy(body, 2);
+      this._sendFrame(0x8, body);
+      this._socket?.end();
+    } catch (_) {
+      try { this._socket?.destroy(); } catch (_) {}
+    }
+    this._closeTimer = setTimeout(() => {
+      try { this._socket?.destroy(); } catch (_) {}
+      this._emitClose(code, reason);
+    }, 500);
+    if (typeof this._closeTimer.unref === 'function') this._closeTimer.unref();
+  }
+
+  _onData(chunk) {
+    this._recvBuf = this._recvBuf.length > 0 ? Buffer.concat([this._recvBuf, chunk]) : chunk;
+    while (this._recvBuf.length >= 2) {
+      const b0 = this._recvBuf[0];
+      const b1 = this._recvBuf[1];
+      const fin = (b0 & 0x80) !== 0;
+      const opcode = b0 & 0x0f;
+      const masked = (b1 & 0x80) !== 0;
+      let payloadLen = b1 & 0x7f;
+      let offset = 2;
+
+      if (payloadLen === 126) {
+        if (this._recvBuf.length < 4) return;
+        payloadLen = this._recvBuf.readUInt16BE(2);
+        offset = 4;
+      } else if (payloadLen === 127) {
+        if (this._recvBuf.length < 10) return;
+        payloadLen = Number(this._recvBuf.readBigUInt64BE(2));
+        offset = 10;
+      }
+
+      const maskLen = masked ? 4 : 0;
+      if (this._recvBuf.length < offset + maskLen + payloadLen) return;
+
+      const mask = masked ? this._recvBuf.subarray(offset, offset + 4) : null;
+      const payload = Buffer.from(this._recvBuf.subarray(offset + maskLen, offset + maskLen + payloadLen));
+      this._recvBuf = this._recvBuf.subarray(offset + maskLen + payloadLen);
+
+      if (mask) {
+        for (let i = 0; i < payload.length; i++) payload[i] ^= mask[i & 3];
+      }
+
+      if (opcode === 0x8) {
+        let closeCode = 1005;
+        let closeReason = '';
+        if (payload.length >= 2) {
+          closeCode = payload.readUInt16BE(0);
+          closeReason = payload.subarray(2).toString('utf8');
+        }
+        this._pendingCloseCode = closeCode;
+        this._pendingCloseReason = closeReason;
+        if (this.readyState === 1) {
+          this.readyState = 2;
+          try {
+            const reply = payload.length >= 2 ? payload.subarray(0, 2) : Buffer.alloc(0);
+            this._sendFrame(0x8, reply);
+            this._socket?.end();
+          } catch (_) {}
+        }
+        this._emitClose(closeCode, closeReason);
+        return;
+      }
+
+      if (opcode === 0x9) {
+        // RFC 6455 Ping -> automatic Pong with identical payload
+        if (this.readyState === 1) this._sendFrame(0xA, payload);
+        this._emit('ping', { data: payload });
+        continue;
+      }
+
+      if (opcode === 0xA) {
+        this._emit('pong', { data: payload });
+        continue;
+      }
+
+      if (opcode === 0x1 || opcode === 0x2) {
+        if (fin) {
+          this._emit('message', { data: opcode === 0x1 ? payload.toString('utf8') : payload });
+        } else {
+          this._fragOpcode = opcode;
+          this._fragChunks = [payload];
+        }
+      } else if (opcode === 0x0 && this._fragOpcode) {
+        this._fragChunks.push(payload);
+        if (fin) {
+          const full = Buffer.concat(this._fragChunks);
+          const msgOpcode = this._fragOpcode;
+          this._fragOpcode = 0;
+          this._fragChunks = [];
+          this._emit('message', { data: msgOpcode === 0x1 ? full.toString('utf8') : full });
+        }
+      }
+    }
+  }
+}
+
 export function loadBridgeConfig(env = process.env, configFileOverride = '') {
   let fileCfg = {};
   const configPath = configFileOverride || env.XIAOYI_CONFIG_FILE || '';
@@ -65,8 +400,23 @@ export function loadBridgeConfig(env = process.env, configFileOverride = '') {
     return typeof val === 'string' ? val.trim() : fallback;
   };
   const authMode = pick('XIAOYI_AUTH_MODE', 'authMode', 'huawei').toLowerCase();
+  const wsUrl = pick('XIAOYI_WS_URL', 'wsUrl') || pick('XIAOYI_WS_URL_1', 'wsUrl1') || DEFAULT_OPENCLAW_WS_URL;
+
+  const hasEnvWs2 = env.XIAOYI_WS_URL_2 !== undefined;
+  const hasFileWs2 = fileCfg.wsUrl2 !== undefined;
+  let wsUrl2 = '';
+  if (hasEnvWs2 || hasFileWs2) {
+    const rawWs2 = String(hasEnvWs2 ? env.XIAOYI_WS_URL_2 : fileCfg.wsUrl2).trim();
+    if (rawWs2 && !['none', 'false', 'off'].includes(rawWs2.toLowerCase())) {
+      wsUrl2 = rawWs2;
+    }
+  } else if (wsUrl === DEFAULT_OPENCLAW_WS_URL) {
+    wsUrl2 = DEFAULT_OPENCLAW_WS_URL_2;
+  }
+
   const cfg = {
-    wsUrl: pick('XIAOYI_WS_URL', 'wsUrl', DEFAULT_OPENCLAW_WS_URL),
+    wsUrl,
+    wsUrl2,
     authMode: authMode === 'hag' ? 'hag' : 'huawei',
     ak: pick('XIAOYI_AK', 'ak'),
     sk: pick('XIAOYI_SK', 'sk'),
@@ -89,6 +439,9 @@ export function loadBridgeConfig(env = process.env, configFileOverride = '') {
   if (!/^wss?:\/\//i.test(cfg.wsUrl)) {
     throw new Error('XIAOYI_WS_URL must use ws:// or wss://');
   }
+  if (cfg.wsUrl2 && !/^wss?:\/\//i.test(cfg.wsUrl2)) {
+    throw new Error('XIAOYI_WS_URL_2 must use ws:// or wss://');
+  }
   if (!/^https?:\/\//i.test(cfg.hubUrl)) {
     throw new Error('PERSONA_HUB_URL must use http:// or https://');
   }
@@ -103,7 +456,7 @@ export function loadBridgeConfig(env = process.env, configFileOverride = '') {
 
 /**
  * Build HMAC-SHA256 authentication headers for XiaoYi OpenClaw outbound WebSocket handshake.
- * - "huawei" (default): official Huawei OpenClaw headers (`x-access-key`, `x-ts`, `x-sign`, `x-agent-id`, `x-hag-trace-id`).
+ * - "huawei" (default): official Huawei OpenClaw headers (`x-access-key`, `x-ts`, `x-sign`, `x-agent-id`).
  * - "hag": legacy custom gateway headers (`x-hag-ak`, `x-hag-agent-id`, `x-hag-timestamp`, `x-hag-nonce`, `x-hag-signature`).
  */
 export function signOpenClawHeaders({
@@ -112,8 +465,7 @@ export function signOpenClawHeaders({
   agentId,
   authMode = 'huawei',
   timestampMs = Date.now(),
-  nonce = randomBytes(12).toString('hex'),
-  traceId = randomUUID()
+  nonce = randomBytes(12).toString('hex')
 }) {
   const ts = String(Math.floor(timestampMs));
   if (authMode === 'hag') {
@@ -132,8 +484,7 @@ export function signOpenClawHeaders({
     'x-access-key': ak,
     'x-ts': ts,
     'x-sign': sign,
-    'x-agent-id': agentId,
-    'x-hag-trace-id': traceId
+    'x-agent-id': agentId
   };
 }
 
@@ -564,6 +915,43 @@ export function unwrapOpenClawEnvelope(rawFrame, defaultAgentId = '') {
   return { ignore: false, enveloped: false, envelope: null, rpcFrame: rawFrame };
 }
 
+function formatEnvelopedStatusUpdate(id, taskId, state, text) {
+  return {
+    jsonrpc: '2.0',
+    id,
+    result: {
+      taskId,
+      kind: 'status-update',
+      final: false,
+      status: {
+        message: {
+          role: 'agent',
+          parts: [{ kind: 'text', text }]
+        },
+        state
+      }
+    }
+  };
+}
+
+function formatEnvelopedArtifactUpdate(id, taskId, parts, { append = false, lastChunk = true, final = false } = {}) {
+  return {
+    jsonrpc: '2.0',
+    id,
+    result: {
+      taskId,
+      kind: 'artifact-update',
+      append,
+      lastChunk,
+      final,
+      artifact: {
+        artifactId: randomUUID(),
+        parts
+      }
+    }
+  };
+}
+
 /** Handle one incoming JSON-RPC 2.0 frame (bare or unwrapped from Huawei OpenClaw envelope). */
 export async function handleOpenClawRpc(
   frame,
@@ -598,12 +986,19 @@ export async function handleOpenClawRpc(
 
   if (method === 'clearContext' || method === 'clear_context' || method === 'clear' || method === 'context/clear') {
     if (sessionKey) sessionContexts.delete(sessionKey);
-    emit({
-      jsonrpc: '2.0',
-      id,
-      result: { cleared: true, sessionId: sessionKey, status: { state: 'cleared' } },
-      error: { code: 0, message: '' }
-    }, sessionKey);
+    if (enveloped) {
+      emit({
+        jsonrpc: '2.0',
+        id,
+        result: { status: { state: 'cleared' } }
+      }, String(frame?.taskId || envelope?.taskId || id || ''));
+    } else {
+      emit({
+        jsonrpc: '2.0',
+        id,
+        result: { cleared: true, sessionId: sessionKey, status: { state: 'cleared' } }
+      }, sessionKey);
+    }
     return;
   }
 
@@ -620,8 +1015,7 @@ export async function handleOpenClawRpc(
     emit({
       jsonrpc: '2.0',
       id,
-      result: { id: taskId, status: { state: 'canceled' } },
-      error: { code: 0, message: '' }
+      result: { id: taskId, status: { state: 'canceled' } }
     }, taskId);
     return;
   }
@@ -652,20 +1046,7 @@ export async function handleOpenClawRpc(
 
   if (streaming) {
     if (enveloped) {
-      emit({
-        jsonrpc: '2.0',
-        id,
-        result: {
-          taskId,
-          contextId: sessionKey,
-          kind: 'status-update',
-          final: false,
-          status: {
-            state: 'working',
-            message: { role: 'agent', parts: [{ kind: 'text', text: '正在处理中，请稍候…' }] }
-          }
-        }
-      }, taskId);
+      emit(formatEnvelopedStatusUpdate(id, taskId, 'working', '正在处理中，请稍候…'), taskId);
     } else {
       emit({ jsonrpc: '2.0', method: 'TaskStatusUpdate', params: { taskId, status: { state: 'working' } } }, taskId);
     }
@@ -712,22 +1093,15 @@ export async function handleOpenClawRpc(
         onChunk: (delta, lastChunk) => {
           if (!streaming || stateHandle.cancelled || !delta) return;
           if (enveloped) {
-            emit({
-              jsonrpc: '2.0',
-              id,
-              result: {
+            emit(
+              formatEnvelopedArtifactUpdate(
+                id,
                 taskId,
-                contextId: sessionKey,
-                kind: 'artifact-update',
-                append: chunkIndex > 0,
-                lastChunk: true,
-                final: false,
-                artifact: {
-                  artifactId: `${taskId}:answer`,
-                  parts: [{ kind: 'text', text: delta, mediaType: 'text/plain' }]
-                }
-              }
-            }, taskId);
+                [{ kind: 'reasoningText', reasoningText: delta }],
+                { append: chunkIndex > 0, lastChunk: true, final: false }
+              ),
+              taskId
+            );
           } else {
             emit({
               jsonrpc: '2.0',
@@ -754,36 +1128,21 @@ export async function handleOpenClawRpc(
     }
 
     if (enveloped && streaming) {
-      emit({
-        jsonrpc: '2.0',
-        id,
-        result: {
+      const statusLabel = finalState === 'completed'
+        ? '任务处理已完成~'
+        : finalState === 'input-required'
+          ? '请在 Persona 应用中确认'
+          : '请求未能执行';
+      emit(formatEnvelopedStatusUpdate(id, taskId, finalState, statusLabel), taskId);
+      emit(
+        formatEnvelopedArtifactUpdate(
+          id,
           taskId,
-          contextId: sessionKey,
-          kind: 'status-update',
-          final: false,
-          status: {
-            state: finalState,
-            message: { role: 'agent', parts: [{ kind: 'text', text: replyText, mediaType: 'text/plain' }] }
-          }
-        }
-      }, taskId);
-      emit({
-        jsonrpc: '2.0',
-        id,
-        result: {
-          taskId,
-          contextId: sessionKey,
-          kind: 'artifact-update',
-          append: false,
-          lastChunk: true,
-          final: true,
-          artifact: {
-            artifactId: randomUUID(),
-            parts: [{ kind: 'text', text: replyText, mediaType: 'text/plain' }]
-          }
-        }
-      }, taskId);
+          [{ kind: 'text', text: replyText }],
+          { append: false, lastChunk: true, final: true }
+        ),
+        taskId
+      );
     } else {
       emit({
         jsonrpc: '2.0',
@@ -792,19 +1151,33 @@ export async function handleOpenClawRpc(
           id: taskId,
           status: {
             state: finalState,
-            message: { role: 'agent', parts: [{ kind: 'text', text: replyText, mediaType: 'text/plain' }] }
+            message: { role: 'agent', parts: [{ kind: 'text', text: replyText }] }
           },
-          artifacts: [{ artifactId: `${taskId}:result`, parts: [{ kind: 'text', text: replyText, mediaType: 'text/plain' }] }]
+          artifacts: [{ artifactId: `${taskId}:result`, parts: [{ kind: 'text', text: replyText }] }]
         }
       }, taskId);
     }
   } catch (error) {
     if (stateHandle.cancelled) return;
-    emit({
-      jsonrpc: '2.0',
-      id,
-      error: { code: -32000, message: error?.message || 'Hub request failed' }
-    }, taskId);
+    const errMsg = error?.message || 'Hub request failed';
+    if (enveloped && streaming) {
+      emit(formatEnvelopedStatusUpdate(id, taskId, 'failed', '处理失败，请稍后重试'), taskId);
+      emit(
+        formatEnvelopedArtifactUpdate(
+          id,
+          taskId,
+          [{ kind: 'text', text: errMsg }],
+          { append: false, lastChunk: true, final: true }
+        ),
+        taskId
+      );
+    } else {
+      emit({
+        jsonrpc: '2.0',
+        id,
+        error: { code: -32000, message: errMsg }
+      }, taskId);
+    }
   } finally {
     if (activeTasks.get(taskId) === stateHandle) {
       activeTasks.delete(taskId);
@@ -813,80 +1186,138 @@ export async function handleOpenClawRpc(
 }
 
 export class OpenClawBridge {
-  constructor(cfg, { WebSocketImpl = globalThis.WebSocket, fetchImpl = globalThis.fetch, logger = console } = {}) {
+  constructor(cfg, { WebSocketImpl = Rfc6455WebSocket, fetchImpl = globalThis.fetch, logger = console } = {}) {
     this.cfg = cfg;
     this.WebSocketImpl = WebSocketImpl;
     this.hub = new PersonaHubClient(cfg, fetchImpl);
     this.logger = logger;
-    this.ws = null;
     this.stopped = false;
-    this.attempt = 0;
-    this.reconnectTimer = null;
-    this.heartbeatTimer = null;
     this.activeTasks = new Map();
     this.sessionContexts = new Map();
+    this.sessionServerMap = new Map();
+    this.servers = new Map();
+
+    const endpoints = [{ id: 'server1', url: cfg.wsUrl }];
+    if (cfg.wsUrl2) endpoints.push({ id: 'server2', url: cfg.wsUrl2 });
+    for (const ep of endpoints) {
+      this.servers.set(ep.id, {
+        id: ep.id,
+        url: ep.url,
+        ws: null,
+        attempt: 0,
+        reconnectTimer: null,
+        heartbeatTimer: null,
+        lastPongAt: 0
+      });
+    }
+  }
+
+  get ws() {
+    return this.servers.get('server1')?.ws || null;
   }
 
   start() {
     this.stopped = false;
-    this.connect();
+    for (const serverState of this.servers.values()) {
+      this.connectServer(serverState);
+    }
   }
 
   stop() {
     this.stopped = true;
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
-    this.reconnectTimer = null;
-    this.heartbeatTimer = null;
     for (const handle of this.activeTasks.values()) handle.cancelled = true;
     this.activeTasks.clear();
-    if (this.ws) {
-      try { this.ws.close(); } catch (_) {}
-      this.ws = null;
+    for (const serverState of this.servers.values()) {
+      if (serverState.reconnectTimer) {
+        clearTimeout(serverState.reconnectTimer);
+        serverState.reconnectTimer = null;
+      }
+      if (serverState.heartbeatTimer) {
+        clearInterval(serverState.heartbeatTimer);
+        serverState.heartbeatTimer = null;
+      }
+      if (serverState.ws) {
+        try { serverState.ws.close(1000, 'shutdown'); } catch (_) {}
+        serverState.ws = null;
+      }
     }
   }
 
-  connect() {
+  connectServer(serverState) {
     if (this.stopped) return;
+    if (serverState.reconnectTimer) {
+      clearTimeout(serverState.reconnectTimer);
+      serverState.reconnectTimer = null;
+    }
+
     const headers = signOpenClawHeaders(this.cfg);
-    const wsUrl = new URL(this.cfg.wsUrl);
-    if (!wsUrl.searchParams.has('agentId')) {
+    const wsUrl = new URL(serverState.url);
+    if (this.cfg.authMode === 'hag' && !wsUrl.searchParams.has('agentId')) {
       wsUrl.searchParams.set('agentId', this.cfg.agentId);
     }
+
     const ws = new this.WebSocketImpl(wsUrl.toString(), { headers });
-    this.ws = ws;
+    serverState.ws = ws;
 
     ws.addEventListener('open', () => {
-      if (this.ws !== ws) return;
-      this.attempt = 0;
-      this.logger.info('[xiaoyi-openclaw] connected to outbound gateway');
+      if (serverState.ws !== ws) return;
+      serverState.attempt = 0;
+      serverState.lastPongAt = Date.now();
+      this.logger.info(`[xiaoyi-openclaw] [${serverState.id}] connected to ${wsUrl.host}`);
       ws.send(JSON.stringify({ msgType: 'clawd_bot_init', agentId: this.cfg.agentId }));
-      if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
-      this.heartbeatTimer = setInterval(() => {
-        if (this.ws === ws && ws.readyState === 1) {
+      if (serverState.heartbeatTimer) clearInterval(serverState.heartbeatTimer);
+      serverState.heartbeatTimer = setInterval(() => {
+        if (serverState.ws === ws && ws.readyState === 1) {
           ws.send(JSON.stringify({ msgType: 'heartbeat', agentId: this.cfg.agentId, timestamp: Date.now() }));
+          if (typeof ws.ping === 'function') ws.ping();
         }
       }, this.cfg.heartbeatMs);
     });
 
+    ws.addEventListener('pong', () => {
+      if (serverState.ws === ws) serverState.lastPongAt = Date.now();
+    });
+
     ws.addEventListener('message', (event) => {
-      if (this.ws !== ws) return;
+      if (serverState.ws !== ws) return;
       let rawFrame;
       try {
         rawFrame = JSON.parse(String(event.data || ''));
       } catch (_) {
         return;
       }
+      if (typeof rawFrame?.agentId === 'string' && rawFrame.agentId && rawFrame.agentId !== this.cfg.agentId) {
+        this.logger.warn(`[xiaoyi-openclaw] [${serverState.id}] mismatched agentId=${rawFrame.agentId}, discarding`);
+        return;
+      }
       const unwrapped = unwrapOpenClawEnvelope(rawFrame, this.cfg.agentId);
       if (unwrapped.ignore) return;
+
+      const sessionId = unwrapped.envelope?.sessionId || unwrapped.rpcFrame?.params?.sessionId || unwrapped.rpcFrame?.sessionId || '';
+      if (sessionId) {
+        this.sessionServerMap.set(sessionId, serverState.id);
+      }
+
+      const rpcMethod = unwrapped.rpcFrame?.method || unwrapped.rpcFrame?.action || 'unknown';
+      const rpcTask = unwrapped.envelope?.taskId || unwrapped.rpcFrame?.params?.id || unwrapped.rpcFrame?.id || '';
+      this.logger.info(`[xiaoyi-openclaw] [${serverState.id}] rpc method=${rpcMethod} session=${sessionId} task=${rpcTask}`);
+
+      const sendReply = (reply) => {
+        if (serverState.ws === ws && ws.readyState === 1) {
+          ws.send(JSON.stringify(reply));
+          return;
+        }
+        const mappedId = sessionId ? this.sessionServerMap.get(sessionId) : '';
+        const target = mappedId ? this.servers.get(mappedId) : null;
+        if (target?.ws && target.ws.readyState === 1) {
+          target.ws.send(JSON.stringify(reply));
+        }
+      };
+
       handleOpenClawRpc(
         unwrapped.rpcFrame,
         this.hub,
-        (reply) => {
-          if (this.ws === ws && ws.readyState === 1) {
-            ws.send(JSON.stringify(reply));
-          }
-        },
+        sendReply,
         this.activeTasks,
         {
           enveloped: unwrapped.enveloped,
@@ -894,44 +1325,106 @@ export class OpenClawBridge {
           sessionContexts: this.sessionContexts
         }
       ).catch((err) => {
-        this.logger.error('[xiaoyi-openclaw] rpc error:', err?.message || err);
+        this.logger.error(`[xiaoyi-openclaw] [${serverState.id}] rpc error:`, err?.message || err);
       });
     });
 
-    ws.addEventListener('close', () => {
-      if (this.ws !== ws) return;
-      this.ws = null;
-      if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
-      this.heartbeatTimer = null;
+    ws.addEventListener('close', (ev) => {
+      if (serverState.ws !== ws) return;
+      serverState.ws = null;
+      if (serverState.heartbeatTimer) {
+        clearInterval(serverState.heartbeatTimer);
+        serverState.heartbeatTimer = null;
+      }
       if (this.stopped) return;
-      const delay = computeReconnectDelayMs(this.attempt++);
-      this.logger.warn(`[xiaoyi-openclaw] disconnected, reconnecting in ${delay}ms`);
-      this.reconnectTimer = setTimeout(() => this.connect(), delay);
+      const delay = computeReconnectDelayMs(serverState.attempt++);
+      const reason = ev?.reason ? ` (${ev.reason})` : '';
+      this.logger.warn(`[xiaoyi-openclaw] [${serverState.id}] disconnected (code=${ev?.code || 0}${reason}), reconnecting in ${delay}ms`);
+      serverState.reconnectTimer = setTimeout(() => this.connectServer(serverState), delay);
     });
 
     ws.addEventListener('error', (err) => {
-      this.logger.error('[xiaoyi-openclaw] socket error:', err?.message || 'connection error');
+      this.logger.error(`[xiaoyi-openclaw] [${serverState.id}] socket error:`, err?.message || 'connection error');
     });
   }
 }
 
+async function probeWsEndpoint(cfg, wsUrlStr, { WebSocketImpl, wsTimeoutMs, wsStayOpenMs }) {
+  return new Promise((resolve) => {
+    let settled = false;
+    let stayTimer = null;
+    const done = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutTimer);
+      if (stayTimer) clearTimeout(stayTimer);
+      resolve(result);
+    };
+    const timeoutTimer = setTimeout(() => {
+      try { ws?.close(); } catch (_) {}
+      done({ ok: false, detail: `timed out after ${wsTimeoutMs}ms` });
+    }, wsTimeoutMs);
+
+    let ws;
+    try {
+      const headers = signOpenClawHeaders(cfg);
+      const wsUrl = new URL(wsUrlStr);
+      if (cfg.authMode === 'hag' && !wsUrl.searchParams.has('agentId')) {
+        wsUrl.searchParams.set('agentId', cfg.agentId);
+      }
+      ws = new WebSocketImpl(wsUrl.toString(), { headers });
+    } catch (err) {
+      done({ ok: false, detail: err?.message || 'invalid WebSocket config' });
+      return;
+    }
+
+    let opened = false;
+    ws.addEventListener('open', () => {
+      opened = true;
+      try {
+        ws.send(JSON.stringify({ msgType: 'clawd_bot_init', agentId: cfg.agentId }));
+      } catch (err) {
+        done({ ok: false, detail: err?.message || 'failed to send clawd_bot_init' });
+        return;
+      }
+      stayTimer = setTimeout(() => {
+        try { ws.close(1000, 'preflight-ok'); } catch (_) {}
+        done({ ok: true, detail: `${new URL(wsUrlStr).host} stayed open ${wsStayOpenMs}ms after clawd_bot_init` });
+      }, wsStayOpenMs);
+    });
+    ws.addEventListener('error', (err) => {
+      if (!opened) {
+        done({ ok: false, detail: err?.message || 'WebSocket connection failed' });
+      }
+    });
+    ws.addEventListener('close', (ev) => {
+      if (!settled) {
+        const reason = ev?.reason ? ` (${ev.reason})` : '';
+        const phase = opened ? 'closed after clawd_bot_init' : 'closed before open';
+        done({ ok: false, detail: `${new URL(wsUrlStr).host} ${phase} (code ${ev?.code || 0}${reason})` });
+      }
+    });
+  });
+}
+
 /**
  * Preflight check (`--check` / `--check-ws`) so a developer can validate Hub reachability, token auth,
- * recording module state, and optional live OpenClaw WebSocket handshake in under 60 seconds without printing secrets.
+ * recording module state, and optional live OpenClaw WebSocket handshake without printing secrets.
  */
 export async function runPreflightCheck(
   cfg,
-  { checkWs = false, fetchImpl = globalThis.fetch, WebSocketImpl = globalThis.WebSocket, wsTimeoutMs = 8000 } = {}
+  { checkWs = false, fetchImpl = globalThis.fetch, WebSocketImpl = Rfc6455WebSocket, wsTimeoutMs = 8000, wsStayOpenMs = 1500 } = {}
 ) {
   const hub = new PersonaHubClient(cfg, fetchImpl);
   const report = {
     ok: false,
     hubUrl: cfg.hubUrl,
     wsUrl: cfg.wsUrl,
+    wsUrl2: cfg.wsUrl2 || '',
     authMode: cfg.authMode,
     agentId: cfg.agentId,
     checks: {
-      config: { ok: true, detail: `authMode=${cfg.authMode}` },
+      config: { ok: true, detail: `authMode=${cfg.authMode}${cfg.wsUrl2 ? ', dual-server=on' : ''}` },
       hubHealth: { ok: false, detail: '' },
       hubAuth: { ok: false, detail: '' },
       assistant: { ok: false, detail: '' },
@@ -988,46 +1481,16 @@ export async function runPreflightCheck(
   }
 
   if (checkWs) {
-    report.checks.wsHandshake = await new Promise((resolve) => {
-      let settled = false;
-      const done = (result) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        resolve(result);
-      };
-      const timer = setTimeout(() => {
-        try { ws.close(); } catch (_) {}
-        done({ ok: false, detail: `timed out after ${wsTimeoutMs}ms` });
-      }, wsTimeoutMs);
-
-      let ws;
-      try {
-        const headers = signOpenClawHeaders(cfg);
-        const wsUrl = new URL(cfg.wsUrl);
-        if (!wsUrl.searchParams.has('agentId')) wsUrl.searchParams.set('agentId', cfg.agentId);
-        ws = new WebSocketImpl(wsUrl.toString(), { headers });
-      } catch (err) {
-        done({ ok: false, detail: err?.message || 'invalid WebSocket config' });
-        return;
-      }
-
-      ws.addEventListener('open', () => {
-        try {
-          ws.send(JSON.stringify({ msgType: 'clawd_bot_init', agentId: cfg.agentId }));
-          ws.close(1000, 'preflight-ok');
-        } catch (_) {}
-        done({ ok: true, detail: 'connected and sent clawd_bot_init' });
-      });
-      ws.addEventListener('error', (err) => {
-        done({ ok: false, detail: err?.message || 'WebSocket connection failed' });
-      });
-      ws.addEventListener('close', (ev) => {
-        if (!settled) {
-          done({ ok: false, detail: `closed before open (code ${ev?.code || 0})` });
-        }
-      });
-    });
+    const urls = [cfg.wsUrl];
+    if (cfg.wsUrl2) urls.push(cfg.wsUrl2);
+    const results = await Promise.all(
+      urls.map((u) => probeWsEndpoint(cfg, u, { WebSocketImpl, wsTimeoutMs, wsStayOpenMs }))
+    );
+    const allOk = results.every((r) => r.ok);
+    report.checks.wsHandshake = {
+      ok: allOk,
+      detail: results.map((r, idx) => `server${idx + 1}: ${r.detail}`).join('; ')
+    };
   }
 
   report.ok = Object.values(report.checks).every((c) => c.ok);
@@ -1038,8 +1501,11 @@ export function formatPreflightReport(report) {
   const lines = [
     `Persona XiaoYi OpenClaw Preflight (${report.ok ? 'PASS' : 'FAIL'})`,
     `  Hub: ${report.hubUrl}`,
-    `  WS:  ${report.wsUrl} (agentId=${report.agentId}, authMode=${report.authMode})`
+    `  WS1: ${report.wsUrl} (agentId=${report.agentId}, authMode=${report.authMode})`
   ];
+  if (report.wsUrl2) {
+    lines.push(`  WS2: ${report.wsUrl2}`);
+  }
   for (const [name, entry] of Object.entries(report.checks)) {
     const badge = entry.skipped ? 'SKIP' : entry.ok ? 'PASS' : 'FAIL';
     lines.push(`  [${badge}] ${name}: ${entry.detail}`);
@@ -1061,6 +1527,7 @@ function printUsage() {
     '',
     'Optional env vars:',
     `  XIAOYI_WS_URL (default: ${DEFAULT_OPENCLAW_WS_URL})`,
+    `  XIAOYI_WS_URL_2 (default: ${DEFAULT_OPENCLAW_WS_URL_2} when WS1 uses default; "none" to disable)`,
     '  XIAOYI_AUTH_MODE ("huawei" default or "hag"), PERSONA_MANAGER, XIAOYI_CONFIG_FILE'
   ].join('\n'));
 }

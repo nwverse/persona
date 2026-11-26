@@ -3,13 +3,17 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { createHash, createHmac } from 'node:crypto';
 import {
+  DEFAULT_HEARTBEAT_MS,
   DEFAULT_OPENCLAW_WS_URL,
+  DEFAULT_OPENCLAW_WS_URL_2,
   OpenClawBridge,
   PersonaHubClient,
+  Rfc6455WebSocket,
   computeReconnectDelayMs,
   formatPreflightReport,
   handleOpenClawRpc,
   isHubRecordingAllowed,
+  isWssIpLiteralUrl,
   loadBridgeConfig,
   parseCliArgs,
   runPreflightCheck,
@@ -17,27 +21,28 @@ import {
   unwrapOpenClawEnvelope
 } from '../scripts/xiaoyi-openclaw-bridge.mjs';
 
-/** Minimal zero-dependency RFC 6455 mock WebSocket server for end-to-end OpenClawBridge testing. */
-function createMockWsServer() {
+/** Minimal zero-dependency RFC 6455 mock WebSocket server supporting Ping/Pong and fragmented frames. */
+function createMockWsServer({ dropAfterInit = false } = {}) {
   const connections = [];
   const server = http.createServer((_req, res) => {
     res.statusCode = 426;
     res.end('Upgrade Required');
   });
 
-  function encodeServerFrame(opcode, payloadBuf) {
+  function encodeServerFrame(opcode, payloadBuf, fin = true) {
     const len = payloadBuf.length;
+    const firstByte = (fin ? 0x80 : 0x00) | (opcode & 0x0f);
     let header;
     if (len < 126) {
-      header = Buffer.from([0x80 | opcode, len]);
+      header = Buffer.from([firstByte, len]);
     } else if (len < 65536) {
       header = Buffer.alloc(4);
-      header[0] = 0x80 | opcode;
+      header[0] = firstByte;
       header[1] = 126;
       header.writeUInt16BE(len, 2);
     } else {
       header = Buffer.alloc(10);
-      header[0] = 0x80 | opcode;
+      header[0] = firstByte;
       header[1] = 127;
       header.writeBigUInt64BE(BigInt(len), 2);
     }
@@ -59,12 +64,24 @@ function createMockWsServer() {
       headers: req.headers,
       socket,
       received: [],
+      pings: [],
       waiters: [],
       sendJson(obj) {
         socket.write(encodeServerFrame(0x1, Buffer.from(JSON.stringify(obj), 'utf8')));
       },
-      closeSocket() {
-        try { socket.write(encodeServerFrame(0x8, Buffer.alloc(0))); } catch (_) {}
+      sendFragmentedText(chunks) {
+        chunks.forEach((part, idx) => {
+          const opcode = idx === 0 ? 0x1 : 0x0;
+          const fin = idx === chunks.length - 1;
+          socket.write(encodeServerFrame(opcode, Buffer.from(part, 'utf8'), fin));
+        });
+      },
+      closeSocket(code = 1000) {
+        try {
+          const body = Buffer.allocUnsafe(2);
+          body.writeUInt16BE(code, 0);
+          socket.write(encodeServerFrame(0x8, body));
+        } catch (_) {}
         socket.end();
       },
       waitForMessage(predicate, timeoutMs = 4000) {
@@ -112,9 +129,18 @@ function createMockWsServer() {
           }
           return;
         }
+        if (opcode === 0x9) {
+          conn.pings.push(raw.toString('utf8'));
+          socket.write(encodeServerFrame(0xA, raw));
+          continue;
+        }
         if (opcode === 0x1) {
           const parsed = JSON.parse(raw.toString('utf8'));
           conn.received.push(parsed);
+          if (dropAfterInit && parsed.msgType === 'clawd_bot_init') {
+            conn.closeSocket(1000);
+            return;
+          }
           for (let i = conn.waiters.length - 1; i >= 0; i--) {
             if (conn.waiters[i].predicate(parsed)) {
               const waiter = conn.waiters.splice(i, 1)[0];
@@ -261,22 +287,22 @@ function createMockHubServer({ recordingEnabled = true, rejectAuth = false, wate
   };
 }
 
-test('signOpenClawHeaders produces real Huawei OpenClaw headers by default and supports legacy hag mode', () => {
+test('signOpenClawHeaders produces exact 4 Huawei OpenClaw headers by default and supports legacy hag mode', () => {
   const huawei = signOpenClawHeaders({
     ak: 'test-ak',
     sk: 'test-sk-secret',
     agentId: 'agent-123',
-    timestampMs: 1764100000000,
-    traceId: 'trace-abc'
+    timestampMs: 1764100000000
   });
   const expectedHuaweiSign = createHmac('sha256', 'test-sk-secret')
     .update('1764100000000', 'utf8')
     .digest('base64');
-  assert.equal(huawei['x-access-key'], 'test-ak');
-  assert.equal(huawei['x-ts'], '1764100000000');
-  assert.equal(huawei['x-sign'], expectedHuaweiSign);
-  assert.equal(huawei['x-agent-id'], 'agent-123');
-  assert.equal(huawei['x-hag-trace-id'], 'trace-abc');
+  assert.deepEqual(huawei, {
+    'x-access-key': 'test-ak',
+    'x-ts': '1764100000000',
+    'x-sign': expectedHuaweiSign,
+    'x-agent-id': 'agent-123'
+  });
 
   const hag = signOpenClawHeaders({
     ak: 'test-ak',
@@ -293,7 +319,13 @@ test('signOpenClawHeaders produces real Huawei OpenClaw headers by default and s
   assert.equal(hag['x-hag-signature'], expectedHagSign);
 });
 
-test('computeReconnectDelayMs, parseCliArgs, isHubRecordingAllowed, and loadBridgeConfig validate cleanly', () => {
+test('isWssIpLiteralUrl, computeReconnectDelayMs, parseCliArgs, isHubRecordingAllowed, and loadBridgeConfig validate cleanly', () => {
+  assert.equal(isWssIpLiteralUrl('wss://116.63.174.231/openclaw/v1/ws/link'), true);
+  assert.equal(isWssIpLiteralUrl('wss://[::1]/openclaw/v1/ws/link'), true);
+  assert.equal(isWssIpLiteralUrl('wss://hag.cloud.huawei.com/openclaw/v1/ws/link'), false);
+  assert.equal(isWssIpLiteralUrl('ws://127.0.0.1:8080/ws'), false);
+  assert.equal(isWssIpLiteralUrl('not-a-url'), false);
+
   assert.equal(computeReconnectDelayMs(0), 1000);
   assert.equal(computeReconnectDelayMs(2), 4000);
   assert.equal(computeReconnectDelayMs(10), 30000);
@@ -309,16 +341,39 @@ test('computeReconnectDelayMs, parseCliArgs, isHubRecordingAllowed, and loadBrid
   assert.equal(isHubRecordingAllowed(['file_upload']), true);
 
   assert.throws(() => loadBridgeConfig({}), /Missing required configuration/);
-  const cfg = loadBridgeConfig({
+  const defaultCfg = loadBridgeConfig({
     XIAOYI_AK: 'ak',
     XIAOYI_SK: 'sk',
     XIAOYI_AGENT_ID: 'agent-1',
     PERSONA_HUB_URL: 'https://hub.example.com/',
     PERSONA_HUB_TOKEN: 'tok-1'
   });
-  assert.equal(cfg.wsUrl, DEFAULT_OPENCLAW_WS_URL);
-  assert.equal(cfg.authMode, 'huawei');
-  assert.equal(cfg.hubUrl, 'https://hub.example.com');
+  assert.equal(defaultCfg.wsUrl, DEFAULT_OPENCLAW_WS_URL);
+  assert.equal(defaultCfg.wsUrl2, DEFAULT_OPENCLAW_WS_URL_2);
+  assert.equal(defaultCfg.heartbeatMs, DEFAULT_HEARTBEAT_MS);
+  assert.equal(defaultCfg.authMode, 'huawei');
+  assert.equal(defaultCfg.hubUrl, 'https://hub.example.com');
+
+  const disabledWs2Cfg = loadBridgeConfig({
+    XIAOYI_AK: 'ak',
+    XIAOYI_SK: 'sk',
+    XIAOYI_AGENT_ID: 'agent-1',
+    XIAOYI_WS_URL_2: 'none',
+    PERSONA_HUB_URL: 'https://hub.example.com',
+    PERSONA_HUB_TOKEN: 'tok-1'
+  });
+  assert.equal(disabledWs2Cfg.wsUrl2, '');
+
+  const customWs1Cfg = loadBridgeConfig({
+    XIAOYI_AK: 'ak',
+    XIAOYI_SK: 'sk',
+    XIAOYI_AGENT_ID: 'agent-1',
+    XIAOYI_WS_URL: 'ws://127.0.0.1:9999/ws',
+    PERSONA_HUB_URL: 'https://hub.example.com',
+    PERSONA_HUB_TOKEN: 'tok-1'
+  });
+  assert.equal(customWs1Cfg.wsUrl2, '');
+
   assert.throws(() => loadBridgeConfig({
     XIAOYI_AK: 'ak',
     XIAOYI_SK: 'sk',
@@ -330,6 +385,47 @@ test('computeReconnectDelayMs, parseCliArgs, isHubRecordingAllowed, and loadBrid
 
   const ignored = unwrapOpenClawEnvelope({ msgType: 'heartbeat', timestamp: 1 });
   assert.equal(ignored.ignore, true);
+});
+
+test('Rfc6455WebSocket connects without permessage-deflate, handles Ping/Pong, and reassembles fragmented frames', async () => {
+  const wsServer = createMockWsServer();
+  const wsUrl = await wsServer.listen();
+  try {
+    const ws = new Rfc6455WebSocket(wsUrl, { headers: { 'x-access-key': 'ak-test' } });
+    let opened = false;
+    let pongPayload = '';
+    const messages = [];
+
+    await new Promise((resolve, reject) => {
+      ws.addEventListener('open', () => {
+        opened = true;
+        resolve();
+      });
+      ws.addEventListener('error', reject);
+    });
+    assert.equal(opened, true);
+    const conn = await wsServer.waitForConnections(1);
+    assert.equal(conn.headers['sec-websocket-extensions'], undefined);
+    assert.equal(conn.headers['x-access-key'], 'ak-test');
+
+    ws.addEventListener('pong', (ev) => { pongPayload = ev.data.toString('utf8'); });
+    ws.addEventListener('message', (ev) => { messages.push(ev.data); });
+
+    ws.ping('hb-1');
+    await new Promise((r) => setTimeout(r, 80));
+    assert.equal(conn.pings[0], 'hb-1');
+    assert.equal(pongPayload, 'hb-1');
+
+    conn.sendFragmentedText(['{"hello":', '"world"}']);
+    await new Promise((r) => setTimeout(r, 80));
+    assert.deepEqual(messages, ['{"hello":"world"}']);
+
+    ws.close(1000, 'done');
+    await new Promise((r) => setTimeout(r, 80));
+    assert.equal(ws.readyState, 3);
+  } finally {
+    await wsServer.close();
+  }
 });
 
 test('handleOpenClawRpc handles bare JSON-RPC status, todos, water, agent task, kb search, streaming ask, approval refusal, and recording module off', async () => {
@@ -381,7 +477,6 @@ test('handleOpenClawRpc handles bare JSON-RPC status, todos, water, agent task, 
     }, hubClient, (f) => todoOut.push(f));
     assert.ok(todoOut[0].result.status.message.parts[0].text.includes('验证小艺通道'));
 
-    // Log water (always omits X-Persona-Manager, targeting default manager)
     const waterOut = [];
     await handleOpenClawRpc({
       jsonrpc: '2.0',
@@ -393,7 +488,6 @@ test('handleOpenClawRpc handles bare JSON-RPC status, todos, water, agent task, 
     const waterPost = hub.requests.find((r) => r.url.includes('/health/intake') && r.method === 'POST');
     assert.equal(waterPost.manager, '');
 
-    // Send agent task (skips read-only session `s-ro` and dispatches to live `s1`)
     const agentOut = [];
     await handleOpenClawRpc({
       jsonrpc: '2.0',
@@ -430,7 +524,6 @@ test('handleOpenClawRpc handles bare JSON-RPC status, todos, water, agent task, 
     await hub.close();
   }
 
-  // Verify water-not-enabled refusal cleanly surfaces guidance error
   const noWaterHub = createMockHubServer({ waterEnabled: false });
   const noWaterUrl = await noWaterHub.listen();
   try {
@@ -448,14 +541,17 @@ test('handleOpenClawRpc handles bare JSON-RPC status, todos, water, agent task, 
   }
 });
 
-test('OpenClawBridge completes real local WebSocket round-trip (auth headers, clawd_bot_init, heartbeat, enveloped streaming, clearContext, cancel, reconnect)', async () => {
+test('OpenClawBridge completes dual-server WebSocket round-trip via Rfc6455WebSocket (auth headers, routing, streaming, clearContext, cancel, heartbeat+ping, reconnect)', async () => {
   const hub = createMockHubServer({ recordingEnabled: false });
-  const wsServer = createMockWsServer();
+  const wsServer1 = createMockWsServer();
+  const wsServer2 = createMockWsServer();
   const hubUrl = await hub.listen();
-  const wsUrl = await wsServer.listen();
+  const wsUrl = await wsServer1.listen();
+  const wsUrl2 = await wsServer2.listen();
 
   const cfg = {
     wsUrl,
+    wsUrl2,
     authMode: 'huawei',
     ak: 'demo-ak-value',
     sk: 'demo-sk-secret-never-logged',
@@ -463,7 +559,7 @@ test('OpenClawBridge completes real local WebSocket round-trip (auth headers, cl
     hubUrl,
     hubToken: 'demo-hub-token-never-logged',
     manager: '',
-    heartbeatMs: 1200,
+    heartbeatMs: 1100,
     askTimeoutMs: 4000
   };
 
@@ -472,30 +568,34 @@ test('OpenClawBridge completes real local WebSocket round-trip (auth headers, cl
   bridge.start();
 
   try {
-    // 1. Verify real HTTP Upgrade auth headers & clawd_bot_init
-    const conn1 = await wsServer.waitForConnections(1);
+    // 1. Both servers connect with clean URLs, exact 4 headers, no permessage-deflate, and send clawd_bot_init
+    const [conn1, conn2Server2] = await Promise.all([
+      wsServer1.waitForConnections(1),
+      wsServer2.waitForConnections(1)
+    ]);
+    assert.equal(conn1.url, '/openclaw/v1/ws/link');
+    assert.equal(conn1.headers['sec-websocket-extensions'], undefined);
     assert.equal(conn1.headers['x-access-key'], 'demo-ak-value');
     assert.equal(conn1.headers['x-agent-id'], 'agent-e2e-1');
-    assert.ok(conn1.headers['x-ts']);
     const expectedSign = createHmac('sha256', cfg.sk).update(conn1.headers['x-ts'], 'utf8').digest('base64');
     assert.equal(conn1.headers['x-sign'], expectedSign);
-    assert.ok(conn1.headers['x-hag-trace-id']);
+    assert.equal(conn1.headers['x-hag-trace-id'], undefined);
 
-    const initMsg = await conn1.waitForMessage((m) => m.msgType === 'clawd_bot_init');
-    assert.equal(initMsg.agentId, 'agent-e2e-1');
+    const [init1, init2] = await Promise.all([
+      conn1.waitForMessage((m) => m.msgType === 'clawd_bot_init'),
+      conn2Server2.waitForMessage((m) => m.msgType === 'clawd_bot_init')
+    ]);
+    assert.equal(init1.agentId, 'agent-e2e-1');
+    assert.equal(init2.agentId, 'agent-e2e-1');
 
-    // 2. Verify enveloped Huawei OpenClaw streaming request (`message/stream`)
+    // 2. Streaming request on server1 emits reasoningText chunks + final text artifact-update cleanly
     conn1.sendJson({
-      msgType: 'agent_request',
       agentId: 'agent-e2e-1',
+      jsonrpc: '2.0',
+      id: 'rpc-1',
+      method: 'message/stream',
       sessionId: 'sess-hw-1',
-      taskId: 'task-hw-1',
-      msgDetail: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 'rpc-1',
-        method: 'message/stream',
-        params: { id: 'task-hw-1', sessionId: 'sess-hw-1', message: { parts: [{ text: 'Summarize my notes' }] } }
-      })
+      params: { id: 'task-hw-1', sessionId: 'sess-hw-1', message: { role: 'user', parts: [{ kind: 'text', text: 'Summarize my notes' }] } }
     });
 
     const finalStreamEnvelope = await conn1.waitForMessage((m) => {
@@ -504,97 +604,114 @@ test('OpenClawBridge completes real local WebSocket round-trip (auth headers, cl
       return detail.result?.kind === 'artifact-update' && detail.result?.final === true;
     });
     assert.equal(finalStreamEnvelope.sessionId, 'sess-hw-1');
-    const finalDetail = JSON.parse(finalStreamEnvelope.msgDetail);
-    assert.equal(finalDetail.result.artifact.parts[0].kind, 'text');
-    assert.equal(finalDetail.result.artifact.parts[0].text, 'Here is your Persona reply.');
-    assert.ok(conn1.received.some((m) => m.msgType === 'agent_response' && JSON.parse(m.msgDetail).result?.kind === 'status-update' && JSON.parse(m.msgDetail).result?.status?.state === 'completed'));
+    assert.equal(conn2Server2.received.some((m) => m.sessionId === 'sess-hw-1'), false);
 
-    // 2b. Verify live Huawei unwrapped inbound (`{ agentId, jsonrpc: "2.0", ... }`) wraps outbound `agent_response`
-    conn1.sendJson({
+    const finalDetail = JSON.parse(finalStreamEnvelope.msgDetail);
+    assert.equal(finalDetail.result.contextId, undefined);
+    assert.equal(finalDetail.result.artifact.parts[0].kind, 'text');
+    assert.equal(finalDetail.result.artifact.parts[0].mediaType, undefined);
+    assert.equal(finalDetail.result.artifact.parts[0].text, 'Here is your Persona reply.');
+    assert.ok(conn1.received.some((m) => {
+      if (m.msgType !== 'agent_response' || m.taskId !== 'task-hw-1') return false;
+      const detail = JSON.parse(m.msgDetail);
+      return detail.result?.kind === 'artifact-update' && detail.result?.final === false && detail.result?.artifact?.parts?.[0]?.kind === 'reasoningText';
+    }));
+
+    // 2b. Session on server2 routes replies strictly back to server2
+    conn2Server2.sendJson({
       agentId: 'agent-e2e-1',
       jsonrpc: '2.0',
-      id: 'rpc-live-1',
+      id: 'rpc-live-2',
       method: 'message/stream',
-      sessionId: 'sess-live-1',
+      sessionId: 'sess-live-2',
       params: {
-        id: 'task-live-1',
-        sessionId: 'sess-live-1',
+        id: 'task-live-2',
+        sessionId: 'sess-live-2',
         message: { role: 'user', parts: [{ kind: 'text', text: 'Check status' }] }
       }
     });
-    const liveFinal = await conn1.waitForMessage((m) => {
-      if (m.msgType !== 'agent_response' || m.taskId !== 'task-live-1') return false;
+    const server2Final = await conn2Server2.waitForMessage((m) => {
+      if (m.msgType !== 'agent_response' || m.taskId !== 'task-live-2') return false;
       const detail = JSON.parse(m.msgDetail);
       return detail.result?.kind === 'artifact-update' && detail.result?.final === true;
     });
-    assert.equal(liveFinal.sessionId, 'sess-live-1');
-    assert.ok(JSON.parse(liveFinal.msgDetail).result.artifact.parts[0].text.includes('1 working, 1 need you'));
+    assert.equal(server2Final.sessionId, 'sess-live-2');
+    assert.ok(JSON.parse(server2Final.msgDetail).result.artifact.parts[0].text.includes('1 working, 1 need you'));
+    assert.equal(conn1.received.some((m) => m.sessionId === 'sess-live-2'), false);
 
-    // 3. Verify `clearContext` clears the cached session mapping
+    // 3. `clearContext` clears cached session mapping and omits spurious error property
     assert.ok(bridge.sessionContexts.has('sess-hw-1'));
     conn1.sendJson({
-      msgType: 'agent_request',
       agentId: 'agent-e2e-1',
+      jsonrpc: '2.0',
+      id: 'rpc-clear',
+      method: 'clearContext',
       sessionId: 'sess-hw-1',
-      taskId: 'task-clear',
-      msgDetail: JSON.stringify({ jsonrpc: '2.0', id: 'rpc-clear', method: 'clearContext', params: {} })
+      params: {}
     });
     const clearedEnv = await conn1.waitForMessage((m) => m.msgType === 'agent_response' && JSON.parse(m.msgDetail).id === 'rpc-clear');
-    assert.equal(JSON.parse(clearedEnv.msgDetail).result.cleared, true);
+    const clearedDetail = JSON.parse(clearedEnv.msgDetail);
+    assert.equal(clearedDetail.result.status.state, 'cleared');
+    assert.equal(clearedDetail.error, undefined);
     assert.equal(bridge.sessionContexts.has('sess-hw-1'), false);
 
-    // 4. Verify `tasks/cancel` interrupts an active streaming turn on the Hub
+    // 4. `tasks/cancel` interrupts active turn on Hub and returns clean canceled status
     hub.resetMessageSent();
     hub.setHoldWorking(true);
     conn1.sendJson({
-      msgType: 'agent_request',
       agentId: 'agent-e2e-1',
+      jsonrpc: '2.0',
+      id: 'rpc-run',
+      method: 'message/stream',
       sessionId: 'sess-hw-2',
-      taskId: 'task-cancel-1',
-      msgDetail: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 'rpc-run',
-        method: 'message/stream',
-        params: { id: 'task-cancel-1', message: { parts: [{ text: 'Long running task' }] } }
-      })
+      params: { id: 'task-cancel-1', sessionId: 'sess-hw-2', message: { role: 'user', parts: [{ kind: 'text', text: 'Long running task' }] } }
     });
     await conn1.waitForMessage((m) => m.msgType === 'agent_response' && m.taskId === 'task-cancel-1');
     await new Promise((r) => setTimeout(r, 40));
     conn1.sendJson({
-      msgType: 'agent_request',
       agentId: 'agent-e2e-1',
+      jsonrpc: '2.0',
+      id: 'rpc-cancel',
+      method: 'tasks/cancel',
       sessionId: 'sess-hw-2',
       taskId: 'task-cancel-1',
-      msgDetail: JSON.stringify({ jsonrpc: '2.0', id: 'rpc-cancel', method: 'tasks/cancel', params: { id: 'task-cancel-1' } })
+      params: { id: 'task-cancel-1' }
     });
     const cancelEnv = await conn1.waitForMessage((m) => m.msgType === 'agent_response' && JSON.parse(m.msgDetail).id === 'rpc-cancel');
-    assert.equal(JSON.parse(cancelEnv.msgDetail).result.status.state, 'canceled');
+    const cancelDetail = JSON.parse(cancelEnv.msgDetail);
+    assert.equal(cancelDetail.result.status.state, 'canceled');
+    assert.equal(cancelDetail.error, undefined);
     assert.ok(hub.requests.some((r) => r.url.includes('/interrupt')));
 
-    // 5. Verify periodic heartbeat frame arrives
+    // 5. Periodic app heartbeat + RFC 6455 Ping
     const hb = await conn1.waitForMessage((m) => m.msgType === 'heartbeat', 2500);
     assert.equal(hb.agentId, 'agent-e2e-1');
+    assert.ok(conn1.pings.length >= 1);
 
-    // 6. Verify automatic reconnect when server drops the socket
-    conn1.closeSocket();
-    const conn2 = await wsServer.waitForConnections(2, 3000);
-    const initMsg2 = await conn2.waitForMessage((m) => m.msgType === 'clawd_bot_init');
-    assert.equal(initMsg2.agentId, 'agent-e2e-1');
+    // 6. Automatic reconnect on server1 when socket closes
+    conn1.closeSocket(1000);
+    const conn1Reconnected = await wsServer1.waitForConnections(2, 3000);
+    const initReconnected = await conn1Reconnected.waitForMessage((m) => m.msgType === 'clawd_bot_init');
+    assert.equal(initReconnected.agentId, 'agent-e2e-1');
   } finally {
     bridge.stop();
-    await wsServer.close();
+    await wsServer1.close();
+    await wsServer2.close();
     await hub.close();
   }
 });
 
-test('runPreflightCheck validates Hub + live WS handshake, detects auth failures, and never leaks secrets', async () => {
+test('runPreflightCheck validates Hub + live WS stay-open handshake, catches post-init closes, and never leaks secrets', async () => {
   const hub = createMockHubServer({ recordingEnabled: false });
-  const wsServer = createMockWsServer();
+  const goodWsServer = createMockWsServer();
+  const badWsServer = createMockWsServer({ dropAfterInit: true });
   const hubUrl = await hub.listen();
-  const wsUrl = await wsServer.listen();
+  const goodWsUrl = await goodWsServer.listen();
+  const badWsUrl = await badWsServer.listen();
 
   const cfg = {
-    wsUrl,
+    wsUrl: goodWsUrl,
+    wsUrl2: '',
     authMode: 'huawei',
     ak: 'ak-preflight',
     sk: 'super-secret-sk-must-not-print',
@@ -605,7 +722,7 @@ test('runPreflightCheck validates Hub + live WS handshake, detects auth failures
   };
 
   try {
-    const okReport = await runPreflightCheck(cfg, { checkWs: true });
+    const okReport = await runPreflightCheck(cfg, { checkWs: true, wsStayOpenMs: 120 });
     assert.equal(okReport.ok, true);
     assert.equal(okReport.checks.hubHealth.ok, true);
     assert.equal(okReport.checks.hubAuth.ok, true);
@@ -616,8 +733,14 @@ test('runPreflightCheck validates Hub + live WS handshake, detects auth failures
     assert.ok(formatted.includes('PASS'));
     assert.ok(!formatted.includes(cfg.sk), 'preflight report must never contain SK');
     assert.ok(!formatted.includes(cfg.hubToken), 'preflight report must never contain hub token');
+
+    const droppedReport = await runPreflightCheck({ ...cfg, wsUrl: badWsUrl }, { checkWs: true, wsStayOpenMs: 250 });
+    assert.equal(droppedReport.ok, false);
+    assert.equal(droppedReport.checks.wsHandshake.ok, false);
+    assert.ok(droppedReport.checks.wsHandshake.detail.includes('closed after clawd_bot_init'));
   } finally {
-    await wsServer.close();
+    await goodWsServer.close();
+    await badWsServer.close();
     await hub.close();
   }
 
