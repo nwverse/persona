@@ -276,13 +276,13 @@ beforeEach(() => {
       if (!ch) return notFound();
       if (method === "PUT" && body && typeof body === "object") {
         const patch = body as Partial<ChannelDetail>;
+        const mode = patch.thread_mode ?? ch.thread_mode;
         const next: ChannelDetail = {
           ...ch,
           ...patch,
-          target_override:
-            (patch.thread_mode ?? ch.thread_mode) === "per_group_and_topic" || (patch.thread_mode ?? ch.thread_mode) === "per_topic"
-              ? { mode: "topics" }
-              : undefined,
+          target_override: mode === "per_group_and_topic"
+            ? { mode: "groups_and_topics" }
+            : mode === "per_topic" ? { mode: "topics" } : undefined,
         };
         currentChannels[cid] = next;
         return ok(next);
@@ -608,7 +608,7 @@ describe("Composite extension (connector + channel + sectioned config + lifecycl
     const modePut = requests.find((r) => r.method === "PUT" && r.url.includes("/channels/larkx_chat"));
     expect(modePut?.body).toEqual({ thread_mode: "per_group_and_topic" });
     // Response updated target_override -> override hint appears immediately
-    expect(section("channel")!.textContent).toContain(t("settings-channels.target_override_topics"));
+    expect(section("channel")!.textContent).toContain(t("settings-channels.target_override_groups_and_topics"));
 
     // Update thread_idle_hours to 48 and click Save inside the ConfigurationForm field
     const idleField = section("channel")!.querySelector<HTMLElement>('[data-configuration-field="thread_idle_hours"]')!;

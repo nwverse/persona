@@ -30,6 +30,8 @@ const fieldClass = "h-8 w-full rounded-control bg-field px-2.5 text-[12.5px] tex
 
 function targetOverrideText(override: ChannelTargetOverride): string {
   switch (override.mode) {
+    case "groups_and_topics":
+      return t("settings-channels.target_override_groups_and_topics");
     case "topics":
       return t("settings-channels.target_override_topics");
     case "threads":
