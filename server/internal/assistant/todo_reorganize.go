@@ -115,6 +115,7 @@ func (s *Service) reorganizeTodos(ctx context.Context, in todoReorganizeRequest)
 	st := s.todoDB()
 	updated := make([]Todo, 0, len(affectedIDs))
 	updatedIdx := make(map[string]int, len(affectedIDs))
+	var afterChanged []Todo
 
 	for _, tid := range affectedIDs {
 		cur, ok := s.todoNow(tid)
@@ -153,8 +154,15 @@ func (s *Service) reorganizeTodos(ctx context.Context, in todoReorganizeRequest)
 		out, _, _ := s.setTodoRow(tid, *row, nil)
 		updatedIdx[tid] = len(updated)
 		updated = append(updated, out)
+		if edit.After != nil {
+			afterChanged = append(afterChanged, out)
+		}
 	}
 	s.todos.writing.Unlock()
+
+	for _, t := range afterChanged {
+		s.syncAfterBlockers(ctx, t.ID, t.After, "", nil)
+	}
 
 	s.todosChanged(ctx)
 

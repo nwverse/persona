@@ -79,6 +79,9 @@ func (s *Service) resolvePreparedAnswer(ctx context.Context, p *pending, r proto
 	case r.UserDenied():
 		a.reportStatus = "denied"
 		text = cmpOr(a.op.Denied, "The user declined the change: nothing changed.")
+		if note := strings.TrimSpace(r.Message); note != "" {
+			text += " Owner note: " + note
+		}
 	case r.UserAllowed():
 		a.reportStatus = "resolved"
 		applyCtx := ctx

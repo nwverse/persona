@@ -993,6 +993,9 @@ export interface Interaction {
   elicitation?: Elicitation;
   /** Whether this assistant-owned operation can take a non-final owner question. */
   can_clarify?: boolean;
+  /** True when the card has no interactive computer terminal or UI to hand back to (headless assistant, command gates,
+   *  manager-owned cards, headless ACP companions like AGY, Grok, and builtin OpenCode); absent/false keeps "Leave to computer". */
+  no_hand_back?: boolean;
   /** What a permission card needs filled in before it is approved (a password): such a card is never approved in one tap. */
   fields?: { key: string; label: string; secret?: boolean }[];
   /** The assistant is deciding whether it may answer this question for the user (docs/assistant/assistant.md "Assistant
