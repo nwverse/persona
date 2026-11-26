@@ -175,8 +175,25 @@ readable, searchable and the user's to delete. On the iPhone and iPad:
   recording that already runs still opens. The quick action menu leaves Start Meeting out (`QuickAction.offered`), and
   no meeting reminder is scheduled (`MeetingReminders.reminds`), so none offers a Start. The Live Activity's Ask
   Persona, Talk, Turn Off and Bookmark do nothing while the module is off (`MeetingRecorder.changesOffered`); Stop and
-  Pause always act. The widgets and the Live Activity still draw their buttons: their extensions do not read the
-  module state.
+  Pause always act.
+- **What the extensions draw.** The widget extension cannot read the module state (nor the keychain), so the app tells
+  it through what it already writes for it, each time as the closed `PhoneRecordingAllowance` (`allowed`, `off`,
+  `unknown`), written only when off: absent means allowed, as does an unknown word, so with the module on the file and
+  the state are byte for byte what they were, and one from before the field reads as allowed.
+  - **Home Screen and Lock Screen widgets**: `HomeSnapshot.recordingModule` in the App Group's snapshot (no version
+    bump: an optional field). While it is off and nothing records, the Record widget has no button: the same mark
+    without the recording red and the line "Meeting recording is off on this hub."; the Lock Screen's circle shows the
+    mark dimmed, its rectangle "Record" over "Off on this hub". A tap opens the app (the widget's link). While a
+    recording runs, the time and Stop are drawn as always.
+  - **Control Center control**: the system always draws a placed control, so it is drawn disabled, named "Meeting"
+    with "Off on this hub" (`MeetingRecordingControlOffer` reads the same snapshot); the app reloads it when the
+    hub's answer changes.
+  - **Live Activity**: `ContentState.module`. While it is off, Bookmark and Ask Persona / Talk are not drawn; End
+    (a meeting) and Stop always are. `RecordingActivity` reads the allowance where it builds the state, so the
+    activity follows a hello by itself.
+  - `RecordingModule.tellSurfaces` (after each hello of the hub the app follows, and when another hub is picked) tells
+    the watch, writes the snapshot and reloads the control, the last two once per run and then only when the answer
+    changed.
 - **Apple Watch.** The watch never talks to the hub about modules: the phone tells it. `RecordingModule.tellWatch`
   (after each hello of the hub the app follows, when another hub is picked, and when the watch session activates)
   puts the allowance into the WatchConnectivity application context under one key, `recordingModule`, as the word
@@ -211,10 +228,9 @@ readable, searchable and the user's to delete. On the iPhone and iPad:
   - Screenshots: any state with `-recording.phoneModule off` (the stored word as a launch argument), e.g.
     `-openRecording YES`, `-showAllDaySample recording -openWatchItem allday`, `-showMeetingSample minutes -openWatchItem
     minutes-writing`, `-openWatchItem record-complication`.
-- **Not yet** (tracked on #15214): the iPhone's widgets, Control Center control and Live Activity still draw their
-  buttons with the module off (refused or inert when tapped). visionOS compiles the same sources and was not built or
-  checked for this change.
-- Tests: `RecordingModuleOffTests`, `RecordingOuterSurfacesTests`, `WatchRecordingModuleOffTests`, `ModulesTests.recordingFollowsItsHubFlag`. Mock hub: `MOCK_HUB_MODULES=<flags without
+- **Not checked**: visionOS compiles the same sources and was not built or checked for this change; the Control's
+  disabled drawing was not seen (a simulator's Control Center cannot be captured from the command line).
+- Tests: `RecordingModuleOffTests`, `RecordingOuterSurfacesTests`, `WatchRecordingModuleOffTests`, `RecordingSurfacesModuleOffTests`, `ModulesTests.recordingFollowsItsHubFlag`. Mock hub: `MOCK_HUB_MODULES=<flags without
   module.recording>` turns the module off for the app.
 
 ## Persona in meetings
