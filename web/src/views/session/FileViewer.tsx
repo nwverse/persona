@@ -6,7 +6,7 @@ import { FilesPanel } from "./FilesPanel";
 
 const normSlashes = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "");
 
-export function FileViewerPanel({ mid, sid, path, cwd, line, to, onClose }: { mid: string; sid?: string; path: string; cwd?: string; line?: number; to?: number; onClose: () => void }) {
+export function FileViewerPanel({ mid, sid, path, cwd, line, to, readOnly, onClose }: { mid: string; sid?: string; path: string; cwd?: string; line?: number; to?: number; readOnly?: boolean; onClose: () => void }) {
   const folder = dirName(path) || "/";
   const inCwd = Boolean(cwd && (below(cwd, path) !== null || normSlashes(path).startsWith(normSlashes(cwd) + "/")));
   const root = inCwd ? cwd! : folder;
@@ -20,8 +20,8 @@ export function FileViewerPanel({ mid, sid, path, cwd, line, to, onClose }: { mi
       line={line}
       to={to}
       onClose={onClose}
-      // Show in Files: the Files panel at its folder, the file marked (#5827)
-      onShowInFolder={(p) => openPanel({ kind: "files", mid, sid: sid ?? "", cwd: cwd || dirName(p) || "/", path: dirName(p) || "/", highlight: fileName(p) })}
+      // Show in Files: the Files panel at its folder, the file marked (#5827). Omitted in read-only mode so it cannot escape to writable file management.
+      onShowInFolder={readOnly ? undefined : (p) => openPanel({ kind: "files", mid, sid: sid ?? "", cwd: cwd || dirName(p) || "/", path: dirName(p) || "/", highlight: fileName(p) })}
     />
   );
 }

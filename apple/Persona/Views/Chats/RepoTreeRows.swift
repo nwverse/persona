@@ -280,16 +280,32 @@ struct WorkspaceAgentRow: View {
     var session: Session
     var time: AgentTime?
     var muted: Bool
+    /// Present when a folded side session keeps this parent row Unread (#13524); nil leaves the row unchanged.
+    var sideUnread: SideFold.UnreadSummary? = nil
     var preferHerdrTabName = false
     var body: some View {
-        HStack(spacing: Theme.Space.xs) {
-            title
-            Spacer(minLength: 0)
-            metadata
+        Group {
+            if let sideUnread {
+                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                    HStack(spacing: Theme.Space.xs) {
+                        title
+                        Spacer(minLength: 0)
+                        metadata
+                    }
+                    SideUnreadLine(parent: session.key, summary: sideUnread)
+                }
+                .scaledFrame(minHeight: Theme.WorkspaceSidebar.agentHeight)
+            } else {
+                HStack(spacing: Theme.Space.xs) {
+                    title
+                    Spacer(minLength: 0)
+                    metadata
+                }
+                .scaledFrame(height: Theme.WorkspaceSidebar.agentHeight)
+            }
         }
-        .scaledFrame(height: Theme.WorkspaceSidebar.agentHeight)
         .frame(maxWidth: .infinity, alignment: .leading).contentShape(.rect)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: sideUnread == nil ? .combine : .contain)
         .accessibilityValue(session.stateLabel(muted: muted))
     }
 

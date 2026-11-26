@@ -1,6 +1,6 @@
 // Machines: every computer's CPU / memory / network now and over the last hour (docs/server/machines.md), as Insight Cards. "Add computer"
 // (feature machines_add) adds one from here, and a computer waiting to be confirmed (trust pending) says so on its card.
-import { memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import { storedValue, storeValue } from "../lib/compatibility";
 import { lazyPage } from "../lib/lazy-page";
 import { takeUsageFocus } from "../lib/usage-map-link";
@@ -14,8 +14,8 @@ import { hubLabel, routeText } from "../lib/mesh";
 import { machineDeployment } from "../lib/machine-deploy";
 import { classifyConnection } from "../lib/node-health";
 import { href, navigate, onLinkClick, type Route } from "../lib/router";
-import { currentRoster, hostedManagerAttention, hostedManagersForMachine, managerOrder, multiManager, offlineManagerOf, useRoster, type Manager } from "../lib/managers";
-import { defaultManager, withManager } from "../lib/manager-choice";
+import { hostedManagerAttention, hostedManagersForMachine, offlineManagerOf, useRoster, type Manager } from "../lib/managers";
+import { useMachineMetrics } from "../lib/machine-metrics";
 import { onHubEvent, useStore } from "../lib/store";
 import { useFullAgentSessions } from "../lib/sessions";
 import { documentPage, visiblePoll } from "../lib/visible-poll";
@@ -23,9 +23,8 @@ import type { Machine, MachineMetrics, Session } from "../lib/types";
 import { Button, cx, EASE, IconButton, Loading, toast } from "../ui/atoms";
 import { Icon } from "../ui/icons";
 import { Empty } from "./assistant/parts";
-import { AddComputer, type PendingComputer } from "./machines/AddComputer";
-import { HelpDialog } from "./assistant/Readiness";
-import { MachineDeploy } from "./machines/MachineDeploy";
+import { lazyDialog, lazyOverlay } from "./LazyOverlay";
+import type { PendingComputer } from "./machines/AddComputer";
 import { MachineMetricsSummary } from "./machines/MachineMetricsSummary";
 import { AlertChips } from "./machines/MachineAlertChips";
 import { MachineAlertSheet } from "./machines/MachineAlertSheet";
@@ -51,6 +50,18 @@ const StoragePanel = lazyPage(() => import("./machines/StoragePanel").then((m) =
 
 const ResourcesPanel = lazyPage(() => import("./machines/ResourcesPanel").then((m) => m.ResourcesPanel));
 
+const NOOP = () => {};
+type MachineDeployProps = ComponentProps<typeof import("./machines/MachineDeploy").MachineDeploy>;
+
+// Loaded strictly on demand when the user opens Add computer or Help, or when a card has a deployment banner (no idle preload).
+const AddComputer = lazyDialog(() => import("./machines/AddComputer").then((m) => m.AddComputer));
+const HelpDialog = lazyOverlay(() => import("./assistant/ReadinessHelp").then((m) => m.HelpDialog));
+const MachineDeploy = lazyOverlay<MachineDeployProps & { onClose: () => void }>(() =>
+  import("./machines/MachineDeploy").then(({ MachineDeploy: Deploy }) => function LazyMachineDeploy(props: MachineDeployProps & { onClose: () => void }) {
+    return <Deploy machine={props.machine} className={props.className} onDetails={props.onDetails} hostedManagers={props.hostedManagers} />;
+  }),
+);
+
 export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   // with several assistants, the current one's computers (docs/assistant/managers.md "Clients"); one: as before
   const machines = useScopedMachines();
@@ -61,8 +72,7 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   // Hubs without machines_add get the plain how-to instead of the in-app flow.
   const [helping, setHelping] = useState(false);
   const [answering, setAnswering] = useState("");
-  const [metrics, setMetrics] = useState<MachineMetrics[] | null>(null);
-  const [error, setError] = useState("");
+  const { metrics, error } = useMachineMetrics();
   // Each computer's agents. A hub that pages its Agents list pushes no sessions, so the store holds none of them: they
   // are read as the Agents list reads them (each parent once, folded; the assistant's conversations are no agents),
   // and until that read is in, a card says so rather than "No agents running".
@@ -116,37 +126,6 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     const mm = metrics?.find((x) => x.machine_id === m.id);
     return concernOf(m, machineAlerts({ machine: m, metrics: mm, launchers: issues.get(m.id) ?? 0, managerOffline: !!offlineManagerOf(roster, m) }), agents.get(m.id)?.[2] ?? 0);
   }), [machines, metrics, issues, roster, agents]);
-
-  useEffect(() => {
-    let dead = false;
-    const previous = new Map<string, MachineMetrics[]>();
-    const load = async () => {
-      const roster = currentRoster();
-      const ids = multiManager(roster) ? managerOrder(roster).filter((m) => m.online).map((m) => m.id) : [defaultManager()];
-      const results = await Promise.allSettled(ids.map((id) => api<{ machines: MachineMetrics[] }>(withManager("/metrics", id))));
-      if (dead) return;
-      const failed = results.find((r) => r.status === "rejected");
-      if (failed && results.every((r) => r.status === "rejected")) {
-        setError(errorText(failed.reason));
-        return;
-      }
-      const merged = new Map<string, MachineMetrics>();
-      results.forEach((r, i) => {
-        if (r.status === "fulfilled") previous.set(ids[i], r.value.machines ?? []);
-        for (const m of previous.get(ids[i]) ?? []) {
-          if (!merged.has(m.machine_id)) merged.set(m.machine_id, m);
-        }
-      });
-      setMetrics([...merged.values()]);
-      setError("");
-    };
-    // Right away and every 10 s while the tab is shown; a hidden tab asks nothing and loads again when shown.
-    const stop = visiblePoll(() => void load(), 10_000, documentPage);
-    return () => {
-      dead = true;
-      stop();
-    };
-  }, []);
 
   // Stable callbacks, so the memoized cards keep their props when the page renders again.
   const reconnect = useCallback(async (id: string): Promise<void> => {
@@ -323,7 +302,8 @@ type AgentsKnown = "yes" | "loading" | "failed";
 // machines push that only moved last_seen on (sameCard).
 const MachineCard = memo(function MachineCard({ m, index, metrics: mm, hub, route, canAdd, answering, onReconnect, onAnswer, onAddAgain, managerOffline, hostedManagers, agents, working, known, launcherIssues, onAlert }: CardProps) {
   const detail = { name: "machine" as const, mid: m.id };
-  const { expectedDisconnect } = machineDeployment(m);
+  const deployment = machineDeployment(m);
+  const { expectedDisconnect } = deployment;
   const pending = isPending(m);
   // why it is offline: the hub's error_code in our words, else from the error text, and what to do
   const coded = pending ? "" : machineErrorText(m.error_code);
@@ -441,7 +421,9 @@ const MachineCard = memo(function MachineCard({ m, index, metrics: mm, hub, rout
       )}
       {/* an offline card has no metrics under them: the chips keep their own room above the footer */}
       <AlertChips alerts={alerts} onOpen={(kind) => onAlert(m.id, kind)} className={m.online ? undefined : "mb-3"} />
-      <MachineDeploy machine={m} hostedManagers={hostedManagers} className="mt-2" onDetails={() => onAlert(m.id, m.deploy_error ? "deploy_failed" : "mismatch")} />
+      {deployment.visible && (
+        <MachineDeploy machine={m} hostedManagers={hostedManagers} className="mt-2" onDetails={() => onAlert(m.id, m.deploy_error ? "deploy_failed" : "mismatch")} onClose={NOOP} />
+      )}
       <MachineMetricsSummary machine={m} metrics={mm} />
       {/* the gap keeps the state and the versions apart when the versions have to shorten */}
       <div className="flex items-center justify-between gap-3 border-t border-line px-4 py-2 text-[11.5px] text-ink-3">

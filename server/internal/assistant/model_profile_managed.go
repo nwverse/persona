@@ -229,22 +229,31 @@ func (s *Service) modelProfileOwnChange(p *modelProfileProposal, lang i18n.Lang)
 	if len(p.changed) == 0 {
 		return &ownChange{summary: i18n.T(lang, "assistant-settings_tool.model_profile_unchanged", i18n.Args{"profile": p.id})}
 	}
-	return &ownChange{applyChecksProposal: true, cardText: func(l i18n.Lang) string {
-		lines := make([]string, 0, len(p.changed)+2)
-		for _, field := range p.changed {
-			lines = append(lines, modelProfileCardChange(l, p.id, field, p.before, p.after))
-		}
-		if p.capture {
-			lines = append(lines, i18n.T(l, "assistant-settings_tool.model_profile_capture_note"))
-		}
-		lines = append(lines, i18n.T(l, "assistant-settings_tool.model_profile_save_only"))
-		return strings.Join(lines, "\n")
-	}, apply: func(ctx context.Context) (string, error) { return s.applyModelProfileProposal(ctx, p) }}
+	return &ownChange{applyChecksProposal: true, revision: &p.revision, modelProfileWrite: true,
+		profileAfter: map[string]ModelProfile{p.id: cloneModelProfile(p.after)}, cardText: func(l i18n.Lang) string {
+			lines := make([]string, 0, len(p.changed)+2)
+			for _, field := range p.changed {
+				lines = append(lines, modelProfileCardChange(l, p.id, field, p.before, p.after))
+			}
+			if p.capture {
+				lines = append(lines, i18n.T(l, "assistant-settings_tool.model_profile_capture_note"))
+			}
+			lines = append(lines, i18n.T(l, "assistant-settings_tool.model_profile_save_only"))
+			return strings.Join(lines, "\n")
+		}, apply: func(ctx context.Context) (string, error) { return s.applyModelProfileProposal(ctx, p) }}
+}
+
+func modelProfileSaveImageEqual(a, b ModelProfile) bool {
+	// UpdatedAt is save metadata, not a decision-relevant value. In particular,
+	// independently regenerated built-in templates have different timestamps
+	// until the first approved save persists the catalog.
+	a.UpdatedAt = b.UpdatedAt
+	return reflect.DeepEqual(a, b)
 }
 
 func (s *Service) applyModelProfileProposal(ctx context.Context, p *modelProfileProposal) (string, error) {
 	_, err := s.saveModelProfile(ctx, &p.revision, p.id, ProfileActor{Kind: "assistant"}, func(current *ModelProfile, exists bool) error {
-		if !exists || !reflect.DeepEqual(*current, p.before) {
+		if !exists || !modelProfileSaveImageEqual(*current, p.before) {
 			return fmt.Errorf("the model profile changed after the card was shown, so nothing was saved: %w", approvalops.ErrStale)
 		}
 		*current = cloneModelProfile(p.after)
@@ -256,18 +265,20 @@ func (s *Service) applyModelProfileProposal(ctx context.Context, p *modelProfile
 	if err != nil {
 		return "", err
 	}
-	// A successful save is followed by an independent read-back. A read failure is not reported as a rollback.
+	// A successful save is followed by an independent read-back. Any failure
+	// below is after the commit: exact batches record the item as completed and
+	// stop later items rather than falsely saying the write did not happen.
 	view, err := s.modelProfilesView(ctx)
 	if err != nil {
-		return "", err
+		return "", ownerActionCompletedError{err: err}
 	}
 	i := slices.IndexFunc(view.Profiles, func(candidate ModelProfileView) bool { return candidate.ID == p.id })
 	if i < 0 {
-		return "", errors.New("the saved model profile was not present on read-back")
+		return "", ownerActionCompletedError{err: errors.New("the saved model profile was not present on read-back")}
 	}
 	saved := view.Profiles[i]
 	if changed := modelProfileChangedFields(p.after, saved.ModelProfile); len(changed) != 0 {
-		return "", fmt.Errorf("saved model profile read-back differs in %s", strings.Join(changed, ", "))
+		return "", ownerActionCompletedError{err: fmt.Errorf("saved model profile read-back differs in %s", strings.Join(changed, ", "))}
 	}
 	raw, err := json.Marshal(struct {
 		Revision int64            `json:"revision"`

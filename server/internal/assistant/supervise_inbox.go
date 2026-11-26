@@ -44,7 +44,7 @@ func (s *Service) superviseInbox(ctx context.Context, items []*InboxItem, linked
 	if len(items) == 0 {
 		return
 	}
-	visible := items[:0]
+	visible := make([]*InboxItem, 0, len(items))
 	for _, it := range items {
 		allowed, err := s.inboxVisibilityModelAllowed(ctx, it)
 		if err == nil && allowed {
@@ -228,7 +228,7 @@ func (s *Service) acceptedFeedbackHolds(t Todo, in *prompts.SuperviseInbox) bool
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	it := b.items[in.Item]
-	if it == nil || !it.open() || it.Agent == nil || it.Agent.TodoID != t.ID {
+	if it == nil || it.VisibilityExcluded || !it.open() || it.Agent == nil || it.Agent.TodoID != t.ID {
 		return false
 	}
 	url := inboxOpenPR(it)
@@ -246,7 +246,7 @@ func (s *Service) followContinuations(ctx context.Context, items []*InboxItem) {
 	b.mu.Lock()
 	linkedTo := map[*InboxItem]string{}
 	for _, it := range items {
-		if it.Agent != nil && it.Agent.TodoID != "" && inboxTaskLinkEligible(it) {
+		if !it.VisibilityExcluded && it.Agent != nil && it.Agent.TodoID != "" && inboxTaskLinkEligible(it) {
 			linkedTo[it] = it.Agent.TodoID
 		}
 	}
@@ -269,7 +269,7 @@ func (s *Service) followContinuations(ctx context.Context, items []*InboxItem) {
 	var writes []*inboxWrite
 	b.mu.Lock()
 	for it, to := range moves {
-		if b.items[it.ID] != it || it.Agent == nil || it.Agent.TodoID != linkedTo[it] || !inboxTaskLinkEligible(it) {
+		if b.items[it.ID] != it || it.VisibilityExcluded || it.Agent == nil || it.Agent.TodoID != linkedTo[it] || !inboxTaskLinkEligible(it) {
 			continue // moved or relinked meanwhile
 		}
 		w := beginWrite(it)
@@ -338,7 +338,7 @@ func (s *Service) inboxSignalHolds(t Todo) bool {
 // signal it gave (receivedSince), and remembers that count. Under b.mu.
 func inboxSignalOf(it *InboxItem, linked bool) (superviseSignal, bool) {
 	a := it.Agent
-	if a == nil || a.TodoID == "" || !it.open() || it.Kind == KindBot || !inboxTaskLinkEligible(it) ||
+	if a == nil || a.TodoID == "" || it.VisibilityExcluded || !it.open() || it.externallyRouted() || it.Kind == KindBot || !inboxTaskLinkEligible(it) ||
 		a.SentOf != "" && a.SentOf == it.Last ||
 		a.signaledOf != "" && a.signaledOf == it.Last {
 		return superviseSignal{}, false
