@@ -1356,6 +1356,25 @@ test('knowledge contexts retain their entry kind when IDs collide across categor
 });
 
 
+test('a row working only on background work has ended its turn: its next-step box shows and Stop is not offered',()=>{
+ const {model}=fixture();
+ model.selected.raw=JSON.stringify({agent:'claude',state:'working',background_working:true});model.selected.state='working';
+ model.transcript={liveTools:[],liveActive:false,liveThinking:false,liveSummary:'',liveRetryCount:'',liveCompacting:false};
+ const items=[{id:'q',seq:1,kind:'text',role:'user',text:'Check section 4'},
+  {id:'w',seq:2,kind:'tool_use',role:'assistant',tool_use_id:'w',tool_name:'mcp__ccd_turn__wrap_up',
+   tool_input:{recap:'Both findings hold; tests still run.',ask:'Fix both findings now?',actions:[{label:'Fix both'},{label:'Not now'}]}},
+  {id:'r',seq:3,kind:'tool_result',tool_use_id:'w',text:'Shown in the next-step box. Write your closing answer.'},
+  {id:'a',seq:4,kind:'text',role:'assistant',text:'Both findings hold.'}];
+ assert.equal(model.turnWorking(),false);assert.equal(model.canStop(),false);
+ model.publishTranscript(items,model.turnWorking());
+ assert.equal(model.messages.at(-1).role,'next_step');
+ assert.deepEqual(model.messages.at(-1).nextStep.choices.map(c=>c.label),['Fix both','Not now']);
+ model.selected.raw=JSON.stringify({agent:'claude',state:'working'});
+ assert.equal(model.turnWorking(),true);
+ model.publishTranscript(items,model.turnWorking());
+ assert.ok(!model.messages.some(m=>m.role==='next_step'));
+});
+
 test('interrupt is active-turn only and its pending admission retires with the route',async()=>{
  const {model}=fixture();let posts=0;model.repository.stop=async()=>posts++;
  assert.equal(model.canStop(),false);await model.stop();assert.equal(posts,0);

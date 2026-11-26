@@ -1448,9 +1448,13 @@ export class ClientModel {
   }
   @Trace interruptPendingKey: string = '';
   private interruptIdentity(): string { return JSON.stringify([this.generation, this.target()]); }
+  /** A turn is running. A row the hub reports as working only because of background work (background_working) has
+   *  ended its turn: its closing reply, next-step box and finished plan show as for an idle session. */
   turnWorking(): boolean {
     const row = this.sessions.find((item: ResourceRow) => item.machine === this.selected.machine && (item.session || item.id) === (this.selected.session || this.selected.id)) || this.selected;
-    return row.state === 'working' || Wire.text(row.data(), 'status') === 'working' || Wire.bool(row.data(), 'working');
+    const data = row.data();
+    if (Wire.bool(data, 'background_working')) return false;
+    return row.state === 'working' || Wire.text(data, 'status') === 'working' || Wire.bool(data, 'working');
   }
   stopPending(): boolean { return this.interruptPendingKey === this.interruptIdentity(); }
   private interruptibleTurn(): boolean {

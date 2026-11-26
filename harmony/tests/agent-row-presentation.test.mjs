@@ -382,3 +382,9 @@ test('a parent row shows its family state and running count once, and a child sa
   const child = page.bindAgentRows([], [{ identity: 'k2', key: 'k2', value: kids[1] }], true)[0];
   assert.match(page.rowSpoken(child), /relation_side · relation_root/);
 });
+
+test('the quick filter segments are rebuilt when their set changes, never updated in place', () => {
+  // CapsuleSegmentButtonV2 throws in getBackplatePosition when its items change under a selection it has not laid out.
+  assert.match(source, /ForEach\(\[this\.quickFilters\(\)\.join\('\|'\)\], \(_set: string\) => \{\s*(?:\/\/[^\n]*\n\s*)*CapsuleSegmentButtonV2\(\{ items: new SegmentButtonV2Items\(this\.quickFilters\(\)/);
+  assert.match(source, /buttonPadding: LengthMetrics\.vp\(Tokens\.fine\) \}\)\.width\('100%'\)\s*\}, \(set: string\) => set\)/);
+});
