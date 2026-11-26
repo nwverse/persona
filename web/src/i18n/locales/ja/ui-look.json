@@ -57,5 +57,7 @@
   "surface_style": "ウインドウスタイル",
   "surface_style_hint": "デフォルトは従来の不透明な表示を保ちます。Liquid Glass は半透明のすりガラス質感とデスクトップの透過を追加します。このブラウザにのみ保存されます。",
   "surface_default": "デフォルト",
-  "surface_liquid_glass": "Liquid Glass"
+  "surface_liquid_glass": "Liquid Glass",
+  "glass_translucency": "ガラスの透明度",
+  "glass_translucency_hint": "Liquid Glass の透過度と背景ぼかしの強さを調整します。このブラウザにのみ保存されます。"
 }

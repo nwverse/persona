@@ -8,14 +8,16 @@ import { pageToken } from "../../ui/extension-theme";
 import { useActiveExtensionTheme } from "../../ui/ExtensionThemePicker";
 import { Icon } from "../../ui/icons";
 import {
-  ACCENT_PRESETS, accentTokens, PRESET_COLORS, setAccentChoice, setSurfaceStyle, setTextSize, SURFACE_STYLES, TEXT_SIZES,
-  useAccentChoice, usePersonaAccent, useSurfaceStyle, useTextSize, type AccentChoice, type SurfaceStyle, type TextSize,
+  ACCENT_PRESETS, accentTokens, PRESET_COLORS, setAccentChoice, setGlassTranslucency, setSurfaceStyle, setTextSize,
+  SURFACE_STYLES, TEXT_SIZES, useAccentChoice, useGlassTranslucency, usePersonaAccent, useSurfaceStyle, useTextSize,
+  type AccentChoice, type SurfaceStyle, type TextSize,
 } from "../../ui/look";
 import { RECENT_COUNTS, setRecentCount, useRecentCount } from "../../lib/sidebar-recent";
 import { setSidebarUsageShown, useSidebarUsageShown } from "../../lib/sidebar-usage";
 import { setSidebarIconMode, SIDEBAR_ICON_MODES, useSidebarIconMode, type SidebarIconMode } from "../../lib/sidebar-icons";
 import { usePersona } from "../assistant/Persona";
 import { Segmented } from "../assistant/parts";
+import { Slider } from "../../ui/Slider";
 import { Row, Switch } from "./SettingsParts";
 import { FONT_FALLBACKS, FONT_PRESETS, FONT_SERIF, fontFamily, quoteFont, setBrowserFonts, useFontSettings, validFontFamily, type FontChoice, type FontKind, type FontPreference } from "../../ui/font-preference";
 import { useFontAvailability } from "../../ui/font-availability";
@@ -254,11 +256,32 @@ export function SidebarIconsRow() {
 /** "Window style" (#16607): Default (opaque surfaces) or Liquid Glass (translucent frosted material + macOS vibrancy). */
 export function SurfaceStyleRow() {
   const style = useSurfaceStyle();
+  const translucency = useGlassTranslucency();
   const label = (v: SurfaceStyle) => (v === "liquid-glass" ? t("ui-look.surface_liquid_glass") : t("ui-look.surface_default"));
   return (
-    <Row label={t("ui-look.surface_style")} hint={t("ui-look.surface_style_hint")} wrapHint stackOnNarrow anchor="surface-style">
-      <Segmented<SurfaceStyle> label={t("ui-look.surface_style")} value={style} options={SURFACE_STYLES.map((v) => ({ v, label: label(v) }))} onChange={setSurfaceStyle} />
-    </Row>
+    <>
+      <Row label={t("ui-look.surface_style")} hint={t("ui-look.surface_style_hint")} wrapHint stackOnNarrow anchor="surface-style">
+        <Segmented<SurfaceStyle> label={t("ui-look.surface_style")} value={style} options={SURFACE_STYLES.map((v) => ({ v, label: label(v) }))} onChange={setSurfaceStyle} />
+      </Row>
+      {style === "liquid-glass" && (
+        <Row label={t("ui-look.glass_translucency")} hint={t("ui-look.glass_translucency_hint")} wrapHint stackOnNarrow anchor="glass-translucency">
+          <div className="flex items-center gap-3">
+            <Slider
+              value={translucency}
+              min={0}
+              max={100}
+              step={2}
+              label={t("ui-look.glass_translucency")}
+              valueText={`${translucency}%`}
+              onInput={setGlassTranslucency}
+              onCommit={setGlassTranslucency}
+              className="w-36 sm:w-44"
+            />
+            <span className="w-9 text-right text-label font-medium tabular-nums text-ink-2">{translucency}%</span>
+          </div>
+        </Row>
+      )}
+    </>
   );
 }
 

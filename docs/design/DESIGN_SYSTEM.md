@@ -190,7 +190,7 @@ Needs you is blue on every client (`docs/design/DECISIONS.md`, 11-11). Android r
 | `ModeTone` (permission modes, #3719) | asks first: secondary ink; plans: teal `#0E7C86`/`#4FD1C5`; acts within limits (Auto-Edit, Auto): `Hue.purple`; allows everything: `danger`. None is an agent state's color | `apple/Shared/Design/Theme.swift` (`Theme.ModeTone`) |
 | `Shell` (same in every style) | composer `#FFFFFF`/`#1F1F21`, stroke `#E3E3E3`/`#3A3A3C`, ink `#0D0D0D`/`#F2F2F2`, segment `#E6E6E6`/`#3A3A3C`, drawer `#F9F9F9`/`#171717` | `apple/Shared/Design/Theme.swift:840-873` |
 | `ChatBox` | user `#E3EDFD`/`#1C2F47`, persona `#F0F0F3`/`#2A2A2E` | `apple/Shared/Design/ChatLayoutTokens.swift:18-23` |
-| `UsageColor` | input, output, cache write, cache read; color-blind checked; same on web. Web also has `--project-other`, By project's non-development projects (#16530, development takes the accent) | `apple/Shared/Design/UsageColor.swift:8-15`, `web/src/styles.css` |
+| `UsageColor` | input, output, cache write, cache read; color-blind checked; same on web. `projectOther` (web `--project-other`), By project's non-development projects (#16530, development takes the accent); a By project chart's other columns at `Theme.Heat.unpicked` (55%) | `apple/Shared/Design/UsageColor.swift:8-19`, `web/src/styles.css` |
 | `Syntax` | eight colors, each 4.5:1 on `codeBackground` | `apple/Shared/Design/Theme.swift:888` |
 
 Android mirrors `Shell`, `ChatBox` and the roles hex for hex (`android/core/designsystem/src/main/kotlin/persona/core/designsystem/HomeTokens.kt`).
@@ -466,11 +466,13 @@ on-demand model panel, not the everyday Assistant home (#6887).
   length", and ✕. While the clipboard holds a picture not yet offered, the focused composer offers **Paste** (the accent's
   capsule on iOS, a Secondary button on Android) and ✕ **Don't paste** at its top, once per copy; the field itself pastes
   only text. Android: the video row in every style, the Paste chip on Glass (`ComposerPaste.kt`).
-- Web selection comments (#14518): while writing a comment on selected chat text, paste an image into its field or
-  use the labeled image button beside the keyboard hint. The card reuses the composer's attachment tiles and their
-  remove controls so the picture stays with the text it illustrates. Saving or reopening the note keeps its images.
-  Escape discards a new comment or restores the note and images from before the edit. All pictures in the draft share
-  the message's limits. Selecting text preloads the draft editor, which also loads when a saved comment opens.
+- Web selection comments (#11585, #14518): selecting chat text opens a floating comment bar by the passage, or
+  above the keyboard on a narrow or touch screen. Save leaves a numbered pin beside the passage. One compact
+  chip above the composer lists draft comments and opens the same editor as the pin. Paste a picture into the
+  comment field or use its labeled image button. The editor reuses the composer's removable attachment tiles.
+  Saving and reopening a note keeps its pictures. Escape discards a new comment or restores the note and pictures
+  from before the edit. All pictures in the draft share the message's limits. The editor starts loading when a
+  passage is selected or the comments list is opened.
 - Files (iOS `FileAttachmentsBar`, #8361): + › Files never types into the draft. Each file is a card in a row above the
   field that scrolls sideways like the photos' strip, 6 pt apart: `box56` tall and `box160` wide (a new size: a name of
   about 14 characters whole, and the next card showing) on `Fill.well` with the card radius,
@@ -944,7 +946,7 @@ existing overview list style.
   **Clear Seen (N)** for its retained rows. Pull to refresh or change the list scope to start a new visit. Appearance →
   Agents list → Seen Agents switches between keeping rows in place and moving them when a chat closes.
 
-- Web History (#10240) is an Agents destination for non-running sessions, grouped by local activity day. It shares folded sidebar state and visibility before filtering; day counts equal the displayed filtered rows, including only loaded content-search matches. The primary switch stays Assistant / Agents. Agents + owns New Agent, New terminal and Open terminals; History never starts on a remembered terminal inventory (details in `docs/web/web.md`).
+- Web History (#10240) is an Agents destination for non-running sessions, grouped by local activity day. It shares folded sidebar state and visibility before filtering; day counts equal the displayed filtered rows, including only loaded content-search matches. The primary switch stays Assistant / Agents. Agents + offers New agent, New shell and Browse tabs; History never starts on a remembered terminal inventory (details in `docs/web/web.md`).
 
 - **Native workspace pins** (#9300): the Agents workspace tree shows a host-pinned workspace with the existing pin mark,
   ordered before its unpinned siblings (newest pin first, then the existing stable order). Its repository moves ahead
@@ -2569,16 +2571,14 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   any other, also while a permission holds the Agent (iOS sends it the same way). Each style keeps its own card: on
   Android, Glass a floating card inset like the composer, Brief a rounded card with a light shadow, Board a bordered card
   under its amber rule.
-  A Persona conversation's own requests (its model's tool approvals, `ask_user`) are the same: the stack above its
+  A Persona conversation's own requests (its model's tool approvals, `ask_user`) are the same: the pending area above its
   composer, under the Needs you / In progress entries and the route chip, on every client (#4883: on the web and Android
   they sat only in the closed Needs you tray, and an owner waited minutes on an approval no screen in the chat showed).
   Needs you still counts them, and its row for one closes the tray onto the card instead of drawing it a second time.
   On the web, a card the conversation's own turn waits on (its own session's request, not one of a worker or side
-  session folded under it: `lib/turn-asks.ts`, #11794) is never folded: each stands open above the Needs you / In
-  progress capsules, all of them at once, and Needs you neither counts nor lists it again. The cards of sessions folded
-  under the conversation keep the stack and the tray as above.
-  The stack holds the conversation's own cards alone, as one slot on the web: its first card with "2 / 6" (where it stands in the run), the next taking its place when it is answered, and what was just answered one line over it that goes 3 seconds after the last answer (details with the interaction cards in `docs/web/web.md`).
-  **To Decide** (iOS and iPadOS, #12831): in an assistant conversation the conversation's own cards and its tasks'
+  session folded under it: `lib/turn-asks.ts`, #11794) opens in To Decide by default (#12857). Only the owner can fold
+  the pager. Cards from workers or side sessions outside its tasks continue to use the waiting stack and the tray.
+  **To Decide** (iOS and iPadOS #12831, Web #12857): in an assistant conversation the conversation's own cards and its tasks'
   questions and approvals are one pager over the composer (`QuestionDock`), opened from a **To Decide** entry (zh-Hans
   待选择, `QuestionDockEntry`) first in the row of entries, drawn as they are (`DockCapsule`, the needs-you tone; the
   selected look while the pager is open). One card at a time, the conversation's own first and then the tasks' oldest
@@ -2591,10 +2591,13 @@ Kinds: questions, plan approvals, tool approvals, secret entry, MCP forms, and w
   terminal, a tool approval and a plan approval show it greyed with one line in `cautionText` saying why and what to use
   ("Reply in Chat Instead", Deny, send it back); every other card keeps the rule below (Skip where the request can be
   cancelled). A Needs You row for the conversation's own card closes the tray and opens the pager on that card; the
-  pager and a tray show one at a time, the pager stepping aside while a tray is open. The pager is capped as a lone
-  question card (#6277), owns the grabber (#12306), and in a voice call stays open at half the page. The three numbers
+  pager and a tray show one at a time, the pager stepping aside while a tray is open. The iOS pager is capped as a lone
+  question card (#6277), owns the grabber (#12306), and in a voice call stays open at half the page. The Web pager scrolls inside the composer's existing height limit. The three numbers
   are To Decide (the pager's cards), Needs you (its rows) and, in an Agent's chat, "N pending". An Agent's chat keeps the
   stack; the wrap-up chips stay chips after the entries.
+  In an Agent's chat on the web, the stack holds the conversation's own cards alone, as one slot: its first card with
+  "2 / 6" (where it stands in the run), the next taking its place when it is answered, and what was just answered one
+  line over it that goes 3 seconds after the last answer (details with the interaction cards in `docs/web/web.md`).
   **Android** (#12858) uses the same pager order, collapsed selection, and Skip rules with `AssistantTrayEntry`,
   `DecisionDock`, and `RequestEditor`. Its task source opens over the Assistant tab, where Back restores the pager.
   The existing message jump highlights the source. A card from a terminal without a tool ID goes to the latest question
@@ -2944,12 +2947,25 @@ No HTTP codes, key algorithms, CLI flags or raw error text in the primary line. 
 | Hub | product term; "the hub machine" for the machine |
 | Computer | the user's own machine; "Machine" only for list and monitoring entries |
 | Node | never in user-facing English |
-| Agent | lowercase mid-sentence; "Agents" for the tab |
-| Session | what an Agent runs, titled by what it is doing. Not "task", which names the work Persona hands out |
 | Persona | the product and the main assistant |
 | Assistant | one of the hub's assistants, each with its own chats, inbox and computers (`manager` in code, the protocol and docs); zh-Hans 助手, ja アシスタント. Never "manager" in user-facing text |
 | Lark | in en and ja, except where Feishu is a separate option |
 | sign in / sign-in | verb / noun |
+
+#### Tabs, agents and sessions
+
+These words serve people who work with coding agents in Agents. Assistant uses everyday language such as “chat” where the distinction is unnecessary.
+
+| Term | Meaning in the UI |
+| --- | --- |
+| Tab | A herdr tab or its equivalent on another terminal host. Use “tab” for the running container, including when referring to where an agent runs. |
+| Agent | A running AI CLI such as Claude Code or Codex. In English, use lowercase mid-sentence and **Agents** for the navigation destination. |
+| Shell | A tab without an agent. |
+| Session | An agent's conversation, during or after execution. A session can outlive its tab. A task is the work assigned to the agent. |
+| History | Ended sessions. The tab inventory has its own label, **Tabs**. |
+| Start | The action that launches an agent. Launcher, model, effort and optional preset belong in the start flow. |
+
+Reserve “terminal” for the terminal view. Describe a split within a tab as a terminal split. Keep “slot” and “pane” out of this UI copy. The web's **In a tab** filter counts the sidebar agents currently associated with a running tab and shows those same agents. Shell rows are outside that selection.
 
 Full glossary: `docs/protocol/i18n.md`. Languages: en, zh-Hans, ja. Apple strings live in `apple/Shared/Localization/Localizable.xcstrings`; hub strings in the server locale files. Keys with a bracketed suffix are translator-context tags; the English value strips them. Japanese uses no space between Japanese and Latin text (the catalogs do not follow this yet; DS-29). Do not concatenate sentences.
 
@@ -3577,6 +3593,8 @@ speed, persona, style or theme color. Android reuses PairingHeading, JCard, JTex
 Apple reuses the pairing Form, Section, Picker, toolbar and Theme tokens.
 
 ## Meeting page (#3862)
+
+In a Web recording's transcript, keep search and bookmark navigation together behind a review control. Show the active match and match count where the owner moves between passages. Jumps stay inside the recording detail scroller. The local text download includes timestamps and follows the same transcript retention rules as the detail.
 
 ### The floating meeting window (#8731 V5)
 

@@ -45,6 +45,7 @@ import { TranscriptModel } from './TranscriptModel';
 import { Pairing, PairingTarget } from '../platform/Pairing';
 import { scopeKey, sessionCapabilities, projectToolTurn, TranscriptReducer } from '../core/Domain';
 import type { SessionCapabilityInput, EffectiveSessionCapabilities, TranscriptItem, TranscriptSnapshot, ToolTurnProjection, WorkInspectionStep } from '../core/Domain';
+import { extractPublishedModules, isRecordingModuleAllowed, parseStoredHubModules, serializeStoredHubModules } from '../core/XiaoYiActions';
 
 
 
@@ -79,6 +80,22 @@ class PhoneListRead {
 export class ClientModel {
   readonly ssh: SshTunnel = new SshTunnel();
   private static pairingEpochs: Map<string, number> = new Map();
+  private static forgetHooks: Set<(hubId: string, context: common.Context) => Promise<void>> = new Set();
+  static registerForgetHook(hook: (hubId: string, context: common.Context) => Promise<void>): void {
+    ClientModel.forgetHooks.add(hook);
+  }
+  private static statusHooks: Set<(pendingCount: number, workingCount: number, context: common.Context) => void> = new Set();
+  static registerStatusHook(hook: (pendingCount: number, workingCount: number, context: common.Context) => void): void {
+    ClientModel.statusHooks.add(hook);
+  }
+  private notifyStatusHooks(): void {
+    if (this.detached || this.demo || !this.connected || !this.context || ClientModel.statusHooks.size === 0) return;
+    const workingCount = this.sessions.filter((s: ResourceRow): boolean => s.state === 'working').length;
+    const pendingCount = this.phoneAgentBadge((): boolean => false);
+    for (const hook of ClientModel.statusHooks) {
+      try { hook(pendingCount, workingCount, this.context); } catch (_) {}
+    }
+  }
   pairingRevision(): number { return ClientModel.pairingEpochs.get(this.profile.id) || 0; }
   private retirePairing(id: string): void { ClientModel.pairingEpochs.set(id, (ClientModel.pairingEpochs.get(id) || 0) + 1); }
   retireHubConnections(id: string): void {
@@ -97,6 +114,18 @@ export class ClientModel {
   @Trace projectsRequested: boolean = false;
   @Trace pairingLink: string = '';
   @Trace notificationTarget: string = '';
+  @Trace pendingXiaoYiRoute: string = '';
+  @Trace rememberedHubModules: string[] | null = null;
+  openXiaoYiRoute(routeJson: string): void {
+    if (!routeJson || routeJson.length > 16384) return;
+    this.pendingXiaoYiRoute = routeJson;
+  }
+  private hubModulesKey(hubId: string): string {
+    return 'xiaoyi:' + scopeKey({ groupId: hubId, managerId: '' }) + ':hub-modules';
+  }
+  isRecordingModuleAllowed(): boolean {
+    return isRecordingModuleAllowed(this.features, this.rememberedHubModules);
+  }
   @Trace forgottenProfile: string = '';
   @Trace forgottenEpoch: number = 0;
   @Trace busy: boolean = false;
@@ -411,6 +440,7 @@ export class ClientModel {
     if (revision === this.attentionReadRevision && this.owns(generation, scope)) {
       this.attentionCards = agentAttentionCards(values, this.profile.manager);
       this.attentionOwner = JSON.stringify([generation, scope]);
+      this.notifyStatusHooks();
     }
     return values;
   }
@@ -666,13 +696,15 @@ export class ClientModel {
     this.sendAttempts.clear(); this.feedbackChanged();
     this.profile = profile; const scope = this.scope(); this.connected = false;
     this.clearPendingDecisions();
-    this.unresolvedWrites = []; this.operationState = ''; this.mainId = ''; this.mainMachineId = ''; this.sidebarConfig = ''; this.features = []; this.managers = []; this.rosterDefaultId = '';
+    this.unresolvedWrites = []; this.operationState = ''; this.mainId = ''; this.mainMachineId = ''; this.sidebarConfig = ''; this.features = []; this.rememberedHubModules = null; this.managers = []; this.rosterDefaultId = '';
     this.publishedImageLimits = {};
     this.demo = false; this.demoRepository = undefined; this.error = '';
     if (!keep) { this.sessionsReady = false; this.sessions = []; this.machines = []; this.conversations = []; this.todos = []; this.inbox = []; this.knowledge = []; this.messages = []; } this.selected = keep ? selection : new ResourceRow(); this.draftLoading = false;
     if (!keep && !this.detached) { this.directoryReady = false; this.directoryLoading = false; this.directoryUnavailable = 0; this.publishDirectory(); }
     if (!keep) { this.draft = ''; this.sourceContext = ''; this.draftRevision = ''; this.localMessages = []; this.renderedMessages = []; this.echoedMessages.clear(); }
     await saved; if (!this.owns(generation, scope)) return;
+    try { this.rememberedHubModules = parseStoredHubModules(await this.local.get(this.hubModulesKey(profile.id))); } catch (_) { this.rememberedHubModules = null; }
+    if (!this.owns(generation, scope)) return;
     await this.saveProfiles(); if (!this.owns(generation, scope) || !this.foreground) return;
     let access: HubAccess | undefined;
     const token = await this.vault?.get(profile.id, (value: HubAccess | undefined): void => { access = value; });
@@ -816,7 +848,7 @@ export class ClientModel {
       this.sessionsReady = false; this.sessions = []; this.conversations = []; this.machines = []; this.managers = []; this.todos = []; this.knowledge = []; this.inbox = [];
       this.clearPendingDecisions();
       this.messages = []; this.draft = ''; this.sourceContext = ''; this.draftRevision = ''; this.localMessages = []; this.renderedMessages = []; this.echoedMessages.clear(); this.detail = ''; this.reply = ''; this.mainId = ''; this.mainMachineId = ''; this.sidebarConfig = '';
-      this.unresolvedWrites = []; this.operationState = ''; this.notificationTarget = ''; this.draftLoading = false; this.features = []; this.error = '';
+      this.unresolvedWrites = []; this.operationState = ''; this.notificationTarget = ''; this.pendingXiaoYiRoute = ''; this.draftLoading = false; this.features = []; this.rememberedHubModules = null; this.error = '';
       this.publishedImageLimits = {};
     }
     this.publishDirectory();
@@ -834,6 +866,11 @@ export class ClientModel {
     if (this.context) { try { clearImagePreviews(this.context, profile.hubId || id); } catch (_) { cleanupFailed = true; } }
     try { await nativeNotifications.clear(id); } catch (_) { cleanupFailed = true; }
     if (!this.detached) { nativeLiveView.stopNow(id).catch(() => {}); }
+    if (this.context) {
+      for (const hook of ClientModel.forgetHooks) {
+        try { await hook(id, this.context); } catch (_) {}
+      }
+    }
     try { await this.credentialChange(id, async (): Promise<void> => { await this.vault?.remove(id); }); } catch (_) { cleanupFailed = true; }
     this.profiles = this.profiles.filter((item: HubProfile) => item.id !== id); this.publishDirectory();
     try { await this.saveProfiles(); } catch (_) { cleanupFailed = true; }
@@ -862,6 +899,11 @@ export class ClientModel {
       if (type === 'hello') {
         this.publishedImageLimits = Wire.object(data, 'image_limits');
         this.features = Wire.strings(data, 'features'); this.connected = true; this.error = '';
+        if (this.features.length > 0 && this.profile.id) {
+          const published = extractPublishedModules(this.features);
+          this.rememberedHubModules = published;
+          this.local.put(this.hubModulesKey(this.profile.id), serializeStoredHubModules(published)).catch(() => {});
+        }
         this.repository?.transport.hello(nativeNotifications.features(!this.detached && this.alerts));
         const generation = this.generation, scope = this.scope();
         this.reconcileWrites().then(async (): Promise<void> => { if (this.owns(generation, scope)) await this.refresh(); }).then(async (): Promise<void> => { if (this.owns(generation, scope)) await this.flushNotification(); }).catch((error: Error) => { if (this.owns(generation, scope)) this.failure(error); });
@@ -913,6 +955,7 @@ export class ClientModel {
       sessions.forEach((row: ResourceRow) => row.group = this.profile.id); machines.forEach((row: ResourceRow) => row.group = this.profile.id);
       this.sessions = sessions; this.sessionsReady = true; this.machines = machines; this.managers = managers; this.rosterDefaultId = rosterDefault;
       this.updateSendFeedbackSessions(sessions);
+      this.notifyStatusHooks();
       if (owner.heldReceipts.length) owner.heldReceipts = owner.heldReceipts.filter((receipt: HeldActionReceipt) => {
         if (receipt.scope !== scope) return true;
         const row = sessions.find((item: ResourceRow) => this.target(item) === receipt.target);

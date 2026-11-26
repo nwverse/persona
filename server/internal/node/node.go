@@ -222,6 +222,7 @@ type Node struct {
 	fulls               map[string]*fullClient            // client id -> a full herdr client running for the web (fullclient.go)
 	focus               focusState                        // focus sync for the full views (focus.go)
 	suggests            map[string]*suggestState          // session id -> Claude's suggested next message (suggestion.go)
+	checkpoints         checkpointTracker                 // per-turn working-tree snapshots (checkpoint.go)
 	driving             map[string]bool                   // session id -> Persona is working its TUI (a picker it opened is not "blocked")
 	blockedAt           map[string]time.Time              // session id -> when host status first became blocked without clearing
 	dialogs             paneDialogs                       // pane -> the dialog its last screen read showed (dialogstatus.go)
@@ -1164,6 +1165,15 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			}
 		}
 	}
+	if sessionSend || method == "session.start" && p.ResumeSessionID != "" {
+		id := p.SessionID
+		if method == "session.start" {
+			id = p.ResumeSessionID
+		}
+		if err := n.waitCheckpoint(ctx, id); err != nil {
+			return nil, err
+		}
+	}
 	if n.codexBlocked(p.SessionID) && (strings.HasPrefix(method, "session.") || strings.HasPrefix(method, "terminal.") || method == "assistant.send" || method == assistantwire.DeviceAssistantAnswerAgain || method == "assistant.permissions.reset") {
 		return nil, refusal("identity_conflict", "会话 ID 与另一来源重复，不能判断操作目标；未读取或发送", nil)
 	}
@@ -1315,7 +1325,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		// The companion's agy-<conversation> while an agy in a terminal has it open (agypresence.go, #13603): a message
 		// or an interrupt goes to the pane running it; nothing else may drive it from the companion.
 		if pane != "" && (method == "session.send" || method == "session.interrupt") {
-			if res, err, handled := n.workAgentCalls(ctx, method, pane, a, params, paneMessage{Text: p.Text, Images: p.Images}); handled {
+			if res, err, handled := n.workAgentCalls(ctx, method, pane, a, params, paneMessage{Text: p.Text, Images: p.Images, Source: p.MessageSource}); handled {
 				return res, err
 			}
 		}
@@ -1339,7 +1349,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	} else if a, ok := n.agent(p.SessionID); ok && (a.Agent == cursorAgent || a.Agent == agyAgent) {
 		// Herdr drives the pane (workagent.go). Messages go through agent.prompt, and Persona sends Esc through
 		// herdr to interrupt. Agy reads the verified pane conversation when available. Cursor shows a terminal notice.
-		if res, err, handled := n.workAgentCalls(ctx, method, p.SessionID, a, params, paneMessage{Text: p.Text, Images: p.Images}); handled {
+		if res, err, handled := n.workAgentCalls(ctx, method, p.SessionID, a, params, paneMessage{Text: p.Text, Images: p.Images, Source: p.MessageSource}); handled {
 			return res, err
 		}
 	} else if r, ok := n.terminalOnly(p.SessionID); ok { // a pi or opencode without its extension, any other agent (opencode.go)

@@ -60,6 +60,8 @@ def gen_ts(defs: dict[str, Def], calls: list[Call] | None = None, header: list[s
                 f"export class {defects}Defects {{",
                 "  static unknownEnum: ((enumName: string, raw: string) => void) | null = null;", "}", ""]
 
+    any_type = "Object" if flavor == "arkts" else "unknown"
+
     def ttype(t: TypeRef) -> str:
         k = t.kind
         if k in ("string", "time"):
@@ -69,7 +71,7 @@ def gen_ts(defs: dict[str, Def], calls: list[Call] | None = None, header: list[s
         if k == "bool":
             return "boolean"
         if k == "any":
-            return "Object" if flavor == "arkts" else "unknown"
+            return any_type
         if k == "null":
             return "null"
         if k == "array":
@@ -127,19 +129,20 @@ def gen_ts(defs: dict[str, Def], calls: list[Call] | None = None, header: list[s
             out += [f"export type {d.name} = string;", ""]
         elif d.kind == "opaque":
             out += doc(" ".join(x for x in (d.doc, f"Opaque JSON: {sentence(d.reason)}") if x))
-            out += [f"export type {d.name} = {'Object' if flavor == 'arkts' else 'unknown'};", ""]
+            out += [f"export type {d.name} = {any_type};", ""]
         elif d.kind == "enum":
             out += doc(d.doc)
             if flavor == "arkts":
                 out.append(f"export type {d.name} = string;")
-                out.append(f"export const {upper_snake(plural(d.name))}: readonly string[] = [{', '.join(json.dumps(v) for v in d.values)}];")
+                out.append(f"export const {upper_snake(plural(d.name))}: readonly string[] = "
+                           f"[{', '.join(json.dumps(v) for v in d.values)}];")
             else:
                 out.append(f"export type {d.name} = {' | '.join(json.dumps(v) for v in d.values)} | (string & {{}});")
                 out.append(f"export const {upper_snake(plural(d.name))} = [{', '.join(json.dumps(v) for v in d.values)}] "
                            "as const;")
             out.append("")
         elif d.kind == "any":
-            typ = " | ".join(ttype(t) for t in d.json_types) if d.json_types else ("Object" if flavor == "arkts" else "unknown")
+            typ = " | ".join(ttype(t) for t in d.json_types) if d.json_types else any_type
             out += doc(d.doc) + [f"export type {d.name} = {typ};", ""]
         elif d.kind == "struct":
             out += doc(d.doc)
@@ -149,7 +152,7 @@ def gen_ts(defs: dict[str, Def], calls: list[Call] | None = None, header: list[s
             out += fields([f for f in d.fields if f.name not in d.exclusive])
             if d.extra:
                 out += ["  /** Extra keys are opaque JSON; declared properties keep their own types. */",
-                        "  [key: string]: unknown;"]
+                        f"  [key: string]: {any_type};"]
             if d.exclusive:
                 out += ["} & ("]
                 for payload in d.exclusive:

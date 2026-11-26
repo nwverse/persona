@@ -434,6 +434,28 @@ func (s *Service) signalAgentDecisionReply(id string, a acceptAsk) {
 		At: r.At, Machine: r.MachineID, Session: r.SessionID})
 }
 
+// signalSupervisorDecisionReply hands an owner reply written in a supervisor / direction
+// conversation back to that very conversation. It is distinct from signalAgentDecisionReply,
+// which keeps the shared routing (an Agent-chat reply and the restart sweep rely on digestTo's
+// needs_user escalation to the main conversation and digestTarget's runtime-policy handling).
+// A leader distinct from Main is named explicitly so the reverse-lookup hand-back reaches the
+// direction that raised the card; a main-conversation card keeps the legacy no-To route.
+func (s *Service) signalSupervisorDecisionReply(ctx context.Context, id string, a acceptAsk) {
+	r := a.AgentReply
+	if r == nil || !r.ToldAt.IsZero() || !r.Handled && !a.AcceptedAt.IsZero() {
+		return
+	}
+	g := superviseSignal{Todo: id, Kind: sigDecisionReply, Key: agentDecisionReplyKey(a),
+		At: r.At, Machine: r.MachineID, Session: r.SessionID}
+	if t, ok := s.todoNow(id); ok && t.Supervision != nil {
+		lead := t.Supervision.Supervisor
+		if lead != "" && lead != s.settings(ctx).Main {
+			g.To = lead
+		}
+	}
+	s.signal(g)
+}
+
 // Recover the supervisor handoff from the persisted round after a manager restart.
 func (s *Service) sweepAgentDecisionReplies() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

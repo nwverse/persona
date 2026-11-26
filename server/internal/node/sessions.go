@@ -92,7 +92,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 		if agent.Agent == agyAgent {
 			if conversation := n.agyConversation(id, agent.PaneID); conversation != "" {
 				agyConversations[id] = conversation
-				if agent.AgentStatus != proto.StatusOffline && agent.AgentStatus != proto.StatusInterrupted {
+				if !agyStopped(agent.AgentStatus) {
 					agyRuntimeIDs[id] = agyAgent + "-" + conversation
 				}
 			}
@@ -357,7 +357,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			hasRuntimeRow := false
 			if runtimeID := agyRuntimeIDs[id]; runtimeID != "" {
 				seen[runtimeID] = true
-				if runtimeRow, _, ok := n.runtimes.rowOf(runtimeID); ok {
+				if runtimeRow, ok := n.runtimes.agyPaneRuntimeRow(runtimeID); ok {
 					hasRuntimeRow = true
 					if s.Model == "" {
 						s.Model = runtimeRow.Model
@@ -377,6 +377,9 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 					if s.LastText == "" && runtimeRow.LastText != "" {
 						s.LastText = runtimeRow.LastText
 					}
+					// The companion has already applied the native rewind cut.
+					agyBackgroundTasks{running: runtimeRow.Background, ended: runtimeRow.BackgroundEnded()}.apply(&s)
+					n.agyRuntimeTaskLogs(&s, agyConversations[id])
 					if bd := runtimeRow.ContextBreakdown(); bd != nil {
 						if existing := s.ContextBreakdown(); existing == nil || existing.Source != proto.ContextBreakdownExact {
 							s.SetContextBreakdown(bd)
@@ -471,6 +474,12 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 			}
 		} else if s.Agent == agyAgent {
 			n.resolveAgyContextWindow(s)
+			if s.SourceInstanceID == agyRuntimeID {
+				agyBackgroundTasks{running: s.Background, ended: s.BackgroundEnded()}.apply(s)
+				if conversation, ok := strings.CutPrefix(s.SessionID, agyAgent+"-"); ok {
+					n.agyRuntimeTaskLogs(s, conversation)
+				}
+			}
 		}
 		seen[s.SessionID] = true
 		if j != i {
@@ -574,6 +583,9 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	linkSideSessions(out, parents)           // the desktop app's side sessions under the sessions that started them (#5935)
 	linkHerdrChildren(out, agents)           // herdr's sub-agent terminals under the session of the terminal that started them
 	placeClaudeDesktop(out, origins, n.home) // and in their projects (#8521)
+	if n.peer != nil {
+		n.noteCheckpointEnds(out)
+	}
 	sortNewestFirst(out)
 	return out
 }

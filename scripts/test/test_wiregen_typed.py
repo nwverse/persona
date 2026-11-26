@@ -222,7 +222,9 @@ class Languages(unittest.TestCase):
                 self.assertNotIn('"unknown" | (string & {})', ts)
                 if flavor == "arkts":
                     self.assertIn("export type Legacy = string;", ts)
-                    self.assertNotIn("as const;", ts)
+                    self.assertIn('export const LEGACIES: readonly string[] = ["a", "b"];', ts)
+                    self.assertNotIn("as const", ts)
+                    self.assertNotIn("(string & {})", ts)
                 else:
                     self.assertIn('export type Legacy = "a" | "b" | (string & {});', ts)  # open: as before
                 self.assertIn("export function parsePhase(raw: string): Phase | UnknownPhase {", ts)

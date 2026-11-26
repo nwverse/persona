@@ -369,6 +369,8 @@ func (v Contributes) MarshalJSON() ([]byte, error) {
 // 256 KB and 32 skills per extension).
 type SkillItem struct {
 	ID string `json:"id"`
+	// What the extension's contributions list calls it; the id when absent.
+	Title string `json:"title,omitempty"`
 	// The directory, relative to the package (or to the data directory with source data).
 	Dir    string `json:"dir"`
 	Source string `json:"source,omitempty"`
@@ -818,7 +820,9 @@ type APIReceipt struct {
 }
 
 type AssistantItem struct {
-	ID           string   `json:"id"`
+	ID string `json:"id"`
+	// What the extension's contributions list calls it; the id when absent.
+	Title        string   `json:"title,omitempty"`
 	Skills       []string `json:"skills,omitempty"`
 	Instructions string   `json:"instructions,omitempty"`
 	Gate         string   `json:"gate,omitempty"`
@@ -830,6 +834,8 @@ type AssistantItem struct {
 type MCPServerItem struct {
 	// The server's name for the assistant; not persona or persona.
 	ID string `json:"id"`
+	// What the extension's contributions list calls it; the id when absent.
+	Title string `json:"title,omitempty"`
 	// Looked up on PATH, then in ~/bin.
 	Command string `json:"command"`
 	// A PERSONA_ variable (PERSONA_ read too) that, when set, replaces the lookup: a path, or "" / 0 / off / false to

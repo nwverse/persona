@@ -18,9 +18,9 @@ vi.mock("../../lib/api", async (orig) => {
 import { t } from "../../i18n";
 import { applyFonts, fontPreference } from "../../ui/font-preference";
 import { BUILTIN_PERSONA, type PersonaInfo } from "../../lib/persona";
-import { savedPersonaAccent, setAccentChoice, setPersonaAccent } from "../../ui/look";
+import { applyLook, savedPersonaAccent, setAccentChoice, setGlassTranslucency, setPersonaAccent, setSurfaceStyle } from "../../ui/look";
 import { choosePersona, refreshPersonas } from "../assistant/Persona";
-import { FontRows, ThemeColorPicker } from "./LookSettings";
+import { FontRows, SurfaceStyleRow, ThemeColorPicker } from "./LookSettings";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 // preload() waits on <img> loads, which jsdom never fires
@@ -206,5 +206,48 @@ describe("Appearance font settings", () => {
     await select(t("ui-look.font_local_label", { kind: t("ui-look.font_mono") }), "Example Mono");
     expect(host.querySelector("input")!.value).toBe("Example Mono");
     expect(fontPreference().mono.preset).toBe("default");
+  });
+});
+
+describe("Window style & glass translucency controls", () => {
+  let host: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(async () => {
+    localStorage.clear();
+    setSurfaceStyle("default");
+    setGlassTranslucency(68);
+    applyLook();
+    host = document.createElement("div");
+    document.body.appendChild(host);
+    root = createRoot(host);
+    await act(async () => root.render(<SurfaceStyleRow />));
+  });
+
+  afterEach(() => {
+    act(() => root.unmount());
+    host.remove();
+    localStorage.clear();
+    applyLook();
+  });
+
+  it("hides the translucency slider under Default and shows + updates it under Liquid Glass", async () => {
+    expect(host.querySelector('input[type="range"]')).toBeNull();
+    const liquidGlassBtn = [...host.querySelectorAll("button")].find((b) => b.textContent === t("ui-look.surface_liquid_glass"))!;
+    await act(async () => liquidGlassBtn.click());
+
+    const slider = host.querySelector<HTMLInputElement>('input[type="range"]');
+    expect(slider).not.toBeNull();
+    expect(slider!.value).toBe("68");
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(slider!, "90");
+      slider!.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(document.documentElement.style.getPropertyValue("--glass-t")).toBe("0.90");
+    expect(host.textContent).toContain("90%");
+
+    const defaultBtn = [...host.querySelectorAll("button")].find((b) => b.textContent === t("ui-look.surface_default"))!;
+    await act(async () => defaultBtn.click());
+    expect(host.querySelector('input[type="range"]')).toBeNull();
   });
 });
