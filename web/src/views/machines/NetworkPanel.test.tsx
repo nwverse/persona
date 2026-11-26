@@ -135,10 +135,10 @@ describe("NetworkPanel", () => {
     expect(host.textContent).toMatch(/更新.*节点|Update this computer's node/);
   });
 
-  it("wires NetworkPanel lazily from Machines.tsx via lazyPage", async () => {
+  it("wires NetworkPanel lazily from MachineViews.tsx via lazyPage", async () => {
     const fs = await import("node:fs");
     const path = await import("node:path");
-    const source = fs.readFileSync(path.join(__dirname, "../Machines.tsx"), "utf8");
-    expect(source).toMatch(/const NetworkPanel = lazyPage\(\(\) => import\("\.\/machines\/NetworkPanel"\)\.then\(\(m\) => m\.NetworkPanel\)\)/);
+    const source = fs.readFileSync(path.join(__dirname, "MachineViews.tsx"), "utf8");
+    expect(source).toMatch(/const NetworkPanel = lazyPage\(\(\) => import\("\.\/NetworkPanel"\)\.then\(\(m\) => m\.NetworkPanel\)\)/);
   });
 });

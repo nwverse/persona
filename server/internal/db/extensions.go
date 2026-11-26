@@ -330,7 +330,7 @@ var _ extension.PlanStore = (*DB)(nil)
 // ExtensionMarkets are the registered markets, oldest first.
 func (d *DB) ExtensionMarkets(ctx context.Context) ([]extension.MarketRecord, error) {
 	rows, err := d.pool.Query(ctx, `SELECT id, spec, name, token_sealed, index_json, warnings, error, fetched_at, added_at,
-		signing_key, signature FROM plugin_markets ORDER BY added_at, id`)
+		signing_key, signature, trusted_keys FROM plugin_markets ORDER BY added_at, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -338,10 +338,15 @@ func (d *DB) ExtensionMarkets(ctx context.Context) ([]extension.MarketRecord, er
 	var out []extension.MarketRecord
 	for rows.Next() {
 		var r extension.MarketRecord
-		var index, warnings, signature []byte
+		var index, warnings, signature, trusted []byte
 		if err := rows.Scan(&r.ID, &r.Spec, &r.Name, &r.TokenSealed, &index, &warnings, &r.Error, &r.FetchedAt, &r.AddedAt,
-			&r.SigningKey, &signature); err != nil {
+			&r.SigningKey, &signature, &trusted); err != nil {
 			return nil, err
+		}
+		if len(trusted) > 0 && string(trusted) != "null" {
+			if err := json.Unmarshal(trusted, &r.TrustedKeys); err != nil {
+				return nil, err
+			}
 		}
 		if len(signature) > 0 && string(signature) != "null" {
 			if err := json.Unmarshal(signature, &r.Signature); err != nil {
@@ -373,12 +378,16 @@ func (d *DB) PutExtensionMarket(ctx context.Context, r extension.MarketRecord) e
 	if err != nil {
 		return err
 	}
+	trusted, err := json.Marshal(append([]string{}, r.TrustedKeys...))
+	if err != nil {
+		return err
+	}
 	_, err = d.pool.Exec(ctx, `INSERT INTO plugin_markets (id, spec, name, token_sealed, index_json, warnings, error, fetched_at, added_at,
-		signing_key, signature)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		signing_key, signature, trusted_keys)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		ON CONFLICT (id) DO UPDATE SET spec = $2, name = $3, token_sealed = $4, index_json = $5, warnings = $6, error = $7, fetched_at = $8,
-			signing_key = $10, signature = $11`,
-		r.ID, r.Spec, r.Name, r.TokenSealed, index, warnings, r.Error, r.FetchedAt, r.AddedAt, r.SigningKey, signature)
+			signing_key = $10, signature = $11, trusted_keys = $12`,
+		r.ID, r.Spec, r.Name, r.TokenSealed, index, warnings, r.Error, r.FetchedAt, r.AddedAt, r.SigningKey, signature, trusted)
 	return err
 }
 

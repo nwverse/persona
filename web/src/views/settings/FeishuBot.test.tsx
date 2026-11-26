@@ -577,17 +577,11 @@ describe("Feishu bot dialog", () => {
   });
 
   it("fills the saved App ID into a dialog opened by URL before the status arrived", async () => {
-    const before = location.href;
-    history.replaceState(null, "", "?tab=connectors&connector=feishu-bot");
-    try {
-      act(() => root.render(<FeishuBot larkcli={null} />));
-      await advanced();
-      expect(input("App ID").value).toBe("");
-      await act(async () => calls.status[0].resolve(saved()));
-      expect(input("App ID").value).toBe("cli_saved");
-    } finally {
-      history.replaceState(null, "", before);
-    }
+    act(() => root.render(<FeishuBot larkcli={null} onRouteClose={() => {}} />));
+    await advanced();
+    expect(input("App ID").value).toBe("");
+    await act(async () => calls.status[0].resolve(saved()));
+    expect(input("App ID").value).toBe("cli_saved");
   });
 
   it("keeps a typed App ID when a feature switch is flipped", async () => {
@@ -894,5 +888,31 @@ describe("topic group policies", () => {
     expect(calls.update[3].body).toEqual({ topic_chats: [{ ...group, home: false }] });
     await act(async () => calls.update[3].resolve(saved({ owner, topic_chats: [{ ...group, home: false }] })));
     expect(homeSelect().value).toBe("");
+  });
+  it("saves the to-do mode for one group without changing the home", async () => {
+    const group = { chat_id: "oc_example", name: "Example group", home: true, todo_mode: "answer_only" } as const;
+    const other = { chat_id: "oc_other", name: "Other group", todo_mode: "always_todo" } as const;
+    await open(saved({ owner, topic_chats: [group, other] }));
+    const modeSelect = (name: string) =>
+      document.body.querySelector<HTMLSelectElement>(`select[aria-label="${t("settings-feishubot.topic_todo_for", { name })}"]`)!;
+    const choose = async (value: string) => act(async () => {
+      const select = modeSelect(group.name);
+      select.value = value;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(modeSelect(group.name).value).toBe("answer_only");
+    await choose("main_decides");
+    expect(JSON.parse(JSON.stringify(calls.update[0].body))).toEqual({ topic_chats: [
+      { chat_id: group.chat_id, name: group.name, todo_mode: "main_decides" },
+      { chat_id: other.chat_id, name: other.name },
+    ] });
+    expect(modeSelect(group.name).disabled).toBe(true);
+    await act(async () => calls.update[0].reject!(new Error("Synthetic save failure")));
+    expect(modeSelect(group.name).value).toBe("answer_only");
+    await choose("main_decides");
+    await act(async () => calls.update[1].resolve(saved({ owner, topic_chats: [{ ...group, todo_mode: "main_decides" }, other] })));
+    expect(modeSelect(group.name).value).toBe("main_decides");
+    expect(modeSelect(other.name).value).toBe("always_todo");
+    expect(homeSelect().value).toBe(group.chat_id);
   });
 });

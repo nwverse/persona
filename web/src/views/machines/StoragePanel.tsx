@@ -268,7 +268,7 @@ function Storage({ machine, focus }: { machine?: Machine; focus?: StorageFocus }
       cleanupCtrlRef.current?.abort();
       cleanupCtrlRef.current = null;
     };
-  }, [selectedId]);
+  }, [selectedId, machine?.online]);
 
   // Fetch fast per-mount statfs report when machine changes or refresh is clicked.
   useEffect(() => {
@@ -381,7 +381,7 @@ function Storage({ machine, focus }: { machine?: Machine; focus?: StorageFocus }
   };
 
   const requestPreview = async () => {
-    if (!machine || chosenTargetIds.length === 0) return;
+    if (!machine?.online || chosenTargetIds.length === 0) return;
     const mid = machine.id;
     const targets = [...chosenTargetIds];
     previewCtrlRef.current?.abort();
@@ -410,7 +410,7 @@ function Storage({ machine, focus }: { machine?: Machine; focus?: StorageFocus }
   };
 
   const confirmCleanup = async () => {
-    if (!machine || !confirmState || confirmState.targets.length === 0) return;
+    if (!machine?.online || !confirmState || confirmState.targets.length === 0) return;
     const mid = machine.id;
     const targets = [...confirmState.targets];
     cleanupCtrlRef.current?.abort();
@@ -448,28 +448,15 @@ function Storage({ machine, focus }: { machine?: Machine; focus?: StorageFocus }
 
   return (
     <div className="space-y-4" data-testid="storage-panel">
-      {/* Storage report header */}
-      <section className="rounded-card bg-surface px-4 py-3 shadow-card">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <h2 className="text-sm font-semibold text-ink">{t("machines-storage.title")}</h2>
-            <p className="text-submeta text-ink-3">{t("machines-storage.subtitle")}</p>
-          </div>
-          {machine?.online && (
-            <Button tone="secondary" icon="retry" busy={mountsLoading} onClick={() => setMountRefreshTick((n) => n + 1)} testId="storage-refresh-mounts">
-              {t("machines-storage.refresh_mounts")}
-            </Button>
-          )}
-        </div>
-      </section>
-
-      {/* The disk map (#14576): the lists below stay as they are */}
-      {machine && <UsageMap key={machine.id} machine={machine} focus={focus && focus.mid === machine.id ? { mode: focus.mode, seq: focus.seq } : undefined} />}
+      {machine && <UsageMap key={String(machine.online)} machine={machine} focus={focus && focus.mid === machine.id ? { mode: focus.mode, seq: focus.seq } : undefined} />}
 
       {/* Per-mount capacity & inode utilization */}
       <section className="rounded-card bg-surface px-4 py-3.5 shadow-card" data-testid="storage-mounts-section">
         <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2">
           <h3 className="text-sm font-medium text-ink">{t("machines-storage.mounts_title")}</h3>
+          {machine.online && <Button tone="secondary" icon="retry" busy={mountsLoading} onClick={() => setMountRefreshTick(n => n + 1)} testId="storage-refresh-mounts">
+            {t("machines-storage.refresh_mounts")}
+          </Button>}
           {activeMountsReport && activeMountsReport.supported && (
             <span className="text-submeta text-ink-3 tabular-nums">
               {t("machines-storage.collected_ms", { ms: activeMountsReport.collected_ms })}
@@ -566,10 +553,10 @@ function Storage({ machine, focus }: { machine?: Machine; focus?: StorageFocus }
       </section>
 
       {/* On-demand hotspot analysis & selective safe cleanup */}
-      <section className="rounded-card bg-surface px-4 py-3.5 shadow-card" data-testid="storage-hotspots-section">
+      <details className="rounded-card bg-surface px-4 py-3.5 shadow-card" data-testid="storage-hotspots-section">
+        <summary className="cursor-pointer py-2 text-label font-medium text-ink">{t("machines-storage.hotspots_title")}</summary>
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
-            <h3 className="text-sm font-medium text-ink">{t("machines-storage.hotspots_title")}</h3>
             <p className="text-submeta text-ink-3">{t("machines-storage.hotspots_hint")}</p>
           </div>
           <Button tone="primary" icon="search" disabled={!machine?.online || hotspotsLoading || cleanupBusy} busy={hotspotsLoading} onClick={() => void scanHotspots()} testId="storage-scan-hotspots">
@@ -705,7 +692,7 @@ function Storage({ machine, focus }: { machine?: Machine; focus?: StorageFocus }
             </ul>
           </div>
         )}
-      </section>
+      </details>
 
       {/* Confirmation dialog populated from frozen server dry-run preview */}
       <Dialog
