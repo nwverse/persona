@@ -19,6 +19,7 @@ import { Icon } from "../../ui/icons";
 import { answeredSessions } from "./answered-lookup";
 import { Empty } from "./parts";
 import { openAgent, openTask } from "../../lib/handoff";
+import { sameManager, useShownManager } from "../../lib/manager-choice";
 import { place, progressOf, removeTaskNow, statusOf, TaskMark, taskAsk, taskInteraction, useTaskLookup } from "./Tasks";
 
 const BOARD_TITLE: Record<BoardSectionKey, string> = {
@@ -48,6 +49,7 @@ function agentLine(s: Session): string {
 // Mounted only while open (TodayCard / TaskDock render it conditionally), so the store subscriptions and the
 // session lookup below don't run for every "Today" card in the history on each session update.
 export function TaskBoard({ open, conversation, onClose }: { open: boolean; conversation: string; onClose: () => void }) {
+  const manager = useShownManager();
   const todos = useStore((s) => s.todos);
   const sessions = useStore((s) => s.sessions);
   const main = useStore((s) => s.assistant?.main);
@@ -59,9 +61,12 @@ export function TaskBoard({ open, conversation, onClose }: { open: boolean; conv
   const sections = useMemo(() => {
     if (!open) return [];
     const now = Date.now();
-    const rows = todos.filter((td) => td.origin === conversation).map((todo) => ({ todo, status: statusOf(todo, lookup, plans), parked: triage(todo, lookup, now).section === "parked" }));
-    return boardSections(rows, dockAgents(answeredSessions(Object.values(sessions).flat(), interactions, answered), todos, conversation, main));
-  }, [open, todos, sessions, conversation, main, lookup, plans, interactions, answered]);
+    const scopedTodos = todos.filter((td) => sameManager(td.manager, manager));
+    const scopedSessions = Object.values(sessions).flat().filter((s) => sameManager(s.manager, manager));
+    const scopedInteractions = interactions.filter((ix) => sameManager(ix.manager, manager));
+    const rows = scopedTodos.filter((td) => td.origin === conversation).map((todo) => ({ todo, status: statusOf(todo, lookup, plans), parked: triage(todo, lookup, now).section === "parked" }));
+    return boardSections(rows, dockAgents(answeredSessions(scopedSessions, scopedInteractions, answered), scopedTodos, conversation, main));
+  }, [open, manager, todos, sessions, conversation, main, lookup, plans, interactions, answered]);
   const subtitle = (todo: Todo, status: TodoStatus) => {
     const lead = mostUrgentAgent(todo, lookup)?.session;
     const where = place(todo, lead);

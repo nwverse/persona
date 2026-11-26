@@ -67,12 +67,11 @@ func (s *Service) inboxRoutes() {
 		}
 		var c InboxItem
 		if ok {
-			c = it.listed()
+			c = it.shown()
 			if it.Source == "larkx" {
 				cutoff := time.Now().Add(-inboxKeepDone)
 				b.larkDuplicates(cutoff, b.listedDoneCut(cutoff, true), true).link(&c)
 			}
-			c.Context = it.Context
 		}
 		b.mu.Unlock()
 		if !ok { // a done item of the history memory no longer holds (inbox_history.go)

@@ -20,6 +20,7 @@ import { BrandMark } from "../../ui/BrandMark";
 import { Icon, type IconName } from "../../ui/icons";
 import { Group, Pill, Row, Switch, settingsInputClass } from "./SettingsParts";
 import { SignInSteps } from "./HubConnector";
+import { LarkSyncSection } from "./LarkSyncSection";
 
 export const SOURCE_REPORT_DELAYS = [0, 1, 2, 5, 10, 15, 30, 60];
 
@@ -77,6 +78,7 @@ export const FEATURES: { key: keyof BotFeatures; icon: IconName; title: string; 
 export const STEPS = [
   t("settings-feishubot.step_create_app"),
   t("settings-feishubot.step_permissions"),
+  t("settings-feishubot.step_sync_permissions"),
   t("settings-feishubot.step_events"),
   t("settings-feishubot.step_publish"),
 ];
@@ -326,6 +328,9 @@ function FeishuBotDialog({ bot, larkcli, onClose, onOpen }: { bot: ReturnType<ty
           }}
         />
       )}
+
+      {/* reading Feishu as you every day, into the knowledge base: absent on a hub without it */}
+      <LarkSyncSection appID={status?.app_id} />
 
       <Group title={dialogLarkcli ? t("settings-feishubot.bot_section") : undefined} footer={t("settings-feishubot.footer")}>
         <div className="flex items-center gap-3 px-4 py-3">

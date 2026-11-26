@@ -63,6 +63,7 @@ func (m *Meta) codexPlanResponse(seq int, l codexLine) []proto.Item {
 				calls = calls[1:]
 			}
 			m.codexPlanCalls = append(calls, codexPlanCall{p.CallID, data})
+			m.pendingIDs()
 		}
 		return nil
 	}
@@ -74,6 +75,7 @@ func (m *Meta) codexPlanResponse(seq int, l codexLine) []proto.Item {
 			continue
 		}
 		m.codexPlanCalls = slices.Delete(slices.Clone(m.codexPlanCalls), i, i+1)
+		m.pendingIDs()
 		var result struct{ Output json.RawMessage }
 		if json.Unmarshal(l.Payload, &result) != nil {
 			return nil
@@ -106,6 +108,7 @@ func (m *Meta) codexPlanEvent(seq int, at time.Time, raw json.RawMessage) []prot
 	for i, pending := range m.codexPlanCalls {
 		if bytes.Equal(pending.todos, todos) {
 			m.codexPlanCalls = slices.Delete(slices.Clone(m.codexPlanCalls), i, i+1)
+			m.pendingIDs()
 			break
 		}
 	}

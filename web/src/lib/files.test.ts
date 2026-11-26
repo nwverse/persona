@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -8,7 +8,6 @@ import {
   columns,
   diffTotals,
   dirName,
-  extendStates,
   fileName,
   gitLetter,
   gitMark,
@@ -19,8 +18,6 @@ import {
   isMachineRef,
   isStaged,
   joinPath,
-  languageOf,
-  lexLine,
   markdownChunks,
   parseDiff,
   prettyJSON,
@@ -34,11 +31,18 @@ import {
   type FileContent,
   type GitFile,
   type GitStatus,
-  type LexState,
-  type Token,
 } from "./files";
+import { extendStates, languageOf, lexLine, type LexState, type Token } from "./files-syntax";
 
 const f = (path: string, index: string, worktree: string, added = 0, deleted = 0): GitFile => ({ path, index, worktree, added, deleted });
+
+describe("loading boundary", () => {
+  it("keeps the viewer's lexer out of the first screen's file helpers", () => {
+    const source = readFileSync(new URL("./files.ts", import.meta.url), "utf8");
+    expect(source).not.toContain("files-syntax");
+    expect(source).not.toMatch(/export (?:function|interface|type) (?:lexLine|languageOf|extendStates|LexState|TokenKind)\b/);
+  });
+});
 
 describe("paths", () => {
   it("joins, splits and resolves", () => {

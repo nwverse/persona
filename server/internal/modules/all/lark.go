@@ -5,16 +5,20 @@ package all
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/botport"
 	"github.com/nwverse/persona/server/internal/cliport"
 	"github.com/nwverse/persona/server/internal/cliwire"
 	"github.com/nwverse/persona/server/internal/larkhost"
+	"github.com/nwverse/persona/server/internal/larksyncwire"
 	"github.com/nwverse/persona/server/internal/modules/lark"
 	larkconnector "github.com/nwverse/persona/server/internal/modules/lark/connector/larkcli"
 	"github.com/nwverse/persona/server/internal/modules/lark/feishubot"
+	"github.com/nwverse/persona/server/internal/modules/lark/larkauth"
 	"github.com/nwverse/persona/server/internal/modules/lark/larkcli"
+	"github.com/nwverse/persona/server/internal/modules/lark/larksync"
 )
 
 // The Feishu / Lark module: the bot's client (internal/botport) and the lark-cli adapter and its connector
@@ -42,6 +46,14 @@ func init() {
 				r = r.WithHost(host)
 			}
 			return r
+		},
+		Sync: larksyncwire.Provider{
+			NewUserAuth: func(accounts, open string, h *http.Client) larksyncwire.UserAuth {
+				return larkauth.NewUserAuth(accounts, open, h)
+			},
+			NewSyncer: func(h *http.Client, now func() time.Time) larksyncwire.Syncer {
+				return larksync.NewSyncer(h, now)
+			},
 		},
 	})
 	larkhost.Provide(lark.Module{}.Info().ID, func(h larkhost.Host) larkhost.Layer { return lark.New(h) })

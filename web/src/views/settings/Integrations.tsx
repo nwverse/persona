@@ -1,9 +1,11 @@
 // Lazy-loaded unified Settings › Integrations & Extensions view (integrations_v2, #14874 / Refs #14802).
-// Aggregates built-in services, channels, connectors, and installed extensions into one deduplicated list
-// with capability filter chips, Extension Market access, and inline IntegrationDetail (#14868) mounting.
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+// Aggregates built-in services, channels, connectors, standalone push sources, and installed extensions
+// into one deduplicated list with capability filter chips, subscription health alerts, Extension Market access,
+// inline IntegrationDetail (#14868) mounting, and a lazy-loaded Data Flow view (#15423).
+import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { hubServes, moduleFeature } from "../../core/module-host";
 import { t } from "../../i18n";
+import { ExternalSourceSettingsEntry } from "../../features/external-sources/ExternalSourceSettingsEntry";
 import type { MailAccount } from "../../lib/agent-settings";
 import { api, enc, errorText } from "../../lib/api";
 import { listChannels, type Channel } from "../../lib/channels";
@@ -16,18 +18,27 @@ import { EXTENSIONS_CHANGED } from "../../lib/extension-prompts";
 import { extensionDetail, extensionTone, listExtensionsInfo, type HubExtension, type HubExtensionDetail } from "../../lib/extensions";
 import { ExtensionOwnerScope } from "../../lib/extension-owner";
 import { botStatus, type FeishuBotStatus } from "../../lib/feishu-bot";
+import { lazyPage } from "../../lib/lazy-page";
 import { defaultManager, otherManager, pinManagerAt, useChosenManager } from "../../lib/manager-choice";
 import { isResumed } from "../../lib/reconnect";
 import { onHubEvent, useLarkOn, useStore } from "../../lib/store";
+import {
+  listSubscriptions,
+  useInboxSourcesShown,
+  useSubscriptionsShown,
+  type HubSubscription,
+} from "../../lib/subscriptions";
 import { Button, cx, IconButton, Loading } from "../../ui/atoms";
 import { BrandMark } from "../../ui/BrandMark";
 import { ChannelMark } from "../../ui/ChannelMark";
 import { ExtensionLogo } from "../../ui/ExtensionLogo";
 import { Icon } from "../../ui/icons";
+import { Segmented } from "../assistant/parts";
 import { OfflineState, useShownOffline } from "../ManagerParts";
 import { MarketCatalog, MarketItem, Markets } from "./ExtensionMarket";
 import { ExtensionUI } from "./ExtensionView";
 import { IntegrationDetail } from "./IntegrationDetail";
+import { OwnerMark } from "./OwnerMark";
 import { SentSettings } from "./SentSettings";
 import { Group, Pill, Row, SettingsHint } from "./SettingsParts";
 import {
@@ -42,11 +53,16 @@ import {
   filterIntegrationItems,
   isIntegrationRowSelected,
   resolveIntegrationTarget,
+  resolveSourceItem,
   type IntegrationCapability,
   type IntegrationItem,
+  type IntegrationSubscriptionAlert,
   type IntegrationTone,
   type LarkGatewaySummary,
 } from "./integrations/catalog";
+
+// Lazily load SourcesUI (and its SourcesGraph chunk) only when opening the Data Flow view or a push source detail.
+const LazySourcesUI = lazyPage(() => import("../subscriptions/SourcesUI").then((m) => m.SourcesUI));
 
 export interface IntegrationsProps {
   open: string | null;
@@ -59,6 +75,8 @@ export interface IntegrationsProps {
   initialFilter?: IntegrationFilter;
   /** Navigate to a Settings URL linked from a channel override notice. */
   onSettings?: (url: string) => void;
+  /** Report whether an open extension plugin_page needs the wide page container. */
+  onPageWide?: (wide: boolean) => void;
 }
 
 const DOT_CLASS: Record<IntegrationTone, string> = {
@@ -99,6 +117,19 @@ function ItemMark({ item }: { item: IntegrationItem }) {
       />
     );
   }
+  if (item.kind === "source") {
+    const toneClass =
+      item.alertTone === "red"
+        ? "bg-red-tint text-red"
+        : item.alertTone === "orange"
+          ? "bg-orange-tint text-orange"
+          : "bg-accent-tint text-accent-ink";
+    return (
+      <span className={cx("flex size-8 shrink-0 items-center justify-center rounded-control", toneClass)}>
+        <Icon name="bell" size={15} />
+      </span>
+    );
+  }
   if (item.channel) {
     return <ChannelMark c={item.channel} size={32} />;
   }
@@ -118,17 +149,124 @@ function ItemMark({ item }: { item: IntegrationItem }) {
   );
 }
 
+function SubscriptionAlertBadge({ alert }: { alert: IntegrationSubscriptionAlert }) {
+  return (
+    <span
+      data-subscription-alert-badge={alert.state}
+      className={cx(
+        "inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-submeta font-medium whitespace-nowrap",
+        alert.tone === "red" ? "bg-red-tint text-red" : "bg-orange-tint text-orange",
+      )}
+    >
+      <span aria-hidden className={cx("size-1.5 shrink-0 rounded-full", DOT_CLASS[alert.tone])} />
+      {alert.badgeText}
+    </span>
+  );
+}
+
+/** Detail pane for a standalone push source (or single source deep link), backed by lazy SourcesUI. */
+function PushSourceDetailPane({
+  state,
+  item,
+  manager,
+  onBack,
+  reloadKey,
+  onReload,
+}: {
+  state: string;
+  item: IntegrationItem | null;
+  manager?: string;
+  onBack?: () => void;
+  reloadKey: number;
+  onReload: () => void;
+}) {
+  useLayoutEffect(() => pinManagerAt(["/subscriptions"], otherManager(manager)), [manager]);
+  const title = item?.name ?? t("subscriptions.title_sources");
+  return (
+    <div data-integration-detail={item?.id ?? "source"} data-integration-kind="source">
+      <div className="mb-3 flex items-center gap-2">
+        {onBack && (
+          <Button tone="quiet" icon="chevronLeft" onClick={onBack} className="-ml-2">
+            {t("settings-integrations.back")}
+          </Button>
+        )}
+        <OwnerMark manager={manager} />
+        <span className="flex-1" />
+        <IconButton icon="retry" label={t("settings-integrations.refresh")} onClick={onReload} />
+      </div>
+
+      {item && (
+        <section className="mb-6 overflow-hidden rounded-card bg-surface shadow-card">
+          <div className="flex items-center gap-3 px-4 py-3.5">
+            <ItemMark item={item} />
+            <div className="min-w-0 flex-1">
+              <div className="flex min-w-0 items-center gap-2">
+                <h1 className="truncate text-card-title font-semibold text-ink">{item.name}</h1>
+                <Pill>{t("settings-integrations.push_source_badge")}</Pill>
+              </div>
+              <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-label text-ink-3">
+                <span aria-hidden className={cx("size-1.5 shrink-0 rounded-full", DOT_CLASS[item.tone])} />
+                <span className="truncate">{item.statusText}</span>
+              </div>
+            </div>
+          </div>
+          {item.description && (
+            <div className="border-t border-line px-4 py-3">
+              <p className="text-meta leading-relaxed text-ink-2">{item.description}</p>
+            </div>
+          )}
+        </section>
+      )}
+
+      <Suspense fallback={<Loading />}>
+        <LazySourcesUI key={`${state}:${reloadKey}`} title={title} state={state} />
+      </Suspense>
+      {item?.kind === "source" && <ExternalSourceSettingsEntry provider="subscription" channel="" manager={manager} />}
+    </div>
+  );
+}
+
+/** Full-width Data Flow pane (`-sources` / `-sources@<manager>`), pinning `/subscriptions` when a manager is named. */
+function SourcesFlowPane({
+  manager,
+  reloadKey,
+}: {
+  manager?: string;
+  reloadKey: number;
+}) {
+  useLayoutEffect(() => (manager ? pinManagerAt(["/subscriptions"], otherManager(manager)) : undefined), [manager]);
+  return (
+    <>
+      {manager && (
+        <div className="mb-3 flex items-center gap-2">
+          <OwnerMark manager={manager} />
+        </div>
+      )}
+      <Suspense fallback={<Loading />}>
+        <LazySourcesUI
+          key={`${manager ?? ""}:${reloadKey}`}
+          title={t("subscriptions.title_sources")}
+          initialView="graph"
+          manager={manager}
+        />
+      </Suspense>
+    </>
+  );
+}
+
 /** A declarative page contributed by an extension, rendered under Settings › Integrations. */
 function IntegrationExtensionPage({
   id,
   ui,
   manager,
   onBack,
+  onWide,
 }: {
   id: string;
   ui: string;
   manager?: string;
   onBack?: () => void;
+  onWide?: (wide: boolean) => void;
 }) {
   useLayoutEffect(() => pinManagerAt([`/extensions/${enc(id)}`, `/plugins/${enc(id)}`], manager), [id, manager]);
   const [detail, setDetail] = useState<HubExtensionDetail | null>(null);
@@ -136,6 +274,7 @@ function IntegrationExtensionPage({
   useEffect(() => {
     extensionDetail(id).then(setDetail, () => {});
   }, [id]);
+  useEffect(() => () => onWide?.(false), [onWide]);
   const title = detail?.ui?.find((u) => u.id === ui)?.title;
   return (
     <>
@@ -149,7 +288,7 @@ function IntegrationExtensionPage({
         <IconButton icon="retry" label={t("settings-extensions.redraw")} onClick={() => setReloadCount((x) => x + 1)} />
       </div>
       <ExtensionOwnerScope owner={id}>
-        <ExtensionUI key={reloadCount} extension={id} ui={ui} title={title} manager={manager} />
+        <ExtensionUI key={reloadCount} extension={id} ui={ui} title={title} manager={manager} onWide={onWide} />
       </ExtensionOwnerScope>
     </>
   );
@@ -162,6 +301,7 @@ export function Integrations({
   headerBack = false,
   initialFilter = "all",
   onSettings,
+  onPageWide,
 }: IntegrationsProps) {
   const route = useMemo(() => parseIntegrationsSub(open), [open]);
   const go = useCallback((next: IntegrationsRoute) => onOpen(formatIntegrationsSub(next)), [onOpen]);
@@ -176,6 +316,8 @@ export function Integrations({
   const hasConnectors = useStore((s) => s.features.includes("connectors"));
   const hasMail = useStore((s) => hubServes(moduleFeature("mail"), s));
   const hasLark = useLarkOn();
+  const hasSubscriptions = useSubscriptionsShown();
+  const hasInboxSources = useInboxSourcesShown();
 
   const [filter, setFilter] = useState<IntegrationFilter>(initialFilter);
   useEffect(() => {
@@ -186,6 +328,7 @@ export function Integrations({
   const [markets, setMarkets] = useState(false);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [connectors, setConnectors] = useState<HubConnector[]>([]);
+  const [subscriptions, setSubscriptions] = useState<HubSubscription[]>([]);
   const [mailAccounts, setMailAccounts] = useState<MailAccount[] | null>(null);
   const [larkStatus, setLarkStatus] = useState<LarkGatewaySummary | null>(null);
   const [feishuBotStatus, setFeishuBotStatus] = useState<FeishuBotStatus | null>(null);
@@ -193,6 +336,16 @@ export function Integrations({
   const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [partialErrors, setPartialErrors] = useState<string[]>([]);
+  const [sourcesReload, setSourcesReload] = useState(0);
+
+  const loadSubscriptionsOnly = useCallback(async () => {
+    if (!hasSubscriptions && !hasInboxSources) {
+      setSubscriptions([]);
+      return;
+    }
+    const list = await listSubscriptions(owner).catch(() => null);
+    if (list) setSubscriptions(list);
+  }, [hasSubscriptions, hasInboxSources, owner]);
 
   const seq = useRef(0);
   const loadAll = useCallback(async () => {
@@ -200,7 +353,7 @@ export function Integrations({
     setLoading(true);
     const errors: string[] = [];
 
-    const [extRes, chRes, connRes, mailRes, larkRes, botRes] = await Promise.all([
+    const [extRes, chRes, connRes, mailRes, larkRes, botRes, subsRes] = await Promise.all([
       hasExtensions
         ? listExtensionsInfo().catch((e) => {
             errors.push(errorText(e));
@@ -226,6 +379,9 @@ export function Integrations({
         ? api<LarkGatewaySummary>("/lark/status").catch(() => null)
         : Promise.resolve(null),
       botStatus().catch(() => null),
+      hasSubscriptions || hasInboxSources
+        ? listSubscriptions(owner).catch(() => null)
+        : Promise.resolve(null),
     ]);
 
     if (mine !== seq.current) return;
@@ -240,6 +396,8 @@ export function Integrations({
     else if (!hasChannels) setChannels([]);
     if (connRes) setConnectors(connRes);
     else if (!hasConnectors) setConnectors([]);
+    if (subsRes) setSubscriptions(subsRes);
+    else if (!hasSubscriptions && !hasInboxSources) setSubscriptions([]);
     setMailAccounts(mailRes);
     setLarkStatus(larkRes);
     setFeishuBotStatus(botRes);
@@ -247,11 +405,25 @@ export function Integrations({
     setPartialErrors(errors);
     setLoaded(true);
     setLoading(false);
-  }, [hasExtensions, hasChannels, hasConnectors, hasMail, hasLark, owner]);
+  }, [hasExtensions, hasChannels, hasConnectors, hasMail, hasLark, hasSubscriptions, hasInboxSources, owner]);
 
   useEffect(() => {
     void loadAll();
   }, [loadAll]);
+
+  // Refresh subscriptions when a subscription state changes on the hub (at most once per second).
+  useEffect(() => {
+    if (!hasSubscriptions && !hasInboxSources) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const off = onHubEvent("subscription", () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => void loadSubscriptionsOnly(), 1000);
+    });
+    return () => {
+      clearTimeout(timer);
+      off();
+    };
+  }, [hasSubscriptions, hasInboxSources, loadSubscriptionsOnly]);
 
   // Reload list when an extension is installed, upgraded, or uninstalled.
   useEffect(() => {
@@ -292,6 +464,7 @@ export function Integrations({
         extensions: ownExtensions,
         channels,
         connectors: ownConnectors,
+        subscriptions,
         hasMail,
         hasLark,
         hasFeishuBot,
@@ -300,7 +473,7 @@ export function Integrations({
         feishuBotStatus,
         ownerManager: owner,
       }),
-    [ownExtensions, channels, ownConnectors, hasMail, hasLark, hasFeishuBot, mailAccounts, larkStatus, feishuBotStatus, owner],
+    [ownExtensions, channels, ownConnectors, subscriptions, hasMail, hasLark, hasFeishuBot, mailAccounts, larkStatus, feishuBotStatus, owner],
   );
 
   const counts = useMemo(
@@ -315,8 +488,11 @@ export function Integrations({
 
   const filtered = useMemo(() => filterIntegrationItems(items, filter), [items, filter]);
   const builtins = useMemo(() => filtered.filter((it) => it.kind === "builtin"), [filtered]);
+  const pushSources = useMemo(() => filtered.filter((it) => it.kind === "source"), [filtered]);
   const installedExtensions = useMemo(() => filtered.filter((it) => it.kind === "extension"), [filtered]);
 
+  const isSourcesView = route.kind === "sources" && !route.state;
+  const sourceDetailState = route.kind === "sources" && route.state ? route.state : null;
   const showDetail = isIntegrationDetailRoute(route);
   const compactList = showDetail && twoCol;
   const listScrollRef = useRef<HTMLDivElement>(null);
@@ -366,6 +542,7 @@ export function Integrations({
         ui={route.ui}
         manager={route.manager ?? owner}
         onBack={headerBack ? undefined : () => go({ kind: "extension", id: route.id, manager: route.manager })}
+        onWide={onPageWide}
       />
     );
   }
@@ -383,7 +560,8 @@ export function Integrations({
     );
   }
 
-  const resolvedTarget = showDetail ? resolveIntegrationTarget(route, items, picked) : null;
+  const resolvedTarget = showDetail && !sourceDetailState ? resolveIntegrationTarget(route, items, picked) : null;
+  const resolvedSourceItem = sourceDetailState ? resolveSourceItem(route, items, picked) : null;
 
   const renderRow = (item: IntegrationItem) => {
     const selected = isIntegrationRowSelected(open, item, picked);
@@ -392,7 +570,7 @@ export function Integrations({
         className={cx(
           "flex items-center gap-1.5 whitespace-nowrap",
           compactList ? "mt-0.5 min-w-0 text-submeta" : "shrink-0 text-label",
-          item.alertTone === "red" ? "text-red" : "text-ink-2",
+          item.alertTone === "red" ? "text-red" : item.alertTone === "orange" ? "text-orange" : "text-ink-2",
         )}
       >
         <span aria-hidden className={cx("size-1.5 shrink-0 rounded-full", DOT_CLASS[item.tone])} />
@@ -406,6 +584,7 @@ export function Integrations({
         data-integration-row={item.key}
         data-integration-kind={item.kind}
         data-integration-id={item.id}
+        data-integration-sub-alert={item.subscriptionAlert?.state}
         aria-current={selected || undefined}
         onClick={() => onOpen(item.sub)}
         className={cx(
@@ -421,6 +600,9 @@ export function Integrations({
               item.capabilities.map((cap) => (
                 <Pill key={cap}>{t(CAP_LABEL_KEY[cap])}</Pill>
               ))}
+            {!compactList && item.subscriptionAlert && item.kind !== "source" && (
+              <SubscriptionAlertBadge alert={item.subscriptionAlert} />
+            )}
           </div>
           {compactList && status}
           {item.subtitle && (!compactList || item.alertTone) && (
@@ -441,7 +623,7 @@ export function Integrations({
   };
 
   const listHeader = (
-    <div className={cx(compactList ? "mb-2.5 flex items-center gap-1.5" : "mb-3 flex flex-wrap items-center gap-2")}>
+    <div className={cx(compactList ? "mb-2 flex items-center gap-1.5" : "mb-3 flex flex-wrap items-center gap-2")}>
       {!headerBack && (
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-card-title font-semibold text-ink">{t("settings-integrations.list_title")}</h1>
@@ -460,9 +642,41 @@ export function Integrations({
           {t(compactList ? "settings-integrations.browse_market_compact" : "settings-integrations.browse_market_action")}
         </Button>
       )}
-      <IconButton icon="retry" label={t("settings-integrations.refresh")} onClick={() => void loadAll()} disabled={loading} />
+      <IconButton
+        icon="retry"
+        label={t("settings-integrations.refresh")}
+        onClick={() => (isSourcesView ? setSourcesReload((n) => n + 1) : void loadAll())}
+        disabled={!isSourcesView && loading}
+      />
     </div>
   );
+
+  const viewSwitch = hasInboxSources ? (
+    <div className={cx(compactList ? "mb-2" : "mb-3 flex")} data-integrations-view-switch>
+      <Segmented
+        label={t("settings-integrations.view_label")}
+        value={isSourcesView ? "sources" : "list"}
+        compact={compactList}
+        options={[
+          { v: "list", label: t("settings-integrations.view_list") },
+          { v: "sources", label: t("settings-integrations.view_sources") },
+        ]}
+        onChange={(v) => go(v === "sources" ? { kind: "sources" } : { kind: "list" })}
+      />
+    </div>
+  ) : null;
+
+  // Full-width global Data Flow view (`route.kind === "sources"` without `state`):
+  // natural single-scroll container so SourcesGraph can use the full wide canvas, with untouched InboxForwardSetting.
+  if (isSourcesView) {
+    return (
+      <div data-integrations-sources-view>
+        {listHeader}
+        {viewSwitch}
+        <SourcesFlowPane manager={route.manager} reloadKey={sourcesReload} />
+      </div>
+    );
+  }
 
   const filterBar = (
     <div
@@ -565,9 +779,23 @@ export function Integrations({
         </Group>
       )}
 
+      {loaded && pushSources.length > 0 && (
+        <Group
+          anchor="push-sources"
+          title={
+            <span className="flex items-center gap-2">
+              {t("settings-integrations.group_push_sources")}
+              <span className="font-normal">{t("settings-integrations.count", { count: pushSources.length })}</span>
+            </span>
+          }
+        >
+          {pushSources.map((item) => renderRow(item))}
+        </Group>
+      )}
+
       {loaded && installedExtensions.length > 0 && (
         <Group
-          anchor={builtins.length === 0 ? "integrations" : "extensions"}
+          anchor={builtins.length === 0 && pushSources.length === 0 ? "integrations" : "extensions"}
           title={
             <span className="flex items-center gap-2">
               {t("settings-integrations.group_extensions")}
@@ -585,7 +813,16 @@ export function Integrations({
     </>
   );
 
-  const detailPane = showDetail && resolvedTarget ? (
+  const detailPane = sourceDetailState ? (
+    <PushSourceDetailPane
+      state={sourceDetailState}
+      item={resolvedSourceItem}
+      manager={route.kind === "sources" ? (route.manager ?? owner) : owner}
+      onBack={headerBack || twoCol ? undefined : () => onOpen(null)}
+      reloadKey={sourcesReload}
+      onReload={() => setSourcesReload((n) => n + 1)}
+    />
+  ) : showDetail && resolvedTarget ? (
     <IntegrationDetail
       target={resolvedTarget}
       integrationsV2={true}
@@ -595,6 +832,7 @@ export function Integrations({
       onUpgrade={(market, extId, manager) => go({ kind: "item", market, id: extId, manager })}
       onSettings={onSettings}
       onOpenConnector={(id, manager) => go({ kind: "connector", id, manager })}
+      onOpenSources={(sourceState, manager) => go({ kind: "sources", ...(sourceState ? { state: sourceState } : {}), ...(manager ? { manager } : {}) })}
     />
   ) : null;
 
@@ -617,6 +855,7 @@ export function Integrations({
             className="shrink-0 border-b border-line px-3 pt-4 pb-3"
           >
             {listHeader}
+            {viewSwitch}
             {filterBar}
           </div>
           <div
@@ -643,6 +882,7 @@ export function Integrations({
   return (
     <div data-integrations-list>
       {listHeader}
+      {viewSwitch}
       <p className="mb-4 px-1 text-meta leading-relaxed text-ink-3">
         {t("settings-integrations.list_intro")}
       </p>

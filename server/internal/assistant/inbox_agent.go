@@ -404,8 +404,9 @@ func (s *Service) startInboxAgents(ctx context.Context, cfg InboxAgentConfig) {
 	b.sortQueued(queued)
 	type job struct {
 		it      *InboxItem
+		todoID  string
 		chat    string
-		prompt  func(*prompts.KBContext, bool) string
+		prompt  func(*prompts.KBContext, bool, []prompts.InboxHandoffTarget) string
 		carried int // the agent's told count when the first message was made: it carries the notes queued up to it
 		// Reservation fields let a per-start policy veto return this item to queued without consuming an outward start.
 		turn, previousTurn, previousState string
@@ -437,16 +438,18 @@ func (s *Service) startInboxAgents(ctx context.Context, cfg InboxAgentConfig) {
 		previousRetry, previousTurn := it.Agent.RetryAfter, it.Agent.ProcessingTurn
 		it.Agent.State, it.Agent.StartedAt, it.Agent.Attempts, it.Agent.RetryAfter = AgentRunning, &now, it.Agent.Attempts+1, nil
 		delete(b.listMemo.kept, it.ID) // saved once the start returns: listed as running meanwhile (inbox_list_memo.go)
-		a := b.inboxAgentForIn(it, owner, linked[it.Agent.TodoID], larkDefault, loc, language)
+		todoID := it.Agent.TodoID
+		a := b.inboxAgentForIn(it, owner, linked[todoID], larkDefault, loc, language)
 		a.ReplyPolicy = replyPolicyItemApplies(replyPolicy, it)
 		a.KnowledgeDir = s.kb.dir // the heading of what the knowledge base knows names where it is
 		turn := rand.Text()
 		it.Agent.ProcessingTurn = turn
-		jobs = append(jobs, job{it: it, chat: b.kbChatOf(it), prompt: func(kbc *prompts.KBContext, allowKBContext bool) string {
+		jobs = append(jobs, job{it: it, todoID: todoID, chat: b.kbChatOf(it), prompt: func(kbc *prompts.KBContext, allowKBContext bool, targets []prompts.InboxHandoffTarget) string {
 			if allowKBContext {
 				a.KnowledgeDir = s.kb.dir // the heading of what the knowledge base knows names where it is
 			}
 			a.KB = kbc
+			a.HandoffTargets = targets
 			return inboxProcessingPrompt(turn, prompts.RenderInboxAgent(a))
 		}, carried: it.Agent.told, turn: turn, previousTurn: previousTurn, previousState: previousState,
 			previousStarted: previousStarted, previousRetry: previousRetry, previousAttempts: previousAttempts})
@@ -513,14 +516,16 @@ func (s *Service) startInboxAgents(ctx context.Context, cfg InboxAgentConfig) {
 					promptAgent.KnowledgeDir = s.kb.dir
 				}
 				turn := j.turn
+				j.todoID = a.TodoID
 				j.chat = b.kbChatOf(j.it)
 				j.carried = a.told
 				j.contentVersion = replyPolicyContentVersion(j.it)
-				j.prompt = func(kbc *prompts.KBContext, allowKBContext bool) string {
+				j.prompt = func(kbc *prompts.KBContext, allowKBContext bool, targets []prompts.InboxHandoffTarget) string {
 					if allowKBContext {
 						promptAgent.KnowledgeDir = s.kb.dir
 					}
 					promptAgent.KB = kbc
+					promptAgent.HandoffTargets = targets
 					return inboxProcessingPrompt(turn, prompts.RenderInboxAgent(promptAgent))
 				}
 				ready = true
@@ -543,10 +548,11 @@ func (s *Service) startInboxAgents(ctx context.Context, cfg InboxAgentConfig) {
 		if allowKBContext && j.chat != "" {
 			kbc = s.kbChatContext(ctx, j.chat)
 		}
+		targets := s.inboxPromptHandoffTargets(ctx, j.todoID)
 		cctx, cancel := context.WithTimeout(ctx, inboxAgentStartWait)
 		promptCfg := cfg
 		promptCfg.ReadProfile = jobCfg.Agent.ReadProfile // the profile that actually governed this rebuilt prompt
-		machineID, sessionID, err := s.startInboxAgentAuthorized(cctx, promptCfg, j.it, j.prompt(kbc, allowKBContext), j.contentVersion, j.turn)
+		machineID, sessionID, err := s.startInboxAgentAuthorized(cctx, promptCfg, j.it, j.prompt(kbc, allowKBContext, targets), j.contentVersion, j.turn)
 		cancel()
 		if errors.Is(err, errInboxStartAuthorization) {
 			// No outward session was created. Return the reservation to queued without consuming its attempt budget.

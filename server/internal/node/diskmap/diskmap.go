@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -80,9 +81,17 @@ func New(opt Options) *Map {
 	if opt.GOOS == "" {
 		opt.GOOS = runtime.GOOS
 	}
-	if real, err := filepath.EvalSymlinks(opt.Home); opt.Home != "" && err == nil {
-		opt.Home = real // the rules judge real paths
+	rawHome := opt.Home
+	if opt.Home != "" && filepath.IsAbs(opt.Home) {
+		if real, err := filepath.EvalSymlinks(opt.Home); err == nil {
+			opt.Home = real // the rules judge real paths
+		} else if opt.GOOS == runtime.GOOS {
+			opt.Home = evalPathSymlinks(opt.Home)
+		}
 	}
+	opt.Caches = resolveCacheDirs(opt.GOOS, rawHome, opt.Home, opt.Caches)
+	opt.AgentDirs = resolveProtectedDirs(opt.GOOS, rawHome, opt.Home, opt.AgentDirs)
+	opt.PersonaDirs = resolveProtectedDirs(opt.GOOS, rawHome, opt.Home, opt.PersonaDirs)
 	if opt.Getenv == nil {
 		opt.Getenv = os.Getenv
 	}
@@ -107,6 +116,176 @@ func New(opt Options) *Map {
 	return &Map{opt: opt, rules: ruleEnv{goos: opt.GOOS, home: opt.Home, caches: opt.Caches, agents: opt.AgentDirs,
 		persona: opt.PersonaDirs}, gate: make(chan struct{}, scansAtOnce), cache: newCache(cacheMost, cacheTTL, opt.Now),
 		jobs: map[string]*job{}}
+}
+
+// rewriteHomePrefix swaps an unresolved Home prefix for its resolved path so even not-yet-created paths inside a
+// symlinked home match the resolved home regardless of GOOS overrides in tests.
+func rewriteHomePrefix(p, rawHome, realHome string) string {
+	if rawHome == "" || realHome == "" || rawHome == realHome {
+		return p
+	}
+	cp, cr := filepath.Clean(p), filepath.Clean(rawHome)
+	if cp == cr {
+		return realHome
+	}
+	sep := string(filepath.Separator)
+	prefix := strings.TrimSuffix(cr, sep) + sep
+	if strings.HasPrefix(cp, prefix) {
+		return filepath.Join(realHome, cp[len(prefix):])
+	}
+	return p
+}
+
+// resolveRulePath resolves symlinks in p when p exists on disk (or, on the host OS, via its deepest existing ancestor
+// when p does not exist yet). Synthetic non-existent cross-OS paths are left untouched.
+func resolveRulePath(goos, rawHome, realHome, p string) string {
+	if filepath.IsAbs(p) {
+		if real, err := filepath.EvalSymlinks(p); err == nil {
+			return real
+		}
+	}
+	p = rewriteHomePrefix(p, rawHome, realHome)
+	if !filepath.IsAbs(p) {
+		return p
+	}
+	if real, err := filepath.EvalSymlinks(p); err == nil {
+		return real
+	}
+	if goos == runtime.GOOS {
+		return evalPathSymlinks(p)
+	}
+	return p
+}
+
+// resolveRuleParentPath resolves symlinks in p's parent directory without following p itself.
+func resolveRuleParentPath(goos, rawHome, realHome, p string) string {
+	p = rewriteHomePrefix(p, rawHome, realHome)
+	if !filepath.IsAbs(p) {
+		return p
+	}
+	p = filepath.Clean(p)
+	dir, base := filepath.Dir(p), filepath.Base(p)
+	if dir == p {
+		return p
+	}
+	if real, err := filepath.EvalSymlinks(dir); err == nil {
+		return filepath.Join(real, base)
+	}
+	if goos == runtime.GOOS {
+		return filepath.Join(evalPathSymlinks(dir), base)
+	}
+	return p
+}
+
+// evalPathSymlinks resolves symlinks in p on the current OS; when p itself does not exist yet (including a dangling
+// symlink), it follows bounded link targets and resolves the deepest existing ancestor so rules match real paths once
+// created.
+func evalPathSymlinks(p string) string {
+	if p == "" || !filepath.IsAbs(p) {
+		return p
+	}
+	for range 8 {
+		if real, err := filepath.EvalSymlinks(p); err == nil {
+			return real
+		}
+		if info, err := os.Lstat(p); err == nil && info.Mode()&os.ModeSymlink != 0 {
+			target, err := os.Readlink(p)
+			if err != nil {
+				break
+			}
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(filepath.Dir(p), target)
+			}
+			p = target
+			continue
+		}
+		break
+	}
+	cur := filepath.Clean(p)
+	var tail []string
+	for {
+		dir := filepath.Dir(cur)
+		if dir == cur {
+			return filepath.Clean(p)
+		}
+		tail = append(tail, filepath.Base(cur))
+		cur = dir
+		if real, err := filepath.EvalSymlinks(cur); err == nil {
+			slices.Reverse(tail)
+			return filepath.Join(append([]string{real}, tail...)...)
+		}
+	}
+}
+
+// resolveProtectedDirs clones dirs and resolves symlinks so rules match real paths. When a configured entry is a
+// symlink or traverses an intermediate symlink inside realHome, both the resolved target and each in-home link path
+// are kept so neither the target data nor a parent folder holding a configured symlink can be trashed.
+func resolveProtectedDirs(goos, rawHome, realHome string, dirs []string) []string {
+	if len(dirs) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(dirs))
+	add := func(p string) {
+		if p != "" && !slices.Contains(out, p) {
+			out = append(out, p)
+		}
+	}
+	env := ruleEnv{goos: goos, home: realHome}
+	normHome := ""
+	if realHome != "" {
+		normHome = env.norm(realHome)
+	}
+	inHome := func(p string) bool {
+		if normHome == "" {
+			return false
+		}
+		n := env.norm(p)
+		return within(n, normHome) && n != normHome
+	}
+	for _, d := range dirs {
+		if d == "" {
+			continue
+		}
+		add(resolveRulePath(goos, rawHome, realHome, d))
+		parentResolved := resolveRuleParentPath(goos, rawHome, realHome, d)
+		if inHome(parentResolved) {
+			add(parentResolved)
+		}
+		// Protect parent folders inside realHome that hold an intermediate symlink traversed by d.
+		rewritten := rewriteHomePrefix(d, rawHome, realHome)
+		if filepath.IsAbs(rewritten) {
+			for cur := filepath.Dir(filepath.Clean(rewritten)); ; {
+				parent := filepath.Dir(cur)
+				if parent == cur {
+					break
+				}
+				if info, err := os.Lstat(cur); err == nil && info.Mode()&os.ModeSymlink != 0 {
+					linkPath := resolveRuleParentPath(goos, rawHome, realHome, cur)
+					if inHome(linkPath) {
+						add(linkPath)
+					}
+				}
+				cur = parent
+			}
+		}
+	}
+	return out
+}
+
+// resolveCacheDirs clones caches and resolves symlinked ancestors in each folder path without following a symlinked
+// cache leaf into a protected or out-of-home directory.
+func resolveCacheDirs(goos, rawHome, realHome string, caches map[string]string) map[string]string {
+	if len(caches) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(caches))
+	for id, dir := range caches {
+		if dir != "" {
+			dir = resolveRuleParentPath(goos, rawHome, realHome, dir)
+		}
+		out[id] = dir
+	}
+	return out
 }
 
 // ErrBadPath is a usage path the map does not open: relative, a pseudo filesystem, or not a folder.
