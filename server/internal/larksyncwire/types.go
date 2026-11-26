@@ -423,6 +423,31 @@ type OpenID string
 // ChatID is a Feishu/Lark chat_id (oc_…) in the sync contract.
 type ChatID string
 
+// MessageID is a Feishu/Lark message_id (om_…) in the sync contract.
+type MessageID string
+
+// EventLarkMessages is the extension event emitted after a sync round commits new messages to the outbox.
+const EventLarkMessages = "lark.messages"
+
+// MessageEventItem is one message's metadata inside event.lark.messages: strictly no message body, display names,
+// or attachment contents; extensions read bodies within their own permissions.
+type MessageEventItem struct {
+	ChatID       ChatID    `json:"chat_id"`
+	MessageID    MessageID `json:"message_id"`
+	SenderOpenID OpenID    `json:"sender_open_id,omitempty"`
+	At           time.Time `json:"at,omitzero"`
+	Type         string    `json:"type,omitempty"`
+}
+
+// MessagesEvent is one paginated batch of newly synced Lark message metadata emitted as event.lark.messages.
+type MessagesEvent struct {
+	Binding  string             `json:"binding"`
+	Page     int                `json:"page"`
+	Pages    int                `json:"pages"`
+	Total    int                `json:"total"`
+	Messages []MessageEventItem `json:"messages"`
+}
+
 // NameResolveRequest describes the unnamed senders and chats a binding's sender-name backfill wants to resolve.
 type NameResolveRequest struct {
 	// OpenIDs are unique human sender open_ids to look up.
