@@ -198,6 +198,10 @@ awk '{print "Authorization: Bearer " $0}' member.token > member.header
    curl --fail-with-body -H @member.header "$API/revisions/1"
    ~~~
 
+Members can also discover documents before requesting their text. `GET /v1/projects/{project}/documents` lists one entry per document with an approval, ordered by document identifier in ASCII order. Each entry describes the latest approved revision. `GET /v1/projects/{project}/documents/{document}/approvals` lists that document's approved revisions, newest first. Both return an `items` array containing the project, document, revision, SHA-256 digest, author, approver and approval time. Fetch the numbered revision for the text.
+
+Both lists accept `limit` from 1 to 100 (default 25). When more rows are available, pass the response's `next` string as `after` for documents or `before` for revisions. Each request reads the current approvals. Restart the list to see a document or a new revision that sorts before your cursor.
+
 Publishing and approving are separate actions. A reader may retrieve a published, pending revision by number. Members can distinguish approval from authorship using `approved_by`, `approved_at` and `author`. A later draft leaves the previous approved revision current until an approver accepts the new head. Writers editing the same head receive one success and one conflict. A document holds up to 256 KiB of UTF-8 text per revision. The [team project proposal](../design/proposals/team-project-spaces.md) covers the planned Web experience, attachments and opening a revision in a personal agent.
 
 ## Code
