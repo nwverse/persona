@@ -133,3 +133,12 @@ the first visible row and its offset before changing the rows and put it back wi
 its index moved. Keep leading rows (notices, Load more) in the list even when empty, so their coming and going never
 shifts indices, and hold a change that arrives during a gesture until the gesture settles. On a device, check the row
 ID and its offset before and after an insert, not only that the list still scrolls.
+
+## Rebuild a segment button when its segments change
+
+`CapsuleSegmentButtonV2` (API 26, on a phone) throws `Cannot read property position of undefined` in
+`getBackplatePosition` when its items change in the same update as a selection it has not laid out yet, and the app
+exits at launch. The Agents list's quick filters list only states that have sessions, so a count reaching or leaving zero
+changes the set while the chosen filter keeps its key at a new position. Give the button a key made of its segments
+(a one-element `ForEach` keyed by the joined filter keys) so a different set builds a new button. Fixed segment lists
+need nothing. Reproduce it by launching with a filter selected while another state's count changes, not only by tapping.

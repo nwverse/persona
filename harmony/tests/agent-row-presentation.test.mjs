@@ -442,3 +442,9 @@ test('Interrupt, Mark all as read and Collapse / Expand all sit where iOS puts t
   const module = readFileSync(new URL('../entry/src/main/module.json5', import.meta.url), 'utf8');
   assert.ok(module.includes('"ohos.permission.VIBRATE"'));
 });
+
+test('the quick filter segments are rebuilt when their set changes, never updated in place', () => {
+  // CapsuleSegmentButtonV2 throws in getBackplatePosition when its items change under a selection it has not laid out.
+  assert.match(source, /ForEach\(\[this\.quickFilters\(\)\.join\('\|'\)\], \(_set: string\) => \{\s*(?:\/\/[^\n]*\n\s*)*CapsuleSegmentButtonV2\(\{ items: new SegmentButtonV2Items\(this\.quickFilters\(\)/);
+  assert.match(source, /buttonPadding: LengthMetrics\.vp\(Tokens\.fine\) \}\)\.width\('100%'\)\s*\}, \(set: string\) => set\)/);
+});
