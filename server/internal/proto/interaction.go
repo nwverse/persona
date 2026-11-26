@@ -143,6 +143,12 @@ type Interaction struct {
 	// CanClarify advertises an assistant-owned prepared approval whose owner may ask a question without resolving it.
 	// Only the authoritative creation path sets it; older clients ignore it and keep their existing Allow/Deny behavior.
 	CanClarify bool `json:"can_clarify,omitempty"`
+	// NoHandBack marks a card that has no interactive computer terminal or UI to hand back to (manager-owned approvals,
+	// headless assistant conversations and command gates, and headless ACP companions such as Antigravity (agy),
+	// Grok (grok / grok-chat), and the builtin OpenCode companion (opencode, distinct from the opencode-<pid> TUI
+	// plugin) where dismiss cancels or denies instead of handing back). Only the manager sets it; absent or false
+	// preserves the existing "Leave to computer" action for interactive terminal cards and older hubs.
+	NoHandBack bool `json:"no_hand_back,omitempty"`
 	// Detachable is a node command gate's request to release its initial hook while the owner decides. The manager
 	// honors it only for a permission in one of its assistant conversations with complete input and ExecutionCwd;
 	// a later Allow creates a one-time grant for the exact original call rather than executing it in another process.

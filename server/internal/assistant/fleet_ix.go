@@ -301,6 +301,7 @@ func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (pr
 	ix.ApprovalBatchID, ix.ApprovalItemID = "", ""
 	ix.OwnerProposal, ix.NoExpiry = false, false
 	ix.OwnerApprovalPhrases = nil
+	ix.NoHandBack = false
 	ix.OutwardWrite = ix.OutwardWrite && ix.Kind == proto.IxPermission
 	if reservedCard(ix) {
 		return proto.Resolution{}, errReservedCard
@@ -363,6 +364,9 @@ func (s *Service) nodeInteraction(ctx context.Context, ix proto.Interaction) (pr
 	}
 	ix.Detachable = ix.Detachable && ix.Kind == proto.IxPermission && ix.SessionID != "" && inAssistant &&
 		len(ix.ToolInput) > 0 && ix.ExecutionCwd != ""
+	if ix.Kind == proto.IxPermission {
+		ix.NoHandBack = s.permissionNoHandBack(ix, inAssistant)
+	}
 	if ix.Detachable && ix.Resumable {
 		// The original request is never its own continuation. In particular it
 		// must not spend its unused grant or re-enter through a newly stored
@@ -425,6 +429,9 @@ func (s *Service) waitRegisteredInteraction(ctx context.Context, ix proto.Intera
 	ix = cleanTitle(ix)
 	// Only an operation registered by this process can advertise clarification.
 	ix.CanClarify = prepared != nil
+	if ix.Kind == proto.IxPermission && (prepared != nil || ix.OwnerProposal) {
+		ix.NoHandBack = true
+	}
 	// A Just me turn's card, the node's or the manager's own (ask_user, a confirmation): pushed without its content,
 	// never to Lark or a channel (meeting_justme.go).
 	ix.Private = ix.Private || s.justMeNow(ix.MachineID, ix.SessionID)
@@ -442,6 +449,8 @@ func (s *Service) waitRegisteredInteraction(ctx context.Context, ix proto.Intera
 	again := false
 	if ix.Resumable && !freshLogical {
 		restartPrepared := false
+		upgradedNoHandBack := false
+		var updatedIx proto.Interaction
 		s.fleet.mu.Lock()
 		if p := s.fleet.interactions[ix.ID]; p != nil && p.local == nil {
 			if !p.claimed && len(p.ix.AlwaysKeys) > 0 && len(ix.AlwaysKeys) == 0 && ix.AlwaysHonored != nil && !*ix.AlwaysHonored {
@@ -449,6 +458,10 @@ func (s *Service) waitRegisteredInteraction(ctx context.Context, ix proto.Intera
 				// retain a previously stripped/disallowed Always option (#15267).
 				p.ix.AlwaysKeys = nil
 				p.ix.AlwaysHonored = ix.AlwaysHonored
+			}
+			if !p.claimed && ix.NoHandBack && !p.ix.NoHandBack {
+				p.ix.NoHandBack = true
+				upgradedNoHandBack = true
 			}
 			if p.prepared != nil {
 				// The reconnecting hook is now the caller whose lifetime governs the
@@ -482,7 +495,13 @@ func (s *Service) waitRegisteredInteraction(ctx context.Context, ix proto.Intera
 				}
 				restartPrepared = true
 			}
+			if upgradedNoHandBack {
+				updatedIx = p.ix
+			}
 			s.fleet.mu.Unlock()
+			if upgradedNoHandBack {
+				s.show(updatedIx)
+			}
 			if restartPrepared {
 				s.startPreparedTimer(p)
 			}
@@ -1656,17 +1675,79 @@ func honest(ix proto.Interaction, r proto.Resolution) proto.Resolution {
 
 // ownCard is a permission card the manager asks itself (its tools', the extensions', the hub's persona_settings): its
 // Always is kept only where the card says what it keeps (AlwaysLabel: the apps a computer may use, LCU's own scopes),
-// nowhere else, and the tool gets its name for people when the catalog has one.
+// nowhere else, and the tool gets its name for people when the catalog has one. Manager-owned permission cards have no
+// computer terminal to hand back to, so NoHandBack is always set.
 func (s *Service) ownCard(ctx context.Context, ix proto.Interaction) proto.Interaction {
 	if ix.Kind != proto.IxPermission {
 		return ix
 	}
+	ix.NoHandBack = true
 	kept := strings.TrimSpace(ix.AlwaysLabel) != ""
 	ix.AlwaysHonored = &kept
 	if ix.ToolTitle == "" {
 		ix.ToolTitle = toolTitle(s.lang(ctx), ix.ToolName)
 	}
 	return ix
+}
+
+// permissionNoHandBack reports whether a node permission card has no interactive computer terminal or UI to hand
+// back to: headless assistant conversations (Claude -p, Codex app-server, AGY ACP), command-gate approvals
+// (Detachable / OutwardWrite), and headless ACP companions (Antigravity, Grok / grok-chat, builtin OpenCode
+// companion) where dismiss cancels or denies instead of handing the request back to a terminal.
+func (s *Service) permissionNoHandBack(ix proto.Interaction, inAssistant bool) bool {
+	if ix.Kind != proto.IxPermission {
+		return false
+	}
+	if inAssistant || ix.Detachable || ix.OutwardWrite {
+		return true
+	}
+	if row, ok := s.nodeSession(ix.MachineID, ix.SessionID); ok {
+		if row.PaneID == "" {
+			if row.Assistant {
+				return true
+			}
+			if m, ok := s.fleetMachine(ix.MachineID); ok && m.isAssistant(row) {
+				return true
+			}
+		}
+		if row.SourceKind == proto.SourceRuntime && row.SourceInstanceID != "" {
+			if interactivePermissionRuntimeHost(row.SourceInstanceID) {
+				return false
+			}
+			if headlessPermissionRuntimeInstance(row.SourceInstanceID) {
+				return true
+			}
+			return headlessPermissionAgent(row.Agent) || headlessPermissionAgent(ix.Agent)
+		}
+		if headlessPermissionAgent(row.Agent) {
+			return true
+		}
+	}
+	return headlessPermissionAgent(ix.Agent)
+}
+
+// interactivePermissionRuntimeHost reports runtime hosts with a local computer TUI, desktop app, or web UI
+// where handing a permission card back (dismiss) lets the user answer it there instead of cancelling the call.
+func interactivePermissionRuntimeHost(instanceID string) bool {
+	switch instanceID {
+	case "paseo", "orca", "cindy", "dsh", "managed-agents":
+		return true
+	}
+	return strings.HasPrefix(instanceID, "opencode-") || strings.HasPrefix(instanceID, "dsh-")
+}
+
+// headlessPermissionRuntimeInstance reports runtime instance IDs whose own permission bridge is headless ACP.
+func headlessPermissionRuntimeInstance(instanceID string) bool {
+	switch instanceID {
+	case "agy", "grok", "grok-chat", "opencode":
+		return true
+	}
+	return false
+}
+
+// headlessPermissionAgent reports agents whose non-hosted permission cards come from a headless ACP companion.
+func headlessPermissionAgent(agent string) bool {
+	return agent == "agy" || agent == "grok"
 }
 
 // toolTitle is one of the manager's own tools by its name for people ("iPhone control"), "" for any other.
@@ -1921,6 +2002,19 @@ func (s *Service) restoreStoredInteractions(ctx context.Context, st staleInterac
 			resumable[i].AlwaysKeys = nil
 			notKept := false
 			resumable[i].AlwaysHonored = &notKept
+		}
+		if resumable[i].Kind == proto.IxPermission {
+			inAssistant := false
+			if resumable[i].Cwd != "" {
+				inAssistant = s.ixInAssistant(ctx, resumable[i])
+			} else {
+				lookupCtx, cancel := context.WithTimeout(ctx, historyTimeout)
+				inAssistant = s.ixInAssistant(lookupCtx, resumable[i])
+				cancel()
+			}
+			if resumable[i].OwnerProposal || resumable[i].Detachable || s.permissionNoHandBack(resumable[i], inAssistant) {
+				resumable[i].NoHandBack = true
+			}
 		}
 	}
 	if recStore, ok := s.store().(interactionRecorder); ok && len(cancelled) > 0 {
