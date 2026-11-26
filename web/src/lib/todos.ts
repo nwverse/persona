@@ -1086,6 +1086,8 @@ export interface TodoPatch {
   project?: string;
   /** A responsible party that is not a Persona-started agent (#12712); null clears it. */
   responsible?: TodoResponsible | null;
+  /** Explicit 2-type classification under todos_v2 (#15758, #16100). */
+  item_type?: "personal" | "task";
 }
 
 export async function updateTodo(id: string, patch: TodoPatch): Promise<Todo> {
@@ -1094,6 +1096,15 @@ export async function updateTodo(id: string, patch: TodoPatch): Promise<Todo> {
     json: patch,
   });
   return r.todo;
+}
+
+/** Clears `seen_at` and persists server-side `AutoSeenUndone` anti-rebound protection (#14658, #16100). */
+export async function unseeTodo(id: string): Promise<Todo | undefined> {
+  const r = await api<{ todo?: Todo }>(`/todos/${enc(id)}/seen`, {
+    method: "DELETE",
+    headers: currentHeaders(),
+  });
+  return r?.todo;
 }
 
 export async function deleteTodo(id: string): Promise<void> {
