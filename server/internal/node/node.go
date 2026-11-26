@@ -391,8 +391,6 @@ type Node struct {
 	larkCfgAt    time.Time
 	larkCfgTryAt time.Time // the last attempt to refresh it, kept even when that failed
 	larkAllowed  map[string]bool
-	// editedAnswers carries an editable card's answer from askOnce to larkGateWithEdit, keyed by interaction id.
-	editedAnswers sync.Map
 	// secrets is a test's own hand-offs; nil: the process's, shared by every connection (secretenv.go handoffs).
 	secrets *secretStage
 	// gp is the proxy that adds the gates' credentials, made at its first use (gateproxy.go, #1317).
@@ -1984,8 +1982,10 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	case "assistant.execution":
 		return n.assistantExecution(ctx, p.SessionID), nil
 	case "assistant.send", assistantwire.DeviceAssistantAnswerAgain:
-		if p.ResumeOnly && !n.assistantResumable(p.SessionID) {
-			return nil, fmt.Errorf("conversation %s is gone", p.SessionID)
+		if p.ResumeOnly {
+			if err := n.checkAssistantResumable(ctx, p.SessionID, p.Launcher); err != nil {
+				return nil, err
+			}
 		}
 		sctx := withSkillOwner(ctx, p.SkillOwner)
 		if p.TaskInput {
