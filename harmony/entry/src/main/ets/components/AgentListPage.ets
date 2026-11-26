@@ -768,7 +768,9 @@ export struct AgentListPage {
         .fontColor($r('app.color.persona_danger')).padding(Tokens.inset).width('100%')
       Refresh({ refreshing: $$this.refreshing }) {
       List() {
-        if (this.workspace.loading && !this.workspace.hasRows()) ListItem() { LoadingProgress().height(Tokens.touch).width(Tokens.touch).padding(Tokens.page) }
+        if (!this.workspace.hasRows() && (this.workspace.loading || this.workspace.awaitingSource() && !this.workspace.sourceProblem())) ListItem() {
+          LoadingProgress().height(Tokens.touch).width(Tokens.touch).padding(Tokens.page)
+        }.id('agents.loading')
         if (this.markAllCount() > 0) ListItem() {
           Button() {
             Row({ space: Tokens.gap }) {
@@ -796,9 +798,12 @@ export struct AgentListPage {
                 .onClick(() => this.toggleIdle(binding.value.id)).id('agents.idle.expand.' + binding.value.id)
             }
           }, (binding: BoundAgentGroup) => binding.key)
-        if (!this.workspace.hasRows() && !this.workspace.loading) ListItem() {
+        if (!this.workspace.hasRows() && !this.workspace.loading && !this.workspace.awaitingSource()) ListItem() {
           Text(tr(this.workspace.search ? 'no_results' : 'empty')).fontSize(Tokens.meta).padding(Tokens.page).width('100%')
         }.id('agents.empty')
+        if (!this.workspace.hasRows() && !this.workspace.loading && this.workspace.sourceProblem()) ListItem() {
+          Text(tr(this.workspace.sourceProblem())).fontSize(Tokens.meta).fontColor(Colors.secondary).padding(Tokens.page).width('100%')
+        }.id('agents.unavailable')
       }.width('100%').height('100%').padding({ bottom: Tokens.listTail })
         .divider({ strokeWidth: Tokens.hairline, startMargin: Tokens.page + Tokens.avatar + Tokens.gap,
           endMargin: Tokens.page, color: Colors.divider })

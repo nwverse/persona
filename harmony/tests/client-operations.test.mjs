@@ -5,6 +5,7 @@ import { readFileSync, existsSync } from 'node:fs';
 
 registerHooks({
   resolve(specifier, context, next) {
+    if (specifier === '../core/SessionSnapshot' || context.parentURL?.endsWith('/SessionSnapshot.ts') && specifier === './TranscriptCache') return {url: new URL(specifier + '.ts', context.parentURL).href, shortCircuit: true};
     if (specifier === '@kit.ArkTS') return {url:'client-boundary:'+specifier,shortCircuit:true};
     if (context.parentURL?.endsWith('/ClientModel.ets')) {
       if (['./SessionArchive', './SessionRelations', './Wire', './AssistantView', './DemoRepository', './NavigationContext', './ChatDraftStore', './HubRepository', './MutationStore', './Compatibility', './InteractionDecision', '../core/ClientLocale', '../core/ClientLocale', '../core/Domain', '../core/AgentEvents', '../core/ConversationPlan', '../core/ScopePolicy', '../core/StorageOwnership', '../core/MessageContent', '../core/MessageImageGallery', '../core/TranscriptCache'].includes(specifier)) {
@@ -1849,4 +1850,31 @@ test('an offline search result can open the cached transcript of its own paired 
   await assert.rejects(model.viewFor(row),/connection unavailable/);
   owner.retired=true;
   await assert.rejects(model.viewFor(row,true),/connection unavailable/);
+});
+
+test('a Hub whose session titles hold whole pasted prompts still restores its list at the next launch', async () => {
+  const {model} = heldFixture(), prompt = '把这份很长的文档整理成要点。'.repeat(8000);
+  const rows = Array.from({length: 40}, (_, i) => ResourceRow.from({machine_id: 'my laptop', session_id: 'chat/' + i, manager: 'personal',
+    title: prompt, last_text: prompt, updated_at: new Date(Date.UTC(2026, 10, 1, 0, i)).toISOString()}, 'session'));
+  model.queueRefresh = () => {};
+  model.repository.sessions = async () => rows;
+  model.repository.machines = async () => model.machines;
+  model.repository.call = async () => ({ok: true});
+  await model.refresh();
+  const stored = await model.local.get('snapshot:' + model.scope());
+  assert.ok(Buffer.byteLength(stored) < 1024 * 1024, 'the stored value stays readable');
+  const reopened = heldFixture().model; reopened.local = model.local; reopened.connected = false; reopened.sessions = []; reopened.sessionsReady = false;
+  await reopened.restoreSnapshot(reopened.connectionGeneration(), reopened.scope());
+  assert.equal(reopened.sessionsReady, true);
+  assert.deepEqual(reopened.sessions.map(row => row.id), rows.map(row => row.id));
+  assert.ok(reopened.sessions[0].title.length < 400 && reopened.sessions[0].title.startsWith('把这份'));
+  assert.equal(reopened.error, '');
+});
+
+test('a snapshot cut off before it was bounded restores as no list, without an error', async () => {
+  const {model} = heldFixture();
+  await model.local.put('snapshot:' + model.scope(), '{"sessions":[{"id":"chat/one","title":"cut', 0);
+  model.sessions = []; model.sessionsReady = false; model.error = '';
+  await model.restoreSnapshot(model.connectionGeneration(), model.scope());
+  assert.deepEqual(model.sessions, []); assert.equal(model.sessionsReady, false); assert.equal(model.error, '');
 });

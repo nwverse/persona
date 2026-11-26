@@ -1,5 +1,11 @@
 import type { LocalStore } from '../platform/LocalStore';
 import { ResourceRow, Wire } from './Wire';
+import { decodeSessionSnapshot, encodeSessionSnapshot } from '../core/SessionSnapshot';
+
+function plainRow(row: ResourceRow): Record<string, Object> {
+  return Wire.payload(['id', 'title', 'detail', 'kind', 'state', 'manager', 'group', 'machine', 'session', 'path', 'raw'],
+    [row.id, row.title, row.detail, row.kind, row.state, row.manager, row.group, row.machine, row.session, row.path, row.raw]);
+}
 
 export class ChatDraft {
   text: string = '';
@@ -46,9 +52,11 @@ export class ChatDraftStore {
     const key = 'snapshot:' + scope; return this.transaction(key, (): Promise<string> => this.local.get(key));
   }
   async saveSessionSnapshot(scope: string, sessions: ResourceRow[], conversations: ResourceRow[], heldActions: Record<string, Object>[], current: () => boolean): Promise<void> {
-    const key = 'snapshot:' + scope, value = JSON.stringify({ sessions: sessions, conversations: conversations, heldActions: heldActions });
+    // Bounded: the store writes a value it cannot read back past about 2 MB (core/SessionSnapshot.ts).
+    const key = 'snapshot:' + scope, value = encodeSessionSnapshot(sessions.map(plainRow), conversations.map(plainRow), heldActions);
     await this.transaction(key, async (epoch: number): Promise<void> => {
-      if (current()) await this.local.put(key, value, epoch);
+      if (!current()) return;
+      if (value) await this.local.put(key, value, epoch); else await this.local.remove(key, epoch);
     });
   }
   // Commit a definite held receipt before retiring its outbox copy, even if the owner switched chats or managers.
@@ -56,7 +64,7 @@ export class ChatDraftStore {
     action?: Record<string, Object>): Promise<void> {
     const key = 'snapshot:' + scope, original = Wire.record(JSON.parse(JSON.stringify(owner)) as Object);
     await this.transaction(key, async (epoch: number): Promise<void> => {
-      const raw = await this.local.get(key), snapshot = raw ? Wire.record(JSON.parse(raw) as Object) : Wire.payload([], []);
+      const snapshot = decodeSessionSnapshot(await this.local.get(key)) || Wire.payload([], []);
       if (!paired()) return;
       const actions = Wire.rows(snapshot, 'heldActions');
       const same = (item: Record<string, Object>): boolean => Wire.text(item, 'target') === target && Wire.text(item, 'id') === id;
