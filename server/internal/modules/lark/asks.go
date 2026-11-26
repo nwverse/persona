@@ -193,16 +193,16 @@ func (s core) postInteractionCard(ctx context.Context, ix proto.Interaction) {
 	dc.mu.Lock()
 	s.book(ctx, func(b chatBook) {
 		post.card = botCard{MessageID: mid, Ix: ix, At: b.Now(), Thread: reply, ChatID: to.ChatID}
+		if post.detached { // feishuDetach took it while Feishu had not answered: it closes this message, a reconnect reopens it
+			detached = true
+			return
+		}
 		current, still := b.Card(ix.ID)
 		same := still && !differentBotCardOccurrence(current.Ix, ix)
 		if !same || ended { // answered or replaced while this occurrence was being posted
 			if same {
 				b.KeepCard(ix.ID, nil)
 			}
-			return
-		}
-		if post.detached { // feishuDetach took it while Feishu had not answered: it closes this message, a reconnect reopens it
-			detached = true
 			return
 		}
 		card := post.card

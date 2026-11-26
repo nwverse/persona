@@ -439,7 +439,9 @@ func (s *Service) waitInteractionReadyResult(ctx context.Context, ix proto.Inter
 func (s *Service) waitRegisteredInteraction(ctx context.Context, ix proto.Interaction, prepared *preparedApproval, registered func(*pending)) (proto.Resolution, error) {
 	// The node may send its first request while FleetUp is still restoring the last manager's cards.
 	// Do not let that recovery cancel a card this process is about to persist.
-	s.restoreInteractions(ctx)
+	if s.fleetOn() {
+		s.restoreInteractions(ctx)
+	}
 	unlockAdmission := s.lockInteractionAdmission(ix.ID)
 	admissionHeld := true
 	releaseAdmission := func() {

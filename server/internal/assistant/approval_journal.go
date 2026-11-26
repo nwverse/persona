@@ -858,14 +858,6 @@ func (s *Service) recoverApprovalJournals(ctx context.Context) {
 			// current process after storage recovered. It is not restart residue.
 			continue
 		}
-		if b.list[i].Status != "approved" {
-			// A continuation grant is valid only with its completed approved
-			// result. Revoke interrupted, cancelled and failed outcomes before
-			// delivery; a crashed apply must never leave an execution permit.
-			if err := s.revokeDetachedGrant(ctx, b.list[i]); err != nil {
-				s.logf("revoke interrupted approval %s: %v", b.list[i].ID, err)
-			}
-		}
 		if b.handled == nil {
 			b.handled = map[string]bool{}
 		}

@@ -39,7 +39,7 @@ func (s *Service) syncPlanInteractions(machine string) {
 // approvalWaitingWindow (#12918). A permission without an id needs its exact tool input to identify a unique call;
 // Codex's and a runtime's cards end through their own sources. Callers hold s.fleet.mu.
 func terminalReconciled(p *pending) bool {
-	if p.local != nil || p.claimed || detachedApprovalWaitingLocked(p) {
+	if p.local != nil || p.prepared != nil || p.claimed {
 		return false
 	}
 	switch p.ix.Kind {
@@ -190,9 +190,9 @@ func permissionCall(ix proto.Interaction, items []proto.Item) (string, int) {
 
 func (s *Service) finishExternalPlan(p *pending) {
 	s.fleet.mu.Lock()
-	if s.fleet.interactions[p.ix.ID] != p || p.claimed || detachedApprovalWaitingLocked(p) {
+	if s.fleet.interactions[p.ix.ID] != p || p.prepared != nil || p.claimed {
 		s.fleet.mu.Unlock()
-		return // the phone answered, a newer card replaced this one, or the terminal result only released the turn
+		return // the phone answered, a newer card replaced this one, or a prepared coordinator owns it
 	}
 	delete(s.fleet.interactions, p.ix.ID)
 	if p.orphaned != nil {
