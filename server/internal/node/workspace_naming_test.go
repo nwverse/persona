@@ -478,43 +478,73 @@ func TestWorkspaceNamingSymlinkedHomeRejectsInnerAndPrivateSymlinks(t *testing.T
 		})
 	}
 
-	t.Run("symlinked control directory under state dir rejected", func(t *testing.T) {
-		root := workspaceTemp(t)
-		realHome := filepath.Join(root, "data", "home", "me")
-		external := filepath.Join(root, "external")
-		if err := os.MkdirAll(filepath.Join(realHome, ".persona"), 0o700); err != nil {
-			t.Fatal(err)
+}
+
+func TestWorkspacePhysicalStateDirectory(t *testing.T) {
+	home, state := workspaceTemp(t), workspaceTemp(t)
+	alias := filepath.Join(home, "node-state")
+	if err := os.Symlink(state, alias); err != nil {
+		t.Skip("symlinks:", err)
+	}
+	t.Setenv("PERSONA_HOME", alias)
+	n := &Node{home: home, dir: alias}
+	source := workspacePlan(t, home, repositorywire.LayoutRoot, workspaceRemote(t, "trunk")).Source
+	preview := namingGuardPreview(t, n, source)
+	if preview.Plan == nil {
+		t.Fatal(preview)
+	}
+	req := taskworkspace.Request{WorkspaceID: "ws_state", OperationID: "op_state", Plan: *preview.Plan, MirrorRepos: []string{"web"}}
+	for _, stage := range []string{"prepare", "inspect", "cleanup"} {
+		got := workspaceCall(t, n, stage, req)
+		if got.Error != nil || stage == "cleanup" && got.State != "removed" || stage != "cleanup" && got.State != "ready" {
+			t.Fatalf("%s: %+v", stage, got)
 		}
-		if err := os.MkdirAll(external, 0o700); err != nil {
-			t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(state, "repos", "web.git")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWorkspaceControlDirectoryDiagnostics(t *testing.T) {
+	for _, control := range []string{"task-workspaces", "repos"} {
+		for _, target := range []string{"ordinary", ".ssh", ".persona", "configured-state"} {
+			t.Run(control+"/"+target, func(t *testing.T) {
+				home, state := workspaceTemp(t), workspaceTemp(t)
+				n := &Node{home: home, dir: filepath.Join(home, "node-state")}
+				if err := os.Symlink(state, n.dir); err != nil {
+					t.Skip("symlinks:", err)
+				}
+				t.Setenv("PERSONA_HOME", n.dir)
+				dst := filepath.Join(home, target)
+				if target == "configured-state" {
+					dst = filepath.Join(state, "nested")
+				}
+				if err := os.Mkdir(dst, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(dst, filepath.Join(state, control)); err != nil {
+					t.Fatal(err)
+				}
+				source := workspacePlan(t, home, repositorywire.LayoutRoot, workspaceRemote(t, "trunk")).Source
+				preview := namingGuardPreview(t, n, source)
+				if preview.Plan == nil {
+					t.Fatal(preview)
+				}
+				req := taskworkspace.Request{WorkspaceID: "ws_control", OperationID: "op_control", Plan: *preview.Plan, MirrorRepos: []string{"web"}}
+				got := workspaceCall(t, n, "prepare", req)
+				want := "base_scope_denied"
+				if target == "ordinary" {
+					want = "path_symlink"
+				}
+				if got.Error == nil || got.Error.Code != want {
+					t.Fatalf("prepare error = %v, want %s", got.Error, want)
+				}
+				if entries, err := os.ReadDir(dst); err != nil || len(entries) != 0 {
+					t.Fatalf("link target changed: %v, %v", entries, err)
+				}
+			})
 		}
-		linkHome := filepath.Join(root, "home", "me")
-		if err := os.MkdirAll(filepath.Dir(linkHome), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Symlink(realHome, linkHome); err != nil {
-			t.Skip("symlinks:", err)
-		}
-		if err := os.Symlink(external, filepath.Join(realHome, ".persona", "task-workspaces")); err != nil {
-			t.Fatal(err)
-		}
-		n := &Node{home: linkHome, dir: filepath.Join(linkHome, ".persona")}
-		source := namingGuardSource()
-		source.Manager = "example"
-		source.MachineID = "node_example"
-		source.Repositories = repositorywire.PreparationSnapshot{
-			SchemaVersion: 1, Manager: source.Manager, TodoID: source.TodoID, Repositories: []repositorywire.PreparationRepository{},
-		}
-		source.Rules.BaseDirectory = "~/.herdr/worktrees"
-		preview := namingGuardPreview(t, n, source)
-		if preview.Plan == nil {
-			t.Fatalf("preview failed: %+v", preview)
-		}
-		raw, _ := json.Marshal(taskworkspace.Request{WorkspaceID: "ws_ctrl", OperationID: "op_ctrl", Plan: *preview.Plan})
-		if _, err := n.handle(t.Context(), "task.workspace.prepare", raw); err == nil {
-			t.Fatal("symlinked task-workspaces control directory was accepted")
-		}
-	})
+	}
 }
 
 func namingGuardSource() workspacenaming.Source {
