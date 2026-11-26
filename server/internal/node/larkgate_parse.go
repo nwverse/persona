@@ -1174,7 +1174,10 @@ func parseGateCall(g proto.CommandGate, args []string, vars map[string]string, e
 	if _, agent := gateAgentToken(g); agent {
 		account := ""
 		if name := gateAgentAccountEnv(g); name != "" {
-			account = vars[name]
+			account = g.Env[name]
+			if value, ok := vars[name]; ok {
+				account = value
+			}
 			for _, assignment := range env {
 				if key, value, ok := strings.Cut(assignment, "="); ok && key == name {
 					account = value

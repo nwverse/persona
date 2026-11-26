@@ -210,6 +210,34 @@ func TestGateProxyAgentAPIWriteGETUsesOneGrantAndWritesTheLedger(t *testing.T) {
 	}
 }
 
+func TestGateProxyUsesTheConfiguredAgentAccountBaseline(t *testing.T) {
+	api := newFakeAPI(t)
+	n, _, _ := ledgerNode(t, api.URL)
+	n.larkCfg.Gates[0].PathPrefix = "/agent/v1"
+	n.larkCfg.Gates[0].Env["EXAMPLE_ACCOUNT"] = "2"
+	p := n.gates()
+	base, release, err := p.open("ex", "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+
+	call, deny, ok := parseGateCall(n.larkCfg.Gates[0],
+		[]string{http.MethodPost, "/conversations/F1/messages", `{}`}, nil, nil, t.TempDir())
+	if !ok || deny != "" {
+		t.Fatalf("the configured-account call was not parsed: ok=%v deny=%q", ok, deny)
+	}
+	p.grant("ex", "session-1", call, proto.LarkLetThrough{Kind: proto.LarkThroughCard})
+	code, body := send(t, http.MethodPost, base+"/agent/v1/conversations/F1/messages", `{}`, "x-example-account", "2")
+	if code != http.StatusOK || call.Account != "2" {
+		t.Fatalf("approved call account=%q; configured account 2 proxy response=%d %s, want account 2 and 200", call.Account, code, body)
+	}
+	seen := api.requests()
+	if len(seen) != 1 || seen[0].Account != "2" {
+		t.Fatalf("the configured-account request did not reach account 2 exactly once: %+v", seen)
+	}
+}
+
 func TestGateProxyBindsItsGrantToTheAgentAccount(t *testing.T) {
 	api := newFakeAPI(t)
 	n, _, _ := ledgerNode(t, api.URL)

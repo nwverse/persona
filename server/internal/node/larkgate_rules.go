@@ -49,6 +49,10 @@ func larkDecision(cfg proto.AssistantLark, c larkCall) string {
 			(candidate.Method == "*" || strings.EqualFold(candidate.Method, c.Method)) &&
 			pathMatches(candidate.Path, c.Path)
 	})
+	// Deletion-classified GET/HEAD calls were confirmed before the read default
+	// was introduced. Neither an unmatched read nor a generic confirm catch-all
+	// may silently downgrade that existing boundary.
+	cardFreeRead := read && !bodyScoped && !larkDeletionCall(c)
 	if action, ok := matchLark(rules, c); ok {
 		rule, _ := firstLark(rules, c)
 		// A blanket read allow is the common default, not an authorization for
@@ -60,7 +64,7 @@ func larkDecision(cfg proto.AssistantLark, c larkCall) string {
 			return "confirm"
 		}
 		if read && action == "confirm" {
-			if rule.Method == "*" && strings.Trim(rule.Path, "/") == "**" && len(rule.Body) == 0 && !bodyScoped {
+			if rule.Method == "*" && strings.Trim(rule.Path, "/") == "**" && len(rule.Body) == 0 && cardFreeRead {
 				return "allow"
 			}
 		}
@@ -69,7 +73,7 @@ func larkDecision(cfg proto.AssistantLark, c larkCall) string {
 	// A command gate's explicit exceptions come first. An ordinary GET/HEAD is
 	// a read even when the gate only declares its writes and a catch-all, but a
 	// body-scoped rule still has to match before that read can go.
-	if read && !bodyScoped {
+	if cardFreeRead {
 		return "allow"
 	}
 	return "confirm"
@@ -225,6 +229,16 @@ var larkActions = []struct {
 	{lazyre.New(`^CLI /calendar`), "建 / 改日程", larkOrdinary},
 	{lazyre.New(`^CLI /(docs|sheets|wiki|drive|base)`), "写文档", larkOrdinary},
 	{lazyre.New(`^CLI /mail`), "发 / 改邮件", larkOrdinary},
+}
+
+func larkDeletionCall(c larkCall) bool {
+	action := c.Method + " " + c.Path
+	for _, candidate := range larkActions {
+		if candidate.boundary == larkDeletion && candidate.re.MatchString(action) {
+			return true
+		}
+	}
+	return false
 }
 
 // larkSummary is the phone card's text: what each write does, then its method, path and body.

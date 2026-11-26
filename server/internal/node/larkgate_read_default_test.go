@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -60,6 +61,38 @@ func TestCommandGateGenericConfirmCatchAllIgnoresSlashSpelling(t *testing.T) {
 		cfg.Gates[0].Rules = []proto.LarkRule{{Method: "*", Path: pattern, Action: "confirm"}}
 		if got := larkDecision(cfg, larkCall{Gate: 0, Method: "GET", Path: "/messages/2002"}); got != "allow" {
 			t.Fatalf("catch-all %q: got %q, want allow", pattern, got)
+		}
+	}
+}
+
+func TestCommandGateDeletionGETAndHEADStillConfirm(t *testing.T) {
+	for _, mode := range []string{proto.ModeDefault, proto.ModeBypass} {
+		for _, method := range []string{http.MethodGet, http.MethodHead} {
+			for _, rules := range []struct {
+				name  string
+				rules []proto.LarkRule
+			}{
+				{name: "no matching rule"},
+				{name: "generic confirm", rules: []proto.LarkRule{{Method: "*", Path: "**", Action: "confirm"}}},
+			} {
+				t.Run(mode+"/"+method+"/"+rules.name, func(t *testing.T) {
+					n, fh, _ := gateReadDefaultNode(t)
+					n.larkCfg.Gates[0].Rules = rules.rules
+					n.persistModes(testThread, mode, "")
+					fh.answer = func(proto.Interaction) proto.Resolution { return proto.Resolution{Allow: boolp(true)} }
+					decision, _, err := n.larkCheck(context.Background(), testThread, t.TempDir(), "ex "+method+" /messages/om_1/recall",
+						proto.Interaction{SessionID: testThread, ExpiresAt: time.Now().Add(time.Minute)})
+					cards := fh.interactions()
+					if err != nil || decision != "allow" || len(cards) != 1 || !strings.Contains(cards[0].Summary, "删除") {
+						t.Fatalf("deletion decision=%q err=%v cards=%v, want one confirmed deletion", decision, err, cards)
+					}
+					decision, _, err = n.larkCheck(context.Background(), testThread, t.TempDir(), "ex "+method+" /messages/om_1",
+						proto.Interaction{SessionID: testThread, ExpiresAt: time.Now().Add(time.Minute)})
+					if err != nil || decision != "allow" || len(fh.interactions()) != 1 {
+						t.Fatalf("ordinary read decision=%q err=%v cards=%v, want no additional card", decision, err, fh.interactions())
+					}
+				})
+			}
 		}
 	}
 }
