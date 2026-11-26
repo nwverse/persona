@@ -1,8 +1,11 @@
+import type { AgentPhase, AgentView } from "./agent-view-wire";
 import type { UsageCard } from "./tokens";
 import type { RuleSuggestion } from "./rule-suggestion";
 // The hub's wire types (docs/protocol/protocol.md). Only the fields the web client reads.
 
-export type AgentState = "needs_you" | "working" | "unread" | "idle" | "offline" | "unknown";
+/** Frozen Session.state and the host-state filters on older paging endpoints. */
+export type AgentState = Extract<AgentPhase, "needs_you" | "working" | "idle"> | "unread" | "offline" | "unknown";
+export type StatusMarkState = AgentPhase | AgentState;
 
 /** An engine as the machine's node found it (docs/integrations/engines.md): `note` says why one that is there cannot be used. */
 export interface DetectedEngine {
@@ -286,6 +289,7 @@ export interface Session {
   start_error_code?: string;
   start_error_args?: Record<string, string>;
   state?: AgentState;
+  view?: AgentView;
   state_since?: string;
   agent?: string;
   agent_name?: string;
