@@ -20,6 +20,8 @@ import type { Interaction, Session } from "./types";
  */
 type NeedsYouTask = { kind: "task"; key: string; todo: Todo; status: TodoStatus; asks: Interaction[]; countsOpen: boolean; steps?: NeedsYouTask[] };
 
+type RankedTask = { item: NeedsYouTask; rank: number; at: string };
+
 export type NeedsYouItem =
   /** A task whose agent asks something (`asks`, oldest first), or that waits for the user's decision.
    *  `countsOpen` says whether the To-dos page's "Not done" counts the to-do (#3331): the row stays visible whatever
@@ -157,8 +159,8 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
     asksOf.set(k, [...(asksOf.get(k) ?? []), ix]);
   }
 
-  const asking: NeedsYouItem[] = [];
-  const deciding: { item: NeedsYouItem; rank: number; at: string }[] = [];
+  const asking: NeedsYouTask[] = [];
+  const deciding: RankedTask[] = [];
   const open: { item: RunningItem; rank: number; at: string }[] = [];
   const shelved: { item: RunningItem; at: string }[] = [];
   const parked: { item: RunningItem; at: string }[] = [];
@@ -169,8 +171,8 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
   const openOf = openByView(todos);
   // The hub counts the parent once. Include its waiting steps even if a different conversation dispatched them.
   const slotIds = new Set(slots.map((card) => card.todo_id));
-  const carried = new Map<string, NeedsYouTask[]>();
-  const stepRows = new Map<string, NeedsYouTask[]>();
+  const carried = new Map<string, RankedTask[]>();
+  const stepRows = new Map<string, RankedTask[]>();
   for (const step of todos) {
     const parent = step.part_of ? byTodo.get(step.part_of) : undefined;
     if (!parent || parent === step || !slotIds.has(parent.id) || !parent.view?.steps ||
@@ -241,7 +243,9 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
       (decisionDismissed(todo) || input.deferred?.[decisionLaterKey(todo)]);
     const parentSteps = carried.get(todo.id);
     if (parentSteps) {
-      if (asks.length || (!hiddenDecision && (waits || decision || deliveryApproval))) parentSteps.push(item);
+      if (asks.length || (!hiddenDecision && (waits || decision || deliveryApproval))) {
+        parentSteps.push({ item, rank: todoRank(todo, status), at: card.at });
+      }
     } else if (asks.length) asking.push(item);
     else if (hub ?? (waits || decision || deliveryApproval)) {
       if (!hiddenDecision) deciding.push({ item, rank: todoRank(todo, status), at: card.at });
@@ -268,6 +272,19 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
     }
     for (const agent of active) folded.add(sessionKey(agent.machine_id, agent.session_id));
     if (linked) folded.add(sessionKey(linked.machine_id, linked.session_id));
+  }
+
+  // A pending step needs its own row when its parent has no visible Needs you row.
+  if (stepRows.size) {
+    const visibleTasks = new Set(asking.map((item) => item.todo.id));
+    for (const { item } of deciding) visibleTasks.add(item.todo.id);
+    for (const [parent, steps] of stepRows) {
+      if (visibleTasks.has(parent)) continue;
+      for (const step of steps) {
+        if (step.item.asks.length) asking.push(step.item);
+        else deciding.push(step);
+      }
+    }
   }
 
   // Agents that belong to no task, the main conversation's only (dockAgents): asking ones wait on the user, working ones run.
@@ -303,7 +320,7 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
     if (item.kind !== "task") return true;
     const steps = stepRows.get(item.todo.id);
     if (!steps) return true;
-    item.steps = steps;
+    item.steps = steps.map(({ item }) => item);
     return steps.length > 0 || item.asks.length > 0 || taskAwaitsDecision(item.todo) ||
       heldDelivery(item.todo)?.unblock === "user" || WAITS_ON_YOU.has(item.status);
   });
