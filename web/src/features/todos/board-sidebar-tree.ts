@@ -3,7 +3,7 @@
 
 import { t } from "../../i18n";
 import { splitAgentSessions, type AgentMutes } from "../../lib/agent-groups";
-import { stateOf } from "../../lib/format";
+import { activityOf, stateOf } from "../../lib/format";
 import {
   agentGroupLabel,
   agentTreeState,
@@ -28,7 +28,7 @@ import type { Machine, Session } from "../../lib/types";
 
 function defaultSessionCompare(mutes: AgentMutes) {
   const rank = (s: Session): number => {
-    const st = stateOf(s);
+    const st = activityOf(s);
     const waiting =
       (st === "idle" || st === "unknown") &&
       Boolean(s.loop || s.background?.length || s.subagents?.some((a) => a.running));

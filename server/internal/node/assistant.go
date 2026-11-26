@@ -294,6 +294,151 @@ func (n *Node) assistantResumable(id string) bool {
 	return (p != nil && p.alive()) || n.transcriptPath(id) != ""
 }
 
+func (n *Node) isManagedRuntimeLauncher(name string) bool {
+	if name == "" {
+		return false
+	}
+	if m, ok := n.managedLauncher(name); ok && m.AgentType() == "agy" {
+		return true
+	}
+	if n.autoCompanions && !shellLauncherNames()[name] && (name == agyRuntimeID || name == opencodeRuntimeID) {
+		return true
+	}
+	return false
+}
+
+func (n *Node) pendingAutoCompanionRuntime(id string) (string, bool) {
+	if !n.autoCompanions || !runtimeSessionID(id) {
+		return "", false
+	}
+	for _, rtID := range []string{agyRuntimeID, opencodeRuntimeID} {
+		if strings.HasPrefix(id, rtID+"-") {
+			return rtID, true
+		}
+	}
+	return "", false
+}
+
+// runtimeResumablePending reports whether id looks like an existing runtime conversation whose runtime has not yet
+// connected or finished pushing its first session list after a node restart.
+func (n *Node) runtimeResumablePending(id, launcher string) bool {
+	if id == "" || n.runtimes == nil {
+		return false
+	}
+	var st sessionState
+	var hasState bool
+	if n.state != nil {
+		st, hasState = n.state.get(id)
+	}
+	rl := launcherOr(st.Launcher, launcher)
+	rt := n.assistantRuntime(rl)
+	if rt == nil && launcher != "" && launcher != rl {
+		rt = n.assistantRuntime(launcher)
+	}
+	if rt == nil && runtimeSessionID(id) {
+		rt, _ = n.runtimes.assistantRuntimeByPrefix(id)
+	}
+	if rt != nil {
+		return !rt.listedSessions()
+	}
+	if hasState && (runtimeSessionID(id) || st.EngineRuntime != "" || st.RemoteAgent || n.isManagedRuntimeLauncher(rl)) {
+		return true
+	}
+	if n.isManagedRuntimeLauncher(launcher) {
+		return true
+	}
+	if runtimeSessionID(id) {
+		if _, pending := n.runtimes.unlistedAssistantRuntime(); pending {
+			return true
+		}
+		if _, pending := n.pendingAutoCompanionRuntime(id); pending {
+			return true
+		}
+	}
+	return false
+}
+
+// checkAssistantResumable verifies that a resume_only send may continue conversation id.
+// Unlike assistantResumable, it distinguishes a truly missing conversation ("is gone") from a runtime conversation
+// whose owning runtime has not connected or pushed its initial session list yet after a restart (errRuntimeAway),
+// and probes a ready runtime for older sessions outside its recent session window before concluding gone.
+func (n *Node) checkAssistantResumable(ctx context.Context, id, launcher string) error {
+	if n.assistantResumable(id) {
+		return nil
+	}
+	if id == "" {
+		return fmt.Errorf("conversation %s is gone", id)
+	}
+	if n.state != nil && n.state.isLoading() {
+		if err := n.state.loaded(ctx); err != nil {
+			return err
+		}
+		if n.assistantResumable(id) {
+			return nil
+		}
+	}
+	if n.runtimes == nil {
+		return fmt.Errorf("conversation %s is gone", id)
+	}
+	var st sessionState
+	var hasState bool
+	if n.state != nil {
+		st, hasState = n.state.get(id)
+	}
+	rl := launcherOr(st.Launcher, launcher)
+	rt := n.assistantRuntime(rl)
+	if rt == nil && launcher != "" && launcher != rl {
+		rt = n.assistantRuntime(launcher)
+	}
+	if rt == nil && runtimeSessionID(id) {
+		rt, _ = n.runtimes.assistantRuntimeByPrefix(id)
+	}
+	if rt != nil {
+		if !rt.listedSessions() {
+			return errRuntimeAway(cmp.Or(rt.label(), rl, "runtime"))
+		}
+		if !hasState {
+			return fmt.Errorf("conversation %s is gone", id)
+		}
+		if gone := n.runtimes.goneOf(id); gone != nil {
+			return fmt.Errorf("conversation %s is gone", id)
+		}
+		if rt.peer == nil {
+			return errRuntimeAway(cmp.Or(rt.label(), rl, "runtime"))
+		}
+		cctx, cancel := context.WithTimeout(ctx, runtimeClaimTimeout)
+		var page struct {
+			Items []json.RawMessage `json:"items"`
+		}
+		err := rt.peer.Call(cctx, "session.items", map[string]any{"session_id": id, "limit": 1}, &page)
+		cancel()
+		if hasSession(err) {
+			n.runtimes.claim(rt, id)
+			return nil
+		}
+		if rpcCode(err) == codeNotFound {
+			n.runtimes.unclaim(id, err)
+			return fmt.Errorf("conversation %s is gone", id)
+		}
+		return errRuntimeAway(cmp.Or(rt.label(), rl, "runtime"))
+	}
+	if hasState && (runtimeSessionID(id) || st.EngineRuntime != "" || st.RemoteAgent || n.isManagedRuntimeLauncher(rl)) {
+		return errRuntimeAway(cmp.Or(rl, st.EngineRuntime, "runtime"))
+	}
+	if n.isManagedRuntimeLauncher(launcher) {
+		return errRuntimeAway(launcher)
+	}
+	if runtimeSessionID(id) {
+		if label, pending := n.runtimes.unlistedAssistantRuntime(); pending {
+			return errRuntimeAway(cmp.Or(rl, label, "runtime"))
+		}
+		if rtID, pending := n.pendingAutoCompanionRuntime(id); pending {
+			return errRuntimeAway(cmp.Or(rl, rtID, "runtime"))
+		}
+	}
+	return fmt.Errorf("conversation %s is gone", id)
+}
+
 type sendTraceKey struct{}
 
 type assistantSendTiming struct {
