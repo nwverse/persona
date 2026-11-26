@@ -16,6 +16,12 @@ Build closed-task banner links with the router's `href` and handle clicks with `
 in-app, modified clicks retain native navigation, and native destinations retain the reverse-proxy base path.
 Test the rendered anchor and its click behavior at both the root and a nested base path, not only the router helper.
 
+## Reopening a model picker can reuse the computer's catalog (#15481)
+
+The browser's repeat read and the computer's forced discovery are separate. Use the opening read for fast results
+and send `refresh=1` for an explicit refresh or Retry. Keep the previous list visible while the request runs, and
+verify that a changed catalog replaces its rows in the same opening.
+
 ## A text shimmer needs an opaque source color (#15367)
 
 Setting `color: transparent` also clears any gradient stop that reads `currentColor`.

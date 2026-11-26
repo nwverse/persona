@@ -984,14 +984,17 @@ function foldedRow(item: NeedsYouItem): { title: string; line?: string; kicker: 
 /** What a Needs you row's open state is kept under: its key and the round it asks, so the same task or Agent asking
  *  again comes back folded while a row that only blinks out (hidden for a moment, then restored) keeps its state. */
 function openKey(item: NeedsYouItem): string {
-  if (item.kind === "task") return `${item.key}@${item.todo.supervision?.reviews?.at(-1)?.at || item.todo.decision_review?.review_at || openAsk(item.todo)?.asked_at || item.asks.map((ix) => ix.id).join(",")}`;
+  if (item.kind === "task") {
+    const round = item.todo.supervision?.reviews?.at(-1)?.at || item.todo.decision_review?.review_at || openAsk(item.todo)?.asked_at || item.asks.map((ix) => ix.id).join(",");
+    return `${item.key}@${round}${item.steps?.map(openKey).join(",") ?? ""}`;
+  }
   if (item.kind === "agent") return `${item.key}@${item.asks.map((ix) => ix.id).join(",")}`;
   return item.key;
 }
 
 /** A Needs you row. Open the folded line to answer in place; its expanded title opens the asking Agent (or the task
  *  for a task-level decision), while the chevron folds it again. */
-function NeedsYouRow({ item, open, onToggle }: { item: NeedsYouItem; open: boolean; onToggle: () => void }) {
+function NeedsYouRow({ item, open, onToggle, onOpenChat }: { item: NeedsYouItem; open: boolean; onToggle: () => void; onOpenChat: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const opened = useRef(open);
   useEffect(() => {
@@ -1013,16 +1016,21 @@ function NeedsYouRow({ item, open, onToggle }: { item: NeedsYouItem; open: boole
     const stop = window.setTimeout(() => growing.disconnect(), 1000);
     return () => { window.clearTimeout(stop); growing.disconnect(); };
   }, [open]);
-  const folded = foldedRow(item);
+  const steps = item.kind === "task" ? item.steps : undefined;
+  const firstStep = steps?.[0];
+  const showStep = firstStep && item.kind === "task" && !item.asks.length && !openAsk(item.todo) && !isDecision(item.todo);
+  const shown = showStep ? firstStep : item;
+  const folded = foldedRow(shown) ?? (steps?.length && shown.kind === "task" ?
+    { title: shown.todo.title, kicker: stateName("needs_you") } : undefined);
   // Whether the To-dos page counts this to-do as open (#3331): no attribute on rows that are no to-do. The chip badge
   // is summed from this same flag, so the trays and the header tell one number.
   const countsOpenAttr = item.kind === "task" ? { "data-counts-open": item.countsOpen ? "true" : "false" } : {};
-  if (!folded) return <NeedsYouBody item={item} />;
+  if (!folded) return <NeedsYouBody item={item} onOpenChat={onOpenChat} />;
   const openTitle = item.kind === "agent" ? () => openAgent(item.session.machine_id, item.session.session_id)
-    : item.kind === "task" ? () => {
-      const ask = item.asks[0];
-      if (ask && reviewState(item.todo) !== "user_check") openAgent(ask.machine_id, ask.session_id);
-      else openTask(item.todo.id);
+    : shown.kind === "task" ? () => {
+      const ask = shown.asks[0];
+      if (ask && !showStep && reviewState(shown.todo) !== "user_check") openAgent(ask.machine_id, ask.session_id);
+      else openTask(shown.todo.id);
     } : undefined;
   const label = <>
     <StatusMark state="needs_you" />
@@ -1059,7 +1067,13 @@ function NeedsYouRow({ item, open, onToggle }: { item: NeedsYouItem; open: boole
   return (
     <div ref={ref} data-needs-row={item.key} data-needs-open {...countsOpenAttr} className="flex scroll-m-2 flex-col gap-1">
       {head}
-      <NeedsYouBody item={item} nested />
+      <NeedsYouBody item={shown} nested onOpenChat={onOpenChat} />
+      {steps?.filter((step) => step !== shown).map((step) => (
+        <div key={openKey(step)} className="flex min-w-0 flex-col gap-1">
+          <OpenEntry title={step.todo.title} onOpen={() => openTask(step.todo.id)} />
+          <NeedsYouBody item={step} nested onOpenChat={onOpenChat} />
+        </div>
+      ))}
     </div>
   );
 }
@@ -1076,7 +1090,7 @@ function OpenEntry({ title, onOpen }: { title: string; onOpen: () => void }) {
 }
 
 /** The whole card of a Needs you row, or the one line it is. `nested`: inside its opened row, which carries the row's key. */
-export function NeedsYouBody({ item, nested = false }: { item: NeedsYouItem; nested?: boolean }) {
+export function NeedsYouBody({ item, nested = false, onOpenChat }: { item: NeedsYouItem; nested?: boolean; onOpenChat?: () => void }) {
   const rowKey = nested ? undefined : item.key;
   if (item.kind === "plan") return <div><PlanCard plan={item.plan} /><OpenEntry title={t("assistant-tasks.needs_group_another")} onOpen={() => navigate(conversationPage(item.plan.conversation, undefined, item.plan.manager))} /></div>;
   if (item.kind === "message") return <MessageCard item={item.item} />;
@@ -1098,7 +1112,7 @@ export function NeedsYouBody({ item, nested = false }: { item: NeedsYouItem; nes
   }
   return (
     <Suspense fallback={<div data-needs-row={rowKey} {...taskOpenAttr} className={cx("truncate rounded-control px-3 py-2 text-sm", item.status === "failed" ? "bg-danger-wash" : "bg-field")}>{item.todo.title}</div>}>
-      <NeedsYouPart task={item.todo} status={item.status} rowKey={rowKey} hideTitle={nested} countsOpenAttr={taskOpenAttr} />
+      <NeedsYouPart task={item.todo} status={item.status} rowKey={rowKey} hideTitle={nested} countsOpenAttr={taskOpenAttr} onOpenChat={onOpenChat} />
     </Suspense>
   );
 }
@@ -1284,6 +1298,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
     setTray(null);
     entry?.focus();
   };
+  const closeTray = () => setTray(null);
   return (
     // shrinks with the dock (ChatView's DOCK_MAX): an open tray gives up its height and scrolls inside, instead of
     // standing taller than the dock and leaving its bottom (a card's answer row) and the entries under the composer;
@@ -1320,13 +1335,13 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
             {!entries.parked.length && <p className="px-3 py-3 text-sm text-ink-2">{t("assistant-tasks.tray_empty_parked")}</p>}
           </div>}
           {tray === "needs" && <div className="flex flex-col gap-2 p-2">
-            {asking.map((item) => <NeedsYouRow key={item.key} item={item} open={openRows.has(openKey(item))} onToggle={() => toggleRow(openKey(item))} />)}
+            {asking.map((item) => <NeedsYouRow key={item.key} item={item} open={openRows.has(openKey(item))} onToggle={() => toggleRow(openKey(item))} onOpenChat={closeTray} />)}
             {countedOwnAsks.map((ix) => <OwnAskRow key={ix.id} ix={ix} onOpen={() => openOwn(ix.id)} />)}
-            {rest.map((item) => <NeedsYouRow key={item.key} item={item} open={openRows.has(openKey(item))} onToggle={() => toggleRow(openKey(item))} />)}
+            {rest.map((item) => <NeedsYouRow key={item.key} item={item} open={openRows.has(openKey(item))} onToggle={() => toggleRow(openKey(item))} onOpenChat={closeTray} />)}
             {groups.slice(1).map((group) => (
               <section key={group.supervisor} data-needs-supervisor={group.supervisor} aria-label={supervisorTitle(group.supervisor)} className="flex flex-col gap-2">
                 <h3 className="truncate px-1 pt-1 text-xs text-ink-2">{supervisorTitle(group.supervisor)}</h3>
-                {[...group.items.filter(isAsking), ...group.items.filter((item) => !isAsking(item))].map((item) => <NeedsYouRow key={item.key} item={item} open={openRows.has(openKey(item))} onToggle={() => toggleRow(openKey(item))} />)}
+                {[...group.items.filter(isAsking), ...group.items.filter((item) => !isAsking(item))].map((item) => <NeedsYouRow key={item.key} item={item} open={openRows.has(openKey(item))} onToggle={() => toggleRow(openKey(item))} onOpenChat={closeTray} />)}
               </section>
             ))}
             {!counts.needs && <p className="px-1 py-2 text-sm text-ink-2">{t("assistant-tasks.tray_empty_pending")}</p>}
