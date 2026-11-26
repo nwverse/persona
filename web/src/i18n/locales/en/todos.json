@@ -449,5 +449,17 @@
   "active_blocker_kind_owner_decision": "Decision needed",
   "active_blocker_kind_other": "Blocker",
   "active_blocker_attempts_one": "{count} retry",
-  "active_blocker_attempts_other": "{count} retries"
+  "active_blocker_attempts_other": "{count} retries",
+  "active_blocker_add_pr": "Wait on PR",
+  "active_blocker_pr_placeholder": "https://github.com/org/repo/pull/123",
+  "active_blocker_pr_input_aria": "External pull request URL",
+  "active_blocker_pr_submit": "Add",
+  "active_blocker_pr_cancel": "Cancel",
+  "active_blocker_pr_url_invalid": "Enter a valid https:// pull request URL.",
+  "active_blocker_added": "External PR blocker added",
+  "active_blocker_add_failed": "Couldn't add blocker: {error}",
+  "active_blocker_cancel": "Remove blocker",
+  "active_blocker_cancel_aria": "Remove blocker {target}",
+  "active_blocker_cancelled": "Blocker removed",
+  "active_blocker_cancel_failed": "Couldn't remove blocker: {error}"
 }
