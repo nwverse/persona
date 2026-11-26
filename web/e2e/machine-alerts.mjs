@@ -94,7 +94,8 @@ async function shot(page, name) {
 }
 
 async function sheetFor(page, machine, alert) {
-  await card(page, machine).locator(`[data-alert=${alert}]`).click();
+  if (alert === "disk") await card(page, machine).getByTestId("disk-details").click();
+  else await card(page, machine).locator(`[data-alert=${alert}]`).click();
   await page.waitForSelector(`[data-testid=alert-sheet][data-kind=${alert}]`, { timeout: 10_000 });
 }
 

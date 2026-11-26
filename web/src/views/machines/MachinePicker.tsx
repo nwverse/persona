@@ -3,17 +3,23 @@ import { t } from "../../i18n";
 import type { Machine } from "../../lib/types";
 import { fieldClass } from "../assistant/parts";
 
-export interface MachineToolProps {
+interface PickerProps {
   machines: readonly Machine[];
   initialMachineId?: string;
   selectedMid?: string;
   onSelectMachine?: (mid: string) => void;
 }
 
-/** The Machines page owns the choice across tools. A standalone panel owns its own choice. */
-export function MachineTool({ machines, initialMachineId, selectedMid, onSelectMachine, children }: MachineToolProps & {
-  children: (machine: Machine | undefined) => ReactNode;
-}) {
+export type MachineToolProps = PickerProps | { machine: Machine; initialMachineId?: string };
+type RenderTool = (machine: Machine | undefined) => ReactNode;
+
+/** A routed tool receives exactly its computer. Standalone panels still offer the picker. */
+export function MachineTool(props: MachineToolProps & { children: RenderTool }) {
+  if ("machine" in props) return <Fragment key={props.machine.id}>{props.children(props.machine)}</Fragment>;
+  return <StandaloneTool {...props} />;
+}
+
+function StandaloneTool({ machines, initialMachineId, selectedMid, onSelectMachine, children }: PickerProps & { children: RenderTool }) {
   const [localMid, setLocalMid] = useState(initialMachineId);
   const requested = selectedMid ?? localMid;
   const select = onSelectMachine ?? setLocalMid;
