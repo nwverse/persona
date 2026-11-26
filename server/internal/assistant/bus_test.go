@@ -28,6 +28,9 @@ func TestRoutesAreTheWireOnes(t *testing.T) {
 	needsLarkLayer(t)
 	s := newTestService(t, newFakeHub())
 	got, want := s.Routes(), slices.Concat(assistantwire.Routes, assistantwire.InboxRoutes)
+	if !s.briefingOn() {
+		want = slices.DeleteFunc(want, func(r string) bool { return r == "POST /api/v1/later/{id}/handled" })
+	}
 	if !s.recordingOn() { // the recording module's routes are served only with it (recording.go)
 		want = slices.DeleteFunc(want, func(r string) bool {
 			// Stored photos' list and images are the core's own routes (kb_recording_media.go): they stay.

@@ -59,6 +59,7 @@ type InboxPort interface {
 
 // LaterPort reads questions Agents left to wait for the next briefing.
 type LaterPort interface {
+	Handle(ctx context.Context, id string) (bool, error)
 	Rows(ctx context.Context, lang, web string, now time.Time, limit int) ([]BriefBoardRow, int)
 }
 

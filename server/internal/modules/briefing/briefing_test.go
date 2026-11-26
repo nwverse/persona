@@ -221,6 +221,7 @@ type fakeLater struct {
 	total int
 }
 
+func (f *fakeLater) Handle(context.Context, string) (bool, error) { return false, nil }
 func (f *fakeLater) Rows(context.Context, string, string, time.Time, int) ([]modapi.BriefBoardRow, int) {
 	return f.rows, f.total
 }

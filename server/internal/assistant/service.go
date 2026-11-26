@@ -519,7 +519,7 @@ func New(o Options) *Service {
 	s.taskRoutes()
 	s.viewActionRoutes()
 	s.todayRoutes()
-	s.briefRoutes()
+	s.todoAcceptRoute()
 	s.todoRoutes()
 	s.agentRoutes()
 	s.sessionReviewRoutes()

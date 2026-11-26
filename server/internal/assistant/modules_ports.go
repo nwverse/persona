@@ -305,6 +305,10 @@ func toBriefInboxSignals(items []InboxItem) []modapi.BriefInboxSignal {
 
 type briefLaterPort struct{ s *Service }
 
+func (p briefLaterPort) Handle(ctx context.Context, id string) (bool, error) {
+	return p.s.laterHandled(ctx, id, time.Now())
+}
+
 func (p briefLaterPort) Rows(ctx context.Context, lang, web string, now time.Time, limit int) ([]modapi.BriefBoardRow, int) {
 	rows, total := p.s.laterRows(ctx, i18n.Lang(lang), web, now, limit)
 	return toBriefBoardRows(rows), total

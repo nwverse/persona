@@ -13,8 +13,6 @@ import (
 
 // Scheduled routines use the loaded schedule facts runner, when present.
 
-const timeKeyLayout = time.RFC3339Nano
-
 type (
 	briefFacts    = modapi.BriefSnapshot
 	briefRun      = modapi.BriefRun
@@ -188,19 +186,4 @@ func (s *Service) briefAsked(f *briefFacts, shown []string) {
 		}
 	}
 	s.saveAcceptLocked(ctx)
-}
-
-// acceptTryFromBrief is the Accept button of a briefing card: it accepts task id when the round the button was made for
-// (askedAt, as the card wrote it) is the round that waits now. The card is not one of the ask's own messages, so
-// acceptTry cannot tell an old round's button from a current one by its message id. The errors are acceptTry's: a
-// decision whose recommendation did not reach the agent, or errAcceptStore (the asks cannot be read or the acceptance
-// saved), which is not "another round".
-func (s *Service) acceptTryFromBrief(ctx context.Context, id, askedAt string) (acceptResult, error) {
-	at, err := time.Parse(timeKeyLayout, askedAt)
-	if err != nil {
-		return acceptResult{}, nil
-	}
-	s.reviewDismissals.actions.acquire(id)
-	defer s.reviewDismissals.actions.release(id)
-	return s.acceptTryAsDismissalLocked(ctx, id, "", at, false)
 }

@@ -33,11 +33,15 @@ func (Module) Register(h modapi.Host) error {
 	if err := h.AddSetting(modapi.Setting{Key: SettingKey, Value: value, Check: check, Describe: describe}); err != nil {
 		return err
 	}
+	r := newRunner(h)
+	if err := h.AddHubRoute(handleLaterRoute, r.handleLater); err != nil {
+		return err
+	}
 	return h.AddScheduleFacts(modapi.ScheduleFacts{
 		Setting: SettingKey,
 		Waits: func(stored json.RawMessage) modapi.WaitRules {
 			return waitsOf(stored)
 		},
-		Runner: newRunner(h),
+		Runner: r,
 	})
 }

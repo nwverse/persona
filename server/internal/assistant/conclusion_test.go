@@ -387,7 +387,7 @@ func TestRecommendationThatCannotReachTheAgentIsNotTaken(t *testing.T) {
 	f.mu.Lock()
 	f.failSend = errors.New("node down")
 	f.mu.Unlock()
-	if ok, err := s.acceptTryFromBrief(ctx, todo.ID, a.AskedAt.UTC().Format(timeKeyLayout)); ok.taken || err == nil {
+	if ok, err := s.acceptReviewRound(ctx, todo.ID, a.AskedAt.UTC().Format(timeKeyLayout)); ok.taken || err == nil {
 		t.Fatalf("taken while the agent cannot be reached: %v %v", ok, err)
 	}
 	// The web button: 502 with the reason, not 409 "already handled" (the web app toasts it and the button works again).

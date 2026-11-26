@@ -26,6 +26,14 @@ const (
 	briefDayWhat    = 100
 )
 
+const feedBrief = modapi.FeedKindBrief
+
+type (
+	briefBody           = modapi.BriefBody
+	briefBodyRow        = modapi.BriefBodyRow
+	briefBodyPRFollowup = modapi.BriefPRFollowup
+)
+
 func (s *Service) briefModelText(f *briefFacts) string {
 	r, ok := s.briefingRunner()
 	if !ok {

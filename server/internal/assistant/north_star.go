@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/nwverse/persona/server/internal/modapi"
 	"net/http"
 	"os"
 	"path"
@@ -893,8 +894,8 @@ func signedPoints(d float64) string {
 }
 
 // body is the north star as a `brief` item says it.
-func (b briefNorthStar) body(lines []string) briefBodyNorthStar {
-	out := briefBodyNorthStar{Lines: lines}
+func (b briefNorthStar) body(lines []string) modapi.BriefBodyNorthStar {
+	out := modapi.BriefBodyNorthStar{Lines: lines}
 	if out.Lines == nil {
 		out.Lines = []string{}
 	}
