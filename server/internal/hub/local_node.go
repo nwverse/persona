@@ -7,11 +7,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
 
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/identity"
-	"github.com/nwverse/persona/server/internal/nodeupdate"
 	"github.com/nwverse/persona/server/internal/update"
 )
 
@@ -28,13 +26,17 @@ func residentProgram(binDir, path string) (string, string) {
 	switch name := filepath.Base(path); name {
 	case "personad", "persona-node":
 		// Only the fixed compatibility alias may be a symlink.
-		if info, err := os.Lstat(filepath.Join(binDir, name)); err == nil && info.Mode().IsRegular() {
-			return filepath.Join(binDir, name), name
+		target := filepath.Join(binDir, name)
+		if info, err := os.Lstat(target); err == nil && info.Mode().IsRegular() {
+			program := update.ProgramOf(target)
+			if program == name || program == "personad" && update.IsDeviceFile(target) {
+				return target, program
+			}
 		}
 	case compat.DaemonBinary:
 		target := resolvedPath(path)
 		if target == filepath.Join(binDir, "personad") || target == filepath.Join(binDir, compat.DaemonBinary) {
-			if info, err := os.Lstat(target); err == nil && info.Mode().IsRegular() {
+			if info, err := os.Lstat(target); err == nil && info.Mode().IsRegular() && update.ProgramOf(target) == "personad" {
 				return target, "personad"
 			}
 		}
@@ -45,8 +47,8 @@ func residentProgram(binDir, path string) (string, string) {
 // Only a package whose own checks match the confirmed build can replace a
 // local split node. The install never changes a service's program or wrapper.
 func prepareResidentTarget(ctx context.Context, path, program string, want *update.Manifest) error {
-	if err := update.CheckBinary(ctx, path, want); err != nil {
-		if program != "persona-node" {
+	if err := verifyResident(ctx, path, program, want); err != nil {
+		if !update.IsDeviceFile(path) {
 			return err
 		}
 		dir := identity.NodeBinaryDir()
@@ -64,23 +66,12 @@ func prepareResidentTarget(ctx context.Context, path, program string, want *upda
 		}
 		return update.InstallPrepared(path, pkg)
 	}
-	return checkResidentProgram(ctx, path, program, want.Version)
+	return nil
 }
 
 func verifyResident(ctx context.Context, path, program string, want *update.Manifest) error {
-	if err := update.CheckBinary(ctx, path, want); err != nil {
-		return err
+	if update.ProgramOf(path) != program {
+		return errors.New("replacement does not match the resident node's program")
 	}
-	return checkResidentProgram(ctx, path, program, want.Version)
-}
-
-func checkResidentProgram(ctx context.Context, path, program, version string) error {
-	info, err := nodeupdate.RunCheck(ctx, path, nodeupdate.CheckLimits{FirstRun: time.Minute, Repeat: 5 * time.Second})
-	if err != nil {
-		return err
-	}
-	if info.Program != program || info.Version != version || info.OS != runtime.GOOS || info.Arch != runtime.GOARCH || !info.ResidentHandover {
-		return errors.New("replacement does not match the resident node's program, build or handover support")
-	}
-	return nil
+	return update.CheckBinary(ctx, path, want)
 }

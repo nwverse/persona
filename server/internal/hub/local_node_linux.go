@@ -103,11 +103,14 @@ func reloadResidentPID(ctx context.Context, root, target, program string, pid in
 	if !runningResident(base, root) {
 		return nil
 	}
+	if update.ProgramOf(running) != program {
+		return nil // preserve the program the resident process is using
+	}
 	before, err := os.Stat(running)
 	if err != nil {
 		return nil
 	}
-	if program == "personad" {
+	if !update.IsDeviceFile(target) {
 		if current, err := os.Stat(target); err == nil && os.SameFile(before, current) {
 			return nil
 		}
