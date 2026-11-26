@@ -877,7 +877,7 @@ type assistantView struct {
 	MainBackgroundFolded    bool `json:"main_background_folded"`
 	FoldRoutineRelayReplies bool `json:"fold_routine_relay_replies"`
 	// RecentTaskChats is in effect, like DoneNeedsDelivery.
-	RecentTaskChats bool     `json:"recent_task_chats"`
+	RecentTaskChats              bool     `json:"recent_task_chats"`
 	WorkGuide                    bool     `json:"work_guide"`
 	TodosV2                      bool     `json:"todos_v2"`
 	TodosV2AutoSeen              string   `json:"todos_v2_auto_seen"`
@@ -885,7 +885,7 @@ type assistantView struct {
 	TodosV2CanWaitSLAHours       int      `json:"todos_v2_can_wait_sla_hours"`
 	TodosV2FoldChildren          bool     `json:"todos_v2_fold_children"`
 	IntegrationsV2               bool     `json:"integrations_v2"`
-	LabsSeen        []string `json:"labs_seen"`
+	LabsSeen                     []string `json:"labs_seen"`
 	// MeetingAttendanceDefault is in effect (off until changed).
 	MeetingAttendanceDefault      string   `json:"meeting_attendance_default"`
 	MeetingTranscriptionDefault   string   `json:"meeting_transcription_default"`
@@ -954,10 +954,10 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		Dashboards:                  v.Dashboards != nil && *v.Dashboards,
 		MeetingTranscriptionDefault: meetingTranscriptionDefaultOf(v), MeetingGlossary: meetingGlossaryOf(v),
 		MeetingTranscriptionExtension: meetingTranscriptionExtensionOf(v), MeetingTranscriptionReady: s.transcriptionReadyNow(),
-		TaskWorkspacePreference: s.taskWorkspacePreference(ctx),
-		ReadonlyMode:            readonlyModeOf(v),
-		MainBackgroundFolded:    quietOn(v.MainBackgroundFolded),
-		FoldRoutineRelayReplies: v.foldRoutineRelayReplies(),
+		TaskWorkspacePreference:      s.taskWorkspacePreference(ctx),
+		ReadonlyMode:                 readonlyModeOf(v),
+		MainBackgroundFolded:         quietOn(v.MainBackgroundFolded),
+		FoldRoutineRelayReplies:      v.foldRoutineRelayReplies(),
 		WorkGuide:                    v.workGuideOn(),
 		TodosV2:                      v.todosV2On(),
 		TodosV2AutoSeen:              v.todosV2AutoSeenMode(),
@@ -965,10 +965,10 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		TodosV2CanWaitSLAHours:       v.todosV2CanWaitSLAHours(),
 		TodosV2FoldChildren:          v.todosV2FoldChildrenOn(),
 		IntegrationsV2:               v.integrationsV2On(),
-		LabsSeen:                append([]string{}, v.LabsSeen...),
-		RecentTaskChats:         v.RecentTaskChats != nil && *v.RecentTaskChats,
-		DeliveryGate:            deliveryGateOf(v),
-		DoneNeedsDelivery:       deliveryGateOf(v) == deliveryGateLive, IdleCloseHours: int(s.idleCloseAfter(ctx) / time.Hour),
+		LabsSeen:                     append([]string{}, v.LabsSeen...),
+		RecentTaskChats:              v.RecentTaskChats != nil && *v.RecentTaskChats,
+		DeliveryGate:                 deliveryGateOf(v),
+		DoneNeedsDelivery:            deliveryGateOf(v) == deliveryGateLive, IdleCloseHours: int(s.idleCloseAfter(ctx) / time.Hour),
 		ArchiveClosedDays:            int(s.archiveClosedAfter(ctx) / (24 * time.Hour)),
 		ReviewSamplePercent:          s.reviewSamplePercent(ctx),
 		InterjectBackground:          v.InterjectBackground != nil && *v.InterjectBackground,

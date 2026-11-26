@@ -426,5 +426,16 @@
   "item_type_updated": "{type}に切り替えました",
   "item_type_update_failed": "種類を更新できませんでした：{error}",
   "detail_mark_unread": "未読に戻す",
-  "detail_marked_unread": "未読に戻しました"
+  "detail_marked_unread": "未読に戻しました",
+  "direction_include_children": "サブタスク {count} 件も一緒に移動",
+  "active_blockers_region": "ブロッカー依存",
+  "active_blockers_title": "ブロッカー依存 · {count}",
+  "active_blocker_kind_external_pr": "外部 PR",
+  "active_blocker_kind_todo_done": "前提タスク",
+  "active_blocker_kind_todo_stage": "ステージ依存",
+  "active_blocker_kind_merge_train": "マージキュー",
+  "active_blocker_kind_write_conflict": "書き込み競合",
+  "active_blocker_kind_owner_decision": "判断待ち",
+  "active_blocker_kind_other": "ブロッカー",
+  "active_blocker_attempts": "再試行 {count} 回"
 }
