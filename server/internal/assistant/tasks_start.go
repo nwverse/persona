@@ -606,7 +606,7 @@ func (s *Service) startRemedying(ctx context.Context, t Todo) bool {
 // example, an aged-out Antigravity session still on disk beyond the recent list cap, an away runtime, a known
 // no_transcript session, or an unreachable computer) stays fail-closed as not stopped.
 func (s *Service) todoAgentStopped(ctx context.Context, a TodoAgent) bool {
-	stopped, listed, listErr := s.todoAgentStopPresence(ctx, a)
+	_, stopped, listed, listErr := s.todoAgentStopPresence(ctx, a)
 	if stopped || listed || listErr != nil {
 		return stopped
 	}
@@ -614,29 +614,40 @@ func (s *Service) todoAgentStopped(ctx context.Context, a TodoAgent) bool {
 }
 
 // todoAgentStopPresence checks a's computer session list once, matching by SessionID or Aliases so an Antigravity
-// conversation running in a terminal pane under a pane row is still seen as live. Any live matching row wins.
-func (s *Service) todoAgentStopPresence(ctx context.Context, a TodoAgent) (stopped, listed bool, listErr error) {
+// conversation running in a terminal pane under a pane row is still seen as live. Any live matching row wins, and among
+// live matches a terminal-backed row takes precedence so continuation never routes a terminal pane to session.close.
+func (s *Service) todoAgentStopPresence(ctx context.Context, a TodoAgent) (row proto.Session, stopped, listed bool, listErr error) {
 	list, err := s.sessions(ctx, a.MachineID)
 	if errors.Is(err, ErrNoDevice) {
-		return true, false, nil
+		return proto.Session{}, true, false, nil
 	}
 	if err != nil {
-		return false, false, err
+		return proto.Session{}, false, false, err
 	}
 	live := false
+	liveHasTerminal := false
 	for _, c := range list {
 		if !sessionNamesID(c, a.SessionID) {
 			continue
 		}
-		listed = true
-		if !(c.Archived || switchStopped(c)) {
+		cLive := !(c.Archived || switchStopped(c))
+		cTerm := c.PaneID != "" || (c.Capabilities != nil && c.Capabilities.Terminal)
+		if !listed {
+			row = c
+			listed = true
+		}
+		if cLive {
+			if !live || (cTerm && !liveHasTerminal) {
+				row = c
+				liveHasTerminal = cTerm
+			}
 			live = true
 		}
 	}
 	if !listed {
-		return false, false, nil
+		return proto.Session{}, false, false, nil
 	}
-	return !live, true, nil
+	return row, !live, true, nil
 }
 
 // sessionNamesID reports whether row is id or carries id in its aliases.
@@ -761,6 +772,76 @@ func (s *Service) takeTodoForTask(ctx context.Context, planID, conversation stri
 	return formatTodo(t), nil
 }
 
+// runtimeCanClose reports whether c is a non-terminal runtime session that explicitly advertises session.close.
+// Terminal-backed sessions (including pi/omp inside a terminal pane) and assistant conversations never match.
+func runtimeCanClose(c proto.Session) bool {
+	return c.SourceKind == proto.SourceRuntime &&
+		!c.Assistant &&
+		c.PaneID == "" &&
+		c.Capabilities != nil &&
+		!c.Capabilities.Terminal &&
+		c.Capabilities.Close != nil && *c.Capabilities.Close
+}
+
+// runtimeCanInterruptOnly reports whether c is a non-terminal runtime session without session.close
+// (such as Antigravity Desktop, DSH, Managed Agents, or opencode TUI) whose execution is controlled by session.interrupt.
+func runtimeCanInterruptOnly(c proto.Session) bool {
+	return c.SourceKind == proto.SourceRuntime &&
+		!c.Assistant &&
+		c.PaneID == "" &&
+		c.Capabilities != nil &&
+		!c.Capabilities.Terminal &&
+		(c.Capabilities.Close == nil || !*c.Capabilities.Close) &&
+		c.Capabilities.Interrupt
+}
+
+// runtimeSessionBusy reports whether a runtime session has active or queued work that must be interrupted before
+// releasing its to-do link.
+func runtimeSessionBusy(c proto.Session) bool {
+	return c.Status == proto.StatusWorking ||
+		c.Status == proto.StatusBlocked ||
+		c.Starting ||
+		c.State == proto.StateWorking ||
+		c.State == proto.StateNeedsYou ||
+		c.BackgroundWorking ||
+		len(c.Background) > 0 ||
+		len(c.Queued) > 0
+}
+
+// stopContinuedAgent stops one active predecessor Agent during a task_plan(continues=...) handoff (#16231).
+// Terminal-backed Agents always use session.stop so their terminal pane stays open (#4754).
+// Non-terminal runtime sessions use their declared lifecycle control: session.close when Capabilities.Close is true
+// (e.g. native Antigravity companion, Paseo, Opencode companion, Grok, Orca, T3Code, Cindy, Pi Web), or
+// session.interrupt when Close is unavailable and Interrupt is true while busy (e.g. Antigravity Desktop, DSH,
+// Managed Agents, Opencode TUI). When an unlisted non-terminal session answers no_terminal to session.stop,
+// session.close is attempted only if the live session list confirmed no terminal pane exists for it.
+func (s *Service) stopContinuedAgent(ctx context.Context, a TodoAgent, sess proto.Session, listed bool, listErr error) error {
+	targetID := a.SessionID
+	if listed && sess.SessionID != "" {
+		targetID = sess.SessionID
+	}
+	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	switch {
+	case listErr == nil && runtimeCanClose(sess):
+		return s.call(cctx, a.MachineID, "session.close", map[string]any{"session_id": targetID}, nil)
+	case listed && runtimeCanInterruptOnly(sess):
+		if !runtimeSessionBusy(sess) {
+			return nil
+		}
+		return s.call(cctx, a.MachineID, "session.interrupt", map[string]any{"session_id": targetID}, nil)
+	default:
+		err := s.call(cctx, a.MachineID, deviceSessionStop, map[string]any{"session_id": targetID}, nil)
+		var re *rpc.Error
+		if listErr == nil && !listed && !sess.Assistant && sess.PaneID == "" &&
+			(sess.Capabilities == nil || !sess.Capabilities.Terminal) &&
+			errors.As(err, &re) && re.Code == "no_terminal" {
+			return s.call(cctx, a.MachineID, "session.close", map[string]any{"session_id": targetID}, nil)
+		}
+		return err
+	}
+}
+
 // stopContinuedTaskAgents is an explicit handoff, not the idle task-closure pass: stop the old process but keep its
 // terminal and history. A refusal leaves the handoff failed on this to-do, with no replacement Agent.
 func (s *Service) stopContinuedTaskAgents(ctx context.Context, todo Todo) ([]TodoAgent, error) {
@@ -789,8 +870,13 @@ func (s *Service) stopContinuedTaskAgents(ctx context.Context, todo Todo) ([]Tod
 		} else if c, ok := s.session(ctx, a.MachineID, a.SessionID); ok {
 			sess, hasSess = c, true
 		}
+		liveRow, isStopped, listed, listErr := s.todoAgentStopPresence(ctx, a)
 		if !hasSess {
-			sess = proto.Session{MachineID: a.MachineID, SessionID: a.SessionID}
+			if listed {
+				sess, hasSess = liveRow, true
+			} else {
+				sess = proto.Session{MachineID: a.MachineID, SessionID: a.SessionID}
+			}
 		}
 		if refused, why := sessionSafetyRefusal(sess); refused {
 			return nil, handoffBlockerError{
@@ -798,13 +884,20 @@ func (s *Service) stopContinuedTaskAgents(ctx context.Context, todo Todo) ([]Tod
 				msg:  fmt.Sprintf("continues: agent %s/%s on to-do %s is blocked by a provider safety refusal (%s); safety refusals remain recorded blockers", a.MachineID, short(a.SessionID), todo.ID, why),
 			}
 		}
-		if s.sessionUnresolvedApproval(sess) {
+		if listed {
+			if refused, why := sessionSafetyRefusal(liveRow); refused {
+				return nil, handoffBlockerError{
+					code: "safety_refusal",
+					msg:  fmt.Sprintf("continues: agent %s/%s on to-do %s is blocked by a provider safety refusal (%s); safety refusals remain recorded blockers", a.MachineID, short(a.SessionID), todo.ID, why),
+				}
+			}
+		}
+		if s.sessionUnresolvedApproval(sess) || (listed && s.sessionUnresolvedApproval(liveRow)) {
 			return nil, handoffBlockerError{
 				code: "unresolved_approval",
 				msg:  fmt.Sprintf("continues: agent %s/%s on to-do %s has an unresolved approval or question; resolve it first", a.MachineID, short(a.SessionID), todo.ID),
 			}
 		}
-		isStopped, listed, listErr := s.todoAgentStopPresence(ctx, a)
 		liveListed := listed && !isStopped
 		if !isStopped && !listed && listErr == nil && s.todoAgentConfirmedMissing(ctx, a) {
 			s.logf("continues: agent %s/%s on to-do %s is confirmed missing on its computer; letting its stale link go", a.MachineID, a.SessionID, todo.ID)
@@ -812,10 +905,11 @@ func (s *Service) stopContinuedTaskAgents(ctx context.Context, todo Todo) ([]Tod
 			isStopped = true
 		}
 		if !isStopped {
-			cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-			err := s.call(cctx, a.MachineID, deviceSessionStop, map[string]any{"session_id": a.SessionID}, nil)
-			cancel()
-			if err != nil {
+			target := sess
+			if listed {
+				target = liveRow
+			}
+			if err := s.stopContinuedAgent(ctx, a, target, listed, listErr); err != nil {
 				if !liveListed && sessionNotFound(err) {
 					s.logf("continues: agent %s/%s on to-do %s is no longer on its computer; letting its stale link go: %v", a.MachineID, a.SessionID, todo.ID, err)
 					s.endSessionCards(a.MachineID, a.SessionID)

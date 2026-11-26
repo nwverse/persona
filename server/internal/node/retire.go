@@ -76,6 +76,9 @@ func (n *Node) retire(ctx context.Context, id string, closeTerminal, afterExit b
 	}
 	release := n.recovery.lock(id)
 	defer release()
+	if err := n.resolveStopRuntime(ctx, id); err != nil {
+		return false, err
+	}
 	unlock, _, ok, err := n.stoppable(id, true)
 	if err != nil {
 		return false, err
@@ -227,20 +230,47 @@ func (n *Node) stop(ctx context.Context, id string, retire bool) (stopped bool, 
 	return n.stopWithCause(ctx, id, retire, proto.StopUser)
 }
 
+// resolveStopRuntime probes connected runtimes for an unlisted runtime-shaped session ID (e.g. an older agy-<uuid>,
+// session-<uuid>, or paseo-... row that dropped off its runtime's recent list) when this machine has no local terminal
+// or transcript session for it. If a runtime owns it, runtimeFor claims it so stoppable classifies it as no_terminal /
+// not_retirable instead of invalid session id; if the owning-prefix runtime confirms it does not exist, that typed
+// not_found error is returned.
+func (n *Node) resolveStopRuntime(ctx context.Context, id string) error {
+	if h, _, known := n.runtimes.belongs(id); h != nil || known {
+		return nil
+	}
+	if n.hasOwnSession(id) || n.agyPaneRow(id) || !runtimeIDRe.MatchString(id) {
+		return nil
+	}
+	if _, _, held := n.agyOpenIn(id); held {
+		return nil
+	}
+	_, err := n.runtimeFor(ctx, "session.interrupt", id)
+	return err
+}
+
 func (n *Node) stopWithCause(ctx context.Context, id string, retire bool, cause proto.StopCause) (stopped bool, err error) {
 	release := n.recovery.lock(id)
 	defer release()
+	if err := n.resolveStopRuntime(ctx, id); err != nil {
+		return false, err
+	}
+	unlock, a, ok, err := n.stoppable(id, retire)
+	if err != nil {
+		return false, err
+	}
+	if ok {
+		defer unlock()
+	}
 	if cause == proto.StopUser {
 		if err := n.saveStopCause(ctx, id, proto.StopUser); err != nil {
 			return false, err
 		}
 		defer n.state.stopped(id, cause)
 	}
-	unlock, a, ok, err := n.stoppable(id, retire)
-	if err != nil || !ok {
-		return false, err
+	if !ok {
+		return false, nil
 	}
-	defer unlock()
 	if cause != proto.StopUser {
 		n.state.stopped(id, proto.StopUnknown) // An unconfirmed/failed automatic stop never grants recovery.
 	}
@@ -254,22 +284,26 @@ func (n *Node) stopWithCause(ctx context.Context, id string, retire bool, cause 
 // stoppable checks that session id's agent may be stopped now (retire: only a still one) and holds its typing lock
 // (unlock releases it) when ok; ok false with no error when it is not running.
 func (n *Node) stoppable(id string, retire bool) (unlock func(), a host.Agent, ok bool, err error) {
-	if !validID(id) && !n.agyPaneRow(id) {
-		return nil, a, false, fmt.Errorf("invalid session id %q", id)
-	}
 	no := func(code, why string) (func(), host.Agent, bool, error) {
 		if retire {
 			code = notRetirable // what hubs before #4754 know
 		}
 		return nil, a, false, refusal(code, why, nil)
 	}
+	// Classify assistant, runtime-owned, external Codex, and terminal-only sessions before checking the Claude hex ID
+	// format, so non-hex runtime session IDs (agy-<uuid>, session-<uuid>, paseo-..., etc.) answer no_terminal /
+	// not_retirable instead of invalid session id (#16231).
 	_, terminalOnly := n.terminalOnly(id)
 	switch h, _, known := n.runtimes.belongs(id); {
 	case n.isAssistantSession(id) || n.runtimeAssistant(id):
 		return no(notRetirable, "assistant conversations are not stopped")
 	case n.externalCodex(id) || h != nil || known || terminalOnly:
 		return no(noTerminal, "this session belongs to another tool")
-	case n.restarting(id):
+	}
+	if !validID(id) && !n.agyPaneRow(id) {
+		return nil, a, false, fmt.Errorf("invalid session id %q", id)
+	}
+	if n.restarting(id) {
 		// Refused at once rather than after the lock below, which a message carrying out a launcher switch holds for
 		// minutes: stopping the agent it starts then would leave the switch for nothing (launcher_switch.go).
 		return no(notRetirable, "still starting")
