@@ -421,7 +421,7 @@ func (d *DB) AcceptIdleConversationSwitch(ctx context.Context, machine, session,
 			return err
 		}
 		// No input carried the handoff: it stays for the conversation's next one (ConversationPendingHandoff, #14488).
-		if err := resolveConversationSwitch(ctx, tx, machine, session, operation, "accepted", "", settleIdleSwitch); err != nil {
+		if err := resolveConversationSwitch(ctx, tx, machine, session, operation, "accepted", "", switchSettlement{keepHandoff: true}); err != nil {
 			return err
 		}
 		accepted = true
@@ -442,7 +442,7 @@ func (d *DB) ResolveConversationSwitch(ctx context.Context, machine, session, op
 }
 
 func resolveConversationSwitchTx(ctx context.Context, tx pgx.Tx, machine, session, operation, outcome, reason string) error {
-	return resolveConversationSwitch(ctx, tx, machine, session, operation, outcome, reason, settleSwitch)
+	return resolveConversationSwitch(ctx, tx, machine, session, operation, outcome, reason, switchSettlement{})
 }
 
 // ResolveConversationPreparation applies a failed or unconfirmed preparation only while the operation still
@@ -452,17 +452,14 @@ func (d *DB) ResolveConversationPreparation(ctx context.Context, machine, sessio
 		return errors.New("invalid preparation outcome")
 	}
 	return conversationTransaction(ctx, d, func(tx pgx.Tx) error {
-		return resolveConversationSwitch(ctx, tx, machine, session, operation, outcome, reason, settlePreparation)
+		return resolveConversationSwitch(ctx, tx, machine, session, operation, outcome, reason, switchSettlement{preparationOnly: true})
 	})
 }
 
-type switchSettlement uint8
-
-const (
-	settleSwitch switchSettlement = iota
-	settleIdleSwitch
-	settlePreparation
-)
+type switchSettlement struct {
+	keepHandoff     bool
+	preparationOnly bool
+}
 
 // An idle acceptance keeps its handoff for the conversation's next input. Accepting a switch discards
 // the handoff an earlier idle acceptance kept for the newly retired source.
@@ -476,7 +473,7 @@ func resolveConversationSwitch(ctx context.Context, tx pgx.Tx, machine, session,
 	if err := tx.QueryRow(ctx, `SELECT source_segment,coalesce(target_segment,''),phase,expected_epoch FROM conversation_switches WHERE logical_machine=$1 AND logical_session=$2 AND operation_id=$3`, machine, session, operation).Scan(&source, &target, &phase, &expected); err != nil {
 		return err
 	}
-	if settlement == settlePreparation && (epoch != expected || phase != "preparing" && phase != "in_doubt") {
+	if settlement.preparationOnly && (epoch != expected || phase != "preparing" && phase != "in_doubt") {
 		return ErrConversationEpoch
 	}
 	if phase == outcome {
@@ -529,7 +526,7 @@ func resolveConversationSwitch(ctx context.Context, tx pgx.Tx, machine, session,
 			}
 		}
 	}
-	_, err := tx.Exec(ctx, `UPDATE conversation_switches SET phase=$4,error=$5,handoff=CASE WHEN $4 IN ('accepted','rejected') AND NOT $6::boolean THEN NULL ELSE handoff END,updated_at=now() WHERE logical_machine=$1 AND logical_session=$2 AND operation_id=$3`, machine, session, operation, outcome, reason, settlement == settleIdleSwitch)
+	_, err := tx.Exec(ctx, `UPDATE conversation_switches SET phase=$4,error=$5,handoff=CASE WHEN $4 IN ('accepted','rejected') AND NOT $6::boolean THEN NULL ELSE handoff END,updated_at=now() WHERE logical_machine=$1 AND logical_session=$2 AND operation_id=$3`, machine, session, operation, outcome, reason, settlement.keepHandoff)
 	return err
 }
 
