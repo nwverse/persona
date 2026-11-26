@@ -150,7 +150,7 @@ function backupSteps(p: HubDevelopmentProgress, builtinQuiesce?: boolean): strin
 }
 
 function PhaseSteps({ p, builtinQuiesce }: { p: HubDevelopmentProgress; builtinQuiesce?: boolean }) {
-  const steps = p.phase === "backing_up" ? backupSteps(p, builtinQuiesce) : [...phaseSteps[p.phase]];
+  const steps = p.steps?.length ? [...p.steps] : p.phase === "backing_up" ? backupSteps(p, builtinQuiesce) : [...phaseSteps[p.phase]];
   let active = steps.indexOf(p.step);
   if (active < 0) {
     // Keep all known steps and give a new step its own node so its telemetry remains visible.

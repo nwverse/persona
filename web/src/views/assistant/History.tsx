@@ -10,7 +10,7 @@ import { conversationChannel, useChannels } from "../../lib/channels";
 import { ChannelMark, OriginMark } from "../../ui/ChannelMark";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { api, credentialOwner, enc, errorText, subscribeCredentialOwner } from "../../lib/api";
-import { ago, stateOf } from "../../lib/format";
+import { ago, activityOf } from "../../lib/format";
 import { plainMarkdown } from "../../lib/plain-markdown";
 import { conversationPage } from "../../lib/conversation-page";
 import { href, navigate, onLinkClick, type Route } from "../../lib/router";
@@ -116,7 +116,13 @@ export function History({ origin, onToggleSidebar }: { origin?: string; onToggle
   // read again after a reconnect (#4954's rule, as the scheduled tasks are): always when the read failed while the hub
   // was away, else when the hub could not resume, as the pushes missed meanwhile are not replayed
   const failed = error !== "";
-  useEffect(() => onHubEvent("hello", (msg) => (failed || !isResumed(msg)) && void load()), [load, failed]);
+  useEffect(() => {
+    const offHello = onHubEvent("hello", (msg) => (failed || !isResumed(msg)) && void load());
+    const offDirs = onHubEvent("directions", () => document.visibilityState === "visible" && void load());
+    const onVis = () => { if (document.visibilityState === "visible") void load(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => { offHello(); offDirs(); document.removeEventListener("visibilitychange", onVis); };
+  }, [load, failed]);
   const [retrying, setRetrying] = useState(false);
   const [retried, setRetried] = useState(0);
   const retry = () => {
@@ -446,7 +452,7 @@ function ConvRow({ s, main, now, said, fit, onRename, onArchive, onEditTags }: {
   const builtIn = useStore((x) => isBackgroundSupervisor(x.assistant, s.session_id));
   const title = main ? t("sidebar.main_chat") : builtIn ? backgroundSupervisorTitle(s) : conversationTitle(s);
   const split = builtIn ? null : splitTitle(title);
-  const st = stateOf(s);
+  const st = activityOf(s);
   const flagged = st === "needs_you" || st === "working" || st === "unread";
   const last = plainMarkdown(s.last_text);
   // opened by the hub itself (#3758, #5195): what opened it, in the channel's place, as on its sidebar row; decided as the

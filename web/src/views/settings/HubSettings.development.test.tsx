@@ -224,6 +224,13 @@ it.each([true, false])("renders snapshot preflight with built-in pause %s", asyn
   expect(steps.some(([name]) => name === "resume_writers")).toBe(!builtin);
 });
 
+it("shows writers resumed while the hub packages programs", async () => {
+  const steps = ["preflight", "quiesce", "database_dump", "archive_files", "resume_writers", "archive_programs", "verify_snapshot"];
+  await mount("backing_up", { development_progress: { phase: "backing_up", steps, step: "archive_programs",
+    step_index: 6, step_total: 7, elapsed_seconds: 8 } });
+  expect(pipelineNodes("Phase steps")).toEqual(steps.map((name, i) => [name, i < 5 ? "done" : i === 5 ? "active" : "pending"]));
+});
+
 it("uses the named node before the index and keeps telemetry for an unknown step", async () => {
   const p = { phase: "building", step: "go_build", step_index: 1, step_total: 6, elapsed_seconds: 5,
     item_label: "personad (linux-amd64)", percent: 75, item_done: 3, item_total: 4 } as const;
