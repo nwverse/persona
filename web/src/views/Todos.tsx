@@ -1055,9 +1055,9 @@ function TodoListView({
 
   return (
     <div className="flex h-full flex-col bg-surface">
-      {/* Top Header */}
-      <header className="flex h-13 shrink-0 items-center justify-between border-b border-line bg-surface px-4 sm:px-6">
-        <div className="flex items-center gap-3">
+      {/* Top Header: every page's height and side padding (#16462), so the title and its line stay put between pages */}
+      <header className="flex h-14 shrink-0 items-center justify-between border-b border-line bg-surface px-3 sm:px-4">
+        <div className="flex items-center gap-2">
           {onToggleSidebar && <IconButton icon="sidebar" label={t("agents-agentsview.sidebar")} onClick={onToggleSidebar} className="lg:hidden" />}
           <div className={cx("flex gap-2", todosV2 ? "items-center" : "items-baseline")}>
             <h1 className="text-[16px] font-semibold whitespace-nowrap text-ink">{t("todos.title")}</h1>
