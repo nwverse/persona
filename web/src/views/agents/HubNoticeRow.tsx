@@ -1,14 +1,11 @@
 // Keep the status subscription live while Settings is visible. Load the row and its actions only for a notice.
-import { lazy, Suspense, useCallback, useEffect, useState } from "react";
-import { errorText } from "../../lib/api";
+import { lazy, Suspense, useEffect, useState } from "react";
 import {
-  dismissedHubNotices, dismissHubNotice, hubNotice, hubUpdate, setHubUpdateSettings, startHubUpdate,
+  dismissedHubNotices, hubNotice, hubUpdate,
   type HubUpdateStatus,
 } from "../../lib/hub-update";
 import { isResumed } from "../../lib/reconnect";
-import { navigate } from "../../lib/router";
 import { onHubEvent } from "../../lib/store";
-import { toast } from "../../ui/atoms";
 
 const HubNoticeView = lazy(() => import("./HubNoticeView"));
 
@@ -43,26 +40,11 @@ export function HubNoticeLine({ onNavigate }: { onNavigate?: () => void }) {
     };
   }, []);
 
-  const run = useCallback(async (call: () => Promise<HubUpdateStatus>) => {
-    try {
-      setStatus(await call());
-    } catch (e) {
-      toast(errorText(e), "error");
-    }
-  }, []);
-
   const notice = hubNotice(status, dismissed);
   if (!notice) return null;
   return (
     <Suspense fallback={null}>
-      <HubNoticeView
-        notice={notice}
-        onOpen={() => { navigate("/settings?tab=hub"); onNavigate?.(); }}
-        onAutoOff={() => void run(() => setHubUpdateSettings({ auto: false }))}
-        onSeen={() => void run(() => setHubUpdateSettings({ auto_notice_seen: true }))}
-        onUpdate={() => void run(() => startHubUpdate(false))}
-        onDismiss={(key) => setDismissed(dismissHubNotice(key))}
-      />
+      <HubNoticeView notice={notice} onNavigate={onNavigate} onStatus={setStatus} onDismiss={setDismissed} />
     </Suspense>
   );
 }
