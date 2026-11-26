@@ -333,13 +333,8 @@ def semantic_only_checks(worktree, pr, repository):
     if repository not in ("nwverse/persona", "nwverse/persona-extensions"):
         raise WatchError("semantic_only needs an explicit supported repository")
     base, head = pr["baseRefOid"], pr["headRefOid"]
-    if repository == "nwverse/persona":
-        scanner = Path(__file__).resolve().parents[2] / "scripts/privacy_check.py"
-        return [("Exact-head privacy scan", ["python3", "-I", str(scanner), "--range", base + ".." + head])]
-    guard = str(Path(__file__).resolve().parent / "pr_watch_test_guards.py")
-    return [("Privacy and documentation guards", ["python3", "-I", guard,
-                                                   "--base", base, "--head", head,
-                                                   "--worktree", worktree, "--repository-guards"])]
+    scanner = Path(__file__).resolve().parents[2] / "scripts/privacy_check.py"
+    return [("Exact-head privacy scan", ["python3", "-I", str(scanner), "--range", base + ".." + head])]
 
 
 def verify(repo, pr, worktree, config, environ=None):

@@ -27,7 +27,7 @@ func TestPersonStatusUpdate(t *testing.T) {
 				t.Fatal(err)
 			}
 			p, ok := reopened.Person("person")
-			if !ok || p.Status != status || !p.fieldLocked("status") {
+			if !ok || p.Status != status || !taggingFieldLocked(&p.Tagging, "status") {
 				t.Fatalf("status was not persisted and protected: %+v", p)
 			}
 			editApply(t, e, KindPerson, "person", Update{Note: "Confirmed note"})
@@ -124,7 +124,7 @@ func TestPersonStatusAutomaticCuration(t *testing.T) {
 			}
 			// Old chat membership must not let an ignored account back into a project.
 			c.People = []string{pid}
-			slug := e.evolveProject("Project", "short", nil, "", c, "Progress", now)
+			slug := e.evolveProject("Project", "short", nil, "", c, true, "Progress", now)
 			project, ok := e.Store.Project(slug)
 			if !ok || slices.Contains(project.People, pid) != (status != "ignored" && status != "self") {
 				t.Fatalf("project association for %q: %+v", status, project)

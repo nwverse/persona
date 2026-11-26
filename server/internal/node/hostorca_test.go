@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -32,6 +33,11 @@ func TestMain(m *testing.M) {
 	// The tests make, commit to and add worktrees to repositories of their own: none of that may reach the repository
 	// this run was started from (`git bisect run` exports GIT_DIR; #13610).
 	testhome.ClearGit()
+	if os.Getenv("NODE_TEST_TASK_TERMINAL_IDLE") == "1" {
+		fmt.Println("ready")
+		_, _ = io.Copy(io.Discard, os.Stdin)
+		os.Exit(0)
+	}
 	if os.Getenv("NODE_TEST_LAUNCH") == "1" { // the real managed-launch path, before the test harness clears its environment
 		if err := Launch(context.Background(), os.Args[2], os.Args[3:], ""); err != nil {
 			panic(err)
@@ -92,6 +98,10 @@ func TestMain(m *testing.M) {
 	// its own).
 	os.Setenv("T3CODE_HOME", "/tmp/persona-test-no-t3code")
 	t3codeBin = func() string { return "" }
+	// Nor the user's login shell on macOS, where the account's bash or zsh decides the node's shell (loginShellProgram,
+	// #16217): the fixtures write ~/.zshrc, so a developer whose login shell is bash would run them in a bash that
+	// never reads it. zsh, as on most Macs; a test that wants another sets SHELL, or macLoginShell for an unset one.
+	pinTestLoginShell()
 	// Nor the user's Claude config directory (claude under a profile, or these tests run from inside a Claude Code
 	// session): the node's own default is then ~/.claude of the test's home (#2140; a test that wants one sets its own).
 	os.Unsetenv("CLAUDE_CONFIG_DIR")
@@ -102,6 +112,15 @@ func TestMain(m *testing.M) {
 	for _, k := range []string{"PERSONA_HOME", legacyEnv("PERSONA_HOME")} {
 		os.Unsetenv(k)
 	}
+	// Nor the user's herdr or herdr-core: their sockets point nowhere, and no session named in the environment picks
+	// another. These tests run from inside a herdr pane, whose HERDR_SOCKET_PATH names the user's running server, and
+	// the tests that build a node's default hosts (engineHostsFor) pinged it, listed its Agents and subscribed to its
+	// events (#13549); without it the default socket is the one under the real home. A test that wants a herdr gives its
+	// client the fake's socket.
+	os.Setenv("HERDR_SOCKET_PATH", noHerdrSocket)
+	os.Unsetenv("HERDR_SESSION")
+	os.Setenv("HC_SOCKET", noHerdrCoreSocket)
+	os.Unsetenv("HC_SESSION")
 	// Nor the user's login shell: herdr's panes run zsh, whatever the machine's is (a test that wants another sets it).
 	herdrPaneShell = func() string { return "/bin/zsh" }
 	// A send looks at the box once after typing and confirms nothing: most fakes never write what was typed into the
@@ -111,6 +130,13 @@ func TestMain(m *testing.M) {
 }
 
 const orcaCwd = "/tmp/orcaproj"
+
+// noHerdrSocket and noHerdrCoreSocket are where the package's tests find the user's herdr and herdr-core: nowhere
+// (TestMain).
+const (
+	noHerdrSocket     = "/tmp/persona-test-no-herdr/herdr.sock"
+	noHerdrCoreSocket = "/tmp/persona-test-no-herdr-core/default.sock"
+)
 
 // fakeProcs is the process table the Orca host scans: agent processes by pane key.
 type fakeProcs struct {
@@ -268,13 +294,18 @@ func TestOrcaWithoutProcessScan(t *testing.T) {
 // orcaSession is a node with one claude session in Orca's terminal term_1 (pane tab1:leaf1).
 func orcaSession(t *testing.T) (*Node, *orcarttest.Fake, *fakeProcs) {
 	t.Helper()
+	return orcaSessionWithPID(t, 4242)
+}
+
+func orcaSessionWithPID(t *testing.T, pid int) (*Node, *orcarttest.Fake, *fakeProcs) {
+	t.Helper()
 	n, _, o, procs, home := orcaNode(t)
 	writeTranscript(t, home, orcaCwd, sidA, time.Now().Add(-time.Minute), `{"type":"custom-title","customTitle":"x"}`)
-	writeClaudePID(t, home, 4242, sidA)
+	writeClaudePID(t, home, pid, sidA)
 	o.SetTerminals(orcaTerm("term_1", "tab1", "leaf1", "claude"))
 	o.SetWorktrees(orcarttest.Worktree("repo::"+orcaCwd, orcaCwd, "refs/heads/feature-x",
 		orcarttest.Agent("tab1:leaf1", "claude", "done")))
-	procs.set("tab1:leaf1", orcaProc{pid: 4242, agent: "claude"})
+	procs.set("tab1:leaf1", orcaProc{pid: pid, agent: "claude"})
 	if m := byID(listSessions(t, n)); m[sidA].PaneID != "orca:tab1:leaf1" {
 		t.Fatalf("not listed: %v", m)
 	}
@@ -374,6 +405,101 @@ func TestOrcaSendsToForegroundTraeCLI(t *testing.T) {
 	}
 }
 
+// A foreground agy in an Orca terminal is an agy pane (#16531). Persona's own hook names its conversation (the only
+// source on macOS, which has no presence lock to read), so the companion's agy-<conversation> row merges into the
+// pane's, and a message or an interrupt for it goes to the terminal instead of being refused as agy_in_terminal while
+// that agy holds the conversation's presence lock. A background agy is no agent pane.
+func TestOrcaSendsToForegroundAgy(t *testing.T) {
+	n, _, o, procs, _ := orcaNode(t)
+	t.Setenv("ANTIGRAVITY_CLI_CONFIG_DIR", "")
+	const pane, pid, command = "tab1:leaf1", 4646, "/usr/local/bin/agy"
+	paneID := "orca:" + pane
+	oldPresence := agyPresenceOf
+	agyPresenceOf = func(int) string { return "" } // no open presence lock is read: the hook alone names the conversation
+	t.Cleanup(func() { agyPresenceOf = oldPresence })
+	withAgyPresenceHooks(t, func(path string) agyLockState {
+		if filepath.Base(path) == agyTestID+".lock" {
+			return agyLockHeld // the terminal's agy has the conversation open
+		}
+		return agyLockMissing
+	}, nil)
+	acpRow := "agy-" + agyTestID
+	n.runtimes = newRuntimeRegistry()
+	companion := n.runtimes.add(nil) // a call that reached it would fail: it has no peer
+	companion.ready, companion.hello.Runtime = true, agyAgent
+	n.runtimes.setSessions(companion, []proto.Session{{SessionID: acpRow, Agent: agyAgent, Cwd: orcaCwd, Status: proto.StatusIdle}})
+	file := agyTestFile(t, n.agyDataRoot(), agyTestID, `{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":"2026-01-01T00:00:00Z","content":"<USER_REQUEST>\nFix the auth bug\n</USER_REQUEST>"}`+"\n")
+	o.SetTerminals(orcaTerm("term_1", "tab1", "leaf1", ""))
+	o.SetScreen("term_1", "> \n")
+	setProcess := func(state string) {
+		args := fmt.Sprintf("%d %s 01:00 %s", pid, state, command)
+		env := fmt.Sprintf("%d %s ORCA_PANE_KEY=%s", pid, command, pane)
+		procs.set(pane, parseOrcaPSEnv(env, parseOrcaPSArgs(args, time.Now()), nil)[pane]...)
+	}
+	setProcess("S+")
+	if r := n.hookReport(paneID, "PreInvocation", agyTestID); r["ok"] != true {
+		t.Fatalf("hook report refused: %v", r)
+	}
+	n.mu.Lock() // older than agyReportGrace: only a pane listed as running agy keeps it
+	r := n.agyReports[paneID]
+	r.at = time.Now().Add(-time.Minute)
+	n.agyReports[paneID] = r
+	n.mu.Unlock()
+
+	paneRow := otherSession(host.Agent{Agent: agyAgent, PaneID: paneID})
+	var agyRows []string
+	for _, s := range listSessions(t, n) {
+		if s.Agent == agyAgent {
+			agyRows = append(agyRows, s.SessionID+"@"+s.PaneID)
+		}
+	}
+	if len(agyRows) != 1 || agyRows[0] != paneRow+"@"+paneID {
+		t.Fatalf("agy rows %v, want the Orca pane's %s alone", agyRows, paneRow)
+	}
+
+	// The terminal plays agy: the submit appends the typed message to its conversation.
+	o.Handle("terminal.send", func(p map[string]any) any {
+		text, _ := p["text"].(string)
+		if text == "\r" {
+			line := fmt.Sprintf(`{"step_index":1,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":%q,"content":"<USER_REQUEST>\nhello from the phone\n</USER_REQUEST>"}`+"\n", time.Now().UTC().Format(time.RFC3339Nano))
+			f, err := os.OpenFile(file, os.O_WRONLY|os.O_APPEND, 0o600)
+			if err != nil {
+				return orcarttest.Fail{Code: "test_write_failed"}
+			}
+			_, err = f.WriteString(line)
+			if cerr := f.Close(); err != nil || cerr != nil {
+				return orcarttest.Fail{Code: "test_write_failed"}
+			}
+		}
+		return map[string]any{"send": map[string]any{"handle": p["terminal"], "accepted": true, "bytesWritten": len(text)}}
+	})
+	o.Reset()
+	if _, err := request(t, n, "session.send", map[string]any{"session_id": acpRow, "text": "hello from the phone"}); err != nil {
+		t.Fatalf("send to a conversation an Orca terminal's agy has open: %v", err)
+	}
+	if _, err := request(t, n, "session.interrupt", map[string]any{"session_id": acpRow}); err != nil {
+		t.Fatalf("interrupt of a conversation an Orca terminal's agy has open: %v", err)
+	}
+	writes := o.Writes()
+	if len(writes) != 3 || writes[0].Text != pasteStart+"hello from the phone"+pasteEnd || writes[1].Text != "\r" ||
+		writes[2].Text != "\x1b" {
+		t.Fatalf("expected a bracketed paste, a separate submit and an escape in the terminal, got %+v", writes)
+	}
+
+	// The same agy, no longer in its terminal's foreground group: refused with nothing typed (by the pane's own check
+	// while the last list still has the pane, else as a conversation a terminal holds).
+	setProcess("S")
+	o.Reset()
+	if _, err := request(t, n, "session.send", map[string]any{"session_id": acpRow, "text": "again"}); err == nil {
+		t.Fatal("a background agy's conversation took a message")
+	} else if code, data := refusalOf(t, err); code != "not_delivered" && code != codeAgyInTerminal || data["delivered"] != "none" {
+		t.Fatalf("expected a refusal before typing, got %v", err)
+	}
+	if writes := o.Writes(); len(writes) != 0 {
+		t.Fatalf("wrote into the terminal without agy in front: %+v", writes)
+	}
+}
+
 // Orca turning the input down (nothing written) is a refusal the app can retry: a permission dialog is dialog_open,
 // no agent in front / a gone or read-only terminal is not_delivered.
 func TestOrcaSendRefusedByOrca(t *testing.T) {
@@ -405,8 +531,10 @@ func TestOrcaSendRefusedByOrca(t *testing.T) {
 // The claude exited and the pane is back at its shell (Orca may still name claude): the shell does not get the
 // message as a command — refused before anything is typed, and the session is no longer live.
 func TestOrcaSendAfterTheAgentExited(t *testing.T) {
-	n, o, procs := orcaSession(t)
+	pid, exit := idleTerminalTestProcess(t)
+	n, o, procs := orcaSessionWithPID(t, pid)
 	o.SetScreen("term_1", "$ \n")
+	exit()
 	procs.set("tab1:leaf1")
 	_, err := request(t, n, "session.send", map[string]any{"session_id": sidA, "text": "rm -rf build"})
 	if code, _ := refusalOf(t, err); code != "not_delivered" {
@@ -910,8 +1038,10 @@ func TestOrcaPromptSubmitFails(t *testing.T) {
 // A message to a stopped agent is refused (#4754); the user's Resume (session.start) brings back a Claude session
 // whose pane is gone on Orca (#5548), and on Herdr App as herdr does (#2532).
 func TestNotRunningOnAnEngineWithoutResume(t *testing.T) {
-	n, o, procs := orcaSession(t)
+	pid, exit := idleTerminalTestProcess(t)
+	n, o, procs := orcaSessionWithPID(t, pid)
 	n.claudeStart, n.claudeReady = 200*time.Millisecond, 200*time.Millisecond
+	exit()
 	procs.set("tab1:leaf1") // suspended: no claude in front
 	time.Sleep(orcaProcsMaxAge)
 	listSessions(t, n)
@@ -960,7 +1090,8 @@ func TestNotRunningOnAnEngineWithoutResume(t *testing.T) {
 	}
 
 	// Herdr App resumes it as herdr does (#2532): a new tab, its launcher with --resume through the start file.
-	hn, hc := hcSession(t)
+	herdrPID, exitHerdr := idleTerminalTestProcess(t)
+	hn, hc := hcSessionWithPID(t, herdrPID)
 	hn.claudeStart, hn.claudeReady = 200*time.Millisecond, 200*time.Millisecond // the fake shell never runs claude
 	hc.doc = appDoc(hcCwd)
 	var typed string
@@ -968,6 +1099,7 @@ func TestNotRunningOnAnEngineWithoutResume(t *testing.T) {
 		typed, _ = startFileCommand(str(p["text"]))
 		return map[string]any{}
 	})
+	exitHerdr()
 	hc.setTerminals()
 	time.Sleep(time.Second) // past the failed-list cache
 	listSessions(t, hn)

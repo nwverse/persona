@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 // The health module (#13434, the web pilot of #13430; docs/web/web.md "Modules"): its page, its sidebar entry and its
 // strings come from the module host. Switched off, or registered behind a hub flag the hub does not name, it is absent:
-// no entry, its addresses are unknown ones, and neither its chunk (./Health) nor its catalog is ever requested. On, the
-// page opens at /health as before, and its chunk and strings load when it is first drawn, the strings first.
+// no entry, neither its chunk (./Health) nor its catalog is ever requested, and old addresses open the read-only
+// default-panel archive. On, the page opens at /health as before, and its chunk and strings load when it is first
+// drawn, the strings first.
 import { act, Suspense } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,7 +13,7 @@ vi.hoisted(() => {
 });
 // the page as a mark: what matters here is whether its chunk is requested, and what it is given
 vi.mock("./Health", () => ({ HealthPage: ({ path }: { path: readonly string[] }) => <div data-testid="health-page">{path.join("/")}</div> }));
-import { connectModuleHub, moduleExtensionAt, registerModule, resetModulesForTest, type ModuleDescriptor } from "../../core/module-host";
+import { connectModuleHub, MODULES_FEATURE, moduleExtensionAt, registerModule, resetModulesForTest, type ModuleDescriptor } from "../../core/module-host";
 import { ModuleExtensionPage, ModulePage } from "../../core/ModulePage";
 import { preloadPages } from "../../lib/lazy-page";
 import { forgetModuleSwitches, setModuleSwitchedOff } from "../../core/module-switch";
@@ -25,8 +26,7 @@ import { health } from "./module";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-/** The descriptor as registered, with its chunk's import and its catalog loaders counted (and, for the flag case, a
- *  flag of its own). */
+/** The descriptor as registered, with its chunk's import and its catalog loaders counted. */
 const chunk = vi.fn();
 const catalog = vi.fn();
 function counted(over: Partial<ModuleDescriptor> = {}): ModuleDescriptor {
@@ -99,13 +99,15 @@ describe("the health module", () => {
     expect(chunk).toHaveBeenCalledTimes(1);
   });
 
-  it("switched off in this browser: no entry, /health is an unknown address, nothing of it requested", async () => {
+  it("switched off in this browser: no entry or chunk, while old Health addresses open the read-only default-panel archive", async () => {
     setModuleSwitchedOff("health", true);
     registerModule(counted());
     await sidebar();
     expect(links()).not.toContain(t("sidebar.nav_health"));
-    expect(parse("/health")).toEqual({ name: "not-found", path: "/health" });
-    expect(parse("/tracks/health")).toEqual({ name: "not-found", path: "/tracks/health" });
+    expect(parse("/health")).toEqual({ name: "track", slug: "health", fresh: true });
+    expect(parse("/health/new")).toEqual({ name: "track", slug: "health", fresh: true });
+    expect(parse("/health/h1")).toEqual({ name: "track", slug: "health", sid: "h1" });
+    expect(parse("/tracks/health/h1")).toEqual({ name: "track", slug: "health", sid: "h1" });
     act(() => root.render(<ModulePage route={{ name: "module", module: "health", base: "health", path: [] }} />));
     await flush();
     expect(host.querySelector('[data-testid="health-page"]')).toBeNull();
@@ -113,18 +115,19 @@ describe("the health module", () => {
     expect(catalog).not.toHaveBeenCalled();
   });
 
-  it("behind a hub flag the hub does not name: absent, nothing requested; there once the hello names it", async () => {
-    registerModule(counted({ feature: "synthetic_health_flag" }));
-    Object.assign(getState(), { loaded: true, features: ["other"] });
+  it("on a hub that publishes module flags without module.health: the default-panel archive remains reachable, with nothing requested; there once the hello names it", async () => {
+    registerModule(counted());
+    Object.assign(getState(), { loaded: true, features: [MODULES_FEATURE, "other"] });
     await sidebar();
     expect(links()).not.toContain(t("sidebar.nav_health"));
-    expect(parse("/health")).toEqual({ name: "not-found", path: "/health" });
+    expect(parse("/health")).toEqual({ name: "track", slug: "health", fresh: true });
+    expect(parse("/tracks/health")).toEqual({ name: "track", slug: "health", fresh: true });
     act(() => root.render(<ModulePage route={{ name: "module", module: "health", base: "health", path: [] }} />));
     await flush();
     expect(chunk).not.toHaveBeenCalled();
     expect(catalog).not.toHaveBeenCalled();
 
-    Object.assign(getState(), { features: ["other", "synthetic_health_flag"] });
+    Object.assign(getState(), { features: [MODULES_FEATURE, "other", "module.health"] });
     act(() => root.render(<Suspense fallback={null}><ModulePage key="on" route={{ name: "module", module: "health", base: "health", path: [] }} /></Suspense>));
     await vi.waitFor(async () => {
       await flush();
@@ -136,7 +139,7 @@ describe("the health module", () => {
   describe("warming its page before it is opened: on link intent only, as on main", () => {
     /** The idle tier run, then a link to /health reached by the pointer, through lib/lazy-page.ts preloadPages: what
      *  each of them requested. */
-    async function warm() {
+    async function warm(loads: boolean) {
       let idle: (() => void) | undefined;
       const stop = preloadPages({ document, requestIdleCallback: (run) => ((idle = run), 1), cancelIdleCallback: () => {} });
       idle?.();
@@ -146,8 +149,10 @@ describe("the health module", () => {
       link.href = "/health";
       document.body.append(link);
       link.dispatchEvent(new Event("pointerover", { bubbles: true }));
-      // the strings, then the code: let both arrive (nothing comes for a module that is not on)
-      for (let i = 0; i < 40 && chunk.mock.calls.length === 0; i++) await flush();
+      // the strings, then the code: wait for both by time, not by a count of turns, which a loaded machine can outrun
+      // (#13846); for a module that is not on, give it as long as a load takes here and see that nothing came
+      if (loads) await vi.waitFor(() => expect(chunk).toHaveBeenCalled(), { timeout: 5000, interval: 10 });
+      else for (let i = 0; i < 40; i++) await flush();
       const hovered = { chunk: chunk.mock.calls.length, catalog: catalog.mock.calls.length };
       stop();
       link.remove();
@@ -156,19 +161,19 @@ describe("the health module", () => {
 
     it("on: nothing at idle; a link's hover loads its strings and chunk, once", async () => {
       registerModule(counted());
-      expect(await warm()).toEqual({ idled: { chunk: 0, catalog: 0 }, hovered: { chunk: 1, catalog: 1 } });
+      expect(await warm(true)).toEqual({ idled: { chunk: 0, catalog: 0 }, hovered: { chunk: 1, catalog: 1 } });
     });
 
     it("off, or behind a flag the hub lacks: nothing ever, idle or hover", async () => {
       const none = { idled: { chunk: 0, catalog: 0 }, hovered: { chunk: 0, catalog: 0 } };
       setModuleSwitchedOff("health", true);
       registerModule(counted());
-      expect(await warm()).toEqual(none);
+      expect(await warm(false)).toEqual(none);
       resetModulesForTest();
       setModuleSwitchedOff("health", false);
-      registerModule(counted({ feature: "synthetic_health_flag" }));
-      Object.assign(getState(), { loaded: true, features: ["other"] });
-      expect(await warm()).toEqual(none);
+      registerModule(counted());
+      Object.assign(getState(), { loaded: true, features: [MODULES_FEATURE, "other"] });
+      expect(await warm(false)).toEqual(none);
     });
   });
 
@@ -186,9 +191,16 @@ describe("the health module", () => {
     expect(catalog).not.toHaveBeenCalled();
   });
 
-  it("declares what it contributes and nothing it does not serve yet", () => {
+  it("without a registered Health descriptor, as in a core-only build, old addresses still open the archive", () => {
+    expect(parse("/health")).toEqual({ name: "track", slug: "health", fresh: true });
+    expect(parse("/health/kept")).toEqual({ name: "track", slug: "health", sid: "kept" });
+    expect(parse("/tracks/health/kept")).toEqual({ name: "track", slug: "health", sid: "kept" });
+    expect(parse("/health", "?at=message")).toEqual({ name: "track", slug: "health", fresh: true });
+  });
+
+  it("declares what it contributes, and its hub flag module.health", () => {
     expect(health.id).toBe("health");
-    expect(health.feature).toBeUndefined();
+    expect(health.feature).toBe("module.health");
     expect(health.i18nNamespaces).toEqual(["health"]);
     expect(health.chatSlots ?? []).toEqual([]);
     expect(health.settingsTabs ?? []).toEqual([]);
