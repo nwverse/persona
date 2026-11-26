@@ -12,6 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/repositorywire"
 	"github.com/nwverse/persona/server/internal/workspacenaming"
 )
 
@@ -94,7 +95,7 @@ func TestWorkspaceNamingSampleUsesRepositoryDefaultAndDescribesOldNode(t *testin
 	if !preview.Sample || preview.Status != "incomplete" || preview.Plan != nil || preview.SystemDefaults == nil || *preview.SystemDefaults != workspacenaming.Defaults() {
 		t.Fatal(w.Body)
 	}
-	if len(preview.BranchSources) != 1 || preview.BranchSources[0] != (workspacenaming.BranchSource{RepoID: "web", Kind: workspacenaming.BranchRepositoryDefault}) ||
+	if len(preview.BranchSources) != 1 || preview.BranchSources[0] != (workspacenaming.BranchSource{RepoID: "web", Kind: repositorywire.BranchRepositoryDefault}) ||
 		!slices.ContainsFunc(preview.Diagnostics, func(d workspacenaming.Problem) bool {
 			return d.Code == "field_unavailable" && d.Field == "branch_template"
 		}) {

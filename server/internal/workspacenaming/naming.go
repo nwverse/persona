@@ -4,6 +4,7 @@ package workspacenaming
 
 import (
 	"bytes"
+	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -298,30 +299,17 @@ type Preview struct {
 	BranchSources  []BranchSource `json:"branch_sources,omitempty"`
 }
 
-type BranchSourceKind string
-
-const (
-	BranchRepositoryDefault BranchSourceKind = "repository_default"
-	BranchExplicit          BranchSourceKind = "explicit_branch"
-	BranchOtherRef          BranchSourceKind = "non_branch_ref"
-)
-
-// BranchSource describes the input available to the branch template, even when
-// preview cannot produce a plan. A default ref does not name a branch yet.
-type BranchSource struct {
-	RepoID string           `json:"repo_id"`
-	Kind   BranchSourceKind `json:"kind"`
-	Branch string           `json:"branch,omitempty"`
-}
+type BranchSource = repositorywire.BranchSource
 
 func branchSource(repo repositorywire.PreparationRepository) BranchSource {
+	id := repositorywire.RepositoryID(repo.RepoID)
 	switch repo.RequestedRef.Kind {
 	case "default", "":
-		return BranchSource{RepoID: repo.RepoID, Kind: BranchRepositoryDefault}
+		return BranchSource{RepoID: id, Kind: repositorywire.BranchRepositoryDefault}
 	case "branch":
-		return BranchSource{RepoID: repo.RepoID, Kind: BranchExplicit, Branch: strings.TrimPrefix(repo.RequestedRef.Value, "refs/heads/")}
+		return BranchSource{RepoID: id, Kind: repositorywire.BranchExplicit, Branch: strings.TrimPrefix(repo.RequestedRef.Value, "refs/heads/")}
 	default:
-		return BranchSource{RepoID: repo.RepoID, Kind: BranchOtherRef}
+		return BranchSource{RepoID: id, Kind: repositorywire.BranchOtherRef}
 	}
 }
 
@@ -332,7 +320,7 @@ func (p *Preview) Describe(s Source) {
 	for _, repo := range s.Repositories.Repositories {
 		p.BranchSources = append(p.BranchSources, branchSource(repo))
 	}
-	slices.SortFunc(p.BranchSources, func(a, b BranchSource) int { return strings.Compare(a.RepoID, b.RepoID) })
+	slices.SortFunc(p.BranchSources, func(a, b BranchSource) int { return cmp.Compare(a.RepoID, b.RepoID) })
 }
 
 func (p *Preview) add(code, field, repo, severity string) {

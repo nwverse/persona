@@ -22,50 +22,50 @@ func (n *Node) workspaceLocalSource(ctx context.Context, raw json.RawMessage) (a
 	if err := json.Unmarshal(raw, &in); err != nil {
 		return nil, err
 	}
-	fail := func(code string) (any, error) {
-		return taskworkspace.LocalSource{Error: taskworkspace.Failure(code, "source", "", "", in.Cwd)}, nil
+	fail := func(code repository.LocalSourceError) (any, error) {
+		return taskworkspace.LocalSource{Error: code}, nil
 	}
 	cwd, err := n.realPath(filepath.Clean(in.Cwd))
 	if err != nil || n.offLimitsResolved(cwd) != nil {
-		return fail("invalid_path")
+		return fail(repository.LocalSourceInvalidPath)
 	}
 	info, err := os.Stat(cwd)
 	if err != nil || !info.IsDir() {
-		return fail("invalid_path")
+		return fail(repository.LocalSourceInvalidPath)
 	}
 	top, err := workspaceReadGit(ctx, cwd, "rev-parse", "--show-toplevel")
 	if err != nil {
 		if exit, ok := errors.AsType[*exec.ExitError](err); ok && exit.ExitCode() == 128 {
 			return taskworkspace.LocalSource{}, nil // an ordinary directory
 		}
-		return fail("source_unavailable")
+		return fail(repository.LocalSourceUnavailable)
 	}
 	common, err := workspaceReadGit(ctx, cwd, "rev-parse", "--git-common-dir")
 	if err != nil || common == "" {
-		return fail("source_invalid")
+		return fail(repository.LocalSourceInvalid)
 	}
 	if !filepath.IsAbs(common) {
 		common = filepath.Join(cwd, common)
 	}
 	common, err = n.realPath(filepath.Clean(common))
 	if err != nil || !n.workspaceLocalCommonAllowed(common) {
-		return fail("source_invalid")
+		return fail(repository.LocalSourceInvalid)
 	}
 	local := &repository.LocalCheckout{CommonDir: common}
 	branch, _ := workspaceReadGit(ctx, cwd, "symbolic-ref", "--quiet", "HEAD")
 	if in.TaskBranch != "" {
 		if _, err := repository.NormalizeRef(repository.RequestedRef{Kind: "branch", Value: in.TaskBranch}); err != nil {
-			return fail("ref_invalid")
+			return fail(repository.LocalSourceInvalidRef)
 		}
 		ref := "refs/heads/" + in.TaskBranch
 		local.Commit, err = workspaceBranchTip(ctx, common, ref)
 		if err != nil {
-			return fail("source_unavailable")
+			return fail(repository.LocalSourceUnavailable)
 		}
 		if local.Commit != "" {
 			at, err := branchCheckedOutAt(ctx, cwd, in.TaskBranch)
 			if err != nil {
-				return fail("source_unavailable")
+				return fail(repository.LocalSourceUnavailable)
 			}
 			if at != "" {
 				return taskworkspace.LocalSource{ExistingPath: n.visiblePath(at)}, nil
@@ -76,10 +76,10 @@ func (n *Node) workspaceLocalSource(ctx context.Context, raw json.RawMessage) (a
 	if local.Commit == "" {
 		local.Commit, err = workspaceBranchTip(ctx, cwd, "HEAD^{commit}")
 		if err != nil {
-			return fail("source_unavailable")
+			return fail(repository.LocalSourceUnavailable)
 		}
 		if local.Commit == "" {
-			return fail("no_commits")
+			return fail(repository.LocalSourceNoCommits)
 		}
 	}
 	ref := repository.RequestedRef{Kind: "commit", Value: local.Commit}

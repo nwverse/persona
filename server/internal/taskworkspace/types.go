@@ -17,26 +17,13 @@ const Capability = nodeproto.TaskWorkspace
 const MethodPrefix = "task.workspace."
 
 // Capabilities is the response to the read-only task.workspace.capabilities probe.
-type Capabilities struct {
-	Capability        string `json:"capability"`
-	Start             bool   `json:"start,omitempty"`
-	EmptyRepositories bool   `json:"empty_repositories,omitempty"`
-	LocalGit          bool   `json:"local_git,omitempty"`
-}
+type Capabilities = nodeproto.TaskWorkspaceCapabilities
 
 // LocalSourceMethod inspects a source directory without consulting a terminal host.
 const LocalSourceMethod = "workspace.naming.local-source"
 
-type LocalSourceRequest struct {
-	Cwd        string `json:"cwd"`
-	TaskBranch string `json:"task_branch,omitempty"`
-}
-
-type LocalSource struct {
-	Repository   *repository.PreparationRepository `json:"repository,omitempty"`
-	ExistingPath string                            `json:"existing_path,omitempty"`
-	Error        *Problem                          `json:"error,omitempty"`
-}
+type LocalSourceRequest = repository.LocalSourceRequest
+type LocalSource = repository.LocalSource
 
 type Problem struct {
 	Code        string   `json:"code"`

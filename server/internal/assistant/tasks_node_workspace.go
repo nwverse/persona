@@ -89,8 +89,8 @@ func (s *Service) previewDispatchedWorkspace(ctx context.Context, t *PlanTask, r
 			taskworkspace.LocalSourceRequest{Cwd: t.Cwd, TaskBranch: t.Workspace.Branch}, &local); err != nil {
 			return false, err
 		}
-		if local.Error != nil {
-			return false, local.Error
+		if local.Error != "" {
+			return false, taskworkspace.Failure(string(local.Error), "source", "", "", t.Cwd)
 		}
 		if local.ExistingPath != "" {
 			if t.Workspace.Branch == "" || !proto.NodeAbs(local.ExistingPath) {

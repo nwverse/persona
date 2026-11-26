@@ -541,6 +541,44 @@ type LocalCheckout struct {
 	Commit         string `json:"commit"`
 	ExistingBranch bool   `json:"existing_branch,omitempty"`
 }
+type LocalSourceRequest struct {
+	Cwd        string `json:"cwd"`
+	TaskBranch string `json:"task_branch,omitempty"`
+}
+
+type LocalSource struct {
+	Repository   *PreparationRepository `json:"repository,omitempty"`
+	ExistingPath string                 `json:"existing_path,omitempty"`
+	Error        LocalSourceError       `json:"error,omitempty"`
+}
+
+type LocalSourceError string
+
+const (
+	LocalSourceInvalidPath LocalSourceError = "invalid_path"
+	LocalSourceInvalid     LocalSourceError = "source_invalid"
+	LocalSourceUnavailable LocalSourceError = "source_unavailable"
+	LocalSourceInvalidRef  LocalSourceError = "ref_invalid"
+	LocalSourceNoCommits   LocalSourceError = "no_commits"
+)
+
+type RepositoryID string
+
+type BranchSourceKind string
+
+const (
+	BranchRepositoryDefault BranchSourceKind = "repository_default"
+	BranchExplicit          BranchSourceKind = "explicit_branch"
+	BranchOtherRef          BranchSourceKind = "non_branch_ref"
+)
+
+// BranchSource describes the input available to a branch template. A default ref has no known branch yet.
+type BranchSource struct {
+	RepoID RepositoryID     `json:"repo_id"`
+	Kind   BranchSourceKind `json:"kind"`
+	Branch string           `json:"branch,omitempty"`
+}
+
 type PreparationSnapshot struct {
 	SchemaVersion int                     `json:"schema_version"`
 	Manager       string                  `json:"manager"`

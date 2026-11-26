@@ -27,7 +27,7 @@ func localWorkspaceSource(t *testing.T, n *Node, cwd, branch string) taskworkspa
 
 func localWorkspacePlan(t *testing.T, n *Node, source taskworkspace.LocalSource, branch string) workspacenaming.Plan {
 	t.Helper()
-	if source.Error != nil || source.Repository == nil {
+	if source.Error != "" || source.Repository == nil {
 		t.Fatalf("source lookup: %+v", source)
 	}
 	s := workspacePlan(t, n.home, repository.LayoutContainer).Source
