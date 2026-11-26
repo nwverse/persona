@@ -14,6 +14,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 	"github.com/nwverse/persona/server/internal/taskworkspace"
@@ -586,19 +587,79 @@ func (s *Service) startRemedying(ctx context.Context, t Todo) bool {
 // (switchStopped) or archived, or its computer is gone from the hub. Not listed at all, or the computer not reached,
 // is not known to be stopped.
 func (s *Service) todoAgentStopped(ctx context.Context, a TodoAgent) bool {
+	stopped, _ := s.todoAgentStopPresence(ctx, a)
+	return stopped
+}
+
+// todoAgentStopPresence is todoAgentStopped plus listed: listed says a session list answered and some row names
+// a.SessionID as its own id or one of its aliases. Aliases matter for Antigravity: while an agy-<conversation> runs
+// in a terminal pane, the node lists the pane row and puts agy-<conversation> in its aliases, so matching the row id
+// alone would call a live Agent absent. A listed live session therefore stays fail-closed against a contradictory
+// stop answer; an id no row or alias names can still be settled by the computer's authoritative "no such session"
+// stop answer.
+func (s *Service) todoAgentStopPresence(ctx context.Context, a TodoAgent) (stopped, listed bool) {
 	list, err := s.sessions(ctx, a.MachineID)
 	if errors.Is(err, ErrNoDevice) {
-		return true
+		return true, false
 	}
 	if err != nil {
-		return false
+		return false, false
 	}
+	// Every row naming the id counts: a stopped alias row can sort before the live exact row (runtime
+	// fork aliases), so one stopped match must not hide another live match. Any live match wins.
+	live := false
 	for _, c := range list {
-		if c.SessionID == a.SessionID {
-			return c.Archived || switchStopped(c)
+		if !sessionNamesID(c, a.SessionID) {
+			continue
+		}
+		listed = true
+		if !(c.Archived || switchStopped(c)) {
+			live = true
 		}
 	}
-	return false
+	if !listed {
+		return false, false
+	}
+	return !live, true
+}
+
+// sessionNamesID reports whether row is id or names id as another of its machine-known ids (proto.Session.Aliases).
+func sessionNamesID(row proto.Session, id string) bool {
+	if row.SessionID == id {
+		return true
+	}
+	return slices.Contains(row.Aliases(), id)
+}
+
+// agyCompanionIDRe is the Antigravity companion row id agy-<conversation-uuid> shape the node's
+// agyConversationID recognizes. For this id the node's plain "invalid session id" stop answer is not
+// proof the conversation is gone: a live pane normally carries it only as an alias, and when two panes
+// report one conversation the node leaves that alias off both rows. Pane/worker-derived agy ids (the
+// form a task links, e.g. agy-64c84f4d) are instead checked by the node's agyPaneRow, so the same text
+// is an id-specific "no such live pane" answer for them.
+var agyCompanionIDRe = lazyre.New(`^agy-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// stopErrSaysSessionGone reports whether a session.stop error is the reached computer's authoritative answer that
+// the target session does not exist there: the typed not_found code current nodes and runtimes return
+// (sessionNotFound), or the legacy plain "invalid session id %q" text older Persona nodes send for a non-standard
+// row id they no longer know, restricted to the id forms for which that text is id-specific. The legacy text has
+// to name this exact session id: another id's complaint says nothing about this link. Transport, timeout, offline
+// and refusal errors are none of these, so a computer that cannot be reached is never read as a stopped agent.
+func stopErrSaysSessionGone(err error, sessionID string) bool {
+	if err == nil {
+		return false
+	}
+	if sessionNotFound(err) {
+		return true
+	}
+	var re *rpc.Error
+	if !errors.As(err, &re) {
+		return false
+	}
+	if re.Message != fmt.Sprintf("invalid session id %q", sessionID) {
+		return false
+	}
+	return !agyCompanionIDRe.MatchString(sessionID)
 }
 
 // takeTodoForTask is the todo a started plan's task runs on (PlanTask.ReuseTodo), checked again now (it may have been
@@ -735,14 +796,24 @@ func (s *Service) stopContinuedTaskAgents(ctx context.Context, todo Todo) ([]Tod
 				msg:  fmt.Sprintf("continues: agent %s/%s on to-do %s has an unresolved approval or question; resolve it first", a.MachineID, short(a.SessionID), todo.ID),
 			}
 		}
-		if !s.todoAgentStopped(ctx, a) {
+		isStopped, listed := s.todoAgentStopPresence(ctx, a)
+		if !isStopped {
 			cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 			err := s.call(cctx, a.MachineID, deviceSessionStop, map[string]any{"session_id": a.SessionID}, nil)
 			cancel()
-			if err != nil {
+			switch {
+			case err == nil:
+				s.endSessionCards(a.MachineID, a.SessionID)
+			case listed || !stopErrSaysSessionGone(err, a.SessionID):
+				// A session the list shows live, or any uncertain/refusal error, stays fail-closed: the handoff fails
+				// and a retry can reconcile it. Only an absent row plus the computer's own "no such session" answer is
+				// the idempotent already-gone case (an orphaned agy worker after its companion restarted).
 				return nil, fmt.Errorf("continues: cannot stop agent %s/%s on to-do %s: %w", a.MachineID, a.SessionID, todo.ID, err)
+			default:
+				s.logf("continues: agent %s/%s on to-do %s is no longer on its computer; letting its stale link go: %v",
+					a.MachineID, a.SessionID, todo.ID, err)
+				s.endSessionCards(a.MachineID, a.SessionID)
 			}
-			s.endSessionCards(a.MachineID, a.SessionID)
 		}
 		stopped = append(stopped, a)
 	}
