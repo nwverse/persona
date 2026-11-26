@@ -28,8 +28,8 @@ if [ "$lane" = all ] || [ "$lane" = build ]; then
   ci_run 'Go SDK tests' 300 bash -c 'cd sdk/go && go test -count=1 -timeout=4m ./...'
   # A feature added to Persona Core without changing Core (docs/extensions/core-only-features.md, #16244): the sample
   # extension's own tests, then the document's steps on a persona_core_only hub with a disposable Postgres: absent,
-  # installed (flag, navigation entry, route, stored value), switched off (entry points gone, stored file unchanged)
-  # and on again.
+  # installed (flag, navigation entry, route, stored value), switched off (entry points gone, stored file unchanged),
+  # on again and uninstalled (entry points gone, data directory explicitly deleted).
   ci_run 'Sample extension tests' 300 bash -c 'test -z "$(gofmt -l sdk/examples)" && cd sdk/examples/quicknotes && go vet ./... && go test -count=1 -timeout=4m ./...'
   ci_run 'Core-only sample extension' 900 python3 scripts/ci/core-sample.py
 fi

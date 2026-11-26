@@ -14,11 +14,14 @@ scripts/ci/core-only-smoke.py: nothing of this machine's own hub is read or reac
   off        `personad extension disable`: the flag and the entry are gone, the route answers 404 for a read and
              for a write, Core still answers, and the stored file is byte for byte what it was
   on again   `personad extension enable`: the same note is read back, the file still unchanged
+  uninstalled `personad extension uninstall`: the flag, entry and route are gone, Core answers, and the data directory
+             is deleted (the explicit alternative to switching off; --keep-data is documented but not used here)
 
 Every personad command runs with `env -i` and an explicit HOME and PERSONA_HOME of the temporary home: an inherited
-PERSONA_HOME would send the command to this machine's own hub (docs/lessons/workflow.md). The gate checks the address
-that home resolves to before the first command. Prints one PASS / FAIL / TIMEOUT line. Needs Go and Docker (DOCKER
-names another client).
+PERSONA_HOME would send the command to this machine's own hub (docs/lessons/workflow.md). Before every hub write the
+gate runs the read-only `extension list` in that same environment, prints the resolved home and listen address, and
+checks they are the sandbox's. Prints one PASS / FAIL / TIMEOUT line. Needs Go and Docker (DOCKER names another
+client).
 """
 import argparse
 import hashlib
@@ -102,6 +105,25 @@ def personad(bindir, env, cwd, *args, timeout=600):
     return out
 
 
+def start_hub(bindir, home, work, log):
+    """Start only the sandbox hub, with PERSONA_HOME explicit even in the clean environment."""
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home), "TMPDIR": str(work),
+           "PERSONA_HOME": str(home / ".persona"), "LANG": "C.UTF-8", "PERSONA_LOCAL_NODE": "0"}
+    with open(log, "a") as out:
+        return subprocess.Popen(["env", "-i"] + [f"{k}={v}" for k, v in env.items()] +
+                                [str(bindir / "persona-hub"), "run"], cwd=work, env={"PATH": env["PATH"]},
+                                stdout=out, stderr=subprocess.STDOUT, start_new_session=True)
+
+
+def confirm_target(bindir, env, cwd, listen):
+    """A read-only CLI call and an explicit target check before a write; never print the sandbox token."""
+    resolved = json.loads((Path(env["PERSONA_HOME"]) / "hub.json").read_text())["listen"]
+    check(resolved == listen, f"personad would reach {resolved}, not the test hub {listen}")
+    out = personad(bindir, env, cwd, "extension", "list")
+    print(f"target confirmed by read-only extension list: PERSONA_HOME={env['PERSONA_HOME']}, hub={resolved}; "
+          f"{out or 'no extensions listed'}", flush=True)
+
+
 def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
@@ -122,7 +144,7 @@ def main():
         port, token = smoke.free_port(), secrets.token_hex(24)
         smoke.write_hub_json(home, port, token, database)
         base = f"http://127.0.0.1:{port}"
-        hub = smoke.start_hub(bindir, home, work, log)
+        hub = start_hub(bindir, home, work, log)
         loaded = smoke.wait_ready(hub, base, log, 0)
         check(not loaded, f"a core-only manager loaded modules: {loaded}")
         env = cli_env(home)
@@ -151,6 +173,7 @@ def main():
         personad(bindir, env, sample, "extension", "pack", "--platforms", platform)
         package = sample / "dist" / f"{ID}-0.1.0.tar.gz"
         check(package.exists(), f"pack wrote no {package.name}")
+        confirm_target(bindir, env, sample, resolved)
         personad(bindir, env, sample, "extension", "install", str(package), "--yes")
         smoke.wait_for("the sample's route", 60, lambda: call(base, token, "GET", ROUTE)[0] == 200)
         check(FLAG in features(base), "installed: the hub does not announce the flag")
@@ -173,6 +196,7 @@ def main():
         print(f"installed: flag announced, entry listed ({', '.join(titles.values())}), note n1 stored and drawn", flush=True)
 
         # off: entry points and new activity go; what is stored stays.
+        confirm_target(bindir, env, work, resolved)
         personad(bindir, env, work, "extension", "disable", ID)
         smoke.wait_for("the flag to go", 30, lambda: FLAG not in features(base))
         check(not entries(base, token), "off: the navigation entry is still listed")
@@ -187,6 +211,7 @@ def main():
         print("off: flag and entry gone, route 404 for read and write, Core answers, stored file unchanged", flush=True)
 
         # on again: the same data, nothing rewritten.
+        confirm_target(bindir, env, work, resolved)
         personad(bindir, env, work, "extension", "enable", ID)
         smoke.wait_for("the sample's route again", 60, lambda: call(base, token, "GET", ROUTE)[0] == 200)
         status, body = call(base, token, "GET", ROUTE)
@@ -196,13 +221,25 @@ def main():
         seen["on_again"] = {"flag": True, "entries": 1, "notes": body["notes"], "stored_sha256": sha(stored)}
         print("on again: flag and entry back, the stored note read back, file unchanged", flush=True)
 
+        # uninstalled: a separate, explicit deletion. Off above kept the file; the default uninstall removes it.
+        confirm_target(bindir, env, work, resolved)
+        personad(bindir, env, work, "extension", "uninstall", ID)
+        smoke.wait_for("the flag to go after uninstall", 30, lambda: FLAG not in features(base))
+        check(not entries(base, token), "uninstalled: the navigation entry is still listed")
+        status, _ = call(base, token, "GET", ROUTE)
+        check(status == 404, f"uninstalled: the route answers {status}, want 404")
+        core_answers(base, token)
+        check(not stored.parent.exists(), f"uninstalled: the data directory remains at {stored.parent}")
+        seen["uninstalled"] = {"flag": False, "entries": 0, "route": status, "data_dir_exists": False}
+        print("uninstalled: flag and entry gone, route 404, Core answers, data directory deleted", flush=True)
+
         smoke.stop_hub(hub, bindir)
         hub = None
         if a.evidence:
             Path(a.evidence).write_text(json.dumps(seen, ensure_ascii=False, indent=2) + "\n")
-        print(f"PASS core-only sample: core-only hub, {ID} absent -> installed -> off -> on again; flag, navigation entry "
-              f"and route follow the switch, stored value unchanged (sha256 {before[:12]}), clean shutdown "
-              f"({time.monotonic() - started:.0f}s)")
+        print(f"PASS core-only sample: core-only hub, {ID} absent -> installed -> off -> on again -> uninstalled; flag, "
+              f"navigation entry and route follow the switch, off leaves the stored value unchanged (sha256 {before[:12]}), "
+              f"uninstall deletes it, clean shutdown ({time.monotonic() - started:.0f}s)")
         return 0
     except (Failed, TimedOut) as e:
         verdict = "TIMEOUT" if isinstance(e, TimedOut) else "FAIL"

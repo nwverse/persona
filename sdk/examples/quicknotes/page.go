@@ -65,32 +65,44 @@ func (a *app) home(ctx context.Context, r *ext.UIRequest) (*wire.View, error) {
 
 // act answers a tap; an empty result draws the page again.
 func (a *app) act(ctx context.Context, r *ext.UIRequest) (*wire.ActionResult, error) {
+	lang := langOf(r.Locale)
 	switch {
 	case r.Action == actionAdd:
 		if _, err := a.book.Add(r.Values["text"], MarkPlain, a.now()); err != nil {
-			return nil, userError(err)
+			return nil, userError(err, lang)
 		}
 	case strings.HasPrefix(r.Action, actionToggle):
 		id, err := ParseNoteID(strings.TrimPrefix(r.Action, actionToggle))
 		if err != nil {
-			return nil, userError(err)
+			return nil, userError(err, lang)
 		}
 		if _, err := a.book.Toggle(id); err != nil {
-			return nil, userError(err)
+			return nil, userError(err, lang)
 		}
 	default:
-		return nil, &ext.Error{Code: "invalid", Message: "unknown action"}
+		return nil, &ext.Error{Code: "invalid", Message: TextUnknownAction.In(lang)}
 	}
 	return nil, nil
 }
 
 // userError is err as the app shows it: the book's own refusals are the user's to read, anything else is internal.
-func userError(err error) error {
+func userError(err error, lang Lang) error {
+	var text Text
 	switch {
-	case errors.Is(err, errNoNote):
-		return &ext.Error{Code: "not_found", Message: err.Error()}
-	case errors.Is(err, errBadNoteID), errors.Is(err, errEmptyNote), errors.Is(err, errLongNote), errors.Is(err, errFullBook):
-		return &ext.Error{Code: "invalid", Message: err.Error()}
+	case errors.Is(err, errNoNote), errors.Is(err, errBadNoteID):
+		text = TextNoNote
+	case errors.Is(err, errEmptyNote):
+		text = TextNeedsText
+	case errors.Is(err, errLongNote):
+		text = TextNoteTooLong
+	case errors.Is(err, errFullBook):
+		text = TextBookFull
+	default:
+		return err
 	}
-	return err
+	code := "invalid"
+	if text == TextNoNote {
+		code = "not_found"
+	}
+	return &ext.Error{Code: code, Message: text.In(lang)}
 }

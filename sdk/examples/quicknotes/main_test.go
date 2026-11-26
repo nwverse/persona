@@ -113,6 +113,17 @@ func TestEveryTextIsTranslated(t *testing.T) {
 			t.Errorf("locale %q: title %q, want %q", locale, v.Title, title)
 		}
 	}
+	r := &ext.UIRequest{}
+	r.Action = actionAdd
+	r.Values = map[string]string{"text": " "}
+	for locale, want := range map[string]string{"en": "Enter some text for the note.", "zh-Hans": "请输入速记内容。", "ja-JP": "メモを入力してください。"} {
+		r.Locale = locale
+		_, err := a.act(context.Background(), r)
+		var e *ext.Error
+		if !asExtError(err, &e) || e.Message != want {
+			t.Errorf("empty-note error in %q: %#v, want %q", locale, err, want)
+		}
+	}
 	for _, f := range []string{"l10n/en.json", "l10n/zh-Hans.json", "l10n/ja.json"} {
 		var l struct {
 			Name string

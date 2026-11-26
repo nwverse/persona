@@ -361,5 +361,7 @@ Apple builds, where a cold build costs the most:
   installed with `--yes` onto the machine's own hub instead of the temporary one; nothing in the output named the hub.
   Unsetting is not enough to rely on. Run every hub command of a test as
   `env -i HOME=<temp home> PERSONA_HOME=<temp home>/.persona PATH="$PATH" personad …`, read the address that home
-  resolves to (`hub.json`'s `listen`) and compare it with the test hub's before the first command, as
-  `scripts/ci/core-sample.py` does; the smoke scripts start their hubs with a clean environment for the same reason.
+  resolves to (`hub.json`'s `listen`) and compare it with the test hub's before the first command. Before every write,
+  run the read-only `personad extension list` in that same environment and print and verify the home and address again
+  (the list itself does not print them), as `scripts/ci/core-sample.py` does; the smoke scripts start their hubs with a
+  clean environment for the same reason.

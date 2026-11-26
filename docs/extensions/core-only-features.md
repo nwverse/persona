@@ -58,19 +58,39 @@ Keep to the same typing rule in anything you hand to Core or to a client: closed
 ## Step by step
 
 You need the core-only programs (`personad`, `persona-hub`, `persona-manager`), a running core-only hub, and Go for a
-Go extension. `personad` carries the SDK and the templates, so nothing else of this repository is needed.
+Go extension. `personad` carries the SDK and the templates, so nothing else of this repository is needed. For a
+completely disposable proof, `python3 scripts/ci/core-sample.py` builds and starts that hub itself, follows these steps,
+and removes its own container and temporary home; the commands below are the same steps by hand.
 
 > **Test hubs: say which hub, every time.** `personad extension …` reads the hub's address and token from
 > `$PERSONA_HOME/hub.json`, and only when `PERSONA_HOME` is unset from `$HOME/.persona/hub.json`. A shell on a machine
-> that also runs a real hub (or an Agent started by one) usually **inherits `PERSONA_HOME`**, so changing only `HOME`
-> does not move the command: it installs onto the real hub. When you try this on a test hub, run every command as
-> `env -i HOME=<test home> PERSONA_HOME=<test home>/.persona PATH="$PATH" personad extension …` and read
-> `<test home>/.persona/hub.json`'s `listen` first. `scripts/ci/core-sample.py` does both.
+> that also runs a real hub (or an Agent started by one) can **inherit `PERSONA_HOME`**, so changing only `HOME` does
+> not move the command: it can install onto the real hub. That happened while this sample was being developed; the
+> owner removed the mistakenly installed extension. Never rely on `unset`, and never read or use the real home for the
+> test. Run every CLI command with a clean environment and an explicit `PERSONA_HOME`.
+
+Set these to **new sandbox paths**, never to an existing hub's paths. The function prints the resolved home and listen
+address before each CLI call; `extension list` alone does not print them today.
+
+```sh
+TEST_HOME=/absolute/path/to/a/new/test/home
+PERSONAD=/absolute/path/to/the/core-only/bin/personad
+sand() {
+  env -i HOME="$TEST_HOME" PERSONA_HOME="$TEST_HOME/.persona" PATH="$PATH" \
+    python3 -c 'import json, os; p=os.environ["PERSONA_HOME"]; print("PERSONA_HOME="+p+" hub="+json.load(open(p+"/hub.json"))["listen"])' &&
+  env -i HOME="$TEST_HOME" PERSONA_HOME="$TEST_HOME/.persona" PATH="$PATH" "$PERSONAD" "$@"
+}
+sand extension list
+```
+
+The first command is read-only. Continue only if its first line names the test home and the test hub's `listen` address;
+otherwise stop. Before **every** write below (`install`, `disable`, `enable`, `uninstall`), run `sand extension list`
+again and make that same check. `scripts/ci/core-sample.py` performs the equivalent check and refuses a mismatch.
 
 1. **Start from the template or the sample.** A new extension of your own:
 
    ```sh
-   personad extension new mynotes --template go --name "My notes"   # writes ./mynotes with a copy of the SDK
+   sand extension new mynotes --template go --name "My notes"   # writes ./mynotes with a copy of the SDK
    ```
 
    To run the sample as it is, work in `sdk/examples/quicknotes` of a checkout (it builds against `sdk/go` beside it).
@@ -97,20 +117,21 @@ Go extension. `personad` carries the SDK and the templates, so nothing else of t
 
    ```sh
    go test ./...              # your tests and the SDK's conformance check (exttest.Check)
-   personad extension test    # the manifest and package as at install, and the hub's stricter protocol checks
+   sand extension test        # the manifest and package as at install, and the hub's stricter protocol checks
    ```
 
 5. **Pack and install** onto the running core-only hub, on the hub machine:
 
    ```sh
-   personad extension pack                      # builds each platform of the manifest, writes dist/<id>-<version>.tar.gz
-   personad extension install "$PWD/dist/quicknotes-0.1.0.tar.gz" --yes
+   sand extension pack                      # builds each platform of the manifest, writes dist/<id>-<version>.tar.gz
+   sand extension list                      # read-only: verify the printed sandbox home and hub first
+   sand extension install "$PWD/dist/quicknotes-0.1.0.tar.gz" --yes
    ```
 
    Give `install` an absolute path: the hub opens the file, not the command. Without `--yes` it shows what the
    extension may do and asks. The Admin UI's **Extensions** page installs the same package.
 
-6. **See it work.** With `<hub>` the hub's address and `<token>` a credential of yours:
+6. **See it work.** With `<hub>` the test hub's address and `<token>` a credential of that test hub:
 
    ```sh
    curl -s <hub>/api/v1/health                                   # "features" now has "quicknotes"
@@ -119,18 +140,31 @@ Go extension. `personad` carries the SDK and the templates, so nothing else of t
    curl -s -H "Authorization: Bearer <token>" <hub>/api/v1/quicknotes/notes
    ```
 
-   Open the web app: **Quick notes** is in the sidebar, and its page lists the note. The route answers a moment
-   after `install` or `enable` returns (the list says `running`).
+   Open the test hub's web app: **Quick notes** is in the sidebar, and its page lists the note. The route answers a
+   moment after `install` or `enable` returns (the list says `running`).
 
 7. **Switch it off and on.**
 
    ```sh
-   personad extension disable quicknotes    # flag gone, entry gone, the route 404; notes.json untouched
-   personad extension show quicknotes       # "data_dir": where the stored value is
-   personad extension enable quicknotes     # the same notes are back
+   sand extension list                      # verify the target before the write
+   sand extension disable quicknotes        # flag gone, entry gone, the route 404; notes.json untouched
+   sand extension show quicknotes           # "data_dir": where the stored value is
+   sand extension list                      # verify the target again
+   sand extension enable quicknotes         # the same notes are back
    ```
 
    The apps' **Settings › Extensions** has the same switch. It takes effect at once: no hub or manager restart.
+
+8. **Uninstall, if that is what you mean.** This is different from switching off: without `--keep-data`, it explicitly
+   deletes the extension's data directory, including `notes.json`.
+
+   ```sh
+   sand extension list                      # verify the target before the write
+   sand extension uninstall quicknotes      # entry and route gone; notes.json deleted
+   ```
+
+   Use `sand extension uninstall quicknotes --keep-data` instead only when you intentionally want the data directory
+   left on disk. In either case the flag, entry and route are gone and Core remains usable.
 
 ## Switched off: what goes, what stays
 
@@ -165,9 +199,10 @@ and searchable without you.
 - `go test ./...` in the extension: `TestConformance` (the protocol and every page's View), the route, the stored
   file, the closed sets and the three languages.
 - `python3 scripts/ci/core-sample.py`: builds the core-only programs, starts a hub in a temporary home on a disposable
-  Postgres container and runs steps 4 to 7 with `sdk/examples/quicknotes`: absent, installed, off, on again. One
-  PASS / FAIL / TIMEOUT line. `scripts/ci/server.sh build` runs it ('Core-only sample extension'), with the sample's
-  own tests ('Sample extension tests').
+  Postgres container and runs steps 4 to 8 with `sdk/examples/quicknotes`: absent, installed, off, on again and
+  uninstalled. It checks the sandbox target before every hub write. One PASS / FAIL / TIMEOUT line.
+  `scripts/ci/server.sh build` runs it ('Core-only sample extension'), with the sample's own tests
+  ('Sample extension tests').
 
 ## What you cannot do yet
 
@@ -184,3 +219,6 @@ Each of these needs a Core change today; none is worked around by the sample (#1
    socket and the Go SDK then stops. Serve HTTP only when `ext.Env().Socket` is set, as the sample does.
 6. **The bounded `storage.*` store from Go**: only the TypeScript SDK has its client; a Go extension keeps a file in
    its data directory.
+7. **A CLI target guard**: `extension list` and the install preview do not print the resolved home and hub address, so
+   the safe wrapper above is necessary. #16302 proposes target reporting and optional exact-target flags; implementing
+   it is a separate Core change, not part of this sample.
