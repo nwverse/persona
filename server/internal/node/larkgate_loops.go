@@ -130,8 +130,11 @@ func literalLarkLoopCommands(cmd string, gates []proto.CommandGate) ([]string, b
 					return false
 				}
 			}
-			// A variable method remains unknown, matching the existing gate policy.
+			// A variable method, lark-cli subcommand word, or sensitive flag remains unknown, matching the gate policy.
 			if gated && index+1 < len(bound) && bound[index+1] {
+				return false
+			}
+			if isLarkCLI(name) && larkCLILoopBindingUnsafe(words[index+1:], original[index+1:], bound[index+1:]) {
 				return false
 			}
 			if gateOf(gates, name) >= 0 && (index+1 >= len(words) || !strings.EqualFold(words[index+1], "GET") && !strings.EqualFold(words[index+1], "HEAD")) {
@@ -214,6 +217,90 @@ func literalLarkLoopCommands(cmd string, gates []proto.CommandGate) ([]string, b
 		}
 	}
 	return commands, loops > 0 && resolved
+}
+
+// larkCLILoopBindingUnsafe rejects loop-variable bindings in lark-cli subcommand words, api HTTP methods, flag names,
+// bare positional arguments after flags, and sensitive flags (--as, --method, -X, --request, --profile, --dry-run,
+// --help, --version). Ordinary flag values and api GET/HEAD paths may still be bound from a literal for-list (#15860).
+func larkCLILoopBindingUnsafe(args, origArgs []string, bound []bool) bool {
+	i := 0
+	for i < len(args) && strings.HasPrefix(args[i], "-") {
+		key, _, inline := strings.Cut(args[i], "=")
+		if !strings.Contains(" --as --format -q --jq -o --output ", " "+key+" ") {
+			break
+		}
+		origKey, _, _ := strings.Cut(origArgs[i], "=")
+		if bound[i] && (!inline || strings.Contains(origKey, "$") || larkCLISensitiveFlags[key]) {
+			return true
+		}
+		i++
+		if !inline {
+			if i == len(args) {
+				return true
+			}
+			if larkCLISensitiveFlags[key] && bound[i] {
+				return true
+			}
+			i++
+		}
+	}
+	subStart := i
+	for ; i < len(args); i++ {
+		if strings.HasPrefix(args[i], "-") {
+			break
+		}
+	}
+	subWords, subBound := args[subStart:i], bound[subStart:i]
+	if len(subWords) > 0 && subWords[0] == "api" {
+		if subBound[0] || len(subWords) > 1 && subBound[1] {
+			return true
+		}
+	} else {
+		for _, b := range subBound {
+			if b {
+				return true
+			}
+		}
+	}
+	afterDashDash := false
+	for ; i < len(args); i++ {
+		f := args[i]
+		if afterDashDash {
+			if bound[i] {
+				return true
+			}
+			continue
+		}
+		if f == "--" {
+			afterDashDash = true
+			continue
+		}
+		if !strings.HasPrefix(f, "-") {
+			if bound[i] {
+				return true
+			}
+			continue
+		}
+		key, _, inline := strings.Cut(f, "=")
+		origKey, _, _ := strings.Cut(origArgs[i], "=")
+		if bound[i] && (!inline || strings.Contains(origKey, "$") || larkCLISensitiveFlags[key]) {
+			return true
+		}
+		if inline || larkCLIBoolFlags[key] || larkCLIReadBoolFlags[key] {
+			continue
+		}
+		if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+			i++
+			if larkCLISensitiveFlags[key] && bound[i] {
+				return true
+			}
+			continue
+		}
+		if larkCLISensitiveFlags[key] {
+			return true
+		}
+	}
+	return false
 }
 
 // bindLiteralLoopAssignments records only top-level scalar assignments whose value is one literal executable word.

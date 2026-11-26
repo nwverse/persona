@@ -320,12 +320,15 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 	// segment for larkTextRuns.
 	flow := make([]larkFlow, 0, len(segs))
 	// sequential: a `;` / `&&` / `||` list of simple commands, run one after another in the order written.
+	var tree *syntax.File
 	sequential := false
-	if tree, err := syntax.NewParser().Parse(strings.NewReader(cmd), ""); err == nil {
+	if parsedTree, err := syntax.NewParser().Parse(strings.NewReader(cmd), ""); err == nil {
+		tree = parsedTree
 		_, sequential = larkFlatStmts(tree.Stmts)
 	}
+	allowHome := !strings.Contains(cmd, "HOME=")
 	for position, s := range segs {
-		writes, notes := larkWritesFile(s.Redirect)
+		writes, notes := larkWritesFileWithVars(s.Redirect, vars, allowHome)
 		flow = append(flow, larkFlow{text: s.Text, writes: writes, notes: notes})
 		seg := &flow[len(flow)-1]
 		seg.resolved = resolvedPrefixes[position]
@@ -367,7 +370,7 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 		// from a file (`$(cat ids.txt)`, `$(< ids.txt)`, #9101), as from $(head …): a write with it stays unknown by
 		// the dynamic-argument rule below. In any other command's argument (curl's) a file read stays unsure: it could
 		// carry the file elsewhere.
-		cliFileRead := s.ArgSubst && nestedUnsure && fileReads && larkSegmentCLI(s.Words)
+		cliFileRead := s.ArgSubst && nestedUnsure && fileReads && (larkSegmentCLI(s.Words) || larkFileReadForLoop(tree, s.Words, gates))
 		if s.ArgSubst && nestedUnsure && !cliFileRead {
 			v.unsure, v.other = true, true
 		}
@@ -555,7 +558,7 @@ func classifyLarkAt(cmd string, gates []proto.CommandGate, cwd string, risk lark
 			sequential = sequential && name != "trap" // its code runs later
 		}
 	}
-	if larkTextRuns(cmd, flow, sequential) {
+	if larkTextRuns(cmd, flow, sequential, vars) {
 		v.other, v.unknown = true, true
 	}
 	if executableEnv && (len(v.calls) > 0 || larkCLIRe.MatchString(cmd)) {
@@ -604,13 +607,34 @@ func larkSubstitutionFilter(cmd string, inlineCode bool) bool {
 }
 
 // larkFileReadSubstitution: a command substitution that only reads files, `cat <file>…` with plain file words or
-// `< file` (#9101). Kept only in a lark-cli read's argument (larkSegmentCLI), as $(head …) is anywhere.
+// `< file` (#9101), optionally piped through pure read-only filters (`sort -u`, `head`, `jq`, etc., #15860). Kept only
+// in a lark-cli read's argument (larkSegmentCLI) or a safe lark-cli read for-loop header (larkFileReadForLoop).
 func larkFileReadSubstitution(cmd string) bool {
 	segs, ok := shellcmd.Split(cmd)
-	if !ok || len(segs) != 1 || segs[0].Subst {
+	if !ok || len(segs) == 0 {
 		return false
 	}
-	s := segs[0]
+	if !larkFileReadSegment(segs[0]) {
+		return false
+	}
+	if len(segs) == 1 {
+		return true
+	}
+	if !larkPurePipeChain(cmd, len(segs)) {
+		return false
+	}
+	for _, s := range segs[1:] {
+		if !larkPurePipeFilter(s) {
+			return false
+		}
+	}
+	return true
+}
+
+func larkFileReadSegment(s shellcmd.Segment) bool {
+	if s.Subst {
+		return false
+	}
 	if len(s.Words) == 0 {
 		return larkReadsFileOnly(s.Redirect)
 	}
@@ -621,6 +645,274 @@ func larkFileReadSubstitution(cmd string) bool {
 		if strings.HasPrefix(w, "-") || strings.ContainsAny(w, "$`") {
 			return false
 		}
+	}
+	return true
+}
+
+// larkPurePipeChain reports whether cmd parses as a single pipeline of want CallExprs (no ;, &&, ||, or compounds).
+func larkPurePipeChain(cmd string, want int) bool {
+	tree, err := syntax.NewParser().Parse(strings.NewReader(cmd), "")
+	if err != nil || len(tree.Stmts) != 1 {
+		return false
+	}
+	count := 0
+	var walk func(*syntax.Stmt) bool
+	walk = func(st *syntax.Stmt) bool {
+		if st.Background || st.Coprocess || st.Negated {
+			return false
+		}
+		switch c := st.Cmd.(type) {
+		case *syntax.CallExpr:
+			count++
+			return true
+		case *syntax.BinaryCmd:
+			return len(st.Redirs) == 0 && (c.Op == syntax.Pipe || c.Op == syntax.PipeAll) && walk(c.X) && walk(c.Y)
+		}
+		return false
+	}
+	return walk(tree.Stmts[0]) && count == want
+}
+
+// larkPurePipeFilter permits stdin/stdout read-only filters inside a file-read command substitution, rejecting options
+// that write files (`sort -o`, `uniq` output operands).
+func larkPurePipeFilter(s shellcmd.Segment) bool {
+	if s.Subst || s.Redirect != "" || len(s.Words) == 0 {
+		return false
+	}
+	words, ok := unwrapCommand(s.Words)
+	if !ok || len(words) != len(s.Words) || len(words) == 0 {
+		return false
+	}
+	switch words[0] {
+	case "jq", "head", "tail", "grep", "egrep", "cut", "tr", "wc", "column":
+		return true
+	case "sort":
+		for _, a := range words[1:] {
+			if a == "-o" || strings.HasPrefix(a, "--output") || (strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--") && strings.Contains(a[1:], "o")) {
+				return false
+			}
+		}
+		return true
+	case "uniq":
+		for _, a := range words[1:] {
+			if !strings.HasPrefix(a, "-") {
+				return false // avoid file output operands
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// larkFileReadForLoop reports whether a `for <var> in …` segment with a file-read substitution drives a lark-cli loop
+// whose body only runs lark-cli and safe local utilities, and never passes the loop variable (or any variable assigned
+// inside the loop) to a non-allowlisted command such as curl (#15860).
+func larkFileReadForLoop(tree *syntax.File, words []string, gates []proto.CommandGate) bool {
+	if tree == nil || len(words) < 4 || words[0] != "for" || words[2] != "in" {
+		return false
+	}
+	varName := words[1]
+	if !isShellIdent(varName) || varName == "IFS" || larkExecutableEnv[varName] || varName == larkProfileEnvName {
+		return false
+	}
+	switch varName {
+	case "RANDOM", "SRANDOM", "SECONDS":
+		return false
+	}
+	matched := 0
+	allSafe := true
+	syntax.Walk(tree, func(node syntax.Node) bool {
+		if !allSafe {
+			return false
+		}
+		fc, ok := node.(*syntax.ForClause)
+		if !ok {
+			return true
+		}
+		list, ok := fc.Loop.(*syntax.WordIter)
+		if !ok || list.Name == nil || list.Name.Value != varName {
+			return true
+		}
+		matched++
+		if fc.Select || !list.InPos.IsValid() || len(list.Items) == 0 {
+			allSafe = false
+			return false
+		}
+		if !larkSafeFileReadForClause(tree, fc, varName, gates) {
+			allSafe = false
+			return false
+		}
+		return true
+	})
+	return matched > 0 && allSafe
+}
+
+func larkSafeFileReadForClause(tree *syntax.File, fc *syntax.ForClause, varName string, gates []proto.CommandGate) bool {
+	tainted := map[string]bool{varName: true}
+	hasLarkCLI := false
+	bodyOK := true
+	for _, stmt := range fc.Do {
+		syntax.Walk(stmt, func(node syntax.Node) bool {
+			if !bodyOK {
+				return false
+			}
+			switch n := node.(type) {
+			case *syntax.DeclClause, *syntax.FuncDecl, *syntax.ArithmCmd, *syntax.ArithmExp, *syntax.ProcSubst:
+				bodyOK = false
+				return false
+			case *syntax.ParamExp:
+				if n.Exp != nil && (n.Exp.Op == syntax.AssignUnset || n.Exp.Op == syntax.AssignUnsetOrNull) {
+					bodyOK = false
+					return false
+				}
+			case *syntax.Stmt:
+				if n.Background || n.Coprocess {
+					bodyOK = false
+					return false
+				}
+			case *syntax.CallExpr:
+				for _, a := range n.Assigns {
+					if a.Name == nil || a.Name.Value == "IFS" || larkExecutableEnv[a.Name.Value] || a.Name.Value == larkProfileEnvName {
+						bodyOK = false
+						return false
+					}
+					if len(n.Args) == 0 {
+						tainted[a.Name.Value] = true
+					}
+				}
+				if len(n.Args) == 0 {
+					return true
+				}
+				callWords := make([]string, len(n.Args))
+				for i, arg := range n.Args {
+					callWords[i], _ = executionWord(arg)
+				}
+				rest, parsed := unwrapCommand(callWords)
+				if !parsed || len(rest) == 0 {
+					bodyOK = false
+					return false
+				}
+				if isLarkCLI(rest[0]) {
+					hasLarkCLI = true
+					return true
+				}
+				if gateOf(gates, rest[0]) >= 0 || !larkLoopSafeLocalCommand(rest) {
+					bodyOK = false
+					return false
+				}
+			}
+			return true
+		})
+		if !bodyOK {
+			return false
+		}
+	}
+	if !hasLarkCLI {
+		return false
+	}
+	outsideOK := true
+	syntax.Walk(tree, func(node syntax.Node) bool {
+		if !outsideOK {
+			return false
+		}
+		if node == fc {
+			return false // already inspected fc.Do above; fc.Loop is the header itself
+		}
+		switch n := node.(type) {
+		case *syntax.ForClause:
+			if larkNodeUsesVars(n.Loop, tainted) {
+				outsideOK = false
+				return false
+			}
+		case *syntax.Assign:
+			if larkNodeUsesVars(n, tainted) {
+				outsideOK = false
+				return false
+			}
+		case *syntax.ArithmCmd, *syntax.ArithmExp:
+			if larkNodeUsesVars(n, tainted) {
+				outsideOK = false
+				return false
+			}
+		case *syntax.ParamExp:
+			if n.Exp != nil && (n.Exp.Op == syntax.AssignUnset || n.Exp.Op == syntax.AssignUnsetOrNull) && larkNodeUsesVars(n.Exp.Word, tainted) {
+				outsideOK = false
+				return false
+			}
+		case *syntax.Stmt:
+			if !larkNodeUsesVars(n, tainted) {
+				return true
+			}
+			call, isCall := n.Cmd.(*syntax.CallExpr)
+			if !isCall {
+				return true
+			}
+			if len(call.Args) == 0 {
+				outsideOK = false // do not allow copying tainted vars outside the loop
+				return false
+			}
+			callWords := make([]string, len(call.Args))
+			for i, arg := range call.Args {
+				callWords[i], _ = executionWord(arg)
+			}
+			rest, parsed := unwrapCommand(callWords)
+			if !parsed || len(rest) == 0 {
+				outsideOK = false
+				return false
+			}
+			if !isLarkCLI(rest[0]) && !larkLoopSafeLocalCommand(rest) {
+				outsideOK = false
+				return false
+			}
+		}
+		return true
+	})
+	return outsideOK
+}
+
+func larkLoopSafeLocalCommand(words []string) bool {
+	if len(words) == 0 || dynamicCommandName(words[0]) {
+		return false
+	}
+	name := words[0]
+	if larkFilters[name] {
+		if name == "printf" {
+			return !slices.ContainsFunc(words[1:], func(w string) bool { return strings.HasPrefix(w, "-v") })
+		}
+		return true
+	}
+	switch name {
+	case "cat", "ls", "tee", "sleep", "[", "[[", "test", "false", ":":
+		return true
+	}
+	return selfContainedCode(words) || inertPythonCode(words)
+}
+
+func larkNodeUsesVars(node syntax.Node, vars map[string]bool) bool {
+	used := false
+	syntax.Walk(node, func(n syntax.Node) bool {
+		if used {
+			return false
+		}
+		if p, ok := n.(*syntax.ParamExp); ok && p.Param != nil && vars[p.Param.Value] {
+			used = true
+			return false
+		}
+		return true
+	})
+	return used
+}
+
+func isShellIdent(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if c == '_' || 'A' <= c && c <= 'Z' || 'a' <= c && c <= 'z' || i > 0 && '0' <= c && c <= '9' {
+			continue
+		}
+		return false
 	}
 	return true
 }
@@ -858,7 +1150,7 @@ func larkVariableScopeStable(cmd string, gates []proto.CommandGate) bool {
 				allowed = gateOf(gates, suffix[1]) >= 0
 			}
 			if !allowed {
-				allowed = map[string]bool{"cat": true, "tee": true, "ls": true, "git": true, "go": true, "pwd": true, "sleep": true, "false": true, ":": true}[name] ||
+				allowed = map[string]bool{"cat": true, "tee": true, "ls": true, "mkdir": true, "git": true, "go": true, "pwd": true, "sleep": true, "false": true, ":": true}[name] ||
 					larkFilters[name] && name != "printf" && name != "cd"
 			}
 			if !allowed {
