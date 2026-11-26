@@ -84,7 +84,7 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     }
     setView(v);
   };
-  const [sheet, setSheet] = useState<{ mid: string; kind: AlertKind } | null>(null);
+  const [sheet, setSheet] = useState<{ mid: string; kind: Exclude<AlertKind, "disk"> } | null>(null);
   useEffect(() => {
     if (route.name !== "machines") return;
     const req = takeUsageFocus();
@@ -94,7 +94,12 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   useEffect(() => {
     if (legacyEngine) navigate({ name: "machine", mid: legacyEngine, subview: "management" }, true);
   }, [legacyEngine]);
-  const openAlert = useCallback((mid: string, kind: AlertKind) => setSheet({ mid, kind }), []);
+  const openAlert = useCallback((mid: string, kind: AlertKind) => {
+    if (kind === "disk") {
+      setSheet(null);
+      openUsageMap(mid);
+    } else setSheet({ mid, kind });
+  }, []);
   const records = useLauncherHealth();
   const issues = useMemo(() => {
     const by = new Map<string, number>();
@@ -258,7 +263,7 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
           )}
         </div>
       </FleetScroll>
-      <AlertSheetHost sheet={sheet} machines={machines} metrics={metrics} sessions={full.sessions} known={known} records={records} launcherIssues={launcherIssues} roster={roster} onKind={openAlert} onClose={() => setSheet(null)} onReconnect={reconnect} onUsageMap={mid => { setSheet(null); openUsageMap(mid); }} />
+      <AlertSheetHost sheet={sheet} machines={machines} metrics={metrics} sessions={full.sessions} known={known} records={records} launcherIssues={launcherIssues} roster={roster} onKind={openAlert} onClose={() => setSheet(null)} onReconnect={reconnect} />
       <AddComputer open={!!adding} again={adding?.again} onClose={() => setAdding(null)} />
       {helping && <HelpDialog topic="add_computer" machine="" step={null} onClose={() => setHelping(false)} onAction={() => {}} />}
     </div>
@@ -429,10 +434,7 @@ const MachineCard = memo(function MachineCard({ m, onlyComputer, index, metrics:
         </p>
       )}
       {/* an offline card has no metrics under them: the chips keep their own room above the footer */}
-      <AlertChips alerts={alerts} onOpen={(kind) => kind === "disk" ? openUsageMap(m.id) : onAlert(m.id, kind)} className={m.online ? undefined : "mb-3"} />
-      {alerts.some(a => a.kind === "disk") && <div className="mx-4">
-        <Button tone="quiet" testId="disk-details" onClick={() => onAlert(m.id, "disk")}>{t("machines.disk_details")}</Button>
-      </div>}
+      <AlertChips alerts={alerts} onOpen={(kind) => onAlert(m.id, kind)} className={m.online ? undefined : "mb-3"} />
       {deployment.visible && (
         <MachineDeploy machine={m} hostedManagers={hostedManagers} className="mt-2" onDetails={() => onAlert(m.id, m.deploy_error ? "deploy_failed" : "mismatch")} onClose={NOOP} />
       )}
@@ -554,8 +556,8 @@ function useLauncherHealth(): { list: LauncherHealthRecord[]; merge: (records: L
 }
 
 /** The alert sheet for the computer and alert asked for; closed (with its exit) when none is. */
-function AlertSheetHost({ sheet, machines, metrics, sessions, known, records, launcherIssues, roster, onKind, onClose, onReconnect, onUsageMap }: {
-  sheet: { mid: string; kind: AlertKind } | null;
+function AlertSheetHost({ sheet, machines, metrics, sessions, known, records, launcherIssues, roster, onKind, onClose, onReconnect }: {
+  sheet: { mid: string; kind: Exclude<AlertKind, "disk"> } | null;
   machines: Machine[];
   metrics: MachineMetrics[] | null;
   sessions: readonly Session[];
@@ -566,7 +568,6 @@ function AlertSheetHost({ sheet, machines, metrics, sessions, known, records, la
   onKind: (mid: string, kind: AlertKind) => void;
   onClose: () => void;
   onReconnect: (id: string) => Promise<void>;
-  onUsageMap: (mid: string) => void;
 }) {
   const m = sheet ? machines.find((x) => x.id === sheet.mid) : undefined;
   const mm = m ? metrics?.find((x) => x.machine_id === m.id) : undefined;
@@ -588,7 +589,6 @@ function AlertSheetHost({ sheet, machines, metrics, sessions, known, records, la
       onClose={onClose}
       onReconnect={onReconnect}
       onRecords={records.merge}
-      onUsageMap={onUsageMap}
       onReloadRecords={records.reload}
     />
   );

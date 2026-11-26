@@ -10,6 +10,10 @@ export interface MachineLocation {
 /** Shared by web history and persona://open. Only carry query keys owned by the selected view. */
 export function machineLocation(parts: string[], search: string): MachineLocation | null {
   const segment = parts[2];
+  if ((parts.length === 3 && segment === "cleanup") ||
+      (parts.length === 4 && segment === "storage" && parts[3] === "cleanup")) {
+    return { subview: "storage", mode: "reclaim" };
+  }
   const subview = (segment === "fs" ? "files" : segment) as MachineSubview | undefined;
   if (parts.length > 3 || (subview && !views.includes(subview))) return null;
   const query = new URLSearchParams(search);
