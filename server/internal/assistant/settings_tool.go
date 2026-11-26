@@ -521,6 +521,20 @@ func (s *Service) allOwnSettings() []ownSetting {
 				return fmt.Sprint(s.settings(ctx).todosV2FoldChildrenOn()), nil
 			},
 			set: s.setTodosV2FoldChildren},
+		{Setting: Setting{Key: todosV2QuietHoursSettingKey, Title: "Quiet hours for routine notifications (todos_v2)", Actions: getSet,
+			About: "optional 24-hour local-time quiet window (HH:MM-HH:MM, e.g. 22:00-08:00 or 13:00-15:00) under todos_v2=true during which routine non-card, non-P0, non-notify_user pushes downgrade to LevelP2; empty string disables quiet hours (default); P0, cards, approvals, and notify_user are never muted; no effect when todos_v2 is off",
+			Value: `"" (off) or "HH:MM-HH:MM"`},
+			get: func(ctx context.Context) (string, error) {
+				return s.settings(ctx).todosV2QuietHours(), nil
+			},
+			set: s.setTodosV2QuietHours},
+		{Setting: Setting{Key: todosV2DigestWindowMinutesSettingKey, Title: "Routine notification digest window in minutes (todos_v2)", Actions: getSet,
+			About: "optional burst-coalescing window in minutes under todos_v2=true: 0 (off, default), 30, 60, or 120; follow-up routine non-card, non-P0, non-notify_user pushes for the same session/direction within the window downgrade to LevelP2; P0, cards, approvals, and notify_user are never muted; no effect when todos_v2 is off",
+			Value: "0, 30, 60 or 120"},
+			get: func(ctx context.Context) (string, error) {
+				return fmt.Sprint(s.settings(ctx).todosV2DigestWindowMinutes()), nil
+			},
+			set: s.setTodosV2DigestWindowMinutes},
 		s.trustSetting(),
 		s.urgentRulesSetting(), // urgent_call_rules.go
 	}
@@ -821,10 +835,12 @@ var settingTitles = map[string]string{modulesKey: "title_modules", standingAutho
 const dashboardsSettingKey = "assistant.dashboards"
 
 const (
-	todosV2AutoSeenSettingKey         = "assistant.todos_v2_auto_seen"
-	todosV2PendingReviewSLASettingKey = "assistant.todos_v2_pending_review_sla_hours"
-	todosV2CanWaitSLASettingKey       = "assistant.todos_v2_can_wait_sla_hours"
-	todosV2FoldChildrenSettingKey     = "assistant.todos_v2_fold_children"
+	todosV2AutoSeenSettingKey            = "assistant.todos_v2_auto_seen"
+	todosV2PendingReviewSLASettingKey    = "assistant.todos_v2_pending_review_sla_hours"
+	todosV2CanWaitSLASettingKey          = "assistant.todos_v2_can_wait_sla_hours"
+	todosV2FoldChildrenSettingKey        = "assistant.todos_v2_fold_children"
+	todosV2QuietHoursSettingKey          = "assistant.todos_v2_quiet_hours"
+	todosV2DigestWindowMinutesSettingKey = "assistant.todos_v2_digest_window_minutes"
 )
 
 // clipped is a value as the card shows it, in l.
@@ -1496,6 +1512,73 @@ func (s *Service) setTodosV2FoldChildren(ctx context.Context, v json.RawMessage)
 			s.settingsChanged(ctx)
 			s.todosChanged(ctx)
 			return fmt.Sprintf("%s is %v (applies when todos_v2 is enabled).", todosV2FoldChildrenSettingKey, on), nil
+		},
+	}, nil
+}
+
+func (s *Service) setTodosV2QuietHours(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	var rawPtr *string
+	if err := json.Unmarshal(v, &rawPtr); err != nil || rawPtr == nil {
+		return nil, errors.New("todos_v2_quiet_hours must be empty or HH:MM-HH:MM (24-hour range with distinct start and end)")
+	}
+	next := strings.TrimSpace(*rawPtr)
+	if next != "" {
+		if _, ok := parseTodosV2QuietHours(next); !ok {
+			return nil, errors.New("todos_v2_quiet_hours must be empty or HH:MM-HH:MM (24-hour range with distinct start and end)")
+		}
+	}
+	before := s.settings(ctx).todosV2QuietHours()
+	if next == before {
+		return &ownChange{summary: todosV2QuietHoursSettingKey + " is unchanged"}, nil
+	}
+	if s.store() == nil {
+		return nil, errors.New("no database on this hub")
+	}
+	display := func(val string) string {
+		if val == "" {
+			return "off"
+		}
+		return val
+	}
+	return &ownChange{
+		cardText: func(l i18n.Lang) string {
+			return fmt.Sprintf("Change %s: %s → %s", todosV2QuietHoursSettingKey, display(before), display(next))
+		},
+		apply: func(ctx context.Context) (string, error) {
+			if _, err := s.updateSettings(ctx, func(v *Settings) error { v.TodosV2QuietHours = next; return nil }); err != nil {
+				return "", err
+			}
+			s.settingsChanged(ctx)
+			s.todosChanged(ctx)
+			return fmt.Sprintf("%s is %s (applies when todos_v2 is enabled).", todosV2QuietHoursSettingKey, display(next)), nil
+		},
+	}, nil
+}
+
+func (s *Service) setTodosV2DigestWindowMinutes(ctx context.Context, v json.RawMessage) (*ownChange, error) {
+	var mins *int
+	if err := json.Unmarshal(v, &mins); err != nil || mins == nil || !slices.Contains(todosV2DigestWindowOptions, *mins) {
+		return nil, errors.New("todos_v2_digest_window_minutes must be 0, 30, 60 or 120")
+	}
+	next := *mins
+	before := s.settings(ctx).todosV2DigestWindowMinutes()
+	if next == before {
+		return &ownChange{summary: todosV2DigestWindowMinutesSettingKey + " is unchanged"}, nil
+	}
+	if s.store() == nil {
+		return nil, errors.New("no database on this hub")
+	}
+	return &ownChange{
+		cardText: func(l i18n.Lang) string {
+			return fmt.Sprintf("Change %s: %d → %d", todosV2DigestWindowMinutesSettingKey, before, next)
+		},
+		apply: func(ctx context.Context) (string, error) {
+			if _, err := s.updateSettings(ctx, func(v *Settings) error { v.TodosV2DigestWindowMinutes = &next; return nil }); err != nil {
+				return "", err
+			}
+			s.settingsChanged(ctx)
+			s.todosChanged(ctx)
+			return fmt.Sprintf("%s is %d (applies when todos_v2 is enabled).", todosV2DigestWindowMinutesSettingKey, next), nil
 		},
 	}, nil
 }

@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -36,6 +37,7 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		TranscriptionMode      json.RawMessage `json:"meeting_transcription_default"`
 		Glossary               json.RawMessage `json:"meeting_glossary"`
 		TranscriptionExtension json.RawMessage `json:"meeting_transcription_extension"`
+		TodosV2QuietHoursPatch json.RawMessage `json:"todos_v2_quiet_hours"`
 	}
 	var raw json.RawMessage
 	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
@@ -71,6 +73,7 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	if (in.Permission != nil || in.WorkGuide != nil || in.TodosV2 != nil ||
 		in.TodosV2AutoSeen != "" || in.TodosV2PendingReviewSLAHours != nil ||
 		in.TodosV2CanWaitSLAHours != nil || in.TodosV2FoldChildren != nil ||
+		in.TodosV2QuietHoursPatch != nil || in.TodosV2DigestWindowMinutes != nil ||
 		in.IntegrationsV2 != nil) && !s.explicitSettingsTarget(w, r) {
 		return
 	}
@@ -200,6 +203,25 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if h := in.TodosV2CanWaitSLAHours; h != nil && !slices.Contains(todosV2CanWaitSLAOptions, *h) {
 		apierr.Write(w, http.StatusBadRequest, errors.New("todos_v2_can_wait_sla_hours must be 0, 24, 48 or 72"))
+		return
+	}
+	var todosV2QuietHours string
+	if in.TodosV2QuietHoursPatch != nil {
+		var qh *string
+		if err := json.Unmarshal(in.TodosV2QuietHoursPatch, &qh); err != nil || qh == nil {
+			apierr.Write(w, http.StatusBadRequest, errors.New("todos_v2_quiet_hours must be empty or HH:MM-HH:MM (24-hour range with distinct start and end)"))
+			return
+		}
+		todosV2QuietHours = strings.TrimSpace(*qh)
+		if todosV2QuietHours != "" {
+			if _, ok := parseTodosV2QuietHours(todosV2QuietHours); !ok {
+				apierr.Write(w, http.StatusBadRequest, errors.New("todos_v2_quiet_hours must be empty or HH:MM-HH:MM (24-hour range with distinct start and end)"))
+				return
+			}
+		}
+	}
+	if m := in.TodosV2DigestWindowMinutes; m != nil && !slices.Contains(todosV2DigestWindowOptions, *m) {
+		apierr.Write(w, http.StatusBadRequest, errors.New("todos_v2_digest_window_minutes must be 0, 30, 60 or 120"))
 		return
 	}
 	if code := s.readMeetingTranscriptionSettings(&in.Settings, in.TranscriptionMode, in.Glossary, in.TranscriptionExtension); code != "" {
@@ -391,6 +413,12 @@ func (s *Service) putSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		if in.TodosV2FoldChildren != nil {
 			v.TodosV2FoldChildren = in.TodosV2FoldChildren
+		}
+		if in.TodosV2QuietHoursPatch != nil {
+			v.TodosV2QuietHours = todosV2QuietHours
+		}
+		if in.TodosV2DigestWindowMinutes != nil {
+			v.TodosV2DigestWindowMinutes = in.TodosV2DigestWindowMinutes
 		}
 		if in.IntegrationsV2 != nil {
 			v.IntegrationsV2 = in.IntegrationsV2
