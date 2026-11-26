@@ -5,6 +5,7 @@ import { readFileSync, existsSync } from 'node:fs';
 
 registerHooks({
   resolve(specifier, context, next) {
+    if (specifier === '../core/SessionSnapshot' || context.parentURL?.endsWith('/SessionSnapshot.ts') && specifier === './TranscriptCache') return {url: new URL(specifier + '.ts', context.parentURL).href, shortCircuit: true};
     if (specifier === '@kit.ArkTS') return { url: 'persona-question-test:arkts', shortCircuit: true };
     if (context.parentURL?.endsWith('/ClientModel.ets')) {
       if (['./Wire', './InteractionDecision', './ChatDraftStore', '../core/MessageImageGallery', '../core/Domain', '../core/AgentEvents', '../core/ConversationPlan'].includes(specifier)) {

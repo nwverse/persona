@@ -9,6 +9,7 @@ import { i18n } from '@kit.LocalizationKit';
 import { DemoRepository } from './DemoRepository';
 import { NavigationContext } from './NavigationContext';
 import { utf8Bytes } from '../core/TranscriptCache';
+import { decodeSessionSnapshot } from '../core/SessionSnapshot';
 import { ChatDraftStore, ChatDraft, ChatOutboxEntry } from './ChatDraftStore';
 import { clearImagePreviews } from '../platform/NativePreview';
 import { parseMessageContent } from '../core/MessageContent';
@@ -686,9 +687,9 @@ export class ClientModel {
   private async restoreSnapshot(generation: number, scope: string): Promise<void> {
     try {
       const owner = this.heldOwner(), heldRevision = owner.heldRevision(scope);
-      const cached = await new ChatDraftStore(this.local).readSessionSnapshot(scope);
-      if (!this.owns(generation, scope) || heldRevision !== owner.heldRevision(scope) || !cached) return;
-      const snapshot = Wire.record(JSON.parse(cached) as Object);
+      const snapshot = decodeSessionSnapshot(await new ChatDraftStore(this.local).readSessionSnapshot(scope));
+      // An unreadable snapshot (one stored before it was bounded was cut at 8 MiB) is no snapshot; the next sync replaces it.
+      if (!this.owns(generation, scope) || heldRevision !== owner.heldRevision(scope) || !snapshot) return;
       const restored = owner.heldReceipts.filter((receipt: HeldActionReceipt) => receipt.scope !== scope);
       for (const saved of Wire.rows(snapshot, 'heldActions')) {
         const target = Wire.text(saved, 'target'), expected = new HeldAgentMessage();

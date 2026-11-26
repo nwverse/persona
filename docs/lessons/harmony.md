@@ -135,3 +135,12 @@ exits at launch. The Agents list's quick filters list only states that have sess
 changes the set while the chosen filter keeps its key at a new position. Give the button a key made of its segments
 (a one-element `ForEach` keyed by the joined filter keys) so a different set builds a new button. Fixed segment lists
 need nothing. Reproduce it by launching with a filter selected while another state's count changes, not only by tapping.
+
+## Bound every value the relational store must read back
+
+The relational store writes a value it cannot read back: past about 2 MB the insert succeeds and the read fails. The
+launch snapshot (`snapshot:<scope>`) stored whole session rows, and a Hub with hundreds of sessions whose titles held pasted
+prompts produced a value cut at 8 MiB. Every launch failed to restore it, so the
+Agents list started empty until the Hub answered, with no visible cause. Bound anything that grows with Hub data before
+writing it (`core/SessionSnapshot.ts`: short display text, then a byte budget), and treat an unreadable value as absent
+so the next write replaces it. Measure on the device: `hdc file recv -b <bundle>` copies a debug build's database.
