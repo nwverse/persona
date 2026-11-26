@@ -79,7 +79,7 @@ export function TaskWaitInfo({ todo, merges: legacyMerges = [], expanded = false
   const handoff = info.handoff;
   const route = handoff && { name: "todos", id: handoff.todo_id } as const;
   const targetLine = route ? <>
-    {t("task-wait.kind_todo_handoff")} <a data-wait-target href={href(route)} className="text-accent-ink hover:underline"
+    {t("task-wait.kind_todo_handoff")} <a data-wait-target href={href(route)} className={cx("text-accent-ink hover:underline", isExpanded && "inline-flex items-center pointer-coarse:min-h-11 pointer-coarse:min-w-11")}
       onClick={(event) => { event.stopPropagation(); onLinkClick(event, route); }}>{handoff?.title || target}</a>
   </> : <span data-wait-target>{todo.wait != null ? waitSummary(todo.wait) : t(`task-wait.kind_${info.kind}`) + t("task-wait.target", { target })}</span>;
   return <div data-task-wait-info={todo.id} data-wait-kind={info.kind} data-wait-overdue={info.overdue ? "true" : "false"}
