@@ -118,6 +118,23 @@ internal fun ChatAppBindings.inGroup(names: GroupNames): ChatAppBindings {
         mainSender = mainSender.inGroup(names, coroutineScope),
         draftVersions = { key -> source.draftVersions(names.raw(key)) },
         ports = ports?.inGroup(names),
+        // The model panel also uses this provider to read launcher and model lists.
+        worktrees = worktrees?.let { provider ->
+            val lock = Any()
+            var previous: AgentCreationService? = null
+            var grouped: AgentCreationService? = null
+            val resolve: () -> AgentCreationService? = {
+                synchronized(lock) {
+                    val service = provider()
+                    if (service !== previous) {
+                        grouped = service?.inGroup(names)
+                        previous = service
+                    }
+                    grouped
+                }
+            }
+            resolve
+        },
         agentShares = agentShares?.let { provider -> AgentSharesProvider { session, manager ->
             if (GroupKeys.namespaceOf(session.machineId) != names.namespace) throw AgentShareFailure("session_conflict")
             val api = provider.forSession(names.raw(session), manager)
@@ -329,6 +346,15 @@ internal fun AssistantManagement.inGroup(names: GroupNames): AssistantManagement
         override suspend fun launcherModels(machineId: String, launcher: String) = source.launcherModels(names.rawMachine(machineId), launcher)
         override suspend fun setModelPick(session: SessionKey, pick: persona.core.contracts.ModelPick) = source.setModelPick(names.raw(session), pick)
         override suspend fun clearModelPick(session: SessionKey) = source.clearModelPick(names.raw(session))
+        override suspend fun conversationSwitchState(session: SessionKey) = source.conversationSwitchState(names.raw(session))
+        override suspend fun submitConversationSwitch(session: SessionKey, request: ConversationSwitchRequest) =
+            source.submitConversationSwitch(
+                names.raw(session),
+                request.copy(
+                    sourceMachineId = names.rawMachine(request.sourceMachineId),
+                    machineId = names.rawMachine(request.machineId),
+                ),
+            )
         override suspend fun endConversation(session: SessionKey) = source.endConversation(names.raw(session))
         override suspend fun compactConversation(session: SessionKey) = source.compactConversation(names.raw(session))
         override suspend fun archiveConversation(session: SessionKey) = source.archiveConversation(names.raw(session))

@@ -429,6 +429,8 @@ data class SessionCapabilities(
      * between them (`persona.core.domain.sort.listedModes`); null from an older node and wherever Claude Code's modes stand.
      */
     @SerialName("permission_modes") val permissionModes: List<String>? = null,
+    /** Reply to asynchronous questions without granting general approval support. */
+    @SerialName("answer_questions") val answerQuestions: Boolean = false,
 )
 
 /**
@@ -844,6 +846,8 @@ data class Session(
     @SerialName("engine_history") val engineHistory: List<EngineLeg> = emptyList(),
     /** The manager's current queue. A complete session row without the field has no held messages. */
     val undelivered: List<HeldAgentMessage>? = null,
+    /** Terminal host reported by the hub (`herdr`, `herdr-core`, `orca`, `tern`, `rex`, `botmux`); optional on older hubs. */
+    @SerialName("host") val host: String? = null,
 ) {
     val key: SessionKey get() = SessionKey(machineId, sessionId)
     /** The listed ancestor's key (`folded_under_machine_id` when cross-machine, else `machine_id`); null when not folded. */
@@ -1483,7 +1487,7 @@ data class Interaction(
             return SecretHandoffRequest(variables, text("agent"), text("machine_name"), text("cwd"), text("prompt"))
         }
 
-    /** A password card's computer, purpose and commands (the commands exactly as sent); null for any other card. */
+    /** A password card's computer, purpose, delivery and commands (the commands exactly as sent); null for any other card. */
     val secretRun: SecretRunRequest?
         get() {
             if (!isSecretRun) return null
@@ -1491,7 +1495,8 @@ data class Interaction(
             fun text(key: String) = (input?.get(key) as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim().orEmpty()
             val commands = (input?.get("commands") as? JsonArray).orEmpty()
                 .mapNotNull { command -> (command as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf(String::isNotBlank) }
-            return SecretRunRequest(text("machine_name").ifEmpty { text("machine") }, text("purpose"), commands)
+            val delivery = if ((input?.get("delivery") as? JsonPrimitive)?.takeIf { it.isString }?.content == "env") "env" else "stdin"
+            return SecretRunRequest(text("machine_name").ifEmpty { text("machine") }, text("purpose"), commands, delivery)
         }
 
     /** One line for a notification or a list row. */
@@ -1534,8 +1539,8 @@ data class SecretHandoffRequest(
     val prompt: String,
 )
 
-/** What a password card ([Interaction.isSecretRun], #1137) would run: the computer's name, why, and the commands. */
-data class SecretRunRequest(val machine: String, val purpose: String, val commands: List<String>) {
+/** What a password card ([Interaction.isSecretRun], #1137) would run: the computer's name, why, delivery and the commands. */
+data class SecretRunRequest(val machine: String, val purpose: String, val commands: List<String>, val delivery: String = "stdin") {
     companion object {
         /** The card's one field, declared by the hub: Run sends the typed password under this key in [Resolution.values]. */
         const val PASSWORD = "password"
