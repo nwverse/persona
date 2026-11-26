@@ -299,6 +299,7 @@
   "lib-hub-update.state_applying_backup",
   "lib-hub-update.state_backing_up",
   "lib-hub-update.state_building",
+  "lib-hub-update.state_checking",
   "lib-hub-update.state_confirming",
   "lib-hub-update.state_downloading",
   "lib-hub-update.state_restarting",

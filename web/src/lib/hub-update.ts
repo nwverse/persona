@@ -28,6 +28,7 @@ export interface HubDevelopmentProgress {
 }
 
 export interface HubUpdateStatus {
+  supports_preview?: boolean;
   source?: "release" | "beta" | "web-dev";
   development?: {
     configured: boolean;
@@ -129,21 +130,19 @@ export const skills = (manager?: string) => api<{ machine_id: string; machine?: 
 /** Titles shared by the sidebar notice and the Settings progress row. */
 export function workingUpdateTitle(s: HubUpdateStatus): string | undefined {
   switch (s.state) {
+    case "resolving":
+      return t("lib-hub-update.state_checking");
     case "applying_backup":
-      return t("lib-hub-update.state_applying_backup");
     case "building":
-      return t("lib-hub-update.state_building");
     case "backing_up":
-      return t("lib-hub-update.state_backing_up");
     case "downloading":
-      return t("lib-hub-update.state_downloading");
+    case "confirming":
+      return t(`lib-hub-update.state_${s.state}`);
     case "waiting_idle":
       return s.busy.length ? t("lib-hub-update.state_waiting_busy", { count: s.busy.length }) : t("lib-hub-update.state_waiting_idle");
     case "installing":
     case "restarting":
       return t("lib-hub-update.state_restarting");
-    case "confirming":
-      return t("lib-hub-update.state_confirming");
   }
 }
 
