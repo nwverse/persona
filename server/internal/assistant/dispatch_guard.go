@@ -212,7 +212,9 @@ func (s *Service) guardTools(ctx context.Context, machine, session string, tools
 
 // ToolsFor is the assistant's own tool list for one conversation.
 func (s *Service) ToolsFor(ctx context.Context, machine, session string) []proto.Tool {
-	return append(s.guardTools(ctx, machine, session, append(s.Tools(ctx), s.healthTools(ctx, machine, session)...)), s.spaceTools(ctx, machine, session)...)
+	tools := append(s.Tools(ctx), s.healthTools(ctx, machine, session)...)
+	tools = append(tools, s.externalSourceTools(ctx, machine, session)...)
+	return append(s.guardTools(ctx, machine, session, tools), s.spaceTools(ctx, machine, session)...)
 }
 
 // rejectDuplicateGuardKeys validates every object occurrence before RawMessage decoding can discard an earlier
@@ -449,6 +451,9 @@ func (s *Service) guardDiscoveryCursor(ctx context.Context, machine, session str
 	}
 	if _, err := s.pageCallerOf(ctx, machine, session, true); err == nil {
 		base += ":page" // the conversation writes dashboards (pages_tool.go); one that comes to, or stops, lists again
+	}
+	if s.externalSourceToolCaller(ctx, machine, session) {
+		base += ":external-sources"
 	}
 	denied := s.guardDeniedForDiscovery(ctx, machine, session)
 	if len(denied) == 0 {

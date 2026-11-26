@@ -189,6 +189,7 @@ export const SEARCH_INDEX: SearchGroup[] = [
   { tab: "labs", group: path(t("settings-labs.work_area"), t("settings-labs.integrations_v2_title")), anchor: "configuration-assistant-integrations-v2-integrations_v2" },
   { tab: "labs", group: path(t("settings-labs.area_agents"), t("settings-labs.terminal_renderer")), hint: words(t("settings-labs.terminal_renderer_standard"), t("settings-labs.terminal_renderer_webgl")), anchor: "configuration-terminal-renderer" },
   // This hub
+  { tab: "hub", group: t("settings-recovery.title"), hint: t("settings-recovery.entry_hint"), anchor: "hub-recovery" },
   { tab: "hub", group: t("settings-hubsettings.version"), hint: words(t("settings-hubsettings.last_check"), t("settings-hubsettings.branch"), t("settings-hubsettings.current_commit"), t("settings-hubsettings.latest_commit")), anchor: "hub-version" },
   { tab: "hub", group: t("settings-hubsettings.channel"), hint: words(t("settings-hubsettings.source"), t("settings-hubsettings.web_dev")), anchor: "hub-channel" },
   { tab: "hub", group: t("settings-hubsettings.update"), hint: words(t("settings-hubsettings.update_version"), t("settings-hubsettings.target_commit"), t("settings-hubsettings.backup_created_at")), anchor: "hub-update" },

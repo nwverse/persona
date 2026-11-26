@@ -43,7 +43,8 @@ export function isPersonalSlimRow(
     todo.pr_status?.url?.trim() ||
     todo.delivery ||
     todo.start_error ||
-    responsibleOf(todo)
+    responsibleOf(todo) ||
+    (todo.repo_gate && todo.repo_gate.state !== "reference_only" && todo.repo_gate.target_count > 0)
   ) {
     return false;
   }

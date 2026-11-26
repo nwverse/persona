@@ -9,6 +9,7 @@ import { useEffect, useId, useState } from "react";
 import { otherManager, parseOwnedSub, useChosenManager } from "../../lib/manager-choice";
 import { clientIDError, EMPTY_MAIL_FORM, MAIL_KINDS, mailAccountLine, mailCodeGuide, mailErrors, mailProviderBadge, mailRequest, mailSummary, signsInOnPhone, type MailAccount, type MailForm, type MicrosoftConfig } from "../../lib/agent-settings";
 import { t } from "../../i18n";
+import { ExternalSourceSettingsEntry } from "../../features/external-sources/ExternalSourceSettingsEntry";
 import { api, ApiError, enc, errorText } from "../../lib/api";
 import { listConnectors, setConnector, type HubConnector } from "../../lib/connectors";
 import { ago } from "../../lib/format";
@@ -77,7 +78,7 @@ export function Connectors({ open, onOpen, onChannel, headerBack, openBeside }: 
 
 // ── Mail ────────────────────────────────────────────────
 
-export function Mail({ hideInboxSwitch = false }: { hideInboxSwitch?: boolean } = {}) {
+export function Mail({ hideInboxSwitch = false, manager }: { hideInboxSwitch?: boolean; manager?: string } = {}) {
   const [accounts, setAccounts] = useState<MailAccount[] | null>(null);
   const [error, setError] = useState("");
   const [adding, setAdding] = useState(false);
@@ -155,6 +156,8 @@ export function Mail({ hideInboxSwitch = false }: { hideInboxSwitch?: boolean } 
         ))}
         {!hideInboxSwitch && accounts && accounts.length > 0 && <MailInboxSwitch />}
       </Group>
+      {!!accounts?.length && <ExternalSourceSettingsEntry provider="mail" manager={manager}
+        accounts={accounts.map((account) => ({ channel: account.id, name: account.email }))} />}
       <AddMail
         open={adding}
         onClose={() => setAdding(false)}
@@ -506,7 +509,7 @@ function LarkAccountRow({ a, isDefault }: { a: LarkAccount; isDefault: boolean }
   );
 }
 
-export function Feishu() {
+export function Feishu({ manager }: { manager?: string } = {}) {
   const [st, setSt] = useState<LarkStatus | null>(null);
   const [accounts, setAccounts] = useState<LarkAccountList | null>(null);
   const [error, setError] = useState("");
@@ -529,6 +532,7 @@ export function Feishu() {
   const last = st?.last_event_at ? ago(new Date(st.last_event_at * 1000).toISOString()) : "";
 
   return (
+    <>
     <Group
       anchor="lark"
       title={t("settings-connectors.lark")}
@@ -575,5 +579,8 @@ export function Feishu() {
         </div>
       ))}
     </Group>
+    {st?.configured && <ExternalSourceSettingsEntry provider="lark" manager={manager}
+      accounts={accounts?.accounts.map((account) => ({ channel: account.id > 1 ? String(account.id) : "", name: accountTitle(account) }))} />}
+    </>
   );
 }

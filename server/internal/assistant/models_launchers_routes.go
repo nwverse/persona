@@ -390,7 +390,7 @@ func sessionLaunchers(discovered, configured []ConfiguredLauncher) []ConfiguredL
 			switch {
 			case list[i].Agent != "":
 				list[i].AgentType = list[i].Agent
-			case list[i].Name == "codex" || list[i].Name == "traex":
+			case list[i].Name == "codex" || list[i].Name == "traex" || list[i].Name == "agy":
 				list[i].AgentType = list[i].Name
 			default:
 				list[i].AgentType = "claude"

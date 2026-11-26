@@ -31,6 +31,7 @@ type todosList struct {
 	Todos          []listedTodo               `json:"todos"`
 	Counts         assistantwire.TodoCounts   `json:"counts"`
 	SharedBlockers []projection.SharedBlocker `json:"shared_blockers,omitempty"`
+	Board          *todoBoardProjection       `json:"board,omitempty"`
 }
 
 // listedTodos are the to-dos as GET /api/v1/todos lists them, newest created first: each formatted, with its decision
@@ -118,6 +119,7 @@ func (s *Service) viewed(ctx context.Context, list []listedTodo, now time.Time) 
 	p := s.todoProjectionOf(ctx, list, now)
 	for i := range list {
 		list[i].View = &p.views[i]
+		list[i].Wait = p.waits[i]
 	}
 	return p
 }
@@ -135,6 +137,7 @@ func (s *Service) todosViewed(ctx context.Context, briefs bool) ([]listedTodo, t
 	if s.todoViewsSeen(gen, p, nil) {
 		s.todoViewDiffers()
 	}
+	s.todosCounted(gen, p) // the counts view's to-dos (counts_view.go)
 	return list, p, nil
 }
 

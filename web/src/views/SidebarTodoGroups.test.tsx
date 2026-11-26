@@ -11,7 +11,8 @@ vi.hoisted(() => {
   window.matchMedia ??= ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
 });
 import { buildTodoTree } from "../lib/todo-tree";
-import type { Todo } from "../lib/todos";
+import { consumeBoardSidebarTree } from "../features/todos/board-consumer";
+import type { Todo, TodoBoardProjection } from "../lib/todos";
 import type { Machine, Session } from "../lib/types";
 import { GroupBranch, TodoTreeView } from "./SidebarTree";
 import { Section } from "./SidebarParts";
@@ -152,6 +153,33 @@ describe("By to-do's rows (#6458)", () => {
     expect(heading.textContent).toMatch(/^没挂待办的.*0 个 Agent$/);
     expect(heading.querySelector('button[aria-label="关于「没挂待办的」"]')).not.toBeNull();
     expect(host.textContent).toContain("why");
+  });
+
+  it("renders By-to-do branches directly from server board.sidebar_tree order and folded progress (#15800)", () => {
+    const goalTodos: Todo[] = [
+      { id: "goal_a", title: "Ship release", created_at: at, updated_at: at, agents: [link("a")] },
+      { id: "sub_b", title: "Subtask B", part_of: "goal_a", created_at: at, updated_at: at, agents: [link("b")] },
+      { id: "sub_urgent", title: "Blocked child", part_of: "goal_a", created_at: at, updated_at: at, agents: [link("c")] },
+    ];
+    const goalSessions: Session[] = [
+      s("a", "working", "/code/persona"),
+      s("b", "working", "/code/persona"),
+      s("c", "needs_you", "/code/persona"),
+    ];
+    const board: TodoBoardProjection = {
+      status_groups: [],
+      direction_groups: [],
+      sidebar_tree: [
+        { todo_id: "sub_urgent", section: "needs_you", item_type: "task", folded_count: 0, needs_you_count: 1, active_count: 0 },
+        { todo_id: "goal_a", section: "in_progress", item_type: "task", child_ids: ["sub_b"], surfaced_child_ids: ["sub_urgent"], folded_count: 1, needs_you_count: 0, active_count: 2 },
+      ],
+      counts: { needs_you: 1, in_progress: 2, pending_review: 0, waiting: 0, someday: 0, done: 0, open_total: 3 },
+    };
+    const tree = consumeBoardSidebarTree(goalSessions, machines, goalTodos, board, { spaces: [], sessions: [] }, Date.now(), { keepEmpty: true });
+    show(<TodoTreeView tree={tree} activeKey="" {...stable} />);
+    const keys = [...host.querySelectorAll("[data-tree-branch]")].map((el) => el.getAttribute("data-tree-branch"));
+    expect(keys).toEqual(["todo:sub_urgent", "todo:goal_a", "todo:none"]);
+    expect(row("todo:goal_a").querySelector("[data-goal-progress]")?.getAttribute("data-goal-progress")).toBe("0/2");
   });
 });
 

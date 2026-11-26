@@ -6,13 +6,13 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../../lib/api";
 import { askRow, briefBody, type BriefRow, type FeedItem } from "../../lib/feed";
-import type { TodoAsk } from "../../lib/todos";
+import type { Todo, TodoAsk } from "../../lib/todos";
 
 const api = vi.hoisted(() => vi.fn());
 vi.mock("../../lib/api", async (orig) => ({ ...(await orig<typeof import("../../lib/api")>()), api }));
 const toast = vi.hoisted(() => vi.fn());
 vi.mock("../../ui/atoms", async (orig) => ({ ...(await orig<typeof import("../../ui/atoms")>()), toast }));
-import { FeedLineView } from "./Tasks";
+import { FeedLineView, NeedsYouBody } from "./Tasks";
 import { AcceptRow, meta } from "./Brief";
 import { getState, reset } from "../../lib/store";
 import { loadPages } from "../../lib/lazy-page";
@@ -422,5 +422,34 @@ describe("a row's meta line", () => {
     // the chat a waiting or later row came from, which Open opens in the app (#12055)
     expect(briefBody(item(body({ waiting: [{ id: "ix2", title: "x", waited_s: 1, machine_id: "box", session_id: "ag1" }] })))!.waiting[0]).toMatchObject({ machine_id: "box", session_id: "ag1" });
     expect(briefBody(item(body({ waiting: [{ id: "ix3", title: "x", waited_s: 1, machine_id: 7, session_id: {} }] })))!.waiting[0]).toEqual({ id: "ix3", title: "x", waited_s: 1 });
+  });
+});
+
+describe("NeedsYouBody open acceptance ask", () => {
+  it("loads AcceptRow lazily through NeedsYouPart with row attributes and Accept action intact", async () => {
+    const todo: Todo = {
+      id: "todo_lazy_ask",
+      title: "验证懒加载验收卡",
+      created_at: ASKED,
+      updated_at: ASKED,
+      ask: { verdict: "✅ 做完了：请验收", asked_at: ASKED },
+    };
+    await import("./TaskDecision");
+    await act(async () => {
+      root.render(<NeedsYouBody item={{ kind: "task", key: "task:todo_lazy_ask", todo, status: "needs_you", asks: [], countsOpen: true }} />);
+    });
+    await vi.waitFor(async () => {
+      await act(async () => { await Promise.resolve(); });
+      expect(host.querySelector('[data-brief-row="accept"]')).not.toBeNull();
+    });
+    const wrap = host.querySelector<HTMLElement>('[data-needs-row="task:todo_lazy_ask"]')!;
+    expect(wrap).not.toBeNull();
+    expect(wrap.getAttribute("data-counts-open")).toBe("true");
+    expect(wrap.textContent).toContain("验证懒加载验收卡");
+    expect(wrap.textContent).toContain("✅ 做完了：请验收");
+    const pass = [...wrap.querySelectorAll("button")].find((b) => b.textContent === "通过")!;
+    await act(async () => pass.click());
+    expect(api).toHaveBeenCalledWith("/todos/todo_lazy_ask/accept", { method: "POST", json: { asked_at: ASKED } });
+    expect(wrap.querySelector("[data-brief-accepted=accepted]")?.textContent).toBe("已验收");
   });
 });

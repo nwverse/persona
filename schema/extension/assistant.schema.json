@@ -675,6 +675,16 @@
         "critical"
       ]
     },
+    "AssistantEventState": {
+      "description": "Where the thing an event's key names is now, in the extension's own words (firing, resolved, ...): a label each extension chooses.",
+      "type": "string",
+      "x-text": "AssistantEventState"
+    },
+    "AssistantEventReplace": {
+      "description": "Whether an event takes the place of one of the extension's with the same key still waiting behind a running turn: absent and true replace, false keeps the earlier one as its own message.",
+      "type": "boolean",
+      "x-tristate": "AssistantEventReplace"
+    },
     "AssistantEventParams": {
       "description": "assistant.event (assistant.events): one event for the assistant's main conversation. The assistant gets it as something an extension observed, never as the user's words, and decides what to tell the user. An event with the same key as one of this extension's still waiting behind a running turn replaces it, unless replace is false. Lengths are in characters.",
       "type": "object",
@@ -708,11 +718,12 @@
         "state": {
           "type": "string",
           "maxLength": 64,
+          "x-text": "AssistantEventState",
           "description": "Where the thing the key names is now, in the extension's words (firing, resolved, ...)."
         },
         "replace": {
           "type": "boolean",
-          "x-go-pointer": true,
+          "x-tristate": "AssistantEventReplace",
           "description": "false keeps an earlier event with the same key as its own message instead of replacing it. Absent is true."
         }
       },

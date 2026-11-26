@@ -2,7 +2,6 @@
   "title": "存储与清理",
   "subtitle": "查看各挂载点容量与 inode 使用率，并按需扫描热点占用。",
   "refresh_mounts": "刷新挂载点",
-  "machine_picker": "选择电脑",
   "mounts_title": "已挂载文件系统",
   "collected_ms": "采集耗时 {ms} ms",
   "mounts_unsupported": "{os} 暂不支持按挂载点采集 statfs 统计。",

@@ -137,6 +137,8 @@ Each sample has a required nonempty `user` and optional `system`, `id`, and `lab
 A `via_machine` response is first buffered by the existing `model.http` transport under its separate 16 MiB cap, then
 subject to the same 1 MiB probe parsing cap. Returned text is credential-redacted and UTF-8-safely truncated to 8 KiB;
 redaction replaces every occurrence of a stored credential/header value, even when it appears as ordinary answer text.
+Provider-controlled block types and `Retry-After` are redacted too. A usage entry whose field name requires redaction is
+omitted rather than returned under a colliding `***` key; ordinary numeric usage is unchanged.
 Results remain in input order and report `index`,
 optional `id`/`label`, `ok`, full sample `ms`, `http_status`, redacted `error`, ordered unique `block_types`, bounded
 `text`, separate `text_truncated` (the 8 KiB output cap) and `generation_truncated` (the provider's token limit), optional
@@ -150,7 +152,7 @@ model-specific low-effort fallback. Existing bounded Chat compatibility retries 
 rename `max_tokens` to `max_completion_tokens`, or remove `stream_options` after a 400/422 rejection; the per-sample
 `effort` describes the final attempt and becomes empty
 when effort was removed, while the top-level `effort` remains the requested/resolved value. A 429 is never retried: its
-status and original `Retry-After` header are returned. HTTP, network, timeout, malformed-response, stream-error,
+status and credential-redacted `Retry-After` header are returned (ordinary values are unchanged). HTTP, network, timeout, malformed-response, stream-error,
 HTTP-200 provider errors, refusals and empty/unfinished-stream failures remain attached to their sample instead of being
 silently counted as successes. A provider token-limit ending remains a successful inference with
 `generation_truncated:true` so partial text cannot be mistaken for a complete answer.
@@ -546,6 +548,8 @@ The model panel of a Persona chat switches that conversation to another launcher
   - `ok` otherwise.
 - A body without `split` and `hide_aliases` (iOS, Android, older web clients) merges every group and hides nothing; the env passthrough and `own_service: use` apply to every import.
 - **One alias** (#5193, feature `launcher_import_parse`): `GET …/import?machine=&alias=` and `POST` with `alias` read only that alias of the computer, so the groups are that alias's alone; an alias the computer does not have previews nothing. “Found on your computers” on the web and iPhone opens the import this way.
+
+The assistant exposes the same engine as the managed MCP tool `launcher_import` (`assistant/launcher_import_tool.go`). `{action:"preview", machine, names?}` is read-only; a preview provider name selects its whole group, while a raw alias or variant name selects that alias, and omitting `names` previews all groups. Its explicit response DTO contains only `name`, `aliases`, `base_url`, `models`, `has_key`, `has_headers`, `has_env`, `env_names`, `existing`, `create_as`, `differs` and `variants`. `{action:"commit", machine, names, split?, hide_originals?}` requires a nonempty selection and produces one ordinary owner-confirmation card. Approval recomputes discovery, grouping, landing and collision names; a different proposal is stale and writes nothing. The approved operation uses the existing `importLaunchers` sealing, model merge and hiding path, then returns only created/updated/hidden names and safe stored-provider readback (`id`, `name`, `base_url`, `models` and credential-presence booleans). The strict JSON decoder rejects every unknown field, including `api_key`, `headers`, `env` and `base_url`; neither preview nor commit accepts connection overrides. Model-facing errors use fixed redacted messages rather than node/store error text. Restricted Inbox conversations cannot call this tool.
 
 ## Starting a provider from a pasted configuration (#5193)
 

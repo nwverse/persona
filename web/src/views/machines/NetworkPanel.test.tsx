@@ -117,12 +117,8 @@ describe("NetworkPanel", () => {
     await flush();
     expect(calls).toEqual(["/api/v1/machines/m1/network", "/api/v1/machines/m1/network"]);
 
-    // Switching to an offline machine shows the offline message without fetching.
-    const offlineTab = [...host.querySelectorAll('[role="radio"]')].find((b) => b.textContent?.includes("Offline Box"));
-    expect(offlineTab).toBeDefined();
-    await act(async () => {
-      (offlineTab as HTMLButtonElement).click();
-    });
+    // Once all computers are offline, the tool shows its offline state without fetching.
+    act(() => root.render(<NetworkPanel machines={machines.map((m) => ({ ...m, online: false }))} />));
     await flush();
     expect(calls).toHaveLength(2);
     expect(host.textContent).toMatch(/离线|offline/i);

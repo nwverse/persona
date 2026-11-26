@@ -42,6 +42,7 @@ func (t *Todo) setPlan(row db.TodoRow) {
 	t.Responsible = cloneResponsible(row.Responsible)
 	t.Audience = row.Audience
 	t.DirectionID = row.DirectionID
+	t.ItemType = row.ItemType
 }
 
 // keepPlan writes t's plan, project and the owner's marks (seen, restored, Someday) into row: a row made in memory for a
@@ -63,6 +64,7 @@ func (t *Todo) keepPlan(row *db.TodoRow) {
 	row.Responsible = cloneResponsible(t.Responsible)
 	row.Audience = t.Audience
 	row.DirectionID = t.DirectionID
+	row.ItemType = t.ItemType
 }
 
 // todoRowOf is todo t as a row (what memory has of it; the store-less PATCH changes it).
@@ -111,6 +113,7 @@ type todoPlanIn struct {
 	Priority    *string         `json:"priority"`
 	Audience    *string         `json:"audience"`
 	DirectionID *string         `json:"direction_id"`
+	ItemType    *string         `json:"item_type"`
 }
 
 // edit puts the plan into e; an error says which field could not be read.
@@ -277,6 +280,11 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 			return Todo{}, err
 		}
 	}
+	if e.ItemType != nil {
+		if err := db.ValidateTodoItemType(strings.TrimSpace(*e.ItemType)); err != nil {
+			return Todo{}, err
+		}
+	}
 	cur, ok := s.todoNow(id)
 	if !ok {
 		return Todo{}, db.ErrTodoNotFound
@@ -295,11 +303,32 @@ func (s *Service) editTodo(ctx context.Context, id string, e db.TodoEdit) (Todo,
 		f(id)
 	}
 	reopening := e.Done != nil && !*e.Done
+	var fencedSessions [][2]string
 	if reopening {
-		// Keep a concurrent ledger writer from publishing an older state over the reopened row.
-		s.supervise.writeMu.Lock()
+		fencedSessions = todoProtectedSessions(cur, e.Responsible)
+	} else if e.SetResponsible && e.Responsible != nil && e.Responsible.Kind == db.ResponsibleSession && e.Responsible.SessionID != "" {
+		fencedSessions = [][2]string{{e.Responsible.MachineID, e.Responsible.SessionID}}
 	}
-	s.todos.writing.Lock()
+	for {
+		if reopening {
+			// Keep a concurrent ledger writer from publishing an older state over the reopened row.
+			s.supervise.writeMu.Lock()
+		}
+		s.todos.writing.Lock()
+		if ch := s.idleCloseFenceForSessions(fencedSessions); ch != nil {
+			s.todos.writing.Unlock()
+			if reopening {
+				s.supervise.writeMu.Unlock()
+			}
+			select {
+			case <-ch:
+				continue
+			case <-ctx.Done():
+				return Todo{}, ctx.Err()
+			}
+		}
+		break
+	}
 	unlock := func() {
 		s.todos.writing.Unlock()
 		if reopening {

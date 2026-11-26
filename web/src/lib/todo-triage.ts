@@ -314,9 +314,38 @@ export function viewWaitsOnOwner(todo: Todo): OwnerWait | null | undefined {
     case "interrupted":
     case "stopped_unfinished":
       return "agent_asks";
-    default:
+    case "owner_decides":
+    case "verify":
+    case "steps_proposed":
+    case "signin":
+    case "can_wait":
+    case "awaits_reply":
+    case "persona_working":
+    case "agent_running":
+    case "starting":
+    case "queued":
+    case "background":
+    case "closed_unseen":
+    case "completed":
+    case "canceled":
+    case "reported":
+    case "superseded":
+    case "parked":
+    case "finished_unseen":
+    case "finished_recent":
+    case "pr_open":
+    case "usage_limit":
+    case "computer_offline":
+    case "scheduled_report":
+    case "someone_else":
+    case "finished_seen":
+    case "deferred":
+    case "rest":
       return "owner_decides";
   }
+  // TodoReason is closed and VIEW_REASONS let through only its values: a new one fails to compile above.
+  const exhaustive: never = v.reason;
+  return exhaustive;
 }
 
 /**
