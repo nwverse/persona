@@ -14,9 +14,8 @@ import (
 // Scheduled routines use the loaded schedule facts runner, when present.
 
 type (
-	briefFacts    = modapi.BriefSnapshot
-	briefRun      = modapi.BriefRun
-	briefProgress = modapi.BriefTaskProgress
+	briefFacts = modapi.BriefSnapshot
+	briefRun   = modapi.BriefRun
 )
 
 func briefTaskInfo(t Task) modapi.BriefTaskInfo {
@@ -41,14 +40,6 @@ func briefScheduleRun(r ScheduleRun) modapi.BriefScheduleRun {
 		Retried:   r.Retried,
 		Manual:    r.Manual,
 	}
-}
-
-func (s *Service) briefFactsAt(ctx context.Context, now time.Time, self string) *briefFacts {
-	r, ok := s.briefingRunner()
-	if !ok {
-		return nil
-	}
-	return r.FactsAt(ctx, now, self)
 }
 
 func (s *Service) briefStart(ctx context.Context, t Task, now time.Time) string {

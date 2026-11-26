@@ -1,16 +1,16 @@
 package assistant
 
 import (
-"context"
-"encoding/json"
-"errors"
-"net/http"
-"slices"
-"time"
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"slices"
+	"time"
 
-"github.com/nwverse/persona/server/internal/apierr"
-"github.com/nwverse/persona/server/internal/i18n"
-"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 func (s *Service) todoAcceptRoute() {

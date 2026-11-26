@@ -29,10 +29,19 @@ const (
 const feedBrief = modapi.FeedKindBrief
 
 type (
+	briefProgress       = modapi.BriefTaskProgress
 	briefBody           = modapi.BriefBody
 	briefBodyRow        = modapi.BriefBodyRow
 	briefBodyPRFollowup = modapi.BriefPRFollowup
 )
+
+func (s *Service) briefFactsAt(ctx context.Context, now time.Time, self string) *briefFacts {
+	r, ok := s.briefingRunner()
+	if !ok {
+		return nil
+	}
+	return r.FactsAt(ctx, now, self)
+}
 
 func (s *Service) briefModelText(f *briefFacts) string {
 	r, ok := s.briefingRunner()

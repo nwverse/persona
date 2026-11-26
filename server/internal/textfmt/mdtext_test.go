@@ -1,9 +1,9 @@
 package textfmt
 
 import (
-"strings"
-"testing"
-"unicode/utf8"
+	"strings"
+	"testing"
+	"unicode/utf8"
 )
 
 func TestClipMarkdown(t *testing.T) {

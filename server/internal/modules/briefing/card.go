@@ -1,17 +1,17 @@
 package briefing
 
 import (
-"encoding/json"
-"fmt"
-"strings"
-"time"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
 
-"github.com/nwverse/persona/server/internal/assistantwire"
-"github.com/nwverse/persona/server/internal/botcard"
-"github.com/nwverse/persona/server/internal/deeplink"
-"github.com/nwverse/persona/server/internal/textfmt"
-"github.com/nwverse/persona/server/internal/i18n"
-"github.com/nwverse/persona/server/internal/modapi"
+	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/botcard"
+	"github.com/nwverse/persona/server/internal/deeplink"
+	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/modapi"
+	"github.com/nwverse/persona/server/internal/textfmt"
 )
 
 const (

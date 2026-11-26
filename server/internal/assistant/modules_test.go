@@ -12,7 +12,9 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistant/kernel"
 	"github.com/nwverse/persona/server/internal/db"
+	"github.com/nwverse/persona/server/internal/larkhost"
 	"github.com/nwverse/persona/server/internal/modapi"
+	"github.com/nwverse/persona/server/internal/moduleswitch"
 )
 
 // The built-in feature modules as the assistant loads them (modules.go). The briefing module is the pilot: loaded by
@@ -212,13 +214,18 @@ func assertBriefingAbsent(t *testing.T, s *Service) {
 // End to end: the morning routine with facts on runs with the module absent as a routine with facts off does: its answer
 // goes out, with no briefing rows and no brief item.
 func TestMorningRoutineRunsWithoutTheBriefingModule(t *testing.T) {
-	needsLarkLayer(t) // the chat is the lark module's
 	off := briefRunEnvWith(t, true, func(e *briefRunEnv) { e.s.modules = kernel.New(nil, nil, nil) })
 	off.mirror()
 	plain := newBriefRunEnv(t, false)
 	plain.mirror()
 	if items := off.briefItems(); len(items) != 0 {
 		t.Fatalf("brief items without the module: %+v", items)
+	}
+	if !larkhost.InBuild(moduleswitch.Set{}) {
+		if len(off.cards()) != 0 || len(plain.cards()) != 0 {
+			t.Fatal("a chat card was posted without its channel")
+		}
+		return
 	}
 	got, want := off.cards(), plain.cards()
 	if len(got) != len(want) || len(got) == 0 || !strings.Contains(got[0], briefSummary) {
