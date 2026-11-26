@@ -391,8 +391,6 @@ type Node struct {
 	larkCfgAt    time.Time
 	larkCfgTryAt time.Time // the last attempt to refresh it, kept even when that failed
 	larkAllowed  map[string]bool
-	// editedAnswers carries an editable card's answer from askOnce to larkGateWithEdit, keyed by interaction id.
-	editedAnswers sync.Map
 	// secrets is a test's own hand-offs; nil: the process's, shared by every connection (secretenv.go handoffs).
 	secrets *secretStage
 	// gp is the proxy that adds the gates' credentials, made at its first use (gateproxy.go, #1317).
