@@ -911,7 +911,7 @@ function FileBrowser({ machine, path, routed }: { machine?: Machine } & Director
             .filter(item => writable ? !["open", "rename", "move", "upload"].includes(item.key) : ["copy", "download"].includes(item.key)),
           { key: "info", icon: "info", label: t("files-info.info"), onSelect: () => setInfo(menu.entry) },
           ...(!isNavigableDir(menu.entry) ? [{ key: "preview", icon: "read" as const, label: t("files-ops.open"),
-            onSelect: () => openPanel({ kind: "file", mid: machine.id, cwd: folder, path: menu.entry.path, readOnly: true }) }] : []),
+            onSelect: () => openPanel({ kind: "file", mid: machine.id, cwd: folder, path: menu.entry.path }) }] : []),
           ...(canChmod ? [{ key: "permissions", icon: "shield" as const, label: t("files-perm.menu"), onSelect: () => setPermissions(menu.entry.path) }] : []),
         ]} />}
         {info && <FileInfoDialog mid={machine.id} cwd={folder} path={info.path}
