@@ -47,6 +47,7 @@
   "by_agent_plain": "Agent別",
   "by_model": "モデル別",
   "by_launcher": "ランチャー別",
-  "launcher_other": "その他",
-  "by_hour_plain": "1時間ごと"
+  "by_hour_plain": "1時間ごと",
+  "launcher_terminal": "ターミナルで開いたもの",
+  "project_unknown_model": "不明なモデル"
 }

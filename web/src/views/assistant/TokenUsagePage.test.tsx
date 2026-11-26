@@ -18,6 +18,7 @@ vi.mock("../../lib/api", async (orig) => {
         return Promise.resolve({ usage: { zone: "UTC", stored: true, ranges: PROJECT_RANGES_FIXTURE } });
       }
       if (path.startsWith("/usage/projects/detail")) return Promise.resolve({ usage: PROJECT_DETAIL_FIXTURE });
+      if (path === "/launchers") return Promise.resolve({ launchers: [{ name: "claude-max", display_name: "Anthropic 订阅" }, { name: "kimi" }] });
       if (path.startsWith("/usage/days")) {
         const days = [
           { date: "2026-11-16", in: 1, out: 2_000_000, cache_write: 30_000_000, cache_read: 5_800_000_000 },
@@ -85,7 +86,7 @@ const breakdown = (days: number, tokens: number) => ({
   machines: [{ key: "a", name: "Studio", tokens: { cache_read: tokens - 1 } }, { key: "gone", tokens: { cache_read: 1 } }],
   agents: [{ key: "claude", tokens: { cache_read: tokens } }],
   models: [{ key: "claude-opus-5-5", tokens: { cache_read: tokens } }],
-  launchers: [{ key: "", tokens: { cache_read: tokens } }],
+  launchers: [{ key: "claude-max", tokens: { cache_read: tokens - 2 } }, { key: "kimi", tokens: { cache_read: 1 } }, { key: "", tokens: { cache_read: 1 } }],
   places: [
     { machine: "a", machine_name: "Studio", place: "~/code/app", tokens: { cache_read: tokens / 2 } },
     { machine: "a", machine_name: "Studio", place: "~/code/app-wt/feature", worktree: true, tokens: { cache_read: tokens / 2 } },
@@ -233,10 +234,29 @@ describe("By project (#16530)", () => {
     expect(hub.calls).toContain("/usage/projects/detail?key=git%3Agithub.com%2Facme%2Fapp");
     const page = host.querySelector("[data-token-project]")!;
     const text = page.textContent ?? "";
-    for (const s of ["占全部", "请求", "42", "缓存命中", "93%", "每天", "目录与 worktree", "~/code/app", "~/code/app-wt/feature", "按电脑", "Studio", "已移除的电脑", "按 Agent", "Claude Code", "按模型", "claude-opus-5-5", "按启动器", "其他"]) {
+    for (const s of ["占全部", "请求", "42", "缓存命中", "93%", "每天", "目录与 worktree", "~/code/app", "~/code/app-wt/feature", "按电脑", "Studio", "已移除的电脑", "按 Agent", "Claude Code", "按模型", "按启动器"]) {
       expect(text).toContain(s);
     }
     expect(page.querySelector('[title="关联的 worktree"]')).not.toBeNull();
+    // a model by the name the model pickers use, its id on hover
+    const model = page.querySelector<HTMLElement>('[title="claude-opus-5-5"]')!;
+    expect(model.textContent).toBe("opus 5.5");
+    // a launcher by its display name (its own name on hover), one without by its name, none: opened in a terminal
+    expect(hub.calls).toContain("/launchers");
+    expect(page.querySelector<HTMLElement>('[title="claude-max"]')?.textContent).toBe("Anthropic 订阅");
+    for (const s of ["kimi", "终端里打开的"]) expect(text).toContain(s);
+    // the chart's line: the largest day at first (11月17日, today), then the one hovered, then the one tapped
+    const line = () => page.querySelector("[data-token-project-line]")!.textContent ?? "";
+    expect(line()).toContain("今天");
+    expect(line()).toContain("60");
+    const bars = [...page.querySelectorAll<HTMLButtonElement>("button[aria-pressed]")];
+    expect(bars).toHaveLength(7);
+    act(() => bars[2].dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
+    expect(line()).toContain("20");
+    act(() => bars[4].click());
+    act(() => bars[4].parentElement!.dispatchEvent(new MouseEvent("mouseout", { bubbles: true, relatedTarget: document.body })));
+    expect(line()).toContain("40");
+    expect(bars[4].getAttribute("aria-pressed")).toBe("true");
     // today: by the hour
     const today = [...page.querySelectorAll<HTMLButtonElement>("[role=radio]")].find((b) => b.textContent === "今天")!;
     await act(async () => today.click());

@@ -47,6 +47,7 @@
   "by_agent_plain": "按 Agent",
   "by_model": "按模型",
   "by_launcher": "按启动器",
-  "launcher_other": "其他",
-  "by_hour_plain": "每小时"
+  "by_hour_plain": "每小时",
+  "launcher_terminal": "终端里打开的",
+  "project_unknown_model": "未知模型"
 }

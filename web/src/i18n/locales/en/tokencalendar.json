@@ -49,6 +49,7 @@
   "by_agent_plain": "By agent",
   "by_model": "By model",
   "by_launcher": "By launcher",
-  "launcher_other": "Other",
-  "by_hour_plain": "By the hour"
+  "by_hour_plain": "By the hour",
+  "launcher_terminal": "Opened in a terminal",
+  "project_unknown_model": "Unknown model"
 }

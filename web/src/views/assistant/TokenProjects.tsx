@@ -22,6 +22,8 @@ import {
   type UsageProjectRange,
   type UsageProjects,
 } from "../../lib/usage-projects";
+import { loadLaunchers } from "../../lib/launcher-list";
+import { modelLabel } from "../../lib/session-models";
 import { useMedia } from "../../lib/viewport";
 import { AgentMark } from "../../ui/AgentMark";
 import { Loading } from "../../ui/atoms";
@@ -287,33 +289,41 @@ function Parts({ rows }: { rows: { key: string; name: React.ReactNode; tokens: P
 const utc = (date: string) => new Date(`${date}T00:00:00Z`);
 const hourName = (h: number) => formatDate(Date.UTC(2024, 0, 1, h), { hour: "numeric", timeZone: "UTC" });
 
-/** By day (by the hour for today): columns against the largest, one picked to read its number. */
+/** By day (by the hour for today): columns against the largest, and a line over them with one's day (or hour) and
+ *  tokens: the largest's at first, then the one hovered or tapped (kept until another is). */
 function Columns({ detail, days }: { detail: UsageProjectDetail; days: number }) {
   const cols =
     days === 1
-      ? detail.hours.map((h) => ({ key: String(h.t), label: hourName(h.hour), axis: h.hour % 6 === 0 ? hourName(h.hour) : "", value: projectTotal(h.tokens) }))
+      ? detail.hours.map((h) => ({ key: String(h.t), day: t("tokencalendar.today"), hour: hourName(h.hour), axis: h.hour % 6 === 0 ? hourName(h.hour) : "", value: projectTotal(h.tokens) }))
       : detail.days.slice(-days).map((d, i, all) => {
           const today = i === all.length - 1;
-          const label = today ? t("tokencalendar.today") : formatDate(utc(d.date), { month: "short", day: "numeric", weekday: "short", timeZone: "UTC" });
+          const day = today ? t("tokencalendar.today") : formatDate(utc(d.date), { month: "short", day: "numeric", weekday: "short", timeZone: "UTC" });
           const axis = today ? t("tokencalendar.today") : formatDate(utc(d.date), { month: "numeric", day: "numeric", timeZone: "UTC" });
-          return { key: d.date, label, axis, value: projectTotal(d.tokens) };
+          return { key: d.date, day, hour: "", axis, value: projectTotal(d.tokens) };
         });
   const [picked, setPicked] = useState<string | null>(null);
+  const [hovered, setHovered] = useState<string | null>(null);
   const top = Math.max(1, ...cols.map((c) => c.value));
-  const p = cols.find((c) => c.key === picked);
+  const largest = cols.reduce<(typeof cols)[number] | undefined>((a, c) => (!a || c.value > a.value ? c : a), undefined);
+  const shown = cols.find((c) => c.key === hovered) ?? cols.find((c) => c.key === picked) ?? largest;
+  const line = (c: (typeof cols)[number]) =>
+    c.hour ? t("tokencalendar.hour_line", { day: c.day, hour: c.hour, tokens: short(c.value) }) : t("tokencalendar.day_line", { day: c.day, tokens: short(c.value) });
   return (
     <div>
-      <div className="mb-2 text-meta text-ink-2" aria-live="polite" style={{ minHeight: "1.25em" }}>
-        {p && t("tokencalendar.day_line", { day: p.label, tokens: short(p.value) })}
+      <div className="mb-2 text-meta text-ink-2 tabular-nums" aria-live="polite" style={{ minHeight: "1.25em" }} data-token-project-line>
+        {shown && shown.value > 0 && line(shown)}
       </div>
-      <div className="flex items-end" style={{ height: 110, gap: days === 1 ? 3 : 10 }}>
+      <div className="flex items-end" style={{ height: 110, gap: days === 1 ? 3 : 10 }} onMouseLeave={() => setHovered(null)}>
         {cols.map((c) => (
           <button
             key={c.key}
             type="button"
-            title={`${c.label} · ${short(c.value)}`}
-            aria-label={`${c.label} · ${short(c.value)}`}
-            onClick={() => setPicked(picked === c.key ? null : c.key)}
+            aria-label={line(c)}
+            aria-pressed={shown?.key === c.key}
+            onClick={() => setPicked(c.key)}
+            onMouseEnter={() => setHovered(c.key)}
+            onFocus={() => setHovered(c.key)}
+            onBlur={() => setHovered(null)}
             className="flex h-full min-w-0 flex-1 flex-col justify-end"
           >
             <span
@@ -321,7 +331,7 @@ function Columns({ detail, days }: { detail: UsageProjectDetail; days: number })
               style={{
                 height: `${Math.max(c.value > 0 ? 2 : 0, (100 * c.value) / top)}%`,
                 borderRadius: "4px 4px 2px 2px",
-                background: picked === c.key ? "var(--accent)" : "color-mix(in srgb, var(--accent) 55%, transparent)",
+                background: shown?.key === c.key ? "var(--accent)" : "color-mix(in srgb, var(--accent) 55%, transparent)",
               }}
             />
           </button>
@@ -349,10 +359,28 @@ function Stat({ label, value, good }: { label: string; value: string; good?: boo
 
 /** One project's breakdown: what it is, its totals for the range, by day, by computer, Agent, model and launcher,
  *  and its worktrees and folders. */
+/** The launchers' display names (Settings › Models, GET /launchers), read once a page: a launcher without one, or
+ *  before the list comes (or from a hub that will not give it), shows its name. */
+function useLauncherNames(): Record<string, string> {
+  const [names, setNames] = useState<Record<string, string>>({});
+  useEffect(() => {
+    let live = true;
+    loadLaunchers<{ name: string; display_name?: string }>().then(
+      (r) => live && setNames(Object.fromEntries(r.launchers.filter((l) => l.display_name?.trim()).map((l) => [l.name, l.display_name!.trim()]))),
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+  }, []);
+  return names;
+}
+
 export function ProjectDetail({ project, range, onRange }: { project: UsageProject; range: number; onRange: (i: number) => void }) {
   const [detail, setDetail] = useState<UsageProjectDetail | null>(null);
   const [failed, setFailed] = useState(false);
   const phone = useMedia(SHEET_QUERY);
+  const launcherNames = useLauncherNames();
   useEffect(() => {
     let live = true;
     const read = () =>
@@ -403,12 +431,22 @@ export function ProjectDetail({ project, range, onRange }: { project: UsageProje
     ),
     b.models.length > 0 && (
       <Card key="mo" title={t("tokencalendar.by_model")}>
-        <Parts rows={b.models.map((m) => ({ key: m.key, name: <span className="truncate font-mono text-label">{m.key}</span>, tokens: m.tokens }))} />
+        <Parts rows={b.models.map((m) => ({ key: m.key, name: <span className="truncate" title={m.key}>{m.key ? modelLabel(m.key) : t("tokencalendar.project_unknown_model")}</span>, tokens: m.tokens }))} />
       </Card>
     ),
     b.launchers.length > 0 && (
       <Card key="l" title={t("tokencalendar.by_launcher")}>
-        <Parts rows={b.launchers.map((l) => ({ key: l.key || "-", name: <span className="truncate">{l.key || t("tokencalendar.launcher_other")}</span>, tokens: l.tokens }))} />
+        <Parts
+          rows={b.launchers.map((l) => ({
+            key: l.key || "-",
+            name: (
+              <span className="truncate" title={l.key && launcherNames[l.key] ? l.key : undefined}>
+                {l.key ? launcherNames[l.key] ?? l.key : t("tokencalendar.launcher_terminal")}
+              </span>
+            ),
+            tokens: l.tokens,
+          }))}
+        />
       </Card>
     ),
   ].filter(Boolean);
