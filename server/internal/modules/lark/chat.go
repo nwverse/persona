@@ -27,6 +27,7 @@ type (
 	FeishuStatus   = assistantwire.FeishuStatus
 	FeishuFeatures = assistantwire.FeishuFeatures
 	FeishuMessage  = assistantwire.FeishuMessage
+	FeishuMenu     = assistantwire.FeishuMenu
 	FeishuAction   = assistantwire.FeishuAction
 	FeishuOwner    = assistantwire.FeishuOwner
 	FeishuRecalled = assistantwire.FeishuRecalled

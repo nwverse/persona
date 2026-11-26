@@ -29,6 +29,8 @@ const (
 	EventCardAction = "card.action.trigger"
 	EventP2PEntered = "im.chat.access_event.bot_p2p_chat_entered_v1"
 	EventRecalled   = "im.message.recalled_v1"
+	// EventBotMenu is a press on the bot's menu (set up in the developer console, docs/extensions/bots.md "The menu").
+	EventBotMenu = "application.bot.menu_v6"
 )
 
 // Recalled is im.message.recalled_v1: a message in a chat the bot is in was recalled (message_owner: by its sender).
@@ -152,6 +154,16 @@ type Toast struct {
 type CardPayload struct {
 	Type string `json:"type"` // raw
 	Data any    `json:"data"`
+}
+
+// BotMenu is application.bot.menu_v6: who pressed which entry of the bot's menu (its event key). Who pressed it is
+// event.operator.operator_id (open_id, union_id, user_id), beside operator.operator_name, as Lark documents the event
+// (https://open.feishu.cn/document/client-docs/bot-v3/events/menu).
+type BotMenu struct {
+	Operator struct {
+		OperatorID UserID `json:"operator_id"`
+	} `json:"operator"`
+	EventKey string `json:"event_key"`
 }
 
 // P2PEntered is the user opening the chat with the bot.

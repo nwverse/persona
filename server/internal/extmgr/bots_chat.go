@@ -112,8 +112,77 @@ func (h *Manager) botEventFrom(ctx context.Context, payload []byte, api botport.
 		if json.Unmarshal(env.Event, &ev) == nil {
 			go h.botWelcome(ev.OperatorID.OpenID, ev.ChatID)
 		}
+	case botcard.EventBotMenu:
+		h.bots.mu.Lock()
+		current := h.bots.acceptBotEventLocked(api, env.Header.AppID)
+		h.bots.mu.Unlock()
+		if !current {
+			return nil, nil
+		}
+		var ev botcard.BotMenu
+		if err := json.Unmarshal(env.Event, &ev); err != nil {
+			return nil, err
+		}
+		// A press Feishu delivers again (its acknowledgement lost) is the same event: dropped here, as a redelivered
+		// message is, and claimed again by the assistant, which keeps its ids across restarts. Its place in the chat's
+		// line is taken in the same step, as it comes, as a message's is: a /new pressed and a message sent right after
+		// it reach the assistant in that order.
+		id := env.Header.EventID
+		b := &h.bots
+		b.mu.Lock()
+		if id != "" && slices.Contains(b.seen, "menu:"+id) {
+			b.mu.Unlock()
+			return nil, nil
+		}
+		if id != "" {
+			b.rememberBotMessageLocked("menu:" + id)
+		}
+		done := make(chan struct{})
+		prev := b.line
+		b.line = done
+		b.mu.Unlock()
+		go h.botMenu(ev, id, time.Now(), prev, done)
 	}
 	return nil, nil
+}
+
+// botMenu hands the owner's press on the bot's menu to the assistant once the message or press before it was handed
+// over (prev), and lets the next one go (done) once this one is; the assistant answers it in the owner's private chat
+// as the command the entry names (docs/extensions/bots.md "The menu"). Anyone else's press is nothing: the menu shows
+// to whoever opens a chat with the bot.
+func (h *Manager) botMenu(ev botcard.BotMenu, id string, since time.Time, prev, done chan struct{}) {
+	defer close(done)
+	if prev != nil {
+		t := time.NewTimer(botTurnWait())
+		select {
+		case <-prev:
+		case <-t.C:
+		}
+		t.Stop()
+	}
+	api, set := h.botAPI()
+	key := strings.TrimSpace(ev.EventKey)
+	if set.Owner == nil || ev.Operator.OperatorID.OpenID != set.Owner.OpenID || key == "" {
+		return
+	}
+	err := h.toAssistantSince(assistantwire.MethodFeishuMenu, assistantwire.FeishuMenu{Key: key, EventID: id}, since)
+	if err == nil {
+		return
+	}
+	// Not handed over: the press is let go of, so one Feishu delivers again is handed over then (the assistant claims
+	// it too, so a press that did reach it is still answered once), and the owner is told, as for a message. The
+	// event names no chat: the note goes to the owner, which is the private chat with the bot.
+	h.forgetBotMessage("menu:" + id)
+	h.logf("bots: the menu's %s: %v", key, err)
+	if api == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	text := i18n.T(h.userLang(), "hub-bots_chat.not_sent", i18n.Args{"error": clip(oneLine(err.Error()), 200)})
+	if _, err := api.Send(ctx, "open_id", set.Owner.OpenID, botcard.TypeText, botcard.TextContent(text), feishuSendUUID()); err != nil {
+		h.logf("bots: tell: %v", err)
+	}
 }
 
 // botRecalled cancels a queued owner message locally, or tells the assistant
@@ -189,6 +258,18 @@ func (b *botHub) rememberBotMessageLocked(id string) {
 	if len(b.seen) > botSeenKeep {
 		b.seen = b.seen[len(b.seen)-botSeenKeep:]
 	}
+}
+
+// forgetBotMessage lets go of an event's id the hub remembered (rememberBotMessageLocked), for an event that was not
+// handed over after all.
+func (h *Manager) forgetBotMessage(id string) {
+	if id == "" {
+		return
+	}
+	b := &h.bots
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.seen = slices.DeleteFunc(b.seen, func(seen string) bool { return seen == id })
 }
 
 // feishuMaxUUID is the open platform's uuid length cap on the send/reply message APIs.
