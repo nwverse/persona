@@ -145,6 +145,9 @@ type busConn struct {
 	// inboxNeedsYou is the inbox's "Needs you" count it reported on this connection (inbox.needs_you, managers.go);
 	// nil: none yet. It goes with the connection, so the roster never shows the count of a manager that is away.
 	inboxNeedsYou *int
+	// countsView is the counts view it told on this connection (counts.view, counts_view.go), compacted and never
+	// decoded; nil: none yet. It goes with the connection, as inboxNeedsYou does.
+	countsView json.RawMessage
 
 	// roster is the managers event on its way to it (sendRoster): the newest list, its number and the one sent last.
 	roster struct {
@@ -299,7 +302,7 @@ func (h *Hub) serveBus(w http.ResponseWriter, r *http.Request) {
 	// the card up and made the change on a later approval, after the assistant had heard the call failed (#5907). A
 	// devices.file_call's long file copy / zip likewise stops when the hub's caller goes away (#6113). Ordinary
 	// devices.call methods run on: their node may not support cancellation, so stopping the manager would be ambiguous.
-	c.peer.Cancels = map[string]bool{assistantwire.MethodFleetAsk: true, assistantwire.MethodFleetAskPrepared: true, extwire.MethodHubCall: true, devicewire.MethodFileCall: true}
+	c.peer.Cancels = map[string]bool{assistantwire.MethodFleetAsk: true, assistantwire.MethodFleetAskPrepared: true, extwire.MethodHubCall: true, devicewire.MethodFileCall: true, devicewire.MethodRetireCall: true}
 	c.peer.OnRequest = func(ctx context.Context, method string, params json.RawMessage) (any, error) {
 		return h.busRequest(ctx, c, method, params)
 	}
@@ -379,16 +382,17 @@ func (c *busConn) refuse(h *Hub, err error) (any, error) {
 // busManagerHello is what manager.hello says that the hub keeps for now; the rest (apps, the machine's summary) is
 // the follow-up's.
 type busManagerHello struct {
-	ID             string   `json:"id"`
-	Host           string   `json:"host"`
-	MachineUID     string   `json:"machine_uid,omitempty"`
-	OS             string   `json:"os"`
-	Arch           string   `json:"arch"`
-	Deploy         string   `json:"deploy"`
-	Version        string   `json:"version"`
-	PendingRestart bool     `json:"pending_restart,omitempty"`
-	Capabilities   []string `json:"capabilities"`
-	Features       []string `json:"features"`
+	ID                     string   `json:"id"`
+	Host                   string   `json:"host"`
+	MachineUID             string   `json:"machine_uid,omitempty"`
+	OS                     string   `json:"os"`
+	Arch                   string   `json:"arch"`
+	Deploy                 string   `json:"deploy"`
+	Version                string   `json:"version"`
+	PendingRestart         bool     `json:"pending_restart,omitempty"`
+	Capabilities           []string `json:"capabilities"`
+	Features               []string `json:"features"`
+	ProjectReviewAppInputs *bool    `json:"project_review_app_inputs,omitempty"`
 }
 
 // busHelloReply is manager.hello's answer: who the hub knows the service as, the managers, and the assistant's hello
@@ -417,10 +421,33 @@ func (h *Hub) managerHello(ctx context.Context, c *busConn, params json.RawMessa
 	if p.ID != c.ident.ID {
 		return c.refuse(h, fmt.Errorf("manager.hello says %q but the token is %q's", clip(p.ID, 64), c.ident.ID))
 	}
+	capabilities, cut := capabilityList(p.Capabilities)
+	features, featuresCut := capabilityList(p.Features)
 	if err := h.busAccept(ctx, c, busPresence{Host: clip(p.Host, 200), MachineUID: clip(strings.TrimSpace(p.MachineUID), 80),
 		OS: clip(p.OS, 40), Arch: clip(p.Arch, 40), Deploy: clip(p.Deploy, 40), Version: clip(p.Version, 80),
-		PendingRestart: p.PendingRestart, Capabilities: capabilityList(p.Capabilities), Features: capabilityList(p.Features)}); err != nil {
+		PendingRestart: p.PendingRestart, Capabilities: capabilities, Features: features}); err != nil {
 		return nil, err
+	}
+	// A hello without the switch or the capability (a manager from before project review, or one rolled back to such a
+	// version) turns App inputs off: what was queued for it is dropped, and nothing more is queued that it could never
+	// take. An optional feature: its write failing must not hang up the manager (refuse says "wrong identity", which a
+	// client may take as final). The switch saved by an earlier hello stays in place, and the next hello writes again.
+	appInputs := p.ProjectReviewAppInputs != nil && *p.ProjectReviewAppInputs &&
+		slices.Contains(p.Capabilities, assistantwire.CapabilityProjectReview)
+	if err := h.setProjectReviewAppInputs(ctx, c.ident.ID, appInputs); err != nil {
+		h.logf("bus: [%s] project review App inputs not saved: %v", c.ident.ID, err)
+	}
+	if slices.Contains(p.Capabilities, assistantwire.CapabilityProjectReview) {
+		h.pokeProjectReviewOwners() // its rows, kept while it was away
+	}
+	for _, l := range []struct {
+		what      string
+		kept, cut []string
+	}{{"capabilities", capabilities, cut}, {"features", features, featuresCut}} {
+		if len(l.cut) > 0 {
+			h.logf("bus: [%s] hello names %d %s and the hub keeps %d: dropped %s (raise maxManagerCapabilities)",
+				c.ident.ID, len(l.kept)+len(l.cut), l.what, maxManagerCapabilities, strings.Join(l.cut[:min(len(l.cut), 8)], ", "))
+		}
 	}
 	if c.ident.Role == bus.RoleManager && !slices.Contains(p.Capabilities, assistantwire.CapabilityConfigOwn) {
 		h.bus.mu.Lock()
@@ -444,15 +471,25 @@ func (h *Hub) managerHello(ctx context.Context, c *busConn, params json.RawMessa
 	return reply, nil
 }
 
-// capabilityList is a hello's capabilities, bounded: at most 32 names of at most 64 bytes.
-func capabilityList(in []string) []string {
-	var out []string
+// maxManagerCapabilities bounds how many capabilities the hub keeps from a manager's hello. A capability past it is
+// dropped, so the feature it gates never starts (managerHello logs which); the built-in manager alone says 33
+// (2026-11-24), and TestManagerHelloCapabilitiesFit keeps room above that.
+const maxManagerCapabilities = 64
+
+// capabilityList is a hello's capabilities, bounded: at most maxManagerCapabilities names of at most 64 bytes. cut is
+// the well-formed names past the limit, in the hello's order: what the hub drops that the manager means.
+func capabilityList(in []string) (out, cut []string) {
 	for _, c := range in {
-		if c = strings.TrimSpace(c); c != "" && len(c) <= 64 && len(out) < 32 && !slices.Contains(out, c) {
+		if c = strings.TrimSpace(c); c == "" || len(c) > 64 || slices.Contains(out, c) || slices.Contains(cut, c) {
+			continue
+		}
+		if len(out) < maxManagerCapabilities {
 			out = append(out, c)
+		} else {
+			cut = append(cut, c)
 		}
 	}
-	return out
+	return out, cut
 }
 
 // busAccept makes c its identity's current connection, and hangs up the one it replaces.
@@ -536,6 +573,7 @@ func (h *Hub) busEnded(c *busConn) {
 	if current {
 		h.extLost.lost(c.ident.ID, time.Now()) // its extensions may still call for a while (extensions_proof.go)
 		h.logf("bus: [%s] disconnected", c.ident.ID)
+		h.countsViewEnded(c) // the apps hear that its view stopped (counts_view.go); they keep the one they have
 		if c.ident.Role == bus.RoleManager {
 			go h.devicesGone(c.ident.ID) // its machines (devices_reports.go)
 		}

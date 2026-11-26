@@ -280,16 +280,32 @@ struct WorkspaceAgentRow: View {
     var session: Session
     var time: AgentTime?
     var muted: Bool
+    /// Present when a folded side session keeps this parent row Unread (#13524); nil leaves the row unchanged.
+    var sideUnread: SideFold.UnreadSummary? = nil
     var preferHerdrTabName = false
     var body: some View {
-        HStack(spacing: Theme.Space.xs) {
-            title
-            Spacer(minLength: 0)
-            metadata
+        Group {
+            if let sideUnread {
+                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                    HStack(spacing: Theme.Space.xs) {
+                        title
+                        Spacer(minLength: 0)
+                        metadata
+                    }
+                    SideUnreadLine(parent: session.key, summary: sideUnread)
+                }
+                .scaledFrame(minHeight: Theme.WorkspaceSidebar.agentHeight)
+            } else {
+                HStack(spacing: Theme.Space.xs) {
+                    title
+                    Spacer(minLength: 0)
+                    metadata
+                }
+                .scaledFrame(height: Theme.WorkspaceSidebar.agentHeight)
+            }
         }
-        .scaledFrame(height: Theme.WorkspaceSidebar.agentHeight)
         .frame(maxWidth: .infinity, alignment: .leading).contentShape(.rect)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: sideUnread == nil ? .combine : .contain)
         .accessibilityValue(session.stateLabel(muted: muted))
     }
 
@@ -435,16 +451,19 @@ struct ChildSpacesRow: View {
 }
 
 /// The ⋯ of a repository whose agents are in more than one space (By Repository): what applies to all of them. Equal while
-/// its unread agents are: the menu held open is not rebuilt by every push.
+/// its agents and its unread ones are: the menu held open is not rebuilt by every push.
 struct RepoMenuItems: View, Equatable {
     @Environment(AppModel.self) private var model
     nonisolated let unread: [SessionKey]
+    /// Every agent of the repository: Mark All as Seen marks the unread ones and lets the ones read during the visit and
+    /// held in place go with them (#12514).
+    nonisolated let all: [SessionKey]
 
-    nonisolated static func == (a: Self, b: Self) -> Bool { a.unread == b.unread }
+    nonisolated static func == (a: Self, b: Self) -> Bool { a.unread == b.unread && a.all == b.all }
 
     var body: some View {
         if !unread.isEmpty {
-            Button { model.markSeen(unread) } label: { Label(StateName.markAllSeen(unread.count), systemImage: Theme.Icon.success) }
+            Button { model.markSeen(all) } label: { Label(StateName.markAllSeen(unread.count), systemImage: Theme.Icon.success) }
         }
     }
 }
@@ -579,17 +598,23 @@ struct RepoTreeSelected: View {
 }
 
 /// A repository's header: its folder, its name and the chevron that turns as it folds. Its actions (the space's pin,
-/// mute, rename, to-do; Mark All as Seen) are its long-press menu: no ⋯ or list mark of its own.
+/// mute, rename, to-do; Mark All as Seen) are its long-press menu. A flattened workspace contributes its marks.
 struct RepoCardHeader: View {
     var name: String
     var folded: Bool
+    var workspace: RepoTree.Worktree? = nil
 
     var body: some View {
         RepoTreeLine(level: 0) {
-            ThemedIcon(Theme.Icon.folder).font(Theme.Font.secondary).foregroundStyle(.secondary)
+            ThemedIcon(workspace?.main == true ? Theme.Icon.home : Theme.Icon.folder)
+                .font(Theme.Font.secondary).foregroundStyle(.secondary)
         } content: {
             HStack(spacing: Theme.Space.s) {
-                Text(name).font(Theme.Font.bodyStrong).foregroundStyle(Color.primary).lineLimit(1)
+                Text(name).font(Theme.Font.bodyStrong)
+                    .foregroundStyle(workspace?.unavailable == true ? Color.secondary : Color.primary).lineLimit(1)
+                if workspace?.latestPinnedAt != nil {
+                    ThemedIcon(Theme.Icon.pinned).font(Theme.Font.caption).foregroundStyle(Theme.accent).accessibilityHidden(true)
+                }
                 Spacer(minLength: 0)
                 FoldChevron(folded: folded)
             }

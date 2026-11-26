@@ -34,7 +34,8 @@ from test_check_fast import GUARD_SUITES, PASSING, copy_check_fast
 ROOT = Path(__file__).resolve().parents[2]
 
 
-FAKE_GO = '#!/bin/sh\nprintf "%s|%s%s\\n" "${PWD##*/}" "${GOOS:+GOOS=$GOOS }" "$*" >> "$FAKE_GO_LOG"\n'
+FAKE_GO = ('#!/bin/sh\nprintf "%s|%s%s%s\\n" "${PWD##*/}" "${GOOS:+GOOS=$GOOS }" "${CI_BASE_SHA:+CI_BASE_SHA=$CI_BASE_SHA }" '
+           '"$*" >> "$FAKE_GO_LOG"\n')
 # A gofmt that records each call ("<slot held>|<args>") and lists, as gofmt -l does, the named files that hold the
 # marker: a planted unformatted file.
 UNFORMATTED = "not gofmt-formatted"
@@ -298,7 +299,11 @@ class CheckFastServerInputsTests(unittest.TestCase):
         self.assertIn("./internal/foo/...", packages)
         calls = self.guard_calls()
         self.assertEqual(2, len(calls), out)
-        self.assertEqual("server|test -count=1 " + GUARD_PACKAGES, calls[0])
+        # The whole-package guards hold the domain counts to the merge base too (archguard's TestDomainLayers reads
+        # CI_BASE_SHA), as the sleep ratchet's --base does.
+        merge_base = subprocess.run(["git", "-C", str(self.repo), "merge-base", "HEAD", "base"], check=True,
+                                    capture_output=True, text=True).stdout.strip()
+        self.assertEqual("server|CI_BASE_SHA=%s test -count=1 %s" % (merge_base, GUARD_PACKAGES), calls[0])
         match = re.fullmatch(r"server\|test -count=1 -run \^\(([\w|.*]+)\)\$ " + re.escape(GUARD_RUN_PACKAGES), calls[1])
         self.assertIsNotNone(match, calls[1])
         # go test -run passes when a name matches nothing: test_check_fast_guards.py's CheckFastGoGuardListTests holds

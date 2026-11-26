@@ -132,11 +132,30 @@ func (s *Service) noteNodeOffline(machine string, now time.Time) {
 	})
 }
 
+// nodeOfflineSince reports when machine was first marked offline in the current
+// outage, reusing node_recovery's tracking book.
+func (s *Service) nodeOfflineSince(machine string) (time.Time, bool) {
+	id := s.canonical(machine)
+	if id == "" {
+		return time.Time{}, false
+	}
+	b := &s.nodeRecovery
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if i := b.indexLocked(id); i >= 0 && !b.records[i].offlineAt.IsZero() {
+		return b.records[i].offlineAt, true
+	}
+	return time.Time{}, false
+}
+
 // NodeConnected is called when a node finishes connecting and listing sessions
 // (devices.Options.OnConnected). If the node was offline longer than
 // nodeRecoveryOfflineAfter or rebooted since it was last online, it runs a
 // recovery sweep for affected tasks.
 func (s *Service) NodeConnected(ctx context.Context, machine string) {
+	if machine != "" {
+		s.invalidateLauncherListCache(machine)
+	}
 	s.nodeConnectedAt(ctx, machine, time.Now())
 }
 
@@ -230,6 +249,10 @@ func (s *Service) nodeConnectedAt(ctx context.Context, machine string, now time.
 		b.records = append(b.records, rec)
 	}
 	b.mu.Unlock()
+
+	// Wake logicalSweep promptly so any retired segments with ClosePending on the
+	// returning node are closed right away, preventing split-brain after failover.
+	s.historyWake()
 
 	if !shouldSweep {
 		return nodeRecoveryResult{Rebooted: rebooted, Outage: outage}

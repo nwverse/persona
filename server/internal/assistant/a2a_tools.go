@@ -99,6 +99,7 @@ func (s *Service) a2aToolCall(ctx context.Context, st a2aStore, cfg assistantwir
 	if err := json.Unmarshal(args, &a); err != nil {
 		return nil, errA2AInvalid
 	}
+	a.a2aRef = s.a2aResolve(ctx, cfg, a.a2aRef) // an id the session's conversation went by: its row now (a2a_resolve.go)
 	var t *a2aTask
 	var err error
 	switch name {

@@ -3,9 +3,11 @@ package assistant
 import (
 	"context"
 	"maps"
+	"slices"
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/supervisionrole"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -163,11 +165,10 @@ func (s *Service) rememberLegacyBackground(conversation string, list []supervise
 	s.saveRelayLocked()
 }
 
-// followUpWords tells the caller who follows a newly handed-out task: the main conversation, with its supervision
-// messages and task_review (#5732).
-func (s *Service) followUpWords(ctx context.Context, self string) string {
-	main := s.settings(ctx).Main
-	if main != "" && main != self {
+// followUpWords tells the caller who follows a newly handed-out task: the caller when it supervises the task itself
+// (main, a direction lead, or a live side conversation), else the main conversation (#5732, #13657).
+func (s *Service) followUpWords(ctx context.Context, self, supervisor string) string {
+	if supervisor != "" && supervisor != self {
 		return "the main conversation gets a supervision message (📋) when it needs review, and closes it with task_review"
 	}
 	return "you get a supervision message (📋) when it needs you, and close it with task_review"
@@ -315,8 +316,10 @@ func (s *Service) backgroundStranded(ctx context.Context) {
 	b.dedupMu.Lock()
 	defer b.dedupMu.Unlock()
 	lost := s.backgroundLost(ctx, id, cfg.Main, s.webBase(ctx))
-	if len(lost) == 0 || !s.autoSupervisionOn(ctx) {
-		return // with automatic supervision messages off what was lost is not told again
+	mode := s.supervisionMode(ctx)
+	lost = slices.DeleteFunc(lost, func(g superviseSignal) bool { return !supervisionSignalAllowed(mode, g) })
+	if len(lost) == 0 {
+		return // what the mode drops (all of it while off) is not told again
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -398,7 +401,7 @@ func (s *Service) backgroundFresh(cfg Settings, id string) bool {
 func (s *Service) startBackground(ctx context.Context) (string, error) {
 	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 100*time.Second)
 	defer cancel()
-	sctx = context.WithValue(sctx, supervisionStartup{}, true)
+	sctx = context.WithValue(sctx, supervisionStartup{}, supervisionrole.RoleBackground())
 	c, err := s.startConversation(sctx, startParams{Text: prompts.RenderSupervisorStart(prompts.SupervisorStart{Owner: s.owner(ctx)}),
 		Purpose: purposeSupervise, Origin: OriginTask, Source: &proto.MessageSource{Kind: proto.SourceSupervision}})
 	if err != nil {

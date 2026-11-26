@@ -3,9 +3,10 @@
 export function vitestShard(value = process.env.PERSONA_WEB_TEST_SHARD) {
   if (value === undefined || value === "") return { args: [], nodeTests: true };
   const match = /^([1-9]\d*)\/([1-9]\d*)$/.exec(value);
-  if (!match || Number(match[1]) > Number(match[2])) {
+  const index = Number(match?.[1]);
+  const count = Number(match?.[2]);
+  if (!Number.isSafeInteger(index) || !Number.isSafeInteger(count) || index > count) {
     throw new Error(`PERSONA_WEB_TEST_SHARD must be <index>/<count> with 1 <= index <= count; got ${JSON.stringify(value)}`);
   }
-  const index = Number(match[1]), count = Number(match[2]);
   return { args: [`--shard=${index}/${count}`], nodeTests: index === 1 };
 }

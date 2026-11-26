@@ -134,14 +134,20 @@ func TestReviewCardlessWaitSurvivesRestart(t *testing.T) {
 	if !slices.Contains(pendingKinds(s, todo.ID), sigCardlessWait) {
 		t.Fatalf("card-less review not handed back: %v", pendingKinds(s, todo.ID))
 	}
-	setSuperviseTimings(s, shortSuperviseTimings) // the claim goes out now, at the test's usual pace, before the restart
+	setSuperviseTimings(s, shortSuperviseTimings)
+	// The digest removes its in-memory batch before the send and its durable ACK.
+	// This restart follows delivery. A claim still in Postgres belongs to crash recovery.
 	releaseDigest(s)
-	forgetSignals(t, s)
-	// forgetSignals sees the pending signals gone once a digest takes them; the restart waits until that digest has
-	// ended, the claim's delivery acknowledged in the outbox.
-	s.supervise.digestMu.Lock()
-	s.supervise.digestMu.Unlock() //nolint:staticcheck // an empty critical section: it waits for the digest under way
-	again, _ := restartedOn(t, database)
+	waitFor(t, "the cardless hand-back to be delivered and acknowledged", func() bool {
+		_, pending := storedSupervisePending(t, s)[todo.ID+"|"+sigCardlessWait]
+		return cardlessNotices(f) > 0 && !pending
+	})
+	stopCardlessManager(s)
+	if n := cardlessNotices(f); n != 1 {
+		t.Fatalf("the old manager delivered %d card-less hand-backs, want one", n)
+	}
+	again, nextHub := restartedOn(t, database)
+	t.Cleanup(func() { stopCardlessManager(again) })
 	quietDigest(again)
 	holdDigest(again)
 	if err := again.ensureTodosLoaded(ctx); err != nil {
@@ -154,6 +160,10 @@ func TestReviewCardlessWaitSurvivesRestart(t *testing.T) {
 	again.superviseWatch(ctx, time.Now().Add(2*time.Hour))
 	if slices.Contains(pendingKinds(again, todo.ID), sigCardlessWait) {
 		t.Fatal("a restart reissued the same card-less hand-back")
+	}
+	flushCardlessClaim(again)
+	if n := cardlessNotices(nextHub); n != 0 {
+		t.Fatalf("the restarted manager delivered %d duplicate card-less hand-backs", n)
 	}
 }
 
@@ -316,6 +326,26 @@ func TestCardlessWaitRenderedForTaskLeader(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("worker cardless_wait render lacks %q:\n%s", want, got)
 		}
+	}
+}
+
+// A card-less review that comes due while its conversation is stopped (/stop, #3308) is not stamped as told, since
+// signal drops it then: once the user speaks again it is handed back (#13415).
+func TestReviewCardlessWaitUnderStopWaitsForTheUser(t *testing.T) {
+	s, f, todo := newSupervisedService(t)
+	holdDigest(s)
+	ctx := context.Background()
+	waitsForReview(t, s, f, todo.ID, "做完了，你看下要不要这样发布。")
+	s.markReporter(ctx, "box", todo.Origin)
+	s.setReporterStopped(ctx, todo.Origin, "app")
+	s.superviseWatch(ctx, time.Now().Add(cardlessSettle+time.Minute))
+	if todoNow(s, todo.ID).Supervision.CardlessToldAt != nil {
+		t.Fatal("the round was stamped told while stopped, though nothing was queued")
+	}
+	s.setReporterStopped(ctx, todo.Origin, "")
+	s.superviseWatch(ctx, time.Now().Add(cardlessSettle+2*time.Minute))
+	if !slices.Contains(pendingKinds(s, todo.ID), sigCardlessWait) {
+		t.Fatalf("not handed back once /stop was lifted: %v", pendingKinds(s, todo.ID))
 	}
 }
 

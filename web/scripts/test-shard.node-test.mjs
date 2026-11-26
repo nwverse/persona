@@ -25,3 +25,16 @@ test("a malformed or reversed shard fails before any test starts", () => {
     assert.throws(() => vitestShard(value), /PERSONA_WEB_TEST_SHARD must be <index>\/<count>/, value);
   }
 });
+
+test("shard bounds must be safe integers before comparison and formatting", () => {
+  const max = "9007199254740991";
+  assert.deepEqual(vitestShard(`${max}/${max}`), { args: [`--shard=${max}/${max}`], nodeTests: false });
+  for (const value of [
+    "9007199254740993/9007199254740992",
+    "1/9007199254740992",
+    "1000000000000000000000000000000001/1000000000000000000000000000000000",
+    `1/${"9".repeat(400)}`,
+  ]) {
+    assert.throws(() => vitestShard(value), /PERSONA_WEB_TEST_SHARD must be <index>\/<count>/, value);
+  }
+});

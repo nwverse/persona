@@ -21,16 +21,43 @@ nonisolated struct SpaceGroup: Identifiable, Sendable {
     var id: String // machineID/spaceID, "group|machineID/spaceID" for another group of hubs
     var machineID: String
     var spaceID: String
+    /// By Project can use a workspace ID when the session has no terminal space ID.
+    var workspaceGroupID: String? = nil
     /// The group of hubs its machine is in (docs/protocol/multi-hub.md); "" = the default group.
     var group: String = ""
     var machineRef: MachineRef { MachineRef(group: group, id: machineID) }
     var name: String
+    var projectFolder: AgentProjectFolder? = nil
     var index: Int
     var sessions: [Session] // in tab order
     /// The hub project key for whole-space todo links; nil outside a herdr workspace.
     var todoSpace: String? = nil
     var aggregate: SessionListCounts? = nil
     var bounded = false
+
+    var headingLabel: String { [name, projectFolder?.qualifier].compactMap { $0 }.joined(separator: " · ") }
+
+    static func withProjectFolders(_ groups: [Self], machines: [MachineRef: Machine]) -> [Self] {
+        let sharedNames = Dictionary(grouping: groups, by: \.machineRef).mapValues { sameComputer in
+            Dictionary(grouping: sameComputer) { $0.name.lowercased() }.filter { $0.value.count > 1 }
+        }
+        return groups.map { group in
+            guard group.workspaceGroupID != nil || (group.spaceID != "-" && !group.spaceID.isEmpty) else { return group }
+            var counts: [String: Int] = [:]
+            for row in group.sessions {
+                let path = row.workspaceCWD.flatMap { $0.isEmpty ? nil : $0 } ?? row.cwd
+                if !path.isEmpty { counts[path, default: 0] += 1 }
+            }
+            guard let folder = counts.min(by: { left, right in
+                left.value == right.value ? left.key < right.key : left.value > right.value
+            })?.key else { return group }
+            let qualifier = sharedNames[group.machineRef]?[group.name.lowercased()] == nil ? nil
+                : AgentProjectFolder.parentLabel(folder, home: machines[group.machineRef]?.home)
+            var withFolder = group
+            withFolder.projectFolder = AgentProjectFolder(machine: group.machineRef, cwd: folder, qualifier: qualifier)
+            return withFolder
+        }
+    }
 
     var state: AgentState { sessions.map(\.countedState).min { $0.priority < $1.priority } ?? .idle }
     var updatedAt: Date { sessions.compactMap(\.updatedAt).max() ?? .distantPast }
@@ -53,11 +80,12 @@ nonisolated struct SpaceGroup: Identifiable, Sendable {
     /// Its agents that only wait in the background (#6045): counted apart, with a clock (`StateCounts`).
     var waitingInBackground: Int { sessions.filter { $0.waitsInBackground && !$0.isNestedSubtask }.count }
 
-    static func build(_ sessions: [Session]) -> [SpaceGroup] {
+    static func build(_ sessions: [Session], byProject: Bool = false) -> [SpaceGroup] {
         var groups: [String: SpaceGroup] = [:]
         for s in sessions where s.state.isLive {
             let spaceID = s.spaceID ?? "-"
-            let key = "\(s.machineRef.path)/\(spaceID)"
+            let workspace = byProject && (s.spaceID ?? "").isEmpty ? s.workspaceID.flatMap { $0.isEmpty ? nil : $0 } : nil
+            let key = "\(s.machineRef.path)/\(workspace ?? spaceID)"
             if groups[key] == nil {
                 let todoSpace: String?
                 if let id = s.spaceID, !id.isEmpty {
@@ -65,7 +93,7 @@ nonisolated struct SpaceGroup: Identifiable, Sendable {
                 } else {
                     todoSpace = nil
                 }
-                groups[key] = SpaceGroup(id: key, machineID: s.machineID, spaceID: spaceID, group: s.group,
+                groups[key] = SpaceGroup(id: key, machineID: s.machineID, spaceID: spaceID, workspaceGroupID: workspace, group: s.group,
                                          name: s.spaceName ?? s.folderName, index: s.spaceIndex ?? 0, sessions: [], todoSpace: todoSpace)
             }
             groups[key]!.sessions.append(s)
@@ -884,6 +912,7 @@ private struct AgentsList: View {
     @State private var creatingChild: HostWorkspace?
     @State private var createdWorktree: HostWorkspace?
     @State private var startingWorktree: HostWorkspace?
+    @State private var startingProject: AgentProjectFolder?
     @State private var renamingWorktree: HostWorkspace?
     /// iPhone Duo's bars down the side: the shell's bar is the side rail, and the list needs no room for it at its top.
     @Environment(\.shellRailEdge) private var railEdge
@@ -923,7 +952,8 @@ private struct AgentsList: View {
     @StoredValue("dev.projectFilter") private var projectFilter = ""
     @StoredValue("dev.modelFilter") private var modelFilter = ""
     @StoredValue("dev.pinnedOnly") private var pinnedOnly = false
-    @StoredValue("dev.searchScope") private var searchScope: AgentSearchScope = .all
+    /// What the search reads (#7443; the ⋯ menu's Search In), applied only while something is searched.
+    @StoredValue(AgentSearchScope.key) private var searchScope: AgentSearchScope = .all
     @StoredValue("dev.searchAsCode") private var searchAsCode = false
     /// Several groups of hubs: "" all of them, else the list is narrowed to one (`HubFilter`).
     @StoredValue(HubFilter.key) private var storedHubFilter = ""
@@ -941,6 +971,8 @@ private struct AgentsList: View {
     @StoredValue(AgentRowStyle.key) private var rowStyle: AgentRowStyle = .standard
     /// Folded sections (spaces, machines, states), one id per line.
     @StoredValue("dev.folded") private var foldedList = ""
+    /// The notice that read rows now stay (`seenRowsNotice`, #12514) was closed, or the choice made in Settings.
+    @StoredValue(SeenRows.noticedKey) private var seenRowsNoticed = false
     @State private var quick: AgentFilter = .all
     @State private var showHiddenDirectories = false
     @State private var paginationArmed = false
@@ -978,6 +1010,8 @@ private struct AgentsList: View {
     @State private var answering: Interaction?
     /// The long-press menu's actions on a row (not observed: see `AgentRowMenu`).
     @State private var rowActions = AgentMenuHandlers()
+    /// Opens an unread folded side session in one tap (`\.openUnreadSide`): the same object for the list's life (#13524).
+    @State private var sideOpener = SideSessionOpener()
     @State private var takeoverCoordinator = CodexTakeoverCoordinator()
     /// The agents, the questions and the machines the list shows (`AgentsFeed`): held still while it is scrolled or
     /// out of sight.
@@ -1050,15 +1084,22 @@ private struct AgentsList: View {
     }
     private func session(_ key: SessionKey) -> Session? { lookup.sessions[key] }
 
+    /// The scope the list applies. The Sidebar layout's field (chats and Agents) names no scope: Full Text there
+    /// (`AgentsListMenu`).
+    private var appliedScope: AgentSearchScope {
+        unified == nil ? searchScope.applied(query: query, searching: searching) : .all
+    }
+
     /// Small value inputs, not a fingerprint of the inventory. Paging counts and preferences remain partitioned.
     private func projectionSettings() -> AgentListProjection.Settings {
         var preferences: [String: AgentListProjection.Preferences] = [:]
         for link in model.links { preferences[link.group] = .init(pins: link.pins.pins, mutes: link.pins.mutes) }
         return .init(grouping: grouping.rawValue, sort: sort.rawValue, filter: quick, query: query,
-                     searchScope: searchScope, searchAsCode: searchAsCode,
+                     searchScope: appliedScope,
+                     searchAsCode: searchAsCode,
                      machine: machineFilter, harness: harnessFilter, project: projectFilter, model: modelFilter,
                      pinnedOnly: pinnedOnly, showEmptyWorkspaces: showEmptyWorkspaces, hub: hubFilter, multiHub: model.isMultiHub, kept: kept,
-                     held: model.heldInList, heldJustFinished: model.heldJustFinished, preferences: preferences,
+                     held: model.heldInList, heldJustFinished: model.heldJustFinished, heldSeen: heldSeen, preferences: preferences,
                      pagedGroups: Set(model.sessionLists.lists.filter { $0.value.paged }.keys),
                      listQuery: listQuery, sideFold: model.sideFoldGroups)
     }
@@ -1245,8 +1286,9 @@ private struct AgentsList: View {
         observedAgentList(
             AnyView(agentList(base: base, filtered: filtered, unpinned: unpinned, pinnedAgents: pinnedAgents,
                               needsYou: needsYou, unreadShown: unreadShown, active: active, quiet: quiet,
-                              tree: tree, byHost: byHost, hasSearchResults: projection.hasSearchResults)),
-            base: base, interactions: interactions, quiet: quiet, matching: matching)
+                              tree: tree, byHost: byHost, hasSearchResults: projection.hasSearchResults,
+                              holdsSeen: !projection.heldSeen.isEmpty)),
+            base: base, interactions: interactions, quiet: quiet, matching: matching, needsSeen: projection.needsSeen)
             .codexTakeoverDialogs(coordinator: takeoverCoordinator) { adopted in
                 model.adopt(adopted)
                 openFromList(adopted.key)
@@ -1274,7 +1316,7 @@ private struct AgentsList: View {
     // the minimum compiler to solve each expression independently.
     private func agentList(base: [Session], filtered: [Session], unpinned: [Session], pinnedAgents: [Session],
                            needsYou: [AgentsNeedsYou.Row], unreadShown: [SessionKey], active: [SpaceGroup], quiet: [SpaceGroup],
-                           tree: [RepoTree.Host], byHost: Bool, hasSearchResults: Bool) -> some View {
+                           tree: [RepoTree.Host], byHost: Bool, hasSearchResults: Bool, holdsSeen: Bool) -> some View {
         List {
             // The Sidebar layout (#6332): the pages and Persona's chats first, as the web sidebar has them over its Agents.
             if let sidebarRows {
@@ -1434,6 +1476,14 @@ private struct AgentsList: View {
                                    message: String(localized: "You can search space, tab and session titles and content. Try another word."))
                 }
                 .listRowBackground(Color.clear)
+            } else if !hasSearchResults, appliedScope.isSearch(query: query) {
+                // An open search under Errors with nothing typed and no Agent with an error: the same, not the first-run screen.
+                Section {
+                    EmptyStateView(symbol: Theme.Icon.success, title: String(localized: "No Agents with Errors"),
+                                   message: String(localized: "Agents that stop with an error show up here."),
+                                   action: (String(localized: "Show All"), { searchScope = .all }))
+                }
+                .listRowBackground(Color.clear)
             } else if !hasSearchResults, machineFilter.isEmpty, machines.isEmpty, model.canAddComputer {
                 Section {
                     EmptyStateView(symbol: Theme.Icon.machines, title: Self.emptyNoComputerTitle, message: Self.emptyNoComputerMessage,
@@ -1461,6 +1511,16 @@ private struct AgentsList: View {
                 .listRowSeparator(floating ? .hidden : .automatic)
             }
         }
+        #if os(iOS)
+        // The changed default said once (#12514, PRINCIPLES 1), when a read row first stays, with the way to change it
+        // back: floating at the list's foot, not in the list, so no row moves when it comes or goes. A section at the
+        // list's top, put in while the chat was open over it, moved the rows ~570 pt on the way back.
+        .floatingFooter(over: listPage, shown: holdsSeen && !seenRowsNoticed && model.seenRows == .stay && query.isEmpty) {
+            seenRowsNotice
+                .padding(.horizontal, Theme.Space.page)
+                .padding(.bottom, Theme.Space.sm)
+        }
+        #endif
     }
 
     private func styledAgentList<Content: View>(_ list: Content, base: [Session], interactions: [Interaction]) -> some View {
@@ -1512,9 +1572,11 @@ private struct AgentsList: View {
     }
 
     private func observedAgentList<Content: View>(_ content: Content, base: [Session], interactions: [Interaction],
-                                                 quiet: [SpaceGroup], matching: Set<SessionKey>) -> some View {
+                                                 quiet: [SpaceGroup], matching: Set<SessionKey>,
+                                                 needsSeen: [SessionKey: AgentListOrder.Held]) -> some View {
         let decorated = AnyView(styledAgentList(content, base: base, interactions: interactions))
-        .refreshable { await model.sessionLists.reload(); await model.refresh() }
+        // A pull is a refresh: the rows read during the visit go where their state puts them (#12514).
+        .refreshable { releaseSeenRows(); await model.sessionLists.reload(); await model.refresh() }
         // Whether each machine's herdr runs, while the list is in sight (a modifier of its own: in this chain the
         // compiler ran out of time type-checking it).
         // Both stop while the list is out of sight; `AgentsCoverWatch` reads that and carries them.
@@ -1558,6 +1620,12 @@ private struct AgentsList: View {
                 openFromList(session.key)
             }
         }
+        .sheet(item: $startingProject) { project in
+            NewChatView(projectFolder: project) { session in
+                startingProject = nil
+                openFromList(session.key)
+            }
+        }
         .sheet(item: $linkingSession) { s in
             TodoLinkAgentSheet(session: s)
         }
@@ -1567,6 +1635,9 @@ private struct AgentsList: View {
                 TodoLinkAgentSheet(space: TodoItem.Space(machineID: group.machineID, space: space))
             }
         }
+        // What this visit showed as Unread or Just finished: each keeps that place once seen, here or elsewhere (#12514);
+        // noted again when rows that are read stay is chosen once more (the list's rows have not changed since).
+        let noted: [SessionKey: AgentListOrder.Held] = model.seenRows == .stay ? needsSeen : [:]
         let list = AnyView(sheets)
         .task(id: listQuery) {
             paginationArmed = false
@@ -1576,13 +1647,15 @@ private struct AgentsList: View {
         }
         .task(id: hubFilter) { await model.sessionLists.select(listQuery, hub: selectedHub, model: model) }
         .onChange(of: matching) { _, now in kept.formUnion(now) }
+        .onChange(of: noted, initial: true) { _, now in model.noteShownUnseen(now) }
         .onChange(of: query.isEmpty, initial: true) { _, empty in feed.searching = !empty }
         .onChange(of: grouping, initial: true) { _, mode in feed.recent = mode == .recent }
         #if DEBUG && (os(iOS) || os(visionOS))
         .onChange(of: searching) { _, now in SearchTrace.shared.note("searching \(now)") }
         .onChange(of: query) { _, now in SearchTrace.shared.note("query '\(now)'") }
         #endif
-        .onChange(of: machineFilter) { _, _ in kept = [] }
+        .onChange(of: machineFilter) { _, _ in kept = []; releaseSeenRows() }
+        .onChange(of: hubFilter) { _, _ in releaseSeenRows() }
         // Narrowed to one hub, another one made current (#11657): a computer of the hub before is not on this list, also
         // when the switch was made while the list was not there.
         .modifier(MachineFilterFollowsHub(hubFilter: hubFilter, machineFilter: $machineFilter))
@@ -1617,6 +1690,7 @@ private struct AgentsList: View {
             }
         }
         .environment(feed) // a quiet space's line reads its agents' times from the rows (`SpaceGroup.updatedAt(_:)`)
+        .environment(\.openUnreadSide, sideOpener.set { parent, side in openUnreadSide(parent: parent, side: side) })
     }
 
     /// The quick filter bar. Equal while the counts are: the bar is not drawn again for pushes that change none of
@@ -1655,13 +1729,47 @@ private struct AgentsList: View {
         }
     }
 
-    /// A quick filter chosen (again): it starts from what matches now.
+    /// A quick filter chosen (again): it starts from what matches now, without the rows read during the visit (#12514).
     private func choose(_ f: AgentFilter, _ base: [Session]) {
         Haptics.tap()
         quick = f
         kept = Set(base.filter { f != .all && f.matches($0, muted: model.isMuted($0)) }.map(\.key))
+        releaseSeenRows()
     }
 
+    /// The list starts again (#12514): the rows read during the visit go where their state puts them, and the ones it
+    /// shows unseen now are this visit's (the projection the body last published).
+    private func releaseSeenRows() {
+        model.releaseAllSeen(keeping: lookup.projection?.needsSeen ?? [:])
+    }
+
+    #if os(iOS)
+    /// Says once that a read row now stays where it was (#12514), with the way to the setting; closed for good with ✕.
+    private var seenRowsNotice: some View {
+        NoticeBanner(text: SeenRows.notice, tone: .neutral, dismiss: {
+            withAnimation(Theme.Motion.standard) { seenRowsNoticed = true }
+        }) {
+            Button {
+                Haptics.tap()
+                model.revealSeenRowsSetting = true
+                model.settingsPath = NavigationPath([SettingsPage.appearance, SettingsPage.layout])
+                model.showSettings()
+            } label: {
+                Text(String(localized: "Change in Settings"))
+                    .tapTargetHeight()
+                    .contentShape(.rect)
+            }
+            .accessibilityIdentifier("agents.seenNotice.settings")
+        }
+        .accessibilityIdentifier("agents.seenNotice")
+    }
+
+    /// The color behind the list (`AgentsListPage`), which what floats over its foot is washed back to.
+    private var listPage: Color {
+        if unified != nil { return UnifiedSidebar.columnColor }
+        return grouping == .repo && !repoTree ? Theme.WorkspaceSidebar.background : Theme.groupedPage
+    }
+    #endif
 
     /// One row of the Needs You section (`AgentsNeedsYou.Row`): a session's only card as it always was; several cards of
     /// one session under its name, each answering itself; a session waiting in its terminal, a row that opens it.
@@ -1922,23 +2030,42 @@ private struct AgentsList: View {
         }
     }
 
+    /// Opens an unread folded side session in its parent's chat in one tap (#13524).
+    private func openUnreadSide(parent: SessionKey, side: SessionKey) {
+        model.sideLanding = SideLanding(parent: parent, side: side)
+        if searching {
+            openFromSearch(parent)
+        } else {
+            openFromList(parent)
+        }
+    }
+
+    /// Reads the unread-side summary for a row kept Unread by folded sides (#13524). Rows with no unread side return
+    /// nil immediately without touching `model.sides(of:)`, keeping observation narrow (P5).
+    private func unreadSideSummary(for s: Session) -> SideFold.UnreadSummary? {
+        guard s.state == .unread, !s.assistant, (s.children?.sidesUnread ?? 0) > 0 else { return nil }
+        if let summary = model.sides(of: s.key).unreadSummary { return summary }
+        return SideFold.unreadSummary(parent: s, ownState: model.session(s.key)?.state, sides: nil)
+    }
+
     @ViewBuilder private func slotRowDrawn(_ s: Session, time: AgentTime?, context: Bool, inStateSection: Bool, cardLast: Bool?, showHost: Bool = false,
                                            pane: TabPanes.Role? = nil, open: Bool = false) -> some View {
         // herdr is where most agents run: only the others name their host
         let host = showHost ? s.hostKind.flatMap { $0 == "herdr" ? nil : $0 } : nil
+        let sideUnread = unreadSideSummary(for: s)
         let preferTab = model.prefersHerdrTabName(for: s)
         if grouping == .repo && !repoTree {
             // The Mac's and Apple Vision Pro's repository cards keep their rows. On iOS By Repository draws the same
             // rows as every other grouping (#3753).
-            WorkspaceAgentRow(session: s, time: time, muted: model.isMuted(s), preferHerdrTabName: preferTab)
+            WorkspaceAgentRow(session: s, time: time, muted: model.isMuted(s), sideUnread: sideUnread, preferHerdrTabName: preferTab)
         } else if compact {
-            CompactSlotRow(session: s, muted: model.isMuted(s), hideState: inStateSection, space: context ? (s.spaceName ?? s.folderName) : nil, host: host, time: time, pane: pane, preferHerdrTabName: preferTab)
+            CompactSlotRow(session: s, muted: model.isMuted(s), hideState: inStateSection, space: context ? (s.spaceName ?? s.folderName) : nil, host: host, time: time, pane: pane, sideUnread: sideUnread, preferHerdrTabName: preferTab)
                 .equatable()
         } else {
             SlotRow(session: s, muted: model.isMuted(s), space: context ? (s.spaceName ?? s.folderName) : nil,
                     machine: rowMachine(s, context: context), host: host,
                     hideState: inStateSection, surface: cardLast.map { .cardRow(last: $0) } ?? .capsule, time: time, pane: pane,
-                    rowStyle: listRowStyle, dense: !ownsTop, preferHerdrTabName: preferTab)
+                    rowStyle: listRowStyle, dense: !ownsTop, sideUnread: sideUnread, preferHerdrTabName: preferTab)
                 .equatable()
         }
     }
@@ -2050,7 +2177,7 @@ private struct AgentsList: View {
     private func spaceScope(_ group: SpaceGroup) -> RuntimeSessionLists.Scope {
         var query = listQuery
         query.machine = group.machineID
-        query.group = group.spaceID == "-" ? "" : group.spaceID
+        query.group = group.workspaceGroupID ?? (group.spaceID == "-" ? "" : group.spaceID)
         return RuntimeSessionLists.Scope(hub: group.group, query: query)
     }
 
@@ -2079,18 +2206,38 @@ private struct AgentsList: View {
             .buttonStyle(.plain)
             .accessibilityIdentifier("agents.space")
             TodoSpaceTag(group: g) { todoID in openFromList(TodoDetailRoute(id: todoID)) }
-            Menu {
-                SpaceHeaderMenu(group: g, isMuted: model.isMuted, rename: { renamingSpace = g }, open: { openFromList(SpaceRoute(id: g.id)) },
-                                linkTodo: { linkingSpace = g }).equatable()
-            } label: {
-                headerMenuLabel
+            if let folder = availableProjectFolder(g) {
+                Button {
+                    startingProject = folder
+                } label: {
+                    ThemedIcon(Theme.Icon.add).font(Theme.Font.label).foregroundStyle(.secondary)
+                        .scaledFrame(width: Theme.Size.tapTarget, height: Theme.Size.tapTarget)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("agents.project.new")
+                .accessibilityLabel("New Agent in \(g.headingLabel)")
             }
-            // Compact List: as quiet as the counts beside it (a Menu's label takes the accent otherwise).
-            .tint(compact ? Color.secondary : nil)
-            .labelOnlyMenu()
-            .accessibilityLabel("More actions for \(g.name) [Chats View 661d12]")
+            if g.workspaceGroupID == nil {
+                Menu {
+                    SpaceHeaderMenu(group: g, isMuted: model.isMuted, rename: { renamingSpace = g }, open: { openFromList(SpaceRoute(id: g.id)) },
+                                    linkTodo: { linkingSpace = g }).equatable()
+                } label: {
+                    headerMenuLabel
+                }
+                // Compact List: as quiet as the counts beside it (a Menu's label takes the accent otherwise).
+                .tint(compact ? Color.secondary : nil)
+                .labelOnlyMenu()
+                .accessibilityLabel("More actions for \(g.name) [Chats View 661d12]")
+            }
         }
         .task(id: spaceScope(g)) { await model.sessionLists.loadCounts(spaceScope(g)) }
+    }
+
+    private func availableProjectFolder(_ group: SpaceGroup) -> AgentProjectFolder? {
+        guard machine(group.machineRef)?.online == true,
+              model.sessionLists.hasCompleteSessions(group.group) else { return nil }
+        return group.projectFolder
     }
 
     /// The ⋯ on a space's or a repository's header.
@@ -2115,6 +2262,15 @@ private struct AgentsList: View {
                         }
                     } else {
                         quietRow(g, namesMachine: namesMachine, repo: false, selected: false)
+                            .contextMenu {
+                                if let folder = availableProjectFolder(g) {
+                                    Button {
+                                        startingProject = folder
+                                    } label: {
+                                        Label("New Agent in \(g.headingLabel)", systemImage: Theme.Icon.add)
+                                    }
+                                }
+                            }
                     }
                 }
             } header: {
@@ -2235,12 +2391,13 @@ private struct AgentsList: View {
     @ViewBuilder private func repoCard(_ r: RepoTree.Repo) -> some View {
         let folded = isFolded(r.id)
         Section {
-            Button { toggleFold(r.id) } label: { RepoCardHeader(name: r.name, folded: folded) }
+            Button { toggleFold(r.id) } label: {
+                RepoCardHeader(name: r.name, folded: folded, workspace: r.flattenedWorkspace)
+            }
                 .buttonStyle(.plain)
                 .contextMenu { repoMenu(r) }
                 .accessibilityIdentifier("agents.project")
-                .accessibilityLabel([r.name, folded ? String(localized: "Collapsed [Readiness Card ee6046]") : String(localized: "Expanded")]
-                    .joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label")))
+                .accessibilityLabel(repositoryLabel(r, folded: folded))
                 .selectionDisabled()
                 .modifier(FoldAnchor(id: r.id, reader: feed.reader))
                 .modifier(ButtonRowInsets(edges: rowInsets(level: 0)))
@@ -2260,13 +2417,14 @@ private struct AgentsList: View {
     /// What the ⋯ and the to-do's mark beside a repository's header offered: when its agents are all in one herdr space
     /// (the usual case), that space's pin, mute, rename, open and to-do; otherwise Mark All as Seen.
     @ViewBuilder private func repoMenu(_ r: RepoTree.Repo) -> some View {
+        if let workspace = r.flattenedWorkspace { worktreeMenu(workspace) }
         let prepared = lookup.projection?.repositories[r.id]
         if let space = prepared?.space {
             SpaceHeaderMenu(group: space, isMuted: model.isMuted, rename: { renamingSpace = space }, open: { openFromList(SpaceRoute(id: space.id)) },
                             linkTodo: { linkingSpace = space }).equatable()
             TodoSpaceMenuItem(group: space) { todoID in openFromList(TodoDetailRoute(id: todoID)) }
         } else {
-            RepoMenuItems(unread: prepared?.unread ?? []).equatable()
+            RepoMenuItems(unread: prepared?.unread ?? [], all: prepared?.keys ?? []).equatable()
         }
     }
 
@@ -2413,28 +2571,34 @@ private struct AgentsList: View {
         let prepared = lookup.projection?.repositories[r.id]
         let space = prepared?.space
         let unread = prepared?.unread ?? []
+        let workspace = r.flattenedWorkspace
         return HStack(spacing: Theme.Space.xs) {
             Button { toggleFold(r.id) } label: {
                 HStack(spacing: Theme.Space.s) {
-                    ThemedIcon(Theme.Icon.folder).foregroundStyle(Theme.WorkspaceSidebar.muted)
-                    Text(r.name).font(Theme.WorkspaceSidebar.titleUnread).foregroundStyle(Theme.WorkspaceSidebar.foreground).lineLimit(1)
+                    ThemedIcon(workspace?.main == true ? Theme.Icon.home : Theme.Icon.folder).foregroundStyle(Theme.WorkspaceSidebar.muted)
+                    Text(r.name).font(Theme.WorkspaceSidebar.titleUnread).lineLimit(1)
+                        .foregroundStyle(workspace?.unavailable == true ? Theme.WorkspaceSidebar.muted : Theme.WorkspaceSidebar.foreground)
+                    if workspace?.latestPinnedAt != nil {
+                        ThemedIcon(Theme.Icon.pinned).font(Theme.WorkspaceSidebar.meta).foregroundStyle(Theme.accent).accessibilityHidden(true)
+                    }
                     Spacer(minLength: 0)
                     FoldChevron(folded: isFolded)
                 }.contentShape(.rect)
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("agents.project")
-            .accessibilityLabel([r.name, isFolded ? String(localized: "Collapsed [Readiness Card ee6046]") : String(localized: "Expanded")].joined(separator: ", "))
+            .accessibilityLabel(repositoryLabel(r, folded: isFolded))
             if let space {
                 TodoSpaceTag(group: space) { todoID in openFromList(TodoDetailRoute(id: todoID)) }
             }
-            if space != nil || !unread.isEmpty {
+            if workspace != nil || space != nil || !unread.isEmpty {
                 Menu {
+                    if let workspace { worktreeMenu(workspace) }
                     if let space {
                         SpaceHeaderMenu(group: space, isMuted: model.isMuted, rename: { renamingSpace = space }, open: { openFromList(SpaceRoute(id: space.id)) },
                                         linkTodo: { linkingSpace = space }).equatable()
                     } else {
-                        RepoMenuItems(unread: unread).equatable()
+                        RepoMenuItems(unread: unread, all: prepared?.keys ?? []).equatable()
                     }
                 } label: {
                     headerMenuLabel
@@ -2445,6 +2609,17 @@ private struct AgentsList: View {
             }
         }
         .task(id: repoScope(r)) { await model.sessionLists.loadCounts(repoScope(r)) }
+    }
+
+    private func repositoryLabel(_ repo: RepoTree.Repo, folded: Bool) -> String {
+        var labels = [repo.name]
+        if let workspace = repo.flattenedWorkspace {
+            if workspace.main { labels.append(String(localized: "Main worktree")) }
+            if workspace.latestPinnedAt != nil { labels.append(String(localized: "Pinned [Personal Agent List View fb47db]")) }
+            if workspace.unavailable { labels.append(String(localized: "This computer is offline")) }
+        }
+        labels.append(folded ? String(localized: "Collapsed [Readiness Card ee6046]") : String(localized: "Expanded"))
+        return labels.joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label"))
     }
 
     /// A working tree in its repository's card: its row and agents (`worktreeRow`), then the spaces nested under it
@@ -2612,8 +2787,11 @@ private struct AgentsList: View {
     // MARK: By state / by machine
 
     private var order: AgentListOrder {
-        AgentListOrder(isPinned: model.isPinned, isMuted: model.isMuted, byRank: quick == .all && sort == .state, held: model.heldInList, heldJustFinished: model.heldJustFinished)
+        AgentListOrder(isPinned: model.isPinned, isMuted: model.isMuted, byRank: quick == .all && sort == .state, held: model.heldInList,
+                       heldJustFinished: model.heldJustFinished, heldSeen: heldSeen)
     }
+    /// The rows seen during this visit that keep their place (#12514): none when seen rows leave with their chat.
+    private var heldSeen: [SessionKey: AgentListOrder.Held] { model.seenRows == .stay ? model.seenThisVisit : [:] }
     /// By Machine's machines: those with live agents, in their own order; under Recently Updated the one with the latest agent first.
     /// The list and ↑ / ↓ (`rowsInOrder`) both go by it.
     private func machineOrder(_ live: [Session]) -> [Machine] {
@@ -2654,13 +2832,20 @@ private struct AgentsList: View {
     /// "N more idle" row inside it as well (2026-10-31: it took two taps where the other states take one). Waiting: nothing new
     /// yet, but a /loop or background work will bring some.
     @ViewBuilder private func stateSections(_ live: [Session]) -> some View {
-        let byRank = Dictionary(grouping: live, by: rank)
+        let order = self.order
+        let byRank = Dictionary(grouping: live, by: order.rank)
         let buckets = Self.stateTitles.enumerated().map { i, t in (key: t.key, title: t.title, rows: byRank[i] ?? [], tint: t.tint) }
+        // Rows read during this visit and kept in place, drawn as Seen (#12514): not counted, a section counts what is still
+        // in its state, and its Clear Seen lets them go, all but the one whose chat is open (it goes when it is left). With
+        // seen rows leaving with their chat, the open one counts as it always did.
+        let stay = model.seenRows == .stay
+        let open = model.heldInList
         ForEach(buckets, id: \.key) { b in
-            let rows = ordered(b.rows)
+            let rows = order.ordered(b.rows)
             let id = "state/" + b.key
+            let seen = stay ? rows.filter { order.isHeldSeen($0) && $0.key != open }.map(\.key) : []
             // As the quick filters count: not a subtask that is a row only because its parent is not drawn.
-            let counted = rows.filter { !$0.isNestedSubtask }.count
+            let counted = rows.filter { !$0.isNestedSubtask && !(stay && order.isHeldSeen($0)) }.count
             if !rows.isEmpty {
                 listSection(foldable: true) {
                     if isFolded(id) {
@@ -2672,7 +2857,7 @@ private struct AgentsList: View {
                     }
                 } header: {
                     stateSectionHeader(key: b.key, id: id, title: b.title, count: stateSectionCount(b.key, loaded: counted),
-                                       tint: b.tint, rows: rows)
+                                       tint: b.tint, rows: rows, seen: seen)
                 }
                 .listSectionSpacing(isFolded(id) ? .custom(0) : .default)
             }
@@ -2682,18 +2867,34 @@ private struct AgentsList: View {
     /// A By Status section's folding header; only Just finished attaches a context menu so the other headings keep plain
     /// button hit-testing without an empty menu wrapper.
     @ViewBuilder private func stateSectionHeader(key: String, id: String, title: String, count: Int,
-                                                 tint: StatusTone, rows: [Session]) -> some View {
-        let button = FoldButton(title: title, folded: isFolded(id),
-                                detail: String(localized: "\(count) [Chats View cb60bd]"),
-                                topPadding: floating ? Theme.Space.l : Theme.Space.s,
-                                bottomPadding: floating ? Theme.Space.xs : Theme.Space.s) { toggleFold(id) } label: {
-            SectionHeader(title: title, count: count, tone: tint,
-                          symbol: key == "background" ? Theme.Icon.backgroundWaiting : nil)
+                                                 tint: StatusTone, rows: [Session], seen: [SessionKey]) -> some View {
+        let topPadding = floating ? Theme.Space.l : Theme.Space.s
+        let bottomPadding = floating ? Theme.Space.xs : Theme.Space.s
+        let header = Group {
+            if seen.isEmpty {
+                FoldButton(title: title, folded: isFolded(id),
+                           detail: String(localized: "\(count) [Chats View cb60bd]"),
+                           topPadding: topPadding, bottomPadding: bottomPadding) { toggleFold(id) } label: {
+                    SectionHeader(title: title, count: count, tone: tint,
+                                  symbol: key == "background" ? Theme.Icon.backgroundWaiting : nil)
+                }
+                .accessibilityIdentifier("agents.section")
+            } else {
+                FoldButton(title: title, folded: isFolded(id),
+                           detail: String(localized: "\(count) [Chats View cb60bd]"),
+                           identifier: "agents.section",
+                           topPadding: topPadding, bottomPadding: bottomPadding,
+                           action: { toggleFold(id) }) {
+                    SectionHeader(title: title, count: count, tone: tint,
+                                  symbol: key == "background" ? Theme.Icon.backgroundWaiting : nil)
+                } accessory: {
+                    clearSeenButton(seen)
+                }
+            }
         }
         .modifier(FoldAnchor(id: id, reader: feed.reader))
-        .accessibilityIdentifier("agents.section")
         if key == "just_finished" {
-            button.contextMenu {
+            header.contextMenu {
                 if rows.contains(where: { $0.needsSeen() }) {
                     Button { model.markSeen(rows.map(\.key)) } label: {
                         Label(StateName.markAllSeen(), systemImage: Theme.Icon.success)
@@ -2701,8 +2902,32 @@ private struct AgentsList: View {
                 }
             }
         } else {
-            button
+            header
         }
+    }
+
+    /// A section's Clear Seen (N) (#12514): the rows read during this visit and kept there leave it, as a pull to refresh
+    /// lets every one of them go; under a quick filter they leave the list, as its Mark All as Seen's do.
+    private func clearSeenButton(_ keys: [SessionKey]) -> some View {
+        Button {
+            Haptics.tap()
+            withAnimation(Theme.Motion.standard) {
+                model.releaseSeen(keys)
+                kept.subtract(keys)
+            }
+        } label: {
+            Text(SeenRows.clearTitle(keys.count))
+                .font(Theme.Font.secondary)
+                .foregroundStyle(Theme.accent)
+                .textCase(nil)
+                .lineLimit(1)
+                .fixedSize()
+                .tapTargetHeight(alignment: .bottom)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.borderless)
+        .accessibilityHint(SeenRows.clearHint)
+        .accessibilityIdentifier("agents.clearSeen")
     }
 
     /// One section per todo, its agents ordered; agents opened by hand in the terminal go into "Started Manually", the other
@@ -3770,7 +3995,8 @@ nonisolated struct AgentsListShown: Encodable, Equatable {
     /// The row shows the folded copy: a waiting child makes the parent Needs You, and says what that child asks.
     /// The stored list stays the hub's own rows, so the chat page and the structure's equality are unchanged.
     private func applyFoldedRows(_ s: [Session]) {
-        let folded = Dictionary(ChildSessions.fold(s, asks: ChildSessions.asks(interactions)).map { ($0.id, $0) },
+        let sideFolded = SideFold.fold(s, groups: model?.sideFoldGroups ?? []).listed
+        let folded = Dictionary(ChildSessions.fold(sideFolded, asks: ChildSessions.asks(interactions)).map { ($0.id, $0) },
                                 uniquingKeysWith: { a, _ in a })
         for x in s {
             let display = folded[x.id] ?? x
@@ -4051,35 +4277,98 @@ struct QuickFilterBar: View, Equatable {
 /// A section header that folds its section: the header itself plus a chevron, spoken as "name, expanded / collapsed, …".
 /// A finger's height whatever the header draws (#3753). Optional vertical padding stays inside the plain button's label so
 /// the hit area covers the full height of the header cell (#13575).
-struct FoldButton<Content: View>: View {
+struct FoldButton<Content: View, Accessory: View>: View {
     var title: String
     var folded: Bool
     var detail: String
+    /// The fold's own identifier where the header also holds an `accessory` (one set around the header would reach the
+    /// accessory too); without one, callers set it around the header as they always did.
+    var identifier: String? = nil
     var topPadding: CGFloat = Theme.Space.flush
     var bottomPadding: CGFloat = Theme.Space.flush
     var action: () -> Void
     @ViewBuilder var label: Content
+    /// A section action drawn between the title and the chevron, a button of its own outside the fold's (a section's
+    /// Clear Seen, #12514). None: the header is the one button it always was.
+    @ViewBuilder var accessory: Accessory
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: Theme.Space.sm) {
-                label
-                Spacer(minLength: 4)
-                FoldChevron(folded: folded)
+        if Accessory.self == EmptyView.self {
+            Button(action: action) {
+                HStack(spacing: Theme.Space.sm) {
+                    label
+                    Spacer(minLength: 4)
+                    FoldChevron(folded: folded)
+                }
+                // The room it gains is above its words: a section's title stays by its card.
+                .modifier(TouchHeight(alignment: .bottom))
+                #if os(iOS)
+                .padding(.top, topPadding)
+                .padding(.bottom, bottomPadding)
+                #endif
+                .contentShape(.rect)
             }
-            // The room it gains is above its words: a section's title stays by its card.
-            .modifier(TouchHeight(alignment: .bottom))
-            #if os(iOS)
-            .padding(.top, topPadding)
-            .padding(.bottom, bottomPadding)
-            #endif
-            .contentShape(.rect)
+            .buttonStyle(.plain)
+            .modifier(FoldSpoken(title: title, folded: folded, detail: detail))
+        } else {
+            HStack(spacing: Theme.Space.sm) {
+                Button(action: action) {
+                    // As wide as the header leaves it (`TouchHeight`), its title at the leading edge.
+                    label
+                        .modifier(TouchHeight(alignment: .bottom))
+                        #if os(iOS)
+                        .padding(.top, topPadding)
+                        .padding(.bottom, bottomPadding)
+                        #endif
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .modifier(FoldSpoken(title: title, folded: folded, detail: detail, identifier: identifier))
+                accessory
+                    #if os(iOS)
+                    .padding(.top, topPadding)
+                    .padding(.bottom, bottomPadding)
+                    #endif
+                // The chevron folds too, as it does in the header without an action; the button above says so. A finger's
+                // square at the trailing edge (#3753), its glyph where the header without an action draws it.
+                Button(action: action) {
+                    FoldChevron(folded: folded)
+                        .tapTargetFrame(alignment: .bottomTrailing)
+                        #if os(iOS)
+                        .padding(.top, topPadding)
+                        .padding(.bottom, bottomPadding)
+                        #endif
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .accessibilityHidden(true)
+            }
         }
-        .buttonStyle(.plain)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel([title, folded ? String(localized: "Collapsed [Readiness Card ee6046]") : String(localized: "Expanded"), detail].filter { !$0.isEmpty }
-            .joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label")))
-        .accessibilityAddTraits(.isButton)
+    }
+}
+
+extension FoldButton where Accessory == EmptyView {
+    init(title: String, folded: Bool, detail: String, topPadding: CGFloat = Theme.Space.flush,
+         bottomPadding: CGFloat = Theme.Space.flush, action: @escaping () -> Void, @ViewBuilder label: () -> Content) {
+        self.init(title: title, folded: folded, detail: detail, identifier: nil, topPadding: topPadding,
+                  bottomPadding: bottomPadding, action: action, label: label, accessory: { EmptyView() })
+    }
+}
+
+/// How a fold button is spoken: "name, expanded / collapsed, …", one button.
+private struct FoldSpoken: ViewModifier {
+    var title: String
+    var folded: Bool
+    var detail: String
+    var identifier: String? = nil
+
+    func body(content: Content) -> some View {
+        let spoken = content
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel([title, folded ? String(localized: "Collapsed [Readiness Card ee6046]") : String(localized: "Expanded"), detail].filter { !$0.isEmpty }
+                .joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label")))
+            .accessibilityAddTraits(.isButton)
+        if let identifier { spoken.accessibilityIdentifier(identifier) } else { spoken }
     }
 }
 
@@ -4143,9 +4432,9 @@ struct SpaceHeader: View {
             }
             if compact {
                 // Compact List: the space is the title over its rows (Color.primary: a header dims `.primary` a level).
-                Text(group.name).font(CompactList.sectionTitle).foregroundStyle(Color.primary).textCase(nil).lineLimit(1)
+                group.headingText(CompactList.sectionTitle).foregroundStyle(Color.primary).textCase(nil).lineLimit(1)
             } else {
-                Text(group.name).font(Theme.Font.sectionHeader).foregroundStyle(.secondary).textCase(nil).lineLimit(1)
+                group.headingText(Theme.Font.sectionHeader).foregroundStyle(.secondary).textCase(nil).lineLimit(1)
             }
             let small = compact ? CompactList.meta : Theme.Font.label
             if pinned { ThemedIcon(Theme.Icon.pinned).font(small).foregroundStyle(Theme.accent).accessibilityLabel("Pinned [Personal Agent List View fb47db]") }
@@ -4160,11 +4449,19 @@ struct SpaceHeader: View {
         }
         .contentShape(.rect)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel([group.name, folded ? String(localized: "Collapsed [Readiness Card ee6046]") : String(localized: "Expanded"),
+        .accessibilityLabel([group.headingLabel, folded ? String(localized: "Collapsed [Readiness Card ee6046]") : String(localized: "Expanded"),
                              pinned ? String(localized: "Pinned [Personal Agent List View fb47db]") : "", muted ? String(localized: "Muted [Chats View b66705]") : "",
                              showMachine ? machine?.title ?? "" : "", StateCounts.spoken(group)]
             .filter { !$0.isEmpty }.joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label")))
         .accessibilityAddTraits(.isButton)
+    }
+}
+
+extension SpaceGroup {
+    @MainActor func headingText(_ font: Font) -> Text {
+        let title = Text(name).font(font)
+        guard let qualifier = projectFolder?.qualifier else { return title }
+        return Text("\(title)\(Text(" · " + qualifier).font(font).fontWeight(.regular).foregroundColor(.secondary))")
     }
 }
 
@@ -4321,6 +4618,8 @@ nonisolated struct SlotRow: View, Equatable {
     var rowStyle: AgentRowStyle? = nil
     /// In a regular-width sidebar (an open iPhone Duo, an iPad): style A's latest words take one line.
     var dense = false
+    /// Unread folded side session(s) keeping this parent row Unread (#13524); nil leaves the row unchanged.
+    var sideUnread: SideFold.UnreadSummary? = nil
     /// Hub setting `use_herdr_tab_name`: promotes the herdr tab name to main title and moves the CLI title to detail (#13899).
     var preferHerdrTabName = false
 
@@ -4346,7 +4645,10 @@ nonisolated struct SlotRow: View, Equatable {
     }
 
     /// The tag under the time: where it was opened, for an agent (Persona's own conversations carry none).
-    private var rowSource: SessionSource? { session.assistant ? nil : session.source }
+    var rowSource: SessionSource? { session.assistant ? nil : session.source }
+
+    /// The parent's own preview line, omitted when only folded side sessions are unread so the side line stands in its place (#13524).
+    @MainActor var rowPreview: String? { sideUnread?.replacesPreview == true ? nil : session.listPreview(muted: muted) }
 
     private var indented: Bool { if case .cardRow = surface { true } else { false } }
 
@@ -4360,9 +4662,9 @@ nonisolated struct SlotRow: View, Equatable {
         Group {
             if AppStyle.current.usesBeautifulUI {
                 TaskRow(TaskItem(id: session.key.sessionID, title: rowTitle,
-                                 subtitle: session.listPreview(muted: muted), footnote: meta,
+                                 subtitle: rowPreview, footnote: meta,
                                  status: .pending(step: 0)),
-                        shape: taskShape(), isOpen: session.leadWorkflow != nil,
+                        shape: taskShape(), isOpen: session.leadWorkflow != nil || sideUnread != nil,
                         accessory: surface == .none || Self.endsInTime ? .none : .disclosure, titleLines: 2, subtitleLines: 1) {
                     // The badge's column is 24 pt: only the badge goes there (#3004); the source tag is under the time (#3043).
                     if dot { AgentStateBadge(state: session.state, waiting: session.waitsInBackground, justFinished: session.showsJustFinished(muted: muted)).padding(.leading, indented ? Theme.Space.l : 0) }
@@ -4386,6 +4688,7 @@ nonisolated struct SlotRow: View, Equatable {
                         }
                     }
                 } detail: {
+                    if let sideUnread { SideUnreadLine(parent: session.key, summary: sideUnread) }
                     if !session.runningWorkflows.isEmpty { WorkflowLine(runs: session.runningWorkflows) }
                     RunningChildrenCaption(session: session)
                 }
@@ -4424,9 +4727,10 @@ nonisolated struct SlotRow: View, Equatable {
                                 .fixedSize(horizontal: false, vertical: true)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .animation(UltracodeMark.motion, value: ultracodeMark)
-                            if let last = session.listPreview(muted: muted) {
+                            if let last = rowPreview {
                                 Text(last).font(Theme.Font.secondary).lineHeight(.secondary).foregroundStyle(.secondary).lineLimit(2)
                             }
+                            if let sideUnread { SideUnreadLine(parent: session.key, summary: sideUnread) }
                             // A workflow running in the background (#2935): its name, phase and progress.
                             if !session.runningWorkflows.isEmpty { WorkflowLine(runs: session.runningWorkflows) }
                             RunningChildrenCaption(session: session)
@@ -4658,6 +4962,8 @@ nonisolated struct CompactSlotRow: View, Equatable {
     var time: AgentTime? = nil
     /// As SlotRow's `pane`.
     var pane: TabPanes.Role? = nil
+    /// Unread folded side session(s) keeping this parent row Unread (#13524); nil leaves the row unchanged.
+    var sideUnread: SideFold.UnreadSummary? = nil
     /// Hub setting `use_herdr_tab_name`: promotes the herdr tab name to main title and moves the CLI title to detail (#13899).
     var preferHerdrTabName = false
 
@@ -4666,6 +4972,21 @@ nonisolated struct CompactSlotRow: View, Equatable {
         #if DEBUG || PERF_SIGNPOST
         let _ = PerfTrace.body("CompactSlotRow")
         #endif
+        Group {
+            if let sideUnread {
+                VStack(alignment: .leading, spacing: Theme.Space.xxs) {
+                    mainLine
+                    SideUnreadLine(parent: session.key, summary: sideUnread)
+                }
+            } else {
+                mainLine
+            }
+        }
+        .opacity(muted ? 0.8 : 1)
+    }
+
+    @MainActor
+    private var mainLine: some View {
         HStack(spacing: CompactList.gap) {
             // The agent's mark before its state (#6390).
             if !session.assistant { AgentMark(session) }
@@ -4706,7 +5027,6 @@ nonisolated struct CompactSlotRow: View, Equatable {
             if muted { ThemedIcon(Theme.Icon.muted).font(CompactList.meta).foregroundStyle(.secondary).accessibilityLabel("Notifications muted") }
             AgentTimeText(time: time, fallback: session.updatedAt, font: CompactList.meta.monospacedDigit())
         }
-        .opacity(muted ? 0.8 : 1)
     }
 
     private var pendingCount: Bool {
@@ -4768,7 +5088,7 @@ struct QuietSpaceRow: View {
         HStack(spacing: Theme.Space.m) {
             ThemedIcon(repo ? Theme.Icon.folder : Theme.Icon.space).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: Theme.Space.xxs) {
-                Text(group.name).font(Theme.Font.heading).lineLimit(1)
+                group.headingText(Theme.Font.heading).lineLimit(1)
                 Text([showMachine ? machine?.title : nil, String(localized: "\(group.sessions.count) agents"),
                       group.sessions.compactMap(\.slotLabel).prefix(3).joined(separator: " · ")]
                     .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
@@ -4915,7 +5235,7 @@ struct QuietSpaceCardHead: View {
 
     var body: some View {
         TaskRow(TaskItem(id: group.id, title: group.name,
-                         subtitle: [showMachine ? machine?.title : nil, String(localized: "\(group.sessions.count) agents"),
+                         subtitle: [group.projectFolder?.qualifier, showMachine ? machine?.title : nil, String(localized: "\(group.sessions.count) agents"),
                                     group.sessions.compactMap(\.slotLabel).prefix(3).joined(separator: " · ")]
                             .compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "),
                          status: .pending(step: 0)),
@@ -4970,7 +5290,11 @@ struct SpaceMenuItems: View {
         }
         let unread = group.sessions.filter { $0.needsSeen(muted: model.isMuted($0)) }.map(\.key)
         if !unread.isEmpty {
-            Button { model.markSeen(unread) } label: { Label(StateName.markAllSeen(unread.count), systemImage: Theme.Icon.success) }
+            // All of the space's rows: the unread ones are marked, and the ones read during the visit and held in place
+            // leave with them (#12514), as the Just finished header's does.
+            Button { model.markSeen(group.sessions.map(\.key)) } label: {
+                Label(StateName.markAllSeen(unread.count), systemImage: Theme.Icon.success)
+            }
         }
         if let rename, group.spaceID != "-" {
             Button(action: rename) { Label("Rename Space", systemImage: Theme.Icon.edit) }
@@ -5108,6 +5432,7 @@ private struct AgentsDestinations: ViewModifier {
             .navigationDestination(for: MachineListRoute.self) { _ in MachinesView().splitDetailPage() }
             .navigationDestination(for: TerminalsRoute.self) { r in TerminalsView(only: r.machine).splitDetailPage() }
             .navigationDestination(for: MachineDetailRoute.self) { r in MachineDetailView(ref: r.ref).splitDetailPage() }
+            .navigationDestination(for: MachineUsageMapRoute.self) { r in UsageMapView(route: r).splitDetailPage() }
             .navigationDestination(for: PersonalAgentsRoute.self) { _ in PersonalAgentListView().splitDetailPage() }
             .navigationDestination(for: PersonalAgentSession.self) { s in PersonalAgentSessionView(session: s).id(s.id).splitDetailPage() }
             .navigationDestination(for: TodoDetailRoute.self) { r in
@@ -5235,11 +5560,27 @@ private struct AgentsSystemSearch: ViewModifier {
     var enabled: Bool
     @Binding var query: String
     @Binding var searching: Bool
+    #if os(iOS)
+    /// What the search reads (#7443): another scope than Full Text is a token in the field, as on a phone
+    /// (`AgentsSearchField`); deleting it searches Full Text again.
+    @StoredValue(AgentSearchScope.key) private var scope: AgentSearchScope = .all
+    private var tokens: Binding<[AgentSearchScope]> {
+        Binding(get: { scope == .all ? [] : [scope] }, set: { scope = $0.last ?? .all })
+    }
+    #endif
 
     func body(content: Content) -> some View {
         if enabled {
+            #if os(iOS)
+            content.pageSearchable(text: $query, tokens: tokens, isPresented: $searching,
+                                   placement: .navigationBarDrawer(displayMode: .automatic),
+                                   prompt: AgentsSearchPrompt.text(scope)) { s in
+                Label(s.title, systemImage: s.symbol)
+            }
+            #else
             content.pageSearchable(text: $query, isPresented: $searching, placement: .navigationBarDrawer(displayMode: .automatic),
                                    prompt: AgentsSearchPrompt.text)
+            #endif
         } else {
             content
         }
@@ -5248,6 +5589,14 @@ private struct AgentsSystemSearch: ViewModifier {
 
 enum AgentsSearchPrompt {
     static var text: String { String(localized: "Search spaces, tabs, sessions, content") }
+
+    /// The field's prompt under a scope (#7443): Full Text's names all it reads; another scope is the token before it.
+    static func text(_ scope: AgentSearchScope) -> String { scope == .all ? text : String(localized: "Search") }
+
+    /// What the field searches, spoken (the field at rest is one element: its token is not read on its own).
+    static func spoken(_ scope: AgentSearchScope) -> String {
+        scope == .all ? text : String(localized: "Search in: \(scope.title)")
+    }
 }
 
 /// A bar above a list in a stack (the split's sidebar column). Otherwise nothing: on a phone the bar is the list's

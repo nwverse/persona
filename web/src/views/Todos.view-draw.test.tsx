@@ -92,7 +92,8 @@ const placed = () =>
   Object.fromEntries(
     [...host.querySelectorAll<HTMLElement>('[data-testid="todo-section"]')].map((s) => [s.dataset.section, [...s.querySelectorAll<HTMLElement>("[data-todo]")].map((r) => r.dataset.todo)]),
   );
-const view = (section: string, reason: string, phase: string, more: Partial<TodoSummary> = {}): TodoSummary => ({ phase, section, reason, rank: 0, ...more });
+// The view as the wire carries it: raw strings, which may be a newer hub's values the closed types do not know.
+const view = (section: string, reason: string, phase: string, more: Partial<TodoSummary> = {}): TodoSummary => ({ phase, section, reason, rank: 0, ...more }) as TodoSummary;
 const task = (id: string, fields: Partial<Todo> = {}): Todo => ({ id, title: `Errand ${id}`, created_at: iso(5 * HOUR), updated_at: iso(4 * HOUR), ...fields });
 
 // Today's triage files all three in Other open; the hub's view puts the first two elsewhere.

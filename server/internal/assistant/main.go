@@ -57,6 +57,8 @@ type MainHooks struct {
 	Ready func(Idle)
 	// PendingRestart is given a setter to report pending_restart to the hub once BusHub is made.
 	PendingRestart func(func(bool))
+	// HubVersion provides the version on the bound connection after takeover.
+	HubVersion func(func() string)
 	// HostDataDir is the host's Persona data directory (~/.persona) captured before PERSONA_HOME is redirected to an
 	// independent manager's directory, so manager.hello can read the co-located node's machine-uid.
 	HostDataDir string
@@ -136,6 +138,7 @@ func MainWith(ctx context.Context, build update.Build, stdin io.Reader, h MainHo
 	o.Fingerprint, o.StopWhenRevoked, o.TokenFirst = fingerprint, deploy == DeployService, deploy == DeployService
 	o.RotateSecretKey = true
 	o.Logf, o.ExtConfig, o.Ready, o.PendingRestart = logger.Printf, ext, h.Ready, h.PendingRestart
+	o.HubVersion = h.HubVersion
 	o.HostDataDir = h.HostDataDir
 	if o.HostDataDir == "" {
 		o.HostDataDir = home
@@ -269,6 +272,7 @@ type runOptions struct {
 	Ready func(Idle)
 	// PendingRestart is given BusHub.SetPendingRestart once BusHub is made (MainHooks.PendingRestart); nil: nobody asks.
 	PendingRestart func(func(bool))
+	HubVersion     func(func() string)
 	// HostDataDir is the host's Persona data directory (~/.persona) used to read machine-uid for manager.hello.
 	HostDataDir string
 	// Errors is the process's log writer that reports its error lines (newErrorTee); nil: run makes one.
@@ -357,7 +361,7 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 	var svc *Service
 	var ext *extmgr.Manager
 	// ConfigFile: its usage section (the account-pool gateways and their keys) is the devices', read and written there.
-	devs := devices.New(devices.Options{PackageHub: func() *bus.Client { return bh.Client() }, Store: database, ConfigFile: o.ConfigFile, TailcatKey: o.TailcatKey, ManagerID: o.ID,
+	devs := devices.New(devices.Options{Edition: build.Edition, PackageHub: func() *bus.Client { return bh.Client() }, Store: database, ConfigFile: o.ConfigFile, TailcatKey: o.TailcatKey, ManagerID: o.ID,
 		Logf:         log.New(stderr, "devices: ", log.LstdFlags).Printf,
 		ProjectState: func(st devicewire.States) devicewire.States { return svc.logicalProjectStates(st) },
 		Answer: func(ctx context.Context, machine, method string, params json.RawMessage) (any, bool, error) {
@@ -413,6 +417,12 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 	// provider seam (moduleswitch) get the same list, so a module switched off is absent as one built out.
 	assistantStore := repositorystore.New(database)
 	modulesOff := ReadModuleSwitch(ctx, assistantStore, logf)
+	// The assistant's pages (Dashboards, #15017) are the built-in manager's: the hub relays the extensions' routes to
+	// the default manager, and no other has pages (pages_ui.go).
+	var pages extmgr.Pages
+	if o.ID == assistantwire.AssistantID {
+		pages = pagesHook{svc: func() *Service { return svc }}
+	}
 	// The extensions, connectors and bots (internal/extmgr): the data directory here, its own sections in manager.json
 	// (as moveConfig read and checked them) and its own secret.key.
 	ext = extmgr.New(extmgr.Options{Modules: moduleswitch.Off(modulesOff...), Dir: home, ConfigFile: o.ConfigFile, Config: o.ExtConfig, SecretKey: o.SecretKey,
@@ -454,13 +464,17 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 			return nil
 		},
 		Lang:     func() i18n.Lang { return svc.lang(context.Background()) },
-		Timezone: func() string { return svc.userTZ() }})
+		Timezone: func() string { return svc.userTZ() },
+		Pages:    pages})
 	o.Errors.ext.Store(ext)
 	bh = NewBusHub(BusOptions{ID: o.ID, Hub: hub, Token: token, HTTPClient: httpClient, Version: version, Deploy: deploy,
 		HostDataDir: o.HostDataDir, ConfigFile: o.ConfigFile, Outbox: database, Features: func() []string { return svc.moduleFeatures() },
 		Logf: logf, Devices: devs, Extensions: ext, StopWhenRevoked: o.StopWhenRevoked, StopWhenRejected: o.TokenFirst})
 	if o.PendingRestart != nil {
 		o.PendingRestart(bh.SetPendingRestart)
+	}
+	if o.HubVersion != nil {
+		o.HubVersion(devs.AdvertisedHubVersion)
 	}
 	// The knowledge base in its directory, kept as its manager.json's kb section says (over the hub's hello). The model
 	// providers' keys are sealed with its own secret.key.
@@ -487,7 +501,11 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 		_ = ext.Run(ctx) // after ctx: stops the extensions' programs (they are the manager's children)
 	}()
 	var developmentDone chan *managerupdate.DevelopmentImage
-	if o.ID != "assistant" {
+	if o.ID != assistantwire.AssistantID || o.Deploy == DeployService {
+		updateDir := home
+		if o.ID == assistantwire.AssistantID {
+			updateDir = managerconf.DefaultDir(home)
+		}
 		developmentDone = make(chan *managerupdate.DevelopmentImage, 1)
 		go func() {
 			var image *managerupdate.DevelopmentImage
@@ -496,7 +514,7 @@ func run(ctx context.Context, build update.Build, o runOptions) error {
 				if err := managerupdate.MarkReady(home, build); err != nil {
 					logf("manager update readiness: %v", err)
 				}
-				image = followDevelopment(ctx, home, build, devs, func(ctx context.Context) (bool, string) {
+				image = followDevelopment(ctx, updateDir, o.HostDataDir, build, devs, func(ctx context.Context) (bool, string) {
 					return managerIdle(ctx, bh, svc, ext)
 				}, logf)
 				if image != nil {

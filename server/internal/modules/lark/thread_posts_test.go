@@ -1,6 +1,7 @@
 package lark
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -44,7 +45,7 @@ func TestThreadPostQueuesAndFlushesOneLine(t *testing.T) {
 		t.Fatalf("an unbound to-do armed %d timers", n)
 	}
 	s.th().bound["todo_1"] = [2]string{testChat, testThread}
-	s.th().anchors[testChat+"/"+testThread] = "om_anchor"
+	s.chat().rememberTopicMessage(context.Background(), testChat, testThread, "om_anchor")
 	s.layer.ThreadPost("todo_1", assistantwire.ThreadEvent{Kind: assistantwire.ThreadDecision, Text: "Ship it → yes"})
 	s.layer.ThreadPost("todo_1", assistantwire.ThreadEvent{Kind: assistantwire.ThreadTodoAccepted})
 	if n := len(s.th().later); n != 1 {
@@ -82,11 +83,11 @@ func TestThreadPostForgetsAGoneAnchor(t *testing.T) {
 	})
 	s := newTestService(t, f)
 	s.th().bound["todo_1"] = [2]string{testChat, testThread}
-	s.th().anchors[testChat+"/"+testThread] = "om_gone"
+	s.chat().rememberTopicMessage(context.Background(), testChat, testThread, "om_gone")
 	s.layer.ThreadPost("todo_1", assistantwire.ThreadEvent{Kind: assistantwire.ThreadTodoDone})
 	s.fireLater()
-	if got := s.th().forgot; len(got) != 1 || got[0] != testChat+"/"+testThread+" om_gone" {
-		t.Fatalf("forgot %v", got)
+	if got := s.chat().topicMessage(context.Background(), testChat, testThread); got != "" {
+		t.Fatalf("the gone anchor is still kept: %q", got)
 	}
 }
 
@@ -95,7 +96,7 @@ func TestThreadPostNothingToAChatNotInTheList(t *testing.T) {
 	f, _ := feishuHub("ou_a", time.Unix(100, 0))
 	s := newTestService(t, f)
 	s.th().bound["todo_1"] = [2]string{"oc_other", testThread}
-	s.th().anchors["oc_other/"+testThread] = "om_anchor"
+	s.chat().rememberTopicMessage(context.Background(), "oc_other", testThread, "om_anchor")
 	s.layer.ThreadPost("todo_1", assistantwire.ThreadEvent{Kind: assistantwire.ThreadTodoDone})
 	s.fireLater()
 	if n := len(f.appParams(AppFeishu, FeishuText)); n != 0 {
