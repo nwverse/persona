@@ -61,7 +61,6 @@ const agent: Session = { machine_id: "mac", session_id: "s1", title: "改发布�
 const todo: Todo = { id: "td1", title: "天气 App 发 1.3 版", created_at: "2026-11-05T00:00:00Z", updated_at: "2026-11-05T00:00:00Z", agents: [{ machine_id: "mac", session_id: "s1", linked_at: "2026-11-05T00:00:00Z" }] };
 
 const json = (body: unknown, status = 200) => Promise.resolve(new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } }));
-const failed = () => json({ error: "boom" }, 500);
 const counts = { total: 1, revision: "r1", state: { working: 1 }, machine: { mac: 1 }, project: {}, group: {}, todo: { td1: 1 } };
 const agentsResponse = (query: URLSearchParams) => query.get("counts") === "1"
   ? json(counts)
@@ -86,7 +85,6 @@ const flush = async () => {
   for (let i = 0; i < 8; i++) await act(async () => { await Promise.resolve(); await new Promise((r) => setTimeout(r, 0)); });
 };
 const grouping = () => host.querySelector<HTMLElement>('[role="radiogroup"][aria-label="Agent 分组"]')!;
-const checked = () => [...grouping().querySelectorAll('[role="radio"]')].find((b) => b.getAttribute("aria-checked") === "true")?.getAttribute("aria-label");
 const agentsBlock = () => grouping().closest<HTMLElement>("[data-sidebar-agents]")!;
 const alerts = () => [...agentsBlock().querySelectorAll('[role="alert"]')].map((el) => el.textContent);
 const retryButton = () => [...agentsBlock().querySelectorAll("button")].find((b) => b.textContent === t("sidebar.retry"));
