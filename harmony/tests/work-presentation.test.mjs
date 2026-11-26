@@ -18,7 +18,7 @@ test('toolVerb and toolIconRole mirror iOS ToolPresentation including MCP humani
   assert.equal(toolIconRole('Grep'), 'search');
   assert.equal(toolVerb('mcp__github__create_pull_request'), 'Github · Create Pull Request');
   assert.equal(toolIconRole('mcp__github__create_pull_request'), 'skill');
-  assert.equal(compactDisplayPath('/Users/tony/Projects/persona/harmony/Index.ets'), 'harmony/Index.ets');
+  assert.equal(compactDisplayPath('/Users/example/Projects/persona/harmony/Index.ets'), 'harmony/Index.ets');
 });
 
 test('extractWorkStepsFromRaw, extractWorkNowFromRaw, and extractTurnChangesFromRaw parse structured tool turns', () => {
