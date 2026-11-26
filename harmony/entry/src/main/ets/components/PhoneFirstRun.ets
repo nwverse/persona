@@ -126,7 +126,7 @@ export struct PhoneFirstRun {
         }.alignItems(HorizontalAlign.Center)
 
         Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.Center, space: { main: LengthMetrics.vp(8), cross: LengthMetrics.vp(8) } }) {
-          this.featureBadge(Symbols.persona, tr('assistant'), Colors.ai)
+          this.featureBadge(Symbols.persona, tr('phone_settings_assistant'), Colors.ai)
           this.featureBadge(Symbols.agents, tr('agents'), Colors.link)
           this.featureBadge(Symbols.device, tr('phone_machines'), Colors.teal)
         }.width('100%').margin({ top: 4 })

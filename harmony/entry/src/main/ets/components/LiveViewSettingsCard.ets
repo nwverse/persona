@@ -221,12 +221,12 @@ export struct LiveViewSettingsCard {
         }.width('100%').justifyContent(FlexAlign.Center)
         this.previewCard()
         Scroll() {
-          Row({ space: 6 }) {
+          Row({ space: 5 }) {
             ForEach(PREVIEW_MODES, (mode: string) => {
               Button(this.modeTitle(mode), { type: ButtonType.Capsule })
-                .height(32)
-                .padding({ left: 11, right: 11 })
-                .fontSize(Tokens.interfaceFontVp(12, this.env.fontScale))
+                .height(31)
+                .padding({ left: 8, right: 8 })
+                .fontSize(Tokens.interfaceFontVp(11.5, this.env.fontScale))
                 .fontWeight(this.previewMode === mode ? FontWeight.Bold : FontWeight.Medium)
                 .fontColor(this.previewMode === mode ? Colors.link : Colors.secondary)
                 .backgroundColor(this.previewMode === mode ? Colors.selection : (this.env.dark ? '#28282B' : Colors.control))
@@ -245,11 +245,11 @@ export struct LiveViewSettingsCard {
                 })
                 .id('live_view.preview.mode.' + mode)
             }, (mode: string) => mode)
-          }.padding({ right: 4 })
+          }
         }.scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off).width('100%')
       }
       .width('100%')
-      .padding({ left: 12, right: 12, top: 14, bottom: 12 })
+      .padding({ left: 10, right: 10, top: 14, bottom: 12 })
       .borderRadius(22)
       .linearGradient({
         direction: GradientDirection.RightBottom,
