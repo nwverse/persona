@@ -107,6 +107,45 @@ while not pathlib.Path(os.environ["FIXTURE_DUMP_CONTINUE"]).exists():
 	}
 }
 
+func TestDevelopmentBackupFailureRotation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("development helper needs Unix")
+	}
+	dir, home := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "hub.json"), []byte(`{"database_url":"fixture"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &DevelopmentConfig{Backup: DevelopmentBackupConfig{Builtin: true, Directory: "relative"}}
+	input := map[string]any{"runtime": home}
+	run := func(reason string) {
+		t.Helper()
+		var steps []string
+		err := DevelopmentRequest(context.Background(), cfg, dir, "backup", input, &DevelopmentBackup{}, func(p DevelopmentProgress) {
+			steps = append(steps, p.Step)
+		})
+		var failure backupFailure
+		if !errors.As(err, &failure) || failure.Reason != reason || strings.Join(steps, ",") != "preflight" {
+			t.Fatalf("unexpected failure or steps: %+v %v", failure, steps)
+		}
+	}
+	run("directory")
+	old, err := os.ReadFile(filepath.Join(dir, "backup.log"))
+	if err != nil || !strings.Contains(string(old), "invalid backup directory") {
+		t.Fatal("missing first failure", err)
+	}
+	cfg.Backup.Directory = ""
+	input["hub_database"] = "password=fixture-secret invalid-key=private"
+	run("database")
+	previous, err := os.ReadFile(filepath.Join(dir, "backup.prev.log"))
+	if err != nil || string(previous) != string(old) {
+		t.Fatal("previous log was not preserved", err)
+	}
+	current, err := os.ReadFile(filepath.Join(dir, "backup.log"))
+	if err != nil || !strings.Contains(string(current), "invalid database connection parameters") || strings.Contains(string(current), "fixture-secret") {
+		t.Fatal("incorrect current log", err)
+	}
+}
+
 func TestDevelopmentWebRecoveryPreservesConflictingOverride(t *testing.T) {
 	dir := t.TempDir()
 	p := Pending{RecoveryReady: true, Web: filepath.Join(dir, "web"), WebPrev: filepath.Join(dir, "previous")}

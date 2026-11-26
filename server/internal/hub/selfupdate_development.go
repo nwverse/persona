@@ -255,12 +255,24 @@ func (u *updater) runDevelopment(ctx context.Context, operation string, input ma
 		}
 	}
 	if err := u.devRun(ctx, cfg, filepath.Join(u.dir, "development"), operation, input, result, report); err != nil {
+		if errors.Is(err, context.Canceled) {
+			return err
+		}
 		u.mu.Lock()
 		step := ""
 		if p := u.developmentProgress; p != nil && u.opGen == gen && update.DevelopmentStep(operation, p.Step, cfg.Backup.Builtin).Phase == p.Phase {
 			step = p.Step
 		}
 		u.mu.Unlock()
+		if reason, code := update.DevelopmentBackupReason(err); reason != "" && step != "" {
+			key := "hub-selfupdate.backup_reason_" + reason
+			if i18n.Has(key) {
+				return i18n.Err("hub-selfupdate.err_development_detail", i18n.Args{
+					"step": i18n.Err("hub-selfupdate.development_step_" + step), "phase": operation,
+					"reason": i18n.Err(key, i18n.Args{"code": code}),
+				})
+			}
+		}
 		return developmentPhaseError(operation, step)
 	}
 	return nil
@@ -488,15 +500,30 @@ func (u *updater) buildDevelopment(ctx context.Context, r *update.Published) err
 	return nil
 }
 
-func (u *updater) backupDevelopment(ctx context.Context, r *update.Published, target string) (*update.DevelopmentBackup, error) {
+func (u *updater) preflightDevelopment(ctx context.Context) error {
+	cfg := u.developmentRequestConfig()
+	u.startDevelopmentPhase(update.DevelopmentStep("preflight", "preflight", cfg.Backup.Builtin), "")
+	return u.checkBackupBeforePause(ctx, cfg.Backup)
+}
+
+func (u *updater) checkBackupBeforePause(ctx context.Context, cfg update.DevelopmentBackupConfig) error {
 	if err := u.developmentTopology(); err != nil {
-		return nil, err
+		return err
 	}
 	// Immutable package pointers belong to the release publisher. Do not alter it
 	// or silently leave development nodes on the previous release.
 	if info, err := os.Lstat(identity.NodeBinaryDir()); err == nil && info.Mode()&os.ModeSymlink != 0 {
-		return nil, errors.New("node package directory is publisher-managed; configure a dedicated development installation")
+		return errors.New("node package directory is publisher-managed; configure a dedicated development installation")
 	}
+	if err := u.developmentQuiesceError(cfg); err != nil {
+		return err
+	}
+	return u.runDevelopment(ctx, "preflight", map[string]any{
+		"runtime": u.h.cfg.dir, "hub_database": u.h.cfg.DatabaseURL,
+	}, &struct{}{})
+}
+
+func (u *updater) backupDevelopment(ctx context.Context, r *update.Published, target string) (*update.DevelopmentBackup, error) {
 	u.mu.Lock()
 	updatedAt := u.currentUpdatedAtLocked()
 	cfg := u.developmentBackupConfigLocked()
@@ -504,7 +531,7 @@ func (u *updater) backupDevelopment(ctx context.Context, r *update.Published, ta
 		u.mu.Unlock()
 		return nil, context.Canceled
 	}
-	u.startDevelopmentPhaseLocked(update.DevelopmentStep("backup", "quiesce", cfg.Builtin), "")
+	u.startDevelopmentPhaseLocked(update.DevelopmentStep("backup", "preflight", cfg.Builtin), "")
 	u.mu.Unlock()
 	u.broadcastStatus()
 	programs := map[string]string{"personad": target}
@@ -513,12 +540,19 @@ func (u *updater) backupDevelopment(ctx context.Context, r *update.Published, ta
 		if _, err := os.Stat(path); err == nil {
 			programs[name] = path
 		} else if !errors.Is(err, os.ErrNotExist) {
-			return nil, developmentPhaseError("backup", "quiesce")
+			return nil, developmentPhaseError("backup", "preflight")
 		}
 	}
 	var saved update.DevelopmentBackup
 	// The hub's own writers pause around every dump and the file archive; with
 	// hub.json's hooks the helper does it instead.
+	if cfg.Builtin {
+		// Idle waiting and the build may have outlived the first check.
+		if err := u.checkBackupBeforePause(ctx, cfg); err != nil {
+			return nil, err
+		}
+		u.startDevelopmentPhase(update.DevelopmentStep("backup", "quiesce", true), "")
+	}
 	resume, err := u.quiesceDevelopmentWriters(ctx, cfg)
 	if err != nil {
 		return nil, developmentPhaseError("backup", "quiesce")

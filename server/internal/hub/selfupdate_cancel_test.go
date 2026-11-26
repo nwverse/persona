@@ -54,7 +54,7 @@ func cancellationBuildFixture(dir string, in map[string]any, result any) error {
 }
 
 func TestDevelopmentCancelUntilAdoption(t *testing.T) {
-	for _, phase := range []string{"resolve", "build", "waiting_idle", "backup", "restarting"} {
+	for _, phase := range []string{"resolve", "preflight", "build", "waiting_idle", "backup", "backup_failure", "restarting"} {
 		t.Run(phase, func(t *testing.T) {
 			h, machine, target, _ := updatingHub(t, newPublisher(t, "unused", 202611021700), "release")
 			h.store = newMeshStore()
@@ -86,7 +86,7 @@ func TestDevelopmentCancelUntilAdoption(t *testing.T) {
 			defer stop()
 			first := true
 			u.devRun = func(ctx context.Context, cfg *update.DevelopmentConfig, dir, op string, in map[string]any, out any, report func(update.DevelopmentProgress)) error {
-				if first && phase == op {
+				if first && (phase == op || phase == "backup_failure" && op == "backup") {
 					first = false
 					close(entered)
 					if op != "backup" {
@@ -171,7 +171,7 @@ func TestDevelopmentCancelUntilAdoption(t *testing.T) {
 			if !status().CanCancel {
 				t.Fatal("cancel not offered")
 			}
-			if phase == "backup" {
+			if phase == "backup" || phase == "backup_failure" {
 				request("POST", "/test-write", "", 503)
 				unauth := httptest.NewRecorder()
 				gate.ServeHTTP(unauth, httptest.NewRequest(http.MethodPost, route+"/cancel", nil))
@@ -180,12 +180,31 @@ func TestDevelopmentCancelUntilAdoption(t *testing.T) {
 				}
 			}
 			request("POST", route+"/cancel", "", 200)
-			if phase == "backup" {
+			if phase == "backup" || phase == "backup_failure" {
 				request("POST", route+"/cancel", "", 200)
 				if v := status(); !v.Cancelling || !v.CanCancel || v.State != "backing_up" {
 					t.Fatal("backup cancel not pending", v)
 				}
 				request("POST", "/test-write", "", 503)
+			}
+			if phase == "preflight" {
+				if _, err := os.Stat(filepath.Join(u.dir, "development", "backup.log")); !os.IsNotExist(err) {
+					t.Fatal("early cancellation started a snapshot", err)
+				}
+			}
+			if phase == "backup_failure" {
+				if err := os.WriteFile(filepath.Join(bin, "pg_dump"), []byte("#!/bin/sh\nexit 7\n"), 0700); err != nil {
+					t.Fatal(err)
+				}
+				close(release)
+				waitForUpdate(t, u, "snapshot failure", func() bool { return status().State == "failed" })
+				v := status()
+				if v.Cancelling || v.Backup != nil || !strings.Contains(v.Error, "7") ||
+					!strings.Contains(v.Error, su(h.userLang(), "development_step_database_dump")) {
+					t.Fatal("cancellation hid the snapshot failure", v)
+				}
+				request("POST", "/test-write", "", 200)
+				return
 			}
 			close(release)
 			waitForUpdate(t, u, "cancelled attempt to finish", func() bool { return status().State == "idle" })

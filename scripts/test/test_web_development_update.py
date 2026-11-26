@@ -259,7 +259,7 @@ pathlib.Path({str(resumed)!r}).touch()
                             process.wait(timeout=3)
                     store = Path(request["runtime"])/"update/development-backups"
                     self.assertFalse((self.root/"result.json").exists())
-                    self.assertTrue(any(store.glob(".incomplete-*")))
+                    self.assertFalse(any(store.glob(".incomplete-*")))
                     if phase == "failed-resume":
                         self.assertTrue(paused.exists())
                         self.assertTrue((store/"coordination-pending.json").exists())
@@ -272,8 +272,11 @@ pathlib.Path({str(resumed)!r}).touch()
                             self.assertTrue(interrupted.exists(), "child did not get graceful SIGINT")
                         with self.assertRaises(ProcessLookupError):
                             os.killpg(int(entered.read_text()), 0)
-                    with self.assertRaisesRegex(ValueError, "coordination|incomplete"):
-                        webdev.snapshot(request)
+                    if phase == "failed-resume":
+                        with self.assertRaisesRegex(ValueError, "coordination"):
+                            webdev.preflight(request)
+                    else:
+                        webdev.preflight(request)
                 finally:
                     if child_group is not None:
                         try:
@@ -481,6 +484,48 @@ pathlib.Path({str(resumed)!r}).touch()
         (snapshot/"program-personad.gz").write_bytes(b"corrupt")
         with self.assertRaisesRegex(ValueError, "checksum"):
             webdev.prepare_backup(dict(request, work=str(work), backup_id=snapshot.name))
+
+    def test_stale_staging_is_removed_only_under_lock_without_recovery_marker(self):
+        request = self.history_fixture()
+        store = Path(request["runtime"]) / "update/development-backups"
+        store.mkdir(parents=True, mode=0o700)
+        stale = store / ".incomplete-earlier"
+        stale.mkdir()
+        outside = self.root / "keep"
+        outside.mkdir()
+        (stale / "link").symlink_to(outside)
+        (store / ".incomplete-link").symlink_to(outside)
+        marker = store / "coordination-pending.json"
+        with (store / ".lock").open("a") as lock:
+            webdev.lock_backup(lock)
+            with self.assertRaisesRegex(ValueError, "another backup"):
+                webdev.preflight(request)
+            self.assertTrue(stale.is_dir())
+        marker.touch()
+        events = []
+        with self.assertRaisesRegex(ValueError, "coordination"):
+            webdev.snapshot(request, webdev.Progress("backing_up", events.append))
+        self.assertEqual([e["step"] for e in events], ["preflight"])
+        self.assertTrue(stale.is_dir())
+        marker.unlink()
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            receipt = webdev.snapshot(request)
+        self.assertIn("removed an incomplete snapshot", output.getvalue())
+        self.assertFalse(stale.exists())
+        self.assertTrue(outside.is_dir())
+        self.assertTrue((store / ".incomplete-link").is_symlink())
+        self.assertEqual(receipt["retained"], 1)
+
+    def test_failed_verification_cleans_staging_and_preserves_published_snapshots(self):
+        request = self.history_fixture()
+        first = webdev.snapshot(request)
+        store = Path(request["runtime"]) / "update/development-backups"
+        with patch.object(webdev, "verify", side_effect=ValueError("invalid snapshot")), self.assertRaises(ValueError):
+            webdev.snapshot(request)
+        self.assertEqual(list(store.glob(".incomplete-*")), [])
+        self.assertEqual([p.name for p in store.glob("snapshot-*")], [first["id"]])
+        self.assertEqual(webdev.snapshot(request)["retained"], 2)
 
     def test_resume_failure_and_unknown_coordination_block_retry(self):
         request = self.history_fixture()

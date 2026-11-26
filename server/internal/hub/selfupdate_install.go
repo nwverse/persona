@@ -196,6 +196,14 @@ func (u *updater) installCandidate(parent context.Context, auto bool, candidate 
 			fail(i18n.Err("hub-selfupdate.err_development_recovery"))
 			return
 		}
+		if err := u.preflightDevelopment(ctx); err != nil {
+			fail(err)
+			return
+		}
+		if err := ctx.Err(); err != nil {
+			fail(err)
+			return
+		}
 		if err := u.buildDevelopment(ctx, r); err != nil {
 			fail(err)
 			return
