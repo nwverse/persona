@@ -26,7 +26,7 @@ import { helloDeviceId } from "./device-id";
 import { currentLanguage } from "../i18n";
 import type { AgentMutes } from "./agent-groups";
 import { justFinished } from "./agent-groups";
-import { stateOf } from "./format";
+import { activityOf } from "./format";
 import { timeMs } from "./times";
 import { agentKey, NO_PINS, pinsOf, type AgentPins } from "./pins";
 import { holdNotedSeen, recordMarkedSeen, releaseOpenSeen, releaseSeen, resetSeenVisit } from "./seen-rows";
@@ -2029,8 +2029,8 @@ export function markSeenLocally(mid: string, sid: string) {
     send({ type: "seen", machine_id: mid, session_id: sid });
     return;
   }
-  if (s && (stateOf(s) === "unread" || justFinished(s, state.mutes))) {
-    recordMarkedSeen(s, stateOf(s) === "idle" ? "just_finished" : "unread", viewed.has(runtimeIdentity(s)));
+  if (s && (activityOf(s) === "unread" || justFinished(s, state.mutes))) {
+    recordMarkedSeen(s, activityOf(s) === "idle" ? "just_finished" : "unread", viewed.has(runtimeIdentity(s)));
   }
   set({ seen: { ...state.seen, [runtimeIdentity(s!)]: deliverSeen(mid, sid, mark) } });
   scheduleSeenCheck();
