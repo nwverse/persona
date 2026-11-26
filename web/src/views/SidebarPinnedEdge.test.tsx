@@ -58,7 +58,6 @@ const report = (mark: Element, where: "above" | "in" | "clipped") => act(() => w
   rootBounds: { top: 0, bottom: 800 },
 }]));
 const edged = () => [...host.querySelectorAll("[data-sidebar-group-heading][data-edge]")].map((h) => h.textContent);
-const pinnedHeadings = () => [...host.querySelectorAll("[data-sidebar-group-heading][data-pinned]")].map((h) => h.textContent);
 
 describe("a pinned sidebar heading (audit item 51)", () => {
   it("draws its edge while its group's top has gone under it and its end has not, and none at rest", () => {
@@ -139,28 +138,5 @@ describe("a pinned sidebar heading (audit item 51)", () => {
     expect(rule).toMatch(/height:\s*1px/);
     expect(rule).toMatch(/background:\s*var\(--line\)/);
     expect(rule).toMatch(/bottom:\s*0/);
-  });
-
-  it("marks every pinned heading with data-pinned while nested headings stack, and clears it when unpinned (#16663)", () => {
-    act(() => root.render(
-      <SidebarGroup heading={<span>Agents</span>}>
-        <Section title="天气 App 发 1.3 版" folded={false} onToggle={() => {}}><p>row</p></Section>
-      </SidebarGroup>,
-    ));
-    const [outer] = marks("Agents");
-    const [start, end] = marks("天气 App 发 1.3 版");
-    expect(pinnedHeadings()).toEqual([]);
-    report(outer!, "above");
-    expect(pinnedHeadings()).toEqual(["Agents"]);
-    report(start!, "above");
-    expect(edged()).toEqual(["天气 App 发 1.3 版"]);
-    expect(pinnedHeadings()).toEqual(["Agents", "天气 App 发 1.3 版"]);
-    report(end!, "above");
-    expect(edged()).toEqual(["Agents"]);
-    expect(pinnedHeadings()).toEqual(["Agents"]);
-    report(end!, "in");
-    report(start!, "in");
-    report(outer!, "in");
-    expect(pinnedHeadings()).toEqual([]);
   });
 });

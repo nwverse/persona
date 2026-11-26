@@ -78,25 +78,22 @@ describe("the pinned Persona row", () => {
     expect(row().className).toContain("hover:bg-hover");
   });
 
-  it("toggles data-scrolled on the list only while scrolled past 0 and shields Liquid Glass sticky headers (#16663)", async () => {
+  it("scrolls sidebar rows inside a clipped sibling scroller below the pinned Persona row and keeps Liquid Glass headers static/transparent (#16663)", async () => {
     act(() => root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />));
     await flush();
     const list = host.querySelector<HTMLElement>("[data-sidebar-rows]")!;
-    expect(list.hasAttribute("data-scrolled")).toBe(false);
-    act(() => {
-      list.scrollTop = 48;
-      list.dispatchEvent(new Event("scroll"));
-    });
-    expect(list.hasAttribute("data-scrolled")).toBe(true);
-    act(() => {
-      list.scrollTop = 0;
-      list.dispatchEvent(new Event("scroll"));
-    });
-    expect(list.hasAttribute("data-scrolled")).toBe(false);
+    const pinned = list.querySelector<HTMLElement>(":scope > [data-sidebar-sticky]")!;
+    const scroller = list.querySelector<HTMLElement>(":scope > [data-sidebar-scroller][data-row-scroller]")!;
+    expect(scroller).not.toBeNull();
+    expect(scroller.contains(pinned)).toBe(false);
+    expect(scroller.className).toMatch(/\boverflow-y-auto\b/);
+    expect([...list.children].filter((c) => c.getAttribute("aria-hidden") !== "true")).toEqual([pinned, scroller]);
 
     const css = readFileSync(join(__dirname, "../styles.css"), "utf8");
     expect(css).not.toMatch(/:root\[data-surface-style="liquid-glass"\]\s+\[data-sidebar-rows\]\s*\{[^}]*mask-image/);
-    expect(css).toMatch(/\[data-sidebar-rows\]\[data-scrolled\]\s*>\s*\[data-sidebar-sticky\],[\s\S]*?\.sidebar-group-heading\[data-pinned\]\s*\{[^}]*background:\s*var\(--glass-sticky-bg\)/);
+    expect(css).toMatch(/:root\[data-surface-style="liquid-glass"\]\s+\[data-app-shell\]\s+:is\(\[data-sidebar-root\],\s*\[data-sidebar-rail\],\s*\[data-sidebar-sticky\]\)\s*\{[^}]*background:\s*transparent/);
+    expect(css).toMatch(/:root\[data-surface-style="liquid-glass"\]\s+\.sidebar-group-heading\s*\{[^}]*position:\s*static;\s*[^}]*background:\s*transparent/);
+    expect(css).toMatch(/:root\[data-surface-style="liquid-glass"\]\s+\.sidebar-group-heading\[data-edge\]::after\s*\{[^}]*display:\s*none/);
   });
 });
 

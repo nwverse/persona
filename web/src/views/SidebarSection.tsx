@@ -78,7 +78,6 @@ export function SidebarGroup({ heading, children, className }: { heading: React.
       const pinned = p.start && !p.end;
       if (pinned === p.pinned) return;
       p.pinned = pinned;
-      ref.current?.toggleAttribute("data-pinned", pinned);
       toParent?.(pinned ? 1 : -1);
       edge();
     };

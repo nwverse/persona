@@ -71,6 +71,9 @@
 }
 [data-sidebar-rows] {
   --sidebar-group-bg: var(--canvas);
+}
+[data-sidebar-rows],
+[data-sidebar-scroller] {
   scroll-padding-top: calc(var(--sidebar-sticky-top, 0px) + var(--sidebar-controls-height, 0px) + var(--sidebar-row));
 }
 
@@ -787,7 +790,6 @@ select:not([multiple], [size], .appearance-none) {
   --glass-t: 0.68;
   --glass-blur: calc(6px + var(--glass-t) * 24px);
   --glass-sat: calc(115% + var(--glass-t) * 75%);
-  --glass-sticky-bg: rgba(242, 244, 248, calc(0.95 - var(--glass-t) * 0.08));
   --canvas: rgba(242, 244, 248, calc(0.92 - var(--glass-t) * 0.56));
   --page: rgba(250, 250, 253, calc(0.96 - var(--glass-t) * 0.24));
   --surface: rgba(255, 255, 255, calc(0.94 - var(--glass-t) * 0.30));
@@ -799,7 +801,6 @@ select:not([multiple], [size], .appearance-none) {
   --mac-rim-top: rgba(255, 255, 255, 0.90);
 }
 :root.dark[data-surface-style="liquid-glass"] {
-  --glass-sticky-bg: rgba(14, 18, 28, calc(0.94 - var(--glass-t) * 0.08));
   --canvas: rgba(12, 16, 24, calc(0.90 - var(--glass-t) * 0.62));
   --page: rgba(18, 20, 26, calc(0.95 - var(--glass-t) * 0.30));
   --surface: rgba(28, 31, 40, calc(0.92 - var(--glass-t) * 0.36));
@@ -830,31 +831,20 @@ select:not([multiple], [size], .appearance-none) {
   background: transparent;
 }
 :root[data-surface-style="liquid-glass"] .sidebar-group-heading {
+  position: static;
   background: transparent;
 }
-:root[data-surface-style="liquid-glass"] [data-sidebar-rows] > [data-sidebar-sticky],
-:root[data-surface-style="liquid-glass"] [data-sidebar-rows] .sidebar-group-heading {
-  margin-inline: calc(var(--spacing) * -2.5);
-  padding-inline: calc(var(--spacing) * 2.5);
-  transition: background-color 140ms ease;
-}
-:root[data-surface-style="liquid-glass"] [data-sidebar-rows] .sidebar-group-heading[data-edge]::after {
-  inset-inline: calc(var(--spacing) * 4.5);
-}
-:root[data-surface-style="liquid-glass"] [data-app-shell] [data-sidebar-rows][data-scrolled] > [data-sidebar-sticky],
-:root[data-surface-style="liquid-glass"] .sidebar-group-heading[data-pinned] {
-  background: var(--glass-sticky-bg);
-  backdrop-filter: blur(24px) saturate(160%);
-  -webkit-backdrop-filter: blur(24px) saturate(160%);
+:root[data-surface-style="liquid-glass"] .sidebar-group-heading[data-edge]::after {
+  display: none;
 }
 :root[data-surface-style="liquid-glass"] [data-app-shell] {
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
 }
 :root[data-surface-style="liquid-glass"] [data-app-shell] > main,
 :root[data-surface-style="liquid-glass"] [data-app-shell] > aside {
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
   -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-sat));
   box-shadow: inset 0 1px 0 var(--mac-rim-top);
 }
 :root[data-surface-style="liquid-glass"] [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"]) > main {
@@ -873,7 +863,6 @@ select:not([multiple], [size], .appearance-none) {
     --inset: #f5f5f7;
     --line: #e4e4e9;
     --mac-rim-top: transparent;
-    --glass-sticky-bg: var(--canvas);
   }
   :root.dark[data-surface-style="liquid-glass"] {
     background: #0b0b0c;
@@ -883,18 +872,15 @@ select:not([multiple], [size], .appearance-none) {
     --inset: #101012;
     --line: #202024;
     --mac-rim-top: transparent;
-    --glass-sticky-bg: var(--canvas);
   }
   :root[data-surface-style="liquid-glass"] body {
     background: var(--page);
   }
   :root[data-surface-style="liquid-glass"] [data-app-shell],
   :root[data-surface-style="liquid-glass"] [data-app-shell] > main,
-  :root[data-surface-style="liquid-glass"] [data-app-shell] > aside,
-  :root[data-surface-style="liquid-glass"] [data-app-shell] [data-sidebar-rows][data-scrolled] > [data-sidebar-sticky],
-  :root[data-surface-style="liquid-glass"] .sidebar-group-heading[data-pinned] {
-    backdrop-filter: none;
+  :root[data-surface-style="liquid-glass"] [data-app-shell] > aside {
     -webkit-backdrop-filter: none;
+    backdrop-filter: none;
   }
 }
 .range::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; margin-top: -7px; border-radius: 50%; background: #fff; box-shadow: var(--shadow-btn); transition: transform 150ms var(--ease-out-strong); }
