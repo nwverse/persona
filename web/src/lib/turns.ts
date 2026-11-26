@@ -13,7 +13,7 @@ import { markModelChanges, type ModelChange } from "./model-change";
 import { sourceKey, sourceOf, userSourceSentinel } from "./message-source";
 import { attachedAgentNotices, taskCalls } from "./task-association";
 import { addUsage, countUsage, itemUsage, markFirstUsage, type TurnUsage } from "./turn-usage";
-import type { Injected, Item, MessageSource, TokenUsage } from "./types";
+import type { Botmux, Injected, Item, MessageSource, TokenUsage } from "./types";
 
 export type Step =
   | { kind: "tool"; id: string; use: Item; result?: Item; images: Item[] }
@@ -55,6 +55,8 @@ export interface UserMessage {
   promptHidden?: boolean;
   /** Inside an opened background round: drawn as its source block, not as the raw model input supervision shows. */
   sourceInTrace?: boolean;
+  /** What botmux wrapped, as the node read it (Item.botmux): drawn as written in Lark while the chip decodes (lib/botmux.ts). */
+  botmux?: Botmux;
   /** An explicitly promoted main-chat round keeps this conversation input behind its source disclosure by default. */
   promotedRelay?: boolean;
 }
@@ -323,6 +325,7 @@ export function segments(items: Item[], results?: ReadonlyMap<string, Item>): Se
       cur.user!.client_msg_id ??= it.client_msg_id || undefined;
       if (it.kind === "image") cur.user!.images.push(it);
       else {
+        if (it.botmux) cur.user!.botmux ??= it.botmux;
         const p = parseUserText(it.text ?? "");
         if (p.text) {
           cur.user!.text = cur.user!.text ? `${cur.user!.text}\n${p.text}` : p.text;
@@ -991,6 +994,18 @@ export interface ChatLinesOptions {
   stale?: boolean;
 }
 
+const COMPACT_COMMAND_RE = /^\/compact(?:\s|$)/;
+const SLASH_COMMAND_RE = /^\/[a-zA-Z][\w:-]*(?:\s|$)/;
+
+/** Local slash commands (/compact with or without args, or another slash command answered only by non-error local
+ *  notices) never produce an assistant reply and must not be marked empty or offered for Retry. */
+function isLocalCommandTurn(user: UserMessage, steps: readonly Step[]): boolean {
+  const text = user.text.trim();
+  if (COMPACT_COMMAND_RE.test(text)) return true;
+  return !user.images.length && SLASH_COMMAND_RE.test(text) && steps.length > 0 &&
+    steps.every((step) => step.kind === "notice" && !step.item.task && !step.item.wake && !parseAPIError(step.item.text));
+}
+
 function turnLines(t: Turn, live: boolean, results?: ReadonlyMap<string, Item>, stale = false): ChatLine[] {
   const out: ChatLine[] = [];
   let ordered = t.ordered;
@@ -1016,6 +1031,7 @@ function turnLines(t: Turn, live: boolean, results?: ReadonlyMap<string, Item>, 
   if (end && !live && t.trailing.some((n) => isInterruptNotice(n) && (!end.answer || n.seq > at))) end.cut = true;
   const user = end?.user;
   if (end && user && !live && !stale && !end.answer && !t.trailing.length && isOwnMessage(user) && !user.queued && !isLoopTick(user) &&
+      !isLocalCommandTurn(user, end.steps) &&
       !end.steps.some((step) => step.kind === "visualization" || (step.kind === "image" && step.item.role === "assistant") ||
         (step.kind === "tool" && !step.result && supervisionTool(step.use.tool_name) === "supervision_finish" && step.use.tool_input?.visibility === "silent")) &&
       !supervisionVisibility(ordered, results, false).completedSilent) {
