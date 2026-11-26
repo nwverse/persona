@@ -299,6 +299,10 @@ func TestSupervisorTimeoutKeepsSourceWhenCheckpointFails(t *testing.T) {
 	ageQueuedSideDigest(t, s, 31*time.Minute)
 	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
 	oldStore := s.storeAccessor()
+	if oldStore == nil {
+		t.Fatal("queuedSideOrphan has no store accessor")
+	}
+	t.Cleanup(func() { s.setStore(oldStore) })
 	failed := &memStore{}
 	if err := failed.PutSetting(context.Background(), settingsKey, s.settings(context.Background())); err != nil {
 		t.Fatal(err)

@@ -5,7 +5,7 @@ import { settingsTarget, type ChannelDetail } from "../../../lib/channels";
 import { Loading } from "../../../ui/atoms";
 import { ChannelBindingBlock, ChannelDeliveryControls, ChannelTargetControls, ChannelStateInline } from "../Channels";
 import { ConfigurationForm } from "../configuration/ConfigurationForm";
-import { Group, SettingsHint } from "../SettingsParts";
+import { Group, Row, SettingsHint } from "../SettingsParts";
 import { useChannelController, type ChannelController } from "../useChannelController";
 import { channelRoutingSource, type IntegrationTarget } from "./model";
 
@@ -43,10 +43,10 @@ export function ChannelDeliveryBlock({ ctl, target, targetOnly, onSettings }: {
   const link = d.settings_url && settingsTarget(d.settings_url);
   const selfLink = link && !link.anchor && link.sub === target.id && link.tab === (target.kind === "extension" ? "extensions" : "connectors");
   const openSettings = selfLink ? undefined : onSettings;
-  if (targetOnly) return <ChannelTargetControls ctl={ctl} onSettings={openSettings} />;
+  const settingsUrl = d.settings_url;
 
   const showRouting = d.source === "plugin" && (d.kind === "im" || d.kind === "mention") && d.installed && !d.read_only;
-  return (
+  const controls = targetOnly ? <ChannelTargetControls ctl={ctl} onSettings={openSettings} /> : (
     <ChannelDeliveryControls
       ctl={ctl}
       onSettings={openSettings}
@@ -58,5 +58,15 @@ export function ChannelDeliveryBlock({ ctl, target, targetOnly, onSettings }: {
         ) : undefined
       }
     />
+  );
+  return (
+    <>
+      {controls}
+      {d.read_only && settingsUrl && openSettings && (
+        <Group footer={t("settings-channels.settings_elsewhere")}>
+          <Row label={t("settings-channels.more_settings")} onClick={() => openSettings(settingsUrl)} />
+        </Group>
+      )}
+    </>
   );
 }
