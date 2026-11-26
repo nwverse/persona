@@ -29,6 +29,8 @@ var ScopesDocs = []string{
 	"offline_access",
 	"search:message",
 	"drive:drive:readonly",
+	// batch_query accepts metadata:readonly, not drive:readonly (linked documents in both tiers).
+	"drive:drive.metadata:readonly",
 	"docx:document:readonly",
 	"docs:document.content:read",
 	"sheets:spreadsheet:readonly",
@@ -43,12 +45,16 @@ var ScopesDocs = []string{
 // ScopesFullExtra are what TierFull adds to ScopesDocs.
 var ScopesFullExtra = []string{
 	"im:chat:read",
+	// GET chats/:chat_id (the p2p name fallback) has a separate read permission from listing chats.
+	"im:chat:readonly",
 	"im:message:readonly",
 	"im:message.group_msg:get_as_user",
 	"im:message.p2p_msg:get_as_user",
 	"drive:file:download",
 	// The senders' names, so a message the Lark gateway already put in the knowledge base is recognized.
 	"contact:user.base:readonly",
+	// GET contact/v3/users/:open_id needs API access as well as the name field permission above.
+	"contact:contact.base:readonly",
 }
 
 // ScopesFor is a tier's user scopes; an unknown tier is TierDocs.
@@ -94,6 +100,20 @@ const (
 	ResDrive   = "drive"
 	ResWiki    = "wiki"
 	ResMinutes = "minutes"
+
+	// PendingLinksCursor is the per-binding cursor key in lark_sync_cursors holding the persistent queue of unfetched
+	// or retryable linked cloud documents discovered in synced messages.
+	PendingLinksCursor = "links_queue"
+
+	// SenderNamesCursor is the per-binding cursor key holding the name book: display names the sync learned for
+	// senders and mentioned users (open_id or app_id -> name), so a member who left a group or a bot another message
+	// mentioned is still named.
+	SenderNamesCursor = "sender_names"
+	// SenderNamesProgressCursor is the per-binding cursor key holding how far the sender-name backfill got: each
+	// large group's member list position, and the lookups that already found nothing (retried after a week), so the
+	// backfill runs in rounds that each have their own budget and resume where the last one stopped. Opaque to the
+	// manager; an older hub ignores it.
+	SenderNamesProgressCursor = "sender_names:progress"
 )
 
 // Canonical-key prefixes: one piece of content has one key whichever bot, account or entry point read it.
@@ -214,10 +234,11 @@ const (
 
 // Error is an open-platform failure.
 type Error struct {
-	Kind string
-	Op   string
-	Code int
-	Msg  string
+	Kind       string
+	Op         string
+	Code       int
+	HTTPStatus int
+	Msg        string
 	// RetryAfter is how long the platform asked to wait (rate limits), 0 when it did not say.
 	RetryAfter time.Duration
 }
@@ -252,6 +273,10 @@ type Binding struct {
 	Backfill time.Duration
 	// Budget bounds one run; what is left is read next time, from where the cursors stopped.
 	Budget time.Duration
+	// AuthorizedAt and GrantedScopes describe the binding's current user authorization, so readers can detect
+	// re-authorization or newly granted scopes and immediately retry previously blocked linked documents.
+	AuthorizedAt  time.Time
+	GrantedScopes []string
 }
 
 // Attachment is a file or image of a message; the knowledge base fetches it lazily through the connector
@@ -390,6 +415,114 @@ type Syncer interface {
 // errors are omitted; a missing contact scope or auth/context error is returned alongside any names resolved so far.
 type NameResolver interface {
 	ResolveUserNames(ctx context.Context, b Binding, token func(ctx context.Context) (string, error), openIDs []string) (map[string]string, error)
+}
+
+// OpenID is a Feishu/Lark user open_id in the sync contract.
+type OpenID string
+
+// ChatID is a Feishu/Lark chat_id (oc_…) in the sync contract.
+type ChatID string
+
+// MessageID is a Feishu/Lark message_id (om_…) in the sync contract.
+type MessageID string
+
+// EventLarkMessages is the extension event emitted after a sync round commits new messages to the outbox.
+const EventLarkMessages = "lark.messages"
+
+// MessageEventItem is one message's metadata inside event.lark.messages: strictly no message body, display names,
+// or attachment contents; extensions read bodies within their own permissions.
+type MessageEventItem struct {
+	ChatID       ChatID    `json:"chat_id"`
+	MessageID    MessageID `json:"message_id"`
+	SenderOpenID OpenID    `json:"sender_open_id,omitempty"`
+	At           time.Time `json:"at,omitzero"`
+	Type         string    `json:"type,omitempty"`
+}
+
+// MessagesEvent is one paginated batch of newly synced Lark message metadata emitted as event.lark.messages.
+type MessagesEvent struct {
+	Binding  string             `json:"binding"`
+	Page     int                `json:"page"`
+	Pages    int                `json:"pages"`
+	Total    int                `json:"total"`
+	Messages []MessageEventItem `json:"messages"`
+}
+
+// NameResolveRequest describes the unnamed senders and chats a binding's sender-name backfill wants to resolve.
+type NameResolveRequest struct {
+	// OpenIDs are unique human sender open_ids to look up.
+	OpenIDs []OpenID
+	// ChatSenders maps chat_id -> unique unnamed sender_ids seen in that chat (group, topic, or p2p), used to
+	// fetch GET /open-apis/im/v1/chats/:chat_id/members per chat when contact/v3 misses external users.
+	ChatSenders map[string][]string
+	// P2PChatIDs are unnamed p2p chat_ids whose display name should be resolved via chat info and chat members.
+	P2PChatIDs []ChatID
+	// SampleMessages maps sender_id -> a sample message_id from that sender for message-carried fallback when
+	// both contact/v3 and chat members miss.
+	SampleMessages map[string]string
+	// SampleTimes maps sender_id -> the time of its sample message, around which the chat is read for an @mention of
+	// a sender no member list names (one who left the group).
+	SampleTimes map[string]time.Time
+	// SampleChats maps sender_id -> the chat of its sample message.
+	SampleChats map[string]string
+	// NameBook is the binding's stored SenderNamesCursor value: names learned before, for senders nothing else names.
+	NameBook string
+	// Progress is the binding's stored SenderNamesProgressCursor value ("" for a first round).
+	Progress string
+}
+
+// NameResolveResult holds display names resolved for senders and unnamed p2p chats.
+type NameResolveResult struct {
+	// UserNames maps sender_id -> display name.
+	UserNames map[string]string
+	// P2PChatNames maps p2p chat_id -> peer display name.
+	P2PChatNames map[string]string
+	// Partial is true when the round's budget ran out before every lookup was tried: not a failure, the next round
+	// resumes from Progress.
+	Partial bool
+	// Progress is the new SenderNamesProgressCursor value to store, returned with or without an error ("" when
+	// nothing is left to remember).
+	Progress string
+	// NameBook is the name book with the names this round learned ("" when unchanged).
+	NameBook string
+}
+
+// ChatNameResolver is optionally implemented by a Syncer (alongside NameResolver) to resolve sender display names
+// and unnamed p2p chat names with chat-scoped fallbacks (GET im/v1/chats/:chat_id/members, GET im/v1/chats/:chat_id,
+// and message-carried sender/mention info) when contact/v3 cannot see external users.
+type ChatNameResolver interface {
+	ResolveNamesWithFallback(ctx context.Context, b Binding, token func(ctx context.Context) (string, error), req NameResolveRequest) (NameResolveResult, error)
+}
+
+// LinkObjType is the canonical cloud object type of a Feishu / Lark document or wiki link.
+type LinkObjType string
+
+// Supported cloud object types for linked documents.
+const (
+	LinkObjDocx     LinkObjType = "docx"
+	LinkObjDoc      LinkObjType = "doc"
+	LinkObjSheet    LinkObjType = "sheet"
+	LinkObjBitable  LinkObjType = "bitable"
+	LinkObjFile     LinkObjType = "file"
+	LinkObjMindnote LinkObjType = "mindnote"
+	LinkObjSlides   LinkObjType = "slides"
+	LinkObjWiki     LinkObjType = "wiki"
+)
+
+// PendingLinkCandidate is a cloud document or wiki link extracted from a synced message during one-time remediation.
+type PendingLinkCandidate struct {
+	Token     string
+	ObjType   LinkObjType
+	URL       string
+	MessageAt time.Time
+}
+
+// PendingLinkBackfiller is optionally implemented by a Syncer to extract cloud document and wiki links from
+// already-synced messages and merge missing ones into a binding's PendingLinksCursor payload without duplicating
+// queued tokens or overwriting higher-priority live entries.
+type PendingLinkBackfiller interface {
+	ExtractDocLinks(text string) []PendingLinkCandidate
+	MergePendingLinks(existingCursor string, add []PendingLinkCandidate) (updatedCursor string, added int)
 }
 
 // Provider is what the Lark module provides for the sync (botport.Provider.Sync).

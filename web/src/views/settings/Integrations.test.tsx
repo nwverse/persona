@@ -12,6 +12,7 @@ const state = vi.hoisted(() => ({
   integrationsV2: true,
   features: ["channels", "extension_manager", "connectors", "lark"] as string[],
   loaded: true,
+  assistant: "assistant",
 }));
 
 vi.hoisted(() => {
@@ -34,6 +35,7 @@ vi.mock("../../lib/store", async (original) => ({
   useStore: (select: (s: Record<string, unknown>) => unknown) =>
     select({
       features: state.features,
+      todos: [],
       machines: [],
       sessions: {},
       interactions: [],
@@ -43,7 +45,7 @@ vi.mock("../../lib/store", async (original) => ({
       hubName: "",
       mesh: [],
       loaded: state.loaded,
-      assistant: state.loaded ? { manager: "assistant", integrations_v2: state.integrationsV2 } : null,
+      assistant: state.loaded ? { manager: state.assistant, integrations_v2: state.integrationsV2 } : null,
     }),
   useLarkOn: () => state.features.includes("lark"),
   onHubEvent: () => () => {},
@@ -55,11 +57,13 @@ vi.mock("./IntegrationDetail", () => ({
     onBack,
     onUpgrade,
     onPage,
+    onSettings,
   }: {
     target: { kind: string; id: string; channelId?: string; connectorId?: string | null; manager?: string };
     onBack?: () => void;
     onUpgrade?: (market: string, id: string, manager?: string) => void;
     onPage?: (extId: string, uiId: string, manager?: string) => void;
+    onSettings?: (url: string) => void;
   }) => (
     <div
       data-mock-integration-detail
@@ -83,6 +87,16 @@ vi.mock("./IntegrationDetail", () => ({
         <button type="button" data-mock-detail-page onClick={() => onPage(target.id, "dashboard", target.manager)}>
           Open page
         </button>
+      )}
+      {onSettings && (
+        <>
+          <button type="button" data-mock-detail-repos onClick={() => onSettings("settings/persona#repositories")}>
+            Repos
+          </button>
+          <button type="button" data-mock-detail-kb onClick={() => onSettings("settings/knowledge#knowledge-items")}>
+            Knowledge
+          </button>
+        </>
       )}
     </div>
   ),
@@ -129,14 +143,22 @@ vi.mock("./SentSettings", () => ({
 }));
 
 const extViewMock = vi.hoisted(() => ({ onWide: undefined as ((wide: boolean) => void) | undefined }));
-vi.mock("./ExtensionView", () => ({
-  ExtensionUI: ({ extension, ui, state: uiState, onWide }: { extension: string; ui: string; state?: string; onWide?: (wide: boolean) => void }) => {
-    extViewMock.onWide = onWide;
-    return <div data-mock-extension-ui data-extension={extension} data-ui={ui} data-state={uiState ?? ""} />;
-  },
-  askAssistant: vi.fn(),
-  LauncherExtensionSections: () => null,
-}));
+vi.mock("./ExtensionView", async (original) => {
+  const { ExtensionUI } = await original<typeof import("./ExtensionView")>();
+  return {
+    ExtensionUI: (props: Parameters<typeof ExtensionUI>[0]) => {
+      const { extension, ui, state: uiState, onWide } = props;
+      extViewMock.onWide = onWide;
+      return (
+        <div data-mock-extension-ui data-extension={extension} data-ui={ui} data-state={uiState ?? ""}>
+          {extension === "-subscriptions" && <ExtensionUI {...props} />}
+        </div>
+      );
+    },
+    askAssistant: vi.fn(),
+    LauncherExtensionSections: () => null,
+  };
+});
 
 vi.mock("./ShortcutSettings", () => ({ ShortcutSettings: () => <div data-page="shortcuts" /> }));
 vi.mock("./NotificationSettings", () => ({ NotificationSettings: () => <div data-page="notifications" /> }));
@@ -170,7 +192,7 @@ import type { HubExtension } from "../../lib/extensions";
 import type { SourcesGraph } from "../../lib/sources-graph";
 import { subscriptionSourceState, type HubSubscription } from "../../lib/subscriptions";
 import { loadPages } from "../../lib/lazy-page";
-import { resetManagerChoice } from "../../lib/manager-choice";
+import { chooseManager, chosenManager, managerHeaderFor, resetManagerChoice } from "../../lib/manager-choice";
 import { resetRoster } from "../../lib/managers";
 import { Settings } from "../Settings";
 import { Integrations } from "./Integrations";
@@ -304,6 +326,7 @@ beforeEach(() => {
   state.integrationsV2 = true;
   state.features = ["channels", "extension_manager", "connectors", "lark"];
   state.loaded = true;
+  state.assistant = "assistant";
   localStorage.clear();
   resetManagerChoice();
   resetRoster();
@@ -434,7 +457,7 @@ function stubFullHubFetch(overrides?: {
   graph?: SourcesGraph;
   inboxTodoForward?: boolean;
 }) {
-  let forwardEnabled = overrides?.inboxTodoForward ?? false;
+  const forwarding = new Map<string | null, boolean>();
   vi.stubGlobal(
     "fetch",
     vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -454,12 +477,17 @@ function stubFullHubFetch(overrides?: {
       if (path === "/api/v1/subscriptions/-/graph") {
         return Promise.resolve(json(overrides?.graph ?? SAMPLE_GRAPH));
       }
+      if (path === "/api/v1/subscriptions/-/ui") {
+        const owner = new Headers(init?.headers).get("X-Persona-Manager") ?? "default";
+        return Promise.resolve(json({ view: { sections: [{ items: [{ type: "text", text: `Sources for ${owner}` }] }] } }));
+      }
       if (path === "/api/v1/assistant") {
+        const manager = new Headers(init?.headers).get("X-Persona-Manager");
         if (init?.method === "PUT" && init.body) {
           const parsed = JSON.parse(String(init.body)) as { inbox_todo_forward?: boolean };
-          if (typeof parsed.inbox_todo_forward === "boolean") forwardEnabled = parsed.inbox_todo_forward;
+          if (typeof parsed.inbox_todo_forward === "boolean") forwarding.set(manager, parsed.inbox_todo_forward);
         }
-        return Promise.resolve(json({ inbox_todo_forward: forwardEnabled }));
+        return Promise.resolve(json({ inbox_todo_forward: forwarding.get(manager) ?? overrides?.inboxTodoForward ?? false }));
       }
       if (path === "/api/v1/mail/accounts") {
         return overrides?.failMail
@@ -475,7 +503,7 @@ function stubFullHubFetch(overrides?: {
           : Promise.resolve(json({ enabled: true, has_secret: true, connected: true, bot_name: "Feishu Bot" }));
       }
       if (path === "/api/v1/managers") {
-        return Promise.resolve(json({ default: "assistant", managers: [{ id: "assistant", name: "助手", online: true, builtin: true }] }));
+        return Promise.resolve(json({ default: "assistant", managers: [{ id: "assistant", name: "助手", online: true, builtin: true }, { id: "work", name: "Work", online: true }] }));
       }
       return Promise.resolve(json({}));
     }),
@@ -1200,5 +1228,110 @@ describe("Settings navigation collapse and bidirectional redirects under integra
 
     await act(async () => extViewMock.onWide?.(false));
     expect(container().className).toContain("max-w-[1120px]");
+  });
+
+  it("forwards IntegrationDetail crosslinks through Settings to Assistant repositories and Knowledge items", async () => {
+    state.integrationsV2 = true;
+    state.twoCol = true;
+    state.phone = false;
+    state.features = ["channels", "extension_manager", "connectors", "lark"];
+    stubFullHubFetch();
+
+    history.replaceState(null, "", "/settings?tab=integrations&integration=builtin%3Agithub");
+    await act(async () => {
+      root.render(<Settings onToggleSidebar={() => {}} />);
+    });
+    await flush();
+
+    const reposBtn = host.querySelector<HTMLButtonElement>("[data-mock-detail-repos]")!;
+    expect(reposBtn).not.toBeNull();
+    await act(async () => reposBtn.click());
+    await flush();
+    expect(location.pathname + location.search).toBe("/settings?tab=persona");
+    expect(host.querySelector('[data-page="persona"]')).not.toBeNull();
+
+    history.replaceState(null, "", "/settings?tab=integrations&integration=builtin%3Amail");
+    await act(async () => root.render(null));
+    await act(async () => {
+      root.render(<Settings onToggleSidebar={() => {}} />);
+    });
+    await flush();
+
+    const kbBtn = host.querySelector<HTMLButtonElement>("[data-mock-detail-kb]")!;
+    expect(kbBtn).not.toBeNull();
+    await act(async () => kbBtn.click());
+    await flush();
+    expect(location.pathname + location.search).toBe("/settings?tab=knowledge");
+    expect(host.querySelector('[data-page="knowledge-selection"]')).not.toBeNull();
+  });
+});
+
+describe("assistant isolation across integration routes", () => {
+  function headersFor(path: string, method: string) {
+    return vi.mocked(fetch).mock.calls
+      .filter(([url, init]) => String(url).split("?")[0] === `/api/v1${path}` && (init?.method ?? "GET") === method)
+      .map(([, init]) => new Headers(init?.headers).get("X-Persona-Manager"));
+  }
+
+  async function clickOption(group: string, label: string) {
+    const button = [...host.querySelectorAll<HTMLButtonElement>(`${group} [role="radio"]`)].find((el) => el.textContent === label);
+    expect(button).toBeDefined();
+    await act(async () => button!.click());
+    await flush();
+  }
+
+  beforeEach(() => {
+    state.features.push("source_subscriptions", "inbox_sources", "inbox_sources_graph");
+    stubFullHubFetch();
+  });
+
+  it("retains the chosen assistant when switching list → data flow → list", async () => {
+    chooseManager("work");
+    state.assistant = "work";
+    history.replaceState(null, "", "/settings?tab=integrations");
+    await act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
+    await clickOption("[data-integrations-view-switch]", t("settings-integrations.view_sources"));
+    expect(new URLSearchParams(location.search).get("integration")).toBe("-sources@work");
+    expect(headersFor("/subscriptions/-/graph", "GET")).toEqual(["work"]);
+    await clickOption("[data-integrations-view-switch]", t("settings-integrations.view_list"));
+    expect(host.querySelector("[data-integrations-list]")).not.toBeNull();
+    expect(chosenManager()).toBe("work");
+    expect(managerHeaderFor("/subscriptions/-/graph")).toBeUndefined();
+  });
+
+  it("uses the chosen assistant for an unqualified Data flow link and a market install", async () => {
+    chooseManager("work");
+    const onOpen = vi.fn();
+    await act(async () => root.render(<Integrations open="-sources" onOpen={onOpen} />));
+    await flush();
+    expect(headersFor("/subscriptions/-/graph", "GET")).toEqual(["work"]);
+    await act(async () => root.render(<Integrations open="-market/official/demo-ext" onOpen={onOpen} />));
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-mock-item-install]")!.click());
+    expect(onOpen).toHaveBeenCalledWith("ext:demo-ext@work");
+  });
+
+  it.each([true, false])("reads and saves forwarding for the linked assistant with Labs enabled=%s", async (v2) => {
+    state.integrationsV2 = v2;
+    history.replaceState(null, "", v2 ? "/settings?tab=integrations&integration=-sources%40work" : "/settings?tab=sources&manager=work");
+    await act(async () => root.render(<Settings onToggleSidebar={() => {}} />));
+    await flush();
+    expect(headersFor("/assistant", "GET")).toEqual(["work"]);
+    const toggle = host.querySelector<HTMLButtonElement>('[data-settings-group="inbox-todo-forward"] [role="switch"]')!;
+    await act(async () => toggle.click());
+    expect(headersFor("/assistant", "PUT")).toEqual(["work"]);
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    if (v2) await clickOption('[data-settings-group="inbox-sources"]', t("subscriptions.view_list"));
+    expect(headersFor("/subscriptions/-/ui", "POST")).toEqual(["work"]);
+    expect(host.textContent).toContain("Sources for work");
+    if (!v2) await clickOption('[data-settings-group="inbox-sources"]', t("subscriptions.view_graph"));
+    expect(headersFor("/subscriptions/-/graph", "GET")).toEqual(["work"]);
+    expect(chosenManager()).toBeNull();
+  });
+
+  it("reloads the same push source page when only the route owner changes", async () => {
+    const onOpen = vi.fn();
+    await act(async () => root.render(<Integrations open="-sources@work/source" onOpen={onOpen} />));
+    await act(async () => root.render(<Integrations open="-sources/source" onOpen={onOpen} />));
+    expect(headersFor("/subscriptions/-/ui", "POST")).toEqual(["work", null]);
   });
 });

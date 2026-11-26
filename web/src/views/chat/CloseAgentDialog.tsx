@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { t } from "../../i18n";
-import { appArchiveDeps, archiveAgent, closeBusyReason, closeOffer, type CloseBusyReason, type CloseOffer } from "../../lib/agent-archives";
+import { appArchiveDeps, archiveAgent, closeBusyReason, closeOffer, type CloseBusyReason, type CloseOffer, type CloseResult } from "../../lib/agent-archives";
 import { api, errorText, sessionPath } from "../../lib/api";
 import { stripBase } from "../../lib/base";
 import { sessionMenuActions, sessionTitle, tabLabel } from "../../lib/format";
@@ -14,6 +14,15 @@ import { cleanupReady, KEEP, runCleanup, useAgentWorktree, WorktreeCleanup, type
 export interface CloseAgentArchiveResult {
   ok: boolean;
   busy?: boolean;
+  close?: CloseResult;
+}
+
+/** Whether `archive?close=1` confirmed the agent closed (or was already not running) so deleting its worktree is safe.
+ *  Controlled `onArchiveClose` callers that omit `close` are assumed closed for backwards compatibility; the default
+ *  hub `archiveAgent` path fails closed when `close` is omitted (`archived_close_unknown`). */
+function archiveClosed(close: CloseResult | undefined, assumeClosedWhenOmitted: boolean): boolean {
+  if (!close) return assumeClosedWhenOmitted;
+  return close.closed || close.outcome === "not_running";
 }
 
 export interface CloseAgentDialogProps {
@@ -110,10 +119,28 @@ function CloseAgentDialogView({
   // the hub said it is busy though this page doesn't know why yet (a 409 to the archive): it closes as a busy one does
   const [refused, setRefused] = useState(false);
   const [cleanup, setCleanup] = useState<Cleanup>(KEEP);
+  // Track whether this uncontrolled dialog ever observed the session in the live store while open (outside our own
+  // archive attempt, whose 409/error `restore()` may briefly insert an off-page snapshot), so a session that genuinely
+  // disappeared while the dialog was open still dismisses, while off-page/filtered/grouped/archived-open snapshots
+  // remain closable.
+  const hadLive = useRef(Boolean(open && live));
+  const submitting = useRef(false);
+  const archiveRestored = useRef(false);
   useEffect(() => {
-    if (open) setCleanup(KEEP); // each time: keeping is the default
-    if (open) setRefused(false);
+    if (!open) {
+      hadLive.current = false;
+      archiveRestored.current = false;
+      return;
+    }
+    setCleanup(KEEP); // each time: keeping is the default
+    setRefused(false);
+    archiveRestored.current = false;
+    hadLive.current = Boolean(live);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+  useEffect(() => {
+    if (open && live && !pending && !submitting.current && !archiveRestored.current) hadLive.current = true;
+  }, [open, live, pending]);
   const shown = closing(live ?? session, session, resolvedFeatures, refused);
   const notify = (message: string, tone: "ok" | "error" | "info") => {
     if (onNotice) onNotice(message, tone);
@@ -122,21 +149,26 @@ function CloseAgentDialogView({
   const go = async () => {
     if (pending) return;
     // the agent went away while the dialog was open: nothing left to close, so don't leave a button that does nothing
-    const current = liveControlled ? live : getSession(session.machine_id, session.session_id);
+    const liveNow = liveControlled ? live : getSession(session.machine_id, session.session_id);
+    const current = liveControlled ? live : (liveNow ?? (hadLive.current ? undefined : session));
     const activeFeatures = featuresControlled ? resolvedFeatures : getState().features;
     const now = current && closing(current, session, activeFeatures, refused);
     if (!current || !now || now.offer === "no" || now.offer === "busy") {
       onClose();
       return;
     }
+    submitting.current = true;
     setPending(true);
     try {
+      let shouldCleanup = true;
       if (now.offer === "archive") {
         const r = onArchiveClose ? await onArchiveClose(current) : await archiveAgent(current, true, appArchiveDeps);
         if (!r.ok) {
+          if (!onArchiveClose && !liveNow) archiveRestored.current = true;
           if (r.busy) setRefused(true); // the toast said why; the dialog now offers to close it anyway
           return;
         }
+        shouldCleanup = archiveClosed(r.close, Boolean(onArchiveClose));
         onClose();
       } else {
         if (onCloseSession) await onCloseSession(current);
@@ -146,7 +178,7 @@ function CloseAgentDialogView({
         if (onClosed) onClosed();
         else if (showsSession(parse(stripBase(location.pathname), location.search), session.machine_id, session.session_id)) navigate({ name: "home" });
       }
-      if (wt?.path && cleanup.remove) {
+      if (shouldCleanup && wt?.path && cleanup.remove) {
         if (onCleanupWorktree) {
           try {
             await onCleanupWorktree(wt, cleanup);
@@ -160,6 +192,7 @@ function CloseAgentDialogView({
     } catch (e) {
       notify(t("close-agent.close_failed", { error: errorText(e) }), "error");
     } finally {
+      submitting.current = false;
       setPending(false);
     }
   };
