@@ -208,6 +208,7 @@ type Config struct {
 	NodePackagesURL   string             `json:"node_packages_url,omitempty"`
 	NodePackagesProxy string             `json:"node_packages_proxy,omitempty"`
 	DevelopmentTarget *DevelopmentTarget `json:"development_target,omitempty"`
+	PublishedTarget   *DevelopmentTarget `json:"published_target,omitempty"`
 	DevelopmentHold   bool               `json:"development_hold,omitempty"`
 	// LinkPingMS / LinkPingTimeoutMS: the heartbeats of the links and streams, hub.json's link section (0: the
 	// protocol's, link.PingEvery / PingTimeout; tests shorten them). The manager tells Persona Link them too.
@@ -522,8 +523,8 @@ var TransferRoutes = []string{
 }
 
 // MetricsRoutes are the machines' monitoring's routes (internal/devices metrics.go), relayed the same way: every
-// machine's latest sample and its last hour, one machine's history, the token usage (all, one machine's range, and
-// the history: the days, the last days by the hour).
+// machine's latest sample and its last hour, one machine's history, the token usage (all, one machine's range, the
+// history: the days, the last days by the hour, and by project: usage_projects.go).
 var MetricsRoutes = []string{
 	"GET /api/v1/metrics",
 	"GET /api/v1/machines/{id}/metrics",
@@ -531,6 +532,8 @@ var MetricsRoutes = []string{
 	"GET /api/v1/usage",
 	"GET /api/v1/usage/days",
 	"GET /api/v1/usage/hours",
+	"GET /api/v1/usage/projects",
+	"GET /api/v1/usage/projects/detail",
 }
 
 // UsageRoutes are the subscription usage windows' routes (internal/devices usagewindows.go, docs/server/usage-windows.md),

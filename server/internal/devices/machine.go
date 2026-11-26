@@ -119,14 +119,14 @@ type Machine struct {
 	kick      chan struct{}
 	// deploying: the manager is sending this machine the hub's node build (deploy.go); deployErr: why the last try
 	// failed. deployRun ties each waiter to one run's outcome, including one the card does not retain.
-	deploying       bool
-	deployErr       string
-	deployPhase     string
-	deploySource    string
-	deployVersion   string
-	deployRun       *deployRun
-	deployPreflight *nodeDeployPreflight
-	updateHandoff   bool // grace expired while waiting for idle: no new headless turns until the update settles
+	deploying     bool
+	deployErr     string
+	deployPhase   string
+	deploySource  string
+	deployVersion string
+	deployRun     *deployRun
+	deployWatch   *nodeDeployWatch
+	updateHandoff bool // grace expired while waiting for idle: no new headless turns until the update settles
 	// via is how the connection runs (local | ssh | tailcat | link | service | hub), path how tailcat's packets go.
 	via, path                  string
 	directFailed, switchedBack time.Time
@@ -252,7 +252,9 @@ func (m *Machine) snapshot() proto.Machine {
 	// The build its platform resolves to (packages.go: the hub's own, or the newest release this manager drives), and
 	// why none can be sent; before m.mu, as they read the hub's handover.
 	version, noPackage := d.hubVersion(), error(nil)
-	if m.cfg.Kind != "local" { // the hub's own machine runs the hub's binary: nothing to look up
+	// A local stdio process uses the manager's binary. Its resident relay,
+	// when present, can run a separate build and needs package lookup.
+	if m.cfg.Kind != "local" || info.NodeUpdate && nodeHas(info, nodeproto.NodeUpdate) {
 		version, noPackage = d.nodeTarget(info), d.packageBlocked(info)
 	}
 	clipboardOn := d.clipboardOn(m.cfg.ID)
@@ -984,6 +986,12 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 	}
 	m.noteClosed(event, params)
 	switch event {
+	case nodeproto.EventUpdateDraining:
+		m.nodeUpdateDraining(params)
+		return
+	case nodeproto.EventRestarting:
+		m.nodeUpdateHandover(params)
+		return
 	case nodeproto.EventUpdatePreflightFailed:
 		m.nodeUpdatePreflightFailed(params)
 		return
@@ -1137,6 +1145,14 @@ func (m *Machine) onRequest(ctx context.Context, method string, params json.RawM
 			}
 		}
 		return map[string]any{"sessions": out}, nil
+	case "usage.features": // what this manager keeps of the usage a node meters (usage_projects.go)
+		return map[string]any{"dirs": true}, nil
+	case "usage.resplit.status": // the last week split by directory once (usage_resplit.go)
+		return m.d.usageResplitStatus(ctx, m.cfg.ID, time.Now())
+	case "usage.resplit":
+		sctx, cancel := m.storeCtx()
+		defer cancel()
+		return m.d.putUsageResplit(sctx, m.cfg.ID, params, time.Now())
 	case "usage.backfill.status": // the token usage backfill (usage_backfill.go)
 		return m.d.usageBackfillStatus(ctx, m.cfg.ID, params, time.Now())
 	case "usage.backfill":
