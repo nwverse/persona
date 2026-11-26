@@ -8771,6 +8771,62 @@
     {
       "name": "agents_marked_seen_toast",
       "value": "已将 {count} 项标为已读"
+    },
+    {
+      "name": "live_view_preview_approve",
+      "value": "批准"
+    },
+    {
+      "name": "live_view_preview_deny",
+      "value": "拒绝"
+    },
+    {
+      "name": "live_view_capsule_metric_working",
+      "value": "运行中"
+    },
+    {
+      "name": "fold_workbench_pulse",
+      "value": "动态"
+    },
+    {
+      "name": "fold_workbench_code",
+      "value": "代码"
+    },
+    {
+      "name": "fold_workbench_machines",
+      "value": "设备"
+    },
+    {
+      "name": "fold_posture_trifold_angled",
+      "value": "三折支架"
+    },
+    {
+      "name": "fold_workbench_expand_tools",
+      "value": "全屏展开"
+    },
+    {
+      "name": "fold_workbench_pick_session",
+      "value": "选择一个智能体会话即可并排查看文件、Git 差异与终端。"
+    },
+    {
+      "name": "fold_relay_next",
+      "value": "下一个"
+    },
+    {
+      "name": "fold_relay_prev",
+      "value": "上一个"
+    },
+    {
+      "name": "fold_relay_queue",
+      "value": "{count} 项待看"
+    },
+    {
+      "name": "fold_relay_clear",
+      "value": "已全部看完"
+    },
+    {
+      "name": "machine_load_per_core",
+      "value": "{per}/核"
     }
   ]
 }

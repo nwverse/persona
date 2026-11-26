@@ -2450,7 +2450,7 @@
     },
     {
       "name": "health_question_resting_heart_rate",
-      "value": "今日の体重62.5kgを記録して"
+      "value": "今週の安静時心拍数の推移はどうですか？"
     },
     {
       "name": "health_log_weight",
@@ -8771,6 +8771,62 @@
     {
       "name": "agents_marked_seen_toast",
       "value": "{count} 件を既読にしました"
+    },
+    {
+      "name": "live_view_preview_approve",
+      "value": "承認"
+    },
+    {
+      "name": "live_view_preview_deny",
+      "value": "拒否"
+    },
+    {
+      "name": "live_view_capsule_metric_working",
+      "value": "作業中"
+    },
+    {
+      "name": "fold_workbench_pulse",
+      "value": "パルス"
+    },
+    {
+      "name": "fold_workbench_code",
+      "value": "コード"
+    },
+    {
+      "name": "fold_workbench_machines",
+      "value": "マシン"
+    },
+    {
+      "name": "fold_posture_trifold_angled",
+      "value": "三つ折りスタンド"
+    },
+    {
+      "name": "fold_workbench_expand_tools",
+      "value": "拡大"
+    },
+    {
+      "name": "fold_workbench_pick_session",
+      "value": "エージェントセッションを選択するとファイル・Git差分・ターミナルを表示できます。"
+    },
+    {
+      "name": "fold_relay_next",
+      "value": "次へ"
+    },
+    {
+      "name": "fold_relay_prev",
+      "value": "前へ"
+    },
+    {
+      "name": "fold_relay_queue",
+      "value": "{count} 件の確認待ち"
+    },
+    {
+      "name": "fold_relay_clear",
+      "value": "すべて確認済み"
+    },
+    {
+      "name": "machine_load_per_core",
+      "value": "{per}/コア"
     }
   ]
 }

@@ -117,11 +117,18 @@ export struct PhoneAppearanceSettings {
     const owner=key==='lavender' ? 'clay' : key==='teal' ? 'island' : key==='lark' ? 'lark' : 'glass';
     return this.label('phone_look_style',owner);
   }
+  private pageTint(page: string): ResourceColor {
+    if (page === 'phone_look_style') return Colors.ai;
+    if (page === 'phone_look_navigation') return Colors.teal;
+    if (page === 'phone_look_layout') return Colors.working;
+    if (page === 'phone_look_scheme') return '#5856D6';
+    return Colors.iconAccent;
+  }
   @Builder overview() {
     Column() {
       ForEach(phoneAppearancePages, (page: string) => {
         PhoneSettingsRow({label:tr(page),detail:this.label(page,this.selected(page)),elevated:true,symbol:this.icon(page),
-          artwork:this.artwork(page),tint:Colors.iconAccent,last:false,identity:'settings.appearance.'+page.slice('phone_look_'.length),
+          artwork:this.artwork(page),tint:this.pageTint(page),last:false,identity:'settings.appearance.'+page.slice('phone_look_'.length),
           action:() => { if (this.active && this.route === 'appearance') this.onOpen(page); }}).accessibilityRole(AccessibilityRoleType.BUTTON)
       }, (page: string) => page)
       this.chatSwitch(true)
@@ -166,7 +173,7 @@ export struct PhoneAppearanceSettings {
         Text(tr('phone_look_sample_reply')).fontSize(14).maxFontScale(Tokens.interfaceScaleFor(14)).fontColor(Colors.ink)
         Text(tr('phone_look_sample_link')).fontSize(14).maxFontScale(Tokens.interfaceScaleFor(14)).fontColor(Colors.link)
       }.width('100%').alignItems(HorizontalAlign.Start).padding(12).backgroundColor(Colors.card(true)).borderRadius(14)
-        .border({width:0.5,color:PhoneStyle.cardBorder(this.environment.dark),radius:14})
+        .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:14})
       Row({space:8}) {
         Text(tr('phone_look_sample_add')).fontSize(14).maxFontScale(Tokens.interfaceScaleFor(14)).fontWeight(FontWeight.Medium).fontColor(Colors.onAction)
           .padding({left:14,right:14,top:7,bottom:7}).backgroundColor(Colors.action).borderRadius(Tokens.capsule)
@@ -174,7 +181,7 @@ export struct PhoneAppearanceSettings {
           .padding({left:14,right:14,top:7,bottom:7}).backgroundColor(Colors.control).borderRadius(Tokens.capsule)
       }
     }.alignItems(HorizontalAlign.Start).width('100%').padding(12).backgroundColor(Colors.sheetBackground).borderRadius(16)
-      .border({width:0.5,color:PhoneStyle.cardBorder(this.environment.dark),radius:16})
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:16})
       .accessibilityGroup(true).id('settings.appearance.preview')
   }
   @Builder colors() {

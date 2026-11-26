@@ -2450,7 +2450,7 @@
     },
     {
       "name": "health_question_resting_heart_rate",
-      "value": "Log my weight today: 62.5 kg"
+      "value": "How has my resting heart rate been trending this week?"
     },
     {
       "name": "health_log_weight",
@@ -8767,6 +8767,62 @@
     {
       "name": "agents_marked_seen_toast",
       "value": "Marked {count} as seen"
+    },
+    {
+      "name": "live_view_preview_approve",
+      "value": "Approve"
+    },
+    {
+      "name": "live_view_preview_deny",
+      "value": "Deny"
+    },
+    {
+      "name": "live_view_capsule_metric_working",
+      "value": "Working"
+    },
+    {
+      "name": "fold_workbench_pulse",
+      "value": "Pulse"
+    },
+    {
+      "name": "fold_workbench_code",
+      "value": "Code"
+    },
+    {
+      "name": "fold_workbench_machines",
+      "value": "Machines"
+    },
+    {
+      "name": "fold_posture_trifold_angled",
+      "value": "Tri-Fold Stand"
+    },
+    {
+      "name": "fold_workbench_expand_tools",
+      "value": "Expand"
+    },
+    {
+      "name": "fold_workbench_pick_session",
+      "value": "Select an agent session to inspect files, git diff, and terminal."
+    },
+    {
+      "name": "fold_relay_next",
+      "value": "Next"
+    },
+    {
+      "name": "fold_relay_prev",
+      "value": "Previous"
+    },
+    {
+      "name": "fold_relay_queue",
+      "value": "{count} to review"
+    },
+    {
+      "name": "fold_relay_clear",
+      "value": "Queue clear"
+    },
+    {
+      "name": "machine_load_per_core",
+      "value": "{per}/core"
     }
   ]
 }

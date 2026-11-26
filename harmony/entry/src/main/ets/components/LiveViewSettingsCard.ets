@@ -19,8 +19,8 @@ import { toastCenter } from '../models/ToastCenter';
 const PREVIEW_MODES: string[] = ['needsYou', 'working', 'background', 'done'];
 
 /**
- * Interactive Fleet Live View preview & settings section matching iOS
- * `Settings › Notifications › Live Activities` (docs/apple/live-activity.md).
+ * Interactive Fleet Live View preview & settings section aligned with iOS
+ * `IslandSettingsView` + `FleetIslandViews` (`docs/apple/live-activity.md`).
  */
 @ComponentV2
 export struct LiveViewSettingsCard {
@@ -33,18 +33,18 @@ export struct LiveViewSettingsCard {
     return sampleFleetState(this.previewMode, this.liveView.lockDetails);
   }
 
+  private phaseCount(state: FleetLiveState): string {
+    if (state.phase === 'needsYou') return String(state.needsYou);
+    if (state.phase === 'working') return String(state.working);
+    if (state.phase === 'done') return String(state.unread);
+    return '0';
+  }
+
   private phaseTint(phase: string): ResourceColor {
     if (phase === 'needsYou') return Colors.needs;
     if (phase === 'working') return Colors.working;
     if (phase === 'done') return Colors.unread;
     return Colors.link;
-  }
-
-  private capsuleBg(phase: string): string {
-    if (phase === 'needsYou') return '#D93A3A';
-    if (phase === 'working') return '#B35400';
-    if (phase === 'done') return '#1D7A4C';
-    return '#0071E3';
   }
 
   private headline(state: FleetLiveState): string {
@@ -54,10 +54,14 @@ export struct LiveViewSettingsCard {
     return tr('live_view_all_caught_up');
   }
 
-  private capsuleLabel(state: FleetLiveState): string {
-    if (state.phase === 'needsYou') return tr('live_view_capsule_needs').replace('{count}', String(state.needsYou));
-    if (state.phase === 'working') return tr('live_view_capsule_working').replace('{count}', String(state.working));
-    if (state.phase === 'done') return tr('live_view_capsule_unread').replace('{count}', String(state.unread));
+  private capsuleTrailing(state: FleetLiveState): string {
+    const first = state.items[0];
+    if (state.phase === 'working' && first?.background && fleetItemProgressPercent(first) >= 0) {
+      return String(fleetItemProgressPercent(first)) + '%';
+    }
+    if (state.phase === 'needsYou') return tr('needs_you');
+    if (state.phase === 'working') return tr('live_view_capsule_metric_working');
+    if (state.phase === 'done') return tr('agent_group_unread');
     return tr('live_view_capsule_done');
   }
 
@@ -73,29 +77,34 @@ export struct LiveViewSettingsCard {
   }
 
   @Builder previewCapsule() {
+    // Authentic pure-black hardware Live View capsule mirroring iOS Dynamic Island compact presentation.
     Row({ space: 8 }) {
-      Circle().width(8).height(8).fill('#FFFFFF')
-      Text(this.capsuleLabel(this.previewState))
-        .fontSize(Tokens.interfaceFontVp(13, this.env.fontScale))
-        .fontWeight(FontWeight.Bold)
-        .fontColor('#FFFFFF')
-        .maxLines(1)
-      if (this.previewState.phase === 'needsYou' && this.previewState.working > 0) {
-        Text('· ' + tr('live_view_capsule_working').replace('{count}', String(this.previewState.working)))
-          .fontSize(Tokens.interfaceFontVp(12, this.env.fontScale))
-          .fontColor('#E6FFFFFF')
+      Row({ space: 6 }) {
+        Image($r('app.media.phone_persona_face')).width(16).height(16).objectFit(ImageFit.Contain).accessibilityLevel('no')
+        Text(this.phaseCount(this.previewState))
+          .fontSize(Tokens.interfaceFontVp(13, this.env.fontScale))
+          .fontWeight(FontWeight.Bold)
+          .fontFeature('tnum 1')
+          .fontColor(this.phaseTint(this.previewState.phase))
           .maxLines(1)
-      } else if (this.previewState.phase === 'working' && this.previewState.items[0]?.background && fleetItemProgressPercent(this.previewState.items[0]) >= 0) {
-        Text(String(fleetItemProgressPercent(this.previewState.items[0])) + '%')
+      }
+      // Simulated camera cutout gap
+      Blank().width(24)
+      Row({ space: 5 }) {
+        Circle().width(6).height(6).fill(this.phaseTint(this.previewState.phase))
+        Text(this.capsuleTrailing(this.previewState))
           .fontSize(Tokens.interfaceFontVp(12, this.env.fontScale))
           .fontWeight(FontWeight.Medium)
-          .fontColor('#E6FFFFFF')
+          .fontColor('#FFFFFF')
           .maxLines(1)
       }
     }
-    .padding({ left: 12, right: 12, top: 6, bottom: 6 })
-    .backgroundColor(this.capsuleBg(this.previewState.phase))
-    .borderRadius(Tokens.capsule)
+    .height(34)
+    .padding({ left: 12, right: 12 })
+    .backgroundColor('#000000')
+    .borderRadius(17)
+    .border({ width: this.env.dark ? 0.5 : 0, color: '#2EFFFFFF', radius: 17 })
+    .shadow(PhoneStyle.floatingElevation(this.env.dark))
     .animation(Motion.state(this.env.reduceMotion))
     .id('live_view.preview.capsule')
   }
@@ -104,13 +113,13 @@ export struct LiveViewSettingsCard {
     Column({ space: 10 }) {
       Row({ space: 8 }) {
         Stack() {
-          Image($r('app.media.phone_persona_face')).width(22).height(22).objectFit(ImageFit.Contain)
+          Image($r('app.media.phone_persona_face')).width(20).height(20).objectFit(ImageFit.Contain)
         }
         .width(28)
         .height(28)
         .borderRadius(14)
-        .backgroundColor(Colors.subtle)
-        Column({ space: 2 }) {
+        .backgroundColor(Colors.control)
+        Column({ space: 1 }) {
           Text(this.headline(this.previewState))
             .fontSize(Tokens.interfaceFontVp(15, this.env.fontScale))
             .fontWeight(FontWeight.Bold)
@@ -121,7 +130,7 @@ export struct LiveViewSettingsCard {
             .fontColor(Colors.secondary)
             .maxLines(1)
         }.layoutWeight(1).alignItems(HorizontalAlign.Start)
-        Row({ space: 6 }) {
+        Row({ space: 5 }) {
           if (this.previewState.needsYou > 0) this.countChip(String(this.previewState.needsYou), Colors.needs)
           if (this.previewState.working > 0) this.countChip(String(this.previewState.working), Colors.working)
           if (this.previewState.unread > 0) this.countChip(String(this.previewState.unread), Colors.unread)
@@ -173,14 +182,37 @@ export struct LiveViewSettingsCard {
           }
         }.width('100%').alignItems(HorizontalAlign.Start)
       }, (item: FleetItem) => this.previewMode + ':' + item.id + ':' + String(this.liveView.lockDetails) + ':' + item.detail)
+
+      if (this.liveView.lockDetails && this.previewState.phase === 'needsYou') {
+        Row({ space: 8 }) {
+          Text(tr('live_view_preview_approve'))
+            .fontSize(Tokens.interfaceFontVp(12.5, this.env.fontScale))
+            .fontWeight(FontWeight.Medium)
+            .fontColor(Color.White)
+            .textAlign(TextAlign.Center)
+            .layoutWeight(1)
+            .padding({ top: 7, bottom: 7 })
+            .backgroundColor(Colors.positive)
+            .borderRadius(Tokens.capsule)
+          Text(tr('live_view_preview_deny'))
+            .fontSize(Tokens.interfaceFontVp(12.5, this.env.fontScale))
+            .fontWeight(FontWeight.Medium)
+            .fontColor(Colors.ink)
+            .textAlign(TextAlign.Center)
+            .layoutWeight(1)
+            .padding({ top: 7, bottom: 7 })
+            .backgroundColor(Colors.control)
+            .borderRadius(Tokens.capsule)
+        }.width('100%').padding({ top: 2 })
+      }
     }
     .width('100%')
-    .padding(Tokens.page)
-    .backgroundColor(this.env.dark ? '#E61F1F23' : '#F8FFFFFF')
+    .padding(14)
+    .backgroundColor(this.env.dark ? '#E61C1C1E' : '#F8FFFFFF')
     .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
-    .borderRadius(Tokens.card)
-    .border({ width: PhoneStyle.surfaceEdgeWidth(0.75), color: PhoneStyle.cardBorder(this.env.dark), radius: Tokens.card })
-    .shadow(PhoneStyle.heroElevation(this.env.dark))
+    .borderRadius(18)
+    .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.floatingBorder(this.env.dark), radius: 18 })
+    .shadow(PhoneStyle.floatingElevation(this.env.dark))
     .animation(Motion.state(this.env.reduceMotion))
     .id('live_view.preview.card')
   }
@@ -191,10 +223,11 @@ export struct LiveViewSettingsCard {
       Text(value)
         .fontSize(Tokens.interfaceFontVp(12, this.env.fontScale))
         .fontWeight(FontWeight.Bold)
+        .fontFeature('tnum 1')
         .fontColor(Colors.ink)
     }
-    .padding({ left: 8, right: 8, top: 3, bottom: 3 })
-    .backgroundColor(this.env.dark ? '#33FFFFFF' : Colors.control)
+    .padding({ left: 7, right: 7, top: 3, bottom: 3 })
+    .backgroundColor(Colors.control)
     .borderRadius(10)
   }
 
@@ -214,48 +247,52 @@ export struct LiveViewSettingsCard {
         .width('100%')
         .padding({ left: 4 })
 
-      // Status-bar capsule + Lock-screen banner preview inside an ambient glass stage
-      Column({ space: 12 }) {
+      // Hardware Live Capsule + Lock-Screen banner preview inside an iOS inset-grouped stage
+      Column({ space: 14 }) {
         Row() {
           this.previewCapsule()
         }.width('100%').justifyContent(FlexAlign.Center)
         this.previewCard()
-        Scroll() {
-          Row({ space: 5 }) {
-            ForEach(PREVIEW_MODES, (mode: string) => {
-              Button(this.modeTitle(mode), { type: ButtonType.Capsule })
-                .height(31)
-                .padding({ left: 8, right: 8 })
+        Row({ space: 2 }) {
+          ForEach(PREVIEW_MODES, (mode: string) => {
+            Button({ type: ButtonType.Capsule }) {
+              Text(this.modeTitle(mode))
                 .fontSize(Tokens.interfaceFontVp(11.5, this.env.fontScale))
                 .fontWeight(this.previewMode === mode ? FontWeight.Bold : FontWeight.Medium)
-                .fontColor(this.previewMode === mode ? Colors.link : Colors.secondary)
-                .backgroundColor(this.previewMode === mode ? Colors.selection : (this.env.dark ? '#28282B' : Colors.control))
-                .border({ width: this.previewMode === mode ? 1 : 0.5, color: this.previewMode === mode ? Colors.link : PhoneStyle.cardBorder(this.env.dark), radius: Tokens.capsule })
-                .scale({ x: this.pressedId === mode ? MotionTokens.pressScale : 1, y: this.pressedId === mode ? MotionTokens.pressScale : 1 })
-                .animation(Motion.state(this.env.reduceMotion))
-                .onTouch((event: TouchEvent) => {
-                  if (event.type === TouchType.Down) this.pressedId = mode;
-                  else if (event.type === TouchType.Up || event.type === TouchType.Cancel) this.pressedId = '';
-                })
-                .onClick(() => {
-                  Haptics.selection();
-                  Motion.run(this.getUIContext(), Motion.state(this.env.reduceMotion), () => {
-                    this.previewMode = mode;
-                  });
-                })
-                .id('live_view.preview.mode.' + mode)
-            }, (mode: string) => mode)
-          }
-        }.scrollable(ScrollDirection.Horizontal).scrollBar(BarState.Off).width('100%')
+                .fontColor(this.previewMode === mode ? Colors.ink : Colors.secondary)
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+            }
+            .layoutWeight(1)
+            .height(30)
+            .padding({ left: 6, right: 6 })
+            .backgroundColor(this.previewMode === mode ? Colors.surface : Color.Transparent)
+            .scale({ x: this.pressedId === mode ? MotionTokens.pressScale : 1, y: this.pressedId === mode ? MotionTokens.pressScale : 1 })
+            .animation(Motion.state(this.env.reduceMotion))
+            .onTouch((event: TouchEvent) => {
+              if (event.type === TouchType.Down) this.pressedId = mode;
+              else if (event.type === TouchType.Up || event.type === TouchType.Cancel) this.pressedId = '';
+            })
+            .onClick(() => {
+              Haptics.selection();
+              Motion.run(this.getUIContext(), Motion.state(this.env.reduceMotion), () => {
+                this.previewMode = mode;
+              });
+            })
+            .id('live_view.preview.mode.' + mode)
+          }, (mode: string) => mode)
+        }
+        .width('100%')
+        .padding(3)
+        .backgroundColor(Colors.control)
+        .borderRadius(Tokens.capsule)
       }
       .width('100%')
-      .padding({ left: 10, right: 10, top: 14, bottom: 12 })
-      .borderRadius(22)
-      .linearGradient({
-        direction: GradientDirection.RightBottom,
-        colors: [[Colors.heroGlow, 0], [Colors.heroGlowAlt, 0.5], [this.env.dark ? '#18181B' : '#EAECEF', 1]]
-      })
-      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: 22 })
+      .padding({ left: 12, right: 12, top: 14, bottom: 12 })
+      .backgroundColor(Colors.surface)
+      .borderRadius(20)
+      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: 20 })
+      .shadow(PhoneStyle.cardElevation(this.env.dark))
 
       // Live View toggles
       Column() {
@@ -270,6 +307,7 @@ export struct LiveViewSettingsCard {
               .fontColor(Colors.secondary)
           }.layoutWeight(1).alignItems(HorizontalAlign.Start)
           Toggle({ type: ToggleType.Switch, isOn: this.liveView.enabled })
+            .selectedColor(Colors.positive)
             .enabled(!this.liveView.busy)
             .accessibilityText(tr('live_view_enable'))
             .onChange((value: boolean) => {
@@ -292,6 +330,7 @@ export struct LiveViewSettingsCard {
               .fontColor(Colors.secondary)
           }.layoutWeight(1).alignItems(HorizontalAlign.Start)
           Toggle({ type: ToggleType.Switch, isOn: this.liveView.lockDetails })
+            .selectedColor(Colors.positive)
             .enabled(!this.liveView.busy && this.liveView.enabled)
             .accessibilityText(tr('live_view_lock_details'))
             .onChange((value: boolean) => {
@@ -311,7 +350,6 @@ export struct LiveViewSettingsCard {
             .fontWeight(FontWeight.Medium)
             .fontColor(Colors.onAction)
             .backgroundColor(Colors.action)
-            .shadow({ radius: 10, color: '#26007AFF', offsetY: 3 })
             .scale({ x: this.pressedId === 'publish' ? MotionTokens.pressScale : 1, y: this.pressedId === 'publish' ? MotionTokens.pressScale : 1 })
             .animation(Motion.release(this.env.reduceMotion))
             .onTouch((event: TouchEvent) => {
@@ -335,7 +373,6 @@ export struct LiveViewSettingsCard {
               .fontWeight(FontWeight.Medium)
               .fontColor(Colors.link)
               .backgroundColor(Colors.control)
-              .border({ width: 0.5, color: PhoneStyle.cardBorder(this.env.dark), radius: Tokens.capsule })
               .scale({ x: this.pressedId === 'stop' ? MotionTokens.pressScale : 1, y: this.pressedId === 'stop' ? MotionTokens.pressScale : 1 })
               .animation(Motion.release(this.env.reduceMotion))
               .onTouch((event: TouchEvent) => {

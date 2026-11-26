@@ -169,15 +169,16 @@ export class DemoRepository extends HubRepository {
     this.mutesData = demoRecord(['spaces', 'sessions', 'allowed'], [[], [], []]);
     const capabilities: DemoRecord = demoRecord(['read', 'send', 'approve', 'interrupt', 'terminal', 'close', 'rename'],
       [true, true, true, true, true, true, true]);
-    const session = (id: string, title: string, state: string, status: string, cwd: string, branch: string): DemoRecord => demoRecord(
-      ['id', 'session_id', 'machine_id', 'manager', 'title', 'state', 'status', 'cwd', 'repo_root', 'worktree', 'branch', 'space_name',
-        'source_kind', 'capabilities', 'pane_id', 'slot_name', 'assistant', 'archived', 'read_only', 'updated_at'],
-      [id, id, DEMO_MACHINE, DEMO_MANAGER, title, state, status, cwd, '/demo/ReleaseDesk', cwd, branch, 'ReleaseDesk', 'live',
-        cloneRecord(capabilities), 'demo:pane-' + id, title, false, false, false, '2026-11-11T09:00:00Z']);
+    const session = (id: string, title: string, state: string, status: string, cwd: string, branch: string,
+      launcher: string, model: string, lastText: string): DemoRecord => demoRecord(
+      ['id', 'session_id', 'machine_id', 'manager', 'title', 'state', 'status', 'cwd', 'repo_root', 'worktree', 'branch', 'git_branch', 'space_name',
+        'source_kind', 'capabilities', 'pane_id', 'slot_name', 'launcher', 'model', 'last_text', 'assistant', 'archived', 'read_only', 'updated_at'],
+      [id, id, DEMO_MACHINE, DEMO_MANAGER, title, state, status, cwd, '/demo/ReleaseDesk', cwd, branch, branch, 'ReleaseDesk', 'live',
+        cloneRecord(capabilities), 'demo:pane-' + id, title, launcher, model, lastText, false, false, false, '2026-11-27T09:00:00Z']);
     this.sessionsData = [
-      session('demo-agent-review', 'Review release checks', 'needs_you', 'idle', '/demo/ReleaseDesk', 'main'),
-      session('demo-agent-changelog', 'Prepare the changelog', 'working', 'working', '/demo/ReleaseDesk', 'docs'),
-      session('demo-agent-notes', 'Organize project notes', 'unread', 'done', '/demo/Notes', 'main')
+      session('demo-agent-review', 'Review release checks', 'needs_you', 'idle', '/demo/ReleaseDesk', 'main', 'claude', 'claude-sonnet-4-6', 'Release audit ready · Awaiting plan approval'),
+      session('demo-agent-changelog', 'Prepare the changelog', 'working', 'working', '/demo/ReleaseDesk', 'docs', 'codex', 'gpt-5.3-codex', 'Drafting v2.4 changelog & verifying diffs...'),
+      session('demo-agent-notes', 'Organize project notes', 'unread', 'done', '/demo/Notes', 'main', 'claude', 'claude-opus-4-6', 'Grouped 14 architecture notes by milestone.')
     ];
     this.conversationsData = [
       demoRecord(['id', 'session_id', 'machine_id', 'manager', 'title', 'main', 'kind'],
@@ -188,22 +189,28 @@ export class DemoRepository extends HubRepository {
         ['demo-auto-summary', 'demo-auto-summary', DEMO_MACHINE, DEMO_MANAGER, 'Daily summary', false, 'automatic', true])
     ];
     this.transcripts.set(this.transcriptKey(DEMO_MACHINE, this.mainId), [
-      this.item('assistant', 'Ready to explore the local Persona demo. Messages stay on this device and do not reach an agent or service.')
+      this.item('assistant', 'Ready to explore the local Persona demo. Messages stay on this device and do not reach an agent or service.'),
+      this.item('assistant', '### What you can preview offline\n- **Agents & Live Workbench** — inspect rich Markdown reports, code blocks, diffs, files, and terminal output\n- **Needs You Queue** — approve or decline the open release plan in *Review release checks*\n- **Machines & Quota** — browse live-shaped CPU, memory, per-core load, and subscription windows\n- **Inbox & To-Dos** — reply to sample threads, hand off items, or complete tasks')
     ]);
     this.transcripts.set(this.transcriptKey(DEMO_MACHINE, 'demo-recent-review'), [
-      this.item('user', 'What should I review before the release?'), this.item('assistant', 'Start with the release checks, then confirm the changelog and open issues.')
+      this.item('user', 'What should I review before the release?'),
+      this.item('assistant', 'Start with the release checks, then confirm the changelog and open issues.\n\n| Area | Status | Notes |\n| --- | --- | --- |\n| Host tests | Pass | 42/42 suites green |\n| Diff review | Needs You | Awaiting plan sign-off |\n| Docs | Working | Changelog draft in progress |')
     ]);
     this.transcripts.set(this.transcriptKey(DEMO_MACHINE, 'demo-auto-summary'), [
-      this.item('assistant', 'Three sample tasks are ready to inspect in this local demo.')
+      this.item('assistant', 'Three sample tasks are ready to inspect in this local demo:\n1. **Review release checks** (`needs_you`) — pre-release verification & open plan\n2. **Prepare the changelog** (`working`) — drafting highlights & bug fixes\n3. **Organize project notes** (`unread`) — finished architecture summary')
     ]);
     this.transcripts.set(this.transcriptKey(DEMO_MACHINE, 'demo-agent-review'), [
-      this.item('assistant', 'The release checklist is ready for review.'), this.item('assistant', 'A sample plan is waiting for your decision.')
+      this.item('user', 'Run the pre-release audit across ReleaseDesk and summarize what changed.'),
+      this.item('assistant', '### Release Audit Summary\n\nAll host test suites passed and two files in `ReleaseDesk` were updated.\n\n| Check | Result | Duration |\n| --- | --- | --- |\n| Unit & Domain Suite | Passed (42/42) | 1.8s |\n| Schema & Privacy Guard | Clean | 0.4s |\n| Bundle Packaging | Verified | 0.9s |\n\n```ts\nexport function verifyReleaseGate(checks: CheckResult[]): boolean {\n  return checks.every((item) => item.passed && !item.skipped);\n}\n```\n\n> Ready for final sign-off once you approve the release verification plan below.'),
+      this.item('assistant', 'A sample plan is waiting for your decision.')
     ]);
     this.transcripts.set(this.transcriptKey(DEMO_MACHINE, 'demo-agent-changelog'), [
-      this.item('user', 'Prepare a concise changelog draft.'), this.item('assistant', 'The local draft groups the sample changes by feature and fix.')
+      this.item('user', 'Prepare a concise changelog draft.'),
+      this.item('assistant', 'The local draft groups the sample changes by feature and fix.\n\n### Highlights\n- **Foldable Workbench**: side-by-side Pulse, Code, and Machines panes\n- **Liquid Glass**: borderless inset-grouped cards across light & dark schemes\n\n### Fixes\n- Normalized per-core load labels (`Load 2.4 · 0.2/core`)\n- Prevented duplicate row subtitles on narrow screens')
     ]);
     this.transcripts.set(this.transcriptKey(DEMO_MACHINE, 'demo-agent-notes'), [
-      this.item('assistant', 'The sample notes are organized. This session is complete.')
+      this.item('user', 'Summarize the architectural notes in `/demo/Notes`.'),
+      this.item('assistant', 'The sample notes are organized. This session is complete.\n\n- **Navigation**: 3-column tri-fold layout scales cleanly from 360vp to 1060vp+\n- **Offline Safety**: Demo data stays strictly in memory on-device')
     ]);
     this.interactionsData = [demoRecord(['id', 'machine_id', 'session_id', 'manager', 'status', 'revision', 'interaction'], [
       'demo-plan-review', DEMO_MACHINE, 'demo-agent-review', DEMO_MANAGER, 'open', 'demo-rev-1',
@@ -319,7 +326,9 @@ export class DemoRepository extends HubRepository {
     if (resource==='model-config') return this.modelConfig(parts,verb,input);
     if (resource === 'assistant') return this.assistant(parts, verb, input, operationId);
     if (resource === 'managers') return this.managers(parts, verb);
-    if (resource === 'machines') return this.machinesRoute(parts, verb);
+    if (resource === 'machines') return this.machinesRoute(parts, query, verb);
+    if (resource === 'metrics') return this.allMetricsRoute(verb);
+    if (resource === 'usage') return this.usageRoute(parts, verb);
     if (resource === 'sessions') return this.sessionsRoute(parts, verb, input, operationId);
     if (resource === 'interactions') return this.interactions(parts, verb, input);
     if (resource === 'pins' || resource === 'mutes') return this.preferences(resource, parts, verb, input);
@@ -342,9 +351,11 @@ export class DemoRepository extends HubRepository {
 
   private machineData(): DemoRecord {
     const repositories: DemoRecord[] = [demoRecord(['path', 'name'], ['/demo/ReleaseDesk', 'ReleaseDesk'])];
-    return demoRecord(['id', 'manager', 'name', 'machine_id', 'platform', 'os', 'online', 'trust', 'pending', 'pending_confirm', 'directories', 'repos'],
+    const system: DemoRecord = demoRecord(['os', 'distro', 'name', 'version', 'cores', 'memory'],
+      ['darwin', 'macos', 'macOS Sequoia', '15.6', 12, 38654705664]);
+    return demoRecord(['id', 'manager', 'name', 'machine_id', 'platform', 'os', 'online', 'trust', 'pending', 'pending_confirm', 'directories', 'repos', 'system'],
       [DEMO_MACHINE, DEMO_MANAGER, 'My Mac', DEMO_MACHINE, 'darwin', 'macOS', true, 'personal', false, false,
-        ['/demo/ReleaseDesk', '/demo/Notes'], repositories]);
+        ['/demo/ReleaseDesk', '/demo/Notes'], repositories, system]);
   }
 
   private activeSessions(): DemoRecord[] { return this.sessionsData.filter((item: DemoRecord) => !Wire.bool(item, 'archived')); }
@@ -478,10 +489,123 @@ export class DemoRepository extends HubRepository {
     return demoRecord(['default', 'managers'], [DEMO_MANAGER, rows]);
   }
 
-  private machinesRoute(parts: string[], method: string): DemoRecord {
+  private machinesRoute(parts: string[], query: Record<string, string>, method: string): DemoRecord {
     if (parts.length === 1 && method === 'GET') return demoRecord(['machines'], [[this.machineData()]]);
-    if (parts.length === 2 && parts[1] === DEMO_MACHINE && method === 'GET') return demoRecord(['machine'], [this.machineData()]);
+    if (parts.length >= 2 && parts[1] === DEMO_MACHINE && method === 'GET') {
+      if (parts.length === 2) return demoRecord(['machine'], [this.machineData()]);
+      if (parts.length === 3 && parts[2] === 'metrics') return demoRecord(['metrics'], [this.demoMachineMetrics(query['range'] || '1h')]);
+      if (parts.length === 3 && parts[2] === 'fs') return this.demoDirectory(query['path'] || '/demo/ReleaseDesk');
+      if (parts.length === 4 && parts[2] === 'fs' && parts[3] === 'find') {
+        return demoRecord(['files', 'truncated'], [['README.md', 'CHANGELOG.md', 'package.json', 'src/release.ts', 'tests/release.test.ts'], false]);
+      }
+      if (parts.length === 3 && parts[2] === 'file') return this.demoFileRead(query['path'] || '');
+      if (parts.length === 4 && parts[2] === 'git' && parts[3] === 'status') return this.demoGitStatus();
+      if (parts.length === 4 && parts[2] === 'git' && parts[3] === 'diff') return this.demoGitDiff(query['path'] || '');
+    }
     throw new HttpFailure(404, 'demo_unsupported');
+  }
+
+  private allMetricsRoute(method: string): DemoRecord {
+    if (method !== 'GET') throw new HttpFailure(404, 'demo_unsupported');
+    return demoRecord(['machines'], [[this.demoMachineMetrics('1h')]]);
+  }
+
+  private usageRoute(parts: string[], method: string): DemoRecord {
+    if (parts.length === 2 && parts[1] === 'windows' && method === 'GET') {
+      const now = Date.now();
+      const iso = (offsetMs: number): string => new Date(now + offsetMs).toISOString();
+      const claude = demoRecord(['id', 'provider', 'name', 'plan', 'sampled_at', 'stale_at', 'stale', 'local', 'machines', 'sources', 'windows'], [
+        'demo-claude', 'claude', 'Claude', 'Max', iso(-20000), iso(3600000), false, false, ['My Mac'], ['oauth'], [
+          demoRecord(['label', 'used_percent', 'resets_at', 'window_minutes'], ['5h', 34, iso(3.2 * 3600000), 300]),
+          demoRecord(['label', 'used_percent', 'resets_at', 'window_minutes'], ['7d', 52, iso(92 * 3600000), 10080])
+        ]
+      ]);
+      const codex = demoRecord(['id', 'provider', 'name', 'plan', 'sampled_at', 'stale_at', 'stale', 'local', 'machines', 'sources', 'windows'], [
+        'demo-codex', 'codex', 'Codex', 'Pro', iso(-35000), iso(3600000), false, false, ['My Mac'], ['cli'], [
+          demoRecord(['label', 'used_percent', 'resets_at', 'window_minutes'], ['5h', 18, iso(4.1 * 3600000), 300]),
+          demoRecord(['label', 'used_percent', 'resets_at', 'window_minutes'], ['7d', 41, iso(116 * 3600000), 10080])
+        ]
+      ]);
+      return demoRecord(['accounts'], [[claude, codex]]);
+    }
+    throw new HttpFailure(404, 'demo_unsupported');
+  }
+
+  private demoMachineMetrics(range: string): DemoRecord {
+    const now = Math.floor(Date.now() / 1000);
+    const span = range === '24h' ? 86400 : range === '6h' ? 21600 : 3600;
+    const step = Math.floor(span / 24);
+    const points: DemoRecord[] = [];
+    for (let i = 0; i <= 24; i++) {
+      const t = now - (24 - i) * step;
+      const cpu = Math.round((20 + 11 * Math.sin(i * 0.45) + 4 * Math.cos(i * 0.9)) * 10) / 10;
+      const mem = Math.round((18.2 + 0.8 * Math.sin(i * 0.3)) * 1024 * 1024 * 1024);
+      const load = Math.round((1.8 + 0.7 * Math.sin(i * 0.4)) * 100) / 100;
+      const rx = Math.round(310000 + 180000 * Math.abs(Math.sin(i * 0.55)));
+      const tx = Math.round(92000 + 55000 * Math.abs(Math.cos(i * 0.55)));
+      points.push(demoRecord(['t', 'cpu', 'mem', 'load', 'rx', 'tx'], [t, cpu, mem, load, rx, tx]));
+    }
+    const system = demoRecord(['os', 'distro', 'name', 'version', 'cores', 'memory'],
+      ['darwin', 'macos', 'macOS Sequoia', '15.6', 12, 38654705664]);
+    const latest = demoRecord(['cpu', 'load', 'mem_used', 'mem_total', 'disk_used', 'disk_total', 'net_rx', 'net_tx'],
+      [28.4, 2.4, 19327352832, 38654705664, 412316860416, 1000204886016, 485000, 142000]);
+    const today = demoRecord(['in', 'out', 'cache_write', 'cache_read'], [184000, 62000, 41000, 980000]);
+    const usage = demoRecord(['per_minute', 'today', 'recent'], [12400, today, [8200, 9600, 11200, 10800, 13400, 12900, 11800, 12400]]);
+    return demoRecord(['machine_id', 'system', 'latest', 'points', 'usage'], [DEMO_MACHINE, system, latest, points, usage]);
+  }
+
+  private demoDirectory(requestedPath: string): DemoRecord {
+    const clean = safePath(requestedPath) ? requestedPath : '/demo/ReleaseDesk';
+    const entry = (name: string, dir: boolean, size: number): DemoRecord =>
+      demoRecord(['name', 'dir', 'symlink', 'link_target', 'link_broken', 'size', 'mtime', 'ignored'],
+        [name, dir, false, '', false, size, '2026-11-27T08:50:00Z', false]);
+    const rows: DemoRecord[] = clean === '/demo/Notes'
+      ? [entry('architecture.md', false, 2480), entry('release-checklist.md', false, 1640)]
+      : clean.endsWith('/src')
+        ? [entry('release.ts', false, 1420), entry('index.ts', false, 680)]
+        : clean.endsWith('/tests')
+          ? [entry('release.test.ts', false, 1920)]
+          : [entry('src', true, 0), entry('tests', true, 0), entry('CHANGELOG.md', false, 1840), entry('README.md', false, 1290), entry('package.json', false, 540)];
+    return demoRecord(['path', 'truncated', 'entries'], [clean, false, rows]);
+  }
+
+  private demoFileRead(path: string): DemoRecord {
+    const name = path.split('/').pop() || 'README.md';
+    const bodies: Record<string, string> = {
+      'CHANGELOG.md': '# v2.4.0\n\n## Highlights\n- Foldable 3-column Live Workbench for tri-fold & tablet layouts\n- iOS 26 borderless Liquid Glass card hierarchy\n\n## Fixes\n- Per-core machine load formatting (`Load 2.4 · 0.2/core`)\n',
+      'release.ts': 'export interface CheckResult {\n  name: string;\n  passed: boolean;\n  skipped?: boolean;\n}\n\nexport function verifyReleaseGate(checks: CheckResult[]): boolean {\n  return checks.every((item) => item.passed && !item.skipped);\n}\n',
+      'README.md': '# ReleaseDesk\n\nSynthetic sample workspace for offline Persona preview.\n\n1. Inspect files & diffs safely on-device.\n2. Review release checklist tasks and approval gates.\n'
+    };
+    const text = bodies[name] || ('// Sample preview file: ' + (safePath(path) ? path : '/demo/ReleaseDesk/' + name) + '\n');
+    return demoRecord(['name', 'size', 'mime', 'text', 'offset', 'next', 'truncated'],
+      [name, utf8Bytes(text), 'text/plain; charset=utf-8', text, 0, 0, false]);
+  }
+
+  private demoGitStatus(): DemoRecord {
+    const file = (path: string, index: string, worktree: string, added: number, deleted: number): DemoRecord =>
+      demoRecord(['path', 'orig_path', 'index', 'worktree', 'added', 'deleted', 'binary'], [path, '', index, worktree, added, deleted, false]);
+    const commit = (hash: string, subject: string, date: string): DemoRecord =>
+      demoRecord(['hash', 'subject', 'author', 'date'], [hash, subject, 'Demo Builder', date]);
+    return demoRecord(['is_repo', 'root', 'branch', 'upstream', 'ahead', 'behind', 'gone', 'stashes', 'head', 'commits', 'files'], [
+      true, '/demo/ReleaseDesk', 'main', 'origin/main', 1, 0, false, 0,
+      commit('a1b2c3d', 'polish(ui): refine Liquid Glass spacing and per-core load', '2026-11-27T08:45:00Z'),
+      [
+        commit('a1b2c3d', 'polish(ui): refine Liquid Glass spacing and per-core load', '2026-11-27T08:45:00Z'),
+        commit('9e8d7c6', 'feat(workbench): add Next Unread relay navigation', '2026-11-27T07:20:00Z')
+      ],
+      [
+        file('src/release.ts', 'M', '.', 12, 3),
+        file('CHANGELOG.md', '.', 'M', 8, 1)
+      ]
+    ]);
+  }
+
+  private demoGitDiff(path: string): DemoRecord {
+    const target = path || 'src/release.ts';
+    const diff = target === 'CHANGELOG.md'
+      ? 'diff --git a/CHANGELOG.md b/CHANGELOG.md\n--- a/CHANGELOG.md\n+++ b/CHANGELOG.md\n@@ -1,4 +1,6 @@\n # Changelog\n \n+## v2.4.0\n+- Foldable 3-column Live Workbench & Next Unread relay\n+- iOS 26 borderless Liquid Glass refinement\n'
+      : 'diff --git a/src/release.ts b/src/release.ts\n--- a/src/release.ts\n+++ b/src/release.ts\n@@ -1,6 +1,8 @@\n export interface CheckResult {\n   name: string;\n   passed: boolean;\n+  skipped?: boolean;\n }\n \n export function verifyReleaseGate(checks: CheckResult[]): boolean {\n-  return checks.every((item) => item.passed);\n+  return checks.every((item) => item.passed && !item.skipped);\n }\n';
+    return demoRecord(['diff', 'truncated'], [diff, false]);
   }
 
   private sessionsRoute(parts: string[], method: string, body: DemoRecord, operationId: string): DemoRecord {
@@ -529,6 +653,17 @@ export class DemoRepository extends HubRepository {
     }
     if (action === 'interrupt' && method === 'POST') {
       record['status'] = 'interrupted'; record['state'] = 'idle'; return demoRecord(['state'], ['done']);
+    }
+    if (action === 'screen' && method === 'GET') {
+      const text = [
+        '$ npm test -- release-gate',
+        '  ✓ verifyReleaseGate enforces zero skipped checks (1.4ms)',
+        '  ✓ privacy check clean across changed files (0.9ms)',
+        '  ✓ bundle assets & localization keys verified (1.1ms)',
+        '',
+        'Summary: 42 passed, 0 failed (local demo preview)'
+      ].join('\n');
+      return demoRecord(['text'], [text]);
     }
     throw new HttpFailure(404, 'demo_unsupported');
   }

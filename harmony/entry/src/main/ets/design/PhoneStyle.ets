@@ -14,21 +14,27 @@ export class PhoneStyle {
     if (Colors.styleID === 'lark') return {radius:0,color:Color.Transparent};
     return fallback;
   }
-  static cardElevation(dark: boolean): ShadowOptions {
+  static cardElevation(_dark: boolean): ShadowOptions {
+    return PhoneStyle.surfaceShadow({ radius: 0, color: Color.Transparent });
+  }
+  static floatingElevation(dark: boolean): ShadowOptions {
     return PhoneStyle.surfaceShadow({
-      radius: dark ? 14 : 14,
-      color: dark ? '#4D000000' : '#0E000000',
+      radius: dark ? 14 : 12,
+      color: dark ? '#40000000' : '#12000000',
       offsetY: dark ? 4 : 3
     });
   }
   static heroElevation(dark: boolean): ShadowOptions {
     return PhoneStyle.surfaceShadow({
-      radius: dark ? 22 : 20,
-      color: dark ? '#66000000' : '#18000000',
-      offsetY: dark ? 8 : 6
+      radius: dark ? 18 : 16,
+      color: dark ? '#4D000000' : '#14000000',
+      offsetY: dark ? 6 : 4
     });
   }
-  static cardBorder(dark: boolean): ResourceColor {
+  static cardBorder(_dark: boolean): ResourceColor {
+    return Colors.styleEdge || Color.Transparent;
+  }
+  static floatingBorder(dark: boolean): ResourceColor {
     return Colors.styleEdge || (dark ? Colors.glassRim : Colors.divider);
   }
   static surfaceEdgeWidth(fallback: number): number {
@@ -108,8 +114,8 @@ export struct PhoneIconButton {
     }.width(this.controlDiameter).height(this.controlDiameter).padding(0)
       .backgroundColor(Colors.styleID === 'glass' ? (this.env.dark ? '#CC1C1C1E' : '#E6FFFFFF') : Colors.surface)
       .backgroundBlurStyle(Colors.styleID === 'glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
-      .border({ width: PhoneStyle.surfaceEdgeWidth(.5), color: Colors.styleEdge || Colors.divider, radius: this.controlDiameter / 2 })
-      .shadow(PhoneStyle.surfaceShadow({ radius: this.env.dark ? 8 : 10, color: this.env.dark ? '#33000000' : '#0E000000', offsetY: 2 }))
+      .border({ width: PhoneStyle.surfaceEdgeWidth(.5), color: PhoneStyle.floatingBorder(this.env.dark), radius: this.controlDiameter / 2 })
+      .shadow(PhoneStyle.floatingElevation(this.env.dark))
       .scale({ x: this.pressed ? MotionTokens.pressScale : 1, y: this.pressed ? MotionTokens.pressScale : 1 })
       .animation(Motion.release(this.env.reduceMotion))
       .onTouch((event: TouchEvent) => {

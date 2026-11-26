@@ -78,6 +78,38 @@ function settingIcon(id:string):Resource {
   }
 }
 
+function settingTint(id:string):ResourceColor {
+  switch (id) {
+    case 'notifications':
+    case 'phone_native_alarms':
+    case 'phone_health_reports':
+      return Colors.danger;
+    case 'appearance':
+    case 'phone_language_options':
+      return '#5856D6';
+    case 'models':
+    case 'assistant':
+    case 'privacy':
+      return Colors.ai;
+    case 'machines':
+    case 'phone_live_screen':
+    case 'ssh':
+      return Colors.teal;
+    case 'channels':
+    case 'phone_inbox_sources':
+    case 'connectors':
+      return Colors.positive;
+    case 'phone_meeting_options':
+    case 'schedules':
+    case 'phone_knowledge_selection':
+    case 'memory':
+    case 'phone_agent_layout':
+      return Colors.working;
+    default:
+      return Colors.iconAccent;
+  }
+}
+
 function settingArtwork(id:string):Resource|undefined {
   switch (id) {
     case 'models': return $r('app.media.phone_settings_model');
@@ -227,28 +259,27 @@ export struct SettingsDirectory {
     Button({type:ButtonType.Normal}) { Row({space:12}) {
       Stack({alignContent:Alignment.BottomEnd}) {
         Text(this.account().slice(0,1)).fontSize('17vp').fontWeight(FontWeight.Bold).fontColor(Color.White)
-          .width(40).height(40).textAlign(TextAlign.Center).backgroundColor(Colors.ai).borderRadius(20)
-          .linearGradient({ direction: GradientDirection.RightBottom, colors: [['#7B6FF0', 0], ['#4B3EC4', 1]] })
-        Circle().width(11).height(11).fill(this.model.connected ? Colors.positive : Colors.secondary)
+          .width(38).height(38).textAlign(TextAlign.Center).backgroundColor(Colors.ai).borderRadius(19)
+        Circle().width(10).height(10).fill(this.model.connected ? Colors.positive : Colors.secondary)
           .stroke(Colors.card(this.elevated)).strokeWidth(2)
-      }.width(40).height(40)
+      }.width(38).height(38)
       Column({space:2}) {
         Text(this.currentManager() ? tr('settings_assistant_named').replace('{name}',this.account()) : tr('phone_settings_assistant'))
-          .fontSize(16).maxFontScale(Tokens.interfaceScaleFor(16)).fontWeight(FontWeight.Bold).fontColor(Colors.ink).maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis})
+          .fontSize(16).maxFontScale(Tokens.interfaceScaleFor(16)).fontWeight(FontWeight.Medium).fontColor(Colors.ink).maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis})
         Text(tr(this.model.connected ? 'online' : 'offline'))
           .fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor(this.model.connected ? Colors.positive : Colors.secondary).maxLines(1)
       }.layoutWeight(1).alignItems(HorizontalAlign.Start)
       if (this.currentManager()) {
         Row({space:4}) {
           Text(tr('phone_settings_switch')).fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontWeight(FontWeight.Medium).fontColor(Colors.link)
-          SymbolGlyph($r('sys.symbol.chevron_down')).fontSize('12vp').fontColor([Colors.link]).accessibilityLevel('no')
+          SymbolGlyph($r('sys.symbol.chevron_down')).fontSize('12vp').fontColor([Colors.tertiary]).accessibilityLevel('no')
         }
-        .padding({left:10,right:9,top:5,bottom:5})
-        .backgroundColor(Colors.selection)
+        .padding({left:10,right:8,top:5,bottom:5})
+        .backgroundColor(Colors.control)
         .borderRadius(Tokens.capsule)
       }
-    }.width('100%').padding({left:15,right:14,top:13,bottom:13})
-      }.width('100%').constraintSize({minHeight:PhoneStyle.formSize(66,78,this.environment.fontScale)}).padding(0)
+    }.width('100%').padding({left:15,right:14,top:12,bottom:12})
+      }.width('100%').constraintSize({minHeight:PhoneStyle.formSize(62,74,this.environment.fontScale)}).padding(0)
       .backgroundColor(Colors.card(this.elevated))
       .borderRadius(PhoneStyle.cardRadius)
       .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.cardBorder(this.environment.dark),radius:PhoneStyle.cardRadius})
@@ -275,7 +306,7 @@ export struct SettingsDirectory {
         } else if (title) PhoneSectionTitle({text:title})
         Column() {
           ForEach(entries ?? this.results,(id:string,ix:number) => {
-            PhoneSettingsRow({elevated:this.elevated,label:settingLabel(id,this.label),detail:this.subtitle(id),symbol:settingIcon(id),artwork:settingArtwork(id),tint:Colors.iconAccent,
+            PhoneSettingsRow({elevated:this.elevated,label:settingLabel(id,this.label),detail:this.subtitle(id),symbol:settingIcon(id),artwork:settingArtwork(id),tint:settingTint(id),
               identity:id==='phone_settings_advanced' ? 'settings.advanced' : 'settings.'+id,last:ix+1===(entries ?? this.results).length,action:() => this.openEntry(id)})
           },(id:string,ix:number) => JSON.stringify([id,ix,this.subtitle(id),(entries ?? this.results).length]))
           if (!(entries ?? this.results).length) Text(tr('no_results')).fontSize(16).maxFontScale(Tokens.interfaceScaleFor(16)).fontColor(Colors.secondary).width('100%').padding(15).id('settings.no_results')
@@ -413,7 +444,7 @@ export struct PhoneSettingsOptions {
         ListItem() {
         Column() {
           ForEach(AGENT_OPTIONS,(id:string,ix:number) => {
-            PhoneSettingsRow({elevated:this.elevated,insetGrouped:true,label:settingLabel(id,this.label),symbol:settingIcon(id),artwork:settingArtwork(id),tint:Colors.iconAccent,
+            PhoneSettingsRow({elevated:this.elevated,insetGrouped:true,label:settingLabel(id,this.label),symbol:settingIcon(id),artwork:settingArtwork(id),tint:settingTint(id),
               identity:'settings.'+id,last:ix === AGENT_OPTIONS.length-1,action:() => this.onOpen(id)})
           },(id:string) => id)
         }.width('100%').clip(true).backgroundColor(Colors.card(this.elevated)).borderRadius(PhoneStyle.settingsGroupRadius)
