@@ -1,10 +1,12 @@
 import { Symbols } from '../design/Symbols';
 import { Colors } from '../design/Colors';
+import { PhoneStyle } from '../design/PhoneStyle';
 import { Tokens } from '../design/Tokens';
 import { tr } from '../design/Strings';
 import { ClientModel } from '../models/ClientModel';
 import { Wire } from '../models/Wire';
 import { nativeEnvironment, NativeEnvironment } from '../platform/NativeEnvironment';
+import { Haptics } from '../platform/Haptics';
 
 class WelcomeSuggestion {
   id: string;
@@ -98,9 +100,11 @@ export struct AssistantWelcome {
         Text(item.title).fontSize(16).fontWeight(FontWeight.Medium).fontColor(Colors.ink)
           .width('100%').textAlign(TextAlign.Start)
       }.width('100%').constraintSize({ minHeight: 92 }).alignItems(HorizontalAlign.Start).justifyContent(FlexAlign.Start).padding(14)
-    }.width('100%').padding(0).backgroundColor(Colors.control).borderRadius(15)
+    }.width('100%').padding(0).backgroundColor(Colors.surface).borderRadius(16)
+      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: Colors.divider, radius: 16 })
+      .shadow(PhoneStyle.cardElevation(this.environment.dark))
       .accessibilityText(item.title).enabled(item.local || this.canAsk)
-      .onClick(() => this.choose(item)).id('welcome.suggestion.' + item.id)
+      .onClick(() => { Haptics.tap(); this.choose(item); }).id('welcome.suggestion.' + item.id)
   }
   @Builder helpSheet() {
     Column({ space: Tokens.page }) {

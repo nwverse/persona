@@ -8,6 +8,7 @@ import { Tokens } from '../design/Tokens';
 import { Colors } from '../design/Colors';
 import { nativeEnvironment } from '../platform/NativeEnvironment';
 import { Haptics } from '../platform/Haptics';
+import { toastCenter } from '../models/ToastCenter';
 import { StreamTailCaret } from './StatusMotionMarks';
 
 @ComponentV2
@@ -118,10 +119,10 @@ export struct MarkdownText {
     try {
       await pasteboard.getSystemPasteboard().setData(pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, text));
       Haptics.success();
-      this.getUIContext().getPromptAction().showToast({ message: tr('done') });
+      toastCenter.success(tr('done'));
     } catch (_) {
       Haptics.error();
-      this.getUIContext().getPromptAction().showToast({ message: tr('failed') });
+      toastCenter.error(tr('failed'));
     }
   }
 

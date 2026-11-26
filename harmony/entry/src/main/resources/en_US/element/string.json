@@ -8723,6 +8723,38 @@
     {
       "name": "fold_posture_hover",
       "value": "Tabletop Hover"
+    },
+    {
+      "name": "turn_changes_one",
+      "value": "1 file changed"
+    },
+    {
+      "name": "turn_changes_many",
+      "value": "{count} files changed"
+    },
+    {
+      "name": "turn_changes_review",
+      "value": "Review"
+    },
+    {
+      "name": "turn_changes_more",
+      "value": "Show {count} more"
+    },
+    {
+      "name": "bubble_show_more",
+      "value": "Show More"
+    },
+    {
+      "name": "bubble_show_less",
+      "value": "Show Less"
+    },
+    {
+      "name": "live_view_published_toast",
+      "value": "Live View updated on status bar"
+    },
+    {
+      "name": "agents_marked_seen_toast",
+      "value": "Marked {count} as seen"
     }
   ]
 }

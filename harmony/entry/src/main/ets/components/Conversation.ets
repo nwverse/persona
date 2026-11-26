@@ -60,6 +60,18 @@ import { Motion } from '../design/Motion';
 import { MotionTokens } from '../core/MotionTokens';
 import { Haptics } from '../platform/Haptics';
 import { WorkingArcSpinner } from './StatusMotionMarks';
+import {
+  extractTurnChangesFromRaw,
+  extractWorkNowFromRaw,
+  extractWorkStepsFromRaw
+} from '../core/WorkPresentation';
+import type { TurnChangeSet, WorkStepView } from '../core/WorkPresentation';
+import { WorkStepTimeline, TurnChangesCard } from './WorkStepsCard';
+import { evaluateBubbleFold } from '../core/BubbleFold';
+import type { BubbleFoldDecision } from '../core/BubbleFold';
+import { buildEdgeScrubMarks } from '../core/EdgeScrub';
+import type { EdgeScrubMark, EdgeScrubSourceLine } from '../core/EdgeScrub';
+import { ChatEdgeScrubOverlay } from './ChatEdgeScrubOverlay';
 
 class ConversationFrame extends FrameCallback {
   private action: () => void;
@@ -231,6 +243,7 @@ export struct Conversation {
   private feedKey: string = '';
   private feedTimer: number = -1;
   @Local expanded: string[] = [];
+  @Local private unfoldedBubbles: string[] = [];
   private scroller: Scroller = new Scroller();
   private readingLease: ClientViewLease | undefined;
   private readingKey: string = '';
@@ -1665,11 +1678,70 @@ export struct Conversation {
     return false;
   }
 
+  private workNowText(message: ChatMessage): string {
+    if (!message.running) return '';
+    const live = extractWorkNowFromRaw(message.raw, true);
+    if (!live) return '';
+    return live.more > 0 ? live.text + ' +' + String(live.more) : live.text;
+  }
+
+  private workStepsFor(message: ChatMessage): WorkStepView[] {
+    return extractWorkStepsFromRaw(message.raw, message.running);
+  }
+
+  private turnChangesFor(message: ChatMessage): TurnChangeSet | undefined {
+    if (message.running) return undefined;
+    return extractTurnChangesFromRaw(message.raw);
+  }
+
+  private userBubbleFold(message: ChatMessage, maxBubbleWidth: number): BubbleFoldDecision {
+    if (message.role !== 'user' || !message.text) {
+      return { foldable: false, estimatedLines: 1, foldedText: message.text };
+    }
+    return evaluateBubbleFold(message.text, maxBubbleWidth, this.environment.fontScale);
+  }
+
+  private toggleBubbleFold(id: string): void {
+    Haptics.tap();
+    Motion.run(this.getUIContext(), Motion.layout(this.environment.reduceMotion), () => {
+      this.unfoldedBubbles = this.unfoldedBubbles.includes(id)
+        ? this.unfoldedBubbles.filter((entry: string) => entry !== id)
+        : this.unfoldedBubbles.concat([id]);
+    });
+  }
+
+  @Computed get edgeScrubMarks(): EdgeScrubMark[] {
+    const sources: EdgeScrubSourceLine[] = [];
+    for (let i = 0; i < this.lines.length; i++) {
+      const msg = this.lines[i].message;
+      if (!msg) continue;
+      sources.push({
+        id: this.lines[i].id,
+        role: msg.role,
+        text: msg.text,
+        hasImages: msg.imagePaths.length > 0 || !!msg.imageId || msg.localImageCount > 0
+      });
+    }
+    return buildEdgeScrubMarks(sources);
+  }
+
+  private jumpToEdgeMark(mark: EdgeScrubMark): void {
+    Haptics.tap();
+    try {
+      this.scroller.scrollToIndex(this.readingPrefix() + mark.lineIndex, !this.environment.reduceMotion, ScrollAlign.START);
+    } catch (_) {}
+  }
+
   @Builder messageBody(entry: RepeatItem<ConversationLine>) {
     Column({ space: Tokens.gap }) {
       if (entry.item.message!.role === 'work' && entry.item.message!.running && !entry.item.message!.work) {
         Row({ space: 6 }) {
           WorkingArcSpinner({ diameter: 14, tint: Colors.working, surface: Color.Transparent, showCoreDot: false })
+          if (this.workNowText(entry.item.message!)) {
+            Text(this.workNowText(entry.item.message!))
+              .fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.secondary)
+              .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).flexShrink(1)
+          }
           RunningTurnLabel({ start: entry.item.message!.at, active: this.active })
         }.id('chat.work.' + entry.item.message!.id)
       } else if (entry.item.message!.work) {
@@ -1677,14 +1749,22 @@ export struct Conversation {
           Row({ space: 7 }) {
             if (entry.item.message!.running) WorkingArcSpinner({ diameter: 14, tint: Colors.working, surface: Color.Transparent, showCoreDot: false })
             else SymbolGlyph($r('sys.symbol.list_bullet')).fontSize(15).fontColor([Colors.secondary])
-            if (entry.item.message!.running) RunningTurnLabel({ start: entry.item.message!.at, active: this.active })
-            else Text(tr('work_summary')).fontSize(14).maxFontScale(Tokens.interfaceScaleFor(14)).fontWeight(FontWeight.Medium).fontColor(Colors.secondary)
+            if (entry.item.message!.running && this.workNowText(entry.item.message!)) {
+              Text(this.workNowText(entry.item.message!))
+                .fontSize(13).maxFontScale(Tokens.interfaceScaleFor(13)).fontWeight(FontWeight.Medium).fontColor(Colors.ink)
+                .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).flexShrink(1)
+              RunningTurnLabel({ start: entry.item.message!.at, active: this.active })
+            } else if (entry.item.message!.running) {
+              RunningTurnLabel({ start: entry.item.message!.at, active: this.active })
+            } else {
+              Text(tr('work_summary')).fontSize(14).maxFontScale(Tokens.interfaceScaleFor(14)).fontWeight(FontWeight.Medium).fontColor(Colors.secondary)
+            }
             if (entry.item.message!.toolCount > 0) Text(tr('tool') + ' ' + String(entry.item.message!.toolCount)).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor(Colors.secondary)
             if (entry.item.message!.thoughtCount > 0) Text(tr('phone_chat_thoughts') + ' ' + String(entry.item.message!.thoughtCount)).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor(Colors.secondary)
             SymbolGlyph(Symbols.down).fontSize(12).fontColor([Colors.secondary])
               .rotate({ angle: this.expanded.includes(entry.item.message!.id) ? 0 : -90 })
               .animation(Motion.state(this.environment.reduceMotion))
-          }.constraintSize({ minHeight: 32 })
+          }.constraintSize({ minHeight: 32, maxWidth: '100%' })
         }.padding({ left: 10, right: 10 }).borderRadius(12)
           .backgroundColor(this.model.style==='beautiful' ? this.composerSurface() : Colors.control)
           .outline({width:this.model.style==='beautiful' ? 1 : 0.5,color:this.model.style==='beautiful' ? this.composerRim() : Colors.divider,radius:12})
@@ -1698,11 +1778,17 @@ export struct Conversation {
           })
           .id('chat.work.' + entry.item.message!.id)
         if (this.expanded.includes(entry.item.message!.id)) {
-          Text(entry.item.message!.work).fontFamily('monospace').fontSize(14).fontColor(Colors.secondary).lineHeight(21)
-            .copyOption(CopyOptions.LocalDevice).onTextSelectionChange((start: number, end: number) => this.selectReadingText(entry.item.id, end > start))
-            .padding(12).width('100%').backgroundColor(Colors.control).borderRadius(14)
-            .border({ width: 0.5, color: Colors.divider, radius: 14 })
-            .transition(Motion.slideFade(this.environment.reduceMotion, -6))
+          WorkStepTimeline({
+            steps: this.workStepsFor(entry.item.message!),
+            fallbackText: entry.item.message!.work,
+            onOpenFile: (path: string) => this.onOpenFile(path)
+          }).transition(Motion.slideFade(this.environment.reduceMotion, -6))
+        }
+        if (this.turnChangesFor(entry.item.message!)) {
+          TurnChangesCard({
+            changes: this.turnChangesFor(entry.item.message!)!,
+            onOpenFile: (path: string) => this.onOpenFile(path)
+          })
         }
       }
       if (entry.item.message!.localImageCount > 0) Text(tr('photos') + ' · ' + entry.item.message!.localImageCount).fontSize(Tokens.meta).maxFontScale(Tokens.interfaceScaleFor(Tokens.meta)).fontColor($r('sys.color.font_secondary'))
@@ -1726,12 +1812,39 @@ export struct Conversation {
         MessageSurface({ sourceId: 'chat.lift.source.'+entry.item.id, own: entry.item.message!.role === 'user', agentPrompt: this.model.selected.kind === 'session' && entry.item.message!.role === 'user',
           personaReply: this.model.selected.kind === 'conversation' && entry.item.message!.role === 'assistant', maximum: entry.item.message!.role === 'user' ? Math.max(Tokens.touch, Math.min(this.availableWidth, Tokens.readingMax) - Tokens.page * 2 - Tokens.touch) : Tokens.readingMax }) {
           if (entry.item.message!.role === 'assistant' && this.model.selected.kind === 'conversation') AssistantMessage({ model: this.model, feed: this.feed, message: entry.item.message!, active: this.active, streaming: this.isStreamingMessage(entry.item.message!), onLink: (address: string) => this.onLink(address), onOpenResource: (row: ResourceRow) => this.onOpenResource(row) })
-          else MarkdownText({ text: entry.item.message!.text, chatReply: entry.item.message!.role === 'assistant',
-            streaming: this.isStreamingMessage(entry.item.message!),
-            agentReply: this.model.selected.kind === 'session' && entry.item.message!.role === 'assistant',
-            agentPrompt: this.model.selected.kind === 'session' && entry.item.message!.role === 'user',
-            agentFontScale: this.environment.fontScale, nativeTextSelection: !this.canLiftMessage(entry.item.message!), fitContent: entry.item.message!.role === 'user',
-            onSelectionChange: (selected: boolean) => this.selectReadingText(entry.item.id, selected), onLink: (address: string) => this.onLink(address) })
+          else Column({ space: 6 }) {
+            MarkdownText({
+              text: this.userBubbleFold(entry.item.message!, Math.max(Tokens.touch, Math.min(this.availableWidth, Tokens.readingMax) - Tokens.page * 2 - Tokens.touch)).foldable &&
+                !this.unfoldedBubbles.includes(entry.item.message!.id)
+                ? this.userBubbleFold(entry.item.message!, Math.max(Tokens.touch, Math.min(this.availableWidth, Tokens.readingMax) - Tokens.page * 2 - Tokens.touch)).foldedText
+                : entry.item.message!.text,
+              chatReply: entry.item.message!.role === 'assistant',
+              streaming: this.isStreamingMessage(entry.item.message!),
+              agentReply: this.model.selected.kind === 'session' && entry.item.message!.role === 'assistant',
+              agentPrompt: this.model.selected.kind === 'session' && entry.item.message!.role === 'user',
+              agentFontScale: this.environment.fontScale, nativeTextSelection: !this.canLiftMessage(entry.item.message!), fitContent: entry.item.message!.role === 'user',
+              onSelectionChange: (selected: boolean) => this.selectReadingText(entry.item.id, selected), onLink: (address: string) => this.onLink(address)
+            })
+            if (this.userBubbleFold(entry.item.message!, Math.max(Tokens.touch, Math.min(this.availableWidth, Tokens.readingMax) - Tokens.page * 2 - Tokens.touch)).foldable) {
+              Button({ type: ButtonType.Normal }) {
+                Row({ space: 4 }) {
+                  Text(tr(this.unfoldedBubbles.includes(entry.item.message!.id) ? 'bubble_show_less' : 'bubble_show_more'))
+                    .fontSize(Tokens.interfaceFontVp(13, this.environment.fontScale))
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor(Colors.link)
+                  SymbolGlyph(Symbols.down)
+                    .fontSize('11vp')
+                    .fontColor([Colors.link])
+                    .rotate({ angle: this.unfoldedBubbles.includes(entry.item.message!.id) ? 180 : 0 })
+                    .animation(Motion.state(this.environment.reduceMotion))
+                }.padding({ top: 4, bottom: 2 })
+              }
+              .padding(0)
+              .backgroundColor(Color.Transparent)
+              .onClick(() => this.toggleBubbleFold(entry.item.message!.id))
+              .id('chat.bubble.fold.' + entry.item.message!.id)
+            }
+          }.alignItems(HorizontalAlign.Start)
         }
         }
       }
@@ -1806,6 +1919,13 @@ export struct Conversation {
       }
       Stack({ alignContent: Alignment.BottomEnd }) {
         this.transcriptList()
+        if (this.active && this.edgeScrubMarks.length >= 2) {
+          ChatEdgeScrubOverlay({
+            marks: this.edgeScrubMarks,
+            viewportHeight: this.transcriptHeight,
+            onJump: (mark: EdgeScrubMark) => this.jumpToEdgeMark(mark)
+          })
+        }
         if (!this.legacyInterface && !Colors.stylePage) {
           Row()
             .width('100%')

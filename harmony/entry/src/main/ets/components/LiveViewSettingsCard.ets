@@ -13,6 +13,7 @@ import {
 import { NativeEnvironment, nativeEnvironment } from '../platform/NativeEnvironment';
 import { NativeLiveView, nativeLiveView } from '../platform/NativeLiveView';
 import { Haptics } from '../platform/Haptics';
+import { toastCenter } from '../models/ToastCenter';
 
 const PREVIEW_MODES: string[] = ['needsYou', 'working', 'background', 'done'];
 
@@ -295,7 +296,7 @@ export struct LiveViewSettingsCard {
             .onClick(() => {
               Haptics.tap();
               this.liveView.publishSample(this.previewMode).then((ok: boolean) => {
-                if (ok) Haptics.success();
+                if (ok) { Haptics.success(); toastCenter.success(tr('live_view_published_toast')); }
                 else Haptics.error();
               });
             })

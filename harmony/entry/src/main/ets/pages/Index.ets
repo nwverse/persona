@@ -107,6 +107,7 @@ import { Haptics } from '../platform/Haptics';
 import { resolveFoldLayout, widthClassFromBreakpoint } from '../core/FoldPosture';
 import type { FoldAdaptiveLayout } from '../core/FoldPosture';
 import { FoldInspectorPanel } from '../components/FoldInspectorPanel';
+import { FloatingToastOverlay } from '../components/FloatingToastOverlay';
 import { isHubStateKey } from '../core/StorageOwnership';
 
 interface ChatActionEntry extends SheetInfo {
@@ -1042,6 +1043,10 @@ struct Index {
     if (!this.foldLayout.supportsInspector) {
       this.foldInspectorUserToggled = false;
       this.foldInspectorOpen = false;
+    }
+    if (!this.wide() && (this.collapsed || this.foldInspectorCollapsedRail)) {
+      this.collapsed = false;
+      this.foldInspectorCollapsedRail = false;
     }
     if (oldWide !== this.wide() && this.wide() && this.model.section === 1 && this.stack.size() === 0 && this.model.sessions.length)
       this.openRow(this.model.sessions.find((row: ResourceRow) => row.key() === this.model.selected.key()) || this.model.sessions[0]);
@@ -3450,6 +3455,12 @@ struct Index {
         PhoneMessageLiftHostLayer({content:this.messageLift.current!.content})
       }
     }
+    Column() {
+      FloatingToastOverlay({
+        reconnecting: !!this.model.profile.id && !this.model.demo && !this.model.connected,
+        topOffset: this.wide() ? 14 : Math.max(12, this.compactNavigationInset() + 6)
+      })
+    }.width('100%').height('100%').alignItems(HorizontalAlign.Center).justifyContent(FlexAlign.Start).hitTestBehavior(HitTestMode.Transparent)
     }.width('100%').height('100%').backgroundColor(Colors.canvas)
       .background(this.compactInsetSurface(), { ignoresLayoutSafeAreaEdges: this.compactInsetEdges() })
       .bindSheet($$this.readerShown, this.readerContent(), { title: { title: this.readerTitle }, height: Tokens.readerFull, width: Tokens.readerFull, preferType: SheetType.BOTTOM,

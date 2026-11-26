@@ -30,6 +30,7 @@ import { Motion } from '../design/Motion';
 import { MotionTokens } from '../core/MotionTokens';
 import { Haptics } from '../platform/Haptics';
 import { nativeLiveView } from '../platform/NativeLiveView';
+import { toastCenter } from '../models/ToastCenter';
 
 const QUICK_FILTERS: string[] = ['all', 'needsYou', 'unread', 'working', 'backgroundWaiting', 'feishu', 'terminal'];
 const QUICK_LABELS: Record<string,string> = { 'all':'all', 'needsYou':'needs_you', 'unread':'agent_group_unread', 'working':'working', 'backgroundWaiting':'agent_group_background', 'feishu':'agent_source_lark_group', 'terminal':'terminal' };
@@ -1034,9 +1035,10 @@ export struct AgentListPage {
           this.workspace.markAllSeen().then((marked: number) => {
             if (marked > 0) {
               Haptics.success();
+              toastCenter.success(tr('agents_marked_seen_toast').replace('{count}', String(marked)));
               nativeLiveView.syncFromModel(this.model).catch(() => {});
             }
-          }).catch(() => { Haptics.error(); });
+          }).catch(() => { Haptics.error(); toastCenter.error(tr('failed')); });
         }
       }
     });
