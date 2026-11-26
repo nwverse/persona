@@ -307,10 +307,8 @@ export function MachineDetail({ mid, subview = "work", mode, onToggleSidebar }: 
             <Icon name="machine" size={18} />
           </span>
           <div className="min-w-0 flex-1">
-            {renaming && <RenameMachine key={m.id} m={m} onDone={() => setRenaming(false)} />}
-            <div className={cx("flex flex-wrap items-center gap-x-2 gap-y-1", renaming && "hidden")}>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
               <h2 className="truncate text-[15px] font-semibold text-ink">{m.name}</h2>
-              {canRename && <IconButton icon="write" label={t("machines-machinedetail.rename")} size={24} iconSize={12} onClick={() => setRenaming(true)} />}
               <span className={cx("inline-flex h-5 items-center gap-1 whitespace-nowrap rounded-full px-1.5 text-[11px] font-medium", online ? "bg-green-tint text-green" : "bg-field text-ink-3")}>
                 <span className={cx("size-1.5 rounded-full", online ? "bg-green" : "bg-ink-3")} />
                 {online ? t("machines-machinedetail.online") : t("machines-machinedetail.offline")}
@@ -327,8 +325,6 @@ export function MachineDetail({ mid, subview = "work", mode, onToggleSidebar }: 
             </p>
             {route && <p className="mt-0.5 truncate text-[11.5px] text-ink-3" title={t("machines-machinedetail.route_hint")}>{t("machines-machinedetail.route", { route })}</p>}
           </div>
-          {/* with several managers: give it to another one (a linked hub's computer is its own hub's) */}
-          <MoveToManager machineId={m.id} manager={m.manager} movable={m.kind !== "hub" && ownHub} />
           {!online && !expectedDisconnect && !goneWith && (
             <Button tone="secondary" icon="retry" busy={reconnecting} onClick={() => void reconnect()}>
               {reconnecting ? t("machines-machinedetail.connecting") : t("machines.reconnect")}
@@ -360,10 +356,13 @@ export function MachineDetail({ mid, subview = "work", mode, onToggleSidebar }: 
           </div>
         )}
         {online && m.error && <p className="mx-4 mb-3.5 rounded-[8px] bg-red-tint px-2.5 py-1.5 text-[12px] text-red">{m.error}</p>}
-        {deployment?.visible && <MachineDeploy machine={m} hostedManagers={hostedManagers} className="mb-3.5" onClose={NOOP} />}
+        {deployment?.visible && !management && <div role="status" className="flex flex-wrap items-center gap-2 px-4 pb-3 text-label text-orange">
+          <span>{deployment.message} {deployment.error}</span>
+          <a className="text-accent-ink" href={href({ name: "machine", mid, subview: "management" })}
+            onClick={e => onLinkClick(e, { name: "machine", mid, subview: "management" })}>{t("machines.view_management")}</a>
+        </div>}
       </section>
 
-      <MachineViewLinks mid={mid} view={subview} />
       {work && <>
         {waiting.length > 0 && <section>
           <Heading title={t("lib-state-labels.needs_you")} count={waiting.length} />
@@ -436,6 +435,7 @@ export function MachineDetail({ mid, subview = "work", mode, onToggleSidebar }: 
           </div>
         </section>}
       </>}
+      <MachineViewLinks mid={mid} view={subview} />
       {subview === "monitoring" && <>
         {/* its token usage, then how busy it is, then the engine and what it can do (#4973, as in the apps) */}
         <UsageSection mid={mid} heading={(right) => <Heading title={t("machines-usage.title")} right={right} />} />
@@ -508,6 +508,12 @@ export function MachineDetail({ mid, subview = "work", mode, onToggleSidebar }: 
         <section>
           <Heading title={t("machines-machinedetail.configuration")} />
           <EngineSection key={m.id} machine={m} heading={<h3 className="mb-2 flex items-center gap-2 text-sm font-medium text-ink"><Icon name="gear" size={14} />{t("machines-machinedetail.engine")}</h3>} />
+          <div className="my-3 flex flex-wrap items-center gap-2">
+            {canRename && (renaming ? <RenameMachine m={m} onDone={() => setRenaming(false)} /> :
+              <Button icon="write" onClick={() => setRenaming(true)}>{t("machines-machinedetail.rename")}</Button>)}
+            <MoveToManager machineId={m.id} manager={m.manager} movable={m.kind !== "hub" && ownHub} />
+          </div>
+          {deployment?.visible && <MachineDeploy machine={m} hostedManagers={hostedManagers} className="mb-3.5" onClose={NOOP} />}
           <div className="my-3"><BotmuxSwitch key={m.id} machineID={m.id} /></div>
           {/* switching it to Persona Link (#10662), on this hub's own computer (a linked hub's switches there); while one
               runs, its disconnect is expected (machineDeployment) */}
