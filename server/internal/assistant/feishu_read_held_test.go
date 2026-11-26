@@ -397,22 +397,16 @@ func TestFeishuReadHeldSlowPost(t *testing.T) {
 		t.Fatalf("a press meanwhile %+v", r.Toast)
 	}
 	close(release)
-	deadline := time.Now().Add(2 * time.Second)
-	for {
+	posted := func() bool {
 		var updated string
 		for _, u := range e.f.appParams(AppFeishu, FeishuUpdateCard) {
 			if u["message_id"] == "om_dm1" {
 				updated, _ = u["card"].(string)
 			}
 		}
-		if strings.Contains(updated, heldText("read_held_posted")) {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the card was not updated: %v", e.f.appParams(AppFeishu, FeishuUpdateCard))
-		}
-		time.Sleep(10 * time.Millisecond)
+		return strings.Contains(updated, heldText("read_held_posted"))
 	}
+	waitFor(t, "the card to say it was posted", posted)
 	if _, group := e.posts(); len(group) != 1 || e.tries() != 1 {
 		t.Fatalf("%d tries, group %v", e.tries(), group)
 	}
