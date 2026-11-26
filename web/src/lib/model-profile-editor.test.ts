@@ -132,7 +132,7 @@ describe("model-profile-editor", () => {
     expect(profileDraftProblems(draft).some((p) => p.includes("Duplicate"))).toBe(true);
   });
 
-  it("round-trips multi-candidate tiers with aliases and keeps single-candidate tiers flat", () => {
+  it("round-trips multi-candidate tiers with aliases and sends a one-item list when cut to one", () => {
     const multi: ModelProfile = {
       id: "routing",
       name: "Routing",
@@ -151,10 +151,13 @@ describe("model-profile-editor", () => {
       },
       changes: [],
     };
+    const original = profileToDraft(multi);
     const draft = profileToDraft(multi);
+    expect(draft.listedTierNames).toEqual(["dev"]);
     expect(draft.tiers[0].aliases).toEqual(["standard"]);
     expect(draft.tiers[0].candidates).toHaveLength(2);
     expect(profileDraftProblems(draft)).toEqual([]);
+    expect(isProfileDraftDirty(draft, original)).toBe(false);
 
     // Reorder candidates: second becomes primary flat fields.
     const [first, second] = draft.tiers[0].candidates;
@@ -172,8 +175,9 @@ describe("model-profile-editor", () => {
         { launcher: "example-a", model: "model-a", effort: "medium" },
       ],
     });
+    expect(isProfileDraftDirty(draft, original)).toBe(true);
 
-    // Removing down to one candidate omits `candidates` (legacy flat shape).
+    // Removing B from [A, B] sends `candidates: [A]` so the hub drops B instead of merging it back.
     draft.tiers[0].candidates = [first];
     const single = draftToProfileInput(draft, 4);
     expect(single.tiers?.dev).toEqual({
@@ -182,8 +186,111 @@ describe("model-profile-editor", () => {
       effort: "medium",
       description: "Development work",
       aliases: ["standard"],
+      candidates: [{ launcher: "example-a", model: "model-a", effort: "medium" }],
     });
-    expect(single.tiers?.dev?.candidates).toBeUndefined();
+    expect(isProfileDraftDirty(draft, original)).toBe(true);
+
+    // Never emit an empty `candidates` array even if all candidates are removed in the draft.
+    draft.tiers[0].candidates = [];
+    expect(draftToProfileInput(draft, 4).tiers?.dev?.candidates).toBeUndefined();
+  });
+
+  it("sends candidates when deleting a multi-candidate tier and recreating or swapping into its name", () => {
+    const multi: ModelProfile = {
+      id: "routing",
+      name: "Routing",
+      tiers: {
+        core: {
+          launcher: "example-c",
+          model: "model-c",
+          description: "Core work",
+        },
+        dev: {
+          launcher: "example-a",
+          model: "model-a",
+          description: "Development work",
+          candidates: [
+            { launcher: "example-a", model: "model-a" },
+            { launcher: "example-b", model: "model-b" },
+          ],
+        },
+      },
+      changes: [],
+    };
+    const original = profileToDraft(multi);
+    expect(original.listedTierNames).toEqual(["dev"]);
+
+    // Delete multi-candidate `dev` and create a new single-candidate `dev`.
+    const recreated = profileToDraft(multi);
+    recreated.tiers = recreated.tiers.filter((item) => item.name !== "dev");
+    recreated.tiers.push({
+      key: "new-dev",
+      name: "dev",
+      description: "Fresh dev",
+      candidates: [
+        {
+          key: "new-dev-c0",
+          launcher: "example-c",
+          model: "model-c",
+          effort: "",
+          permission_mode: "",
+          speed: "",
+        },
+      ],
+    });
+    const recreatedInput = draftToProfileInput(recreated, 2);
+    expect(recreatedInput.tiers?.dev).toEqual({
+      launcher: "example-c",
+      model: "model-c",
+      description: "Fresh dev",
+      candidates: [{ launcher: "example-c", model: "model-c" }],
+    });
+    expect("candidates" in (recreatedInput.tiers?.core ?? {})).toBe(false);
+    expect(isProfileDraftDirty(recreated, original)).toBe(true);
+
+    // Swap names: multi-candidate `dev` -> `core`, single-candidate `core` -> `dev`.
+    const swapped = profileToDraft(multi);
+    const coreEntry = swapped.tiers.find((item) => item.name === "core")!;
+    const devEntry = swapped.tiers.find((item) => item.name === "dev")!;
+    coreEntry.name = "dev";
+    devEntry.name = "core";
+    const swappedInput = draftToProfileInput(swapped, 2);
+    expect(swappedInput.tiers?.dev?.candidates).toEqual([{ launcher: "example-c", model: "model-c" }]);
+    expect(swappedInput.tiers?.core?.candidates).toEqual([
+      { launcher: "example-a", model: "model-a" },
+      { launcher: "example-b", model: "model-b" },
+    ]);
+  });
+
+  it("keeps tiers in the flat shape when the hub did not list candidates", () => {
+    const flatHub: ModelProfile = {
+      id: "flat",
+      name: "Flat",
+      tiers: {
+        dev: { launcher: "example-a", model: "model-a", description: "Development work" },
+      },
+      changes: [],
+    };
+    const original = profileToDraft(flatHub);
+    const draft = profileToDraft(flatHub);
+    expect(draft.listedTierNames).toEqual([]);
+    const unchanged = draftToProfileInput(draft, 1);
+    expect(unchanged.tiers?.dev).toEqual({
+      launcher: "example-a",
+      model: "model-a",
+      description: "Development work",
+    });
+    expect("candidates" in (unchanged.tiers?.dev ?? {})).toBe(false);
+
+    draft.tiers[0].candidates[0].model = "model-b";
+    const edited = draftToProfileInput(draft, 1);
+    expect(edited.tiers?.dev).toEqual({
+      launcher: "example-a",
+      model: "model-b",
+      description: "Development work",
+    });
+    expect("candidates" in (edited.tiers?.dev ?? {})).toBe(false);
+    expect(isProfileDraftDirty(draft, original)).toBe(true);
   });
 
   it("validates candidate count limits and includes 1-based candidate indices in errors", () => {

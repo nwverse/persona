@@ -42,6 +42,7 @@ import java.time.Instant
 import persona.core.designsystem.FeedbackNotice
 import persona.core.designsystem.FeedbackStyle
 import persona.core.designsystem.Tokens
+import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.rememberToastState
 import persona.feature.chat.CodexTakeoverBusyPill
 import persona.feature.chat.CodexTakeoverClient
@@ -114,7 +115,7 @@ private fun SpacePage(route: SpaceRoute, model: AgentsViewModel, navigator: Navi
     val toast = rememberToastState()
     val feedback = LocalAppFeedback.current
     var operationDialog by remember { mutableStateOf<AgentOperationDialog?>(null) }
-    var confirmRead by remember { mutableStateOf<List<AgentSession>?>(null) }
+    var confirmRead by remember { mutableStateOf<MarkAllSeenBatch?>(null) }
     var newAgent by rememberSaveable { mutableStateOf(false) }
     val creation = creationModel?.state?.collectAsStateWithLifecycle()?.value
     var now by remember { mutableStateOf(Instant.now()) }
@@ -165,7 +166,20 @@ private fun SpacePage(route: SpaceRoute, model: AgentsViewModel, navigator: Navi
         val takeoverActions = if (takeoverClient != null && !row.session.archived) {
             codexTakeoverMenuActions(row.session, takeoverCoordinator, enabled = !operations.busy && onlineForRow)
         } else emptyList()
-        AgentSessionMenuItems(row, row.id in page.preferences.pins.sessions, page.preferences.mutes.mutes(row), operations.busy,
+        val forkAction: (() -> Unit)? = if (row.session.canFork && !row.session.archived && model.hasOperations) ({
+            model.fork(row.session) { forked -> navigator.navigate(ChatRoute(forked.machineId, forked.sessionId)) }
+        }) else null
+        if (!row.session.isLive) buildList {
+            add(JAction(stringResource(R.string.agents_action_open_read_only), onClick = { openRow(row) }))
+            addAll(takeoverActions)
+            forkAction?.let {
+                add(JAction(stringResource(persona.feature.chat.R.string.chat_menu_fork), PersonaIcons.forkChat,
+                    enabled = !operations.busy && onlineForRow, onClick = it))
+            }
+            if (row.session.canDelete) add(JAction(stringResource(R.string.agents_action_delete_chat), destructive = true, enabled = !operations.busy) {
+                operationDialog = AgentOperationDialog.Delete(row.session)
+            })
+        } else AgentSessionMenuItems(row, row.id in page.preferences.pins.sessions, page.preferences.mutes.mutes(row), operations.busy,
             onOpen = { openRow(row) }, onPin = { model.pin(row) }, onMute = { model.mute(row) },
             onRead = { model.markRead(listOf(row)) }, onRename = { operationDialog = AgentOperationDialog.Rename(row.session) },
             onStopLoop = { model.stopLoop(row.session) }, onHandoff = {
@@ -173,9 +187,7 @@ private fun SpacePage(route: SpaceRoute, model: AgentsViewModel, navigator: Navi
                     navigator.navigate(ChatRoute(it.machineId, it.sessionId, kind = ConversationKind.Assistant))
                 })
             },
-            onFork = if (row.session.canFork && !row.session.archived && model.hasOperations) ({
-                model.fork(row.session) { forked -> navigator.navigate(ChatRoute(forked.machineId, forked.sessionId)) }
-            }) else null,
+            onFork = forkAction,
             forkOnline = onlineForRow,
             takeoverActions = takeoverActions,
             onInterrupt = { model.interrupt(row.session) },
@@ -189,11 +201,11 @@ private fun SpacePage(route: SpaceRoute, model: AgentsViewModel, navigator: Navi
             onNewTab = { creationModel?.startIn(AgentSpacePreset(it.machineId, requireNotNull(workspace), it.cwd, it.name)); newAgent = true },
             spaceMenu = { shown ->
                 val session = shown.members.first().session
-                val unread = shown.members.filter { it.unseen }
+                val markAll = markAllSeenBatch(shown.members)
                 AgentSpaceMenu(session, shown.preferenceKey in page.preferences.pins.spaces, shown.preferenceKey in page.preferences.mutes.spaces,
                     operations.busy, onPin = { model.spacePin(session) }, onMute = { model.spaceMute(session) },
                     onRename = { operationDialog = AgentOperationDialog.RenameSpace(session) },
-                    onMarkRead = unread.takeIf { it.isNotEmpty() }?.let { rows -> { confirmRead = rows } })
+                    onMarkRead = markAll.takeIf { it.unread.isNotEmpty() }?.let { batch -> { confirmRead = batch } })
             },
             sessionMenu = rowMenu, title = route.title,
             onMachine = { navigator.navigate(MachineSpacesRoute(it)) },
@@ -213,10 +225,15 @@ private fun SpacePage(route: SpaceRoute, model: AgentsViewModel, navigator: Navi
     }
     operationDialog?.let { dialog ->
         val machine = page.machines.firstOrNull { it.id == dialog.session.machineId }
-        AgentOperationDialog(dialog, model, machine?.displayName, creationModel?.service, machine) { operationDialog = null }
+        AgentOperationDialog(dialog, model, machine?.displayName, creationModel?.service, machine,
+            preferHerdrTabName = page.preferences.prefersHerdrTabName(dialog.session)) { operationDialog = null }
     }
     if (takeoverClient != null) CodexTakeoverDialogs(takeoverCoordinator)
-    confirmRead?.let { rows -> MarkAllReadDialog(rows.size, onDismiss = { confirmRead = null }) { model.markRead(rows) } }
+    confirmRead?.let { markAll ->
+        MarkAllReadDialog(markAll.unread.size, onDismiss = { confirmRead = null }) {
+            model.markRead(markAll.unread, clear = true, release = markAll.release)
+        }
+    }
     if (newAgent) {
         if (creationModel != null) NewAgentDialog(creationModel, page.machines, connection == ConnectionState.Online,
             onAddProvider = { navigator.navigate(persona.core.navigation.SettingsPageRoute(persona.core.navigation.SettingsPage.Providers)) },

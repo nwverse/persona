@@ -17,6 +17,8 @@ func directSupervisionTask(t *testing.T, s *Service, f *fakeHub, supervisor, tit
 	f.mu.Lock()
 	f.known[supervisor] = true
 	f.mu.Unlock()
+	// These fixtures exercise push-held supervisor delivery, not ordinary side-conversation notification policy.
+	setSettings(t, s, func(v *Settings) { v.Leaders = appendOnce(v.Leaders, supervisor) })
 	task, err := s.createTodo(ctx, title, "Verify direct supervision transcript confirmation", supervisor, "")
 	if err != nil {
 		t.Fatal(err)
@@ -419,6 +421,8 @@ func TestDirectSupervisionSendRestartRecoversThroughDurableQueue(t *testing.T) {
 			}
 
 			restarted, node := newQuietServiceOn(t, store)
+			// newQuietServiceOn seeds fresh settings; restore the held supervisor identity along with the ledger.
+			setSettings(t, restarted, func(v *Settings) { v.Leaders = appendOnce(v.Leaders, "conv2") })
 			t.Cleanup(func() { stopRelayTimer(restarted, "conv2") })
 			restarted.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
 			// memStore persists settings (assistant.relay, assistant.supervision_dedup) only; restore the open tasks as Postgres would.

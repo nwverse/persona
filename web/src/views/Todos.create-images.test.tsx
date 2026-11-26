@@ -398,6 +398,8 @@ describe("New to-do images over 1 MiB (#13797)", () => {
     holdDecodes = true;
     await openNew();
     await pickNow([png("late.png", 3000, 2000, 2 * MiB)]);
+    await until(() => decodes.length === 1);
+    expect(decodes[0].name).toBe("late.png");
     await act(async () => button(t("common.cancel"), dialog())!.click());
     await flush();
     expect(document.querySelector("[role=dialog]")).toBeNull();

@@ -26,7 +26,7 @@
   "hint_channels": "在微信、飞书里和 Persona 说话",
   "hint_connectors": "让 Persona 读你的邮箱、飞书、GitHub",
   "hint_extensions": "装上新能力：连接器、渠道、语音",
-  "hint_integrations": "对话频道、数据源连接器与已安装扩展",
+  "hint_integrations": "对话频道、连接器、收件箱来源与已安装扩展",
   "hint_devices": "已登录的手机、浏览器，连新设备",
   "hint_hub": "hub 更新、Agent 看板和扩展下载镜像",
   "tab_managers": "助手",

@@ -21,7 +21,7 @@ type healthItem struct {
 }
 
 var healthCatalog = []healthItem{
-	{"water", "persona"}, {"protein", "persona"},
+	{"water", "persona"}, {"protein", "persona"}, {"strength", "persona"},
 	{"activity", "apple_health"}, {"trends", "apple_health"},
 }
 

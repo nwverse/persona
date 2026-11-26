@@ -259,18 +259,19 @@ func TestAManagerKeepsItsOwnList(t *testing.T) {
 
 // fakeKeeper is a manager that keeps its own list in memory (devices.machines.*).
 type fakeKeeper struct {
-	id   string
-	peer *rpc.Peer
-	stop context.CancelFunc
-	mu   sync.Mutex
-	list map[string]json.RawMessage
+	id      string
+	peer    *rpc.Peer
+	stop    context.CancelFunc
+	mu      sync.Mutex
+	list    map[string]json.RawMessage
+	clients chan assistantwire.Clients
 	// putDelay is how long a put takes (a slow manager); set it under mu.
 	putDelay time.Duration
 }
 
 func connectKeeper(t *testing.T, h *Hub, srv *httptest.Server, id string, list ...json.RawMessage) *fakeKeeper {
 	t.Helper()
-	f := &fakeKeeper{id: id, list: map[string]json.RawMessage{}}
+	f := &fakeKeeper{id: id, list: map[string]json.RawMessage{}, clients: make(chan assistantwire.Clients, 64)}
 	for _, e := range list {
 		f.list[machineEntryID(e)] = e
 	}
@@ -284,6 +285,15 @@ func connectKeeper(t *testing.T, h *Hub, srv *httptest.Server, id string, list .
 	t.Cleanup(func() { _ = ws.CloseNow() })
 	conn := bus.NewConn(ctx, ws)
 	f.peer = rpc.New("k", conn)
+	f.peer.OnEvent = func(method string, params json.RawMessage) {
+		var clients assistantwire.Clients
+		if method == assistantwire.EventClients && json.Unmarshal(params, &clients) == nil {
+			select {
+			case f.clients <- clients:
+			default:
+			}
+		}
+	}
 	f.peer.OnRequest = func(rctx context.Context, method string, params json.RawMessage) (any, error) {
 		var ref devicewire.MachineRef
 		var put devicewire.MachinePut

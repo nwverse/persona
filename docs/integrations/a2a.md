@@ -35,10 +35,18 @@ the Manager's enrolled computers. Enable this for runtimes you trust with that a
 ## Send and receive
 
 Use the tools through Persona MCP, a runtime's existing `callTool` API, or
-`personad tool` from a shell associated with a supported session. The node's
-program is not always on an Agent's `PATH` as `personad` (on macOS it can be
-installed under another name); notes the node writes for an Agent name its
-absolute path, as the task handoff does.
+`personad tool` from a shell associated with a supported session. Because
+`personad` is often not on a terminal pane's `PATH` (or may be installed under
+another name), when the manager renders an A2A message for a session that calls
+Persona's tools from a node-verifiable terminal (a pane or a Codex thread)
+without Persona MCP tools—or for the first prompt of a session launched by A2A
+or `dispatch_start` unless its launcher runs Claude Code or a runtime—it uses
+the absolute executable the recipient node reported when it connected, falling
+back to a bounded `node.info` read when no absolute path is cached. It includes
+the path as a JSON string to decode and quote for the shell, matching task
+handoffs. Sessions with Persona MCP tools, runtimes that wire A2A tools in
+themselves, and nodes with no verified absolute executable keep the plain
+`personad tool` wording unchanged.
 
 | Tool | Purpose |
 | --- | --- |
@@ -50,6 +58,15 @@ absolute path, as the task handoff does.
 | `a2a_cancel` | Cancel a request that has not entered a turn, or one waiting for input |
 
 For an existing session, send its exact machine and session IDs.
+An address names the session's conversation. When its computer lists that
+conversation under another ID by the time an Agent uses the address, a tool
+that takes the address acts on the row listed now, which names the IDs the
+conversation went by in its `aliases` (`docs/protocol/protocol.md`). The
+common case is an Antigravity CLI conversation: it is listed under its terminal
+pane's row while a pane shows it, and under its own `agy-<conversation id>`
+otherwise (`docs/integrations/engines.md`). An ID that no listed row names, or
+that two rows name, is not resolved. A task keeps the target it was created with.
+
 Each receiving session runs one active A2A task at a time; additional sends to a
 busy session are queued and delivered in FIFO order when the active task ends.
 An active request waiting for delivery is retried when the recipient becomes idle.
@@ -188,8 +205,12 @@ notification and interaction APIs.
 | Cindy database fallback, other read-only integrations and historical sessions | Can be viewed through the ordinary session client |
 
 Terminal engines such as herdr, Herdr App, Orca and Tern use the A2A support
-of the Agent running in their terminal. The supported launch, send and resume
-operations still depend on the engine and runtime.
+of the Agent running in their terminal. When a terminal Agent (such as Codex or
+Antigravity CLI in a node-verifiable pane, or a Codex thread) has no Persona MCP
+tools, A2A messages name the recipient node's reported absolute executable as a
+JSON string so the Agent can run `tool` commands even when `personad` is not on
+`PATH`. The supported launch, send and resume operations still depend on the
+engine and runtime.
 
 The server integration tests exercise two Node connections, a Manager,
 Postgres and the Hub. They check an input-required round trip and read the

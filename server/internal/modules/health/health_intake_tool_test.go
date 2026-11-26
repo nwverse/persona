@@ -21,7 +21,7 @@ func TestHealthIntakeToolLogListDelete(t *testing.T) {
 	s := newServiceOn(t, newFakeHub(), st)
 	call := func(args string) string {
 		t.Helper()
-		out, err := s.Tool(ctx, json.RawMessage(args))
+		out, err := s.intakeTool(ctx, json.RawMessage(args))
 		if err != nil {
 			t.Fatalf("%s: %v", args, err)
 		}

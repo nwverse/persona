@@ -167,6 +167,10 @@ func TestPaneAgentsTypedThroughHerdrGetTheSessionMentionNote(t *testing.T) {
 				pane = agentOf(cursorAgent, agyTestID, proto.StatusIdle, agyTestPane, "w1:t1", "w1", home, "cursor")
 			}
 			seedAgents(t, n, f, pane)
+			if tc.agent == agyAgent {
+				// A send to an agy pane is confirmed in agy's own conversation record (#14722): agy writes the typed text there.
+				stubAgyNativePrompt(t, n, f, agyTestPane, agyTestID)
+			}
 			text, noted := notedQuote(t, n)
 			agyTestCall(t, n, "session.send", tc.row, map[string]any{"text": text, "prompt_language": "English"})
 			assertTrace(t, f.trace("agent.prompt"), []string{call("agent.prompt", map[string]any{"target": agyTestPane, "text": noted})})

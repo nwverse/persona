@@ -1,11 +1,12 @@
+import type { HubAccess } from '../core/HubAccess';
 import { SocketReceiveBuffer } from '../core/SocketReceiveBuffer';
-import { legacyClientHeader, legacyOperationHeader } from '../core/WireCompatibility';
+import { defaultHealthIntakeRoute, legacyClientHeader, legacyOperationHeader } from '../core/WireCompatibility';
 import { clientLocale } from '../core/ClientLocale';
 import { bundleManager } from '@kit.AbilityKit';
 import { deviceInfo } from '@kit.BasicServicesKit';
 import { i18n } from '@kit.LocalizationKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { AGENT_MESSAGE_HOLD, isAgentMessagePost, heldReceipt202, writeResultUnknown } from '../core/TransportPolicy';
+import { AGENT_MESSAGE_HOLD, isAgentMessagePost, heldReceipt202, publicMutationError, writeResultUnknown } from '../core/TransportPolicy';
 import { cryptoFramework } from '@kit.CryptoArchitectureKit';
 import { cert } from '@kit.DeviceCertificateKit';
 import { connection, socket } from '@kit.NetworkKit';
@@ -21,6 +22,12 @@ const MAX_HEADER_BYTES: number = 16 * 1024;
 const REQUEST_TIMEOUT_MS: number = 15000;
 const NEXT_ADDRESS_TIMEOUT_MS: number = 2500;
 const WS_GUID: string = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
+
+export interface StreamNetworkRule {
+  readonly directOnly:boolean;
+  current():boolean;
+  bind(tcp:socket.TCPSocket):Promise<void>;
+}
 
 export interface TransportProxy {
   readonly host: string;
@@ -38,13 +45,14 @@ export class EndpointConfig {
   readonly managerId: string;
   readonly alternateUrls: string[];
   readonly proxy: TransportProxy | undefined;
-  constructor(baseUrl: string, hubId: string, token: string, pin: string, managerId: string = '', alternateUrls: string[] = [], proxy?: TransportProxy) {
+  readonly access: HubAccess | undefined;
+  constructor(baseUrl: string, hubId: string, token: string, pin: string, managerId: string = '', alternateUrls: string[] = [], proxy?: TransportProxy, access?: HubAccess) {
     this.baseUrl = normalizeBaseUrl(baseUrl);
     this.hubId = hubId;
     this.token = token;
     this.pin = normalizePin(pin);
     this.managerId = managerId;
-    this.proxy = proxy;
+    this.proxy = proxy; this.access = access;
     if (alternateUrls.length > 8) throw new Error('invalid_endpoint');
     this.alternateUrls = Array.from(new Set<string>(alternateUrls.map((value: string) => { const normalized = normalizeBaseUrl(value); if (!normalized.startsWith('https://')) throw new Error('invalid_endpoint'); return normalized; }))).filter((value: string) => value !== this.baseUrl);
   }
@@ -55,13 +63,15 @@ export class HttpFailure extends Error {
   readonly code: string;
   readonly resultUnknown: boolean;
   readonly resultPending: boolean;
-  constructor(status: number, code: string, resultUnknown: boolean = false, resultPending: boolean = false) {
+  readonly userMessage: string;
+  constructor(status: number, code: string, resultUnknown: boolean = false, resultPending: boolean = false, userMessage: string = '') {
     super(code || 'request_failed');
     this.name = 'HttpFailure';
     this.status = status;
     this.code = code || 'request_failed';
     this.resultUnknown = resultUnknown;
     this.resultPending = resultPending;
+    this.userMessage = userMessage;
   }
 }
 
@@ -129,6 +139,12 @@ function endpointParts(baseUrl: string): ParsedEndpoint {
     scheme: scheme,
     hostHeader: parsed.host
   };
+}
+
+export function hubCredentialOrigin(baseUrl: string): string {
+  const endpoint = endpointParts(normalizeBaseUrl(baseUrl));
+  const host = endpoint.hostname.toLowerCase();
+  return endpoint.scheme + '://' + (host.includes(':') ? '[' + host + ']' : host) + ':' + endpoint.port;
 }
 
 function routePath(base: ParsedEndpoint, path: string): string {
@@ -209,11 +225,19 @@ function constantTimeEqual(left: string, right: string): boolean {
   return difference === 0;
 }
 
-function errorCode(body: string): string {
+function errorCode(body: string, path: string, method: string, status: number): string {
   if (!body || body.length > 64 * 1024) return 'http_error';
   try {
     const parsed = JSON.parse(body) as Record<string, Object>;
     const code = parsed['code'];
+    // Older hubs reject dest=attachment before reading any file bytes. Preserve that exact refusal for a temp upload.
+    if ((code === undefined || code === 'bad_request') && status === 400 && method === 'POST' && /^\/api\/v1\/machines\/[^/]+\/files\?/.test(path) &&
+      /[?&]dest=attachment(?:&|$)/.test(path) && (parsed['error'] === 'unknown dest' || parsed['detail'] === 'unknown dest'))
+      return 'unknown_upload_destination';
+    // The Hub exposes both a general HTTP code and a precise receipt error. A missing
+    // operation can be checked safely only on its authenticated operation-status route.
+    if (method === 'GET' && status === 404 && code === 'not_found' && parsed['error'] === 'no such operation' &&
+      /^\/api\/v1\/ops\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(path)) return 'no_such_operation';
     if (typeof code === 'string' && code.length <= 128) return code;
     const error = parsed['error'];
     if (typeof error === 'string' && error.length <= 128) return error;
@@ -258,8 +282,12 @@ export class HubTransport {
   private fragmentSize: number = 0;
   private sendQueue: Promise<void> = Promise.resolve();
 
+  private readonly access: HubAccess | undefined;
+  private readonly credentialOrigin: string;
+
   constructor(config: EndpointConfig, streamPath: string = '/api/v1/ws') {
     this.endpoint = endpointParts(config.baseUrl);
+    this.access = config.access; this.credentialOrigin = hubCredentialOrigin(config.baseUrl);
     this.hubId = config.hubId;
     this.token = config.token;
     this.pin = config.pin;
@@ -271,11 +299,25 @@ export class HubTransport {
     if (this.pin && this.endpoint.scheme !== 'https') throw new Error('pin_requires_https');
   }
 
-  stream(path: string): HubTransport {
+  private streamNetwork:StreamNetworkRule|undefined;
+  private outgoingLimit(opcode:number):number {
+    if(opcode===1 && this.streamNetwork && /^\/api\/v1\/recordings\/[a-f0-9-]{36}\/audio$/.test(this.streamPath))return 8704*1024;
+    return MAX_FRAME_BYTES;
+  }
+  /** Local equality witness for a recording consent across app restarts. No device credential enters its manifest. */
+  meetingCredentialKey():string {
+    this.assertLive(this.generation);
+    if(!this.token)throw new Error('missing_credential');
+    const md=cryptoFramework.createMd('SHA256');
+    md.updateSync({data:utf8('persona.meeting.consent.v1\u0000'+this.token)});
+    return new util.Base64Helper().encodeToStringSync(md.digestSync().data,util.Type.BASIC_URL_SAFE).replace(/=+$/,'');
+  }
+  stream(path: string, network?:StreamNetworkRule): HubTransport {
     this.assertLive(this.generation); this.children = this.children.filter((child: HubTransport) => !child.closed);
     if (this.children.length >= 4) throw new Error('stream_limit');
-    const config = new EndpointConfig(this.endpoint.origin + this.endpoint.basePath, this.hubId, this.token, this.pin, this.managerId, [], this.proxy);
-    const child = new HubTransport(config, path); this.children.push(child); return child;
+    const config = new EndpointConfig(this.endpoint.origin + this.endpoint.basePath, this.hubId, this.token, this.pin, this.managerId, [], this.proxy, this.access);
+    if (network && (!network.current() || this.proxy && network.directOnly)) throw new Error('audio_network_unverified');
+    const child = new HubTransport(config, path); child.streamNetwork=network; this.children.push(child); return child;
   }
   private assertLive(generation: number): void {
     if (this.closed || this.closing || generation !== this.generation || this.proxy && !this.proxy.isCurrent()) throw new HttpFailure(0, 'connection_closed');
@@ -303,11 +345,33 @@ export class HubTransport {
     identity['type'] = 'client_hello'; identity['features'] = features.concat([AGENT_MESSAGE_HOLD]); identity['locale'] = clientLocale(i18n.getSystemLanguage());
     return this.send(JSON.stringify(identity));
   }
-  private authHeaders(): Record<string, string> {
+  private authHeaders(includeManager:boolean = true): Record<string, string> {
     const headers = this.clientHeaders();
+    this.access?.apply(this.credentialOrigin, headers);
     if (this.token) headers['Authorization'] = 'Bearer ' + this.token;
-    if (this.managerId) headers['X-Persona-Manager'] = this.managerId;
+    if (includeManager && this.managerId) headers['X-Persona-Manager'] = this.managerId;
     return headers;
+  }
+
+  private accessDenial(status: number, header: (name: string) => string, body?: Uint8Array): HttpFailure | undefined {
+    let blocked = false;
+    const location = header('location');
+    if (status >= 300 && status < 400 && location) {
+      try {
+        const host = url.URL.parseURL(location, this.endpoint.origin).hostname.toLowerCase();
+        blocked = host === 'cloudflareaccess.com' || host.endsWith('.cloudflareaccess.com');
+      } catch (_) {}
+    }
+    if (!blocked && header('content-type').toLowerCase().includes('html')) {
+      if (body && body.length) {
+        const text = utf8String(body.subarray(0, 64 * 1024), false).toLowerCase();
+        blocked = text.includes('cloudflareaccess.com') || text.includes('/cdn-cgi/access/');
+      } else {
+        blocked = (status === 401 || status === 403) && (!!header('cf-ray') || header('server').toLowerCase().includes('cloudflare'));
+      }
+    }
+    if (!blocked) return undefined;
+    return new HttpFailure(status, this.access?.origin === this.credentialOrigin ? 'cloudflare_access_rejected' : 'cloudflare_access_required');
   }
 
   private async validateContextPin(context: rcp.ValidationContext): Promise<boolean> {
@@ -330,7 +394,7 @@ export class HubTransport {
     const generation = this.generation; this.assertLive(generation);
     const verb = method.toUpperCase();
     if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'].includes(verb)) throw new Error('invalid_method');
-    const target = this.endpoint.origin + routePath(this.endpoint, path), headers = this.authHeaders();
+    const target = this.endpoint.origin + routePath(this.endpoint, path), headers = this.authHeaders(!defaultHealthIntakeRoute(path,verb));
     const messagePost = isAgentMessagePost(verb, path);
     if (messagePost) headers['X-Persona-Features'] = AGENT_MESSAGE_HOLD;
     if (body !== undefined) headers['Content-Type'] = contentType;
@@ -340,7 +404,11 @@ export class HubTransport {
     }
     const session = rcp.createSession(); this.requests.add(session);
     const request = new rcp.Request(target, verb as rcp.HttpMethod, headers, body);
-    request.configuration = { transfer: { autoRedirect: false, timeout: { connectMs: REQUEST_TIMEOUT_MS, transferMs: REQUEST_TIMEOUT_MS, inactivityMs: REQUEST_TIMEOUT_MS } },
+    // Git pull allows the Hub 90 seconds, and checkout creation/removal may wait longer on its host.
+    const worktreeRequest = verb === 'POST' && /^\/api\/v1\/machines\/[^/]+\/worktree\/(create|delete|add|remove)$/.test(path);
+    const pullRequest = verb === 'POST' && /^\/api\/v1\/machines\/[^/]+\/git\/pull$/.test(path);
+    const responseTimeout = worktreeRequest ? 165000 : pullRequest ? 100000 : REQUEST_TIMEOUT_MS;
+    request.configuration = { transfer: { autoRedirect: false, timeout: { connectMs: REQUEST_TIMEOUT_MS, transferMs: responseTimeout, inactivityMs: responseTimeout } },
       security: { remoteValidation: this.pin ? (context: rcp.ValidationContext) => this.validateContextPin(context) : 'system' } };
     if (this.proxy) request.configuration.proxy = { url: 'http://' + this.proxy.host + ':' + this.proxy.port,
       createTunnel: 'always', security: { serverAuthentication: { authenticationType: 'basic', credential: {
@@ -352,32 +420,46 @@ export class HubTransport {
       received += chunk.byteLength; chunks.push(new Uint8Array(chunk).slice());
     };
     try {
+      if(this.streamNetwork && (!this.streamNetwork.current() || this.streamNetwork.directOnly))throw new HttpFailure(0,'audio_network_unverified');
       this.assertLive(generation); dispatched = true; const response = await session.fetch(request); this.assertLive(generation);
       if (overLimit) throw new HttpFailure(0, 'response_too_large');
+      const bytes = concatArrays(chunks);
+      const header = (name: string): string => {
+        const key = Object.keys(response.headers).find((k: string) => k.toLowerCase() === name);
+        const value = key ? response.headers[key] : undefined;
+        return typeof value === 'string' ? value : Array.isArray(value) ? value.join(', ') : '';
+      };
+      const denied = this.accessDenial(response.statusCode, header, bytes);
+      if (denied) throw new HttpFailure(denied.status, denied.code, !['GET','HEAD'].includes(verb) && denied.status >= 200 && denied.status < 300);
       if (response.statusCode >= 300 && response.statusCode < 400) throw new HttpFailure(response.statusCode, 'redirect_refused');
-      const bytes = concatArrays(chunks), text = response.statusCode < 200 || response.statusCode >= 300 ? utf8String(bytes, false) : '';
+      const text = response.statusCode < 200 || response.statusCode >= 300 ? utf8String(bytes, false) : '';
       if (response.statusCode === 202 && !['GET', 'HEAD'].includes(verb) && !acceptTransfer) {
         const state = messagePost ? heldReceipt202(utf8String(bytes, false), opId) : 'pending';
         if (state !== 'held') throw new HttpFailure(202, state === 'unknown' ? 'result_unknown' : 'pending', true, state === 'pending');
       }
-      if (response.statusCode < 200 || response.statusCode >= 300)
-        throw new HttpFailure(response.statusCode, errorCode(text), !['GET', 'HEAD'].includes(verb) && writeResultUnknown(response.statusCode, text));
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        const userMessage=publicMutationError(verb,path,response.statusCode,text);
+        throw new HttpFailure(response.statusCode,errorCode(text,path,verb,response.statusCode),
+          !['GET','HEAD'].includes(verb) && writeResultUnknown(response.statusCode,text,pullRequest),false,userMessage);
+      }
       const responseType = response.headers['content-type'] || response.headers['Content-Type'];
       return { data: toArrayBuffer(bytes), contentType: typeof responseType === 'string' ? responseType : '' };
     } catch (error) {
-      if (error instanceof HttpFailure) throw new HttpFailure(error.status, error.code, error.resultUnknown || (dispatched && !['GET', 'HEAD'].includes(verb) && (error.status === 0 || error.status >= 300 && error.status < 400)), error.resultPending);
+      if (error instanceof HttpFailure) throw new HttpFailure(error.status, error.code, error.resultUnknown || (dispatched && !['GET', 'HEAD'].includes(verb) && (error.status === 0 || error.status >= 300 && error.status < 400)), error.resultPending, error.userMessage);
       const fields = error as Object as Record<string, Object>, code = fields ? fields['code'] : undefined;
       const diagnostic = overLimit ? 'response_too_large' : (code === 2300060 || code === 1007900060) && this.pin ? 'tls_' + this.pinValidation : typeof code === 'number' ? 'transport_failed_' + code : 'transport_failed';
       throw new HttpFailure(0, diagnostic, dispatched && !['GET', 'HEAD'].includes(verb));
     } finally { this.requests.delete(session); try { session.close(); } catch (_) {} }
   }
 
-  async request(path: string, method: string = 'GET', body: string = '', opId: string = ''): Promise<string> {
-    if (utf8(body).length > MAX_HTTP_BYTES) throw new HttpFailure(0, 'request_too_large');
-    const limit = method.toUpperCase() === 'GET' && path.split('?')[0] === '/api/v1/sessions' ? MAX_HUB_EVENT_BYTES : MAX_HTTP_BYTES;
-    const response = await this.requestData(path, method, body || undefined, 'application/json', limit, opId);
+  async request(path: string, method: string = 'GET', body: string = '', opId: string = '', messageRequestBytes: number = MAX_HTTP_BYTES): Promise<string> {
+    const verb = method.toUpperCase();
+    const requestLimit = isAgentMessagePost(verb, path) ? messageRequestBytes : MAX_HTTP_BYTES;
+    if (utf8(body).length > requestLimit) throw new HttpFailure(0, 'request_too_large');
+    const responseLimit = verb === 'GET' && path.split('?')[0] === '/api/v1/sessions' ? MAX_HUB_EVENT_BYTES : MAX_HTTP_BYTES;
+    const response = await this.requestData(path, method, body || undefined, 'application/json', responseLimit, opId);
     try { return utf8String(new Uint8Array(response.data), true); }
-    catch (_) { throw new HttpFailure(0, 'response_invalid', !['GET', 'HEAD'].includes(method.toUpperCase())); }
+    catch (_) { throw new HttpFailure(0, 'response_invalid', !['GET', 'HEAD'].includes(verb)); }
   }
   /** Only the transfer protocol defines 202 as a task snapshot; it is still not completion. */
   async requestAccepted(path: string, method: string, body: string): Promise<string> {
@@ -387,9 +469,15 @@ export class HubTransport {
     try { return utf8String(new Uint8Array(response.data), true); }
     catch (_) { throw new HttpFailure(0, 'response_invalid', true); }
   }
-  async requestBytes(path: string, method: string = 'GET', body?: ArrayBuffer, contentType: string = 'application/octet-stream', opId: string = ''): Promise<BytesResponse> {
-    if (body && body.byteLength > MAX_BINARY_BYTES) throw new HttpFailure(0, 'request_too_large');
+  async requestBytes(path: string, method: string = 'GET', body?: ArrayBuffer, contentType: string = 'application/octet-stream', opId: string = '', requestLimit: number = MAX_BINARY_BYTES): Promise<BytesResponse> {
+    if (body && body.byteLength > requestLimit) throw new HttpFailure(0, 'request_too_large');
     return this.requestData(path, method, body, contentType, MAX_BINARY_BYTES, opId);
+  }
+  async putMeetingGap(path:string,data:ArrayBuffer):Promise<string>{
+    if(!this.streamNetwork || !/^\/api\/v1\/recordings\/[0-9a-f-]{36}\/audio\?at=\d+(?:\.\d+)?$/.test(path) || !data.byteLength || data.byteLength%2 || data.byteLength>64000)
+      throw new Error('invalid_audio_gap');
+    const result=await this.requestData(path,'PUT',data,'application/octet-stream',MAX_HTTP_BYTES,'');
+    return utf8String(new Uint8Array(result.data),true);
   }
 
   private async withTimeout<T>(promise: Promise<T>, timeout: number, code: string): Promise<T> {
@@ -477,6 +565,8 @@ export class HubTransport {
       const peer = peers[index], tcp = socket.constructTCPSocketInstance();
       this.tcpSocket = tcp;
       try {
+        if(this.streamNetwork?.directOnly)await tcp.bind({address:peer.family===2 ? '::':'0.0.0.0',port:0,family:peer.family});
+        if (this.streamNetwork) await this.streamNetwork.bind(tcp);
         await this.withTimeout(tcp.connect({ address: peer, timeout: timeout }), timeout, 'connect_timeout');
         this.assertLive(generation);
         return { tcp: tcp, family: peer.family || 1 };
@@ -620,9 +710,6 @@ export class HubTransport {
     let header: string;
     try { header = utf8String(received.subarray(0, end), true); } catch (_) { this.failSocket(new Error('invalid_upgrade')); return; }
     const lines = header.split('\r\n');
-    if (!/^HTTP\/1\.[01] 101(?: |$)/.test(lines[0])) {
-      const status = Number((lines[0].split(' ')[1] || '0')); this.failSocket(new HttpFailure(status, 'upgrade_rejected') as Error); return;
-    }
     const parsed: Map<string, string> = new Map();
     for (const line of lines.slice(1)) {
       const colon = line.indexOf(':');
@@ -630,6 +717,11 @@ export class HubTransport {
       const name = line.slice(0, colon).trim().toLowerCase();
       const value = line.slice(colon + 1).trim();
       parsed.set(name, (parsed.get(name) || '') + (parsed.has(name) ? ', ' : '') + value);
+    }
+    if (!/^HTTP\/1\.[01] 101(?: |$)/.test(lines[0])) {
+      const status = Number(lines[0].split(' ')[1] || '0');
+      const denied = this.accessDenial(status, (name: string): string => parsed.get(name) || '');
+      this.failSocket((denied || new HttpFailure(status, 'upgrade_rejected')) as Error); return;
     }
     const upgrade = (parsed.get('upgrade') || '').toLowerCase().split(',').map((v: string) => v.trim());
     const connection = (parsed.get('connection') || '').toLowerCase().split(',').map((v: string) => v.trim());
@@ -734,14 +826,15 @@ export class HubTransport {
   }
 
   private enqueueFrame(opcode: number, payload: Uint8Array): Promise<void> {
-    if (payload.length > MAX_FRAME_BYTES || this.closed || this.closing && opcode !== 8) return Promise.reject(new Error('connection_closed'));
-    if (this.queuedFrames >= 64 || this.queuedBytes + payload.length > MAX_FRAME_BYTES * 2) { this.failSocket(new Error('send_queue_full')); return Promise.reject(new Error('send_queue_full')); }
+    const limit=this.outgoingLimit(opcode);
+    if (payload.length > limit || this.closed || this.closing && opcode !== 8) return Promise.reject(new Error('connection_closed'));
+    if (this.queuedFrames >= 64 || this.queuedBytes + payload.length > Math.max(MAX_FRAME_BYTES*2,limit)) { this.failSocket(new Error('send_queue_full')); return Promise.reject(new Error('send_queue_full')); }
     const tls = this.tlsSocket, tcp = this.tcpSocket, copied = payload.slice(), generation = this.generation;
     this.queuedFrames++; this.queuedBytes += copied.length;
     const send = async (): Promise<void> => {
       if (this.closed || this.closing && opcode !== 8 || this.proxy && !this.proxy.isCurrent()) throw new Error('connection_closed');
       const random = await cryptoFramework.createRandom().generateRandom(4);
-      if (this.closed || this.closing && opcode !== 8 || generation !== this.generation || tls !== this.tlsSocket || tcp !== this.tcpSocket || this.proxy && !this.proxy.isCurrent()) throw new Error('connection_closed');
+      if (this.closed || this.streamNetwork && !this.streamNetwork.current() && opcode!==8 || this.closing && opcode !== 8 || generation !== this.generation || tls !== this.tlsSocket || tcp !== this.tcpSocket || this.proxy && !this.proxy.isCurrent()) throw new Error('connection_closed');
       const mask = random.data;
       const maskBit = 0x80;
       let header: Uint8Array;
@@ -756,7 +849,7 @@ export class HubTransport {
       const masked = new Uint8Array(payload.length);
       for (let i = 0; i < payload.length; i++) masked[i] = copied[i] ^ mask[i & 3];
       const data = toArrayBuffer(concatArrays([header, mask, masked]));
-      if (this.closed || this.closing && opcode !== 8 || generation !== this.generation || tls !== this.tlsSocket || tcp !== this.tcpSocket || this.proxy && !this.proxy.isCurrent()) throw new Error('connection_closed');
+      if (this.closed || this.streamNetwork && !this.streamNetwork.current() && opcode!==8 || this.closing && opcode !== 8 || generation !== this.generation || tls !== this.tlsSocket || tcp !== this.tcpSocket || this.proxy && !this.proxy.isCurrent()) throw new Error('connection_closed');
       if (tls) await this.withTimeout(tls.send(data), 5000, 'socket_write_timeout');
       else if (tcp) await this.withTimeout(tcp.send({ data: data }), 5000, 'socket_write_timeout');
       else throw new Error('connection_closed');
@@ -767,9 +860,15 @@ export class HubTransport {
   }
 
   send(payload: string): boolean {
-    const bytes = utf8(payload); if (!this.upgraded || this.closed || this.closing || bytes.length > MAX_FRAME_BYTES || this.proxy && !this.proxy.isCurrent()) return false;
+    const bytes = utf8(payload); if (!this.upgraded || this.closed || this.closing || bytes.length > this.outgoingLimit(1) || this.proxy && !this.proxy.isCurrent()) return false;
     this.enqueueFrame(1, bytes).catch(() => { if (!this.closing) this.failSocket(new Error('socket_write_failed')); });
     return !this.closed;
+  }
+
+  async sendBinaryAsync(payload:ArrayBuffer):Promise<void> {
+    if (!this.upgraded || this.closed || this.closing || payload.byteLength>MAX_FRAME_BYTES ||
+      this.streamNetwork && !this.streamNetwork.current() || this.proxy && !this.proxy.isCurrent()) throw new Error('connection_closed');
+    await this.enqueueFrame(2,new Uint8Array(payload));
   }
 
   sendBinary(payload: ArrayBuffer): boolean {
