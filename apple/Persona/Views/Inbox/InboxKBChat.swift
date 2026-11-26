@@ -56,6 +56,14 @@ final class InboxKBChats {
         return id
     }
 
+    /// The stamp the Inbox list's copy of item `id` carries (`InboxItem.manager`, what its key is made of), the copy of the
+    /// assistant whose knowledge base listed it (`manager`, nil: the default); `manager` when the list has no copy.
+    /// `owner` says whose a stamp is.
+    nonisolated static func listedManager(of id: String, manager: String?, items: [InboxItem], owner: (String?) -> String) -> String? {
+        let whose = owner(manager)
+        return items.first { $0.id == id && owner($0.manager) == whose }?.manager ?? manager
+    }
+
     /// Reads which chat item came from, unless that is known or being asked.
     func load(_ item: InboxItem) async {
         let key = item.key
@@ -81,5 +89,28 @@ struct InboxKBChatButton: View {
             Button { model.openKBChat(chat) } label: { Label("Knowledge Page", systemImage: Theme.Icon.knowledge) }
                 .accessibilityIdentifier("inbox.detail.kbChat")
         }
+    }
+}
+
+extension AppModel {
+    /// Opens Inbox item `id` of the assistant whose knowledge base listed it (`manager`, as its page's client names it)
+    /// as a link to the item does (`/inbox/<id>`): the Inbox, with the item open once it is listed. The link names the
+    /// list's own stamp of the item, so the Inbox finds it by its key.
+    func openKBInboxItem(_ id: String, manager: String?) {
+        guard let group = hub?.group else { return }
+        let roster = managerRoster
+        let stamp = InboxKBChats.listedManager(of: id, manager: manager, items: InboxStore.shared.items) { roster?.owner($0) ?? "" }
+        #if os(iOS)
+        openNavigationLink(.inboxItem(id: id, manager: stamp), group: group)
+        #else
+        _ = openHubPage(.inboxItem(id: id, manager: stamp), group: group)
+        #endif
+    }
+
+    /// Opens knowledge base chat `id`'s page over the screen, as a link to it does (`/kb/chats/<id>`).
+    func openKBChat(_ id: String) {
+        guard let group = hub?.group, case .sheet(let page)? = openHubPage(.knowledgeEntry(kind: KBKind.chats.rawValue, id: id), group: group)
+        else { return }
+        linkSheet = page
     }
 }

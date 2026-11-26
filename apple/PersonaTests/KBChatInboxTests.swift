@@ -149,12 +149,12 @@ struct KBChatInboxTests {
         let owner: (String?) -> String = { roster.owner($0) }
         let items = [try Self.inboxItem("lark:c1:2", manager: "assistant"), try Self.inboxItem("lark:c1:2", manager: "work")]
         // The default's knowledge base (its client names no manager): the default's copy, stamped with its id.
-        #expect(KBChatInbox.listedManager(of: "lark:c1:2", manager: nil, items: items, owner: owner) == "assistant")
-        #expect(KBChatInbox.listedManager(of: "lark:c1:2", manager: "work", items: items, owner: owner) == "work")
+        #expect(InboxKBChats.listedManager(of: "lark:c1:2", manager: nil, items: items, owner: owner) == "assistant")
+        #expect(InboxKBChats.listedManager(of: "lark:c1:2", manager: "work", items: items, owner: owner) == "work")
         // Not listed (yet): the knowledge base's own manager.
-        #expect(KBChatInbox.listedManager(of: "lark:c1:9", manager: "work", items: items, owner: owner) == "work")
+        #expect(InboxKBChats.listedManager(of: "lark:c1:9", manager: "work", items: items, owner: owner) == "work")
         // One assistant, no roster: whatever the list stamped.
-        #expect(KBChatInbox.listedManager(of: "lark:c1:2", manager: nil, items: [items[0]]) { _ in "" } == "assistant")
+        #expect(InboxKBChats.listedManager(of: "lark:c1:2", manager: nil, items: [items[0]]) { _ in "" } == "assistant")
     }
 
     @Test func anItemsChatIsAskedOnceAndOnlyOfAnItemThatCanHaveOne() async throws {

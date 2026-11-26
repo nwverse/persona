@@ -3,9 +3,9 @@ import SwiftUI
 
 // A chat's Inbox items on its knowledge page (#15356, docs/assistant/knowledge.md "A chat's Inbox items"), as the web
 // draws them (web/src/views/knowledge/KBInbox.tsx): "In Inbox", the open items with their section and the done ones
-// folded under "N Done", each opening its item; and a row of the chat's last 7 days that an item holds, opening that
-// item. An item opens as a link to it does (`/inbox/<id>`, docs/protocol/deep-links.md). A chat without items, and a
-// hub from before them, draw the page as before.
+// folded under "N done", each opening its item; and a row of the chat's last 7 days that an item holds, opening that
+// item. An item opens as a link to it does (`/inbox/<id>`, docs/protocol/deep-links.md; `AppModel.openKBInboxItem`, on
+// the Inbox's side in InboxKBChat.swift). A chat without items, and a hub from before them, draw the page as before.
 
 /// The page's part of the chat's Inbox items, worked out once per read (pure, for tests).
 nonisolated enum KBChatInbox {
@@ -127,14 +127,6 @@ nonisolated enum KBChatInbox {
         let shape = d.enumerated().allSatisfy { i, c in i == 4 || i == 7 ? c == "-" : c.isASCII && c.isNumber }
         return d.count == 10 && shape ? d : nil
     }
-
-    /// The stamp the Inbox list's copy of item `id` carries (`InboxItem.manager`, what its key is made of), the copy of the
-    /// assistant whose knowledge base listed it (`manager`, nil: the default); `manager` when the list has no copy.
-    /// `owner` says whose a stamp is.
-    static func listedManager(of id: String, manager: String?, items: [InboxItem], owner: (String?) -> String) -> String? {
-        let whose = owner(manager)
-        return items.first { $0.id == id && owner($0.manager) == whose }?.manager ?? manager
-    }
 }
 
 /// "In Inbox" on a chat's page: its open Inbox items, then "N Done" folding the done ones open. Each row opens its item.
@@ -235,28 +227,5 @@ struct KBRecentText: View {
         } else {
             Text(text).font(Theme.Font.secondary).textSelection(.enabled)
         }
-    }
-}
-
-extension AppModel {
-    /// Opens Inbox item `id` of the assistant whose knowledge base listed it (`manager`, as its page's client names it)
-    /// as a link to the item does (`/inbox/<id>`): the Inbox, with the item open once it is listed. The link names the
-    /// list's own stamp of the item, so the Inbox finds it by its key.
-    func openKBInboxItem(_ id: String, manager: String?) {
-        guard let group = hub?.group else { return }
-        let roster = managerRoster
-        let stamp = KBChatInbox.listedManager(of: id, manager: manager, items: InboxStore.shared.items) { roster?.owner($0) ?? "" }
-        #if os(iOS)
-        openNavigationLink(.inboxItem(id: id, manager: stamp), group: group)
-        #else
-        _ = openHubPage(.inboxItem(id: id, manager: stamp), group: group)
-        #endif
-    }
-
-    /// Opens knowledge base chat `id`'s page over the screen, as a link to it does (`/kb/chats/<id>`).
-    func openKBChat(_ id: String) {
-        guard let group = hub?.group, case .sheet(let page)? = openHubPage(.knowledgeEntry(kind: KBKind.chats.rawValue, id: id), group: group)
-        else { return }
-        linkSheet = page
     }
 }

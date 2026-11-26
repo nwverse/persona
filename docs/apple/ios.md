@@ -3302,7 +3302,7 @@ Inbox items"; `apple/Persona/Views/Knowledge/KBChatInbox.swift`, `apple/Persona/
   color, the Inbox mark at its end) (VoiceOver hint "Open in Inbox: <title>"), hit a finger's height without taking more room
   (`tapTargetOutset`). When no item holds a row, the text is the one `Text` it was, selectable as before.
 - **Opening an item** (`AppModel.openKBInboxItem`): as a link to it does (`openNavigationLink(.inboxItem…)`): the Inbox, the
-  item opened once it is listed. The link names the stamp the Inbox list's copy carries (`KBChatInbox.listedManager`: the copy
+  item opened once it is listed. The link names the stamp the Inbox list's copy carries (`InboxKBChats.listedManager`: the copy
   whose owner is the knowledge base's assistant), since the list keys an item by its id and its stamp. A chat's page shown
   as a sheet (`shownAsSheet`) closes first. While the hub's navigation hides the Inbox page, the section and the row marks
   are left out: a link would go back to the start.
