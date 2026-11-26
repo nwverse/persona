@@ -19,7 +19,7 @@ whether there's a pending interaction, and whether the user has looked at it in 
 
 A dispatched session with an unknown host status reads as `state unknown` in `dispatch_read`. Its last reply may be partial. A session marked `offline` on a connected computer is interrupted. When the computer itself is offline, the manager reports `computer offline` and leaves the transcript unread. A stopped session with `turn_error_code: "upstream_unavailable"` (#13372) keeps its wire `state` (`unread` or `idle`) and client badge counts unchanged, while server-side `agents_list` and the Assistant live snapshot group it under `Needs you` so stalled external `/loop` and coding Agent sessions remain visible.
 
-List order (each client's rank: web `lib/format.ts`, iOS / Mac `AgentListOrder.rank`, Android `agentRank`): Needs you → Unread → Awaiting reply → Working → Just finished → Seen → Unknown → Not running. `Session.view.rank` ("Five phases" below) replaces these as each client moves to it.
+The Web Agents list uses `Session.view.rank` ("Five phases" below). Clients using the older list order (iOS / Mac `AgentListOrder.rank`, Android `agentRank`) show Needs you → Unread → Awaiting reply → Working → Just finished → Seen → Unknown → Not running.
 
 Sort priority of a folded row or tab (which agent it speaks for and which pane it opens on; web `lib/herdr-tree.ts`, Android `tabUrgency`): Needs you → Working → Unread → Seen → Unknown → Not running, with Awaiting reply and then Just finished right after Unread on Android.
 iOS / Mac tab rows (`TabPanes.swift`) go by `AgentState.priority` instead: Needs you → Unread → Working → Seen → Unknown → Not running.
@@ -328,8 +328,8 @@ Needs you; **D-B** `unknown` (and a state this hub does not know) is `idle`, rea
   running; anything else is `host_unknown`.
 - **Per computer.** Each machine's list is told on its own, so a row is decided with its own computer's rows and every
   pending card: a child folded under a parent on another computer is decided as a row of its own (`counted` on the
-  child, not on the parent), where the Agents list counts it under the parent. Cross-computer folds are rare (A2A
-  subagents); deciding the whole fleet at once is a follow-up.
+  child, not on the parent). The Web Agents list keeps that counted child visible. Clients using the older hierarchy
+  can fold it under the parent. Cross-computer folds are rare (A2A subagents). Deciding the whole fleet at once is a follow-up.
 
 ### Rank
 
