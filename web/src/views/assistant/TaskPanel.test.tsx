@@ -102,6 +102,27 @@ async function expectSessionWindow(s = first) {
   expect(newWindow.mock.calls.at(-1)?.[0]).not.toContain("/todos");
 }
 
+it("answers a rolled-up step's decision from its task panel", async () => {
+  const step: Todo = {
+    ...task(), part_of: "example-parent",
+    supervision: { state: "needs_user", supervisor: "example-conversation" },
+    ask: {
+      asked_at: at, outcome: "decide", verdict: "Choose a release", question: "Which release should go out?",
+      recommend: "Preview", options: [{ label: "Preview" }, { label: "Stable" }],
+    },
+    view: { phase: "needs_you", section: "needs_you", reason: "owner_decides", rank: 0 },
+  };
+  await open({ kind: "task", todo: step.id }, step);
+  await expect.poll(() => host.querySelector("aside [data-decision-question]")?.textContent).toBe(step.ask?.question);
+  const option = [...host.querySelectorAll<HTMLButtonElement>("aside button")].find((button) => button.textContent === "Stable");
+  expect(option).toBeDefined();
+  await act(async () => option!.click());
+  const writes = vi.mocked(fetch).mock.calls.filter(([url, init]) => String(url).endsWith("/accept") && init?.method === "POST");
+  expect(writes.map(([url, init]) => [url, JSON.parse(String(init?.body))])).toEqual([
+    [`/api/v1/todos/${step.id}/accept`, { asked_at: at, option: "Stable" }],
+  ]);
+});
+
 describe("Agent panel new-window destination", () => {
   it("opens the displayed Agent session from a task card or task-backed In progress tray entry", async () => {
     await open({ kind: "task", todo: "example-task" });

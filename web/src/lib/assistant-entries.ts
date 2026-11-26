@@ -18,11 +18,13 @@ import type { Interaction, Session } from "./types";
  * however long it has waited. A task is one row whatever its agents: they are not listed on their own. In the main
  * conversation an Agent that belongs to no task (opened by hand) is a row of its own.
  */
+type NeedsYouTask = { kind: "task"; key: string; todo: Todo; status: TodoStatus; asks: Interaction[]; countsOpen: boolean; steps?: NeedsYouTask[] };
+
 export type NeedsYouItem =
   /** A task whose agent asks something (`asks`, oldest first), or that waits for the user's decision.
    *  `countsOpen` says whether the To-dos page's "Not done" counts the to-do (#3331): the row stays visible whatever
    *  it says, the chip badge counts it only when it does. */
-  | { kind: "task"; key: string; todo: Todo; status: TodoStatus; asks: Interaction[]; countsOpen: boolean }
+  | NeedsYouTask
   /** An Agent that belongs to no task, asking something. */
   | { kind: "agent"; key: string; session: Session; asks: Interaction[] }
   /** A plan waiting for Start. */
@@ -165,6 +167,21 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
   const folded = new Set<string>();
   const slots = taskCardSlots(conversation, input.cards ?? [], feed, plans, todos, isMain);
   const openOf = openByView(todos);
+  // The hub counts the parent once. Include its waiting steps even if a different conversation dispatched them.
+  const slotIds = new Set(slots.map((card) => card.todo_id));
+  const carried = new Map<string, NeedsYouTask[]>();
+  const stepRows = new Map<string, NeedsYouTask[]>();
+  for (const step of todos) {
+    const parent = step.part_of ? byTodo.get(step.part_of) : undefined;
+    if (!parent || parent === step || !slotIds.has(parent.id) || !parent.view?.steps ||
+        !hubNeedsYou(parent, openOf) || step.view?.section !== "needs_you" || step.id.startsWith("todo_od_")) continue;
+    const rows = stepRows.get(parent.id) ?? [];
+    stepRows.set(parent.id, rows);
+    carried.set(step.id, rows);
+    if (!slotIds.has(step.id)) {
+      slots.push({ id: `task:${step.id}`, todo_id: step.id, at: step.created_at, updated_at: step.updated_at, state: "not_started" });
+    }
+  }
   const activeAgents = (todo: Todo) => (todo.done_at ? [] : (todo.agents ?? []).filter((a) => !a.released_at));
   const homeAgents = (todo: Todo) => (todo.done_at ? [] : (todo.agents ?? []).filter((a) => !a.released_at || parkInteractionID(todo)));
   // One home per request (docs/design/DESIGN_SYSTEM.md 4.8): an Agent several of these tasks list asks under one of them,
@@ -218,12 +235,16 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
     const quietOwnerAskHere = todo.quiet && (isMain || supervisesHere) && (reviewState(todo) === "user_check" ||
       taskReviewDecisionAsk(todo) && !input.deferred?.[decisionLaterKey(todo)]);
     const hub = hubNeedsYou(quietOwnerAskHere ? { ...todo, quiet: false } : todo, openOf);
-    if (asks.length) asking.push({ kind: "task", key, todo, status, asks, countsOpen });
+    const item: NeedsYouTask = { kind: "task", key, todo, status, asks, countsOpen };
+    // Only the review decision is hidden; a live Agent question still has its home.
+    const hiddenDecision = !deliveryApproval && status !== "needs_you" && decision &&
+      (decisionDismissed(todo) || input.deferred?.[decisionLaterKey(todo)]);
+    const parentSteps = carried.get(todo.id);
+    if (parentSteps) {
+      if (asks.length || (!hiddenDecision && (waits || decision || deliveryApproval))) parentSteps.push(item);
+    } else if (asks.length) asking.push(item);
     else if (hub ?? (waits || decision || deliveryApproval)) {
-      // Only the review decision is hidden; a live Agent question above still has its home.
-      if (deliveryApproval || !(status !== "needs_you" && decision && (decisionDismissed(todo) || input.deferred?.[decisionLaterKey(todo)]))) {
-        deciding.push({ item: { kind: "task", key, todo, status, asks, countsOpen }, rank: todoRank(todo, status), at: card.at });
-      }
+      if (!hiddenDecision) deciding.push({ item, rank: todoRank(todo, status), at: card.at });
     }
     // its supervisor's review (#8678): Persona's own work, not the owner's and not a wait on the upstream maintainer, so
     // its own group whatever the To-dos page files it under, even with a fresh open PR; once reviewed (accepted, or parked
@@ -273,13 +294,21 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
 
   const newest = (a: { at: string; rank?: number }, b: { at: string; rank?: number }) => (a.rank ?? 0) - (b.rank ?? 0) || byTime(b.at, a.at);
   const firstAsk = (item: NeedsYouItem) => (item.kind === "task" || item.kind === "agent" ? item.asks[0]?.created_at : undefined);
+  const needsYou = [
+    ...[...asking, ...agentsAsking].sort((a, b) => byTime(firstAsk(a), firstAsk(b))),
+    ...plansWaiting,
+    ...deciding.sort(newest).map((row) => row.item),
+    ...messages,
+  ].filter((item) => {
+    if (item.kind !== "task") return true;
+    const steps = stepRows.get(item.todo.id);
+    if (!steps) return true;
+    item.steps = steps;
+    return steps.length > 0 || item.asks.length > 0 || taskAwaitsDecision(item.todo) ||
+      heldDelivery(item.todo)?.unblock === "user" || WAITS_ON_YOU.has(item.status);
+  });
   return {
-    needsYou: [
-      ...[...asking, ...agentsAsking].sort((a, b) => byTime(firstAsk(a), firstAsk(b))),
-      ...plansWaiting,
-      ...deciding.sort(newest).map((row) => row.item),
-      ...messages,
-    ],
+    needsYou,
     running: [...open.sort(newest).map((row) => row.item), ...agentsRunning],
     shelved: shelved.sort(newest).map((row) => row.item),
     parked: parked.sort(newest).map((row) => row.item),
