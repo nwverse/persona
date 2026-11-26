@@ -38,39 +38,18 @@ import type { ComponentType, ReactElement, ReactNode, RefObject } from "react";
 import { useSyncExternalStore } from "react";
 import { addCatalogs, type CatalogLoaders } from "../i18n";
 import type { IconName } from "../ui/icons";
-import { BASE } from "../lib/base";
 import type { UIColor } from "../lib/extension-ui-v6";
 import type { Route } from "../lib/router";
 import type { KBDetail, KBEntry } from "../lib/kb";
 import type { State } from "../lib/store";
 import type { Interaction, Item, Session } from "../lib/types";
-import { moduleSwitchedOff, readStoredJson, subscribeModuleSwitches } from "./module-switch";
+import { moduleSwitchedOff, subscribeModuleSwitches } from "./module-switch";
+import { readHubModules, rememberHubModules } from "./module-hub-storage";
 
 import { MODULES_FEATURE } from "./module-flags";
 
 // The hub flag names (the rule above) live in module-flags.ts, so a descriptor can name its flag without the host.
 export { MODULES_FEATURE, moduleFeature } from "./module-flags";
-
-const hubKey = () => `persona.modules.hub:${typeof location < "u" ? location.origin ?? "" : ""}${BASE}`;
-
-const readHubModules = (): string[] | null => {
-  const v = readStoredJson(hubKey());
-  return Array.isArray(v) && v.every((x): x is string => typeof x === "string" && x.startsWith("module.")) ? v : null;
-};
-
-const rememberHubModules = (features: readonly string[]) => {
-  const key = hubKey();
-  const next = features.includes(MODULES_FEATURE)
-    ? JSON.stringify([...new Set(features.filter((f) => f.startsWith("module.")))].sort())
-    : null;
-  try {
-    if (next === localStorage.getItem(key)) return;
-    if (next === null) localStorage.removeItem(key);
-    else localStorage.setItem(key, next);
-  } catch {
-    // storage blocked or full: the live hello still applies for this page
-  }
-};
 
 /** The typed chat slots a module may fill (#13430 `composer_actions`, `chat_accessories`), each drawn by the chat page
  *  where the comment on ChatSlotComponents says. */

@@ -77,7 +77,8 @@ func checkEvent(raw json.RawMessage) (checkedEvent, error) {
 	}
 	bad := func(msg string) error { return conversationsInvalid(assistantwire.MethodAssistantEvent, msg) }
 	p.Key, p.Title = strings.TrimSpace(p.Key), strings.TrimSpace(p.Title)
-	p.Body, p.ActionHint, p.State = strings.TrimSpace(p.Body), strings.TrimSpace(p.ActionHint), strings.TrimSpace(p.State)
+	p.Body, p.ActionHint = strings.TrimSpace(p.Body), strings.TrimSpace(p.ActionHint)
+	p.State = assistantwire.AssistantEventState(strings.TrimSpace(string(p.State)))
 	for _, f := range []struct {
 		name  string
 		value string
@@ -85,7 +86,7 @@ func checkEvent(raw json.RawMessage) (checkedEvent, error) {
 		need  bool
 	}{
 		{"key", p.Key, extEventKeyMost, true}, {"title", p.Title, extEventTitleMost, true}, {"body", p.Body, extEventBodyMost, false},
-		{"action_hint", p.ActionHint, extEventActionMost, false}, {"state", p.State, extEventStateMost, false},
+		{"action_hint", p.ActionHint, extEventActionMost, false}, {"state", string(p.State), extEventStateMost, false},
 	} {
 		if f.need && f.value == "" {
 			return checkedEvent{}, bad(f.name + " is required")
@@ -101,7 +102,7 @@ func checkEvent(raw json.RawMessage) (checkedEvent, error) {
 	default:
 		return checkedEvent{}, bad("severity must be info, warning or critical")
 	}
-	return checkedEvent{AssistantEventParams: p, replace: p.Replace == nil || *p.Replace}, nil
+	return checkedEvent{AssistantEventParams: p, replace: p.Replace.Replaces()}, nil
 }
 
 // extensionEvent delivers one event of extension req.Extension into the main conversation.
@@ -109,7 +110,7 @@ func (s *Service) extensionEvent(ctx context.Context, req assistantwire.Extensio
 	if !extEventIDRe.MatchString(req.Extension) { // the manager's word, but it ends up in the assistant's prompt as it is
 		return assistantwire.AssistantEventResult{}, conversationsInvalid(assistantwire.MethodExtensionEvent, "extension is not an extension id")
 	}
-	ev, err := checkEvent(req.Params)
+	ev, err := checkEvent(json.RawMessage(req.Params))
 	if err != nil {
 		return assistantwire.AssistantEventResult{}, err
 	}
@@ -126,7 +127,7 @@ func (s *Service) extensionEvent(ctx context.Context, req assistantwire.Extensio
 	msg := relayMsg{
 		From: req.Extension, FromTitle: name, Tool: extensionEventTool, Key: ev.Key, Title: ev.Title, State: ev.Severity, At: time.Now().UTC(),
 		Text: prompts.RenderExtensionEvent(prompts.ExtensionEvent{ID: req.Extension, Severity: ev.Severity, Name: name, Key: ev.Key,
-			Title: ev.Title, Body: ev.Body, ActionHint: ev.ActionHint, State: ev.State}),
+			Title: ev.Title, Body: ev.Body, ActionHint: ev.ActionHint, State: string(ev.State)}),
 	}
 	c, ok := s.session(ctx, machine, to)
 	idle := ok && c.Status != proto.StatusWorking && !c.Starting

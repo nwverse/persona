@@ -18,6 +18,7 @@
   without authorizing an unrelated conversation or taking over a real supervisor's offline queue; test direct, busy
   and restart-restored delivery with the assignment unchanged.
 
+
 - A scheduled-workout fixture must clear unrelated default routines before admission (#15442). `acceptWorkout`
   appends its task to the existing schedule; unlike `setTasks`, it does not replace the morning and evening routines.
   Near their due time, a catalog test can count both the workout report and a briefing, while waiting for only the
@@ -1038,3 +1039,10 @@ Save the hold timestamp and promotion together. Clear the active record at the e
 turn's decision to the delayed push and channel mirror. Reading the conversation's current hold at notification
 time can pick up the next round. A restart test for promotion must show the hold still exists before it checks
 that a silent finish is refused.
+
+## An inbox row can carry more than one provider event (#15517)
+
+Keep the deduplication key independent of the Inbox row and the binding that matched. Two readers can report
+the same comment, and the row can collect a later comment while the first is waiting for its digest. Commit the
+source receipt with the Inbox write. Reserve only one action owner and pin the delivery before contacting the
+Agent. Record uncertain delivery against that recipient so a restarted worker does not try another one.

@@ -79,9 +79,11 @@ export function ExtensionNavPage({ extension, ui, onToggleSidebar }: { extension
     },
     [extension, ui],
   );
-  // a code review or a file browser (UI version 4) and a dashboard of columns (8) take the page's whole width; everything
-  // else stays a column
-  const [wide, setWide] = useState(false);
+  // a code review or a file browser (UI version 4), a dashboard of columns (8), and interactive canvases (10–12: graph,
+  // scene, map) take the page's whole width; everything else stays a column
+  const [wideAt, setWideAt] = useState<{ at: string; wide: boolean }>();
+  const onWide = useCallback((next: boolean) => setWideAt({ at, wide: next }), [at]);
+  const wide = wideAt?.at === at && wideAt.wide;
   return (
     <div className="flex h-full flex-col">
       <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3 sm:px-4">
@@ -102,9 +104,9 @@ export function ExtensionNavPage({ extension, ui, onToggleSidebar }: { extension
         <IconButton icon="retry" label={t("extensions-extensionslots.redraw")} onClick={() => setN((x) => x + 1)} />
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className={cx("mx-auto flex flex-col px-4 py-6 sm:px-8", wide ? "max-w-[1680px]" : "max-w-[880px]")}>
+        <div data-extension-page-container className={cx("mx-auto flex flex-col px-4 py-6 sm:px-8", wide ? "max-w-[1680px]" : "max-w-[880px]")}>
           <Suspense fallback={<Loading />}>
-            <OwnerScope extension={extension}><ExtensionUI key={`${extension}/${ui}/${n}`} extension={extension} ui={ui} title={title} bare state={state} onWide={setWide} remember {...(pages ? { onTitle, openPage } : {})} /></OwnerScope>
+            <OwnerScope extension={extension}><ExtensionUI key={`${extension}/${ui}/${n}`} extension={extension} ui={ui} title={title} bare state={state} onWide={onWide} remember {...(pages ? { onTitle, openPage } : {})} /></OwnerScope>
           </Suspense>
         </div>
       </div>

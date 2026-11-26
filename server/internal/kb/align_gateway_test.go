@@ -3,6 +3,7 @@ package kb
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -282,5 +283,459 @@ func TestAlignDaysNearMidnight(t *testing.T) {
 	}
 	if got := alignDays(time.Date(2026, 3, 2, 23, 58, 0, 0, zone), zone); len(got) != 2 || got[1] != "2026-03-03" {
 		t.Errorf("before midnight: %v", got)
+	}
+}
+
+// Pre-#15486 overlapping larksync chats (written without alignment and with empty sender names "?") are deduplicated
+// once by DedupeLarkSyncChats: overlapping lines are removed from the larksync copy, .crosswalk.json is recorded,
+// non-overlapping lines and all receipt IDs are preserved, and reruns (with or without the version marker) are no-ops.
+func TestDedupeLarkSyncChatsBackfillIsIdempotentAndPreservesNonOverlap(t *testing.T) {
+	e := testEngine(t, nil)
+	ctx := context.Background()
+	at := alignAt()
+
+	// Seed Lark gateway chat.
+	gw := SourceChat{ID: "f_overlap", Name: "Example Overlap Group", Kind: "group"}
+	if n, err := e.Ingest(ctx, named("lark"), gw, []SourceMessage{
+		{ID: "g1", SenderID: "u1", SenderName: "Example Alice", Text: "Shared announcement", At: at},
+		{ID: "g2", SenderID: "u_me", SenderName: "Owner", Mine: true, Text: "Owner reply", At: at.Add(20 * time.Second)},
+	}); err != nil || n != 2 {
+		t.Fatalf("gateway ingest: %d, %v", n, err)
+	}
+
+	// Simulate pre-#15486 larksync ingestion (e.Align nil, SenderName empty -> written as "?"), with 2 overlapping
+	// messages + 1 unique message that the gateway does not have.
+	sync := SourceChat{ID: "oc_overlap", Name: "Example Overlap Group", Kind: "group"}
+	if n, err := e.Ingest(ctx, named("larksync"), sync, []SourceMessage{
+		{ID: "om_dup1", SenderID: "ou_a", SenderName: "", Text: "Shared announcement", At: at.Add(time.Second)},
+		{ID: "om_dup2", SenderID: "ou_me", SenderName: "", Mine: true, Text: "Owner reply", At: at.Add(21 * time.Second)},
+		{ID: "om_unique", SenderID: "ou_b", SenderName: "", Text: "Only in larksync", At: at.Add(40 * time.Second)},
+	}); err != nil || n != 3 {
+		t.Fatalf("pre-#15486 sync ingest: %d, %v", n, err)
+	}
+
+	// First pass removes the 2 duplicates, writes .crosswalk.json, preserves om_unique and all 3 receipt IDs.
+	dropped := e.DedupeLarkSyncChats()
+	if dropped != 2 {
+		t.Fatalf("DedupeLarkSyncChats dropped %d, want 2", dropped)
+	}
+	text := e.Store.Since("larksync-oc_overlap", time.Time{}, 1<<20)
+	if strings.Contains(text, "Shared announcement") || strings.Contains(text, "Owner reply") {
+		t.Fatalf("duplicates still in larksync archive:\n%s", text)
+	}
+	if !strings.Contains(text, "Only in larksync") {
+		t.Fatalf("non-overlapping message lost:\n%s", text)
+	}
+	if w := readCrosswalk(t, e.Store); w["larksync-oc_overlap"] != "lark-f_overlap" {
+		t.Fatalf("crosswalk = %v, want larksync-oc_overlap -> lark-f_overlap", w)
+	}
+	if c, ok := e.Store.Chat("larksync-oc_overlap"); !ok || c.Messages != 1 {
+		t.Fatalf("chat count = %+v, want Messages=1", c)
+	}
+	rIDs := receiptIDs(t, e.Store, "larksync-oc_overlap")
+	for _, id := range []string{"om_dup1", "om_dup2", "om_unique"} {
+		if _, ok := rIDs[id]; !ok {
+			t.Errorf("receipt %s lost after dedupe", id)
+		}
+	}
+
+	// Second pass is skipped via version marker (0 dropped).
+	if again := e.DedupeLarkSyncChats(); again != 0 {
+		t.Fatalf("second pass with marker dropped %d, want 0", again)
+	}
+
+	// Even if the version marker is removed, rerunning is inherently idempotent (0 dropped, unique line stays).
+	if err := os.Remove(filepath.Join(e.Store.Dir, KindChat, larkSyncRepairFile)); err != nil {
+		t.Fatal(err)
+	}
+	if again := e.DedupeLarkSyncChats(); again != 0 {
+		t.Fatalf("rerun without marker dropped %d, want 0", again)
+	}
+	if !strings.Contains(e.Store.Since("larksync-oc_overlap", time.Time{}, 1<<20), "Only in larksync") {
+		t.Fatal("unique line disappeared on rerun")
+	}
+}
+
+// Re-ingesting a repair batch with resolved SenderNames rewrites pre-#15486 "?:" lines in place, updates Person.Name
+// and unnamed DM Chat.Name, removes any line that now aligns with a gateway chat, and is idempotent on replay.
+func TestIngestRepairsPre15486SenderNamesAndIsIdempotent(t *testing.T) {
+	e := testEngine(t, nil)
+	ctx := context.Background()
+	at := alignAt()
+
+	// Seed a gateway chat with a minute-only attachment line that could not align without a sender name.
+	gw := SourceChat{ID: "f_dm", Name: "Example Group", Kind: "group"}
+	if _, err := e.Ingest(ctx, named("lark"), gw, []SourceMessage{
+		{ID: "g_named", SenderID: "u1", SenderName: "Example Alice", Text: "Gateway copy", At: at},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pre-#15486 ingestion (no Align, empty SenderName) into a group chat and an unnamed DM chat.
+	grp := SourceChat{ID: "oc_grp", Name: "Example Group", Kind: "group"}
+	if n, err := e.Ingest(ctx, named("larksync"), grp, []SourceMessage{
+		{ID: "om_overlap", SenderID: "ou_alice", SenderName: "", Text: "Gateway copy", At: at.Add(time.Second)},
+		{ID: "om_keep", SenderID: "ou_bob", SenderName: "", Text: "Sync only line", At: at.Add(30 * time.Second)},
+	}); err != nil || n != 2 {
+		t.Fatalf("seed grp: %d, %v", n, err)
+	}
+	dm := SourceChat{ID: "oc_dm", Name: "", Kind: "dm"}
+	if n, err := e.Ingest(ctx, named("larksync"), dm, []SourceMessage{
+		{ID: "om_dm", SenderID: "ou_carol", SenderName: "", Text: "Direct hello", At: at.Add(40 * time.Second)},
+	}); err != nil || n != 1 {
+		t.Fatalf("seed dm: %d, %v", n, err)
+	}
+
+	// Now enable the gateway aligner and replay repair batches with resolved SenderNames.
+	e.Align = NewGatewayAligner(e.Store)
+	if n, err := e.Ingest(ctx, named("larksync"), grp, []SourceMessage{
+		{ID: "om_overlap", SenderID: "ou_alice", SenderName: "Example Alice", Text: "Gateway copy", At: at.Add(time.Second)},
+		{ID: "om_keep", SenderID: "ou_bob", SenderName: "Example Bob", Text: "Sync only line", At: at.Add(30 * time.Second)},
+	}); err != nil || n != 0 {
+		t.Fatalf("repair grp: %d, %v", n, err)
+	}
+	if n, err := e.Ingest(ctx, named("larksync"), SourceChat{ID: "oc_dm", Name: "Example Carol", Kind: "dm"}, []SourceMessage{
+		{ID: "om_dm", SenderID: "ou_carol", SenderName: "Example Carol", Text: "Direct hello", At: at.Add(40 * time.Second)},
+	}); err != nil || n != 0 {
+		t.Fatalf("repair dm: %d, %v", n, err)
+	}
+
+	grpText := e.Store.Since("larksync-oc_grp", time.Time{}, 1<<20)
+	if strings.Contains(grpText, "Gateway copy") {
+		t.Fatalf("aligned duplicate not removed during repair:\n%s", grpText)
+	}
+	if !strings.Contains(grpText, "Example Bob: Sync only line") || strings.Contains(grpText, "?: Sync only line") {
+		t.Fatalf("sender name not repaired in grp:\n%s", grpText)
+	}
+	if c, _ := e.Store.Chat("larksync-oc_grp"); c.Messages != 1 {
+		t.Fatalf("grp Messages = %d, want 1", c.Messages)
+	}
+	if p, ok := e.Store.Person(PersonID("larksync", "ou_bob")); !ok || p.Name != "Example Bob" {
+		t.Fatalf("person ou_bob = %+v, want Example Bob", p)
+	}
+	if w := readCrosswalk(t, e.Store); w["larksync-oc_grp"] != "lark-f_dm" {
+		t.Fatalf("crosswalk = %v", w)
+	}
+
+	dmText := e.Store.Since("larksync-oc_dm", time.Time{}, 1<<20)
+	if !strings.Contains(dmText, "Example Carol: Direct hello") {
+		t.Fatalf("dm sender not repaired:\n%s", dmText)
+	}
+	if c, _ := e.Store.Chat("larksync-oc_dm"); c.Name != "Example Carol" {
+		t.Fatalf("dm chat name = %q, want Example Carol", c.Name)
+	}
+
+	// Idempotent replay: running the exact same repair batch again leaves text and counts unchanged.
+	beforeText := e.Store.Since("larksync-oc_grp", time.Time{}, 1<<20)
+	if n, err := e.Ingest(ctx, named("larksync"), grp, []SourceMessage{
+		{ID: "om_overlap", SenderID: "ou_alice", SenderName: "Example Alice", Text: "Gateway copy", At: at.Add(time.Second)},
+		{ID: "om_keep", SenderID: "ou_bob", SenderName: "Example Bob", Text: "Sync only line", At: at.Add(30 * time.Second)},
+	}); err != nil || n != 0 {
+		t.Fatalf("replay repair grp: %d, %v", n, err)
+	}
+	if afterText := e.Store.Since("larksync-oc_grp", time.Time{}, 1<<20); afterText != beforeText {
+		t.Fatalf("replay modified archive:\nbefore:\n%s\nafter:\n%s", beforeText, afterText)
+	}
+}
+
+// Source renderers differ in link notation, entity escaping and inline media placeholders. The additional match
+// preserves exact receipt times, known senders, attachment counts and every meaningful word/link destination.
+func TestGatewayAlignerEquivalentBodyAndAttachmentFormats(t *testing.T) {
+	cases := []struct {
+		name, gateway, synced string
+		media                 bool
+	}{
+		{"link", "Read [guide](https://example.com/guide)", "Read guide (https://example.com/guide)", false},
+		{"entity", "Review A &amp; B", "Review A & B", false},
+		{"inline_image", "Before after", "Before [image] after", true},
+		{"inline_video", "Watch this now", "Watch [video] this now", true},
+	}
+	for _, archived := range []bool{false, true} {
+		t.Run(fmt.Sprint("archived=", archived), func(t *testing.T) {
+			e := testEngine(t, nil)
+			ctx := context.Background()
+			at := alignAt()
+			gw := SourceChat{ID: "f_formats", Name: "Example formats", Kind: "group"}
+			sc := SourceChat{ID: "oc_formats", Name: gw.Name, Kind: "group"}
+			// Keep an existing sync chat so duplicate delivery exercises its durable per-message receipts.
+			// A chat containing only duplicates intentionally stores no empty directory (covered above).
+			if _, err := e.Ingest(ctx, named("larksync"), sc, []SourceMessage{
+				{ID: "om_sync_only", SenderName: "Example Sender", Text: "Only in sync", At: at.Add(-time.Minute)},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			var synced []SourceMessage
+			for i, c := range cases {
+				g := SourceMessage{ID: "gateway_" + c.name, SenderName: "Example Sender", Text: c.gateway, At: at.Add(time.Duration(i) * time.Minute)}
+				m := SourceMessage{ID: "sync_" + c.name, SenderName: g.SenderName, Text: c.synced, At: g.At.Add(time.Second)}
+				if c.media {
+					g.Media, m.Media = []string{"gateway-ref"}, []string{"sync-ref"}
+				}
+				if _, err := e.Ingest(ctx, named("lark"), gw, []SourceMessage{g}); err != nil {
+					t.Fatal(err)
+				}
+				synced = append(synced, m)
+			}
+			if !archived {
+				e.Align = NewGatewayAligner(e.Store)
+			}
+			n, err := e.Ingest(ctx, named("larksync"), sc, synced)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if archived {
+				if n != len(cases) {
+					t.Fatalf("archive seed: %d", n)
+				}
+				// A deployed version-1 pass must not prevent the new representation repair from running.
+				marker := filepath.Join(e.Store.Dir, KindChat, larkSyncRepairFile)
+				if err := os.WriteFile(marker, []byte(`{"version":1}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if n := e.DedupeLarkSyncChats(); n != len(cases) {
+					t.Fatalf("format repair dropped %d, want %d", n, len(cases))
+				}
+				if n := e.DedupeLarkSyncChats(); n != 0 {
+					t.Fatalf("format repair is not idempotent: %d", n)
+				}
+			} else if n != 0 {
+				t.Fatalf("new equivalent messages written twice: %d", n)
+			}
+			for _, m := range synced {
+				if _, ok := receiptIDs(t, e.Store, "larksync-oc_formats")[m.ID]; !ok {
+					t.Errorf("receipt lost for %s", m.ID)
+				}
+			}
+			if readCrosswalk(t, e.Store)["larksync-oc_formats"] != "lark-f_formats" {
+				t.Fatal("format match did not preserve chat provenance")
+			}
+		})
+	}
+}
+
+func TestGatewayAlignerFormatFallbackRefusesUncertainMatches(t *testing.T) {
+	for _, name := range []string{"different_sender", "unknown_sender", "different_time", "minute_only", "different_url", "url_case", "literal_media", "media_count", "file_name", "code", "attachment_only", "ambiguous_lines", "ambiguous_chats"} {
+		t.Run(name, func(t *testing.T) {
+			e, _ := alignEngine(t)
+			ctx := context.Background()
+			at := alignAt()
+			g := SourceMessage{ID: "g1", SenderName: "Example Sender", Text: "Read [guide](https://example.com/Guide)", At: at}
+			m := SourceMessage{ID: "om_one", SenderName: g.SenderName, Text: "Read guide (https://example.com/Guide)", At: at.Add(time.Second)}
+			switch name {
+			case "different_sender":
+				m.SenderName = "Another Sender"
+			case "unknown_sender":
+				m.SenderName = ""
+			case "different_time":
+				m.At = at.Add(10 * time.Second)
+			case "minute_only":
+				g.ID = ""
+			case "different_url":
+				m.Text = "Read guide (https://example.com/other)"
+			case "url_case":
+				m.Text = "Read guide (https://example.com/guide)"
+			case "literal_media":
+				g.Text, m.Text = "Before after", "Before [image] after"
+			case "media_count":
+				g.Text, m.Text = "Before after", "Before [image] after"
+				g.Media, m.Media = []string{"one"}, []string{"one", "two"}
+			case "file_name":
+				m.Text += " [file different-report.pdf]"
+				g.Media, m.Media = []string{"one"}, []string{"other"}
+			case "code":
+				g.Text, m.Text = "`A &amp; B`", "`A & B`"
+			case "attachment_only":
+				g.Text, m.Text = "", "[video]"
+				g.Media, m.Media = []string{"one"}, []string{"other"}
+			case "ambiguous_lines":
+				g.Text, m.Text = "Review A &amp; B", "Review A & B"
+			}
+			gw := SourceChat{ID: "f_safe", Name: "Example safe", Kind: "group"}
+			if _, err := e.Ingest(ctx, named("lark"), gw, []SourceMessage{g}); err != nil {
+				t.Fatal(err)
+			}
+			if name == "ambiguous_lines" {
+				g.ID, g.Text = "g2", "Review A &#38; B"
+				if _, err := e.Ingest(ctx, named("lark"), gw, []SourceMessage{g}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if name == "ambiguous_chats" {
+				if _, err := e.Ingest(ctx, named("lark"), SourceChat{ID: "f_other", Name: gw.Name, Kind: "group"}, []SourceMessage{g}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if n, err := e.Ingest(ctx, named("larksync"), SourceChat{ID: "oc_safe", Name: gw.Name, Kind: "group"}, []SourceMessage{m}); err != nil || n != 1 {
+				t.Fatalf("uncertain match must be retained: added=%d err=%v", n, err)
+			}
+			if _, err := os.Stat(filepath.Join(e.Store.Dir, KindChat, crosswalkFile)); !os.IsNotExist(err) {
+				t.Fatal("uncertain match created a crosswalk")
+			}
+		})
+	}
+}
+
+// Expanded format normalization reconciles Chinese/English inline and standalone media placeholders, named file
+// wrappers, bold post titles, self-labeled Markdown links, emoji codes, @all/@所有人, and card prefixes in both
+// live alignment and repair version 3 (which re-runs automatically after version 2 completed) without losing receipts
+// or non-overlapping lines.
+func TestGatewayAlignerExpandedFormatNormalizationAndRepairV3(t *testing.T) {
+	cases := []struct {
+		name, gateway, synced string
+		media                 bool
+	}{
+		{"chinese_inline_image", "Look [图片] here", "Look [image] here", true}, // i18n-ignore: archive data
+		{"chinese_trailing_video", "Clip [视频]", "Clip [video]", true},         // i18n-ignore: archive data
+		{"standalone_image", "[图片]", "[image]", true},                         // i18n-ignore: archive data
+		{"standalone_audio", "[语音]", "[audio]", true},                         // i18n-ignore: archive data
+		{"standalone_sticker", "[表情]", "[sticker]", false},                    // i18n-ignore: archive data
+		{"file_cn_prefix", "[文件] report.pdf", "[file report.pdf]", true},      // i18n-ignore: archive data
+		{"file_cn_colon", "[文件: spec.docx]", "[file spec.docx]", true},        // i18n-ignore: archive data
+		{"file_bare_name", "slides.pptx", "[file slides.pptx]", true},         // i18n-ignore: archive data
+		{"post_title_self_link_emoji", "**Release**\n[https://example.com/r](https://example.com/r) [THUMBSUP] @所有人", "Release\nhttps://example.com/r :THUMBSUP: @all", false}, // i18n-ignore: archive data
+		{"card_prefix", "[卡片] Alert\ndisk full", "Alert\ndisk full", false},                                                                                                    // i18n-ignore: archive data
+		{"standalone_card", "[卡片]", "[card]", false},                                                                                                                           // i18n-ignore: archive data
+	}
+	for _, archived := range []bool{false, true} {
+		t.Run(fmt.Sprint("archived=", archived), func(t *testing.T) {
+			e := testEngine(t, nil)
+			ctx := context.Background()
+			at := alignAt()
+			gw := SourceChat{ID: "f_v3", Name: "Example v3 group", Kind: "group"}
+			sc := SourceChat{ID: "oc_v3", Name: gw.Name, Kind: "group"}
+			if _, err := e.Ingest(ctx, named("larksync"), sc, []SourceMessage{
+				{ID: "om_keep", SenderName: "Example Sender", Text: "Unique sync message", At: at.Add(-time.Minute)},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			var synced []SourceMessage
+			for i, c := range cases {
+				g := SourceMessage{ID: "gw_" + c.name, SenderName: "Example Sender", Text: c.gateway, At: at.Add(time.Duration(i) * time.Minute)}
+				m := SourceMessage{ID: "sy_" + c.name, SenderName: g.SenderName, Text: c.synced, At: g.At.Add(time.Second)}
+				if c.media {
+					g.Media, m.Media = []string{"gw-ref"}, []string{"sy-ref"}
+				}
+				if _, err := e.Ingest(ctx, named("lark"), gw, []SourceMessage{g}); err != nil {
+					t.Fatal(err)
+				}
+				synced = append(synced, m)
+			}
+			if !archived {
+				e.Align = NewGatewayAligner(e.Store)
+			}
+			n, err := e.Ingest(ctx, named("larksync"), sc, synced)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if archived {
+				if n != len(cases) {
+					t.Fatalf("seed archived sync messages = %d, want %d", n, len(cases))
+				}
+				// Simulate a site that already completed repair version 2.
+				marker := filepath.Join(e.Store.Dir, KindChat, larkSyncRepairFile)
+				if err := os.WriteFile(marker, []byte(`{"version":2}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if dropped := e.DedupeLarkSyncChats(); dropped != len(cases) {
+					t.Fatalf("repair v3 dropped %d, want %d", dropped, len(cases))
+				}
+				if again := e.DedupeLarkSyncChats(); again != 0 {
+					t.Fatalf("repair v3 rerun dropped %d, want 0", again)
+				}
+				var state larkSyncRepairState
+				if ok, err := readJSON(marker, &state); err != nil || !ok || state.Version != larkSyncRepairVersion {
+					t.Fatalf("repair marker = %+v (ok=%v err=%v), want version %d", state, ok, err, larkSyncRepairVersion)
+				}
+			} else if n != 0 {
+				t.Fatalf("live alignment wrote %d duplicates", n)
+			}
+			text := e.Store.Since("larksync-oc_v3", time.Time{}, 1<<20)
+			if !strings.Contains(text, "Unique sync message") {
+				t.Fatalf("non-overlapping line lost:\n%s", text)
+			}
+			if c, _ := e.Store.Chat("larksync-oc_v3"); c.Messages != 1 {
+				t.Fatalf("chat Messages = %d, want 1", c.Messages)
+			}
+			for _, m := range synced {
+				if _, ok := receiptIDs(t, e.Store, "larksync-oc_v3")[m.ID]; !ok {
+					t.Errorf("receipt lost for %s", m.ID)
+				}
+			}
+		})
+	}
+}
+
+// On a chat already paired in chats/.crosswalk.json (L1), format-normalized matching allows an unknown sender ("?",
+// such as a bot/app or pre-backfill external user) to deduplicate against a non-owner gateway line while still
+// refusing owner ("我") lines and distinct filenames.
+func TestGatewayAlignerPairedChatUnknownSenderFormatMatchAndOwnerSafety(t *testing.T) {
+	e := testEngine(t, nil)
+	ctx := context.Background()
+	at := alignAt()
+
+	gw := SourceChat{ID: "f_paired", Name: "Example Paired Group", Kind: "group"}
+	sc := SourceChat{ID: "oc_paired", Name: gw.Name, Kind: "group"}
+	if _, err := e.Ingest(ctx, named("lark"), gw, []SourceMessage{
+		{ID: "g_img", SenderName: "External Member", Text: "See [图片] details", Media: []string{"gw-1"}, At: at},                // i18n-ignore: archive data
+		{ID: "g_file", SenderName: "External Bot", Text: "[文件] summary.pdf", Media: []string{"gw-2"}, At: at.Add(time.Minute)}, // i18n-ignore: archive data
+		{ID: "g_owner", SenderName: "Owner", Mine: true, Text: "Read [guide](https://example.com/Guide)", At: at.Add(2 * time.Minute)},
+		{ID: "g_diff", SenderName: "External Member", Text: "[文件] alpha.pdf", Media: []string{"gw-3"}, At: at.Add(3 * time.Minute)}, // i18n-ignore: archive data
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Seed pre-existing crosswalk pairing and archived sync lines with unknown sender ("?").
+	walk, _ := json.Marshal(map[string]string{"larksync-oc_paired": "lark-f_paired"})
+	if err := os.WriteFile(filepath.Join(e.Store.Dir, KindChat, crosswalkFile), walk, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := e.Ingest(ctx, named("larksync"), sc, []SourceMessage{
+		{ID: "om_img", SenderName: "", Text: "See [image] details", Media: []string{"sy-1"}, At: at.Add(time.Second)},
+		{ID: "om_file", SenderName: "", Text: "[file summary.pdf]", Media: []string{"sy-2"}, At: at.Add(time.Minute + time.Second)},
+		// Non-mine unknown sender must NOT match the owner's own ("我") line.
+		{ID: "om_not_owner", SenderName: "", Text: "Read guide (https://example.com/Guide)", At: at.Add(2*time.Minute + time.Second)},
+		// Distinct file name must NOT match.
+		{ID: "om_diff_file", SenderName: "", Text: "[file beta.pdf]", Media: []string{"sy-3"}, At: at.Add(3*time.Minute + time.Second)},
+	}); err != nil || n != 4 {
+		t.Fatalf("seed paired sync: %d, %v", n, err)
+	}
+
+	if dropped := e.DedupeLarkSyncChats(); dropped != 2 {
+		t.Fatalf("DedupeLarkSyncChats dropped %d, want 2 (om_img and om_file)", dropped)
+	}
+	text := e.Store.Since("larksync-oc_paired", time.Time{}, 1<<20)
+	if strings.Contains(text, "See [image] details") || strings.Contains(text, "[file summary.pdf]") {
+		t.Fatalf("paired format duplicates still present:\n%s", text)
+	}
+	if !strings.Contains(text, "Read guide (https://example.com/Guide)") || !strings.Contains(text, "[file beta.pdf]") {
+		t.Fatalf("protected lines were wrongly dropped:\n%s", text)
+	}
+}
+
+// Re-ingesting a repair batch that carries only a resolved DM Chat.Name (e.g. an owner-only single chat with no
+// peer messages) fills Chat.Name in place and is idempotent on replay.
+func TestIngestFillsUnnamedDMChatNameWithOwnerOnlyBatch(t *testing.T) {
+	e := testEngine(t, nil)
+	ctx := context.Background()
+	at := alignAt()
+	if n, err := e.Ingest(ctx, named("larksync"), SourceChat{ID: "oc_owner_dm", Name: "", Kind: "dm"}, []SourceMessage{
+		{ID: "om_mine", SenderID: "ou_owner", Mine: true, Text: "note to peer", At: at},
+	}); err != nil || n != 1 {
+		t.Fatalf("seed owner-only dm: %d, %v", n, err)
+	}
+	if c, _ := e.Store.Chat("larksync-oc_owner_dm"); c.Name != "" {
+		t.Fatalf("expected empty initial DM name, got %q", c.Name)
+	}
+	if n, err := e.Ingest(ctx, named("larksync"), SourceChat{ID: "oc_owner_dm", Name: "Quiet Peer", Kind: "dm"}, nil); err != nil || n != 0 {
+		t.Fatalf("name-only repair batch: %d, %v", n, err)
+	}
+	if c, _ := e.Store.Chat("larksync-oc_owner_dm"); c.Name != "Quiet Peer" || c.Messages != 1 {
+		t.Fatalf("after repair: chat = %+v, want Name=Quiet Peer Messages=1", c)
+	}
+	// Idempotent replay with a different name does not overwrite once filled.
+	if n, err := e.Ingest(ctx, named("larksync"), SourceChat{ID: "oc_owner_dm", Name: "Other Name", Kind: "dm"}, nil); err != nil || n != 0 {
+		t.Fatalf("replay repair batch: %d, %v", n, err)
+	}
+	if c, _ := e.Store.Chat("larksync-oc_owner_dm"); c.Name != "Quiet Peer" {
+		t.Fatalf("already-named DM was overwritten: %q", c.Name)
 	}
 }
