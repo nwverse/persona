@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // Controlled ActiveWorktreeActions bypasses default store/catalog/API/mutation singletons, caches fresh-array/object
 // getters, resets dialogs and fences stale/ABA callbacks across scope/target switches, and keeps default fallbacks intact.
-import { act, StrictMode } from "react";
+import { act, startTransition, StrictMode, Suspense, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetManagerChoice, setRosterDefault } from "../lib/manager-choice";
@@ -641,6 +641,7 @@ describe("ActiveWorktreeActions controlled deps, view separation, snapshot cachi
     await act(async () => {
       root.render(<ActiveWorktreeActions request={{ id: 1, target, anchor }} registry={registry} />);
       await Promise.resolve();
+      await Promise.resolve();
     });
     expect(mocks.useWorkspaceCatalog).toHaveBeenCalledWith(true);
     expect(mocks.useStore).toHaveBeenCalled();
@@ -649,8 +650,237 @@ describe("ActiveWorktreeActions controlled deps, view separation, snapshot cachi
     await act(async () => {
       copyPath.click();
       await Promise.resolve();
+      await Promise.resolve();
     });
     expect(mocks.copyText).toHaveBeenCalledWith("/repo/work-1");
     resetManagerChoice();
+  });
+
+  it("invalidates cached probe authorization after explicit readOnly downgrade and stays fail-closed while replacement probe is pending", async () => {
+    const target = makeTarget("work-1");
+    const catalog = makeCatalog(target);
+    const machines: Machine[] = [{ id: "m1", manager: "mgr-1", name: "Studio", online: true, engine_hosts: ["orca"] }];
+    const registry: WorktreeMutationRegistry = new Map();
+    const request: WorktreeActionsRequest = { id: 1, target, anchor };
+    const openAgent = vi.fn();
+    const closeRequest = vi.fn();
+    const stage1Probe = deferred<WorktreeActionsAccess>();
+    const stage3Probe = deferred<WorktreeActionsAccess>();
+    let stage: 1 | 3 = 1;
+    const checkAccess = vi.fn(() => (stage === 1 ? stage1Probe.promise : stage3Probe.promise));
+    let captured: WorktreeActionsMenuViewProps | null = null;
+
+    const baseDeps: WorktreeActionsMenuDeps = {
+      scopeKey: "acct-1",
+      credentialOwner: "acct-1",
+      isRequestCurrent: () => true,
+      closeRequest,
+      catalog,
+      machines,
+      pins: NO_PINS,
+      storeSessions: [{}, []],
+      resolveAction: (tg, ctx) => makeResolved(tg, ctx.catalog, ctx.machines, ctx.writable, ctx.linkedWorktree),
+      firstDirectAgent: () => undefined,
+      createMutation: (tg, d) => createFakeMutation(tg, d),
+      openNewAgent: openAgent,
+      checkAccess,
+      renderView: (props) => {
+        captured = props;
+        return null;
+      },
+    };
+
+    // Stage 1: initial probe grants full write access on epoch 1.
+    await act(async () => root.render(
+      <StrictMode>
+        <ActiveWorktreeActions request={request} registry={registry} deps={baseDeps} />
+      </StrictMode>,
+    ));
+    expect(captured!.items.find((i) => i.key === "new-agent")?.disabled).toBe(true);
+    await act(async () => {
+      stage1Probe.resolve("full");
+      await Promise.resolve();
+    });
+    const frame1NewAgent = captured!.items.find((i) => i.key === "new-agent")!;
+    expect(frame1NewAgent.disabled).toBe(false);
+
+    // Stage 2: explicit readOnly downgrade on the exact same owner/target/scope/request epoch.
+    await act(async () => root.render(
+      <StrictMode>
+        <ActiveWorktreeActions request={request} registry={registry} deps={{ ...baseDeps, access: "readOnly" }} />
+      </StrictMode>,
+    ));
+    expect(captured!.items.find((i) => i.key === "new-agent")?.disabled).toBe(true);
+    expect(captured!.items.find((i) => i.key === "availability")?.label).toBe(t("worktree-actions.read_only"));
+
+    // Stage 3: remove direct access override and switch back to the same probe function while its new probe is pending.
+    stage = 3;
+    const callsBeforeReturn = checkAccess.mock.calls.length;
+    await act(async () => root.render(
+      <StrictMode>
+        <ActiveWorktreeActions request={request} registry={registry} deps={baseDeps} />
+      </StrictMode>,
+    ));
+    expect(checkAccess.mock.calls.length).toBeGreaterThan(callsBeforeReturn);
+    const pendingNewAgent = captured!.items.find((i) => i.key === "new-agent")!;
+    expect(pendingNewAgent.disabled).toBe(true);
+    expect(captured!.items.find((i) => i.key === "availability")?.label).toBe(t("worktree-actions.checking_access"));
+
+    // Neither the current nor the earlier captured write callback may fire while the replacement probe is pending.
+    pendingNewAgent.onSelect();
+    frame1NewAgent.onSelect();
+    expect(openAgent).not.toHaveBeenCalled();
+    expect(closeRequest).not.toHaveBeenCalled();
+
+    // Settling the denying probe keeps write callbacks blocked.
+    await act(async () => {
+      stage3Probe.resolve("readOnly");
+      await Promise.resolve();
+    });
+    expect(captured!.items.find((i) => i.key === "new-agent")?.disabled).toBe(true);
+    expect(captured!.items.find((i) => i.key === "availability")?.label).toBe(t("worktree-actions.read_only"));
+    captured!.items.find((i) => i.key === "new-agent")!.onSelect();
+    frame1NewAgent.onSelect();
+    expect(openAgent).not.toHaveBeenCalled();
+    expect(closeRequest).not.toHaveBeenCalled();
+
+    // Also verify generation fencing: a superseded probe resolving "full" late cannot overwrite a newer probe generation.
+    const staleProbe = deferred<WorktreeActionsAccess>();
+    const activeProbe = deferred<WorktreeActionsAccess>();
+    const staleFn = vi.fn(() => staleProbe.promise);
+    const activeFn = vi.fn(() => activeProbe.promise);
+    await act(async () => root.render(
+      <ActiveWorktreeActions request={request} registry={registry} deps={{ ...baseDeps, checkAccess: staleFn }} />,
+    ));
+    await act(async () => root.render(
+      <ActiveWorktreeActions request={request} registry={registry} deps={{ ...baseDeps, checkAccess: activeFn }} />,
+    ));
+    await act(async () => {
+      staleProbe.resolve("full");
+      await Promise.resolve();
+    });
+    expect(captured!.items.find((i) => i.key === "new-agent")?.disabled).toBe(true);
+    expect(captured!.items.find((i) => i.key === "availability")?.label).toBe(t("worktree-actions.checking_access"));
+    captured!.items.find((i) => i.key === "new-agent")!.onSelect();
+    expect(openAgent).not.toHaveBeenCalled();
+    await act(async () => {
+      activeProbe.resolve("readOnly");
+      await Promise.resolve();
+    });
+    expect(captured!.items.find((i) => i.key === "new-agent")?.disabled).toBe(true);
+    expect(captured!.items.find((i) => i.key === "availability")?.label).toBe(t("worktree-actions.read_only"));
+    expectNoDefaultSingletons();
+  });
+
+  it("keeps the committed model, active preview, and shared registry intact when a concurrent transition render is abandoned", async () => {
+    const target = makeTarget("work-1");
+    const catalog = makeCatalog(target);
+    const machines: Machine[] = [{ id: "m1", manager: "mgr-1", name: "Studio", online: true, engine_hosts: ["orca"] }];
+    const registry: WorktreeMutationRegistry = new Map();
+    const regKey = `acct-1\0${JSON.stringify([target.owner, target.manager, target.machineId, target.host, target.workspaceId, target.cwd])}`;
+    const models: FakeMutation[] = [];
+    const createMutation = vi.fn((tg: OwnedWorkspaceTarget, d: WorktreeMutationDeps) => {
+      const m = createFakeMutation(tg, d);
+      models.push(m);
+      return m;
+    });
+    let captured: WorktreeActionsMenuViewProps | null = null;
+    const suspendGate = deferred<void>();
+    const renderedIds: number[] = [];
+
+    function SuspendIf({ block }: { block: boolean }) {
+      if (block) throw suspendGate.promise;
+      return null;
+    }
+
+    let setHarnessState!: (next: { id: number; block: boolean }) => void;
+    function Harness() {
+      const [state, setState] = useState({ id: 1, block: false });
+      setHarnessState = setState;
+      renderedIds.push(state.id);
+      const req: WorktreeActionsRequest = { id: state.id, target, anchor };
+      return (
+        <Suspense fallback={<div data-suspense-fallback />}>
+          <ActiveWorktreeActions
+            request={req}
+            registry={registry}
+            deps={{
+              scopeKey: "acct-1",
+              credentialOwner: "acct-1",
+              isRequestCurrent: () => true,
+              closeRequest: vi.fn(),
+              catalog,
+              machines,
+              pins: NO_PINS,
+              storeSessions: [{}, []],
+              resolveAction: (tg, ctx) => makeResolved(tg, ctx.catalog, ctx.machines, ctx.writable, ctx.linkedWorktree),
+              firstDirectAgent: () => undefined,
+              access: "full",
+              createMutation,
+              renderView: (props) => {
+                captured = props;
+                return <div data-active-view={`${props.view}:${props.model.snapshot().phase}`} />;
+              },
+            }}
+          />
+          <SuspendIf block={state.block} />
+        </Suspense>
+      );
+    }
+
+    await act(async () => root.render(<Harness />));
+    expect(createMutation).toHaveBeenCalledTimes(1);
+    const model1 = models[0];
+    expect(registry.get(regKey)).toBe(model1);
+
+    // Open delete dialog and put model1 into an active non-dispatched preview.
+    await act(async () => { captured!.items.find((i) => i.key === "delete")!.onSelect(); });
+    await act(async () => { model1.setState({ phase: "previewing" }); });
+    expect(captured!.view).toBe("delete");
+    expect(captured!.model).toBe(model1);
+    expect(host.querySelector("[data-active-view]")?.getAttribute("data-active-view")).toBe("delete:previewing");
+    model1.cancel.mockClear();
+    model1.dispose.mockClear();
+
+    // Start a concurrent transition to request id 2 (same target/registryKey) that suspends before commit.
+    await act(async () => {
+      startTransition(() => {
+        setHarnessState({ id: 2, block: true });
+      });
+    });
+    expect(renderedIds).toContain(2);
+    // While suspended (uncommitted), the committed model, its active preview, and shared registry must be completely untouched.
+    expect(model1.cancel).not.toHaveBeenCalled();
+    expect(model1.dispose).not.toHaveBeenCalled();
+    expect(createMutation).toHaveBeenCalledTimes(1);
+    expect(registry.get(regKey)).toBe(model1);
+    expect(model1.snapshot().phase).toBe("previewing");
+    expect(model1.deps.current()).toBe(true);
+    expect(host.querySelector("[data-active-view]")?.getAttribute("data-active-view")).toBe("delete:previewing");
+
+    // Abandon/revert the transition via an urgent update back to id 1 (block: false).
+    await act(async () => {
+      setHarnessState({ id: 1, block: false });
+    });
+    expect(model1.cancel).not.toHaveBeenCalled();
+    expect(model1.dispose).not.toHaveBeenCalled();
+    expect(createMutation).toHaveBeenCalledTimes(1);
+    expect(registry.get(regKey)).toBe(model1);
+    expect(captured!.view).toBe("delete");
+    expect(captured!.model).toBe(model1);
+    expect(model1.snapshot().phase).toBe("previewing");
+    expect(model1.deps.current()).toBe(true);
+
+    // Once a transition to id 2 actually commits, model1 is cleanly cancelled/disposed and replaced in commit effects.
+    await act(async () => {
+      setHarnessState({ id: 2, block: false });
+    });
+    expect(model1.cancel).toHaveBeenCalled();
+    expect(model1.dispose).toHaveBeenCalled();
+    expect(createMutation).toHaveBeenCalledTimes(2);
+    expect(registry.get(regKey)).toBe(models[1]);
+    expect(captured!.view).toBe("menu");
+    expect(captured!.model).toBe(models[1]);
+    expectNoDefaultSingletons();
   });
 });

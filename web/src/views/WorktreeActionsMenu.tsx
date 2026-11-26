@@ -148,31 +148,50 @@ export interface ActiveWorktreeActionsProps extends WorktreeActionsHostProps {
 
 const EMPTY_STORE_SESSIONS: WorktreeStoreSessions = [{}, []];
 const EMPTY_CATALOG: WorkspaceCatalogSnapshot = { owner: "", manager: "", workspaces: [] };
+const IDLE_MUTATION_STATE: WorktreeMutationState = Object.freeze({ phase: "idle", error: "", dispatched: false });
+const IDLE_MODEL_SNAPSHOT = () => IDLE_MUTATION_STATE;
 const noopSubscribe = () => () => {};
+const noopFn = () => {};
+const noopAsync = () => Promise.resolve();
 
-function useTrackedScope(subscribe: (listener: () => void) => () => void, read: () => string) {
-  const stateRef = useRef<{ value: string; version: number } | null>(null);
-  const sub = useCallback((listener: () => void) => subscribe(() => {
-    const next = read();
-    if (!stateRef.current || next !== stateRef.current.value) {
-      stateRef.current = { value: next, version: (stateRef.current?.version ?? 0) + 1 };
-    }
-    listener();
-  }), [subscribe, read]);
+function useTrackedScope(
+  source: string | (() => string) | undefined,
+  subscribe: ((listener: () => void) => () => void) | undefined,
+) {
+  const isGetter = typeof source === "function";
+  const read = useCallback(() => (typeof source === "function" ? source() : (source ?? "")), [source]);
+  const committedRef = useRef<{ value: string; version: number } | null>(null);
+  const snapRef = useRef<{ value: string; version: number } | null>(null);
+  const sub = useCallback((listener: () => void) => {
+    if (!subscribe || !isGetter) return noopSubscribe();
+    return subscribe(() => {
+      const next = read();
+      const cur = committedRef.current;
+      if (!cur || next !== cur.value) {
+        committedRef.current = { value: next, version: (cur?.version ?? 0) + 1 };
+      }
+      listener();
+    });
+  }, [subscribe, isGetter, read]);
   const getSnapshot = useCallback(() => {
     const next = read();
-    if (!stateRef.current) {
-      stateRef.current = { value: next, version: 0 };
-    } else if (next !== stateRef.current.value) {
-      stateRef.current = { value: next, version: stateRef.current.version + 1 };
+    const cur = committedRef.current;
+    if (cur && next === cur.value) return cur;
+    const nextVersion = cur ? cur.version + 1 : 0;
+    if (snapRef.current && snapRef.current.value === next && snapRef.current.version === nextVersion) {
+      return snapRef.current;
     }
-    return stateRef.current;
+    snapRef.current = { value: next, version: nextVersion };
+    return snapRef.current;
   }, [read]);
   const snap = useSyncExternalStore(sub, getSnapshot, getSnapshot);
+  useLayoutEffect(() => {
+    committedRef.current = snap;
+  }, [snap]);
   const readToken = useCallback(() => {
     const cur = read();
-    const s = stateRef.current;
-    return s && s.value === cur ? `${s.version}:${cur}` : `drift:${cur}`;
+    const committed = committedRef.current;
+    return committed && committed.value === cur ? `${committed.version}:${cur}` : `drift:${cur}`;
   }, [read]);
   return { value: snap.value, token: `${snap.version}:${snap.value}`, readToken };
 }
@@ -297,7 +316,7 @@ interface WorktreeActionsBodyProps {
   view: WorktreeActionsViewMode;
   access: WorktreeActionsAccess;
   linkedWorktree: boolean | null | undefined;
-  model: WorktreeMutationLike;
+  model: WorktreeMutationLike | null;
   state: WorktreeMutationState;
   scopeEpoch: number;
   stampRef: { current: { epoch: number; value: string } };
@@ -351,7 +370,7 @@ function WorktreeActionsBody({
   }, [catalog, machines, liveCatalogRef, liveMachinesRef]);
 
   useLayoutEffect(() => {
-    if (access === "loading") return;
+    if (!model || access === "loading") return;
     const next = context.workspace ? worktreeSafetyStamp(context.workspace) : "";
     if (stampRef.current.epoch !== scopeEpoch) {
       stampRef.current = { epoch: scopeEpoch, value: next };
@@ -376,6 +395,8 @@ function WorktreeActionsBody({
     });
     return [...pinnedSessions(unique, pins), ...unique.filter((session) => !isPinned(session, pins)).sort(byAttention)];
   }, [sessions, storeSessions, pins]);
+
+  if (!model) return null;
 
   const agent = (deps?.firstDirectAgent ?? firstDirectWorktreeAgent)(target, catalog, ordered);
   const run = (action: () => void, writing = false) => {
@@ -549,18 +570,8 @@ export function ActiveWorktreeActions({
   deps,
 }: ActiveWorktreeActionsProps) {
   const { target, id, anchor } = request;
-  const scopeDep = deps?.scopeKey;
-  const readScope = useCallback(() => (typeof scopeDep === "function" ? scopeDep() : (scopeDep ?? "")), [scopeDep]);
-  const scopeSubscribe = deps?.subscribeScopeKey && typeof scopeDep === "function" ? deps.subscribeScopeKey : noopSubscribe;
-  const trackedScope = useTrackedScope(scopeSubscribe, readScope);
-
-  const ownerDep = deps?.credentialOwner;
-  const readControlledOwner = useCallback(
-    () => (typeof ownerDep === "function" ? ownerDep() : typeof ownerDep === "string" ? ownerDep : ""),
-    [ownerDep],
-  );
-  const ownerSubscribe = deps?.subscribeCredentialOwner && typeof ownerDep === "function" ? deps.subscribeCredentialOwner : noopSubscribe;
-  const trackedOwner = useTrackedScope(ownerSubscribe, readControlledOwner);
+  const trackedScope = useTrackedScope(deps?.scopeKey, deps?.subscribeScopeKey);
+  const trackedOwner = useTrackedScope(deps?.credentialOwner, deps?.subscribeCredentialOwner);
 
   const key = worktreeActionKey(target);
   const registryKey = deps?.scopeKey !== undefined ? `${trackedScope.value}\0${key}` : key;
@@ -576,24 +587,81 @@ export function ActiveWorktreeActions({
     epoch: effectiveEpoch,
     view: "menu",
   }));
-  const [accessState, setAccessState] = useState<{ epoch: number; value: WorktreeActionsAccess }>(() => ({
+
+  const controlledAccess = deps?.access;
+  const customCheckAccess = deps?.checkAccess;
+  const [accessSource, setAccessSource] = useState<{
+    epoch: number;
+    controlled: boolean;
+    probe: WorktreeActionsMenuDeps["checkAccess"];
+    gen: number;
+  }>(() => ({
     epoch: effectiveEpoch,
-    value: "loading",
+    controlled: controlledAccess !== undefined,
+    probe: customCheckAccess,
+    gen: 1,
   }));
-  const [linkedState, setLinkedState] = useState<{ epoch: number; value: boolean | null | undefined }>(() => ({
-    epoch: effectiveEpoch,
-    value: undefined,
+  const accessSourceChanged = accessSource.epoch !== effectiveEpoch
+    || accessSource.controlled !== (controlledAccess !== undefined)
+    || (controlledAccess === undefined && accessSource.probe !== customCheckAccess);
+  const accessGen = accessSourceChanged ? accessSource.gen + 1 : accessSource.gen;
+  if (accessSourceChanged) {
+    setAccessSource({
+      epoch: effectiveEpoch,
+      controlled: controlledAccess !== undefined,
+      probe: customCheckAccess,
+      gen: accessGen,
+    });
+  }
+  const [accessState, setAccessState] = useState<{ gen: number; value: WorktreeActionsAccess }>(() => ({
+    gen: accessGen,
+    value: "loading",
   }));
 
   const view: WorktreeActionsViewMode = deps?.view !== undefined
     ? deps.view
     : (localViewState.epoch === effectiveEpoch ? localViewState.view : "menu");
-  const access: WorktreeActionsAccess = deps?.access !== undefined
-    ? deps.access
-    : (accessState.epoch === effectiveEpoch ? accessState.value : "loading");
-  const linkedWorktree: boolean | null | undefined = deps?.linkedWorktree !== undefined
-    ? deps.linkedWorktree
-    : (linkedState.epoch === effectiveEpoch ? linkedState.value : undefined);
+  const access: WorktreeActionsAccess = controlledAccess !== undefined
+    ? controlledAccess
+    : (accessState.gen === accessGen ? accessState.value : "loading");
+
+  const controlledLinked = deps?.linkedWorktree;
+  const customCheckStatus = deps?.checkWorktreeStatus;
+  const linkedEligible = target.host === "herdr" && access === "full";
+  const [linkedSource, setLinkedSource] = useState<{
+    epoch: number;
+    controlled: boolean;
+    probe: WorktreeActionsMenuDeps["checkWorktreeStatus"];
+    eligible: boolean;
+    gen: number;
+  }>(() => ({
+    epoch: effectiveEpoch,
+    controlled: controlledLinked !== undefined,
+    probe: customCheckStatus,
+    eligible: linkedEligible,
+    gen: 1,
+  }));
+  const linkedSourceChanged = linkedSource.epoch !== effectiveEpoch
+    || linkedSource.controlled !== (controlledLinked !== undefined)
+    || linkedSource.eligible !== linkedEligible
+    || (controlledLinked === undefined && linkedSource.probe !== customCheckStatus);
+  const linkedGen = linkedSourceChanged ? linkedSource.gen + 1 : linkedSource.gen;
+  if (linkedSourceChanged) {
+    setLinkedSource({
+      epoch: effectiveEpoch,
+      controlled: controlledLinked !== undefined,
+      probe: customCheckStatus,
+      eligible: linkedEligible,
+      gen: linkedGen,
+    });
+  }
+  const [linkedState, setLinkedState] = useState<{ gen: number; value: boolean | null | undefined }>(() => ({
+    gen: linkedGen,
+    value: undefined,
+  }));
+  const linkedWorktree: boolean | null | undefined = controlledLinked !== undefined
+    ? controlledLinked
+    : (linkedState.gen === linkedGen ? linkedState.value : undefined);
 
   const controlledCatalog = useCachedExternalValue(deps?.catalog, deps?.subscribeCatalog);
   const controlledMachines = useCachedExternalValue(deps?.machines, deps?.subscribeStore);
@@ -601,6 +669,8 @@ export function ActiveWorktreeActions({
   const controlledStoreSessions = useCachedExternalValue(deps?.storeSessions, deps?.subscribeStore);
 
   const activeEpochRef = useRef(effectiveEpoch);
+  const activeAccessGenRef = useRef(accessGen);
+  const activeLinkedGenRef = useRef(linkedGen);
   const prevCommittedEpochRef = useRef(0);
   const depsRef = useRef(deps);
   const requestRef = useRef(request);
@@ -713,58 +783,35 @@ export function ActiveWorktreeActions({
     };
   };
 
-  const acquireModel = (
-    modelTarget: OwnedWorkspaceTarget,
-    regKey: string,
-    reg: WorktreeMutationRegistry,
-    currentDeps: WorktreeActionsMenuDeps | undefined,
-    previousModel?: WorktreeMutationLike,
-  ): WorktreeMutationLike => {
-    const prior = reg.get(regKey);
-    if (prior && !["invalid", "removed"].includes(prior.snapshot().phase)) {
-      if (previousModel && prior === previousModel) {
-        prior.cancel();
-        if (prior.snapshot().dispatched) return prior;
-        prior.dispose();
-        reg.delete(regKey);
-      } else {
-        return prior;
-      }
-    } else {
-      prior?.dispose();
-    }
-    let createdRef: WorktreeMutationLike | null = null;
-    const modelDeps = makeBoundModelDeps(
-      effectiveEpoch,
-      capturedScopeToken,
-      capturedOwnerToken,
-      id,
-      modelTarget,
-      anchor,
-      () => createdRef,
-      currentDeps?.post,
-    );
-    const created: WorktreeMutationLike = currentDeps?.createMutation
-      ? currentDeps.createMutation(modelTarget, modelDeps)
-      : new WorktreeMutation(modelTarget, modelDeps);
-    createdRef = created;
-    reg.set(regKey, created as WorktreeMutation);
-    return created;
-  };
+  // Acquire, cancel, dispose, and register mutation models only in commit-phase effects so abandoned concurrent renders never mutate committed state.
+  const [modelEntry, setModelEntry] = useState<{
+    epoch: number;
+    regKey: string;
+    registry: WorktreeMutationRegistry;
+    model: WorktreeMutationLike;
+  } | null>(null);
+  const activeModel = modelEntry
+    && modelEntry.epoch === effectiveEpoch
+    && modelEntry.regKey === registryKey
+    && modelEntry.registry === registry
+    ? modelEntry.model
+    : null;
+  const activeRegKey = activeModel ? modelEntry!.regKey : null;
 
-  const [modelEntry, setModelEntry] = useState<{ epoch: number; regKey: string; model: WorktreeMutationLike }>(() => ({
-    epoch: effectiveEpoch,
-    regKey: registryKey,
-    model: acquireModel(target, registryKey, registry, deps),
-  }));
-  if (modelEntry.epoch !== effectiveEpoch || modelEntry.regKey !== registryKey) {
-    setModelEntry({
-      epoch: effectiveEpoch,
-      regKey: registryKey,
-      model: acquireModel(target, registryKey, registry, deps, modelEntry.model),
-    });
-  }
-  const model = modelEntry.model;
+  const placeholderModel = useMemo<WorktreeMutationLike>(() => ({
+    target,
+    activate: noopFn,
+    updateDependencies: noopFn,
+    snapshot: IDLE_MODEL_SNAPSHOT,
+    subscribe: noopSubscribe,
+    cancel: noopFn,
+    invalidate: noopFn,
+    dispose: noopFn,
+    rename: noopAsync,
+    preview: noopAsync,
+    remove: noopAsync,
+    reconcile: noopAsync,
+  }), [target]);
 
   useLayoutEffect(() => {
     depsRef.current = deps;
@@ -772,32 +819,85 @@ export function ActiveWorktreeActions({
     readOnlyRef.current = readOnly;
     accessRef.current = access;
     linkedWorktreeRef.current = linkedWorktree;
+    activeAccessGenRef.current = accessGen;
+    activeLinkedGenRef.current = linkedGen;
     readScopeTokenRef.current = trackedScope.readToken;
     readOwnerTokenRef.current = trackedOwner.readToken;
     if (controlledCatalog !== undefined) liveCatalogRef.current = controlledCatalog;
     if (controlledMachines !== undefined) liveMachinesRef.current = controlledMachines;
     resolveRef.current = resolveNow;
-    activeModelRef.current = model;
+    activeModelRef.current = activeModel;
   });
 
   useLayoutEffect(() => {
     const previous = prevCommittedEpochRef.current;
     prevCommittedEpochRef.current = effectiveEpoch;
     activeEpochRef.current = effectiveEpoch;
-    activeModelRef.current = model;
     if (previous !== 0 && previous !== effectiveEpoch) {
       depsRef.current?.onViewChange?.("menu");
     }
     return () => {
       if (activeEpochRef.current === effectiveEpoch) activeEpochRef.current = 0;
-      if (activeModelRef.current === model) activeModelRef.current = null;
       if (pendingChildRef.current === effectiveEpoch) pendingChildRef.current = 0;
       if (pendingCopyRef.current === effectiveEpoch) pendingCopyRef.current = 0;
     };
-  }, [effectiveEpoch, model]);
+  }, [effectiveEpoch]);
 
   useLayoutEffect(() => {
-    model.updateDependencies(
+    if (!activeModel || activeRegKey === null) return;
+    activeModelRef.current = activeModel;
+    registry.set(activeRegKey, activeModel as WorktreeMutation);
+    activeModel.activate();
+    return () => {
+      if (activeModelRef.current === activeModel) activeModelRef.current = null;
+      activeModel.cancel();
+      if (!activeModel.snapshot().dispatched) {
+        activeModel.dispose();
+        if (registry.get(activeRegKey) === activeModel) registry.delete(activeRegKey);
+      }
+    };
+  }, [activeModel, activeRegKey, registry]);
+
+  useLayoutEffect(() => {
+    if (
+      modelEntry
+      && modelEntry.epoch === effectiveEpoch
+      && modelEntry.regKey === registryKey
+      && modelEntry.registry === registry
+    ) return;
+    const reqTarget = requestRef.current.target;
+    const reqAnchor = requestRef.current.anchor;
+    const reqId = requestRef.current.id;
+    const curDeps = depsRef.current;
+    const prior = registry.get(registryKey);
+    let nextModel: WorktreeMutationLike;
+    if (prior && !["invalid", "removed"].includes(prior.snapshot().phase)) {
+      nextModel = prior;
+    } else {
+      prior?.dispose();
+      let createdRef: WorktreeMutationLike | null = null;
+      const modelDeps = makeBoundModelDeps(
+        effectiveEpoch,
+        capturedScopeToken,
+        capturedOwnerToken,
+        reqId,
+        reqTarget,
+        reqAnchor,
+        () => createdRef,
+        curDeps?.post,
+      );
+      nextModel = curDeps?.createMutation
+        ? curDeps.createMutation(reqTarget, modelDeps)
+        : new WorktreeMutation(reqTarget, modelDeps);
+      createdRef = nextModel;
+      registry.set(registryKey, nextModel as WorktreeMutation);
+    }
+    setModelEntry({ epoch: effectiveEpoch, regKey: registryKey, registry, model: nextModel });
+  }, [modelEntry, effectiveEpoch, registryKey, registry, capturedScopeToken, capturedOwnerToken]);
+
+  useLayoutEffect(() => {
+    if (!activeModel) return;
+    activeModel.updateDependencies(
       makeBoundModelDeps(
         effectiveEpoch,
         capturedScopeToken,
@@ -805,19 +905,18 @@ export function ActiveWorktreeActions({
         id,
         target,
         anchor,
-        () => model,
+        () => activeModel,
         deps?.post,
       ),
     );
-  }, [model, effectiveEpoch, capturedScopeToken, capturedOwnerToken, id, target, anchor, deps?.post]);
+  }, [activeModel, effectiveEpoch, capturedScopeToken, capturedOwnerToken, id, target, anchor, deps?.post]);
 
-  const state = useCachedModelSnapshot(model);
+  const state = useCachedModelSnapshot(activeModel ?? placeholderModel);
 
-  const controlledAccess = deps?.access;
-  const customCheckAccess = deps?.checkAccess;
   useEffect(() => {
     if (controlledAccess !== undefined) return;
     const runEpoch = effectiveEpoch;
+    const runGen = accessGen;
     const runScopeToken = trackedScope.token;
     const runOwnerToken = trackedOwner.token;
     const runTarget = requestRef.current.target;
@@ -825,6 +924,7 @@ export function ActiveWorktreeActions({
     const isProbeCurrent = () =>
       !controller.signal.aborted
       && activeEpochRef.current === runEpoch
+      && activeAccessGenRef.current === runGen
       && readScopeTokenRef.current() === runScopeToken
       && readOwnerTokenRef.current() === runOwnerToken
       && (depsRef.current?.isRequestCurrent ?? worktreeActionsCurrent)(id)
@@ -835,7 +935,7 @@ export function ActiveWorktreeActions({
           const result = await customCheckAccess(runTarget, controller.signal);
           if (!isProbeCurrent()) return;
           const next: WorktreeActionsAccess = result === true || result === "full" ? "full" : "readOnly";
-          setAccessState({ epoch: runEpoch, value: next });
+          setAccessState({ gen: runGen, value: next });
           return;
         }
         // This route is full-device-only on existing hubs. No role is guessed from a token's spelling or saved device id.
@@ -845,20 +945,19 @@ export function ActiveWorktreeActions({
         if (!isProbeCurrent()) return;
         const full = Array.isArray(result.tokens) && typeof result.current === "string"
           && (result.current === "" || result.tokens.some((token) => token.id === result.current && token.role === "full"));
-        setAccessState({ epoch: runEpoch, value: full ? "full" : "readOnly" });
+        setAccessState({ gen: runGen, value: full ? "full" : "readOnly" });
       } catch {
-        if (isProbeCurrent()) setAccessState({ epoch: runEpoch, value: "readOnly" });
+        if (isProbeCurrent()) setAccessState({ gen: runGen, value: "readOnly" });
       }
     })();
     return () => controller.abort();
-  }, [controlledAccess, customCheckAccess, effectiveEpoch, id, target.manager, target.owner, trackedScope.token, trackedOwner.token]);
+  }, [controlledAccess, customCheckAccess, effectiveEpoch, accessGen, id, target.manager, target.owner, trackedScope.token, trackedOwner.token]);
 
-  const controlledLinked = deps?.linkedWorktree;
-  const customCheckStatus = deps?.checkWorktreeStatus;
   useEffect(() => {
     if (controlledLinked !== undefined) return;
-    if (target.host !== "herdr" || access !== "full") return;
+    if (!linkedEligible) return;
     const runEpoch = effectiveEpoch;
+    const runGen = linkedGen;
     const runScopeToken = trackedScope.token;
     const runOwnerToken = trackedOwner.token;
     const runTarget = requestRef.current.target;
@@ -866,6 +965,7 @@ export function ActiveWorktreeActions({
     const isProbeCurrent = () =>
       !controller.signal.aborted
       && activeEpochRef.current === runEpoch
+      && activeLinkedGenRef.current === runGen
       && readScopeTokenRef.current() === runScopeToken
       && readOwnerTokenRef.current() === runOwnerToken
       && (depsRef.current?.isRequestCurrent ?? worktreeActionsCurrent)(id)
@@ -876,7 +976,7 @@ export function ActiveWorktreeActions({
           const res = await customCheckStatus(runTarget, controller.signal);
           if (!isProbeCurrent()) return;
           const next = typeof res === "boolean" || res === null ? res : Boolean(res.worktree && res.path === runTarget.cwd);
-          setLinkedState({ epoch: runEpoch, value: next });
+          setLinkedState({ gen: runGen, value: next });
           return;
         }
         const status = await api<WorktreeStatus>(`/machines/${encodeURIComponent(runTarget.machineId)}/worktree/status`, {
@@ -884,30 +984,18 @@ export function ActiveWorktreeActions({
           headers: { [MANAGER_HEADER]: runTarget.manager },
         });
         if (!isProbeCurrent()) return;
-        setLinkedState({ epoch: runEpoch, value: status.worktree && status.path === runTarget.cwd });
+        setLinkedState({ gen: runGen, value: status.worktree && status.path === runTarget.cwd });
       } catch {
-        if (isProbeCurrent()) setLinkedState({ epoch: runEpoch, value: null });
+        if (isProbeCurrent()) setLinkedState({ gen: runGen, value: null });
       }
     })();
     return () => controller.abort();
-  }, [controlledLinked, customCheckStatus, effectiveEpoch, id, target.host, target.machineId, target.cwd, target.manager, target.owner, access, trackedScope.token, trackedOwner.token]);
-
-  useEffect(() => {
-    registry.set(registryKey, model as WorktreeMutation);
-    model.activate();
-    return () => {
-      model.cancel();
-      if (!model.snapshot().dispatched) {
-        model.dispose();
-        if (registry.get(registryKey) === model) registry.delete(registryKey);
-      }
-    };
-  }, [model, registry, registryKey, effectiveEpoch]);
+  }, [controlledLinked, customCheckStatus, linkedEligible, effectiveEpoch, linkedGen, id, target.host, target.machineId, target.cwd, target.manager, target.owner, trackedScope.token, trackedOwner.token]);
 
   const changeView = (next: "rename" | "delete" | "close") => {
-    if (!isCurrent()) return;
+    if (!isCurrent() || !activeModel) return;
     const checked = resolveRef.current();
-    const dispatched = model.snapshot().dispatched;
+    const dispatched = activeModel.snapshot().dispatched;
     if (next === "rename" && (dispatched || !checked.canRename)) return;
     if (next === "close" && (dispatched ? !checked.canReconcile : !checked.canClose)) return;
     if (next === "delete" && (dispatched ? !checked.canReconcile : !checked.canDelete)) return;
@@ -940,7 +1028,7 @@ export function ActiveWorktreeActions({
       view={view}
       access={access}
       linkedWorktree={linkedWorktree}
-      model={model}
+      model={activeModel}
       state={state}
       scopeEpoch={capturedEpoch}
       stampRef={stampRef}
