@@ -238,7 +238,8 @@ WEB = {
              # recording-handoff.title, recording.private_label, recording.asks_title).
              "off": {
                  "kept": [
-                     {"name": "the recording uploaded while on", "text": r"Module gate sample recording",
+                     # uploaded in the `on` phase, so it exists only when there is one: core-only has no `on` phase.
+                     {"name": "the recording uploaded while on", "text": r"Module gate sample recording", "needs_on": True,
                       "shows": [{"name": "its transcript", "selector": "main :text('A made-up sample line')"}]},
                      {"name": "a stored meeting with minutes", "text": r"^Kept recording$",
                       "shows": [{"name": "its minutes", "selector": "main :text('wombat checklist')"},
@@ -379,11 +380,59 @@ def build_web(checkout, npm_ci):
     return web / "dist"
 
 
-def build_go(checkout, out):
+def build_go(checkout, out, tags=""):
     env = dict(os.environ, GOFLAGS=(os.environ.get("GOFLAGS", "") + " -trimpath").strip())
-    r = run(["go", "build", "-o", str(out) + "/"] + [f"./cmd/{p}" for p in PROGRAMS], remaining(900), cwd=checkout / "server", env=env)
+    args = ["go", "build"] + ([f"-tags={tags}"] if tags else []) + ["-o", str(out) + "/"] + [f"./cmd/{p}" for p in PROGRAMS]
+    r = run(args, remaining(900), cwd=checkout / "server", env=env)
     if r.returncode != 0:
         raise Failed("build: " + (r.stderr or r.stdout).strip()[-2000:])
+
+
+def core_only_phase(rep, ids, dist, shots, work, schemes):
+    """A browser against a hub built with `-tags persona_core_only` (#16243): the client against the *core-only binary*,
+    not a default build with modules switched off. The hello still carries the `modules` marker and no built-in
+    `module.<id>` flag (a client-only flag such as module.glasses may stay), so every module is off by the clients' own
+    rule (docs/architecture/core-and-modules.md "Hub flags"), and it is checked as such: the core's pages render with no
+    page or console error, and no module's entry, address or chunk is there."""
+    phase = "core-only"
+    container = "persona-module-e2e-core-" + secrets.token_hex(4)
+    db = smoke.postgres(container)
+    home = work / "core-home"
+    (home / ".persona").mkdir(parents=True)
+    port, token = smoke.free_port(), secrets.token_hex(24)
+    cfg = home / ".persona/hub.json"
+    cfg.write_text(json.dumps({"listen": f"127.0.0.1:{port}", "token": token, "public_url": f"http://127.0.0.1:{port}",
+                               "name": "Core-only gate hub", "database_url": db, "machines": []}))
+    cfg.chmod(0o600)
+    shutil.copytree(dist, home / ".persona/web")  # newer than the build's embedded copy, so the hub serves it
+    smoke.seed_recordings(home)  # what the user already has, before the hub first starts
+    bindir = work / "core-bin"
+    bindir.mkdir()
+    build_go(ROOT, bindir, tags="persona_core_only")
+    hub = Hub(bindir, work, home, port, token)
+    hub.checkout = ROOT
+    try:
+        loaded = hub.start()
+        on = {id: False for id in ids}
+        server_checks(rep, phase, hub, ids, on, loaded)
+        rep.add(phase, "core", "a core-only manager loaded no module", loaded in ("none", ""), f"modules: loaded {loaded}")
+        flags = [f for f in hub.features() if f == "modules" or f.startswith("module.")]
+        rep.add(phase, "core", "the hello has the modules marker", "modules" in flags, ",".join(flags))
+        stray = sorted(f for f in flags if f.startswith("module.") and f.removeprefix("module.") in on)
+        rep.add(phase, "core", "the hello announces no built-in module flag", not stray, ",".join(stray))
+        rows, _detail = smoke.kept_recordings(hub.base, hub.token, False, home)
+        for what, ok, text in rows:
+            rep.add(phase, "recording", what, ok, text)
+        seen = browser(rep, phase, hub.base, token, "test", ids, on, shots, work, schemes, phases=(phase,))
+    finally:
+        if hub.proc is not None and hub.proc.poll() is None:
+            try:
+                hub.stop()
+            except TimedOut:
+                pass
+        subprocess.run([smoke.DOCKER, "rm", "-fv", container], capture_output=True, timeout=60)
+    return {"manager_line": f"modules: loaded {loaded}", "hello_module_flags": flags, "browser_hello": seen["hello"],
+            "requested": seen["requested"]}
 
 
 def server_checks(rep, phase, hub, ids, on, loaded):
@@ -439,7 +488,9 @@ def kept_checks(rep, phase, hub, ids, on, kept, home):
                 json.dumps(detail)[:300])
 
 
-def browser(rep, phase, base, token, hub_kind, ids, on, shots, work, schemes):
+def browser(rep, phase, base, token, hub_kind, ids, on, shots, work, schemes, phases=("on", "off", "back-on")):
+    """phases: which phases this run has, so a kept item only the `on` phase makes (needs_on) is skipped in a run
+    without one (the core-only gate has no `on` phase)."""
     modules = {id: WEB[id] for id in ids if id in WEB}
     for id in ids:
         if id not in WEB and phase == "on":
@@ -447,7 +498,7 @@ def browser(rep, phase, base, token, hub_kind, ids, on, shots, work, schemes):
     spec = {"base": base, "token": token, "phase": phase, "hub": hub_kind, "expect": {id: on[id] for id in modules},
             "modules": modules, "shots": str(shots), "out": str(work / f"browser-{phase}.json"), "schemes": schemes,
             "ignore_console": IGNORE_CONSOLE[hub_kind], "strict_before_hello": STRICT_BEFORE_HELLO[0],
-            "mask_text": socket.gethostname()}
+            "mask_text": socket.gethostname(), "phases": list(phases)}
     path = work / f"spec-{phase}.json"
     path.write_text(json.dumps(spec))
     r = run(["node", str(ROOT / "web/e2e/module-gate.mjs"), str(path)], remaining(600), cwd=ROOT / "web")
@@ -496,13 +547,17 @@ def mock_phase(rep, phase, ids, flags, dist, shots, work, schemes, procs):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--modules", required=True, help="comma-separated module ids, e.g. voice,health,recording")
+    ap.add_argument("--modules", help="comma-separated module ids, e.g. voice,health,recording (not needed with --core-only)")
     ap.add_argument("--checkout", type=Path, default=ROOT, help="the checkout to build (default: this one)")
     ap.add_argument("--shots", type=Path, default=Path.home() / "persona-pr-shots/module-e2e", help="screenshots go here")
     ap.add_argument("--evidence", type=Path, help="the JSON evidence file (default: <shots>/evidence.json)")
     ap.add_argument("--no-build-web", action="store_true", help="serve the checkout's existing web/dist")
     ap.add_argument("--npm-ci", action="store_true", help="run npm ci before building the web app")
     ap.add_argument("--no-mock", action="store_true", help="leave out the mock hub phases (older hub, flags off)")
+    ap.add_argument("--core-only", action="store_true",
+                    help="only the core-only browser phase: build with -tags persona_core_only and check that every "
+                         "module is off against the core-only binary (no on/off/back-on, no mock phases)")
+
     ap.add_argument("--schemes", default="light,dark")
     ap.add_argument("--strict-before-hello", action="store_true",
                     help="fail on an off module's chunk fetched before the page's hello (a WARN otherwise)")
@@ -511,7 +566,13 @@ def main():
     a = ap.parse_args()
     DEADLINE[0] = time.monotonic() + a.timeout
     STRICT_BEFORE_HELLO[0] = a.strict_before_hello
-    ids = [m.strip() for m in a.modules.split(",") if m.strip()]
+    if a.core_only:
+        # The core-only phase checks every built-in module is off; --modules may narrow nothing, so it defaults to all.
+        ids = [m.strip() for m in (a.modules or ",".join(smoke.module_ids())).split(",") if m.strip()]
+    else:
+        if not a.modules:
+            ap.error("--modules is required without --core-only")
+        ids = [m.strip() for m in a.modules.split(",") if m.strip()]
     checkout = a.checkout.resolve()
     shots = a.shots.expanduser().resolve()
     shots.mkdir(parents=True, exist_ok=True)
@@ -525,6 +586,33 @@ def main():
     dirty = bool(run(["git", "-C", str(checkout), "status", "--porcelain", "--untracked-files=no"], 10).stdout.strip())
     out = {"commit": commit + ("-dirty" if dirty else ""), "checkout": str(checkout), "modules": ids, "phases": {}}
     started = time.monotonic()
+    if a.core_only:
+        # Only the core-only browser phase (#16243): a core-only-built hub against the real web app. Its own Postgres
+        # container is made and removed inside core_only_phase.
+        try:
+            dist = checkout / "web/dist" if a.no_build_web else build_web(checkout, a.npm_ci)
+            smoke.check((dist / "index.html").exists(), f"no web build at {dist}")
+            print(f"the web app from {checkout} at {out['commit'][:12]} in {time.monotonic() - started:.0f}s", flush=True)
+            out["phases"]["core-only"] = core_only_phase(rep, ids, dist, shots, work, schemes)
+        except (Failed, TimedOut) as e:
+            verdict = "TIMEOUT" if isinstance(e, TimedOut) else "FAIL"
+            summary = f"{verdict} core-only browser gate for {', '.join(ids)} at {out['commit'][:12]}: {e}"
+        else:
+            verdict = "PASS" if rep.failed == 0 else "FAIL"
+            summary = f"{verdict} core-only browser gate for {', '.join(ids)} at {out['commit'][:12]}: " \
+                      f"{len(rep.lines) - rep.failed - rep.warned} checks passed, {rep.failed} failed, {rep.warned} warnings " \
+                      f"({time.monotonic() - started:.0f}s)"
+        out.update(verdict=verdict, summary=summary, checks=rep.lines, shots=str(shots))
+        evidence.parent.mkdir(parents=True, exist_ok=True)
+        evidence.write_text(json.dumps(out, indent=2, ensure_ascii=False))
+        print(f"evidence: {evidence}; screenshots: {shots}")
+        print(summary)
+        if not a.keep:
+            shutil.rmtree(work, ignore_errors=True)
+        else:
+            print(f"kept {work}")
+        return 0 if verdict == "PASS" else 1
+
     try:
         build_go(checkout, bindir)
         dist = checkout / "web/dist" if a.no_build_web else build_web(checkout, a.npm_ci)
