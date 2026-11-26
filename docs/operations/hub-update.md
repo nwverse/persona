@@ -136,6 +136,19 @@ installation user's existing HTTPS credential mechanism, with interactive prompt
 Updates execute build code from this project's repository.
 Docker Hubs and Windows Hubs retain their original update paths.
 
+In Settings › Hub the development pipeline runs **Build → Waiting for idle → Backup → Restart**.
+Build includes staging and verifying the programs. For a saved version, **Prepare backup** takes
+the place of Build. Choose **Cancel update** and confirm to stop before binary adoption.
+The hub interrupts resolution or a running build, or stops at a safe staging or idle boundary.
+During a snapshot it records the request in memory, finishes verification, resumes writers and
+saves the backup receipt. After cleanup the hub is idle, history shows **Cancelled**, and another
+update can start immediately.
+
+`GET /api/v1/hub/update` reports `can_cancel` and `cancelling`. The authenticated
+`POST /api/v1/hub/update/cancel` remains available during the built-in writer pause.
+Repeated requests during cancellation return the current status. Once the installer claims
+adoption, or when there is no cancellable attempt, cancel returns HTTP 409.
+
 Settings › Hub shows the current step and elapsed phase time during a development build,
 snapshot backup or saved-version preparation. Build progress covers the pinned checkout,
 `npm ci`, the Web development and public-share bundles, precompression and runtime assets,
@@ -340,7 +353,7 @@ recovery procedure; use the offline procedure only when data recovery is actuall
 
 `coordination-pending.json` means a pause/resume outcome needs inspection: run the original
 resume procedure and verify the writers before removing that exact marker. `.incomplete-*`
-directories remain for inspection. Normal cancellation signals the helper and its active child
+directories remain for inspection. Interrupting a helper process signals the helper and its active child
 group with SIGINT, then escalates child termination within bounded waits. The resume hook gets
 its own 60-second deadline; additional SIGINT/SIGTERM signals are deferred until it finishes.
 A failed/timed-out resume or a force-killed helper retains its coordination evidence and blocks

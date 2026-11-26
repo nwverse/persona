@@ -2179,8 +2179,10 @@ The web Changes panel's secondary file tree (#10477) reuses the existing `Resize
 Settings › Hub shows a stage strip and an inset step list during updates (#15240). The
 strip borrows the task stage markers so users can see what is running and what remains
 even when a phase has no detailed progress. A development update takes the rollback
-snapshot after the idle wait, so the backup marker stays pending until the Hub reaches
-it. Use a green check for completed work, an accent mark for the current stage and a
+snapshot after the idle wait. Show Build (or Prepare backup), Waiting for idle, Backup
+and Restart in that order. For people updating their hub, the pipeline offers a secondary
+Cancel update button while the hub reports it can cancel. Confirm with the shared dialog.
+Keep the action disabled during cancellation and announce when a backup must finish first. Use a green check for completed work, an accent mark for the current stage and a
 hollow mark for pending work. The inset list pairs the localized step with the shared
 spinner, live status label and an accent bar when the Hub reports a percentage. The
 header shows the short target and elapsed time when the start of the update can be
