@@ -922,8 +922,9 @@ export function ProgressTaskRow({ card, conversation, activity, countsOpen, supe
   const reportBeatsReply = Boolean(progressText) && (progress?.kind === "question" || progress?.kind === "blocked" || progressNewerThanReply);
   const conclusion = explicitConclusion || (!reportBeatsReply ? lastReply : undefined);
   const finishedDetail = explicitConclusion || lastReply;
+  const todoFinished = Boolean((inFinished || finished) && (!todo || todo.done_at || accepted));
   const detail = state === "cancelled" ? review?.note ?? todo?.done_reason ?? (receipt && field(receipt, "summary"))
-    : finished || inFinished ? finishedDetail
+    : todoFinished ? finishedDetail
     : conclusion ?? limit ?? liveLine ?? parked ?? waits ?? nobody ?? stopped ?? progressText ?? ask ?? task?.lead?.plan?.current ?? progressOf(task?.lead)?.text ?? (report && field(report, "text"));
   const row = (
     <button type="button" data-task-slot={card.id} data-counts-open={countsOpen ? "true" : "false"} disabled={!todo && !card.plan_id} onClick={() => {

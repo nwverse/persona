@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -1453,6 +1454,38 @@ func TestLegacyCodexFallbackReportReadsAsNotice(t *testing.T) {
 			timeline, err := s.todoFeed(ctx, todo.ID, false)
 			if err != nil || len(timeline) != 1 || timeline[0].ID != done.ID {
 				t.Errorf("task timeline %+v, err %v", timeline, err)
+			}
+		})
+	}
+}
+
+type legacyFeedByRefStore struct {
+	*memStore
+	rows []db.FeedRow
+}
+
+func (f *legacyFeedByRefStore) FeedByRef(context.Context, string, []string, int) ([]db.FeedRow, error) {
+	return slices.Clone(f.rows), nil
+}
+
+func TestLegacyCodexFallbackTimelineStoreFiltersNotice(t *testing.T) {
+	for _, lang := range i18n.Langs {
+		t.Run(string(lang), func(t *testing.T) {
+			ctx := t.Context()
+			at := time.Now().UTC().Add(-time.Minute)
+			legacyBody, _ := json.Marshal(reportBody{Kind: upReportProgress, Text: i18n.T(lang, "assistant-tasks.codex_effort_terminal")})
+			doneBody, _ := json.Marshal(reportBody{Kind: upReportDone, Text: "Export verified."})
+			st := &legacyFeedByRefStore{
+				memStore: &memStore{},
+				rows: []db.FeedRow{
+					{ID: "done", Conversation: "owner", At: at.Add(time.Second), Kind: feedReport, Ref: "todo_effort", Body: doneBody},
+					{ID: "legacy", Conversation: "owner", At: at, Kind: feedReport, Body: legacyBody},
+				},
+			}
+			s, _ := newTaskServiceOn(t, st)
+			timeline, err := s.todoFeed(ctx, "todo_effort", false)
+			if err != nil || len(timeline) != 1 || timeline[0].ID != "done" {
+				t.Fatalf("store-backed task timeline %+v, err %v", timeline, err)
 			}
 		})
 	}
