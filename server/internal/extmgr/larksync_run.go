@@ -343,7 +343,11 @@ func (h *Manager) larkSyncRunHeld(ctx context.Context, key, mode string, rt *lar
 		if commitErr == nil {
 			committedLinksBackfillVer = linksBackfillVer
 			if tier == larksyncwire.TierFull && b.BackfillVersion < larkSyncBackfillVersion {
-				repaired, done, repairErr := h.larkSyncBackfillSenderNames(ctx, store, binding, &st, reader, token, handed)
+				book := cursors[larksyncwire.SenderNamesCursor]
+				if v, ok := moved[larksyncwire.SenderNamesCursor]; ok {
+					book = v
+				}
+				repaired, done, repairErr := h.larkSyncBackfillSenderNames(ctx, store, binding, &st, reader, token, handed, book)
 				chats += repaired
 				if repairErr != nil {
 					res.Errors = append(res.Errors, larksyncwire.ResourceError{
@@ -403,6 +407,7 @@ func (h *Manager) larkSyncBackfillSenderNames(
 	reader larksyncwire.Syncer,
 	token func(ctx context.Context) (string, error),
 	handed func() string,
+	nameBook string,
 ) (repairedChats int, done bool, repairErr error) {
 	chatResolver, hasChatResolver := reader.(larksyncwire.ChatNameResolver)
 	legacyResolver, hasLegacyResolver := reader.(larksyncwire.NameResolver)
@@ -571,6 +576,8 @@ func (h *Manager) larkSyncBackfillSenderNames(
 	var openIDs []string
 	chatSenderSets := map[string]map[string]bool{}
 	sampleMessages := map[string]string{}
+	sampleTimes := map[string]time.Time{}
+	sampleChats := map[string]string{}
 	for _, id := range ownedOrder {
 		c := owned[id]
 		sid := c.msg.SenderID
@@ -586,6 +593,8 @@ func (h *Manager) larkSyncBackfillSenderNames(
 		}
 		if sampleMessages[sid] == "" {
 			sampleMessages[sid] = id
+			sampleTimes[sid] = c.msg.At
+			sampleChats[sid] = c.chat.ID
 		}
 	}
 	slices.Sort(openIDs)
@@ -617,6 +626,9 @@ func (h *Manager) larkSyncBackfillSenderNames(
 		ChatSenders:    chatSenders,
 		P2PChatIDs:     typedP2P,
 		SampleMessages: sampleMessages,
+		SampleTimes:    sampleTimes,
+		SampleChats:    sampleChats,
+		NameBook:       nameBook,
 	}
 	runResolve := func() (larksyncwire.NameResolveResult, error) {
 		if hasChatResolver {

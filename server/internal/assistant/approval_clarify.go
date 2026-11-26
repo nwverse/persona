@@ -685,4 +685,5 @@ type approvalBook struct {
 	delivering bool
 	again      bool
 	retry      bool
+	retryDelay time.Duration // 0: approvalResultRetryDelay; tests shorten it
 }

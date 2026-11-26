@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -90,6 +91,7 @@ func (s *Syncer) Run(ctx context.Context, b larksyncwire.Binding, token func(ctx
 // (larksyncwire.ModeIM), only IM chats, p2p chat discovery, and the cloud documents and minutes linked in those new
 // messages run, with reserved budget slices so a busy chat backlog cannot starve p2p discovery or linked docs.
 func (r *run) read(ctx context.Context) error {
+	defer r.saveNameBook()
 	if r.b.Mode == larksyncwire.ModeIM {
 		if r.b.Tier != larksyncwire.TierFull {
 			return nil
@@ -283,44 +285,49 @@ func (s *Syncer) ResolveNamesWithFallback(ctx context.Context, b larksyncwire.Bi
 		}
 	}
 
-	chatMembers := map[string]map[string]string{}
+	known := nameBookNames(req.NameBook)
+	chatMembers := map[string]*chatMemberList{}
 	chatMembersOff := false
-	ensureMembers := func(chatID string) (map[string]string, error) {
+	// memberName reads chatID's members on demand until want is among them ("" reads the whole list) and says want's
+	// name; it returns the members read so far.
+	memberName := func(chatID, want string) (map[string]string, error) {
 		if chatID == "" {
 			return nil, nil
 		}
-		if m, ok := chatMembers[chatID]; ok {
-			return m, nil
-		}
-		if chatMembersOff {
-			return nil, nil
-		}
-		if overBudget() {
-			return nil, context.DeadlineExceeded
-		}
-		members, scopeDenied, err := loadChatMembers(runCtx, sess, chatID, overBudget)
-		if scopeDenied {
-			chatMembersOff = true
-		}
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
+		l := chatMembers[chatID]
+		if l == nil {
+			if chatMembersOff {
+				return nil, nil
 			}
-			if runCtx.Err() != nil {
-				return nil, runCtx.Err()
+			l = &chatMemberList{}
+			chatMembers[chatID] = l
+		}
+		if !l.done && !chatMembersOff {
+			if overBudget() {
+				return l.names, context.DeadlineExceeded
 			}
-			return nil, err
+			if _, err := l.find(runCtx, sess, chatID, want, overBudget); err != nil {
+				if ctx.Err() != nil {
+					return l.names, ctx.Err()
+				}
+				if runCtx.Err() != nil {
+					return l.names, runCtx.Err()
+				}
+				return l.names, err
+			}
+			if l.denied {
+				chatMembersOff = true
+			}
+			if !l.done && overBudget() {
+				return l.names, context.DeadlineExceeded
+			}
 		}
-		if members == nil {
-			members = map[string]string{}
-		}
-		chatMembers[chatID] = members
-		for id, name := range members {
+		for id, name := range l.names {
 			if name != "" && requestedSenders[id] && out.UserNames[id] == "" {
 				out.UserNames[id] = name
 			}
 		}
-		return members, nil
+		return l.names, nil
 	}
 
 	// Pass 1: resolve senders chat-by-chat; once a chat has a contact/v3 miss, load its member list once and serve
@@ -331,8 +338,8 @@ func (s *Syncer) ResolveNamesWithFallback(ctx context.Context, b larksyncwire.Bi
 			if sid == "" || out.UserNames[sid] != "" || !isContactUser(sid, "") {
 				continue
 			}
-			if members, loaded := chatMembers[chatID]; loaded {
-				if name := members[sid]; name != "" {
+			if l := chatMembers[chatID]; l != nil {
+				if name := l.names[sid]; name != "" {
 					out.UserNames[sid] = name
 					continue
 				}
@@ -344,7 +351,7 @@ func (s *Syncer) ResolveNamesWithFallback(ctx context.Context, b larksyncwire.Bi
 			if name != "" {
 				continue
 			}
-			members, err := ensureMembers(chatID)
+			members, err := memberName(chatID, sid)
 			if err != nil {
 				return out, err
 			}
@@ -432,8 +439,17 @@ func (s *Syncer) ResolveNamesWithFallback(ctx context.Context, b larksyncwire.Bi
 				}
 			}
 		}
+		if peer == "" && targetID == "" {
+			// A bot's single chat: no API a user token may call names another app's bot; the book may.
+			for _, sid := range req.ChatSenders[chatID] {
+				if name := known[strings.TrimSpace(sid)]; name != "" && sid != owner {
+					peer = name
+					break
+				}
+			}
+		}
 		if peer == "" {
-			members, err := ensureMembers(chatID)
+			members, err := memberName(chatID, "")
 			if err != nil {
 				return out, err
 			}
@@ -499,7 +515,53 @@ func (s *Syncer) ResolveNamesWithFallback(ctx context.Context, b larksyncwire.Bi
 			out.UserNames[sid] = name
 		}
 	}
-	// If Pass 4 learned a peer's name for a still-unnamed p2p chat, populate P2PChatNames too.
+	// Pass 5: the binding's name book, for a sender no API names now (a member who left the group, a bot an earlier
+	// message mentioned).
+	for _, sid := range sortedKeys(req.SampleMessages) {
+		if sid != "" && out.UserNames[sid] == "" && known[sid] != "" {
+			out.UserNames[sid] = known[sid]
+		}
+	}
+
+	// Pass 6: read the chat around a still-unnamed sender's sample message for an @mention of them (someone replying
+	// to a member who has since left the group).
+	scanned := map[string]bool{}
+	for _, sid := range sortedKeys(req.SampleMessages) {
+		chatID := strings.TrimSpace(req.SampleChats[sid])
+		at := req.SampleTimes[sid]
+		if sid == "" || out.UserNames[sid] != "" || chatID == "" || at.IsZero() {
+			continue
+		}
+		key := chatID + "\x00" + strconv.FormatInt(at.Unix()/3600, 10)
+		if !scanned[key] {
+			scanned[key] = true
+			if overBudget() {
+				return out, context.DeadlineExceeded
+			}
+			var want []string
+			for _, other := range req.ChatSenders[chatID] {
+				if other = strings.TrimSpace(other); other != "" && out.UserNames[other] == "" {
+					want = append(want, other)
+				}
+			}
+			if err := scanMentions(runCtx, sess, chatID, at, want, msgNames, overBudget); err != nil {
+				if ctx.Err() != nil {
+					return out, ctx.Err()
+				}
+				if runCtx.Err() != nil {
+					return out, runCtx.Err()
+				}
+				return out, err
+			}
+		}
+		for _, other := range req.ChatSenders[chatID] {
+			if other = strings.TrimSpace(other); other != "" && out.UserNames[other] == "" && msgNames[other] != "" {
+				out.UserNames[other] = msgNames[other]
+			}
+		}
+	}
+
+	// If Pass 4-6 learned a peer's name for a still-unnamed p2p chat, populate P2PChatNames too.
 	for _, rawChatID := range req.P2PChatIDs {
 		chatID := strings.TrimSpace(string(rawChatID))
 		if chatID == "" || out.P2PChatNames[chatID] != "" {
