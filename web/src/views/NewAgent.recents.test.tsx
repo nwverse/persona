@@ -141,6 +141,14 @@ describe("New agent's first message for Codex (#4961)", () => {
   });
 });
 
+it("uses the preset computer with its own saved folder when only the computer was selected", async () => {
+  localStorage.setItem("new.cwd.studio", "/projects/notes");
+  await open("machine-only", { machineId: "studio" });
+  expect(machineChip("Studio").className).toContain("bg-ink");
+  expect(folder()).toBe("/projects/notes");
+  expect(launched).toHaveLength(0);
+});
+
 describe("New agent's recent setups (#2134)", () => {
   it("shows no section before anything started, and remembers a start with the model and effort it sent", async () => {
     await open();

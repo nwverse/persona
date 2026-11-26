@@ -624,7 +624,7 @@ function Shell() {
       main = <MachineDetail key={route.mid} mid={route.mid} onToggleSidebar={toggle} />;
       break;
     case "space":
-      main = <SpacePage key={`${route.mid}/${route.space}`} mid={route.mid} space={route.space} onToggleSidebar={toggle} />;
+      main = <SpacePage key={`${route.mid}/${route.workspace ?? route.space}`} workspaceId={route.workspace} mid={route.mid} space={route.space} onToggleSidebar={toggle} />;
       break;
     case "settings":
       main = <Settings onToggleSidebar={toggle} />;
