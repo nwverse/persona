@@ -3098,6 +3098,8 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
     var ownerProposal: Bool?
     var noExpiry: Bool?
     var ownerApprovalPhrases: [String]?
+    /// True when the card has no interactive computer terminal or UI to hand back to; absent/false keeps hand-back.
+    var noHandBack: Bool?
     var ownerApprovalPhrase: String? {
         guard kind == .permission, ownerProposal == true, let approvalBatchID, !approvalBatchID.isEmpty,
               !machineID.isEmpty, !sessionID.isEmpty,
@@ -3148,7 +3150,8 @@ nonisolated struct Interaction: Codable, Identifiable, Hashable, Sendable {
              agentID = "agent_id", agentType = "agent_type", foldedUnderText = "folded_under",
              foldedUnderMachineIDText = "folded_under_machine_id", foldedAsText = "folded_as",
              foldedSideText = "folded_side", approvalBatchID = "approval_batch_id", approvalItemID = "approval_item_id",
-             ownerProposal = "owner_proposal", noExpiry = "no_expiry", ownerApprovalPhrases = "owner_approval_phrases"
+             ownerProposal = "owner_proposal", noExpiry = "no_expiry", ownerApprovalPhrases = "owner_approval_phrases",
+             noHandBack = "no_hand_back"
     }
 }
 
