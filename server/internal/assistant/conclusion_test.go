@@ -796,21 +796,24 @@ func TestConclusionVerificationCopyFollowsDeliveryState(t *testing.T) {
 	}
 
 	// 3. Briefing feed and briefing card
-	facts := s.briefFactsAt(ctx, time.Now(), "")
-	body := s.briefBodyOf(facts, "早报")
-	var row *briefBodyRow
-	for i := range body.Accept {
-		if body.Accept[i].ID == todo.ID {
-			row = &body.Accept[i]
+	t.Run("briefing", func(t *testing.T) {
+		needsBriefingModule(t)
+		facts := s.briefFactsAt(ctx, time.Now(), "")
+		body := s.briefBodyOf(facts, "早报")
+		var row *briefBodyRow
+		for i := range body.Accept {
+			if body.Accept[i].ID == todo.ID {
+				row = &body.Accept[i]
+			}
 		}
-	}
-	if row == nil || row.Verdict != wantVerdict || row.Outcome != "" {
-		t.Fatalf("brief body row = %+v, want verdict=%q outcome=\"\"", row, wantVerdict)
-	}
-	briefCard, _, _ := s.briefCard(facts, "早报", "")
-	if js := briefCard.JSON(); !strings.Contains(js, botcard.EscapeMarkdown(wantVerdict)) || strings.Contains(js, forbidden) {
-		t.Fatalf("brief card verdict mismatch:\n%s", js)
-	}
+		if row == nil || row.Verdict != wantVerdict || row.Outcome != "" {
+			t.Fatalf("brief body row = %+v, want verdict=%q outcome=\"\"", row, wantVerdict)
+		}
+		briefCard, _, _ := s.briefCard(facts, "早报", "")
+		if js := briefCard.JSON(); !strings.Contains(js, botcard.EscapeMarkdown(wantVerdict)) || strings.Contains(js, forbidden) {
+			t.Fatalf("brief card verdict mismatch:\n%s", js)
+		}
+	})
 
 	// 4. Snapshot
 	snap, total := s.snapshotUnaccepted(ctx, s.location(ctx))
