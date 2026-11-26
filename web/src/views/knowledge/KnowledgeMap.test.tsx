@@ -123,6 +123,25 @@ describe("the knowledge map", () => {
     expect([...svg.querySelectorAll("g[role=button]")].some((g) => g.getAttribute("aria-label") === "Collapse Cache")).toBe(true);
   });
 
+  it("wraps a point's English text between words and its Chinese text between any two characters", async () => {
+    const english = "Files changed within two seconds of each other are not cached until the next scan";
+    const chinese = "缓存在两秒内被改写的文件不会被缓存因为时间戳相同需要等到下一次扫描才会更新到索引里面"; // i18n-ignore: a point's text as curation writes it
+    const words: KBDetailResponse = { detail: { kind: "topics", id: "cache", path: "", meta: { name: "Cache" }, points: [{ id: "e", kind: "fact", text: english }, { id: "c", kind: "fact", text: chinese }] } };
+    act(() => root.render(<KnowledgeMap onToggleSidebar={() => {}} />));
+    await answer("/api/v1/kb/topics", { items: [{ kind: "topics", id: "cache", name: "Cache", relevance: 0 }] });
+    await answer("/api/v1/assistant", {});
+    await answer("/api/v1/kb/topics/cache", words);
+    // the card's lines, after its kind tag
+    const lines = (text: string) => [...host.querySelector(`svg[data-map] g[aria-label="Fact: ${text}"]`)!.querySelectorAll("text")].slice(1).map((t) => t.textContent!);
+    const en = lines(english);
+    expect(en.length).toBeGreaterThan(1);
+    expect(en.join(" ")).toBe(english); // every break falls between two words
+    const zh = lines(chinese);
+    expect(zh.length).toBeGreaterThan(1);
+    expect(zh.join("")).toBe(chinese);
+    expect(zh[0].length).toBeGreaterThan(en[0].length); // Chinese fills its lines to the edge, as before
+  });
+
   it("switches to the projects view", async () => {
     act(() => root.render(<KnowledgeMap onToggleSidebar={() => {}} />));
     await answer("/api/v1/kb/topics", empty);
@@ -188,6 +207,43 @@ describe("zooming and panning the map", () => {
     expect(zoom()).toBe(`${Math.round(fit * 1.25 * 100)}%`);
     act(() => button("Fit to view").click());
     expect(zoom()).toBe(`${Math.round(fit * 100)}%`);
+  });
+
+  it("zooms with + / = / - / _ / 0 while a node has focus, leaves ⌘ / Ctrl / Alt to the page zoom, and ignores typing", async () => {
+    const { svg, view, width, height } = await draw();
+    size(view, 800, 600);
+    const node = svg.querySelector<SVGGElement>("g[role=button][tabindex]")!;
+    node.focus();
+    const press = (el: Element, key: string, mods: KeyboardEventInit = {}) => {
+      const e = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...mods });
+      act(() => el.dispatchEvent(e));
+      return e.defaultPrevented;
+    };
+    expect(zoom()).toBe("65%");
+    // the zoom bar's steps
+    expect(press(node, "=")).toBe(true);
+    expect(zoom()).toBe("81%");
+    press(node, "+", { shiftKey: true });
+    expect(zoom()).toBe("102%");
+    press(node, "-");
+    expect(zoom()).toBe("81%");
+    press(node, "_", { shiftKey: true });
+    expect(zoom()).toBe("65%");
+    // with ⌘, Ctrl or Alt they are the browser's or the desktop app's page zoom: not handled, not prevented
+    for (const mods of [{ metaKey: true }, { ctrlKey: true }, { altKey: true }]) for (const key of ["=", "+", "-", "_", "0"]) expect(press(node, key, mods)).toBe(false);
+    expect(zoom()).toBe("65%");
+    // typing in a field, inside the map's view or elsewhere on the page, zooms nothing
+    for (const parent of [view, document.body]) {
+      const input = parent.appendChild(document.createElement("input"));
+      input.focus();
+      for (const key of ["=", "+", "-", "_", "0"]) expect(press(input, key)).toBe(false);
+      input.remove();
+    }
+    expect(zoom()).toBe("65%");
+    // 0 is Fit to view
+    size(view, 120, 90);
+    expect(press(node, "0")).toBe(true);
+    expect(zoom()).toBe(`${Math.round(Math.max(0.05, Math.min((120 - 24) / width, (90 - 24) / height)) * 100)}%`);
   });
 
   it("pans on a mouse drag without selecting where it started; a press that hardly moves still selects", async () => {

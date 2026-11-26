@@ -47,17 +47,33 @@ function clip(s: string, px: number, weight: number, max: number): string {
   while (out && tw(out + "…", px, weight) > max) out = out.slice(0, -1);
   return out + "…";
 }
+// What a line may break between (SVG text has no CSS line breaking): a run of spaces, one CJK character (Chinese and
+// Japanese break between any two, as they always did here), or a word of anything else.
+const CJK = "\\p{Script=Han}\\p{Script=Hiragana}\\p{Script=Katakana}\\p{Script=Hangul}\\u3000-\\u303f\\uff00-\\uffef";
+const TOKENS = new RegExp(`\\s+|[${CJK}]|[^\\s${CJK}]+`, "gu");
+/** `s` in at most `lines` lines of `max` px, the last clipped with "…" when it does not fit. Words stay whole; a word
+ *  longer than a line breaks inside it; spaces never start a line. */
 function wrap(s: string, px: number, max: number, lines: number): string[] {
   const out: string[] = [];
   let l = "";
-  for (const ch of s) {
-    if (tw(l + ch, px) > max && l) {
-      out.push(l);
-      l = ch;
-      if (out.length === lines) break;
-    } else l += ch;
+  const full = () => out.length === lines;
+  const put = (piece: string) => {
+    if (l && tw(l + piece, px) > max) {
+      out.push(l.trimEnd());
+      l = piece;
+    } else l += piece;
+  };
+  for (const tok of s.match(TOKENS) ?? []) {
+    if (full()) break;
+    if (/^\s/.test(tok)) {
+      if (l) l += tok;
+    } else if (tw(tok, px) <= max) put(tok);
+    else for (const ch of tok) {
+      put(ch);
+      if (full()) break;
+    }
   }
-  if (out.length < lines) out.push(l);
+  if (!full()) out.push(l.trimEnd());
   else out[lines - 1] = clip(out[lines - 1] + "…", px, 400, max);
   return out;
 }
@@ -377,6 +393,21 @@ export function KnowledgeMap({ onToggleSidebar }: { onToggleSidebar: () => void 
     el.scrollTo({ left: o.px + (p.x + p.box.w / 2) * zoom - el.clientWidth / 2, top: o.py + p.y * zoom - el.clientHeight / 2, behavior: scrollBehavior() });
   }, [L, zoom]);
   const fitAll = () => L && zoomAt(Math.min(1, fits()), undefined, undefined, { mx: L.width / 2, my: L.height / 2 });
+  // Zoom keys, as in the other zoomable views (the image viewer, the extension graph): with a node focused and no ⌘, Ctrl or
+  // Alt held, + or = zooms in one step, - or _ out, 0 fits the whole map. A step zooms around the focused node (the
+  // nearest point of it in view), so it stays put. ⌘/Ctrl + =, - and 0 are left to the browser's and the desktop app's page
+  // zoom (lib/shortcuts.ts keeps them reserved).
+  const zoomKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    const el = host.current, focused = e.target instanceof Element ? e.target.closest("svg[data-map] [tabindex]") : null;
+    if (!el || !focused || e.metaKey || e.ctrlKey || e.altKey) return;
+    const step = e.key === "+" || e.key === "=" ? STEP : e.key === "-" || e.key === "_" ? 1 / STEP : e.key === "0" ? 0 : null;
+    if (step === null) return;
+    e.preventDefault();
+    if (!step) return fitAll();
+    const r = focused.getBoundingClientRect(), v = el.getBoundingClientRect();
+    const x = Math.min(Math.max(r.left + r.width / 2, v.left), v.left + el.clientWidth), y = Math.min(Math.max(r.top + r.height / 2, v.top), v.top + el.clientHeight);
+    zoomAt(zoom * step, x, y);
+  };
   const selected = (sel && byId.get(sel)) || root;
 
   return (
@@ -405,7 +436,7 @@ export function KnowledgeMap({ onToggleSidebar }: { onToggleSidebar: () => void 
       ) : (
         <div className="flex min-h-0 flex-1">
           <div className="relative min-w-0 flex-1">
-            <div ref={host} className="absolute inset-0 cursor-grab select-none overflow-auto bg-canvas active:cursor-grabbing"
+            <div ref={host} onKeyDown={zoomKey} className="absolute inset-0 cursor-grab select-none overflow-auto bg-canvas active:cursor-grabbing"
               style={{ backgroundImage: "radial-gradient(var(--line-strong) 1px, transparent 1px)", backgroundSize: "22px 22px", touchAction: "pan-x pan-y", overflowAnchor: "none" }}>
               {L && <MapCanvas key={view} L={L} shift={shift} title={load.root.title} sel={selected?.id ?? ""} zoom={zoom} onFit={setZoom} onSelect={select} onToggle={toggle} />}
             </div>
