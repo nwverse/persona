@@ -131,6 +131,8 @@ type Service struct {
 	reportedLinks reportedLinkBook
 	// build is Options.Build.
 	build string
+	// supRoles supplements direction role baselines for working legacy supervisors (supervision_roles.go).
+	supRoles supervisionRoleBook
 	// northStarOn: the north star's recording start is saved (north_star.go).
 	northStarOn atomic.Bool
 	// nodeAnswering: the computers' requests being answered now, but the ones that wait on a person (idle.go).
@@ -209,6 +211,8 @@ type Service struct {
 	todoAskAfter time.Duration
 	// retryNow is the clock a due retry checks the task's time against (retryStillDue; nil: time.Now, tests set it).
 	retryNow func() time.Time
+	// machineNow is the clock collectMachineSnapshots checks sample freshness and silent-node age against (nil: time.Now, tests set it).
+	machineNow func() time.Time
 
 	mux            *http.ServeMux
 	routes         []string
@@ -301,22 +305,23 @@ type Service struct {
 	// with none set up. Tests turn tagging off unless they are about it: a model's socket inside a synctest bubble
 	// never counts as blocked.
 	noInfoTag      bool
-	background     backgroundBook    // supervise_background.go
-	autoRuns       autoReviewBook    // supervise_autoreview.go
-	sessionReviews sessionReviewBook // agents_session_review.go
-	reports        reportBook        // reports.go
-	upReports      reportRate        // agent_control.go: report_to_supervisor
-	noteRate       reportRate        // todo_decisions.go: todo_decision_add
-	dispatch       dispatchBook      // dispatch.go: dispatch_start, dispatch_read
-	admission      admissionBook     // admission.go: execution-agent resource and direction gate
-	adoptMu        sync.Mutex        // agent_control.go: one agent_supervise at a time
-	placeBook      placeBook         // places.go
-	accept         acceptBook        // acceptance.go
-	pushQuiet      quietSwitch       // push_quiet.go: the hub's low-distraction switch as last read
-	attention      attentionClock    // attention.go: the attention mode as last read, and its end
-	deploy         deployProbe       // deploy_check.go: is the work in the running hub
-	prEventRoute   prEventRouteBook  // pr_status_route.go: opt-in direct PR-event routing dedupe
-	parkReplies    parkReplyBook     // park_reply.go: bounded source reads for explicitly bound person replies
+	background     backgroundBook         // supervise_background.go
+	autoRuns       autoReviewBook         // supervise_autoreview.go
+	sessionReviews sessionReviewBook      // agents_session_review.go
+	reports        reportBook             // reports.go
+	upReports      reportRate             // agent_control.go: report_to_supervisor
+	noteRate       reportRate             // todo_decisions.go: todo_decision_add
+	dispatch       dispatchBook           // dispatch.go: dispatch_start, dispatch_read
+	admission      admissionBook          // admission.go: execution-agent resource and direction gate
+	placementSched placementSchedulerBook // placement_queue.go: pending_placement scheduler leases and fallback loop
+	adoptMu        sync.Mutex             // agent_control.go: one agent_supervise at a time
+	placeBook      placeBook              // places.go
+	accept         acceptBook             // acceptance.go
+	pushQuiet      quietSwitch            // push_quiet.go: the hub's low-distraction switch as last read
+	attention      attentionClock         // attention.go: the attention mode as last read, and its end
+	deploy         deployProbe            // deploy_check.go: is the work in the running hub
+	prEventRoute   prEventRouteBook       // pr_status_route.go: opt-in direct PR-event routing dedupe
+	parkReplies    parkReplyBook          // park_reply.go: bounded source reads for explicitly bound person replies
 
 	reviewDismissals taskReviewDismissalBook // task_review_dismissals.go
 	repoRootsMu      sync.Mutex              // pr_number_ref.go: one write of the repository roots at a time
@@ -351,19 +356,20 @@ type Service struct {
 	tevents          todoEvents        // todo_events.go: what the extensions are told of the todos
 	tpush            todosPush         // todos.go: the {"type":"todos"} waiting for the rest of its write
 	directions       directionBook     // directions.go: the leaders' records and what the extensions were told of them
-	lreports         leaderReportBook  // leader_reports.go: what the leaders' tasks were reported as
-	outbound         outboundOnce      // outbound_once.go: one card per hand-off the owner is asked about, none again once allowed
-	dtree            directionTreeBook // direction_tree.go: the direction tree the apps were last told of
-	tview            todoViewBook      // todo_view_push.go: what the apps were told each to-do is filed under
-	trevision        todoRevisionBook  // todo_revision.go: the pushed read's cheap validator
-	offers           routeBook         // route.go: the directions offered for New chats
-	fleetUp          atomic.Bool       // the fleet has been brought up since this process started (FleetUp): the pending cards are the real ones (lark_board.go)
-	kb               kbState           // kb.go
-	inbox            inboxBook         // inbox_book.go
-	board            boardBook         // workspace_board.go: the workspace board
-	viewEvents       viewNotifications // views.go: only coalesced notifications; contents are stored first
-	pages            pagesRuntime      // pages_actions.go, pages_events.go: the pages' events, taps and turns (Dashboards)
-	viewMemo         viewMemo          // views.go: encoded cards for the feed snapshot, checked against the database
+
+	lreports   leaderReportBook  // leader_reports.go: what the leaders' tasks were reported as
+	outbound   outboundOnce      // outbound_once.go: one card per hand-off the owner is asked about, none again once allowed
+	dtree      directionTreeBook // direction_tree.go: the direction tree the apps were last told of
+	tview      todoViewBook      // todo_view_push.go: what the apps were told each to-do is filed under
+	trevision  todoRevisionBook  // todo_revision.go: the pushed read's cheap validator
+	offers     routeBook         // route.go: the directions offered for New chats
+	fleetUp    atomic.Bool       // the fleet has been brought up since this process started (FleetUp): the pending cards are the real ones (lark_board.go)
+	kb         kbState           // kb.go
+	inbox      inboxBook         // inbox_book.go
+	board      boardBook         // workspace_board.go: the workspace board
+	viewEvents viewNotifications // views.go: only coalesced notifications; contents are stored first
+	pages      pagesRuntime      // pages_actions.go, pages_events.go: the pages' events, taps and turns (Dashboards)
+	viewMemo   viewMemo          // views.go: encoded cards for the feed snapshot, checked against the database
 
 	devs                 Devices // the computers (devices.go); nil: no fleet
 	mcpWaitMu            sync.Mutex
@@ -416,7 +422,8 @@ type Service struct {
 	sockets   sync.Once
 	socketMux *http.ServeMux
 	// navMu: one change of the user's navigation choices at a time, each read and written whole (navigation.go)
-	navMu sync.Mutex
+	navMu            sync.Mutex
+	idleArchiveAudit idleArchiveAuditBook // agent_archive_idle.go: audited guarded idle archive-and-close records
 }
 
 var _ Handler = (*Service)(nil)
@@ -445,6 +452,7 @@ func New(o Options) *Service {
 	s.conversationSwitchRoutes()
 	s.modelPickRoutes()
 	s.agentArchiveRoutes()
+	s.idleArchiveRoutes()
 	s.agentNamingRoutes()  // agent_naming_request.go
 	s.questionReadRoutes() // question_reads.go
 	s.alwaysRoutes()
@@ -465,7 +473,9 @@ func New(o Options) *Service {
 	s.dispatchPolicyRoutes() // dispatch_policy_routes.go
 	s.dispatchGuardRoutes()  // dispatch_guard.go
 	s.startPresetRoutes()
-	s.startDefaultsRoutes() // start_defaults_routes.go
+	s.startDefaultsRoutes()    // start_defaults_routes.go
+	s.machineResourcesRoutes() // machine_resources_routes.go
+	s.placementRoutes()        // placement_queue.go
 	s.directionTreeRoutes()
 	s.organizationSnapshotRoutes()
 	s.directionSessionRoutes()
@@ -638,7 +648,8 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 			return beforeNodeWrite(method, err)
 		}
 	}
-	if method == DeviceSessionItems || method == DeviceAssistantHandoff || method == "session.item" || method == "session.image" {
+	if method == DeviceSessionItems || method == DeviceAssistantHandoff || method == "session.item" || method == "session.image" ||
+		method == proto.MethodSessionInputPreviews || method == proto.MethodSessionItemsWindow {
 		raw, err := json.Marshal(params)
 		if err != nil {
 			return err
@@ -991,6 +1002,10 @@ func (s *Service) event(ctx context.Context, ev map[string]any) {
 			return
 		}
 	}
+	s.broadcastEvent(ctx, ev)
+}
+
+func (s *Service) broadcastEvent(ctx context.Context, ev any) {
 	raw, err := json.Marshal(ev)
 	if err != nil {
 		return

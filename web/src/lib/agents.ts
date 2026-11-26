@@ -3,7 +3,7 @@ import { storedValue, storeValue } from "./compatibility";
 // "<source>:<sessionKey>" and bridge keys contain "/", so the whole id is percent-encoded in paths.
 import { useSyncExternalStore } from "react";
 import { t } from "../i18n";
-import { api, errorText } from "./api";
+import { api, errorText, invalidateInFlightGets } from "./api";
 import { SessionList, compareListIds } from "./session-list";
 import { toast } from "../ui/atoms";
 
@@ -362,6 +362,8 @@ export function resetAgents() {
   bounded = false;
   personalSessions.reset();
   listGen++;
+  invalidateInFlightGets("/agents/sessions");
+  invalidateInFlightGets("/agents");
   // the next login's first pull starts right away instead of waiting behind the old one
   inflight = null;
   queued = null;
@@ -385,7 +387,7 @@ export function useAgentList(): ListState {
 export type GroupBy = "date" | "provider" | "none";
 export type SortBy = "updated" | "unread" | "name";
 export type ShowMode = "all" | "unread" | "sendable";
-export interface AgentView {
+export interface AgentListView {
   group?: GroupBy;
   sort?: SortBy;
   show?: ShowMode;
@@ -397,15 +399,15 @@ export interface AgentSectionDef {
 }
 export interface AgentPrefs {
   pins: string[];
-  view: AgentView;
+  view: AgentListView;
   sections: AgentSectionDef[];
   assign: Record<string, string>; // session id → section id
   /** Removed from the list: session id → when (ms). Changed only through hide / unhide; the hub keeps it on a save. */
   hidden?: Record<string, number>;
 }
-export const DEFAULT_VIEW: Required<AgentView> = { group: "date", sort: "updated", show: "all", providers: [] };
+export const DEFAULT_VIEW: Required<AgentListView> = { group: "date", sort: "updated", show: "all", providers: [] };
 export const emptyPrefs = (): AgentPrefs => ({ pins: [], view: {}, sections: [], assign: {} });
-export const viewOf = (p: AgentPrefs): Required<AgentView> => ({ ...DEFAULT_VIEW, ...Object.fromEntries(Object.entries(p.view ?? {}).filter(([, v]) => v !== undefined && v !== "")) }) as Required<AgentView>;
+export const viewOf = (p: AgentPrefs): Required<AgentListView> => ({ ...DEFAULT_VIEW, ...Object.fromEntries(Object.entries(p.view ?? {}).filter(([, v]) => v !== undefined && v !== "")) }) as Required<AgentListView>;
 export const isDefaultView = (p: AgentPrefs) => {
   const v = viewOf(p);
   return v.group === DEFAULT_VIEW.group && v.sort === DEFAULT_VIEW.sort && v.show === DEFAULT_VIEW.show && !v.providers.length;
@@ -501,7 +503,7 @@ export function removeSection(p: AgentPrefs, id: string): AgentPrefs {
 }
 // "Reset to default" resets the view only; pins and sections stay.
 export const resetView = (p: AgentPrefs): AgentPrefs => ({ ...p, view: {} });
-export function setView(p: AgentPrefs, patch: AgentView): AgentPrefs {
+export function setView(p: AgentPrefs, patch: AgentListView): AgentPrefs {
   return { ...p, view: { ...p.view, ...patch } };
 }
 export function toggleProvider(p: AgentPrefs, provider: string): AgentPrefs {
@@ -555,7 +557,7 @@ export function refreshAgentPrefs(): Promise<void> {
   const rev = prefsOut ? -1 : prefsRev;
   if (rev === -1) prefsPullAfterSave = true;
   const seq = ++prefsGetSeq;
-  return api<AgentPrefs>("/agents/prefs")
+  return api<AgentPrefs>("/agents/prefs", { dedupe: false })
     .then((p) => {
       hubPrefs = true;
       if (rev !== prefsRev || seq < prefsGetApplied) return;

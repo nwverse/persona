@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/taskworkspace"
@@ -53,7 +54,9 @@ type PlanTask struct {
 	InboxHandoff string `json:"inbox_handoff,omitempty"`
 	// MachinePolicy defaults to fixed; only explicit flexible tasks may move to another machine.
 	MachinePolicy string `json:"machine_policy,omitempty"`
-	Cwd           string `json:"cwd"`
+	// PlacementConstraints restricts automatic machine selection when Machine is omitted.
+	PlacementConstraints *assistantwire.PlacementConstraints `json:"placement_constraints,omitempty"`
+	Cwd                  string                              `json:"cwd"`
 	// Repo: the Git repository the task runs in on Machine (taskRunDir: the workspace it resolved to, which can be
 	// another repository than Cwd's), named by its main checkout, so that every worktree of one repository is one kind
 	// the user can let start without asking (trustKey, #8259). "" when that folder is in no repository or the machine
@@ -259,7 +262,8 @@ type PlanTask struct {
 	// admissionRelease, once the admission gate passed, releases this start's held machine/direction slot. It is kept
 	// across the whole start (not the session.start RPC alone) and run when the agent is linked or the start failed for
 	// good, so the slot stays counted through the metrics/ledger gap. Never serialized (admission.go).
-	admissionRelease func()
+	admissionRelease      func()
+	admissionClaimMachine string
 }
 
 // Keep the default protection unless the owner opted into instructions only. Spawned helpers keep their caller's mode.

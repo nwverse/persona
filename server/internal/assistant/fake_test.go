@@ -785,6 +785,13 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		f.retired = append(f.retired, a["session_id"].(string))
 		f.retireArgs = append(f.retireArgs, map[string]any{"method": p.Method, "close_terminal": a["close_terminal"]})
 		return json.RawMessage(`{"closed":true}`), nil
+	case deviceSessionRetireGuarded:
+		if f.retireErr != nil {
+			return nil, f.retireErr
+		}
+		f.retired = append(f.retired, a["session_id"].(string))
+		f.retireArgs = append(f.retireArgs, map[string]any{"method": p.Method, "close_terminal": a["close_terminal"]})
+		return json.RawMessage(`{"closed":true,"guard_verified":true}`), nil
 	case deviceSessionStop:
 		if f.retireErr != nil {
 			return nil, f.retireErr
@@ -840,7 +847,8 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		if f.assistantAnswer != nil {
 			maps.Copy(out, f.assistantAnswer(a))
 		}
-		if !f.omitSentItems && a[holdPushesParam] == true {
+		source, _ := a["message_source"].(map[string]any)
+		if !f.omitSentItems && source["kind"] == proto.SourceSupervision {
 			if text, _ := a["text"].(string); text != "" {
 				target, _ := out["session_id"].(string)
 				if target == "" {
@@ -913,6 +921,10 @@ func (f *fakeHub) AppCall(ctx context.Context, p AppCall) (json.RawMessage, erro
 	case AppPlugins + " " + PluginsAssistant:
 		if f.apps[p.AppID+" "+p.Method] == nil { // else the test's answer (answerApp), below
 			return json.Marshal(map[string]any{"instructions": "", "skills": nil})
+		}
+	case assistantwire.AppPhone + " " + assistantwire.PhoneTools:
+		if f.apps[p.AppID+" "+p.Method] == nil {
+			return json.Marshal(map[string]any{"tools": []proto.Tool{}})
 		}
 	case AppSettings + " " + SettingsList:
 		return json.Marshal(map[string]any{"settings": []Setting{{Key: "inbox.rules", Title: "收件箱分拣规则", About: "the rules",

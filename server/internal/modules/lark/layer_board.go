@@ -25,7 +25,7 @@ func (l *Layer) WorkbenchStamp(ctx context.Context, c *botcard.Card) *botcard.Ca
 }
 
 // DivertNotices hands cards to the notifications companion when it takes them; false: they go to the bot's chat.
-func (l *Layer) DivertNotices(ctx context.Context, kind string, cards []*botcard.Card, fallbacks []string) bool {
+func (l *Layer) DivertNotices(ctx context.Context, kind assistantwire.NoticeKind, cards []*botcard.Card, fallbacks []string) bool {
 	return l.chat().divertNotices(ctx, kind, cards, fallbacks)
 }
 

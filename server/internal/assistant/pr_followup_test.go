@@ -617,6 +617,18 @@ func TestPRFollowupBriefingSurfacesUnwatchedHonestly(t *testing.T) {
 		t.Fatalf("save stale obs: ok=%v err=%v", ok, err)
 	}
 
+	staleRows := s.stalePRFollowups(ctx, now)
+	coreByTodo := map[string]repository.PRFollowup{}
+	for _, row := range staleRows {
+		coreByTodo[row.TodoID] = row
+	}
+	if _, present := coreByTodo["todo_active_fresh"]; present {
+		t.Fatalf("recently polled active subscription should not be stale: %+v", coreByTodo["todo_active_fresh"])
+	}
+	if len(coreByTodo) != 4 {
+		t.Fatalf("core stale PR follow-ups = %d (%+v), want 4", len(coreByTodo), staleRows)
+	}
+	needsBriefingModule(t)
 	body := s.briefBodyOf(&briefFacts{At: now, Lang: string(i18n.En)}, "Morning")
 	gotByTodo := map[string]briefBodyPRFollowup{}
 	for _, row := range body.PRFollowups {

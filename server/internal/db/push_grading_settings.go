@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -78,6 +79,29 @@ func (d *DB) PutPushGradingBase(ctx context.Context, baseKey, _, mirrorKey strin
 	})
 }
 
+// SetPushGradingSwitch atomically updates the owner's legacy switch and, when a
+// versioned base configuration row already exists, updates its enabled field in
+// the same advisory-locked transaction so both settings never diverge.
+func (d *DB) SetPushGradingSwitch(ctx context.Context, baseKey, mirrorKey string, enabled bool) error {
+	return d.pushGradingWrite(ctx, func(tx pgx.Tx) error {
+		var existing []byte
+		err := tx.QueryRow(ctx, `SELECT value FROM `+d.settingsTable()+` WHERE key = $1`, baseKey).Scan(&existing)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		if err == nil {
+			if _, err := tx.Exec(ctx, `UPDATE `+d.settingsTable()+`
+				SET value = jsonb_set(value, '{enabled}', to_jsonb($2::boolean), true), updated_at = now()
+				WHERE key = $1`, baseKey, enabled); err != nil {
+				return err
+			}
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO `+d.settingsTable()+` (key, value, updated_at) VALUES ($1, $2::jsonb, now())
+			ON CONFLICT (key) DO UPDATE SET value = $2::jsonb, updated_at = now()`, mirrorKey, enabled)
+		return err
+	})
+}
+
 // PutPushGradingLayer claims or renews only the extension layer. A different
 // owner changes no row. Neither success nor conflict touches the legacy switch.
 func (d *DB) PutPushGradingLayer(ctx context.Context, _, layerKey, _, manager, source string, value any, out any) (bool, error) {
@@ -119,6 +143,57 @@ func (d *DB) DeletePushGradingLayer(ctx context.Context, _, layerKey, _, manager
 		tag, err := tx.Exec(ctx, `DELETE FROM `+d.settingsTable()+`
 			WHERE key = $1 AND value->>'manager' = $2 AND value->>'source' = $3
 			AND ($4::bigint = 0 OR COALESCE((value->>'revision')::bigint, 0) = $4)`, layerKey, manager, source, revision)
+		if err != nil {
+			return err
+		}
+		deleted = tag.RowsAffected() == 1
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return deleted, nil
+}
+
+// ClearPushGradingLayer deletes the singleton extension layer when it matches
+// the optional manager and source filters. It runs under the serialized push
+// grading write lock and never touches the owner-controlled legacy switch.
+func (d *DB) ClearPushGradingLayer(ctx context.Context, layerKey, manager, source string) (bool, error) {
+	deleted := false
+	err := d.pushGradingWrite(ctx, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `DELETE FROM `+d.settingsTable()+`
+			WHERE key = $1
+			AND ($2 = '' OR value->>'manager' = $2)
+			AND ($3 = '' OR value->>'source' = $3)`, layerKey, manager, source)
+		if err != nil {
+			return err
+		}
+		deleted = tag.RowsAffected() == 1
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return deleted, nil
+}
+
+// PrunePushGradingLayer deletes the singleton extension layer when it belongs
+// to manager and its source is no longer in keepSources (after extension
+// disable, uninstall, or push.grading scope removal). It never touches another
+// manager's layer or the owner-controlled legacy switch.
+func (d *DB) PrunePushGradingLayer(ctx context.Context, layerKey, manager string, keepSources []string) (bool, error) {
+	if strings.TrimSpace(manager) == "" {
+		return false, errors.New("push grading layer prune requires a manager")
+	}
+	if keepSources == nil {
+		keepSources = []string{}
+	}
+	deleted := false
+	err := d.pushGradingWrite(ctx, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, `DELETE FROM `+d.settingsTable()+`
+			WHERE key = $1
+			AND value->>'manager' = $2
+			AND NOT (COALESCE(value->>'source', '') = ANY($3::text[]))`, layerKey, manager, keepSources)
 		if err != nil {
 			return err
 		}

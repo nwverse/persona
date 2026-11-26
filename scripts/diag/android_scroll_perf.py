@@ -41,32 +41,47 @@ def fling(up=True):
     y1, y2 = (int(h * 0.78), int(h * 0.28)) if up else (int(h * 0.28), int(h * 0.78))
     adb("shell", "input", "swipe", str(x), str(y1), str(x), str(y2), str(SWIPE_MS))
 
+def frame_times(text):
+    """Read usable timing rows from the first optional profile section."""
+    blocks = text.split("---PROFILEDATA---", 2)
+    if len(blocks) < 3:
+        return []
+    lines = blocks[1].strip().splitlines()
+    if not lines:
+        return []
+    header = lines[0].split(",")
+    try:
+        iv, fc, flags = (header.index(name) for name in ("IntendedVsync", "FrameCompleted", "Flags"))
+    except ValueError:
+        return []
+
+    frames = []
+    last_column = max(iv, fc, flags)
+    for line in lines[1:]:
+        cols = line.split(",")
+        if len(cols) <= last_column or cols[flags] != "0":
+            continue
+        try:
+            start, done = int(cols[iv]), int(cols[fc])
+        except ValueError:
+            continue
+        if start <= 0 or done <= start or done - start > 5e9:  # unfinished or bogus rows
+            continue
+        frames.append((done - start) / 1e6)
+    return frames
+
 def summary():
     text = adb("shell", "dumpsys", "gfxinfo", package, "framestats", capture=True)
     total, janky = frame_counts(text)
     def num(pattern):
         m = re.search(pattern, text)
         return float(m.group(1)) if m else None
-    frames = []
-    block = text.split("---PROFILEDATA---")
-    if len(block) >= 3:
-        lines = block[1].strip().splitlines()
-        header = lines[0].split(",")
-        iv, fc, flags = header.index("IntendedVsync"), header.index("FrameCompleted"), header.index("Flags")
-        for line in lines[1:]:
-            cols = line.split(",")
-            if len(cols) <= fc or cols[flags] != "0":
-                continue
-            start, done = int(cols[iv]), int(cols[fc])
-            if start <= 0 or done <= start or done - start > 5e9:  # unfinished or bogus rows
-                continue
-            frames.append((done - start) / 1e6)
     return {
         "total": total,
         "janky": janky,
         "p50": num(r"50th percentile: (\d+)ms"), "p90": num(r"90th percentile: (\d+)ms"),
         "p95": num(r"95th percentile: (\d+)ms"), "p99": num(r"99th percentile: (\d+)ms"),
-        "frames": frames,
+        "frames": frame_times(text),
     }
 
 SCENARIOS = {

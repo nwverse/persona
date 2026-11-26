@@ -1,13 +1,14 @@
 // One tool call in a work group (cindy's AgentActionRow): [status][verb][what it worked on][+N -N][›]. A command and
 // the like open in place (what went in, what came out, in full); an edit opens the changes side panel; a read opens
 // the file in the side panel.
-import { lazy, memo, Suspense, useMemo } from "react";
+import { Fragment, lazy, memo, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useExpanded } from "./expanded";
 import { diffLines, type Op } from "../../lib/diff-lines";
 import { fileName, toolFile } from "../../lib/files";
-import { openPanel } from "../../lib/panel";
+import { bytes } from "../../lib/format";
+import { openPanel, useReadOnlyFile, type Panel } from "../../lib/panel";
 import { getSession } from "../../lib/store";
-import { taskBadge } from "../../lib/tasks";
+import { taskBadge, type TaskIndex } from "../../lib/tasks";
 import { ownEntry, personaToolVerb, SUBJECT_KEYS, toolChip, toolDisplayName, toolLabel } from "../../lib/turns";
 import type { Item } from "../../lib/types";
 import { toolDurationLabel, toolDurationMs, type ToolStep } from "../../lib/work-groups";
@@ -15,7 +16,7 @@ import { cx, Spinner } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { parseAnsi } from "../../lib/ansi";
 import { NARROW, useMedia } from "../../ui/media-query";
-import { patchDiffs } from "../../lib/tool-detail";
+import { patchDiffs, withoutCutMark } from "../../lib/tool-detail";
 import { changePath, editLines } from "../../lib/turn-changes";
 import { useChatContext } from "./chat-context";
 import { useFullText } from "./FullText";
@@ -225,19 +226,236 @@ export function argumentLines(inp: Record<string, unknown>): string {
   return keys.flatMap((k) => (shown(inp[k]) ? [`${k}: ${shown(inp[k])}`] : [])).join("\n");
 }
 
-export const ActionRow = memo(function ActionRow({ step, running, mid, sid, trace, inlineDiff }: { step: ToolStep; running?: boolean; mid: string; sid: string; trace?: boolean; inlineDiff?: boolean }) {
-  const { use, result, images } = step;
+export type ActionRowPanel = Extract<Panel, { kind: "changes" | "file" }>;
+
+export interface ActionRowBadge {
+  text: string;
+  failed?: boolean;
+}
+
+export interface ActionRowProps {
+  step: ToolStep;
+  running?: boolean;
+  mid?: string;
+  sid?: string;
+  trace?: boolean;
+  inlineDiff?: boolean;
+  /** Explicit working directory (`null` for none) skips default `getSession` lookup. */
+  cwd?: string | null;
+  /** Explicit background task index skips `ChatContext` lookup for the row's task badge. */
+  tasks?: TaskIndex;
+  /** Explicit background task badge (`null` for none) skips `ChatContext` and `taskBadge` lookup. */
+  taskBadge?: ActionRowBadge | null;
+  /** Explicit expansion scope skips `ChatContext` lookup for `expanded.ts` and `search-reveal.ts`. */
+  scope?: string;
+  /** Controlled expanded state skips default-panel expansion memory (`expanded.ts`) and search reveal (`search-reveal.ts`). */
+  expanded?: boolean;
+  /** Called with the next expanded state when an in-place or trace row is toggled. */
+  onExpandedChange?: (expanded: boolean) => void;
+  /** Controlled panel handler for edit (`changes`) and file (`file`) rows, replacing default `openPanel`. */
+  onOpenPanel?: (panel: ActionRowPanel) => void;
+  /** Controlled full-text loader for clipped results (`result.full_size`), replacing default `useFullText` / `fullItem`. */
+  loadFullText?: (item: Item) => Promise<string>;
+  /** Controlled renderer for attached tool images, replacing default `Thumb`. */
+  renderImage?: (item: Item, index: number) => ReactNode;
+}
+
+function useControlledFullText(
+  item: Item | undefined,
+  loadFullText: (item: Item) => Promise<string>,
+): { text: string; more: ReactNode } {
+  const key = item?.full_size ? JSON.stringify([item.id, item.text, item.full_size, item.source_fingerprint]) : "";
+  const current = useRef(key);
+  current.current = key;
+  const loadRef = useRef(loadFullText);
+  loadRef.current = loadFullText;
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const pending = useRef<{ key: string; promise: Promise<void> } | null>(null);
+  const [whole, setWhole] = useState<{ key: string; text: string } | null>(null);
+  const [status, setStatus] = useState<{ key: string; state: "idle" | "loading" | "failed" }>();
+  const state = status?.key === key ? status.state : "idle";
+  const raw = item?.text ?? "";
+  const size = item?.full_size;
+
+  const load = () => {
+    if (!item || !size || whole?.key === key || pending.current?.key === key) return;
+    setStatus({ key, state: "loading" });
+    const promise: Promise<void> = Promise.resolve()
+      .then(() => loadRef.current(item))
+      .then((text) => {
+        if (!mounted.current || pending.current?.promise !== promise) return;
+        if (current.current === key) {
+          setWhole({ key, text });
+          setStatus({ key, state: "idle" });
+        } else {
+          setStatus((prev) => (prev?.key === key ? undefined : prev));
+        }
+      })
+      .catch(() => {
+        if (!mounted.current || pending.current?.promise !== promise) return;
+        if (current.current === key) setStatus({ key, state: "failed" });
+        else setStatus((prev) => (prev?.key === key ? undefined : prev));
+      })
+      .finally(() => {
+        if (pending.current?.promise === promise) pending.current = null;
+      });
+    pending.current = { key, promise };
+  };
+
+  if (whole?.key === key) return { text: whole.text, more: null };
+  if (!size) return { text: raw, more: null };
+  const loading = state === "loading";
+  return {
+    text: withoutCutMark(raw),
+    more: (
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          if (!loading) load();
+        }}
+        disabled={loading}
+        aria-busy={loading || undefined}
+        className={cx(
+          "mt-1.5 flex h-7 w-fit items-center gap-1.5 rounded-control px-1 font-sans text-meta font-medium whitespace-nowrap transition-colors hover:bg-hover disabled:opacity-60",
+          state === "failed" ? "text-red" : "text-accent-ink",
+        )}
+        data-full-text={state}
+      >
+        {loading ? <Spinner size={12} /> : <Icon name={state === "failed" ? "retry" : "external"} size={12} />}
+        {loading ? t("chat-fulltext.loading") : state === "failed" ? t("chat-fulltext.failed") : t("chat-fulltext.show_all", { size: bytes(size) })}
+      </button>
+    ),
+  };
+}
+
+export const ActionRow = memo(function ActionRow(props: ActionRowProps) {
+  const needsTasks = props.taskBadge === undefined && props.tasks === undefined;
+  const needsScope = props.expanded === undefined && props.scope === undefined;
+  if (needsTasks || needsScope) return <ContextActionRow {...props} />;
+  return <ActionRowExpansion {...props} tasks={props.tasks} scope={props.scope ?? ""} />;
+});
+
+function ContextActionRow(props: ActionRowProps) {
+  const ctx = useChatContext();
+  return <ActionRowExpansion {...props} tasks={props.tasks ?? ctx.tasks} scope={props.scope ?? ctx.scope} />;
+}
+
+interface ActionRowResolvedContextProps extends ActionRowProps {
+  scope: string;
+}
+
+function ActionRowExpansion(props: ActionRowResolvedContextProps) {
+  if (props.expanded !== undefined) {
+    return (
+      <ActionRowFullText
+        {...props}
+        open={props.expanded}
+        onToggle={() => props.onExpandedChange?.(!props.expanded)}
+      />
+    );
+  }
+  return <DefaultExpandedActionRow {...props} />;
+}
+
+function DefaultExpandedActionRow(props: ActionRowResolvedContextProps) {
+  const { step, scope, trace, onExpandedChange } = props;
+  const { use, result } = step;
   const name = use.tool_name ?? "";
-  const { tasks, scope } = useChatContext();
+  // kept by the chat, not the row (expanded.ts): a row drawn again (a group regrouped, a line rebuilt) stays as the reader left it
+  const [open, setOpen] = useExpanded(`${scope}act:${use.id}`);
+  const inPlace = Boolean(trace || !FILE_TOOLS.has(name));
+  const ids = useMemo(() => [use.id, ...(result ? [result.id] : [])], [use.id, result]);
+  const changeRef = useRef(onExpandedChange);
+  changeRef.current = onExpandedChange;
+  // a search hit in its input or output (search-reveal.ts): its detail opens in place
+  useReveal(scope, ids, () => {
+    if (!inPlace || open) return;
+    setOpen(true);
+    changeRef.current?.(true);
+    return () => {
+      setOpen(false);
+      changeRef.current?.(false);
+    };
+  });
+  const onToggle = () => {
+    if (onExpandedChange) {
+      let next = !open;
+      setOpen((o) => {
+        next = !o;
+        return next;
+      });
+      onExpandedChange(next);
+    } else {
+      setOpen((o) => !o);
+    }
+  };
+  return <ActionRowFullText {...props} open={open} onToggle={onToggle} />;
+}
+
+interface ActionRowExpansionProps extends ActionRowResolvedContextProps {
+  open: boolean;
+  onToggle: () => void;
+}
+
+function ActionRowFullText(props: ActionRowExpansionProps) {
+  if (props.loadFullText) return <ControlledFullTextActionRow {...props} loadFullText={props.loadFullText} />;
+  return <DefaultFullTextActionRow {...props} />;
+}
+
+function DefaultFullTextActionRow(props: ActionRowExpansionProps) {
+  const full = useFullText(props.step.result, props.mid ?? "", props.sid ?? "");
+  return <ActionRowView {...props} fullText={full.text} fullMore={full.more} />;
+}
+
+function ControlledFullTextActionRow(props: ActionRowExpansionProps & { loadFullText: (item: Item) => Promise<string> }) {
+  const full = useControlledFullText(props.step.result, props.loadFullText);
+  return <ActionRowView {...props} fullText={full.text} fullMore={full.more} />;
+}
+
+interface ActionRowViewProps extends ActionRowExpansionProps {
+  fullText: string;
+  fullMore: ReactNode;
+}
+
+function ActionRowView({
+  step,
+  running,
+  mid = "",
+  sid = "",
+  trace,
+  inlineDiff,
+  cwd,
+  tasks,
+  taskBadge: controlledBadge,
+  open,
+  onToggle,
+  onOpenPanel,
+  renderImage,
+  fullText,
+  fullMore,
+}: ActionRowViewProps) {
+  const { use, result, images } = step;
+  const readOnly = useReadOnlyFile();
+  const name = use.tool_name ?? "";
   const narrow = useMedia(NARROW);
   const p = useMemo(() => presentAction(use), [use]);
   const diffs = useMemo(() => (DIFF_TOOLS.has(name) ? editDiffs(use) : null), [name, use]);
   const stats = diffs ? diffStats(diffs) : null;
-  // kept by the chat, not the row (expanded.ts): a row drawn again (a group regrouped, a line rebuilt) stays as the reader left it
-  const [open, setOpen] = useExpanded(`${scope}act:${use.id}`);
-  const inPlace = trace || !FILE_TOOLS.has(name);
+  const inPlace = trace || (readOnly && Boolean(diffs)) || !FILE_TOOLS.has(name);
   const call = use.tool_use_id;
-  const bg = call && (tasks.started.has(call) || tasks.notes.has(call)) ? taskBadge(tasks.notes.get(call) ?? []) : null;
+  const bg =
+    controlledBadge !== undefined
+      ? controlledBadge
+      : call && tasks && (tasks.started.has(call) || tasks.notes.has(call))
+        ? taskBadge(tasks.notes.get(call) ?? [])
+        : null;
   const error = Boolean(result?.is_error);
   // the call's own elapsed time (#8163): a quiet suffix on wide rows, the row's hover title on compact layouts
   const duration = toolDurationLabel(step);
@@ -247,32 +465,31 @@ export const ActionRow = memo(function ActionRow({ step, running, mid, sid, trac
     Boolean(use.usage?.length || result?.usage?.length || (typeof use.ttft_ms === "number" && use.ttft_ms >= 0));
   const stepItems = useMemo(() => [use, result], [use, result]);
 
+  const resolveCwd = () => (cwd !== undefined ? (cwd ?? undefined) : getSession(mid, sid)?.cwd);
+  const openActionPanel = (panel: ActionRowPanel) => {
+    if (onOpenPanel) onOpenPanel(panel);
+    else openPanel(panel);
+  };
   const activate = () => {
-    if (trace) return setOpen((o) => !o);
+    if (trace) return onToggle();
     if (diffs) {
+      if (readOnly) return onToggle();
       const path = p.file ?? "";
-      const cwd = getSession(mid, sid)?.cwd;
-      return openPanel({ kind: "changes", mid, sid, at: { path: path ? changePath(path, cwd) : "", call } });
+      const resolvedCwd = resolveCwd();
+      return openActionPanel({ kind: "changes", mid, sid, at: { path: path ? changePath(path, resolvedCwd) : "", call } });
     }
-    if (inPlace) return setOpen((o) => !o);
+    if (inPlace) return onToggle();
     const f = toolFile(name, use.tool_input);
-    if (f) openPanel({ kind: "file", mid, path: f.path, cwd: getSession(mid, sid)?.cwd, line: f.line });
+    if (f) openActionPanel({ kind: "file", mid, path: f.path, cwd: resolveCwd(), line: f.line, ...(readOnly ? { readOnly: true } : {}) });
   };
   const ids = useMemo(() => [use.id, ...(result ? [result.id] : [])], [use.id, result]);
-  // a search hit in its input or output (search-reveal.ts): its detail opens in place
-  useReveal(scope, ids, () => {
-    if (!inPlace || open) return;
-    setOpen(true);
-    return () => setOpen(false);
-  });
   const label = [p.verb, p.param?.text].filter(Boolean).join(" ");
   // on a compact layout the duration stays in the hover title, not in the crowded row
   const rowTitle = [p.param?.title, narrow && duration].filter(Boolean).join(" · ") || undefined;
   // A supervision trace is historical: show the original parameters/result, never today's file in the side panel.
   const detail = open && !trace && hasStepDetail(use);
   const input = open && !detail ? trace ? JSON.stringify(use.tool_input ?? {}, null, 2) : inlineInput(use) : "";
-  const full = useFullText(result, mid, sid);
-  const output = result && (trace || showsResult(name, result)) ? full.text : "";
+  const output = result && (trace || showsResult(name, result)) ? fullText : "";
   return (
     <div className="flex min-w-0 flex-col" data-action-row={name} data-tool-use={call} data-items={ids.join(" ")}>
       <button type="button" onClick={activate} aria-expanded={inPlace ? open : undefined} aria-label={label || name} title={rowTitle} className={ROW}>
@@ -311,9 +528,13 @@ export const ActionRow = memo(function ActionRow({ step, running, mid, sid, trac
       )}
       {images.length > 0 && (
         <div className="flex min-w-0 flex-wrap gap-1.5 py-2 pl-8">
-          {images.map((im) => (
-            <Thumb key={im.id} item={im} mid={mid} sid={sid} />
-          ))}
+          {images.map((im, i) =>
+            renderImage ? (
+              <Fragment key={im.id}>{renderImage(im, i)}</Fragment>
+            ) : (
+              <Thumb key={im.id} item={im} mid={mid} sid={sid} />
+            ),
+          )}
         </div>
       )}
       {open && (
@@ -329,20 +550,20 @@ export const ActionRow = memo(function ActionRow({ step, running, mid, sid, trac
             </div>
           )}
           {COMMAND_TOOLS.has(name) && str((use.tool_input as Record<string, unknown> | undefined)?.description) && <div className="mb-2 font-sans">{str((use.tool_input as Record<string, unknown>).description)}</div>}
-          {input && <pre className="m-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{input}</pre>}
+          {readOnly && diffs ? <DiffBlocks diffs={diffs} /> : input && <pre className="m-0 whitespace-pre-wrap [overflow-wrap:anywhere]">{input}</pre>}
           {output && (
             <>
-              {(input || detail) && <div className="my-2 h-px bg-tool-ink/20" />}
+              {(input || detail || (readOnly && diffs)) && <div className="my-2 h-px bg-tool-ink/20" />}
               <pre className={cx("m-0 whitespace-pre-wrap [overflow-wrap:anywhere]", error ? "text-red" : "text-tool-ink")}><AnsiOutput text={output} /></pre>
-              {full.more}
+              {fullMore}
             </>
           )}
-          {!input && !detail && !output && <span className="text-tool-ink">{t("chat-actionrow.no_content")}</span>}
+          {!input && !detail && !output && !(readOnly && diffs) && <span className="text-tool-ink">{t("chat-actionrow.no_content")}</span>}
         </div>
       )}
     </div>
   );
-});
+}
 
 function AnsiOutput({ text }: { text: string }) {
   const runs = useMemo(() => parseAnsi(text), [text]);

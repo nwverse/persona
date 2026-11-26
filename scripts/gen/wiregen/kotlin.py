@@ -98,7 +98,7 @@ def gen_kotlin(defs: dict[str, Def], *, header: list[str] | None = None, prefix:
             return "JsonNull"
         if d.kind == "enum":
             return f'{kname(t.ref)}.Unknown("")' if d.closed else '""'
-        if d.kind == "id":
+        if d.kind in ("id", "text"):
             return f'{kname(t.ref)}("")'
         if d.kind == "union":
             raise SchemaError(f"a required field of union type {t.ref}: not in the subset")
@@ -143,10 +143,13 @@ def gen_kotlin(defs: dict[str, Def], *, header: list[str] | None = None, prefix:
         return lines
 
     for d in defs.values():
+        if d.external:
+            continue  # a shared file's ID: its own file, in this package, declares it
         if d.kind == "enum" and d.closed:
             out += closed_enum(d)
-        elif d.kind == "id":
-            out += kdoc((d.doc or f"{d.name}: an ID.") + " It encodes as the bare string.")
+        elif d.kind in ("id", "text"):
+            what = "a label (free text, not a closed set)" if d.kind == "text" else "an ID"
+            out += kdoc((d.doc or f"{d.name}: {what}.") + " It encodes as the bare string.")
             out += ["@Serializable", "@JvmInline", f"value class {kname(d.name)}(val raw: String) {{",
                     "    override fun toString(): String = raw", "}", ""]
         elif d.kind == "opaque":
@@ -190,7 +193,16 @@ def gen_kotlin(defs: dict[str, Def], *, header: list[str] | None = None, prefix:
                 if d.extra:
                     out += ["    /** Extra keys stay at this object's level on the wire; declared fields always win. */",
                             "    val additionalProperties: Map<String, JsonElement> = emptyMap(),"]
-                out.append(f"){suffix}")
+                if d.keyed:
+                    # A struct made from an enum-keyed map, read by its key: an unknown one has the zero value.
+                    key = kname(d.keyed)
+                    out.append(f"){suffix} {{")
+                    out += kdoc(f"The field of one {d.keyed}: an unknown one reads {zero(d.fields[0].type)}.", "    ")
+                    out.append(f"    operator fun get(key: {key}): {ktype(d.fields[0].type)} = when (key) {{")
+                    out += [f"        {key}.{kt_case(f.name)} -> {kt_ident(lower_camel(f.name))}" for f in d.fields]
+                    out += [f"        is {key}.Unknown -> {zero(d.fields[0].type)}", "    }", "}"]
+                else:
+                    out.append(f"){suffix}")
             else:
                 out.append(f"class {name}{suffix}")
             out.append("")
@@ -285,4 +297,3 @@ def gen_kotlin(defs: dict[str, Def], *, header: list[str] | None = None, prefix:
     code = "\n".join(line for line in out if not line.startswith("import "))
     return "\n".join(line for line in out if not line.startswith("import ")
                      or re.search(r"\b" + re.escape(line.rsplit(".", 1)[1]) + r"\b", code))
-
