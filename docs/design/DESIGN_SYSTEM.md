@@ -1214,6 +1214,9 @@ A row read from Unread or Just finished and held in that place ("Rows read durin
 
 On the web, people opening a computer see waiting Agents first. Each session has a conversation link and, when the hub supplies it, a separate to-do link. Workspaces with active sessions precede other known workspaces. Files, Terminal and New agent carry the selected computer and workspace. Work shows its workspace shortcuts before secondary navigation. Files has one directory listing on the selected computer. Every disk alert opens that computer’s Storage map with reclaim suggestions. Cleanup shows the server’s targets, asks for confirmation and reports individual outcomes. Diagnostics groups self-check, network, ports and processes, services and toolchain. Management holds the computer name, engine, launchers, Link and deployment controls (#16196).
 
+The web computer header keeps New agent and the available Terminal action together across views. They sit beside the computer identity when space allows and wrap below it on a phone. Underlined links mark the primary views. Compact pills within Diagnostics select a tool. Both levels expose the current link and give adjacent touch controls their own 44 px targets. The fleet switcher aligns with its cards. A single computer has direct Files and Storage shortcuts, and the detail rail appears only when there is another computer to switch to on a wide screen (#16328).
+
+
 #### Finished work nobody has seen
 
 With Session Triage on, a turn the triage found done leaves Unread, but while it is new it is not filed with the

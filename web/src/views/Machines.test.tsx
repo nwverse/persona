@@ -118,6 +118,9 @@ describe("Machines", () => {
     fake.machines = ["a", "b"].map(id => ({ id, name: id, online: true }));
     await show();
     await follow("/machines/b");
+    const rail = host.querySelector(`nav[aria-label="${t("machines.title")}"]`)!;
+    expect(rail.querySelector('a[aria-current="page"]')?.getAttribute("href")).toBe("/machines/b");
+    expect(rail.querySelector('a[href="/machines/a"]')).not.toBeNull();
     for (const view of ["files", "storage", "diagnostics", "services", "network", "toolchain", "procs"]) {
       await follow("/machines/b/" + view);
       expect(host.querySelector("h1")?.textContent).toBe("b");
@@ -138,6 +141,38 @@ describe("Machines", () => {
     const reads = vi.mocked(fetch).mock.calls.map(([url]) => String(url));
     expect(reads).toContain("/api/v1/machines/b/storage");
     expect(reads).not.toContain("/api/v1/machines/a/storage");
+  });
+
+  it("keeps computer actions in the header on every route and distinguishes tool navigation", async () => {
+    fake.machines = [{ id: "b", name: "Computer B", online: true }];
+    fake.features = ["terminal_panes"];
+    history.replaceState(null, "", "/machines/b");
+    await show();
+    const header = host.querySelector("section h2")!.closest("section")!;
+    const actions = () => [...header.querySelectorAll("button")].map(button => button.textContent);
+    for (const view of ["work", "monitoring", "files", "storage", "diagnostics", "services", "management"]) {
+      const path = view === "work" ? "/machines/b" : "/machines/b/" + view;
+      if (view !== "work") await follow(path);
+      expect(actions()).toEqual([t("space-page.new_agent"), t("sidebar.nav_terminal")]);
+      expect(header.textContent).not.toContain(t("machines.home_folder"));
+      const nav = host.querySelector(`nav[aria-label="${t("machines.view_label")}"]`)!;
+      const active = nav.querySelector('a[aria-current="page"]')!;
+      expect(active.getAttribute("href")).toBe(view === "services" ? "/machines/b/diagnostics" : path);
+      expect(nav.classList.contains("border-b")).toBe(true);
+      expect(active.classList.contains("border-b-2")).toBe(true);
+      const tools = host.querySelector(`nav[aria-label="${t("machines.view_diagnostics")}"]`);
+      if (view === "services" || view === "diagnostics") {
+        const pill = tools!.querySelector('a[aria-current="page"]')!;
+        expect(pill.getAttribute("href")).toBe(path);
+        expect(pill.classList.contains("rounded-full")).toBe(true);
+      } else expect(tools).toBeNull();
+    }
+    fake.features = [];
+    await show();
+    expect(actions()).toEqual([t("space-page.new_agent")]);
+    fake.machines = [{ ...fake.machines[0]!, online: false }];
+    await show();
+    expect(actions()).toEqual([t("machines.reconnect")]);
   });
 
   it("restores the fleet tab and scroll offset when leaving detail through Back", async () => {
@@ -199,6 +234,15 @@ describe("Machines", () => {
     await show();
     expect(link("/machines/a")).toBeTruthy();
     expect(buttons(t("machines.view_capabilities"))).toHaveLength(0);
+    const start = buttons(t("space-page.new_agent"))[0]!;
+    for (const view of ["files", "storage"]) {
+      const shortcut = link("/machines/a/" + view)!;
+      expect(shortcut.querySelector("svg")).not.toBeNull();
+      expect(shortcut.classList.contains("shadow-btn")).toBe(true);
+      expect([shortcut, start].every(action => action.classList.contains("h-8"))).toBe(true);
+    }
+    await follow("/machines/a/files");
+    expect(host.querySelector(`nav[aria-label="${t("machines.title")}"]`)).toBeNull();
     await act(async () => navigate({ name: "machine", mid: "missing", subview: "storage" }));
     await show();
     expect(host.textContent).toContain(t("machines-machinedetail.not_found"));
