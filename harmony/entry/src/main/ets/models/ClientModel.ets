@@ -116,12 +116,19 @@ export class ClientModel {
   @Trace notificationTarget: string = '';
   @Trace pendingXiaoYiRoute: string = '';
   @Trace rememberedHubModules: string[] | null = null;
+  @Trace useHerdrTabName: boolean = false;
+  @Trace agentsDisplaySupported: boolean = false;
+  @Trace agentsDisplaySaving: boolean = false;
+  private agentsDisplayRevision: number = 0;
   openXiaoYiRoute(routeJson: string): void {
     if (!routeJson || routeJson.length > 16384) return;
     this.pendingXiaoYiRoute = routeJson;
   }
   private hubModulesKey(hubId: string): string {
     return 'xiaoyi:' + scopeKey({ groupId: hubId, managerId: '' }) + ':hub-modules';
+  }
+  private agentsDisplayKey(hubId: string): string {
+    return 'view:' + scopeKey({ groupId: hubId, managerId: '' }) + ':agents-display';
   }
   isRecordingModuleAllowed(): boolean {
     return isRecordingModuleAllowed(this.features, this.rememberedHubModules);
@@ -696,7 +703,7 @@ export class ClientModel {
     this.sendAttempts.clear(); this.feedbackChanged();
     this.profile = profile; const scope = this.scope(); this.connected = false;
     this.clearPendingDecisions();
-    this.unresolvedWrites = []; this.operationState = ''; this.mainId = ''; this.mainMachineId = ''; this.sidebarConfig = ''; this.features = []; this.rememberedHubModules = null; this.managers = []; this.rosterDefaultId = '';
+    this.unresolvedWrites = []; this.operationState = ''; this.mainId = ''; this.mainMachineId = ''; this.sidebarConfig = ''; this.features = []; this.rememberedHubModules = null; this.useHerdrTabName = false; this.agentsDisplaySupported = false; this.agentsDisplaySaving = false; this.agentsDisplayRevision++; this.managers = []; this.rosterDefaultId = '';
     this.publishedImageLimits = {};
     this.demo = false; this.demoRepository = undefined; this.error = '';
     if (!keep) { this.sessionsReady = false; this.sessions = []; this.machines = []; this.conversations = []; this.todos = []; this.inbox = []; this.knowledge = []; this.messages = []; } this.selected = keep ? selection : new ResourceRow(); this.draftLoading = false;
@@ -704,6 +711,16 @@ export class ClientModel {
     if (!keep) { this.draft = ''; this.sourceContext = ''; this.draftRevision = ''; this.localMessages = []; this.renderedMessages = []; this.echoedMessages.clear(); }
     await saved; if (!this.owns(generation, scope)) return;
     try { this.rememberedHubModules = parseStoredHubModules(await this.local.get(this.hubModulesKey(profile.id))); } catch (_) { this.rememberedHubModules = null; }
+    try {
+      const cachedDisplay = await this.local.get(this.agentsDisplayKey(profile.id));
+      if (cachedDisplay) {
+        const parsedDisplay = Wire.parse(cachedDisplay);
+        if (typeof parsedDisplay['use_herdr_tab_name'] === 'boolean') {
+          this.useHerdrTabName = parsedDisplay['use_herdr_tab_name'] === true;
+          this.agentsDisplaySupported = true;
+        }
+      }
+    } catch (_) {}
     if (!this.owns(generation, scope)) return;
     await this.saveProfiles(); if (!this.owns(generation, scope) || !this.foreground) return;
     let access: HubAccess | undefined;
@@ -848,7 +865,7 @@ export class ClientModel {
       this.sessionsReady = false; this.sessions = []; this.conversations = []; this.machines = []; this.managers = []; this.todos = []; this.knowledge = []; this.inbox = [];
       this.clearPendingDecisions();
       this.messages = []; this.draft = ''; this.sourceContext = ''; this.draftRevision = ''; this.localMessages = []; this.renderedMessages = []; this.echoedMessages.clear(); this.detail = ''; this.reply = ''; this.mainId = ''; this.mainMachineId = ''; this.sidebarConfig = '';
-      this.unresolvedWrites = []; this.operationState = ''; this.notificationTarget = ''; this.pendingXiaoYiRoute = ''; this.draftLoading = false; this.features = []; this.rememberedHubModules = null; this.error = '';
+      this.unresolvedWrites = []; this.operationState = ''; this.notificationTarget = ''; this.pendingXiaoYiRoute = ''; this.draftLoading = false; this.features = []; this.rememberedHubModules = null; this.useHerdrTabName = false; this.agentsDisplaySupported = false; this.agentsDisplaySaving = false; this.agentsDisplayRevision++; this.error = '';
       this.publishedImageLimits = {};
     }
     this.publishDirectory();
@@ -992,8 +1009,53 @@ export class ClientModel {
       this.refreshPhoneList('todo', repo, generation, scope, false).catch(() => {});
       if (this.section === 2) await this.refreshPhoneList('inbox', repo, generation, scope, true);
       else if (!this.detached) this.refreshPhoneList('inbox', repo, generation, scope, false).catch(() => {});
+      this.refreshAgentsDisplay(repo, generation, scope).catch(() => {});
     } catch (error) { if (this.owns(generation, scope)) this.failure(error as Error); }
     finally { if (this.owns(generation, scope)) { this.busy = false; this.publishDirectory(); } }
+  }
+  async refreshAgentsDisplay(repo: HubRepository, generation: number, scope: string): Promise<void> {
+    if (this.demo || this.agentsDisplaySaving) return;
+    const rev = this.agentsDisplayRevision;
+    try {
+      const result = await repo.call('/api/v1/agents/display-settings');
+      if (!this.owns(generation, scope) || rev !== this.agentsDisplayRevision || this.agentsDisplaySaving) return;
+      if (typeof result['use_herdr_tab_name'] === 'boolean') {
+        const enabled = result['use_herdr_tab_name'] === true;
+        this.agentsDisplaySupported = true;
+        this.useHerdrTabName = enabled;
+        this.local.put(this.agentsDisplayKey(this.profile.id), JSON.stringify(Wire.payload(['use_herdr_tab_name'], [enabled]))).catch(() => {});
+      }
+    } catch (error) {
+      if (error instanceof HttpFailure && [404, 501].includes(error.status) && this.owns(generation, scope) && rev === this.agentsDisplayRevision) {
+        this.agentsDisplaySupported = false;
+        this.useHerdrTabName = false;
+      }
+    }
+  }
+  async setUseHerdrTabName(enabled: boolean): Promise<boolean> {
+    if (this.demo || !this.connected || !this.repository || this.agentsDisplaySaving) return false;
+    const generation = this.generation, scope = this.scope(), repo = this.repository, profileId = this.profile.id;
+    const previous = this.useHerdrTabName;
+    const rev = ++this.agentsDisplayRevision;
+    this.agentsDisplaySaving = true;
+    this.useHerdrTabName = enabled;
+    try {
+      const result = await repo.call('/api/v1/agents/display-settings', 'PUT', Wire.payload(['use_herdr_tab_name'], [enabled]));
+      if (!this.owns(generation, scope) || this.repository !== repo || rev !== this.agentsDisplayRevision) return false;
+      const acknowledged = typeof result['use_herdr_tab_name'] === 'boolean' ? result['use_herdr_tab_name'] === true : enabled;
+      this.agentsDisplaySupported = true;
+      this.useHerdrTabName = acknowledged;
+      await this.local.put(this.agentsDisplayKey(profileId), JSON.stringify(Wire.payload(['use_herdr_tab_name'], [acknowledged]))).catch(() => {});
+      return true;
+    } catch (error) {
+      if (this.owns(generation, scope) && this.repository === repo && rev === this.agentsDisplayRevision) {
+        this.useHerdrTabName = previous;
+        this.failure(error as Error);
+      }
+      return false;
+    } finally {
+      if (this.owns(generation, scope) && rev === this.agentsDisplayRevision) this.agentsDisplaySaving = false;
+    }
   }
   private async refreshPhoneList(kind: string, repo: HubRepository, generation: number, scope: string, force: boolean): Promise<void> {
     const state = kind === 'todo' ? this.todoRead : this.inboxRead;
@@ -2080,6 +2142,7 @@ export class ClientModel {
     this.ssh.stop(); this.stopReconnect(); this.cancelDraftTimer(); this.closeTranscript(); this.releaseTerminal(); this.retireViews(); this.repository?.close(); this.generation++; this.selectionGeneration++;
     this.publishedImageLimits = {};
     this.demo = true; this.connected = true; this.profile = new HubProfile('demo', tr('local_demo')); this.profile.hubId = 'demo'; this.profile.manager = 'demo';
+    this.useHerdrTabName = false; this.agentsDisplaySupported = false; this.agentsDisplaySaving = false; this.agentsDisplayRevision++;
     this.sendAttempts.clear(); this.feedbackChanged();
     this.demoRepository = new DemoRepository(this.local); this.repository = this.demoRepository;
     this.selected = new ResourceRow(); this.messages = []; this.revisionItems = []; this.clearPendingDecisions(); this.draft = ''; this.sourceContext = ''; this.draftRevision = ''; this.draftLoading = false;

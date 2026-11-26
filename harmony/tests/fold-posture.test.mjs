@@ -310,8 +310,8 @@ test('64vp icon rail, 3-dot header, 3-tab Live Workbench, relay wiring, and bord
   assert.match(agents, /PhoneStyle\.cardBorder\(/);
 
   // Duplicate place suppression in AgentDirectoryRowContent & ProjectsPage + worktree dividers & borderless card styling.
-  assert.match(rowContent, /private displayPlace\(\): string \{\s*return deduplicateAgentPlace\(this\.agent\.row\.title, this\.place\);/);
-  assert.match(projects, /deduplicateAgentPlace\(agent\.row\.title, paneName \|\| agent\.tab\)/);
+  assert.match(rowContent, /private displayPlace\(\): string \{\s*return deduplicateAgentPlace\(this\.displayTitle\(\), this\.place\);/);
+  assert.match(projects, /deduplicateAgentPlace\(sessionDisplayTitle\(agent\.row\.title, agent\.row\.data\(\), this\.model\.useHerdrTabName\), paneName \|\| agent\.tab\)/);
   assert.match(projects, /outlineItemNeedsDivider\(entry\)[\s\S]*Divider\(\)\.strokeWidth\(0\.5\)/);
   assert.match(projects, /PhoneStyle\.cardElevation\(nativeEnvironment\.dark\)/);
   assert.match(projects, /PhoneStyle\.cardBorder\(nativeEnvironment\.dark\)/);

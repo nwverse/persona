@@ -21,6 +21,7 @@ import { AgentDirectoryRowContent } from './AgentDirectoryRowContent';
 import { deviceLook } from '../models/DeviceLook';
 import { nativeEnvironment } from '../platform/NativeEnvironment';
 import { compactTreeInset, deduplicateAgentPlace } from '../core/FoldPosture';
+import { sessionDisplayTitle } from '../core/SessionNaming';
 import { Motion } from '../design/Motion';
 import { Haptics } from '../platform/Haptics';
 
@@ -629,13 +630,13 @@ export struct ProjectsPage {
       AgentDirectoryRowContent({agent:agent,display:this.agentRepositories?
         (deviceLook.agentDisplay==='list'?'list':this.model.style==='beautiful'?'beautiful':deviceLook.agentDisplay):'avatar',
         activityList:!!this.agentRepositories,muted:this.agentRepositories?this.isMuted(agent.row):false, age:this.age(agent),
-        place:deduplicateAgentPlace(agent.row.title, paneName || agent.tab), showsSource:!!(agent.tab || agent.runtime),
+        place:deduplicateAgentPlace(sessionDisplayTitle(agent.row.title, agent.row.data(), this.model.useHerdrTabName), paneName || agent.tab), showsSource:!!(agent.tab || agent.runtime),
         starter:starter,narrow:this.narrowOutline(),
         leftInset:this.agentRepositories && deviceLook.agentDisplay==='list' ? PhoneStyle.inset+6+18*this.outlineControlScale()*Math.min(level,3) : this.treeInset(level)+6,
         controlScale:this.outlineControlScale(),
-        fontScale:nativeEnvironment.fontScale,tint:this.tint(agent)})
+        fontScale:nativeEnvironment.fontScale,tint:this.tint(agent),useHerdrTabName:this.model.useHerdrTabName})
     }.width('100%')
-      .accessibilityGroup(true).accessibilityText([agent.row.title,agent.preview,tr(agent.stateLabel),this.agentContext(agent,paneName,starter),agent.todoTitle,this.age(agent)].filter((v:string) => !!v).join(' · '))
+      .accessibilityGroup(true).accessibilityText([sessionDisplayTitle(agent.row.title, agent.row.data(), this.model.useHerdrTabName),agent.preview,tr(agent.stateLabel),this.agentContext(agent,paneName,starter),agent.todoTitle,this.age(agent)].filter((v:string) => !!v).join(' · '))
       .accessibilitySelected(this.adjacentItem === 'session:' + agent.row.key())
       .onClick(() => this.chooseAgent(agent)).bindContextMenu(this.cellActions(agent,treeKey),ResponseType.LongPress).id(this.agentRepositories ? 'agents.repo.session' : 'projects.inline_session')
   }

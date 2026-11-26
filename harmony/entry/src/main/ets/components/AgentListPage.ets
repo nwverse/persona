@@ -11,6 +11,7 @@ import { AgentNeedsYouMark } from './AgentNeedsYouMark';
 import { NeedsYouPulseDot, WorkingArcSpinner } from './StatusMotionMarks';
 import { recommendedOptionTitle, interactionToolName } from '../models/InteractionDecision';
 import { agentPaneSource } from '../core/AgentListAdapter';
+import { herdrTabName } from '../core/SessionNaming';
 import { WorktreeChange } from '../models/WorktreeActions';
 import { AgentRepositoryRows } from './AgentRepositoryRows';
 import { AgentTaskGrouping, agentTaskSectionsFor } from '../models/AgentTaskGrouping';
@@ -53,6 +54,7 @@ class AgentRowPresentation {
   @Trace machineId: string = '';
   @Trace sessionId: string = '';
   @Trace spaceName: string = '';
+  @Trace herdrTabName: string = '';
   @Trace recentContent: string = '';
   @Trace provider: string = '';
   @Trace brand: string = '';
@@ -353,6 +355,7 @@ export struct AgentListPage {
       presentation.machineId = Wire.text(data, 'machine_id');
       presentation.sessionId = Wire.text(data, 'session_id');
       presentation.spaceName = Wire.text(data, 'space_name');
+      presentation.herdrTabName = herdrTabName(data);
     }
     if (this.compactRoot && !this.rail || this.workspace?.groupingMode === 'app' || this.workspace?.groupingMode === 'recent') presentation.prepareActivity(row);
     const state = row.state || presentation.rawStatus;
@@ -833,12 +836,13 @@ export struct AgentListPage {
           showsSource:!!binding.presentation.activitySource,sourceTitle:binding.presentation.activitySource ? tr(binding.presentation.activitySource) : '',
           narrow:this.listWidth>0 && this.listWidth<296,leftInset:(groupId.includes('/project/') ? 36 : 20)+16*depth,
           controlScale:Math.max(1,Math.min(this.environment.fontScale,67/51)),fontScale:this.environment.fontScale,
-          tint:this.rowStatusColor(binding.presentation),activityList:true})
+          tint:this.rowStatusColor(binding.presentation),activityList:true,useHerdrTabName:this.model.useHerdrTabName})
       }.width('100%').backgroundColor(this.isRowSelected(binding) ? Colors.selection : this.displayedAgentStyle==='cards'?Colors.grouped:Colors.surface)
        .borderRadius({topLeft:this.startsSurface(binding,groupId) && !groupId.includes('/project/') ? 26:0,topRight:this.startsSurface(binding,groupId) && !groupId.includes('/project/') ? 26:0,
          bottomLeft:this.endsSurface(binding,groupId) && endOfSurface ? 26:0,bottomRight:this.endsSurface(binding,groupId) && endOfSurface ? 26:0})
     }.margin({left:this.floatingStatusCards?0:4,right:this.floatingStatusCards?0:4}).accessibilityGroup(true)
-      .accessibilityText([binding.presentation.provider,this.rowStatus(binding.presentation),binding.bound.value.title,
+      .accessibilityText([binding.presentation.provider,this.rowStatus(binding.presentation),
+        this.rowTitle(binding),
         this.rowTime(binding.presentation),binding.presentation.recentContent,binding.presentation.activitySource ? tr(binding.presentation.activitySource) : '',
         this.activityPlace(binding,groupId),binding.presentation.activity?.model || '',binding.presentation.activity?.todoTitle || ''].filter((part:string)=>!!part).join(' · '))
       .selectable(true).selected(this.isRowSelected(binding)).onClick(()=>this.openRow(binding.bound.value))
@@ -879,7 +883,7 @@ export struct AgentListPage {
           }.width(36).height(36)
           Column({ space: 3 }) {
             Row({ space: 6 }) {
-              Text(binding.bound.value.title || tr('agent_untitled')).fontSize(17).maxFontScale(Tokens.interfaceFontMaxScale)
+              Text(this.rowTitle(binding)).fontSize(17).maxFontScale(Tokens.interfaceFontMaxScale)
                 .fontWeight(binding.presentation.status === 'unread' ? FontWeight.Bold : 600)
                 .fontColor(Colors.ink).layoutWeight(1).maxLines(this.narrowRow() ? 4 : 1)
                 .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -912,7 +916,7 @@ export struct AgentListPage {
             top: this.look.density === 'compact' ? 9 : 12, bottom: this.look.density === 'compact' ? 9 : 12 })
         if (!this.endsSurface(binding,groupId)) Divider().strokeWidth(0.5).color(Colors.divider).margin({ left: 62, right: 12 })
       }.width('100%')
-    }.accessibilityGroup(true).accessibilityText([binding.bound.value.title || tr('agent_untitled'),
+    }.accessibilityGroup(true).accessibilityText([this.rowTitle(binding),
       binding.presentation.recentContent, ...binding.presentation.metadata.slice(0, 2), this.rowStatus(binding.presentation)].filter((s: string) => !!s).join(' · '))
       .selectable(true).selected(this.isRowSelected(binding)).padding({left:18*Math.min(3,Math.max(0,depth))})
       .backgroundColor(this.isRowSelected(binding) ? Colors.selection : Colors.surface)
@@ -954,6 +958,13 @@ export struct AgentListPage {
           .textOverflow({ overflow: TextOverflow.Ellipsis })
       }.width('100%')
     }
+  }
+
+  private rowTitle(binding: BoundAgentRow): string {
+    if (this.model.useHerdrTabName && binding.presentation.herdrTabName) {
+      return binding.presentation.herdrTabName;
+    }
+    return binding.bound.value.title || tr('agent_untitled');
   }
 
   private rowPlace(presentation: AgentRowPresentation): string {

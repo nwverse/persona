@@ -9,6 +9,7 @@ import { MachineReading, machineKey, machineOnline, machinePercent, osFamily } f
 import { SubscriptionAccount, SubscriptionWindow, usageProviderTitle } from '../models/MachineSubscriptionUsage';
 import { SessionWorkspace } from '../models/SessionWorkspace';
 import { ResourceRow, Wire } from '../models/Wire';
+import { sessionDisplayTitle } from '../core/SessionNaming';
 import { NativeEnvironment, nativeEnvironment } from '../platform/NativeEnvironment';
 import { NativeLiveView, nativeLiveView } from '../platform/NativeLiveView';
 import { Haptics } from '../platform/Haptics';
@@ -187,6 +188,10 @@ export struct FoldInspectorPanel {
 
   private urgentSession(): ResourceRow | undefined {
     return this.activeFleetSessions().find((row: ResourceRow) => this.normalizedRowState(row) === 'needs_you');
+  }
+
+  private displaySessionTitle(row: ResourceRow, fallback: string = tr('agent_untitled')): string {
+    return sessionDisplayTitle(row.title, row.data(), this.model.useHerdrTabName) || fallback;
   }
 
   private machineRows(): ResourceRow[] {
@@ -423,7 +428,7 @@ export struct FoldInspectorPanel {
     Row({ space: 10 }) {
       NeedsYouPulseDot({ dotSize: 9, tint: Colors.needs, surface: Colors.surface, bordered: false })
       Column({ space: 2 }) {
-        Text(row.title || tr('agent_untitled'))
+        Text(this.displaySessionTitle(row))
           .fontSize(Tokens.interfaceFontVp(13, this.env.fontScale))
           .fontWeight(FontWeight.Bold)
           .fontColor(Colors.ink)
@@ -571,7 +576,7 @@ export struct FoldInspectorPanel {
                 Row({ space: 8 }) {
                   this.statusMark(this.normalizedRowState(row))
                   Column({ space: 2 }) {
-                    Text(row.title || tr('agent_untitled'))
+                    Text(this.displaySessionTitle(row))
                       .fontSize(Tokens.interfaceFontVp(13, this.env.fontScale))
                       .fontWeight(this.activeOwner().selected.key() === row.key() ? FontWeight.Bold : FontWeight.Medium)
                       .fontColor(Colors.ink)
@@ -622,7 +627,7 @@ export struct FoldInspectorPanel {
                 .id('fold.inspector.interrupt.' + row.id)
               }
             }.width('100%').alignItems(VerticalAlign.Center)
-          }, (row: ResourceRow) => row.key() + ':' + this.normalizedRowState(row) + ':' + row.title)
+          }, (row: ResourceRow) => row.key() + ':' + this.normalizedRowState(row) + ':' + this.displaySessionTitle(row))
         }.width('100%')
       }
     }
@@ -679,7 +684,7 @@ export struct FoldInspectorPanel {
           Column({ space: 8 }) {
             Row({ space: 8 }) {
               this.statusMark(this.sessionState())
-              Text(this.selectedSession()!.title || tr('main_chat'))
+              Text(this.displaySessionTitle(this.selectedSession()!, tr('main_chat')))
                 .fontSize(Tokens.interfaceFontVp(15, this.env.fontScale))
                 .fontWeight(FontWeight.Bold)
                 .fontColor(Colors.ink)
