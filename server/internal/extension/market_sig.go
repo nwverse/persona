@@ -227,21 +227,31 @@ func ParseCatalog(raw []byte, trusted string) (*Fetched, error) {
 	if trusted != "" {
 		keys = []string{trusted}
 	}
-	return ParseCatalogKeys(raw, keys)
-}
-
-// ParseCatalogKeys is ParseCatalog for a market that trusts any one of keys (a private market's owner-configured keys,
-// several during a rotation). No keys: the catalog is parsed but not verified, as for an unsigned market. With keys,
-// one valid signature by any of them verifies it, and Fetched.SignedBy is the first key (in keys' order) that signed.
-func ParseCatalogKeys(raw []byte, keys []string) (*Fetched, error) {
-	f, err := parseCatalog(raw, keys)
+	f, err := parseCatalog(raw, keys, "extension-market_security.signature")
 	if err != nil {
 		return nil, catalogFailure(ErrCatalogUnverified, err)
 	}
 	return f, nil
 }
 
-func parseCatalog(raw []byte, keys []string) (*Fetched, error) {
+// ParseCatalogKeys is ParseCatalog for a market that trusts any one of keys (a private market's owner-configured keys,
+// several during a rotation). No keys: the catalog is parsed but not verified, as for an unsigned market. With keys,
+// one valid signature by any of them verifies it, and Fetched.SignedBy is the first key (in keys' order) that signed.
+func ParseCatalogKeys(raw []byte, keys []string) (*Fetched, error) {
+	refused := "extension-market_security.private_signature"
+	if len(keys) == 1 && keys[0] == Official.SigningKey {
+		refused = "extension-market_security.signature"
+	}
+	f, err := parseCatalog(raw, keys, refused)
+	if err != nil {
+		return nil, catalogFailure(ErrCatalogUnverified, err)
+	}
+	return f, nil
+}
+
+// parseCatalog verifies with any one of keys (none: not verified); refused is the message key of a signature no key
+// verifies.
+func parseCatalog(raw []byte, keys []string, refused string) (*Fetched, error) {
 	if len(raw) > IndexMost {
 		return nil, i18n.Err("extension-market_security.catalog")
 	}
@@ -303,10 +313,7 @@ func parseCatalog(raw []byte, keys []string) (*Fetched, error) {
 		}
 	}
 	if len(keys) > 0 && trusted == "" {
-		if len(keys) == 1 && keys[0] == Official.SigningKey {
-			return nil, i18n.Err("extension-market_security.signature")
-		}
-		return nil, i18n.Err("extension-market_security.private_signature")
+		return nil, i18n.Err(refused)
 	}
 	if err := catalogFields(payload, reflect.TypeFor[MarketIndex]()); err != nil {
 		return nil, err
