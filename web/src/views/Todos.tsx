@@ -61,6 +61,7 @@ import {
   unseeTodo,
   updateTodo,
   type Todo,
+  type TodoActiveBlocker,
   type TodoAgent,
   type TodoImage,
   type TodoPatch,
@@ -3626,6 +3627,106 @@ function TodoImages({ todo, owner }: { todo: Todo; owner: string }) {
   );
 }
 
+function activeBlockerKindLabel(kind: string): string {
+  switch (kind) {
+    case "external_pr":
+      return t("todos.active_blocker_kind_external_pr");
+    case "todo_done":
+      return t("todos.active_blocker_kind_todo_done");
+    case "todo_stage":
+      return t("todos.active_blocker_kind_todo_stage");
+    case "merge_train":
+      return t("todos.active_blocker_kind_merge_train");
+    case "write_conflict":
+      return t("todos.active_blocker_kind_write_conflict");
+    case "owner_decision":
+      return t("todos.active_blocker_kind_owner_decision");
+    default:
+      return kind.trim() || t("todos.active_blocker_kind_other");
+  }
+}
+
+function activeBlockerLink(raw: string): { url: string; label: string } | null {
+  const trimmed = raw.trim();
+  if (!trimmed.startsWith("https://")) return null;
+  let u: URL;
+  try {
+    u = new URL(trimmed);
+  } catch {
+    return null;
+  }
+  if (u.protocol !== "https:") return null;
+  const ghPr = /^\/([^/]+)\/([^/]+)\/pull\/(\d+)\/?$/.exec(u.pathname);
+  if (ghPr) return { url: u.href, label: `${ghPr[1]}/${ghPr[2]}#${ghPr[3]}` };
+  const ghIssue = /^\/([^/]+)\/([^/]+)\/issues\/(\d+)\/?$/.exec(u.pathname);
+  if (ghIssue) return { url: u.href, label: `${ghIssue[1]}/${ghIssue[2]}#${ghIssue[3]}` };
+  const glMr = /^\/(.+?)\/-\/merge_requests\/(\d+)\/?$/.exec(u.pathname);
+  if (glMr) return { url: u.href, label: `${glMr[1]}!${glMr[2]}` };
+  const path = u.pathname.replace(/\/$/, "");
+  return { url: u.href, label: path ? `${u.host}${path}` : u.host };
+}
+
+/** Compact strip of active persistent blocker edges projected by the server under todos_v2 (#16135, #16138). */
+function TodoActiveBlockersStrip({ blockers }: { blockers: readonly TodoActiveBlocker[] }) {
+  return (
+    <section
+      data-testid="todo-active-blockers"
+      aria-label={t("todos.active_blockers_region")}
+      className="mt-3 rounded-control border border-orange/30 bg-orange-tint/40 px-3 py-2 text-meta text-ink-2"
+    >
+      <div className="mb-1.5 flex items-center gap-1.5 text-label font-semibold text-orange">
+        <Icon name="alertCircle" size={12} stroke={2} className="shrink-0" />
+        <span>{t("todos.active_blockers_title", { count: blockers.length })}</span>
+      </div>
+      <ul className="flex flex-col gap-1">
+        {blockers.map((blocker) => {
+          const link = activeBlockerLink(blocker.target_ref);
+          const attempts = typeof blocker.attempts === "number" && blocker.attempts > 0 ? blocker.attempts : 0;
+          return (
+            <li
+              key={blocker.id}
+              data-testid="todo-active-blocker-item"
+              data-blocker-kind={blocker.kind}
+              className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs"
+            >
+              <span
+                data-testid="todo-active-blocker-kind"
+                className="shrink-0 rounded-chip bg-surface px-1.5 py-0.5 text-submeta font-medium text-ink-2 shadow-hairline"
+              >
+                {activeBlockerKindLabel(blocker.kind)}
+              </span>
+              {link ? (
+                <a
+                  href={link.url}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  data-testid="todo-active-blocker-link"
+                  className="inline-flex min-w-0 items-center gap-1 truncate font-medium text-accent-ink hover:underline"
+                >
+                  <span className="truncate">{link.label}</span>
+                  <Icon name="external" size={11} stroke={2} className="shrink-0" />
+                </a>
+              ) : (
+                <span data-testid="todo-active-blocker-target" className="min-w-0 truncate text-ink">
+                  {blocker.target_ref}
+                </span>
+              )}
+              {attempts > 0 && (
+                <span
+                  data-testid="todo-active-blocker-attempts"
+                  className="shrink-0 rounded-chip bg-surface px-1.5 py-0.5 text-submeta text-ink-3 tabular-nums shadow-hairline"
+                >
+                  {t("todos.active_blocker_attempts", { count: attempts })}
+                </span>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
 function TodoDetail({
   todo,
   owner,
@@ -4214,6 +4315,11 @@ function TodoDetail({
       {/* What it waits on from the user and how to answer it (#2056) */}
       <TodoAskPanel todo={todo} />
       <HeldForBriefing todo={todo} />
+
+      {/* Active persistent blocker edges projected by the server under todos_v2 (#16135, #16138) */}
+      {todosV2 === true && todo.active_blockers && todo.active_blockers.length > 0 && (
+        <TodoActiveBlockersStrip blockers={todo.active_blockers} />
+      )}
 
       {/* Due date, reminder, priority (#1683) */}
       <TodoPlanEditor todo={todo} todosV2={todosV2} />
