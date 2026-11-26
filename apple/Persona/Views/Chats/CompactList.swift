@@ -95,7 +95,7 @@ struct CompactQuietSpaceRow: View {
                 .foregroundStyle(.secondary)
                 .scaledFrame(width: CompactList.mark)
             HStack(alignment: .firstTextBaseline, spacing: CompactList.gap) {
-                Text(group.name).font(CompactList.title).lineLimit(1).layoutPriority(1)
+                group.headingText(CompactList.title).lineLimit(1).layoutPriority(1)
                 Text([showMachine ? machine?.name : nil, count].compactMap { $0 }.joined(separator: " · "))
                     .font(CompactList.meta).foregroundStyle(.secondary).lineLimit(1)
             }
@@ -106,7 +106,7 @@ struct CompactQuietSpaceRow: View {
         }
         .contentShape(.rect)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel([group.name, expanded ? String(localized: "Expanded") : String(localized: "Collapsed [Readiness Card ee6046]"), showMachine ? machine?.name ?? "" : "",
+        .accessibilityLabel([group.headingLabel, expanded ? String(localized: "Expanded") : String(localized: "Collapsed [Readiness Card ee6046]"), showMachine ? machine?.name ?? "" : "",
                              count, at].filter { !$0.isEmpty }.joined(separator: String(localized: ", ", comment: "Separator between parts of an accessibility label")))
         .accessibilityAddTraits(.isButton)
     }
@@ -122,6 +122,8 @@ struct CompactInteractionRow: View {
     var machine: String?
     /// Its session's other cards (`AgentsNeedsYou`): one line per session, "+N" for the rest, which its chat answers.
     var more = 0
+    /// Optional promoted herdr tab name override when `use_herdr_tab_name` is on (#13899).
+    var sessionTitleOverride: String? = nil
 
     var body: some View {
         HStack(spacing: CompactList.gap) {
@@ -131,7 +133,7 @@ struct CompactInteractionRow: View {
                 .scaledFrame(width: CompactList.mark)
             HStack(alignment: .firstTextBaseline, spacing: CompactList.gap) {
                 Text(interaction.title).font(CompactList.titleUnread).lineLimit(1).fixedSize()
-                Text(interaction.placeLine(machine: machine))
+                Text(interaction.placeLine(machine: machine, sessionTitleOverride: sessionTitleOverride))
                     .font(CompactList.meta).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: Theme.Space.xs)

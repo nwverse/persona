@@ -318,7 +318,7 @@ func (s *Service) recordStartFailure(ctx context.Context, machine, launcher stri
 		s.recordHealth(ctx, machine, launcher, healthResult{err: err.Error(), source: healthSourceStart, kind: errKindNotInTerminal})
 		return
 	}
-	s.recordHealth(ctx, machine, launcher, healthResult{err: err.Error(), source: healthSourceStart})
+	s.recordHealth(ctx, machine, launcher, healthResult{err: err.Error(), source: healthSourceStart, kind: codedLauncherErrorKind(err)})
 	// Reserve before launching the goroutine: a task's immediate detour must join this check, even before it runs.
 	if rc, run := s.claimHealthRecheck(ctx, machine, launcher); run {
 		go s.runHealthRecheck(context.WithoutCancel(ctx), machine, launcher, rc, true)
@@ -497,7 +497,7 @@ var startRequestErr = lazyre.New(`^directory .* does not exist$|^invalid launche
 // not broken, and its check, which runs it on the command line, would pass and clear any record of it.
 var startRefusalCodes = []string{"codex_needs_prompt", "codex_resume", "codex_read_only", "orca_resume", "open_elsewhere", "runtime_session",
 	proto.CodeResumeUnknown, "identity_conflict", "ultracode_unsupported", "readonly_unsupported", proto.CodeDirectoryUntypable, proto.CodeNodeOutdated,
-	proto.CodeLauncherKindMissing}
+	proto.CodeLauncherKindMissing, proto.CodeAgyCompanionOffline}
 
 // startRefused: the start failed on the request, not the launcher: the node checked it and said no before running
 // anything (one of startRefusalCodes, or of startRequestErr).

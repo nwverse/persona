@@ -138,7 +138,18 @@ func (n *Node) agyHooksOptedOut() bool {
 
 // ensureAgyHooks puts Persona's entries into agy's hooks file when agy is here and the person has not removed them.
 func (n *Node) ensureAgyHooks() {
-	if n.sessionScope != nil || n.dir == "" || n.bin == "" || n.agyHooksOptedOut() || !n.agyInstalled() {
+	if !n.agyInstalled() {
+		return
+	}
+	n.ensureAgyHooksForLaunch()
+}
+
+// ensureAgyHooksForLaunch ensures Persona's entries are in agy's hooks file right before Persona starts or resumes an
+// agy Agent (#13950). Unlike ensureAgyHooks at node startup, it does not gate on agyInstalled so an agy installed after
+// startup or invoked through a custom launcher gets its hooks before launching; explicit opt-out (agyHooksOffFile) and
+// scoped/unconfigured nodes are still respected.
+func (n *Node) ensureAgyHooksForLaunch() {
+	if n.sessionScope != nil || n.dir == "" || n.bin == "" || n.agyHooksOptedOut() {
 		return
 	}
 	want, err := agyHooksWanted(n.bin, n.dir, n.home)
