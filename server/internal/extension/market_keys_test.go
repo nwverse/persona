@@ -119,13 +119,13 @@ func TestTrustPinAndVerifyKeys(t *testing.T) {
 	_, pub1 := newPrivateKey(t)
 	_, pub2 := newPrivateKey(t)
 	spec := "https://example.com/private/persona-extensions.json"
-	if TrustPin(spec, []string{pub1, pub2}) != TrustPin(spec, []string{pub2, pub1}) {
+	if TrustPin(spec, "", []string{pub1, pub2}) != TrustPin(spec, "", []string{pub2, pub1}) {
 		t.Fatal("the pin depends on key order")
 	}
-	if TrustPin(spec, []string{pub1}) == TrustPin(spec, []string{pub1, pub2}) || TrustPin(spec, nil) != "" {
+	if TrustPin(spec, "", []string{pub1}) == TrustPin(spec, "", []string{pub1, pub2}) || TrustPin(spec, "", nil) != "" || TrustPin(spec, "x", nil) == "" {
 		t.Fatal("the pin does not follow the key set")
 	}
-	if TrustPin(Official.Spec, []string{pub1}) != Official.SigningKey {
+	if TrustPin(Official.Spec, "", []string{pub1}) != Official.SigningKey {
 		t.Fatal("the official pin is not the compiled-in key")
 	}
 	s, _ := ParseMarket(spec)

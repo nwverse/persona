@@ -116,6 +116,7 @@ todos.write          DELETE /api/v1/todos/{id}/spaces/{mid}/{space...}
 -                    DELETE {base}/bindings/{key}
 -                    DELETE {base}/bots/{bot}
 -                    DELETE {base}/markets/{mid}
+-                    DELETE {base}/markets/{mid}/keys/{kid}
 -                    GET /api/v1/a2a/{mid}/{sid}/.well-known/agent-card.json
 -                    GET /api/v1/admin/devices
 -                    GET /api/v1/admin/devices/{credential_id}/owner
@@ -444,6 +445,7 @@ agents.read          GET /api/v1/workspaces
 -                    GET {base}/catalog
 -                    GET {base}/market-settings
 -                    GET {base}/markets
+-                    GET {base}/markets/{mid}/keys
 -                    GET {bus.Path}
 -                    GET {devicewire.DevelopmentPackagesPath}/{commit}/{version}/{file}
 -                    GET {devicewire.RelayPath}
@@ -795,6 +797,7 @@ todos.write          POST /api/v1/todos/{id}/workspace-naming/preview
 -                    POST {base}/bots/{bot}/scopes
 -                    POST {base}/catalog/preview
 -                    POST {base}/markets
+-                    POST {base}/markets/{mid}/keys
 -                    POST {base}/markets/{mid}/refresh
 -                    POST {base}/oauth
 -                    POST {bus.JoinPath}

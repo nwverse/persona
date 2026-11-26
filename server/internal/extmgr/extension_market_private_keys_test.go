@@ -327,7 +327,7 @@ func TestPrivateMarketKeyRotation(t *testing.T) {
 		t.Fatalf("both signatures: %d %v", code, out)
 	}
 	pm.publish("1.2.0", newKey)
-	if code, out := pm.refresh(); code != 200 {
+	if code, out = pm.refresh(); code != 200 {
 		t.Fatalf("new key only: %d %v", code, out)
 	}
 	if state, kid := signatureOf(out); state != extension.SigSigned || kid != newKey.id {

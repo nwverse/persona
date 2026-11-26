@@ -187,7 +187,7 @@ func (r *Registry) PreviewMarket(ctx context.Context, mk *Market, marketID strin
 		}
 		return nil, fmt.Errorf("下载的包（%s %s）的完整清单和市场索引（%s %s）不一致", m.ID, m.Version, e.Parsed.ID, e.Parsed.Version)
 	}
-	pv.Market, pv.marketSpec, pv.marketKey = marketID, mk.Spec.String(), TrustPin(mk.Spec.String(), mk.TrustedKeys)
+	pv.Market, pv.marketSpec, pv.marketKey = marketID, mk.Spec.String(), TrustPin(mk.Spec.String(), mk.TrustedKey, mk.TrustedKeys)
 	pv.verifiedMarketKey = verifiedKey
 	pv.RenameFrom, pv.replaces = renameFrom, e.Replaces
 	return pv, nil

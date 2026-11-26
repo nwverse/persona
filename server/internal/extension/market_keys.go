@@ -64,13 +64,18 @@ func MarketKeyID(key string) string {
 }
 
 // TrustPin is a market's verification identity at one moment, compared between a preview and its commit: the
-// official key for the official market, the sorted configured keys for a private one, "" for an unsigned one.
-func TrustPin(spec string, keys []string) string {
+// official key for the official market, the sorted configured keys for a private one, "" for an unsigned one. legacy
+// is the market's stored single key (MarketRecord.SigningKey, cleared on load for private markets): any change to it
+// changes the pin too.
+func TrustPin(spec, legacy string, keys []string) string {
 	if IsOfficialMarket(spec) {
 		return Official.SigningKey
 	}
 	sorted := slices.Clone(keys)
 	slices.Sort(sorted)
+	if legacy != "" {
+		sorted = append([]string{"legacy " + legacy}, sorted...)
+	}
 	return strings.Join(sorted, "\n")
 }
 
