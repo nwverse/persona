@@ -201,8 +201,9 @@ export class DemoRepository extends HubRepository {
     ]);
     this.transcripts.set(this.transcriptKey(DEMO_MACHINE, 'demo-agent-review'), [
       this.item('user', 'Run the pre-release audit across ReleaseDesk and summarize what changed.'),
-      this.item('assistant', '### Release Audit Summary\n\nAll host test suites passed and two files in `ReleaseDesk` were updated.\n\n| Check | Result | Duration |\n| --- | --- | --- |\n| Unit & Domain Suite | Passed (42/42) | 1.8s |\n| Schema & Privacy Guard | Clean | 0.4s |\n| Bundle Packaging | Verified | 0.9s |\n\n```ts\nexport function verifyReleaseGate(checks: CheckResult[]): boolean {\n  return checks.every((item) => item.passed && !item.skipped);\n}\n```\n\n> Ready for final sign-off once you approve the release verification plan below.'),
-      this.item('assistant', 'A sample plan is waiting for your decision.')
+      this.item('assistant', 'The release checklist is ready for review.'),
+      this.item('user', 'Show the detailed audit report and verification gate.'),
+      this.item('assistant', '### Release Audit Summary\n\nAll host test suites passed and two files in `ReleaseDesk` are ready for sign-off.\n\n| Check | Result | Duration |\n| --- | --- | --- |\n| Unit & Domain Suite | Passed (42/42) | 1.8s |\n| Schema & Privacy Guard | Clean | 0.4s |\n| Bundle Packaging | Verified | 0.9s |\n\n```ts\nexport function verifyReleaseGate(checks: CheckResult[]): boolean {\n  return checks.every((item) => item.passed && !item.skipped);\n}\n```\n\n> A sample plan is waiting for your decision below.')
     ]);
     this.transcripts.set(this.transcriptKey(DEMO_MACHINE, 'demo-agent-changelog'), [
       this.item('user', 'Prepare a concise changelog draft.'),
