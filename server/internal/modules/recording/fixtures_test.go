@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"image"
 	"image/jpeg"
 	"image/png"
@@ -348,7 +349,7 @@ func (r *roomFixture) roomUpWith(id, role string, more map[string]any) string {
 	}
 	r.look(id)
 	m := r.meeting(id)
-	if m.Room == nil || m.Room.State != kb.RoomReady {
+	if m.Room == nil || m.Room.State != recordingwire.RoomReady {
 		r.t.Fatalf("room %+v", m.Room)
 	}
 	r.f.mu.Lock()
@@ -417,9 +418,9 @@ func (m minutesModel) JSONMax(_ context.Context, _, _ string, _ int, out any) er
 }
 
 // meeting is recording id's meeting.json now.
-func (r *roomFixture) meeting(id string) kb.Meeting {
+func (r *roomFixture) meeting(id string) recordingwire.Meeting {
 	r.t.Helper()
-	m, _, err := r.engine().MeetingRead(id)
+	m, _, err := writersOf(r.engine()).MeetingRead(id)
 	if err != nil {
 		r.t.Fatal(err)
 	}

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/moduleswitch"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -85,7 +86,7 @@ func (s *Service) recordingOn() bool { return s.rec != nil }
 const (
 	purposeMeetingAnswer  = kb.PurposeMeetingAnswer
 	purposeMeetingMinutes = kb.PurposeMeetingMinutes
-	purposeMeetingTitle   = kb.PurposeMeetingTitle
+	purposeMeetingTitle   = recordingwire.PurposeMeetingTitle
 	purposeMeetingRoom    = kb.PurposeMeetingRoom
 )
 

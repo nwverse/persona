@@ -1,8 +1,6 @@
-Create a recurring routine, or pass `id` from list_followups to edit only the fields supplied. `enabled: false` pauses it. Use `time` with optional `weekdays`, or `cron` (5 fields in the user's zone, at least 5m apart, 0/7 = Sunday, restricted day fields match either; seconds, @every and TZ= are refused; check the reply's next runs). `until` cannot be a bare clock time.
+Create a recurring routine, or pass `id` from list_followups to edit supplied fields. `enabled: false` pauses it. Use `time` (with optional `weekdays`) or 5-field `cron` in the user's zone (at least 5m apart; aliases, 0/7=Sun, Vixie day OR; no seconds/@every/TZ=; check reply's next runs). `until` needs RFC 3339 or relative duration.
 
-Runs inherit Main chat's launcher/model/effort; permission mode stays the user's. `fresh_each_run: true` starts a new chat per run with its state note.
-
-For approved work advancing a supervised to-do, pass its explicit `todo_id` (this conversation must supervise it; omit keeps, "" clears). From the second run Persona checks progress (Agent answers, tool calls, criterion changes, reports; not waits or repeats); a long stall asks Change approach / Keep waiting, even with `push: asked`. Get owner consent before creating or changing recurring work. For a result kept as an Overview card, use watch_draft.{{template "shared/mcp_language" .}}
+Runs inherit Main chat's launcher/model/effort (omit to keep; empty launcher resets). Permission mode is the user's. `fresh_each_run: true` starts a new chat per run with its state note. For a supervised to-do, pass `todo_id` (omit keeps; "" clears; Persona checks real progress from run 2 and asks on stalls). For a dashboard page you write, pass `page_id` (one routine/page, immutable, >=60m apart, never pushes or posts to Inbox, no report/todo_id; held on draft until Keep, data-only grant on kept page). Get owner consent before creating or changing recurring work.{{template "shared/mcp_language" .}}
 
 ```json
 {
@@ -10,12 +8,16 @@ For approved work advancing a supervised to-do, pass its explicit `todo_id` (thi
   "properties": {
     "todo_id": {
       "type": "string",
-      "description": "explicit supervised to-do this routine advances"
+      "description": "supervised to-do this routine advances"
+    },
+    "page_id": {
+      "type": "string",
+      "description": "pg_ dashboard page to refresh (immutable, <=1/hour, no push/inbox/report/todo_id)"
     },
     "fresh_each_run": { "type": "boolean" },
     "id": {
       "type": "string",
-      "description": "to change an existing routine"
+      "description": "existing routine id to edit"
     },
     "title": {
       "type": "string",
@@ -23,7 +25,7 @@ For approved work advancing a supervised to-do, pass its explicit `todo_id` (thi
     },
     "prompt": {
       "type": "string",
-      "description": "what to do each time, self-contained"
+      "description": "self-contained instructions for each run"
     },
     "time": {
       "type": "string",
@@ -36,32 +38,32 @@ For approved work advancing a supervised to-do, pass its explicit `todo_id` (thi
         "minimum": 1,
         "maximum": 7
       },
-      "description": "1 = Monday … 7 = Sunday; omit or empty = every day"
+      "description": "1=Mon…7=Sun; omit/empty = every day"
     },
     "cron": {
       "type": "string",
-      "description": "instead of time / weekdays: minute hour day-of-month month day-of-week in the user's time zone, e.g. */30 9-18 * * 1-5 or 0 10 1 * *; or @hourly / @daily / @weekly / @monthly / @yearly"
+      "description": "replaces time/weekdays: 5 fields in user's zone (e.g. */30 9-18 * * 1-5) or @hourly/@daily/@weekly/@monthly/@yearly"
     },
     "enabled": {
       "type": "boolean"
     },
     "report": {
       "type": "boolean",
-      "description": "a daily report (as a leader's): each run opens with Persona's north-star lines (interruptions, availability, change since yesterday), which the report starts with. Omit to keep"
+      "description": "daily report: prepends Persona's north-star lines. Omit to keep"
     },
     "push": {
       "type": "string",
       "enum": ["every", "asked"],
-      "description": "every (default): each run's answer is pushed; asked: only what a run sends with notify_user, for watching something (runs in its own conversation). Omit to keep"
+      "description": "every (default): push every answer; asked: only notify_user (own chat). Omit to keep"
     },
     "inbox": {
       "type": "string",
       "enum": ["off", "worthy", "every"],
-      "description": "Inbox rows, independent of push: off (default), worthy (the run uses inbox_post only for something worth a look), every (Persona adds a row after each run, for a daily briefing). Only when the user asked. Omit to keep"
+      "description": "Inbox rows (only when requested): off (default), worthy (inbox_post), every. Omit to keep"
     },
     "run_if": {
       "type": ["object", "null"],
-      "description": "owner-approved shell check on the routine's computer before scheduled runs: exit 0 runs, 1 skips, other errors follow on_error. Omit keeps; null removes",
+      "description": "owner-approved pre-run shell check (exit 0 runs, 1 skips; null removes; omit keeps)",
       "properties": {
         "command": {"type": "string", "maxLength": 4096},
         "timeout_s": {"type": "integer", "minimum": 1, "maximum": 60, "default": 30},
@@ -72,20 +74,20 @@ For approved work advancing a supervised to-do, pass its explicit `todo_id` (thi
     },
     "until": {
       "type": ["string", "null"],
-      "description": "optional end time (RFC 3339 or 30m / 2h / 1d); then Persona turns it off and records a skipped run. Omit keeps; null clears"
+      "description": "end time (RFC 3339 or 30m/2h/1d); null clears, omit keeps"
     },
     "launcher": {
       "type": "string",
-      "description": "own launcher instead of Main chat's (a name on the run's computer); empty follows Main chat. Omit to keep"
+      "description": "launcher override; empty resets to Main chat; omit keeps"
     },
     "model": {
       "type": "string",
-      "description": "model id for that launcher (without one, pins the current launcher); empty: its default. Omit to keep"
+      "description": "model id for launcher; empty uses launcher default; omit keeps"
     },
     "effort": {
       "type": "string",
       "enum": ["low", "medium", "high", "xhigh", "max"],
-      "description": "Claude thinking effort (without a launcher, pins the current one). Omit keeps; empty clears"
+      "description": "Claude thinking effort; omit keeps"
     }
   }
 }

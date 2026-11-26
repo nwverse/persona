@@ -1,4 +1,11 @@
 {
+  "close_active_refused": "タスク {id} を閉じられません。Agent「{agent}」にユーザーからの未完了の依頼があります（{activity}）。",
+  "latest_owner_message": "この Agent へのユーザーの最新メッセージ：「{message}」",
+  "close_active_choices": "task_scope で完了条件に追加するか、Agent に作業の完了または監視の停止を依頼するか、needs_user でユーザーに確認してください。",
+  "close_active_confirm": "Agent「{agent}」は引き続き監視中、または予定済みの作業があります。「{title}」を完了しますか？",
+  "accept_active_confirm": "Agent「{agent}」は引き続き監視中、または予定済みの作業があります。レビューを承認して「{title}」を閉じますか？",
+  "latest_agent_message": "この Agent に送った最新のメッセージは「{message}」です。",
+  "close_not_confirmed": "Agent は監視中、または予定済みの作業があります。確認するまでタスクは開いたままです。",
   "remind_subtitle": "ToDo リマインダー",
   "remind_body": "時間になりました",
   "remind_due": "期限 {when}",

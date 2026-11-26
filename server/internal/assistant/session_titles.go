@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/nwverse/persona/server/internal/assistant/fleetview"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/transcript"
 )
@@ -66,7 +67,7 @@ func (s *Service) feishuAgentPlaceParts(ctx context.Context, ix proto.Interactio
 	}
 	if agent == "" && ix.Kind == proto.IxScreen {
 		if listed {
-			agent = agentTitle(&sess, 60)
+			agent = fleetview.AgentTitle(sessionTitle(&sess), 60)
 		}
 		if agent == "" || agent == "." {
 			agent = short(ix.SessionID)

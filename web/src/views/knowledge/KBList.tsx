@@ -30,7 +30,6 @@ import { BrandMark } from "../../ui/BrandMark";
 import { connectorBrand } from "../../lib/connectors";
 import { lists, listKey, remember, searches, searchKey } from "./cache";
 import { mergeMeetingLists } from "./meetings";
-import { useKBKindShown } from "../../core/ModuleKBDetail";
 import { Badges, Card, importedNotesLabel, KBIcon, KIND_ICON, Marked, onPlainClick, SectionTitle, Tile, TonePill } from "./KBParts";
 import { t } from "../../i18n";
 
@@ -44,6 +43,7 @@ export function ListPane({
   reloadKey,
   onToggleSidebar,
   onOpen,
+  onFirst,
 }: {
   kind: KBKind;
   selected?: { kind: string; id: string };
@@ -51,13 +51,14 @@ export function ListPane({
   reloadKey: number;
   onToggleSidebar: () => void;
   onOpen: (e: KBEntry, query?: string) => void;
+  /** The first entry this list shows, so the page can draw it beside the list while the address names no entry. The
+   *  list's kind can differ from the entry's (recordings under meetings). */
+  onFirst?: (first: { listKind: KBKind; entry: KBEntry } | undefined) => void;
 }) {
   const [tags, setTags] = useState<Partial<Record<KBKind, string>>>({});
   const tag = tags[kind];
-  // Recordings are there while the module that draws them is (core/ModuleKBDetail.tsx): off, the Meetings list is the
-  // imported meetings alone, and a search leaves them out.
-  const withRecordings = useKBKindShown("recordings");
-  const key = listKey(kind, tag) + (kind === "meetings" && !withRecordings ? "|imported" : "");
+  // Recordings are existing knowledge data: the Meetings list and search keep them when the recording module is off.
+  const key = listKey(kind, tag);
   const [list, setList] = useState<KBList | undefined>(() => lists.get(key));
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
@@ -68,7 +69,7 @@ export function ListPane({
     const ac = new AbortController();
     const read = (k: string) => api<KBList>(`/kb/${k}${tag ? `?tag=${enc(tag)}` : ""}`, { signal: ac.signal });
     // Meetings are one list with the recordings (#8871): both are read, and either failing fails the page.
-    (kind === "meetings" ? Promise.all([read("meetings"), withRecordings ? read("recordings") : { items: [] }]).then(([m, r]) => mergeMeetingLists(m, r)) : read(kind))
+    (kind === "meetings" ? Promise.all([read("meetings"), read("recordings")]).then(([m, r]) => mergeMeetingLists(m, r)) : read(kind))
       .then((l) => {
         const v = { items: l.items ?? [], tags: l.tags ?? [] };
         lists.set(key, v);
@@ -77,7 +78,7 @@ export function ListPane({
       })
       .catch((e) => !isAbort(e) && setError(errorText(e)));
     return () => ac.abort();
-  }, [key, kind, tag, withRecordings, reloadKey, retry]);
+  }, [key, kind, tag, reloadKey, retry]);
 
   // ── search ──
   const [query, setQuery] = useState("");
@@ -129,6 +130,8 @@ export function ListPane({
   }, [error, searchError]);
 
   const sections = useMemo(() => (list?.items ? groupEntries(kind, list.items, tag) : []), [list, kind, tag]);
+  const first = sections[0]?.items[0];
+  useEffect(() => onFirst?.(first ? { listKind: kind, entry: first } : undefined), [first, kind, onFirst]);
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [limits, setLimits] = useState<Record<string, number>>({});
   const toggle = (k: string) =>
@@ -205,7 +208,7 @@ export function ListPane({
           {q ? (
             <SearchResults
               q={q}
-              found={found && !withRecordings ? { q: found.q, results: found.results.filter((r) => r.entry.kind !== "recordings") } : found}
+              found={found}
               error={searchError}
               searching={searching}
               isSel={isSel}

@@ -2,7 +2,7 @@ package writers
 
 import (
 	"errors"
-	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"testing"
 	"time"
 )
@@ -21,7 +21,7 @@ func TestDayAppendTrimmed(t *testing.T) {
 	}
 	now = dayClock.Add(time.Hour)
 	e.RecordingDaysFunc = func() int { return 60 } // back in the window: still expired
-	if got, err := e.AppendRecording(dayID, dayAppend(10, 11, 1, seg(70, "二"))); err != nil || got.Status != kb.RecordingExpired {
+	if got, err := e.AppendRecording(dayID, dayAppend(10, 11, 1, seg(70, "二"))); err != nil || got.Status != recordingwire.RecordingExpired {
 		t.Errorf("append %+v %v", got, err)
 	}
 	if err := e.AskMinutes(dayID); !errors.Is(err, ErrTranscriptExpired) {
@@ -56,10 +56,10 @@ func TestDayChunksDST(t *testing.T) {
 	u := dayUpload(1)
 	u.StartedAt, u.Day, u.TZ = start, "2026-11-01", "America/Los_Angeles"
 	u.Segments = []RecordingSegment{seg(5400, "一点半")}
-	u.Coverage = &kb.RecordingCoverage{To: 6600} // 01:50 PDT
+	u.Coverage = &recordingwire.RecordingCoverage{To: 6600} // 01:50 PDT
 	mustPut(t, e, dayID, u, now)
 	a := dayAppend(1, 2, 1)
-	a.Coverage = &kb.RecordingCoverage{To: 7300} // 01:01 PST
+	a.Coverage = &recordingwire.RecordingCoverage{To: 7300} // 01:01 PST
 	if got := mustAppend(t, e, dayID, a); !got.Wake {
 		t.Error("the repeated hour began without a wake")
 	}

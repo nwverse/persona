@@ -175,7 +175,7 @@ func (n *Node) forkOnRuntime(ctx context.Context, h *runtimeConn, source proto.S
 	params := map[string]any{"session_id": source.SessionID, "at_item_id": at, "assistant": assistant}
 	if assistant {
 		st, _ := n.state.get(source.SessionID)
-		if env := n.assistantEnvForRuntime(h, n.runtimeAssistantCwd(source.SessionID, source.Cwd, st)); env != nil {
+		if env := n.assistantEnvForRuntime(h, n.runtimeAssistantCwd(source.SessionID, source.Cwd, st), source.SessionID); env != nil {
 			params["env"] = env
 		}
 	}

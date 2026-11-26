@@ -251,6 +251,7 @@ func (s *Service) pageTapParams(ctx context.Context, machine, conversation strin
 	}
 	params["interject_background"] = false // sendModel set it when the owner moves work aside for their messages
 	s.UserSpoke(ctx, SessionRef{MachineID: machine, SessionID: conversation})
+	s.detachPendingApprovalsOnOwnerMessage(machine, conversation)
 	return params, nil
 }
 
@@ -410,10 +411,15 @@ func (s *Service) cleanPages(ctx context.Context, st pageStore, now time.Time) {
 		s.logf("assistant pages: %d drafts expired", len(expired))
 		s.expirePageOffers(ctx, expired) // their cards say Expired (pages_tool.go)
 	}
-	if n, err := st.PurgeAssistantPages(ctx, now); err != nil {
+	if n, routines, err := st.PurgeAssistantPagesWithRoutines(ctx, now); err != nil {
 		s.logf("assistant pages: purging: %v", err)
-	} else if n > 0 {
-		s.pagesListChanged(ctx) // Recently removed lost them
+	} else {
+		for _, routine := range routines {
+			s.pageRoutineDeleted(ctx, "", routine) // their routines go with them
+		}
+		if n > 0 {
+			s.pagesListChanged(ctx) // Recently removed lost them
+		}
 	}
 	if _, err := st.TrimAssistantPageActions(ctx, now); err != nil {
 		s.logf("assistant pages: trimming taps: %v", err)

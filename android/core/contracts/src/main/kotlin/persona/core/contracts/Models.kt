@@ -4,6 +4,7 @@ package persona.core.contracts
 
 import persona.core.contracts.CoreText.Key
 import persona.core.contracts.CoreText
+import persona.core.contracts.api.ExtensionView
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.KeepGeneratedSerializer
@@ -681,6 +682,8 @@ data class Session(
      * under its own folder, whose paths name no repository). Group by repository goes by it (core:domain repoOf); older hubs never send it.
      */
     @SerialName("repo_root") val repoRoot: String? = null,
+    /** The physical directory given by the node for workspace association, with symlinks resolved. */
+    @SerialName("workspace_cwd") val workspaceCwd: String? = null,
     /** The top of the git working tree cwd is in (repoRoot for the main checkout) and its branch, from the node (#1805). */
     @SerialName("worktree") val worktree: String? = null,
     @SerialName("branch") val branch: String? = null,
@@ -846,6 +849,8 @@ data class Session(
     @SerialName("engine_history") val engineHistory: List<EngineLeg> = emptyList(),
     /** The manager's current queue. A complete session row without the field has no held messages. */
     val undelivered: List<HeldAgentMessage>? = null,
+    /** Terminal host reported by the hub (`herdr`, `herdr-core`, `orca`, `tern`, `rex`, `botmux`); optional on older hubs. */
+    @SerialName("host") val host: String? = null,
 ) {
     val key: SessionKey get() = SessionKey(machineId, sessionId)
     /** The listed ancestor's key (`folded_under_machine_id` when cross-machine, else `machine_id`); null when not folded. */
@@ -912,7 +917,7 @@ data class Session(
             else -> UsageLimitWhen.Resets(at)
         }
     }
-    val folderName: String get() = cwd.trimEnd('/').substringAfterLast('/')
+    val folderName: String get() = compactFolderName(cwd)
     val displayTitle: String get() = if (title.isEmpty() || title == "Claude Code") folderName.ifEmpty { sessionId.take(8) } else title
     /** Codex in a terminal, or a thread from a Codex app-server / Codex history. */
     val isCodex: Boolean get() = agent == "codex" || sourceKind == "codex_app_server" || sourceKind == "codex_history"
@@ -1113,6 +1118,8 @@ data class Item(
     val narration: Boolean? = null,
     @SerialName("codex_heartbeat_quiet") val codexHeartbeatQuiet: Boolean? = null,
     @SerialName("source_fingerprint") val sourceFingerprint: String? = null,
+    /** Out-of-band, read-only views rendered beside this item. */
+    @SerialName("tool_views") val toolViews: List<ExtensionView> = emptyList(),
 )
 
 /**
@@ -1414,6 +1421,8 @@ data class Interaction(
     @SerialName("delegating") val delegating: Boolean = false,
     /** What the assistant filled in when it handed the question to the user. */
     @SerialName("delegate") val delegate: Delegate? = null,
+    /** True when the card has no interactive computer terminal or UI to hand back to; absent/false keeps "Leave to computer". */
+    @SerialName("no_hand_back") val noHandBack: Boolean = false,
 ) {
     val sessionKey: SessionKey get() = SessionKey(machineId, sessionId)
     /** The one exact reply this card advertises. Anything else stays an ordinary card action. */
@@ -1485,7 +1494,7 @@ data class Interaction(
             return SecretHandoffRequest(variables, text("agent"), text("machine_name"), text("cwd"), text("prompt"))
         }
 
-    /** A password card's computer, purpose and commands (the commands exactly as sent); null for any other card. */
+    /** A password card's computer, purpose, delivery and commands (the commands exactly as sent); null for any other card. */
     val secretRun: SecretRunRequest?
         get() {
             if (!isSecretRun) return null
@@ -1493,7 +1502,8 @@ data class Interaction(
             fun text(key: String) = (input?.get(key) as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim().orEmpty()
             val commands = (input?.get("commands") as? JsonArray).orEmpty()
                 .mapNotNull { command -> (command as? JsonPrimitive)?.takeIf { it.isString }?.content?.takeIf(String::isNotBlank) }
-            return SecretRunRequest(text("machine_name").ifEmpty { text("machine") }, text("purpose"), commands)
+            val delivery = if ((input?.get("delivery") as? JsonPrimitive)?.takeIf { it.isString }?.content == "env") "env" else "stdin"
+            return SecretRunRequest(text("machine_name").ifEmpty { text("machine") }, text("purpose"), commands, delivery)
         }
 
     /** One line for a notification or a list row. */
@@ -1536,8 +1546,8 @@ data class SecretHandoffRequest(
     val prompt: String,
 )
 
-/** What a password card ([Interaction.isSecretRun], #1137) would run: the computer's name, why, and the commands. */
-data class SecretRunRequest(val machine: String, val purpose: String, val commands: List<String>) {
+/** What a password card ([Interaction.isSecretRun], #1137) would run: the computer's name, why, delivery and the commands. */
+data class SecretRunRequest(val machine: String, val purpose: String, val commands: List<String>, val delivery: String = "stdin") {
     companion object {
         /** The card's one field, declared by the hub: Run sends the typed password under this key in [Resolution.values]. */
         const val PASSWORD = "password"

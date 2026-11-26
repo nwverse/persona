@@ -23,9 +23,10 @@ func TestMCPLegacyBytes(t *testing.T) {
 	if err := json.Unmarshal(raw, &expected); err != nil {
 		t.Fatal(err)
 	}
-	// Unified-ledger tools, health_strength (#14713), file_transfer, a2a_read (#13831), page (Dashboards, #15017),
-	// model_profile_capture (#15288) and the watch tools were introduced after the frozen legacy inventory.
-	newTools := []string{"decision_record", "decisions_query", "space_state_update", "lark_image", "conversations_switch", "health_strength", "file_transfer", "a2a_read", "page", "model_profile_capture",
+	// Unified-ledger tools, origin-scoped withdrawal, health_strength (#14713), file_transfer, a2a_read (#13831),
+	// page (Dashboards, #15017), model_profile_capture (#15288), bot_group_reply (#16096) and the watch tools were
+	// introduced after the frozen legacy inventory.
+	newTools := []string{"decision_record", "decisions_query", "space_state_update", "lark_image", "ask_user_withdraw", "conversations_switch", "health_strength", "file_transfer", "a2a_read", "page", "model_profile_capture", "model_probe", "launcher_import", "external_sources_read", "external_sources_write", "bot_group_reply", "todo_split", "todo_merge",
 		"watch_draft", "watch_confirm", "watch_list", "watch_update", "watch_delete", "watch_reorder", "watch_report"}
 	for _, name := range newTools {
 		if _, exists := expected[name]; exists {
