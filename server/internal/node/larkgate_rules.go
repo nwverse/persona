@@ -38,8 +38,12 @@ func larkDecision(cfg proto.AssistantLark, c larkCall) string {
 	if c.Gate < 0 || c.Gate >= len(cfg.Gates) {
 		return "confirm"
 	}
-	rules := cfg.Gates[c.Gate].Rules
-	read := larkGateRead(cfg.Gates[c.Gate], c)
+	g := cfg.Gates[c.Gate]
+	if c.fileBody && g.Auth == nil {
+		return decideLarkFileBody(g.Rules, c)
+	}
+	rules := g.Rules
+	read := larkGateRead(g, c)
 	bodyScoped := read && slices.ContainsFunc(rules, func(candidate proto.LarkRule) bool {
 		return len(candidate.Body) > 0 &&
 			(candidate.Method == "*" || strings.EqualFold(candidate.Method, c.Method)) &&
@@ -67,6 +71,35 @@ func larkDecision(cfg proto.AssistantLark, c larkCall) string {
 	// body-scoped rule still has to match before that read can go.
 	if read && !bodyScoped {
 		return "allow"
+	}
+	return "confirm"
+}
+
+// decideLarkFileBody decides a command-gate call whose body comes from @file on a gate without Auth.
+// Without a proxy to enforce rules on the actual HTTP body at send time, check-time @file contents
+// cannot select a body-scoped allow rule or silently clear an earlier body-scoped deny/confirm rule.
+// Body-independent rules without a preceding body-scoped restriction, and body-scoped deny/confirm
+// rules that match the check-time snapshot, still apply.
+func decideLarkFileBody(rules []proto.LarkRule, c larkCall) string {
+	sawBodyRestriction := false
+	for _, r := range rules {
+		if (r.Method != "*" && !strings.EqualFold(r.Method, c.Method)) || !pathMatches(r.Path, c.Path) {
+			continue
+		}
+		if len(r.Body) > 0 {
+			if r.Action == "allow" {
+				continue
+			}
+			if bodyMatches(r.Body, c.Body) {
+				return r.Action
+			}
+			sawBodyRestriction = true
+			continue
+		}
+		if r.Action == "allow" && sawBodyRestriction {
+			return "confirm"
+		}
+		return r.Action
 	}
 	return "confirm"
 }

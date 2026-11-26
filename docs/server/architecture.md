@@ -1082,9 +1082,10 @@ of entry goes through the same design. The central lists keep the entries they h
 ### One registry per Service
 
 - **The registry**: package `seam`, under `server/internal/assistant/kernel`, holds one registry per assistant
-  `Service`, with a slot for each kind of entry. Routes (installed through `Service.handle`) are the first; bus methods,
-  tools (each placed after a named anchor tool), the hooks for a settled turn and a new connection, snapshot parts,
-  and loops come with the steps below. `Kernel.Bus` is where any domain adds a new bus method, not only the Inbox.
+  `Service`, with a slot for each kind of entry. Routes (installed through `Service.handle`), bus methods, the hooks
+  for a settled turn and a new connection, and snapshot parts are there; tools (each placed after a named anchor
+  tool) and loops come with the steps below. `Kernel.Bus` is where any domain adds a new bus method, not only the
+  Inbox.
   Package `kernel` itself hosts the built-in feature modules (`docs/architecture/core-and-modules.md`), which a build
   may leave out and the owner may switch off; the modules registered here are part of Persona Core.
 - **Two ways in, one registry**:
@@ -1106,7 +1107,8 @@ of entry goes through the same design. The central lists keep the entries they h
   `server/internal/assistant/kernel/seam/dispatch.go`.
 - **When each part lands**:
   1. the registry, with `saved` (S1, #15182);
-  2. the Inbox's routes, bus methods, hooks and snapshot part (S4);
+  2. the Inbox's routes, bus methods, hooks and snapshot part (S4, #15418), as the module "inbox"
+     (`server/internal/assistant/inbox_module.go`);
   3. `registerRoutes` and `registerLoop` (#7891);
   4. `registerTools`, with or just before the Inbox's tools (S5).
 
@@ -1145,16 +1147,49 @@ func (Module) Name() seam.ModuleName { return seam.NewModuleName("saved") }
   `assistantwire.Routes` nor `assistantwire.InboxRoutes` and a nil handler, and `Kernel.Route` a pattern already
   registered. Only their constructors make a `ModuleName` or a `Route`: a zero one is a defect wherever it is used.
 - **The Kernel.** Only `Registry.Register` makes one, for the module it registers, and any method of a zero `Kernel`
-  is a defect. It offers the services every module uses (`Route`, `Full` and `BodyError`) and, with later steps, the
-  slots that replace central lines; never a store, an untyped event or a domain method. A module takes its own
+  is a defect. It offers the services every module uses (`Route`, `Full` and `BodyError`) and the slots that replace
+  central lines (`Bus`, `TurnSettled`, `Connected` and `Snapshot` below; tools and loops with later steps); never a
+  store, an untyped event or a domain method. `Kernel.Publish(ctx, assistantwire.Event)`, the service that publishes
+  contract events to the apps, comes with its first user, saved's events (#15222, with `assistantwire.Event` and a
+  golden per event kind): no module of the kernel builds a `map[string]any` event yet. A module takes its own
   dependencies through its own constructor, as typed port interfaces `New` hands it: no `any`, no map of them and no
   runtime assertion to get a port back ("Domain model", "Typed seams").
 - **saved's legacy ports.** `saved.NewModule` is the one exception, and not an example to copy: it takes saved's store
   as `func() any` and its events as `func(context.Context, map[string]any)`, the shape `saved.Host` always had, and
   saved asserts its ports back out of that store at run time. It stays only because open drafts edit `saved.go` and
   the files that make those assertions; #15222 gives saved typed ports once they land.
-- **Sealed.** `New` seals the registry before it returns. `Register`, `Kernel.Route` or `Seal` after that is a
-  defect; `Full` and `BodyError` stay open, because requests use them.
+- **Bus methods.** `seam.NewBusMethod[P, R](name, fn)` refuses an empty name, one that is not lower-case words joined
+  by dots (`inbox.repo_mutes`), a name no domain lists as a module's, and a nil `fn`; `Kernel.Bus` refuses a name
+  another module registered. A domain lists its modules' methods from an init() in its own wire file,
+  `func init() { addModuleMethods(…) }` (`server/internal/assistantwire/module_methods.go`; the Inbox's are in
+  `server/internal/assistantwire/inbox_bus.go`), so a module cannot take a name the central dispatch answers.
+  `BusHub.request` asks `Registry.Answer` after its own cases, where the Inbox's switch was, and before the extension
+  manager and the devices: the params are decoded into `P` once (a field `P` lacks is ignored), a body that does not
+  decode is answered `invalid_params` as the switch answered it, and the reply is encoded as the bus encodes answers.
+  `P` and `R` are contract types. archguard's `TestModuleBusMethodsAreNoCentralCase` keeps the list off the central
+  dispatch: it reads the cases of `BusHub.request`, of each function in package assistant it hands the method name
+  to, and of the extension manager's and the devices' `Request`, and fails on a listed name among them or on a case
+  whose name is not a string literal or constant. `TestTheCentralSwitchLeavesTheKernelsBusMethods`
+  (`server/internal/assistant/inbox_module_test.go`) sends each listed name through `BusHub.request` with a kernel
+  that has no module.
+- **Settled turn.** `Kernel.TurnSettled(func(ctx, agentref.Ref))`: `turnEnded` parses the session once with
+  `agentrefadapt.FromWire` and, inside its `!meeting` branch, runs the hooks after the settle delay
+  (`server/internal/assistant/seam_slots.go`). Ids that name no session run no hook and are logged as they came: that
+  is the hub's bad input, not a defect. No hook takes `(machine, session string)`.
+- **Handshake.** `Kernel.Connected(func(ctx))`: after each handshake with the hub, once the connection counts as up,
+  on a goroutine of its own (`BusHub.onHello`).
+- **Snapshot part.** `Kernel.Snapshot(func(ctx, *assistantwire.Snapshot))`: where `Service.snapshot` filled the
+  Inbox's part, before `snap.Work`, because `fleetTakeSnapshot` reads the parts back.
+- **One hook of a kind per module.** A hook has no name of its own, so its module is its key: a second hook of a
+  kind from one module, or a nil one, is a defect. Hooks run in registration order; route handlers run under the
+  catch site below, and bus methods and hooks run where the lines they replaced ran.
+- **Route functions written before the kernel.** `routesThrough(k, routes)` runs a module's existing route functions
+  with each `Service.handle` in them registering through `k`, so the Inbox's `inboxRoutes` stays as it was; a new
+  module calls `Kernel.Route` itself. archguard's `TestCentralFilesNameNoInboxCode` keeps the Inbox's names out of
+  `bus.go` and `handler.go`, and in `service.go` to a shrink-only list.
+- **Sealed.** `New` seals the registry before it returns. `Register`, any slot (`Route`, `Bus`, `TurnSettled`,
+  `Connected`, `Snapshot`) or `Seal` after that is a defect; `Full` and `BodyError` stay open, because requests use
+  them, and so do the `Registry` methods that run the slots (`Answer`, `TurnSettled`, `Connected`, `Snapshot`).
 - **One catch site.** Each route registered through the kernel is served under `defer defect.Catch(…)` in
   `server/internal/assistant/kernel/seam/dispatch.go`: a defect raised while serving is reported (the assistant logs it
   with its stack) and answered with 500 (`internal`), so that request fails alone and the manager goes on. Any other
