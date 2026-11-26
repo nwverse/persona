@@ -19,6 +19,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/nwverse/persona/server/internal/agentprompt"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/nodeclient"
 
@@ -249,8 +250,15 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 	// A message that is only a slash command goes on its own: with the context block in front, an agent that runs its own
 	// commands (Antigravity's /compact) takes the line for plain text, records it as `/compact/compact` and runs nothing.
 	// The snapshot is not marked as sent, so the next message carries it. A conversation's first message keeps its block:
-	// it holds the instructions the runtime needs.
-	command := runtimeCommandOnly(text, len(images)) && !st.AwaitingFirstMessage
+	// it holds the instructions the runtime needs. Antigravity's own workflow commands are different: agy still needs
+	// them at byte 0, but they run with Persona context, which its runtime puts after the command body.
+	workflow := false
+	if h.agent() == agentprompt.Antigravity {
+		if ordered, ok := agentprompt.WorkflowCommand(text); ok {
+			text, workflow = ordered, true
+		}
+	}
+	command := runtimeCommandOnly(text, len(images)) && !st.AwaitingFirstMessage && !workflow
 	live, commit := "", func() {}
 	if !command {
 		if !public {
