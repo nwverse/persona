@@ -219,13 +219,20 @@ func (s *Service) snapshotTasks(ctx context.Context, web string) []prompts.Snaps
 		}
 		if t.Supervision != nil {
 			task.DoneWhen = len(t.Supervision.DoneWhen)
-			if p := t.Supervision.Progress; p != nil {
+			if p := t.Supervision.Progress; p != nil && !isCodexRouteProgress(p) {
+				lead := taskLead(st, agents)
 				// A completed round's last reply says more than its earlier progress.
-				// Explicit conclusions and outstanding questions still have their own line.
+				// Explicit conclusions, outstanding questions, and progress newer than
+				// the last result timestamp still have their own line.
 				resultReady := st == "done" || st == "auto_done" || st == "awaiting_review" ||
 					(t.Supervision.state(t) == reviewUserCheck && (st == "owner_wait" || st == "followup"))
-				if p.Kind != upReportProgress || task.Last == "" || !resultReady {
-					reported(&task, p, taskLead(st, agents), now)
+				resultAt := lead.UpdatedAt
+				if t.DoneAt != nil && t.DoneAt.After(resultAt) {
+					resultAt = *t.DoneAt
+				}
+				progressNewer := !p.At.IsZero() && !resultAt.IsZero() && p.At.After(resultAt)
+				if p.Kind != upReportProgress || task.Last == "" || !resultReady || progressNewer {
+					reported(&task, p, lead, now)
 				}
 			}
 		}

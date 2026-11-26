@@ -70,6 +70,7 @@ underCard.line = ruleLine;
 import { SentLine } from "./Sent";
 import { feedWake, HandoffCard, HandoffCards, TASK_LINE_SLACK_MS, taskHandoffs } from "./Handoff";
 import { acceptanceStands, latestReview, parkedLine, progressLine, reviewState } from "../../lib/supervision";
+import { isLegacyCodexRouteNotice } from "../../lib/compatibility";
 import { namedLauncher, providerIdNote, providerTitle, useProviderNames } from "../../lib/provider-names";
 import { sameManager, useChosenManager, useLinkManager, useShownManager } from "../../lib/manager-choice";
 import { AnsweredSummary, InteractionCard, underCard } from "../chat/Interactions";
@@ -868,7 +869,8 @@ export function ProgressTaskRow({ card, conversation, activity, countsOpen, supe
   const clock = useNow(30_000, state === "usage_limit"); // the limit's grace running out
   const blocked = ["needs_you", "interrupted", "usage_limit", "failed"].includes(state) || (!finished && todo?.supervision?.progress?.kind === "blocked");
   const meter = taskMeter(todo, task?.lead);
-  const report = feed.find((it) => it.id === card.report_id && it.kind === "report");
+  const rawReport = feed.find((it) => it.id === card.report_id && it.kind === "report");
+  const report = rawReport && !(field(rawReport, "kind") === "progress" && isLegacyCodexRouteNotice(field(rawReport, "text"))) ? rawReport : undefined;
   const receipt = feed.find((it) => it.id === card.receipt_id);
   const pr = todo?.pr_url ?? (receipt && field(receipt, "pr"));
   const prNumber = pr ? /\/(\d+)\/?$/.exec(pr)?.[1] : undefined;
@@ -902,15 +904,27 @@ export function ProgressTaskRow({ card, conversation, activity, countsOpen, supe
   // a usage limit says what stopped it and when it goes on (the status word on the right says only that it did)
   const limit = todo?.wait == null && state === "usage_limit" ? usageLimitLabel(task?.lead, clock) : undefined;
   const review = latestReview(todo?.supervision);
+  const progress = todo?.supervision?.progress;
+  const progressText = progressLine(todo?.supervision);
   const resultReady = finished || inFinished || reviewing || (!liveWork && todo && task && awaitsReview(todo, task.status));
-  const conclusion = resultReady ? (review?.verdict === "accepted" && review.note?.trim()) || todo?.done_reason?.trim()
-    || (todo?.supervision?.progress?.kind === "done" && progressLine(todo.supervision))
-    || (report && field(report, "kind") === "done" && field(report, "text")?.trim())
-    || (receipt && field(receipt, "state") === "done" && field(receipt, "summary")?.trim())
-    || plainMarkdown(task?.lead?.last_text?.trim() ?? "") || undefined : undefined;
+  const explicitConclusion = resultReady
+    ? (review?.verdict === "accepted" && review.note?.trim())
+      || todo?.done_reason?.trim()
+      || (progress?.kind === "done" && progressText)
+      || (report && field(report, "kind") === "done" && field(report, "text")?.trim())
+      || (receipt && field(receipt, "state") === "done" && field(receipt, "summary")?.trim())
+      || undefined
+    : undefined;
+  const lastReply = resultReady ? plainMarkdown(task?.lead?.last_text?.trim() ?? "") || undefined : undefined;
+  const progressAt = progress?.at ? Date.parse(progress.at) : NaN;
+  const replyAt = task?.lead?.updated_at ? Date.parse(task.lead.updated_at) : NaN;
+  const progressNewerThanReply = Boolean(progressText) && Number.isFinite(progressAt) && Number.isFinite(replyAt) && progressAt > replyAt;
+  const reportBeatsReply = Boolean(progressText) && (progress?.kind === "question" || progress?.kind === "blocked" || progressNewerThanReply);
+  const conclusion = explicitConclusion || (!reportBeatsReply ? lastReply : undefined);
+  const finishedDetail = explicitConclusion || lastReply;
   const detail = state === "cancelled" ? review?.note ?? todo?.done_reason ?? (receipt && field(receipt, "summary"))
-    : finished || inFinished ? conclusion
-    : conclusion ?? limit ?? liveLine ?? parked ?? waits ?? nobody ?? stopped ?? progressLine(todo?.supervision) ?? ask ?? task?.lead?.plan?.current ?? progressOf(task?.lead)?.text ?? (report && field(report, "text"));
+    : finished || inFinished ? finishedDetail
+    : conclusion ?? limit ?? liveLine ?? parked ?? waits ?? nobody ?? stopped ?? progressText ?? ask ?? task?.lead?.plan?.current ?? progressOf(task?.lead)?.text ?? (report && field(report, "text"));
   const row = (
     <button type="button" data-task-slot={card.id} data-counts-open={countsOpen ? "true" : "false"} disabled={!todo && !card.plan_id} onClick={() => {
       onOpen?.();

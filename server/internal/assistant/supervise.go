@@ -246,9 +246,11 @@ func (v *Supervision) clone() *Supervision {
 	if out.DoneWhen == nil {
 		out.DoneWhen = []string{}
 	}
-	if v.Progress != nil {
+	if v.Progress != nil && !isCodexRouteProgress(v.Progress) {
 		p := *v.Progress
 		out.Progress = &p
+	} else {
+		out.Progress = nil
 	}
 	if v.AutoReview != nil {
 		a := *v.AutoReview
@@ -597,8 +599,11 @@ func (s *Service) updateSupervisionGuardedLockedAt(ctx context.Context, id strin
 }
 
 // noteProgress keeps p as supervised task id's progress (in memory, no ledger write: see Supervision.Progress) and
-// tells the apps; false when id is no supervised task.
+// tells the apps; false when id is no supervised task or p is a legacy startup notice.
 func (s *Service) noteProgress(ctx context.Context, id string, p TaskProgress) bool {
+	if isCodexRouteProgress(&p) {
+		return false
+	}
 	s.todos.mu.Lock()
 	cur := s.todos.todos[id]
 	ok := cur != nil && cur.Supervision != nil
