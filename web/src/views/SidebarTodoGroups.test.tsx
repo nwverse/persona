@@ -105,7 +105,7 @@ describe("By to-do's rows (#6458)", () => {
   it("puts the agents opened in a terminal in the same group, each row ending with the Terminal source mark (#6591)", () => {
     show(<TodoTreeView tree={buildTodoTree(sessions, machines, todos, { spaces: [], sessions: [] }, Date.now())} activeKey="" {...stable} />);
     const marks = [...branch("todo:none").querySelectorAll("[data-tree-branch-list] [data-source]")].map((el) => [el.getAttribute("data-source"), el.getAttribute("aria-label")]);
-    expect(marks).toEqual([["feishu", "飞书群"], ["terminal", "终端"]]);
+    expect(marks).toEqual([["feishu", "飞书群"], ["terminal", "在标签页中"]]);
   });
 
   it("folds the group by default, except when it holds an agent that needs you", () => {

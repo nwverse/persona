@@ -34,6 +34,8 @@ const (
 	notRetirable = "not_retirable"
 	noTerminal   = "no_terminal"
 	notStopped   = "not_stopped"
+	// The manager's owner-activity grace period, also enforced at the node's stop boundary.
+	stopInputIdle = 10 * time.Minute
 )
 
 // stopRounds and stopWait bound session.stop: each round presses Ctrl+C twice and waits up to stopWait for the agent
@@ -191,6 +193,49 @@ func (n *Node) currentSessionActivity(id string, a host.Agent) (rev int64, updat
 // closeExited closes the shell session id's agent left when it quit (closeAfterExit), under the recovery lock its
 // caller holds; done false when there is no such shell. Its stop cause stays as it was.
 func (n *Node) closeExited(ctx context.Context, id string) (bool, error) {
+	return n.closeExitedChecked(ctx, id, nil)
+}
+
+// closeIdleTerminal applies the owner's close-on-end setting without bypassing automatic retirement's guard.
+// The running Agent's Close and an already exited Agent's shell both recheck input at their irreversible boundaries.
+func (n *Node) closeIdleTerminal(ctx context.Context, id string, cause proto.StopCause) (stopped, closed bool, err error) {
+	release := n.recovery.lock(id)
+	defer release()
+	if err := ctx.Err(); err != nil {
+		return false, false, err
+	}
+	if err := n.refreshHosts(ctx); err != nil {
+		return false, false, err
+	}
+	before := func() error { return n.checkAutomaticStop(ctx, id) }
+	unlock, _, running, err := n.stoppable(id, true)
+	if err != nil {
+		return false, false, err
+	}
+	if running {
+		defer unlock()
+		err = n.closeWithCauseChecked(ctx, id, cause, before)
+		stopped, closed = err == nil, err == nil
+	} else {
+		closed, err = n.closeExitedChecked(ctx, id, before)
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return false, false, ctxErr
+	}
+	return stopped, closed, err
+}
+
+func (n *Node) checkAutomaticStop(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if !n.typing.inputIdle(id, stopInputIdle) {
+		return refusal(notRetirable, "input is pending or was received within the last 10 minutes", nil)
+	}
+	return nil
+}
+
+func (n *Node) closeExitedChecked(ctx context.Context, id string, before func() error) (bool, error) {
 	if !validID(id) {
 		return false, fmt.Errorf("invalid session id %q", id)
 	}
@@ -199,6 +244,11 @@ func (n *Node) closeExited(ctx context.Context, id string) (bool, error) {
 	}
 	unlock := n.typing.lock(id)
 	defer unlock()
+	if before != nil {
+		if err := before(); err != nil {
+			return false, err
+		}
+	}
 	if _, running := n.agent(id); running {
 		return false, refusal(notRetirable, "the agent is running again", nil)
 	}
@@ -215,7 +265,7 @@ func (n *Node) closeExited(ctx context.Context, id string) (bool, error) {
 		return false, nil // no shell it left that Persona can tell apart safely: kept, as before
 	}
 	_, kept := n.keptPane(id) // in the hosts' last snapshots; closeAfterExit reads the engine again before closing
-	if err := n.closeAfterExit(ctx, id, st); err != nil {
+	if err := n.closeAfterExit(ctx, id, st, before); err != nil {
 		return false, err
 	}
 	return kept, nil
@@ -228,8 +278,29 @@ func (n *Node) stop(ctx context.Context, id string, retire bool) (stopped bool, 
 }
 
 func (n *Node) stopWithCause(ctx context.Context, id string, retire bool, cause proto.StopCause) (stopped bool, err error) {
+	return n.stopWithGuard(ctx, id, retire, cause, false)
+}
+
+func (n *Node) stopWithGuard(ctx context.Context, id string, retire bool, cause proto.StopCause, guarded bool) (stopped bool, err error) {
+	// An Antigravity companion row id agy-<conversation-uuid> resolves here first: to its one live pane
+	// row, to an authoritative not_found for an orphaned conversation, or to a hard refusal. Every other
+	// id comes back unchanged. Resolving before the recovery lock also serializes companion-id stops with
+	// pane-row stops on the same row key.
+	origID := id
+	id, err = n.resolveAgyCompanionStop(id, retire)
+	if err != nil {
+		return false, err
+	}
 	release := n.recovery.lock(id)
 	defer release()
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if guarded {
+		if err := n.refreshHosts(ctx); err != nil {
+			return false, err
+		}
+	}
 	if cause == proto.StopUser {
 		if err := n.saveStopCause(ctx, id, proto.StopUser); err != nil {
 			return false, err
@@ -237,15 +308,45 @@ func (n *Node) stopWithCause(ctx context.Context, id string, retire bool, cause 
 		defer n.state.stopped(id, cause)
 	}
 	unlock, a, ok, err := n.stoppable(id, retire)
-	if err != nil || !ok {
+	if err != nil {
 		return false, err
 	}
+	if !ok {
+		// The routed row went away between resolution and stoppable. For a companion uuid re-check raw
+		// attribution: a refresh can have moved the conversation to another pane, and returning the
+		// idempotent (false,nil) here would otherwise make the hub release that live conversation.
+		if lerr := n.agyStopAbsentVerdict(origID, id); lerr != nil {
+			return false, lerr
+		}
+		return false, nil
+	}
 	defer unlock()
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if conversation, isCompanion := agyConversationID(origID); isCompanion && id != origID {
+		// The routed unique pane could gain a twin or move while saveStopCause/stoppable ran; never
+		// Ctrl+C one pane while raw attribution now shows more than one.
+		if err := n.agyCompanionStopRecheck(conversation, id); err != nil {
+			return false, err
+		}
+	}
 	if cause != proto.StopUser {
 		n.state.stopped(id, proto.StopUnknown) // An unconfirmed/failed automatic stop never grants recovery.
 	}
-	stopped, err = n.quitAgent(ctx, id, a.PaneID)
+	var before func() error
+	if guarded {
+		before = func() error { return n.checkAutomaticStop(ctx, id) }
+	}
+	stopped, err = n.quitAgentChecked(ctx, id, a.PaneID, before)
 	if stopped && err == nil {
+		if conversation, isCompanion := agyConversationID(origID); isCompanion && id != origID {
+			// A twin pane can have appeared during the quit verification; quitAgent only proves the
+			// routed row left, so confirm no other pane still attributes the conversation before success.
+			if perr := n.agyCompanionStopPostQuit(conversation); perr != nil {
+				return false, perr
+			}
+		}
 		n.state.stopped(id, cause)
 	}
 	return stopped, err
@@ -254,17 +355,47 @@ func (n *Node) stopWithCause(ctx context.Context, id string, retire bool, cause 
 // stoppable checks that session id's agent may be stopped now (retire: only a still one) and holds its typing lock
 // (unlock releases it) when ok; ok false with no error when it is not running.
 func (n *Node) stoppable(id string, retire bool) (unlock func(), a host.Agent, ok bool, err error) {
-	if !validID(id) && !n.agyPaneRow(id) {
-		return nil, a, false, fmt.Errorf("invalid session id %q", id)
-	}
 	no := func(code, why string) (func(), host.Agent, bool, error) {
 		if retire {
 			code = notRetirable // what hubs before #4754 know
 		}
 		return nil, a, false, refusal(code, why, nil)
 	}
+	h, _, known := n.runtimes.belongs(id)
+	if !validID(id) && !n.agyPaneRow(id) {
+		// session.stop and session.retire are dispatched before runtimeFor (node.go), so a live or known external
+		// runtime session with a non-hex id (opencode-*, hermes-*, pi-*, paseo-*, etc.) must be refused here rather
+		// than falling through to "not running" or "invalid session id".
+		if h != nil || known {
+			if n.isAssistantSession(id) || n.runtimeAssistant(id) {
+				return no(notRetirable, "assistant conversations are not stopped")
+			}
+			return no(noTerminal, "this session belongs to another tool")
+		}
+		// A runtime's session (agy-b-<conversation>, opencode-*, hermes-*, etc.) that no runtime lists any more
+		// reaches here. Fail closed while a matching runtime is still starting or has connected without pushing
+		// its initial runtime.sessions list yet; otherwise nothing runs it on this computer, so it is not running
+		// (#16376). A pane's row of another work agent (cursor) is not this: it runs, and is refused as before;
+		// so is an id of any other shape.
+		if _, running := n.agent(id); !running && runtimeIDRe.MatchString(id) {
+			if n.isAssistantSession(id) || n.runtimeAssistant(id) {
+				return no(notRetirable, "assistant conversations are not stopped")
+			}
+			if n.restarting(id) {
+				return no(notRetirable, "still starting")
+			}
+			if r := n.starts.get(id); r != nil && r.ended.IsZero() {
+				return no(notRetirable, "still starting")
+			}
+			if label, pending := n.pendingRuntimeForStop(id); pending {
+				return nil, a, false, errRuntimeAway(label)
+			}
+			return nil, a, false, nil
+		}
+		return nil, a, false, fmt.Errorf("invalid session id %q", id)
+	}
 	_, terminalOnly := n.terminalOnly(id)
-	switch h, _, known := n.runtimes.belongs(id); {
+	switch {
 	case n.isAssistantSession(id) || n.runtimeAssistant(id):
 		return no(notRetirable, "assistant conversations are not stopped")
 	case n.externalCodex(id) || h != nil || known || terminalOnly:
@@ -309,8 +440,12 @@ func (n *Node) stoppable(id string, retire bool) (unlock func(), a host.Agent, o
 // quitAgent presses Ctrl+C twice in pane until session id's agent is no longer in it (or in any pane), and never
 // closes the pane: the shell the agent ran in stays. An agent that does not quit is refused as not_stopped.
 func (n *Node) quitAgent(ctx context.Context, id, pane string) (bool, error) {
+	return n.quitAgentChecked(ctx, id, pane, nil)
+}
+
+func (n *Node) quitAgentChecked(ctx context.Context, id, pane string, before func() error) (bool, error) {
 	for range stopRounds {
-		stopped, err := n.quitAgentRound(ctx, id, pane, nil, false)
+		stopped, err := n.quitAgentRound(ctx, id, pane, nil, false, before)
 		if err != nil {
 			return false, err
 		}
@@ -324,7 +459,7 @@ func (n *Node) quitAgent(ctx context.Context, id, pane string) (bool, error) {
 // quitAgentRound is one quitAgent attempt: two Ctrl+C presses, then a bounded wait for the session to leave pane.
 // With only and requireFresh, an abandoned start uses the same primitive but every verification refresh must succeed
 // for that pane's host; the ordinary quitAgent keeps its tolerant multi-round refresh behavior.
-func (n *Node) quitAgentRound(ctx context.Context, id, pane string, only host.Host, requireFresh bool) (bool, error) {
+func (n *Node) quitAgentRound(ctx context.Context, id, pane string, only host.Host, requireFresh bool, before func() error) (bool, error) {
 	if requireFresh {
 		// Do not let a successful discovery followed by an outage turn the first Ctrl+C pair into an unverified interrupt,
 		// and do not send it to a shell after the agent has already left.
@@ -335,6 +470,19 @@ func (n *Node) quitAgentRound(ctx context.Context, id, pane string, only host.Ho
 			return true, nil
 		}
 	}
+	// A guarded retirement must recheck activity before each irreversible action.
+	check := func() error {
+		if before == nil {
+			return nil
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return before()
+	}
+	if err := check(); err != nil {
+		return false, err
+	}
 	codexAgent := false
 	codexExtra := 0
 	if a, ok := n.agent(id); ok && a.PaneID == pane && a.Agent == "codex" {
@@ -344,6 +492,9 @@ func (n *Node) quitAgentRound(ctx context.Context, id, pane string, only host.Ho
 			// idle composer; otherwise keep Ctrl+C-only keys (codex_waiting_test.go) and follow up within Codex's
 			// ~1s "Press Ctrl-C again to exit" window before stopWait expires it (#12389).
 			wireInterrupted := n.interruptCodexActiveTurn(ctx, id)
+			if err := check(); err != nil {
+				return false, err
+			}
 			codexExtra = 1
 			if !wireInterrupted && (a.AgentStatus == proto.StatusWorking || a.AgentStatus == proto.StatusBlocked) {
 				codexExtra = 2
@@ -352,6 +503,9 @@ func (n *Node) quitAgentRound(ctx context.Context, id, pane string, only host.Ho
 	}
 	_ = n.sendKeys(ctx, pane, "ctrl+c")
 	time.Sleep(200 * time.Millisecond)
+	if err := check(); err != nil {
+		return false, err
+	}
 	if err := n.sendKeys(ctx, pane, "ctrl+c"); err != nil {
 		return false, err
 	}
@@ -384,6 +538,9 @@ func (n *Node) quitAgentRound(ctx context.Context, id, pane string, only host.Ho
 					extraAt = time.Time{}
 				}
 				if a.Agent == "codex" {
+					if err := check(); err != nil {
+						return false, err
+					}
 					_ = n.sendKeys(ctx, pane, "ctrl+c")
 				}
 			}
@@ -659,6 +816,7 @@ func (n *Node) newTab(ctx context.Context, launch host.Launcher, cwd, ws, tabNam
 	if err != nil {
 		return nil, fmt.Errorf("创建终端标签页失败：%w", err)
 	}
+	n.forgetPane(created.Pane.String()) // a new tab: whatever ran in a pane of its id before, nothing runs in it yet
 	ts.opened(created.SpaceID)
 	markPersonaTab(ctx, launch, created.Pane, id)
 	markTaskTerminal(ctx, launch, created.Pane)
@@ -671,4 +829,22 @@ func (n *Node) newTab(ctx context.Context, launch host.Launcher, cwd, ws, tabNam
 func (n *Node) agyPaneRow(id string) bool {
 	a, ok := n.agent(id)
 	return ok && a.Agent == agyAgent && a.PaneID != "" && id == otherSession(a)
+}
+
+// pendingRuntimeForStop reports whether a runtime matching id's "<runtime>-" prefix is still starting up or has
+// connected without pushing its initial runtime.sessions list yet, so stop fails closed with runtime_away instead
+// of assuming the session is already gone.
+func (n *Node) pendingRuntimeForStop(id string) (string, bool) {
+	if n.runtimes != nil {
+		if label, pending := n.runtimes.unlistedRuntimeByPrefix(id); pending {
+			return label, true
+		}
+		if n.runtimes.hasListedRuntimePrefix(id) {
+			return "", false
+		}
+	}
+	if rtID, pending := n.pendingAutoCompanionRuntime(id); pending {
+		return rtID, true
+	}
+	return "", false
 }

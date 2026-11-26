@@ -125,9 +125,10 @@ test('cmd.exe runs the Windows hook and answers "ask" once its script or Node.js
   writeFileSync(join(home, 'cut.png'), png.subarray(0, 20))
   const payload = JSON.stringify({ toolCall: { name: 'read_file', args: { Path: join(home, 'cut.png') } } })
   for (const answer of cmd(hook(SCRIPT), payload)) assert.equal(answer.decision, 'deny')
-  const installed = join(installMediaGuard({ agyDir, script: SCRIPT }), 'media-guard.mjs')
+  const installed = join(home, 'config', 'plugins', 'persona-media-guard', 'media-guard.mjs')
+  const missingScript = hook(SCRIPT)
   rmSync(installed)
-  for (const answer of cmd(hook(SCRIPT), payload)) assert.deepEqual(answer, { decision: 'ask' })
+  for (const answer of cmd(missingScript, payload)) assert.deepEqual(answer, { decision: 'ask' })
   // Node.js moved (an upgrade, a reinstall): cmd would say "is not recognized" and print no JSON.
   for (const answer of cmd(hook(SCRIPT, join(home, 'old node (x86)', 'node.exe')), payload)) assert.deepEqual(answer, { decision: 'ask' })
 })
