@@ -109,6 +109,17 @@ describe("steps carried by an open request", () => {
     expect(result.needsYou).toEqual([]);
     expect(result.running).toEqual([]);
   });
+
+  it("keeps a carried verification visible in its supervisor's tray when its open parent belongs to another conversation", () => {
+    const otherParent: Todo = { ...parent, origin: "other-conversation" };
+    const step: Todo = {
+      ...verification, origin: "direction",
+      supervision: { state: "user_check", supervisor: "direction" },
+    };
+    const result = entries([otherParent, step]);
+    expect(result.needsYou).toMatchObject([{ key: "task:verify", todo: { ask: step.ask } }]);
+    expect(result.running).toEqual([]);
+  });
 });
 
 // Android reads the same fixture (AssistantEntriesFixtureTest): the two entries split the same input the same way.

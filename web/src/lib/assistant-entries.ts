@@ -281,7 +281,7 @@ export function assistantEntries(input: AssistantEntriesInput): AssistantEntries
       (reviewState(todo) === "user_check" ||
         Boolean(taskReviewDecisionAsk(todo) && !input.deferred?.[decisionLaterKey(todo)]));
     // The hub's view decides when there is one, so this tray, the To-dos badge and the hub's needs_you agree.
-    const hub = hubNeedsYou(quietOwnerAskHere ? { ...todo, quiet: false } : todo, openOf);
+    const hub = hubNeedsYou(quietOwnerAskHere ? { ...todo, quiet: false } : todo, (id) => carried.has(todo.id) && openOf(id));
     const item: NeedsYouTask = { kind: "task", key, todo, status, asks, countsOpen };
     // Only the review decision is hidden; a live Agent question still has its home.
     // A user_check round follows the same Later/Dismiss rules as a decision. Its parent may still carry live
