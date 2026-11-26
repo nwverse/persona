@@ -145,6 +145,19 @@ unrecognized enum to `unknown`. The four terminal messages are a presentation ma
 before its final socket write prevents late updates after the answer. The peer-combination table and terminal messages
 are in [protocol.md](protocol.md) ("MCP tools (`personad mcp`)").
 
+### Task workspace sources
+
+The read-only `task.workspace.capabilities` probe adds optional `empty_repositories` and `local_git` fields.
+The base `task_workspace_v1` capability and the node protocol floor stay the same.
+
+| Pair or state | Behavior |
+| --- | --- |
+| New manager and capable node | New isolated task dispatches use node naming and preparation. A local Git source is frozen to its actual commit. A folder-only workspace uses the empty-container capability. |
+| New manager and older node | Ordinary dispatch keeps its engine checkout path when the probe omits local support or is unknown. A transport error remains a failure of that attempt. A bound-remote backend plan keeps using the original capability. |
+| Older manager and new node | The manager still sends the original preparation and launch fields or calls the engine's checkout methods. A legacy checkout keeps its existing path and ownership rules. |
+| Node rolled back after a workspace operation was saved | A retry keeps the saved operation and computer. If the peer cannot read the selected source, the operation can continue after the node is updated. The manager does not replay the start through the engine. |
+| Older client and new manager | Optional `system_defaults` and `branch_sources` can be ignored. The naming-plan digest and fields for existing remote plans are unchanged. |
+
 ### Assistant conversations on the CLI only (#9799)
 
 Every assistant conversation on Claude Code (the main chat, side chats, scheduled tasks, guests and meeting rooms) runs
