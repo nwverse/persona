@@ -51,7 +51,7 @@ import { ChannelList, ChannelPage } from "./settings/Channels";
 import { ConnectDevice } from "./settings/ConnectDevice";
 import { settingsTarget } from "../lib/channels";
 import { extensionsRoute, routeSub } from "../lib/extension-market";
-import { otherManager, ownedSub, parseOwnedSub, pinManagerAt, sameManager, useChosenManager } from "../lib/manager-choice";
+import { otherManager, ownedSub, parseOwnedSub, pinManagerAt, sameManager, useChosenManager, useShownManager } from "../lib/manager-choice";
 import { HubSettings } from "./settings/HubSettings";
 import { RecoverySettings } from "./settings/RecoverySettings";
 import { ManagersSettings } from "./settings/ManagersSettings";
@@ -184,9 +184,11 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   // assistant only. Their merged lists are filtered by it, its configuration editors name it, and what else they ask of
   // its manager (ASSISTANT_PREFIXES) names it while the page is open.
   const picked = useChosenManager();
-  const integrationsV2 = useStore((s) => s.assistant?.integrations_v2 === true && (!picked || !s.assistant?.manager || sameManager(s.assistant.manager, picked)));
-  const integrationsKnown = useStore((s) => s.loaded !== false || s.assistant != null);
-  const integrationsMode: boolean | "loading" = integrationsKnown ? integrationsV2 : "loading";
+  const targetManager = useShownManager();
+  const integrationsMode = useStore((s) =>
+    s.assistant && sameManager(s.assistant.manager, targetManager) ? s.assistant.integrations_v2 === true : "loading",
+  );
+  const integrationsV2 = integrationsMode === true;
   const integrationsModeRef = useRef<boolean | "loading">(integrationsMode);
   integrationsModeRef.current = integrationsMode;
   // The category (null: none named, the phone's list) and the purpose (model configuration) or extension ("Extensions") it has open.
@@ -229,6 +231,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   const scroller = useRef<HTMLDivElement>(null);
   useScrollMemory(scroller, listed ? "settings" : `settings/${tab}/${itemIsPage(tab) ? (at.sub ?? "") : ""}`);
   const { sub } = at;
+  const sourcesManager = tab === "sources" ? new URLSearchParams(location.search).get("manager") ?? picked ?? undefined : undefined;
   useLayoutEffect(() => (ASSISTANT_TABS.has(tab) ? pinManagerAt(ASSISTANT_PREFIXES, otherManager(picked ?? undefined)) : undefined), [tab, picked]);
   // Another assistant made current with one of the group's items open (a connector, an extension, a channel, a model
   // purpose): that item is the last assistant's, so the page goes back to its list, which then lists the new one's.
@@ -383,7 +386,6 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     !phone &&
     twoCol &&
     tab === "integrations" &&
-    integrationsKnown &&
     integrationsV2 &&
     isIntegrationDetailRoute(parseIntegrationsSub(sub));
   return (
@@ -451,7 +453,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
               {tab === "prompts" && <SavedPrompts />}
               {tab === "sources" && (
                 <Suspense fallback={<Loading />}>
-                  <SourcesUI title={TAB_INFO.sources.label} state={sub ?? undefined} onGraph={setSourcesGraph} />
+                  <SourcesUI key={sourcesManager} manager={sourcesManager} title={TAB_INFO.sources.label} state={sub ?? undefined} onGraph={setSourcesGraph} />
                 </Suspense>
               )}
               {tab === "models" && <>
@@ -468,7 +470,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
                 <Group title={t("settings.agent_preferences")} anchor="agents-display"><AgentsDisplayRow /></Group>
                 <AgentSections section={at.section} />
               </>}
-              {tab === "integrations" && (integrationsKnown ? (
+              {tab === "integrations" && (integrationsMode !== "loading" ? (
                 <Suspense fallback={integrationsSplit ? <div className="p-6"><Loading /></div> : <Loading />}>
                   <Integrations
                     open={sub}

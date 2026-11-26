@@ -63,7 +63,6 @@ const TaskActivityDetail = lazyPage(() => import("./TaskActivityDetail").then((m
 // same chunk has a suggested rule's line (#5802), which comes with the first card that carries one, and a task whose
 // Agent did not start (#10365), which comes with the first such row.
 const NeedsYouPart = lazy(() => import("./TaskDecision"));
-const WaitingTaskRow = lazy(() => import("./WaitingTaskRow"));
 /** The suggested rule's line of a card, drawn right after it; nothing for a card without the field, unless Always
  *  was answered on it here (the line then says what was made, though the hub sent the card again without the field). */
 const ruleLine = (of: RuleCard) => (of.suggestion || underCard.made?.has(of.id!)) && <Suspense fallback={null}><NeedsYouPart rule={of} /></Suspense>;
@@ -1022,7 +1021,7 @@ function NeedsYouRow({ item, open, onToggle }: { item: NeedsYouItem; open: boole
   const openTitle = item.kind === "agent" ? () => openAgent(item.session.machine_id, item.session.session_id)
     : item.kind === "task" ? () => {
       const ask = item.asks[0];
-      if (ask) openAgent(ask.machine_id, ask.session_id);
+      if (ask && reviewState(item.todo) !== "user_check") openAgent(ask.machine_id, ask.session_id);
       else openTask(item.todo.id);
     } : undefined;
   const label = <>
@@ -1081,47 +1080,25 @@ export function NeedsYouBody({ item, nested = false }: { item: NeedsYouItem; nes
   const rowKey = nested ? undefined : item.key;
   if (item.kind === "plan") return <div><PlanCard plan={item.plan} /><OpenEntry title={t("assistant-tasks.needs_group_another")} onOpen={() => navigate(conversationPage(item.plan.conversation, undefined, item.plan.manager))} /></div>;
   if (item.kind === "message") return <MessageCard item={item.item} />;
-  if (item.kind === "agent") {
-    const { session, asks } = item;
-    const open = () => openAgent(session.machine_id, session.session_id);
-    if (!asks.length) return <button type="button" data-needs-row={rowKey} onClick={open} className="flex items-center gap-2 rounded-control bg-field px-3 py-2 text-left text-sm"><StatusMark state="needs_you" /><span className="min-w-0 flex-1 truncate">{sessionTitle(session)}</span><span className="shrink-0 text-xs text-ink-2">{stateName("needs_you")}</span></button>;
-    return <div data-needs-row={rowKey}>{!nested && <button type="button" onClick={open} className="block max-w-full truncate px-1 text-left text-sm font-semibold hover:underline">{sessionTitle(session)}</button>}{asks.map((ix) => <InteractionCard key={ix.id} ix={ix} />)}{nested && <OpenEntry title={sessionTitle(session)} onOpen={open} />}</div>;
+  const taskOpenAttr = item.kind === "task" && !nested ? { "data-counts-open": item.countsOpen ? "true" : "false" } : {};
+  if (item.asks.length) {
+    const title = item.kind === "agent" ? sessionTitle(item.session) : item.todo.title;
+    const open = () => item.kind === "agent" ? openAgent(item.session.machine_id, item.session.session_id) : openTask(item.todo.id);
+    return <div data-needs-row={rowKey} {...taskOpenAttr}>
+      {!nested && <button type="button" onClick={open} className="block max-w-full truncate px-1 text-left text-sm font-semibold hover:underline">{title}</button>}
+      {item.asks.map((ix) => <InteractionCard key={ix.id} ix={ix} />)}
+      {nested && <OpenEntry title={title} onOpen={open} />}
+    </div>;
   }
-  const { todo, asks, status } = item;
-  // Unfolded task rows carry the open flag themselves; a nested one's opened head already has it.
-  const taskOpenAttr = !nested ? { "data-counts-open": item.countsOpen ? "true" : "false" } : {};
-  if (asks.length) return <div data-needs-row={rowKey} {...taskOpenAttr}>{!nested && <button type="button" onClick={() => openTask(todo.id)} className="block max-w-full truncate px-1 text-left text-sm font-semibold hover:underline">{todo.title}</button>}{asks.map((ix) => <InteractionCard key={ix.id} ix={ix} />)}{nested && <OpenEntry title={todo.title} onOpen={() => openTask(todo.id)} />}</div>;
-  const verifying = reviewState(todo) === "user_check";
-  const ask = verifying ? personalVerificationAsk(todo) : openAsk(todo);
-  if (verifying && !ask) return (
-    <button type="button" data-needs-row={rowKey} {...taskOpenAttr} onClick={() => openTask(todo.id)} className="flex min-w-0 items-center gap-2 rounded-control bg-field px-3 py-2 text-left text-sm hover:bg-hover">
-      <StatusMark state="needs_you" />
-      <span className="min-w-0 flex-1 truncate">{todo.title}</span>
-      <span className="shrink-0 text-xs text-ink-2">{t("assistant-tasks.review_user_check")}</span>
-    </button>
-  );
-  // Both structured decisions and older review-only decisions have the same deferral controls.
-  if (isDecision(todo))
-    return (
-      <Suspense fallback={<div data-needs-row={rowKey} {...taskOpenAttr} className="truncate rounded-control bg-field px-3 py-2.5 text-label text-ink-2">{todo.title}</div>}>
-        <NeedsYouPart key={todo.id + (todo.supervision?.reviews?.at(-1)?.at || todo.decision_review?.review_at || ask?.asked_at)} rowKey={rowKey} hideTitle={nested} decision={todo} />
-      </Suspense>
-    );
-  if (ask)
-    return (
-      <Suspense fallback={<div data-needs-row={rowKey} {...taskOpenAttr} className="truncate rounded-control bg-field px-3 py-2.5 text-label text-ink-2">{todo.title}</div>}>
-        <NeedsYouPart key={todo.id + ask.asked_at} rowKey={rowKey} hideTitle={nested} accept={todo} ask={ask} countsOpenAttr={taskOpenAttr} />
-      </Suspense>
-    );
-  if (status === "failed")
-    return (
-      <Suspense fallback={<div data-needs-row={item.key} {...taskOpenAttr} className="truncate rounded-control bg-danger-wash px-3 py-2 text-sm">{todo.title}</div>}>
-        <NeedsYouPart rowKey={item.key} failed={todo} countsOpenAttr={taskOpenAttr} />
-      </Suspense>
-    );
+  if (item.kind === "agent") {
+    const { session } = item;
+    return <button type="button" data-needs-row={rowKey} onClick={() => openAgent(session.machine_id, session.session_id)} className="flex items-center gap-2 rounded-control bg-field px-3 py-2 text-left text-sm">
+      <StatusMark state="needs_you" /><span className="min-w-0 flex-1 truncate">{sessionTitle(session)}</span><span className="shrink-0 text-xs text-ink-2">{stateName("needs_you")}</span>
+    </button>;
+  }
   return (
-    <Suspense fallback={<div data-needs-row={rowKey} {...taskOpenAttr} className="truncate rounded-control bg-field px-3 py-2 text-sm">{todo.title}</div>}>
-      <WaitingTaskRow rowKey={rowKey} todo={todo} status={status} countsOpenAttr={taskOpenAttr} />
+    <Suspense fallback={<div data-needs-row={rowKey} {...taskOpenAttr} className={cx("truncate rounded-control px-3 py-2 text-sm", item.status === "failed" ? "bg-danger-wash" : "bg-field")}>{item.todo.title}</div>}>
+      <NeedsYouPart task={item.todo} status={item.status} rowKey={rowKey} hideTitle={nested} countsOpenAttr={taskOpenAttr} />
     </Suspense>
   );
 }
@@ -1275,9 +1252,14 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
       takeDirectWaitingRequest(conversation);
       setTray("needs");
     };
+    const followUp = (event: Event) => {
+      if ((event as CustomEvent).detail === conversation) setTray(null);
+    };
+    window.addEventListener("persona:verification-follow-up", followUp);
     window.addEventListener("persona:task-pending", needs);
     window.addEventListener("persona:task-start", needs);
     return () => {
+      window.removeEventListener("persona:verification-follow-up", followUp);
       window.removeEventListener("persona:task-pending", needs);
       window.removeEventListener("persona:task-start", needs);
     };
