@@ -236,7 +236,7 @@ func (n *Node) taskWorkspace(ctx context.Context, method string, raw, start json
 	}
 	// A digest detects accidental changes; re-resolve on the target to validate
 	// paths and templates rather than trusting a caller-computed digest.
-	preview := workspacenaming.Resolve(req.Plan.Source, workspacenaming.NodeContext{Home: n.home, PersonaHome: n.dir})
+	preview := n.resolveWorkspacePlan(req.Plan.Source)
 	if preview.Plan == nil || preview.Plan.Digest != req.Plan.Digest {
 		return taskworkspace.Record{Error: taskworkspace.Failure("invalid_path", "validation", req.OperationID, "", req.Plan.RootPath)}, nil
 	}
@@ -253,9 +253,13 @@ func (n *Node) taskWorkspace(ctx context.Context, method string, raw, start json
 			return taskworkspace.Record{Error: taskworkspace.Failure("source_invalid", "validation", req.OperationID, source.RepoID, "")}, nil
 		}
 	}
-	control := filepath.Join(n.dir, "task-workspaces")
-	if workspaceNoLinks(control) != nil {
-		return nil, errors.New("workspace control path unavailable")
+	control, err := n.workspaceControlDir("task-workspaces")
+	if err != nil {
+		var problem *taskworkspace.Problem
+		if errors.As(err, &problem) {
+			return taskworkspace.Record{Error: taskworkspace.Failure(problem.Code, "validation", req.OperationID, "", req.Plan.RootPath)}, nil
+		}
+		return nil, err
 	}
 	if err := os.MkdirAll(control, 0700); err != nil {
 		return nil, err
