@@ -1084,7 +1084,7 @@ Download → Verify → Prepare → Wait for idle → Replace → Restart → Co
   - **Update History**: last 10 attempts, result (updated / rolled back / **Update failed** / **Not installed automatically**), automatic attempts marked, from/to versions, time, rollback and held-update reasons.
   - Old hub (no `/api/v1/hub/update`): explain that install.sh must be run once on the hub machine to update it.
 - Android Settings has the same items (**Hub Version**, `HubUpdatePage`, see `../android/android.md`, "Hub version"); Android does not yet have the row at the top of Agents.
-- **A row at the top of Agents** (`HubNoticeRow`, same position and appearance as **Persona is signed in on your Mac**, hidden while searching): only one at a time, most important first:
+- **On Apple, a row at the top of Agents** (`HubNoticeRow`, same position and appearance as **Persona is signed in on your Mac**, hidden while searching): only one at a time, most important first:
   1. App too old (its build number is below the hub's `min_app_build`): "This app is too old for this hub. Update it in TestFlight", cannot dismiss;
   2. Hub too old (`protocol` below what the App requires; old hubs that do not report it count as 0): "The hub is out of date; some features won't work", dismissed with × and not shown again;
   3. Updating: e.g. "Hub updating: waiting for 2 busy chats to finish";
@@ -1093,9 +1093,11 @@ Download → Verify → Prepare → Wait for idle → Replace → Restart → Co
   6. New version with automatic updates off: "Hub update available: X", with **Update** and × (not shown again for this version). Not shown with automatic updates on; it will install itself;
      Docker hubs show "New hub image: X", with only ×. After dismissing one, the next appears as usual; the App remembers the most recently dismissed notices.
   Tapping elsewhere in the row opens the hub page (sheet). No popup or blocked interaction; button labels stay single-line, and each button handles only its own action (`.borderless`, `HubNoticeUITests`).
-  Only on Agents: the assistant page is a chat, and an extra top row would push it down; hub status belongs with machines and Agents.
-  On the web (#2897), it sits below the filter bar in the sidebar's Agents block (`web/src/views/agents/HubNoticeRow.tsx`); items, order and buttons match the App, and dismissals are stored in this browser (last 8, same keys as the App);
-  no items 1 or 2: the web is served by the hub itself, so their versions always match. Tapping the row opens Settings › hub.
+  On the web, the notice sits directly below Settings in the sidebar's Pages group. Folding Pages hides both rows.
+  Reopening it reads the current status. In the phone drawer the notice spans the width beneath the grid row containing Settings.
+  Tapping the text opens Settings › Hub. Each adjacent button performs its own action and keeps the sidebar open.
+  The web follows the same priority and remembers the last eight dismissals in this browser. It skips the app and hub
+  compatibility notices because the hub serves the web client.
 - **Notifications**: after an automatic update installs, push "Hub updated to X"; after rollback, push "Hub update failed" with the reason (hub's `updater.notify`). Manual updates are visible in the App and do not send an extra push.
 - **During restart**: disconnection is expected; the usual "Connecting…" title becomes "Hub updating…", and its explanation says the hub is restarting and will automatically return to the previous version if the new one cannot start; after reconnect, show the new version.
 - **Settings › Assistant › Skills** (`SkillsPage`): skills on the computer running the assistant (`GET /api/v1/skills`), read-only, marked as user-provided or built-in, explaining where to put them and when they take effect.

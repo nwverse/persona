@@ -2,7 +2,7 @@
 // Aggregates built-in services, channels, connectors, standalone push sources, and installed extensions
 // into one deduplicated list with capability filter chips, subscription health alerts, Extension Market access,
 // inline IntegrationDetail (#14868) mounting, and a lazy-loaded Data Flow view (#15423).
-import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { loadMailAccounts, useMailboxEnabled } from "../../lib/mail";
 import { t } from "../../i18n";
 import { ExternalSourceSettingsEntry } from "../../features/external-sources/ExternalSourceSettingsEntry";
@@ -10,6 +10,8 @@ import type { MailAccount } from "../../lib/agent-settings";
 import { api, enc, errorText } from "../../lib/api";
 import { listChannels, type Channel } from "../../lib/channels";
 import { connectorBrand, listConnectors, type HubConnector } from "../../lib/connectors";
+import { stripBase } from "../../lib/base";
+import { navigate, subscribeRoute } from "../../lib/router";
 import { scoped, useScope } from "../../lib/current-assistant";
 import { hubHasExt } from "../../lib/extension-api";
 import { onAuthChange, withAuth } from "../../lib/extension-auth";
@@ -44,6 +46,7 @@ import { Group, Pill, Row, SettingsHint } from "./SettingsParts";
 import {
   formatIntegrationsSub,
   isIntegrationDetailRoute,
+  normalizeIntegrationFilter,
   parseIntegrationsSub,
   type IntegrationFilter,
   type IntegrationsRoute,
@@ -66,13 +69,11 @@ const LazySourcesUI = lazyPage(() => import("../subscriptions/SourcesUI").then((
 
 export interface IntegrationsProps {
   open: string | null;
-  onOpen: (sub: string | null) => void;
-  /** Desktop split-pane layout (`min-width: 900px`): list stays beside the open integration detail. */
+  onOpen: (sub: string | null, drillDown?: boolean) => void;
+  /** Desktop split-pane layout (when the Settings host has room): list stays beside the open integration detail. */
   twoCol?: boolean;
   /** The page's top bar already provides Back (phone), so subviews omit their own Back button. */
   headerBack?: boolean;
-  /** Initial capability filter (for example when redirected from legacy `/settings/channels` or `/settings/connectors`). */
-  initialFilter?: IntegrationFilter;
   /** Navigate to a Settings URL linked from a channel override notice. */
   onSettings?: (url: string) => void;
   /** Report whether an open extension plugin_page needs the wide page container. */
@@ -227,11 +228,13 @@ function PushSourceDetailPane({
 
 /** Full-width Data Flow pane (`-sources` / `-sources@<manager>`), pinning `/subscriptions` when a manager is named. */
 function SourcesFlowPane({
+  onOpenSource,
   manager,
   reloadKey,
 }: {
   manager?: string;
   reloadKey: number;
+  onOpenSource?: (page: string) => void;
 }) {
   return (
     <>
@@ -245,6 +248,7 @@ function SourcesFlowPane({
           key={`${manager ?? ""}:${reloadKey}`}
           title={t("subscriptions.title_sources")}
           initialView="graph"
+          onOpenSource={onOpenSource}
           manager={manager}
         />
       </Suspense>
@@ -297,12 +301,12 @@ export function Integrations({
   onOpen,
   twoCol = false,
   headerBack = false,
-  initialFilter = "all",
   onSettings,
   onPageWide,
 }: IntegrationsProps) {
   const route = useMemo(() => parseIntegrationsSub(open), [open]);
-  const go = useCallback((next: IntegrationsRoute) => onOpen(formatIntegrationsSub(next)), [onOpen]);
+  const go = (next: IntegrationsRoute) => onOpen(formatIntegrationsSub(next));
+  const drillDown = (next: IntegrationsRoute) => onOpen(formatIntegrationsSub(next), true);
 
   const picked = useChosenManager();
   const owner = otherManager(picked ?? undefined);
@@ -318,10 +322,13 @@ export function Integrations({
   const hasSubscriptions = useSubscriptionsShown();
   const hasInboxSources = useInboxSourcesShown();
 
-  const [filter, setFilter] = useState<IntegrationFilter>(initialFilter);
-  useEffect(() => {
-    if (initialFilter !== "all") setFilter(initialFilter);
-  }, [initialFilter]);
+  const filter = useSyncExternalStore(subscribeRoute, () => normalizeIntegrationFilter(new URLSearchParams(location.search).get("filter")));
+  const setFilter = (next: IntegrationFilter) => {
+    const url = new URL(location.href);
+    if (next === "all") url.searchParams.delete("filter");
+    else url.searchParams.set("filter", next);
+    navigate(stripBase(url.pathname) + url.search + url.hash, true);
+  };
 
   const [extensions, setExtensions] = useState<HubExtension[]>([]);
   const [markets, setMarkets] = useState(false);
@@ -677,8 +684,10 @@ export function Integrations({
     return (
       <div data-integrations-sources-view>
         {listHeader}
-        {viewSwitch}
-        <SourcesFlowPane manager={effectiveManager} reloadKey={sourcesReload} />
+        {!headerBack && viewSwitch}
+        <SourcesFlowPane manager={effectiveManager} reloadKey={sourcesReload}
+          onOpenSource={headerBack ? (page) => drillDown({ kind: "sources", state: page, manager: effectiveManager }) : undefined}
+        />
       </div>
     );
   }
@@ -690,7 +699,7 @@ export function Integrations({
       data-integrations-filters
       className={cx(
         compactList
-          ? "-mx-1 -my-0.5 flex flex-nowrap items-center gap-1 overflow-x-auto overscroll-x-contain px-1 py-0.5 scrollbar-none"
+          ? "-mx-1 -my-0.5 flex flex-nowrap items-center gap-1 overflow-x-auto overscroll-x-contain px-1 py-0.5 integrations-chip-scroll"
           : "mb-4 flex flex-wrap items-center gap-1.5",
       )}
     >
@@ -836,8 +845,8 @@ export function Integrations({
       onPage={(extId, uiId, manager) => go({ kind: "page", id: extId, ui: uiId, manager })}
       onUpgrade={(market, extId, manager) => go({ kind: "item", market, id: extId, manager })}
       onSettings={onSettings}
-      onOpenConnector={(id, manager) => go({ kind: "connector", id, manager })}
-      onOpenSources={(sourceState, manager) => go({ kind: "sources", ...(sourceState ? { state: sourceState } : {}), ...(manager ? { manager } : {}) })}
+      onOpenConnector={(id, manager) => drillDown({ kind: "connector", id, manager })}
+      onOpenSources={(sourceState, manager) => drillDown({ kind: "sources", ...(sourceState ? { state: sourceState } : {}), ...(manager ? { manager } : {}) })}
     />
   ) : null;
 
