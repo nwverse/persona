@@ -724,6 +724,9 @@ real web app.
 ```bash
 DOCKER=<docker client> python3 scripts/ci/module-e2e.py --modules voice,health,recording \
     [--checkout <dir>] [--shots ~/persona-pr-shots/<pr>] [--evidence <file>] [--strict-before-hello]
+
+# The core alone against a client: build with -tags persona_core_only and check every module is off (#16243).
+DOCKER=<docker client> python3 scripts/ci/module-e2e.py --core-only [--no-build-web] [--shots <dir>]
 ```
 
 - **Start-up**: builds `personad`, `persona-hub`, `persona-manager` and `persona-node` (a default build) and the web app
@@ -770,7 +773,21 @@ DOCKER=<docker client> python3 scripts/ci/module-e2e.py --modules voice,health,r
   or push them). The last line is the verdict (`PASS`, `FAIL` or `TIMEOUT` after `--timeout`, default 40 minutes); the
   exit code is non-zero unless it is `PASS`. A run takes about four to six minutes after the builds.
 - **A module the tables lack** is still checked for its hello flag and the manager line, and the run says so: the PR
-  that moves a module adds its rows (what the hub has of it, what the web app shows of it).
+  that moves a module adds its rows (what the hub has of it, what the web app shows of it). A module with nothing of its
+  own on a hub (only its flag and the manager line) gets the honest empty `SERVER` row `{}`, not a missing one; a module
+  the web gates nothing on may have no `WEB` row (only a `NOTE`), or a chunks-only one (its chunks must not be requested
+  while it is off).
+- **Row forms that are not "on or absent"**: `off_stays` is a page the default panel keeps for existing data while the
+  module is off (`health`'s `/health` is the read-only archive, #15704): it stays and shows what it stores, with none of
+  the module's controls. `needs_on` on a kept item is data only the `on` phase makes (the recording the gate uploads),
+  skipped in a run with no `on` phase.
+- **The core-only mode** (`--core-only`, #16243) is the one check that runs a client against a hub built with
+  `-tags persona_core_only` instead of a default build with modules switched off. It builds the four programs with the
+  tag (its own `persona_core_only` build, `--no-build-web` serving the existing `web/dist`), starts a disposable hub the
+  same way, and runs the browser half with **every** module expected off: the hello carries the `modules` marker and no
+  built-in flag, the manager says `modules: loaded none`, the core's pages render with no page or console error, no
+  module's entry, address or chunk is there, and stored recordings stay readable. `--modules` is optional (every module
+  by default). It has no `on`/`off`/`back-on` and no mock phases; the full gate above covers those.
 
 ## End-to-end (verified 2026-10-24)
 
