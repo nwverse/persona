@@ -2,7 +2,8 @@
 // (topics → subtopics → knowledge points, docs/assistant/knowledge.md "Knowledge points") and the projects (what the
 // main chat keeps on each, with the curated summary as sections) — and a side panel on what is selected. Pinch to zoom
 // (trackpad, Safari gestures, two fingers), drag or scroll to pan; a tap selects, a double tap or the round toggle opens
-// and closes. A zoom only resizes the drawing: the layout and the nodes are kept until the map or its folding changes.
+// and closes, and the node opened or closed stays where it is on screen. A zoom only resizes the drawing: the layout and
+// the nodes are kept until the map or its folding changes.
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { t } from "../../i18n";
 import { api, enc, errorText, isAbort } from "../../lib/api";
@@ -46,17 +47,33 @@ function clip(s: string, px: number, weight: number, max: number): string {
   while (out && tw(out + "…", px, weight) > max) out = out.slice(0, -1);
   return out + "…";
 }
+// What a line may break between (SVG text has no CSS line breaking): a run of spaces, one CJK character (Chinese and
+// Japanese break between any two, as they always did here), or a word of anything else.
+const CJK = "\\p{Script=Han}\\p{Script=Hiragana}\\p{Script=Katakana}\\p{Script=Hangul}\\u3000-\\u303f\\uff00-\\uffef";
+const TOKENS = new RegExp(`\\s+|[${CJK}]|[^\\s${CJK}]+`, "gu");
+/** `s` in at most `lines` lines of `max` px, the last clipped with "…" when it does not fit. Words stay whole; a word
+ *  longer than a line breaks inside it; spaces never start a line. */
 function wrap(s: string, px: number, max: number, lines: number): string[] {
   const out: string[] = [];
   let l = "";
-  for (const ch of s) {
-    if (tw(l + ch, px) > max && l) {
-      out.push(l);
-      l = ch;
-      if (out.length === lines) break;
-    } else l += ch;
+  const full = () => out.length === lines;
+  const put = (piece: string) => {
+    if (l && tw(l + piece, px) > max) {
+      out.push(l.trimEnd());
+      l = piece;
+    } else l += piece;
+  };
+  for (const tok of s.match(TOKENS) ?? []) {
+    if (full()) break;
+    if (/^\s/.test(tok)) {
+      if (l) l += tok;
+    } else if (tw(tok, px) <= max) put(tok);
+    else for (const ch of tok) {
+      put(ch);
+      if (full()) break;
+    }
   }
-  if (out.length < lines) out.push(l);
+  if (!full()) out.push(l.trimEnd());
   else out[lines - 1] = clip(out[lines - 1] + "…", px, 400, max);
   return out;
 }
@@ -152,6 +169,14 @@ const DRAG = 4;
 // Once the new size is drawn, map point (mx, my) (in the map's own units) is put at (x, y) in the view. px / py: where the
 // map starts inside the scrolled content (the room around it does not scale).
 type Anchor = { x: number; y: number; mx: number; my: number; px: number; py: number };
+/** How far the drawing is moved inside the map's box (its viewBox starts there), in the map's units. */
+type Shift = { x: number; y: number };
+
+/** The layout as drawn: every node moved by `s`. */
+function moved(L: Layout, s: Shift): Layout {
+  if (!s.x && !s.y) return L;
+  return { ...L, cx: L.cx + s.x, cy: L.cy + s.y, placed: L.placed.map((p) => ({ ...p, x: p.x + s.x, y: p.y + s.y })) };
+}
 
 function place(el: HTMLElement, a: Anchor, zoom: number) {
   el.scrollLeft = a.px + a.mx * zoom - a.x;
@@ -303,6 +328,26 @@ export function KnowledgeMap({ onToggleSidebar }: { onToggleSidebar: () => void 
   const root = load && "root" in load && !load.empty ? load.root : null;
   // eslint-disable-next-line react-hooks/exhaustive-deps -- `folds` stands for the folding the layout reads off the nodes
   const L = useMemo(() => (root ? layout(root, measure) : null), [root, folds]);
+  // Opening or closing a branch keeps that node where it is on screen. The new layout is drawn moved by `shift`, so the node
+  // keeps its place in the drawing while the rest slides around it, and the view scrolls by as much as the node moved in the
+  // map's box, in the same frame: nothing jumps and slides back. Under reduced motion the slide is gone (styles.css) and
+  // the node still stays put. `kept`: the node's place in the drawing when it was toggled.
+  const shown = useRef<{ L: Layout | null; shift: Shift }>({ L: null, shift: { x: 0, y: 0 } });
+  const kept = useRef<{ id: string; x: number; y: number } | null>(null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- read once per new layout: `kept` is set just before it
+  const shift = useMemo((): Shift => {
+    const k = kept.current, p = k && L?.placed.find((x) => x.node.id === k.id);
+    return k && p ? { x: k.x - p.x, y: k.y - p.y } : shown.current.shift;
+  }, [L]);
+  useLayoutEffect(() => {
+    const el = host.current, before = shown.current.shift;
+    shown.current = { L, shift };
+    kept.current = null;
+    const dx = (shift.x - before.x) * zoom, dy = (shift.y - before.y) * zoom;
+    if (!el || (!dx && !dy)) return;
+    el.scrollLeft -= dx;
+    el.scrollTop -= dy;
+  }, [L, shift, zoom]);
   /** The zoom that shows the whole map (with a little room). */
   const fits = useCallback(() => {
     const el = host.current;
@@ -327,6 +372,8 @@ export function KnowledgeMap({ onToggleSidebar }: { onToggleSidebar: () => void 
   };
   const select = useCallback((n: MapNode) => setSel(n.id), []);
   const toggle = useCallback((n: MapNode) => {
+    const { L, shift } = shown.current, p = L?.placed.find((x) => x.node === n);
+    kept.current = p ? { id: n.id, x: p.x + shift.x, y: p.y + shift.y } : null;
     n.collapsed = !n.collapsed;
     bump((x) => x + 1);
   }, []);
@@ -346,6 +393,21 @@ export function KnowledgeMap({ onToggleSidebar }: { onToggleSidebar: () => void 
     el.scrollTo({ left: o.px + (p.x + p.box.w / 2) * zoom - el.clientWidth / 2, top: o.py + p.y * zoom - el.clientHeight / 2, behavior: scrollBehavior() });
   }, [L, zoom]);
   const fitAll = () => L && zoomAt(Math.min(1, fits()), undefined, undefined, { mx: L.width / 2, my: L.height / 2 });
+  // Zoom keys, as in the other zoomable views (the image viewer, the extension graph): with a node focused and no ⌘, Ctrl or
+  // Alt held, + or = zooms in one step, - or _ out, 0 fits the whole map. A step zooms around the focused node (the
+  // nearest point of it in view), so it stays put. ⌘/Ctrl + =, - and 0 are left to the browser's and the desktop app's page
+  // zoom (lib/shortcuts.ts keeps them reserved).
+  const zoomKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    const el = host.current, focused = e.target instanceof Element ? e.target.closest("svg[data-map] [tabindex]") : null;
+    if (!el || !focused || e.metaKey || e.ctrlKey || e.altKey) return;
+    const step = e.key === "+" || e.key === "=" ? STEP : e.key === "-" || e.key === "_" ? 1 / STEP : e.key === "0" ? 0 : null;
+    if (step === null) return;
+    e.preventDefault();
+    if (!step) return fitAll();
+    const r = focused.getBoundingClientRect(), v = el.getBoundingClientRect();
+    const x = Math.min(Math.max(r.left + r.width / 2, v.left), v.left + el.clientWidth), y = Math.min(Math.max(r.top + r.height / 2, v.top), v.top + el.clientHeight);
+    zoomAt(zoom * step, x, y);
+  };
   const selected = (sel && byId.get(sel)) || root;
 
   return (
@@ -374,9 +436,9 @@ export function KnowledgeMap({ onToggleSidebar }: { onToggleSidebar: () => void 
       ) : (
         <div className="flex min-h-0 flex-1">
           <div className="relative min-w-0 flex-1">
-            <div ref={host} className="absolute inset-0 cursor-grab select-none overflow-auto bg-canvas active:cursor-grabbing"
+            <div ref={host} onKeyDown={zoomKey} className="absolute inset-0 cursor-grab select-none overflow-auto bg-canvas active:cursor-grabbing"
               style={{ backgroundImage: "radial-gradient(var(--line-strong) 1px, transparent 1px)", backgroundSize: "22px 22px", touchAction: "pan-x pan-y", overflowAnchor: "none" }}>
-              {L && <MapCanvas key={view} L={L} title={load.root.title} sel={selected?.id ?? ""} zoom={zoom} onFit={setZoom} onSelect={select} onToggle={toggle} />}
+              {L && <MapCanvas key={view} L={L} shift={shift} title={load.root.title} sel={selected?.id ?? ""} zoom={zoom} onFit={setZoom} onSelect={select} onToggle={toggle} />}
             </div>
             <div className="absolute bottom-3 left-3 z-10 inline-flex items-center gap-0.5 rounded-control bg-surface p-1 text-[12px] shadow-overlay">
               <IconButton icon="minus" label={t("knowledge-knowledgemap.zoom_out")} size={26} iconSize={12} onClick={() => zoomAt(zoom / STEP)} />
@@ -425,7 +487,7 @@ function spoken(n: MapNode): string {
   return n.meta ? `${n.title} · ${n.meta}` : n.title;
 }
 
-function MapCanvas({ L, title, sel, zoom, onFit, onSelect, onToggle }: { L: Layout; title: string; sel: string; zoom: number; onFit: (z: number) => void; onSelect: (n: MapNode) => void; onToggle: (n: MapNode) => void }) {
+function MapCanvas({ L, shift, title, sel, zoom, onFit, onSelect, onToggle }: { L: Layout; shift: Shift; title: string; sel: string; zoom: number; onFit: (z: number) => void; onSelect: (n: MapNode) => void; onToggle: (n: MapNode) => void }) {
   // First paint: shrink to fit (not below 65%), then center on the root. `target` is the zoom asked for: centering waits
   // until it is drawn, or a second run of this effect (React's dev StrictMode) would center at the old zoom.
   const fitted = useRef<"no" | "zoomed" | "done">("no");
@@ -447,12 +509,13 @@ function MapCanvas({ L, title, sel, zoom, onFit, onSelect, onToggle }: { L: Layo
     host.scrollTo({ left: left + L.cx * zoom - host.clientWidth / 2, top: top + L.cy * zoom - host.clientHeight / 2 });
   });
   // The edges and nodes, kept while only the zoom changes: a zoom resizes the drawing, nothing in it.
-  const drawing = useMemo(() => draw(L, sel, onSelect, onToggle), [L, sel, onSelect, onToggle]);
+  const drawing = useMemo(() => draw(moved(L, shift), sel, onSelect, onToggle), [L, shift, sel, onSelect, onToggle]);
   return (
     // Half a screen of room on every side, so a pinch can keep any point under the fingers even when the map is smaller than the view.
+    // Overflow visible: while a closed branch's neighbours slide in, they are not cut at the map's new, smaller edge.
     <div className="w-max" style={{ padding: "50vh 50vw" }}>
       <svg ref={box} data-map="" role="group" aria-label={t("knowledge-knowledgemap.map_label", { name: title })}
-        width={L.width * zoom} height={L.height * zoom} viewBox={`0 0 ${L.width} ${L.height}`} className="block">
+        width={L.width * zoom} height={L.height * zoom} viewBox={`${shift.x} ${shift.y} ${L.width} ${L.height}`} overflow="visible" className="block">
         {drawing}
       </svg>
     </div>
