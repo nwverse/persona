@@ -258,22 +258,14 @@ export struct FoldInspectorPanel {
     const sys = Object.keys(reading.system).length ? reading.system : Wire.object(machine.data(), 'system');
     const cores = Wire.number(sys, 'cores');
     const loadVal = Wire.number(reading.latest, 'load', -1);
-    const cpuVal = Wire.number(reading.latest, 'cpu', -1);
-    const parts: string[] = [];
-    if (loadVal >= 0) {
-      const loadText = loadVal.toFixed(loadVal >= 10 ? 1 : 2);
-      if (cores > 0) {
-        const per = loadVal / cores;
-        const perText = per.toFixed(per >= 10 ? 1 : 2);
-        parts.push(tr('machine_load') + ' ' + loadText + ' · ' + tr('machine_load_per_core').replace('{per}', perText));
-      } else {
-        parts.push(tr('machine_load') + ' ' + loadText);
-      }
+    if (loadVal < 0) return '';
+    const loadText = loadVal.toFixed(loadVal >= 10 ? 1 : 2);
+    if (cores > 0) {
+      const per = loadVal / cores;
+      const perText = per.toFixed(per >= 10 ? 1 : 2);
+      return tr('machine_load') + ' ' + loadText + ' · ' + tr('machine_load_per_core').replace('{per}', perText);
     }
-    if (cpuVal >= 0) {
-      parts.push('CPU ' + machinePercent(cpuVal));
-    }
-    return parts.join(' · ');
+    return tr('machine_load') + ' ' + loadText;
   }
 
   private machineHardwareCaption(machine: ResourceRow): string {
@@ -283,7 +275,8 @@ export struct FoldInspectorPanel {
     const sys = reading && Object.keys(reading.system).length ? reading.system : rawSystem;
     const osLabel = Wire.text(sys, 'name') || Wire.text(machine.data(), 'os') || osFamily(sys, Wire.text(machine.data(), 'os'));
     const cores = Wire.number(sys, 'cores');
-    return [osLabel, cores > 0 ? String(cores) + 'c' : ''].filter((v: string) => !!v).join(' · ');
+    const cpuVal = reading ? Wire.number(reading.latest, 'cpu', -1) : -1;
+    return [osLabel, cores > 0 ? String(cores) + 'c' : '', cpuVal >= 0 ? 'CPU ' + machinePercent(cpuVal) : ''].filter((v: string) => !!v).join(' · ');
   }
 
   @Builder statusMark(state: string) {
