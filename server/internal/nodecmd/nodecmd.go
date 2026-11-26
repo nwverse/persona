@@ -18,12 +18,12 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/extension/sandbox"
-	"github.com/nwverse/persona/server/internal/iphone"
 	"github.com/nwverse/persona/server/internal/machineops"
 	"github.com/nwverse/persona/server/internal/mcpserver"
 	"github.com/nwverse/persona/server/internal/node"
 	"github.com/nwverse/persona/server/internal/nodeclient"
 	"github.com/nwverse/persona/server/internal/nodecmd/commandport"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/nodeupdate"
 	"github.com/nwverse/persona/server/internal/osproc"
 	"github.com/nwverse/persona/server/internal/procs"
@@ -35,6 +35,9 @@ import (
 type Build struct {
 	Version string
 	Program string // nodeproto.ProgramPersonad or ProgramPersonaNode: what node.info says the node runs as
+	// Edition is the edition the program was built as (update.ThisEdition), which node.info says so that an update
+	// brings the same one. The zero value is the full build.
+	Edition nodeproto.Edition
 }
 
 // Usage is the device commands' part of the usage text (the node part is NodeUsage), with the lines of the commands
@@ -62,8 +65,7 @@ const deviceUsage = `  personad resource status [resource]  shared runner status
                            words; docs/operations/link.md "Claude Code plugin")
   personad codex-start <file>
                            run the Codex launcher in file (written by the node, removed once read) with the first
-                           message as its last argument, no shell in between (docs/integrations/codex.md "Starting from the phone")
-` + iphone.Usage
+                           message as its last argument, no shell in between (docs/integrations/codex.md "Starting from the phone")`
 
 // SysmonUsage is `sysmon`'s line in the usage text.
 const SysmonUsage = `  personad sysmon [n]       print this machine's system info and 1 + n metric samples (n default 3, at most 8640,
@@ -106,7 +108,7 @@ func Run(ctx context.Context, stop func(), args []string, b Build) (handled bool
 	case "codex-start": // a Codex launcher with the phone's first message, read from a file (node/codex_start.go)
 		return true, node.CodexStart(rest)
 	case "tab-start": // a command a runtime gave to resume its session in a new tab (`pi --session …`, node/pi.go)
-		return true, node.CodexStart(rest)
+		return true, node.TabStart(rest)
 	case "mcp":
 		return true, mcpserver.Serve(ctx, b.Version, os.Stdin, os.Stdout)
 	case "tool": // a connector's tools and command line from the assistant's shell (internal/toolcli)
@@ -125,8 +127,6 @@ func Run(ctx context.Context, stop func(), args []string, b Build) (handled bool
 		os.Exit(machineops.Main(ctx, b.Version, rest, os.Stdin, os.Stdout, os.Stderr))
 	case "claude-plugin": // the Persona plugin for Claude Code here, as JSON (node/claudeplugin.go; persona-link plugin)
 		os.Exit(node.ClaudePluginCommand(ctx, rest, os.Stdout, os.Stderr))
-	case "iphone": // this computer's paired iPhones for phone control (internal/iphone)
-		os.Exit(iphone.Command(ctx, rest, os.Stdout, os.Stderr))
 	case "sysmon":
 		n, err := sysmonCount(rest)
 		if err != nil {
@@ -209,6 +209,7 @@ func runNode(ctx context.Context, args []string, b Build) error {
 		return err
 	}
 	n.Program = b.Program
+	n.Edition = b.Edition
 	if err = n.ServeStdio(ctx); errors.Is(err, io.EOF) {
 		err = nil
 	}

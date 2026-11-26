@@ -267,7 +267,7 @@ struct RootView: View {
         .htmlCardSample()
         .voiceOrbSample()
         .closeoutSample()
-        .healthTrendsSample()
+        .modifier(ModuleDebugSamples())
         #endif
         .alert("Claude Wants to Act on Your iPhone", isPresented: Binding(
             get: { model.pendingConfirmation != nil },

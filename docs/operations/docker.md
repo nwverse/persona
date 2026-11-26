@@ -155,6 +155,9 @@ It sets `no-new-privileges`, permits bubblewrap's `clone`, `unshare`, `setns`, `
 standard seccomp allowlist, and otherwise retains that allowlist. These calls still
 need kernel permission: the non-root hub can mount only after creating its own user
 namespace, where it receives namespace-local capabilities, never host `CAP_SYS_ADMIN`.
+The sandbox retains its fresh PID namespace and binds the outer procfs read-only into it,
+so only that namespace's processes are visible. It does not mount another procfs: Docker's
+protected `/proc` mounts reject a fresh procfs even with an unprivileged user namespace.
 `clone3` retains Docker's fallback behavior. This is a wider syscall surface than the
 standard Docker profile, so use the supplied profile only for the hub.
 
@@ -182,7 +185,7 @@ the documented profile/override before required extensions can run.
 `server-other` CI runs the real extension filesystem/network isolation test as the
 non-root image user in a disposable container built from the same runtime stage,
 with all outer capabilities dropped and the supplied security options. It also requires the manager tests for refusal, `active=true` and the official
-exemption to pass inside that container. A skipped isolation test fails that check. This does not require a running hub or real state.
+exemption to pass inside that container. A skipped isolation test fails that check. On GitHub-hosted test VMs that advertise AppArmor, the workflow loads the checked-in host profile before starting the test container. This does not require a running hub or real state.
 
 ## Environment variables (override hub.json, not written back to the file)
 

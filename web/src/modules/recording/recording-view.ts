@@ -135,7 +135,10 @@ export function recordingView(kind: string, meta?: Record<string, unknown> | nul
   const tz = day && knownZone(meta?.tz) ? (meta.tz as string) : undefined;
   const clock = (sec: number) => recordingClock(started, sec, tz);
   const at: { sec: number; line: RecordingView["lines"][number] }[] = [];
-  for (const s of segments ?? []) {
+  const trimmed = str(meta?.trimmed_at);
+  const trimmedAt = trimmed && Number.isFinite(Date.parse(trimmed)) ? trimmed : undefined;
+  // Detail refreshes can briefly pair new retention metadata with an older segment list.
+  for (const s of trimmedAt ? [] : segments ?? []) {
     if (s?.echo === true) continue; // Persona's echo is not the meeting's: hidden, as the phone hides it
     const sec = Number(s?.start) || 0;
     if (typeof s?.text === "string" && s.text.trim()) at.push({ sec, line: { seconds: sec, clock: clock(sec), text: s.text.trim() } });
@@ -152,7 +155,6 @@ export function recordingView(kind: string, meta?: Record<string, unknown> | nul
   const role = str(meta?.attendance);
   const attending = meta?.attending_session as { machine_id?: unknown; session_id?: unknown } | null | undefined;
   const machineId = str(attending?.machine_id), sessionId = str(attending?.session_id);
-  const trimmed = str(meta?.trimmed_at);
   const part = meta?.part;
   return {
     startedAt: Number.isFinite(t0) ? started : undefined,
@@ -165,7 +167,7 @@ export function recordingView(kind: string, meta?: Record<string, unknown> | nul
     ...(role === "notes" ? { notesOnly: true } : {}),
     // Both ids or none: anything else names no session, and the main chat attends.
     ...(machineId && sessionId ? { attendingSession: { machineId, sessionId } } : {}),
-    ...(trimmed && Number.isFinite(Date.parse(trimmed)) ? { trimmedAt: trimmed } : {}),
+    ...(trimmedAt ? { trimmedAt } : {}),
     ...(day ? { allDay: { day: str(meta?.day) ?? "", part: typeof part === "number" && Number.isInteger(part) && part >= 1 && part <= 99 ? part : 1 } } : {}),
     ...(tz ? { tz } : {}),
   };
@@ -240,4 +242,3 @@ function formatSeconds(sec: number): string {
   const h = Math.floor(s / 3600);
   return h > 0 ? `${h}:${pad(Math.floor((s % 3600) / 60))}:${pad(s % 60)}` : `${Math.floor(s / 60)}:${pad(s % 60)}`;
 }
-

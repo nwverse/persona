@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/agentprompt"
 	"github.com/nwverse/persona/server/internal/ai"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -184,14 +185,15 @@ func (s *Service) outcomeAgents(ctx context.Context, t Todo) []outcomeAgent {
 		if m, ok := s.device(ctx, a.MachineID); ok {
 			name = m.Name
 		}
-		_, text := s.lastTurn(ctx, a.MachineID, a.SessionID)
+		resolved, sid, listed := s.resolveTaskSession(ctx, a.MachineID, a.SessionID)
+		_, text := s.lastTurn(ctx, a.MachineID, sid)
 		cwd := a.Cwd
-		if c, ok := s.session(ctx, a.MachineID, a.SessionID); ok {
+		if listed {
 			if text == "" {
-				text = strings.TrimSpace(c.LastText)
+				text = strings.TrimSpace(resolved.LastText)
 			}
 			if cwd == "" {
-				cwd = c.Cwd
+				cwd = resolved.Cwd
 			}
 		}
 		if text = strings.TrimSpace(text); text == "" || cutOff(text) {
@@ -629,19 +631,30 @@ func (s *Service) withProjectContext(ctx context.Context, machine, dir, lead, pr
 }
 
 func (s *Service) withProjectContextForTodo(ctx context.Context, machine, dir, lead string, t Todo, prompt string) string {
+	return s.withProjectContextForTodoAgent(ctx, machine, dir, lead, t, "", prompt)
+}
+
+// withProjectContextForAgent is withProjectContext for a known agent kind. An agy workflow
+// command keeps its body at byte 0 and receives the project context after it.
+func (s *Service) withProjectContextForAgent(ctx context.Context, machine, dir, lead, agent, prompt string) string {
+	return s.withProjectContextForTodoAgent(ctx, machine, dir, lead, Todo{}, agent, prompt)
+}
+
+func (s *Service) withProjectContextForTodoAgent(ctx context.Context, machine, dir, lead string, t Todo, agent, prompt string) string {
 	if strings.TrimSpace(prompt) == "" {
 		return prompt
 	}
+	return agentprompt.WithContext(agent, prompt, s.projectBackgroundForTodo(ctx, machine, dir, lead, t, prompt))
+}
+
+func (s *Service) projectBackgroundForTodo(ctx context.Context, machine, dir, lead string, t Todo, prompt string) string {
 	background := s.projectHandoffContextForTodo(ctx, machine, dir, lead, t)
 	// The memory extension's entries the work bears on (memory_extension_source.go); a planned task's carry them in
 	// handOffMemory instead.
 	if memory := s.agentStartMemory(ctx, machine, strings.TrimSpace(t.Title+"\n"+prompt)); memory != "" {
 		background = strings.TrimSpace(background + "\n\n" + memory)
 	}
-	if background != "" {
-		return background + "\n\n" + prompt
-	}
-	return prompt
+	return background
 }
 
 func (s *Service) projectHandoffContext(ctx context.Context, machine, dir, lead string) string {

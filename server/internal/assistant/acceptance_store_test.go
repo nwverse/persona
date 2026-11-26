@@ -17,6 +17,7 @@ import (
 // be saved, every way to accept (the web button, the card's button, a reply) says the service is unavailable, never
 // "already handled" or "verified", and the task does not move on. Once the store answers, the same press accepts.
 func TestAcceptStoreFailureIsNotAccepted(t *testing.T) {
+	needsLarkLayer(t)
 	ctx := context.Background()
 	e := newBriefEnv(t)
 	e.verify("todo_v1", "Fix the login crash", 2*time.Hour)
@@ -46,7 +47,7 @@ func TestAcceptStoreFailureIsNotAccepted(t *testing.T) {
 			a.Action.Value["asked_at"] = asked
 		}
 		a.Context.MessageID = "om_todo_v1"
-		return e.s.botCardAction(ctx, &a, "")
+		return e.s.larkModule().Action(ctx, &a, "")
 	}
 	asked := askOf(e.s, "todo_v1").AskedAt.Format(timeKeyLayout)
 	route := func(s *Service) int {

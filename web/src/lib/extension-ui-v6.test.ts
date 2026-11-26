@@ -10,9 +10,9 @@ import {
 const PATH = "/api/v1/extensions/home/-/image/eyJhIjoxfQ.c2ln";
 
 describe("UI 6：版本", () => {
-  it("asks for version 11, which has all of 6", () => {
-    expect(UI_VERSION).toBe(11);
-    expect(uiContext().ui_version).toBe(11);
+  it("asks for version 12, which has all of 6", () => {
+    expect(UI_VERSION).toBe(12);
+    expect(uiContext().ui_version).toBe(12);
   });
 });
 
