@@ -172,6 +172,40 @@ func (s *Service) taskWaits(ctx context.Context, t Todo) bool {
 	return waits || !known
 }
 
+const (
+	ignoredClosedStart = "task %s: accepted; its agent works again, but nothing was sent for the task: left closed"
+	droppedClosedEnd   = "task %s: closed; its agent %s/%s ended a turn: dropped"
+)
+
+const maxClosedTurnLogs = 256
+
+type closedTurnLog struct {
+	todo, machine, session string
+	doneAt                 time.Time
+	format                 string
+}
+
+// Remember the most recent diagnostics for closed tasks in this manager. Eviction or a
+// restart can log an old closure again; the log history never participates in a turn decision.
+func (ts *tasksState) firstClosedTurnLog(t *Todo, machine, session string, format string) bool {
+	entry := closedTurnLog{todo: t.ID, machine: machine, session: session, doneAt: t.DoneAt.UTC(), format: format}
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	logs := ts.closedTurnLogs
+	for i := len(logs) - 1; i >= 0; i-- {
+		if logs[i] == entry {
+			copy(logs[i:], logs[i+1:])
+			logs[len(logs)-1] = entry
+			return false
+		}
+	}
+	if len(logs) == maxClosedTurnLogs {
+		logs = slices.Delete(logs, 0, 1)
+	}
+	ts.closedTurnLogs = append(logs, entry)
+	return true
+}
+
 // taskWorking: one of the task's agents started a turn. The agent of a task the hub closed meanwhile (judged done,
 // accepted) works on it again — sent more by agent_send, which resumes a closed one, or by the user: the task is open
 // again first, as a change asked for on its "Please verify" card reopens it (#3457), so this turn is followed
@@ -201,7 +235,9 @@ func (s *Service) taskWorking(ctx context.Context, mid, sid string, row startRow
 			s.saveSendsOut(ctx) // the hold too: after a restart, the turn is the task's (recoverSendsOut)
 			return
 		case closedTurnStays:
-			s.logf("task %s: accepted; its agent works again, but nothing was sent for the task: left closed", closed.ID)
+			if s.tasks.firstClosedTurnLog(&closed, mid, sid, ignoredClosedStart) {
+				s.logf(ignoredClosedStart, closed.ID)
+			}
 			return
 		}
 		if err := s.reopenTodo(ctx, closed.ID); err != nil {
@@ -459,7 +495,9 @@ func (s *Service) settleTurnReporting(ctx context.Context, machine, sid, unheard
 		if closed, found := s.closedTaskOf(ctx, machine, sid); found {
 			// Its closed task's agent still: a turn nobody sent for the task, or one running when it was accepted
 			// (#7539). Nothing is made of its end; this line says it was seen.
-			s.logf("task %s: closed; its agent %s/%s ended a turn: dropped", closed.ID, machine, short(sid))
+			if s.tasks.firstClosedTurnLog(&closed, machine, sid, droppedClosedEnd) {
+				s.logf(droppedClosedEnd, closed.ID, machine, short(sid))
+			}
 		}
 		return settleRefused
 	}
@@ -546,7 +584,7 @@ func (s *Service) settleTurnReporting(ctx context.Context, machine, sid, unheard
 		if items, read = s.lastTurnItems(ctx, last.MachineID, last.SessionID); !read {
 			return settleLater
 		}
-		if _, closed := turnEndOf(items); !closed {
+		if _, closed := turnEndForSession(last, items); !closed {
 			return settleLater // it went on since the sweep read it
 		}
 		_, stopped := s.stopFor(last.MachineID, last.SessionID, s.taskStretch(t))
@@ -616,7 +654,7 @@ func (s *Service) settleTurnReporting(ctx context.Context, machine, sid, unheard
 			return settleLater
 		}
 	}
-	end, named := turnEndOf(items)
+	end, named := turnEndForSession(last, items)
 	quiet := "" // the turn had no output: proto.TurnErrorNoOutput, or proto.TurnErrorStopped (silent_turns.go)
 	// The Stop that interrupted this turn, if one did: read once, it classifies the turn and is the one its receipt
 	// spends, never a newer one (stopFor, forgetStop).
