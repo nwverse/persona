@@ -5,6 +5,7 @@
   "cancelling": "Cancelling…",
   "stop_after_backup": "Will stop after backup finishes…",
   "cancelled": "Cancelled",
+  "progress_step_preflight": "Check backup settings",
   "pipeline_title": "Update pipeline",
   "pipeline_stages": "Update stages",
   "pipeline_steps": "Phase steps",

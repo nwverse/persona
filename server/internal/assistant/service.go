@@ -1005,6 +1005,7 @@ func (s *Service) pushResult(ctx context.Context, n Notification) (NotifyResult,
 	}
 	// A track's push_cap holds the level (track_attention.go).
 	s.capTrackPush(ctx, &n)
+	s.applyTodosV2PushAttention(ctx, &n)
 	if n.Asked { // the conversation pushed what matters itself: its own finished push is left out (fleet_push.go)
 		s.noteAsked(n.SessionID)
 	}

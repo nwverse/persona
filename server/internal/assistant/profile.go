@@ -129,6 +129,12 @@ type Settings struct {
 	// TodosV2FoldChildren controls whether non-urgent child tasks fold under their top-level parent goal in board
 	// projection under todos_v2=true (#16098). nil is true (the default).
 	TodosV2FoldChildren *bool `json:"todos_v2_fold_children,omitempty"`
+	// TodosV2QuietHours is an optional 24-hour local-time quiet window ("HH:MM-HH:MM") under todos_v2=true during
+	// which routine non-card, non-P0, non-notify_user pushes downgrade to LevelP2 (#16433). Empty disables it.
+	TodosV2QuietHours string `json:"todos_v2_quiet_hours,omitempty"`
+	// TodosV2DigestWindowMinutes is an optional burst-coalescing window in minutes under todos_v2=true (#16433):
+	// 0 (default, disabled), 30, 60, or 120.
+	TodosV2DigestWindowMinutes *int `json:"todos_v2_digest_window_minutes,omitempty"`
 	// IntegrationsV2 enables the unified experimental Integrations & Extensions experience (#14802, #14805). nil is off (the default).
 	IntegrationsV2 *bool `json:"integrations_v2,omitempty"`
 	// LabsSeen is the set of experiment IDs acknowledged on any client of this assistant.
@@ -387,12 +393,14 @@ const (
 
 	todosV2DefaultPendingReviewSLAHours = 24
 	todosV2DefaultCanWaitSLAHours       = 48
+	todosV2DefaultDigestWindowMinutes   = 0
 )
 
 var (
 	todosV2AutoSeenModes           = []string{todosV2AutoSeenOff, todosV2AutoSeenSubtasks, todosV2AutoSeenAllAutonomous}
 	todosV2PendingReviewSLAOptions = []int{0, 12, 24, 48}
 	todosV2CanWaitSLAOptions       = []int{0, 24, 48, 72}
+	todosV2DigestWindowOptions     = []int{0, 30, 60, 120}
 )
 
 func (v Settings) workGuideOn() bool      { return v.WorkGuide != nil && *v.WorkGuide }
@@ -422,6 +430,24 @@ func (v Settings) todosV2CanWaitSLAHours() int {
 
 func (v Settings) todosV2FoldChildrenOn() bool {
 	return v.TodosV2FoldChildren == nil || *v.TodosV2FoldChildren
+}
+
+func (v Settings) todosV2QuietHours() string {
+	raw := strings.TrimSpace(v.TodosV2QuietHours)
+	if raw == "" {
+		return ""
+	}
+	if _, ok := parseTodosV2QuietHours(raw); !ok {
+		return ""
+	}
+	return raw
+}
+
+func (v Settings) todosV2DigestWindowMinutes() int {
+	if v.TodosV2DigestWindowMinutes != nil && slices.Contains(todosV2DigestWindowOptions, *v.TodosV2DigestWindowMinutes) {
+		return *v.TodosV2DigestWindowMinutes
+	}
+	return todosV2DefaultDigestWindowMinutes
 }
 
 // integrationsV2On reports whether assistant.integrations_v2 is enabled (off by default).
@@ -885,6 +911,8 @@ type assistantView struct {
 	TodosV2PendingReviewSLAHours int      `json:"todos_v2_pending_review_sla_hours"`
 	TodosV2CanWaitSLAHours       int      `json:"todos_v2_can_wait_sla_hours"`
 	TodosV2FoldChildren          bool     `json:"todos_v2_fold_children"`
+	TodosV2QuietHours            string   `json:"todos_v2_quiet_hours"`
+	TodosV2DigestWindowMinutes   int      `json:"todos_v2_digest_window_minutes"`
 	IntegrationsV2               bool     `json:"integrations_v2"`
 	LabsSeen                     []string `json:"labs_seen"`
 	// MeetingAttendanceDefault is in effect (off until changed).
@@ -965,6 +993,8 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		TodosV2PendingReviewSLAHours: v.todosV2PendingReviewSLAHours(),
 		TodosV2CanWaitSLAHours:       v.todosV2CanWaitSLAHours(),
 		TodosV2FoldChildren:          v.todosV2FoldChildrenOn(),
+		TodosV2QuietHours:            v.todosV2QuietHours(),
+		TodosV2DigestWindowMinutes:   v.todosV2DigestWindowMinutes(),
 		IntegrationsV2:               v.integrationsV2On(),
 		LabsSeen:                     append([]string{}, v.LabsSeen...),
 		RecentTaskChats:              v.RecentTaskChats != nil && *v.RecentTaskChats,
