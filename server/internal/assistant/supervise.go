@@ -106,7 +106,7 @@ type Supervision struct {
 	// OwnerWork is server-only evidence for the close guard (#15406): the latest owner-authored instruction and the
 	// latest Persona assignment per linked Agent session. Keeping it out of the wire shape prevents another Agent or
 	// an ordinary to-do reader from seeing an excerpt meant for the owner and the responsible supervisor.
-	OwnerWork []OwnerSessionWork `json:"-"`
+	OwnerWork []ownerSessionWork `json:"-"`
 }
 
 // assigned records a current ownership decision, rather than a pre-policy legacy ledger.
@@ -258,7 +258,7 @@ func (v *Supervision) clone() *Supervision {
 		p := *v.Progress
 		out.Progress = &p
 	}
-	out.OwnerWork = make([]OwnerSessionWork, len(v.OwnerWork))
+	out.OwnerWork = make([]ownerSessionWork, len(v.OwnerWork))
 	for i, w := range v.OwnerWork {
 		out.OwnerWork[i] = w
 		if w.Instruction != nil {
