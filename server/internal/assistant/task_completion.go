@@ -161,23 +161,26 @@ func taskAgentsSettled(t Todo, agents []proto.Session) bool {
 }
 
 // taskAgentSettledIn is taskAgentSettled for c, one of task t's current agents (agents, without the superseded ones):
-// the task's lone agent that reported it done in this round also settles with background commands that only wait,
-// were moved from the foreground or stalled (#16418). With more than one agent the report names none of them.
+// an agent that reported t done in this round also settles with background commands started before that report that
+// only wait, were moved from the foreground or stalled (#16418). A report is tied to the machine and session that sent
+// it, so another agent linked to t cannot inherit it.
 func taskAgentSettledIn(t Todo, agents []proto.Session, c proto.Session) bool {
-	return taskAgentSettledReported(c, len(agents) == 1 && taskReportedDone(t))
+	reportAt, ok := taskReportedDone(t, c)
+	return taskAgentSettledReported(c, ok && len(agents) > 0, reportAt)
 }
 
 // taskAgentSettled: c's turn is over and nothing of it goes on: no question or card waits, no background work runs
 // (stalled background commands alone do not count, #16418), and no "Continue" is due by itself.
-func taskAgentSettled(c proto.Session) bool { return taskAgentSettledReported(c, false) }
+func taskAgentSettled(c proto.Session) bool { return taskAgentSettledReported(c, false, time.Time{}) }
 
-// taskAgentSettledReported is taskAgentSettled; reportedDone: c reported its task done in this round, so background
-// commands left behind that only wait, were moved from the foreground or stalled do not hold it (backgroundLeftOver).
-func taskAgentSettledReported(c proto.Session, reportedDone bool) bool {
+// taskAgentSettledReported is taskAgentSettled; reportedDone/reportAt: c reported its task done in this round at
+// reportAt, so background commands left behind from before that report that only wait, were moved from the foreground
+// or stalled do not hold it (backgroundLeftOver).
+func taskAgentSettledReported(c proto.Session, reportedDone bool, reportAt time.Time) bool {
 	if c.Status != proto.StatusDone && c.Status != proto.StatusIdle || c.State == proto.StateNeedsYou || c.PendingInteractions > 0 {
 		return false
 	}
-	if (c.State == proto.StateWorking || backgroundRunning(c)) && !backgroundLeftOver(c, reportedDone) {
+	if (c.State == proto.StateWorking || backgroundRunning(c)) && !backgroundLeftOver(c, reportedDone, reportAt) {
 		return false
 	}
 	w := c.Work
@@ -185,10 +188,10 @@ func taskAgentSettledReported(c proto.Session, reportedDone bool) bool {
 }
 
 // backgroundLeftOver (#16418): c's turn is over and all it still has running are background commands nothing waits
-// for: the node found them stalled (backgroundStalledShellOnly), or, after a done report (reportedDone), each only
-// waits, was moved from the foreground by the timeout, or stalled. Never while its own turn is working (state
-// working without background_working), nor with a subagent, a workflow or a Monitor.
-func backgroundLeftOver(c proto.Session, reportedDone bool) bool {
+// for: the node found them stalled (backgroundStalledShellOnly), or, after a done report (reportedDone at reportAt),
+// each started no later than reportAt and only waits, was moved from the foreground by the timeout, or stalled. Never
+// while its own turn is working (state working without background_working), nor with a subagent, a workflow or a Monitor.
+func backgroundLeftOver(c proto.Session, reportedDone bool, reportAt time.Time) bool {
 	if c.State == proto.StateWorking && !c.BackgroundWorking {
 		return false
 	}
@@ -199,18 +202,30 @@ func backgroundLeftOver(c proto.Session, reportedDone bool) bool {
 		return false
 	}
 	return !slices.ContainsFunc(c.Background, func(b proto.BackgroundTask) bool {
-		return b.Kind != "shell" || !b.MovedFromForeground && !c.BackgroundWaiting && c.BackgroundStalledSince == 0
+		if b.Kind != "shell" {
+			return true
+		}
+		if !reportAt.IsZero() && !b.StartedAt.IsZero() && b.StartedAt.After(reportAt) {
+			return true
+		}
+		return !b.MovedFromForeground && !c.BackgroundWaiting && c.BackgroundStalledSince == 0
 	})
 }
 
-// taskReportedDone: t's agent reported it done (report_to_supervisor kind done) in the round under way, after the
+// taskReportedDone: agent c reported task t done (report_to_supervisor kind done) in the round under way, after the
 // supervision last changed (a review, a rework, the task opened again), as freshTaskDoneReport counts a round.
-func taskReportedDone(t Todo) bool {
+func taskReportedDone(t Todo, c proto.Session) (time.Time, bool) {
 	v := t.Supervision
 	if v == nil || v.Progress == nil || v.Progress.Kind != upReportDone || v.Progress.At.IsZero() || v.Progress.At.Before(v.UpdatedAt) {
-		return false
+		return time.Time{}, false
 	}
-	return t.ReopenedAt == nil || !v.Progress.At.Before(*t.ReopenedAt)
+	if v.Progress.machine == "" || v.Progress.session == "" || v.Progress.machine != c.MachineID || v.Progress.session != c.SessionID {
+		return time.Time{}, false
+	}
+	if t.ReopenedAt != nil && v.Progress.At.Before(*t.ReopenedAt) {
+		return time.Time{}, false
+	}
+	return v.Progress.At, true
 }
 
 // supersededAgents are the links of t another agent took over from (#6483): an unreleased link whose session is

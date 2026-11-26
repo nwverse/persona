@@ -252,6 +252,7 @@ func (s *Service) taskWorking(ctx context.Context, mid, sid string, row startRow
 		}
 		s.logf("task %s: reopened: its agent works again", t.ID)
 	}
+	s.clearDoneProgress(ctx, t.ID)
 	s.taskWorks(ctx, t)
 }
 

@@ -92,45 +92,118 @@ func TestTaskAgentSettledWithLeftOverShells(t *testing.T) {
 			if got := taskAgentSettled(tc.c); got != tc.plain {
 				t.Errorf("without a done report: settled %v, want %v", got, tc.plain)
 			}
-			if got := taskAgentSettledReported(tc.c, true); got != tc.onEarly {
+			if got := taskAgentSettledReported(tc.c, true, time.Time{}); got != tc.onEarly {
 				t.Errorf("after a done report: settled %v, want %v", got, tc.onEarly)
 			}
 		})
 	}
 }
 
-// A done report counts for the round under way only, and for a task's lone Agent.
+// A done report counts only for the Agent and turn that produced it, and only for shells started before the report.
 func TestTaskReportedDoneIsTheRoundsOwn(t *testing.T) {
 	at := time.Now().UTC()
-	report := func(kind string, reportAt, updated time.Time) Todo {
-		return Todo{Supervision: &Supervision{UpdatedAt: updated, Progress: &TaskProgress{Kind: kind, Text: "done", At: reportAt}}}
+	agentA := proto.Session{MachineID: "box", SessionID: "s1", Status: proto.StatusDone, State: proto.StateWorking, BackgroundWorking: true,
+		Background: []proto.BackgroundTask{{ID: "b1", Kind: "shell", MovedFromForeground: true, StartedAt: at.Add(-time.Minute)}}}
+	agentB := proto.Session{MachineID: "box", SessionID: "s2", Status: proto.StatusDone, State: proto.StateWorking, BackgroundWorking: true,
+		Background: []proto.BackgroundTask{{ID: "b2", Kind: "shell", MovedFromForeground: true, StartedAt: at.Add(-time.Minute)}}}
+	report := func(kind, machine, session string, reportAt, updated time.Time) Todo {
+		return Todo{Supervision: &Supervision{UpdatedAt: updated,
+			Progress: &TaskProgress{Kind: kind, Text: "done", At: reportAt, machine: machine, session: session}}}
 	}
-	if !taskReportedDone(report(upReportDone, at, at.Add(-time.Minute))) {
-		t.Fatal("a done report after the supervision last changed is this round's")
+	if _, ok := taskReportedDone(report(upReportDone, "box", "s1", at, at.Add(-time.Minute)), agentA); !ok {
+		t.Fatal("a done report from the same Agent after the supervision last changed is this round's")
 	}
-	if taskReportedDone(report(upReportDone, at, at.Add(time.Minute))) {
+	if _, ok := taskReportedDone(report(upReportDone, "box", "s1", at, at.Add(time.Minute)), agentA); ok {
 		t.Fatal("a review or rework after the report starts another round")
 	}
-	if taskReportedDone(report(upReportProgress, at, at.Add(-time.Minute))) {
+	if _, ok := taskReportedDone(report(upReportProgress, "box", "s1", at, at.Add(-time.Minute)), agentA); ok {
 		t.Fatal("a progress report is no done report")
 	}
-	reopened := report(upReportDone, at, at.Add(-time.Minute))
+	if _, ok := taskReportedDone(report(upReportDone, "box", "s1", at, at.Add(-time.Minute)), agentB); ok {
+		t.Fatal("another Agent must not inherit Agent A's done report")
+	}
+	if _, ok := taskReportedDone(report(upReportDone, "", "", at, at.Add(-time.Minute)), agentA); ok {
+		t.Fatal("an unattributed done report must not settle any Agent")
+	}
+	reopened := report(upReportDone, "box", "s1", at, at.Add(-time.Minute))
 	later := at.Add(time.Second)
 	reopened.ReopenedAt = &later
-	if taskReportedDone(reopened) || taskReportedDone(Todo{}) {
-		t.Fatal("the task opened again after the report, or no supervision")
+	if _, ok := taskReportedDone(reopened, agentA); ok {
+		t.Fatal("the task opened again after the report")
 	}
-	moved := proto.Session{Status: proto.StatusDone, State: proto.StateWorking, BackgroundWorking: true,
-		Background: []proto.BackgroundTask{{ID: "b1", Kind: "shell", MovedFromForeground: true}}}
-	done := report(upReportDone, at, at.Add(-time.Minute))
-	if !taskAgentSettledIn(done, []proto.Session{moved}, moved) {
-		t.Fatal("the lone Agent's done report settles its moved shell")
+	if _, ok := taskReportedDone(Todo{}, agentA); ok {
+		t.Fatal("a task without supervision has no done report")
 	}
-	other := moved
-	other.SessionID, other.Background = "s2", nil
-	if taskAgentSettledIn(done, []proto.Session{moved, other}, moved) {
-		t.Fatal("with two Agents the report names neither")
+	done := report(upReportDone, "box", "s1", at, at.Add(-time.Minute))
+	if !taskAgentSettledIn(done, []proto.Session{agentA}, agentA) {
+		t.Fatal("Agent A's done report settles its own pre-report moved shell")
 	}
+	if taskAgentSettledIn(done, []proto.Session{agentA, agentB}, agentB) {
+		t.Fatal("Agent A's done report must not settle Agent B's moved shell")
+	}
+	afterReport := agentA
+	afterReport.Background = []proto.BackgroundTask{{ID: "b3", Kind: "shell", MovedFromForeground: true, StartedAt: at.Add(time.Second)}}
+	if taskAgentSettledIn(done, []proto.Session{afterReport}, afterReport) {
+		t.Fatal("a shell started after the done report must not be settled by the earlier report")
+	}
+}
+
+// Regression (#16418 review): Agent A's done report must not settle a second Agent linked later without a supervision
+// update, nor a later turn of Agent A itself.
+func TestDoneReportDoesNotSettleAnotherAgentOrNewTurn(t *testing.T) {
+	t.Run("relinked second Agent", func(t *testing.T) {
+		s, f, todo := newSupervisedService(t)
+		ctx := context.Background()
+		listedDecorated(t, s, f, turnRow(proto.StatusWorking, 1, ""))
+		args, _ := json.Marshal(map[string]any{"kind": "done", "text": "Agent A finished"})
+		if res := s.agentTool(ctx, "box", "s1", "report_to_supervisor", args); res.IsError {
+			t.Fatalf("report: %+v", res)
+		}
+		agentA := turnRow(proto.StatusDone, 2, "done")
+		waitFor(t, "Agent A done report", func() bool {
+			_, ok := taskReportedDone(todoNow(s, todo.ID), agentA)
+			return ok
+		})
+		// Link Agent B to the same to-do without updating Supervision.UpdatedAt.
+		if err := s.linkTodoAgent(ctx, todo.ID, "box", "s2", "agent B", "", "claude"); err != nil {
+			t.Fatalf("link Agent B: %v", err)
+		}
+		cur := todoNow(s, todo.ID)
+		if cur.Supervision.Progress != nil {
+			t.Fatalf("linking another Agent should clear the prior done report, got %+v", cur.Supervision.Progress)
+		}
+		agentB := proto.Session{MachineID: "box", SessionID: "s2", Status: proto.StatusDone, State: proto.StateWorking, BackgroundWorking: true,
+			Background: []proto.BackgroundTask{{ID: "b2", Kind: "shell", MovedFromForeground: true}}}
+		if taskAgentSettledIn(cur, []proto.Session{agentA, agentB}, agentB) {
+			t.Fatal("Agent B must not settle using Agent A's cleared done report")
+		}
+	})
+
+	t.Run("new turn on same Agent", func(t *testing.T) {
+		s, f, todo := newSupervisedService(t)
+		ctx := context.Background()
+		listedDecorated(t, s, f, turnRow(proto.StatusWorking, 1, ""))
+		args, _ := json.Marshal(map[string]any{"kind": "done", "text": "Turn 1 finished"})
+		if res := s.agentTool(ctx, "box", "s1", "report_to_supervisor", args); res.IsError {
+			t.Fatalf("report: %+v", res)
+		}
+		agentA := turnRow(proto.StatusDone, 2, "done")
+		waitFor(t, "Turn 1 done report", func() bool {
+			_, ok := taskReportedDone(todoNow(s, todo.ID), agentA)
+			return ok
+		})
+		// Turn 2 starts on the same Agent without a supervision update.
+		s.turnStartedObserved(ctx, SessionRef{MachineID: "box", SessionID: "s1"}, true, startRow{Rev: 3})
+		if got := todoNow(s, todo.ID).Supervision.Progress; got != nil {
+			t.Fatalf("new turn should clear prior done report, got %+v", got)
+		}
+		turn2Ended := turnRow(proto.StatusDone, 4, "waiting on shell")
+		turn2Ended.State, turn2Ended.BackgroundWorking = proto.StateWorking, true
+		turn2Ended.Background = []proto.BackgroundTask{{ID: "b2", Kind: "shell", MovedFromForeground: true}}
+		if taskAgentSettledIn(todoNow(s, todo.ID), []proto.Session{turn2Ended}, turn2Ended) {
+			t.Fatal("Turn 2 must not settle using Turn 1's done report")
+		}
+	})
 }
 
 // decoratedRow is what the manager's session list says of row (the manager decorates the node's rows; the fake
@@ -215,7 +288,10 @@ func TestDoneReportSettlesWithMovedShellLeft(t *testing.T) {
 			if res := s.agentTool(ctx, "box", "s1", "report_to_supervisor", args); res.IsError {
 				t.Fatalf("report: %+v", res)
 			}
-			waitFor(t, "the done report", func() bool { return taskReportedDone(todoNow(s, todo.ID)) })
+			waitFor(t, "the done report", func() bool {
+				_, ok := taskReportedDone(todoNow(s, todo.ID), turnRow(proto.StatusDone, 2, ""))
+				return ok
+			})
 			reply := "修好了，PR https://github.com/o/r/pull/901 已合并"
 			f.setItems(turnPage("turn-1", reply, true)...)
 			ended := turnRow(proto.StatusDone, 2, reply)
