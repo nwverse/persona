@@ -434,9 +434,10 @@ type fakeHost struct {
 	member     atomic.Bool
 	runCtx     context.Context
 
-	mu     sync.Mutex
-	kicks  []string
-	pushes []map[string]any
+	mu           sync.Mutex
+	kicks        []string
+	pushes       []map[string]any
+	larkMessages []larksyncwire.Message
 }
 
 func (h *fakeHost) HasSettings() bool { return h.settings != nil }
@@ -481,6 +482,12 @@ func (h *fakeHost) Audit(_ context.Context, _ string, _ map[string]any) {}
 func (h *fakeHost) KBKick(connectorID string, scope connectorwire.Scope) {
 	h.mu.Lock()
 	h.kicks = append(h.kicks, connectorID+":"+string(scope))
+	h.mu.Unlock()
+}
+
+func (h *fakeHost) EmitLarkMessages(_ string, msgs []larksyncwire.Message) {
+	h.mu.Lock()
+	h.larkMessages = append(h.larkMessages, msgs...)
 	h.mu.Unlock()
 }
 

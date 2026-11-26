@@ -292,7 +292,9 @@ func TestLarkSyncSuiteA(t *testing.T) {
 		if code, body := doSyncReq(t, mux, http.MethodPost, "/api/v1/bots/feishu/sync/bindings/"+key+"/run", ""); code != 200 {
 			t.Fatalf("start run %s: %d %v", key, code, body)
 		}
-		deadline := time.Now().Add(15 * time.Second)
+		tick := time.NewTicker(10 * time.Millisecond)
+		defer tick.Stop()
+		deadline := time.After(15 * time.Second)
 		for {
 			_, view := doSyncReq(t, mux, http.MethodGet, "/api/v1/bots/feishu/sync", "")
 			var found map[string]any
@@ -312,10 +314,11 @@ func TestLarkSyncSuiteA(t *testing.T) {
 				}
 				break
 			}
-			if time.Now().After(deadline) {
+			select {
+			case <-tick.C:
+			case <-deadline:
 				t.Fatalf("run %s did not finish", key)
 			}
-			time.Sleep(10 * time.Millisecond)
 		}
 		advance(time.Hour)
 	}

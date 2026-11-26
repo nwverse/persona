@@ -96,6 +96,7 @@ type SyncHost interface {
 	UserLang() i18n.Lang
 	Audit(ctx context.Context, action string, detail map[string]any)
 	KBKick(connectorID string, scope connectorwire.Scope)
+	EmitLarkMessages(binding string, msgs []larksyncwire.Message)
 	PushLocalized(build func(i18n.Lang) map[string]any, collapseID string)
 	IsMember() bool
 }
