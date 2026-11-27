@@ -17,7 +17,6 @@ import kotlinx.serialization.json.putJsonObject
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
@@ -68,8 +67,8 @@ class CoreOnlyHubLiveTest {
             val paired = HubPairingClient(fixture.string("hub_id"), null, listOf(base.toString()), "core-edition-live").use { client ->
                 client.pair(fixture.string("pairing_token"), "Android core edition JVM probe") {}
             }
-            assertNotEquals("A current hub must issue a device credential, not fall back to the pairing token",
-                fixture.string("pairing_token"), paired.token)
+            assertFalse("A current hub must issue a device credential, not fall back to the pairing token",
+                paired.token == fixture.string("pairing_token"))
             assertNotNull("The hub did not return a device credential id", paired.deviceId)
             assertTrue("The issued value is not an Android device credential", paired.token.startsWith("jd_"))
 
