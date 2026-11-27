@@ -33,6 +33,7 @@ type Fake struct {
 	layouts     []any
 	trees       []map[string]any
 	screens     map[string]map[string]any
+	outputs     map[string]*Output
 	status      map[string]any
 	on          map[string]func(params map[string]any) any
 	keepalive   int
@@ -72,7 +73,7 @@ func New(t testing.TB) *Fake {
 	kind, socket := Endpoint(dir)
 	f := &Fake{
 		MetaPath: filepath.Join(dir, "orca-runtime.json"), Socket: socket, Kind: kind,
-		token: "test-token-1", runtimeID: "rt-1", screens: map[string]map[string]any{},
+		token: "test-token-1", runtimeID: "rt-1", screens: map[string]map[string]any{}, outputs: map[string]*Output{},
 		on: map[string]func(map[string]any) any{}, agentStatus: map[string]map[string]any{}, revisions: map[string]int{},
 		status: map[string]any{"appVersion": "1.4.245", "runtimeProtocolVersion": 3, "minCompatibleRuntimeClientVersion": 2,
 			"protocolVersion": 3, "capabilities": []string{"terminal.prompt-delivery.v1"}},
@@ -273,6 +274,9 @@ func (f *Fake) answerLocked(method string, p map[string]any) any {
 	}
 	switch method {
 	case "terminal.read":
+		if p["screen"] != true {
+			return map[string]any{"terminal": f.readOutputLocked(h, p)}
+		}
 		s := f.screens[h]
 		if s == nil {
 			s = map[string]any{"tail": []string{}, "tailRows": []any{}}
@@ -403,6 +407,11 @@ func validate(method string, p map[string]any) string {
 	case "terminal.read":
 		if p["screen"] == true && p["cursor"] != nil {
 			return "Cursor cannot be combined with a screen read"
+		}
+		if v, ok := p["cursor"]; ok {
+			if c, isNum := v.(float64); !isNum || c < 0 || c != float64(int64(c)) {
+				return "Cursor must be a non-negative integer"
+			}
 		}
 		return first(handle(), literalTrue("screen"))
 	case "terminal.agentStatus", "terminal.close":
@@ -691,6 +700,83 @@ func (f *Fake) SetScreenRows(handle string, lines []string, wrapped []bool) {
 	f.mu.Lock()
 	f.screens[handle] = map[string]any{"tail": lines, "tailRows": rows}
 	f.mu.Unlock()
+}
+
+// Output is what a terminal's program wrote, as Orca keeps it (terminal.read without screen).
+type Output struct {
+	// Tail is the output tail: the newest lines, rows redrawn in place as they ended, the line being written last.
+	Tail []string
+	// TailTruncated: Orca let older lines of the tail go.
+	TailTruncated bool
+	// Log is every completed line, redrawn rows each time, oldest kept first; Total counts all the completed lines
+	// ever written (the cursor after the newest), so the oldest kept is Total-len(Log).
+	Log   []string
+	Total int
+	// NoCursor answers as an Orca without cursor reads: no cursors, a cursor ignored.
+	NoCursor bool
+}
+
+// SetOutput sets what terminal.read without screen answers for a handle: the tail, and the log a cursor pages. A
+// handle without one answers a tail read with the screen, as Orca does for a program on the alternate screen.
+func (f *Fake) SetOutput(handle string, o Output) {
+	f.mu.Lock()
+	f.outputs[handle] = &o
+	f.mu.Unlock()
+}
+
+// readOutputLocked answers terminal.read without screen as Orca 1.4.277 does (lFt in its runtime): a cursor pages
+// the log, at most limit (default and cap 2000) lines; without one, the tail's last limit (default 120, cap 2000)
+// lines, cut further to 32 KiB of text from the end.
+func (f *Fake) readOutputLocked(h string, p map[string]any) map[string]any {
+	o := f.outputs[h]
+	if o == nil {
+		s := f.screens[h]
+		if s == nil {
+			s = map[string]any{"tail": []string{}, "tailRows": []any{}}
+		}
+		out := map[string]any{"handle": h, "status": "running", "truncated": false, "source": "screen"}
+		maps.Copy(out, s)
+		return out
+	}
+	limit := func(def int) int {
+		if v, ok := p["limit"].(float64); ok && v > 0 {
+			return min(max(1, int(v)), 2000)
+		}
+		return def
+	}
+	oldest, latest := max(0, o.Total-len(o.Log)), o.Total
+	out := map[string]any{"handle": h, "status": "running", "source": "stream"}
+	if !o.NoCursor {
+		out["oldestCursor"], out["nextCursor"], out["latestCursor"] = fmt.Sprint(oldest), fmt.Sprint(latest), fmt.Sprint(latest)
+	}
+	if c, ok := p["cursor"].(float64); ok && !o.NoCursor {
+		cursor := int(c)
+		if cursor > latest {
+			out["tail"], out["truncated"], out["limited"] = []string{}, false, false
+			return out
+		}
+		from := max(cursor, oldest)
+		rest := o.Log[from-oldest:]
+		lines := rest[:min(len(rest), limit(2000))]
+		out["tail"], out["truncated"], out["limited"] = slices.Clone(lines), cursor < oldest, len(lines) < len(rest)
+		out["nextCursor"] = fmt.Sprint(from + len(lines))
+		return out
+	}
+	lines := slices.Clone(o.Tail[max(0, len(o.Tail)-limit(120)):])
+	limited := len(lines) < len(o.Tail)
+	chars := 0
+	for _, l := range lines {
+		chars += len(l)
+	}
+	for len(lines) > 0 && chars-len(lines[0]) >= 32768 {
+		chars -= len(lines[0])
+		lines, limited = lines[1:], true
+	}
+	if chars > 32768 {
+		lines[0], limited = lines[0][chars-32768:], true
+	}
+	out["tail"], out["truncated"], out["limited"] = lines, o.TailTruncated, limited
+	return out
 }
 
 // Handle makes a method answer through fn (a Fail for an error).

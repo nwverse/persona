@@ -2436,6 +2436,9 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		if rev := dialogRev(text, p.Lines, p.Source, p.Format); rev != "" {
 			res["dialog_rev"] = rev
 		}
+		if ms := n.screenRefresh(p.SessionID); ms > 0 {
+			res["refresh_ms"] = ms // a client polling a screen that cannot stream may read it this often (#17048)
+		}
 		return res, err
 	case "terminal.watch":
 		var a struct {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -275,6 +276,101 @@ func (c *Client) Read(ctx context.Context, t Target) (*Screen, error) {
 		s.Wrapped = append(s.Wrapped, r.Wrapped)
 	}
 	return s, nil
+}
+
+// Tail is terminal.read without screen or cursor: the newest lines the terminal's program wrote, escapes stripped,
+// rows it redrew in place kept as they ended (Orca's output tail), the line it is still writing last. Orca answers
+// with the screen instead for a program on the alternate screen (vim, a full-screen agent): Source "screen" then, and
+// there is nothing above it.
+type Tail struct {
+	Lines []string
+	// Truncated: Orca let older output go (its tail keeps at most 2000 lines and 256 KiB). Limited: it keeps more than
+	// Lines (one read sends at most 2000 lines and 32 KiB; Lines[0] may then be the end of a longer line).
+	Truncated, Limited bool
+	// Source is "stream" for the output tail, "screen" for the screen.
+	Source string
+}
+
+// TailLimit is the most lines one tail or cursor read returns.
+const TailLimit = 2000
+
+// ReadTail is terminal.read {limit}: the output tail's last limit lines (at most TailLimit).
+func (c *Client) ReadTail(ctx context.Context, t Target, limit int) (*Tail, error) {
+	var res struct {
+		Terminal struct {
+			Tail      []string `json:"tail"`
+			Truncated bool     `json:"truncated"`
+			Limited   bool     `json:"limited"`
+			Source    string   `json:"source"`
+		} `json:"terminal"`
+	}
+	p := t.params()
+	p["limit"] = min(max(limit, 1), TailLimit)
+	if err := c.Call(ctx, CallTimeout, "terminal.read", p, &res); err != nil {
+		return nil, err
+	}
+	r := res.Terminal
+	if r.Source == "screen-unavailable" {
+		return nil, fmt.Errorf("orca terminal.read: %w", ErrNoScreen)
+	}
+	return &Tail{Lines: r.Tail, Truncated: r.Truncated, Limited: r.Limited, Source: r.Source}, nil
+}
+
+// Output is terminal.read by cursor: the lines the terminal's program completed, in order, escapes stripped. It is
+// every line written, rows a program redrew in place included each time (a spinner's, an agent's input box), so it
+// is a log of the output, not what the terminal shows; Tail is that. A cursor counts the completed lines since Orca
+// began keeping the terminal's output.
+type Output struct {
+	Lines []string
+	// Oldest is the cursor of the oldest line Orca keeps (0: it let none go), Next the one after Lines, Latest the one
+	// after the newest line.
+	Oldest, Next, Latest int64
+}
+
+// ErrNoCursor: this Orca reads no output by cursor (an older one answers a cursor read without cursors).
+var ErrNoCursor = errors.New("orca reads no output by cursor")
+
+// ReadOutput is terminal.read {cursor, limit}: up to limit lines (at most TailLimit) from cursor on, starting at the
+// oldest Orca keeps when cursor is older.
+func (c *Client) ReadOutput(ctx context.Context, t Target, cursor int64, limit int) (*Output, error) {
+	var res struct {
+		Terminal struct {
+			Tail   []string     `json:"tail"`
+			Oldest outputCursor `json:"oldestCursor"`
+			Next   outputCursor `json:"nextCursor"`
+			Latest outputCursor `json:"latestCursor"`
+		} `json:"terminal"`
+	}
+	p := t.params()
+	p["cursor"] = max(cursor, 0)
+	p["limit"] = min(max(limit, 1), TailLimit)
+	if err := c.Call(ctx, CallTimeout, "terminal.read", p, &res); err != nil {
+		return nil, err
+	}
+	r := res.Terminal
+	if !r.Oldest.ok || !r.Next.ok || !r.Latest.ok {
+		return nil, fmt.Errorf("orca terminal.read: %w", ErrNoCursor)
+	}
+	return &Output{Lines: r.Tail, Oldest: r.Oldest.n, Next: r.Next.n, Latest: r.Latest.n}, nil
+}
+
+// outputCursor is a cursor as Orca sends it: a decimal string ("501"), or a number.
+type outputCursor struct {
+	n  int64
+	ok bool
+}
+
+func (c *outputCursor) UnmarshalJSON(b []byte) error {
+	s := strings.Trim(string(b), `"`)
+	if s == "" || s == "null" {
+		return nil
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil || n < 0 {
+		return nil // not a cursor Persona can page by: as if none came
+	}
+	c.n, c.ok = n, true
+	return nil
 }
 
 // AgentStatus is terminal.agentStatus: whether an agent Orca recognises is running in front in the terminal, and its
