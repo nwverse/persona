@@ -72,6 +72,9 @@ import type { BubbleFoldDecision } from '../core/BubbleFold';
 import { buildEdgeScrubMarks } from '../core/EdgeScrub';
 import type { EdgeScrubMark, EdgeScrubSourceLine } from '../core/EdgeScrub';
 import { ChatEdgeScrubOverlay } from './ChatEdgeScrubOverlay';
+import { extractComposerQueue } from '../core/ComposerQueue';
+import type { ComposerQueueState } from '../core/ComposerQueue';
+import { ComposerTopStrip } from './ComposerTopStrip';
 
 class ConversationFrame extends FrameCallback {
   private action: () => void;
@@ -856,6 +859,7 @@ export struct Conversation {
   @Local composerWidth: number = 360;
   @Local composerFrameWidth: number = 0;
   @Local composerFrameHeight: number = 0;
+  @Local private queueSendNowBusy: boolean = false;
   @Local decisionPager: DecisionPager = new DecisionPager();
   @Local questions: QuestionWorkspace = new QuestionWorkspace();
   @Local questionInset: number = 0;
@@ -1368,7 +1372,11 @@ export struct Conversation {
     if (!this.sendCurrent() || this.sending || this.attachments.busy || !this.model.canSend()) return;
     const owner = this.model, generation = owner.connectionGeneration(), scope = owner.scope(), target = owner.target(), draft = owner.draft, context = owner.sourceContext;
     const current = (): boolean => this.sendCurrent() && this.model === owner && owner.owns(generation, scope) && owner.target() === target;
-    if (!this.attachments.attachments.length) { await owner.send(current); return; }
+    if (!this.attachments.attachments.length) {
+      const sent = await owner.send(current);
+      if (sent && owner.demo && current() && typeof owner.refresh === 'function') void owner.refresh();
+      return;
+    }
     this.sending = true;
     try {
       const hasImage=this.attachments.attachments.some((item:ChatAttachment)=>item.kind==='image');
@@ -2270,6 +2278,38 @@ export struct Conversation {
     }.width('100%').height('100%').backgroundColor(Colors.surface).id(this.pageSheetNodeId)
       .onAreaChange(() => this.measurePageSheet())
   }
+  @Computed get composerQueueState(): ComposerQueueState {
+    const selected = this.model.selected;
+    if (!selected || !selected.id) return extractComposerQueue({});
+    const matched = selected.kind === 'session'
+      ? this.model.sessions.find((row: ResourceRow) => row.id === selected.id && row.machine === selected.machine)
+      : undefined;
+    const source = matched || selected;
+    return extractComposerQueue(source.data());
+  }
+  private async sendQueuedNow(): Promise<void> {
+    if (!this.sendCurrent() || this.queueSendNowBusy) return;
+    const row = this.model.selected;
+    if (!row || !row.machine || !(row.session || row.id)) return;
+    const owner = this.model, generation = owner.connectionGeneration(), scope = owner.scope(), target = owner.target();
+    this.queueSendNowBusy = true;
+    try {
+      await owner.repo().call(
+        '/api/v1/sessions/' + encodeURIComponent(row.machine) + '/' + encodeURIComponent(row.session || row.id) + '/queue/send-now',
+        'POST',
+        {}
+      );
+      if (this.sendCurrent() && this.model === owner && owner.owns(generation, scope) && owner.target() === target) {
+        await owner.refresh();
+      }
+    } catch (_) {
+      if (this.model === owner && owner.owns(generation, scope) && owner.target() === target) {
+        owner.error = 'failed';
+      }
+    } finally {
+      this.queueSendNowBusy = false;
+    }
+  }
   @Computed get quoteRemoveSize(): number { return Math.min(68,44*this.environment.fontScale); }
   @Builder composer() {
     // The shell measures the decorated editor. Its extra paint area never changes editing layout or hit targets.
@@ -2282,6 +2322,13 @@ export struct Conversation {
   }
   @Builder composerContent() {
     Column({ space: Tokens.gap }) {
+      if (this.composerQueueState.items.length > 0) {
+        ComposerTopStrip({
+          queue: this.composerQueueState,
+          busy: this.queueSendNowBusy,
+          onSendNow: () => { void this.sendQueuedNow(); }
+        })
+      }
       if (this.model.hasForwardContext()) PhoneChatForwardTray({model:this.model})
       AttachmentStrip({ attachments: this.attachments.attachments, errorKey: this.attachments.errorKey, actionsEnabled: !this.sending && !this.attachments.busy,
           onRemove: (id: string) => this.attachments.remove(id), onEdit: (id: string) => this.attachments.editPhoto(id), onPreview: (item: ChatAttachment) => this.preview(item) })

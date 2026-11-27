@@ -44,6 +44,7 @@ export struct MarkdownText {
   @Local private environment: NativeEnvironment = nativeEnvironment;
   @Local private copiedCodeKey: string = '';
   @Local private pressedCodeKey: string = '';
+  @Local private wrappedCodeKeys: string[] = [];
   private copyResetTimer: number = -1;
   @Local foreground: ResourceColor = $r('sys.color.font_primary');
   @Local secondary: ResourceColor = $r('sys.color.font_secondary');
@@ -136,17 +137,30 @@ export struct MarkdownText {
     return Tokens.body;
   }
 
+  private isCodeWrapped(key: string): boolean {
+    return this.wrappedCodeKeys.includes(key);
+  }
+
+  private toggleCodeWrap(key: string): void {
+    Haptics.selection();
+    Motion.run(this.getUIContext(), Motion.state(this.environment.reduceMotion), () => {
+      this.wrappedCodeKeys = this.isCodeWrapped(key)
+        ? this.wrappedCodeKeys.filter((entry: string) => entry !== key)
+        : this.wrappedCodeKeys.concat([key]);
+    });
+  }
+
   private async copyCode(text: string, key: string): Promise<void> {
     try {
       await pasteboard.getSystemPasteboard().setData(pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, trimCodeForCopy(text)));
-      Haptics.success();
+      Haptics.selection();
       this.copiedCodeKey = key;
       if (this.copyResetTimer !== -1) clearTimeout(this.copyResetTimer);
       this.copyResetTimer = setTimeout(() => {
         if (this.copiedCodeKey === key) this.copiedCodeKey = '';
         this.copyResetTimer = -1;
       }, 1600);
-      toastCenter.success(tr('done'));
+      toastCenter.show(tr('copied'));
     } catch (_) {
       Haptics.error();
       toastCenter.error(tr('failed'));
@@ -235,10 +249,38 @@ export struct MarkdownText {
         Blank().layoutWeight(1)
         Button({ type: ButtonType.Capsule }) {
           Row({ space: 4 }) {
+            SymbolGlyph(this.isCodeWrapped(blockKey) ? $r('sys.symbol.arrow_left_arrow_right') : $r('sys.symbol.textformat'))
+              .fontSize('12vp')
+              .fontColor([this.isCodeWrapped(blockKey) ? Colors.link : Colors.secondary])
+            Text(tr(this.isCodeWrapped(blockKey) ? 'code_unwrap_lines' : 'code_wrap_lines'))
+              .fontSize(11.5)
+              .maxFontScale(Tokens.interfaceScaleFor(11.5))
+              .fontWeight(FontWeight.Medium)
+              .fontColor(this.isCodeWrapped(blockKey) ? Colors.link : Colors.secondary)
+              .maxLines(1)
+          }
+        }
+          .height(26)
+          .padding({ left: 9, right: 9 })
+          .backgroundColor(this.isCodeWrapped(blockKey)
+            ? Colors.selection
+            : (this.environment.dark ? '#18FFFFFF' : '#0D000000'))
+          .border({
+            width: PhoneStyle.surfaceEdgeWidth(0.5),
+            color: this.isCodeWrapped(blockKey) ? Colors.link : PhoneStyle.cardBorder(this.environment.dark),
+            radius: 13
+          })
+          .responseRegion({ x: -4, y: -9, width: 68, height: 44 })
+          .accessibilityText(tr(this.isCodeWrapped(blockKey) ? 'code_unwrap_lines' : 'code_wrap_lines'))
+          .bindTips(tr(this.isCodeWrapped(blockKey) ? 'code_unwrap_lines' : 'code_wrap_lines'))
+          .onClick(() => this.toggleCodeWrap(blockKey))
+          .id('markdown.code.wrap')
+        Button({ type: ButtonType.Capsule }) {
+          Row({ space: 4 }) {
             SymbolGlyph(this.copiedCodeKey === blockKey ? Symbols.check : IconActions.symbol('copy'))
               .fontSize('12.5vp')
               .fontColor([this.copiedCodeKey === blockKey ? Colors.positive : Colors.secondary])
-            Text(this.copiedCodeKey === blockKey ? tr('done') : tr('copy'))
+            Text(this.copiedCodeKey === blockKey ? tr('copied') : tr('copy'))
               .fontSize(12)
               .maxFontScale(Tokens.interfaceScaleFor(12))
               .fontWeight(FontWeight.Medium)
@@ -280,20 +322,33 @@ export struct MarkdownText {
         .backgroundColor(Colors.codeHunk)
         .alignItems(VerticalAlign.Center)
       Divider().strokeWidth(0.5).color(this.environment.dark ? '#16FFFFFF' : Colors.divider)
-      Scroll() {
+      if (this.isCodeWrapped(blockKey)) {
         Text(trimCodeForCopy(block.text))
           .fontFamily('monospace')
           .fontSize(this.chatReply ? 13.5 : Tokens.meta)
           .lineHeight(this.chatReply ? '21fp' : '20fp')
           .fontColor(Colors.ink)
+          .wordBreak(WordBreak.BREAK_WORD)
           .copyOption(this.nativeTextSelection ? CopyOptions.LocalDevice : CopyOptions.None)
           .onTextSelectionChange((start: number, end: number) => this.onSelectionChange(end > start))
           .padding({ left: 14, right: 14, top: 12, bottom: 12 })
+          .width('100%')
+      } else {
+        Scroll() {
+          Text(trimCodeForCopy(block.text))
+            .fontFamily('monospace')
+            .fontSize(this.chatReply ? 13.5 : Tokens.meta)
+            .lineHeight(this.chatReply ? '21fp' : '20fp')
+            .fontColor(Colors.ink)
+            .copyOption(this.nativeTextSelection ? CopyOptions.LocalDevice : CopyOptions.None)
+            .onTextSelectionChange((start: number, end: number) => this.onSelectionChange(end > start))
+            .padding({ left: 14, right: 14, top: 12, bottom: 12 })
+        }
+          .scrollable(ScrollDirection.Horizontal)
+          .align(Alignment.TopStart)
+          .scrollBar(BarState.Auto)
+          .width('100%')
       }
-        .scrollable(ScrollDirection.Horizontal)
-        .align(Alignment.TopStart)
-        .scrollBar(BarState.Auto)
-        .width('100%')
     }
       .width('100%')
       .alignItems(HorizontalAlign.Start)
