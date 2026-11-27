@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"slices"
@@ -86,24 +87,34 @@ func (s *Service) activeInternalCard(ix proto.Interaction) bool {
 func (s *Service) internalReviewer(ctx context.Context, ix proto.Interaction) (string, string) {
 	cfg := s.settings(ctx)
 	home := s.canonical(cfg.MachineID)
+	machineOf := func(id string) string {
+		if id == cfg.Main {
+			return s.canonical(cfg.mainRouteMachine())
+		}
+		if id == cfg.BackgroundSupervisor {
+			return s.canonical(cmp.Or(cfg.BackgroundSupervisorMachineID, cfg.MachineID))
+		}
+		return s.canonical(s.conversationMachine(ctx, id, ""))
+	}
 	if cfg.supervisorConversation(ix.SessionID) && ix.SessionID != cfg.Main {
-		return cfg.Main, home // a source task cannot send a supervisor's own approval downwards
+		return cfg.Main, machineOf(cfg.Main) // a source task cannot send a supervisor's own approval downwards
 	}
 	if ix.SessionID == cfg.Main && cfg.Main != "" {
 		s.background.mu.Lock()
 		defer s.background.mu.Unlock()
 		cfg = s.settings(ctx)
 		if cfg.BackgroundSupervisor != "" && cfg.BackgroundSupervisor != ix.SessionID {
-			return cfg.BackgroundSupervisor, home
+			return cfg.BackgroundSupervisor, machineOf(cfg.BackgroundSupervisor)
 		}
 		if id, err := s.startBackground(ctx); err == nil && id != ix.SessionID {
-			return id, home
+			cfg = s.settings(ctx)
+			return id, machineOf(id)
 		}
 		return "", home
 	}
 	to, _ := s.nonOwnerCardTarget(ctx, ix.MachineID, ix.SessionID)
 	if to != "" && to != ix.SessionID {
-		return to, home
+		return to, machineOf(to)
 	}
 	return "", home
 }

@@ -348,6 +348,17 @@ func TestMainInternalReviewerIsIndependentOfItsSourceTask(t *testing.T) {
 	if to != "bg1" || home != "server" {
 		t.Fatalf("main approval followed a lower task supervisor: %q on %q", to, home)
 	}
+	setSettings(t, e.s, func(v *Settings) { v.BackgroundSupervisorMachineID = "review-machine" })
+	to, home = e.s.internalReviewer(ctx, ix)
+	if to != "bg1" || home != "review-machine" {
+		t.Fatalf("background reviewer migration lost its machine: %q on %q", to, home)
+	}
+	setSettings(t, e.s, func(v *Settings) { v.MainMachineID = "main-machine" })
+	ix.SessionID = "lead1"
+	to, home = e.s.internalReviewer(ctx, ix)
+	if to != "conv1" || home != "main-machine" {
+		t.Fatalf("upward approval ignored main's confirmed machine: %q on %q", to, home)
+	}
 }
 
 // The prepared entry must share one-shot maintenance authority and never turn an
