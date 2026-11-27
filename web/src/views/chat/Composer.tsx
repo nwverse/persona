@@ -26,9 +26,8 @@ import { imageLimitsFor, pictureRoom } from "../../lib/image-limits";
 import { addFiles as addComposerFiles, filesBusy, MAX_FILES, readyFiles, restoreFiles, splitFileTags, takeReadyFiles, useComposerFiles, withFiles } from "../../lib/composer-files";
 import { activateComposer, addContext, getContexts, newContext, registerComposer, removeContext, useContexts, withContexts, type ContextRef, type ComposerHandle } from "../../lib/links";
 import { addQuote, getQuotes, onDraftEvent, parseQuotes, removeQuote, replaceNeedsConfirm, restoreQuotes, sendDraft, setQuotes, splitQuotes, storeDraft, useQuotes, withQuoteBlock, type CommentImagePicker, type DraftEvent, type DraftImage } from "../../lib/drafts";
-import type { EditedImage, EditState } from "../../lib/image-edit";
-import { mentionAt, sessionQuote, workspaceContext, type MentionToken } from "../../lib/mentions";
-import { machineWithHub } from "../../lib/mesh";
+import type { EditedImage } from "../../lib/image-edit";
+import { mentionAt, type MentionToken } from "../../lib/mentions";
 import { skillContext, skillDraft, splitSkillDraft } from "../../lib/skill-mentions";
 import { contextXML } from "../../lib/context-xml";
 import {
@@ -36,7 +35,6 @@ import {
   writeInlineDraft, type InlineDocument, type InlineSelection,
 } from "../../lib/inline-mentions";
 import { parseUserText } from "../../lib/turns";
-import { getState } from "../../lib/store";
 import { AttachmentTiles } from "../../ui/AttachmentTray";
 import { FileTiles } from "./FileTiles";
 import { cx, EASE, Spinner, toast } from "../../ui/atoms";
@@ -112,10 +110,8 @@ interface PastedBlock {
 }
 
 interface ConfirmState {
-  title: string;
+  word: string;
   message: string;
-  confirmLabel: string;
-  tone?: "primary" | "danger";
   onConfirm: () => void;
 }
 
@@ -149,10 +145,7 @@ function joinDrafts(first: InlineDocument, second: InlineDocument): InlineDocume
 }
 
 function fromDraftImage(img: DraftImage, id = uuid(), edited?: EditedImage): Attachment {
-  const bin = atob(img.data);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return { ...img, id, url: URL.createObjectURL(new Blob([bytes], { type: img.mime })), ...(edited ? { edited } : {}) };
+  return { ...img, id, url: URL.createObjectURL(base64File(img.name, img.mime, img.data)), ...(edited ? { edited } : {}) };
 }
 
 // memo: a chat renders again for each transcript item, and this box takes none of them (ChatView keeps its props stable)
@@ -394,15 +387,10 @@ export const Composer = memo(function Composer({
       return { ...cur, id: next[Math.min(Math.max(idx, 0), next.length - 1)].id };
     });
   };
-  const updateAttachment = (id: string, img: DraftImage, state: EditState) => {
-    const old = attsNow.current.find((a) => a.id === id);
-    if (!old) return;
-    // the picture as it came stays the source (the first edit's tile URL, kept); the earlier result goes
-    const source = old.edited?.source ?? old.url;
-    const updated = fromDraftImage(img, old.id, { source, ...state });
-    attsNow.current = attsNow.current.map((a) => (a.id === old.id ? updated : a));
-    setAtts((cur) => cur.map((a) => (a.id === old.id ? updated : a)));
-    if (old.url !== source) URL.revokeObjectURL(old.url);
+  const updateAttachment = (id: string, build: (old: Attachment) => Attachment) => {
+    const next = attsNow.current.map((a) => (a.id === id ? build(a) : a));
+    attsNow.current = next;
+    setAtts(next);
   };
   // Pictures past what a message holds are not dropped (#12973): they go to the session's computer as files, as the share
   // sheet sends them, with one word on which limit it was; with no computer to send them to they are turned away.
@@ -776,12 +764,12 @@ export const Composer = memo(function Composer({
   const pickRow = (r: MentionRow, at: MentionToken | null) => {
     let ref: ContextRef | undefined;
     if (r.kind === "session") {
-      const q = sessionQuote(r.session);
+      const q = r.toContext();
       ref = newContext("context", q.title, q.url, q.text);
     } else if (r.kind === "skill") {
       ref = skillContext(r.skill);
     } else if (r.kind === "workspace") {
-      const w = workspaceContext(r.workspace, (id) => machineWithHub(id, getState().machines));
+      const w = r.toContext();
       ref = { ...newContext("workspace", w.title, w.url, w.text), attrs: w.attrs };
     } else if (r.kind === "repository") {
       const c = r.context;
@@ -1103,13 +1091,7 @@ export const Composer = memo(function Composer({
     };
     if (c.confirm) {
       preloadComposerOverlay();
-      setConfirmState({
-        title: t("chat-composer.confirm_run_title", { word: c.word }),
-        message: c.confirm,
-        confirmLabel: t("chat-composer.confirm_ok"),
-        tone: "danger",
-        onConfirm: apply,
-      });
+      setConfirmState({ word: c.word, message: c.confirm, onConfirm: apply });
       return;
     }
     apply();
@@ -1124,7 +1106,7 @@ export const Composer = memo(function Composer({
   const innerOverlay = Boolean(slashOpen || mOpen || plusOpen || history.searching || confirmState || expanded);
   const drag = {
     onDragOver: (e: React.DragEvent) => {
-      if (!editor && (e.dataTransfer.types.includes("Files") || Array.from(e.dataTransfer.types ?? []).includes(ENTRY_DRAG_TYPE))) {
+      if (!editor && (e.dataTransfer.types.includes("Files") || e.dataTransfer.types.includes(ENTRY_DRAG_TYPE))) {
         e.preventDefault();
         setDragging(true);
       }
@@ -1382,10 +1364,11 @@ export const Composer = memo(function Composer({
               }
             }
             if (e.key === "Escape" && imageExpanded && !innerOverlay && !document.querySelector("[role=dialog],[role=menu]")) {
-              e.preventDefault();
-              e.stopPropagation();
-              if (stageHandle.current) stageHandle.current.escape();
-              else closeImagePreview();
+              if (!stageHandle.current) {
+                e.preventDefault();
+                e.stopPropagation();
+                closeImagePreview();
+              }
               return;
             }
             // Esc while editing cancels it; kept from ChatView's interrupt on the window

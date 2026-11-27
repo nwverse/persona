@@ -124,10 +124,8 @@ type PasteProps = {
 type ImageStageOverlayProps = { imageStage: ComposerImageStageProps };
 type ConfirmOverlayProps = {
   confirm: {
-    title: string;
+    word: string;
     message: string;
-    confirmLabel: string;
-    tone?: "primary" | "danger";
     onConfirm: () => void;
   };
   onClose: () => void;
@@ -146,7 +144,7 @@ function ConfirmDialog({ confirm, onClose }: ConfirmOverlayProps) {
     <Dialog
       open
       onClose={onClose}
-      title={confirm.title}
+      title={t("chat-composer.confirm_run_title", { word: confirm.word })}
       width={400}
       footer={
         <>
@@ -154,14 +152,14 @@ function ConfirmDialog({ confirm, onClose }: ConfirmOverlayProps) {
             {t("chat-composer.confirm_cancel")}
           </Button>
           <Button
-            tone={confirm.tone ?? "primary"}
+            tone="danger"
             onClick={() => {
               const fn = confirm.onConfirm;
               onClose();
               fn();
             }}
           >
-            {confirm.confirmLabel}
+            {t("chat-composer.confirm_ok")}
           </Button>
         </>
       }
