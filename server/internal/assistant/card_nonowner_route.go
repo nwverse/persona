@@ -82,7 +82,7 @@ func (s *Service) handNonOwnerCard(ix proto.Interaction) bool {
 	cfg := s.settings(ctx)
 	// Keep the explicit bot write-approval route; supervising read-only approvals
 	// use the same accountable internal route as every other internal source.
-	if !cfg.supervisorConversation(ix.SessionID) && ix.Kind == proto.IxPermission && s.nonMainAssistantPermission(ctx, ix) && s.larkModule().AskWanted(ctx, ix) {
+	if src == cardAgentPermission && !cfg.supervisorConversation(ix.SessionID) && ix.Kind == proto.IxPermission && s.nonMainAssistantPermission(ctx, ix) && s.larkModule().AskWanted(ctx, ix) {
 		return false
 	}
 	to, home := s.internalReviewer(ctx, ix)
@@ -104,7 +104,7 @@ func (s *Service) handNonOwnerCard(ix proto.Interaction) bool {
 	p := s.fleet.interactions[ix.ID]
 	if p == nil || p.claimed || p.told || !p.ix.CreatedAt.Equal(ix.CreatedAt) {
 		s.fleet.mu.Unlock()
-		return false
+		return true // a stale internal announcement must never fall through to an owner push
 	}
 	if p.route != nil {
 		s.fleet.mu.Unlock()
