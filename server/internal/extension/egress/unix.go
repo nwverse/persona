@@ -29,6 +29,10 @@ func (p *Proxy) ListenRuntimeUnix(ext, path string) error { return p.listenUnix(
 
 func (p *Proxy) listenUnix(ext, path string, source bool) error {
 	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return net.ErrClosed
+	}
 	if old := p.unix[ext]; old != nil {
 		_ = old.Close()
 		delete(p.unix, ext)
@@ -41,6 +45,11 @@ func (p *Proxy) listenUnix(ext, path string, source bool) error {
 	}
 	_ = os.Chmod(path, 0o600)
 	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		_ = ln.Close()
+		return net.ErrClosed
+	}
 	if source {
 		ln = p.boundLocked(ln)
 	}
@@ -59,6 +68,10 @@ func (p *Proxy) listenUnix(ext, path string, source bool) error {
 // Each connection holds two descriptors and three goroutines here, so the socket is bounded (runtimeListener).
 func (p *Proxy) RelayUnix(ext, path, target string) error {
 	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return net.ErrClosed
+	}
 	if old := p.relay[ext]; old != nil {
 		_ = old.Close()
 		delete(p.relay, ext)
@@ -71,6 +84,11 @@ func (p *Proxy) RelayUnix(ext, path, target string) error {
 	}
 	_ = os.Chmod(path, 0o600)
 	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		_ = ln.Close()
+		return net.ErrClosed
+	}
 	if p.relay == nil {
 		p.relay = map[string]net.Listener{}
 	}

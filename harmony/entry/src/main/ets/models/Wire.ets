@@ -1,3 +1,4 @@
+import type { TurnChangeSet } from '../core/WorkPresentation';
 import type { NextStepProposal, ToolTurnProjection, TranscriptItem } from '../core/Domain';
 
 // Decode untrusted JSON at the transport boundary. Unknown keys never become executable actions.
@@ -44,6 +45,32 @@ export class Wire {
     const result = value[key];
     if (!Array.isArray(result)) return [];
     return (result as Object[]).filter((item: Object) => typeof item === 'string').map((item: Object) => item as string);
+  }
+}
+
+// A per-agent entry is a complete set. Missing or malformed fields in that set use the protocol defaults.
+export class ImageLimits {
+  requestBytes: number = 32 * 1024 * 1024;
+  imageBytes: number = 3750000;
+  maxSide: number = 1600;
+  perMessage: number = 20;
+
+  private static field(values: Record<string, Object>, key: string, fallback: number): number {
+    const n = Wire.number(values, key);
+    return n >= 1 && n < 2147483647 ? Math.floor(n) : fallback;
+  }
+
+  static forAgent(published: Record<string, Object>, agent: string): ImageLimits {
+    const agents = Wire.object(published, 'agents'), name = agent || 'claude';
+    const entry = agents[name];
+    const values = Wire.has(agents, name) && entry !== null && typeof entry === 'object' && !Array.isArray(entry)
+      ? Wire.record(entry) : published;
+    const limits = new ImageLimits();
+    limits.requestBytes = ImageLimits.field(values, 'request_bytes', limits.requestBytes);
+    limits.imageBytes = ImageLimits.field(values, 'image_bytes', limits.imageBytes);
+    limits.maxSide = ImageLimits.field(values, 'max_side', limits.maxSide);
+    limits.perMessage = ImageLimits.field(values, 'per_message', limits.perMessage);
+    return limits;
   }
 }
 
@@ -213,6 +240,7 @@ export interface ConversationRecapItem {
 }
 
 export class ChatMessage {
+  turnChanges?: TurnChangeSet;
   id: string = '';
   role: string = 'assistant';
   recaps: ConversationRecapItem[] = [];
@@ -237,6 +265,7 @@ export class ChatMessage {
   imageIds: string[] = [];
   itemId: string = '';
   userTextClipped: boolean = false;
+  sourceFingerprint: string = '';
   ownerTarget: string = '';
   imagePaths: string[] = [];
   filePaths: string[] = [];

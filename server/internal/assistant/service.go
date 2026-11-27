@@ -15,8 +15,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/moduleswitch"
-
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistant/kernel"
 	"github.com/nwverse/persona/server/internal/assistant/kernel/seam"
@@ -30,6 +28,7 @@ import (
 	"github.com/nwverse/persona/server/internal/knowledgeuihost"
 	"github.com/nwverse/persona/server/internal/modapi"
 	"github.com/nwverse/persona/server/internal/modelhttp"
+	"github.com/nwverse/persona/server/internal/moduleswitch"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/remoteimage"
@@ -96,6 +95,7 @@ type Service struct {
 	moduleSwitch    moduleswitch.Set
 	modulesOff      []string // the ids the modules setting switched off at start (loadModules): built-in and client-only
 	compactRecovery compactRecoveryCache
+	agyNodePush     agyNodeConfigPush
 	// nodeRecovery tracks node online/boot timestamps to run recovery sweeps after outages or reboots (#14781).
 	nodeRecovery nodeRecoveryBook
 	// sendFanout: whom each conversation woke with conversation_send lately (conversation_fanout.go).
@@ -106,6 +106,8 @@ type Service struct {
 	history          conversationHistoryBook
 	// agentDirs keeps each computer's hidden Agent folders (hidden_agent_dirs.go); nil: none.
 	agentDirs AgentDirs
+	// projectReview relays owner input and task events to the configured review session (project_review.go); nil: off.
+	projectReview *projectReview
 	// herdrSessions keeps each computer's blocked named herdr sessions (herdr_sessions.go); nil: none.
 	herdrSessions HerdrSessions
 	// remoteImages fetches the pictures replies name by address for the apps (remote_image.go).
@@ -263,6 +265,8 @@ type Service struct {
 	extEvents        extEventBook           // extension_event.go
 	phoneKept        keptPhoneTools         // fleet_tools.go: the phone's tools as the hub last listed them
 	agentNames       agentNamingBook        // agent_naming.go
+	taskActivity     taskActivityBook       // task_close_activity.go: owner input/view activity, not read receipts
+	taskCloseStops   taskCloseStopBook      // tasks_close_stops.go: stopped Agents of completed tasks
 	prefs            settingsBook           // profile.go
 	guard            dispatchGuardBook      // dispatch_guard.go
 	main             mainBook               // start.go
@@ -331,11 +335,13 @@ type Service struct {
 	attention      attentionClock         // attention.go: the attention mode as last read, and its end
 	deploy         deployProbe            // deploy_check.go: is the work in the running hub
 	prEventRoute   prEventRouteBook       // pr_status_route.go: opt-in direct PR-event routing dedupe
+	prFeedback     prFeedbackBook         // pr_feedback.go: per-PR feedback cursors and routing serialization
 	parkReplies    parkReplyBook          // park_reply.go: bounded source reads for explicitly bound person replies
 
-	reviewDismissals taskReviewDismissalBook // task_review_dismissals.go
-	repoRootsMu      sync.Mutex              // pr_number_ref.go: one write of the repository roots at a time
-	repoMirrors      repoMirrorSyncState     // repo_mirrors.go: opt-in low-frequency periodic mirror sync
+	reviewDismissals  taskReviewDismissalBook // task_review_dismissals.go
+	supervisorSettles supervisorSettleBook    // decision_supervisor_reply.go: exact choices waiting for their send (#13041)
+	repoRootsMu       sync.Mutex              // pr_number_ref.go: one write of the repository roots at a time
+	repoMirrors       repoMirrorSyncState     // repo_mirrors.go: opt-in low-frequency periodic mirror sync
 	// ownerVerifiesAll: every deployed task asks the owner to verify, not only the big ones (ownerVerifies; tests).
 	ownerVerifiesAll         bool
 	later                    laterBook    // later.go: questions that can wait for a briefing
@@ -400,10 +406,13 @@ type Service struct {
 	fleetEnded func(ix proto.Interaction, r *proto.Resolution)
 	// ixResolved, when set, sees every answered card the assistant is told of (tests).
 	ixResolved func(InteractionResolved)
-	models     modelsState   // models.go: the model configuration
-	health     healthBook    // launcher_health.go: each machine's launchers
-	trust      trustBook     // machine_trust.go: the computers waiting to be confirmed
-	ready      readinessBook // readiness.go: the main conversation's readiness
+	// postCardHook runs after a Feishu post's first terminal/occurrence check and
+	// before it claims the ledger (tests: an older in-flight post racing a replacement).
+	postCardHook func(proto.Interaction)
+	models       modelsState   // models.go: the model configuration
+	health       healthBook    // launcher_health.go: each machine's launchers
+	trust        trustBook     // machine_trust.go: the computers waiting to be confirmed
+	ready        readinessBook // readiness.go: the main conversation's readiness
 
 	// pieceWriteHook, when set, runs as a write of part_of/after (editTodo, insertTodo) has passed its caller's check
 	// and is about to take todoBook.writing (tests: two writes held there both passed against the same graph).
@@ -413,6 +422,12 @@ type Service struct {
 	editWriteHook func(id string)
 	// acceptSweepHook, when set, runs in the acceptance sweeps' unlocked window, after a todo is read (tests).
 	acceptSweepHook func(id string)
+	// deadlineDefaultHook, when set, runs in the deadline sweep after it found no owner choice on its way for decision
+	// id and before it takes the default or marks the reminder (tests: the choice arrives in between).
+	deadlineDefaultHook func(id string)
+	// supervisorSettleHook, when set, runs as a delivered owner choice of decision id is about to be settled: it is
+	// claimed in the book, and the card's action lock is not taken yet (tests: the deadline sweep runs in between).
+	supervisorSettleHook func(id string)
 	// sendsSettleHook, when set, runs in sendsSettle once the task is opened again, before the turn held for it is
 	// taken up (tests).
 	sendsSettleHook func()
@@ -475,6 +490,7 @@ func New(o Options) *Service {
 	s.healthTellRoutes()
 	s.undeliveredRoutes()
 	s.standingAuthorizationRoutes()
+	s.outboundMessageRoutes()
 	s.ruleSuggestionRoutes()
 	s.northStarRoutes()
 	s.urgentCallRoutes() // urgent_call.go
@@ -519,12 +535,13 @@ func New(o Options) *Service {
 	s.taskRoutes()
 	s.viewActionRoutes()
 	s.todayRoutes()
-	s.briefRoutes()
+	s.todoAcceptRoute()
 	s.todoRoutes()
 	s.agentRoutes()
 	s.sessionReviewRoutes()
 	s.workspaceBoardRoutes()
 	s.navigationRoutes() // navigation.go: the page the apps open on
+	s.webFontRoutes()
 	s.channelRoutes()
 	s.kbInit(o.KB)
 	// The recording module's layer, before its routes (kbRoutes) and its hello capabilities (recording.go).
@@ -802,12 +819,13 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		}
 	}
 	if p, ok := params.(map[string]any); ok && (method == DeviceAssistantSend || method == DeviceAssistantWarm || sessionSend) {
-		// The window the main conversation is held to (main_compact_window.go), as sendModel puts it: a start, a relay,
-		// an internal message and the spare warmed for its next start carry it with is_main, or the node starts it again
-		// on its launcher's window (and never adopts the spare).
-		if _, set := p["main_compact_window"]; !set && p["is_main"] == true {
-			putMainCompactWindow(s.settings(ctx), p)
-		}
+		// The window the main conversation and each direction's lead are held to (main_compact_window.go), as sendModel
+		// puts it: a start, a relay, an internal message (a lead's supervision digest, #15318) and the spare warmed for
+		// the main conversation's next start carry it, or the node starts the conversation again on its launcher's
+		// window (and never adopts the spare). Put on every send, a value a caller set included: the node applies the
+		// window that comes with any conversation, so only this manager says which ones are held to it.
+		id, _ := p["session_id"].(string)
+		putMainCompactWindow(s.settings(ctx), p, s.isLeader(ctx, id))
 		// Interactive Claude Code (#10058) is part of what a process runs: every send and warm carries it, or the node
 		// restarts a conversation between the two kinds as messages without it come.
 		if _, set := p["claude_interactive"]; !set && s.claudeInteractive(ctx) {
@@ -853,6 +871,7 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 		unlock := s.lockTaskSpace(taskRoot)
 		defer unlock()
 	}
+	assignmentAt := time.Now().UTC()
 	raw, err := json.Marshal(params)
 	if err != nil {
 		return beforeNodeWrite(method, err)
@@ -874,6 +893,15 @@ func (s *Service) call(ctx context.Context, device, method string, params, out a
 	}
 	if err == nil {
 		round.sent(s, res) // whose round it is, for the owner's next message (owner_preempt.go)
+	}
+	if err == nil && (method == DeviceSessionSend || method == DeviceSessionSendOnce) {
+		if sent, ok := params.(map[string]any); ok {
+			if id, _ := sent["session_id"].(string); id != "" {
+				actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+				s.notePersonaAssignment(actx, device, id, assignmentAt)
+				cancel()
+			}
+		}
 	}
 	laterTaken(err == nil)
 	if sent, ok := params.(map[string]any); ok && method == DeviceAssistantSend {
@@ -1005,13 +1033,15 @@ func (s *Service) pushResult(ctx context.Context, n Notification) (NotifyResult,
 	}
 	// A track's push_cap holds the level (track_attention.go).
 	s.capTrackPush(ctx, &n)
+	s.applyTodosV2PushAttention(ctx, &n)
 	if n.Asked { // the conversation pushed what matters itself: its own finished push is left out (fleet_push.go)
 		s.noteAsked(n.SessionID)
 	}
-	s.noteCard(ctx, "", n) // its source is on ctx (withCard; card_layers.go)
 	res, err := s.hub.NotifyRequest(ctx, NotifyRequest{Notification: n})
 	if err != nil {
 		s.logf("assistant: push: %v", err)
+	} else {
+		s.noteCardResult(ctx, "", n, res) // its source is on ctx (withCard; card_layers.go)
 	}
 	return res, err
 }
@@ -1172,11 +1202,28 @@ func (s *Service) UserSpoke(ctx context.Context, r SessionRef) {
 }
 
 func (s *Service) userSpokeText(ctx context.Context, r SessionRef, text string) {
+	s.rememberTaskCloseExcerpt(r, text)
+	s.rememberSessionActivity(ctx, r.MachineID, r.SessionID)
+	s.userSpokeMessage(ctx, r, text, "")
+}
+
+// userSpokeMessage is session.user_spoke as the hub tells it: the owner's text when a person's own app sent it, and
+// the send's client_msg_id ("" from an older hub or a client that names none), which its session.assistant_sent
+// carries too.
+func (s *Service) userSpokeMessage(ctx context.Context, r SessionRef, text, clientMsgID string) {
+	s.rememberTaskCloseExcerpt(r, text)
+	s.rememberSessionActivity(ctx, r.MachineID, r.SessionID)
 	s.availOwnerSpoke(r, time.Now()) // before anything else: what the conversation is doing as the message comes (availability.go)
 	if exitText(text) {
 		s.retireTodoWork([2]string{r.MachineID, r.SessionID}) // /exit or /quit starts no turn that could cancel the wake
 	}
 	s.agentDecisionSpoke(ctx, r, time.Now(), text)
+	// A supervisor / direction conversation is never a task's active worker session, so the
+	// Agent-chat path above finds nothing for it. Settle the needs_user cards it supervises by
+	// reverse lookup instead (decision_supervisor_reply.go). Provenance-marked input is ignored.
+	if s.activeTodoOf(r.MachineID, r.SessionID) == "" {
+		s.supervisorDecisionSpoke(ctx, r, time.Now(), text, clientMsgID)
+	}
 	s.ownerHeard(r.SessionID)
 	go s.ownerAppeared(context.WithoutCancel(ctx), "user_spoke", r.SessionID)
 	s.clearToolLoop([2]string{r.MachineID, r.SessionID}, loopUserInput)
@@ -1198,10 +1245,10 @@ func (s *Service) userSpokeText(ctx context.Context, r SessionRef, text string) 
 
 // TurnStarted: one of a task's agents is working; what was going to be done about an agent's last turn is off.
 func (s *Service) TurnStarted(ctx context.Context, r SessionRef) {
-	s.approvalAnswerTurnStarted(r)
 	if s.meetingTurnStarted(r.MachineID, r.SessionID, true) {
 		return // a meeting's batch started it: a side exchange (meeting_turns.go)
 	}
+	s.approvalAnswerTurnStarted(r)
 	s.turnStartedObserved(ctx, r, true, startRow{})
 }
 
@@ -1218,7 +1265,9 @@ func (s *Service) turnStartedObserved(ctx context.Context, r SessionRef, newTurn
 // triaged; a new conversation is named after its first turn.
 func (s *Service) TurnEnded(ctx context.Context, r SessionRef) {
 	s.a2aRecipientIdle(ctx, a2aRef{r.MachineID, r.SessionID})
-	s.approvalAnswerTurnEnded(r)
+	if ctx.Value(approvalEndHandledKey{}) == nil {
+		s.approvalAnswerTurnEnded(r)
+	}
 	meeting := s.meetingTurnEnded(r.MachineID, r.SessionID)
 	if !meeting && ctx.Value(supervisionEndKey{}) == nil {
 		end := s.remedyTurnEnded(ctx, r.SessionID)
@@ -1267,6 +1316,12 @@ func (s *Service) turnEnded(ctx context.Context, r SessionRef, meeting bool) {
 // a goroutine asleep through the window would hold a stack per pending turn end (#2472). Each call is its own run.
 func (s *Service) afterSettle(ctx context.Context, settled func(context.Context, string, string), machine, sid string) {
 	time.AfterFunc(s.settleDelay(ctx), func() { settled(ctx, machine, sid) })
+}
+
+// interactionResolvedSoon is InteractionResolved on its own goroutine: whoever ended the card does not wait for the
+// hook. The run is counted, so a test's fixture can wait for it before it puts back what the hook reads.
+func (s *Service) interactionResolvedSoon(ctx context.Context, r InteractionResolved) {
+	s.fleet.resolvedRuns.Go(func() { s.InteractionResolved(ctx, r) })
 }
 
 // InteractionResolved: the user dealt with a card of a task's agent: the conversation keeps a record of it, and the

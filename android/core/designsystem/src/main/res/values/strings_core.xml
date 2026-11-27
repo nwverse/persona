@@ -73,8 +73,8 @@
     <string name="designsystem_core_field_invalid">Check what you entered and its format</string>
     <string name="designsystem_core_computer_fallback">the computer</string>
     <string name="designsystem_core_close_agent_title">Close this agent?</string>
-    <string name="designsystem_core_close_agent_message_tab">“%1$s”\n%2$s\n\nThis quits %4$s on %3$s and closes its terminal tab “%5$s” (in a split tab, only its pane). Work in progress stops; the chat is kept, and you can continue it later from History in Agents.</string>
-    <string name="designsystem_core_close_agent_message_pane">“%1$s”\n%2$s\n\nThis quits %4$s on %3$s and closes its terminal pane. Work in progress stops; the chat is kept, and you can continue it later from History in Agents.</string>
+    <string name="designsystem_core_close_agent_message_tab">“%1$s”\n%2$s\n\nThis quits %4$s on %3$s and closes its tab “%5$s”. In a split terminal, only its part closes. Work in progress stops. The session is kept, and you can resume it from History in Agents.</string>
+    <string name="designsystem_core_close_agent_message_pane">“%1$s”\n%2$s\n\nThis quits %4$s on %3$s and closes its terminal. Work in progress stops. The session is kept, and you can resume it from History in Agents.</string>
     <string name="designsystem_core_close_agent_message_runtime">“%1$s”\n%2$s\n\nThis ends the session on %3$s. Work in progress stops.</string>
     <string name="designsystem_core_delete_session_title">Delete this chat?</string>
     <string name="designsystem_core_delete_session_on_machine_command">“%1$s” will be removed from the list on every device. The chat record on %2$s is not deleted; continue it there with %3$s and it comes back.</string>
@@ -272,6 +272,12 @@
     <string name="designsystem_core_engine_footer_none_offline">The machine is offline; the choice applies once it connects. The desktop apps\' sessions show, and starting or continuing a session from your phone is off.</string>
     <string name="designsystem_core_engine_switched">Engine switched</string>
     <string name="designsystem_core_engine_saved_offline">Saved. Applies once connected</string>
+    <string name="designsystem_core_engine_set_notice">This computer uses %1$s together, with %2$s as the default. To change which engines it uses, open this computer in Persona on the web.</string>
+    <string name="designsystem_core_engine_footer_set">Sessions from every engine this computer uses are shown. New sessions from your phone open in %1$s.</string>
+    <string name="designsystem_core_engine_footer_set_offline">The machine is offline; the choice applies once it connects. New sessions from your phone will open in %1$s.</string>
+    <string name="designsystem_core_engine_footer_set_one">Only %1$s will be used: the other engines are turned off and only its sessions are shown.</string>
+    <string name="designsystem_core_engine_footer_set_one_offline">The machine is offline; the choice applies once it connects. Only %1$s will be used, and the other engines are turned off.</string>
+    <string name="designsystem_core_engine_default_changed">Default engine changed</string>
     <string name="designsystem_core_tool_run">Run</string>
     <string name="designsystem_core_tool_read">Read</string>
     <string name="designsystem_core_tool_edit">Edit</string>

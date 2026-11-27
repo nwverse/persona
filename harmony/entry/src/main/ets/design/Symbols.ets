@@ -28,4 +28,5 @@ export class Symbols {
   static readonly check: Resource = $r('sys.symbol.checkmark');
   static readonly waiting: Resource = $r('sys.symbol.clock');
   static readonly muted: Resource = $r('sys.symbol.bell_slash');
+  static readonly search: Resource = $r('sys.symbol.magnifyingglass');
 }

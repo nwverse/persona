@@ -25,6 +25,9 @@ const TaskInstructions = "task_instructions_v1"
 // EventUpdatePreflightFailed reports a refused resident reload for a committed node update.
 const EventUpdatePreflightFailed = "node.update.preflight_failed"
 
+// EventUpdateDraining reports that a committed node update is draining idle work before handover.
+const EventUpdateDraining = "node.update.draining"
+
 // PersonaContracts is the optional bidirectional naming capability. It does not
 // change the node protocol floor or become a required capability.
 const PersonaContracts = "persona_contracts_v1"
@@ -37,6 +40,10 @@ const MCPWait = "mcp_wait_v1"
 // ManagerUpdateInventory is the optional read-only local update.inventory
 // contract. A legacy peer remains compatible, but cannot produce idle evidence.
 const ManagerUpdateInventory = "manager_update_inventory_v1"
+
+// StopIfIdle is an additive automatic-stop RPC. Old peers refuse it before
+// stopping anything; callers must never fall back to unconditional session.stop.
+const StopIfIdle = "session.stop_if_idle"
 
 // ExternalLauncherInventory is optional source-scoped discovery from a trusted node-local adapter registration.
 // It is announced dynamically only while that registration is enabled, never as execution authority.
@@ -87,6 +94,8 @@ const (
 	// SessionStartSpeed: session.start and session.start.work take speed for a new terminal Codex or Claude Code Agent.
 	// A node without it would silently drop the explicit choice and start at the launcher's own speed.
 	SessionStartSpeed = "session_start_speed"
+	// SessionStartServiceTier lets session.start apply a native Codex service_tier before the first turn.
+	SessionStartServiceTier = "session_start_service_tier"
 	// NodeUpdate: the node.update.* methods (docs/operations/node-update.md). Whether an update can run right now is still
 	// node.info's node_update / node_update_reason.
 	NodeUpdate = "node_update"
@@ -165,6 +174,10 @@ const (
 	// (docs/operations/node-update.md "Usage"). sessions.list answers update_busy, that check, and the hub waits on it;
 	// for a node without it (or a list without the field) it waits on the old rule, every Agent idle.
 	NodeUpdateIdle = "node_update_idle"
+	// NodeUpdateDrain: a resident node reports node.update.draining and node.info's update_draining while draining
+	// active work after node.update.commit, and announces node.restarting when handover begins so the hub can anchor
+	// its post-restart confirmation deadline to handover rather than the pre-drain commit reply.
+	NodeUpdateDrain = "node_update_drain_v1"
 	// MachineDiagnose: machine.diagnose and machine.cleanup, a computer's bounded self-description (largest process
 	// groups, folders, rebuildable caches, tools) and the emptying of caches from its own catalog
 	// (docs/server/machines.md "Diagnosis and cleanup"). Without it the manager answers node_outdated.
@@ -271,6 +284,54 @@ const RestartExitCode = 75
 // TaskWorkspace supports explicit backend-created task workspaces.
 const TaskWorkspace = "task_workspace_v1"
 
+// ScratchWorkspace supports workspace.scratch.prepare, creating or safely reusing a
+// node-managed isolated scratch directory under <persona-data>/scratch/<todo_id> for
+// non-repository task_plan dispatches. Older nodes without it fail clearly instead of
+// falling back to an arbitrary or assistant directory.
+const ScratchWorkspace = "scratch_workspace_v1"
+
+// MethodWorkspaceScratchPrepare is the node RPC method gated by ScratchWorkspace.
+const MethodWorkspaceScratchPrepare = "workspace.scratch.prepare"
+
+// ScratchID is a validated single-segment identifier for a managed scratch directory.
+type ScratchID string
+
+// ScratchWorkspaceRequest is the params for workspace.scratch.prepare.
+type ScratchWorkspaceRequest struct {
+	TodoID ScratchID `json:"todo_id"`
+	DryRun bool      `json:"dry_run,omitempty"`
+}
+
+// ScratchWorkspaceResult is the reply to workspace.scratch.prepare.
+type ScratchWorkspaceResult struct {
+	Path    string `json:"path"`
+	Created bool   `json:"created,omitempty"`
+	Reused  bool   `json:"reused,omitempty"`
+}
+
+// ValidScratchID reports whether id is a safe single path segment for a managed scratch
+// directory: 1-96 ASCII characters starting with a letter or digit, followed by letters,
+// digits, hyphens, or underscores (no dots, separators, whitespace, or control bytes).
+func ValidScratchID(id string) bool {
+	if len(id) == 0 || len(id) > 96 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		isAlnum := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+		if i == 0 {
+			if !isAlnum {
+				return false
+			}
+			continue
+		}
+		if !isAlnum && c != '-' && c != '_' {
+			return false
+		}
+	}
+	return true
+}
+
 // TaskWorkspaceCapabilities is the reply to task.workspace.capabilities.
 type TaskWorkspaceCapabilities struct {
 	Capability        string `json:"capability"`
@@ -283,7 +344,7 @@ type TaskWorkspaceCapabilities struct {
 const MarkdownCloseout = "closeout.markdown.v1"
 
 // Announced is what a node built from this code announces.
-var Announced = []string{MarkdownCloseout, TaskWorkspace, TaskInstructions, SourcePermissions, OwnerControls, SessionSkills, ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, MCPWait, Sessions, SessionEchoStatus, ModelConfiguration, AssistantConfigDir, AssistantSupervisionInstructions, AssistantServiceTier, SessionStartSpeed, TaskExecution, TaskInput, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, SecretRunEnv, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow, LauncherSwitchIdle, PaneCwd, NodeUpdateIdle, PaneNewSpace, MachineDiagnose, MachineStorageUsage, StartGoal, StartContinue, LauncherCheckAssistantTurn, StartAnswer, AssistantToolSearchFallback, AgentDirsBlocked, HerdrSessionsBlocked, NodeLanes, ResumeOutsideHealth, DenyDirs, StartOpID}
+var Announced = []string{MarkdownCloseout, TaskWorkspace, ScratchWorkspace, TaskInstructions, SourcePermissions, OwnerControls, SessionSkills, ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, MCPWait, Sessions, SessionEchoStatus, ModelConfiguration, AssistantConfigDir, AssistantSupervisionInstructions, AssistantServiceTier, SessionStartSpeed, SessionStartServiceTier, TaskExecution, TaskInput, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, SecretRunEnv, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow, LauncherSwitchIdle, PaneCwd, NodeUpdateIdle, NodeUpdateDrain, PaneNewSpace, MachineDiagnose, MachineStorageUsage, StartGoal, StartContinue, LauncherCheckAssistantTurn, StartAnswer, AssistantToolSearchFallback, AgentDirsBlocked, HerdrSessionsBlocked, NodeLanes, ResumeOutsideHealth, DenyDirs, StartOpID}
 
 // ShareProjection is the bounded complete-source sharing projection, not light Items.
 const ShareProjection = "share_projection.v1"

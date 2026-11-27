@@ -18,8 +18,11 @@ import PersonaWire
 
     /// The accounts of `manager` (nil: the default's) as the hub has them now, kept; nil when they can't be read, or
     /// when another assistant became current meanwhile (they are not the page's any more).
-    static func read(_ model: AppModel) async -> [MailAccount]? {
+    /// With the hub's mail module off (`MailAccess.storedOnly`, #15995) nothing is asked: the accounts kept from before
+    /// still name the Inbox's mail groups and filters.
+    static func read(_ model: AppModel, access: MailAccess? = nil) async -> [MailAccount]? {
         let manager = model.assistantManagerID
+        guard (access ?? MailModule.access).offersMail else { return nil }
         guard let api = model.api?.manager(manager), let accounts = try? await api.mailAccounts(),
               manager == model.assistantManagerID else { return nil }
         StateCache.save(cacheName(manager), accounts)
@@ -585,8 +588,11 @@ struct InboxPage: View {
             }
             cleanButton
             Divider()
-            Button { composing = ComposeDraft(accountID: accounts.first?.id ?? "", manager: model.assistantManagerID, accounts: accounts) } label: { Label("New Email", systemImage: Theme.Icon.compose) }
-                .disabled(accounts.isEmpty)
+            // Not offered while the hub's mail module is off: it could not be sent (#15995).
+            if MailModule.access.offersMail {
+                Button { composing = ComposeDraft(accountID: accounts.first?.id ?? "", manager: model.assistantManagerID, accounts: accounts) } label: { Label("New Email", systemImage: Theme.Icon.compose) }
+                    .disabled(accounts.isEmpty)
+            }
             Button { showingMutes = true } label: { Label("Muted [Inbox Mutes View e5e468]", systemImage: Theme.Icon.mute) }
             Button { showingRules = true } label: { Label("Rules [Inbox Policy]", systemImage: Theme.Icon.inboxRule) }
             // Every source subscription, with the Inbox's other settings, once the hub shows them (#2041).
@@ -1466,7 +1472,8 @@ struct InboxRow: View {
                     // into), In Progress's state, the 'preparing a suggestion' line; its buttons are in the detail.
                     InboxEventMarkLine(mark: mark).padding(.top, Theme.Space.xxs)
                 } else if !item.isDone && item.suggestion == nil && item.handling == nil {
-                    if let draft = item.agentDraft, let send {
+                    // A mail's reply goes out through the hub's mail module: no Send while it is off (#15995).
+                    if let draft = item.agentDraft, let send, MailModule.access.offersReply(to: item) {
                         InboxDraftCard(draft: draft, changes: (item.agent?.changes ?? []).map { DocChangeText.line($0, in: item.doc) },
                                        sending: sending, send: { send(draft) }, edit: edit)
                             .padding(.top, Theme.Space.sm)
@@ -1748,6 +1755,8 @@ struct InboxDetailView: View {
                 slot.detailIdentityChanged(from: oldKey, to: newKey)
             }
             #endif
+            // Which knowledge base chat it came from, for Knowledge Page in More (#15356): asked once per item.
+            .task(id: Self.identity(for: item)) { await InboxKBChats.shared.load(current) }
             #if DEBUG
             // `-showInboxAction draft|handoff`: open that sheet (screenshots).
             .task {
@@ -1785,6 +1794,8 @@ struct InboxDetailView: View {
                         }
                         Button { sameMatter = true } label: { Label("Same matter as…", systemImage: Theme.Icon.link) }
                             .accessibilityIdentifier("inbox.detail.sameMatter")
+                        // Its chat's knowledge page, when its read names one (#15356).
+                        InboxKBChatButton(item: current)
                     } label: { ThemedIcon(Theme.Icon.moreMenu) }
                         .accessibilityLabel("More")
                         .accessibilityIdentifier("inbox.detail.more")
@@ -1817,6 +1828,7 @@ struct InboxDetailView: View {
                 .safeAreaInset(edge: .top, spacing: 0) {
                     InboxActionBar(item: current, draft: { drafting = true }, handOff: { handingOff = true })
                 }
+                .textLookupSurface("inbox") // the summary's and a chat's words look up on a tap (#10977)
         }
     }
 
@@ -1847,7 +1859,7 @@ struct InboxDetailView: View {
         if let c = item.larkConversation {
             LarkChatView(conversation: c, manager: model.linkManager(current.manager))
         } else if let m = item.mailSummary {
-            MailDetailView(summary: m, accounts: accounts)
+            MailReaderView(item: item, summary: m, accounts: accounts)
         }
     }
 

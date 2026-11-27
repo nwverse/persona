@@ -3,6 +3,7 @@ package assistant
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
@@ -105,7 +106,6 @@ func (s *Service) sideConversationStatus(ctx context.Context, cfg Settings, id s
 	if err != nil {
 		return ""
 	}
-	listed := false
 	for _, c := range list {
 		if c.SessionID == id {
 			if !c.Assistant {
@@ -113,9 +113,11 @@ func (s *Service) sideConversationStatus(ctx context.Context, cfg Settings, id s
 			}
 			return ""
 		}
-		listed = listed || c.Assistant
 	}
-	if listed {
+	if _, deleted, err := s.deletedConversation(ctx, cfg.MachineID, id); err == nil && deleted {
+		return "gone"
+	}
+	if sideRuntimeInventoryReady(id, list) {
 		return "gone"
 	}
 	return ""
@@ -138,14 +140,35 @@ func (s *Service) conversationAway(ctx context.Context, cfg Settings, id string)
 	if err != nil {
 		return false
 	}
-	listed := false
 	for _, c := range list {
 		if c.SessionID == id {
 			return !inTurn(c)
 		}
-		listed = listed || c.Assistant
 	}
-	return listed
+	if _, deleted, err := s.deletedConversation(ctx, cfg.MachineID, id); err == nil && deleted {
+		return true
+	}
+	return sideRuntimeInventoryReady(id, list)
+}
+
+// sideRuntimeInventoryReady reports whether list is complete enough to prove that absent side conversation id is gone.
+// File-backed Claude conversations are listed independently from the Antigravity runtime, so seeing only Claude
+// assistant sessions cannot prove an agy-* side conversation is gone while zero agy assistant sessions are listed.
+func sideRuntimeInventoryReady(id string, list []proto.Session) bool {
+	if strings.HasPrefix(id, "agy-") {
+		for _, c := range list {
+			if c.Assistant && (c.Agent == "agy" || strings.HasPrefix(c.SessionID, "agy-")) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, c := range list {
+		if c.Assistant {
+			return true
+		}
+	}
+	return false
 }
 
 // handOverSideTask atomically moves an open task supervised by a gone or archived side conversation to main chat's

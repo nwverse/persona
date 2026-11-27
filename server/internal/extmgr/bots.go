@@ -78,6 +78,8 @@ type FeishuBotSettings struct {
 	// SourceReportDelayMinutes is the preview window before a reply to the source group. Zero skips it.
 	SourceReportDelayMinutes *int `json:"source_report_delay_minutes,omitempty"`
 	SourceReportFullReply    bool `json:"source_report_full_reply,omitempty"`
+	// Handoff is the proxy-reply policy (bots_handoff.go). The owner's: it goes when the owner does.
+	Handoff *botHandoffPolicy `json:"handoff,omitempty"`
 }
 
 // BotFeatures are the parts that can be switched on one by one: kept here with the credentials, acted on by the
@@ -112,10 +114,21 @@ type BotFeatures struct {
 	// TopicCot: a topic run also shows its thinking and tools in a native agent message, beside the progress card.
 	// On by default, including settings saved before it; off keeps the card's folded process panel.
 	TopicCot bool `json:"topic_cot"`
+	// DMCot: a private-chat run also shows its thinking and tools in a native agent message, beside the progress card
+	// (#16847). Off by default, and for settings saved before it: they have no such key.
+	DMCot bool `json:"dm_cot"`
+	// CotAnswer: a run whose agent message is allowed (dm_cot, topic_cot) gets its answer inside that message and no
+	// progress or answer card; cards take over when the message cannot carry it (#16847). Off by default, and for
+	// settings saved before it.
+	CotAnswer bool `json:"cot_answer"`
 	// ReadGroup: the owner's "@bot /read <task>" in a group the bot is in reads the group's recent messages, images and
 	// files as the owner, then does the task and answers under that message (#11803, bots_read.go). Off by default, and
 	// for settings saved before it: they have no such key.
 	ReadGroup bool `json:"read_group"`
+	// ReadGroupDirect: a /read's answer goes straight under the owner's message in the group, as it did before #14437.
+	// Off by default, and for settings saved before it (they have no such key): the answer goes to the owner's private
+	// chat first, and into the group only when the owner presses its button (the lark module's read_held.go).
+	ReadGroupDirect bool `json:"read_group_direct"`
 }
 
 var defaultBotFeatures = BotFeatures{Main: true, Cards: true, Reports: true, TopicCot: true}
@@ -196,8 +209,9 @@ type botHub struct {
 	// bindGate serializes Feishu binding, including registration network calls, independently of mu.
 	// A channel lets a waiting client's context cancel without waiting for the current bind.
 	bindGate chan struct{}
-	// sync is the user sync: the bots' apps reading as the owner every day (larksync.go).
-	sync larkSync
+	// sync is the user sync service provided by the lark module (larksync_host.go).
+	syncMu sync.Mutex
+	sync   botport.SyncService
 }
 
 func (b *botHub) clock() time.Time {
@@ -433,6 +447,12 @@ func (s FeishuBotSettings) copy() FeishuBotSettings {
 		r := *s.Registration
 		s.Registration = &r
 	}
+	if s.Handoff != nil {
+		h := *s.Handoff
+		h.DirectChats = slices.Clone(h.DirectChats)
+		h.BlockedChats = slices.Clone(h.BlockedChats)
+		s.Handoff = &h
+	}
 	return s
 }
 
@@ -456,6 +476,8 @@ type feishuBotView struct {
 
 	SourceReportDelayMinutes int  `json:"source_report_delay_minutes"`
 	SourceReportFullReply    bool `json:"source_report_full_reply"`
+	// Handoff is the proxy-reply policy; absent when the owner has never set one.
+	Handoff *botHandoffView `json:"handoff,omitempty"`
 	// Target and Agents are the assistant's (feishu.view): where the chat's messages go now, the agents bound to
 	// threads of the chat; left out while it is not connected.
 	Target  string                      `json:"target,omitempty"`
@@ -481,7 +503,8 @@ func (h *Manager) botView(ctx context.Context) feishuBotView {
 	appID, _, domain, fromConfig, _ := h.botCredentialsLocked()
 	v := feishuBotView{Enabled: s.Enabled, AppID: appID, Domain: botcard.ResolveDomain(domain), HasSecret: appID != "",
 		FromConfig: fromConfig, Features: s.Features, BotName: b.info.Name, NudgeAfter: s.nudgeAfter(),
-		SourceReportDelayMinutes: s.sourceReportDelayMinutes(), SourceReportFullReply: s.SourceReportFullReply}
+		SourceReportDelayMinutes: s.sourceReportDelayMinutes(), SourceReportFullReply: s.SourceReportFullReply,
+		Handoff: s.handoffView()}
 	if loadErr != nil {
 		v.Error = i18n.Localize(loadErr, h.botLang(ctx))
 	} else if b.conn != nil {
@@ -500,7 +523,7 @@ func (h *Manager) botView(ctx context.Context) feishuBotView {
 		v.Pairing = &botPairView{Code: p.Code, ExpiresAt: p.Expires.Unix()}
 	}
 	for _, c := range s.TopicChats {
-		v.TopicChats = append(v.TopicChats, botChatView{ChatID: c.ChatID, Name: c.Name, AddedAt: c.At.Unix(), Home: c.ChatID == s.homeChat(), RequireOwnerMention: c.RequireOwnerMention})
+		v.TopicChats = append(v.TopicChats, botChatView{ChatID: c.ChatID, Name: c.Name, AddedAt: c.At.Unix(), Home: c.ChatID == s.homeChat(), RequireOwnerMention: c.RequireOwnerMention, TodoMode: c.TodoMode.Effective(), Space: c.Space})
 	}
 	botAppID := appID
 	b.mu.Unlock()
@@ -569,10 +592,12 @@ func (h *Manager) botRoutes(api *http.ServeMux) {
 			// An entry may carry home: true (the home topic group, "/topics home"); when no entry says anything about home,
 			// the one the list has stays.
 			TopicChats *[]struct {
-				ChatID              string `json:"chat_id"`
-				Name                string `json:"name"`
-				Home                *bool  `json:"home"`
-				RequireOwnerMention *bool  `json:"require_owner_mention"`
+				ChatID              string                       `json:"chat_id"`
+				Name                string                       `json:"name"`
+				Home                *bool                        `json:"home"`
+				RequireOwnerMention *bool                        `json:"require_owner_mention"`
+				TodoMode            *assistantwire.TopicTodoMode `json:"todo_mode"`
+				Space               *string                      `json:"space"`
 			} `json:"topic_chats"`
 			// NudgeAfter is minutes before the one nudge under an unanswered card; 0 turns nudges off, absent leaves it.
 			// Read as raw JSON so that anything but a whole number in range gets the same answer (nudgeAfterValue).
@@ -580,6 +605,8 @@ func (h *Manager) botRoutes(api *http.ServeMux) {
 			// Zero posts as soon as the result is ready. Absent leaves the current setting.
 			SourceReportDelayMinutes json.RawMessage `json:"source_report_delay_minutes"`
 			SourceReportFullReply    *bool           `json:"source_report_full_reply"`
+			// Handoff replaces the proxy-reply policy keys that are present; absent leaves it (bots_handoff.go).
+			Handoff json.RawMessage `json:"handoff"`
 		}
 		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in); err != nil {
 			writeErr(w, http.StatusBadRequest, err)
@@ -618,6 +645,7 @@ func (h *Manager) botRoutes(api *http.ServeMux) {
 		}
 		var topics []BotChat
 		mentionEdits := map[string]bool{}
+		spaceEdits := map[string]string{}
 		keepHome := true // no entry says anything about home: the list's own stays
 		if in.TopicChats != nil {
 			topics = []BotChat{}
@@ -628,7 +656,24 @@ func (h *Manager) botRoutes(api *http.ServeMux) {
 				if c.Home != nil {
 					keepHome = false
 				}
-				topics = append(topics, BotChat{ChatID: c.ChatID, Name: c.Name, Home: c.Home != nil && *c.Home})
+				chat := BotChat{ChatID: c.ChatID, Name: c.Name, Home: c.Home != nil && *c.Home}
+				if c.TodoMode != nil {
+					if !c.TodoMode.Valid() {
+						writeErr(w, http.StatusBadRequest, i18n.Err("hub-bots.topic_todo_mode_bad"))
+						return
+					}
+					chat.TodoMode = *c.TodoMode
+				}
+				if c.Space != nil {
+					sp := strings.TrimSpace(*c.Space)
+					if err := h.checkTopicSpace(r.Context(), sp); err != nil {
+						writeErr(w, http.StatusBadRequest, err)
+						return
+					}
+					spaceEdits[strings.TrimSpace(c.ChatID)] = sp
+					chat.Space = sp
+				}
+				topics = append(topics, chat)
 			}
 			// Everything is checked before anything is written: a list sent with a change that makes it impossible
 			// (a new App ID unpairs the owner) must not leave the rest of the request applied.
@@ -648,7 +693,7 @@ func (h *Manager) botRoutes(api *http.ServeMux) {
 			return
 		}
 		if topics != nil {
-			if err := h.setTopicChats(r.Context(), topics, keepHome, mentionEdits); err != nil {
+			if err := h.setTopicChatsOpt(r.Context(), topics, keepHome, mentionEdits, spaceEdits); err != nil {
 				writeErr(w, http.StatusBadRequest, err)
 				return
 			}
@@ -668,6 +713,12 @@ func (h *Manager) botRoutes(api *http.ServeMux) {
 		if in.LarkCLIProfile != nil {
 			if err := h.setLarkCLIProfile(r.Context(), *in.LarkCLIProfile); err != nil {
 				writeErr(w, http.StatusInternalServerError, err)
+				return
+			}
+		}
+		if len(in.Handoff) > 0 && string(in.Handoff) != "null" {
+			if err := h.setHandoffPolicy(r.Context(), in.Handoff, in.AppID); err != nil {
+				writeErr(w, http.StatusBadRequest, err)
 				return
 			}
 		}
@@ -715,6 +766,16 @@ func (h *Manager) botRoutes(api *http.ServeMux) {
 		}
 		writeJSON(w, map[string]any{"ok": true})
 	})
+	// identity: the paired bot's public identity, never a secret (bots_handoff.go).
+	api.HandleFunc("GET /api/v1/bots/feishu/identity", func(w http.ResponseWriter, r *http.Request) {
+		if err := h.loadBotSettings(r.Context()); err != nil {
+			writeErr(w, http.StatusServiceUnavailable, err)
+			return
+		}
+		writeJSON(w, h.botIdentity(r.Context()))
+	})
+	// handoffs: an authorized caller hands a group question to the bot (bots_handoff.go).
+	api.HandleFunc("POST /api/v1/bots/feishu/handoffs", h.postHandoff)
 	h.larkSyncRoutes(api) // the user sync: /api/v1/bots/feishu/sync…
 }
 
@@ -734,7 +795,7 @@ func (h *Manager) unpairBot(ctx context.Context) error {
 	}
 	previous := b.set.copy()
 	had := b.set.Owner != nil
-	b.set.Owner, b.set.Pairing, b.set.TopicChats, b.set.AISources = nil, nil, nil, nil // the topic chats and the /ai sources were the owner's
+	b.set.Owner, b.set.Pairing, b.set.TopicChats, b.set.AISources, b.set.Handoff = nil, nil, nil, nil, nil // the topic chats, the /ai sources and the handoff policy were the owner's
 	b.set.Configure = nil
 	if err := h.saveBotSettingsLocked(); err != nil {
 		b.set = previous
@@ -885,7 +946,7 @@ func (h *Manager) applyBotUpdateWithReceipt(ctx context.Context, enabled *bool, 
 			records = append(records, botRecord{auditBotCredentials, d})
 		}
 		if next.AppID != cur.AppID {
-			cur.Owner, cur.Pairing, cur.TopicChats, cur.AISources = nil, nil, nil, nil
+			cur.Owner, cur.Pairing, cur.TopicChats, cur.AISources, cur.Handoff = nil, nil, nil, nil, nil
 		}
 		h.clearBotConfigureOnChangeLocked(next)
 		cur.AppID, cur.SecretEnc, cur.Domain = next.AppID, next.SecretEnc, next.Domain
