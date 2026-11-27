@@ -44,6 +44,7 @@ import { Icon } from "../../ui/icons";
 import { ContextChips, ContextChipList } from "../link/ContextChips";
 import { ForwardBars } from "./ForwardCard";
 import { ComposerField, preloadInlineField } from "./ComposerField";
+import type { ComposerImageStageHandle } from "./ComposerImageStage";
 import type { InlineMentionInputHandle } from "./InlineMentionInput";
 import { QuoteBars } from "./Quote";
 import type { ComposerPanelHandle, MentionRow, MentionSource, PanelPick } from "./ComposerPanel";
@@ -59,7 +60,8 @@ import type { ComposerAction } from "../../core/module-host";
 // The + / @ panel loads on picker intent.
 const ComposerPanel = lazyPage(() => import("./ComposerPanel").then((m) => m.ComposerPanel));
 const AssistantComposerPanel = lazyPage(() => import("./AssistantComposerPanel").then((m) => m.AssistantComposerPanel));
-const ComposerOverlay = lazyPage(() => import("./ComposerOverlays").then((m) => m.ComposerOverlay));
+const loadComposerOverlays = () => import("./ComposerOverlays");
+const ComposerOverlay = lazyPage(() => loadComposerOverlays().then((m) => m.ComposerOverlay));
 const preloadComposerOverlay = () => void ComposerOverlay.preload().catch(() => {});
 const SlashSkillEntry = lazyPage(() => import("./SlashSkillView").then((m) => m.SlashSkillEntry));
 // Skill-aware history labels are needed only when recall search opens, not on the first screen.
@@ -286,6 +288,7 @@ export const Composer = memo(function Composer({
   const [imagePreview, setImagePreview] = useState<{ id: string; closing?: boolean } | null>(null);
   const imageExpanded = Boolean(imagePreview && !imagePreview.closing);
   const dockSlot = useRef<HTMLDivElement>(null);
+  const stageHandle = useRef<ComposerImageStageHandle | null>(null);
   // Enter while blocked (#4480): a line says why nothing went, the button and the card light up; it fades after a while
   const [nudge, setNudge] = useState(0);
   useEffect(() => {
@@ -375,7 +378,8 @@ export const Composer = memo(function Composer({
   const openImagePreview = (id: string) => {
     preloadComposerOverlay();
     setExpanded(false);
-    setImagePreview({ id });
+    if (stageHandle.current && imageExpanded) stageHandle.current.select(id);
+    else setImagePreview({ id });
   };
   const removeAttachment = (id: string) => {
     const idx = attsNow.current.findIndex((a) => a.id === id);
@@ -831,7 +835,7 @@ export const Composer = memo(function Composer({
     const raw = e.dataTransfer.getData(ENTRY_DRAG_TYPE);
     if (!raw) return false;
     if (!disabled && !editor) {
-      void import("./ComposerOverlays").then((m) =>
+      void loadComposerOverlays().then((m) =>
         m.resolveEntryDrop(raw, { mid: machineId, cwd: mention?.cwd }, (path) =>
           replaceAtCaret([fileReference(path, baseName(path.replace(/\/$/, "")) || path)], null, true),
         ),
@@ -855,7 +859,7 @@ export const Composer = memo(function Composer({
         reading.current++;
         let a: Attachment | null;
         try {
-          a = await import("./ComposerOverlays").then((m) => m.readImage(f, limits()));
+          a = await loadComposerOverlays().then((m) => m.readImage(f, limits()));
         } finally {
           reading.current--;
         }
@@ -903,7 +907,7 @@ export const Composer = memo(function Composer({
     commentReads.add(read);
     signal.addEventListener("abort", release, { once: true });
     try {
-      const { runCommentImagePicker } = await import("./ComposerOverlays");
+      const { runCommentImagePicker } = await loadComposerOverlays();
       await runCommentImagePicker({
         target,
         files,
@@ -971,6 +975,8 @@ export const Composer = memo(function Composer({
       }
       if (!mounted.current || keyNow.current !== draftKey || draftNow.current !== value || !canWriteDraft()) return;
     }
+    const pendingEdits = stageHandle.current?.flush();
+    if (pendingEdits && (!(await pendingEdits) || !mounted.current || keyNow.current !== draftKey || !canWriteDraft())) return;
     const refs = getContexts(draftKey);
     const q = getQuotes(draftKey).list;
     if (commentReads.size) {
@@ -1148,6 +1154,7 @@ export const Composer = memo(function Composer({
                 compact,
                 composerRef: box,
                 slotRef: dockSlot,
+                handleRef: stageHandle,
                 innerOverlayOpen: innerOverlay,
                 dragging,
                 drag,
@@ -1377,7 +1384,8 @@ export const Composer = memo(function Composer({
             if (e.key === "Escape" && imageExpanded && !innerOverlay && !document.querySelector("[role=dialog],[role=menu]")) {
               e.preventDefault();
               e.stopPropagation();
-              closeImagePreview();
+              if (stageHandle.current) stageHandle.current.escape();
+              else closeImagePreview();
               return;
             }
             // Esc while editing cancels it; kept from ChatView's interrupt on the window

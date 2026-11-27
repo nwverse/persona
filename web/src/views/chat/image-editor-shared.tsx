@@ -306,7 +306,8 @@ export function useImageEditorCore({
   onDecodeError,
   onDragStart,
 }: UseImageEditorCoreOptions) {
-  const [img, setImg] = useState<HTMLImageElement | null>(null);
+  const [loaded, setLoaded] = useState<{ src: string; img: HTMLImageElement } | null>(null);
+  const img = loaded && loaded.src === src ? loaded.img : null;
   const [doc, setDoc] = useState<EditState>(() => start ?? { edits: noEdits(), history: noHistory() });
   const [shownKey, setShownKey] = useState(stateKey);
   const [current, setCurrent] = useState<Mark | null>(null);
@@ -342,22 +343,21 @@ export function useImageEditorCore({
 
   useEffect(() => {
     if (!src) {
-      setImg(null);
+      setLoaded(null);
       return;
     }
     const cached = decodedCache?.current.get(src);
     if (cached) {
-      setImg(cached);
+      setLoaded({ src, img: cached });
       return;
     }
     let live = true;
-    setImg(null);
     const el = new Image();
     el.src = src;
     el.decode().then(
       () => {
         decodedCache?.current.set(src, el);
-        if (live) setImg(el);
+        if (live) setLoaded({ src, img: el });
       },
       () => {
         if (!live) return;
