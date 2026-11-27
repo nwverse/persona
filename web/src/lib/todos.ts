@@ -857,9 +857,8 @@ export function sortTodos(todos: Todo[], lookup?: SessionLookup): Todo[] {
     }
     if (rA !== rB) return rA - rB;
 
-    const tA = a.created_at ? Date.parse(a.created_at) || 0 : 0;
-    const tB = b.created_at ? Date.parse(b.created_at) || 0 : 0;
-    if (tA !== tB) return tB - tA;
+    const created = byTime(b.created_at, a.created_at);
+    if (created) return created;
     return a.id.localeCompare(b.id);
   });
 }
@@ -951,11 +950,8 @@ export function mostUrgentAgent(
 }
 
 function byDate(a: Session, b: Session): number {
-  const parseTime = (s: Session) => {
-    const raw = (stateOf(s) === "working" ? s.state_since || s.updated_at : s.updated_at) ?? "";
-    return raw ? Date.parse(raw) || 0 : 0;
-  };
-  const diff = parseTime(b) - parseTime(a);
+  const at = (s: Session) => (stateOf(s) === "working" ? s.state_since || s.updated_at : s.updated_at) ?? "";
+  const diff = byTime(at(b), at(a));
   if (diff !== 0) return diff;
   return a.session_id.localeCompare(b.session_id) || a.machine_id.localeCompare(b.machine_id);
 }

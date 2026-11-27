@@ -5,6 +5,7 @@ import { foldedState } from "./child-sessions";
 import { t } from "../i18n";
 import type { Session } from "./types";
 import type { SessionPlace } from "./session-groups";
+import { byTime } from "./times";
 
 // Match Go's JSON tuple spelling, including HTML and line-separator escaping.
 const GO_JSON_ESCAPE = new RegExp("[<>&" + String.fromCharCode(8232, 8233) + "]", "g");
@@ -27,7 +28,7 @@ export function runtimeRemoval(id: string): string {
   throw new Error(t("paged-agents.invalid_page"));
 }
 export const runtimeOrder = (a: Session, b: Session) => {
-  const time = (Date.parse(b.updated_at ?? "") || 0) - (Date.parse(a.updated_at ?? "") || 0);
+  const time = byTime(b.updated_at, a.updated_at);
   if (time) return time;
   // JavaScript timestamps drop sub-millisecond precision; Go's transport order does not.
   const fraction = (s: Session) => (/\.(\d+)/.exec(s.updated_at ?? "")?.[1] ?? "").padEnd(9, "0");

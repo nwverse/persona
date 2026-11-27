@@ -101,6 +101,7 @@
   "step_mail_search": "メールを検索",
   "step_mail_read": "メールを読む",
   "step_mail_send": "メールを送信",
+  "step_mail_move": "メールを移動",
   "step_kb": "ナレッジベースを検索",
   "step_kb_update": "ナレッジベースを更新",
   "cot_tool_done": "✓ 完了",

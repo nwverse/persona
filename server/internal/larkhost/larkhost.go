@@ -137,7 +137,7 @@ type Asks interface {
 	AskBack(ix proto.Interaction, grace time.Duration)
 	// AsksCatchUp closes the cards whose interaction is over for good, as the hub's history says; pending are the
 	// interactions up now (after a reconnection).
-	AsksCatchUp(ctx context.Context, pending map[string]bool)
+	AsksCatchUp(ctx context.Context, pending map[string]proto.Interaction)
 }
 
 // Workbench is the Lark workbench (/home, /today, /inbox and their buttons, the home card).
@@ -221,6 +221,9 @@ type Chat interface {
 	// SetTarget makes the chat's messages go to t; RememberThread binds a message the bot posted to a target.
 	SetTarget(t assistantwire.ChatTarget)
 	RememberThread(messageID string, t assistantwire.ChatTarget, title string)
+	// RememberTopicSession binds a group chat topic (chatID/threadID) to a conversation target so replies
+	// in that topic continue the bound conversation.
+	RememberTopicSession(ctx context.Context, chatID, threadID string, t assistantwire.ChatTarget, title string)
 	// Send passes a message of the chat on to its target and starts the run that answers it.
 	Send(ctx context.Context, ev *botcard.MessageEvent, content botcard.Content, t assistantwire.ChatTarget) error
 	// CardsWaiting is how many cards are open; CardNudged whether interaction id's card was nudged under.
@@ -384,8 +387,10 @@ type Host interface {
 	EndedText(l i18n.Lang, status, fallback string) string
 	ResolutionText(l i18n.Lang, ix proto.Interaction, r proto.Resolution) string
 	ResolveInteraction(ctx context.Context, id string, r proto.Resolution, action string) (bool, error)
+	ResolveInteractionAt(ctx context.Context, id string, r proto.Resolution, action string, expected *time.Time) (bool, error)
 	ValidateClarifyQuestion(text string) error
 	ClarifyInteraction(ctx context.Context, id, question, clientMsgID, action, chatID, messageID string) (bool, error)
+	ClarifyInteractionAt(ctx context.Context, id, question, clientMsgID, action, chatID, messageID string, expected *time.Time) (bool, error)
 	AcceptAction(ctx context.Context, a *botcard.CardAction) (kind, text string)
 	LaterHandled(ctx context.Context, id string) (bool, error)
 	TabName(ctx context.Context, prompt string) string
@@ -403,7 +408,11 @@ type Host interface {
 	AskView(ctx context.Context, ix proto.Interaction) assistantwire.AskView
 	AskRoute(ctx context.Context, ix proto.Interaction) assistantwire.AskRoute
 	AskSensitive(ctx context.Context, ix proto.Interaction) bool
+	// AskDirect admits an eligible owner-decision Assistant write approval independently of all_cards.
+	AskDirect(ctx context.Context, ix proto.Interaction) bool
 	AskState(id string) (ended, pending bool)
+	// AskStateFor binds the terminal marker and announcement to ix's exact occurrence.
+	AskStateFor(ix proto.Interaction) (ended, pending bool)
 	AskPending(id string) (proto.Interaction, bool)
 
 	// The nudges (nudge.go): a card's agent gone, a prepared card's deadline, the standing board told a card was
@@ -479,13 +488,13 @@ func (None) DivertNotices(_ context.Context, kind assistantwire.NoticeKind, _ []
 }
 
 // No cards for what is asked without a channel: none is wanted, none is posted.
-func (None) AskAnnounced(proto.Interaction)                    {}
-func (None) AskPost(context.Context, proto.Interaction)        {}
-func (None) AskWanted(context.Context, proto.Interaction) bool { return false }
-func (None) AskEnded(proto.Interaction, string, bool)          {}
-func (None) AskDetached([]string, time.Duration)               {}
-func (None) AskBack(proto.Interaction, time.Duration)          {}
-func (None) AsksCatchUp(context.Context, map[string]bool)      {}
+func (None) AskAnnounced(proto.Interaction)                            {}
+func (None) AskPost(context.Context, proto.Interaction)                {}
+func (None) AskWanted(context.Context, proto.Interaction) bool         { return false }
+func (None) AskEnded(proto.Interaction, string, bool)                  {}
+func (None) AskDetached([]string, time.Duration)                       {}
+func (None) AskBack(proto.Interaction, time.Duration)                  {}
+func (None) AsksCatchUp(context.Context, map[string]proto.Interaction) {}
 
 // The chat without a channel: a bot switched off. Nothing is taken or answered, nothing waits, no target is set, and
 // its records are empty: what is kept in them is dropped.
@@ -509,6 +518,8 @@ func (None) Route(string, string) assistantwire.ChatTarget {
 }
 func (None) SetTarget(assistantwire.ChatTarget)                      {}
 func (None) RememberThread(string, assistantwire.ChatTarget, string) {}
+func (None) RememberTopicSession(context.Context, string, string, assistantwire.ChatTarget, string) {
+}
 func (None) Send(context.Context, *botcard.MessageEvent, botcard.Content, assistantwire.ChatTarget) error {
 	return ErrNoChannel
 }

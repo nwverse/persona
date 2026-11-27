@@ -2410,12 +2410,13 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	case "codex.answer": // the phone's answer to a Codex question or approval card (codexask.go)
 		var a struct {
 			ID         string           `json:"id"`
+			CreatedAt  time.Time        `json:"created_at"`
 			Resolution proto.Resolution `json:"resolution"`
 		}
 		if err := json.Unmarshal(params, &a); err != nil {
 			return nil, err
 		}
-		return ok(n.codexAnswer(ctx, p.SessionID, a.ID, a.Resolution))
+		return ok(n.codexAnswerAt(ctx, p.SessionID, a.ID, a.CreatedAt, a.Resolution))
 	case "assistant.permissions.reset":
 		restart, err := n.resetAssistantPermissions(ctx, p.SessionID)
 		return map[string]any{"ok": err == nil, "restart_required": restart}, err

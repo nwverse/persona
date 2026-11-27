@@ -78,7 +78,7 @@ class ExtensionUIStreamController(
                 scope.launch {
                     try {
                         val resolver = checkNotNull(binding.approvals)
-                        withTimeout(responseDeadlineMillis) { resolver.resolveOutcome(permission.id, Resolution(allow = allow)) }
+                        withTimeout(responseDeadlineMillis) { resolver.resolveOccurrence(permission, Resolution(allow = allow)) }
                         if (adapter.permission === permission) adapter.permission = null
                     } catch (cancelled: CancellationException) { throw cancelled }
                     catch (_: Exception) { adapter.local.rejected = true }

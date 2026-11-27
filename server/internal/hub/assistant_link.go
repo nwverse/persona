@@ -194,7 +194,7 @@ func (l assistantLink) helloBase() assistantwire.Hello {
 	h := l.h
 	// SecretHandoffGate: this hub checks who approves a hand-off card (secret_handoff.go). ArchivedApart: it takes a
 	// machine's archived rows apart from its list (fleet.archived, fleet_link.go).
-	out := assistantwire.Hello{Locale: string(h.userLang()), SecretHandoffGate: true, ArchivedApart: true}
+	out := assistantwire.Hello{Locale: string(h.userLang()), SecretHandoffGate: true, ArchivedApart: true, ApprovalMirrors: true}
 	if m, ok := h.mutesEvent(); ok { // the hub's mutes, before the manager pushes anything (fleet_link.go)
 		out.Mutes = m.Mutes
 	}
@@ -275,7 +275,8 @@ func (l assistantLink) deviceCallFrom(ctx context.Context, from string, p assist
 		case assistantwire.DeviceInteractionsList:
 			list := []proto.Interaction{}
 			for _, ix := range h.pendingInteractions() {
-				if cmp.Or(ix.Manager, assistantwire.AssistantID) == from && h.cardAllowed(from, ix) {
+				// A manager reconnects authoritative operations; display copies belong only in app snapshots.
+				if ix.MirrorOf == "" && cmp.Or(ix.Manager, assistantwire.AssistantID) == from && h.cardAllowed(from, ix) {
 					list = append(list, ix)
 				}
 			}
@@ -299,7 +300,8 @@ func (l assistantLink) deviceCallFrom(ctx context.Context, from string, p assist
 		}
 		list := []proto.Interaction{}
 		for _, ix := range h.pendingInteractions() {
-			if (ix.MachineID == "" || ix.MachineID == m.cfg.ID) && cmp.Or(ix.Manager, assistantwire.AssistantID) == from && h.cardAllowed(from, ix) {
+			// A manager reconnects authoritative operations; display copies belong only in app snapshots.
+			if ix.MirrorOf == "" && (ix.MachineID == "" || ix.MachineID == m.cfg.ID) && cmp.Or(ix.Manager, assistantwire.AssistantID) == from && h.cardAllowed(from, ix) {
 				list = append(list, ix)
 			}
 		}
@@ -511,11 +513,7 @@ func init() {
 		}
 		return notifyAnswer(out), nil
 	})
-	handleBus(assistantwire.MethodSnapshot, func(h *Hub, ctx context.Context, c *busConn, params json.RawMessage) (any, error) {
-		var s assistantwire.Snapshot
-		if err := json.Unmarshal(params, &s); err != nil {
-			return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: assistantwire.MethodSnapshot + ": " + err.Error()}
-		}
+	handleTypedBus(assistantwire.SnapshotMethod, assistantwire.MethodSnapshot+": ", func(h *Hub, ctx context.Context, c *busConn, s assistantwire.Snapshot) (assistantwire.SnapshotResult, error) {
 		res, err := assistantLink{h}.snapshotFrom(ctx, c.managerID(), s)
 		return res, busCodedError(err)
 	})
@@ -693,12 +691,10 @@ func updatedHello(hello assistantwire.Hello) assistantwire.Hello {
 func (h *Hub) assistantConnected() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	var res struct {
-		Tools []proto.Tool `json:"tools"`
-	}
 	h.managerConnected()    // agents_link.go
 	h.fleetClientsRefresh() // what of the apps it needs (fleet_link.go)
-	if err := h.callBus(ctx, assistantwire.AssistantID, assistantwire.MethodTools, nil, &res); err != nil {
+	res, err := buswire.Call(ctx, h.managerCaller(assistantwire.AssistantID), assistantwire.ToolsMethod, assistantwire.SessionRef{})
+	if err != nil {
 		h.logf("assistant: tools: %v", err)
 		return
 	}
@@ -795,23 +791,19 @@ func (h *Hub) assistantToolsNow() []proto.Tool {
 func (a assistantRemote) Tool(ctx context.Context, call assistantwire.ToolCall) proto.ToolResult {
 	ctx, cancel := context.WithTimeout(ctx, time.Hour)
 	defer cancel()
-	var res proto.ToolResult
-	if err := a.call(ctx, assistantwire.MethodTool, call, &res); err != nil {
+	res, err := callAssistant(ctx, a, assistantwire.ToolMethod, call)
+	if err != nil {
 		return proto.TextResult(err.Error(), true)
 	}
 	return res
 }
 
 func (a assistantRemote) Context(ctx context.Context, p assistantwire.ContextParams) (assistantwire.ContextResult, error) {
-	var res assistantwire.ContextResult
-	err := a.call(ctx, assistantwire.MethodContext, p, &res)
-	return res, err
+	return callAssistant(ctx, a, assistantwire.ContextMethod, p)
 }
 
 func (a assistantRemote) Action(ctx context.Context, act assistantwire.Action) (assistantwire.ActionResult, error) {
-	var res assistantwire.ActionResult
-	err := a.call(ctx, assistantwire.MethodAction, act, &res)
-	return res, err
+	return callAssistant(ctx, a, assistantwire.ActionMethod, act)
 }
 
 func (a assistantRemote) UserSpoke(ctx context.Context, r assistantwire.SessionRef) {

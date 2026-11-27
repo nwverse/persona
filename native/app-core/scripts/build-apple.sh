@@ -17,7 +17,7 @@
 # cache is best effort: when an entry cannot be read, or the cache cannot be written, the script says so in one line on
 # stderr and builds, or keeps, the worktree's copy as it would without a cache.
 #
-# On Linux, for a Linux Apple toolchain such as nwverse/apple-build that builds the iOS app without Xcode (#16944), the
+# On Linux, for a Linux Apple toolchain that builds the iOS app without Xcode (#16944), the
 # same commands build the device and arm64 simulator slices whatever the machine's architecture (every Apple Rust
 # target is a cross target there, and such a toolchain builds for the arm64 simulator), and no macOS slice: macOS
 # `swift test` needs a Mac, and the script says so in one line. With no Apple linker and no xcodebuild, cargo builds
