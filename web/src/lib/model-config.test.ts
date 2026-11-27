@@ -259,7 +259,7 @@ describe("后台督办的用途 (#5082)", () => {
     // a hub before #5086 sends none: nothing for Main chat, this page's own sentence for the background supervisor
     expect(purposeDescription(main)).toBe("");
     expect(purposeDescription({ ...main, description: "   " })).toBe("");
-    expect(purposeDescription(supervise)).toContain("跟进并验收");
+    expect(purposeDescription(supervise)).toContain("跟进并审核");
   });
 });
 
@@ -413,5 +413,5 @@ describe("the two meeting uses (#7980)", () => {
 });
 
 describe("退回 CLI", () => {
-  it("says why", () => expect(runtimeFallbackText(" 没有 Node.js 22+ ")).toBe("已退回 CLI：没有 Node.js 22+"));
+  it("says why", () => expect(runtimeFallbackText(" 没有 Node.js 22+ ")).toBe("已回退至 CLI：没有 Node.js 22+"));
 });

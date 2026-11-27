@@ -97,7 +97,7 @@ describe("新对话页：第一条消息发出、会话还没开起来 (#1697)",
   it("立刻换成对话页的样子：页头「新对话」、气泡、「正在准备」，欢迎语收起，输入框不能发", async () => {
     await act(async () => root.render(<PersonaAssistant fresh onToggleSidebar={() => {}} />));
     await flush();
-    expect(host.textContent).toContain("有什么要我做的？");
+    expect(host.textContent).toContain("有什么我可以帮你的？");
 
     await send();
     expect(starts).toHaveLength(1);
@@ -106,7 +106,7 @@ describe("新对话页：第一条消息发出、会话还没开起来 (#1697)",
     expect(headerTitle()).not.toContain(WORDS);
     expect(waiting()!.querySelector("[data-user-bubble]")?.textContent).toContain(WORDS);
     expect(waiting()!.textContent).toContain("正在准备");
-    expect(host.textContent).not.toContain("有什么要我做的？");
+    expect(host.textContent).not.toContain("有什么我可以帮你的？");
     expect(host.querySelector("textarea")!.disabled).toBe(true);
   });
 
@@ -118,7 +118,7 @@ describe("新对话页：第一条消息发出、会话还没开起来 (#1697)",
     act(() => vi.advanceTimersByTime(SLOW_START_MS - 100));
     expect(waiting()!.textContent).toContain("正在准备");
     act(() => vi.advanceTimersByTime(200));
-    expect(waiting()!.textContent).toContain("还在启动");
+    expect(waiting()!.textContent).toContain("仍在启动");
   });
 
   it("开起来了：去那个会话", async () => {
@@ -137,7 +137,7 @@ describe("新对话页：第一条消息发出、会话还没开起来 (#1697)",
     await act(async () => starts[0].reject(new Error("no launcher")));
     await flush();
     expect(waiting()).toBeNull();
-    expect(host.textContent).toContain("有什么要我做的？");
+    expect(host.textContent).toContain("有什么我可以帮你的？");
     expect(host.querySelector("textarea")!.value).toBe(WORDS);
     expect(host.querySelector("textarea")!.disabled).toBe(false);
     expect(navigate).not.toHaveBeenCalled();

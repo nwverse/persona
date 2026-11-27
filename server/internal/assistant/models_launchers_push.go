@@ -16,17 +16,29 @@ import (
 
 // ---- the nodes ----
 
-// managedNodeCalls is the new-connection configuration callback: the providers in the machine's scope
-// (launchers.catalog), or for a node from before the catalog the same with their secrets (launchers.managed). A failed
-// read sends nothing.
-func (s *Service) managedNodeCalls(ctx context.Context, machine string) []devicewire.NodeCall {
-	s.invalidateLauncherListCache(machine)
-	if s.machinePending(ctx, machine) {
+// nodeConnectCalls is the new-connection configuration callback (devices.Options.NodeCalls): the node's own settings
+// (node.configure: Antigravity idle compaction and the sessions with cards waiting, agyNodeConfigureCall), then its
+// providers (managedNodeCalls). A provider read that fails holds back only the providers. A computer waiting to be
+// confirmed gets nothing.
+func (s *Service) nodeConnectCalls(ctx context.Context, machine string) []devicewire.NodeCall {
+	providers := s.managedNodeCalls(ctx, machine)
+	if len(providers) == 0 && s.machinePending(ctx, machine) {
 		return nil
 	}
 	var calls []devicewire.NodeCall
 	if cfgCall, ok := s.agyNodeConfigureCall(ctx, machine); ok {
 		calls = append(calls, cfgCall)
+	}
+	return append(calls, providers...)
+}
+
+// managedNodeCalls is a new connection's provider configuration (nodeConnectCalls): the providers in the machine's
+// scope (launchers.catalog), or for a node from before the catalog the same with their secrets (launchers.managed). A
+// failed read sends nothing.
+func (s *Service) managedNodeCalls(ctx context.Context, machine string) []devicewire.NodeCall {
+	s.invalidateLauncherListCache(machine)
+	if s.machinePending(ctx, machine) {
+		return nil
 	}
 	s.models.mu.Lock()
 	stored, err := s.readStoredLaunchers(ctx)
@@ -37,27 +49,27 @@ func (s *Service) managedNodeCalls(ctx context.Context, machine string) []device
 	s.models.mu.Unlock()
 	if err != nil {
 		s.logf("launchers: prepare node configuration: %v", err)
-		return calls
+		return nil
 	}
 	if _, err := s.nodeLaunchers(stored); err != nil {
 		s.logf("launchers: prepare node configuration: %v", err)
-		return calls
+		return nil
 	}
 	catalog, legacy, err := s.nodeLaunchersFor(ctx, stored, keys, machine)
 	if err != nil {
 		s.logf("launchers: prepare node configuration: %v", err)
-		return calls
+		return nil
 	}
 	c, err := json.Marshal(map[string]any{"launchers": catalog})
 	if err != nil {
-		return calls
+		return nil
 	}
 	l, err := json.Marshal(map[string]any{"launchers": legacy})
 	if err != nil {
-		return calls
+		return nil
 	}
-	return append(calls, devicewire.NodeCall{MachineID: machine, Method: DeviceLaunchersCatalog, Params: c,
-		Fallback: &devicewire.NodeCall{MachineID: machine, Method: DeviceLaunchersManaged, Params: l}})
+	return []devicewire.NodeCall{{MachineID: machine, Method: DeviceLaunchersCatalog, Params: c,
+		Fallback: &devicewire.NodeCall{MachineID: machine, Method: DeviceLaunchersManaged, Params: l}}}
 }
 
 // managedForNodes: the providers with their secrets as every node from before the catalog would get them (no scope

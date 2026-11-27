@@ -11,3 +11,6 @@ func readPaneEnv(pid int) map[string]string {
 	}
 	return p.env
 }
+
+// procEnvBytes: another agy data directory is not looked for on Windows (agyroots.go).
+func procEnvBytes(int) []byte { return nil }

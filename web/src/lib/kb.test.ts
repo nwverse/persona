@@ -76,7 +76,7 @@ describe("the meetings list (#8871)", () => {
     // The owner's own recordings never fold, sorted or not yet (no summary yet).
     expect(s.map((x) => [x.key, x.title, x.items.map((i) => i.id), !!x.fold])).toEqual([
       ["ranked", "全部", ["just-ended", "new", "old"], false],
-      ["rest", "还没整理的", ["raw", "undated"], true],
+      ["rest", "待整理", ["raw", "undated"], true],
     ]);
     const tagged = groupEntries("meetings", [e("a", { kind: "meetings", updated: "2026-01-01T00:00:00Z" }), e("b", { kind: "recordings", updated: "2026-02-01T00:00:00Z" })], "周会");
     expect(tagged.map((x) => [x.title, x.items.map((i) => i.id)])).toEqual([["#周会", ["b", "a"]]]);
@@ -92,7 +92,7 @@ describe("project tagging", () => {
     expect(projectKindLabel(e("a", { extra: "short · active" }))).toBe("短期");
     expect(projectKindLabel(e("a"))).toBeNull();
     expect(statusLabel("active")).toBeNull();
-    expect(statusLabel("paused")).toBe("暂停");
+    expect(statusLabel("paused")).toBe("已暂停");
   });
 });
 
@@ -122,8 +122,8 @@ describe("groupEntries", () => {
   it("folds the untagged people under 还没整理的", () => {
     const s = groupEntries("people", [e("x", { kind: "people" }), e("y", { kind: "people", importance: "P1" })]);
     expect(s.map((x) => [x.key, x.title, x.items.map((i) => i.id), !!x.fold])).toEqual([
-      ["ranked", "按重要级和相关性", ["y"], false],
-      ["rest", "还没整理的", ["x"], true],
+      ["ranked", "按重要程度与相关性", ["y"], false],
+      ["rest", "待整理", ["x"], true],
     ]);
     expect(s[1].footer).toContain("人");
   });
@@ -289,7 +289,7 @@ describe("detail", () => {
     expect(factsOf("meetings", { at: "2026-10-30T14:00:00Z", url: " https://example.com/m " })).toEqual({
       at: "2026-10-30T14:00:00Z",
       url: "https://example.com/m",
-      whenLabel: "开会时间",
+      whenLabel: "会议时间",
       openLabel: "打开会议纪要",
     });
   });
@@ -352,7 +352,7 @@ describe("问 Persona", () => {
     const t = askPersonaText({ name: "天气 App" }, { summary: "# 天气 App\n档案", log, path: "/home/me/.persona/data/projects/weather-app" });
     expect(t.startsWith('<persona-context kind="context" title="知识库 · 天气 App" url="">\n# 天气 App\n档案\n\n时间线（最近）：\n- 2026-10-03')).toBe(true);
     expect(t).not.toContain("2026-10-02");
-    expect(t).toContain("知识库目录：/home/me/.persona/data/projects/weather-app\n</persona-context>\n\n说说「天气 App」现在怎么样了");
+    expect(t).toContain("知识库目录：/home/me/.persona/data/projects/weather-app\n</persona-context>\n\n请帮我同步「天气 App」目前的进展");
     expect(askPersonaText({ name: "韩梅梅", one_line: "产品经理" })).toContain('url="">\n产品经理\n</persona-context>');
   });
 });

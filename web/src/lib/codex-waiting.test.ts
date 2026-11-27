@@ -28,6 +28,6 @@ describe("a waiting Codex's row", () => {
   it("says it waits for its first message", () => {
     expect(waitsForFirstMessage(waiting)).toBe(true);
     expect(waitsForFirstMessage(s({}))).toBe(false);
-    expect(rowLine(waiting)?.text).toBe("等第一条消息");
+    expect(rowLine(waiting)?.text).toBe("等待首条消息");
   });
 });

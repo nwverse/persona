@@ -56,7 +56,7 @@ import { onOpenNewAgent, type NewAgentPreset } from "./lib/new-agent";
 import { closeHelp, useHelpOpen } from "./lib/shortcut-help";
 import { closePalette, openPalette, usePalette } from "./lib/palette";
 import { sidebarRail, sidebarShown, useLayout } from "./lib/layout";
-import { useMacChrome } from "./lib/mac-chrome";
+import { macChromeMode, useMacChrome } from "./lib/mac-chrome";
 import { MacBayTools, MacMainContour } from "./views/MacChrome";
 import { SIDEBAR_LABEL, useShortcuts } from "./lib/use-shortcuts";
 import { Sidebar, SidebarRail } from "./views/Sidebar";
@@ -679,7 +679,7 @@ function Shell() {
       ref={shell}
       data-app-shell
       data-sidebar-hidden={!sidebarShown(layout) || undefined}
-      data-mac-chrome={macChrome.unifiedTitlebar ? (macChrome.fullScreen ? "fullscreen" : "windowed") : undefined}
+      data-mac-chrome={macChromeMode(macChrome)}
       data-mac-bay={macBay ?? (macWindowed ? "expanded" : undefined)}
       className="flex h-full overflow-hidden bg-page"
     >

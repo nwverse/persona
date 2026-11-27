@@ -2941,6 +2941,20 @@ screens. One card contains a title, speaker, timestamp, saved text, and **Open o
 actions. Long saved text folds in the card. The original uses the existing transcript jump. The saved text stays usable
 when the original cannot be opened.
 
+### 4.15 Following a name in code (web, UI version 13)
+
+When an extension sets `navigate` on a `code` component (`docs/extensions/extensions.md`, "UI version 13: go to
+definition"), a name in the code can be followed the way an IDE does it, with IntelliJ's keys
+(`web/src/views/extensions/CodeViews.tsx`, `web/src/lib/code-navigate.ts`):
+
+- **⌘-click or ⌘B** (Ctrl-click, Ctrl+B elsewhere) goes to the definition of the name under the pointer or the caret;
+  **⌥F7** (Alt+F7) asks for its usages; **⌘[** (Ctrl+Alt+← elsewhere) goes back. The extension answers with the page to
+  show, and the code shows the busy state as for any other action.
+- The keys work only inside the code area, never in a field or during an IME composition, and ⌘F there still finds in
+  the file.
+- There is no new visible control: a hover title on the code area names the keys. A code without `navigate`, and an
+  app below UI version 13, look and work as before (principle 2).
+
 ## 5. Content
 
 ### 5.1 Voice and tone

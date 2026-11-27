@@ -23,6 +23,7 @@ import (
 	"github.com/nwverse/persona/server/internal/moduleswitch"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/connector/proc"
@@ -631,7 +632,7 @@ func (ps *extensions) changed(c extension.Change) {
 		ps.forgetAssistantData(ctx, c.ID) // what the assistant read of its data directory goes with it
 		// What the user let it read of the assistant's sensitive information goes too (#13246): installed again, it
 		// starts as a third party's with no grant.
-		if err := ps.h.callAssistant(ctx, assistantwire.MethodExtensionTrustForget, assistantwire.ExtensionTrustForget{Extension: c.ID}, nil); err != nil {
+		if _, err := buswire.Call(ctx, assistantCaller(ps.h.callAssistant), assistantwire.ExtensionTrustForgetMethod, assistantwire.ExtensionTrustForget{Extension: c.ID}); err != nil {
 			ps.logf("plugin %s removed: its trust was not forgotten: %v", c.ID, err)
 		}
 		if n, err := ps.h.removeHandoffRules(ctx, c.ID, ""); err != nil {

@@ -109,7 +109,7 @@ describe("errors", () => {
   it("keeps other failures' readable detail without asking for an update", () => {
     const failed = new ApiError(502, "新建 worktree 失败：'x' is already used by worktree", {});
     expect(worktreeProblem(failed, WORKTREE_COPY.failed)).toEqual({
-      text: `没能新建 worktree：${errorText(failed)}`, needsUpdate: false,
+      text: `创建 worktree 失败：${errorText(failed)}`, needsUpdate: false,
     });
     expect(worktreeProblem(new ApiError(403, "changing a computer's terminals needs a full device", {}), WORKTREE_COPY.failed).needsUpdate).toBe(false);
   });

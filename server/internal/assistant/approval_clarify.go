@@ -62,6 +62,9 @@ type clarifyAttempt struct {
 	clientMsgID string
 	text        string
 	originKey   string
+	sending     bool
+	turnStarted bool
+	turnEnded   bool
 }
 
 type clarifyDelivery struct {
@@ -560,7 +563,14 @@ func (s *Service) clarificationTurnStarted(machine, session string) {
 	defer s.fleet.mu.Unlock()
 	for _, p := range s.fleet.interactions {
 		a := p.prepared
-		if a == nil || !a.clarified || a.terminal || p.ix.MachineID != machine || p.ix.SessionID != session {
+		if a == nil || a.terminal || p.ix.MachineID != machine || p.ix.SessionID != session {
+			continue
+		}
+		if a.attempt != nil && a.attempt.sending && a.answeredSeq == a.acceptedSeq {
+			a.attempt.turnStarted = true
+			a.attempt.turnEnded = false
+		}
+		if !a.clarified || a.acceptedSeq == a.answeredSeq {
 			continue
 		}
 		a.turnActive = true
@@ -568,12 +578,18 @@ func (s *Service) clarificationTurnStarted(machine, session string) {
 	}
 }
 
-func (s *Service) clarificationTurnEnded(machine, session string) {
+func (s *Service) clarificationTurnEndedSync(machine, session string) []proto.Interaction {
 	s.fleet.mu.Lock()
 	var tells []proto.Interaction
 	for _, p := range s.fleet.interactions {
 		a := p.prepared
-		if a == nil || !a.clarified || a.terminal || p.ix.MachineID != machine || p.ix.SessionID != session || !a.turnActive {
+		if a == nil || a.terminal || p.ix.MachineID != machine || p.ix.SessionID != session {
+			continue
+		}
+		if a.attempt != nil && a.attempt.sending && a.attempt.turnStarted {
+			a.attempt.turnEnded = true
+		}
+		if !a.clarified || !a.turnActive {
 			continue
 		}
 		a.turnActive = false
@@ -583,7 +599,11 @@ func (s *Service) clarificationTurnEnded(machine, session string) {
 		}
 	}
 	s.fleet.mu.Unlock()
-	for _, ix := range tells {
+	return tells
+}
+
+func (s *Service) clarificationTurnEnded(machine, session string) {
+	for _, ix := range s.clarificationTurnEndedSync(machine, session) {
 		s.show(ix)
 	}
 }
@@ -686,6 +706,9 @@ func (s *Service) clarify(ctx context.Context, id, text, clientMsgID string, ori
 		// may have ended. Mark that answer turn before dispatch, not at its end.
 		s.justMeSent(p.ix.MachineID, p.ix.SessionID)
 	}
+	s.fleet.mu.Lock()
+	attempt.sending = true
+	s.fleet.mu.Unlock()
 	err = s.sendOnce(ctx, p.ix.MachineID, params)
 	if err != nil && !relayInDoubt(err) {
 		return s.finishClarifyAttempt(p, attempt, nil, err)
@@ -709,10 +732,27 @@ func (s *Service) finishClarifyAttempt(p *pending, attempt *clarifyAttempt, run 
 	var tell proto.Interaction
 	tellDeadline := false
 	if err == nil && !a.terminal && !p.claimed && s.fleet.interactions[p.ix.ID] == p {
+		prevAccepted := a.acceptedSeq
 		release = attempt.first && !a.clarified
 		a.clarified = true
 		a.questionSeq++
 		a.acceptedSeq = a.questionSeq
+		prev := s.fleet.prev[p.ix.MachineID][p.ix.SessionID]
+		working := prev.Status == proto.StatusWorking || prev.WorkingBeforeUnknown
+		if attempt.turnEnded {
+			a.turnActive = false
+			a.answeredSeq = max(a.answeredSeq, a.acceptedSeq)
+		} else if attempt.turnStarted {
+			a.turnActive = true
+			a.turnSeq = a.acceptedSeq
+		} else if working && !a.turnActive && a.answeredSeq == prevAccepted {
+			// Headless assistant sessions remain StatusWorking through waitPreparedCard/waitDetachedCard
+			// and either steer the owner's question into the running turn (Codex) or coalesce the
+			// tool-turn end and answer-turn start inside notifySessionsSoon (Claude), emitting only
+			// StatusWorking -> StatusDone with no intermediate stopped edge.
+			a.turnActive = true
+			a.turnSeq = a.acceptedSeq
+		}
 		a.deliveries[attempt.clientMsgID] = clarifyDelivery{text: attempt.text, originKey: attempt.originKey}
 		if run != nil {
 			if a.channelRuns == nil {
@@ -772,10 +812,15 @@ func (s *Service) clarificationChannelEnded(id, runID string) {
 	}
 }
 
+type approvalEndHandledKey struct{}
+
 // approvalAnswerTurnStarted/Ended are small indirections used by Service's turn
 // events and tests.
 func (s *Service) approvalAnswerTurnStarted(r SessionRef) {
 	s.clarificationTurnStarted(r.MachineID, r.SessionID)
+}
+func (s *Service) approvalAnswerTurnEndedSync(r SessionRef) []proto.Interaction {
+	return s.clarificationTurnEndedSync(r.MachineID, r.SessionID)
 }
 func (s *Service) approvalAnswerTurnEnded(r SessionRef) {
 	s.clarificationTurnEnded(r.MachineID, r.SessionID)

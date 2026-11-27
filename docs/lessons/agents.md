@@ -978,6 +978,19 @@ need the node to set one: the Codex App's always had one, the Claude desktop app
 sessions outside the engines should set a space too. On the list path, take the repository from the list's Git places
 (`fillGitPlace`, read in the background) rather than running git per row: it runs every second.
 
+## One folder was a project for each way its Agents ran (2026-11-23, #13533)
+
+Every way an Agent runs names its space its own way: herdr by its workspace id (`w1`), the desktop apps by
+`codex-project:<root>`, a runtime without workspaces by its directory. A folder worked in more than one way was a project
+for each in every client's **Project** list, all with the folder's name, and one CLI split too: Claude Code in herdr
+against the Claude desktop app, an agy pane in herdr against an agy runtime conversation. Pins, mutes and to-do space
+links go by `machine/space name`, so nothing there showed it. The node's last pass now gives every session whose space
+only stands for a folder that folder's space (`server/internal/node/folderspace.go`); a new source that names its space by
+a folder needs nothing more, and should not invent another path-keyed id. Compare folders by their physical paths: the
+same folder reaches the list as written by a runtime and resolved by herdr or a desktop app, and a home directory on
+Linux is often a link to another volume. A joined space holds several `space_kind`s, and a client may name its host by
+any of its sessions' kinds, so a space action takes a kind that is no host's to mean the workspace's host.
+
 ## The session list runs every second: per-row lookups add up (2026-11-09, #2538)
 
 - `pollAgents` rebuilds the whole list every second, so a lookup made once per row is made once per row per second. With 199 Codex rollouts on disk, `codexSessions` resolved each rollout's directory through `realPath` (an `lstat` per path part, a `readlink` per link), stat'ed the rollout up to three times, resolved the Codex home per rollout and rebuilt the assistant's project name with a regexp: about 19 stats per rollout per pass, 5,600 `newfstatat` and 380 `readlinkat` a second from an idle node, half its CPU. A pass-local memo (`codexListPass`) that keeps each directory's resolved path, each rollout's stat, the App socket check per home and the project name for that one call brought it to about 1,000 `newfstatat` and 13 `readlinkat` a second, with the rows unchanged. Keep such a memo local to the call: nothing is shared between callers, and nothing can go stale for longer than one pass. Count with `strace -c -f -p <node pid>` over a steady window against a copy of a real corpus (symlinks to `~/.claude/projects` and `~/.codex/sessions` in a scratch HOME), not on a fixture with a handful of files.
