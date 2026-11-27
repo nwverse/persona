@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"context"
 	"encoding/json"
 	"path"
 	"strings"
@@ -23,8 +24,15 @@ func newSpaceThreadEnv(t *testing.T, spaceSlug string) (*threadEnv, *fleetDevs) 
 	env.f.devices[0].Online = true
 	env.f.devices[0].Home = "/home/me"
 	fd := newFleetDevs()
-	fd.add("server", "server").home = "/home/me"
-	fd.add("box", "box")
+	srv := fd.add("server", "server")
+	srv.home = "/home/me"
+	srv.call = func(method string, params json.RawMessage) (any, error) {
+		return env.f.DeviceCall(context.Background(), DeviceCall{Device: "server", Method: method, Params: params})
+	}
+	box := fd.add("box", "box")
+	box.call = func(method string, params json.RawMessage) (any, error) {
+		return env.f.DeviceCall(context.Background(), DeviceCall{Device: "box", Method: method, Params: params})
+	}
 	env.s.devs = spaceDevs{fleetDevs: fd}
 	e := withFeishuThread(env)
 	fd.setSessions("server", []proto.Session{

@@ -150,7 +150,7 @@ func TestScheduledTaskThreadDeliveryPostsInThreadAndCapturesReply(t *testing.T) 
 		Enabled:      true,
 		RunMachineID: "server",
 		RunSessionID: "sched_conv_1",
-		Delivery:     &TaskDelivery{Channel: channel.Feishu, ChatID: testChat, ThreadID: "om_origin_root"},
+		Delivery:     &TaskDelivery{Channel: channel.Feishu, ChatID: assistantwire.FeishuChatID(testChat), ThreadID: assistantwire.FeishuThreadID("om_origin_root")},
 	})
 
 	// Scheduled run finishes -> feishuMirror delivers into the source Feishu thread.
@@ -208,7 +208,7 @@ func TestScheduledTaskThreadDeliveryRefusesNonOptedInChat(t *testing.T) {
 		Enabled:      true,
 		RunMachineID: "server",
 		RunSessionID: "sched_conv_2",
-		Delivery:     &TaskDelivery{Channel: channel.Feishu, ChatID: testChat, ThreadID: "om_origin_root"},
+		Delivery:     &TaskDelivery{Channel: channel.Feishu, ChatID: assistantwire.FeishuChatID(testChat), ThreadID: assistantwire.FeishuThreadID("om_origin_root")},
 	})
 
 	e.s.feishuMirror(context.Background(), "server", "sched_conv_2")

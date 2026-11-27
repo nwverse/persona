@@ -73,8 +73,8 @@ type LarkMirror struct {
 	StillDue func(ctx context.Context, pushes bool) bool
 	// ThreadChatID and ThreadID route a scheduled task's mirrored result into a specific Feishu group
 	// topic (in_thread) instead of the owner's private DM, and bind that topic back to this conversation.
-	ThreadChatID string
-	ThreadID     string
+	ThreadChatID FeishuChatID
+	ThreadID     FeishuThreadID
 }
 
 // LarkMirrorTurn is the finished turn that Core cleared to mirror. Question is the short question

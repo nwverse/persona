@@ -223,28 +223,30 @@ func (s core) postMirror(ctx context.Context, m mirrorSend, attempt int) {
 		kind = "sync"
 	}
 	ctx = s.sendAs(ctx, kind, m.to.MachineID, m.to.SessionID)
-	threadDelivery := m.to.ThreadChatID != "" && m.to.ThreadID != ""
+	threadChat := string(m.to.ThreadChatID)
+	threadID := string(m.to.ThreadID)
+	threadDelivery := threadChat != "" && threadID != ""
 	postTo := feishuTarget{}
 	replyTo := ""
 	if threadDelivery {
 		st, err := s.feishuStatusKept(ctx)
 		if err != nil || !st.Ready {
-			s.logf("bots: mirror to thread %s/%s: bot is not ready (%v)", m.to.ThreadChatID, m.to.ThreadID, err)
+			s.logf("bots: mirror to thread %s/%s: bot is not ready (%v)", threadChat, threadID, err)
 			return
 		}
-		if !slices.Contains(st.Chats, m.to.ThreadChatID) {
-			s.logf("bots: mirror to thread %s/%s: chat is not opted in", m.to.ThreadChatID, m.to.ThreadID)
+		if !slices.Contains(st.Chats, threadChat) {
+			s.logf("bots: mirror to thread %s/%s: chat is not opted in", threadChat, threadID)
 			return
 		}
-		replyTo = s.topicMessage(ctx, m.to.ThreadChatID, m.to.ThreadID)
-		if replyTo == "" && strings.HasPrefix(m.to.ThreadID, "om_") {
-			replyTo = m.to.ThreadID
+		replyTo = s.topicMessage(ctx, threadChat, threadID)
+		if replyTo == "" && strings.HasPrefix(threadID, "om_") {
+			replyTo = threadID
 		}
 		if replyTo == "" {
-			s.logf("bots: mirror to thread %s/%s: no anchor message known to reply to", m.to.ThreadChatID, m.to.ThreadID)
+			s.logf("bots: mirror to thread %s/%s: no anchor message known to reply to", threadChat, threadID)
 			return
 		}
-		postTo = feishuTarget{ChatID: m.to.ThreadChatID, InThread: true, NoDetour: true}
+		postTo = feishuTarget{ChatID: threadChat, InThread: true, NoDetour: true}
 	} else if !m.to.Main && s.divertAnswer(ctx, assistantwire.NoticeTask(), m.cards) {
 		// A scheduled task's result can go to a notifications companion. Main turns stay in the chat where a reply continues them.
 		if m.sent != nil {
@@ -259,7 +261,7 @@ func (s core) postMirror(ctx context.Context, m mirrorSend, attempt int) {
 		if err != nil {
 			s.logf("bots: mirror: %v", err)
 			if threadDelivery && botcard.MessageGone(err) {
-				s.forgetTopicMessage(ctx, m.to.ThreadChatID, m.to.ThreadID, replyTo)
+				s.forgetTopicMessage(ctx, threadChat, threadID, replyTo)
 				return
 			}
 			if i == 0 {
@@ -276,9 +278,9 @@ func (s core) postMirror(ctx context.Context, m mirrorSend, attempt int) {
 		}
 		s.rememberBotThread(mid, target, m.to.Label) // a reply to any of them goes to this conversation
 		if threadDelivery {
-			s.rememberTopicMessage(ctx, m.to.ThreadChatID, m.to.ThreadID, mid)
+			s.rememberTopicMessage(ctx, threadChat, threadID, mid)
 			if i == 0 {
-				s.rememberTopicSession(ctx, m.to.ThreadChatID, m.to.ThreadID, target, m.to.Label)
+				s.rememberTopicSession(ctx, threadChat, threadID, target, m.to.Label)
 			}
 		}
 		if i == 0 && m.sent != nil {

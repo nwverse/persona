@@ -35,15 +35,19 @@ func cleanTaskDelivery(d *TaskDelivery) (*TaskDelivery, error) {
 		return nil, nil
 	}
 	ch := strings.ToLower(strings.TrimSpace(d.Channel))
-	chat := strings.TrimSpace(d.ChatID)
-	thread := strings.TrimSpace(d.ThreadID)
+	chat := strings.TrimSpace(string(d.ChatID))
+	thread := strings.TrimSpace(string(d.ThreadID))
 	if ch == "" && chat == "" && thread == "" {
 		return nil, nil
 	}
 	if ch != channel.Feishu || !validDeliveryToken(chat) || !validDeliveryToken(thread) {
 		return nil, i18n.Err("assistant-schedule.bad_delivery")
 	}
-	return &TaskDelivery{Channel: ch, ChatID: chat, ThreadID: thread}, nil
+	return &TaskDelivery{
+		Channel:  ch,
+		ChatID:   assistantwire.FeishuChatID(chat),
+		ThreadID: assistantwire.FeishuThreadID(thread),
+	}, nil
 }
 
 // deliveryRaw parses an optional delivery JSON field (from HTTP bodies or scheduling tools).

@@ -241,6 +241,9 @@ type FeishuHandoffID string
 // FeishuChatID is a Lark open-platform chat id (oc_…).
 type FeishuChatID string
 
+// FeishuThreadID is a Lark open-platform thread id (omt_…) or root message id (om_…).
+type FeishuThreadID string
+
 // FeishuHandoffState is the state of a handoff the hub answers with; it only ever answers once one is accepted.
 type FeishuHandoffState string
 
