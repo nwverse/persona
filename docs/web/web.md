@@ -2355,6 +2355,33 @@ only the module they happen in. The page is never built.
 
 The server contract, legacy preservation, egress/consent and fixed-slot migration are in `docs/extensions/extensions.md` ("Entry lists and per-entry secrets") and `docs/protocol/protocol.md` ("Extension entry-list settings"). The interaction rules and accessibility acceptance are in `docs/design/DESIGN_SYSTEM.md` ("Extension entry lists").
 
+## Templates (#16772)
+
+Settings › General › **Templates** (`views/settings/Templates.tsx`, `lib/templates.ts`) applies a named set of
+configuration in one step. A template (`schema/template.schema.json`, `persona_template: 1`) has an `id`, a name and
+description (one string or one per language) and up to four parts, each applied where it belongs:
+
+- `browser`: this browser's looks: `phone_nav` (`switch` / `tabs`), `sidebar_icons`, and `modules_off`, the whole list
+  of optional web modules switched off (every other one is switched on);
+- `navigation`: the hub's start page (`start`) and sidebar arrangement (`pages`, the navigation record's shape; `null`
+  puts the default back), sent with the start page's and the sidebar's own writers, so every device follows;
+- `extensions`: per installed extension, `enabled` and `config`, merged over its current configuration and saved with
+  `PUT /api/v1/extensions/{id}/-/config?preserve_entries=1`; an extension that is not installed is skipped;
+- `settings`: persona_settings keys (`{key, action?, value}`), sent to `POST /api/v1/templates/settings`, where each
+  goes through its own setter (`docs/protocol/protocol.md` "Templates"); a hub without the route skips them.
+
+A template never carries secrets. The group lists the one built-in, **Default** (Persona as it comes: the top switch,
+every optional feature on, the sidebar's default pages); any other setup is a template of one's own, imported or opened
+from a link. For example, a lean Agent console on phones:
+`{"persona_template":1,"id":"my-console","name":"My console","browser":{"phone_nav":"tabs","modules_off":["health"]},"navigation":{"pages":{"order":[],"shown":[],"hidden":["home","inbox","todos","routines","kb","machines"]}}}`.
+**Use** opens a preview: every item with its current and new value, what is already set, and what is skipped or
+refused and why (the settings part is a dry run on the manager); **Apply** writes them in order, each item on its own,
+and the dialog then shows what happened to each. **Share** copies a link, `/settings?tab=general&template=<id>` for a
+built-in, else the template's JSON in base64url; opening it on any Persona shows the same preview (marked as coming from
+a link) and drops the parameter. **Import** takes such a link or the JSON. The last template applied in this browser is
+remembered (`persona.template`) so its row says **In use**. Nothing is applied without the preview, and Default or
+another template is the way back. Checks: `web/src/lib/templates.test.ts`, `scripts/test/test_template_schema.py`.
+
 ## Labs
 
 Settings › Labs (#9877, #14468, `web/src/views/settings/Labs.tsx`) holds temporary experiments. It has its own untitled
@@ -3418,7 +3445,7 @@ How narrow screens (below `lg`) and touch screens work; wide desktop screens sta
   - In the narrow-screen drawer, the pages from Overview … Settings collapse into a two-row icon grid, so AGENTS and the machine tree are visible as soon as it opens.
     The grid uses localized short labels (`sidebar.nav_*_short`, #3579): Overview / Scheduled tasks / Knowledge / Machines become Home / Tasks / KB / Hosts in English, and 受信トレイ / ヘルスケア / 定期タスク become 受信 / 健康 / 定期 in Japanese. English Inbox / Health and all Chinese labels stay unchanged. Short labels appear only in the grid's single-line captions; tooltips, accessible names, the wide-screen sidebar, and the collapsed icon rail keep the full names.
   - The middle of the top bar is an "Assistant | Agents" switch (same as the new iOS shell; no bottom tab bar). The Agents page is `/agents`, and its content is the Agents block from the sidebar. The buttons on both sides of both pages sit in slots at least 64px wide (`views/chat/header.ts`), at their outer edges, so their positions match to the pixel. A slot grows to fit its buttons (the main conversation's right side has New chat, Start an Agent and ⋯), and the switch takes the room left between them, never running under a button (#5036). Under 640px the Sessions side says its short name ("Sessions") on both pages alike, with less padding and its count on the segment's corner. On the narrowest screens a label truncates instead of wrapping. The full name stays the link's accessible name and tooltip.
-  - **Phone navigation** (#16761, Settings › Advanced › Appearance, `lib/phone-nav.ts`, kept in this browser as `persona.phone-nav`): **Top switch** is the switch above, the default. **Tab bar** puts the main chat, Agents, External and Settings along the bottom instead (`views/PhoneTabBar.tsx`, loaded only where it is drawn): the bar shows on those four places only (the main chat, `/agents`, `/history/external`, `/settings`), and any other page keeps its header and way back. The top bar then shows the page's name where the switch was (`ShellPageTitle`), Agents carries the same waiting count, and the bar hides while the keyboard is up (`data-kb`). External is All chats filtered to every chat an external source opened (`external`: Lark /agent's and other extensions', `lib/conversation-origins.ts` `EXTERNAL_ORIGINS`); its chip and heading appear only while that is the filter, so All chats is unchanged otherwise. Wide screens keep the sidebar either way.
+  - **Phone navigation** (#16761, set by a template since #16772: one with `browser.phone_nav: "tabs"` turns it on, **Default** off, "Templates" below; `lib/phone-nav.ts`, kept in this browser as `persona.phone-nav`): **Top switch** is the switch above, the default. **Tab bar** puts the main chat, Agents, External and Settings along the bottom instead (`views/PhoneTabBar.tsx`, loaded only where it is drawn): the bar shows on those four places only (the main chat, `/agents`, `/history/external`, `/settings`), and any other page keeps its header and way back. The top bar then shows the page's name where the switch was (`ShellPageTitle`), Agents carries the same waiting count, and the bar hides while the keyboard is up (`data-kb`). External is All chats filtered to every chat an external source opened (`external`: Lark /agent's and other extensions', `lib/conversation-origins.ts` `EXTERNAL_ORIGINS`); its chip and heading appear only while that is the filter, so All chats is unchanged otherwise. Wide screens keep the sidebar either way.
   - In any other chat, the sidebar button in the header carries how many other Agents are waiting for you (`ChatSidebarButton`, leaving out the Agent you are in).
   - A gone tab's page and an ambiguous `/s/` link's choices have the same header as Offline, with the sidebar button (#11442).
   - The Agents page keeps its scroll position when you come Back to it from an Agent (`lib/scroll-memory.ts`, #11511); its title row's Filter, ⋯ and + take a real 44 px box each on touch screens, so they no longer take each other's taps, By to-do's rows are 44 px tall and fold from a tap anywhere on them, and the drawer's search box shows no ⌘K on touch screens.
