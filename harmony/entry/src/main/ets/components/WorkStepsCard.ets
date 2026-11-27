@@ -51,7 +51,7 @@ export struct WorkStepTimeline {
 
   private toggleStep(id: string): void {
     Haptics.tap();
-    Motion.run(this.getUIContext(), Motion.layout(this.env.reduceMotion), () => {
+    Motion.run(this.getUIContext(), Motion.state(this.env.reduceMotion), () => {
       this.openedStepIds = this.isOpen(id)
         ? this.openedStepIds.filter((entry: string) => entry !== id)
         : this.openedStepIds.concat([id]);
@@ -61,8 +61,8 @@ export struct WorkStepTimeline {
   private copySnippet(text: string): void {
     try {
       pasteboard.getSystemPasteboard().setDataSync(pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, text));
-      Haptics.success();
-      toastCenter.success(tr('done'));
+      Haptics.selection();
+      toastCenter.show(tr('copied'));
     } catch (_) {
       Haptics.error();
       toastCenter.error(tr('failed'));
@@ -117,6 +117,30 @@ export struct WorkStepTimeline {
           .copyOption(CopyOptions.LocalDevice)
           .width('100%')
       } else {
+        Row({ space: 6 }) {
+          SymbolGlyph(Symbols.spaces)
+            .fontSize('12.5vp')
+            .fontColor([Colors.secondary])
+          Text(tr('work_summary'))
+            .fontSize(Tokens.interfaceFontVp(12, this.env.fontScale))
+            .fontWeight(FontWeight.Medium)
+            .fontColor(Colors.secondary)
+            .maxLines(1)
+          Blank().layoutWeight(1)
+          Text(String(this.steps.length))
+            .fontSize(Tokens.interfaceFontVp(11.5, this.env.fontScale))
+            .fontWeight(FontWeight.Bold)
+            .fontFamily('monospace')
+            .fontColor(Colors.link)
+            .padding({ left: 7, right: 7, top: 1.5, bottom: 1.5 })
+            .backgroundColor(Colors.accentWell)
+            .borderRadius(9)
+            .id('chat.work.timeline.count')
+        }
+        .width('100%')
+        .padding({ left: 4, right: 4, top: 2, bottom: 2 })
+        .alignItems(VerticalAlign.Center)
+
         ForEach(this.steps, (step: WorkStepView, index: number) => {
           Column({ space: 6 }) {
             Button({ type: ButtonType.Normal }) {
@@ -218,6 +242,7 @@ export struct WorkStepTimeline {
     .backgroundColor(Colors.control)
     .borderRadius(15)
     .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: 15 })
+    .animation(Motion.state(this.env.reduceMotion))
     .id('chat.work.timeline')
   }
 }
@@ -360,7 +385,7 @@ export struct TurnChangesCard {
           .backgroundColor(Color.Transparent)
           .onClick(() => {
             Haptics.tap();
-            Motion.run(this.getUIContext(), Motion.layout(this.env.reduceMotion), () => {
+            Motion.run(this.getUIContext(), Motion.state(this.env.reduceMotion), () => {
               this.expanded = !this.expanded;
             });
           })

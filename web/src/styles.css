@@ -36,6 +36,10 @@
   [data-app-shell] > main,
   [data-app-shell] > aside {
     background: var(--page);
+  }
+
+  /* not the aside: its resize handle sits in the gutter outside it; its content div clips the corners below */
+  [data-app-shell] > main {
     overflow: clip;
   }
 

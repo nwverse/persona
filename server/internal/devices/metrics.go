@@ -531,7 +531,9 @@ func (u *usageBook) apply(machine string, params json.RawMessage, now time.Time)
 		if m.dirs == nil {
 			m.dirs = map[string]proto.UsageDir{}
 		}
-		m.dirs[x.Dir] = x
+		if old, ok := m.dirs[x.Dir]; !ok || replacesResolution(old, x) {
+			m.dirs[x.Dir] = x
+		}
 	}
 	for _, b := range p.Buckets {
 		k := keyOf(b)

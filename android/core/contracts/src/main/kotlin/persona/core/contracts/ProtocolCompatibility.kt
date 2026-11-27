@@ -20,6 +20,10 @@ object ProtocolCompatibility {
     private const val names = "(?:persona|jarvis)-(?:context|file)"
     val unclosedContextBlock = Regex("<$names\\b[^>]*>[\\s\\S]*$", RegexOption.IGNORE_CASE)
     val strayClosingTag = Regex("</\\s*$names\\s*>", RegexOption.IGNORE_CASE)
+    val internalTagBlock = Regex(
+        "<(system-reminder|command-name|command-message|command-args|local-command-[a-z-]+)\\b[^>]*>[\\s\\S]*?</\\1>",
+        RegexOption.IGNORE_CASE,
+    )
     val internalTagSingle = Regex(
         "</?(?:system-reminder|command-name|command-message|command-args|local-command-[a-z-]+|persona-[a-z-]+|" + "jarvis-[a-z-]+)\\b[^>]*>",
         RegexOption.IGNORE_CASE,

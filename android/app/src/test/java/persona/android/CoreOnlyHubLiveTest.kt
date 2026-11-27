@@ -25,6 +25,8 @@ import persona.core.contracts.Endpoint
 import persona.core.contracts.JsonCodec
 import persona.core.hub.HttpDeviceSettings
 import persona.core.hub.HttpHubManagers
+import persona.core.hub.HttpInboxAssistantTransport
+import persona.core.hub.HttpTasksApi
 import persona.core.hub.HubConnectionConfig
 import persona.core.hub.HubNetwork
 import persona.core.hub.HubPairingClient
@@ -107,6 +109,12 @@ class CoreOnlyHubLiveTest {
                 assertNotNull("The built-in core manager is absent", roster.manager(roster.defaultManagerId))
                 val sessions = HubPairingClient(connection).use { it.json("/api/v1/sessions", paired.token) }
                 assertTrue("The core sessions response is not a list", sessions["sessions"] is JsonArray)
+                val inbox = HttpInboxAssistantTransport("core-edition-live", connection).inbox()
+                val inboxItems = requireNotNull(inbox["items"]) { "The Inbox response has no items list" }
+                assertTrue("The Inbox items value is not a list", inboxItems is JsonArray)
+                assertTrue("The fresh hub's Inbox is not empty", inboxItems.jsonArray.isEmpty())
+                val todos = HttpTasksApi(connection).todos()
+                assertTrue("The fresh hub's To-dos list is not empty", todos.isEmpty())
                 val devices = HttpDeviceSettings(paired.address, paired.token, paired.deviceId!!,
                     connection.http.client).devices()
                 assertEquals("The issued credential is not the current device", paired.deviceId, devices.currentId)
@@ -122,6 +130,8 @@ class CoreOnlyHubLiveTest {
                     putJsonObject("core_reads") {
                         put("installed_managers", roster.installed.size)
                         put("sessions", sessions.getValue("sessions").jsonArray.size)
+                        put("inbox_items", inboxItems.jsonArray.size)
+                        put("todos", todos.size)
                         put("paired_devices", devices.devices.size)
                     }
                     put("carried_modules", kotlinx.serialization.json.JsonArray(carried.sorted().map { kotlinx.serialization.json.JsonPrimitive(it) }))
