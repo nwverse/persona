@@ -272,6 +272,8 @@ def no_errors(ctl, page):
 
 def capture(ctl, shots, edition, page, appearance, evidence):
     ctl.appearance(appearance)
+    wait_for(ctl, f"{appearance} appearance", 10,
+             lambda: ctl.call("state").get("appearance") == appearance or None)
     path = shots / f"{edition}-{appearance}-{page}.png"
     ctl.screenshot(str(path), timeout=6, stable=2, pixels=600)
     check(path.stat().st_size > 1000, f"empty capture {path}")
