@@ -524,10 +524,11 @@ def exercise_app(ctl, base, code, edition, shots, master):
     capture_both(ctl, shots, edition, "devices", proof)
 
     ctl.call("ping", _timeout=5)
-    status, devices = request(base, "/api/v1/devices", master)
-    check(status == 200 and isinstance(devices.get("devices"), list) and devices["devices"],
-          f"{edition}: the hub lists no paired device")
-    proof["paired_devices"] = len(devices["devices"])
+    status, devices = request(base, "/api/v1/auth/tokens", master)
+    rows = devices.get("tokens") if isinstance(devices, dict) else None
+    check(status == 200 and isinstance(rows, list) and any(row.get("kind") == "phone" and not row.get("revoked_at") for row in rows),
+          f"{edition}: the hub lists no issued phone credential")
+    proof["paired_devices"] = sum(1 for row in rows if row.get("kind") == "phone" and not row.get("revoked_at"))
     # A second exchange is the protocol proof that the app redeemed the single-use code for a device credential.
     status, _ = request(base, "/api/v1/auth/tokens", code, "POST", {})
     check(status == 401, f"{edition}: the single-use pair code exchanged again with status {status}")
