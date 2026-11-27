@@ -841,6 +841,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 				tier = "" // a launcher of its own: the tier gives it nothing
 			} else {
 				tierChoice = &pick
+				a.Host = cmp.Or(a.Host, t.startHost())
 				if a.Speed == "" && (model == "" || model == t.Model) {
 					a.Speed = t.Speed
 				}
@@ -924,7 +925,7 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			where += " · " + swapped
 		case tier != "":
 			selected := pickOf(run)
-			runs = ModelTier{Launcher: selected.launcher, Model: selected.model, Effort: selected.effort, Speed: selected.speed, PermissionMode: selected.permission}.runs()
+			runs = ModelTier{Launcher: selected.launcher, Model: selected.model, Effort: selected.effort, Speed: selected.speed, PermissionMode: selected.permission, Host: &a.Host}.runs()
 			where += i18n.T(s.lang(ctx), "assistant-tools.with_tier", i18n.Args{"tier": tier, "runs": runs})
 		case a.Model != "":
 			where += i18n.T(s.lang(ctx), "assistant-tools.with_model", i18n.Args{"model": a.Model})
