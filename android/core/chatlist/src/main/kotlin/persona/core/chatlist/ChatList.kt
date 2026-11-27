@@ -377,11 +377,7 @@ fun ChatListEffects(
                 // The reversed list measures an item's offset from the newest edge: the same number scrollToItem takes.
                 val topOffset = layout.viewportEndOffset - anchor.sizePx
                 val target = if (anchor.riseToTop) topOffset else anchor.offsetPx
-                val needs = when {
-                    visible == null -> true
-                    anchor.riseToTop -> visible.offset > target
-                    else -> abs(visible.offset - target) > 1
-                }
+                val needs = visible == null || expansionNeedsScroll(visible.offset, target, anchor.riseToTop)
                 if (needs) {
                     if (visible != null) {
                         val delta = visible.offset - target
@@ -427,6 +423,11 @@ fun ChatListEffects(
         snapshotFlow { state.position }.debounce(250).distinctUntilChanged().collect { state.persist() }
     }
 }
+
+/** Whether a held fold header still has to move. A one-pixel rounding difference is settled, as the ordinary hold
+ *  already treats it; a rise-to-top hold only ever moves the header up, never back down. */
+internal fun expansionNeedsScroll(visibleOffset: Int, target: Int, riseToTop: Boolean): Boolean =
+    if (riseToTop) visibleOffset - target > 1 else abs(visibleOffset - target) > 1
 
 @Composable
 fun ChatList(

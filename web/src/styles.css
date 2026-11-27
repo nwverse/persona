@@ -790,31 +790,45 @@ select:not([multiple], [size], .appearance-none) {
   }
 }
 
-/* ── Opt-in Liquid Glass surface style (Settings › Advanced › Appearance, #16607, #16776) ────────────────── */
+/* ── Opt-in Liquid Glass surface style (Settings › Advanced › Appearance, #16607, #16776, #17012) ────────── */
 :root[data-surface-style="liquid-glass"] {
-  --glass-t: 0.68;
-  --glass-blur: calc(6px + var(--glass-t) * 24px);
-  --glass-sat: calc(105% + var(--glass-t) * 25%);
-  --canvas: rgba(244, 245, 248, calc(0.92 - var(--glass-t) * 0.36));
-  --page: rgba(250, 250, 253, calc(0.96 - var(--glass-t) * 0.22));
-  --surface: rgba(255, 255, 255, calc(0.94 - var(--glass-t) * 0.26));
-  --inset: rgba(241, 243, 247, calc(0.86 - var(--glass-t) * 0.30));
-  --hover: rgba(17, 17, 19, 0.065);
-  --hover-2: rgba(255, 255, 255, 0.82);
-  --line: rgba(17, 17, 19, 0.09);
-  --line-strong: rgba(17, 17, 19, 0.15);
-  --mac-rim-top: rgba(255, 255, 255, 0.90);
+  --glass-t: 0.75;
+  --glass-blur: calc(6px + var(--glass-t) * 20px);
+  --glass-sat: calc(105% + var(--glass-t) * 35%);
+  --canvas: rgba(244, 246, 251, calc(1 - var(--glass-t)));
+  --page: rgba(251, 251, 254, calc(1 - var(--glass-t) * 0.06));
+  --surface: rgba(255, 255, 255, calc(1 - var(--glass-t) * 0.02));
+  --inset: rgba(240, 242, 247, calc(1 - var(--glass-t) * 0.10));
+  --field: rgba(235, 237, 243, calc(1 - var(--glass-t) * 0.12));
+  --accent-tint: rgba(15, 23, 42, 0.075);
+  --hover: rgba(15, 23, 42, 0.055);
+  --hover-2: rgba(255, 255, 255, 0.90);
+  --line: rgba(15, 23, 42, 0.09);
+  --line-strong: rgba(15, 23, 42, 0.16);
+  --mac-rim-top: rgba(255, 255, 255, 0.98);
+  --shadow-card: inset 0 1px 0 rgba(255, 255, 255, 0.95), 0 0 0 1px rgba(15, 23, 42, 0.07), 0 2px 8px rgba(15, 23, 42, 0.04);
+  --shadow-btn: inset 0 1px 0 rgba(255, 255, 255, 0.96), 0 0 0 1px rgba(15, 23, 42, 0.09), 0 1px 3px rgba(15, 23, 42, 0.06);
+  --glass-main-sheen: linear-gradient(160deg, rgba(255, 255, 255, 0.55) 0%, transparent 32%);
+  --glass-main-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.98), 0 8px 26px rgba(15, 23, 42, 0.11), 0 1px 3px rgba(15, 23, 42, 0.06);
+  --glass-sidebar-shadow: 0 1px 1px rgba(255, 255, 255, calc(var(--glass-t) * 0.40));
 }
 :root.dark[data-surface-style="liquid-glass"] {
-  --canvas: rgba(16, 17, 21, calc(0.92 - var(--glass-t) * 0.34));
-  --page: rgba(20, 21, 26, calc(0.95 - var(--glass-t) * 0.25));
-  --surface: rgba(28, 30, 36, calc(0.93 - var(--glass-t) * 0.28));
-  --inset: rgba(12, 13, 17, calc(0.84 - var(--glass-t) * 0.30));
+  --canvas: rgba(14, 15, 19, calc(1 - var(--glass-t)));
+  --page: rgba(21, 22, 27, calc(1 - var(--glass-t) * 0.06));
+  --surface: rgba(38, 40, 48, calc(1 - var(--glass-t) * 0.04));
+  --inset: rgba(14, 15, 19, calc(1 - var(--glass-t) * 0.12));
+  --field: rgba(15, 16, 21, calc(1 - var(--glass-t) * 0.14));
+  --accent-tint: rgba(255, 255, 255, 0.11);
   --hover: rgba(255, 255, 255, 0.08);
-  --hover-2: rgba(255, 255, 255, 0.13);
-  --line: rgba(255, 255, 255, 0.11);
-  --line-strong: rgba(255, 255, 255, 0.18);
-  --mac-rim-top: rgba(255, 255, 255, 0.22);
+  --hover-2: rgba(255, 255, 255, 0.14);
+  --line: rgba(255, 255, 255, 0.13);
+  --line-strong: rgba(255, 255, 255, 0.22);
+  --mac-rim-top: rgba(255, 255, 255, 0.24);
+  --shadow-card: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 0 0 1px rgba(255, 255, 255, 0.08), 0 2px 8px rgba(0, 0, 0, 0.22);
+  --shadow-btn: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 0 0 1px rgba(255, 255, 255, 0.10), 0 1px 3px rgba(0, 0, 0, 0.25);
+  --glass-main-sheen: linear-gradient(160deg, rgba(255, 255, 255, 0.035) 0%, transparent 32%);
+  --glass-main-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), 0 10px 30px rgba(0, 0, 0, 0.42), 0 1px 3px rgba(0, 0, 0, 0.30);
+  --glass-sidebar-shadow: 0 1px 2px rgba(0, 0, 0, calc(var(--glass-t) * 0.34));
 }
 :root[data-surface-style="liquid-glass"][data-desktop-glass="1"],
 :root[data-surface-style="liquid-glass"][data-desktop-glass="1"] body {
@@ -835,6 +849,14 @@ select:not([multiple], [size], .appearance-none) {
 :root[data-surface-style="liquid-glass"] [data-app-shell] :is([data-sidebar-root], [data-sidebar-rail], [data-sidebar-sticky]) {
   background: transparent;
 }
+:root[data-surface-style="liquid-glass"] [data-sidebar-column] {
+  text-shadow: var(--glass-sidebar-shadow);
+}
+@media (width < 64rem) {
+  :root[data-surface-style="liquid-glass"] [data-sidebar-column] {
+    background: var(--page);
+  }
+}
 :root[data-surface-style="liquid-glass"] .sidebar-group-heading {
   position: static;
   background: transparent;
@@ -853,7 +875,8 @@ select:not([multiple], [size], .appearance-none) {
 }
 :root[data-surface-style="liquid-glass"] [data-app-shell] > main,
 :root[data-surface-style="liquid-glass"] [data-app-shell] > aside {
-  box-shadow: inset 0 1px 0 var(--mac-rim-top);
+  background-image: var(--glass-main-sheen);
+  box-shadow: var(--glass-main-shadow);
 }
 :root[data-surface-style="liquid-glass"] [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"]) > main {
   box-shadow: none;
@@ -869,8 +892,15 @@ select:not([multiple], [size], .appearance-none) {
     --page: #f7f7f9;
     --surface: #ffffff;
     --inset: #f5f5f7;
+    --field: #efeff3;
+    --accent-tint: #e2e2e7;
     --line: #e4e4e9;
     --mac-rim-top: transparent;
+    --shadow-card: 0 0 0 1px #0000000a;
+    --shadow-btn: 0 0 0 1px #00000017;
+    --glass-main-sheen: none;
+    --glass-main-shadow: none;
+    --glass-sidebar-shadow: none;
   }
   :root.dark[data-surface-style="liquid-glass"] {
     background: #0b0b0c;
@@ -878,8 +908,15 @@ select:not([multiple], [size], .appearance-none) {
     --page: #111113;
     --surface: #161618;
     --inset: #101012;
+    --field: #1b1b1e;
+    --accent-tint: #252529;
     --line: #202024;
     --mac-rim-top: transparent;
+    --shadow-card: 0 0 0 1px rgba(255,255,255,.04);
+    --shadow-btn: 0 0 0 1px rgba(255,255,255,.09);
+    --glass-main-sheen: none;
+    --glass-main-shadow: none;
+    --glass-sidebar-shadow: none;
   }
   :root[data-surface-style="liquid-glass"] body {
     background: var(--page);
