@@ -129,3 +129,37 @@ func TestClientFailsWhenNotLoggedIn(t *testing.T) {
 		t.Fatalf("not a lark-cli adapter error: %T", err)
 	}
 }
+
+// searchRunner answers every lark-cli call with one minutes search page, without a lark-cli.
+type searchRunner struct{ page string }
+
+func (r searchRunner) Run(context.Context, ...string) ([]byte, error) { return []byte(r.page), nil }
+func (searchRunner) InspectDocument(context.Context, string) (cliwire.Document, error) {
+	return cliwire.Document{}, nil
+}
+
+// A wall-clock start time is read in the zone the client was given (the knowledge base's); without one it is UTC,
+// never the machine's zone.
+func TestClientReadsStartTimesInItsZone(t *testing.T) {
+	const page = `{"ok":true,"data":{"items":[{"token":"t1","display_info":"Weekly","meta_data":{"description":"Start: 2026.11.17 20:01:31"}}],"has_more":false}}`
+	tokyo := time.FixedZone("UTC+9", 9*3600)
+	for _, tc := range []struct {
+		name     string
+		in, want *time.Location
+	}{
+		{"given zone", tokyo, tokyo},
+		{"nil zone", nil, time.UTC},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			minutes, err := NewClient(searchRunner{page}, tc.in).SearchMinutes(context.Background(),
+				time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 11, 30, 0, 0, 0, 0, time.UTC))
+			if err != nil || len(minutes) != 1 {
+				t.Fatalf("minutes %+v, %v", minutes, err)
+			}
+			want := time.Date(2026, 11, 17, 20, 1, 31, 0, tc.want)
+			if got := minutes[0].Start; !got.Equal(want) || got.Location() != tc.want {
+				t.Fatalf("start %v (%v), want %v", got, got.Location(), want)
+			}
+		})
+	}
+}
