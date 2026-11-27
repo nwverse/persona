@@ -245,6 +245,12 @@
     <string name="designsystem_core_engine_footer_none_offline">机器离线，选择会在连接后生效。显示桌面 App 的会话，不能从手机新建或继续会话。</string>
     <string name="designsystem_core_engine_switched">已切换引擎</string>
     <string name="designsystem_core_engine_saved_offline">已保存，连上后生效</string>
+    <string name="designsystem_core_engine_set_notice">这台电脑同时使用 %1$s，默认是 %2$s。要更改使用哪些引擎，请在网页版 Persona 里打开这台电脑。</string>
+    <string name="designsystem_core_engine_footer_set">显示这台电脑所有引擎里的会话。从手机新建的会话在 %1$s 里打开。</string>
+    <string name="designsystem_core_engine_footer_set_offline">机器离线，选择会在连接后生效。从手机新建的会话将在 %1$s 里打开。</string>
+    <string name="designsystem_core_engine_footer_set_one">只使用 %1$s：其他引擎会关闭，只显示它里面的会话。</string>
+    <string name="designsystem_core_engine_footer_set_one_offline">机器离线，选择会在连接后生效。只使用 %1$s，其他引擎会关闭。</string>
+    <string name="designsystem_core_engine_default_changed">已更改默认引擎</string>
     <string name="designsystem_core_tool_run">运行</string>
     <string name="designsystem_core_tool_read">读取</string>
     <string name="designsystem_core_tool_edit">编辑</string>

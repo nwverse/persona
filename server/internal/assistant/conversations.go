@@ -987,6 +987,8 @@ func (s *Service) sendRelay(ctx context.Context, machine, to string, msg relayMs
 		}
 	} else if s.isBackground(ctx, to) {
 		s.backgroundModel(ctx, params) // its own model purpose, on every message as the main chat's is (supervise_background.go)
+	} else if s.conversationModelPurpose(ctx, machine, to) == purposeMain {
+		s.relayMainModel(ctx, machine, to, params)
 	}
 	if msg.standalonePermission() {
 		cfg := s.settings(ctx)

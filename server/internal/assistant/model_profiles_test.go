@@ -585,6 +585,33 @@ func TestModelProfileCaptureDirectAPIAndUnrelatedLaunchers(t *testing.T) {
 	}
 }
 
+func TestModelProfileCaptureDoesNotTurnMissingAliasesIntoClears(t *testing.T) {
+	s, _, store := modelService(t)
+	ctx := t.Context()
+	launcher := storedLauncher{ManagedLauncher: proto.ManagedLauncher{Name: "work", Model: "vendor/main", SonnetModel: "vendor/standard"}}
+	putLaunchers(t, s, launcher)
+	if err := s.saveModel(ctx, "agent.new", modelRecord{Binding: ModelBinding{Provider: "launcher.work"}}); err != nil {
+		t.Fatal(err)
+	}
+	_, launchers, _, err := s.captureModels(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	models := launchers["work"]
+	if models.SonnetModel == nil || *models.SonnetModel != "vendor/standard" || models.OpusModel != nil || models.FableModel != nil {
+		t.Fatal("capture did not distinguish configured aliases from missing aliases")
+	}
+	storeProfiles(t, store, ModelProfile{ID: "captured", Name: "Captured", Launchers: launchers})
+	launcher.OpusModel = "vendor/strong"
+	putLaunchers(t, s, launcher)
+	if _, err := s.applyModelProfile(ctx, "captured", ProfileActor{Kind: "hub"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.storedLaunchers(ctx)[0].OpusModel; got != "vendor/strong" {
+		t.Fatalf("profile switch erased alias set after capture: %s", got)
+	}
+}
+
 func TestModelProfileSwitchAllowsMessagesEffort(t *testing.T) {
 	for _, tc := range []struct{ name, api, effort string }{
 		{name: "messages", api: "messages", effort: "low"},

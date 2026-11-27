@@ -42,7 +42,7 @@ func (h *Manager) marketAdd(ctx context.Context, specText, token string, keys ..
 	if err != nil {
 		return MarketView{}, err
 	}
-	mk := &extension.Market{Spec: spec, Token: token, TrustedKeys: keys, Client: client, GitHubAPI: ms.githubAPI, Dir: h.marketsDir(), Cache: h.packageCache()}
+	mk := &extension.Market{Spec: spec, HubBuild: h.build.Number, Token: token, TrustedKeys: keys, Client: client, GitHubAPI: ms.githubAPI, Dir: h.marketsDir(), Cache: h.packageCache()}
 	if err := h.configureMarket(mk); err != nil {
 		return MarketView{}, err
 	}
@@ -52,7 +52,7 @@ func (h *Manager) marketAdd(ctx context.Context, specText, token string, keys ..
 	}
 	now := time.Now()
 	// Official identity determines verification; unofficial markets acquire no persistent pin.
-	rec, ix, err := signedIndex(extension.MarketRecord{ID: id, Spec: spec.String(), AddedAt: now, TrustedKeys: keys}, f, now)
+	rec, ix, err := signedIndex(extension.MarketRecord{ID: id, Spec: spec.String(), AddedAt: now, TrustedKeys: keys}, f, now, h.build.Number)
 	if err != nil {
 		mk.RemoveCheckout()
 		return MarketView{}, err
@@ -146,7 +146,7 @@ func (h *Manager) marketSetSpec(ctx context.Context, id, specText string) (Marke
 	if err != nil {
 		return MarketView{}, err
 	}
-	mk := &extension.Market{Spec: spec, Token: old.Token, TrustedKeys: old.TrustedKeys, Client: client, GitHubAPI: ms.githubAPI, Dir: h.marketsDir(), Cache: h.packageCache()}
+	mk := &extension.Market{Spec: spec, HubBuild: h.build.Number, Token: old.Token, TrustedKeys: old.TrustedKeys, Client: client, GitHubAPI: ms.githubAPI, Dir: h.marketsDir(), Cache: h.packageCache()}
 	if err := h.configureMarket(mk); err != nil {
 		return MarketView{}, err
 	}
@@ -174,7 +174,7 @@ func (h *Manager) marketSetSpec(ctx context.Context, id, specText string) (Marke
 	if extension.IsOfficialMarket(s.rec.Spec) && !extension.IsOfficialMarket(candidate.Spec) {
 		return MarketView{}, i18n.Err("extension-market_security.catalog")
 	}
-	rec, ix, err := signedIndex(candidate, f, now)
+	rec, ix, err := signedIndex(candidate, f, now, h.build.Number)
 	if err != nil {
 		if old.Spec.String() != spec.String() {
 			mk.RemoveCheckout()

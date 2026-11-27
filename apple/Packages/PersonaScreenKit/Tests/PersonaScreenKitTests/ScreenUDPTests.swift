@@ -244,7 +244,9 @@ final class ScreenUDPTests: XCTestCase {
         XCTAssertEqual(r.requests(at: 0.12, rtt: 0.01, jitter: 0).skip, 0)
         XCTAssertEqual(r.givenUp, 1)
         XCTAssertNil(r.requests(at: 0.121, rtt: 0.01, jitter: 0).skip) // once, until the reset or a while
-        let d = r.reset(to: 3000, at: 0.13)
+        XCTAssertEqual(r.requests(at: 0.136, rtt: 0.01, jitter: 0).skip, 0) // retried while waiting for reset
+        XCTAssertEqual(r.givenUp, 1) // retry does not count as another give-up
+        let d = r.reset(to: 3000, at: 0.14)
         XCTAssertEqual(d.messages.map(\.bytes), [next])
         XCTAssertEqual(r.expected, 3500)
     }

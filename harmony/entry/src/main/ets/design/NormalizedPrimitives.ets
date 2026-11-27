@@ -26,7 +26,6 @@ export struct PersonaSheetHeader {
   @Param showDivider: boolean = false;
   @Event onClose: () => void = () => {};
   @Event onTrailing: () => void = () => {};
-  @Local private env: NativeEnvironment = nativeEnvironment;
 
   build() {
     Column({ space: 0 }) {

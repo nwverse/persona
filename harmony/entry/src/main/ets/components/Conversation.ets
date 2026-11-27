@@ -72,9 +72,18 @@ import type { BubbleFoldDecision } from '../core/BubbleFold';
 import { buildEdgeScrubMarks } from '../core/EdgeScrub';
 import type { EdgeScrubMark, EdgeScrubSourceLine } from '../core/EdgeScrub';
 import { ChatEdgeScrubOverlay } from './ChatEdgeScrubOverlay';
-import { extractComposerQueue } from '../core/ComposerQueue';
+import {
+  canMutateQueueIndex,
+  extractComposerQueue,
+  mergeQueuedTakeBackDraft,
+  queueKeepSwapped,
+  queueKeepWithout
+} from '../core/ComposerQueue';
 import type { ComposerQueueState } from '../core/ComposerQueue';
 import { ComposerTopStrip } from './ComposerTopStrip';
+import { isVerifiedStarSource } from '../core/StarredMessages';
+import type { StarredSnapshot, StarredSource } from '../core/StarredMessages';
+import { starredStore, StarredStore } from '../models/StarredStore';
 import { toastCenter } from '../models/ToastCenter';
 
 class ConversationFrame extends FrameCallback {
@@ -861,6 +870,7 @@ export struct Conversation {
   @Local composerFrameWidth: number = 0;
   @Local composerFrameHeight: number = 0;
   @Local private queueSendNowTarget: string = '';
+  @Local private starred: StarredStore = starredStore;
   @Local decisionPager: DecisionPager = new DecisionPager();
   @Local questions: QuestionWorkspace = new QuestionWorkspace();
   @Local questionInset: number = 0;
@@ -1396,6 +1406,7 @@ export struct Conversation {
     catch (_) { if (key === this.attachmentKey) this.attachments.errorKey = 'preview_unavailable'; }
   }
   private syncRevision(): void {
+    this.starred.configure(this.model);
     if (!this.active || !this.model.connected || !this.model.isChat() || this.model.demo) {
       if (this.revisionContextKey) this.invalidateRevisionMenuContext();
       this.revisionContextKey = '';
@@ -1507,10 +1518,86 @@ export struct Conversation {
   private messageMenuBuilder(entry: RepeatItem<ConversationLine>): CustomBuilder {
     return (): void => { const message = entry.item.message; if (message) this.messageMenu(message); };
   }
+  @Monitor('model', 'model.connected', 'model.features', 'model.starredRevision') syncStarredScope(): void {
+    this.starred.configure(this.model);
+  }
+  private starSourceFor(message: ChatMessage): StarredSource | undefined {
+    const row = this.model.selected;
+    const machine = row.machine;
+    const session = row.session || row.id;
+    const itemId = message.itemId || message.id;
+    if (!machine || !session || !itemId || message.ownerTarget !== this.model.target()) return undefined;
+    if (message.role !== 'user' && message.role !== 'assistant') return undefined;
+    if (message.held || message.failed || (message.localOperation && message.deliveryState !== 'done')) return undefined;
+    const conversation = row.kind === 'conversation' ? 'assistant' : 'agent';
+    const source: StarredSource = {
+      machine_id: machine,
+      session_id: session,
+      item_id: itemId,
+      conversation: conversation,
+      source_fingerprint: message.sourceFingerprint || undefined
+    };
+    return isVerifiedStarSource(source) ? source : undefined;
+  }
+  private canStarMessage(message: ChatMessage): boolean {
+    if (!this.active || !this.model.connected || !this.model.isChat()) return false;
+    if (!this.starred.canWriteFor(this.model)) return false;
+    if (!message.text.trim()) return false;
+    return this.starSourceFor(message) !== undefined;
+  }
+  private isMessageStarred(message: ChatMessage): boolean {
+    const _rev = this.starred.indexRevision;
+    const source = this.starSourceFor(message);
+    if (!source) return false;
+    return this.starred.isStarred(this.model, source);
+  }
+  private isStarPending(message: ChatMessage): boolean {
+    const _rev = this.starred.pendingRevision;
+    const source = this.starSourceFor(message);
+    if (!source) return false;
+    return this.starred.isPending(this.model, source);
+  }
+  private async toggleMessageStar(message: ChatMessage): Promise<void> {
+    if (!this.canStarMessage(message)) return;
+    const source = this.starSourceFor(message);
+    if (!source) return;
+    if (this.starred.isStarred(this.model, source)) {
+      await this.starred.remove(this.model, source);
+      return;
+    }
+    const speaker = message.role === 'user'
+      ? tr('chat_lift_me')
+      : (this.composerAgentName() || tr(this.model.selected.kind === 'conversation' ? 'persona' : 'assistant'));
+    const writtenAt = message.at > 0 ? new Date(message.at).toISOString() : undefined;
+    const draft: StarredSnapshot = {
+      id: '',
+      machine_id: source.machine_id,
+      session_id: source.session_id,
+      item_id: source.item_id,
+      conversation: source.conversation,
+      source_fingerprint: source.source_fingerprint,
+      role: message.role,
+      title: this.model.selected.title || tr('conversation'),
+      speaker: speaker,
+      source_manager: this.model.profile.manager || undefined,
+      written_at: writtenAt,
+      text: message.text
+    };
+    await this.starred.add(this.model, draft);
+  }
   @Builder messageMenu(message: ChatMessage) {
     Menu() {
       if (message.text) MenuItem({ content: tr('copy') }).onClick(() => this.copyMessage(message))
       if (message.text) MenuItem({ content: tr('use_as_context') }).onClick(() => this.model.useMessageContext(message))
+      if (this.canStarMessage(message)) {
+        MenuItem({
+          content: tr(this.isMessageStarred(message) ? 'unstar_message' : 'star_message'),
+          symbolStartIcon: new SymbolGlyphModifier(this.isMessageStarred(message) ? $r('sys.symbol.star_fill') : $r('sys.symbol.star'))
+        })
+          .enabled(!this.isStarPending(message))
+          .onClick(() => { void this.toggleMessageStar(message); })
+          .id('chat.message.star')
+      }
       if (message.itemId && message.ownerTarget === this.model.target() && this.revisions.canFork(message.itemId))
         MenuItem({ content: tr('branch_chat') }).onClick(() => this.openForkConfirmation(message))
       if (message.itemId && message.ownerTarget === this.model.target() && this.revisions.canRewind(message.itemId)) {
@@ -1656,8 +1743,8 @@ export struct Conversation {
       PhoneMessageLift({text:this.liftMessage!.text,own:this.liftMessage!.role==='user',frame:this.liftFrame!,
         canForward:this.model.connected && this.forwardState.isEligible(this.model,this.liftMessage!),
         onForward:():void => this.forwardLiftedMessage(false),onSelectMessages:():void => this.forwardLiftedMessage(true),
-        selectOnOpen:this.liftSelectOnOpen,hasMore:!!this.liftMessage!.itemId &&
-          (this.revisions.canFork(this.liftMessage!.itemId) || this.revisions.canRewind(this.liftMessage!.itemId)),
+        selectOnOpen:this.liftSelectOnOpen,hasMore:this.canStarMessage(this.liftMessage!) || (!!this.liftMessage!.itemId &&
+          (this.revisions.canFork(this.liftMessage!.itemId) || this.revisions.canRewind(this.liftMessage!.itemId))),
         moreMenu:():void => this.liftMore(),onClose:():void => { this.closeOwnedLift(); },
         onCopyText:(text:string):void => { const message=this.currentLift(); if (message) void this.copyMessage(message,text); },
         onQuoteText:(text?:string):void => this.quoteLiftedText(text)})
@@ -1874,6 +1961,24 @@ export struct Conversation {
           }.alignItems(HorizontalAlign.Start)
         }
         }
+      }
+      if (this.isMessageStarred(entry.item.message!)) {
+        Row({ space: Tokens.spaceXs }) {
+          SymbolGlyph($r('sys.symbol.star_fill'))
+            .fontSize('11vp')
+            .fontColor([Colors.working])
+          Text(tr('starred_badge'))
+            .fontSize(Tokens.typeLabel)
+            .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
+            .fontWeight(FontWeight.Medium)
+            .fontColor(Colors.working)
+            .maxLines(1)
+        }
+        .padding({ left: Tokens.spaceS, right: Tokens.spaceS, top: Tokens.spaceXxs, bottom: Tokens.spaceXxs })
+        .backgroundColor(Colors.workingWash)
+        .borderRadius(Tokens.radiusCapsule)
+        .accessibilityText(tr('starred_badge'))
+        .id('chat.starred.badge.' + (entry.item.message!.itemId || entry.item.message!.id))
       }
       if (entry.item.message!.held) this.heldStatus(entry.item.message!)
       if (entry.item.message!.deliveryState && entry.item.message!.deliveryState !== 'done' && !entry.item.message!.failed &&
@@ -2330,6 +2435,67 @@ export struct Conversation {
       try { await owner.refresh(); } catch (_) {}
     }
   }
+  private async mutateQueued(index: number, action: 'edit' | 'delete' | 'move', delta: -1 | 1 = -1): Promise<void> {
+    if (!this.sendCurrent()) return;
+    const owner = this.model, row = owner.selected;
+    if (!row || !row.machine || !(row.session || row.id)) return;
+    const queueState = this.composerQueueState;
+    if (!canMutateQueueIndex(queueState.ownCount, index)) return;
+    if (action === 'move' && (!queueState.steersQueue || queueState.ownCount <= 1)) return;
+    const keep = action === 'move'
+      ? queueKeepSwapped(queueState.ownCount, index, delta)
+      : queueKeepWithout(queueState.ownCount, index);
+    if (action === 'move' && !keep.length) return;
+    const path = '/api/v1/sessions/' + encodeURIComponent(row.machine) + '/' + encodeURIComponent(row.session || row.id) + '/queue';
+    if (owner.operationBlocked(path)) {
+      toastCenter.error(tr('pending_action'));
+      return;
+    }
+    const busyKey = this.queueSendNowKey(owner, row);
+    if (!busyKey || this.queueSendNowTarget === busyKey) return;
+    const generation = owner.connectionGeneration(), scope = owner.scope(), target = owner.target();
+    const admit = (): boolean => this.active && owner === this.model && owner.owns(generation, scope) && owner.target() === target;
+    this.queueSendNowTarget = busyKey;
+    let mutated = false;
+    try {
+      const response = await owner.repo().call(
+        path,
+        'POST',
+        Wire.payload(['keep'], [keep]),
+        '',
+        admit,
+        false,
+        undefined,
+        true
+      );
+      mutated = true;
+      if (this.model === owner && owner.owns(generation, scope) && owner.target() === target) {
+        if (action === 'edit') {
+          const pulled = Wire.strings(response, 'queue');
+          const taken = (index < pulled.length ? pulled[index] : '') || queueState.items[index]?.text || '';
+          owner.updateDraft(mergeQueuedTakeBackDraft(owner.draft, taken));
+          Haptics.success();
+          toastCenter.success(tr('composer_queue_taken_back'));
+        } else if (action === 'delete') {
+          Haptics.success();
+          toastCenter.success(tr('composer_queue_deleted'));
+        } else {
+          Haptics.tap();
+        }
+      }
+    } catch (error) {
+      if (this.model === owner && owner.owns(generation, scope) && owner.target() === target) {
+        owner.reportError(error as Error);
+        Haptics.error();
+        toastCenter.error(tr(owner.error || 'failed'));
+      }
+    } finally {
+      if (this.queueSendNowTarget === busyKey) this.queueSendNowTarget = '';
+    }
+    if (mutated && this.active && this.model === owner && owner.owns(generation, scope) && owner.target() === target) {
+      try { await owner.refresh(); } catch (_) {}
+    }
+  }
   @Computed get quoteRemoveSize(): number { return Math.min(68,44*this.environment.fontScale); }
   @Builder composer() {
     // The shell measures the decorated editor. Its extra paint area never changes editing layout or hit targets.
@@ -2346,7 +2512,10 @@ export struct Conversation {
         ComposerTopStrip({
           queue: this.composerQueueState,
           busy: this.queueSendNowTarget !== '' && this.queueSendNowTarget === this.queueSendNowKey(),
-          onSendNow: () => { void this.sendQueuedNow(); }
+          onSendNow: () => { void this.sendQueuedNow(); },
+          onEditQueued: (index: number) => { void this.mutateQueued(index, 'edit'); },
+          onDeleteQueued: (index: number) => { void this.mutateQueued(index, 'delete'); },
+          onMoveQueued: (index: number, delta: -1 | 1) => { void this.mutateQueued(index, 'move', delta); }
         })
       }
       if (this.model.hasForwardContext()) PhoneChatForwardTray({model:this.model})

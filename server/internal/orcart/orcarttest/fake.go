@@ -33,14 +33,17 @@ type Fake struct {
 	layouts     []any
 	trees       []map[string]any
 	screens     map[string]map[string]any
+	outputs     map[string]*output
 	status      map[string]any
 	on          map[string]func(params map[string]any) any
 	keepalive   int
 	ln          net.Listener
 	agentStatus map[string]map[string]any
-	revisions   map[string]int
-	writes      []Write
-	invalid     []string
+	// processes are terminal.inspectProcess's answers by handle; nil: the method is unknown (an older Orca).
+	processes map[string]map[string]any
+	revisions map[string]int
+	writes    []Write
+	invalid   []string
 	// unknown: params each method's schema does not have and refuses (Unknown), as an older, strict Orca's would.
 	unknown map[string][]string
 }
@@ -74,7 +77,7 @@ func New(t testing.TB) *Fake {
 	kind, socket := Endpoint(dir)
 	f := &Fake{
 		MetaPath: filepath.Join(dir, "orca-runtime.json"), Socket: socket, Kind: kind,
-		token: "test-token-1", runtimeID: "rt-1", screens: map[string]map[string]any{},
+		token: "test-token-1", runtimeID: "rt-1", screens: map[string]map[string]any{}, outputs: map[string]*output{},
 		on: map[string]func(map[string]any) any{}, agentStatus: map[string]map[string]any{}, revisions: map[string]int{},
 		status: map[string]any{"appVersion": "1.4.245", "runtimeProtocolVersion": 3, "minCompatibleRuntimeClientVersion": 2,
 			"protocolVersion": 3, "capabilities": []string{"terminal.prompt-delivery.v1"}},
@@ -278,6 +281,9 @@ func (f *Fake) answerLocked(method string, p map[string]any) any {
 	}
 	switch method {
 	case "terminal.read":
+		if p["screen"] != true {
+			return map[string]any{"terminal": f.readOutputLocked(h, p)}
+		}
 		s := f.screens[h]
 		if s == nil {
 			s = map[string]any{"tail": []string{}, "tailRows": []any{}}
@@ -293,6 +299,16 @@ func (f *Fake) answerLocked(method string, p map[string]any) any {
 		out := map[string]any{"handle": h}
 		maps.Copy(out, st)
 		return map[string]any{"agentStatus": out}
+	case "terminal.inspectProcess":
+		if f.processes == nil {
+			return Fail{"method_not_found"}
+		}
+		pr := f.processes[h]
+		if pr == nil {
+			// What Orca says when it cannot read the terminal's processes.
+			pr = map[string]any{"foregroundProcess": nil, "hasChildProcesses": true, "childProcessEvidence": "unverifiable"}
+		}
+		return map[string]any{"process": maps.Clone(pr)}
 	case "terminal.close":
 		f.writes = append(f.writes, Write{Handle: h, Close: true})
 		return map[string]any{"close": map[string]any{"handle": h, "tabId": t["tabId"], "ptyKilled": true}}
@@ -409,9 +425,16 @@ func validate(method string, p map[string]any) string {
 		if p["screen"] == true && p["cursor"] != nil {
 			return "Cursor cannot be combined with a screen read"
 		}
+		if v, ok := p["cursor"]; ok {
+			if c, isNum := v.(float64); !isNum || c < 0 || c != float64(int64(c)) {
+				return "Cursor must be a non-negative integer"
+			}
+		}
 		return first(handle(), literalTrue("screen"))
 	case "terminal.agentStatus", "terminal.close":
 		return handle()
+	case "terminal.inspectProcess":
+		return first(handle(), boolean("scanChildProcesses"))
 	case "terminal.rename", "terminal.setPaneTitle":
 		return first(handle(), str("title", true))
 	case "repo.add":
@@ -444,27 +467,32 @@ func validate(method string, p map[string]any) string {
 			}
 		}
 		return ""
+	case "session.tabs.listAll":
+		return ""
+	case "agentSession.reveal":
+		return str("sessionId", true)
+	case "agentSession.respondToApproval":
+		return first(envelopeOf(p), str("itemId", true), str("optionId", true), positiveInt(p, "expectedRevision"))
+	case "agentSession.respondToQuestion":
+		if r := first(envelopeOf(p), str("itemId", true), positiveInt(p, "expectedRevision")); r != "" {
+			return r
+		}
+		answers, hasAnswers := p["answers"].([]any)
+		_, hasOption := p["optionId"]
+		if hasAnswers == hasOption {
+			return "Send exactly one of an option id or answers"
+		}
+		if hasAnswers && len(answers) == 0 {
+			return "answers must not be empty"
+		}
+		return ""
+	case "agentSession.setOption":
+		return first(envelopeOf(p), str("key", true))
+	case "agentSession.cancel":
+		return envelopeOf(p)
 	case "agentSession.send":
-		envelope, ok := p["envelope"].(map[string]any)
-		if !ok {
-			return "Missing envelope"
-		}
-		for _, field := range []string{"sessionId", "clientOperationId", "payloadFingerprint"} {
-			if value, _ := envelope[field].(string); value == "" {
-				return "Missing envelope." + field
-			}
-		}
-		fingerprint, _ := envelope["payloadFingerprint"].(string)
-		if len(fingerprint) != 64 {
-			return "payloadFingerprint must be a sha256 hex digest"
-		}
-		for _, r := range fingerprint {
-			if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f') {
-				return "payloadFingerprint must be lowercase hex"
-			}
-		}
-		if fence, ok := envelope["expectedRuntimeFence"].(float64); !ok || fence <= 0 {
-			return "expectedRuntimeFence must be positive"
+		if r := envelopeOf(p); r != "" {
+			return r
 		}
 		body, ok := p["body"].(map[string]any)
 		if !ok || body["kind"] != "message" || body["role"] != "user" {
@@ -528,6 +556,42 @@ func validate(method string, p map[string]any) string {
 	return ""
 }
 
+// envelopeOf checks an agentSession write's envelope as Orca's schema does: session, operation id and a lowercase
+// sha256 fingerprint, and a positive fence ("" when valid). null, which a create sends, is checked by its method.
+func envelopeOf(p map[string]any) string {
+	envelope, ok := p["envelope"].(map[string]any)
+	if !ok {
+		return "Missing envelope"
+	}
+	for _, field := range []string{"sessionId", "clientOperationId", "payloadFingerprint"} {
+		if value, _ := envelope[field].(string); value == "" {
+			return "Missing envelope." + field
+		}
+	}
+	fingerprint, _ := envelope["payloadFingerprint"].(string)
+	if len(fingerprint) != 64 {
+		return "payloadFingerprint must be a sha256 hex digest"
+	}
+	for _, r := range fingerprint {
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f') {
+			return "payloadFingerprint must be lowercase hex"
+		}
+	}
+	if fence, ok := envelope["expectedRuntimeFence"].(float64); !ok || fence <= 0 {
+		return "expectedRuntimeFence must be positive"
+	}
+	return ""
+}
+
+// positiveInt checks that p[k] is a positive integer ("" when it is).
+func positiveInt(p map[string]any, k string) string {
+	n, ok := p[k].(float64)
+	if !ok || n < 1 || n != float64(int64(n)) {
+		return k + " must be a positive integer"
+	}
+	return ""
+}
+
 // Write is one terminal.send or terminal.close the fake took: what reached the terminal.
 type Write struct {
 	Handle string
@@ -583,6 +647,50 @@ func (f *Fake) SetAgentStatus(handle string, running bool, status string) {
 	f.mu.Lock()
 	f.agentStatus[handle] = map[string]any{"isRunningAgent": running, "status": st}
 	f.mu.Unlock()
+}
+
+// SetProcess sets terminal.inspectProcess's answer for a handle (ShellAtRest, ShellWithJobs, Running, Unverifiable);
+// from the first call on the fake knows the method, and a handle with no answer set is one Orca cannot read. nil
+// clears the handle's answer.
+func (f *Fake) SetProcess(handle string, process map[string]any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.processes == nil {
+		f.processes = map[string]map[string]any{}
+	}
+	if process == nil {
+		delete(f.processes, handle)
+		return
+	}
+	f.processes[handle] = process
+}
+
+// ShellAtRest is Orca 1.4.277's terminal.inspectProcess answer for a shell at rest with nothing else in its terminal.
+func ShellAtRest(shellPID int) map[string]any {
+	return map[string]any{"foregroundProcess": nil, "hasChildProcesses": false, "idleShellProven": true,
+		"foregroundProcessEvidence": map[string]any{"verdict": "live", "processName": nil,
+			"fence": map[string]any{"platform": "posix", "shellPid": shellPID, "foregroundPgid": shellPID}}}
+}
+
+// ShellWithJobs is its answer for a shell in front with a background or stopped job: in front, not proven idle.
+func ShellWithJobs(shellPID int) map[string]any {
+	return map[string]any{"foregroundProcess": nil, "hasChildProcesses": false,
+		"foregroundProcessEvidence": map[string]any{"verdict": "live", "processName": nil,
+			"fence": map[string]any{"platform": "posix", "shellPid": shellPID, "foregroundPgid": shellPID}}}
+}
+
+// Running is its answer for a program in front of the shell ("sleep", "vi", "python3"…).
+func Running(name string, shellPID int) map[string]any {
+	return map[string]any{"foregroundProcess": name, "hasChildProcesses": true,
+		"foregroundProcessEvidence": map[string]any{"verdict": "live", "processName": nil,
+			"fence": map[string]any{"platform": "posix", "shellPid": shellPID, "foregroundPgid": shellPID + 1}}}
+}
+
+// Unverifiable is its answer when it cannot tell (reason "incarnation_mismatch", "process_table_unreadable"…): the
+// foreground it names then is only its last guess.
+func Unverifiable(reason string) map[string]any {
+	return map[string]any{"foregroundProcess": "bash", "hasChildProcesses": false,
+		"foregroundProcessEvidence": map[string]any{"verdict": "unverifiable", "reason": reason}}
 }
 
 // Orphan does to a terminal what Orca does about 2 s after terminal.create in a worktree its UI is not showing: the
@@ -744,6 +852,92 @@ func (f *Fake) SetScreenRows(handle string, lines []string, wrapped []bool) {
 	f.mu.Lock()
 	f.screens[handle] = map[string]any{"tail": lines, "tailRows": rows}
 	f.mu.Unlock()
+}
+
+// output is what a terminal's program wrote, as Orca keeps it (terminal.read without screen).
+type output struct {
+	// tail is the output tail: the newest lines, rows redrawn in place as they ended, the line being written last.
+	tail          []string
+	tailTruncated bool
+	// log is every completed line, redrawn rows each time, oldest kept first; total counts all the completed lines
+	// ever written (the cursor after the newest), so the oldest kept is total-len(log).
+	log   []string
+	total int
+	// noCursor answers as an Orca without cursor reads: no cursors, a cursor ignored.
+	noCursor bool
+}
+
+// SetOutput sets what terminal.read without screen answers for a handle: tail is the output tail (the newest lines,
+// rows redrawn in place as they ended, the line being written last; truncated: Orca let older lines of it go), log
+// every completed line, redrawn rows each time, oldest kept first, and total the count of every completed line ever
+// written (the cursor after the newest; the oldest kept is total-len(log)). A handle without output answers a tail read
+// with the screen, as Orca does for a program on the alternate screen.
+func (f *Fake) SetOutput(handle string, tail []string, truncated bool, log []string, total int) {
+	f.mu.Lock()
+	f.outputs[handle] = &output{tail: tail, tailTruncated: truncated, log: log, total: total}
+	f.mu.Unlock()
+}
+
+// SetOldOutput sets a handle's output tail as an Orca without cursor reads answers it: no cursors, a cursor ignored.
+func (f *Fake) SetOldOutput(handle string, tail []string) {
+	f.mu.Lock()
+	f.outputs[handle] = &output{tail: tail, noCursor: true}
+	f.mu.Unlock()
+}
+
+// readOutputLocked answers terminal.read without screen as Orca 1.4.277 does (lFt in its runtime): a cursor pages
+// the log, at most limit (default and cap 2000) lines; without one, the tail's last limit (default 120, cap 2000)
+// lines, cut further to 32 KiB of text from the end.
+func (f *Fake) readOutputLocked(h string, p map[string]any) map[string]any {
+	o := f.outputs[h]
+	if o == nil {
+		s := f.screens[h]
+		if s == nil {
+			s = map[string]any{"tail": []string{}, "tailRows": []any{}}
+		}
+		out := map[string]any{"handle": h, "status": "running", "truncated": false, "source": "screen"}
+		maps.Copy(out, s)
+		return out
+	}
+	limit := func(def int) int {
+		if v, ok := p["limit"].(float64); ok && v > 0 {
+			return min(max(1, int(v)), 2000)
+		}
+		return def
+	}
+	oldest, latest := max(0, o.total-len(o.log)), o.total
+	out := map[string]any{"handle": h, "status": "running", "source": "stream"}
+	if !o.noCursor {
+		out["oldestCursor"], out["nextCursor"], out["latestCursor"] = fmt.Sprint(oldest), fmt.Sprint(latest), fmt.Sprint(latest)
+	}
+	if c, ok := p["cursor"].(float64); ok && !o.noCursor {
+		cursor := int(c)
+		if cursor > latest {
+			out["tail"], out["truncated"], out["limited"] = []string{}, false, false
+			return out
+		}
+		from := max(cursor, oldest)
+		rest := o.log[from-oldest:]
+		lines := rest[:min(len(rest), limit(2000))]
+		out["tail"], out["truncated"], out["limited"] = slices.Clone(lines), cursor < oldest, len(lines) < len(rest)
+		out["nextCursor"] = fmt.Sprint(from + len(lines))
+		return out
+	}
+	lines := slices.Clone(o.tail[max(0, len(o.tail)-limit(120)):])
+	limited := len(lines) < len(o.tail)
+	chars := 0
+	for _, l := range lines {
+		chars += len(l)
+	}
+	for len(lines) > 0 && chars-len(lines[0]) >= 32768 {
+		chars -= len(lines[0])
+		lines, limited = lines[1:], true
+	}
+	if chars > 32768 {
+		lines[0], limited = lines[0][chars-32768:], true
+	}
+	out["tail"], out["truncated"], out["limited"] = lines, o.tailTruncated, limited
+	return out
 }
 
 // Handle makes a method answer through fn (a Fail for an error).

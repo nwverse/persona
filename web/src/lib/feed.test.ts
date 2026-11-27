@@ -239,7 +239,7 @@ describe("a task whose agent did not start (#1077, #1142)", () => {
       expect(fetcher).not.toHaveBeenCalled();
       const ask = vi.fn((_message: string) => true);
       expect(await removeTask(ran, ask)).toBe(true);
-      expect(ask.mock.calls[0][0]).toContain("Agents 页");
+      expect(ask.mock.calls[0][0]).toContain("「Agents」页面");
       expect(fetcher.mock.calls.some(([, init]) => init?.method === "DELETE")).toBe(true);
     });
   });

@@ -119,7 +119,7 @@ describe("RunningStatusView", () => {
 
   it("background subagents after the turn: cindy's Activity line, no time, no tokens, no Stop all the node cannot do (#5030)", () => {
     const html = render({ live: { verb: "Frosting", elapsed_s: 975, tokens_down: 22_800 }, working: true, subtasks: true });
-    expect(html).toContain("后台子任务运行中，模型用量仍在消耗…");
+    expect(html).toContain("后台子任务仍在运行，模型用量持续消耗中…");
     expect(html).toContain('data-running-background="subtasks"');
     expect(html).not.toContain("Frosting");
     expect(html).not.toContain("data-running-elapsed");
@@ -216,7 +216,7 @@ describe("RunningStatusView", () => {
   it("a background workflow says so first, before background subagents", () => {
     const html = render({ live: null, working: true, subtasks: true, background: { run: { task_id: "w", status: "running", running: true, agents_started: 3, agents_done: 1 }, more: 0, guessed: false } });
     expect(html).toContain('data-running-background="workflow"');
-    expect(html).not.toContain("后台子任务运行中");
+    expect(html).not.toContain("后台子任务仍在运行");
   });
 
   it("without a line: thinking, counting from when the turn started, no tokens", () => {
@@ -268,7 +268,7 @@ describe("model request retries (#887)", () => {
     expect(text).not.toContain(rateLimited);
     expect(text).not.toContain(upstream);
     expect(text).not.toContain("模型请求失败");
-    expect(text).not.toContain("请求太多，被限流了");
+    expect(text).not.toContain("请求过于频繁，已触发限流");
     expect(text).not.toContain("模型服务暂时不可用");
   };
 
@@ -278,7 +278,7 @@ describe("model request retries (#887)", () => {
     expect(html).toMatch(/data-running-verb="true" title="[^"]*">[^<]*5\/10[^<]*<\/span>/);
     expect(html).toContain("text-orange");
     expect(html).toContain("5/10");
-    expect(html).toContain("请求太多，被限流了");
+    expect(html).toContain("请求过于频繁，已触发限流");
     expect(html).toContain("重试");
     expect(html).toContain("text-status-working");
     expect(html).toContain(statusIcon("retry", "text-status-working"));
@@ -296,13 +296,13 @@ describe("model request retries (#887)", () => {
       expect(text()).not.toContain("API Error");
       expect(text()).toContain("1/10");
       expect(text()).toContain("模型请求失败");
-      expect(text()).not.toContain("请求太多，被限流了");
+      expect(text()).not.toContain("请求过于频繁，已触发限流");
 
       act(() => root.render(bar(retryLive(rateLimited, 5, 10))));
       expect(detail()).toBe(rateLimited);
       expect(text()).not.toContain(rateLimited);
       expect(text()).toContain("5/10");
-      expect(text()).toContain("请求太多，被限流了");
+      expect(text()).toContain("请求过于频繁，已触发限流");
       expect(text()).not.toContain("模型请求失败");
 
       act(() => root.render(bar(retryLive(rateLimited, 6, 10))));

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"strconv"
 	"strings"
 )
 
@@ -74,6 +75,8 @@ type TerminalList struct {
 	// HasTabs: the layouts were asked for (Tabs is complete, possibly empty).
 	HasTabs           bool
 	TopologyRevisions map[string]int64
+	// Truncated: Orca left terminals out (more than its list limit).
+	Truncated bool
 }
 
 // Terminals is terminal.list, with the layouts (costly for Orca to build) only when layouts is true.
@@ -81,6 +84,7 @@ func (c *Client) Terminals(ctx context.Context, layouts bool) (*TerminalList, er
 	var res struct {
 		Terminals         []Terminal       `json:"terminals"`
 		TopologyRevisions map[string]int64 `json:"topologyRevisions"`
+		Truncated         bool             `json:"truncated"`
 		VisualLayouts     []struct {
 			WorktreeID string     `json:"worktreeId"`
 			Root       layoutNode `json:"root"`
@@ -90,7 +94,7 @@ func (c *Client) Terminals(ctx context.Context, layouts bool) (*TerminalList, er
 	if err := c.Call(ctx, ListTimeout, "terminal.list", params, &res); err != nil {
 		return nil, err
 	}
-	out := &TerminalList{Terminals: res.Terminals, HasTabs: layouts, TopologyRevisions: res.TopologyRevisions}
+	out := &TerminalList{Terminals: res.Terminals, HasTabs: layouts, TopologyRevisions: res.TopologyRevisions, Truncated: res.Truncated}
 	for _, l := range res.VisualLayouts {
 		l.Root.tabs(l.WorktreeID, &out.Tabs)
 	}
@@ -227,6 +231,25 @@ func (c *Client) Worktrees(ctx context.Context, after string) (trees []Worktree,
 	return res.Worktrees, res.SnapshotID, res.Unchanged && after != "", err
 }
 
+// ErrPartial: Orca answered a list with only part of it (more than its limit).
+var ErrPartial = errors.New("orca answered with part of the list")
+
+// AllWorktrees is worktree.ps answered whole, outside a snapshot series (Worktrees); ErrPartial when Orca left
+// worktrees out.
+func (c *Client) AllWorktrees(ctx context.Context) ([]Worktree, error) {
+	var res struct {
+		Worktrees []Worktree `json:"worktrees"`
+		Truncated bool       `json:"truncated"`
+	}
+	if err := c.Call(ctx, ListTimeout, "worktree.ps", map[string]any{"afterSnapshotId": nil}, &res); err != nil {
+		return nil, err
+	}
+	if res.Truncated {
+		return nil, ErrPartial
+	}
+	return res.Worktrees, nil
+}
+
 // Screen is terminal.read with screen: the visible screen as plain text.
 type Screen struct {
 	Lines []string
@@ -311,6 +334,84 @@ func (c *Client) Read(ctx context.Context, t Target) (*Screen, error) {
 	return s, nil
 }
 
+// TailLimit is the most lines one tail or log read returns.
+const TailLimit = 2000
+
+// ReadTail is terminal.read {limit}: the last limit lines (at most TailLimit) of the terminal's output tail, which is
+// the newest lines its program wrote, escapes stripped, rows it redrew in place kept as they ended, the line it is
+// still writing last. truncated: Orca let older output go (its tail keeps at most 2000 lines and 256 KiB). limited:
+// it keeps more than the lines sent (one read sends at most 2000 lines and 32 KiB; the first line may then be the end
+// of a longer one). source is "stream" for the tail, "screen" when Orca answered with the screen instead (a program on
+// the alternate screen: nothing is above it).
+func (c *Client) ReadTail(ctx context.Context, t Target, limit int) (lines []string, truncated, limited bool, source string, err error) {
+	var res struct {
+		Terminal struct {
+			Tail      []string `json:"tail"`
+			Truncated bool     `json:"truncated"`
+			Limited   bool     `json:"limited"`
+			Source    string   `json:"source"`
+		} `json:"terminal"`
+	}
+	p := t.params()
+	p["limit"] = min(max(limit, 1), TailLimit)
+	if err := c.Call(ctx, CallTimeout, "terminal.read", p, &res); err != nil {
+		return nil, false, false, "", err
+	}
+	r := res.Terminal
+	if r.Source == "screen-unavailable" {
+		return nil, false, false, "", fmt.Errorf("orca terminal.read: %w", ErrNoScreen)
+	}
+	return r.Tail, r.Truncated, r.Limited, r.Source, nil
+}
+
+// ErrNoCursor: this Orca reads no output by cursor (an older one answers a cursor read without cursors).
+var ErrNoCursor = errors.New("orca reads no output by cursor")
+
+// ReadLog is terminal.read {cursor, limit}: up to limit lines (at most TailLimit) of the terminal's log from cursor
+// on, starting at the oldest line Orca keeps when cursor is older; oldest is that line's cursor (0: Orca let none go).
+// The log is every line the terminal's program completed, in order, escapes stripped: rows a program redrew in place
+// come again each time (a spinner, an agent's input box), so it is a record of the output, not what the terminal
+// shows (ReadTail is that). A cursor counts the completed lines since Orca began keeping the terminal's output.
+func (c *Client) ReadLog(ctx context.Context, t Target, cursor int64, limit int) (lines []string, oldest int64, err error) {
+	var res struct {
+		Terminal struct {
+			Tail   []string     `json:"tail"`
+			Oldest outputCursor `json:"oldestCursor"`
+			Latest outputCursor `json:"latestCursor"`
+		} `json:"terminal"`
+	}
+	p := t.params()
+	p["cursor"] = max(cursor, 0)
+	p["limit"] = min(max(limit, 1), TailLimit)
+	if err := c.Call(ctx, CallTimeout, "terminal.read", p, &res); err != nil {
+		return nil, 0, err
+	}
+	r := res.Terminal
+	if !r.Oldest.ok || !r.Latest.ok {
+		return nil, 0, fmt.Errorf("orca terminal.read: %w", ErrNoCursor)
+	}
+	return r.Tail, r.Oldest.n, nil
+}
+
+// outputCursor is a cursor as Orca sends it: a decimal string ("501"), or a number.
+type outputCursor struct {
+	n  int64
+	ok bool
+}
+
+func (c *outputCursor) UnmarshalJSON(b []byte) error {
+	s := strings.Trim(string(b), `"`)
+	if s == "" || s == "null" {
+		return nil
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil || n < 0 {
+		return nil // not a cursor Persona can page by: as if none came
+	}
+	c.n, c.ok = n, true
+	return nil
+}
+
 // AgentStatus is terminal.agentStatus: whether an agent Orca recognises is running in front in the terminal, and its
 // state when Orca knows it ("working", "permission", "idle"; "" unknown).
 type AgentStatus struct {
@@ -330,6 +431,96 @@ func (c *Client) AgentStatus(ctx context.Context, t Target) (*AgentStatus, error
 		return nil, fmt.Errorf("orca terminal.agentStatus: no status in the answer")
 	}
 	return res.AgentStatus, nil
+}
+
+// Process is terminal.inspectProcess: what runs in a terminal, as Orca reads its process table. Orca 1.4.277 answers a
+// shell at rest with no foreground program, no children and its proof of an idle shell.
+type Process struct {
+	// foreground is the program in front of the terminal's shell ("" when Orca names none: the shell itself is in
+	// front, or it could not tell); children: something other than the shell is in front.
+	foreground string
+	children   bool
+	// childEvidence is how Orca knows children ("no-children", "children", "unverifiable"; "" when it does not say).
+	childEvidence string
+	// verdict is Orca's own verdict on its evidence ("live" when it read the terminal's process as it is now;
+	// "unverifiable" when it could not, as for an incarnation that is not the terminal's any more; "" when the answer
+	// carries no evidence, as from older runtimes); reason says why it could not ("incarnation_mismatch"…).
+	verdict, reason string
+	// idleShell: Orca proved the shell idle — in front, alone in its process group, no child, no stopped or
+	// background job on its terminal, no output since it looked (idleShellProven).
+	idleShell bool
+	// shellPID is the terminal's shell process (the evidence's fence), 0 when not given.
+	shellPID int
+}
+
+// Known: Orca could tell what runs in the terminal; an answer it marks unverifiable says nothing.
+func (p Process) Known() bool {
+	return p.childEvidence != "unverifiable" && (p.verdict == "" || p.verdict == "live")
+}
+
+// Foreground is the program Orca names in front of the terminal's shell, "" for none (or none it could name).
+func (p Process) Foreground() string { return p.foreground }
+
+// HasChildren: something other than the terminal's shell is in front.
+func (p Process) HasChildren() bool { return p.children }
+
+// IdleShell: Orca proved the shell at rest with nothing else in its terminal (idleShellProven).
+func (p Process) IdleShell() bool { return p.idleShell }
+
+// ShellPID is the terminal's shell process as Orca's evidence names it, 0 when it does not.
+func (p Process) ShellPID() int { return p.shellPID }
+
+// Unverified says why Orca could not tell ("incarnation_mismatch", "unverifiable"…), "" for a known answer.
+func (p Process) Unverified() string {
+	switch {
+	case p.Known():
+		return ""
+	case p.reason != "":
+		return p.reason
+	}
+	return "unverifiable"
+}
+
+// InspectProcess is terminal.inspectProcess, fenced to the terminal's incarnation: Orca answers for another process
+// behind the handle with an unverifiable verdict (Process.Known false). Orca runtimes without the method answer
+// method_not_found.
+func (c *Client) InspectProcess(ctx context.Context, t Target) (*Process, error) {
+	var res struct {
+		Process *struct {
+			ForegroundProcess *string `json:"foregroundProcess"`
+			HasChildProcesses bool    `json:"hasChildProcesses"`
+			ChildEvidence     string  `json:"childProcessEvidence"`
+			IdleShellProven   bool    `json:"idleShellProven"`
+			Evidence          *struct {
+				Verdict string `json:"verdict"`
+				Reason  string `json:"reason"`
+				Fence   *struct {
+					ShellPID int `json:"shellPid"`
+				} `json:"fence"`
+			} `json:"foregroundProcessEvidence"`
+		} `json:"process"`
+	}
+	if err := c.Call(ctx, CallTimeout, "terminal.inspectProcess", t.params(), &res); err != nil {
+		return nil, err
+	}
+	if res.Process == nil {
+		return nil, fmt.Errorf("orca terminal.inspectProcess: no process in the answer")
+	}
+	r := res.Process
+	p := &Process{children: r.HasChildProcesses, childEvidence: r.ChildEvidence, idleShell: r.IdleShellProven}
+	if r.ForegroundProcess != nil {
+		p.foreground = *r.ForegroundProcess
+	}
+	if e := r.Evidence; e != nil {
+		p.verdict, p.reason = e.Verdict, e.Reason
+		if p.verdict == "" {
+			p.verdict = "unverifiable" // evidence without a verdict proves nothing
+		}
+		if e.Fence != nil {
+			p.shellPID = e.Fence.ShellPID
+		}
+	}
+	return p, nil
 }
 
 // ClientID is how Persona names itself to Orca as the driver of its input (terminal.send's client.id, required).

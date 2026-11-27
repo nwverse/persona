@@ -818,6 +818,11 @@ func providerEnv(l proto.ManagedLauncher, model, effort string, mainConversation
 	}
 	if gateway {
 		withoutTierAliases(env, ours)
+		for _, key := range tierModelVars {
+			if key != "ANTHROPIC_MODEL" && key != "ANTHROPIC_SMALL_FAST_MODEL" && env[key] == "" && ours[key] != "" {
+				env[key] = ours[key]
+			}
+		}
 	}
 	// The reply limit by the models the process ends up with (the launcher's own environment may name one), unless
 	// that environment sets it itself (empty: Claude Code's own limit).

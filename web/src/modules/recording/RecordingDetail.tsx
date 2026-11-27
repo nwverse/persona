@@ -104,6 +104,7 @@ export function RecordingDetail({ kind, id, query, detail: d, entry: e, auth, cu
           refresh={reload}
           onSaved={onSaved}
           onJump={jumpToTranscript}
+          highlighted={highlighted}
           photos={meeting.photos}
         />}
         {/* While a room meeting records (phase 2): its topics and newest live lines, above its conversation. */}

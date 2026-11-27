@@ -1243,7 +1243,7 @@ func (s *Service) warm(launcher string) {
 	}
 	params := map[string]any{"cwd": cwd, "launcher": launcher, "is_main": true}
 	if picked {
-		err = s.applyPick(ctx, params, pick)
+		err = s.applyPickFor(ctx, purposeMain, params, pick)
 	} else {
 		err = s.applyModel(ctx, purposeMain, params)
 	}

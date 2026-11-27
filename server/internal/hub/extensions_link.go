@@ -26,6 +26,7 @@ import (
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/modapi"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -242,6 +243,7 @@ func (h *Hub) features() []string {
 			out = append(out, f)
 		}
 	}
+	out = h.reportedModules(out)
 	if h.defaultManagerNames(assistantwire.CapabilityHealthTell) {
 		out = append(out, assistantwire.CapabilityHealthTell)
 	}
@@ -274,7 +276,7 @@ func (h *Hub) features() []string {
 	out = append(out, "assistant_views", "assistant_html_bridge")
 	for _, f := range h.extReport().Features {
 		if f == "modules" || strings.HasPrefix(f, "module.") {
-			continue // only the default manager's hello can publish module presence
+			continue // only the default manager's hello and its approved providers (reportedModules) publish module presence
 		}
 		switch f {
 		case assistantwire.CapabilityHealthTell, assistantwire.CapabilityHealthItems, assistantwire.CapabilityHealthStrength, assistantwire.CapabilityHealthIntake, assistantwire.CapabilityAssistantSegments, featureAgentSessionArchives, featureAgentSessionArchiveClose, featureAgentSessionIdleArchive, featureAgentAutoname, featureMeetingAttendance, featureMeetingConversation,
@@ -302,6 +304,41 @@ func (h *Hub) defaultManagerModuleFeatures() []string {
 		}
 	}
 	return nil
+}
+
+// reportedModules is out with the flags of the modules approved installed extensions supply (#16254): from the
+// default manager's report (Report.Modules), only while that manager is connected and its hello carries the modules
+// marker, as for its built-in modules' flags (defaultManagerModuleFeatures). An installed provider decides its module's
+// flag: one that is on adds module.<id>, one that is off removes the built-in module's flag of that id. Only ids of the
+// host's list count (modapi.ExtensionModules); an older manager reports none, and out stays as it was.
+func (h *Hub) reportedModules(out []string) []string {
+	id := h.defaultOwner(context.Background())
+	if h.busConnOf(id) == nil {
+		return out
+	}
+	marker := false
+	for _, manager := range h.busRoster() {
+		if manager.ID == id {
+			marker = slices.Contains(manager.Features, "modules") // the marker (moduleswitch.Marker, not linked into the hub)
+		}
+	}
+	r := h.extReportOf(id)
+	if !marker || r == nil {
+		return out
+	}
+	for _, m := range r.Modules {
+		if !slices.ContainsFunc(modapi.ExtensionModules(), func(x modapi.ExtensionModule) bool { return string(x.ID) == string(m.ID) }) {
+			continue
+		}
+		f := "module." + string(m.ID)
+		switch {
+		case m.On && !slices.Contains(out, f):
+			out = append(out, f)
+		case !m.On:
+			out = slices.DeleteFunc(out, func(g string) bool { return g == f })
+		}
+	}
+	return out
 }
 
 // extrasOf is machine m's Cua, ego and iPhone state as the manager reports it (each nil when not on), read from one

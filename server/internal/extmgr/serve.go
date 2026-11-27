@@ -128,6 +128,7 @@ func (h *Manager) registerRoutes(api *http.ServeMux) {
 	h.agentRoutes(api)
 	h.connectorRoutes(api)
 	h.extensionRoutes(api)
+	h.textLookupRoutes(api)
 	h.messagingRoutes(api)
 	h.adminExtensionRoutes(api) // with the old /api/v1/admin/plugins paths
 	h.subscriptionRoutes(api)
@@ -693,6 +694,7 @@ func (h *Manager) report() extwire.Report {
 			}
 		}
 		slices.Sort(r.PushGradingExtensions)
+		r.Modules = h.reportModules() // the modules approved installed extensions supply (module_providers.go)
 	}
 	for _, m := range h.machinesNow() {
 		var x extwire.MachineExtras

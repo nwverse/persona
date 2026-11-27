@@ -21,7 +21,8 @@ import (
 // is left out of the words, as at the start); one started elsewhere (`codex` in a terminal, since closed) lists as a
 // Codex history row and comes back in the directory its rollout names, through the launcher the caller picked when
 // that one runs Codex, else plain codex. Afterwards it is Persona's like any other: retired and resumed again the same
-// way.
+// way. Orca resumes it as herdr does (#17044): a new terminal in the Orca worktree holding its directory, `cd` there,
+// then codex-start; the stock launcher with Orca's own Codex arguments, as a new start of it there.
 //
 // Only a thread nothing has open: no app-server owns it (codex_remote.go: sends go there), no process holds its
 // rollout (a Codex CLI still running it, the Codex App's own app-server: a second writer would fork it), no Codex App
@@ -52,7 +53,7 @@ func (n *Node) codexResumableIn(ctx context.Context, id string, pass *codexListP
 		return false
 	}
 	kind := n.startKind(n.withResumeHost(ctx, id))
-	if _, runtime := engineRuntimes[kind]; runtime || kind == proto.EngineOrca {
+	if _, runtime := engineRuntimes[kind]; runtime { // herdr, Herdr App, Orca (#17044), Tern open the terminal; a runtime does not
 		return false
 	}
 	if _, err := hostCapFor[host.Launcher](n, kind); err != nil {
