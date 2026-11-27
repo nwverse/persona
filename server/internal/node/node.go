@@ -185,6 +185,7 @@ type Node struct {
 	agyParentSubs *lru[string, agyParentSubagentInfo]
 	agyReports    map[string]agyHookReport  // pane -> what its agy hook last said (agyhooks.go)
 	agyBound      map[string]agyPaneBinding // herdr pane -> last accepted non-subagent agy conversation (agypane.go)
+	agyRoots      agyRootsState             // agy data directories besides the default (agyroots.go)
 	agyTitles     *agyTitleBook             // agy's own conversation titles, as last read (agytitle.go)
 	// pumping: the shared watch pump runs (session_watch.go watchPump); it stops when watches is empty.
 	pumping bool
@@ -296,6 +297,14 @@ type Node struct {
 	// usageRetried: when a conversation's message was last sent again after its transcript's usage was repaired
 	// (assistant_usage.go): once in a while at most. Under mu; nil until the first.
 	usageRetried map[string]time.Time
+
+	// agyIdle*: Antigravity idle auto-compaction policy, per-session idle tracking, and hub-reported pending
+	// interaction session IDs (agy_idle_compact.go).
+	agyIdleMu         sync.Mutex
+	agyIdleClock      func() time.Time // nil uses time.Now (tests override per-node)
+	agyIdlePolicy     *assistantwire.AgyIdleCompaction
+	agyIdleSessions   map[string]*agyIdleState
+	pendingIxSessions map[string]bool
 	// recoveries: a conversation's bounded model-failure recovery, surviving the process replaced by a model switch.
 	// recoveryClosed stops the ended connection's Node from starting another attempt while its processes hand over.
 	recoveries     map[string]*assistantTurnRecovery
@@ -357,8 +366,8 @@ type Node struct {
 	// finishedSince: when each finished Agent's terminal was first seen at rest, with its screen; agentTerms: the
 	// terminals opened for Agents on engines without marks of their own (finished_close.go); n.mu.
 	finishedSince map[string]finishedClock
-	agentTerms    map[string]bool
-	agentRoots    map[string]bool // first shells of Agent worktrees on engines without tokens (personatab.go)
+	agentTerms    map[string]string // pane -> the session it was opened for ("agent": not known yet)
+	agentRoots    map[string]bool   // first shells of Agent worktrees on engines without tokens (personatab.go)
 
 	expectedTokensMu sync.Mutex
 	expectedTokens   map[string]map[string]string
@@ -1138,7 +1147,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 				}
 				return n.sendFirstCodexCall(ctx, w, params, p.Text, p.Images)
 			}
-			if r, err, handled := n.codexWaitCalls(method, p.SessionID); handled {
+			if r, err, handled := n.codexWaitCalls(method, p.SessionID, p.UserInputs); handled {
 				return r, err
 			}
 		}
@@ -1492,6 +1501,12 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			// PrivateNetwork: the hub is in office network mode (hub.json security.private_network_only), so this node's
 			// tailcat endpoint stops (tailcat.go stopTailcat); nil or false (an older hub) leaves it as it is.
 			PrivateNetwork *bool `json:"private_network"`
+			// AgyIdleCompaction: proactive idle auto-compaction policy for Antigravity sessions (agy_idle_compact.go);
+			// nil leaves the current policy (or defaults) unchanged.
+			AgyIdleCompaction *assistantwire.AgyIdleCompaction `json:"agy_idle_compaction"`
+			// PendingInteractionSessions: session IDs on this machine currently holding pending hub interaction cards
+			// (ask_user / approval), so idle auto-compaction does not compact sessions waiting on the user.
+			PendingInteractionSessions *[]string `json:"pending_interaction_sessions"`
 		}
 		if err := json.Unmarshal(params, &c); err != nil {
 			return nil, err
@@ -1509,7 +1524,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 			n.hubPersonaContracts.Store(c.HubFeatures != nil && slices.Contains(*c.HubFeatures, nodeproto.PersonaContracts))
 			n.hubMCPWait.Store(c.HubFeatures != nil && slices.Contains(*c.HubFeatures, nodeproto.MCPWait))
 		}
-		if c.ClaudeDirs != nil || c.Keep == nil { // a call that only changes what is kept leaves the directories
+		if c.ClaudeDirs != nil || (c.Keep == nil && c.AgyIdleCompaction == nil && c.PendingInteractionSessions == nil) { // partial updates leave the directories
 			n.setKnownClaudeDirs(c.ClaudeDirs)
 		}
 		if c.ClaudeDirsBlocked != nil {
@@ -1561,6 +1576,12 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		}
 		if c.ClaudeLiveReplies != nil {
 			n.setLiveReplies(*c.ClaudeLiveReplies)
+		}
+		if c.AgyIdleCompaction != nil {
+			n.setAgyIdleCompaction(*c.AgyIdleCompaction)
+		}
+		if c.PendingInteractionSessions != nil {
+			n.setPendingInteractionSessions(*c.PendingInteractionSessions)
 		}
 		return map[string]any{"claude_dirs": n.claudeConfigDirs()}, nil
 	case "usage.windows": // subscription rate-limit windows collected on this computer (usagewindows.go, #2432)
@@ -2620,7 +2641,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		if err != nil {
 			if !p.StrictRead {
 				if conv, ok := strings.CutPrefix(p.SessionID, agyAgent+"-"); ok && uuidRe.MatchString(conv) {
-					dir := n.agyDataRoot()
+					dir := n.agyRootFor(conv)
 					if root, rerr := agyBrain(dir, conv); rerr == nil {
 						defer root.Close()
 						if h, _, aerr := n.agyRead(root, filepath.Join(dir, conv), conv, nil); aerr == nil {

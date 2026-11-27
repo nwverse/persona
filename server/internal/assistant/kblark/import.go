@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
 )
 
@@ -25,6 +26,9 @@ const (
 type Config struct {
 	SinceDays int
 	DocSearch []string
+	// Lang is the owner's language, which a minute's note words its labels in (zero: i18n.Default). A note keeps the
+	// language it was written in: the import writes a note only while there is none.
+	Lang i18n.Lang
 }
 
 // Result is what a run did.
@@ -72,7 +76,7 @@ func Run(ctx context.Context, e *kb.Engine, r Reader, cfg Config, now time.Time,
 			}
 		}
 		it := kb.Item{Kind: kb.KindMeeting, Source: Source, ID: id, Title: m.Title, URL: m.URL, At: m.Start,
-			Where: Where, Note: minuteNote(m)}
+			Where: Where, Note: minuteNote(m, cfg.Lang)}
 		changed, err := e.PutCollectedItem(&it)
 		if err != nil {
 			return res, err
@@ -121,11 +125,11 @@ func Run(ctx context.Context, e *kb.Engine, r Reader, cfg Config, now time.Time,
 }
 
 // minuteNote is what the item's note keeps of a minute: one line of its summary, its first few to-dos and chapter
-// titles — never the transcript.
-func minuteNote(m Minute) string {
+// titles — never the transcript. Its labels are in lang (the kb-lark catalog); what Lark sent is kept as it came.
+func minuteNote(m Minute, lang i18n.Lang) string {
 	var b strings.Builder
 	if s := oneLine(m.Summary); s != "" {
-		b.WriteString("摘要：")
+		b.WriteString(i18n.T(lang, "kb-lark.summary"))
 		b.WriteString(clip(s, 240))
 	}
 	add := func(label string, list []string, most, each int) {
@@ -145,10 +149,10 @@ func minuteNote(m Minute) string {
 			b.WriteString(" ")
 		}
 		b.WriteString(label)
-		b.WriteString(strings.Join(parts, "；"))
+		b.WriteString(strings.Join(parts, i18n.T(lang, "kb-lark.list_sep")))
 	}
-	add("待办：", m.Todos, 3, 80)
-	add("章节：", m.Chapters, 5, 40)
+	add(i18n.T(lang, "kb-lark.todos"), m.Todos, 3, 80)
+	add(i18n.T(lang, "kb-lark.chapters"), m.Chapters, 5, 40)
 	return clip(b.String(), 700)
 }
 

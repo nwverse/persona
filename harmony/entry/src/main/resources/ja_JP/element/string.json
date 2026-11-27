@@ -9123,6 +9123,258 @@
     {
       "name": "agents_use_herdr_tab_name_hint",
       "value": "タブ名を優先して表示します。この設定は同じハブのデバイス間で同期されます。"
+    },
+    {
+      "name": "composer_queued_count",
+      "value": "{count} 件待機中"
+    },
+    {
+      "name": "composer_queue_send_now",
+      "value": "今すぐ送信"
+    },
+    {
+      "name": "composer_queue_relayed",
+      "value": "転送済み"
+    },
+    {
+      "name": "code_wrap_lines",
+      "value": "折り返し"
+    },
+    {
+      "name": "code_unwrap_lines",
+      "value": "横スクロール"
+    },
+    {
+      "name": "copied",
+      "value": "コピーしました"
+    },
+    {
+      "name": "quick_palette_title",
+      "value": "クイックコマンド"
+    },
+    {
+      "name": "quick_palette_placeholder",
+      "value": "エージェント、ワークスペース、操作を検索…"
+    },
+    {
+      "name": "quick_palette_agents",
+      "value": "対応待ち・稼働中のエージェント"
+    },
+    {
+      "name": "quick_palette_workspaces",
+      "value": "ワークスペース"
+    },
+    {
+      "name": "quick_palette_actions",
+      "value": "プロコントロール"
+    },
+    {
+      "name": "quick_palette_toggle_theme",
+      "value": "ライト / ダークテーマを切り替え"
+    },
+    {
+      "name": "quick_palette_toggle_workbench",
+      "value": "ライブワークベンチを切り替え"
+    },
+    {
+      "name": "quick_palette_liveview_preview",
+      "value": "LiveView プレビュー"
+    },
+    {
+      "name": "quick_palette_code_tab",
+      "value": "コードタブに切り替え"
+    },
+    {
+      "name": "quick_palette_machines_tab",
+      "value": "マシンタブに切り替え"
+    },
+    {
+      "name": "quick_palette_empty",
+      "value": "一致するコマンドがありません"
+    },
+    {
+      "name": "fold_posture_book",
+      "value": "折りたたみブック"
+    },
+    {
+      "name": "machine_cpu_load",
+      "value": "CPU と負荷"
+    },
+    {
+      "name": "composer_queue_edit",
+      "value": "入力欄に戻して編集"
+    },
+    {
+      "name": "composer_queue_move_up",
+      "value": "上へ移動"
+    },
+    {
+      "name": "composer_queue_move_down",
+      "value": "下へ移動"
+    },
+    {
+      "name": "composer_queue_taken_back",
+      "value": "入力欄に戻しました"
+    },
+    {
+      "name": "composer_queue_deleted",
+      "value": "キューから削除しました"
+    },
+    {
+      "name": "composer_queue_arrives_turn_end",
+      "value": "このターン終了時に届きます"
+    },
+    {
+      "name": "composer_queue_arrives_next",
+      "value": "次のメッセージと一緒に届きます"
+    },
+    {
+      "name": "starred_messages",
+      "value": "スター付きメッセージ"
+    },
+    {
+      "name": "star_message",
+      "value": "スターを付ける"
+    },
+    {
+      "name": "unstar_message",
+      "value": "スターを外す"
+    },
+    {
+      "name": "starred_badge",
+      "value": "スター付き"
+    },
+    {
+      "name": "starred_saved_toast",
+      "value": "メッセージをスターに追加しました"
+    },
+    {
+      "name": "starred_removed_toast",
+      "value": "スターを外しました"
+    },
+    {
+      "name": "starred_search_placeholder",
+      "value": "スター付きメッセージを検索"
+    },
+    {
+      "name": "starred_empty_title",
+      "value": "スター付きメッセージはありません"
+    },
+    {
+      "name": "starred_empty_message",
+      "value": "メッセージを長押ししてスターを付けられます。"
+    },
+    {
+      "name": "starred_unavailable_title",
+      "value": "スター付きメッセージは利用できません"
+    },
+    {
+      "name": "starred_unavailable_message",
+      "value": "このアシスタントでスター付きメッセージを使うにはハブを更新してください。"
+    },
+    {
+      "name": "starred_load_failed",
+      "value": "スター付きメッセージを読み込めませんでした"
+    },
+    {
+      "name": "starred_search_empty",
+      "value": "一致するスター付きメッセージがありません"
+    },
+    {
+      "name": "starred_open_original",
+      "value": "元のメッセージを開く"
+    },
+    {
+      "name": "starred_original_unavailable",
+      "value": "元のメッセージは利用できません。"
+    },
+    {
+      "name": "starred_original_check_failed",
+      "value": "元のメッセージを確認できませんでした。もう一度お試しください。"
+    },
+    {
+      "name": "starred_omitted_chars",
+      "value": "ほか {count} 文字"
+    },
+    {
+      "name": "export_chat",
+      "value": "チャットを書き出す"
+    },
+    {
+      "name": "export_include_timestamps",
+      "value": "タイムスタンプを含める"
+    },
+    {
+      "name": "export_include_work_steps",
+      "value": "作業ステップを含める"
+    },
+    {
+      "name": "export_preview_count",
+      "value": "{count} 件のメッセージ"
+    },
+    {
+      "name": "export_truncated_badge",
+      "value": "{count} 件が省略されました"
+    },
+    {
+      "name": "export_truncated_notice",
+      "value": "{omitted} 文字が省略されました"
+    },
+    {
+      "name": "export_copy_markdown",
+      "value": "Markdown をコピー"
+    },
+    {
+      "name": "export_save_share",
+      "value": "保存 / 共有"
+    },
+    {
+      "name": "export_copied_toast",
+      "value": "Markdown をコピーしました"
+    },
+    {
+      "name": "archived_chats",
+      "value": "アーカイブ済み"
+    },
+    {
+      "name": "unarchive",
+      "value": "アーカイブ解除"
+    },
+    {
+      "name": "unarchived_toast",
+      "value": "アーカイブを解除しました"
+    },
+    {
+      "name": "archived_search_placeholder",
+      "value": "アーカイブ済みチャットを検索"
+    },
+    {
+      "name": "archived_empty_title",
+      "value": "アーカイブされたチャットはありません"
+    },
+    {
+      "name": "archived_empty_message",
+      "value": "アーカイブされた会話がここに表示されます。タップして開くか解除できます。"
+    },
+    {
+      "name": "archived_search_empty",
+      "value": "一致するアーカイブ済みチャットがありません"
+    },
+    {
+      "name": "fork_continue_new_chat",
+      "value": "新しいチャットで続ける"
+    },
+    {
+      "name": "fork_chat_done_toast",
+      "value": "新しいチャットに分岐しました"
+    },
+    {
+      "name": "undo",
+      "value": "元に戻す"
+    },
+    {
+      "name": "assistant",
+      "value": "アシスタント"
     }
   ]
 }

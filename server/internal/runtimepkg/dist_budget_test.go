@@ -77,14 +77,17 @@ import (
 // autonomous-wake cleanup, cached GetCascadeTrajectory idle verification for summary_behind, last_modified_time
 // listed cache invalidation, and sanitized unrecognized-status logging) add 1,066 B (292,362 B).
 // Antigravity Run-prefixed Persona MCP permission normalization (with shell/file/a2a guards), fork mode/model/effort preservation with RPC-gated implicit-option recovery, and assistant capabilities.rewind=false advertisement add 1,976 B (294,338 B).
-// PR #16425 (P0-1) merged onto that main reuses one read-only conversation_summaries connection with a stat-validated
-// parsed snapshot, prepared primary-key lookup and the watch-poll short-circuit (the nativeWorking gate stays open so
-// the active interval keeps evaluating). It reuses main's object-shaped transcriptVersion key and ships summary-db.js
-// through the antigravity/lib/*.js glob. The union measures 296,024 B exactly (+1,686 B).
+// Antigravity idle auto-compaction `/compact` divider mapping and empty-prompt exemption (#16604) add 174 B (294,512 B).
+// OpenCode unconditional interruptVersion queued-turn cancellation and status refresh add 71 B (294,583 B).
+// Keeping Antigravity media-guard fail-closed when the optional partial JPEG copy fails, races, or receives a non-string state adds 55 B (294,638 B).
+// PR #16425 (P0-1) reuses one read-only conversation_summaries connection with a stat-validated parsed snapshot,
+// prepared primary-key lookup and the watch-poll short-circuit (the nativeWorking gate stays open so the active
+// interval keeps evaluating). It uses main's object-shaped transcriptVersion key, keeps main's #16604 compact,
+// CHECKPOINT and availability-model edits through the merge, and ships summary-db.js through the antigravity/lib/*.js
+// glob. Re-aligned onto the main carrying #16604, the union measures 296,417 B exactly (+1,779 B over 294,638 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 296_024
-
+	const budget = 296_417
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {
