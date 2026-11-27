@@ -9123,6 +9123,82 @@
     {
       "name": "agents_use_herdr_tab_name_hint",
       "value": "优先显示标签名。此设置会在连接同一 Hub 的设备间同步。"
+    },
+    {
+      "name": "composer_queued_count",
+      "value": "{count} 条排队中"
+    },
+    {
+      "name": "composer_queue_send_now",
+      "value": "立即发送"
+    },
+    {
+      "name": "composer_queue_relayed",
+      "value": "已转达"
+    },
+    {
+      "name": "code_wrap_lines",
+      "value": "换行"
+    },
+    {
+      "name": "code_unwrap_lines",
+      "value": "横向滚动"
+    },
+    {
+      "name": "copied",
+      "value": "已复制"
+    },
+    {
+      "name": "quick_palette_title",
+      "value": "快速命令"
+    },
+    {
+      "name": "quick_palette_placeholder",
+      "value": "跳转到智能体、工作区或操作…"
+    },
+    {
+      "name": "quick_palette_agents",
+      "value": "待处理与活跃智能体"
+    },
+    {
+      "name": "quick_palette_workspaces",
+      "value": "工作区"
+    },
+    {
+      "name": "quick_palette_actions",
+      "value": "快捷控制"
+    },
+    {
+      "name": "quick_palette_toggle_theme",
+      "value": "切换浅色 / 深色主题"
+    },
+    {
+      "name": "quick_palette_toggle_workbench",
+      "value": "切换实时工作台"
+    },
+    {
+      "name": "quick_palette_liveview_preview",
+      "value": "实况窗预览"
+    },
+    {
+      "name": "quick_palette_code_tab",
+      "value": "切换到代码标签页"
+    },
+    {
+      "name": "quick_palette_machines_tab",
+      "value": "切换到设备标签页"
+    },
+    {
+      "name": "quick_palette_empty",
+      "value": "没有匹配的命令"
+    },
+    {
+      "name": "fold_posture_book",
+      "value": "折叠书本模式"
+    },
+    {
+      "name": "machine_cpu_load",
+      "value": "CPU 与负载"
     }
   ]
 }

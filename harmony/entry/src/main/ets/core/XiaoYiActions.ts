@@ -112,25 +112,15 @@ export const XIAOYI_OUTBOX_TTL_MS: number = 7 * 24 * 3600 * 1000;
 export const XIAOYI_OUTBOX_BATCH_SIZE: number = 20;
 export const XIAOYI_PUSH_BODY_MAX: number = 8000;
 
-export const HUB_MODULES_MARKER: string = 'modules';
-export const HUB_MODULE_PREFIX: string = 'module.';
-export const RECORDING_MODULE_FEATURE: string = 'module.recording';
+import {
+  HUB_MODULES_MARKER,
+  HUB_MODULE_PREFIX,
+  RECORDING_MODULE_FEATURE,
+  extractPublishedModules,
+  isHubModuleAllowed
+} from './HubModules.ts';
 
-/**
- * Extract the Hub's published module flags from a `hello` / `health` `features` list, matching iOS `HubModules`.
- * Returns `null` when the Hub does not announce the `modules` marker (older hub => every module allowed).
- * Returns a sorted array (possibly empty) of `module.*` flags when the `modules` marker is present.
- */
-export function extractPublishedModules(features: readonly string[]): string[] | null {
-  if (!features || features.length === 0) return null;
-  if (!features.includes(HUB_MODULES_MARKER)) return null;
-  const set = new Set<string>();
-  for (let i = 0; i < features.length; i++) {
-    const f = features[i];
-    if (f && f.startsWith(HUB_MODULE_PREFIX)) set.add(f);
-  }
-  return Array.from(set).sort();
-}
+export { HUB_MODULES_MARKER, HUB_MODULE_PREFIX, RECORDING_MODULE_FEATURE, extractPublishedModules };
 
 /** Serialize remembered Hub module flags for LocalStore persistence (`xiaoyi:<scope>:hub-modules`). */
 export function serializeStoredHubModules(published: readonly string[] | null): string {
@@ -169,15 +159,7 @@ export function isRecordingModuleAllowed(
   features?: readonly string[],
   storedPublished?: readonly string[] | null
 ): boolean {
-  if (features && features.length > 0) {
-    const published = extractPublishedModules(features);
-    if (published === null) return true;
-    return published.includes(RECORDING_MODULE_FEATURE);
-  }
-  if (storedPublished !== undefined && storedPublished !== null) {
-    return storedPublished.includes(RECORDING_MODULE_FEATURE);
-  }
-  return true;
+  return isHubModuleAllowed(RECORDING_MODULE_FEATURE, features ?? [], storedPublished);
 }
 
 /** Plain-language recording refusal matching iOS `MeetingRecorder.startRefusal` (#15985) across en/zh-Hans/ja. */

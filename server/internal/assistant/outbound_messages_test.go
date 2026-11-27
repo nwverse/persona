@@ -226,6 +226,9 @@ func TestOutboundScopeIsStructuredAndConservative(t *testing.T) {
 func TestOutboundInboxAutomaticSendAndRevocation(t *testing.T) {
 	ctx := context.Background()
 	h, st, c, it := outboundTestHub(t)
+	// Hold the handling pass the send's background delivery schedules, so it cannot move the item under the test.
+	h.inbox.handing.Lock()
+	t.Cleanup(h.inbox.handing.Unlock)
 	putMessageGrant(t, st, "inbox_reply")
 	if _, err := suggestTool(t, h, `{"kind":"reply","text":"The example update is ready."}`); err != nil {
 		t.Fatal(err)
@@ -237,6 +240,10 @@ func TestOutboundInboxAutomaticSendAndRevocation(t *testing.T) {
 		!strings.Contains(string(st.audit[0].LetThrough), `"outcome":"sent"`) || !strings.Contains(string(st.audit[0].Target), "oc_example_group") {
 		t.Fatalf("missing exact audit: %+v", st.audit)
 	}
+	// The send tells the conversation in the background (tellSoon), and that prompt opens its next processing turn.
+	// The later suggestion below belongs to that turn: finish the delivery first; the item's delivery lock waits for
+	// one already under way.
+	h.deliverNotes(ctx, it)
 	if w := serve(h.Service, "DELETE", "/api/v1/assistant/standing-authorizations/sa_messages", ""); w.Code != 200 {
 		t.Fatalf("revoke: %d %s", w.Code, w.Body)
 	}

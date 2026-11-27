@@ -886,6 +886,10 @@ func (b *runtimeRegistry) appendSessions(dst []proto.Session) []proto.Session {
 				row := h.sessions[i]
 				if compact := b.compactions[row.SessionID]; compact != nil {
 					row.Compaction = compact.state
+					if compact.silent && compact.state != nil && compact.state.State == proto.CompactionRunning &&
+						row.Status == proto.StatusWorking && compact.prevStatus != "" {
+						row.Status = compact.prevStatus
+					}
 				}
 				dst = append(dst, row)
 			}
@@ -893,6 +897,48 @@ func (b *runtimeRegistry) appendSessions(dst []proto.Session) []proto.Session {
 		h.mu.Unlock()
 	}
 	return b.appendAway(dst)
+}
+
+func (b *runtimeRegistry) wasStarted(id string) bool {
+	if b == nil || id == "" {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	_, ok := b.started[id]
+	return ok
+}
+
+func (b *runtimeRegistry) agySnapshots() []agyRuntimeSnapshot {
+	if b == nil {
+		return nil
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var out []agyRuntimeSnapshot
+	for _, h := range b.conns {
+		if h.peer != nil {
+			select {
+			case <-h.peer.Done():
+				continue
+			default:
+			}
+		}
+		h.mu.Lock()
+		agent := h.hello.Agent
+		if agent == "" {
+			agent = h.hello.Runtime
+		}
+		if h.ready && agent == agyAgent {
+			for i := range h.sessions {
+				if b.owner[h.sessions[i].SessionID] == h {
+					out = append(out, agyRuntimeSnapshot{host: h, row: h.sessions[i]})
+				}
+			}
+		}
+		h.mu.Unlock()
+	}
+	return out
 }
 
 // launcherOwners maps each launcher name the runtimes offer to the one connection that answers for it: the one

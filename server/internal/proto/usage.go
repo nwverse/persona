@@ -27,8 +27,10 @@ type UsageBucket struct {
 // names one.
 const (
 	UsageDirAssistant = ":assistant" // a Persona assistant conversation
-	UsageDirTemp      = ":temp"      // a session started in a temporary folder (the system's temp dir, /tmp)
-	UsageDirUnknown   = ":unknown"   // a record that names no directory
+	// UsageDirTemp: a session started in a temporary folder (the system's temp dir, /tmp), sent to a manager that does
+	// not take them by their paths (usage.features' temp_dirs, #16827).
+	UsageDirTemp    = ":temp"
+	UsageDirUnknown = ":unknown" // a record that names no directory
 )
 
 // UsageDir is what a node resolved a start directory (UsageBucket.Dir) to, sent with the "usage" notification that
@@ -38,7 +40,8 @@ type UsageDir struct {
 	Dir string `json:"dir"`
 	// Project is the key the manager sums by, across machines: "git:<host>/<path>" (a git working tree with a remote,
 	// credentials and port dropped), "local:<root commit>" (a repository with no usable remote), "local:dir:<folder>"
-	// (one with no commit yet), "folder:<folder name, lower case>" (not in a repository), "home", "temp",
+	// (one with no commit yet), "folder:<folder name, lower case>" (not in a repository), "home", "temp" (a temporary
+	// folder in no repository made inside it, or gone: never named, and never replacing another resolution, #16827),
 	// "assistant".
 	Project string `json:"project"`
 	// Name is how the apps show the project: "owner/repo" as the remote writes it, a folder's name; "" for home,

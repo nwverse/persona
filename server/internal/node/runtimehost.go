@@ -750,6 +750,7 @@ func (rh *RuntimeHost) event(h *runtimeConn, event string, params json.RawMessag
 		if n == nil {
 			return
 		}
+		n.observeAgySessions(h, list)
 		for _, id := range moved {
 			n.transcriptMoved(h, id)
 		}
