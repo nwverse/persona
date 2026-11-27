@@ -396,7 +396,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				if hasRuntimeRow {
 					n.resolveAgyContext(&s, agyConversations[id])
 				} else {
-					n.mergeAgyTranscript(&s, u)
+					n.mergeAgyTranscript(&s, conversation)
 				}
 				n.agyPaneControls(&s, id)
 				n.agyPaneTitle(&s, agyConversations[id]) // its conversation's title, not the terminal's (agytitle.go)
