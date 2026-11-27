@@ -280,6 +280,12 @@ export function SidePanelView({
       e.stopPropagation();
       return;
     }
+    const unsaved = e.currentTarget.querySelector("[data-unsaved-edit]");
+    if (unsaved && !unsaved.dispatchEvent(new CustomEvent("persona:escape-unsaved", { cancelable: true }))) {
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     e.preventDefault();
     // not also the conversation's Esc (it stops a running agent, ChatView)
     e.stopPropagation();

@@ -1241,8 +1241,8 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
   // over it (theirs), and not from a field being typed in or a waiting card in the tray: a card's Esc goes back to the
   // composer (lib/card-keys.ts) and closing the tray under it would throw away an answer being written.
   const onTrayKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (e.key !== "Escape" || !tray || e.nativeEvent.isComposing || !e.currentTarget.contains(e.target as Node)) return;
-    if (document.querySelector("[role=dialog],[role=menu]")) return;
+    if (e.key !== "Escape" || !tray || e.defaultPrevented || e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229 || !e.currentTarget.contains(e.target as Node)) return;
+    if ([...document.querySelectorAll("[role=dialog],[role=menu],[role=alertdialog]")].some((el) => !el.closest("[data-closing],[inert]"))) return;
     const target = e.target instanceof HTMLElement ? e.target : null;
     if (target && (target.isContentEditable || target.closest(`${EDITABLE}, [data-card-keys]`))) return;
     e.preventDefault();
