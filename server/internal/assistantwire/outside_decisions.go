@@ -19,8 +19,10 @@ const (
 	OutsideAnswerDefault     = "default"
 )
 
-// OutsideDecisionOption is one choice and what choosing it leads to.
+// OutsideDecisionOption is one choice and what choosing it leads to. ID is an
+// optional stable protocol value; Label remains the localizable display text.
 type OutsideDecisionOption struct {
+	ID      string `json:"id,omitempty"`
 	Label   string `json:"label"`
 	LeadsTo string `json:"leads_to"`
 }
@@ -53,6 +55,7 @@ type OutsideDecisionSource struct {
 // supplied. ExplainFirst can be present while the decision remains pending.
 type OutsideDecisionAnswer struct {
 	Option     string    `json:"option,omitempty"`
+	OptionID   string    `json:"option_id,omitempty"`
 	Response   string    `json:"response,omitempty"`
 	Text       string    `json:"text,omitempty"`
 	AnsweredBy string    `json:"answered_by"`
