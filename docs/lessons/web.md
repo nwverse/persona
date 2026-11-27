@@ -1,5 +1,11 @@
 # Lessons: web UI and interactions
 
+## Idle app ownership still needs takeover confirmation (#17419)
+
+A Codex takeover plan's `running` and `app_owned` flags describe different things. An idle app-owned session still
+requires explicit confirmation and `confirm_stop: true`; use both flags when opening the dialog and building the POST
+body. Keep the running-turn warning for active turns and show app-ownership copy for idle App sessions.
+
 ## A TypeError is not a network failure (#16182)
 
 fetch rejects a failed connection with a TypeError, and JavaScript throws one for a bug in the page's own code.
