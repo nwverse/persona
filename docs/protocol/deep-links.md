@@ -93,9 +93,13 @@ These name the same pages and are read wherever links are read. Nothing new writ
 | `persona://task/<id>` | `/todos/<id>` |
 | `persona://kb/<kind>/<id…>` | `/kb/<kind>/<id>` (the rest of the path is the id) |
 | `persona://settings/extensions/<id>` | `/settings?tab=extensions&extension=<id>` |
+| `persona://settings/extensions/<id>?set=<url-encoded JSON object>` | that settings page with the proposed ordinary configuration values filled in (Web; nothing is saved until Save) |
 | `persona://extension/<extension>/<ui>[?state=]` | `/extension/<extension>/<ui>[?state=]` |
 
 The older product name's scheme and paths are accepted as these are (`docs/protocol/rolling-upgrade-compatibility.md`).
+The `set` form is deliberately narrow: one object of known ordinary configuration fields, at most 2 KiB decoded, with no
+secrets, entry lists, unknown fields, extra path, extra query or fragment. Web applies it to the existing extension form;
+the saved configuration stays the base, and Save is the only write. Apple and Android do not apply this prefill yet.
 
 ## Which hub
 

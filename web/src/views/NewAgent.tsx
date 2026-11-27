@@ -29,11 +29,12 @@ import { agentId, providerAgent } from "../lib/agent-kind";
 import { modelPurpose, modelSummary, type ModelBinding } from "../lib/model-config";
 import { formatFollowDetail, resolveFollowBinding, resolvedStartModel } from "../lib/new-agent-follow";
 import {
-  effortChoices, effortRule, fitEffort, followedBinding, inlineTextStart, launcherAgent, listedModes, machineLaunchers, nativeOmpStart, pickerLauncher, startCatalogHost, startPicks, tierLeftOut, type PickerTier,
+  defaultModel, effortChoices, effortRule, fitEffort, followedBinding, inlineTextStart, launcherAgent, listedModel, listedModes, machineLaunchers, nativeOmpStart, pickerLauncher, startCatalogHost, startPicks, tierLeftOut, type PickerTier,
   type UnavailableLauncher,
 } from "../lib/launcher-models";
 import { choiceCarries, type ModelChoice } from "../lib/new-agent-panel";
 import { readModels } from "../lib/session-models";
+import { startSpeedOptions, startSpeedTier } from "../lib/session-speed";
 import { BYPASS_MODE, BYPASS_WARNING, effortTitle, listedModeOption, modeTitle, PERMISSION_MODES } from "../lib/session-actions";
 import {
   clearRecentSetups, forgetSetup, formHolds, loadRecentSetups, machineModel, recentCards, rememberSetup, setupKey, setupTime, type RecentCard, type RecentSetup,
@@ -147,6 +148,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   const readThisTime = useRef(new Set<string>());
   // ultracode for this start: off whenever the sheet opens, never saved (the server's rule: no choice carries over)
   const [ultracode, setUltracode] = useState(false);
+  const [speedChoice, setSpeedChoice] = useState<{ key: string; value: string }>();
   const features = useStore((s) => s.features);
   // Claude Code's permission mode for this start ("": the launcher's), remembered per computer like iOS's mode.<machine>
   const [mode, setMode] = useState("");
@@ -294,6 +296,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     setRecents(loadRecentSetups());
     setPickedSetup("");
     setUltracode(false);
+    setSpeedChoice(undefined);
     setInWorktree(false);
     setWtBranch("");
     setWtError("");
@@ -751,6 +754,19 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
   const ultracodeShown = !desktopStart && !loadingModels && efforts.length > 0 && ultracodeStartOffered(features, agent);
   // what of the picked preset this launcher can't take, said once its list is in
   const startModelOptions = { agent, list: models.list, followed, launcher: listEntry, nativeOmp };
+  const picks = startPicks({ ...startModelOptions, model, effort });
+  const startModel = resolvedStartModel({ model: picks.model, followed, launcher: listEntry, list: models.list });
+  const speedModel = !loadingModels && !desktopStart && agent === "codex" && features.includes("session_start_service_tier") && models.list?.supports_start_service_tier
+    ? (startModel ? listedModel(models.list.models, startModel) : defaultModel(models.list.models))
+    : undefined;
+  const speedOptions = startSpeedOptions(speedModel);
+  const speedKey = speedOptions && JSON.stringify([mid, startHost, listLauncher, speedModel?.id]);
+  const speed = speedOptions?.some(({ id }) => id === speedChoice?.value) && speedChoice?.key === speedKey
+    ? speedChoice?.value
+    : "standard";
+  useEffect(() => {
+    setSpeedChoice((choice) => choice?.key === speedKey ? choice : undefined);
+  }, [speedKey]);
   const tierMissed = tier && listLauncher === tier.launcher && (models.list !== undefined || (agent === "omp" && models.error)) ? tierLeftOut(tier, startModelOptions) : [];
   // the follow row's second line: what Model settings › New agent runs (the unified effective binding, by display names)
   const defaultList = useModelList(open ? mid : "", defaultRuns, startCatalogHost(defaultEntry, opensIn, startHost)).list;
@@ -816,7 +832,6 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     const dir = desktopScratch ? "" : cwd.trim();
     if (dir) localStorage.setItem(`new.cwd.${mid}`, dir);
     if (launcher && !unified) localStorage.setItem(`new.launcher.${mid}`, launcher);
-    const picks = startPicks({ ...startModelOptions, model, effort });
     // a Codex keeps its own modes; the choice stays for this computer's next Claude Code. A launcher that lists its own
     // takes one of those alone, never the remembered one (its own goes as no mode).
     const permissionMode = claudeModes ? mode
@@ -837,7 +852,8 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
       : undefined;
     // what every start of this sheet goes with (each run of a comparison too)
     const launcherDefaultEffort = agent === "agy" && !!launcher && !picks.effort;
-    const target = { launcher: projectDocument || desktopStart ? listLauncher : launcher, ...picks,
+    const serviceTier = startSpeedTier(speedModel, speed);
+    const target = { launcher: projectDocument || desktopStart || serviceTier ? listLauncher : launcher, ...picks, serviceTier,
       nameHint: projectDocument ? `${projectDocument.snapshot.project}/${projectDocument.snapshot.document} r${projectDocument.snapshot.revision}` : undefined,
       launcherDefaultEffort: launcherDefaultEffort || undefined, permissionMode: permissionMode || undefined,
       host: projectDocument ? documentHost : opensIn, ultracode: ultra,
@@ -845,7 +861,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
     const launchDisplay = {
       displayLauncher: listLauncher || undefined,
       displayEngine: listLauncher ? agentId(providerAgent(agent, listLauncher)) : undefined,
-      displayModel: resolvedStartModel({ model: picks.model, followed, launcher: listEntry, list: models.list }),
+      displayModel: startModel,
     };
     const launch = (dir: string, workspaceId: string | undefined) => {
       if (!current()) return;
@@ -1305,6 +1321,7 @@ function AgentForm({ open, onClose, preset }: NewAgentProps) {
                     unavailable={skipped}
                     follow={unified ? { label: t("newagent.follow_row"), active: launcher === "", detail: followDetail, warning: defaultBlock?.reason } : undefined}
                     fallback={modelDefault || t("chat-modelpill.default_model")}
+                    speed={speedOptions && speedKey ? { options: speedOptions, value: speed, onChange: (value) => setSpeedChoice({ key: speedKey, value }) } : undefined}
                     ultracode={ultracodeShown ? <div data-testid="new-agent-ultracode"><UltracodeStartRow on={ultracode} onChange={setUltracode} blocked={ultracodeBlocked} /></div> : undefined}
                     ultracodeOn={ultracodeShown && !ultracodeBlocked && ultracode}
                     onChoice={pickModel}

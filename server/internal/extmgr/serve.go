@@ -758,7 +758,7 @@ func (h *Manager) CallTool(ctx context.Context, machine, session, name string, a
 	case assistant && isComputerTool(name):
 		return h.callComputerTool(ctx, session, name, args), true
 	case assistant && isBrowserTool(name):
-		return h.callBrowserTool(ctx, session, name, args), true
+		return h.callBrowserTool(ctx, machine, session, name, args), true
 	case assistant && isIPhoneTool(name):
 		return h.callIPhoneTool(ctx, session, name, args), true
 	case assistant && isSubscriptionTool(name):

@@ -150,6 +150,9 @@ type TaskReview struct {
 	// "Please verify" waits for them instead of being passed by the supervisor (acceptance_supervisor.go, #3240).
 	UserCheck bool   `json:"user_check,omitempty"`
 	Link      string `json:"link,omitempty"` // Deliverable named by the supervisor for owner verification.
+	// DeferredScope and FollowUpTodoID record what an accepted review handed back or assigned separately.
+	DeferredScope  string `json:"deferred_scope,omitempty"`
+	FollowUpTodoID string `json:"follow_up_todo_id,omitempty"`
 	// A needs_user review's decision (#3804, decision.go): why only the owner can decide, what is to be decided, the
 	// option recommended, the options (the recommended first) and what waiting costs.
 	WhyOwner      string           `json:"why_owner,omitempty"`

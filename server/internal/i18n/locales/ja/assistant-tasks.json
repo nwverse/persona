@@ -1,4 +1,5 @@
 {
+  "workers_accepted": "子タスク {count} 件はすべて受け入れ済みで、リーダーは停止しています。親タスクと記録された決定を確認し、残りの作業を進めてください。",
   "investigation_handoff_open": "このフォローアップを終了する前に、調査項目を完了するか引き継ぎ先を変更してください。{finding}",
   "investigation_review_required": "この作業を保留または終了する前に、今回の調査結果を確認してください。",
   "investigation_findings_open": "次の調査項目には、フォローアップ、確認できる利用者の判断、または完了の証拠が必要です。{findings}",

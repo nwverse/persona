@@ -215,13 +215,14 @@ describe("本地优先启动", () => {
 
     const codexInline = vi.fn().mockResolvedValueOnce(response({ session: { ...session, agent: "codex" } }));
     vi.stubGlobal("fetch", codexInline);
-    launchAgent({ ...input, launcher: "codex", agentType: "codex", inlinePrompt: true, model: "gpt-5.5-mini", effort: "high" });
+    launchAgent({ ...input, launcher: "codex", agentType: "codex", inlinePrompt: true, model: "gpt-5.5-mini", effort: "high", serviceTier: "ultrafast" });
     await advanceDelivery(0);
     expect(JSON.parse(codexInline.mock.calls[0][1].body)).toMatchObject({
       launcher: "codex",
       agent_type: "codex",
       model: "gpt-5.5-mini",
       effort: "high",
+      service_tier: "ultrafast",
       prompt: input.text,
     });
 
@@ -232,6 +233,7 @@ describe("本地优先启动", () => {
     const unsetBody = JSON.parse(codexUnset.mock.calls[0][1].body);
     expect(unsetBody).toMatchObject({ launcher: "codex", agent_type: "codex", model: "gpt-5.5-mini", prompt: input.text });
     expect(unsetBody).not.toHaveProperty("effort");
+    expect(unsetBody).not.toHaveProperty("service_tier");
 
     const codexRetry = vi.fn().mockResolvedValueOnce(response({ error: "needs prompt", code: "codex_needs_prompt" }, 409)).mockResolvedValueOnce(response({ session: { ...session, agent: "codex" } }));
     vi.stubGlobal("fetch", codexRetry);

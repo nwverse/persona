@@ -178,21 +178,42 @@ func (s *Service) readonlyLaunchersOn(ctx context.Context, m Device) []string {
 }
 
 // taskDirectoryExists checks the mapped directory before a flexible task changes machines. Missing, denied or
-// unreadable paths (including a node too old to answer fs.stat) keep that machine out of the detour.
+// unreadable paths (including a node too old to answer fs.stat) keep that machine out of the detour. Concurrent
+// identical checks coalesce in-flight, and positive confirmations are reused within the same logical placement
+// decision (placementOf(ctx)); separate requests always re-check live so deleted directories are rejected immediately.
 func (s *Service) taskDirectoryExists(ctx context.Context, machine, dir string) bool {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	var res struct {
-		Stats []struct {
-			Path string `json:"path"`
-			Kind string `json:"kind"`
-		} `json:"stats"`
+	flightKey := taskDirCacheKey(machine, dir)
+	cacheKey := ""
+	if pl := placementOf(ctx); pl != nil && pl.ID != "" {
+		cacheKey = pl.ID + "\x00" + flightKey
 	}
-	if err := s.call(ctx, machine, "fs.stat", map[string]any{"paths": []string{dir}}, &res); err != nil {
+	exists, err := s.tasks.dirMeta.dirExists.getOrFetch(
+		ctx,
+		s.taskMetaNow,
+		flightKey,
+		cacheKey,
+		5*time.Second,
+		func(ok bool) bool { return ok },
+		nil,
+		func(callCtx context.Context) (bool, error) {
+			var res struct {
+				Stats []struct {
+					Path string `json:"path"`
+					Kind string `json:"kind"`
+				} `json:"stats"`
+			}
+			if err := s.call(callCtx, machine, "fs.stat", map[string]any{"paths": []string{dir}}, &res); err != nil {
+				return false, err
+			}
+			return len(res.Stats) == 1 && res.Stats[0].Path == dir && res.Stats[0].Kind == "dir", nil
+		},
+	)
+	if err != nil {
 		placementOf(ctx).hit(machine, "directory_unknown", nil)
 		return false
 	}
-	exists := len(res.Stats) == 1 && res.Stats[0].Path == dir && res.Stats[0].Kind == "dir"
 	if !exists {
 		placementOf(ctx).hit(machine, "directory_missing", nil)
 	}

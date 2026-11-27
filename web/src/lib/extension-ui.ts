@@ -12,18 +12,20 @@ import { itemHeaders } from "./manager-choice";
 import { extRoot } from "./extension-api";
 import { areaBands, colorOf, hue, imageLoadable, readV6 } from "./extension-ui-v6";
 import { isHttps, isObject, readAction, readPush } from "./extension-ui-read";
+import { decodeSettingsPrefill } from "./settings-prefill";
 import { t } from "../i18n";
 import type { Comment, Hunk, Thread, TreeEntry } from "./code-view";
 import type { UIColor, UIImageSource, UIRowAction, UIRowControl, UISpark, UITile } from "./extension-ui-v6";
 import { HEALTH_INTAKE_UI } from "./health-intake-ui";
 import { SUBSCRIPTIONS_UI } from "./subscriptions-ui";
+import type { SceneCamera, SceneLabel, ScenePin, SceneShape } from "./extension-wire";
 
 export { isHttps };
 
 /**
- * The UI version the web draws (context.ui_version): all of 13, a code's navigate (views/extensions/CodeViews.tsx),
- * the map canvas (views/extensions/ViewBody12.tsx), the graph canvas (views/extensions/ViewBody10.tsx), the columns
- * layout's (views/extensions/ViewBody8.tsx) and a tile's gauge (views/extensions/ViewBody9.tsx) too.
+ * The UI version the web draws (context.ui_version): all of 13, including a code's navigate (CodeViews.tsx), the map
+ * canvas (ViewBody12.tsx), the lazy 3D scene (ViewBody11.tsx), the graph canvas (ViewBody10.tsx), the columns layout
+ * (ViewBody8.tsx) and a tile's gauge (ViewBody9.tsx).
  */
 export const UI_VERSION = 13;
 
@@ -172,6 +174,11 @@ export interface UIItem {
   folded?: string[];
   layout?: UIGraph["layout"];
   direction?: UIGraph["direction"];
+  /** UI version 11: an orthographic 3D scene, drawn by ViewBody11.tsx. */
+  camera?: SceneCamera;
+  shapes?: SceneShape[];
+  labels?: SceneLabel[];
+  pins?: ScenePin[];
   /** UI version 12 (#14730, #14998), map: viewport framing, markers, routes, verified https links, static flag and stop list toggle */
   viewport?: UIMapViewport;
   markers?: UIMapMarker[];
@@ -492,7 +499,7 @@ export interface UIContextSent extends UIContext {
   locale?: string;
   platform: "web" | "desktop";
   ui_version: number;
-  /** Component types in the current UI version that the web client does not render (scene requires native 3D). */
+  /** Component types in the current UI version that the web client does not render. */
   unsupported?: string[];
 }
 
@@ -506,7 +513,7 @@ export function uiContext(context?: UIContext): UIContextSent {
   }
   const locale = typeof navigator !== "undefined" ? navigator.language || undefined : undefined;
   const platform = typeof window !== "undefined" && window.personaDesktop ? "desktop" : "web";
-  const out: UIContextSent = { platform, ui_version: UI_VERSION, unsupported: ["scene"] };
+  const out: UIContextSent = { platform, ui_version: UI_VERSION };
   if (tz) out.tz = tz;
   if (locale) out.locale = locale;
   if (context?.launcher) out.launcher = context.launcher;
@@ -795,11 +802,12 @@ export function inboxSourceItem(url: string): string | undefined {
 
 /**
  * The in-app path of an extension's settings page that persona://settings/extensions/<id> names (the id escaped as one
- * path segment): /settings?tab=extensions&extension=<id>. undefined for any other link, and for an id the hub keeps for
- * itself (one starting with "-") or one with a "/".
+ * path segment): /settings?tab=extensions&extension=<id>. A bounded ?set=<url-encoded JSON object> proposes ordinary
+ * values for that same page and is preserved. undefined for any other link, and for an id the hub keeps for itself (one
+ * starting with "-") or one with a "/".
  */
 export function extensionSettingsHref(url: string): string | undefined {
-  const m = /^persona:\/\/settings\/extensions\/([^/?#]+)$/.exec(canonicalAppURL(url));
+  const m = /^persona:\/\/settings\/extensions\/([^/?#]+)(?:\?([^#]*))?$/.exec(canonicalAppURL(url));
   if (!m) return undefined;
   let id: string;
   try {
@@ -808,7 +816,11 @@ export function extensionSettingsHref(url: string): string | undefined {
     return undefined;
   }
   if (!id || id.startsWith("-") || id.includes("/")) return undefined;
-  return `/settings?tab=extensions&extension=${encodeURIComponent(id)}`;
+  const href = `/settings?tab=extensions&extension=${encodeURIComponent(id)}`;
+  if (m[2] === undefined || m[2] === "") return href;
+  if (!m[2].startsWith("set=") || /[&;#]/.test(m[2])) return undefined;
+  const set = new URLSearchParams(m[2]).get("set");
+  return decodeSettingsPrefill(set) ? `${href}&set=${encodeURIComponent(set!)}` : undefined;
 }
 
 // ── reading what the hub sent (UI version 2) ─────────────
@@ -820,6 +832,7 @@ export const KNOWN_ITEMS: readonly string[] = [
   "header", "breadcrumb", "file_tree", "code", "diff", "comment_thread", "composer", // UI version 4
   "image", "grid", "carousel", // UI version 6
   "graph", // UI version 10
+  "scene", // UI version 11
   "map", // UI version 12
 ];
 
@@ -863,6 +876,9 @@ function drawable(it: unknown): it is UIItem {
     // UI version 10: a graph with nodes that read at all; the rest of the reading is readGraph's
     case "graph":
       return Array.isArray(it.nodes) && it.nodes.some((n: Record<string, unknown>) => isObject(n) && typeof n.id === "string" && typeof n.title === "string" && !!n.title);
+    // UI version 11: a scene with a description and shapes that can be drawn
+    case "scene":
+      return typeof it.alt === "string" && !!it.alt && Array.isArray(it.shapes) && it.shapes.length > 0;
     // UI version 12: an interactive map with required alt text and valid geometry
     case "map":
       return Boolean(readMap(it));
@@ -1164,6 +1180,10 @@ function readItem(it: UIItem): UIItem {
     else delete out.direction;
     if (graph?.selected) out.selected = graph.selected;
     else delete out.selected;
+  }
+  // UI version 11: a scene's pins carry the same checked actions as rows and tiles.
+  if (it.type === "scene" && Array.isArray(raw.pins)) {
+    out.pins = raw.pins.filter(isObject).map((pin) => ({ ...pin, action: readAction(pin.action) })) as ScenePin[];
   }
   if (it.type === "map") {
     const map = readMap(raw);
