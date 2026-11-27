@@ -6,7 +6,7 @@ Writable tasks need done_when and read-only tasks need goal. Set completion_mode
 
 Edits need readonly=false and write permission. With readonly, Claude/agy uses bypassPermissions, Codex uses plan unless assistant.readonly_mode=prompt, and pi/cursor refuse. A leader can plan and review direct workers.
 
-Use repositories_list or repository_get when needed. An explicit URL or path wins. Set machine and cwd separately from bindings. Only the owner can close terminals on acceptance.
+Use repositories_list or repository_get when needed. An explicit repository URL or path takes precedence. Set machine and cwd separately from bindings. Non-repository tasks need no lookup (not a mandatory dispatch preflight). Only the owner can close terminals on acceptance.
 
 Pass todo_id with a saved backend or container operation_id. Repositories for a new container must be ready. Host selects an enabled engine.
 
