@@ -2664,7 +2664,10 @@ conversation, the questions, the photos and the transcript, with their strings (
 recording's parts of the day, its meeting's room, follow-up and photos). Its switch's name and description come from
 `sidebar.json`. It names the `recordings` kind. When switched off, the Meetings list and search keep existing
 recordings, and `views/knowledge/RecordingReadOnlyDetail.tsx` renders their stored minutes, recaps, transcripts and
-photos read-only, without importing the module or showing its write and live controls. A photo list that is
+photos read-only, without importing the module or showing its write and live controls. When the hub marks an in-flight
+recording with `paused: "module_off"` (decoded through `recordingPaused` in `lib/kb.ts`), the read-only detail shows a
+quiet neutral note that minutes and transcription are paused while stored content stays readable, and ignores unknown
+pause values without showing module-off wording (#15214). A photo list that is
 unavailable (including a 404 from a hub before the list read moved into Core) hides only the photo section. Its hub
 flag is `module.recording`: off on a hub that publishes module flags without it, or where a browser switches it off.
 The recording settings (how long recordings and minutes are kept, Settings › Persona) stay in core for now.

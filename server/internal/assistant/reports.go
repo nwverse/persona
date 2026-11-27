@@ -14,6 +14,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
+	"github.com/nwverse/persona/server/internal/closeout"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/larkhost"
 	"github.com/nwverse/persona/server/internal/lazyre"
@@ -129,17 +130,20 @@ func negatedBefore(pre string) bool {
 	return notYetZh.MatchString(tail) || notYetEn.MatchString(strings.Join(words, " "))
 }
 
-// stageOf is how far a reply says the work got (at least develop: the agent worked), and the PR it names.
+// stageOf reads a reply on its own. A structured closeout may name a PR, and unbound legacy tasks can use a single
+// unambiguous PR from prose.
 func stageOf(text string) (stage, pr string) {
-	stage = "develop"
-	if ref := closeoutPRRef(text); ref != "" {
-		pr = prLink.FindString(ref)
-	} else if deliveryCloseout(text) == "" {
-		if prs := prLink.FindAllString(text, -1); len(prs) > 0 {
-			pr = prs[len(prs)-1]
-		}
+	if deliveryCloseout(text) != "" {
+		pr = prLink.FindString(closeoutPRRef(text))
+		return stageFromReply(text, pr != ""), pr
 	}
-	if pr != "" {
+	pr, seen, _ := legacyReportPR(text)
+	return stageFromReply(text, seen), pr
+}
+
+func stageFromReply(text string, sawPR bool) string {
+	stage := "develop"
+	if sawPR {
 		stage = "review"
 		if said(mergedWords, text) {
 			stage = "merge"
@@ -157,32 +161,90 @@ func stageOf(text string) (stage, pr string) {
 			stage = st
 		}
 	}
-	return stage, pr
+	return stage
+}
+
+func (s *Service) replyRepositoryBindings(ctx context.Context, id string) ([]repository.TaskRepository, bool) {
+	st, ok := s.store().(todoRepositoryStore)
+	if !ok {
+		return nil, true
+	}
+	set, err := st.TodoRepositories(ctx, id)
+	if err != nil {
+		s.logf("task %s: repository bindings could not be read: %v", id, err)
+		return nil, false
+	}
+	return set.Repositories, true
 }
 
 // advanceTaskReply handles progress and final answers identically, including the running-hub deploy check.
 func (s *Service) advanceTaskReply(ctx context.Context, t Todo, machine, session, text string) bool {
-	if urls := taskRepositoryReportLinks(text); len(urls) > 0 {
-		roleByURL := map[string]string{}
-		for raw := range referenceReportLinks(text, urls) {
-			roleByURL[raw] = repository.LinkRoleReference
+	if cur, ok := s.todoNow(t.ID); ok {
+		t.PRURL, t.PRs = cur.PRURL, cur.PRs
+	}
+	urls := taskRepositoryReportLinks(text)
+	block := deliveryCloseout(text)
+	var rows []repository.TaskRepository
+	bindingsRead := true
+	if len(urls) != 0 || block != "" || t.PRURL == "" && strings.Contains(text, "#") {
+		rows, bindingsRead = s.replyRepositoryBindings(ctx, t.ID)
+	}
+	var pr string
+	var deliveries []string
+	var sawPR, legacy bool
+	switch {
+	case block != "":
+		pr = prLink.FindString(closeoutPRRef(text))
+		if pr == "" {
+			pr = s.prFromNumber(ctx, t, machine, session, text)
 		}
-		if err := s.importReportedLinks(ctx, t.ID, urls, "pull_request", roleByURL); err != nil {
-			s.logf("task %s: repository links not saved: %v", t.ID, err)
+		_, artifacts, _ := closeout.Parse(block)
+		for _, a := range artifacts {
+			if u := strings.TrimSpace(a.Ref); a.Kind == "pr" && u != "" && prLink.FindString(u) == u {
+				deliveries = append(deliveries, u)
+			}
+		}
+		if pr != "" && !slices.Contains(deliveries, pr) {
+			deliveries = append(deliveries, pr)
+		}
+		sawPR = pr != ""
+	case bindingsRead && t.PRURL == "" && len(t.PRs) == 0 && !reportBindingsBlockLegacy(rows, ""):
+		var reference bool
+		pr, sawPR, reference = legacyReportPR(text)
+		if !sawPR {
+			pr = s.prFromNumber(ctx, t, machine, session, text)
+			sawPR = pr != ""
+		}
+		legacy = pr != ""
+		if legacy && !reference {
+			deliveries = []string{pr}
 		}
 	}
-	stage, pr := stageOf(text)
+	// Keep incidental links even on replies that carry no stage update. A legacy candidate becomes a
+	// delivery link only if its stage write wins the check for an empty binding.
+	defer func() {
+		if !bindingsRead {
+			return
+		}
+		for _, raw := range deliveries {
+			if !slices.Contains(urls, raw) {
+				urls = append(urls, raw)
+			}
+		}
+		if len(urls) != 0 {
+			links, roles := reportLinkRoles(urls, deliveries, rows)
+			if len(links) == 0 {
+				return
+			}
+			if err := s.importReportedLinks(ctx, t.ID, links, "pull_request", roles); err != nil {
+				s.logf("task %s: repository links not saved: %v", t.ID, err)
+			}
+		}
+	}()
+	stage := stageFromReply(text, sawPR)
 	d, marked := deliveryMark(text)
 	if changeSeen(text, d, marked) {
 		s.restage(ctx, t.ID, func(st *todoStage) { st.Change = true }) // a commit, a branch or a held delivery: code work, PR link or not
-	}
-	if pr != "" {
-		s.learnRepoRoot(ctx, machine, session, pr)
-	} else if pr = s.prFromNumber(ctx, t, machine, session, text); pr != "" && stage == "develop" && !marked {
-		stage = "review" // as stageOf has it for a linked PR (#7921)
-		if said(mergedWords, text) {
-			stage = "merge"
-		}
 	}
 	if !marked && stageIndex(stage) < stageIndex("merge") && pr == "" && t.PRURL != "" && said(mergedWords, text) {
 		stage = "merge" // later replies need not repeat the link already kept on the task
@@ -207,7 +269,17 @@ func (s *Service) advanceTaskReply(ctx context.Context, t Todo, machine, session
 		d.At = time.Now().UTC()
 		s.setTaskDelivery(ctx, t.ID, d) // a held deploy check takes precedence over the agent's mark
 	}
-	s.setTaskStage(ctx, t.ID, stage, pr)
+	if !s.writeTaskStage(ctx, t.ID, stage, pr, "", false, "", legacy) && legacy {
+		deliveries = nil
+		rows, bindingsRead = s.replyRepositoryBindings(ctx, t.ID)
+		return false
+	}
+	if pr != "" {
+		s.learnRepoRoot(ctx, machine, session, pr)
+		if legacy && !slices.Contains(urls, pr) {
+			urls = append(urls, pr) // the lone legacy reference may have been a comment URL
+		}
+	}
 	return deployed
 }
 
@@ -439,6 +511,12 @@ func (s *Service) setTaskStageKind(ctx context.Context, id, stage, pr, kind stri
 // setTaskStageOn is setTaskStageKind, and when onPR is set it does nothing unless, under the stage lock, the open to-do
 // and its stage still name that PR: an observation of a PR that was replaced meanwhile moves no stage (#7614 review).
 func (s *Service) setTaskStageOn(ctx context.Context, id, stage, pr, kind string, verified bool, onPR string) {
+	s.writeTaskStage(ctx, id, stage, pr, kind, verified, onPR, false)
+}
+
+// writeTaskStage checks the prior PR under the same lock that publishes stage updates. A legacy fallback may fill an
+// empty PR slot only while there is no target or candidate binding, including when another reply overtook it.
+func (s *Service) writeTaskStage(ctx context.Context, id, stage, pr, kind string, verified bool, onPR string, legacy bool) bool {
 	if !verified && stage == "verify" {
 		if t, ok := s.todoNow(id); ok && t.Supervision != nil {
 			v := t.Supervision
@@ -450,22 +528,27 @@ func (s *Service) setTaskStageOn(ctx context.Context, id, stage, pr, kind string
 	b := &s.reports
 	b.stageWriting.Lock()
 	defer b.stageWriting.Unlock()
-	if onPR != "" {
+	if onPR != "" || legacy {
 		// The to-do's PR changes only under stageWriting (below), so it is read before b.mu, in the usual lock order.
 		if t, ok := s.todoNow(id); !ok || t.DoneAt != nil || t.PRURL != onPR {
-			return
+			return false
+		}
+	}
+	if legacy {
+		if rows, ok := s.replyRepositoryBindings(ctx, id); !ok || reportBindingsBlockLegacy(rows, pr) {
+			return false
 		}
 	}
 	b.mu.Lock()
 	if !s.loadStagesLocked(ctx) {
 		b.mu.Unlock()
 		s.logf("task %s: stage %s not kept: the stages could not be read", id, stage)
-		return
+		return false
 	}
 	cur := b.stages[id]
-	if onPR != "" && cur.PR != onPR {
+	if (onPR != "" || legacy) && cur.PR != onPR {
 		b.mu.Unlock()
-		return
+		return false
 	}
 	changed := false
 	if verified && !cur.Verified {
@@ -533,7 +616,7 @@ func (s *Service) setTaskStageOn(ctx context.Context, id, stage, pr, kind string
 	}
 	b.mu.Unlock()
 	if !changed {
-		return
+		return true
 	}
 	s.todos.mu.Lock()
 	if t := s.todos.todos[id]; t != nil {
@@ -542,6 +625,7 @@ func (s *Service) setTaskStageOn(ctx context.Context, id, stage, pr, kind string
 	}
 	s.todos.mu.Unlock()
 	s.todosChanged(ctx)
+	return true
 }
 
 // loadStagesLocked reads the stages once and reports whether they are in memory; s.reports.mu is held. A failed read
