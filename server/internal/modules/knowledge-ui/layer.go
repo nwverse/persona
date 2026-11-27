@@ -123,12 +123,7 @@ func (l *Layer) Need(sel *kb.Selection, ret kb.Retention, connector string, c co
 
 // ProviderCheckpoint resolves the owner's exact connector identity before exposing any progress.
 func (l *Layer) ProviderCheckpoint(e *kb.Engine, cfg *assistantwire.KBHistory, binding assistantwire.KBImportProvider, day string, now time.Time) (wire.KBImportCheckpointResult, bool) {
-	chat := kb.ChatID(binding.FiledAs, string(binding.SourceID))
-	cp, ok := kbhistory.ProviderCheckpoint(e, cfg, binding.Connector.String(), chat, day, now)
-	if !ok || cp.SourceID != string(binding.SourceID) || cp.FiledAs != binding.FiledAs {
-		return wire.KBImportCheckpointResult{}, false
-	}
-	return wire.KBImportCheckpointResult{Approval: cp.Approval, State: wire.KBImportState(cp.State), Read: cp.Read, Written: cp.Written}, true
+	return kbhistory.ProviderCheckpoint(e, cfg, binding, day, now)
 }
 
 // Day is the day p names with the lines the owner sent from Persona marked (kbsent).

@@ -292,6 +292,11 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 				if err := n.a2aSendReady(ctx, p.SessionID); err != nil {
 					return err
 				}
+				if h.agent() == agyAgent {
+					if err := n.agyIdleCompactBeforeInput(ctx, h, p.SessionID, p.Text, p.Images, false, false); err != nil {
+						return err
+					}
+				}
 				input := map[string]any{"session_id": p.SessionID, "text": p.Text, "images": p.Images}
 				if !syntheticSegment {
 					input["client_msg_id"] = opts.ClientMsgID
@@ -301,6 +306,17 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 				} else if h.agent() == agyAgent && !n.runtimeAssistant(p.SessionID) {
 					if mode := agySendMode(n.runtimePermissionMode(h, p.SessionID), n.agyRuntimeMode(p.SessionID)); mode != "" {
 						input["mode"] = mode
+					}
+				}
+				if h.agent() == agyAgent && !n.runtimeAssistant(p.SessionID) && n.state != nil {
+					if st, ok := n.state.get(p.SessionID); ok && st.Launcher != "" {
+						ch, err := n.agyChannelFor(ctx, st.Launcher)
+						if err != nil {
+							return err
+						}
+						if ch != nil {
+							input["channel"] = ch
+						}
 					}
 				}
 				if p.A2AWakeOnSend {

@@ -175,6 +175,8 @@ struct ChatView: View {
     @Environment(\.hostedChat) private var host
     /// In the detail column of a split (iPhone Duo open): the list is beside the chat, the tab bar stays.
     @Environment(\.splitDetail) private var split
+    /// A task's detail goes on the stack's path, not pushed by view from here (#13156).
+    @Environment(\.taskDetailByValue) private var taskDetailByValue
     @Environment(\.splitShowList) private var showList
     /// The Persona conversation in the shell (docs/apple/ios.md「New shell」).
     @Environment(\.shellChat) private var shellChat
@@ -402,6 +404,8 @@ struct ChatView: View {
         base
             .background { DismissReader(holder: dismissChat) }
             .environment(\.rowMemoScope, RowMemo.scope(shownKey))
+            // A tap on a word of a message looks it up while a text_lookup extension answers (#10977).
+            .textLookupSurface(style == .assistant ? "chat" : "agent")
             .environment(\.assistantCardConversation, style == .assistant ? shownKey : nil)
             // Only this chat hands its lifted message to the page (a chat shown in a sheet from it draws its own).
             .environment(\.messageLiftHost, nil)
@@ -555,7 +559,9 @@ struct ChatView: View {
         }
         // A task's own detail: assigning detailTask must not be a dead link. iPhone dispatch links push a live Agent
         // directly; this is the starting/no-Agent fallback and the normal task detail.
-        .detailPresentation(isPresented: Binding(get: { style == .assistant && (TasksStore.shared.detailTask != nil || TasksStore.shared.detailAgent != nil) },
+        // Not where the stack takes it by value (the Sidebar layout's page, `taskDetailByValue`, #13156).
+        .detailPresentation(isPresented: Binding(get: { style == .assistant && !taskDetailByValue
+                                                        && (TasksStore.shared.detailTask != nil || TasksStore.shared.detailAgent != nil) },
                                                  set: { if !$0 { TasksStore.shared.detailTask = nil; TasksStore.shared.detailAgent = nil } })) {
             Group {
                 if let id = TasksStore.shared.detailTask {
@@ -585,7 +591,11 @@ struct ChatView: View {
             if key == model.assistantMain { TasksStore.shared.loadToday(key.sessionID) }
             #if DEBUG
             // `-showTaskDetail <todo id>` / `-showTaskBoard YES`: a task's detail or the board, for screenshots.
-            if let id = UserDefaults.standard.string(forKey: "showTaskDetail") { TasksStore.shared.detailTask = id }
+            if let id = UserDefaults.standard.string(forKey: "showTaskDetail") {
+                // On the Sidebar layout's path (#13156) after the launch's first assistant switch, which empties that path.
+                if taskDetailByValue { try? await Task.sleep(for: .seconds(2)) }
+                TasksStore.shared.detailTask = id
+            }
             if UserDefaults.standard.bool(forKey: "showTaskBoard") { TasksStore.shared.showBoard = true }
             #endif
         }

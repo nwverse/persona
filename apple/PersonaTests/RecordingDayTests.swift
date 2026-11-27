@@ -419,6 +419,31 @@ struct RecordingDayWireTests {
         #expect(WatchSync.phoneDayKeepDaysKey == WatchPhoneCapabilities.keepDaysKey)
     }
 
+    /// `recordingDay` 0 and absent differ: 0 is a phone that takes day recordings whose user has not agreed to the
+    /// sheet's current version yet, so what the watch already recorded keeps going to it under the agreement it
+    /// started with; absent is a phone from before, which takes nothing.
+    @Test func aPhoneThatHasNotAgreedToThisSheetStillTakesARunningRecording() throws {
+        let name = "watch-day-takes-\(UUID().uuidString)"
+        let defaults = try #require(CountingDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        #expect(!WatchPhoneCapabilities.takesDays(defaults), "a phone from before never sets the key")
+
+        let waiting: [String: Any] = [RecordingDayContract.phoneKey: 0, RecordingDayContract.phoneHubKey: false,
+                                      RecordingDayContract.phoneKeepDaysKey: 7]
+        #expect(WatchPhoneCapabilities.storeDay(waiting, full: true, in: defaults) == 3)
+        #expect(WatchPhoneCapabilities.takesDays(defaults), "0: the phone takes them; its user agreed to an older sheet")
+        #expect(WatchPhoneCapabilities.keepDays(defaults) == 7, "the age limit still follows the phone")
+
+        var agreed = waiting
+        agreed[RecordingDayContract.phoneKey] = RecordingDayContract.version
+        #expect(WatchPhoneCapabilities.storeDay(agreed, full: true, in: defaults) == 1)
+        #expect(WatchPhoneCapabilities.takesDays(defaults))
+
+        // A full context without the day keys (a phone from before, or another phone): nothing goes to it.
+        #expect(WatchPhoneCapabilities.storeDay([:], full: true, in: defaults) == 3)
+        #expect(!WatchPhoneCapabilities.takesDays(defaults))
+    }
+
     /// What tells the watch's day transfer to look again (`WatchSync.onDayCapabilities`): any change of the day keys,
     /// the consent arriving above all, and only that. The rolling key and the resends of the same context don't.
     @Test func onlyAChangeOfTheDayKeysCountsAsOne() throws {

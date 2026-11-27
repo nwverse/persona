@@ -284,10 +284,17 @@ func TestCancelMachineInteractions(t *testing.T) {
 // One of the hub's own features asks (fleet.ask): a card like a hook's, its answer back to the hub.
 func TestAskHub(t *testing.T) {
 	ft := newFleetTestNoStore(t)
-	done := make(chan proto.Resolution, 1)
+	b := &BusHub{svc: ft.s, helloed: make(chan struct{})}
+	close(b.helloed)
+	ask := assistantwire.FleetAskParams{Interaction: proto.Interaction{
+		MachineID: "mac", Kind: proto.IxPermission, ToolName: "mail_send", Summary: "send it", ExpiresAt: time.Now().Add(time.Minute),
+	}}
+	done := make(chan any, 1)
 	go func() {
-		r, _ := ft.s.askHub(context.Background(), proto.Interaction{MachineID: "mac", Kind: proto.IxPermission, ToolName: "mail_send",
-			Summary: "send it", ExpiresAt: time.Now().Add(time.Minute)})
+		r, err := b.answer(t.Context(), assistantwire.FleetAskMethod.Name, mustJSON(ask))
+		if err != nil {
+			t.Errorf("fleet ask: %v", err)
+		}
 		done <- r
 	}()
 	ix := ft.waitPending(1)[0]
@@ -298,8 +305,9 @@ func TestAskHub(t *testing.T) {
 	if err := ft.s.resolve(ix.ID, proto.Resolution{Allow: &no}); err != nil {
 		t.Fatal(err)
 	}
-	if r := <-done; r.Allow == nil || *r.Allow {
-		t.Fatalf("answer = %+v", r)
+	out := <-done
+	if r, ok := out.(proto.Resolution); !ok || r.Allow == nil || *r.Allow {
+		t.Fatalf("answer = %+v (%T), want a denied resolution", out, out)
 	}
 	// It was pushed as any card (to the devices that take "needs you" pushes).
 	if got := ft.pushesOf(assistantwire.NotifyInput, 1, time.Second); len(got) != 1 || got[0].Interaction == nil || got[0].Interaction.ID != ix.ID {

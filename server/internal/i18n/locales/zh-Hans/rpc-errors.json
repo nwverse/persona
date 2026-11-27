@@ -133,5 +133,14 @@
   "conversation_retired": "此会话已不再运行该对话。",
   "agent_assistant_workspace": "不能在助手工作区派出 Agent。请选择项目目录或独立的 worktree；尚未启动 Agent。",
   "codex_writable_symlink": "无法以 workspace-write 模式启动 Codex：可写根目录下的 {name} 是符号链接，沙箱无法保护该只读路径。请改用项目目录作为 cwd，或选择只读模式。尚未启动，也未修改符号链接。",
-  "agy_in_terminal": "这个 Antigravity 对话正在那台电脑的终端里由 agy 打开，Persona 连不到那个终端，所以没有发送。请在终端里回复，或者先在那边退出 agy 再试。"
+  "agy_in_terminal": "这个 Antigravity 对话正在那台电脑的终端里由 agy 打开，Persona 连不到那个终端，所以没有发送。请在终端里回复，或者先在那边退出 agy 再试。",
+  "effort_input_draft": "终端的输入框里有还没发出的文字（「{draft}」），思考强度没有改，也没有输入任何内容。在电脑上清掉后再试。",
+  "effort_input_draft_plain": "终端的输入框里有文字（「{draft}」），思考强度没有改，也没有输入任何内容。这个终端的画面读不到颜色，Claude 灰色的建议消息也算作文字。在电脑上清掉后再试。",
+  "speed_input_draft": "终端的输入框里有还没发出的文字（「{draft}」），速度没有改，也没有输入任何内容。在电脑上清掉后再试。",
+  "speed_input_draft_plain": "终端的输入框里有文字（「{draft}」），速度没有改，也没有输入任何内容。这个终端的画面读不到颜色，Claude 灰色的建议消息也算作文字。在电脑上清掉后再试。",
+  "orca_away": "那台电脑上的 Orca 没有在运行，这次没有发送。在那台电脑上打开 Orca 后再试。",
+  "orca_refused": "Orca 没有接受，什么都没有改：{detail}",
+  "orca_unknown": "不确定 Orca 是否已经执行。请先在那台电脑的 Orca 里看一下这个对话，再决定是否重试。",
+  "orca_session_gone": "这个对话已经不在 Orca 里了。",
+  "orca_closed": "这个对话在 Orca 里已经关闭。先给它发一条消息重新打开，再改它的设置。"
 }

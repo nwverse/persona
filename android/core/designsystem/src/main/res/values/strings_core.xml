@@ -272,6 +272,12 @@
     <string name="designsystem_core_engine_footer_none_offline">The machine is offline; the choice applies once it connects. The desktop apps\' sessions show, and starting or continuing a session from your phone is off.</string>
     <string name="designsystem_core_engine_switched">Engine switched</string>
     <string name="designsystem_core_engine_saved_offline">Saved. Applies once connected</string>
+    <string name="designsystem_core_engine_set_notice">This computer uses %1$s together, with %2$s as the default. To change which engines it uses, open this computer in Persona on the web.</string>
+    <string name="designsystem_core_engine_footer_set">Sessions from every engine this computer uses are shown. New sessions from your phone open in %1$s.</string>
+    <string name="designsystem_core_engine_footer_set_offline">The machine is offline; the choice applies once it connects. New sessions from your phone will open in %1$s.</string>
+    <string name="designsystem_core_engine_footer_set_one">Only %1$s will be used: the other engines are turned off and only its sessions are shown.</string>
+    <string name="designsystem_core_engine_footer_set_one_offline">The machine is offline; the choice applies once it connects. Only %1$s will be used, and the other engines are turned off.</string>
+    <string name="designsystem_core_engine_default_changed">Default engine changed</string>
     <string name="designsystem_core_tool_run">Run</string>
     <string name="designsystem_core_tool_read">Read</string>
     <string name="designsystem_core_tool_edit">Edit</string>

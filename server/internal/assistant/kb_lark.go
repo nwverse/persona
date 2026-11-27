@@ -40,7 +40,8 @@ func (s *Service) kbLarkMinutes(ctx context.Context, e *kb.Engine, r *kbRounds) 
 		return
 	}
 	client := kblark.NewClient(cliport.NewRunner(cliwire.Config{Bin: cfg.Binary, Profile: cfg.Profile, Timeout: kbLarkMinutesTimeout}), e.Store.Zone())
-	res, err := kblark.Run(ctx, e, client, kblark.Config{SinceDays: cfg.SinceDays, DocSearch: cfg.DocSearch}, time.Now(), s.logf)
+	res, err := kblark.Run(ctx, e, client, kblark.Config{SinceDays: cfg.SinceDays, DocSearch: cfg.DocSearch,
+		Lang: s.lang(ctx)}, time.Now(), s.logf)
 	if err != nil {
 		if ctx.Err() == nil {
 			s.logf("kb: lark minutes: %v", err)

@@ -2219,6 +2219,10 @@ rail's other metrics (`web/src/ui/nav-rail-metrics.ts`); details in `docs/web/we
 
 The web Changes panel's secondary file tree (#10477) reuses the existing `ResizeHandle` separator from the sidebar and side panel: pointer drag, arrow keys, Home/End, and double-click/Enter to reset. Column dimensions live in `web/src/lib/layout.ts` (`CHANGES_TREE_DEFAULT`, `CHANGES_TREE_MIN`, `CHANGES_TREE_MAX`, `CHANGES_DIFF_MIN`). Its default remains 192 px; the browser remembers a user resize and temporarily fits it to the panel while keeping space for the diff. At narrow widths the tree stays above the diff. File names and indentation may truncate, while each row's unchanged addition/deletion counts remain whole and the full path remains on hover.
 
+### 4.2.1 Click a word to look it up (web, #10977)
+
+A plain click on an English word in any text the page shows opens a small card on that word: the word, its pronunciation, its meanings, Save or Saved, and the dictionary's name. It is for everyday reading (Assistant first), so it stays off until the hub says a dictionary is available, and off adds nothing to the page. The card uses the existing surface (`bg-surface`, `border-line`, `shadow-overlay`), the text tokens (`text-card-title`, `text-meta`, `text-label`), `Button` / `IconButton` and the pop-in motion; it is a labelled non-modal dialog that takes focus and gives it back when it closes. Escape, a press outside it or scrolling closes it. Save / Saved is one toggle button (`aria-pressed`) that changes at once; a refused change puts it back and says so in a line under it. The same click does nothing on a link, a button, a row that opens something, a field, code, a terminal, a drag, or a double-click that selects the word; `data-no-lookup` opts a region out. Saved words are underlined only when the dictionary's own underline switch is on; the underline (`--accent`) is painted over the words and does not change them.
+
 ### 4.3 Feedback and haptics
 
 Settings › Hub shows a stage strip and an inset step list during updates (#15240). The
@@ -2938,6 +2942,20 @@ screens. One card contains a title, speaker, timestamp, saved text, and **Open o
 actions. Long saved text folds in the card. The original uses the existing transcript jump. The saved text stays usable
 when the original cannot be opened.
 
+### 4.15 Following a name in code (web, UI version 13)
+
+When an extension sets `navigate` on a `code` component (`docs/extensions/extensions.md`, "UI version 13: go to
+definition"), a name in the code can be followed the way an IDE does it, with IntelliJ's keys
+(`web/src/views/extensions/CodeViews.tsx`, `web/src/lib/code-navigate.ts`):
+
+- **⌘-click or ⌘B** (Ctrl-click, Ctrl+B elsewhere) goes to the definition of the name under the pointer or the caret;
+  **⌥F7** (Alt+F7) asks for its usages; **⌘[** (Ctrl+Alt+← elsewhere) goes back. The extension answers with the page to
+  show, and the code shows the busy state as for any other action.
+- The keys work only inside the code area, never in a field or during an IME composition, and ⌘F there still finds in
+  the file.
+- There is no new visible control: a hover title on the code area names the keys. A code without `navigate`, and an
+  app below UI version 13, look and work as before (principle 2).
+
 ## 5. Content
 
 ### 5.1 Voice and tone
@@ -3284,6 +3302,32 @@ line. A stopped Agent instead gives its explicit stop reason beside the existing
 promise that another message can be sent. There is no new setting, style, notification, count or automatic confirmation.
 The ownership notice and stopped/archived-session recovery controls load only when needed, keeping them out of the
 first-screen startup budget without changing their layout, text or actions. Session-detail load errors stay eager.
+
+## Word lookup
+
+The `text_lookup` extension point on Apple (#10977; behavior per surface in `docs/apple/ios.md` "Word lookup (text_lookup)").
+Who it serves: everyday readers of English text; nothing changes for anyone without an enabled lookup extension
+(principle 1, defaults first; principle 3, turning the extension off removes the behavior at once).
+
+- **Gesture**: a quick tap on a word of reading text (`TextLookupViews.swift`, `LookupTap`) opens the card; it never takes a
+  touch from a link, a long press (lift, selection), a button or a scroll, and never fires in inputs, code blocks, tool
+  output or terminals. Rows and buttons are never lookup surfaces. The plain alternative (VoiceOver selects rather than
+  taps) is **Look Up in <provider>** in a selection's edit menu (`Theme.Icon.lookUpWord`, an alias of `glossary`).
+- **The card** (`TextLookupCard`): a popover on the iPhone too (as `InfoTip`; a UIKit popover hosting the card, which
+  grows with it as the lookup loads), `Theme.Size.box300` wide in all (scaled) with `Theme.Space.m` padding: one width,
+  so its height is measured at the width it is drawn. The word in `Theme.Font.title` on one line (shrinking to
+  `Theme.TextLookup.minimumScale`), the pronunciation in `Theme.Font.secondary` secondary ink, senses as a part-of-speech
+  label in `Theme.Font.captionStrong` secondary and the sense in `Theme.Font.secondary` (at most
+  `Theme.TextLookup.senseLimit`), then a footer: the extension's name in `Theme.Font.caption` secondary and **Save** /
+  **Saved** (`themedButton`, prominent while unsaved; `Theme.Icon.saveWord` / `Theme.Icon.savedWord`, one line). Loading
+  shows the word at once with a small spinner and "Looking up…"; a failure says why in secondary ink with **Retry**
+  (section 3.10); a failed save says why in `Theme.danger` caption and goes back. No entry: "No entry for this word.",
+  no Save.
+- **Underline of saved words** (only with the extension's `underline_saved`, off by default): a `Theme.TextLookup.underline`
+  hairline `Theme.TextLookup.underlineInset` above the line's bottom in `Theme.TextLookup.underlineInk` (the accent at
+  55%, quieter than a link), drawn by one Canvas per block, hidden from VoiceOver.
+- **Tokens** (`apple/Shared/Design/TextLookupTokens.swift`): `Theme.TextLookup.tapLimit`, `senseLimit`, `minimumScale`,
+  `underline`, `underlineInset`, `underlineInk`.
 
 ## UI change self-check
 
@@ -4319,12 +4363,36 @@ the flat Key points / Decisions lists made them read every line (principle 2).
   `send`, performance `gauge`, metrics `chart`, tooling `tool`, quality `shield`, design `layers`, people `users`,
   customer `person`, budget `money`, risk `shieldAlert`, general `list`.
 - **Copy** sends the hub's `markdown`, as it always did.
+- **Disagreements (#16728)** (contract: `docs/assistant/meeting-minutes.md` "Disagreements (#16728)"):
+  `web/src/modules/recording/minutes-debates.ts` (`minutesDebates`) cleans `detail.minutes.debates` on its own, apart
+  from the rest of the minutes, and `MinutesDebatesSection` (`web/src/modules/recording/MinutesOverview.tsx`) renders it
+  in both layouts whenever at least one valid disagreement survives; minutes with no disagreement render unchanged.
+  - **Why not a summary-card bullet (principle 4):** the summary card's topic bullets must be a 1-to-1 mirror of the flat
+    `points` and `decisions` lists so older clients and meeting material carry the same items; a disagreement cannot live
+    inside them because it carries a disputed question, two to four attributed stances with transcript timestamps, an
+    explicit status word, and an optional settled outcome linked to a decision.
+  - **Placement and headings:** in the summary card, a `section` labelled by an `h4` (**Disagreements**) sits after Core
+    conclusions and before the topic cards; in the legacy layout, the same `h4` section sits inside the minutes `Card`
+    after Action items and before Open questions (under the `h3` title, with Key points, Decisions, Action items,
+    Disagreements and Open questions at `h4`). Each disagreement is an `article` labelled by its `h5` question heading.
+  - **Card and controls (reused):** each disagreement uses a neutral inset card (`rounded-card bg-inset shadow-hairline`),
+    reusing `TonePill` (`orange` for **still disagreed**, `neutral` for **settled**, omitted for an unknown status so
+    status is always text, never color alone, and never reuses the wording of **Open questions**), `Icon`
+    (`arrowLeftRight`, `flag`, `clock`), `TranscriptTime` (jumping to the cited transcript line), and `.minutes-words`,
+    `.minutes-mark` and `.minutes-glyph` from `web/src/modules/recording/minutes-overview.css` (plus
+    `.minutes-debate-outcome` for the outcome row's top spacing). No new color token or first-screen CSS is added.
+  - **Linked decision:** for a settled disagreement, the outcome row offers a single-line **Decision** jump button only
+    when the hub set an in-bounds `outcome.decision` index (scrolling to and highlighting that decision in either layout,
+    and unfolding its topic card in the summary card if folded); the web never matches timestamps itself.
 - Checks: `web/src/modules/recording/minutes-overview.test.ts` (the cleaning, `boldParts` and the shared
-  `spec/fixtures/minutes-overview/cases.json`), `RecordingMinutes.test.tsx` (order, heading levels, fallback, the fold,
-  to-dos, Copy, the trim), `RecordingPhotos.test.tsx` (a cited photo after the trim) and `web/e2e/recording-minutes.mjs`
-  (en, zh-Hans and ja at 1440 and 390, light and dark; the Large text size and a 1440 window at 200% zoom; a card
-  alone in its row and a long speaker name, with every topic card and line checked for running past its box; and the
-  legacy baseline).
+  `spec/fixtures/minutes-overview/cases.json`), `web/src/modules/recording/minutes-debates.test.ts` (the cleaning,
+  decision target mapping and the shared `spec/fixtures/minutes-debates/cases.json`), `RecordingMinutes.test.tsx` (order,
+  heading levels, fallback, disagreements in both layouts, the fold, to-dos, Copy, the trim), `RecordingPhotos.test.tsx`
+  (a cited photo after the trim), `TestMinutesHeadingsAreTheWebsSections` (`en`, `zh-Hans` and `ja` heading and status
+  parity with `kb-minutes.json`), and `web/e2e/recording-minutes.mjs` (en, zh-Hans and ja at 1440 and 390, light and dark;
+  the Large text size and a 1440 window at 200% zoom; both layouts with disagreements, a card alone in its row and a long
+  speaker name, with every topic card, disagreement card and line checked for running past its box; and the legacy
+  no-disagreement baseline).
 
 ### The summary card (#6563)
 

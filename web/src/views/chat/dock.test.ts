@@ -54,8 +54,8 @@ describe("cardLine", () => {
   it("says what each card asks, else what it waits for", () => {
     expect(cardLine(ix({ questions: [{ question: "用哪个框架？", options: [] }] as Interaction["questions"] }))).toBe("用哪个框架？");
     expect(cardLine(ix({ kind: "permission", tool_name: "Bash", tool_input: { description: "跑测试" } }))).toBe("跑测试");
-    expect(cardLine(ix({ kind: "plan" }))).toBe("计划等你审批");
-    expect(cardLine(ix({ kind: "screen" }))).toBe("终端等你处理");
+    expect(cardLine(ix({ kind: "plan" }))).toBe("计划等待你审批");
+    expect(cardLine(ix({ kind: "screen" }))).toBe("终端等待你处理");
   });
 });
 

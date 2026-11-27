@@ -38,9 +38,13 @@ type Fake struct {
 	keepalive   int
 	ln          net.Listener
 	agentStatus map[string]map[string]any
-	revisions   map[string]int
-	writes      []Write
-	invalid     []string
+	// processes are terminal.inspectProcess's answers by handle; nil: the method is unknown (an older Orca).
+	processes map[string]map[string]any
+	revisions map[string]int
+	writes    []Write
+	invalid   []string
+	// unknown: params each method's schema does not have and refuses (Unknown), as an older, strict Orca's would.
+	unknown map[string][]string
 }
 
 // Call is one request the fake got (status.get included).
@@ -164,7 +168,10 @@ func (f *Fake) serve(c net.Conn) {
 		invalid := ""
 		if authed {
 			f.log = append(f.log, Call{Method: req.Method, Params: req.Params})
-			if invalid = validate(req.Method, req.Params); invalid == "" {
+			if invalid = f.unknownLocked(req.Method, req.Params); invalid == "" {
+				invalid = validate(req.Method, req.Params)
+			}
+			if invalid == "" {
 				result = f.answerLocked(req.Method, req.Params)
 			} else {
 				f.invalid = append(f.invalid, req.Method+": "+invalid)
@@ -288,6 +295,16 @@ func (f *Fake) answerLocked(method string, p map[string]any) any {
 		out := map[string]any{"handle": h}
 		maps.Copy(out, st)
 		return map[string]any{"agentStatus": out}
+	case "terminal.inspectProcess":
+		if f.processes == nil {
+			return Fail{"method_not_found"}
+		}
+		pr := f.processes[h]
+		if pr == nil {
+			// What Orca says when it cannot read the terminal's processes.
+			pr = map[string]any{"foregroundProcess": nil, "hasChildProcesses": true, "childProcessEvidence": "unverifiable"}
+		}
+		return map[string]any{"process": maps.Clone(pr)}
 	case "terminal.close":
 		f.writes = append(f.writes, Write{Handle: h, Close: true})
 		return map[string]any{"close": map[string]any{"handle": h, "tabId": t["tabId"], "ptyKilled": true}}
@@ -407,6 +424,8 @@ func validate(method string, p map[string]any) string {
 		return first(handle(), literalTrue("screen"))
 	case "terminal.agentStatus", "terminal.close":
 		return handle()
+	case "terminal.inspectProcess":
+		return first(handle(), boolean("scanChildProcesses"))
 	case "terminal.rename", "terminal.setPaneTitle":
 		return first(handle(), str("title", true))
 	case "repo.add":
@@ -439,27 +458,32 @@ func validate(method string, p map[string]any) string {
 			}
 		}
 		return ""
+	case "session.tabs.listAll":
+		return ""
+	case "agentSession.reveal":
+		return str("sessionId", true)
+	case "agentSession.respondToApproval":
+		return first(envelopeOf(p), str("itemId", true), str("optionId", true), positiveInt(p, "expectedRevision"))
+	case "agentSession.respondToQuestion":
+		if r := first(envelopeOf(p), str("itemId", true), positiveInt(p, "expectedRevision")); r != "" {
+			return r
+		}
+		answers, hasAnswers := p["answers"].([]any)
+		_, hasOption := p["optionId"]
+		if hasAnswers == hasOption {
+			return "Send exactly one of an option id or answers"
+		}
+		if hasAnswers && len(answers) == 0 {
+			return "answers must not be empty"
+		}
+		return ""
+	case "agentSession.setOption":
+		return first(envelopeOf(p), str("key", true))
+	case "agentSession.cancel":
+		return envelopeOf(p)
 	case "agentSession.send":
-		envelope, ok := p["envelope"].(map[string]any)
-		if !ok {
-			return "Missing envelope"
-		}
-		for _, field := range []string{"sessionId", "clientOperationId", "payloadFingerprint"} {
-			if value, _ := envelope[field].(string); value == "" {
-				return "Missing envelope." + field
-			}
-		}
-		fingerprint, _ := envelope["payloadFingerprint"].(string)
-		if len(fingerprint) != 64 {
-			return "payloadFingerprint must be a sha256 hex digest"
-		}
-		for _, r := range fingerprint {
-			if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f') {
-				return "payloadFingerprint must be lowercase hex"
-			}
-		}
-		if fence, ok := envelope["expectedRuntimeFence"].(float64); !ok || fence <= 0 {
-			return "expectedRuntimeFence must be positive"
+		if r := envelopeOf(p); r != "" {
+			return r
 		}
 		body, ok := p["body"].(map[string]any)
 		if !ok || body["kind"] != "message" || body["role"] != "user" {
@@ -474,7 +498,21 @@ func validate(method string, p map[string]any) string {
 		}
 		return ""
 	case "terminal.create":
-		return first(str("worktree", true), str("title", true), str("shell", false))
+		if v, ok := p["env"]; ok {
+			env, isObj := v.(map[string]any)
+			if !isObj {
+				return "env must be an object of strings"
+			}
+			for _, val := range env {
+				if _, isStr := val.(string); !isStr {
+					return "env must be an object of strings"
+				}
+			}
+		}
+		if v, ok := p["startupCommandDelivery"]; ok && v != "fast" && v != "shell-ready" {
+			return "startupCommandDelivery must be fast or shell-ready"
+		}
+		return first(str("worktree", true), str("title", true), str("shell", false), str("command", false))
 	case "terminal.send":
 		if r := first(handle(), literalTrue("agentPrompt"), literalTrue("requireWriteSettlement"),
 			literalTrue("claimViewport")); r != "" {
@@ -509,6 +547,42 @@ func validate(method string, p map[string]any) string {
 	return ""
 }
 
+// envelopeOf checks an agentSession write's envelope as Orca's schema does: session, operation id and a lowercase
+// sha256 fingerprint, and a positive fence ("" when valid). null, which a create sends, is checked by its method.
+func envelopeOf(p map[string]any) string {
+	envelope, ok := p["envelope"].(map[string]any)
+	if !ok {
+		return "Missing envelope"
+	}
+	for _, field := range []string{"sessionId", "clientOperationId", "payloadFingerprint"} {
+		if value, _ := envelope[field].(string); value == "" {
+			return "Missing envelope." + field
+		}
+	}
+	fingerprint, _ := envelope["payloadFingerprint"].(string)
+	if len(fingerprint) != 64 {
+		return "payloadFingerprint must be a sha256 hex digest"
+	}
+	for _, r := range fingerprint {
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f') {
+			return "payloadFingerprint must be lowercase hex"
+		}
+	}
+	if fence, ok := envelope["expectedRuntimeFence"].(float64); !ok || fence <= 0 {
+		return "expectedRuntimeFence must be positive"
+	}
+	return ""
+}
+
+// positiveInt checks that p[k] is a positive integer ("" when it is).
+func positiveInt(p map[string]any, k string) string {
+	n, ok := p[k].(float64)
+	if !ok || n < 1 || n != float64(int64(n)) {
+		return k + " must be a positive integer"
+	}
+	return ""
+}
+
 // Write is one terminal.send or terminal.close the fake took: what reached the terminal.
 type Write struct {
 	Handle string
@@ -524,6 +598,27 @@ func (f *Fake) Writes() []Write {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.writes)
+}
+
+// Unknown makes the fake refuse method's requests that carry any of keys (invalid_argument, before any handler), as
+// an Orca whose schema for it does not have them and refuses unknown keys would.
+func (f *Fake) Unknown(method string, keys ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.unknown == nil {
+		f.unknown = map[string][]string{}
+	}
+	f.unknown[method] = keys
+}
+
+// unknownLocked is the refusal of a request carrying a key Unknown named for its method, "" for none.
+func (f *Fake) unknownLocked(method string, p map[string]any) string {
+	for _, k := range f.unknown[method] {
+		if _, ok := p[k]; ok {
+			return "Unrecognized key: \"" + k + "\""
+		}
+	}
+	return ""
 }
 
 // Invalid are the requests refused for their params so far ("method: reason").
@@ -543,6 +638,50 @@ func (f *Fake) SetAgentStatus(handle string, running bool, status string) {
 	f.mu.Lock()
 	f.agentStatus[handle] = map[string]any{"isRunningAgent": running, "status": st}
 	f.mu.Unlock()
+}
+
+// SetProcess sets terminal.inspectProcess's answer for a handle (ShellAtRest, ShellWithJobs, Running, Unverifiable);
+// from the first call on the fake knows the method, and a handle with no answer set is one Orca cannot read. nil
+// clears the handle's answer.
+func (f *Fake) SetProcess(handle string, process map[string]any) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.processes == nil {
+		f.processes = map[string]map[string]any{}
+	}
+	if process == nil {
+		delete(f.processes, handle)
+		return
+	}
+	f.processes[handle] = process
+}
+
+// ShellAtRest is Orca 1.4.277's terminal.inspectProcess answer for a shell at rest with nothing else in its terminal.
+func ShellAtRest(shellPID int) map[string]any {
+	return map[string]any{"foregroundProcess": nil, "hasChildProcesses": false, "idleShellProven": true,
+		"foregroundProcessEvidence": map[string]any{"verdict": "live", "processName": nil,
+			"fence": map[string]any{"platform": "posix", "shellPid": shellPID, "foregroundPgid": shellPID}}}
+}
+
+// ShellWithJobs is its answer for a shell in front with a background or stopped job: in front, not proven idle.
+func ShellWithJobs(shellPID int) map[string]any {
+	return map[string]any{"foregroundProcess": nil, "hasChildProcesses": false,
+		"foregroundProcessEvidence": map[string]any{"verdict": "live", "processName": nil,
+			"fence": map[string]any{"platform": "posix", "shellPid": shellPID, "foregroundPgid": shellPID}}}
+}
+
+// Running is its answer for a program in front of the shell ("sleep", "vi", "python3"…).
+func Running(name string, shellPID int) map[string]any {
+	return map[string]any{"foregroundProcess": name, "hasChildProcesses": true,
+		"foregroundProcessEvidence": map[string]any{"verdict": "live", "processName": nil,
+			"fence": map[string]any{"platform": "posix", "shellPid": shellPID, "foregroundPgid": shellPID + 1}}}
+}
+
+// Unverifiable is its answer when it cannot tell (reason "incarnation_mismatch", "process_table_unreadable"…): the
+// foreground it names then is only its last guess.
+func Unverifiable(reason string) map[string]any {
+	return map[string]any{"foregroundProcess": "bash", "hasChildProcesses": false,
+		"foregroundProcessEvidence": map[string]any{"verdict": "unverifiable", "reason": reason}}
 }
 
 // Orphan does to a terminal what Orca does about 2 s after terminal.create in a worktree its UI is not showing: the
@@ -679,6 +818,19 @@ func (f *Fake) SetScreen(handle string, text string) {
 	}
 	f.mu.Lock()
 	f.screens[handle] = map[string]any{"tail": lines, "tailRows": rows, "returnedLineCount": len(lines)}
+	f.mu.Unlock()
+}
+
+// SetBoxScreen sets terminal.read's answer for a handle the way Orca 1.4.277 reads an agent's input box: text is the
+// screen with the box's prompt row as its bare glyph (❯), and draft the text the box shows, lifted out of the rows
+// ("" for none). Orca's draft has no colors: Claude Code's grey suggestion comes back as a draft too.
+func (f *Fake) SetBoxScreen(handle, text, draft string) {
+	f.SetScreen(handle, text)
+	if draft == "" {
+		return
+	}
+	f.mu.Lock()
+	f.screens[handle]["draft"] = draft
 	f.mu.Unlock()
 }
 

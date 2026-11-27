@@ -75,6 +75,9 @@ func TestMain(m *testing.M) {
 	codexStartupLook = time.Second
 	// No test may reach the user's running Orca: the default metadata path points nowhere.
 	os.Setenv("ORCA_USER_DATA_PATH", "/tmp/persona-test-no-orca")
+	// Nor the user's book of Orca chats in the node's cache folder (orcabridge_book.go): kept in memory unless a test
+	// gives it a file.
+	orcaBookPath = func() string { return "" }
 	// Nor the user's botmux: a node registers no botmux host unless a test gives it one.
 	botmuxBin = func() string { return "" }
 	// Nor the user's Tern: no tern binary is found (a test that wants one gives its client a fake).

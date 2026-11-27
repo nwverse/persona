@@ -314,7 +314,7 @@ func (s *Service) finishChannelRun(r *channel.Run, res *channel.Result) (unrelat
 		r.Hold(res.Last, now.UTC())
 		prog.unsettled = time.Time{}
 		delete(r.Ext, "card") // the next turn gets its own progress message
-		for _, k := range []string{"cot", "cot_msg", "cot_para", "cot_calls", "cot_done", "cot_off"} {
+		for _, k := range []string{"cot", "cot_msg", "cot_para", "cot_calls", "cot_done", "cot_off", "cot_answer"} {
 			delete(r.Ext, k) // the next turn gets its own agent message (and asks for one again)
 		}
 		prog.steps, prog.live, prog.dirty = nil, "", false

@@ -78,7 +78,7 @@ describe("deriveFeatures", () => {
   it("turns a warning on something optional into 未启用, a failure into 有问题", () => {
     const r = report({ "runtime.sock": { status: "warn", detail: "不存在" } });
     expect(state(r, "runtimes")).toBe("off");
-    expect(summarize(deriveFeatures(r))).toEqual({ attention: 0, title: "一切正常", off: "没有设置：运行时接入" });
+    expect(summarize(deriveFeatures(r))).toEqual({ attention: 0, title: "一切正常", off: "未配置：运行时接入" });
     expect(state(report({ "runtime.sock": { status: "fail", detail: "连不上" } }), "runtimes")).toBe("broken");
   });
 
@@ -89,7 +89,7 @@ describe("deriveFeatures", () => {
     expect(state(r, "terminal", {})).toBe("broken"); // never chosen: herdr
     expect(state(r, "terminal", { engine: "orca" })).toBe("off");
     expect(state(r, "terminal", { engine: "paseo" })).toBe("off");
-    expect(summarize(deriveFeatures(r, { engine: "orca" })).off).toBe("没有设置：终端与引擎");
+    expect(summarize(deriveFeatures(r, { engine: "orca" })).off).toBe("未配置：终端与引擎");
   });
 
   it("leaves a feature out when an older node does not report its checks, and shows an unknown bad check", () => {
@@ -126,7 +126,7 @@ describe("fix", () => {
   });
 
   it("says what it did", () => {
-    expect(fixResult({ ok: true, checks: [], fixed: ["a", "b"] })).toEqual({ text: "已重新生成 2 项", tone: "ok" });
+    expect(fixResult({ ok: true, checks: [], fixed: ["a", "b"] })).toEqual({ text: "已重新生成 2 个文件", tone: "ok" });
     expect(fixResult({ ok: true, checks: [] })).toEqual({ text: "没有需要重新生成的文件", tone: "ok" });
     expect(fixResult({ ok: false, checks: [{ name: "fix", status: "fail", detail: "重新生成失败：磁盘已满" }] })).toEqual({ text: "重新生成失败：磁盘已满", tone: "error" });
   });

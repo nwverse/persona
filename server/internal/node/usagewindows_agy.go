@@ -10,13 +10,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
 
+	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -26,7 +26,7 @@ const (
 )
 
 var (
-	agyNativeHTTPPortRE = regexp.MustCompile(`(?m)random port at (\d+) for HTTP(?:\r?\n|$)`)
+	agyNativeHTTPPortRE = lazyre.New(`(?m)random port at (\d+) for HTTP(?:\r?\n|$)`)
 	agyLocalUserStatus  = probeLocalAgyUserStatus
 )
 

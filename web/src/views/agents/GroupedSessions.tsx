@@ -202,7 +202,7 @@ function GroupList<T>({ groups, onExcluded, dimension, kind, scope, source, rend
     return next;
   }, [groups, dimension, heldSeen, chipless, scope.state, justFinished]);
   const shown = all ? adjusted : adjusted.slice(0, SESSION_LIST_METRICS.groupOptions);
-  const opens = (group: SessionGroup, i: number) => dimension === "todo" ? !group.rest : i < SESSION_LIST_METRICS.groupsOpen || (dimension === "state" && group.key === JUST_FINISHED_KEY);
+  const opens = (group: SessionGroup, i: number) => dimension === "todo" ? !group.rest && (i < SESSION_LIST_METRICS.groupsOpen || group.needs > 0) : i < SESSION_LIST_METRICS.groupsOpen || (dimension === "state" && group.key === JUST_FINISHED_KEY);
   const hideIdleIds = useMemo(() => (dimension === "state" && heldSeen?.rows.length ? new Set(heldSeen.rows.map(source.identity)) : undefined), [dimension, heldSeen, source.identity]);
   const several = !nested && groupMachines(adjusted) > 1;
   return <>
