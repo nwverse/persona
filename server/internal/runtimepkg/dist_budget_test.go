@@ -70,9 +70,10 @@ import (
 // 290,316 B exactly. The merge also restores one missing ASI semicolon in main's runtime.js.
 // With the compat.js declaration fix (#16771), main measured 290,321 B.
 // Keeping legacy effort-only requests in the selected model family adds 694 B (291,015 B).
+// Antigravity keep_always declaration, Assistant allow_once-absent fail-closed guard, and MultiEdit/NotebookEdit tool mapping add 101 B (291,116 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 291_015
+	const budget = 291_116
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {
