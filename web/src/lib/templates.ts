@@ -1,13 +1,15 @@
 // Templates (#16772, docs/web/web.md "Templates"): a named, versioned set of configuration applied in one step from
 // Settings › General › Templates, and handed to another Persona as a link (`/settings?template=…`). A template has up
 // to four parts, each applied where it belongs:
-//   - browser: this browser's looks (phone navigation, sidebar icons, optional web modules switched off);
+//   - browser: this browser's looks (phone navigation, sidebar icons, the lean looks of lib/looks.ts, optional web
+//     modules switched off);
 //   - navigation: the hub's start page and sidebar page arrangement (`PUT /api/v1/navigation`, every device follows);
 //   - extensions: per installed extension, whether it is on and part of its configuration (its own routes);
 //   - settings: persona_settings keys, checked and written by the manager (`POST /api/v1/templates/settings`).
 // The format is `schema/template.schema.json`. A template never carries secrets: extension secrets have their own
 // routes, and the manager refuses settings that grant permissions or speak for the owner.
 // Parsing, links and the plan are pure; applying takes its writers as arguments so it can be tested without a hub.
+import { isLookMode, LOOK_NAMES, LOOKS, type LookMode, type LookName } from "./looks";
 import { PHONE_NAV_MODES, type PhoneNavMode } from "./phone-nav";
 import { SIDEBAR_ICON_MODES, type SidebarIconMode } from "./sidebar-icons";
 import { readPrefs, type SidebarPrefs } from "./sidebar-pages";
@@ -32,7 +34,7 @@ export interface PersonaTemplate {
   id: string;
   name: Localized;
   description?: Localized;
-  browser?: { phone_nav?: PhoneNavMode; sidebar_icons?: SidebarIconMode; modules_off?: string[] };
+  browser?: { phone_nav?: PhoneNavMode; sidebar_icons?: SidebarIconMode; modules_off?: string[] } & { [N in LookName]?: LookMode<N> };
   /** `pages: null` puts the sidebar back to its default arrangement. */
   navigation?: { start?: string; pages?: SidebarPrefs | null };
   extensions?: Record<string, { enabled?: boolean; config?: JsonObject }>;
@@ -76,6 +78,11 @@ export function parseTemplate(raw: unknown): { template: PersonaTemplate } | { e
     if (b.sidebar_icons !== undefined) {
       if (!(SIDEBAR_ICON_MODES as readonly unknown[]).includes(b.sidebar_icons)) return { error: "browser.sidebar_icons must be monochrome or colored" };
       t.browser.sidebar_icons = b.sidebar_icons as SidebarIconMode;
+    }
+    for (const name of LOOK_NAMES) {
+      if (b[name] === undefined) continue;
+      if (!isLookMode(name, b[name])) return { error: `browser.${name} must be ${LOOKS[name].join(" or ")}` };
+      (t.browser as Record<string, unknown>)[name] = b[name];
     }
     if (b.modules_off !== undefined) {
       if (!Array.isArray(b.modules_off) || b.modules_off.length > 32 || !b.modules_off.every((m) => typeof m === "string" && ID.test(m))) return { error: "browser.modules_off must list module ids" };
@@ -190,8 +197,8 @@ export function readTemplateInput(input: string, builtIns: readonly PersonaTempl
 
 // ── the built-ins ──
 
-/** The built-in templates: Default, Persona as it comes (the top switch, every optional web module on, the sidebar's
- *  default pages). Any other setup is a template of its own, shared as a link or JSON. Names come from the catalog. */
+/** The built-in templates: Default, Persona as it comes (the top switch, the full main chat, Agents and Settings, every
+ *  optional web module on, the sidebar's default pages). Any other setup is a template of its own, shared as a link or JSON. Names come from the catalog. */
 export function builtInTemplates(name: (key: string) => string): PersonaTemplate[] {
   return [
     {
@@ -199,7 +206,7 @@ export function builtInTemplates(name: (key: string) => string): PersonaTemplate
       id: "default",
       name: name("default_name"),
       description: name("default_description"),
-      browser: { phone_nav: "switch", sidebar_icons: "monochrome", modules_off: [] },
+      browser: { phone_nav: "switch", sidebar_icons: "monochrome", main_chat: "full", agents_view: "full", settings_view: "full", modules_off: [] },
       navigation: { pages: null },
     },
   ];
@@ -225,6 +232,8 @@ export interface TemplateHost {
   setPhoneNav(m: PhoneNavMode): void;
   sidebarIcons(): SidebarIconMode;
   setSidebarIcons(m: SidebarIconMode): void;
+  look<N extends LookName>(name: N): LookMode<N>;
+  setLook<N extends LookName>(name: N, mode: LookMode<N>): void;
   /** the optional web modules this browser can switch, and which are off */
   modules(): { id: string; title: string; off: boolean }[];
   setModuleOff(id: string, off: boolean): void;
@@ -247,6 +256,8 @@ export interface TemplateWords {
   phoneNavMode: (m: PhoneNavMode) => string;
   sidebarIcons: string;
   sidebarIconsMode: (m: SidebarIconMode) => string;
+  look: (name: LookName) => string;
+  lookMode: (name: LookName, mode: string) => string;
   module: (title: string) => string;
   on: string;
   off: string;
@@ -304,6 +315,12 @@ async function run(t: PersonaTemplate, host: TemplateHost, dry: boolean): Promis
   if (b?.sidebar_icons) {
     const now = host.sidebarIcons();
     await attempt({ part: "browser", label: w.sidebarIcons, detail: arrow(w.sidebarIconsMode(now), w.sidebarIconsMode(b.sidebar_icons)) }, now !== b.sidebar_icons, () => host.setSidebarIcons(b.sidebar_icons!));
+  }
+  for (const name of LOOK_NAMES) {
+    const wanted = b?.[name];
+    if (!wanted) continue;
+    const now = host.look(name);
+    await attempt({ part: "browser", label: w.look(name), detail: arrow(w.lookMode(name, now), w.lookMode(name, wanted)) }, now !== wanted, () => host.setLook(name, wanted));
   }
   if (b?.modules_off) {
     const wanted = new Set(b.modules_off);

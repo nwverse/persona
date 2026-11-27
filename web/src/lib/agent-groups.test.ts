@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentGrouping, type AgentMutes, awaitsReply, buildAgentGroups, hostsOf, isQuiet, justFinished, replyAsk, sessionHost, splitAgentSessions } from "./agent-groups";
+import { agentGrouping, type AgentMutes, awaitsReply, buildAgentGroups, hostsOf, isQuiet, justFinished, replyAsk, runningNow, sessionHost, splitAgentSessions } from "./agent-groups";
 import { byAttention } from "./format";
 import type { AgentState, Machine, Session } from "./types";
 
@@ -65,6 +65,16 @@ describe("所有分组共用 live 与最近的边界", () => {
     expect(recent).toHaveLength(40);
     expect(recent[0].updated_at).toBe(date(23));
     expect(ids(all)).toEqual(before);
+  });
+});
+
+describe("runningNow", () => {
+  it("keeps the live Agents on an online computer, not one a restart stopped", () => {
+    const all = [session("working", "working"), session("idle", "idle"), session("waits", "needs_you"),
+      session("restarted", "unknown", { status: "interrupted" }), session("offline", "offline"),
+      session("machine-offline", "working", { machine_id: "machine-off" })];
+    const { live } = splitAgentSessions(all, machines);
+    expect(ids(runningNow(live, machines))).toEqual(["working", "idle", "waits"]);
   });
 });
 

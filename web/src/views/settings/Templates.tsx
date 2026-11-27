@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import { currentLanguage, t } from "../../i18n";
 import { api, ApiError } from "../../lib/api";
 import { extensionDetail, setExtensionConfigPreservingEntries, setExtensionEnabled, type JsonObject } from "../../lib/extensions";
+import { look, setLook } from "../../lib/looks";
 import { phoneNavMode, setPhoneNavMode, type PhoneNavMode } from "../../lib/phone-nav";
 import { setSidebarIconMode, sidebarIconMode, type SidebarIconMode } from "../../lib/sidebar-icons";
 import { getSidebarPrefs, resetSidebarPrefs, restoreSidebarPrefs } from "../../lib/sidebar-pages";
@@ -45,6 +46,8 @@ export function templateHost(): TemplateHost {
     setPhoneNav: setPhoneNavMode,
     sidebarIcons: sidebarIconMode,
     setSidebarIcons: setSidebarIconMode,
+    look,
+    setLook,
     modules: () => registeredModules().map((d) => ({ id: d.id, title: d.title(), off: moduleSwitchedOff(d.id) })),
     setModuleOff: (id, off) => {
       if (!setModuleSwitchedOff(id, off)) throw new Error(tt("storage_failed"));
@@ -81,6 +84,8 @@ export function templateHost(): TemplateHost {
       phoneNavMode: (m: PhoneNavMode) => tt(`phone_nav_${m}`),
       sidebarIcons: t("ui-look.sidebar_icons"),
       sidebarIconsMode: (m: SidebarIconMode) => t(`ui-look.sidebar_icons_${m}`),
+      look: (name) => tt(`item_look_${name}`),
+      lookMode: (name, mode) => tt(`look_${name}_${mode}`),
       module: (title) => tt("item_module", { title }),
       on: tt("on"),
       off: tt("off"),

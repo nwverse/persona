@@ -29,6 +29,9 @@
       "properties": {
         "phone_nav": {"type": "string", "enum": ["switch", "tabs"]},
         "sidebar_icons": {"type": "string", "enum": ["monochrome", "colored"]},
+        "main_chat": {"description": "plain: the main conversation as questions and replies (#16898).", "type": "string", "enum": ["full", "plain"]},
+        "agents_view": {"description": "active: Agents lists only the sessions running now, by computer (#16898).", "type": "string", "enum": ["full", "active"]},
+        "settings_view": {"description": "short: Settings lists a few categories, the rest under More settings (#16898).", "type": "string", "enum": ["full", "short"]},
         "modules_off": {"type": "array", "maxItems": 32, "items": {"$ref": "#/$defs/ID"}}
       }
     },

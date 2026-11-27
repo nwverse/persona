@@ -111,6 +111,13 @@ export function splitAgentSessions(all: Session[], machines: Machine[], keepOffl
   return { live, recent };
 }
 
+/** The Agents running now (#16898, lib/looks.ts `agents_view: "active"`): live on a computer that is online, not one a
+ *  restart stopped (it can be resumed but is not running) nor one whose host is not known. */
+export function runningNow(live: Session[], machines: Machine[]): Session[] {
+  const online = new Set(machines.filter((m) => m.online).map((m) => m.id));
+  return live.filter((s) => online.has(s.machine_id) && activityOf(s) !== "offline" && activityOf(s) !== "unknown" && viewOf(s).reason?.kind !== "restart_interrupted");
+}
+
 export interface Space {
   key: string;
   machineId: string;

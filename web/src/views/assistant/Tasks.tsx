@@ -1090,9 +1090,12 @@ const LazyDecisionEntry = lazyPage(() => import("./DecisionPager").then((module)
 const LazyAssistantTray = lazyPage(() => import("./AssistantTrayContents").then((module) => module.AssistantTrayContents));
 
 export const AssistantActionBar = memo(function AssistantActionBar({ conversation, ownAsks = NO_ASKS, turnAsks = NO_ASKS,
-  taskDecisions = NO_DECISIONS, turnItems, focusDecision, inCall = false, openDecisionSource = () => {}, sourceOpen = false }: {
+  taskDecisions = NO_DECISIONS, turnItems, focusDecision, inCall = false, openDecisionSource = () => {}, sourceOpen = false, plain = false }: {
   conversation: string; ownAsks?: Interaction[]; turnAsks?: readonly Interaction[]; taskDecisions?: readonly DecisionCard[]; focusDecision?: string; inCall?: boolean;
   turnItems?: readonly Item[]; openDecisionSource?: (card: DecisionCard, target?: string) => void; sourceOpen?: boolean;
+  /** the plain main chat (#16898, lib/looks.ts): only what waits on the owner (the decisions, the next unanswered
+   *  question), no to-do tray entries and no tray */
+  plain?: boolean;
 }) {
   const [tray, setTrayNow] = useState<AssistantTray | null>(null);
   // the open tray filling the chat column (#4656), for going through many cards; closing or switching trays undoes it
@@ -1234,7 +1237,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
   // Parked is a peer, not folded inside In progress; keep an emptied tray reachable until it closes. To verify
   // (`user_check`) sits beside In progress as a calm non-attention entry while present. Finished comes last, as what
   // just finished comes after the unfinished work on the To-dos page (#10922).
-  const entryKeys: AssistantTray[] = ["needs", "running", ...(entries.verify.length > 0 || tray === "verify" ? ["verify" as const] : []), ...(entries.parked.length > 0 || tray === "parked" ? ["parked" as const] : []), ...(entries.review.length > 0 || tray === "review" ? ["review" as const] : []), ...(entries.finished.length > 0 || tray === "finished" ? ["finished" as const] : [])];
+  const entryKeys: AssistantTray[] = plain ? [] : ["needs", "running", ...(entries.verify.length > 0 || tray === "verify" ? ["verify" as const] : []), ...(entries.parked.length > 0 || tray === "parked" ? ["parked" as const] : []), ...(entries.review.length > 0 || tray === "review" ? ["review" as const] : []), ...(entries.finished.length > 0 || tray === "finished" ? ["finished" as const] : [])];
   const entryButtons = useRef<Partial<Record<AssistantTray, HTMLButtonElement | null>>>({});
   // Esc closes the open tray from its entry, its header and its rows, and hands the focus back to the entry; it stops
   // there, never on to the window, where the chat's Esc would stop a working turn. Not while a menu or dialog is open
@@ -1258,7 +1261,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
     // closed it is the capsules alone, which never give way to the cards over them (#10347, #11794)
     <div ref={bar} className={cx("flex min-h-0 flex-col gap-2", !tray && !showPager ? "shrink-0" : "shrink")} data-assistant-actionbar onKeyDownCapture={onTrayKey}>
       {decisionPanel}
-      {tray && (
+      {tray && !plain && (
         <Suspense fallback={<Loading />}>
           <LazyAssistantTray tray={tray} id={trayId} label={labels[tray]} expanded={expanded}
             toggleExpanded={() => setExpanded((value) => !value)} openBoard={() => setBoard(true)} close={() => setTray(null)}
@@ -1270,7 +1273,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
       {/* The entries are the dock's old "All" / task capsules (DOCK_CAPSULE), content-wide at the leading edge; the
           open tray is the selected capsule. The scroller pads by the focus ring's width and takes it back, as the
           dock's did, so a large font scrolls sideways instead of clipping the ring. */}
-      <div className="scrollbar-none -my-1 flex min-w-0 shrink-0 items-center gap-2 overflow-x-auto py-1">
+      {(!plain || pager.count > 0 || stackedAsks.length > 0) && <div className="scrollbar-none -my-1 flex min-w-0 shrink-0 items-center gap-2 overflow-x-auto py-1">
         {pager.count > 0 && <Suspense fallback={null}>
           <LazyDecisionEntry pager={pager} expanded={showPager} controls={decisionId} capsule={DOCK_CAPSULE} onToggle={() => {
             if (showPager) pager.collapse();
@@ -1304,7 +1307,7 @@ export const AssistantActionBar = memo(function AssistantActionBar({ conversatio
             </button>
           );
         })}
-      </div>
+      </div>}
       {board && <Suspense fallback={null}><TaskBoard open conversation={conversation} onClose={() => setBoard(false)} /></Suspense>}
     </div>
   );

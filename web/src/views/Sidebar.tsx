@@ -19,7 +19,8 @@ import { AGENT_FILTERS, agentFilter, applyFilter, arrangeSpaces, extendKept, fil
 import { applyDimensionFilters, buildAgentFacets, DEFAULT_DIMENSION_FILTERS, hasActiveDimensionFilters, type AgentDimensionFilters, type AgentFacetCounts } from "../lib/agent-chatlist-filter";
 import { pagedFilterOf, resetAgentListFilters, setAgentListFilters, useAgentListFilters } from "../lib/agent-list-filters";
 import { AgentChatListRow, AgentFilterButton, AgentFilterChips } from "./agents/AgentChatListControls";
-import { agentGrouping, AGENT_GROUPINGS, type AgentGrouping, buildAgentGroups, buildSpaces, heldPlace, hostsOf, isHeldSeen, isQuiet, needsSeenOf, sessionHost, splitAgentSessions, type AgentGroup, type Space } from "../lib/agent-groups";
+import { useActiveAgentsView } from "../lib/looks";
+import { agentGrouping, AGENT_GROUPINGS, type AgentGrouping, buildAgentGroups, buildSpaces, heldPlace, hostsOf, isHeldSeen, isQuiet, needsSeenOf, runningNow, sessionHost, splitAgentSessions, type AgentGroup, type Space } from "../lib/agent-groups";
 import { isMuted } from "../lib/session-actions";
 import { heldOrderFor, holdNotedSeen, noteShownUnseen, releaseAllSeen, releaseSeen, useHeldSeenOrder, useSeenRowsMode, useSeenRowsNoticed, useSeenVisit } from "../lib/seen-rows";
 import { reportBoundary } from "../lib/error-reports";
@@ -776,7 +777,9 @@ function AgentsBlock(props: AgentsBlockProps) {
   useEffect(() => { if (displayLoaded && !showFilter && storedFilters !== DEFAULT_DIMENSION_FILTERS) resetAgentListFilters(); }, [displayLoaded, showFilter, storedFilters]);
   const [stored, setGrouping] = useState(() => storedValue("persona.agentGrouping"));
   useEffect(() => onGrouping(setGrouping), []);
-  const grouping = agentGrouping(stored);
+  // Running now (#16898, lib/looks.ts `agents_view: "active"`): the complete list, by computer, only what runs
+  const activeOnly = useActiveAgentsView();
+  const grouping = activeOnly ? "machine" : agentGrouping(stored);
   // a hub without todos shows by machine, a by-todo choice kept for when it has them; to-dos that cannot be read, by
   // status until they can
   const shown = todosSupported === false && grouping === "todo" ? "machine" : todosUnread && grouping === "todo" ? "state" : grouping;
@@ -788,7 +791,7 @@ function AgentsBlock(props: AgentsBlockProps) {
   // A filter or view the hub's paged list cannot ask for (model, pinned, search scope, several computers, the chat list…)
   // is answered by the complete list, which has every one of them: never a filter that half works
   const typedViews = useStore(hasAgentViews);
-  const paged = shown !== "state" && !(typedViews && showFilter) && pagedAgentList({ bounded, byTodo, todosSupported, pins, stored, several }) && !chatList && pagedFilterOf(dimFilters) !== null;
+  const paged = !activeOnly && shown !== "state" && !(typedViews && showFilter) && pagedAgentList({ bounded, byTodo, todosSupported, pins, stored, several }) && !chatList && pagedFilterOf(dimFilters) !== null;
   const display: AgentsDisplayProps = { showFilter, dimFilters, chatList, displayValue };
   const chooseGrouping = useCallback((g: AgentGrouping) => {
     storeValue("persona.agentGrouping", g);
@@ -800,7 +803,7 @@ function AgentsBlock(props: AgentsBlockProps) {
   }, [props.hover]);
   // `shown !== "repo"` only tells TypeScript what pagedAgentList already rules out
   return paged && shown !== "repo" && !hubUnreachable ? <BoundedAgentsBlock {...props} {...display} grouping={shown} todosUnread={todosUnread && grouping === "todo"} chooseGrouping={chooseGrouping} />
-    : <LegacyAgentsBlock {...props} {...display} grouping={grouping} hubUnreachable={hubUnreachable} chooseGrouping={chooseGrouping} />;
+    : <LegacyAgentsBlock {...props} {...display} grouping={grouping} hubUnreachable={hubUnreachable} chooseGrouping={chooseGrouping} activeOnly={activeOnly} />;
 }
 
 /** The Agents block's title, the paged list's as the complete list's (#6662): unpinning changes nothing above the list. */
@@ -1141,7 +1144,10 @@ function retainedActiveSpaces(): ReadonlySet<string> | undefined {
   }
 }
 
-function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, workspaceActions, add = true, foldable = false, grouping, hubUnreachable, chooseGrouping, showFilter, dimFilters, chatList, displayValue, onHoldsSeen }: AgentsBlockProps & AgentsDisplayProps & { grouping: AgentGrouping; /** useHubUnreachable */ hubUnreachable: boolean; chooseGrouping: (g: AgentGrouping) => void }) {
+const NO_SESSIONS: Session[] = [];
+
+function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, workspaceActions, add = true, foldable = false, grouping, hubUnreachable, chooseGrouping, showFilter, dimFilters, chatList, displayValue, onHoldsSeen, activeOnly = false }: AgentsBlockProps & AgentsDisplayProps & { grouping: AgentGrouping; /** useHubUnreachable */ hubUnreachable: boolean; chooseGrouping: (g: AgentGrouping) => void;
+  /** only the Agents running now, no grouping bar and no Recent (#16898, lib/looks.ts) */ activeOnly?: boolean }) {
   // the current assistant's computers, agents and to-dos (all of them with one assistant)
   const scope = useScope();
   const sidebarMachines = useStore(selectSidebarMachines);
@@ -1239,9 +1245,11 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
     [listed, dimFilters, evalCtx, facets],
   );
   // A host pin keeps its saved conversations in the repository tree, including ones older than Recent's 40 rows.
-  const { live, recent: offline } = useMemo(() => splitAgentSessions(dimFiltered, machines,
-    shownGrouping === "repo" && !chatList && agentRepos.mod ? (s) => agentRepos.mod!.hasWorkspacePin(s, catalog.workspaces, catalog.manager) : undefined),
-  [dimFiltered, machines, shownGrouping, chatList, catalog, agentRepos.mod]);
+  const { live, recent: offline } = useMemo(() => {
+    const split = splitAgentSessions(dimFiltered, machines,
+      shownGrouping === "repo" && !chatList && agentRepos.mod ? (s) => agentRepos.mod!.hasWorkspacePin(s, catalog.workspaces, catalog.manager) : undefined);
+    return activeOnly ? { live: runningNow(split.live, machines), recent: NO_SESSIONS } : split;
+  }, [dimFiltered, machines, shownGrouping, chatList, catalog, agentRepos.mod, activeOnly]);
   const filter = savedFilter === "feishu" && !live.some((s) => matchesFilter(s, "feishu", mutes)) ? "all" : savedFilter;
   const seenMode = useSeenRowsMode();
   const heldOrder = useHeldSeenOrder(seenMode);
@@ -1469,7 +1477,7 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
         {add && <AgentsAdd onNewAgent={onNewAgent} onNavigate={onNavigate} className={TITLE_ICON_TOUCH} />}
       </div>
       <Collapse open={!folded} sidebarFold>
-        <GroupingBar groupings={availableGroupings} selection={shownGrouping} onChoose={chooseGroupingOutOfChatList} />
+        {!activeOnly && <GroupingBar groupings={availableGroupings} selection={shownGrouping} onChoose={chooseGroupingOutOfChatList} />}
         <FilterBar selection={filter} counts={filterTotals} onChoose={choose} />
       </Collapse>
       </div>

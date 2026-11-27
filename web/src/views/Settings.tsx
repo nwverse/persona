@@ -19,6 +19,7 @@ import { useHasUnseenLabs } from "../lib/labs-seen";
 import { Icon, type IconName } from "../ui/icons";
 import { ExtensionThemePicker } from "../ui/ExtensionThemePicker";
 import { setTheme, useTheme, type Theme } from "./theme";
+import { useShortSettings } from "../lib/looks";
 import { Group, Row, Pill, RowConfirm, Switch } from "./settings/SettingsParts";
 import { LanguageRow } from "./settings/LanguageRow";
 import { FontRows, RecentChatsRow, SidebarIconsRow, SidebarUsageRow, SurfaceStyleRow, TextSizeRow, ThemeColorPicker } from "./settings/LookSettings";
@@ -272,6 +273,13 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     return (k !== "extensions" || hasExtensions || tab === "extensions") && (k !== "channels" || hasChannels || tab === "channels") &&
       (k !== "sources" || hasSources || tab === "sources");
   };
+  // Short Settings (#16898, lib/looks.ts `settings_view: "short"`): a few categories in the list, the rest behind More
+  // settings; search still finds every one, and the open category stays listed
+  const short = useShortSettings();
+  const [allTabs, setAllTabs] = useState(false);
+  const inNav = (k: Tab) => shown(k) && (!short || allTabs || SHORT_TABS.has(k) || tab === k);
+  const moreTabs = short && !allTabs ? navGroups(integrationsV2).flatMap((g) => g.tabs).filter((k) => shown(k) && !inNav(k)).length : 0;
+  const more = moreTabs > 0 ? { count: moreTabs, onShow: () => setAllTabs(true) } : null;
   const contentId = useId();
   const configurationOwner = useRef<string | null>(new URLSearchParams(location.search).get("manager"));
   const pick = (rawTab: Tab, rawId: string | null = null, section?: SettingsSection, options?: { anchor?: string; drillDown?: boolean }) => {
@@ -431,7 +439,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
       </header>
       <div className="flex min-h-0 min-w-0 flex-1">
         {!phone && (
-          <SettingsNav tab={tab} query={query} onQuery={setQuery} search={search} shown={shown} integrationsV2={integrationsV2} onPick={pick} onGroup={goGroup} contentId={contentId} />
+          <SettingsNav tab={tab} query={query} onQuery={setQuery} search={search} shown={shown} inNav={inNav} more={more} integrationsV2={integrationsV2} onPick={pick} onGroup={goGroup} contentId={contentId} />
         )}
         <div
           ref={scroller}
@@ -447,7 +455,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
         >
           {listed ? (
             <div className="px-4 py-5" style={{ animation: `fade-up 320ms ${EASE} both` }}>
-              <SettingsList shown={shown} integrationsV2={integrationsV2} onPick={pick} />
+              <SettingsList shown={inNav} more={more} integrationsV2={integrationsV2} onPick={pick} />
             </div>
           ) : (
             <div
@@ -631,12 +639,22 @@ function AgentSections({ section }: { section: SettingsSection | null }) {
 }
 
 /** The desktop left sidebar: a sticky "Settings" title and search box, then the grouped categories. */
-function SettingsNav({ tab, query, onQuery, search, shown, integrationsV2, onPick, onGroup, contentId }: {
+/** The categories Short Settings lists (#16898): what someone running Agents from Persona changes. General holds the
+ *  templates, so a template can always be undone from the list. */
+const SHORT_TABS: ReadonlySet<Tab> = new Set<Tab>(["models", "persona", "integrations", "channels", "extensions", "agents", "general", "hub"]);
+
+/** Short Settings' last row: the categories it leaves out, all listed again on a tap. */
+type MoreTabs = { count: number; onShow: () => void } | null;
+
+function SettingsNav({ tab, query, onQuery, search, shown, inNav = shown, more = null, integrationsV2, onPick, onGroup, contentId }: {
   tab: Tab;
   query: string;
   onQuery: (q: string) => void;
   search: ReturnType<typeof searchSettings>;
   shown: (k: Tab) => boolean;
+  /** the categories listed without a search (Short Settings lists fewer); `shown` still filters the search */
+  inNav?: (k: Tab) => boolean;
+  more?: MoreTabs;
   integrationsV2: boolean;
   onPick: (k: Tab) => void;
   onGroup: (g: SearchGroup) => void;
@@ -690,7 +708,7 @@ function SettingsNav({ tab, query, onQuery, search, shown, integrationsV2, onPic
           </>
         ) : (
           navGroups(integrationsV2).map((g) => {
-            const its = g.tabs.filter(shown);
+            const its = g.tabs.filter(inNav);
             if (!its.length) return null;
             return (
               <div key={g.key} data-settings-nav-group={g.key}>
@@ -703,6 +721,13 @@ function SettingsNav({ tab, query, onQuery, search, shown, integrationsV2, onPic
               </div>
             );
           })
+        )}
+        {!query && more && (
+          <button type="button" data-settings-more onClick={more.onShow} className="mt-2 flex h-8 w-full items-center gap-2 rounded-[7px] px-2.5 text-left text-[13px] text-ink-2 transition-colors hover:bg-hover hover:text-ink">
+            <Icon name="more" size={15} className="shrink-0" />
+            <span className="min-w-0 flex-1 truncate">{t("settings.more_settings")}</span>
+            <span className="shrink-0 tabular-nums text-[11px] text-ink-3">{more.count}</span>
+          </button>
         )}
       </nav>
     </aside>
@@ -747,7 +772,7 @@ function GroupResult({ g, onGroup }: { g: SearchGroup; onGroup: (g: SearchGroup)
 }
 
 /** The phone's first page of Settings: the categories in grouped cards, each opening its page (as on iOS). */
-function SettingsList({ shown, integrationsV2, onPick }: { shown: (k: Tab) => boolean; integrationsV2: boolean; onPick: (k: Tab) => void }) {
+function SettingsList({ shown, more = null, integrationsV2, onPick }: { shown: (k: Tab) => boolean; more?: MoreTabs; integrationsV2: boolean; onPick: (k: Tab) => void }) {
   const labsUnseen = useHasUnseenLabs();
   return (
     <nav aria-label={t("settings.categories")}>
@@ -764,6 +789,11 @@ function SettingsList({ shown, integrationsV2, onPick }: { shown: (k: Tab) => bo
           </Group>
         );
       })}
+      {more && (
+        <Group anchor="nav-more">
+          <Row icon="more" label={t("settings.more_settings")} hint={t("settings.more_settings_hint", { count: more.count })} onClick={more.onShow} />
+        </Group>
+      )}
     </nav>
   );
 }
