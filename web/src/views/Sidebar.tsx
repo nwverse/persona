@@ -358,7 +358,10 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
   // a phone's drawer has the pages as two rows of icons, so its first screen reaches the Agents (#1996)
   const narrow = useMedia(NARROW);
   const activeKey = useActiveKey(route);
-  const workBrowserReady = useStore((s) => s.features.includes("sessions_dimensions"));
+  // On a hub with the work browser the sidebar lists only the Agents waiting on you; with Agents set to running now
+  // (#16898, lib/looks.ts) it lists those Agents, by computer, as the Agents page does
+  const runningAgents = useActiveAgentsView();
+  const workBrowserReady = useStore((s) => s.features.includes("sessions_dimensions")) && !runningAgents;
   // Persona chats are the main conversation (its row above) and the leaders, "常驻" (#4331): making a chat one and ending
   // it is the menu's 设为常驻 / 取消常驻, on the hub for every device. Each says what it has open, Working and Waiting on
   // you, and an open sidebar follows the hub's `directions` (lib/store.ts). Then "最近", the newest of the user's other

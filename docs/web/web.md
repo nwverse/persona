@@ -2395,7 +2395,8 @@ nothing and draws the page as it always was, and Default puts it back.
   (`lib/plain-chat.ts`). What waits on the owner stays: the decisions and the next unanswered question over the
   composer, pending cards, plans, live cards, urgent calls, and a background round while it runs. Other conversations
   are unchanged.
-- `agents_view: "active"`: the Agents list (the page and the sidebar's block) shows only the Agents running now
+- `agents_view: "active"`: the Agents list (the page, and the sidebar's block and the phone's drawer, where a hub with
+  the work browser would show only Pending) shows only the Agents running now
   (`runningNow` in `lib/agent-groups.ts`): those herdr or another terminal engine still has a pane for, on an online
   computer, not stopped by a restart. A session with no pane (a desktop app's chat, a Feishu topic, a runtime's history,
   even with cards still waiting) is left out. Grouped by computer, without the grouping bar and without Recent; the

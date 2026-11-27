@@ -110,10 +110,13 @@ describe("the sidebar's top-level headings (#10637)", () => {
     { list: "the complete Agents list", features: [], titles: ["页面", "Persona 对话", "Agents"] },
     { list: "the paged Agents list", features: ["sessions_list", "sessions_lookup", "sessions_todo", "sessions_agents_only"], titles: ["页面", "Persona 对话", "Agents"] },
     { list: "Pending in Agents' place", features: ["sessions_dimensions"], titles: ["页面", "Persona 对话", "待处理"] },
+    // Agents set to running now (#16898, lib/looks.ts): the list is back in Pending's place
+    { list: "the running Agents in Pending's place", features: ["sessions_dimensions"], titles: ["页面", "Persona 对话", "Agents"], running: true },
   ];
-  for (const { list, features, titles } of cases) {
+  for (const { list, features, titles, running } of cases) {
     it(`share one heading box, folded and unfolded, with ${list}`, async () => {
       if (features.includes("sessions_list")) localStorage.setItem("persona.agentGrouping", "machine");
+      if (running) localStorage.setItem("persona.look.agents", "active");
       await render(features);
       expect(Boolean(host.querySelector("[data-paged-sessions]"))).toBe(features.includes("sessions_list"));
       for (const folded of [false, true]) {
