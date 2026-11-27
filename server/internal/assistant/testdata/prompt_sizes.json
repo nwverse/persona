@@ -107,7 +107,7 @@
   "mcp_tools.assistant#subscription_sources": 1161,
   "mcp_tools.assistant#supervision_finish": 878,
   "mcp_tools.assistant#task_decided": 652,
-  "mcp_tools.assistant#task_plan": 10156,
+  "mcp_tools.assistant#task_plan": 9987,
   "mcp_tools.assistant#task_plan_withdraw": 941,
   "mcp_tools.assistant#task_retry": 878,
   "mcp_tools.assistant#task_review": 11017,
