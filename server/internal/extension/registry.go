@@ -582,9 +582,9 @@ func (r *Registry) logf(format string, args ...any) {
 	}
 }
 
-// put keeps p's row (a built-in one gets its first row here). A built-in held off (KeepOff) is written with its
-// row's own switch, not the hold.
-func (r *Registry) put(ctx context.Context, row Record) error {
+// put keeps p's row (a built-in one gets its first row here) and says its revision, as write does. A built-in held
+// off (KeepOff) is written with its row's own switch, not the hold.
+func (r *Registry) put(ctx context.Context, row Record) (time.Time, error) {
 	r.mu.Lock()
 	if k := r.keptOff[row.ID]; k != nil {
 		row.Enabled = k.row
@@ -593,15 +593,16 @@ func (r *Registry) put(ctx context.Context, row Record) error {
 	return r.write(ctx, row)
 }
 
-// write keeps row as it is.
-func (r *Registry) write(ctx context.Context, row Record) error {
+// write keeps row as it is, at the revision after its own (revisionAfter), and says that revision: the caller puts
+// it in the record with the change, since storage binds an installation by it (#16920).
+func (r *Registry) write(ctx context.Context, row Record) (time.Time, error) {
 	if r.store == nil {
-		return nil // no database: the choice lasts until the hub restarts
+		return row.UpdatedAt, nil // no database: the choice lasts until the hub restarts
 	}
 	if row.InstalledAt.IsZero() {
 		row.InstalledAt = r.now()
 	}
-	row.UpdatedAt = r.now()
+	row.UpdatedAt = r.revisionAfter(row.UpdatedAt)
 	if row.Source == SourceInstalled {
 		row.ExpectedID, row.ExpectedVersion = row.ID, row.Version
 	}
@@ -610,7 +611,7 @@ func (r *Registry) write(ctx context.Context, row Record) error {
 	if len(row.DeleteSecrets) > 0 {
 		store, ok := r.store.(PlanStore)
 		if !ok {
-			return fmt.Errorf("the store cannot delete secrets with the configuration")
+			return time.Time{}, fmt.Errorf("the store cannot delete secrets with the configuration")
 		}
 		err = store.PutExtensionPlan(ctx, []Record{row})
 	} else {
@@ -627,7 +628,21 @@ func (r *Registry) write(ctx context.Context, row Record) error {
 		}
 		r.mu.Unlock()
 	}
-	return err
+	if err != nil {
+		return time.Time{}, err
+	}
+	return row.UpdatedAt, nil
+}
+
+// revisionAfter is the revision a write stores over a row at revision current. The database keeps the later of the
+// one it is given and one microsecond past its own (#16754), at microsecond precision. Given the later of now and
+// one microsecond past current, at that precision, it keeps exactly this one, so the record still matches its row.
+func (r *Registry) revisionAfter(current time.Time) time.Time {
+	next := r.now().Truncate(time.Microsecond)
+	if floor := current.Truncate(time.Microsecond).Add(time.Microsecond); next.Before(floor) {
+		return floor
+	}
+	return next
 }
 
 // Audit records what the hub changed about extension id outside the registry (its sandbox).
