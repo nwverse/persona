@@ -99,9 +99,8 @@ func pagesTestService(t *testing.T, also ...func(string, ...any)) (*Service, *pa
 	}
 	s := withSettings(t, f, New(Options{Hub: hub, Store: func() Store { return st }, Logf: logf}))
 	setSettings(t, s, func(v *Settings) {
-		v.MachineID, v.Main, v.Timezone = "server", "main-1", "UTC"
 		on := true
-		v.Dashboards = &on
+		*v = Settings{MachineID: "server", MainMachineID: "server", Main: "main-1", Timezone: "UTC", Dashboards: &on}
 	})
 	return s, hub, database
 }

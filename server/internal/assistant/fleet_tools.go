@@ -135,6 +135,14 @@ func (s *Service) sessionMCPToolsChecked(ctx context.Context, machine, session s
 	if err != nil {
 		return nil, err
 	}
+	// A proxy reply's guest lists only its one tool, before any other guest's list (bot_handoff.go).
+	if id, handoff, err := s.handoffOf(ctx, machine, session); guest && err == nil && handoff {
+		_ = id
+		if s.isWorkMachine(machine) {
+			return []proto.Tool{}, nil
+		}
+		return guestTools(s.larkModule().HandoffTools(), allowed), nil
+	}
 	if _, room, err := s.roomOf(ctx, machine, session); guest && err == nil && room {
 		if s.isWorkMachine(machine) {
 			return []proto.Tool{}, nil
@@ -155,7 +163,9 @@ func (s *Service) sessionMCPToolsChecked(ctx context.Context, machine, session s
 		}
 		tools := s.mcpTools(ctx, assistant)
 		if assistant {
-			tools = s.guardTools(ctx, machine, session, append(tools, s.healthTools(ctx, machine, session)...))
+			tools = append(tools, s.healthTools(ctx, machine, session)...)
+			tools = append(tools, s.externalSourceTools(ctx, machine, session)...)
+			tools = s.guardTools(ctx, machine, session, tools)
 			tools = append(tools, s.spaceTools(ctx, machine, session)...) // space_state_update (track_space_md.go)
 		}
 		if !assistant {
@@ -224,6 +234,12 @@ func (s *Service) mcpCallWithOrigin(ctx context.Context, machine, session, name 
 	if res, refused := s.inboxVisibilityToolRefusal(ctx, machine, session, origin, name, args); refused {
 		return res
 	}
+	if isExternalSourceTool(name) {
+		if !assistant {
+			return proto.TextResult("unknown tool "+name, true)
+		}
+		return s.Tool(ctx, ToolCall{Name: name, Arguments: args, MachineID: machine, SessionID: session})
+	}
 	if slices.Contains(resourceToolNames, name) {
 		return s.resourceTool(ctx, machine, session, name, args)
 	}
@@ -242,8 +258,25 @@ func (s *Service) mcpCallWithOrigin(ctx context.Context, machine, session, name 
 	if s.ext != nil { // the connectors', Cua's, ego's: ctx is the node's call (its caller going away withdraws a card)
 		if s.ext.ConnectorTool(name) { // a connector is told where the call comes from (connector_context.go)
 			ctx = connector.WithCallContext(ctx, s.connectorCallContext(ctx, session))
+			if assistant && machine != "" && session != "" && !s.isWorkMachine(machine) && !s.isRoom(session) {
+				if _, guest, err := s.guestOf(ctx, machine, session); err == nil && !guest {
+					ctx = connector.WithOwnerCaller(ctx)
+				} else {
+					ctx = connector.WithoutOwnerCaller(ctx)
+				}
+			} else {
+				ctx = connector.WithoutOwnerCaller(ctx)
+			}
 		}
-		if res, ok := s.ext.CallTool(ctx, machine, session, name, args, assistant); ok {
+		callerMachine := machine
+		if name == "browser_fetch_download" {
+			// The file belongs on the machine running this turn. Approval still belongs to the logical conversation.
+			if caller, ok := ctx.Value(logicalAuthenticatedKey{}).(logicalAuthenticated); ok &&
+				caller.Machine == machine && caller.Session == session && caller.Lease != nil && caller.Lease.Load() {
+				callerMachine = caller.PhysicalMachine
+			}
+		}
+		if res, ok := s.ext.CallTool(ctx, callerMachine, session, name, args, assistant); ok {
 			return res
 		}
 	}

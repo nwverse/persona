@@ -105,7 +105,7 @@ internal class ChatInteractionController(
         scope.launch {
             try {
                 val result = submitInteraction(keepUnconfirmedReason = interaction.isCommandInputPermission) { resolve(interaction, resolution,
-                    handoffCard = interaction.isSecretHandoff && resolution.allow == true) }
+                    handoffCard = (interaction.isSecretHandoff || interaction.secretRun?.delivery == "env") && resolution.allow == true) }
                 result.submission.haptic?.let(haptics)
                 taps.value = taps.value.answered(interaction.id, result.card)
                 if (result.withdraw) {

@@ -29,6 +29,7 @@ export function isCriticalItem(item: Item): boolean {
 export interface ItemCoalescer {
   push(batch: Item[], immediate?: boolean): void;
   flush(): void;
+  drain(): Item[];
   cancel(): void;
 }
 
@@ -60,7 +61,10 @@ export function createItemCoalescer(
 
   return {
     push(batch, immediate = false) {
-      if (!batch.length) return;
+      if (!batch.length) {
+        if (immediate) commit();
+        return;
+      }
       pending = pending.length ? mergeItems(pending, batch) : batch;
       const now = clock.now();
       const elapsed = now - lastEmit;
@@ -74,6 +78,13 @@ export function createItemCoalescer(
     },
     flush() {
       commit();
+    },
+    drain() {
+      stop();
+      const batch = pending;
+      pending = [];
+      lastEmit = -Infinity;
+      return batch;
     },
     cancel() {
       stop();

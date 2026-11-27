@@ -44,6 +44,7 @@ func (s *Service) fitEngineLauncher(ctx context.Context, m Device, host string, 
 	if !known || !hostRuntime {
 		return "", startAgent{}, nil, false
 	}
+	list = s.launchersWithinScope(ctx, m.ID, list)
 	discovered := make([]ConfiguredLauncher, 0, len(list))
 	for _, l := range list {
 		discovered = append(discovered, ConfiguredLauncher{Launcher: l})
@@ -165,7 +166,7 @@ func (s *Service) launcherKindOn(ctx context.Context, machine, name string) stri
 		return a
 	}
 	switch name {
-	case "codex", "traex", "omp":
+	case "codex", "traex", "omp", "agy":
 		return name
 	}
 	return "claude"

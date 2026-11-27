@@ -60,6 +60,14 @@ import java.time.Instant
 
 private const val AGENTS_PREFETCH_ROWS = 6
 
+/** The unread rows a bulk confirmation counts, and every row it releases from this visit's held Seen places. */
+internal data class MarkAllSeenBatch(val unread: List<AgentSession>, val release: List<AgentSession>)
+
+internal fun markAllSeenBatch(rows: List<AgentSession>): MarkAllSeenBatch {
+    val release = rows.distinctBy(AgentSession::id)
+    return MarkAllSeenBatch(release.filter { it.unseen }, release)
+}
+
 /** Inputs supplied by the shell's single merged list. The footer is outside its scroll viewport. */
 class AgentsSidebarLayout(
     val prefix: LazyListScope.() -> Unit,
@@ -172,6 +180,9 @@ internal fun AgentsScreen(
     val requestHistory by model.requestHistory.collectAsStateWithLifecycle()
     val refreshing by model.refreshing.collectAsStateWithLifecycle()
     val notice by model.notice.collectAsStateWithLifecycle()
+    val explainSeenRows = !page.preferences.seenRowsNoticed &&
+        page.list.groups.any { group -> group.visibleRows.any { it.seenPlace != null } }
+    LaunchedEffect(explainSeenRows) { if (explainSeenRows) model.showSeenRowsNotice() }
     val hubNotice by model.hubNotice.collectAsStateWithLifecycle()
     val herdrStates by (model.herdr?.states ?: remember { kotlinx.coroutines.flow.MutableStateFlow(emptyMap<String, HerdrState>()) }).collectAsStateWithLifecycle()
     val startingHerdr by (model.herdr?.starting ?: remember { kotlinx.coroutines.flow.MutableStateFlow(emptySet<String>()) }).collectAsStateWithLifecycle()
@@ -185,7 +196,7 @@ internal fun AgentsScreen(
     var operationDialog by remember { mutableStateOf<AgentOperationDialog?>(null) }
     var pickingTodoForSession by remember { mutableStateOf<Session?>(null) }
     // "Mark all as read" asks first and names how many it marks (iOS confirmReadAll).
-    var confirmRead by remember { mutableStateOf<List<AgentSession>?>(null) }
+    var confirmRead by remember { mutableStateOf<MarkAllSeenBatch?>(null) }
     /** A project being put on a to-do ("Link to to-do…"): its machine and its name as the hub keys it. */
     var pickingTodoForSpace by remember { mutableStateOf<Pair<String, String>?>(null) }
     val todos by (model.tasks?.todos ?: remember { kotlinx.coroutines.flow.MutableStateFlow(emptyList()) }).collectAsStateWithLifecycle()
@@ -369,7 +380,10 @@ internal fun AgentsScreen(
         sidebar.onSearchPicked()
         openRow(picked.listSession(page.preferences))
     }
-    fun newSession(space: AgentSpacePreset? = null) { creationModel?.startIn(space); newAgent = true }
+    fun newSession(space: AgentSpacePreset? = null, project: AgentProjectFolder? = null) {
+        creationModel?.startIn(space, project)
+        newAgent = true
+    }
     // Built with the page off the main thread (AgentsViewModel).
     val spaces = page.spaces
     // The list rows and the space page share one session menu and one space menu; [nested] rows sit under "Subtasks (N)".
@@ -421,14 +435,14 @@ internal fun AgentsScreen(
     val spaceMenu: @Composable (AgentSpace, Boolean) -> Unit = { space, inList ->
         val session = space.members.first().session
         // Mark all as read: the finished ones nobody has seen, Just finished ones too (#9786)
-        val unread = space.members.filter { it.unseen }
+        val markAll = markAllSeenBatch(space.members)
         // A whole project on a to-do (#1616, iOS SpaceTodoMenu): only a herdr space the hub can name, on a hub that knows projects.
         val todoSpace = session.todoSpaceName?.takeIf { model.tasks?.spacesSupported == true }
         val linked = todoSpace?.let { todos.forSpace(session.machineId, it) }
         AgentSpaceMenu(session, space.preferenceKey in page.preferences.pins.spaces, space.preferenceKey in page.preferences.mutes.spaces,
             operations.busy, onPin = { model.spacePin(session) }, onMute = { model.spaceMute(session) },
             onRename = { operationDialog = AgentOperationDialog.RenameSpace(session) },
-            onMarkRead = unread.takeIf { it.isNotEmpty() }?.let { rows -> { confirmRead = rows } },
+            onMarkRead = markAll.takeIf { it.unread.isNotEmpty() }?.let { batch -> { confirmRead = batch } },
             onOpen = if (inList) ({ navigator.navigate(SpaceRoute(space.id, space.name)) }) else null, compact = inList,
             todo = todoSpace?.let { name ->
                 SpaceTodoActions(linked != null, onLink = { pickingTodoForSpace = session.machineId to name },
@@ -439,15 +453,15 @@ internal fun AgentsScreen(
     // to-do; agents in several spaces, Mark all as read.
     val repoActions: @Composable (AgentListGroup) -> List<JAction> = { repo ->
         val space = page.spacesById[repo.id]
-        if (space != null) {
+        val actions = if (space != null) {
             val session = space.members.first().session
-            val unread = space.members.filter { it.unseen }
+            val markAll = markAllSeenBatch(space.members)
             val todoSpace = session.todoSpaceName?.takeIf { model.tasks?.spacesSupported == true }
             val linked = todoSpace?.let { todos.forSpace(session.machineId, it) }
             agentSpaceActions(session, space.preferenceKey in page.preferences.pins.spaces, space.preferenceKey in page.preferences.mutes.spaces,
                 operations.busy, onPin = { model.spacePin(session) }, onMute = { model.spaceMute(session) },
                 onRename = { operationDialog = AgentOperationDialog.RenameSpace(session) },
-                onMarkRead = unread.takeIf { it.isNotEmpty() }?.let { rows -> { confirmRead = rows } },
+                onMarkRead = markAll.takeIf { it.unread.isNotEmpty() }?.let { batch -> { confirmRead = batch } },
                 onOpen = { navigator.navigate(SpaceRoute(space.id, space.name)) },
                 todo = todoSpace?.let { name ->
                     SpaceTodoActions(linked != null, onLink = { pickingTodoForSpace = session.machineId to name },
@@ -457,10 +471,11 @@ internal fun AgentsScreen(
                         onClick = { navigator.navigate(persona.core.navigation.TodoDetailRoute(todo.id)) })
                 })
         } else {
-            val unread = (repo.rows + page.list.groups.filter { it.under == repo.id }.flatMap { it.rows }).filter { it.unseen }
-            listOfNotNull(JAction(stringResource(R.string.agents_mark_all_read), PhIcons.Check, onClick = { confirmRead = unread })
-                .takeIf { unread.isNotEmpty() })
+            val markAll = markAllSeenBatch(repo.rows + page.list.groups.filter { it.under == repo.id }.flatMap { it.rows })
+            listOfNotNull(JAction(stringResource(R.string.agents_mark_all_read), PhIcons.Check, onClick = { confirmRead = markAll })
+                .takeIf { markAll.unread.isNotEmpty() })
         }
+        actions + listOfNotNull(workspaceCopyPathAction(repo.workspace))
     }
     // "By machine" shows a herdr tab's agents as a group (#2320), as the web's sidebar; the other groupings list one agent a row
     val tabs = page.preferences.grouping == AgentGrouping.MachineSpace
@@ -660,6 +675,7 @@ internal fun AgentsScreen(
                                     owner = entry.owner,
                                     machine = entry.machine,
                                     sidebar = sidebar != null,
+                                    preferHerdrTabName = entry.owner?.let(page.preferences::prefersHerdrTabName) == true,
                                     onClick = {
                                         if (entry.owner != null) openRow(entry.owner.listSession(page.preferences)) else open(entry.row.key)
                                     },
@@ -687,7 +703,9 @@ internal fun AgentsScreen(
                             if (owner != null || sidebar != null) item("needs-you:${row.id}") {
                                 JRow(stringResource(persona.core.designsystem.R.string.designsystem_decision_screen),
                                     subtitle = owner?.let {
-                                        if (sidebar == null) it.title.takeIf(String::isNotBlank) ?: it.sessionId else it.displayTitle
+                                        val preferTab = page.preferences.prefersHerdrTabName(it)
+                                        if (sidebar == null) it.displayTabName(preferTab) ?: it.title.takeIf(String::isNotBlank) ?: it.sessionId
+                                        else it.displayTitle(preferTab)
                                     },
                                     leadingIcon = persona.core.designsystem.icons.PersonaIcons.terminal,
                                     value = names[row.key.machineId], onClick = {
@@ -707,14 +725,15 @@ internal fun AgentsScreen(
             }
             if (page.settings.quick == AgentQuickFilter.Unread && page.list.unreadShown.isNotEmpty()) item("mark-read") {
                 // The same set iOS counts and marks: the list's unread ids, whichever groups (or none) draw them.
-                val unread = remember(page.list, page.sessions) {
+                val markAll = remember(page.list, page.sessions) {
                     val rows = page.list.groups.flatMap { it.rows }.associateBy { it.id }
                     val sessions = page.sessions.associateBy { it.key.path }
-                    page.list.unreadShown.distinct().mapNotNull { id -> rows[id] ?: sessions[id]?.let(::AgentSession) }
+                    val unread = page.list.unreadShown.distinct().mapNotNull { id -> rows[id] ?: sessions[id]?.let(::AgentSession) }
+                    markAllSeenBatch(page.list.groups.flatMap { it.rows } + unread)
                 }
                 JRow(stringResource(R.string.agents_mark_all_read), leadingIcon = PhIcons.Check,
-                    value = pluralStringResource(R.plurals.agents_mark_all_read_count, unread.size, unread.size),
-                    chevron = false, onClick = { confirmRead = unread })
+                    value = pluralStringResource(R.plurals.agents_mark_all_read_count, markAll.unread.size, markAll.unread.size),
+                    chevron = false, onClick = { confirmRead = markAll })
             }
             if (firstPageIncomplete) item("initial-state") {
                 if (page.pagination.failed) JNotice(
@@ -785,6 +804,7 @@ internal fun AgentsScreen(
                             model.countGroup(group)
                         }
                         val space = spacesById[group.id]
+                        val project = group.projectFolder.takeIf { page.pagination.loaded && !page.pagination.paged }
                         // A history group of a session without a directory has no title of its own (AgentHistory.kt).
                         val groupTitle = group.title.text().ifBlank { stringResource(R.string.agents_history_unknown_folder) }
                         val slot = repoSlots[entry.key]
@@ -804,7 +824,10 @@ internal fun AgentsScreen(
                             var sheet by remember { mutableStateOf(false) }
                             AgentRepoHeader(groupTitle, group.folded, { model.fold(group) }, Modifier.repoCard(slot.first, slot.last),
                                 onLongClick = if (actions.isEmpty()) null else ({ sheet = true }),
-                                actionsLabel = stringResource(R.string.agents_repo_actions))
+                                actionsLabel = stringResource(R.string.agents_repo_actions),
+                                main = group.worktree?.main == true,
+                                offline = group.worktree?.offline == true,
+                                pinned = group.worktree?.pinned == true)
                             if (sheet) JActionSheet(actions, { sheet = false }, title = groupTitle)
                         } else if (slot != null && group.repo != null) {
                             val line = group.worktree
@@ -817,23 +840,45 @@ internal fun AgentsScreen(
                                     }
                                 }, quiet = entry.quiet, offline = line?.offline == true, pinned = line?.pinned == true)
                         } else if (entry.space) AgentSpaceHeader(groupTitle, group.folded, { model.fold(group) }, depth = entry.depth, first = entry.first,
-                            quiet = entry.quiet, sessions = group.totalCount ?: group.rows.size, counts = group.headingCounts,
+                            quiet = entry.quiet, sessions = group.sectionCount, counts = group.headingCounts,
                             waiting = group.waitingInBackground, flags = buildList {
                                 if (group.worktree?.pinned == true) add(RowFlag(stringResource(R.string.agents_row_pinned), PersonaIcons.pinned))
+                                if (group.repo == RepoLevel.Repository && group.worktree?.main == true) {
+                                    add(RowFlag(stringResource(persona.core.designsystem.R.string.designsystem_worktree_primary), PhIcons.House))
+                                }
+                                if (group.repo == RepoLevel.Repository && group.worktree?.offline == true) {
+                                    add(RowFlag(stringResource(persona.core.designsystem.R.string.designsystem_worktree_offline), PersonaIcons.offline))
+                                }
                                 if (space != null && space.preferenceKey in page.preferences.pins.spaces) add(RowFlag(stringResource(R.string.agents_flag_space_pinned), PhIcons.PushPin))
                                 if (space != null && space.preferenceKey in page.preferences.mutes.spaces) add(RowFlag(stringResource(R.string.agents_flag_space_muted), PhIcons.Prohibit))
                                 // iOS TodoSpaceTag: the project is on a to-do.
                                 space?.members?.first()?.session?.let { s -> s.todoSpaceName?.let { name -> todos.forSpace(s.machineId, name) } }
                                     ?.let { todo -> add(RowFlag(stringResource(R.string.agents_flag_space_todo, todo.title), PhIcons.ListChecks)) }
-                            }, menu = space?.let { { spaceMenu(it, true) } }, icon = group.repo?.icon,
-                            kind = group.repo?.kind ?: stringResource(R.string.agents_kind_space))
+                            }, menu = {
+                                if (project != null && creationModel != null && connection == ConnectionState.Online &&
+                                    page.machines.any { it.id == project.machineId && it.online }) {
+                                    val projectLabel = listOfNotNull(groupTitle, project.qualifier).joinToString(" · ")
+                                    HeadingAction(PersonaIcons.add, stringResource(R.string.agents_new_agent_in_project, projectLabel),
+                                        onClick = { newSession(project = project) })
+                                }
+                                if (group.workspace != null) {
+                                    val actions = repoActions(group)
+                                    var sheet by remember { mutableStateOf(false) }
+                                    if (actions.isNotEmpty()) {
+                                        HeadingAction(PersonaIcons.moreMenu, stringResource(R.string.agents_repo_actions), { sheet = true })
+                                        if (sheet) JActionSheet(actions, { sheet = false }, title = groupTitle)
+                                    }
+                                }
+                                if (space != null) spaceMenu(space, true)
+                            }, icon = group.repo?.icon, kind = group.repo?.kind ?: stringResource(R.string.agents_kind_space),
+                            qualifier = project?.qualifier)
                         else if (group.id.startsWith("todo/") && group.id != TodoNoneGroup && group.id != TodoManualGroup) {
                             // "By to-do" as iOS (#4338 A5): the to-do's title, its agents' count in the to-do's state, and
                             // the arrow to the to-do.
                             val todoId = group.id.removePrefix("todo/")
                             val todoState = todos.firstOrNull { it.id == todoId }?.state { key -> sessionsByKey[key] }
                             AgentTreeHeader(groupTitle, group.folded, { model.fold(group) }, first = entry.first, icon = PersonaIcons.todo,
-                                counts = listOf(todoState.countTone to group.rows.count { !it.isNestedSubtask }),
+                                counts = listOf(todoState.countTone to group.rows.count(AgentSession::countsInHeading)),
                                 onAction = { navigator.navigate(persona.core.navigation.TodoDetailRoute(todoId)) },
                                 actionLabel = stringResource(R.string.agents_view_todo))
                         } else if (group.id.startsWith(DirectionTaskPrefix)) {
@@ -859,7 +904,7 @@ internal fun AgentsScreen(
                             } else null
                             AgentAppProjectRow(
                                 title = groupTitle,
-                                count = group.totalCount ?: group.rows.size,
+                                count = group.sectionCount,
                                 folded = group.folded,
                                 onToggle = { model.fold(group) },
                                 other = group.id.endsWith("/project/other#"),
@@ -875,14 +920,24 @@ internal fun AgentsScreen(
                             AgentTreeHeader(groupTitle, group.folded, { model.fold(group) }, first = entry.first,
                                 icon = host?.deviceIcon ?: PersonaIcons.machine, online = host?.online,
                                 counts = machineHeadingCounts(group), waiting = group.waitingInBackground)
-                        } else AgentTreeHeader(groupTitle, group.folded, { model.fold(group) }, first = entry.first,
-                            icon = PhIcons.PushPin.takeIf { group.id == "pinned" }
-                                ?: PersonaIcons.backgroundWaiting.takeIf { group.id == "state/background" }
-                                ?: PersonaIcons.recent.takeIf { group.id == RecentGroup }
-                                ?: PersonaIcons.byApp.takeIf { group.id.startsWith("app/") },
-                            counts = group.stateSectionCounts ?: group.todoLooseCounts ?: group.sectionCounts, waitsInBackground = group.id == "state/background",
-                            // Pinned's counts are the states', so a clock counts the agents that only wait in the background apart.
-                            waiting = if (group.stateSectionCounts == null && group.todoLooseCounts == null) group.waitingInBackground else 0)
+                        } else {
+                            val stateCounts = group.stateSectionCounts
+                            val seen = if (stateCounts != null) group.heldSeen else emptyList()
+                            AgentTreeHeader(groupTitle, group.folded, { model.fold(group) }, first = entry.first,
+                                icon = PhIcons.PushPin.takeIf { group.id == "pinned" }
+                                    ?: PersonaIcons.backgroundWaiting.takeIf { group.id == "state/background" }
+                                    ?: PersonaIcons.recent.takeIf { group.id == RecentGroup }
+                                    ?: PersonaIcons.byApp.takeIf { group.id.startsWith("app/") },
+                                counts = stateCounts ?: group.todoLooseCounts ?: group.sectionCounts,
+                                waitsInBackground = group.id == "state/background",
+                                // Pinned counts agents that only wait in the background separately.
+                                waiting = if (stateCounts == null && group.todoLooseCounts == null) group.waitingInBackground else 0,
+                                onAction = if (seen.isEmpty()) null else ({ model.clearSeen(seen.toSet()) }),
+                                actionText = if (seen.isEmpty()) null else {
+                                    pluralStringResource(R.plurals.agents_clear_seen, seen.size, seen.size)
+                                },
+                            )
+                        }
                     }
                     is TreeRowEntry -> item(entry.key, contentType = "session") {
                         val row = entry.row
@@ -906,6 +961,7 @@ internal fun AgentsScreen(
                                 launcher = entry.launcher, branch = entry.branch, hideState = entry.inStateSection,
                                 requestCount = cardCounts[row.session.key] ?: 0, card = requestCards[row.session.key],
                                 mixesComputers = mixesComputers, showHost = showHost, style = page.preferences.rowStyle,
+                                preferHerdrTabName = page.preferences.prefersHerdrTabName(row.session),
                                 heldChildren = heldChildrenByParent[row.session.key].orEmpty(),
                                 onOpenSubagents = { openRowSubagents(row) },
                                 sideUnread = sideUnread, onOpenSide = { side -> model.opened(row); open(side) })
@@ -939,7 +995,8 @@ internal fun AgentsScreen(
                     is TreeTabEntry -> item(entry.key, contentType = "tab") {
                         CompositionLocalProvider(LocalDetailKey provides detail.takeIf { sidebar == null || entry.key == selectedEntry }) {
                             AgentTabEntryRow(entry, now, page.preferences.compact, onOpen = { openRow(entry.tab.lead) }, onToggle = { model.foldTab(entry.tab) },
-                                card = requestCards[entry.tab.lead.session.key], muted = page.preferences.mutes.mutes(entry.tab.lead))
+                                card = requestCards[entry.tab.lead.session.key], muted = page.preferences.mutes.mutes(entry.tab.lead),
+                                preferHerdrTabName = page.preferences.prefersHerdrTabName(entry.tab.lead.session))
                         }
                     }
                     is TreeIdleEntry -> item(entry.key, contentType = "idle") {
@@ -1030,7 +1087,7 @@ internal fun AgentsScreen(
             if (takeoverClient != null) CodexTakeoverBusyPill(takeoverCoordinator, page.sessions)
             if (sidebar == null) AgentsFeedNote(feed, latestPage)
         }
-        persona.core.designsystem.JToastHost(toast, Modifier.align(Alignment.TopCenter).statusBarsPadding())
+        persona.core.designsystem.JToastHost(toast, Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = persona.core.designsystem.ToastTopBarClearance))
     }
     }
     val glassRows = PersonaTheme.style == AppStyle.Glass
@@ -1173,14 +1230,15 @@ internal fun AgentsScreen(
                             }
                         })
                     if (takeoverClient != null) CodexTakeoverDialogs(historyTakeoverCoordinator)
-                    persona.core.designsystem.JToastHost(historyToast, Modifier.align(Alignment.TopCenter).statusBarsPadding())
+                    persona.core.designsystem.JToastHost(historyToast, Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = persona.core.designsystem.ToastTopBarClearance))
                 }
             }
         }
     }
     if (takeoverClient != null) CodexTakeoverDialogs(takeoverCoordinator)
     operationDialog?.let { AgentOperationDialog(it, model, names[it.session.machineId], creationModel?.service,
-        page.machines.firstOrNull { m -> m.id == it.session.machineId }) { operationDialog = null } }
+        page.machines.firstOrNull { m -> m.id == it.session.machineId },
+        preferHerdrTabName = page.preferences.prefersHerdrTabName(it.session)) { operationDialog = null } }
     pickingTodoForSession?.let { targetSession ->
         TodoPickerSheet(
             todos = assistant.todosFor(todos, targetSession.machineId,
@@ -1223,8 +1281,10 @@ internal fun AgentsScreen(
             },
         )
     }
-    confirmRead?.let { rows ->
-        MarkAllReadDialog(rows.size, onDismiss = { confirmRead = null }) { model.markRead(rows) }
+    confirmRead?.let { markAll ->
+        MarkAllReadDialog(markAll.unread.size, onDismiss = { confirmRead = null }) {
+            model.markRead(markAll.unread, clear = true, release = markAll.release)
+        }
     }
     if (newAgent) {
         if (creationModel != null) NewAgentDialog(creationModel, page.machines, connection == ConnectionState.Online,
@@ -1370,6 +1430,8 @@ internal fun SlotRow(
     showHost: Boolean = false,
     /** Glass's row style while the list is not [compact] (#4338 A9); Brief and Board keep their row. */
     style: AgentRowStyle = AgentRowStyle.Avatar,
+    /** Hub setting `use_herdr_tab_name`: promotes the herdr tab name to main title and moves the CLI title to detail. */
+    preferHerdrTabName: Boolean = false,
     /** Held folded children under this parent row, for unified [childRollup] computation. */
     heldChildren: List<Session> = emptyList(),
     /** Tapping the subagent rollup subtitle opens this parent session at Session Overview's Subagents section. */
@@ -1381,11 +1443,15 @@ internal fun SlotRow(
 ) {
     var menu by remember { mutableStateOf(false) }
     val session = row.session
+    val primaryTab = session.displayTabName(preferHerdrTabName)
+    val rowTitle = session.displayTitle(preferHerdrTabName)
+    val titleDetail = session.displayTitleDetail(preferHerdrTabName)
     val source = session.source
     val glass = PersonaTheme.style == AppStyle.Glass
     val content = row.rowContent(AgentRowContext(located = located, machine = machine.takeIf { mixesComputers }, host = showHost,
         // Under its tab's row the agent is named by its agent and whether it started the tab; the tab's row names the tab.
-        pane = if (launcher || branch) AgentPane(session.agentLabel, launcher) else null, slot = slotLabel, stateSection = hideState), muted,
+        pane = if (launcher || branch) AgentPane(session.agentLabel, launcher) else null, slot = slotLabel, stateSection = hideState,
+        preferHerdrTabName = preferHerdrTabName), muted,
         display = AgentListDisplay.of(if (glass) style else AgentRowStyle.Avatar, compact))
     val links = androidx.compose.ui.platform.LocalUriHandler.current
     // "Lark groups" / "Terminal" under the time (#3132, #3043); a botmux session's tag opens its Feishu topic when it has one.
@@ -1398,7 +1464,7 @@ internal fun SlotRow(
     val rowSideUnread = sideUnread?.toRowSideUnread(onOpenSide)
     JSwipeActions(end = onClose?.let { SwipeAction(stringResource(R.string.agents_close), PhIcons.X, Status.NeedsYou, it, destructive = true) }) {
     AgentRow(
-        title = session.displayTitle, status = row.rowStatus(muted), depth = depth, position = position,
+        title = rowTitle, status = row.rowStatus(muted), depth = depth, position = position,
         onClick = onOpen, onLongClick = menuItems?.let { { menu = true } }, compact = compact, muted = muted,
         selected = isSessionSelected(LocalDetailKey.current, session.key),
         // What its card asks while it needs you, else why its host says it waits or stopped, where its work stands, its last words.
@@ -1413,6 +1479,7 @@ internal fun SlotRow(
             // Glass says where it runs, its source, model and to-do on its third line ([place]); view only stays a fact.
             if (glass && source?.readOnly == true) add(RowFact(stringResource(R.string.agents_row_view_only), caution = true))
             if (!glass) {
+                titleDetail?.let { add(RowFact(it)) }
                 // Where a Codex thread or a runtime's session comes from, and when the phone can only read it.
                 source?.let { add(RowFact(listOfNotNull(it.label, it.agentName).joinToString(" / "))) }
                 if (source?.readOnly == true) add(RowFact(stringResource(R.string.agents_row_view_only), caution = true))
@@ -1425,7 +1492,7 @@ internal fun SlotRow(
                 // The model it runs on (#4338 A9): the session's model, else its launcher's, by its short name, never the raw id.
                 session.rowModel?.let { add(RowFact(it)) }
                 session.todo?.let { add(RowFact(stringResource(R.string.agents_row_todo, it.title))) }
-                slotLabel?.let { add(RowFact(it)) }
+                if (primaryTab == null) slotLabel?.let { add(RowFact(it)) }
             }
             if (requestCount > 0) add(RowFact(pluralStringResource(R.plurals.agents_row_requests, requestCount, requestCount), caution = true))
             session.loop?.let { add(RowFact(it.nextRunLabel(agentResources(), now))) }
@@ -1481,7 +1548,7 @@ internal fun SlotRow(
         note = WorkflowSummary.lineFields(session, now)?.let { RowNote(it, WorkflowIcon) },
     )
     }
-    if (menu && menuItems != null) JActionSheet(menuItems(), { menu = false }, title = session.displayTitle)
+    if (menu && menuItems != null) JActionSheet(menuItems(), { menu = false }, title = rowTitle)
 }
 
 @Composable
@@ -1519,14 +1586,18 @@ internal fun AgentTabEntryRow(
     entry: TreeTabEntry, now: Instant, compact: Boolean, onOpen: () -> Unit, onToggle: () -> Unit, card: Interaction? = null,
     /** The lead agent is muted: a muted Awaiting Reply reads as Seen. */
     muted: Boolean = false,
+    preferHerdrTabName: Boolean = false,
 ) {
     val lead = entry.tab.lead
     val session = lead.session
     val titled = entry.tab.launcher ?: entry.tab.members.first()
+    val primaryTab = titled.session.displayTabName(preferHerdrTabName)
+    val tabLabel = if (primaryTab != null) "" else titled.session.slotLabel.orEmpty()
+    val tabTitle = titled.session.displayTitle(preferHerdrTabName)
     val asks = session.askingLine(card)?.text()
     val words = asks ?: session.rowLine(card, now, muted)?.text()
     AgentTabRow(
-        label = titled.session.slotLabel.orEmpty(), title = titled.session.displayTitle, status = lead.rowStatus(muted),
+        label = tabLabel, title = tabTitle, status = lead.rowStatus(muted),
         agents = entry.tab.members.size, folded = entry.folded, onToggle = onToggle, onClick = onOpen,
         depth = entry.depth, position = GroupPosition(entry.first, entry.last),
         // "Codex · Needs approval: …": the card's own words already have a colon
@@ -1549,6 +1620,9 @@ internal fun closeSwipe(row: AgentSession, busy: Boolean, close: () -> Unit): ((
  * "Subtasks (N)", offers no Pin: Pinned lists rows of their own only, so it would not move (#4494); a pin it has can go.
  */
 @Suppress("DEPRECATION")
+internal fun forkBlockedByTurn(session: Session): Boolean =
+    session.isLive && (session.agentState == AgentState.Working || session.agentState == AgentState.NeedsYou)
+
 @Composable
 internal fun AgentSessionMenuItems(
     row: AgentSession, pinned: Boolean, muted: Boolean, busy: Boolean,
@@ -1582,7 +1656,7 @@ internal fun AgentSessionMenuItems(
         }
         onAttach?.let { add(JAction(stringResource(R.string.agents_action_attach), PhIcons.PlugsConnected, enabled = !busy, onClick = it)) }
         if (onFork != null) {
-            val turnRunning = row.state == AgentState.Working || row.state == AgentState.NeedsYou
+            val turnRunning = forkBlockedByTurn(session)
             add(JAction(
                 stringResource(persona.feature.chat.R.string.chat_menu_fork),
                 PersonaIcons.forkChat,
@@ -1692,7 +1766,11 @@ internal val AgentState.label: String @Composable get() = designStatus.localized
  * A row's state colour: Awaiting Reply (#5096) and Just finished (#9786) take Unread's, since they wait on the user as
  * much; a muted one is just Seen.
  */
-internal fun AgentSession.rowStatus(muted: Boolean): Status = if ((asksYou || showsJustFinished) && !muted) Status.Unread else state.designStatus
+internal fun AgentSession.rowStatus(muted: Boolean): Status = when {
+    seenPlace != null -> Status.Idle
+    (asksYou || showsJustFinished) && !muted -> Status.Unread
+    else -> state.designStatus
+}
 
 /**
  * The row's state in words, as iOS's default row (#4338 A9, `rowStateWord`): only what its dot does not say alone, Needs

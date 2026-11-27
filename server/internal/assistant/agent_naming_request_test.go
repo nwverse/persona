@@ -291,7 +291,7 @@ func TestRequestedAgentNameRefusals(t *testing.T) {
 		}, status: http.StatusBadGateway, code: "dialogue_unavailable", retryable: true, reason: "dialogue_unavailable"},
 		{name: "ledger write", role: roleFull, sid: "s1", prepare: func(t *testing.T, s *Service, f *fakeHub) {
 			base := s.store()
-			s.store = func() Store { return failingAgentNameStore{base} }
+			s.setStore(func() Store { return failingAgentNameStore{base} })
 		}, status: http.StatusInternalServerError, code: "save_failed", retryable: true, reason: "result_write_failed", modelRuns: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

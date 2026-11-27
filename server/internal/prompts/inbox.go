@@ -181,15 +181,26 @@ type InboxAgent struct {
 	Notes   []string // what came since (the user's answers…), each rendered (inbox/handling/*)
 	// Linked: the user's task the item is about (the judge's task_id), its progress for the reply.
 	Linked *InboxTask
-	Lark   *InboxAgentLark
-	Doc    *InboxAgentDoc
-	Moment *InboxAgentMoment
-	Mail   *InboxAgentMail
+	// HandoffTargets are the eligible existing conversations on this manager (main, leaders, linked task)
+	// that kind "handoff" may propose handing the item to (#13562).
+	HandoffTargets []InboxHandoffTarget
+	Lark           *InboxAgentLark
+	Doc            *InboxAgentDoc
+	Moment         *InboxAgentMoment
+	Mail           *InboxAgentMail
 	// Connector: an item of a connector's (GitHub…).
 	Connector *InboxAgentConnector
 	KB        *KBContext // what the knowledge base knows about the item's chat
 	// KnowledgeDir: the knowledge base directory the KB part names; "" is the default ~/.persona/data.
 	KnowledgeDir string
+}
+
+// InboxHandoffTarget is an eligible existing conversation on this manager listed in inbox/agent (#13562).
+type InboxHandoffTarget struct {
+	Machine string
+	Session string
+	Role    string // main | leader | task
+	Title   string
 }
 
 // InboxAgentLark is the item's Feishu chat; Account is the gateway account it is in when that is not lark.account.
@@ -400,4 +411,21 @@ func RenderInboxReplyPolicyInput(in InboxReplyPolicyInput) string {
 		return render("inbox/reply_policy_legacy_input", in)
 	}
 	return render("inbox/reply_policy_input", in)
+}
+
+// RenderExternalInboxTriage gives the small-task model its routing response schema.
+func RenderExternalInboxTriage(language string) string {
+	return render("inbox/external_routing", struct{ Language string }{language})
+}
+
+// ExternalInboxUpdate is one source update routed to its existing owner.
+type ExternalInboxUpdate struct {
+	Language string
+	Event    string
+	Summary  string
+	URL      string
+}
+
+func RenderExternalInboxUpdate(in ExternalInboxUpdate) string {
+	return render("inbox/external_update", in)
 }

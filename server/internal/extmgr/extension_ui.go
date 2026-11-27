@@ -427,7 +427,7 @@ func (h *Manager) uiCall(ctx context.Context, id, uiID string, in uiRequest) (ex
 		if params.UIVersion < 3 {
 			res.Push, res.Pop = nil, false // an older app knows neither: it draws the view it got, or draws again
 		}
-		if err := checkOpenURL(id, item, in.Context.Item, res.OpenURL); err != nil {
+		if err := checkOpenURL(id, p.Manifest, item, in.Context.Item, res.OpenURL); err != nil {
 			return extension.ActionResult{}, err
 		}
 		return res, nil
@@ -466,16 +466,34 @@ func checkPushes(m *extension.Manifest, from extension.UIItem, v *extension.View
 }
 
 // checkOpenURL holds what extension id's action opens to https; an inbox_item may also open its item's own source page
-// (extension.InboxSourceURL), that item's only, and any of its pages its own settings (extension.SettingsURL), its own
-// only.
-func checkOpenURL(id string, ui extension.UIItem, itemID, raw string) error {
+// (extension.InboxSourceURL), that item's only, any of its pages its own settings (extension.SettingsURL), its own
+// only, and any page one of its own declared quick prompts in the assistant's composer
+// (persona://compose?prompt=<id>&text=<text>).
+// space-conversations may also open one assistant conversation (spaceConversationLink).
+func checkOpenURL(id string, m *extension.Manifest, ui extension.UIItem, itemID, raw string) error {
 	if raw == "" || raw == extension.SettingsURL(id) {
 		return nil
 	}
 	if ui.Placement == "inbox_item" && itemID != "" && raw == extension.InboxSourceURL(itemID) {
 		return nil
 	}
+	if id == spacesMigrationID && spaceConversationLink(raw) {
+		return nil
+	}
+	if promptID, promptText, ok := composePrompt(raw); ok {
+		if m != nil {
+			for _, p := range m.Prompts() {
+				if p.ID == promptID && p.Kind == extension.PromptQuick && p.Text == promptText {
+					return nil
+				}
+			}
+		}
+		return i18n.Err("hub-extension_ui.open_not_prompt")
+	}
 	if u, err := url.Parse(raw); err != nil || u.Scheme != "https" || u.Host == "" {
+		if lower := strings.ToLower(raw); strings.HasPrefix(lower, "persona://compose") || strings.HasPrefix(lower, "jarvis://compose") {
+			return i18n.Err("hub-extension_ui.open_not_prompt")
+		}
 		if strings.HasPrefix(raw, "persona:") {
 			return i18n.Err("hub-extension_ui.open_not_source")
 		}
@@ -513,7 +531,8 @@ func (h *Manager) extensionUIRoutes(api *http.ServeMux) {
 			}
 		}
 		places := h.extensions.localizeUI(h.requestLang(r), h.extensions.uiPlaces(placement, base))
-		places = append(places, h.pagesPlaces(r, placement)...) // the assistant's pages, after the extensions' own (pages_hook.go)
+		pagesOverview := r.URL.Query().Get("pages_overview") == "1"
+		places = append(places, h.pagesPlaces(r, placement, pagesOverview)...) // the assistant's pages, after the extensions' own (pages_hook.go)
 		writeJSON(w, map[string]any{"ui": uiPlacesOut(r, places)})
 	})
 	api.HandleFunc("POST /api/v1/extensions/{id}/-/ui/{ui}", func(w http.ResponseWriter, r *http.Request) {

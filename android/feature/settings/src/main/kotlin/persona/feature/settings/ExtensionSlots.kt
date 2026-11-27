@@ -57,26 +57,16 @@ internal object ExtensionSlotText {
     const val InboxItem = "inbox_item"
     private val known = setOf(NavPage, Card, MachineSection)
 
-    fun known(place: ExtensionUiPlace): Boolean = place.placement in known && place.extension.isNotEmpty() && place.id.isNotEmpty()
+    fun known(place: ExtensionUiPlace): Boolean =
+        place.placement in known && place.extension.isNotEmpty() && place.id.isNotEmpty() &&
+            !(place.placement == Card && DashboardPages.httpOnly(place.extension))
 
     /** An inbox item's page: for the items of one connector; one that names none draws for nobody's. */
     fun inboxItem(place: ExtensionUiPlace): Boolean =
         place.placement == InboxItem && place.extension.isNotEmpty() && place.id.isNotEmpty() && !place.connector.isNullOrBlank()
 
-    /** A nav page's icon from the few an extension may name; anything else is the extension's puzzle piece. */
-    fun icon(name: String?): PhIcon = when (name) {
-        "chart" -> PhIcons.ChartBar
-        "gauge" -> PhIcons.Gauge
-        "list" -> PhIcons.List
-        "bell" -> PhIcons.BellSimple
-        "doc" -> PhIcons.FileText
-        "calendar" -> PhIcons.CalendarBlank
-        "money" -> PhIcons.Coins
-        "branch", "merge" -> PhIcons.GitBranch
-        "code" -> PhIcons.Code
-        "pull_request" -> PhIcons.GitDiff
-        else -> PhIcons.PuzzlePiece
-    }
+    /** A nav page's icon from the shared extension/page icon list; anything else is the extension's puzzle piece. */
+    fun icon(name: String?): PhIcon = ExtensionIcons.of(name)
 
     /**
      * The settings tab's badge from the nav pages': the numbers added up; when there are only words ("New"), a dot.
@@ -112,7 +102,7 @@ data class ExtensionSlotsState(
     val inboxItemsKnown: Boolean = false,
 ) {
     val navPages: List<ExtensionUiPlace> get() = places.filter { it.placement == ExtensionSlotText.NavPage }
-    val cards: List<ExtensionUiPlace> get() = places.filter { it.placement == ExtensionSlotText.Card }
+    val cards: List<ExtensionUiPlace> get() = places.filter { it.placement == ExtensionSlotText.Card && !DashboardPages.httpOnly(it.extension) }
     val machineSections: List<ExtensionUiPlace> get() = places.filter { it.placement == ExtensionSlotText.MachineSection }
     val tabBadge: SlotBadge get() = ExtensionSlotText.tabBadge(places)
 }
@@ -225,7 +215,7 @@ internal fun LazyListScope.extensionSlotItems(
     onOpen: (ExtensionUiPlace) -> Unit,
 ) {
     val pages = state.navPages
-    val shown = cards.filter { !it.state.unsupported }
+    val shown = cards.filter { !it.state.unsupported && !DashboardPages.httpOnly(it.place.extension) }
     if (pages.isEmpty() && shown.isEmpty()) return
     item("slots-title") { JSectionHeader(stringResource(R.string.settings_ext_title)) }
     shown.forEach { card ->
@@ -281,7 +271,11 @@ internal class ExtensionCardSlot(val place: ExtensionUiPlace, val state: Extensi
 
 /** The cards of Settings › Extensions, each drawn compact and kept fresh while that page is on screen. */
 @Composable
-internal fun rememberExtensionCards(slots: ExtensionSlots?, onOpen: (persona.core.navigation.ExtensionUiRoute) -> Unit = {}): List<ExtensionCardSlot> {
+internal fun rememberExtensionCards(
+    slots: ExtensionSlots?,
+    onOpen: (persona.core.navigation.ExtensionUiRoute) -> Unit = {},
+    onSettings: ((String) -> Unit)? = null,
+): List<ExtensionCardSlot> {
     slots ?: return emptyList()
     val state by slots.state.collectAsState()
     val cards = state.cards
@@ -294,7 +288,15 @@ internal fun rememberExtensionCards(slots: ExtensionSlots?, onOpen: (persona.cor
             LaunchedEffect(model) { model.load() }
             KeepFresh(model, slots.invalidations)
             ExtensionCardSlot(place, model.state.collectAsState().value,
-                rememberExtensionView(model, onPush = { onOpen(ExtensionViewText.opened(place, it)) })) { scope.launch { model.load() } }
+                rememberExtensionView(model,
+                    appLink = { url ->
+                        val id = ExtensionViewText.settings(place.extension, url)
+                        if (id != null && onSettings != null) {
+                            onSettings(id)
+                            true
+                        } else false
+                    },
+                    onPush = { onOpen(ExtensionViewText.opened(place, it)) })) { scope.launch { model.load() } }
         }
     }
 }
@@ -337,7 +339,7 @@ fun rememberMachineExtensionSections(slots: ExtensionSlots?, machineId: String,
                 JInlineStatus(view.error.text(), Modifier.padding(vertical = Tokens.Space.xs), tone = InlineTone.Failed)
 
             }
-            extensionViewItems(key, view, handle, showTitles = true, compactGraph = true)
+            extensionViewItems(key, view, handle, showTitles = true, compactPreview = true)
         }
     }
 }

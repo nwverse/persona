@@ -82,6 +82,8 @@ import persona.core.designsystem.rowPadding
 import persona.core.domain.sort.OverviewSubagent
 import persona.core.domain.sort.OverviewSubagentStatus
 import persona.core.domain.sort.buildOverviewSubagents
+import persona.core.domain.sort.displayTitle
+import persona.core.domain.sort.displayTitleDetail
 import persona.core.domain.sort.listedModes
 import persona.core.domain.sort.resumeCommand
 import java.time.Duration
@@ -112,6 +114,7 @@ internal fun SessionOverviewSheet(
     onOpenSubagent: ((SessionKey) -> Unit)? = null,
     onOpenBackground: ((BackgroundDestination) -> Unit)? = null,
     onStopLoop: (() -> Unit)? = null,
+    preferHerdrTabName: Boolean = false,
     onDismiss: () -> Unit,
 ) {
     val copyText = rememberCopy()
@@ -222,12 +225,21 @@ internal fun SessionOverviewSheet(
                     verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs),
                 ) {
                     Text(
-                        session.displayTitle,
+                        session.displayTitle(preferHerdrTabName),
                         style = PersonaTheme.type.headline,
                         color = PersonaTheme.palette.ink,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
+                    session.displayTitleDetail(preferHerdrTabName)?.let { cliTitle ->
+                        Text(
+                            cliTitle,
+                            style = PersonaTheme.type.caption,
+                            color = PersonaTheme.palette.ink2,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                     val status = Status.entries.firstOrNull { it.name == session.agentState.name }
                     Text(
                         listOfNotNull(

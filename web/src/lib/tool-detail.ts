@@ -78,10 +78,11 @@ export function isCommandInput(ix: Pick<Interaction, "kind" | "tool_name">): boo
   return ix.kind === "permission" && ix.tool_name === "command_input";
 }
 
-/** A password card's computer, purpose and commands, the commands exactly as sent. */
-export function secretRunInput(input: Record<string, unknown> | undefined): { machine: string; purpose: string; commands: string[] } {
+/** A password card's computer, purpose, delivery and commands, the commands exactly as sent. */
+export function secretRunInput(input: Record<string, unknown> | undefined): { machine: string; purpose: string; delivery: "stdin" | "env"; commands: string[] } {
   const commands = Array.isArray(input?.commands) ? input.commands.filter((c): c is string => typeof c === "string" && c.trim() !== "") : [];
-  return { machine: s(input?.machine_name) || s(input?.machine), purpose: s(input?.purpose), commands };
+  const delivery = input?.delivery === "env" ? "env" : "stdin";
+  return { machine: s(input?.machine_name) || s(input?.machine), purpose: s(input?.purpose), delivery, commands };
 }
 
 /** The questions an AskUserQuestion / ask_user call asked (empty when its input has none). */

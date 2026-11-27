@@ -448,7 +448,7 @@ func TestBriefRoutineWithoutACardTellsTheModelToListTheRows(t *testing.T) {
 
 func TestBriefCardsKeepEveryOwnerWaitWithinPhysicalBudget(t *testing.T) {
 	needsLarkLayer(t) // the chat is the lark module's
-	f := &briefFacts{l: i18n.En, loc: time.UTC, At: time.Date(2026, 11, 18, 8, 0, 0, 0, time.UTC), web: "https://example.com"}
+	f := &briefFacts{Lang: string(i18n.En), Loc: time.UTC, At: time.Date(2026, 11, 18, 8, 0, 0, 0, time.UTC), Web: "https://example.com"}
 	d := prompts.BriefDirection{Name: "Main", Open: 220, Link: "https://example.com/main"}
 	for i := 0; i < 220; i++ {
 		d.Waits = append(d.Waits, prompts.BriefWait{
@@ -484,7 +484,7 @@ func TestBriefCardsKeepEveryOwnerWaitWithinPhysicalBudget(t *testing.T) {
 	last := -1
 	rendered := all.String()
 	for i, w := range d.Waits {
-		row := botcard.EscapeMarkdown(w.Line) + briefLink(f.l, w.Link)
+		row := botcard.EscapeMarkdown(w.Line) + briefLink(i18n.Lang(f.Lang), w.Link)
 		if n := strings.Count(rendered, row); n != 1 {
 			t.Fatalf("owner row %d occurs %d times in the rich cards, want exactly once", i, n)
 		}
@@ -503,7 +503,7 @@ func TestBriefCardsKeepEveryOwnerWaitWithinPhysicalBudget(t *testing.T) {
 // lands in is dropped, so the quoted answer does not turn the rest of itself into code or show half a marker.
 func TestBriefCardQuotesItsAnswerAsMarkdown(t *testing.T) {
 	needsLarkLayer(t) // the chat is the lark module's
-	f := &briefFacts{l: i18n.En, loc: time.UTC, At: time.Date(2026, 11, 11, 8, 0, 0, 0, time.UTC)}
+	f := &briefFacts{Lang: string(i18n.En), Loc: time.UTC, At: time.Date(2026, 11, 11, 8, 0, 0, 0, time.UTC)}
 	card := func(answer string) string {
 		t.Helper()
 		c, _, _ := (&Service{}).briefCard(f, "Morning brief", answer)

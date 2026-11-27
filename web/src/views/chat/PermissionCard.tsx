@@ -62,7 +62,7 @@ function ToolPermissionCard({ ix }: { ix: Interaction }) {
       title={t("chat-interactions.permission_title", { tool: cardToolName(ix) })}
       cardKeys={keys}
       tapGuard={tapGuard}
-      onDismiss={() => go({ dismiss: true })}
+      onDismiss={ix.no_hand_back ? undefined : () => go({ dismiss: true })}
       busy={busy || replyBusy}
       footer={
         <>
