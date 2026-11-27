@@ -258,10 +258,15 @@ never deletes a user's files automatically.
 ```
 
 For an update, use `operation: "edit"`, the vault and item IDs, and the fields; omit category and title. Field types are
-`STRING` or `CONCEALED` (default in the file manifest). Creation categories are `LOGIN`, `PASSWORD`, `SECURE_NOTE`,
-`API_CREDENTIAL`, `SERVER` and `DATABASE`. Sectioned/ambiguous fields and items with attachments are refused. Login
-updates are refused because 1Password's CLI JSON template updates can overwrite passkeys. No automatic retry follows
-an uncertain write result: inspect metadata before asking for a new approval.
+`STRING`, `CONCEALED` (default in the file manifest) or `OTP` (one-time password: accepts a raw base32 secret, wrapped
+into an `otpauth://totp/...` URI, or an `otpauth://` URI, and stores it as a native 1Password one-time password field).
+On `edit`, a field may also set `"delete": true` (without `type` or `file`) to remove an existing field, or omit `file`
+with an explicit `type` (such as `"OTP"`) to convert an existing field's type in place inside the resident node without
+exporting its value. Creation categories are `LOGIN`, `PASSWORD`, `SECURE_NOTE`, `API_CREDENTIAL`, `SERVER` and
+`DATABASE`. On `LOGIN` items, `username` and `password` write to 1Password's built-in `USERNAME`/`PASSWORD` fields
+instead of creating duplicate custom fields. Sectioned/ambiguous fields and items with passkeys or attachments are
+refused; passkey-free `LOGIN` items may be edited. No automatic retry follows an uncertain write result: inspect
+metadata before asking for a new approval.
 
 The manager-only `secrets.store` protocol has three phases (types `SecretStore*` in the protocol schema):
 
@@ -277,7 +282,8 @@ The manager-only `secrets.store` protocol has three phases (types `SecretStore*`
    Only the resident node has the private key. Hub, manager and hub extension carry ciphertext only.
 5. Commit consumes both records, checks actor/target/field equality, decrypts in the resident node, and writes a JSON
    template to `op item create`/`op item edit` on stdin. No value enters argv or a Persona-created disk file. Existing
-   item JSON stays inside that node. Answers contain only `{references:{field:"op://vault-id/item-id/field-id"}}`.
+   item JSON stays inside that node. Answers contain only `{references:{field:"op://vault-id/item-id/field-id"}}` (plus
+   `deleted:[...]` when an edit removes fields).
 
 Source calls require a process identity the resident node can verify (currently macOS/Linux); otherwise they fail
 closed. An attempted commit invalidates the provider's cached launcher values, including references spelled by names,

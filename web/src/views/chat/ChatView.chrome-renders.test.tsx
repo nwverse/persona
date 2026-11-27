@@ -156,7 +156,7 @@ it("shows and answers the linked task's current decision above the Agent compose
   let todos: Todo[] = [{ ...task, id: "task2", ask: { ...task.ask!, question: "A different task's decision" } }];
   const fallback = fetcher.getMockImplementation() as typeof fetch;
   fetcher.mockImplementation(async (url: string, init?: RequestInit) => {
-    const path = String(url);
+    const path = new URL(String(url), location.origin).pathname; // the list read carries closed_limit (#16680)
     if (path.endsWith("/todos/task1/accept") && init?.method === "POST") {
       todos = [{ ...task, ask: undefined }];
       return Response.json({});

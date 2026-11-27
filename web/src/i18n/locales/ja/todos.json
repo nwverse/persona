@@ -487,5 +487,12 @@
   "status_pr_checks_pending": "チェック中",
   "status_pr_waiting_merge": "マージ待ち",
   "status_parked": "保留中",
-  "status_tracking": "追跡中"
+  "status_tracking": "追跡中",
+  "grouping_v2_status": "状態別",
+  "grouping_v2_direction": "方向別",
+  "grouping_v2_folder": "プロジェクト別",
+  "grouping_v2_request": "依頼別",
+  "detail_direction_inherited_hint": "「{name}」から継承",
+  "detail_direction_inherited_picker_hint": "現在は「{name}」から継承しています。適用で明示的に固定するか、別の方向を選択・解除できます。",
+  "detail_subtask_direction_mismatch": "方向：{direction}"
 }

@@ -125,10 +125,11 @@ func (r *Registry) attachable(id string) (*Extension, error) {
 
 // switchRemote saves row, old's record with only Remote changed, and puts it in effect. Called inside an operation.
 func (r *Registry) switchRemote(ctx context.Context, old *Extension, row Record) (*Extension, error) {
-	row.UpdatedAt = r.now()
-	if err := r.write(ctx, row); err != nil {
+	revision, err := r.write(ctx, row)
+	if err != nil {
 		return nil, err
 	}
+	row.UpdatedAt = revision
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	next := r.fromRow(row)

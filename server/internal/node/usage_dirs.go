@@ -24,7 +24,8 @@ import (
 // session started (proto.UsageBucket.Dir): the start directory written from home, or a token. The node resolves each
 // directory once, in the background (usageDirs), to the project the manager sums by across machines: a git remote's
 // host and path (credentials, user and port dropped), a repository's root commit when it has no remote, a folder's
-// name when it is in no repository. Reading only files (.git, its config) and running git only for an aliased remote
+// name when it is in no repository, "temp" for a temporary folder in none (#16827: one made in it, a worktree added
+// in /tmp, is its repository's). Reading only files (.git, its config) and running git only for an aliased remote
 // or a root commit, with a time limit; a directory that cannot be read is a folder, and one that is gone is not
 // resolved at all (the manager keeps its last resolution). The meter never waits for it.
 
@@ -44,10 +45,15 @@ var usageForgeHosts = []string{"github.com", "gitlab.com", "bitbucket.org", "cod
 var usageHostAliases = map[string]string{"ssh.github.com": "github.com", "www.github.com": "github.com",
 	"altssh.gitlab.com": "gitlab.com", "altssh.bitbucket.org": "bitbucket.org", "ssh.dev.azure.com": "dev.azure.com"}
 
+// usageProjectTemp is the project of a temporary folder that is in no repository made inside it (proto.UsageDir):
+// the one "Temporary folders" the apps show.
+const usageProjectTemp = "temp"
+
 // usageDirKey is how a bucket names the directory cwd: written from home ("~", "~/code/app"), as it is outside home,
-// UsageDirTemp in a temporary folder, UsageDirAssistant for the assistant's own conversations, UsageDirUnknown when
-// there is none.
-func (n *Node) usageDirKey(cwd string) string {
+// UsageDirAssistant for the assistant's own conversations, UsageDirUnknown when there is none. A temporary folder is
+// named by its path too when the manager takes them (temps, usage.features' temp_dirs, #16827), and resolved like any
+// other directory (resolveUsageDir: a worktree made there is its repository's); for an older manager it is UsageDirTemp.
+func (n *Node) usageDirKey(cwd string, temps bool) string {
 	if cwd == "~" || strings.HasPrefix(cwd, "~/") {
 		cwd = n.home + strings.TrimPrefix(cwd, "~")
 	}
@@ -58,10 +64,21 @@ func (n *Node) usageDirKey(cwd string) string {
 	switch {
 	case identity.IsAssistantDir(cwd):
 		return proto.UsageDirAssistant
-	case usageTempDir(cwd):
+	case !temps && usageTempDir(cwd):
 		return proto.UsageDirTemp
 	}
 	return homeRelative(cwd, n.home)
+}
+
+// usageTempKey: a bucket's directory (usageDirKey's) is a temporary folder, or the token for one.
+func (n *Node) usageTempKey(dir string) bool {
+	if dir == proto.UsageDirTemp {
+		return true
+	}
+	if dir == "~" || strings.HasPrefix(dir, "~/") {
+		dir = n.home + strings.TrimPrefix(dir, "~")
+	}
+	return filepath.IsAbs(dir) && usageTempDir(filepath.Clean(dir))
 }
 
 // homeRelative is path written from home ("~" for home itself), through either spelling of home (as written, and
@@ -81,15 +98,28 @@ func homeRelative(path, home string) string {
 	return path
 }
 
-// usageTempDir: path is in a temporary folder (the system's temp directory, /tmp, /var/tmp, macOS's /var/folders).
-func usageTempDir(path string) bool {
+// usageTempRoots are the temporary folders (the system's temp directory, /tmp, /var/tmp, macOS's /var/folders), each
+// as written and with its links resolved. A variable for the tests, whose own folders are in one.
+var usageTempRoots = func() []string {
 	tmp := filepath.Clean(os.TempDir())
-	for _, root := range []string{tmp, realPath(tmp), "/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp", "/var/folders", "/private/var/folders"} {
-		if path == root || strings.HasPrefix(path, root+string(filepath.Separator)) {
-			return true
+	return []string{tmp, realPath(tmp), "/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp", "/var/folders", "/private/var/folders"}
+}
+
+// usageTempRoot is the temporary folder path is in (the longest of usageTempRoots that holds it or is it); "" when it
+// is in none.
+func usageTempRoot(path string) string {
+	best := ""
+	for _, root := range usageTempRoots() {
+		if (path == root || strings.HasPrefix(path, root+string(filepath.Separator))) && len(root) > len(best) {
+			best = root
 		}
 	}
-	return false
+	return best
+}
+
+// usageTempDir: path is in a temporary folder.
+func usageTempDir(path string) bool {
+	return usageTempRoot(path) != ""
 }
 
 // headCwd is the first directory a transcript's head names ("cwd": Claude Code's lines, a Codex rollout's
@@ -322,6 +352,12 @@ func rootCommit(ctx context.Context, worktree string) string {
 
 // resolveUsageDir resolves the directory a bucket names (usageDirKey's; never a token) on this machine: ok false
 // when it is not there (removed since: the manager keeps what it resolved to before).
+//
+// A temporary folder (#16827) is the project of a repository made inside it (a worktree added there, a clone), as
+// any directory is, and otherwise usageProjectTemp: in no repository, in one at the temporary folder's top or above
+// it (which would make every temporary folder one project), in one with no commit or whose .git cannot be read (only
+// its folder's name, random in such folders, to know it by), or gone. The manager keeps a repository it resolved a
+// directory to before over usageProjectTemp, so a worktree removed since keeps its project.
 func resolveUsageDir(ctx context.Context, home, dir string) (proto.UsageDir, bool) {
 	abs := dir
 	if dir == "~" || strings.HasPrefix(dir, "~/") {
@@ -330,12 +366,22 @@ func resolveUsageDir(ctx context.Context, home, dir string) (proto.UsageDir, boo
 	if !filepath.IsAbs(abs) {
 		return proto.UsageDir{}, false
 	}
+	temp := usageTempDir(filepath.Clean(abs))
+	tempDir := proto.UsageDir{Dir: dir, Project: usageProjectTemp}
 	if st, err := os.Stat(abs); err != nil || !st.IsDir() {
+		if temp {
+			return tempDir, true
+		}
 		return proto.UsageDir{}, false
 	}
 	physical, physHome := realPath(filepath.Clean(abs)), realPath(filepath.Clean(home))
 	out := proto.UsageDir{Dir: dir}
 	p := readGitPlace(physical)
+	if temp {
+		if root := usageTempRoot(physical); root != "" && !strings.HasPrefix(p.worktree, root+string(filepath.Separator)) {
+			return tempDir, true
+		}
+	}
 	// A repository at home or above it (dotfiles kept in git) is the project of the home folder only: a folder in it
 	// is its own (a trip's notes are not the dotfiles). A repository whose config cannot be read is a folder too.
 	aboveHome := p.worktree != "" && (p.worktree == physHome || strings.HasPrefix(physHome, p.worktree+string(filepath.Separator)))
@@ -365,6 +411,8 @@ func resolveUsageDir(ctx context.Context, home, dir string) (proto.UsageDir, boo
 		out.Name = strings.TrimSuffix(filepath.Base(root), ".git")
 		if commit := rootCommit(ctx, worktree); commit != "" {
 			out.Project = "local:" + commit
+		} else if temp {
+			return tempDir, true
 		} else {
 			out.Project = "local:dir:" + strings.ToLower(out.Name)
 		}
@@ -372,6 +420,9 @@ func resolveUsageDir(ctx context.Context, home, dir string) (proto.UsageDir, boo
 			return proto.UsageDir{}, false
 		}
 		return out, true
+	}
+	if temp {
+		return tempDir, true
 	}
 	if physical == physHome {
 		out.Project, out.Place = "home", "~"
@@ -388,7 +439,9 @@ func resolveUsageDir(ctx context.Context, home, dir string) (proto.UsageDir, boo
 // usageDirs resolves the directories the meter names, one at a time in the background, and keeps what it resolved
 // for the reports: each once per connection (the manager keeps them across connections).
 type usageDirs struct {
-	home    string
+	home string
+	// temps: the manager takes temporary folders by their paths (usage.features' temp_dirs), not as UsageDirTemp.
+	temps   bool
 	resolve func(ctx context.Context, home, dir string) (proto.UsageDir, bool)
 	mu      sync.Mutex
 	asked   map[string]bool // every directory asked for: resolved, waiting, or not there
@@ -469,30 +522,35 @@ func (o *usageDirsOn) get() *usageDirs { return o.p.Load() }
 
 // usageKeepsDirs asks the manager whether it keeps the usage's directories (usage.features, #16530): an older one
 // answers unknown method (the hub's), and its buckets stay summed as before, since there buckets that differ only by
-// directory would replace each other.
-func (n *Node) usageKeepsDirs(ctx context.Context) bool {
+// directory would replace each other. temps: it also takes a temporary folder by its path (temp_dirs, #16827); one
+// that does not gets UsageDirTemp for them, as before.
+func (n *Node) usageKeepsDirs(ctx context.Context) (keeps, temps bool) {
 	if n.peer == nil {
-		return false
+		return false, false
 	}
 	var out struct {
-		Dirs bool `json:"dirs"`
+		Dirs     bool `json:"dirs"`
+		TempDirs bool `json:"temp_dirs"`
 	}
 	cctx, cancel := context.WithTimeout(ctx, backfillCall)
 	defer cancel()
-	return n.peer.Call(cctx, "usage.features", map[string]any{}, &out) == nil && out.Dirs
+	if n.peer.Call(cctx, "usage.features", map[string]any{}, &out) != nil || !out.Dirs {
+		return false, false
+	}
+	return true, out.TempDirs
 }
 
 // meterDirs has m name each file's and each database row's start directory, asking dirs to resolve it.
 func (n *Node) meterDirs(m *usageMeter, dirs *usageDirs) {
 	m.dirs = dirs
-	fileDir := n.usageFileDirs()
+	fileDir := n.usageFileDirs(dirs.temps)
 	m.fileDir = func(f usagePath) string {
 		dir := fileDir(f)
 		dirs.want(dir)
 		return dir
 	}
 	m.recordDir = func(q usageQuery, session string) string {
-		dir := n.usageSessionDir(session, q.dir(session))
+		dir := n.usageSessionDir(session, q.dir(session), dirs.temps)
 		dirs.want(dir)
 		return dir
 	}
@@ -518,8 +576,8 @@ func (m *usageMeter) dirOfRecord(q usageQuery, r tokenuse.Record) string {
 // usageFileDirs names where the session a usage file belongs to started, as a bucket names it: the directory Persona
 // started it in (its state), else the first directory its transcript names (the adapter's startDir), each session's
 // read once (a session's subagent files all take its own transcript's). Never the latest one: Claude Code's lines
-// follow the model's cd (docs/lessons/transcript.md).
-func (n *Node) usageFileDirs() func(usagePath) string {
+// follow the model's cd (docs/lessons/transcript.md). temps as usageDirKey's.
+func (n *Node) usageFileDirs(temps bool) func(usagePath) string {
 	sessions := map[string]string{}
 	return func(f usagePath) string {
 		session := f.ad.session(f.path)
@@ -527,19 +585,19 @@ func (n *Node) usageFileDirs() func(usagePath) string {
 		if dir, ok := sessions[key]; ok && session != "" {
 			return dir
 		}
-		dir := n.usageSessionDir(session, f.ad.startDir(f.path))
+		dir := n.usageSessionDir(session, f.ad.startDir(f.path), temps)
 		sessions[key] = dir
 		return dir
 	}
 }
 
 // usageSessionDir is where session started: the directory Persona started it in, else recorded (what its own record
-// says), as a bucket names it.
-func (n *Node) usageSessionDir(session, recorded string) string {
+// says), as a bucket names it (temps as usageDirKey's).
+func (n *Node) usageSessionDir(session, recorded string, temps bool) string {
 	if session != "" {
 		if st, ok := n.state.get(session); ok && st.Cwd != "" {
-			return n.usageDirKey(st.Cwd)
+			return n.usageDirKey(st.Cwd, temps)
 		}
 	}
-	return n.usageDirKey(recorded)
+	return n.usageDirKey(recorded, temps)
 }

@@ -801,6 +801,11 @@ an input box but herdr doesn't know claude is present (`agent_not_found` or empt
 then explain process-name / `HERDR_AGENT=claude` recognition and cases where the prefix doesn't reach claude. Foreground process name comes from herdr `pane.process_info`. With no input box, retain the shell-not-started error;
 other engines' panes (Orca) keep their original error.
 
+`pane.process_info` in herdr 0.9.5 names each foreground process by `name`, `argv` and `cmdline`, with no `argv0`, and Claude Code's `name` is its version
+(`2.1.330`). Its list starts with the foreground group's leader: a launcher's wrapper when claude runs under one. Code that takes the first process for
+claude itself must pick Claude Code out first (`herdr.Client.PaneProcesses`): matching `argv0` found nothing, and the port scan reported Claude Code's own
+loopback listener as a server the Agent runs, which kept every idle Agent behind a wrapper from Close (#14681).
+
 - A Claude Code turn ending with a model API error ("API Error: Connection lost mid-response…", overload, rate limit, expired login) is done in herdr just like normal completion, so hub counts it unread:
   task_plan tasks once showed green "Done" cards with the raw error as summary and "finished" in snapshots (#1516). Only the last text distinguishes this: when a session is stopped and `last_text` begins with these errors, hub sets `turn_error` (prefix only;
   mentioning "API Error" in an answer doesn't count), marks the task interrupted, doesn't auto-close it, and writes an `interrupted` receipt. Ordinary Agent pushes also stop using a success marker.
@@ -972,6 +977,19 @@ grouping looks fine and the bug shows only in the other one. Hosts set it (herdr
 need the node to set one: the Codex App's always had one, the Claude desktop app's had none until #8521. A new source of
 sessions outside the engines should set a space too. On the list path, take the repository from the list's Git places
 (`fillGitPlace`, read in the background) rather than running git per row: it runs every second.
+
+## One folder was a project for each way its Agents ran (2026-11-23, #13533)
+
+Every way an Agent runs names its space its own way: herdr by its workspace id (`w1`), the desktop apps by
+`codex-project:<root>`, a runtime without workspaces by its directory. A folder worked in more than one way was a project
+for each in every client's **Project** list, all with the folder's name, and one CLI split too: Claude Code in herdr
+against the Claude desktop app, an agy pane in herdr against an agy runtime conversation. Pins, mutes and to-do space
+links go by `machine/space name`, so nothing there showed it. The node's last pass now gives every session whose space
+only stands for a folder that folder's space (`server/internal/node/folderspace.go`); a new source that names its space by
+a folder needs nothing more, and should not invent another path-keyed id. Compare folders by their physical paths: the
+same folder reaches the list as written by a runtime and resolved by herdr or a desktop app, and a home directory on
+Linux is often a link to another volume. A joined space holds several `space_kind`s, and a client may name its host by
+any of its sessions' kinds, so a space action takes a kind that is no host's to mean the workspace's host.
 
 ## The session list runs every second: per-row lookups add up (2026-11-09, #2538)
 

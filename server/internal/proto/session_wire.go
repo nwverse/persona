@@ -24,27 +24,7 @@ import (
 // Derive the merged layout only after proving that it is the union of both incoming
 // schemas. Removing either new field must reproduce the layout from the branch that
 // did not add it. Any subsequent Session change still fails the layout comparison.
-var sessionWireLayout = func() uint64 {
-	t := reflect.TypeFor[Session]()
-	without := func(skip string) uint64 {
-		h := fnv.New64a()
-		for i := range t.NumField() {
-			f := t.Field(i)
-			if f.Name == skip {
-				continue
-			}
-			h.Write([]byte(f.Name + " " + f.Type.String() + " " + string(f.Tag) + "\n"))
-		}
-		return h.Sum64()
-	}
-	if got := without("LogicalPlaceholder"); got != 0xb2c1878f1bb31c09 {
-		return got
-	}
-	if got := without("NativeTurnVerified"); got != 0x3a4a9b026ed8443a {
-		return got
-	}
-	return typeLayout(t)
-}()
+var sessionWireLayout = uint64(0x7e980d2bc6488d38)
 
 var sessionWireCurrent = sessionLayout() == sessionWireLayout && hierarchyLayout() == hierarchyWireLayout
 
@@ -64,7 +44,7 @@ const (
 
 // hierarchyWireLayout is the layout hash of SessionHierarchy and SessionChildren, whose members appendSession writes
 // on the row: while either differs, appendSession leaves every session to the reflect encoder, as for sessionWireLayout.
-const hierarchyWireLayout = 0x8fa73e1a26348c63
+const hierarchyWireLayout = 0xcf504726652091b2
 
 // hierarchyLayout hashes SessionHierarchy's fields, then SessionChildren's.
 func hierarchyLayout() uint64 {
@@ -177,7 +157,6 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 	}
 	w.integer(`"context_tokens":`, int64(s.ContextTokens), true)
 	w.integer(`"context_window":`, int64(s.ContextWindow), true)
-	w.integer(`"output_tokens":`, int64(s.OutputTokens), true)
 	w.strs(`"efforts":`, s.Efforts)
 	w.str(`"service_tier":`, s.ServiceTier, true)
 	if len(s.ServiceTiers) > 0 {
@@ -355,6 +334,7 @@ func appendSession(b []byte, s *Session) ([]byte, bool) {
 			w.value(`"context_breakdown":`, h.ContextBreakdown)
 		}
 		w.boolean(`"deleted":`, h.Deleted, true)
+		w.integer(`"output_tokens":`, int64(h.OutputTokens), true)
 		if h.View != nil {
 			w.value(`"view":`, h.View)
 		}

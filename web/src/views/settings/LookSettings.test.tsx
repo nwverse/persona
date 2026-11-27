@@ -216,7 +216,7 @@ describe("Window style & glass translucency controls", () => {
   beforeEach(async () => {
     localStorage.clear();
     setSurfaceStyle("default");
-    setGlassTranslucency(68);
+    setGlassTranslucency(75);
     applyLook();
     host = document.createElement("div");
     document.body.appendChild(host);
@@ -238,7 +238,8 @@ describe("Window style & glass translucency controls", () => {
 
     const slider = host.querySelector<HTMLInputElement>('input[type="range"]');
     expect(slider).not.toBeNull();
-    expect(slider!.value).toBe("68");
+    expect(slider!.value).toBe("75");
+    expect(slider!.step).toBe("5");
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(slider!, "90");
       slider!.dispatchEvent(new Event("change", { bubbles: true }));

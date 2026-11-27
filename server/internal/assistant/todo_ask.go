@@ -85,16 +85,18 @@ type todoActiveBlockerView struct {
 // the routes, its view (todo_view_routes.go).
 type listedTodo struct {
 	Todo
-	PrerequisiteBlockers []string                   `json:"prerequisite_blockers,omitzero"`
-	ActiveBlockers       []todoActiveBlockerView    `json:"active_blockers,omitempty"`
-	Ask                  *todoAsk                   `json:"ask,omitempty"`
-	DecisionReview       *decisionReview            `json:"decision_review,omitempty"`
-	Orphaned             *TodoOrphan                `json:"orphaned,omitempty"`
-	View                 *assistantwire.TodoSummary `json:"view,omitempty"`
-	Wait                 *assistantwire.TodoWait    `json:"wait,omitempty"`
-	RepoGate             *repoGate                  `json:"repo_gate,omitempty"`
-	ItemType             string                     `json:"item_type,omitempty"`
-	ChildSummary         *todoChildSummary          `json:"child_summary,omitempty"`
+	PrerequisiteBlockers   []string                   `json:"prerequisite_blockers,omitzero"`
+	ActiveBlockers         []todoActiveBlockerView    `json:"active_blockers,omitempty"`
+	Ask                    *todoAsk                   `json:"ask,omitempty"`
+	DecisionReview         *decisionReview            `json:"decision_review,omitempty"`
+	Orphaned               *TodoOrphan                `json:"orphaned,omitempty"`
+	View                   *assistantwire.TodoSummary `json:"view,omitempty"`
+	Wait                   *assistantwire.TodoWait    `json:"wait,omitempty"`
+	RepoGate               *repoGate                  `json:"repo_gate,omitempty"`
+	ItemType               string                     `json:"item_type,omitempty"`
+	ChildSummary           *todoChildSummary          `json:"child_summary,omitempty"`
+	EffectiveDirectionID   string                     `json:"effective_direction_id,omitempty"`
+	EffectiveDirectionName string                     `json:"effective_direction_name,omitempty"`
 }
 
 // askEvidenceLink returns raw when it is a valid http(s) URL and not merely the to-do's own /todos/<id> page.

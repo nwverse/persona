@@ -9119,6 +9119,82 @@
     {
       "name": "agents_use_herdr_tab_name_hint",
       "value": "Shows the tab name first and syncs this preference across devices on this hub."
+    },
+    {
+      "name": "composer_queued_count",
+      "value": "{count} queued"
+    },
+    {
+      "name": "composer_queue_send_now",
+      "value": "Send now"
+    },
+    {
+      "name": "composer_queue_relayed",
+      "value": "Relayed"
+    },
+    {
+      "name": "code_wrap_lines",
+      "value": "Wrap"
+    },
+    {
+      "name": "code_unwrap_lines",
+      "value": "Scroll"
+    },
+    {
+      "name": "copied",
+      "value": "Copied"
+    },
+    {
+      "name": "quick_palette_title",
+      "value": "Quick Commands"
+    },
+    {
+      "name": "quick_palette_placeholder",
+      "value": "Jump to agent, workspace, or action…"
+    },
+    {
+      "name": "quick_palette_agents",
+      "value": "Needs You & Active Agents"
+    },
+    {
+      "name": "quick_palette_workspaces",
+      "value": "Workspaces"
+    },
+    {
+      "name": "quick_palette_actions",
+      "value": "Pro Controls"
+    },
+    {
+      "name": "quick_palette_toggle_theme",
+      "value": "Toggle Light / Dark Theme"
+    },
+    {
+      "name": "quick_palette_toggle_workbench",
+      "value": "Toggle Live Workbench"
+    },
+    {
+      "name": "quick_palette_liveview_preview",
+      "value": "LiveView Preview"
+    },
+    {
+      "name": "quick_palette_code_tab",
+      "value": "Switch to Code Tab"
+    },
+    {
+      "name": "quick_palette_machines_tab",
+      "value": "Switch to Machines Tab"
+    },
+    {
+      "name": "quick_palette_empty",
+      "value": "No matching commands"
+    },
+    {
+      "name": "fold_posture_book",
+      "value": "Foldable Book"
+    },
+    {
+      "name": "machine_cpu_load",
+      "value": "CPU & Load"
     }
   ]
 }

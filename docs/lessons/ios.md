@@ -1231,6 +1231,10 @@ Use an invalidation revision as the task key and handle the flag after completio
 - Within one NavigationStack, pushing view-based `NavigationLink { destination }` then value-based `NavigationLink(value:)` inserts the new page **underneath**:
   taps look ineffective until Back (Settings › Machines › card, machine detail › session; Knowledge search entries also reveal a yellow warning on return, 2026-10-31). Use an entirely value-based chain (`MachineListRoute`,
   `MachineDetailRoute` + `navigationDestination(for:)`) or entirely view-based. `navigationDestination(isPresented:)` is view-based too.
+- A page pushed by view is outside the stack's path, so anything that moves the page by setting the path leaves it in front (2026-11-23, #13156).
+  In the Sidebar layout a pick in the sidebar replaces the root and the path (`SidebarPageRoots`). A task's page pushed from the conversation by
+  `detailPresentation` stayed over the Agent picked next, with the selected row already moved. `probe.sidebar-page` read `path 0, depth 2`:
+  the depth counted the page, the path did not. On a stack whose roots the sidebar swaps, push values only (`TaskDetailRoute`, `TasksStore.takeDetail`).
 - Several `NavigationLink(value:)` in one `List` row all fire on one tap, each pushing its page (an extension's machine list, a Set Up per Mac in one field row, #2446:
   Back from Mac Studio's page landed on MacBook's). `.buttonStyle(.borderless)` keeps a `Button`'s tap its own but does not stop this; push one value from a `Button`
   (`splitPush`), or give each link its own row.

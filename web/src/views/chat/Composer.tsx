@@ -1249,6 +1249,7 @@ export const Composer = memo(function Composer({
           }}
           onSelectionChange={trackCaret}
           onPaste={(e) => {
+            if (editor) return;
             const files = Array.from(e.clipboardData.files);
             if (files.length) {
               e.preventDefault();
