@@ -3,6 +3,8 @@ package modapi
 import (
 	"context"
 	"time"
+
+	"github.com/nwverse/persona/server/internal/assistantwire"
 )
 
 // FeedKindBrief is the chat feed item kind for a routine briefing's fixed facts.
@@ -55,8 +57,9 @@ type InboxPort interface {
 	FollowingSignals(ctx context.Context) []BriefInboxSignal
 }
 
-// LaterPort reads questions Agents left to wait for the next briefing.
+// LaterPort reads deferred questions and marks a question handled when its button is pressed.
 type LaterPort interface {
+	Handle(ctx context.Context, id string) (bool, error)
 	Rows(ctx context.Context, lang, web string, now time.Time, limit int) ([]BriefBoardRow, int)
 }
 
@@ -90,11 +93,19 @@ type DeliveryPort interface {
 	MarkListed(f *BriefSnapshot)
 }
 
-// PromptPort renders briefing prompts, counts runes, formats plain board rows, strips context tags and translates i18n keys.
+// BriefCardPage pairs a physical card with its own plain-text substitute.
+type BriefCardPage struct {
+	Card     *assistantwire.BotCard
+	Fallback string
+}
+
+// PromptPort renders briefing prompts, counts runes, formats board rows and stages, strips context tags and translates i18n keys.
 type PromptPort interface {
 	RenderBriefFacts(BriefFacts) string
 	RenderNorthStarFacts(lines []string) string
 	BriefDayRunes(day *BriefDay) int
+	BoardRowMarkdown(lang string, n int, row BriefBoardRow) string
+	OpenStageBar(lang, stage string) string
 	BoardRowPlain(lang string, n int, row BriefBoardRow) string
 	Translate(lang, key string, args map[string]any) string
 	StripContext(text string) string
@@ -102,6 +113,8 @@ type PromptPort interface {
 
 // ScheduleFactsRunner is the briefing module's runtime lifecycle for scheduled routines with facts or reports.
 type ScheduleFactsRunner interface {
+	// RenderCards builds the delivery pages, complete plain notification and IDs with visible Accept buttons.
+	RenderCards(f *BriefSnapshot, label, answer, header, openLabel, openURL string) ([]BriefCardPage, string, []string)
 	Start(ctx context.Context, task BriefTaskInfo, now time.Time) string
 	StartReport(ctx context.Context, task BriefTaskInfo, now time.Time) string
 	Sent(BriefScheduleRun)

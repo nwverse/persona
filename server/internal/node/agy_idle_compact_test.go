@@ -1,0 +1,525 @@
+package node
+
+import (
+	"encoding/json"
+	"errors"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/transcript"
+)
+
+type testAgyClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *testAgyClock) get() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *testAgyClock) set(at time.Time) {
+	c.mu.Lock()
+	c.now = at
+	c.mu.Unlock()
+}
+
+func setAgyIdleClock(n *Node, start time.Time) *testAgyClock {
+	c := &testAgyClock{now: start}
+	n.agyIdleMu.Lock()
+	n.agyIdleClock = c.get
+	n.agyIdleMu.Unlock()
+	return c
+}
+
+func pushAgyRow(t *testing.T, n *Node, host *fakeRuntime, rows ...proto.Session) {
+	t.Helper()
+	if err := host.peer.Notify("runtime.sessions", map[string]any{"sessions": rows}); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range rows {
+		waitFor(t, "agy row updated", func() bool {
+			got, _, ok := n.runtimes.rowOf(want.SessionID)
+			return ok && got.Status == want.Status && got.Rev == want.Rev &&
+				got.ContextTokens == want.ContextTokens && got.TurnError == want.TurnError
+		})
+	}
+}
+
+func TestAgyIdleAutoCompactSweepTaskAgentAndAssistant(t *testing.T) {
+	base := time.Date(2026, 11, 27, 10, 0, 0, 0, time.UTC)
+
+	n, host, _ := runtimeCompactFixture(t)
+	clock := setAgyIdleClock(n, base)
+	assistantID := runtimeCompactTestID
+	taskID := "agy-22222222-3333-4444-5555-666666666666"
+	n.state.put(assistantID, sessionState{Launcher: "agy", Cwd: filepath.Join(n.home, ".persona", "assistant")})
+	n.state.put(taskID, sessionState{Launcher: "agy", Cwd: filepath.Join(n.home, "proj")})
+
+	// Below token threshold (199,999) and below idle threshold (9m) must not compact.
+	pushAgyRow(t, n, host,
+		proto.Session{SessionID: assistantID, Cwd: filepath.Join(n.home, ".persona", "assistant"), Status: proto.StatusDone, Rev: 1, ContextTokens: 199_999, UpdatedAt: base},
+		proto.Session{SessionID: taskID, Cwd: filepath.Join(n.home, "proj"), Status: proto.StatusIdle, Rev: 1, ContextTokens: 250_000, UpdatedAt: base},
+	)
+	clock.set(base.Add(9 * time.Minute))
+	n.sweepAgyIdleCompactions(t.Context(), clock.get())
+	if sends := host.got("session.send"); len(sends) != 0 {
+		t.Fatalf("unexpected compact before idle threshold: %s", sends)
+	}
+
+	// Cross both thresholds (10m idle, >= 200,000 tokens) for both sessions.
+	pushAgyRow(t, n, host,
+		proto.Session{SessionID: assistantID, Cwd: filepath.Join(n.home, ".persona", "assistant"), Status: proto.StatusDone, Rev: 2, ContextTokens: 210_000, UpdatedAt: base},
+		proto.Session{SessionID: taskID, Cwd: filepath.Join(n.home, "proj"), Status: proto.StatusIdle, Rev: 1, ContextTokens: 250_000, UpdatedAt: base},
+	)
+	clock.set(base.Add(10 * time.Minute))
+	n.sweepAgyIdleCompactions(t.Context(), clock.get())
+
+	waitFor(t, "both sessions receive /compact", func() bool {
+		return len(host.got("session.send")) == 2
+	})
+	var sawAssistant, sawTask bool
+	for _, raw := range host.got("session.send") {
+		var p map[string]any
+		if err := json.Unmarshal(raw, &p); err != nil {
+			t.Fatal(err)
+		}
+		if p["text"] != "/compact" {
+			t.Fatalf("expected /compact, got %v", p)
+		}
+		switch p["session_id"] {
+		case assistantID:
+			if p["assistant"] != true {
+				t.Fatalf("assistant session /compact missing assistant=true: %v", p)
+			}
+			sawAssistant = true
+		case taskID:
+			if _, ok := p["assistant"]; ok {
+				t.Fatalf("task Agent /compact should not set assistant flag: %v", p)
+			}
+			sawTask = true
+		default:
+			t.Fatalf("unexpected session_id: %v", p)
+		}
+	}
+	if !sawAssistant || !sawTask {
+		t.Fatalf("missing compact call: assistant=%v task=%v", sawAssistant, sawTask)
+	}
+
+	// While runtime reports working during silent compaction, Node preserves pre-compaction status.
+	pushAgyRow(t, n, host,
+		proto.Session{SessionID: assistantID, Cwd: filepath.Join(n.home, ".persona", "assistant"), Status: proto.StatusWorking, Rev: 3, ContextTokens: 210_000, UpdatedAt: clock.get()},
+		proto.Session{SessionID: taskID, Cwd: filepath.Join(n.home, "proj"), Status: proto.StatusWorking, Rev: 2, ContextTokens: 250_000, UpdatedAt: clock.get()},
+	)
+	rows := listed(t, n)
+	if rows[assistantID].Status != proto.StatusDone {
+		t.Fatalf("silent assistant compaction changed status to %q, want %q", rows[assistantID].Status, proto.StatusDone)
+	}
+	if rows[taskID].Status != proto.StatusIdle {
+		t.Fatalf("silent task compaction changed status to %q, want %q", rows[taskID].Status, proto.StatusIdle)
+	}
+
+	// Settle compaction without shrinking context yet: latch must prevent duplicate sweep compaction.
+	pushAgyRow(t, n, host,
+		proto.Session{SessionID: assistantID, Cwd: filepath.Join(n.home, ".persona", "assistant"), Status: proto.StatusDone, Rev: 4, ContextTokens: 210_000, UpdatedAt: base},
+		proto.Session{SessionID: taskID, Cwd: filepath.Join(n.home, "proj"), Status: proto.StatusIdle, Rev: 3, ContextTokens: 50_000, UpdatedAt: clock.get()},
+	)
+	waitFor(t, "both compactions finished", func() bool {
+		return !n.runtimes.compacting(assistantID) && !n.runtimes.compacting(taskID)
+	})
+	clock.set(clock.get().Add(15 * time.Minute))
+	n.sweepAgyIdleCompactions(t.Context(), clock.get())
+	if sends := host.got("session.send"); len(sends) != 2 {
+		t.Fatalf("latched session compacted again: %s", sends)
+	}
+
+	// Task Agent dropped to 50k (rearmed), then grows back to 220k and idles 10m -> compacts again.
+	growAt := clock.get()
+	pushAgyRow(t, n, host,
+		proto.Session{SessionID: assistantID, Cwd: filepath.Join(n.home, ".persona", "assistant"), Status: proto.StatusDone, Rev: 4, ContextTokens: 210_000, UpdatedAt: base},
+		proto.Session{SessionID: taskID, Cwd: filepath.Join(n.home, "proj"), Status: proto.StatusDone, Rev: 4, ContextTokens: 220_000, UpdatedAt: growAt},
+	)
+	clock.set(growAt.Add(10 * time.Minute))
+	n.sweepAgyIdleCompactions(t.Context(), clock.get())
+	waitFor(t, "rearmed task session compacted again", func() bool {
+		return len(host.got("session.send")) == 3
+	})
+	pushAgyRow(t, n, host,
+		proto.Session{SessionID: assistantID, Cwd: filepath.Join(n.home, ".persona", "assistant"), Status: proto.StatusDone, Rev: 4, ContextTokens: 210_000, UpdatedAt: base},
+		proto.Session{SessionID: taskID, Cwd: filepath.Join(n.home, "proj"), Status: proto.StatusDone, Rev: 5, ContextTokens: 45_000, UpdatedAt: clock.get()},
+	)
+	waitFor(t, "third compaction settled", func() bool {
+		return !n.runtimes.compacting(taskID)
+	})
+}
+
+func TestAgyIdleAutoCompactBeforeInputTaskAgentAndAssistant(t *testing.T) {
+	base := time.Date(2026, 11, 27, 11, 0, 0, 0, time.UTC)
+
+	n, host, _ := runtimeCompactFixture(t)
+	clock := setAgyIdleClock(n, base)
+	assistantID := runtimeCompactTestID
+	taskID := "agy-33333333-4444-5555-6666-777777777777"
+	n.state.put(assistantID, sessionState{Launcher: "agy", Cwd: filepath.Join(n.home, ".persona", "assistant")})
+	n.state.put(taskID, sessionState{Launcher: "agy", Cwd: filepath.Join(n.home, "proj")})
+
+	pushAgyRow(t, n, host,
+		proto.Session{SessionID: assistantID, Cwd: filepath.Join(n.home, ".persona", "assistant"), Status: proto.StatusDone, Rev: 1, ContextTokens: 260_000, UpdatedAt: base},
+		proto.Session{SessionID: taskID, Cwd: filepath.Join(n.home, "proj"), Status: proto.StatusDone, Rev: 1, ContextTokens: 240_000, UpdatedAt: base},
+	)
+
+	var orderMu sync.Mutex
+	var order []string
+	var compactFinished bool
+	host.mu.Lock()
+	host.answer = func(method string, params json.RawMessage) (any, error) {
+		if method != "session.send" {
+			return map[string]any{"ok": true}, nil
+		}
+		var p struct {
+			SessionID string `json:"session_id"`
+			Text      string `json:"text"`
+		}
+		_ = json.Unmarshal(params, &p)
+		orderMu.Lock()
+		order = append(order, p.SessionID+":"+p.Text)
+		if p.Text == "/compact" {
+			compactFinished = false
+		} else if !compactFinished {
+			orderMu.Unlock()
+			return nil, errors.New("input arrived before compaction settled")
+		}
+		orderMu.Unlock()
+		if p.Text == "/compact" {
+			go func(sid string) {
+				orderMu.Lock()
+				compactFinished = true
+				orderMu.Unlock()
+				cur, _, _ := n.runtimes.rowOf(sid)
+				cur.Rev++
+				cur.Status = proto.StatusDone
+				cur.ContextTokens = 40_000
+				cur.UpdatedAt = clock.get()
+				otherID := assistantID
+				if sid == assistantID {
+					otherID = taskID
+				}
+				other, _, _ := n.runtimes.rowOf(otherID)
+				_ = host.peer.Notify("runtime.sessions", map[string]any{"sessions": []proto.Session{cur, other}})
+			}(p.SessionID)
+		}
+		return map[string]any{"ok": true}, nil
+	}
+	host.mu.Unlock()
+
+	// Advance past 10 minutes idle and send new input to task Agent via session.send.
+	clock.set(base.Add(12 * time.Minute))
+	if _, err := nodeCall(t, n, "session.send", map[string]any{
+		"session_id": taskID, "text": "continue task", "client_msg_id": "m-task-1",
+	}); err != nil {
+		t.Fatalf("task session.send: %v", err)
+	}
+
+	// Send new input to AGY assistant session via assistant.send (assistantSendRuntime holds typing.lock).
+	if _, err := nodeCall(t, n, "assistant.send", map[string]any{
+		"session_id": assistantID, "text": "hello assistant", "launcher": "agy",
+	}); err != nil {
+		t.Fatalf("assistant.send: %v", err)
+	}
+
+	orderMu.Lock()
+	gotOrder := append([]string(nil), order...)
+	orderMu.Unlock()
+	wantOrder := []string{
+		taskID + ":/compact",
+		taskID + ":continue task",
+		assistantID + ":/compact",
+		assistantID + ":hello assistant",
+	}
+	if strings.Join(gotOrder, "|") != strings.Join(wantOrder, "|") {
+		t.Fatalf("delivery order = %v, want %v", gotOrder, wantOrder)
+	}
+
+	// Sending /compact directly when over thresholds must NOT send a duplicate /compact.
+	t2 := base.Add(30 * time.Minute)
+	pushAgyRow(t, n, host,
+		proto.Session{SessionID: assistantID, Cwd: filepath.Join(n.home, ".persona", "assistant"), Status: proto.StatusDone, Rev: 10, ContextTokens: 260_000, UpdatedAt: t2},
+		proto.Session{SessionID: taskID, Cwd: filepath.Join(n.home, "proj"), Status: proto.StatusDone, Rev: 10, ContextTokens: 260_000, UpdatedAt: t2},
+	)
+	clock.set(t2.Add(15 * time.Minute))
+	orderMu.Lock()
+	order = nil
+	orderMu.Unlock()
+	if _, err := nodeCall(t, n, "session.send", map[string]any{
+		"session_id": taskID, "text": "/compact", "client_msg_id": "m-compact-1",
+	}); err != nil {
+		t.Fatalf("manual /compact: %v", err)
+	}
+	orderMu.Lock()
+	gotManual := append([]string(nil), order...)
+	orderMu.Unlock()
+	if len(gotManual) != 1 || gotManual[0] != taskID+":/compact" {
+		t.Fatalf("manual /compact triggered extra compaction: %v", gotManual)
+	}
+}
+
+func TestAgyIdleAutoCompactWaitsForInFlightSweepBeforeAssistantInput(t *testing.T) {
+	base := time.Date(2026, 11, 27, 11, 30, 0, 0, time.UTC)
+
+	n, host, _ := runtimeCompactFixture(t)
+	clock := setAgyIdleClock(n, base)
+	assistantID := runtimeCompactTestID
+	n.state.put(assistantID, sessionState{Launcher: "agy", Cwd: filepath.Join(n.home, ".persona", "assistant")})
+	pushAgyRow(t, n, host, proto.Session{
+		SessionID: assistantID, Cwd: filepath.Join(n.home, ".persona", "assistant"), Status: proto.StatusDone, Rev: 1, ContextTokens: 250_000, UpdatedAt: base,
+	})
+
+	clock.set(base.Add(11 * time.Minute))
+	n.sweepAgyIdleCompactions(t.Context(), clock.get())
+	waitFor(t, "sweep started silent compaction", func() bool {
+		return n.runtimes.compacting(assistantID)
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := nodeCall(t, n, "assistant.send", map[string]any{
+			"session_id": assistantID, "text": "after sweep", "launcher": "agy",
+		})
+		done <- err
+	}()
+
+	waitFor(t, "assistant.send waiting on in-flight silent sweep", func() bool {
+		unlock, ok := n.typing.tryLock(assistantID)
+		if ok {
+			unlock()
+			return false
+		}
+		return true
+	})
+	select {
+	case err := <-done:
+		t.Fatalf("assistant.send returned before silent compaction settled: %v", err)
+	default:
+	}
+
+	// Settle the silent compaction; assistant.send must now succeed instead of refusing with "compacting".
+	if err := host.peer.Notify("runtime.sessions", map[string]any{"sessions": []proto.Session{{
+		SessionID: assistantID, Cwd: filepath.Join(n.home, ".persona", "assistant"), Status: proto.StatusDone, Rev: 2, ContextTokens: 35_000, UpdatedAt: clock.get(),
+	}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("assistant.send after silent sweep failed: %v", err)
+	}
+	sends := host.got("session.send")
+	if len(sends) != 2 {
+		t.Fatalf("expected 1 sweep /compact + 1 user message, got %d: %s", len(sends), sends)
+	}
+}
+
+func TestAgyIdleAutoCompactBeforeInputFailureStillDelivers(t *testing.T) {
+	base := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
+
+	n, host, _ := runtimeCompactFixture(t)
+	clock := setAgyIdleClock(n, base)
+	taskID := "agy-44444444-5555-6666-7777-888888888888"
+	n.state.put(taskID, sessionState{Launcher: "agy", Cwd: filepath.Join(n.home, "proj")})
+	pushAgyRow(t, n, host, proto.Session{
+		SessionID: taskID, Cwd: filepath.Join(n.home, "proj"), Status: proto.StatusDone, Rev: 1, ContextTokens: 300_000, UpdatedAt: base,
+	})
+
+	host.mu.Lock()
+	host.answer = func(method string, params json.RawMessage) (any, error) {
+		if method == "session.send" {
+			var p struct {
+				Text string `json:"text"`
+			}
+			_ = json.Unmarshal(params, &p)
+			if p.Text == "/compact" {
+				return nil, &rpc.Error{Code: "compact_failed", Message: "temporary failure"}
+			}
+		}
+		return map[string]any{"ok": true}, nil
+	}
+	host.mu.Unlock()
+
+	clock.set(base.Add(15 * time.Minute))
+	if _, err := nodeCall(t, n, "session.send", map[string]any{
+		"session_id": taskID, "text": "still deliver me", "client_msg_id": "m-fail-1",
+	}); err != nil {
+		t.Fatalf("message should still be delivered after best-effort compaction failure: %v", err)
+	}
+	sends := host.got("session.send")
+	if len(sends) != 2 {
+		t.Fatalf("expected /compact attempt + user message, got %d: %s", len(sends), sends)
+	}
+}
+
+func TestAgyIdleAutoCompactGuardsAndConfiguration(t *testing.T) {
+	base := time.Date(2026, 11, 27, 13, 0, 0, 0, time.UTC)
+
+	n, host, _ := runtimeCompactFixture(t)
+	clock := setAgyIdleClock(n, base)
+	h := n.runtimes.ownerOf(runtimeCompactTestID)
+	managedID := runtimeCompactTestID
+	unmanagedID := "agy-55555555-6666-7777-8888-999999999999"
+	n.state.put(managedID, sessionState{Launcher: "agy", Cwd: filepath.Join(n.home, "proj")})
+
+	readyRow := func(id string) proto.Session {
+		return proto.Session{
+			SessionID: id, Cwd: filepath.Join(n.home, "proj"), Status: proto.StatusDone,
+			Rev: 1, ContextTokens: 250_000, UpdatedAt: base,
+		}
+	}
+
+	clock.set(base.Add(15 * time.Minute))
+	cases := []struct {
+		name  string
+		setup func() (proto.Session, func())
+	}{
+		{"unmanaged session", func() (proto.Session, func()) { return readyRow(unmanagedID), nil }},
+		{"working", func() (proto.Session, func()) {
+			r := readyRow(managedID)
+			r.Status = proto.StatusWorking
+			return r, nil
+		}},
+		{"blocked", func() (proto.Session, func()) {
+			r := readyRow(managedID)
+			r.Status = proto.StatusBlocked
+			return r, nil
+		}},
+		{"starting", func() (proto.Session, func()) { r := readyRow(managedID); r.Starting = true; return r, nil }},
+		{"archived", func() (proto.Session, func()) { r := readyRow(managedID); r.Archived = true; return r, nil }},
+		{"subagent", func() (proto.Session, func()) { r := readyRow(managedID); r.IsSubagent = true; return r, nil }},
+		{"needs you state", func() (proto.Session, func()) { r := readyRow(managedID); r.State = proto.StateNeedsYou; return r, nil }},
+		{"pending interactions on row", func() (proto.Session, func()) { r := readyRow(managedID); r.PendingInteractions = 1; return r, nil }},
+		{"background working", func() (proto.Session, func()) { r := readyRow(managedID); r.BackgroundWorking = true; return r, nil }},
+		{"background waiting", func() (proto.Session, func()) { r := readyRow(managedID); r.BackgroundWaiting = true; return r, nil }},
+		{"background tasks list", func() (proto.Session, func()) {
+			r := readyRow(managedID)
+			r.Background = []proto.BackgroundTask{{ID: "bg1"}}
+			return r, nil
+		}},
+		{"woke by task", func() (proto.Session, func()) { r := readyRow(managedID); r.WokeByTask = true; return r, nil }},
+		{"loop active", func() (proto.Session, func()) {
+			r := readyRow(managedID)
+			r.Loop = &proto.LoopInfo{Prompt: "watch"}
+			return r, nil
+		}},
+		{"running subagent", func() (proto.Session, func()) {
+			r := readyRow(managedID)
+			r.Subagents = []proto.Subagent{{ID: "s1", Running: true}}
+			return r, nil
+		}},
+		{"running workflow", func() (proto.Session, func()) {
+			r := readyRow(managedID)
+			r.Workflows = []proto.Workflow{{TaskID: "w1", Running: true}}
+			return r, nil
+		}},
+		{"queued messages", func() (proto.Session, func()) {
+			r := readyRow(managedID)
+			r.Queued = []string{"wait"}
+			return r, nil
+		}},
+		{"node active ask", func() (proto.Session, func()) {
+			_, leave := n.activeAsks.enter(proto.Interaction{SessionID: managedID, Kind: proto.IxQuestion})
+			return readyRow(managedID), func() { leave() }
+		}},
+		{"hub pending interaction via node.configure", func() (proto.Session, func()) {
+			if _, err := nodeCall(t, n, "node.configure", map[string]any{"pending_interaction_sessions": []string{managedID}}); err != nil {
+				t.Fatal(err)
+			}
+			return readyRow(managedID), func() {
+				_, _ = nodeCall(t, n, "node.configure", map[string]any{"pending_interaction_sessions": []string{}})
+			}
+		}},
+		{"state tasks running", func() (proto.Session, func()) {
+			n.state.put(managedID, sessionState{Launcher: "agy", Cwd: filepath.Join(n.home, "proj"), Tasks: []string{"t1"}})
+			return readyRow(managedID), func() {
+				n.state.put(managedID, sessionState{Launcher: "agy", Cwd: filepath.Join(n.home, "proj")})
+			}
+		}},
+		{"external terminal presence lock", func() (proto.Session, func()) {
+			prev := agyPresenceLockProbe
+			agyPresenceLockProbe = func(string) agyLockState { return agyLockHeld }
+			return readyRow(managedID), func() { agyPresenceLockProbe = prev }
+		}},
+	}
+
+	policy := n.agyIdleCompactionPolicy()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			row, cleanup := tc.setup()
+			if cleanup != nil {
+				defer cleanup()
+			}
+			if _, ready := n.agyIdleReady(h, row, policy, clock.get()); ready {
+				t.Fatalf("guard %q unexpectedly allowed compaction", tc.name)
+			}
+		})
+	}
+
+	// Custom thresholds and disable toggle via node.configure (preserving existing claude_dirs).
+	n.setKnownClaudeDirs([]string{"/tmp/kept-claude-dir"})
+	if _, err := nodeCall(t, n, "node.configure", map[string]any{
+		"agy_idle_compaction": assistantwire.AgyIdleCompaction{Enabled: false, IdleMinutes: 5, ContextTokens: 150_000},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if n.agyIdleCompactionPolicy().Enabled {
+		t.Fatal("expected policy to be disabled via node.configure")
+	}
+	if _, ready := n.agyIdleReady(h, readyRow(managedID), n.agyIdleCompactionPolicy(), clock.get()); ready {
+		t.Fatal("disabled policy should block compaction")
+	}
+	if _, err := nodeCall(t, n, "node.configure", map[string]any{
+		"agy_idle_compaction": assistantwire.AgyIdleCompaction{Enabled: true, IdleMinutes: 5, ContextTokens: 150_000},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	r := readyRow(managedID)
+	r.ContextTokens = 160_000
+	r.UpdatedAt = clock.get()
+	pushAgyRow(t, n, host, r)
+	clock.set(clock.get().Add(5 * time.Minute))
+	if _, ready := n.agyIdleReady(h, r, n.agyIdleCompactionPolicy(), clock.get()); !ready {
+		t.Fatal("custom thresholds (5m / 150k) should allow compaction at 5m / 160k")
+	}
+}
+
+func TestAgyTranscriptMapsCompactToDividerNotices(t *testing.T) {
+	raw := strings.Join([]string{
+		`{"step_index":0,"type":"USER_INPUT","source":"USER_EXPLICIT","status":"DONE","created_at":"2026-11-27T01:00:00Z","content":"<USER_REQUEST>\nhi\n</USER_REQUEST>"}`,
+		`{"step_index":1,"type":"PLANNER_RESPONSE","source":"MODEL","status":"DONE","created_at":"2026-11-27T01:00:05Z","content":"hello","input_tokens":4000,"cache_read_tokens":246000,"output_tokens":120}`,
+		`{"step_index":2,"type":"USER_INPUT","source":"USER_EXPLICIT","status":"DONE","created_at":"2026-11-27T01:15:00Z","content":"<USER_REQUEST>\n/compact\n</USER_REQUEST>","client_msg_id":"cmp-1"}`,
+		`{"step_index":3,"type":"CHECKPOINT","source":"SYSTEM","status":"DONE","created_at":"2026-11-27T01:15:10Z","content":"# Resuming","input_tokens":3800,"cache_read_tokens":250200,"output_tokens":6000}`,
+		`{"step_index":4,"type":"USER_INPUT","source":"USER_EXPLICIT","status":"DONE","created_at":"2026-11-27T01:16:00Z","content":"<USER_REQUEST>\nnext\n</USER_REQUEST>"}`,
+	}, "\n") + "\n"
+
+	steps, _ := parseAgySteps([]byte(raw), agyTestID)
+	h := mapAgySteps(steps, time.Now(), nil)
+	if h.usage.turns != 2 {
+		t.Fatalf("turns = %d, want 2 (/compact must not count as user turn)", h.usage.turns)
+	}
+	if len(h.items) != 5 {
+		t.Fatalf("items count = %d, want 5: %+v", len(h.items), h.items)
+	}
+	if h.items[2].Role != "system" || h.items[2].Kind != proto.KindNotice || h.items[2].Text != transcript.CompactNotice || h.items[2].ClientMsgID != "cmp-1" {
+		t.Fatalf("item[2] = %+v, want CompactNotice", h.items[2])
+	}
+	if h.items[3].Role != "system" || h.items[3].Kind != proto.KindNotice || h.items[3].Text != transcript.CompactedNotice || h.items[3].Compact == nil || h.items[3].Compact.PreTokens != 254_000 {
+		t.Fatalf("item[3] = %+v, want CompactedNotice with pre_tokens=254000", h.items[3])
+	}
+	usage := extractAgyUsage(steps)
+	if usage.turns != 2 || usage.compactions != 1 || usage.contextTokens != 0 {
+		t.Fatalf("extractAgyUsage = %+v", usage)
+	}
+}

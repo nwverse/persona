@@ -712,6 +712,8 @@ What it does, each run:
   `meetings/lark-minutes-<token>` item: `Title` from the first line of `display_info`, `URL` from `app_link`, `At` from
   the start time in `description` (read in the archive's zone), `Where` `lark-cli`, `Source` `larkcli`. The note keeps
   one line of the summary, the first three to-dos and the first five chapter titles — **never the transcript**.
+  Its labels (summary, to-dos, chapters) are in the owner's language (`kb-lark.json`); what Lark sent is kept as it
+  came, and a note keeps the language it was first written in.
 - **Document titles**: documents under `docs/` with no title whose link is a Lark / Feishu one get it from
   `drive +inspect` (at most 10 a run). The title is written and the document is listed by `GET /api/v1/kb/docs`.
 - **Document discovery** (`doc_search`, empty: off): each keyword's first `docs +search` page becomes `docs/<token>`
@@ -1221,7 +1223,7 @@ and a disabled knowledge base (`kb.enabled: false`) returns 503 as before.
 ## A chat's Inbox items
 
 A chat's page leads to the Inbox items that came from it, and an item leads back to the chat's page (#15356,
-`assistant/kb_inbox.go`). Neither side keeps a message id, so a message is matched on its time, sender and text.
+`assistant/kb_inbox.go`, with the Inbox's side in `assistant/inbox_kb_chat.go`). Neither side keeps a message id, so a message is matched on its time, sender and text.
 
 - **Which items**: an item is a chat's when its connector and thread are the chat's `connector` (in an older file, its
   `source`) and `source_id`, whatever the connector, or when the chat is the one the AI twin reads for it (`kbChatOf` in

@@ -14,7 +14,7 @@ import { AgentDecisionQueue, AgentDecisionCard } from '../models/AgentDecisionQu
 import { util } from '@kit.ArkTS';
 import {
   InteractionChoice, InteractionSchemaField, InteractionValidation,
-  interactionCardAgent, interactionQuestionHeader, interactionPermissionTool, interactionPermissionSubject, interactionSessionAllowance, interactionAllowanceScope,
+  interactionCardAgent, interactionCanHandBack, interactionQuestionHeader, interactionPermissionTool, interactionPermissionSubject, interactionSessionAllowance, interactionAllowanceScope,
   recordedPlanMode, interactionCanDefer, interactionCanSubmit, interactionSupervisorHeld, interactionToolName, interactionElicitationDefaults, interactionElicitationMessage,
   interactionElicitationMode, interactionElicitationSupported, interactionElicitationUrl, interactionHistoryResolution,
   interactionPermissionFieldPlaceholder, interactionPlanTitle, interactionQuestionOptions,
@@ -662,7 +662,7 @@ export struct InteractionDecisionForm {
 
   @Builder dockMenu() {
     Menu() {
-      if ((this.taskQueue || this.agentCard) && interactionToolName(this.request) !== 'ask_user') MenuItem({content:tr('phone_interaction_terminal')})
+      if ((this.taskQueue || this.agentCard) && interactionCanHandBack(this.request)) MenuItem({content:tr('phone_interaction_terminal')})
         .enabled(this.canRespond()).onClick(() => this.submit('dismiss'))
     }
   }
@@ -777,7 +777,7 @@ export struct InteractionDecisionForm {
         }
       }.width(this.headerControlSide()).height(this.headerControlSide()).padding(0).backgroundColor(Color.Transparent).accessibilityText(tr('phone_plan_fullscreen'))
         .onClick(() => { if (this.admission()) this.fullPlan=true; }).id('interaction.task.expand_plan')
-      if (!this.supervisorHeld && (this.taskQueue || this.agentCard) && interactionToolName(this.request)!=='ask_user') Button({type:ButtonType.Circle}) {
+      if (!this.supervisorHeld && (this.taskQueue || this.agentCard) && interactionCanHandBack(this.request)) Button({type:ButtonType.Circle}) {
         Row({space:this.docked ? 2.17 : 2}) {
           ForEach([0,1,2],(_dot:number) => {
             Circle().width(this.docked ? 2.67 : 2.5).height(this.docked ? 2.67 : 2.5)

@@ -441,8 +441,10 @@ func desktopSessions(read []desktopEntryFile) []desktopSession {
 				ranBefore[old] = true
 			}
 		}
-		slices.SortStableFunc(copies, func(a, b desktopEntryFile) int { // newest first
-			return cmp.Or(b.mtime.Compare(a.mtime), strings.Compare(b.entry.transcript, a.entry.transcript))
+		// Newest first: the copy active last (lastActivityAt) describes the session, then the later-written file (#15262).
+		slices.SortStableFunc(copies, func(a, b desktopEntryFile) int {
+			return cmp.Or(cmp.Compare(b.entry.activity, a.entry.activity), b.mtime.Compare(a.mtime),
+				strings.Compare(b.entry.transcript, a.entry.transcript))
 		})
 		head := 0
 		for i, c := range copies {

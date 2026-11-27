@@ -198,7 +198,7 @@ func setContext(s *proto.Session, m quickMeta) {
 	if m.codex && m.serviceTier != "" {
 		s.ServiceTier = m.serviceTier
 	}
-	s.OutputTokens = m.outputTokens
+	s.SetOutputTokens(m.outputTokens)
 	s.ContextRestartRecommended = m.contextRestartRecommended
 	s.TitleManual = s.TitleManual || m.titleManual
 	if m.title != "" && s.Title == m.title || m.title == "" && m.titleSource == "prompt" {

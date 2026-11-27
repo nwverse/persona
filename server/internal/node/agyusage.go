@@ -172,9 +172,13 @@ func extractAgyUsage(steps []agyStep) agyTranscriptUsage {
 		switch step.Type {
 		case "USER_INPUT":
 			if step.Source == "" || step.Source == "USER_EXPLICIT" {
+				text := agyUserText(step.Content)
+				if isAgyCompactCommand(text) {
+					break
+				}
 				u.turns++
 				if u.first == "" {
-					u.first = agyUserText(step.Content)
+					u.first = text
 				}
 			}
 		case "CHECKPOINT":
@@ -407,7 +411,7 @@ func (n *Node) resolveAgyContext(s *proto.Session, conversation string) {
 	// The companion may have filtered out a rewound tail that is still on disk. Pair the
 	// local category weights with companion counts only when their observed usage agrees.
 	if u, ok := n.agyTranscriptMeta(conversation); ok && proto.Tokens32(u.contextTokens) == s.ContextTokens &&
-		(s.OutputTokens == 0 || u.outputTokens == s.OutputTokens) {
+		(s.OutputTokensValue() == 0 || int32(u.outputTokens) == s.OutputTokensValue()) {
 		setAgyContextBreakdown(s, u.contextStats)
 	}
 }
@@ -488,7 +492,7 @@ func (n *Node) mergeAgyTranscript(s *proto.Session, conversation string) {
 			s.Model = u.model
 		}
 		if u.outputTokens > 0 {
-			s.OutputTokens = u.outputTokens
+			s.SetOutputTokens(int(u.outputTokens))
 		}
 		if s.UpdatedAt.IsZero() && !u.modTime.IsZero() {
 			s.UpdatedAt = u.modTime

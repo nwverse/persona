@@ -12,6 +12,7 @@ import (
 	"time"
 
 	approvalops "github.com/nwverse/persona/server/internal/approval"
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -164,6 +165,21 @@ func (s *Service) allOwnSettings() []ownSetting {
 			Value: "a whole number from 10000 to 10000000"},
 			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.idleAutoCompactTokens(ctx)), nil },
 			set: s.setIdleAutoCompactTokens},
+		{Setting: Setting{Key: "assistant.agy_idle_auto_compact", Title: "Compact idle Antigravity sessions", Actions: getSet,
+			About: "on (the default): proactively compact Persona-managed Antigravity sessions (task Agents and AGY assistant/direction chats) once both idle time and context size thresholds are reached",
+			Value: "true or false"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.agyIdleAutoCompact(ctx)), nil },
+			set: s.setAgyIdleAutoCompact},
+		{Setting: Setting{Key: "assistant.agy_idle_auto_compact_minutes", Title: "Antigravity idle time before compaction", Actions: getSet,
+			About: "minimum idle time before automatic Antigravity session compaction; 10 minutes by default",
+			Value: "a whole number from 1 to 1440"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.agyIdleAutoCompactMinutes(ctx)), nil },
+			set: s.setAgyIdleAutoCompactMinutes},
+		{Setting: Setting{Key: "assistant.agy_idle_auto_compact_tokens", Title: "Antigravity context size before compaction", Actions: getSet,
+			About: "minimum context size before automatic Antigravity session compaction; 200000 tokens by default",
+			Value: "a whole number from 10000 to 10000000"},
+			get: func(ctx context.Context) (string, error) { return fmt.Sprint(s.agyIdleAutoCompactTokens(ctx)), nil },
+			set: s.setAgyIdleAutoCompactTokens},
 		{Setting: Setting{Key: "assistant.idle_release_minutes", Title: "Main chat stays loaded when idle", Actions: getSet,
 			About: "how long the main chat's process stays loaded after its last activity before it is let go (it resumes on the " +
 				"next message); 20 minutes by default. Just before, it is compacted when its context is large (assistant.idle_auto_compact_tokens " +
@@ -866,6 +882,7 @@ func orNone(s string) string {
 // what the assistant reads).
 var settingTitles = map[string]string{modulesKey: "title_modules", standingAuthorizationsKey: "title_standing_authorizations", "assistant.notes": "title_notes", "assistant.main_tasks_quiet": "title_main_tasks_quiet",
 	"assistant.idle_auto_compact": "title_idle_auto_compact", "assistant.idle_auto_compact_minutes": "title_idle_auto_compact_minutes", "assistant.idle_auto_compact_tokens": "title_idle_auto_compact_tokens",
+	"assistant.agy_idle_auto_compact": "title_agy_idle_auto_compact", "assistant.agy_idle_auto_compact_minutes": "title_agy_idle_auto_compact_minutes", "assistant.agy_idle_auto_compact_tokens": "title_agy_idle_auto_compact_tokens",
 	"assistant.idle_release_minutes":      "title_idle_release_minutes",
 	readonlyModeKey:                       "title_readonly_mode",
 	"assistant.task_workspace_preference": "title_task_workspace_preference",
@@ -959,6 +976,63 @@ func (s *Service) setIdleAutoCompactTokens(ctx context.Context, raw json.RawMess
 		}
 		s.settingsChanged(ctx)
 		return i18n.T(s.lang(ctx), "assistant-settings_tool.idle_auto_compact_saved"), nil
+	}}, nil
+}
+
+func (s *Service) setAgyIdleAutoCompact(ctx context.Context, raw json.RawMessage) (*ownChange, error) {
+	var value *bool
+	if err := json.Unmarshal(raw, &value); err != nil || value == nil {
+		return nil, i18n.Err("assistant-settings_tool.bad_agy_idle_auto_compact")
+	}
+	return s.setBoolSetting(ctx, raw, s.agyIdleAutoCompact, i18n.T(s.lang(ctx), "assistant-settings_tool.agy_idle_auto_compact_unchanged"), func(l i18n.Lang, before, after string) string {
+		return i18n.T(l, "assistant-settings_tool.change_agy_idle_auto_compact", i18n.Args{"before": before, "after": after})
+	}, func(v *Settings) **bool { return &v.AgyIdleAutoCompact },
+		"Antigravity idle compaction setting saved (%v).")
+}
+
+func (s *Service) setAgyIdleAutoCompactMinutes(ctx context.Context, raw json.RawMessage) (*ownChange, error) {
+	var value int
+	if err := json.Unmarshal(raw, &value); err != nil || !assistantwire.AgyIdleMinutesValid(value) {
+		return nil, i18n.Err("assistant-settings_tool.bad_agy_idle_auto_compact_minutes")
+	}
+	before := s.agyIdleAutoCompactMinutes(ctx)
+	if value == before {
+		return &ownChange{summary: i18n.T(s.lang(ctx), "assistant-settings_tool.agy_idle_auto_compact_unchanged")}, nil
+	}
+	if s.store() == nil {
+		return nil, errors.New("no database on this hub")
+	}
+	return &ownChange{cardText: func(l i18n.Lang) string {
+		return i18n.T(l, "assistant-settings_tool.change_agy_idle_auto_compact_minutes", i18n.Args{"before": before, "after": value})
+	}, apply: func(ctx context.Context) (string, error) {
+		if _, err := s.updateSettings(ctx, func(v *Settings) error { v.AgyIdleAutoCompactMinutes = &value; return nil }); err != nil {
+			return "", err
+		}
+		s.settingsChanged(ctx)
+		return i18n.T(s.lang(ctx), "assistant-settings_tool.agy_idle_auto_compact_saved"), nil
+	}}, nil
+}
+
+func (s *Service) setAgyIdleAutoCompactTokens(ctx context.Context, raw json.RawMessage) (*ownChange, error) {
+	var value int
+	if err := json.Unmarshal(raw, &value); err != nil || !assistantwire.AgyIdleTokensValid(value) {
+		return nil, i18n.Err("assistant-settings_tool.bad_agy_idle_auto_compact_tokens")
+	}
+	before := s.agyIdleAutoCompactTokens(ctx)
+	if value == before {
+		return &ownChange{summary: i18n.T(s.lang(ctx), "assistant-settings_tool.agy_idle_auto_compact_unchanged")}, nil
+	}
+	if s.store() == nil {
+		return nil, errors.New("no database on this hub")
+	}
+	return &ownChange{cardText: func(l i18n.Lang) string {
+		return i18n.T(l, "assistant-settings_tool.change_agy_idle_auto_compact_tokens", i18n.Args{"before": before, "after": value})
+	}, apply: func(ctx context.Context) (string, error) {
+		if _, err := s.updateSettings(ctx, func(v *Settings) error { v.AgyIdleAutoCompactTokens = &value; return nil }); err != nil {
+			return "", err
+		}
+		s.settingsChanged(ctx)
+		return i18n.T(s.lang(ctx), "assistant-settings_tool.agy_idle_auto_compact_saved"), nil
 	}}, nil
 }
 
