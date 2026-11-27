@@ -49,6 +49,12 @@ describe("an agent's row", () => {
     expect(link(html)).toContain('aria-current="page"');
     expect(link(html)).toMatch(/class="[^"]*\bbg-hover-2\b/);
   });
+  it("draws an error phase with the error mark, not the Seen dot its activity folds it into (#16873)", () => {
+    const mark = (s: Session) => renderToStaticMarkup(<SessionRow {...rowProps} s={s} showState active={false} />).match(/class="status-mark[^"]*"[^>]*data-state="([^"]+)"/)?.[1];
+    expect(mark({ ...session, view: { phase: "error", reason: { kind: "start_refused" }, rank: 10 } } as Session)).toBe("error");
+    expect(mark({ ...session, view: { phase: "done", reason: { kind: "unseen" }, rank: 30 } } as Session)).toBe("unread");
+    expect(mark(session)).toBe("idle");
+  });
   it("is neither when it is not", () => {
     const html = renderToStaticMarkup(<SessionRow {...rowProps} active={false} />);
     expect(link(html)).not.toContain("aria-current");
