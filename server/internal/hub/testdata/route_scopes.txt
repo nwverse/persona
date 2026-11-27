@@ -116,6 +116,7 @@ todos.write          DELETE /api/v1/todos/{id}/spaces/{mid}/{space...}
 -                    DELETE {base}/bindings/{key}
 -                    DELETE {base}/bots/{bot}
 -                    DELETE {base}/markets/{mid}
+-                    DELETE {base}/markets/{mid}/keys/{kid}
 -                    GET /api/v1/a2a/{mid}/{sid}/.well-known/agent-card.json
 -                    GET /api/v1/admin/devices
 -                    GET /api/v1/admin/devices/{credential_id}/owner
@@ -187,6 +188,7 @@ machines.read        GET /api/v1/assistant/machine-resources
 -                    GET /api/v1/assistant/memory
 -                    GET /api/v1/assistant/north-star
 -                    GET /api/v1/assistant/organization/snapshot
+-                    GET /api/v1/assistant/outbound-messages
 tasks.schedule       GET /api/v1/assistant/placement/pending
 -                    GET /api/v1/assistant/places
 -                    GET /api/v1/assistant/readiness
@@ -414,9 +416,12 @@ agents.read          GET /api/v1/sessions/{mid}/{sid}/screen
 -                    GET /api/v1/subscriptions/catalog
 -                    GET /api/v1/subscriptions/summary
 -                    GET /api/v1/subscriptions/{id}
+-                    GET /api/v1/task-plans
 -                    GET /api/v1/task-plans/{id}
 -                    GET /api/v1/task-trust
 todos.read           GET /api/v1/todos
+-                    GET /api/v1/todos/decisions/groups
+-                    GET /api/v1/todos/mergetrain
 todos.read           GET /api/v1/todos/places
 -                    GET /api/v1/todos/revision
 todos.read           GET /api/v1/todos/{id}
@@ -427,11 +432,14 @@ todos.read           GET /api/v1/todos/{id}/decisions
 -                    GET /api/v1/todos/{id}/images/{image}
 todos.read           GET /api/v1/todos/{id}/repositories
 todos.read           GET /api/v1/todos/{id}/timeline
+-                    GET /api/v1/todos/{id}/trace
 todos.read           GET /api/v1/todos/{id}/workspace-naming/plans/{operation_id}
 todos.read           GET /api/v1/todos/{id}/workspace-rules
 -                    GET /api/v1/usage
 -                    GET /api/v1/usage/days
 -                    GET /api/v1/usage/hours
+-                    GET /api/v1/usage/projects
+-                    GET /api/v1/usage/projects/detail
 -                    GET /api/v1/usage/windows
 agents.read          GET /api/v1/workspace-board
 agents.read          GET /api/v1/workspace-board/activity
@@ -445,6 +453,7 @@ agents.read          GET /api/v1/workspaces
 -                    GET {base}/catalog
 -                    GET {base}/market-settings
 -                    GET {base}/markets
+-                    GET {base}/markets/{mid}/keys
 -                    GET {bus.Path}
 -                    GET {devicewire.DevelopmentPackagesPath}/{commit}/{version}/{file}
 -                    GET {devicewire.RelayPath}
@@ -529,6 +538,7 @@ leaders.write        POST /api/v1/assistant/directions/{id}/progress
 -                    POST /api/v1/assistant/main/clear
 -                    POST /api/v1/assistant/main/new
 -                    POST /api/v1/assistant/origins/backfill
+-                    POST /api/v1/assistant/outbound-messages
 tasks.schedule       POST /api/v1/assistant/placement/{todo_id}/assign
 tasks.schedule       POST /api/v1/assistant/placement/{todo_id}/defer
 -                    POST /api/v1/assistant/places
@@ -605,6 +615,7 @@ market.refresh_own   POST /api/v1/extensions/-/self/market/refresh
 -                    POST /api/v1/hub/recovery/bundles/{id}/verify
 -                    POST /api/v1/hub/update
 -                    POST /api/v1/hub/update/backups/{id}/apply
+-                    POST /api/v1/hub/update/cancel
 -                    POST /api/v1/hub/update/check
 inbox.write          POST /api/v1/inbox/bulk
 inbox.write          POST /api/v1/inbox/done
@@ -780,7 +791,9 @@ todos.write          POST /api/v1/todos
 todos.write          POST /api/v1/todos/{id}/decisions
 -                    POST /api/v1/todos/{id}/done-check
 -                    POST /api/v1/todos/{id}/handoff
+-                    POST /api/v1/todos/{id}/merge
 -                    POST /api/v1/todos/{id}/retry
+-                    POST /api/v1/todos/{id}/split
 -                    POST /api/v1/todos/{id}/start/answer
 todos.write          POST /api/v1/todos/{id}/workspace-naming/plans
 todos.write          POST /api/v1/todos/{id}/workspace-naming/preview
@@ -797,6 +810,7 @@ todos.write          POST /api/v1/todos/{id}/workspace-naming/preview
 -                    POST {base}/bots/{bot}/scopes
 -                    POST {base}/catalog/preview
 -                    POST {base}/markets
+-                    POST {base}/markets/{mid}/keys
 -                    POST {base}/markets/{mid}/refresh
 -                    POST {base}/oauth
 -                    POST {bus.JoinPath}

@@ -21,7 +21,7 @@ import { ExtensionThemePicker } from "../ui/ExtensionThemePicker";
 import { setTheme, useTheme, type Theme } from "./theme";
 import { Group, Row, Pill, RowConfirm, Switch } from "./settings/SettingsParts";
 import { LanguageRow } from "./settings/LanguageRow";
-import { FontRows, RecentChatsRow, SidebarIconsRow, SidebarUsageRow, TextSizeRow, ThemeColorPicker } from "./settings/LookSettings";
+import { FontRows, RecentChatsRow, SidebarIconsRow, SidebarUsageRow, SurfaceStyleRow, TextSizeRow, ThemeColorPicker } from "./settings/LookSettings";
 import { setStarredEnabled, useStarredSetting } from "../lib/starred-summary";
 import { setReplyMotionEnabled, useReplyMotionSetting } from "../ui/stream/motion";
 import { setAgentDetails, useAgentDetails } from "../lib/context-usage";
@@ -81,6 +81,7 @@ import { SHEET_QUERY, useMedia } from "../ui/overlay";
 import { lazyDialog, lazyOverlay, useOpened } from "./LazyOverlay";
 import { lazyPage } from "../lib/lazy-page";
 import { formatList, t } from "../i18n";
+import { settingsPrefill } from "../lib/settings-prefill";
 
 // ── types (docs/integrations/launchers.md) ───────────────────────────
 
@@ -231,6 +232,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     return () => observer.disconnect();
   }, [tab, phone]);
   const sourcesManager = tab === "sources" ? new URLSearchParams(location.search).get("manager") ?? picked ?? undefined : undefined;
+  const extensionPrefill = tab === "extensions" ? settingsPrefill(location.search) : undefined;
   useLayoutEffect(() => (ASSISTANT_TABS.has(tab) ? pinManagerAt(ASSISTANT_PREFIXES, otherManager(picked ?? undefined)) : undefined), [tab, picked]);
   // Another assistant made current with one of the group's items open (a connector, an extension, a channel, a model
   // purpose): that item is the last assistant's, so the page goes back to its list, which then lists the new one's.
@@ -413,7 +415,7 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     isIntegrationDetailRoute(parseIntegrationsSub(sub));
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
-      <header className="flex min-h-14 shrink-0 items-center gap-2 border-b border-line px-3 py-2 sm:px-4">
+      <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3 sm:px-4">
         {phone && at.tab ? (
           <>
             <IconButton icon="chevronLeft" label={up ? up.label : t("settings.back")} onClick={goBack} />
@@ -527,11 +529,11 @@ export function Settings({ onToggleSidebar }: { onToggleSidebar: () => void }) {
               )}</Suspense>}
               {tab === "extensions" && <Suspense fallback={<Loading />}>{extensionsRoute(sub).kind === "extension" && twoCol ? (
                 <div className="flex gap-6">
-                  <div className="w-[300px] shrink-0"><Extensions open={null} openBeside={sub} onOpen={(id) => pick("extensions", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} onConnector={(id, manager) => pick("connectors", ownedSub(id, manager))} /></div>
-                  <div className="min-w-0 flex-1"><Extensions open={sub} onOpen={(id) => pick("extensions", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} onConnector={(id, manager) => pick("connectors", ownedSub(id, manager))} /></div>
+                  <div className="w-[300px] shrink-0"><Extensions open={null} openBeside={sub} onOpen={(id) => pick("extensions", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} onConnector={(id, manager) => pick("connectors", ownedSub(id, manager))} prefill={extensionPrefill} /></div>
+                  <div className="min-w-0 flex-1"><Extensions open={sub} onOpen={(id) => pick("extensions", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} onConnector={(id, manager) => pick("connectors", ownedSub(id, manager))} prefill={extensionPrefill} /></div>
                 </div>
               ) : (
-                <Extensions open={sub} headerBack={phone} onOpen={(id) => pick("extensions", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} onConnector={(id, manager) => pick("connectors", ownedSub(id, manager))} onPageWide={setExtensionPageWide} />
+                <Extensions open={sub} headerBack={phone} onOpen={(id) => pick("extensions", id)} onChannel={(id, manager) => pick("channels", ownedSub(id, manager))} onConnector={(id, manager) => pick("connectors", ownedSub(id, manager))} onPageWide={setExtensionPageWide} prefill={extensionPrefill} />
               )}</Suspense>}
               {tab === "shortcuts" && <ShortcutSettings />}
               {tab === "labs" && <Suspense fallback={<Loading />}><LabsSettings /></Suspense>}
@@ -848,6 +850,7 @@ function General({ onModel }: { onModel: () => void }) {
 function Advanced() {
   return (
     <Group title={t("settings.appearance")} anchor="appearance">
+      <SurfaceStyleRow />
       <ThemeColorPicker />
       <ExtensionThemePicker />
       <FontRows />

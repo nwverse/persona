@@ -38,6 +38,7 @@ const answers: Record<string, unknown> = { "/api/v1/sessions": { sessions }, "/a
 let host: HTMLDivElement;
 let root: Root;
 const flush = async () => {
+  await act(async () => { await vi.dynamicImportSettled(); }); // NodeMenu comes in a chunk of its own
   for (let i = 0; i < 5; i++) await act(async () => { await Promise.resolve(); });
 };
 const leadRow = () => [...host.querySelectorAll("a")].find((a) => a.textContent?.includes("#1") && a.textContent.includes("主窗格"));
@@ -97,7 +98,7 @@ describe("a herdr tab with several panes", () => {
     expect(menu()?.textContent).toContain("标签页 #1");
     const items = menu()?.textContent ?? "";
     // the tab's own items (its node), not one agent's: rename, split, close the tab
-    for (const item of ["重命名", "新建窗格", "关闭标签页"]) expect(items).toContain(item);
+    for (const item of ["重命名", "终端分屏", "关闭标签页"]) expect(items).toContain(item);
     // a closed menu again on the second click (the toggle a ⋯ has)
     act(() => more!.click());
     await flush();

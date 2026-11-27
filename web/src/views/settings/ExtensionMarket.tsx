@@ -1158,4 +1158,3 @@ function permissionIcon(key: string) {
       return "info";
   }
 }
-

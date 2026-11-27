@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -53,6 +54,16 @@ type todoBlockerReconcileSummary struct {
 	EscalatedIDs     []string
 	UnblockedTodoIDs []string
 	SharedGroups     []todoBlockerSharedGroup
+}
+
+type todoStageUnlockSpec struct {
+	stage     string
+	contracts []string
+}
+
+type todoStageBlockerCondition struct {
+	RequiredStage     string   `json:"required_stage,omitempty"`
+	RequiredContracts []string `json:"required_contracts,omitempty"`
 }
 
 type todoBlockerHooks struct {
@@ -211,6 +222,184 @@ func (s *Service) persistExternalPRBlockers(ctx context.Context, todoID string, 
 	return nil
 }
 
+// parseUnlockStageRule validates optional structured unlock_stage and unlock_contracts inputs.
+func parseUnlockStageRule(rawStage string, rawContracts []string) (string, []string, error) {
+	normStage := ""
+	if trimmed := strings.TrimSpace(rawStage); trimmed != "" {
+		st, ok := stagegate.NormalizeStage(trimmed)
+		if !ok {
+			return "", nil, fmt.Errorf("unlock_stage %q is invalid (valid: plan, contract_ready, develop, pr_open, merged, done)", rawStage)
+		}
+		normStage = string(st)
+	}
+	normContracts := stagegate.NormalizeContracts(rawContracts)
+	return normStage, normContracts, nil
+}
+
+func encodeTodoStageBlockerCondition(stage string, contracts []string) string {
+	cond := todoStageBlockerCondition{
+		RequiredStage:     strings.TrimSpace(stage),
+		RequiredContracts: stagegate.NormalizeContracts(contracts),
+	}
+	if cond.RequiredStage == "" && len(cond.RequiredContracts) == 0 {
+		return "{}"
+	}
+	b, err := json.Marshal(cond)
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
+}
+
+func decodeTodoStageBlockerCondition(raw string) (todoStageUnlockRule, bool) {
+	var cond todoStageBlockerCondition
+	if err := decodeTodoBlockerCondition(raw, &cond); err != nil {
+		return todoStageUnlockRule{}, false
+	}
+	var rule todoStageUnlockRule
+	if st, ok := stagegate.NormalizeStage(cond.RequiredStage); ok {
+		rule.Stage = st
+	}
+	rule.Contracts = stagegate.NormalizeContracts(cond.RequiredContracts)
+	if rule.Stage == "" && len(rule.Contracts) == 0 {
+		return todoStageUnlockRule{}, false
+	}
+	return rule, true
+}
+
+func normalizeBlockerConditionJSON(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" || s == "null" {
+		return "{}"
+	}
+	return s
+}
+
+// todoStageUnlockRuleFromBlockers extracts a structured stage/contract unlock rule from persisted todo_stage blockers
+// for todoID under todos_v2, allowing structured unlock_stage/unlock_contracts inputs to work alongside legacy notes.
+func (s *Service) todoStageUnlockRuleFromBlockers(ctx context.Context, todoID string) (todoStageUnlockRule, bool) {
+	if s == nil || !s.settings(ctx).todosV2On() {
+		return todoStageUnlockRule{}, false
+	}
+	st := s.todoBlockerDB()
+	if st == nil {
+		return todoStageUnlockRule{}, false
+	}
+	rows, err := st.ListTodoBlockersByTodo(ctx, strings.TrimSpace(todoID))
+	if err != nil {
+		return todoStageUnlockRule{}, false
+	}
+	for _, r := range rows {
+		if r.Kind != todoBlockerKindTodoStage || r.State == db.TodoBlockerStateCancelled {
+			continue
+		}
+		if rule, ok := decodeTodoStageBlockerCondition(r.ConditionJSON); ok {
+			return rule, true
+		}
+	}
+	return todoStageUnlockRule{}, false
+}
+
+// syncAfterBlockers mirrors Todo.After edges into persistent todo_blockers (todo_done or todo_stage) strictly
+// when todos_v2 is enabled. It upserts active edges for current afterIDs, skips already-resolved identical edges,
+// and cancels stale active mirrored todo_done/todo_stage edges whose target_ref was removed without touching
+// external_pr, merge_train, or other blocker kinds.
+func (s *Service) syncAfterBlockers(ctx context.Context, todoID string, afterIDs []string, unlockStage string, unlockContracts []string) {
+	if s == nil || !s.settings(ctx).todosV2On() {
+		return
+	}
+	todoID = strings.TrimSpace(todoID)
+	if todoID == "" {
+		return
+	}
+	st := s.todoBlockerDB()
+	if st == nil {
+		return
+	}
+
+	existing, err := st.ListTodoBlockersByTodo(ctx, todoID)
+	if err != nil {
+		s.logf("todo %s: list blockers for after mirror: %v", todoID, err)
+		return
+	}
+	existingByID := make(map[string]db.TodoBlockerRow, len(existing))
+	for _, r := range existing {
+		existingByID[r.ID] = r
+	}
+
+	normStage := ""
+	if stVal, ok := stagegate.NormalizeStage(unlockStage); ok {
+		normStage = string(stVal)
+	}
+	normContracts := stagegate.NormalizeContracts(unlockContracts)
+	if normStage == "" && len(normContracts) == 0 {
+		if t, ok := s.todoNow(todoID); ok {
+			if rule, hasRule := parseTodoStageUnlockRule(t); hasRule {
+				normStage = string(rule.Stage)
+				normContracts = rule.Contracts
+			}
+		}
+	}
+	if normStage == "" && len(normContracts) == 0 {
+		for _, r := range existing {
+			if r.Kind == todoBlockerKindTodoStage && r.State == db.TodoBlockerStateActive {
+				if rule, hasRule := decodeTodoStageBlockerCondition(r.ConditionJSON); hasRule {
+					normStage = string(rule.Stage)
+					normContracts = rule.Contracts
+					break
+				}
+			}
+		}
+	}
+
+	kind := todoBlockerKindTodoDone
+	condJSON := "{}"
+	if normStage != "" || len(normContracts) > 0 {
+		kind = todoBlockerKindTodoStage
+		condJSON = encodeTodoStageBlockerCondition(normStage, normContracts)
+	}
+
+	deps := cleanIDs(afterIDs)
+	wantIDs := make(map[string]struct{}, len(deps))
+	for _, depID := range deps {
+		if depID == todoID {
+			continue
+		}
+		id := todoBlockerID(todoID, kind, depID)
+		wantIDs[id] = struct{}{}
+		if cur, ok := existingByID[id]; ok && cur.State == db.TodoBlockerStateResolved &&
+			normalizeBlockerConditionJSON(cur.ConditionJSON) == condJSON {
+			continue
+		}
+		if _, err := s.addTodoBlocker(ctx, db.TodoBlockerRow{
+			ID:            id,
+			TodoID:        todoID,
+			Kind:          kind,
+			TargetRef:     depID,
+			ConditionJSON: condJSON,
+			State:         db.TodoBlockerStateActive,
+		}); err != nil {
+			s.logf("todo %s: mirror after blocker %s (%s): %v", todoID, depID, kind, err)
+		}
+	}
+
+	now := time.Now().UTC()
+	for _, r := range existing {
+		if r.State != db.TodoBlockerStateActive {
+			continue
+		}
+		if r.Kind != todoBlockerKindTodoDone && r.Kind != todoBlockerKindTodoStage {
+			continue
+		}
+		if _, keep := wantIDs[r.ID]; keep {
+			continue
+		}
+		if _, err := st.CancelTodoBlocker(ctx, r.ID, now); err != nil {
+			s.logf("todo %s: cancel stale mirrored blocker %s: %v", todoID, r.ID, err)
+		}
+	}
+}
+
 // ReconcileTodoBlockers performs a pull-based reconciliation of persisted active blockers under todos_v2 (#16099).
 // Pass targetRef="" for a full fallback sweep, or a specific PR URL / todo ID for targeted fast-path reconciliation.
 func (s *Service) ReconcileTodoBlockers(ctx context.Context, targetRef string) (todoBlockerReconcileSummary, error) {
@@ -364,15 +553,18 @@ func (s *Service) reconcilePersistedTodoBlockersWithPRFact(ctx context.Context, 
 		resolvedSet[id] = struct{}{}
 	}
 
+	resolvedByTodo := make(map[string][]todoBlockerRecord)
 	remaining := make([]todoBlockerRecord, 0, len(active))
 	for _, b := range active {
-		if _, done := resolvedSet[b.ID]; !done {
+		if _, done := resolvedSet[b.ID]; done {
+			resolvedByTodo[b.TodoID] = append(resolvedByTodo[b.TodoID], b)
+		} else {
 			remaining = append(remaining, b)
 		}
 	}
 
 	for _, todoID := range result.UnblockedTodoIDs {
-		s.notifyTodoBlockerUnblockedOnly(ctx, todoID, onUnblocked)
+		s.notifyTodoBlockerUnblockedWithResolved(ctx, todoID, resolvedByTodo[todoID], onUnblocked)
 	}
 	if len(result.UnblockedTodoIDs) > 0 && s.settings(ctx).todosV2On() {
 		s.sweepAdmissionQueue(ctx)
@@ -423,18 +615,111 @@ func (s *Service) hasActiveTodoBlockers(ctx context.Context, todoID string) bool
 	return len(s.activeTodoBlockerRefs(ctx, todoID)) > 0
 }
 
+// collectUpstreamPRURLs gathers deduplicated upstream PR URLs observed on prerequisite to-dos and resolved
+// external_pr blockers so sigTodoReady wakeups immediately expose upstream deliverable links.
+func (s *Service) collectUpstreamPRURLs(ctx context.Context, todoID string, extraDepIDs []string, resolvedBlockers []todoBlockerRecord, extraPRs []string) []string {
+	seen := make(map[string]struct{})
+	var out []string
+	addURL := func(raw string) {
+		u := strings.TrimRight(strings.TrimSpace(raw), "/")
+		if u == "" {
+			return
+		}
+		key := strings.ToLower(normalizeTodoBlockerPRRef(u))
+		if key == "" {
+			return
+		}
+		if _, dup := seen[key]; dup {
+			return
+		}
+		seen[key] = struct{}{}
+		out = append(out, u)
+	}
+	seenDep := make(map[string]struct{})
+	addDep := func(depID string) {
+		depID = strings.TrimSpace(depID)
+		if depID == "" {
+			return
+		}
+		if _, dup := seenDep[depID]; dup {
+			return
+		}
+		seenDep[depID] = struct{}{}
+		dep, ok := s.todoNow(depID)
+		if !ok {
+			return
+		}
+		if dep.PRStatus != nil {
+			addURL(dep.PRStatus.URL)
+		}
+		addURL(dep.PRURL)
+		for _, u := range dep.PRs {
+			addURL(u)
+		}
+		for _, other := range dep.OtherPRs {
+			addURL(other.URL)
+		}
+	}
+
+	for _, u := range extraPRs {
+		addURL(u)
+	}
+	for _, depID := range extraDepIDs {
+		addDep(depID)
+	}
+	for _, b := range resolvedBlockers {
+		switch b.Kind {
+		case todoBlockerKindExternalPR:
+			addURL(b.TargetRef)
+		case todoBlockerKindTodoDone, todoBlockerKindTodoStage:
+			addDep(b.TargetRef)
+		}
+	}
+	if t, ok := s.todoNow(todoID); ok {
+		for _, depID := range cleanIDs(t.After) {
+			addDep(depID)
+		}
+	}
+	if len(resolvedBlockers) == 0 && s.settings(ctx).todosV2On() {
+		if st := s.todoBlockerDB(); st != nil {
+			if rows, err := st.ListTodoBlockersByTodo(ctx, todoID); err == nil {
+				for _, r := range rows {
+					if r.State != db.TodoBlockerStateResolved {
+						continue
+					}
+					switch r.Kind {
+					case todoBlockerKindExternalPR:
+						addURL(r.TargetRef)
+					case todoBlockerKindTodoDone, todoBlockerKindTodoStage:
+						addDep(r.TargetRef)
+					}
+				}
+			}
+		}
+	}
+	return out
+}
+
 func (s *Service) notifyTodoBlockerUnblockedOnly(ctx context.Context, todoID string, hook func(ctx context.Context, todoID string)) {
+	s.notifyTodoBlockerUnblockedWithResolved(ctx, todoID, nil, hook)
+}
+
+func (s *Service) notifyTodoBlockerUnblockedWithResolved(ctx context.Context, todoID string, resolved []todoBlockerRecord, hook func(ctx context.Context, todoID string)) {
 	key := "blockers_unblocked:" + todoID
 	to := ""
 	if t, ok := s.todoNow(todoID); ok {
 		to = s.todoReadySupervisor(ctx, s.settings(ctx), t)
+	}
+	detail := "all persistent blockers resolved"
+	if prURLs := s.collectUpstreamPRURLs(ctx, todoID, nil, resolved, nil); len(prURLs) > 0 {
+		detail += "; upstream PRs: " + strings.Join(prURLs, ", ")
 	}
 	s.signal(superviseSignal{
 		Todo:   todoID,
 		Kind:   sigTodoReady,
 		Key:    key,
 		To:     to,
-		Detail: "all persistent blockers resolved",
+		Detail: detail,
 	})
 	if hook != nil {
 		hook(ctx, todoID)
@@ -486,6 +771,13 @@ func (s *Service) buildBlockerFactSnapshot(ctx context.Context, active []todoBlo
 		}
 		if cp.DoneAt != nil {
 			stage = maxStageGateStage(stage, stagegate.StageDone)
+		} else if (cp.PRStatus != nil && strings.EqualFold(cp.PRStatus.State, "merged")) ||
+			(cp.Delivery != nil && (cp.Delivery.State == deliveryMerged || cp.Delivery.State == deliveryLive)) {
+			stage = maxStageGateStage(stage, stagegate.StageMerged)
+		} else if todoHasOpenPR(cp, nil) {
+			stage = maxStageGateStage(stage, stagegate.StagePROpen)
+		} else if todoHasActiveAgent(cp) || len(cp.Agents) > 0 {
+			stage = maxStageGateStage(stage, stagegate.StageDevelop)
 		}
 		_, hasAsk := asks[id]
 		facts.Todos[id] = todoBlockerTodoFact{
