@@ -82,7 +82,10 @@ struct AgentConsoleRoot: View {
         .onAppear { router.attach(to: model) }
         .onDisappear { router.detach(from: model) }
         .onChange(of: NativeTemplateStore.shared.enabled) { _, enabled in
-            if !enabled, model.selectedTab == .settings { model.selectedTab = .assistant }
+            if !enabled, model.selectedTab == .settings {
+                model.settingsPath = NavigationPath()
+                model.selectedTab = .assistant
+            }
         }
     }
 }

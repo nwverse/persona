@@ -5038,6 +5038,12 @@ final class AppModel {
     var shellSettings = false
     /// A shared template link waiting for Settings › Templates' native preview (#17129).
     var pendingNativeTemplate: String?
+    func openNativeTemplate(_ template: String) {
+        pendingNativeTemplate = template
+        settingsPath = NavigationPath([SettingsPage.templates])
+        selectedTab = .settings
+        if tabRouter != nil { shellSettings = true }
+    }
 
     /// Add Computer / Confirm Computer over the whole app (AddComputerView.swift): set it from anywhere without a sheet of its own
     /// (`openAddComputer()`, `openConfirmComputer(_:)`, the main conversation's readiness card); nil closes it.

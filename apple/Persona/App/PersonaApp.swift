@@ -52,9 +52,7 @@ struct PersonaApp: App {
                 .task(id: model.fleetLook) { LiveActivityController.shared.look(model.fleetLook) { model.fleetFaces } }
                 .onOpenURL { url in
                     if let template = NativeTemplateLink.parameter(url) {
-                        model.pendingNativeTemplate = template
-                        model.selectedTab = .settings
-                        model.settingsPath = NavigationPath([SettingsPage.templates])
+                        model.openNativeTemplate(template)
                         return
                     }
                     #if os(iOS)
