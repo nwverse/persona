@@ -1142,8 +1142,8 @@ background work, a queued message, a question, or an attached terminal can keep 
 | Assistant conversation (main, leader, scheduled or other chats) | `assistant.agy_idle_auto_compact` and `assistant.idle_auto_compact` | `assistant.idle_auto_compact_minutes`, 30 by default | `assistant.idle_auto_compact_tokens`, 300,000 by default |
 
 The prior defaults could compact the main chat during an ordinary pause after the prompt cache had already expired
-(#17260). The task agent thresholds now apply to task agents alone. Turning off `assistant.agy_idle_auto_compact`
-stops both groups.
+(#17260). Turning off `assistant.agy_idle_auto_compact` stops both groups. The node records which chats it runs as
+assistant conversations so that a restart preserves their policy even when they run from a project directory.
 
 The manager sends `agy_idle_compaction` in `node.configure` on connect and when policy changes. The `enabled` switch
 applies to both groups. `idle_minutes` and `context_tokens` carry the task agent thresholds. The optional

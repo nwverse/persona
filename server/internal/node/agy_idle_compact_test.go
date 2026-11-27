@@ -1103,6 +1103,9 @@ func TestAgyIdleAutoCompactAssistantSettingsFromConfigure(t *testing.T) {
 	if _, ready := agyIdleReadyNow(n, h, mainRow, clock.get()); !ready {
 		t.Fatal("main chat should compact at its configured 15 minutes / 150,000 tokens")
 	}
+	if _, ready := agyIdleReadyNow(n, h, routineRow, clock.get()); !ready {
+		t.Fatal("scheduled assistant chat should become ready at the configured assistant thresholds")
+	}
 
 	configure(assistantwire.AgyIdleCompaction{
 		Enabled: true, IdleMinutes: 10, ContextTokens: 200_000, AssistantOff: true, AssistantIdleMinutes: 15, AssistantContextTokens: 150_000,
@@ -1113,6 +1116,8 @@ func TestAgyIdleAutoCompactAssistantSettingsFromConfigure(t *testing.T) {
 	if _, ready := agyIdleReadyNow(n, h, taskRow, clock.get()); !ready {
 		t.Fatal("assistant.idle_auto_compact off should leave task Agents compacting")
 	}
+	// After state.load the recorded runtime role is sufficient, even without the last input's execution mode.
+	n.state.put(routineID, sessionState{Launcher: "agy", Cwd: projectCwd, RuntimeAssistant: true})
 	if _, ready := agyIdleReadyNow(n, h, routineRow, clock.get()); ready {
 		t.Fatal("assistant.idle_auto_compact off should stop the scheduled assistant chat's compaction")
 	}
