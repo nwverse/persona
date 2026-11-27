@@ -266,6 +266,61 @@ func TestPRFeedbackRetryKeepsDiscussionWhenTheReviewHeadMoves(t *testing.T) {
 	}
 }
 
+func TestPRFeedbackQueuedDiscussionFollowsPRWhileQueuedReviewsFollowHead(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		discussion bool
+	}{
+		{name: "mixed_batch", discussion: true},
+		{name: "reviews_only"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Now().UTC().Truncate(time.Second)
+			s, _, _ := newBoundPRTask(t, &memStore{}, feedbackTestAgent(now, true))
+			turnPREventsRouteOn(t, s)
+			source, forge := newFeedbackTestForge(t)
+			s.deploy.forge = forge
+			s.sweepPRStatuses(t.Context(), now)
+			source.mu.Lock()
+			source.reviews = []githubPRReview{
+				feedbackTestReview(51, now, "Revise the old implementation."),
+				feedbackTestReview(52, now, "Add a regression test."),
+			}
+			if tc.discussion {
+				source.comments = []map[string]any{feedbackTestComment(51, now, "Check the cancellation requirement.")}
+			}
+			source.mu.Unlock()
+			s.sweepPRStatuses(t.Context(), now.Add(deployRecheck))
+			pending := storedSupervisePending(t, s)
+			if len(pending) != 1 {
+				t.Fatalf("expected one queued supervisor wake: %+v", pending)
+			}
+			for _, signal := range pending {
+				if _, ok := s.digestEntry(t.Context(), signal, ""); !ok {
+					t.Fatal("fresh batch is missing from the supervisor digest")
+				}
+			}
+
+			source.mu.Lock()
+			source.head = "head-two"
+			source.mu.Unlock()
+			s.sweepPRStatuses(t.Context(), now.Add(2*deployRecheck))
+			for _, signal := range pending {
+				entry, ok := s.digestEntry(t.Context(), signal, "")
+				if ok != tc.discussion {
+					t.Fatalf("queued batch deliverable after head change = %t, want %t", ok, tc.discussion)
+				}
+				if ok && (!strings.Contains(entry.Detail, "#issuecomment-51") || !strings.Contains(entry.Detail, "head-one")) {
+					t.Fatalf("queued discussion lost its comment or review provenance: %+v", entry)
+				}
+			}
+			if got := storedSupervisePending(t, s); len(got) != 1 {
+				t.Fatalf("head change queued another wake: %+v", got)
+			}
+		})
+	}
+}
+
 func TestPRFeedbackDiscardsSuppressedFeedbackOnTerminalStateOrNewHead(t *testing.T) {
 	for _, state := range []string{"merged", "closed", "open"} {
 		t.Run(state, func(t *testing.T) {

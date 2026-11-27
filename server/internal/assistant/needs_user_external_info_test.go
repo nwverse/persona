@@ -258,6 +258,10 @@ func TestNeedsUserExternalInfoDraftPRFeedbackKeepsDecision(t *testing.T) {
 			t.Fatalf("busy supervisor lost the pending feedback %s", g.PREventID)
 		}
 	}
+	source.mu.Lock()
+	source.head = "head-two"
+	source.mu.Unlock()
+	s.sweepPRStatuses(ctx, now.Add(3*deployRecheck))
 
 	supervisor.Status = proto.StatusIdle
 	hub.setSessions("server", supervisor)

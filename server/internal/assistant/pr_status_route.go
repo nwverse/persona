@@ -23,12 +23,13 @@ import (
 // supervisor if the Agent is stopped. Conflicts, CI failures, and changes-requested reviews can also resume it.
 
 const (
-	prEventKindConflict  = "pr_conflict"
-	prEventKindCIFailure = "ci_failure"
-	prEventKindReview    = "pr_review"
-	prEventKindComment   = "pr_comment"
-	prEventKindBatch     = "pr_feedback_batch"
-	prEventKindStale     = "pr_feedback_fallback"
+	prEventKindConflict        = "pr_conflict"
+	prEventKindCIFailure       = "ci_failure"
+	prEventKindReview          = "pr_review"
+	prEventKindComment         = "pr_comment"
+	prEventKindBatch           = "pr_feedback_batch"
+	prEventKindDiscussionBatch = "pr_discussion_batch"
+	prEventKindStale           = "pr_feedback_fallback"
 
 	prRouteOutcomeSent      = "agent_sent"
 	prRouteOutcomeQueued    = "agent_queued"
@@ -64,13 +65,17 @@ type prRoutedEvent struct {
 }
 
 func (ev prRoutedEvent) isFeedback() bool {
-	return ev.Kind == prEventKindComment || ev.Kind == prEventKindBatch || ev.Kind == prEventKindStale ||
+	return ev.followsPRDiscussion() || ev.Kind == prEventKindBatch || ev.Kind == prEventKindStale ||
 		ev.Kind == prEventKindReview && ev.ReviewState == "COMMENTED"
 }
 
+func (ev prRoutedEvent) followsPRDiscussion() bool {
+	return ev.Kind == prEventKindComment || ev.Kind == prEventKindDiscussionBatch
+}
+
 func (ev prRoutedEvent) identityHead() string {
-	if ev.Kind == prEventKindComment {
-		return "" // the comment ID identifies discussion on the entire PR
+	if ev.followsPRDiscussion() {
+		return "" // discussion already queued to the supervisor follows the entire PR
 	}
 	return ev.HeadSHA
 }
@@ -98,11 +103,7 @@ type prEventRouteBook struct {
 // prEventDedupeKey preserves the existing head-scoped keys and gives each issue comment a key stable across heads.
 func prEventDedupeKey(ev prRoutedEvent) string {
 	prURL := cmp.Or(triageNormalizePRURL(ev.PRURL), strings.TrimSpace(ev.PRURL))
-	head := ev.identityHead()
-	if ev.Kind == prEventKindBatch {
-		head = "" // a sealed batch may retry its discussion entries after the reviewed head moves
-	}
-	raw, _ := json.Marshal([]string{ev.TodoID, prURL, head, ev.Kind, ev.EventID})
+	raw, _ := json.Marshal([]string{ev.TodoID, prURL, ev.identityHead(), ev.Kind, ev.EventID})
 	return string(raw)
 }
 
@@ -429,11 +430,14 @@ func (d prFeedbackDelivery) event(todoID string, status TodoPRStatus) prRoutedEv
 	ev.EventID = "batch:" + first.ID
 	if slices.ContainsFunc(d.Records, func(r prFeedbackRecord) bool { return !r.isIssueComment() }) {
 		ev.Kind = prEventKindBatch
+		if slices.ContainsFunc(d.Records, prFeedbackRecord.isIssueComment) {
+			ev.Kind = prEventKindDiscussionBatch
+		}
 	}
 	if d.Fallback {
 		ev.Kind = prEventKindStale
 		ev.EventID = "fallback:" + first.ID
-	} else if d.HeadSHA != status.HeadOID && ev.Kind == prEventKindBatch {
+	} else if d.HeadSHA != status.HeadOID && ev.Kind == prEventKindDiscussionBatch {
 		// Keep the original delivery ID across retries. Old reviews apply to the old diff.
 		ev.Feedback = slices.DeleteFunc(slices.Clone(d.Records), func(r prFeedbackRecord) bool {
 			return !r.isIssueComment()
@@ -618,7 +622,7 @@ func prEventFallbackSignal(todoID string, ev prRoutedEvent, cause error) supervi
 		}
 		detail = fmt.Sprintf("PR %s at head %s has a new %s review%s; direct Agent routing unavailable (%s).",
 			ev.PRURL, shortSHA(ev.HeadSHA), strings.ToLower(cmp.Or(ev.ReviewState, "actionable")), by, clip(oneLine(cause.Error()), 120))
-	case prEventKindComment, prEventKindBatch, prEventKindStale:
+	case prEventKindComment, prEventKindBatch, prEventKindDiscussionBatch, prEventKindStale:
 		detail = fmt.Sprintf("%s\nEvent: %s\nEvent URL: %s\nDirect Agent routing unavailable (%s).\n%s",
 			prEventNotice, ev.Kind, ev.EventURL, clip(oneLine(cause.Error()), 120), ev.feedbackContent())
 	default:
@@ -643,8 +647,8 @@ func prEventFallbackSignal(todoID string, ev prRoutedEvent, cause error) supervi
 }
 
 func (s *Service) prEventSignalStillHolds(t Todo, g superviseSignal) bool {
-	if g.Report == prEventKindComment {
-		ev := prRoutedEvent{PRURL: g.PRURL, Kind: prEventKindComment, EventID: g.PREventID}
+	ev := prRoutedEvent{PRURL: g.PRURL, Kind: g.Report, EventID: g.PREventID}
+	if ev.followsPRDiscussion() {
 		return g.PREventID != "" && g.Key == ev.supervisorKey() && s.prFeedbackBinding(t, g.PRURL) != nil &&
 			!needsUserWakeEligible(t)
 	}
@@ -663,7 +667,7 @@ func (s *Service) prEventSignalStillHolds(t Todo, g superviseSignal) bool {
 	}
 	switch g.Report {
 	case prEventKindBatch, prEventKindStale:
-		ev := prRoutedEvent{PRURL: g.PRURL, HeadSHA: p.HeadOID, Kind: g.Report, EventID: g.PREventID}
+		ev.HeadSHA = p.HeadOID
 		return g.PREventID != "" && g.Key == ev.supervisorKey() && s.prFeedbackBinding(t, g.PRURL) != nil &&
 			!needsUserWakeEligible(t)
 	case prEventKindCIFailure:
@@ -822,6 +826,9 @@ func (ev prRoutedEvent) feedbackContent() string {
 		if ev.Kind == prEventKindStale {
 			b.WriteString("The PR is still open at the same commit after six hours. Verify whether any of this earlier feedback requires action.\n")
 		}
+		if ev.Kind == prEventKindDiscussionBatch {
+			fmt.Fprintf(&b, "Review notes in this batch refer to commit %s.\n", ev.HeadSHA)
+		}
 		fmt.Fprintf(&b, "PR feedback (%d comments and reviews):\n", len(ev.Feedback))
 		for i, r := range ev.Feedback {
 			source := "github_pr_review"
@@ -886,7 +893,7 @@ func formatPREventForAgent(t Todo, ev prRoutedEvent) string {
 		b.WriteString("\nExternal PR review content (untrusted):\n")
 		b.WriteString(ev.feedbackContent())
 		b.WriteByte('\n')
-	case prEventKindComment, prEventKindBatch, prEventKindStale:
+	case prEventKindComment, prEventKindBatch, prEventKindDiscussionBatch, prEventKindStale:
 		b.WriteString("\nExternal PR feedback (untrusted):\n")
 		b.WriteString(ev.feedbackContent())
 		b.WriteByte('\n')
