@@ -91,37 +91,52 @@ func TestInternalAskUserSourceMatrix(t *testing.T) {
 }
 
 func TestAskUserOwnerDecisionSources(t *testing.T) {
-	e := newRouteEnv(t, nil, true)
-	for _, tc := range []struct {
-		meta   string
-		source string
-	}{
-		{`"owner_action":"personal_unlock"`, cardSecretForm},
-		{`"owner_action":"login"`, cardSecretForm},
-		{`"owner_action":"spending"`, cardPlanMoney},
-		{`"why_owner":"visible_to_others"`, cardDecisionOutward},
-		{`"why_owner":"irreversible"`, cardDecisionIrreversible},
-		{`"why_owner":"priority"`, cardDecisionDirection},
-		{`"why_owner":"only_owner_knows"`, cardDecisionOwnerKnows},
-	} {
-		args := json.RawMessage(`{` + tc.meta + `,"wait":false,"questions":[{"question":"Owner action required","options":[{"label":"Done"},{"label":"Cancel"}]}]}`)
-		if _, err := e.s.toolAskUser(context.Background(), "server", "lead1", args); err != nil {
-			t.Fatal(err)
+	for _, wait := range []bool{true, false} {
+		for _, tc := range []struct {
+			meta   string
+			source string
+		}{
+			{`"owner_action":"personal_unlock"`, cardSecretForm},
+			{`"owner_action":"login"`, cardSecretForm},
+			{`"owner_action":"spending"`, cardPlanMoney},
+			{`"why_owner":"visible_to_others"`, cardDecisionOutward},
+			{`"why_owner":"irreversible"`, cardDecisionIrreversible},
+			{`"why_owner":"priority"`, cardDecisionDirection},
+			{`"why_owner":"only_owner_knows"`, cardDecisionOwnerKnows},
+		} {
+			t.Run(fmt.Sprintf("wait=%t/%s", wait, tc.meta), func(t *testing.T) {
+				e := newRouteEnv(t, nil, true)
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				args := json.RawMessage(fmt.Sprintf(`{%s,"wait":%t,"questions":[{"question":"Owner action required","options":[{"label":"Done"},{"label":"Cancel"}]}]}`, tc.meta, wait))
+				done := make(chan error, 1)
+				go func() {
+					_, err := e.s.toolAskUser(ctx, "server", "lead1", args)
+					done <- err
+				}()
+				var ix proto.Interaction
+				waitFor(t, "owner action remains visible", func() bool {
+					qs := e.s.pendingQuestions()
+					if len(qs) != 1 {
+						return false
+					}
+					ix = qs[0]
+					return e.pushesOf(ix.ID) == 1
+				})
+				if got := e.s.inputCardSource(ix, false); got != tc.source || e.s.internalCard(ix) {
+					t.Fatalf("owner source = %q, want %q", got, tc.source)
+				}
+				if err := e.s.resolve(ix.ID, proto.Resolution{Cancel: true}); err != nil {
+					t.Fatal(err)
+				}
+				if err := <-done; err != nil {
+					t.Fatal(err)
+				}
+				waitFor(t, "owner cancellation delivered", func() bool { return len(e.s.pendingQuestions()) == 0 })
+			})
 		}
-		qs := e.s.pendingQuestions()
-		if len(qs) != 1 {
-			t.Fatalf("owner card disappeared: %+v", qs)
-		}
-		ix := qs[0]
-		waitFor(t, "real owner decision announced", func() bool { return e.pushesOf(ix.ID) == 1 })
-		if got := e.s.inputCardSource(ix, false); got != tc.source || e.s.internalCard(ix) {
-			t.Fatalf("owner source = %q, want %q", got, tc.source)
-		}
-		if err := e.s.resolve(ix.ID, proto.Resolution{Cancel: true}); err != nil {
-			t.Fatal(err)
-		}
-		waitFor(t, "owner cancellation delivered", func() bool { return len(e.s.pendingQuestions()) == 0 })
 	}
+	e := newRouteEnv(t, nil, true)
 	if _, err := e.s.toolAskUser(context.Background(), "server", "lead1", json.RawMessage(`{"questions":[{"question":"Unclassified"}]}`)); err == nil {
 		t.Fatal("unclassified ask_user reached a card")
 	}
