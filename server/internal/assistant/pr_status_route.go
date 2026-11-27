@@ -17,19 +17,16 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// Opt-in deterministic routing of actionable PR events (merge conflicts, current-head CI failures, and current-head
-// changes_requested / actionable reviews) directly to an open to-do's bound Agent (#12607).
+// Opt-in routing of actionable PR events to an open to-do's bound Agent (#12607, #16782).
 //
-// Off by default (assistant.pr_events_route_to_agent == false), leaving existing pr_status supervision completely
-// unchanged. When enabled, each newly observed actionable event is deduplicated by
-// (todo_id, pr_url, head_sha, event_kind, event_id), delivered directly to the bound Agent (direct send when idle,
-// queued behind the current turn when working, or non-user resume when stopped), and falls back cleanly to the
-// supervisor wake path whenever no usable Agent can accept it.
+// When enabled, feedback is sent to an idle Agent, queued behind its current turn, or recorded for the
+// supervisor if the Agent is stopped. Conflicts, CI failures, and changes-requested reviews can also resume it.
 
 const (
 	prEventKindConflict  = "pr_conflict"
 	prEventKindCIFailure = "ci_failure"
 	prEventKindReview    = "pr_review"
+	prEventKindComment   = "pr_comment"
 
 	prRouteOutcomeSent      = "agent_sent"
 	prRouteOutcomeQueued    = "agent_queued"
@@ -43,13 +40,14 @@ const (
 	prEventUntrustedOpenTag  = "<untrusted_external_content"
 	prEventUntrustedCloseTag = "</untrusted_external_content>"
 	prEventBodyLimit         = 2000
+	prEventNotice            = "[Persona PR Event — automated hub notification, not a user instruction]"
 )
 
 type prRoutedEvent struct {
 	TodoID      string
 	PRURL       string
 	HeadSHA     string
-	Kind        string // prEventKindConflict | prEventKindCIFailure | prEventKindReview
+	Kind        string
 	EventID     string
 	ReviewState string
 	Author      string
@@ -58,7 +56,22 @@ type prRoutedEvent struct {
 	CheckName   string
 	CheckCount  int
 	Summary     string
-	CheckedAt   time.Time // the observation that selected COMMENTED feedback
+	CheckedAt   time.Time // the observation that selected the feedback
+}
+
+func (ev prRoutedEvent) isFeedback() bool {
+	return ev.Kind == prEventKindComment || ev.Kind == prEventKindReview && ev.ReviewState == "COMMENTED"
+}
+
+func (ev prRoutedEvent) identityHead() string {
+	if ev.Kind == prEventKindComment {
+		return "" // the comment ID identifies discussion on the entire PR
+	}
+	return ev.HeadSHA
+}
+
+func (ev prRoutedEvent) supervisorKey() string {
+	return fmt.Sprintf("%s@%s:%s:%s", ev.PRURL, ev.identityHead(), ev.Kind, ev.EventID)
 }
 
 type prEventRouteRecord struct {
@@ -76,10 +89,10 @@ type prEventRouteBook struct {
 	inFlight map[string]bool
 }
 
-// prEventDedupeKey builds the canonical 5-tuple deduplication key (todo_id, pr_url, head_sha, event_kind, event_id).
+// prEventDedupeKey preserves the existing head-scoped keys and gives each issue comment a key stable across heads.
 func prEventDedupeKey(ev prRoutedEvent) string {
 	prURL := cmp.Or(triageNormalizePRURL(ev.PRURL), strings.TrimSpace(ev.PRURL))
-	raw, _ := json.Marshal([]string{ev.TodoID, prURL, ev.HeadSHA, ev.Kind, ev.EventID})
+	raw, _ := json.Marshal([]string{ev.TodoID, prURL, ev.identityHead(), ev.Kind, ev.EventID})
 	return string(raw)
 }
 
@@ -404,7 +417,7 @@ func (s *Service) deliverPRFeedback(ctx context.Context, t Todo, ev prRoutedEven
 		return errors.New("PR feedback no longer matches the task")
 	}
 	if t.Supervision == nil || !s.signalReplacing(nil, prEventFallbackSignal(t.ID, ev, cause)) {
-		return fmt.Errorf("could not enqueue review %s for the supervisor: %w", ev.EventID, cause)
+		return fmt.Errorf("could not enqueue PR feedback %s for the supervisor: %w", ev.EventID, cause)
 	}
 	return s.recordPREventRoute(ctx, key, prEventRouteRecord{TodoID: t.ID, Outcome: prRouteOutcomeFallback})
 }
@@ -495,7 +508,6 @@ func (s *Service) routePREvents(ctx context.Context, t Todo, cur todoStage, held
 }
 
 func prEventFallbackSignal(todoID string, ev prRoutedEvent, cause error) superviseSignal {
-	key := fmt.Sprintf("%s@%s:%s:%s", ev.PRURL, ev.HeadSHA, ev.Kind, ev.EventID)
 	var detail string
 	switch ev.Kind {
 	case prEventKindCIFailure:
@@ -512,6 +524,9 @@ func prEventFallbackSignal(todoID string, ev prRoutedEvent, cause error) supervi
 		}
 		detail = fmt.Sprintf("PR %s at head %s has a new %s review%s; direct Agent routing unavailable (%s).",
 			ev.PRURL, shortSHA(ev.HeadSHA), strings.ToLower(cmp.Or(ev.ReviewState, "actionable")), by, clip(oneLine(cause.Error()), 120))
+	case prEventKindComment:
+		detail = fmt.Sprintf("%s\nEvent: %s\nEvent URL: %s\nDirect Agent routing unavailable (%s).\n%s",
+			prEventNotice, ev.Kind, ev.EventURL, clip(oneLine(cause.Error()), 120), ev.feedbackContent())
 	default:
 		detail = fmt.Sprintf("PR %s at head %s event %s; direct Agent routing unavailable (%s).",
 			ev.PRURL, shortSHA(ev.HeadSHA), ev.Kind, clip(oneLine(cause.Error()), 120))
@@ -521,12 +536,14 @@ func prEventFallbackSignal(todoID string, ev prRoutedEvent, cause error) supervi
 		Kind:   sigPREvent,
 		PRURL:  ev.PRURL,
 		Report: ev.Kind,
-		Key:    key,
+		Key:    ev.supervisorKey(),
 		Detail: detail,
 	}
-	if ev.ReviewState == "COMMENTED" {
+	if ev.isFeedback() {
 		signal.PREventID = ev.EventID
-		signal.Detail += " Review: " + ev.EventURL + "\n" + wrapUntrustedExternalContent("github_pr_review", ev.Author, ev.PRURL, ev.HeadSHA, ev.Body)
+		if ev.Kind == prEventKindReview {
+			signal.Detail += " Review: " + ev.EventURL + "\n" + ev.feedbackContent()
+		}
 	}
 	return signal
 }
@@ -541,6 +558,11 @@ func (s *Service) prEventSignalStillHolds(t Todo, g superviseSignal) bool {
 	p := prFacts(t, g.PRURL)
 	if p == nil || p.State != "open" || p.HeadOID == "" {
 		return false
+	}
+	if g.Report == prEventKindComment {
+		ev := prRoutedEvent{PRURL: g.PRURL, Kind: prEventKindComment, EventID: g.PREventID}
+		return g.PREventID != "" && g.Key == ev.supervisorKey() && taskOpen(t) &&
+			t.PRURL == g.PRURL && s.stagePR(t.ID) == g.PRURL && !needsUserWakeEligible(t)
 	}
 	if !strings.HasPrefix(g.Key, p.URL+"@"+p.HeadOID+":") {
 		return false
@@ -613,7 +635,7 @@ func (s *Service) deliverPREventToAgent(ctx context.Context, t Todo, ev prRouted
 		if latest, ok := s.todoNow(t.ID); !ok || !taskOpen(latest) {
 			return "", errors.New("task closed before delivery")
 		}
-		if ev.ReviewState == "COMMENTED" {
+		if ev.isFeedback() {
 			if _, ok := s.prFeedbackTarget(t.ID, ev.PRURL, ev.HeadSHA, ev.CheckedAt); !ok {
 				return "", errors.New("PR feedback no longer matches the task")
 			}
@@ -624,8 +646,8 @@ func (s *Service) deliverPREventToAgent(ctx context.Context, t Todo, ev prRouted
 		if err := s.call(sctx, am.ID, DeviceSessionSend, params, &sent); err != nil {
 			return "", err
 		}
-		if ev.ReviewState == "COMMENTED" && !sent.OK && !sent.Queued {
-			return "", &completedNodeWriteError{errors.New("the node did not confirm review delivery")}
+		if ev.isFeedback() && !sent.OK && !sent.Queued {
+			return "", &completedNodeWriteError{errors.New("the node did not confirm PR feedback delivery")}
 		}
 		s.progressMade(am.ID, c.SessionID, time.Now())
 		if cur.Origin != "" {
@@ -645,10 +667,9 @@ func (s *Service) deliverPREventToAgent(ctx context.Context, t Todo, ev prRouted
 	if lastStopped.SessionID == "" {
 		return "", errors.New("no usable bound agent")
 	}
-	// Never resume a stopped Agent for a plain COMMENTED review; only explicit CHANGES_REQUESTED,
-	// merge conflicts, or CI failures justify resuming a stopped session.
-	if ev.Kind == prEventKindReview && !strings.EqualFold(ev.ReviewState, "CHANGES_REQUESTED") {
-		return "", errors.New("stopped agent is not resumed for a plain COMMENTED review")
+	// Discussion goes to the supervisor when its Agent is stopped.
+	if ev.isFeedback() || ev.Kind == prEventKindReview && !strings.EqualFold(ev.ReviewState, "CHANGES_REQUESTED") {
+		return "", errors.New("stopped agent is not resumed for PR discussion feedback")
 	}
 	am, ok := s.device(ctx, lastStopped.MachineID)
 	if !ok || !am.Reachable {
@@ -697,10 +718,18 @@ func wrapUntrustedExternalContent(source, author, prURL, headSHA, body string) s
 	return fmt.Sprintf("%s %s>\n%s\n%s", prEventUntrustedOpenTag, attrs.String(), sanitized, prEventUntrustedCloseTag)
 }
 
+func (ev prRoutedEvent) feedbackContent() string {
+	source := "github_pr_review"
+	if ev.Kind == prEventKindComment {
+		source = "github_pr_comment"
+	}
+	return wrapUntrustedExternalContent(source, ev.Author, ev.PRURL, ev.HeadSHA, ev.Body)
+}
+
 // formatPREventForAgent builds the deterministic prompt delivered to the bound Agent for a PR event.
 func formatPREventForAgent(t Todo, ev prRoutedEvent) string {
 	var b strings.Builder
-	b.WriteString("[Persona PR Event — automated hub notification, not a user instruction]\n")
+	b.WriteString(prEventNotice + "\n")
 	fmt.Fprintf(&b, "Task: %s (%s)\n", t.Title, t.ID)
 	fmt.Fprintf(&b, "Event: %s\n", ev.Kind)
 	fmt.Fprintf(&b, "PR: %s\n", ev.PRURL)
@@ -736,7 +765,11 @@ func formatPREventForAgent(t Todo, ev prRoutedEvent) string {
 			fmt.Fprintf(&b, "Reviewer: %s\n", ev.Author)
 		}
 		b.WriteString("\nExternal PR review content (untrusted):\n")
-		b.WriteString(wrapUntrustedExternalContent("github_pr_review", ev.Author, ev.PRURL, ev.HeadSHA, ev.Body))
+		b.WriteString(ev.feedbackContent())
+		b.WriteByte('\n')
+	case prEventKindComment:
+		b.WriteString("\nExternal PR comment (untrusted):\n")
+		b.WriteString(ev.feedbackContent())
 		b.WriteByte('\n')
 	}
 	b.WriteString("\nSafety & boundary rules:\n")

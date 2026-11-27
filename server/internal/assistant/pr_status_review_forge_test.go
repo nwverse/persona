@@ -235,14 +235,19 @@ func TestPRReviewWakeForgeEvidence(t *testing.T) {
 	}
 }
 
-const feedbackTestPullPath = "/repos/example/app/pulls/12"
+const (
+	feedbackTestPullPath     = "/repos/example/app/pulls/12"
+	feedbackTestCommentsPath = "/repos/example/app/issues/12/comments"
+)
 
 type feedbackTestForge struct {
 	mu            sync.Mutex
 	head          string
 	headAfterList string
+	draft         bool
 	reviews       []githubPRReview
 	inline        map[int64][]githubPRInlineComment
+	comments      []map[string]any
 	requests      map[string]int
 	failRequest   string
 }
@@ -267,7 +272,7 @@ func (f *feedbackTestForge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var body any
 	switch path := r.URL.Path; {
 	case path == feedbackTestPullPath:
-		body = map[string]any{"state": "open", "head": map[string]string{"sha": f.head}, "user": map[string]string{"login": "pr-author"}}
+		body = map[string]any{"state": "open", "draft": f.draft, "head": map[string]string{"sha": f.head}, "user": map[string]string{"login": "pr-author"}}
 	case path == feedbackTestPullPath+"/reviews":
 		body = feedbackTestPage(f.reviews, page)
 		if f.headAfterList != "" {
@@ -276,6 +281,8 @@ func (f *feedbackTestForge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case strings.HasPrefix(path, feedbackTestPullPath+"/reviews/") && strings.HasSuffix(path, "/comments"):
 		id, _ := strconv.ParseInt(strings.TrimSuffix(strings.TrimPrefix(path, feedbackTestPullPath+"/reviews/"), "/comments"), 10, 64)
 		body = feedbackTestPage(f.inline[id], page)
+	case path == feedbackTestCommentsPath:
+		body = feedbackTestPage(f.comments, page)
 	case strings.HasSuffix(path, "/status"):
 		body = map[string]int{"total_count": 0}
 	case strings.HasSuffix(path, "/check-runs"):
@@ -295,9 +302,19 @@ func feedbackTestPage[T any](rows []T, page int) []T {
 }
 
 func feedbackTestReview(id int64, at time.Time, body string) githubPRReview {
-	r := githubPRReview{ID: id, State: "COMMENTED", SubmittedAt: at, CommitID: "head-one", Body: body, AuthorAssociation: "COLLABORATOR"}
+	r := githubPRReview{
+		githubPRFeedbackPost: githubPRFeedbackPost{ID: id, Body: body, AuthorAssociation: "COLLABORATOR"},
+		State:                "COMMENTED", SubmittedAt: at, CommitID: "head-one",
+	}
 	r.User.Login, r.User.Type = "reviewer", "User"
 	return r
+}
+
+func feedbackTestComment(id int64, at time.Time, body string) map[string]any {
+	return map[string]any{
+		"id": id, "created_at": at, "updated_at": at, "body": body,
+		"author_association": "COLLABORATOR", "user": map[string]string{"login": "reviewer", "type": "User"},
+	}
 }
 
 func (f *feedbackTestForge) calls(uri string) int {
