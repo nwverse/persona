@@ -448,5 +448,5 @@ const briefKeep = 3 * time.Hour
 
 func (s *Service) briefCard(f *briefFacts, label, answer string) (*botcard.Card, string, []string) {
 	pages, plain, shown := s.scheduleCards(f, label, answer, "", "", "")
-	return pages[0].card, plain, shown
+	return (*botcard.Card)(pages[0].Card), plain, shown
 }
