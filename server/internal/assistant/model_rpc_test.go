@@ -265,6 +265,16 @@ func TestModelRPCDecodingCompatibility(t *testing.T) {
 	}
 }
 
+func TestModelsUsableRejectsMalformedParams(t *testing.T) {
+	s, _, _ := modelService(t)
+	out, handled, err := s.modelsRequest(t.Context(), assistantwire.MethodModelsUsable, json.RawMessage(`{"purpose":`))
+	var wireErr *rpc.Error
+	if !handled || out != nil || !errors.As(err, &wireErr) || wireErr.Code != bus.CodeInvalidParams ||
+		wireErr.Message != "models.usable: unexpected end of JSON input" {
+		t.Fatalf("models.usable: reply %v, handled %v, error %v", out, handled, err)
+	}
+}
+
 func TestExtensionCompleteWithNothingToCall(t *testing.T) {
 	s, f, calls := extensionModelService(t, "ok")
 	if _, err := completeAs(s, "other", `{"messages":[{"role":"user","content":"a"}]}`); rpcCode(err) != assistantwire.CodeModelUnavailable {
@@ -407,22 +417,27 @@ func TestPurposeCompleteRunsTheManagersPurposeOnInformationProcessing(t *testing
 		t.Fatal("a refused call went out")
 	}
 	// models.usable names what it runs on, for the consent before a sample goes there.
-	usable := func() map[string]any {
+	usable := func() string {
 		raw, _ := json.Marshal(map[string]string{"purpose": assistantwire.PurposeSubscriptionRecipe})
 		out, ok, err := s.modelsRequest(context.Background(), assistantwire.MethodModelsUsable, raw)
 		if !ok || err != nil {
 			t.Fatalf("models.usable: %v %v", ok, err)
 		}
-		return out.(map[string]any)
+		reply, err := json.Marshal(out)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(reply)
 	}
-	if u := usable(); u["usable"] != true || u["model"] != "kb-model" || u["provider"] == "" || u["provider"] == p.Effective.Provider {
-		t.Fatalf("models.usable %v: want the connection's display name, not its id %q", u, p.Effective.Provider)
+	provider, _ := json.Marshal(mc(s.lang(context.Background()), "provider_legacy_kb"))
+	if got, want := usable(), `{"usable":true,"provider":`+string(provider)+`,"model":"kb-model"}`; got != want {
+		t.Fatalf("models.usable = %s, want %s", got, want)
 	}
 	f.hello.Models.AI = ai.Config{}
 	if _, err := call(assistantwire.PurposeSubscriptionRecipe, params); rpcCode(err) != assistantwire.CodeModelUnavailable {
 		t.Fatalf("nothing set up: %v", err)
 	}
-	if u := usable(); u["usable"] != false || u["provider"] != nil {
-		t.Fatalf("models.usable with nothing set up: %v", u)
+	if got := usable(); got != `{"usable":false}` {
+		t.Fatalf("models.usable with nothing set up: %s", got)
 	}
 }
