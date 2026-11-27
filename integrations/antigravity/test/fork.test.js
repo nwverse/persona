@@ -79,7 +79,12 @@ async function fixture(t, { assistant = false, status = 'IDLE', pending = false,
   }
   const fork = (at_item_id, session_id = sessionId, extra = {}) => node.peer.call('session.fork', { session_id, at_item_id, assistant, ...extra })
   const items = async (id = sessionId) => (await node.peer.call('session.items', { session_id: id })).items
-  const calls = () => readFileSync(join(home, 'calls.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse)
+  const calls = () => {
+    const contents = readFileSync(join(home, 'calls.jsonl'), 'utf8')
+    // A concurrent fake worker may still be appending the last JSONL record.
+    // Completed malformed records must still fail; only an unfinished tail waits.
+    return contents.slice(0, contents.lastIndexOf('\n') + 1).split('\n').filter(Boolean).map(JSON.parse)
+  }
   const rowOf = (id = branched) => node.last('runtime.sessions')?.sessions.find((row) => row.session_id === id)
   const restart = async () => {
     await runtime.stop()
