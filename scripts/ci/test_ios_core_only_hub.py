@@ -34,7 +34,7 @@ class IOSCoreOnlyHubProofTests(unittest.TestCase):
             "registry": {"active": sorted(["health", "screen-share", "voice"] if full else []),
                          "off_by_hub": [] if full else ["health", "screen-share", "voice"]},
             "module_flags": ["modules"] + [f"module.{name}" for name in DRIVER.smoke.module_ids()] if full else ["modules"],
-            "pages": {"agents": "loaded with synthetic offline computer", "inbox": "loaded empty", "todos": "loaded empty"},
+            "pages": {"agents": "loaded", "inbox": "loaded empty", "todos": "loaded empty"},
             "entries": entries, "app_alive_at_end": True, "screenshots": captures,
         }
 

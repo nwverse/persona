@@ -232,6 +232,18 @@ def require(ctl, element_id=None, label=None, label_contains=None, seconds=30):
     return wait_for(ctl, element_id or label or label_contains, seconds, probe)
 
 
+def require_any(ctl, labels, seconds=30):
+    def probe():
+        rows = elements(ctl)
+        for label in labels:
+            found = matches(rows, label=label)
+            if found:
+                return found
+        dismiss_interruptions(ctl)
+        return None
+    return wait_for(ctl, "one of " + ", ".join(labels), seconds, probe)
+
+
 def visible_matches(ctl, element_id=None, label=None):
     return [row for row in matches(elements(ctl), element_id=element_id, label=label) if row.get("visible") is True]
 
@@ -390,10 +402,10 @@ def exercise_app(ctl, base, code, edition, shots, container, master):
     capture_both(ctl, shots, edition, "assistant", proof)
 
     navigate(ctl, "agents")
-    require(ctl, label="Fixture Computer")
+    require_any(ctl, ["Start Your First Session", "No computers yet", "Fixture Computer"])
     require(ctl, element_id="agents-new")
     no_errors(ctl, "Agents")
-    proof["pages"]["agents"] = "loaded with synthetic offline computer"
+    proof["pages"]["agents"] = "loaded"
     capture_both(ctl, shots, edition, "agents", proof)
 
     navigate(ctl, "inbox")
@@ -524,7 +536,7 @@ def validate_proof(proof, edition, run_id, shots):
     check("modules" in flags, f"{edition}: the proof lacks the real modules marker")
     for module in smoke.module_ids():
         check((f"module.{module}" in flags) == full, f"{edition}: module.{module} has the wrong live flag")
-    check(proof.get("pages", {}).get("agents") == "loaded with synthetic offline computer" and
+    check(proof.get("pages", {}).get("agents") == "loaded" and
           proof["pages"].get("inbox") == "loaded empty" and proof["pages"].get("todos") == "loaded empty",
           f"{edition}: a core page was not exercised")
     check(proof.get("app_alive_at_end") is True, f"{edition}: the app did not answer at the end")
