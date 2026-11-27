@@ -167,7 +167,8 @@ func (s *Service) authorizeTaskTerminal(ctx context.Context, machine string, req
 	defer s.todos.writing.Unlock()
 	err = s.patchPlanTask(ctx, t.PlanID, i, func(pt *PlanTask) {
 		if pt.TodoID == t.ID && pt.CloseTabOnAccept && pt.TerminalCleanup == devicewire.TaskTerminalPending &&
-			pt.TerminalTarget == target && !pt.TerminalAuthorized && s.taskTerminalOwned(t.ID, req.AcceptedAt, target) {
+			pt.TerminalTarget == target && !pt.TerminalAuthorized && s.taskTerminalOwned(t.ID, req.AcceptedAt, target) &&
+			s.sessionActivitySnapshotReason(machine, target.SessionID, time.Now()) == "" {
 			pt.TerminalAuthorized = true
 			authorized = true
 		}

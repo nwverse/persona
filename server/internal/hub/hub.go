@@ -22,6 +22,8 @@ import (
 )
 
 type Hub struct {
+	// projectReview: wakes the owner-input relay (project_review.go).
+	projectReview projectReviewRelay
 	passwordLogin passwordLoginState
 	browserLogin  browserLoginState
 	// errs: the hub's own error reports on their way to the managers (error_reports.go).
@@ -185,6 +187,7 @@ type Hub struct {
 
 	secret       secretState  // secretkey.go
 	devtok       devTokens    // device token lookups (devicetokens.go)
+	readonlyMu   sync.Mutex   // serializes active-cap checks on read-only session issuance (readonly_sessions.go)
 	shareIngress shareIngress // anonymous admission limits; no sharing business state
 	public       publicState  // TLS identity, listener and advertised addresses (public.go)
 	sends        sendLog      // messages being / just sent, by client_msg_id (send.go)
@@ -359,6 +362,7 @@ func runHub(ctx context.Context, b update.Build, cfg *Config, budget *shutdownBu
 	h.push.attention = h.attentionMode
 	h.push.privateOnly = cfg.Security.PrivateNetworkOnly          // own APNs key only, sealed (push.go relayed, push_send.go)
 	h.push.devicesChanged = func() { go h.fleetClientsChanged() } // a phone that takes MCP forms by push (fleet_link.go)
+	go h.projectReviewOwnerLoop(ctx)
 	go h.push.maintenanceLoop(ctx)
 	// The machines are the manager's to connect (devices_link.go); until it reports them they show as before a
 	// restart (what it handed over), before the assistant's process starts and takes that hand-over.

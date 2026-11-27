@@ -16,7 +16,7 @@ describe("zh-Hans words that were English", () => {
   });
 
   it("heads the palette's node commands in the menus' words", () => {
-    expect(t("lib-node-palette.section_pane", { name: "整理发布说明" })).toBe("窗格 · 整理发布说明");
+    expect(t("lib-node-palette.section_pane", { name: "整理发布说明" })).toBe("终端 · 整理发布说明");
     expect(t("lib-node-palette.section_tab", { name: "zsh" })).toBe("标签页 · zsh");
     expect(t("lib-node-palette.section_space", { name: "weather" })).toBe("空间 · weather");
   });

@@ -31,6 +31,9 @@ func (e *Engine) Ingest(ctx context.Context, src Source, sc SourceChat, msgs []S
 	// run while a connector downloads, so reread their metadata before commit.
 	e.Store.ingestMu.Lock()
 	defer e.Store.ingestMu.Unlock()
+	// After every other deferred unlock (chatMu below), still under ingestMu: gateway lines a fuller sync message
+	// supersedes go once that message is written (align_loose.go).
+	defer e.settleSuperseded(ChatID(src.Name(), sc.ID))
 	cut := e.textCutoff()
 	e.Store.chatMu.Lock()
 	c, exists, r, err := e.Store.ingestState(src.Name(), sc, cut)
@@ -157,9 +160,13 @@ func (e *Engine) Ingest(ctx context.Context, src Source, sc SourceChat, msgs []S
 		}
 		kept = append(kept, m)
 	}
-	if len(repairs) > 0 {
+	needChatNameFill := exists && syncSource(src) && sc.Name != "" && c.Name == ""
+	if len(repairs) > 0 || needChatNameFill {
 		if err := e.repairLarkSyncSenders(src, sc, cut, repairs); err != nil {
 			return 0, err
+		}
+		if needChatNameFill {
+			c.Name = sc.Name
 		}
 	}
 	if len(lines) == 0 {
@@ -489,16 +496,26 @@ func (e *Engine) applyUser(kind, id string, uu UserUpdate) (string, error) {
 	e.Store.applyMu.Lock()
 	defer e.Store.applyMu.Unlock()
 	uu.Update = u
+	var tree treeEdit
 	if kind == KindProject {
 		if err := e.projectSourceUpdate(id, &uu); err != nil {
 			return "", err
 		}
+		var err error
+		if tree, err = e.projectTreeUpdate(id, uu); err != nil {
+			return "", err
+		}
 		u = e.projectUpdate(u)
+	} else {
+		uu.Parent, uu.Milestones, uu.Milestone = nil, nil, nil
 	}
 	uu.Update = u
 	out, err := e.apply(kind, id, uu, userEdit(uu), UserWriter)
 	if err == nil && u.MergeInto == "" {
 		err = e.claim(kind, out, u, "", nil, nil)
+	}
+	if err == nil && kind == KindProject {
+		err = e.writeTree(out, tree)
 	}
 	if err == nil && profile != nil {
 		_, err = e.putProfile(out, UserWriter, profile)
@@ -602,6 +619,9 @@ func (e *Engine) apply(kind, id string, uu UserUpdate, le linkEdit, writer strin
 		for _, cid := range u.Chats {
 			c, ok, err := e.Store.editChat(cid, func(c *Chat) {
 				c.Projects = addUnique(c.Projects, p.Slug)
+				if le.user { // an extension's link does not lift what the user held
+					c.HeldOffProjects = false
+				}
 				if u.Lock == nil || *u.Lock {
 					c.LockedFields = addUnique(c.LockedFields, "projects")
 				}
@@ -666,8 +686,14 @@ func (e *Engine) apply(kind, id string, uu UserUpdate, le linkEdit, writer strin
 				c.Projects = addUnique(c.Projects, pr.Slug)
 				le.linked(&c.Tagging, "projects", pr.Slug)
 			}
+			if le.user && (len(linked) > 0 || len(le.allow["projects"]) > 0) { // the user's own link, not an extension's
+				c.HeldOffProjects = false
+			}
 			c.People = removeStrings(c.People, u.RemovePeople)
 			c.Projects = removeStrings(c.Projects, u.RemoveProjects)
+			if le.user && le.lockLists && len(u.RemoveProjects) > 0 && len(c.Projects) == 0 {
+				c.HeldOffProjects = true // took off every project and held the list: compression links it to none
+			}
 			le.removed(&c.Tagging, "people", e.existing(KindPerson, u.RemovePeople)...)
 			le.removed(&c.Tagging, "projects", e.existing(KindProject, u.RemoveProjects)...)
 			le.allowed(&c.Tagging, "people", "projects")

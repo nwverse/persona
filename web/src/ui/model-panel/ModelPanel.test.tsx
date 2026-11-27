@@ -7,6 +7,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PanelProvider, PanelState } from "../../lib/model-panel";
+import { t } from "../../i18n";
 import type { LauncherQuotaAnswer } from "../../lib/quota";
 import { effortTitle } from "../../lib/session-actions";
 
@@ -74,7 +75,7 @@ const codex = (over: Partial<PanelProvider> = {}): PanelProvider => ({
       id: "gpt-5.5",
       name: "GPT 5.5",
       efforts: ["low", "medium", "high"],
-      fast: true,
+      speeds: [{ id: "standard" }, { id: "fast" }],
     },
   ],
   unavailable: "需要新开对话",
@@ -109,7 +110,7 @@ interface Opts {
   providers?: PanelProvider[];
   state?: PanelState;
   onPick?: (c: unknown) => Promise<boolean>;
-  onApplyCurrent?: (p: { effort?: string; fast?: boolean }) => Promise<boolean>;
+  onApplyCurrent?: (p: { effort?: string; speed?: string }) => Promise<boolean>;
   onReload?: (p: string) => void;
   onForget?: (p: string, m: string) => void;
   quotas?: Readonly<Record<string, LauncherQuotaAnswer>>;
@@ -391,11 +392,11 @@ describe("the model panel", () => {
     await flush();
     expect(onPick).not.toHaveBeenCalled();
     expect(flyout()).not.toBeNull();
-    const fast = flyout()!.querySelector<HTMLButtonElement>("[data-fast-toggle]")!;
+    const fast = flyout()!.querySelector<HTMLButtonElement>('[data-panel-speed="fast"]')!;
     expect(fast.getAttribute("aria-pressed")).toBe("false");
     act(() => fast.click());
     await flush();
-    expect(onApplyCurrent).toHaveBeenCalledWith({ fast: true });
+    expect(onApplyCurrent).toHaveBeenCalledWith({ speed: "fast" });
   });
 
   it("the current effort-only row is not greyed out and a tap opens its working slider", async () => {
@@ -701,6 +702,25 @@ describe("launcher-first acceptance #10249", () => {
     expect(onPick).toHaveBeenCalledWith({ provider: "account-1", model: "vendor/new-model" });
   });
 
+  it("opens a favorite saved by the binary speed picker as Fast", async () => {
+    localStorage.setItem(panelStoreKey("agent", "favorites"), JSON.stringify([
+      { uid: "fast", provider: "codex", model: "gpt-5.5", fast: true },
+      { uid: "ultra", provider: "codex", model: "gpt-5.5", speed: "ultrafast", fast: false },
+    ]));
+    const current = codex({ unavailable: undefined });
+    current.models = current.models?.map((model) => ({
+      ...model,
+      speeds: [{ id: "standard" }, { id: "fast" }, { id: "ultrafast" }],
+    })) ?? null;
+    const { onPick } = await open({ providers: [current], state: { current: null, recommended: ["codex"] } });
+    const choices = [...document.querySelectorAll<HTMLElement>("[data-panel-quick] [data-panel-row]")];
+    expect(choices.map((choice) => choice.querySelector("[data-row-speed]")?.getAttribute("aria-label")))
+      .toEqual([t("ui-modelpanel.fast_short"), t("ui-modelpanel.speed_ultrafast")]);
+    act(() => choices[0].click());
+    await flush();
+    expect(onPick).toHaveBeenCalledWith({ provider: "codex", model: "gpt-5.5", speed: "fast" });
+  });
+
   it("combines favorites and recent into at most three distinct one-action saved setups", async () => {
     localStorage.setItem(panelStoreKey("agent", "favorites"), JSON.stringify([{ uid: "saved", provider: "claude", model: "sonnet", effort: "low" }]));
     localStorage.setItem(
@@ -819,28 +839,28 @@ describe("model families", () => {
     ],
   });
   const names = () => rows().map((r) => r.querySelector(".truncate")?.textContent);
-  const fold = (family: string) => document.body.querySelector<HTMLButtonElement>(`[data-panel-fold$="claude:${family}"]`)!;
+  const fold = (series = "claude") => document.body.querySelector<HTMLButtonElement>(`[data-panel-fold$="${series}"]`)!;
 
-  it("each family under its name, the newest marked Latest; Earlier versions unfolds and folds; a search finds the folded", async () => {
+  it("each series under its name, the newest marked Latest; Earlier versions unfolds and folds; a search finds the folded", async () => {
     await open({
       providers: [max(), codex()],
       state: { current: null, recommended: [] },
     });
     act(() => launcher("claude-max").click());
-    expect([...document.body.querySelectorAll("[data-panel-family]")].map((f) => f.getAttribute("aria-label"))).toEqual(["Claude Fable", "Claude Opus"]);
+    expect([...document.body.querySelectorAll("[data-panel-family]")].map((f) => f.getAttribute("aria-label"))).toEqual(["Claude"]);
     expect(names()).toEqual(["Default (recommended)", "Fable 5.2", "Opus 5.5"]);
     expect(row("Opus 5.5").querySelector("[data-row-latest]")?.textContent).toBe("最新");
     expect(row("Default (recommended)").querySelector("[data-row-latest]")).toBeNull();
 
-    const opus = fold("opus");
-    expect(opus.textContent).toBe("更早版本 · 2");
-    expect(opus.getAttribute("aria-label")).toBe("Claude Opus：显示 2 个更早版本");
-    expect(opus.getAttribute("aria-expanded")).toBe("false");
-    act(() => opus.click());
-    expect(names()).toEqual(["Default (recommended)", "Fable 5.2", "Opus 5.5", "Opus 4.8", "Opus 4.7"]);
-    expect(fold("opus").getAttribute("aria-expanded")).toBe("true");
-    expect(fold("opus").textContent).toBe("收起更早版本");
-    act(() => fold("opus").click());
+    const claudeFold = fold("claude");
+    expect(claudeFold.textContent).toBe("更早版本 · 3");
+    expect(claudeFold.getAttribute("aria-label")).toBe("Claude：显示 3 个更早版本");
+    expect(claudeFold.getAttribute("aria-expanded")).toBe("false");
+    act(() => claudeFold.click());
+    expect(names()).toEqual(["Default (recommended)", "Fable 5.2", "Fable 5", "Opus 5.5", "Opus 4.8", "Opus 4.7"]);
+    expect(fold("claude").getAttribute("aria-expanded")).toBe("true");
+    expect(fold("claude").textContent).toBe("收起更早版本");
+    act(() => fold("claude").click());
     expect(names()).not.toContain("Opus 4.8");
 
     type(search(), "opus 4.7");
@@ -848,7 +868,7 @@ describe("model families", () => {
     expect(document.body.querySelector("[data-panel-fold]")).toBeNull();
   });
 
-  it("the older model that runs now stays in its family, and ↑↓ walk the rows shown", async () => {
+  it("the older model that runs now stays in its series, and ↑↓ walk the rows shown", async () => {
     await open({
       providers: [max(), codex()],
       state: {
@@ -858,11 +878,61 @@ describe("model families", () => {
       },
     });
     expect(names()).toEqual(["Default (recommended)", "Fable 5.2", "Opus 5.5", "Opus 4.7"]);
-    expect(fold("opus").textContent).toBe("更早版本 · 1");
+    expect(fold("claude").textContent).toBe("更早版本 · 2");
     const now = row("Opus 4.7");
     expect(now.hasAttribute("data-current")).toBe(true);
     act(() => now.focus());
     await key(now, "ArrowUp");
     expect(document.activeElement).toBe(row("Opus 5.5"));
+  });
+
+  it("groups models by series (Orchestrator under Gemini, GPT-OSS under GPT) and puts unrecognized/custom models under Other while keeping Default headerless", async () => {
+    const mixed: PanelProvider = {
+      id: "agy-mix",
+      name: "agy-mix",
+      engine: "agy",
+      models: [
+        { id: "default", name: "Default (recommended)", providerDefault: true, efforts: [] },
+        { id: "claude-opus-5-5", name: "Opus 5.5", efforts: [] },
+        { id: "claude-opus-4-8", name: "Opus 4.8", efforts: [] },
+        { id: "claude-sonnet-5-5", name: "Sonnet 5.5", efforts: [] },
+        { id: "gemini-pro-orchestrator-neon", name: "Orchestrator (Neon)", efforts: [] },
+        { id: "gpt-oss-120b-medium", name: "GPT-OSS 120B (Medium)", efforts: [] },
+        { id: "glm-5.3", name: "GLM 5.3", efforts: [] },
+        { id: "acme-custom-1", name: "Acme Custom 1", efforts: [] },
+        { id: "vendor/model-x", name: "vendor/model-x", efforts: [], custom: true },
+      ],
+    };
+    await open({
+      providers: [mixed, codex()],
+      state: { current: null, recommended: [] },
+    });
+    act(() => launcher("agy-mix").click());
+
+    const familyEls = [...document.body.querySelectorAll<HTMLElement>("[data-panel-family]")];
+    expect(familyEls.map((el) => [el.dataset.panelFamily, el.getAttribute("aria-label")])).toEqual([
+      ["claude", "Claude"],
+      ["gemini", "Gemini"],
+      ["gpt", "GPT"],
+      ["glm", "GLM"],
+      ["other", "其他"],
+    ]);
+
+    const otherGroup = familyEls.find((el) => el.dataset.panelFamily === "other")!;
+    expect(otherGroup.getAttribute("role")).toBe("group");
+    expect(otherGroup.querySelector(".text-submeta")?.textContent).toBe("其他");
+    expect(otherGroup.querySelector("[data-panel-fold]")).toBeNull();
+    expect([...otherGroup.querySelectorAll("[data-panel-row]")].map((r) => r.querySelector(".truncate")?.textContent)).toEqual([
+      "Acme Custom 1",
+      "vendor/model-x",
+    ]);
+    expect(row("Default (recommended)").closest("[data-panel-family]")).toBeNull();
+
+    const glmRow = row("GLM 5.3");
+    act(() => glmRow.focus());
+    await key(glmRow, "ArrowDown");
+    expect(document.activeElement).toBe(row("Acme Custom 1"));
+    await key(row("Acme Custom 1"), "ArrowUp");
+    expect(document.activeElement).toBe(glmRow);
   });
 });
