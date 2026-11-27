@@ -42,15 +42,16 @@ func TestItemValidate(t *testing.T) {
 		t.Fatal(err)
 	}
 	bad := map[string]func(*Item){
-		"reserved id":  func(i *Item) { i.ID = "feishu" },
-		"uuid-like id": func(i *Item) { i.ID = "cafebabe" },
-		"no name":      func(i *Item) { i.Name = " " },
-		"kind":         func(i *Item) { i.Kind = KindApp },
-		"format":       func(i *Item) { i.Capabilities.Format = "html" },
-		"asks":         func(i *Item) { i.Capabilities.Asks = "cards" },
-		"max_text":     func(i *Item) { i.Capabilities.MaxText = 50 },
-		"bind alone":   func(i *Item) { i.Connector = "" },
-		"bind value":   func(i *Item) { i.Bind = BindNone },
+		"reserved id":     func(i *Item) { i.ID = "feishu" },
+		"uuid-like id":    func(i *Item) { i.ID = "cafebabe" },
+		"no name":         func(i *Item) { i.Name = " " },
+		"kind":            func(i *Item) { i.Kind = KindApp },
+		"format":          func(i *Item) { i.Capabilities.Format = "html" },
+		"asks":            func(i *Item) { i.Capabilities.Asks = "cards" },
+		"max_text":        func(i *Item) { i.Capabilities.MaxText = 50 },
+		"bind alone":      func(i *Item) { i.Connector = "" },
+		"bind value":      func(i *Item) { i.Bind = BindNone },
+		"reply_only+push": func(i *Item) { i.Capabilities.ReplyOnly = true; i.Capabilities.Push = true },
 	}
 	for what, f := range bad {
 		it := good
@@ -58,6 +59,11 @@ func TestItemValidate(t *testing.T) {
 		if it.Validate() == nil {
 			t.Errorf("%s: accepted", what)
 		}
+	}
+	replyOnly := good
+	replyOnly.Capabilities.ReplyOnly = true
+	if err := replyOnly.Validate(); err != nil {
+		t.Fatalf("reply_only rejected: %v", err)
 	}
 }
 
@@ -86,6 +92,60 @@ func TestMentionMessageWithOnlyOriginIsARequest(t *testing.T) {
 	}
 }
 
+func TestMessageGroupTopicRoutingFieldsAndEmpty(t *testing.T) {
+	var m Message
+	raw := `{"id":"om_1","text":"hello","chat_id":"oc_group_1","chat_kind":"topic","topic_id":"omt_42","thread":"legacy_key"}`
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		t.Fatal(err)
+	}
+	if m.ChatID != "oc_group_1" || m.ChatKind != ChatKindTopic || m.TopicID != "omt_42" || m.Thread != "legacy_key" {
+		t.Fatalf("decoded routing fields = %+v", m)
+	}
+	// Routing metadata alone does not constitute message content.
+	onlyRouting := Message{ID: "om_2", ChatID: "oc_group_1", ChatKind: ChatKindGroup, TopicID: "omt_42", Thread: "legacy_key"}
+	if !onlyRouting.Empty() {
+		t.Fatalf("message with only routing metadata should be empty: %+v", onlyRouting)
+	}
+}
+
+func TestThreadModeAndIdleHoursValidation(t *testing.T) {
+	for _, tc := range []struct {
+		mode ThreadMode
+		ok   bool
+	}{
+		{ThreadModeChannelDefault, true},
+		{ThreadModePerGroupAndTopic, true},
+		{ThreadModePerTopic, true},
+		{"", false},
+		{"per_group", false},
+	} {
+		if err := tc.mode.Check(); (err == nil) != tc.ok {
+			t.Errorf("ThreadMode(%q).Check() = %v, want ok=%v", tc.mode, err, tc.ok)
+		}
+	}
+	if got := ThreadMode("").Effective(false); got != ThreadModeChannelDefault {
+		t.Fatalf("Effective empty = %q, want %q", got, ThreadModeChannelDefault)
+	}
+	if got := ThreadModePerTopic.Effective(false); got != ThreadModePerTopic {
+		t.Fatalf("Effective per_topic = %q, want %q", got, ThreadModePerTopic)
+	}
+	for _, tc := range []struct {
+		hours int
+		ok    bool
+	}{
+		{0, true},
+		{1, true},
+		{24, true},
+		{MaxThreadIdleHours, true},
+		{-1, false},
+		{MaxThreadIdleHours + 1, false},
+	} {
+		if err := CheckThreadIdleHours(tc.hours); (err == nil) != tc.ok {
+			t.Errorf("CheckThreadIdleHours(%d) = %v, want ok=%v", tc.hours, err, tc.ok)
+		}
+	}
+}
+
 func TestTargetCheck(t *testing.T) {
 	for _, tc := range []struct {
 		t  Target
@@ -110,6 +170,9 @@ func TestPluginFeatures(t *testing.T) {
 		t.Fatal(got)
 	}
 	if got := ids(PluginFeatures("", Capabilities{Asks: AsksNone}, nil)); got != "" {
+		t.Fatal(got)
+	}
+	if got := ids(PluginFeatures("", Capabilities{Asks: AsksText, Push: true, ReplyOnly: true}, nil)); got != "asks,all_asks" {
 		t.Fatal(got)
 	}
 }

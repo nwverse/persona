@@ -374,6 +374,11 @@ func TestHandoffNotApprovedStartsNothing(t *testing.T) {
 			ix := r.card()
 			if c.answer != nil {
 				c.answer(r, ix)
+			} else {
+				// Unseen hand-off cards do not expire until viewed in the app.
+				if !r.s.markInteractionSeen(context.Background(), ix.ID) {
+					t.Fatal("markInteractionSeen returned false")
+				}
 			}
 			answer, errText := r.answer(done)
 			if errText != "" || !strings.Contains(answer, c.want) || !strings.Contains(answer, "No agent was started") {
@@ -441,6 +446,9 @@ func TestHandoffFailuresAfterTheApproval(t *testing.T) {
 	}
 	if r.stages != 0 || len(r.f.starts) != 0 {
 		t.Fatalf("staged %d, started %d", r.stages, len(r.f.starts))
+	}
+	if task := onlyTodo(r.s); task.DoneAt == nil || task.StartError == "" {
+		t.Fatalf("the pre-start failure left an open task without a start error: %+v", task)
 	}
 	r.leaks(answer)
 

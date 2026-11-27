@@ -38,7 +38,7 @@ import (
 
 // codexAppHistoryVersion changes when already-written JSONL no longer matches what the converter produces. A mark
 // without it is a legacy cache and is rebuilt once, even when the App database has not changed.
-const codexAppHistoryVersion = 2
+const codexAppHistoryVersion = 3
 
 // codexAppHistoryWait bounds one read of the history database; a long chat's turns stream in well under it.
 const codexAppHistoryWait = 30 * time.Second
@@ -81,10 +81,17 @@ type codexHistoryMark struct {
 
 // codexHistoryDBPath is the newest history database in home (thread_history_1.sqlite in 2026-11).
 func codexHistoryDBPath(home string) string {
-	paths, _ := filepath.Glob(filepath.Join(home, "thread_history_*.sqlite"))
+	return codexNumberedDB(home, "thread_history_")
+}
+
+// codexNumberedDBGlob is what codexNumberedDB globs with, indirected so a test can count the history/log Globs.
+var codexNumberedDBGlob = filepath.Glob
+
+func codexNumberedDB(home, prefix string) string {
+	paths, _ := codexNumberedDBGlob(filepath.Join(home, prefix+"*.sqlite"))
 	best, bestN := "", -1
 	for _, p := range paths {
-		n, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(filepath.Base(p), "thread_history_"), ".sqlite"))
+		n, err := strconv.Atoi(strings.TrimSuffix(strings.TrimPrefix(filepath.Base(p), prefix), ".sqlite"))
 		if err == nil && n > bestN {
 			best, bestN = p, n
 		}
@@ -254,6 +261,9 @@ func (n *Node) refreshCodexAppHistory(id string) error {
 		n.logf("codex app history %s: %v", src.thread, err)
 		return err
 	}
+	n.mu.Lock()
+	delete(n.metas, p)
+	n.mu.Unlock()
 	live := map[string]codexAppThread{}
 	for id, row := range codexAppThreads(src.home) {
 		live[id] = row
@@ -339,7 +349,7 @@ func writeCodexAppHistory(ctx context.Context, db string, t codexAppThread, path
 	if grow {
 		res = codexHistoryWrite{turn: mark.Turn, turnID: mark.TurnID, status: mark.Status}
 	}
-	sqlite, err := exec.LookPath("sqlite3")
+	sqlite, err := codexSQLiteProgram()
 	if err != nil {
 		return res, err
 	}
@@ -356,10 +366,12 @@ func writeCodexAppHistory(ctx context.Context, db string, t codexAppThread, path
 	if err != nil {
 		return res, err
 	}
-	defer file.Close()
-	if !grow {
-		defer os.Remove(file.Name()) // renamed away once complete
-	}
+	defer func() {
+		file.Close()
+		if !grow {
+			os.Remove(file.Name()) // close first: Windows cannot remove the open temporary file
+		}
+	}()
 	w := bufio.NewWriterSize(file, 256<<10)
 	line := func(at time.Time, typ string, payload any) {
 		b, _ := json.Marshal(map[string]any{"timestamp": at.UTC().Format(time.RFC3339Nano), "type": typ, "payload": payload})
@@ -388,6 +400,7 @@ func writeCodexAppHistory(ctx context.Context, db string, t codexAppThread, path
 		`LEFT JOIN thread_items i ON i.thread_id = t.thread_id AND i.turn_id = t.turn_id AND t.history_ordinal > %d `+
 		`WHERE t.history_ordinal >= %d ORDER BY t.history_ordinal, i.rollout_ordinal`, from, from)
 	cmd := exec.CommandContext(ctx, sqlite, "-readonly", "-bail", "-noheader", "-list", "-separator", "\x1f", "-cmd", ".timeout 2000", codexDBTarget(db), q)
+	hideCodexSQLiteWindow(cmd)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	stdout, err := cmd.StdoutPipe()
@@ -615,6 +628,8 @@ func codexRolloutItem(kind string, raw []byte) map[string]any {
 		} `json:"content"`
 		Text             string          `json:"text"`
 		Phase            string          `json:"phase"`
+		Delivery         string          `json:"delivery"`
+		Questions        json.RawMessage `json:"questions"`
 		Summary          []string        `json:"summary"`
 		Command          string          `json:"command"`
 		Status           string          `json:"status"`
@@ -674,6 +689,9 @@ func codexRolloutItem(kind string, raw []byte) map[string]any {
 		item["type"], item["content"] = "UserMessage", content
 	case "agentMessage":
 		item["type"], item["content"], item["phase"] = "AgentMessage", []map[string]string{{"type": "text", "text": v.Text}}, v.Phase
+		if v.Delivery == "async" && len(v.Questions) > 0 {
+			item["delivery"], item["questions"] = v.Delivery, v.Questions
+		}
 	case "reasoning":
 		item["type"], item["summary_text"] = "Reasoning", v.Summary
 	case "commandExecution":

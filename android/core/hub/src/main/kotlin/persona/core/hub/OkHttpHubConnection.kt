@@ -123,6 +123,8 @@ class OkHttpHubConnection(
     override val currentHello = _currentHello.asStateFlow()
     private val _serverFeatures = MutableStateFlow<Set<String>>(emptySet())
     val serverFeatures = _serverFeatures.asStateFlow()
+    private val _imageLimits = MutableStateFlow(ImageLimitsTable.Standard)
+    val imageLimits = _imageLimits.asStateFlow()
     /** A pairing-owned consumer for phone calls, before typed event decoding. */
     @Volatile var phoneMessageHandler: ((JsonObject) -> Boolean)? = null
     private val _events = MutableSharedFlow<ServerEvent>()
@@ -378,14 +380,18 @@ class OkHttpHubConnection(
             }) }
         })
 
-    override fun reconnect() = synchronized(lock) {
-        if (closed || revoked) return@synchronized
-        val previous = runner
-        previous?.cancel()
-        socket?.cancel()
-        socket = null
-        clearRoute()
-        runner = scope.launch { previous?.join(); connectLoop() }
+    override fun reconnect() {
+        val toCancel: WebSocket?
+        synchronized(lock) {
+            if (closed || revoked) return
+            val previous = runner
+            previous?.cancel()
+            toCancel = socket
+            socket = null
+            clearRoute()
+            runner = scope.launch { previous?.join(); connectLoop() }
+        }
+        toCancel?.cancel()
     }
 
     fun updateNetwork(value: HubNetwork) {
@@ -528,9 +534,10 @@ class OkHttpHubConnection(
         /** Longer than the client's 15 s, for answers the hub waits on a machine for (a CLI starting). */
         readTimeoutSeconds: Long? = null,
         sharingFence: HubSharingFence? = null,
+        allowNotModified: Boolean = false,
     ): Response {
         val (call, owner) = prepareRequest(path, method, body, headers, expectedRoute, readTimeoutSeconds, sharingFence)
-        return checkedResponse(call.awaitResponse(buffered), owner, sharingFence)
+        return checkedResponse(call.awaitResponse(buffered), owner, sharingFence, allowNotModified)
     }
 
     /** The call owns its body through validation and consumption, including cancellation after its headers. */
@@ -559,7 +566,7 @@ class OkHttpHubConnection(
         val selected = awaitRoute()
         if (expectedRoute != null && selected !== expectedRoute) throw HubFailure(HubError.NoNetwork)
         val owner = synchronized(lock) {
-            activeRoute().takeIf { it === selected } ?: throw HubFailure(HubError.NoNetwork)
+            if (activeRoute() !== selected) throw HubFailure(HubError.NoNetwork)
             routeOwner?.takeIf { it.first === selected }?.second ?: throw HubFailure(HubError.NoNetwork)
         }
         require(path.startsWith("/api/") && !path.contains('#')) { "Expected an API path" }
@@ -580,9 +587,11 @@ class OkHttpHubConnection(
         return client.newCall(request) to owner
     }
 
-    private fun checkedResponse(response: Response, owner: Owner, sharingFence: HubSharingFence?): Response {
+    private fun checkedResponse(
+        response: Response, owner: Owner, sharingFence: HubSharingFence?, allowNotModified: Boolean = false,
+    ): Response {
         try { sharingFence?.requireCurrent() } catch (error: Exception) { response.close(); throw error }
-        if (!response.isSuccessful) {
+        if (!response.isSuccessful && !(allowNotModified && response.code == 304)) {
             val error = response.use { if (sharingFence != null) sharingFailure(it) else HubFailure.from(it) }
             recordRequestFailure(error, owner)
             throw error
@@ -929,6 +938,7 @@ class OkHttpHubConnection(
                             }
                             features = event.features.toSet()
                             _serverFeatures.value = features
+                            _imageLimits.value = event.imageLimits ?: ImageLimitsTable.Standard
                             if (!features.containsAll(config.requiredFeatures)) {
                                 throw HubFailure(HubError.Incompatible, retryable = false)
                             }
@@ -1032,7 +1042,8 @@ class OkHttpHubConnection(
         // The language the app shows (docs/protocol/i18n.md "Protocol"): this socket's notices, and the user's language.
         put("locale", persona.core.contracts.ClientLanguage.tag)
         putJsonArray("features") {
-            (setOf("endpoints", "ws_notify", "app_ping", "elicitation", persona.core.contracts.api.AgentMessageHoldFeature, ProtocolCompatibility.CAPABILITY) + config.clientFeatures).forEach { add(it) }
+            (setOf("endpoints", "ws_notify", "app_ping", "elicitation", persona.core.contracts.api.AgentMessageHoldFeature,
+                persona.core.contracts.generated.ExtensionHubCapability.TOOL_VIEWS, ProtocolCompatibility.CAPABILITY) + config.clientFeatures).forEach { add(it) }
         }
         if ("heartbeat" in features) {
             putJsonObject("heartbeat") {
@@ -1045,7 +1056,7 @@ class OkHttpHubConnection(
     /** The socket's URL; with the stream and last broadcast seen, so the hub replays what was missed (#1574). */
     internal fun socketUrl(base: HttpUrl, resumeFrom: Pair<String, Long>?): HttpUrl =
         base.hubUrl("/api/v1/ws").newBuilder().apply {
-            addQueryParameter("features", "sessions_list,sessions_hierarchy,extension_ui_stream_v1,${ProtocolCompatibility.CAPABILITY}")
+            addQueryParameter("features", "sessions_list,sessions_hierarchy,extension_ui_stream_v1,${ProtocolCompatibility.CAPABILITY},${persona.core.contracts.generated.ExtensionHubCapability.TOOL_VIEWS}")
             resumeFrom?.let { (stream, seq) ->
                 addQueryParameter("event_stream", stream)
                 addQueryParameter("event_seq", seq.toString())
@@ -1171,6 +1182,7 @@ class OkHttpHubConnection(
         }
         val owner: Owner
         val remaining: Boolean
+        var toCancel: WebSocket? = null
         synchronized(lock) {
             if (revoked || closed) return false
             owner = refusedBy ?: attemptOwner ?: homeOwner()
@@ -1180,12 +1192,13 @@ class OkHttpHubConnection(
             if (remaining) {
                 _failure.value = error
                 updateDiagnostics { it.copy(lastDisconnectReason = error.message, lastAttemptFailure = endpointResultLabel(error.kind)) }
-                socket?.cancel()
+                toCancel = socket
                 socket = null
                 clearRoute()
                 publishState(if (network.available) ConnectionState.Connecting else ConnectionState.WaitingForNetwork)
             }
         }
+        toCancel?.cancel()
         if (!remaining) recordTerminal(error)
         notifyRevoked(owner)
         return remaining
@@ -1193,25 +1206,29 @@ class OkHttpHubConnection(
 
     private fun notifyRevoked(owner: Owner) = onMemberRevoked(owner.hubId.orEmpty(), owner.ownToken)
 
-    private fun recordTerminal(error: HubFailure) = synchronized(lock) {
-        if (revoked) return@synchronized
-        _failure.value = error
-        updateDiagnostics { it.copy(lastDisconnectReason = error.message, lastAttemptFailure = endpointResultLabel(error.kind)) }
-        // A socket that went silent was already gone for a long while: say so at once, unless the hub is restarting.
-        if (error.kind == HubError.Timeout && !policy.restarting(restartSince, clockMillis())) setState(ConnectionState.Connecting)
-        when (error.kind) {
-            HubError.PairingExpired -> {
-                revoked = true
-                runner?.cancel()
-                socket?.cancel()
-                socket = null
-                clearRoute()
-                publishState(ConnectionState.Revoked)
+    private fun recordTerminal(error: HubFailure) {
+        var toCancel: WebSocket? = null
+        synchronized(lock) {
+            if (revoked) return
+            _failure.value = error
+            updateDiagnostics { it.copy(lastDisconnectReason = error.message, lastAttemptFailure = endpointResultLabel(error.kind)) }
+            // A socket that went silent was already gone for a long while: say so at once, unless the hub is restarting.
+            if (error.kind == HubError.Timeout && !policy.restarting(restartSince, clockMillis())) setState(ConnectionState.Connecting)
+            when (error.kind) {
+                HubError.PairingExpired -> {
+                    revoked = true
+                    runner?.cancel()
+                    toCancel = socket
+                    socket = null
+                    clearRoute()
+                    publishState(ConnectionState.Revoked)
+                }
+                HubError.CertificateMismatch, HubError.HubMismatch -> publishState(ConnectionState.CertificateMismatch)
+                HubError.LocalNetworkPermission -> publishState(ConnectionState.NeedsLocalNetworkPermission)
+                else -> publishState(if (network.available) ConnectionState.Connecting else ConnectionState.WaitingForNetwork)
             }
-            HubError.CertificateMismatch, HubError.HubMismatch -> publishState(ConnectionState.CertificateMismatch)
-            HubError.LocalNetworkPermission -> publishState(ConnectionState.NeedsLocalNetworkPermission)
-            else -> publishState(if (network.available) ConnectionState.Connecting else ConnectionState.WaitingForNetwork)
         }
+        toCancel?.cancel()
     }
 
     /**
@@ -1263,6 +1280,7 @@ class OkHttpHubConnection(
     }
 
     override fun close() {
+        val toCancel: WebSocket?
         synchronized(lock) {
             if (closed) return
             closed = true
@@ -1271,13 +1289,14 @@ class OkHttpHubConnection(
             socketDrop?.invoke()
             socketDrop = null
             runner?.cancel()
-            socket?.cancel()
+            toCancel = socket
             socket = null
             clearRoute()
             scope.cancel()
-            http.close()
-            closeTunnels(forget = false)
         }
+        toCancel?.cancel()
+        http.close()
+        closeTunnels(forget = false)
     }
 
     companion object {

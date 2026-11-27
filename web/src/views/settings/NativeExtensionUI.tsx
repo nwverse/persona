@@ -9,7 +9,9 @@ import { credentialOwner, enc, errorText } from "../../lib/api";
 import { endInteraction, getState, useStore } from "../../lib/store";
 import { apiOp } from "../../lib/ops";
 import { listManagers } from "../../lib/managers";
+import { confirmedDefaultManager, onDefaultManager } from "../../lib/manager-choice";
 import { uuid } from "../../lib/format";
+import { takeOverlayEntry, withoutOverlayState } from "../../lib/back-close";
 import { navigate } from "../../lib/router";
 import { openLink } from "../../lib/links";
 import { wideView } from "../../lib/code-view";
@@ -21,22 +23,34 @@ import { NATIVE_UI_VERSION } from "../../lib/extension-view-cache";
 
 type Props = Parameters<typeof LegacyExtensionUI>[0];
 type Page = { key: string; ui: string; state?: string; title?: string; legacy?: boolean };
-export function NativeExtensionUI(props: Props & { legacy: (props: Props) => ReactNode }) {
-  const [manager, setManager] = useState<string>();
+export function NativeExtensionUI(props: Props & { legacy: (props: Props) => ReactNode; onLegacyFallback?: () => void }) {
+  const [manager, setManager] = useState<string | undefined>(() => confirmedDefaultManager());
   const [unavailable, setUnavailable] = useState(false);
   const [stack, setStack] = useState<Page[]>(() => [{ key: uuid(), ui: props.ui, state: props.state, title: props.title }]);
   const stackRef = useRef(stack); stackRef.current = stack;
   const historied = props.history ?? (props.pages !== "open");
+  // Settings draws the route back only at the first page; a pushed page's own Back replaces it.
+  useEffect(() => { props.onDepth?.(stack.length); }, [props.onDepth, stack.length]);
   useEffect(() => {
+    if (manager) return;
     let live = true;
     const owner = credentialOwner();
+    // Accept the shared roster default if watchRoster() resolves it first, without waiting on a duplicate GET /managers.
+    const off = onDefaultManager(() => {
+      if (!live) return;
+      const confirmed = confirmedDefaultManager();
+      if (credentialOwner() === owner && confirmed) {
+        live = false;
+        setManager(confirmed);
+      }
+    });
     void listManagers().then((roster) => {
       if (!live) return;
       if (credentialOwner() === owner && roster.default) setManager(roster.default);
       else setUnavailable(true);
     }).catch(() => { if (live) setUnavailable(true); });
-    return () => { live = false; };
-  }, []);
+    return () => { live = false; off(); };
+  }, [manager]);
   useEffect(() => {
     if (!historied) return;
     const pop = (event: PopStateEvent) => {
@@ -52,7 +66,11 @@ export function NativeExtensionUI(props: Props & { legacy: (props: Props) => Rea
     if (props.pages === "open") { navigate(pageHref(props.extension, p.ui || top.ui, p.state)); return; }
     const page = { ...p, ui: p.ui || top.ui, key: uuid(), legacy: legacy || top.legacy };
     const next = [...(current.length >= MAX_STACK ? current.slice(0, MAX_STACK - 1) : current), page];
-    if (historied && next.length > current.length) history.pushState({ ...(history.state ?? {}), extPage: next.length }, "", location.href);
+    if (historied && next.length > current.length) {
+      const nextState = { ...(withoutOverlayState(history.state) ?? {}), extPage: next.length };
+      if (takeOverlayEntry()) history.replaceState(nextState, "", location.href);
+      else history.pushState(nextState, "", location.href);
+    }
     stackRef.current = next; setStack(next);
   }, [props.pages, props.extension, historied]);
   const pop = useCallback((from: string) => {
@@ -64,11 +82,11 @@ export function NativeExtensionUI(props: Props & { legacy: (props: Props) => Rea
   if (!manager) return props.placeholder ?? <Loading />;
   // only the first page has a last view (ExtensionUI's `remember`)
   return <>{stack.map((page, index) => <div key={page.key} hidden={index !== stack.length - 1}>
-    <ConnectedPage {...props} placeholder={index ? undefined : props.placeholder} onView={index ? undefined : props.onView} page={page} manager={manager} active={index === stack.length - 1} push={(p, legacy) => push(page.key, p, legacy)} pop={() => pop(page.key)}
+    <ConnectedPage {...props} placeholder={index ? undefined : props.placeholder} onView={index ? undefined : props.onView} onLegacyFallback={index ? undefined : props.onLegacyFallback} page={page} manager={manager} active={index === stack.length - 1} push={(p, legacy) => push(page.key, p, legacy)} pop={() => pop(page.key)}
       back={index > 0 ? stack[index - 1].title || t("settings-extensionview.back") : undefined} />
   </div>)}</>;
 }
-function ConnectedPage(props: Props & { legacy: (props: Props) => ReactNode; page: Page; manager: string; active: boolean; push: (p: UIPush, legacy?: boolean) => void; pop: () => void; back?: string }) {
+function ConnectedPage(props: Props & { legacy: (props: Props) => ReactNode; onLegacyFallback?: () => void; page: Page; manager: string; active: boolean; push: (p: UIPush, legacy?: boolean) => void; pop: () => void; back?: string }) {
   const [adapter, setAdapter] = useState<AppUIStreamPage>();
   const [fallback, setFallback] = useState(!!props.page.legacy);
   const callbacks = useRef(props); callbacks.current = props;
@@ -98,7 +116,11 @@ function ConnectedPage(props: Props & { legacy: (props: Props) => ReactNode; pag
     revision.current = props.revision;
     adapter?.session.refresh();
   }, [props.revision, adapter]);
-  useEffect(() => { if (fallback) adapter?.dispose(); }, [fallback, adapter]);
+  useEffect(() => {
+    if (!fallback) return;
+    adapter?.dispose();
+    props.onLegacyFallback?.();
+  }, [fallback, adapter, props.onLegacyFallback]);
   const confirm = useCallback((action: Action, _displayed: unknown, _value: UIStreamValue) => new Promise<boolean>((finish) => {
     confirmationRef.current?.finish(false); setConfirmation({ action, finish });
   }), []);
@@ -106,7 +128,7 @@ function ConnectedPage(props: Props & { legacy: (props: Props) => ReactNode; pag
   const fail = useCallback(() => setFallback(true), []);
   const error = useCallback((e: unknown) => toast(t("settings-extensionview.action_failed", { error: e instanceof Error ? e.message : String(e) }), "error"), []);
   const jump = useCallback((action: { push?: UIPush }) => { if (action.push) callbacks.current.push(action.push); }, []);
-  const legacy = props.legacy({ ...props, ui: props.page.ui, state: props.page.state, title: props.page.title,
+  const legacy = props.legacy({ ...props, onDepth: undefined, ui: props.page.ui, state: props.page.state, title: props.page.title,
     active: props.active, history: false, navigation: { push: (p) => callbacks.current.push(p, true), pop: props.pop } });
   return <>
     {props.back && <Button tone="quiet" icon="chevronLeft" onClick={props.pop}>{props.back}</Button>}

@@ -3,6 +3,7 @@ package persona.feature.assistant.settings
 import android.graphics.Bitmap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.CompositionLocalProvider
@@ -83,6 +84,15 @@ class AssistantSettingsShotsTest {
     @Config(sdk = [35], qualifiers = "zh-w400dp-h2200dp-xhdpi")
     @Test fun nextSuggestionsSimplifiedChinese() = nextSuggestionShots("zh")
 
+    @Config(sdk = [35], qualifiers = "en-w400dp-h2400dp-xhdpi")
+    @Test fun dashboardsEnglish() = dashboardsShots("en")
+
+    @Config(sdk = [35], qualifiers = "zh-w400dp-h2400dp-xhdpi")
+    @Test fun dashboardsSimplifiedChinese() = dashboardsShots("zh")
+
+    @Config(sdk = [35], qualifiers = "ja-w400dp-h2400dp-xhdpi")
+    @Test fun dashboardsJapanese() = dashboardsShots("ja")
+
     @Config(sdk = [35], qualifiers = "en-w400dp-h3200dp-xhdpi")
     @Test fun recentTaskChatsLargeFont() = recentTaskChatsLargeFontShots()
 
@@ -113,7 +123,7 @@ class AssistantSettingsShotsTest {
         override suspend fun config() = config
         override suspend fun updateConfig(update: AssistantConfigUpdate): AssistantConfig {
             config = config.copy(timezone = update.timezone ?: config.timezone, notes = update.notes ?: config.notes,
-                nextSuggestions = update.nextSuggestions ?: config.nextSuggestions,
+                nextSuggestions = update.nextSuggestions ?: config.nextSuggestions, dashboards = update.dashboards ?: config.dashboards,
                 recentTaskChats = update.recentTaskChats ?: config.recentTaskChats)
             return config
         }
@@ -248,6 +258,45 @@ class AssistantSettingsShotsTest {
         }
     }
 
+    /** Dashboards (#15017): no switch while the hub does not say assistant_pages; with it, off (absent) and on. */
+    private fun dashboardsShots(language: String) {
+        var style by mutableStateOf(AppStyle.Glass)
+        var dark by mutableStateOf(false)
+        var features by mutableStateOf(emptySet<String>())
+        var value by mutableStateOf<Boolean?>(null)
+        val management = FakeManagement("Morning", "Keep it short.")
+        var title = ""
+        rule.setContent {
+            title = stringResource(R.string.assistant_settings_dashboards)
+            PersonaTheme(darkTheme = dark, reduceMotion = true, style = style) {
+                val roster = ManagerRoster(listOf(HubManager("assistant", "Persona", online = true, isDefault = true)), "assistant")
+                CompositionLocalProvider(LocalManagerRoster provides roster, LocalHubFeatures provides features) {
+                    Box(Modifier.testTag("dashboards-shot").width(400.dp).height(2400.dp).background(PersonaTheme.palette.background)) {
+                        key(value) { AssistantSettingsScreen(management, machines, onBack = {}, onModelConfiguration = { _, _ -> }) }
+                    }
+                }
+            }
+        }
+        for ((part, feature, next) in listOf(Triple("hidden", false, null), Triple("off", true, null), Triple("on", true, true))) {
+            management.config = management.config.copy(dashboards = next)
+            features = if (feature) setOf(AssistantPagesFeature) else emptySet()
+            value = next
+            rule.waitForIdle()
+            when (part) {
+                "hidden" -> rule.onNodeWithText(title).assertDoesNotExist()
+                "off" -> rule.onNode(hasText(title) and isToggleable()).assertIsOff()
+                else -> rule.onNode(hasText(title) and isToggleable()).assertIsOn()
+            }
+            for (s in AppStyle.entries) for (d in listOf(false, true)) {
+                style = s
+                dark = d
+                rule.waitForIdle()
+                val image = rule.onNodeWithTag("dashboards-shot").captureToImage().asAndroidBitmap()
+                save("settings-dashboards-$language-$part-${s.name.lowercase()}-${if (d) "dark" else "light"}.png", image)
+            }
+        }
+    }
+
     private fun nextSuggestionLargeFont() {
         var fontScale by mutableStateOf(1f)
         val management = FakeManagement("Morning", "Keep it short.").apply {
@@ -277,6 +326,42 @@ class AssistantSettingsShotsTest {
         val large = rule.onNodeWithTag("next-large").captureToImage().asAndroidBitmap()
         assertFalse("the large-text capture really scales Compose text", standard.sameAs(large))
         save("settings-next-suggestions-en-off-glass-light-font-2.png", large)
+    }
+
+    @Config(sdk = [35], qualifiers = "zh-xhdpi")
+    @Test fun renameDialogSimplifiedChinese() = renameDialogShots("zh", "助手")
+
+    @Config(sdk = [35], qualifiers = "en-xhdpi")
+    @Test fun renameDialogEnglish() = renameDialogShots("en", "Assistant")
+
+    @Config(sdk = [35], qualifiers = "ja-xhdpi")
+    @Test fun renameDialogJapanese() = renameDialogShots("ja", "アシスタント")
+
+    /** Dialog text fields go idle at Robolectric's own dimensions, not the long page fixture's custom ones. */
+    private fun renameDialogShots(language: String, title: String) {
+        var dark by mutableStateOf(false)
+        val management = FakeManagement("Morning", "Body")
+        AssistantSettingsPreview.open = "rename"
+        rule.setContent {
+            PersonaTheme(darkTheme = dark, reduceMotion = true, style = AppStyle.Glass) {
+                val roster = ManagerRoster(listOf(HubManager("assistant", title, online = true, isDefault = true),
+                    HubManager("work", "Work", online = true)), "assistant")
+                CompositionLocalProvider(LocalManagerRoster provides roster) {
+                    Box(Modifier.fillMaxSize().background(PersonaTheme.palette.background)) {
+                        AssistantSettingsScreen(management, machines, onBack = {})
+                    }
+                }
+            }
+        }
+        for (d in listOf(false, true)) {
+            dark = d
+            rule.waitForIdle()
+            rule.onNode(isDialog()).assertExists()
+            val bitmap = rule.onNode(isDialog()).captureToImage().asAndroidBitmap()
+            File(out(), "settings-$language-rename-glass-${if (d) "dark" else "light"}.png").outputStream()
+                .use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        }
+        AssistantSettingsPreview.open = null
     }
 
     private fun ownerApprovalShots() {
@@ -357,13 +442,16 @@ class AssistantSettingsShotsTest {
                 .use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
         }
         rule.waitForIdle()
-        // The current assistant's profile, with no assistant picker of its own (the sidebar's switcher picks).
-        assertTrue(rule.onAllNodesWithText(title).fetchSemanticsNodes().isEmpty())
+        // The current assistant's profile names that manager and offers the shared manager rename interaction.
+        val rename = when (language) { "zh" -> "改名"; "ja" -> "名前を変更"; else -> "Rename" }
+        rule.onNodeWithText(title).assertExists()
+        rule.onNodeWithText(rename).assertExists()
         for (s in AppStyle.entries) for (d in listOf(false, true)) { style = s; dark = d; capture("home") }
         style = AppStyle.Glass
         for (p in listOf("notes", "memory", "memory-file", "memory-edit", "memory-delete", "machine", "timezone", "move")) {
             AssistantSettingsPreview.open = p
             part = p
+            rule.waitForIdle()
             for (d in listOf(false, true)) { dark = d; capture(p) }
         }
         // Saved Places (#9293): three styles × light / dark, as the issue asks.

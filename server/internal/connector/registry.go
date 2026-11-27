@@ -32,12 +32,17 @@ type Registry struct {
 	// from the ledger (SetUserRules), which can change while it runs and come after them.
 	rules []Rule
 	user  []Rule
-	off   map[string]bool // switched off by the user (SetEnabled)
+	// autoConfirm are the hub-side guarded conditional auto-confirm policies (manager.json connector_auto_confirm).
+	autoConfirm []AutoConfirmPolicy
+	off         map[string]bool // switched off by the user (SetEnabled)
 	// feedsOff are the feeds the user turned off, by connector (SetFeed).
 	feedsOff map[string]map[Feed]bool
 	// run is what Start was given, to start a connector switched on later; stop cancels a running one's Run / Watch.
 	run  *starter
 	stop map[string]context.CancelFunc
+	// lifecycle orders whole-registry starts and stops. workers includes a removed connector until it returns.
+	lifecycle sync.Mutex
+	workers   sync.WaitGroup
 	// sent is told of every gated write that went out (SetSent).
 	sent func(ctx context.Context, s Sent)
 }
@@ -88,6 +93,26 @@ func (r *Registry) gateRules() []Rule {
 		return r.rules
 	}
 	return slices.Concat(r.rules, r.user)
+}
+
+// SetAutoConfirmPolicies sets the hub-side guarded conditional auto-confirm policies (manager.json
+// connector_auto_confirm). Policies are validated before replacing; an invalid list leaves existing policies untouched
+// (fail closed). nil or empty disables guarded auto-confirm for all connectors.
+func (r *Registry) SetAutoConfirmPolicies(policies []AutoConfirmPolicy) error {
+	if err := ValidateAutoConfirmPolicies(policies); err != nil {
+		return err
+	}
+	cloned := cloneAutoConfirmPolicies(policies)
+	r.mu.Lock()
+	r.autoConfirm = cloned
+	r.mu.Unlock()
+	return nil
+}
+
+func (r *Registry) autoConfirmPolicies() []AutoConfirmPolicy {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.autoConfirm
 }
 
 // switchedOff are the connectors switched off, by instance: StatusOf answers StateDisabled for them, so every pipe
@@ -292,6 +317,13 @@ func (r *Registry) ReadOnly(name string) bool {
 	return ok && has(t.Tools(), name)
 }
 
+// InboxVisibilityPreflight says whether the tool's provider positively declares the manager's source-visibility
+// enforcement. Absence is not evidence of enforcement: the assistant's fallback must fail closed for unverifiable reads.
+func (r *Registry) InboxVisibilityPreflight(name string) bool {
+	c := r.Owner(name)
+	return c != nil && c.Manifest().Has(CapInboxVisibility)
+}
+
 // ForAgents says whether the tool name is a connector's that the coding agents get too (Manifest.AgentTools).
 func (r *Registry) ForAgents(name string) bool {
 	c := r.Owner(name)
@@ -392,14 +424,24 @@ func (r *Registry) call(ctx context.Context, name string, args json.RawMessage, 
 		return proto.TextResult("unknown tool "+name, true)
 	}
 	var through LetThrough
+	var approval *AutoConfirmApproval
 	if gated {
-		res, how := gate(ctx, r.gateRules(), c, a, name, args, ask)
+		res, how, appr := gate(ctx, r.gateRules(), r.autoConfirmPolicies(), c, a, name, args, ask)
 		if res != nil {
 			return *res
 		}
-		through = how
+		through, approval = how, appr
 	}
-	done, err := Write(ctx, a, name, args)
+	var done DoResult
+	var err error
+	if approval != nil {
+		if !approval.ExpiresAt.After(autoConfirmNow()) {
+			return proto.TextResult("guarded auto-confirm credential expired before execution", true)
+		}
+		done, err = WriteWithApproval(ctx, a, name, args, *approval)
+	} else {
+		done, err = Write(ctx, a, name, args)
+	}
 	if gated && err == nil {
 		r.mu.RLock()
 		sent := r.sent

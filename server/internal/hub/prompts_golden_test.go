@@ -250,6 +250,9 @@ func TestGoldenChannelMessage(t *testing.T) {
 	for _, l := range []struct{ name, language string }{{"zh-Hans", ""}, {"en", "English"}, {"ja", "日本語"}} {
 		golden(t, "channel_message.images_out."+l.name, prompts.RenderChannelMessage(prompts.ChannelMessage{Persona: true, Name: "WeChat",
 			Plain: true, Asks: true, ImagesOut: true, Language: l.language, Text: "Show me the chart"}))
+		// The same for a public mention on a plain channel that sends pictures (review of #12158).
+		golden(t, "channel_mention_message.images_out."+l.name, prompts.RenderChannelMessage(prompts.ChannelMessage{Persona: true,
+			Name: "Example Chat", Public: true, Plain: true, ImagesOut: true, Language: l.language, Text: "Show me the chart"}))
 	}
 }
 
@@ -396,7 +399,8 @@ func TestTodoLessonsGolden(t *testing.T) {
 				Answers:       []prompts.TodoLessonsAnswer{{Question: "Which simulator?", Choice: "The stock one"}},
 				Result:        []prompts.TodoLessonsCriterion{{Criterion: "No crash in landscape", State: "met", Evidence: "Screenshot test passes"}},
 				ExpectMinutes: 30, ActualMinutes: 95, Reply: "Fixed: the page used a fixed width.",
-				Known: []prompts.TodoLessonsKnown{{ID: "lesson-1", Kind: "missing_context", Text: "Use the stock simulator for layout bugs."}},
+				Known:   []prompts.TodoLessonsKnown{{ID: "lesson-1", Kind: "missing_context", Text: "Use the stock simulator for layout bugs."}},
+				Deleted: []prompts.TodoLessonsKnown{{ID: "lesson-retired-2", Kind: "wasted_step", Text: "Rebuild all targets before testing."}},
 			}))
 			golden(t, "todo_project_lessons."+tc.name, prompts.RenderTodoProjectLessons(prompts.TodoProjectLessons{
 				Language: tc.language, Name: `Weather "direction"`, Lessons: []prompts.TodoProjectLesson{

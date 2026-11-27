@@ -42,6 +42,60 @@ async function fixture(t, options = {}, startParams = {}) {
   return { node, directory, calls, update, chunk, promptCount, runtime }
 }
 
+test('AGY companion publishes background lifecycles and clears running work when ACP exits', { timeout: 20_000 }, async (t) => {
+  const { node, directory, update } = await fixture(t)
+  const logs = join(directory, 'config', 'brain', RAW, '.system_generated', 'logs')
+  mkdirSync(logs, { recursive: true })
+  const file = join(logs, 'transcript.jsonl')
+  const row = () => node.last('runtime.sessions')?.sessions.find(session => session.session_id === SESSION)
+  const started = new Date(Date.now() - 60_000).toISOString()
+  const ended = new Date().toISOString()
+  const taskID = n => `${RAW}/task-${n}`
+  const step = (step_index, type, data) => ({ step_index, type, created_at: started, ...data })
+  const start = (index, n, description) => step(index, 'GENERIC', {
+    status: 'RUNNING',
+    content: `Created At: ${started}\nTool is running as a background task with task id: ${taskID(n)}\nTask Description: ${description}`,
+  })
+  const append = (...steps) => appendFileSync(file, steps.map(record => JSON.stringify(record)).join('\n') + '\n')
+  append(step(0, 'PLANNER_RESPONSE', { tool_calls: [
+    { name: 'run_command', args: { CommandLine: JSON.stringify('echo ready') } },
+    { name: 'schedule', args: { CronExpression: JSON.stringify('*/30 * * * *') } },
+    { name: 'run_workflow' },
+    { name: 'invoke_subagent' },
+  ] }),
+  start(2, 2, 'Cron: */30 * * * * Check status'), start(1, 1, 'Wait for ready'),
+  start(3, 3, 'Run checks'), start(4, 4, 'Review changes'))
+  const running = await until('background tasks on the companion row', () => row()?.background?.length === 4 && row(), 5000)
+  assert.deepEqual(running.background.map(task => [task.id, task.kind, task.started_at]), [
+    [taskID(1), 'shell', started], [taskID(2), 'monitor', started],
+    [taskID(3), 'workflow', started], [taskID(4), 'agent', started],
+  ])
+  assert.equal(running.background[0].command, 'echo ready')
+  assert.equal(running.background[1].description, 'Cron: */30 * * * * Check status')
+  assert.equal(running.loop, undefined)
+
+  append(step(5, 'SYSTEM_MESSAGE', { created_at: ended, content: `Task id "${taskID(1)}" finished with result: Ready` }),
+    step(6, 'PLANNER_RESPONSE', { created_at: ended, tool_calls: [
+      { name: 'manage_task', args: { Action: JSON.stringify('kill'), TaskId: JSON.stringify(taskID(2)) } },
+      { name: 'manage_task', args: { Action: 'status', TaskId: taskID(4) } },
+    ] }))
+  await until('completion and kill are reported', () => row()?.background_ended?.length === 2, 5000)
+  // The native export updates an earlier step in place, without increasing the transcript sequence.
+  append(step(3, 'GENERIC', { status: 'ERROR', updated_at: ended, content: 'Workflow failed' }))
+  const finished = await until('same-sequence outcome is published', () => row()?.background_ended?.length === 3 && row(), 5000)
+  assert.deepEqual(finished.background_ended.map(task => [task.id, task.kind, task.status, task.ended_at]), [
+    [taskID(1), 'shell', 'completed', ended], [taskID(2), 'monitor', 'killed', ended],
+    [taskID(3), 'workflow', 'failed', ended],
+  ])
+  assert.equal(finished.background_ended[2].description, 'Run checks')
+  assert.deepEqual(finished.background.map(task => task.id), [taskID(4)])
+
+  update({ exit: true })
+  const stopped = await until('exit clears the running task', () => row() && !row().background && row(), 5000)
+  assert.deepEqual(stopped.background_ended, finished.background_ended)
+  assert.deepEqual(stopped.agy_pane_background, finished.background)
+})
+
 test('AGY streams one assistant message at a time across tool calls', { timeout: 20_000 }, async (t) => {
   const { node, update, chunk, promptCount } = await fixture(t)
   await node.peer.call('session.send', { session_id: SESSION, text: 'Make the change.' })
@@ -52,6 +106,41 @@ test('AGY streams one assistant message at a time across tool calls', { timeout:
   update({ sessionUpdate: 'tool_call_update', toolCallId: 'tool-1', status: 'completed' })
   await chunk('The change is ')
   await chunk('complete.', 'The change is complete.')
+  update({ end: true })
+  await until('live text cleared at completion', () => node.last('session.delta')?.text === '', 15_000)
+})
+
+for (const withTool of [true, false]) {
+  test(`AGY keeps text before a following thought in event order (tool: ${withTool})`, { timeout: 20_000 }, async (t) => {
+    const { node, update, chunk, promptCount, runtime } = await fixture(t)
+    await node.peer.call('session.send', { session_id: SESSION, text: 'Inspect.' })
+    await promptCount(1)
+    await chunk('I will inspect the file.')
+    update({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'Check its contents first.' } })
+    await until('thought after text is pushed', () => node.last('session.items')?.items.some((item) => item.kind === 'thinking'))
+    if (withTool) {
+      update({ sessionUpdate: 'tool_call', toolCallId: 'read', name: 'read_file' })
+      await until('tool after thought is pushed', () => node.last('session.items')?.items.some((item) => item.kind === 'tool_use'))
+    }
+    update({ end: true })
+    await until('turn settles before the final order is checked', () => runtime.idle() && node.last('session.delta')?.text === '')
+    const page = await node.peer.call('session.items', { session_id: SESSION })
+    assert.equal(page.items.filter((item) => item.role === 'assistant' && item.kind === 'text' && item.text === 'I will inspect the file.').length, 1)
+    assert.deepEqual(page.items.map((item) => [item.role, item.kind, item.text ?? item.tool_name]), [
+      ['user', 'text', 'Inspect.'],
+      ['assistant', 'text', 'I will inspect the file.'],
+      ['assistant', 'thinking', 'Check its contents first.'],
+      ...withTool ? [['assistant', 'tool_use', 'Read']] : [],
+    ])
+  })
+}
+
+test('AGY normalizes closed local file:// links while streaming without rewriting incomplete URLs', { timeout: 20_000 }, async (t) => {
+  const { node, update, chunk, promptCount } = await fixture(t)
+  await node.peer.call('session.send', { session_id: SESSION, text: 'Show the file.' })
+  await promptCount(1)
+  await chunk('See [notes.md](file:///work/repo/no')
+  await chunk('tes.md#L5) and ![pic](file:///work/repo/pic.png).', 'See [notes.md](/work/repo/notes.md#L5) and ![pic](/work/repo/pic.png).')
   update({ end: true })
   await until('live text cleared at completion', () => node.last('session.delta')?.text === '', 15_000)
 })
@@ -327,8 +416,9 @@ test('an autonomous wake preserves a previous unexported reply through interrupt
   nativeState(directory, 'IDLE', 5)
   await until('both replies are exported despite a mid-prompt system message', () => runtime.idle() && node.last('session.items')?.to_seq === 5)
   const final = await node.peer.call('session.items', { session_id: SESSION })
-  assert.deepEqual(final.items.filter((item) => !item.wake).map((item) => item.text), ['Run the workflow.', 'Workflow started.', 'Workflow finished.'])
+  assert.deepEqual(final.items.filter((item) => !item.wake && item.kind !== 'turn_duration').map((item) => item.text), ['Run the workflow.', 'Workflow started.', 'Workflow finished.'])
   assert.deepEqual(final.items.filter((item) => item.wake).map((item) => item.seq), [5])
+  assert.equal(final.items.at(-1).kind, 'turn_duration')
 })
 
 test('a text-only wake preserves the unexported prompt and opens its own live exchange', async (t) => {
@@ -350,8 +440,9 @@ test('a text-only wake preserves the unexported prompt and opens its own live ex
   nativeState(directory, 'IDLE', 3)
   await until('both exact replies land in one markerless export', () => runtime.idle())
   const settled = await node.peer.call('session.items', { session_id: SESSION })
-  assert.deepEqual(settled.items.map(item => item.wake ? 'wake' : item.text),
+  assert.deepEqual(settled.items.filter((item) => item.kind !== 'turn_duration').map(item => item.wake ? 'wake' : item.text),
     ['Run the workflow.', 'Workflow started.', 'wake', 'Workflow finished.'])
+  assert.equal(settled.items.at(-1).kind, 'turn_duration')
 })
 
 test('live and native wakes keep one identity across batched notifications and a watched file attachment', async (t) => {
@@ -373,7 +464,8 @@ test('live and native wakes keep one identity across batched notifications and a
   const final = await visible()
   assert.deepEqual(final.items.slice(0, prior.items.length), prior.items)
   assert.deepEqual(final.items.filter(item => item.wake).map(item => item.id), [wakeID])
-  assert.equal(final.items.at(-1).text, steps[5].content)
+  assert.equal(final.items.filter(item => item.kind !== 'turn_duration').at(-1).text, steps[5].content)
+  assert.equal(final.items.at(-1).kind, 'turn_duration')
 })
 
 test('an observed ACP wake keeps its boundary when the native export omits its scheduler notice', async (t) => {
@@ -395,7 +487,8 @@ test('an observed ACP wake keeps its boundary when the native export omits its s
   const final = await read()
   assert.deepEqual(final.items.slice(0, prior.items.length), prior.items)
   assert.deepEqual(final.items.filter(item => item.wake).map(item => item.id), [wake.id])
-  assert.equal(final.items.at(-1).text, 'The check is complete.')
+  assert.equal(final.items.filter(item => item.kind !== 'turn_duration').at(-1).text, 'The check is complete.')
+  assert.equal(final.items.at(-1).kind, 'turn_duration')
   const receipt = readFileSync(join(directory, 'config/brain', RAW, '.persona-observed-wakes'), 'utf8')
   assert.equal(receipt, readFileSync(new URL('./fixtures/observed-wake.txt', import.meta.url), 'utf8'))
 
@@ -722,7 +815,7 @@ test('live thinking chunks, parallel tool updates and settling keep history stab
   }
 
   const merged = [...mergedById.values()].sort((a, b) => a.seq - b.seq)
-  assert.deepEqual(merged.slice(0, 4).map((it) => it.text), ['Old prompt 1', 'Old answer 1', 'Old prompt 2', 'Old answer 2'])
+  assert.deepEqual(merged.filter((it) => it.kind !== 'turn_duration').slice(0, 4).map((it) => it.text), ['Old prompt 1', 'Old answer 1', 'Old prompt 2', 'Old answer 2'])
   const thoughts = merged.filter((it) => it.kind === 'thinking')
   assert.deepEqual(thoughts.map((it) => it.text), ['Step 1: reading runtime.js.', 'Step 2: wrapping up.'])
   const readUse = merged.find((it) => it.kind === 'tool_use' && it.tool_name === 'Read')
@@ -733,7 +826,7 @@ test('live thinking chunks, parallel tool updates and settling keep history stab
   assert.equal(resultsByCall.get(readUse.tool_use_id)?.is_error, true)
   assert.equal(resultsByCall.get(bashUse.tool_use_id)?.text, 'ok-2')
   assert.equal(resultsByCall.get(bashUse.tool_use_id)?.is_error, false)
-  assert.equal(merged.at(-1).text, 'Fixed cleanly.')
+  assert.equal(merged.filter((it) => it.kind !== 'turn_duration').at(-1).text, 'Fixed cleanly.')
 
   // 5. Only once native transcript_full.jsonl actually flushes does the history change, replacing the projected steps.
   const flushed = [
@@ -747,7 +840,8 @@ test('live thinking chunks, parallel tool updates and settling keep history stab
     return latest && latest.history !== liveHistory && latest.to_seq === 6
   })
   assert.equal(node.last('session.items').from_seq, 0)
-  assert.equal(node.last('session.items').items.at(-1).text, 'Fixed cleanly.')
+  assert.equal(node.last('session.items').items.filter((it) => it.kind !== 'turn_duration').at(-1).text, 'Fixed cleanly.')
+  assert.equal(node.last('session.items').items.at(-1).kind, 'turn_duration')
 })
 
 test('trailing thinking chunks arriving right before turn completion are not dropped on settle (#11129)', { timeout: 20_000 }, async (t) => {
@@ -841,7 +935,9 @@ for (const partialTools of [false, true]) {
     const full = [...partial, replyStep(partial.at(-1).step_index + 1, 'Final answer.')]
     transcripts(directory, full, full)
     await until('final export replaces pending history', () => node.last('session.items') && node.last('session.items').history !== page.history)
-    assert.equal((await node.peer.call('session.items', { session_id: SESSION })).items.at(-1).text, 'Final answer.')
+    const finalItems = (await node.peer.call('session.items', { session_id: SESSION })).items
+    assert.equal(finalItems.filter((item) => item.kind !== 'turn_duration').at(-1).text, 'Final answer.')
+    assert.equal(finalItems.at(-1).kind, 'turn_duration')
   })
 }
 
@@ -864,18 +960,20 @@ test('pre-tool text is committed and partial user export keeps live history stab
 })
 
 test('queued sends acknowledge the queue and defer options until execution', async (t) => {
-  const { node, calls, update, promptCount } = await fixture(t)
+  const { node, calls, update, chunk, promptCount } = await fixture(t)
   await node.peer.call('session.send', { session_id: SESSION, text: 'First.' })
   await promptCount(1)
   const count = calls().length
   const result = await node.peer.call('session.send', { session_id: SESSION, text: 'Second.', model: 'next-model', mode: 'plan' })
   assert.equal(result.queued, true)
   assert.equal(calls().slice(count).some((call) => call.method === 'session/set_model' || call.method === 'session/set_mode'), false)
+  await chunk('First answer.')
   update({ end: true })
   await promptCount(2)
   const nextCalls = calls().slice(count)
   assert.ok(nextCalls.some((call) => call.method === 'session/set_model'))
   assert.ok(nextCalls.some((call) => call.method === 'session/set_mode'))
+  await chunk('Second answer.')
   update({ end: true })
 })
 
@@ -890,7 +988,7 @@ test('plan-mode starts advertise readonly support', async (t) => {
 
 for (const text of ['invalid-once', 'invalid-always']) {
   test(`stale sessions get one clean resume retry: ${text}`, async (t) => {
-    const { node, calls, update, promptCount } = await fixture(t)
+    const { node, calls, update, chunk, promptCount } = await fixture(t)
     const before = calls().length
     await node.peer.call('session.send', { session_id: SESSION, text })
     await promptCount(2)
@@ -900,6 +998,7 @@ for (const text of ['invalid-once', 'invalid-always']) {
       await until('retry failure published', () => node.last('runtime.sessions')?.sessions.find((s) => s.session_id === SESSION)?.turn_error === 'Invalid session')
       assert.equal(calls().filter((call) => call.method === 'session/prompt').length, 2)
     } else {
+      await chunk('The session resumed.')
       update({ end: true })
       await until('retried turn ends', () => node.last('runtime.sessions')?.sessions.find((s) => s.session_id === SESSION)?.status !== 'working')
     }
@@ -929,7 +1028,9 @@ for (const secondReply of ['Second answer.', 'First answer.']) {
     const full = [...first, userStep(2, 'Second.'), replyStep(3, secondReply)]
     transcripts(directory, full, full)
     await until('second export replaces pending', () => node.last('session.items') && node.last('session.items').history !== page.history)
-    assert.equal(node.last('session.items').items.at(-1).text, secondReply)
+    const pushedItems = node.last('session.items').items
+    assert.equal(pushedItems.filter((item) => item.kind !== 'turn_duration').at(-1).text, secondReply)
+    assert.equal(pushedItems.at(-1).kind, 'turn_duration')
   })
 }
 
@@ -948,7 +1049,7 @@ for (const externalReply of [false, true]) {
     transcripts(directory, steps, steps)
     const page = await node.peer.call('session.items', { session_id: SESSION })
     assert.notEqual(page.history, pending.history)
-    assert.deepEqual(page.items.map((item) => item.text), steps.map((step) => step.content))
+    assert.deepEqual(page.items.filter((item) => item.kind !== 'turn_duration').map((item) => item.text), steps.map((step) => step.content))
   })
 }
 
@@ -1026,10 +1127,11 @@ test('whitespace before a tool call does not allocate a text step', async (t) =>
 })
 
 test('a queued preparation failure remains visible after its queued acknowledgement', async (t) => {
-  const { node, update, promptCount } = await fixture(t)
+  const { node, update, chunk, promptCount } = await fixture(t)
   await node.peer.call('session.send', { session_id: SESSION, text: 'First.' })
   await promptCount(1)
   assert.equal((await node.peer.call('session.send', { session_id: SESSION, text: 'Queued.', model: 'invalid-model' })).queued, true)
+  await chunk('First answer.')
   update({ end: true })
   await until('queued failure published', () => node.last('runtime.sessions')?.sessions.find((row) => row.session_id === SESSION)?.turn_error?.includes('Unknown model'))
   const row = node.last('runtime.sessions').sessions.find((row) => row.session_id === SESSION)
@@ -1090,7 +1192,7 @@ for (const prompt of ['', 'Check the photo.']) {
     const native = await read()
     assert.notEqual(await checkUser(native), liveId)
     assert.notEqual(native.history, live.history)
-    assert.deepEqual(native.items.map((item) => item.kind), [...(prompt ? ['text'] : []), 'image', 'text', 'notice'])
+    assert.deepEqual(native.items.map((item) => item.kind), [...(prompt ? ['text'] : []), 'image', 'text', 'turn_duration', 'notice'])
     assert.equal(native.items.at(-1).text, '上下文已压缩')
     assert.equal(node.last('runtime.sessions').sessions.find((row) => row.session_id === SESSION).last_text, 'Checked.')
   })

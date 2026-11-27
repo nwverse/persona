@@ -58,6 +58,12 @@ herdr pane ──observe(pane size)──▶ node (one observe process per pane,
 - **Compatibility**: old Apps don't send the new subscription and keep polling `/screen`; old node / herdr that don't recognize `terminal.watch` (or can't start observe) make the hub return
   `unsupported`. The App falls back to screen polling (`format=ansi` snapshots retain colors, but no cursor and one refresh per second).
 
+Viewer presence follows the visible page, not the stream transport. Android and iOS send a read-only
+`terminal_subscribe` even when the first hub hello omits `terminal_stream`; screen polling continues without a grid,
+control or takeover request. An unsupported stream keeps that presence. Leaving the page sends `terminal_unsubscribe`,
+and a still-visible page registers again after reconnect. This lets automatic task retirement distinguish reading
+from inactivity without tying the owner's presence to a working stream.
+
 ## 3. iOS emulator choice
 
 | | SwiftTerm | libghostty (GhosttyKit) | Custom VT subset |
@@ -359,7 +365,8 @@ Phone rendering (`dumpsys gfxinfo`) and real-session key/wheel round trips weren
 ## 18. Web clipboard: paste images/files, copy, OSC 52
 
 Web terminal clipboard works both inward (screenshots/files, like Moshi web) and outward (selected text, program OSC 52). Both share `lib/terminal-clipboard.ts` (pure logic) and
-`session/terminal/clipboard.ts` (browser side); hints use page toasts, upload status appears at the terminal top.
+`session/terminal/clipboard.ts` (browser side); hints use page toasts, upload status appears at the terminal top. `escapePastePath` and
+`dragHasFiles` live in the import-free `lib/paste-path.ts` (re-exported by `terminal-clipboard.ts`), because a composer's file drop on the first screen uses them too.
 
 ### Pasting images / files
 
@@ -651,8 +658,10 @@ These suggestions apply only to creation and do not establish ownership for clos
   - `POST /machines/{mid}/worktree/create {workspace_id, branch, path, kind?}` → `{workspace_id, tab_id?, pane?, terminal?, path, branch}`.
   - Only these fields accepted; no base commit, `--force` or command. Node `worktree.prepare` / `worktree.create` (`node/worktree.go`).
 - **Task branch inspection** (#8357): the node-only `worktree.prepare` request may additionally name a `branch`.
-  If already checked out in this repository, `existing: {path, branch}` is returned only after clean-tree and complete
-  live-Agent checks. Dirty/busy/unknown state refuses with the checkout path and known owner. The task manager separately
+  If already checked out in this repository, `existing: {path, branch}` is returned only after status and complete
+  live-Agent checks. Explicit branches require a clean tree. For its own generated branch the task manager sends
+  `allow_untracked: true`. The node honors this only for `task/` branches inside the checkouts folder and still refuses
+  tracked or staged changes. An older node ignores the flag and requires a clean tree. The task manager separately
   checks unfinished-task ownership before reuse. Older nodes omit `existing`; ordinary creation still refuses duplicate checkouts.
   Since #10365 `existing.path` is the checkouts folder's own spelling (`<path>/<dir name of the branch>`) when it is that
   checkout, else the home's spelling of git's resolved path (`node/selfprogram.go` `visiblePath`), `in_checkouts` says whether it lies in
@@ -660,7 +669,8 @@ These suggestions apply only to creation and do not establish ownership for clos
   checkout of this repository its git links are made portable (`node/worktree_links.go`), whether it is then handed back or
   refused (a refusal names it for a workspace `{existing}`). Not on Windows, where Git for Windows misreads a link written
   with backslashes and no terminal sees only one spelling of the home. The refusals carry codes, `checkout_dirty`, `checkout_in_use`,
-  `checkout_changed`, `checkout_unverified`, with `branch`, `path` and `owner` as data. A create whose checkout path holds
+  `checkout_changed`, `checkout_unverified`, with `branch`, `path` and `owner` as data where applicable. A `checkout_dirty`
+  refusal includes up to three changed paths in `files`. A create whose checkout path holds
   something is refused with code `worktree_path_taken` (data `path`), worded in the request's `locale`; nothing there is adopted.
 - **Unnamed worktrees** (#1399): prepare advertises `automatic_name: true`. A full device may send `{workspace_id, kind: "orca", parent_workspace_id?, auto_name: true}` without a branch or path. Only a boolean `true` enables this alternative; strings and missing fields remain invalid. The node verifies the source repository and parent, then sends Orca a random creature-name seed with `nameWasGenerated: true`, the source HEAD and the chosen parent, omitting `branchNameOverride`. Orca owns branch prefixes, retired names, collision retries and subsequent first-work branch naming. The result returns the actual branch and directory. Explicit branch/path creates keep the existing checks; combining overrides with automatic naming is refused. For other hosts that support worktree creation, the node chooses a unique `persona/worktree-<random>` branch and checkout path, then uses the same checked creation route. Content-based renaming is host-specific. Older nodes keep the manual form; an older hub refuses the new boolean mode safely, so update both before using it.
 - **Creation retries** use the existing operation receipt header on `worktree/create`. Apple keeps one operation ID for unchanged source, parent and naming parameters, so a lost success response can be replayed without creating another randomly named checkout. Changing the target or parameters starts a new operation. A timeout with an unknown outcome keeps its receipt and never dispatches the same operation again; clients must not treat a pending or unknown receipt as a created worktree. This protection requires a hub with the worktree receipt route; older clients without the header retain the original behavior.
@@ -679,6 +689,8 @@ These suggestions apply only to creation and do not establish ownership for clos
   - **Conflicts Orca does not fail on are stopped by the node**: for a branch checked out in another worktree, or a folder that exists (an empty one too), Orca 1.4 does not fail but quietly makes `<branch>-2` in `<name>-2` (measured on Orca 1.4.250 on 2026-11-05; `branchIntent` does not prevent it).
     So the node reads `git worktree list --porcelain` first (and creates nothing when it cannot), answers "branch … is already checked out at …" for a branch in use, and refuses an existing checkout path (an empty directory git could use, Orca cannot); Orca is not called in either case.
     An answer on another branch all the same (checked out elsewhere meanwhile, or Orca's own folder setting taken) is an error naming what Orca made and where (nothing is deleted), not a success.
+  - **A directory-level workspace is no worktree** (#13363): when the repository's checkout is itself open as an Orca worktree, `worktree.create` answers ok without running `git worktree add` or making a branch: a directory-level workspace in that existing checkout (id `<repo id>::<path>::workspace:<uuid>`, `path` the checkout's, `branch` and `head` empty).
+    The node tells it by the id, or by the source workspace's own checkout coming back as `path` (compared with links resolved), for a named branch and an automatic one alike, and answers `worktree-composer.orca_directory_workspace` in the request's language: what Orca made, where, why, and that a task can start without a worktree of its own (`workspace: "none"`). Nothing falls back to that by itself, and nothing is deleted. Orca's behavior here, and its refusal of a repository selector through a linked path, are left to Orca (the node selects by `id:`).
 - **Delegate to Paseo** (#6295, `node/runtimeworkspaces.go`): on a Paseo Git workspace (web only), the bridge has Paseo make the worktree as a workspace of
   its own (runtime `workspace.create`, Paseo's `workspace.create.request`), after the node's guards below. The folder is Paseo's: prepare's `path` is
   Paseo's worktrees folder for the repository and the checkout path must be in it (only its last element can be chosen, taken as Paseo names a folder:
@@ -695,7 +707,7 @@ These suggestions apply only to creation and do not establish ownership for clos
   Creation shows spinner and disables dismissal; failure inside dialog ("Couldn't create worktree: …"), missing old-hub/node API says "Persona on this computer is too old; update to create worktrees". Success: toast, reload tree, open new workspace terminal.
 - **iOS / Mac** (#3099): space ⋯ in Agents list has New Worktree…, same two routes/form rules (`WorktreeForm`); success opens New Chat prefilled with new workspace instead of terminal (`docs/apple/ios.md`, "Information architecture").
 - **Tests**: `node/worktree_test.go` (real Git + fake herdr: prepare repo name/branch/config directory/linked worktree/detached HEAD/nonrepo; herdr creation with new/existing branches; rejected paths/branches never touch herdr; Git errors; Git fallback/repeated checkout; `panes.list` includes `worktree`),
-  `node/hostorca_worktree_test.go` (real Git + a fake Orca whose `worktree.create` behaves like Orca 1.4: Orca's default folder; a new branch from the source workspace's branch, under it, not activated, to the terminal Orca opened; an existing branch without a base; a detached HEAD's commit; a branch in use and an existing empty folder refused without asking Orca; Orca's own folder taken as it is; a renamed branch is an error; a workspace Orca does not list),
+  `node/hostorca_worktree_test.go` (real Git + a fake Orca whose `worktree.create` behaves like Orca 1.4: Orca's default folder; a new branch from the source workspace's branch, under it, not activated, to the terminal Orca opened; an existing branch without a base; a detached HEAD's commit; a branch in use and an existing empty folder refused without asking Orca; Orca's own folder taken as it is; a renamed branch is an error; a directory-level workspace, by its id or by the source's own path through a link, is an error saying so, named or automatic; a workspace Orca does not list),
   `herdr/worktrees_test.go` (config parsing, slug, folder name, socket args, CLI fallback), `hub/panes_test.go` (permissions, named fields only), `web/src/lib/worktree.test.ts`, `node-actions.test.ts`, `node-palette.test.ts`, `views/NewWorktree.test.tsx`.
 
 ### Advanced Orca worktree actions

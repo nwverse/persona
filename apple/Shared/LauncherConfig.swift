@@ -77,7 +77,8 @@ nonisolated struct LauncherView: Codable, Identifiable, Hashable, Sendable {
     /// What a person reads: its display name, the built-in CLI's name on older hubs, or the startup name.
     var title: String {
         let label = displayName.flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 }
-        return Launcher.traeCLITitle(name: name, source: source, agent: agent, baseURL: baseURL, displayName: label) ?? label ?? name
+        return Launcher.traeCLITitle(name: name, source: source, agent: agent, baseURL: baseURL, displayName: label)
+            ?? Launcher.builtinTitle(name: name, displayName: label)
     }
     var managed: Bool { source == "persona" || source == LegacyNames.product }
     /// A wrapper script on a computer's PATH (#5954) rather than a ~/.zshrc function.
@@ -170,7 +171,9 @@ nonisolated struct AgentModelOption: Decodable, Identifiable, Hashable, Sendable
     var isDefault: Bool?
     /// An ID typed before and remembered on the hub (#1644): listed after the agent's own, and it can be forgotten.
     var custom: Bool?
-    enum CodingKeys: String, CodingKey { case id, name, resolved, custom, isDefault = "default" }
+    /// Other spellings the hub folded into this row (#10365); absent from an older hub.
+    var aliases: [String]?
+    enum CodingKeys: String, CodingKey { case id, name, resolved, custom, aliases, isDefault = "default" }
     var title: String { name ?? id }
 }
 

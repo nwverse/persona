@@ -156,9 +156,10 @@ func TestListAndDescriptions(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := List(user, Selection{})
-	// The user's, then the built-in ones that need no connector (persona-office).
-	if len(got) != 3 || got[0] != (Skill{"alpha", "quoted one", "user"}) || got[1] != (Skill{"folded", "first line second line", "user"}) ||
-		got[2].Name != "persona-office" || got[2].Source != "builtin" || !strings.HasPrefix(got[2].Description, "生成 Word") {
+	// The user's, then the built-in ones that need no connector (persona-office and persona-views).
+	if len(got) != 4 || got[0] != (Skill{"alpha", "quoted one", "user"}) || got[1] != (Skill{"folded", "first line second line", "user"}) ||
+		got[2].Name != "persona-office" || got[2].Source != "builtin" || !strings.HasPrefix(got[2].Description, "生成 Word") ||
+		got[3].Name != "persona-views" || got[3].Source != "builtin" || !strings.HasPrefix(got[3].Description, "Use before constructing persona-view") {
 		t.Fatalf("%+v", got)
 	}
 }
@@ -313,6 +314,164 @@ func TestWorkGuideLeavesExistingSkillInPlace(t *testing.T) {
 	}
 }
 
+func TestViewsGuideLeavesANewNameCollisionInPlace(t *testing.T) {
+	for _, runtime := range []string{".claude", ".agents"} {
+		t.Run(runtime, func(t *testing.T) {
+			t.Setenv("PERSONA_PLUGIN_SKILLS_DIR", t.TempDir())
+			dir, user := filepath.Join(t.TempDir(), runtime, "skills"), t.TempDir()
+			skill(t, dir, "persona-views", "Personal view construction")
+			marker := filepath.Join(dir, "persona-views", "scripts", "keep.txt")
+			if err := os.WriteFile(marker, []byte("keep"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			for range 2 {
+				if err := Sync(dir, user, Selection{}, quiet); err != nil {
+					t.Fatal(err)
+				}
+				b, err := os.ReadFile(filepath.Join(dir, "persona-views", "SKILL.md"))
+				if err != nil || !strings.Contains(string(b), "Personal view construction") {
+					t.Fatalf("the upgrade replaced a handmade skill: %s, %v", b, err)
+				}
+				if b, err := os.ReadFile(marker); err != nil || string(b) != "keep" {
+					t.Fatalf("the handmade skill lost a file: %q, %v", b, err)
+				}
+			}
+			// A same-name skill in the user's own directory must not make Sync delete the handmade workspace copy.
+			skill(t, user, "persona-views", "A different user skill")
+			if err := Sync(dir, user, Selection{}, quiet); err != nil {
+				t.Fatal(err)
+			}
+			b, err := os.ReadFile(filepath.Join(dir, "persona-views", "SKILL.md"))
+			if err != nil || !strings.Contains(string(b), "Personal view construction") {
+				t.Fatalf("user linking replaced the handmade workspace skill: %s, %v", b, err)
+			}
+			if _, err := os.Lstat(filepath.Join(dir, "persona-views")); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestViewsGuideOldNodeStampCannotDeleteManagedCopy(t *testing.T) {
+	dir, user := t.TempDir(), t.TempDir()
+	t.Setenv("PERSONA_PLUGIN_SKILLS_DIR", t.TempDir())
+	if err := Sync(dir, user, Selection{}, quiet); err != nil {
+		t.Fatal(err)
+	}
+	stamp, err := os.ReadFile(filepath.Join(dir, builtinStamp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// An older node removes an unknown built-in only when the shared stamp says this binary installed it.
+	if slices.Contains(installedNames(stamp), viewsGuideName) {
+		_ = os.RemoveAll(filepath.Join(dir, viewsGuideName)) // the older node's removal rule
+	}
+	if !viewsGuideInstalled(dir) {
+		t.Fatal("the older node's inventory would delete the skill a resumed compact prompt references")
+	}
+}
+
+func TestViewsGuideReplacementIsNotManaged(t *testing.T) {
+	dir, user := t.TempDir(), t.TempDir()
+	t.Setenv("PERSONA_PLUGIN_SKILLS_DIR", t.TempDir())
+	if err := Sync(dir, user, Selection{}, quiet); err != nil {
+		t.Fatal(err)
+	}
+	if !viewsGuideInstalled(dir) {
+		t.Fatal("the initial managed guide is not ready")
+	}
+	if err := os.RemoveAll(filepath.Join(dir, viewsGuideName)); err != nil {
+		t.Fatal(err)
+	}
+	skill(t, dir, viewsGuideName, "Personal replacement")
+	for range 2 {
+		if err := Sync(dir, user, Selection{}, quiet); err != nil {
+			t.Fatal(err)
+		}
+		b, err := os.ReadFile(filepath.Join(dir, viewsGuideName, "SKILL.md"))
+		if err != nil || !strings.Contains(string(b), "Personal replacement") {
+			t.Fatalf("the personal replacement was adopted or overwritten: %s, %v", b, err)
+		}
+		if viewsGuideInstalled(dir) {
+			t.Fatal("a replacement without Persona's in-directory marker is still considered managed")
+		}
+	}
+}
+
+func TestViewsGuideCopiedMarkerDoesNotTransferOwnership(t *testing.T) {
+	dir, user := t.TempDir(), t.TempDir()
+	t.Setenv("PERSONA_PLUGIN_SKILLS_DIR", t.TempDir())
+	if err := Sync(dir, user, Selection{}, quiet); err != nil {
+		t.Fatal(err)
+	}
+	at := filepath.Join(dir, viewsGuideName)
+	marker, err := os.ReadFile(filepath.Join(at, viewsGuideOwnershipFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A file copy, unlike a hard link, gives the edited personal replacement a new inode.
+	if err := os.RemoveAll(at); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(at, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(at, viewsGuideOwnershipFile), marker, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(at, "SKILL.md"), []byte("Edited personal guide"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if viewsGuideInstalled(dir) {
+			t.Fatal("copying Persona's marker transferred managed ownership")
+		}
+		if err := Sync(dir, user, Selection{}, quiet); err != nil {
+			t.Fatal(err)
+		}
+		got, err := os.ReadFile(filepath.Join(at, "SKILL.md"))
+		if err != nil || string(got) != "Edited personal guide" {
+			t.Fatalf("the edited personal copy was overwritten: %q, %v", got, err)
+		}
+	}
+}
+
+func TestViewsGuideCachedExtensionDisablesCompactReadiness(t *testing.T) {
+	cwd, user, plugins := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("PERSONA_PLUGIN_SKILLS_DIR", plugins)
+	for _, runtime := range []string{".claude", ".agents"} {
+		if err := Sync(filepath.Join(cwd, runtime, "skills"), user, Selection{}, quiet); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !ViewsGuideReady(cwd) {
+		t.Fatal("managed guides should be ready before the extension collision")
+	}
+	skill(t, plugins, viewsGuideName, "Extension guide")
+	if ViewsGuideReady(cwd) {
+		t.Fatal("a cached extension can replace the guide during a downgrade; compact instructions must stay disabled")
+	}
+}
+
+func TestViewsGuideStaleExtensionStampKeepsPersonalReplacement(t *testing.T) {
+	dir, user, plugins := t.TempDir(), t.TempDir(), t.TempDir()
+	t.Setenv("PERSONA_PLUGIN_SKILLS_DIR", plugins)
+	skill(t, dir, viewsGuideName, "Personal replacement")
+	if err := os.WriteFile(filepath.Join(dir, pluginsCopied), []byte(viewsGuideName+"=old-extension digest\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Sync(dir, user, Selection{}, quiet); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(filepath.Join(dir, viewsGuideName, "SKILL.md"))
+	if err != nil || !strings.Contains(string(b), "Personal replacement") {
+		t.Fatalf("a stale extension stamp deleted or replaced the personal directory: %q, %v", b, err)
+	}
+	if viewsGuideInstalled(dir) {
+		t.Fatal("the preserved personal directory became Persona-managed")
+	}
+}
+
 func TestWorkGuideCatalogBudget(t *testing.T) {
 	dir, user := t.TempDir(), t.TempDir()
 	t.Setenv("PERSONA_PLUGIN_SKILLS_DIR", t.TempDir())
@@ -437,5 +596,133 @@ func TestWorkGuideRestoresCodexLinkAfterOlderNode(t *testing.T) {
 	sync(false)
 	if _, err := os.Lstat(filepath.Join(codex, workGuideName)); !os.IsNotExist(err) {
 		t.Fatal("rollback retained the recovered Codex link", err)
+	}
+}
+
+func TestMachineOpsSkillIsOptInByDefault(t *testing.T) {
+	t.Setenv("PERSONA_PLUGIN_SKILLS_DIR", t.TempDir())
+	user, dir := t.TempDir(), t.TempDir()
+	if err := Sync(dir, user, Selection{}, quiet); err != nil {
+		t.Fatal(err)
+	}
+	if hasSkill(dir, MachineOpsSkillName) {
+		t.Fatal("persona-machine-ops was installed by default without opt-in")
+	}
+	if slices.ContainsFunc(List(user, Selection{}), func(s Skill) bool { return s.Name == MachineOpsSkillName }) {
+		t.Fatal("persona-machine-ops appeared in default List without opt-in")
+	}
+	if slices.Contains(ForAgents, MachineOpsSkillName) {
+		t.Fatal("persona-machine-ops must not be injected into default ForAgents plugin")
+	}
+	// Explicit opt-in via Selection{MachineOps: true} installs and rolls back cleanly.
+	if err := Sync(dir, user, Selection{MachineOps: true}, quiet); err != nil {
+		t.Fatal(err)
+	}
+	if !hasSkill(dir, MachineOpsSkillName) {
+		t.Fatal("persona-machine-ops missing when Selection{MachineOps: true}")
+	}
+	if err := Sync(dir, user, Selection{MachineOps: false}, quiet); err != nil {
+		t.Fatal(err)
+	}
+	if hasSkill(dir, MachineOpsSkillName) {
+		t.Fatal("persona-machine-ops stayed after opting out")
+	}
+}
+
+func TestMachineOpsSkillCatalogAndReferences(t *testing.T) {
+	t.Setenv("PERSONA_PLUGIN_SKILLS_DIR", t.TempDir())
+	dir := t.TempDir()
+	if _, err := InstallMachineOps(dir); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := LocalCatalog([]Root{{Path: dir, Source: "user"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, e := range entries {
+		if e.Name != MachineOpsSkillName {
+			continue
+		}
+		found = true
+		e.Path = "/example/skills/persona-machine-ops/SKILL.md"
+		b, err := json.Marshal(e)
+		if err != nil || len(b) > 512 {
+			t.Fatalf("catalog entry %d bytes (want <= 512): %v", len(b), err)
+		}
+	}
+	if !found {
+		t.Fatal("persona-machine-ops missing from LocalCatalog")
+	}
+	read := func(rel string) string {
+		t.Helper()
+		b, err := os.ReadFile(filepath.Join(dir, MachineOpsSkillName, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	entry := read("SKILL.md")
+	for _, tc := range []struct{ ref, tool string }{
+		{"references/storage.md", "machine_ops_storage_hotspots"},
+		{"references/toolchain.md", "machine_ops_toolchain"},
+		{"references/network.md", "machine_ops_network"},
+		{"references/ports-and-processes.md", "machine_ops_processes"},
+		{"references/services.md", "machine_ops_service_logs"},
+	} {
+		if !strings.Contains(entry, "]("+tc.ref+")") {
+			t.Errorf("SKILL.md does not link to %s", tc.ref)
+		}
+		if !strings.Contains(read(tc.ref), tc.tool) {
+			t.Errorf("%s does not document %s", tc.ref, tc.tool)
+		}
+	}
+}
+
+func TestMachineOpsScriptAndConflictProtection(t *testing.T) {
+	dir := t.TempDir()
+	st, err := InstallMachineOps(dir)
+	if err != nil || !st.Installed || !st.Managed || st.Conflict {
+		t.Fatalf("InstallMachineOps: %+v %v", st, err)
+	}
+	script := filepath.Join(dir, MachineOpsSkillName, "scripts", "ops.sh")
+	info, err := os.Stat(script)
+	if err != nil || info.Mode()&0o111 == 0 {
+		t.Fatalf("ops.sh is not executable: %v", err)
+	}
+	bin := filepath.Join(dir, "personad")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\necho \"$@\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("sh", script, "ports", "--protocol", "tcp")
+	cmd.Env = []string{"PERSONA_BIN=" + bin, "HOME=" + dir, "PATH=/usr/bin:/bin"}
+	if out, err := cmd.CombinedOutput(); err != nil || strings.TrimSpace(string(out)) != "ops ports --protocol tcp" {
+		t.Fatalf("ops.sh delegation: %v %q", err, out)
+	}
+	cmd = exec.Command("sh", script, "storage")
+	cmd.Env = []string{"HOME=" + dir, "PATH=/usr/bin:/bin"}
+	out, err := cmd.CombinedOutput()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 3 || !strings.Contains(string(out), "no personad") {
+		t.Fatalf("ops.sh without personad: %v %q", err, out)
+	}
+	// Editing a file marks the skill conflicted; reinstall and uninstall both refuse to clobber user edits.
+	if err := os.WriteFile(filepath.Join(dir, MachineOpsSkillName, "SKILL.md"), []byte("user owned"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := InstallMachineOps(dir); !errors.Is(err, ErrSkillConflict) {
+		t.Fatalf("InstallMachineOps over edited skill: %v, want ErrSkillConflict", err)
+	}
+	if _, err := UninstallMachineOps(dir); !errors.Is(err, ErrSkillConflict) {
+		t.Fatalf("UninstallMachineOps over edited skill: %v, want ErrSkillConflict", err)
+	}
+	// Clean directory installs and uninstalls cleanly.
+	dir2 := t.TempDir()
+	if _, err := InstallMachineOps(dir2); err != nil {
+		t.Fatal(err)
+	}
+	st2, err := UninstallMachineOps(dir2)
+	if err != nil || st2.Installed || st2.Managed {
+		t.Fatalf("UninstallMachineOps: %+v %v", st2, err)
 	}
 }

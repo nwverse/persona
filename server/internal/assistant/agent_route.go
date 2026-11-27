@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
+	"github.com/nwverse/persona/server/internal/proto"
 )
 
 // New agent goes under a leader (docs/design/proposals/owner-at-a-glance.md "New chat opens a direction; New agent goes
@@ -99,12 +101,13 @@ func (s *Service) routeAgent(ctx context.Context, machine, cwd, prompt string) a
 // conversation; one already on a task the hub tracks moves to lead (its signals follow from the next one); one on the
 // owner's own to-do stays theirs. made says a task was made.
 func (s *Service) putAgentUnder(ctx context.Context, mid, sid, lead, title string) (Todo, bool, error) {
-	return s.assignAgentUnder(ctx, mid, sid, lead, title, true)
+	return s.assignAgentUnder(ctx, mid, sid, lead, title, true, "")
 }
 
 // assignAgentUnder is the App's move path. agent_transfer disables adoption so a task that
-// ended before the lookup cannot accidentally become a new task.
-func (s *Service) assignAgentUnder(ctx context.Context, mid, sid, lead, title string, allowAdoption bool) (Todo, bool, error) {
+// ended before the lookup cannot accidentally become a new task, and sets requireSupervisor
+// for a direction lead so it can hand off only a task it currently supervises.
+func (s *Service) assignAgentUnder(ctx context.Context, mid, sid, lead, title string, allowAdoption bool, requireSupervisor string) (Todo, bool, error) {
 	cfg := s.settings(ctx)
 	if lead == "" {
 		lead = cfg.Main
@@ -112,8 +115,8 @@ func (s *Service) assignAgentUnder(ctx context.Context, mid, sid, lead, title st
 	if lead == "" {
 		return Todo{}, false, errors.New("there is no main conversation to supervise it")
 	}
-	if lead != cfg.Main && !s.isLeader(ctx, lead) {
-		return Todo{}, false, fmt.Errorf("%s is not a leader conversation (GET /api/v1/assistant/leaders lists them)", lead)
+	if err := s.transferTarget(ctx, cfg, lead); err != nil {
+		return Todo{}, false, err
 	}
 	am, ok := s.device(ctx, mid)
 	if !ok {
@@ -129,25 +132,21 @@ func (s *Service) assignAgentUnder(ctx context.Context, mid, sid, lead, title st
 	if err := s.ensureTodosLoaded(ctx); err != nil {
 		return Todo{}, false, err
 	}
+	// Serialize a move with digest delivery and queued supervision reconciliation.
+	s.supervise.routingMu.Lock()
+	defer s.supervise.routingMu.Unlock()
 	if t, ok := s.openTodoOfAgent(am.ID, c.SessionID); ok {
 		if t.Origin == "" {
 			return Todo{}, false, fmt.Errorf("%s is on the owner's own to-do %q: it stays theirs", agentLabel(c), t.Title)
 		}
-		v, moved, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
-			if v.Supervisor == lead {
-				return false
-			}
-			v.Supervisor = lead
-			return true
-		})
+		moved, blockedBy, err := s.transferTaskLocked(ctx, t, lead, requireSupervisor)
 		if err != nil {
 			return Todo{}, false, err
 		}
-		if moved {
-			s.taskCard(ctx, lead, t.ID, wakeActive) // its card follows it (the old conversation keeps its history)
+		if blockedBy != "" {
+			return Todo{}, false, s.transferRefused(ctx, c, t, blockedBy)
 		}
-		t.Supervision = &v
-		return t, false, nil
+		return moved, false, nil
 	}
 	if !allowAdoption {
 		return Todo{}, false, errors.New("that Agent has no open task to transfer: use agent_supervise to adopt work first")
@@ -163,10 +162,84 @@ func (s *Service) assignAgentUnder(ctx context.Context, mid, sid, lead, title st
 	return todo, made, nil
 }
 
+// transferTarget refuses a supervisor a task may not be moved to: one that is neither the main conversation nor a
+// current lead, a lead validateSupervisorLead turns down (a reporting-only direction), or a lead whose runtime cannot
+// receive supervision policy. The main conversation always takes one.
+func (s *Service) transferTarget(ctx context.Context, cfg Settings, lead string) error {
+	if lead == cfg.Main {
+		return nil
+	}
+	if err := s.validateSupervisorLead(ctx, lead); err != nil {
+		return err
+	}
+	if s.runtimeWithoutSupervisionPolicy(ctx, cfg.MachineID, lead) {
+		return errors.New("the target lead's runtime cannot receive supervision policy")
+	}
+	return nil
+}
+
+// transferTaskLocked is the move itself, the same for Move to, agent_transfer and an ended direction's hand-back
+// (handBackDirectionTasks): open task t becomes an explicit assignment of lead (supervisor_source "explicit", kept
+// across restarts), its card follows it (the old conversation keeps its history), and its supervisor-held cards,
+// untried queued signals and pending outbox go with it (transferPendingAsks). With requireSupervisor set, t moves only
+// while that conversation supervises it; blockedBy then names the one that does. routingMu is held by the caller.
+func (s *Service) transferTaskLocked(ctx context.Context, t Todo, lead, requireSupervisor string) (
+	moved Todo, blockedBy string, err error) {
+	v, changed, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
+		if requireSupervisor != "" {
+			cur := cmp.Or(v.Supervisor, t.Origin)
+			if cur != requireSupervisor {
+				blockedBy = cur
+				return false
+			}
+		}
+		if v.Supervisor == lead && v.SupervisorSource == "explicit" {
+			return false
+		}
+		v.Supervisor, v.SupervisorSource = lead, "explicit"
+		return true
+	})
+	if err != nil {
+		return Todo{}, "", err
+	}
+	if blockedBy != "" {
+		return t, blockedBy, nil
+	}
+	if changed {
+		s.taskCard(ctx, lead, t.ID, wakeActive)
+	}
+	t.Supervision = &v
+	if err := s.transferPendingAsks(ctx, t); err != nil {
+		return Todo{}, "", err
+	}
+	return t, "", nil
+}
+
+// transferRefused explains why a direction lead may not move a task supervised by cur, naming cur and who can move it.
+func (s *Service) transferRefused(ctx context.Context, c proto.Session, t Todo, cur string) error {
+	switch {
+	case s.isMain(ctx, cur):
+		return fmt.Errorf("%s works for task %q (%s), supervised by the main conversation (%s): "+
+			"only the main conversation or the owner can move it", agentLabel(c), t.Title, t.ID, cur)
+	case s.isLeader(ctx, cur):
+		return fmt.Errorf("%s works for task %q (%s), supervised by the direction lead %s: "+
+			"only that supervisor, the main conversation, or the owner can move it", agentLabel(c), t.Title, t.ID, cur)
+	default:
+		if _, _, ok := parseLeaderRef(cur); ok {
+			return fmt.Errorf("%s works for task %q (%s), supervised by task leader %s: "+
+				"only the main conversation or the owner can move it", agentLabel(c), t.Title, t.ID, cur)
+		}
+		return fmt.Errorf("%s works for task %q (%s), supervised by conversation %s: "+
+			"only the main conversation or the owner can move it", agentLabel(c), t.Title, t.ID, cur)
+	}
+}
+
 // toolAgentTransfer exposes Move to without sending or interrupting the running Agent.
+// Main may move any open supervised task; a direction lead may hand off only one it supervises.
 func (s *Service) toolAgentTransfer(ctx context.Context, self string, args json.RawMessage) (string, error) {
-	if !s.isMain(ctx, self) {
-		return "", errors.New("only the main conversation transfers tasks between supervisors")
+	main := s.isMain(ctx, self)
+	if !main && !s.isLeader(ctx, self) {
+		return "", errors.New("only the main conversation or a direction's lead transfers tasks between supervisors")
 	}
 	var a struct {
 		Machine    string `json:"machine"`
@@ -184,13 +257,21 @@ func (s *Service) toolAgentTransfer(ctx context.Context, self string, args json.
 	if err != nil {
 		return "", err
 	}
-	todo, _, err := s.assignAgentUnder(ctx, am.ID, c.SessionID, lead, "", false)
+	requireSupervisor := ""
+	if !main {
+		requireSupervisor = self
+	}
+	todo, _, err := s.assignAgentUnder(ctx, am.ID, c.SessionID, lead, "", false, requireSupervisor)
 	if err != nil {
 		return "", err
 	}
+	undo := "Use agent_transfer with the previous supervisor to move it back."
+	if !main && lead != self {
+		undo = "Only the new supervisor, the main conversation, or the owner can move it back."
+	}
 	return fmt.Sprintf("Task %s (%q) is now supervised by conversation %s; its existing card is there. "+
-		"The same Agent continues: nothing was sent, started or interrupted. Use agent_transfer with the previous supervisor to move it back.",
-		todo.ID, todo.Title, lead), nil
+		"The same Agent continues: nothing was sent, started or interrupted. %s",
+		todo.ID, todo.Title, lead, undo), nil
 }
 
 var errAgentNotFound = errors.New("not found")
@@ -232,7 +313,14 @@ func (s *Service) agentRouteRoutes() {
 		}
 		todo, made, err := s.putAgentUnder(r.Context(), r.PathValue("mid"), r.PathValue("sid"), strings.TrimSpace(in.Supervisor), in.Title)
 		if err != nil {
-			apierr.Write(w, cond(errors.Is(err, errAgentNotFound), http.StatusNotFound, http.StatusConflict), err)
+			status := http.StatusConflict
+			switch {
+			case errors.Is(err, errAgentNotFound):
+				status = http.StatusNotFound
+			case errors.Is(err, errDirectionUnavailable):
+				status = http.StatusServiceUnavailable
+			}
+			apierr.Write(w, status, err)
 			return
 		}
 		apierr.WriteJSON(w, map[string]any{"todo": todo, "made": made})

@@ -44,6 +44,17 @@ func (s *Service) superviseInbox(ctx context.Context, items []*InboxItem, linked
 	if len(items) == 0 {
 		return
 	}
+	visible := make([]*InboxItem, 0, len(items))
+	for _, it := range items {
+		allowed, err := s.inboxVisibilityModelAllowed(ctx, it)
+		if err == nil && allowed {
+			visible = append(visible, it)
+		}
+	}
+	items = visible
+	if len(items) == 0 {
+		return
+	}
 	s.followContinuations(ctx, items)
 	if !s.inboxSignalsOn(ctx) {
 		return
@@ -57,26 +68,61 @@ func (s *Service) superviseInbox(ctx context.Context, items []*InboxItem, linked
 		}
 	}
 	b.mu.Unlock()
-	hears := map[string]bool{}
+	type recipient struct {
+		task                        Todo
+		active, accepted, needsUser bool
+	}
+	tasks := map[string]recipient{}
 	for _, id := range todos {
-		if _, seen := hears[id]; !seen && id != "" {
-			t, ok := s.todoNow(id)
-			hears[id] = ok && s.inboxSignalHolds(t)
+		if _, seen := tasks[id]; !seen && id != "" {
+			t, _ := s.todoNow(id)
+			tasks[id] = recipient{
+				task:      t,
+				active:    s.inboxSignalHolds(t),
+				accepted:  taskAcceptedForFeedback(t) && !s.agentSupervised(t),
+				needsUser: needsUserWakeEligible(t) && !s.agentSupervised(t),
+			}
 		}
 	}
+	type needsUserInboxWake struct {
+		task Todo
+		sig  superviseSignal
+	}
 	var out []superviseSignal
+	var needsUserOut []needsUserInboxWake
 	b.mu.Lock()
 	for i, it := range items {
-		if it.Agent == nil || it.Agent.TodoID != todos[i] || !hears[todos[i]] {
+		r := tasks[todos[i]]
+		afterAcceptance := r.accepted && acceptedPRFeedback(r.task, inboxOpenPR(it))
+		if it.Agent == nil || it.Agent.TodoID != todos[i] || !afterAcceptance && !r.active && !r.needsUser {
 			continue // relinked meanwhile, or its task cannot hear it: the messages wait, uncounted
 		}
 		if g, ok := inboxSignalOf(it, linked[it]); ok {
+			if r.needsUser && !afterAcceptance {
+				needsUserOut = append(needsUserOut, needsUserInboxWake{task: r.task, sig: g})
+				continue
+			}
+			g.Inbox.AfterAcceptance = afterAcceptance
 			out = append(out, g)
 		}
 	}
 	b.mu.Unlock()
+	for _, w := range needsUserOut {
+		if w.sig.Inbox == nil {
+			continue
+		}
+		source, summary := formatInboxExternalInfo(*w.sig.Inbox)
+		s.emitNeedsUserExternalInfo(ctx, w.task, source, summary, "inbox:"+w.sig.Key)
+	}
 	for _, g := range out {
-		if g.Inbox.URL == "" || !s.taskHasAgent(g.Todo) {
+		b.mu.Lock()
+		it := b.items[g.Inbox.Item]
+		b.mu.Unlock()
+		allowed, err := s.inboxVisibilityModelAllowed(ctx, it)
+		if err != nil || !allowed {
+			continue
+		}
+		if g.Inbox.AfterAcceptance || g.Inbox.URL == "" || !s.taskHasAgent(g.Todo) {
 			s.signal(g)
 			continue
 		}
@@ -92,6 +138,17 @@ func (s *Service) superviseInbox(ctx context.Context, items []*InboxItem, linked
 // through report_to_supervisor; a clipped Inbox preview is not a semantic classifier. In the background: the twin's
 // pass does not wait on a node.
 func (s *Service) inboxToAgent(ctx context.Context, g superviseSignal) {
+	if g.Inbox == nil {
+		return
+	}
+	b := &s.inbox
+	b.mu.Lock()
+	it := b.items[g.Inbox.Item]
+	b.mu.Unlock()
+	allowed, err := s.inboxVisibilityModelAllowed(ctx, it)
+	if err != nil || !allowed {
+		return
+	}
 	in := *g.Inbox
 	g.Inbox = &in
 	if t, ok := s.todoNow(g.Todo); ok && taskOpen(t) {
@@ -100,7 +157,7 @@ func (s *Service) inboxToAgent(ctx context.Context, g superviseSignal) {
 		e := taskInboxEvent{ID: namedClientID("task inbox\n" + t.ID + "\n" + g.Key), Key: g.Key, Todo: t.ID, Inbox: in}
 		e.Prompt = prompts.RenderInboxToAgent(prompts.InboxToAgent{Sender: in.Sender,
 			Preview: in.Preview, URL: in.URL, Count: in.Count, Event: e.ID})
-		_, err := s.sendTaskInput(ctx, t, e.Prompt, true, &e, false)
+		_, err = s.sendTaskInput(ctx, t, e.Prompt, true, &e, false)
 		if err != nil {
 			_ = s.updateTaskInboxEvents(ctx, func(events map[string]taskInboxEvent) bool {
 				if cur, ok := events[e.ID]; ok && !cur.Retried {
@@ -144,6 +201,40 @@ func inboxThreadURL(it *InboxItem) string {
 	return it.Connector.URL
 }
 
+// inboxOpenPR is an open pull request observed by the GitHub connector. Called while holding the inbox lock.
+func inboxOpenPR(it *InboxItem) string {
+	if it.Source != "github" || it.Connector == nil || it.Connector.ThreadState != "open" {
+		return ""
+	}
+	u := triageNormalizePRURL(it.Connector.URL)
+	if u != "" && ciPRURL.FindString(u) == u {
+		return u
+	}
+	return ""
+}
+
+func taskAcceptedForFeedback(t Todo) bool {
+	return t.DoneAt != nil && !t.Cancelled() && acceptanceStands(t)
+}
+
+func acceptedPRFeedback(t Todo, url string) bool {
+	return url != "" && taskAcceptedForFeedback(t) && (triageNormalizePRURL(t.PRURL) == url ||
+		slices.ContainsFunc(t.PRs, func(u string) bool { return triageNormalizePRURL(u) == url }))
+}
+
+// acceptedFeedbackHolds rechecks the PR's latest connector state when a queued supervisor notice is sent.
+func (s *Service) acceptedFeedbackHolds(t Todo, in *prompts.SuperviseInbox) bool {
+	b := &s.inbox
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	it := b.items[in.Item]
+	if it == nil || it.VisibilityExcluded || !it.open() || it.Agent == nil || it.Agent.TodoID != t.ID {
+		return false
+	}
+	url := inboxOpenPR(it)
+	return url == triageNormalizePRURL(in.URL) && acceptedPRFeedback(t, url)
+}
+
 // continuesHops bounds how far a closed task's link follows the tasks that continue it.
 const continuesHops = 8
 
@@ -155,7 +246,7 @@ func (s *Service) followContinuations(ctx context.Context, items []*InboxItem) {
 	b.mu.Lock()
 	linkedTo := map[*InboxItem]string{}
 	for _, it := range items {
-		if it.Agent != nil && it.Agent.TodoID != "" && inboxTaskLinkEligible(it) {
+		if !it.VisibilityExcluded && it.Agent != nil && it.Agent.TodoID != "" && inboxTaskLinkEligible(it) {
 			linkedTo[it] = it.Agent.TodoID
 		}
 	}
@@ -178,7 +269,7 @@ func (s *Service) followContinuations(ctx context.Context, items []*InboxItem) {
 	var writes []*inboxWrite
 	b.mu.Lock()
 	for it, to := range moves {
-		if b.items[it.ID] != it || it.Agent == nil || it.Agent.TodoID != linkedTo[it] || !inboxTaskLinkEligible(it) {
+		if b.items[it.ID] != it || it.VisibilityExcluded || it.Agent == nil || it.Agent.TodoID != linkedTo[it] || !inboxTaskLinkEligible(it) {
 			continue // moved or relinked meanwhile
 		}
 		w := beginWrite(it)
@@ -247,7 +338,7 @@ func (s *Service) inboxSignalHolds(t Todo) bool {
 // signal it gave (receivedSince), and remembers that count. Under b.mu.
 func inboxSignalOf(it *InboxItem, linked bool) (superviseSignal, bool) {
 	a := it.Agent
-	if a == nil || a.TodoID == "" || !it.open() || it.Kind == KindBot || !inboxTaskLinkEligible(it) ||
+	if a == nil || a.TodoID == "" || it.VisibilityExcluded || !it.open() || it.externallyRouted() || it.Kind == KindBot || !inboxTaskLinkEligible(it) ||
 		a.SentOf != "" && a.SentOf == it.Last ||
 		a.signaledOf != "" && a.signaledOf == it.Last {
 		return superviseSignal{}, false

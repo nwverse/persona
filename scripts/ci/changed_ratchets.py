@@ -30,6 +30,7 @@ import tempfile
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import sleep_ratchet  # noqa: E402
 import web_font_ratchet  # noqa: E402
+import wire_types_ratchet  # noqa: E402
 
 GIT_TIMEOUT = 120  # seconds for one git command; a large change lists and reads its files in a few
 LS_TREE_CHUNK = 500  # paths per git ls-tree call, well under any command-line limit
@@ -109,6 +110,20 @@ class Repository:
         """Paths that differ between two commits, each side of a rename on its own."""
         out = self.run(["diff", "--name-only", "--no-renames", "-z", old, new, "--"])
         return [name for name in out.decode("utf-8", "surrogateescape").split("\0") if name]
+
+    def renames(self, old, new):
+        """{new path: old path} for the files git's rename detection sees as moved between two commits."""
+        out = self.run(["diff", "--name-status", "-M", "-z", old, new, "--"])
+        fields = out.decode("utf-8", "surrogateescape").split("\0")
+        moved, at = {}, 0
+        while at < len(fields) and fields[at]:
+            if fields[at].startswith(("R", "C")):
+                if fields[at].startswith("R"):
+                    moved[fields[at + 2]] = fields[at + 1]
+                at += 3
+            else:
+                at += 2
+        return moved
 
     def blobs(self, rev, paths):
         """{path: bytes} for the paths that are files at rev; a path that is absent or not a file is missing."""
@@ -248,14 +263,41 @@ def ratchet_failures(change, ratchet):
             failures.extend(ratchet.violations({path: got}, {path: allowed}))
     if ratchet.raised:
         current = {path: merged_counts[path] for path in sorted(edited) if path in merged_counts}
-        failures.extend(ratchet.raised(current, base_counts, change.base[:12]))
+        # A file the change only moved keeps the entry it had (sleep_ratchet.carry_renames): moving is no raise.
+        moved = {new: old for new, old in change.repo.renames(change.base, change.head).items()
+                 if ratchet.covers(new) and ratchet.covers(old)}
+        failures.extend(ratchet.raised(current, sleep_ratchet.carry_renames(base_counts, moved), change.base[:12]))
     return failures, notes
+
+
+def global_failures(change):
+    """Failure lines for the wire types baseline: a global count baseline has no files to count here (the counter
+    needs Go), so the merge is held to what it can check from Git alone, that the baseline never rises."""
+    rel = wire_types_ratchet.BASELINE_REL
+    base_text = change.repo.blobs(change.base, [rel]).get(rel)
+    if base_text is None or rel not in change.touched:
+        return [], []
+    merged = change.as_merged([rel])[rel]
+    if merged is CONFLICT:
+        return [], ["{0}: conflicts with the base; wire types not checked".format(rel)]
+    if merged is None:
+        return ["{0}: the merge removes the wire types baseline".format(rel)], []
+    try:
+        previous = wire_types_ratchet.parse_baseline(base_text.decode("utf-8"), change.base[:12] + ":" + rel)
+        candidate = wire_types_ratchet.parse_baseline(merged.decode("utf-8"), "the merge's " + rel)
+    except wire_types_ratchet.WireTypesError as error:
+        raise CheckError(str(error))
+    return (wire_types_ratchet.raised_against(candidate[0], previous[0], change.base[:12], candidate[2], previous[2])
+            + wire_types_ratchet.exceptions_grow(candidate[0], candidate[1], previous[0], previous[1], change.base[:12])), []
 
 
 def check(root, base, head):
     """(failure lines, notes, number of files checked) for merging head onto base."""
     change = Change(Repository(root), base, head)
     failures, notes, checked = [], [], set()
+    found, skipped = global_failures(change)
+    failures.extend(found)
+    notes.extend(skipped)
     for ratchet in RATCHETS:
         found, skipped = ratchet_failures(change, ratchet)
         failures.extend(found)

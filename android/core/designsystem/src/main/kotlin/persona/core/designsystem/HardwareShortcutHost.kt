@@ -54,7 +54,7 @@ fun HardwareShortcutHost(modifier: Modifier = Modifier, requestFocusWhenLarge: B
     LaunchedEffect(large) {
         if (large) {
             // Fill an empty focus tree so Ctrl+/ has a receiver, but never take an existing child or dialog focus.
-            if (requestFocusWhenLarge && !currentFocusWithin) runCatching { focus.requestFocus() }
+            if (requestFocusWhenLarge && !currentFocusWithin) { val _ = runCatching { focus.requestFocus() } }
         } else controller.closeHelp()
     }
     val keys = if (large) Modifier.onKeyEvent { controller.handle(it, focus) }.focusable() else Modifier
@@ -79,11 +79,12 @@ internal fun HardwareShortcutHelp(owner: Any) {
 }
 
 /** Let a text input open help before its editor consumes the key; all other keys keep their ordinary path. */
-fun Modifier.hardwareShortcutTextInput(): Modifier = composed {
+fun Modifier.hardwareShortcutTextInput(enabled: () -> Boolean = { true }): Modifier = composed {
     val controller = LocalHardwareShortcutController.current ?: return@composed this
     val owner = LocalHardwareShortcutHelpOwner.current
+    val currentEnabled by rememberUpdatedState(enabled)
     onPreviewKeyEvent { event ->
-        if (event.key == Key.Slash && event.isCtrlPressed) controller.handle(event, owner) else false
+        if (currentEnabled() && event.key == Key.Slash && event.isCtrlPressed) controller.handle(event, owner) else false
     }
 }
 
@@ -105,6 +106,6 @@ fun Modifier.hardwareShortcutDismiss(onDismiss: () -> Unit, helpOwner: Any?): Mo
         onDispose { controller.unregister(registration) }
     }
     // Becoming a large window registers this surface again; a child that already holds focus keeps it.
-    LaunchedEffect(controller, token) { if (!currentFocusWithin) runCatching { focus.requestFocus() } }
+    LaunchedEffect(controller, token) { if (!currentFocusWithin) { val _ = runCatching { focus.requestFocus() } } }
     tracked.onKeyEvent { controller.handle(it, helpOwner) }.focusRequester(focus).focusable()
 }

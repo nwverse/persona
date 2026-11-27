@@ -235,6 +235,9 @@ struct ShellNeedsYou: View {
         #endif
         // The current assistant's, as its Agents and Inbox pages list them.
         let agents = model.scopedInteractions.filter { !model.isMuted($0.sessionKey) }.map(Line.agent)
+        #if os(iOS)
+        if model.hiddenNavigationPages.contains(.inbox) { return agents }
+        #endif
         let inbox = InboxStore.shared.scopedItems
             .filter { !$0.isDone && $0.triage == .action }
             .sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
@@ -440,12 +443,17 @@ struct ShellDestinations: ViewModifier {
     /// (#6332), whose one path has the Agents' (`AgentsDestinations`), the split's first pages without a back.
     var agentRoutes = true
     @StateObject private var accounts = InboxAccountState()
+    @State private var pusher = SplitPush()
 
     /// The explicit closure from Assistant, or this destination's own path in the unified Sidebar layout.
     private var routeChat: ((InboxChatRoute) -> Void)? {
         if let inboxChat { return inboxChat }
         guard enabled else { return nil }
         return { path.append($0) }
+    }
+
+    private var splitPush: SplitPush {
+        pusher.set { [path = $path] value in path.wrappedValue.append(value) }
     }
 
     func body(content: Content) -> some View {
@@ -458,11 +466,12 @@ struct ShellDestinations: ViewModifier {
                     routed(place(route).modifier(FirstPage(on: !agentRoutes)).modifier(ShellPlaceRoot()))
                 }
                 .modifier(InboxDestinations(accounts: accounts.accounts, inboxChat: routeChat, openFeishu: { path.append($0) }))
-                .modifier(AgentRoutes(on: agentRoutes, chat: routeChat, openFeishu: { path.append($0) }))
+                .modifier(AgentRoutes(path: $path, on: agentRoutes, chat: routeChat, openFeishu: { path.append($0) }))
                 .navigationDestination(for: InboxChatRoute.self) { r in routed(ChatView(key: r.key, itemManager: r.manager).id(r.key)) }
                 .environment(\.feishuOpen) { path.append($0) }
                 .environment(\.pushInboxChat, routeChat)
                 .environment(\.shellInboxAccounts, accounts)
+                .environment(\.splitPush, splitPush)
                 #if DEBUG
                 .onAppear { ShellTrace.shared.note("inbox chat closure available=\(routeChat != nil)") }
                 #endif
@@ -473,11 +482,14 @@ struct ShellDestinations: ViewModifier {
 
     /// Injects on each returned destination, not only the stack's root content (the iPad split drops the latter).
     private func routed<Content: View>(_ content: Content) -> some View {
-        content.modifier(InboxDestinationEnvironment(chat: routeChat, openFeishu: { path.append($0) }))
+        content
+            .modifier(InboxDestinationEnvironment(chat: routeChat, openFeishu: { path.append($0) }))
+            .environment(\.splitPush, splitPush)
     }
 
     /// What the Agents list registers as well: here only where it does not (the shell, the iPad's Persona tab).
     private struct AgentRoutes: ViewModifier {
+        @Binding var path: NavigationPath
         var on: Bool
         var chat: ((InboxChatRoute) -> Void)?
         var openFeishu: ((FeishuRoute) -> Void)?
@@ -486,11 +498,15 @@ struct ShellDestinations: ViewModifier {
             if on {
                 content
                     .navigationDestination(for: TodoDetailRoute.self) { r in
-                        TodoDetailView(todoID: r.id)
+                        TodoDetailView(todoID: r.id, openDetail: { (route: TodoDetailRoute) in path.append(route) })
                             .modifier(InboxDestinationEnvironment(chat: chat, openFeishu: openFeishu))
                     }
                     .navigationDestination(for: MachineDetailRoute.self) { r in
                         MachineDetailView(ref: r.ref)
+                            .modifier(InboxDestinationEnvironment(chat: chat, openFeishu: openFeishu))
+                    }
+                    .navigationDestination(for: MachineUsageMapRoute.self) { r in
+                        UsageMapView(route: r)
                             .modifier(InboxDestinationEnvironment(chat: chat, openFeishu: openFeishu))
                     }
                     .navigationDestination(for: TerminalsRoute.self) { r in
@@ -523,9 +539,9 @@ struct ShellDestinations: ViewModifier {
         case .inbox: InboxPage(path: path, accountState: accounts, embedded: true)
         case .todos:
             #if os(iOS)
-            TodosPlacePage() // the V1 list where the hub sends the view (#10465), else TodosView
+            TodosPlacePage(openDetail: { (route: TodoDetailRoute) in path.wrappedValue.append(route) }) // V1 (#10465), else TodosView
             #else
-            TodosView()
+            TodosView(openDetail: { (route: TodoDetailRoute) in path.wrappedValue.append(route) })
             #endif
         case .machines: MachinesView()
         case .extensionPage(let r): ExtensionNavPage(route: r)

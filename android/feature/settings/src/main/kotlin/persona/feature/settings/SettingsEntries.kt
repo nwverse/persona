@@ -76,6 +76,8 @@ data class SettingsServices(
     /** Settings › Session triage on the paired hub (docs/assistant/agent-work.md "Switches"); null in demo mode. */
     val triage: AgentTriage? = null,
     val capsule: FloatingCapsuleSettings? = null,
+    /** Local model choice for Android's Default Digital Assistant floating overlay; null where unavailable. */
+    val digitalAssistantModel: DigitalAssistantModelSettings? = null,
     /** The last pairing attempt (recorded by the pairing page, shown in "Connection diagnostics"); null in demo mode. */
     val pairingAttempts: PairingAttempts? = null,
     /** The main conversation's steps on "Checklist" (docs/assistant/onboarding.md 4.5); null or unavailable: the phone's items only. */
@@ -90,6 +92,8 @@ data class SettingsServices(
     val agentsDisplay: persona.core.domain.sort.AgentListDisplaySettings? = null,
     /** Settings › Standing Authorizations on the paired hub; null in demo mode. */
     val standing: StandingAuthorizationsSource? = null,
+    /** What each extension may read of personal information (#13500), the default manager's; null in demo mode. */
+    val extensionTrust: persona.core.contracts.api.ExtensionTrustSource? = null,
     /** Device-local Developing Persona records; never scoped to or synchronized with a hub. */
     val developing: DevelopingDiagnostics? = null,
 )

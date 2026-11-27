@@ -18,6 +18,7 @@ import persona.core.navigation.Navigator
 import persona.core.navigation.RouteSource
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
+import persona.core.inbox.*
 
 /**
  * "Hand to AI" (iOS `InboxHandOffSheet`, the old app's sheet): what to do with the item (three presets or the user's own
@@ -90,7 +91,7 @@ internal fun InboxHandOffSheet(
         error = null
         scope.launch {
             try {
-                val text = handoffPrompt(res, handOffItem(record, context ?: repository.personaContext(itemId)), instruction)
+                val text = handoffPrompt(res, handOffItem(record, context ?: repository.personaContext(itemId)?.text), instruction)
                 val operation = attempt.operationId(text, target)
                 val session = repository.handOff(InboxHandOffRequest(itemId, text, target?.machineId, target?.sessionId, operation,
                     targetTitle = target?.title))

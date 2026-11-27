@@ -3,9 +3,12 @@ package persona.core.contracts
 import kotlinx.serialization.json.*
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import persona.core.contracts.api.ScheduledTask
+import persona.core.contracts.generated.TodoWaitKind
+import persona.core.contracts.generated.TodoWaitPRBlocker
 
 /** The unified entry's wire shapes (docs/protocol/protocol.md "Tasks and the chat feed") decode, and its events enter the stream. */
 class TasksContractTest {
@@ -136,6 +139,21 @@ class TasksContractTest {
         assertEquals("future-kind", JsonCodec.decodeFromString<Todo>("""{"id":"u","kind":"future-kind"}""").kind)
     }
 
+    @Test fun todoCarriesTheServersTypedWaitAndAnOlderHubHasNone() {
+        val todo = JsonCodec.decodeFromString<Todo>("""{"id":"t1","title":"Ship the release",
+            "wait":{"kind":"pr_merge","waiting_on":"PR #88","reason":"Fix CSV escaping",
+              "wake_condition":"Checks pass","wake_at":"2026-11-19T10:15:00Z",
+              "until":"2026-11-19T11:30:00Z","since":"2026-11-18T09:45:00Z",
+              "url":"https://github.com/example/app/pull/88",
+              "pr_blockers":["review_required","checks_pending"]}}""")
+        val wait = todo.wait ?: error("wait missing")
+        assertEquals(TodoWaitKind.PrMerge, wait.kind)
+        assertEquals("PR #88", wait.waitingOn)
+        assertEquals("Checks pass", wait.wakeCondition)
+        assertEquals(listOf(TodoWaitPRBlocker.ReviewRequired, TodoWaitPRBlocker.ChecksPending), wait.prBlockers)
+        assertNull(JsonCodec.decodeFromString<Todo>("""{"id":"older","title":"Older hub"}""").wait)
+    }
+
     @Test fun unknownKindsAndTodosDecode() {
         val res = JsonCodec.decodeFromString<FeedResponse>("""{"items":[{"id":"f","conversation":"c","at":"2026-11-03T10:00:00Z","kind":"new_kind"}],
             "plans":{"p":{"id":"p","state":"started","tasks":[]}}}""")
@@ -153,6 +171,40 @@ class TasksContractTest {
         assertEquals("claude did not become ready within 1m0s", (failed.startError).zhAny())
         val ix = JsonCodec.decodeFromString<Interaction>("""{"id":"ix","machine_id":"box","session_id":"s1","kind":"permission","task_title":"修登录崩溃"}""")
         assertEquals("修登录崩溃", (ix.taskTitle).zhAny())
+    }
+
+    /** Cancellation and takeover history survive the wire, while an older hub's payload still decodes (#5732). */
+    @Test fun cancellationAndLineageDecode() {
+        val todo = JsonCodec.decodeFromString<Todo>("""{"id":"new","done_at":"2026-11-12T08:00:00Z",
+            "cancelled_at":"2026-11-12T08:00:00Z","cancelled_reason":"Superseded by the revised plan",
+            "lineage":[{"todo_id":"old","title":"First attempt","agent":"claude","machine":"box","session_id":"s1",
+              "started":"2026-11-11T08:00:00Z","ended":"2026-11-12T07:00:00Z","why":"continues",
+              "superseded_by":"new"},{"todo_id":"new","title":"Revised attempt","continues":"old","current":true}]}""")
+        assertTrue(todo.isCancelled)
+        assertEquals("Superseded by the revised plan", todo.cancellationReason)
+        assertEquals(listOf("old", "new"), todo.lineage?.map { it.todoId })
+        assertEquals("new", todo.lineage?.first()?.supersededBy)
+        assertEquals("old", todo.lineage?.last()?.continues)
+        assertEquals(true, todo.lineage?.last()?.current)
+
+        val legacy = JsonCodec.decodeFromString<Todo>("""{"id":"old","done_at":"2026-11-12T08:00:00Z",
+            "done_by":"review","done_reason":"superseded","supervision":{"state":"cancelled"}}""")
+        assertTrue(legacy.isCancelled)
+        assertEquals("superseded", legacy.cancellationReason)
+        assertEquals(null, legacy.lineage)
+        val oldHub = JsonCodec.decodeFromString<Todo>("""{"id":"plain","title":"Unchanged"}""")
+        assertEquals(null, oldHub.cancelledReason)
+        assertEquals(null, oldHub.lineage)
+    }
+
+    @Test fun cancelledReopenedAndExplicitlyCompletedIsNotCancelled() {
+        for (doneBy in listOf("", "auto")) {
+            val marker = if (doneBy.isEmpty()) "" else """"done_by":"$doneBy","""
+            val completed = JsonCodec.decodeFromString<Todo>("""{"id":"reopened","done_at":"2026-11-13T08:00:00Z",
+                $marker"reopened_at":"2026-11-13T07:00:00Z","supervision":{"state":"cancelled"}}""")
+            assertFalse(completed.isCancelled)
+            assertEquals(null, completed.cancellationReason)
+        }
     }
 
     /** An answered record has every question with its answer in full (#1231); one from before it shows its line. */

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/closeout"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
@@ -311,6 +312,20 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 	if c.Assistant && (w == nil || w.On != proto.WaitTransient && !(quotaWait && w.On == proto.WaitExternal)) {
 		return // Assistant participates only in mechanical model recovery and quota waits.
 	}
+	personWait := false // its closeout says it stopped on a person, background work or not
+	if w != nil && backgroundRule(c) {
+		// Background work it left running is no word that it goes on by itself when its own closeout says it stopped on
+		// a person: that closeout is read (the model's triage) and its turn settles (taskAgentSettled), so the
+		// supervisor or the owner hears of it rather than a wait that "wakes itself" (#14899). Read only with the triage
+		// on (above); triageTurnModel then takes the same read (triageRead keeps it for the turn).
+		_, reply := s.triageRead(ctx, machine, c)
+		if reply == "" {
+			reply = turnReplyText(c.LastText, false) // as triageTurnModel reads it
+		}
+		if co, _, ok := closeout.Parse(reply); ok && closeoutWaitsOnPerson(co) {
+			w, by, personWait = nil, "", true
+		}
+	}
 	if w == nil {
 		mctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 		defer cancel()
@@ -342,6 +357,9 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 	if !closed {
 		s.actOn(ctx, v, machine, c, &e)
 	}
+	// Validate the stored conclusion even when no action was possible, e.g.
+	// when the only source for a Codex App thread was read-only history.
+	clearUnsupportedUserWait(&e.Work, s.lang(ctx))
 	// The turn after a status question is its answer (agents_closeout_ask.go): never asked again, whatever it says.
 	answersAsk := had && last.Work.CloseoutAsk == closeoutAskSent && !sameTurn(c, last.TurnAt)
 	switch {
@@ -382,6 +400,11 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 	} else {
 		s.putWork(ctx, e)
 	}
+	if personWait && backgroundRunning(c) {
+		// Its turn end was put off for the background work (taskAgentSettled): settle it now that its state says why
+		// it stopped, so its task gets its receipt, judgment and supervision signal.
+		go s.taskTurnSettled(context.WithoutCancel(ctx), machine, c.SessionID)
+	}
 	if e.Work.Phase == proto.WorkDone {
 		s.work.mu.Lock()
 		var items []proto.Item
@@ -397,6 +420,17 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 		"line": e.Work.Line, "ms": time.Since(start).Milliseconds()})
 	if answersAsk {
 		s.workEvent(machine, c.SessionID, closeoutAskOutcome(e.Work), map[string]any{"phase": e.Work.Phase})
+	}
+}
+
+func unsupportedUserWait(w *proto.WorkState) bool {
+	return w.Phase == proto.WorkBlocked && w.On == proto.WaitUser && w.By == "model" && len(w.Questions) == 0 && w.Link == nil
+}
+
+func clearUnsupportedUserWait(w *proto.WorkState, lang i18n.Lang) {
+	if unsupportedUserWait(w) {
+		*w = proto.WorkState{TurnAt: w.TurnAt, At: w.At, By: w.By, Artifacts: w.Artifacts, Closeout: w.Closeout}
+		unfinished(w, lang)
 	}
 }
 
@@ -471,7 +505,11 @@ func triageRules(c proto.Session, loc *time.Location, l i18n.Lang) (w *proto.Wor
 			return limitWork(c, time.Now(), loc, l), "rule", false
 		}
 		if turnErrorTransient(c) {
-			return &proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitTransient, Line: workT(l, "transient_retrying"),
+			line := workT(l, "transient_retrying")
+			if c.TurnErrorCode == proto.TurnErrorUpstreamUnavailable {
+				line = clip(oneLine(workT(l, "upstream_unavailable_retrying", i18n.Args{"error": e})), 120)
+			}
+			return &proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitTransient, Line: line,
 				Wait: clip(oneLine(e), 200)}, "rule", false
 		}
 		return &proto.WorkState{Phase: proto.WorkBlocked, On: proto.WaitUser, Line: clip(oneLine(workT(l, "model_error", i18n.Args{"error": e})), 60),
@@ -531,6 +569,12 @@ func limitClock(reset, now time.Time, loc *time.Location) string {
 	return r.Format("01-02 15:04")
 }
 
+// backgroundRule: triageRules' state for c, when it gave one, is its background work's or its /loop's: no turn error
+// came before those (triageRules).
+func backgroundRule(c proto.Session) bool {
+	return c.TurnError == "" && (runningInBackground(c) > 0 || c.Loop != nil)
+}
+
 func runningInBackground(c proto.Session) int {
 	n := len(c.Background)
 	for _, a := range c.Subagents {
@@ -547,7 +591,7 @@ func turnErrorTransient(c proto.Session) bool {
 	if proto.UnrecoverableTurnErrorCode(c.TurnError) != "" || c.TurnErrorKind == proto.TurnErrorUnrecoverable {
 		return false
 	}
-	if sessionTurnErrorCode(c) == proto.TurnErrorModelFallbackUnavailable {
+	if code := sessionTurnErrorCode(c); code == proto.TurnErrorModelFallbackUnavailable || code == proto.TurnErrorImagesTooLarge {
 		return false
 	}
 	switch c.TurnErrorKind {
@@ -591,11 +635,12 @@ var (
 	// a request too large (413).
 	userErrorStatus = lazyre.New(`\b(400|401|403|413)\b`)
 	rateLimitStatus = lazyre.New(`\b429\b`)
-	// userErrorWords: the auth words shared with the node's failed-turn check (assistantwire.AuthErrorWords, #4669),
-	// then a request the service refuses as it is, a context too long, an interrupt.
-	userErrorWords = append(slices.Clone(assistantwire.AuthErrorWords),
+	// userErrorWords: the auth and image-limit words shared with the node's failed-turn check
+	// (assistantwire.AuthErrorWords, #4669; assistantwire.ImageLimitErrorWords, #13045), then a request the service
+	// refuses as it is, a context too long, an interrupt.
+	userErrorWords = append(append(slices.Clone(assistantwire.AuthErrorWords), assistantwire.ImageLimitErrorWords...),
 		"invalid_request_error", "invalid request", "prompt is too long", "context length", "context window", "context_length_exceeded",
-		"maximum context", "too many tokens", "request too large", "request_too_large",
+		"maximum context", "too many tokens",
 		"interrupted by user", "request was aborted", "aborted by user", "user aborted")
 )
 

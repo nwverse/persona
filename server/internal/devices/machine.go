@@ -26,6 +26,7 @@ import (
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
+	"github.com/nwverse/persona/server/internal/transcript"
 	"github.com/nwverse/persona/server/internal/update"
 )
 
@@ -119,11 +120,14 @@ type Machine struct {
 	kick      chan struct{}
 	// deploying: the manager is sending this machine the hub's node build (deploy.go); deployErr: why the last try
 	// failed. deployRun ties each waiter to one run's outcome, including one the card does not retain.
-	deploying       bool
-	deployErr       string
-	deployPhase     string
-	deployRun       *deployRun
-	deployPreflight *nodeDeployPreflight
+	deploying     bool
+	deployErr     string
+	deployPhase   string
+	deploySource  string
+	deployVersion string
+	deployRun     *deployRun
+	deployWatch   *nodeDeployWatch
+	updateHandoff bool // grace expired while waiting for idle: no new headless turns until the update settles
 	// via is how the connection runs (local | ssh | tailcat | link | service | hub), path how tailcat's packets go.
 	via, path                  string
 	directFailed, switchedBack time.Time
@@ -170,6 +174,8 @@ type Machine struct {
 	claudeDirsMu sync.Mutex
 	// hiddenDirs is the machine's hidden Agent folders, cached (agentdirs.go).
 	hiddenDirs hiddenDirsCache
+	// herdrSessionsBlocked is the machine's blocked named herdr sessions, cached (herdrsessions.go).
+	herdrSessionsBlocked herdrSessionsCache
 	// nodeCmd replaces the node command (tests).
 	nodeCmd func(context.Context) *exec.Cmd
 	// localNote is why the last start of a local node passed a program beside it over (localNode), said once until it
@@ -247,7 +253,9 @@ func (m *Machine) snapshot() proto.Machine {
 	// The build its platform resolves to (packages.go: the hub's own, or the newest release this manager drives), and
 	// why none can be sent; before m.mu, as they read the hub's handover.
 	version, noPackage := d.hubVersion(), error(nil)
-	if m.cfg.Kind != "local" { // the hub's own machine runs the hub's binary: nothing to look up
+	// A local stdio process uses the manager's binary. Its resident relay,
+	// when present, can run a separate build and needs package lookup.
+	if m.cfg.Kind != "local" || info.NodeUpdate && nodeHas(info, nodeproto.NodeUpdate) {
 		version, noPackage = d.nodeTarget(info), d.packageBlocked(info)
 	}
 	clipboardOn := d.clipboardOn(m.cfg.ID)
@@ -296,6 +304,10 @@ func (m *Machine) snapshot() proto.Machine {
 	if m.link != nil {
 		link = m.link.info()
 	}
+	source := m.deploySource
+	if m.deployVersion != version || !m.deploying && m.info.Version != m.deployVersion && deployErr == "" {
+		source = ""
+	}
 	return proto.Machine{
 		ID: m.cfg.ID, Name: m.name(), Kind: m.cfg.Kind, Icon: icon, SSHHost: m.cfg.SSHHost, Online: m.online || warm, Error: m.err,
 		Hostname: m.info.Hostname, OS: m.info.OS, Arch: m.info.Arch, Home: m.info.Home,
@@ -303,7 +315,7 @@ func (m *Machine) snapshot() proto.Machine {
 		NodeVersion: m.info.Version, NodeMismatch: m.online && nodeMismatch(version, m.info),
 		NodeProtocol: m.info.Protocol, NodeIncompatible: incompatible,
 		Deploying: m.deploying, DeployError: deployErr,
-		CanDeploy: &canDeploy, DeployReason: deployReason, DeployNoPackage: onlyPackage, DeployPhase: m.deployPhase,
+		DeploySource: source, CanDeploy: &canDeploy, DeployReason: deployReason, DeployNoPackage: onlyPackage, DeployPhase: m.deployPhase,
 		Transport: m.via, TailcatPath: m.path, Tailcat: m.cfg.TailcatAddr != "",
 		Engine: engine, Engines: engines, EngineHosts: choice.Hosts, EngineDefault: choice.Default,
 		EngineSuggested: suggested, EngineSetsUnsupported: setsUnsupported, Link: link, System: d.metrics.system(m.cfg.ID),
@@ -526,7 +538,11 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 	m.mu.Lock()
 	p := m.peer
 	info := m.info
+	handoff := m.updateHandoff
 	m.mu.Unlock()
+	if handoff && (method == "assistant.send" || method == "assistant.warm") {
+		return &rpc.Error{Code: nodeproto.CodeRestarting, Message: nodeproto.CodeRestarting}
+	}
 	if p != nil {
 		select {
 		case <-p.Done():
@@ -581,13 +597,30 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-ultracode.node_outdated")}
 		}
 	}
+	if !nodeHas(info, nodeproto.TaskInput) || !nodeHas(info, nodeproto.TaskExecution) {
+		requires := method == "assistant.content" || method == "fs.task.list"
+		if method == "assistant.send" {
+			raw, _ := json.Marshal(params)
+			var send struct {
+				TaskInput bool `json:"task_input"`
+			}
+			_ = json.Unmarshal(raw, &send)
+			requires = send.TaskInput
+		}
+		if requires {
+			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_task_input")}
+		}
+	}
 	if method == "assistant.directory" && !nodeHas(info, nodeproto.TaskExecution) {
-		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_task_execution")}
+		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_task_execution"), Data: json.RawMessage(`{"capability":"task_execution"}`)}
 	}
 	if method == "assistant.send" {
-		next, allowed := taskExecutionParams(params, nodeHas(info, nodeproto.TaskExecution))
+		next, allowed, legacyFallback := taskExecutionParams(params, nodeHas(info, nodeproto.TaskExecution))
 		if !allowed {
-			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_task_execution")}
+			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_task_execution"), Data: json.RawMessage(`{"capability":"task_execution"}`)}
+		}
+		if legacyFallback {
+			devicewire.MarkLegacyTaskExecution(ctx)
 		}
 		params = next
 	}
@@ -611,6 +644,23 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 		if strings.TrimSpace(fields.Goal) != "" { // its own code: the caller starts again without the goal
 			return &rpc.Error{Code: proto.CodeStartGoalUnsupported, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_start_goal")}
 		}
+	}
+	if method == "assistant.prepare" && !nodeHas(info, nodeproto.TrackSpaces) {
+		raw, _ := json.Marshal(params)
+		var fields struct {
+			Space json.RawMessage `json:"space"`
+		}
+		_ = json.Unmarshal(raw, &fields)
+		if len(fields.Space) > 0 && string(fields.Space) != "null" {
+			// A track's directory (#13472): an older node would write its instructions without the track's SPACE.md
+			// or folders. The manager asks only a node it saw announce it; this holds when the node changed since.
+			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "rpc-errors.node_outdated")}
+		}
+	}
+	if method == "assistant.space_md" && !nodeHas(info, nodeproto.TrackSpaceMD) {
+		// A track's SPACE.md (#13472): an older node does not know the method. The manager asks only a node it saw
+		// announce it; this holds when the node changed since.
+		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "rpc-errors.node_outdated")}
 	}
 	if devicewire.IsSessionStart(method) && !nodeHas(info, nodeproto.ResumeOutsideHealth) {
 		raw, _ := json.Marshal(params)
@@ -680,9 +730,22 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 		// The same for an API purpose that runs on a launcher there.
 		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_model_run")}
 	}
-	if method == proto.MethodSecretRun && !nodeHas(info, nodeproto.SecretRun) {
-		// An older node would answer "unknown method"; this says what to do about it before the user types anything.
-		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_secret_run")}
+	if method == proto.MethodSecretRun {
+		if !nodeHas(info, nodeproto.SecretRun) {
+			// An older node would answer "unknown method"; this says what to do about it before the user types anything.
+			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_secret_run")}
+		}
+		if !nodeHas(info, nodeproto.SecretRunEnv) {
+			raw, _ := json.Marshal(params)
+			var fields struct {
+				Delivery string `json:"delivery"`
+			}
+			_ = json.Unmarshal(raw, &fields)
+			if fields.Delivery == proto.SecretRunDeliveryEnv {
+				// An older node would ignore delivery and run without the secret the card promised (#11945).
+				return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_secret_run")}
+			}
+		}
 	}
 	if ctx.Err() != nil {
 		return rpc.NotSent(ctx.Err()) // waited for the connection or the resident handover: nothing went out
@@ -739,14 +802,15 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 }
 
 // taskExecutionParams selects the protocol before the first send to the connected node.
-// The scheduler alone can attest that a task uses inherited, ordinary execution.
-func taskExecutionParams(params any, supported bool) (any, bool) {
+// The scheduler alone can attest that a task uses inherited, ordinary execution. The last result reports actual omission.
+func taskExecutionParams(params any, supported bool) (any, bool, bool) {
 	raw, _ := json.Marshal(params)
 	var fields map[string]json.RawMessage
 	if json.Unmarshal(raw, &fields) != nil {
-		return params, true
+		return params, true, false
 	}
 	legacy, hinted := fields[devicewire.LegacyTaskExecution]
+	fallback := false
 	if !supported && string(fields["task_execution"]) == "true" {
 		var id, origin string
 		_ = json.Unmarshal(fields["session_id"], &id)
@@ -755,18 +819,19 @@ func taskExecutionParams(params any, supported bool) (any, bool) {
 		if string(legacy) != "true" || (origin != "task" && !(origin == "" && resume)) || string(fields["origin_known"]) != "true" ||
 			string(fields["is_main"]) == "true" || string(fields["public"]) == "true" ||
 			fields["guest"] != nil || fields["external"] != nil || fields["new_session_id"] != nil {
-			return nil, false
+			return nil, false, false
 		}
 		delete(fields, "task_execution")
 		if resume {
 			delete(fields, "cwd") // the traditional resume leaves the existing process's directory alone
 		}
+		fallback = true
 	}
 	if hinted {
 		delete(fields, devicewire.LegacyTaskExecution)
-		return fields, true
+		return fields, true, fallback
 	}
-	return params, true
+	return params, true, fallback
 }
 
 // firstWait bounds how long a call waits for a machine's first try to connect (the manager just started: an answer
@@ -851,15 +916,24 @@ func (m *Machine) forgetSeqLocked(id string) {
 
 // setSessions keeps the node's session list (the hub gets it as the node sent it, devices.event).
 func (m *Machine) setSessions(list []proto.Session) {
-	for i := range list {
-		list[i].MachineID = m.cfg.ID
-	}
+	m.takeRows(list)
 	m.mu.Lock()
 	m.sessions = list
 	m.sessionsListed = true
 	m.sessionRevision++
 	m.lastSeen = time.Now().UTC()
 	m.mu.Unlock()
+}
+
+// takeRows makes a node's listed rows the manager's, in place, before they are kept: on this machine, and each title
+// one a list can carry (transcript.ListTitle, #16343). A node from before that cut sends whatever its agents stored as
+// a title, a whole opening prompt among them; every reader of the kept list (the assistant, the archive, the list the
+// hub and the apps get) then has the cut one.
+func (m *Machine) takeRows(list []proto.Session) {
+	for i := range list {
+		list[i].MachineID = m.cfg.ID
+		list[i].Title = transcript.ListTitle(list[i].Title)
+	}
 }
 
 func (m *Machine) sessionList() []proto.Session {
@@ -922,6 +996,12 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 	}
 	m.noteClosed(event, params)
 	switch event {
+	case nodeproto.EventUpdateDraining:
+		m.nodeUpdateDraining(params)
+		return
+	case nodeproto.EventRestarting:
+		m.nodeUpdateHandover(params)
+		return
 	case nodeproto.EventUpdatePreflightFailed:
 		m.nodeUpdatePreflightFailed(params)
 		return
@@ -930,7 +1010,8 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 		defer m.sessionsEventMu.Unlock() // held through OnEvent and forward below
 		if list, ok := m.decodeSessions(params); ok {
 			m.setSessions(list)
-			m.d.heldWake(m.cfg.ID) // a message held for a session listed now goes (held.go)
+			m.d.heldWake(m.cfg.ID)      // a message held for a session listed now goes (held.go)
+			m.d.heldStartWake(m.cfg.ID) // held new-Agent starts for this computer go now (held_starts.go)
 		}
 	case "sessions.revs":
 		var p struct {
@@ -1074,6 +1155,14 @@ func (m *Machine) onRequest(ctx context.Context, method string, params json.RawM
 			}
 		}
 		return map[string]any{"sessions": out}, nil
+	case "usage.features": // what this manager keeps of the usage a node meters (usage_projects.go)
+		return map[string]any{"dirs": true}, nil
+	case "usage.resplit.status": // the last week split by directory once (usage_resplit.go)
+		return m.d.usageResplitStatus(ctx, m.cfg.ID, time.Now())
+	case "usage.resplit":
+		sctx, cancel := m.storeCtx()
+		defer cancel()
+		return m.d.putUsageResplit(sctx, m.cfg.ID, params, time.Now())
 	case "usage.backfill.status": // the token usage backfill (usage_backfill.go)
 		return m.d.usageBackfillStatus(ctx, m.cfg.ID, params, time.Now())
 	case "usage.backfill":

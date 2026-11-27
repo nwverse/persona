@@ -114,8 +114,9 @@ func TestTaskPlanRoleContractRejectsNewGeneralTasksWithoutDurableEffects(t *test
 	}
 }
 
-// Explicit worker keeps ordinary dispatch; an ordinary eligible conversation may still dispatch an explicit leader and
-// supervises it itself. Deliberately misleading synthetic model ids cannot participate in either role decision.
+// Explicit worker keeps ordinary dispatch; an ordinary eligible conversation may still dispatch an explicit leader.
+// A live side conversation owns and supervises what it dispatches (#13657). Deliberately misleading synthetic model ids
+// cannot participate in either role decision.
 func TestTaskPlanRoleContractExplicitDispatch(t *testing.T) {
 	for _, tt := range []struct {
 		role, model, source string
@@ -134,7 +135,7 @@ func TestTaskPlanRoleContractExplicitDispatch(t *testing.T) {
 				t.Fatalf("stored role = %q, want %q", got, tt.role)
 			}
 			if todo.Origin != "conv2" || todo.Supervision == nil || todo.Supervision.Supervisor != "conv2" {
-				t.Fatalf("the dispatching conversation no longer supervises its %s: origin %q, supervision %+v", tt.role, todo.Origin, todo.Supervision)
+				t.Fatalf("live side conversation does not supervise the %s it dispatched: origin %q, supervision %+v", tt.role, todo.Origin, todo.Supervision)
 			}
 			if len(todo.Agents) != 1 || todo.Agents[0].Source != tt.source || todo.Agents[0].Via != "" {
 				t.Fatalf("explicit %s changed the existing agent link: %+v", tt.role, todo.Agents)

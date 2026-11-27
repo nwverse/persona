@@ -134,6 +134,12 @@ const (
 // be clipped shorter: the hub's sentence for the code (StartErrorCode) is bounded, and its remedy comes last (#1642).
 const CodedStartErrorMax = 600
 
+// TitleMax is the most runes a session's title has in a list of sessions or a session frame (#16343): the node, the
+// manager and the hub cut a longer one (transcript.ListTitle), and the list answers' rows were already cut to it. A
+// title that long is an opening prompt an agent stored as its title (a Codex thread name, a runtime's own title),
+// which no row shows; the transcript keeps the prompt whole.
+const TitleMax = 256
+
 // ToolLoop is a node-detected repetition. It contains no tool input or output.
 // Since identifies the start of this repetition within the current turn.
 type ToolLoop struct {
@@ -235,12 +241,31 @@ type Session struct {
 	// optional effort metadata within the row size budget.
 	PendingEffort      *string `json:"pending_effort,omitempty"`
 	EffortChangeFailed bool    `json:"effort_change_failed,omitempty"`
+	// ContextRestartRecommended: the latest three measured requests each used over 300,000 input
+	// tokens since the last compaction. Omitted when false or the runtime has no request-level evidence.
+	// Kept with EffortChangeFailed so it fits the row's allocation size class.
+	ContextRestartRecommended bool `json:"context_restart_recommended,omitempty"`
 	// OffLauncher: Persona started this Claude Code Agent on Launcher, but the claude that runs it now was not started
 	// by Persona's command (it lacks Persona's --mcp-config): herdr's bare `claude --resume <id>` after a restart on a
 	// herdr older than 0.9.2, or a resume typed by hand (#11792). Launcher's settings, model, MCP and hooks do not
 	// apply to it, and a launcher switch to Launcher itself brings it back there. Beside EffortChangeFailed, in its
 	// padding: a Session stays in its allocation size class.
 	OffLauncher bool `json:"off_launcher,omitempty"`
+	// NativeTurnVerified says the AGY terminal's working or done status is backed by its current transcript and lifecycle hook.
+	NativeTurnVerified bool `json:"native_turn_verified,omitempty"`
+	// LogicalPlaceholder is manager-internal provenance: this row stands in for a logical conversation whose active
+	// physical segment is not listed. Its Assistant identity comes from the logical root, not from a physical Cwd.
+	// Kept with NativeTurnVerified beside BackgroundStalledSince so Session stays in its allocation size class.
+	LogicalPlaceholder bool `json:"-"`
+	// BackgroundStalledSince (#13744, #16418): the time since which this session's background commands have used no CPU
+	// and written no output, set while the turn is over once that lasted the node's grace (ten minutes for a known
+	// worker such as a build, tests or a download; three for a process it does not know or a command moved from the
+	// foreground; two for shells gone from under the live claude). Beside a subagent, workflow or Monitor, state stays
+	// working and this only tells a client the work looks stuck; when stalled background commands are all that is left,
+	// the manager leaves the finished turn's own state and the task's turn settles. Zero (omitted) otherwise. Whole
+	// seconds in a uint32, in the padding before Ultracode: a Session stays in its allocation size class
+	// (TestSessionFitsItsSizeClass).
+	BackgroundStalledSince UnixTime32 `json:"background_stalled_since,omitempty"`
 	// Ultracode is Claude Code's independent session-only workflow switch: nil means unknown.
 	// UltracodePending (beside AsksRead) means a requested change waits for an idle input box; LostAt asks the client
 	// to offer reopening after a resumed process reset an enabled switch. Reopening or dismissing the notice clears
@@ -438,8 +463,9 @@ type Session struct {
 	// rollout's own rate limits), else what the hub reads off Claude Code's words when they name a time zone. Nil: not
 	// known, and nothing waits for it. Only a subscription's limit has one: a gateway's or an API key's 429 never does.
 	TurnErrorResetsAt *time.Time `json:"turn_error_resets_at,omitempty"`
-	// TurnErrorCode says what is wrong when the hub can tell from TurnError (docs/assistant/onboarding.md 5.2): one of the
-	// TurnErrorCode* values, for a card that says what to fix (sign in, the key, the model). Empty: not known.
+	// TurnErrorCode says what is wrong when the hub or node can tell from TurnError (docs/assistant/onboarding.md 5.2):
+	// one of the TurnError* values below, for a client fix card (sign in, the key, the model) or for upstream-stall
+	// visibility (TurnErrorUpstreamUnavailable). Empty: not known.
 	TurnErrorCode string `json:"turn_error_code,omitempty"`
 	// ModelFallback is the refusal fallback still active in this session, as the runtime recorded it.
 	ModelFallback *ModelRefusal `json:"model_fallback,omitempty"`
@@ -528,6 +554,13 @@ const (
 	// TurnErrorToolSearchUnsupported: the gateway refused Claude Code's on-demand tool loading (tool search, #10365). The
 	// node now starts that launcher and model with every tool loaded, so a retry works: not the user's to fix.
 	TurnErrorToolSearchUnsupported = "tool_search_unsupported"
+	// TurnErrorUpstreamUnavailable: the model gateway reported an exhausted upstream account pool, or the session hit >= 2
+	// consecutive upstream 5xx turns with no assistant progress in between (#13372). Visibility label: TurnErrorKind stays
+	// transient unless another rule marks it.
+	TurnErrorUpstreamUnavailable = "upstream_unavailable"
+	// TurnErrorImagesTooLarge: accumulated pictures in the conversation exceed the model API's size, count or dimension
+	// limit (#13045). Compacting the conversation clears older pictures so the failed turn can be sent again.
+	TurnErrorImagesTooLarge = "images_too_large"
 )
 
 // Codes a call refuses with when the assistant's conversation cannot start on a machine (docs/assistant/onboarding.md 4.6, 5.2):
@@ -544,6 +577,10 @@ const (
 	// CodeAgentStartStalled: the agent opened but its session never became identifiable. This says nothing about
 	// launcher health and must not trigger an automatic retry or a health detour.
 	CodeAgentStartStalled = "agent_start_stalled"
+	// CodeCodexNotLoggedIn: a Codex start met Codex's sign-in screen (node/codex_start.go): Codex has no login on that
+	// computer, so no wait would bring its session up. The launcher's sign-in (launcher health's auth), not a stalled
+	// start; the new tab is closed, and someone runs `codex login` on that computer.
+	CodeCodexNotLoggedIn = "codex_not_logged_in"
 	// CodeShellWaiting: the new tab's shell stopped on a question of its startup files (an update prompt, [Y/n]) before
 	// the start command was typed (#2570). Nothing ran; the tab is kept a while for someone to answer (node/shellsettle.go).
 	CodeShellWaiting = "shell_waiting"
@@ -554,6 +591,10 @@ const (
 	// would act on when an engine types the directory (Orca's `cd`, node/hostorca_launch.go). Nothing ran; a refusal of
 	// the request, not the launcher's fault.
 	CodeDirectoryUntypable = "directory_untypable"
+	// CodeAgyCompanionOffline: the start named HostAgy on a computer whose Antigravity companion is not connected
+	// (node/starthost.go). Nothing ran. A task start the hub sent there by default starts again in the computer's
+	// default host (assistant/tasks_placement.go, #13447); one that named the host is refused.
+	CodeAgyCompanionOffline = "agy_companion_offline"
 )
 
 // Codes session.modes refuses with (node/modes.go), the text in the request's language (apierr.Call). 409.
@@ -566,6 +607,16 @@ const (
 	// CodeModesUnsupported: an agent in a terminal whose mode, effort and model are its start's (cursor, agy).
 	CodeModesUnsupported    = "modes_unsupported"
 	CodeEffortChangePending = "effort_change_pending"
+	// A Codex on the terminal route, whose model and effort the node types as `/model <model> --reasoning=<level>`
+	// (node/codex_terminal_modes.go, #12572). CodeModesCodexVersion: a Codex older than 0.169 started the session, and
+	// its /model takes no arguments. CodeModesCodexNoRollout: the session has no rollout yet to confirm a change by.
+	// CodeModesCodexRefused: Codex answered the command with a refusal; the message is Codex's own words.
+	// CodeModesCodexUnconfirmed: the command went in, and the rollout did not record the change in time (delivered
+	// "unknown": it may still have taken).
+	CodeModesCodexVersion     = "modes_codex_version"
+	CodeModesCodexNoRollout   = "modes_codex_no_rollout"
+	CodeModesCodexRefused     = "modes_codex_refused"
+	CodeModesCodexUnconfirmed = "modes_codex_unconfirmed"
 )
 
 // CodeNotLoaded is what session.items and session.item refuse with when reading the session would start its agent: an
@@ -661,8 +712,9 @@ const (
 
 // TodoRef names a session's associated todo; Session.Todo is active, CompletedTodo() is display-only history.
 type TodoRef struct {
-	ID    string `json:"id"`
-	Title string `json:"title"`
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	Cancelled bool   `json:"cancelled,omitempty"`
 }
 
 // SourceRuntime is the source_kind of a session an agent runtime lists (docs/integrations/runtimes.md): source_instance_id names
@@ -742,7 +794,7 @@ type QueueEdit struct {
 	Images [][]Image `json:"images,omitempty"`
 }
 
-// ServiceTier is a speed advertised by the native Codex model catalog.
+// ServiceTier is an advertised running-session speed or a native Codex catalog tier.
 type ServiceTier struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
@@ -761,4 +813,43 @@ const ContextNearlyFullShare = 0.85
 // ContextNearlyFull: what the model saw in the latest reply fills ContextNearlyFullShare of its window (both known).
 func ContextNearlyFull(tokens, window int) bool {
 	return window > 0 && tokens > 0 && float64(tokens) >= ContextNearlyFullShare*float64(window)
+}
+
+// UnixTime32 is a time in whole seconds since the epoch (zero: not set) that is sent as RFC 3339 like the other times;
+// four bytes, so that it fits the padding in Session.
+type UnixTime32 uint32
+
+// UnixTime32Of is t as a UnixTime32 (zero for the zero time and for times it cannot hold).
+func UnixTime32Of(t time.Time) UnixTime32 {
+	if t.IsZero() || t.Unix() <= 0 || t.Unix() > 1<<32-1 {
+		return 0
+	}
+	return UnixTime32(t.Unix())
+}
+
+// Time is the time it holds (the zero time when not set).
+func (u UnixTime32) Time() time.Time {
+	if u == 0 {
+		return time.Time{}
+	}
+	return time.Unix(int64(u), 0).UTC()
+}
+
+// MarshalJSON writes null for a zero one, so that a Session leaves it out of every encoder's output.
+func (u UnixTime32) MarshalJSON() ([]byte, error) {
+	if u == 0 {
+		return []byte("null"), nil
+	}
+	return u.Time().MarshalJSON()
+}
+
+func (u *UnixTime32) UnmarshalJSON(b []byte) error {
+	var t time.Time
+	if string(b) != "null" {
+		if err := t.UnmarshalJSON(b); err != nil {
+			return err
+		}
+	}
+	*u = UnixTime32Of(t)
+	return nil
 }

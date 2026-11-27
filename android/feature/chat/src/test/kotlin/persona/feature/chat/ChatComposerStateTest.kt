@@ -8,11 +8,17 @@ import org.robolectric.annotation.Config
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.core.content.FileProvider
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
 import org.junit.Test
 import persona.core.contracts.HubScope
 import persona.core.contracts.JsonCodec
+import persona.core.contracts.ProtocolCompatibility
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.*
 import persona.core.domain.AttachedFile
@@ -78,6 +84,33 @@ class ChatComposerStateTest {
         assertFalse(state.hasContent)
     }
 
+    @Test fun independentAttachmentUpdatesDoNotRestoreAnotherUploadsStaleState() = runTest {
+        val first = ComposerAttachment("first", "first.png", "content://example.com/first", true)
+        val second = ComposerAttachment("second", "second.png", "content://example.com/second", true)
+        val state = ChatComposerState(ChatComposerDraft(attachments = listOf(first, second)))
+        val firstRead = CompletableDeferred<Unit>()
+        val finish = CompletableDeferred<Unit>()
+        fun upload(attachment: ComposerAttachment) = async(Dispatchers.Default + SupervisorJob()) {
+            // Each upload used to read and later replace this whole list. Per-id updates must keep the other result.
+            state.updateAttachment(attachment.id) { it.copy(uploadState = DraftUploadState.Uploading) }
+            firstRead.complete(Unit)
+            finish.await()
+            state.updateAttachment(attachment.id) {
+                it.copy(path = "/up/${attachment.name}", uploadState = DraftUploadState.Uploaded)
+            }
+        }
+        val uploads = listOf(upload(first), upload(second))
+        firstRead.await()
+        finish.complete(Unit)
+        uploads.awaitAll()
+
+        assertEquals(listOf("/up/first.png", "/up/second.png"), state.attachments.map { it.path })
+        assertEquals(listOf("first", "second"), state.attachments.map { it.id })
+        assertTrue(state.attachments.all { it.uploadState == DraftUploadState.Uploaded })
+        assertTrue(state.ready)
+        assertTrue(state.message().endsWith("<attached_images>\n/up/first.png\n/up/second.png\n</attached_images>"))
+    }
+
     @Test fun photosAloneSayPleaseLookAndKeepTheirTag() {
         val photo = ComposerAttachment("photo", "photo.jpg", "content://example.com/photo", true, "/tmp/photo.jpg",
             uploadState = DraftUploadState.Uploaded)
@@ -130,12 +163,17 @@ class ChatComposerStateTest {
     @Test fun forwardedContextKeepsItsOwnFileTagsOutOfTheNewAttachments() {
         val nested = AttachedFile("file", "/up/quoted.txt", "quoted.txt", 10).toXml()
         val own = AttachedFile("file", "/up/own.txt", "own.txt", 20).toXml()
-        val raw = "Review\n\n<persona-context kind=\"quote\">\n$nested\n</persona-context>\n\n$own"
-        val edited = ChatComposerState().apply { editMessage(raw) }
-        assertEquals(listOf("/up/own.txt"), edited.attachments.map { it.path })
-        assertTrue(edited.value.text.contains(nested))
-        assertFalse(edited.value.text.contains(own))
-        assertEquals(raw, edited.message())
+        val canonical = "Review\n\n<persona-context kind=\"quote\">\n$nested\n<attached_images>\n/up/quoted.jpg\n</attached_images>\n</persona-context>\n\n$own"
+        val legacy = ProtocolCompatibility.messageForHub(canonical)
+        assertNotEquals(canonical, legacy)
+        for (raw in listOf(canonical, legacy)) {
+            val edited = ChatComposerState().apply { editMessage(raw) }
+            assertEquals(listOf("/up/own.txt"), edited.attachments.map { it.path })
+            assertTrue(edited.value.text.contains("/up/quoted.txt"))
+            assertTrue(edited.value.text.contains("/up/quoted.jpg"))
+            assertFalse(edited.value.text.contains("/up/own.txt"))
+            if (raw == canonical) assertEquals(raw, edited.message())
+        }
     }
 
     @Test fun tenFilesFitButTheEleventhHasNoPlace() {

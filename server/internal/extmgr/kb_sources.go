@@ -11,9 +11,9 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/connector"
-	"github.com/nwverse/persona/server/internal/connector/imessage"
 	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/imessagewire"
 	"github.com/nwverse/persona/server/internal/kb"
 	"github.com/nwverse/persona/server/internal/kbwire"
 )
@@ -76,7 +76,7 @@ func (h *Manager) kbSourcesCall(ctx context.Context, p assistantwire.AppCall) (j
 		var arch connector.Archive
 		if arch, err = h.kbArchive(ctx, a.ID); err == nil {
 			var res assistantwire.ChangesResult
-			if a.ID == imessage.ID {
+			if a.ID == imessagewire.ID {
 				if a.FenceVersion != assistantwire.ArchiveFenceV1 {
 					return nil, true, errors.New("iMessage archive requires commit fencing")
 				}
@@ -139,8 +139,12 @@ func (h *Manager) kbArchives(ctx context.Context) assistantwire.Archives {
 	if h.connectors == nil {
 		return out
 	}
+	h.enforceIMessageVisibility()
 	h.reconcileIMessageAI(ctx)
 	for _, c := range h.connectors.All() {
+		if h.inboxVisibilityBlocksSource(c.ID()) {
+			continue
+		}
 		a, archive := connector.As[connector.Archive](c)
 		_, items := connector.As[connector.Items](c)
 		if (!archive && !items) || !h.connectors.Feeds(c.ID(), connector.FeedArchive) || connector.StatusOf(ctx, c).State != connector.StateOK || ctx.Err() != nil {
@@ -157,7 +161,7 @@ func (h *Manager) kbArchives(ctx context.Context) assistantwire.Archives {
 		_, anchors := connector.As[connector.HistoryAnchors](c)
 		src := assistantwire.ArchiveSource{ID: c.ID(), PollMS: c.Manifest().Poll.Milliseconds(),
 			Sources: h.archiveSources(c), Media: media, History: history, HistoryAnchors: history && anchors}
-		if c.ID() == imessage.ID {
+		if c.ID() == imessagewire.ID {
 			src.FenceVersion = assistantwire.ArchiveFenceV1
 		}
 		out.Archives = append(out.Archives, src)
@@ -169,6 +173,9 @@ func (h *Manager) kbArchives(ctx context.Context) assistantwire.Archives {
 			h.logf("kb: subscriptions: %v", err)
 		}
 		for _, id := range ids {
+			if h.inboxVisibilityBlocksSource(id) {
+				continue
+			}
 			out.Archives = append(out.Archives, assistantwire.ArchiveSource{ID: id})
 		}
 	}
@@ -178,6 +185,9 @@ func (h *Manager) kbArchives(ctx context.Context) assistantwire.Archives {
 // kbArchive is connector id's archive, while the user lets it into the knowledge base; or subscription id's (#2039),
 // which answers errArchiveOff-like itself while its knowledge base is off.
 func (h *Manager) kbArchive(ctx context.Context, id string) (connector.Archive, error) {
+	if h.inboxVisibilityBlocksSource(id) {
+		return nil, errArchiveOff
+	}
 	c := h.connectorByID(id)
 	if c == nil && h.subs != nil && h.subs.IsSubscription(ctx, id) {
 		return subscriptionArchive{h.subs, id}, nil
@@ -314,7 +324,7 @@ func (h *Manager) forgetArchiveSources(c connector.Connector) []string {
 // Other connectors supply their owner's hints with Mine messages while the user lets them into the KB.
 func (h *Manager) kbConnectorOwner(ctx context.Context) (assistantwire.KBOwnerSources, error) {
 	out := assistantwire.KBOwnerSources{Sources: []assistantwire.KBOwnerSource{}}
-	if h.mail == nil || h.connectors == nil || !h.connectors.Feeds("mail", connector.FeedArchive) {
+	if h.mail == nil || h.connectors == nil || h.inboxVisibilityBlocksSource("mail") || !h.connectors.Feeds("mail", connector.FeedArchive) {
 		return out, nil
 	}
 	accounts, err := h.mail.ListAccounts()

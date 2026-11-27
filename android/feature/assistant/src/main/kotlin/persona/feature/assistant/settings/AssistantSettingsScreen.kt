@@ -20,13 +20,16 @@ import persona.core.contracts.Machine
 import persona.core.contracts.SessionKey
 import persona.core.contracts.api.AssistantConfig
 import persona.core.contracts.api.AssistantManagement
+import persona.core.contracts.api.AssistantPagesFeature
 import persona.core.contracts.api.AssistantRepository
 import persona.core.contracts.api.BackgroundSupervisor
+import persona.core.contracts.api.HubManagers
 import persona.core.designsystem.*
 import persona.core.designsystem.icons.PhIcon
 import persona.core.designsystem.icons.PersonaIcons
 import persona.core.designsystem.icons.PhIcons
 import persona.feature.assistant.LocalAssistantHost
+import persona.feature.assistant.LocalAssistantManagers
 import persona.feature.assistant.R
 import persona.feature.assistant.assistantAttempt
 import persona.feature.assistant.conversationTime
@@ -62,13 +65,15 @@ internal fun AssistantSettingsScreen(
     /** Opens Settings › Standing Authorizations; null leaves the row out (shots of this page stay as they were). */
     onStandingAuthorizations: (() -> Unit)? = null,
     initialManager: String? = null,
+    /** Existing manager API shared by Settings; test hosts may provide it through [management] or the composition local. */
+    managers: HubManagers? = management as? HubManagers ?: LocalAssistantManagers.current,
 ) {
     // The current assistant's profile (docs/assistant/managers.md "Clients"); another one current, the page reads that one's.
     val owner = initialManager?.takeIf(String::isNotBlank) ?: persona.core.designsystem.currentAssistant().id
     key(management, owner) {
         val scoped = remember(management, owner) { management.forManager(owner) }
         AssistantSettingsDetails(scoped, machines, onBack, onMoved, inPlace, onOpenConversation, onModelConfiguration,
-            onStandingAuthorizations, owner, conversations)
+            onStandingAuthorizations, owner, conversations, managers)
     }
 }
 
@@ -77,7 +82,7 @@ private fun AssistantSettingsDetails(
     management: AssistantManagement, machines: List<Machine>, onBack: () -> Unit, onMoved: suspend () -> Unit,
     inPlace: Boolean, onOpenConversation: (SessionKey) -> Unit, onModelConfiguration: ((String, String) -> Unit)?,
     onStandingAuthorizations: (() -> Unit)?,
-    owner: String, conversations: AssistantRepository?,
+    owner: String, conversations: AssistantRepository?, managers: HubManagers?,
 ) {
     val context = LocalContext.current
     val moved by rememberUpdatedState(onMoved)
@@ -176,6 +181,8 @@ private fun AssistantSettingsDetails(
             foldBackground = { scope.launch { controller.setMainBackgroundFolded(it) } },
             recentTaskChats = { scope.launch { controller.setRecentTaskChats(it) } },
             nextSuggestions = { scope.launch { controller.setNextSuggestions(it) } },
+            dashboards = { scope.launch { controller.setDashboards(it) } },
+            showDashboards = dashboardsShown(LocalHubFeatures.current, owner, LocalManagerRoster.current?.defaultManagerId),
             superviseOwn = { scope.launch { controller.setMainSupervisesOwnTasks(it) } },
             closeEndedTerminals = { scope.launch { controller.setCloseEndedTerminals(it) } },
             ownerApproval = { scope.launch { controller.setOwnerReplyApproval(it) } },
@@ -184,7 +191,7 @@ private fun AssistantSettingsDetails(
             supervisorModel = onModelConfiguration?.let { open -> { open(BackgroundSupervisor.PURPOSE, owner) } },
             onStandingAuthorizations = onStandingAuthorizations, standingCount = standingCount,
             owner = owner, permission = { scope.launch { controller.setDefaultPermission(it) } },
-            showSavedPrompts = savedPrompts != null)
+            showSavedPrompts = savedPrompts != null, managers = managers, preview = preview)
         SettingsPart.Prompts -> {
             if (savedPrompts != null) key(savedPrompts) { SavedPromptsPage(savedPrompts) { part = SettingsPart.Home } }
             else JListPage(title = stringResource(R.string.assistant_saved_prompts_title), onBack = { part = SettingsPart.Home }) {
@@ -236,6 +243,13 @@ private fun AssistantSettingsDetails(
     }
 }
 
+/**
+ * Whether Settings › Assistant shows the Dashboards switch (#15017): the hub says `assistant_pages`, which only its default
+ * manager announces, and the page is that assistant's ([defaultManager]; a hub without a roster has only the one).
+ */
+internal fun dashboardsShown(features: Set<String>, owner: String, defaultManager: String?): Boolean =
+    AssistantPagesFeature in features && owner == (defaultManager ?: persona.core.contracts.api.ManagerRoster.ASSISTANT_MANAGER)
+
 @Composable
 internal fun Caption(text: String) {
     Text(text, Modifier.padding(top = Tokens.Space.s, start = Tokens.Space.xs, end = Tokens.Space.xs),
@@ -277,6 +291,9 @@ private fun SettingsHome(
     foldBackground: (Boolean) -> Unit = {},
     recentTaskChats: (Boolean) -> Unit = {},
     nextSuggestions: (Boolean) -> Unit = {},
+    dashboards: (Boolean) -> Unit = {},
+    /** The hub says `assistant_pages` and this page is the default assistant's (#15017): the Dashboards switch shows. */
+    showDashboards: Boolean = false,
     superviseOwn: (Boolean) -> Unit = {},
     closeEndedTerminals: (Boolean) -> Unit = {},
     ownerApproval: (Boolean) -> Unit = {},
@@ -290,7 +307,18 @@ private fun SettingsHome(
     owner: String = persona.core.contracts.api.ManagerRoster.ASSISTANT_MANAGER,
     permission: (String) -> Unit = {},
     showSavedPrompts: Boolean = false,
+    managers: HubManagers? = null,
+    preview: String? = null,
 ) {
+    val roster = LocalManagerRoster.current
+    val manager = roster?.manager(owner)?.takeUnless { it.isInstalling }
+    var confirmedName by remember(owner) { mutableStateOf<Pair<String, String>?>(null) }
+    val identityName = confirmedName?.takeIf { manager != null && it.first == manager.shownName }?.second
+        ?: manager?.shownName ?: LocalPersonaName.current
+    var renaming by remember(owner) { mutableStateOf(preview == "rename") }
+    var renameBusy by remember(owner) { mutableStateOf(false) }
+    var renameFailed by remember(owner) { mutableStateOf(false) }
+    val renameScope = rememberCoroutineScope()
     val config = state.config
     val ready = config != null && !state.busy
     val resources = LocalResources.current
@@ -298,6 +326,18 @@ private fun SettingsHome(
         title = stringResource(R.string.assistant_settings_title), onBack = onBack, refreshing = state.loading && config != null, onRefresh = onRefresh,
         summary = config?.let { stringResource(R.string.assistant_settings_summary, machineName) },
     ) {
+        item("identity") {
+            JGroupItem(GroupPosition.Single) {
+                if (manager == null) {
+                    JRow(stringResource(R.string.assistant_settings_name), value = identityName,
+                        leadingIcon = PersonaIcons.person)
+                } else {
+                    JRow(stringResource(R.string.assistant_settings_rename), value = identityName,
+                        leadingIcon = PersonaIcons.edit, enabled = !renameBusy, chevron = false,
+                        onClick = { renameFailed = false; renaming = true })
+                }
+            }
+        }
         if (state.loadFailed) item("load-failed") {
             JNotice(stringResource(R.string.assistant_settings_load_failed), status = Status.NeedsYou,
                 actionLabel = stringResource(R.string.assistant_settings_retry), onAction = onRefresh)
@@ -418,6 +458,16 @@ private fun SettingsHome(
                 item("next-suggestions-caption") { Caption(stringResource(R.string.assistant_settings_next_suggestions_caption)) }
             }
 
+            // #15017: Dashboards, off by default (absent is off); only on a hub that says assistant_pages, for its default assistant.
+            if (showDashboards) {
+                item("dashboards") { JSectionHeader(stringResource(R.string.assistant_settings_dashboards_header)) }
+                rows("dashboards", listOf(
+                    { JSwitchRow(stringResource(R.string.assistant_settings_dashboards), config.dashboards ?: false, dashboards,
+                        leadingIcon = PersonaIcons.pluginChart, enabled = !state.busy) },
+                ))
+                item("dashboards-caption") { Caption(stringResource(R.string.assistant_settings_dashboards_caption)) }
+            }
+
             // #4927 / #5084: the background supervisor's off switch and its model, shown only by a hub that has it.
             // The model row is there whichever way the switch is, as Settings › Model configuration lists the use: one
             // rule for both pages. Its current value is on the page it opens.
@@ -488,6 +538,42 @@ private fun SettingsHome(
             ))
             item("reach-caption") { Caption(stringResource(R.string.assistant_settings_reach_caption)) }
         }
+    }
+    if (renaming) {
+        JManagerNameDialog(
+            title = stringResource(R.string.assistant_settings_rename),
+            confirm = stringResource(R.string.assistant_settings_save),
+            initial = identityName,
+            busy = renameBusy,
+            failure = stringResource(R.string.assistant_settings_save_failed).takeIf { renameFailed },
+            placeholder = stringResource(R.string.assistant_settings_name_placeholder),
+            invalidName = stringResource(R.string.assistant_settings_name_invalid),
+            onDismiss = { if (!renameBusy) renaming = false },
+            onConfirm = { typed ->
+                val api = managers
+                val current = manager
+                if (api == null || current == null || renameBusy) {
+                    if (!renameBusy) renameFailed = true
+                } else {
+                    renameScope.launch {
+                        renameBusy = true
+                        renameFailed = false
+                        try {
+                            val renamed = api.rename(current.id, typed.trim())
+                            // Show the confirmed value at once; the next roster value then owns every surface.
+                            confirmedName = current.shownName to renamed.shownName
+                            renaming = false
+                        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                            throw cancelled
+                        } catch (_: Exception) {
+                            renameFailed = true
+                        } finally {
+                            renameBusy = false
+                        }
+                    }
+                }
+            },
+        )
     }
 }
 

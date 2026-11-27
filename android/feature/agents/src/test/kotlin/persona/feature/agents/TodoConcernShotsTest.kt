@@ -40,6 +40,7 @@ import persona.core.contracts.Supervision
 import persona.core.contracts.TaskReview
 import persona.core.contracts.Todo
 import persona.core.contracts.TodoAgent
+import persona.core.contracts.TodoPRStatus
 import persona.core.designsystem.AppStyle
 import persona.core.designsystem.PersonaTheme
 
@@ -89,7 +90,7 @@ class TodoConcernShotsTest {
     private fun textLayout(text: String): TextLayoutResult {
         val node = rule.onNodeWithText(text, useUnmergedTree = true).fetchSemanticsNode()
         val layouts = mutableListOf<TextLayoutResult>()
-        node.config[SemanticsActions.GetTextLayoutResult].action!!(layouts)
+        val _ = node.config[SemanticsActions.GetTextLayoutResult].action!!(layouts)
         return layouts.single()
     }
 
@@ -120,8 +121,11 @@ class TodoConcernShotsTest {
         assertTrue("Other open", has(if (chinese) "其他未完成" else "Other open"))
         assertTrue("Just finished", has(if (chinese) "刚做完" else "Just finished"))
         assertTrue("the working concern keeps its state tag", has(if (chinese) "进行中" else "In progress"))
+        val tracking = if (chinese) "跟进中" else "Tracking"
         val notStarted = if (chinese) "未开始" else "Not started"
-        assertEquals("the open concern and ordinary row both keep their state tags", 2,
+        assertEquals("the open concern shows Tracking instead of Not started", 1,
+            rule.onAllNodesWithText(tracking, useUnmergedTree = true).fetchSemanticsNodes().size)
+        assertEquals("only the ordinary unstarted row shows Not started", 1,
             rule.onAllNodesWithText(notStarted, useUnmergedTree = true).fetchSemanticsNodes().size)
         titles.forEach { title -> assertTrue("missing title $title", has(title)) }
         val shotBounds = rule.onNodeWithTag("shot").fetchSemanticsNode().boundsInRoot
@@ -199,8 +203,10 @@ class TodoConcernShotsTest {
     }
 
     @Test fun closedConcernInExpandedRelatedRowIsLabelled() {
+        // Two reported concerns keep one in the related row; an ordinary completed task is directly Done (#5732).
         val list = listOf(
-            Todo("ordinary", title = "Morning work", createdAt = ago(500), updatedAt = ago(30), doneAt = ago(30), planId = "p1"),
+            Todo("ordinary", title = "Morning work", createdAt = ago(500), updatedAt = ago(30), doneAt = ago(30), planId = "p1")
+                .withKind("concern"),
             Todo("concern", title = "Morning answer", createdAt = ago(500), updatedAt = ago(60), doneAt = ago(60), doneBy = "reported", planId = "p1")
                 .withKind("concern"),
         )
@@ -215,13 +221,120 @@ class TodoConcernShotsTest {
         rule.onNodeWithText("1 related", useUnmergedTree = true).performClick()
         rule.waitForIdle()
         assertTrue(has("Morning answer"))
-        assertEquals(1, rule.onAllNodesWithContentDescription("Concern", useUnmergedTree = true).fetchSemanticsNodes().size)
-        assertEquals("the section heading and the related line's section tag", 2,
-            rule.onAllNodesWithText("Just finished", useUnmergedTree = true).fetchSemanticsNodes().size)
+        assertEquals("both reported concerns are labelled", 2,
+            rule.onAllNodesWithContentDescription("Concern", useUnmergedTree = true).fetchSemanticsNodes().size)
         val bitmap = rule.onNodeWithTag("shot").captureToImage().asAndroidBitmap()
         File(out(), "todos-concerns-related-glass-light-en.png").outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        val labelCounts = listOf("Just finished", "Delivered · awaiting review").associateWith {
+            rule.onAllNodesWithText(it, useUnmergedTree = true).fetchSemanticsNodes().size
+        }
+        assertEquals("the section heading and the related line's section tag; labels=$labelCounts", 2,
+            rule.onAllNodesWithText("Just finished", useUnmergedTree = true).fetchSemanticsNodes().size)
+    }
+
+    @Config(qualifiers = "ja-w400dp-h1400dp-xhdpi")
+    @Test fun closedConcernJapaneseSectionAndRelatedRowStayJustFinished() {
+        val list = listOf(
+            Todo("ordinary", title = "Morning work", createdAt = ago(500), updatedAt = ago(30), doneAt = ago(30), planId = "p1")
+                .withKind("concern"),
+            Todo("concern", title = "Morning answer", createdAt = ago(500), updatedAt = ago(60), doneAt = ago(60), doneBy = "reported", planId = "p1")
+                .withKind("concern"),
+        )
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
+                Box(Modifier.testTag("shot").width(400.dp).height(1400.dp).background(PersonaTheme.palette.background)) {
+                    TodosScreen(list, emptyList(), null, onBack = {}, onOpenTodo = {}, now = now)
+                }
+            }
+        }
+        rule.waitForIdle()
+        rule.onNodeWithText("関連 1 件", useUnmergedTree = true).performClick()
+        rule.waitForIdle()
+        assertEquals("Japanese section heading and related line", 2,
+            rule.onAllNodesWithText("完了したばかり", useUnmergedTree = true).fetchSemanticsNodes().size)
+        assertFalse("a reported concern is not awaiting review", has("交付済み・確認待ち"))
     }
 
     @Config(fontScale = 2f)
     @Test fun glassLightEnglishLargeFont() = shot(AppStyle.Glass, false, large = true)
+
+    @Test fun openPrTodosShowPrStatusInsteadOfNotStartedInListAndDetail() {
+        val checked = ago(2)
+        val mergePr = Todo(
+            "pr-ready",
+            title = "Ship parser fix",
+            createdAt = ago(120), updatedAt = ago(5), origin = "conv",
+            prUrl = "https://github.com/org/repo/pull/101",
+            prStatus = TodoPRStatus(
+                url = "https://github.com/org/repo/pull/101",
+                state = "open", draft = false, review = "approved", checks = "success", conflicts = false, checkedAt = checked,
+            ),
+        )
+        val conflictPr = Todo(
+            "pr-conflict",
+            title = "Rebase storage layer",
+            createdAt = ago(110), updatedAt = ago(4), origin = "conv",
+            prUrl = "https://github.com/org/repo/pull/102",
+            prStatus = TodoPRStatus(
+                url = "https://github.com/org/repo/pull/102",
+                state = "open", draft = false, review = "changes_requested", checks = "failure", conflicts = true, checkedAt = checked,
+            ),
+        )
+        val draftPr = Todo(
+            "pr-draft",
+            title = "WIP draft work",
+            createdAt = ago(100), updatedAt = ago(3), origin = "conv",
+            prUrl = "https://github.com/org/repo/pull/103",
+            prStatus = TodoPRStatus(
+                url = "https://github.com/org/repo/pull/103",
+                state = "open", draft = true, review = "pending", checks = "none", conflicts = false, checkedAt = checked,
+            ),
+        )
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
+                Box(Modifier.width(400.dp).height(1400.dp).background(PersonaTheme.palette.background)) {
+                    TodosScreen(listOf(mergePr, conflictPr, draftPr), emptyList(), null, onBack = {}, onOpenTodo = {}, now = now)
+                }
+            }
+        }
+        rule.waitForIdle()
+        rule.onNodeWithText("Waiting to merge", useUnmergedTree = true).assertIsDisplayed()
+        rule.onNodeWithText("Merge conflicts", useUnmergedTree = true).assertIsDisplayed()
+        assertEquals("only the draft PR stays Not started", 1,
+            rule.onAllNodesWithText("Not started", useUnmergedTree = true).fetchSemanticsNodes().size)
+    }
+
+    @Test fun detailScreenShowsTrackingForOpenConcernAndMergeStatusForOpenPr() {
+        val checked = ago(2)
+        val prTodo = Todo(
+            "detail-pr",
+            title = "PR detail item",
+            createdAt = ago(60), updatedAt = ago(5), origin = "conv",
+            prUrl = "https://github.com/org/repo/pull/205",
+            prStatus = TodoPRStatus(
+                url = "https://github.com/org/repo/pull/205",
+                state = "open", draft = false, review = "required", checks = "success", conflicts = false, checkedAt = checked,
+            ),
+        )
+        rule.setContent {
+            PersonaTheme(darkTheme = false, reduceMotion = true, style = AppStyle.Glass) {
+                Box(Modifier.width(400.dp).height(1000.dp).background(PersonaTheme.palette.background)) {
+                    TodoDetailScreen(
+                        todoId = prTodo.id,
+                        todos = listOf(prTodo),
+                        machines = emptyList(),
+                        sessions = emptyList(),
+                        tasks = null,
+                        onBack = {},
+                        onOpenSession = {},
+                        onHandOff = {},
+                        now = now,
+                    )
+                }
+            }
+        }
+        rule.waitForIdle()
+        rule.onNodeWithText("In review", useUnmergedTree = true).assertIsDisplayed()
+        assertFalse("detail screen must not show Not started for open PR", has("Not started"))
+    }
 }

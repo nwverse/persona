@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.filter
@@ -99,9 +100,12 @@ class PersonaApp : Application() {
         capsule.start()
         restorePairing()
         errorReporting.start(scope, hub)
+        scope.launch(Dispatchers.IO) {
+            val _ = runCatching { persona.android.assist.AssistScreenshotStore.pruneExpired(this@PersonaApp) }
+        }
         scope.launch {
             connection.state.map { it == persona.core.contracts.api.ConnectionState.Online }.distinctUntilChanged()
-                .collect { online -> if (online) runCatching { personas.refresh() } }
+                .collect { online -> if (online) { val _ = runCatching { personas.refresh() } } }
         }
         // Theme color for the app's other windows (share, the capsule, dialogs): the main one provides the same accent itself.
         scope.launch {
@@ -111,14 +115,31 @@ class PersonaApp : Application() {
         }
         // Light/dark for what Compose does not draw (WebView pages, system dialogs) too: the app's own night mode.
         scope.launch { appearance.scheme.collect { applyNightMode(it) } }
+        // Placed widgets follow AppStyleStore and the active persona package; redraw them when style, theme color, or
+        // the package's colours change.
+        scope.launch {
+            persona.platform.shortcuts.PersonaWidget
+                .appearanceChanges(appearance.style, appearance.color, personas.current)
+                .collect {
+                    persona.platform.shortcuts.PersonaWidget.refresh(this@PersonaApp)
+                    persona.platform.shortcuts.AskPersonaWidget.refresh(this@PersonaApp)
+                    persona.platform.shortcuts.MainChatWidget.refresh(this@PersonaApp)
+                }
+        }
+        // MainChatWidget also honors the app's explicit light/dark override.
+        scope.launch {
+            appearance.scheme.drop(1).collect {
+                persona.platform.shortcuts.MainChatWidget.refresh(this@PersonaApp)
+            }
+        }
         // A tiered look moved to another tier: the new tier is downloaded whole before the face changes. The two events
         // are taken off the event flow first, so the download holds up no other live event (#4038).
         scope.launch {
             connection.events.filter { it is persona.core.contracts.PersonasEvent || it is persona.core.contracts.LookEvent }
                 .buffer(kotlinx.coroutines.channels.Channel.UNLIMITED).collect { event ->
-                    if (event is persona.core.contracts.PersonasEvent) runCatching { personas.refresh() }
+                    if (event is persona.core.contracts.PersonasEvent) { val _ = runCatching { personas.refresh() } }
                     // Another device chose a look (#3200): this phone shows it too.
-                    if (event is persona.core.contracts.LookEvent) runCatching { personas.follow(event.id) }
+                    if (event is persona.core.contracts.LookEvent) { val _ = runCatching { personas.follow(event.id) } }
                 }
         }
     }
@@ -134,7 +155,7 @@ class PersonaApp : Application() {
             true -> android.app.UiModeManager.MODE_NIGHT_YES
             false -> android.app.UiModeManager.MODE_NIGHT_NO
         }
-        runCatching { getSystemService(android.app.UiModeManager::class.java)?.setApplicationNightMode(mode) }
+        val _ = runCatching { getSystemService(android.app.UiModeManager::class.java)?.setApplicationNightMode(mode) }
     }
 
     val deviceName: String get() = "${Build.MANUFACTURER} ${Build.MODEL}".trim()

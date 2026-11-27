@@ -100,6 +100,8 @@ func main() {
 		err = address(args)
 	case "name":
 		err = nameCmd(e, args)
+	case "tray":
+		err = trayCmd(e, args)
 	case "plugin":
 		err = pluginCmd(e, args)
 	case "version", "--version", "-v":
@@ -147,7 +149,7 @@ var errUsage = errors.New("usage")
 // helpTopics are the subcommands `<sub> -h` answers for (supervise is not for people: its -h shows the whole usage).
 var helpTopics = map[string]bool{"pair": true, "mode": true, "node": true, "discover": true, "install": true,
 	"uninstall": true, "status": true, "reconnect": true, "logs": true, "log": true, "run": true, "supervise": true, "ssh": true,
-	"address": true, "name": true, "plugin": true, "proxy": true}
+	"address": true, "name": true, "plugin": true, "proxy": true, "tray": true}
 
 // wantsHelp says whether args ask for help (-h, -help or --help anywhere).
 func wantsHelp(args []string) bool {
@@ -254,7 +256,7 @@ func pairCmd(e *env, args []string) error {
 		if flags.any() {
 			return link.NewTextError("link-cli.pair_listen_ssh", nil)
 		}
-		if flags.proxy.set {
+		if flags.proxy.any() {
 			return link.NewTextError("link-cli.listen_proxy", nil)
 		}
 		if seen || machine != "" {
@@ -262,7 +264,7 @@ func pairCmd(e *env, args []string) error {
 		}
 		return pairListen(e, listen, addrs)
 	}
-	if err := flags.proxy.save(e); err != nil {
+	if err := flags.check(); err != nil {
 		return err
 	}
 	c, err := pairWithSSH(e, raw, machine, flags)
@@ -310,6 +312,10 @@ func pairWithSSH(e *env, raw, machine string, flags routeFlags) (*link.Config, e
 	}
 	sshCfg, err := flags.build(raw)
 	if err != nil {
+		return nil, err
+	}
+	// Saved before pairing, so the pairing goes through the proxy too.
+	if err := flags.saveProxy(e, sshCfg); err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)

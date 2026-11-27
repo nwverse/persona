@@ -94,6 +94,20 @@ func assertScopedHandoff(t *testing.T, prompt string) {
 	}
 }
 
+// assertHandoffContract: wherever a handoff entry is offered, the note says it is for a separate part only and the
+// caller does the rest, and that the new session shares the caller's directory and reports to the supervisor, so the
+// caller neither edits what it changes nor polls it (#12995).
+func assertHandoffContract(t *testing.T, prompt string) {
+	t.Helper()
+	for _, want := range []string{"only to hand a separate part of this assignment", "never hand over all of it", "do the rest yourself",
+		"works in your directory with your permissions", "reports to your supervisor, not to you", "leave the files it changes alone",
+		"do not poll it, read its transcript or wait for it"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("the handoff note lacks %q: %s", want, prompt)
+		}
+	}
+}
+
 // assertTerminalOwnTools: the terminal entry says it runs the Agent's own tools, with their arguments, and is not a
 // general entry (#12136).
 func assertTerminalOwnTools(t *testing.T, prompt string) {
@@ -125,6 +139,7 @@ func TestTaskHandoffCodexProductionEntrypoints(t *testing.T) {
 			}
 			assertTerminalOwnTools(t, prompt)
 			assertScopedHandoff(t, prompt)
+			assertHandoffContract(t, prompt)
 		})
 	}
 }
@@ -144,6 +159,7 @@ func TestTaskHandoffClaudeKeepsMCPWithoutMetadata(t *testing.T) {
 				t.Fatal("MCP handoff unnecessarily queried or advertised a terminal executable")
 			}
 			assertScopedHandoff(t, prompt)
+			assertHandoffContract(t, prompt)
 		})
 	}
 }
@@ -159,6 +175,7 @@ func TestTaskHandoffOtherTerminalFamilies(t *testing.T) {
 			}
 			assertTerminalOwnTools(t, prompt)
 			assertScopedHandoff(t, prompt)
+			assertHandoffContract(t, prompt)
 		})
 	}
 }
@@ -193,7 +210,8 @@ func TestTaskHandoffMissingMetadataDoesNotBlockAssignments(t *testing.T) {
 					t.Cleanup(func() { agentStartListTimeout = old })
 				}
 				prompt := taskHandoffTestStart(t, s, f, tool)
-				if strings.Contains(prompt, "task_spawn") || strings.Contains(prompt, "todo_decisions") || taskHandoffTestExecutable(t, prompt) != "" {
+				if strings.Contains(prompt, "task_spawn") || strings.Contains(prompt, "todo_decisions") || taskHandoffTestExecutable(t, prompt) != "" ||
+					strings.Contains(prompt, "do not poll it") {
 					t.Fatalf("an unverified entry was advertised: %s", prompt)
 				}
 				if !strings.Contains(prompt, "Continue the assigned work yourself") {
@@ -229,6 +247,93 @@ func TestTaskHandoffExecutableIsData(t *testing.T) {
 				t.Fatal("the path was interpolated as instructions or shell code")
 			}
 		})
+	}
+}
+
+// taskHandoffTestFleet gives s the manager's own devices, as a running manager has them: the assistant's machine, and
+// "box", whose node said it runs from exe when its connection began ("": a node that did not say).
+func taskHandoffTestFleet(s *Service, exe string) {
+	d := newFleetDevs()
+	d.add("server", "Server")
+	d.add("box", "Box").executable = exe
+	s.devs = d
+}
+
+// nodeInfoAsked is the machines node.info was asked of, in order.
+func (h *taskHandoffTestHub) nodeInfoAsked() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.infoCalls...)
+}
+
+// A node.info that answers later than the hint may wait no longer drops the terminal entry (#14446). A node works
+// node.info out whole, Claude Code's version from an interactive login shell included, so a computer whose shell takes
+// seconds to start never answered within that second. The executable the node named when its connection began, as
+// the devices keep it, is named instead, and the node is not asked again.
+func TestTaskHandoffSlowNodeInfoKeepsExecutable(t *testing.T) {
+	for _, tool := range []string{"task_plan", "agent_start"} {
+		t.Run(tool, func(t *testing.T) {
+			s, f, h := taskHandoffTestFixture(t, "codex")
+			exe := h.info["box"].Executable
+			taskHandoffTestFleet(s, exe)
+			h.infoWait = true // every node.info answers after the hint's wait
+			old := agentStartListTimeout
+			agentStartListTimeout = 10 * time.Millisecond
+			t.Cleanup(func() { agentStartListTimeout = old })
+			prompt := taskHandoffTestStart(t, s, f, tool)
+			if got := taskHandoffTestExecutable(t, prompt); got != exe {
+				t.Fatalf("executable = %q, want %q: %s", got, exe, prompt)
+			}
+			assertTerminalOwnTools(t, prompt)
+			assertScopedHandoff(t, prompt)
+			assertHandoffContract(t, prompt)
+			if asked := h.nodeInfoAsked(); len(asked) != 0 {
+				t.Fatalf("node.info was asked again of %v", asked)
+			}
+		})
+	}
+}
+
+// Both entries (a new Agent's, an adopted session's) read the executable the devices keep first. The node is asked,
+// within the hint's second, only when the devices name no absolute path: a node that did not say, a machine this
+// manager does not hold.
+func TestTaskHandoffExecutableSources(t *testing.T) {
+	ctx := context.Background()
+	entries := []struct {
+		name  string
+		entry func(s *Service, machine string) prompts.TaskHandoff
+	}{
+		{"start", func(s *Service, machine string) prompts.TaskHandoff {
+			return s.taskEntry(ctx, machine, startAgent{agent: "codex", source: "zshrc"})
+		}},
+		{"adopted", func(s *Service, machine string) prompts.TaskHandoff {
+			return s.adoptedTaskEntry(ctx, machine, proto.Session{Agent: "codex"})
+		}},
+	}
+	for _, e := range entries {
+		for _, c := range []struct {
+			name, held, machine, want string
+			asked                     bool
+		}{
+			{name: "held", held: "/opt/held tools/persona-node", machine: "box", want: "/opt/held tools/persona-node"},
+			{name: "held without one", machine: "box", want: "/opt/task tools/persona-node", asked: true},
+			{name: "held relative", held: "personad", machine: "box", want: "/opt/task tools/persona-node", asked: true},
+			{name: "not held", held: "/opt/held tools/persona-node", machine: "far", want: "/opt/far/persona-node", asked: true},
+		} {
+			t.Run(e.name+"/"+c.name, func(t *testing.T) {
+				s, _, h := taskHandoffTestFixture(t, "codex")
+				h.info["far"] = proto.NodeInfo{Executable: "/opt/far/persona-node"}
+				taskHandoffTestFleet(s, c.held)
+				got := e.entry(s, c.machine)
+				var path string
+				if err := json.Unmarshal([]byte(got.Executable), &path); err != nil || path != c.want {
+					t.Fatalf("executable = %q (%v), want %q", got.Executable, err, c.want)
+				}
+				if asked := len(h.nodeInfoAsked()) != 0; asked != c.asked {
+					t.Fatalf("node.info asked: %v, want %v", asked, c.asked)
+				}
+			})
+		}
 	}
 }
 

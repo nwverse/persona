@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/compat"
+	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 func TestAgyPaneTranscriptMapping(t *testing.T) {
@@ -142,6 +143,15 @@ func TestAgyContextResourceHistory(t *testing.T) {
 		{"similar scheme", "Content of persona-context-extra:///snapshot.txt:\n" + context + user, "Content of persona-context-extra:///snapshot.txt:\n" + user},
 		{"quoted label", "Example:\n" + label + user, "Example:\n" + label + user},
 		{"incomplete envelope", label + "<persona-context>unfinished", label + "<persona-context>unfinished"},
+		{"leading resource with literal context tags", label + "<persona-context><persona-context>inner</persona-context>outer</persona-context>" + user, user},
+		{"leading resource with nested prose", label + "<persona-context>outer\n<persona-context>inner</persona-context>\n\nGenerated prose\n</persona-context>\n" + user, user},
+		{"trailing resource", user + "\n\n" + label + context, user},
+		{"trailing resource with literal context tags", user + "\n\n" + label + "<persona-context><persona-context>inner</persona-context>outer</persona-context>", user},
+		{"trailing resource before user prose", user + "\n\n" + label + "<persona-context>generated</persona-context>\n\nMy example: <persona-context>user</persona-context>", user + "\n\nMy example:"},
+		{"resources around user prose", user + "\n\n" + label + context + "\n\nkeep me\n\n" + label + context, user + "\n\nkeep me"},
+		{"trailing view errors", user + "\n\n<persona-view-errors>bad</persona-view-errors>", user},
+		{"malformed trailing URI", user + "\n\nContent of persona-context:// /snapshot.txt:\n" + context, user + "\n\nContent of persona-context:// /snapshot.txt:"},
+		{"quoted trailing label", "Example: " + label + context, "Example: Content of persona-context:///snapshot.txt:"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			content, err := json.Marshal(tc.content)
@@ -176,6 +186,65 @@ func TestAgyToolArrayArgsAreClipped(t *testing.T) {
 	}
 	if _, small := agyTool("view_file", json.RawMessage(`[1,2]`)); string(small) != `[1,2]` {
 		t.Fatalf("small array changed: %s", small)
+	}
+}
+
+func TestAgyToolInput(t *testing.T) {
+	const path = "/example/file.go"
+	const content = "line1\nline2\nline3\n"
+	encode := func(value string) string {
+		raw, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	written := func(path, content string) map[string]string {
+		return map[string]string{"TargetFile": path, "CodeContent": content}
+	}
+	wantWrite := func(path, content string) map[string]string {
+		return map[string]string{"file_path": path, "content": content}
+	}
+	for _, tc := range []struct {
+		name, tool, wantTool string
+		args, want           map[string]string
+		truncated            bool
+	}{
+		{"encoded write", "write_to_file", "Write", written(encode(path), encode(content)), wantWrite(path, content), false},
+		{"plain quoted query", "grep_search", "Grep", map[string]string{"Query": `"exact phrase"`, "SearchPath": "/example"},
+			map[string]string{"pattern": `"exact phrase"`, "path": "/example"}, false},
+		{"plain JSON file", "write_to_file", "Write", written("/example/file.json", `"hello"`), wantWrite("/example/file.json", `"hello"`), false},
+		{"encoded tail cut", "write_to_file", "Write", written(encode(path), "\"line1\\nline2\\nli\n<truncated 41 bytes>"),
+			wantWrite(path, "line1\nline2\nli"+transcript.ApproximateClipNote(55)), true},
+		{"middle cut", "write_to_file", "Write", written(path, "HEAD-PART\n<truncated 40 bytes>\nTAIL-PART"),
+			wantWrite(path, "HEAD-PART"+transcript.ClipNote(58)), true},
+		{"encoded middle cut", "write_to_file", "Write", written(encode(path), "\"head\\n\n<truncated 10 bytes>\ntail\""),
+			wantWrite(path, "head\n"+transcript.ApproximateClipNote(20)), true},
+		{"tail cut after dangling backslash", "write_to_file", "Write", written(encode(path), "\"line1\\n\\\n<truncated 8 bytes>"),
+			wantWrite(path, "line1\n"+transcript.ApproximateClipNote(14)), true},
+		{"tail cut inside Unicode escape", "write_to_file", "Write", written(encode(path), "\"line1\\n\\u00\n<truncated 8 bytes>"),
+			wantWrite(path, "line1\n"+transcript.ApproximateClipNote(14)), true},
+		{"tail cut after escaped backslash", "write_to_file", "Write", written(encode(path), "\"line1\\n\\\\\n<truncated 8 bytes>"),
+			wantWrite(path, "line1\n\\"+transcript.ApproximateClipNote(15)), true},
+		{"read_file with JSON-encoded numeric line bounds", "read_file", "Read", map[string]string{"Path": encode(path), "StartLine": "1", "EndLine": "260"},
+			map[string]string{"file_path": path}, false},
+		{"run_command with JSON-encoded numeric and boolean args", "run_command", "Bash", map[string]string{"CommandLine": encode("go test ./..."), "WaitMsBeforeAsync": "10000", "IsDaemon": "false", "toolSummary": encode("Run tests")},
+			map[string]string{"command": "go test ./...", "description": "Run tests"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := json.Marshal(tc.args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, err := json.Marshal(tc.want)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tool, input := agyToolInput(tc.tool, raw, tc.truncated)
+			if tool != tc.wantTool || string(input) != string(want) {
+				t.Fatalf("tool input = %s %s, want %s %s", tool, input, tc.wantTool, want)
+			}
+		})
 	}
 }
 
@@ -272,6 +341,59 @@ func TestAgyCallWithoutResultDoesNotShiftLaterResults(t *testing.T) {
 	}
 }
 
+func TestAgyAssistantTextNormalizesLocalFileLinks(t *testing.T) {
+	for _, tc := range []struct{ name, input, want string }{
+		{"unix_file_link", "See [notes.md](file:///work/repo/notes.md).", "See [notes.md](/work/repo/notes.md)."},
+		{"line_fragment", "Check [app.go](file:///work/repo/app.go#L10-L20).", "Check [app.go](/work/repo/app.go#L10-L20)."},
+		{"localhost", "[doc](file://localhost/work/repo/doc.md)", "[doc](/work/repo/doc.md)"},
+		{"uppercase_and_spaces", "[a](FILE:///work/My%20Notes/a.md)", "[a](/work/My%20Notes/a.md)"},
+		{"angle_brackets", `[a](<file:///work/My Notes/a.md> "title")`, `[a](</work/My Notes/a.md> "title")`},
+		{"balanced_parens", `[p](file:///work/photo(1).png "shot")`, `[p](/work/photo(1).png "shot")`},
+		{"image", "![chart](file:///work/repo/chart.png)", "![chart](/work/repo/chart.png)"},
+		{"windows_drive", "[win](file:///C:/work/notes.md#L5)", "[win](C:/work/notes.md#L5)"},
+		{"windows_encoded_colon", "[win](file:///c%3A/work/notes.md)", "[win](c:/work/notes.md)"},
+		{"ref_def", `[ref]: file:///work/repo/notes.txt "Ref"`, `[ref]: /work/repo/notes.txt "Ref"`},
+		{"list_continuation", "- item\n    [notes](file:///work/notes.md)", "- item\n    [notes](/work/notes.md)"},
+		{"inline_code", "Use `[notes](file:///work/notes.md)` literally.", "Use `[notes](file:///work/notes.md)` literally."},
+		{"fenced_code", "```md\n[notes](file:///work/notes.md)\n```\n[live](file:///work/live.md)", "```md\n[notes](file:///work/notes.md)\n```\n[live](/work/live.md)"},
+		{"indented_code", "Example:\n\n    [notes](file:///work/notes.md)\n\n[live](file:///work/live.md)", "Example:\n\n    [notes](file:///work/notes.md)\n\n[live](/work/live.md)"},
+		{"remote_host", "[r](file://other-host/share/notes.md)", "[r](file://other-host/share/notes.md)"},
+		{"unc_double_slash", "[u](file:////server/share/notes.md)", "[u](file:////server/share/notes.md)"},
+		{"hub_route", "[api](file:///api/v1/sessions)", "[api](file:///api/v1/sessions)"},
+		{"query_string", "[q](file:///work/notes.md?x=1)", "[q](file:///work/notes.md?x=1)"},
+		{"nul_byte", "[n](file:///work/notes%00.md)", "[n](file:///work/notes%00.md)"},
+		{"relative_file", "[rel](file:notes.md)", "[rel](file:notes.md)"},
+		{"escaped_bracket", `text \](file:///work/notes.md)`, `text \](file:///work/notes.md)`},
+		{"unclosed_link", "See [notes](file:///work/no", "See [notes](file:///work/no"},
+	} {
+		if got := agyAssistantText(tc.input); got != tc.want {
+			t.Errorf("%s: agyAssistantText(%q) = %q, want %q", tc.name, tc.input, got, tc.want)
+		}
+	}
+
+	fixture := `{"step_index":0,"type":"USER_INPUT","source":"USER_EXPLICIT","status":"DONE","created_at":"2026-01-01T00:00:00Z","content":"Open [u](file:///work/u.md)"}
+{"step_index":1,"type":"PLANNER_RESPONSE","source":"MODEL","status":"DONE","created_at":"2026-01-01T00:00:01Z","thinking":"Check [t](file:///work/t.md)","content":"Opened [notes.md](file:///work/notes.md#L12) and ![img](file:///work/img.png).","tool_calls":[{"name":"view_file","args":{"AbsolutePath":"/work/notes.md"}}]}
+{"step_index":2,"type":"GENERIC","status":"DONE","created_at":"2026-01-01T00:00:02Z","content":"[out](file:///work/out.md)"}
+`
+	steps, _ := parseAgySteps([]byte(fixture), agyTestID)
+	history := mapAgySteps(steps, time.Time{}, nil)
+	if len(history.items) != 5 {
+		t.Fatalf("items = %+v", history.items)
+	}
+	if history.items[0].Text != "Open [u](file:///work/u.md)" {
+		t.Errorf("user text = %q", history.items[0].Text)
+	}
+	if history.items[1].Text != "Check [t](file:///work/t.md)" {
+		t.Errorf("thinking text = %q", history.items[1].Text)
+	}
+	if history.items[2].Text != "Opened [notes.md](/work/notes.md#L12) and ![img](/work/img.png)." {
+		t.Errorf("assistant text = %q", history.items[2].Text)
+	}
+	if history.items[4].Text != "[out](file:///work/out.md)" {
+		t.Errorf("tool output = %q", history.items[4].Text)
+	}
+}
+
 func TestAgyInterruptedErrorNoteIsDropped(t *testing.T) {
 	const afterSystem = `{"step_index":0,"type":"USER_INPUT","source":"USER_EXPLICIT","status":"DONE","created_at":"2026-01-01T00:00:00Z","content":"run task"}
 {"step_index":1,"type":"PLANNER_RESPONSE","source":"MODEL","status":"DONE","created_at":"2026-01-01T00:00:01Z","content":"Working on it."}
@@ -327,5 +449,70 @@ func TestAgyInterruptedErrorNoteIsDropped(t *testing.T) {
 	}
 	if len(uses) != 2 || results[uses[0]] != "" || results[uses[1]] != "file body" {
 		t.Fatalf("tool call pairing after interrupt = uses:%v results:%v", uses, results)
+	}
+}
+
+func TestAgyToolOutputStripsTimestampHeadersWithoutAlteringPlainText(t *testing.T) {
+	const receipt = `{"level":"triage","summary":"All checks quiet.","visibility":"silent"}`
+	for _, tc := range []struct {
+		name, input, want string
+	}{
+		{
+			"duplicate_rfc3339_pairs_mcp_json",
+			"Created At: 2026-11-23T16:10:40+08:00\nCompleted At: 2026-11-23T16:10:44+08:00\nCreated At: 2026-11-23T16:10:40+08:00\nCompleted At: 2026-11-23T16:10:44+08:00\n" + receipt,
+			receipt,
+		},
+		{
+			"single_rfc3339_pair_crlf_fractional",
+			"Created At: 2026-11-23T09:10:40.25Z\r\nCompleted At: 2026-11-23T09:10:44.50Z\r\n" + receipt,
+			receipt,
+		},
+		{
+			"rfc3339_pair_with_immediate_output_marker",
+			"Created At: 2026-11-23T09:10:40Z\nCompleted At: 2026-11-23T09:10:44Z\nOutput:\ntotal 0\n",
+			"total 0\n",
+		},
+		{
+			"rfc3339_pair_preserves_later_output_marker_in_body",
+			"Created At: 2026-11-23T09:10:40Z\nCompleted At: 2026-11-23T09:10:44Z\nShowing lines 1-3\nOutput:\nkeep me",
+			"Showing lines 1-3\nOutput:\nkeep me",
+		},
+		{
+			"legacy_created_at_output",
+			"Created At: 2026-11-01\nOutput:\nsample.txt\n",
+			"sample.txt\n",
+		},
+		{
+			"plain_text_date_only_untouched",
+			"Created At: 2026-11-23\nCompleted At: 2026-11-23\nHello",
+			"Created At: 2026-11-23\nCompleted At: 2026-11-23\nHello",
+		},
+		{
+			"plain_text_single_created_at_untouched",
+			"Created At: 2026-11-23T16:10:40+08:00\nTitle: Notes",
+			"Created At: 2026-11-23T16:10:40+08:00\nTitle: Notes",
+		},
+		{
+			"non_leading_timestamps_untouched",
+			"Prefix\nCreated At: 2026-11-23T16:10:40+08:00\nCompleted At: 2026-11-23T16:10:44+08:00\nBody",
+			"Prefix\nCreated At: 2026-11-23T16:10:40+08:00\nCompleted At: 2026-11-23T16:10:44+08:00\nBody",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := agyToolOutput(tc.input); got != tc.want {
+				t.Fatalf("agyToolOutput(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+
+	const fixture = `{"step_index":0,"type":"USER_INPUT","source":"USER_EXPLICIT","status":"DONE","created_at":"2026-11-23T08:10:39Z","content":"Supervision check"}
+{"step_index":1,"type":"PLANNER_RESPONSE","source":"MODEL","status":"DONE","created_at":"2026-11-23T08:10:40Z","tool_calls":[{"name":"mcp_persona_supervision_finish","args":{"visibility":"silent","summary":"All checks quiet."}}]}
+{"step_index":2,"type":"GENERIC","source":"MODEL","status":"DONE","created_at":"2026-11-23T08:10:44Z","content":"Created At: 2026-11-23T16:10:40+08:00\nCompleted At: 2026-11-23T16:10:44+08:00\nCreated At: 2026-11-23T16:10:40+08:00\nCompleted At: 2026-11-23T16:10:44+08:00\n{\"level\":\"triage\",\"summary\":\"All checks quiet.\",\"visibility\":\"silent\"}"}
+{"step_index":3,"type":"PLANNER_RESPONSE","source":"MODEL","status":"DONE","created_at":"2026-11-23T08:10:45Z","content":"OK"}
+`
+	steps, _ := parseAgySteps([]byte(fixture), agyTestID)
+	history := mapAgySteps(steps, time.Time{}, nil)
+	if len(history.items) != 4 || history.items[2].Kind != "tool_result" || history.items[2].Text != receipt {
+		t.Fatalf("mapped items = %+v, want stripped receipt %q", history.items, receipt)
 	}
 }

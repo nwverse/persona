@@ -1,11 +1,12 @@
-// The To-dos page's status sections drawn from the hub's view (#10226; docs/web/web.md "Developing Persona"), behind
-// view-gates.ts viewDrawOn only. Nothing but the source of each row's section changes: the sections, titles, folds and
-// rows are today's, so what moves is what the redesign decided (view-legacy.ts). Proposal 7.3: a row with a view is
-// placed by it, alone (related-row merging retires, 6.4); a row without one, or with one this web cannot read, keeps
-// today's triage.
+// The To-dos page's status sections drawn from the hub's view (#10226, #14583; docs/web/web.md "Developing Persona"),
+// gated by view-gates.ts viewDrawOn (on by default when the hub lists `todo_view`, off with `persona.todos.viewDraw=0`).
+// Nothing but the source of each row's section, rank and page counts changes: the sections, titles, folds and rows are
+// today's, so what moves is what the redesign decided (view-legacy.ts). Proposal 7.3: a row with a view is placed by
+// it, alone (related-row merging retires, 6.4); a row without one, or with one this web cannot read, keeps today's
+// triage. Browser-local restores still keep a locally restored inactive row in Other open across snapshots.
 
 import { TODO_LIST_SECTIONS, type TodoSummary } from "../../../lib/todo-view-wire";
-import { countsAsOpen, TRIAGE_SECTIONS, triageGroupKey, type Triage, type TriageGroup, type TriageResult, type TriageRule, type TriageSection } from "../../../lib/todo-triage";
+import { countsAsOpen, SHELVE_AFTER_MS, TRIAGE_SECTIONS, triageGroupKey, type Triage, type TriageGroup, type TriageResult, type TriageRule, type TriageSection } from "../../../lib/todo-triage";
 import { compareWaitAge } from "../../../lib/task-wait";
 import type { Todo } from "../../../lib/todos";
 import { knownView, legacyOf } from "./view-legacy";
@@ -21,7 +22,7 @@ function ruleOf(view: TodoSummary, section: TriageSection): TriageRule {
   if (section === "just_done" || section === "done") {
     if (view.phase === "done") return "closed";
     const settled = SAME_RULE.get(view.line?.key ?? "");
-    if (settled === "accepted" || settled === "deployed") return settled;
+    if (settled === "accepted") return settled;
     return section === "done" ? "seen" : "finished_unseen";
   }
   return BY_SECTION[section] ?? "rest";
@@ -34,7 +35,7 @@ const SAME_RULE = new Map<string, TriageRule>([
   ["pr_open", "pr_open"],
   ["parked", "parked"],
   ["accepted", "accepted"],
-  ["deployed", "deployed"],
+  ["canceled", "cancelled"],
 ]);
 const BY_SECTION: Partial<Record<TriageSection, TriageRule>> = { waiting: "agent_asks", working: "agent_running", parked: "parked", shelved: "stale" };
 
@@ -46,11 +47,17 @@ export function openAsDrawn(todo: Todo, t: Triage): boolean {
   return todo.view.phase !== "done" && todo.view.section !== "someday" && t.section !== "shelved";
 }
 
+function ms(at: string | null | undefined): number {
+  const v = at ? Date.parse(at) : NaN;
+  return Number.isNaN(v) ? 0 : v;
+}
+
 /** `local` (today's triage of the same to-dos, its order and Parked's wait order applied) with every row that has a view
  *  moved to the view's place: its own group, ahead of the rows without one in that section, by the view's section,
  *  then `rank`, then the manager and the id (#10226 D12). What is left of a merged row keeps today's order in the
- *  section its new lead takes. The counts follow the rows. */
-export function drawnFromView(local: TriageResult, now: number): TriageResult {
+ *  section its new lead takes. Browser-local restores (`restored`) keep a locally restored inactive row in Other open
+ *  even when subsequent hub snapshots still carry `inactive`. The counts follow the rows. */
+export function drawnFromView(local: TriageResult, now: number, restored?: ReadonlyMap<string, number>): TriageResult {
   const viewed = (m: Todo) => knownView(m.view);
   if (!TRIAGE_SECTIONS.some((s) => local.sections[s].some((g) => g.members.some(viewed)))) return local;
   const fromView: { group: TriageGroup; view: TodoSummary }[] = [];
@@ -61,8 +68,11 @@ export function drawnFromView(local: TriageResult, now: number): TriageResult {
       const rest = g.members.filter((m) => !viewed(m));
       for (const m of g.members) {
         if (!knownView(m.view)) continue;
-        const section = legacyOf(m.view)!;
-        const t: Triage = { section, rule: ruleOf(m.view, section), last: g.triage.get(m.id)!.last };
+        const before = g.triage.get(m.id)!;
+        let section = legacyOf(m.view, before.rule === "closed" && before.section === "just_done")!;
+        const localRestored = restored?.get(m.id) ?? 0;
+        if (section === "shelved" && localRestored > ms(m.restored_at) && now - localRestored < SHELVE_AFTER_MS) section = "other";
+        const t: Triage = { section, rule: ruleOf(m.view, section), last: before.last };
         fromView.push({ view: m.view, group: { key: m.id, section, lead: m, members: [m], triage: new Map([[m.id, t]]), last: t.last } });
       }
       if (rest.length === g.members.length) kept[s].push(g);
@@ -102,8 +112,8 @@ export function drawnFromView(local: TriageResult, now: number): TriageResult {
         const t = g.triage.get(m.id)!;
         todoCounts[t.section]++;
         if (openAsDrawn(m, t)) open++;
-        // closed, accepted or deployed as today; from a view, closed (Someday is neither open nor finished)
-        else if (knownView(m.view) ? m.view.phase === "done" : t.section !== "shelved") finished++;
+        // closed or accepted as today; from a view, closed (Someday is neither open nor finished)
+        else if (t.section !== "cancelled" && (knownView(m.view) ? m.view.phase === "done" : t.section !== "shelved")) finished++;
       }
-  return { sections, todoCounts, open, shelved: todoCounts.shelved, finished };
+  return { sections, todoCounts, open, shelved: todoCounts.shelved, finished, cancelled: todoCounts.cancelled };
 }

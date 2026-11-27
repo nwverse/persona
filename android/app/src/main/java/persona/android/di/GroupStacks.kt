@@ -45,6 +45,8 @@ class GroupStack internal constructor(
     internal val actions: ChatActions by lazy { HttpChatActions(connection).inGroup(names) }
     /** Successful manager snapshots follow this pairing across refreshed HTTP routes. */
     internal val metricSnapshots = HttpMachineMetricsApi.Cache()
+    /** The single TasksStore shared by shell badges, the To-dos page and chat bindings for this hub group. */
+    val tasks: persona.core.domain.tasks.TasksStore? get() = plainBindings.tasks
     val current: Boolean get() = group.data === data && group.active
 }
 
@@ -123,7 +125,7 @@ class GroupStacks @Inject constructor(application: Application, private val runt
     }
 
     private fun closeStack(stack: GroupStack) {
-        app.scope.launch { runCatching { stack.repositories.close() } }
+        app.scope.launch { val _ = runCatching { stack.repositories.close() } }
         // Its forwarded ports' listeners, or the next pairing cannot bind the same numbers (#3483).
         (stack.plainBindings.ports as? AutoCloseable)?.let { ports -> runCatching { ports.close() } }
     }

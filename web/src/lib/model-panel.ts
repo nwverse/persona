@@ -2,10 +2,20 @@
 // the providers a chat can run on and their models, the setup that runs now, and what the panel keeps in this browser
 // (favorites, recent setups, per-model customizations). The panel (ui/model-panel/ModelPanel.tsx) draws them; each chat
 // kind builds them from its own sources (an Agent: its computer's launchers; a Persona chat: the assistant's list).
-import { matches } from "./launcher-models";
+import { t } from "../i18n";
+import { effortVariantBase, matches } from "./launcher-models";
 import { cleanModelId, validModelId } from "./model-id";
 import { isCurrentModel } from "./model-switch";
 import { familyBlocks, type PanelBlock } from "./model-families";
+import type { SpeedOption } from "./session-speed";
+import { defaultVariant, groupVariants, variantName } from "./model-variant-groups";
+
+export function speedLabel({ id, name }: SpeedOption): string {
+  if (id === "standard") return t("ui-modelpanel.speed_standard");
+  if (id === "fast") return t("ui-modelpanel.fast_short");
+  if (id === "ultrafast") return t("ui-modelpanel.speed_ultrafast");
+  return name || id;
+}
 
 /** The catalog's reference price in USD per one million tokens; absent means unknown, not free. */
 export interface PanelPrice {
@@ -36,8 +46,8 @@ export interface PanelModel {
   effortNote?: string;
   /** The effort the model runs with when none is set: the slider marks it "Recommended". */
   defaultEffort?: string;
-  /** A Fast (priority) speed exists for this model on this engine. */
-  fast?: boolean;
+  /** Ordered live speed choices, when offered for this model. */
+  speeds?: readonly SpeedOption[];
   /** Context window in tokens, when known. */
   context?: number;
   /** Exact catalog reference price, when known. */
@@ -102,7 +112,7 @@ export interface PanelConfig {
   provider: string;
   model: string;
   effort?: string;
-  fast?: boolean;
+  speed?: string;
 }
 
 /** What the chat runs and may switch to right now. */
@@ -137,7 +147,7 @@ export interface PanelFavorite extends PanelConfig {
 /** A model's own setup, changed in its flyout: what a pick of its row sends instead of the recommended one. */
 export interface PanelOverride {
   effort?: string;
-  fast?: boolean;
+  speed?: string;
 }
 
 /** Overrides by `overrideKey(provider, model)`. */
@@ -148,15 +158,15 @@ export const RECENT_MAX = 5;
 
 export const overrideKey = (provider: string, model: string) => `${provider}\n${model}`;
 
-/** A setup without empty parts: no effort rather than "", no Fast rather than false. */
+/** A setup without empty effort or speed values. */
 export function cleanSetup(c: PanelConfig): PanelConfig {
-  return { provider: c.provider, model: c.model, ...(c.effort ? { effort: c.effort } : {}), ...(c.fast ? { fast: true } : {}) };
+  return { provider: c.provider, model: c.model, ...(c.effort ? { effort: c.effort } : {}), ...(c.speed ? { speed: c.speed } : {}) };
 }
 
-/** The same setup: provider, model, effort and Fast all alike (an unset part and an empty one are alike). */
+/** The same setup: provider, model, effort and speed all alike. Legacy saved setups without speed are Standard. */
 export function sameSetup(a: PanelConfig | null | undefined, b: PanelConfig | null | undefined): boolean {
   if (!a || !b) return false;
-  return a.provider === b.provider && a.model === b.model && (a.effort || "") === (b.effort || "") && Boolean(a.fast) === Boolean(b.fast);
+  return a.provider === b.provider && a.model === b.model && (a.effort || "") === (b.effort || "") && (a.speed || "standard") === (b.speed || "standard");
 }
 
 /** Favorites with `config` saved as a copy at the end; an identical setup already saved is not saved twice. */
@@ -189,7 +199,7 @@ export function setOverride(all: PanelOverrides, provider: string, model: string
   const merged: PanelOverride = { ...all[k], ...patch };
   const next: PanelOverride = {};
   if (merged.effort) next.effort = merged.effort;
-  if (merged.fast !== undefined) next.fast = merged.fast;
+  if (merged.speed) next.speed = merged.speed;
   const out = { ...all };
   if (Object.keys(next).length) out[k] = next;
   else delete out[k];
@@ -224,7 +234,7 @@ const takes = (model: Pick<PanelModel, "efforts">, effort: string | undefined) =
  * browser override for an unknown session value. An Agent not started yet keeps only supported form values. Any
  * other: the effort last chosen for it here (its override), else none: the model's own default (#12315; the effort
  * running now no longer carries over to another model, so a model always opens at what it was left at). New agy starts
- * use their native effort unless the user picks one. Fast comes from the override when offered.
+ * use their native effort unless the user picks one. Speed comes from the override when offered.
  */
 export function rowSetup(provider: Pick<PanelProvider, "id" | "models"> & { engine?: string }, model: PanelModel, state: Pick<PanelState, "current" | "currentEffortDisplayOnly" | "starting">, override?: PanelOverride): PanelConfig {
   const current = state.current;
@@ -232,16 +242,16 @@ export function rowSetup(provider: Pick<PanelProvider, "id" | "models"> & { engi
   const displayOnly = state.currentEffortDisplayOnly === "all" || (state.currentEffortDisplayOnly === "agy" && provider.engine === "agy");
   const currentEffort = displayOnly ? undefined : current?.effort;
   const effort = now ? (state.starting ? takes(model, currentEffort) : currentEffort) : takes(model, override?.effort);
-  // what runs is what runs: an unset Fast on the running model is Standard, not "unknown, take the override"
-  const fast = model.fast ? (now ? current?.fast : override?.fast) : undefined;
-  return cleanSetup({ provider: provider.id, model: model.id, effort, fast });
+  const speed = now && !state.starting ? current?.speed : takesSpeed(model, now ? current?.speed : override?.speed);
+  return cleanSetup({ provider: provider.id, model: model.id, effort, speed });
 }
 
-/** A saved copy (a favorite, a recent entry) as it applies to the model now: an effort the model no longer takes and a
- *  Fast it lacks are left out. A model whose list is not read yet keeps the copy as it is. */
+const takesSpeed = (model: PanelModel, speed: string | undefined) => model.speeds?.some((choice) => choice.id === speed) ? speed : undefined;
+
+/** A saved copy as it applies to the model now, without choices the model no longer offers. */
 export function copySetup(copy: PanelConfig, model: PanelModel, listed: boolean): PanelConfig {
   if (!listed) return cleanSetup(copy);
-  return cleanSetup({ provider: copy.provider, model: model.id, effort: takes(model, copy.effort), fast: model.fast ? copy.fast : undefined });
+  return cleanSetup({ provider: copy.provider, model: model.id, effort: takes(model, copy.effort), speed: takesSpeed(model, copy.speed ?? "standard") });
 }
 
 /** The effort a setup runs at: its own, else the model's default (the triple and the slider show this). */
@@ -280,29 +290,15 @@ export function matchesQuery(provider: Pick<PanelProvider, "name">, model: Pick<
 /** The ID a model would have without its level, when it is one level of a model listed per level (Antigravity's
  *  `gemini-4-neon-high`: its default effort is the ID's last word); undefined for any other model. */
 function variantBase(m: PanelModel): string | undefined {
-  const level = m.defaultEffort;
-  if (!level || m.custom || m.providerDefault || m.variants || !m.id.endsWith(`-${level}`)) return undefined;
-  return m.id.slice(0, -(level.length + 1)) || undefined;
+  if (m.custom || m.providerDefault || m.variants) return undefined;
+  return effortVariantBase(m.id, m.defaultEffort);
 }
 
 /** A list's models in groups, in list order: the levels of one model together (where its first level is listed), every
  *  other model alone. Only levels the node told apart (`default_effort` naming the ID's suffix, server agyModelList)
  *  group; a model with one level listed stays as it is. */
 export function variantGroups(models: PanelModel[]): PanelModel[][] {
-  const out: PanelModel[][] = [];
-  const byBase = new Map<string, PanelModel[]>();
-  for (const m of models) {
-    const base = variantBase(m);
-    const group = base === undefined ? undefined : byBase.get(base);
-    if (group) {
-      group.push(m);
-      continue;
-    }
-    const own = [m];
-    if (base !== undefined) byBase.set(base, own);
-    out.push(own);
-  }
-  return out;
+  return groupVariants(models, variantBase);
 }
 
 /** How many models a list has, each model's levels counted once (a launcher's "N models"). */
@@ -313,19 +309,16 @@ const levelRank = (effort: string) => {
   return i < 0 ? EFFORT_TONES.length : i;
 };
 
-/** The level a model listed per level runs at when none was chosen: Medium where it has one (agy names no default),
- *  else the one its list names first. */
-const defaultLevel = (levels: PanelModel[]) => (levels.some((m) => m.defaultEffort === "medium") ? "medium" : (levels[0].defaultEffort ?? ""));
+const defaultLevel = (levels: PanelModel[]) => defaultVariant(levels, (m) => m.defaultEffort);
 
 /** One row's model for the levels of one model (two or more, from variantGroups), standing for `chosen`: the model's
  *  name without the level ("Gemini 4 Neon (High)" → "Gemini 4 Neon"; the base ID when the names disagree), the levels
  *  as its efforts, and `chosen`'s level as its own. */
 export function foldVariants(levels: PanelModel[], chosen: PanelModel): PanelModel {
   const base = variantBase(levels[0]) ?? chosen.id;
-  const names = new Set(levels.map((m) => m.name.replace(/\s*\([^()]*\)\s*$/, "")));
-  const name = names.size === 1 ? [...names][0] || base : base;
+  const name = variantName(levels.map((m) => m.name), base);
   const sorted = levels.map((m) => ({ effort: m.defaultEffort ?? "", id: m.id })).sort((a, b) => levelRank(a.effort) - levelRank(b.effort));
-  return { ...chosen, name, efforts: sorted.map((l) => l.effort), variants: { base, levels: sorted, first: defaultLevel(levels) } };
+  return { ...chosen, name, efforts: sorted.map((l) => l.effort), variants: { base, levels: sorted, first: defaultLevel(levels).defaultEffort ?? "" } };
 }
 
 /** The level a model's folded row stands for: the one that runs now, else the one a switch waits for, else the one
@@ -335,8 +328,7 @@ function chosenLevel(provider: PanelProvider, levels: PanelModel[], state: Pick<
   const pending = state.pending;
   const waiting = pending && pending.provider === provider.id ? levels.find((m) => isCurrentModel(m, pending.model)) : undefined;
   const picked = override?.effort ? levels.find((m) => m.defaultEffort === override.effort) : undefined;
-  const first = defaultLevel(levels);
-  return now ?? waiting ?? picked ?? levels.find((m) => m.defaultEffort === first) ?? levels[0];
+  return now ?? waiting ?? picked ?? defaultLevel(levels);
 }
 
 /** A provider's model rows (the search applied): one row per model, a model's levels folded into one (#12315). A
@@ -362,7 +354,7 @@ function modelRows(p: PanelProvider, models: PanelModel[], state: PanelState, ov
 export function levelSetup(row: Pick<PanelRow, "provider" | "model" | "setup">, effort: string): PanelConfig | undefined {
   const level = row.model.variants?.levels.find((l) => l.effort === effort);
   if (!level) return undefined;
-  return cleanSetup({ provider: row.provider.id, model: level.id, fast: row.setup.fast });
+  return cleanSetup({ provider: row.provider.id, model: level.id, speed: row.setup.speed });
 }
 
 /** What the list shows: one rail cell's view. A search shows "all" whatever cell is on. */
@@ -485,7 +477,7 @@ export function panelSections({ providers, state, view: chosen, query, favorites
       const setup = copySetup(c, r.model, r.listed);
       const starred = favorites.find((f) => f.provider === setup.provider && isCurrentModel(r.model, f.model) && sameSetup(copySetup(f, r.model, r.listed), setup));
       const now = state.current;
-      const current = Boolean(now) && runsNow(r.provider, r.model, now) && (setup.effort || "") === (now?.effort || "") && Boolean(setup.fast) === Boolean(now?.fast);
+      const current = Boolean(now) && runsNow(r.provider, r.model, now) && (setup.effort || "") === (now?.effort || "") && (setup.speed || "standard") === (now?.speed || "standard");
       rows.push({ key: `recent:${i}`, kind: "recent", provider: r.provider, model: r.model, setup, starredUid: starred?.uid, current, customized: false });
     }
     return rows.length ? [{ key: "recent", kind: "recent", rows }] : [];

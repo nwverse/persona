@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/shellcmd"
 	"github.com/nwverse/persona/server/internal/textfmt"
@@ -182,6 +183,7 @@ type runtimeStartParams struct {
 	ClientMsgID                   string
 	Images                        []proto.Image
 	WorkspaceID                   string // a space of the runtime's to start in (one of its sessions' space_id)
+	DesktopProjectID              string // the exact native desktop project selected in the project board
 	Resume                        string // the Claude session to take over and continue (caps.resume)
 	// SessionID: the id the hub named for a new session (session.start's session_id, #8130): the manager finds a
 	// start whose answer it lost by it. A runtime that can give its session that id does (Paseo); one that cannot
@@ -189,7 +191,12 @@ type runtimeStartParams struct {
 	SessionID string
 	// AgentType: the kind of agent Launcher starts (claude, codex…), for a runtime that runs only its own launchers
 	// (caps.same_kind) and does not have it: it starts one of its own of that kind, or refuses.
-	AgentType     string
+	AgentType       string
+	RequireLauncher bool // the start carries context to a fresh session on its old launcher
+	// DeferMCP asks an Antigravity Companion to return its real session id before attaching MCP or sending the first
+	// prompt. The manager activates that starting row with an ordinary send after linking the task role. Older nodes and
+	// Companions ignore the field; only an answer that actually says Starting is activated again.
+	DeferMCP      bool `json:"defer_mcp"`
 	Shell         bool // Launcher is a login shell's launcher: the runtime picks its own of that name (no caps.same_kind)
 	OpenElsewhere bool // a running claude has Resume open: only a runtime running it may take it
 }
@@ -266,6 +273,9 @@ func (n *Node) startOnEngineRuntime(ctx context.Context, p runtimeStartParams) (
 	// default (shell_launcher). A managed launcher's own settings apply only where personad launch runs it
 	// (runtimeStart), never inside the engine.
 	if _, own := h.launcherNamed(p.Launcher); !own && p.Launcher != "" {
+		if p.RequireLauncher {
+			return nil, nil, refusal("launcher_missing", i18n.T(i18n.From(ctx), "hub-context_handoff.launcher_missing"), nil)
+		}
 		if sameKind(h) {
 			p.AgentType = n.agentKindOf(p.Launcher, p.AgentType)
 		} else {
@@ -302,8 +312,10 @@ func (n *Node) takeOverInRuntime(ctx context.Context, h *runtimeConn, p runtimeS
 			}
 		}
 	}
-	if p.PermissionMode == "" && p.Effort == "" {
-		p.PermissionMode, p.Effort = n.modesOf(p.Resume)
+	if p.PermissionMode == "" || p.Effort == "" {
+		mode, effort := n.modesOf(p.Resume)
+		p.PermissionMode = cmp.Or(p.PermissionMode, mode)
+		p.Effort = cmp.Or(p.Effort, effort)
 	}
 	s, _, err := n.runtimeStartOn(ctx, h, p)
 	if elsewhere != nil && rpcCode(err) == openElsewhere {
