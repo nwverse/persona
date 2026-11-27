@@ -16,10 +16,29 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
+
+func TestDeviceBusInvalidParams(t *testing.T) {
+	for _, tc := range []struct {
+		method, params, message string
+	}{
+		{devicewire.MethodConnected, `{"machine_id":1}`, "devices.connected: json: cannot unmarshal number into Go struct field Connected.machine_id of type string"},
+		{devicewire.MethodConnectorCred, `{"machine_id":1}`, "json: cannot unmarshal number into Go struct field ConnectorCred.machine_id of type string"},
+		{devicewire.MethodConnectorCred, `{"machine_id":"box","fp":1}`, "json: cannot unmarshal number into Go struct field ConnectorCred.fp of type string"},
+		{devicewire.MethodConnectorPaired, `{"machine_id":1}`, "json: cannot unmarshal number into Go struct field ConnectorCred.machine_id of type string"},
+		{devicewire.MethodRename, `{"machine_id":1}`, "devices.rename: json: cannot unmarshal number into Go struct field Rename.machine_id of type string"},
+	} {
+		_, err := busMethods[tc.method](nil, t.Context(), nil, json.RawMessage(tc.params))
+		var re *rpc.Error
+		if !errors.As(err, &re) || re.Code != bus.CodeInvalidParams || re.Message != tc.message {
+			t.Errorf("%s %s = %v, want invalid_params with %q", tc.method, tc.params, err, tc.message)
+		}
+	}
+}
 
 // The computers are the manager's (devices_link.go): a hub whose manager connects its machine; the apps' lists, calls,
 // pushes and streams go through the manager as before; while the manager is gone the machine is offline and its routes

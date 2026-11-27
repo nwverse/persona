@@ -1,6 +1,8 @@
 {
   "tree": "文件",
   "treeView": "树状视图",
+  "showTree": "显示文件树",
+  "hideTree": "隐藏文件树",
   "loading": "正在读取",
   "emptyFolder": "空文件夹",
   "hiddenOnly": "只有隐藏文件",

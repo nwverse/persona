@@ -202,7 +202,7 @@ function GroupList<T>({ groups, onExcluded, dimension, kind, scope, source, rend
     return next;
   }, [groups, dimension, heldSeen, chipless, scope.state, justFinished]);
   const shown = all ? adjusted : adjusted.slice(0, SESSION_LIST_METRICS.groupOptions);
-  const opens = (group: SessionGroup, i: number) => dimension === "todo" ? !group.rest : i < SESSION_LIST_METRICS.groupsOpen || (dimension === "state" && group.key === JUST_FINISHED_KEY);
+  const opens = (group: SessionGroup, i: number) => dimension === "todo" ? !group.rest && (i < SESSION_LIST_METRICS.groupsOpen || group.needs > 0) : i < SESSION_LIST_METRICS.groupsOpen || (dimension === "state" && group.key === JUST_FINISHED_KEY);
   const hideIdleIds = useMemo(() => (dimension === "state" && heldSeen?.rows.length ? new Set(heldSeen.rows.map(source.identity)) : undefined), [dimension, heldSeen, source.identity]);
   const several = !nested && groupMachines(adjusted) > 1;
   return <>
@@ -301,8 +301,10 @@ function GroupSection<T>({ group, first, startsOpen, dimension, kind, scope, sou
     return () => onExcluded(key, 0);
   }, [onExcluded, key, left]);
   // a space whose name another of its computer's spaces has says where it is (#13522); without computer headings, a
-  // space or a directory names its computer only when the groups are on several
-  const computer = several && group.places[0]?.machine ? machineName(group.places[0].machine) : undefined;
+  // space or a directory names its computer only when the groups are on several, and a project only when all of its
+  // directories are on that one (a repository checked out on two computers is not either's, #16877)
+  const on = [...new Set(group.places.map((place) => place.machine).filter(Boolean))];
+  const computer = several && on.length === 1 ? machineName(on[0]) : undefined;
   const title = <>{name}{group.qualifier ? <span className="font-normal"> · {group.qualifier}</span> : computer && <span className="font-normal"> · {computer}</span>}</>;
   return (
     <div data-session-group={group.key} data-group-open={!folded}>
