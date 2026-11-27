@@ -104,15 +104,37 @@ func (n *Node) spawnCodex(id, cwd, launcher string, resume, spare bool, options 
 
 // codexAssistantCommand is the command that runs the Codex assistant's app-server with launcher in shell.
 func (n *Node) codexAssistantCommand(shell, launcher string, args []string) *exec.Cmd {
+	env := identity.Environment(withoutEnv(os.Environ(), []string{categoriesEnv}), "PERSONA_ASSISTANT=1")
+	var script string
 	if provider, ok := n.managedLauncher(launcher); ok && provider.AgentType() == "codex" {
 		catalog, _ := n.codexCatalogFor(provider)
-		prefix := launchArgv("codex", nil, provider.Args, launcherDefaultEffort(provider), provider.Model, managedEnv(provider), catalog)
+		managed := managedEnv(provider)
+		prefix := launchArgv("codex", nil, provider.Args, launcherDefaultEffort(provider), provider.Model, managed, catalog)
 		// Keep the assistant's MCP and provider flags before app-server. Running
 		// personad launch here bypasses the shell's codex wrapper and starts a TUI.
-		argv := append(append(prefix[1:], args...), "app-server")
-		return exec.Command(shell, append([]string{shellFlag(shell), `if [[ -n "${PERSONA_MODEL_SOURCE_BIN-}" && -n "${PERSONA_MODEL_SOURCE_HOSTS-}" ]]; then "${PERSONA_MODEL_SOURCE_BIN}" model-source codex "$@"; else builtin command codex "$@"; fi`, "persona"}, argv...)...)
+		args = append(append(prefix[1:], args...), "app-server")
+		script = `if [[ -n "${PERSONA_MODEL_SOURCE_BIN-}" && -n "${PERSONA_MODEL_SOURCE_HOSTS-}" ]]; then "${PERSONA_MODEL_SOURCE_BIN}" model-source codex "$@"; else builtin command codex "$@"; fi`
+		env = identity.Environment(withoutEnv(env, envClearFor(provider)), managed...)
+		var proxies []string
+		for _, assignment := range managed {
+			key, _, _ := strings.Cut(assignment, "=")
+			if len(otherSpelling(key)) > 0 {
+				proxies = append(proxies, assignment)
+			}
+		}
+		if len(proxies) > 0 {
+			// The interactive shell can export a proxy or bypass list of its own. Restore the managed values after its rc files.
+			carriers, extraEnv := codexShellEnvCarriers(proxies)
+			env = append(env, extraEnv...)
+			args = append(carriers, args...)
+			script = codexShellRestoreEnv + script
+		}
+	} else {
+		script = codexShell(n.launcherForScript(launcher))
 	}
-	return exec.Command(shell, append([]string{shellFlag(shell), codexShell(n.launcherForScript(launcher)), "persona"}, args...)...)
+	cmd := exec.Command(shell, append([]string{shellFlag(shell), script, "persona"}, args...)...)
+	cmd.Env = env
+	return cmd
 }
 
 func (n *Node) spawnCodexWithMode(id, cwd, launcher string, resume, spare bool, mode string, options ...modelExecution) (*assistantProc, error) {
@@ -136,12 +158,6 @@ func (n *Node) spawnCodexWithMode(id, cwd, launcher string, resume, spare bool, 
 	}
 	cmd := n.codexAssistantCommand(shell, launcher, args)
 	cmd.Dir = root
-	cmd.Env = identity.Environment(withoutEnv(os.Environ(), []string{categoriesEnv}), "PERSONA_ASSISTANT=1")
-	if provider, ok := n.managedLauncher(launcher); ok && provider.AgentType() == "codex" {
-		// Use the same managed environment and header bindings as personad launch,
-		// without passing secrets as shell code or command-line arguments.
-		cmd.Env = identity.Environment(withoutEnv(cmd.Env, envClearFor(provider)), managedEnv(provider)...)
-	}
 	gateEnv, releaseGates, nameGates := n.assistantLarkEnvNamed(cwd, id) // its addresses at the gate proxy go with the process
 	categories := categoriesFromEnv(gateEnv)
 	started := false
