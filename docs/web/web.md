@@ -2915,23 +2915,27 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   too. Why: picking a model and then its effort took several opens of the panel and a hover-only flyout, and the same
   cross-engine sentence was repeated under every launcher (the user's ask, 2026-11-21).
 - **Families and earlier versions** (`lib/model-families.ts`): a provider group (and Recommended, after the model that
-  runs) keeps each model family together under its name in small type: Claude Fable, Opus, Sonnet and Haiku (in that
-  order, by capability), a GPT line per variant ("GPT Sol", "GPT Terra"), a Gemini tier ("Gemini Pro", "Gemini Flash";
-  thinking levels and release channels such as `-medium` or `-preview` are not tiers). The family is read from the
-  model's concrete ID (an alias by what it resolves to, a gateway's vendor path and date stamps dropped); anything else
-  (the provider's own Default entry first, `glm-5.3`, `gpt-4o`, an ID typed before last) keeps its list order after the
-  families. Vendors come in the order the list first names them, other families by first mention. Within a family the
-  newest version leads (every row of it the hub lists: a 1M-context one, a gateway route's "Opus 5.5 (kiro)") and says
+  runs) visually groups models by **model series** in small type (`Claude`, `Gemini`, `GPT`, `DeepSeek`, `GLM`,
+  `MiniMax`, `Seed`, `Qwen`, `Kimi`, `Grok`): `Orchestrator` (`gemini-pro-orchestrator*`) groups under `Gemini`,
+  `GPT-OSS` (`gpt-oss-*`) and `gpt-4o*` group under `GPT`, and Claude's internal tiers stay ordered Fable, Opus, Sonnet,
+  Haiku inside `Claude`. The series and internal line are read from the model's concrete ID (an alias by what it resolves
+  to, a gateway's vendor path and date stamps dropped; thinking levels and release channels such as `-medium` or
+  `-preview` are kept out of line names). The provider's own Default entry stays headerless first, and anything else (an
+  unrecognized model ID, an ID typed before last) keeps its list order after the series blocks under a localized
+  **Other** (`其他`; `その他`) header so it never appears inside the preceding series. Series appear in first-mention
+  order, and within each versioned internal line the newest version leads (every row of it the hub lists: a 1M-context
+  one, a gateway route's "Opus 5.5 (kiro)") and says
   **Latest** (最新; 最新) when older ones exist. Spellings of one model are not rows of their own: the hub sends one row
   whose `aliases` hold the others (Claude Code's tier aliases on a gateway whose tiers name one model,
   `docs/assistant/model-config.md` "One row per model", #10365), and a setup saved with one of them (a kept pick, a
-  favorite, a recent setup, Model configuration's model) is that row's (`isCurrentModel`, `listedModel`); the
-  older ones fold under the family's **Earlier versions · N** (更早版本 · N; 以前のバージョン · N), unfolded for this
-  opening only. Never folded: the model that runs or waits, a favorite's or a recent setup's model, a customized one, and
-  everything under a search (which still marks only the family's real newest). Nothing changes for a list where no family
-  has two rows. Why: Claude.ai and ChatGPT keep older models behind one "More models" step, Claude Code's `/model` offers
-  per-family aliases that track the newest; a provider listing every pinned version (14 rows for one Claude account)
-  buried the newest of each family (the user's ask, 2026-11-17).
+  favorite, a recent setup, Model configuration's model) is that row's (`isCurrentModel`, `listedModel`). All older
+  versions across lines within a series combine into one **Earlier versions · N** (更早版本 · N; 以前のバージョン · N)
+  button in the series header, unfolded for this opening only. Never folded: the model that runs or waits, a
+  favorite's or a recent setup's model, a customized one, unversioned lines (`Orchestrator`, `GPT-OSS`, `Other`), and
+  everything under a search (which still marks each line's real newest). Nothing changes for a single-series list where
+  no versioned line has two rows; series headers activate once at least two series appear or a versioned line has older
+  versions. Why: grouping by series avoids header clutter across gateways and Antigravity while still keeping older
+  versions one tap away under "More models" / "Earlier versions" (2026-11-17, updated #16792).
 - **Context below the composer** (#5056): `ContextMeter` sits in the right-aligned usage row below the composer card.
   The visible label and fill show the used share at every width (#9155). The popover still shows the remaining share and
   token counts. Unknown context mounts no meter.
@@ -3414,6 +3418,7 @@ How narrow screens (below `lg`) and touch screens work; wide desktop screens sta
   - In the narrow-screen drawer, the pages from Overview … Settings collapse into a two-row icon grid, so AGENTS and the machine tree are visible as soon as it opens.
     The grid uses localized short labels (`sidebar.nav_*_short`, #3579): Overview / Scheduled tasks / Knowledge / Machines become Home / Tasks / KB / Hosts in English, and 受信トレイ / ヘルスケア / 定期タスク become 受信 / 健康 / 定期 in Japanese. English Inbox / Health and all Chinese labels stay unchanged. Short labels appear only in the grid's single-line captions; tooltips, accessible names, the wide-screen sidebar, and the collapsed icon rail keep the full names.
   - The middle of the top bar is an "Assistant | Agents" switch (same as the new iOS shell; no bottom tab bar). The Agents page is `/agents`, and its content is the Agents block from the sidebar. The buttons on both sides of both pages sit in slots at least 64px wide (`views/chat/header.ts`), at their outer edges, so their positions match to the pixel. A slot grows to fit its buttons (the main conversation's right side has New chat, Start an Agent and ⋯), and the switch takes the room left between them, never running under a button (#5036). Under 640px the Sessions side says its short name ("Sessions") on both pages alike, with less padding and its count on the segment's corner. On the narrowest screens a label truncates instead of wrapping. The full name stays the link's accessible name and tooltip.
+  - **Phone navigation** (#16761, Settings › Advanced › Appearance, `lib/phone-nav.ts`, kept in this browser as `persona.phone-nav`): **Top switch** is the switch above, the default. **Tab bar** puts the main chat, Agents, External and Settings along the bottom instead (`views/PhoneTabBar.tsx`, loaded only where it is drawn): the bar shows on those four places only (the main chat, `/agents`, `/history/external`, `/settings`), and any other page keeps its header and way back. The top bar then shows the page's name where the switch was (`ShellPageTitle`), Agents carries the same waiting count, and the bar hides while the keyboard is up (`data-kb`). External is All chats filtered to every chat an external source opened (`external`: Lark /agent's and other extensions', `lib/conversation-origins.ts` `EXTERNAL_ORIGINS`); its chip and heading appear only while that is the filter, so All chats is unchanged otherwise. Wide screens keep the sidebar either way.
   - In any other chat, the sidebar button in the header carries how many other Agents are waiting for you (`ChatSidebarButton`, leaving out the Agent you are in).
   - A gone tab's page and an ambiguous `/s/` link's choices have the same header as Offline, with the sidebar button (#11442).
   - The Agents page keeps its scroll position when you come Back to it from an Agent (`lib/scroll-memory.ts`, #11511); its title row's Filter, ⋯ and + take a real 44 px box each on touch screens, so they no longer take each other's taps, By to-do's rows are 44 px tall and fold from a tap anywhere on them, and the drawer's search box shows no ⌘K on touch screens.
@@ -3572,7 +3577,7 @@ The defaults add nothing to the page (no attribute, no stylesheet), so the defau
   - Explicit choices precede the theme's fallback stack. Default restores it for that family. Terminals read the code stack when opened and preserve their separate font size and CJK width correction. A retained Full UI feed also reads the stack when another terminal surface attaches.
 - **Recent chats in the sidebar** (`persona.sidebar-recent`, #5146): 5 / 10 / 15 / 25, default 5 (#6228), how many of the latest chats the sidebar's Persona chats › 最近 lists before **Show N more**. iOS and Android list 5 and have no such setting yet. The fold of the 最近 group itself is `fold:recent-chats` (#6228).
 - **Sidebar icons** (`persona.sidebar-icons`, #10822): Monochrome (stores nothing, the default) or Colored (`colored`), a color for each page's icon in the sidebar ("The sidebar's pages", **Icon colors**). Other tabs follow through the `storage` event.
-- **Window style** (`persona.surface-style`, #16607): Default (stores nothing, preserving crisp opaque surfaces) or Liquid Glass (`liquid-glass`), an opt-in translucent frosted surface style under Settings › Advanced › Appearance that clears opaque root backgrounds on macOS desktop (`setSurfaceStyle` + `data-desktop-glass`), exposes a **Glass translucency** slider (`persona.glass-translucency`, `0%–100%`, default `68%`), and respects `prefers-reduced-transparency`. Other tabs follow through the `storage` event.
+- **Window style** (`persona.surface-style`, #16607, #16776): Default (stores nothing, preserving crisp opaque surfaces) or Liquid Glass (`liquid-glass`), an opt-in translucent frosted surface style under Settings › Advanced › Appearance that clears opaque root backgrounds on macOS desktop (`setSurfaceStyle` + `data-desktop-glass`), syncs `persona.theme` via `setThemeSource` so native vibrancy matches light/dark mode, skips redundant shell CSS `backdrop-filter` when `data-desktop-glass` is active, calibrates neutral glass tints with legibility-safe opacity floors across the **Glass translucency** slider (`persona.glass-translucency`, `0%–100%`, default `68%`), and respects `prefers-reduced-transparency`. Other tabs follow through the `storage` event.
 - **Launcher quota in the sidebar** (`persona.sidebar-usage`, #13493): on by default (stores nothing); off (`0`) stops the sidebar mounting its usage card (`lib/sidebar-usage.ts`, `views/UsageBars.tsx`). Settings › General › Appearance. Other tabs follow through the `storage` event.
 
 ## New versions

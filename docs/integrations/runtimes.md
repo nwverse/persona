@@ -204,9 +204,11 @@ The list carries only recent sessions (`rt.recent`). A caller reading an older p
 - **Cards belong to the runtime**: node tags cards it asks with `agent` (the Agent the runtime runs, or the one the session's row names) and `agent_label` (its name: the row's own `agent_label` whenever it has one, else the runtime's `name`; a runtime running several Agents under its own id names each in its rows, as Paseo's providers, #8142), and the App draws them as "another Agent's card"
   (the same kind as Codex's: "DSH Needs Your Permission", Approve / Deny, `reason` above the command). **Always Approve** only appears when the card has `always_label` (saying exactly what is always approved);
   don't send it if the runtime can't do it. `always_label` itself is just text; "always" is enforced by the runtime (opencode's save rules and Paseo's suggestions are both narrower than the whole tool).
-  If a runtime can't remember session rules itself, it declares `caps.keep_always: true` in hello (the SDK's `keepAlways`; DSH does this): only then, when its `permission` card carries `always_label`,
-  does node write `always_keys: ["runtime:<runtime id>:tool:<tool_name>"]`; the hub remembers it per session id, and later cards for the same tool in the same session are answered by the hub directly with "allow + always" (#3974).
-  `always_keys` sent by a runtime are always cleared; no key is written for runtimes without `keep_always`, the health space, or cards with `fields`. When the runtime runs Claude Code (`agent: "claude"`), cards are drawn as Claude's.
+  If a runtime can't remember session rules itself (or withholds native session rules on Assistant sessions so Persona's command gate and revocation stay authoritative, as Antigravity does), it declares `caps.keep_always: true` in hello (the SDK's `keepAlways`):
+  - For local `assistant_environment` runtimes (Antigravity), node computes scoped `tool:*` keys matching Claude Code hooks (`tool:Read(//dir/**)` / `tool:Edit(//dir/**)` for absolute non-root, non-home, non-space, non-escaping file paths, `tool:Bash` for inspected non-empty non-truncated Bash outside `origin:inbox`, and `tool:<tool_name>` for safe non-file/non-command tools — failing closed on unknown tools carrying path or command inputs); Assistant cards always clear `always_label` and keep ACP on `allow_once`, while non-assistant cards carrying a native `always_label` keep their native rule without hub keys so narrow rules are never widened.
+  - For other `keep_always` runtimes (DSH), when a `permission` card carries `always_label`, node writes `always_keys: ["runtime:<runtime id>:tool:<tool_name>"]` (still withholding whole-tool Bash on `origin:inbox`).
+  The hub remembers `always_keys` per session id, and later cards whose keys are all kept are answered directly with "allow + always + remembered" (#3974).
+  `always_keys` sent by a runtime are always cleared; no key is written for runtimes without `keep_always`, `remote_agent` runtimes or sessions, spaces, or cards with `fields`. When the runtime runs Claude Code (`agent: "claude"`), cards are drawn as Claude's.
 - **The text written on deny**: `Resolution.message`. If the runtime's permission can carry a reason, pass it; otherwise deny first, then steer that sentence into the turn (DSH does this).
 - **"Needs you" doesn't mean there's a card**: a session waiting for a person in its local UI reports `blocked`, the phone shows "Needs you", and the hub doesn't read the screen to build a terminal card (never for sessions without terminal capability).
 - Use the runtime's own "timed question" if it has one: if the local side times out first, the card on the phone can stay, and a late answer is handed back to the runtime (DSH's `userQuestions.answer`).
@@ -636,21 +638,32 @@ the local export names the corresponding file in that conversation's task direct
 
 A session is listed `unknown` when the evidence cannot say working, idle or done (`transcriptState` in
 `integrations/antigravity/lib/map.js`). It is never guessed as idle: an idle native summary closes a turn only when its
-step count covers the last exported step. The companion logs why, as reason counts, each time the tally across listed
+step count covers the last exported step (or when both the export and an idle summary have zero steps). A freshly
+`session.start`-ed conversation with no completed turns also stays `idle` if `agy` writes a 0-byte `transcript.jsonl`
+before populating a summary row (provided the summary store is readable and shows zero steps and no active/unrecognized
+status). Active native
+states (`CASCADE_RUN_STATUS_RUNNING`, `CASCADE_RUN_STATUS_CANCELING`, `CASCADE_RUN_STATUS_BUSY`, and `not_fully_idle`)
+all report `working`. The companion logs why, as reason counts, each time the tally across listed
 sessions changes (`agy unknown status: no_summary 1, summary_behind 2`, then `none` once it clears, #12003):
 `read_failed` (the native summary database could not be read), `no_summary`, `summary_not_idle`, `summary_behind` (the
 summary's step count does not cover the last exported step), `no_step_index`, and `no_relevant_step` (no user input,
-response, tool result or error has been exported). A failed summary read is logged when it starts or its cause changes,
+response, tool result or error has been exported). Any non-empty unrecognized summary status value is also logged once
+as a sanitized enum token (`agy unrecognized summary status: …`). A failed summary read is logged when it starts or its cause changes,
 with SQLite's result-code text only, and once more when reads recover, with the number of failures. The lines carry no
 session IDs, message text or paths; under `personad node` they appear in the node log after `agy runtime:`.
 
 A settled Persona-owned ACP reply writes `.persona-turn-completion` beside the conversation's history-epoch file (mode
 0600). It stores SHA-256 fingerprints of the branch and actual settled reply index: one for the full reply and one for
-its byte length and first/last eight characters so truncated exports can match, never message text. After a restart, a
-`summary_behind` row becomes `done` only while the current export matches that settled turn; a missing or mismatched
-marker, including one followed by later native work, leaves `unknown`. Starting another prompt or issuing a native rewind clears
-the marker, and a known or pending native-cut check suppresses recovery. Transcript-only status rules and the step-count
-coverage check above are unchanged.
+its byte length and first/last eight characters so truncated exports can match, never message text (a clean tool-only
+turn ending without trailing text writes an `idle:` fingerprint of the completed `GENERIC` step instead). After a restart,
+a `summary_behind`, `no_summary` (with a readable summary store), or unspecified `summary_not_idle` (`""` or
+`CASCADE_RUN_STATUS_UNSPECIFIED`, with no unexported native steps past the export) row becomes `done` (or `idle` for a
+settled tool-only turn) only while the current export matches that settled turn; a missing or mismatched marker, an
+unrecognized future summary status, or later native work leaves `unknown`. When `GetCascadeTrajectory` has already
+verified an idle native trajectory matching every exported step past a lagging `summary_behind` count, that cached
+verification resolves the row until the export or summary changes. Starting another prompt, an autonomous wake, or a
+native rewind clears the marker and verification cache, and a known or pending native-cut check suppresses recovery.
+Transcript-only status rules and the step-count coverage check above are unchanged.
 
 What subagents and background tasks send back reaches the CLI companion's chat (#14625). agy 1.5.15 writes each
 as a `SYSTEM_MESSAGE` step whose body is `[Message] … sender=<id> … content=<text>`; the companion maps it to a
