@@ -64,9 +64,13 @@ import (
 // Antigravity incremental transcript append (tail anchor + rolling SHA-256 + deferred/periodic verification),
 // sub-second fileMeta fast hit, watched-poll idle backoff, and bounded summary/cache weights (with decoupled
 // raw-byte and object-weight transcriptCache caps) add 1,969 B (289,171 B).
+// Merging #16001 onto that main keeps its settled list-summary / .persona-turn-completion keying and static
+// summary_behind readListedTranscript cache, restores dev/ino/ctime wake-receipt detection, and adds a fixed
+// 4 KiB head-sample integrity check inside the racy window alongside the tail anchor. The union measures
+// 290,316 B exactly. The merge also restores one missing ASI semicolon in main's runtime.js.
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 289_171
+	const budget = 290_316
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {
