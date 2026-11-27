@@ -105,6 +105,12 @@ func (n *Node) listPanes(ctx context.Context) (proto.PanesResponse, error) {
 		}
 		_, c.NewTab = h.(host.Launcher)
 		c.Worktree = canWorktree(h)
+		_, c.Split = h.(host.Splitter)
+		_, c.CloseTab = h.(host.SlotCloser)
+		_, c.Rename = h.(host.Organizer)
+		if o, ok := h.(*orcaHost); ok { // an Orca that answered method_not_found to one no longer offers it
+			c.Split, c.CloseTab = o.CanSplit(), o.CanCloseSlot()
+		}
 		caps[h.Kind()] = c
 	}
 	n.mu.Lock()

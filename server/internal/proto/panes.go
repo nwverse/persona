@@ -17,7 +17,13 @@ type PaneHost struct {
 	// NewTab: the host can open a new shell tab in a workspace (panes.new).
 	NewTab bool `json:"new_tab"`
 	// Worktree: the host can make a Git worktree of a workspace's repository and open it as a workspace (worktree.create).
-	Worktree   bool        `json:"worktree"`
+	Worktree bool `json:"worktree"`
+	// Split: the host can split a pane (panes.split). CloseTab: it can close a whole tab (tabs.close). Rename: it can
+	// rename a tab (tabs.rename) and a workspace (worktree.rename). Older nodes leave them out: a client then keeps its
+	// own rule for the host.
+	Split      bool        `json:"split,omitempty"`
+	CloseTab   bool        `json:"close_tab,omitempty"`
+	Rename     bool        `json:"rename,omitempty"`
 	Workspaces []PaneSpace `json:"workspaces"`
 	Tabs       []PaneTab   `json:"tabs"`
 	Panes      []PaneItem  `json:"panes"`

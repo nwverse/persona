@@ -59,6 +59,9 @@ type orcaHost struct {
 	// #5547), and it is still found by its handle under that key. rekeyed: such a key -> the pane key Orca gives it now.
 	made    map[string]orcart.Terminal
 	rekeyed map[string]string
+	// missing are the methods the runtime missingIn (its id) answered method_not_found to (hostorca_panes.go).
+	missing   map[string]bool
+	missingIn string
 }
 
 // track remembers a terminal this host created (h.mu held), to find it by handle if Orca re-keys it.
