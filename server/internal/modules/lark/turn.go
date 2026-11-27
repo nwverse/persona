@@ -87,18 +87,13 @@ func (f feishuSink) progress(ctx context.Context, r *channel.Run, took time.Dura
 	scope := s.cotScope(r)
 	switch {
 	case f.cotWorked(ctx, r, scope):
-		// The card is posted first, and the snapshot queued after it returns. Queuing only takes two mutexes and
-		// replaces a snapshot, but the worker's persistence takes the channels' lock, which a progress tick holds
-		// while it calls this: queuing here would wait on that lock. The native API runs in the worker afterwards.
 		// Queued as this returns, after the card: the worker's persistence takes the channels' lock, which a
-		// progress tick holds across this call, so queuing first would keep that tick — and the next one's card —
+		// progress tick holds across this call, so queuing first would keep that tick, and the next one's card,
 		// waiting on the native API. The queue itself only replaces a snapshot.
-		w := f.nativeWorker(r)
-		if f.cotUnified(ctx, scope) && f.holdsCard(r, w, took) {
-			defer func() { f.cotQueue(r, nil) }()
-			return
-		}
 		defer func() { f.cotQueue(r, nil) }()
+		if f.cotUnified(ctx, scope) && f.holdsCard(r, f.nativeWorker(r), took) {
+			return // unified mode: no progress card while the agent message carries the turn
+		}
 	case f.cotProgressNow(ctx, r):
 		return
 	}
