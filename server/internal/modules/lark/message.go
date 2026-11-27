@@ -35,6 +35,9 @@ func (s core) FeishuMessage(ctx context.Context, p FeishuMessage) error {
 	}
 	// It takes its place as it comes, before the bot's status is read (a call to the hub). One that is not handled
 	// (refused, redelivered) still passes the turn on.
+	// It takes its place as it comes, before the bot's status is read (a call to the hub). One that is not handled
+	// (refused, redelivered) still passes the turn on. The same place is taken as a menu press comes (FeishuMenu):
+	// messages and menu presses are answered in the order they came.
 	b := s.fbot()
 	turn := &feishuTurn{done: make(chan struct{}), wait: s.timing("turn_wait"), now: b.clock}
 	b.mu.Lock()

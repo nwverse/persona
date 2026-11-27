@@ -808,6 +808,12 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 		return map[string]any{}, s.larkModule().Handoff(ctx, p)
 	case assistantwire.MethodFeishuView:
 		return s.FeishuView(ctx), nil
+	case assistantwire.MethodFeishuMenu:
+		var p FeishuMenu
+		if err := decode(&p); err != nil {
+			return nil, err
+		}
+		return map[string]any{}, s.FeishuMenu(ctx, p)
 	case assistantwire.MethodFleetAsk:
 		return handleBusRequest(ctx, assistantwire.FleetAskMethod, decode, func(ctx context.Context, p assistantwire.FleetAskParams) (proto.Resolution, error) {
 			return s.askHub(ctx, p.Interaction)
