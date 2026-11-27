@@ -722,6 +722,19 @@ func (f *Fake) SetScreen(handle string, text string) {
 	f.mu.Unlock()
 }
 
+// SetBoxScreen sets terminal.read's answer for a handle the way Orca 1.4.277 reads an agent's input box: text is the
+// screen with the box's prompt row as its bare glyph (❯), and draft the text the box shows, lifted out of the rows
+// ("" for none). Orca's draft has no colors: Claude Code's grey suggestion comes back as a draft too.
+func (f *Fake) SetBoxScreen(handle, text, draft string) {
+	f.SetScreen(handle, text)
+	if draft == "" {
+		return
+	}
+	f.mu.Lock()
+	f.screens[handle]["draft"] = draft
+	f.mu.Unlock()
+}
+
 // SetScreenRows sets terminal.read's answer with explicit rows and wrap flags.
 func (f *Fake) SetScreenRows(handle string, lines []string, wrapped []bool) {
 	rows := make([]any, len(lines))
