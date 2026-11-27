@@ -660,6 +660,7 @@ func (b *superviseBook) setQueuedLocked(to string, list []superviseSignal) {
 // revalidation rather than being persisted into a rendered queued relay.
 func supervisionSignalNeedsRevalidation(g superviseSignal) bool {
 	return g.Kind == sigPRConflict || g.Kind == sigDraftPR || g.Kind == sigPREvent || g.Kind == sigDecisionReply || g.Kind == sigTopicFollowup ||
+		g.Kind == sigNeedsUserExternalInfo && g.PREventID != "" ||
 		g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled"
 }
 
@@ -1192,6 +1193,11 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 	if g.Kind == sigNeedsUserExternalInfo {
 		e.Detail = ""
 		e.ExternalInfo = s.needsUserExternalInfoEntry(ctx, t, g.ExternalSource, g.Detail)
+		if g.PREventID != "" {
+			// Keep the direct link and the complete, already bounded untrusted-content envelope.
+			e.ExternalInfo.Source = g.ExternalSource
+			e.ExternalInfo.Summary = g.Detail
+		}
 		e.LastReview = s.lastReviewEntry(ctx, v)
 		s.briefEntry(ctx, t.ID, &e)
 		return e, true
