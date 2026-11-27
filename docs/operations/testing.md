@@ -817,6 +817,35 @@ DOCKER=<docker client> python3 scripts/ci/module-e2e.py --core-only [--no-build-
 
 Simulator limits: computer-use can't click simulators while the screen is locked; use DEBUG launch arguments to open pages directly. Push, real HealthKit data and WatchConnectivity sync need devices.
 
+## iOS real core-only and full hubs
+
+Run `python3 scripts/ci/ios-core-only-hub.py --shots ~/persona-pr-shots/ios-core-only` from the repository root with macOS,
+Xcode, Go and Docker (`DOCKER` names another client). This is an opt-in local gate, not a hosted-CI step or a test that runs
+in an ordinary suite. The output directory must be empty and outside the checkout.
+
+The driver copies the current tracked and uncommitted source inputs into a disposable source snapshot, builds the **default**
+iOS app once (never `PERSONA_CORE_ONLY=YES`), and starts a real core-only hub and then a real full hub. Every hub has a fresh
+temporary `HOME` and explicit `PERSONA_HOME`, a generated master token, a free loopback port and a uniquely named disposable
+Postgres 18 container. The app uses only the synthetic `org.example.persona.ci` bundle configuration. The driver boots a new
+simulator through `scripts/app/sim-boot.sh`, keeps its audio muted where the local audio guard is installed, and shuts down and
+deletes only that simulator at the end.
+
+For each edition the app receives a real single-use `jp_…` code from `POST /api/v1/auth/pair-codes` and pairs through
+`-openPairLink`, without `-pairURL` (whose presence would skip the credential exchange). The driver reads the fresh sessions,
+Inbox and To-dos API responses before pairing, then drives the actual app through the DEBUG Runtime CLI: active pairing, the
+real hello's module registry, the empty Agents / Inbox / To-dos pages, the drawer, Settings home and Advanced, Connectors,
+Channels, Extensions, Devices and the main-chat composer. The current device must be marked in Devices, a second exchange of
+the pair code must answer 401, and the app must still answer at the end. Health, Screen Share, Voice, recording-write,
+Mail and Lark entry assertions are checked against the full-hub positive control. The recording archive's read entry remains
+available in both editions.
+
+Light/dark PNGs, per-edition sanitized proofs and `evidence.json` (commit, Xcode and pre-build local-time / idle readings) are
+written below `--shots`; credentials are never included. Inspect every PNG. `--keep` retains the temporary source snapshot,
+hub homes and logs for diagnosis; without it the driver removes them. Every run ends with one `PASS`, `FAIL` or `TIMEOUT` line.
+A failed build or assertion, a missing proof, or a missing capture is never a pass.
+
+This is simulator UI evidence, not visionOS, physical-device, push, microphone, permission or performance verification.
+
 ## Android real core-only and full hubs
 
 Run `python3 scripts/ci/android-core-only-hub.py --evidence /tmp/android-hub-editions.json` from the repository root with
