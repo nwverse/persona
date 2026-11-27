@@ -119,3 +119,15 @@ test('named and numbered Hub tabs survive in source attribution and an absent ta
   assert.equal(state.previews(model)[0].project,expected);
  }
 });
+
+test('the transcript renderer keeps the phone selection and forwarding routes around enriched Agent messages', () => {
+  const view = readFileSync(new URL('../entry/src/main/ets/components/Conversation.ets', import.meta.url), 'utf8');
+  const route = readFileSync(new URL('../entry/src/main/ets/pages/Index.ets', import.meta.url), 'utf8');
+  const message = view.slice(view.indexOf('  @Builder message(entry:'), view.indexOf('  @Builder actionsMenu('));
+  assert.ok(message.includes('this.forwardState.toggle(this.model,entry.item.message!)'));
+  assert.ok(message.includes('this.workBody(entry)'));
+  assert.ok(message.includes('this.canLiftMessage(entry.item.message!)'));
+  assert.ok(message.includes("'chat.lift.source.'+entry.item.id"));
+  assert.ok(message.includes('PhoneForwardSentCard(') && message.includes('this.onForwardOrigin(row,item)'));
+  assert.ok(route.includes('this.selectedComputer()?.key() === row.key()) this.openComputer(row)'));
+});

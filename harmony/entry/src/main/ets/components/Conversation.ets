@@ -134,7 +134,7 @@ struct MessageSurface {
   @Builder surface() {
     Column() { this.content() }.width(this.own ? (this.structured ? this.structuredWidth : undefined) : '100%').constraintSize({ maxWidth: this.maximum })
       .padding(this.own ? { left:Tokens.inset, right:Tokens.inset, top:10, bottom:10 } : 0).backgroundColor(this.own ? this.fill : Color.Transparent)
-      .borderRadius(this.own ? Tokens.bubble : 0).clip(this.own)
+      .borderRadius(this.own ? Tokens.bubble : 0).clip(this.own).id(this.sourceId)
   }
   build() {
     if (this.timeHint) {
@@ -2301,6 +2301,30 @@ export struct Conversation {
           onLoad: () => { if (this.active) this.model.expandWork(entry.item.message!); } })
   }
   @Builder message(entry: RepeatItem<ConversationLine>) {
+    if (this.forwardState.isPicking(this.model) && this.forwardState.isEligible(this.model,entry.item.message!)) {
+      Row({space:8}) {
+        this.pickMark(this.forwardState.isPicked(this.model,entry.item.message!),this.forwardState.isBrought(this.model,entry.item.message!))
+        Column() { this.messageBody(entry) }.layoutWeight(1).hitTestBehavior(HitTestMode.None).accessibilityLevel('no-hide-descendants')
+      }.width('100%').alignItems(VerticalAlign.Top).accessibilityGroup(true).accessibilityRole(AccessibilityRoleType.BUTTON)
+        .accessibilityText(entry.item.message!.text).accessibilitySelected(this.forwardState.isPicked(this.model,entry.item.message!))
+        .id('chat.pick.'+(entry.item.message!.itemId || entry.item.message!.id))
+        .onClick(() => this.forwardState.toggle(this.model,entry.item.message!))
+    } else if (this.forwardState.isPicking(this.model)) {
+      Column() { this.messageBody(entry) }.width('100%').hitTestBehavior(HitTestMode.None)
+    } else if (this.canLiftMessage(entry.item.message!)) {
+      Column() { this.messageBody(entry) }.width('100%')
+        .priorityGesture(LongPressGesture({repeat:false}).onActionEnd((event:GestureEvent) => {
+          this.showLift(entry,event.fingerList[0]?.globalY,false,event.target.area);
+        }))
+        .accessibilityCustomActions([{name:tr('chat_lift_select'),onAction:():void => this.showLift(entry,undefined,true)}])
+    } else {
+      Column() { this.messageBody(entry) }.width('100%')
+        .bindContextMenu(this.messageMenuBuilder(entry), ResponseType.LongPress, {preview:MenuPreviewMode.IMAGE,
+          onAppear:() => { this.readingMenuLine=entry.item.id; },
+          onDisappear:() => { if (this.readingMenuLine===entry.item.id) this.readingMenuLine=''; }})
+    }
+  }
+  @Builder messageBody(entry: RepeatItem<ConversationLine>) {
     Column({ space: Tokens.gap }) {
       if (entry.item.message!.work) {
         this.workBody(entry)
@@ -2326,7 +2350,12 @@ export struct Conversation {
         }
       }
       if (entry.item.message!.queued) Text(tr('ev_queued')).fontSize(Tokens.caption).fontColor(Colors.secondary)
-      if (entry.item.message!.source) Text(entry.item.message!.source).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).width('100%')
+      if (entry.item.message!.source) {
+        if (this.model.sentForwards(entry.item.message!).length) PhoneForwardSentCard({model:this.model,message:entry.item.message!,
+          onOpen:(row:ResourceRow,item:string):void => this.onForwardOrigin(row,item)})
+        if (this.model.sentOtherSourceTitle(entry.item.message!))
+          Text(this.model.sentOtherSourceTitle(entry.item.message!)).fontSize(Tokens.meta).fontColor($r('sys.color.font_secondary')).width('100%')
+      }
       if (entry.item.message!.role === 'user') {
         if (entry.item.message!.ownerTarget === this.model.target()) this.userImages(entry.item.message!, messageAttachmentImages(entry.item.message!, this.model.target()))
       } else if (entry.item.message!.ownerTarget === this.model.target()) {
@@ -2345,7 +2374,7 @@ export struct Conversation {
         }.width('100%').alignItems(VerticalAlign.Center).padding({top:4,bottom:4}).id('chat.live.activity')
       } else if (entry.item.message!.text && entry.item.message!.id !== this.issueEchoId) {
         WithTheme({ colorMode: this.environment.dark ? ThemeColorMode.DARK : ThemeColorMode.LIGHT, theme: nativeMessageTheme(this.look, this.model.style, entry.item.message!.role === 'user', this.environment.dark) }) {
-        MessageSurface({ own: entry.item.message!.role === 'user', structured: entry.item.message!.role === 'user' && structuredBubble(entry.item.message!.text), text:entry.item.message!.text, maximum: entry.item.message!.role === 'user' ? this.messageMaximum(entry.item.message!) : Tokens.readingMax,
+        MessageSurface({ sourceId:'chat.lift.source.'+entry.item.id, own: entry.item.message!.role === 'user', structured: entry.item.message!.role === 'user' && structuredBubble(entry.item.message!.text), text:entry.item.message!.text, maximum: entry.item.message!.role === 'user' ? this.messageMaximum(entry.item.message!) : Tokens.readingMax,
           timeHint:this.timeHint(entry.item.message!), onTime:() => this.toggleMessageTime(entry.item.message!) }) {
           if (entry.item.message!.role === 'assistant' && this.model.selected.kind === 'conversation') AssistantMessage({ model: this.model, documents:this.documents, feed: this.feed, message: entry.item.message!, active: this.active, workspaceRoot:this.markdownWorkspace, mediaWidth:Math.min(Tokens.readingMax,this.availableWidth - 2 * Tokens.page), onPreview:(request: ConversationPhotoRequest) => this.showPhoto(request), onEditImage:(image: LoadedMessageImage) => this.editReceivedImage(image), onOpenFile:(path: string) => this.onOpenFile(path), onLink: (address: string) => this.onLink(address), onOpenResource: (row: ResourceRow) => this.onOpenResource(row) })
           else MarkdownText({ transcript: true, documents:this.documents, text: entry.item.message!.text, narration:entry.item.message!.narration, ownMessage:entry.item.message!.role === 'user',
@@ -2372,7 +2401,6 @@ export struct Conversation {
       if (entry.item.message!.localOperation && this.model.canRestoreMessage(entry.item.message!.localOperation)) Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('restore_draft')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('restore_draft', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('restore_draft')).bindTips(tr('restore_draft')).onClick(() => this.restoreDraft(entry.item.message!))
     }.width('100%').alignItems(entry.item.message!.role === 'user' ? HorizontalAlign.End : HorizontalAlign.Start)
       .padding({ left: Tokens.page, right: Tokens.page, top: entry.item.message!.work ? 0 : Tokens.fine, bottom: entry.item.message!.work ? 0 : Tokens.fine })
-      .bindContextMenu(this.messageMenuBuilder(entry), ResponseType.LongPress, { preview: MenuPreviewMode.IMAGE })
   }
   @Builder actionsMenu() {
     Menu() {
@@ -3016,6 +3044,7 @@ export struct Conversation {
       if (this.showContextMenu && (this.model.decision || !this.model.canCompose())) Button({ type: ButtonType.Circle }) { Image(Symbols.more).width(Tokens.symbol).height(Tokens.symbol).fillColor(Colors.ink) }
         .attributeModifier(ButtonStyles.quiet).width(Tokens.touch).height(Tokens.touch).padding(0).accessibilityText(tr('more')).onClick(() => this.openFallbackActions())
         .bindMenu(this.actionsVisible, this.actionsMenu, this.actionMenuOptions(this.actionsRequest)).id('chat.more.fallback')
+      this.taskDock()
       if (this.desktopWait) this.desktopWaitContent()
       if (this.contextUsage || (this.model.canCompose() && this.sessionIdentity.agent)) this.composerIdentity()
       if (this.model.canCompose() && !this.model.decision) {
