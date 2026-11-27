@@ -3,14 +3,23 @@ import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { credentialOwner, errorText } from "./api";
 import { CompleteSessions } from "./complete-sessions";
 import { heldOnlyNeeds } from "./attention";
-import { backgroundWaiting, stateOf } from "./format";
+import { supervisorHeldOnly, userCards } from "./supervisor-held";
+import { activityOf, backgroundWaiting, stateOf } from "./format";
+import { legacyAgentViews } from "./legacy-agent-view";
+import type { AgentView } from "./agent-view-wire";
+import { isMuted } from "./session-actions";
+import { sameValue } from "./stable-lines";
+import type { AgentMutes } from "./agent-groups";
+import { defaultManager } from "./manager-choice";
+import { agentKey } from "./pins";
 import { foldedState } from "./child-sessions";
 import { foldRows } from "./folded-rows";
 import { heldLaunchRows, observeLaunchRows } from "./launch-handoff";
-import { cardSessionRow, getState, onHubEvent, subscribe, useStore } from "./store";
-import { SESSIONS_LIST_FEATURE } from "./session-list";
+import { cardSessionRow, getState, onHubEvent, subscribe, useStore, type State } from "./store";
+import { SESSIONS_LIST_FEATURE, type ListCounts } from "./session-list";
 import { runtimeAgents, runtimeSessions, supportsPagedAgents } from "./runtime-list";
 import { heldCounts, heldRows } from "./seen-outbox";
+import { holdNotedSeen } from "./seen-rows";
 import { heldSidesOf, useHeldVersion } from "./use-child-sessions";
 import type { Interaction, Session } from "./types";
 
@@ -25,6 +34,39 @@ export function directoryVisibleCards(cards: Interaction[]): Interaction[] {
 // Filter before folding: a hidden parent must not swallow a visible child, or a hidden child raise its parent’s state.
 const directoryVisible = (rows: Session[]) => rows.some((s) => s.hidden_by_directory) ? rows.filter((s) => !s.hidden_by_directory) : rows;
 
+// An unrelated fleet update must preserve memoized list rows. For an unchanged
+// session only its external cards, delegation and mute can change the view.
+const legacyRows = new WeakMap<Session, Session>();
+function withLegacyView(session: Session, view: AgentView): Session {
+  const previous = legacyRows.get(session);
+  if (previous && sameValue(previous.view, view)) return previous;
+  const row = { ...session, view };
+  legacyRows.set(session, row);
+  return row;
+}
+
+/** Apply the old-manager fallback before excluding hidden rows or folding children. */
+export function listedAgents(rows: Session[], cards: readonly Interaction[] = [], mutes?: AgentMutes): Session[] {
+  let sessions = rows;
+  if (rows.some((s) => !s.view)) {
+    const fallback = defaultManager();
+    const managerOf = (row: { manager?: string }) => row.manager || fallback;
+    const managers = new Set(rows.filter((s) => !s.view).map(managerOf));
+    const resolved = new Map<Session, Session>();
+    for (const manager of managers) {
+      const own = rows.filter((s) => managerOf(s) === manager);
+      const pending = cards.filter((ix) => managerOf(ix) === manager);
+      const views = legacyAgentViews(own, pending, (s) => Boolean(mutes && isMuted(s, mutes)));
+      for (const s of own) {
+        const view = !s.view && views.get(agentKey(s));
+        if (view) resolved.set(s, withLegacyView(s, view));
+      }
+    }
+    sessions = rows.map((s) => resolved.get(s) ?? s);
+  }
+  return foldRows(directoryVisible(sessions)).filter((s) => !s.assistant);
+}
+
 /** The agents the lists show and count: without the child sessions folded under one of them, each parent in its folded
  *  state (lib/folded-rows.ts, #5120). A child's own row is in the store (`sessions`, `sessionSummaries`) for its card. */
 export function useAgentSessions(): Session[] {
@@ -32,8 +74,10 @@ export function useAgentSessions(): Session[] {
   const summaries = useStore((s) => s.sessionSummaries);
   const bounded = useStore((s) => s.features.includes(SESSIONS_LIST_FEATURE));
   const launches = useStore((s) => s.launches);
+  const cards = useStore((s) => s.interactions);
+  const mutes = useStore((s) => s.mutes);
   // folded before the assistant's conversations go: a child folded under one of them is no Agent of its own either
-  return useMemo(() => heldLaunchRows(foldRows(directoryVisible(bounded ? summaries : Object.values(by).flat())).filter((s) => !s.assistant), launches, Date.now()), [by, summaries, bounded, launches]);
+  return useMemo(() => listedAgents(heldLaunchRows(bounded ? summaries : Object.values(by).flat(), launches, Date.now()), cards, mutes), [by, summaries, bounded, launches, cards, mutes]);
 }
 
 /** The complete list as its readers get it: `error` says why it has not loaded (its read failed; it is read again in a
@@ -89,7 +133,9 @@ function createFullCache(owner: string) {
       if (valid()) observeLaunchRows(result.sessions);
       // An unchanged delta leaves the published snapshot (and its older base, which only widens the overlay) as it is.
       if (valid() && (result.changed || !fullSnapshot.loaded)) {
-        fullSnapshot = { sessions: foldRows(directoryVisible(result.sessions)).filter((s) => !s.assistant), loaded: true, error: "", base, epoch: fullSnapshot.epoch };
+        const sessions = result.sessions;
+        fullSnapshot = { sessions, loaded: true, error: "", base, epoch: fullSnapshot.epoch };
+        holdNotedSeen(sessions);
         fullChanged();
       }
     } catch (e) {
@@ -173,10 +219,12 @@ export function retryFullAgentSessions() {
  * useAgentSessions: no child session folded under a listed one, each parent in its folded state. */
 export function useFullAgentSessions(on = true): FullAgentSessions {
   const full = useCompleteAgentSessions(on);
+  const cards = useStore((s) => s.interactions);
+  const mutes = useStore((s) => s.mutes);
   return useMemo(() => {
-    const sessions = foldRows(directoryVisible(full.sessions));
+    const sessions = listedAgents(full.sessions, cards, mutes);
     return sessions === full.sessions ? full : { sessions, loaded: full.loaded, error: full.error };
-  }, [full]);
+  }, [full, cards, mutes]);
 }
 
 function useCompleteAgentSessions(on: boolean): FullAgentSessions {
@@ -208,7 +256,7 @@ function useHubCompleteAgentSessions(on: boolean): FullAgentSessions {
   return useMemo(() => {
     // `on` false: the caller has no use for the list now and asks the hub for nothing
     if (!on) return EMPTY_FULL_LIST;
-    if (!bounded) return { sessions: heldLaunchRows(foldRows(directoryVisible(Object.values(by).flat())).filter((s) => !s.assistant), launches, Date.now()), loaded, error: "" };
+    if (!bounded) return { sessions: heldLaunchRows(Object.values(by).flat(), launches, Date.now()), loaded, error: "" };
     // Wait for the first refresh's pins and grouping inputs before showing the complete snapshot.
     if (!loaded) return EMPTY_FULL_LIST;
     if (by === full.base) {
@@ -234,35 +282,61 @@ function useHubCompleteAgentSessions(on: boolean): FullAgentSessions {
  *  sidebar's quick filters count them (#10938). */
 export function stateCounts(all: Session[], interactions: readonly Interaction[] = [], grading = false) {
   const c = { needs: 0, working: 0, waiting: 0, unread: 0, badge: 0 };
+  // "Needs you" only for cards a task's supervisor holds (lib/supervisor-held.ts): the supervisor is at work on them, so
+  // it is counted Working, as the overview lists it, in neither the number nor the badge (the hub's `supervisor_held`)
+  const held = supervisorHeldOnly(interactions);
   for (const s of all) {
     if (s.hidden_by_directory) continue;
     const st = stateOf(s);
-    if (st === "needs_you") {
+    if (s.view?.counted) { c.needs++; c.badge++; }
+    if (s.view && st === "needs_you") continue;
+    if (st === "needs_you" && held.has(`${s.machine_id}/${s.session_id}`)) c.working++;
+    else if (st === "needs_you") {
       c.needs++;
       if (!s.quiet && (!grading || !heldOnlyNeeds(s, interactions))) c.badge++;
     } else if (st === "working") {
       if (backgroundWaiting(s)) c.waiting++;
       else c.working++;
-    } else if (st === "unread") c.unread++;
+    } else if (activityOf(s) === "unread") c.unread++;
   }
   return c;
+}
+
+/** A paging hub's counts as the lists read them (useCounts). Its State needs_you has in it the agents that wait only on
+ *  cards a task's supervisor holds (`supervisor_held`, apart from `held_needs`): Working here, as stateCounts counts
+ *  them, in neither the number nor the badge, graded or not. */
+export function boundedCounts(counts: Pick<ListCounts, "state" | "background_waiting" | "held_needs" | "supervisor_held">, grading: boolean) {
+  const supervised = Math.max(0, Math.min(counts.supervisor_held ?? 0, counts.state.needs_you ?? 0));
+  const needs = Math.max(0, (counts.state.needs_you ?? 0) - supervised);
+  // the hub leaves the ones that only wait in the background in state.working for older apps (protocol.md "Counts")
+  const waiting = Math.min(counts.background_waiting ?? 0, counts.state.working ?? 0);
+  const badge = grading ? Math.max(0, needs - (counts.held_needs ?? 0)) : needs;
+  return { needs, working: (counts.state.working ?? 0) - waiting + supervised, waiting, unread: counts.state.unread ?? 0, badge };
 }
 
 /** `badge` without `open`, the agent on screen: it says it is waiting itself, so a count of only it would tell nothing.
  *  `quietCounted`: `badge` is the hub's own count, which has quiet agents in it. `held`: open agent was excluded for grading. */
 export function othersWaiting(badge: number, open: Session | undefined, quietCounted = false, held = false): number {
-  return Math.max(0, badge - (open && !open.assistant && !open.hidden_by_directory && (quietCounted || !open.quiet) && !held && foldedState(open) === "needs_you" ? 1 : 0));
+  return Math.max(0, badge - (open && !open.assistant && !open.hidden_by_directory && (open.view ? open.view.counted : (quietCounted || !open.quiet) && !held && foldedState(open) === "needs_you") ? 1 : 0));
 }
 
 const scopedAgentCounts = () => runtimeAgents.getSnapshot().counts;
 const scopedAgentRows = () => runtimeAgents.getSnapshot().rows;
 const listedRows = () => runtimeSessions.getSnapshot().rows;
 
+/** A newer manager can supply views through a paging hub with an older hello. */
+export function hasAgentViews(s: Pick<State, "features" | "sessionSummaries">): boolean {
+  return s.features.includes("agent_view") || (s.features.includes(SESSIONS_LIST_FEATURE) && s.sessionSummaries.some(row => !!row.view));
+}
+
 export function useCounts() {
   const all = useAgentSessions();
+  const typed = useStore(hasAgentViews);
+  const complete = useFullAgentSessions(typed);
   const allInteractions = useStore((s) => s.interactions);
   const grading = useStore((s) => s.pushGrading);
-  const interactions = useMemo(() => directoryVisibleCards(allInteractions).length, [allInteractions]);
+  // the cards waiting on the user: not those a task's supervisor holds (lib/supervisor-held.ts)
+  const interactions = useMemo(() => userCards(directoryVisibleCards(allInteractions)).length, [allInteractions]);
   const { bounded, pagedAgents, aggregate } = useStore((s) => ({
     bounded: s.features.includes(SESSIONS_LIST_FEATURE),
     pagedAgents: supportsPagedAgents(s.features),
@@ -282,13 +356,10 @@ export function useCounts() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- heldAt: heldSidesOf reads the held rows, which it versions
   const counts = useMemo(() => read && coupled ? heldCounts(read, pagedAgents ? agentRows : rows, marks, Date.now(), heldSidesOf) : read, [read, coupled, pagedAgents, agentRows, rows, marks, heldAt]);
   return useMemo(() => {
+    if (typed) return { ...stateCounts(complete.loaded ? complete.sessions : all, allInteractions, grading), interactions, quietCounted: false };
     if (!bounded || !counts) return { ...stateCounts(all, allInteractions, grading), interactions, quietCounted: false };
-    const needs = counts.state.needs_you ?? 0;
-    // the hub leaves the ones that only wait in the background in state.working for older apps (protocol.md "Counts")
-    const waiting = Math.min(counts.background_waiting ?? 0, counts.state.working ?? 0);
-    const badge = grading ? Math.max(0, needs - (counts.held_needs ?? 0)) : needs;
-    return { needs, working: (counts.state.working ?? 0) - waiting, waiting, unread: counts.state.unread ?? 0, badge, interactions, quietCounted: true };
-  }, [all, allInteractions, grading, interactions, counts, bounded]);
+    return { ...boundedCounts(counts, grading), interactions, quietCounted: true };
+  }, [all, allInteractions, grading, interactions, counts, bounded, typed, complete]);
 }
 
 // A read that follows a failed one counts as failed until one comes back: each attempt clears the list's error while it

@@ -181,6 +181,28 @@ func TestOwnerDecidesWithoutAReview(t *testing.T) {
 	}
 }
 
+// TestPersonalVerificationStaysOutOfNeedsYou is the #15680 (#15638) resolution of the placement #16002 briefly gave
+// personal verification: the owner chose a calm, separate "to verify" layer (tree review + counts.user_check, a calm
+// web tray), so an open user_check must not be counted as red Needs you. #16080 explicitly left that product call to
+// #15680. Reintroducing the ownerDecides verify placement makes these assertions fail.
+func TestPersonalVerificationStaysOutOfNeedsYou(t *testing.T) {
+	f := Facts{ID: "todo_verify", Origin: "conv_lead", CreatedAt: hours(-5), UpdatedAt: hours(-1),
+		Delivery: &Delivery{State: deliveryLive, At: hours(-2)},
+		Ask:      &Ask{Verdict: "Please verify the result", AskedAt: hours(-1)}}
+	if v := View(f, testNow); v.Section != assistantwire.TodoListSectionJustFinished {
+		t.Fatalf("ordinary verification section = %q", v.Section)
+	}
+	f.Supervision = &Supervision{State: reviewUserCheck, UpdatedAt: hours(-1), Reviews: []Review{{Verdict: reviewAccepted, At: hours(-1)}}}
+	views := Views([]Facts{f}, testNow)
+	v := views[0]
+	if v.Section == assistantwire.TodoListSectionNeedsYou || v.Phase == assistantwire.TodoPhaseNeedsYou || v.Reason == assistantwire.TodoReasonVerify {
+		t.Fatalf("personal verification must stay out of Needs you under #15680, view: %+v", v)
+	}
+	if c := Counts([]Facts{f}, views); c.NeedsYou != 0 {
+		t.Fatalf("personal verification counts = %+v, want NeedsYou=0", c)
+	}
+}
+
 // A run's ask is what its pending card asks, by the card's id: the session's own card before the manager's about its
 // turn, then the oldest, then the lesser id, whatever order the cards come in. It is safe only when a notification may
 // answer the card too, one question with options and nothing else, and its asker did not say going ahead cannot be

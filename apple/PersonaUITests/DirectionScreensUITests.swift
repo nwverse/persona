@@ -331,6 +331,21 @@ final class DirectionScreensUITests: XCTestCase {
         shot("page-from-title")
     }
 
+    @MainActor func testDefaultPermissionsEntry() {
+        reset()
+        launch()
+        openSidebar()
+        chat("Persona 产品").tap()
+        sleep(2)
+        openTitleMenu()
+        let item = app.buttons.matching(NSPredicate(format: "label == %@", word("Default Permissions", "默认权限", "デフォルト権限"))).firstMatch
+        XCTAssertTrue(item.waitForExistence(timeout: 5), "no Default Permissions in the direction's title menu:\n\(app.debugDescription)")
+        item.tap()
+        XCTAssertTrue(app.descendants(matching: .any)["default-permission-mode"].firstMatch.waitForExistence(timeout: 10),
+                      "the direction entry did not open the shared default-permissions control:\n\(app.debugDescription)")
+        shot("default-permissions")
+    }
+
     // MARK: Menus, choices, toast, refusal
 
     @MainActor func testMenuChoicesAndToast() {

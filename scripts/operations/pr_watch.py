@@ -37,6 +37,9 @@ VERIFICATION_POLICY_VERSION = 3
 REVIEW_POLICY_VERSION = 3
 REPAIR_LIMIT = 3
 INFRASTRUCTURE_ATTEMPT_LIMIT = 3
+# `gh pr list` returns the newest PRs first and pages through `--limit` itself,
+# so the bound must exceed the open PRs or the oldest are never polled (#14864).
+DISCOVERY_LIMIT = 2000
 
 
 def blocking_findings(findings):
@@ -316,9 +319,12 @@ class Watcher:
         try:
             for repo, config in self.repositories.items():
                 raw = gh_json(["pr", "list", "--repo", repo, "--state", "open", "--json",
-                               "number,headRefOid,isDraft,baseRefName,mergeable", "--limit", "200"])
+                               "number,headRefOid,isDraft,baseRefName,mergeable", "--limit", str(DISCOVERY_LIMIT)])
                 if not isinstance(raw, list):
                     raise WatchError("PR discovery did not return an array")
+                if len(raw) >= DISCOVERY_LIMIT:
+                    self.log("%s: discovery reached its bound of %d open PRs; older PRs are not polled"
+                             % (repo, DISCOVERY_LIMIT))
                 for item in raw:
                     if not isinstance(item, dict) or not isinstance(item.get("number"), int):
                         raise WatchError("invalid PR discovery entry")
@@ -929,7 +935,12 @@ query($owner: String!, $name: String!, $number: Int!, $pageSize: Int!,
         seen = set()
         for _ in range(1000):
             variables = {"owner": owner, "name": name, "number": number, "pageSize": 100}
-            variables.update({field + "Cursor": value for field, value in cursors.items()})
+            # `False` marks a finished collection here, but the cursor variable is declared String: sending
+            # `false` is rejected ("Could not coerce value false to String") on every second page, which used
+            # to block every PR with more than one page of activity (#16737). The @include directive already
+            # drops a finished collection, so its cursor only has to be a legal value.
+            variables.update({field + "Cursor": None if value is False else value
+                              for field, value in cursors.items()})
             variables.update({"needComments": cursors["comments"] is not False,
                               "needReviews": cursors["reviews"] is not False,
                               "needThreads": cursors["threads"] is not False})

@@ -5,6 +5,7 @@
 import { act, useEffect, useReducer } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { LEGACY_SCHEME } from "../../lib/compatibility";
 import type { Item, Session } from "../../lib/types";
 
 // a mouse (fine pointer) or a touch screen alone, per test
@@ -229,6 +230,7 @@ describe("the error an Agent's chat stopped on", () => {
   it("leaves the host's failure note to say why the turn stopped: one card over the composer", async () => {
     captured.session = { ...IDLE, failure_reason: "⚠️ API Error: 529 overloaded" };
     await draw();
+    await act(async () => { await import("./BotmuxMessages"); });
     expect(host.querySelector('[data-chat-dock] [data-testid="chat-failure"]')).not.toBeNull();
     expect(banner()).toBeNull();
     expect(inChat()).not.toBeNull();
@@ -237,6 +239,7 @@ describe("the error an Agent's chat stopped on", () => {
   it("stays away after the failure note's Retry: the note goes, 继续 is sent, and no banner takes its place", async () => {
     captured.session = { ...IDLE, failure_reason: "⚠️ API Error: 529 overloaded" };
     await draw();
+    await act(async () => { await import("./BotmuxMessages"); });
     await act(async () => host.querySelector<HTMLButtonElement>('[data-testid="chat-failure-retry"]')!.click());
     await flush();
     expect(bodies.map((b) => b.text)).toEqual(["继续"]);
@@ -294,6 +297,12 @@ describe("the error the Persona conversation stopped on", () => {
 describe("image-limit Compact and send again (#13045)", () => {
   const TOO_LARGE = "Request too large (max 32MB). Accumulated images and attachments in the conversation pushed the request over the limit.";
 
+  const clickCompactAndResend = async (control = banner()!.querySelector<HTMLButtonElement>('[data-testid="compact-and-resend"]')!) => {
+    act(() => control.click());
+    await act(async () => vi.dynamicImportSettled());
+    await flush();
+  };
+
   it("runs assistant_compact and resends the failed message once compaction succeeds", async () => {
     captured.features = ["assistant_compact"];
     captured.session = { ...IDLE, assistant: true, turn_error_code: "images_too_large" };
@@ -304,8 +313,7 @@ describe("image-limit Compact and send again (#13045)", () => {
     expect(btn?.textContent).toBe("压缩并重发");
     expect(button(banner(), "重试")).toBeUndefined();
 
-    act(() => btn!.click());
-    await flush();
+    await clickCompactAndResend(btn!);
     expect(compactCalls).toHaveLength(1);
     expect(compactCalls[0]).toContain("/assistant/conversations/c1/compact");
     expect(bodies).toEqual([]);
@@ -327,8 +335,7 @@ describe("image-limit Compact and send again (#13045)", () => {
     captured.session = { ...IDLE, assistant: true, turn_error_code: "images_too_large" };
     transcript.items = [msg("u1", 1, "user", "帮我对比这几张截图"), msg("e1", 2, "assistant", TOO_LARGE)];
     await draw(true);
-    act(() => banner()!.querySelector<HTMLButtonElement>('[data-testid="compact-and-resend"]')!.click());
-    await flush();
+    await clickCompactAndResend();
     captured.session = { ...captured.session, compaction: { state: "failed", started_at: "2026-11-22T12:00:00Z", finished_at: "2026-11-22T12:00:03Z", error: "too short" } };
     act(() => upsertSession(captured.session!));
     await flush();
@@ -343,8 +350,7 @@ describe("image-limit Compact and send again (#13045)", () => {
     expect(btn?.textContent).toBe("压缩并重发");
     expect(button(banner(), "重试")).toBeUndefined();
 
-    act(() => btn!.click());
-    await flush();
+    await clickCompactAndResend(btn!);
     expect(bodies.map((b) => b.text)).toEqual(["/compact"]);
 
     // Terminal works, writes compact_boundary, then returns idle -> resends original message.
@@ -388,16 +394,16 @@ describe("image-limit Compact and send again (#13045)", () => {
       msg("e1", 2, "assistant", TOO_LARGE),
     ];
     await draw(true);
-    act(() => banner()!.querySelector<HTMLButtonElement>('[data-testid="compact-and-resend"]')!.click());
-    await flush();
+    await clickCompactAndResend();
     expect(compactCalls).toHaveLength(1);
 
     captured.session = { ...captured.session, compaction: { state: "done", started_at: "2026-11-22T12:00:00Z", finished_at: "2026-11-22T12:00:05Z" } };
     act(() => upsertSession(captured.session!));
     await flush();
     expect(bodies).toHaveLength(1);
-    expect(bodies[0].text).toMatch(/<(?:persona|jarvis)-context kind="edit" title="Doc">line 1<\/(?:persona|jarvis)-context>/);
-    expect(bodies[0].text).toMatch(/<(?:persona|jarvis)-file kind="file" path="\/tmp\/a\.pdf" name="a\.pdf"\/>/);
+    const tag = `(?:persona|${LEGACY_SCHEME})`;
+    expect(bodies[0].text).toMatch(new RegExp(`<${tag}-context kind="edit" title="Doc">line 1</${tag}-context>`));
+    expect(bodies[0].text).toMatch(new RegExp(`<${tag}-file kind="file" path="/tmp/a\\.pdf" name="a\\.pdf"/>`));
     expect(bodies[0].text).toContain("帮我看看这张图");
     expect(bodies[0].images).toEqual([{ mime: "image/png", data: "UE5H" }]);
   });
@@ -431,8 +437,7 @@ describe("image-limit Compact and send again (#13045)", () => {
       msg("e2", 2, "assistant", TOO_LARGE),
     ];
     await draw(true);
-    act(() => banner()!.querySelector<HTMLButtonElement>('[data-testid="compact-and-resend"]')!.click());
-    await flush();
+    await clickCompactAndResend();
     expect(compactCalls).toEqual([]);
     expect(bodies).toEqual([]);
     expect(vi.mocked(toast)).toHaveBeenCalled();
@@ -447,8 +452,7 @@ describe("image-limit Compact and send again (#13045)", () => {
       msg("e1", 4, "assistant", TOO_LARGE),
     ];
     await draw(false);
-    act(() => banner()!.querySelector<HTMLButtonElement>('[data-testid="compact-and-resend"]')!.click());
-    await flush();
+    await clickCompactAndResend();
     expect(bodies.map((b) => b.text)).toEqual(["/compact"]);
 
     captured.session = { ...captured.session, status: "working", state: "working" };
@@ -468,8 +472,7 @@ describe("image-limit Compact and send again (#13045)", () => {
     captured.session = { ...IDLE, agent: "claude", turn_error_code: "images_too_large" };
     transcript.items = [msg("u1", 10, "user", "看看这些界面差异"), msg("e1", 11, "assistant", TOO_LARGE)];
     await draw(false);
-    act(() => banner()!.querySelector<HTMLButtonElement>('[data-testid="compact-and-resend"]')!.click());
-    await flush();
+    await clickCompactAndResend();
     expect(bodies.map((b) => b.text)).toEqual(["/compact"]);
 
     // Older boundary paged in while still idle -> must NOT trigger resend.
@@ -501,8 +504,7 @@ describe("image-limit Compact and send again (#13045)", () => {
     captured.session = { ...IDLE, assistant: true, turn_error_code: "images_too_large" };
     transcript.items = [msg("u1", 1, "user", "/clear"), msg("e1", 2, "assistant", TOO_LARGE)];
     await draw(true);
-    act(() => banner()!.querySelector<HTMLButtonElement>('[data-testid="compact-and-resend"]')!.click());
-    await flush();
+    await clickCompactAndResend();
     expect(compactCalls).toHaveLength(1);
 
     captured.session = { ...captured.session, compaction: { state: "done", started_at: "2026-11-22T12:00:00Z", finished_at: "2026-11-22T12:00:05Z" } };
@@ -516,8 +518,7 @@ describe("image-limit Compact and send again (#13045)", () => {
     captured.session = { ...IDLE, agent: "claude", turn_error_code: "images_too_large" };
     transcript.items = [msg("u1", 1, "user", "/workflows"), msg("e1", 2, "assistant", TOO_LARGE)];
     await draw(false);
-    act(() => banner()!.querySelector<HTMLButtonElement>('[data-testid="compact-and-resend"]')!.click());
-    await flush();
+    await clickCompactAndResend();
     expect(bodies.map((b) => b.text)).toEqual(["/compact"]);
 
     captured.session = { ...captured.session, status: "working", state: "working" };
@@ -551,8 +552,7 @@ describe("image-limit Compact and send again (#13045)", () => {
       captured.session = { ...IDLE, agent: "claude", turn_error_code: "images_too_large" };
       transcript.items = [msg("u1", 1, "user", "/model"), msg("e1", 2, "assistant", TOO_LARGE)];
       await draw(false);
-      act(() => banner()!.querySelector<HTMLButtonElement>('[data-testid="compact-and-resend"]')!.click());
-      await flush();
+      await clickCompactAndResend();
       expect(bodies.map((b) => b.text)).toEqual(["/compact"]);
 
       captured.session = { ...captured.session, status: "working", state: "working" };
@@ -579,8 +579,7 @@ describe("image-limit Compact and send again (#13045)", () => {
       captured.session = { ...IDLE, agent: "claude", turn_error_code: "images_too_large" };
       transcript.items = [msg("u2", 10, "user", "/permissions"), msg("e2", 11, "assistant", TOO_LARGE)];
       await draw(false);
-      act(() => banner()!.querySelector<HTMLButtonElement>('[data-testid="compact-and-resend"]')!.click());
-      await flush();
+      await clickCompactAndResend();
       expect(bodies.map((b) => b.text)).toEqual(["/compact"]);
 
       captured.session = { ...captured.session, status: "working", state: "working" };
@@ -604,8 +603,7 @@ describe("image-limit Compact and send again (#13045)", () => {
     captured.session = { ...IDLE, agent: "claude", turn_error_code: "images_too_large" };
     transcript.items = [msg("u1", 1, "user", "/model"), msg("e1", 2, "assistant", TOO_LARGE)];
     await draw(false);
-    act(() => banner()!.querySelector<HTMLButtonElement>('[data-testid="compact-and-resend"]')!.click());
-    await flush();
+    await clickCompactAndResend();
     expect(bodies.map((b) => b.text)).toEqual(["/compact"]);
 
     captured.session = { ...captured.session, status: "working", state: "working" };

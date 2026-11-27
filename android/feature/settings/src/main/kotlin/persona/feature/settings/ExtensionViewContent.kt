@@ -184,7 +184,7 @@ internal fun rememberExtensionView(model: ExtensionViewModel, appLink: (String) 
  * cards, a row of them at a time; with one (a phone, and anywhere a page is not measured) it is the stack.
  */
 internal fun LazyListScope.extensionViewItems(key: String, state: ExtensionViewState, handle: ExtensionViewHandle, showTitles: Boolean = true,
-                                             streamSectionKeys: List<String>? = null, columns: Int = 1, compactGraph: Boolean = false) {
+                                             streamSectionKeys: List<String>? = null, columns: Int = 1, compactPreview: Boolean = false) {
     val view = state.view ?: return
     view.tabs?.takeIf { it.items.size >= 2 && it.name.isNotEmpty() }?.let { tabs ->
         item("$key-tabs") { ExtensionTabs(tabs, state.values[tabs.name] ?: tabs.value, state, handle, Modifier.padding(bottom = Tokens.Space.s)) }
@@ -251,7 +251,7 @@ internal fun LazyListScope.extensionViewItems(key: String, state: ExtensionViewS
                             GroupedItem(item, state, itemHandle)
                         }
                     } else Box(moving) {
-                        CompositionLocalProvider(LocalExtensionGraphCompact provides compactGraph) {
+                        CompositionLocalProvider(LocalExtensionPreviewCompact provides compactPreview) {
                             StandaloneItem(item, state, itemHandle, first = start == 0)
                         }
                     }
@@ -331,13 +331,25 @@ private fun ExtensionRow(item: ExtensionViewItem, state: ExtensionViewState, han
     val icon = item.icon?.takeIf { it.isNotBlank() }?.let(ExtensionIcons::of)
     val leading = rowLeading(item, handle)
     val busy = action != null && state.acting == action.id
+    val slider = control?.takeIf { it.under() }
+    val rowValue = if (slider == null) item.value?.takeIf { it.isNotBlank() } else null
+    val stackedSpark = spark != null && rowValue != null
     val end = control?.takeIf { !it.under() }
     val flip = end?.takeIf { it.kind == "switch" && it.disabled != true }
+    val rowHandlesSwitch = action == null && flip != null
     val trailing: (@Composable () -> Unit)? = if (busy || badge != null || end != null || spark != null || actions.isNotEmpty()) ({
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
-            spark?.let { JSparkline(it) }
+            if (stackedSpark) {
+                val valueStyle = if (PersonaTheme.style == AppStyle.Board) PersonaTheme.type.micro else PersonaTheme.type.callout
+                Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(Tokens.Space.xxs)) {
+                    JChangingText(rowValue, style = valueStyle, color = palette.ink3)
+                    JSparkline(spark)
+                }
+            } else {
+                spark?.let { JSparkline(it) }
+            }
             if (busy) JSpinner() else badge?.let { ExtensionBadge(it) }
-            end?.let { RowControlEnd(it, state, handle) }
+            end?.let { RowControlEnd(it, state, handle, rowHandlesSwitch = rowHandlesSwitch) }
             RowActionsMenu(actions, menu, { menu = it }, handle, enabled = true)
         }
     }) else null
@@ -355,9 +367,8 @@ private fun ExtensionRow(item: ExtensionViewItem, state: ExtensionViewState, han
             role = if (action == null && flip != null) androidx.compose.ui.semantics.Role.Switch else androidx.compose.ui.semantics.Role.Button)
     }
     JSwipeActions(start = start, end = swipeEnd) {
-        val slider = control?.takeIf { it.under() }
         if (slider != null) RowSlider(slider, item.title.orEmpty(), state, handle) { value -> row(value) }
-        else row(item.value?.takeIf { it.isNotBlank() })
+        else row(if (stackedSpark) null else rowValue)
     }
 }
 
@@ -383,14 +394,16 @@ internal fun StandaloneItem(item: ExtensionViewItem, state: ExtensionViewState, 
         }
         "metric" -> ItemPanel(top) {
             Column(Modifier.fillMaxWidth().padding(horizontal = rowPadding, vertical = Tokens.Space.m), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xxs)) {
+                val tone = ExtensionViewText.tone(item.tone)
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     item.icon?.takeIf { it.isNotBlank() }?.let {
-                        JIcon(ExtensionIcons.of(it), null, size = Tokens.Space.l, tint = palette.hueOr(ExtensionViewText.hue(item.iconColor)), decorative = true)
+                        val iconTint = ExtensionViewText.hue(item.iconColor)?.let { h -> palette.hue(h).dot }
+                            ?: if (tone == Tone.Neutral) palette.ink2 else palette.tone(tone).dot
+                        JIcon(ExtensionIcons.of(it), null, size = Tokens.Space.l, tint = iconTint, decorative = true)
                         Spacer(Modifier.width(Tokens.Space.xs))
                     }
                     Text(item.label.orEmpty(), style = type.caption, color = palette.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
-                val tone = ExtensionViewText.tone(item.tone)
                 JChangingText(item.value.orEmpty(), style = type.number, color = if (tone == Tone.Neutral) palette.ink else palette.tone(tone).text)
                 ExtensionViewText.spark(item.spark)?.let { JSparkline(it, Modifier.fillMaxWidth().height(SparkSize.height)) }
                 item.detail?.takeIf { it.isNotBlank() }?.let { Text(it, style = type.caption, color = palette.ink3) }
@@ -446,7 +459,9 @@ internal fun StandaloneItem(item: ExtensionViewItem, state: ExtensionViewState, 
         "grid" -> ExtensionGrid(item, state, handle, top)
         "carousel" -> ExtensionCarousel(item, state, handle, top)
         // UI version 10: a card or an in-place reply block shows the same still preview as an overview card.
-        "graph" -> ExtensionGraph(item, state, handle, top, compact = LocalExtensionCard.current || LocalExtensionGraphCompact.current)
+        "graph" -> ExtensionGraph(item, state, handle, top, compact = LocalExtensionCard.current || LocalExtensionPreviewCompact.current)
+        "map" -> ExtensionMap(item, state, handle, top, compact = LocalExtensionCard.current || LocalExtensionPreviewCompact.current)
+        "scene" -> ExtensionScene(item, state, handle, top, compact = LocalExtensionCard.current || LocalExtensionPreviewCompact.current)
     }
 }
 
@@ -456,8 +471,8 @@ internal fun StandaloneItem(item: ExtensionViewItem, state: ExtensionViewState, 
  */
 internal val LocalViewHtml = staticCompositionLocalOf<(@Composable (ExtensionViewItem, Modifier) -> Unit)?> { null }
 
-/** Only the graph changes presentation inside an in-place card; existing panels keep their original chrome. */
-private val LocalExtensionGraphCompact = staticCompositionLocalOf { false }
+/** Graphs, maps and scenes show previews in embedded cards and replies. */
+private val LocalExtensionPreviewCompact = staticCompositionLocalOf { false }
 
 /**
  * A view drawn in place, not in a lazy list (an assistant's ```persona-view in a reply): the same items in the same
@@ -468,7 +483,7 @@ internal fun ExtensionViewColumn(state: ExtensionViewState, handle: ExtensionVie
     val view = state.view ?: return
     val palette = PersonaTheme.palette
     val type = PersonaTheme.type
-    CompositionLocalProvider(LocalExtensionGraphCompact provides true) {
+    CompositionLocalProvider(LocalExtensionPreviewCompact provides true) {
         Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
             view.title?.takeIf { it.isNotBlank() }?.let { Text(it, style = type.headline, color = palette.ink) }
             view.sections.forEach { section ->
@@ -590,6 +605,8 @@ private fun CardItem(item: ExtensionViewItem, state: ExtensionViewState, handle:
         "carousel" -> ExtensionCarousel(item, state, handle, limit = 6, compact = true)
         // UI version 10: a still preview; only its whole surface opens the full-screen canvas.
         "graph" -> ExtensionGraph(item, state, handle, compact = true)
+        "map" -> ExtensionMap(item, state, handle, compact = true)
+        "scene" -> ExtensionScene(item, state, handle, compact = true)
     }
 }
 

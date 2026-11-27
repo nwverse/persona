@@ -1,12 +1,15 @@
 // Package modapi is the module contract of Persona Core (docs/architecture/core-and-modules.md): what a built-in
 // feature module declares about itself (Info, the manifest of schema/module.schema.json), what it is (Module), and the
-// one way it reaches the core (Host). It holds types and constants only, imports nothing but the standard library,
+// one way it reaches the core (Host). It holds types, constants and the list of client-only module ids, imports nothing but the standard library and the
+// contract's ID types (internal/wireids),
 // and is a contract package (internal/archguard/testdata/contracts.txt): the core (internal/assistant/kernel serves
 // Host) and the modules (internal/modules/<id>) both import it, never each other.
 package modapi
 
 import (
+	"context"
 	"encoding/json"
+	"net/http"
 	"time"
 )
 
@@ -40,7 +43,8 @@ type Info struct {
 	// when they are, through the kernel only: a wanted module may be left out of the build.
 	Needs []string `json:"needs,omitempty"`
 	Wants []string `json:"wants,omitempty"`
-	// Feature is the wire feature flag announced while the module is loaded ("" for none).
+	// Feature is the wire feature flag module.<id> announced while the module is loaded ("" for none). A publishing
+	// manager also announces the reserved modules marker, including when every module is absent.
 	Feature string `json:"feature,omitempty"`
 
 	HubRoutes       []string `json:"hub_routes,omitempty"`       // "METHOD /api/v1/…" patterns
@@ -76,7 +80,8 @@ type Module interface {
 }
 
 // Host is everything a module may use of the core. It grows one method per slot as the server learns to serve the
-// slot (docs/architecture/core-and-modules.md "Slots"); a module never reaches the core any other way.
+// slot (docs/architecture/core-and-modules.md "Slots"), and narrow read/write ports for the ledgers a module acts on;
+// a module never reaches the core any other way.
 type Host interface {
 	// Logf writes to the manager's log, prefixed with the module's id.
 	Logf(format string, args ...any)
@@ -84,6 +89,30 @@ type Host interface {
 	AddSetting(Setting) error
 	// AddScheduleFacts serves Info.Schedules' ScheduleFactsName entry.
 	AddScheduleFacts(ScheduleFacts) error
+	// AddHubRoute serves one declared "METHOD /api/v1/…" route while the module is loaded.
+	AddHubRoute(pattern string, handler http.HandlerFunc) error
+	// AddMCPTool serves one declared assistant tool (Info.MCPTools names it) while the module is loaded.
+	// The tool is built with Tool (typed arguments, decoded strictly) or as an MCPTool value (tool.go).
+	AddMCPTool(MCPTool) error
+	// AddBackgroundJob runs one declared loop under the Service Run context while the module is loaded.
+	AddBackgroundJob(name string, run func(context.Context) error) error
+
+	// Narrow core ports a module uses at run time (each may be nil in registration-only tests).
+	Tasks() TaskPort
+	Todos() TodoPort
+	Inbox() InboxPort
+	Later() LaterPort
+	Schedule() SchedulePort
+	Feed() FeedPort
+	Delivery() DeliveryPort
+	DayRecap() DayRecapPort
+	Prompts() PromptPort
+}
+
+// BackgroundJob is a module-owned loop. Run inherits Service.Run's cancellation; an off module never starts it.
+type BackgroundJob struct {
+	Name string
+	Run  func(context.Context) error
 }
 
 // Setting is a module's value in persona_settings. The core keeps the stored value (also while the module is off,
@@ -101,13 +130,17 @@ type Setting struct {
 }
 
 // ScheduleFacts is a module's part in the facts a scheduled routine with facts on opens with (the briefing). The core
-// gathers the ledgers it owns (to-dos, cards, agents, queues); the module decides when stopped work counts as waiting
-// and how much of it is shown. Without it, such a routine opens with no facts.
+// owns the ledgers (to-dos, cards, agents, queues, schedule); the module gathers the briefing snapshot, builds its feed
+// item, manages per-run retention and model-failure fallbacks, and decides when stopped work counts as waiting. Without
+// it, such a routine opens with no facts.
 type ScheduleFacts struct {
 	// Setting is the key of the module's Setting the rules read ("" for none).
 	Setting string
 	// Waits are the wait rules for the setting's stored value (nil: never set).
 	Waits func(stored json.RawMessage) WaitRules
+	// Runner owns the briefing's fact gathering, feed item, fallback and schedule lifecycle hooks (optional for
+	// wait-only test modules).
+	Runner ScheduleFactsRunner
 }
 
 // WaitRules say when stopped work is waiting and how many rows a direction shows.
@@ -131,4 +164,14 @@ type WaitRow struct {
 	Kind  string
 	Since time.Time
 	Key   string
+}
+
+// ClientModules are the ids of the feature modules that live only in the clients (web, iOS, Android): the server has
+// no module of that id, so no manifest announces their flag. The manager announces module.<id> for each of them beside
+// the built-in modules' flags unless the modules setting switches it off, so a client that gates one on the hello
+// (docs/architecture/core-and-modules.md "Hub flags") keeps it on by default and the owner can turn it off from the
+// hub. An id leaves this list in the PR that gives the module a server half with its own feature
+// (internal/modules/all checks that no built-in module is listed).
+func ClientModules() []string {
+	return []string{"glasses"}
 }
