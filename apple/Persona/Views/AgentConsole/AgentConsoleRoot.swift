@@ -53,38 +53,9 @@ struct AgentConsoleRoot: View {
         default: .assistant
         }
         TabView(selection: Binding(get: { selected }, set: { model.selectHomeTab($0) })) {
-            Tab(String(localized: "Main Chat"), systemImage: Theme.Icon.ai, value: AppTab.assistant) {
-                AssistantView()
-                    .modifier(TabActivityScope(tab: .assistant))
-            }
-            .badge(model.badges.assistant)
-
-            Tab("Agents", systemImage: Theme.Icon.agents, value: AppTab.chats) {
-                VStack(spacing: 0) {
-                        Picker("Agent conversations", selection: $agentsMode) {
-                            Text("Running").tag(AgentConsoleAgentsMode.running)
-                            Text("External").tag(AgentConsoleAgentsMode.external)
-                        }
-                        .pickerStyle(.segmented)
-                        .padding(.horizontal, Theme.Space.m)
-                        .padding(.vertical, Theme.Space.s)
-                        .accessibilityIdentifier("agent-console-running-external")
-
-                        if agentsMode == .running {
-                            ChatsView()
-                                .environment(\.agentConsole, true)
-                        } else {
-                            LarkConversationsView()
-                        }
-                }
-                .modifier(TabActivityScope(tab: .chats))
-            }
-            .badge(model.badges.agents)
-
-            Tab(String(localized: "Settings"), systemImage: Theme.Icon.settings, value: AppTab.settings) {
-                SettingsView()
-                    .modifier(TabActivityScope(tab: .settings))
-            }
+            AgentConsoleMainTab()
+            AgentConsoleAgentsTab(mode: $agentsMode)
+            AgentConsoleSettingsTab()
         }
         .environment(\.agentConsole, true)
         .onAppear {
@@ -98,6 +69,55 @@ struct AgentConsoleRoot: View {
                 model.settingsPath = NavigationPath()
                 model.selectedTab = .assistant
             }
+        }
+    }
+}
+
+/// Each tab is a separate `TabContent`, as the existing RootTabs are. Keeping the page types out of the root's
+/// conditional body avoids the iOS 27 SwiftUI associated-type crash seen in the TestFlight restart reports (#17129).
+@MainActor private struct AgentConsoleMainTab: TabContent {
+    @Environment(AppModel.self) private var model
+
+    var body: some TabContent<AppTab> {
+        Tab(String(localized: "Main Chat"), systemImage: Theme.Icon.ai, value: AppTab.assistant) {
+            AssistantView().modifier(TabActivityScope(tab: .assistant))
+        }
+        .badge(model.badges.assistant)
+    }
+}
+
+@MainActor private struct AgentConsoleAgentsTab: TabContent {
+    @Environment(AppModel.self) private var model
+    @Binding var mode: AgentConsoleAgentsMode
+
+    var body: some TabContent<AppTab> {
+        Tab("Agents", systemImage: Theme.Icon.agents, value: AppTab.chats) {
+            VStack(spacing: 0) {
+                Picker("Agent conversations", selection: $mode) {
+                    Text("Running").tag(AgentConsoleAgentsMode.running)
+                    Text("External").tag(AgentConsoleAgentsMode.external)
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, Theme.Space.m)
+                .padding(.vertical, Theme.Space.s)
+                .accessibilityIdentifier("agent-console-running-external")
+
+                if mode == .running {
+                    ChatsView().environment(\.agentConsole, true)
+                } else {
+                    LarkConversationsView()
+                }
+            }
+            .modifier(TabActivityScope(tab: .chats))
+        }
+        .badge(model.badges.agents)
+    }
+}
+
+@MainActor private struct AgentConsoleSettingsTab: TabContent {
+    var body: some TabContent<AppTab> {
+        Tab(String(localized: "Settings"), systemImage: Theme.Icon.settings, value: AppTab.settings) {
+            SettingsView().modifier(TabActivityScope(tab: .settings))
         }
     }
 }
