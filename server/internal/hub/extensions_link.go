@@ -27,7 +27,6 @@ import (
 	"github.com/nwverse/persona/server/internal/extwire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/modapi"
-	"github.com/nwverse/persona/server/internal/moduleswitch"
 	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -320,7 +319,7 @@ func (h *Hub) reportedModules(out []string) []string {
 	marker := false
 	for _, manager := range h.busRoster() {
 		if manager.ID == id {
-			marker = slices.Contains(manager.Features, moduleswitch.Marker)
+			marker = slices.Contains(manager.Features, "modules") // the marker (moduleswitch.Marker, not linked into the hub)
 		}
 	}
 	r := h.extReportOf(id)
@@ -331,7 +330,7 @@ func (h *Hub) reportedModules(out []string) []string {
 		if !slices.ContainsFunc(modapi.ExtensionModules(), func(x modapi.ExtensionModule) bool { return string(x.ID) == string(m.ID) }) {
 			continue
 		}
-		f := moduleswitch.FlagPrefix + string(m.ID)
+		f := "module." + string(m.ID)
 		switch {
 		case m.On && !slices.Contains(out, f):
 			out = append(out, f)

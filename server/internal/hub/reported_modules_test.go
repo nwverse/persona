@@ -3,13 +3,16 @@ package hub
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/bus"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/extwire"
+	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // The flags of modules approved installed extensions supply (#16254, Report.Modules): the hub takes them from the
@@ -26,7 +29,7 @@ func helloManager(t *testing.T, h *Hub, id string, features ...string) *busConn 
 	if err := json.Unmarshal(raw, &p); err != nil {
 		t.Fatal(err)
 	}
-	c := &busConn{ident: db.BusIdentity{ID: id}, presence: p}
+	c := &busConn{ident: db.BusIdentity{ID: id, Role: bus.RoleManager}, presence: p, peer: rpc.New("h", io.Discard)}
 	h.bus.mu.Lock()
 	if h.bus.current == nil {
 		h.bus.current = map[string]*busConn{}
