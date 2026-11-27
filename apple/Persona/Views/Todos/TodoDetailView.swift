@@ -339,6 +339,8 @@ struct TodoDetailView: View {
                             .readingContent()
                             .font(Theme.Font.body)
                             .foregroundStyle(Color.primary)
+                            .lookUpWords(plain: text.notes)
+                            .textLookupSurface("todo") // a tap on a word looks it up (#10977); the field above never does
                     } else {
                         Text("No notes yet")
                             .font(Theme.Font.body)
