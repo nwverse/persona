@@ -21890,9 +21890,21 @@ def personal_rows():
     rows = [("muse", "周报助手", 0.1, 2), ("grok_bot", "旅行规划", 1.5, 0), ("cue", "读书笔记", 5, 1), ("muse", "代码评审", 30, 0),
             ("grok_bot", "健身记录", 80, 0), ("cue", "菜谱整理", 200, 0)]
     if os.environ.get("MOCK_PERSONAL_UPGRADE"): rows[0] = ("muse", "Upgrade preference fixture", 0.1, 2)
-    return [{"id": "lark-bridge:%s:%d" % (prov, i), "source": "lark-bridge", "sessionKey": "%s:%d" % (prov, i), "provider": prov,
-             "title": title, "canSend": True, "unreadCount": unread, "rankTimeMs": now - int(hours * 3600 * 1000), "hasAvatar": False}
-            for i, (prov, title, hours, unread) in enumerate(rows)]
+    # What the Messages page draws beside each (docs/extensions/lark-migration.md "Personal Agents in Messages"): the
+    # latest message, and the allowance at its service as a charge: plenty (show false, an older account's default, still
+    # drawn), low, used up, none, an old reading.
+    previews = [("周报草稿好了", False), ("帮我再找找周末的票", True), ("第三章的要点整理完了", False), ("", False), ("", False), ("", False)]
+    quotas = [{"state": "ok", "percent": 70, "show": False, "resetsAt": now + 5 * 3600 * 1000}, {"state": "low", "remaining": 0.15},
+              {"state": "exhausted", "remaining": 0}, None, {"state": "ok", "percent": 55, "stale": True}, None]
+    out = []
+    for i, (prov, title, hours, unread) in enumerate(rows):
+        row = {"id": "lark-bridge:%s:%d" % (prov, i), "source": "lark-bridge", "sessionKey": "%s:%d" % (prov, i), "provider": prov,
+               "title": title, "canSend": True, "unreadCount": unread, "rankTimeMs": now - int(hours * 3600 * 1000), "hasAvatar": False}
+        text, mine = previews[i]
+        if text: row.update(previewText=text, previewIsMine=mine)
+        if quotas[i]: row["quota"] = quotas[i]
+        out.append(row)
+    return out
 def personal_listed(hidden):
     return [r for r in personal_rows() if (r["id"] in PERSONAL_HIDDEN) == hidden] if PERSONAL_STATE["state"] in ("configured", "partial", "partial_setup") else []
 # MOCK_GIT_WRITE=1 (#6121): the Git panel's writes on a made-up repository that changes as they are made

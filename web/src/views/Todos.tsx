@@ -47,6 +47,7 @@ import {
   makeSessionLookup,
   mostUrgentAgent,
   orphanedLine,
+  reportConcern,
   responsibleOf,
   sortTodos,
   heldDelivery,
@@ -295,6 +296,7 @@ function TodoListView({
   const [newOpen, setNewOpen] = useState(false);
   const [handoverOpen, setHandoverOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [reportingConcern, setReportingConcern] = useState<Todo>();
   // Which to-do the hand-over and delete dialogs are for: a row's whose menu chose them (#4429), or for hand-over
   // none, the open one, which it follows. Each stays set after its dialog closes, so the dialog leaves with the to-do
   // it showed.
@@ -1036,6 +1038,10 @@ function TodoListView({
 
   // `open`: the row's checkbox shows it open (`checksAsOpen`): a failed start waiting on the owner is ticked to close it
   const toggleDone = useCallback(async (todo: Todo, open = !todo.done_at) => {
+    if (open && todo.kind === "concern") {
+      setReportingConcern(todo);
+      return;
+    }
     try {
       await updateTodo(todo.id, { done: open });
       await refreshTodos();
@@ -1453,7 +1459,17 @@ function TodoListView({
               ) : offline && todos.length === 0 ? (
                 <OfflineState offline={offline} ring="ring-surface" className="py-14" />
               ) : (
-                <TodoBoard todos={boardProjection.todos} lookup={lookup} triages={boardProjection.triages} projectName={projectName} tick={tick} onOpen={openFromList} />
+                <TodoBoard
+                  todos={boardProjection.todos}
+                  lookup={lookup}
+                  triages={boardProjection.triages}
+                  projectName={projectName}
+                  tick={tick}
+                  onOpen={openFromList}
+                  todosV2={todosV2}
+                  allTodos={todosV2 ? todos : undefined}
+                  effectiveDirectionOf={todosV2 ? resolveDirection : undefined}
+                />
               )}
             </TodoListScroller>
           ) : requestMode ? (
@@ -1808,6 +1824,10 @@ function TodoListView({
       )}
 
       {dueTodo && <TodoDueDialog key={dueTodo.id} todo={dueTodo} onClose={() => setDueFor(undefined)} onSave={(patch) => savePlan(dueTodo.id, patch)} />}
+
+      {reportingConcern && (
+        <ReportConcernDialog key={`report:${reportingConcern.id}`} todo={reportingConcern} onClose={() => setReportingConcern(undefined)} />
+      )}
 
       {handoverTodo && (
         <HandoverDialog
@@ -2938,6 +2958,7 @@ const TodoListItem = memo(function TodoListItem({
   const thread = useStore((s) => todoThreadsOn(s.features)) ? boundThread(todo) : undefined;
   // a failed start still waiting on the owner reads open, not done, with why it did not start (#3713), in every grouping
   const open = checksAsOpen(todo, effectiveSection);
+  const completeLabel = todo.kind === "concern" ? t("todos.report_concern_action") : t("todos.complete_todo");
   const failedOpen = open && Boolean(todo.start_error);
   // Its menu (#4429): a right click opens it at the pointer, the menu key and Shift+F10 on the row
   const menu = onMenu ? contextMenuProps((at) => onMenu(todo, at, open)) : undefined;
@@ -2993,7 +3014,7 @@ const TodoListItem = memo(function TodoListItem({
           )}
           <button
             type="button"
-            aria-label={open ? t("todos.complete_todo") : t("todos.reopen_todo")}
+            aria-label={open ? completeLabel : t("todos.reopen_todo")}
             onClick={(e) => {
               e.stopPropagation();
               onToggleDone(todo, open);
@@ -3139,7 +3160,7 @@ const TodoListItem = memo(function TodoListItem({
         )}
         <button
           type="button"
-          aria-label={open ? t("todos.complete_todo") : t("todos.reopen_todo")}
+          aria-label={open ? completeLabel : t("todos.reopen_todo")}
           onClick={(e) => {
             e.stopPropagation();
             onToggleDone(todo, open);
@@ -3365,7 +3386,7 @@ const TodoListItem = memo(function TodoListItem({
       {/* Checkbox button: touch-hit makes the 16px circle a 44px target on touch, its own (no row underneath) */}
       <button
         type="button"
-        aria-label={open ? t("todos.complete_todo") : t("todos.reopen_todo")}
+        aria-label={open ? completeLabel : t("todos.reopen_todo")}
         onClick={(e) => {
           e.stopPropagation();
           onToggleDone(todo, open);
@@ -4447,6 +4468,7 @@ function TodoDetail({
             ? "idle"
             : "offline";
 
+  const completeLabel = todo.kind === "concern" ? t("todos.report_concern_action") : t("todos.complete");
   const hasChildSummary = Boolean(todo.child_summary && todo.child_summary.total > 0);
   const showOwnershipStrip =
     todosV2 === true &&
@@ -5303,7 +5325,7 @@ function TodoDetail({
           </>
         )}
         <Button tone="secondary" icon="check" onClick={() => onToggleDone(open)} className="h-8.5 px-3 text-[13px] whitespace-nowrap">
-          {open ? t("todos.complete") : t("todos.reopen")}
+          {open ? completeLabel : t("todos.reopen")}
         </Button>
       </div>
     </div>
@@ -5690,6 +5712,59 @@ function submitOnModEnter(e: React.KeyboardEvent<HTMLFormElement>) {
   if (e.defaultPrevented || e.key !== "Enter" || !(e.metaKey || e.ctrlKey) || composing(e.nativeEvent)) return;
   e.preventDefault();
   e.currentTarget.requestSubmit();
+}
+
+function ReportConcernDialog({ todo, onClose }: { todo: Todo; onClose: () => void }) {
+  const [report, setReport] = useState("");
+  const [busy, setBusy] = useState(false);
+  const fieldId = useId();
+  const hintId = useId();
+  const canSubmit = report.trim().length > 0 && !busy;
+  const close = () => { if (!busy) onClose(); };
+
+  const submit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!canSubmit) return;
+    setBusy(true);
+    try {
+      await reportConcern(todo.id, report);
+      await refreshTodos();
+      await refresh();
+      onClose();
+      toast(t("todos.report_concern_success"), "ok");
+    } catch (err) {
+      toast(t("todos.action_failed", { error: errorText(err) }), "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open onClose={close} title={t("todos.report_concern_title")}>
+      <form onSubmit={submit} onKeyDown={submitOnModEnter} className="flex flex-col gap-3.5">
+        <p id={hintId} className="wrap-break-word text-meta text-ink-3">{t("todos.report_concern_hint", { title: todo.title })}</p>
+        <div>
+          <label htmlFor={fieldId} className="mb-1 block text-label font-medium text-ink-2">{t("todos.report_concern_label")}</label>
+          <textarea
+            id={fieldId}
+            aria-describedby={hintId}
+            rows={3}
+            required
+            autoFocus
+            readOnly={busy}
+            value={report}
+            onChange={(e) => setReport(e.target.value)}
+            placeholder={t("todos.report_concern_placeholder")}
+            className="w-full resize-y rounded-control border border-line bg-canvas px-3 py-1.5 text-meta text-ink outline-none focus:border-accent"
+          />
+        </div>
+        <div className="mt-2 flex flex-wrap justify-end gap-2">
+          <Button tone="secondary" disabled={busy} onClick={close}>{t("common.cancel")}</Button>
+          <Button tone="accent" type="submit" disabled={!canSubmit} busy={busy}>{t("todos.report_concern_submit")}</Button>
+        </div>
+      </form>
+    </Dialog>
+  );
 }
 
 function DecisionDialog({

@@ -1,14 +1,107 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { t } from "../../i18n";
 import { useCloseOnBack } from "../../lib/back-close";
+import { setCommentImages, type CommentImagePicker, type DraftImage } from "../../lib/drafts";
+import { composerEntryDrop, parseEntry } from "../../lib/entry-drag";
+import { uuid } from "../../lib/format";
+import { MAX_PICTURE_SOURCE, type ImageLimits } from "../../lib/image-limits";
 import { enterSends, hasFinePointer, NARROW, useMedia } from "../../lib/viewport";
 import { useComposition } from "../../lib/ime";
 import { editorText, type InlineDocument, type InlineSelection } from "../../lib/inline-mentions";
-import { cx, EASE } from "../../ui/atoms";
+import { Button, cx, Dialog, EASE, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { useModalFocus } from "../../ui/overlay";
 import { ComposerField } from "./ComposerField";
+import { ComposerImageStage, type ComposerImageStageProps } from "./ComposerImageStage";
 import type { InlineMentionInputHandle } from "./InlineMentionInput";
+
+/** A picked picture made ready for a message (scaled down as on the iPhone, lib/image-scale.ts), or null when
+ *  the page cannot read it or bring it under the limits: it goes as a file. */
+export async function fitDraftImage(file: File, limits: ImageLimits): Promise<DraftImage | null> {
+  if (file.size > MAX_PICTURE_SOURCE) return null;
+  const { fitPicture } = await import("../../lib/image-scale");
+  const fit = await fitPicture(file, limits);
+  return fit && { ...fit, name: file.name || "image.png" };
+}
+
+export async function readImage(file: File, limits: ImageLimits) {
+  const image = await fitDraftImage(file, limits);
+  return image && { ...image, id: uuid(), url: URL.createObjectURL(file) };
+}
+
+export function resolveEntryDrop(raw: string, target: { mid?: string; cwd?: string }, onPaste: (path: string) => void) {
+  const entry = parseEntry(raw);
+  if (!entry) return;
+  const drop = composerEntryDrop(entry, target);
+  if (drop.action === "refuse") toast(drop.toast);
+  else onPaste(drop.text.slice(1, -1));
+}
+
+export async function runCommentImagePicker({
+  target,
+  files,
+  signal,
+  draftKey,
+  limits,
+  roomForImage,
+  imageRoomError,
+  commentReads,
+  releaseLoader,
+  current,
+}: {
+  target: Parameters<CommentImagePicker>[0];
+  files: File[];
+  signal: AbortSignal;
+  draftKey: string;
+  limits: () => ImageLimits;
+  roomForImage: (size: number) => "ok" | "count" | "bytes";
+  imageRoomError: (why: "count" | "bytes") => void;
+  commentReads: Set<object>;
+  releaseLoader: () => void;
+  current: (id: string | undefined) => boolean;
+}) {
+  releaseLoader();
+  let id = typeof target === "string" ? target : undefined;
+  for (const file of files) {
+    if (!current(id)) return;
+    if (!file.type.startsWith("image/")) {
+      toast(t("chat-composer.images_only"), "error");
+      continue;
+    }
+    const room = roomForImage(0);
+    if (room !== "ok") {
+      imageRoomError(room);
+      return;
+    }
+    const read = {};
+    const release = () => commentReads.delete(read);
+    commentReads.add(read);
+    signal.addEventListener("abort", release, { once: true });
+    let image: DraftImage | null = null;
+    try {
+      image = await fitDraftImage(file, limits());
+    } catch {
+      // A failed decode or read uses the same message as an unsupported image.
+    } finally {
+      release();
+      signal.removeEventListener("abort", release);
+    }
+    if (!current(id)) return;
+    if (!image) {
+      toast(t("chat-composer.image_unreadable", { name: file.name }), "error");
+      continue;
+    }
+    const fittedRoom = roomForImage(image.data.length);
+    if (fittedRoom !== "ok") {
+      imageRoomError(fittedRoom);
+      continue;
+    }
+    if (!id && typeof target === "function") id = target();
+    if (!id || !current(id)) return;
+    const added = { ...image, id: uuid() };
+    setCommentImages(draftKey, id, (images) => [...images, added]);
+  }
+}
 
 type ExpandedProps = {
   editLabel?: string;
@@ -28,11 +121,54 @@ type PasteProps = {
   onRemove: (id: string) => void;
   onExpand: (id: string, text: string) => void;
 };
+type ImageStageOverlayProps = { imageStage: ComposerImageStageProps };
+type ConfirmOverlayProps = {
+  confirm: {
+    title: string;
+    message: string;
+    confirmLabel: string;
+    tone?: "primary" | "danger";
+    onConfirm: () => void;
+  };
+  onClose: () => void;
+};
 
 /** Conditional composer extras share one chunk and one first-screen loader. */
-export function ComposerOverlay(props: ExpandedProps | SuggestionProps | PasteProps) {
+export function ComposerOverlay(props: ExpandedProps | SuggestionProps | PasteProps | ImageStageOverlayProps | ConfirmOverlayProps) {
+  if ("imageStage" in props) return <ComposerImageStage {...props.imageStage} />;
+  if ("confirm" in props) return <ConfirmDialog {...props} />;
   if ("pastedBlocks" in props) return <PastedBlocks {...props} />;
   return "value" in props ? <ExpandedComposer {...props} /> : <SuggestionPill {...props} />;
+}
+
+function ConfirmDialog({ confirm, onClose }: ConfirmOverlayProps) {
+  return (
+    <Dialog
+      open
+      onClose={onClose}
+      title={confirm.title}
+      width={400}
+      footer={
+        <>
+          <Button tone="quiet" onClick={onClose}>
+            {t("chat-composer.confirm_cancel")}
+          </Button>
+          <Button
+            tone={confirm.tone ?? "primary"}
+            onClick={() => {
+              const fn = confirm.onConfirm;
+              onClose();
+              fn();
+            }}
+          >
+            {confirm.confirmLabel}
+          </Button>
+        </>
+      }
+    >
+      <p className="text-[length:var(--chat-secondary)] leading-relaxed text-ink-2">{confirm.message}</p>
+    </Dialog>
+  );
 }
 
 function PastedBlocks({ pastedBlocks, onRemove, onExpand }: PasteProps) {

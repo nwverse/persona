@@ -2119,6 +2119,13 @@ export interface CodeComponent {
    * (…/blob/<sha>/a.go#L{start}-L{end}).
    */
   line_url?: string;
+  /**
+   * Go to definition (UI version 13): a name in the code chosen to follow it (⌘/Ctrl-click or ⌘/Ctrl+B on it; Alt+F7
+   * for its usages) calls ui.action with action and values {path, line, column (1-based, in characters), word,
+   * intent: definition or references}; ⌘[ (Ctrl+Alt+← elsewhere) calls it with {path, intent: back}. An older app
+   * leaves it out.
+   */
+  navigate?: Action;
 }
 
 /**

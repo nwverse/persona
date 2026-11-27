@@ -1991,7 +1991,12 @@ type Component struct {
 	Load      *Action       `json:"load,omitempty"`
 	// An https link to lines of this file on its site, {start} and {end} standing for the lines
 	// (…/blob/<sha>/a.go#L{start}-L{end}).
-	LineURL   string   `json:"line_url,omitempty"`
+	LineURL string `json:"line_url,omitempty"`
+	// Go to definition (UI version 13): a name in the code chosen to follow it (⌘/Ctrl-click or ⌘/Ctrl+B on it; Alt+F7
+	// for its usages) calls ui.action with action and values {path, line, column (1-based, in characters), word, intent:
+	// definition or references}; ⌘[ (Ctrl+Alt+← elsewhere) calls it with {path, intent: back}. An older app leaves it
+	// out.
+	Navigate  *Action  `json:"navigate,omitempty"`
 	OldPath   string   `json:"old_path,omitempty"`
 	Status    string   `json:"status,omitempty"`
 	Additions int      `json:"additions,omitempty"`

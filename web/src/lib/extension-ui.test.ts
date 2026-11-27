@@ -70,7 +70,7 @@ describe("画一页", () => {
     expect(submitValues(view, { note: "new", token: "s", extra: "no" })).toEqual({ note: "new", token: "s", auto: "true", off: "false", plan: "solo", limit: "20" });
     expect(numberProblem("12.5")).toBe("");
     expect(numberProblem("")).toBe("");
-    expect(numberProblem("abc")).toBe("要是一个数");
+    expect(numberProblem("abc")).toBe("必须为数字");
   });
   it("reads what a press answered", () => {
     expect(outcome({})).toEqual({ view: undefined, reload: true, toast: undefined, url: undefined });
@@ -166,7 +166,7 @@ describe("UI 版本 2：上下文", () => {
     vi.stubGlobal("navigator", { language: "zh-CN" });
     const c = uiContext({ machine: "m1", size: "compact" });
     expect(c).toMatchObject({ platform: "web", ui_version: UI_VERSION, locale: "zh-CN", machine: "m1", size: "compact" });
-    expect(UI_VERSION).toBe(12);
+    expect(UI_VERSION).toBe(13);
     expect(c.tz).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
     expect(uiContext()).not.toHaveProperty("launcher");
     expect(uiContext({ launcher: "work" }).launcher).toBe("work");
