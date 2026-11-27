@@ -14,10 +14,10 @@ import (
 	"github.com/nwverse/persona/server/internal/orcart"
 )
 
-// Splitting a pane, closing a whole tab and renaming a tab only while it keeps a name (#17043): Orca's terminal.split,
-// terminal.closeTab and terminal.rename, all on its local socket (checked live on an isolated Orca 1.4.277). An Orca
-// without one of the first two answers method_not_found: the host refuses with nothing done, and stops offering it
-// (orcaHost.offers) until another runtime answers.
+// Splitting a pane, closing a whole tab, and tab names that follow renames (#17043): Orca's terminal.split,
+// terminal.closeTab, terminal.rename and session.tabs.list, all on its local socket (checked live on an isolated Orca
+// 1.4.277). An Orca without split or close tab answers method_not_found: the host refuses with nothing done, and stops
+// offering it (orcaHost.offers) until another runtime answers; one without session.tabs.list keeps the layouts' titles.
 
 var (
 	_ host.Splitter   = (*orcaHost)(nil)
