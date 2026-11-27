@@ -416,6 +416,7 @@ export function useAgentList(): ListState {
       return () => listeners.delete(l);
     },
     () => list,
+    () => list, // a static render (an Inbox detail's Trail names personal Agents, #16770) reads the same list
   );
 }
 

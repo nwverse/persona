@@ -1223,7 +1223,7 @@ and a disabled knowledge base (`kb.enabled: false`) returns 503 as before.
 ## A chat's Inbox items
 
 A chat's page leads to the Inbox items that came from it, and an item leads back to the chat's page (#15356,
-`assistant/kb_inbox.go`). Neither side keeps a message id, so a message is matched on its time, sender and text.
+`assistant/kb_inbox.go`, with the Inbox's side in `assistant/inbox_kb_chat.go`). Neither side keeps a message id, so a message is matched on its time, sender and text.
 
 - **Which items**: an item is a chat's when its connector and thread are the chat's `connector` (in an older file, its
   `source`) and `source_id`, whatever the connector, or when the chat is the one the AI twin reads for it (`kbChatOf` in

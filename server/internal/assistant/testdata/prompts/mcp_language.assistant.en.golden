@@ -3412,7 +3412,7 @@
   },
   {
     "name": "task_decided",
-    "description": "Record the owner's needs_user choice; main chat or supervisor only. Quote their words and exact option; never guess. told_agent=true means already delivered (also direct Agent chat): record only. Otherwise send and record. Both settle the ask.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
+    "description": "Record the owner's needs_user choice or user_check Pass (\"Pass\"); main chat or supervisor only. Quote their words and exact option; never guess. told_agent=true records only (already relayed); false also sends. Both settle the ask.\n\nWrite newly generated user-facing arguments, such as titles, reasons, criteria and messages, in English unless the user requests another language or the field requires source wording. Preserve quoted source text, identifiers, tool and parameter names, enum values and command prefixes exactly. Language does not change approval requirements or permission boundaries.",
     "input_schema": {
       "type": "object",
       "required": [
