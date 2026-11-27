@@ -146,7 +146,7 @@ describe("TokenUsagePage", () => {
     expect(page.querySelectorAll("[data-agent-mark]")).toHaveLength(2); // the not-split row has no mark
     // the calendar on the page has no totals line, only a picked day's
     expect(page.querySelector("[data-token-calendar-line]")).toBeNull();
-    expect(text).toContain("和「机器」页的「今天」是同一个数");
+    expect(text).toContain("与「机器」页中的「今天」统计一致");
   });
 
   it("has no By agent from an older hub", async () => {
@@ -244,7 +244,7 @@ describe("By project (#16530)", () => {
     // a launcher by its display name (its own name on hover), one without by its name, none: opened in a terminal
     expect(hub.calls).toContain("/launchers");
     expect(page.querySelector<HTMLElement>('[title="claude-max"]')?.textContent).toBe("Anthropic 订阅");
-    for (const s of ["kimi", "终端里打开的"]) expect(text).toContain(s);
+    for (const s of ["kimi", "终端直接打开"]) expect(text).toContain(s);
     // the chart's line: the largest day at first (11月17日, today), then the one hovered, then the one tapped
     const line = () => page.querySelector("[data-token-project-line]")!.textContent ?? "";
     expect(line()).toContain("今天");
@@ -275,7 +275,7 @@ describe("a project in the dialog", () => {
     await act(async () => row.click());
     await act(async () => {});
     expect(dialog().querySelector("[data-token-project]")).not.toBeNull();
-    const back = dialog().querySelector<HTMLButtonElement>('[aria-label="返回按项目"]')!;
+    const back = dialog().querySelector<HTMLButtonElement>('[aria-label="返回「按项目」"]')!;
     expect(back).not.toBeNull();
     await act(async () => back.click());
     expect(dialog().querySelector("[data-token-project]")).toBeNull();

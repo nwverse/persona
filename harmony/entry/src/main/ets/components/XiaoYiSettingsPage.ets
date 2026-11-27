@@ -23,19 +23,19 @@ struct XiaoYiInfoRow {
   build() {
     Flex({ wrap: FlexWrap.Wrap, justifyContent: FlexAlign.SpaceBetween, alignItems: ItemAlign.Center }) {
       Text(this.label)
-        .fontSize(Tokens.body)
+        .fontSize(Tokens.typeBody)
         .maxFontScale(Tokens.interfaceFontMaxScale)
         .fontColor(Colors.ink)
-        .margin({ right: Tokens.gap, top: Tokens.fine, bottom: Tokens.fine })
+        .margin({ right: Tokens.spaceS, top: Tokens.spaceXs, bottom: Tokens.spaceXs })
       Text(this.value)
-        .fontSize(Tokens.meta)
-        .maxFontScale(Tokens.interfaceScaleFor(Tokens.meta))
+        .fontSize(Tokens.typeSecondary)
+        .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSecondary))
         .fontColor(this.accent || Colors.secondary)
-        .margin({ top: Tokens.fine, bottom: Tokens.fine })
+        .margin({ top: Tokens.spaceXs, bottom: Tokens.spaceXs })
     }
     .width('100%')
-    .constraintSize({ minHeight: Tokens.touch })
-    .padding({ left: Tokens.page, right: Tokens.page, top: Tokens.fine, bottom: Tokens.fine })
+    .constraintSize({ minHeight: Tokens.controlTouch })
+    .padding({ left: Tokens.spaceL, right: Tokens.spaceL, top: Tokens.spaceXs, bottom: Tokens.spaceXs })
     .accessibilityGroup(true)
   }
 }
@@ -187,12 +187,12 @@ export struct XiaoYiSettingsPage {
 
   @Builder cardGroup(title: string) {
     Text(title)
-      .fontSize(Tokens.caption)
-      .maxFontScale(Tokens.interfaceScaleFor(Tokens.caption))
-      .fontWeight(FontWeight.Medium)
+      .fontSize(Tokens.typeSectionHeader)
+      .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSectionHeader))
+      .fontWeight(600)
       .fontColor(Colors.secondary)
       .width('100%')
-      .padding({ left: Tokens.page, right: Tokens.page, top: Tokens.inset, bottom: Tokens.fine })
+      .padding({ left: Tokens.spaceL, right: Tokens.spaceL, top: Tokens.spaceM, bottom: Tokens.spaceXs })
   }
 
   build() {

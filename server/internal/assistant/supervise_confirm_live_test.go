@@ -228,26 +228,17 @@ func TestDirectSupervisionConfirmBypassesStaleHistoryCache(t *testing.T) {
 
 	t.Run("logical_switched_agy_segment_keeps_retired_segment_cached", func(t *testing.T) {
 		frozenEnd := 2
+		retired := placeholderSegment("seg-1", 1, "server", "conv2", "claude", "retired")
+		retired.Launcher, retired.SourceHistory, retired.Offset, retired.FrozenEnd = "claude", "h-claude-1", 0, &frozenEnd
+		active := placeholderSegment("seg-2", 2, "server", "agy-seg2", "agy", "active")
+		active.Launcher, active.SourceHistory, active.Offset = "agy", "h-agy-2", 2
 		logicalConv := db.LogicalConversation{
 			MachineID: "server",
 			SessionID: "conv2",
 			Epoch:     2,
 			History:   "logical-h2",
 			Revision:  50,
-			Segments: []conversationlog.Segment{
-				{
-					ID: "seg-1", Ordinal: 1, State: "retired",
-					MachineID: "server", SessionID: "conv2",
-					Engine: "claude", Launcher: "claude",
-					SourceHistory: "h-claude-1", Offset: 0, FrozenEnd: &frozenEnd,
-				},
-				{
-					ID: "seg-2", Ordinal: 2, State: "active",
-					MachineID: "server", SessionID: "agy-seg2",
-					Engine: "agy", Launcher: "agy",
-					SourceHistory: "h-agy-2", Offset: 2,
-				},
-			},
+			Segments:  []conversationlog.Segment{retired, active},
 		}
 		store := newLogicalHistoryMemStore(logicalConv)
 		s, f := newQuietServiceOn(t, store)

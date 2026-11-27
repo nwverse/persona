@@ -172,9 +172,13 @@ func extractAgyUsage(steps []agyStep) agyTranscriptUsage {
 		switch step.Type {
 		case "USER_INPUT":
 			if step.Source == "" || step.Source == "USER_EXPLICIT" {
+				text := agyUserText(step.Content)
+				if isAgyCompactCommand(text) {
+					break
+				}
 				u.turns++
 				if u.first == "" {
-					u.first = agyUserText(step.Content)
+					u.first = text
 				}
 			}
 		case "CHECKPOINT":
@@ -432,7 +436,7 @@ func (n *Node) agyTranscriptMeta(conversation string) (agySessionMeta, bool) {
 	if n == nil || conversation == "" || !uuidRe.MatchString(conversation) {
 		return agySessionMeta{}, false
 	}
-	dir := n.agyDataRoot()
+	dir := n.agyRootKnownFor(conversation)
 	root, err := agyBrain(dir, conversation)
 	if err != nil {
 		return agySessionMeta{}, false

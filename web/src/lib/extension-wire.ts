@@ -1613,11 +1613,13 @@ export interface SecretsResolveResult {
 }
 
 /**
- * A public field name/type; never a value or source path.
+ * A public field name/type or edit action (delete, keep_value); never a value or source path.
  */
 export interface SecretStoreField {
   name: string;
-  type: string;
+  type?: string;
+  delete?: boolean;
+  keep_value?: boolean;
 }
 
 /**
@@ -2114,6 +2116,13 @@ export interface CodeComponent {
    * (…/blob/<sha>/a.go#L{start}-L{end}).
    */
   line_url?: string;
+  /**
+   * Go to definition (UI version 13): a name in the code chosen to follow it (⌘/Ctrl-click or ⌘/Ctrl+B on it; Alt+F7
+   * for its usages) calls ui.action with action and values {path, line, column (1-based, in characters), word,
+   * intent: definition or references}; ⌘[ (Ctrl+Alt+← elsewhere) calls it with {path, intent: back}. An older app
+   * leaves it out.
+   */
+  navigate?: Action;
 }
 
 /**

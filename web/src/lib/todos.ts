@@ -224,6 +224,10 @@ export interface Todo {
   part_of?: string;
   /** The direction (leader conversation) this to-do is grouped under (#14704); unset for none. */
   direction_id?: string;
+  /** Server-resolved effective direction ID under todos_v2 (#16939); unset when ungrouped or on older hubs. */
+  effective_direction_id?: string;
+  /** Server-resolved effective direction display name under todos_v2 (#16939); unset when ungrouped or on older hubs. */
+  effective_direction_name?: string;
   after?: string[];
   /** Unmet prerequisite to-do IDs for a strict piece; an empty list means none, omission keeps legacy behavior. */
   prerequisite_blockers?: string[];
@@ -1109,6 +1113,13 @@ export async function addTodoDecision(
     json: { question: d.question.trim(), choice: d.choice.trim(), reason: d.reason?.trim() || undefined, supersedes_id: d.supersedes_id || undefined },
   });
   return r.decision;
+}
+
+export function reportConcern(todoId: string, report: string): Promise<{ todo: Todo; closed: boolean }> {
+  return api(`/todos/${enc(todoId)}/decisions`, {
+    method: "POST",
+    json: { source: "reported", choice: report.trim() },
+  });
 }
 
 /** Marks decision `id` as replacing the earlier `supersedesId` ("" undoes it). */

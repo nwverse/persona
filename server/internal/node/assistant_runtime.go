@@ -130,8 +130,10 @@ func (n *Node) assistantEnvForRuntimeLease(h *runtimeConn, cwd, session string) 
 // the runtimePolicyDropped boundary (refusing supervision deliveries, dropping policy for owner messages).
 func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd, launcher, text string, images []proto.Image, mode string, public, strict, modeExplicit bool, selected []assistantskills.Entry, previousStopAt int64, modelEffortPolicy ...string) (string, error) {
 	hasInput := strings.TrimSpace(text) != "" || len(images) != 0
-	if id != "" && hasInput && n.runtimes.compacting(id) {
-		return "", runtimeCompactingRefusal(ctx)
+	if id != "" && hasInput {
+		if active := n.runtimes.activeCompaction(id); active != nil && !active.silent {
+			return "", runtimeCompactingRefusal(ctx)
+		}
 	}
 	var pickedModel, pickedEffort, policy string
 	if len(modelEffortPolicy) > 0 {
@@ -247,6 +249,11 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 		awaitList(n.notifySessionsSoon())
 		return id, nil
 	}
+	if !startedNew && h.agent() == agyAgent {
+		if err := n.agyIdleCompactBeforeInput(ctx, h, id, text, images, true, true); err != nil {
+			return "", err
+		}
+	}
 	// A message that is only a slash command goes on its own: with the context block in front, an agent that runs its own
 	// commands (Antigravity's /compact) takes the line for plain text, records it as `/compact/compact` and runs nothing.
 	// The snapshot is not marked as sent, so the next message carries it. A conversation's first message keeps its block:
@@ -262,7 +269,7 @@ func (n *Node) assistantSendRuntime(ctx context.Context, h *runtimeConn, id, cwd
 	live, commit := "", func() {}
 	if !command {
 		if !public {
-			live, commit = n.turnContext(id, n.assistantContext(id))
+			live, commit = n.turnContext(id, n.assistantContextFor(id, text))
 		}
 		// Antigravity loads .agents/rules on every turn. Other generic runtimes have no verified native
 		// rule-directory contract, so carry the exact split remainder alongside their bounded AGENTS.md.

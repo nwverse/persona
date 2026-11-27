@@ -1580,10 +1580,12 @@ type SecretsResolveResult struct {
 	Value string `json:"value"`
 }
 
-// SecretStoreField: A public field name/type; never a value or source path.
+// SecretStoreField: A public field name/type or edit action (delete, keep_value); never a value or source path.
 type SecretStoreField struct {
-	Name string `json:"name"`
-	Type string `json:"type"`
+	Name      string `json:"name"`
+	Type      string `json:"type,omitempty"`
+	Delete    bool   `json:"delete,omitempty"`
+	KeepValue bool   `json:"keep_value,omitempty"`
 }
 
 // SecretStoreTarget: the canonical public target approved on the secret storage card.
@@ -1986,7 +1988,12 @@ type Component struct {
 	Load      *Action       `json:"load,omitempty"`
 	// An https link to lines of this file on its site, {start} and {end} standing for the lines
 	// (…/blob/<sha>/a.go#L{start}-L{end}).
-	LineURL   string   `json:"line_url,omitempty"`
+	LineURL string `json:"line_url,omitempty"`
+	// Go to definition (UI version 13): a name in the code chosen to follow it (⌘/Ctrl-click or ⌘/Ctrl+B on it; Alt+F7
+	// for its usages) calls ui.action with action and values {path, line, column (1-based, in characters), word, intent:
+	// definition or references}; ⌘[ (Ctrl+Alt+← elsewhere) calls it with {path, intent: back}. An older app leaves it
+	// out.
+	Navigate  *Action  `json:"navigate,omitempty"`
 	OldPath   string   `json:"old_path,omitempty"`
 	Status    string   `json:"status,omitempty"`
 	Additions int      `json:"additions,omitempty"`

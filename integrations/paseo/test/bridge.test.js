@@ -2,7 +2,9 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { syncBuiltinESMExports } from 'node:module'
+import os from 'node:os'
+import { dirname, join, sep } from 'node:path'
 import { RpcError } from '../../runtime-sdk/index.js'
 import { startFakeNode, until } from '../../runtime-sdk/testing/fake-node.js'
 import { createPaseoBridge, TIMELINES_MAX, uuidOf } from '../lib/bridge.js'
@@ -775,6 +777,61 @@ test('a new session: an agent of the launcher\'s provider, with the form\'s choi
   await assert.rejects(call(node, 'session.start', { cwd: '/nonexistent/dir', prompt: 'x' }), /没有这个目录/)
   fake.handlers['agent.create.request'] = () => ({ payload: { agent: null, error: 'Provider unavailable' } })
   await assert.rejects(call(node, 'session.start', { cwd: '/tmp', prompt: 'x', launcher: 'grok' }), /Paseo 没能新建：Provider unavailable/)
+})
+
+test('home paths are expanded before validating and forwarding working directories', async (t) => {
+  const { fake, node, paseo } = await setup(t)
+  const userHome = realpathSync(mkdtempSync(join(TMP, 'ppaseo-home-')))
+  t.after(() => rmSync(userHome, { recursive: true, force: true }))
+  const dir = join(userHome, 'sub', 'dir')
+  mkdirSync(dir, { recursive: true })
+  const homeStub = t.mock.method(os, 'homedir', () => userHome)
+  syncBuiltinESMExports()
+  t.after(() => {
+    homeStub.mock.restore()
+    syncBuiltinESMExports()
+  })
+
+  const start = (cwd) => call(node, 'session.start', { cwd, prompt: 'x', launcher: 'my-claude' })
+  await t.test('start', async () => {
+    for (const [input, expected] of [['~', userHome], ['~/sub/dir', dir], [dir, dir]]) {
+      await start(input)
+      assert.equal(fake.requestsOf('agent.create.request').at(-1).config.cwd, expected, input)
+    }
+    if (sep === '\\') {
+      await start('~\\sub\\dir')
+      assert.equal(fake.requestsOf('agent.create.request').at(-1).config.cwd, dir)
+    }
+  })
+
+  await t.test('refused paths', async () => {
+    const before = fake.requestsOf('agent.create.request').length
+    await assert.rejects(start('~/missing'), { code: 'bad_request' })
+    await assert.rejects(start('~otheruser'), { code: 'bad_request', message: /~otheruser/ })
+    if (sep === '/') await assert.rejects(start('~\\sub\\dir'), { code: 'bad_request' })
+    assert.equal(fake.requestsOf('agent.create.request').length, before)
+  })
+
+  await t.test('worktree creation', async () => {
+    writeFileSync(join(paseo.home, 'config.json'), JSON.stringify({ worktrees: { root: '~/trees' } }))
+    const { checkouts } = await call(node, 'workspace.prepare', { cwd: dir })
+    assert.equal(dirname(checkouts), join(userHome, 'trees'))
+    await call(node, 'workspace.create', { cwd: '~/sub/dir', branch: 'feature' })
+    assert.equal(fake.requestsOf('workspace.create.request').at(-1).source.cwd, dir)
+  })
+
+  await t.test('takeover', async () => {
+    await call(node, 'session.start', { cwd: '~/sub/dir', resume: 'cccccccc-0000-4000-8000-000000000009' })
+    assert.equal(fake.requestsOf('import_agent_request').at(-1).cwd, dir)
+  })
+
+  await t.test('launcher check', async () => {
+    fake.handlers.wait_for_finish_request = () => ({ payload: { status: 'idle', lastMessage: 'OK' } })
+    const res = await call(node, 'launchers.check', { cwd: '~/sub/dir', launcher: 'my-claude', prompt: 'Say OK' })
+    assert.equal(res.ok, true)
+    assert.equal(fake.requestsOf('workspace.create.request').at(-1).source.path, dir)
+    assert.equal(fake.requestsOf('agent.create.request').at(-1).config.cwd, dir)
+  })
 })
 
 test("a new Codex session: bypassPermissions starts it with Paseo's full-access mode; the other modes are left alone", async (t) => {
