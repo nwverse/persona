@@ -3486,6 +3486,18 @@ Conventions (languages, fallback, glossary) are in [i18n.md](../protocol/i18n.md
   A module with a local variable named `t` must rename it so it doesn't shadow `t()`. Chinese that has to match text someone else wrote (notifications the hub writes into chats, markers inside `<persona-context>`, the first line of quotes) is not translated and is marked `i18n-ignore`.
 
 
+## Click a word to look it up (#10977)
+
+Who it serves: everyday readers of English text anywhere in the app (Assistant replies, Agent transcripts, the Inbox), with nothing to set up in the page itself.
+
+- **Off costs nothing.** The root host (`src/text-lookup/host.tsx`, the only part on the first screen) reads the hub's feature list from the store and loads nothing until the hello lists `text_lookup`. Then the listener (`listen.ts`, `client.ts`, `word.ts`) asks `GET /api/v1/text-lookup` (`{available, extension?, contribution?, name?, underline_saved, words}`). While `available` is false it adds no pointer listeners, no style and no card. `text_lookup_changed`, a new hello, the extension-changed window event and the tab regaining focus (at most every 15 seconds) read the state again.
+- **What a click does.** A plain primary click on a Latin word waits out the double-click window, then opens the card (`popover.tsx`, its own chunk) under the word. It asks `POST /api/v1/text-lookup/lookup` with `{word, context}`, the sentence around the word from its block (code and `data-no-lookup` left out, 500 characters at most), and shows the word, pronunciation, meanings and the dictionary's name. The response type is the generated `TextLookupLookupResult` (`src/lib/extension-wire.ts`).
+- **What a click never does.** Nothing happens on a link, a button, `[role=button]` and the other control roles (rows and cards that open something are links or buttons), `input` / `textarea` / `select`, `contenteditable`, `code` / `pre` / `kbd` / `samp`, a terminal, anything inside `[data-no-lookup]`, while text is selected, on a double or triple click, a drag, a modifier click or another button. `src/text-lookup/listen.test.ts` covers each through real pointer events.
+- **Save and remove.** Save / Saved is a toggle (`aria-pressed`) calling `POST /api/v1/text-lookup/words` with `{word, context, source: "web"}` or `DELETE /api/v1/text-lookup/words/{word}`; it changes at once and goes back, with a line saying so, if the hub refuses. A `text_lookup_unavailable` refusal reads the state again and closes the card once the dictionary is gone.
+- **Underline.** When `underline_saved` is on, saved words are underlined through the CSS Custom Highlight API (`highlight.ts`): ranges over the existing text nodes, so the DOM is untouched. The page is walked about 80 text nodes per animation frame, and added or edited text (a streaming reply's bare text node included) is repainted after a short debounce. A browser without the API gets no underline, no style and no observer.
+- **Keyboard and screen readers.** The card is a labelled non-modal dialog that takes focus, keeps Tab inside, closes on Escape, a press outside or a scroll, and gives focus back to where it was.
+- Strings are `text-lookup.*` in en, zh-Hans and ja. `web/e2e/text-lookup.mjs` takes light and dark captures over a chat reply, an Agent transcript and an Inbox item, the underline, and the unavailable and no-feature pages into a directory outside the repository; they are not committed.
+
 ## Detail conventions
 
 - Colors only come from tokens (`:root` / `.dark` in `src/styles.css`); no hardcoded color values. Status colors: Needs you red, Working orange, Unread green, Seen gray.

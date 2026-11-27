@@ -75,7 +75,7 @@ iOS and Android also offer "No Terminal Engine", the empty set, last in Choose E
 | `herdr` | herdr | Run `herdr` in a terminal, then `claude` / `codex` in its panes (node starts it on demand if absent; see "When herdr is not running") | Connectable herdr socket or installed `herdr` command |
 | `herdr-core` | Herdr App | Terminals opened in Herdr desktop app (herdr-core behind it) | Responsive herdr-core socket |
 | `herdr-both` | herdr + Herdr App | Both above | Both runtimes detected |
-| `orca` | Orca | Terminals and native Claude chats (structured sessions) in Orca desktop app, or its remote runtime launched here over SSH by Orca on another computer | Orca desktop / remote runtime running, with a Persona-compatible version |
+| `orca` | Orca | Terminals and native chats (structured sessions: Claude Code, Codex and its other providers) in Orca desktop app, or its remote runtime launched here over SSH by Orca on another computer | Orca desktop / remote runtime running, with a Persona-compatible version |
 | `tern` | Tern | Terminal blocks in Tern's sessions, in any of its windows ("Tern" below) | `tern` found (PATH, `~/.local/bin`, the app bundle) and its session daemon answering `tern inspect` |
 | `rex` | Rex | Terminal blocks in Rex's sessions and windows ("Rex" below) | `rex` found (PATH, `~/.local/bin`, macOS Application Support / app bundle) and `rex --autostart=false api call server.status` answering |
 | `paseo` | Paseo | Paseo Agents (desktop app, `paseo` command; Claude Code, Codex, ACP all count) | Paseo daemon running; address in its home's `paseo.pid` responds |
@@ -180,9 +180,12 @@ or changes a minute or more after the close. It still takes the user's messages,
 no terminal to resume it in; A2A messages do not wake it. The node keeps this mark in memory for the last 256
 conversations closed: after a restart the companion's rows are listed as it says.
 
-Orca's native Claude chats (structured, no terminal) connect through node's bridge: list, state, send text / images, interrupt, close,
-answer approvals / questions, change permission / thinking (no plan mode); no screen reads, keys, or live terminal. Chats appear only after their first message;
-Codex chats not listed in this version. See `docs/plans/plan-orca-support.md` ("Structured sessions").
+Orca's native chats (structured, no terminal) connect through node's bridge: Claude Code's, Codex's and every other provider's.
+List, state, send text / images, interrupt, close, answer approvals / questions, change permission / thinking (no plan mode); no
+screen reads, keys, or live terminal. A Claude chat reads as its Claude transcript, a Codex chat is listed once as its Codex thread,
+and the rest read from Orca's own journal. A chat shows before its first message, and a chat closed in Orca stays listed, not
+running, until a message opens it in Orca again (never in a terminal). An answer Orca does not take comes back as a new card. See
+`docs/plans/plan-orca-support.md` ("Structured sessions") for the ids, the closed chats and the cards.
 
 Unsupported actions explain failure instead of partially acting. Orca rejects sending without entering anything when its pane is still
 there with Claude not in front, saying "Claude is not in foreground (possibly suspended); nothing sent," or asking to reopen on the computer.

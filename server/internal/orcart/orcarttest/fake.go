@@ -576,27 +576,32 @@ func validate(method string, p map[string]any) string {
 			}
 		}
 		return ""
+	case "session.tabs.listAll":
+		return ""
+	case "agentSession.reveal":
+		return str("sessionId", true)
+	case "agentSession.respondToApproval":
+		return first(envelopeOf(p), str("itemId", true), str("optionId", true), positiveInt(p, "expectedRevision"))
+	case "agentSession.respondToQuestion":
+		if r := first(envelopeOf(p), str("itemId", true), positiveInt(p, "expectedRevision")); r != "" {
+			return r
+		}
+		answers, hasAnswers := p["answers"].([]any)
+		_, hasOption := p["optionId"]
+		if hasAnswers == hasOption {
+			return "Send exactly one of an option id or answers"
+		}
+		if hasAnswers && len(answers) == 0 {
+			return "answers must not be empty"
+		}
+		return ""
+	case "agentSession.setOption":
+		return first(envelopeOf(p), str("key", true))
+	case "agentSession.cancel":
+		return envelopeOf(p)
 	case "agentSession.send":
-		envelope, ok := p["envelope"].(map[string]any)
-		if !ok {
-			return "Missing envelope"
-		}
-		for _, field := range []string{"sessionId", "clientOperationId", "payloadFingerprint"} {
-			if value, _ := envelope[field].(string); value == "" {
-				return "Missing envelope." + field
-			}
-		}
-		fingerprint, _ := envelope["payloadFingerprint"].(string)
-		if len(fingerprint) != 64 {
-			return "payloadFingerprint must be a sha256 hex digest"
-		}
-		for _, r := range fingerprint {
-			if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f') {
-				return "payloadFingerprint must be lowercase hex"
-			}
-		}
-		if fence, ok := envelope["expectedRuntimeFence"].(float64); !ok || fence <= 0 {
-			return "expectedRuntimeFence must be positive"
+		if r := envelopeOf(p); r != "" {
+			return r
 		}
 		body, ok := p["body"].(map[string]any)
 		if !ok || body["kind"] != "message" || body["role"] != "user" {
@@ -656,6 +661,42 @@ func validate(method string, p map[string]any) string {
 			return "Missing terminal send payload"
 		}
 		return ""
+	}
+	return ""
+}
+
+// envelopeOf checks an agentSession write's envelope as Orca's schema does: session, operation id and a lowercase
+// sha256 fingerprint, and a positive fence ("" when valid). null, which a create sends, is checked by its method.
+func envelopeOf(p map[string]any) string {
+	envelope, ok := p["envelope"].(map[string]any)
+	if !ok {
+		return "Missing envelope"
+	}
+	for _, field := range []string{"sessionId", "clientOperationId", "payloadFingerprint"} {
+		if value, _ := envelope[field].(string); value == "" {
+			return "Missing envelope." + field
+		}
+	}
+	fingerprint, _ := envelope["payloadFingerprint"].(string)
+	if len(fingerprint) != 64 {
+		return "payloadFingerprint must be a sha256 hex digest"
+	}
+	for _, r := range fingerprint {
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f') {
+			return "payloadFingerprint must be lowercase hex"
+		}
+	}
+	if fence, ok := envelope["expectedRuntimeFence"].(float64); !ok || fence <= 0 {
+		return "expectedRuntimeFence must be positive"
+	}
+	return ""
+}
+
+// positiveInt checks that p[k] is a positive integer ("" when it is).
+func positiveInt(p map[string]any, k string) string {
+	n, ok := p[k].(float64)
+	if !ok || n < 1 || n != float64(int64(n)) {
+		return k + " must be a positive integer"
 	}
 	return ""
 }
