@@ -45,6 +45,8 @@ export interface LauncherModels {
   locked?: string;
   /** The node accepts a model when starting the native omp launcher on the queried host (#11964). */
   supports_start_model?: boolean;
+  /** This launcher's Codex start on the queried host accepts a native service tier. */
+  supports_start_service_tier?: boolean;
 }
 
 /** What "Model configuration" runs when a launcher picker is left alone (GET /machines/{mid}/launchers's `default`, #2455):
@@ -162,9 +164,9 @@ export const takesTypedModel = (agent: string) =>
 export const terminalOmp = (agent: string, launcher?: Pick<Launcher, "source">) =>
   agent === "omp" && (!launcher?.source || launcher.source === "zshrc" || launcher.source === "path" || launcher.source === "builtin");
 
-/** Only the plain omp command on herdr can advertise a typed model for a new terminal session (#11964). */
+/** Only the plain omp command on herdr or Orca can advertise a typed model for a new terminal session (#11964). */
 export function nativeOmpStart(agent: string, launcher: Pick<Launcher, "name" | "source"> | undefined, host: string | undefined): boolean {
-  return terminalOmp(agent, launcher) && launcher?.name === "omp" && host === "herdr";
+  return terminalOmp(agent, launcher) && launcher?.name === "omp" && (host === "herdr" || host === "orca");
 }
 
 /** omp's start capability belongs to the terminal host, including when another launcher's destination is a desktop app. */

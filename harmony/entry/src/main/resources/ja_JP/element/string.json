@@ -9123,6 +9123,82 @@
     {
       "name": "agents_use_herdr_tab_name_hint",
       "value": "タブ名を優先して表示します。この設定は同じハブのデバイス間で同期されます。"
+    },
+    {
+      "name": "composer_queued_count",
+      "value": "{count} 件待機中"
+    },
+    {
+      "name": "composer_queue_send_now",
+      "value": "今すぐ送信"
+    },
+    {
+      "name": "composer_queue_relayed",
+      "value": "転送済み"
+    },
+    {
+      "name": "code_wrap_lines",
+      "value": "折り返し"
+    },
+    {
+      "name": "code_unwrap_lines",
+      "value": "横スクロール"
+    },
+    {
+      "name": "copied",
+      "value": "コピーしました"
+    },
+    {
+      "name": "quick_palette_title",
+      "value": "クイックコマンド"
+    },
+    {
+      "name": "quick_palette_placeholder",
+      "value": "エージェント、ワークスペース、操作を検索…"
+    },
+    {
+      "name": "quick_palette_agents",
+      "value": "対応待ち・稼働中のエージェント"
+    },
+    {
+      "name": "quick_palette_workspaces",
+      "value": "ワークスペース"
+    },
+    {
+      "name": "quick_palette_actions",
+      "value": "プロコントロール"
+    },
+    {
+      "name": "quick_palette_toggle_theme",
+      "value": "ライト / ダークテーマを切り替え"
+    },
+    {
+      "name": "quick_palette_toggle_workbench",
+      "value": "ライブワークベンチを切り替え"
+    },
+    {
+      "name": "quick_palette_liveview_preview",
+      "value": "LiveView プレビュー"
+    },
+    {
+      "name": "quick_palette_code_tab",
+      "value": "コードタブに切り替え"
+    },
+    {
+      "name": "quick_palette_machines_tab",
+      "value": "マシンタブに切り替え"
+    },
+    {
+      "name": "quick_palette_empty",
+      "value": "一致するコマンドがありません"
+    },
+    {
+      "name": "fold_posture_book",
+      "value": "折りたたみブック"
+    },
+    {
+      "name": "machine_cpu_load",
+      "value": "CPU と負荷"
     }
   ]
 }

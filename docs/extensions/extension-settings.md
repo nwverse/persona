@@ -97,6 +97,12 @@ Keep the host's existing contribution switches, isolation status, declared permi
 
 No new server fields are needed for this web implementation: the established `source`, `origin`, `read_only`, `attached`, `auto_upgrade`, `auto_upgrade_paused`, `upgrade` and `previous_version` responses already distinguish the supported full-rights market operations. `origin` is manager-owned installation metadata, not a manifest setting. Web does not offer owner-only local/attached management actions or infer privileges from an arbitrary source URL. Global automatic-upgrade state and manual catalog refresh explicitly target the same manager as the extension. Actual authorization remains enforced by the existing manager endpoints.
 
+An extension page's action may ask Web to open its own settings with proposed ordinary values
+(`persona://settings/extensions/<id>?set=<url-encoded JSON object>`). The existing form overlays only known non-secret,
+non-entry-list fields from that object onto its draft; the saved configuration remains the base, and Save is still the
+only write. The hub bounds and validates the object before the link reaches Web. Apple and Android do not apply this
+prefill slice yet.
+
 Entry-list editing (#9504) is an explicit later addition to this boundary. Web, Android and Apple send `entry_lists=1` on the initial detail read and every detail-returning configuration, secret, lifecycle or contribution write. Without that query the hub leaves raw configuration intact but filters the entry-list form and dynamic secret rows; non-opted configuration writes preserve the saved entry arrays, including when an old draft omitted them or held a stale copy. An immediate fixed-field save from a capable page (the machine switches) adds `preserve_entries=1` alongside `entry_lists=1`, selecting the same preserving write without losing the opted-in response. A stale immediate save therefore cannot delete entries or secrets added elsewhere. Entry-list editing is never a hidden raw-JSON fallback.
 
 ## Apple implementation and API boundary

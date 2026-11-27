@@ -56,11 +56,11 @@ func listKeySized(list []proto.Session, size int) string {
 			w.quotes(a)
 			w.b.WriteByte('\n')
 		}
-		if s.TitleSource != proto.TitleSourceUnknown || s.TitleManual || s.OutputTokens != 0 {
+		if s.TitleSource != proto.TitleSourceUnknown || s.TitleManual || s.OutputTokensValue() != 0 {
 			w.b.WriteString("naming:")
 			w.quote(s.TitleSource.String(), '/')
 			w.str(strconv.FormatBool(s.TitleManual), '/')
-			w.int(int64(s.OutputTokens), '\n')
+			w.int(int64(s.OutputTokensValue()), '\n')
 		}
 		writeContextBreakdownKey(&w, s.ContextBreakdown())
 		writeUltracodeKey(&w, s)

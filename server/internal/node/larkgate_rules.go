@@ -3,6 +3,7 @@ package node
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"regexp"
 	"slices"
 	"strings"
@@ -35,7 +36,41 @@ func larkDecision(cfg proto.AssistantLark, c larkCall) string {
 	if c.fileBody && g.Auth == nil {
 		return decideLarkFileBody(g.Rules, c)
 	}
-	return decideLark(g.Rules, c)
+	rules := g.Rules
+	read := larkGateRead(g, c)
+	bodyScoped := read && slices.ContainsFunc(rules, func(candidate proto.LarkRule) bool {
+		return len(candidate.Body) > 0 &&
+			(candidate.Method == "*" || strings.EqualFold(candidate.Method, c.Method)) &&
+			pathMatches(candidate.Path, c.Path)
+	})
+	// Deletion-classified GET/HEAD calls were confirmed before the read default
+	// was introduced. Neither an unmatched read nor a generic confirm catch-all
+	// may silently downgrade that existing boundary.
+	cardFreeRead := read && !bodyScoped && !larkDeletionCall(c)
+	if action, ok := matchLark(rules, c); ok {
+		rule, _ := firstLark(rules, c)
+		// A blanket read allow is the common default, not an authorization for
+		// the Agent API's side-effecting GET/HEAD routes. An exact or narrower
+		// route rule still has its explicit, first-match meaning.
+		if !read && action == "allow" && strings.Trim(rule.Path, "/") == "**" && len(rule.Body) == 0 &&
+			(c.Method == http.MethodGet && strings.EqualFold(rule.Method, http.MethodGet) ||
+				c.Method == http.MethodHead && strings.EqualFold(rule.Method, http.MethodHead)) {
+			return "confirm"
+		}
+		if read && action == "confirm" {
+			if rule.Method == "*" && strings.Trim(rule.Path, "/") == "**" && len(rule.Body) == 0 && cardFreeRead {
+				return "allow"
+			}
+		}
+		return action
+	}
+	// A command gate's explicit exceptions come first. An ordinary GET/HEAD is
+	// a read even when the gate only declares its writes and a catch-all, but a
+	// body-scoped rule still has to match before that read can go.
+	if cardFreeRead {
+		return "allow"
+	}
+	return "confirm"
 }
 
 // decideLarkFileBody decides a command-gate call whose body comes from @file on a gate without Auth.
@@ -76,13 +111,22 @@ func larkRead(c larkCall) bool {
 	return c.Method == "GET" || c.Method == "HEAD"
 }
 
-// decideLark: the action for a call, from the rules in order (the first match); none matching is confirmed.
-
-func decideLark(rules []proto.LarkRule, c larkCall) string {
-	if action, ok := matchLark(rules, c); ok {
-		return action
+// Agent API's NOT_READ_ONLY_GET_ROUTES are shared with the manager's ledger
+// through proto.AgentAPIWriteGET. Ordinary GET/HEAD routes remain card-free.
+func larkGateRead(g proto.CommandGate, c larkCall) bool {
+	if larkRead(c) && (c.Method == http.MethodGet || c.Method == http.MethodHead) {
+		if _, ok := gateAgentToken(g); ok && proto.AgentAPIWriteGET(c.Method, c.Path) {
+			return false
+		}
 	}
-	return "confirm"
+	return larkRead(c)
+}
+
+func larkCallRead(gates []proto.CommandGate, c larkCall) bool {
+	if !c.CLI && c.Gate >= 0 && c.Gate < len(gates) {
+		return larkGateRead(gates[c.Gate], c)
+	}
+	return larkRead(c)
 }
 
 // matchLark is the action of the first rule that matches the call.
@@ -179,6 +223,11 @@ func classifyGateAction(method, path string) (string, int) {
 	return "", larkgateport.BoundaryOrdinary
 }
 
+func larkDeletionCall(c larkCall) bool {
+	_, boundary := classifyGateAction(c.Method, c.Path) // the lark module's rules live in modules/lark/larkgate now
+	return boundary == larkgateport.BoundaryDeletion
+}
+
 // larkSummary is the phone card's text: what each write does, then its method, path and body.
 func larkSummary(gates []proto.CommandGate, calls []larkCall) string {
 	return larkSummaryWithContext(gates, calls, nil, i18n.Default)
@@ -193,9 +242,12 @@ func larkSummaryWithContext(gates []proto.CommandGate, calls []larkCall, context
 		if i > 0 {
 			b.WriteString("\n\n")
 		}
-		what, _ := classifyGateAction(c.Method, c.Path)
-		if what == "" {
-			what = "写操作"
+		what := "写操作"
+		if larkCallRead(gates, c) {
+			what = "读操作"
+		}
+		if action, _ := classifyGateAction(c.Method, c.Path); action != "" {
+			what = action
 		}
 		if c.Gate >= 0 && c.Gate < len(gates) {
 			for _, a := range gates[c.Gate].Actions {
@@ -262,8 +314,8 @@ func larkBypassSafe(c larkCall) bool {
 
 // larkCallOutwardWrite reports whether c is a gated connector write acting as the owner
 // (not a read-only call and not an explicit lark-cli --as bot call).
-func larkCallOutwardWrite(c larkCall) bool {
-	if larkRead(c) {
+func larkCallOutwardWrite(gates []proto.CommandGate, c larkCall) bool {
+	if larkCallRead(gates, c) {
 		return false
 	}
 	if c.CLI && c.Method == "CLI" {
@@ -276,12 +328,12 @@ func larkCallOutwardWrite(c larkCall) bool {
 
 // wholeCommandOutwardWrite reports whether a complex-command gate card for title is an outward
 // write as the owner, matching the gate's write wording and excluding read-only or bot-only calls.
-func wholeCommandOutwardWrite(v larkVerdict, write bool, title string) bool {
-	if title == "" || wholeCommandReads(v, write) {
+func wholeCommandOutwardWrite(gates []proto.CommandGate, v larkVerdict, write bool, title string) bool {
+	if title == "" || wholeCommandReads(gates, v, write) {
 		return false
 	}
 	if write || len(v.calls) == 0 || v.unknown || v.dynamic || v.unparsed {
 		return true
 	}
-	return slices.ContainsFunc(v.calls, larkCallOutwardWrite)
+	return slices.ContainsFunc(v.calls, func(c larkCall) bool { return larkCallOutwardWrite(gates, c) })
 }

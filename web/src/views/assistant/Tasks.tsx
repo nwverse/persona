@@ -967,6 +967,7 @@ export function isDecision(todo: Todo): boolean {
   return openAsk(todo)?.outcome === "decide" || todo.supervision?.state === "needs_user";
 }
 
+
 /** An additional way to the task or Agent page at the end of an opened Needs you row. */
 export function OpenEntry({ title, onOpen }: { title: string; onOpen: () => void }) {
   return (
@@ -1053,7 +1054,7 @@ export function NeedsYouBody({ item, nested = false, calmVerify = false, onOpenC
   if (isDecision(todo))
     return (
       <Suspense fallback={<div data-needs-row={rowKey} {...taskOpenAttr} className="truncate rounded-control bg-field px-3 py-2.5 text-label text-ink-2">{todo.title}</div>}>
-        <NeedsYouPart key={todo.id + (todo.supervision?.reviews?.at(-1)?.at || todo.decision_review?.review_at || ask?.asked_at)} rowKey={rowKey} hideTitle={nested} decision={todo} />
+        <NeedsYouPart key={todo.id + (todo.supervision?.reviews?.at(-1)?.at || todo.decision_review?.review_at || ask?.asked_at)} rowKey={rowKey} hideTitle={nested} decision={todo} onOpenChat={onOpenChat} />
       </Suspense>
     );
   if (ask)
