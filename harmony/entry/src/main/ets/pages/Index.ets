@@ -1241,6 +1241,7 @@ struct Index {
           model: this.model,
           showWorkbench: this.wide() && this.foldLayout.supportsInspector,
           showLiveView: true,
+          autoFocus: this.wide(),
           onSelectEntry: (entry: QuickCommandEntry) => this.executeQuickCommand(entry),
           onClose: () => { this.quickPaletteOpen = false; }
         })
