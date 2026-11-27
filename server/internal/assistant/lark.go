@@ -187,6 +187,7 @@ func (h larkHost) OpenButton(ctx context.Context, machine, session string) botca
 
 func (h larkHost) Unreachable(err error) bool { return unreachable(err) }
 func (h larkHost) Offline(err error) bool     { return errors.Is(err, bus.ErrOffline) }
+func (h larkHost) Answered(err error) bool    { return answered(err) }
 
 func (h larkHost) StepParts(l i18n.Lang, it proto.Item) (string, string) { return botStepParts(l, it) }
 
@@ -339,10 +340,6 @@ func (h larkHost) WorkbenchBoard(ctx context.Context, l i18n.Lang, web string, n
 			Link: link, Blocking: r.blocking}
 	}
 	return out
-}
-
-func (h larkHost) SessionNames(ctx context.Context, sess proto.Session) (string, string) {
-	return feishuSessionNames(sess, h.s.useHerdrTabName(ctx))
 }
 
 func (h larkHost) NextMeeting(ctx context.Context, now time.Time) *assistantwire.WorkbenchMeeting {

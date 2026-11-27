@@ -499,11 +499,11 @@ private struct SettingsDestinations: ViewModifier {
             #else
             EmptyView()
             #endif
-        case .mail: MailAccountsView(inSheet: false)
+        case .mail: MailSettingsGate { MailAccountsView(inSheet: false) }
         case .feishu(let manager): FeishuConnectorView(manager: manager)
         case .connector(let id, let manager):
             if id == "imessage" { MessagesConnectorView(manager: manager ?? model.assistantManagerID) } else { HubConnectorView(id: id, manager: manager) }
-        case .feishuBot: FeishuBotView()
+        case .feishuBot: LarkBotGate { FeishuBotView() }
         #if os(iOS)
         case .health: WorkoutReportSettingsView()
         case .meetings: MeetingSettingsView()
@@ -542,7 +542,9 @@ private struct SettingsDestinations: ViewModifier {
         case .marketExtension(let market, let id): MarketExtensionDetailView(market: market, id: id)
         case .pluginMarkets: ExtensionMarketsView()
         case .channels: ChannelsView()
-        case .channel(let id, let manager): ChannelDetailView(id: id, manager: manager)
+        case .channel(let id, let manager):
+            // The Lark bot's channel goes with the hub's Lark module (#15995); every other channel is as it was.
+            if id == LarkBotEntry.channelID { LarkBotGate { ChannelDetailView(id: id, manager: manager) } } else { ChannelDetailView(id: id, manager: manager) }
         }
     }
 
