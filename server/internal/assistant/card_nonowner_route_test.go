@@ -18,18 +18,20 @@ func hasRelayFrom(s *Service, to, from, needle string) bool {
 			return true
 		}
 	}
- s.fleet.mu.Lock()
- defer s.fleet.mu.Unlock()
- for _, p := range s.fleet.interactions {
-  if p.route != nil && p.route.at() == to && (needle == "" || strings.Contains("interaction_id="+p.ix.ID, needle)) && s.inputCardSource(p.ix, false) == from { return true }
- }
- return false
+	s.fleet.mu.Lock()
+	defer s.fleet.mu.Unlock()
+	for _, p := range s.fleet.interactions {
+		if p.route != nil && p.route.at() == to && (needle == "" || strings.Contains("interaction_id="+p.ix.ID, needle)) && s.inputCardSource(p.ix, false) == from {
+			return true
+		}
+	}
+	return false
 }
 
 // Source 1 (agent_permission): non-six-class tool permissions from an unsupervised agent go to the main
 // conversation instead of pushing to the owner, while six-class permissions (secret/form, outward/delete
 // approval) still push to the owner. The main conversation's own permission stays the user's even with a
-// background supervisor configured (#15360, TestSupervisingConversationsKeepTheirOwnCards).
+// background reviewer configured (TestSupervisingConversationsRouteTheirOwnInternalCards).
 func TestAgentPermissionNonOwnerRoutedAndSixClassesStillPush(t *testing.T) {
 	e := newRouteEnv(t, nil, true)
 	setSettings(t, e.s, func(v *Settings) { v.BackgroundSupervisor = "bg1" })
@@ -370,29 +372,36 @@ func TestLocalNonActionPermissionsUseNonOwnerRoute(t *testing.T) {
 	}
 }
 
-// The assistant's own supervising conversations keep their cards (#15360). A leader's approval of a gated write that
-// userApproval leaves to a supervisor (the node's Lark gate card for a doc update as the user), a leader's question,
-// and the main conversation's own approval with no background supervisor are the user's: pushed, not shown as held
-// by a supervisor, and not handed on. Handed to the main conversation they were parked there: no turn was started for
-// them, no timeout moved them, ask_escalate could not take them without a task, and the main conversation's own card
-// waited on the main conversation itself.
+// Ordinary supervisor permissions wake an independent reviewer, including main's
+// own permission; the reviewer answers as the assistant and never as the user.
 func TestSupervisingConversationsRouteTheirOwnInternalCards(t *testing.T) {
- e := newRouteEnv(t, nil, true)
- setSettings(t, e.s, func(v *Settings) { v.BackgroundSupervisor = "bg1" })
- for _, source := range []string{"lead1", "conv1", "bg1"} {
-  ix := askPermission("ix_own_"+source, source)
-  ix.MachineID = "server"
-  ix.ToolInput = json.RawMessage(`{"command":"ls /tmp | head"}`)
-  done := e.raise(ix)
-  to := "conv1"
-  if source == "conv1" { to = "bg1" }
-  waitFor(t, "independent reviewer", func() bool { return hasRelayFrom(e.s, to, cardAgentPermission, "interaction_id="+ix.ID) })
-  no := false
-  if _, err := runJSON(t, e.s, to, "interaction_answer", map[string]any{"machine":"server", "session_id":source, "interaction_id":ix.ID, "allow":no, "reason":"Reviewed the read-only command"}); err != nil { t.Fatal(err) }
-  got := answerOf(t, done)
-  if got.Allow == nil || *got.Allow || got.AnsweredBy != proto.AnsweredByAssistant { t.Fatalf("answer = %+v", got) }
-  if e.pushesOf(ix.ID) != 0 { t.Fatal("internal supervisor permission pushed to owner") }
- }
+	e := newRouteEnv(t, nil, true)
+	setSettings(t, e.s, func(v *Settings) { v.BackgroundSupervisor = "bg1" })
+	for _, source := range []string{"lead1", "conv1", "bg1"} {
+		ix := askPermission("ix_own_"+source, source)
+		ix.MachineID = "server"
+		ix.ToolInput = json.RawMessage(`{"command":"ls /tmp | head"}`)
+		done := e.raise(ix)
+		to := "conv1"
+		if source == "conv1" {
+			to = "bg1"
+		}
+		waitFor(t, "independent reviewer", func() bool {
+			return hasRelayFrom(e.s, to, cardAgentPermission, "interaction_id="+ix.ID)
+		})
+		no := false
+		if _, err := runJSON(t, e.s, to, "interaction_answer", map[string]any{"machine": "server", "session_id": source,
+			"interaction_id": ix.ID, "allow": no, "reason": "Reviewed the read-only command"}); err != nil {
+			t.Fatal(err)
+		}
+		got := answerOf(t, done)
+		if got.Allow == nil || *got.Allow || got.AnsweredBy != proto.AnsweredByAssistant {
+			t.Fatalf("answer = %+v", got)
+		}
+		if e.pushesOf(ix.ID) != 0 {
+			t.Fatal("internal supervisor permission pushed to owner")
+		}
+	}
 }
 
 // Source 2 (agent_question): non-six-class questions and parsed non-user terminal dialogs from an

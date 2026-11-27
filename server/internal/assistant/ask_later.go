@@ -285,8 +285,8 @@ func (s *Service) renderAskLater(ctx context.Context, ix proto.Interaction, r pr
 		}
 		m.Missing = len(m.Answers) < len(ix.Questions)
 	case s.askLaterExpired(ix, r) && questionOwnerSource(ix) == "":
-  // An internal timeout cannot manufacture an owner decision or take a default.
- case s.askLaterExpired(ix, r) && s.askLaterSpokeOf(ix.ID):
+		// An internal timeout cannot manufacture an owner decision or take a default.
+	case s.askLaterExpired(ix, r) && s.askLaterSpokeOf(ix.ID):
 		// The owner wrote in the conversation while the card was up, which may have been their answer (a waiting
 		// question is taken back at that point): no to-do, and no default taken at a deadline.
 		m.Spoke = true

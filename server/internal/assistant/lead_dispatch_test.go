@@ -14,20 +14,20 @@ import (
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
-// Decision rights: a supervisor (a direction lead, the main conversation) handing work or words to the owner's own
-// Agents and sessions is none of the six kinds of thing only the owner decides, so no phone card is raised for it,
-// whatever its track (health included) and whatever the words carry. An ordinary conversation is still asked.
+// A supervisor's identity does not override an isolated track's privacy boundary.
 func TestSupervisorSensitiveHandoffStillChecksPrivacyBoundary(t *testing.T) {
- ctx := context.Background()
- s, f, _ := infoUseService(t)
- setSettings(t, s, func(v *Settings) {
-  v.Main, v.Leaders, v.MachineID = "qa-main-chat", []string{"qa-health-1"}, "qa-machine"
- })
- f.setSessions("qa-machine", proto.Session{SessionID:"qa-health-1", MachineID:"qa-machine", Assistant:true, Space:SpaceHealth},
-  proto.Session{SessionID:"qa-main-chat", MachineID:"qa-machine", Assistant:true})
- answerOutboundIn(t, s, "qa-health-1", "agent_send", "summary", "", false)
- ok, _, err := s.confirmOutbound(ctx, "qa-machine", "qa-health-1", "agent_send", "qa: placeholder health data", "summary", nil)
- if err != nil || ok { t.Fatalf("isolated track bypassed owner boundary: %v %v", ok, err) }
+	ctx := context.Background()
+	s, f, _ := infoUseService(t)
+	setSettings(t, s, func(v *Settings) {
+		v.Main, v.Leaders, v.MachineID = "qa-main-chat", []string{"qa-health-1"}, "qa-machine"
+	})
+	f.setSessions("qa-machine", proto.Session{SessionID: "qa-health-1", MachineID: "qa-machine", Assistant: true, Space: SpaceHealth},
+		proto.Session{SessionID: "qa-main-chat", MachineID: "qa-machine", Assistant: true})
+	answerOutboundIn(t, s, "qa-health-1", "agent_send", "summary", "", false)
+	ok, _, err := s.confirmOutbound(ctx, "qa-machine", "qa-health-1", "agent_send", "qa: placeholder health data", "summary", nil)
+	if err != nil || ok {
+		t.Fatalf("isolated track bypassed owner boundary: %v %v", ok, err)
+	}
 }
 
 // A direction lead's plan starts at once, writable work in a folder the owner never let start by itself included: no

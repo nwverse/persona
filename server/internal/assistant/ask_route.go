@@ -355,7 +355,6 @@ func (s *Service) quietRemind(todo, to string, ix proto.Interaction, nth int) {
 		key += strconv.Itoa(nth)
 	}
 	s.signal(superviseSignal{Todo: todo, Kind: sigAsk, To: to, Machine: ix.MachineID, Session: ix.SessionID, Key: key})
-
 }
 
 // heldAsks are the cards of task todo waiting with conversation to, oldest first, as a supervision entry lists them.

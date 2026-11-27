@@ -158,11 +158,11 @@ func (s *Service) redactedNotice(ctx context.Context, l i18n.Lang, space string)
 // (outboundNotDone).
 func (s *Service) confirmOutbound(ctx context.Context, machine, self, tool, text, summary string, input json.RawMessage) (allowed bool, outcome string, err error) {
 	space, _ := s.selfSpace(ctx, self)
- policy := s.exitPolicy(ctx, text, self, space)
- if _, ok := ctx.Value(ownerConfirmedKey{}).(bool); ok && !s.selfPolicy(ctx, self).ConfirmOutbound {
-  return true, "", nil // fresh confirmation covers these words, never an isolated track boundary
- }
- if !policy.ConfirmOutbound {
+	policy := s.exitPolicy(ctx, text, self, space)
+	if _, ok := ctx.Value(ownerConfirmedKey{}).(bool); ok && !s.selfPolicy(ctx, self).ConfirmOutbound {
+		return true, "", nil // fresh confirmation covers these words, never an isolated track boundary
+	}
+	if !policy.ConfirmOutbound {
 		return true, "", nil
 	}
 	return s.outbound.confirm(ctx, outboundKey(self, tool, text, summary), func() (bool, string, error) {
@@ -175,14 +175,14 @@ func (s *Service) confirmOutbound(ctx context.Context, machine, self, tool, text
 			ix.Cwd = c.Cwd
 		}
 		source := cardSecretForm // a cross-track privacy boundary needs the owner in person
-  if tool == "agent_send" && !s.selfPolicy(ctx, self).ConfirmOutbound {
-   source = cardConfirmOutbound
-   ix.Summary = s.outboundSummary(ctx, l, space, "Internal delegation to an owned Agent; review the existing task authorization before allowing it")
-  } else {
-   ix.OwnerProposal = true
-   ix.Reason = "only_owner_knows: authorize sensitive information across this data boundary"
-  }
-  r, err := s.ask(withCard(ctx, source), ix)
+		if tool == "agent_send" && !s.selfPolicy(ctx, self).ConfirmOutbound {
+			source = cardConfirmOutbound
+			ix.Summary = s.outboundSummary(ctx, l, space, "Internal delegation to an owned Agent; review the existing task authorization before allowing it")
+		} else {
+			ix.OwnerProposal = true
+			ix.Reason = "only_owner_knows: authorize sensitive information across this data boundary"
+		}
+		r, err := s.ask(withCard(ctx, source), ix)
 		if err != nil {
 			return false, "", err
 		}

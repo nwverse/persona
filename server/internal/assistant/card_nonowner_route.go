@@ -73,22 +73,24 @@ func (s *Service) scheduleFailureTarget(ctx context.Context, t Task) (string, bo
 // durable delivery. The pending interaction owns its answer and expiry; stale
 // relays cannot authorize another occurrence. Owner-only cards stay out of it.
 func (s *Service) handNonOwnerCard(ix proto.Interaction) bool {
-	if !s.internalCard(ix) { return false }
- src := s.inputCardSource(ix, false)
- ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
- defer cancel()
- cfg := s.settings(ctx)
- // Keep the explicit bot write-approval route; supervising read-only approvals
- // use the same accountable internal route as every other internal source.
- if !cfg.supervisorConversation(ix.SessionID) && ix.Kind == proto.IxPermission && s.nonMainAssistantPermission(ctx, ix) && s.larkModule().AskWanted(ctx, ix) {
-  return false
- }
- to, home := s.internalReviewer(ctx, ix)
- if to == "" || home == "" {
-  s.workEvent(ix.MachineID, ix.SessionID, "ask_internal_unavailable", map[string]any{"id":ix.ID, "source":src})
-  _ = s.resolveRemembered(ix.ID, proto.Resolution{Dismiss:true, Reason:"internal_reviewer_unavailable"}, false)
-  return true
- }
+	if !s.internalCard(ix) {
+		return false
+	}
+	src := s.inputCardSource(ix, false)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	cfg := s.settings(ctx)
+	// Keep the explicit bot write-approval route; supervising read-only approvals
+	// use the same accountable internal route as every other internal source.
+	if !cfg.supervisorConversation(ix.SessionID) && ix.Kind == proto.IxPermission && s.nonMainAssistantPermission(ctx, ix) && s.larkModule().AskWanted(ctx, ix) {
+		return false
+	}
+	to, home := s.internalReviewer(ctx, ix)
+	if to == "" || home == "" {
+		s.workEvent(ix.MachineID, ix.SessionID, "ask_internal_unavailable", map[string]any{"id": ix.ID, "source": src})
+		_ = s.resolveRemembered(ix.ID, proto.Resolution{Dismiss: true, Reason: "internal_reviewer_unavailable"}, false)
+		return true
+	}
 	_, standalone := s.nonOwnerCardTarget(ctx, ix.MachineID, ix.SessionID)
 	s.fleet.mu.Lock()
 	p := s.fleet.interactions[ix.ID]
@@ -101,22 +103,26 @@ func (s *Service) handNonOwnerCard(ix proto.Interaction) bool {
 		return true
 	}
 	now := time.Now()
- until := ix.ExpiresAt
- if standalone && src == cardAgentPermission && !cfg.supervisorConversation(ix.SessionID) {
-  remaining := ix.ExpiresAt.Sub(now)
-  if remaining <= 2*superviseTick {
-   p.ix.Delegating = false
-   shown := p.ix
-   s.fleet.mu.Unlock()
-   s.show(shown)
-   return true
-  }
-  until = now.Add(min(askHoldFor, remaining/2))
- }
- p.route = &askRoute{
-  machine: home, ladder: []string{to}, routedAt: now, since: now, held: now,
-  standaloneUntil: until,
- }
+	until := ix.ExpiresAt
+	if standalone && src == cardAgentPermission && !cfg.supervisorConversation(ix.SessionID) {
+		remaining := ix.ExpiresAt.Sub(now)
+		if remaining <= 2*superviseTick {
+			p.ix.Delegating = false
+			shown := p.ix
+			s.fleet.mu.Unlock()
+			s.show(shown)
+			return true
+		}
+		until = now.Add(min(askHoldFor, remaining/2))
+	}
+	p.route = &askRoute{
+		machine:         home,
+		ladder:          []string{to},
+		routedAt:        now,
+		since:           now,
+		held:            now,
+		standaloneUntil: until,
+	}
 	p.ix.Delegating = true
 	shown := p.ix
 	s.fleet.mu.Unlock()
@@ -146,13 +152,13 @@ func (s *Service) handNonOwnerCard(ix proto.Interaction) bool {
 		Internal:  true,
 	}
 	msg.Card = ix.ID
- if _, err := s.queueRelayDurable(to, msg); err == nil {
-  s.drainAfter(home, to, 0)
-  s.publish(ctx)
- } else {
-  s.workEvent(ix.MachineID, ix.SessionID, "ask_internal_delivery_failed", map[string]any{"id": ix.ID, "to": to, "reason": "queue_not_durable"})
-  _ = s.resolveRemembered(ix.ID, proto.Resolution{Dismiss: true, Reason: "internal_queue_unavailable"}, false)
- }
+	if _, err := s.queueRelayDurable(to, msg); err == nil {
+		s.drainAfter(home, to, 0)
+		s.publish(ctx)
+	} else {
+		s.workEvent(ix.MachineID, ix.SessionID, "ask_internal_delivery_failed", map[string]any{"id": ix.ID, "to": to, "reason": "queue_not_durable"})
+		_ = s.resolveRemembered(ix.ID, proto.Resolution{Dismiss: true, Reason: "internal_queue_unavailable"}, false)
+	}
 	s.workEvent(ix.MachineID, ix.SessionID, "ask_routed_nonowner", map[string]any{
 		"to":     to,
 		"source": src,
