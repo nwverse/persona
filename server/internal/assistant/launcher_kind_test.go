@@ -18,6 +18,10 @@ import (
 func TestSendRefusesALauncherOfAnotherAgentKind(t *testing.T) {
 	ctx := context.Background()
 	s, f := mainChatFixture(t)
+	// "nope" below is a launcher the list never has: its send waits out the launcher recovery, 30 s by default, for
+	// nothing. One second, polled fast, checks the same thing.
+	fastLauncherRecovery(t)
+	setLauncherRecovery(f, 1, nil)
 	setModel(t, s, "assistant", ModelBinding{Provider: "launcher.gw"})
 	setSettings(t, s, func(v *Settings) { v.Main = "main" })
 	f.setSessions("server",
@@ -98,6 +102,7 @@ func TestSendRefusesALauncherOfAnotherAgentKind(t *testing.T) {
 		t.Fatal("an unidentified runtime was allowed to resume another connection")
 	}
 	f.launcherList = nil // the machine's list can't be read: its Codex alias isn't known to be one
+	s.invalidateLauncherListCache("server")
 	if _, err := send("claude-side", "cx", "en"); err != nil && strings.Contains(err.Error(), "wasn't sent") && strings.Contains(err.Error(), "Codex") {
 		t.Fatalf("refused without the list: %v", err)
 	}

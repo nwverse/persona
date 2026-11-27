@@ -159,10 +159,10 @@ selection. The zh-Hans words of every label in this section are in section 3.11.
 
 | Place | Where | Contents | Count on its row | Capture default | Empty state |
 | --- | --- | --- | --- | --- | --- |
-| **All To-dos** | the sidebar's **To-dos** row itself | every open to-do, in sections | blue N (to-dos that need you), hidden at 0 | none | "Nothing to do yet. Write down anything you want done. Persona can help with the rest." + **New To-Do** |
-| **Today** | child row | due, reminding or overdue today, plus what the owner put on Today | none | due today | "Nothing for today." + "3 coming up this week ›" |
-| **Upcoming** | child row | dated to-dos under day headings; ⋯ › Show as Calendar (Day, Week, Month; drag to reschedule) | none | asks for a date; a day heading's **+** fills it | "Nothing scheduled. To-dos with a date show up here." |
-| **Projects** (each knowledge-base project with open to-dos) | child rows after a 12-pt gap, up to 5, then **All Projects…** | that project's open to-dos | the project's needs-you part, blue, hidden at 0 | in that project | "Nothing open in Kyoto trip." + **New To-Do in Kyoto trip** |
+| **All To-dos** | the sidebar's **To-dos** row itself | every open to-do, in sections, with the Filter | blue N (to-dos that need you), hidden at 0 | none | "Nothing to do yet. Write down anything you want done. Persona can help with the rest." + **New To-Do** |
+| **Today** | child row | due, reminding or overdue today, plus what the owner put on Today; no Filter (amended 2026-11-21) | none | due today | "Nothing for today." + "3 coming up this week ›", a link beside the foot's **+** |
+| **Upcoming** | child row | dated to-dos under day headings, no Filter and no sort (amended 2026-11-21); ⋯ › Show as Calendar (Day, Week, Month; drag to reschedule), alone in its ⋯ | none | asks for a date, tomorrow at first; a day heading's **+**, or an hour tapped on its calendar, fills it | "Nothing scheduled. To-dos with a date show up here." |
+| **Projects** (each knowledge-base project with open to-dos) | child rows after a 12-pt gap, up to 5, then **All Projects…** (every project, each with its needs-you part and its open count, neutral, amended 2026-11-21) | that project's open to-dos, with the Filter | the project's needs-you part, blue, hidden at 0 | in that project | "Nothing open in Kyoto trip."; the foot's **+** (New To-Do in Kyoto trip) |
 
 - The sidebar stays at two levels, with no "Projects" heading row. The fold state belongs to the owner
   (`sidebar.fold.todos`, a `@StoredValue` like `sidebar.fold.places`); it starts unfolded and never folds or unfolds by
@@ -182,7 +182,9 @@ remembered. Needs you's blue N stays on its section header and the drawer's row;
 owner, the list's first line says "● 3 more need you · Show All", and on iOS 26 the title's subtitle keeps it once that
 line scrolls away. Nothing sits under the title. Today and Upcoming draw no Filter (amended 2026-11-21; it was "inside
 every place"): they list open to-dos already narrowed by date, so Done would always be empty there and the other choices
-would narrow little. Each client draws the Filter in its own idiom (stage 4); the contract below is the same everywhere.
+would narrow little. Outside All To-dos the same one guard line also counts what needs the owner outside the place ("●
+2 more need you, not in Today · Show All"), what a choice hides in a project's place too, never two lines, and its Show
+All opens All To-dos. Each client draws the Filter in its own idiom (stage 4); the contract below is the same everywhere.
 
 | Choice (the landing choice first) | Shows | Count |
 | --- | --- | --- |
@@ -209,8 +211,9 @@ size, with nothing past an edge.
 headers are not drawn, so the list reads as a plain list with search and + at its foot; they appear once two sections
 have rows. **Search** (amended 2026-11-21) is the system's search field on the list, scoped to To-dos: it looks through
 the titles and notes of the to-dos on the device as the words are typed, keeps the sections with their folds open, and
-ends with one row, "Search Chats for …", that takes the words to the app's search; closed to-dos and the hub's own
-matches merge in later, with #10465's search step. It replaces "the app's one search, scoped to To-dos, shown as a
+ends with one row, "Search Chats for …", that takes the words to the app's search; since #10465's search step
+(2026-11-23) it finds closed to-dos too, on the device, which holds every to-do, so the hub's own matches wait for what
+the phone does not hold. It replaces "the app's one search, scoped to To-dos, shown as a
 removable chip": the iPhone's drawer has no scoped search, and every native sibling list keeps the system's field. The
 web keeps #6589's one search.
 
@@ -253,7 +256,9 @@ each visit.
 - **Awaiting Reply keeps its own state** (`docs/design/DECISIONS.md` ("11-10 Awaiting Reply stays its own state")): its
   row says Awaiting Reply, it is not counted in N, and Can wait only files it under Needs you's header, folded.
 - **Within a section** the hub's `rank` orders rows: Needs you by deadline, then oldest ask; Working by latest
-  activity; Just finished newest first; Waiting by soonest wake; To do by overdue, today, due date, the owner's order.
+  activity; Just finished newest first; Waiting by soonest wake; To do by due date (overdue, today, later, no date
+  last), then priority (high, normal, low), then the newest. The owner's order has no input yet: priority and age
+  stand in.
 - **Steps roll up**: a step (a child to-do) is never a row in its parent's place; the parent carries the most urgent
   phase of itself and its steps, counted once, and line 2 names the step ("Ryokan · Which of 3?").
 - **Rows never move under a finger**: a phase change re-files a row only while the list is idle (a 0.2-s fade). Moves

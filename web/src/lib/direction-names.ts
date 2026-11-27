@@ -13,14 +13,19 @@
 // /api/v1/assistant/leaders and there are no counts.
 import { useEffect, useSyncExternalStore } from "react";
 import { api } from "./api";
-import { DIRECTION_TREE_PATH, directionTreeNow, readDirectionTreeOnce, refreshDirectionTree, resetDirectionTree, subscribeDirectionTree, type DirectionTree } from "./direction-tree";
+import { DIRECTION_TREE_PATH, directionTreeNow, normalizeExternalDirection, readDirectionTreeOnce, refreshDirectionTree, resetDirectionTree, subscribeDirectionTree, type DirectionTree, type ExternalDirection } from "./direction-tree";
 
 export const LEADERS_PATH = "/assistant/leaders";
 export const TREE_PATH = DIRECTION_TREE_PATH;
 
 /** The tree's directions as leaders: the secretary group left out. */
 export function treeLeaders(tree: DirectionTree | undefined): LeaderInfo[] {
-  return (tree?.directions ?? []).filter((d) => d.id && !d.secretary).map((d) => ({ id: d.id, name: d.name, counts: { running: d.running, needs_you: d.counts.needs_you } }));
+  return (tree?.directions ?? []).filter((d) => d.id && !d.secretary).map((d) => ({
+    id: d.id,
+    name: d.name,
+    ...normalizeExternalDirection(d),
+    counts: { running: d.running, needs_you: d.counts.needs_you, ...(d.counts.user_check ? { user_check: d.counts.user_check } : {}) },
+  }));
 }
 
 export interface LeaderInfo {
@@ -29,14 +34,20 @@ export interface LeaderInfo {
   name?: string;
   project?: string;
   ended?: boolean;
+  /** An outside Agent (#8236), with no Persona conversation. The pair is optional and may be incomplete. */
+  external?: boolean;
+  machine_id?: string;
+  session_id?: string;
   counts?: LeaderCounts;
 }
 
 /** What a leader's row shows of its direction (#6626): whether anything under it runs (the row's one activity mark, the
- *  tree's `running`) and how many of its open tasks wait on you (its 等你 N). No working count: the mark says it. */
+ *  tree's `running`), how many of its open tasks urgently need you ("N need you"), and optionally how many completed
+ *  tasks await owner verification (`user_check`, shown calmly apart from red Needs you). */
 export interface LeaderCounts {
   running: boolean;
   needs_you: number;
+  user_check?: number;
 }
 
 /** The names of the current leaders, by conversation id (ended ones and blank names left out). */
@@ -58,39 +69,85 @@ export function directionLabel(names: ReadonlyMap<string, string>, id: string, t
 export function leaderCounts(list: readonly LeaderInfo[] | undefined): Map<string, LeaderCounts> {
   const out = new Map<string, LeaderCounts>();
   for (const l of list ?? []) {
-    if (l.id && !l.ended && l.counts) out.set(l.id, { running: l.counts.running === true, needs_you: l.counts.needs_you ?? 0 });
-  }
-  return out;
-}
-
-/** What a direction's row says at its end: "等你 N" while tasks wait on you, else "". What runs under it is the row's
- *  activity mark alone, never words as well (#6626: one meaning, one expression). */
-export function countsLabel(c: Pick<LeaderCounts, "needs_you"> | undefined, t: (key: string, o: { count: number }) => string): string {
-  return c && c.needs_you > 0 ? t("sidebar.leader_needs_you", { count: c.needs_you }) : "";
-}
-
-/** Every leader's together (the folded section's tally): running when any runs, the tasks waiting on you added up. */
-export function totalCounts(counts: ReadonlyMap<string, LeaderCounts>, ids: readonly string[]): LeaderCounts {
-  const out = { running: false, needs_you: 0 };
-  for (const id of ids) {
-    const c = counts.get(id);
-    if (c) {
-      out.running ||= c.running;
-      out.needs_you += c.needs_you;
+    if (l.id && !l.ended && l.counts) {
+      out.set(l.id, { running: l.counts.running === true, needs_you: l.counts.needs_you ?? 0, ...(l.counts.user_check ? { user_check: l.counts.user_check } : {}) });
     }
   }
   return out;
 }
 
+/** The current external directions, by their own opaque direction id (never by the outside session id). */
+export function leaderExternalDirections(list: readonly LeaderInfo[] | undefined): Map<string, ExternalDirection> {
+  const out = new Map<string, ExternalDirection>();
+  for (const l of list ?? []) {
+    const external = normalizeExternalDirection(l);
+    if (l.id && !l.ended && external) out.set(l.id, external);
+  }
+  return out;
+}
+
+/** What a direction's row says at its end: "N need you" while tasks urgently need you, else "". What runs under it is
+ *  the row's activity mark alone, never words as well (#6626: one meaning, one expression). */
+export function countsLabel(c: Pick<LeaderCounts, "needs_you"> | undefined, t: (key: string, o: { count: number }) => string): string {
+  return c && c.needs_you > 0 ? t("sidebar.leader_needs_you", { count: c.needs_you }) : "";
+}
+
+/** Secondary verification count for completed tasks awaiting optional owner verification (`user_check`), separate from
+ *  the urgent Needs you count. */
+export function userCheckLabel(c: Pick<LeaderCounts, "user_check"> | undefined, t: (key: string, o: { count: number }) => string): string {
+  return c && (c.user_check ?? 0) > 0 ? t("sidebar.leader_user_check", { count: c.user_check! }) : "";
+}
+
+/** Combined row hint for a direction row: urgent Needs you first, then calm To verify when present. */
+export function directionHint(c: Pick<LeaderCounts, "needs_you" | "user_check"> | undefined, t: (key: string, o: { count: number }) => string): string {
+  return [countsLabel(c, t), userCheckLabel(c, t)].filter(Boolean).join(" · ");
+}
+
+/** Every leader's together (the folded section's tally): running when any runs, Needs you and user_check added up. */
+export function totalCounts(counts: ReadonlyMap<string, LeaderCounts>, ids: readonly string[]): LeaderCounts {
+  const out: LeaderCounts = { running: false, needs_you: 0 };
+  let userCheck = 0;
+  for (const id of ids) {
+    const c = counts.get(id);
+    if (c) {
+      out.running ||= c.running;
+      out.needs_you += c.needs_you;
+      userCheck += c.user_check ?? 0;
+    }
+  }
+  if (userCheck > 0) out.user_check = userCheck;
+  return out;
+}
+
+/** Tally only the rows currently visible under the Persona chats section (deduplicated) so hidden/omitted directions,
+ *  main-chat open plans, and folded/unlisted chats never inflate the section header above the visible rows beneath it. */
+export function visibleSectionCounts(
+  counts: ReadonlyMap<string, LeaderCounts>,
+  directionIds: readonly string[],
+  visibleRecentIds: readonly string[] = [],
+): LeaderCounts {
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  for (const id of directionIds) {
+    if (id && !seen.has(id)) { seen.add(id); ids.push(id); }
+  }
+  for (const id of visibleRecentIds) {
+    if (id && !seen.has(id)) { seen.add(id); ids.push(id); }
+  }
+  return totalCounts(counts, ids);
+}
+
 const listeners = new Set<() => void>();
 let names: Map<string, string> = new Map();
 let counts: Map<string, LeaderCounts> = new Map();
+let externals: Map<string, ExternalDirection> = new Map();
 let askedFor = "";
 let asked = 0;
 
 function set(list: readonly LeaderInfo[] | undefined) {
   names = directionNames(list);
   counts = leaderCounts(list);
+  externals = leaderExternalDirections(list);
   listeners.forEach((l) => l());
 }
 
@@ -136,6 +193,7 @@ export function resetDirectionNames() {
   asked++;
   names = new Map();
   counts = new Map();
+  externals = new Map();
   toldIds = null;
   resetDirectionTree();
 }
@@ -161,12 +219,23 @@ export function useDirectionName(id: string): string | undefined {
   return useSyncExternalStore(subscribe, name, name);
 }
 
+/** The currently cached direction names without triggering a fetch. */
+export function useCachedDirectionNames(): ReadonlyMap<string, string> {
+  return useSyncExternalStore(subscribe, snapshot, snapshot);
+}
+
 const countsSnapshot = () => counts;
 
 /** The current leaders' counts (read with useDirectionNames, which asks for them). */
 export function useLeaderCounts(): ReadonlyMap<string, LeaderCounts> {
   return useSyncExternalStore(subscribe, countsSnapshot, countsSnapshot);
 }
+
+/** The same external metadata the subscribed names and counts carry; their update also redraws the sidebar. */
+export const directionExternal = (id: string): ExternalDirection | undefined => externals.get(id);
+
+/** A permanent external id is already fully described by the tree, not a missing conversation to reread forever. */
+export const isExternalDirection = (id: string): boolean => externals.has(id);
 
 /** Reads the tree (on every hello, `since` the socket opened: a read sent since then serves; with `changed`, on
  *  `directions`, once more after any read out): the leaders' ids in order, or null when it could not be read (an older

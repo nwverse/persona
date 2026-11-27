@@ -8,8 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/channel"
-	"github.com/nwverse/persona/server/internal/feishubot"
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/prompts"
 )
 
@@ -180,6 +181,7 @@ func TestInboxAndThreadAndPrereqSignalsWakeDuringNeedsUser(t *testing.T) {
 	t.Run("linked inbox item wakes supervisor without bypassing to agent", func(t *testing.T) {
 		ctx := context.Background()
 		s, f, todo, _, _ := setupNeedsUserTaskWithLark(t, nil)
+		f.inbox = newFakeInbox()
 		turnInboxSignalsOn(t, s)
 		beforeNotices := len(f.notices())
 		beforeAgentSent := len(sentToAgent(f))
@@ -204,6 +206,7 @@ func TestInboxAndThreadAndPrereqSignalsWakeDuringNeedsUser(t *testing.T) {
 	})
 
 	t.Run("bound feishu thread reply wakes supervisor without mutating card", func(t *testing.T) {
+		needsLarkLayer(t) // the topic's message is the lark module's
 		ctx := context.Background()
 		s, f, todo, _, _ := setupNeedsUserTaskWithLark(t, nil)
 		th := TodoThread{Channel: channel.Feishu, ChatID: "oc_group1", ThreadID: "omt_thread1", Title: "Rollout topic"}
@@ -212,14 +215,15 @@ func TestInboxAndThreadAndPrereqSignalsWakeDuringNeedsUser(t *testing.T) {
 		}
 		beforeNotices := len(f.notices())
 
-		ev := feishubot.MessageEvent{}
+		ev := botcard.MessageEvent{}
 		ev.Sender.SenderType = "user"
 		ev.Sender.SenderID.OpenID = "ou_me"
 		ev.Message.MessageID = "om_reply_1"
 		ev.Message.ChatID = "oc_group1"
 		ev.Message.ThreadID = "omt_thread1"
+		ev.Message.ChatType, ev.Message.MessageType, ev.Message.Content = "group", "text", `{"text":"Go ahead after QA signs off"}`
 		st := FeishuStatus{Ready: true, Enabled: true, Owner: "ou_me", Features: FeishuFeatures{Main: true, Cards: true, Reports: true}}
-		s.threadMessage(ctx, ev, st, feishubot.Content{Text: "Go ahead after QA signs off"})
+		feishuSay(t, s, f, &st, ev, "")
 
 		waitFor(t, "thread external info wake", func() bool {
 			for _, n := range f.notices()[beforeNotices:] {
@@ -306,6 +310,9 @@ func TestNeedsUserExternalInfoSilentFinishKeepsCardIntact(t *testing.T) {
 }
 
 func TestTaskReviewSupersedesNeedsUserCleanlyAcrossVerdicts(t *testing.T) {
+	needsLarkLayer(t)
+	parkedArgs := personReplyParkArgs(time.Now())
+	parkedArgs["reason"] = "Waiting for external QA sign-off per thread reply"
 	verdicts := []struct {
 		name       string
 		args       map[string]any
@@ -339,19 +346,8 @@ func TestTaskReviewSupersedesNeedsUserCleanlyAcrossVerdicts(t *testing.T) {
 			wantReason: "Reviewer requested changes on PR #42; sending back to Agent",
 		},
 		{
-			name: "parked",
-			args: map[string]any{
-				"verdict":    "parked",
-				"reason":     "Waiting for external QA sign-off per thread reply",
-				"waiting_on": "someone_else",
-				"until":      "24h",
-				"evidence": map[string]any{
-					"kind":       "other",
-					"target":     "QA sign-off",
-					"wake":       "QA replies in thread",
-					"next_actor": "external",
-				},
-			},
+			name:       "parked",
+			args:       parkedArgs,
 			wantState:  reviewParked,
 			wantClosed: false,
 			wantInAsk:  false,
@@ -415,14 +411,15 @@ func TestTaskReviewSupersedesNeedsUserCleanlyAcrossVerdicts(t *testing.T) {
 				t.Fatalf("latest review superseded_reason = %+v, want %q", latestReview, tc.wantReason)
 			}
 
-			// Verify feed audit entry recorded SupersededReason.
-			feed, err := s.feedItems(ctx, todo.Origin, todo.CreatedAt.Add(-time.Minute))
+			// Verify feed audit entry recorded SupersededReason. Query by todo rather than the conversation's bounded
+			// page: earlier tests in a shared Postgres shard can fill that page while this test runs.
+			feed, err := database.FeedByRef(ctx, todo.ID, []string{feedReview}, 10)
 			if err != nil {
 				t.Fatal(err)
 			}
 			foundFeedReason := false
 			for _, item := range feed {
-				if item.Kind == feedReview && item.Ref == todo.ID {
+				if item.Conversation == todo.Origin {
 					var body reviewFeedBody
 					if json.Unmarshal(item.Body, &body) == nil && body.SupersededReason == tc.wantReason {
 						foundFeedReason = true
@@ -455,13 +452,17 @@ func TestTaskReviewSupersedesNeedsUserCleanlyAcrossVerdicts(t *testing.T) {
 				t.Fatalf("redrawn Lark card fabricated owner recommendation click:\n%s", cardUpdates[0])
 			}
 
-			// Verify NO fabricated owner decision row (task_decided / DecisionManual) was created!
+			// Let an accepted completion finish its legitimate outcome receipt before inspecting decisions.
+			// Every non-outcome row still fails just as the original empty-list assertion did.
+			s.tasks.outcomeRuns.Wait()
 			decisions, err := database.ListTodoDecisions(ctx, todo.ID, true)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(decisions) != 0 {
-				t.Fatalf("supersession fabricated owner decision rows: %+v", decisions)
+			for _, decision := range decisions {
+				if decision.Source != db.DecisionOutcome {
+					t.Fatalf("supersession fabricated a decision row: %+v", decision)
+				}
 			}
 		})
 	}

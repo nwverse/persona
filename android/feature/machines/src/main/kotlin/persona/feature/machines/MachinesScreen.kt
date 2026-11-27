@@ -94,6 +94,7 @@ internal fun MachinesScreen(
     val locale = currentLocale
     val healthState = health?.state?.collectAsStateWithLifecycle()?.value ?: MachineHealthState()
     val subscriptionUsage = LocalSidebarUsage.current?.value ?: healthState.usage
+    val (hiddenUsage, showUsage) = rememberHiddenUsageProviders()
     var allChecks by rememberSaveable(machineId) { mutableStateOf(false) }
     var allAgents by rememberSaveable(machineId) { mutableStateOf(false) }
     var confirmFix by remember { mutableStateOf(false) }
@@ -146,6 +147,7 @@ internal fun MachinesScreen(
         state.failure?.let { failure -> item("failure") { JNotice(stringResource(failure.text)) } }
         if (state.sessionsFailure) item("sessions-failure") { JNotice(stringResource(R.string.machines_sessions_failure)) }
         if (machineId == null) {
+            usageWindows(subscriptionUsage, java.time.Instant.ofEpochSecond(state.now), hiddenUsage, showUsage)
             val tokenShares = entries.mapNotNull { entry ->
                 entry.metrics.usage?.let { (entry.machine?.displayName ?: entry.id) to it }
             }

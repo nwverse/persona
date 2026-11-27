@@ -3,8 +3,6 @@ package node
 import (
 	"context"
 	"log"
-	"os"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -20,7 +18,7 @@ import (
 // transcript. Before, the node resumed it with `claude --resume` in a terminal tab, so the session ran outside the app,
 // and was refused on a machine without a terminal engine.
 //
-// Only the index's sessions, on macOS (claudeDesktopOpens), and only when no claude has the session open: one
+// The index's sessions and sessions created for the app that await import, only when no claude has the session open: one
 // that does (a terminal's claude without an inbox, a program's) is refused as before, never given a second claude.
 
 // desktopOpenWait bounds the wait for the app to start the session's claude and its inbox; desktopInboxGrace is how
@@ -30,27 +28,32 @@ var (
 	desktopInboxGrace = 3 * time.Second
 )
 
-// openDesktopLink opens link with its handler, in the background (a variable: tests record the link).
-var openDesktopLink = func(ctx context.Context, link string) error {
-	return exec.CommandContext(ctx, "/usr/bin/open", "-g", link).Run()
-}
-
 const (
 	desktopOpenFailed     = "desktop_open_failed"
 	desktopOpenTimeoutMsg = "电脑上的 Claude 桌面版没有及时打开这个会话（它可能还在启动，或电脑在锁屏）：在电脑上打开它再发。这次没有发送。"
 )
 
-// sendThroughDesktopApp sends text to session id through the desktop app when the app's sidebar lists it and nothing
-// runs it: the app opens it, then the message goes to its inbox. handled false for any other session, and when the link
-// cannot be opened at all (nothing was started: the caller goes on as before), or not in the background here
-// (claudeDesktopOpens).
+// sendThroughDesktopApp sends text to session id through the desktop app when its index or persisted launcher owns it
+// and nothing runs it: pending imports retain the same transcript, then the app opens its inbox. Desktop failures are
+// handled refusals, so a retry never starts a terminal claude against the app's transcript.
 func (n *Node) sendThroughDesktopApp(ctx context.Context, id, text string, images []proto.Image) (handled bool, err error) {
-	if !claudeDesktopOpens {
+	// A scoped node's home may still be the user's real home. Its own offline
+	// sessions continue through the regular route; never inspect or open the
+	// user's desktop sessions while deciding that route.
+	if n.sessionScope != nil || !claudeDesktopOpens {
 		return false, nil
 	}
 	local := readClaudeDesktopIndex(n.home).about[id].local
 	if local == "" {
-		return false, nil
+		if n.state == nil {
+			return false, nil
+		}
+		if err := n.state.loaded(ctx); err != nil {
+			return true, err
+		}
+		if state, ok := n.state.get(id); !ok || state.Launcher != claudeDesktopLauncher {
+			return false, nil
+		}
 	}
 	if r := n.openElsewhereRefusal(id); r != nil {
 		return true, r
@@ -59,9 +62,21 @@ func (n *Node) sendThroughDesktopApp(ctx context.Context, id, text string, image
 		// The inbox runs no commands, and a command resumed in a terminal would take the session out of the app.
 		return true, refusal(peerCommand, peerCommandMsg, nil)
 	}
+	if local == "" {
+		if err := n.ensureDesktopImport(ctx, id); err != nil {
+			return true, err
+		}
+		local = readClaudeDesktopIndex(n.home).about[id].local
+		if local == "" {
+			return true, refusal(desktopOpenFailed, desktopOpenTimeoutMsg, nil)
+		}
+	}
 	if err := openDesktopLink(ctx, "claude://claude.ai/epitaxy/"+local); err != nil {
-		log.Printf("send %s: could not ask the desktop app to open it (%v): resuming it as before", id, err)
-		return false, nil
+		log.Printf("send %s: could not ask the desktop app to open it: %v", id, err)
+		if ctx.Err() != nil {
+			return true, ctx.Err()
+		}
+		return true, refusal(desktopOpenFailed, desktopOpenTimeoutMsg, nil)
 	}
 	deadline := time.Now().Add(desktopOpenWait)
 	var noInbox time.Time
@@ -70,7 +85,7 @@ func (n *Node) sendThroughDesktopApp(ctx context.Context, id, text string, image
 		cur := n.desktopTranscript(local, id)
 		if c, ok := n.outsideClaude(cur); ok {
 			if p, has := peerOf(c); has {
-				if _, err := os.Stat(p.socket); err == nil {
+				if peerReachable(p) && peerInboxExists(p.socket) {
 					if cur != id {
 						log.Printf("send %s: the desktop app went on in %s", id, cur)
 						n.transferDesktopSettings(id, cur)
@@ -105,6 +120,41 @@ func (n *Node) sendOpened(ctx context.Context, id, text string, images []proto.I
 		return true, refusal(peerUnreachable, peerUnreachMsg, nil) // it was there, and is gone
 	}
 	return true, refusal(peerUnsupported, peerNoInboxMsg, nil)
+}
+
+// wentOnKey marks a send that already went on from an earlier transcript (sendWentOn): it goes on once at most.
+type wentOnKey struct{}
+
+// desktopWentOn is the transcript the desktop app's session runs now when that session went on from transcript id and
+// is unarchived (#14394); "" for any other id (a session's current transcript, one no entry names, an archived
+// session's), for one a claude has open (a terminal's that took it up: refused as open elsewhere, as before), for a
+// send that already went on, and where sendThroughDesktopApp does not look (a scoped node, an app that cannot be
+// opened).
+func (n *Node) desktopWentOn(ctx context.Context, id string) string {
+	if n.sessionScope != nil || !claudeDesktopOpens || !validID(id) || ctx.Value(wentOnKey{}) != nil {
+		return ""
+	}
+	for _, s := range readClaudeDesktopIndex(n.home).earlier[id] {
+		if !s.archived {
+			if _, _, open := n.claudeOpenElsewhere(id); open {
+				return ""
+			}
+			return s.transcript
+		}
+	}
+	return ""
+}
+
+// sendWentOn sends the message for transcript id, which its desktop session went on from, as one to the transcript
+// the session runs now (cur): the inbox of its claude, or the app opens it (sendThroughDesktopApp), never a claude
+// --resume of id in a terminal beside the app's session. The settings queued for id go with it, as when the app goes on
+// in a new transcript as it opens a session. Sent as cur's, it takes cur's turn (inputTurn) inside id's, and the host
+// id last ran in (withResumeHost) is not cur's.
+func (n *Node) sendWentOn(ctx context.Context, id, cur, text string, images []proto.Image, opts sendOpts) error {
+	log.Printf("send %s: its desktop session went on in %s", id, cur)
+	n.transferDesktopSettings(id, cur)
+	ctx = context.WithValue(context.WithValue(ctx, startHostKey{}, ""), wentOnKey{}, id)
+	return n.send(ctx, cur, text, images, opts)
 }
 
 // desktopTranscript is the transcript the app's session local runs now, by its entry; id when no entry names it.

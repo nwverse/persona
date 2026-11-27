@@ -65,6 +65,7 @@ export interface Manifest {
    * executable; writes and arbitrary command lines are not part of this contract.
    */
   host_integrations?: HostIntegrationSpec[];
+  upgrade?: UpgradeSpec;
 }
 
 /**
@@ -136,6 +137,24 @@ export interface AuthSpec {
    * do leave it out of its pages.
    */
   page?: string;
+}
+
+/**
+ * What the extension asks of the hub around an automatic upgrade (docs "Backup before an upgrade"). The hub snapshots
+ * the data directory before every automatic upgrade whether or not this is there. Hubs before it refuse the manifest.
+ */
+export interface UpgradeSpec {
+  /** auto (the default): the upgrade goes ahead when the snapshot fails; required: no snapshot, no upgrade. */
+  backup?: string;
+  /**
+   * Before the snapshot the hub calls upgrade.prepare on the installed version's program; an error stops the upgrade.
+   */
+  prepare?: boolean;
+  /**
+   * Once the new version is up the hub calls its upgrade.health; an error rolls the upgrade back and restores the
+   * snapshot.
+   */
+  health_check?: boolean;
 }
 
 export interface Dependency {
@@ -285,6 +304,11 @@ export interface Permissions {
    */
   agent_runtimes?: boolean;
   /**
+   * The routine sends its local date and language to this extension and may include its facts and report sections in
+   * the briefing.
+   */
+  routine_facts?: boolean;
+  /**
    * It receives the error and crash reports of the hub and the user's devices, scrubbed (no message text, tokens,
    * user names, machine names or IP addresses). Needed by contributes.error_reports.
    */
@@ -328,6 +352,7 @@ export interface Contributes {
   assistant?: AssistantItem[];
   mcp_servers?: MCPServerItem[];
   ui?: UIItem[];
+  track_kinds?: TrackKindItem[];
   agent_sources?: AgentSourceItem[];
   channel?: ChannelItem[];
   events?: EventsItem[];
@@ -339,10 +364,13 @@ export interface Contributes {
   triage_templates?: TriageTemplateItem[];
   agent_filters?: AgentFilterItem[];
   tunnels?: TunnelItem[];
+  routine_facts?: RoutineFactsItem[];
   error_reports?: ErrorReportsItem[];
   auth_relay?: AuthRelayItem[];
   secret_providers?: SecretProviderItem[];
   repository_providers?: RepositoryProviderItem[];
+  memory_sources?: MemorySourceItem[];
+  disk_offload?: DiskOffloadItem[];
   messaging?: MessagingItem[];
   /** Extra keys are opaque JSON; declared properties keep their own types. */
   [key: string]: unknown;
@@ -356,6 +384,8 @@ export interface Contributes {
  */
 export interface SkillItem {
   id: string;
+  /** What the extension's contributions list calls it; the id when absent. */
+  title?: string;
   /** The directory, relative to the package (or to the data directory with source data). */
   dir: string;
   source?: ContentSource;
@@ -584,6 +614,43 @@ export interface RepositoryProviderItem {
 }
 
 /**
+ * A provider that moves items from a computer to storage elsewhere, lists what it already holds and brings items back
+ * (docs/server/machine-usage-map.md "Extension point disk_offload"): the disk usage map draws its inventory beside
+ * the computer's disk and offers Offload; the manager asks the program (offload.inventory, offload.run, offload.job,
+ * offload.cancel; offload.schema.json) after the user confirmed. Needs the program to speak the protocol.
+ */
+export interface DiskOffloadItem {
+  id: string;
+  /**
+   * What the map and its menus call the provider (Offload to Example Cloud). Not only spaces, no control characters.
+   */
+  name: string;
+  /** What it takes from the map; without it, files and folders. */
+  kinds?: DiskOffloadKind[];
+  /** Items it holds can be brought back (Restore on the map's cloud side). */
+  restore?: boolean;
+}
+
+/**
+ * What a disk_offload provider takes: file, dir (a folder) or app (a macOS app bundle).
+ */
+export type DiskOffloadKind = "file" | "dir" | "app" | (string & {});
+export const DISK_OFFLOAD_KINDS = ["file", "dir", "app"] as const;
+
+/**
+ * The extension's memory, read by the manager one entry at a time (memory.entries; memory.schema.json) so the hub
+ * decides which entries reach which scene (a conversation's standing context, a recall, a dispatched task, the
+ * Inbox's helper). Needs the program to speak the protocol; one per extension. Once declared, the hub stops
+ * delivering the extension's own text outlets (its assistant instructions, project context, Inbox context and its
+ * connectors' read tools in the assistant's conversations) directly.
+ */
+export interface MemorySourceItem {
+  id: string;
+  /** What settings call the source (My memory). Not only spaces, no control characters. */
+  name: string;
+}
+
+/**
  * A repository provider's optional answer: pr_status (repo.pr_status).
  */
 export type RepositoryCapability = "pr_status" | (string & {});
@@ -603,6 +670,24 @@ export interface RepositoryLinkLabel {
  */
 export type RepositoryLinkKind = "issue" | "pull_request" | (string & {});
 export const REPOSITORY_LINK_KINDS = ["issue", "pull_request"] as const;
+
+/**
+ * Identifies one routine facts source within its extension.
+ */
+export type RoutineContributionID = string & { readonly __brand: "RoutineContributionID" };
+/** A RoutineContributionID from its raw string. */
+export function routineContributionID(raw: string): RoutineContributionID {
+  return raw as RoutineContributionID;
+}
+
+/**
+ * A source of facts and report sections for a scheduled briefing. Requires an RPC runtime and
+ * permissions.routine_facts.
+ */
+export interface RoutineFactsItem {
+  id: RoutineContributionID;
+  title: string;
+}
 
 /**
  * It is given the error and crash reports of the hub and the user's devices (error_reports.deliver): needs the
@@ -678,6 +763,41 @@ export interface ConnectorItem {
   sends_as_user?: boolean;
 }
 
+export interface TrackAttention {
+  push_cap?: string;
+  deep_default?: string;
+  enter_mode?: string;
+}
+
+export interface TrackSidebar {
+  group?: string;
+  order?: number;
+  icon?: string;
+}
+
+export interface TrackKindConfig {
+  schema: 1;
+  template: string;
+  user_instructions?: string;
+  context: string;
+  default_categories: string[];
+  tag_focus: string[];
+  rhythms: (Record<string, unknown>)[];
+  attention: TrackAttention;
+  supervision: string;
+  usage: (Record<string, unknown>)[];
+  assembly: string;
+  capture_target?: boolean;
+  channels: string[];
+  sidebar: TrackSidebar;
+}
+
+export interface TrackKindItem {
+  id: string;
+  title: string;
+  config: TrackKindConfig;
+}
+
 /**
  * A contribution with only an id and a name: voice, transcription, speech, computer, browser.
  */
@@ -733,6 +853,8 @@ export interface APIReceipt {
 
 export interface AssistantItem {
   id: string;
+  /** What the extension's contributions list calls it; the id when absent. */
+  title?: string;
   skills?: string[];
   instructions?: string;
   gate?: string;
@@ -746,6 +868,8 @@ export interface AssistantItem {
 export interface MCPServerItem {
   /** The server's name for the assistant; not persona or persona. */
   id: string;
+  /** What the extension's contributions list calls it; the id when absent. */
+  title?: string;
   /** Looked up on PATH, then in ~/bin. */
   command: string;
   /**
@@ -980,8 +1104,8 @@ export interface SettingsCheckResult {
 export type HubRole = "center" | "member" | (string & {});
 export const HUB_ROLES = ["center", "member"] as const;
 
-export type HubCapability = "inbox_group" | "inbox_group_state" | "tool_images" | (string & {});
-export const HUB_CAPABILITIES = ["inbox_group", "inbox_group_state", "tool_images"] as const;
+export type HubCapability = "inbox_group" | "inbox_group_state" | "tool_images" | "tool_views" | (string & {});
+export const HUB_CAPABILITIES = ["inbox_group", "inbox_group_state", "tool_images", "tool_views"] as const;
 
 /**
  * What the hub sends first. The extension is under extension; hubs before the rename (#1844) send it as plugin, newer
@@ -994,6 +1118,11 @@ export interface InitializeParams {
   plugin?: ExtensionInfo;
   /** The configuration with the schema's defaults filled in. */
   config?: unknown;
+  /**
+   * The manager's source-privacy boundary, sent only to an extension contributing a selected connector. Runtime
+   * authorization input, not extension settings persisted in the extension registry.
+   */
+  inbox_visibility?: unknown;
   secrets?: Record<string, string>;
   granted: Permissions;
   /** The contributions this run is for, by extension point. */
@@ -1142,6 +1271,11 @@ export interface UIContext {
   locale?: string;
   platform?: Platform;
   ui_version?: number;
+  /**
+   * Component types this client cannot draw even within ui_version (such as ["scene"] while rendering v12 "map"). The
+   * hub downgrades each listed type in place.
+   */
+  unsupported?: string[];
   /**
    * Explicit stream opt-in, independent of ui_version. Absent means snapshot-only. Contract only: no current client
    * or hub advertises it.
@@ -1702,9 +1836,10 @@ export type Component =
   | GridComponent
   | CarouselComponent
   | GraphComponent
-  | SceneComponent;
-export const COMPONENT_TYPES = ["text", "metric", "progress", "row", "button", "link", "field", "divider", "chart", "stat_grid", "segmented", "markdown", "table", "empty", "loading", "html", "header", "breadcrumb", "file_tree", "code", "diff", "comment_thread", "composer", "image", "grid", "carousel", "graph", "scene"] as const;
-export const COMPONENT_SINCE: Record<string, number> = { text: 1, metric: 1, progress: 1, row: 1, button: 1, link: 1, field: 1, divider: 1, chart: 2, stat_grid: 2, segmented: 2, markdown: 3, table: 3, empty: 3, loading: 3, html: 4, header: 4, breadcrumb: 4, file_tree: 4, code: 4, diff: 4, comment_thread: 4, composer: 4, image: 6, grid: 6, carousel: 6, graph: 10, scene: 11 };
+  | SceneComponent
+  | MapComponent;
+export const COMPONENT_TYPES = ["text", "metric", "progress", "row", "button", "link", "field", "divider", "chart", "stat_grid", "segmented", "markdown", "table", "empty", "loading", "html", "header", "breadcrumb", "file_tree", "code", "diff", "comment_thread", "composer", "image", "grid", "carousel", "graph", "scene", "map"] as const;
+export const COMPONENT_SINCE: Record<string, number> = { text: 1, metric: 1, progress: 1, row: 1, button: 1, link: 1, field: 1, divider: 1, chart: 2, stat_grid: 2, segmented: 2, markdown: 3, table: 3, empty: 3, loading: 3, html: 4, header: 4, breadcrumb: 4, file_tree: 4, code: 4, diff: 4, comment_thread: 4, composer: 4, image: 6, grid: 6, carousel: 6, graph: 10, scene: 11, map: 12 };
 
 /**
  * A paragraph.
@@ -2336,6 +2471,104 @@ export type SceneWarmth = "warm" | "cool" | (string & {});
 export const SCENE_WARMTHS = ["warm", "cool"] as const;
 
 /**
+ * An interactive native map (UI version 12): route polylines and markers (waypoints, origin, destination, pins) with
+ * distance/duration metadata and external https map links. Drawn as a snapshot preview in cards and inline tool
+ * views; tapping opens an interactive sheet unless static is true. An older app gets the caption, route summaries,
+ * marker rows and links.
+ */
+export interface MapComponent {
+  type: "map";
+  /** Keeps camera state across redraws of the page. */
+  key?: string;
+  title?: string;
+  /** Read out by screen readers and shown as fallback text when the map cannot be drawn. */
+  alt: string;
+  caption?: string;
+  aspect?: ImageAspect;
+  viewport?: MapViewport;
+  markers?: MapMarker[];
+  routes?: MapRoute[];
+  links?: MapLink[];
+  /** When true, stays a non-interactive snapshot and does not open an interactive sheet. */
+  static?: boolean;
+  /**
+   * When true (or when multiple routes/stops exist without a compact override), shows a companion route/stop list
+   * beneath the map.
+   */
+  show_list?: boolean;
+}
+
+/**
+ * Travel mode of a route polyline (UI version 12).
+ */
+export type MapTravelMode = "driving" | "walking" | "transit" | "cycling" | (string & {});
+export const MAP_TRAVEL_MODES = ["driving", "walking", "transit", "cycling"] as const;
+
+/**
+ * Semantic role of a marker on a map (UI version 12).
+ */
+export type MapMarkerKind = "origin" | "destination" | "waypoint" | "pin" | "user" | (string & {});
+export const MAP_MARKER_KINDS = ["origin", "destination", "waypoint", "pin", "user"] as const;
+
+/**
+ * A geographic point in WGS-84 (UI version 12).
+ */
+export interface MapCoordinate {
+  lat: number;
+  lon: number;
+}
+
+/**
+ * Initial map framing in WGS-84 when not auto-fitted to markers and routes (UI version 12).
+ */
+export interface MapViewport {
+  center: MapCoordinate;
+  span_lat?: number;
+  span_lon?: number;
+}
+
+/**
+ * One location pin on a map (UI version 12), in tone's role color or color's named color (never both).
+ */
+export interface MapMarker {
+  id: string;
+  lat: number;
+  lon: number;
+  kind?: MapMarkerKind;
+  label: string;
+  subtitle?: string;
+  detail?: string;
+  icon?: NavIcon;
+  tone?: Tone;
+  color?: Color;
+  action?: Action;
+}
+
+/**
+ * One route polyline on a map (UI version 12), in WGS-84 coordinates.
+ */
+export interface MapRoute {
+  id: string;
+  label?: string;
+  mode?: MapTravelMode;
+  distance_meters?: number;
+  duration_seconds?: number;
+  summary?: string;
+  selected?: boolean;
+  tone?: Tone;
+  color?: Color;
+  points: MapCoordinate[];
+}
+
+/**
+ * An https link shown beside or inside a map component (UI version 12).
+ */
+export interface MapLink {
+  title: string;
+  url: string;
+}
+
+/**
  * Where a picture comes from (UI version 6): an https url the app loads without credentials, or a ref the extension
  * serves itself (ui.image) through the hub; exactly one. path is written by the hub only, for a ref: its own address,
  * which the app loads with its device credentials. An extension that writes path is refused.
@@ -2723,8 +2956,8 @@ export interface Action {
    */
   reply?: string;
   /**
-   * Assistant only: an https URL or a validated persona/persona session, task, kb or file target, opened inside the
-   * app.
+   * Assistant only, except that a full extension page may open persona://session/<machine>/<session> or
+   * persona://task/<id>: an https URL or a validated persona session, task, kb or file target, opened inside the app.
    */
   open?: string;
   /** Assistant only: return one page within the card. */
@@ -3706,7 +3939,7 @@ export interface ConnectorCatalogCallParams {
 
 /**
  * items: new items, each kept once; snapshot: the answer as one state, kept when it changes; things: the answer lists
- * Inbox rows ready-made (ConnectorInboxThing), kept and handed to the Inbox as they are.
+ * Inbox rows ready-made (ConnectorInboxThing), and the Inbox gets the latest answer's rows as they are, in its order.
  */
 export type ConnectorSubscriptionMode = "items" | "snapshot" | "things" | (string & {});
 export const CONNECTOR_SUBSCRIPTION_MODES = ["items", "snapshot", "things"] as const;
@@ -3790,8 +4023,8 @@ export const CONNECTOR_ERROR_CODES = ["rate_limited", "no_machine", "offline", "
  * and calls their short tool names. An extension's connector with one this hub does not know loses only that
  * capability.
  */
-export type ConnectorCapability = "status" | "tools" | "actions" | "events" | "inbox" | "settle" | "archive" | "chats" | "items" | "login" | "options" | "threads" | "snapshot" | "group" | "meta" | "fallback" | "machines" | "recall" | "history" | "history_anchors" | "catalog" | (string & {});
-export const CONNECTOR_CAPABILITIES = ["status", "tools", "actions", "events", "inbox", "settle", "archive", "chats", "items", "login", "options", "threads", "snapshot", "group", "meta", "fallback", "machines", "recall", "history", "history_anchors", "catalog"] as const;
+export type ConnectorCapability = "status" | "tools" | "actions" | "events" | "inbox" | "settle" | "archive" | "chats" | "items" | "login" | "options" | "threads" | "snapshot" | "group" | "meta" | "fallback" | "machines" | "recall" | "history" | "history_anchors" | "catalog" | "inbox_visibility" | (string & {});
+export const CONNECTOR_CAPABILITIES = ["status", "tools", "actions", "events", "inbox", "settle", "archive", "chats", "items", "login", "options", "threads", "snapshot", "group", "meta", "fallback", "machines", "recall", "history", "history_anchors", "catalog", "inbox_visibility"] as const;
 
 /**
  * ConnectorStatus.state. disabled is the hub's own (the user switched it off); a program never answers it.
@@ -3845,6 +4078,26 @@ export const CONNECTOR_POST_STATUSES = ["new", "changed", "refused"] as const;
  */
 export type ConnectorGroupTool = "messages_before" | "messages_around" | "search" | (string & {});
 export const CONNECTOR_GROUP_TOOLS = ["messages_before", "messages_around", "search"] as const;
+
+/**
+ * How the hub's write gate authorized actions.do besides an ordinary phone card or connector_gate allow rule:
+ * auto_confirm means the hub accepted the short-lived credential actions.describe returned under an explicit hub-side
+ * guarded auto-confirm policy.
+ */
+export type ConnectorApprovalMode = "auto_confirm" | (string & {});
+export const CONNECTOR_APPROVAL_MODES = ["auto_confirm"] as const;
+
+/**
+ * Short-lived, single-use credential returned from actions.describe when the hub negotiated approval_protocol and the
+ * extension's own guard checks passed. Bound by the extension to the exact action and raw args JSON; ignored unless
+ * the hub also authorizes guarded auto-confirm for the call.
+ */
+export interface ConnectorAutoConfirm {
+  /** Opaque single-use approval token generated by the extension; never logged or persisted by the hub. */
+  token: string;
+  /** RFC 3339 timestamp after which the token is no longer valid. */
+  expires_at: string;
+}
 
 /**
  * An answer with nothing in it: {}.
@@ -3953,6 +4206,24 @@ export interface ConnectorCallParams {
   contribution: string;
   name: string;
   args?: unknown;
+  /**
+   * actions.describe only (tools.call never sets and ignores it): the guarded auto-confirm protocol the hub is
+   * willing to accept for this call when a hub-side policy matches (for example guarded-auto-confirm-v1). Absent when
+   * no policy applies or on older hubs.
+   */
+  approval_protocol?: string;
+  /**
+   * The calling conversation's track (#13246): its slug, main for the main track; absent when the hub cannot tell.
+   */
+  track?: string;
+  /** The track's kind; absent when not known (the main track). */
+  track_kind?: string;
+  /**
+   * The calling conversation's information categories (health, finance, relationships, emotion, legal_id); empty is
+   * general. Absent means not known (an older hub, a turn not tagged yet): take it for sensitive. Whether the phone
+   * confirms a write stays the hub's decision.
+   */
+  categories?: string[];
 }
 
 /**
@@ -3967,6 +4238,12 @@ export interface ConnectorCallResult {
    * pixels; the hub leaves out any over a limit and says so after the text.
    */
   images?: ConnectorToolImage[];
+  /**
+   * tools.call only (actions.do and catalog.call ignore it): declarative Views rendered out-of-band inline on the
+   * tool call item in chat (never added to the model's context), on a hub whose initialize lists the capability
+   * tool_views. At most 4 views and 128 KiB JSON total; the text must still stand on its own.
+   */
+  views?: View[];
   /**
    * actions.do only (tools.call ignores it): the id, on the other side, of the message the write made, when the
    * service gave one (a comment's id, a mail's Message-ID, a chat message's id). The hub trims it and keeps it as the
@@ -4006,6 +4283,11 @@ export interface ConnectorAction {
 export interface ConnectorDescribeResult {
   action: ConnectorAction;
   summary: string;
+  /**
+   * Optional short-lived single-use credential returned only when approval_protocol was negotiated and the
+   * extension's own guard checks passed. Ignored unless the hub also authorizes guarded auto-confirm for this call.
+   */
+  auto_confirm?: ConnectorAutoConfirm;
 }
 
 /**
@@ -4017,6 +4299,28 @@ export interface ConnectorDoParams {
   name: string;
   args?: unknown;
   request_id: string;
+  /**
+   * Present together with approval_token only when the hub gate let the write through via guarded auto-confirm;
+   * absent for phone-card approvals, connector_gate allow rules and user-initiated writes.
+   */
+  approval_mode?: ConnectorApprovalMode;
+  /**
+   * The exact opaque token returned by actions.describe in auto_confirm.token, sent together with approval_mode only
+   * when the hub gate approved guarded auto-confirm.
+   */
+  approval_token?: string;
+  /**
+   * The calling conversation's track (#13246): its slug, main for the main track; absent when the hub cannot tell.
+   */
+  track?: string;
+  /** The track's kind; absent when not known (the main track). */
+  track_kind?: string;
+  /**
+   * The calling conversation's information categories (health, finance, relationships, emotion, legal_id); empty is
+   * general. Absent means not known (an older hub, a turn not tagged yet): take it for sensitive. Whether the phone
+   * confirms a write stays the hub's decision.
+   */
+  categories?: string[];
 }
 
 /**
@@ -4677,6 +4981,20 @@ export interface ConnectorKBItem {
    * recently). The knowledge base's selection keeps documents by them; leave out what the program cannot tell.
    */
   signals?: string[];
+  /**
+   * The content's identity across sources (feishu_doc:<obj_token>): items from two sources with the same key are kept
+   * once, with both in sources.
+   */
+  canonical_key?: string;
+  /** Other ids other sources store the same content under (a wiki node token). */
+  aliases?: string[];
+  /** Only grows: an item handed over with a lower revision than the stored one does not replace it. */
+  revision?: number;
+  body_hash?: string;
+  /** The item's text (a document as Markdown, a meeting's transcript), bounded by the source. */
+  content?: string;
+  /** Every place the content was read from. */
+  sources?: ConnectorKBSourceRef[];
   importance?: string;
   relevance?: number;
   tags?: string[];
@@ -4688,6 +5006,17 @@ export interface ConnectorKBItem {
   provenance?: Record<string, ConnectorKBProvenance>;
   /** The store's: the links the user removed, by list. A connector's is ignored. */
   excluded?: Record<string, string[]>;
+}
+
+/**
+ * One place a knowledge-base item was read from.
+ */
+export interface ConnectorKBSourceRef {
+  channel: string;
+  binding?: string;
+  account?: string;
+  entry?: string;
+  seen_at?: string;
 }
 
 /**
@@ -5063,6 +5392,13 @@ export type ChannelSendKind = "answer" | "note" | "ask" | "push" | (string & {})
 export const CHANNEL_SEND_KINDS = ["answer", "note", "ask", "push"] as const;
 
 /**
+ * What kind of chat a channel message came from: direct (private chat), group (regular group chat), or topic (a topic
+ * or thread inside a group).
+ */
+export type ChannelChatKind = "direct" | "group" | "topic" | (string & {});
+export const CHANNEL_CHAT_KINDS = ["direct", "group", "topic"] as const;
+
+/**
  * channel.receive: one of the owner's messages (only the owner's). Answered once the hub has it, deduplicated by id
  * and queued, not after the turn.
  */
@@ -5085,6 +5421,12 @@ export interface ChannelMessage {
   chat?: string;
   /** The topic or thread within chat, when the request came from one. */
   topic?: string;
+  /** Opaque chat or group identifier for conversation routing when integrations_v2 is enabled. */
+  chat_id?: string;
+  /** Kind of chat the message came from (direct, group, or topic), when known. */
+  chat_kind?: ChannelChatKind;
+  /** Opaque topic or thread identifier within chat_id for conversation routing when integrations_v2 is enabled. */
+  topic_id?: string;
   /**
    * Context the extension gathered for this request, such as nearby chat history. It is data, not owner-authored
    * instructions.
@@ -5186,6 +5528,57 @@ export interface ChannelEditParams {
   text: string;
 }
 
+/**
+ * The host selects the provider, source, account and chat for this import.
+ */
+export interface KBImportCheckpointParams {
+}
+
+/**
+ * The host importer’s committed state for the selected chat.
+ */
+export type KBImportState = "pending" | "running" | "done" | "paused" | "error" | "unreadable";
+export const KBIMPORT_STATES: readonly KBImportState[] = ["pending", "running", "done", "paused", "error", "unreadable"];
+
+/** A KBImportState this app does not know, kept as it came. */
+export interface UnknownKBImportState {
+  unknown: string;
+}
+
+/** A raw KBImportState: one this app knows, or UnknownKBImportState with the raw value. */
+export function parseKBImportState(raw: string): KBImportState | UnknownKBImportState {
+  const known = KBIMPORT_STATES.find((value) => value === raw);
+  if (known !== undefined) {
+    return known;
+  }
+  const unknown: UnknownKBImportState = { unknown: raw };
+  return unknown;
+}
+
+export interface KBImportCheckpointResult {
+  state: KBImportState;
+  approval: string;
+  read: number;
+  written: number;
+}
+
+export interface KBSentMarkersParams {
+  day: string;
+  approval: string;
+  after?: number;
+}
+
+export interface KBSentMarker {
+  n: number;
+  sent_by: string;
+  recalled_at?: string;
+}
+
+export interface KBSentMarkersResult {
+  markers: KBSentMarker[];
+  next_after?: number;
+}
+
 export type KBKind = "projects" | "chats" | "people" | "docs" | "meetings" | "events" | "recordings" | "topics" | (string & {});
 export const KBKINDS = ["projects", "chats", "people", "docs", "meetings", "events", "recordings", "topics"] as const;
 
@@ -5193,10 +5586,11 @@ export const KBKINDS = ["projects", "chats", "people", "docs", "meetings", "even
  * error.code of a knowledge-base call besides permission_denied (data {scope}, the one missing): invalid_params,
  * not_found, assistant_offline (the manager is away), kb_unavailable (not open yet), conflict (kb.update touches
  * fields the user or another extension holds; data KBConflict, nothing was written). assistant_offline and
- * kb_unavailable are worth trying again; conflict is for the user to decide.
+ * kb_unavailable are worth trying again; conflict is for the user to decide. deleted: kb.put_recording of a recording
+ * the user deleted, which is not made again.
  */
-export type KBErrorCode = "invalid_params" | "not_found" | "assistant_offline" | "kb_unavailable" | "conflict" | (string & {});
-export const KBERROR_CODES = ["invalid_params", "not_found", "assistant_offline", "kb_unavailable", "conflict"] as const;
+export type KBErrorCode = "invalid_params" | "not_found" | "assistant_offline" | "kb_unavailable" | "conflict" | "deleted" | (string & {});
+export const KBERROR_CODES = ["invalid_params", "not_found", "assistant_offline", "kb_unavailable", "conflict", "deleted"] as const;
 
 /**
  * The data of a conflict error: field → who holds it (user, or ext:<extension id>); a linked entity's field is
@@ -5281,6 +5675,12 @@ export interface KBEntry {
    * absent on other kinds, before a match and from an older hub.
    */
   meeting_id?: string;
+  /**
+   * A recording whose stored state is in flight (an upload not complete, minutes or a day recap pending, a hub
+   * transcription not final) while nothing can settle it: module_off when the recording module is off. Derived when
+   * read, never stored; absent otherwise and from an older hub.
+   */
+  paused?: string;
   /** Reference-only for a project that stores pointers. Omitted means full. */
   project_mode?: string;
   freshness?: KBProjectFreshness;
@@ -5355,6 +5755,11 @@ export interface KBDetail {
    * (docs/assistant/knowledge.md "Person profiles").
    */
   profiles?: Record<string, KBProfileRecord>;
+  /**
+   * A recording's in-flight state that nothing can settle, as KBEntry.paused: module_off when the recording module is
+   * off. Derived when read, never stored.
+   */
+  paused?: string;
   /** Reference-only for a project that stores pointers. Omitted means full. */
   project_mode?: string;
   freshness?: KBProjectFreshness;
@@ -5650,6 +6055,167 @@ export interface KBUpdateResult {
 }
 
 /**
+ * A recording's UUID, picked by the extension so a retry lands on the same recording.
+ */
+export type KBRecordingID = string & { readonly __brand: "KBRecordingID" };
+/** A KBRecordingID from its raw string. */
+export function kBRecordingID(raw: string): KBRecordingID {
+  return raw as KBRecordingID;
+}
+
+/**
+ * An action item's id, picked by the extension and stable across writes.
+ */
+export type KBMinutesActionID = string & { readonly __brand: "KBMinutesActionID" };
+/** A KBMinutesActionID from its raw string. */
+export function kBMinutesActionID(raw: string): KBMinutesActionID {
+  return raw as KBMinutesActionID;
+}
+
+/**
+ * A to-do's id, set by the hub when the user makes a to-do of an action item.
+ */
+export type KBTodoID = string & { readonly __brand: "KBTodoID" };
+/** A KBTodoID from its raw string. */
+export function kBTodoID(raw: string): KBTodoID {
+  return raw as KBTodoID;
+}
+
+/**
+ * Whether a recording's meeting is a calendar item (events) or an imported meeting (meetings).
+ */
+export type KBRecordingMeetingKind = "events" | "meetings";
+export const KBRECORDING_MEETING_KINDS: readonly KBRecordingMeetingKind[] = ["events", "meetings"];
+
+/** A KBRecordingMeetingKind this app does not know, kept as it came. */
+export interface UnknownKBRecordingMeetingKind {
+  unknown: string;
+}
+
+/** A raw KBRecordingMeetingKind: one this app knows, or UnknownKBRecordingMeetingKind with the raw value. */
+export function parseKBRecordingMeetingKind(raw: string): KBRecordingMeetingKind | UnknownKBRecordingMeetingKind {
+  const known = KBRECORDING_MEETING_KINDS.find((value) => value === raw);
+  if (known !== undefined) {
+    return known;
+  }
+  const unknown: UnknownKBRecordingMeetingKind = { unknown: raw };
+  return unknown;
+}
+
+/**
+ * A calendar item's or imported meeting's id in the knowledge base.
+ */
+export type KBRecordingMeetingID = string & { readonly __brand: "KBRecordingMeetingID" };
+/** A KBRecordingMeetingID from its raw string. */
+export function kBRecordingMeetingID(raw: string): KBRecordingMeetingID {
+  return raw as KBRecordingMeetingID;
+}
+
+/**
+ * kb.put_recording (kb.write): create or update the extension's own recording with its minutes and, optionally, its
+ * transcript (docs/extensions/extensions.md "Writing recordings and minutes"). It is the extension's: no other
+ * extension may write it, and no extension a recording the phone uploaded (permission_denied). The same params again
+ * change nothing; a recording the user deleted is not made again (deleted). A recording with minutes is kept past
+ * recording_days, its minutes until minutes_days.
+ */
+export interface KBPutRecordingParams {
+  /** A UUID the extension picks; one derived from its own source id makes a retry land on the same recording. */
+  id: KBRecordingID;
+  title?: string;
+  /** An RFC 3339 time. */
+  started_at: string;
+  /** An RFC 3339 time, not before started_at. */
+  ended_at?: string;
+  /** An i18n code (zh-Hans, en, ja). */
+  language?: string;
+  minutes?: KBRecordingMinutes;
+  /**
+   * Optional; n, source and echo are the hub's and are dropped. Without minutes, the hub makes minutes of it when the
+   * recording module is on.
+   */
+  transcript?: KBRecordingSegment[];
+  /** Slugs of existing projects to link it to; a later write never removes a link. */
+  projects?: string[];
+  meeting?: KBRecordingMeeting;
+}
+
+/**
+ * The minutes the extension wrote, stored as minutes.json and minutes.md. The hub sets version, revision,
+ * generated_at, when, start and end. Minutes or a transcript is required.
+ */
+export interface KBRecordingMinutes {
+  title?: string;
+  where?: string;
+  attendees?: string[];
+  points?: KBMinutesPoint[];
+  decisions?: KBMinutesItem[];
+  actions?: KBMinutesAction[];
+  open?: KBMinutesItem[];
+  /** An i18n code: what the minutes are written in. */
+  language?: string;
+  /** The minutes as Markdown: minutes.md, what searches and kb.get read. Required, not blank. */
+  markdown: string;
+}
+
+/**
+ * A decision or an open question of the minutes.
+ */
+export interface KBMinutesItem {
+  text: string;
+  /** Seconds from the recording's start. */
+  at: number;
+  photo?: number;
+}
+
+/**
+ * A point discussed; who only when the source names the person.
+ */
+export interface KBMinutesPoint {
+  text: string;
+  /** Seconds from the recording's start. */
+  at: number;
+  photo?: number;
+  who?: string;
+}
+
+/**
+ * An action item. id is the extension's, stable across writes (at most 64 characters): a to-do the user made of it
+ * stays on it.
+ */
+export interface KBMinutesAction {
+  id: KBMinutesActionID;
+  who?: string;
+  what: string;
+  /** The deadline as said. */
+  by?: string;
+  /** YYYY-MM-DD, when by is one date. */
+  due_date?: string;
+  /** Seconds from the recording's start. */
+  at: number;
+  photo?: number;
+  /** The hub's: the to-do made of it. */
+  todo_id?: KBTodoID;
+}
+
+/**
+ * The calendar item (events) or imported meeting (meetings) the recording was; it must exist.
+ */
+export interface KBRecordingMeeting {
+  kind: KBRecordingMeetingKind;
+  id: KBRecordingMeetingID;
+}
+
+export interface KBPutRecordingResult {
+  id: KBRecordingID;
+  /** The hub's revision of the recording: 1 when created, one more for each write that changed it. */
+  revision: number;
+  created?: boolean;
+  /** The write was the same as the last one; nothing was written. */
+  unchanged?: boolean;
+  minutes_version?: number;
+}
+
+/**
  * kb.owner takes nothing.
  */
 export interface KBOwnerParams {
@@ -5756,13 +6322,13 @@ export interface TodoDecisionEvent {
 }
 
 /**
- * event.leader.changed: a leader conversation was made (a side conversation added to assistant.leaders), its title
- * changed, it was filed under another knowledge-base project, it ended (it left assistant.leaders; nothing is
- * deleted) or it was made a leader again. id is the leader conversation's session id, the key a work-log record
- * keeps; title its title as the apps show it; name what the direction is called, to show it by (the name the owner or
- * the secretary gave it, else its knowledge-base project's name, else the title without its "MMDD | kind | " prefix;
- * always sent by a hub that has it, #3679); project the knowledge-base project's slug, left out while it has none;
- * ended true once it is no longer a leader, left out while it is.
+ * event.leader.changed: a direction was made (an id added to assistant.leaders), its title changed, it was filed
+ * under another knowledge-base project, it ended (it left assistant.leaders; nothing is deleted) or it was made
+ * current again. id is the stable direction id, the key a work-log record keeps; it is a conversation session id only
+ * for a conversation-backed direction. title is its conversation title, or its explicit name when no Persona
+ * conversation exists; name is what the direction is called (an explicit name, else its knowledge-base project's
+ * name, else the title without its "MMDD | kind | " prefix); project is the knowledge-base project's slug, left out
+ * while it has none; ended is true once it is no longer current, left out while it is.
  */
 export interface LeaderChangedEvent {
   id: string;
@@ -5773,16 +6339,17 @@ export interface LeaderChangedEvent {
 }
 
 /**
- * event.leader.report: one of a leader's tasks reached its goal (reached: its review accepted it), needs the owner's
- * decision (decision: its review says needs_user, or a plan of the leader's waits for the owner's Start), or is stuck
- * (stuck: in Waiting on you or stopped unfinished for 24 hours, told at most once per 24 hours); those are written by
- * the hub from the task's ledger, never by a model. progress (#3679) is the leader's own summary of its direction at
- * the goal level, sent with its leader_progress tool: reached, doing (and where it is stuck), needs_you (what the
- * owner has to do) and links (evidence; link is the first), text the three put together, todo "". id names the report
- * (never sent twice; key on it to be safe), leader the leader conversation's id, todo the task's to-do id (GET
- * /api/v1/todos with todos.read reads it; "" for a plan, which has no to-do until it starts), plan the waiting plan's
- * id (only on a decision about a plan), text at most 300 characters in the owner's language, link the task's PR or
- * delivery link when it has one, at when what it reports happened.
+ * event.leader.report: one of a direction's tasks reached its goal (reached: its review accepted it), needs the
+ * owner's decision (decision: its review says needs_user, or a plan of the direction's waits for the owner's Start),
+ * or is stuck (stuck: in Waiting on you or stopped unfinished for 24 hours, told at most once per 24 hours); those
+ * are written by the hub from the task's ledger, never by a model. progress (#3679, #8236) is the direction's own
+ * summary at the goal level, sent with leader_progress or an authorized leaders.write HTTP / node CLI report:
+ * reached, doing (and where it is stuck), needs_you (what the owner has to do) and links (evidence; link is the
+ * first), text the three put together, todo "". id names the report (never sent twice; key on it to be safe), leader
+ * the stable direction id, todo the task's to-do id (GET /api/v1/todos with todos.read reads it; "" for a plan, which
+ * has no to-do until it starts), plan the waiting plan's id (only on a decision about a plan), text at most 300
+ * characters in the owner's language, link the task's PR or delivery link when it has one, at when what it reports
+ * happened.
  */
 export interface LeaderReportEvent {
   id: string;
@@ -5952,12 +6519,16 @@ export interface ModelRefusal {
 
 /**
  * error.code of the assistant calls besides permission_denied (data {scope: "assistant.read"}, or
- * "assistant.memory.read" for assistant.memory): invalid_params; not_found (assistant.messages: no such conversation
- * in the assistant's own space); assistant_offline (the manager is away: try again); machine_offline (the assistant's
- * computer is not connected or not set up: try again).
+ * "assistant.memory.read" for assistant.memory, or "assistant.entries.read" for assistant.entries.list, or
+ * "assistant.events" for assistant.event): invalid_params; not_found (assistant.messages: no such conversation in the
+ * assistant's own space); assistant_offline (the manager is away: try again); machine_offline (the assistant's
+ * computer is not connected or not set up: try again); assistant.event only: no_main_conversation (the user has no
+ * main conversation: nothing was started or changed, do not retry until they have one); rate_limited (data
+ * {retry_after} in seconds: too many events from this extension); queue_full (this extension already has the most
+ * events waiting behind a running turn: try again later).
  */
-export type AssistantErrorCode = "invalid_params" | "not_found" | "assistant_offline" | "machine_offline" | (string & {});
-export const ASSISTANT_ERROR_CODES = ["invalid_params", "not_found", "assistant_offline", "machine_offline"] as const;
+export type AssistantErrorCode = "invalid_params" | "not_found" | "assistant_offline" | "machine_offline" | "no_main_conversation" | "rate_limited" | "queue_full" | (string & {});
+export const ASSISTANT_ERROR_CODES = ["invalid_params", "not_found", "assistant_offline", "machine_offline", "no_main_conversation", "rate_limited", "queue_full"] as const;
 
 /**
  * assistant.conversations (assistant.read): the conversations last active at or after since, newest first.
@@ -6050,6 +6621,11 @@ export interface AssistantMemoryEntry {
   content?: string;
   /** content was cut or left out for its size. */
   truncated?: boolean;
+  /**
+   * The track whose memory it is; absent for the main track's. Another track's is shown only to an extension that may
+   * read what comes from it: the user's own, or one granted every default category of the track.
+   */
+  track?: string;
 }
 
 /**
@@ -6065,6 +6641,140 @@ export interface AssistantMemoryResult {
 export interface AssistantMessagesResult {
   messages: AssistantMessage[];
   next_seq?: number;
+}
+
+/**
+ * An RFC 3339 expiry timestamp, or null when absent.
+ */
+export type AssistantEntryNullableTime = unknown;
+
+/**
+ * Whether the choice is reversible; null means unknown.
+ */
+export type AssistantEntryNullableBool = unknown;
+
+export interface AssistantEntrySource {
+  machine: string;
+  session: string;
+  msg_uuid?: string;
+  card_id?: string;
+  file?: string;
+  line?: number;
+}
+
+export interface AssistantEntryScope {
+  executor: string;
+  machine: string[];
+  project: string[];
+  personal: boolean;
+}
+
+export interface AssistantEntryScopeFilter {
+  executor?: string;
+  machine?: string[];
+  project?: string[];
+  personal?: boolean;
+}
+
+export interface AssistantEntryDecision {
+  options: string[];
+  selected: string[];
+  rejected: string[];
+  reason: string;
+  reversible: unknown;
+}
+
+export interface AssistantLedgerEntry {
+  id: string;
+  type: string;
+  text: string;
+  quote: string;
+  source: AssistantEntrySource;
+  relayed_via: string[];
+  scope: AssistantEntryScope;
+  at: string;
+  expires_at: unknown;
+  supersedes: string;
+  trust: string;
+  status: string;
+  by: string;
+  tag: string[];
+  decision?: AssistantEntryDecision;
+  ext_id?: string;
+  origin_space: string;
+  category: string[];
+}
+
+export interface AssistantEntriesParams {
+  after?: string;
+  limit?: number;
+  by?: string;
+  trust?: string;
+  status?: string;
+  scope?: AssistantEntryScopeFilter;
+  tag?: string;
+  type?: string;
+}
+
+export interface AssistantEntriesResult {
+  entries: AssistantLedgerEntry[];
+  after: string;
+  has_more: boolean;
+}
+
+export interface AssistantEntriesChangedEvent {
+  id: string;
+  record_id: string;
+  status: "wrong";
+}
+
+/**
+ * How much the user should care. info: tell them only if it matters to what they are doing; warning: they should hear
+ * about it; critical: they need to know now.
+ */
+export type AssistantEventSeverity = "info" | "warning" | "critical" | (string & {});
+export const ASSISTANT_EVENT_SEVERITIES = ["info", "warning", "critical"] as const;
+
+/**
+ * Where the thing an event's key names is now, in the extension's own words (firing, resolved, ...): a label each
+ * extension chooses. Free text, not a closed set.
+ */
+export type AssistantEventState = string;
+
+/**
+ * assistant.event (assistant.events): one event for the assistant's main conversation. The assistant gets it as
+ * something an extension observed, never as the user's words, and decides what to tell the user. An event with the
+ * same key as one of this extension's still waiting behind a running turn replaces it, unless replace is false.
+ * Lengths are in characters.
+ */
+export interface AssistantEventParams {
+  /**
+   * What the event is about (one monitored thing). The same extension and key replace an event not yet delivered.
+   */
+  key: string;
+  severity?: AssistantEventSeverity;
+  /** One line saying what happened. */
+  title: string;
+  /** The details. */
+  body?: string;
+  /** What the extension suggests be done about it: a suggestion for the assistant to weigh, not an order. */
+  action_hint?: string;
+  /** Where the thing the key names is now, in the extension's words (firing, resolved, ...). */
+  state?: AssistantEventState;
+  /** false keeps an earlier event with the same key as its own message instead of replacing it. Absent is true. */
+  replace?: boolean;
+}
+
+/**
+ * What happened to the event. delivered: sent into the idle main conversation now. queued: the conversation is
+ * running (or not reachable just now), so it goes in when its turn ends. replaced: it took the place of an earlier
+ * event with the same key that was still queued.
+ */
+export type AssistantEventDelivery = "delivered" | "queued" | "replaced" | (string & {});
+export const ASSISTANT_EVENT_DELIVERIES = ["delivered", "queued", "replaced"] as const;
+
+export interface AssistantEventResult {
+  delivery: AssistantEventDelivery;
 }
 
 /**
@@ -6141,6 +6851,66 @@ export interface AssistantDataStatusResult {
 }
 
 /**
+ * machines.pair_link (machines.pair): request a one-time persona://link?... pairing link for a pending link computer.
+ */
+export interface MachinesPairLinkParams {
+  /**
+   * Optional computer id: re-issues a pairing link when an existing pending link machine matches (with name/os/icon
+   * omitted), or creates a new pending link machine with this id (defaulting name to machine_id when name is
+   * omitted).
+   */
+  machine_id?: string;
+  /**
+   * Display name for a newly added computer (defaults to machine_id when machine_id is given; required when
+   * machine_id is omitted).
+   */
+  name?: string;
+  /** Target OS hint for install commands. */
+  os?: string;
+  /** Optional icon for the computer. */
+  icon?: string;
+}
+
+export interface MachinesPairLinkResult {
+  /** The hub machine id assigned to the computer. */
+  machine_id: string;
+  /** The display name of the computer. */
+  name: string;
+  /** The one-time persona://link?... pairing URL. */
+  link: string;
+  /** When the pairing link expires. */
+  expires_at: string;
+  /** Whether the computer is waiting for the owner's confirmation. */
+  pending: boolean;
+  /** Optional one-line Linux install-and-pair command when the hub knows its publication site. */
+  install_linux?: string;
+}
+
+/**
+ * machines.status (machines.read or machines.pair): read one computer's current connection and confirmation state.
+ */
+export interface MachinesStatusParams {
+  /** The computer's hub machine id. */
+  machine_id: string;
+}
+
+export interface MachinesStatusResult {
+  machine_id: string;
+  name?: string;
+  exists: boolean;
+  /** Whether the computer's link/connection is currently up. */
+  online: boolean;
+  /** Whether the resident node is connected and responding. */
+  node_online: boolean;
+  /** Whether the computer is waiting for the owner's confirmation. */
+  pending: boolean;
+  /** When the computer was last seen online, if ever. */
+  last_seen?: string;
+  /** Last connection error, if any. */
+  error?: string;
+}
+
+/**
  * browser.machines (browser.run): list computers that have a browser backend enabled.
  */
 export interface BrowserMachinesParams {
@@ -6162,8 +6932,7 @@ export interface BrowserMachinesResult {
 }
 
 /**
- * browser.run (browser.run): run a script inside an extension-isolated browser task space (ext-<extensionID>-<slot>)
- * on machine_id.
+ * browser.run (browser.run): run a script inside an extension-isolated browser task space on machine_id.
  */
 export interface BrowserRunParams {
   machine_id: string;
@@ -6920,6 +7689,366 @@ export interface RepoPRStatusResult {
   viewer_is_author?: boolean;
 }
 
+/**
+ * error.code a memory source answers besides the base ErrorCode: not_ready (its entries are not loaded yet; the
+ * manager uses none of them this time and asks again at the next assembly), failed (anything else, say why in
+ * message).
+ */
+export type MemoryErrorCode = "not_ready" | "failed" | (string & {});
+export const MEMORY_ERROR_CODES = ["not_ready", "failed"] as const;
+
+/**
+ * memory.entries: one page of the contribution's entries, most important first (standing ones first, then by rank,
+ * then newest). Read-only: answering changes nothing in the program's state.
+ */
+export interface MemoryEntriesParams {
+  /** The memory_sources item's id. */
+  contribution: string;
+  /**
+   * At most this many entries on the page (the manager asks 200). Only a cap: the program ends a page early, with
+   * has_more and after, so the answer stays within 1 MB.
+   */
+  limit: number;
+  /** The previous page's after, to read on; empty for the first page. */
+  after?: string;
+}
+
+/**
+ * One page of entries. tagged is the program's promise for the whole page: it writes origin_space and categories on
+ * every entry and leaves them out only when empty, so a missing origin_space means the main space and missing
+ * categories mean general. A program that cannot promise that answers tagged false, and the manager then takes none
+ * of its entries for its own track (each is in no track, not known, so the strictest rule holds).
+ */
+export interface MemoryEntriesResult {
+  entries: MemoryEntry[];
+  tagged: boolean;
+  /**
+   * Another page follows; ask again with after. When true, after must be set: true with an empty after counts as the
+   * end of the entries.
+   */
+  has_more: boolean;
+  /** Opaque: what to send as after for the next page; required in practice whenever has_more is true. */
+  after?: string;
+  /**
+   * The bytes of standing entries' text the program wants a standing channel to carry (its own setting, say). The hub
+   * keeps this budget apart from its own memory ledger's, caps it at 8192 and takes the largest any page states; left
+   * out or 0: 4096. Entries past it are left out, the most important kept.
+   */
+  standing_bytes?: number;
+}
+
+/**
+ * One entry as the program keeps it. Only an active entry is carried; the others may be answered (so a page's order
+ * stays the program's) and are skipped. An entry that breaks a rule here is dropped alone, never the page.
+ */
+export interface MemoryEntry {
+  /**
+   * Stable across pages and answers: a to-do's brief names the entries it carried by it (prefixed memory-extension:).
+   */
+  id: string;
+  /** What the entry says, as the program would render it, on one or a few lines. */
+  text: string;
+  /**
+   * The program's own grouping (preferences, workflow, people…). Used for explicit recall tag matching; it does not
+   * change priority or visibility.
+   */
+  facet?: string;
+  /**
+   * active: the program would use it today, whatever it calls that state itself (a program with its own stable or
+   * shifting states answers active for both); candidate: not borne out yet; dormant: not seen lately; retired: no
+   * longer true. Only active entries are carried; an entry with any other value is dropped.
+   */
+  status: string;
+  /** The slug of the space the entry was first said in; left out for the main space. */
+  origin_space?: string;
+  /**
+   * Its information categories (health, finance, relationships, emotion, legal_id); left out for a general entry. A
+   * category the hub does not know makes the entry not known.
+   */
+  categories?: string[];
+  /**
+   * The program kept it in every conversation (always in context). Only a standing entry goes to a standing channel
+   * (usage still decides); the others come in only by relevance (their subjects or text) in a recall, a hand-off or
+   * the Inbox.
+   */
+  standing?: boolean;
+  /** The program's order among entries alike in standing: higher first. Left out: 0. */
+  rank?: number;
+  /**
+   * The names whose mention brings the entry in (a person, a project, a place): what a task's or a message's words
+   * are matched with, besides its text.
+   */
+  subjects?: string[];
+}
+
+/**
+ * Whether the provider can work on this computer: ready; needs_install (its tool is not on the computer: the first
+ * offload asks to install it, OffloadTool); needs_setup (the user has to set it up first, in the extension's
+ * settings: detail says what); unavailable (detail says why).
+ */
+export type OffloadState = "ready" | "needs_install" | "needs_setup" | "unavailable" | (string & {});
+export const OFFLOAD_STATES = ["ready", "needs_install", "needs_setup", "unavailable"] as const;
+
+/**
+ * What an offloaded item was: a file, a dir (folder), an app, an app's data (app_data), a bundle of items moved
+ * together, a session archive, or other.
+ */
+export type OffloadItemKind = "file" | "dir" | "app" | "app_data" | "bundle" | "session" | "other" | (string & {});
+export const OFFLOAD_ITEM_KINDS = ["file", "dir", "app", "app_data", "bundle", "session", "other"] as const;
+
+/**
+ * What offload.run does: offload (move paths away) or restore (bring items back by id).
+ */
+export type OffloadAction = "offload" | "restore" | (string & {});
+export const OFFLOAD_ACTIONS = ["offload", "restore"] as const;
+
+/**
+ * offload.run's answer: started (a job runs: job), needs_install (the tool is missing and install was not given:
+ * nothing happened; tool), refused (nothing happened; items say why), ok (a dry run's answer: items).
+ */
+export type OffloadRunStatus = "started" | "needs_install" | "refused" | "ok" | (string & {});
+export const OFFLOAD_RUN_STATUSES = ["started", "needs_install", "refused", "ok"] as const;
+
+/**
+ * A job: running, done, failed (error says why) or canceled.
+ */
+export type OffloadJobState = "running" | "done" | "failed" | "canceled" | (string & {});
+export const OFFLOAD_JOB_STATES = ["running", "done", "failed", "canceled"] as const;
+
+/**
+ * What a running job does now: install (its tool), check, upload, verify, cleanup (removing the originals), download
+ * (a restore).
+ */
+export type OffloadPhase = "install" | "check" | "upload" | "verify" | "cleanup" | "download" | (string & {});
+export const OFFLOAD_PHASES = ["install", "check", "upload", "verify", "cleanup", "download"] as const;
+
+/**
+ * One item of a job: pending, running, done, failed or skipped.
+ */
+export type OffloadJobItemStatus = "pending" | "running" | "done" | "failed" | "skipped" | (string & {});
+export const OFFLOAD_JOB_ITEM_STATUSES = ["pending", "running", "done", "failed", "skipped"] as const;
+
+/**
+ * The program the provider needs on the computer. source is one sentence in the caller's language saying where it
+ * comes from and where it is installed; the install confirmation shows it.
+ */
+export interface OffloadTool {
+  name: string;
+  title?: string;
+  version?: string;
+  installed: boolean;
+  source?: string;
+  detail?: string;
+}
+
+/**
+ * One item the provider holds of this computer. bytes is the size it had on disk, what the map draws so both sides
+ * share one scale; stored_bytes what it takes where it is stored; origin_path where it was and where a restore puts
+ * it; stub_path the placeholder left behind, if any; local_bytes what of it is still on the computer (a cache). Times
+ * are Unix seconds.
+ */
+export interface OffloadItem {
+  id: string;
+  name: string;
+  kind: OffloadItemKind;
+  bytes: number;
+  stored_bytes?: number;
+  origin_path?: string;
+  stub_path?: string;
+  local_bytes?: number;
+  offloaded_at?: number;
+  used_at?: number;
+  /** Items moved together share a group (an app and its data). */
+  group?: string;
+  restorable: boolean;
+}
+
+/**
+ * What the inventory left out past its 500 largest items.
+ */
+export interface OffloadMore {
+  count: number;
+  bytes: number;
+}
+
+/**
+ * offload.inventory: what the provider holds of machine. refresh asks it not to answer from its own cache.
+ */
+export interface OffloadInventoryParams {
+  contribution: string;
+  locale: string;
+  machine: UIMachine;
+  refresh?: boolean;
+}
+
+/**
+ * What the provider holds of the computer, largest first, at most 500 items (the rest summed in more). at is when it
+ * was read (Unix seconds); total_bytes the items' bytes together, stored_bytes what they take where they are stored;
+ * partial when the list may be incomplete. items may be left out when there are none; the manager's answer to the
+ * apps always has it.
+ */
+export interface OffloadInventory {
+  state: OffloadState;
+  detail?: string;
+  tool?: OffloadTool;
+  at: number;
+  total_bytes: number;
+  stored_bytes?: number;
+  partial?: boolean;
+  items?: OffloadItem[];
+  more?: OffloadMore;
+}
+
+/**
+ * offload.run: offload paths (absolute, on machine, each already agreed by the node's protection rules) or restore
+ * items (ids of the inventory), at most 50. dry_run only checks and answers status ok with each item; install lets
+ * the job install the tool first (the user agreed to that too). request_id is the same for a retry of the same
+ * request.
+ */
+export interface OffloadRunParams {
+  contribution: string;
+  locale: string;
+  machine: UIMachine;
+  action: OffloadAction;
+  paths?: string[];
+  items?: string[];
+  dry_run?: boolean;
+  install?: boolean;
+  request_id: string;
+}
+
+/**
+ * One path or item of a run's answer: why it is refused (reason, in the caller's language), or a dry run's verdict
+ * (ok, bytes). refusal is set only by the manager, when the computer's own protection rules refused the path before
+ * the program was asked (a machine.storage.check refusal code: credentials, app_managed, ...).
+ */
+export interface OffloadRunItem {
+  path?: string;
+  id?: string;
+  ok?: boolean;
+  reason?: string;
+  refusal?: string;
+  bytes?: number;
+}
+
+/**
+ * offload.run's answer (OffloadRunStatus).
+ */
+export interface OffloadRunResult {
+  status: OffloadRunStatus;
+  job?: string;
+  tool?: OffloadTool;
+  items?: OffloadRunItem[];
+}
+
+/**
+ * offload.job and offload.cancel: the job offload.run started.
+ */
+export interface OffloadJobParams {
+  contribution: string;
+  locale: string;
+  machine: UIMachine;
+  job: string;
+}
+
+/**
+ * One path (offload) or item (restore) of a job.
+ */
+export interface OffloadJobItem {
+  path?: string;
+  id?: string;
+  status: OffloadJobItemStatus;
+  error?: string;
+  bytes?: number;
+}
+
+/**
+ * How a job goes. A job belongs to the extension: a client that lost track asks the inventory again. items may be
+ * left out; the manager's answer to the apps always has it.
+ */
+export interface OffloadJob {
+  state: OffloadJobState;
+  phase?: OffloadPhase;
+  done_bytes: number;
+  total_bytes: number;
+  freed_bytes?: number;
+  error?: string;
+  items?: OffloadJobItem[];
+}
+
+/**
+ * One enabled disk_offload contribution, as GET /api/v1/extensions/-/offload lists it for the apps.
+ */
+export interface OffloadProvider {
+  extension: string;
+  id: string;
+  name: string;
+  kinds: DiskOffloadKind[];
+  restore: boolean;
+}
+
+/**
+ * GET /api/v1/extensions/-/offload?machine=: the providers the map can offer on that computer.
+ */
+export interface OffloadProviders {
+  providers: OffloadProvider[];
+}
+
+/**
+ * POST /api/v1/extensions/{id}/-/offload/{cid}/run, an app's request: without dry_run or confirm it is refused
+ * (confirmation_required); install only after the user agreed to the tool's install confirmation.
+ */
+export interface OffloadRunRequest {
+  machine: string;
+  action: OffloadAction;
+  paths?: string[];
+  items?: string[];
+  dry_run?: boolean;
+  confirm?: boolean;
+  install?: boolean;
+}
+
+/**
+ * The run route's 202 answer: the job to follow with GET …/jobs/{job}.
+ */
+export interface OffloadStarted {
+  job: string;
+}
+
+/**
+ * An offload route's error: error in the reader's language and a code (bad_request, confirmation_required, read_only,
+ * not_found, machine_offline, node_outdated, tool_install_required with tool, offload_refused with items,
+ * plugin_failed (detail: the provider's own words, one line), usage_failed, deadline).
+ */
+export interface OffloadError {
+  error: string;
+  code: string;
+  tool?: OffloadTool;
+  detail?: string;
+  items?: OffloadRunItem[];
+}
+
+export interface RoutineFactsParams {
+  contribution: RoutineContributionID;
+  /** Calendar date in the routine's time zone. */
+  date: string;
+  language: string;
+}
+
+export interface RoutineReportSection {
+  title: string;
+  /** Plain text. The host owns report layout. */
+  body: string;
+}
+
+/**
+ * A read-only snapshot. Return an empty object when the contribution has nothing for this date.
+ */
+export interface RoutineFactsResult {
+  facts?: string[];
+  sections?: RoutineReportSection[];
+}
+
 /** One call or event of an extension point's protocol: who sends it, and the definitions its params and
  * its answer hold to (no result: any JSON; an event has no answer). */
 export interface Call {
@@ -6988,6 +8117,9 @@ export const CALLS: Record<string, Call> = {
   "kb.update": { from: "program", params: "KBUpdateParams", result: "KBUpdateResult" },
   "kb.owner": { from: "program", params: "KBOwnerParams", result: "KBOwner" },
   "kb.recent": { from: "program", params: "KBRecentParams", result: "KBRecentResult" },
+  "kb.import_checkpoint": { from: "program", params: "KBImportCheckpointParams", result: "KBImportCheckpointResult" },
+  "kb.sent_markers": { from: "program", params: "KBSentMarkersParams", result: "KBSentMarkersResult" },
+  "kb.put_recording": { from: "program", params: "KBPutRecordingParams", result: "KBPutRecordingResult" },
   "event.kb.changed": { from: "hub", params: "KBChangedEvent", event: true },
   "event.kb.forgotten": { from: "hub", params: "KBForgottenEvent", event: true },
   "event.todo.changed": { from: "hub", params: "TodoChangedEvent", event: true },
@@ -6998,7 +8130,12 @@ export const CALLS: Record<string, Call> = {
   "assistant.conversations": { from: "program", params: "AssistantConversationsParams", result: "AssistantConversationsResult" },
   "assistant.messages": { from: "program", params: "AssistantMessagesParams", result: "AssistantMessagesResult" },
   "assistant.memory": { from: "program", params: "AssistantMemoryParams", result: "AssistantMemoryResult" },
+  "assistant.entries.list": { from: "program", params: "AssistantEntriesParams", result: "AssistantEntriesResult" },
+  "assistant.event": { from: "program", params: "AssistantEventParams", result: "AssistantEventResult" },
+  "event.assistant.entries.changed": { from: "hub", params: "AssistantEntriesChangedEvent", event: true },
   "assistant.data_status": { from: "program", params: "AssistantDataStatusParams", result: "AssistantDataStatusResult" },
+  "machines.pair_link": { from: "program", params: "MachinesPairLinkParams", result: "MachinesPairLinkResult" },
+  "machines.status": { from: "program", params: "MachinesStatusParams", result: "MachinesStatusResult" },
   "browser.machines": { from: "program", params: "BrowserMachinesParams", result: "BrowserMachinesResult" },
   "browser.run": { from: "program", params: "BrowserRunParams", result: "BrowserRunResult" },
   "storage.request": { from: "program", params: "StorageEmptyParams", result: "StorageRequestResult" },
@@ -7026,4 +8163,10 @@ export const CALLS: Record<string, Call> = {
   "repo.link": { from: "hub", params: "RepoLinkParams", result: "RepoLinkResult" },
   "repo.describe": { from: "hub", params: "RepoDescribeParams", result: "RepoDescribeResult" },
   "repo.pr_status": { from: "hub", params: "RepoPRStatusParams", result: "RepoPRStatusResult" },
+  "memory.entries": { from: "hub", params: "MemoryEntriesParams", result: "MemoryEntriesResult" },
+  "offload.inventory": { from: "hub", params: "OffloadInventoryParams", result: "OffloadInventory" },
+  "offload.run": { from: "hub", params: "OffloadRunParams", result: "OffloadRunResult" },
+  "offload.job": { from: "hub", params: "OffloadJobParams", result: "OffloadJob" },
+  "offload.cancel": { from: "hub", params: "OffloadJobParams", result: "Empty" },
+  "routine_facts.collect": { from: "hub", params: "RoutineFactsParams", result: "RoutineFactsResult" },
 };

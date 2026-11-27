@@ -69,7 +69,10 @@ func (n *Node) mergePiRow(s *proto.Session) {
 	if bd := r.ContextBreakdown(); bd != nil {
 		s.SetContextBreakdown(bd)
 	}
-	s.LastText, s.Model, s.UpdatedAt, s.Rev = r.LastText, r.Model, r.UpdatedAt, r.Rev
+	if r.LastText != "" {
+		s.LastText = r.LastText
+	}
+	s.Model, s.UpdatedAt, s.Rev = r.Model, r.UpdatedAt, r.Rev
 	if r.Status == proto.StatusBlocked {
 		s.Status = proto.StatusBlocked
 	}
@@ -126,6 +129,7 @@ func (n *Node) resumeInTerminal(ctx context.Context, cwd string, argv []string, 
 		return nil, fmt.Errorf("创建终端标签页失败：%w", err)
 	}
 	pane := created.Pane.String()
+	n.forgetPane(pane)                 // a new tab, as newTab's: no older session's binding of its id stays
 	n.bindPane(pane, id)               // the pane is this session's before herdr or the extension says so
 	time.Sleep(300 * time.Millisecond) // the fresh shell loads ~/.zshrc; typed input is buffered either way
 	shells := n.startPaneShells(ctx, launch, created)

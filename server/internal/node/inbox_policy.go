@@ -16,6 +16,19 @@ const (
 	inboxLarkRefusal = "Inbox conversations cannot make outbound Lark calls directly; use inbox_suggest so the owner can confirm the action."
 )
 
+// inboxPermissionMode accepts only the manager's dedicated AI-twin field. Missing, Plan and unknown values stay in
+// default, preserving the MCP allowlist and rolling-upgrade safety. A live process keeps its existing mode; the latest
+// setting applies when a stopped process resumes or a new conversation starts.
+func inboxPermissionMode(configured, current string, keepCurrent bool) string {
+	if keepCurrent {
+		return current
+	}
+	if configured == proto.ModePlan || !slices.Contains(proto.PermissionModes, configured) {
+		return proto.ModeDefault
+	}
+	return configured
+}
+
 // assistantOrigin is the manager-recorded origin for a model call. Session state covers Claude from before process
 // start and every resumed conversation; the process record covers Codex while its proc-* key is becoming a thread id.
 func (n *Node) assistantOrigin(id string) string {
@@ -218,7 +231,7 @@ func inboxReadDenyRule(path string, directory bool) string {
 // before configured allows, bypass-safe bot send/reply, and phone confirmation: none of those is an Inbox confirmation.
 func inboxLarkOutbound(cfg proto.AssistantLark, v larkVerdict, command string) bool {
 	for _, c := range v.calls {
-		if !larkRead(c) {
+		if !larkCallRead(cfg.Gates, c) {
 			return true
 		}
 	}

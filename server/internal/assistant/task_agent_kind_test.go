@@ -37,11 +37,16 @@ func TestPlannedTaskAgentKindUsesStartAnswerWithoutChangingStart(t *testing.T) {
 		sess.Agent = "codex"
 		return nil
 	}
+	// The node has reported its empty inventory. A background refresh of its todo marks can use that list
+	// while this test counts every node call the planned start and link make.
+	s.syncTodoTokens("box", []proto.Session{})
+	tokenSendDone(t, s, "box")
 	before := f.callCount()
 	todo := startAgentKindPlanTask(t, s, PlanTask{
 		Title: "Record the started kind", Prompt: "Inspect the regression", Machine: "box", Cwd: "/code/app",
 		Readonly: true, Permission: "plan", Launcher: "codex", Model: "model-from-plan", Effort: "high",
 	})
+	tokenSendDone(t, s, "box")
 	after := f.callCount()
 	starts := f.started()
 	if len(starts) != 1 {
@@ -247,7 +252,7 @@ func TestAutoReviewAgentKindInMemory(t *testing.T) {
 
 // The same value reaches the persistent todo_agents row rather than only the manager's transient copy.
 func TestAutoReviewAgentKindPersisted(t *testing.T) {
-	database, err := db.Open(context.Background(), newDatabase(t), db.ManagerSet)
+	database, err := db.Open(context.Background(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)
 	}

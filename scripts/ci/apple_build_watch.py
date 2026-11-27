@@ -92,17 +92,16 @@ def swift_frontend_identity(command):
 
 
 def duration(value):
-    fields = value.split("-", 1)
-    days = int(fields.pop(0)) if len(fields) == 2 and fields[0].isdigit() else 0
-    parts = fields[0].split(":")
-    if len(parts) not in {2, 3}:
+    # Darwin ps emits [[dd-]hh:]mm:ss[.fraction]. Bound every field before
+    # conversion so hostile counters cannot overflow the diagnostic collector.
+    match = re.fullmatch(r"(?:([0-9]{1,18})-)?(?:([0-9]{1,18}):)?([0-9]{1,18}):([0-9]{1,18}(?:\.[0-9]{1,18})?)", value)
+    if match is None:
         return None
     try:
-        numbers = [float(part) for part in parts]
-    except ValueError:
+        days, hours, minutes = (int(field or 0) for field in match.group(1, 2, 3))
+        seconds = ((days * 24 + hours) * 60 + minutes) * 60 + float(match.group(4))
+    except (ValueError, OverflowError):
         return None
-    seconds = numbers[-1] + numbers[-2] * 60 + (numbers[-3] * 3600 if len(numbers) == 3 else 0)
-    seconds += days * 86400
     return seconds if math.isfinite(seconds) else None
 
 

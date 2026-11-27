@@ -9,12 +9,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/feishubot"
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 // The real Lark callback must give the same known-option receipt as the saved and refreshed conclusion card.
 func TestDecisionButtonReceiptMatchesCard(t *testing.T) {
+	needsLarkLayer(t)
 	for _, tc := range []struct {
 		name, kind string
 		check      bool
@@ -45,7 +46,7 @@ func TestDecisionButtonReceiptMatchesCard(t *testing.T) {
 			}
 			a := askOf(s, todo.ID)
 			agentAtWork(f, todo)
-			press := feishubot.CardAction{}
+			press := botcard.CardAction{}
 			press.Operator.OpenID = "ou_me"
 			press.Context.MessageID = a.MessageID
 			label := a.Options[1].Label
@@ -97,7 +98,7 @@ func TestDecisionButtonReceiptMatchesCard(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			invoke := func() *feishubot.CardResponse {
+			invoke := func() *botcard.CardResponse {
 				t.Helper()
 				resp, err := s.FeishuAction(ctx, FeishuAction{Event: raw, Action: "oa_option"})
 				if err != nil {

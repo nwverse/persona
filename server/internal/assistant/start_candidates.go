@@ -53,7 +53,7 @@ func (s *Service) candidateSource() startCandidateSource {
 // filtered list, which would hide the reason a preset was passed over.
 type profileCandidateSource struct{ s *Service }
 
-// candidateAgentLookup mirrors fitLauncher's everywhere/last-seen/configured metadata decisions for one inventory.
+// candidateAgentLookup mirrors fitLauncher's managed, last-seen and configured metadata decisions for one inventory.
 // An unknown wrapper stays unknown; only real launcher metadata or a named built-in determines the agent.
 func (s *Service) candidateAgentLookup(ctx context.Context, machine string, list []proto.Launcher, known bool) func(string) string {
 	discovered := make([]ConfiguredLauncher, 0, len(list))
@@ -62,16 +62,8 @@ func (s *Service) candidateAgentLookup(ctx context.Context, machine string, list
 	}
 	agentOf := configuredStartAgentLookup(discovered, s.hello(ctx).Models.Launchers[machine])
 	return func(name string) string {
-		if name == "" || name == "claude" {
-			return "claude"
-		}
-		if s.launcherEverywhere(ctx, name) {
-			for _, l := range s.storedLaunchers(ctx) {
-				if l.Name == name {
-					return l.AgentType()
-				}
-			}
-			return ""
+		if agent, err := s.launcherWithoutInventory(ctx, machine, name); agent.agent != "" || err != nil {
+			return agent.agent
 		}
 		if !known {
 			return s.lastSeenAgent(ctx, machine, name).agent
@@ -85,6 +77,63 @@ type hiddenCandidateMetadata struct {
 	agent  string
 }
 
+// launcherAvailability judges launchers on one machine the way a start does: its ordinary launcher list read once,
+// a hidden launcher probed once (its health check passes: it still starts, #4661), then the launcher's health
+// (launcherUnusable). profileCandidateSource and pickTierCandidate share it, so a preset offered, a candidate picked
+// and the start that follows agree.
+type launcherAvailability struct {
+	s          *Service
+	machine    string
+	loaded     bool
+	list       []proto.Launcher
+	listKnown  bool
+	agentOf    func(string) string
+	hidden     []string
+	hiddenRows map[string]hiddenCandidateMetadata
+}
+
+func (s *Service) availabilityOn(machine string) *launcherAvailability {
+	return &launcherAvailability{s: s, machine: machine, hiddenRows: map[string]hiddenCandidateMetadata{}}
+}
+
+// check says whether launcher can start on the machine now, why not, and the agent it runs (configured metadata;
+// "" unknown).
+func (a *launcherAvailability) check(ctx context.Context, launcher string) (available bool, reason, agent string) {
+	if err := a.s.launcherScopeErr(ctx, a.machine, launcher); err != nil {
+		return false, err.Error(), ""
+	}
+	if !a.loaded {
+		a.list, a.listKnown = a.s.launchersHere(ctx, a.machine)
+		a.agentOf = a.s.candidateAgentLookup(ctx, a.machine, a.list, a.listKnown)
+		a.hidden = a.s.hiddenLaunchers(ctx)
+		a.loaded = true
+	}
+	agent = a.agentOf(launcher)
+	// A hidden launcher is startable when its health check passes; a plain one must be in the machine's list.
+	has := !a.listKnown || slices.ContainsFunc(a.list, func(l proto.Launcher) bool { return l.Name == launcher })
+	if !has && slices.Contains(a.hidden, launcher) {
+		row, probed := a.hiddenRows[launcher]
+		if !probed {
+			hiddenList, known, usable := a.s.hiddenLauncherInventory(ctx, a.machine, launcher)
+			row = hiddenCandidateMetadata{usable: usable, agent: a.s.candidateAgentLookup(ctx, a.machine, hiddenList, known)(launcher)}
+			a.hiddenRows[launcher] = row
+		}
+		has = row.usable
+		if has {
+			agent = row.agent
+		}
+	}
+	if a.listKnown && !has {
+		return false, "this computer has no launcher " + launcher, agent
+	}
+	if _, bad := a.s.launcherUnusable(ctx, a.machine, launcher); bad {
+		return false, launcher + " is not available yet", agent
+	}
+	return true, "", agent
+}
+
+// candidates are the presets names (or their aliases) on machine: a preset with several candidates is available when
+// any is, and offers the first available one in its order; with none available it says why its first is not.
 func (p profileCandidateSource) candidates(ctx context.Context, machine string, names []string) (map[string]startCandidate, error) {
 	prof, _, err := p.s.activeModelProfile(ctx)
 	if err != nil {
@@ -95,37 +144,21 @@ func (p profileCandidateSource) candidates(ctx context.Context, machine string, 
 	}
 	// Read the ordinary inventory once. Explicitly requested hidden launchers still start (#4661); cache each
 	// unhidden probe and its metadata, including a false result, so repeated tiers never repeat its launcher-list RPC.
-	list, listKnown := p.s.launchersHere(ctx, machine)
-	agentOf := p.s.candidateAgentLookup(ctx, machine, list, listKnown)
-	hidden := p.s.hiddenLaunchers(ctx)
-	hiddenRows := make(map[string]hiddenCandidateMetadata)
+	avail := p.s.availabilityOn(machine)
 	out := make(map[string]startCandidate, len(names))
 	for _, name := range names {
-		tier, ok := prof.Tiers[name]
+		own, ok := prof.lookupTier(name)
 		if !ok {
 			continue
 		}
-		c := startCandidate{Name: name, Launcher: tier.Launcher, Agent: agentOf(tier.Launcher), Available: true}
-		// A hidden launcher is startable when its health check passes; a plain one must be in the machine's list.
-		has := !listKnown || slices.ContainsFunc(list, func(l proto.Launcher) bool { return l.Name == tier.Launcher })
-		if !has && slices.Contains(hidden, tier.Launcher) {
-			row, probed := hiddenRows[tier.Launcher]
-			if !probed {
-				hiddenList, known, usable := p.s.hiddenLauncherInventory(ctx, machine, tier.Launcher)
-				row = hiddenCandidateMetadata{usable: usable, agent: p.s.candidateAgentLookup(ctx, machine, hiddenList, known)(tier.Launcher)}
-				hiddenRows[tier.Launcher] = row
+		var c startCandidate
+		for i, cand := range prof.Tiers[own].list() {
+			available, reason, agent := avail.check(ctx, cand.Launcher)
+			if i == 0 || available {
+				c = startCandidate{Name: name, Launcher: cand.Launcher, Agent: agent, Available: available, Reason: reason}
 			}
-			has = row.usable
-			if has {
-				c.Agent = row.agent
-			}
-		}
-		switch {
-		case listKnown && !has:
-			c.Available, c.Reason = false, "this computer has no launcher "+tier.Launcher
-		default:
-			if _, bad := p.s.launcherUnusable(ctx, machine, tier.Launcher); bad {
-				c.Available, c.Reason = false, tier.Launcher+" is not available yet"
+			if available {
+				break
 			}
 		}
 		out[name] = c

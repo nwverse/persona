@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -25,8 +26,7 @@ func (f *fakeHub) noticesTo(id string) []string {
 	return out
 }
 
-// newLeaderService is newQuietService with side conversation lead1 made a leader. Its task_plan keeps that origin,
-// while main supervises the task (#5732).
+// newLeaderService plans work from direction lead1, which owns its task from dispatch through review.
 func newLeaderService(t *testing.T) (*Service, *fakeHub, Todo) {
 	t.Helper()
 	return newLeaderServiceOn(t, nil)
@@ -34,7 +34,20 @@ func newLeaderService(t *testing.T) (*Service, *fakeHub, Todo) {
 
 func newLeaderServiceOn(t *testing.T, st Store) (*Service, *fakeHub, Todo) {
 	t.Helper()
+	return newLeaderServiceFromAgentNumberOn(t, st, 0)
+}
+
+// Public agent tools require at least eight characters of the session id. A seeded fake counter lets those tests
+// exercise the real tool without relaxing its lookup contract; older fixtures keep their usual s1, s2 ids.
+func newLeaderServiceFromAgentNumberOn(t *testing.T, st Store, agentNumber int) (*Service, *fakeHub, Todo) {
+	t.Helper()
+	return newConversationPlanServiceOn(t, st, "lead1", agentNumber)
+}
+
+func newConversationPlanServiceOn(t *testing.T, st Store, conversation string, agentNumber int) (*Service, *fakeHub, Todo) {
+	t.Helper()
 	s, f := newQuietServiceOn(t, st)
+	f.agents = agentNumber
 	f.judge = `{"verdict":"done","reason":"PR 已合并"}`
 	f.known["lead1"] = true
 	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
@@ -44,112 +57,83 @@ func newLeaderServiceOn(t *testing.T, st Store) (*Service, *fakeHub, Todo) {
 		"title": "修登录崩溃", "prompt": "iPad 横屏时登录页崩溃，修好并补测试", "machine": "box", "cwd": "/code/app", "readonly": true,
 		"why": "这个仓库最近在 box 上", "done_when": []string{"PR 合并到 main"}, "expect_minutes": 30,
 	}}})
-	res, err := s.toolTaskPlan(context.Background(), "lead1", raw)
+	res, err := s.toolTaskPlan(context.Background(), conversation, raw)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(res, "The main conversation supervises them") {
+	if !strings.Contains(res, "You supervise them") {
 		t.Fatalf("the leader conversation is not told who supervises: %s", res)
 	}
 	waitFor(t, "the link", func() bool { return len(onlyTodo(s).Agents) == 1 })
 	todo := onlyTodo(s)
-	if v := todo.Supervision; v == nil || v.Supervisor != "conv1" || len(v.DoneWhen) != 1 {
+	if v := todo.Supervision; v == nil || v.Supervisor != conversation || len(v.DoneWhen) != 1 {
 		t.Fatalf("supervision = %+v", todo.Supervision)
 	}
 	return s, f, todo
 }
 
-// A leader conversation's own task is still its origin, but main supervises it (#5732). Main sends the work back,
-// presents any owner decision and accepts it; the origin cannot review it itself.
-func TestLeaderConversationTaskIsSupervisedByMain(t *testing.T) {
+// The planning lead receives ordinary supervision, reworks its Agent and accepts delivery without involving main.
+func TestLeaderConversationTaskIsSupervisedByItsLead(t *testing.T) {
 	s, f, todo := newLeaderService(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	if !strings.Contains(s.Context(ctx, ContextParams{SessionID: "lead1"}).Text, "这是 leader 对话") {
-		t.Fatal("the leader's context does not say it is one")
+		t.Fatal("the leader's context does not identify its role")
 	}
-	if strings.Contains(s.Context(ctx, ContextParams{SessionID: "conv1"}).Text, "这是 leader 对话") {
-		t.Fatal("the main conversation's context says it is a leader")
-	}
-
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, "做完了，PR https://github.com/o/r/pull/7 已合并", 0)
-	waitFor(t, "main's supervision message", func() bool { return len(f.noticesTo("conv1")) == 1 })
-	n := f.noticesTo("conv1")[0]
-	for _, want := range []string{"📋 督办", "待逐项复核，不代表完成", "pull/7"} {
-		if !strings.Contains(n, want) {
-			t.Errorf("the leader's message lacks %q:\n%s", want, n)
-		}
+	waitFor(t, "lead's supervision", func() bool { return len(f.noticesTo("lead1")) == 1 })
+	if n := f.noticesTo("lead1")[0]; !strings.Contains(n, "pull/7") || !strings.Contains(n, "待逐项复核") {
+		t.Fatalf("the lead lost its delivery evidence: %s", n)
 	}
-	if got := f.noticesTo("lead1"); len(got) != 0 {
-		t.Fatalf("the origin got the supervision message too: %q", got)
+	if len(f.noticesTo("conv1")) != 0 {
+		t.Fatal("main received the lead's ordinary supervision")
 	}
-
-	review := func(self, verdict, note string, extra map[string]any) (string, error) {
-		args := map[string]any{"todo_id": todo.ID, "verdict": verdict, "note": note}
-		for k, v := range extra {
-			args[k] = v
-		}
-		return runJSON(t, s, self, "task_review", args)
+	if _, err := runJSON(t, s, "conv2", "task_review", map[string]any{"todo_id": todo.ID, "verdict": "rework", "note": "x"}); err == nil {
+		t.Fatal("an unrelated side conversation reviewed the task")
 	}
-	if _, err := review("conv2", "rework", "x", nil); err == nil {
-		t.Fatal("another side conversation reviewed the leader's task")
-	}
-	if _, err := review("lead1", "rework", "x", nil); err == nil {
-		t.Fatal("the origin reviewed a main-supervised task")
-	}
-	res, err := review("conv1", "rework", "补测试", nil)
-	if err != nil || !strings.Contains(res, "Rework round 1") {
-		t.Fatalf("main's rework: %s %v", res, err)
+	out, err := runJSON(t, s, "lead1", "task_review", map[string]any{"todo_id": todo.ID, "verdict": "rework", "note": "补测试"})
+	if err != nil || !strings.Contains(out, "Rework round 1") {
+		t.Fatalf("lead rework: %s %v", out, err)
 	}
 	if sent := sentToAgent(f); len(sent) != 1 || !strings.Contains(sent[0], "补测试") {
-		t.Fatalf("sent to the agent: %q", sent)
+		t.Fatalf("rework did not reach the same Agent: %q", sent)
 	}
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, "补了测试", 0)
-	waitFor(t, "the review again", func() bool { return todoNow(s, todo.ID).Supervision.State == reviewPending })
-	waitFor(t, "main's second message", func() bool { return len(f.noticesTo("conv1")) == 2 })
-
-	// Main presents the owner's decision directly; there is no leader escalation to another conversation.
-	res, err = review("conv1", "needs_user", "", map[string]any{"reason": "要不要顺手改 iPhone 横屏", "recommend": "先只修 iPad",
-		"why_owner": "priority", "cost_of_waiting": "iPad 的修复晚一天发",
-		"options": []map[string]string{{"label": "先只修 iPad", "leads_to": "今天就能发"}, {"label": "一起改 iPhone", "leads_to": "多花一天"}}})
-	if err != nil || !strings.Contains(res, "waits for the user") {
-		t.Fatalf("main's needs_user: %s %v", res, err)
-	}
-	if got := todoNow(s, todo.ID).Supervision.State; got != reviewNeedsUser {
-		t.Fatalf("after needs_user: %q", got)
-	}
-	if ask := listedAsk(t, s, todo.ID); ask == nil || ask["outcome"] != outcomeDecide || ask["recommend"] != "先只修 iPad" {
-		t.Fatalf("owner decision = %+v", ask)
-	}
-
-	// Main closes it too, with complete review evidence; the origin and supervisor stay distinct.
-	res, err = review("conv1", "accepted", "用户选了只修 iPad，已合并", map[string]any{"checks": completeReviewChecks(todoNow(s, todo.ID))})
-	if err != nil || !strings.Contains(res, "accepted and closed") {
-		t.Fatalf("main's accept: %s %v", res, err)
+	waitFor(t, "second review", func() bool { return todoNow(s, todo.ID).Supervision.State == reviewPending })
+	out, err = runJSON(t, s, "lead1", "task_review", map[string]any{"todo_id": todo.ID, "verdict": "accepted", "note": "PR merged", "checks": completeReviewChecks(todoNow(s, todo.ID))})
+	if err != nil || !strings.Contains(out, "accepted and closed") {
+		t.Fatalf("lead acceptance: %s %v", out, err)
 	}
 	done := todoNow(s, todo.ID)
-	if done.DoneAt == nil || done.Origin != "lead1" || done.Supervision.State != reviewAccepted || done.Supervision.Supervisor != "conv1" {
-		t.Fatalf("accepted: %+v %+v", done, done.Supervision)
+	if done.DoneAt == nil || done.Origin != "lead1" || done.Supervision.Supervisor != "lead1" || len(f.noticesTo("conv1")) != 0 {
+		t.Fatalf("lead closeout changed ownership or woke main: %+v", done)
 	}
 }
 
-// Main's review of a leader conversation's task keeps main as supervisor; the origin cannot take that role back.
-func TestMainReviewKeepsSupervisorWithMain(t *testing.T) {
+// Main cannot review a task supervised by a direction lead (#13657): only the lead can review it, and ownership stays
+// with the lead.
+func TestMainReviewKeepsSupervisorWithLead(t *testing.T) {
 	s, f, todo := newLeaderService(t)
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, "做完了", 0)
 	waitFor(t, "the review", func() bool { return todoNow(s, todo.ID).Supervision.State == reviewPending })
-	if res, err := runJSON(t, s, "conv1", "task_review", map[string]any{"todo_id": todo.ID, "verdict": "rework", "note": "补截图"}); err != nil ||
-		!strings.Contains(res, "Rework round 1") {
-		t.Fatalf("main's rework: %s %v", res, err)
+	if _, err := runJSON(t, s, "conv1", "task_review", map[string]any{"todo_id": todo.ID, "verdict": "rework", "note": "补截图"}); err == nil {
+		t.Fatal("main chat was allowed to review a lead-supervised task")
 	}
-	if v := todoNow(s, todo.ID).Supervision; v.Supervisor != "conv1" {
-		t.Fatalf("main's review changed the supervisor: %+v", v)
+	if got := todoNow(s, todo.ID).Supervision.Supervisor; got != "lead1" {
+		t.Fatalf("main's refused review changed supervisor: %s", got)
+	}
+	if out, err := runJSON(t, s, "lead1", "task_review", map[string]any{"todo_id": todo.ID, "verdict": "rework", "note": "补截图"}); err != nil || !strings.Contains(out, "Rework round 1") {
+		t.Fatalf("lead review: %s %v", out, err)
+	}
+	if got := todoNow(s, todo.ID).Supervision.Supervisor; got != "lead1" {
+		t.Fatalf("lead review changed supervisor: %s", got)
 	}
 }
 
-// Without an explicit leader assignment, a legacy side-supervised task and every new side task_plan go to main (#5732).
+// A legacy unmarked side-supervised task still goes to main, while a new task_plan from a live side conversation is
+// supervised by that conversation (#13657).
 func TestDigestGoesToMainWithoutAnExplicitLeader(t *testing.T) {
 	s, f := newQuietService(t)
 	ctx := context.Background()
@@ -178,13 +162,13 @@ func TestDigestGoesToMainWithoutAnExplicitLeader(t *testing.T) {
 		t.Fatal("a side conversation's context says it is a leader")
 	}
 
-	// task_plan from a side conversation that is not an explicit leader: main supervises it.
+	// task_plan from a live side conversation: the side conversation supervises it (#13657).
 	res, err := s.toolTaskPlan(ctx, "lead1", planArgs(true))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(res, "The main conversation supervises them") {
-		t.Fatalf("a side conversation is told who supervises: %s", res)
+	if !strings.Contains(res, "You supervise them") {
+		t.Fatalf("a live side conversation is not told it supervises: %s", res)
 	}
 	var planned Todo
 	waitFor(t, "the task", func() bool {
@@ -196,8 +180,8 @@ func TestDigestGoesToMainWithoutAnExplicitLeader(t *testing.T) {
 		}
 		return false
 	})
-	if planned.Supervision == nil || planned.Supervision.Supervisor != "conv1" {
-		t.Fatalf("a side conversation's task is not main-supervised: %+v", planned.Supervision)
+	if planned.Supervision == nil || planned.Supervision.Supervisor != "lead1" {
+		t.Fatalf("a live side conversation's task is not side-supervised: %+v", planned.Supervision)
 	}
 }
 
@@ -283,88 +267,59 @@ func TestWorkerCannotHandOutTasks(t *testing.T) {
 	}
 }
 
-// Cancelling a task stops its agent (session.stop: its terminal stays, #4754), ends the card it waits on and archives
-// it (reversible); another task's agent with a card waiting is left as it is.
-func TestCancelStopsAndArchivesAgents(t *testing.T) {
+// A cancelled task stays readable and writable; closing it never interrupts its blocked Agent.
+func TestCancelDefersStoppingAndArchivingAgents(t *testing.T) {
 	ft, row := closeTestService(t, func(s *proto.Session) {
 		s.Status, s.State, s.PendingInteractions = proto.StatusBlocked, proto.StateNeedsYou, 1
 	})
-	other := row
-	other.SessionID, other.Title = "other-codex", "other"
-	ft.d.setSessions("mac", []proto.Session{row, other})
-	ft.f.setSessions("mac", row, other)
-	var closed []string
-	ft.f.answerNode("session.close", func(_ string, raw json.RawMessage) (any, error) {
-		t.Errorf("closed the agent's terminal: %s", raw)
-		return map[string]any{"ok": true}, nil
-	})
-	ft.f.answerNode(deviceSessionStop, func(_ string, raw json.RawMessage) (any, error) {
-		var a struct {
-			SessionID string `json:"session_id"`
-			Retire    bool   `json:"retire"`
-		}
-		_ = json.Unmarshal(raw, &a)
-		if a.Retire {
-			t.Errorf("a cancelled task's agent is stopped whatever it does: %s", raw)
-		}
-		closed = append(closed, a.SessionID)
-		gone := row // its node lists it closed a moment later
-		gone.Status, gone.State, gone.PendingInteractions, gone.PaneID = proto.StatusOffline, proto.StateOffline, 0, ""
-		ft.d.setSessions("mac", []proto.Session{gone, other})
-		return map[string]any{"stopped": true}, nil
-	})
-	s := ft.s
-	ctx := context.Background()
-	setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
-	todos := map[string]string{}
-	for _, sid := range []string{row.SessionID, other.SessionID} {
-		todo, err := s.createTodo(ctx, "做 "+sid, "做", "conv1", "")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := s.linkTodoAgent(ctx, todo.ID, "mac", sid, sid, "/code", "claude"); err != nil {
-			t.Fatal(err)
-		}
-		todos[sid] = todo.ID
-		s.fleet.mu.Lock()
-		s.ixMapLocked()["ix-"+sid] = &pending{ix: proto.Interaction{ID: "ix-" + sid, MachineID: "mac", SessionID: sid, Kind: proto.IxPermission,
-			ToolName: "Bash", CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour)}, done: make(chan proto.Resolution, 1),
-			resolved: make(chan struct{})}
-		s.fleet.mu.Unlock()
+	ft.f.setSessions("mac", row)
+	for _, method := range []string{deviceSessionStop, "session.close"} {
+		ft.f.answerNode(method, func(_ string, raw json.RawMessage) (any, error) {
+			t.Errorf("cancellation requested an unguarded stop (%s): %s", method, raw)
+			return map[string]any{"stopped": true}, nil
+		})
 	}
-	res, err := runJSON(t, s, "conv1", "task_review", map[string]any{"todo_id": todos[row.SessionID], "verdict": "cancelled", "note": "不做了"})
+	s, ctx := ft.s, context.Background()
+	setSettings(t, s, func(v *Settings) { v.Main = "conv1" })
+	todo, err := s.createTodo(ctx, "Disposable task", "Check the result", "conv1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.linkTodoAgent(ctx, todo.ID, "mac", row.SessionID, row.Title, "/code", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	res, err := runJSON(t, s, "conv1", "task_review", map[string]any{"todo_id": todo.ID, "verdict": "cancelled", "note": "No longer needed"})
 	if err != nil || !strings.Contains(res, "cancelled and closed") {
 		t.Fatalf("cancel: %s %v", res, err)
 	}
-	waitFor(t, "the archive", func() bool { return archivedIDs(t, s)[row.SessionID] })
-	ft.f.mu.Lock()
-	gotClosed := append([]string(nil), closed...)
-	ft.f.mu.Unlock()
-	if len(gotClosed) != 1 || gotClosed[0] != row.SessionID {
-		t.Fatalf("closed: %v", gotClosed)
+	s.closeDoneTaskAgents(ctx, taskCloseRefused{}, doneSeen{})
+	if len(retiredOf(ft)) != 0 || archivedIDs(t, s)[row.SessionID] {
+		t.Fatal("closing a task stopped or archived a live conversation")
 	}
-	if _, waiting := s.pendingIx("ix-" + row.SessionID); waiting {
-		t.Fatal("the cancelled task's card still waits")
+	if todoNow(s, todo.ID).DoneAt == nil {
+		t.Fatal("the task was not closed")
 	}
-	if _, waiting := s.pendingIx("ix-" + other.SessionID); !waiting {
-		t.Fatal("the other task's card ended")
+	if err := s.sendToSession(ctx, "mac", row.SessionID, "One more check"); err != nil {
+		t.Fatalf("closed task conversation is not writable: %v", err)
 	}
-	if archivedIDs(t, s)[other.SessionID] {
-		t.Fatal("the other task's agent was archived")
-	}
-	if todoNow(s, todos[other.SessionID]).DoneAt != nil {
-		t.Fatal("the other task was closed")
-	}
-	// Reversible: restoring it brings it back to the list.
-	if _, err := runJSON(t, s, "conv1", "agent_unarchive", map[string]any{"machine": "mac", "session_id": row.SessionID}); err != nil {
-		t.Fatal(err)
-	}
-	if archivedIDs(t, s)[row.SessionID] {
-		t.Fatal("still archived after agent_unarchive")
+	old := time.Now().Add(-time.Hour)
+	s.todos.mu.Lock()
+	s.todos.todos[todo.ID].DoneAt = &old
+	s.todos.mu.Unlock()
+	s.taskActivity.mu.Lock()
+	s.taskActivity.times[runtimeListID("mac", row.SessionID)] = old
+	s.taskActivity.mu.Unlock()
+	s.fleet.mu.Lock()
+	s.fleet.seen[[2]string{"mac", row.SessionID}] = old
+	s.fleet.mu.Unlock()
+	row.Status, row.State, row.PendingInteractions = proto.StatusIdle, proto.StateIdle, 0
+	ft.d.setSessions("mac", []proto.Session{row})
+	s.closeDoneTaskAgents(ctx, taskCloseRefused{}, doneSeen{{"mac", row.SessionID}: {done: old, running: old}})
+	if got := retiredOf(ft); len(got) != 1 || got[0] != row.SessionID || !archivedIDs(t, s)[row.SessionID] {
+		t.Fatalf("idle, inactive cancelled Agent was not stopped and archived: %v", got)
 	}
 }
 
-// assistant.leaders takes side conversations only, and says what it is.
 func TestSetLeaders(t *testing.T) {
 	s, f := newQuietServiceOn(t, newFleetMem())
 	ctx := context.Background()
@@ -397,18 +352,15 @@ func TestSetLeaders(t *testing.T) {
 	}
 }
 
-// A leader whose conversation is gone (archived, deleted) does not swallow its tasks' signals: they go to the main one.
-func TestDigestFallsBackWhenLeaderGone(t *testing.T) {
+// A temporarily unavailable assigned lead keeps its queue. Main must not silently become its worker driver.
+func TestAssignedLeadUnavailabilityKeepsItsQueue(t *testing.T) {
 	s, f, todo := newLeaderService(t)
 	f.setSessions("server", proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle})
 	agentTurn(s, f, proto.StatusWorking, "", 0)
 	agentTurn(s, f, proto.StatusDone, "做完了", 0)
-	waitFor(t, "the main conversation's message", func() bool { return len(f.noticesTo("conv1")) == 1 })
-	if n := f.noticesTo("conv1")[0]; !strings.Contains(n, todo.ID) {
-		t.Fatalf("message:\n%s", n)
-	}
-	if got := f.noticesTo("lead1"); len(got) != 0 {
-		t.Fatalf("told the gone leader: %q", got)
+	waitFor(t, "lead queue", func() bool { return s.queuedFor("lead1") == 1 })
+	if len(f.noticesTo("conv1")) != 0 || todoNow(s, todo.ID).Supervision.Supervisor != "lead1" {
+		t.Fatal("an unavailable lead silently reassigned its task to main")
 	}
 }
 
@@ -417,7 +369,7 @@ func TestCancelLeavesAnotherTasksAgent(t *testing.T) {
 	ft, row := closeTestService(t, nil)
 	ft.f.setSessions("mac", row)
 	var closed []string
-	for _, m := range []string{"session.close", deviceSessionStop} {
+	for _, m := range []string{"session.close", deviceSessionStop, nodeproto.StopIfIdle} {
 		ft.f.answerNode(m, func(_ string, raw json.RawMessage) (any, error) {
 			closed = append(closed, string(raw))
 			return map[string]any{"ok": true}, nil
@@ -431,7 +383,7 @@ func TestCancelLeavesAnotherTasksAgent(t *testing.T) {
 	if err := s.linkTodoAgent(ctx, todo.ID, "mac", row.SessionID, "open", "/code", "claude"); err != nil {
 		t.Fatal(err)
 	}
-	s.stopCancelledAgent(ctx, "todo_old", "mac", row.SessionID)
+	s.closeDoneTaskAgents(ctx, taskCloseRefused{}, doneSeen{})
 	ft.f.mu.Lock()
 	n := len(closed)
 	ft.f.mu.Unlock()
@@ -440,46 +392,42 @@ func TestCancelLeavesAnotherTasksAgent(t *testing.T) {
 	}
 }
 
-// A cancelled task's agent with no terminal (another tool's, an engine that runs agents itself: the node answers
-// session.stop with no_terminal) is closed as before; one the node cannot stop for another reason is left running,
-// never closed.
-func TestCancelClosesOnlyAnAgentWithoutTerminal(t *testing.T) {
-	for _, tc := range []struct {
-		code  string
-		close bool
-	}{{"no_terminal", true}, {"not_stopped", false}} {
-		ft, row := closeTestService(t, nil)
-		ft.f.setSessions("mac", row)
-		var calls []string
-		ft.f.answerNode(deviceSessionStop, func(_ string, _ json.RawMessage) (any, error) {
-			calls = append(calls, deviceSessionStop)
-			return nil, &rpc.Error{Code: tc.code, Message: "no"}
+// A refusal from the node never falls back to closing the terminal or archiving the Agent.
+func TestClosedTaskRetirementRefusalKeepsAgent(t *testing.T) {
+	for _, code := range []string{"no_terminal", "not_stopped", "not_retirable", "unknown_method"} {
+		t.Run(code, func(t *testing.T) {
+			ft, row := closeTestService(t, nil)
+			ft.f.setSessions("mac", row)
+			ft.f.answerNode(nodeproto.StopIfIdle, func(_ string, _ json.RawMessage) (any, error) {
+				return nil, &rpc.Error{Code: code, Message: "refused"}
+			})
+			ft.f.answerNode(deviceSessionStop, func(_ string, _ json.RawMessage) (any, error) {
+				t.Error("fell back to an unconditional stop")
+				return nil, nil
+			})
+			ft.f.answerNode("session.close", func(_ string, _ json.RawMessage) (any, error) {
+				t.Error("automatically closed an Agent's terminal")
+				return nil, nil
+			})
+			s, ctx := ft.s, context.Background()
+			todo, err := s.createTodo(ctx, "Disposable task", "Check", "conv1", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := s.linkTodoAgent(ctx, todo.ID, "mac", row.SessionID, "Agent", "/code", "claude"); err != nil {
+				t.Fatal(err)
+			}
+			if ok, err := s.reviewDoneTodo(ctx, todo.ID, "Cancelled", false); err != nil || !ok {
+				t.Fatalf("close: %v %v", ok, err)
+			}
+			s.todos.mu.Lock()
+			at := time.Now().Add(-time.Hour)
+			s.todos.todos[todo.ID].DoneAt = &at
+			s.todos.mu.Unlock()
+			s.closeDoneTaskAgents(ctx, taskCloseRefused{}, doneSeen{{"mac", row.SessionID}: {done: at, running: at}})
+			if archivedIDs(t, s)[row.SessionID] {
+				t.Fatal("a refused retirement was archived")
+			}
 		})
-		ft.f.answerNode("session.close", func(_ string, _ json.RawMessage) (any, error) {
-			calls = append(calls, "session.close")
-			gone := row
-			gone.Status, gone.State, gone.PaneID = proto.StatusOffline, proto.StateOffline, ""
-			ft.d.setSessions("mac", []proto.Session{gone})
-			return map[string]any{"ok": true}, nil
-		})
-		s, ctx := ft.s, context.Background()
-		todo, err := s.createTodo(ctx, "做", "做", "conv1", "")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := s.linkTodoAgent(ctx, todo.ID, "mac", row.SessionID, "x", "/code", "claude"); err != nil {
-			t.Fatal(err)
-		}
-		s.stopCancelledAgent(ctx, todo.ID, "mac", row.SessionID)
-		ft.f.mu.Lock()
-		got := append([]string(nil), calls...)
-		ft.f.mu.Unlock()
-		want := []string{deviceSessionStop}
-		if tc.close {
-			want = append(want, "session.close")
-		}
-		if strings.Join(got, ",") != strings.Join(want, ",") {
-			t.Errorf("%s: calls %v, want %v", tc.code, got, want)
-		}
 	}
 }

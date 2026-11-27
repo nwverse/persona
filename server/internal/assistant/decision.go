@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -65,16 +66,78 @@ var (
 	decisionSettle = 10 * time.Minute
 )
 
-// DecisionOption is one option of a decision: its label, and what choosing it leads to.
+// DecisionOption is one option of a decision: its optional stable id, its
+// localizable label, and what choosing it leads to.
 type DecisionOption struct {
+	ID      string `json:"id,omitempty"`
 	Label   string `json:"label"`
 	LeadsTo string `json:"leads_to"`
+}
+
+// terminalResumeLabel recognizes the existing terminal instruction in the three
+// supported languages. It can only offer navigation; it never authorizes a start.
+func terminalResumeLabel(label string) bool {
+	label = strings.ToLower(strings.TrimSpace(label))
+	return strings.HasPrefix(label, "resume ") && strings.Contains(label, "terminal") ||
+		strings.Contains(label, "终端") && strings.Contains(label, "恢复") || // i18n-ignore: matches the terminal-resume instruction as written in zh-Hans / ja, never shown
+		strings.Contains(label, "ターミナル") && strings.Contains(label, "再開") // i18n-ignore: matches the terminal-resume instruction as written in zh-Hans / ja, never shown
+}
+
+func terminalResumeMention(text string) bool {
+	text = strings.ToLower(text)
+	return strings.Contains(text, "resume") && strings.Contains(text, "terminal") ||
+		strings.Contains(text, "终端") && strings.Contains(text, "恢复") || // i18n-ignore: matches the terminal-resume instruction as written in zh-Hans / ja, never shown
+		strings.Contains(text, "ターミナル") && strings.Contains(text, "再開") // i18n-ignore: matches the terminal-resume instruction as written in zh-Hans / ja, never shown
+}
+
+func soleDecisionAgent(t Todo, asked time.Time) *SessionRef {
+	var target *SessionRef
+	for _, a := range t.Agents {
+		if !a.active() || a.LinkedAt.After(asked) || a.MachineID == "" || a.SessionID == "" {
+			continue
+		}
+		if target != nil {
+			return nil
+		}
+		target = &SessionRef{MachineID: a.MachineID, SessionID: a.SessionID}
+	}
+	return target
+}
+
+// decisionTerminal returns a task-owned target. An archived/released binding is
+// never used to redirect an owner's recovery action to another Agent.
+func decisionTerminal(t Todo, label string) *SessionRef {
+	if !terminalResumeLabel(label) {
+		return nil
+	}
+	var match *SessionRef
+	for _, a := range t.Agents {
+		if !a.active() || len(a.SessionID) < 8 || !strings.Contains(strings.ToLower(label), strings.ToLower(a.SessionID[:8])) {
+			continue
+		}
+		if match != nil {
+			return nil
+		}
+		match = &SessionRef{MachineID: a.MachineID, SessionID: a.SessionID}
+	}
+	return match
 }
 
 // reviewDecision is what a needs_user review says of its decision, as checked (readDecision).
 type reviewDecision struct {
 	WhyOwner, Reason, Recommend, CostOfWaiting string
 	Options                                    []DecisionOption
+}
+
+// decisionPushLevel is the push level of a decision the owner is asked, by why it is theirs. Choosing what comes
+// first (priority) is the owner's call but no emergency: P1, in Needs you without ringing through low-distraction
+// mode. A step that cannot be undone, one others will see, a delivery to accept or what only the owner knows stays
+// P0 (decision rights: a2eb5451's "update the profile now?" rang as P0 on 2026-11-23).
+func decisionPushLevel(why string) string {
+	if why == whyPriority {
+		return assistantwire.LevelP1
+	}
+	return assistantwire.LevelP0
 }
 
 // neverDefault: the decision is never taken by default (it cannot be undone, or other people will see it).
@@ -85,10 +148,14 @@ const decisionElse = "When nothing needs the user, don't use needs_user: decide 
 	"send the work back (rework), or close it (accepted or cancelled). A task that only waits for something or someone is no " +
 	"decision either: park it (parked, with reason, waiting_on, evidence and until), and it comes back to you at that time."
 
+// decisionReasonMaxRunes is the shared rune cap for a needs_user decision's question/reason across validation
+// (readDecision) and stored asks (askConclusion).
+const decisionReasonMaxRunes = 200
+
 // readDecision checks a review's decision: every part there, the recommended option first among two to four. The
 // error names everything missing at once, and what to do when nothing needs the owner.
 func readDecision(why, reason, recommend, cost string, options []DecisionOption) (reviewDecision, error) {
-	d := reviewDecision{WhyOwner: strings.TrimSpace(why), Reason: clip(oneLine(reason), 200), Recommend: clip(oneLine(recommend), 120),
+	d := reviewDecision{WhyOwner: strings.TrimSpace(why), Reason: clip(oneLine(reason), decisionReasonMaxRunes), Recommend: clip(oneLine(recommend), 120),
 		CostOfWaiting: clip(oneLine(cost), 200)}
 	for _, o := range options {
 		o.Label, o.LeadsTo = clip(oneLine(o.Label), 120), clip(oneLine(o.LeadsTo), 200)
@@ -324,6 +391,12 @@ func (s *Service) askRound(id, asked string) (*acceptAsk, error) {
 func (s *Service) chooseOption(ctx context.Context, id, asked, label string) (acceptResult, error) {
 	s.reviewDismissals.actions.acquire(id)
 	defer s.reviewDismissals.actions.release(id)
+	return s.chooseOptionLocked(ctx, id, asked, label)
+}
+
+// chooseOptionLocked is chooseOption for a caller that already holds the card's action lock (settleSupervisorChoice,
+// which must keep it from its look at the waiting choice until the choice is recorded).
+func (s *Service) chooseOptionLocked(ctx context.Context, id, asked, label string) (acceptResult, error) {
 	a, err := s.askRound(id, asked)
 	if err != nil || a == nil {
 		return acceptResult{}, err
@@ -335,6 +408,9 @@ func (s *Service) chooseOption(ctx context.Context, id, asked, label string) (ac
 			return acceptResult{}, errDecisionOption
 		}
 		return s.answerOutside(ctx, id, asked, outsideAnswer{Option: label}, false)
+	}
+	if terminalResumeLabel(label) && i >= 0 {
+		return acceptResult{}, i18n.Err("assistant-reports.manual_terminal_resume")
 	}
 	switch {
 	case label == a.Recommend && label != "":
@@ -518,6 +594,7 @@ func (s *Service) endAskWithTextDelivery(ctx context.Context, id string, asked t
 	cp := *a
 	b.mu.Unlock()
 	s.askChanged(ctx)
+	s.todoPushOver(id) // answered: its next push may ring
 	s.updateAskCards(ctx, id, cp)
 }
 
@@ -703,6 +780,9 @@ func (s *Service) sweepDecisionAges(now time.Time) {
 		if !decisionRecheckDue(&a, now) {
 			continue
 		}
+		if t, ok := s.todoNow(w.todo); ok && s.reporterStopped(ctx, t.Origin) {
+			continue // signal would drop it under /stop (#3308): the owner keeps the decision until they speak
+		}
 		if !s.markDecisionRecheck(ctx, w.todo, a.AskedAt, now.UTC()) {
 			continue
 		}
@@ -723,6 +803,7 @@ func (s *Service) sweepDecisionAges(now time.Time) {
 		}
 		b.mu.Unlock()
 		s.askChanged(ctx)
+		s.todoPushOver(w.todo)
 		s.logf("task %s: its decision waited %s: back to its supervisor to confirm it", w.todo, humanDuration(now.Sub(a.AskedAt)))
 		s.signal(superviseSignal{Todo: w.todo, Kind: sigRecheck, Key: "recheck@" + a.AskedAt.UTC().Format(time.RFC3339Nano),
 			Minutes: int(now.Sub(a.AskedAt).Minutes()), Decision: s.signalDecision(ctx, &a)})
@@ -747,6 +828,9 @@ func (s *Service) undecidableSignal(ctx context.Context, t Todo, now time.Time) 
 		if a.AcceptedAt.IsZero() && a.Recommend != "" || !a.AcceptedAt.IsZero() && now.Sub(a.AcceptedAt) < decisionSettle {
 			return superviseSignal{}, false // answerable, or its answer is on its way to the agent
 		}
+	}
+	if s.reporterStopped(ctx, t.Origin) {
+		return superviseSignal{}, false // signal would drop it under /stop (#3308): keep it untold until the user speaks
 	}
 	_, changed, err := s.updateSupervision(ctx, t.ID, func(v *Supervision) bool {
 		n := len(v.Reviews)
@@ -788,4 +872,16 @@ func ownerCannotStats(events []db.WorkEvent) map[string]map[string]int {
 		out[sup][resp]++
 	}
 	return out
+}
+
+// decisionLine is a decision as a line quotes it: the question and what was chosen.
+func decisionLine(d db.TodoDecisionRow) string {
+	q, c := clip(oneLine(d.Question), 40), clip(oneLine(d.Choice), 60)
+	switch {
+	case q == "":
+		return c
+	case c == "":
+		return q
+	}
+	return q + " → " + c
 }

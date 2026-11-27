@@ -385,4 +385,68 @@ class AgentsFoldAllTest {
         runCurrent()
         assertTrue(model.page.value.list.groups.first { it.id == "pinned" }.folded)
     }
+
+    @Test fun forkRefreshesRepositoryAndOpensBranchedSession() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        var refreshes = 0
+        val forkedCalls = mutableListOf<SessionKey>()
+        val opened = mutableListOf<SessionKey>()
+        val opsApi = object : AgentOperations {
+            override val scope = "s"
+            override suspend fun pins() = AgentOperationPreferences()
+            override suspend fun mutes() = AgentOperationPreferences()
+            override suspend fun savePins(value: AgentOperationPreferences) = Unit
+            override suspend fun saveMutes(value: AgentOperationPreferences) = Unit
+            override suspend fun renameSession(key: SessionKey, title: String?, tabName: String?) = Unit
+            override suspend fun renameSpace(machineId: String, workspaceId: String, name: String) = Unit
+            override suspend fun closeSession(key: SessionKey) = Unit
+            override suspend fun forkSession(key: SessionKey): String { forkedCalls += key; return "branched-99" }
+        }
+        val source = Session("shown", "s-orig", state = "idle", status = "idle", canFork = true)
+        model = AgentsViewModel(object : SessionsRepository {
+            override val sessions = MutableStateFlow(listOf(source))
+            override val machines = MutableStateFlow(listOf(Machine("shown", online = true)))
+            override suspend fun refresh() { refreshes++ }
+        }, object : InteractionCenter {
+            override val pending = MutableStateFlow<List<Interaction>>(emptyList())
+            override suspend fun refresh() = Unit
+            override suspend fun resolve(id: String, resolution: Resolution) = Unit
+        }, object : HubConnection {
+            override val state = MutableStateFlow(ConnectionState.Online)
+            override val events = MutableSharedFlow<ServerEvent>()
+            override fun reconnect() = Unit
+            override fun send(message: JsonObject) = true
+        }, object : MessageSender {
+            override val outbox = MutableStateFlow<List<OutboxMessage>>(emptyList())
+            override suspend fun send(session: SessionKey, text: String, clientMessageId: String, clearDraft: String?) = Unit
+        }, preferences, AgentsOperationsBindings(opsApi, object : AssistantConversations {
+            override val assistant = MutableStateFlow(AssistantSnapshot())
+            override val pinned = MutableStateFlow(emptySet<SessionKey>())
+            override suspend fun startConversation(): SessionKey = error("unused")
+            override suspend fun refresh() = Unit
+        }))
+        model.fork(source) { opened += it }
+        runCurrent()
+        assertEquals(listOf(source.key), forkedCalls)
+        assertEquals(1, refreshes)
+        assertEquals(listOf(SessionKey("shown", "branched-99")), opened)
+        assertEquals(persona.feature.chat.R.string.chat_menu_forked, model.notice.value?.id)
+    }
+
+    @Test fun forkBlockedByTurnChecksOwnLiveStateNotFoldedOrStopped() {
+        val idleParent = Session("m", "p", state = "idle", status = "idle", canFork = true,
+            children = persona.core.contracts.SessionChildren(total = 1, working = 1))
+        val foldedParent = persona.core.domain.sort.AgentSession(idleParent)
+        assertEquals(persona.core.contracts.AgentState.Working, foldedParent.state)
+        assertFalse(forkBlockedByTurn(foldedParent.session))
+
+        val workingLive = Session("m", "w", state = "working", status = "working", canFork = true)
+        val needsYouLive = Session("m", "n", state = "needs_you", status = "blocked", canFork = true)
+        assertTrue(forkBlockedByTurn(workingLive))
+        assertTrue(forkBlockedByTurn(needsYouLive))
+
+        val stoppedWithStaleWorking = Session("m", "s", state = "working", status = "offline", canFork = true)
+        assertFalse(stoppedWithStaleWorking.isLive)
+        assertFalse(forkBlockedByTurn(stoppedWithStaleWorking))
+    }
 }

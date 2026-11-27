@@ -14,11 +14,18 @@ Pitfalls, odd behavior and the trade-offs made at the time (formerly in `CLAUDE.
   `origin/main` between inspection and local commit consolidation, turning an older tree into apparent reversions
   of unrelated main changes. Capture the full base SHA or fetch into a task-specific ref before integrating or
   consolidating unpublished commits. Compare against that fixed base and stage only the task's files before pushing;
-  never force-push a published branch or rewrite another task's commits to repair the mismatch.
+  never force-push a published branch or rewrite another task's commits to repair the mismatch. The same holds for two
+  processes in one clone: a watcher preparing a review worktree and `scripts/hooks/merge-pr.sh` read `FETCH_HEAD` after
+  fetching, so whichever fetch runs second wins and the other reports a moved base or head for an unchanged PR
+  (#16759). Fetch into a per-PR ref (`+pull/<n>/head:<ref>`) and compare that ref.
 
 - Privacy hooks must resolve the tracked default branch, not assume `origin/master` (#733). A new remote branch has an all-zero old SHA, so falling back to that SHA and skipping an unavailable range silently lets its first push through. Test real first pushes to an isolated bare repository, retain existing-ref and deletion controls, and refuse a new branch when no scan base is available.
 
 - PR merges and progress comments must be checked serially (#2024): `gh pr merge` can fail on a new conflict; if a compound shell command does not stop, the "merged" comment after it still goes out. Exit when the merge command fails, and read the PR's `state` again before posting a completion comment; mark it done only on `MERGED`. `mergeable: UNKNOWN` is not confirmation that it can merge, nor proof of a conflict; read back a definite state before acting. On a false report, edit the original comment first, keeping the verified results and the unfinished items; never leave two contradicting progress comments.
+- Lightweight semantic verification is not local build/test evidence. Require a dedicated exact-head runner status
+  at the automatic merge boundary, including cached approvals and merge retries. Baseline exceptions must name the
+  fixed comparison commit; never infer success from an interrupted remote run.
+
 - An unattended PR review service must bind every result to repository + PR + head SHA, and a pre-existing review must not bypass its own checks. Treat model failure, malformed findings, unavailable platform tests and GitHub read failures as not verified. Run manual and automated merges through the same shared-Git-directory lock and exact-head wrapper (`docs/operations/pr-review-automation.md`); an in-process lock alone cannot protect two service instances or a manual merge.
 
 - Migration inventories must distinguish actual extension packages from SDK templates, schema examples and duplicate application worktrees (#5956). Deduplicate real package IDs across repository copies before counting runtime kinds; a manifest with a command under `runtime` is executable even when `runtime.mode` is omitted. Finding and classifying authoring fixtures is not evidence of a third marketplace or additional migrated extensions.
@@ -346,3 +353,18 @@ Apple builds, where a cold build costs the most:
 - After merging `main`, `cannot find 'persona_core_…'` means the Rust core's XCFramework is stale: run
   `native/app-core/scripts/build-apple.sh` first. If `ContinuityFixture` reports a wrong `fold_id` argument, delete the old
   `PersonaCore*.swiftmodule` at the root of `Build/Products/<config>/` in DerivedData.
+
+- Finish static review, generated tool snapshots and fixture corrections before queuing expensive shared-runner verification. A dedupe key prevents repeated submissions of one commit/group set; it cannot coalesce a series of intermediate commits. While a run waits, collect further fixes into one candidate instead of queuing each edit. Reuse an earlier shard result only when its relevant source is unchanged, and record the exact candidate and baseline commits in the PR.
+
+- Inspect test-running Git hooks before remote-only verification: merging upstream can stage token or icon files and trigger local tests even when the feature itself changes server code. Keep privacy scanning enabled and run the triggered test suites through the prescribed remote workflow.
+
+- A CLI aimed at a test hub by `HOME` alone reaches the real hub (2026-11-26, #16244). `personad extension …` (and every
+  command that reads `hub.json`) resolves the hub from `PERSONA_HOME` first, and a shell or an Agent started on a machine
+  that runs a hub inherits `PERSONA_HOME` (with its older alias). Overriding only `HOME`, a sample extension was
+  installed with `--yes` onto the machine's own hub instead of the temporary one; nothing in the output named the hub.
+  Unsetting is not enough to rely on. Run every hub command of a test as
+  `env -i HOME=<temp home> PERSONA_HOME=<temp home>/.persona PATH="$PATH" personad …`, read the address that home
+  resolves to (`hub.json`'s `listen`) and compare it with the test hub's before the first command. Before every write,
+  run the read-only `personad extension list` in that same environment and print and verify the home and address again
+  (the list itself does not print them), as `scripts/ci/core-sample.py` does; the smoke scripts start their hubs with a
+  clean environment for the same reason.

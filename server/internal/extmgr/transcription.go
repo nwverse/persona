@@ -16,9 +16,9 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/nwverse/persona/server/internal/builtinext"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extwire"
-	"github.com/nwverse/persona/server/internal/voice"
 )
 
 // Meeting transcription (#3862 phase 5, docs/assistant/meeting-minutes.md "The `transcription` extension point"): the
@@ -134,6 +134,11 @@ func (h *Manager) TranscriptionInstall(ref string) string {
 // rename, whose old id resolves to it) and when it was installed, to the microsecond the database keeps
 // (extensionIdentityTimestamp): the install's clock has nanoseconds, so a reload would otherwise move it.
 func transcriptionInstallOf(r extension.Record) string {
+	// The owner explicitly moved this speech provider into the same storage and
+	// permission slot. A fresh package with its public ID still gets a new pin.
+	if r.VerifiedBuiltinPredecessor() {
+		return extension.SourceBuiltin + ":" + r.ID
+	}
 	switch r.Source {
 	case extension.SourceBuiltin, extension.SourceHubJSON:
 		return r.Source + ":" + r.ID
@@ -141,11 +146,13 @@ func transcriptionInstallOf(r extension.Record) string {
 	return r.Source + ":" + r.StorageKey() + "@" + strconv.FormatInt(extensionIdentityTimestamp(r.InstalledAt), 10)
 }
 
-// transcriptionRef is the extension and contribution ref names: "" the built-in voice extension's
-// (voice.TranscriptionContribution), else "<extension id>/<contribution id>".
+// transcriptionRef is the extension and contribution ref names: "" the built-in voice extension's (its
+// TranscriptionContribution, internal/builtinext; none in a build without the voice module), else
+// "<extension id>/<contribution id>".
 func (ps *extensions) transcriptionRef(ref string) (id, cid string, ok bool) {
 	if ref == "" {
-		return ps.voiceID, voice.TranscriptionContribution, ps.voiceID != ""
+		voice, has := builtinext.VoiceExtension(ps.modules())
+		return ps.voiceID, voice.TranscriptionContribution, has && ps.voiceID != ""
 	}
 	id, cid, ok = strings.Cut(ref, "/")
 	return id, cid, ok && extension.ValidID(id) && extension.ValidID(cid)

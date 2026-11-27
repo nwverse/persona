@@ -1,6 +1,6 @@
 /// <reference types="node" />
-// session-review.ts is on the chat's first screen and numbers a turn's hunks; the code viewer (code-view.ts: trees,
-// highlighting, split rows) is not. Importing hunkRows from code-view.ts put that whole module on every first screen.
+// session-review.ts numbers a turn's hunks; the code viewer (code-view.ts: trees, highlighting, split rows) is a page
+// of its own. Importing hunkRows from code-view.ts put that whole module wherever session-review.ts loaded.
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { hunkRows as fromCodeView } from "./code-view";

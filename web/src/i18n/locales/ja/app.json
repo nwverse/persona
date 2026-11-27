@@ -27,10 +27,12 @@
   "session_choices_one": "IDが{sid}で始まるセッションが{count}件あります。開くものを選んでください",
   "session_choices_other": "IDが{sid}で始まるセッションが{count}件あります。開くものを選んでください",
   "title_health": "ヘルスケア",
-  "title_agent_archives": "アーカイブしたエージェント",
+  "title_agent_archives": "アーカイブ済みセッション",
   "title_subscriptions": "購読",
   "new_version": "新しいバージョンがあります",
   "new_version_reload": "再読み込み",
   "title_request": "リクエスト",
-  "title_compare_runs": "実行を比較"
+  "title_compare_runs": "実行を比較",
+  "title_space": "スペース",
+  "title_new_space": "新しいスペース"
 }

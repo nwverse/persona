@@ -38,7 +38,7 @@ let unauthorized: ReturnType<typeof vi.fn<() => void>>;
 // the hub's workspace catalog (#7259); empty unless a test lists some
 let catalogRows: Record<string, unknown>[] = [];
 const flush = () => act(async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); });
-const tick = (ms = 0) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+const tick = (ms = 0) => act(async () => { await vi.advanceTimersByTimeAsync(0); await vi.dynamicImportSettled(); await vi.advanceTimersByTimeAsync(ms); });
 const button = (text: string) => [...document.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent?.trim() === text)!;
 const textarea = () => document.querySelector<HTMLTextAreaElement>("textarea")!;
 const starts = () => calls.filter((c) => c.url.endsWith("/sessions"));
@@ -130,7 +130,7 @@ beforeEach(async () => {
       const catalog = launcherModels[launcher?.name ?? ""] ?? { models: [{ id: "synthetic-model", name: "Synthetic model", efforts: ["low", "high"] }] };
       const host = new URL(url, "http://localhost").searchParams.get("host");
       return json({ agent: launcher?.agent_type || launcher?.agent || "claude", ...catalog,
-        supports_start_model: host === "herdr" ? catalog.supports_start_model : undefined });
+        supports_start_model: host === "herdr" || host === "orca" ? catalog.supports_start_model : undefined });
     }
     if (url.endsWith("/launchers")) return json({ launchers: launcherRows, tiers: launcherTiers });
     if (url.includes("/dirs?")) return json({ path: "/projects", entries: [] });

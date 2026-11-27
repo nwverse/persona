@@ -2,6 +2,7 @@ package persona.feature.chat
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.*
@@ -11,11 +12,17 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.MeasurePolicy
+import androidx.compose.ui.layout.Placeable
+import androidx.compose.ui.layout.layoutId
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.constrainHeight
+import androidx.compose.ui.unit.constrainWidth
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -23,6 +30,9 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.progressBarRangeInfo
@@ -57,12 +67,16 @@ import persona.core.domain.tasks.TaskState
 import persona.core.domain.tasks.Interruption
 import persona.core.domain.tasks.notDoneReason
 import persona.core.domain.tasks.orphanedLine
+import persona.core.domain.tasks.planTaskOf
+import persona.core.domain.tasks.reviewState
+import persona.core.domain.tasks.retryLauncher
 import persona.core.domain.tasks.TasksStore
 import persona.core.domain.tasks.assistantEntries
 import persona.core.domain.tasks.finishedSummary
 import persona.core.domain.tasks.showsJustFinished
 import persona.core.domain.tasks.triage
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import persona.core.domain.tasks.HeldPushItem
 import persona.core.domain.tasks.HeldPushDestination
@@ -211,6 +225,27 @@ internal fun trayDrafts(inbox: List<AssistantInboxDraft>, feed: List<FeedItem>):
     (inbox.map { TrayDraft.Inbox(it) } + feed.filter { it.kind == "message" && it.canSend && it.field("draft")?.isNotBlank() == true }
         .map { TrayDraft.Feed(it) }).distinctBy { it.id }
 
+/**
+ * Maximum scrollable list height for an expanded [AssistantTrays] panel: bounded by [AssistantTrayTokens.maximumHeight],
+ * [AssistantTrayTokens.maximumHeightFraction] of [page], and the vertical room left after [header], [bottomInset],
+ * conversation [floor], and [occupied] (everything else in the footer: tray entry capsules, card padding/spacing,
+ * route chip, pending cards, queue strip, and composer with attachments, chips, and toolbar).
+ */
+internal fun assistantTrayMaxHeight(
+    page: Dp,
+    header: Dp = Tokens.Space.flush,
+    occupied: Dp = Tokens.Space.flush,
+    bottomInset: Dp = Tokens.Space.flush,
+    floor: Dp = Tokens.Space.flush,
+    maximum: Dp = AssistantTrayTokens.maximumHeight,
+): Dp {
+    val share = (page * AssistantTrayTokens.maximumHeightFraction).coerceAtLeast(Tokens.Space.flush)
+    val room = (page - header - bottomInset - occupied - floor).coerceAtLeast(Tokens.Space.flush)
+    return minOf(share, maximum, room)
+}
+
+private object AssistantTrayCardSlot
+
 /** Real task/session/interaction projections, with one bounded panel above its permanent two-entry bar. [requests] are
  *  the cards this screen may show: the conversation's own, and its tasks' and Agents' (each goes to its task's or Agent's
  *  row; one that belongs to neither is not this conversation's). */
@@ -220,10 +255,19 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
     maximumHeight: () -> Dp, busy: Boolean, enabled: Boolean,
     onApprove: (List<Pair<Interaction, Resolution>>) -> Unit, onReview: (Interaction) -> Unit,
     onSend: (TrayDraft) -> Unit, onSchedule: (ScheduledTask) -> Unit,
+    modifier: Modifier = Modifier,
     backgroundRecords: Boolean = false, onBackground: (() -> Unit)? = null,
     onPlan: (TaskPlan) -> Unit = {},
     /** The main conversation folds background rounds (#4314): Needs you groups its rows by supervising conversation. */
     groupByOrigin: Boolean = false,
+    /** To Decide shares the footer bar but keeps its card count separate from the tray's rows. */
+    leading: (@Composable () -> Unit)? = null,
+    /**
+     * Optional dynamic cap for the expanded panel's scrollable list height given the tray's own measured non-list
+     * vertical chrome (capsule bar, [under], outer spacing, and card vertical padding). Read in layout measurement so
+     * keyboard frames never trigger recomposition.
+     */
+    maximumHeightForChrome: ((Dp) -> Dp)? = null,
     /**
      * Under the entries: the pill while the conversation's model operates a Mac. iOS puts it after them in their row
      * (`AssistantActionBar`); beside Android's two entries a phone leaves it too little room for its words.
@@ -316,17 +360,37 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
     // the tray closes once its last thing is handled; tapped while empty it still opens "All caught up"
     LaunchedEffect(needsCount) { if (needsCount == 0 && state.expanded == AssistantTray.NeedsYou) state.expanded = null }
     BackHandler(state.expanded != null) { state.expanded = null }
-    Column(Modifier.padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.xs), verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+    // Entry pills keep 48dp touch targets through Compose clickable without inflating layout height, so keep compact
+    // token margins around the bar. Measure the entry bar (and optional under-slot) first so an expanded tray card
+    // only takes the remaining room and never squeezes the entry bar or pushes the composer below out of view when
+    // the IME is up.
+    val horizontalPadding = Tokens.Space.m
+    val expandedTopPadding = Tokens.Space.xs
+    val collapsedTopPadding = Tokens.Space.xxs
+    val bottomPadding = Tokens.Space.xxs
+    val verticalGap = Tokens.Space.xs
+    val cardPadding = Tokens.Space.xs
+    val listBottomPadding = Tokens.Space.xs
+    val minimumListHeight = Tokens.MinTouch.android
+    AssistantTrayLayout(
+        modifier = modifier,
+        horizontalPadding = horizontalPadding,
+        expandedTopPadding = expandedTopPadding,
+        collapsedTopPadding = collapsedTopPadding,
+        bottomPadding = bottomPadding,
+        verticalGap = verticalGap,
+        cardPadding = cardPadding,
+        minimumListHeight = minimumListHeight,
+        maximumListHeight = { trayChromeHeight ->
+            maximumHeightForChrome?.invoke(trayChromeHeight) ?: maximumHeight()
+        },
+    ) {
         state.expanded?.let { tray ->
-            JCard(Modifier.fillMaxWidth().testTag("assistant-tray-${tray.tag}"), padding = Tokens.Space.xs) {
-                // The room is read while measuring: it follows the keyboard frame by frame without composing the tray again.
-                LazyColumn(Modifier.layout { measurable, constraints ->
-                    val most = minOf(maximumHeight(), AssistantTrayTokens.maximumHeight).roundToPx()
-                    val placeable = measurable.measure(constraints.copy(
-                        maxHeight = minOf(constraints.maxHeight, most).coerceAtLeast(constraints.minHeight)))
-                    layout(placeable.width, placeable.height) { placeable.place(0, 0) }
-                },
-                    contentPadding = PaddingValues(bottom = Tokens.Space.s)) {
+            JCard(
+                Modifier.layoutId(AssistantTrayCardSlot).fillMaxWidth().testTag("assistant-tray-${tray.tag}"),
+                padding = cardPadding,
+            ) {
+                LazyColumn(contentPadding = PaddingValues(bottom = listBottomPadding)) {
                     item {
                         val count = when (tray) {
                             AssistantTray.NeedsYou -> needsCount
@@ -334,27 +398,39 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
                             AssistantTray.Finished -> entries.finished.size
                             AssistantTray.HeldPushes -> heldGroups.total
                         }
-                        JSectionHeader(stringResource(tray.label), trailing = pluralStringResource(R.plurals.chat_tray_items, count, count), action = if (tray == AssistantTray.NeedsYou && approvals.isNotEmpty()) ({
-                            JTextButton(stringResource(R.string.chat_tray_approve_all), { onApprove(approvals) },
-                                enabled = enabled && !busy, modifier = Modifier.testTag("assistant-approve-all"))
-                        }) else if (tray == AssistantTray.Running || tray == AssistantTray.Finished) ({
-                            JTextButton(stringResource(R.string.chat_tasks_dock_all, progress.size + standalone.size),
-                                { host.sheet.value = TaskSheet.Board }, modifier = Modifier.testTag("assistant-task-board"))
-                        }) else if (tray == AssistantTray.HeldPushes) ({
-                            JTextButton(stringResource(R.string.chat_tasks_retry), { host.tasks.refreshPushIntercepts() },
-                                enabled = !heldLoading, modifier = Modifier.testTag("assistant-held-retry"))
-                        }) else null)
+                        TrayPanelHeader(
+                            title = stringResource(tray.label),
+                            countText = pluralStringResource(R.plurals.chat_tray_items, count, count),
+                            action = if (tray == AssistantTray.NeedsYou && approvals.isNotEmpty()) ({
+                                JTextButton(stringResource(R.string.chat_tray_approve_all), { onApprove(approvals) },
+                                    enabled = enabled && !busy, modifier = Modifier.testTag("assistant-approve-all"))
+                            }) else if (tray == AssistantTray.Running || tray == AssistantTray.Finished) ({
+                                JTextButton(stringResource(R.string.chat_tasks_dock_all, progress.size + standalone.size),
+                                    { host.sheet.value = TaskSheet.Board }, modifier = Modifier.testTag("assistant-task-board"))
+                            }) else if (tray == AssistantTray.HeldPushes) ({
+                                JTextButton(stringResource(R.string.chat_tasks_retry), { host.tasks.refreshPushIntercepts() },
+                                    enabled = !heldLoading, modifier = Modifier.testTag("assistant-held-retry"))
+                            }) else null,
+                        )
                     }
                     when (tray) {
                         AssistantTray.NeedsYou -> {
                             if (needsCount == 0) item { JEmptyState(stringResource(R.string.chat_tray_caught_up), "", icon = PhIcons.CheckCircle) }
                             // #4314: one group, as before; with several supervising conversations, each under its title,
                             // this conversation's first (its own cards, plans and drafts are in it), the rows unchanged.
+                            var shownGroupCount = 0
                             for (group in needsGroups) {
-                                if (needsGroups.size > 1 && (group.entries.isNotEmpty() || (group.conversation == host.conversation && (own.isNotEmpty() || drafts.isNotEmpty())))) {
+                                val showGroupHeader = needsGroups.size > 1 && (group.entries.isNotEmpty() || (group.conversation == host.conversation && (own.isNotEmpty() || drafts.isNotEmpty())))
+                                if (showGroupHeader) {
+                                    val firstGroup = shownGroupCount == 0
+                                    shownGroupCount++
                                     item(key = "needs-group:${group.conversation}") {
-                                        JSectionHeader(host.sessions.firstOrNull { it.sessionId == group.conversation }?.displayTitle?.takeIf(String::isNotBlank)
-                                            ?: stringResource(R.string.chat_tray_other_conversation))
+                                        TrayGroupHeader(
+                                            host.sessions.firstOrNull { it.sessionId == group.conversation }?.displayTitle?.takeIf(String::isNotBlank)
+                                                ?: stringResource(R.string.chat_tray_other_conversation),
+                                            first = firstGroup,
+                                            modifier = Modifier.testTag("assistant-needs-group-${group.conversation}"),
+                                        )
                                     }
                                 }
                                 items(asking.filter(group::has), key = { it.key }) { entry ->
@@ -393,14 +469,30 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
                                     val gate = todo.hold?.takeIf { it.unblock == HoldUnblock.User }?.gate
                                     when {
                                         todo.ask?.outcome == "decide" -> TaskDecisionCard(todo, host, enabled) { openTask(host, todo) }
+                                        todo.reviewState == "user_check" && todo.ask?.askedAt?.isNotBlank() == true ->
+                                            TaskOwnerDecision(todo, host, enabled = enabled, onOpen = { openTask(host, todo) })
                                         entry.status == TriageStatus.Failed || entry.status == TriageStatus.Interrupted ->
                                             TrayOutcomeRow(entry, host, enabled, taskBusy)
-                                        else -> TrayDecisionRow(todo.title, todo.ask?.verdict ?: gate ?: row?.text.orEmpty(), R.string.chat_tray_review,
-                                            "assistant-review-${row?.id ?: "todo:${todo.id}"}", enabled, onOpen = { openTask(host, todo) }) { openTask(host, todo) }
+                                        else -> {
+                                            val readyToVerify = stringResource(R.string.chat_tray_ready_to_verify)
+                                            val parsed = todo.ask?.verdict?.let { trayVerdictText(it, readyToVerify) }
+                                            val subtitle = parsed?.text ?: gate ?: row?.text.orEmpty()
+                                            TrayDecisionRow(
+                                                todo.title,
+                                                subtitle,
+                                                R.string.chat_tray_review,
+                                                "assistant-review-${row?.id ?: "todo:${todo.id}"}",
+                                                enabled,
+                                                verdictTone = parsed?.tone,
+                                                onOpen = { openTask(host, todo) },
+                                            ) { openTask(host, todo) }
+                                        }
                                     }
                                 }
                                 val groupDrafts = drafts.takeIf { group.conversation == host.conversation }.orEmpty()
-                                if (groupDrafts.isNotEmpty()) item { JSectionHeader(stringResource(R.string.chat_tray_drafts)) }
+                                if (groupDrafts.isNotEmpty()) item {
+                                    TrayGroupHeader(stringResource(R.string.chat_tray_drafts), first = shownGroupCount == 0 && asking.isEmpty() && own.isEmpty() && plansWaiting.isEmpty() && deciding.isEmpty())
+                                }
                                 items(groupDrafts, key = { "draft:${if (it is TrayDraft.Feed) it.item.id else it.id}" }) { draft ->
                                     if (draft is TrayDraft.Feed) {
                                         Box(Modifier.testTag("assistant-draft-${draft.id}").padding(horizontal = Tokens.Space.s)) {
@@ -488,7 +580,9 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
                             if (shelvedLine && entries.shelved.isNotEmpty()) item(key = "shelved") {
                                 TrayShelvedLine(entries.shelved.size) { state.expanded = null; host.sheet.value = TaskSheet.Board }
                             }
-                            if (schedules.isNotEmpty() || backgroundRecords) item { JSectionHeader(stringResource(R.string.chat_tray_quiet)) }
+                            if (schedules.isNotEmpty() || backgroundRecords) item {
+                                TrayGroupHeader(stringResource(R.string.chat_tray_quiet), first = entries.running.isEmpty() && !(shelvedLine && entries.shelved.isNotEmpty()))
+                            }
                             items(schedules, key = { "schedule:${it.id}" }) { schedule ->
                                 JRow(schedule.title, subtitle = schedule.lastError?.takeIf(String::isNotBlank)
                                     ?: schedule.nextRun?.let { stringResource(R.string.chat_tray_next_run, formatTrayScheduleTime(it, currentLocale)) }
@@ -514,8 +608,16 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
             }
         }
         // Content-width chips at the leading edge, like the old All / task chips; a large font scrolls rather than wraps.
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).testTag("assistant-tray-bar"),
-            horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
+        val barScroll = rememberScrollState()
+        Row(
+            Modifier.fillMaxWidth()
+                .assistantTrayEdgeFade(barScroll)
+                .horizontalScroll(barScroll)
+                .testTag("assistant-tray-bar"),
+            horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            leading?.invoke()
             // Finished is there while it has rows, or its tray is open (an emptied tray stays reachable till it closes)
             for (tray in AssistantTray.entries.filter {
                 (it != AssistantTray.HeldPushes || showHeldEntry) &&
@@ -547,6 +649,131 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
 }
 
 /**
+ * Inline layout for the optional expanded tray card above the permanent entry bar (and optional [under] slot).
+ * Non-card children are measured first so the entry bar stays visible; the expanded card receives at most
+ * the remaining height inside [constraints] and [maximumListHeight], collapsing cleanly to zero height
+ * when no list room remains instead of drawing an empty padded shell or crowding the composer.
+ */
+@Composable
+private inline fun AssistantTrayLayout(
+    modifier: Modifier,
+    horizontalPadding: Dp,
+    expandedTopPadding: Dp,
+    collapsedTopPadding: Dp,
+    bottomPadding: Dp,
+    verticalGap: Dp,
+    cardPadding: Dp,
+    minimumListHeight: Dp,
+    noinline maximumListHeight: (Dp) -> Dp,
+    content: @Composable () -> Unit,
+) {
+    val latestMax by rememberUpdatedState(maximumListHeight)
+    val policy = remember(
+        horizontalPadding, expandedTopPadding, collapsedTopPadding, bottomPadding, verticalGap, cardPadding, minimumListHeight,
+    ) {
+        assistantTrayMeasurePolicy(
+            horizontalPadding, expandedTopPadding, collapsedTopPadding, bottomPadding, verticalGap, cardPadding, minimumListHeight,
+        ) {
+            latestMax(it)
+        }
+    }
+    Layout(content = content, modifier = modifier, measurePolicy = policy)
+}
+
+private fun assistantTrayMeasurePolicy(
+    horizontalPadding: Dp,
+    expandedTopPadding: Dp,
+    collapsedTopPadding: Dp,
+    bottomPadding: Dp,
+    verticalGap: Dp,
+    cardPadding: Dp,
+    minimumListHeight: Dp,
+    maximumListHeight: (Dp) -> Dp,
+) = MeasurePolicy { measurables, constraints ->
+    val horizontalPadPx = horizontalPadding.roundToPx()
+    val expandedTopPadPx = expandedTopPadding.roundToPx()
+    val collapsedTopPadPx = collapsedTopPadding.roundToPx()
+    val bottomPadPx = bottomPadding.roundToPx()
+    val gapPx = verticalGap.roundToPx()
+    val cardVertPadPx = cardPadding.roundToPx() * 2
+    val minListHeightPx = minimumListHeight.roundToPx()
+    val contentMaxWidth = (constraints.maxWidth - horizontalPadPx * 2).coerceAtLeast(0)
+    val childLoose = constraints.copy(minWidth = 0, maxWidth = contentMaxWidth, minHeight = 0)
+
+    val placeables = arrayOfNulls<Placeable>(measurables.size)
+    var cardIndex = -1
+    var nonCardHeight = 0
+    var nonCardCount = 0
+    for (index in measurables.indices) {
+        val measurable = measurables[index]
+        if (measurable.layoutId === AssistantTrayCardSlot) {
+            cardIndex = index
+            continue
+        }
+        val gapBefore = if (nonCardCount > 0) gapPx else 0
+        val maxChildHeight = if (constraints.hasBoundedHeight) {
+            (constraints.maxHeight - collapsedTopPadPx - bottomPadPx - nonCardHeight - gapBefore).coerceAtLeast(0)
+        } else {
+            constraints.maxHeight
+        }
+        val placeable = measurable.measure(childLoose.copy(maxHeight = maxChildHeight))
+        placeables[index] = placeable
+        nonCardHeight += gapBefore + placeable.height
+        nonCardCount++
+    }
+
+    var cardPlaced = false
+    if (cardIndex >= 0) {
+        val cardGapPx = if (nonCardCount > 0) gapPx else 0
+        val trayChromeHeightPx = nonCardHeight + expandedTopPadPx + bottomPadPx + cardGapPx + cardVertPadPx
+        val requestedCapPx = minOf(maximumListHeight(trayChromeHeightPx.toDp()), AssistantTrayTokens.maximumHeight)
+            .roundToPx().coerceAtLeast(0)
+        val constraintListRoomPx = if (constraints.hasBoundedHeight) {
+            (constraints.maxHeight - trayChromeHeightPx).coerceAtLeast(0)
+        } else {
+            requestedCapPx
+        }
+        val finalListMaxPx = minOf(requestedCapPx, constraintListRoomPx)
+        // Only place the expanded tray card when at least one touch-height row fits; otherwise collapse it
+        // cleanly to zero height so no empty padded sliver appears and the composer keeps full priority.
+        if (finalListMaxPx >= minListHeightPx) {
+            val cardPlaceable = measurables[cardIndex].measure(
+                childLoose.copy(maxHeight = finalListMaxPx + cardVertPadPx),
+            )
+            placeables[cardIndex] = cardPlaceable
+            cardPlaced = true
+        }
+    }
+
+    val maxChildWidth = placeables.maxOfOrNull { it?.width ?: 0 } ?: 0
+    val totalWidth = constraints.constrainWidth(maxChildWidth + horizontalPadPx * 2)
+    var placedCount = 0
+    var placedContentHeight = 0
+    for (placeable in placeables) {
+        if (placeable != null) {
+            if (placedCount > 0) placedContentHeight += gapPx
+            placedContentHeight += placeable.height
+            placedCount++
+        }
+    }
+    val topPadPx = if (cardPlaced) expandedTopPadPx else if (placedCount > 0) collapsedTopPadPx else 0
+    val appliedBottomPadPx = if (placedCount > 0) bottomPadPx else 0
+    val totalHeight = topPadPx + placedContentHeight + appliedBottomPadPx
+    layout(totalWidth, constraints.constrainHeight(totalHeight)) {
+        var y = topPadPx
+        var indexPlaced = 0
+        for (placeable in placeables) {
+            if (placeable != null) {
+                if (indexPlaced > 0) y += gapPx
+                placeable.placeRelative(horizontalPadPx, y)
+                y += placeable.height
+                indexPlaced++
+            }
+        }
+    }
+}
+
+/**
  * "Message “x”" above the composer while the next message goes straight to a task (iOS `RouteChip`, web `RouteChip`;
  * docs/assistant/unified-entry.md "Routing"); its × hands the message back to Persona. The route is the store's one per
  * conversation, set by a task's Message or by picking the task after @. Every style: where a message goes is behaviour,
@@ -557,11 +784,13 @@ internal fun TaskRouteChip(host: AssistantTaskHost, modifier: Modifier = Modifie
     val routes by host.tasks.routes.collectAsStateWithLifecycle()
     val todos by host.tasks.todos.collectAsStateWithLifecycle()
     val task = routedTask(routes, todos, host.conversation) ?: return
-    // At the tray bar's inset, so the chip lines up with its chips above it.
-    Row(modifier.fillMaxWidth().padding(horizontal = Tokens.Space.m)) {
-        JChip(stringResource(R.string.chat_tasks_route_chip, task.title), Modifier.testTag("assistant-route-chip"),
-            icon = PhIcons.PaperPlaneTilt, accent = true, onRemove = { host.tasks.setRoute(host.conversation, null) },
-            removeLabel = stringResource(R.string.chat_tasks_route_clear))
+    // At the tray bar's inset, so the chip lines up with its chips above it without leaking 48dp box padding.
+    CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides Dp.Unspecified) {
+        Row(modifier.fillMaxWidth().padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.xxs)) {
+            JChip(stringResource(R.string.chat_tasks_route_chip, task.title), Modifier.testTag("assistant-route-chip"),
+                icon = PhIcons.PaperPlaneTilt, accent = true, onRemove = { host.tasks.setRoute(host.conversation, null) },
+                removeLabel = stringResource(R.string.chat_tasks_route_clear))
+        }
     }
 }
 
@@ -618,13 +847,122 @@ private fun HeldPushRow(item: HeldPushItem, host: AssistantTaskHost, todos: List
 }
 
 @Composable
-private fun TrayDecisionRow(title: String, subtitle: String, action: Int, tag: String, enabled: Boolean,
-    onOpen: (() -> Unit)? = null, onClick: () -> Unit) {
-    JRow(title, subtitle = subtitle, subtitleLines = 1, chevron = false, onClick = onOpen.takeIf { enabled },
-        leading = { AssistantTrayMark(AssistantTrayTone.Pending) }, trailing = {
-            JButton(stringResource(action), onClick, Modifier.testTag(tag), kind = JButtonKind.Secondary,
-                size = JButtonSize.Small, enabled = enabled)
-        })
+private fun TrayPanelHeader(
+    title: String,
+    countText: String,
+    action: (@Composable RowScope.() -> Unit)? = null,
+) {
+    val palette = PersonaTheme.palette
+    Row(
+        Modifier.fillMaxWidth()
+            .padding(start = Tokens.Space.m, end = Tokens.Space.m, top = Tokens.Space.s, bottom = Tokens.Space.xs)
+            .semantics { heading() }
+            .testTag("assistant-tray-header"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Tokens.Space.sm),
+    ) {
+        Text(
+            title,
+            Modifier.weight(1f, fill = false),
+            style = PersonaTheme.type.callout.copy(fontWeight = FontWeight.SemiBold),
+            color = palette.ink,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text("·", style = PersonaTheme.type.caption, color = palette.ink3, maxLines = 1)
+        Text(
+            countText,
+            style = PersonaTheme.type.caption,
+            color = palette.ink3,
+            maxLines = 1,
+        )
+        Spacer(Modifier.weight(1f))
+        if (action != null) Row(verticalAlignment = Alignment.CenterVertically, content = action)
+    }
+}
+
+@Composable
+private fun TrayGroupHeader(title: String, first: Boolean, modifier: Modifier = Modifier) {
+    val palette = PersonaTheme.palette
+    Column(modifier.fillMaxWidth()) {
+        if (!first) JDivider(Modifier.padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.xs))
+        Text(
+            title,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(
+                    start = Tokens.Space.m,
+                    end = Tokens.Space.m,
+                    top = if (first) Tokens.Space.xs else Tokens.Space.xxs,
+                    bottom = Tokens.Space.xxs,
+                )
+                .semantics { heading() },
+            style = PersonaTheme.type.labelSmall.copy(fontWeight = FontWeight.Medium),
+            color = palette.ink3,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun TrayDecisionRow(
+    title: String,
+    subtitle: String,
+    action: Int,
+    tag: String,
+    enabled: Boolean,
+    verdictTone: VerdictTone? = null,
+    onOpen: (() -> Unit)? = null,
+    onClick: () -> Unit,
+) {
+    val palette = PersonaTheme.palette
+    val shape = PersonaTheme.shapes.controlShape
+    Row(
+        Modifier.fillMaxWidth()
+            .heightIn(min = Tokens.MinTouch.android)
+            .clip(shape)
+            .then(if (onOpen != null && enabled) Modifier.clickable(role = Role.Button, onClick = onOpen) else Modifier)
+            .stableAlpha(if (enabled) 1f else 0.45f)
+            .padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s),
+    ) {
+        Box(Modifier.size(Tokens.Size.iconXS), contentAlignment = Alignment.Center) {
+            when (verdictTone) {
+                VerdictTone.Done -> JIcon(PersonaIcons.success, decorative = true, size = Tokens.Size.markS, tint = palette.positive)
+                VerdictTone.Cannot -> JIcon(PersonaIcons.error, decorative = true, size = Tokens.Size.markS, tint = palette.danger.dot)
+                VerdictTone.Decide -> JIcon(PersonaIcons.help, decorative = true, size = Tokens.Size.markS, tint = palette.needsYou.dot)
+                else -> AssistantTrayMark(AssistantTrayTone.Pending)
+            }
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xxs)) {
+            Text(
+                title,
+                style = PersonaTheme.type.callout.copy(fontWeight = FontWeight.Medium),
+                color = palette.ink,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (subtitle.isNotBlank()) {
+                Text(
+                    subtitle,
+                    style = PersonaTheme.type.caption,
+                    color = palette.ink2,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        JButton(
+            stringResource(action),
+            onClick,
+            Modifier.testTag(tag),
+            kind = JButtonKind.Secondary,
+            size = JButtonSize.Small,
+            enabled = enabled,
+        )
+    }
 }
 
 @Composable
@@ -783,6 +1121,7 @@ private fun TrayUsageLimitRow(entry: RunningEntry.Task, host: AssistantTaskHost,
  * A failed start or a cut-off turn (#8237): a danger wash, ink words, and its own buttons under the row. The row opens
  * the task. Retry and Remove, or Continue, are separate taps.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun TrayOutcomeRow(entry: NeedsYouEntry.Task, host: AssistantTaskHost, enabled: Boolean, taskBusy: Set<String>) {
     val palette = PersonaTheme.palette
@@ -790,7 +1129,12 @@ private fun TrayOutcomeRow(entry: NeedsYouEntry.Task, host: AssistantTaskHost, e
     val failed = entry.status == TriageStatus.Failed
     val lead = host.tasks.lead(todo, host.sessions)
     val cut = Interruption.of(lead)
-    val why = if (failed) startFailureRowLine(todo.startError.orEmpty())
+    val plans by host.tasks.plans.collectAsStateWithLifecycle()
+    val features by (host.tasks.features ?: remember { MutableStateFlow(emptySet<String>()) }).collectAsStateWithLifecycle()
+    val failedTask = if (failed) planTaskOf(todo, plans) else null
+    val instead = retryLauncher(failedTask, features)
+    val why = if (failed) startFailureCodeLine(failedTask?.errorCode, failedTask?.errorArgs)
+        ?: startFailureRowLine(todo.startError.orEmpty())
         else if (cut?.invalid == true) cut.reason.text() else interruptedWhy(lead?.turnError)
     val retrying = TasksStore.retryKey(todo.id) in taskBusy
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(Tokens.Radius.card)).background(palette.danger.tint)
@@ -803,10 +1147,21 @@ private fun TrayOutcomeRow(entry: NeedsYouEntry.Task, host: AssistantTaskHost, e
                     else (if (failed) TaskState.Failed else TaskState.Interrupted).label).text(),
                     style = PersonaTheme.type.micro, color = palette.ink, maxLines = 1)
             })
-        Row(Modifier.padding(start = Tokens.Space.m, end = Tokens.Space.s, bottom = Tokens.Space.s),
-            horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
+        if (failed && failedTask != null) TaskShellQuestion(todo, failedTask, host.tasks,
+            Modifier.padding(horizontal = Tokens.Space.s, vertical = Tokens.Space.xs))
+        val actions: @Composable () -> Unit = {
             if (failed) {
+                if (instead != null) JButton(
+                    stringResource(persona.core.designsystem.R.string.designsystem_use_launcher_instead, instead),
+                    { host.tasks.retryTaskOnLauncher(todo, instead, host.onError) },
+                    modifier = Modifier.testTag("assistant-tray-retry-launcher"),
+                    size = JButtonSize.Small,
+                    icon = PersonaIcons.retry,
+                    enabled = enabled && !retrying,
+                    loading = retrying,
+                )
                 JButton(stringResource(R.string.chat_tasks_retry), { host.tasks.retryTask(todo, host.onError) },
+                    kind = if (instead == null) JButtonKind.Primary else JButtonKind.Secondary,
                     size = JButtonSize.Small, enabled = enabled, loading = retrying, modifier = Modifier.testTag("assistant-tray-retry"))
                 JButton(stringResource(R.string.chat_tasks_remove), { host.tasks.removeTask(todo, host.onError) },
                     kind = JButtonKind.Destructive, size = JButtonSize.Small, enabled = enabled,
@@ -816,6 +1171,10 @@ private fun TrayOutcomeRow(entry: NeedsYouEntry.Task, host: AssistantTaskHost, e
                     size = JButtonSize.Small, enabled = enabled, loading = retrying, modifier = Modifier.testTag("assistant-tray-continue"))
             }
         }
+        val actionModifier = Modifier.padding(start = Tokens.Space.m, end = Tokens.Space.s, bottom = Tokens.Space.s)
+        if (instead == null) Row(actionModifier, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)) { actions() }
+        else FlowRow(actionModifier, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s),
+            verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) { actions() }
     }
 }
 
