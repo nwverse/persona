@@ -378,7 +378,7 @@ func TestPreparedMaintenanceRequiresFreshDecision(t *testing.T) {
 			case "late":
 				r.Late = true
 			case "cancel":
-				r.Cancel = true
+				r = proto.Resolution{Dismiss: true, Reason: proto.DismissedWithdrawn}
 			case "expired":
 				r.Dismiss, r.Reason = true, proto.DismissedExpired
 			}
