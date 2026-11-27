@@ -46,9 +46,9 @@ final class CoreOnlyHubLiveUITests: XCTestCase {
     @MainActor private func check(app: XCUIApplication, edition: String, appearance: String, shots: String?) throws -> String {
         defer { app.terminate() }
         XCUIDevice.shared.appearance = appearance == "dark" ? .dark : .light
-        let add = app.descendants(matching: .any).matching(identifier: "shell-composer-add").firstMatch
-        XCTAssertTrue(add.waitForExistence(timeout: 40), "no composer + button:\n\(app.debugDescription)")
-        add.press(forDuration: 1.0)
+        let addButton = app.descendants(matching: .any).matching(identifier: "shell-composer-add").firstMatch
+        XCTAssertTrue(addButton.waitForExistence(timeout: 40), "no composer + button:\n\(app.debugDescription)")
+        addButton.press(forDuration: 1.0)
         let mention = app.descendants(matching: .any).matching(NSPredicate(
             format: "identifier == %@ OR label == %@", "composer-menu-mention", "Mention a File or Session")).firstMatch
         XCTAssertTrue(mention.waitForExistence(timeout: 15), "the composer menu did not open:\n\(app.debugDescription)")
