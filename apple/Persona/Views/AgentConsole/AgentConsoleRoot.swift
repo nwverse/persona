@@ -44,7 +44,14 @@ struct AgentConsoleRoot: View {
     @State private var agentsMode: AgentConsoleAgentsMode = .running
 
     var body: some View {
-        TabView(selection: Binding(get: { model.selectedTab }, set: { model.selectHomeTab($0) })) {
+        // A relaunch can restore .feishu or .mail from before the template. The console has neither tab; map it before
+        // TabView reads the selection rather than letting UIKit see a value its current tab set does not contain.
+        let selected: AppTab = switch model.selectedTab {
+        case .chats, .feishu: .chats
+        case .settings: .settings
+        default: .assistant
+        }
+        TabView(selection: Binding(get: { selected }, set: { model.selectHomeTab($0) })) {
             Tab(String(localized: "Main Chat"), systemImage: Theme.Icon.ai, value: AppTab.assistant) {
                 AssistantView()
                     .modifier(TabActivityScope(tab: .assistant))
