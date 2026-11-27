@@ -1336,6 +1336,14 @@ Android's `JMenu` takes a choice list in groups: an action can open a group with
 ### 3.5 Navigation
 
 - Shell (compact width): Assistant and Agents as pages on a strip, a drawer sidebar, no tab bar. Top bar: persona button, `ShellSwitch`, circle button (`apple/Persona/DesignSystem/ShellComponents.swift:24,739,775`). Both destinations of the switch across the top look tappable at rest (#13450): the chosen one sits on the pill, and each other one is outlined, a hairline capsule where it is (`Size.hairline`: Liquid Glass in `Theme.cardStroke`, as the app's other glass capsules are edged; BeautifulUI in `lineStrong`, lighter than the chosen capsule's ring), faded by how far the pill is from it, so the pill takes it in as it glides with the strip. While tapping the chosen one again opens its menu, its name is followed by the pull-down mark (`Theme.Icon.pullDown`, small, in the name's quieter color, not read by VoiceOver: the menu says what it is), and the name gives way to the mark within the segment's 72 pt; a segment with no menu has no mark, and the bar that stands in while the strip slides marks what the page's bar marks at rest. A finger on a segment fills it with `Theme.Fill.pressed`. Each segment is hit the capsule's whole height, 44 pt at the default text size: the capsule's padding above and below is inside the segment's button or menu, and the capsule is drawn as before; the Agents count hangs off the corner of that hit frame, clear of the mark. iPhone Duo's tab bar keeps its own look. Re-tapping Assistant opens its menu. Explicitly selecting Agents opens its list, clearing any retained detail navigation; re-tapping Agents from a detail returns to the list. Re-tapping Agents while already at the list opens the existing list-options menu. A card, notification or session link remains a targeted open and goes directly to that Agent, not through the list. This list-first rule serves people moving between their everyday Assistant conversation and Agent work, without a setting or a new visual style.
+- **Phone tab bar (web, opt-in, #16761)**: Settings › Advanced › Appearance › **Phone navigation** › **Tab bar** puts four
+  places along the bottom of a narrow web page: the main chat, Agents, **External** (the chats Lark /agent and other
+  extensions opened, `/history/external`) and Settings (`web/src/views/PhoneTabBar.tsx`, `web/src/lib/phone-nav.ts`).
+  **Top switch** stays the default and pixel-identical. The bar shows only on those four places; every other page keeps
+  its own header and way back. Under it the top bar names the page where the switch was, the Agents tab carries the
+  waiting count the switch carries, labels use `--text-submeta` on one line, glyphs are the sidebar's (`home`, `agent`,
+  `at`, `gear`), and the bar gives its room to the composer while the keyboard is up. Who it serves: people who use
+  Persona mainly as a console for their Agents and reach these four places with one thumb.
 - Sidebar places and tasks (#6599, one-button amendment #7799, `docs/design/sidebar-navigation.md`): a place chosen in the drawer (a conversation, Inbox, To-dos, Scheduled Tasks, Knowledge, Machines, Recordings, extension pages, Profile) switches the page under the open drawer without animation, then the drawer closes; each place keeps its stack while the user is elsewhere, and choosing the place in front returns it to its root. On iPhone a place's root shows ☰ (`ShellPlaceRoot`) in place of Back; its sub-pages show Back and no ☰. Return to the conversation by choosing one in the drawer, or with the root's system edge-swipe (Back is hidden but the existing pop-gesture delegate remains enabled). A sub-page's edge-swipe goes back to its root. The drawer's sideways pan still yields every pushed page to that system gesture, so the two never compete. A place has at most one top-trailing action on iPhone: Inbox's Select, Knowledge's filter and map, an Inbox item's Done, a Lark chat's Pins and summary, and Browser Sign-ins' Select join their existing ⋯ menus. The multi-hub Inbox's picker joins that menu, and only on iPhone does selection's Select All join the bottom action bar; outside the iPhone shell it remains at the original top leading, verified by `IPadInboxSelectionTests`. These consolidations do not change iPad or Mac layouts. A task (Settings, Archived, Auto conversations, Search) opens over the open drawer and returns to it; a conversation picked in one opens after its sheet has gone. The drawer's closing never runs with a push, a slide or a sheet.
 - **To-dos places** (#10465; iOS, hubs with `todo_view`, from #10465's switch-on;
   `docs/design/proposals/todos-redesign.md` 3.3; the V1 frames `iphone/list~drawer`, `~menu`, `~today`, `~kyoto`): the
@@ -1802,12 +1810,19 @@ chat (#5033), where the panel only offers models and says plainly which one the 
   Launcher summaries retain each provider's full name as their accessible name and tooltip; the former provider rail
   and its shortened captions are replaced by the shared column (#10249).
 - Model families (`web/src/lib/model-families.ts`, `docs/web/web.md` "Model pill and model panel"): inside a provider
-  group, each family's name is a 11.5 px `text-submeta` line in `ink-3` (12 px side padding, 6 px above, 2 px below)
-  over its rows; its right end holds the fold, a text button in the same size and colour ("Earlier versions · N" with
-  an 11 px chevron, "Hide earlier" with the chevron turned up), a `--hover-2` fill and `ink` on hover, one line, its
-  accessible name naming the family. The newest row says "Latest" after its name in `text-submeta` `ink-3`, no chip.
-  Rows outside any family (the Default entry, unknown models) have no header. Why: one family's versions read as one
-  choice and the newest is the one most people want, while older ones stay one tap (or a search) away (2026-11-17).
+  group, models are grouped by series (`Claude`, `Gemini`, `GPT`, `DeepSeek`, `GLM`, `MiniMax`, `Seed`, `Qwen`, `Kimi`,
+  `Grok`) once at least two series appear in the section or any versioned line has older versions; each series header
+  is a 11.5 px `text-submeta` line in `ink-3` (12 px side padding, 6 px above, 2 px below) over its rows. Version
+  comparison and folding stay per internal line (e.g. `Orchestrator` stays inside `Gemini`, `GPT-OSS` inside `GPT`, and
+  Claude tiers ordered `Fable → Opus → Sonnet → Haiku`), and any folded older versions combine into one right-aligned
+  text button in the series header ("Earlier versions · N" with an 11 px chevron, "Hide earlier" with the chevron
+  turned up, `--hover-2` fill and `ink` on hover, accessible label naming the series). The newest row of each
+  versioned line says "Latest" after its name in `text-submeta` `ink-3`, no chip. Leading entries outside any series
+  (`Default` and the running row pinned at the top of Recommended) have no header; trailing rows outside any series
+  (unrecognized models and custom typed IDs) sit under a localized **Other** header in the same `text-submeta` `ink-3`
+  style (no fold) so they never visually fall under the preceding series. Why: grouping at series level avoids noisy
+  per-tier header clutter while keeping each line's newest version visible and older ones one tap (or search) away
+  (2026-11-17, updated #16792).
 - Usage placement (#5056): the Agent's context meter is a separate, right-aligned row below the composer card, not part of
   the header or the model-pill container. The composer, Session Insights and enabled sidebar details use the same
   context share and progress bar. When only the current context size is available, the composer and Session Insights

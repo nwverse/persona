@@ -10,6 +10,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -158,13 +159,9 @@ func init() {
 		// Its own requests only (the keys are its own); an end mark kept ahead of the request only for its own machine.
 		h.requestEnded(requestKey(c, p.Request), h.ownsMachine(c, p.MachineID) == nil)
 	})
-	handleBus(devicewire.MethodConnected, func(h *Hub, ctx context.Context, c *busConn, params json.RawMessage) (any, error) {
-		var p devicewire.Connected
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: devicewire.MethodConnected + ": " + err.Error()}
-		}
+	handleTypedBus(devicewire.ConnectedMethod, devicewire.MethodConnected+": ", func(h *Hub, ctx context.Context, c *busConn, p devicewire.Connected) (devicewire.ConnectedReply, error) {
 		if err := h.ownsMachine(c, p.MachineID); err != nil {
-			return nil, err
+			return devicewire.ConnectedReply{}, err
 		}
 		m := h.machineByID(p.MachineID)
 		if m == nil {
@@ -173,25 +170,17 @@ func init() {
 		return h.machineConnected(ctx, m, p.ConnectedAt), nil
 	})
 	// A service machine's credential goes only to the manager that carries it (ownership.go).
-	handleBus(devicewire.MethodConnectorCred, func(h *Hub, ctx context.Context, c *busConn, params json.RawMessage) (any, error) {
-		var p devicewire.ConnectorCred
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: err.Error()}
-		}
+	handleTypedBus(devicewire.ConnectorCredMethod, "", func(h *Hub, ctx context.Context, c *busConn, p devicewire.ConnectorCredRequest) (devicewire.ConnectorCred, error) {
 		if err := h.ownsMachine(c, p.MachineID); err != nil {
-			return nil, err
+			return devicewire.ConnectorCred{}, err
 		}
 		return h.connectorCred(ctx, p.MachineID)
 	})
-	handleBus(devicewire.MethodConnectorPaired, func(h *Hub, ctx context.Context, c *busConn, params json.RawMessage) (any, error) {
-		var p devicewire.ConnectorCred
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: err.Error()}
-		}
+	handleTypedBus(devicewire.ConnectorPairedMethod, "", func(h *Hub, ctx context.Context, c *busConn, p devicewire.ConnectorCred) (buswire.None, error) {
 		if err := h.ownsMachine(c, p.MachineID); err != nil {
-			return nil, err
+			return buswire.None{}, err
 		}
-		return map[string]any{}, h.keepConnectorCred(ctx, p)
+		return buswire.None{}, h.keepConnectorCred(ctx, p)
 	})
 }
 

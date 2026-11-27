@@ -245,4 +245,69 @@ describe("the model panel's columns", () => {
     expect(side("traex").querySelector('[data-agent-mark="generic"]')).toBeNull();
     expect(rows()[0].textContent).toBe("GPT-5.5");
   });
+
+  it("groups models by series (Orchestrator under Gemini, GPT-OSS under GPT) with Other for unrecognized rows in three-column mode", async () => {
+    const agyMixed: PanelProvider = {
+      id: "agy",
+      name: "agy",
+      engine: "agy",
+      models: [
+        ...["high", "xhigh", "medium", "low"].map((e) => level("gemini-4-neon", "Gemini 4 Neon", e)),
+        ...["high", "medium", "low"].map((e) => level("gemini-3.8-flash", "Gemini 3.8 Flash", e)),
+        ...["medium", "low"].map((e) => level("gemini-3.5-flash", "Gemini 3.5 Flash", e)),
+        { id: "gemini-pro-orchestrator-neon", name: "Orchestrator (Neon)", efforts: [] },
+        { id: "gemini-pro-orchestrator", name: "Orchestrator (Carbon)", efforts: [] },
+        { id: "gemini-pro-orchestrator-argon", name: "Orchestrator (Argon)", efforts: [] },
+        ...["low", "medium", "high"].map((e) => level("claude-opus-5-5", "Claude Opus 5.5", e)),
+        ...["low", "medium", "high"].map((e) => level("claude-sonnet-5-5", "Claude Sonnet 5.5", e)),
+        { id: "gpt-oss-120b-medium", name: "GPT-OSS 120B (Medium)", efforts: [] },
+        { id: "custom-alpha", name: "Custom Alpha", efforts: [] },
+      ],
+    };
+    const onPick = vi.fn(async () => true);
+    const onClose = vi.fn();
+    act(() =>
+      root.render(
+        <ModelPanel
+          anchor={anchor}
+          onClose={onClose}
+          providers={[agyMixed, claude, codex]}
+          state={{ current: { provider: "agy", model: "gemini-pro-orchestrator-neon" }, recommended: ["agy"] }}
+          scope="assistant"
+          onPick={onPick}
+        />,
+      ),
+    );
+    await flush();
+
+    const groups = [...document.body.querySelectorAll<HTMLElement>("[data-panel-family]")];
+    expect(groups.map((g) => [g.dataset.panelFamily, g.getAttribute("aria-label")])).toEqual([
+      ["gemini", "Gemini"],
+      ["claude", "Claude"],
+      ["gpt", "GPT"],
+      ["other", "其他"],
+    ]);
+
+    const groupRows = (key: string) =>
+      [...groups.find((g) => g.dataset.panelFamily === key)!.querySelectorAll<HTMLElement>("[data-panel-row]")].map(
+        (r) => r.querySelector(".truncate")?.textContent,
+      );
+    expect(groupRows("gemini")).toEqual([
+      "Gemini 4 Neon",
+      "Gemini 3.8 Flash",
+      "Orchestrator (Neon)",
+      "Orchestrator (Carbon)",
+      "Orchestrator (Argon)",
+    ]);
+    expect(groups.find((g) => g.dataset.panelFamily === "gemini")?.querySelector("[data-panel-fold]")?.textContent).toBe("更早版本 · 1");
+    expect(groupRows("claude")).toEqual(["Claude Opus 5.5", "Claude Sonnet 5.5"]);
+    expect(groupRows("gpt")).toEqual(["GPT-OSS 120B (Medium)"]);
+    expect(groupRows("other")).toEqual(["Custom Alpha"]);
+    expect(
+      groups.find((g) => g.dataset.panelFamily === "gemini")?.querySelector('[data-current="true"]')?.textContent,
+    ).toContain("Orchestrator (Neon)");
+    expect(groups.find((g) => g.dataset.panelFamily === "claude")?.querySelector("[data-panel-fold]")).toBeNull();
+    expect(groups.find((g) => g.dataset.panelFamily === "gpt")?.querySelector("[data-panel-fold]")).toBeNull();
+    expect(groups.find((g) => g.dataset.panelFamily === "other")?.querySelector("[data-panel-fold]")).toBeNull();
+  });
 });

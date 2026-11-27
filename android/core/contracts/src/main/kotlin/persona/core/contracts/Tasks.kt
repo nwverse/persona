@@ -322,6 +322,8 @@ data class TodoAsk(
     val response: String? = null,
     @SerialName("for_briefing") val forBriefing: Boolean = false,
     val suggestion: RuleSuggestion? = null,
+    val summary: String? = null,
+    val link: String? = null,
 )
 
 /** One option of a decision: its [label], which is the answer, and what choosing it leads to. */
