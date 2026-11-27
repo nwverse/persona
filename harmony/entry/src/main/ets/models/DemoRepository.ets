@@ -175,9 +175,15 @@ export class DemoRepository extends HubRepository {
         'source_kind', 'capabilities', 'pane_id', 'slot_name', 'launcher', 'model', 'last_text', 'assistant', 'archived', 'read_only', 'updated_at'],
       [id, id, DEMO_MACHINE, DEMO_MANAGER, title, state, status, cwd, '/demo/ReleaseDesk', cwd, branch, branch, 'ReleaseDesk', 'live',
         cloneRecord(capabilities), 'demo:pane-' + id, title, launcher, model, lastText, false, false, false, '2026-11-27T09:00:00Z']);
+    const changelog = session('demo-agent-changelog', 'Prepare the changelog', 'working', 'working', '/demo/ReleaseDesk', 'docs', 'codex', 'gpt-5.3-codex', 'Drafting v2.4 changelog & verifying diffs...');
+    const changelogCaps = Wire.object(changelog, 'capabilities');
+    changelogCaps['queue_send_now'] = true;
+    changelog['capabilities'] = changelogCaps;
+    changelog['queued'] = ['Include Mate XT 2 tri-fold notes', 'Double-check zh_CN strings'];
+    changelog['queued_relayed'] = 0;
     this.sessionsData = [
       session('demo-agent-review', 'Review release checks', 'needs_you', 'idle', '/demo/ReleaseDesk', 'main', 'claude', 'claude-sonnet-4-6', 'Release audit ready · Awaiting plan approval'),
-      session('demo-agent-changelog', 'Prepare the changelog', 'working', 'working', '/demo/ReleaseDesk', 'docs', 'codex', 'gpt-5.3-codex', 'Drafting v2.4 changelog & verifying diffs...'),
+      changelog,
       session('demo-agent-notes', 'Organize project notes', 'unread', 'done', '/demo/Notes', 'main', 'claude', 'claude-opus-4-6', 'Grouped 14 architecture notes by milestone.')
     ];
     this.conversationsData = [
@@ -207,7 +213,18 @@ export class DemoRepository extends HubRepository {
     ]);
     this.transcripts.set(this.transcriptKey(DEMO_MACHINE, 'demo-agent-changelog'), [
       this.item('user', 'Prepare a concise changelog draft.'),
-      this.item('assistant', 'The local draft groups the sample changes by feature and fix.\n\n### Highlights\n- **Foldable Workbench**: side-by-side Pulse, Code, and Machines panes\n- **Liquid Glass**: borderless inset-grouped cards across light & dark schemes\n\n### Fixes\n- Normalized per-core load labels (`Load 2.4 · 0.2/core`)\n- Prevented duplicate row subtitles on narrow screens')
+      this.thinkingItem('Reviewing recent HarmonyOS UI commits and ReleaseDesk diff summary before drafting the v2.4 changelog.'),
+      this.toolUseItem('Read', 'demo-changelog-read', demoRecord(['file_path'], ['/demo/ReleaseDesk/CHANGELOG.md'])),
+      this.toolResultItem('demo-changelog-read', '# v2.4.0\n- Foldable 3-column Live Workbench\n- Liquid Glass card hierarchy'),
+      this.toolUseItem('Edit', 'demo-changelog-edit', demoRecord(['file_path', 'old_string', 'new_string'], [
+        '/demo/ReleaseDesk/src/release.ts',
+        'export function verifyReleaseGate(checks: CheckResult[]): boolean {\n  return checks.every((item) => item.passed);\n}',
+        'export function verifyReleaseGate(checks: CheckResult[]): boolean {\n  return checks.every((item) => item.passed && !item.skipped);\n}'
+      ])),
+      this.toolResultItem('demo-changelog-edit', 'Updated /demo/ReleaseDesk/src/release.ts (+1/-1)'),
+      this.toolUseItem('Bash', 'demo-changelog-test', demoRecord(['command', 'description'], ['npm test -- release-gate', 'Run release-gate checks'])),
+      this.toolResultItem('demo-changelog-test', '42 passed, 0 failed (1.4s)'),
+      this.item('assistant', 'The local draft groups the sample changes by feature and fix.\n\n### Highlights\n- **Foldable Workbench**: side-by-side Pulse, Code, and Machines panes\n- **Liquid Glass**: borderless inset-grouped cards across light & dark schemes\n\n### Fixes\n- Normalized per-core load labels (`Load 2.4 · 0.2/core`)\n- Prevented duplicate row subtitles on narrow screens\n\n```typescript\nexport interface ReleaseGateCheck {\n  readonly suite: string;\n  readonly passed: number;\n  readonly skipped: number;\n}\n\nexport function verifyReleaseGate(checks: readonly ReleaseGateCheck[]): boolean {\n  return checks.length > 0 && checks.every((item) => item.passed > 0 && item.skipped === 0);\n}\n```')
     ]);
     this.transcripts.set(this.transcriptKey(DEMO_MACHINE, 'demo-agent-notes'), [
       this.item('user', 'Summarize the architectural notes in `/demo/Notes`.'),
@@ -218,17 +235,21 @@ export class DemoRepository extends HubRepository {
       demoRecord(['id', 'kind', 'plan', 'status'], ['demo-plan-review', 'plan', 'Run the sample release checklist in this local demo?', 'open'])
     ])];
     this.todosData = [
-      demoRecord(['id', 'manager', 'title', 'notes', 'state', 'status', 'origin', 'created_at', 'updated_at', 'agents', 'spaces'], [
+      demoRecord(['id', 'manager', 'title', 'notes', 'state', 'status', 'origin', 'created_at', 'updated_at', 'supervision', 'agents', 'spaces'], [
         'demo-todo-release', DEMO_MANAGER, 'Review the release checklist', 'Check the sample release notes and confirm the open plan.',
-        'needs_you', 'needs_you', 'manual', '2026-11-10T08:00:00Z', '2026-11-11T09:00:00Z', [demoRecord(
+        'needs_you', 'needs_you', this.mainId, '2026-11-10T08:00:00Z', '2026-11-27T08:50:00Z',
+        demoRecord(['state', 'pending_since'], ['user_check', '2026-11-27T08:50:00Z']),
+        [demoRecord(
           ['machine_id', 'session_id', 'title', 'cwd', 'agent', 'source', 'linked_at'],
           [DEMO_MACHINE, 'demo-agent-review', 'Review release checks', '/demo/ReleaseDesk', '', 'manual', '2026-11-11T09:00:00Z'])], []]),
       demoRecord(['id', 'manager', 'title', 'notes', 'state', 'status', 'origin', 'created_at', 'updated_at', 'agents', 'spaces'], [
         'demo-todo-docs', DEMO_MANAGER, 'Prepare release notes', 'Collect the sample changes in one concise note.',
-        'not_started', 'not_started', 'manual', '2026-11-10T09:00:00Z', '2026-11-10T09:00:00Z', [], []]),
-      demoRecord(['id', 'manager', 'title', 'notes', 'state', 'status', 'done_at', 'created_at', 'updated_at', 'agents', 'spaces'], [
+        'working', 'working', this.mainId, '2026-11-10T09:00:00Z', '2026-11-27T08:55:00Z', [demoRecord(
+          ['machine_id', 'session_id', 'title', 'cwd', 'agent', 'source', 'linked_at'],
+          [DEMO_MACHINE, 'demo-agent-changelog', 'Prepare the changelog', '/demo/ReleaseDesk', 'codex', 'manual', '2026-11-27T08:55:00Z'])], []]),
+      demoRecord(['id', 'manager', 'title', 'notes', 'state', 'status', 'origin', 'done_at', 'created_at', 'updated_at', 'agents', 'spaces'], [
         'demo-todo-done', DEMO_MANAGER, 'Check the example project', 'This sample task is complete.', 'done', 'done',
-        '2026-11-10T10:00:00Z', '2026-11-09T10:00:00Z', '2026-11-10T10:00:00Z', [], []])
+        this.mainId, '2026-11-10T10:00:00Z', '2026-11-09T10:00:00Z', '2026-11-10T10:00:00Z', [], []])
     ];
     this.knowledgeData = [
       this.knowledgeEntry('projects', 'demo-project-release', 'Release Desk', 'A sample project for trying the local workspace.', 'The Release Desk example keeps the checklist, release notes, and follow-up tasks together.', ['demo', 'release'], demoRecord(['kind', 'status', 'dirs'], ['short', 'active', [DEMO_MACHINE + ':/demo/ReleaseDesk']])),
@@ -376,6 +397,51 @@ export class DemoRepository extends HubRepository {
     return item;
   }
 
+  private thinkingItem(text: string): DemoRecord {
+    this.messageSequence++;
+    return demoRecord(['id', 'seq', 'role', 'kind', 'text', 'ts'],
+      ['demo-item-' + this.messageSequence, this.messageSequence, 'assistant', 'thinking', textWithin(text, MAX_TEXT_BYTES), '2026-11-27T08:56:00Z']);
+  }
+
+  private toolUseItem(tool: string, useId: string, input: DemoRecord): DemoRecord {
+    this.messageSequence++;
+    return demoRecord(['id', 'seq', 'role', 'kind', 'tool', 'tool_name', 'tool_use_id', 'input', 'ts'],
+      ['demo-item-' + this.messageSequence, this.messageSequence, 'assistant', 'tool_use', tool, tool, useId, cloneRecord(input), '2026-11-27T08:56:05Z']);
+  }
+
+  private toolResultItem(useId: string, text: string): DemoRecord {
+    this.messageSequence++;
+    return demoRecord(['id', 'seq', 'role', 'kind', 'tool_use_id', 'text', 'ts'],
+      ['demo-item-' + this.messageSequence, this.messageSequence, 'user', 'tool_result', useId, textWithin(text, MAX_TEXT_BYTES), '2026-11-27T08:56:10Z']);
+  }
+
+  private dequeueSessionQueue(record: DemoRecord, machine: string, session: string, appendReply: boolean): number {
+    const raw = record['queued'];
+    if (!Array.isArray(raw) || raw.length === 0) {
+      record['queued'] = [];
+      record['queued_relayed'] = 0;
+      return 0;
+    }
+    const items: DemoRecord[] = [];
+    for (const entry of raw as Object[]) {
+      const text = typeof entry === 'string'
+        ? entry.trim()
+        : (entry && typeof entry === 'object' ? Wire.text(entry as DemoRecord, 'text', Wire.text(entry as DemoRecord, 'body')).trim() : '');
+      if (text) items.push(this.item('user', text));
+    }
+    if (items.length > 0) {
+      if (appendReply) {
+        const reply = 'Processed queued follow-ups in the local demo.';
+        items.push(this.item('assistant', reply));
+        record['last_text'] = reply;
+      }
+      this.appendTranscript(machine, session, items);
+    }
+    record['queued'] = [];
+    record['queued_relayed'] = 0;
+    return items.length;
+  }
+
   private transcriptKey(machine: string, session: string): string { return JSON.stringify([machine, session]); }
 
   private appendTranscript(machine: string, session: string, items: DemoRecord[]): void {
@@ -387,9 +453,11 @@ export class DemoRepository extends HubRepository {
   }
 
   private appendChat(machine: string, session: string, text: string, clientId: string): void {
-    if (!this.findChat(machine, session)) throw new HttpFailure(404, 'demo_chat_not_found');
+    const target = this.findChat(machine, session);
+    if (!target) throw new HttpFailure(404, 'demo_chat_not_found');
     const current = this.transcripts.get(this.transcriptKey(machine, session)) || [];
     if (current.some((item: DemoRecord) => Wire.text(item, 'client_msg_id') === clientId)) return;
+    this.dequeueSessionQueue(target, machine, session, false);
     this.appendTranscript(machine, session, [this.item('user', text, clientId), this.item('assistant', 'Received in the local demo. No message was sent to a real agent or service.')]);
   }
 
@@ -447,6 +515,15 @@ export class DemoRepository extends HubRepository {
     }
     if (parts.length === 4 && parts[1] === 'conversations' && parts[3] === 'feed' && method === 'GET') {
       if (!this.findChat(DEMO_MACHINE, parts[2])) throw new HttpFailure(404, 'demo_chat_not_found');
+      if (parts[2] === this.mainId) {
+        const emptyItems: DemoRecord[] = [];
+        const emptyPlans: DemoRecord = {};
+        const taskCards: DemoRecord[] = [
+          demoRecord(['id', 'todo_id', 'state', 'at'], ['demo-card-release', 'demo-todo-release', 'needs_you', '2026-11-27T08:50:00Z']),
+          demoRecord(['id', 'todo_id', 'state', 'at'], ['demo-card-docs', 'demo-todo-docs', 'working', '2026-11-27T08:55:00Z'])
+        ];
+        return demoRecord(['items', 'plans', 'task_cards'], [emptyItems, emptyPlans, taskCards]);
+      }
       return demoRecord(['items'], [[]]);
     }
     throw new HttpFailure(404, 'demo_unsupported');
@@ -652,8 +729,16 @@ export class DemoRepository extends HubRepository {
       this.transcripts.delete(this.transcriptKey(DEMO_MACHINE, sessionId));
       return demoRecord(['deleted'], [true]);
     }
+    if (parts.length === 5 && parts[3] === 'queue' && parts[4] === 'send-now' && method === 'POST') {
+      const dequeued = this.dequeueSessionQueue(record, DEMO_MACHINE, sessionId, true);
+      if (dequeued === 0) throw new HttpFailure(409, 'nothing_queued');
+      return demoRecord(['session', 'state'], [cloneRecord(record), 'done']);
+    }
     if (action === 'interrupt' && method === 'POST') {
-      record['status'] = 'interrupted'; record['state'] = 'idle'; return demoRecord(['state'], ['done']);
+      record['status'] = 'interrupted';
+      record['state'] = 'idle';
+      record['last_text'] = 'Interrupted in local demo.';
+      return demoRecord(['state'], ['done']);
     }
     if (action === 'screen' && method === 'GET') {
       const text = [
