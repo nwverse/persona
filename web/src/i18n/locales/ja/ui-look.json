@@ -24,6 +24,10 @@
   "sidebar_icons_hint": "モノクロではサイドバーのページアイコンをこれまでどおりグレーで表示し、カラーではページごとに色を付けます。このブラウザにのみ保存されます。",
   "sidebar_icons_monochrome": "モノクロ",
   "sidebar_icons_colored": "カラー",
+  "phone_nav": "スマートフォンのナビゲーション",
+  "phone_nav_hint": "上部の切り替えでは、これまでどおりトップバーに「アシスタント | Agents」を表示します。タブバーでは、メインチャット、Agents、外部（Lark の /agent やほかの拡張機能が開いたチャット）、設定を画面下部に並べます。狭い画面のみ。このブラウザにのみ保存されます。",
+  "phone_nav_switch": "上部の切り替え",
+  "phone_nav_tabs": "タブバー",
   "small": "小",
   "standard": "標準",
   "large": "大",
@@ -55,9 +59,9 @@
   "sidebar_usage": "サイドバーのランチャー残量",
   "sidebar_usage_hint": "サイドバー下部に各ランチャーの残り枠を示すカードを表示します。このブラウザにのみ保存されます。",
   "surface_style": "ウインドウスタイル",
-  "surface_style_hint": "デフォルトは従来の不透明な表示を保ちます。Liquid Glass は半透明のすりガラス質感とデスクトップの透過を追加します。このブラウザにのみ保存されます。",
+  "surface_style_hint": "デフォルトは従来の不透明な表示を保ちます。すりガラスは半透明の質感とデスクトップの透過を追加します。このブラウザにのみ保存されます。",
   "surface_default": "デフォルト",
-  "surface_liquid_glass": "Liquid Glass",
+  "surface_liquid_glass": "すりガラス",
   "glass_translucency": "ガラスの透明度",
-  "glass_translucency_hint": "Liquid Glass の透過度と背景ぼかしの強さを調整します。このブラウザにのみ保存されます。"
+  "glass_translucency_hint": "すりガラスの透過度と背景ぼかしの強さを調整します。このブラウザにのみ保存されます。"
 }

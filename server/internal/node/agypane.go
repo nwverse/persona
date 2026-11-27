@@ -111,7 +111,7 @@ func (n *Node) rawAgyConversationLocked(id, pane string) string {
 					return ""
 				}
 				matches++
-			} else if reported == conversation {
+			} else if n.agyPaneClaimsLocked(raw, conversation) {
 				return ""
 			}
 		}
@@ -125,12 +125,19 @@ func (n *Node) rawAgyConversationLocked(id, pane string) string {
 func (n *Node) agyConversationClaimedElsewhereLocked(pane, conversation string) bool {
 	for _, agents := range n.hostAgents {
 		for _, raw := range agents {
-			if raw.PaneID != pane && n.agyReportedLocked(raw) == conversation {
+			if raw.PaneID != pane && n.agyPaneClaimsLocked(raw, conversation) {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// A disagreement invalidates the reporting pane's own identity. Both reports still count against other panes so
+// neither conversation is exposed while ownership is contested.
+func (n *Node) agyPaneClaimsLocked(a host.Agent, conversation string) bool {
+	return a.Agent == agyAgent && (reportedAgyConversation(a) == conversation ||
+		n.agyReports[a.PaneID].conversation == conversation)
 }
 
 // isAgySubagentHead reports whether a conversation's opening step indicates a built-in
@@ -451,7 +458,7 @@ func (n *Node) agyConversation(id, pane string) string {
 		}
 		n.mu.Unlock()
 
-		dir := n.agyDataRoot()
+		dir := n.agyRootFor(raw)
 		var next agyPaneBinding
 		var result string
 		var keepBound bool
@@ -850,7 +857,7 @@ func (n *Node) agyEchoBase(id, pane string) echoAfter {
 	if n.agyConversation(id, pane) != conversation {
 		return echoAfter{in: echoInTranscript}
 	}
-	dir := n.agyDataRoot()
+	dir := n.agyRootFor(conversation)
 	root, err := agyBrain(dir, conversation)
 	if err != nil {
 		return echoAfter{in: echoInTranscript}
@@ -907,7 +914,7 @@ func (n *Node) agyPaneCall(ctx context.Context, method, id, pane string, raw jso
 	conversation := n.agyConversation(id, pane)
 	if conversation != "" {
 		h = agyStepsHistory(conversation)
-		dir := n.agyDataRoot()
+		dir := n.agyRootFor(conversation)
 		root, err := agyBrain(dir, conversation)
 		if err == nil {
 			defer root.Close()
@@ -999,9 +1006,9 @@ func (n *Node) agyPaneSessionInfo(id, pane string) map[string]any {
 			if runtimeRow.Effort != "" {
 				info["effort"] = runtimeRow.Effort
 			}
-			if runtimeRow.ContextTokens > 0 || runtimeRow.OutputTokens > 0 {
+			if runtimeRow.ContextTokens > 0 || runtimeRow.OutputTokensValue() > 0 {
 				info["context_tokens"] = int(runtimeRow.ContextTokens)
-				info["output_tokens"] = runtimeRow.OutputTokens
+				info["output_tokens"] = int(runtimeRow.OutputTokensValue())
 				delete(info, "usage_unknown")
 			}
 			n.resolveAgyContext(&runtimeRow, conversation)
@@ -1077,7 +1084,7 @@ func (n *Node) pollAgyPane(w *watch) {
 	var info *agyPaneFiles
 	if conversation != "" {
 		h = agyStepsHistory(conversation)
-		dir := n.agyDataRoot()
+		dir := n.agyRootFor(conversation)
 		root, err := agyBrain(dir, conversation)
 		if err == nil {
 			defer root.Close()

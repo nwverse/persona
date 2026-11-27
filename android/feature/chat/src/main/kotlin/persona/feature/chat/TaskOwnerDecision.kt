@@ -22,6 +22,7 @@ import persona.core.designsystem.icons.PersonaIcons
 import persona.core.domain.tasks.AssistantExtra
 import persona.core.domain.tasks.AssistantTaskCards
 import persona.core.domain.tasks.decisionOptions
+import persona.core.domain.tasks.reviewState
 import persona.core.domain.tasks.todoRuleCard
 
 /** Whether [TaskOwnerDecision] renders a primary action button for this task, so bottom sheet actions demote to secondary. */
@@ -39,16 +40,23 @@ internal fun shouldShowTaskReceiptInDetail(todo: Todo): Boolean = todo.ask == nu
 
 /** Acceptance carries the exact round the user read, independently of any later task refresh. */
 @Composable
-internal fun TaskOwnerDecision(todo: Todo, host: AssistantTaskHost, prUrl: String? = null) {
+internal fun TaskOwnerDecision(
+    todo: Todo,
+    host: AssistantTaskHost,
+    prUrl: String? = null,
+    enabled: Boolean = true,
+    onOpen: (() -> Unit)? = null,
+) {
     val ask = todo.ask ?: return
     if (ask.outcome == "decide") {
-        TaskDecisionCard(todo, host)
+        TaskDecisionCard(todo, host, enabled, onOpen)
         return
     }
     val busy by host.tasks.busy.collectAsStateWithLifecycle()
     val resources = LocalResources.current
     val palette = PersonaTheme.palette
     val parsed = remember(ask.verdict) { parseTaskVerdict(ask.verdict) }
+    val userCheck = todo.reviewState == "user_check"
     val (icon, tint) = when {
         parsed.tone == VerdictTone.Done || (parsed.tone == VerdictTone.Neutral && ask.outcome == "done") ->
             PersonaIcons.success to palette.positive
@@ -72,7 +80,17 @@ internal fun TaskOwnerDecision(todo: Todo, host: AssistantTaskHost, prUrl: Strin
                     modifier = Modifier.padding(top = Tokens.Space.xxs),
                 )
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
-                    Text(parsed.text, style = PersonaTheme.type.bodyStrong, color = palette.ink)
+                    if (onOpen != null) {
+                        Text(todo.title, style = PersonaTheme.type.bodyStrong, color = palette.ink)
+                    }
+                    Text(
+                        parsed.text,
+                        style = if (onOpen != null) PersonaTheme.type.callout else PersonaTheme.type.bodyStrong,
+                        color = palette.ink,
+                    )
+                    ask.summary?.takeIf(String::isNotBlank)?.let { summary ->
+                        Text(summary, style = PersonaTheme.type.caption, color = palette.ink2)
+                    }
                     ask.recommend?.takeIf(String::isNotBlank)?.let { recommendation ->
                         Text(
                             stringResource(R.string.chat_tray_recommended, recommendation),
@@ -85,7 +103,7 @@ internal fun TaskOwnerDecision(todo: Todo, host: AssistantTaskHost, prUrl: Strin
             if (ask.askedAt.isNotBlank() && (ask.outcome != "decide" || !ask.recommend.isNullOrBlank())) {
                 Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) {
                     JButton(
-                        stringResource(R.string.chat_tray_accept),
+                        stringResource(if (userCheck) R.string.chat_tray_pass else R.string.chat_tray_accept),
                         {
                             host.tasks.acceptTask(todo, host.onError) {
                                 host.onError(IllegalStateException(resources.getString(R.string.chat_tray_accept_changed)))
@@ -94,8 +112,19 @@ internal fun TaskOwnerDecision(todo: Todo, host: AssistantTaskHost, prUrl: Strin
                         Modifier.fillMaxWidth().testTag("assistant-accept-${todo.id}"),
                         kind = JButtonKind.Primary,
                         size = JButtonSize.Medium,
+                        enabled = enabled,
                         loading = "accept:${todo.id}" in busy,
                     )
+                    if (onOpen != null) {
+                        JButton(
+                            stringResource(R.string.chat_link_open),
+                            onOpen,
+                            Modifier.testTag("assistant-open-${todo.id}"),
+                            kind = JButtonKind.Secondary,
+                            size = JButtonSize.Small,
+                            enabled = enabled,
+                        )
+                    }
                     if (pr != null) {
                         val uri = LocalUriHandler.current
                         JButton(

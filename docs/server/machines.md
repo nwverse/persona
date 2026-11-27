@@ -318,16 +318,17 @@ machines, and one project's breakdown (`devices/usage_projects.go`, `devicewire/
 
 - **What a row says**: each bucket also names where its session started (`proto.UsageBucket.Dir`, `machine_usage.dir`,
   migration `manager/20261126153844_usage_by_dir.sql`): the start directory written from the home folder (`~/code/app`, `~`;
-  outside home as it is), or a token, `:assistant` (a Persona assistant conversation), `:temp` (a temporary folder),
-  `:unknown` (a record that names no directory). The directory is part of the row's key through the minute, ten-minute
-  and hour rows, the backfill and a runtime's deltas. `''` is "not split": usage stored before, or from an older node.
+  outside home as it is), or a token, `:assistant` (a Persona assistant conversation), `:temp` (a temporary folder, from
+  a node or manager before #16827), `:unknown` (a record that names no directory). The directory is part of the row's
+  key through the minute, ten-minute and hour rows, the backfill and a runtime's deltas. `''` is "not split": usage stored before, or from an older node.
 - **Where a session started** (`node/usage_dirs.go`): the directory Persona started it in (its state), else the first
   directory its records name: a Claude Code transcript's head (a subagent's or workflow agent's file takes its session's
   own transcript), a Codex or TRAE CLI rollout's `session_meta`, a pi or omp session's header, opencode's
   `session.directory` (read apart from the usage query, so a database without it is still metered), a runtime's row.
   Never the latest one: Claude Code's `cwd` follows the model's `cd` (`docs/lessons/transcript.md`). Read once per file
-  (the head, at most 256 KB). The assistant's own directories are `:assistant`; the system's temp directory, `/tmp`,
-  `/var/tmp` and macOS's `/var/folders` are `:temp`.
+  (the head, at most 256 KB). The assistant's own directories are `:assistant`. A temporary folder (the system's temp
+  directory, `/tmp`, `/var/tmp`, macOS's `/var/folders`) is named by its path like any directory to a manager that
+  answers `usage.features` with `temp_dirs: true` (#16827), and is `:temp` to an older one.
 - **Resolving it** (`resolveUsageDir`, in the background, once per directory and connection; the meter never waits for
   it): the nearest `.git` above it, read as git does without running git (`node/gitplace.go`: a linked worktree's
   shared git dir, a submodule's own). Its remote is `origin`, else `upstream`, else the first one in the repository's
@@ -343,16 +344,24 @@ machines, and one project's breakdown (`devices/usage_projects.go`, `devicewire/
   (`local:dir:`). Forks and mirrors with another owner stay apart. A repository at home or above it (dotfiles in git)
   is the home folder's only, a folder in it its own; a repository whose config cannot be read, and a broken `.git`,
   are folders; a directory that cannot be read is not looked into (a folder); one that is gone is not resolved, and the
-  manager keeps its last resolution.
+  manager keeps its last resolution. **A temporary folder** (#16827) is the project of a repository made inside it (a
+  worktree added in `/tmp`, a clone there: Agents that work in worktrees under `/tmp` count for their repository), and
+  otherwise `temp`: in no repository, in one at the temporary folder's top or above it (which would make every
+  temporary folder one project), in one with no commit or a `.git` that cannot be read (only the folder's name, random
+  in such folders, to know it by), and gone, so a temporary folder is never split by its name.
 - **What a directory is**: the node sends, with the report that first names a directory on a connection, what it resolved
   it to (`dirs`, `proto.UsageDir`): the project key the manager sums by across machines, its name, the remote's host,
   the place (the working tree's top, or the folder) and whether that is a linked worktree. Keys: `git:<host>/<path>`,
   `local:<root commit>`, `local:dir:<folder>`, `folder:<folder name>`, `home`. The manager keeps the latest resolution of
   each machine's directory in `usage_dirs` (and in memory), so the usage of a directory removed since (a finished task's
-  worktree) keeps its project, and a folder that later gets a remote moves its history to the repository.
+  worktree) keeps its project, and a folder that later gets a remote moves its history to the repository. `temp` never
+  replaces another resolution (`replacesResolution`, `putUsageDirSQL`): a node says it for a temporary folder that is
+  gone too, and a worktree removed from `/tmp` keeps its repository.
   It keeps only the shapes a node makes (`usableDirs`): a `git:` key has a lower-case host with no user or port and
   path segments of a forge's characters, its name is the key's path and its host the key's, so no remote's
-  credentials, URL or query can be stored even from a broken node. A refused resolution is logged by count only.
+  credentials, URL or query can be stored even from a broken node; `temp` carries no name, host or place, so the apps
+  never show a temporary folder's (random) name. A refused resolution is logged by count only. A directory resolved
+  to `temp` is summed with `:temp` into the one `temp` project and shows no place.
 - **Sums** (`db.UsageDirSpans`): every machine's rows summed into the calendar's day bounds (and today's hours for a
   breakdown) by machine and directory, and for a breakdown by agent, model and launcher too; Go maps each machine's
   directory to its project. A directory no node resolved is `unknown`. So a range's projects and its not-split part add
@@ -373,10 +382,20 @@ machines, and one project's breakdown (`devices/usage_projects.go`, `devicewire/
   Usage the transcripts no longer hold, a runtime's and an older node's stays not split; re-read usage with nothing
   stored is left out. The manager records the last ten minutes sent and when it finished, so a cut re-split goes on
   and one sent again changes nothing; a machine with nothing to split is done at once.
+  **The temporary folders' pass** (#16827, migration `manager/20261127045749_usage_resplit_temp.sql`, the `temp_`
+  columns of `usage_resplit`): a node that names temporary folders by their paths says `temp_dirs: true` in
+  `usage.resplit.status`; once the first pass is done the manager answers `pass: "temp"` while the week has rows under
+  `:temp`, and the node re-reads the week again and sends only the sessions that started in a temporary folder, with
+  what their folders resolve to. The manager splits each ten minutes' `:temp` rows, together with the rows already
+  stored for those folders in the same ten minutes (a node that named them by path for part of it), in the re-read
+  shares, sums unchanged; usage the transcripts no longer hold stays `:temp`. An older node is never asked (its re-read
+  still says `:temp`).
 - **Rolling upgrades**: the node splits by directory only after the manager answers `usage.features` with `dirs: true`;
   an older manager answers `unknown method`, and the node sends its buckets summed as before (there, several buckets of
   one minute, model, launcher and agent would replace each other). An older node sends no directories: its usage is
-  not split. The routes are not open to extension tokens or read-only sessions: project names and places are more than
+  not split. A node names temporary folders by their paths only when the manager also answers `temp_dirs: true`; to a
+  manager before it, and from a node before it, they are `:temp`, which the manager still takes as the `temp` project.
+  The routes are not open to extension tokens or read-only sessions: project names and places are more than
   counts.
 
 ### Backfill

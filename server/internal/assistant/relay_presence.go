@@ -27,6 +27,10 @@ var (
 	// relayDecisionMax is the longest a message that waits on a decision is held for a present owner, counted from
 	// when it queued: the time a card stays on one rung (askHoldFor).
 	relayDecisionMax = 5 * time.Minute
+	// relaySupervisionMax is the longest a non-decision supervision digest (such as completed task reports or reviews)
+	// is held for a continuously active owner, counted from when it queued: once reached, it delivers as one merged
+	// summary in the next gap between owner turns instead of starving indefinitely while the owner keeps chatting.
+	relaySupervisionMax = 10 * time.Minute
 	// ownerTurnStartWait is the safety limit for an owner-turn gate whose round no session list ever shows working
 	// (a send the node refused, a conversation the list dropped): it releases anyway so the queue cannot stick.
 	ownerTurnStartWait = time.Minute
@@ -125,6 +129,13 @@ func (msg relayMsg) decisionSince() time.Time {
 	return msg.At
 }
 
+func (msg relayMsg) queuedSince() time.Time {
+	if !msg.QueuedAt.IsZero() {
+		return msg.QueuedAt
+	}
+	return msg.At
+}
+
 // holdLocked is how long msg still has to wait before it may go into conversation to (0: it may go now); b.mu is
 // held. A message that waits on a decision and does not say when it queued is not held, and neither is the owner's
 // own answer on a card asked without waiting (relayMsg.Owner, #4928): the hold keeps the system out of the owner's
@@ -162,6 +173,12 @@ func (b *relayBook) holdLocked(to string, msg relayMsg, now time.Time) time.Dura
 	if msg.decisionWaiting() {
 		if latest := msg.decisionSince().Add(relayDecisionMax); latest.Before(until) {
 			until = latest
+		}
+	} else if msg.Tool == superviseTool {
+		if since := msg.queuedSince(); !since.IsZero() {
+			if latest := since.Add(relaySupervisionMax); latest.Before(until) {
+				until = latest
+			}
 		}
 	}
 	return max(until.Sub(now), 0)

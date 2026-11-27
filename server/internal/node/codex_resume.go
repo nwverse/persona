@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -23,8 +24,8 @@ import (
 // way.
 //
 // Only a thread nothing has open: no app-server owns it (codex_remote.go: sends go there), no process holds its
-// rollout (a Codex CLI still running it, the Codex App's own app-server: a second writer would fork it), not the
-// Codex App's chat (codex_desktop.go), not a subagent or a program's run. And only in the default Codex home, whose
+// rollout (a Codex CLI still running it, the Codex App's own app-server: a second writer would fork it), no Codex App
+// still owns it (codex_desktop.go), not a subagent or a program's run. And only in the default Codex home, whose
 // thread ids are the session ids: a thread of another home is listed under an opaque key (codexSourceID).
 
 const codexResumeRefused = "codex_resume"
@@ -69,11 +70,40 @@ func (n *Node) codexResumableIn(ctx context.Context, id string, pass *codexListP
 	if n.codexRemoteConnecting(src.home) { // its app-server may own the thread once it is back
 		return false
 	}
-	if o := readCodexOrigin(src.path); o.exec || o.sub || o.parent != "" || o.desktopThread(src, pass) {
+	o := readCodexOrigin(src.path)
+	if o.exec || o.sub || o.parent != "" || o.guardian {
 		return false
+	}
+	// A shared app-server stamp corroborated by the sidebar remains App-owned. Only an explicit desktop origin becomes
+	// eligible for terminal recovery after the App and every writer have stopped.
+	if o.sharedAppStamp() && pass.appState(src.home).listed(src.thread) {
+		return false
+	}
+	desktop := o.desktop
+	if desktop {
+		// Refuse resuming a Codex App thread whenever the App bus or native queue is live or the App itself is running
+		// and could load it.
+		if pass.desktopAvailable(src.home) {
+			return false
+		}
+		if pass != nil {
+			if pass.desktopRunning(n, src.home) {
+				return false
+			}
+		} else if running, complete := n.codexAppRunningNow(src.home); running || !complete {
+			return false
+		}
 	}
 	m, ok := metaOfIn(src.home, src.path, pass)
 	if !ok {
+		return false
+	}
+	// The turn state is the session scan's (quickMeta), not the rollout header's.
+	var turn quickMeta
+	if st, err := os.Stat(src.path); err == nil {
+		turn = n.meta(src.path, st)
+	}
+	if n.codexEncryptedFailed(id, turn) || desktop && n.codexTurnRunning(src, turn) {
 		return false
 	}
 	return !m.sub && m.cwd != ""
@@ -188,6 +218,15 @@ func (n *Node) resumeCodexThread(ctx context.Context, id, launcher, text string,
 	if path := n.codexPath(id); path != "" && n.codices != nil && n.codexHeldNow(path) {
 		return busy
 	}
+	if src, ok := n.codexSource(id); ok && codexAppOrigin(src) {
+		running, complete := n.codexAppRunningNow(src.home)
+		if running {
+			return takeoverRefusal("app_running")
+		}
+		if !complete {
+			return takeoverRefusal("unavailable")
+		}
+	}
 	if !complete {
 		src, ok := n.codexSource(id)
 		if !ok || src.path == "" {
@@ -197,6 +236,16 @@ func (n *Node) resumeCodexThread(ctx context.Context, id, launcher, text string,
 		st.Cwd = metaOf(src.home, src.path).cwd
 	}
 	err := n.resumeOtherWith(ctx, id, st, text, images)
+	if err != nil && encryptedCodexFailure(err.Error()) {
+		n.takeovers.mu.Lock()
+		if n.takeovers.failed == nil {
+			n.takeovers.failed = map[string]bool{}
+		}
+		n.takeovers.failed[id] = true
+		n.takeovers.mu.Unlock()
+		codexResumes.Delete(id)
+		return takeoverRefusal("continue_only")
+	}
 	if maybeDelivered(err) && n.paneOf(id) != "" { // a tab runs it (one never made holds nothing off)
 		codexResumes.Store(id, time.Now())
 	} else {

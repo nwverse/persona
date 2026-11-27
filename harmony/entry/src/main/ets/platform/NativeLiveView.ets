@@ -4,6 +4,7 @@ import type { WantAgent } from '@ohos.wantAgent';
 import type { ClientModel } from '../models/ClientModel';
 import { ResourceRow, Wire } from '../models/Wire';
 import { tr } from '../design/Strings';
+import { shouldEndLiveViewOnBackground } from '../core/HubModules';
 import {
   FLEET_END_DELAY_MS,
   FLEET_LIVE_VIEW_ID,
@@ -208,10 +209,14 @@ export class NativeLiveView {
     }
   }
 
-  setForeground(foreground: boolean): void {
+  setForeground(foreground: boolean, hasPushRoute: boolean = true, isDemo: boolean = false): void {
     this.foreground = foreground;
     if (foreground) {
       this.refreshSystemState().catch(() => {});
+      return;
+    }
+    if (shouldEndLiveViewOnBackground(hasPushRoute, isDemo, this.active)) {
+      this.stopNow().catch(() => {});
     }
   }
 

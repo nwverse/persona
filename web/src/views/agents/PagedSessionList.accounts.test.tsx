@@ -13,7 +13,11 @@ import { PagedSessionList } from "./PagedSessionList";
 import { useAccountGroups } from "./account-groups";
 
 vi.mock("../../lib/api", async (original) => ({ ...await original<typeof import("../../lib/api")>(), api: vi.fn() }));
-vi.mock("../../lib/store", () => ({ onHubEvent: () => () => {} }));
+vi.mock("../../lib/store", () => ({
+  onHubEvent: () => () => {},
+  // the grouped list reads the computers' online state (GroupedSessions, #13522): none here
+  useStore: (select: (state: { machines: [] }) => unknown) => select({ machines: [] }),
+}));
 const agents = vi.hoisted(() => ({ sources: null as AgentSourceStatus[] | null, sessions: [] as { id: string; accountId: string; provider: string }[] }));
 vi.mock("../../lib/agents", async (original) => ({
   ...await original<typeof import("../../lib/agents")>(),

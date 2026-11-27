@@ -59,7 +59,7 @@ func (n *Node) mergePiRow(s *proto.Session) {
 	if r.Title != "" {
 		s.Title, s.TitleManual, s.TitleSource = r.Title, r.TitleManual, r.TitleSource
 	}
-	s.OutputTokens = r.OutputTokens
+	s.SetOutputTokens(int(r.OutputTokensValue()))
 	if r.ContextTokens > 0 {
 		s.ContextTokens = r.ContextTokens
 	}

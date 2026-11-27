@@ -135,6 +135,7 @@
   "launching_count": "起動中{count}件",
   "pane_count": "シェル{count}件",
   "folded_states": "折りたたんだエージェント：{list}",
+  "folded_chats": "折りたたんだチャット：{list}",
   "unread_messages_count": "未読メッセージ{count}件",
   "inbox_badge_title": "受信トレイ：未読の項目{count}件。待機中のエージェントは「概要」へ",
   "todos_badge_title": "あなたの対応が必要なToDo {count}件",

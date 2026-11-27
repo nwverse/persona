@@ -7,6 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
 import { startFakeNode, until } from '../../runtime-sdk/testing/fake-node.js'
+import { MCP_SERVER_NAMES } from '../../runtime-sdk/lib/compat.js'
 import { AgyAcpClient } from '../lib/acp.js'
 import { toPersonaId } from '../lib/map.js'
 import { createAgyRuntime } from '../lib/runtime.js'
@@ -425,6 +426,12 @@ test('permission cards normalize canonical tool names before display titles', as
     ['a distinct human title remains readable beside the command',
       { name: 'run_command', kind: 'execute', title: 'Run focused tests', rawInput: { command: 'npm test' } },
       'Bash', { command: 'npm test', description: 'Run focused tests' }, 'npm test'],
+    ['Run-prefixed Persona MCP title normalizes to mcp__persona__<tool>',
+      { kind: 'other', title: 'Run mcp_persona_19d68ad7_todo_decisions', rawInput: { todo_id: 'todo_1' } },
+      'mcp__persona__todo_decisions', { todo_id: 'todo_1' }, 'todo_id: todo_1'],
+    ['Run-prefixed proxied persona_call title unwraps target tool',
+      { kind: 'other', title: `Run mcp_${MCP_SERVER_NAMES[1]}_19d68ad7_persona_call`, rawInput: { name: 'todo_decisions', arguments: { todo_id: 'todo_2' } } },
+      'mcp__persona__todo_decisions', { todo_id: 'todo_2' }, 'todo_id: todo_2'],
   ]
   for (const [name, toolCall, toolName, toolInput, summary] of cases) {
     await t.test(name, async (t) => {
@@ -641,11 +648,31 @@ test('permission cards forward always_label, honor always responses, and never s
 
   await t.test('Assistant sessions omit always_label and never pass allow_always to ACP', async (t) => {
     const { n, record, start } = await agyRuntime(t)
+    assert.equal(n.hello.caps.keep_always, true)
     n.resolve = () => ({ allow: true, always: true })
     const pid = await start(`ask-options ${JSON.stringify(fullOptions)}`, { assistant: true })
     await until('assistant permission answered', () => permissionAnswers(record).length === 1, SLOW)
     assert.equal('always_label' in n.asked[0], false)
     assert.deepEqual(permissionAnswers(record)[0].result, { outcome: { outcome: 'selected', optionId: 'once' } })
+    await n.peer.call('session.interrupt', { session_id: pid })
+
+    // Remembered hub Always grant on a second matching call still selects allow_once, never allow_always.
+    n.resolve = () => ({ allow: true, always: true, remembered: true })
+    await n.peer.call('session.send', { session_id: pid, text: `ask-options ${JSON.stringify(fullOptions)}`, assistant: true })
+    await until('remembered assistant permission answered', () => permissionAnswers(record).length === 2, SLOW)
+    assert.equal('always_label' in n.asked[1], false)
+    assert.deepEqual(permissionAnswers(record)[1].result, { outcome: { outcome: 'selected', optionId: 'once' } })
+    await n.peer.call('session.interrupt', { session_id: pid })
+
+    // Assistant request lacking allow_once (allow_always-only) cancels without raising a card or selecting allow_always.
+    const alwaysOnly = [
+      { optionId: 'always', name: 'Always allow', kind: 'allow_always' },
+      { optionId: 'reject', name: 'Reject', kind: 'reject_once' },
+    ]
+    await n.peer.call('session.send', { session_id: pid, text: `ask-options ${JSON.stringify(alwaysOnly)}`, assistant: true })
+    await until('assistant allow_always-only cancelled without asking hub', () => permissionAnswers(record).length === 3, SLOW)
+    assert.equal(n.asked.length, 2)
+    assert.deepEqual(permissionAnswers(record)[2].result, cancelled)
     await n.peer.call('session.interrupt', { session_id: pid })
   })
 

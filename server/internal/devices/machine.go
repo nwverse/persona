@@ -624,13 +624,15 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 		}
 		params = next
 	}
-	if devicewire.IsSessionStart(method) && !nodeHas(info, nodeproto.SessionStartSpeed) {
+	if devicewire.IsSessionStart(method) && (!nodeHas(info, nodeproto.SessionStartSpeed) || !nodeHas(info, nodeproto.SessionStartServiceTier)) {
 		raw, _ := json.Marshal(params)
 		var fields struct {
-			Speed string `json:"speed"`
+			Speed       string `json:"speed"`
+			ServiceTier string `json:"service_tier"`
 		}
 		_ = json.Unmarshal(raw, &fields)
-		if proto.FasterSpeed(strings.TrimSpace(fields.Speed)) {
+		if (fields.ServiceTier != "" && !nodeHas(info, nodeproto.SessionStartServiceTier)) ||
+			(proto.FasterSpeed(strings.TrimSpace(fields.Speed)) && !nodeHas(info, nodeproto.SessionStartSpeed)) {
 			// An older node would drop the explicit, billable choice and start at the launcher's own speed.
 			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_session_start_speed")}
 		}
@@ -1156,9 +1158,10 @@ func (m *Machine) onRequest(ctx context.Context, method string, params json.RawM
 		}
 		return map[string]any{"sessions": out}, nil
 	case "usage.features": // what this manager keeps of the usage a node meters (usage_projects.go)
-		return map[string]any{"dirs": true}, nil
+		// temp_dirs: a temporary folder by its path, resolved like any directory (#16827), not only as :temp.
+		return map[string]any{"dirs": true, "temp_dirs": true}, nil
 	case "usage.resplit.status": // the last week split by directory once (usage_resplit.go)
-		return m.d.usageResplitStatus(ctx, m.cfg.ID, time.Now())
+		return m.d.usageResplitStatus(ctx, m.cfg.ID, params, time.Now())
 	case "usage.resplit":
 		sctx, cancel := m.storeCtx()
 		defer cancel()

@@ -435,6 +435,29 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 			kept[i].OriginOnly = true // persist the route's lack of acceptance authority with the signal itself
 		}
 	}
+	willInterject := slices.ContainsFunc(kept, func(g superviseSignal) bool { return g.Kind == sigDecisionReply })
+	c, listed := s.session(ctx, here.MachineID, to)
+	directBlocked := !listed || c.Starting || s.relayReplacing(to) || s.relayHasUnresolvedSupervision(to) ||
+		!willInterject && (c.Status == proto.StatusWorking || s.relayWaits(to, relayMsg{Tool: superviseTool, Urgent: anyDecision(kept)}))
+	if directBlocked && slices.ContainsFunc(kept, supervisionSignalNeedsRevalidation) {
+		var queueableEntries []prompts.SuperviseEntry
+		var queueable, reval []superviseSignal
+		for i, g := range kept {
+			if supervisionSignalNeedsRevalidation(g) {
+				reval = append(reval, g)
+			} else {
+				queueableEntries = append(queueableEntries, entries[i])
+				queueable = append(queueable, g)
+			}
+		}
+		if len(queueable) > 0 {
+			// Keep revalidation-only signals pending without reserving dedup so ordinary signals can still queue or
+			// merge into one digest instead of looping in SupervisePending behind them.
+			s.restoreDigest(reval, time.Time{}, prev)
+			entries, kept = queueableEntries, queueable
+			ackable = append(slices.Clone(moot), kept...)
+		}
+	}
 	holds := kept
 	entries, kept, rollback, err := s.reserveSupervision(ctx, entries, kept, now)
 	if err != nil {
@@ -540,10 +563,7 @@ func (s *Service) deliverDigest(ctx context.Context, here Settings, to string, l
 	render := func(list []prompts.SuperviseEntry) string { return s.renderQueuedDigest(ctx, to, list) }
 	queued := s.queuedDigestSignals(to)
 	msg := relayMsg{From: superviseTool, FromTitle: "督办", Tool: superviseTool, At: now.UTC()}
-	if len(queued) > 0 && !slices.ContainsFunc(kept, func(g superviseSignal) bool {
-		return g.Kind == sigPRConflict || g.Kind == sigDraftPR || g.Kind == sigPREvent || g.Kind == sigDecisionReply ||
-			g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled"
-	}) {
+	if len(queued) > 0 && !slices.ContainsFunc(kept, supervisionSignalNeedsRevalidation) {
 		// The last message may still wait in the queue: this one takes its place with both.
 		all := mergeSignals(queued, kept)
 		var allEntries []prompts.SuperviseEntry
@@ -634,6 +654,14 @@ func (b *superviseBook) setQueuedLocked(to string, list []superviseSignal) {
 	b.queued[to] = list
 }
 
+// supervisionSignalNeedsRevalidation reports whether an untried signal must stay in pending for delivery-time
+// revalidation rather than being persisted into a rendered queued relay.
+func supervisionSignalNeedsRevalidation(g superviseSignal) bool {
+	return g.Kind == sigPRConflict || g.Kind == sigDraftPR || g.Kind == sigPREvent || g.Kind == sigDecisionReply ||
+		g.Kind == sigNeedsUserExternalInfo && g.PREventID != "" ||
+		g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled"
+}
+
 // queueDigest queues msg, the message of signals kept, behind conversation to's turn; at is when sendDigest
 // marked it as the last message and prev the last message before. When the relay queue can't be read nothing is
 // queued (false): the signals wait again, no longer marked told (a newer one of the same task and kind keeps its
@@ -641,10 +669,7 @@ func (b *superviseBook) setQueuedLocked(to string, list []superviseSignal) {
 // out), and the digest is tried again in the urgent gap, or later when the gap after prev has not passed yet.
 func (s *Service) queueDigest(to string, msg relayMsg, kept []superviseSignal, at, prev time.Time) bool {
 	tried := !msg.TriedAt.IsZero() || !msg.DoubtedAt.IsZero()
-	if !tried && slices.ContainsFunc(kept, func(g superviseSignal) bool {
-		return g.Kind == sigPRConflict || g.Kind == sigDraftPR || g.Kind == sigPREvent || g.Kind == sigDecisionReply ||
-			g.Kind == sigInbox && g.Inbox != nil && g.Inbox.ToAgent == "unhandled"
-	}) {
+	if !tried && slices.ContainsFunc(kept, supervisionSignalNeedsRevalidation) {
 		// Rendered relays cannot recheck PR facts, a source acknowledgment or a decision round. Keep untried signals
 		// pending so the next dispatch revalidates them; deliverDigest releases the unaccepted dedup reservation.
 		// Once tryDirectRelay has attempted the send, retain the exact rendered payload, OnceID, and attempt state in
@@ -1037,6 +1062,17 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 			return prompts.SuperviseEntry{}, false // told by another message meanwhile (a later decision's)
 		}
 	case sigOrphaned:
+		if g.WorkerSet != "" {
+			if st != "" && st != reviewRework {
+				return prompts.SuperviseEntry{}, false
+			}
+			s.todos.mu.RLock()
+			group := completedWorkerSets(s.todos.todos)[t.ID]
+			s.todos.mu.RUnlock()
+			if group.key() != g.WorkerSet {
+				return prompts.SuperviseEntry{}, false
+			}
+		}
 		if p := v.parking(); p != nil && p.Handoff != nil || v.handoffResult() != nil {
 			return prompts.SuperviseEntry{}, false // an acknowledged handoff already explains the stop
 		}
@@ -1150,6 +1186,11 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 	if g.Kind == sigNeedsUserExternalInfo {
 		e.Detail = ""
 		e.ExternalInfo = s.needsUserExternalInfoEntry(ctx, t, g.ExternalSource, g.Detail)
+		if g.PREventID != "" {
+			// Keep the direct link and the complete, already bounded untrusted-content envelope.
+			e.ExternalInfo.Source = g.ExternalSource
+			e.ExternalInfo.Summary = g.Detail
+		}
 		e.LastReview = s.lastReviewEntry(ctx, v)
 		s.briefEntry(ctx, t.ID, &e)
 		return e, true

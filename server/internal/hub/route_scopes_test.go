@@ -23,7 +23,8 @@ import (
 // extwire.Routes (internal/extmgr: an extension's token is judged by their patterns there, extensions.authorize).
 func routePatterns(t *testing.T) []string {
 	seen := map[string]bool{}
-	for _, dir := range []string{".", filepath.Join("..", "extmgr")} {
+	// larksync's routes are mounted on extmgr's API mux (extmgr/bots.go larkSyncRoutes) since they moved to the module (#16357).
+	for _, dir := range []string{".", filepath.Join("..", "extmgr"), filepath.Join("..", "modules", "lark", "larksync")} {
 		fset := token.NewFileSet()
 		files, _ := filepath.Glob(filepath.Join(dir, "*.go"))
 		for _, name := range files {

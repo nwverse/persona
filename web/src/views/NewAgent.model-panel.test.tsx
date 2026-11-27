@@ -86,6 +86,7 @@ const key = (el: Element, k: string) => act(() => { el.dispatchEvent(new Keyboar
 
 beforeEach(() => {
   resetModelListsForTests();
+  state.features = [];
   state.machines = [{ id: "mac", name: "Mac", online: true }, { id: "studio", name: "Studio", online: true }];
   launched.length = 0;
   effective = PURPOSE.purpose.effective;
@@ -418,7 +419,7 @@ describe("New agent's model panel (#5104)", () => {
     expect(pill().title).toContain("only-mac");
     act(() => machineChip("Studio").click());
     await flush();
-    expect(q("[data-testid=new-agent-dropped]")!.textContent).toBe("Studio 上用不了 only-mac，已换回这台电脑的默认设置。");
+    expect(q("[data-testid=new-agent-dropped]")!.textContent).toBe("only-mac 无法在 Studio 上运行，已改用这台电脑的默认设置。");
     expect(pill().title).toBe("Claude Code · Opus 5.5 · High");
     // a pick on this computer takes the note away
     await pick("model:claude\nsonnet");
@@ -495,7 +496,7 @@ describe("New agent's model panel (#5104)", () => {
     failList = "claude";
     await open();
     expect(pill().dataset.modelPill).toBe("failed");
-    expect(q("[data-testid=new-agent-models-failed]")!.textContent).toBe("没读到模型列表，仍可以用默认模型启动");
+    expect(q("[data-testid=new-agent-models-failed]")!.textContent).toBe("无法加载模型列表，仍可使用默认模型启动。");
     start();
     expect(launched[0]).toMatchObject({ machineId: "mac", launcher: "" });
     expect(launched[0].model).toBeUndefined();
@@ -612,5 +613,83 @@ describe("Codex reasoning effort in New Agent (#13764)", () => {
     expect(pill().title).toBe("Codex · GPT-5.5 Mini · High");
     start();
     expect(launched[0]).toMatchObject({ launcher: "codex", agentType: "codex", inlinePrompt: true, model: "gpt-5.5-mini", effort: "high" });
+  });
+});
+
+describe("Codex start speed", () => {
+  const catalog = LISTS.codex;
+  const tiers = [{ id: "priority", name: "Fast" }, { id: "ultrafast", name: "Ultrafast" }];
+  const speedButton = (id: string) => q<HTMLButtonElement>(`[data-panel-speed="${id}"]`)!;
+
+  function offerSpeed(hub: boolean, node: boolean) {
+    state.features = hub ? ["session_start_service_tier"] : [];
+    LISTS.codex = {
+      agent: "codex",
+      supports_start_service_tier: node,
+      models: [
+        { id: "gpt-5.5", name: "GPT-5.5", default: true, service_tiers: tiers },
+        { id: "gpt-5.5-mini", name: "GPT-5.5 Mini" },
+      ],
+    };
+  }
+
+  afterEach(() => { LISTS.codex = catalog; });
+
+  it.each([[false, "fast", "priority"], [true, "ultrafast", "ultrafast"]] as const)(
+    "applies the selected tier in the narrow flyout or wide footer (wide=%s)", async (wide, speed, tier) => {
+      wideScreen = wide;
+      offerSpeed(true, true);
+      await open();
+      if (!wide) {
+        await pick("model:codex\ngpt-5.5");
+        await openPanel();
+        await customize("model:codex\ngpt-5.5");
+      } else {
+        await openPanel();
+        act(() => q<HTMLButtonElement>('[data-panel-side="codex"]')!.click());
+        await flush();
+        act(() => row("model:codex\ngpt-5.5").click());
+      }
+      await act(async () => vi.dynamicImportSettled());
+      await flush();
+      expect(speedButton("standard").getAttribute("aria-pressed")).toBe("true");
+      act(() => speedButton(speed).click());
+      expect(speedButton(speed).getAttribute("aria-pressed")).toBe("true");
+      if (!wide) {
+        act(() => button("恢复推荐").click());
+        expect(speedButton("standard").getAttribute("aria-pressed")).toBe("true");
+        act(() => speedButton(speed).click());
+      }
+      act(() => pill().click());
+      start();
+      expect(launched[0]).toMatchObject({ launcher: "codex", serviceTier: tier });
+    },
+  );
+
+  it.each([[false, true], [true, false]])("hides speed for older peers (hub=%s, node=%s)", async (hub, node) => {
+    offerSpeed(hub, node);
+    await open();
+    await pick("model:codex\ngpt-5.5");
+    await openPanel();
+    await customize("model:codex\ngpt-5.5");
+    expect(q("[data-panel-speed]")).toBeNull();
+    act(() => pill().click());
+    start();
+    expect(launched[0].serviceTier).toBeUndefined();
+  });
+
+  it("clears a tier when the user switches to a model with no tiers", async () => {
+    offerSpeed(true, true);
+    await open();
+    await pick("model:codex\ngpt-5.5");
+    await openPanel();
+    await customize("model:codex\ngpt-5.5");
+    await act(async () => vi.dynamicImportSettled());
+    act(() => speedButton("ultrafast").click());
+    act(() => row("model:codex\ngpt-5.5-mini").click());
+    await flush();
+    start();
+    expect(launched[0]).toMatchObject({ launcher: "codex", model: "gpt-5.5-mini" });
+    expect(launched[0].serviceTier).toBeUndefined();
   });
 });

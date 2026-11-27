@@ -91,7 +91,8 @@ type agyTranscriptUsage struct {
 	compacted     bool
 	hasUsage      bool
 	contextStats  transcript.ContextStats
-	first         string    // the first message the user typed, as shown (agyUserText): an untitled pane's title (agytitle.go)
+	first         string // the first message the user typed, as shown (agyUserText): an untitled pane's title (agytitle.go)
+	turn          agyTurnEvidence
 	modTime       time.Time // transcript file mtime in UTC, used as fallback UpdatedAt for herdr agy panes
 }
 
@@ -391,8 +392,8 @@ func agyContextEndNames() string {
 // kept as the user's text.
 var (
 	agyContextResourceLabel = lazyre.New(`Content of persona-context://[^\s<>]+:\r?\n`)
-	agyContextResourceOpen  = lazyre.New(`(?i)^<(?:persona|jarvis)-context\b[^>]*>`)
-	agyContextResourceTag   = lazyre.New(`(?i)<(?:persona|jarvis)-context\b[^>]*>|</(?:persona|jarvis)-context\s*>`)
+	agyContextResourceOpen  = lazyre.New(`(?i)^<` + compat.ContextPattern() + `\b[^>]*>`)
+	agyContextResourceTag   = lazyre.New(`(?i)<` + compat.ContextPattern() + `\b[^>]*>|</` + compat.ContextPattern() + `\s*>`)
 	agyViewErrorsTrailing   = lazyre.New(`(?is)(?:^|\n)<persona-view-errors\b[^>]*>.*?</persona-view-errors>` + agySpace + `*$`)
 )
 
@@ -409,6 +410,11 @@ func isAgyInterruptedStep(step agyStep) bool {
 		text = step.Content
 	}
 	return agyInterruptedError.MatchString(strings.TrimSpace(text))
+}
+
+func isAgyCompactCommand(text string) bool {
+	fields := strings.Fields(strings.TrimSpace(text))
+	return len(fields) > 0 && strings.EqualFold(fields[0], "/compact")
 }
 
 func agyUserText(text string) string {
@@ -837,17 +843,28 @@ func mapAgySteps(steps []agyStep, fallback time.Time, receipts map[string]bool) 
 			notified = delivered != ""
 		case "USER_INPUT":
 			if step.Source == "" || step.Source == "USER_EXPLICIT" {
-				history.usage.turns++
 				delivered, notified = "", false
 				text := agyUserText(step.Content)
+				if isAgyCompactCommand(text) {
+					add("0", "system", proto.KindNotice, transcript.CompactNotice).ClientMsgID = step.ClientMsgID
+					break
+				}
+				history.usage.turns++
 				if text != "" {
 					add("0", "user", proto.KindText, text).ClientMsgID = step.ClientMsgID
 				}
 				addMedia("user", "", step.ClientMsgID, agyAttachedImagePaths(text))
 			}
 		case "CHECKPOINT":
+			pre := history.usage.contextTokens
+			if _, stepCtx, _, ok := step.tokenUsage(); ok && stepCtx > 0 {
+				pre = stepCtx
+			}
 			history.usage.observeCheckpoint()
-			add("0", "system", proto.KindNotice, transcript.CompactedNotice)
+			it := add("0", "system", proto.KindNotice, transcript.CompactedNotice)
+			if pre > 0 {
+				it.Compact = &proto.Compact{PreTokens: pre}
+			}
 		case "PLANNER_RESPONSE":
 			stepModel := step.normalizedModel()
 			stepUsage, hasUsage := history.usage.observePlanner(step)

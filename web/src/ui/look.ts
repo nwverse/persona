@@ -82,7 +82,7 @@ export type TextSize = (typeof TEXT_SIZES)[number];
 /** Window material style (#16607): "default" keeps the opaque surface intact; "liquid-glass" is opt-in under Appearance. */
 export const SURFACE_STYLES = ["default", "liquid-glass"] as const;
 export type SurfaceStyle = (typeof SURFACE_STYLES)[number];
-export const DEFAULT_GLASS_TRANSLUCENCY = 68;
+export const DEFAULT_GLASS_TRANSLUCENCY = 75;
 
 // ── the saved choices ─────────────────────────────────────
 
@@ -200,7 +200,12 @@ export function applyLook(doc: Document = document) {
     if (desktopGlass) root.dataset.desktopGlass = "1";
     else delete root.dataset.desktopGlass;
   }
-  if (typeof window !== "undefined" && doc === document) window.personaDesktop?.setSurfaceStyle?.(style);
+  if (typeof window !== "undefined" && doc === document) {
+    const rawTheme = read("persona.theme");
+    const theme = rawTheme === "light" || rawTheme === "dark" ? rawTheme : "system";
+    window.personaDesktop?.setThemeSource?.(theme);
+    window.personaDesktop?.setSurfaceStyle?.(style);
+  }
 }
 
 // Another tab of this browser changed one (or its storage was cleared): this one follows at once, as with the appearance

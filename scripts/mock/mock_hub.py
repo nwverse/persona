@@ -1757,7 +1757,6 @@ if os.environ.get("MOCK_TERMINAL_ONLY") == "1":
     SESSIONS.append(sess("macbook", TERMINAL_ONLY, "kiro-demo", "/Users/me/code/kiro-demo", "idle", "idle", "kiro-demo", 8, "kiro", 1, 1,
                          "", agent="kiro", launcher="kiro", read_only_reason="Persona 还不能读 kiro 的对话：手机上只能看终端、按键盘"))  # i18n-ignore
 
-
 # MOCK_OMP=1 (docs/integrations/omp.md): every computer lists the omp launcher, which takes no model, mode, effort or
 # ultracode (omp's own config decides) and starts with its first message, as the node does (control.go): a start that
 # is async or sets any of those is refused (omp_options), else it answers with omp's session, the first message in it.
@@ -10659,26 +10658,6 @@ if os.environ.get("MOCK_SECRET_RUN") in ("pending", "ran", "withheld", "long"):
             ensure_ascii=False), 1) + [
             it("assistant", "text", 0.5, text="第二条命令失败了（退出码 5）：launchd 没能加载这个任务。我先看看 plist 的权限再告诉你。")]
 
-# MOCK_SECRET_RUN=env: the explicit one-off non-sudo mode. Every command receives PERSONA_SECRET; the card warns
-# about it after showing the commands. It is separate so the original stdin fixtures stay byte for byte unchanged.
-if os.environ.get("MOCK_SECRET_RUN") == "env":
-    _env_input = {"machine": "studio", "machine_name": "Mac Studio", "delivery": "env",
-                  "purpose": "登录一次局域网设备，查看已连接客户端",
-                  "commands": ["/usr/bin/env sh -c 'test -n \"$PERSONA_SECRET\"'",
-                               "/usr/bin/curl -H \"Authorization: Bearer $PERSONA_SECRET\" https://example.test"]}
-    ITEMS[ASK1] = ITEMS[ASK1] + [
-        it("user", "text", 2, text="帮我登录一次局域网设备，看看现在连着哪些客户端，用一次就行"),
-        it("assistant", "text", 1.5, text="这次不用 sudo。每条命令都会通过 PERSONA_SECRET 拿到密码，请逐条核对后再运行。")]
-    ITEMS[ASK1].append(it("assistant", "tool_use", 1, tool_use_id="toolu_secret_run", tool_name="mcp__persona__secret_run",
-                          tool_input=_env_input))
-    INTERACTIONS.append(
-        {"id": "ix_secret_run", "machine_id": "server", "session_id": ASK1, "session_title": "Persona",
-         "kind": "permission", "created_at": ago(minutes=1), "expires_at": later(minutes=9),
-         "tool_name": "secret_run", "tool_use_id": "toolu_secret_run", "tool_input": _env_input,
-         "summary": "在 Mac Studio 上运行（%s）：\n" % _env_input["purpose"]
-                    + "\n".join("$ " + c for c in _env_input["commands"])
-                    + "\n警告：你输入的密码会通过 PERSONA_SECRET 直接传给上面列出的每一条命令。编码后的输出可能绕过脱敏。",
-         "fields": [{"key": "password", "label": "密码", "placeholder": "只用这一次，不会保存", "secret": True}]})
 
 # MOCK_SECRET_HANDOFF=1: the hand-off card (secret_handoff, #3962) in Persona's main conversation: the assistant asked to
 # start an Agent on the MacBook with two values from a made-up provider; nothing has been handed over. Its approval is
@@ -19175,7 +19154,7 @@ def session_catalog(rows, revision, state_of):
     """catalog=1 (sessions_catalog): the filtered rows' projects and spaces, as the hub's sessionCatalogOf builds them.
     A directory whose computer names a network remote (CATALOG_ORIGINS) is that repository's project wherever it is
     checked out; any other goes by its folder's name. needs_you (left out when 0) is by the state the list filters by."""
-    places, groups, names = {}, {}, {}
+    places, groups, names, folders = {}, {}, {}, {}
     waiting = lambda n: {"needs_you": n} if n else {}
     for s in rows:
         needs = 1 if state_of(s) == "needs_you" else 0
@@ -19187,6 +19166,11 @@ def session_catalog(rows, revision, state_of):
         at[0] += 1; at[1] += needs
         if group and s.get("space_name"):
             names.setdefault((s["machine_id"], group), s["space_name"])
+        # a space's folder: the one most of its rows are in (workspace_cwd, else cwd), the first among equals
+        folder = s.get("workspace_cwd") or s.get("cwd") or ""
+        if group and folder:
+            tally = folders.setdefault((s["machine_id"], group), {})
+            tally[folder] = tally.get(folder, 0) + 1
     projects = {}
     for (mid, path), (n, needs) in places.items():
         origin = CATALOG_ORIGINS.get((mid, path), "")
@@ -19205,7 +19189,11 @@ def session_catalog(rows, revision, state_of):
             project["name"] = origin.rsplit("/", 1)[-1] if origin else folder_name(first["path"])
         if origin:
             project["origin"] = origin
-    spaces = [{"machine_id": mid, "id": group, "name": names.get((mid, group), group), "total": n, **waiting(needs)} for (mid, group), (n, needs) in groups.items()]
+    def space_path(key):
+        tally = folders.get(key)
+        return {"path": max(tally, key=tally.get)} if tally else {}  # max keeps the first of equals
+    spaces = [{"machine_id": mid, "id": group, "name": names.get((mid, group), group), **space_path((mid, group)), "total": n, **waiting(needs)}
+              for (mid, group), (n, needs) in groups.items()]
     return {"revision": revision, "total": len(rows),
             "projects": sorted(projects.values(), key=lambda p: (not p["id"], -p["total"], p["name"].lower(), p["id"])),
             "spaces": sorted(spaces, key=lambda p: (not p["id"], -p["total"], p["name"].lower(), p["machine_id"], p["id"]))}
@@ -21902,9 +21890,21 @@ def personal_rows():
     rows = [("muse", "周报助手", 0.1, 2), ("grok_bot", "旅行规划", 1.5, 0), ("cue", "读书笔记", 5, 1), ("muse", "代码评审", 30, 0),
             ("grok_bot", "健身记录", 80, 0), ("cue", "菜谱整理", 200, 0)]
     if os.environ.get("MOCK_PERSONAL_UPGRADE"): rows[0] = ("muse", "Upgrade preference fixture", 0.1, 2)
-    return [{"id": "lark-bridge:%s:%d" % (prov, i), "source": "lark-bridge", "sessionKey": "%s:%d" % (prov, i), "provider": prov,
-             "title": title, "canSend": True, "unreadCount": unread, "rankTimeMs": now - int(hours * 3600 * 1000), "hasAvatar": False}
-            for i, (prov, title, hours, unread) in enumerate(rows)]
+    # What the Messages page draws beside each (docs/extensions/lark-migration.md "Personal Agents in Messages"): the
+    # latest message, and the allowance at its service as a charge: plenty (show false, an older account's default, still
+    # drawn), low, used up, none, an old reading.
+    previews = [("周报草稿好了", False), ("帮我再找找周末的票", True), ("第三章的要点整理完了", False), ("", False), ("", False), ("", False)]
+    quotas = [{"state": "ok", "percent": 70, "show": False, "resetsAt": now + 5 * 3600 * 1000}, {"state": "low", "remaining": 0.15},
+              {"state": "exhausted", "remaining": 0}, None, {"state": "ok", "percent": 55, "stale": True}, None]
+    out = []
+    for i, (prov, title, hours, unread) in enumerate(rows):
+        row = {"id": "lark-bridge:%s:%d" % (prov, i), "source": "lark-bridge", "sessionKey": "%s:%d" % (prov, i), "provider": prov,
+               "title": title, "canSend": True, "unreadCount": unread, "rankTimeMs": now - int(hours * 3600 * 1000), "hasAvatar": False}
+        text, mine = previews[i]
+        if text: row.update(previewText=text, previewIsMine=mine)
+        if quotas[i]: row["quota"] = quotas[i]
+        out.append(row)
+    return out
 def personal_listed(hidden):
     return [r for r in personal_rows() if (r["id"] in PERSONAL_HIDDEN) == hidden] if PERSONAL_STATE["state"] in ("configured", "partial", "partial_setup") else []
 # MOCK_GIT_WRITE=1 (#6121): the Git panel's writes on a made-up repository that changes as they are made

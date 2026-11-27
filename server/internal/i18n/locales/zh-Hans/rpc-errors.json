@@ -105,6 +105,8 @@
   "assistant_service_tier_refused": "Codex 没能在第一条消息前启用 Fast。这次没有发送，请重试或改用 Standard。",
   "agent_speed_unsupported": "这个启动器不能以该速度启动 Agent：{reason}",
   "agent_speed_start_only": "更快的速度只能在启动新 Agent 时选择：{reason}",
+  "agent_speed_tier_new": "请启动新的 Codex Agent 以选择速度档位。",
+  "agent_speed_tier_value": "请选择 priority 或 ultrafast，并省略独立的 speed 字段。",
   "agent_speed_model": "这个模型未提供该 Codex 速度：{reason}",
   "agent_speed_invalid": "Agent 速度无效：{reason}",
   "session_speed_unsupported": "此会话不提供所选速度。",
@@ -116,7 +118,7 @@
   "assistant_supervision_none": "尚未检测到，请连接或更新支持此能力的运行时",
   "assistant_supervision_account": "这个引擎支持任务跟进，但此账号尚未开通自定义系统指令。请联系引擎服务商为此账号开通。本次没有启动或发送任何内容。",
   "assistant_supervision_node_outdated": "请先更新这台电脑的 Persona Link，再在这里跟进任务。当前版本不能应用独立的任务指令，这次没有启动或发送任何内容。",
-  "omp_options": "只能在 herdr 中新建 omp 会话时指定模型。请留空权限模式、思考强度和 ultracode。",
+  "omp_options": "只能在 herdr 或 Orca 中新建 omp 会话时指定模型。请留空权限模式、思考强度和 ultracode。",
   "omp_resume_unknown": "找不到这个 omp 会话的文件，Persona 没法从这里恢复它：请在电脑上用 omp --resume 接着它。这次没有发送。",
   "resume_unknown": "这台电脑上没有这个对话的记录，无法在这里接着它。这次没有启动。",
   "held_ahead": "这个 Agent 还有更早的消息在等待发送，请等它们发出后再发这条。",
@@ -131,5 +133,9 @@
   "conversation_retired": "此会话已不再运行该对话。",
   "agent_assistant_workspace": "不能在助手工作区派出 Agent。请选择项目目录或独立的 worktree；尚未启动 Agent。",
   "codex_writable_symlink": "无法以 workspace-write 模式启动 Codex：可写根目录下的 {name} 是符号链接，沙箱无法保护该只读路径。请改用项目目录作为 cwd，或选择只读模式。尚未启动，也未修改符号链接。",
-  "agy_in_terminal": "这个 Antigravity 对话正在那台电脑的终端里由 agy 打开，Persona 连不到那个终端，所以没有发送。请在终端里回复，或者先在那边退出 agy 再试。"
+  "agy_in_terminal": "这个 Antigravity 对话正在那台电脑的终端里由 agy 打开，Persona 连不到那个终端，所以没有发送。请在终端里回复，或者先在那边退出 agy 再试。",
+  "effort_input_draft": "终端的输入框里有还没发出的文字（「{draft}」），思考强度没有改，也没有输入任何内容。在电脑上清掉后再试。",
+  "effort_input_draft_plain": "终端的输入框里有文字（「{draft}」），思考强度没有改，也没有输入任何内容。这个终端的画面读不到颜色，Claude 灰色的建议消息也算作文字。在电脑上清掉后再试。",
+  "speed_input_draft": "终端的输入框里有还没发出的文字（「{draft}」），速度没有改，也没有输入任何内容。在电脑上清掉后再试。",
+  "speed_input_draft_plain": "终端的输入框里有文字（「{draft}」），速度没有改，也没有输入任何内容。这个终端的画面读不到颜色，Claude 灰色的建议消息也算作文字。在电脑上清掉后再试。"
 }

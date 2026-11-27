@@ -33,6 +33,7 @@ type fleetDevs struct {
 	capacity     proto.CapacitySnapshot // what CapacitySnapshot answers (capacity_test.go)
 	accounts     []proto.UsageAccount   // what UsageAccounts answers (candidate_headroom_test.go)
 	gatewayRetry func(source, provider string, now time.Time) time.Time
+	gateways     proto.GatewayAccounts
 	// attention is every Persona Link summary handed over (SetAttention), in order.
 	attention []link.Attention
 	// linkDesktop: the manager has a Persona Link desktop; confirmed: the cards its app confirmed it handed to
@@ -272,6 +273,12 @@ func (d *fleetDevs) UsageAccounts(context.Context) []proto.UsageAccount {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return append([]proto.UsageAccount(nil), d.accounts...)
+}
+
+func (d *fleetDevs) UsageGatewayAccounts() proto.GatewayAccounts {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.gateways
 }
 
 func (d *fleetDevs) GatewayRetryAt(source, provider string, now time.Time) time.Time {

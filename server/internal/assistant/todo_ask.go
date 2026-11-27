@@ -16,8 +16,8 @@ import (
 
 // The ask a to-do waits on, on the to-do itself (#2056, docs/assistant/todos.md "Waiting for the owner"): the apps list
 // the to-dos, not the briefing, and a to-do whose conclusion needs the owner's decision is where they show the
-// recommendation and take it with one tap (POST /api/v1/todos/{id}/accept, briefing_feed.go). It is the briefing's
-// `accept[]` row (briefing_feed.go), read from the same book (awaitingAcceptance): a "Please verify" ask, or a supervised
+// recommendation and take it with one tap (POST /api/v1/todos/{id}/accept, todo_accept_route.go). It is the briefing's
+// `accept[]` row (modules/briefing/feed.go), read from the same book (awaitingAcceptance): a "Please verify" ask, or a supervised
 // task's conclusion (conclusion.go). A decision that recommends an option is also pushed with that option, and the
 // push's OK takes it the same way (pushDecision).
 
@@ -85,16 +85,18 @@ type todoActiveBlockerView struct {
 // the routes, its view (todo_view_routes.go).
 type listedTodo struct {
 	Todo
-	PrerequisiteBlockers []string                   `json:"prerequisite_blockers,omitzero"`
-	ActiveBlockers       []todoActiveBlockerView    `json:"active_blockers,omitempty"`
-	Ask                  *todoAsk                   `json:"ask,omitempty"`
-	DecisionReview       *decisionReview            `json:"decision_review,omitempty"`
-	Orphaned             *TodoOrphan                `json:"orphaned,omitempty"`
-	View                 *assistantwire.TodoSummary `json:"view,omitempty"`
-	Wait                 *assistantwire.TodoWait    `json:"wait,omitempty"`
-	RepoGate             *repoGate                  `json:"repo_gate,omitempty"`
-	ItemType             string                     `json:"item_type,omitempty"`
-	ChildSummary         *todoChildSummary          `json:"child_summary,omitempty"`
+	PrerequisiteBlockers   []string                   `json:"prerequisite_blockers,omitzero"`
+	ActiveBlockers         []todoActiveBlockerView    `json:"active_blockers,omitempty"`
+	Ask                    *todoAsk                   `json:"ask,omitempty"`
+	DecisionReview         *decisionReview            `json:"decision_review,omitempty"`
+	Orphaned               *TodoOrphan                `json:"orphaned,omitempty"`
+	View                   *assistantwire.TodoSummary `json:"view,omitempty"`
+	Wait                   *assistantwire.TodoWait    `json:"wait,omitempty"`
+	RepoGate               *repoGate                  `json:"repo_gate,omitempty"`
+	ItemType               string                     `json:"item_type,omitempty"`
+	ChildSummary           *todoChildSummary          `json:"child_summary,omitempty"`
+	EffectiveDirectionID   string                     `json:"effective_direction_id,omitempty"`
+	EffectiveDirectionName string                     `json:"effective_direction_name,omitempty"`
 }
 
 // askEvidenceLink returns raw when it is a valid http(s) URL and not merely the to-do's own /todos/<id> page.

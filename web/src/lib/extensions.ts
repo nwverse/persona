@@ -729,6 +729,26 @@ export function rebaseDraft<T extends { text: string; integer: boolean }>(
   };
 }
 
+/** Proposed values from a settings link, put only on fields the form draws: unknown fields, secrets and entry lists
+ *  never enter the draft. The saved configuration stays the base; Save is still the only write. */
+export function prefillDraft(draft: JsonObject, prefill: JsonObject, fields: ExtensionField[]): JsonObject {
+  const apply = (out: JsonObject, values: JsonObject, at: ExtensionField[], path: string[]): JsonObject => {
+    let next = out;
+    for (const [name, value] of Object.entries(values)) {
+      const field = at.find((f) => f.name === name);
+      if (!field || field.secret || isEntryList(field) || value === null || value === undefined) continue;
+      if (field.type === "object") {
+        if (typeof value !== "object" || Array.isArray(value)) continue;
+        next = apply(next, value as JsonObject, field.fields ?? [], [...path, field.name]);
+      } else {
+        next = setAt(next, [...path, field.name], value);
+      }
+    }
+    return next;
+  };
+  return apply(draft, prefill, fields, []);
+}
+
 /** The items of a list field: the draft's, else the default. */
 export function listItems(draft: JsonObject, path: string[], f: ExtensionField): string[] {
   const v = valueAt(draft, path) ?? f.default;

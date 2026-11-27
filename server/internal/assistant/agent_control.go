@@ -44,6 +44,22 @@ func isAgentTool(name string) bool {
 	return false
 }
 
+func (s *Service) externalSessionRefusal(ctx context.Context, self string, am Device, c proto.Session) error {
+	if c.SourceKind != proto.SourceRuntime || c.StartedByPersona {
+		return nil
+	}
+	if err := s.ensureTodosLoaded(ctx); err != nil {
+		return fmt.Errorf("cannot verify the open task assignment of %s on %s (external runtime session, source_kind=%s): %w. Use agent_read instead",
+			agentLabel(c), am.Name, c.SourceKind, err)
+	}
+	if t, ok := s.openTodoOfAgent(am.ID, c.SessionID); ok && self != "" &&
+		(t.Origin == self || supervisorOf(t) == self || s.backgroundSupervises(ctx, self, t)) {
+		return nil
+	}
+	return fmt.Errorf("%s on %s is an external runtime session (source_kind=%s) that was not started by Persona and is not assigned to an open task of this conversation. Use agent_read instead",
+		agentLabel(c), am.Name, c.SourceKind)
+}
+
 // ---- agent_interrupt ----
 
 // interruptSettleWait is how long agent_interrupt waits for a stopped turn to end before saying it has not yet;
@@ -75,6 +91,9 @@ func (s *Service) toolAgentInterrupt(ctx context.Context, machine, self string, 
 	if c.SourceKind != "" && (c.Capabilities == nil || !c.Capabilities.Interrupt || then != "" && !c.Capabilities.Send) {
 		return "", fmt.Errorf("this agent can only be read: %s", c.ReadOnlyReason)
 	}
+	if err := s.externalSessionRefusal(ctx, self, am, c); err != nil {
+		return "", err
+	}
 	if stoppedAgent(c) { // read-only (#4754): nothing runs to stop; a resume is agent_send's (#8099)
 		return "", fmt.Errorf("%s has already stopped: nothing to interrupt, and nothing was sent. To go on with it and its "+
 			"context, use agent_send with resume true and resume_why; otherwise start a replacement: for its task, task_plan "+
@@ -92,7 +111,10 @@ func (s *Service) toolAgentInterrupt(ctx context.Context, machine, self string, 
 	} else if !ok {
 		return outboundNotDone(outcome, "The user declined on the phone: the agent goes on as it was.", "the agent goes on as it was"), nil
 	}
-	// Again after the phone: the agent may have become another conversation's task while the user was asked.
+	// Check again after approval, since the task assignment can change while the phone is waiting.
+	if err := s.externalSessionRefusal(ctx, self, am, c); err != nil {
+		return "", err
+	}
 	if err := s.exitAllowed(ctx, self, am, c, then, 0); err != nil {
 		return "", err
 	}
@@ -135,6 +157,12 @@ func (s *Service) toolAgentInterrupt(ctx context.Context, machine, self string, 
 	// closed agent is resumed first (as agent_send does), which can take minutes.
 	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
 	defer cancel()
+	if err := s.externalSessionRefusal(sctx, self, am, c); err != nil {
+		if working && !over {
+			return "", fmt.Errorf("the stop was requested, but the new instruction was withheld: %w", err)
+		}
+		return "", err
+	}
 	var sent struct {
 		Queued bool `json:"queued"` // the runtime holds it behind a turn still running
 	}
@@ -228,6 +256,9 @@ func (s *Service) toolAgentSupervise(ctx context.Context, self string, args json
 	}
 	if c.Assistant {
 		return "", fmt.Errorf("that is an assistant conversation, not a coding agent")
+	}
+	if err := s.externalSessionRefusal(ctx, self, am, c); err != nil {
+		return "", err
 	}
 	if !s.supervises(ctx, self) && !s.sideOwnsAgent(ctx, self, am.ID, c.SessionID) {
 		return "", fmt.Errorf("only the main conversation and a direction's lead supervise agents other than those this conversation started or supervises: from here, send it without a task")

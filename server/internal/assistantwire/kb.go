@@ -1,9 +1,13 @@
 package assistantwire
 
 import (
+	"time"
+
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/kbwire"
+	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 // The knowledge base is the assistant's (docs/assistant/knowledge.md "Who owns what"): its engine and loop, its files under the data
@@ -137,6 +141,17 @@ const (
 	EventKBAgentTurn = "kb.agent_turn"
 )
 
+// Typed descriptors for the knowledge base's internal bus calls.
+var (
+	KBContextMethod       = buswire.Method[KBContextParams, KBContextResult]{Name: MethodKBContext}
+	KBProjectsMethod      = buswire.Method[KBProjectsParams, KBProjectsResult]{Name: MethodKBProjects}
+	KBForgetMethod        = buswire.Method[KBForget, KBForgotten]{Name: MethodKBForget}
+	KBPostsPutMethod      = buswire.Method[KBPosts, KBPostsPutResult]{Name: MethodKBPostsPut}
+	KBPostsCommentsMethod = buswire.Method[KBPosts, KBPostsCommentsAck]{Name: MethodKBPostsComments}
+	KBPostsPendingMethod  = buswire.Method[KBPosts, KBPostsPendingResult]{Name: MethodKBPostsPending}
+	KBArchivedChatsMethod = buswire.Method[KBPosts, KBArchivedChatsResult]{Name: MethodKBArchivedChats}
+)
+
 // KBKick is EventKBKick's params: the connector that has something new, and what (a connector scope: chats, items).
 type KBKick struct {
 	Connector string `json:"connector,omitempty"`
@@ -153,12 +168,14 @@ type KBRemoteFolder struct {
 // KBSettings is the knowledge base's settings the manager goes by: its manager.json's kb section, laid over the hub's
 // hello (an older hub still sends its hub.json's). Its ai is the models' (HubModels.KBAI).
 type KBSettings struct {
-	ReadOnly       bool             `json:"read_only,omitempty"`       // serve local archives without collection, models or writes
-	Off            bool             `json:"off,omitempty"`             // kb.enabled false: no knowledge base at all
-	TextDays       int              `json:"text_days,omitempty"`       // 0: 365
-	AttachmentDays int              `json:"attachment_days,omitempty"` // 0: 30
-	ExtraDirs      []string         `json:"extra_dirs,omitempty"`      // as written; "~/" is the assistant's home
-	RemoteFolders  []KBRemoteFolder `json:"remote_folders,omitempty"`
+	// ImportProvider is manager-local binding information. A remote hello cannot supply it.
+	ImportProvider *KBImportProvider `json:"-"`
+	ReadOnly       bool              `json:"read_only,omitempty"`       // serve local archives without collection, models or writes
+	Off            bool              `json:"off,omitempty"`             // kb.enabled false: no knowledge base at all
+	TextDays       int               `json:"text_days,omitempty"`       // 0: 365
+	AttachmentDays int               `json:"attachment_days,omitempty"` // 0: 30
+	ExtraDirs      []string          `json:"extra_dirs,omitempty"`      // as written; "~/" is the assistant's home
+	RemoteFolders  []KBRemoteFolder  `json:"remote_folders,omitempty"`
 	// AttachmentDaysBySource: attachment_days for the chats of one source (kb.attachment_days_by_source); the sources
 	// not in it, and non-positive values, keep attachment_days.
 	AttachmentDaysBySource map[string]int `json:"attachment_days_by_source,omitempty"`
@@ -168,6 +185,19 @@ type KBSettings struct {
 	// LarkMinutes is kb.lark_minutes, importing the owner's Lark minutes and document titles through lark-cli (nil or
 	// not enabled: off). Like History it is read afresh every round, so a change never reopens the knowledge base.
 	LarkMinutes *KBLarkMinutes `json:"lark_minutes,omitempty"`
+}
+
+// KBSourceChatID identifies a chat in its connector account, before filing in the knowledge base.
+type KBSourceChatID string
+
+// KBImportProvider pins one installation to an exact connector chat and filing namespace.
+type KBImportProvider struct {
+	Extension   wireids.ExtensionID `json:"extension"`
+	StorageID   wireids.ExtensionID `json:"storage_id"`
+	InstalledAt time.Time           `json:"installed_at"`
+	Connector   wireids.ConnectorID `json:"connector"`
+	SourceID    KBSourceChatID      `json:"source_id"`
+	FiledAs     string              `json:"filed_as"`
 }
 
 // KBLarkMinutes is kb.lark_minutes (docs/assistant/knowledge.md "Lark minutes and documents"): meeting minutes and
@@ -199,6 +229,17 @@ const CodeKBReadOnly = "kb_read_only"
 // CodeKBDisabled means the manager has disabled knowledge; retrying cannot enable it.
 const CodeKBDisabled = "kb_disabled"
 
+// KBProjectsParams identifies the machine and working directory to match against knowledge base projects.
+type KBProjectsParams struct {
+	MachineID wireids.MachineID `json:"machine_id"`
+	Cwd       string            `json:"cwd"`
+}
+
+// KBProjectsResult lists the projects whose code directories match the request.
+type KBProjectsResult struct {
+	Projects []KBProject `json:"projects"`
+}
+
 // KBProject is a project as kb.projects names it.
 type KBProject struct {
 	Slug string `json:"slug"`
@@ -220,6 +261,14 @@ type KBForgotten struct {
 	Items  int `json:"items"`
 }
 
+// KBChatID identifies a chat as filed in the knowledge base.
+type KBChatID string
+
+// KBContextParams identifies the chat whose context to read.
+type KBContextParams struct {
+	ChatID KBChatID `json:"chat_id"`
+}
+
 // KBContextResult is kb.context's answer.
 type KBContextResult struct {
 	Context *kbwire.ChatContext `json:"context"`
@@ -236,6 +285,24 @@ type KBPosts struct {
 	Comments []connectorwire.PostComment `json:"comments"`
 	Limit    int                         `json:"limit,omitempty"`
 	Source   string                      `json:"source,omitempty"`
+}
+
+// KBPostsPutResult contains one status per submitted post.
+type KBPostsPutResult struct {
+	Statuses []string `json:"statuses"`
+}
+
+// KBPostsCommentsAck is the empty acknowledgment of a comment update.
+type KBPostsCommentsAck = buswire.None
+
+// KBPostsPendingResult lists posts whose comments need to be read again.
+type KBPostsPendingResult struct {
+	Posts []connectorwire.PendingPost `json:"posts"`
+}
+
+// KBArchivedChatsResult lists conversations archived under the requested source.
+type KBArchivedChatsResult struct {
+	Chats []connectorwire.ArchivedChat `json:"chats"`
 }
 
 // KBAgentTurn is kb.agent_turn's params: the agent, where it works, and what its turn comes to (the hub's verdict

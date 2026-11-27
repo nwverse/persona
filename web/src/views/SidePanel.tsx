@@ -285,7 +285,7 @@ export function SidePanelView({
         "fixed inset-x-0 top-(--kb-top) z-30 flex h-(--kb-h) flex-col bg-page shadow-overlay max-lg:pr-[env(safe-area-inset-right)] max-lg:pl-[env(safe-area-inset-left)] lg:relative lg:inset-auto lg:top-auto lg:z-auto lg:h-auto lg:w-(--panel-w) lg:shrink-0 lg:border-l lg:border-line lg:shadow-none",
         maximized && "lg:hidden",
       )}
-      style={{ "--panel-w": `${width}px`, animation: `slide-in-right 260ms ${EASE} both` } as React.CSSProperties}
+      style={{ "--panel-w": `${width}px`, animation: `slide-in-right 260ms ${EASE} backwards` } as React.CSSProperties}
     >
       {/* the panel is on the right: dragging its left edge left (or ArrowLeft) widens it */}
       <ResizeHandle
@@ -299,7 +299,7 @@ export function SidePanelView({
         label={t("sidepanel.resize_label")}
         title={t("sidepanel.resize_title")}
         controls={asideId}
-        className="hidden lg:block"
+        className="hidden lg:flex"
       />
       <div className="flex min-h-0 flex-1 flex-col">
         {/* a chunk gone after a hub redeploy reloads once, else shows a retry; never a blank panel */}
@@ -673,7 +673,7 @@ function body(p: Panel, onClose: () => void) {
     case "changes":
       return <ChangesPanel key={`${p.mid}/${p.sid}`} mid={p.mid} sid={p.sid} opened={p} onClose={onClose} />;
     case "file":
-      return <FileViewerPanel key={`${p.mid}:${p.path}:${p.line ?? ""}-${p.to ?? ""}${p.readOnly ? ":ro" : ""}`} mid={p.mid} sid={p.sid} path={p.path} cwd={p.cwd} line={p.line} to={p.to} readOnly={p.readOnly} onClose={onClose} />;
+      return <FileViewerPanel key={`${p.mid}:${p.path}:${p.line ?? ""}-${p.to ?? ""}${p.readOnly ? ":ro" : ""}:${p.navigationId ?? ""}`} mid={p.mid} sid={p.sid} path={p.path} cwd={p.cwd} line={p.line} to={p.to} readOnly={p.readOnly} onClose={onClose} />;
     case "link":
       return <LinkPanel key={`${p.manager ?? ""} ${p.url}`} url={p.url} title={p.title} manager={p.manager} onClose={onClose} />;
     case "conversation-tasks":

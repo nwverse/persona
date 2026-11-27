@@ -140,8 +140,16 @@ export struct SettingsPage {
     const sessionTarget = owner.target(target);
     const current = (): boolean => this.mounted && this.active && this.page === page && this.model === owner && revision === this.machineRevision && owner.owns(generation, scope);
     this.management.setAdmission(current);
-    await this.management.load(this.basePage(), owner, page==='model_purpose' ? target.id : ''); if (!current()) return;
     const row = new ManagementRow(target.id, target.title, target.detail, target.data());
+    if (page === 'channel_detail' && !this.channelAllowed(row.id) ||
+        page === 'connector_detail' && !this.connectorAllowed(row.id)) {
+      this.management.selectedId = row.id;
+      this.management.channelDetail = {};
+      this.management.error = '';
+      this.management.loading = false;
+      return;
+    }
+    await this.management.load(this.basePage(), owner, page==='model_purpose' ? target.id : ''); if (!current()) return;
     if (page === 'extension_detail') await this.management.openExtension(owner, row);
     else if (page === 'connector_detail') this.management.openConnector(row);
     else if (page === 'channel_detail') await this.management.openChannel(owner, row);
@@ -1126,8 +1134,22 @@ export struct SettingsPage {
     }.width('100%').height('100%')
   }
 
+  private connectorAllowed(id: string): boolean {
+    const normalized = id.trim().toLowerCase();
+    if (!this.model.mailModuleAllowed() && (normalized === 'mail' || normalized.startsWith('mail:'))) return false;
+    if (!this.model.larkModuleAllowed() && ['larksync', 'feishu_bot', 'feishu-bot', 'lark_bot'].includes(normalized)) return false;
+    return true;
+  }
+  private channelAllowed(id: string): boolean {
+    const normalized = id.trim().toLowerCase();
+    if (!this.model.larkModuleAllowed() && ['feishu', 'feishu_bot', 'feishu-bot', 'lark_bot'].includes(normalized)) return false;
+    return true;
+  }
   @Builder connectorDetailPage() {
     List() {
+      if (!this.connectorAllowed(this.management.selectedId)) {
+        ListItem() { Text(tr('read_only')).fontColor($r('sys.color.font_secondary')).padding(Tokens.inset) }
+      } else {
       if (Wire.text(this.selectedConnector()?.raw || {}, 'status')) ListItem() { Text(Wire.text(this.selectedConnector()?.raw || {}, 'status')).padding(Tokens.inset) }
       if (this.selectedConnector() && Wire.text(this.selectedConnector()?.raw || {}, 'account'))
         ListItem() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: tr('account'), secondaryText: Wire.text(this.selectedConnector()?.raw || {}, 'account') }) }) }
@@ -1181,6 +1203,7 @@ export struct SettingsPage {
           ListItem() { Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('sign_out')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('sign_out', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('sign_out')).bindTips(tr('sign_out')).onClick(() => this.confirmConnectorLogout()) }
       }
       if (this.management.error) ListItem() { Text(trError(this.management.error)).fontColor($r('app.color.persona_danger')).padding(Tokens.inset) }
+      }
     }.width('100%').height('100%')
   }
 
@@ -1191,7 +1214,7 @@ export struct SettingsPage {
       }
       this.extensionOperationPanel()
       ForEach(this.managementRowBindings, (binding: BoundRow<ManagementRow>) => {
-        ListItem() {
+        if (page !== 'connectors' || this.connectorAllowed(binding.value.id)) ListItem() {
           Column() {
             Row() {
               Button({ type: ButtonType.Normal }) {
@@ -1217,7 +1240,9 @@ export struct SettingsPage {
 
   @Builder channelDetailPage() {
     List() {
-      if (Object.keys(this.management.channelDetail).length > 0) {
+      if (!this.channelAllowed(this.management.selectedId)) {
+        ListItem() { Text(tr('read_only')).fontColor($r('sys.color.font_secondary')).padding(Tokens.inset) }
+      } else if (Object.keys(this.management.channelDetail).length > 0) {
         ListItem() { ComposeListItemV2({ contentItemV2: new ContentItemV2({ primaryText: Wire.text(this.management.channelData(), 'name', this.management.selectedId),
           secondaryText: Wire.text(this.management.channelData(), 'state') }) }) }
         if (Wire.bool(this.management.channelData(), 'read_only')) ListItem() { Text(tr('read_only')).padding(Tokens.inset) }
@@ -1284,7 +1309,7 @@ export struct SettingsPage {
   @Builder channelsPage() {
     List() {
       ForEach(this.managementRowBindings, (binding: BoundRow<ManagementRow>) => {
-        ListItem() {
+        if (this.channelAllowed(binding.value.id)) ListItem() {
           Column() {
             Row() {
               Button({ type: ButtonType.Normal }) {
@@ -1437,6 +1462,34 @@ export struct SettingsPage {
                 .onSelect(this.appearanceSelector('group', this.appearanceRevision)).id('appearance.agent-grouping')
             } else LoadingProgress().width(Tokens.touch).height(Tokens.touch).accessibilityText(tr('loading'))
           }.constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.fine, bottom: Tokens.fine }).width('100%')
+          if (this.model.agentsDisplaySupported) {
+            Divider().strokeWidth(Tokens.divider).color(Colors.divider).margin({ left: Tokens.page })
+            Row({ space: Tokens.inset }) {
+              Column({ space: Tokens.fine }) {
+                Text(tr('agents_use_herdr_tab_name'))
+                  .fontSize(Tokens.body)
+                  .maxFontScale(Tokens.interfaceFontMaxScale)
+                  .fontColor(Colors.ink)
+                  .width('100%')
+                Text(tr('agents_use_herdr_tab_name_hint'))
+                  .fontSize(Tokens.caption)
+                  .maxFontScale(Tokens.interfaceScaleFor(Tokens.caption))
+                  .fontColor(Colors.secondary)
+                  .width('100%')
+              }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+              Toggle({ type: ToggleType.Switch, isOn: this.model.useHerdrTabName })
+                .selectedColor(Colors.action)
+                .enabled(!this.model.agentsDisplaySaving && this.model.connected && !this.model.demo)
+                .onChange((value: boolean) => {
+                  if (value !== this.model.useHerdrTabName) {
+                    Haptics.selection();
+                    this.model.setUseHerdrTabName(value);
+                  }
+                })
+                .accessibilityText(tr('agents_use_herdr_tab_name'))
+                .id('appearance.use-herdr-tab-name')
+            }.width('100%').constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.fine, bottom: Tokens.fine })
+          }
         }
         .width('100%')
         .clip(true)

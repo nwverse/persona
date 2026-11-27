@@ -304,6 +304,11 @@ export interface Permissions {
    */
   agent_runtimes?: boolean;
   /**
+   * The routine sends its local date and language to this extension and may include its facts and report sections in
+   * the briefing.
+   */
+  routine_facts?: boolean;
+  /**
    * It receives the error and crash reports of the hub and the user's devices, scrubbed (no message text, tokens,
    * user names, machine names or IP addresses). Needed by contributes.error_reports.
    */
@@ -359,6 +364,7 @@ export interface Contributes {
   triage_templates?: TriageTemplateItem[];
   agent_filters?: AgentFilterItem[];
   tunnels?: TunnelItem[];
+  routine_facts?: RoutineFactsItem[];
   error_reports?: ErrorReportsItem[];
   auth_relay?: AuthRelayItem[];
   secret_providers?: SecretProviderItem[];
@@ -664,6 +670,24 @@ export interface RepositoryLinkLabel {
  */
 export type RepositoryLinkKind = "issue" | "pull_request" | (string & {});
 export const REPOSITORY_LINK_KINDS = ["issue", "pull_request"] as const;
+
+/**
+ * Identifies one routine facts source within its extension.
+ */
+export type RoutineContributionID = string & { readonly __brand: "RoutineContributionID" };
+/** A RoutineContributionID from its raw string. */
+export function routineContributionID(raw: string): RoutineContributionID {
+  return raw as RoutineContributionID;
+}
+
+/**
+ * A source of facts and report sections for a scheduled briefing. Requires an RPC runtime and
+ * permissions.routine_facts.
+ */
+export interface RoutineFactsItem {
+  id: RoutineContributionID;
+  title: string;
+}
 
 /**
  * It is given the error and crash reports of the hub and the user's devices (error_reports.deliver): needs the
@@ -1589,11 +1613,13 @@ export interface SecretsResolveResult {
 }
 
 /**
- * A public field name/type; never a value or source path.
+ * A public field name/type or edit action (delete, keep_value); never a value or source path.
  */
 export interface SecretStoreField {
   name: string;
-  type: string;
+  type?: string;
+  delete?: boolean;
+  keep_value?: boolean;
 }
 
 /**
@@ -2090,6 +2116,13 @@ export interface CodeComponent {
    * (…/blob/<sha>/a.go#L{start}-L{end}).
    */
   line_url?: string;
+  /**
+   * Go to definition (UI version 13): a name in the code chosen to follow it (⌘/Ctrl-click or ⌘/Ctrl+B on it; Alt+F7
+   * for its usages) calls ui.action with action and values {path, line, column (1-based, in characters), word,
+   * intent: definition or references}; ⌘[ (Ctrl+Alt+← elsewhere) calls it with {path, intent: back}. An older app
+   * leaves it out.
+   */
+  navigate?: Action;
 }
 
 /**

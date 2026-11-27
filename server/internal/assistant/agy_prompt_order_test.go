@@ -121,3 +121,34 @@ func TestAgyTaskSuccessorKeepsWorkflowCommandBeforeHandoff(t *testing.T) {
 		t.Fatalf("agy task successor prompt = %q", prompt)
 	}
 }
+
+// A workflow command sent to the main conversation keeps byte zero ahead of what the old main conversation left when
+// the conversation is known only by its launcher, an Antigravity one: the launcher's agent is still looked up for a
+// workflow command (#16591), while an ordinary message skips that lookup and keeps the handoff first (#17005).
+func TestAgyMainSendKeepsWorkflowCommandBeforeHandoff(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeHub().withMachine()
+	f.launcherList = []proto.Launcher{{Name: "agy-rt", Source: "agy", Agent: agentprompt.Antigravity, Assistant: true}}
+	s := newServiceOn(t, f, &memStore{})
+	setSettings(t, s, func(v *Settings) { v.Main, v.MainMachineID, v.MachineID = "main-empty", "server", "server" })
+	s.originSet(ctx, "server", "main-empty", OriginUser, "", "")
+	send := func(text string) string {
+		t.Helper()
+		if err := s.saveHandoff(ctx, mainHandoff{From: "old-main", For: "main-empty", MachineID: "server", Summary: "old work", Until: time.Now().UTC()}); err != nil {
+			t.Fatal(err)
+		}
+		out, err := s.SendParams(ctx, SendParams{MachineID: "server", SessionID: "main-empty", Human: true,
+			Params: map[string]any{"client_msg_id": "c-" + text[:5], "text": text, "launcher": "agy-rt"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sent, _ := out["text"].(string)
+		return sent
+	}
+	if got := send(" \t/boost fix the race\nkeep the body"); !strings.HasPrefix(got, "/boost fix the race\nkeep the body\n\n<persona-context") || !strings.Contains(got, "old-main") {
+		t.Fatalf("agy main workflow command = %q", got)
+	}
+	if got := send("fix the race"); !strings.HasPrefix(got, "<persona-context") || !strings.Contains(got, "old-main") || !strings.HasSuffix(strings.TrimSpace(got), "fix the race") {
+		t.Fatalf("ordinary main message with a handoff = %q", got)
+	}
+}

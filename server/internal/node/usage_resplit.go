@@ -15,12 +15,23 @@ import (
 // meter's rules (a reply counted once, the same launcher and agent) and the directory each session started in, and
 // sends them with what the directories resolve to; the manager splits each stored ten minutes in those shares, its
 // sums unchanged (devices/usage_resplit.go). Gentle like the backfill: after a delay, rate-limited, gone with the
-// connection, and a cut one goes on from the last ten minutes the manager recorded.
+// connection, and a cut one goes on from the last ten minutes the manager recorded. The manager may then name a
+// second pass, the temporary folders' (resplitPassTemp, #16827).
 
 // resplitDelay: after the connection, and after the meter has asked whether the manager keeps directories.
 var resplitDelay = 4 * time.Minute
 
-// resplitUsage asks the manager whether this machine's last week wants re-splitting and does it.
+// resplitPassTemp is the re-split of the usage the manager stored under UsageDirTemp (#16827): a node that names a
+// temporary folder by its path (usage_dirs.go) re-reads the week once more and sends the temporary folders' buckets,
+// and the manager splits what it had under UsageDirTemp among them. Asked only by a node that says it names them
+// (usage.resplit.status' temp_dirs): an older one's re-read still has UsageDirTemp, and would move nothing.
+const resplitPassTemp = "temp"
+
+// resplitPasses: the usage stored before directories, then that stored under UsageDirTemp; each at most once a
+// connection.
+const resplitPasses = 2
+
+// resplitUsage asks the manager whether this machine's last week wants re-splitting and does it, pass by pass.
 func (n *Node) resplitUsage(ctx context.Context, stateLoaded <-chan struct{}) {
 	select {
 	case <-ctx.Done():
@@ -32,15 +43,36 @@ func (n *Node) resplitUsage(ctx context.Context, stateLoaded <-chan struct{}) {
 		return
 	case <-time.After(resplitDelay):
 	}
-	if n.peer == nil || n.usageDirs.get() == nil { // the manager keeps no directories (or the meter is not up)
+	dirs := n.usageDirs.get()
+	if n.peer == nil || dirs == nil { // the manager keeps no directories (or the meter is not up)
 		return
 	}
-	var st backfillRange
+	for range resplitPasses {
+		if !n.resplitPass(ctx, dirs) {
+			return
+		}
+	}
+}
+
+// resplitPass asks the manager what is left to re-split and does it: false when nothing is (or the manager does not
+// know it, or names a pass this node does not), or it was cut.
+func (n *Node) resplitPass(ctx context.Context, dirs *usageDirs) bool {
+	var st struct {
+		backfillRange
+		Pass string `json:"pass"` // "" the usage stored before directories, resplitPassTemp
+	}
+	ask := map[string]any{}
+	if dirs.temps {
+		ask["temp_dirs"] = true
+	}
 	cctx, cancel := context.WithTimeout(ctx, backfillCall)
-	err := n.peer.Call(cctx, "usage.resplit.status", map[string]any{}, &st)
+	err := n.peer.Call(cctx, "usage.resplit.status", ask, &st)
 	cancel()
 	if err != nil || st.Done || st.Since >= st.Before { // an older manager does not know it
-		return
+		return false
+	}
+	if st.Pass != "" && (st.Pass != resplitPassTemp || !dirs.temps) {
+		return false
 	}
 	since, before := time.Unix(st.Since, 0), time.Unix(st.Before, 0)
 	started := time.Now()
@@ -49,13 +81,27 @@ func (n *Node) resplitUsage(ctx context.Context, stateLoaded <-chan struct{}) {
 	queries := slices.DeleteFunc(n.usageQueries(), func(q usageQuery) bool { return !tokenuse.FileMetered(q.agent()) })
 	buckets, err := n.usageScan(ctx, files, queries, since, before, lim, int64(resplitStep/time.Second))
 	if err != nil {
-		return
+		return false
+	}
+	if st.Pass == resplitPassTemp { // only the sessions that started in a temporary folder
+		temp := map[string]bool{}
+		buckets = slices.DeleteFunc(buckets, func(b proto.UsageBucket) bool {
+			is, seen := temp[b.Dir]
+			if !seen {
+				is = n.usageTempKey(b.Dir)
+				temp[b.Dir] = is
+			}
+			return !is
+		})
 	}
 	resolved := map[string]*proto.UsageDir{}
 	moved := 0
 	for _, req := range resplitRequests(buckets, before) {
 		if dirs := n.backfillDirs(ctx, req["buckets"].([]proto.UsageBucket), resolved); len(dirs) > 0 {
 			req["dirs"] = dirs
+		}
+		if st.Pass != "" {
+			req["pass"] = st.Pass
 		}
 		var res struct {
 			Moved int `json:"moved"`
@@ -64,12 +110,21 @@ func (n *Node) resplitUsage(ctx context.Context, stateLoaded <-chan struct{}) {
 		err := n.peer.Call(cctx, "usage.resplit", req, &res)
 		cancel()
 		if err != nil { // the next connection asks again, from the ten minutes after the last recorded
-			n.logger.Printf("usage re-split: %v (%d split)", err, moved)
-			return
+			n.logger.Printf("usage re-split%s: %v (%d split)", resplitLabel(st.Pass), err, moved)
+			return false
 		}
 		moved += res.Moved
 	}
-	n.logger.Printf("usage re-split: %d buckets read in %s, %d split", len(buckets), time.Since(started).Round(time.Second), moved)
+	n.logger.Printf("usage re-split%s: %d buckets read in %s, %d split", resplitLabel(st.Pass), len(buckets), time.Since(started).Round(time.Second), moved)
+	return true
+}
+
+// resplitLabel names a pass in the log ("" for the first).
+func resplitLabel(pass string) string {
+	if pass == "" {
+		return ""
+	}
+	return " (" + pass + ")"
 }
 
 // resplitStep: the ten minutes the manager keeps the last week in.

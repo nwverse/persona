@@ -105,6 +105,8 @@
   "assistant_service_tier_refused": "Codex couldn’t apply Fast before the first message. Nothing was sent; try again or choose Standard.",
   "agent_speed_unsupported": "This launcher can’t start an Agent at that speed: {reason}",
   "agent_speed_start_only": "A faster speed applies only to a new Agent start: {reason}",
+  "agent_speed_tier_new": "Start a new Codex Agent to choose a service tier.",
+  "agent_speed_tier_value": "Choose priority or ultrafast and omit the separate speed field.",
   "agent_speed_model": "This model doesn’t advertise that Codex speed: {reason}",
   "agent_speed_invalid": "That Agent speed isn’t valid: {reason}",
   "session_speed_unsupported": "This session does not offer the selected speed.",
@@ -116,7 +118,7 @@
   "assistant_supervision_none": "none detected; connect or update a compatible runtime",
   "assistant_supervision_account": "This engine supports task follow-up, but this account has not enabled custom system instructions. Ask the engine provider to enable them for your account. Nothing was started or sent.",
   "assistant_supervision_node_outdated": "Update this computer's Persona Link before following up tasks here. Its current version cannot apply separate task instructions. Nothing was started or sent.",
-  "omp_options": "You can choose a model only when starting a new omp session in herdr. Leave permission mode, thinking effort and ultracode unset.",
+  "omp_options": "You can choose a model only when starting a new omp session in herdr or Orca. Leave permission mode, thinking effort and ultracode unset.",
   "omp_resume_unknown": "Persona can’t find this omp session’s file, so it can’t resume it from here. Continue it on the computer with omp --resume. Nothing was sent.",
   "resume_unknown": "This computer has no record of that conversation, so it can’t be continued here. Nothing was started.",
   "held_ahead": "Earlier messages to this Agent are still waiting to be sent. Send this one after them.",
@@ -131,5 +133,9 @@
   "conversation_retired": "This session no longer runs the conversation.",
   "agent_assistant_workspace": "Cannot start an agent in the assistant workspace. Choose the project folder or a separate worktree; no agent was started.",
   "codex_writable_symlink": "Cannot start Codex in workspace-write mode: {name} is a symlink under a writable root, so its sandbox cannot enforce the read-only path. Choose a project folder as cwd or use read-only mode. Nothing was started; the symlink was not changed.",
-  "agy_in_terminal": "This Antigravity conversation is open in agy in a terminal on that computer, and Persona can’t reach that terminal. Nothing was sent. Answer in the terminal, or close agy there and try again."
+  "agy_in_terminal": "This Antigravity conversation is open in agy in a terminal on that computer, and Persona can’t reach that terminal. Nothing was sent. Answer in the terminal, or close agy there and try again.",
+  "effort_input_draft": "The terminal’s input box has text that hasn’t been sent (“{draft}”), so the effort wasn’t changed and nothing was typed. Clear it on the computer and try again.",
+  "effort_input_draft_plain": "The terminal’s input box shows text (“{draft}”), so the effort wasn’t changed and nothing was typed. This terminal is read without colors, so Claude’s grey suggested message counts as text too. Clear it on the computer and try again.",
+  "speed_input_draft": "The terminal’s input box has text that hasn’t been sent (“{draft}”), so the speed wasn’t changed and nothing was typed. Clear it on the computer and try again.",
+  "speed_input_draft_plain": "The terminal’s input box shows text (“{draft}”), so the speed wasn’t changed and nothing was typed. This terminal is read without colors, so Claude’s grey suggested message counts as text too. Clear it on the computer and try again."
 }

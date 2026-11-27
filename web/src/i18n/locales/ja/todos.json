@@ -31,6 +31,13 @@
   "kicker_question": "質問があります",
   "reopen_todo": "ToDoを再開",
   "complete_todo": "ToDoを完了",
+  "report_concern_action": "結果を報告して閉じる…",
+  "report_concern_title": "結果を報告",
+  "report_concern_hint": "「{title}」の結果の要約は決定事項の履歴に保存されます。",
+  "report_concern_label": "結果の要約",
+  "report_concern_placeholder": "どのような結果でしたか？",
+  "report_concern_submit": "報告して閉じる",
+  "report_concern_success": "結果を報告しました",
   "agent_count_one": "{count}個のエージェント",
   "agent_count_other": "{count}個のエージェント",
   "not_handed": "まだエージェントに任せていません",
@@ -487,5 +494,12 @@
   "status_pr_checks_pending": "チェック中",
   "status_pr_waiting_merge": "マージ待ち",
   "status_parked": "保留中",
-  "status_tracking": "追跡中"
+  "status_tracking": "追跡中",
+  "grouping_v2_status": "状態別",
+  "grouping_v2_direction": "方向別",
+  "grouping_v2_folder": "プロジェクト別",
+  "grouping_v2_request": "依頼別",
+  "detail_direction_inherited_hint": "「{name}」から継承",
+  "detail_direction_inherited_picker_hint": "現在は「{name}」から継承しています。適用で明示的に固定するか、別の方向を選択・解除できます。",
+  "detail_subtask_direction_mismatch": "方向：{direction}"
 }

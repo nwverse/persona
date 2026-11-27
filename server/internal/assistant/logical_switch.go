@@ -1206,15 +1206,7 @@ func (s *Service) logicalSwitchHandoff(ctx context.Context, st logicalSwitchStor
 		return h, err
 	}
 	h, fellBack, err := summarizeLogicalHandoff(ctx, h, previousSummary, func() (assistantwire.ModelCompleteResult, error) {
-		out, err := s.runModelCall(ctx, "kb", "conversation handoff", "conversation handoff", call)
-		if err != nil {
-			return assistantwire.ModelCompleteResult{}, err
-		}
-		value, ok := out.(assistantwire.ModelCompleteResult)
-		if !ok {
-			return value, errors.New("invalid summary result")
-		}
-		return value, nil
+		return s.runModelCall(ctx, "kb", "conversation handoff", "conversation handoff", call)
 	})
 	if err != nil {
 		return h, err
