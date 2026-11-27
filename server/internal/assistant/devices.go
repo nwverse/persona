@@ -136,6 +136,7 @@ func (s *Service) nodeAnswer(ctx context.Context, machine, method string, params
 		RecoveryID      string                           `json:"recovery_id"`
 		RecoveryOnly    bool                             `json:"recovery_only"`
 		PrepareRecovery bool                             `json:"prepare_recovery"`
+		Query           string                           `json:"query"`
 		Ack             []assistantwire.ViewErrorReceipt `json:"ack"`
 	}
 	switch method {
@@ -201,7 +202,7 @@ func (s *Service) nodeAnswer(ctx context.Context, machine, method string, params
 		if !s.assistantCaller(ctx, machine, p.SessionID) {
 			return ContextResult{}, true, nil
 		}
-		return s.Context(ctx, ContextParams{SessionID: p.SessionID, MachineID: machine, Ack: p.Ack, RecoveryID: p.RecoveryID, RecoveryOnly: p.RecoveryOnly, PrepareRecovery: p.PrepareRecovery}), true, nil
+		return s.Context(ctx, ContextParams{SessionID: p.SessionID, MachineID: machine, Ack: p.Ack, RecoveryID: p.RecoveryID, RecoveryOnly: p.RecoveryOnly, PrepareRecovery: p.PrepareRecovery, Query: p.Query}), true, nil
 	}
 	return nil, false, nil
 }
