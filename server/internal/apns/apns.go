@@ -208,19 +208,25 @@ func Host(env string) string {
 	return "https://api.push.apple.com"
 }
 
-// maxResponseBodyBytes bounds how much of an APNs response body is decoded or drained for connection reuse.
+// maxResponseBodyBytes bounds how much of an APNs response body is decoded and drained for connection reuse.
 const maxResponseBodyBytes = 64 << 10
 
-// validDeviceToken ensures token is a non-empty single URL path segment so untrusted
-// tokens cannot traverse paths or inject query parameters, fragments, or control bytes.
+// maxDeviceTokenLen bounds device, VoIP, and Live Activity tokens accepted into APNs' /3/device/<token> path.
+const maxDeviceTokenLen = 512
+
+// ErrInvalidDeviceToken reports a malformed device token rejected locally before contacting APNs.
+var ErrInvalidDeviceToken = errors.New("apns: invalid device token")
+
+// validDeviceToken enforces a strict ASCII identifier allowlist ([A-Za-z0-9_-], 1..maxDeviceTokenLen)
+// so untrusted tokens cannot traverse paths, inject path parameters/queries/fragments, or bloat HTTP/2 :path.
 func validDeviceToken(token string) error {
-	if token == "" || token == "." || token == ".." {
-		return errors.New("apns: invalid device token")
+	if len(token) == 0 || len(token) > maxDeviceTokenLen {
+		return ErrInvalidDeviceToken
 	}
 	for i := 0; i < len(token); i++ {
 		c := token[i]
-		if c <= 0x20 || c >= 0x7f || c == '/' || c == '\\' || c == '?' || c == '#' || c == '%' {
-			return errors.New("apns: invalid device token")
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_') {
+			return ErrInvalidDeviceToken
 		}
 	}
 	return nil
@@ -290,8 +296,9 @@ func (c *Client) post(ctx context.Context, r Request, jwt string) (Result, error
 		c.http.CloseIdleConnections()
 		return Result{}, err
 	}
+	limited := io.LimitReader(resp.Body, maxResponseBodyBytes)
 	defer func() {
-		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxResponseBodyBytes))
+		_, _ = io.Copy(io.Discard, limited)
 		_ = resp.Body.Close()
 	}()
 	res := Result{Status: resp.StatusCode}
@@ -299,7 +306,7 @@ func (c *Client) post(ctx context.Context, r Request, jwt string) (Result, error
 		var e struct {
 			Reason string `json:"reason"`
 		}
-		_ = json.NewDecoder(io.LimitReader(resp.Body, maxResponseBodyBytes)).Decode(&e)
+		_ = json.NewDecoder(limited).Decode(&e)
 		res.Reason = e.Reason
 	}
 	return res, nil

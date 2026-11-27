@@ -1,12 +1,15 @@
 package apns
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -28,6 +31,9 @@ func TestSendRejectsMalformedDeviceToken(t *testing.T) {
 		".",
 		"..",
 		"../other",
+		"..;foo",
+		"abcd;foo=bar",
+		";",
 		"abcd/extra",
 		`abcd\extra`,
 		"abcd?foo=bar",
@@ -36,17 +42,37 @@ func TestSendRejectsMalformedDeviceToken(t *testing.T) {
 		"ab cd",
 		"abcd\r\n",
 		"abcd\x00ef",
+		"abcd\x7f",
+		"tok\xc3\xa9",
+		`ab"cd`,
+		"ab<cd>",
+		"ab{cd}",
+		"ab|cd",
+		"ab^cd",
+		"ab@cd",
+		"ab:cd",
+		strings.Repeat("a", maxDeviceTokenLen+1),
 	}
 	for _, tok := range badTokens {
-		if _, err := c.Send(context.Background(), Request{Token: tok, PushType: "alert", Priority: "10", Body: []byte(`{}`)}); err == nil {
-			t.Errorf("Send(Token=%q) succeeded, want validation error", tok)
+		_, err := c.Send(context.Background(), Request{Token: tok, PushType: "alert", Priority: "10", Body: []byte(`{}`)})
+		if !errors.Is(err, ErrInvalidDeviceToken) {
+			t.Errorf("Send(Token=%q) error = %v, want ErrInvalidDeviceToken", tok, err)
 		}
 	}
 	if n := hits.Load(); n != 0 {
 		t.Fatalf("malformed tokens caused %d outbound HTTP requests, want 0", n)
 	}
-	// Valid hex and test fixture tokens remain accepted.
-	for _, tok := range []string{"abcd", "0123456789abcdefABCDEF", "devtok", "tok-phone", "self_token"} {
+	// Valid hex (64-char APNs, 256-char & 512-char Live Activity/VoIP) and test fixture tokens remain accepted.
+	validTokens := []string{
+		"abcd",
+		strings.Repeat("0123456789abcdef", 4),  // 64-char hex
+		strings.Repeat("0123456789abcdef", 16), // 256-char hex
+		strings.Repeat("a", maxDeviceTokenLen), // 512-char boundary
+		"devtok",
+		"tok-phone",
+		"self_token",
+	}
+	for _, tok := range validTokens {
 		res, err := c.Send(context.Background(), Request{Token: tok, PushType: "alert", Priority: "10", Body: []byte(`{}`)})
 		if err != nil || res.Status != 200 {
 			t.Fatalf("Send(Token=%q) = (%+v, %v), want 200", tok, res, err)
@@ -217,5 +243,48 @@ func TestSendErrorBodyDrainsForConnectionReuse(t *testing.T) {
 	}
 	if n := opened.Load(); n != 1 {
 		t.Fatalf("HTTP/1.1 keepalive connections opened = %d, want 1 (error response body was not drained)", n)
+	}
+}
+
+type countingReadCloser struct {
+	r    io.Reader
+	read *atomic.Int64
+}
+
+func (c *countingReadCloser) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.read.Add(int64(n))
+	return n, err
+}
+
+func (c *countingReadCloser) Close() error { return nil }
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestSendBoundsLargeErrorBodyRead(t *testing.T) {
+	k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bytesRead atomic.Int64
+	payload := append([]byte(`{"reason":"BadDeviceToken"}`), bytes.Repeat([]byte(" "), 256<<10)...)
+	c := NewWithKey(Config{KeyID: "KEY1234567", TeamID: "TEAM123456", Topic: "app.test"}, k)
+	c.Base = "https://api.example.com"
+	c.http = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusBadRequest,
+			Body:       &countingReadCloser{r: bytes.NewReader(payload), read: &bytesRead},
+			Header:     make(http.Header),
+		}, nil
+	})}
+
+	res, err := c.Send(context.Background(), Request{Token: "abcd", PushType: "alert", Priority: "10", Body: []byte(`{}`)})
+	if err != nil || res.Status != 400 || res.Reason != "BadDeviceToken" {
+		t.Fatalf("Send = (%+v, %v), want 400 BadDeviceToken", res, err)
+	}
+	if got := bytesRead.Load(); got > maxResponseBodyBytes {
+		t.Fatalf("read %d bytes from 256 KiB error body, want <= %d", got, maxResponseBodyBytes)
 	}
 }
