@@ -104,11 +104,13 @@ test('on Windows the hook is a cmd.exe command', (t) => {
   const agyDir = join(home, 'antigravity-cli')
   mkdirSync(agyDir)
   const node = String.raw`C:\Program Files (x86)\nodejs\node.exe`
-  const dir = installMediaGuard({ agyDir, script: SCRIPT, node, platform: 'win32' })
-  const installed = join(dir, 'media-guard.mjs')
+  const script = SCRIPT
+  const dir = installMediaGuard({ agyDir, script, node, platform: 'win32' })
   const command = JSON.parse(readFileSync(join(dir, 'hooks.json'), 'utf8'))['persona-media-guard'].PreToolUse[0].hooks[0].command
   const ask = 'echo {"decision":"ask"}'
-  assert.equal(command, `if exist "${node}" (if exist "${installed}" ("${node}" "${installed}" --state "${join(agyDir, 'persona-media-guard')}") else (${ask})) else (${ask})`)
+  const installed = join(dir, 'media-guard.mjs')
+  const dependency = join(dir, 'lib', 'media-guard.js')
+  assert.equal(command, `if exist "${node}" (if exist "${installed}" (if exist "${dependency}" ("${node}" "${installed}" --state "${join(agyDir, 'persona-media-guard')}") else (${ask})) else (${ask})) else (${ask})`)
 })
 
 test('cmd.exe runs the Windows hook and answers "ask" once its script or Node.js is gone', { skip: process.platform !== 'win32' && 'needs cmd.exe' }, (t) => {
