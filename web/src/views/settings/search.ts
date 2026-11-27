@@ -104,6 +104,7 @@ const SHARED_INDEX: SearchGroup[] = [
   { tab: "persona", group: t("settings-assistantsettings.inbox_todo_forward"), anchor: "inbox-todo-forward" },
   { tab: "persona", group: t("settings-assistantsettings.default_permissions"), hint: words(t("settings-directionnotes.title"), t("settings-directionnotes.permissions")), anchor: "default-permissions" },
   { tab: "persona", group: t("settings-assistantsettings.readonly_mode"), anchor: "readonly-mode" },
+  { tab: "persona", group: t("settings-assistantsettings.approval_mirror_main"), anchor: "approval-mirror-main" },
   {
     tab: "persona",
     group: t("settings-assistantsettings.owner_approval_title"),

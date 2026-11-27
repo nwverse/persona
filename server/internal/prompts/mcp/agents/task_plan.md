@@ -8,9 +8,9 @@ Edits need readonly=false+write permission; replace readonly Codex for fixes or 
 
 Use repositories_list/repository_get when needed; explicit repository URL or path takes precedence. Bindings never imply machine/cwd. Non-repository tasks need no lookup (not a mandatory dispatch preflight). Only owner closes terminals on acceptance.
 
-Saved workspace plan on existing todo: {"backend":{"operation_id":"<id>"}}. Multi-repo container: {"container":{"selected_repo_ids":[...]}} (or operation_id with todo_id). Optional host picks enabled engine; selected repos must be ready.
+Saved workspace plan on existing todo: {"backend":{"operation_id":"id"}}. Multi-repo container: {"container":{"selected_repo_ids":[...]}} (or operation_id with todo_id). Optional host picks enabled engine; selected repos must be ready.
 
-Workspace: "new" isolates; {"new":{"branch":"task/my-change"}} names it (default task/<todo id>); reuse needs a clean, unused checkout. {"existing":"<cwd or id>","queue":true} selects it without switching; busy queues FIFO only if requested or owner waits. "none" creates nothing. Omitted: readonly=none, otherwise configured default or new when busy. Only the engine creates workspaces; failure stops dispatch, acceptance keeps them. Respect org read-only refusals.
+Workspace: "new" isolates; {"new":{"branch":"task/my-change"}} names it (default task/{todo id}); reuse needs a clean, unused checkout. {"existing":"<cwd or id>","queue":true} selects it without switching; busy queues FIFO only if requested or owner waits. "none" creates nothing. Omitted: readonly=none, otherwise configured default or new when busy. Only the engine creates workspaces; failure stops dispatch, acceptance keeps them. Respect org read-only refusals.
 
 `wait_seconds` observes <=50s after dispatch, appending `Inline observation` JSON (`completed`+`reply`, `question`+`interaction_id`, `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, known input/session ids). Never answers, accepts, resends or cancels; `task_review` supervision applies. Older nodes may time out. Only one immediately dispatchable task waits; cards/multi-task return immediately.{{template "shared/mcp_language" .}}
 

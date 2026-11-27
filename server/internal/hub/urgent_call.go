@@ -15,8 +15,8 @@ import (
 	"github.com/nwverse/persona/server/internal/apns"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/lazyre"
-	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/relayproto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -48,10 +48,8 @@ func init() {
 func (h *Hub) refreshAssistantTools() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	var res struct {
-		Tools []proto.Tool `json:"tools"`
-	}
-	if err := h.callBus(ctx, assistantwire.AssistantID, assistantwire.MethodTools, nil, &res); err != nil {
+	res, err := buswire.Call(ctx, h.managerCaller(assistantwire.AssistantID), assistantwire.ToolsMethod, assistantwire.SessionRef{})
+	if err != nil {
 		h.logf("assistant: tools: %v", err)
 		return
 	}

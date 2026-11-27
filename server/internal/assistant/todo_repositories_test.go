@@ -313,8 +313,18 @@ func TestTodoRepositoryLegacyPRsImportOnceBeforeFirstEdit(t *testing.T) {
 	}
 	next.advanceTaskReply(t.Context(), todoNow(next, todo.ID), "", "", "Opened https://code.example.com/Example/Api/pull/17.")
 	got, err = next.readTodoRepositories(t.Context(), todo.ID)
-	if err != nil || len(got.Repositories) != 0 {
-		t.Fatal("an unlinked report claimed a self-hosted PR without ownership", got, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range got.Repositories {
+		for _, link := range row.Links {
+			if link.Role != repository.LinkRoleReference {
+				t.Fatal("an unlinked report claimed a self-hosted PR as delivery without ownership", got)
+			}
+		}
+	}
+	if old := todoNow(next, todo.ID); old.PRURL != "https://github.com/example/web/pull/8" {
+		t.Fatal("an unlinked report overwrote the legacy PR without ownership", old)
 	}
 }
 

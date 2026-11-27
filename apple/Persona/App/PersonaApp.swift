@@ -111,6 +111,7 @@ struct PersonaApp: App {
                 PushRegistrar.shared.foreground() // notifications allowed in Settings since a denial: register now (#1861)
                 model.resumeLinks()
                 model.refreshExtensionSurfaces()
+                model.textLookup.foreground() // the lookup extension turned on or off elsewhere (#10977), at most once a minute
                 #if os(iOS)
                 model.refreshPageVisibility()
                 HomeWidgetWriter.shared.tellHub() // whether the hub should wake it for its widgets (#5721)
@@ -503,6 +504,16 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             }
             return
         }
+        if let entries = info["resolved_interactions"] as? [[String: Any]] {
+            // Occurrence-bound entries protect a same-ID replacement whose alert arrived during the gathering delay.
+            let cards = entries.compactMap { entry -> NotificationWithdrawal.Resolved? in
+                guard let id = entry["id"] as? String, !id.isEmpty else { return nil }
+                return NotificationWithdrawal.Resolved(interactionID: id, interactionCreatedAt: entry["created_at"] as? String)
+            }
+            nonisolated(unsafe) let done = completionHandler
+            AppModel.shared.withdrawResolvedOccurrences(cards, group: AppModel.shared.pushGroup(info)) { done(.newData) }
+            return
+        }
         if let ids = info["resolved_interaction_ids"] as? [String] {
             // Cards answered elsewhere while suspended (#4349): their notifications leave the lock screen.
             nonisolated(unsafe) let done = completionHandler
@@ -612,6 +623,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         let action = response.actionIdentifier
         let text = (response as? UNTextInputNotificationResponse)?.userText
         let ixID = info["interaction_id"] as? String
+        let ixCreatedAt = info["interaction_created_at"] as? String
         let extensionNotice = info["extension_notification"] != nil
         let pair = PairPush(info) // a pairing receipt (#4199); nil from an older hub: a plain notification
         let decision = NotificationActions.decision(action: action, info: info) // Take Recommendation on a decision's push
@@ -671,10 +683,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                     return
                 }
                 if let ixID, let resolution = NotificationActions.resolution(action: action, text: text),
-                   NotificationActions.answerable(ixID, among: AppModel.shared.pendingInteractions) {
+                   NotificationActions.answerable(ixID, occurrence: ixCreatedAt, among: AppModel.shared.pendingInteractions) {
                     // A button on the notification: settle it in the background, the app stays where it is. A card its
                     // task's supervisor holds is not settled from here: the tap opens its session below, as a plain tap does.
-                    AppDelegate.resolveFromNotification(ixID, group: key?.group ?? ref?.group, resolution, action: action, done: done)
+                    AppDelegate.resolveFromNotification(ixID, group: key?.group ?? ref?.group, resolution, occurrence: ixCreatedAt, action: action, done: done)
                     return
                 }
                 #if os(iOS)
@@ -700,10 +712,10 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     /// Runs a notification button against the hub. iOS may have launched the app in the background just for this, so
     /// hold a background task until the request is answered; a failure comes back as a local notification, because
     /// the user is not looking at the app.
-    static func resolveFromNotification(_ id: String, group: String?, _ resolution: Resolution, action: String, done: @escaping () -> Void) {
+    static func resolveFromNotification(_ id: String, group: String?, _ resolution: Resolution, occurrence: String? = nil, action: String, done: @escaping () -> Void) {
         inBackground("resolve-interaction", done: done) {
             do {
-                try await AppModel.shared.outside(HubStore.client(group: group)) { try await $0.resolve(id, resolution) }
+                try await AppModel.shared.outside(HubStore.client(group: group)) { try await $0.resolve(id, resolution, occurrence: occurrence) }
             } catch {
                 await NotificationActions.reportFailure(id: id, title: NotificationActions.failureTitle(action: action), error: error)
             }

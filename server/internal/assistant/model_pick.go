@@ -233,6 +233,10 @@ func (s *Service) evictModelPicks(ctx context.Context, picks map[string]modelPic
 // configuration › Main chat's model when the launcher is the one configured there (applyModel, later changes there
 // too), else the launcher's own default.
 func (s *Service) applyPick(ctx context.Context, p map[string]any, pick modelPick) error {
+	return s.applyPickFor(ctx, "assistant", p, pick)
+}
+
+func (s *Service) applyPickFor(ctx context.Context, purpose string, p map[string]any, pick modelPick) error {
 	if proto.IsExternalLauncher(pick.Launcher) {
 		scope, ok := ctx.Value(externalPickKey{}).(externalPickScope)
 		if !ok || scope.pick != pick {
@@ -245,7 +249,7 @@ func (s *Service) applyPick(ctx context.Context, p map[string]any, pick modelPic
 	}
 	if pick.Model == "" {
 		delete(p, "model")
-		return s.applyModel(ctx, "assistant", p)
+		return s.applyModel(ctx, purpose, p)
 	}
 	p["model"] = pick.Model
 	return s.applyPickedModel(ctx, p)
@@ -265,6 +269,42 @@ func (s *Service) relayOnPick(ctx context.Context, machine, sid string, params m
 	}
 	maps.Copy(params, p)
 	return nil
+}
+
+// relayMainModel puts Main chat's configured model into an unpicked main conversation's relayed message when it stays
+// on the conversation's current execution path, so an idle reload woken by a relay keeps the configured model.
+func (s *Service) relayMainModel(ctx context.Context, machine, sid string, params map[string]any) {
+	c, known := s.session(ctx, machine, sid)
+	if !known {
+		return
+	}
+	resolved, err := s.resolveModel(ctx, purposeMain)
+	if err != nil {
+		s.logf("[%s] %s: main chat relay model: %v; it keeps what it ran last", machine, short(sid), err)
+		return
+	}
+	targetLauncher, ok := strings.CutPrefix(resolved.Provider, "launcher.")
+	if !ok || targetLauncher == "" || proto.IsExternalLauncher(targetLauncher) {
+		return
+	}
+	if c.SourceKind == proto.SourceRuntime {
+		if c.Launcher == "" || c.Launcher != targetLauncher || (resolved.Model == "" && resolved.Effort == "") {
+			return
+		}
+	} else {
+		if err := s.otherKindPick(ctx, machine, sid, targetLauncher); err != nil {
+			return
+		}
+		if err := s.logicalAdapterPick(ctx, machine, c, targetLauncher); err != nil {
+			return
+		}
+	}
+	p := maps.Clone(params)
+	if err := preservePermissionMode(p, func() error { return s.applyModel(ctx, purposeMain, p) }); err != nil {
+		s.logf("[%s] %s: main chat relay model: %v; it keeps what it ran last", machine, short(sid), err)
+		return
+	}
+	maps.Copy(params, p)
 }
 
 // pickEffortSet makes effort the pick's effort of conversation sid on machine, when it has a pick: the apps set it

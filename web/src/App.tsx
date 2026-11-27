@@ -67,6 +67,7 @@ import { ExtensionNavPage } from "./views/extensions/ExtensionSlots";
 import { useExtensionPlace } from "./lib/extension-slots";
 import { AttentionSignals } from "./lib/attention-signals";
 import { clearDesktopIsland, DesktopIslandSignals } from "./lib/desktop-island";
+import { TextLookupHost } from "./text-lookup/host";
 import { openStartPage } from "./lib/start-page";
 import { conversationRoute } from "./lib/conversation-page";
 import { useTrackTitle } from "./lib/tracks";
@@ -332,6 +333,8 @@ function pageTarget(s: State, route: Route): PageTarget | undefined {
   if (route.name !== "session") return undefined;
   // A compact card, explicit standalone page ("Open as page"), or message link opens this conversation directly.
   const exact = (): PageTarget => ({ link: "exact", to: "", mid: route.mid, sid: route.sid });
+  // An outbox refusal names the pane to open, even when its chat normally redirects to Assistant or a parent.
+  if (route.standalone && route.view === "term") return exact();
   // Deep link to an embedded subagent (`<parent>@<agent>`): open its parent session + subagent detail panel (#14323).
   const sub = splitSubagentLink(route.sid);
   if (sub) {
@@ -753,6 +756,7 @@ function Shell() {
       <AttentionSignals label={title} pane={pane} />
       {/* the counts for the desktop app's island at the MacBook notch (#7669), only in a desktop app that has it */}
       {window.personaDesktop?.setIslandState && <DesktopIslandSignals />}
+      <TextLookupHost />
     </div>
   );
 }

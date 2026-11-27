@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/apierr"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
@@ -1219,10 +1220,10 @@ func (m *Machine) passOn(ctx context.Context, method string, params json.RawMess
 	if len(params) > maxForward {
 		return nil, errTooLarge
 	}
-	var out json.RawMessage
 	key := m.d.requestKey()
-	err := m.d.opts.Hub.Call(ctx, devicewire.MethodRequest, devicewire.NodeCall{MachineID: m.cfg.ID, Method: method, Params: params,
-		Request: key}, &out)
+	out, err := buswire.Call(ctx, m.d.opts.Hub, devicewire.RequestMethod, devicewire.NodeCall{
+		MachineID: m.cfg.ID, Method: method, Params: params, Request: key,
+	})
 	if err != nil {
 		if ctx.Err() != nil { // the node's connection ended (ctx is its): the hub's part ends too
 			_ = m.d.opts.Hub.Notify(devicewire.EventRequestEnd, devicewire.RequestEnd{MachineID: m.cfg.ID, Request: key})

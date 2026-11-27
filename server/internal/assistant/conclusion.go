@@ -61,7 +61,10 @@ func verifyReason(l i18n.Lang, delivery *TodoDelivery) string {
 	case deliveryMerged:
 		return i18n.T(l, "assistant-reports.verdict_verify_merged")
 	case deliveryOff:
-		return i18n.T(l, "assistant-reports.verdict_verify_off")
+		if hasDefaultOffGate(delivery.Gate) {
+			return i18n.T(l, "assistant-reports.verdict_verify_off")
+		}
+		return i18n.T(l, "assistant-reports.verdict_verify")
 	default:
 		return i18n.T(l, "assistant-reports.verdict_verify")
 	}

@@ -49,6 +49,40 @@ func (s *Service) retireTodoWork(keys ...[2]string) {
 	}
 }
 
+// retireDetachedRetry takes down a model retry or a legacy retry decision. The caller holds the todo write lock,
+// so the last open link cannot be replaced between the ownership check and retirement.
+func (s *Service) retireDetachedRetry(k [2]string, now time.Time) (*db.SessionWork, string) {
+	s.work.mu.Lock()
+	defer s.work.mu.Unlock()
+	s.work.init()
+	retired := db.SessionWork{MachineID: k[0], SessionID: k[1]}
+	var hiddenCard string
+	if current := s.work.entries[k]; current != nil {
+		retired = *current
+		switch {
+		case current.Work.On == proto.WaitTransient,
+			current.Work.On == proto.WaitUser && current.Retries > 0 && current.Work.ResetsAt == nil:
+			if _, out := s.work.cards[current.InteractionID]; !out {
+				hiddenCard = current.InteractionID // the snapshot ends visible cards; end a still-hidden card in its history
+			}
+			delete(s.work.cards, current.InteractionID)
+			delete(s.work.gone, current.InteractionID)
+			retired.Work = proto.WorkState{TurnAt: current.TurnAt}
+			retired.WakeAt, retired.InteractionID, retired.Retries = nil, "", 0
+		case current.WakeAt != nil || current.InteractionID != "" || current.Work.RetiredAt != nil:
+			return nil, ""
+		}
+	}
+	if s.work.triaging[k] {
+		s.work.generation[k]++
+	}
+	retired.Work.RetiredAt, retired.Work.RetiredTurnAt = &now, nil
+	retired.UpdatedAt = now
+	saved := retired
+	s.work.entries[k] = &saved
+	return &retired, hiddenCard
+}
+
 // bindRetiredTurn attaches the node's own stopped-turn timestamp to a durable
 // retirement. If it cannot be read, the marker stays until a new TurnStarted.
 func (s *Service) bindRetiredTurn(k [2]string, retiredAt time.Time) {
@@ -90,11 +124,11 @@ func (s *Service) workStartedObserved(ctx context.Context, machine, sid string, 
 		s.work.generation[k]++
 	}
 	e, ok := s.work.entries[k]
-	if !ok || e.Work.Phase == proto.WorkWorking && e.Work.RetiredAt == nil {
+	if !ok || e.Work.Phase == proto.WorkWorking && e.Work.RetiredAt == nil || e.Work.RetiredAt != nil && !newTurn {
 		s.work.mu.Unlock()
 		return
 	}
-	e.Work.RetiredAt, e.Work.RetiredTurnAt = nil, nil // a later turn can work on a reopened task
+	e.Work.RetiredAt, e.Work.RetiredTurnAt = nil, nil // a confirmed new turn can work again
 	by := "user"
 	if now.Sub(s.work.sent[k]) < workSentWindow {
 		by = "hub"
@@ -253,9 +287,9 @@ func (s *Service) triageTurn(ctx context.Context, v *workView, machine string, c
 	s.work.mu.Lock()
 	s.work.init()
 	prev, had := s.work.entries[k]
-	if had && prev.Work.RetiredAt != nil && (prev.Work.RetiredTurnAt == nil || sameTurn(c, *prev.Work.RetiredTurnAt) || !c.UpdatedAt.After(*prev.Work.RetiredTurnAt)) {
+	if had && workRetiredForTurn(prev.Work, c.UpdatedAt) {
 		s.work.mu.Unlock()
-		return // the todo ended before this turn settled, or its identity is unknown
+		return // this turn was retired, or the retired turn's identity is unknown
 	}
 	if s.work.triaging[k] {
 		s.work.mu.Unlock()

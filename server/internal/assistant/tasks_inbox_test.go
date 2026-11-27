@@ -569,3 +569,43 @@ func TestExistingTaskToolsCanDeclineInboxSource(t *testing.T) {
 		})
 	}
 }
+
+func TestExistingTaskToolsOmittedSourceIgnoresUnrelatedHandoff(t *testing.T) {
+	for _, name := range []string{"agent_send", "agent_send with task", "task_scope"} {
+		t.Run(name, func(t *testing.T) {
+			s, f := newQuietService(t)
+			task := agentTask(t, s, f)
+			a := taskInboxItem(t, s, "example:first", "server", "conv1")
+			b := taskInboxItem(t, s, "example:second", "server", "conv1")
+			s.inbox.mu.Lock()
+			a.Agent = &InboxAgent{TodoID: "another-task"}
+			now := time.Now()
+			b.DoneAt = &now
+			s.inbox.mu.Unlock()
+			args := map[string]any{}
+			tool := name
+			if name == "task_scope" {
+				args["todo_id"], args["change"], args["why"] = task.ID, "Check the sample output", "It needs a second example"
+			} else {
+				tool = "agent_send"
+				args["machine"], args["session_id"], args["text"] = task.Agents[0].MachineID, task.Agents[0].SessionID, "Check the sample output"
+				if name == "agent_send with task" {
+					args["task"] = map[string]any{"title": task.Title, "done_when": []string{"Sample output checked"}}
+				}
+			}
+			if _, err := runJSON(t, s, "conv1", tool, args); err != nil {
+				t.Fatalf("unrelated action refused: %v", err)
+			}
+			if todo := todoNow(s, task.ID); todo.InboxItem != "" {
+				t.Fatalf("unrelated action changed the task source: %s", todo.InboxItem)
+			}
+			s.inbox.mu.Lock()
+			defer s.inbox.mu.Unlock()
+			for _, it := range []*InboxItem{a, b} {
+				if it.Agent != nil && it.Agent.TodoID != "another-task" {
+					t.Fatalf("handoff %s was attached to %s", it.ID, it.Agent.TodoID)
+				}
+			}
+		})
+	}
+}

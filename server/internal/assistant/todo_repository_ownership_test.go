@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/repository"
 	"github.com/nwverse/persona/server/internal/assistant/repositorystore"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -62,11 +63,22 @@ func TestTaskRepositoryOwnershipDeploymentReportCannotClaimOthersPRs(t *testing.
 					SessionID: todo.Agents[0].SessionID,
 					Items:     []proto.Item{{Role: "assistant", Kind: proto.KindText, Text: text}}})
 			}
+			it := artifactInboxItem(s, "github:deployment-ref", urls[0])
 			s.linkInboxTaskURLs(t.Context())
 			set, saved := savedArtifactURLs(t, st, todo.ID)
 			current := todoNow(s, todo.ID)
-			if set.Revision != 0 || len(saved) != 0 || current.PRURL != "" || len(current.PRs) != 0 {
-				t.Fatalf("referenced PRs polluted repository links or legacy routing: links=%v, task=%+v", saved, current)
+			if entry == "model artifacts" && (set.Revision != 0 || len(saved) != 0) {
+				t.Fatalf("unowned model artifacts polluted repository links: links=%v", saved)
+			}
+			for _, row := range set.Repositories {
+				for _, link := range row.Links {
+					if link.Role != repository.LinkRoleReference {
+						t.Fatalf("referenced PRs claimed delivery role: %+v", row.Links)
+					}
+				}
+			}
+			if current.PRURL != "" || len(current.PRs) != 0 || it.Agent != nil && it.Agent.TodoID == todo.ID {
+				t.Fatalf("referenced PRs polluted delivery or Inbox routing: links=%v, task=%+v, inbox=%+v", saved, current, it.Agent)
 			}
 		})
 	}

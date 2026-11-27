@@ -40,13 +40,26 @@ func (n *Node) markPersonaTab(ctx context.Context, launch host.Launcher, pane ho
 
 // personaTabLocked is the mark of a pane Persona opened for an Agent: the session id it was opened for, "agent" when
 // the start did not know it yet, "" for a pane the user opened. herdr's persona_tab token, else the node's own record
-// on an engine that keeps no marks (agentTerms; only for those, so a pane id herdr reuses never inherits one). n.mu
-// held.
+// on an engine that keeps no marks. On Orca a matching creation receipt can restore the mark after a node restart.
+// n.mu is held.
 func (n *Node) personaTabLocked(p host.Agent) string {
 	if id := p.Tokens[personaTabToken]; id != "" {
 		return id
 	}
-	return n.agentTerms[p.PaneID]
+	id := n.agentTerms[p.PaneID]
+	if host.ParsePane(p.PaneID).Kind != host.Orca {
+		return id
+	}
+	bound := n.panes[p.PaneID]
+	if id == "" {
+		// After a node restart there is no live mark; only a matching receipt
+		// may restore one. A binding alone never owns a terminal.
+		return n.orcaFinishedOwnerLocked(p, bound, "")
+	}
+	if bound != "" && id != "agent" && bound != id {
+		return ""
+	}
+	return n.orcaFinishedOwnerLocked(p, id, id)
 }
 
 // namePersonaTab gives a pane Persona marked before its session was known ("agent": a Codex start, whose thread id
@@ -62,6 +75,20 @@ func (n *Node) namePersonaTab(ctx context.Context, pane, id string) {
 		n.agentTerms[pane] = id
 	}
 	n.mu.Unlock()
+	if host.ParsePane(pane).Kind == host.Orca {
+		if h, ok := n.hosts.Get(host.Orca).(*orcaHost); ok {
+			if owner := h.claimTerminalOwner(pane, id); owner != nil {
+				n.state.update(id, func(st *sessionState) bool {
+					if st.Pane != pane || st.OrcaTerminal != nil {
+						return false
+					}
+					st.OrcaTerminal = owner
+					return true
+				})
+			}
+		}
+		return
+	}
 	r, ref, err := paneCap[host.MetadataReporter](n, pane)
 	if err != nil {
 		return

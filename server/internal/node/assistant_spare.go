@@ -40,7 +40,7 @@ func (n *Node) adoptSpare(cwd, launcher string, options ...modelExecution) *assi
 	}
 	// A Claude spare was generated with the ordinary built-in list. It cannot become an Inbox process without
 	// reintroducing SendMessage outside the MCP origin policy; let the Inbox start cold with its restricted list.
-	if p.agent == "claude" && executionOption(options).Origin == originInbox {
+	if (p.agent == "claude" && executionOption(options).Origin == originInbox) || p.agent == traexAgent {
 		return nil
 	}
 	// A Claude start names the profile it resolved (assistantProfileSelection), Persona's own included; a spare warmed in

@@ -88,12 +88,15 @@ type channelsBook struct {
 	// followRetry: the followed conversations whose session.follow failed -> when a run's watcher asks again
 	followRetry map[[2]string]time.Time
 	// announced: the cards this process heard of (interaction.announced, or pending when it first connected); one
-	// that came while it was not connected is taken when it is back (channelsCatchUp).
-	announced map[string]bool
-	connected bool
+	// that came while it was not connected is taken when it is back (channelsCatchUp). announcedOccurrence
+	// distinguishes a same-ID replacement. A missing timestamp is legacy/held ID-only bookkeeping.
+	announced           map[string]bool
+	announcedOccurrence map[string]time.Time
+	connected           bool
 	// ended: the cards that ended lately (interaction.ended), by when: one still being sent to a channel then is closed
-	// (or not asked) as soon as it is out.
-	ended map[string]time.Time
+	// (or not asked) as soon as it is out. endedOccurrence distinguishes a same-ID replacement.
+	ended           map[string]time.Time
+	endedOccurrence map[string]time.Time
 	// lastEnded: channel -> the latest text ask there that ended without being answered there (answered in the app,
 	// in a terminal, withdrawn), by when: a late reply to it is told so instead of going into the conversation.
 	lastEnded map[string]endedAsk

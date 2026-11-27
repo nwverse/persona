@@ -40,7 +40,7 @@ describe("deriveFeatures", () => {
   it("is all ready for a healthy node", () => {
     const f = deriveFeatures(report());
     expect(f.map((x) => x.id)).toEqual(["approvals", "status", "terminal", "mcp", "skills", "runtimes"]);
-    expect(f.every((x) => x.state === "ready" && x.note === "")).toBe(true);
+    expect(f.every((x) => x.state === "ready" && x.finding === "" && x.note === "")).toBe(true);
     expect(summarize(f)).toEqual({ attention: 0, title: "一切正常", off: "" });
   });
 
@@ -98,7 +98,18 @@ describe("deriveFeatures", () => {
     const next = report();
     next.checks.push({ name: "disk-space", status: "warn", detail: "剩 200 MB", hint: "清理磁盘" });
     const other = deriveFeatures(next).find((f) => f.id === "other");
-    expect(other).toMatchObject({ state: "partial", note: "清理磁盘" });
+    expect(other).toMatchObject({ state: "partial", finding: "剩 200 MB", note: "清理磁盘" });
+    // a broken check without a separate hint keeps finding empty so the detail is not repeated twice
+    const detailOnly = report();
+    detailOnly.checks.push({ name: "path-access", status: "fail", detail: "读不了 /tmp/link", hint: "" });
+    expect(deriveFeatures(detailOnly).find((f) => f.id === "other")).toMatchObject({ state: "broken", finding: "", note: "读不了 /tmp/link" });
+    // stale / missing generated files and optional "off" features keep finding empty
+    const staleAndOff = report({
+      "mcp.json": { status: "warn", state: "stale", detail: "过期", hint: "重启 node" },
+      "runtime.sock": { status: "warn", detail: "不存在", hint: "没有 node 在监听" },
+    });
+    expect(deriveFeatures(staleAndOff).find((f) => f.id === "mcp")?.finding).toBe("");
+    expect(deriveFeatures(staleAndOff).find((f) => f.id === "runtimes")?.finding).toBe("");
     // a fine unknown check hides nothing and adds nothing
     const fine = report();
     fine.checks.push({ name: "disk-space", status: "ok", detail: "" });
