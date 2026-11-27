@@ -210,7 +210,7 @@ import PersonaWire
 
     @Test func ompTakesAStartModelEvenWithoutCatalogEntries() {
         let empty = LauncherModels(agent: "omp", models: [], supportsStartModel: true)
-        var choice = LauncherModelChoice(list: empty, startLauncher: Launcher(name: "omp", agent: "omp"), startsInHerdr: true)
+        var choice = LauncherModelChoice(list: empty, startLauncher: Launcher(name: "omp", agent: "omp"), startsInOmpModelHost: true)
         #expect(choice.canPick && choice.takesTyped && choice.sent == nil)
         for id in ["opus", "openai/gpt-5.2"] {
             choice.picked = id
@@ -235,12 +235,12 @@ import PersonaWire
         #expect(choice.showsLocked && !choice.startAllowsModel && !choice.takesTyped && choice.sent == nil)
         choice.list.supportsStartModel = nil
         #expect(choice.showsLocked && !choice.canPick && choice.sent == nil)
-        choice.startsInHerdr = false
+        choice.startsInOmpModelHost = false
         #expect(!choice.showsLocked)
         let wrapper = Launcher(name: "my-wrapper", agentType: "omp")
         for agent in ["omp", "claude"] {
             let blocked = LauncherModelChoice(list: LauncherModels(agent: agent, models: [], supportsStartModel: true),
-                                              picked: "unlisted", startLauncher: wrapper, startsInHerdr: true)
+                                              picked: "unlisted", startLauncher: wrapper, startsInOmpModelHost: true)
             #expect(!blocked.canPick && !blocked.takesTyped && blocked.sent == nil)
         }
         #expect(!empty.takesTypedModel)
@@ -275,27 +275,30 @@ import PersonaWire
     }
 
     @Test func ompModelFollowsTheWorkspaceHostOrMachinesDefaultHost() throws {
-        let data = Data(#"{"id":"box","name":"Box","kind":"local","online":true,"engine":"herdr-both","engine_hosts":["herdr","herdr-core"],"engine_default":"herdr-core"}"#.utf8)
+        let data = Data(#"{"id":"box","name":"Box","kind":"local","online":true,"engine":"herdr-both","engine_hosts":["herdr","herdr-core","orca"],"engine_default":"herdr-core"}"#.utf8)
         var machine = try JSON.decoder.decode(Machine.self, from: data)
         #expect(machine.defaultStartHost == "herdr-core")
         var choice = LauncherModelChoice(list: LauncherModels(agent: "omp", models: [], supportsStartModel: true),
                                          picked: "vendor/model", startLauncher: Launcher(name: "omp", agent: "omp"))
         for host in [nil, "herdr-core", "orca", "tern", "paseo", "herdr"] as [String?] {
-            choice.startsInHerdr = machine.startsInHerdr(host: host)
-            #expect(choice.canPick == (host == "herdr"))
-            #expect(choice.sent == (host == "herdr" ? "vendor/model" : nil))
+            choice.startsInOmpModelHost = machine.supportsOmpStartModel(host: host)
+            let allowed = host == "herdr" || host == "orca"
+            #expect(choice.canPick == allowed)
+            #expect(choice.sent == (allowed ? "vendor/model" : nil))
         }
         machine.engineDefault = "herdr"
         #expect(machine.defaultStartHost == "herdr")
-        #expect(machine.startsInHerdr(host: nil) && !machine.startsInHerdr(host: "herdr-core"))
+        #expect(machine.supportsOmpStartModel(host: nil) && !machine.supportsOmpStartModel(host: "herdr-core"))
+        machine.engineDefault = "orca"
+        #expect(machine.supportsOmpStartModel(host: nil) && machine.supportsOmpStartModel(host: "orca"))
         machine.engineHosts = []
         #expect(machine.defaultStartHost == nil)
-        #expect(!machine.startsInHerdr(host: "herdr") && !machine.startsInHerdr(host: nil))
+        #expect(!machine.supportsOmpStartModel(host: "herdr") && !machine.supportsOmpStartModel(host: "orca") && !machine.supportsOmpStartModel(host: nil))
         machine.engineHosts = nil
         machine.engineDefault = nil
-        #expect(machine.startsInHerdr(host: nil))
+        #expect(machine.supportsOmpStartModel(host: nil))
         machine.engine = .orca
-        #expect(!machine.startsInHerdr(host: nil) && !machine.startsInHerdr(host: "herdr"))
+        #expect(machine.supportsOmpStartModel(host: nil) && machine.supportsOmpStartModel(host: "orca") && !machine.supportsOmpStartModel(host: "herdr"))
     }
 
     @Test func aStartCarriesThePick() throws {

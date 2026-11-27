@@ -496,16 +496,26 @@ func (e *Engine) applyUser(kind, id string, uu UserUpdate) (string, error) {
 	e.Store.applyMu.Lock()
 	defer e.Store.applyMu.Unlock()
 	uu.Update = u
+	var tree treeEdit
 	if kind == KindProject {
 		if err := e.projectSourceUpdate(id, &uu); err != nil {
 			return "", err
 		}
+		var err error
+		if tree, err = e.projectTreeUpdate(id, uu); err != nil {
+			return "", err
+		}
 		u = e.projectUpdate(u)
+	} else {
+		uu.Parent, uu.Milestones, uu.Milestone = nil, nil, nil
 	}
 	uu.Update = u
 	out, err := e.apply(kind, id, uu, userEdit(uu), UserWriter)
 	if err == nil && u.MergeInto == "" {
 		err = e.claim(kind, out, u, "", nil, nil)
+	}
+	if err == nil && kind == KindProject {
+		err = e.writeTree(out, tree)
 	}
 	if err == nil && profile != nil {
 		_, err = e.putProfile(out, UserWriter, profile)

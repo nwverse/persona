@@ -112,6 +112,7 @@ import { FoldInspectorPanel } from '../components/FoldInspectorPanel';
 import { FloatingToastOverlay } from '../components/FloatingToastOverlay';
 import { toastCenter } from '../models/ToastCenter';
 import { isHubStateKey } from '../core/StorageOwnership';
+import { sessionDisplayTitle } from '../core/SessionNaming';
 import { formatSharedDraftText } from '../core/XiaoYiRoutes';
 
 interface ChatActionEntry extends SheetInfo {
@@ -3537,7 +3538,8 @@ struct Index {
   private chatTitle(param: Object): string {
     const row = this.routeRow(param);
     const current = this.detailModel.sessions.concat(this.detailModel.conversations).find((item: ResourceRow) => item.key() === row.key());
-    return current?.title || row.title || tr(row.kind === 'conversation' ? 'main_chat' : 'agents');
+    const target = current || row;
+    return sessionDisplayTitle(target.title, target.data(), this.detailModel.useHerdrTabName) || tr(row.kind === 'conversation' ? 'main_chat' : 'agents');
   }
   private async restoreTarget(name: string, param: Object): Promise<void> {
     const descriptor = NavigationContext.from(name, param as string);

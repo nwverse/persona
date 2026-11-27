@@ -60,9 +60,12 @@ import (
 // (#15546), adding 1,397 B (282,660 B).
 // Antigravity form elicitation (#16645) and background task and schedule tracking (#13594) bring the total to 286,998 B,
 // including the 182 B Windows media-guard change above.
+// Antigravity incremental transcript append (tail anchor + rolling SHA-256 + deferred/periodic verification),
+// sub-second fileMeta fast hit, watched-poll idle backoff, and bounded summary/cache weights (with decoupled
+// raw-byte and object-weight transcriptCache caps) add 1,969 B (288,967 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 286_998
+	const budget = 288_967
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

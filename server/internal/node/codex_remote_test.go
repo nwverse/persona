@@ -239,6 +239,7 @@ func remoteTestNode(t *testing.T) *Node {
 	n, home := testNode(t)
 	n.codices = newCodexRegistry()
 	n.codices.scan = func() []codexProcess { return nil }
+	n.codices.checked = func() ([]codexProcess, bool) { return n.codices.scan(), true }
 	fixtureCodexIndex(n.codices)
 	n.logger = log.New(io.Discard, "", 0)
 	n.metas = map[string]quickMeta{}
