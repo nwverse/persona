@@ -615,12 +615,21 @@ export interface RepositoryProviderItem {
 }
 
 /**
+ * Identifies one text_lookup dictionary within its extension.
+ */
+export type TextLookupContributionID = string & { readonly __brand: "TextLookupContributionID" };
+/** A TextLookupContributionID from its raw string. */
+export function textLookupContributionID(raw: string): TextLookupContributionID {
+  return raw as TextLookupContributionID;
+}
+
+/**
  * A dictionary the apps ask for the meaning of a word the user taps (text_lookup.state, text_lookup.lookup,
  * text_lookup.save, text_lookup.remove). Needs the program to speak the protocol. Only English (languages ["en"]) for
  * now.
  */
 export interface TextLookupItem {
-  id: string;
+  id: TextLookupContributionID;
   /** What the dictionary is called, in a few words. */
   name?: string;
   /** The languages it looks up. Only "en" is accepted for now; omitted means ["en"]. */

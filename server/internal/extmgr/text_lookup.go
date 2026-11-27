@@ -16,6 +16,7 @@ import (
 
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/extension"
+	"github.com/nwverse/persona/server/internal/extwire"
 )
 
 // textLookupTimeout bounds one call to the dictionary: the apps wait on a tap.
@@ -35,6 +36,14 @@ var textLookupWord = regexp.MustCompile(`^[` + textLookupLetters + `]+(?:['-][` 
 const textLookupWordMost = 64
 
 const textLookupUnavailable = "text_lookup_unavailable"
+
+// The text_lookup protocol's methods (schema/extension/protocol.schema.json).
+const (
+	textLookupStateMethod  = "text_lookup.state"
+	textLookupLookupMethod = "text_lookup.lookup"
+	textLookupSaveMethod   = "text_lookup.save"
+	textLookupRemoveMethod = "text_lookup.remove"
+)
 
 // textLookupProvider is the dictionary the apps ask: the first enabled, compatible extension with an enabled
 // text_lookup contribution, by extension id then contribution id.
@@ -60,7 +69,7 @@ func (ps *extensions) textLookupProviders() []textLookupProvider {
 			continue
 		}
 		for _, it := range p.Manifest.TextLookups() {
-			out = append(out, textLookupProvider{extension: p.Record.ID, contribution: it.ID, name: it.Name})
+			out = append(out, textLookupProvider{extension: p.Record.ID, contribution: it.ID.String(), name: it.Name})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -105,7 +114,7 @@ func (h *Manager) getTextLookup(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), textLookupTimeout)
 	defer cancel()
 	var res wire.TextLookupStateResult
-	err := hp.proc.Call(ctx, "text_lookup.state", wire.TextLookupStateParams{Contribution: r0.contribution}, &res)
+	err := hp.proc.Call(ctx, textLookupStateMethod, wire.TextLookupStateParams{Contribution: r0.contribution}, &res)
 	if err != nil {
 		h.extensions.logf("plugin %s: text_lookup.state %s: %v", r0.extension, r0.contribution, err)
 		writeJSON(w, empty)
@@ -161,7 +170,7 @@ func (h *Manager) postTextLookupLookup(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), textLookupTimeout)
 	defer cancel()
 	var res wire.TextLookupLookupResult
-	err := hp.proc.Call(ctx, "text_lookup.lookup", wire.TextLookupLookupParams{
+	err := hp.proc.Call(ctx, textLookupLookupMethod, wire.TextLookupLookupParams{
 		Contribution: r0.contribution, Word: word, Context: around, Lang: "en", UILang: string(h.requestLang(r)),
 	}, &res)
 	if err != nil {
@@ -209,11 +218,11 @@ func (h *Manager) textLookupChange(w http.ResponseWriter, r *http.Request, save 
 	var res wire.TextLookupSavedResult
 	var err error
 	if save {
-		err = hp.proc.Call(ctx, "text_lookup.save", wire.TextLookupSaveParams{
+		err = hp.proc.Call(ctx, textLookupSaveMethod, wire.TextLookupSaveParams{
 			Contribution: r0.contribution, Word: word, Context: around, Source: b.Source,
 		}, &res)
 	} else {
-		err = hp.proc.Call(ctx, "text_lookup.remove", wire.TextLookupRemoveParams{Contribution: r0.contribution, Word: word}, &res)
+		err = hp.proc.Call(ctx, textLookupRemoveMethod, wire.TextLookupRemoveParams{Contribution: r0.contribution, Word: word}, &res)
 	}
 	if err != nil {
 		h.extensions.logf("plugin %s: text_lookup %s: %v", r0.extension, r0.contribution, err)
@@ -226,7 +235,7 @@ func (h *Manager) textLookupChange(w http.ResponseWriter, r *http.Request, save 
 
 // textLookupChanged tells the apps to ask GET /api/v1/text-lookup again (docs/extensions/extensions.md "Looking up a word").
 func (h *Manager) textLookupChanged() {
-	h.broadcast(map[string]any{"type": "text_lookup_changed"})
+	h.broadcast(extwire.TextLookupChanged{Type: extwire.EventTextLookupChanged})
 }
 
 // textLookupTouched says whether a registry change can move which dictionary the apps ask, or whether one is there.

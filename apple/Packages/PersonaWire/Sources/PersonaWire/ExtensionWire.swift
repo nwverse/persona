@@ -1601,17 +1601,42 @@ public nonisolated struct ExtensionRepositoryProviderItem: Codable, Hashable, Se
     }
 }
 
+/// Identifies one text_lookup dictionary within its extension.
+/// It encodes as the bare string.
+public nonisolated struct ExtensionTextLookupContributionID: RawRepresentable, Codable, Hashable, Sendable, CustomStringConvertible {
+    public let rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public init(_ rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public var description: String { rawValue }
+
+    public init(from decoder: Decoder) throws {
+        rawValue = try decoder.singleValueContainer().decode(String.self)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        try c.encode(rawValue)
+    }
+}
+
 /// A dictionary the apps ask for the meaning of a word the user taps (text_lookup.state, text_lookup.lookup,
 /// text_lookup.save, text_lookup.remove). Needs the program to speak the protocol. Only English (languages ["en"])
 /// for now.
 public nonisolated struct ExtensionTextLookupItem: Codable, Hashable, Sendable {
-    public var id: String
+    public var id: ExtensionTextLookupContributionID
     /// What the dictionary is called, in a few words.
     public var name: String?
     /// The languages it looks up. Only "en" is accepted for now; omitted means ["en"].
     public var languages: [String]?
 
-    public init(id: String = "", name: String? = nil, languages: [String]? = nil) {
+    public init(id: ExtensionTextLookupContributionID = ExtensionTextLookupContributionID(""), name: String? = nil, languages: [String]? = nil) {
         self.id = id
         self.name = name
         self.languages = languages
@@ -1625,7 +1650,7 @@ public nonisolated struct ExtensionTextLookupItem: Codable, Hashable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        self.id = (try? c.decodeIfPresent(String.self, forKey: .id)) ?? ""
+        self.id = (try? c.decodeIfPresent(ExtensionTextLookupContributionID.self, forKey: .id)) ?? ExtensionTextLookupContributionID("")
         self.name = try? c.decodeIfPresent(String.self, forKey: .name)
         self.languages = try? c.decodeIfPresent([String].self, forKey: .languages)
     }

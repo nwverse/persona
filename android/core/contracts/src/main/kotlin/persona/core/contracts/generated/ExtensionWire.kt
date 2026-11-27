@@ -917,13 +917,22 @@ data class ExtensionRepositoryProviderItem(
 )
 
 /**
+ * Identifies one text_lookup dictionary within its extension. It encodes as the bare string.
+ */
+@Serializable
+@JvmInline
+value class ExtensionTextLookupContributionID(val raw: String) {
+    override fun toString(): String = raw
+}
+
+/**
  * A dictionary the apps ask for the meaning of a word the user taps (text_lookup.state, text_lookup.lookup,
  * text_lookup.save, text_lookup.remove). Needs the program to speak the protocol. Only English (languages ["en"]) for
  * now.
  */
 @Serializable
 data class ExtensionTextLookupItem(
-    val id: String = "",
+    val id: ExtensionTextLookupContributionID = ExtensionTextLookupContributionID(""),
     /**
      * What the dictionary is called, in a few words.
      */

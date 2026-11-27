@@ -829,11 +829,12 @@ var Points = map[string]Point{
 		if err := strict(raw, &a); err != nil {
 			return "", err
 		}
-		if !textLookupID.MatchString(a.ID) {
-			return a.ID, fmt.Errorf("text_lookup id %q: a-z0-9_- up to 64", a.ID)
+		id := a.ID.String()
+		if !textLookupID.MatchString(id) {
+			return id, fmt.Errorf("text_lookup id %q: a-z0-9_- up to 64", id)
 		}
 		if a.Name != "" && (strings.TrimSpace(a.Name) == "" || utf8.RuneCountInString(a.Name) > 80) {
-			return a.ID, fmt.Errorf("text_lookup %s: a name of 1 to 80 characters", a.ID)
+			return id, fmt.Errorf("text_lookup %s: a name of 1 to 80 characters", id)
 		}
 		// Omitted means ["en"]. An explicit list must be exactly ["en"].
 		langs := a.Languages
@@ -841,9 +842,9 @@ var Points = map[string]Point{
 			langs = []string{"en"}
 		}
 		if len(langs) != 1 || langs[0] != "en" {
-			return a.ID, fmt.Errorf("text_lookup %s: languages only \"en\" for now", a.ID)
+			return id, fmt.Errorf("text_lookup %s: languages only \"en\" for now", id)
 		}
-		return a.ID, nil
+		return id, nil
 	}},
 	"voice": {Name: "voice", Namespace: "voice", Version: 1, NeedsHTTP: true, Item: func(raw json.RawMessage) (string, error) {
 		var v VoiceItem

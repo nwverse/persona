@@ -620,11 +620,17 @@ type RepositoryProviderItem struct {
 	Capabilities []string `json:"capabilities,omitempty"`
 }
 
+// TextLookupContributionID: identifies one text_lookup dictionary within its extension.
+type TextLookupContributionID string
+
+// String returns the ID as it is on the wire.
+func (v TextLookupContributionID) String() string { return string(v) }
+
 // TextLookupItem: A dictionary the apps ask for the meaning of a word the user taps (text_lookup.state,
 // text_lookup.lookup, text_lookup.save, text_lookup.remove). Needs the program to speak the protocol. Only English
 // (languages ["en"]) for now.
 type TextLookupItem struct {
-	ID string `json:"id"`
+	ID TextLookupContributionID `json:"id"`
 	// What the dictionary is called, in a few words.
 	Name string `json:"name,omitempty"`
 	// The languages it looks up. Only "en" is accepted for now; omitted means ["en"].
