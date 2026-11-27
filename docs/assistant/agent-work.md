@@ -274,7 +274,7 @@ Apply in order; on a match, do not call the model:
 
 - Decision principles in the prompt:
   - An optional offer at the end such as "Would you also like me to…?" does not mean blocked. If the task is complete, it is `done`; include the offer in the conclusion.
-  - Only an unanswered request for a user decision, information, or action can be `blocked · user`. Arrangements, status reports, and acknowledgments are not questions. `questions[].question` must quote the final reply verbatim: a question ending in `?` / `？` after ignoring trailing Markdown, quotes, brackets, emoji or an answer annotation such as `(y/n)`, or an explicit request. Code rejects invented or paraphrased questions, and an authorization/login link is a separate `user` case even without a question.
+  - The model identifies unanswered requests for a user decision, information, or action. Arrangements, status reports, and acknowledgments are not questions. The hub keeps a non-empty `questions[].question` verbatim from the final reply, including requests without question punctuation. An authorization or login link can require user action on its own.
   - **Pushing code, deploying / releasing, sending messages / comments to others, or merging / modifying someone else's MR / PR** still receives no automatic wake unless it is approved (see "Safety boundary"). Blocking automation does not invent a request for permission.
   - If uncertain whether the task is complete, use `unsure`, not `done`.
 
