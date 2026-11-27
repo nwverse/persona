@@ -68,11 +68,11 @@ import (
 // summary_behind readListedTranscript cache, restores dev/ino/ctime wake-receipt detection, and adds a fixed
 // 4 KiB head-sample integrity check inside the racy window alongside the tail anchor. The union measures
 // 290,316 B exactly. The merge also restores one missing ASI semicolon in main's runtime.js.
-// Main measured 290,330 B when merging the legacy iOS effort change.
-// Keeping legacy effort-only requests in the selected model family adds 694 B (291,024 B).
+// With the compat.js declaration fix (#16771), main measured 290,321 B.
+// Keeping legacy effort-only requests in the selected model family adds 694 B (291,015 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 291_024
+	const budget = 291_015
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {
