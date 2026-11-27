@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/agentprompt"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -105,14 +106,24 @@ func (t *PlanTask) noteWhy(note string) {
 // (#12032). It also reports what the resolved launcher runs (startAgent: its agent type, and whether it runs with
 // Allow all), using the same launcher list rather than another probe. A read-only task whose launcher has no read-only
 // mode is refused here (readonlyLauncherRefusal), when it is planned and again before it starts.
+func checkAliasAgent(aliases proto.ModelAliases, agent startAgent) error {
+	if len(aliases) > 0 && agent.agent != "" && agent.agent != "claude" {
+		return fmt.Errorf("model_aliases require a Claude Code terminal launcher")
+	}
+	return nil
+}
+
 func (s *Service) fitTaskLauncher(ctx context.Context, t *PlanTask, m Device, own startPick, params map[string]any) (startAgent, error) {
 	note, agent, err := s.fitNewLauncher(ctx, m, own, params)
 	if err != nil {
 		return agent, err
 	}
+	if err := checkAliasAgent(t.ModelAliases, agent); err != nil {
+		return agent, err
+	}
 	if t.Readonly {
-		// The Antigravity companion holds a plan start read-only (caps.readonly): a read-only agy task whose launcher it
-		// runs starts there and never in a pane (start_host.go, #13464).
+		// The Antigravity companion runs read-only agy tasks with bypassPermissions and the first-message
+		// constraint, matching Claude Code; terminal agy without the companion stays refused (start_host.go, #13464).
 		s.companionStartHost(ctx, m, agent, params)
 		if err := s.readonlyLauncherRefusal(ctx, m, params, agent); err != nil {
 			return startAgent{}, err
@@ -139,8 +150,9 @@ func (s *Service) fitTaskLauncher(ctx context.Context, t *PlanTask, m Device, ow
 // the node refuses their plan-mode start too (node/control.go). No other launcher is put in its place: the plan named
 // that agent. Anything else goes on as before: a launcher whose agent the computer's list does not say goes to the node
 // with plan, which refuses what it cannot hold read-only (nothing is refused here on a guess), and a start an engine
-// runtime runs is the runtime's to refuse (Paseo holds only its Claude Code providers read-only, caps.readonly). So is
-// an agy start on the Antigravity companion (host agy, fitTaskLauncher), which runs plan in agy's own plan mode (#13464).
+// runtime runs is the runtime's to refuse (Paseo holds only its Claude Code providers read-only, caps.readonly). An
+// agy start on the Antigravity companion (host agy, fitTaskLauncher) is allowed and runs with bypassPermissions and the
+// first-message read-only constraint like Claude Code (#13464).
 func (s *Service) readonlyLauncherRefusal(ctx context.Context, m Device, params map[string]any, agent startAgent) error {
 	if !proto.IsWorkAgentType(agent.agent) {
 		return nil
@@ -176,21 +188,42 @@ func (s *Service) readonlyLaunchersOn(ctx context.Context, m Device) []string {
 }
 
 // taskDirectoryExists checks the mapped directory before a flexible task changes machines. Missing, denied or
-// unreadable paths (including a node too old to answer fs.stat) keep that machine out of the detour.
+// unreadable paths (including a node too old to answer fs.stat) keep that machine out of the detour. Concurrent
+// identical checks coalesce in-flight, and positive confirmations are reused within the same logical placement
+// decision (placementOf(ctx)); separate requests always re-check live so deleted directories are rejected immediately.
 func (s *Service) taskDirectoryExists(ctx context.Context, machine, dir string) bool {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	var res struct {
-		Stats []struct {
-			Path string `json:"path"`
-			Kind string `json:"kind"`
-		} `json:"stats"`
+	flightKey := taskDirCacheKey(machine, dir)
+	cacheKey := ""
+	if pl := placementOf(ctx); pl != nil && pl.ID != "" {
+		cacheKey = pl.ID + "\x00" + flightKey
 	}
-	if err := s.call(ctx, machine, "fs.stat", map[string]any{"paths": []string{dir}}, &res); err != nil {
+	exists, err := s.tasks.dirMeta.dirExists.getOrFetch(
+		ctx,
+		s.taskMetaNow,
+		flightKey,
+		cacheKey,
+		5*time.Second,
+		func(ok bool) bool { return ok },
+		nil,
+		func(callCtx context.Context) (bool, error) {
+			var res struct {
+				Stats []struct {
+					Path string `json:"path"`
+					Kind string `json:"kind"`
+				} `json:"stats"`
+			}
+			if err := s.call(callCtx, machine, "fs.stat", map[string]any{"paths": []string{dir}}, &res); err != nil {
+				return false, err
+			}
+			return len(res.Stats) == 1 && res.Stats[0].Path == dir && res.Stats[0].Kind == "dir", nil
+		},
+	)
+	if err != nil {
 		placementOf(ctx).hit(machine, "directory_unknown", nil)
 		return false
 	}
-	exists := len(res.Stats) == 1 && res.Stats[0].Path == dir && res.Stats[0].Kind == "dir"
 	if !exists {
 		placementOf(ctx).hit(machine, "directory_missing", nil)
 	}
@@ -200,9 +233,31 @@ func (s *Service) taskDirectoryExists(ctx context.Context, machine, dir string) 
 // deferredTaskStart is the first input of a Companion session that answered Starting after defer_mcp. It is activated
 // through the ordinary idempotent session.send path only after the task role and supervision relationship are linked.
 type deferredTaskStart struct {
-	text        string
-	images      []proto.Image
-	clientMsgID string
+	text           string
+	images         []proto.Image
+	clientMsgID    string
+	permissionMode string
+}
+
+// deferredTaskPrompt folds separate task_instructions and task_attachments into the first prompt sent by deferred
+// Companion activation, matching node.startRuntime's immediate fallback order and keeping <attached_images> last.
+func deferredTaskPrompt(prompt string, params map[string]any) string {
+	instructions, _ := params["task_instructions"].(string)
+	attachments, _ := params["task_attachments"].(string)
+	return appendDeferredPromptSection(appendDeferredPromptSection(prompt, instructions), attachments)
+}
+
+func appendDeferredPromptSection(prompt, section string) string {
+	if strings.TrimSpace(section) == "" {
+		return prompt
+	}
+	if strings.TrimSpace(prompt) == "" {
+		return section
+	}
+	if i := strings.LastIndex(prompt, "\n\n<attached_images>"); i >= 0 && strings.HasSuffix(strings.TrimSpace(prompt), "</attached_images>") {
+		return strings.TrimSpace(prompt[:i]) + "\n\n" + section + prompt[i:]
+	}
+	return strings.TrimSpace(prompt) + "\n\n" + section
 }
 
 // startTaskAgent starts the agent for t on its machine (another when its launcher does not work there: t says which)
@@ -210,9 +265,15 @@ type deferredTaskStart struct {
 // up again after the start could find another, or none). A failed start counts against the launcher there.
 func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (mid, sid string, err error) {
 	p := newPlacement(t.Machine, "enforce")
-	if prev := t.Placement; prev != nil && prev.TaskID == "" && t.Reroute != nil {
-		// Start on the landing shown on the plan card and retain the preview's candidate evidence.
-		p.Requested, p.ReasonKey = prev.Requested, prev.ReasonKey
+	if prev := t.Placement; prev != nil && (prev.TaskID == "" && t.Reroute != nil || prev.ReasonKey == placementReasonExtension || prev.ReasonKey == placementReasonFallback) {
+		// Start on the landing shown on the plan card or chosen by automatic placement, retaining its audit evidence.
+		if prev.ID != "" && (prev.ReasonKey == placementReasonExtension || prev.ReasonKey == placementReasonFallback) {
+			p.ID = prev.ID
+			if !prev.At.IsZero() {
+				p.At = prev.At
+			}
+		}
+		p.Requested, p.ReasonKey, p.Reason = prev.Requested, prev.ReasonKey, prev.Reason
 		p.Candidates = prev.cloneCandidates()
 	}
 	p.TaskID = t.TodoID
@@ -268,6 +329,12 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	// A self-planning constraint applies only while a policy rule asks for it on this try.
 	t.planFirst = false
 	params := map[string]any{"model_source": planModelSource(*t), "launcher": t.Launcher, "model": t.Model, "effort": t.Effort, "speed": t.Speed, "tier": t.Tier}
+	if caller.model != "" {
+		params["explicit_model"] = caller.model
+	}
+	if len(t.ModelAliases) != 0 {
+		params["model_aliases"] = t.ModelAliases
+	}
 	if t.Host != "" {
 		params["host"] = t.Host // before the fit: an engine host's runtime runs its own launchers (#8140)
 	}
@@ -335,6 +402,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		if err != nil && t.admissionRelease != nil {
 			t.admissionRelease()
 			t.admissionRelease = nil
+			t.admissionClaimMachine = ""
 		}
 	}()
 	if err != nil {
@@ -375,9 +443,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if !t.preservePermission {
 		switch {
 		case t.Readonly:
-			// Allow all and the first message's constraint, as for Claude Code; the companion keeps plan, which it runs
-			// read-only (#13464), unless assistant.readonly_mode is prompt.
-			if fit.allowAll() && !(t.Permission == "plan" && params["host"] == proto.HostAgy) {
+			// Allow all and the first message's constraint, as for Claude Code: agy's ACP plan mode prompts on every
+			// Bash call (including read-only inspection commands), stalling autonomous tasks. Codex keeps plan.
+			if fit.allowAll() {
 				t.Permission = "bypassPermissions"
 			}
 		case configuredMode != "" && fit.supportsPermissionMode(configuredMode):
@@ -392,7 +460,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if !t.preservePermission && t.CallerPermission != nil && t.Permission == "" && modes {
 		t.Permission = s.taskPermission(ctx, t.Machine, nil)
 	}
-	if !modes { // traex, omp…: no mode and no effort, whatever a default or a tier filled in (launcher_modes.go)
+	if !startTakesEffort(fit.agent) {
 		delete(params, "effort")
 		t.Effort = ""
 	}
@@ -420,7 +488,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if err := s.admitTaskWorkspace(ctx, t); err != nil {
 		return "", "", err
 	}
-	if t.backendWorkspace() {
+	if t.usesPreparedWorkspace() {
 		defer func() {
 			if err != nil && !startResultUnknown(err) {
 				s.releaseUnusedBackendStart(ctx, t)
@@ -439,10 +507,10 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	prompt := t.Prompt
 	if t.HandoffID != "" {
 		if handoffSummary := strings.TrimSpace(s.todoHandoffSummary(ctx, t.HandoffID)); handoffSummary != "" {
-			prompt = handoffSummary + "\n\n" + prompt
+			prompt = agentprompt.WithContext(fit.agent, prompt, handoffSummary)
 		}
 	}
-	if t.backendWorkspace() {
+	if t.usesPreparedWorkspace() && len(t.WorkspaceResolved.Repositories) > 0 {
 		rows, err := json.Marshal(t.WorkspaceResolved.Repositories)
 		if err != nil {
 			return "", "", err
@@ -450,6 +518,9 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		prompt += "\n\n" + prompts.RenderWorkspaceRepositories(string(rows), answerLanguage(s.hello(ctx).Locale))
 	}
 	var rules []string
+	if current, ok := s.todoNow(t.TodoID); t.MultiIssueReport || ok && current.Supervision != nil && current.Supervision.Investigation != nil {
+		rules = append(rules, prompts.RenderTaskInvestigation())
+	}
 	if strings.TrimSpace(t.Context) != "" {
 		prompt += "\n\n" + t.Context
 	}
@@ -499,7 +570,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		background = s.projectHandoffContextForTodo(ctx, m.ID, t.Cwd, direction, s.todoForPlanContext(t))
 	}
 	var repoPaths []string
-	if t.backendWorkspace() {
+	if t.usesPreparedWorkspace() {
 		for _, repo := range t.WorkspaceResolved.Repositories {
 			if repo.AbsolutePath == t.Cwd {
 				continue
@@ -584,7 +655,11 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if modes {
 		mode := t.Permission
 		if mode == "" { // a plan saved before task_plan settled it, or a task started another way (tasks_permission.go)
-			mode = s.taskPermission(ctx, m.ID, nil)
+			if fit.allowAll() {
+				mode = "bypassPermissions"
+			} else {
+				mode = s.taskPermission(ctx, m.ID, nil)
+			}
 		}
 		params["permission_mode"] = mode
 	} // else none, plan included: a read-only task's first message carries the constraint (above)
@@ -624,9 +699,11 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	clearStandardSpeed(params)
 	s.setPlanThen(ctx, m.ID, params)
 	deferredImages, _ := params["images"].([]proto.Image)
+	deferredText := deferredTaskPrompt(prompt, params)
+	companionTarget := t.inPane == "" && !t.backendWorkspace() && params["host"] == proto.HostAgy
 	// A role-bearing Companion start must not attach MCP before linkPlanAgent can answer its identity-scoped tools/list.
 	// The real ACP id comes back first; only a Companion that actually answers Starting is activated after the link.
-	if companion && (t.Role == roleLeader || t.Parent != "") && (prompt != "" || len(deferredImages) > 0) {
+	if companionTarget && (t.Role == roleLeader || t.Parent != "") && (deferredText != "" || len(deferredImages) > 0) {
 		params["defer_mcp"] = true
 		if id, _ := params["client_msg_id"].(string); id == "" {
 			params["client_msg_id"] = newStartSessionID() // the post-link send has the same once-only identity as an immediate start
@@ -637,7 +714,8 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			return
 		}
 		clientMsgID, _ := params["client_msg_id"].(string)
-		t.deferredStart = &deferredTaskStart{text: prompt, images: append([]proto.Image(nil), deferredImages...), clientMsgID: clientMsgID}
+		permMode, _ := params["permission_mode"].(string)
+		t.deferredStart = &deferredTaskStart{text: deferredText, images: append([]proto.Image(nil), deferredImages...), clientMsgID: clientMsgID, permissionMode: permMode}
 	}
 	callNode := func() error {
 		if err := s.checkContinuationScope(t); err != nil {
@@ -650,7 +728,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			return err
 		}
 		bindCtx := context.WithValue(ctx, placementBindKey{}, p)
-		if !t.backendWorkspace() {
+		if !t.usesPreparedWorkspace() {
 			return s.call(bindCtx, m.ID, DeviceSessionStart, params, &res)
 		}
 		return s.startBackendTask(bindCtx, t, params, &res)
@@ -680,7 +758,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			continue
 		}
 		// The companion the hub picked went away before the start reached it: nothing ran, and the start goes to the
-		// computer's default host instead (a pane), never for a read-only task, which only the companion holds read-only.
+		// computer's default host instead (a pane), never for a read-only task, which does not fall back to a pane.
 		if companionAway(err, companion) && !t.Readonly {
 			companion = false
 			delete(params, "host")
@@ -703,7 +781,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 			return "", "", err
 		}
 		s.recordStartFailure(ctx, m.ID, s.startLauncher(ctx, picked), err)
-		if !t.backendWorkspace() && startResultUnknown(err) {
+		if !t.usesPreparedWorkspace() && startResultUnknown(err) {
 			if t.startWithoutReplay() {
 				if expectID != "" {
 					lookup, cancel := context.WithTimeout(context.WithoutCancel(ctx), agentStartListTimeout)
@@ -749,7 +827,7 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 		}
 		return "", "", err
 	}
-	if t.backendWorkspace() && res.Session.Cwd != t.Cwd {
+	if t.usesPreparedWorkspace() && res.Session.Cwd != t.Cwd {
 		return "", "", taskworkspace.Failure("result_mismatch", "start", t.WorkspaceResolved.OperationID, "", t.Cwd)
 	}
 	if res.Session.SessionID == "" || res.Session.MachineID != "" && res.Session.MachineID != m.ID {
@@ -880,8 +958,8 @@ func (s *Service) updatePlanTask(ctx context.Context, planID string, i int, t Pl
 	}
 }
 
-// A typed pre-launch refusal is safe to retry once the fallback is on the same
-// task card as its receipts and progress reports. Never replay an uncertain start.
+// A typed pre-launch refusal is safe to retry once the task's conversations have
+// the fallback notice. Never replay an uncertain start.
 func (s *Service) startWithCodexRouteNotice(ctx context.Context, todoID, agent string, params map[string]any, start func() error) error {
 	effort, _ := params["effort"].(string)
 	if todoID == "" || agent != "codex" || effort == "" || params["codex_effort_fallback"] == proto.CodexFallbackAnnounced {
@@ -896,17 +974,45 @@ func (s *Service) startWithCodexRouteNotice(ctx context.Context, todoID, agent s
 	if !ok || task.DoneAt != nil {
 		return err
 	}
-	note := i18n.T(s.lang(ctx), "assistant-tasks.codex_effort_terminal")
-	report := reportBody{Kind: upReportProgress, Text: note}
-	if _, err := s.appendFeed(ctx, task.Origin, feedReport, todoID, report); err != nil {
+	notice := noticeBody{Text: i18n.T(s.lang(ctx), codexRouteNoticeKey)}
+	if _, err := s.appendFeed(ctx, task.Origin, feedNotice, todoID, notice); err != nil {
 		return err
 	}
 	if v := task.Supervision; v != nil && v.Supervisor != "" && v.Supervisor != task.Origin {
-		if _, err := s.appendFeed(ctx, v.Supervisor, feedReport, todoID, report); err != nil {
+		if _, err := s.appendFeed(ctx, v.Supervisor, feedNotice, todoID, notice); err != nil {
 			return err
 		}
 	}
-	s.noteProgress(ctx, todoID, TaskProgress{Kind: upReportProgress, Text: note, At: time.Now().UTC()})
 	params["codex_effort_fallback"] = proto.CodexFallbackAnnounced
 	return start()
+}
+
+const codexRouteNoticeKey = "assistant-tasks.codex_effort_terminal"
+
+// isCodexRouteNoticeText reports whether text matches the hub's Codex terminal
+// fallback notice in any supported language.
+func isCodexRouteNoticeText(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	return slices.ContainsFunc(i18n.Langs, func(lang i18n.Lang) bool {
+		return trimmed == i18n.T(lang, codexRouteNoticeKey)
+	})
+}
+
+// isCodexRouteProgress reports whether p is a legacy Codex terminal fallback
+// notice previously stored in Supervision.Progress.
+func isCodexRouteProgress(p *TaskProgress) bool {
+	return p != nil && p.Kind == upReportProgress && isCodexRouteNoticeText(p.Text)
+}
+
+// readTaskNotice preserves the stored event ID and time for clients merging old feed pages.
+// Older hubs recorded this notice as an Agent's progress report.
+func readTaskNotice(item FeedItem) FeedItem {
+	if item.Kind != feedReport || item.Ref == "" {
+		return item
+	}
+	var report reportBody
+	if json.Unmarshal(item.Body, &report) == nil && report.Kind == upReportProgress && isCodexRouteNoticeText(report.Text) {
+		item.Kind = feedNotice
+	}
+	return item
 }

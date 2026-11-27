@@ -33,6 +33,7 @@ type fleetDevs struct {
 	capacity     proto.CapacitySnapshot // what CapacitySnapshot answers (capacity_test.go)
 	accounts     []proto.UsageAccount   // what UsageAccounts answers (candidate_headroom_test.go)
 	gatewayRetry func(source, provider string, now time.Time) time.Time
+	gateways     proto.GatewayAccounts
 	// attention is every Persona Link summary handed over (SetAttention), in order.
 	attention []link.Attention
 	// linkDesktop: the manager has a Persona Link desktop; confirmed: the cards its app confirmed it handed to
@@ -274,6 +275,12 @@ func (d *fleetDevs) UsageAccounts(context.Context) []proto.UsageAccount {
 	return append([]proto.UsageAccount(nil), d.accounts...)
 }
 
+func (d *fleetDevs) UsageGatewayAccounts() proto.GatewayAccounts {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.gateways
+}
+
 func (d *fleetDevs) GatewayRetryAt(source, provider string, now time.Time) time.Time {
 	if d.gatewayRetry != nil {
 		return d.gatewayRetry(source, provider, now)
@@ -345,6 +352,7 @@ type fleetMem struct {
 	resolvedInsertGate    chan struct{}
 	resolvedInsertStarted chan struct{}
 	resolvedOutcomeErr    error
+	deadlineErr           error
 }
 
 func newFleetMem() *fleetMem {
@@ -367,6 +375,24 @@ func (m *fleetMem) InsertInteraction(ctx context.Context, ix proto.Interaction) 
 		m.recs = append(m.recs, db.InteractionRecord{Interaction: ix, Status: "pending"})
 	}
 	return nil
+}
+
+func (m *fleetMem) UpdateInteractionDeadline(_ context.Context, id string, created, expires time.Time) error {
+	m.fmu.Lock()
+	defer m.fmu.Unlock()
+	if m.deadlineErr != nil {
+		return m.deadlineErr
+	}
+	if m.status[id] != "pending" {
+		return errors.New("interaction deadline was not recorded")
+	}
+	for i := range m.recs {
+		if m.recs[i].Interaction.ID == id && m.recs[i].Interaction.CreatedAt.Equal(created) {
+			m.recs[i].Interaction.ExpiresAt = expires
+			return nil
+		}
+	}
+	return errors.New("interaction deadline was not recorded")
 }
 
 func (m *fleetMem) InsertResolvedInteraction(ctx context.Context, ix proto.Interaction, res *proto.Resolution) error {
@@ -542,6 +568,29 @@ func (m *fleetMem) AlwaysAllowed(_ context.Context, session string, keys []strin
 		}
 	}
 	return len(keys) > 0, nil
+}
+
+func (m *fleetMem) CopyAlways(_ context.Context, fromSession, toSession string) (int, error) {
+	if fromSession == "" || toSession == "" || fromSession == toSession {
+		return 0, nil
+	}
+	m.fmu.Lock()
+	defer m.fmu.Unlock()
+	src := m.always[fromSession]
+	if len(src) == 0 {
+		return 0, nil
+	}
+	if m.always[toSession] == nil {
+		m.always[toSession] = map[string]bool{}
+	}
+	copied := 0
+	for k := range src {
+		if !m.always[toSession][k] {
+			m.always[toSession][k] = true
+			copied++
+		}
+	}
+	return copied, nil
 }
 
 func (m *fleetMem) MarkSeen(_ context.Context, machine, session string, at time.Time) error {

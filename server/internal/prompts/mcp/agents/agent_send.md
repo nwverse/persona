@@ -4,7 +4,7 @@ For dialog_open, retry with dismiss_notice only when Enter alone closes the noti
 
 Give task to supervise new work, including done_when in text. More on your existing task keeps its title and updates its criteria. A different title, the user's own to-do or another conversation's task is refused. A failed send creates no task. Omit task or use null for a reply, nudge or decision. Blank fields count as omitted.
 
-Use `handoff` for your stopped to-do. A node ack starts its result wait.
+Use `handoff` for your stopped to-do. A node ack starts its result wait. A stopped Agent resumes onto its own open to-do with `todo_id` (never `task`).
 
 `wait_seconds` observes up to 50s after dispatch. `Inline observation` JSON: `completed` (this input's `reply`), `question` (pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, known input/session ids. It never answers questions, accepts tasks, resends or cancels work. Normal supervision via `task_review` applies. Older nodes may time out rather than return an unrelated reply.{{template "shared/mcp_language" .}}
 
@@ -38,6 +38,10 @@ Use `handoff` for your stopped to-do. A node ack starts its result wait.
     "resume_why": {
       "type": "string",
       "description": "shown to the user"
+    },
+    "todo_id": {
+      "type": "string",
+      "description": "with resume: the stopped Agent's open unassigned to-do to re-link; omit for task adoption"
     },
     "dismiss_notice": {
       "type": "boolean",

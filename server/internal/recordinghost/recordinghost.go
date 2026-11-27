@@ -162,9 +162,11 @@ type Host interface {
 	TranscriptionReadyAwait() bool
 
 	InSpaceRecording(ctx context.Context, rawID string) bool
-	PutSpaceRecordingRoute(w http.ResponseWriter, r *http.Request, u kb.RecordingUpload)
+	// PutSpaceRecordingRoute answers the upload u of a recording saved into a track; clean is the module's check of an
+	// upload, run where the knowledge base's own upload runs it.
+	PutSpaceRecordingRoute(w http.ResponseWriter, r *http.Request, u recordingwire.RecordingUpload, clean recordingwire.UploadCleaner)
 	DeleteSpaceRecording(w http.ResponseWriter, r *http.Request, id string) bool
-	SpaceRecordingStates(ctx context.Context) (kept []kb.RecordingState, deleted []string)
+	SpaceRecordingStates(ctx context.Context) (kept []recordingwire.RecordingState, deleted []string)
 
 	DecodeLargeBody(w http.ResponseWriter, r *http.Request, v any, limit int64) error
 }

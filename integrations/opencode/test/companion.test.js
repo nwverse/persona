@@ -295,6 +295,37 @@ test('companion advertises launchers/models/assistant without supervision_policy
   assert.ok(acp.calls.some((c) => c[0] === 'closeSession' && c[1].sessionId === sid))
 })
 
+test('live ACP keeps the last reply when the next segment is a chunked botmux marker', async (t) => {
+  const n = await startFakeNode(t)
+  const acp = new FakeAcpClient()
+  const companion = createTestCompanion({ socketPath: n.path, openDb: fakeV1Db().openDb, acp, pushDelayMs: 5 })
+  t.after(() => companion.stop())
+  let streamingPreview
+  acp.onPrompt = async (sessionId, blocks, client) => {
+    const update = (event) => client.emit('update', { sessionId, update: event })
+    const chunk = (text) => update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } })
+    chunk('Real words.\nBOTMUX_NOTHING_TO_SEND')
+    update({ sessionUpdate: 'tool_call', toolCallId: 'call', kind: 'read', title: 'Read' })
+    chunk('BOTMUX_NOTHING_')
+    chunk('TO_SEND')
+    const before = n.all('runtime.sessions').length
+    companion.runtime.sessionsChanged()
+    await until('streaming row published', () => n.all('runtime.sessions').length > before)
+    streamingPreview = n.last('runtime.sessions').sessions.find(s => s.session_id === sessionId)?.last_text
+    return { stopReason: 'end_turn' }
+  }
+  await companion.start()
+  await n.ready
+  const { session } = await n.peer.call('session.start', { cwd: '/w/app', prompt: 'go' })
+  const id = session.session_id
+  await until('turn finished', () => n.last('runtime.sessions')?.sessions?.find(s => s.session_id === id)?.status === 'done')
+  assert.equal(streamingPreview, 'Real words.')
+  assert.equal(n.last('runtime.sessions').sessions.find(s => s.session_id === id).last_text, 'Real words.')
+  const page = await n.peer.call('session.items', { session_id: id, limit: 20 })
+  assert.deepEqual(page.items.filter(i => i.role === 'assistant' && i.kind === 'text').map(i => i.text),
+    ['Real words.\nBOTMUX_NOTHING_TO_SEND', 'BOTMUX_NOTHING_TO_SEND'])
+})
+
 test('the ACP companion exposes A2A tools and forwards calls from its own Agent session', async (t) => {
   const n = await startFakeNode(t, { tools: [{ name: 'a2a_report', description: 'Report a task result' }] })
   const acp = new FakeAcpClient()
@@ -892,4 +923,154 @@ test('live ACP tool_call notifications normalize tool_name and tool_input from r
       ['WebFetch', { url: 'https://example.com', format: 'markdown' }],
     ],
   )
+})
+
+test('session.interrupt cancels queued turns on normal sessions, settles immediately, and clears working status', async (t) => {
+  const n = await startFakeNode(t)
+  const db = fakeV1Db()
+  const acp = new FakeAcpClient()
+  let turn1Started
+  const turn1Entered = new Promise((r) => { turn1Started = r })
+  let finishTurn1
+  let finishUnexpectedTurn2
+  t.after(() => finishUnexpectedTurn2?.({ stopReason: 'end_turn' }))
+  acp.cancel = (sessionId) => {
+    acp.calls.push(['cancel', { sessionId }])
+    finishTurn1?.({ stopReason: 'cancelled' })
+  }
+  acp.onPrompt = async (_sessionId, blocks) => {
+    const text = blocks.map((b) => b.text).join('')
+    if (text === 'first turn') {
+      turn1Started()
+      return new Promise((r) => { finishTurn1 = r })
+    }
+    // If a queued second turn executes after interrupt, hold it until the test finishes so it is immediately obvious.
+    return new Promise((r) => { finishUnexpectedTurn2 = r })
+  }
+  const companion = createTestCompanion({ socketPath: n.path, openDb: db.openDb, acp })
+  t.after(() => companion.stop())
+  await companion.start()
+  await n.ready
+
+  const started = await n.peer.call('session.start', { cwd: '/w/app', prompt: 'first turn' })
+  const sid = started.session.session_id
+  await turn1Entered
+
+  // Queue a second message while Turn 1 is still running on a normal (non-assistant) session.
+  const queued = await n.peer.call('session.send', { session_id: sid, text: 'queued follow-up' })
+  assert.equal(queued.queued, true)
+  assert.equal(companion.live.get(sid)?.queued, 1)
+
+  // Interrupt must cancel Turn 1, skip the queued follow-up, settle promptly, and push non-working status.
+  const intr = await n.peer.call('session.interrupt', { session_id: sid })
+  assert.equal(intr.settled, true)
+  assert.equal(companion.live.get(sid)?.running, false)
+  assert.equal(companion.live.get(sid)?.queued, 0)
+
+  const prompts = acp.calls.filter((c) => c[0] === 'prompt').map((c) => c[1].prompt.map((b) => b.text).join(''))
+  assert.deepEqual(prompts, ['first turn'])
+
+  await until('final pushed session status leaves working', () => {
+    const latest = n.last('runtime.sessions')?.sessions?.find((r) => r.session_id === sid)
+    return latest && latest.status !== 'working'
+  }, 1500)
+  const latest = n.last('runtime.sessions')?.sessions?.find((r) => r.session_id === sid)
+  assert.equal(latest?.status, 'done')
+})
+
+test('session.interrupt skips Turn 2 without waiting for an immediate Turn 3 and schedules idle stop after skipping queued turns', async (t) => {
+  const n = await startFakeNode(t)
+  const db = fakeV1Db()
+  const acp = new FakeAcpClient()
+  let turn1Started
+  const turn1Entered = new Promise((r) => { turn1Started = r })
+  let turn1CancelSent
+  const turn1Cancelled = new Promise((r) => { turn1CancelSent = r })
+  let finishTurn1
+  let turn3Started
+  const turn3Entered = new Promise((r) => { turn3Started = r })
+  let finishTurn3
+  t.after(() => {
+    finishTurn1?.({ stopReason: 'cancelled' })
+    finishTurn3?.({ stopReason: 'end_turn' })
+  })
+  acp.cancel = (sessionId) => {
+    acp.calls.push(['cancel', { sessionId }])
+    turn1CancelSent?.()
+  }
+  acp.onPrompt = async (_sessionId, blocks) => {
+    const text = blocks.map((b) => b.text).join('')
+    if (text === 'turn 1') {
+      turn1Started()
+      return new Promise((r) => { finishTurn1 = r })
+    }
+    if (text === 'turn 3') {
+      turn3Started()
+      return new Promise((r) => { finishTurn3 = r })
+    }
+    throw new Error(`unexpected prompt ${text}`)
+  }
+  const companion = createOpencodeCompanion({
+    socketPath: n.path,
+    retryMs: 20,
+    pushDelayMs: 5,
+    home: '/home/u',
+    acpIdleMs: 40,
+    openDb: db.openDb,
+    acp,
+    discoverModels: async () => [{ providerID: 'opencode-go', id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' }],
+  })
+  t.after(() => companion.stop())
+  await companion.start()
+  await n.ready
+
+  const started = await n.peer.call('session.start', { cwd: '/w/app', prompt: 'turn 1' })
+  const sid = started.session.session_id
+  await turn1Entered
+
+  // Queue Turn 2 while Turn 1 is active.
+  const q2 = await n.peer.call('session.send', { session_id: sid, text: 'turn 2 (should be skipped)' })
+  assert.equal(q2.queued, true)
+
+  // Start interrupt (holds until Turn 1 cancels and Turn 2 skips), then immediately send Turn 3 before Turn 1 settles.
+  const intrPromise = n.peer.call('session.interrupt', { session_id: sid })
+  await turn1Cancelled
+  const q3 = await n.peer.call('session.send', { session_id: sid, text: 'turn 3' })
+  assert.equal(q3.queued, true)
+
+  // Now complete Turn 1 cancellation: Turn 2 skips, interrupt resolves without waiting for Turn 3, and Turn 3 begins.
+  finishTurn1({ stopReason: 'cancelled' })
+  const intr = await intrPromise
+  assert.equal(intr.settled, true)
+  await turn3Entered
+
+  // Finish Turn 3 and verify only Turn 1 and Turn 3 ever reached acp.prompt.
+  finishTurn3({ stopReason: 'end_turn' })
+  await until('turn 3 done', () => !companion.live.get(sid)?.running && companion.live.get(sid)?.queued === 0)
+  const prompts = acp.calls.filter((c) => c[0] === 'prompt').map((c) => c[1].prompt.map((b) => b.text).join(''))
+  assert.deepEqual(prompts, ['turn 1', 'turn 3'])
+
+  // Now verify scheduleAcpIdleStop() fires cleanly after skipping a queued turn (no subsequent Turn 3).
+  acp.calls.length = 0
+  let finishA
+  let aStarted
+  const aEntered = new Promise((r) => { aStarted = r })
+  acp.cancel = (sessionId) => {
+    acp.calls.push(['cancel', { sessionId }])
+    finishA?.({ stopReason: 'cancelled' })
+  }
+  acp.onPrompt = async (_sessionId, blocks) => {
+    const text = blocks.map((b) => b.text).join('')
+    if (text === 'turn A') {
+      aStarted()
+      return new Promise((r) => { finishA = r })
+    }
+    throw new Error(`unexpected prompt ${text}`)
+  }
+  await n.peer.call('session.send', { session_id: sid, text: 'turn A' })
+  await aEntered
+  await n.peer.call('session.send', { session_id: sid, text: 'turn B (skipped)' })
+  const intr2 = await n.peer.call('session.interrupt', { session_id: sid })
+  assert.equal(intr2.settled, true)
+  await until('idle acp child stopped after skipping queued turn', () => acp.pid === 0 && acp.calls.some((c) => c[0] === 'stopChild'), 2000)
 })

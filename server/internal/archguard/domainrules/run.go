@@ -463,12 +463,20 @@ func Check(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	root, err = filepath.Abs(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listRoot, _, err := moduleRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
 	rel, err := filepath.Rel(root, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	scope := filepath.ToSlash(rel)
-	lists, err := ReadLists(filepath.Join(root, "internal", "archguard", "testdata"))
+	lists, err := ReadLists(filepath.Join(listRoot, "internal", "archguard", "testdata"))
 	if err != nil {
 		t.Fatal(err)
 	}

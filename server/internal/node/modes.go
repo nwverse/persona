@@ -2,6 +2,7 @@ package node
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -123,7 +124,7 @@ func validModes(mode, effort string) error {
 }
 
 // validModesFor validates a start's mode / effort against the launcher it runs on: a Codex start takes Codex's own
-// effort list (ultra included, proto.CodexEffortLevels), and agy takes native levels without Claude's auto.
+// effort list (ultra included, proto.CodexEffortLevels). TRAE CLI uses the same vocabulary without auto.
 func validModesFor(launcher, mode, effort string) error {
 	if mode != "" && !slices.Contains(permissionModes, mode) {
 		return fmt.Errorf("unknown permission mode %q", mode)
@@ -132,6 +133,8 @@ func validModesFor(launcher, mode, effort string) error {
 	switch launcherAgentType(launcher) {
 	case "codex":
 		levels = append([]string{effortAuto}, proto.CodexEffortLevels...)
+	case traexAgent:
+		levels = proto.CodexEffortLevels
 	case agyAgent:
 		levels = proto.EffortLevels
 	}
@@ -285,10 +288,18 @@ func (n *Node) modesOf(id string) (mode, effort string) {
 
 // setModes changes a running session's permission mode and / or effort level ("" leaves one as it is).
 func (n *Node) setModes(ctx context.Context, id, mode, effort string) error {
-	return n.updateModes(ctx, id, mode, effort, nil)
+	return n.updateModes(ctx, id, mode, effort, nil, nil)
 }
 
-func (n *Node) updateModes(ctx context.Context, id, mode, effort string, pending *bool) error {
+func (n *Node) updateModes(ctx context.Context, id, mode, effort string, pending, changed *bool) error {
+	markChanged := func() {
+		if changed != nil {
+			*changed = true
+		}
+	}
+	if mode == "" && effort == "" {
+		return nil
+	}
 	if !n.isAssistantSession(id) {
 		if err := n.switchingRefusal(id); err != nil { // a launcher switch, maybe on the last connection's Node
 			return err
@@ -301,7 +312,11 @@ func (n *Node) updateModes(ctx context.Context, id, mode, effort string, pending
 			if effort == "" {
 				return nil
 			}
-			return n.setCodexEffort(ctx, id, c, t, effort)
+			if err := n.setCodexEffort(ctx, id, c, t, effort); err != nil {
+				return err
+			}
+			markChanged()
+			return nil
 		}
 	}
 	if err := validModes(mode, effort); err != nil {
@@ -327,6 +342,7 @@ func (n *Node) updateModes(ctx context.Context, id, mode, effort string, pending
 					n.stopAssistant(id)
 				}
 				n.notifySessions()
+				markChanged()
 				return nil // an active one restarts with it at the next idle message
 			}
 			if p.needsRestartFor(mode) {
@@ -342,6 +358,7 @@ func (n *Node) updateModes(ctx context.Context, id, mode, effort string, pending
 					n.noteModes(id, "", effort)
 					n.persistModes(id, "", effort)
 					n.notifySessions()
+					markChanged()
 					return nil // both wait for the restart at the next idle message
 				}
 				if !active {
@@ -349,11 +366,16 @@ func (n *Node) updateModes(ctx context.Context, id, mode, effort string, pending
 					n.noteModes(id, "", effort)
 					n.persistModes(id, "", effort)
 					n.notifySessions()
+					markChanged()
 					return nil
 				}
 				mode = "" // Keep the active turn; the next idle message restarts it in bypass mode.
 			}
-			return n.applyAssistantModes(ctx, p, mode, effort)
+			if err := n.applyAssistantModes(ctx, p, mode, effort); err != nil {
+				return err
+			}
+			markChanged()
+			return nil
 		}
 		n.noteModes(id, mode, effort)
 		n.persistModes(id, mode, effort, true)
@@ -381,6 +403,7 @@ func (n *Node) updateModes(ctx context.Context, id, mode, effort string, pending
 			}
 		} // else: applied when the next message starts the process
 		n.notifySessions()
+		markChanged()
 		return nil
 	}
 	if n.codexPath(id) != "" || n.traexPath(id) != "" { // not driven through an app-server: no way to set either
@@ -393,9 +416,11 @@ func (n *Node) updateModes(ctx context.Context, id, mode, effort string, pending
 			}
 			n.noteModes(id, "", effort)
 			n.notifySessions()
+			markChanged()
 			return nil
 		}
 	}
+	applied := false
 	if mode != "" {
 		// Allow All for a claude that has no bypass flag: no key reaches it, so it is restarted in it once its turn is
 		// over (mode_restart.go, #6476). Any other pick drops such a restart that waits.
@@ -404,18 +429,25 @@ func (n *Node) updateModes(ctx context.Context, id, mode, effort string, pending
 				if err := n.queueModeRestart(id, mode); err != nil {
 					return err
 				}
+				applied = true
 				mode = ""
 				if effort == "" {
+					markChanged()
 					return nil
 				}
 			}
 		} else {
-			n.dropModeRestart(id, mode)
+			if n.dropModeRestart(id, mode) {
+				applied = true
+			}
 		}
 	}
 	if effort != "" {
 		unlock, err := n.inputTurn(ctx, id)
 		if err != nil {
+			if applied {
+				return partialModesErr(err)
+			}
 			return err
 		}
 		defer unlock()
@@ -424,27 +456,94 @@ func (n *Node) updateModes(ctx context.Context, id, mode, effort string, pending
 	defer unlockModes()
 	pane, err := n.paneFor(ctx, id)
 	if err != nil {
+		if applied {
+			return partialModesErr(n.noPaneForModes(id))
+		}
 		return n.noPaneForModes(id)
 	}
 	if mode != "" {
 		stopDriving := n.driveModes(id)
-		err := n.tuiSetMode(ctx, pane, mode)
+		modeChanged, err := n.tuiSetMode(ctx, pane, mode)
 		stopDriving()
 		if err != nil {
+			if applied || modeChanged {
+				return partialModesErr(err)
+			}
 			return err
 		}
 		n.noteModes(id, mode, "")
+		if modeChanged {
+			applied = true
+		}
 	}
 	if effort != "" {
 		if c, ok := n.outsideClaude(id); ok && (c.Status == "busy" || c.Status == "waiting") {
-			return fmt.Errorf("Agent 正在工作，这一轮结束后再改思考强度")
-		}
-		if err := n.setTerminalEffort(ctx, id, pane, effort, pending); err != nil {
+			err := fmt.Errorf("Agent 正在工作，这一轮结束后再改思考强度")
+			if applied {
+				return partialModesErr(err)
+			}
 			return err
 		}
+		if err := n.setTerminalEffort(ctx, id, pane, effort, pending); err != nil {
+			if applied {
+				return partialModesErr(err)
+			}
+			return err
+		}
+		applied = true
+	}
+	if applied {
+		markChanged()
 	}
 	n.notifySessions()
 	return nil
+}
+
+// partialModesErr preserves an error's code and details while marking delivered="unknown", partial=true and
+// retryable=false (with a partial-change summary) when an earlier change in the same session.modes request (model,
+// launcher cancellation or permission mode) already took effect, so clients reconcile current settings while
+// client_ops records the partial request as "unknown" instead of "failed".
+func partialModesErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	var re *rpc.Error
+	code := ""
+	origMsg := err.Error()
+	var data map[string]any
+	if errors.As(err, &re) {
+		code = re.Code
+		origMsg = re.Message
+		if len(re.Data) > 0 {
+			_ = json.Unmarshal(re.Data, &data)
+		}
+	}
+	if data == nil {
+		data = map[string]any{}
+	}
+	data["delivered"] = deliveredUnknown
+	data["partial"] = true
+	data["retryable"] = false
+	partialKey := "rpc-errors.modes_partial_failed"
+	switch code {
+	case notDelivered:
+		if reason, _ := data["reason"].(string); reason == "terminal_finished" {
+			partialKey = "rpc-errors.modes_partial_terminal_finished"
+		} else {
+			partialKey = "rpc-errors.modes_partial_not_delivered"
+		}
+	case screen.DialogOpen:
+		partialKey = "rpc-errors.modes_partial_dialog_open"
+	}
+	if _, hasDetail := data["detail"]; !hasDetail && origMsg != "" {
+		data["detail"] = origMsg
+	}
+	msg := i18n.T(i18n.Default, partialKey)
+	if code == "" && origMsg != "" {
+		msg += "：" + origMsg
+	}
+	b, _ := json.Marshal(data)
+	return &rpc.Error{Code: code, Message: msg, Data: b}
 }
 
 // noPaneForModes is the refusal of a mode, effort, model or ultracode change for a session with no pane to drive. A
@@ -524,74 +623,118 @@ func tuiMode(screen string) string {
 	return ""
 }
 
-// tuiSetMode presses shift+tab until the footer shows the wanted mode.
-func (n *Node) tuiSetMode(ctx context.Context, pane, mode string) error {
+// tuiSetMode presses shift+tab until the footer shows the wanted mode, reporting whether any key was pressed.
+func (n *Node) tuiSetMode(ctx context.Context, pane, mode string) (bool, error) {
+	changed := false
 	for range len(tuiModeCycle) + 1 {
 		screen, err := n.readPane(ctx, pane, "visible", 60)
 		if err != nil {
-			return err
+			return changed, err
 		}
 		cur := tuiMode(screen)
 		if cur == mode {
-			return nil
+			return changed, nil
 		}
 		if cur == "" {
-			return fmt.Errorf("终端里没看到 Claude Code 的输入框（可能有对话框挡着）")
+			return changed, fmt.Errorf("终端里没看到 Claude Code 的输入框（可能有对话框挡着）")
 		}
 		if err := n.sendKeys(ctx, pane, "shift+tab"); err != nil {
-			return err
+			return changed, err
 		}
+		changed = true
 		time.Sleep(350 * time.Millisecond)
 	}
 	if mode == "bypassPermissions" {
-		return fmt.Errorf("「全部放行」只能在新开 Agent 时选，运行中切不过去")
+		return changed, fmt.Errorf("「全部放行」只能在新开 Agent 时选，运行中切不过去")
 	}
-	return fmt.Errorf("切换权限模式没成功：终端里循环一圈也没出现 %s", mode)
+	return changed, fmt.Errorf("切换权限模式没成功：终端里循环一圈也没出现 %s", mode)
 }
 
 // tuiPromptEmpty reports whether nothing is typed in the TUI's input box (the hint text on a fresh session counts as
 // empty), so the /effort command is not appended to someone's draft.
 func tuiPromptEmpty(screen string) bool {
+	text, ok := tuiPromptText(screen)
+	return ok && (text == "" || strings.HasPrefix(text, `Try "`))
+}
+
+// tuiPromptText is the text of the last `❯` row of a plain screen, with the rows under it when a rule closes them (the
+// box's bottom rule: a draft that wraps or has several lines), trimmed; ok is false when no row starts with `❯`.
+func tuiPromptText(screen string) (string, bool) {
 	lines := strings.Split(screen, "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
-		t := strings.TrimSpace(lines[i])
-		if rest, ok := strings.CutPrefix(t, "❯"); ok {
-			rest = strings.TrimSpace(rest)
-			return rest == "" || strings.HasPrefix(rest, `Try "`)
+		rest, ok := strings.CutPrefix(strings.TrimSpace(lines[i]), "❯")
+		if !ok {
+			continue
 		}
+		rows := []string{strings.TrimSpace(rest)}
+		for j, l := range lines[i+1:] {
+			if strings.HasPrefix(strings.TrimSpace(l), "──") {
+				for _, r := range lines[i+1 : i+1+j] {
+					rows = append(rows, strings.TrimSpace(r))
+				}
+				break
+			}
+		}
+		return strings.TrimSpace(strings.Join(rows, "\n")), true
 	}
-	return false
+	return "", false
 }
 
 // promptHasDraft: something the user typed sits in Claude's input box. Read with colors where the host can, so the
 // grey next-message suggestion Claude Code shows after a turn (and its new-session tip) count as empty; a plain read
 // can only tell the tip apart (tuiPromptEmpty).
 func (n *Node) promptHasDraft(ctx context.Context, pane string) (bool, error) {
+	_, draft, err := n.promptDraft(ctx, pane)
+	return draft, err
+}
+
+// promptDraft is promptHasDraft with the box's text as shown, for telling the user what is there. A plain screen
+// (host.PlainScreen: Orca) has no colors, so any text in the box is a draft, Claude's grey suggestion too: Orca's
+// screen read gives the box's text without telling which part is grey (orcart.Screen.Draft).
+func (n *Node) promptDraft(ctx context.Context, pane string) (string, bool, error) {
 	if !n.plainScreen(pane) {
 		if s, err := n.readPaneANSI(ctx, pane, "visible", 60); err == nil {
 			if in := screen.ClaudeInput(s); in.Box {
-				return in.Draft, nil
+				return in.Text, in.Draft, nil
 			}
 		}
 	}
 	plain, err := n.readPane(ctx, pane, "visible", 60)
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
-	return !tuiPromptEmpty(plain), nil
+	text, _ := tuiPromptText(plain)
+	return text, !tuiPromptEmpty(plain), nil
+}
+
+// inputDraftRefusal refuses an effort or speed change while the box holds text, nothing typed: the text is named so
+// the user can find it, and on a plain screen the message says Claude's grey suggestion counts too (key is
+// rpc-errors.<what>_input_draft, with _plain for that variant).
+func (n *Node) inputDraftRefusal(pane, what, text string) error {
+	key := "rpc-errors." + what + "_input_draft"
+	if n.plainScreen(pane) {
+		key += "_plain"
+	}
+	if r := []rune(text); len(r) > 200 {
+		text = string(r[:200]) + "…"
+	}
+	return refusal(screen.InputDraft, i18n.T(i18n.Default, key, i18n.Args{"draft": text}), map[string]any{"draft": text})
 }
 
 // tuiSetEffort opens /effort, moves to the requested level and follows the picker's confirmation hints.
 func (n *Node) tuiSetEffort(ctx context.Context, pane, effort string) error {
-	draft, err := n.promptHasDraft(ctx, pane)
+	text, draft, err := n.promptDraft(ctx, pane)
 	if err != nil {
 		return err
 	}
 	if draft {
-		return fmt.Errorf("终端的输入框里有还没发出的文字，先在电脑上处理掉再改思考强度")
+		return n.inputDraftRefusal(pane, "effort", text)
 	}
 	if !n.canTypeText(pane) { // a host that types only whole submissions (herdr-core): the command is one
 		if err := n.hostPrompt(ctx, pane, "/effort"); err != nil {
+			if r := deliveryRefusal(err); r != nil {
+				return r
+			}
 			return err
 		}
 	} else {

@@ -8,5 +8,10 @@
   "suggestion_label": "Claude の提案：{suggestion}",
   "suggestion_use": "使う",
   "suggestion_use_hint": "入力欄に入れる（Tab）",
-  "suggestion_send": "そのまま送信"
+  "suggestion_send": "そのまま送信",
+  "image_stage_label": "画像の拡大プレビュー",
+  "image_annotate": "注釈",
+  "image_close": "画像プレビューを閉じる",
+  "image_previous": "前の画像",
+  "image_next": "次の画像"
 }

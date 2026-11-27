@@ -250,7 +250,7 @@ nonisolated enum TurnChanges {
         }
     }
 
-    /// Whether `text` ends with `\n…（已截断，共 ≈?\d+ 字节）`. Uses raw UTF-8 bytes so `\r\n` does not collapse
+    /// Whether `text` ends with the hub's truncation marker (`clip.go`). Uses raw UTF-8 bytes so `\r\n` does not collapse
     /// into a single Swift grapheme cluster and evade suffix matching.
     static func hasClippedSuffix(_ text: String) -> Bool {
         let utf8 = text[...].utf8

@@ -11,18 +11,21 @@ import { SegmentedTrack } from "../../../ui/Segmented";
 export function BackHeader({
   title,
   subtitle,
+  leading,
   actions,
   onBack,
   onClose,
 }: {
   title: React.ReactNode;
   subtitle?: React.ReactNode;
+  leading?: React.ReactNode;
   actions?: React.ReactNode;
   onBack: () => void;
   onClose: () => void;
 }) {
   return (
     <header className="flex h-14 shrink-0 items-center gap-2 border-b border-line px-3">
+      {leading}
       <IconButton icon="chevronLeft" label={t("session-files-parts.back")} onClick={onBack} iconSize={16} />
       <div className="min-w-0 flex-1">
         <div className="truncate text-[13.5px] font-semibold text-ink">{title}</div>
@@ -119,9 +122,9 @@ const GLYPH = {
   data: <path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5a2 2 0 0 0 2 2h1M16 21h1a2 2 0 0 0 2-2v-5a2 2 0 0 1 2-2 2 2 0 0 1-2-2V5a2 2 0 0 0-2-2h-1" />,
 };
 
-/** The icon of a name in a listing: folders filled in the accent color, files by kind. */
+/** The icon of a name in a listing: restrained neutral folder and file glyphs by kind. */
 export function FileGlyph({ name, dir, size = 16 }: { name: string; dir?: boolean; size?: number }) {
-  if (dir) return <Icon name="folder" size={size} className="shrink-0 text-accent" style={{ fill: "color-mix(in srgb, currentColor 18%, transparent)" }} />;
+  if (dir) return <Icon name="folder" size={size} className="shrink-0 text-ink-3" />;
   const g = glyphOf(name);
   if (g === "code" || g === "data" || g === "sheet") {
     return (

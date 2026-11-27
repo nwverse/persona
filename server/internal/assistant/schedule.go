@@ -21,6 +21,7 @@ import (
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/modapi"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 )
@@ -98,6 +99,8 @@ type Task struct {
 	RunIf  *routineCheck `json:"run_if,omitempty"`
 	// factsText is the run's facts as the model is given them (briefing.go); set on the copy a run is made from, never stored.
 	factsText string
+	// Contributions belong to this run snapshot and never enter the stored routine.
+	routineContributions []modapi.RoutineContribution
 	// kbDir is the knowledge directory the run's hint names (a daily run with the knowledge base on); set on the copy, never stored.
 	kbDir string
 	// The conversation it came from (on MachineID), runs go into it; empty = the task's own conversation.
@@ -1737,6 +1740,7 @@ func (s *Service) Run(ctx context.Context) {
 	s.running.Store(&ctx)
 	s.runModuleJobs(ctx)
 	go s.a2aLoop(ctx)
+	go s.externalInboxLoop(ctx)
 	go s.resourceLoop(ctx)
 	go s.transcriptionReadyLoop(ctx)
 	go s.healthReminders(ctx)
@@ -1746,10 +1750,12 @@ func (s *Service) Run(ctx context.Context) {
 	}
 	s.recoverSendsOut(recoverCtx) // sends of more for accepted tasks the manager before this one left out (tasks_sends_out.go)
 	s.recoverApprovalJournals(recoverCtx)
+	s.recoverIdleArchiveAudit(recoverCtx)
 	cancel()
 	go s.delayedWaitsRecoveryLoop(ctx)     // usage-limit retries and task receipt rechecks left by the previous manager
 	go s.failedStartBatchRecoveryLoop(ctx) // deferred leader failures, including when every failed to-do is closed
 	go s.taskCloseLoop(ctx)                // the agents of finished tasks (tasks_close.go)
+	go s.projectReviewLoop(ctx)            // owner input and task events to the configured review session (project_review.go)
 	go s.superviseLoop(ctx)                // the tasks the main conversation follows up (supervise_signals.go)
 	go s.workLoop(ctx)                     // due wakes and retries, cards past their day, missed turns (agents_work_tick.go)
 	go s.replyLoop(ctx)                    // questions the user looked at and left unanswered (agents_reply.go)
@@ -1767,6 +1773,7 @@ func (s *Service) Run(ctx context.Context) {
 	go s.pagesLoop(ctx)                    // the taps on pages and the pages' upkeep (pages_actions.go)
 	go s.acceptLoop(ctx)                   // "Please verify" cards that did not go out, and reminders each morning (acceptance.go)
 	go s.admissionQueueLoop(ctx)           // plan tasks the admission gate parked: timed retries until they start or time out (task_queue.go)
+	go s.placementFallbackLoop(ctx)        // plan tasks waiting for automatic machine placement (placement_queue.go)
 	// The leaders' tasks that got stuck (leader_reports.go).
 	go s.leaderReportsLoop(ctx)
 	go s.healthLoop(ctx)         // each machine's launchers (launcher_health.go)
@@ -1779,6 +1786,7 @@ func (s *Service) Run(ctx context.Context) {
 	go s.healthTellLoop(ctx)
 	s.scheduleLoop(ctx)
 	s.todoViewsStop() // the To-dos view's timers (todo_view_push.go)
+	s.stopIdleArchiveAuditRetry()
 }
 
 // scheduleLoop starts due tasks. It sleeps until the next one is due (at most scheduleIdle, so a time zone change is
@@ -2191,7 +2199,7 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 	if err != nil {
 		// Task/model admission precedes normal fact preparation; its failure still needs this run's fixed facts.
 		if t.Facts || t.Report {
-			t.factsText = s.runFacts(ctx, t, time.Now())
+			s.prepareRoutineFacts(ctx, &t, time.Now())
 		}
 		return s.failTaskRun(ctx, t, run, err, false)
 	}
@@ -2266,7 +2274,7 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 	if kb {
 		t.kbDir = s.kb.dir // the hint names where the knowledge base is, not the default
 	}
-	t.factsText = s.runFacts(ctx, t, time.Now()) // the run's facts, worked out once (north_star.go)
+	s.prepareRoutineFacts(ctx, &t, time.Now()) // the run's facts, worked out once (north_star.go)
 	t, trainingDay := s.workoutPromptNow(ctx, t)
 	if trainingDay != "" {
 		if ref, ok := s.trainingChat(ctx, trainingDay); ok {
@@ -2279,6 +2287,7 @@ func (s *Service) runTask(t Task, due, now time.Time, manual, retried bool) (pro
 		t.promptRunID = run.ID
 	}
 	isolateScheduledConversation(&t, s.mayBeMainNow(ctx))
+	s.retargetFormerMainTask(ctx, &t, &run)
 	// A schedule the owner let start some kinds by itself runs each round in a new conversation of its own whose
 	// context leaves out the live snapshot (schedule_grant.go cleanRound): only such a round may use the grant. Not a
 	// retry: it goes on in the round's conversation, which has its earlier work, and its plans ask.
@@ -2633,7 +2642,8 @@ func (s *Service) startScheduledRun(run ScheduleRun, t Task, m *Device) {
 	delete(s.sched.waitTold, t.ID) // it runs again: a later wait on the user is news again
 	s.sched.mu.Unlock()
 	if t.Facts || t.Report {
-		s.briefSent(t.ID, run.SessionID, run.Retried)
+		s.briefSent(run)
+		s.writeRoutineContributionNotice(run, t)
 	}
 	if !t.pushesOnlyAsked() {
 		s.noteReportTurn(run.SessionID) // its answer is pushed however quick it was (#3438)
@@ -2996,11 +3006,18 @@ const turnPollInterval = 2 * time.Second
 // it was seen working, a changed last item also means it ended: an immediate failure (a bad model) is idle before
 // the first poll sees it working.
 func (s *Service) waitTurnEnd(ctx context.Context, machine, sid string) (ended, ran bool) {
+	return s.waitTurnEndOnReady(ctx, machine, sid, nil)
+}
+
+func (s *Service) waitTurnEndOnReady(ctx context.Context, machine, sid string, onReady func()) (ended, ran bool) {
 	poll := turnPollInterval
 	if s.turnPoll > 0 {
 		poll = s.turnPoll
 	}
 	before, beforeOK := s.lastItemID(ctx, machine, sid)
+	if onReady != nil {
+		onReady()
+	}
 	idle := 0
 	for {
 		select {

@@ -7,7 +7,12 @@ import persona.core.contracts.Session
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Transient
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.JsonObject
 
 /** The kinds of the knowledge base, in the order the list offers them (docs/assistant/knowledge.md). */
@@ -43,8 +48,14 @@ data class KnowledgeEntry(
     val source: String? = null,
     /** A recording's imported meeting, as the meetings list has its id; null before a match and from an older hub. */
     @SerialName("meeting_id") val meetingId: String? = null,
+    /** A recording whose in-flight state nothing can settle, and why ([RecordingPaused]); null when it is not paused. */
+    val paused: RecordingPaused? = null,
     /** Client-only: the imported meeting this recording stands for in the merged Meetings list. */
     @Transient val imported: KnowledgeEntry? = null,
+    /** A project's parent as it shows (#12927); null at the top level and from an older hub. Read only on Android. */
+    val parent: String? = null,
+    /** A project's milestone flags (#12927); null without any and from an older hub. Read only on Android. */
+    val milestones: List<KnowledgeMilestone>? = null,
 ) {
     val key: String get() = "$kind/$id"
 }
@@ -68,7 +79,32 @@ data class KnowledgeDetail(
     val minutes: RecordingMinutes? = null,
     /** A topic's knowledge points (topics only, docs/assistant/knowledge.md "Topics"). */
     val points: List<TopicPoint>? = null,
+    /** A recording whose in-flight state nothing can settle, and why ([RecordingPaused]); null when it is not paused. */
+    val paused: RecordingPaused? = null,
 )
+
+/**
+ * Why a recording's in-flight state (an upload not complete, minutes or a day recap pending, a transcription on the
+ * hub) is not moving: the hub's `paused` on a recording's list entry and detail, derived when read and never stored
+ * (#13407). A closed set: a reason this app does not know reads as [Unknown], never as one it does.
+ */
+@Serializable(with = RecordingPausedSerializer::class)
+enum class RecordingPaused(val wire: String) {
+    /** `module_off`: the recording module is off on this hub, so nothing takes the recording up until it is back. */
+    ModuleOff("module_off"),
+    /** A reason a newer hub names; the page says nothing it cannot stand behind and behaves as before. */
+    Unknown("unknown");
+
+    companion object {
+        fun fromWire(value: String): RecordingPaused = entries.firstOrNull { it != Unknown && it.wire == value } ?: Unknown
+    }
+}
+
+object RecordingPausedSerializer : KSerializer<RecordingPaused> {
+    override val descriptor = PrimitiveSerialDescriptor("persona.core.contracts.api.RecordingPaused", PrimitiveKind.STRING)
+    override fun deserialize(decoder: Decoder): RecordingPaused = RecordingPaused.fromWire(decoder.decodeString())
+    override fun serialize(encoder: Encoder, value: RecordingPaused) = encoder.encodeString(value.wire)
+}
 
 /** A source a knowledge point was said in; [day] is YYYY-MM-DD. */
 @Serializable
@@ -148,7 +184,30 @@ data class KnowledgeSegment(val start: Double = 0.0, val end: Double = 0.0, val 
 
 /** [agents]: the live, non-assistant sessions working in a project's code directories (projects only). */
 @Serializable
-data class KnowledgeDetailResponse(val detail: KnowledgeDetail, val agents: List<Session>? = null)
+data class KnowledgeDetailResponse(
+    val detail: KnowledgeDetail,
+    val agents: List<Session>? = null,
+    /** A project's place in the project tree (#12927); null from an older hub. Read only on Android. */
+    val tree: KnowledgeProjectTree? = null,
+)
+
+/** A milestone flag on a project (#12927); every field optional so a later field or a damaged flag never fails a list. */
+@Serializable
+data class KnowledgeMilestone(val id: String? = null, val title: String? = null, val target: String? = null, val state: String? = null)
+
+/** A project as the tree names it: a parent, one above it, one under it. */
+@Serializable
+data class KnowledgeProjectRef(val id: String = "", val name: String? = null, val status: String? = null, val children: Int? = null)
+
+/** `tree` of a project's detail (`GET /api/v1/kb/projects/{id}`, #12927). */
+@Serializable
+data class KnowledgeProjectTree(
+    val parent: KnowledgeProjectRef? = null,
+    val ancestors: List<KnowledgeProjectRef>? = null,
+    val children: List<KnowledgeProjectRef>? = null,
+    val milestones: List<KnowledgeMilestone>? = null,
+    val depth: Int? = null,
+)
 
 /**
  * Tagging set by hand (`PUT /api/v1/kb/{kind}/{id}`); the hub keeps it over its automatic tagging. Only the fields

@@ -124,12 +124,13 @@ type answerConclusion struct {
 	Photo modelPhoto `json:"photo"`
 }
 
-// placed is a point or decision kept by buildMinutes with what the overview needs of it: the answer's topic it came
-// in (-1: outside topics) and its bold places.
+// placed is a point or decision kept by buildMinutes with what the overview and debates need of it: the answer's topic
+// it came in (-1: outside topics), its bold places, and the transcript line it cited (0 when it cited a photo).
 type placed[T any] struct {
 	item   T
 	topic  int
 	strong []string
+	line   int
 }
 
 func placedItems[T any](list []placed[T]) []T {

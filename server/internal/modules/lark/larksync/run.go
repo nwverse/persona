@@ -26,35 +26,52 @@ const lookupBatch = 100
 // end (finish), from the resources that did not fail: a resource that fails part way contributes nothing, neither
 // content nor index records nor its cursor.
 type run struct {
-	s        *Syncer
-	b        larksyncwire.Binding
-	sess     *session
-	cursors  map[string]string
-	idx      larksyncwire.Index
-	start    time.Time // the run's "now": windows' ends and SeenAt
-	deadline time.Time
-	owner    string // the owner's open id (Message.Mine)
-	webHost  string // the tenant's document site, learned from the first document URL read
-	partial  bool
+	s            *Syncer
+	b            larksyncwire.Binding
+	sess         *session
+	cursors      map[string]string
+	idx          larksyncwire.Index
+	start        time.Time // the run's "now": windows' ends and SeenAt
+	deadline     time.Time
+	stepDeadline time.Time // optional per-step deadline in ModeIM (zero: use deadline)
+	owner        string    // the owner's open id (Message.Mine)
+	webHost      string    // the tenant's document site, learned from the first document URL read
+	partial      bool
+	p2pLoaded    bool
 
-	res           map[string]*resourceState
-	errs          []larksyncwire.ResourceError
-	known         map[string]knownRecord
-	msgs          map[string]*msgState
-	msgOrder      []string
-	docs          map[string]*docState
-	docOrder      []string
-	chats         map[string]chatInfo
-	readChats     map[string]bool   // chat ids whose history readChat already attempted this run
-	p2pChats      map[string]string // known p2p chat_id -> peer display name (persisted in im:p2p_chats)
-	chatMetaTried map[string]bool   // p2p chat ids already queried via GET /open-apis/im/v1/chats/:chat_id this run
-	leads         []minuteLead
-	// names are the senders' display names read this run (open id -> name); namesOff stops asking after a missing
-	// contact scope: names are a help for matching the gateway's copy, never a reason to fail.
+	res                map[string]*resourceState
+	errs               []larksyncwire.ResourceError
+	known              map[string]knownRecord
+	msgs               map[string]*msgState
+	msgOrder           []string
+	docs               map[string]*docState
+	docOrder           []string
+	chats              map[string]chatInfo
+	readChats          map[string]bool         // chat ids whose history readChat already attempted this run
+	p2pChats           map[string]string       // known p2p chat_id -> peer display name (persisted in im:p2p_chats)
+	chatMetaTried      map[string]bool         // p2p chat ids already queried via GET /open-apis/im/v1/chats/:chat_id this run
+	wikiNodes          map[string]wikiNodeInfo // wiki node_token -> resolved object info learned during this run
+	docLeads           []docLead
+	leads              []minuteLead
+	pendingLinks       map[string]*pendingLink // token -> pending linked doc persisted in links_queue
+	pendingLinksLoaded bool
+	docLeadsEnqueued   bool
+	pendingLinksDirty  bool
+	pendingLinksAuth   string
+	// names are the senders' display names read via contact/v3 this run (open id -> name); namesOff stops contact/v3
+	// lookups after a missing contact scope: names are a help for matching the gateway's copy, never a reason to fail.
+	// chatMembers caches GET /open-apis/im/v1/chats/:chat_id/members per chat, read on demand (members.go), as a
+	// fallback when contact/v3 misses external users; memberNames aggregates learned member names across chats;
+	// msgNames caches display names carried in message payloads (sender.name, mentions, post @-nodes).
 	// senderTypes records each sender id's sender_type ("user", "app", …) seen in messages this run.
-	names       map[string]string
-	senderTypes map[string]string
-	namesOff    bool
+	names          map[string]string
+	chatMembers    map[string]*chatMemberList
+	book           *nameBook // the binding's name book (members.go); nil until first used
+	memberNames    map[string]string
+	msgNames       map[string]string
+	senderTypes    map[string]string
+	namesOff       bool
+	chatMembersOff bool
 }
 
 // resourceState is how one resource (a cursor key) ended: failed (its content is dropped), abandoned (the budget ran
@@ -90,12 +107,26 @@ type docState struct {
 	fetched   bool   // doc holds the content of doc.Revision
 	hasMeta   bool   // a docx's revision was asked for (metaRev; 0 when it could not be read)
 	metaRev   int64
+	lastErr   error // non-nil when consider recorded a revision-0 unreadable stub for this document
 	sightings []sighting
 }
 
 // chatInfo is a chat the chat list gave.
 type chatInfo struct {
 	id, name, kind string
+}
+
+// docLead is a cloud document or wiki link found in a synced message.
+type docLead struct {
+	token, objType, url, resource, entry string
+	messageAt                            int64 // unix seconds of the message that contained the link
+	backfill                             bool  // true for historical backfill messages (lower priority than live links)
+}
+
+// wikiNodeInfo caches a resolved wiki node (node_token -> underlying cloud object).
+type wikiNodeInfo struct {
+	objToken, objType, title string
+	edited                   int64
 }
 
 // minuteLead is a minutes token found in this run, in a resource's content.
@@ -119,15 +150,25 @@ func newRun(s *Syncer, b larksyncwire.Binding, token func(context.Context) (stri
 		msgs:          map[string]*msgState{},
 		docs:          map[string]*docState{},
 		names:         map[string]string{},
+		chatMembers:   map[string]*chatMemberList{},
+		memberNames:   map[string]string{},
+		msgNames:      map[string]string{},
 		senderTypes:   map[string]string{},
 		chats:         map[string]chatInfo{},
 		readChats:     map[string]bool{},
 		p2pChats:      map[string]string{},
 		chatMetaTried: map[string]bool{},
+		wikiNodes:     map[string]wikiNodeInfo{},
 	}
 }
 
-func (r *run) overBudget() bool { return !r.s.now().Before(r.deadline) }
+func (r *run) overBudget() bool {
+	now := r.s.now()
+	if !r.stepDeadline.IsZero() && !now.Before(r.stepDeadline) {
+		return true
+	}
+	return !now.Before(r.deadline)
+}
 
 // backfillFrom is where a resource without a cursor starts reading.
 func (r *run) backfillFrom() time.Time {
@@ -288,6 +329,8 @@ func (r *run) finish(ctx context.Context) (larksyncwire.Result, error) {
 			}
 		}
 	}
+
+	r.savePendingLinks()
 
 	keys = keys[:0]
 	for _, k := range r.docOrder {

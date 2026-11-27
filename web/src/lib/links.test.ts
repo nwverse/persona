@@ -37,6 +37,12 @@ import {
 import { BR, docErrorFromBody, loadDoc, mediaURL, orderedNumbers, prepareMarkdown, readDoc, type DocNode, type Get } from "../views/link/feishu-doc";
 
 describe("where a link opens", () => {
+  it("keeps Settings fragments on same-hub page links behind a base path", () => {
+    const path = "/settings?tab=persona#repositories";
+    expect(linkRoute("https://hub.example.com/base" + path, false, "https://hub.example.com", "/base"))
+      .toEqual({ kind: "page", path });
+  });
+
   it("reads Feishu documents in the panel, like the phone's FeishuLinks.isDoc", () => {
     for (const u of [
       "https://example.feishu.cn/docx/AbC123",
@@ -249,15 +255,15 @@ describe("<persona-context>", () => {
   it("puts the contexts before the message, with a stand-in when nothing was typed", () => {
     expect(withContexts([], "  hi ")).toBe("hi");
     expect(withContexts([ref, { ...ref, text: "二" }], "改一下")).toBe(`${contextXML(ref)}\n${contextXML({ ...ref, text: "二" })}\n\n改一下`);
-    expect(withContexts([ref], "  ")).toBe(`${contextXML(ref)}\n\n参考上面的内容。`);
-    expect(withContexts([ref], "", true)).toBe(`${contextXML(ref)}\n\n请看图片`);
+    expect(withContexts([ref], "  ")).toBe(`${contextXML(ref)}\n\n请参考以上内容。`);
+    expect(withContexts([ref], "", true)).toBe(`${contextXML(ref)}\n\n请查看图片`);
   });
 
   it("writes 「AI 修改」 as an edit context and the request", () => {
     const m = editMessage(ref, " 更简洁 ");
     expect(m.startsWith('<persona-context kind="edit"')).toBe(true);
-    expect(m.endsWith("\n\n按要求修改上面选中的内容：更简洁")).toBe(true);
-    expect(editMessage(ref, "").endsWith("\n\n按上面选中的内容修改。")).toBe(true);
+    expect(m.endsWith("\n\n请按要求修改以上选中的内容：更简洁")).toBe(true);
+    expect(editMessage(ref, "").endsWith("\n\n请基于以上选中的内容进行修改。")).toBe(true);
     expect(parseUserText(m).contexts[0].kind).toBe("edit");
   });
 
@@ -358,8 +364,8 @@ describe("reading a Feishu document", () => {
 
   it("explains failures", async () => {
     await expect(readDoc(url, undefined, async () => { throw fail(404, { error: { code: "DOCUMENT_NOT_FOUND" } }); })).rejects.toThrow("文档不存在或已被删除");
-    expect(fail(401, { error: { code: "AUTH_SESSION_EXPIRED" } }).message).toContain("没有登录飞书");
-    expect(fail(502, { error: "lark: the Lark gateway is not configured (set lark.token or lark.container in hub.json)", code: "upstream_error" }).message).toContain("没有接入飞书");
+    expect(fail(401, { error: { code: "AUTH_SESSION_EXPIRED" } }).message).toContain("尚未登录飞书");
+    expect(fail(502, { error: "lark: the Lark gateway is not configured (set lark.token or lark.container in hub.json)", code: "upstream_error" }).message).toContain("尚未接入飞书");
     expect(fail(403, { error: "forbidden", code: "forbidden" }).message).toBe("没有访问权限");
   });
 });

@@ -308,6 +308,7 @@ func TestSpacesRoutesStayOnTheirManager(t *testing.T) {
 		{"PUT", "/api/v1/assistant/tracks/example", `{}`},
 		{"GET", "/api/v1/assistant/track-kinds", ""},
 		{"GET", "/api/v1/assistant/tracks/example/space-md", ""},
+		{"GET", "/api/v1/assistant/tracks/example/conversations", ""},
 		{"PUT", "/api/v1/assistant/tracks/example/space-md", `{}`},
 		{"GET", "/api/v1/assistant/conversations/conv-b/categories", ""},
 		{"PUT", "/api/v1/assistant/conversations/conv-b/categories", `{}`},
@@ -448,6 +449,8 @@ func TestEveryExtensionRouteIsBounded(t *testing.T) {
 		"POST /api/v1/sessions/{mid}/{sid}/queue/send-now": "path",
 		"POST /api/v1/sessions/{mid}/{sid}/seen":           "path",
 		"POST /api/v1/sessions/{mid}/{sid}/rename":         "path",
+		"POST /api/v1/sessions/{mid}/{sid}/archive-idle":   "path",
+		"GET /api/v1/sessions/archive-idle/audit":          "manager",
 		"POST /api/v1/sessions/{mid}/{sid}/modes":          "path", // and only of a conversation its extension opened (extensionModeRefused)
 		"POST /api/v1/interactions/{id}/choose":            "path",
 		"POST /api/v1/interactions/{id}/resolve":           "path",
@@ -477,6 +480,8 @@ func TestEveryExtensionRouteIsBounded(t *testing.T) {
 		"GET /api/v1/assistant/tracks": "manager", "POST /api/v1/assistant/tracks": "manager",
 		"PUT /api/v1/assistant/tracks/{slug}": "manager", "GET /api/v1/assistant/track-kinds": "manager",
 		"GET /api/v1/assistant/tracks/{slug}/space-md": "manager", "PUT /api/v1/assistant/tracks/{slug}/space-md": "manager",
+		"GET /api/v1/assistant/tracks/{slug}/conversations":   "manager",
+		"GET /api/v1/assistant/tracks/launchers":              "manager",
 		"GET /api/v1/assistant/conversations/{id}/categories": "path",
 		"PUT /api/v1/assistant/conversations/{id}/categories": "path",
 		"GET /api/v1/assistant/reporters":                     "manager",
@@ -491,6 +496,10 @@ func TestEveryExtensionRouteIsBounded(t *testing.T) {
 		"GET /api/v1/assistant/start-defaults":                "manager",
 		"PUT /api/v1/assistant/start-defaults":                "manager",
 		"POST /api/v1/assistant/start-defaults/preview":       "manager",
+		"GET /api/v1/assistant/machine-resources":             "manager",
+		"GET /api/v1/assistant/placement/pending":             "manager",
+		"POST /api/v1/assistant/placement/{todo_id}/assign":   "manager",
+		"POST /api/v1/assistant/placement/{todo_id}/defer":    "manager",
 		"GET /api/v1/todos":                                   "manager", "GET /api/v1/todos/{id}/decisions": "manager",
 		"GET /api/v1/todos/{id}": "manager", "GET /api/v1/todos/places": "manager", // TestTodoViewRoutesStayOnTheirManager
 		"GET /api/v1/todos/{id}/timeline":                     "manager", // TestTodoViewRoutesStayOnTheirManager
@@ -506,6 +515,9 @@ func TestEveryExtensionRouteIsBounded(t *testing.T) {
 		"GET /api/v1/todos/{id}/workspace-naming/plans/{operation_id}": "manager",
 		"POST /api/v1/assistant/workspace-naming/preview":              "manager",
 		"POST /api/v1/todos":                                           "manager", "PATCH /api/v1/todos/{id}": "manager",
+		// The paired bot is the owner's; the manager reads its public identity and bounds every handoff (bots_handoff.go).
+		"GET /api/v1/bots/feishu/identity":                  "manager",
+		"POST /api/v1/bots/feishu/handoffs":                 "manager",
 		"POST /api/v1/decisions":                            "manager",
 		"GET /api/v1/decisions/{id}":                        "manager",
 		"POST /api/v1/decisions/{id}/withdraw":              "manager",

@@ -95,7 +95,7 @@ export const SIDEBAR_DEFAULT = 284;
 export const SIDEBAR_MIN = 240;
 export const SIDEBAR_MAX = 480;
 
-/** Space between the Web shell columns at desktop widths (#7522). */
+/** Desktop shell outer card inset and gap between main and an open side panel (#7522, #14696). */
 export const PANEL_GAP = 6;
 
 /** What the conversation beside the side panel keeps at the least (#5148): its input box and header still fit. */

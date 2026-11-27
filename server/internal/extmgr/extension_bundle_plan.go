@@ -273,6 +273,11 @@ func (h *Manager) guardExtensionPlan(ctx context.Context, previews []*extension.
 		if err != nil {
 			return fail(err)
 		}
+		if old := h.extensions.reg.SnapshotExact(pv.Manifest.ID); old != nil && (h.extensions.reg.CanHandoffBuiltin(pv.Manifest.ID) || old.Record.BuiltinPredecessor) {
+			if !h.builtinMarketUpgrade(rec, entry) || !extension.ManifestsEqual(entry.Parsed, pv.Manifest) {
+				return fail(i18n.Err("extension-identity.invalid"))
+			}
+		}
 		if pv.RenameFrom != "" {
 			old := h.extensions.reg.SnapshotExact(pv.RenameFrom)
 			target := h.extensions.reg.Snapshot(pv.Manifest.ID)
@@ -281,11 +286,7 @@ func (h *Manager) guardExtensionPlan(ctx context.Context, previews []*extension.
 			}
 		}
 		spec, key := pv.MarketTrust()
-		currentKey := rec.SigningKey
-		if extension.IsOfficialMarket(rec.Spec) {
-			currentKey = extension.Official.SigningKey
-		}
-		if spec != rec.Spec || key != currentKey {
+		if spec != rec.Spec || key != extension.TrustPin(rec.Spec, rec.SigningKey, rec.TrustedKeys) {
 			return fail(i18n.Err("hub-extension_model.market_trust_changed"))
 		}
 	}

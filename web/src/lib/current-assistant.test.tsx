@@ -48,15 +48,15 @@ describe("the pick", () => {
   it("remembers the default assistant for display without creating a pick or a routing header", () => {
     expect(DISPLAY_IDENTITY_KEY.slice("persona.shownAssistant".length)).toBe(CHOICE_KEY.slice("persona.currentManager".length));
     setRoster(ONE);
-    expect(shownIdentity()).toEqual({ id: "assistant", name: "助手" });
-    expect(JSON.parse(localStorage.getItem(DISPLAY_IDENTITY_KEY)!)).toEqual({ id: "assistant", name: "助手" });
+    expect(shownIdentity()).toEqual({ id: "assistant", name: "助手", isDefault: true, line: switcherLine(ONE.managers[0]), tone: "green" });
+    expect(JSON.parse(localStorage.getItem(DISPLAY_IDENTITY_KEY)!)).toEqual({ id: "assistant", name: "助手", isDefault: true, line: switcherLine(ONE.managers[0]), tone: "green" });
     expect(chosenManager()).toBeNull();
     expect(localStorage.getItem(CHOICE_KEY)).toBeNull();
     expect(currentHeaders()).toBeUndefined();
     expect(managerHeaderFor("/assistant/tasks")).toBeUndefined();
 
     resetRoster(); // loading again keeps the display identity, and still sends the default's requests unchanged
-    expect(shownIdentity()).toEqual({ id: "assistant", name: "助手" });
+    expect(shownIdentity()).toEqual({ id: "assistant", name: "助手", isDefault: true, line: switcherLine(ONE.managers[0]), tone: "green" });
     expect(chosenManager()).toBeNull();
     expect(currentHeaders()).toBeUndefined();
     expect(managerHeaderFor("/assistant/tasks")).toBeUndefined();
@@ -273,7 +273,7 @@ describe("an assistant in the switcher", () => {
   it("says where an online one runs, when an offline one last synced, and how long an install code lasts", () => {
     expect(switcherLine(ROSTER.managers[1])).toBe("在线 · MacBook");
     expect(switcherLine(ROSTER.managers[2])).toContain("离线");
-    expect(switcherLine(ROSTER.managers[3])).toBe("安装中 · 码 8 分钟后过期");
+    expect(switcherLine(ROSTER.managers[3])).toBe("安装中 · 安装码 8 分钟后过期");
   });
 });
 

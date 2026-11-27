@@ -335,6 +335,7 @@ func (n *Node) reapAssistants(ctx context.Context) {
 		case <-t.C:
 		}
 		n.sweepAssistants()
+		n.sweepAgyIdleCompactions(ctx, n.agyNow())
 		n.sweepCacheWarm(ctx, time.Now())
 	}
 }

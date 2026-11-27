@@ -130,7 +130,7 @@ beforeEach(async () => {
       const catalog = launcherModels[launcher?.name ?? ""] ?? { models: [{ id: "synthetic-model", name: "Synthetic model", efforts: ["low", "high"] }] };
       const host = new URL(url, "http://localhost").searchParams.get("host");
       return json({ agent: launcher?.agent_type || launcher?.agent || "claude", ...catalog,
-        supports_start_model: host === "herdr" ? catalog.supports_start_model : undefined });
+        supports_start_model: host === "herdr" || host === "orca" ? catalog.supports_start_model : undefined });
     }
     if (url.endsWith("/launchers")) return json({ launchers: launcherRows, tiers: launcherTiers });
     if (url.includes("/dirs?")) return json({ path: "/projects", entries: [] });
@@ -601,7 +601,7 @@ describe("New Agent with an omp launcher (#11964)", () => {
     await click("Close externally");
     launcherRows = [{ name: launcher, agent: "omp", source: "zshrc" }];
     launcherModels[launcher] = { models: [], supports_start_model: true };
-    await act(async () => applyMachine({ id: "computer", name: "Synthetic computer", online: true, engine_hosts: ["herdr", "orca"], engine_default: "herdr" }));
+    await act(async () => applyMachine({ id: "computer", name: "Synthetic computer", online: true, engine_hosts: ["herdr", "paseo"], engine_default: "herdr" }));
     resetModelListsForTests();
     await click("Reopen start"); await flush();
     await openPanel();
@@ -610,14 +610,14 @@ describe("New Agent with an omp launcher (#11964)", () => {
     expect(typed).toBeDefined();
     await act(async () => typed!.click());
     expect(pill().title).toContain(model);
-    await click("Orca"); await flush();
+    await click("Paseo"); await flush();
     expect(pill().title).not.toContain(model);
     await openPanel();
     await input(document.querySelector<HTMLInputElement>("[data-model-panel] input")!, model);
     expect(row(`typed:${launcher}\n${model}`)).toBeUndefined();
     await act(async () => pill().click());
     await click(t("newagent.start")); await tick();
-    expect(starts()[0].body).toMatchObject({ launcher, host: "orca" });
+    expect(starts()[0].body).toMatchObject({ launcher, host: "paseo" });
     expect(starts()[0].body).not.toHaveProperty("model");
   });
 
@@ -626,10 +626,10 @@ describe("New Agent with an omp launcher (#11964)", () => {
     launcherRows = [{ name: launcher, agent: "omp", source: "zshrc" }, { name: "codex-app", agent: "codex", source: "codex_app" }];
     launcherModels[launcher] = { models: [], supports_start_model: true };
     launcherModels["codex-app"] = { models: [] };
-    await act(async () => applyMachine({ id: "computer", name: "Synthetic computer", online: true, engine_hosts: ["herdr", "orca"], engine_default: "herdr" }));
+    await act(async () => applyMachine({ id: "computer", name: "Synthetic computer", online: true, engine_hosts: ["herdr", "paseo"], engine_default: "herdr" }));
     resetModelListsForTests();
     await click("Reopen start"); await flush();
-    await click("Orca"); await flush();
+    await click("Paseo"); await flush();
     await openPanel("codex-app");
     const desktop = row("model:codex-app\ndefault");
     expect(desktop).toBeDefined();

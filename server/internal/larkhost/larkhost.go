@@ -106,8 +106,16 @@ type Cards interface {
 	// the process panel on the first when steps is not nil, foot under the last, none for quiet. name names the button
 	// of a bare address in the answer (nil: by its host).
 	AnswerCards(l i18n.Lang, name func(*url.URL) string, answer string, quiet bool, steps []string, foot string) (cards []*botcard.Card, fallbacks []string)
-	// MissingPiecesNote says which pieces of an answer did not get to Feishu (1-based) and where the whole is.
-	MissingPiecesNote(l i18n.Lang, missing []int) string
+}
+
+// Push delivers notices and turn mirrors outside the bot's normal reply path. Without the module a
+// keyed push returns nil, and there is no delivery or retry. Core records skipped copies separately.
+type Push interface {
+	PushKeyed(ctx context.Context, to assistantwire.SessionRef, title, body, key string, receipt assistantwire.LarkPushCopy) error
+	TodoReminder(to assistantwire.SessionRef, reminder assistantwire.LarkReminder)
+	AgentDone(to assistantwire.SessionRef, view func(context.Context) (assistantwire.LarkAgentDone, bool))
+	Mirror(ctx context.Context, to assistantwire.LarkMirror, lang i18n.Lang, turn assistantwire.LarkMirrorTurn)
+	MirrorPost(ctx context.Context, to assistantwire.LarkMirror, lang i18n.Lang, cards []*botcard.Card, fallbacks []string, key string, sent func())
 }
 
 // Asks is the interaction port: what the core tells the chat of what Persona and the agents ask (a question, a
@@ -153,26 +161,46 @@ type Board interface {
 	WorkbenchOn(f assistantwire.FeishuFeatures, ready bool)
 	WorkbenchStamp(ctx context.Context, c *botcard.Card) *botcard.Card
 	// DivertNotices hands cards to the notifications companion when it takes them; false: they go to the chat.
-	DivertNotices(ctx context.Context, kind string, cards []*botcard.Card, fallbacks []string) bool
+	// An unknown kind is a defect, even when no companion takes the cards.
+	DivertNotices(ctx context.Context, kind assistantwire.NoticeKind, cards []*botcard.Card, fallbacks []string) bool
+}
+
+// Handoffs is a proxy reply handed to the bot from a group (modules/lark/handoff.go). A handoff never enters the
+// owner's conversations: the module runs it as a guest with one hub-owned tool, and that tool is how the answer
+// reaches the bot.
+type Handoffs interface {
+	// Handoff accepts a group question the manager already persisted. The call returns once the handoff is kept; the
+	// guest run starts afterwards.
+	Handoff(ctx context.Context, p assistantwire.FeishuHandoff) error
+	// HandoffTools is the one tool a proxy reply's guest lists. Empty without the module.
+	HandoffTools() []proto.Tool
+	// HandoffToolCall runs that tool for handoff. A bad call comes back as an error result and counts nothing.
+	HandoffToolCall(ctx context.Context, handoff, name string, args json.RawMessage) proto.ToolResult
+	// HandoffDecided is the owner answering the confirmation. option empty (a typed answer, a fixed response) declines.
+	HandoffDecided(ctx context.Context, handoff, option string)
+	// HandoffTick ends handoffs nobody finished. The core's minute sweep calls it, as NudgeTick.
+	HandoffTick(ctx context.Context)
 }
 
 // Layer is what the core asks of the lark module: the outbound port, the Feishu turns, the cards of what is asked, the
-// workbench, the board and the chat. It
-// grows as the assistant's Feishu files move into the module (#13404).
+// workbench, the board, the chat, pushes and the proxy replies (#13404).
 type Layer interface {
 	Outbound
 	Turns
 	Cards
+	Push
 	Asks
 	Workbench
 	Board
 	Chat
+	Handoffs
 }
 
 // Chat is the bot's chat: the hub's events it takes (the owner's messages and presses, pairing, recalls, what the
 // apps show of it), what the core asks of it, and its records (Book), which the core's cards and the briefing's
 // waits still read.
 type Chat interface {
+	DecideTopicTodo(ctx context.Context, run channel.Run, title, notes string) (string, error)
 	// Message takes the owner's message (feishu.message); Action answers a press of one of the bot's cards
 	// (feishu.card_action, or a companion's), action being the owner's action for it; Owner is feishu.owner,
 	// Recalled feishu.recalled and View feishu.view.
@@ -243,6 +271,8 @@ type Host interface {
 	// Unreachable: the call did not reach the hub or did not come back; Offline: the hub is not connected.
 	Unreachable(err error) bool
 	Offline(err error) bool
+	// Answered reports a definitive hub refusal, so a status failure does not consume a push retry.
+	Answered(err error) bool
 	StepParts(l i18n.Lang, it proto.Item) (verb, detail string)
 	// RunProgress is what run r's progress card shows besides its steps (the channels' live state of it).
 	RunProgress(r *channel.Run) assistantwire.RunProgress
@@ -273,7 +303,6 @@ type Host interface {
 	WorkbenchInbox() []assistantwire.WorkbenchItem
 	WorkbenchItem(id string) (assistantwire.WorkbenchItem, bool)
 	WorkbenchBoard(ctx context.Context, l i18n.Lang, web string, now time.Time) []assistantwire.WorkbenchBoardRow
-	SessionNames(ctx context.Context, sess proto.Session) (primary, secondary string)
 	NextMeeting(ctx context.Context, now time.Time) *assistantwire.WorkbenchMeeting
 	TodayBody(ctx context.Context) json.RawMessage
 	TasksOverview(ctx context.Context) (cards []*botcard.Card, fallbacks []string)
@@ -319,6 +348,10 @@ type Host interface {
 	ConclusionQuestion(ctx context.Context, ev *botcard.MessageEvent, content *botcard.Content, f assistantwire.FeishuFeatures) bool
 	AcceptReply(ctx context.Context, messageID, text string, media bool, parent, root string) bool
 	ApproveOwnerAction(ctx context.Context, ev botcard.MessageEvent, text, action string) bool
+	// ProjectReviewOwnerInput queues the owner's paired-chat message ref ("feishu:<message id>"), sent to the
+	// conversation machine/session, for a configured project review that takes owner inputs; nil when none takes it.
+	// An error means it could not be committed, and the message is not taken.
+	ProjectReviewOwnerInput(ctx context.Context, ref, machine, session string) error
 
 	// The commands (commands.go, models.go): stopping a conversation's turn (kind is the toast's), the lists to pick
 	// a conversation or an agent from, what a /status card shows, the standing board, and the main conversation's
@@ -402,6 +435,11 @@ type Host interface {
 	// OpenTodo makes the to-do, binds it, records its source, has the main conversation supervise it and shows it
 	// in its feed; anything failing takes it back.
 	OpenTodo(ctx context.Context, t assistantwire.ChatOpenTodo) (todoID string, err error)
+	// What a proxy reply asks of the core (modules/lark/handoff.go): start its guest, and ask the owner before a
+	// confirm reply is posted. The guest is registered before the node starts it.
+	StartHandoffGuest(ctx context.Context, handoff, text, launcher string) (machine, session string, err error)
+	RaiseHandoffDecision(ctx context.Context, handoff string, req assistantwire.OutsideDecisionRequest) (id string, err error)
+	WithdrawHandoffDecision(ctx context.Context, id string)
 }
 
 // The Feishu turns without a channel: nothing is shown and an answer has nowhere to go (a run of the bot kept from a
@@ -420,13 +458,25 @@ func (None) Wait(context.Context) error                   { return nil }
 func (None) AnswerCards(i18n.Lang, func(*url.URL) string, string, bool, []string, string) ([]*botcard.Card, []string) {
 	return nil, nil
 }
-func (None) MissingPiecesNote(i18n.Lang, []int) string { return "" }
+func (None) PushKeyed(context.Context, assistantwire.SessionRef, string, string, string, assistantwire.LarkPushCopy) error {
+	return nil
+}
+func (None) TodoReminder(assistantwire.SessionRef, assistantwire.LarkReminder) {}
+func (None) AgentDone(assistantwire.SessionRef, func(context.Context) (assistantwire.LarkAgentDone, bool)) {
+}
+func (None) Mirror(context.Context, assistantwire.LarkMirror, i18n.Lang, assistantwire.LarkMirrorTurn) {
+}
+func (None) MirrorPost(context.Context, assistantwire.LarkMirror, i18n.Lang, []*botcard.Card, []string, string, func()) {
+}
 
 // No board without a channel: nothing is edited, no card carries the workbench button, no companion takes a notice.
-func (None) BoardChanged()                                                         {}
-func (None) WorkbenchOn(assistantwire.FeishuFeatures, bool)                        {}
-func (None) WorkbenchStamp(_ context.Context, c *botcard.Card) *botcard.Card       { return c }
-func (None) DivertNotices(context.Context, string, []*botcard.Card, []string) bool { return false }
+func (None) BoardChanged()                                                   {}
+func (None) WorkbenchOn(assistantwire.FeishuFeatures, bool)                  {}
+func (None) WorkbenchStamp(_ context.Context, c *botcard.Card) *botcard.Card { return c }
+func (None) DivertNotices(_ context.Context, kind assistantwire.NoticeKind, _ []*botcard.Card, _ []string) bool {
+	kind.RequireKnown()
+	return false
+}
 
 // No cards for what is asked without a channel: none is wanted, none is posted.
 func (None) AskAnnounced(proto.Interaction)                    {}
@@ -440,6 +490,9 @@ func (None) AsksCatchUp(context.Context, map[string]bool)      {}
 // The chat without a channel: a bot switched off. Nothing is taken or answered, nothing waits, no target is set, and
 // its records are empty: what is kept in them is dropped.
 func (None) Message(context.Context, assistantwire.FeishuMessage) error { return nil }
+func (None) DecideTopicTodo(context.Context, channel.Run, string, string) (string, error) {
+	return "", ErrNoChannel
+}
 func (None) Action(context.Context, *botcard.CardAction, string) *botcard.CardResponse {
 	return nil
 }
@@ -465,6 +518,15 @@ func (None) LegacyRuns(context.Context) []*channel.Run              { return nil
 func (None) TopicAnchor(context.Context, string, string) string     { return "" }
 func (None) NudgeTick(context.Context)                              {}
 func (None) Book(_ context.Context, f func(assistantwire.ChatBook)) { f(noBook{}) }
+
+// Proxy replies without a channel: nothing is taken, and the guest lists no tool.
+func (None) Handoff(context.Context, assistantwire.FeishuHandoff) error { return ErrNoChannel }
+func (None) HandoffTools() []proto.Tool                                 { return nil }
+func (None) HandoffToolCall(context.Context, string, string, json.RawMessage) proto.ToolResult {
+	return proto.TextResult("this request is closed; end your turn", true)
+}
+func (None) HandoffDecided(context.Context, string, string) {}
+func (None) HandoffTick(context.Context)                    {}
 
 // noBook is the records of a chat switched off: none, and nothing kept.
 type noBook struct{}

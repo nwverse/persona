@@ -12,6 +12,7 @@ import ts from "typescript";
 import { brotliCompress, constants, gzip as gzipCompress } from "node:zlib";
 import { startupMatcher } from "./i18n/startup-keys";
 import { MODULE_SWITCH_KEY } from "./core/module-switch";
+import { MODULE_HUB_KEY_PREFIX } from "./core/module-hub-storage";
 
 /** The languages under `dir` (src/i18n/locales): code → the language subtags its _meta.json matches. Build time only. */
 export function localeDirs(dir: string): Record<string, string[]> {
@@ -82,7 +83,38 @@ export function preloadScript(files: PreloadFiles): string {
       if (Array.isArray(off) && off.indexOf(own.module) >= 0) own = null;
     } catch (e) {}
   }
+  if (own) {
+    try {
+      var kept = JSON.parse(localStorage.getItem(${JSON.stringify(MODULE_HUB_KEY_PREFIX)} + location.origin + base.replace(/\\/+$/, "")) || "null");
+      var valid = Array.isArray(kept) && kept.every(function (x) { return typeof x === "string" && x.indexOf("module.") === 0; });
+      if (valid && kept.indexOf("module." + own.module) < 0) own = null;
+    } catch (e) {}
+  }
   [files.catalogs[lang]].concat(files.shared, own ? own.files : files.app).forEach(add);
+})();`;
+}
+
+/** Font registration and the Hub read are deferred until after the app commits and the browser has painted it. */
+export function fontStartupScript(module: string): string {
+  return `(function () {
+  var root = document.getElementById("root");
+  if (/^screen\\/[^/]/.test(location.pathname.slice(new URL(document.baseURI).pathname.length))) return;
+  function start() {
+    requestAnimationFrame(function () {
+      requestAnimationFrame(function () {
+        import(new URL(${JSON.stringify(`./${module}`)}, document.baseURI).href).then(function () { dispatchEvent(new Event("persona-font-startup")); }).catch(function () {});
+      });
+    });
+  }
+  if (root.childElementCount) start();
+  else {
+    var observer = new MutationObserver(function () {
+      if (!root.childElementCount) return;
+      observer.disconnect();
+      start();
+    });
+    observer.observe(root, { childList: true });
+  }
 })();`;
 }
 
@@ -589,7 +621,20 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // in lib/agent-groups.ts, and sidebar/store wiring (SeenRowsNotice, ClearSeenButton, SeenRowsSetting and seen-rows
 // strings stay lazy); measured on origin/main 9baa8e3a1: en 483,193 B, ja 485,750 B, zh-Hans 483,805 B. Raise budget
 // to the measured ja size plus 10 B of room.
-export const FIRST_SCREEN_BUDGET = 485_760;
+// #15511: an explicitly promoted main relay keeps its incoming source collapsed until opened, including its deferred
+// placeholder. This change on base 4bab19c283 measures en 483,782 B, ja 486,399 B, zh-Hans 484,384 B. Raise the budget
+// to the measured ja size plus 10 B of room.
+// #16992: Hub Admin shares the main app's titlebar inset under the desktop's macOS titlebar (the expanded sidebar's rule
+// in styles.css also names the admin sidebar; lib/mac-chrome.ts is now shared with the admin page, and macChromeMode
+// gives both shells their data-mac-chrome). 77 B in every language, measured in one environment on base 4a81814ec7
+// (ja 485,962 B to 486,039 B; en 483,466 B to 483,543 B, zh-Hans 484,115 B to 484,192 B). The budget moves by the
+// same 77 B, keeping the room main had.
+// #17136: align the sidebar glide highlight to each row's own horizontal bounds inside the scroller (no scroll wobble,
+// no active-row overlap) and host the macOS sidebar collapse toggle in MacBayTools beside the traffic lights (+46 B on
+// base 53884840c4: ja 486,430 B to 486,476 B). Merged with origin/main (including #17071, which added +109 B to the
+// first screen), this tree measures en 484,077 B, ja 486,585 B, zh-Hans 485,079 B. Raise the budget to the measured
+// ja size plus 10 B of room.
+export const FIRST_SCREEN_BUDGET = 486_595;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;

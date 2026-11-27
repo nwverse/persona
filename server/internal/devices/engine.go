@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -108,20 +109,21 @@ func (d *Devices) storedChoice(machine string) (proto.EngineChoice, bool) {
 	return proto.EngineChoice{}, false
 }
 
-// engineChoiceToMove is the machine's stored set for a move to another manager (devicewire.MethodEngineGet): nil when
-// never chosen, an error while settings can't be read (not "never chosen", which would let the move drop it).
-func (d *Devices) engineChoiceToMove(machine string) (*proto.EngineChoice, error) {
-	c, ok := d.storedChoice(machine)
+// engineChoiceToMove reads the stored set before a move to another manager. An unset choice is omitted.
+// Unreadable settings return an error so a move does not mistake them for an unset choice.
+func (d *Devices) engineChoiceToMove(p devicewire.MachineRef) (devicewire.MachineEngine, error) {
+	c, ok := d.storedChoice(p.MachineID)
 	d.engines.mu.Lock()
 	loaded := d.engines.loaded
 	d.engines.mu.Unlock()
-	switch {
-	case !loaded:
-		return nil, errors.New("engines: settings not readable")
-	case !ok:
-		return nil, nil
+	if !loaded {
+		return devicewire.MachineEngine{}, errors.New("engines: settings not readable")
 	}
-	return &c, nil
+	out := devicewire.MachineEngine{MachineID: p.MachineID}
+	if ok {
+		out.Choice = &c
+	}
+	return out, nil
 }
 
 // errUnknownEngine: not one of proto.EngineNames, or a set that is not valid.

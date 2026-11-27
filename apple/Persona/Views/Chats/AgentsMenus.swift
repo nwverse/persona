@@ -80,6 +80,11 @@ struct AgentsListMenu: View {
     #if os(iOS)
     /// The rows' style or Compact List (#2530), as Settings › Appearance › Layout sets it.
     private let display = AgentListDisplayChoice()
+    /// What the search reads (#7443): the field names it while it is not Full Text (`AgentsSearchField`).
+    @StoredValue(AgentSearchScope.key) private var searchScope: AgentSearchScope = .all
+    /// The Sidebar layout (#6332): its one field searches Persona's chats and the Agents and cannot name a scope, so
+    /// it searches Full Text and the menu does not offer Search In.
+    @Environment(\.unifiedSidebar) private var unified
     #else
     @StoredValue("dev.compact") private var compact = false
     #endif
@@ -121,6 +126,22 @@ struct AgentsListMenu: View {
             // Every grouping draws its agents this way, By Repository too (#3753).
             Picker("Display", selection: display.binding) {
                 ForEach(AgentListDisplay.allCases) { d in Label(d.title, systemImage: d.symbol).tag(d) }
+            }
+            if unified == nil {
+                // The web's Filter › Search in, its scopes in its order and words; Full Text is what an untouched app
+                // searches. A submenu of its own whose row names the choice under it: inline, six choices with no
+                // heading would read as the list's. The row's words are two Texts and an Image: a `Label` around them
+                // drops the second line.
+                Section {
+                    Picker(selection: $searchScope) {
+                        ForEach(AgentSearchScope.allCases) { s in Label(s.title, systemImage: s.symbol).tag(s) }
+                    } label: {
+                        Text("Search In [Agent Search Scope]")
+                        Text(searchScope.title)
+                        Theme.Icon.image(Theme.Icon.search)
+                    }
+                    .pickerStyle(.menu)
+                }
             }
             #else
             // The Mac and Apple Vision Pro keep their rows (#2530): cards or Compact List.
@@ -450,30 +471,60 @@ struct AgentsGroupingMenu: View, Equatable {
     }
 }
 
-/// The personal agents page, one tap away beside the grouping (#140): on a phone the shell has no other way there (the
-/// iPad and Mac use the toolbar's button).
-struct AgentsPersonalPill: View {
+/// The personal agents page as one of the list's top-level groups (#140, #16769): on a phone the shell has no other way
+/// there (the iPad and Mac use the toolbar's button). Drawn as a computer's heading is (`HostHeading`): the mark in a
+/// tile, the name a level above the headers under it, how many there are, and a forward chevron, since it opens a page
+/// rather than folding. A lone capsule under the quick filters read as left over once the grouping joined the filter bar.
+struct AgentsPersonalHeading: View {
+    /// How many personal agent conversations there are; nil while unknown.
+    var count: Int?
     var open: () -> Void
+    @Environment(\.compactList) private var compact
 
     var body: some View {
         Button {
             Haptics.tap()
             open()
         } label: {
-            HStack(spacing: Theme.Space.xs) {
-                ThemedIcon(Theme.Icon.personalAgents)
-                Text("Personal Agents")
-                ThemedIcon(Theme.Icon.forward).font(Theme.Font.label)
+            HStack(spacing: Theme.Space.sm) {
+                CountsHeading {
+                    ThemedIcon(Theme.Icon.personalAgents)
+                        .font(Theme.Font.secondaryStrong)
+                        .foregroundStyle(Color.primary)
+                        .scaledFrame(width: Theme.Size.wellXS, height: Theme.Size.wellXS)
+                        .background(Theme.Fill.chip, in: .rect(cornerRadius: Theme.Radius.badge))
+                    Text("Personal Agents")
+                        .font(compact ? Theme.Font.title : Theme.Font.heading)
+                        .foregroundStyle(Color.primary)
+                        .lineLimit(1)
+                } counts: {
+                    if let count {
+                        Text("\(count)")
+                            .font((compact ? CompactList.metaStrong : Theme.Font.labelHeavy).monospacedDigit())
+                            .foregroundStyle(Color.secondary)
+                            .contentTransition(.numericText(value: Double(count)))
+                    }
+                }
+                Spacer(minLength: Theme.Space.xs)
+                ThemedIcon(Theme.Icon.forward)
+                    .font(Theme.Font.labelHeavy)
+                    .foregroundStyle(.tertiary)
             }
-            .agentsPill()
+            // A finger's height, the room above its words, as a computer's heading (`FoldButton`).
+            .modifier(TouchHeight(alignment: .bottom))
+            .contentShape(.rect)
         }
         .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(String(localized: "Personal Agents"))
+        .accessibilityValue(count.map { String(localized: "\($0) agents") } ?? "")
+        .accessibilityAddTraits(.isButton)
         .accessibilityIdentifier("agents.personal")
     }
 }
 
 private extension View {
-    /// The look of the pills under the quick filters: the grouping and Personal Agents.
+    /// The look of the grouping's pill under the quick filters.
     func agentsPill() -> some View {
         font(Theme.Font.secondaryMedium)
             .lineLimit(1)
@@ -482,5 +533,30 @@ private extension View {
             .padding(.vertical, Theme.Space.s)
             .background(Capsule().fill(Theme.Fill.chip))
             .contentShape(Capsule())
+    }
+}
+
+extension AgentSearchScope {
+    /// The web's words for each (`lib-agent-filter.json`, `scope_*`), in Title Case as Apple menus write them.
+    var title: String {
+        switch self {
+        case .all: String(localized: "Full Text [Agent Search Scope]")
+        case .title: String(localized: "Title [Agent Search Scope]")
+        case .conversation: String(localized: "Without Tools [Agent Search Scope]")
+        case .user: String(localized: "User [Agent Search Scope]")
+        case .assistant: String(localized: "Assistant [Agent Search Scope]")
+        case .errors: String(localized: "Errors [Agent Search Scope]")
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .all: Theme.Icon.search
+        case .title: Theme.Icon.sessionTitle
+        case .conversation: Theme.Icon.conversation
+        case .user: Theme.Icon.user
+        case .assistant: Theme.Icon.ai
+        case .errors: Theme.Icon.error
+        }
     }
 }
