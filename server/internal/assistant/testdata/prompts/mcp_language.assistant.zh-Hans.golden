@@ -890,7 +890,7 @@
   },
   {
     "name": "agent_supervise",
-    "description": "主对话或方向主管可收编没有进行中任务的 Agent。省略 role 即为 worker；leader 需要 done_when，不能使用工作信任电脑。它可用 task_plan 分派直属 worker，用 task_review 验收；worker 不能继续派活。已有任务用 task_scope 调整验收条件或预计用时，用 agent_transfer 转交其他对话的任务。",
+    "description": "主对话或方向主管可收编无进行中任务的 Agent。leader 需 done_when 和非工作信任电脑。改范围用 task_scope，移交用 agent_transfer。",
     "input_schema": {
       "type": "object",
       "required": [
@@ -908,12 +908,31 @@
         },
         "title": {
           "type": "string",
-          "description": "Chinese task title, under 20 characters; empty: Agent title"
+          "description": "Chinese title under 20 chars. Defaults to Agent title."
         },
         "role": {
           "type": "string",
           "enum": [
             "leader"
+          ]
+        },
+        "work_mode": {
+          "type": "string",
+          "enum": [
+            "execute",
+            "research",
+            "coordinate"
+          ],
+          "description": "Default execute."
+        },
+        "completion_mode": {
+          "type": "string",
+          "enum": [
+            "inherit",
+            "draft",
+            "ready",
+            "landed",
+            "verified"
           ]
         },
         "done_when": {
@@ -2586,7 +2605,7 @@
   },
   {
     "name": "task_plan",
-    "description": "Split code, repo research and multi-step work. Use machines_list, KB, agents_list and preferences to explain choices. Main/lead, read-only, user_requested and preapproved plans start now; others and owner_step need 开始. Queued means dispatched; check the to-do. Reuse suggested idle Agents via agent_send, even after closure, when context and permissions fit.\n\nExplicit machine keeps fixed (default, refuses unavailable launchers) or flexible (moves portable work on failed health checks, explain why). Omit machine for automatic placement with optional placement_constraints. Planning leads own their tasks; main owns its own and receives needs_user escalations. Main may pick a lead; agent_transfer persists ownership. Incompatible leads need supervision_policy first. Check returned supervisor and similar work, reusing an active same-directory Agent before starting a new one. Pass todo_id for caller's unassigned to-do (Lark topic, split, failed start).\n\nStarted tasks keep a hub brief (owner request or started_why). Give goal, done_when, out_of_bounds: writable needs done_when (PR/Issue defaults to merged+closed unless PR/draft-only); read-only needs goal. Omit expect_minutes for auto estimate; positive overrides. Use continues+continues_why to continue, task_retry for failed starts, task_scope+scope_revision for approved changes.\n\nEdits need readonly=false and write permission; replace read-only Codex with writable for fixes, or use agent_send when permissions match. readonly=true adds read-only constraint. Claude-family and companion agy use bypassPermissions; Codex uses plan unless assistant.readonly_mode=prompt; pi/cursor refuse readonly. Set role=worker, or leader for direct workers via restricted task_plan/task_review.\n\nUse repositories_list or repository_get when needed; an explicit repository URL or path takes precedence. Bindings never imply machine/cwd. Non-repository tasks need no lookup (not a mandatory dispatch preflight). Only the owner can close terminals on acceptance.\n\nSaved workspace naming plan on existing todo: {\"backend\":{\"operation_id\":\"\u003cid\u003e\"}}. Multi-repo container: {\"container\":{\"selected_repo_ids\":[...]}} (or operation_id with todo_id). Optional host picks enabled engine; selected repos must be ready.\n\nWorkspace: \"new\" isolates; {\"new\":{\"branch\":\"task/my-change\"}} names it (default task/\u003ctodo id\u003e); reuse needs a clean, unused checkout. {\"existing\":\"\u003ccwd or id\u003e\",\"queue\":true} selects it without switching; busy queues FIFO only if requested or owner waits. \"none\" creates nothing. Omitted: readonly=none, otherwise configured default or new when busy. Only the engine creates workspaces; failure stops dispatch, acceptance keeps them. Respect org read-only refusals.\n\n`wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply. Only an immediately dispatchable single-task plan waits; approval cards and multi-task plans return immediately.",
+    "description": "Use for code changes, repo research and multi-step work. Use machines_list, KB, agents_list and preferences to explain choices. Main/lead, read-only, user_requested and preapproved plans start now. Others and owner_step need 开始. Check queued starts in the to-do. Reuse an Agent via agent_send when context and permissions fit, even after closure.\n\nAn explicit machine is fixed by default. Flexible lets portable work move when health checks fail. Omit machine for automatic placement. Planning leads own their tasks and escalate needs_user to main. Main may select a lead. Incompatible leads need supervision_policy first. Check the supervisor and similar work. Reuse an active same-directory Agent when it fits. Pass todo_id for an unassigned to-do (Lark topic, split, failed start).\n\nStarted tasks keep a hub brief (owner request or started_why). Writable tasks need done_when and read-only tasks need goal. Give out_of_bounds as needed. Set completion_mode for draft or review-ready delivery. Omit expect_minutes for an automatic estimate. Use continues+continues_why to continue, task_retry for failed starts, task_scope+scope_revision for approved changes.\n\nEdits need readonly=false and write permission; replace read-only Codex with writable for fixes, or use agent_send when permissions match. readonly=true adds read-only constraint. Claude-family and companion agy use bypassPermissions; Codex uses plan unless assistant.readonly_mode=prompt; pi/cursor refuse readonly. Set role=worker, or leader for direct workers via restricted task_plan/task_review.\n\nUse repositories_list or repository_get when needed. An explicit URL or path wins. Set machine and cwd separately from bindings. Only the owner can close terminals on acceptance.\n\nPass todo_id with a saved backend or container operation_id. For a new container, selected_repo_ids must be ready. Host picks an enabled engine.\n\nWorkspace new isolates and can name a branch (default task/\u003ctodo id\u003e). Existing selects a clean checkout without switching. Queue waits FIFO if requested or the owner waits. None creates nothing. Omission uses none for readonly and the writable default or new if busy. Engine setup failure stops dispatch. Acceptance keeps workspaces. Respect org read-only refusals.\n\n`wait_seconds` observes up to 50 seconds after dispatch, appending `Inline observation` JSON: `completed`(this input's `reply`), `question`(pending `interaction_id`), `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`, with known input/session ids. Observation never answers questions, accepts tasks, resends or cancels work; normal supervision/`task_review` applies. Older nodes may time out rather than return an unrelated reply. Only an immediately dispatchable single-task plan waits; approval cards and multi-task plans return immediately.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -2880,6 +2899,26 @@
               "readonly": {
                 "type": "boolean",
                 "description": "true only for read-only tasks; false for authorized edits. Adds「本任务只读：不改项目文件、不提交、不对外写入」when true"
+              },
+              "work_mode": {
+                "type": "string",
+                "enum": [
+                  "execute",
+                  "research",
+                  "coordinate"
+                ],
+                "description": "New task only. Defaults to research for readonly and execute otherwise."
+              },
+              "completion_mode": {
+                "type": "string",
+                "enum": [
+                  "inherit",
+                  "draft",
+                  "ready",
+                  "landed",
+                  "verified"
+                ],
+                "description": "New task. Inherit uses assistant settings. Draft is a draft artifact, ready is for review, landed is merged or published, verified is confirmed live."
               },
               "user_requested": {
                 "type": "boolean",
@@ -3406,7 +3445,7 @@
   },
   {
     "name": "task_scope",
-    "description": "Change what a supervised task is to do, or what done means, after it started (its todo id). The brief is never rewritten: this adds a brief-log entry (what changed and why), applies the new done_when/expect_minutes, restarts overdue, estimate_due only on a new estimate; the owner reads it in the next digest. It is the only way done_when changes after start (agent_supervise and agent_send on a task use the same log). Give done_when as the whole list after the change: a criterion you leave out is logged as dropped and named in the completion report. A change adding an owner-only step (deploying, merging, releasing, public sends/comments, deleting, spending, production changes) not in the original task is refused unless the owner's own message started this turn: ask first (ask_user, or task_review needs_user), then call again. Only its supervisor may call it; the Agent is not told — send the change with agent_send. estimate_due/overdue: revise expect_minutes here, but a finished task past the settle window with no owner card is refused: give task_review first (accepted/rework/cancelled; needs_user or accepted+user_check if the owner must act); chat-only asks never reach Needs you.",
+    "description": "The supervisor can change a task's criteria, modes or estimate. The original brief stays and the log records what changed and why. Supply the whole list when changing done_when. Removed criteria appear in the completion report. For an owner-only step, ask via ask_user or task_review needs_user and call again in the owner's reply turn. Notify the Agent via agent_send. Scope resets overdue, and a new estimate also resets estimate_due. A finished task past the settle window without an owner card needs task_review first. Use needs_user or accepted with user_check when the owner must act.",
     "input_schema": {
       "type": "object",
       "required": [
@@ -3426,6 +3465,26 @@
         "why": {
           "type": "string",
           "description": "why, in one sentence (Chinese)"
+        },
+        "work_mode": {
+          "type": "string",
+          "enum": [
+            "execute",
+            "research",
+            "coordinate"
+          ],
+          "description": "New work mode. Omit to keep the current mode."
+        },
+        "completion_mode": {
+          "type": "string",
+          "enum": [
+            "inherit",
+            "draft",
+            "ready",
+            "landed",
+            "verified"
+          ],
+          "description": "Omit to keep it. Inherit uses the assistant's delivery gate."
         },
         "done_when": {
           "type": "array",
