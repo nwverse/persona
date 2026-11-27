@@ -13,6 +13,8 @@ import (
 func TestSensitiveOwnedAgentDelegationWaitsForSupervisor(t *testing.T) {
 	e := newRouteEnv(t, nil, true)
 	e.f.infoTagModel = true
+	e.f.fakeModel(t)
+	e.s.noInfoTag = false
 	e.f.mu.Lock()
 	e.f.infoTag = `{"categories":["legal_id"]}`
 	e.f.mu.Unlock()

@@ -73,6 +73,25 @@ func (s *Service) scheduleFailureTarget(ctx context.Context, t Task) (string, bo
 // durable delivery. The pending interaction owns its answer and expiry; stale
 // relays cannot authorize another occurrence. Owner-only cards stay out of it.
 func (s *Service) handNonOwnerCard(ix proto.Interaction) bool {
+	// Preserve the existing private standalone permission's App-only boundary:
+	// it is neither supervisor-readable nor an alert on another surface.
+	if ix.Private && !secretOrForm(ix) && ix.Kind == proto.IxPermission && s.inputCardSource(ix, false) == cardAgentPermission {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if _, standalone := s.nonOwnerCardTarget(ctx, ix.MachineID, ix.SessionID); standalone && !s.settings(ctx).supervisorConversation(ix.SessionID) {
+			s.fleet.mu.Lock()
+			p := s.fleet.interactions[ix.ID]
+			if p == nil || p.claimed || !p.ix.CreatedAt.Equal(ix.CreatedAt) {
+				s.fleet.mu.Unlock()
+				return true
+			}
+			p.route, p.ix.Delegating = nil, false
+			shown := p.ix
+			s.fleet.mu.Unlock()
+			s.show(shown)
+			return true
+		}
+	}
 	if !s.internalCard(ix) {
 		return false
 	}

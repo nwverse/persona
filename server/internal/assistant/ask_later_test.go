@@ -424,7 +424,7 @@ func TestGoldenAskLater(t *testing.T) {
 	golden(t, "ask_later.tool_result", prompts.RenderQuestionAskedLater(prompts.QuestionAskedLater{ID: "ix_0a1b2c", Until: "11-08 17:04"}))
 	e := newAskTodoEnv(t, nil)
 	setSettings(t, e.s, func(v *Settings) { v.Timezone = "UTC" })
-	ix := proto.Interaction{ID: "ix_0a1b2c", ToolName: "ask_user", CreatedAt: time.Date(2026, 11, 8, 15, 4, 0, 0, time.UTC),
+	ix := proto.Interaction{ID: "ix_0a1b2c", ToolName: "ask_user", ToolInput: json.RawMessage(`{"why_owner":"priority"}`), CreatedAt: time.Date(2026, 11, 8, 15, 4, 0, 0, time.UTC),
 		ExpiresAt: time.Now().Add(time.Hour), Questions: []proto.Question{{Question: "Merge the release PR now?"}, {Question: "Tag it?"}}}
 	ctx := context.Background()
 	golden(t, "ask_later.answered", e.s.renderAskLater(ctx, ix, proto.Resolution{Answers: map[string]string{"Merge the release PR now?": "Merge", "Tag it?": "No"}}))

@@ -62,6 +62,7 @@ func newFleetTestOn(t *testing.T, st Store) *fleetTest {
 	d := newFleetDevs()
 	d.add("mac", "Mac")
 	s := New(Options{Hub: f, Store: func() Store { return st }, Logf: t.Logf, Devices: d})
+	configureFleetReviewer(t, s, f)
 	runCtx, cancel := context.WithCancel(context.Background())
 	s.running.Store(&runCtx)
 	ft := &fleetTest{t: t, s: s, d: d, f: f, cancel: cancel}

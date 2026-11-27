@@ -31,6 +31,7 @@ func deferredCardFixture(t *testing.T, store *failingDeferredWorkStore, options 
 	c.UpdatedAt = time.Now().Add(-time.Minute).UTC().Truncate(time.Second)
 	f.setSessions("box", c)
 	s := newServiceOn(t, f, store)
+	configureFleetReviewer(t, s, f)
 	if err := s.putTriageSwitches(context.Background(), TriageSwitches{Enabled: true, Decide: true}); err != nil {
 		t.Fatal(err)
 	}

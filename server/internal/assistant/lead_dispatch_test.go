@@ -18,11 +18,17 @@ import (
 func TestSupervisorSensitiveHandoffStillChecksPrivacyBoundary(t *testing.T) {
 	ctx := context.Background()
 	s, f, _ := infoUseService(t)
+	f.setHello(func(h *Hello) {
+		h.Assistant.MachineID, h.Assistant.Machines = "qa-machine", []string{"qa-machine"}
+	})
 	setSettings(t, s, func(v *Settings) {
 		v.Main, v.Leaders, v.MachineID = "qa-main-chat", []string{"qa-health-1"}, "qa-machine"
 	})
 	f.setSessions("qa-machine", proto.Session{SessionID: "qa-health-1", MachineID: "qa-machine", Assistant: true, Space: SpaceHealth},
 		proto.Session{SessionID: "qa-main-chat", MachineID: "qa-machine", Assistant: true})
+	if !s.selfPolicy(ctx, "qa-health-1").ConfirmOutbound {
+		t.Fatal("the fixture did not install the isolated track policy")
+	}
 	answerOutboundIn(t, s, "qa-health-1", "agent_send", "summary", "", false)
 	ok, _, err := s.confirmOutbound(ctx, "qa-machine", "qa-health-1", "agent_send", "qa: placeholder health data", "summary", nil)
 	if err != nil || ok {
