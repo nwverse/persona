@@ -898,6 +898,10 @@ func (s *Service) drainLogicalInput(ctx context.Context, st logicalSwitchStore, 
 		return err
 	}
 	vanishedActiveTarget := c.Switch != nil && c.Switch.Phase == "active" && s.isVanishedZeroTurnSegment(ctx, c, a)
+	delivery, ok := st.(logicalDeliveryStore)
+	if !ok {
+		return logicalRefusal(ctx, "unavailable")
+	}
 	input, err := st.ClaimConversationInput(ctx, c.MachineID, c.SessionID, c.Epoch)
 	if err != nil || input == nil {
 		return err
@@ -915,7 +919,7 @@ func (s *Service) drainLogicalInput(ctx context.Context, st logicalSwitchStore, 
 		if c.Switch != nil {
 			operation = c.Switch.OperationID
 		}
-		if err := st.RequeueConversationInput(cleanup, c.MachineID, c.SessionID, input.ClientMsgID, c.Epoch, operation); err != nil {
+		if err := delivery.RequeueClaimedConversationInput(cleanup, c.MachineID, c.SessionID, c.Epoch, *input, operation); err != nil {
 			retErr = errors.Join(retErr, err)
 			return
 		}
@@ -984,6 +988,13 @@ func (s *Service) drainLogicalInput(ctx context.Context, st logicalSwitchStore, 
 		if !ok || active.ID != a.ID {
 			return db.ErrConversationEpoch
 		}
+		valid, err := delivery.ConversationInputClaimCurrent(ctx, c.MachineID, c.SessionID, c.Epoch, *input)
+		if err != nil {
+			return err
+		}
+		if !valid {
+			return db.ErrConversationEpoch
+		}
 		if vanishedActiveTarget && current.Switch != nil && current.Switch.Phase == "active" && s.physicalSegmentMissing(ctx, active) {
 			return logicalRefusal(ctx, "unavailable")
 		}
@@ -1018,10 +1029,6 @@ func (s *Service) drainLogicalInput(ctx context.Context, st logicalSwitchStore, 
 	operation := ""
 	if c.Switch != nil {
 		operation = c.Switch.OperationID
-	}
-	delivery, ok := st.(logicalDeliveryStore)
-	if !ok {
-		return logicalRefusal(ctx, "unavailable")
 	}
 	if err = delivery.ResolveClaimedConversationDelivery(ctx, c.MachineID, c.SessionID, c.Epoch, *input, operation, outcome); err != nil {
 		return err

@@ -12,6 +12,8 @@ import (
 )
 
 type logicalDeliveryStore interface {
+	RequeueClaimedConversationInput(context.Context, string, string, int64, db.ConversationInput, string) error
+	ConversationInputClaimCurrent(context.Context, string, string, int64, db.ConversationInput) (bool, error)
 	ResolveClaimedConversationDelivery(context.Context, string, string, int64, db.ConversationInput, string, string) error
 	ResolveHistoricalConversationDelivery(context.Context, string, string, int64, db.ConversationInput, string) error
 	NoteConversationInputBlocked(context.Context, string, string, int64, db.ConversationInput, string) error

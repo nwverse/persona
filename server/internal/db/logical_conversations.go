@@ -789,25 +789,38 @@ func (d *DB) ClaimConversationInput(ctx context.Context, machine, session string
 // must use a positive runtime receipt instead. The epoch fences stale cleanup.
 func (d *DB) RequeueConversationInput(ctx context.Context, machine, session, id string, epoch int64, operation string) error {
 	return conversationTransaction(ctx, d, func(tx pgx.Tx) error {
-		var current int64
-		if err := tx.QueryRow(ctx, `SELECT epoch FROM logical_conversations WHERE machine_id=$1 AND session_id=$2 AND deleted_at IS NULL FOR UPDATE NOWAIT`, machine, session).Scan(&current); err != nil {
-			return err
-		}
-		if current != epoch {
-			return ErrConversationEpoch
-		}
-		tag, err := tx.Exec(ctx, `UPDATE conversation_inputs SET state='queued',dispatch_segment='',dispatch_machine='',dispatch_session='',dispatch_epoch=0,delivery_version=delivery_version+1 WHERE logical_machine=$1 AND logical_session=$2 AND client_msg_id=$3 AND epoch=$4 AND state='sending'`, machine, session, id, epoch)
-		if err != nil {
-			return err
-		}
-		if tag.RowsAffected() != 1 {
-			return ErrConversationEpoch
-		}
-		if operation != "" {
-			return resolveConversationSwitchTx(ctx, tx, machine, session, operation, "rejected", "input refused before dispatch")
-		}
-		return nil
+		return requeueConversationInputTx(ctx, tx, machine, session, id, epoch, operation)
 	})
+}
+
+func (d *DB) RequeueClaimedConversationInput(ctx context.Context, machine, session string, epoch int64, input ConversationInput, operation string) error {
+	return conversationTransaction(ctx, d, func(tx pgx.Tx) error {
+		if err := lockConversationDelivery(ctx, tx, machine, session, epoch, input); err != nil {
+			return err
+		}
+		return requeueConversationInputTx(ctx, tx, machine, session, input.ClientMsgID, epoch, operation)
+	})
+}
+
+func requeueConversationInputTx(ctx context.Context, tx pgx.Tx, machine, session, id string, epoch int64, operation string) error {
+	var current int64
+	if err := tx.QueryRow(ctx, `SELECT epoch FROM logical_conversations WHERE machine_id=$1 AND session_id=$2 AND deleted_at IS NULL FOR UPDATE NOWAIT`, machine, session).Scan(&current); err != nil {
+		return err
+	}
+	if current != epoch {
+		return ErrConversationEpoch
+	}
+	tag, err := tx.Exec(ctx, `UPDATE conversation_inputs SET state='queued',dispatch_segment='',dispatch_machine='',dispatch_session='',dispatch_epoch=0,delivery_version=delivery_version+1 WHERE logical_machine=$1 AND logical_session=$2 AND client_msg_id=$3 AND epoch=$4 AND state='sending'`, machine, session, id, epoch)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrConversationEpoch
+	}
+	if operation != "" {
+		return resolveConversationSwitchTx(ctx, tx, machine, session, operation, "rejected", "input refused before dispatch")
+	}
+	return nil
 }
 
 // ResolveConversationDelivery commits the physical input receipt and its first-

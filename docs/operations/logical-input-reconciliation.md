@@ -68,8 +68,9 @@ refused, or `replay` to requeue this exact input at its original FIFO position.
 Replay can duplicate uncertain execution; it is solely an explicit operator
 choice. There is no default replay. Payload, attachments, provenance and hash
 are preserved. The next claim records its new dispatch identity and advances
-its attempt version; old receipts cannot settle that attempt even at the same
-epoch. A manual current-target rejection rolls back the switch without
+its attempt version; stale dispatch callbacks and pre-RPC cleanup cannot affect
+that attempt even at the same epoch. Before the physical RPC the manager validates
+the original claim again while holding the root epoch lock through dispatch. A manual current-target rejection rolls back the switch without
 implicitly requeueing the rejected input.
 
 A repeated identical request with the same actor and request ID succeeds without

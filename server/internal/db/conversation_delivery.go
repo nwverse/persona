@@ -202,3 +202,12 @@ func recordConversationInputResolution(ctx context.Context, tx pgx.Tx, machine, 
  SELECT logical_machine,logical_session,$4,client_msg_id,$5,$6,$7,$8,payload,payload_hash,dispatch_segment,dispatch_machine,dispatch_session,dispatch_epoch FROM conversation_inputs WHERE logical_machine=$1 AND logical_session=$2 AND client_msg_id=$3`, machine, session, p.Input.ClientMsgID, p.RequestID, actor, p.Reason, p.Action, raw)
 	return err
 }
+
+// ConversationInputClaimCurrent is checked while WithConversationEpoch holds the
+// root SHARE lock through the RPC. Claim, settlement and operator replay all need
+// the exclusive root lock, so an attempt cannot change between this check/send.
+func (d *DB) ConversationInputClaimCurrent(ctx context.Context, machine, session string, epoch int64, input ConversationInput) (bool, error) {
+	var current bool
+	err := d.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM conversation_inputs i JOIN logical_conversations c ON c.machine_id=i.logical_machine AND c.session_id=i.logical_session WHERE i.logical_machine=$1 AND i.logical_session=$2 AND i.client_msg_id=$3 AND c.deleted_at IS NULL AND c.epoch=$4 AND i.epoch=$5 AND i.position=$6 AND i.dispatch_segment=$7 AND i.dispatch_machine=$8 AND i.dispatch_session=$9 AND i.dispatch_epoch=$10 AND i.delivery_version=$11 AND i.state='sending')`, machine, session, input.ClientMsgID, epoch, input.Epoch, input.Position, input.DispatchSegment, input.DispatchMachine, input.DispatchSession, input.DispatchEpoch, input.Version).Scan(&current)
+	return current, err
+}

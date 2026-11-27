@@ -255,6 +255,15 @@ func TestManualReplayFencesLateReceiptAtSameEpochAndPreservesOriginalPayload(t *
 	if err != nil || second == nil || second.Version <= first.Version || string(second.Payload) != string(payload) || second.Position != first.Position {
 		t.Fatalf("replay replaced original input: %+v %v", second, err)
 	}
+	if valid, err := d.ConversationInputClaimCurrent(ctx, "root-machine", "root-chat", 2, *first); err != nil || valid {
+		t.Fatalf("old pre-RPC attempt can still dispatch: %v %v", valid, err)
+	}
+	if err := d.RequeueClaimedConversationInput(ctx, "root-machine", "root-chat", 2, *first, op.OperationID); !errors.Is(err, ErrConversationEpoch) {
+		t.Fatalf("old validation cleanup requeued the new attempt: %v", err)
+	}
+	if valid, err := d.ConversationInputClaimCurrent(ctx, "root-machine", "root-chat", 2, *second); err != nil || !valid {
+		t.Fatalf("new attempt was damaged by stale cleanup: %v %v", valid, err)
+	}
 	if err := d.ResolveClaimedConversationDelivery(ctx, "root-machine", "root-chat", 2, *first, op.OperationID, "accepted"); !errors.Is(err, ErrConversationEpoch) {
 		t.Fatalf("late receipt settled a newer attempt: %v", err)
 	}
