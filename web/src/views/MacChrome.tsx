@@ -15,8 +15,9 @@ export function MacBayTools({ bay, onSearch }: { bay: "expanded" | "rail" | "hid
     <div
       data-mac-bay-tools
       className="pointer-events-auto absolute z-50 flex h-7 items-center gap-1 max-lg:hidden"
-      style={{ left: 86, top: 10 }}
+      style={{ left: 86, top: 11.5 }}
     >
+      <span aria-hidden className="mr-0.5 h-4.5 w-px rounded-full bg-line-strong" />
       <CollapseButton
         collapsed={collapsed}
         chord={bindings["left-sidebar"]}
@@ -33,7 +34,7 @@ export function MacBayTools({ bay, onSearch }: { bay: "expanded" | "rail" | "hid
         title={`${t("sidebar.search_sessions")} (${jumpHint(bindings)})`}
         className={cx(SIDEBAR_CONTROL, "size-7")}
       >
-        <Icon name="search" size={14} stroke={1.85} />
+        <Icon name="search" size={15} stroke={1.8} />
       </button>
     </div>
   );

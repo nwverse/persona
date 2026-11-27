@@ -59,13 +59,13 @@ describe("macOS unified titlebar bridge & Apple G2 contour", () => {
     expect(plain.clip.startsWith("M 14,0 ")).toBe(true);
 
     const rail = appleG2Contour(900, 600, "rail");
-    expect(rail.clip.startsWith("M 126,0 ")).toBe(true);
-    expect(rail.clip).toContain("14,44 H 94 C 105.5,44");
-    expect(rail.stroke).toContain("14,44.5 H 94.5");
+    expect(rail.clip.startsWith("M 134,0 ")).toBe(true);
+    expect(rail.clip).toContain("14,44 H 102 C 113.5,44");
+    expect(rail.stroke).toContain("14,44.5 H 102.5");
 
     const hidden = appleG2Contour(900, 600, "hidden");
-    expect(hidden.clip.startsWith("M 180,0 ")).toBe(true);
-    expect(hidden.clip).toContain("14,44 H 148");
+    expect(hidden.clip.startsWith("M 188,0 ")).toBe(true);
+    expect(hidden.clip).toContain("14,44 H 156");
   });
 
   it("clips <main> immediately on initial mount in rail mode (Cmd+R reload regression)", () => {
@@ -86,11 +86,11 @@ describe("macOS unified titlebar bridge & Apple G2 contour", () => {
     }
     act(() => root.render(<ShellProbe />));
     const main = host.querySelector("main")!;
-    expect(main.style.clipPath).toContain("M 126,0 ");
+    expect(main.style.clipPath).toContain("M 134,0 ");
     expect(host.querySelector("[data-mac-contour]")).not.toBeNull();
   });
 
-  it("places collapse and search buttons side-by-side inside MacBayTools without a divider across expanded, rail, and hidden states", () => {
+  it("places divider, collapse, and search buttons inside MacBayTools across expanded, rail, and hidden states", () => {
     const onSearch = vi.fn();
     setSidebarCollapsed(false);
     act(() => root.render(<MacBayTools bay="expanded" onSearch={onSearch} />));
@@ -101,8 +101,8 @@ describe("macOS unified titlebar bridge & Apple G2 contour", () => {
     expect(expandedButtons[1]!.getAttribute("aria-label")).toBe("搜索会话");
     const tools = host.querySelector<HTMLElement>("[data-mac-bay-tools]")!;
     expect(tools.style.left).toBe("86px");
-    expect(tools.style.top).toBe("10px");
-    expect(tools.querySelector(".w-px")).toBeNull();
+    expect(tools.style.top).toBe("11.5px");
+    expect(tools.querySelector(".w-px")).not.toBeNull();
 
     act(() => expandedButtons[0]!.click());
     expect(getLayout().sidebarCollapsed).toBe(true);

@@ -65,7 +65,7 @@ export function appleG2Contour(W: number, H: number, bay: "rail" | "hidden" | nu
     };
   }
   const by = 44;
-  const bx = bay === "rail" ? 104 : 158;
+  const bx = bay === "rail" ? 112 : 166;
   const sx = bx + 0.5;
   const sy = by + 0.5;
   return {

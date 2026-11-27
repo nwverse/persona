@@ -790,10 +790,10 @@ select:not([multiple], [size], .appearance-none) {
     -webkit-app-region: no-drag;
   }
   [data-app-shell][data-mac-bay="rail"] > main > .min-h-0 header.h-14 {
-    padding-left: 138px;
+    padding-left: 146px;
   }
   [data-app-shell][data-mac-bay="hidden"] > main > .min-h-0 header.h-14 {
-    padding-left: 192px;
+    padding-left: 200px;
   }
   [data-app-shell]:is([data-mac-bay="rail"], [data-mac-bay="hidden"]) > main > .min-h-0 > * > :not(:first-child) header.h-14 {
     padding-left: 1rem;
