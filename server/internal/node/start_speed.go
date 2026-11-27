@@ -143,14 +143,14 @@ func (n *Node) claudeFastModeSettings(ctx context.Context, launcher, settings, c
 			if err != nil {
 				return "", err
 			}
-			return n.mergeManagedSettings(launcher, managed, ours)
+			return n.mergeManagedSettings(launcher, managed, ours, false)
 		}
 		if own := n.launcherOwnSettings(ctx, launcher); own != "" {
 			ours, err := writeSettings(n.dir, "fast-mode-settings.json", fastBytes)
 			if err != nil {
 				return "", err
 			}
-			return n.mergeLauncherSettings(launcher, own, ours, cwd)
+			return n.mergeLauncherSettings(launcher, own, ours, cwd, false)
 		}
 		if launcher != "claude" {
 			// A function can append --settings after Persona's. Without seeing it, adding ours would discard the
@@ -174,5 +174,5 @@ func (n *Node) claudeFastModeSettings(ctx context.Context, launcher, settings, c
 		return "", err
 	}
 	name := cmp.Or(launcher, "claude") + "-fast-" + filepath.Base(settings)
-	return writeSettings(n.dir, name, out)
+	return writeLauncherSettings(n.dir, name, out, n.pluginWorktreeCwd(cwd))
 }

@@ -7,10 +7,11 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/proto"
-	"time"
 )
 
 // An alias's own --settings is found as the shell would pass it: either form, the last of several, ~ and $HOME
@@ -130,6 +131,129 @@ func TestClaudeSettingsMergesTheLaunchers(t *testing.T) {
 	for _, launcher := range []string{"claude", "plain", "gone", "broken"} {
 		if got := n.claudeSettings(ctx, launcher, ours, cwd); got != ours {
 			t.Errorf("%s: %s, want %s", launcher, got, ours)
+		}
+	}
+}
+
+func pluginWorktreeHomeExcludes(t *testing.T, home string) []string {
+	t.Helper()
+	var paths []string
+	for _, h := range homeSpellings(t, home) {
+		paths = append(paths, filepath.Join(h, ".claude", "CLAUDE.md"),
+			filepath.Join(h, ".claude", "AGENTS.md"), filepath.Join(h, ".claude", "rules", "**"))
+	}
+	return paths
+}
+
+func TestPluginWorktreeCwd(t *testing.T) {
+	home := t.TempDir()
+	n := &Node{home: home, dir: filepath.Join(home, "state")}
+	root := filepath.Join(n.dir, nodePluginsDir)
+	cwd := mkdir(t, filepath.Join(root, "plugin", "worktree"))
+	outside := mkdir(t, filepath.Join(home, "project"))
+	outsideChild := mkdir(t, filepath.Join(outside, "child"))
+	escapeChild := filepath.Join(root, "escape-child")
+	links := map[string]string{
+		filepath.Join(root, "escape"): outside,
+		filepath.Join(home, "alias"):  cwd,
+		filepath.Join(home, "root"):   root,
+		escapeChild:                   outsideChild,
+	}
+	for name, target := range links {
+		if err := os.Symlink(target, name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		name, cwd string
+		want      bool
+	}{
+		{"empty", "", false},
+		{"inside", cwd, true},
+		{"root itself", root, false},
+		{"symlink to root itself", filepath.Join(home, "root"), false},
+		{"prefix sibling", filepath.Join(root+"-backup", "plugin"), false},
+		{"ordinary directory", outside, false},
+		{"symlink out of root", filepath.Join(root, "escape"), false},
+		{"parent segment after a symlink", escapeChild + string(filepath.Separator) + filepath.FromSlash("../child"), false},
+		{"symlink into root", filepath.Join(home, "alias"), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := n.pluginWorktreeCwd(tc.cwd); got != tc.want {
+				t.Errorf("pluginWorktreeCwd(%q) = %v, want %v", tc.cwd, got, tc.want)
+			}
+		})
+	}
+	t.Run("symlinked plugin root and data directory fallback", func(t *testing.T) {
+		state := mkdir(t, filepath.Join(home, "fallback"))
+		t.Setenv("PERSONA_HOME", state)
+		if err := os.Symlink(root, filepath.Join(state, nodePluginsDir)); err != nil {
+			t.Fatal(err)
+		}
+		n := &Node{home: home}
+		if !n.pluginWorktreeCwd(cwd) || n.pluginWorktreeCwd(root) {
+			t.Error("resolved plugin root must contain its descendants and exclude itself")
+		}
+	})
+}
+
+func TestClaudePluginWorktreeSettingsWithoutHooksPlugin(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home")
+	if err := os.Symlink(t.TempDir(), home); err != nil {
+		t.Fatal(err)
+	}
+	n := &Node{home: home, dir: filepath.Join(home, ".persona"), logger: log.New(io.Discard, "", 0)}
+	ctx := context.Background()
+	cwd := mkdir(t, filepath.Join(n.dir, nodePluginsDir, "plugin", "worktree"))
+	repo := mkdir(t, filepath.Join(home, "project"))
+	n.setManaged([]proto.ManagedLauncher{{Name: "gateway", BaseURL: "https://gateway.example.com"}})
+	withLauncherSettings(t, map[string]string{"work": "project-settings.json"})
+
+	ours := filepath.Join(n.dir, "claude-settings.json")
+	writeFile(t, ours, `{"claudeMdExcludes":["project-rules/**"],"hooks":{"Stop":[{"hooks":[{"type":"command","command":"personad hook"}]}]}}`)
+	writeFile(t, filepath.Join(cwd, "project-settings.json"),
+		`{"claudeMdExcludes":["custom-rules/**","project-rules/**"],"model":"custom-model"}`)
+	assistant := filepath.Join(n.dir, "assistant-settings.json")
+	writeFile(t, assistant, `{}`)
+	if s, h := n.claudeStartSettings(ctx, "claude", "assistant", cwd); s != assistant || h != "" {
+		t.Fatalf("assistant settings = %q, hooks = %q", s, h)
+	}
+
+	for _, tc := range []struct{ launcher, file string }{
+		{"claude", "claude-plugin-worktree-settings.json"},
+		{"gateway", "gateway-plugin-worktree-claude-settings.json"},
+		{"work", "work-plugin-worktree-claude-settings.json"},
+	} {
+		t.Run(tc.launcher, func(t *testing.T) {
+			path := n.claudeSettings(ctx, tc.launcher, ours, cwd)
+			if want := filepath.Join(n.dir, "launcher-settings", "plugin-worktrees", tc.file); path != want {
+				t.Fatalf("settings = %q, want %q", path, want)
+			}
+			if s, h := n.claudeStartSettings(ctx, tc.launcher, "claude", cwd); s != path || h != "" {
+				t.Fatalf("start settings = %q, hooks = %q", s, h)
+			}
+			s := readSettings(t, path)
+			wantExcludes := append(pluginWorktreeHomeExcludes(t, home), "project-rules/**")
+			if tc.launcher == "work" {
+				wantExcludes = append(wantExcludes, "custom-rules/**")
+				if s["model"] != "custom-model" {
+					t.Error("merged settings lost the alias's model")
+				}
+			}
+			got := excludesOf(s)
+			slices.Sort(got)
+			slices.Sort(wantExcludes)
+			if !slices.Equal(got, wantExcludes) {
+				t.Errorf("excludes %v, want %v", got, wantExcludes)
+			}
+			if got := hookCommands(t, s, "Stop"); !slices.Equal(got, []string{"personad hook"}) {
+				t.Errorf("hooks = %v", got)
+			}
+		})
+	}
+	for _, launcher := range []string{"claude", "gateway"} {
+		if got := excludesOf(readSettings(t, n.claudeSettings(ctx, launcher, ours, repo))); !slices.Equal(got, []string{"project-rules/**"}) {
+			t.Errorf("normal workspace %s excludes = %v", launcher, got)
 		}
 	}
 }

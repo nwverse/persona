@@ -55,7 +55,7 @@ func TestAutoModeDefaultIsDeclined(t *testing.T) {
 			" Enter to confirm · Esc to cancel\n", []string{"esc"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			d, keys := matchStartDialog(claudeStartDialogs, tc.screen, false)
+			d, keys := matchStartDialog(claudeStartDialogs, tc.screen, startDialogPolicy{})
 			if d == nil || d.Name != startDialogAutoMode || d.ChangesUserSettings || !slices.Equal(keys, tc.want) {
 				t.Fatalf("got %s %v, want %v", dialogName(d), keys, tc.want)
 			}
@@ -82,21 +82,22 @@ func TestAutoModeDefaultLeavesOtherScreens(t *testing.T) {
 // Permissions confirmation only for a start that asked for bypass.
 func TestClaudeStartDialogsKeepTheirAnswers(t *testing.T) {
 	trust := screenFixture(t, "claude-2.1.312-trust-162.txt")
-	if d, keys := matchStartDialog(claudeStartDialogs, trust, false); d == nil || !d.Started || !slices.Equal(keys, trustKeys(trust)) {
+	if d, keys := matchStartDialog(claudeStartDialogs, trust, startDialogPolicy{}); d == nil || !d.Started || !slices.Equal(keys, trustKeys(trust)) {
 		t.Errorf("trust: %s %v", dialogName(d), keys)
 	}
 	notes := "Security notes:\n 1. Claude can make mistakes\n\nPress Enter to continue…"
-	if d, keys := matchStartDialog(claudeStartDialogs, notes, false); d == nil || d.Started || !slices.Equal(keys, []string{"enter"}) {
+	if d, keys := matchStartDialog(claudeStartDialogs, notes, startDialogPolicy{}); d == nil || d.Started || !slices.Equal(keys, []string{"enter"}) {
 		t.Errorf("security notes: %s %v", dialogName(d), keys)
 	}
-	if d, _ := matchStartDialog(claudeStartDialogs, bypassConfirm(t), false); d != nil {
+	if d, _ := matchStartDialog(claudeStartDialogs, bypassConfirm(t), startDialogPolicy{}); d != nil {
 		t.Errorf("bypass confirmation answered on a start that did not ask for bypass: %v", d.Name)
 	}
-	if d, keys := matchStartDialog(claudeStartDialogs, bypassConfirm(t), true); d == nil || d.Name != startDialogBypass ||
+	bypass := startDialogPolicy{AcceptBypass: true}
+	if d, keys := matchStartDialog(claudeStartDialogs, bypassConfirm(t), bypass); d == nil || d.Name != startDialogBypass ||
 		!slices.Equal(keys, []string{"down", "enter"}) {
 		t.Errorf("bypass: %s %v", dialogName(d), keys)
 	}
-	if d, _ := matchStartDialog(claudeStartDialogs, screenFixture(t, "claude-2.1.312-empty-162.txt"), true); d != nil {
+	if d, _ := matchStartDialog(claudeStartDialogs, screenFixture(t, "claude-2.1.312-empty-162.txt"), bypass); d != nil {
 		t.Errorf("input box answered as %s", d.Name)
 	}
 }
@@ -104,7 +105,7 @@ func TestClaudeStartDialogsKeepTheirAnswers(t *testing.T) {
 // An unrecognized dialog is a list of choices with claude's input box not drawn that none of the table's rows is:
 // never claude's input box, its loading screen, nor a known dialog (answerable yet or not).
 func TestUnknownStartDialog(t *testing.T) {
-	if d := unknownStartDialog(screenFixture(t, "claude-2.1.312-model-picker-162.txt")); d == nil || len(d.Options) != 6 {
+	if d := unknownStartDialog(screenFixture(t, "claude-2.1.312-model-picker-162.txt"), startDialogPolicy{}); d == nil || len(d.Options) != 6 {
 		t.Errorf("model picker: %+v", d)
 	}
 	for name, s := range map[string]string{
@@ -117,7 +118,7 @@ func TestUnknownStartDialog(t *testing.T) {
 		"shell":              "~/proj % ",
 		"agent list in chat": "⏺ I will:\n  1. read\n  2. fix\n\n> \n  ? for shortcuts",
 	} {
-		if d := unknownStartDialog(s); d != nil {
+		if d := unknownStartDialog(s, startDialogPolicy{}); d != nil {
 			t.Errorf("%s: read as unrecognized: %+v", name, d)
 		}
 	}
@@ -176,5 +177,105 @@ func TestHerdrStartDeclinesTheAutoModeOffer(t *testing.T) {
 	if len(got) != 2 || got[0] != sendKeys("w1:p2", "down", "enter") ||
 		got[1] != call("agent.prompt", map[string]any{"target": "w1:p2", "text": "fix the build"}) {
 		t.Errorf("trace %v", got)
+	}
+}
+
+func externalImportsOffer(choices ...string) string {
+	return "──────────────────────────────────────────────────────────────\n" +
+		" Allow external CLAUDE.md file imports?\n\n" +
+		strings.Join(choices, "\n") + "\n\n Enter to confirm · Esc to cancel\n"
+}
+
+func TestExternalImportsStartDialog(t *testing.T) {
+	for _, tc := range []struct {
+		name, screen string
+		want         []string
+	}{
+		{"numbered, cursor on Yes", externalImportsOffer(" ❯ 1. Yes, allow external imports", "   2. No, continue without external imports"),
+			[]string{"down", "enter"}},
+		{"numbered, cursor on No", externalImportsOffer("   1. Yes, allow external imports", " ❯ 2. No, continue without external imports"),
+			[]string{"enter"}},
+		{"numbered, no cursor drawn", externalImportsOffer("   1. Yes", "   2. No"), []string{"down", "enter"}},
+		{"unnumbered, cursor on Yes", externalImportsOffer(" ❯ Yes", "   No"), []string{"down", "enter"}},
+		{"unnumbered, cursor on No", externalImportsOffer("   Yes", " ❯ No"), []string{"enter"}},
+		{"no declining option", externalImportsOffer(" ❯ 1. Yes, allow external imports", "   2. Learn more"), []string{"esc"}},
+		{"no parsed options", externalImportsOffer(" [Yes] [No]"), []string{"esc"}},
+		{"wrapped in a box", "╭─────────────────────╮\n│ Allow               │\n│ EXTERNAL CLAUDE.md  │\n│ file imports?      │\n" +
+			"│ ❯ 1. Yes            │\n│   2. No             │\n╰─────────────────────╯", []string{"esc"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			scoped := startDialogPolicy{DeclineExternalImports: true}
+			d, keys := matchStartDialog(claudeStartDialogs, tc.screen, scoped)
+			if d == nil || d.Name != startDialogExternalImports || !d.Started ||
+				d.ChangesUserSettings || !slices.Equal(keys, tc.want) {
+				t.Fatalf("worktree dialog = %s, keys = %v, want %v", dialogName(d), keys, tc.want)
+			}
+			if d := unknownStartDialog(tc.screen, scoped); d != nil {
+				t.Errorf("worktree dialog reported as unknown: %+v", d)
+			}
+			ordinary := startDialogPolicy{AcceptBypass: true}
+			if d, keys := matchStartDialog(claudeStartDialogs, tc.screen, ordinary); d != nil || keys != nil {
+				t.Errorf("ordinary dialog = %s, keys = %v", dialogName(d), keys)
+			}
+			if d := unknownStartDialog(tc.screen, ordinary); d == nil {
+				t.Error("ordinary dialog was not reported as unknown")
+			}
+		})
+	}
+}
+
+func TestExternalImportsBannerLeavesInputBoxAlone(t *testing.T) {
+	s := "Allow external CLAUDE.md file imports?\n" + screenFixture(t, "claude-2.1.312-empty-162.txt")
+	if d, keys := matchStartDialog(claudeStartDialogs, s, startDialogPolicy{DeclineExternalImports: true}); d != nil || len(keys) != 0 {
+		t.Errorf("input box treated as %s with keys %v", dialogName(d), keys)
+	}
+}
+
+func TestHerdrStartExternalImports(t *testing.T) {
+	const pane = "w1:p2"
+	for _, tc := range []struct {
+		name     string
+		worktree bool
+	}{
+		{"plugin worktree", true},
+		{"ordinary workspace", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n, f, home := herdrNode(t)
+			withStartWaits(n, 5*time.Second, 5*time.Second)
+			n.readyPoll = 20 * time.Millisecond
+			cwd := mkdir(t, filepath.Join(home, "project"))
+			offer := externalImportsOffer(" ❯ 1. Yes, allow external imports", "   2. No, continue without external imports")
+			f.reply("tab.create", map[string]any{"tab": map[string]any{"tab_id": "w1:t2"}, "root_pane": map[string]any{"pane_id": pane}})
+			f.reply("pane.list", map[string]any{"panes": []any{map[string]any{"pane_id": pane, "tab_id": "w1:t2"}}})
+			if tc.worktree {
+				cwd = mkdir(t, filepath.Join(n.dir, nodePluginsDir, "plugin", "worktree"))
+				startHerdr(f, pane, proto.StatusIdle)
+				f.screenSteps(pane, isKeys("down", "enter"), offer, screenFixture(t, "claude-2.1.312-empty-162.txt"))
+			} else {
+				startHerdr(f, pane, proto.StatusBlocked)
+				f.setScreen(pane, offer)
+			}
+
+			_, err := request(t, n, "session.start", map[string]any{"cwd": cwd, "workspace_id": "w1"})
+			keys := f.trace("pane.send_keys")
+			if tc.worktree {
+				if err != nil {
+					t.Fatalf("worktree did not reach ready: %v", err)
+				}
+				if !slices.Equal(keys, []string{sendKeys(pane, "down", "enter")}) {
+					t.Errorf("worktree keys = %v", keys)
+				}
+				return
+			}
+			if err == nil || rpcCode(err) != proto.CodeAgentStartStalled ||
+				!strings.Contains(err.Error(), "an unrecognized dialog blocks the start:") ||
+				!strings.Contains(err.Error(), "Allow external CLAUDE.md file imports?") {
+				t.Fatalf("ordinary workspace start = %v", err)
+			}
+			if len(keys) != 0 || len(f.trace("tab.close")) != 0 {
+				t.Errorf("ordinary workspace dialog was handled: keys %v, closes %v", keys, f.trace("tab.close"))
+			}
+		})
 	}
 }

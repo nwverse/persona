@@ -134,6 +134,102 @@ func TestClaudeStartSettings(t *testing.T) {
 	}
 }
 
+func TestClaudePluginWorktreeStartSettingsWithHooksPlugin(t *testing.T) {
+	home := t.TempDir()
+	n := &Node{home: home, dir: filepath.Join(home, ".persona"), bin: "personad"}
+	if err := n.writeClaudeConfig(); err != nil {
+		t.Fatal(err)
+	}
+	n.claudeV.set("2.1.318")
+	n.setManaged([]proto.ManagedLauncher{
+		{Name: "gateway", BaseURL: "https://gateway.example.com"},
+		{Name: "gateway-plugin-worktree", BaseURL: "https://other.example.com"},
+	})
+	withLauncherSettings(t, map[string]string{"work": "project-settings.json"})
+	ctx := context.Background()
+	cwd := mkdir(t, filepath.Join(n.dir, nodePluginsDir, "plugin", "worktree"))
+	writeFile(t, filepath.Join(cwd, "project-settings.json"), `{"model":"custom-model"}`)
+	repo := mkdir(t, filepath.Join(home, "project"))
+	wantExcludes := pluginWorktreeHomeExcludes(t, home)
+
+	shared, _ := n.claudeStartSettings(ctx, "gateway", "claude", repo)
+	if filepath.Base(shared) != "gateway-env-settings.json" {
+		t.Fatalf("normal workspace settings = %q", shared)
+	}
+	if got := excludesOf(readSettings(t, shared)); len(got) != 0 {
+		t.Fatalf("normal workspace excludes = %v", got)
+	}
+	before, err := os.ReadFile(shared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, _ := n.claudeStartSettings(ctx, "gateway-plugin-worktree", "claude", repo)
+	otherBefore, err := os.ReadFile(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ launcher, kind, file string }{
+		{"claude", "claude", "claude-plugin-worktree-settings.json"},
+		{"", "claude", "claude-plugin-worktree-settings.json"},
+		{"gateway", "claude", "gateway-plugin-worktree-env-settings.json"},
+		{"work", "claude", ""},
+		{"a_function", "claude", ""},
+		{"claude", "assistant", ""},
+		{"gateway", "assistant", "gateway-env-settings.json"},
+	} {
+		t.Run(tc.kind+"/"+tc.launcher, func(t *testing.T) {
+			s, h := n.claudeStartSettings(ctx, tc.launcher, tc.kind, cwd)
+			want := ""
+			if tc.file != "" {
+				dir := filepath.Join(n.dir, "launcher-settings")
+				if tc.kind == "claude" {
+					dir = filepath.Join(dir, "plugin-worktrees")
+				}
+				want = filepath.Join(dir, tc.file)
+			}
+			if s != want || h != n.hooksPlugin(tc.kind) {
+				t.Fatalf("settings %q, hooks %q, want %q and %q", s, h, want, n.hooksPlugin(tc.kind))
+			}
+			if s == "" {
+				return
+			}
+			settings := readSettings(t, s)
+			if _, ok := settings["hooks"]; ok {
+				t.Error("hooks in --settings would also run from the plugin")
+			}
+			var wantPaths []string
+			if tc.kind == "claude" {
+				wantPaths = wantExcludes
+			}
+			if got := excludesOf(settings); !slices.Equal(got, wantPaths) {
+				t.Errorf("excludes %v, want %v", got, wantPaths)
+			}
+			if tc.launcher == "gateway" {
+				env, _ := settings["env"].(map[string]any)
+				if env["ANTHROPIC_BASE_URL"] != "https://gateway.example.com" {
+					t.Error("managed settings lost the gateway")
+				}
+			} else if len(settings) != 1 {
+				t.Errorf("plain Claude settings have extra keys: %v", settings)
+			}
+		})
+	}
+	after, err := os.ReadFile(shared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("plugin worktree start rewrote the shared managed settings")
+	}
+	otherAfter, err := os.ReadFile(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(otherAfter) != string(otherBefore) {
+		t.Fatal("plugin worktree start rewrote another launcher's shared settings")
+	}
+}
+
 // A herdr start with a claude that loads plugins: the managed launcher's env is its only --settings, then Persona's
 // skills and hooks plugins, and the live replies plugin (on unless the machine's setting is off).
 func TestHerdrStartManagedWithHooksPlugin(t *testing.T) {

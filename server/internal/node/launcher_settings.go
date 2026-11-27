@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -21,14 +22,67 @@ import (
 // that does gets the hooks as a plugin (hooksplugin.go), and nothing of the launcher's is replaced, a function's
 // --settings too, which no merge can see.
 
-// claudeSettings is the --settings a claude start of launcher passes: ours (a file in n.dir), or, when the launcher
-// is an alias with its own --settings, the two merged into launcher-settings/<launcher>-<ours>. cwd is where claude
-// runs (a relative path in the alias is from there). Anything wrong with the launcher's file: ours, as before.
+// pluginWorktreeCwd identifies a working directory below the node's disposable plugin root. The scope helpers
+// resolve symlinks on both sides so a link out of the root keeps the user's normal startup behavior.
+func (n *Node) pluginWorktreeCwd(cwd string) bool {
+	if cwd == "" {
+		return false
+	}
+	// Resolve the existing cwd before the scope helpers clean it. A ".." after a symlink uses the target's parent.
+	if resolved, err := filepath.EvalSymlinks(cwd); err == nil {
+		cwd = resolved
+	}
+	root := n.dir
+	if root == "" {
+		root = identity.DataDir(n.home)
+	}
+	plugins := filepath.Join(root, nodePluginsDir)
+	return sessionScopeWithin(plugins, cwd) && !sameScopePath(plugins, cwd)
+}
+
+func (n *Node) excludeHomeClaudeInstructions(s map[string]any) {
+	if n.home == "" {
+		return
+	}
+	homes := []string{n.home}
+	if real, err := filepath.EvalSymlinks(n.home); err == nil && real != filepath.Clean(n.home) {
+		homes = append(homes, real)
+	}
+	var paths []string
+	for _, home := range homes {
+		claude := filepath.Join(home, ".claude")
+		paths = append(paths, filepath.Join(claude, "CLAUDE.md"), filepath.Join(claude, "AGENTS.md"), filepath.Join(claude, "rules", "**"))
+	}
+	s["claudeMdExcludes"] = mergeUniqueStrings(claudeMdExcludes(s), paths)
+}
+
+func claudeMdExcludes(s map[string]any) []string {
+	switch list := s["claudeMdExcludes"].(type) {
+	case []string:
+		return list
+	case []any:
+		var paths []string
+		for _, v := range list {
+			if path, ok := v.(string); ok {
+				paths = append(paths, path)
+			}
+		}
+		return paths
+	}
+	return nil
+}
+
+// claudeSettings is the --settings a Claude Code launch passes. cwd is where Claude runs and resolves an alias's
+// relative settings path. Settings for a plugin worktree have their own filenames.
 func (n *Node) claudeSettings(ctx context.Context, launcher, ours, cwd string, configDir ...string) string {
+	return n.mergeClaudeStartSettings(ctx, launcher, ours, cwd, n.pluginWorktreeCwd(cwd), configDir...)
+}
+
+func (n *Node) mergeClaudeStartSettings(ctx context.Context, launcher, ours, cwd string, pluginWorktree bool, configDir ...string) string {
 	if m, ok := n.managedLauncher(launcher); ok {
 		// A managed launcher has no settings file of its own, but its gateway and key must beat the user's global
 		// settings env (another gateway): put them in ours.
-		if path, err := n.mergeManagedSettings(launcher, m, ours, configDir...); err != nil {
+		if path, err := n.mergeManagedSettings(launcher, m, ours, pluginWorktree, configDir...); err != nil {
 			n.logf("launcher %s: its gateway not merged with Persona's settings: %v", launcher, err)
 			return ours
 		} else {
@@ -37,15 +91,41 @@ func (n *Node) claudeSettings(ctx context.Context, launcher, ours, cwd string, c
 	}
 	own := n.launcherOwnSettings(ctx, launcher)
 	if own == "" {
+		if pluginWorktree && (launcher == "" || launcher == "claude") {
+			if path, err := n.plainPluginWorktreeSettings(ours); err == nil {
+				return path
+			} else {
+				n.logf("Claude plugin worktree settings not written: %v", err)
+			}
+		}
 		return ours
 	}
-	path, err := n.mergeLauncherSettings(launcher, own, ours, cwd)
+	path, err := n.mergeLauncherSettings(launcher, own, ours, cwd, pluginWorktree)
 	if err != nil {
 		// Not the value: an inline --settings '{…}' can hold a token.
 		n.logf("launcher %s: its own --settings not merged with Persona's, it will be ignored: %v", launcher, err)
 		return ours
 	}
 	return path
+}
+
+func (n *Node) plainPluginWorktreeSettings(ours string) (string, error) {
+	settings := map[string]any{}
+	if ours != "" {
+		var err error
+		if settings, err = readSettingsFile(ours); err != nil {
+			return "", err
+		}
+		if settings == nil { // the file says null
+			settings = map[string]any{}
+		}
+	}
+	n.excludeHomeClaudeInstructions(settings)
+	out, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	return writeLauncherSettings(n.dir, "claude-plugin-worktree-settings.json", out, true)
 }
 
 // launcherOwnSettings is the --settings the launcher's alias gives claude, "" for none (plain claude, a managed
@@ -70,7 +150,7 @@ func (n *Node) launcherOwnSettings(ctx context.Context, launcher string) string 
 
 // mergeLauncherSettings writes the launcher's settings (own: what its alias passes) merged with ours, and says where.
 // Written again on every start: the launcher's file may have changed. 0600: it holds the launcher's token.
-func (n *Node) mergeLauncherSettings(launcher, own, ours, cwd string) (string, error) {
+func (n *Node) mergeLauncherSettings(launcher, own, ours, cwd string, pluginWorktree bool) (string, error) {
 	theirs, err := readLauncherSettings(own, cwd, n.home)
 	if err != nil {
 		return "", err
@@ -83,20 +163,26 @@ func (n *Node) mergeLauncherSettings(launcher, own, ours, cwd string) (string, e
 	if err := json.Unmarshal(b, &mine); err != nil {
 		return "", err
 	}
-	out, err := json.MarshalIndent(mergeClaudeSettings(theirs, mine), "", "  ")
+	settings := mergeClaudeSettings(theirs, mine)
+	if pluginWorktree {
+		settings["claudeMdExcludes"] = mergeUniqueStrings(claudeMdExcludes(theirs), claudeMdExcludes(mine))
+		n.excludeHomeClaudeInstructions(settings)
+		launcher += "-plugin-worktree"
+	}
+	out, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
 		return "", err
 	}
-	return writeSettings(n.dir, launcher+"-"+filepath.Base(ours), out)
+	return writeLauncherSettings(n.dir, launcher+"-"+filepath.Base(ours), out, pluginWorktree)
 }
 
 // mergeManagedSettings writes ours with the managed launcher's env on top and says where (see writeSettings). ours
 // "": the env alone, for a start whose hooks go in a plugin (hooksplugin.go).
-func (n *Node) mergeManagedSettings(launcher string, l proto.ManagedLauncher, ours string, configDir ...string) (string, error) {
+func (n *Node) mergeManagedSettings(launcher string, l proto.ManagedLauncher, ours string, pluginWorktree bool, configDir ...string) (string, error) {
 	mine := map[string]any{}
-	name := launcher + "-env-settings.json"
+	name := "env-settings.json"
 	if ours != "" {
-		name = launcher + "-" + filepath.Base(ours)
+		name = filepath.Base(ours)
 		b, err := os.ReadFile(ours)
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
@@ -153,17 +239,28 @@ func (n *Node) mergeManagedSettings(launcher string, l proto.ManagedLauncher, ou
 	// can only authenticate it against the wrong gateway: Claude Code runs the helper and sends its token in the other
 	// auth header, and the launcher's gateway answers 401. An empty string disables the helper for this start.
 	mine["apiKeyHelper"] = ""
+	if pluginWorktree {
+		n.excludeHomeClaudeInstructions(mine)
+		name = "plugin-worktree-" + name
+	}
 	out, err := json.MarshalIndent(mine, "", "  ")
 	if err != nil {
 		return "", err
 	}
-	return writeSettings(n.dir, name, out)
+	return writeLauncherSettings(n.dir, launcher+"-"+name, out, pluginWorktree)
 }
 
-// writeSettings stores a launcher's merged settings under n.dir as name and returns the path. A temporary file of its
-// own: two starts of the same launcher at once must not rename each other's away.
 func writeSettings(dir, name string, out []byte) (string, error) {
+	return writeLauncherSettings(dir, name, out, false)
+}
+
+// Write atomically so concurrent starts each get a complete settings file.
+func writeLauncherSettings(dir, name string, out []byte, pluginWorktree bool) (string, error) {
 	d := filepath.Join(dir, "launcher-settings")
+	if pluginWorktree {
+		// A launcher name can itself end in "-plugin-worktree".
+		d = filepath.Join(d, "plugin-worktrees")
+	}
 	if err := os.MkdirAll(d, 0o700); err != nil {
 		return "", err
 	}
@@ -222,7 +319,7 @@ func shellPath(p, home string) string {
 }
 
 // mergeClaudeSettings is the launcher's settings (theirs) with ours on top: for each hook event our hooks after its
-// own, so both run; any other key of ours (there is none today) in place of its.
+// own, so both run; any other key of ours in place of its.
 func mergeClaudeSettings(theirs, mine map[string]any) map[string]any {
 	out := make(map[string]any, len(theirs)+len(mine))
 	for k, v := range theirs {

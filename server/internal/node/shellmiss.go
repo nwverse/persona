@@ -250,6 +250,8 @@ type startProbe struct {
 	// acceptBypass: the start asked Claude for bypass itself (--permission-mode bypassPermissions, or a plan that goes on
 	// in bypass), the user's choice in Persona, so waitReady accepts Claude Code's Bypass Permissions confirmation.
 	acceptBypass bool
+	// declineExternalImports is set for starts inside the node's disposable plugin worktrees.
+	declineExternalImports bool
 }
 
 // typed has the probe know the line a start typed (typedStart): the start file it sources and its first word.

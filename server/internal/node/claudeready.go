@@ -87,6 +87,10 @@ func (n *Node) waitReady(ctx context.Context, pane string, probe *startProbe) (*
 	dialogLooks := 0        // looks in a row at which a dialog none of claudeStartDialogs is was on screen
 	var dialog *screenDialog
 	var exited paneStartExit
+	policy := startDialogPolicy{
+		AcceptBypass:           probe != nil && probe.acceptBypass,
+		DeclineExternalImports: probe != nil && probe.declineExternalImports,
+	}
 	if probe != nil {
 		exited.file = probe.startFile
 	}
@@ -110,8 +114,8 @@ func (n *Node) waitReady(ctx context.Context, pane string, probe *startProbe) (*
 		// first-run style picker and security notes, the offer to make auto mode the default (declined: the user's
 		// settings stay as they are), and Claude Code's Bypass Permissions confirmation, on a start Persona itself asked
 		// for bypass because the user chose it (Allow all on the task or the New session sheet): "Yes, I accept" is that
-		// same choice. Any other start that meets the confirmation still stops below with what to do (#3294).
-		if d, keys := matchStartDialog(claudeStartDialogs, screen, probe != nil && probe.acceptBypass); d != nil {
+		// same choice. The external imports dialog is declined for disposable plugin worktrees.
+		if d, keys := matchStartDialog(claudeStartDialogs, screen, policy); d != nil {
 			if d.Name == startDialogBypass {
 				if bypassTries >= bypassConfirmTries {
 					return nil, errors.New(bypassNotAccepted)
@@ -120,6 +124,8 @@ func (n *Node) waitReady(ctx context.Context, pane string, probe *startProbe) (*
 				log.Printf("start in pane %s: accepting Claude Code's Bypass Permissions confirmation (the start asked for bypass)", pane)
 			} else if d.Name == startDialogAutoMode {
 				log.Printf("start in pane %s: declining Claude Code's offer to make auto mode the default (keys %v)", pane, keys)
+			} else if d.Name == startDialogExternalImports {
+				log.Printf("start in pane %s: declining Claude Code's external instructions import (keys %v)", pane, keys)
 			}
 			if d.Started {
 				started()
@@ -133,10 +139,16 @@ func (n *Node) waitReady(ctx context.Context, pane string, probe *startProbe) (*
 			return nil, errors.New(reason)
 		}
 		// A dialog the node does not know, on a start (probe: not a wait for a running claude's box again): counted
-		// here, reported below once it stayed unknownDialogLooks looks with claude come and not reported blocked.
+		// here, reported below once it stayed unknownDialogLooks looks with Claude running. An external imports
+		// confirmation proves Claude started even if the host has yet to recognize it.
+		externalImports := false
 		if probe != nil {
-			if dialog = unknownStartDialog(screen); dialog != nil {
+			if dialog = unknownStartDialog(screen, policy); dialog != nil {
 				dialogLooks++
+				externalImports = externalImportsShown(screen)
+				if externalImports {
+					started()
+				}
 			} else {
 				dialogLooks = 0
 			}
@@ -199,7 +211,7 @@ func (n *Node) waitReady(ctx context.Context, pane string, probe *startProbe) (*
 		sawClaude, goneSince = true, time.Time{}
 		unrecognised = false
 		started()
-		if a.AgentStatus == proto.StatusBlocked {
+		if a.AgentStatus == proto.StatusBlocked && !externalImports {
 			return a, nil // some other dialog; the phone shows it as a screen interaction
 		}
 		if err := stuck(); err != nil {

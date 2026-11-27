@@ -412,6 +412,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	probe := n.probeFor(ctx, id, launcher, shells)
 	probe.typed(typed)
 	probe.acceptBypass = mode == proto.ModeBypass || planThen == proto.ModeBypass
+	probe.declineExternalImports = n.pluginWorktreeCwd(cwd)
 	a, err := n.waitReady(ctx, pane, probe)
 	if rejected := (*startLineRejected)(nil); errors.As(err, &rejected) {
 		// Nothing of it ran: typed once more as it was, once the shell is at rest again. A second refusal ends the start.

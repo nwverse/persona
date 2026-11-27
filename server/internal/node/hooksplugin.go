@@ -129,19 +129,25 @@ func pluginFiles(name, description string, hooks any) (map[string][]byte, error)
 // claudeStartSettings is how a claude start of launcher gets Persona's hooks for kind ("claude" / "assistant") and a
 // managed launcher's gateway: settings is the --settings to pass and hooks the --plugin-dir, "" for none.
 //
-// With a claude that loads plugins, the hooks are their plugin and settings is only a managed launcher's env (its
-// gateway must beat the user's global settings env; Persona's own launcher has no settings of its own to lose):
-// whatever --settings a launcher passes is then the one claude keeps. Otherwise, or while the plugin is not written,
-// as before: the hooks' settings file, merged with an alias's own --settings or a managed launcher's env.
+// With a claude that loads plugins, the hooks are their plugin. Managed launchers pass their gateway env, and a
+// plain or managed Claude in a plugin worktree excludes home instructions. External launchers keep their own
+// --settings. Without a hooks plugin, merge the hooks file with the launcher's settings as needed.
 func (n *Node) claudeStartSettings(ctx context.Context, launcher, kind, cwd string, configDir ...string) (settings, hooks string) {
 	ours := filepath.Join(n.dir, kind+"-settings.json")
 	plugin := n.hooksPlugin(kind)
+	pluginWorktree := kind == "claude" && n.pluginWorktreeCwd(cwd)
 	if _, err := os.Stat(filepath.Join(plugin, "hooks", "hooks.json")); err != nil || !n.claudeLoadsPlugins(ctx) {
-		return n.claudeSettings(ctx, launcher, ours, cwd, configDir...), ""
+		return n.mergeClaudeStartSettings(ctx, launcher, ours, cwd, pluginWorktree, configDir...), ""
 	}
 	if m, ok := n.managedLauncher(launcher); ok {
-		if path, err := n.mergeManagedSettings(launcher, m, "", configDir...); err != nil {
+		if path, err := n.mergeManagedSettings(launcher, m, "", pluginWorktree, configDir...); err != nil {
 			n.logf("launcher %s: its gateway not written for the start: %v", launcher, err)
+		} else {
+			settings = path
+		}
+	} else if pluginWorktree && (launcher == "" || launcher == "claude") {
+		if path, err := n.plainPluginWorktreeSettings(""); err != nil {
+			n.logf("Claude plugin worktree settings not written: %v", err)
 		} else {
 			settings = path
 		}

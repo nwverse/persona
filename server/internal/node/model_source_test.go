@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -68,6 +69,45 @@ func TestClaudeModelSourceUsesEffectiveAddress(t *testing.T) {
 		}
 		if (path != "") != tc.injected {
 			t.Fatalf("injected=%v, want %v", path != "", tc.injected)
+		}
+	}
+}
+
+func TestClaudePluginWorktreeSettingsSurviveLaunchWrappers(t *testing.T) {
+	t.Setenv(modelhttp.SourceHostsEnv, "*.example.com")
+	fakeClaudeManagedSettings(t)
+	n := codexTestNode(t)
+	n.dir = t.TempDir()
+	cwd := mkdir(t, filepath.Join(n.dir, nodePluginsDir, "plugin", "worktree"))
+	ctx := context.Background()
+	n.setManaged([]proto.ManagedLauncher{{Name: "gateway", BaseURL: "https://gw.example.com"}})
+	path := n.claudeSettings(ctx, "gateway", "", cwd)
+	sourced, err := n.sourceClaudeSettings(ctx, "gateway", cwd, path, "", modelhttp.Source{Role: "task_agent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sourced == path {
+		t.Fatal("model source did not generate settings")
+	}
+	fast, err := n.claudeFastModeSettings(ctx, "gateway", sourced, cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Dir(fast) != filepath.Dir(path) {
+		t.Error("fast mode settings left the plugin worktree settings directory")
+	}
+	want := pluginWorktreeHomeExcludes(t, n.home)
+	for _, path := range []string{sourced, fast} {
+		s := readSettings(t, path)
+		if got := excludesOf(s); !slices.Equal(got, want) {
+			t.Errorf("excludes in %s = %v, want %v", filepath.Base(path), got, want)
+		}
+		env, _ := s["env"].(map[string]any)
+		if headers, _ := env["ANTHROPIC_CUSTOM_HEADERS"].(string); !strings.Contains(headers, "X-Persona-Role: task_agent") {
+			t.Errorf("model source header missing in %s", filepath.Base(path))
+		}
+		if path == fast && s["fastMode"] != true {
+			t.Error("fast mode was not enabled")
 		}
 	}
 }

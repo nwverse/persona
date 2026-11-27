@@ -30,17 +30,30 @@ type startDialog struct {
 	// OnlyAcceptBypass: answered only on a start Persona itself asked for Bypass Permissions mode (probe.acceptBypass,
 	// the user chose Allow all); any other start meets it as firstRunScreen's refusal.
 	OnlyAcceptBypass bool
+	// OnlyDeclineExternalImports leaves the decision to the user outside disposable plugin worktrees.
+	OnlyDeclineExternalImports bool
 }
 
 // The names of the rows a caller treats specially.
 const (
-	startDialogBypass   = "claude_bypass_confirm"
-	startDialogAutoMode = "claude_auto_mode_default"
+	startDialogBypass          = "claude_bypass_confirm"
+	startDialogAutoMode        = "claude_auto_mode_default"
+	startDialogExternalImports = "claude_external_imports"
 )
+
+type startDialogPolicy struct {
+	AcceptBypass           bool
+	DeclineExternalImports bool
+}
+
+func (p startDialogPolicy) permits(d *startDialog) bool {
+	return (!d.OnlyAcceptBypass || p.AcceptBypass) && (!d.OnlyDeclineExternalImports || p.DeclineExternalImports)
+}
 
 // claudeStartDialogs are Claude Code's start-up dialogs, in the order a start looks for them (claudeready.go
 // waitReady, assistant_tui_term.go awaitReady): the folder's trust, the first-run style picker and security notes, the
-// Bypass Permissions confirmation on a start that asked for it, and the offer to make auto mode the default.
+// Bypass Permissions confirmation on a start that asked for it, and the offers to make auto mode the default or
+// import external instructions.
 var claudeStartDialogs = []startDialog{
 	{Name: "claude_folder_trust", Keys: trustKeys, ChangesUserSettings: true, Started: true,
 		Shows: func(s string) bool {
@@ -51,6 +64,7 @@ var claudeStartDialogs = []startDialog{
 	{Name: "claude_security_notes", Keys: securityNotesKeys},
 	{Name: startDialogBypass, Keys: bypassConfirmKeys, ChangesUserSettings: true, Started: true, OnlyAcceptBypass: true},
 	{Name: startDialogAutoMode, Keys: autoModeDefaultKeys, Started: true, Shows: autoModeDefaultShown},
+	{Name: startDialogExternalImports, Keys: externalImportsKeys, Started: true, Shows: externalImportsShown, OnlyDeclineExternalImports: true},
 }
 
 // codexStartDialogs are Codex's: its folder trust dialog and its update offer, skipped (codex_start.go,
@@ -60,12 +74,11 @@ var codexStartDialogs = []startDialog{
 	{Name: "codex_skip_update", Keys: codexSkipUpdateKeys},
 }
 
-// matchStartDialog is the first dialog of table on screen and the keys that answer it, nil when none is. A row only
-// for starts that asked for bypass is passed over unless acceptBypass.
-func matchStartDialog(table []startDialog, screen string, acceptBypass bool) (*startDialog, []string) {
+// matchStartDialog returns the first dialog the startup policy can answer and the keys to send.
+func matchStartDialog(table []startDialog, screen string, policy startDialogPolicy) (*startDialog, []string) {
 	for i := range table {
 		d := &table[i]
-		if d.OnlyAcceptBypass && !acceptBypass {
+		if !policy.permits(d) {
 			continue
 		}
 		if keys := d.Keys(screen); keys != nil {
@@ -75,33 +88,38 @@ func matchStartDialog(table []startDialog, screen string, acceptBypass bool) (*s
 	return nil, nil
 }
 
-// knownStartDialog: the screen shows one of table's dialogs, answerable now or not.
-func knownStartDialog(table []startDialog, screen string) bool {
+// knownStartDialog reports a dialog the startup policy handles, including while its options are still drawing.
+func knownStartDialog(table []startDialog, screen string, policy startDialogPolicy) bool {
 	for i := range table {
 		d := &table[i]
+		if !policy.permits(d) {
+			continue
+		}
 		if d.Shows != nil && d.Shows(screen) || d.Keys(screen) != nil {
 			return true
 		}
 	}
-	return strings.Contains(screen, bypassConfirmQuestion) // refused at once by firstRunScreen when not answered
+	return false
 }
 
 // unknownDialogLooks is how many looks in a row (500 ms apart: about 3 seconds) a start sees a dialog it does not know
 // before it gives up on it and reports the screen, instead of waiting out claudeReadyWait.
 const unknownDialogLooks = 6
 
-// unknownStartDialog is the dialog on a starting Claude's screen that none of claudeStartDialogs is, nil when there is
-// none: a list of choices the screen parser reads, with claude's input box not drawn. Claude's own screens on the way
-// to its input box (loading, the input box with a banner above it) have no choices; a known dialog is answered before.
-func unknownStartDialog(s string) *screen.Dialog {
-	if inputBoxVisible(s) || knownStartDialog(claudeStartDialogs, s) {
+// unknownStartDialog reports a startup dialog the policy leaves for the user. firstRunScreen has its own refusal
+// for the Bypass Permissions confirmation.
+func unknownStartDialog(s string, policy startDialogPolicy) *screen.Dialog {
+	if inputBoxVisible(s) || knownStartDialog(claudeStartDialogs, s, policy) || strings.Contains(s, bypassConfirmQuestion) {
 		return nil
 	}
-	d := screen.ParseDialog(s)
-	if d == nil || len(d.Options) < 2 {
-		return nil
+	if d := screen.ParseDialog(s); d != nil && len(d.Options) >= 2 {
+		return d
 	}
-	return d
+	if externalImportsShown(s) {
+		// A narrow or framed pane can show the question without readable options.
+		return &screen.Dialog{Question: "Allow external CLAUDE.md file imports?"}
+	}
+	return nil
 }
 
 // unknownDialogError is why a start ended on dialog d: what it asks and offers. It is a claudeStalled, so the start
@@ -140,6 +158,22 @@ func autoModeDefaultKeys(s string) []string {
 	if !autoModeDefaultShown(s) {
 		return nil
 	}
+	return declineStartDialog(s)
+}
+
+func externalImportsShown(s string) bool {
+	low := strings.ToLower(unframed(s))
+	return strings.Contains(low, "allow external") && strings.Contains(low, "claude.md") && strings.Contains(low, "import")
+}
+
+func externalImportsKeys(s string) []string {
+	if !externalImportsShown(s) {
+		return nil
+	}
+	return declineStartDialog(s)
+}
+
+func declineStartDialog(s string) []string {
 	d := screen.ParseDialog(s)
 	if d == nil || len(d.Options) == 0 {
 		if inputBoxVisible(s) {

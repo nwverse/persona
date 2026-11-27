@@ -232,7 +232,7 @@ func TestRefusalFallbackInGeneratedSettings(t *testing.T) {
 		}
 		check("an Agent's settings", s)
 		l := mustManaged(t, n, tc.launcher)
-		envOnly, err := n.mergeManagedSettings(tc.launcher, l, "", profile)
+		envOnly, err := n.mergeManagedSettings(tc.launcher, l, "", false, profile)
 		if err != nil {
 			t.Fatal(err)
 		}

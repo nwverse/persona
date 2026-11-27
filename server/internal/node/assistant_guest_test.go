@@ -600,7 +600,7 @@ func TestMeetingRoomSettingsKeepNothingOfTheLaunchers(t *testing.T) {
 		"outputStyle":  "Learning",
 		"permissions":  map[string]any{"defaultMode": "bypassPermissions"},
 	})
-	merged, err := n.mergeLauncherSettings("work", "~/.claude/settings.work.json", ours, cwd)
+	merged, err := n.mergeLauncherSettings("work", "~/.claude/settings.work.json", ours, cwd, false)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -142,7 +142,7 @@ func (n *Node) waitCodexBox(ctx context.Context, pane string, maxWait time.Durat
 // the folder is trusted (they chose it), an update offer is skipped — with Skip's own key only, never enter, which
 // would take the highlighted "Update now" and run the installer. true when it pressed a key.
 func (n *Node) answerCodexStartDialog(ctx context.Context, pane, text string) bool {
-	if d, keys := matchStartDialog(codexStartDialogs, text, false); d != nil { // startdialogs.go
+	if d, keys := matchStartDialog(codexStartDialogs, text, startDialogPolicy{}); d != nil { // startdialogs.go
 		_ = n.sendKeys(ctx, pane, keys...)
 		_ = sleepCtx(ctx, codexDialogPause)
 		return true

@@ -370,7 +370,7 @@ func (b *tuiBridge) awaitReady(ctx context.Context) error {
 			return errors.New(b.ended(ctx, plain, status, true))
 		}
 		// The start-up dialogs a terminal start answers (startdialogs.go claudeStartDialogs).
-		d, keys := matchStartDialog(claudeStartDialogs, plain, b.spec.AcceptBypass)
+		d, keys := matchStartDialog(claudeStartDialogs, plain, startDialogPolicy{AcceptBypass: b.spec.AcceptBypass})
 		if d != nil && d.Name == startDialogBypass {
 			if bypassTries++; bypassTries > bypassConfirmTries {
 				return errors.New(bypassNotAccepted)
