@@ -30,6 +30,11 @@ export struct AgentDirectoryRowContent {
   @Param fontScale: number = 1;
   @Param tint: ResourceColor = Colors.secondary;
   @Param activityList: boolean = false;
+  @Param useHerdrTabName: boolean = false;
+
+  private displayTitle(): string {
+    return ((this.useHerdrTabName && this.agent.herdrTabName) ? this.agent.herdrTabName : this.agent.row.title) || tr('agent_untitled');
+  }
 
   @Builder agentMark(agent:ProjectAgent) {
     Stack({ alignContent: Alignment.BottomEnd }) {
@@ -67,12 +72,12 @@ export struct AgentDirectoryRowContent {
       textContent:this.age,fontSize:Tokens.interfaceFontVp(12,this.fontScale)})));
     const remaining=this.titleRoom-timeWidth-6;
     if (remaining>=this.titleRoom*0.7) return false;
-    const titleWidth=ui.px2vp(Math.ceil(ui.getMeasureUtils().measureText({textContent:this.agent.row.title || tr('agent_untitled'),
+    const titleWidth=ui.px2vp(Math.ceil(ui.getMeasureUtils().measureText({textContent:this.displayTitle(),
       fontSize:Tokens.interfaceFontVp(17,this.fontScale),fontWeight:this.agent.state==='unread'?FontWeight.Bold:600})));
     return remaining<Math.min(titleWidth,this.titleRoom*0.7);
   }
   @Builder avatarTitle() {
-    Text(this.agent.row.title || tr('agent_untitled')).fontSize(17).maxFontScale(Tokens.interfaceScaleFor(17))
+    Text(this.displayTitle()).fontSize(17).maxFontScale(Tokens.interfaceScaleFor(17))
       .lineHeight(this.previewRow ? PhoneStyle.settingsExampleLineHeight(20,27.67,this.fontScale) : undefined)
       .letterSpacing(this.previewRow ? '-0.25vp' : undefined)
       .fontWeight(this.agent.state==='unread'?FontWeight.Bold:600).maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis})
@@ -94,7 +99,7 @@ export struct AgentDirectoryRowContent {
     })
   }
   private displayPlace(): string {
-    return deduplicateAgentPlace(this.agent.row.title, this.place);
+    return deduplicateAgentPlace(this.displayTitle(), this.place);
   }
   @Builder avatarRow() {
     Row({space:12}) {
@@ -102,7 +107,7 @@ export struct AgentDirectoryRowContent {
       Column({space:2}) {
         if(this.activityList){this.agentTitleAndTime()}
         else Flex({wrap:FlexWrap.Wrap,alignItems:ItemAlign.Baseline,space:{main:LengthMetrics.vp(8),cross:LengthMetrics.vp(4)}}) {
-          Text(this.agent.row.title || tr('agent_untitled')).fontSize(17).maxFontScale(Tokens.interfaceScaleFor(17))
+          Text(this.displayTitle()).fontSize(17).maxFontScale(Tokens.interfaceScaleFor(17))
             .fontWeight(this.agent.state === 'unread' ? FontWeight.Bold : 600).fontColor(Colors.ink)
             .constraintSize({maxWidth:'100%'}).flexGrow(1).maxLines(this.narrow ? 4 : 1).textOverflow({overflow:TextOverflow.Ellipsis})
           if (this.age) Text(this.age).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor(Colors.secondary).maxLines(1)
@@ -160,7 +165,7 @@ export struct AgentDirectoryRowContent {
     Flex({wrap:FlexWrap.Wrap,alignItems:ItemAlign.Center,space:{main:LengthMetrics.vp(6),cross:LengthMetrics.vp(2)}}){
       Row({space:4}){
         this.tinyBrand()
-        Text(this.agent.row.title||tr('agent_untitled')).fontSize(17).maxFontScale(Tokens.interfaceScaleFor(17)).fontColor(Colors.ink)
+        Text(this.displayTitle()).fontSize(17).maxFontScale(Tokens.interfaceScaleFor(17)).fontColor(Colors.ink)
           .fontWeight(this.agent.state==='unread'?FontWeight.Bold:600).maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis}).layoutWeight(1)
       }.flexGrow(1).constraintSize({minWidth:'42%',maxWidth:'100%'})
       this.stamp()
@@ -210,7 +215,7 @@ export struct AgentDirectoryRowContent {
     Row({space:8}){
       this.tinyBrand()
       Stack(){ this.dot() }.width(16*this.controlScale)
-      Text(this.agent.row.title||tr('agent_untitled')).fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15))
+      Text(this.displayTitle()).fontSize(15).maxFontScale(Tokens.interfaceScaleFor(15))
         .fontWeight(this.agent.state==='unread'?600:FontWeight.Regular).fontColor(Colors.ink)
         .maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis}).layoutWeight(1)
       if(this.starter)Text(tr('session_space_starter')).fontSize(12).maxFontScale(Tokens.interfaceScaleFor(12)).fontColor(Colors.secondary).maxLines(1)
@@ -228,7 +233,7 @@ export struct AgentDirectoryRowContent {
     Row({space:10}){
       Stack(){ this.dot() }.width(24).height(24)
       Column({space:2}){
-        Text(this.agent.row.title || tr('agent_untitled')).fontSize(13).fontWeight(FontWeight.Medium)
+        Text(this.displayTitle()).fontSize(13).fontWeight(FontWeight.Medium)
           .maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.ink).maxLines(2).textOverflow({overflow:TextOverflow.Ellipsis})
         if(this.agent.preview)Text(this.agent.preview).fontSize(12.5).maxFontScale(Tokens.interfaceScaleFor(13)).fontColor(Colors.secondary)
           .maxLines(1).textOverflow({overflow:TextOverflow.Ellipsis})

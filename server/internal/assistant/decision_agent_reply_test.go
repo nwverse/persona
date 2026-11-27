@@ -176,6 +176,10 @@ func TestDecisionAgentReplyDoesNotAffectAnsweredOrNextRound(t *testing.T) {
 	if _, err := reviewErr(s2, todo2.ID, map[string]any{"verdict": "rework", "note": "Revise the rollout plan."}); err != nil {
 		t.Fatal(err)
 	}
+	// The next independent completion is judged after owner inactivity, not while the owner's message is still recent.
+	s2.taskActivity.mu.Lock()
+	s2.taskActivity.times[runtimeListID(a2.MachineID, a2.SessionID)] = time.Now().Add(-taskUserIdle - time.Second)
+	s2.taskActivity.mu.Unlock()
 	waitsForReview(t, s2, f2, todo2.ID, "The agent needs a choice between two rollout options.")
 	if _, err := reviewErr(s2, todo2.ID, rolloutDecision()); err != nil {
 		t.Fatal(err)

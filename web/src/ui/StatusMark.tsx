@@ -56,11 +56,13 @@ export function StatusMark({ state, size = "md", label = true, awaiting = false,
 }
 
 /** What a folded group still shows of its agents: a mark and a monospace count for each of needs you, working and done,
- *  needs you first. Spoken as one phrase; the marks and numbers themselves are hidden from a screen reader. */
-export function StateTally({ counts, className }: { counts: FoldedCounts; className?: string }) {
+ *  needs you first. Spoken as one phrase; the marks and numbers themselves are hidden from a screen reader. `chats`:
+ *  the group holds Persona chats, not agents (the sidebar's Persona chats and Recent, #13425), and the phrase says so. */
+export function StateTally({ counts, className, chats = false }: { counts: FoldedCounts; className?: string; chats?: boolean }) {
   const shown = FOLDED_ORDER.filter((k) => counts[k.key] > 0);
   if (!shown.length) return null;
-  const label = t("sidebar.folded_states", { list: shown.map((k) => stateCount(k.key, counts[k.key])).join(t("sidebar.list_separator")) });
+  const list = shown.map((k) => stateCount(k.key, counts[k.key])).join(t("sidebar.list_separator"));
+  const label = chats ? t("sidebar.folded_chats", { list }) : t("sidebar.folded_states", { list });
   return (
     <span title={label} className={className ? `state-tally ${className}` : "state-tally"} data-testid="state-tally">
       <span className="sr-only">{label}</span>

@@ -966,6 +966,8 @@ export function waitsLabel(todo: Todo, status: TodoStatus, wait?: WaitReason): s
 export function isDecision(todo: Todo): boolean {
   return openAsk(todo)?.outcome === "decide" || todo.supervision?.state === "needs_user";
 }
+
+
 /** An additional way to the task or Agent page at the end of an opened Needs you row. */
 export function OpenEntry({ title, onOpen }: { title: string; onOpen: () => void }) {
   return (

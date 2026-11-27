@@ -37,11 +37,15 @@ import java.util.UUID
 private const val PaseoHost = "paseo"
 
 /** The same host a fresh start uses: the explicit workspace host, or the selected computer's default. */
-private fun Machine.startsInHerdr(host: String?): Boolean {
+private fun Machine.supportsOmpStartModel(host: String?): Boolean {
     val enabled = engineHosts
-    if (enabled != null) return "herdr" in enabled && (host ?: engineDefault) == "herdr"
+    if (enabled != null) {
+        val target = host ?: engineDefault
+        return (target == "herdr" || target == "orca") && target in enabled
+    }
     val legacyHerdr = engine.isEmpty() || engine == "herdr" || engine == "herdr-both"
-    return legacyHerdr && (host == null || host == "herdr")
+    if (legacyHerdr) return host == null || host == "herdr"
+    return engine == "orca" && (host == null || host == "orca")
 }
 
 /** What the Git status of the folder picked is asked by: the computer, the folder, a space, and the engine asked. */
@@ -205,7 +209,7 @@ internal data class NewAgentState(
         it.agentType == "omp" && it.name == "omp" && it.source in nativeLauncherSources
     } == true
     val ompStart: Boolean get() = nativeOmpLauncher &&
-        startMachine?.startsInHerdr(workspace?.source?.takeIf { space == null && it.isNotEmpty() }) == true
+        startMachine?.supportsOmpStartModel(workspace?.source?.takeIf { space == null && it.isNotEmpty() }) == true
     /** What people call [modelLauncher]: its display name (Paseo's label for its provider, #8261), else its name. */
     val modelLauncherTitle: String get() = runningLauncher?.title ?: modelLauncher
     /**

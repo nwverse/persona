@@ -21,7 +21,7 @@ function StoppedTerminalControls({ mid, sid, onTerminal }: StoppedCodexTerminal)
   const resume = useResume(mid, sid);
   return (
     <>
-      <Button tone="quiet" icon="terminal" onClick={onTerminal}>{t("chat-chatview.terminal")}</Button>
+      <Button tone="quiet" icon="terminal" onClick={onTerminal}>{t("lib-terminals.terminal")}</Button>
       <Button
         tone="secondary"
         icon="play"
@@ -60,7 +60,7 @@ export function CodexReadOnlyLine({
   onContinueConsumed?: () => void;
   onPendingChange?: (pending: boolean) => void;
 }) {
-  const reason = visible ? (stopped ? t("chat-chatview.stopped_line") : sourceSubtitle(session) || t("chat-chatview.view_only")) : "";
+  const reason = visible ? (stopped ? session.read_only_reason || t("chat-chatview.stopped_line") : sourceSubtitle(session) || t("chat-chatview.view_only")) : "";
   // Keep the same DOM wrapper and child slot when `visible` flips false so an active TakeoverAction dialog
   // (portaled to document.body) never unmounts across SSE updates that remove capabilities.takeover.
   return (

@@ -263,3 +263,28 @@ func TestTaskTerminalDisappearanceBeforeAcceptanceStillOrphans(t *testing.T) {
 		t.Fatalf("original worker gone before acceptance: %+v, %t", sig, ok)
 	}
 }
+
+func TestTaskTerminalKeepsAgentWhenOwnerOpensItDuringProbe(t *testing.T) {
+	s, f, task := dispatchTerminalTask(t, true, true)
+	var probed bool
+	f.mu.Lock()
+	f.nodes[devicewire.MethodCloseTaskTerminal] = func(machine string, raw json.RawMessage) (any, error) {
+		f.mu.Unlock()
+		defer f.mu.Lock()
+		var req devicewire.TaskTerminalCloseRequest
+		if err := json.Unmarshal(raw, &req); err != nil {
+			return nil, err
+		}
+		probed = true
+		setTaskViewer(t, s, machine, req.Terminal.SessionID, true)
+		if s.authorizeTaskTerminal(t.Context(), machine, req) {
+			t.Error("node received permission to close the session the owner just opened")
+		}
+		return map[string]string{"status": devicewire.TaskTerminalSkipped}, nil
+	}
+	f.mu.Unlock()
+	res, err := runJSON(t, s, "conv1", "task_review", map[string]any{"todo_id": task.ID, "verdict": "accepted"})
+	if err != nil || !probed || !strings.Contains(res, "Terminal cleanup: skipped") {
+		t.Fatalf("review with owner activity during probe = %q, %v (probed: %t)", res, err, probed)
+	}
+}

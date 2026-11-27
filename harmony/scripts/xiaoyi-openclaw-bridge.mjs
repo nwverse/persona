@@ -44,7 +44,7 @@ export const DEFAULT_STABLE_CONNECTION_MS = 10000;
 export const MAX_PROMPT_CHARS = 8000;
 const MAX_SESSION_CONTEXTS = 64;
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
-const RECORDING_OFF_MESSAGE = 'Meeting recording is off on this hub.';
+export const RECORDING_OFF_MESSAGE = 'Meeting recording is off on this hub.';
 const HEALTH_INTAKE_ROUTE = '/api/v1/assistant/health/intake?space=health';
 
 export function parseCliArgs(argv = process.argv.slice(2)) {
@@ -502,13 +502,13 @@ export function isHubRecordingAllowed(features) {
   return features.includes('module.recording');
 }
 
-function sanitizePrompt(raw) {
+export function sanitizePrompt(raw) {
   const cleaned = String(raw || '').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').trim();
   const chars = Array.from(cleaned);
   return chars.length <= MAX_PROMPT_CHARS ? cleaned : chars.slice(0, MAX_PROMPT_CHARS).join('');
 }
 
-function extractMessageText(params) {
+export function extractMessageText(params) {
   const msg = params?.message || params;
   const parts = Array.isArray(msg?.parts) ? msg.parts : [];
   const chunks = [];
@@ -525,7 +525,7 @@ function extractMessageText(params) {
   return sanitizePrompt(chunks.join('\n'));
 }
 
-function classifyRelayCommand(text) {
+export function classifyRelayCommand(text) {
   // Security boundary: NEVER execute approvals silently over the cloud OpenClaw relay.
   if (/^(?:approve|allow\s+first|批准|通过待确认|审批|確認待ちを承認)/i.test(text)) {
     return { kind: 'refuse_approval', arg: '' };
@@ -569,14 +569,16 @@ export class PersonaHubClient {
     this.hubToken = cfg.hubToken;
     this.manager = cfg.manager || '';
     this.askTimeoutMs = cfg.askTimeoutMs || DEFAULT_ASK_TIMEOUT_MS;
+    this.clientHeader = cfg.clientHeader || 'harmony-xiaoyi-openclaw/1.0.0';
+    this.sourceHeader = cfg.sourceHeader || 'xiaoyi-openclaw';
     this.fetch = fetchImpl;
   }
 
   async request(path, method = 'GET', body = undefined, opId = '', { includeManager = true } = {}) {
     const headers = {
       Authorization: `Bearer ${this.hubToken}`,
-      'X-Persona-Client': 'harmony-xiaoyi-openclaw/1.0.0',
-      'X-Persona-Source': 'xiaoyi-openclaw'
+      'X-Persona-Client': this.clientHeader,
+      'X-Persona-Source': this.sourceHeader
     };
     if (includeManager && this.manager) headers['X-Persona-Manager'] = this.manager;
     if (opId) headers['X-Persona-Op-Id'] = opId;

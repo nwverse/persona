@@ -46,6 +46,13 @@ internal object SurfaceLinks {
 
     fun agents(context: Context): Intent = view(context, NotificationRoute(AppTab.Agents).uri())
 
+    /** The Persona tab (main conversation root). */
+    fun persona(context: Context): Intent = view(context, NotificationRoute(AppTab.Persona).uri())
+
+    /** Opens the main conversation directly when its key is known, otherwise the Persona tab. */
+    fun mainChat(context: Context, mainSession: SessionKey?): Intent =
+        mainSession?.let { conversation(context, it, assistant = true) } ?: persona(context)
+
     /** The Persona tab with the cursor in its composer ("Ask Persona"). */
     fun ask(context: Context): Intent = view(context, Uri.parse(AskPersonaLink))
 

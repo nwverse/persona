@@ -1,6 +1,7 @@
 package extmgr
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -19,6 +20,7 @@ import (
 	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extension/uistream"
@@ -250,7 +252,7 @@ func (h *Manager) relayServer() *http.Server {
 	return &http.Server{Handler: h, ReadHeaderTimeout: 30 * time.Second, IdleTimeout: relayIdleTimeout}
 }
 
-// Accept is extwire.MethodAccept: the hub holds a request for the manager; it dials the relay with the id and serves
+// Accept serves extwire.AcceptMethod: the hub holds a request for the manager; it dials the relay with the id and serves
 // the request (and any after it on the same connection) there.
 func (h *Manager) Accept(ctx context.Context, id string) error {
 	if h.opts.DialRelay == nil {
@@ -373,68 +375,107 @@ func (h *Manager) BusUp() {
 }
 
 // Request takes the hub's extensions.* calls (handled false: not one).
+// The central dispatch guard reads the string constants. Each case binds the
+// descriptor built from that constant to its typed handler.
 func (h *Manager) Request(ctx context.Context, method string, params json.RawMessage) (any, bool, error) {
 	switch method {
 	case extwire.MethodUIStream:
-		var call extwire.UIStreamCall
-		if len(params) > 128<<10 || json.Unmarshal(params, &call) != nil {
+		if len(params) > 128<<10 {
 			return nil, true, pageError("invalid")
 		}
-		if !h.ready(ctx) {
-			return nil, true, errAssistantOffline
-		}
-		frame, err := h.uiStream(ctx, call)
-		if err != nil {
-			requestID := ""
-			if env, decodeErr := uistream.DecodeClientEnvelope(call.Envelope); decodeErr == nil && env.Request != nil {
-				requestID = env.Request.RequestID
-			}
-			frame = streamFrame("error", requestID, &wire.UIStreamFailure{Code: pageFailureCode(err), Message: i18n.Localize(err, i18n.Resolve(call.Who.Lang))})
-		}
-		var envelope struct {
-			Kind string `json:"kind"`
-		}
-		_ = json.Unmarshal(frame, &envelope)
-		// Snapshots are enqueued by the manager while it still owns publication order.
-		if envelope.Kind != "snapshot" {
-			h.pageEmit(call.Who, frame)
-		}
-		return map[string]any{}, true, nil
+		return handleExtensionRequest(extwire.UIStreamMethod, params, pageError("invalid"), func(call extwire.UIStreamCall) (buswire.None, error) {
+			return h.requestUIStream(ctx, call)
+		})
 	case extwire.MethodAccept:
-		var a struct {
-			ID string `json:"id"`
-		}
-		if err := json.Unmarshal(params, &a); err != nil || a.ID == "" {
-			return nil, true, &rpc.Error{Code: bus.CodeInvalidParams, Message: "extensions.accept needs an id"}
-		}
-		return map[string]any{}, true, h.Accept(ctx, a.ID)
+		invalid := invalidExtensionParams(method + " needs an id")
+		return handleExtensionRequest(extwire.AcceptMethod, params, invalid, func(a extwire.Accept) (buswire.None, error) {
+			if a.ID == "" {
+				return buswire.None{}, invalid
+			}
+			return buswire.None{}, h.Accept(ctx, string(a.ID))
+		})
 	case extwire.MethodAuthorize:
-		var a extwire.Authorize
-		if err := json.Unmarshal(params, &a); err != nil {
-			return nil, true, &rpc.Error{Code: bus.CodeInvalidParams, Message: err.Error()}
-		}
-		if !h.ready(ctx) {
-			return nil, true, errAssistantOffline
-		}
-		return h.authorize(a), true, nil
+		return handleExtensionRequest(extwire.AuthorizeMethod, params, nil, func(a extwire.Authorize) (extwire.Authorized, error) {
+			if !h.ready(ctx) {
+				return extwire.Authorized{}, errAssistantOffline
+			}
+			return h.authorize(a), nil
+		})
 	case extwire.MethodHubCall:
-		var c extwire.HubCall
-		if err := json.Unmarshal(params, &c); err != nil {
-			return nil, true, &rpc.Error{Code: bus.CodeInvalidParams, Message: err.Error()}
-		}
-		if !h.ready(ctx) {
-			return nil, true, errAssistantOffline
-		}
-		out, err := h.hubCall(ctx, c.Method, c.Params)
-		return out, true, err
-	case extwire.MethodSourceExport, extwire.MethodSourceImport, extwire.MethodSourceRelease:
-		if !h.ready(ctx) {
-			return nil, true, errAssistantOffline
-		}
-		out, err := h.sourceCall(method, params)
-		return out, true, err
+		return handleExtensionRequest(extwire.HubCallMethod, params, nil, func(c extwire.HubCall) (extwire.HubCallResult, error) {
+			return h.requestHubCall(ctx, c)
+		})
+	case extwire.MethodSourceExport:
+		return handleSourceRequest(ctx, h, extwire.SourceExportMethod, params, invalidSourceRef(method), h.exportSource)
+	case extwire.MethodSourceImport:
+		// The decoder's error can quote the bundle.
+		invalid := invalidExtensionParams(method + " needs a source bundle")
+		return handleSourceRequest(ctx, h, extwire.SourceImportMethod, params, invalid, h.importSource)
+	case extwire.MethodSourceRelease:
+		return handleSourceRequest(ctx, h, extwire.SourceReleaseMethod, params, invalidSourceRef(method), h.releaseSource)
 	}
 	return nil, false, nil
+}
+
+// handleExtensionRequest checks the handler's types against its descriptor and
+// decodes its params once. Unknown fields remain valid during rolling upgrades.
+func handleExtensionRequest[P, R any](_ buswire.Method[P, R], params json.RawMessage, invalid error, run func(P) (R, error)) (any, bool, error) {
+	var p P
+	if err := json.Unmarshal(params, &p); err != nil {
+		if invalid == nil {
+			invalid = invalidExtensionParams(err.Error())
+		}
+		return nil, true, invalid
+	}
+	out, err := run(p)
+	if err != nil {
+		return nil, true, err
+	}
+	return out, true, nil
+}
+
+func invalidExtensionParams(message string) error {
+	return &rpc.Error{Code: bus.CodeInvalidParams, Message: message}
+}
+
+func (h *Manager) requestUIStream(ctx context.Context, call extwire.UIStreamCall) (buswire.None, error) {
+	if !h.ready(ctx) {
+		return buswire.None{}, errAssistantOffline
+	}
+	frame, err := h.uiStream(ctx, call)
+	if err != nil {
+		requestID := ""
+		if env, decodeErr := uistream.DecodeClientEnvelope(call.Envelope); decodeErr == nil && env.Request != nil {
+			requestID = env.Request.RequestID
+		}
+		frame = streamFrame("error", requestID, &wire.UIStreamFailure{Code: pageFailureCode(err), Message: i18n.Localize(err, i18n.Resolve(call.Who.Lang))})
+	}
+	var envelope struct {
+		Kind string `json:"kind"`
+	}
+	_ = json.Unmarshal(frame, &envelope)
+	// Snapshots are enqueued by the manager while it still owns publication order.
+	if envelope.Kind != "snapshot" {
+		h.pageEmit(call.Who, frame)
+	}
+	return buswire.None{}, nil
+}
+
+func (h *Manager) requestHubCall(ctx context.Context, c extwire.HubCall) (extwire.HubCallResult, error) {
+	if !h.ready(ctx) {
+		return nil, errAssistantOffline
+	}
+	out, err := h.hubCall(ctx, c.Method, c.Params)
+	if err != nil {
+		return nil, err
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false) // Match the RPC peer's encoding of the nested reply.
+	if err := enc.Encode(out); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
 }
 
 // Event takes the hub's extensions.* events (handled false: not one).
@@ -767,7 +808,7 @@ func (h *Manager) CallTool(ctx context.Context, machine, session, name string, a
 	case assistant && isComputerTool(name):
 		return h.callComputerTool(ctx, session, name, args), true
 	case assistant && isBrowserTool(name):
-		return h.callBrowserTool(ctx, session, name, args), true
+		return h.callBrowserTool(ctx, machine, session, name, args), true
 	case assistant && isIPhoneTool(name):
 		return h.callIPhoneTool(ctx, session, name, args), true
 	case assistant && isSubscriptionTool(name):
