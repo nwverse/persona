@@ -62,8 +62,13 @@ class EngineOrcaShotsTest {
     }
 
     // Only drawn, never called: the page holds on to it (the pairing step reads nothing else from it).
-    private val management = Proxy.newProxyInstance(MachineManagement::class.java.classLoader, arrayOf(MachineManagement::class.java)) { _, _, _ ->
-        throw UnsupportedOperationException()
+    private val management = Proxy.newProxyInstance(MachineManagement::class.java.classLoader, arrayOf(MachineManagement::class.java)) { proxy, method, args ->
+        when (method.name) { // Compose compares it between frames
+            "equals" -> proxy === args?.firstOrNull()
+            "hashCode" -> System.identityHashCode(proxy)
+            "toString" -> "MachineManagement(shots)"
+            else -> throw UnsupportedOperationException(method.name)
+        }
     } as MachineManagement
 
     @Test fun everyStyleLightAndDark() {
