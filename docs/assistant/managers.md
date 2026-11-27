@@ -703,11 +703,30 @@ list or old mtime never proves completion. An unloaded persisted main is covered
 only after the complete live sources have answered. Snapshot data includes no
 prompts, task commands, transcript content or credentials.
 
+Each configured host needs an audited fresh read for this (`SnapshotForUpdate`,
+`server/internal/node/update_inventory_hosts.go`); a host without one fails the
+inventory. herdr, the Herdr App and Orca have one. Orca's
+(`server/internal/node/hostorca_update.go`) reads `terminal.list` with its
+layouts, a full `worktree.ps` outside the listing's snapshot series and a new
+process scan, none from the listing's caches; either list cut short at Orca's limit,
+a failed `worktree.ps` or an unreadable process table fails it, and Orca not running
+is an empty source. It also stands for the built-in Orca bridge, whose sessions are
+Orca's chats: any chat open on this machine that has had a turn refuses the read
+(a chat's row is Orca's display state, with no background or child inventory; a
+chat with no turn yet runs nothing, and one listed closed is not open in Orca),
+and only while Orca's read
+stands for it is the bridge's connection, told by its hello instance, not counted
+as a runtime of its own.
+
 An explicitly remote Codex terminal can use the configured app-server's authority.
-The supported command form is `codex resume --remote <configured-local-endpoint> <thread-id>`:
+The supported command forms are `codex resume --remote <configured-local-endpoint> <thread-id>`
+and the one Persona's own Codex start writes, `codex --remote <configured-local-endpoint> [--no-alt-screen] resume <thread-id>`,
+word for word:
 the host must report that exact session, its foreground PID must match the owner's
 process inventory, and kernel argv must bind that PID to the same endpoint and
-thread. Argument boundaries come from `/proc/<pid>/cmdline` on Linux and
+thread. Orca reports no agent session, so for an Orca pane the session is the
+thread its foreground Codex's kernel argv resumes; two different threads in one
+pane, or an argv that cannot be read, leave it without one. Argument boundaries come from `/proc/<pid>/cmdline` on Linux and
 `KERN_PROCARGS2` on macOS, never the formatted `ps` command or a title. The endpoint
 must already be a configured, connected local app-server; collection neither starts
 one nor resumes the terminal. A matching historical thread ID alone is insufficient.
