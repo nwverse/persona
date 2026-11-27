@@ -308,6 +308,17 @@ func (n *Node) runtimeHandle(ctx context.Context, h *runtimeConn, method string,
 						input["mode"] = mode
 					}
 				}
+				if h.agent() == agyAgent && !n.runtimeAssistant(p.SessionID) && n.state != nil {
+					if st, ok := n.state.get(p.SessionID); ok && st.Launcher != "" {
+						ch, err := n.agyChannelFor(ctx, st.Launcher)
+						if err != nil {
+							return err
+						}
+						if ch != nil {
+							input["channel"] = ch
+						}
+					}
+				}
 				if p.A2AWakeOnSend {
 					input["a2a_wake_on_send"] = true
 				}
