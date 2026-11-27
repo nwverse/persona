@@ -106,35 +106,39 @@ func newStore(core recordingwire.Core, state *storeState) *store {
 
 // The types the writers name, under the names they had.
 type (
-	Model                = recordingwire.Model
-	Tagging              = kbwire.Tagging
-	RecordingSegment     = kbwire.RecordingSegment
-	Recording            = recordingwire.Recording
-	RecapTarget          = recordingwire.RecapTarget
-	RecapSpan            = recordingwire.RecapSpan
-	RecapTodo            = recordingwire.RecapTodo
-	DayRecap             = recordingwire.DayRecap
-	DayRecapEntry        = recordingwire.DayRecapEntry
-	Minutes              = recordingwire.Minutes
-	MinutesItem          = recordingwire.MinutesItem
-	MinutesPoint         = recordingwire.MinutesPoint
-	MinutesAction        = recordingwire.MinutesAction
-	Meeting              = recordingwire.Meeting
-	MeetingTranscription = recordingwire.MeetingTranscription
-	MeetingRoom          = recordingwire.MeetingRoom
-	Timeline             = recordingwire.Timeline
-	HubTranscript        = recordingwire.HubTranscript
-	Photo                = recordingwire.Photo
-	PhotoRef             = recordingwire.PhotoRef
-	PhotoText            = recordingwire.PhotoText
-	PhotoUpload          = recordingwire.PhotoUpload
-	MinutesOverview      = recordingwire.MinutesOverview
-	MinutesConclusion    = recordingwire.MinutesConclusion
-	MinutesGroup         = recordingwire.MinutesGroup
-	MinutesTopic         = recordingwire.MinutesTopic
-	MinutesBullet        = recordingwire.MinutesBullet
-	photoBook            = recordingwire.PhotoBook
-	storedPhoto          = recordingwire.StoredPhoto
+	Model                 = recordingwire.Model
+	Tagging               = kbwire.Tagging
+	RecordingSegment      = kbwire.RecordingSegment
+	Recording             = recordingwire.Recording
+	RecapTarget           = recordingwire.RecapTarget
+	RecapSpan             = recordingwire.RecapSpan
+	RecapTodo             = recordingwire.RecapTodo
+	DayRecap              = recordingwire.DayRecap
+	DayRecapEntry         = recordingwire.DayRecapEntry
+	Minutes               = recordingwire.Minutes
+	MinutesItem           = recordingwire.MinutesItem
+	MinutesPoint          = recordingwire.MinutesPoint
+	MinutesAction         = recordingwire.MinutesAction
+	Meeting               = recordingwire.Meeting
+	MeetingTranscription  = recordingwire.MeetingTranscription
+	MeetingRoom           = recordingwire.MeetingRoom
+	Timeline              = recordingwire.Timeline
+	HubTranscript         = recordingwire.HubTranscript
+	Photo                 = recordingwire.Photo
+	PhotoRef              = recordingwire.PhotoRef
+	PhotoText             = recordingwire.PhotoText
+	PhotoUpload           = recordingwire.PhotoUpload
+	MinutesOverview       = recordingwire.MinutesOverview
+	MinutesConclusion     = recordingwire.MinutesConclusion
+	MinutesGroup          = recordingwire.MinutesGroup
+	MinutesTopic          = recordingwire.MinutesTopic
+	MinutesBullet         = recordingwire.MinutesBullet
+	DebateStatus          = recordingwire.DebateStatus
+	MinutesDebate         = recordingwire.MinutesDebate
+	MinutesDebatePosition = recordingwire.MinutesDebatePosition
+	MinutesDebateOutcome  = recordingwire.MinutesDebateOutcome
+	photoBook             = recordingwire.PhotoBook
+	storedPhoto           = recordingwire.StoredPhoto
 )
 
 // calendarEntry is a calendar entry as the writers read it (recordingwire.CalendarItem, its kind and id as the text
@@ -157,6 +161,8 @@ const (
 	MinutesPending   = recordingwire.MinutesPending
 	MinutesReady     = recordingwire.MinutesReady
 	MinutesFailed    = recordingwire.MinutesFailed
+	DebateOpen       = recordingwire.DebateOpen
+	DebateSettled    = recordingwire.DebateSettled
 	PartPhotos       = recordingwire.PartPhotos
 	PartLines        = recordingwire.PartLines
 	PartAsks         = recordingwire.PartAsks

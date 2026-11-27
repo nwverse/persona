@@ -773,16 +773,17 @@ struct Index {
   }
   @Builder phoneModuleMore(kind:string,owner:string) {
     Button({type:ButtonType.Circle}) {
-      Stack() {
-        Circle().width(22).height(22).stroke(Colors.link).strokeWidth(1.7).fill(Color.Transparent)
-        Row({space:2}) {
-          Circle().width(2.9).height(2.9).fill(Colors.link)
-          Circle().width(2.9).height(2.9).fill(Colors.link)
-          Circle().width(2.9).height(2.9).fill(Colors.link)
-        }
+      Row({space:3}) {
+        ForEach([0,1,2], (_dot:number) => {
+          Circle().width(3.5).height(3.5).fill(Colors.ink)
+        }, (dot:number) => String(dot))
       }
-    }.width(44).height(44).padding(0).backgroundColor(Colors.surface)
-      .border({width:0.5,color:Colors.divider,radius:22}).accessibilityText(tr(kind==='recordings' ? 'meeting_start_options' : 'more'))
+    }.width(PhoneStyle.bar).height(PhoneStyle.bar).padding(0)
+      .backgroundColor(Colors.styleID === 'glass' ? Colors.elevatedGlass : Colors.surface)
+      .backgroundBlurStyle(Colors.styleID === 'glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
+      .border({width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.floatingBorder(this.environment.dark),radius:PhoneStyle.bar/2})
+      .shadow(PhoneStyle.floatingElevation(this.environment.dark))
+      .accessibilityText(tr(kind==='recordings' ? 'meeting_start_options' : 'more'))
       .id(kind==='recordings' ? 'recordings.options' : kind==='knowledge' ? 'knowledge.filters' : 'inbox.more')
       .onClick(()=>this.openModuleMenu(kind,owner))
       .bindMenu(this.moduleMenuShown && this.moduleMenuKind===kind && this.moduleMenuOwner===owner,this.rootModuleMenu,
@@ -1214,7 +1215,7 @@ struct Index {
       this.quickPaletteOpen
         ? Colors.selection
         : Colors.styleID === 'glass'
-          ? (this.environment.dark ? '#CC1C1C1E' : '#E6FFFFFF')
+          ? Colors.elevatedGlass
           : Colors.surface
     )
     .backgroundBlurStyle(Colors.styleID === 'glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
@@ -1241,6 +1242,7 @@ struct Index {
           model: this.model,
           showWorkbench: this.wide() && this.foldLayout.supportsInspector,
           showLiveView: true,
+          autoFocus: this.wide(),
           onSelectEntry: (entry: QuickCommandEntry) => this.executeQuickCommand(entry),
           onClose: () => { this.quickPaletteOpen = false; }
         })
@@ -1926,13 +1928,16 @@ struct Index {
     Button({type:ButtonType.Circle}) {
       Row({space:3}) {
         ForEach([0,1,2], (_dot:number) => {
-          Circle().width(4).height(4).fill(Colors.link)
+          Circle().width(3.5).height(3.5).fill(slim ? Colors.link : Colors.ink)
         }, (dot:number) => String(dot))
       }
-    }.attributeModifier(ButtonStyles.chrome).width(this.sessionActionSize()).height(slim ? 40 : this.sessionActionSize())
-      .backgroundColor(slim ? Color.Transparent : Colors.surface)
+    }.width(this.sessionActionSize()).height(slim ? 40 : this.sessionActionSize()).padding(0)
+      .backgroundColor(slim ? Color.Transparent : (Colors.styleID === 'glass' ? Colors.elevatedGlass : Colors.surface))
+      .backgroundBlurStyle(!slim && Colors.styleID === 'glass' ? BlurStyle.COMPONENT_THICK : BlurStyle.NONE)
       .responseRegion({x:0,y:slim ? (40-this.sessionActionSize())/2 : 0,width:this.sessionActionSize(),height:this.sessionActionSize()})
-      .border({width:slim ? 0 : 0.5,color:Colors.divider,radius:this.sessionActionSize()/2}).accessibilityText(tr('more')).id('chat.title.more')
+      .border(slim ? {width:0} : {width:PhoneStyle.surfaceEdgeWidth(0.5),color:PhoneStyle.floatingBorder(this.environment.dark),radius:this.sessionActionSize()/2})
+      .shadow(slim ? {radius:0,color:Color.Transparent} : PhoneStyle.floatingElevation(this.environment.dark))
+      .accessibilityText(tr('more')).id('chat.title.more')
       .enabled(this.phoneChatActionsReady).onClick(() => this.showChatActions(this.phoneTop,this.phoneParam))
       .bindMenu(this.chatTitleMenuVisible && this.phoneChatActionsReady,this.chatActionsMenu,this.chatMenuOptions(this.chatMenuRevision))
   }
@@ -4016,7 +4021,7 @@ struct Index {
         Stack() {
           Row().width('100%').height('100%').background(Colors.canvas, { ignoresLayoutSafeAreaEdges: [LayoutSafeAreaEdge.BOTTOM] })
           Row().width('100%').height('100%').opacity(this.drawerFraction)
-            .background(this.environment.dark ? '#73000000' : '#33000000', { ignoresLayoutSafeAreaEdges: [LayoutSafeAreaEdge.BOTTOM] })
+            .background(Colors.subtleScrim, { ignoresLayoutSafeAreaEdges: [LayoutSafeAreaEdge.BOTTOM] })
         }.layoutWeight(1).height('100%')
       }.width('100%').height('100%').hitTestBehavior(HitTestMode.None).accessibilityLevel('no-hide-descendants')
     }
@@ -4112,7 +4117,7 @@ struct Index {
         .backgroundBlurStyle(BlurStyle.COMPONENT_THIN).hitTestBehavior(HitTestMode.Transparent)
         .accessibilityLevel(this.spacesShown || this.chatSearchShown ? 'no-hide-descendants' : 'auto')
       if (this.drawerFraction > 0 && !this.wide()) Row().width('100%').height('100%')
-        .backgroundColor(this.environment.dark ? '#73000000' : '#33000000')
+        .backgroundColor(Colors.subtleScrim)
         .opacity(this.drawerFraction)
         .onClick(() => this.spacesShown = false).accessibilityText(tr('close')).id('spaces.dismiss')
       }.width('100%').height('100%').backgroundColor(Colors.canvas)

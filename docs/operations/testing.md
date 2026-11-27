@@ -559,6 +559,13 @@ example configs and services) and both watcher skills under `.claude/skills/`. T
   Xcode after `sim.sh`, run `native/app-core/scripts/build-apple.sh` with no flag:** a simulator-only framework has no
   device slice, so Xcode stops with "no library for this platform was found", which looks like a broken build. The
   script prints the same reminder whenever it leaves the simulator slice only.
+- **The Rust core on Linux, for a Linux Apple toolchain** (such as nwverse/apple-build, #16944). The same
+  `native/app-core/scripts/build-apple.sh` (with or without `--simulator`) needs no Xcode there: it builds the device
+  and arm64 simulator slices as static libraries whatever the machine's architecture, writes the XCFramework in the
+  layout `xcodebuild -create-xcframework` produces, and builds no macOS slice (it says so in one line: macOS
+  `swift test` needs a Mac). The cache sits under `${XDG_CACHE_HOME:-~/.cache}/persona/app-core` and works as on a
+  Mac; the key takes each SDK's build version from the toolchain's copy of the Xcode SDKs (`APPLE_BUILD_SDK_ROOT`, else
+  `sdk_root` in apple-build's `config.json`), or `none` when it cannot be read.
 
 ## Fast local checks (`scripts/check-fast.sh`, #2849)
 
@@ -617,7 +624,7 @@ Path mapping (a new mapping is a rule in check-fast's per-path table, `scripts/c
 | `server/**`, `web/src/**`, `web/e2e/**`, `scripts/**`, `sdk/**`, `apple/**`, `android/**`, `integrations/**`, `spec/**`, `schema/**` | Also `scripts/test/test_doc_sections.py`: most of the section names it checks are in code comments there |
 | `apple/**` | `scripts/test/test_apple_l10n.py` (complete String Catalogs and Swift Chinese literals included in catalogs) and `scripts/test/test_apple_no_callkit.py` (no CallKit import or link setting; also run for `scripts/persona_config.py`); iOS / macOS builds and tests need a Mac and are reported as skipped |
 | `apple/project.yml` and the includes its tests turn on (`apple/app-entitlements.yml`, `apple/watch-and-share.yml`, `apple/lean-dev-build.yml`, `apple/siri-calls.yml`), `scripts/app/sim.sh`, `scripts/app/ui-test.sh`, `scripts/app/perf-test.sh`, `scripts/app/share-from-apps.sh`, `scripts/app/lean-build-note.sh`, `scripts/app/island_peer.sh`, `scripts/diag/stream-scroll/run-ios.sh`, `scripts/release/release.sh`, `scripts/ci/apple.sh`, `native/iphone-bridge/build.sh` | Also `scripts/test/test_apple_dev_build.py`: the switch that leaves the watch app and the share extension out of a development build, that only `sim.sh` sets it and every other script that generates a project clears it, which slices of the Rust core each build takes, the line a lean build prints, and the Release-only commit stamp ("Development builds"; the project checks need xcodegen). Its searches of the whole tree also catch a new caller, which no row maps |
-| `native/app-core/scripts/build-apple.sh` | `scripts/test/test_app_core_apple_build.py`: the simulator-only build and the XCFramework cache shared between worktrees, with fake cargo and Xcode tools ("Development builds") |
+| `native/app-core/scripts/build-apple.sh` | `scripts/test/test_app_core_apple_build.py`: the simulator-only build and the XCFramework cache shared between worktrees, with fake cargo and Xcode tools, and the Linux path with no Xcode tool on PATH ("Development builds") |
 | `deploy/docker/**`, `docs/operations/docker.md`, root `Dockerfile` | `scripts/test/test_docker_entrypoint.py` (also checks root `Dockerfile`’s `EXPOSE`) |
 | Other paths | No code checks; list unmapped paths individually |
 

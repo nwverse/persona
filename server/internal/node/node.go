@@ -185,6 +185,7 @@ type Node struct {
 	agyParentSubs *lru[string, agyParentSubagentInfo]
 	agyReports    map[string]agyHookReport  // pane -> what its agy hook last said (agyhooks.go)
 	agyBound      map[string]agyPaneBinding // herdr pane -> last accepted non-subagent agy conversation (agypane.go)
+	agyRoots      agyRootsState             // agy data directories besides the default (agyroots.go)
 	agyTitles     *agyTitleBook             // agy's own conversation titles, as last read (agytitle.go)
 	// pumping: the shared watch pump runs (session_watch.go watchPump); it stops when watches is empty.
 	pumping bool
@@ -2655,7 +2656,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		if err != nil {
 			if !p.StrictRead {
 				if conv, ok := strings.CutPrefix(p.SessionID, agyAgent+"-"); ok && uuidRe.MatchString(conv) {
-					dir := n.agyDataRoot()
+					dir := n.agyRootFor(conv)
 					if root, rerr := agyBrain(dir, conv); rerr == nil {
 						defer root.Close()
 						if h, _, aerr := n.agyRead(root, filepath.Join(dir, conv), conv, nil); aerr == nil {

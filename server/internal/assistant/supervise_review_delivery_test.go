@@ -604,7 +604,9 @@ func TestDeliveryGateChecksLinkedRepositoryIssuesAndPRs(t *testing.T) {
 		s.deploy.forge = &fakeForge{merged: false, issueStates: map[string]string{"o/r#42": "open"}}
 		s.deploy.hubBuild = func(context.Context) (string, string, error) { return "dev", "", nil }
 		s.deploy.listPaths = []string{}
-		if _, err := acceptReview(s, roTodo.ID, map[string]any{"checks": []ReviewCheck{}}); err != nil {
+		// The owner asked for this investigation, so its result goes to the owner (user_check, #15566); the delivery
+		// gate still checks the review.
+		if _, err := acceptReview(s, roTodo.ID, map[string]any{"checks": []ReviewCheck{}, "user_check": true}); err != nil {
 			t.Fatalf("read-only task was blocked under default merged: %v", err)
 		}
 

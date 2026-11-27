@@ -85,6 +85,18 @@ A correct worktree creation result and a successful Agent reply do not prove tha
   the command, as before the warning). Check a parser change against real captures at several widths (120, 100, 57, 40) and a few seconds apart. Capture them from a throwaway `claude` in a private pty
   with a VT emulator (pyte), with no Persona hooks and outside herdr: no card reaches anyone's phone, and the screen can be resized at will.
 
+## Orca's screen read lifts the input box's text out of the rows (#17042)
+
+Orca 1.4.277's `terminal.read {screen: true}` does not return the screen as drawn: it finds the Agent's input box,
+leaves its prompt row as the bare glyph (`❯`, `›`), drops the rows the text wrapped onto, and returns the box's text
+as a separate `draft`. A plain read of the rows alone takes every box for empty, so an effort change typed `/effort`
+into a user's draft and submitted both together. `orcart.Screen.Text` puts the draft back in its row. The draft has no
+colors: with Claude Code 2.1.331 a typed draft and Claude's grey suggested message come back the same, though Orca's
+own emulator skips dim cells for its internal "typed text" checks; no method on the local socket returns that. Check
+what an engine's read returns against a real Agent on an isolated runtime (its own HOME and profile, a throwaway repo,
+a stand-in Messages API) before trusting a plain-text rule, and capture the empty box, a typed draft and the grey
+suggestion separately.
+
 ## A visible Codex composer does not prove takeover readiness
 
 Codex can draw an empty input box before its folder-trust dialog arrives. A takeover must wait for the original thread to be loaded and joined on the shared app-server, not merely for a running process, a visible composer, or an HTTP success. Test the late dialog after a transient composer, and send a real follow-up from the client. Keep the pending client action mounted when session discovery changes the history row into a live row, or a later failure and its continuation-only fallback can disappear before the request completes (#5739).

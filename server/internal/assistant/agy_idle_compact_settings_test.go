@@ -81,7 +81,7 @@ func TestAgyIdleCompactSettingsToolAndNodeConfig(t *testing.T) {
 		}
 	}
 
-	// Verify managedNodeCalls emits node.configure with agy_idle_compaction and pending_interaction_sessions.
+	// Verify a new connection gets node.configure with agy_idle_compaction and pending_interaction_sessions.
 	s.fleet.mu.Lock()
 	if s.fleet.interactions == nil {
 		s.fleet.interactions = map[string]*pending{}
@@ -89,7 +89,7 @@ func TestAgyIdleCompactSettingsToolAndNodeConfig(t *testing.T) {
 	s.fleet.interactions["ix-agy-1"] = &pending{ix: proto.Interaction{ID: "ix-agy-1", MachineID: "server", SessionID: "agy-11111111-2222-3333-4444-555555555555"}}
 	s.fleet.mu.Unlock()
 
-	calls := s.managedNodeCalls(ctx, "server")
+	calls := s.nodeConnectCalls(ctx, "server")
 	var found bool
 	for _, call := range calls {
 		if call.Method != "node.configure" {
@@ -111,6 +111,6 @@ func TestAgyIdleCompactSettingsToolAndNodeConfig(t *testing.T) {
 		found = true
 	}
 	if !found {
-		t.Fatalf("managedNodeCalls did not include node.configure for AGY idle compaction: %+v", calls)
+		t.Fatalf("nodeConnectCalls did not include node.configure for AGY idle compaction: %+v", calls)
 	}
 }

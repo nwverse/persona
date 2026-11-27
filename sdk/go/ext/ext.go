@@ -23,6 +23,7 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 
 	"github.com/nwverse/persona/sdk/go/wire"
@@ -195,9 +196,9 @@ type server struct {
 	pushes pushes
 
 	mu          sync.Mutex
-	initialized bool
+	initialized atomic.Bool
 	init        *Init
-	contributes map[string]any
+	contributes map[string]json.RawMessage
 
 	// initializing is open while inits initializes that were read are not answered yet: a call read behind one
 	// waits for its answer, as in the TS SDK.
@@ -265,10 +266,7 @@ func (s *server) handle(ctx context.Context, method string, params json.RawMessa
 	// A call sent right behind initialize (without waiting for its answer) waits for it; one before it is not
 	// initialized.
 	waitInit(ctx)
-	s.mu.Lock()
-	ok := s.initialized
-	s.mu.Unlock()
-	if !ok {
+	if !s.initialized.Load() {
 		return nil, &Error{Code: wire.ErrorCodeNotInitialized, Message: "not initialized"}
 	}
 	if method == wire.MethodPing {
@@ -295,11 +293,11 @@ func (s *server) handle(ctx context.Context, method string, params json.RawMessa
 
 // event hands an event the hub tells (event.<topic>) to its namespace's handler; nothing is answered.
 func (s *server) event(method string, params json.RawMessage) {
-	s.mu.Lock()
-	ok := s.initialized
-	s.mu.Unlock()
+	if !s.initialized.Load() {
+		return
+	}
 	ns, rest, found := strings.Cut(method, ".")
-	if h := s.prog.Namespaces[ns]; ok && found && h != nil {
+	if h := s.prog.Namespaces[ns]; found && h != nil {
 		go func() { _, _ = h(s.ctx, rest, params) }()
 	}
 }
@@ -314,7 +312,7 @@ func (s *server) initialize(raw json.RawMessage) (any, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.initialized {
+	if !s.initialized.Load() {
 		var contributes map[string]any
 		if s.prog.Init != nil {
 			var err error
@@ -322,17 +320,25 @@ func (s *server) initialize(raw json.RawMessage) (any, error) {
 				return nil, err
 			}
 		}
-		s.initialized, s.init, s.contributes = true, in, contributes
+		var rawContributes map[string]json.RawMessage
+		if len(contributes) > 0 {
+			rawContributes = make(map[string]json.RawMessage, len(contributes))
+			for k, v := range contributes {
+				b, err := json.Marshal(v)
+				if err != nil {
+					return nil, err
+				}
+				rawContributes[k] = b
+			}
+		}
+		s.init, s.contributes = in, rawContributes
+		s.initialized.Store(true)
 	}
 	res := wire.InitializeResult{Protocol: Protocol, ID: s.prog.ID, Version: s.prog.Version}
 	if len(s.contributes) > 0 {
-		res.Contributes = map[string]json.RawMessage{}
+		res.Contributes = make(map[string]json.RawMessage, len(s.contributes))
 		for k, v := range s.contributes {
-			b, err := json.Marshal(v)
-			if err != nil {
-				return nil, err
-			}
-			res.Contributes[k] = b
+			res.Contributes[k] = v
 		}
 	}
 	return res, nil

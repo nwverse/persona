@@ -360,6 +360,7 @@ type minutesAnswer struct {
 	Decisions   []answerItem                `json:"decisions"`
 	Actions     []answerAction              `json:"actions"`
 	Open        []answerItem                `json:"open"`
+	Debates     modelList[answerDebate]     `json:"debates"`
 }
 
 // answerPoint is a point of the model's answer, in a topic or (the old shape) outside topics.
@@ -496,7 +497,11 @@ func (e *engine) writeMinutes(ctx context.Context, id string) error {
 				return fmt.Errorf("part %d of %d: %w", i+1, len(chunks), err)
 			}
 			read = append(read, c...)
-			merge.Parts = append(merge.Parts, notesForMerge(i+1, notes, c, r.StartedAt, zone, max(2, minutesMergeItems/len(chunks))))
+			part := notesForMerge(i+1, notes, c, r.StartedAt, zone, max(2, minutesMergeItems/len(chunks)))
+			if limit := max(2, minutesMergeDebateTotal/len(chunks)); len(part.Debates) > limit {
+				part.Debates = part.Debates[:limit]
+			}
+			merge.Parts = append(merge.Parts, part)
 		}
 		merge.Meeting.Transcript = ""
 		err := call(prompts.RenderKBMinutesMerge(owner), prompts.RenderKBMinutesMergeInput(merge), &ans)
@@ -666,6 +671,7 @@ func notesForMerge(part int, a minutesAnswer, chunk []minutesLine, start time.Ti
 		return out
 	}
 	p.Points, p.Decisions, p.Actions, p.Open = section(points), section(decisions), section(actions), section(open)
+	p.Debates = debateNotesForMerge(a, lines, minutesDebatesMax)
 	return p
 }
 
@@ -680,6 +686,16 @@ func notedLines(read []minutesLine, parts []prompts.KBMinutesPart) []minutesLine
 				} else {
 					cited[n.Line] = true
 				}
+			}
+		}
+		for _, d := range p.Debates {
+			for _, pos := range d.Positions {
+				if pos.Line > 0 {
+					cited[pos.Line] = true
+				}
+			}
+			if d.OutcomeLine > 0 {
+				cited[d.OutcomeLine] = true
 			}
 		}
 	}
@@ -783,14 +799,22 @@ func (e *engine) buildMinutes(r *Recording, a minutesAnswer, read []minutesLine,
 	point := func(x answerPoint, topic int) {
 		if t, strong := strongText(x.Text, minutesTextRunes); t != "" {
 			if sec, photo, ok := line(x.Line, x.Photo); ok && fresh("p", t) {
-				points = append(points, placed[MinutesPoint]{MinutesPoint{Text: t, At: sec, Photo: photo, Who: named(x.Who)}, topic, strong})
+				lineN := 0
+				if photo == 0 {
+					lineN = int(x.Line)
+				}
+				points = append(points, placed[MinutesPoint]{MinutesPoint{Text: t, At: sec, Photo: photo, Who: named(x.Who)}, topic, strong, lineN})
 			}
 		}
 	}
 	decision := func(x answerItem, topic int) {
 		if t, strong := strongText(x.Text, minutesTextRunes); t != "" {
 			if sec, photo, ok := line(x.Line, x.Photo); ok && fresh("d", t) {
-				decisions = append(decisions, placed[MinutesItem]{MinutesItem{Text: t, At: sec, Photo: photo}, topic, strong})
+				lineN := 0
+				if photo == 0 {
+					lineN = int(x.Line)
+				}
+				decisions = append(decisions, placed[MinutesItem]{MinutesItem{Text: t, At: sec, Photo: photo}, topic, strong, lineN})
 			}
 		}
 	}
@@ -848,6 +872,7 @@ func (e *engine) buildMinutes(r *Recording, a minutesAnswer, read []minutesLine,
 	if m.Overview, why = buildOverview(a, points, decisions, at, photoSec, m.Title); why != "" {
 		e.logf("recording %s: minutes: no overview: %s", r.ID, why)
 	}
+	m.Debates = buildDebates(a.Debates, at, decisions, named)
 	return m, nil
 }
 
@@ -950,14 +975,14 @@ func renderMinutes(m *Minutes, start time.Time, zone *time.Location) string {
 		}
 	}
 	w.section(i18n.T(l, "kb-minutes.decisions"), m.Decisions)
-	w.tail(m)
+	w.tail(m, true)
 	return strings.TrimRight(b.String(), "\n")
 }
 
 // renderOverview is minutes.md of minutes with an overview (docs/assistant/meeting-minutes.md "Markdown"): the
-// headline, the core conclusions, then each group's topics (a topic a ## heading with one group, a ### under its
-// group's ## with several), each decision after "Decided:", then the action items and open questions as without one,
-// and the AI note last. A literal * is escaped, and the bold places are wrapped in **.
+// headline, the core conclusions, any disagreements, then each group's topics (a topic a ## heading with one group, a
+// ### under its group's ## with several), each decision after "Decided:", then the action items and open questions as
+// without one, and the AI note last. A literal * is escaped, and the bold places are wrapped in **.
 func renderOverview(m *Minutes, start time.Time, zone *time.Location) string {
 	o := m.Overview
 	w := newMinutesMarkdown(m, start, zone, escapeStars)
@@ -973,6 +998,7 @@ func renderOverview(m *Minutes, start time.Time, zone *time.Location) string {
 			w.end(c.Photo)
 		}
 	}
+	w.debates(m.Debates)
 	topic := "\n## "
 	for _, g := range o.Groups {
 		if len(o.Groups) > 1 {
@@ -994,7 +1020,7 @@ func renderOverview(m *Minutes, start time.Time, zone *time.Location) string {
 			}
 		}
 	}
-	w.tail(m)
+	w.tail(m, false)
 	b.WriteString("\n*" + i18n.T(l, "kb-minutes.ai_note") + "*\n")
 	return strings.TrimRight(b.String(), "\n")
 }
@@ -1051,8 +1077,9 @@ func (w *minutesMarkdown) section(title string, items []MinutesItem) {
 	}
 }
 
-// tail is the action items, the open questions and the partial note.
-func (w *minutesMarkdown) tail(m *Minutes) {
+// tail is the action items, optionally the disagreements (legacy layout, before open questions), the open questions
+// and the partial note.
+func (w *minutesMarkdown) tail(m *Minutes, withDebates bool) {
 	b, l := &w.b, w.l
 	if len(m.Actions) > 0 {
 		b.WriteString("\n## " + i18n.T(l, "kb-minutes.actions") + "\n\n")
@@ -1067,6 +1094,9 @@ func (w *minutesMarkdown) tail(m *Minutes) {
 			}
 			w.end(a.Photo)
 		}
+	}
+	if withDebates {
+		w.debates(m.Debates)
 	}
 	w.section(i18n.T(l, "kb-minutes.open"), m.Open)
 	if m.Partial {
