@@ -128,7 +128,7 @@ func (s *Service) nameTodoLater(ctx context.Context, id, from, prompt string) {
 		defer s.todos.titling.Done()
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
 		defer cancel()
-		to := s.todoTitleFromModel(ctx, prompt)
+		to := s.todoTitleWithin(ctx, prompt, s.laterTodoTitleTimeout(ctx))
 		if to == "" || to == from {
 			return
 		}
@@ -140,9 +140,33 @@ func (s *Service) nameTodoLater(ctx context.Context, id, from, prompt string) {
 	}()
 }
 
-// todoTitleFromModel is the small-task model's title for a task with this prompt; "" when there is no model, it
-// fails or says nothing usable (the todo keeps the title it has).
+// How long the model may take for a to-do's title: todoTitleTimeout where a caller waits (the retitle route) and on
+// an API connection; todoTitleLauncherTimeout in the background (nameTodoLater) on a launcher, where a request can
+// start the CLI first (agy runs that answered took 12 to 48 s in #13443's logs). It stays inside nameTodoLater's
+// minute.
+const (
+	todoTitleTimeout         = 15 * time.Second
+	todoTitleLauncherTimeout = 50 * time.Second
+)
+
+// laterTodoTitleTimeout is the to-do title's budget in the background: longer when todo.title runs on a launcher.
+func (s *Service) laterTodoTitleTimeout(ctx context.Context) time.Duration {
+	if b, err := s.resolveModel(ctx, "todo.title"); err == nil {
+		if c, err := s.apiConfig(ctx, b); err == nil && c.RunLauncher != "" {
+			return todoTitleLauncherTimeout
+		}
+	}
+	return todoTitleTimeout
+}
+
+// todoTitleFromModel is todoTitleWithin with the budget of a caller that waits.
 func (s *Service) todoTitleFromModel(ctx context.Context, prompt string) string {
+	return s.todoTitleWithin(ctx, prompt, todoTitleTimeout)
+}
+
+// todoTitleWithin is the small-task model's title for a task with this prompt, asked for within timeout; "" when
+// there is no model, it fails or says nothing usable (the todo keeps the title it has).
+func (s *Service) todoTitleWithin(ctx context.Context, prompt string, timeout time.Duration) string {
 	prompt = strings.TrimSpace(contextBlock.ReplaceAllString(prompt, ""))
 	if prompt == "" {
 		return ""
@@ -150,7 +174,7 @@ func (s *Service) todoTitleFromModel(ctx context.Context, prompt string) string 
 	locale := s.hello(ctx).Locale
 	max := todoTitleMax(locale)
 	language := answerLanguage(locale)
-	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	// Reasoning models think first: a small max_tokens comes back empty (agents_start.go's tab names). Thinking is
 	// switched off for this short naming call, and a cut-off chain-of-thought line is dropped before it can replace
