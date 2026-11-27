@@ -105,10 +105,10 @@ describe("New agent when a computer's launchers can't be read (#10952)", () => {
     expect(pill().dataset.modelPill).toBe("failed");
     expect(pill().disabled).toBe(false);
     expect(spinning()).toBe(false);
-    expect(pill().textContent).toContain("模型读取失败");
+    expect(pill().textContent).toContain("模型加载失败");
     expect(pill().querySelector("svg.text-red")).not.toBeNull(); // the warning
     // the reason is on the page, not only in a toast that goes away
-    expect(failedLine()!.textContent).toContain("没读到这台电脑的模型，仍可以用它的默认模型启动");
+    expect(failedLine()!.textContent).toContain("无法读取这台电脑的模型列表，仍可使用其默认模型启动。");
     expect(failedLine()!.textContent).toContain("请求超时");
     expect(failedLine()!.querySelector("button")!.textContent).toBe("重试");
   });

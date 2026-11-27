@@ -62,5 +62,9 @@
   "feature_read_group_direct": "/read 直接回复到群里",
   "feature_read_group_direct_description": "/read 的回答不先发给你，直接回复在群里你那条消息下，全群可见",
   "feature_topic_cot": "话题里显示智能体过程",
-  "feature_topic_cot_description": "在飞书原生的可折叠智能体消息里显示话题这一轮的思考和工具调用，同时保留进度卡；关闭后过程仍放在卡片的折叠面板里"
+  "feature_topic_cot_description": "在飞书原生的可折叠智能体消息里显示话题这一轮的思考和工具调用，同时保留进度卡；关闭后过程仍放在卡片的折叠面板里",
+  "feature_dm_cot": "私聊里显示智能体过程",
+  "feature_dm_cot_description": "在飞书原生的可折叠智能体消息里显示私聊这一轮的思考和工具调用，同时保留进度卡；关闭后过程仍放在卡片的折叠面板里",
+  "feature_cot_answer": "回答写进智能体消息",
+  "feature_cot_answer_description": "这一轮有原生智能体消息时，把回答直接写进去，不再另发进度卡和回答卡；回答较长、被停止或出错、以及没有智能体消息的轮次仍用卡片"
 }

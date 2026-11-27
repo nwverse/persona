@@ -303,6 +303,10 @@ func TestReadOnly(t *testing.T) {
 	if _, err := c.AgentStatus(ctx, tg); err != nil {
 		t.Fatal(err)
 	}
+	f.SetProcess("term_1", orcarttest.ShellAtRest(7))
+	if _, err := c.InspectProcess(ctx, tg); err != nil {
+		t.Fatal(err)
+	}
 	_, perr := c.Prompt(ctx, tg, "x")
 	for _, err := range []error{c.Send(ctx, tg, "x"), perr, c.Close(ctx, tg)} {
 		if err == nil || !strings.Contains(err.Error(), "read-only") {
@@ -517,5 +521,60 @@ func TestNewFindsOrcadRuntimeStartedLater(t *testing.T) {
 	}
 	if _, err := c.Probe(context.Background()); err != nil {
 		t.Fatalf("after orcad started: %v", err)
+	}
+}
+
+// terminal.inspectProcess, as Orca 1.4.277 answers it: a shell at rest (no foreground, no children, proved idle, the
+// shell's pid in the fence), a program in front, and an unverifiable answer whose foreground is only a guess. The call
+// is fenced to the terminal's incarnation; an Orca without it answers method_not_found.
+func TestInspectProcess(t *testing.T) {
+	f := orcarttest.New(t)
+	f.SetTerminals(orcarttest.Terminal("term_1", "tab1", "leaf1", "wt1", "/tmp/p", "", "x", ""))
+	c := &orcart.Client{MetaPath: f.MetaPath}
+	ctx := context.Background()
+	tg := orcart.Target{Handle: "term_1", Incarnation: "inc-term_1"}
+	if _, err := c.InspectProcess(ctx, tg); !orcart.IsCode(err, "method_not_found") {
+		t.Fatalf("an Orca without the call: %v", err)
+	}
+	type process struct {
+		foreground     string
+		children, idle bool
+		shellPID       int
+		known          bool
+		unverified     string
+	}
+	for _, tc := range []struct {
+		name string
+		in   map[string]any
+		want process
+	}{
+		{"shell at rest", orcarttest.ShellAtRest(41), process{idle: true, shellPID: 41, known: true}},
+		{"shell with jobs", orcarttest.ShellWithJobs(41), process{shellPID: 41, known: true}},
+		{"program", orcarttest.Running("sleep", 41), process{foreground: "sleep", children: true, shellPID: 41, known: true}},
+		{"unverifiable", orcarttest.Unverifiable("incarnation_mismatch"),
+			process{foreground: "bash", unverified: "incarnation_mismatch"}},
+		{"no evidence", map[string]any{"foregroundProcess": nil, "hasChildProcesses": true, "childProcessEvidence": "unverifiable"},
+			process{children: true, unverified: "unverifiable"}},
+		{"evidence without a verdict", map[string]any{"foregroundProcess": nil, "hasChildProcesses": false,
+			"foregroundProcessEvidence": map[string]any{}}, process{unverified: "unverifiable"}},
+	} {
+		f.SetProcess("term_1", tc.in)
+		p, err := c.InspectProcess(ctx, tg)
+		if err != nil {
+			t.Errorf("%s: %v", tc.name, err)
+			continue
+		}
+		got := process{p.Foreground(), p.HasChildren(), p.IdleShell(), p.ShellPID(), p.Known(), p.Unverified()}
+		if got != tc.want {
+			t.Errorf("%s: %+v; want %+v", tc.name, got, tc.want)
+		}
+	}
+	for _, p := range f.Params("terminal.inspectProcess") {
+		if p["terminal"] != "term_1" || p["expectedIncarnationId"] != "inc-term_1" {
+			t.Errorf("params %v", p)
+		}
+	}
+	if inv := f.Invalid(); len(inv) != 0 {
+		t.Errorf("params Orca would refuse: %v", inv)
 	}
 }

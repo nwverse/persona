@@ -18,6 +18,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/managerconf"
@@ -741,6 +742,12 @@ func (a assistantRemote) call(ctx context.Context, method string, params, out an
 	return assistantOffline(a.h.callBus(ctx, a.to(ctx), method, params, out))
 }
 
+// callAssistant applies the assistant's routing and offline error to a typed call.
+func callAssistant[P, R any](ctx context.Context, a assistantRemote, method buswire.Method[P, R], params P) (R, error) {
+	result, err := buswire.Call(ctx, a.h.managerCaller(a.to(ctx)), method, params)
+	return result, assistantOffline(err)
+}
+
 // callAsIs is call with ctx's own deadline, or none (callBusAsIs): a card is waited for as long as it lives
 // (waitInteraction).
 func (a assistantRemote) callAsIs(ctx context.Context, method string, params, out any) error {
@@ -845,15 +852,11 @@ func (a assistantRemote) InteractionRaised(_ context.Context, r assistantwire.In
 // The todos' (assistant_todos.go).
 
 func (a assistantRemote) TodoHandoff(ctx context.Context, p assistantwire.TodoHandoff) (assistantwire.TodoHandoffResult, error) {
-	var res assistantwire.TodoHandoffResult
-	err := a.call(ctx, assistantwire.MethodTodoHandoff, p, &res)
-	return res, err
+	return callAssistant(ctx, a, assistantwire.TodoHandoffMethod, p)
 }
 
 func (a assistantRemote) TodoLink(ctx context.Context, p assistantwire.TodoLinkParams) (assistantwire.TodoLinkResult, error) {
-	var res assistantwire.TodoLinkResult
-	err := a.call(ctx, assistantwire.MethodTodoLink, p, &res)
-	return res, err
+	return callAssistant(ctx, a, assistantwire.TodoLinkMethod, p)
 }
 
 func (a assistantRemote) TodoSpaceRenamed(_ context.Context, r assistantwire.TodoSpaceRenamed) {

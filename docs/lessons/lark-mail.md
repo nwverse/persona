@@ -253,3 +253,9 @@ A platform's mention scope may coexist with broader message scopes. Enforce per-
 ## Native topic progress must not hold the card mutex (#12574)
 
 Deferring native create/append until after the first card still holds the progress mutex for the entire call. Test a second progress tick and the final answer while the fake native API remains blocked. Serialize native events separately, coalesce bounded item snapshots, cancel progress at the end, and fence persisted results by current durable membership and the owning turn so a late response cannot modify a held next turn. Test real run folding: an attached worker owns native completion, while restored runs without one use direct cleanup. Distinguish `rpc.NotSent` / `ErrNotWritten` from uncertain cancellation before deciding whether to replay a batch; a terminal refusal repairs the existing card's process panel instead of posting another answer. Keep the worker mutex out of the existing ordered checkpoint I/O.
+
+## A bot switch is two structs, and an agent message keeps its route (#16847)
+
+`BotFeatures` and `assistantwire.FeishuFeatures` are converted by struct conversion: add a switch to both, at the same position, or the flags silently land on the wrong fields. Settings saved before the switch have no key and read as the zero value, so a new switch that must default on needs the same defaulting the older ones use; one that defaults off does not.
+
+An agent message's route (the worker, or the older synchronous cursor) must not change mid-turn. The two cursors do not share a position, so handing a message the worker already opened to the other path appends the same events twice. Switching the feature off, or a hub restart that rebuilds the run, keeps the run on the path that opened the message.

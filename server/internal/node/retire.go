@@ -788,6 +788,11 @@ func (n *Node) newTab(ctx context.Context, launch host.Launcher, cwd, ws, tabNam
 		if ts != nil {
 			ts.adopted = true
 		}
+		if a, ok := launch.(paneAdopter); ok {
+			if err := a.AdoptPane(ctx, c.Pane, cwd); err != nil {
+				return nil, err
+			}
+		}
 		return c, nil
 	}
 	if c, err := keptClaimOf(ctx).tab(ctx); err != nil || c != nil { // a failed start's kept tab (startremedy.go)
@@ -829,10 +834,16 @@ func (n *Node) newTab(ctx context.Context, launch host.Launcher, cwd, ws, tabNam
 	}
 	n.forgetPane(created.Pane.String()) // a new tab: whatever ran in a pane of its id before, nothing runs in it yet
 	ts.opened(created.SpaceID)
-	markPersonaTab(ctx, launch, created.Pane, id)
+	n.markPersonaTab(ctx, launch, created.Pane, id)
 	markTaskTerminal(ctx, launch, created.Pane)
-	n.agentTerminalOpened(launch, created.Pane) // finished_close.go
 	return created, nil
+}
+
+// paneAdopter is a launcher that types a start only into a terminal it opened itself unless told it may (Orca's
+// single-use launch grant, orcaHost.Run): newTab grants it the pane a start was told to use, which the host checks
+// again right before it types.
+type paneAdopter interface {
+	AdoptPane(ctx context.Context, pane host.PaneRef, cwd string) error
 }
 
 // agyPaneRow: id is the pane-derived row (otherSession) of an agy herdr is running now. agy rows never carry a

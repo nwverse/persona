@@ -64,8 +64,7 @@ import (
 // Antigravity incremental transcript append (tail anchor + rolling SHA-256 + deferred/periodic verification),
 // sub-second fileMeta fast hit, watched-poll idle backoff, and bounded summary/cache weights (with decoupled
 // raw-byte and object-weight transcriptCache caps) add 1,969 B (289,171 B).
-// Merging #16001 onto that main keeps its settled list-summary / .persona-turn-completion keying and static
-// summary_behind readListedTranscript cache, restores dev/ino/ctime wake-receipt detection, and adds a fixed
+// Merging #16001 onto that main keeps its settled list-summary / .persona-turn-completion keying and static summary_behind readListedTranscript cache, restores dev/ino/ctime wake-receipt detection, and adds a fixed
 // 4 KiB head-sample integrity check inside the racy window alongside the tail anchor. The union measures
 // 290,316 B exactly. The merge also restores one missing ASI semicolon in main's runtime.js.
 // With the compat.js declaration fix (#16771), main measured 290,321 B.
@@ -81,9 +80,14 @@ import (
 // Antigravity idle auto-compaction `/compact` divider mapping and empty-prompt exemption (#16604) add 174 B (294,512 B).
 // OpenCode unconditional interruptVersion queued-turn cancellation and status refresh add 71 B (294,583 B).
 // Keeping Antigravity media-guard fail-closed when the optional partial JPEG copy fails, races, or receives a non-string state adds 55 B (294,638 B).
+// PR #16425 (P0-1) reuses one read-only conversation_summaries connection with a stat-validated parsed snapshot,
+// prepared primary-key lookup and the watch-poll short-circuit (the nativeWorking gate stays open so the active
+// interval keeps evaluating). It uses main's object-shaped transcriptVersion key, keeps main's #16604 compact,
+// CHECKPOINT and availability-model edits through the merge, and ships summary-db.js through the antigravity/lib/*.js
+// glob. Re-aligned onto the main carrying #16604, the union measures 296,417 B exactly (+1,779 B over 294,638 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 294_638
+	const budget = 296_417
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

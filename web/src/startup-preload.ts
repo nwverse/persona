@@ -629,7 +629,12 @@ export async function brotliCopies(dir: string, files: string[]): Promise<{ file
 // gives both shells their data-mac-chrome). 77 B in every language, measured in one environment on base 4a81814ec7
 // (ja 485,962 B to 486,039 B; en 483,466 B to 483,543 B, zh-Hans 484,115 B to 484,192 B). The budget moves by the
 // same 77 B, keeping the room main had.
-export const FIRST_SCREEN_BUDGET = 486_486;
+// #17136: align the sidebar glide highlight to each row's own horizontal bounds inside the scroller (no scroll wobble,
+// no active-row overlap) and host the macOS sidebar collapse toggle in MacBayTools beside the traffic lights (+46 B on
+// base 53884840c4: ja 486,430 B to 486,476 B). Merged with origin/main (including #17071, which added +109 B to the
+// first screen), this tree measures en 484,077 B, ja 486,585 B, zh-Hans 485,079 B. Raise the budget to the measured
+// ja size plus 10 B of room.
+export const FIRST_SCREEN_BUDGET = 486_595;
 // The hash in a built file's name: the 8 characters of Rollup's [hash] (url-safe base64) between "-" and the
 // extension, as vite.config.ts names every chunk and asset ("assets/[name]-[hash].js", "[name]-[hash][extname]").
 const NAME_HASH = /-([A-Za-z0-9_-]{8})\.[^./]+$/;
