@@ -10,6 +10,7 @@ import { allowPinnedSessionRequest, isValidPin, verifyPinnedCertificate } from "
 import type { HubPin } from "./tls-pin.js";
 import { installDesktopIPC, DesktopNotifications } from "./ipc.js";
 import { applyDesktopThemeSource } from "./theme-source.js";
+import { applyMacSurfaceStyle } from "./surface-style.js";
 import { PageRoutes } from "./page-routes.js";
 import { installSetupIPC, installSetupProtocol } from "./setup-ipc.js";
 import type { ConnectResponse } from "./setup-ipc.js";
@@ -59,14 +60,8 @@ function windowBackground(surface: "hub" | "setup" = "hub"): string {
   return nativeTheme.shouldUseDarkColors ? "#0b0b0c" : "#f1f1f4";
 }
 function applySurfaceStyle(window: BrowserWindow, style: DesktopSurfaceStyle): void {
-  if (process.platform !== "darwin" || window.isDestroyed()) return;
-  if (style === "liquid-glass") {
-    window.setVibrancy("under-window");
-    window.setBackgroundColor("#00000000");
-  } else {
-    window.setVibrancy(null);
-    window.setBackgroundColor(windowBackground());
-  }
+  if (process.platform !== "darwin") return;
+  applyMacSurfaceStyle(window, style, nativeTheme.shouldUseDarkColors, windowBackground());
 }
 // Each hub window's routes wait until its page listens (page-routes.ts, #10282): no route is sent around them.
 const pageRoutes = new WeakMap<BrowserWindow, PageRoutes>();
@@ -236,7 +231,7 @@ async function showMain(): Promise<BrowserWindow | undefined> {
     title: "Persona",
     autoHideMenuBar: true,
     backgroundColor: windowBackground(),
-    ...(process.platform === "darwin" ? { titleBarStyle: "hiddenInset" as const, trafficLightPosition: { x: 14, y: 19 } } : {}),
+    ...(process.platform === "darwin" ? { titleBarStyle: "hiddenInset" as const, trafficLightPosition: { x: 14, y: 19 }, visualEffectState: "active" as const } : {}),
     webPreferences: {
       preload: join(import.meta.dirname, "preload.cjs"),
       contextIsolation: true,
@@ -268,7 +263,9 @@ async function showMain(): Promise<BrowserWindow | undefined> {
   current.on("focus", publishChrome);
   current.on("blur", publishChrome);
   const onThemeUpdated = () => {
-    if (!current.isDestroyed() && surfaceStyle === "default") current.setBackgroundColor(windowBackground());
+    if (current.isDestroyed()) return;
+    if (surfaceStyle === "liquid-glass") applySurfaceStyle(current, surfaceStyle);
+    else current.setBackgroundColor(windowBackground());
   };
   nativeTheme.on("updated", onThemeUpdated);
   const routes = new PageRoutes(route => {
