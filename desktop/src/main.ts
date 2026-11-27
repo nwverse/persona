@@ -276,8 +276,6 @@ async function showMain(): Promise<BrowserWindow | undefined> {
   };
   current.on("enter-full-screen", publishChrome);
   current.on("leave-full-screen", publishChrome);
-  current.on("focus", publishChrome);
-  current.on("blur", publishChrome);
   const onThemeUpdated = () => {
     if (current.isDestroyed()) return;
     if (surfaceStyle === "liquid-glass") applySurfaceStyle(current, surfaceStyle);

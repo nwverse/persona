@@ -16,7 +16,13 @@ test("showMain configures macOS hiddenInset titlebar and publishes window chrome
   assert.ok(showMain.includes('visualEffectState: "active"'), "showMain must keep Liquid Glass vibrancy active");
   assert.ok(showMain.includes('void store().update({ surfaceStyle: style })'), "showMain must persist surfaceStyle for launch");
   assert.ok(showMain.includes('void store().update({ themeSource: theme })'), "showMain must persist themeSource for launch");
-  assert.ok(showMain.includes('desktop:window-chrome-changed'), "showMain must notify renderer when fullscreen/focus changes");
+  assert.ok(showMain.includes('desktop:window-chrome-changed'), "showMain must notify renderer when fullscreen changes");
+  assert.ok(showMain.includes('current.on("enter-full-screen", publishChrome)'), "showMain must publish chrome on fullscreen enter");
+  assert.ok(showMain.includes('current.on("leave-full-screen", publishChrome)'), "showMain must publish chrome on fullscreen leave");
+  assert.ok(!showMain.includes('current.on("focus", publishChrome)'), "showMain must not churn root chrome IPC on window focus");
+  assert.ok(!showMain.includes('current.on("blur", publishChrome)'), "showMain must not churn root chrome IPC on window blur");
+  const tray = await source("tray.ts");
+  assert.ok(tray.includes("!window.isVisible() || window.isMinimized()"), "macOS activate handler must avoid redundant show() when window is already visible");
   assert.ok(main.includes("applyMacSurfaceStyle("), "applySurfaceStyle must delegate to applyMacSurfaceStyle");
 });
 

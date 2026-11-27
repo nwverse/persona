@@ -6,7 +6,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MacBayTools, MacMainContour } from "../views/MacChrome";
 import { getLayout, setSidebarCollapsed, toggleMaximized } from "./layout";
-import { appleG2Contour, useMacChrome } from "./mac-chrome";
+import { appleG2Contour, appleG2ContourAt, macHeaderInset, sidebarBayCutout, useMacChrome, useMacChromeMode } from "./mac-chrome";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -52,6 +52,47 @@ describe("macOS unified titlebar bridge & Apple G2 contour", () => {
 
     act(() => emit?.({ unifiedTitlebar: true, fullScreen: true, focused: false }));
     expect({ ...host.querySelector("span")!.dataset }).toEqual({ u: "true", fs: "true", f: "false" });
+  });
+
+  it("useMacChromeMode ignores focus-only updates so the shell does not re-render on window focus/blur", () => {
+    let emit: ((next: { unifiedTitlebar: boolean; fullScreen: boolean; focused: boolean }) => void) | undefined;
+    let renders = 0;
+    vi.stubGlobal("window", Object.assign(window, {
+      personaDesktop: {
+        windowChrome: () => ({ unifiedTitlebar: true, fullScreen: false, focused: true }),
+        onWindowChromeChange: (cb: typeof emit) => { emit = cb; return () => {}; },
+      },
+    }));
+    function ModeProbe() {
+      renders += 1;
+      return <span data-mode={useMacChromeMode() ?? "none"} />;
+    }
+    act(() => root.render(<ModeProbe />));
+    expect(renders).toBe(1);
+    expect(host.querySelector("span")!.dataset.mode).toBe("windowed");
+
+    act(() => emit?.({ unifiedTitlebar: true, fullScreen: false, focused: false }));
+    expect(renders).toBe(1);
+
+    act(() => emit?.({ unifiedTitlebar: true, fullScreen: true, focused: false }));
+    expect(renders).toBe(2);
+    expect(host.querySelector("span")!.dataset.mode).toBe("fullscreen");
+  });
+
+  it("computes continuous bay cutouts, header insets, and G2 contours across sidebar transition widths", () => {
+    expect(sidebarBayCutout(284)).toBe(0);
+    expect(sidebarBayCutout(168)).toBe(0);
+    expect(sidebarBayCutout(56)).toBe(112);
+    expect(sidebarBayCutout(0)).toBe(166);
+    expect(macHeaderInset(0)).toBe(16);
+    expect(macHeaderInset(112)).toBe(146);
+    expect(macHeaderInset(166)).toBe(200);
+    expect(appleG2ContourAt(900, 600, 0)).toEqual(appleG2Contour(900, 600, null));
+    expect(appleG2ContourAt(900, 600, 112)).toEqual(appleG2Contour(900, 600, "rail"));
+    expect(appleG2ContourAt(900, 600, 166)).toEqual(appleG2Contour(900, 600, "hidden"));
+    const mid = appleG2ContourAt(900, 600, 12);
+    expect(mid.clip).toContain("30,0 ");
+    expect(mid.stroke).toContain("30.25,0.5 ");
   });
 
   it("builds 44 px co-linear G2 curves for rail and hidden bays and a clean rect otherwise", () => {
