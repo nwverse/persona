@@ -304,6 +304,11 @@ export interface Permissions {
    */
   agent_runtimes?: boolean;
   /**
+   * The routine sends its local date and language to this extension and may include its facts and report sections in
+   * the briefing.
+   */
+  routine_facts?: boolean;
+  /**
    * It receives the error and crash reports of the hub and the user's devices, scrubbed (no message text, tokens,
    * user names, machine names or IP addresses). Needed by contributes.error_reports.
    */
@@ -359,6 +364,7 @@ export interface Contributes {
   triage_templates?: TriageTemplateItem[];
   agent_filters?: AgentFilterItem[];
   tunnels?: TunnelItem[];
+  routine_facts?: RoutineFactsItem[];
   error_reports?: ErrorReportsItem[];
   auth_relay?: AuthRelayItem[];
   secret_providers?: SecretProviderItem[];
@@ -664,6 +670,15 @@ export interface RepositoryLinkLabel {
  */
 export type RepositoryLinkKind = "issue" | "pull_request" | (string & {});
 export const REPOSITORY_LINK_KINDS = ["issue", "pull_request"] as const;
+
+/**
+ * A source of facts and report sections for a scheduled briefing. Requires an RPC runtime and
+ * permissions.routine_facts.
+ */
+export interface RoutineFactsItem {
+  id: string;
+  title: string;
+}
 
 /**
  * It is given the error and crash reports of the hub and the user's devices (error_reports.deliver): needs the
@@ -7953,6 +7968,27 @@ export interface OffloadError {
   items?: OffloadRunItem[];
 }
 
+export interface RoutineFactsParams {
+  contribution: string;
+  /** Calendar date in the routine's time zone. */
+  date: string;
+  language: string;
+}
+
+export interface RoutineReportSection {
+  title: string;
+  /** Plain text. The host owns report layout. */
+  body: string;
+}
+
+/**
+ * A read-only snapshot. Return an empty object when the contribution has nothing for this date.
+ */
+export interface RoutineFactsResult {
+  facts?: string[];
+  sections?: RoutineReportSection[];
+}
+
 /** One call or event of an extension point's protocol: who sends it, and the definitions its params and
  * its answer hold to (no result: any JSON; an event has no answer). */
 export interface Call {
@@ -8070,4 +8106,5 @@ export const CALLS: Record<string, Call> = {
   "offload.run": { from: "hub", params: "OffloadRunParams", result: "OffloadRunResult" },
   "offload.job": { from: "hub", params: "OffloadJobParams", result: "OffloadJob" },
   "offload.cancel": { from: "hub", params: "OffloadJobParams", result: "Empty" },
+  "routine_facts.collect": { from: "hub", params: "RoutineFactsParams", result: "RoutineFactsResult" },
 };

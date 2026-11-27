@@ -96,6 +96,10 @@ func TestMain(m *testing.M) {
 		serveSecretProviderExtensionForTest()
 		return
 	}
+	if os.Getenv("PERSONA_TEST_PLUGIN") == "routine" {
+		serveRoutineForTest()
+		return
+	}
 	if os.Getenv("PERSONA_TEST_PLUGIN") == "memory" { // memory_sources_test.go
 		serveMemorySourceExtensionForTest()
 		return

@@ -277,7 +277,7 @@ func TestBriefReportFactsAreFallbackOnly(t *testing.T) {
 	if model := s.briefReportStart(ctx, task, time.Now().UTC()); model != "" {
 		t.Fatalf("Report without a north-star store got different model input: %q", model)
 	}
-	s.briefSent(task.ID, "s-report", false)
+	s.briefSent(ScheduleRun{RefID: task.ID, SessionID: "s-report", Due: time.Now()})
 	run := s.briefOf("s-report")
 	if run == nil || !run.FallbackOnly || run.Facts == nil {
 		t.Fatalf("Report has no retained fallback facts: %+v", run)
