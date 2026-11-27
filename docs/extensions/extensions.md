@@ -3725,6 +3725,8 @@ A `code` component can follow the names in it the way an IDE does. The app sends
 
 **The keys** are IntelliJ's: ⌘-click or ⌘B (Ctrl-click or Ctrl+B elsewhere) for a definition, ⌥F7 (Alt+F7) for usages, ⌘[ (Ctrl+Alt+← elsewhere) back. The extension answers as for any action, usually with the page drawn again at the definition (a list when there are several); the app keeps no history of its own, so `back` is the extension's to answer. The values say where the name is, never which file to open: an extension resolves the definition itself and reads only what it may.
 
+**Checks**: `navigate` is one of the view's actions (`wire.Actions`), so a `push` on it is held to the same state size and page rules as any other action, and in an assistant card it needs a `reply` like every other action there.
+
 **An older app or a native stream** (`downgrade13`, `server/internal/extension/ui_v13.go`): the hub leaves `navigate` out; the code is drawn as before. An extension that offers navigation draws the same choices another way too (an outline, a usages list, a search) for those apps.
 
 **The web** (`web/src/views/extensions/CodeViews.tsx`, keys and values in `web/src/lib/code-navigate.ts`) reads the click's position with `caretPositionFromPoint` (`caretRangeFromPoint` where that is missing) and the keys from the caret or selection in the code; the code's tooltip lists the keys. The Apple and Android apps still say `12`, so they get the code without it.
