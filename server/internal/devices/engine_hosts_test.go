@@ -218,24 +218,33 @@ func TestEngineChoiceForAMove(t *testing.T) {
 	h, _, _, _ := engineHub(t)
 	ctx := context.Background()
 	get := func(d *Devices) (devicewire.MachineEngine, error) {
-		out, handled, err := d.Request(ctx, devicewire.MethodEngineGet, json.RawMessage(`{"machine_id":"m1"}`))
+		out, handled, err := d.Request(ctx, devicewire.MethodEngineGet, json.RawMessage(`{"machine_id":"m1","future_field":true}`))
 		if !handled {
 			t.Fatal("devices.engine.get not handled")
 		}
 		got, _ := out.(devicewire.MachineEngine)
 		return got, err
 	}
-	if got, err := get(h); err != nil || got.Choice != nil {
+	got, err := get(h)
+	if err != nil || got.Choice != nil {
 		t.Fatalf("never chosen: %+v %v", got, err)
 	}
+	if reply, err := json.Marshal(got); err != nil || string(reply) != `{"machine_id":"m1"}` {
+		t.Fatalf("wire reply for an unset choice = %s, %v", reply, err)
+	}
 	put := func(body string) error {
-		_, handled, err := h.Request(ctx, devicewire.MethodEnginePut, json.RawMessage(body))
+		out, handled, err := h.Request(ctx, devicewire.MethodEnginePut, json.RawMessage(body))
 		if !handled {
 			t.Fatal("devices.engine.put not handled")
 		}
+		if err == nil {
+			if reply, err := json.Marshal(out); err != nil || string(reply) != `{}` {
+				t.Fatalf("wire acknowledgment = %s, %v", reply, err)
+			}
+		}
 		return err
 	}
-	if err := put(`{"machine_id":"m1","choice":{"hosts":["orca","herdr"],"default":"orca"}}`); err != nil {
+	if err := put(`{"machine_id":"m1","choice":{"hosts":["orca","herdr"],"default":"orca"},"future_field":true}`); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := get(h); err != nil || got.Choice == nil || !slices.Equal(got.Choice.Hosts, []string{"herdr", "orca"}) || got.Choice.Default != "orca" {

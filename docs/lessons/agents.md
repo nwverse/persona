@@ -7,6 +7,14 @@
 - The hook must print `{}` and exit fast on every path (no node, unknown pane, bad input), or agy waits on it. Subagent conversations inherit the pane's environment and report too, so the node still has to prove the conversation is not a subagent's (#13336) before it reads or resumes.
 - herdr's own report and Persona's can disagree for a moment after a new conversation; the node treats a disagreement as unknown instead of picking one.
 
+## What the node starts is told the node's program, never left to find it by name (#14582)
+
+- The node's program has more than one name: `personad`, `persona-node` in a Persona Link install, either with `.exe` on
+  Windows. The Antigravity companion looked only for `<state>/bin/personad`, found nothing on a Link install and attached
+  no MCP server, so its chats had no Persona tools and nothing said why. Hand a process the node starts the node's own
+  spelling of its program (`selfProgram`'s `bin`, as the generated hooks and MCP configs have it), keep a lookup by name
+  only for a process started some other way, and log when it finds nothing.
+
 ## Visibility-only `TurnErrorCode` values must not trip `readinessBlocks` or `CutOff` on node `TurnError` (#13372)
 
 - `readinessBlocks` (`server/internal/assistant/readiness.go`) defaults every `StepProblem` code to `mode: "setup"` unless explicitly excluded. Any non-user-fix `TurnErrorCode` (such as `upstream_unavailable`, alongside `rate_limited`, `model_fallback_unavailable`, and `tool_search_unsupported`) must be excluded in `readinessBlocks` and paired with `test_assistant` and plain-language readiness strings, or an upstream outage locks every client's composer with "Connect a model first".
@@ -792,6 +800,11 @@ an input box but herdr doesn't know claude is present (`agent_not_found` or empt
 `claude's input box is on screen but herdr did not recognise the agent within 3m0s (herdr sees <foreground process name> in front): is claude a wrapper? …`,
 then explain process-name / `HERDR_AGENT=claude` recognition and cases where the prefix doesn't reach claude. Foreground process name comes from herdr `pane.process_info`. With no input box, retain the shell-not-started error;
 other engines' panes (Orca) keep their original error.
+
+`pane.process_info` in herdr 0.9.5 names each foreground process by `name`, `argv` and `cmdline`, with no `argv0`, and Claude Code's `name` is its version
+(`2.1.330`). Its list starts with the foreground group's leader: a launcher's wrapper when claude runs under one. Code that takes the first process for
+claude itself must pick Claude Code out first (`herdr.Client.PaneProcesses`): matching `argv0` found nothing, and the port scan reported Claude Code's own
+loopback listener as a server the Agent runs, which kept every idle Agent behind a wrapper from Close (#14681).
 
 - A Claude Code turn ending with a model API error ("API Error: Connection lost mid-response…", overload, rate limit, expired login) is done in herdr just like normal completion, so hub counts it unread:
   task_plan tasks once showed green "Done" cards with the raw error as summary and "finished" in snapshots (#1516). Only the last text distinguishes this: when a session is stopped and `last_text` begins with these errors, hub sets `turn_error` (prefix only;

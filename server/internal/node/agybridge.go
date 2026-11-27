@@ -258,6 +258,11 @@ var agyBridgeCommand = func(ctx context.Context, rh *RuntimeHost, agyBin, instan
 	if instance != "" {
 		args = append(args, "--instance", instance)
 	}
+	// The companion attaches `<this program> mcp` to its chats for Persona's tools, and is told which program that is:
+	// a Persona Link install calls it persona-node, which a lookup for personad does not find (#14582).
+	if bin := ownProgram(); bin != "" {
+		args = append(args, "--personad-bin", bin)
+	}
 	cmd := exec.Command(js.Path, args...)
 	cmd.Env = js.env(agyBridgeEnv(ctx, rh, os.Environ()))
 	cmd.Dir = dir
@@ -265,8 +270,9 @@ var agyBridgeCommand = func(ctx context.Context, rh *RuntimeHost, agyBin, instan
 }
 
 // agyBridgeEnv constructs the companion environment from base, applying the runtime socket and any managed agy
-// provider environment, and falling back to OS system proxy settings (macOS `scutil --proxy`) when neither base nor
-// the provider explicitly names any proxy variable (including an explicit empty value such as `HTTPS_PROXY=`).
+// provider environment, and falling back to OS system proxy settings (macOS `scutil --proxy`) and then login-shell
+// proxy variables when neither base nor the provider explicitly names any proxy variable (including an explicit empty
+// value such as `HTTPS_PROXY=`).
 func agyBridgeEnv(ctx context.Context, rh *RuntimeHost, base []string) []string {
 	env := slices.Clone(base)
 	if rh != nil {
@@ -277,7 +283,8 @@ func agyBridgeEnv(ctx context.Context, rh *RuntimeHost, base []string) []string 
 			}
 		}
 	}
-	return withSystemProxyEnv(ctx, env)
+	env = withSystemProxyEnv(ctx, env)
+	return withShellProxyEnv(ctx, env)
 }
 
 func (rh *RuntimeHost) agyConnected() bool {

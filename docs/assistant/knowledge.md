@@ -461,6 +461,34 @@ The manager hands the document to the engine (`Engine.Selection`); an engine wit
   A per-item `read: false` stops future reads only. Shorter days apply only once the user sets them. A ledger that does not read holds up no write, and that
   chat's lines are kept the most days any rule has.
 
+### Reading a selected import from an extension
+
+A manager administrator can let one installed extension monitor a single approved chat import.
+In `manager.json`, add a `kb.import_provider` object alongside the existing `kb.history` configuration:
+
+```json
+{
+  "extension": "example-reader",
+  "storage_id": "example-reader",
+  "installed_at": "2026-01-02T10:00:00Z",
+  "connector": "example-chat",
+  "source_id": "account-a/thread-12",
+  "filed_as": "example-chat"
+}
+```
+
+Use the installation's saved storage key and timestamp, the connector ID, its exact account-qualified chat ID and its
+filing namespace. For a connector that uses its own name as the namespace, set `filed_as` to the connector ID.
+A reinstall has a new timestamp and requires the administrator to update the binding. History import must already
+be enabled and the owner's current approved selection must include that chat.
+
+With the explicit `kb.import_status` grant, the provider can call `kb.import_checkpoint` with `{}` to read the
+state, messages read, lines written and an opaque approval token. The host keeps the cursor and continues the
+import using its existing pacing and restart rules. With the additional explicit `sent.read` grant, the provider
+can pass `{"day":"2026-01-02","approval":"<token>"}` to `kb.sent_markers`. The reply lists up to 100 marked
+line numbers and their provenance. Pass `next_after` back as `after` for the next page. Refresh the checkpoint
+after a selection or approval change. The host applies the selection and retention window on each request.
+
 ### History import
 
 A chat source that can read a conversation backwards hands its older history to the knowledge base page by page: the live archive only reads forward from each connector's cursor,
@@ -1193,7 +1221,7 @@ and a disabled knowledge base (`kb.enabled: false`) returns 503 as before.
 ## A chat's Inbox items
 
 A chat's page leads to the Inbox items that came from it, and an item leads back to the chat's page (#15356,
-`assistant/kb_inbox.go`). Neither side keeps a message id, so a message is matched on its time, sender and text.
+`assistant/kb_inbox.go`, with the Inbox's side in `assistant/inbox_kb_chat.go`). Neither side keeps a message id, so a message is matched on its time, sender and text.
 
 - **Which items**: an item is a chat's when its connector and thread are the chat's `connector` (in an older file, its
   `source`) and `source_id`, whatever the connector, or when the chat is the one the AI twin reads for it (`kbChatOf` in

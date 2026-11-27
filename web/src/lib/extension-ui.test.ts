@@ -282,14 +282,22 @@ describe("收件箱条目（inbox_item）", () => {
   it("opens an extension's own settings in the app (persona://settings/extensions/<id>)", () => {
     expect(extensionSettingsHref("persona://settings/extensions/example-gateway")).toBe("/settings?tab=extensions&extension=example-gateway");
     expect(extensionSettingsHref("persona://settings/extensions/a%20b")).toBe("/settings?tab=extensions&extension=a%20b");
+    const set = JSON.stringify({ machines: ["studio-pc"], repos: ["~/code"] });
+    const href = `/settings?tab=extensions&extension=example-gateway&set=${encodeURIComponent(set)}`;
+    expect(extensionSettingsHref(`persona://settings/extensions/example-gateway?set=${encodeURIComponent(set)}`)).toBe(href);
+    expect(extensionSettingsHref(`jarvis://settings/extensions/example-gateway?set=${encodeURIComponent(set)}`)).toBe(href);
     for (const bad of [
       "persona://settings/extensions/", "persona://settings/extensions/a/b", "persona://settings/extensions/a?x=1", "persona://settings/extensions/-market",
       "persona://settings/extensions/a%2Fb", "persona://settings/extensions/%E0", "persona://settings", "persona://inbox/a/source", "https://example.com/settings/extensions/a",
       "previous://settings/extensions/a",
+      "persona://settings/extensions/a?set=%5B%5D", "persona://settings/extensions/a?set=%7B%7D&x=1",
+      "persona://settings/extensions/a?set=%7B%7D&set=%7B%7D", "persona://settings/extensions/a?set=%7B%7D#x",
+      "persona://settings/extensions/a?set=",
     ]) {
       expect(extensionSettingsHref(bad)).toBeUndefined();
     }
     expect(outcome({ open_url: "persona://settings/extensions/example-gateway" })).toEqual({ view: undefined, reload: false, toast: undefined, url: undefined, settings: "/settings?tab=extensions&extension=example-gateway" });
+    expect(outcome({ open_url: `persona://settings/extensions/example-gateway?set=${encodeURIComponent(set)}` })).toMatchObject({ settings: href, reload: false });
     // any other persona:// link stays as it was: nothing opens, nothing is drawn again
     expect(outcome({ open_url: "persona://settings/other" })).toEqual({ view: undefined, reload: false, toast: undefined, url: undefined });
   });

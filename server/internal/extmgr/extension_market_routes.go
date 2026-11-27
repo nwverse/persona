@@ -264,7 +264,13 @@ func (h *Manager) marketRoutesAt(api *http.ServeMux, base string, allow func(w h
 		}
 		upgrade := ""
 		if cur := h.extensions.reg.Get(in.Extension); cur != nil && cur.Record.Source == extension.SourceInstalled {
+			if cur.Record.BuiltinPredecessor && (!cur.Record.VerifiedBuiltinPredecessor() || !h.builtinMarketUpgrade(rec, e)) {
+				fail(w, i18n.Err("extension-identity.invalid"), "identity_conflict")
+				return
+			}
 			upgrade = cur.Record.ID
+		} else if h.extensions.reg.CanHandoffBuiltin(e.Parsed.ID) && h.builtinMarketUpgrade(rec, e) {
+			upgrade = e.Parsed.ID
 		} else if e.Replaces != "" {
 			if old := h.extensions.reg.GetExact(e.Replaces); old != nil {
 				if old.Record.Source != extension.SourceInstalled || old.Record.Origin != "market:"+rec.ID+"/"+e.Replaces || h.extensions.reg.Get(e.Parsed.ID) != nil {

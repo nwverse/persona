@@ -5,6 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { Interaction, Item, Session } from "../../lib/types";
 import { getState, type AnsweredCard } from "../../lib/store";
 import { Header, spaceAgentsItem } from "./ChatView";
+import { t } from "../../i18n";
 import { HEADER_SLOT, HEADER_SLOT_END, HEADER_SLOT_START } from "./header";
 import { Composer } from "./Composer";
 import { PendingCards, permissionFrom } from "./Interactions";
@@ -111,7 +112,7 @@ describe("Header", () => {
     expect(html).not.toContain("data-chat-branch");
     expect(html).not.toContain("feat/net-tests");
     const files = html.indexOf('aria-label="文件"');
-    const terminal = html.indexOf('aria-label="终端"');
+    const terminal = html.indexOf(`aria-label="${t("lib-terminals.terminal")}"`);
     const divider = html.indexOf("data-header-divider");
     const more = html.indexOf('aria-label="更多操作"');
     expect(files).toBeGreaterThan(-1);
@@ -196,13 +197,13 @@ describe("spaceAgentsItem, ⋯'s 同空间 row (#3576, #5421)", () => {
 describe("Header, the terminal view (#2419, #5421)", () => {
   it("is one button to the other view at every width", () => {
     const chat = bare(header({ view: "chat", onView: () => {} }));
-    expect(chat).toMatch(/<span class="relative flex shrink-0"><button[^>]*aria-label="终端"/);
+    expect(chat).toMatch(new RegExp(`<span class="relative flex shrink-0"><button[^>]*aria-label="${t("lib-terminals.terminal")}"`));
     expect(chat).not.toContain("radiogroup");
     const term = bare(header({ view: "term", onView: () => {} }));
     expect(term).toMatch(/<span class="relative flex shrink-0"><button[^>]*aria-label="对话"/);
   });
   it("is not there without a terminal to switch to", () => {
-    expect(header()).not.toContain('aria-label="终端"');
+    expect(header()).not.toContain(`aria-label="${t("lib-terminals.terminal")}"`);
   });
   it("marks 对话 when the terminal shows and something wants an answer", () => {
     expect(header({ view: "term", onView: () => {}, viewDot: true })).toMatch(/aria-label="对话"(?:(?!<\/button>).)*<\/button><span aria-hidden="true" class="pointer-events-none absolute[^"]*bg-attention"/);

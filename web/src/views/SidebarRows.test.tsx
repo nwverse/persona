@@ -7,6 +7,7 @@ import type { AgentSession } from "../lib/agents";
 import type { Session } from "../lib/types";
 import { setAgentDetails } from "../lib/context-usage";
 import { AgentRow, PersonaRow, SessionRow } from "./Sidebar";
+import { unreadShown } from "./SidebarRows";
 import { conversationMenuItems } from "./ConversationMenu";
 
 // the sidebar's modules read the colour scheme and this browser's settings when they load
@@ -25,11 +26,34 @@ const rowProps = { s: session, k: "s:mac/s1", reg: () => () => {}, hover: () => 
 const link = (html: string) => html.match(/<a [^>]*>/)![0];
 const more = (html: string) => html.match(/<button [^>]*aria-label="Agent 的操作"[^>]*>/)![0];
 
+describe("unread shown in sidebar counts", () => {
+  const unseen: Session["view"] = { phase: "done", reason: { kind: "unseen" }, rank: 30 };
+
+  it.each<{ name: string; patch: Partial<Session>; counted: boolean }>([
+    { name: "an unopened reply", patch: { view: unseen }, counted: true },
+    { name: "an unopened question", patch: { view: { phase: "done", reason: { kind: "asks", unseen: true }, rank: 30 } }, counted: true },
+    { name: "an opened question", patch: { view: { phase: "done", reason: { kind: "asks" }, rank: 31 } }, counted: false },
+    { name: "a just-finished turn", patch: { view: { phase: "done", reason: { kind: "just_finished" }, rank: 32 } }, counted: false },
+    { name: "a reply marked seen locally", patch: { view: unseen, locallySeen: true }, counted: false },
+    { name: "a usage-limit stop", patch: { state: "unread", view: { phase: "error", reason: { kind: "usage_limit" }, rank: 10 } }, counted: false },
+    { name: "a legacy unread reply", patch: { state: "unread", status: "done" }, counted: true },
+    { name: "a legacy usage-limit stop", patch: { state: "unread", status: "done", turn_error_kind: "usage_limit", turn_error: "Usage limit reached" }, counted: false },
+  ])("checks the unread count for $name", ({ patch, counted }) => {
+    expect(unreadShown({ ...session, ...patch })).toBe(counted);
+  });
+});
+
 describe("an agent's row", () => {
   it("is aria-current with the open row's fill when it is open", () => {
     const html = renderToStaticMarkup(<SessionRow {...rowProps} active />);
     expect(link(html)).toContain('aria-current="page"');
     expect(link(html)).toMatch(/class="[^"]*\bbg-hover-2\b/);
+  });
+  it("draws an error phase with the error mark, not the Seen dot its activity folds it into (#16873)", () => {
+    const mark = (s: Session) => renderToStaticMarkup(<SessionRow {...rowProps} s={s} showState active={false} />).match(/class="status-mark[^"]*"[^>]*data-state="([^"]+)"/)?.[1];
+    expect(mark({ ...session, view: { phase: "error", reason: { kind: "start_refused" }, rank: 10 } } as Session)).toBe("error");
+    expect(mark({ ...session, view: { phase: "done", reason: { kind: "unseen" }, rank: 30 } } as Session)).toBe("unread");
+    expect(mark(session)).toBe("idle");
   });
   it("is neither when it is not", () => {
     const html = renderToStaticMarkup(<SessionRow {...rowProps} active={false} />);
