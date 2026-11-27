@@ -1,6 +1,6 @@
 // The sidebar's rows: Persona's main conversation, the pinned heading, a page's row, an agent's row and the personal
-// agents.
-import { memo, useCallback, useMemo, useState, useSyncExternalStore } from "react";
+// agents. Imports only SidebarParts among the sidebar's files.
+import { memo, useCallback, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 import { formatList, t } from "../i18n";
 import { awaitsReply, justFinished, sessionSource, sourceName } from "../lib/agent-groups";
 import { addSection, arrangeSessions, assignSection, GROUP_LABEL, isDefaultView, providerLabel, refreshAgentSessions, removeSection, resetView, setView, SHOW_LABEL, SORT_LABEL, toggleProvider, togglePin, totalUnread, updateAgentPrefs, useAgentList, useAgentPrefs, viewOf, type AgentPrefs, type AgentSession, type GroupBy, type ShowMode, type SortBy } from "../lib/agents";
@@ -123,9 +123,10 @@ export const PersonaRow = memo(function PersonaRow({ reg, hover, active, go, mai
   );
 });
 
-/** A subgroup title. Its disclosure and help are separate controls. */
+/** A subgroup title. Its disclosure and help are separate controls; `tally` is what a folded group still says of the rows
+ *  it hides (Recent's unread chats, #13425), at the end before the help. */
 const SUB_HEADING_TYPE = "text-[11px] font-semibold text-ink-3";
-export function SubHeading({ label, folded, onToggle, help }: { label: string; folded?: boolean; onToggle?: () => void; help?: string }) {
+export function SubHeading({ label, folded, onToggle, help, tally }: { label: string; folded?: boolean; onToggle?: () => void; help?: string; tally?: ReactNode }) {
   return (
     <div className="flex items-center gap-1 px-2 py-0.5">
       <div role="heading" aria-level={3} className={cx("min-w-0 flex-1", !onToggle && "truncate", SUB_HEADING_TYPE)}>
@@ -136,6 +137,7 @@ export function SubHeading({ label, folded, onToggle, help }: { label: string; f
           </button>
         ) : label}
       </div>
+      {tally}
       {help && <InfoTip name={label} text={help} className="[@media(pointer:coarse)]:size-11" />}
     </div>
   );
@@ -322,6 +324,13 @@ function SecondLine({ line, draft }: { line: { lead?: string; text: string; tone
   );
 }
 
+/** Unread as the rows draw it: a turn a usage limit stopped is drawn seen (it goes on by itself once the limit resets).
+ *  A folded Persona chats or Recent heading counts the chats it hides that are (#13425). Just finished is not counted
+ *  there, as in the Agents list's folded tally (docs/protocol/agent-states.md "Just finished"). */
+export function unreadShown(s: Session): boolean {
+  return activityOf(s) === "unread" && !usageLimitLabel(s);
+}
+
 /** Reads a parent's folded rows while its row names an unread side session (useChildSessions): they are held for the
  *  row (useHeldSides), each seen by this page's own mark, so the line can name them and a side seen here clears the row
  *  at once. Draws nothing. */
@@ -382,7 +391,7 @@ function SideUnreadLine({ sides, count, open }: { sides?: readonly Session[]; co
 }
 
 // `prefix`: a word before the title (a tab's name, a pane's agent), in `prefixClass`
-type SessionRowProps = { menuLabel?: string; /** The mark at the start when the state is not shown (a Persona conversation's; pinned: the pin). */ icon?: IconName; s: Session; k: string; reg: RegFn; hover: (k: string | null) => void; active: boolean; /** null: a targetless external direction, drawn as the same non-link row. */ to: Route | null; go: GoFn; tab?: boolean; /** Plain space and tab label for older nodes without a tab association. */ tabFallback?: string; label?: string; prefix?: string; prefixClass?: string; hint?: string; /** A lead's hint stays whole when there is room; the title keeps its minimum and the hint truncates first. */ hintFull?: boolean; host?: string; showState?: boolean; showTodoTag?: boolean; onMenu?: RowMenuFn; endRoom?: boolean; /** A lead row whose own conversation is idle while something under it runs (the direction tree's `running`, #6626): draw the working arc anyway (#6230). An own needs-you / unread state still takes precedence. */ workingMark?: boolean;
+type SessionRowProps = { menuLabel?: string; /** The mark at the start of a row that does not show its state (a Persona conversation's chat icon), drawn while it neither works nor holds a reply nobody has opened (#5862, #13425). */ icon?: IconName; s: Session; k: string; reg: RegFn; hover: (k: string | null) => void; active: boolean; /** null: a targetless external direction, drawn as the same non-link row. */ to: Route | null; go: GoFn; tab?: boolean; /** Plain space and tab label for older nodes without a tab association. */ tabFallback?: string; label?: string; prefix?: string; prefixClass?: string; hint?: string; /** A lead's hint stays whole when there is room; the title keeps its minimum and the hint truncates first. */ hintFull?: boolean; host?: string; showState?: boolean; showTodoTag?: boolean; onMenu?: RowMenuFn; endRoom?: boolean; /** A lead row whose own conversation is idle while something under it runs (the direction tree's `running`, #6626): draw the working arc anyway (#6230). An own needs-you / unread state still takes precedence. */ workingMark?: boolean;
   /** 常驻 rows (#6214): the "在做 N · 等你 N" counts never fade on hover and the ⋯ sits in a reserved end slot instead
    * of covering them, so hovering removes no information. */
   keepTrailing?: boolean };
@@ -426,15 +435,21 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
   const title = sessionTitle(s, preferTab);
   const displayTitle = label ?? title;
   const st = activityOf(s);
-  const phase = stateOf(s);
-  // A lead row whose own conversation is idle while something under it runs (the tree's `running`: an Agent at work,
-  // #6626) carries the working arc anyway (#6230). An own needs-you / unread / working state still wins, and Agent rows
-  // (showState) keep their own state.
-  const leadActive = workingMark && !showState && st !== "working" && st !== "needs_you" && st !== "unread";
   // Awaiting Reply (#5096): seen, but it asked you something you have not answered
   const awaiting = useStore((x) => awaitsReply(s, x.mutes));
   // Just finished (#9751): done before you looked, less than three hours ago
   const finished = useStore((x) => justFinished(s, x.mutes));
+  // A Persona conversation's row (showState off) keeps its chat icon at rest; the same slot draws its mark while it works
+  // (#5862) and while it holds a reply nobody has opened (#13425): Unread's glowing dot, with the Agent rows' unread
+  // weight on its title, or Just finished's plain one. Opening the chat takes it away at once: viewSession marks it
+  // seen, and the seen outbox (heldSeen above) keeps it so until the hub has it.
+  const unread = !showState && unreadShown(s);
+  const unseen = unread || (!showState && finished);
+  // A lead row whose own conversation is idle while something under it runs (the tree's `running`: an Agent at work,
+  // #6626) carries the working arc anyway (#6230). Its own needs-you, working or Unread state still wins, as iOS's
+  // RowStateMark has it; Just finished, ranked after Working, gives way to the arc. Agent rows (showState) keep their
+  // own state.
+  const leadActive = workingMark && !showState && st !== "working" && st !== "needs_you" && !unread;
   // where it was opened, marked at the row's end: not on a tab with several panes (endRoom), where a herdr tab is a
   // terminal by definition, each pane's row under it says so, and the mark's room is the title's
   const source = showState && !s.assistant && !endRoom ? sessionSource(s) : undefined;
@@ -539,7 +554,7 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
     >
       {/* the agent's mark before its state (#6390): what runs there, then how it is doing */}
       {showState && !s.assistant && <SessionMark s={s} size={14} />}
-      <span className="flex size-3.5 shrink-0 items-center justify-center">{showState || st === "working" || leadActive ? <StatusMark state={leadActive ? "working" : phase} awaiting={awaiting} finished={finished} waiting={backgroundWaiting(s)} /> : <Icon name={icon} size={12} className="text-ink-3" />}</span>
+      <span className="flex size-3.5 shrink-0 items-center justify-center">{showState || st === "working" || unseen || leadActive ? <StatusMark state={leadActive ? "working" : usageLimitLabel(s) && st === "unread" ? "idle" : st} awaiting={awaiting} finished={finished} waiting={backgroundWaiting(s)} /> : <Icon name={icon} size={12} className="text-ink-3" />}</span>
       {prefix && <span className={prefixClass}>{prefix}</span>}
       {/* with the mark, the title sits in the column whether a second line shows or not: the same element through a
           workflow's start and end, so the mark does not fade in again */}
@@ -614,6 +629,13 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
               </span>
             ))}
           </span>}
+        </span>
+      ) : keepTrailing ? (
+        // a lead's name reads as a row, even with nothing second to say: the ⋯'s reserved slot must not take the title's
+        // place. Drawn here, in place of the plain title, so the name shows once (it was drawn twice, "Per… Per…"). An
+        // unread reply takes the Agent rows' unread weight (#13425)
+        <span className={cx("flex-1 truncate text-meta", titleMin, titleFirst, active || unread ? "font-medium text-ink" : "text-ink-2")}>
+          {displayTitle}
         </span>
       ) : (
         <span className={cx("flex-1 truncate text-meta", titleMin, titleFirst, active ? "font-medium text-ink" : st === "offline" ? "text-ink-3" : "text-ink-2", st === "unread" && !active && "font-medium text-ink")}>

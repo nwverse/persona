@@ -9115,6 +9115,14 @@
     {
       "name": "knowledge_minutes_writing",
       "value": "正在整理纪要…"
+    },
+    {
+      "name": "agents_use_herdr_tab_name",
+      "value": "使用 herdr 标签名作为会话名"
+    },
+    {
+      "name": "agents_use_herdr_tab_name_hint",
+      "value": "优先显示标签名。此设置会在连接同一 Hub 的设备间同步。"
     }
   ]
 }

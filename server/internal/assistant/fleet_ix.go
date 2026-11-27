@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -898,6 +899,25 @@ func endStatus(r proto.Resolution) string {
 }
 
 var errInvalidElicitation = errors.New("elicitation requires action accept, decline or cancel")
+var errMissingAllow = errors.New("permission resolution requires allow")
+var errMissingApprove = errors.New("plan resolution requires approve")
+
+func validateInteractionDecision(ix proto.Interaction, r proto.Resolution) error {
+	if r.Cancel && (!ix.CanCancel || ix.Kind != proto.IxQuestion || !r.IsQuestionCancel()) {
+		return errInvalidQuestionCancel
+	}
+	if r.Dismiss {
+		return nil
+	}
+	switch {
+	case ix.Kind == proto.IxPermission && r.Allow == nil:
+		return errMissingAllow
+	case ix.Kind == proto.IxPlan && r.Approve == nil:
+		return errMissingApprove
+	}
+	return nil
+}
+
 var errInvalidEditedAnswer = errors.New("edited_text requires an editable permission card and a plain allow")
 
 // editedAnswerAllowed rejects an edit before its card or channel owner action is consumed. The node still has to
@@ -971,6 +991,9 @@ func (s *Service) resolveActiveAnswer(ctx context.Context, id string, r proto.Re
 	isPrepared := prepared != nil && prepared.prepared != nil
 	s.fleet.mu.Unlock()
 	if isPrepared {
+		if err := validateInteractionDecision(prepared.ix, r); err != nil {
+			return err
+		}
 		return s.resolvePreparedAnswer(ctx, prepared, r, remember, authorization)
 	}
 	// A manager work card is answered in the manager, not by the stopped agent. Its local dismiss/defer choices remain
@@ -992,9 +1015,16 @@ func (s *Service) resolveActiveAnswer(ctx context.Context, id string, r proto.Re
 		s.fleet.mu.Unlock()
 		return errSecretRunEnv // an older specialized client would show no env warning before its Run
 	}
-	if p != nil && r.Cancel && (!p.ix.CanCancel || p.ix.Kind != proto.IxQuestion || !r.IsQuestionCancel()) {
-		s.fleet.mu.Unlock()
-		return errInvalidQuestionCancel
+	if p != nil && !p.claimed {
+		if handoff && reflect.ValueOf(r).IsZero() {
+			// A vouched-for device's legacy empty hand-off answer is a decline.
+			deny := false
+			r.Allow = &deny
+		}
+		if err := validateInteractionDecision(p.ix, r); err != nil {
+			s.fleet.mu.Unlock()
+			return err
+		}
 	}
 	if p != nil && !editedAnswerAllowed(p.ix, r) {
 		s.fleet.mu.Unlock()
@@ -1584,14 +1614,15 @@ func (s *Service) expireLoop(ctx context.Context) {
 }
 
 // errReservedCard: a card from a node (a hook, a runtime, a daemon, a Codex list) or an extension may not pass for the
-// password card or the hand-off card: only the assistant's secret_run tool makes the one (secret_run.go) and only the
-// manager's Agent start the other, and the clients show them as those cards, the password card with no Agent's name on it.
-var errReservedCard = errors.New("the tool names " + proto.SecretRunTool + " and " + proto.SecretHandoffTool +
-	" are reserved for the manager's password and hand-off cards")
+// password card, the hand-off card or a command-input card: only the assistant's secret_run tool makes the first
+// (secret_run.go), only the manager's Agent start the second, and only a node's own card list the third
+// (fleet_ix_command.go), and the clients show them as those cards, the password card with no Agent's name on it.
+var errReservedCard = errors.New("the tool names " + proto.SecretRunTool + ", " + proto.SecretHandoffTool + " and " +
+	proto.CommandInputTool + " are reserved for the manager's password, hand-off and command-input cards")
 
-// reservedCard: ix calls itself the password card or the hand-off card.
+// reservedCard: ix calls itself the password card, the hand-off card or a command-input card.
 func reservedCard(ix proto.Interaction) bool {
-	return ix.ToolName == proto.SecretRunTool || ix.ToolName == proto.SecretHandoffTool || strings.HasPrefix(ix.ID, outboundSettingsCardPrefix)
+	return ix.ToolName == proto.SecretRunTool || ix.ToolName == proto.SecretHandoffTool || ix.ToolName == proto.CommandInputTool || strings.HasPrefix(ix.ID, outboundSettingsCardPrefix)
 }
 
 // askHub is fleet.ask: a card one of the hub's own features asks (a mail send, Cua's apps, persona_settings),

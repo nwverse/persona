@@ -109,6 +109,7 @@ go server/internal/buildtags core
 go server/internal/buildtags/printtags core
 go server/internal/builtinext core
 go server/internal/bus core
+go server/internal/buswire core
 go server/internal/cachewarm core
 go server/internal/channel core
 go server/internal/channel/conformance core

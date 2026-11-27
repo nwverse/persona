@@ -2,6 +2,7 @@ package node
 
 import (
 	"bytes"
+	"errors"
 	"math"
 	"os"
 	"path/filepath"
@@ -430,7 +431,7 @@ func setAgyContextBreakdown(s *proto.Session, stats transcript.ContextStats) {
 	s.SetContextBreakdown(transcript.BuildContextBreakdown(stats, int(s.ContextTokens), int(s.ContextWindow), 0, fullWindow))
 }
 
-// agyTranscriptMeta reads the cached token usage and background work of an agy conversation on disk.
+// agyTranscriptMeta reads the cached token usage, background work and latest turn of an agy conversation on disk.
 func (n *Node) agyTranscriptMeta(conversation string) (agySessionMeta, bool) {
 	if n == nil || conversation == "" || !uuidRe.MatchString(conversation) {
 		return agySessionMeta{}, false
@@ -443,7 +444,7 @@ func (n *Node) agyTranscriptMeta(conversation string) (agySessionMeta, bool) {
 	defer root.Close()
 	rel := agyTranscriptPath
 	info, err := root.Stat(rel)
-	if err != nil || !info.Mode().IsRegular() {
+	if errors.Is(err, os.ErrNotExist) {
 		rel = agyFullTranscriptPath
 		info, err = root.Stat(rel)
 		if err != nil || !info.Mode().IsRegular() {
@@ -467,6 +468,7 @@ func (n *Node) agyTranscriptMeta(conversation string) (agySessionMeta, bool) {
 	raw = raw[:bytes.LastIndexByte(raw, '\n')+1]
 	steps, _ := parseAgySteps(raw, conversation)
 	usage := extractAgyUsage(steps)
+	usage.turn = summarizeAgyTurn(steps)
 	usage.modTime = info.ModTime().UTC()
 	meta := agySessionMeta{agyTranscriptUsage: usage, background: agyBackground(steps, conversation, dir, root)}
 

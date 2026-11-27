@@ -87,7 +87,7 @@ func (n *Node) launcherModels(ctx context.Context, name, agentType string, refre
 	}
 	agent := n.launcherModelsAgent(ctx, name, agentType)
 	if agent == ompAgent {
-		// omp accepts a typed model on a new herdr start, unless its launcher pins it.
+		// omp accepts a typed model on a new herdr or Orca start, unless its launcher pins it.
 		res := proto.LauncherModels{Agent: agent, Models: []proto.AgentModel{}}
 		if err := n.checkOmpStartModel(ctx, name, modelCheckProbe); err != nil {
 			res.Locked = err.Error()
