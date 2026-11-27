@@ -695,11 +695,14 @@ private fun ChatPage(
         if (!line.open) toggle(line.id)
         if (!chatList.followsEnd) scope.launch { chatList.scrollToRecord(line.contentKey) }
     } }, modifier) } }
+    val hubKeepsModelPick = switchSession != null &&
+        persona.core.domain.models.PersonaModelPanel.MODEL_PICK in persona.core.designsystem.LocalHubFeatures.current
     /** Whether the message was taken (false: nothing went, the box or another send stands); [onFailed] if it then fails. */
     fun send(command: String? = null, onFailed: () -> Unit = {}): Boolean = interactionController.send(command,
         draft = composer.draft, contexts = linkContexts, hasContent = composer.hasContent, ready = composer.ready,
         wireText = command ?: linkMessage(composer.message(), linkContexts, context.resources), paneId = session?.paneId,
-        conversationLauncher = conversationLauncher, conversationModel = conversationModel, glassAgent = glass && agentChat,
+        conversationLauncher = if (hubKeepsModelPick) null else conversationLauncher,
+        conversationModel = if (hubKeepsModelPick) null else conversationModel, glassAgent = glass && agentChat,
         onFailed = onFailed, onCleared = { refs -> linkContexts = linkContexts.filterNot { ref -> refs.any { it.id == ref.id } } })
     // Chat content (group A): the message menu, quote and context actions.
     // A swipe to the left quotes (iOS #1058) wherever the long-press menu's "Quote" is offered.
@@ -890,7 +893,7 @@ private fun ChatPage(
             chrome.assistantManagement != null
     }?.let { current ->
         {
-            if (glass && ownModelPicker) clearModelPick = true
+            if (ownModelPicker && (glass || renderStyle == ChatRenderStyle.Assistant)) clearModelPick = true
             else scope.launch {
                 try {
                     chrome.assistantManagement?.clearModelPick(current.key)
@@ -1407,9 +1410,31 @@ private fun ChatPage(
                                     // Brief and Board share one wrapping row for the launcher and mode chips; Glass's pill does its work (#5055).
                                     hintChips = if (!glass && renderStyle == ChatRenderStyle.Assistant && chrome.assistantManagement != null &&
                                         !readOnly && (canSend || turnFix == TurnErrorFix.ModelRoute)) ({
-                                        ConversationLauncherChip(chrome.assistantManagement, key.machineId, key.sessionId, session?.launcher,
-                                            conversationLauncher, conversationModel, openRequested = openModes || openModelRoutePicker,
-                                            onOpenHandled = { openModes = false; openModelRoutePicker = false }) { launcher, model ->
+                                        val online = connection == null || connection == ConnectionState.Online
+                                        ConversationLauncherChip(
+                                            api = chrome.assistantManagement,
+                                            machineId = key.machineId,
+                                            sessionId = key.sessionId,
+                                            sessionLauncher = session?.launcher,
+                                            pickedLauncher = conversationLauncher,
+                                            pickedModel = conversationModel,
+                                            openRequested = openModes || openModelRoutePicker,
+                                            onOpenHandled = { openModes = false; openModelRoutePicker = false },
+                                            session = switchSession,
+                                            enabled = online,
+                                            clearRequested = clearModelPick,
+                                            onClearHandled = { clearModelPick = false },
+                                            leaderConversations = chrome.leaderConversations,
+                                            onOverlay = { pillOverlay = it },
+                                            onNotice = { notice = it },
+                                            onSynced = {
+                                                scope.launch {
+                                                    try { sessions.refresh() }
+                                                    catch (cancelled: CancellationException) { throw cancelled }
+                                                    catch (_: Exception) { }
+                                                }
+                                            },
+                                        ) { launcher, model ->
                                             conversationLauncher = launcher
                                             conversationModel = model
                                         }
