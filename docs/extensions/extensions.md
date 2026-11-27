@@ -1511,6 +1511,25 @@ Owner-facing API/CLI requests resolve only historical names of that committed in
 Before any renamed node upload/start/sync, the manager probes authenticated `plugin.node.identity` capability. Incompatible or unavailable nodes cannot receive a sync that would mistake the absent old ID for uninstall.
 Before the rename commits (`checkRenameNodeCapabilities`), every computer picked in an enabled extension's `node.machines` setting must be online with an identity-aware node. The refusal names the computers: `extension-identity.node_unreachable` for one that is offline or did not answer the probe, `extension-identity.node_outdated` for one whose node is too old. A picked ID that is not one of the hub's computers (removed, or left from before the hub moved) is skipped and logged rather than refused (#2510): the fleet lists offline computers too, so no node with that ID can connect, and one added again under it gets the guarded sync above. The settings form keeps showing it as "(no such machine)" for the owner to remove; removing a computer does not rewrite extensions' settings. Identity-aware nodes persist slot/revision bindings, preserve disabled/offline data and rollback packages, and reject late starts, uploads and events. The assistant's authenticated `extensions.identity` probe similarly guards stable model/knowledge ownership across manager versions. Do not manually move data or secret rows, or use uninstall/reinstall as a migration.
 
+### Moving a built-in provider to the official marketplace
+
+A host release can opt a built-in provider into a same-ID marketplace upgrade. Volcengine speech
+uses this path. When an eligible package is available, the owner can preview it in the official
+catalog, inspect the requested permissions, and confirm the upgrade. The first marketplace version
+can have a lower version number than the installed hub because the package has its own release cycle.
+
+The host checks the registered built-in ID, the official catalog and its pinned signing key, and
+the downloaded package digest. The owner confirms the preview's permission digest even for a package
+with the same permissions. The replacement uses the same installation slot, so existing settings,
+sealed credentials, stored data and contribution switches stay with their owner. The database
+transaction records the change of source and checks the saved row before committing. A change to the
+owner's choices during the transaction requires a fresh attempt.
+
+After the first upgrade, **Roll back** restores the built-in provider supplied by the running host.
+The host reads the saved installation record after a restart to find that predecessor. On a hub
+that has never had the built-in provider, installing the package follows the ordinary installation
+flow. The existing marketplace rename rules apply to packages with a declared former ID.
+
 ### Command-line programs (tools)
 
 When an extension works through some command-line tool (for example, wrapping the CLI of a company's internal service), it lists it in the manifest's `tools`, and the hub installs it at install time, so computers that never had that CLI can use it right away (#4507).
