@@ -137,6 +137,7 @@ struct InboxEventBlocks: View {
         } else if let s = item.summary, !s.isEmpty {
             (Text(Image(systemName: Theme.Icon.ai)).foregroundStyle(Theme.ai) + Text(" " + s))
                 .font(Theme.Font.secondary)
+                .lookUpWords(plain: "\u{FFFC} " + s) // the mark is one attachment character
                 .lineHeight(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1082,6 +1083,7 @@ struct InboxEventPage: View {
             .frame(maxWidth: .infinity)
         }
         .scrollDismissesKeyboard(.interactively)
+        .textLookupSurface("inbox") // its words look up on a tap (#10977)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             InboxHandOffBar(item: item, draft: canDraft ? draft : nil,
                             draftTitle: item.agentDraft == nil ? nil : String(localized: "View Draft"))

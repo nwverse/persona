@@ -87,10 +87,10 @@ import (
 // glob. Re-aligned onto the main carrying #16604, the union measures 296,417 B exactly (+1,779 B over 294,638 B).
 // Main carrying #17140 (Antigravity background-task restart/list reconciliation, +2,241 B) measured 298,658 B.
 // Deterministic runtime compaction settlement (`session.compaction.settled` in runtime-sdk and antigravity runtime) adds 211 B (298,869 B).
-// Checking conversation existence before serving Antigravity session.items (fail-closed on stat/metadata read errors) adds 271 B (299,140 B, #16410).
+// Main carrying #17145 (Antigravity channel-isolated ACP pools) plus checking conversation existence before serving Antigravity session.items (fail-closed on stat/metadata read errors, #16410) measures 301,015 B.
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 299_140
+	const budget = 301_015
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

@@ -120,7 +120,7 @@ type Service struct {
 	gates    map[string]*gate
 	busy     map[string]bool // connectors whose subscriptions are running now
 	running  int
-	asked    map[string]bool      // subscriptions asked to run now
+	asked    map[string]time.Time // subscriptions asked to run now (due at or after the stored time; zero means immediately)
 	kicked   map[string]time.Time // when a connector's changed event makes each of its subscriptions due (ConnectorChanged)
 	wake     chan struct{}
 
@@ -165,7 +165,7 @@ func New(o Options) *Service {
 		o.Delivered = func(Subscription) {}
 	}
 	return &Service{o: o, catalogs: map[string]catalogEntry{}, reading: map[string]bool{}, gates: map[string]*gate{},
-		busy: map[string]bool{}, asked: map[string]bool{}, kicked: map[string]time.Time{}, wake: make(chan struct{}, 1), pushed: map[string][]time.Time{}}
+		busy: map[string]bool{}, asked: map[string]time.Time{}, kicked: map[string]time.Time{}, wake: make(chan struct{}, 1), pushed: map[string][]time.Time{}}
 }
 
 func (s *Service) now() time.Time { return s.o.Clock.Now().UTC() }
@@ -959,7 +959,7 @@ func (s *Service) RunNow(ctx context.Context, id string, by Actor) (Subscription
 		return Subscription{}, pushOnly("pull")
 	}
 	s.mu.Lock()
-	s.asked[id] = true
+	s.asked[id] = time.Time{}
 	s.mu.Unlock()
 	s.o.Audit(ctx, sub.Connector, "subscription_run_now", by, map[string]any{"subscription": id})
 	s.poke()
