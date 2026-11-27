@@ -299,7 +299,7 @@ export function SidePanelView({
         label={t("sidepanel.resize_label")}
         title={t("sidepanel.resize_title")}
         controls={asideId}
-        className="hidden lg:block"
+        className="hidden lg:flex"
       />
       <div className="flex min-h-0 flex-1 flex-col">
         {/* a chunk gone after a hub redeploy reloads once, else shows a retry; never a blank panel */}

@@ -7180,7 +7180,7 @@ per-turn fallback** — while `text` always keeps the transcript's words so clie
 
 ```json
 {"role":"user","kind":"text","text":"<botmux_reminder>…</botmux_reminder>\n\n<user_message>\nship it\n</user_message>\n\n<sender … />",
- "botmux":{"kind":"message","text":"ship it","sender":"Alex Kim","sender_type":"user","thread":true}}
+ "botmux":{"kind":"message","text":"ship it","sender":"Example User","sender_type":"user","thread":true}}
 ```
 
 | Field | Meaning |

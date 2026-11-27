@@ -68,9 +68,19 @@ import (
 // summary_behind readListedTranscript cache, restores dev/ino/ctime wake-receipt detection, and adds a fixed
 // 4 KiB head-sample integrity check inside the racy window alongside the tail anchor. The union measures
 // 290,316 B exactly. The merge also restores one missing ASI semicolon in main's runtime.js.
+// With the compat.js declaration fix (#16771), main measured 290,321 B.
+// Keeping legacy effort-only requests in the selected model family adds 694 B (291,015 B).
+// Antigravity keep_always declaration, Assistant allow_once-absent fail-closed guard, and MultiEdit/NotebookEdit tool mapping add 101 B (291,116 B).
+// Treating epoch-zero resetTime on untouched Antigravity quota buckets as unset and emitting a SHA-256 account_key for
+// signed-in Antigravity accounts add 180 B (291_296 B).
+// Antigravity unknown-status jitter fixes (CANCELING/BUSY native working, empty 0-step idle, fresh empty-transcript
+// start, settled-turn recovery across transient empty/UNSPECIFIED summary_not_idle and tool-only turns with
+// autonomous-wake cleanup, cached GetCascadeTrajectory idle verification for summary_behind, last_modified_time
+// listed cache invalidation, and sanitized unrecognized-status logging) add 1,066 B (292,362 B).
+// Antigravity Run-prefixed Persona MCP permission normalization (with shell/file/a2a guards), fork mode/model/effort preservation with RPC-gated implicit-option recovery, and assistant capabilities.rewind=false advertisement add 1,976 B (294,338 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 290_316
+	const budget = 294_338
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

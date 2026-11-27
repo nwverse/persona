@@ -12,22 +12,11 @@ import (
 	"github.com/nwverse/persona/server/internal/modapi"
 )
 
-// Thin core hooks to the daily briefing module (server/internal/modules/briefing via s.modules.ScheduleFacts().Runner).
-// When the briefing module is switched off or left out of the build, every hook degrades cleanly to a no-op / zero value
-// and routines run without briefing facts. The Lark card renderer (briefing_card.go) and briefRoutes (briefing_feed.go)
-// stay here until the neutral Card model and hub_routes slot land (#13845).
-
-const (
-	// briefWindow and briefRowsMax are shared with briefing_card.go until the card moves into the module.
-	briefWindow  = 12 * time.Hour
-	briefRowsMax = 10
-	briefKeep    = 3 * time.Hour
-)
+// Scheduled routines use the loaded schedule facts runner, when present.
 
 type (
-	briefFacts    = modapi.BriefSnapshot
-	briefRun      = modapi.BriefRun
-	briefProgress = modapi.BriefTaskProgress
+	briefFacts = modapi.BriefSnapshot
+	briefRun   = modapi.BriefRun
 )
 
 func briefTaskInfo(t Task) modapi.BriefTaskInfo {
@@ -53,14 +42,6 @@ func briefScheduleRun(r ScheduleRun) modapi.BriefScheduleRun {
 		Retried:   r.Retried,
 		Manual:    r.Manual,
 	}
-}
-
-func (s *Service) briefFactsAt(ctx context.Context, now time.Time, self string) *briefFacts {
-	r, ok := s.briefingRunner()
-	if !ok {
-		return nil
-	}
-	return r.FactsAt(ctx, now, self)
 }
 
 func (s *Service) briefStart(ctx context.Context, t Task, now time.Time) string {
@@ -147,20 +128,30 @@ func (s *Service) briefingGrace(ctx context.Context, local time.Time, start int)
 // on top, the facts under it. Required owner waits continue onto more cards rather than crossing Feishu's physical
 // budget. The push port's per-index key makes every continuation retry independently and idempotently.
 func (s *Service) briefMirror(ctx context.Context, machine, session, label string, run *briefRun, answer, turn string) {
-	card, fallback, shown := s.briefCard(run.Facts, run.Label, answer)
-	card.Buttons(s.openButton(ctx, machine, session))
-	cards := splitBriefAnswerCards(card, fallback, run.Label)
+	openLabel, openURL := s.openLink(ctx, machine, session)
+	cards, _, shown := s.scheduleCards(run.Facts, run.Label, answer, "", openLabel, openURL)
+	if len(cards) == 0 {
+		return
+	}
 	sum := sha256.Sum256([]byte("brief\x00" + machine + "\x00" + session + "\x00" + turn + "\x00" + answer))
 	to := s.larkMirror(machine, session, label, false, answer, turn)
 	s.postBriefMirror(ctx, to, i18n.Lang(run.Facts.Lang), cards, "b"+hex.EncodeToString(sum[:8]), func() { s.briefAsked(run.Facts, shown) })
 }
 
-func (s *Service) postBriefMirror(ctx context.Context, to assistantwire.LarkMirror, lang i18n.Lang, cards []botAnswerCard, key string, sent func()) {
-	drawings, fallbacks := make([]*botcard.Card, len(cards)), make([]string, len(cards))
-	for i, card := range cards {
-		drawings[i], fallbacks[i] = card.card, card.fallback
+func (s *Service) postBriefMirror(ctx context.Context, to assistantwire.LarkMirror, lang i18n.Lang, pages []modapi.BriefCardPage, key string, sent func()) {
+	drawings, fallbacks := make([]*botcard.Card, len(pages)), make([]string, len(pages))
+	for i, page := range pages {
+		drawings[i], fallbacks[i] = (*botcard.Card)(page.Card), page.Fallback
 	}
 	s.larkModule().MirrorPost(ctx, to, lang, drawings, fallbacks, key, sent)
+}
+
+func (s *Service) scheduleCards(f *briefFacts, label, answer, header, openLabel, openURL string) ([]modapi.BriefCardPage, string, []string) {
+	r, ok := s.briefingRunner()
+	if !ok {
+		return nil, "", nil
+	}
+	return r.RenderCards(f, label, answer, header, openLabel, openURL)
 }
 
 // briefAsked notes that the briefing card with the Accept buttons of the tasks shown went out: those tasks are not
@@ -186,19 +177,4 @@ func (s *Service) briefAsked(f *briefFacts, shown []string) {
 		}
 	}
 	s.saveAcceptLocked(ctx)
-}
-
-// acceptTryFromBrief is the Accept button of a briefing card: it accepts task id when the round the button was made for
-// (askedAt, as the card wrote it) is the round that waits now. The card is not one of the ask's own messages, so
-// acceptTry cannot tell an old round's button from a current one by its message id. The errors are acceptTry's: a
-// decision whose recommendation did not reach the agent, or errAcceptStore (the asks cannot be read or the acceptance
-// saved), which is not "another round".
-func (s *Service) acceptTryFromBrief(ctx context.Context, id, askedAt string) (acceptResult, error) {
-	at, err := time.Parse(timeKeyLayout, askedAt)
-	if err != nil {
-		return acceptResult{}, nil
-	}
-	s.reviewDismissals.actions.acquire(id)
-	defer s.reviewDismissals.actions.release(id)
-	return s.acceptTryAsDismissalLocked(ctx, id, "", at, false)
 }

@@ -2942,27 +2942,27 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
   too. Why: picking a model and then its effort took several opens of the panel and a hover-only flyout, and the same
   cross-engine sentence was repeated under every launcher (the user's ask, 2026-11-21).
 - **Families and earlier versions** (`lib/model-families.ts`): a provider group (and Recommended, after the model that
-  runs) keeps each model family together under its name in small type: Claude Fable, Opus, Sonnet and Haiku (in that
-  order, by capability), a GPT line per variant ("GPT Sol", "GPT Terra"), a Gemini tier ("Gemini Pro", "Gemini Flash";
-  thinking levels and release channels such as `-medium` or `-preview` are not tiers), and unversioned peer families
-  (**Orchestrator** for `gemini-pro-orchestrator*`, **GPT-OSS** for `gpt-oss-*`, neither folded nor marked Latest, and
-  neither triggering family headers on its own). The family is read from the
-  model's concrete ID (an alias by what it resolves to, a gateway's vendor path and date stamps dropped); the provider's
-  own Default entry stays headerless first, and anything else (`glm-5.3`, `gpt-4o`, an ID typed before last) keeps its
-  list order after the families under a localized **Other** (`其他`; `その他`) header so it never appears inside the
-  preceding family. Vendors come in the order the list first names them, other families by first mention. Within a
-  versioned family the newest version leads (every row of it the hub lists: a 1M-context one, a gateway route's "Opus
-  5.5 (kiro)") and says
+  runs) visually groups models by **model series** in small type (`Claude`, `Gemini`, `GPT`, `DeepSeek`, `GLM`,
+  `MiniMax`, `Seed`, `Qwen`, `Kimi`, `Grok`): `Orchestrator` (`gemini-pro-orchestrator*`) groups under `Gemini`,
+  `GPT-OSS` (`gpt-oss-*`) and `gpt-4o*` group under `GPT`, and Claude's internal tiers stay ordered Fable, Opus, Sonnet,
+  Haiku inside `Claude`. The series and internal line are read from the model's concrete ID (an alias by what it resolves
+  to, a gateway's vendor path and date stamps dropped; thinking levels and release channels such as `-medium` or
+  `-preview` are kept out of line names). The provider's own Default entry stays headerless first, and anything else (an
+  unrecognized model ID, an ID typed before last) keeps its list order after the series blocks under a localized
+  **Other** (`其他`; `その他`) header so it never appears inside the preceding series. Series appear in first-mention
+  order, and within each versioned internal line the newest version leads (every row of it the hub lists: a 1M-context
+  one, a gateway route's "Opus 5.5 (kiro)") and says
   **Latest** (最新; 最新) when older ones exist. Spellings of one model are not rows of their own: the hub sends one row
   whose `aliases` hold the others (Claude Code's tier aliases on a gateway whose tiers name one model,
   `docs/assistant/model-config.md` "One row per model", #10365), and a setup saved with one of them (a kept pick, a
-  favorite, a recent setup, Model configuration's model) is that row's (`isCurrentModel`, `listedModel`); the
-  older ones fold under the family's **Earlier versions · N** (更早版本 · N; 以前のバージョン · N), unfolded for this
-  opening only. Never folded: the model that runs or waits, a favorite's or a recent setup's model, a customized one, and
-  everything under a search (which still marks only the family's real newest). Nothing changes for a list where no
-  versioned family has two rows. Why: Claude.ai and ChatGPT keep older models behind one "More models" step, Claude Code's `/model` offers
-  per-family aliases that track the newest; a provider listing every pinned version (14 rows for one Claude account)
-  buried the newest of each family (the user's ask, 2026-11-17).
+  favorite, a recent setup, Model configuration's model) is that row's (`isCurrentModel`, `listedModel`). All older
+  versions across lines within a series combine into one **Earlier versions · N** (更早版本 · N; 以前のバージョン · N)
+  button in the series header, unfolded for this opening only. Never folded: the model that runs or waits, a
+  favorite's or a recent setup's model, a customized one, unversioned lines (`Orchestrator`, `GPT-OSS`, `Other`), and
+  everything under a search (which still marks each line's real newest). Nothing changes for a single-series list where
+  no versioned line has two rows; series headers activate once at least two series appear or a versioned line has older
+  versions. Why: grouping by series avoids header clutter across gateways and Antigravity while still keeping older
+  versions one tap away under "More models" / "Earlier versions" (2026-11-17, updated #16792).
 - **Context below the composer** (#5056): `ContextMeter` sits in the right-aligned usage row below the composer card.
   The visible label and fill show the used share at every width (#9155). The popover still shows the remaining share and
   token counts. Unknown context mounts no meter.
@@ -3604,7 +3604,7 @@ The defaults add nothing to the page (no attribute, no stylesheet), so the defau
   - Explicit choices precede the theme's fallback stack. Default restores it for that family. Terminals read the code stack when opened and preserve their separate font size and CJK width correction. A retained Full UI feed also reads the stack when another terminal surface attaches.
 - **Recent chats in the sidebar** (`persona.sidebar-recent`, #5146): 5 / 10 / 15 / 25, default 5 (#6228), how many of the latest chats the sidebar's Persona chats › 最近 lists before **Show N more**. iOS and Android list 5 and have no such setting yet. The fold of the 最近 group itself is `fold:recent-chats` (#6228).
 - **Sidebar icons** (`persona.sidebar-icons`, #10822): Monochrome (stores nothing, the default) or Colored (`colored`), a color for each page's icon in the sidebar ("The sidebar's pages", **Icon colors**). Other tabs follow through the `storage` event.
-- **Window style** (`persona.surface-style`, #16607): Default (stores nothing, preserving crisp opaque surfaces) or Liquid Glass (`liquid-glass`), an opt-in translucent frosted surface style under Settings › Advanced › Appearance that clears opaque root backgrounds on macOS desktop (`setSurfaceStyle` + `data-desktop-glass`), exposes a **Glass translucency** slider (`persona.glass-translucency`, `0%–100%`, default `68%`), and respects `prefers-reduced-transparency`. Other tabs follow through the `storage` event.
+- **Window style** (`persona.surface-style`, #16607, #16776): Default (stores nothing, preserving crisp opaque surfaces) or Liquid Glass (`liquid-glass`), an opt-in translucent frosted surface style under Settings › Advanced › Appearance that clears opaque root backgrounds on macOS desktop (`setSurfaceStyle` + `data-desktop-glass`), syncs `persona.theme` via `setThemeSource` so native vibrancy matches light/dark mode, skips redundant shell CSS `backdrop-filter` when `data-desktop-glass` is active, calibrates neutral glass tints with legibility-safe opacity floors across the **Glass translucency** slider (`persona.glass-translucency`, `0%–100%`, default `68%`), and respects `prefers-reduced-transparency`. Other tabs follow through the `storage` event.
 - **Launcher quota in the sidebar** (`persona.sidebar-usage`, #13493): on by default (stores nothing); off (`0`) stops the sidebar mounting its usage card (`lib/sidebar-usage.ts`, `views/UsageBars.tsx`). Settings › General › Appearance. Other tabs follow through the `storage` event.
 
 ## New versions
