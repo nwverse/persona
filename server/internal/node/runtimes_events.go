@@ -454,18 +454,13 @@ func (n *Node) runtimeAsk(ctx context.Context, h *runtimeConn, params json.RawMe
 		ix.Cwd = sessionCwd
 	}
 	// "Always allow for this session" kept by the hub for a runtime's permission card (#3974): what it grants is the node's word, never
-	// the runtime's — one key for this runtime's tool, which the manager keeps under this session id, so it never
-	// reaches another session or another tool. Only for a runtime that asked for it in its hello (caps.keep_always: it
-	// keeps no rule itself; a runtime whose always is a narrower rule of its own must not get the whole tool), only
-	// when the card offers it (an always_label), and never in a space or on a card with fields.
-	h.mu.Lock()
-	keepAlways := h.hello.Caps.KeepAlways
-	h.mu.Unlock()
-	ix.AlwaysKeys = nil
-	if keepAlways && ix.Kind == proto.IxPermission && strings.TrimSpace(ix.AlwaysLabel) != "" && strings.TrimSpace(ix.ToolName) != "" &&
-		len(ix.Fields) == 0 && !runtimeInSpace(h, ix) {
-		ix.AlwaysKeys = []string{"runtime:" + rt + ":tool:" + ix.ToolName}
-	}
+	// the runtime's. Only for a runtime that asked for it in its hello (caps.keep_always), never in a space or on a card with fields.
+	// Local assistant_environment runtimes (such as Antigravity) get scoped tool:* keys matching Claude Code hooks (directory-scoped
+	// file tools, inspected non-inbox Bash, or tool:<name>); non-assistant cards that already carry a native always_label keep their
+	// native rule without widening. Other keep_always runtimes (e.g. DSH) keep always_label-gated runtime:<rt>:tool:<tool> keys.
+	inSpace := runtimeInSpace(h, ix) || identity.InSpace(sessionCwd) || identity.InSpace(execCwd) ||
+		(hasRow && (s.Space != "" || identity.InSpace(s.Cwd))) || n.isSpaceSession(assistantSid)
+	ix.AlwaysKeys = n.runtimeAlwaysKeys(h, rt, &ix, assistantSid, inSpace, isAsstSession)
 	ix.CreatedAt = now
 	timeout := nodeclient.HookTimeout
 	if p.TimeoutSeconds > 0 && time.Duration(p.TimeoutSeconds)*time.Second < timeout {
@@ -570,6 +565,101 @@ func (n *Node) runtimeAssistantCommandGate(ctx context.Context, ix proto.Interac
 		return proto.Resolution{Allow: proto.Bool(true)}, true, nil
 	}
 	return nil, false, nil
+}
+
+// runtimeAlwaysKeys computes hub-remembered AlwaysKeys for a runtime permission card.
+// Any runtime-supplied always_keys are ignored (caller replaces ix.AlwaysKeys with the return value).
+func (n *Node) runtimeAlwaysKeys(h *runtimeConn, rt string, ix *proto.Interaction, assistantSid string, inSpace, isAsstSession bool) []string {
+	h.mu.Lock()
+	keepAlways := h.hello.Caps.KeepAlways
+	h.mu.Unlock()
+	if !keepAlways || ix.Kind != proto.IxPermission {
+		return nil
+	}
+	toolName := strings.TrimSpace(ix.ToolName)
+	if h.assistantEnvironment() {
+		if isAsstSession {
+			// Assistant sessions never create native ACP allow_always grants; Persona's scoped AlwaysKeys govern.
+			ix.AlwaysLabel = ""
+		} else if strings.TrimSpace(ix.AlwaysLabel) != "" {
+			// Non-assistant session with a native allow_always label (#15785): preserve its native scope without widening.
+			return nil
+		}
+		if toolName == "" || len(ix.Fields) > 0 || inSpace {
+			return nil
+		}
+		return n.scopedRuntimeAlwaysKeys(toolName, ix.ToolInput, assistantSid)
+	}
+	if strings.TrimSpace(ix.AlwaysLabel) == "" || toolName == "" || len(ix.Fields) > 0 || inSpace {
+		return nil
+	}
+	if strings.EqualFold(toolName, "Bash") && n.assistantOrigin(assistantSid) == originInbox {
+		return nil
+	}
+	return []string{"runtime:" + rt + ":tool:" + toolName}
+}
+
+// scopedRuntimeAlwaysKeys builds Claude-compatible scoped session AlwaysKeys for a local assistant_environment runtime.
+// File tools require an absolute, non-truncated path (directory-scoped, never root or whole-tool); Bash requires a
+// parseable, non-empty, non-truncated command and never grants whole-tool tool:Bash on origin:inbox (#15292).
+func (n *Node) scopedRuntimeAlwaysKeys(toolName string, toolInput json.RawMessage, assistantSid string) []string {
+	if strings.EqualFold(toolName, "Bash") {
+		if n.assistantOrigin(assistantSid) == originInbox {
+			return nil
+		}
+		var bashIn struct {
+			Command string `json:"command"`
+		}
+		if json.Unmarshal(toolInput, &bashIn) != nil || strings.TrimSpace(bashIn.Command) == "" || truncatedCommandNoteRe.MatchString(bashIn.Command) {
+			return nil
+		}
+		return []string{"tool:Bash"}
+	}
+	switch toolName {
+	case "Read", "Edit", "Write", "MultiEdit", "NotebookEdit":
+		scope := runtimeFileRuleScope(toolInput, n.home)
+		if scope == "" {
+			return nil
+		}
+		tool := "Edit"
+		if toolName == "Read" {
+			tool = "Read"
+		}
+		return []string{"tool:" + tool + "(" + scope + ")"}
+	}
+	return []string{"tool:" + toolName}
+}
+
+// runtimeFileRuleScope extracts the directory rule ("//abs/dir/**") for a runtime file tool call.
+// Returns "" for missing, relative, truncated, or filesystem-root paths so callers fail closed.
+func runtimeFileRuleScope(input json.RawMessage, home string) string {
+	var a struct {
+		FilePath     string `json:"file_path"`
+		NotebookPath string `json:"notebook_path"`
+	}
+	if json.Unmarshal(input, &a) != nil {
+		return ""
+	}
+	p := strings.TrimSpace(a.FilePath)
+	if p == "" {
+		p = strings.TrimSpace(a.NotebookPath)
+	}
+	if p == "" || truncatedCommandNoteRe.MatchString(p) {
+		return ""
+	}
+	p = proto.ExpandHome(p, home)
+	if !filepath.IsAbs(p) {
+		return ""
+	}
+	dir := filepath.ToSlash(filepath.Dir(p))
+	if !strings.HasPrefix(dir, "/") {
+		dir = "/" + dir
+	}
+	trimmed := strings.TrimSuffix(dir, "/")
+	if trimmed == "" {
+		return ""
+	}
+	return "/" + trimmed + "/**"
 }
 
 // runtimeInSpace: the card's session is in a space (its cwd or the row's), where every write is confirmed

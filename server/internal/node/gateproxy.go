@@ -172,6 +172,25 @@ func (n *Node) gates() *gateProxy {
 	return p
 }
 
+// isSpaceSession reports whether the gate proxy already latched session as belonging to a space,
+// without lazily initializing a gate proxy listener when none exists yet.
+func (n *Node) isSpaceSession(session string) bool {
+	if session == "" {
+		return false
+	}
+	var gp *gateProxy
+	if k := n.keeper; k != nil {
+		k.mu.Lock()
+		gp = k.gp
+		k.mu.Unlock()
+	} else {
+		n.mu.Lock()
+		gp = n.gp
+		n.mu.Unlock()
+	}
+	return gp != nil && gp.spaceSession(session)
+}
+
 func (p *gateProxy) ensureListenerLocked() error {
 	if p.ln != nil {
 		return nil
