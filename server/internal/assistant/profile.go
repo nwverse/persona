@@ -1095,7 +1095,7 @@ func (s *Service) view(ctx context.Context, withArchived bool, space ...string) 
 		SupervisionBatchMinutes:      supervisionBatchMinutesOf(v),
 		AutoSupervisionMessages:      autoSupervisionOf(v),
 		AutoSupervisionMode:          supervisionModeOf(v),
-		SupervisionTriage:            v.SupervisionTriage != nil && *v.SupervisionTriage,
+		SupervisionTriage:            v.supervisionTriageOn(),
 		NextSuggestions:              v.NextSuggestions != nil && *v.NextSuggestions}
 	if d, ok := s.device(ctx, v.MachineID); ok {
 		out.Cwd = s.spaceCwd(ctx, d, sp)

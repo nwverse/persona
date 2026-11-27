@@ -1,6 +1,7 @@
 package assistant
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -16,7 +17,51 @@ import (
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
+	"github.com/nwverse/persona/server/internal/proto"
 )
+
+func TestSupervisionTriageSettingsRequiresOwnerApproval(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	s := newTestService(t, newFakeHub().withMachine())
+	call := func(args string) proto.ToolResult {
+		return s.Tool(ctx, ToolCall{Name: "persona_settings", Arguments: json.RawMessage(args), MachineID: "server", SessionID: "c1"})
+	}
+	read := func(want string) {
+		t.Helper()
+		got := call(`{"action":"get","key":"assistant.supervision_triage"}`)
+		if got.IsError || len(got.Content) == 0 || got.Content[0].Text != want {
+			t.Fatalf("get supervision triage = %+v, want %s", got, want)
+		}
+	}
+	read("false")
+	done := make(chan proto.ToolResult, 1)
+	go func() {
+		done <- call(`{"action":"set","key":"assistant.supervision_triage","value":true}`)
+	}()
+	card, ok := awaitCard(s)
+	if !ok || card.ToolName != "persona_settings" {
+		t.Fatalf("owner approval card = %+v", card)
+	}
+	read("false")
+	allow := true
+	raw, _ := json.Marshal(proto.Resolution{Allow: &allow})
+	if _, err := s.Action(ctx, Action{Op: "answer", InteractionID: card.ID, Answer: raw}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-done:
+		if got.IsError {
+			t.Fatalf("approved setting change = %+v", got)
+		}
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	read("true")
+	if !s.view(ctx, false).SupervisionTriage {
+		t.Fatal("approved change did not reach the Assistant settings view")
+	}
+}
 
 func TestRoutineSupervisionFiltersBeforeDelivery(t *testing.T) {
 	for _, state := range []string{reviewUserCheck, reviewParked, reviewNeedsUser, "recent owner input", "expired owner input"} {

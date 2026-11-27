@@ -589,6 +589,8 @@ deferral and its background model calls are opt-in. When enabled, Persona asks t
 An inconclusive, unavailable, or invalid result goes to the briefing. The model can choose only whether to wake the
 supervisor or save the signal for review. The manager records each verdict with the signal, destination, reason, and
 time in Postgres (`supervision_triage`). A delivery can retry without changing a recorded verdict.
+The settings tool uses the key `assistant.supervision_triage` with the Boolean value `true` or `false` and asks the
+owner to approve a change. The manager logs how many routine signals the deterministic rules suppress in a batch.
 
 The morning and evening briefings with facts enabled list saved follow-ups from the last 24 hours and all older
 follow-ups that have yet to appear in a briefing. The saved verdicts remain available after being listed. Turning off

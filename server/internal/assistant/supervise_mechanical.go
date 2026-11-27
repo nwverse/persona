@@ -23,6 +23,7 @@ func (s *Service) screenMechanicalSignals(ctx context.Context, list []superviseS
 	if len(quiet) > 0 {
 		s.turnsTold(ctx, quiet)
 		s.ackSupervisePending(quiet)
+		s.logf("supervise: %d routine signal(s) suppressed by task state or recent owner input", len(quiet))
 	}
 	actionable := map[string]bool{}
 	for _, g := range list {

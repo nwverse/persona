@@ -20,6 +20,15 @@ const (
 )
 
 const supervisionTriageTimeout = 8 * time.Second
+const supervisionTriageSettingKey = "assistant.supervision_triage"
+
+func (v Settings) supervisionTriageOn() bool {
+	return v.SupervisionTriage != nil && *v.SupervisionTriage
+}
+
+func (s *Service) supervisionTriageOn(ctx context.Context) bool {
+	return s.settings(ctx).supervisionTriageOn()
+}
 
 type supervisionDecisionStore interface {
 	SupervisionTriage(context.Context, []string) (map[string]string, error)
@@ -105,7 +114,7 @@ func supervisionTriageID(g superviseSignal) string {
 // whose verdict cannot be saved stay in the outbox. A deferred verdict takes the
 // place of a wake only after the briefing can read it.
 func (s *Service) screenModelSupervision(ctx context.Context, recipient string, entries []prompts.SuperviseEntry, signals []superviseSignal, now, prev time.Time) ([]prompts.SuperviseEntry, []superviseSignal) {
-	if v := s.settings(ctx).SupervisionTriage; v == nil || !*v {
+	if !s.supervisionTriageOn(ctx) {
 		return entries, signals
 	}
 	var ids []string
