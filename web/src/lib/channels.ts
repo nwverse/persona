@@ -76,7 +76,7 @@ export interface Channel {
 }
 
 export interface ChannelTargetOverride {
-  mode: "topics" | "threads" | (string & {});
+  mode: "topics" | "groups_and_topics" | "threads" | (string & {});
 }
 
 /** GET /api/v1/channels/{id} (channel.Detail). */

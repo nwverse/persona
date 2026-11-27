@@ -44,7 +44,6 @@ import { classifyConnection } from "../../lib/node-health";
 import { SCREEN_PAGE, screenPath, showsScreen } from "../../lib/computer";
 import { standaloneOn, useModuleStates } from "../../core/module-host";
 import { osFamily } from "../../lib/machine-capabilities";
-import { openPanel } from "../../lib/panel";
 import { MachineToolView, MachineViewLinks } from "./MachineViews";
 import type { MachineSubview } from "../../lib/machine-route";
 import { useScrollMemory } from "../../lib/scroll-memory";
@@ -303,48 +302,41 @@ export function MachineDetail({ mid, subview = "work", mode, onToggleSidebar }: 
     >
       {/* the computer */}
       <section className="overflow-hidden rounded-card bg-surface shadow-card" style={{ animation: `fade-up 420ms ${EASE} both` }}>
-        <div className="flex items-start gap-3 px-4 py-3.5">
-          <span className={cx("flex size-10 shrink-0 items-center justify-center rounded-[10px]", online ? "bg-field text-ink-2" : "bg-inset text-ink-3")}>
-            <Icon name="machine" size={18} />
-          </span>
-          <div className="min-w-0 flex-1">
-            {renaming && <RenameMachine key={m.id} m={m} onDone={() => setRenaming(false)} />}
-            <div className={cx("flex flex-wrap items-center gap-x-2 gap-y-1", renaming && "hidden")}>
-              <h2 className="truncate text-[15px] font-semibold text-ink">{m.name}</h2>
-              {canRename && <IconButton icon="write" label={t("machines-machinedetail.rename")} size={24} iconSize={12} onClick={() => setRenaming(true)} />}
-              <span className={cx("inline-flex h-5 items-center gap-1 whitespace-nowrap rounded-full px-1.5 text-[11px] font-medium", online ? "bg-green-tint text-green" : "bg-field text-ink-3")}>
-                <span className={cx("size-1.5 rounded-full", online ? "bg-green" : "bg-ink-3")} />
-                {online ? t("machines-machinedetail.online") : t("machines-machinedetail.offline")}
-              </span>
-              {hub && (
-                <span className="inline-flex h-5 items-center gap-1 whitespace-nowrap rounded-full bg-inset px-1.5 text-[11px] font-medium text-ink-2 shadow-hairline" title={t("machines-machinedetail.belongs_to_hub", { hub })}>
-                  <Icon name="hub" size={11} />
-                  {hub}
+        <div className="flex flex-wrap items-center gap-3 px-4 py-3.5">
+          <div className="flex min-w-0 flex-1 basis-60 items-start gap-3">
+            <span className={cx("flex size-10 shrink-0 items-center justify-center rounded-[10px]", online ? "bg-field text-ink-2" : "bg-inset text-ink-3")}>
+              <Icon name="machine" size={18} />
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <h2 className="truncate text-[15px] font-semibold text-ink">{m.name}</h2>
+                <span className={cx("inline-flex h-5 items-center gap-1 whitespace-nowrap rounded-full px-1.5 text-[11px] font-medium", online ? "bg-green-tint text-green" : "bg-field text-ink-3")}>
+                  <span className={cx("size-1.5 rounded-full", online ? "bg-green" : "bg-ink-3")} />
+                  {online ? t("machines-machinedetail.online") : t("machines-machinedetail.offline")}
                 </span>
-              )}
+                {hub && (
+                  <span className="inline-flex h-5 items-center gap-1 whitespace-nowrap rounded-full bg-inset px-1.5 text-[11px] font-medium text-ink-2 shadow-hairline" title={t("machines-machinedetail.belongs_to_hub", { hub })}>
+                    <Icon name="hub" size={11} />
+                    {hub}
+                  </span>
+                )}
+              </div>
+              <p className="mt-0.5 truncate text-[12px] text-ink-3" title={systemLine(system, m)}>
+                {systemLine(system, m)}
+              </p>
+              {route && <p className="mt-0.5 truncate text-[11.5px] text-ink-3" title={t("machines-machinedetail.route_hint")}>{t("machines-machinedetail.route", { route })}</p>}
             </div>
-            <p className="mt-0.5 truncate text-[12px] text-ink-3" title={systemLine(system, m)}>
-              {systemLine(system, m)}
-            </p>
-            {route && <p className="mt-0.5 truncate text-[11.5px] text-ink-3" title={t("machines-machinedetail.route_hint")}>{t("machines-machinedetail.route", { route })}</p>}
           </div>
-          {/* with several managers: give it to another one (a linked hub's computer is its own hub's) */}
-          <MoveToManager machineId={m.id} manager={m.manager} movable={m.kind !== "hub" && ownHub} />
+          {online && <div className="flex flex-wrap items-center gap-2">
+            <Button tone="primary" className="[@media(pointer:coarse)]:min-h-11" icon="plus" onClick={() => openNewAgent({ machineId: mid })}>{t("space-page.new_agent")}</Button>
+            {panesOn && <Button className="[@media(pointer:coarse)]:min-h-11" icon="terminal" onClick={() => openMachineTerminal({ mid })}>{t("sidebar.nav_terminal")}</Button>}
+          </div>}
           {!online && !expectedDisconnect && !goneWith && (
             <Button tone="secondary" icon="retry" busy={reconnecting} onClick={() => void reconnect()}>
               {reconnecting ? t("machines-machinedetail.connecting") : t("machines.reconnect")}
             </Button>
           )}
         </div>
-        {work && online && <div className="flex flex-wrap items-center gap-2 px-4 pb-3">
-          <Button tone="primary" className="min-h-11" icon="plus" onClick={() => openNewAgent({ machineId: mid })}>{t("space-page.new_agent")}</Button>
-          {panesOn && <Button className="min-h-11" icon="terminal" onClick={() => openMachineTerminal({ mid })}>{t("sidebar.nav_terminal")}</Button>}
-          <Button className="min-h-11" icon="folder" onClick={() => openPanel({ kind: "files", mid, sid: "", cwd: "~" })} title={t("machines-machinedetail.files_hint")}>{t("machines.home_folder")}</Button>
-        </div>}
-        {work && disk && <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-line px-4 py-1">
-          <span className="inline-flex items-center gap-2 text-sm font-medium text-ink"><Icon name="archive" size={14} className="text-orange" />{alertLabel(disk)}</span>
-          <Button tone="quiet" className="min-h-11" onClick={() => openUsageMap(mid)}>{t("machines-usagemap.reclaim_open")}</Button>
-        </div>}
         {!online && !expectedDisconnect && (
           <div className="mx-4 mb-3.5 rounded-[8px] bg-red-tint px-2.5 py-1.5 text-[12px] text-red" data-offline-box>
             {/* The plain reason and next step lead when the error text says why; the raw error then goes last, small and
@@ -361,10 +353,18 @@ export function MachineDetail({ mid, subview = "work", mode, onToggleSidebar }: 
           </div>
         )}
         {online && m.error && <p className="mx-4 mb-3.5 rounded-[8px] bg-red-tint px-2.5 py-1.5 text-[12px] text-red">{m.error}</p>}
-        {deployment?.visible && <MachineDeploy machine={m} hostedManagers={hostedManagers} className="mb-3.5" onClose={NOOP} />}
       </section>
-
       <MachineViewLinks mid={mid} view={subview} />
+      {deployment?.visible && !management && <div role="status" className="flex flex-wrap items-center gap-2 rounded-card bg-surface px-4 py-2 text-label text-orange shadow-card">
+        <span>{deployment.message} {deployment.error}</span>
+        <a className="text-accent-ink" href={href({ name: "machine", mid, subview: "management" })}
+          onClick={e => onLinkClick(e, { name: "machine", mid, subview: "management" })}>{t("machines.view_management")}</a>
+      </div>}
+      {work && disk && <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-card bg-surface shadow-card px-4 py-1">
+        <span className="inline-flex items-center gap-2 text-sm font-medium text-ink"><Icon name="archive" size={14} className="text-orange" />{alertLabel(disk)}</span>
+        <Button tone="quiet" className="min-h-11" onClick={() => openUsageMap(mid)}>{t("machines-usagemap.reclaim_open")}</Button>
+      </div>}
+
       {work && <>
         {waiting.length > 0 && <section>
           <Heading title={t("lib-state-labels.needs_you")} count={waiting.length} />
@@ -488,7 +488,7 @@ export function MachineDetail({ mid, subview = "work", mode, onToggleSidebar }: 
       </>}
       {subview === "diagnostics" && <>
         {/* what this computer can do for Persona, from the node's self-check (docs/server/machines.md "Doctor: what this computer can do") */}
-        <NodeHealth machine={m} heading={<Heading title={t("node-health.title")} />} />
+        <NodeHealth machine={m} heading={null} />
 
         {/* system */}
         <section>
@@ -509,6 +509,12 @@ export function MachineDetail({ mid, subview = "work", mode, onToggleSidebar }: 
         <section>
           <Heading title={t("machines-machinedetail.configuration")} />
           <EngineSection key={m.id} machine={m} heading={<h3 className="mb-2 flex items-center gap-2 text-sm font-medium text-ink"><Icon name="gear" size={14} />{t("machines-machinedetail.engine")}</h3>} />
+          <div className="my-3 flex flex-wrap items-center gap-2">
+            {canRename && (renaming ? <RenameMachine m={m} onDone={() => setRenaming(false)} /> :
+              <Button icon="write" onClick={() => setRenaming(true)}>{t("machines-machinedetail.rename")}</Button>)}
+            <MoveToManager machineId={m.id} manager={m.manager} movable={m.kind !== "hub" && ownHub} />
+          </div>
+          {deployment?.visible && <MachineDeploy machine={m} hostedManagers={hostedManagers} className="mb-3.5" onClose={NOOP} />}
           <div className="my-3"><BotmuxSwitch key={m.id} machineID={m.id} /></div>
           {/* switching it to Persona Link (#10662), on this hub's own computer (a linked hub's switches there); while one
               runs, its disconnect is expected (machineDeployment) */}
@@ -564,7 +570,7 @@ export function MachineDetail({ mid, subview = "work", mode, onToggleSidebar }: 
         {/* the extensions' sections (docs/extensions/extensions.md "UI slots" machine_section), after the machine's own */}
         <MachineExtensionSections mid={mid} heading={(title, right) => <Heading title={title} right={right} />} />
       </>}
-      <MachineToolView machine={m} view={subview} mode={mode} />
+      <MachineToolView machine={m} view={subview} mode={mode} path={address.name === "machine" && address.mid === mid ? address.path : undefined} />
     </Page>
   );
 }
@@ -578,7 +584,7 @@ function WorkspaceActions({ mid, cwd, workspace, panesOn, online }: {
   return <div className="flex shrink-0 items-center">
     <IconButton icon="plus" size={44} label={t("space-page.new_agent")} disabled={disabled}
       onClick={() => openNewAgent(workspace ? boardAgentPreset(workspace) : { machineId: mid, cwd })} />
-    <IconButton icon="folder" size={44} label={t("machines-machinedetail.files")} disabled={disabled} onClick={() => openPanel({ kind: "files", mid, cwd, sid: "" })} />
+    <IconButton icon="folder" size={44} label={t("machines-machinedetail.files")} disabled={disabled} onClick={() => navigate({ name: "machine", mid, subview: "files", path: cwd })} />
     {panesOn && <IconButton icon="terminal" size={44} label={t("sidebar.nav_terminal")} disabled={disabled} onClick={() => openMachineTerminal({ mid, cwd, ...binding })} />}
   </div>;
 }

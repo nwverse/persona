@@ -1,4 +1,8 @@
 {
+  "workers_accepted": "All {count} workers were accepted. Their leader has stopped. Review the parent and its recorded decisions for the remaining work.",
+  "investigation_handoff_open": "Complete or reassign the investigation finding before closing this follow-up: {finding}",
+  "investigation_review_required": "Review the current investigation findings before parking or closing this task.",
+  "investigation_findings_open": "Give these investigation findings a follow-up, owner decision, or completion evidence first: {findings}",
   "handoff_wait": "Waiting for {task} to check {check}",
   "decision_review_changed": "This decision has changed or was already handled. Refresh before trying again.",
   "decision_review_fields": "This request is missing a valid review time or Undo receipt.",
@@ -121,5 +125,7 @@
   "placement_hit_directory_unknown": "could not verify directory",
   "placement_hit_launcher_missing": "launcher {launcher} not installed",
   "placement_hit_launcher_unhealthy": "launcher {launcher} unhealthy ({kind})",
-  "placement_hit_no_resources": "resource metrics unavailable"
+  "placement_hit_no_resources": "resource metrics unavailable",
+  "inbox_link_removed": "The Inbox topic changed. Its automatic link was removed; the task can still start.",
+  "inbox_candidates": "Possible Inbox items: {items}. No automatic link was made; confirm the source before linking."
 }

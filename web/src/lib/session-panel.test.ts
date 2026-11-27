@@ -9,7 +9,7 @@ import { ApiError } from "./api";
 import type { LauncherModels } from "./launcher-models";
 import { rowSetup, shownEffort } from "./model-panel";
 import { pendingView, switchRefused, type ModelList } from "./session-models";
-import { pickPlan, sessionPanel, type PanelOptions } from "./session-panel";
+import { pickPlan, sessionPanel, speedStep, type PanelOptions } from "./session-panel";
 import type { Launcher, Session } from "./types";
 
 const ALL = ["low", "medium", "high", "xhigh", "max"];
@@ -39,6 +39,38 @@ const session = (x: Partial<Session> = {}): Session =>
   ({ machine_id: "mac", session_id: "s1", title: "t", cwd: "/code", status: "idle", state: "idle", agent: "claude", launcher: "claude", model: "claude-opus-5-5", effort: "high", ...x }) as Session;
 const on: PanelOptions = { switching: true };
 const provider = (s: Session, id: string, o: PanelOptions = on) => sessionPanel(s, launchers, listOf, o).providers.find((p) => p.id === id)!;
+
+describe("live session speed", () => {
+  const fast = { id: "priority", name: "Fast" };
+  const ultra = { id: "ultrafast", name: "Ultrafast" };
+
+  it("uses every advertised tier on the running Codex model in speed order", () => {
+    const s = session({
+      agent: "codex", launcher: "cx", pane_id: "pane", model: "gpt-5.5", effort: "high",
+      service_tier: "ultrafast", service_tiers: [ultra, fast, { id: "flex", name: "Flex" }],
+    });
+    const { providers, state } = sessionPanel(s, launchers, listOf);
+    expect(state.current?.speed).toBe("ultrafast");
+    expect(providers.find((p) => p.id === "cx")?.models?.[0].speeds?.map((choice) => choice.id))
+      .toEqual(["standard", "fast", "ultrafast", "flex"]);
+    expect(pickPlan(s, { ...state.current!, speed: "fast" }, raw)).toEqual([{ service_tier: "priority" }]);
+    expect(speedStep(s, "flex")).toEqual({ service_tier: "flex" });
+    expect(speedStep(s, "ultrafast")).toBeUndefined();
+    expect(speedStep(s, "unadvertised", true)).toBeUndefined();
+  });
+
+  it("uses the compact pair for Claude and legacy hubs, and hides the control without advertised choices", () => {
+    const s = session({ service_tier: "fast", service_tiers: [{ id: "fast", name: "Fast" }] });
+    const { state } = sessionPanel(s, launchers, listOf);
+    expect(state.current?.speed).toBe("fast");
+    expect(provider(s, "claude").models?.find((m) => m.id === "opus")?.speeds?.map((choice) => choice.id))
+      .toEqual(["standard", "fast"]);
+    expect(speedStep(s, "standard")).toEqual({ service_tier: "default" });
+    expect(speedStep({ ...s, service_tier: "default" }, "fast")).toEqual({ service_tier: "fast" });
+    expect(speedStep({ ...s, state: "offline" }, "standard")).toBeUndefined();
+    expect(provider(session(), "claude").models?.every((m) => !m.speeds)).toBe(true);
+  });
+});
 
 describe("actual Codex session effort and control availability", () => {
   const live = session({ agent: "codex", source_kind: "codex_app_server", launcher: "cx", model: "gpt-5.5",
@@ -291,9 +323,9 @@ describe("a launcher of the other engine", () => {
     // reopened, the panel stands on what runs now
     expect(state.current).toEqual({ provider: "claude", model: "opus", effort: "high" });
     const withEffort: Record<string, ModelList> = { ...read, cx: { list: { agent: "codex", models: [{ id: "gpt-5.5", name: "GPT-5.5", default: true, default_effort: "medium" }] } } };
-    expect(pendingView(waiting, (n) => withEffort[n] ?? {})).toEqual({ engine: "codex", provider: "cx", model: "5.5", effort: "medium" });
+    expect(pendingView(waiting, (n) => withEffort[n] ?? {})).toEqual({ engine: "codex", provider: "cx", model: "GPT-5.5", effort: "medium" });
     // no effort of Claude Code's carried over when the model has none to say
-    expect(pendingView(waiting, listOf)).toEqual({ engine: "codex", provider: "cx", model: "5.5" });
+    expect(pendingView(waiting, listOf)).toEqual({ engine: "codex", provider: "cx", model: "GPT-5.5" });
     expect(pendingView(session({ pending_switch: { launcher: "cx", agent: "codex", effort: "low" } }), listOf)!.effort).toBe("low");
   });
 

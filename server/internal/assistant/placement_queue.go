@@ -291,7 +291,7 @@ func (s *Service) machineMatchesPlacementConstraintsWith(ctx context.Context, t 
 	return "", nil, nil
 }
 
-func (s *Service) devicePassesPlacementHardConstraints(ctx context.Context, pt PlanTask, d Device, allowHubFallback bool, pl *placement) bool {
+func (s *Service) devicePassesPlacementHardConstraints(ctx context.Context, pt PlanTask, d Device, allowHubFallback, checkPresence bool, pl *placement) (eligible, structurallyEligible bool) {
 	checkCtx := ctx
 	if pl == nil {
 		checkCtx = context.WithValue(ctx, placementKey{}, (*placement)(nil))
@@ -300,46 +300,60 @@ func (s *Service) devicePassesPlacementHardConstraints(ctx context.Context, pt P
 	}
 	if err := s.leaderOnWorkMachine(&pt, d); err != nil {
 		pl.hit(d.ID, "leader_work_machine", nil)
-		return false
+		return false, false
 	}
 	if hitKey, hitArgs, err := s.machineMatchesPlacementConstraintsWith(checkCtx, pt, d, allowHubFallback); err != nil {
 		pl.hit(d.ID, hitKey, hitArgs)
-		return false
+		return false, false
 	}
 	if strings.HasPrefix(pt.Cwd, "~") && d.Home == "" {
 		pl.hit(d.ID, "directory_missing", nil)
-		return false
+		return false, false
 	}
 	dir := proto.ExpandHome(pt.Cwd, d.Home)
 	if assistantWorkspace(d, dir) {
 		pl.hit(d.ID, "assistant_workspace", nil)
-		return false
+		return false, false
 	}
-	if pt.Launcher != "" {
-		resolved := s.startLauncher(checkCtx, pt.Launcher)
-		if !s.launcherOn(checkCtx, d.ID, resolved) {
-			pl.hit(d.ID, "launcher_missing", i18n.Args{"launcher": resolved})
-			return false
+	// Resolve the effective launcher on this computer even when the task names no launcher: a default- or
+	// tier-launcher task otherwise skips both checks here and gets rejected by assignPendingPlacement on every
+	// retry, livelocking until the 30m deadline (#15953).
+	resolved, err := s.fallbackTaskLauncher(checkCtx, pt, d.ID)
+	if err != nil {
+		var line *i18n.Message
+		if errors.As(err, &line) {
+			pl.violation(d.ID, line)
+		} else {
+			pl.hit(d.ID, "tier_unavailable", i18n.Args{"tier": pt.Tier})
 		}
-		if h, bad := s.launcherUnusable(checkCtx, d.ID, resolved); bad {
-			pl.hit(d.ID, "launcher_unhealthy", i18n.Args{"launcher": resolved, "kind": cmp.Or(h.Kind, "unhealthy")})
-			return false
-		}
+		return false, false
+	}
+	if checkPresence && !s.launcherOn(checkCtx, d.ID, resolved) {
+		pl.hit(d.ID, "launcher_missing", i18n.Args{"launcher": resolved})
+		return false, false
 	}
 	if dir != "" && !pt.backendWorkspace() && !s.taskDirectoryExists(checkCtx, d.ID, dir) {
-		return false
+		return false, false
 	}
-	return true
+	// The same on-the-spot probe assignPendingPlacement runs: a stale failing record clears here too instead
+	// of requeuing a task a healthy computer could start. A transient launcher failure leaves the computer
+	// structurally eligible so online non-hub workers still protect the hub from unintended fallback.
+	if h, bad := s.launcherUnusableNow(checkCtx, d.ID, resolved); bad {
+		pl.hit(d.ID, "launcher_unhealthy", i18n.Args{"launcher": resolved, "kind": cmp.Or(h.Kind, "unhealthy")})
+		return false, true
+	}
+	return true, true
 }
 
 // hasOnlineNonHubEligibleForHardConstraints reports whether at least one reachable non-hub computer satisfies
 // pt's non-capacity hard constraints. When false, automatic placement may fall back to the hub computer.
 func (s *Service) hasOnlineNonHubEligibleForHardConstraints(ctx context.Context, pt PlanTask) bool {
+	checkPresence := pt.Launcher != "" || pt.Tier != ""
 	for _, d := range s.devices(ctx) {
 		if !d.Reachable || s.isHubDevice(ctx, d) {
 			continue
 		}
-		if s.devicePassesPlacementHardConstraints(ctx, pt, d, false, nil) {
+		if _, structural := s.devicePassesPlacementHardConstraints(ctx, pt, d, false, checkPresence, nil); structural {
 			return true
 		}
 	}
@@ -701,6 +715,25 @@ func (s *Service) sweepPendingPlacement(ctx context.Context) time.Duration {
 	return nextWake
 }
 
+// fallbackTaskLauncher is the launcher a deferred task would start on machine: the task's own launcher when it names
+// one, else the candidate its tier picks on that machine (the same per-machine pick applyStartTier runs at dispatch),
+// else the configured default (model settings' agent.new, then claude). The fallback's candidate filter must judge
+// this launcher so a task without an explicit launcher never gets recommended a computer whose resolved launcher is
+// missing or unhealthy, which would reject the assignment every 30s until the 30m queue deadline.
+func (s *Service) fallbackTaskLauncher(ctx context.Context, pt PlanTask, machine string) (string, error) {
+	if pt.Launcher != "" {
+		return s.startLauncher(ctx, pt.Launcher), nil
+	}
+	if pt.Tier != "" {
+		pick, err := s.pickTierCandidate(ctx, pt.Tier, tierFacts{Machine: machine})
+		if err != nil {
+			return "", err
+		}
+		return s.startLauncher(ctx, pick.Tier.Launcher), nil
+	}
+	return s.startLauncher(ctx, ""), nil
+}
+
 func (s *Service) runPlacementFallback(ctx context.Context, p *TaskPlan, idx int, pt PlanTask, version int, now time.Time) {
 	s.placementSched.mu.Lock()
 	if s.placementSched.inFlight == nil {
@@ -723,28 +756,48 @@ func (s *Service) runPlacementFallback(ctx context.Context, p *TaskPlan, idx int
 	pctx := context.WithValue(ctx, placementKey{}, pl)
 
 	nonHubEligible := false
-	alt, ok := s.recommendMachine(pctx, "", func(d Device) bool {
-		if !s.devicePassesPlacementHardConstraints(pctx, pt, d, false, pl) {
-			return false
+	// Candidate filtering must match what assignPendingPlacement enforces. checkPresence is only relaxed on a second
+	// pass for tasks without any launcher or tier: fitLauncher swaps a default launcher a computer lacks instead of
+	// refusing, so a missing default alone must not starve the task when no computer offers it. A failing launcher is
+	// always a refusal there and stays one here.
+	suitable := func(checkPresence bool) func(Device) bool {
+		return func(d Device) bool {
+			eligible, structural := s.devicePassesPlacementHardConstraints(pctx, pt, d, false, checkPresence, pl)
+			if structural && !s.isHubDevice(pctx, d) {
+				nonHubEligible = true
+			}
+			return eligible
 		}
-		if !s.isHubDevice(pctx, d) {
-			nonHubEligible = true
-		}
-		return true
-	})
+	}
+	alt, ok := s.recommendMachine(pctx, "", suitable(true))
+	if !ok && pt.Launcher == "" && pt.Tier == "" {
+		// No computer offers the resolved default: keep the pre-#15953 behavior and let the assignment swap to a
+		// launcher the chosen computer has rather than failing at the queue deadline. Health stays enforced.
+		alt, ok = s.recommendMachine(pctx, "", suitable(false))
+	}
 
 	hubFallback := false
 	requireHub := pt.PlacementConstraints != nil && pt.PlacementConstraints.RequireHub
 	if !ok && !nonHubEligible && !requireHub {
-		hubPl := newPlacement("auto", "enforce")
-		hubPl.TaskID = pt.TodoID
-		hubCtx := context.WithValue(ctx, placementKey{}, hubPl)
-		hubAlt, hubOK := s.recommendMachine(hubCtx, "", func(d Device) bool {
-			if !s.isHubDevice(hubCtx, d) {
-				return false
+		tryHub := func(checkPresence bool) (*placement, Device, bool) {
+			hubPl := newPlacement("auto", "enforce")
+			hubPl.TaskID = pt.TodoID
+			hubCtx := context.WithValue(ctx, placementKey{}, hubPl)
+			hubAlt, hubOK := s.recommendMachine(hubCtx, "", func(d Device) bool {
+				if !s.isHubDevice(hubCtx, d) {
+					return false
+				}
+				eligible, _ := s.devicePassesPlacementHardConstraints(hubCtx, pt, d, true, checkPresence, hubPl)
+				return eligible
+			})
+			return hubPl, hubAlt, hubOK
+		}
+		hubPl, hubAlt, hubOK := tryHub(true)
+		if !hubOK && pt.Launcher == "" && pt.Tier == "" {
+			if swapPl, swapAlt, swapOK := tryHub(false); swapOK {
+				hubPl, hubAlt, hubOK = swapPl, swapAlt, true
 			}
-			return s.devicePassesPlacementHardConstraints(hubCtx, pt, d, true, hubPl)
-		})
+		}
 		for _, c := range hubPl.Candidates {
 			if d, found := s.device(ctx, c.Machine); found && s.isHubDevice(ctx, d) {
 				replacePlacementCandidate(pl, c)
@@ -940,19 +993,24 @@ func (s *Service) assignPendingPlacementWith(
 			if err := startModesRefused(cmp.Or(candidate.Launcher, resolvedLauncher), fit.agent, asked, own.effort); err != nil {
 				return nil, &placementHTTPError{status: http.StatusUnprocessableEntity, code: "launcher_unavailable", err: err}
 			}
-			candidate.Effort = ""
 			if asked != "" {
 				candidate.Permission = ""
 			}
+		}
+		if !startTakesEffort(fit.agent) {
+			candidate.Effort = ""
 		}
 	}
 	if candidate.Permission == "" && takesModes {
 		candidate.Permission = s.taskPermission(ctx, m.ID, nil)
 	}
-	if r, bad := s.launcherUnusableNow(ctx, m.ID, s.startLauncher(ctx, cmp.Or(candidate.Launcher, resolvedLauncher))); bad {
+	// Name the resolved launcher, not the task's possibly empty field: a default-launcher task must never format a
+	// blank launcher in fixed_launcher_unhealthy.
+	checkedLauncher := s.startLauncher(ctx, cmp.Or(candidate.Launcher, resolvedLauncher))
+	if r, bad := s.launcherUnusableNow(ctx, m.ID, checkedLauncher); bad {
 		return nil, &placementHTTPError{status: http.StatusUnprocessableEntity, code: "launcher_unavailable",
 			err: i18n.Err("assistant-tasks.fixed_launcher_unhealthy", i18n.Args{
-				"machine": m.ID, "launcher": cmp.Or(candidate.Launcher, resolvedLauncher), "reason": r.Error,
+				"machine": m.ID, "launcher": checkedLauncher, "reason": r.Error,
 			})}
 	}
 	if err := s.resolveTaskWorkspace(ctx, &candidate); err != nil {
