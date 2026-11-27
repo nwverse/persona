@@ -146,6 +146,12 @@ func closeoutDisproved(c proto.Closeout) bool {
 // closeoutDelivery is the delivery a closeout states, for a reply with no delivery line of its own (delivery.go):
 // the same claim in the other form. ok false when the closeout says nothing of merging or deploying and is not done.
 func closeoutDelivery(c proto.Closeout, artifacts []proto.WorkArtifact) (d TodoDelivery, ok bool) {
+	if c.Delivery == deliveryOff && !hasDefaultOffGate(c.Missing+"\n"+c.Waiting) {
+		c.Delivery = ""
+		if c.Merged == "" && c.Deployed == "" {
+			c.Delivery = deliveryMerged
+		}
+	}
 	switch {
 	case c.Delivery == deliveryLive || c.Delivery == deliveryPR || c.Delivery == deliveryMerged || c.Delivery == deliveryOff || c.Delivery == deliveryNone:
 		d.State = c.Delivery

@@ -243,14 +243,14 @@ export class DemoRepository extends HubRepository {
     if (recentItems.length >= 2) {
       this.starredData.push(demoRecord(
         ['id', 'machine_id', 'session_id', 'item_id', 'conversation', 'role', 'title', 'speaker', 'written_at', 'starred_at', 'text'],
-        ['demo-star-1', DEMO_MACHINE, 'demo-recent-review', Wire.text(recentItems[1], 'id'), 'assistant',
+        ['demo-star-1', DEMO_MACHINE, 'demo-recent-review', Wire.text(recentItems[1], 'id'), 'assistant', 'assistant',
           'Release checklist', 'Persona', '2026-11-27T08:40:00Z', '2026-11-27T08:45:00Z', Wire.text(recentItems[1], 'text')]
       ));
     }
     if (reviewItems.length >= 4) {
       this.starredData.push(demoRecord(
         ['id', 'machine_id', 'session_id', 'item_id', 'conversation', 'role', 'title', 'speaker', 'written_at', 'starred_at', 'text'],
-        ['demo-star-2', DEMO_MACHINE, 'demo-agent-review', Wire.text(reviewItems[3], 'id'), 'agent',
+        ['demo-star-2', DEMO_MACHINE, 'demo-agent-review', Wire.text(reviewItems[3], 'id'), 'agent', 'assistant',
           'Review release checks', 'Claude', '2026-11-27T08:50:00Z', '2026-11-27T08:52:00Z', Wire.text(reviewItems[3], 'text')]
       ));
     }
@@ -266,23 +266,59 @@ export class DemoRepository extends HubRepository {
         [demoRecord(
           ['machine_id', 'session_id', 'title', 'cwd', 'agent', 'source', 'linked_at'],
           [DEMO_MACHINE, 'demo-agent-review', 'Review release checks', '/demo/ReleaseDesk', '', 'manual', '2026-11-11T09:00:00Z'])], []]),
-      demoRecord(['id', 'manager', 'title', 'notes', 'state', 'status', 'origin', 'created_at', 'updated_at', 'agents', 'spaces'], [
+      demoRecord(['id', 'manager', 'title', 'notes', 'state', 'status', 'origin', 'created_at', 'updated_at', 'agents', 'spaces', 'pr_url', 'wait'], [
         'demo-todo-docs', DEMO_MANAGER, 'Prepare release notes', 'Collect the sample changes in one concise note.',
         'working', 'working', this.mainId, '2026-11-10T09:00:00Z', '2026-11-27T08:55:00Z', [demoRecord(
           ['machine_id', 'session_id', 'title', 'cwd', 'agent', 'source', 'linked_at'],
-          [DEMO_MACHINE, 'demo-agent-changelog', 'Prepare the changelog', '/demo/ReleaseDesk', 'codex', 'manual', '2026-11-27T08:55:00Z'])], []]),
+          [DEMO_MACHINE, 'demo-agent-changelog', 'Prepare the changelog', '/demo/ReleaseDesk', 'codex', 'manual', '2026-11-27T08:55:00Z'])], [],
+        'https://github.com/example/releasedesk/pull/142',
+        demoRecord(['kind', 'waiting_on', 'reason', 'url', 'pr_blockers', 'since'], [
+          'pr_merge', 'PR #142', 'Update HarmonyOS release notes', 'https://github.com/example/releasedesk/pull/142',
+          ['review_required', 'checks_pending'], '2026-11-27T08:00:00Z'
+        ])]),
       demoRecord(['id', 'manager', 'title', 'notes', 'state', 'status', 'origin', 'done_at', 'created_at', 'updated_at', 'agents', 'spaces'], [
         'demo-todo-done', DEMO_MANAGER, 'Check the example project', 'This sample task is complete.', 'done', 'done',
         this.mainId, '2026-11-10T10:00:00Z', '2026-11-09T10:00:00Z', '2026-11-10T10:00:00Z', [], []])
     ];
+    const demoChatNotes = this.knowledgeEntry('chats', 'demo-chat-notes', 'Planning discussion', 'A synthetic discussion about the sample release.', 'The team agreed to review the plan before preparing the release notes.', ['demo', 'planning']);
+    demoChatNotes['recent'] = '## 2026-11-11\n- 08:15 Mina Example: Can someone review the sample release checklist?\n- 08:20 Demo user: Checking now.';
+    const demoRecordingNotes = this.knowledgeEntry('recordings', 'demo-recording-notes', 'Planning notes', 'A synthetic recording entry.', 'No audio file or personal recording is stored in the local demo.', ['demo', 'planning']);
+    demoRecordingNotes['minutes'] = demoRecord(['version', 'markdown', 'actions', 'debates'], [
+      1,
+      '### Summary\nReviewed the release checklist and agreed on staged rollout timing.',
+      [demoRecord(['id', 'what'], ['demo-action-1', 'Confirm release checklist sign-off'])],
+      [
+        demoRecord(['question', 'topic', 'status', 'at', 'positions', 'outcome'], [
+          'Ship Token Usage and Workspace parity together?',
+          'Release scope',
+          'settled',
+          140,
+          [
+            demoRecord(['stance', 'at', 'who'], ['Ship together in one parity pack', 142, 'Mina']),
+            demoRecord(['stance', 'at', 'who'], ['Split across two minor builds', 188, 'Alex'])
+          ],
+          demoRecord(['text', 'at', 'decision'], ['Ship together in one parity pack after full verification', 240, 0])
+        ]),
+        demoRecord(['question', 'topic', 'status', 'at', 'positions'], [
+          'Default heatmap window on compact phones',
+          'Usage UI',
+          'open',
+          320,
+          [
+            demoRecord(['stance', 'at', 'who'], ['Show 12 weeks for full trend context', 325, 'Alex']),
+            demoRecord(['stance', 'at', 'who'], ['Show 8 weeks on narrow screens', 360, 'Mina'])
+          ]
+        ])
+      ]
+    ]);
     this.knowledgeData = [
       this.knowledgeEntry('projects', 'demo-project-release', 'Release Desk', 'A sample project for trying the local workspace.', 'The Release Desk example keeps the checklist, release notes, and follow-up tasks together.', ['demo', 'release'], demoRecord(['kind', 'status', 'dirs'], ['short', 'active', [DEMO_MACHINE + ':/demo/ReleaseDesk']])),
       this.knowledgeEntry('docs', 'demo-doc-release', 'Release checklist', 'A short checklist for the example release.', '1. Review the plan.\n2. Check the changelog.\n3. Close or reopen the follow-up task.', ['demo', 'checklist']),
-      this.knowledgeEntry('chats', 'demo-chat-notes', 'Planning discussion', 'A synthetic discussion about the sample release.', 'The team agreed to review the plan before preparing the release notes.', ['demo', 'planning']),
+      demoChatNotes,
       this.knowledgeEntry('people', 'demo-person-reviewer', 'Alex Example', 'A sample reviewer in the demo workspace.', 'This contact is synthetic and is not connected to a real account.', ['demo', 'review']),
       this.knowledgeEntry('meetings', 'demo-meeting-kickoff', 'Release kickoff', 'A sample meeting record.', 'Review scope, identify risks, and agree on the next step.', ['demo', 'release']),
       this.knowledgeEntry('events', 'demo-event-check', 'Checklist review', 'A sample project event.', 'The example checklist was added to the Release Desk project.', ['demo', 'checklist']),
-      this.knowledgeEntry('recordings', 'demo-recording-notes', 'Planning notes', 'A synthetic recording entry.', 'No audio file or personal recording is stored in the local demo.', ['demo', 'planning'])
+      demoRecordingNotes
     ];
     this.mailData = [demoRecord(['account_id', 'mailbox', 'uid', 'message_id', 'subject', 'from', 'to', 'date', 'text', 'seen', 'attachments'], [
       DEMO_MAIL_ACCOUNT, 'INBOX', 42, '<demo-mail-42@example.test>', 'Release notes review',
@@ -374,7 +410,8 @@ export class DemoRepository extends HubRepository {
     if (resource === 'managers') return this.managers(parts, verb);
     if (resource === 'machines') return this.machinesRoute(parts, query, verb);
     if (resource === 'metrics') return this.allMetricsRoute(verb);
-    if (resource === 'usage') return this.usageRoute(parts, verb);
+    if (resource === 'usage') return this.usageRoute(parts, query, verb);
+    if (resource === 'agents') return this.agentsRoute(parts, verb);
     if (resource === 'sessions') return this.sessionsRoute(parts, verb, input, operationId);
     if (resource === 'interactions') return this.interactions(parts, verb, input);
     if (resource === 'pins' || resource === 'mutes') return this.preferences(resource, parts, verb, input);
@@ -677,7 +714,57 @@ export class DemoRepository extends HubRepository {
     return demoRecord(['machines'], [[this.demoMachineMetrics('1h')]]);
   }
 
-  private usageRoute(parts: string[], method: string): DemoRecord {
+  private agentsRoute(parts: string[], method: string): DemoRecord {
+    if (parts.length === 1 && method === 'GET') return demoRecord(['sources'], [[]]);
+    if (parts.length === 2 && parts[1] === 'sessions' && method === 'GET') return demoRecord(['sessions', 'total', 'hasMore'], [[], 0, false]);
+    if (parts.length === 2 && parts[1] === 'hidden' && method === 'GET') return demoRecord(['sessions'], [[]]);
+    if (parts.length === 4 && parts[1] === 'sessions' && ['hide', 'unhide'].includes(parts[3]) && method === 'POST') return demoRecord(['ok'], [true]);
+    throw new HttpFailure(404, 'demo_unsupported');
+  }
+
+  private demoUsageTokens(input: number, cacheWrite: number, cacheRead: number, output: number, req: number): DemoRecord {
+    return demoRecord(['in', 'cache_write', 'cache_read', 'out', 'req'], [input, cacheWrite, cacheRead, output, req]);
+  }
+
+  private demoUsageDaysList(count: number): DemoRecord[] {
+    const out: DemoRecord[] = [];
+    const anchor = Date.UTC(2026, 10, 27);
+    for (let i = count - 1; i >= 0; i--) {
+      const d = new Date(anchor - i * 86400000);
+      const dateStr = String(d.getUTCFullYear()).padStart(4, '0') + '-' + String(d.getUTCMonth() + 1).padStart(2, '0') + '-' + String(d.getUTCDate()).padStart(2, '0');
+      const wave = (i * 7 + 3) % 11;
+      const active = i % 9 !== 4;
+      const input = active ? 42000 + wave * 18000 : 0;
+      const cacheWrite = active ? 28000 + wave * 9000 : 0;
+      const cacheRead = active ? 480000 + wave * 190000 : 0;
+      const output = active ? 16000 + wave * 6500 : 0;
+      const req = active ? 18 + wave * 4 : 0;
+      out.push(demoRecord(['date', 'in', 'cache_write', 'cache_read', 'out', 'req'], [dateStr, input, cacheWrite, cacheRead, output, req]));
+    }
+    return out;
+  }
+
+  private demoUsageProjectsList(): DemoRecord[] {
+    const p1 = demoRecord(['key', 'kind', 'group', 'name', 'host', 'machines', 'share', 'tokens'], [
+      'git:example.test/example/releasedesk', 'repo', 'development', 'example/releasedesk', 'example.test', 1, 0.58,
+      this.demoUsageTokens(240000, 120000, 2850000, 96000, 84)
+    ]);
+    const p2 = demoRecord(['key', 'kind', 'group', 'name', 'host', 'machines', 'share', 'tokens'], [
+      'local:notes', 'local', 'development', 'notes', '', 1, 0.24,
+      this.demoUsageTokens(96000, 48000, 1180000, 42000, 36)
+    ]);
+    const p3 = demoRecord(['key', 'kind', 'group', 'name', 'host', 'machines', 'share', 'tokens'], [
+      'folder:Docs', 'folder', 'other', 'Docs', '', 1, 0.11,
+      this.demoUsageTokens(44000, 21000, 520000, 18000, 17)
+    ]);
+    const p4 = demoRecord(['key', 'kind', 'group', 'name', 'host', 'machines', 'share', 'tokens'], [
+      'assistant', 'assistant', 'other', '', '', 1, 0.07,
+      this.demoUsageTokens(28000, 12000, 310000, 14000, 14)
+    ]);
+    return [p1, p2, p3, p4];
+  }
+
+  private usageRoute(parts: string[], query: Record<string, string>, method: string): DemoRecord {
     if (parts.length === 2 && parts[1] === 'windows' && method === 'GET') {
       const now = Date.now();
       const iso = (offsetMs: number): string => new Date(now + offsetMs).toISOString();
@@ -694,6 +781,53 @@ export class DemoRepository extends HubRepository {
         ]
       ]);
       return demoRecord(['accounts'], [[claude, codex]]);
+    }
+    if (parts.length === 2 && parts[1] === 'days' && method === 'GET') {
+      const count = Math.max(1, Math.min(371, Number(query['days'] || '84') || 84));
+      return demoRecord(['usage'], [demoRecord(['zone', 'stored', 'days'], ['UTC', true, this.demoUsageDaysList(count)])]);
+    }
+    if (parts.length === 2 && parts[1] === 'hours' && method === 'GET') {
+      const total = this.demoUsageTokens(408000, 201000, 4860000, 170000, 151);
+      const machines = [demoRecord(['id', 'name', 'in', 'cache_write', 'cache_read', 'out', 'req'], [DEMO_MACHINE, 'My Mac', 408000, 201000, 4860000, 170000, 151])];
+      const agents = [
+        demoRecord(['agent', 'in', 'cache_write', 'cache_read', 'out', 'req'], ['claude', 280000, 140000, 3400000, 115000, 102]),
+        demoRecord(['agent', 'in', 'cache_write', 'cache_read', 'out', 'req'], ['codex', 128000, 61000, 1460000, 55000, 49])
+      ];
+      return demoRecord(['usage'], [demoRecord(['zone', 'stored', 'hours', 'machines', 'agents', 'total'], ['UTC', true, [], machines, agents, total])]);
+    }
+    if (parts.length === 2 && parts[1] === 'projects' && method === 'GET') {
+      const projects7 = this.demoUsageProjectsList();
+      const projects3 = projects7.slice(0, 3);
+      const projects1 = projects7.slice(0, 2);
+      const ranges = [
+        demoRecord(['days', 'total', 'projects', 'not_split'], [1, this.demoUsageTokens(184000, 41000, 980000, 62000, 24), projects1, this.demoUsageTokens(0, 0, 0, 0, 0)]),
+        demoRecord(['days', 'total', 'projects', 'not_split'], [3, this.demoUsageTokens(290000, 130000, 2800000, 112000, 72), projects3, this.demoUsageTokens(0, 0, 0, 0, 0)]),
+        demoRecord(['days', 'total', 'projects', 'not_split'], [7, this.demoUsageTokens(408000, 201000, 4860000, 170000, 151), projects7, this.demoUsageTokens(0, 0, 0, 0, 0)])
+      ];
+      return demoRecord(['usage'], [demoRecord(['zone', 'stored', 'ranges'], ['UTC', true, ranges])]);
+    }
+    if (parts.length === 3 && parts[1] === 'projects' && parts[2] === 'detail' && method === 'GET') {
+      const key = query['key'] || '';
+      const projects = this.demoUsageProjectsList();
+      const match = projects.find((p: DemoRecord) => Wire.text(p, 'key') === key) || projects[0];
+      const tok = Wire.object(match, 'tokens');
+      const breakdown = (days: number): DemoRecord => demoRecord(
+        ['days', 'total', 'share', 'cache_hit', 'machines', 'agents', 'models', 'launchers', 'places'],
+        [
+          days,
+          cloneRecord(tok),
+          Wire.number(match, 'share', 0.5),
+          0.88,
+          [demoRecord(['key', 'name', 'tokens'], [DEMO_MACHINE, 'My Mac', cloneRecord(tok)])],
+          [demoRecord(['key', 'name', 'tokens'], ['claude', '', cloneRecord(tok)])],
+          [demoRecord(['key', 'name', 'tokens'], ['claude-sonnet-4-6', '', cloneRecord(tok)])],
+          [demoRecord(['key', 'name', 'tokens'], ['claude', '', cloneRecord(tok)])],
+          [demoRecord(['machine', 'machine_name', 'place', 'worktree', 'tokens'], [DEMO_MACHINE, 'My Mac', '/demo/ReleaseDesk', false, cloneRecord(tok)])]
+        ]
+      );
+      return demoRecord(['usage'], [demoRecord(['zone', 'stored', 'project', 'ranges', 'days', 'hours'], [
+        'UTC', true, cloneRecord(match), [breakdown(1), breakdown(3), breakdown(7)], this.demoUsageDaysList(7), []
+      ])]);
     }
     throw new HttpFailure(404, 'demo_unsupported');
   }
@@ -1106,8 +1240,15 @@ export class DemoRepository extends HubRepository {
     if (method === 'GET') {
       const q = query['q'] || '', lines = q ? Wire.text(entry, 'content').split('\n').filter((line: string) => line.toLowerCase().includes(q.toLowerCase())) : [];
       const matches: DemoRecord[] = lines.map((line: string, index: number): DemoRecord => demoRecord(['line', 'index'], [line, index]));
-      return demoRecord(['detail', 'matches', 'agents'], [cloneRecord(entry), matches,
+      const reply = demoRecord(['detail', 'matches', 'agents'], [cloneRecord(entry), matches,
         cloneRecords(this.sessionsData.filter((session: DemoRecord) => Wire.text(session, 'project_id') === Wire.text(entry, 'id')))]);
+      if (kind === 'chats' && Wire.text(entry, 'id') === 'demo-chat-notes') {
+        reply['inbox'] = [demoRecord(['id', 'title', 'tier', 'status', 'summary', 'updated_at', 'messages'], [
+          'demo-inbox-lark', 'Release room', 'action', 'action', 'Can someone review the sample release checklist?', '2026-11-11T08:15:00Z',
+          [demoRecord(['day', 'line'], ['2026-11-11', '- 08:15 Mina Example: Can someone review the sample release checklist?'])]
+        ])];
+      }
+      return reply;
     }
     if (method === 'PUT') {
       if (Object.keys(body).some((key: string) => !['tags', 'importance', 'relevance', 'status', 'project_kind'].includes(key))) throw new HttpFailure(400, 'demo_invalid_input');
@@ -1143,7 +1284,13 @@ export class DemoRepository extends HubRepository {
     if (parts.length < 2) throw new HttpFailure(404, 'demo_inbox_not_found');
     const item = this.inboxData.find((value: DemoRecord) => Wire.text(value, 'id') === parts[1]);
     if (!item) throw new HttpFailure(404, 'demo_inbox_not_found');
-    if (parts.length === 2 && method === 'GET') return demoRecord(['item'], [cloneRecord(item)]);
+    if (parts.length === 2 && method === 'GET') {
+      const reply = demoRecord(['item'], [cloneRecord(item)]);
+      if (Wire.text(item, 'id') === 'demo-inbox-lark') {
+        reply['kb_chat'] = demoRecord(['id', 'path'], ['demo-chat-notes', 'chats']);
+      }
+      return reply;
+    }
     const action = parts[2] || '';
     if (action === 'done' && method === 'POST') {
       if (typeof body['done'] !== 'boolean') throw new HttpFailure(400, 'demo_invalid_input');

@@ -83,7 +83,7 @@ func (n *Node) launcherModels(ctx context.Context, name, agentType string, refre
 	}
 	if h != nil && !n.usesAgyPane(ctx, name, agentType) {
 		res, _ := launcherModelsOf(h, runtimeName)
-		return n.liveRuntimeModels(ctx, h, runtimeName, refresh, res)
+		return n.liveRuntimeModels(ctx, h, runtimeName, name, refresh, res)
 	}
 	agent := n.launcherModelsAgent(ctx, name, agentType)
 	if agent == ompAgent {

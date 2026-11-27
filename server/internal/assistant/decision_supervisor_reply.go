@@ -114,7 +114,11 @@ func (s *Service) supervisedDecisionCandidates(supervisorID string) []Todo {
 	out := todos[:0]
 	for _, t := range todos {
 		a, ok := s.askCopy(t.ID)
-		if !ok || !decisionOpen(&a, t) || !a.RecheckAt.IsZero() || ownerDecisionReturned(t.Supervision) {
+		// A can_wait decision held for a briefing has no card yet and the owner has never seen
+		// this round: an ordinary supervisor-conversation message must neither release the hold
+		// nor settle it (heldForBriefing also clears once a briefing lists it).
+		if !ok || heldForBriefing(&a) || !decisionOpen(&a, t) || !a.RecheckAt.IsZero() ||
+			ownerDecisionReturned(t.Supervision) {
 			continue
 		}
 		out = append(out, t)
@@ -163,8 +167,14 @@ func (s *Service) settleSupervisorChoice(ctx context.Context, key [3]string, p s
 	if !ok || cur.DoneAt != nil || cur.Supervision == nil || cur.Supervision.State != reviewNeedsUser {
 		return
 	}
+	// An active "Don't handle" hides this round: an option-shaped message in the supervisor
+	// conversation must not reopen and execute it. Fail closed on a read error, like the
+	// deadline sweep, rather than settling against an unknown dismissal state.
+	if dismissed, err := s.decisionDismissed(ctx, cur); err != nil || dismissed {
+		return
+	}
 	a, ok := s.askCopy(id)
-	if !ok || !decisionOpen(&a, cur) || !a.RecheckAt.IsZero() || ownerDecisionReturned(cur.Supervision) ||
+	if !ok || heldForBriefing(&a) || !decisionOpen(&a, cur) || !a.RecheckAt.IsZero() || ownerDecisionReturned(cur.Supervision) ||
 		!p.at.After(a.AskedAt) || !a.AskedAt.Equal(p.asked) {
 		return
 	}
@@ -193,6 +203,10 @@ func (s *Service) handBackOneSupervisorReply(ctx context.Context, r SessionRef, 
 	if !ok || cur.DoneAt != nil || cur.Supervision == nil || cur.Supervision.State != reviewNeedsUser {
 		return
 	}
+	// A hidden ("Don't handle") round stays hidden: free text must not pause or hand it back.
+	if dismissed, err := s.decisionDismissed(ctx, cur); err != nil || dismissed {
+		return
+	}
 	b := &s.accept
 	b.mu.Lock()
 	if !s.loadAcceptLocked(ctx) {
@@ -200,7 +214,7 @@ func (s *Service) handBackOneSupervisorReply(ctx context.Context, r SessionRef, 
 		return
 	}
 	a := b.asks[id]
-	if a == nil || !decideAsk(a) || a.AskedAt.IsZero() || !a.AcceptedAt.IsZero() ||
+	if a == nil || heldForBriefing(a) || !decideAsk(a) || a.AskedAt.IsZero() || !a.AcceptedAt.IsZero() ||
 		!at.After(a.AskedAt) || acceptAskStale(a, cur) || acceptAskEnded(a, cur) || !a.RecheckAt.IsZero() ||
 		ownerDecisionReturned(cur.Supervision) {
 		b.mu.Unlock()
@@ -210,7 +224,8 @@ func (s *Service) handBackOneSupervisorReply(ctx context.Context, r SessionRef, 
 		b.mu.Unlock()
 		return
 	}
-	a.AgentReply = &decisionAgentReply{MachineID: r.MachineID, SessionID: r.SessionID, At: at.UTC(), Text: clip(text, 2000)}
+	a.AgentReply = &decisionAgentReply{MachineID: r.MachineID, SessionID: r.SessionID, At: at.UTC(),
+		Text: clip(text, 2000), FromSupervisor: true}
 	a.DueAt = at.UTC()
 	// Even a failed write must not let this process take the default; the in-memory pause stands and the sweep retries.
 	if err := s.saveAcceptErrLocked(ctx); err != nil {
@@ -350,8 +365,14 @@ func (s *Service) holdSupervisorChoice(ctx context.Context, r SessionRef, client
 	if !ok || cur.DoneAt != nil || cur.Supervision == nil || cur.Supervision.State != reviewNeedsUser {
 		return
 	}
+	// An active "Don't handle" hides this round: an option-shaped message in the supervisor
+	// conversation must not hold or settle it. Fail closed on a read error, like the
+	// deadline sweep, rather than acting against an unknown dismissal state.
+	if dismissed, err := s.decisionDismissed(ctx, cur); err != nil || dismissed {
+		return
+	}
 	a, ok := s.askCopy(id)
-	if !ok || !decisionOpen(&a, cur) || !a.RecheckAt.IsZero() || ownerDecisionReturned(cur.Supervision) ||
+	if !ok || heldForBriefing(&a) || !decisionOpen(&a, cur) || !a.RecheckAt.IsZero() || ownerDecisionReturned(cur.Supervision) ||
 		!at.After(a.AskedAt) || supervisorOptionLabel(text, a.Options) == "" {
 		return
 	}

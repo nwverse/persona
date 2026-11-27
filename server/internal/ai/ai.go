@@ -442,6 +442,24 @@ func (u *messageUsage) into(to *Usage) {
 	}
 }
 
+// responsesUsage is a Responses API response.usage object. input_tokens counts the cached tokens too, so they are
+// subtracted to match Usage.InputTokens.
+type responsesUsage struct {
+	InputTokens        int `json:"input_tokens"`
+	OutputTokens       int `json:"output_tokens"`
+	InputTokensDetails struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"input_tokens_details"`
+}
+
+func (u *responsesUsage) usage() Usage {
+	if u == nil {
+		return Usage{}
+	}
+	return Usage{InputTokens: u.InputTokens - u.InputTokensDetails.CachedTokens, OutputTokens: u.OutputTokens,
+		CacheReadInputTokens: u.InputTokensDetails.CachedTokens}
+}
+
 // errorOf reads a Messages error: an object with its type, code and message, or only a message string. kind retains
 // the established display/type behavior; code stays separate so new code semantics never mistake type for it.
 func errorOf(raw json.RawMessage) (kind, code, msg string, ok bool) {
@@ -613,7 +631,9 @@ func readMessageStream(body io.Reader) (Reply, bool, error) {
 		return false
 	})
 	if err != nil {
-		return Reply{}, true, fmt.Errorf("ai: read stream: %w", err)
+		// The stream was cut while reading (deadline, reset, EOF): keep the usage message_start/message_delta already
+		// reported, so a long reply cut off here is not metered as zero tokens. No answer text is returned with the error.
+		return Reply{Model: model, Usage: usage}, true, fmt.Errorf("ai: read stream: %w", err)
 	}
 	if failed != nil {
 		return Reply{}, failedAnswered, failed
@@ -715,6 +735,8 @@ func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Req
 	}
 	var b strings.Builder
 	refused := false // a refusal content part came: the model declined, whatever else the stream says
+	// partial keeps the model/usage any event has already reported, for the read-error return below.
+	var partial Reply
 	// event acts on one event's data, and done says it ended the stream, with the reply and error to return. ended
 	// returns them: a limit the stream reported is no answer, so it holds the gate like the HTTP 429 it stands for.
 	ended := func(got Reply, err error) (Reply, bool, error) {
@@ -738,25 +760,22 @@ func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Req
 				IncompleteDetails *struct {
 					Reason string `json:"reason"`
 				} `json:"incomplete_details"`
-				Usage *struct {
-					InputTokens        int `json:"input_tokens"`
-					OutputTokens       int `json:"output_tokens"`
-					InputTokensDetails struct {
-						CachedTokens int `json:"cached_tokens"`
-					} `json:"input_tokens_details"`
-				} `json:"usage"`
+				Usage *responsesUsage `json:"usage"`
 			} `json:"response"`
 		}
 		if json.Unmarshal([]byte(data), &ev) != nil {
 			return reply, false, nil
 		}
+		// Any event's response object can name the model and report usage (possibly partial, before the terminal
+		// response.completed). Keep the latest so a stream cut by a read error still returns what was metered.
+		if ev.Response.Model != "" {
+			partial.Model = ev.Response.Model
+		}
+		if ev.Response.Usage != nil {
+			partial.Usage = ev.Response.Usage.usage()
+		}
 		finished := func() Reply {
-			r := Reply{Text: b.String(), Model: ev.Response.Model}
-			if u := ev.Response.Usage; u != nil { // input_tokens counts the cached ones too
-				r.Usage = Usage{InputTokens: u.InputTokens - u.InputTokensDetails.CachedTokens, OutputTokens: u.OutputTokens,
-					CacheReadInputTokens: u.InputTokensDetails.CachedTokens}
-			}
-			return r
+			return Reply{Text: b.String(), Model: ev.Response.Model, Usage: ev.Response.Usage.usage()}
 		}
 		failureDetails := func() (code, msg string) {
 			code, msg = decodeErrorCode(ev.Code), decodeErrorString(ev.Message)
@@ -813,7 +832,7 @@ func (c *Client) respond(ctx context.Context, hc *http.Client, key string, r Req
 		got, stopped, gotErr = event(data)
 		return stopped
 	}); err != nil {
-		return reply, true, fmt.Errorf("ai: read stream: %w", err)
+		return partial, true, fmt.Errorf("ai: read stream: %w", err)
 	}
 	if stopped {
 		return ended(got, gotErr)

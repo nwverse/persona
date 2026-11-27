@@ -211,8 +211,10 @@ func normalizeRuntimeRows(h *runtimeConn, list []proto.Session, preview func(id,
 		// sending, interrupting, answering cards and every terminal control on capabilities, the hub guards sends.
 		// What a runtime declared, never more: no terminal, no attach, cards always answerable (they are its own asks).
 		s.SourceKind, s.SourceInstanceID, s.SourceThreadID, s.ParentThreadID = proto.SourceRuntime, rt, "", ""
-		if rt == paseoRuntimeID || rt == cindyRuntimeID || rt == t3codeRuntimeID {
-			s.Host = rt // an engine host, though no terminal (#2576)
+		if rt == paseoRuntimeID || rt == cindyRuntimeID || rt == t3codeRuntimeID || rt == orcaRuntimeID && !daemon {
+			// An engine host, though no terminal (#2576). Orca's chats (orcabridge.go) are its engine's too: the apps ask
+			// that engine about the chat's worktree, not the computer's default one.
+			s.Host = rt
 		} else {
 			s.Host = ""
 		}

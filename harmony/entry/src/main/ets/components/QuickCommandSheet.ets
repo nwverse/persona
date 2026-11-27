@@ -91,6 +91,7 @@ export struct QuickCommandSheet {
       workbenchCode: tr('quick_palette_code_tab'),
       workbenchMachines: tr('quick_palette_machines_tab'),
       openXiaoYi: tr('phone_xiaoyi'),
+      openTokenUsage: tr('token_usage_title'),
       toggleTheme: tr('quick_palette_toggle_theme'),
       liveViewPreview: tr('quick_palette_liveview_preview'),
       starredMessages: tr('starred_messages'),
@@ -109,6 +110,7 @@ export struct QuickCommandSheet {
       useHerdrTabName: this.model.useHerdrTabName,
       inboxVisible: this.model.inboxPageVisible(),
       todosVisible: this.model.todosPageVisible(),
+      knowledgeVisible: this.model.knowledgePageVisible(),
       showWorkbench: this.showWorkbench,
       showLiveView: this.showLiveView,
       showStarred: starredStore.isOffered(this.model),
@@ -160,6 +162,7 @@ export struct QuickCommandSheet {
     if (entry.iconKey === 'workbench') return Symbols.apps;
     if (entry.iconKey === 'code') return $r('sys.symbol.code');
     if (entry.iconKey === 'xiaoyi') return $r('sys.symbol.wand_and_stars');
+    if (entry.iconKey === 'token_usage') return Symbols.health;
     if (entry.iconKey === 'sun') return $r('sys.symbol.sun_max');
     if (entry.iconKey === 'moon') return $r('sys.symbol.moon');
     if (entry.iconKey === 'liveview') return $r('sys.symbol.bell');

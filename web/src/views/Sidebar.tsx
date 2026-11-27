@@ -106,6 +106,7 @@ export { SidebarRail } from "./SidebarRail";
 // the chunk is in, never suspending: a Suspense here would hold the sidebar's other updates (a navigation) while it
 // loads. A chunk that will not load is reported, and the next mount asks again.
 const HerdrNoticesContent = lazyPage(() => import("./agents/HerdrNotices").then((m) => m.HerdrNotices));
+const SidebarSpacesLazy = lazy(() => import("./SidebarSpaces").then((m) => ({ default: m.SidebarSpaces })));
 export const HerdrNotices = memo(function HerdrNotices() {
   const [ready, setReady] = useState(HerdrNoticesContent.ready);
   useEffect(() => {
@@ -183,17 +184,13 @@ function reveal(el: HTMLElement): boolean {
   return false;
 }
 
-/** The gliding highlight under a list of rows (Beautiful UI's Sidebar Nav): rows register under their keys, and the
- *  one under the pointer gets the box; the open row has its own fill (CURRENT_ROW), so the box doesn't take it away.
- *  The list is the box's scroll container (`nav`). The open row is kept in view from when it opens until the list is
- *  touched (wheel, pointer, keys): it may come later, and rows loading above it push it down.
- *  The box is measured after each render and again whenever the list's layout moves without one (#2476): a group
- *  folding or opening (its Collapse animates, then ends), rows arriving or changing height, scrolling. It covers only
- *  the part of its row on show and goes away when the row is folded away or gone (lib/glide.ts).
- *  The row under the pointer is kept in a ref and the box in a small store only GlideHighlight reads: hovering
- *  re-measures and moves the box without re-rendering the list that holds the rows. */
+/** The gliding highlight under a list of rows (Beautiful UI's Sidebar Nav): rows register under their keys, and a
+ *  hovered non-active row gets the box; the open row owns CURRENT_ROW, so the box fades out instead of overlapping it
+ *  when the pointer leaves or lands on the active row. When `track` (the scroller) is provided, the box mounts inside
+ *  it and scrolls natively on the compositor without scroll-listener wobble. */
 function useGlide(activeKey: string) {
   const nav = useRef<HTMLDivElement>(null);
+  const track = useRef<HTMLDivElement>(null);
   const rows = useRef(new Map<string, HTMLElement>());
   const lastKey = useRef<string | null>(null);
   const following = useRef(false);
@@ -204,17 +201,17 @@ function useGlide(activeKey: string) {
   const sizes = useRef<ResizeObserver | null>(null);
   const measure = useRef(() => {});
   measure.current = () => {
-    const n = nav.current;
-    // the box rests under the open row when the pointer is away, so it glides from there; that row's fill covers it
-    const el = rows.current.get(hovered.current ?? active.current);
+    const host = track.current ?? nav.current;
+    const k = hovered.current;
+    const el = k && k !== active.current ? rows.current.get(k) : undefined;
     let next: GlideBox | null = null;
-    if (n && el?.isConnected) {
+    if (host && el?.isConnected && host.contains(el)) {
       const clips: Span[] = [];
-      for (let p = el.parentElement; p && p !== n; p = p.parentElement) if (clipsOverflow(getComputedStyle(p).overflowY) || p.hasAttribute("data-sidebar-scroller")) clips.push(p.getBoundingClientRect());
-      next = glideBox(el.getBoundingClientRect(), clips, n.getBoundingClientRect(), n.scrollTop);
+      for (let p = el.parentElement; p && p !== host; p = p.parentElement) if (clipsOverflow(getComputedStyle(p).overflowY)) clips.push(p.getBoundingClientRect());
+      next = glideBox(el.getBoundingClientRect(), clips, host.getBoundingClientRect(), host.scrollTop);
     }
-    // only a real move updates
-    box.set((b) => (next ? (b.on && sameBox(b.at, next) ? b : { at: next, on: true }) : b.on ? { at: b.at, on: false } : b));
+    // only a real move updates; snap into position when revealing from hidden instead of sliding from a stale row
+    box.set((b) => (next ? (b.on && sameBox(b.at, next) ? b : { at: next, on: true, snap: !b.on }) : b.on ? { at: b.at, on: false } : b));
   };
   useEffect(() => {
     const n = nav.current;
@@ -231,7 +228,7 @@ function useGlide(activeKey: string) {
     sizes.current = ro;
     // the list and its blocks (sections) change height as a group inside folds or opens, and as rows come and go;
     // the rows themselves are observed as they register (one growing moves the rest)
-    const scroller = n.querySelector("[data-sidebar-scroller]");
+    const scroller = track.current;
     const watch = () => {
       ro.observe(n);
       for (const c of n.children) ro.observe(c);
@@ -242,13 +239,11 @@ function useGlide(activeKey: string) {
     const mo = new MutationObserver(() => (ro.disconnect(), watch(), soon()));
     mo.observe(n, { childList: true });
     if (scroller) mo.observe(scroller, { childList: true });
-    // a Collapse's transition ending (it may end without a size change, e.g. its opacity) and scrolling inside the list
+    // a Collapse's transition ending (it may end without a size change, e.g. its opacity)
     n.addEventListener("transitionend", soon);
-    n.addEventListener("scroll", soon, { passive: true, capture: true });
     return () => {
       events.forEach((e) => n.removeEventListener(e, stop));
       n.removeEventListener("transitionend", soon);
-      n.removeEventListener("scroll", soon, { capture: true });
       mo.disconnect();
       ro.disconnect();
       sizes.current = null;
@@ -297,12 +292,12 @@ function useGlide(activeKey: string) {
     measure.current();
   });
   const highlight = <GlideHighlight box={box} />;
-  return { nav, reg, hover, highlight };
+  return { nav, track, reg, hover, highlight };
 }
 
-/** Where the box is: `at` is the last place it was on show; a box that goes away (`on` false) fades out there, and
- *  glides from there back. */
-type GlideState = { at: GlideBox | null; on: boolean };
+/** Where the box is: `at` is the last place it was on show; a box that goes away (`on` false) fades out there;
+ *  `snap` suppresses the transform slide when appearing directly from hidden. */
+type GlideState = { at: GlideBox | null; on: boolean; snap?: boolean };
 
 /** The box's place outside React state, so moving it re-renders only GlideHighlight. */
 function glideStore() {
@@ -325,8 +320,8 @@ function glideStore() {
 
 function GlideHighlight({ box }: { box: ReturnType<typeof glideStore> }) {
   // box.get is the server snapshot too: the shell views are also rendered to a string (shell-views.test)
-  const { at, on } = useSyncExternalStore(box.subscribe, box.get, box.get);
-  return <span aria-hidden data-glide className="pointer-events-none absolute inset-x-2.5 rounded-[7px] bg-hover" style={glideStyle(at, on, EASE)} />;
+  const { at, on, snap } = useSyncExternalStore(box.subscribe, box.get, box.get);
+  return <span aria-hidden data-glide className="pointer-events-none absolute rounded-[7px] bg-hover" style={glideStyle(at, on, EASE, snap)} />;
 }
 
 /** Recent's Show more / Show less, as the Agents block's Recent (not running) draws its own. */
@@ -340,7 +335,7 @@ function UnreadTally({ n }: { n: number }) {
   return n > 0 ? <StateTally chats counts={{ needs_you: 0, working: 0, bg_waiting: 0, unread: n }} /> : null;
 }
 
-export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActions, active = true }: { route: Route; onSearch: () => void; onNewAgent: () => void; onNavigate?: () => void; workspaceActions?: WorkspaceTreeActions; active?: boolean }) {
+export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActions, active = true, hideCollapse = false }: { route: Route; onSearch: () => void; onNewAgent: () => void; onNavigate?: () => void; workspaceActions?: WorkspaceTreeActions; active?: boolean; hideCollapse?: boolean }) {
   const bindings = useBindings();
   const searchHint = jumpHint(bindings);
   const assistant = useStore((s) => s.assistant);
@@ -418,7 +413,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
   const unreadPinned = directions.filter((d) => d.conversation !== undefined && unreadShown(d.conversation)).length;
   const unreadRecent = recent.filter(unreadShown).length;
   const leaderTotal = visibleSectionCounts(counts, directions.map((d) => d.id), recentFolded ? [] : recent.map((c) => c.session_id));
-  const { nav, reg, hover, highlight } = useGlide(activeKey);
+  const { nav, track, reg, hover, highlight } = useGlide(activeKey);
   const go = useGo(onNavigate);
   const [holdsSeen, setHoldsSeen] = useState(false);
 
@@ -454,8 +449,8 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
       <div className="px-2.5 pt-2.5">
         <div className="mb-2 flex items-center gap-1">
           <div className="min-w-0 flex-1"><AssistantSwitcher phase={phase} online={online} total={total} route={route} /></div>
-          {/* folds the column to the rail of icons (a wide screen; the drawer closes by its scrim) */}
-          {!narrow && <CollapseButton collapsed={false} chord={bindings["left-sidebar"]} />}
+          {/* folds the column to the rail of icons (a wide screen; macOS desktop hosts it in MacBayTools; the drawer closes by its scrim) */}
+          {!narrow && !hideCollapse && <CollapseButton collapsed={false} chord={bindings["left-sidebar"]} />}
         </div>
         <button type="button" onClick={onSearch} className="touch-hit mb-1 flex h-8 w-full items-center gap-2 rounded-control bg-inset px-2.5 text-left shadow-hairline transition-colors hover:bg-hover">
           <Icon name="search" size={12} stroke={2} className="text-ink-3" />
@@ -470,16 +465,17 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
           column, so the usage popover that opens upward over it from the bottom is never drawn under them */}
       <div className="relative flex min-h-0 flex-1 flex-col">
       <div ref={nav} data-sidebar-rows onMouseLeave={() => hover(null)} className="relative isolate flex min-h-0 flex-1 flex-col scroll-pt-16 px-2.5">
-        {highlight}
         {/* the main conversation is the column's first row, Main chat with the home symbol, and only there (#2004, #5109); it
             stays at the top while the rest scrolls (#5581), with a solid divider above the scrollable rows */}
         <div data-sidebar-sticky className="sticky top-0 z-30 flex shrink-0 flex-col gap-px bg-canvas pt-1">
           <PersonaRow reg={reg} hover={hover} active={activeKey === "persona"} go={go} main={mainConversation} chord={bindings.persona} waiting={mainWaiting.count} onMenu={onConvMenu} />
           <span aria-hidden data-persona-divider className="mx-2 my-1 h-px shrink-0 bg-line" />
         </div>
-        <div data-row-scroller data-sidebar-scroller className="min-h-0 flex-1 -mx-2.5 overflow-y-auto overscroll-contain px-2.5 pb-3">
+        <div ref={track} data-row-scroller data-sidebar-scroller className="relative min-h-0 flex-1 -mx-2.5 overflow-y-auto overscroll-contain px-2.5 pb-3">
+        {highlight}
         {/* a phone's drawer has Pages as its grid of icons; every other group (#9071) is a section, as on a wide screen */}
         {narrow && <NavGrid showHubNotice={active} pages={sections.find((g) => !g.id)?.pages ?? []} more={more} activeKey={activeKey} go={go} onNavigate={onNavigate} />}
+        <Suspense fallback={null}><SidebarSpacesLazy route={route} reg={reg} hover={hover} activeKey={activeKey} go={go} /></Suspense>
         {sections
           .filter((g) => (g.id ? g.pages.length > 0 : !narrow))
           .map((g, i) => <PageGroup showHubNotice={active} key={g.id || "pages"} group={g} more={g.id ? [] : more} first={i === 0 && !narrow} reg={reg} hover={hover} activeKey={activeKey} go={go} />)}

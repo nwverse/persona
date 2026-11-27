@@ -266,7 +266,8 @@ test('changing permissions alone does not apply the configured model', async (t)
 const resumedSession = 'agy-11111111-2222-3333-4444-555555555555'
 
 test('history stays passive and the first resumed prompt applies the native default', async (t) => {
-  const { n, calls } = await fixture(t, { noStart: true })
+  const { n, home, calls } = await fixture(t, { noStart: true })
+  mkdirSync(join(home, 'settings', 'brain', resumedSession.slice(4)), { recursive: true })
   await n.peer.call('session.items', { session_id: resumedSession })
   assert.deepEqual(calls(), [])
 

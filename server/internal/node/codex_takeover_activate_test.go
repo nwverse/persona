@@ -333,7 +333,9 @@ func TestCodexHeldSharedAppServerSurfacesConnectionReason(t *testing.T) {
 	})
 }
 
-func TestCodexTakeoverHostSelectsAvailableNonOrcaLauncher(t *testing.T) {
+// The takeover's terminal goes to the start's host, Orca too since #17044 (it resumes a Codex thread as herdr does),
+// else the first other terminal host of the set; a runtime engine is never one.
+func TestCodexTakeoverHostSelectsAvailableLauncher(t *testing.T) {
 	for _, tc := range []struct {
 		name           string
 		hosts          []string
@@ -342,10 +344,12 @@ func TestCodexTakeoverHostSelectsAvailableNonOrcaLauncher(t *testing.T) {
 		wantCanResume  bool
 		wantCapability bool
 	}{
-		{"orca default falls back to herdr-core", []string{proto.EngineOrca, proto.EngineHerdrCore}, proto.EngineOrca, host.HerdrCore, true, true},
-		{"orca default falls back to tern", []string{proto.EngineOrca, proto.EngineTern}, proto.EngineOrca, host.Tern, true, true},
+		{"orca default takes it over in orca", []string{proto.EngineOrca, proto.EngineHerdrCore}, proto.EngineOrca, host.Orca, true, true},
+		{"herdr-core default takes it over in herdr-core", []string{proto.EngineOrca, proto.EngineHerdrCore}, proto.EngineHerdrCore, host.HerdrCore, true, true},
+		{"orca default with tern takes it over in orca", []string{proto.EngineOrca, proto.EngineTern}, proto.EngineOrca, host.Orca, true, true},
 		{"paseo default falls back to herdr-core", []string{proto.EnginePaseo, proto.EngineHerdrCore}, proto.EnginePaseo, host.HerdrCore, true, true},
-		{"orca alone without shared remote offers continue only", []string{proto.EngineOrca}, proto.EngineOrca, "", false, true},
+		{"paseo default falls back to orca", []string{proto.EnginePaseo, proto.EngineOrca}, proto.EnginePaseo, host.Orca, true, true},
+		{"orca alone takes it over in orca", []string{proto.EngineOrca}, proto.EngineOrca, host.Orca, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			n := remoteTestNode(t)

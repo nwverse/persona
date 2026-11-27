@@ -126,11 +126,15 @@ const (
 )
 
 var (
-	MachinesPutMethod    = buswire.Method[MachinePut, buswire.None]{Name: MethodMachinesPut}
-	MachinesRemoveMethod = buswire.Method[MachineRef, MachineRemoved]{Name: MethodMachinesRemove}
-	MachinesGetMethod    = buswire.Method[MachineRef, MachineEntry]{Name: MethodMachinesGet}
-	EngineGetMethod      = buswire.Method[MachineRef, MachineEngine]{Name: MethodEngineGet}
-	EnginePutMethod      = buswire.Method[MachineEngine, buswire.None]{Name: MethodEnginePut}
+	UpdateNodesMethod          = buswire.Method[buswire.None, buswire.None]{Name: MethodUpdateNodes}
+	PairConnectorMethod        = buswire.Method[PairConnector, PairConnectorReply]{Name: MethodPairConnector}
+	ReconnectMethod            = buswire.Method[ReconnectRequest, buswire.None]{Name: MethodReconnect}
+	UsageGatewayAccountsMethod = buswire.Method[buswire.None, proto.GatewayAccounts]{Name: MethodUsageGatewayAccounts}
+	MachinesPutMethod          = buswire.Method[MachinePut, buswire.None]{Name: MethodMachinesPut}
+	MachinesRemoveMethod       = buswire.Method[MachineRef, MachineRemoved]{Name: MethodMachinesRemove}
+	MachinesGetMethod          = buswire.Method[MachineRef, MachineEntry]{Name: MethodMachinesGet}
+	EngineGetMethod            = buswire.Method[MachineRef, MachineEngine]{Name: MethodEngineGet}
+	EnginePutMethod            = buswire.Method[MachineEngine, buswire.None]{Name: MethodEnginePut}
 )
 
 // MachineEngine is one machine's engine choice (devices.engine.get's answer, devices.engine.put's params).
@@ -151,6 +155,17 @@ type MachinePut struct {
 // MachineRef names one machine.
 type MachineRef struct {
 	MachineID string `json:"machine_id"`
+}
+
+// ReconnectRequest names the machine whose node should reconnect.
+type ReconnectRequest MachineRef
+
+// UnmarshalJSON uses the manager's original anonymous struct to preserve invalid-parameter errors.
+func (r *ReconnectRequest) UnmarshalJSON(data []byte) error {
+	legacy := (*struct {
+		MachineID string `json:"machine_id"`
+	})(r)
+	return json.Unmarshal(data, legacy)
 }
 
 // MachineRemoved is devices.machines.remove's answer: whether the list had it.
@@ -485,6 +500,12 @@ type PairConnector struct {
 	MachineID string `json:"machine_id"`
 	Address   string `json:"address,omitempty"`
 	Proxy     string `json:"proxy,omitempty"`
+}
+
+// PairConnectorReply is the paired connector's address and version.
+type PairConnectorReply struct {
+	Address string `json:"address"`
+	Version string `json:"version"`
 }
 
 // Routes are the apps' routes on machines the manager answers itself (the hub relays them as http.request, as the

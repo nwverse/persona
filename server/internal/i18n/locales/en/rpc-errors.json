@@ -121,6 +121,10 @@
   "omp_options": "You can choose a model only when starting a new omp session in herdr or Orca. Leave permission mode, thinking effort and ultracode unset.",
   "omp_resume_unknown": "Persona can’t find this omp session’s file, so it can’t resume it from here. Continue it on the computer with omp --resume. Nothing was sent.",
   "resume_unknown": "This computer has no record of that conversation, so it can’t be continued here. Nothing was started.",
+  "orca_resume": "Orca can’t resume this Agent’s session from here. Resume it on the computer. Nothing was started or sent.",
+  "work_agent_resume": "This session can’t be resumed with a launcher: pi continues in the tab it ran in, and Cursor and agy sessions are resumed on the computer. Nothing was started.",
+  "agent_not_in_front": "The Agent isn’t in front in its terminal (it may be suspended), so nothing was sent. Bring it back to the front on the computer and send again.",
+  "not_running_engine": "This session isn’t running (it may be suspended or have exited), and a session in {engine} has to be reopened on the computer. Nothing was sent.",
   "held_ahead": "Earlier messages to this Agent are still waiting to be sent. Send this one after them.",
   "held_not_kept": "Earlier messages are still waiting to be sent, and this one couldn't be saved. Try again in a moment.",
   "held_full": "Too many messages are waiting for this Agent. Delete some, or send this one when the computer is back.",
@@ -137,5 +141,10 @@
   "effort_input_draft": "The terminal’s input box has text that hasn’t been sent (“{draft}”), so the effort wasn’t changed and nothing was typed. Clear it on the computer and try again.",
   "effort_input_draft_plain": "The terminal’s input box shows text (“{draft}”), so the effort wasn’t changed and nothing was typed. This terminal is read without colors, so Claude’s grey suggested message counts as text too. Clear it on the computer and try again.",
   "speed_input_draft": "The terminal’s input box has text that hasn’t been sent (“{draft}”), so the speed wasn’t changed and nothing was typed. Clear it on the computer and try again.",
-  "speed_input_draft_plain": "The terminal’s input box shows text (“{draft}”), so the speed wasn’t changed and nothing was typed. This terminal is read without colors, so Claude’s grey suggested message counts as text too. Clear it on the computer and try again."
+  "speed_input_draft_plain": "The terminal’s input box shows text (“{draft}”), so the speed wasn’t changed and nothing was typed. This terminal is read without colors, so Claude’s grey suggested message counts as text too. Clear it on the computer and try again.",
+  "orca_away": "Orca isn’t running on that computer, so nothing was sent. Open Orca there and try again.",
+  "orca_refused": "Orca turned this down, and nothing was changed: {detail}",
+  "orca_unknown": "It’s not clear whether Orca did this. Check the chat in Orca on that computer before you try again.",
+  "orca_session_gone": "This chat is no longer in Orca.",
+  "orca_closed": "This chat is closed in Orca. Send it a message to open it again, then change its settings."
 }

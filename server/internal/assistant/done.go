@@ -1237,8 +1237,12 @@ func judgeTaskDoneWith(ctx context.Context, m jsonModel, in taskDoneInput) (task
 	c.WouldClose = false
 	if in.Checks {
 		d := judgedDelivery(out.Delivery, out.Gate, out.Unblock, in.Replies)
-		if !strings.EqualFold(strings.TrimSpace(out.Delivery), deliveryLive) {
+		if !strings.EqualFold(strings.TrimSpace(out.Delivery), deliveryLive) &&
+			!strings.EqualFold(strings.TrimSpace(out.Delivery), deliveryOff) {
 			d.State = cmp.Or(strings.ToLower(strings.TrimSpace(out.Delivery)), deliveryNone) // live only on the judge's own word, never the agent's line alone
+		}
+		if !strings.EqualFold(strings.TrimSpace(out.Delivery), deliveryLive) && d.State == deliveryLive {
+			d.State = deliveryMerged
 		}
 		if in.Deployed != nil {
 			d = in.Deployed(d)

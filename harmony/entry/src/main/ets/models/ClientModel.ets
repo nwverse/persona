@@ -147,6 +147,9 @@ export class ClientModel {
     const hidden = parseHiddenHubPages(this.sidebarConfig);
     return this.demo || (!hidden.has('todos') && !hidden.has('todo'));
   }
+  knowledgePageVisible(): boolean {
+    return this.demo || !parseHiddenHubPages(this.sidebarConfig).has('knowledge');
+  }
   /**
    * Whether this device has a registered Hub background push route (#16783, PushHealth).
    * HarmonyOS currently uses foreground `ws_notify` without Push Kit registration yet,
