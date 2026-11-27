@@ -70,6 +70,24 @@ import XCTest
         XCTAssertTrue(app.tabBars.buttons.element(boundBy: 2).waitForExistence(timeout: 15), app.debugDescription)
     }
 
+    func testMainChatStaysAliveAcrossRepeatedRestarts() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-demo.on", "YES", "-tab", "assistant", "-persona.ios.console.enabled", "NO"]
+        app.launch()
+        let json = #"{"persona_template":1,"id":"example-console","name":"Agent console","browser":{"main_chat":"plain","agents_view":"active","settings_view":"short"}}"#
+        app.open(URL(string: "persona://template?template=" + json.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)!)!)
+        let apply = app.buttons["template-apply"].firstMatch
+        XCTAssertTrue(apply.waitForExistence(timeout: 15), app.debugDescription)
+        apply.tap()
+        XCTAssertTrue(app.tabBars.buttons.element(boundBy: 0).waitForExistence(timeout: 15), app.debugDescription)
+        for _ in 0..<3 {
+            app.terminate()
+            app.launchArguments = ["-demo.on", "YES", "-tab", "assistant"]
+            app.launch()
+            XCTAssertTrue(app.tabBars.buttons.element(boundBy: 0).waitForExistence(timeout: 15), app.debugDescription)
+        }
+    }
+
     func testDefaultDoesNotReplaceTheExistingShell() {
         let app = XCUIApplication()
         app.launchArguments = ["-demo.on", "YES", "-persona.ios.console.enabled", "NO", "-tab", "assistant"]

@@ -1,4 +1,5 @@
 import SwiftUI
+import os
 
 /// The opt-in iPhone Agent console (#17129): Main chat, Agents and Settings. External conversations are a segment in
 /// Agents, never a fourth tab. The existing native pages keep their navigation, search and chat routes; only the root
@@ -86,7 +87,11 @@ struct AgentConsoleRoot: View {
             }
         }
         .environment(\.agentConsole, true)
-        .onAppear { router.attach(to: model) }
+        .onAppear {
+            // Non-content breadcrumbs for a device-only launch failure: tab id and whether the console was restored.
+            Logger(subsystem: "com.persona.console", category: "launch").log("console appeared tab=\(model.selectedTab.rawValue, privacy: .public)")
+            router.attach(to: model)
+        }
         .onDisappear { router.detach(from: model) }
         .onChange(of: NativeTemplateStore.shared.enabled) { _, enabled in
             if !enabled, model.selectedTab == .settings {
