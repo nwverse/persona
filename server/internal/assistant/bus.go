@@ -574,8 +574,7 @@ func (b *BusHub) Broadcast(ctx context.Context, m Broadcast) {
 
 func (b *BusHub) Snapshot(ctx context.Context, s Snapshot) (SnapshotResult, error) {
 	b.keepFromSnapshot(s) // what the nodes keep listing is the manager's to tell them (devices.go)
-	var out SnapshotResult
-	err := b.client.Call(ctx, assistantwire.MethodSnapshot, s, &out)
+	out, err := buswire.Call(ctx, b.client, assistantwire.SnapshotMethod, s)
 	return out, busError(err)
 }
 
@@ -690,29 +689,19 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 		defer memtrim.AfterLarge(len(p.Body))
 		return serveHTTP(ctx, b.httpHandler(s), p, s.lang)
 	case assistantwire.MethodTools:
-		var target SessionRef
-		if err := decode(&target); err != nil {
-			return nil, err
-		}
-		return map[string]any{"tools": s.ToolsFor(ctx, target.MachineID, target.SessionID)}, nil
+		return handleBusRequest(ctx, assistantwire.ToolsMethod, decode, func(ctx context.Context, target assistantwire.SessionRef) (assistantwire.ToolsResult, error) {
+			return assistantwire.ToolsResult{Tools: s.ToolsFor(ctx, target.MachineID, target.SessionID)}, nil
+		})
 	case assistantwire.MethodTool:
-		var p ToolCall
-		if err := decode(&p); err != nil {
-			return nil, err
-		}
-		return s.Tool(ctx, p), nil
+		return handleBusRequest(ctx, assistantwire.ToolMethod, decode, func(ctx context.Context, p assistantwire.ToolCall) (proto.ToolResult, error) {
+			return s.Tool(ctx, p), nil
+		})
 	case assistantwire.MethodContext:
-		var p ContextParams
-		if err := decode(&p); err != nil {
-			return nil, err
-		}
-		return s.Context(ctx, p), nil
+		return handleBusRequest(ctx, assistantwire.ContextMethod, decode, func(ctx context.Context, p assistantwire.ContextParams) (assistantwire.ContextResult, error) {
+			return s.Context(ctx, p), nil
+		})
 	case assistantwire.MethodAction:
-		var p Action
-		if err := decode(&p); err != nil {
-			return nil, err
-		}
-		return s.Action(ctx, p)
+		return handleBusRequest(ctx, assistantwire.ActionMethod, decode, s.Action)
 	case assistantwire.MethodTodoHandoff:
 		return handleBusRequest(ctx, assistantwire.TodoHandoffMethod, decode, s.TodoHandoff)
 	case assistantwire.MethodTodoLink:
