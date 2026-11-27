@@ -50,11 +50,15 @@ type Config struct {
 	// Owner is how the voice model calls the user; Notes is appended to its instructions.
 	Owner string `json:"owner,omitempty"`
 	Notes string `json:"notes,omitempty"`
+	// ArchiveMachine is the computer (its machine id) each call's lines are written to as a Markdown file when the
+	// call ends, into ArchiveDir there (default DefaultArchiveDir); empty: calls are not archived (archive.go, #13249).
+	ArchiveMachine string `json:"archive_machine,omitempty"`
+	ArchiveDir     string `json:"archive_dir,omitempty"`
 
 	// Setup is what is missing before a conversation can start when no upstream is usable (SetupURLAndKey, SetupKey,
 	// SetupURL); "" when one is. The plugin runs either way.
 	Setup string `json:"-"`
-	// Warnings are settings that were not taken (WarnFormIDTaken, WarnFormNoKey, WarnDefaultUnknown).
+	// Warnings are settings that were not taken (WarnFormIDTaken, WarnFormNoKey, WarnDefaultUnknown, WarnArchiveDir).
 	Warnings []string `json:"-"`
 }
 
@@ -70,6 +74,7 @@ const (
 	WarnFormIDTaken    = "form_id_taken"   // hub.json has an upstream of id custom: the form's is left out
 	WarnFormNoKey      = "form_no_key"     // the form has an address without its key while hub.json's upstreams serve
 	WarnDefaultUnknown = "default_unknown" // hub.json's default names no upstream: the first upstream's default instead
+	WarnArchiveDir     = "archive_dir"     // archive_dir is neither ~/… nor absolute: calls are not archived
 )
 
 // FormProvider is the id of the settings form's upstream: its models are "custom/<model>".
@@ -89,6 +94,9 @@ type Form struct {
 	InputRate    int      `json:"input_rate"`
 	Owner        string   `json:"owner"`
 	Notes        string   `json:"notes"`
+	// ArchiveMachine, ArchiveDir: Config's (archive.go).
+	ArchiveMachine string `json:"archive_machine"`
+	ArchiveDir     string `json:"archive_dir"`
 }
 
 // Sources are where the built-in extension's settings come from (docs/assistant/voice.md "How the extension receives config").
@@ -138,6 +146,10 @@ func Merge(s Sources) (Config, error) {
 		}
 	}
 	c.Owner, c.Notes = firstNonEmpty(f.Owner, c.Owner), firstNonEmpty(f.Notes, c.Notes)
+	c.ArchiveMachine, c.ArchiveDir = firstNonEmpty(strings.TrimSpace(f.ArchiveMachine), c.ArchiveMachine), firstNonEmpty(strings.TrimSpace(f.ArchiveDir), c.ArchiveDir)
+	if err := c.validateArchive(); err != nil {
+		return Config{}, err
+	}
 	fromHubJSON := len(c.Providers) > 0
 	switch {
 	case f.URL == "":
@@ -321,7 +333,21 @@ func (c *Config) validate() error {
 	if len(c.Providers) == 0 {
 		return errors.New("config: no providers")
 	}
+	if err := c.validateArchive(); err != nil {
+		return err
+	}
 	return c.validateProviders()
+}
+
+// validateArchive: the archive's folder is in the home (~/…) or absolute, as the computer's file writes take it; any
+// other turns the archive off (WarnArchiveDir) and leaves the rest of the configuration as it is.
+func (c *Config) validateArchive() error {
+	c.ArchiveMachine, c.ArchiveDir = strings.TrimSpace(c.ArchiveMachine), strings.TrimSpace(c.ArchiveDir)
+	if d := c.ArchiveDir; d != "" && !strings.HasPrefix(d, "~/") && !strings.HasPrefix(d, "/") {
+		c.ArchiveMachine, c.ArchiveDir = "", ""
+		c.Warnings = append(c.Warnings, WarnArchiveDir)
+	}
+	return nil
 }
 
 // validateProviders checks each upstream and that no two share an id.

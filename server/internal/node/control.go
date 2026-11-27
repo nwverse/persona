@@ -83,10 +83,17 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	}
 	var argv []string
 	codex := false
-	if proto.FasterSpeed(execution.Speed) {
+	explicitSpeed := proto.FasterSpeed(execution.Speed) || execution.ServiceTier != ""
+	if explicitSpeed {
 		argv, codex = n.codexLauncher(ctx, launcher)
-		if err := execution.applyStartSpeed(launcher, kind, codex); err != nil {
-			return nil, err
+		if execution.ServiceTier != "" {
+			if !codex || kind == traexAgent {
+				return nil, unsupportedStartSpeed(launcher, execution.ServiceTier)
+			}
+		} else {
+			if err := execution.applyStartSpeed(launcher, kind, codex); err != nil {
+				return nil, err
+			}
 		}
 		if execution.ServiceTier != "" {
 			if err := n.checkCodexStartSpeed(ctx, launcher, execution.Model, execution.ServiceTier); err != nil {
@@ -172,7 +179,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 			return nil, refusal("not_running", "接着这个 omp 会话后没等到它的会话行，这次没有发送。", nil)
 		}
 	}
-	if !proto.FasterSpeed(execution.Speed) {
+	if !explicitSpeed {
 		argv, codex = n.codexLauncher(ctx, launcher)
 	}
 	var launch host.Launcher

@@ -334,9 +334,17 @@ func (s *Service) editTodoWithCloseActivity(ctx context.Context, id string, e db
 		break
 	}
 	unlock := func() {
-		s.todos.writing.Unlock()
 		if reopening {
 			s.supervise.writeMu.Unlock()
+		}
+		s.todos.writing.Unlock()
+	}
+	if e.Done != nil && *e.Done {
+		if current, ok := s.todoNow(id); ok && current.DoneAt == nil {
+			if err := s.investigationCloseError(ctx, current); err != nil {
+				unlock()
+				return Todo{}, err
+			}
 		}
 	}
 	if e.Done != nil && *e.Done {

@@ -409,7 +409,14 @@ class WatcherTests(unittest.TestCase):
         self.assertTrue(all("needReviews" in call["variables"] for call in calls))
         self.assertTrue(all("needThreads" in call["variables"] for call in calls))
         self.assertEqual([call["variables"]["commentsCursor"] for call in calls],
-                         [None, False])
+                         [None, None])
+        # A finished collection stays out of the query through @include, but its cursor variable is still
+        # declared String, so it must stay null rather than `false` (#16737).
+        for call in calls:
+            for field in ("comments", "reviews", "threads"):
+                value = call["variables"][field + "Cursor"]
+                self.assertIsInstance(value, (str, type(None)),
+                                      "%sCursor must be a string or null" % field)
 
     def test_stale_activity_requires_complete_cursor_pages(self):
         response = {"data": {"repository": {"pullRequest": {
@@ -2978,13 +2985,19 @@ class WatcherTests(unittest.TestCase):
         self.assertIn("no full build/vet", run.call_args.args[0][-1])
         self.assertNotIn("all tests passed", run.call_args.args[0][-1])
 
-    def test_semantic_only_extensions_keep_repository_guards(self):
-        with patch.object(pr_watch_verify, "run_check", return_value={"name": "Privacy and documentation guards", "ok": True}) as check:
-            results = pr_watch_verify.verify("nwverse/persona-extensions", pr(), ".", {"profile": "semantic_only"})
-        self.assertEqual(len(results), 1)
+    def test_semantic_only_extensions_run_exact_head_privacy_scan_without_persona_doc_guards(self):
+        with patch.object(pr_watch_verify, "extension_checks") as full, \
+                patch.object(pr_watch_verify, "run_check", return_value={"name": "Exact-head privacy scan", "ok": True, "command": []}) as check:
+            results = pr_watch_verify.verify("nwverse/persona-extensions", pr(), "/tmp/extensions-wt", {"profile": "semantic_only"})
+        full.assert_not_called()
+        self.assertEqual([result["name"] for result in results], ["Exact-head privacy scan"])
         argv = check.call_args.args[1]
-        self.assertIn("--repository-guards", argv)
-        self.assertEqual("nwverse/persona-extensions", argv[argv.index("--repository") + 1])
+        self.assertTrue(argv[2].endswith("scripts/privacy_check.py"), argv)
+        self.assertEqual(argv[3:], ["--range", SHA_BASE + ".." + SHA_A])
+        self.assertNotIn("--repository-guards", argv)
+        self.assertEqual(check.call_args.args[4]["PERSONA_PRIVACY_ROOT"], "/tmp/extensions-wt")
+        with self.assertRaises(pr_watch_common.WatchError):
+            pr_watch_verify.verify("example/other", pr(), "/tmp/other-wt", {"profile": "semantic_only"})
 
     def test_verification_policy_version_covers_semantic_only(self):
         self.assertGreaterEqual(pr_watch.VERIFICATION_POLICY_VERSION, 3)

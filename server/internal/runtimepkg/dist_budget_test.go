@@ -25,12 +25,14 @@ import (
 // Antigravity multi-instance companion flags and --agy-dir env propagation (#14483) add 373 B (260,942 B).
 // An Antigravity CLI without session/set_mode: checks skip the switch and starts say to update agy (#14533), 149 B (261,091 B).
 // Antigravity Gemini API-key gateway model discovery routes through HTTP(S)_PROXY and honors NO_PROXY (#14552), 1,497 B (262,588 B).
+// Keeping agy's live text ahead of later thoughts (#14745) measured 262,673 B on main, 85 B over the ceiling.
 // Keeping Antigravity steps at a reused lower index when the export goes on past them, dropping them again once the run re-covers them (#14626), adds 230 B (262,818 B).
 // Antigravity native error backfill at every unexported index, loading conversations another agy process created, with read failures in the history token (#14627), 427 B (263,245 B).
 // Antigravity subagent reports and background task results as task notices, invoke_subagent Role / Prompt (#14625), 749 B (263,994 B).
 // Untitled Antigravity conversations take a short title from their first prompt line (#14629), 218 B (264,212 B).
 // An API error agy streams as message text becomes the turn's error, kept in history and settled idle (#14628), 231 B (264,443 B).
 // Antigravity GENERIC timestamp header stripping (#13662) adds 176 B (264,619 B).
+// An agy main chat on Windows finding personad.exe and a cmd.exe media-guard hook that also checks Node.js (#14511) add 182 B (264,801 B).
 // Subsequent runtime fixes on main (#15269, #15275, #13312, #12952, #15475) bring the total to 265,362 B.
 // Antigravity shared ACP exit cleanup (#15756) and always-allow permission choices (#15785) bring the total to 265,686 B.
 // Antigravity permission mode persistence across companion restarts and resume re-application (#15807) add 273 B (265,959 B).
@@ -55,10 +57,16 @@ import (
 // Applying the configured Antigravity model before the first prompt after ACP resume (#15537) adds 67 B (281,263 B).
 // Claude Code plugin 0.3.1 reports classic hook pass-over and disables permission bridging under managed settings
 // (#15546), adding 1,397 B (282,660 B).
-// Antigravity form elicitation (#16645) and background task and schedule tracking (#13594) bring the total to 286,816 B.
+// Antigravity form elicitation (#16645) and background task and schedule tracking (#13594) bring the total to 286,998 B,
+// including the 182 B Windows media-guard change above.
+// The Antigravity companion running the node's program from --personad-bin, else persona-node beside personad (#14582), 204 B (287,202 B).
+// Antigravity incremental transcript append (tail anchor + rolling SHA-256 + deferred/periodic verification),
+// sub-second fileMeta fast hit, watched-poll idle backoff, and bounded summary/cache weights (with decoupled
+// raw-byte and object-weight transcriptCache caps) add 1,969 B (289,171 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 286_816
+	const budget = 289_171
+
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

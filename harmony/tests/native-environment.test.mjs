@@ -141,6 +141,8 @@ test('NativeEnvironment uses live densityPixels and fold listeners across Mate X
   // 3184 / 3.0 = 1061.3vp -> trifold_unfolded
   assert.equal(env.foldPosture, 'trifold_unfolded');
   assert.equal(env.isTriFold, true);
+  assert.equal(env.creaseTopPx, 100);
+  assert.equal(env.creaseHeightPx, 10);
   assert.equal(screen.listeners.has('foldStatusChange'), true);
   assert.equal(screen.listeners.has('foldDisplayModeChange'), true);
 
@@ -173,6 +175,8 @@ test('NativeEnvironment uses live densityPixels and fold listeners across Mate X
   env.update({});
   handlers.get('windowSizeChange')(rect);
   assert.equal(env.foldPosture, 'trifold_unfolded');
+  assert.equal(env.creaseTopPx, 0);
+  assert.equal(env.creaseHeightPx, 0);
 
   env.unbindWindow();
   assert.equal(screen.listeners.size, 0);

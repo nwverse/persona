@@ -23,7 +23,8 @@ import {
   isTriFoldExpandedStatus,
   pickRelaySessionIndex,
   resolveFoldLayout,
-  resolveFoldShortcut
+  resolveFoldShortcut,
+  resolveHoverSplitGeometry
 } from '../entry/src/main/ets/core/FoldPosture.ts';
 
 test('straight phone (Mate 90 Pro) stays compact stack with tight tree indentation', () => {
@@ -309,8 +310,8 @@ test('64vp icon rail, 3-dot header, 3-tab Live Workbench, relay wiring, and bord
   assert.match(agents, /PhoneStyle\.cardBorder\(/);
 
   // Duplicate place suppression in AgentDirectoryRowContent & ProjectsPage + worktree dividers & borderless card styling.
-  assert.match(rowContent, /private displayPlace\(\): string \{\s*return deduplicateAgentPlace\(this\.agent\.row\.title, this\.place\);/);
-  assert.match(projects, /deduplicateAgentPlace\(agent\.row\.title, paneName \|\| agent\.tab\)/);
+  assert.match(rowContent, /private displayPlace\(\): string \{\s*return deduplicateAgentPlace\(this\.displayTitle\(\), this\.place\);/);
+  assert.match(projects, /deduplicateAgentPlace\(this\.displayAgentTitle\(agent\), paneName \|\| agent\.tab\)/);
   assert.match(projects, /outlineItemNeedsDivider\(entry\)[\s\S]*Divider\(\)\.strokeWidth\(0\.5\)/);
   assert.match(projects, /PhoneStyle\.cardElevation\(nativeEnvironment\.dark\)/);
   assert.match(projects, /PhoneStyle\.cardBorder\(nativeEnvironment\.dark\)/);
@@ -439,4 +440,46 @@ test('wide XiaoYi settings, SettingsDirectory tint, module.json5 window modes, a
 
   const entryAbility = moduleJson.module.abilities.find((a) => a.name === 'EntryAbility');
   assert.deepEqual(entryAbility.supportWindowMode, ['fullscreen', 'split', 'floating']);
+});
+
+test('resolveHoverSplitGeometry computes crease-safe top/bottom panes and rejects insufficient bounds', () => {
+  const valid = resolveHoverSplitGeometry(773, 372, 28);
+  assert.equal(valid.active, true);
+  assert.equal(valid.topPaneHeightVp, 372);
+  assert.equal(valid.creaseBandVp, 28);
+  assert.equal(valid.bottomPaneHeightVp, 373);
+
+  // Thin crease enforces minimum 12vp band
+  const thin = resolveHoverSplitGeometry(760, 360, 4);
+  assert.equal(thin.active, true);
+  assert.equal(thin.creaseBandVp, 12);
+  assert.equal(thin.bottomPaneHeightVp, 388);
+
+  // Insufficient top (< 180) or bottom (< 140) stays inactive
+  assert.equal(resolveHoverSplitGeometry(773, 150, 24).active, false);
+  assert.equal(resolveHoverSplitGeometry(500, 360, 24).active, false);
+  assert.equal(resolveHoverSplitGeometry(773, 360, 0).active, false);
+  assert.equal(resolveHoverSplitGeometry(0, 360, 24).active, false);
+});
+
+test('Ctrl/Meta+0 opens XiaoYi, and Hover Tabletop + Workbench quick controls stay wired cleanly', () => {
+  assert.equal(resolveFoldShortcut('0', true, false), 'open_xiaoyi');
+  assert.equal(resolveFoldShortcut('0', true, true), 'open_xiaoyi');
+  assert.equal(resolveFoldShortcut('0', false, true), 'none');
+
+  const index = readFileSync(new URL('../entry/src/main/ets/pages/Index.ets', import.meta.url), 'utf8');
+  const inspector = readFileSync(new URL('../entry/src/main/ets/components/FoldInspectorPanel.ets', import.meta.url), 'utf8');
+
+  assert.match(index, /KEYCODE_0/);
+  assert.match(index, /open_xiaoyi/);
+  assert.match(index, /resolveHoverSplitGeometry\(/);
+  assert.match(index, /id\('fold\.hover\.crease'\)/);
+  assert.match(index, /id\('fold\.hover\.deck'\)/);
+  assert.match(index, /id\('fold\.hover\.tabletop'\)/);
+  assert.match(index, /onInterruptSession:/);
+  assert.match(index, /onOpenXiaoYi:/);
+
+  assert.match(inspector, /id\('fold\.inspector\.urgent'\)/);
+  assert.match(inspector, /id\('fold\.inspector\.tools\.xiaoyi'\)/);
+  assert.match(inspector, /fold\.inspector\.interrupt\./);
 });

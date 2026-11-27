@@ -153,9 +153,32 @@ function scheduleSectionLoad(priority: number, run: () => Promise<void>, signal:
   });
 }
 
-export function GroupedSessions<T>({ groups, byComputer = false, machineOrder, dimension, kind, scope, source, renderRow, groupName, groupLead, groupTip, machineName, open, foldScope, heldSeen, placeOf, justFinished = false, chipless = false }: GroupedSessionsProps<T>) {
+type SectionProps<T> = Pick<GroupedSessionsProps<T>, "dimension" | "kind" | "scope" | "source" | "renderRow" | "groupName" | "groupLead" | "groupTip" | "machineName" | "open" | "foldScope" | "heldSeen" | "placeOf" | "justFinished" | "chipless">;
+type SidebarMachine = ReturnType<typeof selectSidebarMachines>[number];
+
+export function GroupedSessions<T>({ groups, byComputer = false, machineOrder, ...p }: GroupedSessionsProps<T>) {
+  return (
+    <div data-session-groups={p.dimension}>
+      {byComputer ? <Computers groups={groups} machineOrder={machineOrder} {...p} /> : <GroupList groups={groups} {...p} />}
+    </div>
+  );
+}
+
+/** A space's New agent (#13523): the one New agent sheet, on the space's computer and in its folder, with that
+ *  computer's usual launcher. A runtime space only (an account is no place to start one), on a computer that is online,
+ *  whose folder the hub says (the catalog's `path`); not No project, which has none. */
+function startIn(group: SessionGroup, kind: string, dimension: GroupDimension, machines: readonly SidebarMachine[]): (() => void) | undefined {
+  const place = group.places[0];
+  if (kind !== "runtime" || dimension !== "group" || group.rest || !place?.path) return undefined;
+  if (!machines.some((m) => m.id === place.machine && m.online)) return undefined;
+  return () => openNewAgent({ machineId: place.machine, cwd: place.path });
+}
+
+/** A run of sections, a bounded number of them at first (a computer's spaces, or the whole list). */
+function GroupList<T>({ groups, onExcluded, dimension, kind, scope, source, renderRow, groupName, groupLead, groupTip, machineName, open, foldScope, heldSeen, placeOf, justFinished = false, chipless = false, nested = false }: SectionProps<T> & { groups: readonly SessionGroup[]; onExcluded?: (key: string, n: number) => void; nested?: boolean }) {
   const machines = useStore(selectSidebarMachines);
-  const adjustedGroups = useMemo(() => {
+  const [all, setAll] = useState(false);
+  const adjusted = useMemo(() => {
     if (dimension !== "state" || !heldSeen?.rows.length || (!chipless && scope.state !== "unread")) return groups;
     const unreadHeld = heldSeen.rows.filter((r) => heldSeen.sectionOf(r) === "unread").length;
     const finishedHeld = justFinished && chipless ? heldSeen.rows.filter((r) => heldSeen.sectionOf(r) === JUST_FINISHED_KEY).length : 0;
@@ -178,40 +201,10 @@ export function GroupedSessions<T>({ groups, byComputer = false, machineOrder, d
     }
     return next;
   }, [groups, dimension, heldSeen, chipless, scope.state, justFinished]);
-  const common = { machines, dimension, kind, scope, source, renderRow, groupName, groupLead, groupTip, machineName, open, foldScope, heldSeen, placeOf };
-  return (
-    <div data-session-groups={dimension}>
-      {byComputer ? <Computers groups={adjustedGroups} machineOrder={machineOrder} {...common} />
-        : <GroupList groups={adjustedGroups} {...common} />}
-    </div>
-  );
-}
-
-type SidebarMachine = ReturnType<typeof selectSidebarMachines>[number];
-
-type SectionProps<T> = Pick<GroupedSessionsProps<T>, "dimension" | "kind" | "scope" | "source" | "renderRow" | "groupName" | "groupLead" | "groupTip" | "machineName" | "open" | "foldScope" | "heldSeen" | "placeOf"> & {
-  /** The computers the store knows: their online state. */
-  machines: readonly SidebarMachine[];
-};
-
-/** A space's New agent (#13523): the one New agent sheet, on the space's computer and in its folder, with that
- *  computer's usual launcher. A runtime space only (an account is no place to start one), on a computer that is online,
- *  whose folder the hub says (the catalog's `path`); not No project, which has none. */
-function startIn(group: SessionGroup, kind: string, dimension: GroupDimension, machines: readonly SidebarMachine[]): (() => void) | undefined {
-  const place = group.places[0];
-  if (kind !== "runtime" || dimension !== "group" || group.rest || !place?.path) return undefined;
-  if (!machines.some((m) => m.id === place.machine && m.online)) return undefined;
-  return () => openNewAgent({ machineId: place.machine, cwd: place.path });
-}
-
-/** A run of sections, a bounded number of them at first (a computer's spaces, or the whole list). */
-function GroupList<T>({ groups, onExcluded, dimension, kind, scope, source, renderRow, groupName, groupLead, groupTip, machineName, open, foldScope, machines, heldSeen, placeOf }: SectionProps<T> & { groups: readonly SessionGroup[]; onExcluded?: (key: string, n: number) => void }) {
-  const [all, setAll] = useState(false);
-  const shown = all ? groups : groups.slice(0, SESSION_LIST_METRICS.groupOptions);
-  const opens = (group: SessionGroup, i: number, sectionHeld: readonly T[]) => sectionHeld.length > 0 || (dimension === "todo" ? !group.rest && (i < SESSION_LIST_METRICS.groupsOpen || group.needs > 0) : i < SESSION_LIST_METRICS.groupsOpen || (dimension === "state" && group.key === JUST_FINISHED_KEY));
-  // a space or a directory names its computer only when the groups are on several
-  const several = groupMachines(groups) > 1;
+  const shown = all ? adjusted : adjusted.slice(0, SESSION_LIST_METRICS.groupOptions);
+  const opens = (group: SessionGroup, i: number) => dimension === "todo" ? !group.rest : i < SESSION_LIST_METRICS.groupsOpen || (dimension === "state" && group.key === JUST_FINISHED_KEY);
   const hideIdleIds = useMemo(() => (dimension === "state" && heldSeen?.rows.length ? new Set(heldSeen.rows.map(source.identity)) : undefined), [dimension, heldSeen, source.identity]);
+  const several = !nested && groupMachines(adjusted) > 1;
   return <>
     {shown.map((group, i) => {
       const sectionHeld = !heldSeen?.rows.length ? (NO_HELD as readonly T[])
@@ -219,15 +212,14 @@ function GroupList<T>({ groups, onExcluded, dimension, kind, scope, source, rend
         : scope.state === "unread" && placeOf ? heldSeen.rows.filter((r) => holdsPlace(group, dimension, placeOf(r)))
         : (NO_HELD as readonly T[]);
       const hideIds = dimension === "state" && group.key === "idle" ? hideIdleIds : undefined;
-      return (
-        <GroupSection key={group.key} group={group} first={i === 0} startsOpen={opens(group, i, sectionHeld)} dimension={dimension} kind={kind} scope={scope} source={source}
-          renderRow={renderRow} name={groupName(group)} lead={groupLead?.(group)} tip={groupTip?.(group)} machineName={machineName} several={several} holds={Boolean((open && holdsPlace(group, dimension, open)) || (dimension === "todo" && !group.rest && group.needs > 0))} foldScope={foldScope} onExcluded={onExcluded}
-          heldRows={sectionHeld} hideIds={hideIds} stay={Boolean(heldSeen?.stay)} onClearSeen={heldSeen?.onClear} onRows={heldSeen?.onRows}
-          start={startIn(group, kind, dimension, machines)} />
-      );
+      return <GroupSection key={group.key} group={group} first={i === 0} startsOpen={sectionHeld.length > 0 || opens(group, i)} dimension={dimension} kind={kind} scope={scope} source={source}
+        renderRow={renderRow} name={groupName(group)} lead={groupLead?.(group)} tip={groupTip?.(group)} machineName={machineName} several={several}
+        holds={Boolean((open && holdsPlace(group, dimension, open)) || (dimension === "todo" && !group.rest && group.needs > 0))} foldScope={foldScope} onExcluded={onExcluded}
+        heldRows={sectionHeld} hideIds={hideIds} stay={Boolean(heldSeen?.stay)} onClearSeen={heldSeen?.onClear} onRows={heldSeen?.onRows}
+        start={startIn(group, kind, dimension, machines)} />;
     })}
-    {groups.length > shown.length && (
-      <ShowMoreRow label={t("paged-agents.more_groups", { count: groups.length - shown.length })} onClick={() => setAll(true)} />
+    {adjusted.length > shown.length && (
+      <ShowMoreRow label={t("paged-agents.more_groups", { count: adjusted.length - shown.length })} onClick={() => setAll(true)} />
     )}
   </>;
 }
@@ -235,9 +227,10 @@ function GroupList<T>({ groups, onExcluded, dimension, kind, scope, source, rend
 /** By space on several computers (#13522, as iOS's By Project): a section per computer, in the hub's order, with its
  *  spaces in it and its sessions in no space last. */
 function Computers<T>({ groups, machineOrder, ...p }: SectionProps<T> & { groups: readonly SessionGroup[]; machineOrder?: readonly string[] }) {
+  const machines = useStore(selectSidebarMachines);
   const sections = useMemo(() => computerSections(groups, machineOrder), [groups, machineOrder]);
   return <>{sections.map((section, i) => (
-    <ComputerGroup key={section.machine} section={section} first={i === 0} machine={p.machines.find((m) => m.id === section.machine)} {...p} />
+    <ComputerGroup key={section.machine} section={section} first={i === 0} machine={machines.find((m) => m.id === section.machine)} {...p} />
   ))}</>;
 }
 
@@ -272,7 +265,7 @@ function ComputerGroup<T>({ section, first, machine, ...p }: SectionProps<T> & {
       }>
         <Collapse open={!folded} sidebarFold unclipped>
           <div className="sidebar-indent" inert={folded || undefined}>
-            <GroupList groups={section.groups} {...p} onExcluded={onExcluded} />
+            <GroupList groups={section.groups} {...p} onExcluded={onExcluded} nested />
           </div>
         </Collapse>
       </SidebarGroup>
@@ -307,15 +300,14 @@ function GroupSection<T>({ group, first, startsOpen, dimension, kind, scope, sou
     onExcluded(key, left);
     return () => onExcluded(key, 0);
   }, [onExcluded, key, left]);
-  // a space whose name another of its computer's spaces has says where it is (#13522); without by-computer nesting,
-  // a space or a directory on several computers names its computer too
-  const computer = several && !group.qualifier && group.places[0]?.machine ? machineName(group.places[0].machine) : undefined;
+  // a space whose name another of its computer's spaces has says where it is (#13522); without computer headings, a
+  // space or a directory names its computer only when the groups are on several
+  const computer = several && group.places[0]?.machine ? machineName(group.places[0].machine) : undefined;
+  const title = <>{name}{group.qualifier ? <span className="font-normal"> · {group.qualifier}</span> : computer && <span className="font-normal"> · {computer}</span>}</>;
   return (
     <div data-session-group={group.key} data-group-open={!folded}>
       <Section first={first} folded={folded} onToggle={toggle}
-        title={lead || tip
-          ? <span className="flex min-w-0 items-center gap-1.5">{lead}<span className="min-w-0 truncate" title={tip}>{name}{computer && <span className="font-normal"> · {computer}</span>}{group.qualifier && <span className="font-normal"> · {group.qualifier}</span>}</span></span>
-          : <>{name}{computer && <span className="font-normal"> · {computer}</span>}{group.qualifier && <span className="font-normal"> · {group.qualifier}</span>}</>}
+        title={lead || tip ? <span className="flex min-w-0 items-center gap-1.5">{lead}<span className="min-w-0 truncate" title={tip}>{title}</span></span> : title}
         right={<>
           {/* the numbers step aside for the + where it shows: under the pointer, on keyboard focus, always on a touch screen */}
           <span className={cx("flex shrink-0 items-center gap-1", start && STEP_ASIDE)}>

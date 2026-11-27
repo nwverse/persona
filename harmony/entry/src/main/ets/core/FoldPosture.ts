@@ -243,6 +243,47 @@ export function compactTreeInset(level: number, windowWidthVp: number, controlSc
   return Math.round(14 + 20 * scale * clamped);
 }
 
+export interface HoverSplitGeometry {
+  readonly active: boolean;
+  readonly topPaneHeightVp: number;
+  readonly creaseBandVp: number;
+  readonly bottomPaneHeightVp: number;
+}
+
+/**
+ * Computes crease-aware top/bottom split heights for half-folded hover tabletop mode.
+ * Returns `active: false` unless both the upper reading pane (>= 180vp) and lower control deck
+ * (>= 140vp) fit cleanly on either side of the physical hinge crease.
+ */
+export function resolveHoverSplitGeometry(
+  windowHeightVp: number,
+  creaseTopVp: number,
+  creaseHeightVp: number
+): HoverSplitGeometry {
+  if (
+    !Number.isFinite(windowHeightVp) ||
+    !Number.isFinite(creaseTopVp) ||
+    !Number.isFinite(creaseHeightVp) ||
+    windowHeightVp <= 0 ||
+    creaseTopVp < 180 ||
+    creaseHeightVp <= 0
+  ) {
+    return { active: false, topPaneHeightVp: 0, creaseBandVp: 0, bottomPaneHeightVp: 0 };
+  }
+  const topPaneHeightVp = Math.floor(creaseTopVp);
+  const creaseBandVp = Math.max(12, Math.ceil(creaseHeightVp));
+  const bottomPaneHeightVp = Math.floor(windowHeightVp - topPaneHeightVp - creaseBandVp);
+  if (topPaneHeightVp < 180 || bottomPaneHeightVp < 140) {
+    return { active: false, topPaneHeightVp: 0, creaseBandVp: 0, bottomPaneHeightVp: 0 };
+  }
+  return {
+    active: true,
+    topPaneHeightVp: topPaneHeightVp,
+    creaseBandVp: creaseBandVp,
+    bottomPaneHeightVp: bottomPaneHeightVp
+  };
+}
+
 export type FoldShortcutAction =
   | 'search'
   | 'new_chat'
@@ -250,6 +291,7 @@ export type FoldShortcutAction =
   | 'workbench_pulse'
   | 'workbench_code'
   | 'workbench_machines'
+  | 'open_xiaoyi'
   | 'next_unread'
   | 'prev_unread'
   | 'dismiss'
@@ -261,6 +303,7 @@ export type FoldShortcutAction =
  * - Ctrl/Meta + N -> new chat or agent
  * - Ctrl/Meta + I -> toggle Live Inspector when supported by the current fold posture
  * - Ctrl/Meta + 1/2/3 -> switch Live Workbench tab (Pulse / Code / Machines) when supported
+ * - Ctrl/Meta + 0 -> open XiaoYi diagnostics & settings
  * - Ctrl/Meta + ] / [ -> step to next / previous actionable session in the relay queue
  * - Escape -> dismiss active overlay, sheet, or inspector
  */
@@ -281,6 +324,7 @@ export function resolveFoldShortcut(
   if (normalized === '1') return supportsInspector ? 'workbench_pulse' : 'none';
   if (normalized === '2') return supportsInspector ? 'workbench_code' : 'none';
   if (normalized === '3') return supportsInspector ? 'workbench_machines' : 'none';
+  if (normalized === '0') return 'open_xiaoyi';
   if (normalized === ']') return 'next_unread';
   if (normalized === '[') return 'prev_unread';
   return 'none';

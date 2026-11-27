@@ -106,11 +106,13 @@ import { tr, trError } from '../design/Strings';
 import { KeyCode } from '@kit.InputKit';
 import { Motion } from '../design/Motion';
 import { Haptics } from '../platform/Haptics';
-import { pickRelaySessionIndex, resolveFoldLayout, resolveFoldShortcut, widthClassFromBreakpoint } from '../core/FoldPosture';
+import { HoverSplitGeometry, pickRelaySessionIndex, resolveFoldLayout, resolveFoldShortcut, resolveHoverSplitGeometry, widthClassFromBreakpoint } from '../core/FoldPosture';
 import type { FoldAdaptiveLayout } from '../core/FoldPosture';
 import { FoldInspectorPanel } from '../components/FoldInspectorPanel';
 import { FloatingToastOverlay } from '../components/FloatingToastOverlay';
+import { toastCenter } from '../models/ToastCenter';
 import { isHubStateKey } from '../core/StorageOwnership';
+import { sessionDisplayTitle } from '../core/SessionNaming';
 import { formatSharedDraftText } from '../core/XiaoYiRoutes';
 
 interface ChatActionEntry extends SheetInfo {
@@ -943,6 +945,50 @@ struct Index {
       nativeHoverAvailable: this.environment.nativeHoverAvailable
     });
   }
+  @Computed get hoverSplit(): HoverSplitGeometry {
+    if (!this.foldLayout.hoverMode || this.environment.creaseHeightPx <= 0) {
+      return { active: false, topPaneHeightVp: 0, creaseBandVp: 0, bottomPaneHeightVp: 0 };
+    }
+    const heightVp = this.foldWindowHeightVp > 0 ? this.foldWindowHeightVp : this.phoneHeight;
+    let creaseTopVp = 0;
+    let creaseHeightVp = 0;
+    try {
+      const ui = this.getUIContext();
+      creaseTopVp = ui.px2vp(this.environment.creaseTopPx);
+      creaseHeightVp = ui.px2vp(this.environment.creaseHeightPx);
+    } catch (_) {
+      return { active: false, topPaneHeightVp: 0, creaseBandVp: 0, bottomPaneHeightVp: 0 };
+    }
+    return resolveHoverSplitGeometry(heightVp, creaseTopVp, creaseHeightVp);
+  }
+  private openXiaoYiQuick(): void {
+    if (this.wide() && this.model.profile.id) {
+      this.openSettings('phone_xiaoyi');
+    } else {
+      this.phoneSettingsQuery = '';
+      this.phoneSettingsTrail = pushPhoneSetting([], 'phone_xiaoyi');
+      if (this.model.profile.id && !this.wide()) this.spacesShown = true;
+      this.phoneSettingsShown = true;
+    }
+  }
+  private async interruptSessionFromWorkbench(row: ResourceRow): Promise<void> {
+    if (this.model.demo || row.kind !== 'session') return;
+    try {
+      const owner = await this.model.viewFor(row);
+      if (owner.selected.key() === row.key() && owner.canStop()) {
+        await owner.stop();
+        toastCenter.show(tr('fold_interrupt_agent'), 'info');
+        return;
+      }
+      if (owner.connected && owner.canInterrupt()) {
+        await owner.repo().stop(row, (): boolean => owner.connected && owner.canInterrupt());
+        owner.refresh().catch(() => {});
+        toastCenter.show(tr('fold_interrupt_agent'), 'info');
+      }
+    } catch (error) {
+      toastCenter.show(trError((error as Error).message || 'failed'), 'error');
+    }
+  }
   private wide(): boolean {
     return this.breakpoint === WidthBreakpoint.WIDTH_LG || this.breakpoint === WidthBreakpoint.WIDTH_XL || this.foldLayout.navigationMode === 'split';
   }
@@ -1023,6 +1069,7 @@ struct Index {
     if (event.keyCode === KeyCode.KEYCODE_1) return '1';
     if (event.keyCode === KeyCode.KEYCODE_2) return '2';
     if (event.keyCode === KeyCode.KEYCODE_3) return '3';
+    if (event.keyCode === KeyCode.KEYCODE_0) return '0';
     if (event.keyCode === KeyCode.KEYCODE_LEFT_BRACKET) return '[';
     if (event.keyCode === KeyCode.KEYCODE_RIGHT_BRACKET) return ']';
     return '';
@@ -1088,6 +1135,10 @@ struct Index {
       event.stopPropagation();
     } else if (action === 'workbench_machines') {
       this.switchFoldWorkbenchTab(2);
+      event.stopPropagation();
+    } else if (action === 'open_xiaoyi') {
+      Haptics.tap();
+      this.openXiaoYiQuick();
       event.stopPropagation();
     } else if (action === 'next_unread') {
       this.stepFoldRelay(1);
@@ -3487,7 +3538,8 @@ struct Index {
   private chatTitle(param: Object): string {
     const row = this.routeRow(param);
     const current = this.detailModel.sessions.concat(this.detailModel.conversations).find((item: ResourceRow) => item.key() === row.key());
-    return current?.title || row.title || tr(row.kind === 'conversation' ? 'main_chat' : 'agents');
+    const target = current || row;
+    return sessionDisplayTitle(target.title, target.data(), this.detailModel.useHerdrTabName) || tr(row.kind === 'conversation' ? 'main_chat' : 'agents');
   }
   private async restoreTarget(name: string, param: Object): Promise<void> {
     const descriptor = NavigationContext.from(name, param as string);
@@ -3704,6 +3756,60 @@ struct Index {
     if (!this.spacesShown) return false;
     this.spacesShown = false; return true;
   }
+  @Builder hoverDeckPill(label: string, tint: ResourceColor, identity: string, action: () => void) {
+    Button(label, { type: ButtonType.Capsule })
+      .height(34)
+      .padding({ left: 12, right: 12 })
+      .fontSize(Tokens.interfaceFontVp(12, this.environment.fontScale))
+      .fontWeight(FontWeight.Medium)
+      .backgroundColor(Colors.surface)
+      .fontColor(tint)
+      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: 17 })
+      .shadow(PhoneStyle.cardElevation(this.environment.dark))
+      .onClick(() => {
+        Haptics.tap();
+        action();
+      })
+      .id(identity)
+  }
+
+  @Builder hoverTabletopDeck() {
+    Column({ space: 10 }) {
+      Row({ space: 8 }) {
+        Text(tr('fold_posture_hover'))
+          .fontSize(Tokens.interfaceFontVp(12, this.environment.fontScale))
+          .fontWeight(FontWeight.Bold)
+          .fontColor(Colors.link)
+          .padding({ left: 10, right: 10, top: 4, bottom: 4 })
+          .backgroundColor(Colors.selection)
+          .borderRadius(Tokens.capsule)
+        Text(tr('fold_hover_deck_title'))
+          .fontSize(Tokens.interfaceFontVp(14, this.environment.fontScale))
+          .fontWeight(FontWeight.Bold)
+          .fontColor(Colors.ink)
+          .layoutWeight(1)
+        this.hoverDeckPill(tr('fold_relay_prev'), Colors.ink, 'fold.hover.prev', () => this.stepFoldRelay(-1))
+        this.hoverDeckPill(tr('fold_relay_next'), Colors.link, 'fold.hover.next', () => this.stepFoldRelay(1))
+      }.width('100%').alignItems(VerticalAlign.Center)
+
+      Row({ space: 8 }) {
+        this.hoverDeckPill(tr('files'), Colors.link, 'fold.hover.files', () => this.openTools('', 0))
+        this.hoverDeckPill(tr('git'), Colors.link, 'fold.hover.git', () => this.openTools('', 1))
+        this.hoverDeckPill(tr('terminal'), Colors.link, 'fold.hover.terminal', () => this.openTools('', 2))
+        this.hoverDeckPill(tr('phone_xiaoyi'), Colors.ai, 'fold.hover.xiaoyi', () => this.openXiaoYiQuick())
+        if (this.wide() && this.foldLayout.supportsInspector) {
+          this.hoverDeckPill(tr('fold_inspector_title'), Colors.ink, 'fold.hover.inspector', () => this.toggleFoldInspector())
+        }
+      }.width('100%')
+    }
+    .width('100%')
+    .layoutWeight(1)
+    .padding({ left: 16, right: 16, top: 12, bottom: 16 })
+    .justifyContent(FlexAlign.SpaceEvenly)
+    .backgroundColor(Colors.grouped)
+    .id('fold.hover.deck')
+  }
+
   build() {
     Stack() {
     if (this.drawerFraction > 0 && this.fullHeightPhone() && !this.environment.keyboardHeightPx) {
@@ -3753,18 +3859,29 @@ struct Index {
         }.width('100%').height('100%')
           .bindSheet($$this.showSheet, this.sheetContent(), { title: this.sheetKind === 'newagent' || this.compactPairing() ? undefined : {title:this.sheetTitle()}, height: this.sheetKind === 'newagent' || this.compactPairing() ? this.compactFormHeight() : SheetSize.LARGE, keyboardAvoidMode: this.sheetKind === 'newagent' ? SheetKeyboardAvoidMode.RESIZE_ONLY : undefined, showClose: this.sheetKind !== 'newagent' && !this.compactPairing(), onWillDismiss:(d:DismissSheetAction) => { if (this.sheetKind === 'newagent' && this.agentPanel) this.closeAgentPanel(); else if (!this.creatingAgent) d.dismiss(); } })
       } else {
-        if (!this.wide() && !this.floatingProjectHeader && !this.floatingDraftHeader && (this.phoneTop || this.model.section!==1 || !this.agentSearching) && this.phoneTop !== 'project_tree' && (this.phoneTop || !this.projectPlace() || !this.projectSearching)) this.phoneHeader()
-        Navigation(this.stack) { this.primaryContent() }.title({ builder: this.peerTitle, height: this.headerHeight() }, { systemMaterial: this.titleMaterial }).titleMode(NavigationTitleMode.Mini)
-          .hideBackButton(true).hideTitleBar(this.rail() || !this.wide()).menus([])
-          .backgroundColor(Colors.canvas)
-          .toolbarConfiguration([])
-          .mode(this.wide() ? NavigationMode.Split : NavigationMode.Stack)
-          .navBarWidth(this.rail() ? Tokens.collapsed : this.foldLayout.masterWidth)
-          .navBarWidthRange(this.rail() ? [Tokens.collapsed, Tokens.collapsed] : [this.foldLayout.masterMin, this.foldLayout.masterMax])
-          .minContentWidth(this.foldLayout.detailMin).enableDragBar(!this.rail()).navDestination(this.destination)
-          .onAreaChange(() => this.updateBreakpoint()).width('100%').layoutWeight(1)
+        Column() {
+          if (!this.wide() && !this.floatingProjectHeader && !this.floatingDraftHeader && (this.phoneTop || this.model.section!==1 || !this.agentSearching) && this.phoneTop !== 'project_tree' && (this.phoneTop || !this.projectPlace() || !this.projectSearching)) this.phoneHeader()
+          Navigation(this.stack) { this.primaryContent() }.title({ builder: this.peerTitle, height: this.headerHeight() }, { systemMaterial: this.titleMaterial }).titleMode(NavigationTitleMode.Mini)
+            .hideBackButton(true).hideTitleBar(this.rail() || !this.wide()).menus([])
+            .backgroundColor(Colors.canvas)
+            .toolbarConfiguration([])
+            .mode(this.wide() ? NavigationMode.Split : NavigationMode.Stack)
+            .navBarWidth(this.rail() ? Tokens.collapsed : this.foldLayout.masterWidth)
+            .navBarWidthRange(this.rail() ? [Tokens.collapsed, Tokens.collapsed] : [this.foldLayout.masterMin, this.foldLayout.masterMax])
+            .minContentWidth(this.foldLayout.detailMin).enableDragBar(!this.rail()).navDestination(this.destination)
+            .onAreaChange(() => this.updateBreakpoint()).width('100%').layoutWeight(1)
 
-          .bindSheet($$this.showSheet, this.sheetContent(), { title: this.sheetKind === 'newagent' || this.compactPairing() ? undefined : {title:this.sheetTitle()}, height: this.sheetKind === 'newagent' || this.compactPairing() ? this.compactFormHeight() : SheetSize.LARGE, keyboardAvoidMode: this.sheetKind === 'newagent' ? SheetKeyboardAvoidMode.RESIZE_ONLY : undefined, showClose: this.sheetKind !== 'newagent' && !this.compactPairing(), onWillDismiss:(d:DismissSheetAction) => { if (this.sheetKind === 'newagent' && this.agentPanel) this.closeAgentPanel(); else if (!this.creatingAgent) d.dismiss(); } })
+            .bindSheet($$this.showSheet, this.sheetContent(), { title: this.sheetKind === 'newagent' || this.compactPairing() ? undefined : {title:this.sheetTitle()}, height: this.sheetKind === 'newagent' || this.compactPairing() ? this.compactFormHeight() : SheetSize.LARGE, keyboardAvoidMode: this.sheetKind === 'newagent' ? SheetKeyboardAvoidMode.RESIZE_ONLY : undefined, showClose: this.sheetKind !== 'newagent' && !this.compactPairing(), onWillDismiss:(d:DismissSheetAction) => { if (this.sheetKind === 'newagent' && this.agentPanel) this.closeAgentPanel(); else if (!this.creatingAgent) d.dismiss(); } })
+        }
+        .width('100%')
+        .height(this.hoverSplit.active ? this.hoverSplit.topPaneHeightVp : 'auto')
+        .layoutWeight(this.hoverSplit.active ? 0 : 1)
+        if (this.hoverSplit.active) {
+          Row().width('100%').height(this.hoverSplit.creaseBandVp).backgroundColor(Colors.grouped).id('fold.hover.crease')
+          Column() {
+            this.hoverTabletopDeck()
+          }.width('100%').layoutWeight(1).id('fold.hover.tabletop')
+        }
       }
     }.layoutWeight(1).height('100%').backgroundColor(Colors.canvas)
       .accessibilityLevel(this.chatSearchShown || this.spacesShown && !this.wide() ? 'no-hide-descendants' : 'auto')
@@ -3787,6 +3904,8 @@ struct Index {
         },
         onOpenSession: (row: ResourceRow) => this.openPickedChat(row),
         onStepRelay: (direction: 1 | -1) => this.stepFoldRelay(direction),
+        onInterruptSession: (row: ResourceRow) => { this.interruptSessionFromWorkbench(row); },
+        onOpenXiaoYi: () => this.openXiaoYiQuick(),
         onOpenLink: (address: string) => this.openReader(address)
       })
     }

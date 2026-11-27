@@ -61,6 +61,7 @@ DOMAINS = [
     "project_headings_mock",  # same-named projects for the native By Project headings (#13558), MOCK_PROJECT_HEADINGS
     "github_mock",  # GitHub's sign-ins and MOCK_GITHUB_INBOX's thread page (/api/v1/connectors/github/…)
     "kb_selection_mock",  # Settings › Knowledge selection (/api/v1/kb/selection), MOCK_KB_SELECTION
+    "project_tree_mock",  # the knowledge base's projects as a tree with milestones (#12927), MOCK_KB_TREE
     "project_lessons_mock",  # a project's lessons from finished tasks (/api/v1/kb/projects/{id}/lessons…), MOCK_PROJECT_LESSONS
     "mail_mock",  # mail accounts and write paths (/api/v1/mail/…, GET /mock/mail), MOCK_MAIL, MOCK_GOOGLE, MOCK_OUTLOOK
     "hub_update_mock",  # the hub's own update (/api/v1/hub/update…, GET /mock/hub_update), MOCK_HUB_UPDATE

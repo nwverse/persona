@@ -69,7 +69,8 @@ func (s *Service) fleetHandler(next http.Handler) http.Handler {
 				apierr.WriteCode(w, http.StatusForbidden, proto.CodeSecretRunEnvElsewhere, err)
 			case errors.Is(err, errNotPending):
 				s.writeEnded(r.Context(), w, id, res, err, r.Header.Get(RoleHeader) == roleExtension)
-			case errors.Is(err, errInvalidElicitation), errors.Is(err, errInvalidQuestionCancel), errors.Is(err, errInvalidEditedAnswer):
+			case errors.Is(err, errInvalidElicitation), errors.Is(err, errInvalidQuestionCancel), errors.Is(err, errInvalidEditedAnswer),
+				errors.Is(err, errMissingAllow), errors.Is(err, errMissingApprove):
 				apierr.Write(w, http.StatusBadRequest, err)
 			default:
 				apierr.Call(w, err) // prompt_changed: 409, nothing pressed

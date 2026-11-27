@@ -64,7 +64,7 @@ type SessionCapabilities struct {
 	// Absent preserves older clients' Claude terminal behavior.
 	Rewind     *bool `json:"rewind,omitempty"`
 	RewindCode *bool `json:"rewind_code,omitempty"`
-	// Takeover is advertised only for a local, read-only Codex CLI thread.
+	// Takeover is advertised for eligible local, read-only Codex CLI and idle unowned Codex App threads.
 	Takeover *CodexTakeover `json:"takeover,omitempty"`
 }
 
@@ -72,6 +72,7 @@ type CodexTakeover struct {
 	Running   bool   `json:"running"`
 	CanResume bool   `json:"can_resume"`
 	Reason    string `json:"reason,omitempty"`
+	AppOwned  bool   `json:"app_owned,omitempty"`
 }
 
 // CanModes is a Modes value.

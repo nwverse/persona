@@ -66,12 +66,13 @@ async function menuItems(): Promise<string[]> {
   return items;
 }
 
-it.each(["en", "zh-Hans", "ja"])("on the agent's page: desktop shows the terminal toolbar button without duplicating it in ⋯, phone keeps ⋯ › Terminal (%s)", async (lang) => {
+it.each(["en", "zh-Hans", "ja"])("on the agent's page: localized terminal entries, no dot while nothing waits (%s)", async (lang) => {
   await initI18n(lang);
   expect(t("lib-terminals.terminal")).not.toBe("lib-terminals.terminal");
   await open(<ChatView mid="mac" sid="s1" inPage />);
   expect(terminalButton()).not.toBeNull();
   expect(dot()).toBeNull();
+  // The desktop's existing toolbar button owns Terminal; the phone puts it in ⋯.
   expect((await menuItems()).some((x) => x.includes(t("lib-terminals.terminal")))).toBe(false);
 
   media.phone = true;
@@ -96,6 +97,7 @@ it("in the side panel: the terminal button opens the agent's page in its termina
 });
 
 it("the side panel's localized terminal menu item opens the terminal page and closes the panel", async () => {
+  await initI18n("zh-Hans");
   media.phone = true;
   const router = await import("../../lib/router");
   const navigate = vi.spyOn(router, "navigate").mockImplementation(() => {});

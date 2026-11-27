@@ -761,7 +761,6 @@ describe("the list by space", () => {
       }
     });
   });
-
   it("lists one computer's spaces as before, with no computer level", async () => {
     const one = ROWS.filter((r) => r.machine === "mac");
     vi.mocked(api).mockImplementation((path) => {
