@@ -723,10 +723,10 @@ function SettingsNav({ tab, query, onQuery, search, shown, inNav = shown, more =
           })
         )}
         {!query && more && (
-          <button type="button" data-settings-more onClick={more.onShow} className="mt-2 flex h-8 w-full items-center gap-2 rounded-[7px] px-2.5 text-left text-[13px] text-ink-2 transition-colors hover:bg-hover hover:text-ink">
+          <button type="button" data-settings-more onClick={more.onShow} className="mt-2 flex h-8 w-full items-center gap-2 rounded-[7px] px-2.5 text-left text-meta text-ink-2 transition-colors hover:bg-hover hover:text-ink">
             <Icon name="more" size={15} className="shrink-0" />
             <span className="min-w-0 flex-1 truncate">{t("settings.more_settings")}</span>
-            <span className="shrink-0 tabular-nums text-[11px] text-ink-3">{more.count}</span>
+            <span className="shrink-0 tabular-nums text-submeta text-ink-3">{more.count}</span>
           </button>
         )}
       </nav>
