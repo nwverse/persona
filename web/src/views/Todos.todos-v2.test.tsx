@@ -1784,4 +1784,149 @@ describe("TodosView detail active_blockers strip under todos_v2 (#16138)", () =>
     await flush();
     expect(host.querySelector("[data-testid=todo-active-blockers]")).toBeNull();
   });
+
+  it("renders no manual blocker add/cancel controls when todos_v2 is false or omitted", async () => {
+    await render({ todos: blockedTodos, todosV2: undefined, selectedId: "unblocked_task" });
+    expect(host.querySelector("[data-testid=todo-add-pr-blocker-btn]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-add-pr-blocker-input]")).toBeNull();
+
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await render({ todos: blockedTodos, todosV2: false, selectedId: "blocked_task" });
+    expect(host.querySelector("[data-testid=todo-add-pr-blocker-btn]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-cancel-blocker-blk_pr]")).toBeNull();
+  });
+
+  it("validates https:// URL, submits POST /todos/{id}/blockers, handles failure, and hides add trigger on done to-dos under todos_v2 (#16199)", async () => {
+    let currentTodos: Todo[] = [
+      ...blockedTodos,
+      {
+        id: "closed_task",
+        title: "Already finished",
+        created_at: iso(5 * HOUR),
+        updated_at: iso(2 * HOUR),
+        done_at: iso(1 * HOUR),
+        view: view("done", "closed", "done", 0),
+      },
+    ];
+    let failNextPost = true;
+    api.mockImplementation(async (path: string, init?: unknown) => {
+      if (path.includes("/kb")) return { items: kbProjects };
+      if (path === "/todos/unblocked_task/blockers" && (init as { method?: string })?.method === "POST") {
+        if (failNextPost) {
+          failNextPost = false;
+          throw new Error("duplicate blocker");
+        }
+        const body = (init as { json?: { kind: string; target_ref: string } })?.json;
+        const created = { id: "blk_added_1", kind: body!.kind, target_ref: body!.target_ref, state: "active" };
+        currentTodos = currentTodos.map((td) =>
+          td.id === "unblocked_task" ? { ...td, active_blockers: [...(td.active_blockers ?? []), created] } : td,
+        );
+        return { blocker: created };
+      }
+      if (path === "/todos") return { todos: currentTodos };
+      return {};
+    });
+
+    const setInputValue = async (input: HTMLInputElement, next: string) => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+      await act(async () => {
+        setter.call(input, next);
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    };
+
+    await render({ todos: currentTodos, todosV2: true, selectedId: "unblocked_task" });
+    // Empty blockers still hides the strip, while open to-do exposes the compact "+ Wait on PR" button
+    expect(host.querySelector("[data-testid=todo-active-blockers]")).toBeNull();
+    const addBtn = host.querySelector<HTMLButtonElement>("[data-testid=todo-add-pr-blocker-btn]")!;
+    expect(addBtn).toBeTruthy();
+
+    await act(async () => addBtn.click());
+    await flush();
+    const input = host.querySelector<HTMLInputElement>("[data-testid=todo-add-pr-blocker-input]")!;
+    expect(input).toBeTruthy();
+
+    // Non-https URL is rejected client-side without hitting API
+    await setInputValue(input, "http://github.com/nwverse/persona/pull/16199");
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-testid=todo-add-pr-blocker-submit]")!.click());
+    await flush();
+    expect(host.querySelector("[data-testid=todo-add-pr-blocker-error]")?.textContent).toBe(
+      t("todos.active_blocker_pr_url_invalid"),
+    );
+    expect(api).not.toHaveBeenCalledWith("/todos/unblocked_task/blockers", expect.anything());
+
+    // Valid https:// URL -> server error shows message and preserves input
+    await setInputValue(input, "https://github.com/nwverse/persona/pull/16199");
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-testid=todo-add-pr-blocker-submit]")!.click());
+    await flush();
+    expect(host.querySelector("[data-testid=todo-add-pr-blocker-error]")?.textContent).toContain("duplicate blocker");
+    expect(host.querySelector<HTMLInputElement>("[data-testid=todo-add-pr-blocker-input]")?.value).toBe(
+      "https://github.com/nwverse/persona/pull/16199",
+    );
+
+    // Retry succeeds -> POSTs exact payload, refreshes /todos, closes form, renders new blocker
+    await act(async () => host.querySelector<HTMLButtonElement>("[data-testid=todo-add-pr-blocker-submit]")!.click());
+    await flush();
+    expect(api).toHaveBeenCalledWith(
+      "/todos/unblocked_task/blockers",
+      expect.objectContaining({
+        method: "POST",
+        json: { kind: "external_pr", target_ref: "https://github.com/nwverse/persona/pull/16199" },
+      }),
+    );
+    expect(api).toHaveBeenCalledWith("/todos", expect.anything());
+    expect(host.querySelector("[data-testid=todo-add-pr-blocker-input]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-active-blockers]")).toBeTruthy();
+    expect(host.querySelector("[data-testid=todo-cancel-blocker-blk_added_1]")).toBeTruthy();
+
+    // Closed to-do does not show "+ Wait on PR"
+    await act(async () => root.unmount());
+    root = createRoot(host);
+    await render({ todos: currentTodos, todosV2: true, selectedId: "closed_task" });
+    expect(host.querySelector("[data-testid=todo-add-pr-blocker-btn]")).toBeNull();
+  });
+
+  it("cancels an active blocker in one click via DELETE /todos/{id}/blockers/{blockerId} and refreshes todos (#16199)", async () => {
+    let currentTodos: Todo[] = blockedTodos.map((td) => ({
+      ...td,
+      active_blockers: td.active_blockers ? [...td.active_blockers] : undefined,
+    }));
+    api.mockImplementation(async (path: string, init?: unknown) => {
+      if (path.includes("/kb")) return { items: kbProjects };
+      if (path === "/todos/blocked_task/blockers/blk_pr" && (init as { method?: string })?.method === "DELETE") {
+        currentTodos = currentTodos.map((td) =>
+          td.id === "blocked_task"
+            ? { ...td, active_blockers: (td.active_blockers ?? []).filter((b) => b.id !== "blk_pr") }
+            : td,
+        );
+        return { ok: true };
+      }
+      if (path === "/todos") return { todos: currentTodos };
+      return {};
+    });
+
+    await render({ todos: currentTodos, todosV2: true, selectedId: "blocked_task" });
+    // Only one "+ Wait on PR" button (rendered inside the strip header)
+    expect(host.querySelectorAll("[data-testid=todo-add-pr-blocker-btn]")).toHaveLength(1);
+    const cancelBtn = host.querySelector<HTMLButtonElement>("[data-testid=todo-cancel-blocker-blk_pr]")!;
+    expect(cancelBtn).toBeTruthy();
+
+    await act(async () => cancelBtn.click());
+    await flush();
+
+    expect(api).toHaveBeenCalledWith(
+      "/todos/blocked_task/blockers/blk_pr",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+    expect(api).toHaveBeenCalledWith("/todos", expect.anything());
+    expect(host.querySelector("[data-testid=todo-cancel-blocker-blk_pr]")).toBeNull();
+    expect(host.querySelectorAll("[data-testid=todo-active-blocker-item]")).toHaveLength(2);
+
+    // Turning todos_v2 off hides all blocker controls immediately
+    await act(async () => patchAssistant({ todos_v2: false }));
+    await flush();
+    expect(host.querySelector("[data-testid=todo-active-blockers]")).toBeNull();
+    expect(host.querySelector("[data-testid=todo-add-pr-blocker-btn]")).toBeNull();
+  });
 });

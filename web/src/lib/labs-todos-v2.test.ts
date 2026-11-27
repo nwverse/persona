@@ -5,6 +5,8 @@ import { parseDocument } from "./configuration/contract";
 import {
   DEFAULT_TODOS_V2_ATTENTION_PREFS,
   getTodosV2State,
+  isValidTodosV2QuietHours,
+  parseTodosV2QuietHours,
   resetTodosV2StateForTest,
   resolveTodosV2AttentionPrefs,
   saveTodosV2AttentionPrefs,
@@ -78,18 +80,45 @@ it("resolves attention preferences with older-hub defaults and preserves explici
     todos_v2_pending_review_sla_hours: 24,
     todos_v2_can_wait_sla_hours: 48,
     todos_v2_fold_children: true,
+    todos_v2_quiet_hours: "",
+    todos_v2_digest_window_minutes: 0,
   });
   expect(resolveTodosV2AttentionPrefs({
     todos_v2_auto_seen: "off",
     todos_v2_pending_review_sla_hours: 0,
     todos_v2_can_wait_sla_hours: 0,
     todos_v2_fold_children: false,
+    todos_v2_quiet_hours: "22:00-08:00",
+    todos_v2_digest_window_minutes: 60,
   })).toEqual({
     todos_v2_auto_seen: "off",
     todos_v2_pending_review_sla_hours: 0,
     todos_v2_can_wait_sla_hours: 0,
     todos_v2_fold_children: false,
+    todos_v2_quiet_hours: "22:00-08:00",
+    todos_v2_digest_window_minutes: 60,
   });
+  // Invalid quiet hours or unsupported digest window fall back to defaults.
+  expect(resolveTodosV2AttentionPrefs({
+    todos_v2_quiet_hours: "22:00-22:00",
+    todos_v2_digest_window_minutes: 45 as unknown as 30,
+  })).toMatchObject({
+    todos_v2_quiet_hours: "",
+    todos_v2_digest_window_minutes: 0,
+  });
+});
+
+it("validates and parses strict 24-hour quiet hours ranges", () => {
+  expect(isValidTodosV2QuietHours("")).toBe(true);
+  expect(isValidTodosV2QuietHours("22:00-08:00")).toBe(true);
+  expect(isValidTodosV2QuietHours("00:00-23:59")).toBe(true);
+  expect(isValidTodosV2QuietHours("22:00-22:00")).toBe(false);
+  expect(isValidTodosV2QuietHours("24:00-08:00")).toBe(false);
+  expect(isValidTodosV2QuietHours("9:00-17:00")).toBe(false);
+  expect(isValidTodosV2QuietHours("invalid")).toBe(false);
+  expect(parseTodosV2QuietHours("22:00-08:00")).toEqual({ start: "22:00", end: "08:00" });
+  expect(parseTodosV2QuietHours("")).toBeNull();
+  expect(parseTodosV2QuietHours("22:00-22:00")).toBeNull();
 });
 
 it("saves attention preferences without expected_todos_v2, updates store, and refreshes to-dos", async () => {
@@ -115,8 +144,40 @@ it("saves attention preferences without expected_todos_v2, updates store, and re
     todos_v2_pending_review_sla_hours: 12,
     todos_v2_can_wait_sla_hours: 72,
     todos_v2_fold_children: false,
+    todos_v2_quiet_hours: "",
+    todos_v2_digest_window_minutes: 0,
   });
   expect(getTodosV2State(manager)).toEqual({ enabled: true, prefs: saved });
   expect(patchAssistant).toHaveBeenCalledWith(saved);
   expect(refreshTodos).toHaveBeenCalledTimes(1);
+});
+
+it("sends explicit MANAGER_HEADER for secondary assistants without mutating the shown assistant or accepting mismatched manager responses", async () => {
+  chooseManager("primary");
+  const request = vi.mocked(api);
+  request.mockResolvedValueOnce({
+    manager: "secondary",
+    todos_v2: true,
+    todos_v2_auto_seen: "off",
+    todos_v2_pending_review_sla_hours: 48,
+    todos_v2_can_wait_sla_hours: 24,
+    todos_v2_fold_children: false,
+  });
+
+  const saved = await saveTodosV2AttentionPrefs("secondary", { todos_v2_auto_seen: "off" });
+  expect(request).toHaveBeenCalledWith("/assistant", {
+    method: "PUT",
+    headers: { [MANAGER_HEADER]: "secondary" },
+    json: { todos_v2_auto_seen: "off" },
+  });
+  expect(saved.todos_v2_auto_seen).toBe("off");
+  expect(patchAssistant).not.toHaveBeenCalled();
+  expect(refreshTodos).not.toHaveBeenCalled();
+
+  request.mockResolvedValueOnce({
+    manager: "primary",
+    todos_v2: true,
+  });
+  await expect(saveTodosV2AttentionPrefs("secondary", { todos_v2_fold_children: true }))
+    .rejects.toMatchObject({ code: "configuration_unavailable" });
 });

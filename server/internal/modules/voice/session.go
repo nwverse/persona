@@ -115,6 +115,10 @@ type conversation struct {
 	queue            []*sentWords          // what waits for the insertion gate
 	userAt           time.Time             // the user's open caption last grew
 	connectedAt      time.Time             // the upstream session came up
+	// kept is everything said in the call for its archive (archive.go, #13249), only with archive_machine set;
+	// keptDropped counts the lines past archiveLinesMost.
+	kept                   []keptLine
+	keptDropped, keptBytes int
 	// askCur is the card the tracker asks by voice (asks.go), askTold whether the model was told it: from then on what
 	// it hands over is the card's answer. askGen is the upstream session (gen) it was last told it in.
 	askCur  string
@@ -185,6 +189,8 @@ func (pl *Plugin) converse(ctx context.Context, app *websocket.Conn, role string
 	c.logf("conversation opened (role %q)", role)
 	pl.active.Add(1)
 	defer pl.active.Add(-1)
+	pl.open.Store(c, struct{}{})
+	defer pl.open.Delete(c)
 	writerDone, loopsDone := make(chan struct{}), make(chan struct{}, 2)
 	go c.writeApp(writerDone)
 	c.runs = newTracker(c, pl.link.listen())
@@ -514,8 +520,12 @@ func (c *conversation) shutdown() {
 		t.Stop()
 		delete(c.pending, id)
 	}
+	archive := c.archive()
 	c.mu.Unlock()
 	c.logf("conversation closed %s", c.summary(lines))
+	if archive != nil {
+		c.pl.startArchive(archive)
+	}
 	if up != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		_ = writeJSON(ctx, up, w.close())
