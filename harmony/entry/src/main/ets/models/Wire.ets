@@ -109,6 +109,11 @@ export class ResourceRow {
   raw: string = '{}';
   constructor(id: string = '', title: string = '', kind: string = '') { this.id = id; this.title = title; this.kind = kind; }
   data(): Record<string, Object> { return Wire.parse(this.raw); }
+  supportsScreen(): boolean {
+    const data = this.data(), os = Wire.text(data, 'os', Wire.text(Wire.object(data, 'system'), 'os'));
+    return this.kind === 'machine' && ['', 'mac', 'macos', 'darwin'].includes(os.toLowerCase()) && Wire.bool(data, 'online') &&
+      !Wire.bool(data, 'pending') && !Wire.bool(data, 'pending_confirm') && ['', 'confirmed', 'personal', 'work'].includes(Wire.text(data, 'trust'));
+  }
   badgeFields(): SessionBadgeFields {
     const known = sessionBadgeFields.get(this);
     if (known && known.snapshot === this.raw) return known;

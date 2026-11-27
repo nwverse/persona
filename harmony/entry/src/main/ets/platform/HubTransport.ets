@@ -281,6 +281,7 @@ export class HubTransport {
   private fragmentParts: Uint8Array[] = [];
   private fragmentSize: number = 0;
   private sendQueue: Promise<void> = Promise.resolve();
+  private replaceablePayload: Uint8Array | undefined;
 
   private readonly access: HubAccess | undefined;
   private readonly credentialOrigin: string;
@@ -825,15 +826,23 @@ export class HubTransport {
     throw new Error('connection_closed');
   }
 
-  private enqueueFrame(opcode: number, payload: Uint8Array): Promise<void> {
+  private enqueueFrame(opcode: number, payload: Uint8Array, replaceQueuedMotion: boolean = false): Promise<void> {
     const limit=this.outgoingLimit(opcode);
     if (payload.length > limit || this.closed || this.closing && opcode !== 8) return Promise.reject(new Error('connection_closed'));
+    // Only consecutive, unsent RFB moves opt in. Any key, button transition, or other frame ends the replacement window.
+    if (replaceQueuedMotion && this.replaceablePayload?.length === payload.length) {
+      this.replaceablePayload.set(payload);
+      return Promise.resolve();
+    }
+    this.replaceablePayload = undefined;
     if (this.queuedFrames >= 64 || this.queuedBytes + payload.length > Math.max(MAX_FRAME_BYTES*2,limit)) { this.failSocket(new Error('send_queue_full')); return Promise.reject(new Error('send_queue_full')); }
     const tls = this.tlsSocket, tcp = this.tcpSocket, copied = payload.slice(), generation = this.generation;
+    if (replaceQueuedMotion) this.replaceablePayload = copied;
     this.queuedFrames++; this.queuedBytes += copied.length;
     const send = async (): Promise<void> => {
       if (this.closed || this.closing && opcode !== 8 || this.proxy && !this.proxy.isCurrent()) throw new Error('connection_closed');
       const random = await cryptoFramework.createRandom().generateRandom(4);
+      if (this.replaceablePayload === copied) this.replaceablePayload = undefined;
       if (this.closed || this.streamNetwork && !this.streamNetwork.current() && opcode!==8 || this.closing && opcode !== 8 || generation !== this.generation || tls !== this.tlsSocket || tcp !== this.tcpSocket || this.proxy && !this.proxy.isCurrent()) throw new Error('connection_closed');
       const mask = random.data;
       const maskBit = 0x80;
@@ -871,9 +880,9 @@ export class HubTransport {
     await this.enqueueFrame(2,new Uint8Array(payload));
   }
 
-  sendBinary(payload: ArrayBuffer): boolean {
+  sendBinary(payload: ArrayBuffer, replaceQueuedMotion: boolean = false): boolean {
     if (!this.upgraded || this.closed || this.closing || payload.byteLength > MAX_FRAME_BYTES || this.proxy && !this.proxy.isCurrent()) return false;
-    this.enqueueFrame(2, new Uint8Array(payload)).catch(() => { if (!this.closing) this.failSocket(new Error('socket_write_failed')); });
+    this.enqueueFrame(2, new Uint8Array(payload), replaceQueuedMotion).catch(() => { if (!this.closing) this.failSocket(new Error('socket_write_failed')); });
     return !this.closed;
   }
 
@@ -893,6 +902,7 @@ export class HubTransport {
 
   private failSocket(_error: Error, state: string = 'offline'): void {
     if (this.closed) return;
+    this.replaceablePayload = undefined;
     const fields = _error as Object as Record<string, Object>, code = fields ? fields['code'] : undefined;
     const diagnostic = /^[a-z_0-9]{1,64}$/.test(_error.message || '') ? _error.message : typeof code === 'number' ? 'native_' + code : 'socket_failed';
     if (state !== 'closed') hilog.error(0x0000, 'PersonaNet', '%{public}s:%{public}s', this.connectionStage, diagnostic);

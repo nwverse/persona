@@ -1605,6 +1605,31 @@ test('question resolution rechecks journal-delayed scope, request, capability an
  }
 });
 
+test('a local workspace name survives saving without changing the paired Hub name or another profile', async () => {
+  const model = new ClientModel();
+  const first = new HubProfile('one', 'Original'), second = new HubProfile('two', 'Original');
+  model.profiles = [first, second]; model.profile = second;
+  await model.renameWorkspace(first, 'Lab');
+  const saved = JSON.parse(await model.local.get('profiles'));
+  assert.equal(saved.active, 'two');
+  assert.equal(saved.profiles[0].label, 'Lab');
+  assert.equal(saved.profiles[0].name, 'Original');
+  assert.equal(model.workspaceName(first), 'Lab');
+  assert.equal(model.workspaceName(second), 'Original');
+  await model.renameWorkspace(first, '');
+  assert.equal(model.workspaceName(first), 'Original');
+  await assert.rejects(model.renameWorkspace(new HubProfile('one'), 'Stale'));
+});
+
+test('a rejected credential asks to pair again and stops reconnecting until the Hub is selected again', () => {
+  const {model} = fixture();
+  model.foreground = true; model.connected = false;
+  model.reportError(new HttpFailure(401));
+  assert.equal(model.workspaceStatus(model.profile), 'workspace_pair_again');
+  model.scheduleReconnect();
+  assert.equal(model.reconnectTimer, -1);
+});
+
 test('assistant selection rechecks the source scope and installed, visible roster at the time of the tap', async () => {
   const { model } = fixture();
   const calls = [];

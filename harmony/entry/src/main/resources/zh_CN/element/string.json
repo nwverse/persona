@@ -530,7 +530,7 @@
     },
     {
       "name": "machines",
-      "value": "电脑与设备"
+      "value": "电脑"
     },
     {
       "name": "add_computer",
@@ -9671,6 +9671,410 @@
     {
       "name": "kb_chat_knowledge_page",
       "value": "知识库页面"
+    },
+    {
+      "name": "computer_screen_show_keys",
+      "value": "打开 Mac 键盘"
+    },
+    {
+      "name": "computer_screen_hide_keys",
+      "value": "收起 Mac 键盘"
+    },
+    {
+      "name": "computer_screen_landscape",
+      "value": "横屏查看"
+    },
+    {
+      "name": "computer_screen_portrait",
+      "value": "竖屏查看"
+    },
+    {
+      "name": "computer_screen_fullscreen",
+      "value": "全屏查看"
+    },
+    {
+      "name": "computer_screen_exit_fullscreen",
+      "value": "退出全屏"
+    },
+    {
+      "name": "computer_screen_fit",
+      "value": "还原至适应屏幕"
+    },
+    {
+      "name": "computer_screen_control_short",
+      "value": "操控"
+    },
+    {
+      "name": "computer_screen_stop_short",
+      "value": "停止"
+    },
+    {
+      "name": "computer_screen_main_display",
+      "value": "主显示器"
+    },
+    {
+      "name": "computer_screen_display",
+      "value": "显示器"
+    },
+    {
+      "name": "computer_screen_mac_sign_in",
+      "value": "使用这台 Mac 的账号登录"
+    },
+    {
+      "name": "computer_screen_controlling",
+      "value": "正在操控"
+    },
+    {
+      "name": "computer_screen_account_hint",
+      "value": "这台 Mac 上的账户名"
+    },
+    {
+      "name": "computer_screen_password_hint",
+      "value": "该账户的登录密码"
+    },
+    {
+      "name": "computer_screen_remember",
+      "value": "在这台手机上记住"
+    },
+    {
+      "name": "computer_screen_remember_hint",
+      "value": "下次查看这台 Mac 时自动连接。"
+    },
+    {
+      "name": "computer_screen_forget_login",
+      "value": "忘记登录信息"
+    },
+    {
+      "name": "computer_screen_saved_rejected",
+      "value": "这台 Mac 未接受已保存的登录信息，请重新输入。"
+    },
+    {
+      "name": "computer_screen_store_unavailable",
+      "value": "暂时无法读取已保存的登录信息，仍可手动登录。"
+    },
+    {
+      "name": "computer_screen_save_failed",
+      "value": "已连接，本次登录信息未能保存到手机。"
+    },
+    {
+      "name": "computer_screen_forget_failed",
+      "value": "未能清除登录信息，请重试。"
+    },
+    {
+      "name": "computer_screen_authenticating",
+      "value": "正在验证 Mac 账号…"
+    },
+    {
+      "name": "computer_screen_waiting_frame",
+      "value": "正在等待电脑传来画面…"
+    },
+    {
+      "name": "computer_screen_auth_timeout",
+      "value": "Mac 登录验证超时，请重新连接。"
+    },
+    {
+      "name": "computer_screen_frame_failed",
+      "value": "无法显示电脑画面，请重新连接。"
+    },
+    {
+      "name": "computer_screen_frame_timeout",
+      "value": "Mac 未及时传来画面，请重新连接。"
+    },
+    {
+      "name": "computer_screen_shortcut_keys",
+      "value": "Mac 快捷键"
+    },
+    {
+      "name": "computer_screen_key_escape",
+      "value": "Esc，取消操作或关闭弹窗"
+    },
+    {
+      "name": "computer_screen_key_tab",
+      "value": "Tab，移到下一个输入项"
+    },
+    {
+      "name": "computer_screen_key_left",
+      "value": "左方向键，向左移动"
+    },
+    {
+      "name": "computer_screen_key_up",
+      "value": "上方向键，向上移动"
+    },
+    {
+      "name": "computer_screen_key_down",
+      "value": "下方向键，向下移动"
+    },
+    {
+      "name": "computer_screen_key_right",
+      "value": "右方向键，向右移动"
+    },
+    {
+      "name": "computer_screen_key_return",
+      "value": "回车，确认或换行"
+    },
+    {
+      "name": "computer_screen_keyboard_unavailable",
+      "value": "键盘未能打开，请再点一次键盘按钮。"
+    },
+    {
+      "name": "computer_screen_input_failed",
+      "value": "部分输入未送达 Mac，请核对电脑上的内容再补输。"
+    },
+    {
+      "name": "browser_qr_access",
+      "value": "允许后，这个浏览器可以完整访问你的 Hub。请确认是你本人发起的登录。"
+    },
+    {
+      "name": "browser_qr_ask",
+      "value": "允许这个浏览器登录吗？"
+    },
+    {
+      "name": "browser_qr_cancel",
+      "value": "取消登录"
+    },
+    {
+      "name": "browser_qr_checking",
+      "value": "正在核对登录请求…"
+    },
+    {
+      "name": "browser_qr_denied",
+      "value": "已拒绝本次登录"
+    },
+    {
+      "name": "browser_qr_done",
+      "value": "完成"
+    },
+    {
+      "name": "browser_qr_ended",
+      "value": "请求已结束"
+    },
+    {
+      "name": "browser_qr_enter",
+      "value": "在浏览器中输入这两位数"
+    },
+    {
+      "name": "browser_qr_expired",
+      "value": "二维码已过期"
+    },
+    {
+      "name": "browser_qr_failed",
+      "value": "无法核对本次登录"
+    },
+    {
+      "name": "browser_qr_internet",
+      "value": "互联网"
+    },
+    {
+      "name": "browser_qr_invalid",
+      "value": "无法识别这个登录码"
+    },
+    {
+      "name": "browser_qr_lan",
+      "value": "局域网"
+    },
+    {
+      "name": "browser_qr_manage",
+      "value": "你可以随时在「设备」中单独撤销这个浏览器的访问权限。"
+    },
+    {
+      "name": "browser_qr_number",
+      "value": "请勿把数字告诉他人。只有一次输入机会，输错会取消本次登录。"
+    },
+    {
+      "name": "browser_qr_other_hub",
+      "value": "这是另一个 Hub 的登录码"
+    },
+    {
+      "name": "browser_qr_refresh",
+      "value": "请在浏览器刷新二维码，再重新扫描。"
+    },
+    {
+      "name": "browser_qr_remote_access",
+      "value": "此请求来自互联网。请确认是你本人发起的登录，再允许浏览器完整访问你的 Hub。"
+    },
+    {
+      "name": "browser_qr_scan",
+      "value": "扫描网页登录码"
+    },
+    {
+      "name": "browser_qr_scan_web",
+      "value": "请打开浏览器中的 Persona 登录页，扫描页面上的二维码。"
+    },
+    {
+      "name": "browser_qr_success",
+      "value": "浏览器已登录"
+    },
+    {
+      "name": "browser_qr_switch",
+      "value": "请先切换到浏览器正在登录的 Hub，再重新扫码。"
+    },
+    {
+      "name": "browser_qr_title",
+      "value": "网页登录"
+    },
+    {
+      "name": "browser_qr_unknown",
+      "value": "未知网络"
+    },
+    {
+      "name": "browser_qr_voided",
+      "value": "数字不匹配，登录已取消"
+    },
+    {
+      "name": "browser_qr_waiting",
+      "value": "等待浏览器输入…"
+    },
+    {
+      "name": "device_kind_browser",
+      "value": "浏览器"
+    },
+    {
+      "name": "device_kind_link",
+      "value": "电脑连接"
+    },
+    {
+      "name": "device_kind_other",
+      "value": "其他设备"
+    },
+    {
+      "name": "device_kind_phone",
+      "value": "手机"
+    },
+    {
+      "name": "device_kind_watch",
+      "value": "手表"
+    },
+    {
+      "name": "devices",
+      "value": "设备"
+    },
+    {
+      "name": "devices_added",
+      "value": "添加时间"
+    },
+    {
+      "name": "devices_demo",
+      "value": "连接真实 Hub 后即可查看已登录设备。"
+    },
+    {
+      "name": "devices_empty",
+      "value": "暂无已登录设备。"
+    },
+    {
+      "name": "devices_last_used",
+      "value": "最近使用"
+    },
+    {
+      "name": "devices_load_failed",
+      "value": "未能加载设备列表，请刷新重试。"
+    },
+    {
+      "name": "devices_no_history",
+      "value": "暂无已撤销设备。"
+    },
+    {
+      "name": "devices_no_match",
+      "value": "没有匹配的设备。"
+    },
+    {
+      "name": "devices_revoke",
+      "value": "撤销"
+    },
+    {
+      "name": "devices_revoke_failed",
+      "value": "该设备仍有访问权限，请刷新后重试。"
+    },
+    {
+      "name": "devices_revoke_note",
+      "value": "这台设备将失去访问当前 Hub 的权限。重新配对后才能再次连接。"
+    },
+    {
+      "name": "devices_revoke_self",
+      "value": "本机将与当前 Hub 断开连接，需要重新配对。"
+    },
+    {
+      "name": "devices_revoke_unpair",
+      "value": "撤销并取消配对"
+    },
+    {
+      "name": "devices_revoked",
+      "value": "已撤销"
+    },
+    {
+      "name": "devices_revoked_at",
+      "value": "撤销时间"
+    },
+    {
+      "name": "devices_search",
+      "value": "搜索设备名称或类型"
+    },
+    {
+      "name": "devices_signed_in",
+      "value": "已登录"
+    },
+    {
+      "name": "devices_this",
+      "value": "本机"
+    },
+    {
+      "name": "hub_unreachable",
+      "value": "未能连接 Hub。请确认 Hub 正在运行，且手机可以访问该地址。"
+    },
+    {
+      "name": "hub_tour_title",
+      "value": "Persona 演示短片"
+    },
+    {
+      "name": "hub_tour_play",
+      "value": "播放短片"
+    },
+    {
+      "name": "hub_tour_pause",
+      "value": "暂停播放"
+    },
+    {
+      "name": "hub_tour_try",
+      "value": "进入互动演示"
+    },
+    {
+      "name": "hub_tour_note",
+      "value": "12 秒无声短片，演示机器总览、Agent 详情和新电脑确认。"
+    },
+    {
+      "name": "hub_tour_error",
+      "value": "短片暂时无法播放，可以直接进入互动演示。"
+    },
+    {
+      "name": "workspace_local_name",
+      "value": "名称仅在这台手机上显示，留空可恢复 Hub 名称。"
+    },
+    {
+      "name": "machine_rename",
+      "value": "修改电脑名称"
+    },
+    {
+      "name": "machine_rename_hint",
+      "value": "此 Hub 的所有设备都能看到新名称。留空可恢复电脑 ID。"
+    },
+    {
+      "name": "machine_name_invalid",
+      "value": "名称最多 40 个字符，不能包含控制字符。"
+    },
+    {
+      "name": "machine_rename_forbidden",
+      "value": "当前设备没有修改电脑名称的权限。"
+    },
+    {
+      "name": "workspace_disconnected",
+      "value": "未连接"
+    },
+    {
+      "name": "workspace_pair_again",
+      "value": "需要重新配对"
+    },
+    {
+      "name": "workspace_pair_action",
+      "value": "重新配对"
     }
   ]
 }

@@ -48,6 +48,7 @@ export class Tokens {
   static readonly body: number = 17;
   static readonly meta: number = 14;
   static readonly title: number = 20;
+  static readonly signInNumber: number = 64;
   // iOS Theme.Font / Theme.Radius / Theme.Space canonical scales
   static readonly typeDisplay: number = 28;
   static readonly typeTitle: number = 22;

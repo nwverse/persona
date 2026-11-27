@@ -16,7 +16,8 @@ export class Symbols {
   static readonly gear: Resource = $r('sys.symbol.gearshape');
   static readonly health: Resource = $r('sys.symbol.gauge_with_dots_needle_33percent');
   static readonly apps: Resource = $r('sys.symbol.square_grid_2x2');
-  static readonly device: Resource = $r('sys.symbol.computer');
+  static readonly machine: Resource = $r('sys.symbol.computer');
+  static readonly device: Resource = $r('sys.symbol.pad_and_iphone');
   static readonly appearance: Resource = $r('sys.symbol.paintpalette');
   static readonly send: Resource = $r('sys.symbol.arrow_up');
   static readonly stop: Resource = $r('sys.symbol.square_fill');
