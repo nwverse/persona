@@ -309,4 +309,5 @@ func TestInternalQuestionRetainsCredentialConstraintWithoutRequestingIt(t *testi
 	if err := e.s.resolve(qs[0].ID, proto.Resolution{Cancel: true}); err != nil {
 		t.Fatal(err)
 	}
+	waitFor(t, "internal constraint reached terminal state", func() bool { return len(e.s.pendingQuestions()) == 0 })
 }

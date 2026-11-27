@@ -12,7 +12,7 @@ import (
 
 func TestMaintenanceApprovalRequiresFreshExplicitAnswer(t *testing.T) {
 	for _, source := range []string{"", "direction-lead"} {
-		for _, mode := range []string{"allow", "cancel", "expired", "late", "remembered"} {
+		for _, mode := range []string{"allow", "cancel", "expired", "late", "remembered", "default", "terminal", "owner_remembered"} {
 			t.Run(source+"/"+mode, func(t *testing.T) {
 				allow := true
 				answer := proto.Resolution{Allow: &allow, AnsweredBy: proto.AnsweredByAssistant}
@@ -25,6 +25,12 @@ func TestMaintenanceApprovalRequiresFreshExplicitAnswer(t *testing.T) {
 					answer.Late = true
 				case "remembered":
 					answer.Remembered = true
+				case "default":
+					answer.AnsweredBy = proto.AnsweredByDefault
+				case "terminal":
+					answer.AnsweredBy = proto.AnsweredByTerminal
+				case "owner_remembered":
+					answer.AnsweredBy, answer.Remembered = "", true
 				}
 				h := &Manager{opts: Options{Ask: func(_ context.Context, ix proto.Interaction) (proto.Resolution, error) {
 					if ix.SessionID != source || !proto.InternalMaintenanceApproval(ix) {

@@ -20,7 +20,7 @@ func (s *Service) waitOneShotPreparedCard(ctx context.Context, ix proto.Interact
 		return approvalops.Outcome{}, fmt.Errorf("%w: %w", approvalops.ErrNotApplied, err)
 	}
 	switch {
-	case r.UserAllowed() || proto.MaintenanceAllowed(ix, r, time.Now()):
+	case r.UserAllowed() && (!proto.InternalMaintenanceApproval(ix) || !r.Remembered) || proto.MaintenanceAllowed(ix, r, time.Now()):
 		if err := ctx.Err(); err != nil {
 			return approvalops.Outcome{Text: fmt.Sprintf("The change was approved after its caller stopped waiting: nothing changed (%v).", err)}, nil
 		}

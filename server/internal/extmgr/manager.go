@@ -394,8 +394,11 @@ func (h *Manager) waitInteraction(ctx context.Context, ix proto.Interaction) (pr
 		return proto.Resolution{}, errAssistantOffline
 	}
 	r, err := h.opts.Ask(ctx, ix)
-	if err == nil && r.AnsweredBy == proto.AnsweredByAssistant && !proto.MaintenanceAllowed(ix, r, time.Now()) {
+	if r.Allow != nil && *r.Allow && !r.UserAllowed() && !proto.MaintenanceAllowed(ix, r, time.Now()) {
 		r.Allow = nil
+	}
+	if proto.InternalMaintenanceApproval(ix) && r.Remembered {
+		r.Allow = nil // forced reruns require a fresh decision, not a remembered grant
 	}
 	if err != nil || ctx.Err() != nil || !time.Now().Before(ix.ExpiresAt) || r.Late || r.Cancel || r.Dismiss {
 		r.Allow = nil
