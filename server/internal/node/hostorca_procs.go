@@ -45,7 +45,7 @@ func (h *orcaHost) agentProcs(maxAge time.Duration) (map[string][]orcaProc, erro
 // orcaProc is an agent process in front in one of Orca's terminals.
 type orcaProc struct {
 	pid   int
-	agent string // claude | codex | traex | agy
+	agent string // claude | codex | traex | omp | agy
 	cwd   string
 	start time.Time // when it started (to the second; zero when unknown)
 }
@@ -91,6 +91,8 @@ func agentOfCmd(argv []string) string {
 		return "codex"
 	case traexAgent, "traecli":
 		return traexAgent
+	case ompAgent:
+		return ompAgent
 	case "node", "bun":
 		if len(argv) > 1 && (progName(argv[1]) == "codex" || strings.Contains(filepath.ToSlash(argv[1]), "/codex/")) {
 			return "codex"

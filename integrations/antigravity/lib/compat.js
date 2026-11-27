@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { basename, join } from 'node:path'
+import { basename, dirname, extname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { defaultStateRoot, legacyEnvName } from '../../runtime-sdk/lib/compat.js'
 import { stateDir } from '../../runtime-sdk/lib/identity.js'
@@ -58,4 +58,10 @@ export function mcpServers(bin, pid, assistant, a2aToken) {
 }
 export function assistantSearchPaths(home) {
   return [...new Set([join(stateDir(home), 'assistant', '.bin'), join(home, '.jarvis', 'assistant', '.bin'), join(home, '.local', 'bin')])]
+}
+// The node's program (--personad-bin, else personad), or persona-node beside it, a Persona Link install's (#14582).
+export function nodeProgram(home, options) {
+  const bin = daemonBinary(home, options)
+  const link = join(dirname(bin), 'persona-node' + extname(bin))
+  return existsSync(bin) ? bin : existsSync(link) ? link : ''
 }
