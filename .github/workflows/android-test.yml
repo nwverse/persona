@@ -55,6 +55,10 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache-dependency-path: server/go.sum
       - uses: android-actions/setup-android@v3
         with:
           # The default also installs the legacy `tools` package, which the SDK repository no longer has.
@@ -103,6 +107,7 @@ jobs:
           if-no-files-found: error
           path: |
             android/build/reports/profile/
+            android/build/reports/core-only-hub/
             android/**/build/reports/lint-results*
             android/**/build/reports/tests/
             android/**/build/test-results/
