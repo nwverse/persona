@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/botcard"
@@ -36,95 +37,146 @@ func (l *Layer) GuestToolStep(ctx context.Context, key, name string) func(bool) 
 	return func(failed bool) { s.guestCotResult(key, step, failed) }
 }
 
-// guestCotStep opens the agent message on the first step and appends one tool call. "" when nothing was shown.
-func (s core) guestCotStep(ctx context.Context, key, name string) string {
+// guestCotCallFor bounds one agent-message call: a slow Lark must not hold a guest's tool call or reply.
+const guestCotCallFor = 10 * time.Second
+
+// guestCotTurn is what the agent-message calls need of a turn, copied out under the book's lock.
+type guestCotTurn struct {
+	id, cot, msg string
+	off          bool
+}
+
+// guestCotSnap copies key's current turn. ok is false when there is none.
+func (s core) guestCotSnap(key string) (guestCotTurn, bool) {
 	b := s.t.guests()
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	r := b.records[key]
-	if r == nil || r.Turn == nil || r.Turn.CotOff {
+	if r == nil || r.Turn == nil {
+		return guestCotTurn{}, false
+	}
+	return guestCotTurn{id: r.Turn.ID, cot: r.Turn.CotID, msg: r.Turn.CotMsg, off: r.Turn.CotOff}, true
+}
+
+// guestCotUpdate changes key's turn when it is still the turn id, and saves the book. False when the turn moved on.
+func (s core) guestCotUpdate(key, id string, fn func(*guestTurnRecord)) bool {
+	b := s.t.guests()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	r := b.records[key]
+	if r == nil || r.Turn == nil || r.Turn.ID != id {
+		return false
+	}
+	fn(r.Turn)
+	_ = s.guestSave(context.Background())
+	return true
+}
+
+// guestCotCall makes one agent-message call on its own deadline, never under the book's lock.
+func (s core) guestCotCall(ctx context.Context, method string, params map[string]any, out any) error {
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), guestCotCallFor)
+	defer cancel()
+	return s.appCall(cctx, method, params, out)
+}
+
+// guestCotStep opens the agent message on the first step and appends one tool call. "" when nothing was shown. Calls
+// for one conversation are serialized by its own lock; the book's lock is taken only to read and write the record.
+func (s core) guestCotStep(ctx context.Context, key, name string) string {
+	defer s.t.guests().cotLock(key)()
+	t, ok := s.guestCotSnap(key)
+	if !ok || t.off {
 		return ""
 	}
-	turn := r.Turn
 	l := s.botLang(ctx)
 	safe := botcard.GuestSafeToolName(name)
-	if turn.CotID == "" {
+	if t.cot == "" {
 		var created struct {
 			CotID     string `json:"cot_id"`
 			MessageID string `json:"message_id"`
 		}
-		if err := s.appCall(ctx, assistantwire.FeishuCotCreate, map[string]any{"guest": turn.ID}, &created); err != nil || created.CotID == "" {
-			s.logf("lark: guest %s: cot: %v", turn.ID, err)
-			turn.CotOff = true
-			_ = s.guestSave(context.Background())
+		if err := s.guestCotCall(ctx, assistantwire.FeishuCotCreate, map[string]any{"guest": t.id}, &created); err != nil || created.CotID == "" {
+			s.logf("lark: guest %s: cot: %v", t.id, err)
+			s.guestCotUpdate(key, t.id, func(r *guestTurnRecord) { r.CotOff = true })
 			return ""
 		}
-		turn.CotID, turn.CotMsg = created.CotID, created.MessageID
-		if err := s.appCall(ctx, assistantwire.FeishuCotAppend, map[string]any{"cot_id": turn.CotID, "message_id": turn.CotMsg,
-			"events": botcard.CotStart(guestHash(key), turn.ID, "p0")}, nil); err != nil {
-			s.guestCotOff(turn)
+		t.cot, t.msg = created.CotID, created.MessageID
+		if !s.guestCotUpdate(key, t.id, func(r *guestTurnRecord) { r.CotID, r.CotMsg = t.cot, t.msg }) {
+			s.guestCotClose(ctx, t) // the turn ended while the message was being made
+			return ""
+		}
+		if err := s.guestCotCall(ctx, assistantwire.FeishuCotAppend, map[string]any{"cot_id": t.cot, "message_id": t.msg,
+			"events": botcard.CotStart(guestHash(key), t.id, "p0")}, nil); err != nil {
+			s.guestCotOff(ctx, key, t)
 			return ""
 		}
 	}
-	turn.Steps++
-	step := fmt.Sprintf("s%d", turn.Steps)
-	title := i18n.T(l, "assistant-feishu.guest_cot_step", i18n.Args{"tool": safe})
-	if err := s.appCall(ctx, assistantwire.FeishuCotAppend, map[string]any{"cot_id": turn.CotID, "message_id": turn.CotMsg,
-		"events": botcard.CotToolCall(step, "p0", safe, title, "default")}, nil); err != nil {
-		s.guestCotOff(turn)
+	n := 0
+	if !s.guestCotUpdate(key, t.id, func(r *guestTurnRecord) {
+		if r.Steps < guestCotStepsMax {
+			r.Steps++
+			n = r.Steps
+		}
+	}) || n == 0 {
 		return ""
 	}
-	_ = s.guestSave(context.Background())
+	step := fmt.Sprintf("s%d", n)
+	title := i18n.T(l, "assistant-feishu.guest_cot_step", i18n.Args{"tool": safe})
+	if err := s.guestCotCall(ctx, assistantwire.FeishuCotAppend, map[string]any{"cot_id": t.cot, "message_id": t.msg,
+		"events": botcard.CotToolCall(step, "p0", safe, title, "default")}, nil); err != nil {
+		s.guestCotOff(ctx, key, t)
+		return ""
+	}
 	return step
 }
 
 // guestCotResult appends the fixed result line of one step.
 func (s core) guestCotResult(key, step string, failed bool) {
-	b := s.t.guests()
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	r := b.records[key]
-	if r == nil || r.Turn == nil || r.Turn.CotID == "" || r.Turn.CotOff {
+	defer s.t.guests().cotLock(key)()
+	t, ok := s.guestCotSnap(key)
+	if !ok || t.cot == "" || t.off {
 		return
 	}
 	key2 := "assistant-feishu.guest_cot_done"
 	if failed {
 		key2 = "assistant-feishu.guest_cot_failed"
 	}
-	line := i18n.T(s.botLang(context.Background()), key2)
-	if err := s.appCall(context.Background(), assistantwire.FeishuCotAppend, map[string]any{"cot_id": r.Turn.CotID,
-		"message_id": r.Turn.CotMsg, "events": []botcard.CotEvent{botcard.CotToolResult(step, line, false)}}, nil); err != nil {
-		s.guestCotOff(r.Turn)
+	ctx := context.Background()
+	line := i18n.T(s.botLang(ctx), key2)
+	if err := s.guestCotCall(ctx, assistantwire.FeishuCotAppend, map[string]any{"cot_id": t.cot,
+		"message_id": t.msg, "events": []botcard.CotEvent{botcard.CotToolResult(step, line, false)}}, nil); err != nil {
+		s.guestCotOff(ctx, key, t)
 	}
 }
 
 // guestCotFinish closes the agent message: finished when the reply was posted, an error otherwise. A turn that called
 // no owner-listed tool has no agent message, and nothing is posted for it.
 func (s core) guestCotFinish(ctx context.Context, key string, ok bool) {
-	b := s.t.guests()
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	r := b.records[key]
-	if r == nil || r.Turn == nil || r.Turn.CotID == "" {
+	defer s.t.guests().cotLock(key)()
+	t, found := s.guestCotSnap(key)
+	if !found || t.cot == "" {
 		return
 	}
-	turn := r.Turn
 	if ok {
-		_ = s.appCall(ctx, assistantwire.FeishuCotAppend, map[string]any{"cot_id": turn.CotID, "message_id": turn.CotMsg,
-			"events": botcard.CotFinish(guestHash(key), turn.ID, "p0")}, nil)
+		_ = s.guestCotCall(ctx, assistantwire.FeishuCotAppend, map[string]any{"cot_id": t.cot, "message_id": t.msg,
+			"events": botcard.CotFinish(guestHash(key), t.id, "p0")}, nil)
 		return
 	}
-	_ = s.appCall(ctx, assistantwire.FeishuCotComplete, map[string]any{"cot_id": turn.CotID, "message_id": turn.CotMsg, "reason": "error"}, nil)
+	s.guestCotClose(ctx, t)
 }
 
-// guestCotOff stops the bubble for the turn and closes the one already opened, so it does not keep spinning.
-func (s core) guestCotOff(turn *guestTurnRecord) {
-	turn.CotOff = true
-	if turn.CotID != "" {
-		_ = s.appCall(context.Background(), assistantwire.FeishuCotComplete, map[string]any{"cot_id": turn.CotID, "message_id": turn.CotMsg, "reason": "error"}, nil)
-		turn.CotID = ""
+// guestCotOff stops the bubble for the turn and closes the one already opened, so it does not keep spinning. The
+// conversation's agent-message lock is held.
+func (s core) guestCotOff(ctx context.Context, key string, t guestCotTurn) {
+	s.guestCotUpdate(key, t.id, func(r *guestTurnRecord) { r.CotOff, r.CotID = true, "" })
+	s.guestCotClose(ctx, t)
+}
+
+// guestCotClose ends an opened agent message with an error.
+func (s core) guestCotClose(ctx context.Context, t guestCotTurn) {
+	if t.cot == "" {
+		return
 	}
-	_ = s.guestSave(context.Background())
+	_ = s.guestCotCall(ctx, assistantwire.FeishuCotComplete, map[string]any{"cot_id": t.cot, "message_id": t.msg, "reason": "error"}, nil)
 }
 
 // guestHash is a short hash of the conversation key, so the bubble's thread id carries no chat id.

@@ -199,14 +199,14 @@ type Service struct {
 	tmu     sync.Mutex
 	timings map[string]time.Duration
 	// lang is the language the core answers in ("" is the default, Chinese). A test sets it.
-	lang string
-	lists   map[string][]time.Duration
-	ctx     context.Context
-	logs    []string
-	wbd     *wbData      // the workbench's data (wb)
-	thd     *threadData  // the to-do threads (th)
-	chd     *chatData    // the chat side (ch)
-	hod     *handoffFake // a proxy reply's asks of the core (chat_fake_test.go)
+	lang  string
+	lists map[string][]time.Duration
+	ctx   context.Context
+	logs  []string
+	wbd   *wbData      // the workbench's data (wb)
+	thd   *threadData  // the to-do threads (th)
+	chd   *chatData    // the chat side (ch)
+	hod   *handoffFake // a proxy reply's asks of the core (chat_fake_test.go)
 }
 
 func newTestService(t testing.TB, f Hub) *Service {

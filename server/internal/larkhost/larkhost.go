@@ -193,7 +193,7 @@ type Guests interface {
 	// The conversation still answering its last question returns an error with assistantwire.CodeGuestBusy.
 	Guest(ctx context.Context, p assistantwire.FeishuGuestTurn) error
 	// GuestToolCall runs the guest's reply tool. own is false for any other tool, which the caller runs itself.
-	GuestToolCall(ctx context.Context, key, name string, args json.RawMessage) (proto.ToolResult, bool)
+	GuestToolCall(ctx context.Context, key, session, name string, args json.RawMessage) (proto.ToolResult, bool)
 	// GuestToolStep records one sanitized step of an owner-listed tool. The returned func finishes the step.
 	GuestToolStep(ctx context.Context, key, name string) func(failed bool)
 	// GuestTick ends turns nobody answered. The core's minute sweep calls it, as HandoffTick.
@@ -560,7 +560,7 @@ func (None) HandoffTick(context.Context)                    {}
 
 // Group guests without a channel: nothing is taken, and a tool call is not the module's.
 func (None) Guest(context.Context, assistantwire.FeishuGuestTurn) error { return ErrNoChannel }
-func (None) GuestToolCall(context.Context, string, string, json.RawMessage) (proto.ToolResult, bool) {
+func (None) GuestToolCall(context.Context, string, string, string, json.RawMessage) (proto.ToolResult, bool) {
 	return proto.ToolResult{}, false
 }
 func (None) GuestToolStep(context.Context, string, string) func(bool) {

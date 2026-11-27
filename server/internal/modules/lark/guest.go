@@ -66,6 +66,24 @@ type guestBook struct {
 	loaded  bool
 	records map[string]*guestConvRecord
 	now     func() time.Time // nil is time.Now; tests set it so they need no sleep
+	// cot serializes one conversation's agent-message calls, so mu is never held across a call to Lark.
+	cot map[string]*sync.Mutex
+}
+
+// cotLock takes key's agent-message lock and returns its unlock. b.mu must not be held.
+func (b *guestBook) cotLock(key string) func() {
+	b.mu.Lock()
+	if b.cot == nil {
+		b.cot = map[string]*sync.Mutex{}
+	}
+	m := b.cot[key]
+	if m == nil {
+		m = &sync.Mutex{}
+		b.cot[key] = m
+	}
+	b.mu.Unlock()
+	m.Lock()
+	return m.Unlock
 }
 
 func (b *guestBook) clock() time.Time {
@@ -175,7 +193,7 @@ func sortedTools(tools []string) []string {
 // GuestToolCall runs the guest's reply tool. A call of any other tool is not the module's (own is false), so the
 // caller runs it. A bad reply comes back as an error result and counts nothing, so the model can shorten it and call
 // once more.
-func (l *Layer) GuestToolCall(ctx context.Context, key, name string, args json.RawMessage) (proto.ToolResult, bool) {
+func (l *Layer) GuestToolCall(ctx context.Context, key, session, name string, args json.RawMessage) (proto.ToolResult, bool) {
 	if name != botGroupReplyTool {
 		return proto.ToolResult{}, false
 	}
@@ -189,7 +207,10 @@ func (l *Layer) GuestToolCall(ctx context.Context, key, name string, args json.R
 	s := l.chat()
 	r := s.guestGet(key)
 	switch {
-	case r == nil || r.Turn == nil || r.Turn.State != guestStateAccepted || s.t.guests().clock().Sub(r.Turn.At) > guestTurnRunningFor:
+	case r == nil || r.Turn == nil || r.Turn.State != guestStateAccepted || s.t.guests().clock().Sub(r.Turn.At) > guestTurnRunningFor,
+		// Only the session the conversation is bound to answers its turn: a session left behind by an unanswered turn
+		// or a changed tool list must not post under a newer question.
+		r.Session != "" && session != r.Session:
 		return proto.TextResult("this request is closed; end your turn", true), true
 	case text == "":
 		return proto.TextResult("bot_group_reply needs a text", true), true
@@ -233,6 +254,11 @@ func (s core) guestFail(key, outcome string) {
 	}
 	id := r.Turn.ID
 	s.guestSetState(key, guestStateClosed)
+	if outcome == "no_reply" {
+		// The session may still be busy with this question: the next one gets a fresh session, so a late answer
+		// cannot land under it (GuestToolCall checks the session).
+		s.guestBind(key, "", "", nil)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	s.guestCotFinish(ctx, key, false)

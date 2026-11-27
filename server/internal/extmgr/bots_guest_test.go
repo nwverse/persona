@@ -220,7 +220,7 @@ func TestGuestCardPressIsRefused(t *testing.T) {
 	w.allowEveryone(t, 0, topicChat, 20)
 	b, _ := json.Marshal(map[string]any{"schema": "2.0", "header": map[string]any{"event_type": "card.action.trigger"},
 		"event": map[string]any{"operator": map[string]any{"open_id": "ou_s"},
-			"action": map[string]any{"value": map[string]any{"a": "ix"}, "tag": "button"},
+			"action":  map[string]any{"value": map[string]any{"a": "ix"}, "tag": "button"},
 			"context": map[string]any{"open_chat_id": topicChat, "open_message_id": "om_card"}}})
 	res, err := w.h.botEvent(w.ctx, b)
 	if err != nil {
@@ -419,4 +419,3 @@ func TestGuestAssistantAwayEndsTheSource(t *testing.T) {
 		t.Fatal("a failed turn still holds the thread")
 	}
 }
-

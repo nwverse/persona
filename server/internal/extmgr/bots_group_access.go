@@ -313,7 +313,7 @@ func (h *Manager) groupAccessView(ctx context.Context) assistantwire.FeishuGroup
 		}
 		v.RecentRequests = append(v.RecentRequests, req)
 	}
-	missing := b.guestAsks
+	missing := slices.Clone(b.guestAsks) // read after the lock is released, while noteGuestAsk may shift the original
 	b.mu.Unlock()
 	if h.connectors != nil {
 		for _, c := range h.connectors.All() {

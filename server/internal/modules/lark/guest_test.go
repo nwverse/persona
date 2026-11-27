@@ -233,13 +233,13 @@ func TestGuestReplyOncePerTurn(t *testing.T) {
 	if _, err := s.chat().guestBegin(ctx, "oc_a/om_1", "oc_a", "bg_1"); err != nil {
 		t.Fatal(err)
 	}
-	res, own := s.layer.GuestToolCall(ctx, "oc_a/om_1", botGroupReplyTool, json.RawMessage(`{"text":"the rule is one reply"}`))
+	res, own := s.layer.GuestToolCall(ctx, "oc_a/om_1", "", botGroupReplyTool, json.RawMessage(`{"text":"the rule is one reply"}`))
 	if !own || res.IsError || res.Content[0].Text != "posted" || len(*posts) != 1 || (*posts)[0]["guest"] != "bg_1" {
 		t.Fatalf("reply: %+v posts %v", res, *posts)
 	}
-	again, _ := s.layer.GuestToolCall(ctx, "oc_a/om_1", botGroupReplyTool, json.RawMessage(`{"text":"second"}`))
-	empty, _ := s.layer.GuestToolCall(ctx, "oc_a/om_1", botGroupReplyTool, json.RawMessage(`{"text":""}`))
-	long, _ := s.layer.GuestToolCall(ctx, "oc_a/om_1", botGroupReplyTool, json.RawMessage(`{"text":"`+strings.Repeat("x", guestReplyMax+1)+`"}`))
+	again, _ := s.layer.GuestToolCall(ctx, "oc_a/om_1", "", botGroupReplyTool, json.RawMessage(`{"text":"second"}`))
+	empty, _ := s.layer.GuestToolCall(ctx, "oc_a/om_1", "", botGroupReplyTool, json.RawMessage(`{"text":""}`))
+	long, _ := s.layer.GuestToolCall(ctx, "oc_a/om_1", "", botGroupReplyTool, json.RawMessage(`{"text":"`+strings.Repeat("x", guestReplyMax+1)+`"}`))
 	if !again.IsError || !empty.IsError || !long.IsError || len(*posts) != 1 {
 		t.Fatalf("a bad reply was accepted: %+v %+v %+v posts %d", again, empty, long, len(*posts))
 	}
@@ -253,7 +253,7 @@ func TestGuestReplyIsSanitized(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := "see /Users/ada/secret.txt and http://hub.example:18660/inbox"
-	res, own := s.layer.GuestToolCall(ctx, "oc_a/om_1", botGroupReplyTool, json.RawMessage(`{"text":"`+text+`"}`))
+	res, own := s.layer.GuestToolCall(ctx, "oc_a/om_1", "", botGroupReplyTool, json.RawMessage(`{"text":"`+text+`"}`))
 	if !own || res.IsError || len(*posts) != 1 {
 		t.Fatalf("reply: %+v", res)
 	}
@@ -332,5 +332,24 @@ func TestGuestBookSurvivesARestart(t *testing.T) {
 	r := guestRecord(t, s, "oc_a/om_1")
 	if r.Session == "" || r.Turn == nil || r.Turn.ID != "bg_1" {
 		t.Fatalf("reloaded: %+v", r)
+	}
+}
+
+// Only the session the conversation is bound to may answer its turn: a session left over from an unanswered turn
+// cannot post under the next question.
+func TestGuestReplyFromAnotherSessionIsRefused(t *testing.T) {
+	s, posts := guestReady(t)
+	ctx := context.Background()
+	if _, err := s.chat().guestBegin(ctx, "oc_a/om_1", "oc_a", "bg_1"); err != nil {
+		t.Fatal(err)
+	}
+	s.chat().guestBind("oc_a/om_1", "mac", "sess_new", nil)
+	res, own := s.layer.GuestToolCall(ctx, "oc_a/om_1", "sess_old", botGroupReplyTool, json.RawMessage(`{"text":"late answer"}`))
+	if !own || !res.IsError || len(*posts) != 0 {
+		t.Fatalf("another session's reply was posted: %+v posts %v", res, *posts)
+	}
+	res, _ = s.layer.GuestToolCall(ctx, "oc_a/om_1", "sess_new", botGroupReplyTool, json.RawMessage(`{"text":"answer"}`))
+	if res.IsError || len(*posts) != 1 {
+		t.Fatalf("the bound session's reply: %+v posts %v", res, *posts)
 	}
 }

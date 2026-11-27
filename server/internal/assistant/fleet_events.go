@@ -293,7 +293,7 @@ func (s *Service) nodeRequest(ctx context.Context, machine, method string, param
 				return proto.TextResult("unknown tool "+p.Name, true), true, nil
 			}
 			lark := s.larkModule()
-			if res, own := lark.GuestToolCall(ctx, key, p.Name, p.Args); own {
+			if res, own := lark.GuestToolCall(ctx, key, p.SessionID, p.Name, p.Args); own {
 				return res, true, nil
 			}
 			done := lark.GuestToolStep(ctx, key, p.Name)

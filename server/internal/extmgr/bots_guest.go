@@ -20,7 +20,7 @@ import (
 // would evict them. Each source may get one reply, under its own message.
 
 type botGuestSource struct {
-	ID        string    `json:"id"`         // "bg_" + 16 hex (handoffHex(8))
+	ID        string    `json:"id"` // "bg_" + 16 hex (handoffHex(8))
 	ChatID    string    `json:"chat_id"`
 	MessageID string    `json:"message_id"` // the trigger: the reply's only parent
 	Conv      string    `json:"conv"`       // thread_id, else root_id, else message_id
