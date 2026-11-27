@@ -81,6 +81,7 @@ func (f *fakeDevices) CapacitySnapshot(context.Context) proto.CapacitySnapshot {
 func (f *fakeDevices) UsageAccounts(context.Context) []proto.UsageAccount { return nil }
 
 func (f *fakeDevices) GatewayRetryAt(string, string, time.Time) time.Time { return time.Time{} }
+func (f *fakeDevices) UsageGatewayAccounts() proto.GatewayAccounts { return proto.GatewayAccounts{} }
 
 func (f *fakeDevices) Follow(context.Context, string, string, bool) error   { return nil }
 func (f *fakeDevices) SetAttention(link.Attention)                          {}
