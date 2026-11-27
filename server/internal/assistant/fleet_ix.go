@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -753,6 +754,11 @@ func (s *Service) orphanLocked(p *pending) bool {
 		return true
 	}
 	wait := min(resumeGrace, time.Until(p.ix.ExpiresAt))
+	status := "cancelled"
+	if outboundSettingsCard(p.ix) {
+		wait = time.Until(p.ix.ExpiresAt)
+		status = "expired"
+	}
 	if wait <= 0 {
 		return false
 	}
@@ -766,7 +772,7 @@ func (s *Service) orphanLocked(p *pending) bool {
 		}
 		s.fleet.mu.Unlock()
 		if still {
-			s.recordEnd(p.ix.ID, "cancelled", nil)
+			s.recordEnd(p.ix.ID, status, nil)
 			s.finishInteraction(p.ix.ID)
 		}
 	})
@@ -893,6 +899,25 @@ func endStatus(r proto.Resolution) string {
 }
 
 var errInvalidElicitation = errors.New("elicitation requires action accept, decline or cancel")
+var errMissingAllow = errors.New("permission resolution requires allow")
+var errMissingApprove = errors.New("plan resolution requires approve")
+
+func validateInteractionDecision(ix proto.Interaction, r proto.Resolution) error {
+	if r.Cancel && (!ix.CanCancel || ix.Kind != proto.IxQuestion || !r.IsQuestionCancel()) {
+		return errInvalidQuestionCancel
+	}
+	if r.Dismiss {
+		return nil
+	}
+	switch {
+	case ix.Kind == proto.IxPermission && r.Allow == nil:
+		return errMissingAllow
+	case ix.Kind == proto.IxPlan && r.Approve == nil:
+		return errMissingApprove
+	}
+	return nil
+}
+
 var errInvalidEditedAnswer = errors.New("edited_text requires an editable permission card and a plain allow")
 
 // editedAnswerAllowed rejects an edit before its card or channel owner action is consumed. The node still has to
@@ -923,6 +948,9 @@ func (s *Service) resolveWithStanding(id string, r proto.Resolution, remember bo
 // resolveApproved is resolve for an app's answer the hub relayed, with the device it vouched may approve a hand-off
 // card (nil: none). Only this way does a hand-off card take more than a no (secret_handoff.go).
 func (s *Service) resolveApproved(ctx context.Context, id string, r proto.Resolution, approver *assistantwire.HandoffApprover) error {
+	if strings.HasPrefix(id, outboundSettingsCardPrefix) {
+		return s.resolveOutboundSettingsCard(ctx, id, r)
+	}
 	if mine, err := s.sessionReviewResolve(ctx, id, r, approver); mine {
 		return err
 	}
@@ -946,6 +974,9 @@ func (s *Service) resolveApproved(ctx context.Context, id string, r proto.Resolu
 
 func (s *Service) resolveAnswer(ctx context.Context, id string, r proto.Resolution, remember bool, authorization *standingResolution,
 	approver *assistantwire.HandoffApprover) error {
+	if strings.HasPrefix(id, outboundSettingsCardPrefix) {
+		return errOutboundOwnerAnswer
+	}
 	return s.logicalInteractionAnswer(ctx, id, r, func() error { return s.resolveActiveAnswer(ctx, id, r, remember, authorization, approver) })
 }
 
@@ -960,6 +991,9 @@ func (s *Service) resolveActiveAnswer(ctx context.Context, id string, r proto.Re
 	isPrepared := prepared != nil && prepared.prepared != nil
 	s.fleet.mu.Unlock()
 	if isPrepared {
+		if err := validateInteractionDecision(prepared.ix, r); err != nil {
+			return err
+		}
 		return s.resolvePreparedAnswer(ctx, prepared, r, remember, authorization)
 	}
 	// A manager work card is answered in the manager, not by the stopped agent. Its local dismiss/defer choices remain
@@ -981,9 +1015,16 @@ func (s *Service) resolveActiveAnswer(ctx context.Context, id string, r proto.Re
 		s.fleet.mu.Unlock()
 		return errSecretRunEnv // an older specialized client would show no env warning before its Run
 	}
-	if p != nil && r.Cancel && (!p.ix.CanCancel || p.ix.Kind != proto.IxQuestion || !r.IsQuestionCancel()) {
-		s.fleet.mu.Unlock()
-		return errInvalidQuestionCancel
+	if p != nil && !p.claimed {
+		if handoff && reflect.ValueOf(r).IsZero() {
+			// A vouched-for device's legacy empty hand-off answer is a decline.
+			deny := false
+			r.Allow = &deny
+		}
+		if err := validateInteractionDecision(p.ix, r); err != nil {
+			s.fleet.mu.Unlock()
+			return err
+		}
 	}
 	if p != nil && !editedAnswerAllowed(p.ix, r) {
 		s.fleet.mu.Unlock()
@@ -1089,7 +1130,7 @@ func (s *Service) resolveActiveAnswer(ctx context.Context, id string, r proto.Re
 			back := s.fleet.interactions[id] == p
 			s.fleet.mu.Unlock()
 			if back { // a Codex card the node could not answer is open again (codexPending): it is not over
-				go s.InteractionResolved(context.Background(), InteractionResolved{Interaction: p.ix, Resolution: told, Status: status})
+				s.interactionResolvedSoon(context.Background(), InteractionResolved{Interaction: p.ix, Resolution: told, Status: status})
 				return err
 			}
 		} else {
@@ -1102,7 +1143,7 @@ func (s *Service) resolveActiveAnswer(ctx context.Context, id string, r proto.Re
 		}
 		s.recordEndBy(id, status, by, &kept)
 		s.finished(p)
-		go s.InteractionResolved(context.Background(), InteractionResolved{Interaction: p.ix, Resolution: told, Status: status})
+		s.interactionResolvedSoon(context.Background(), InteractionResolved{Interaction: p.ix, Resolution: told, Status: status})
 		return err
 	}
 	if authorization != nil {
@@ -1120,7 +1161,7 @@ func (s *Service) resolveActiveAnswer(ctx context.Context, id string, r proto.Re
 	if ownerOnlyTimedCard(p.ix) {
 		s.clearOwnerActionCardWait(p.ix)
 	}
-	go s.InteractionResolved(context.Background(), InteractionResolved{Interaction: p.ix, Resolution: told, Status: status})
+	s.interactionResolvedSoon(context.Background(), InteractionResolved{Interaction: p.ix, Resolution: told, Status: status})
 	if remember {
 		s.keepAlways(p.ix, r) // kept before the hook hears: its next card may follow at once
 	}
@@ -1580,7 +1621,7 @@ var errReservedCard = errors.New("the tool names " + proto.SecretRunTool + " and
 
 // reservedCard: ix calls itself the password card or the hand-off card.
 func reservedCard(ix proto.Interaction) bool {
-	return ix.ToolName == proto.SecretRunTool || ix.ToolName == proto.SecretHandoffTool
+	return ix.ToolName == proto.SecretRunTool || ix.ToolName == proto.SecretHandoffTool || strings.HasPrefix(ix.ID, outboundSettingsCardPrefix)
 }
 
 // askHub is fleet.ask: a card one of the hub's own features asks (a mail send, Cua's apps, persona_settings),
@@ -1898,6 +1939,7 @@ func (s *Service) keepAlways(ix proto.Interaction, r proto.Resolution) {
 // NodeDetached: a machine's node connection ended (devices.Options.Detached): the cards waiting on it that cannot be
 // claimed again end (resumable ones wait for their hook through the next connection), its list shows it.
 func (s *Service) NodeDetached(machine string) {
+	s.invalidateLauncherListCache(machine)
 	s.noteNodeOffline(machine, time.Now())
 	if !s.fleetOn() {
 		return

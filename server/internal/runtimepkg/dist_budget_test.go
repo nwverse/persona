@@ -25,12 +25,14 @@ import (
 // Antigravity multi-instance companion flags and --agy-dir env propagation (#14483) add 373 B (260,942 B).
 // An Antigravity CLI without session/set_mode: checks skip the switch and starts say to update agy (#14533), 149 B (261,091 B).
 // Antigravity Gemini API-key gateway model discovery routes through HTTP(S)_PROXY and honors NO_PROXY (#14552), 1,497 B (262,588 B).
+// Keeping agy's live text ahead of later thoughts (#14745) measured 262,673 B on main, 85 B over the ceiling.
 // Keeping Antigravity steps at a reused lower index when the export goes on past them, dropping them again once the run re-covers them (#14626), adds 230 B (262,818 B).
 // Antigravity native error backfill at every unexported index, loading conversations another agy process created, with read failures in the history token (#14627), 427 B (263,245 B).
 // Antigravity subagent reports and background task results as task notices, invoke_subagent Role / Prompt (#14625), 749 B (263,994 B).
 // Untitled Antigravity conversations take a short title from their first prompt line (#14629), 218 B (264,212 B).
 // An API error agy streams as message text becomes the turn's error, kept in history and settled idle (#14628), 231 B (264,443 B).
 // Antigravity GENERIC timestamp header stripping (#13662) adds 176 B (264,619 B).
+// An agy main chat on Windows finding personad.exe and a cmd.exe media-guard hook that also checks Node.js (#14511) add 182 B (264,801 B).
 // Subsequent runtime fixes on main (#15269, #15275, #13312, #12952, #15475) bring the total to 265,362 B.
 // Antigravity shared ACP exit cleanup (#15756) and always-allow permission choices (#15785) bring the total to 265,686 B.
 // Antigravity permission mode persistence across companion restarts and resume re-application (#15807) add 273 B (265,959 B).
@@ -45,12 +47,29 @@ import (
 // Antigravity Assistant run_command command-gate routing, unclipped command & per-call Cwd forwarding, fail-closed reconnect, tracks Assistant detection, and Assistant allow_always bypass guard (#16202) add 511 B (278,347 B).
 // After preserving Antigravity modes (#16300), the packages measured 278,334 B. Filtering botmux marker
 // lines before shortening runtime previews adds 549 B (#16310).
-// Reusing one read-only conversation_summaries connection, its stat-validated snapshot and the watch-poll
-// short-circuit (#16403) adds 1,944 B (280,827 B).
-// Antigravity detached pending approval turn cancellation (including sibling-ask withdrawal and stale-turn/racing-ask/refusal guards) and explicit deny-with-note refusal follow-up add 436 B (281,263 B combined).
+// Antigravity detached pending approval turn cancellation (including sibling-ask withdrawal and stale-turn/racing-ask/refusal guards) and explicit deny-with-note refusal follow-up add 436 B (279,319 B).
+// Antigravity native usage account name and subscription plan enrichment via GetUserStatus (#16277) adds 286 B (279,605 B).
+// Main then measured 280,046 B (#16595): #16490 (+21 B), #15678 (+406 B) and #16027 (+22 B) grew the packages without raising
+// the budget, and #16285 adds 278 B on main (its 286 B was measured on its own branch).
+// Later runtime changes on main (#16591, #16122) bring the total to 280,892 B.
+// Following an Antigravity conversation past a rewind's abandoned export tail and rewinding a cut that hides ranges at
+// its matching visible step (#14297) add 304 B (281,196 B).
+// Applying the configured Antigravity model before the first prompt after ACP resume (#15537) adds 67 B (281,263 B).
+// Claude Code plugin 0.3.1 reports classic hook pass-over and disables permission bridging under managed settings
+// (#15546), adding 1,397 B (282,660 B).
+// Antigravity form elicitation (#16645) and background task and schedule tracking (#13594) bring the total to 286,998 B,
+// including the 182 B Windows media-guard change above.
+// Antigravity incremental transcript append (tail anchor + rolling SHA-256 + deferred/periodic verification),
+// sub-second fileMeta fast hit, watched-poll idle backoff, and bounded summary/cache weights (with decoupled
+// raw-byte and object-weight transcriptCache caps) add 1,969 B (288,967 B).
+// Reusing one read-only conversation_summaries connection with a stat-validated parsed snapshot, prepared
+// primary-key lookup and the watch-poll short-circuit (#16403) merged onto that main work, with the poll gate
+// held open for nativeWorking so main's 400 ms active interval is preserved, measures 290,813 B, 1,846 B above
+// main's 288,967 B.
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 281_263
+	const budget = 290_813
+
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

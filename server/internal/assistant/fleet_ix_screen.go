@@ -100,11 +100,11 @@ func (s *Service) createScreenInteraction(machine string, sess proto.Session) {
 	if d != nil {
 		id += "_" + d.Rev // another dialog is another card: nothing picked on the last one carries over
 	}
-	ix := proto.Interaction{
+	ix := cleanTitle(proto.Interaction{
 		ID: id, MachineID: machine, SessionID: sess.SessionID, SessionTitle: sess.Title, Cwd: sess.Cwd, Kind: proto.IxScreen,
 		CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().Add(24 * time.Hour).UTC(), Screen: trimScreen(text), Dialog: d,
 		Secret: screen.SecretPrompt(text),
-	}
+	})
 	s.fleet.mu.Lock()
 	if s.screenHandedBackLocked(machine, sess.SessionID, id, d != nil) {
 		s.fleet.mu.Unlock()
