@@ -38,6 +38,8 @@ var (
 		"card_recheck": 90 * time.Second,
 		// mirror_retry is the pause before another attempt to deliver a mirror or a to-do reminder.
 		"mirror_retry": mirrorRetry,
+		// read_working_after is how long a held /read works before its owner is told privately (readWorkingAfter).
+		"read_working_after": readWorkingAfter,
 	}
 	defaultTimingLists = map[string][]time.Duration{
 		// cot_end_tries are the waits between tries of cotEnd (a rate limit that hit the end likely hits the first

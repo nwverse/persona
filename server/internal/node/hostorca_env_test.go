@@ -85,6 +85,10 @@ func TestOrcaRefusingEnvGetsTheTerminalWithout(t *testing.T) {
 	if len(creates) != 2 || envOfCreate(creates[0]) == nil || envOfCreate(creates[1]) != nil {
 		t.Fatalf("terminal.create %v", o.Trace("terminal.create"))
 	}
+	st, _ := n.state.get(startID)
+	if st.OrcaTerminal != nil {
+		t.Fatal("an old runtime that refused the startup environment created close authority")
+	}
 	if creates[0]["clientMutationId"] != creates[1]["clientMutationId"] {
 		t.Errorf("the create without env is another request: %v", o.Trace("terminal.create"))
 	}

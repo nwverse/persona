@@ -45,6 +45,7 @@ type chatData struct {
 	view        func(ix proto.Interaction) assistantwire.AskView
 	route       func(ix proto.Interaction) assistantwire.AskRoute
 	sensitive   func(ix proto.Interaction) bool
+	direct      func(ix proto.Interaction) bool
 	state       func(id string) (ended, pending bool)
 	pendingIx   func(id string) (proto.Interaction, bool)
 	deadline    func(ix proto.Interaction) (time.Time, bool)
@@ -71,9 +72,10 @@ type startedRun struct {
 
 // resolvedAnswer is an interaction the chat answered (Host.ResolveInteraction).
 type resolvedAnswer struct {
-	id     string
-	r      proto.Resolution
-	action string
+	id       string
+	r        proto.Resolution
+	action   string
+	expected *time.Time
 }
 
 func (s *Service) ch() *chatData {
@@ -364,6 +366,13 @@ func (s *Service) AskSensitive(_ context.Context, ix proto.Interaction) bool {
 	return false
 }
 
+func (s *Service) AskDirect(_ context.Context, ix proto.Interaction) bool {
+	if f := s.ch().direct; f != nil {
+		return f(ix)
+	}
+	return false
+}
+
 // AskState is the core's record of interaction id: the test's (state), else not ended and up.
 func (s *Service) AskState(id string) (ended, pending bool) {
 	if f := s.ch().state; f != nil {
@@ -371,6 +380,8 @@ func (s *Service) AskState(id string) (ended, pending bool) {
 	}
 	return false, true
 }
+
+func (s *Service) AskStateFor(ix proto.Interaction) (ended, pending bool) { return s.AskState(ix.ID) }
 
 // AskPending is the interaction up under id: the test's (pendingIx), else none.
 func (s *Service) AskPending(id string) (proto.Interaction, bool) {
@@ -380,10 +391,14 @@ func (s *Service) AskPending(id string) (proto.Interaction, bool) {
 	return proto.Interaction{}, false
 }
 
-func (s *Service) ResolveInteraction(_ context.Context, id string, r proto.Resolution, action string) (bool, error) {
+func (s *Service) ResolveInteraction(ctx context.Context, id string, r proto.Resolution, action string) (bool, error) {
+	return s.ResolveInteractionAt(ctx, id, r, action, nil)
+}
+
+func (s *Service) ResolveInteractionAt(_ context.Context, id string, r proto.Resolution, action string, expected *time.Time) (bool, error) {
 	d := s.ch()
 	s.tmu.Lock()
-	d.resolved = append(d.resolved, resolvedAnswer{id: id, r: r, action: action})
+	d.resolved = append(d.resolved, resolvedAnswer{id: id, r: r, action: action, expected: expected})
 	answer := d.answer
 	s.tmu.Unlock()
 	if answer != nil {
@@ -395,6 +410,10 @@ func (s *Service) ResolveInteraction(_ context.Context, id string, r proto.Resol
 func (s *Service) ValidateClarifyQuestion(string) error { return nil }
 
 func (s *Service) ClarifyInteraction(context.Context, string, string, string, string, string, string) (bool, error) {
+	return true, nil
+}
+
+func (s *Service) ClarifyInteractionAt(context.Context, string, string, string, string, string, string, *time.Time) (bool, error) {
 	return true, nil
 }
 

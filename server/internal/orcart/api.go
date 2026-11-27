@@ -27,11 +27,16 @@ type Terminal struct {
 	Connected    bool   `json:"connected"`
 	Writable     bool   `json:"writable"`
 	Orphaned     bool   `json:"orphaned"`
+	Verdict      string `json:"verdict"`
 	// ExecutionHostID is where the terminal runs: "local" for this machine (others are SSH targets).
 	ExecutionHostID string `json:"executionHostId"`
 	// AgentIdentity is the agent Orca sees in the terminal ("claude", "codex"…), "" for none.
 	AgentIdentity string `json:"agentIdentity"`
 	LastOutputAt  int64  `json:"lastOutputAt"`
+	// ProcessID is the local PTY root from terminal.create's receipt, not a
+	// field older runtimes necessarily include. AcceptedCreateEnv is client-side.
+	ProcessID         int  `json:"processId"`
+	AcceptedCreateEnv bool `json:"-"`
 }
 
 // PaneKey is the terminal's pane as Orca names it in worktree.ps and in the processes it runs (ORCA_PANE_KEY).
@@ -65,6 +70,9 @@ type Tab struct {
 	ID         string
 	Title      string
 	WorktreeID string
+	Active     bool
+	FocusKnown bool
+	PaneCount  int
 }
 
 // TerminalList is terminal.list: the terminals, the tabs of each worktree's layout in order (only when asked for),
@@ -77,24 +85,41 @@ type TerminalList struct {
 	TopologyRevisions map[string]int64
 	// Truncated: Orca left terminals out (more than its list limit).
 	Truncated bool
+	// InventoryIncomplete: the list cannot prove a terminal absent, including
+	// runtimes that omit the truncation flag.
+	InventoryIncomplete bool
 }
 
 // Terminals is terminal.list, with the layouts (costly for Orca to build) only when layouts is true.
 func (c *Client) Terminals(ctx context.Context, layouts bool) (*TerminalList, error) {
+	return c.terminals(ctx, layouts, false)
+}
+
+// CloseInventory bypasses the runtime's cached PTY liveness for a close decision.
+func (c *Client) CloseInventory(ctx context.Context, layouts bool) (*TerminalList, error) {
+	return c.terminals(ctx, layouts, true)
+}
+
+func (c *Client) terminals(ctx context.Context, layouts, fresh bool) (*TerminalList, error) {
 	var res struct {
 		Terminals         []Terminal       `json:"terminals"`
+		Truncated         *bool            `json:"truncated"`
 		TopologyRevisions map[string]int64 `json:"topologyRevisions"`
-		Truncated         bool             `json:"truncated"`
 		VisualLayouts     []struct {
 			WorktreeID string     `json:"worktreeId"`
 			Root       layoutNode `json:"root"`
 		} `json:"visualLayouts"`
 	}
 	params := map[string]any{"includeVisualLayouts": layouts, "includePreview": false}
+	if fresh {
+		params["requireFreshPtyLiveness"] = true
+	}
 	if err := c.Call(ctx, ListTimeout, "terminal.list", params, &res); err != nil {
 		return nil, err
 	}
-	out := &TerminalList{Terminals: res.Terminals, HasTabs: layouts, TopologyRevisions: res.TopologyRevisions, Truncated: res.Truncated}
+	truncated := res.Truncated != nil && *res.Truncated
+	out := &TerminalList{Terminals: res.Terminals, HasTabs: layouts, TopologyRevisions: res.TopologyRevisions,
+		Truncated: truncated, InventoryIncomplete: res.Terminals == nil || res.Truncated == nil || truncated}
 	for _, l := range res.VisualLayouts {
 		l.Root.tabs(l.WorktreeID, &out.Tabs)
 	}
@@ -103,10 +128,12 @@ func (c *Client) Terminals(ctx context.Context, layouts bool) (*TerminalList, er
 
 // layoutNode is a node of a worktree's layout: a group of tabs, or a split of two nodes (first, then second).
 type layoutNode struct {
-	Type string `json:"type"`
-	Tabs []struct {
-		TabID string `json:"tabId"`
-		Title string `json:"title"`
+	Type        string `json:"type"`
+	ActiveTabID string `json:"activeTabId"`
+	Tabs        []struct {
+		TabID string      `json:"tabId"`
+		Title string      `json:"title"`
+		Panes *layoutNode `json:"panes"`
 	} `json:"tabs"`
 	First  *layoutNode `json:"first"`
 	Second *layoutNode `json:"second"`
@@ -117,13 +144,35 @@ func (n *layoutNode) tabs(worktree string, out *[]Tab) {
 	if n == nil {
 		return
 	}
+	focusKnown := false
+	for _, t := range n.Tabs {
+		focusKnown = focusKnown || n.ActiveTabID != "" && t.TabID == n.ActiveTabID
+	}
 	for _, t := range n.Tabs {
 		if t.TabID != "" {
-			*out = append(*out, Tab{ID: t.TabID, Title: t.Title, WorktreeID: worktree})
+			*out = append(*out, Tab{ID: t.TabID, Title: t.Title, WorktreeID: worktree,
+				Active: t.TabID == n.ActiveTabID, FocusKnown: focusKnown, PaneCount: t.Panes.paneCount()})
 		}
 	}
 	n.First.tabs(worktree, out)
 	n.Second.tabs(worktree, out)
+}
+
+// paneCount is zero when layout did not supply a complete terminal pane tree.
+func (n *layoutNode) paneCount() int {
+	if n == nil {
+		return 0
+	}
+	switch n.Type {
+	case "terminal":
+		return 1
+	case "pane-split":
+		first, second := n.First.paneCount(), n.Second.paneCount()
+		if first > 0 && second > 0 {
+			return first + second
+		}
+	}
+	return 0
 }
 
 // Worktree is one worktree of worktree.ps.
@@ -592,6 +641,33 @@ func (c *Client) Close(ctx context.Context, t Target) error {
 	return c.Call(ctx, CloseTimeout, "terminal.close", t.params(), nil)
 }
 
+// CloseVerified requires a receipt for the live terminal just checked by the
+// caller. Older or partial replies cannot be treated as proof of completion.
+func (c *Client) CloseVerified(ctx context.Context, t Target) error {
+	var res struct {
+		Close struct {
+			Handle    string `json:"handle"`
+			PTYKilled bool   `json:"ptyKilled"`
+		} `json:"close"`
+	}
+	if c.ReadOnly {
+		return errors.New("orca terminal.close: refused, the client is read-only")
+	}
+	// Do not retry the write through a reconnected runtime. A retry would
+	// need its own ownership and process checks.
+	meta, err := c.currentMeta()
+	if err != nil {
+		return err
+	}
+	if err := c.callOnce(ctx, meta, CloseTimeout, "terminal.close", t.params(), &res); err != nil {
+		return err
+	}
+	if res.Close.Handle != t.Handle || !res.Close.PTYKilled {
+		return errors.New("orca: could not confirm that the terminal closed")
+	}
+	return nil
+}
+
 // CapShellSelection is the capability (Status.Capabilities) of a runtime whose terminal.create honours shell. One
 // without it ignores the field and starts its default shell, so ask for a shell only when it is advertised.
 const CapShellSelection = "terminal.create-shell-selection.v1"
@@ -655,11 +731,13 @@ func (c *Client) CreateTerminal(ctx context.Context, worktree, title, mutationID
 		return c.Call(ctx, SendTimeout, "terminal.create", p, &res)
 	}
 	var err error
-	if len(o.env) > 0 {
+	withEnv := len(o.env) > 0
+	if withEnv {
 		with := maps.Clone(params)
 		with["env"] = maps.Clone(o.env)
 		// invalid_argument is answered before anything is made, so the same request without env makes one terminal.
 		if err = create(with); IsCode(err, "invalid_argument") {
+			withEnv = false
 			err = create(params)
 		}
 	} else {
@@ -698,6 +776,7 @@ func (c *Client) CreateTerminal(ctx context.Context, worktree, title, mutationID
 	if found == nil {
 		return nil, fmt.Errorf("orca terminal.create: created %s is absent from terminal.list; no command was sent", t.Handle)
 	}
+	found.ProcessID, found.AcceptedCreateEnv = t.ProcessID, withEnv
 	return found, nil
 }
 

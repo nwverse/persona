@@ -694,8 +694,9 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     val decorators = AppTab.entries.associateWith { tab -> key(tab) {
         listOf(rememberSaveableStateHolderNavEntryDecorator<NavKey>(), rememberViewModelStoreNavEntryDecorator<NavKey>())
     } }
-    // The current assistant's cards (ShellCounts): the tab badges and "Needs you now" count them.
-    val shownPending = pending.filter(counts::owned)
+    // The current assistant's authoritative cards (ShellCounts): a display copy stays in its conversation only.
+    val aggregatePending = remember(pending) { pending.filterNot { it.isDisplayMirror } }
+    val shownPending = aggregatePending.filter(counts::owned)
     val assistantRequests = shownPending.filter { currentKind(SessionKey(it.machineId, it.sessionId)) == ConversationKind.Assistant }
     val agentRequests = shownPending - assistantRequests.toSet()
     // The Agents tab counts its waiting agents, one per session (ShellCounts.agentsWaiting), as iOS and the web do.
@@ -704,7 +705,7 @@ internal fun PersonaShell(session: ShellSession, openNavigation: MutableState<((
     // What waits at each assistant, for the switcher's badges and the dot on the sidebar's button: its agents waiting
     // (each once), counted here, and its inbox's "Needs you" from the roster.
     val managerRoster = persona.core.designsystem.LocalManagerRoster.current
-    val waiting = remember(managerRoster, pending, counts) { counts.waiting(managerRoster, pending) }
+    val waiting = remember(managerRoster, aggregatePending, counts) { counts.waiting(managerRoster, aggregatePending) }
     val othersWaiting = currentAssistant.othersWaiting(waiting)
     // Only when what the count reads changed: the shell recomposes on every push, and the whole list is built to count
     // one group. Of the sessions it reads only which space each is in (for mutes), not their state or activity.

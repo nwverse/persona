@@ -817,8 +817,20 @@ func (n *Node) closeWithCauseChecked(ctx context.Context, id string, cause proto
 		}()
 	}
 	a, ok := n.agent(id)
+	st, mine := n.state.get(id)
+	if host.ParsePane(st.Pane).Kind == host.Orca {
+		if h := n.hosts.Get(host.Orca); h != nil {
+			// An Agent that just quit can still be in the poll cache. Do not
+			// send interrupts to its shell or close it as a live Agent.
+			if err := n.refreshHosts(ctx, h); err != nil {
+				return err
+			}
+			a, ok = n.agent(id)
+			st, mine = n.state.get(id)
+		}
+	}
 	if !ok {
-		if st, mine := n.state.get(id); mine {
+		if mine {
 			return n.closeAfterExit(ctx, id, st, before)
 		}
 		return fmt.Errorf("这个 Agent 不在这台电脑的终端里运行，没法从手机关闭")

@@ -174,6 +174,12 @@ func (h *Manager) feishuCall(ctx context.Context, method string, params json.Raw
 					}
 					st.TopicTodoModes[chat.ChatID] = mode
 				}
+				if space := strings.TrimSpace(chat.Space); space != "" {
+					if st.TopicSpaces == nil {
+						st.TopicSpaces = make(map[string]string)
+					}
+					st.TopicSpaces[chat.ChatID] = space
+				}
 			}
 		}
 		if h.cfg != nil {

@@ -45,13 +45,18 @@ func (s *Service) startBotRun(ctx context.Context, rt resolvedTarget, t botTarge
 		}()
 	}
 	if rt.isNew {
-		sess, err := s.Start(ctx, StartParams{Text: text, Images: images, Main: rt.main, Origin: OriginChannel, OriginRef: channel.Feishu})
+		sess, err := s.Start(ctx, StartParams{Text: text, Images: images, Main: rt.main, Space: t.Space, Origin: OriginChannel, OriginRef: channel.Feishu})
 		if err != nil {
 			return err
 		}
 		run.MachineID, run.SessionID, run.TargetKind, run.Probe = sess.MachineID, sess.SessionID, targetPersona, ""
-		if t.Kind == targetPersona { // /new: the chat goes on in it
-			s.larkModule().SetTarget(botTarget{Kind: targetPersona, MachineID: sess.MachineID, SessionID: sess.SessionID})
+		if t.Kind == targetPersona {
+			bound := botTarget{Kind: targetPersona, MachineID: sess.MachineID, SessionID: sess.SessionID}
+			if run.Ext["chat"] != "" && run.Ext["thread"] != "" {
+				s.larkModule().RememberTopicSession(ctx, run.Ext["chat"], run.Ext["thread"], bound, "")
+			} else { // /new in private DM: the chat goes on in it
+				s.larkModule().SetTarget(bound)
+			}
 		}
 	} else {
 		sid := rt.session.SessionID

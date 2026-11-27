@@ -264,6 +264,17 @@ func (n *Node) closeExitedChecked(ctx context.Context, id string, before func() 
 		p, _ := n.keptPane(id)
 		pane = p.PaneID
 	}
+	if host.ParsePane(pane).Kind == host.Orca {
+		h, ref, err := n.paneHost(pane)
+		if err != nil {
+			return false, err
+		}
+		o, ok := h.(*orcaHost)
+		if !ok {
+			return false, unsupported(h)
+		}
+		return n.closeStoppedOrca(ctx, o, id, ref.String(), st, before)
+	}
 	if pane == "" || host.ParsePane(pane).Kind != host.Herdr {
 		return false, nil // no shell it left that Persona can tell apart safely: kept, as before
 	}
@@ -911,6 +922,9 @@ func (n *Node) newTab(ctx context.Context, launch host.Launcher, cwd, ws, tabNam
 	ts.opened(created.SpaceID)
 	n.markPersonaTab(ctx, launch, created.Pane, id)
 	markTaskTerminal(ctx, launch, created.Pane)
+	if h, ok := launch.(*orcaHost); ok {
+		h.markOrcaTerminal(ctx, created.Pane, id)
+	}
 	return created, nil
 }
 

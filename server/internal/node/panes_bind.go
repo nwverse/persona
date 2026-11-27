@@ -127,8 +127,28 @@ func (n *Node) bindPane(pane, id string) {
 		return
 	}
 	n.mu.Lock()
+	previous := n.panes[pane]
 	n.panes[pane] = id
+	if mark := n.agentTerms[pane]; previous != "" && previous != id && mark == previous && host.ParsePane(pane).Kind == host.Orca {
+		delete(n.agentTerms, pane)
+	}
 	n.mu.Unlock()
+	if ref := host.ParsePane(pane); previous != "" && previous != id && ref.Kind == host.Orca {
+		if h, ok := n.hosts.Get(host.Orca).(*orcaHost); ok {
+			h.mu.Lock()
+			if h.agentTabs[ref.ID].id == previous {
+				delete(h.agentTabs, ref.ID)
+			}
+			h.mu.Unlock()
+		}
+		n.state.update(previous, func(st *sessionState) bool {
+			if st.Pane != pane || st.OrcaTerminal == nil {
+				return false
+			}
+			st.OrcaTerminal = nil
+			return true
+		})
+	}
 	n.state.setPane(id, pane)
 }
 

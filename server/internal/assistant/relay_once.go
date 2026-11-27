@@ -38,12 +38,37 @@ var supervisionConfirmDelays = []time.Duration{
 
 // relayMsgID is the once_id every try of message msg to conversation to goes under: made from the message, so
 // the same after the manager restarts and for messages queued before ids existed, and different for any other one.
+// A detached continuation's text may change when its grant is consumed; its occurrence metadata, not that text,
+// identifies the delivery. relayLocked pins the old text hash on pre-upgrade queued continuations.
 func relayMsgID(to string, msg relayMsg) string {
 	if msg.OnceID != "" {
 		return msg.OnceID
 	}
+	text := msg.Text
+	if msg.Continuation {
+		text = "continuation\x00" + msg.ContinuationDigest
+	}
+	return relayMsgIDText(to, msg, text)
+}
+
+// legacyRelayMsgID is the identity used before continuation text became
+// non-identifying. It is retained only when loading an existing queue.
+func legacyRelayMsgID(to string, msg relayMsg) string {
+	return relayMsgIDText(to, msg, msg.Text)
+}
+
+// sameLegacyContinuationRelay recognizes the journal occurrence of a queued
+// pre-upgrade continuation even after its retry text becomes a no-retry notice.
+// Its pinned OnceID deliberately remains the old text hash, so comparing only
+// the newly computed ID would append the same journal result again.
+func sameLegacyContinuationRelay(a, b relayMsg) bool {
+	return a.Continuation && b.Continuation && a.ContinuationDigest == "" && b.ContinuationDigest == "" &&
+		a.From == b.From && a.Tool == b.Tool && a.State == b.State && a.At.Equal(b.At)
+}
+
+func relayMsgIDText(to string, msg relayMsg, text string) string {
 	h := sha256.New()
-	for _, part := range []string{to, msg.From, msg.Tool, msg.State, msg.At.UTC().Format(time.RFC3339Nano), msg.Text} {
+	for _, part := range []string{to, msg.From, msg.Tool, msg.State, msg.At.UTC().Format(time.RFC3339Nano), text} {
 		h.Write([]byte(part))
 		h.Write([]byte{0})
 	}
@@ -283,8 +308,15 @@ func (s *Service) tryDirectRelay(ctx context.Context, machine, to string, msg *r
 // tryQueuedRelay sends the queue head after reconciliation and updates head to its saved pre-send state.
 // A positive wait keeps the returned message queued for another drain.
 func (s *Service) tryQueuedRelay(ctx context.Context, machine, to string, head *relayMsg) (relayMsg, time.Duration, error) {
-	previous := *head
-	msg := previous
+	return s.tryQueuedRelayText(ctx, machine, to, head, *head)
+}
+
+// tryQueuedRelayText separates the durable queue identity from the exact text
+// sent. A continuation can change to a no-retry notice without making the head
+// either unremovable after success or stale after a restart.
+func (s *Service) tryQueuedRelayText(ctx context.Context, machine, to string, head *relayMsg, msg relayMsg) (relayMsg, time.Duration, error) {
+	queued := *head
+	previous := msg
 	if msg.TriedAt.IsZero() {
 		msg.TriedAt = time.Now().UTC()
 	} else {
@@ -298,19 +330,19 @@ func (s *Service) tryQueuedRelay(ctx context.Context, machine, to string, head *
 	b := &s.relays
 	b.mu.Lock()
 	q := b.st.Queue[to]
-	if !b.loaded || len(q) == 0 || q[0] != previous {
+	if !b.loaded || len(q) == 0 || q[0] != queued {
 		// A reload can invalidate the selection before the attempt is saved. Let the next drain pick again.
 		b.mu.Unlock()
-		return previous, relayRetryGap, nil
+		return queued, relayRetryGap, nil
 	}
 	q[0] = msg
 	err := s.saveRelayLocked()
 	if err != nil {
-		q[0] = previous
+		q[0] = queued
 	}
 	b.mu.Unlock()
 	if err != nil {
-		return previous, relayRetryGap, err
+		return queued, relayRetryGap, err
 	}
 	*head = msg
 	if msg.Tool != superviseTool {

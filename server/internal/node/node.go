@@ -2410,12 +2410,13 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 	case "codex.answer": // the phone's answer to a Codex question or approval card (codexask.go)
 		var a struct {
 			ID         string           `json:"id"`
+			CreatedAt  time.Time        `json:"created_at"`
 			Resolution proto.Resolution `json:"resolution"`
 		}
 		if err := json.Unmarshal(params, &a); err != nil {
 			return nil, err
 		}
-		return ok(n.codexAnswer(ctx, p.SessionID, a.ID, a.Resolution))
+		return ok(n.codexAnswerAt(ctx, p.SessionID, a.ID, a.CreatedAt, a.Resolution))
 	case "assistant.permissions.reset":
 		restart, err := n.resetAssistantPermissions(ctx, p.SessionID)
 		return map[string]any{"ok": err == nil, "restart_required": restart}, err
@@ -3266,12 +3267,13 @@ func (n *Node) sessionInfo(ctx context.Context, id string) (map[string]any, erro
 			mode = tuiMode(screen) // shift+tab in the terminal shows up in the transcript only with the next prompt
 		}
 	}
+	path := f.Where()
 	cwd := m.Cwd // an agent's latest directory
 	if n.isAssistantSession(id) {
-		cwd = n.assistantCwd(id, f.Path, cwd) // a conversation's own, where it started (#2368)
+		cwd = n.assistantCwd(id, path, cwd) // a conversation's own, where it started (#2368)
 	}
 	return map[string]any{
-		"session_id": id, "transcript_path": f.Path, "cwd": cwd, "model": model, "launcher": st.Launcher,
+		"session_id": id, "transcript_path": path, "cwd": cwd, "model": model, "launcher": st.Launcher,
 		"git_branch": m.GitBranch, "version": m.Version, "permission_mode": mode, "effort": effort,
 		"context_tokens": m.ContextTokens, "output_tokens": m.OutputTokens, "compactions": m.Compactions,
 		"turns": m.Turns, "started_at": m.StartedAt, "last_activity": m.LastActivity,

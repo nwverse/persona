@@ -575,11 +575,15 @@ func (h *Hub) updateBusy() []busyItem {
 	return out
 }
 
-// unwaitedCards counts each session's pending cards (by machine and session): all of them, and those that are the
-// assistant's ask_user asked without waiting (proto.Interaction.AskedWithoutWaiting).
+// unwaitedCards counts each session's authoritative pending cards (by machine and session): all of them, and those that
+// are the assistant's ask_user asked without waiting (proto.Interaction.AskedWithoutWaiting). Display copies never
+// make a destination conversation block a restart on their own.
 func (h *Hub) unwaitedCards() map[[2]string][2]int {
 	out := map[[2]string][2]int{}
 	for _, ix := range h.pendingInteractions() {
+		if ix.MirrorOf != "" {
+			continue // restart interruption is counted from authoritative operations only
+		}
 		k := [2]string{ix.MachineID, ix.SessionID}
 		n := out[k]
 		n[0]++
