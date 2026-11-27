@@ -449,6 +449,7 @@ data class ExtensionContributes(
     @SerialName("repository_providers") val repositoryProviders: List<ExtensionRepositoryProviderItem>? = null,
     @SerialName("memory_sources") val memorySources: List<ExtensionMemorySourceItem>? = null,
     @SerialName("disk_offload") val diskOffload: List<ExtensionDiskOffloadItem>? = null,
+    @SerialName("agent_rules") val agentRules: List<ExtensionAgentRulesItem>? = null,
     val messaging: List<ExtensionMessagingItem>? = null,
     /** Extra keys stay at this object's level on the wire; declared fields always win. */
     val additionalProperties: Map<String, JsonElement> = emptyMap(),
@@ -489,12 +490,13 @@ private data class ExtensionContributesKnown(
     @SerialName("repository_providers") val repositoryProviders: List<ExtensionRepositoryProviderItem>? = null,
     @SerialName("memory_sources") val memorySources: List<ExtensionMemorySourceItem>? = null,
     @SerialName("disk_offload") val diskOffload: List<ExtensionDiskOffloadItem>? = null,
+    @SerialName("agent_rules") val agentRules: List<ExtensionAgentRulesItem>? = null,
     val messaging: List<ExtensionMessagingItem>? = null,
 )
 
 object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
     private val known = ExtensionContributesKnown.serializer()
-    private val keys = setOf<String>("connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "routine_facts", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "disk_offload", "messaging")
+    private val keys = setOf<String>("connectors", "voice", "transcription", "speech", "computer", "browser", "iphone", "quota", "usage", "providers", "api", "assistant", "mcp_servers", "ui", "track_kinds", "agent_sources", "channel", "events", "shortcuts", "skills", "prompts", "themes", "looks", "triage_templates", "agent_filters", "tunnels", "routine_facts", "error_reports", "auth_relay", "secret_providers", "repository_providers", "memory_sources", "disk_offload", "agent_rules", "messaging")
     override val descriptor: SerialDescriptor = known.descriptor
 
     override fun deserialize(decoder: Decoder): ExtensionContributes {
@@ -536,6 +538,7 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
             repositoryProviders = fields.repositoryProviders,
             memorySources = fields.memorySources,
             diskOffload = fields.diskOffload,
+            agentRules = fields.agentRules,
             messaging = fields.messaging,
             additionalProperties = obj.filterKeys { it !in keys },
         )
@@ -577,6 +580,7 @@ object ExtensionContributesSerializer : KSerializer<ExtensionContributes> {
             repositoryProviders = value.repositoryProviders,
             memorySources = value.memorySources,
             diskOffload = value.diskOffload,
+            agentRules = value.agentRules,
             messaging = value.messaging,
         )
         val obj = output.json.encodeToJsonElement(known, fields) as JsonObject
@@ -945,6 +949,22 @@ object ExtensionDiskOffloadKind {
     const val APP = "app"
     val ALL = listOf("file", "dir", "app")
 }
+
+/**
+ * Rules for a new task Agent, asked by the manager when it starts one (agent_rules.for_start;
+ * agent_rules.schema.json) with the Agent's agent type, launcher, model, directory and computer; a non-empty answer
+ * goes in with the task's other framework rules. Needs the program to speak the protocol. Being asked about every new
+ * Agent and adding to its instructions is agreed to like a permission (in the permission digest).
+ */
+@Serializable
+data class ExtensionAgentRulesItem(
+    val id: String = "",
+    /**
+     * What the install page and the extension's contributions call the rules (Validated rules). Not only spaces, no
+     * control characters.
+     */
+    val name: String = "",
+)
 
 /**
  * The extension's memory, read by the manager one entry at a time (memory.entries; memory.schema.json) so the hub

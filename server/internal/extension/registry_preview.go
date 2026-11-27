@@ -202,7 +202,7 @@ func MorePermissions(cur *Extension, m *Manifest) bool {
 		len(NewTools(was, m)) > 0 || len(newSecrets(was, m)) > 0 ||
 		slices.ContainsFunc(m.Topics(), func(t string) bool { return !slices.Contains(was.Topics(), t) }) ||
 		slices.ContainsFunc(m.Surfaces(), func(t string) bool { return !slices.Contains(was.Surfaces(), t) }) ||
-		len(newChannels(was, m)) > 0 || len(newSendsAsUser(was, m)) > 0 || len(newRepositoryHosts(was, m)) > 0 ||
+		len(newChannels(was, m)) > 0 || len(newSendsAsUser(was, m)) > 0 || len(newRepositoryHosts(was, m)) > 0 || addsAgentRules(was, m) ||
 		slices.ContainsFunc(m.ContributesTo(), func(t string) bool { return !slices.Contains(was.ContributesTo(), t) })
 }
 

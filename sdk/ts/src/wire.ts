@@ -371,6 +371,7 @@ export interface Contributes {
   repository_providers?: RepositoryProviderItem[];
   memory_sources?: MemorySourceItem[];
   disk_offload?: DiskOffloadItem[];
+  agent_rules?: AgentRulesItem[];
   messaging?: MessagingItem[];
   /** Extra keys are opaque JSON; declared properties keep their own types. */
   [key: string]: unknown;
@@ -636,6 +637,21 @@ export interface DiskOffloadItem {
  */
 export type DiskOffloadKind = "file" | "dir" | "app" | (string & {});
 export const DISK_OFFLOAD_KINDS = ["file", "dir", "app"] as const;
+
+/**
+ * Rules for a new task Agent, asked by the manager when it starts one (agent_rules.for_start;
+ * agent_rules.schema.json) with the Agent's agent type, launcher, model, directory and computer; a non-empty answer
+ * goes in with the task's other framework rules. Needs the program to speak the protocol. Being asked about every new
+ * Agent and adding to its instructions is agreed to like a permission (in the permission digest).
+ */
+export interface AgentRulesItem {
+  id: string;
+  /**
+   * What the install page and the extension's contributions call the rules (Validated rules). Not only spaces, no
+   * control characters.
+   */
+  name: string;
+}
 
 /**
  * The extension's memory, read by the manager one entry at a time (memory.entries; memory.schema.json) so the hub
@@ -8050,6 +8066,43 @@ export interface RoutineFactsResult {
   sections?: RoutineReportSection[];
 }
 
+/**
+ * agent_rules.for_start: the rules for one new task Agent. Read-only: answering changes nothing the manager can see;
+ * the program may record that it was asked.
+ */
+export interface AgentRulesForStartParams {
+  /** The agent_rules item's id. */
+  contribution: string;
+  /** The agent type the resolved launcher starts (claude, codex, agy, pi, opencode, or a runtime's own type). */
+  agent: string;
+  /** The launcher's name on that computer. */
+  launcher: string;
+  /**
+   * The model id the Agent starts on, as the start names it (it may carry a context-window suffix such as [1m]);
+   * empty when the start uses the launcher's own default and the manager cannot tell which model that is.
+   */
+  model: string;
+  /** The Agent's directory on its computer, as the task names it (before any worktree the Agent makes itself). */
+  cwd: string;
+  /** The id of the computer the Agent starts on. */
+  machine: string;
+}
+
+/**
+ * The rules for that Agent. An empty text adds nothing.
+ */
+export interface AgentRulesForStartResult {
+  /**
+   * The rules, as the Agent should read them. At most 4096 bytes of UTF-8: the manager drops a longer answer whole.
+   */
+  text: string;
+  /**
+   * The program's own version of the text (a hash, say), logged with the start so a later look can tell which rules
+   * an Agent had.
+   */
+  rev?: string;
+}
+
 /** One call or event of an extension point's protocol: who sends it, and the definitions its params and
  * its answer hold to (no result: any JSON; an event has no answer). */
 export interface Call {
@@ -8170,4 +8223,5 @@ export const CALLS: Record<string, Call> = {
   "offload.job": { from: "hub", params: "OffloadJobParams", result: "OffloadJob" },
   "offload.cancel": { from: "hub", params: "OffloadJobParams", result: "Empty" },
   "routine_facts.collect": { from: "hub", params: "RoutineFactsParams", result: "RoutineFactsResult" },
+  "agent_rules.for_start": { from: "hub", params: "AgentRulesForStartParams", result: "AgentRulesForStartResult" },
 };

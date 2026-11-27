@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/sdk/go/wire"
 	"github.com/nwverse/persona/server/internal/agentprompt"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -544,6 +545,13 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	if brief != "" {
 		rules = append(rules, brief)
 	}
+	// Rules the agent_rules extensions keep for this agent type and model in this directory (agent_rules.go, #16820),
+	// last among the framework rules: each answer as its own block, none when no extension contributes or none answers
+	// in time.
+	launcher, _ := params["launcher"].(string)
+	model, _ := params["model"].(string)
+	rules = append(rules, s.startAgentRules(ctx, wire.AgentRulesForStartParams{Agent: fit.agent, Launcher: launcher, Model: model,
+		Cwd: t.Cwd, Machine: m.ID})...)
 	// The project background, and the decisions of the todo and its continuation ancestors (a task started again may
 	// have some), follow the assignment; they remain user context, never framework policy. Direction notes are prompt
 	// context, separate from the main supervision ledger (#10623, #5732). SkipProjectMemory leaves out the project and

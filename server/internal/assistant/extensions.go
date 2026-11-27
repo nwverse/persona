@@ -154,6 +154,8 @@ func (s *Service) SetExtensions(e ExtensionTools) {
 	}
 	s.transcriptionReadinessReset()
 	s.setMemorySources(e) // the memory extensions' entries (memory_extension_source.go)
+	// The rules a new task Agent starts with (agent_rules.go).
+	s.agentRules, _ = e.(agentRuleSources)
 }
 
 // AskCard is askHub for the extensions in this process: a card of theirs (a mail send, Cua's apps, persona_settings),

@@ -150,6 +150,7 @@ What an extension contributes where is written in the manifest's `contributes`: 
 | `repository_providers` (version 1, #10330) | `repo.` | `id`, `name` (1–80 characters: what the catalog and a to-do's repositories call the source), `hosts` (1–16 exact lowercase host names, no IP address; not `github.com`, `gitlab.com` or the other hosts the built-in providers read), `link_kinds?` (`[{kind: issue / pull_request, label}]`, each kind once, a label of 1–24 characters; only relabels), `capabilities?` (`["pr_status"]`: it answers `repo.pr_status`, #11584) | Process speaks the protocol; a host another installed extension claims (even one that is off), or one host in two items, fails the install | A code-hosting source for **Settings › Repositories** and a to-do's repositories and links on its hosts, asked by the manager only (`repo.parse`, `repo.check`, `repo.link`, the optional `repo.describe` and `repo.pr_status`; `schema/extension/repository.schema.json`), each answer re-checked; the install page lists its hosts, and they are in the permission digest |
 | `memory_sources` (version 1, #13532, #13586) | `memory.` | `id`, `name` (1–80 characters, not only spaces, no control characters: what settings call the source); one per extension | Process speaks the protocol | The extension's memory, entry by entry: the manager reads it with `memory.entries` (`schema/extension/memory.schema.json`) and grades each entry by scene itself, and stops delivering the extension's own text outlets directly; the install page says so, the permission digest does not change; see "Memory sources" below |
 | `disk_offload` (version 1, #14576) | `offload.` | `id`, `name` (1–40 characters: the disk map offers "Offload to <name>"), `kinds?` (1–3 of `file`, `dir`, `app`, each once; omitted means `file`, `dir`), `restore?` (items can be brought back) | Process speaks the protocol | A provider for a computer's disk usage map: the map lists the enabled contributions, draws what the provider already holds of that computer beside the local map (`offload.inventory`), and, after the user confirmed and the computer's own protection rules agreed to every path, starts an offload or restore (`offload.run`, followed with `offload.job`, the optional `offload.cancel`; `schema/extension/offload.schema.json`). Asked by the manager only, each answer held to the schema; see "Disk offload" below |
+| `agent_rules` (version 1, #16820) | `agent_rules.` | `id`, `name` (1–80 characters, not only spaces, no control characters: what the install page and the contributions list call the rules) | Process speaks the protocol | Rules for a new task Agent: when the manager starts one, it asks each contribution that is on with `agent_rules.for_start` (`schema/extension/agent_rules.schema.json`) for that Agent's agent type, launcher, model, directory and computer, and adds each non-empty answer to the Agent's framework rules; bounded, never holding up or failing the start; the install page says so and it is in the permission digest; see "Agent rules" below |
 | `track_kinds` (version 1, #14574) | `track_kinds.` | `id`, `title`, `config` (`schema: 1`, the declarative `assistantwire.TrackKindConfig`: template, context, categories, rhythms, attention, supervision, usage, assembly, capture target, channels and sidebar) | Declarative only; the manager validates every field and option | The headless assistant track registry and execution policy. The optional `space-conversations` extension contributes the `space` kind. An extension-provided kind is read-only through the custom-kind API; disabling its provider hides its surface but preserves existing records and conversations. |
 
 Extension points the hub doesn't know: the extension still installs (it may be written for a newer hub), that item has no effect, and the preview and list show a warning. When adding extension points later (knowledge base sources, link recognition…), add a row to this table.
@@ -1025,6 +1026,55 @@ A standing entry goes only to a standing channel among the standing contexts, bu
 hand-off or the Inbox may carry it when it bears on what they are about, under their own rules, as they carry any
 other. A track conversation (a space, health) has no standing channel yet, so a recall is how it reaches its own
 track's standing entries.
+
+### Agent rules
+
+Some rules hold for one agent type and model only: rules an outer-loop harness optimizer validated on one model in
+one repository, say. Every other way an extension adds text to new Agents reaches every model alike (`project_context`
+is one file per project; a computer's `agent-rules.md` holds for every Agent there), and a repository file does the
+same and misses isolated worktrees. The manager knows at a task Agent's start which agent and model it runs, so it asks
+there. Design and decision: #16820.
+
+**Who it serves:** people who use Agents and install an extension that contributes rules. Nothing changes without
+one, and the Assistant shows nothing new.
+
+The wire types are generated from `schema/extension/agent_rules.schema.json` (`wire.AgentRulesForStartParams`,
+`wire.AgentRulesForStartResult`) and the item from `manifest.schema.json` (`wire.AgentRulesItem`). The extensions'
+manager asks (`server/internal/extmgr/agent_rules.go`); the task start adds the answers
+(`server/internal/assistant/agent_rules.go`, `startTaskAgent` in `server/internal/assistant/tasks_placement.go`).
+
+The contribution (extension point `agent_rules`, version 1, namespace `agent_rules.`; the program speaks the protocol):
+
+```json
+"contributes": {"agent_rules": [{"id": "rules", "name": "Validated rules"}]}
+```
+
+- `id` is the usual contribution id, `name` (1 to 80 characters, not only spaces, no control characters) what the
+  install page and the extension's contributions call it. An extension may contribute several.
+- **Consent**: being told about every new task Agent (its agent type, model, computer and folder) and adding to its
+  instructions is agreed to like a permission. The install page says so ("Add rules to new task Agents"), it is in the
+  permission digest, and an upgrade that starts declaring the point asks again; one that only adds another
+  contribution does not.
+- It can be switched off like any contribution (`agent_rules/<id>`): it is then not asked.
+
+| Method | Parameters → answer | Notes |
+| --- | --- | --- |
+| `agent_rules.for_start` | `{contribution, agent, launcher, model, cwd, machine}` → `{text, rev?}` | `agent` is the agent type the resolved launcher starts (`claude`, `codex`, `agy`, `pi`, `opencode`, or a runtime's own); `launcher` its name; `model` the model id the start names (it may carry a context-window suffix such as `[1m]`), empty when the start uses the launcher's own default and the manager cannot tell which model that is; `cwd` the task's directory on that computer, before any worktree the Agent makes itself; `machine` the computer's id. `text` at most 4096 bytes, may be empty; `rev` at most 64 characters, the extension's own version of the text, logged with the start. |
+
+- **When**: only when a new task Agent starts (`startTaskAgent`; a retry starts a new Agent, so it asks again). A
+  resumed Agent keeps the instructions it started with, as the node stores them.
+- **Where the text goes**: each non-empty text is its own block, after Persona's own framework rules for the task, in
+  the order of the extensions' ids. They travel with them in `task_instructions` (Claude Code's instruction file, Codex's
+  developer instructions), or after the first message on a node that does not keep them separately. The text goes in as
+  the extension wrote it, trimmed of blank lines around it: the extension frames and labels its own rules.
+- **Bounds**: every contribution that is on is asked at once, each call within 1.5 seconds and all of them within 2
+  seconds (`agentRulesCallTimeout`, `agentRulesTotal`). With no contribution on, nothing is asked and the start is
+  byte for byte what it was.
+- **Errors**: the base error codes with a one-line message. A timeout, an answer over a limit (the text over 4096
+  bytes, the rev over 64 characters, the whole answer over 25 KB) or of the wrong shape (not an object, no `text`), a
+  program that does not run, and every error add nothing from that contribution to this start and are logged; the
+  answer is never cut, and the start never fails or waits past the bound because of it.
+- **Who calls**: the manager only; no other extension, device or token can.
 
 ### Unified entries ledger
 

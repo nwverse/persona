@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agent_rules.schema.json",
+  "title": "Agent rules protocol",
+  "description": "The agent_rules extension point's call (version 1, #16820; docs/extensions/extensions.md \"Agent rules\"): when the manager starts a new task Agent it asks each agent_rules contribution that is on for the rules that Agent should start with, given its agent type, launcher, model, directory and computer. A non-empty text goes in as its own block with the task's other framework rules (task_instructions). Only the manager calls, once per new start and never for a resumed Agent; every call is bounded in time and size, and an answer over a limit or of the wrong shape is dropped whole, never cut. A failure leaves that contribution's rules out of this start; the start itself never fails or waits past the bound because of it. Errors are the base ErrorCode with a one-line message for people. Plugin-side: only the hub and the program speak it.",
+  "x-side": "plugin",
+  "x-methods": {
+    "agent_rules.for_start": {"from": "hub", "params": "AgentRulesForStartParams", "result": "AgentRulesForStartResult"}
+  },
+  "$defs": {
+    "AgentRulesForStartParams": {
+      "description": "agent_rules.for_start: the rules for one new task Agent. Read-only: answering changes nothing the manager can see; the program may record that it was asked.",
+      "type": "object",
+      "properties": {
+        "contribution": {"$ref": "manifest.schema.json#/$defs/ID", "description": "The agent_rules item's id."},
+        "agent": {"type": "string", "minLength": 1, "maxLength": 32, "pattern": "^[a-z][a-z0-9_-]{0,31}$", "description": "The agent type the resolved launcher starts (claude, codex, agy, pi, opencode, or a runtime's own type)."},
+        "launcher": {"type": "string", "maxLength": 128, "description": "The launcher's name on that computer."},
+        "model": {"type": "string", "maxLength": 256, "description": "The model id the Agent starts on, as the start names it (it may carry a context-window suffix such as [1m]); empty when the start uses the launcher's own default and the manager cannot tell which model that is."},
+        "cwd": {"type": "string", "maxLength": 4096, "description": "The Agent's directory on its computer, as the task names it (before any worktree the Agent makes itself)."},
+        "machine": {"type": "string", "maxLength": 256, "description": "The id of the computer the Agent starts on."}
+      },
+      "required": ["contribution", "agent", "launcher", "model", "cwd", "machine"]
+    },
+    "AgentRulesForStartResult": {
+      "description": "The rules for that Agent. An empty text adds nothing.",
+      "type": "object",
+      "properties": {
+        "text": {"type": "string", "maxLength": 4096, "description": "The rules, as the Agent should read them. At most 4096 bytes of UTF-8: the manager drops a longer answer whole."},
+        "rev": {"type": "string", "maxLength": 64, "description": "The program's own version of the text (a hash, say), logged with the start so a later look can tell which rules an Agent had."}
+      },
+      "required": ["text"]
+    }
+  }
+}
