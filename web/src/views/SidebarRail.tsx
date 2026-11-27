@@ -19,14 +19,17 @@ import { requestDirectWaiting } from "../lib/direct-waiting";
 import { useMainWaiting } from "./assistant/use-main-waiting";
 import type { UIColor } from "../lib/extension-ui-v6";
 
+export const SIDEBAR_CONTROL = "touch-hit relative z-10 flex shrink-0 items-center justify-center rounded-control text-ink-3 transition-[background-color,color,transform] duration-150 hover:bg-hover hover:text-ink active:scale-[0.94]";
+
 /** The button that folds the sidebar to the rail and opens it again (⌘⌥B by default; the hint follows a rebinding). */
 export function CollapseButton({ collapsed, chord, size = "md", onToggle }: { collapsed: boolean; chord?: string; size?: "sm" | "md"; onToggle?: (keepFocus: boolean) => void }) {
   const label = collapsed ? t("sidebar.expand") : t("sidebar.collapse");
-  // pressed with the focus on it, this one is drawn in place of the other (the rail ⇄ the sidebar) and takes the focus
+  // pressed with the focus on it, this one is drawn in place of the other (the rail ⇄ the sidebar) and takes the focus;
+  // keyed on `collapsed` so persistent MacBayTools controls also receive focus when toggled by keyboard shortcut
   const self = useRef<HTMLButtonElement>(null);
   useLayoutEffect(() => {
     if (takeFocusHandoff()) self.current?.focus({ preventScroll: true });
-  }, []);
+  }, [collapsed]);
   return (
     <button
       ref={self}
@@ -35,10 +38,7 @@ export function CollapseButton({ collapsed, chord, size = "md", onToggle }: { co
       aria-label={label}
       aria-expanded={!collapsed}
       title={chord ? `${label} (${formatChord(chord)})` : label}
-      className={cx(
-        "touch-hit relative z-10 flex shrink-0 items-center justify-center rounded-control text-ink-3 transition-[background-color,color,transform] duration-150 hover:bg-hover hover:text-ink active:scale-[0.94]",
-        size === "sm" ? "size-7" : "size-8",
-      )}
+      className={cx(SIDEBAR_CONTROL, size === "sm" ? "size-7" : "size-8")}
     >
       <Icon name="sidebar" size={15} stroke={1.8} />
     </button>
@@ -67,7 +67,7 @@ const RAIL_ITEM = "touch-hit relative flex size-9 shrink-0 items-center justify-
  * the way back is on screen, so the fold can be kept across reloads (lib/layout.ts). The Agents' list and the
  * conversations are what fold away; ⌘K finds any of them.
  */
-export function SidebarRail({ route, onSearch, onNewAgent }: { route: Route; onSearch: () => void; onNewAgent: () => void }) {
+export function SidebarRail({ route, onSearch, onNewAgent, hideCollapse = false }: { route: Route; onSearch: () => void; onNewAgent: () => void; hideCollapse?: boolean }) {
   const { phase, online, total, main, pages, more } = useNavPages();
   const hasAssistant = useStore((s) => Boolean(s.assistant));
   const [moreMenu, setMoreMenu] = useState<HTMLElement | null>(null);
@@ -100,13 +100,15 @@ export function SidebarRail({ route, onSearch, onNewAgent }: { route: Route; onS
   };
   return (
     <aside data-sidebar-rail className="flex h-full w-full flex-col items-center bg-canvas py-2.5">
-      <div data-rail-top-controls className="flex flex-col items-center">
-        <CollapseButton collapsed chord={bindings["left-sidebar"]} />
-        <button type="button" onClick={onSearch} aria-label={t("sidebar.search_sessions")} title={`${t("sidebar.search_sessions")} (${jumpHint(bindings)})`} className={cx(RAIL_ITEM, "mt-1 text-ink-3 hover:bg-hover hover:text-ink")}>
-          <Icon name="search" size={15} stroke={1.8} />
-        </button>
-        <span aria-hidden className="my-2 h-px w-6 shrink-0 bg-line" />
-      </div>
+      {!hideCollapse && (
+        <div data-rail-top-controls className="flex flex-col items-center">
+          <CollapseButton collapsed chord={bindings["left-sidebar"]} />
+          <button type="button" onClick={onSearch} aria-label={t("sidebar.search_sessions")} title={`${t("sidebar.search_sessions")} (${jumpHint(bindings)})`} className={cx(RAIL_ITEM, "mt-1 text-ink-3 hover:bg-hover hover:text-ink")}>
+            <Icon name="search" size={15} stroke={1.8} />
+          </button>
+          <span aria-hidden className="my-2 h-px w-6 shrink-0 bg-line" />
+        </div>
+      )}
       <nav aria-label={t("sidebar.pages")} className="flex min-h-0 w-full flex-1 flex-col items-center gap-0.5 overflow-y-auto overscroll-contain">
         {hasAssistant && link("j:new", { name: "persona-new" }, t("sidebar.new_chat"), <Icon name="compose" size={15} stroke={1.8} />)}
         {link(

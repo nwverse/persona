@@ -2503,8 +2503,56 @@ go run ./scripts/transcribelive -hub <hub address> -token-file <file> -kb <PERSO
   line and in all, the Latin words kept as said); the latency of each `line` frame after its sentence ended, of the
   first caption after each sentence began, of the final pass after the complete upload and of the minutes after it;
   Persona's echo (marked in the hub's transcript, never a live line); the minutes' share of Han letters against
-  `-lang`; the upstream's billed seconds (`-price-per-minute` adds the cost) and whether the hub deleted the audio.
-  `<out>/frames.json` has every socket frame with when it came, `<out>/detail.json` the recording as the API returns it.
+  `-lang`; `meeting_transcription_extension` (from `GET /api/v1/assistant`, with a warning when it is not `""`); the
+  upstream's billed seconds (`-price-per-minute` adds the cost) and whether the hub deleted the audio.
+  `<out>/frames.json` has every socket frame with when it came, `<out>/detail.json` the recording as the API returns it,
+  and `<out>/hub_segments.json` is copied from the knowledge base before the recording is deleted.
+- Sentence-time and speaker-label scoring (`timing` and `labels` in `<out>/report.json`):
+  - **Text-only matching (`timing.match`)**: hub sentences (live `line` frames ordered by `n`; `hub_segments.json` in
+    stored order) are aligned monotonically to non-echo script lines by normalized text alone, with no timestamps in the
+    cost (1:1, up to 1:3 / 3:1 merges and splits, and skips on either side; Persona's echo lines and segments are left
+    out).
+  - **Start and end errors (`timing.live`, `timing.final`, `timing.final_replay`)**: for each matched group
+    (`H1…Hk`, `L1…Lm`), start error is `H1.start - L1.start` and end error is `Hk.end - Lm.end`, reported as `{n, min,
+    p50, p90, max}` of the absolute error in seconds plus `start_signed_p50` and `end_signed_p50` (`null` when a group
+    is empty). `final_replay` is the subset of `final` written by the final pass rather than kept from live: a non-echo
+    final segment counts as `live_kept` when a live `line` frame has the same normalized text and both `start` and `end`
+    within 0.01 s, and `replay` otherwise (`timing.final_split`).
+  - **Perfect-timeline speaker labels (`labels.rule`, `labels.<group>`)**: using the non-echo script lines as a perfect
+    turn timeline, each matched hub sentence is labelled by overlap with each voice's turns (no overlap: `unlabelled`;
+    otherwise the voice with the most overlap is sure when it has at least 70% of the sentence's total overlap, at least
+    1 s of overlap, and at least 20 s of total speech in the timeline, else `unsure`; a sentence matched to lines from
+    more than one voice is `mixed`). The rule runs once with hub times and once with the matched lines' true span, and
+    reports `time_caused_wrong_pts` and `time_caused_unsure_unlabelled_pts` (in percentage points), both over all matched
+    sentences and under `substantive` (true span >= 2 s, or >= 8 Han characters in the normalized text; English counts by
+    duration only).
+- **Result line and fail-fast checks**: the last line on stdout is `RESULT ...` on success (naming a `failed` minutes
+  state without stopping scoring), `TIMEOUT ...` when the final pass does not finish within 40 minutes, or `FAIL ...` on
+  any fatal error (including a `failed` final pass, or `<kb>/recordings/<id>/meta.json` not appearing within 60 s of the
+  first upload, which deletes the recording and reports a bad `-kb`).
+- **Offline rescoring (`-rescore <dir>`)**: recomputes `timing` and `labels` from `<dir>/script.json`,
+  `<dir>/frames.json` and `<dir>/hub_segments.json` with no hub and no network, writing `<dir>/rescore.json` and the
+  `RESULT` line.
+- **Reusing a longer meeting**: place `<out>/meeting.pcm` (raw signed 16-bit little-endian mono 16 kHz, no header) and
+  `<out>/script.json` (JSON array with all six keys `{voice, lang, text, echo, start, end}` on every line, with
+  `"echo": false` written explicitly on non-echo lines; times in seconds on that PCM's clock). Keep a backup of both
+  files: a `script.json` that fails to parse falls back to synthesizing the embedded meeting and overwrites both files.
+- **Zero-cost dry run**: configure the voice extension with the `fake` dialect (`manager.json` only,
+  `server/internal/modules/voice/transcribe_fake.go`) and set `PERSONA_VOICE_FAKE_TRANSCRIPT` in its environment to the
+  script's `[{start, end, text}]` JSON file. With `<out>/meeting.pcm` and `<out>/script.json` pre-populated, no speech
+  is synthesized and no upstream is called; timing errors and time-caused label shifts should be about 0 (and
+  `final_replay` empty, since the fake emits identical live and replay times).
+- **Running against a real upstream (manual only, never in CI)**:
+  - Use a throwaway test hub (`docs/lessons/workflow.md`, "Temporary test hubs") with its own `HOME`, `PERSONA_HOME`,
+    port and Postgres, never a hub in use. Pass `-hub`, `-token-file` (full device token) and `-kb` explicitly with
+    `PERSONA_HOME` pointing at the test hub so the tool cannot fall back to `~/.persona/hub.json`.
+  - Enable the knowledge base, recording module and built-in `voice` extension with a `live`-dialect upstream
+    (`meeting_transcription_extension` `""` and `meeting_transcription_ready` true). Keep upstream keys only in the
+    test hub's own settings or secret provider, never in issues or PRs. Without a minutes model, every run waits the
+    full 30-minute minutes timeout and audio stays until the final `DELETE`.
+  - Expect roughly 5× the meeting duration in billed upstream minutes (live multi-session pass plus 4× replay), plus
+    one-time speech synthesis (not in `usage_seconds`), minutes model calls and any listener-role room conversation. Run
+    the short embedded script first and extrapolate from its `usage_seconds` before running a 20+ minute script.
 
 ## Live Activity screenshots (`LiveActivityShots`)
 

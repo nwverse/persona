@@ -77,6 +77,9 @@ func (s *Service) startPlan(ctx context.Context, id string, edits []PlanTask, re
 		if err := checkModelID(p.Tasks[i].Model); err != nil { // typed on the card (#1644): refused before anything starts
 			return nil, planInvalid{err}
 		}
+		if err := p.Tasks[i].ModelAliases.Validate(); err != nil {
+			return nil, planInvalid{err}
+		}
 		params := map[string]any{"speed": p.Tasks[i].Speed}
 		if _, err := validateStartSpeed(params); err != nil {
 			return nil, planInvalid{err}

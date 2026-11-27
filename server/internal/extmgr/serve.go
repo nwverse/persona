@@ -693,6 +693,7 @@ func (h *Manager) report() extwire.Report {
 			}
 		}
 		slices.Sort(r.PushGradingExtensions)
+		r.Modules = h.reportModules() // the modules approved installed extensions supply (module_providers.go)
 	}
 	for _, m := range h.machinesNow() {
 		var x extwire.MachineExtras
