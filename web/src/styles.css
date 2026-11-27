@@ -735,6 +735,7 @@ select:not([multiple], [size], .appearance-none) {
 .range::-moz-range-progress { height: 4px; border-radius: 999px; background: var(--accent); }
 
 /* ── macOS unified titlebar + 44 px co-linear Apple G2 control bay (#16607) ────────────────────────────────── */
+/* Hub Admin's sidebar under the same titlebar takes the expanded sidebar's inset and drag strip (#16992). */
 @media (width >= 64rem) {
   [data-app-shell][data-mac-chrome="windowed"] {
     position: relative;
@@ -744,11 +745,13 @@ select:not([multiple], [size], .appearance-none) {
     -webkit-app-region: no-drag;
     app-region: no-drag;
   }
-  [data-app-shell][data-mac-bay="expanded"] [data-sidebar-root] {
+  [data-app-shell][data-mac-bay="expanded"] [data-sidebar-root],
+  [data-admin-shell][data-mac-chrome="windowed"] [data-admin-sidebar] {
     position: relative;
     padding-top: 38px;
   }
-  [data-app-shell][data-mac-bay="expanded"] [data-sidebar-root]::before {
+  [data-app-shell][data-mac-bay="expanded"] [data-sidebar-root]::before,
+  [data-admin-shell][data-mac-chrome="windowed"] [data-admin-sidebar]::before {
     content: "";
     position: absolute;
     inset-inline: 0;
