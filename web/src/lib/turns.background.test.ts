@@ -136,6 +136,33 @@ describe("background rounds in the main conversation", () => {
     expect(leader.kind).toBe("segment");
   });
 
+  it("marks only an explicitly promoted main relay input for full source folding", () => {
+    const ask = call(2, "mcp__persona__ask_user", { question: "Send the brief?" });
+    const items = [relayed(1), ask, result(3, ask, "Yes"), answer(4)];
+    const [promoted] = chatLines(items, { ...on, main: true });
+    expect(promoted.kind).toBe("segment");
+    expect(users([promoted])[0]?.promotedRelay).toBe(true);
+    expect(promoted.kind === "segment" && promoted.seg.answer).toEqual(items[3]);
+    expect(promoted.kind === "segment" && promoted.seg.steps.some((step) => step.kind === "tool" && step.use === ask)).toBe(true);
+
+    const [pending] = chatLines([relayed(1), ask], { ...on, main: true, live: true });
+    expect(pending.kind).toBe("segment");
+    expect(users([pending])[0]?.promotedRelay).toBe(true);
+
+    // Ordinary visible replies, leader and switch-off rounds, quiet rounds, and owner input keep their existing rules.
+    const [ordinary] = chatLines([relayed(1), answer(2)], { background: true, main: true });
+    expect(users([ordinary])[0]?.promotedRelay).toBeUndefined();
+    const [leader] = chatLines(items, { background: true });
+    expect(users([leader])[0]?.promotedRelay).toBeUndefined();
+    const [off] = chatLines(items, { main: true });
+    expect(users([off])[0]?.promotedRelay).toBeUndefined();
+    const [quiet] = chatLines([relayed(1)], { ...on, main: true });
+    expect(quiet.kind).toBe("supervision");
+    expect(users([quiet])[0]?.promotedRelay).toBeUndefined();
+    const [own] = chatLines([mine(1), answer(2)], { ...on, main: true });
+    expect(users([own])[0]?.promotedRelay).toBeUndefined();
+  });
+
   it("keeps a round that asked the user (ask_user) shown, its prompt still hidden", () => {
     const ask = call(2, "mcp__persona__ask_user", { question: "Send the brief?" });
     const lines = chatLines([scheduled(1), ask, result(3, ask, "Yes"), answer(4)], on);

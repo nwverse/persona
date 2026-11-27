@@ -40,6 +40,7 @@ vi.mock("../lib/ops", async (importOriginal) => ({ ...(await importOriginal<type
 const { Home, offlineLine, rowTags } = await import("./Home");
 const { answerCard } = await import("../lib/card-answer");
 const { allowBody } = await import("../lib/quick-answers");
+const { loadPages } = await import("../lib/lazy-page");
 const { t } = await import("../i18n");
 
 const mac: Machine = { id: "mac", name: "Mac", online: true };
@@ -65,7 +66,7 @@ const render = (sessions: Session[], interactions: Interaction[] = [], { machine
   Object.assign(fake, { sessions, interactions, machines }, loaded === undefined ? {} : { loaded });
   return renderToStaticMarkup(<Home onNewAgent={() => {}} onToggleSidebar={() => {}} />);
 };
-const markAll = (html: string) => html.match(/<button [^>]*title="把 (\d+) 个新回复的会话标为已看"[^>]*>/)?.[1];
+const markAll = (html: string) => html.match(/<button [^>]*title="把 (\d+) 个完成未看的会话标为已看"[^>]*>/)?.[1];
 // where a group's heading is in the page (-1: not there)
 const heading = (html: string, title: string) => html.indexOf(`>${title}</h2>`);
 const buttonLabels = (html: string) => (html.match(/<button\b[^>]*>[\s\S]*?<\/button>/g) ?? []).map((button) => button.replace(/<[^>]*>/g, ""));
@@ -73,7 +74,7 @@ const buttonLabels = (html: string) => (html.match(/<button\b[^>]*>[\s\S]*?<\/bu
 describe("the overview", () => {
   it("restores green unread success badges without tinting Needs you rows", () => {
     const html = render([agent(1, 0, "unread"), agent(2, 0, "needs_you")]);
-    expect(html).toMatch(/class="[^"]*bg-green-tint text-green" aria-label="新回复"/);
+    expect(html).toMatch(/class="[^"]*bg-green-tint text-green" aria-label="完成未看"/);
     expect(html).toMatch(/class="[^"]*bg-field text-attention" aria-label="需要你"/);
     expect(html).not.toContain("bg-orange-tint");
     expect(html).not.toContain("bg-red-tint");
@@ -211,6 +212,29 @@ describe("the overview", () => {
     });
   });
 
+  it("keeps the Computers row interaction style before and after the Rows view loads", async () => {
+    const row = /<a [^>]*href="\/machines\/mac"[^>]*class="[^"]*\bcard-interactive\b/;
+    expect(render([], [], { machines: [mac] })).toMatch(row);
+    await loadPages();
+    const { OVERVIEW_MACHINE_VIEW_KEY } = await import("./OverviewMachineView");
+    localStorage.setItem(OVERVIEW_MACHINE_VIEW_KEY, "rows");
+    try {
+      const html = render([], [], { machines: [mac] });
+      expect(html).toMatch(/role="radio" aria-checked="true" data-selected="true"[^>]*>行<\/button>/);
+      expect(html).toMatch(row);
+    } finally {
+      localStorage.removeItem(OVERVIEW_MACHINE_VIEW_KEY);
+    }
+  });
+
+  it("offers the Cards and Rows display switch on the Computers heading, with Cards selected by default", async () => {
+    await loadPages();
+    const html = render([], [], { machines: [mac] });
+    expect(html).toContain('role="radiogroup" aria-label="显示方式"');
+    expect(html).toMatch(/role="radio" aria-checked="true" data-selected="true"[^>]*>卡片<\/button>/);
+    expect(html).toMatch(/role="radio" aria-checked="false" data-selected="false"[^>]*>行<\/button>/);
+  });
+
   it("never builds an empty sentence: with only a card whose agent is not counted, it says how many requests wait (audit item 30)", () => {
     const other = { id: "q3", machine_id: "mac", session_id: "assistant-1", kind: "question" } as Interaction;
     const html = render([], [other]);
@@ -277,7 +301,7 @@ describe("the overview", () => {
     const asking = agent(1, 0, "needs_you");
     const bg = { background_working: true, background_waiting: true };
     const html = render([asking, agent(2, 0, "needs_you"), agent(3, 0, "working"), agent(5, 0, "working", bg), agent(4, 0, "unread")], [{ id: "i1", kind: "permission", machine_id: "mac", session_id: asking.session_id, tool_name: "Bash" } as Interaction]);
-    const at = [heading(html, "需要你"), heading(html, "卡住了，要你去看"), heading(html, "工作中"), heading(html, "后台等待中"), heading(html, "新回复"), heading(html, "电脑"), cards(html)];
+    const at = [heading(html, "需要你"), heading(html, "卡住了，要你去看"), heading(html, "工作中"), heading(html, "后台等待中"), heading(html, "完成未看"), heading(html, "电脑"), cards(html)];
     expect(at.every((x) => x > -1)).toBe(true);
     expect(at).toEqual([...at].sort((a, b) => a - b));
     // nothing to do: the ready card and the computers still come first
@@ -304,15 +328,15 @@ describe("the overview", () => {
 
   it("offers 全部标为已看 beside the summary when the unread agents' tabs are working or need you", () => {
     const html = render([agent(1, 0, "working"), agent(1, 1, "unread"), agent(2, 0, "needs_you"), agent(2, 1, "unread")]);
-    expect(heading(html, "新回复")).toBe(-1);
+    expect(heading(html, "完成未看")).toBe(-1);
     expect(heading(html, "工作中")).toBeGreaterThan(-1);
     expect(html).toContain("卡住了，要你去看");
     expect(markAll(html)).toBe("2");
   });
 
-  it("keeps it in 新回复's header, for every unread agent", () => {
+  it("keeps it in 完成未看's header, for every unread agent", () => {
     const html = render([agent(1, 0, "working"), agent(1, 1, "unread"), agent(3, 0, "unread")]);
-    const section = heading(html, "新回复");
+    const section = heading(html, "完成未看");
     expect(section).toBeGreaterThan(-1);
     expect(markAll(html)).toBe("2");
     expect(html.indexOf("全部标为已看")).toBeGreaterThan(section);
@@ -348,14 +372,14 @@ describe("the overview", () => {
     try {
       const early = render([asking, agent(2, 0, "working"), agent(3, 0, "unread")], [ix]);
       expect(early).toContain("加载中");
-      for (const group of ["需要你", "卡住了，要你去看", "工作中", "新回复", "电脑"]) expect(heading(early, group)).toBe(-1);
+      for (const group of ["需要你", "卡住了，要你去看", "工作中", "完成未看", "电脑"]) expect(heading(early, group)).toBe(-1);
       expect(early).not.toContain("全部标为已看");
     } finally {
       fake.loaded = true;
     }
     const html = render([asking, agent(2, 0, "working"), agent(3, 0, "unread")], [ix]);
     expect(html).not.toContain("加载中");
-    for (const group of ["需要你", "工作中", "新回复", "电脑"]) expect(heading(html, group)).toBeGreaterThan(-1);
+    for (const group of ["需要你", "工作中", "完成未看", "电脑"]) expect(heading(html, group)).toBeGreaterThan(-1);
   });
 });
 
@@ -395,6 +419,28 @@ describe("compact rows", () => {
     // the cards with buttons only once each has room for its question and buttons
     expect(html.match(/@min-\[84rem\]:grid-cols-2 @min-\[120rem\]:grid-cols-3/g)?.length).toBe(1);
     expect(html).toContain("@container");
+  });
+
+  it("lets a section's only card fill a two-column row, capped at two of three in every grid", () => {
+    const a = agent(1, 0, "needs_you");
+    fake.todos = [{ id: "only", title: "Only task", created_at: "2026-11-01T00:00:00Z", updated_at: "2026-11-01T00:00:00Z" }];
+    let html: string;
+    try {
+      html = render([a, agent(2, 0, "working")], [{ id: "p", kind: "permission", machine_id: "mac", session_id: a.session_id, tool_name: "Bash" } as Interaction]);
+    } finally {
+      fake.todos = [];
+    }
+    const grids = [...html.matchAll(/class="([^"]*\bgrid\b[^"]*)"/g)].map((m) => m[1]!.replaceAll("&amp;", "&").replaceAll("&gt;", ">"));
+    const rows = grids.filter((c) => c.includes("@min-[60rem]:grid-cols-2") && c.includes("@min-[100rem]:grid-cols-3") && c.includes("items-start"));
+    const tasks = grids.filter((c) => c.includes("@min-[60rem]:grid-cols-2") && c.includes("@min-[100rem]:grid-cols-3") && c.includes("items-stretch"));
+    const cards = grids.filter((c) => c.includes("@min-[84rem]:grid-cols-2") && c.includes("@min-[120rem]:grid-cols-3"));
+    expect([rows.length, tasks.length, cards.length]).toEqual([1, 1, 1]);
+    expect(rows[0]).toContain("[&>:only-child]:col-span-full");
+    expect(rows[0]).toContain("@min-[100rem]:[&>:only-child]:col-span-2");
+    expect(tasks[0]).toContain("[&>:only-child]:col-span-full");
+    expect(tasks[0]).toContain("@min-[100rem]:[&>:only-child]:col-span-2");
+    expect(cards[0]).toContain("[&>:only-child]:col-span-full");
+    expect(cards[0]).toContain("@min-[120rem]:[&>:only-child]:col-span-2");
   });
 
   it("keeps a short space name that only starts the title, and drops a repeat", () => {
@@ -473,7 +519,7 @@ describe("tasks in progress", () => {
       const html = render([agent(1, 0, "working"), agent(2, 0, "unread")], [{ id: "c1", machine_id: "mac", session_id: "s1", kind: "question", question: "ok?" } as Interaction]);
       expect(heading(html, "进行中的任务")).toBeGreaterThan(-1);
       expect(heading(html, "进行中的任务")).toBeLessThan(heading(html, "需要你"));
-      expect(heading(html, "需要你")).toBeLessThan(heading(html, "新回复"));
+      expect(heading(html, "需要你")).toBeLessThan(heading(html, "完成未看"));
       expect(heading(html, "工作中")).toBe(-1);
       expect(html.indexOf("</h1>")).toBeLessThan(heading(html, "进行中的任务"));
     } finally {

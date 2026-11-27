@@ -312,7 +312,7 @@ func (b *inboxBook) escalateWithPolicy(since, now time.Time, policy replyPolicyS
 	var changed []*inboxWrite
 	for _, it := range b.items {
 		a := it.Agent
-		if it.VisibilityExcluded || !it.open() || it.Context == "" ||
+		if it.VisibilityExcluded || !it.open() || it.externallyRouted() || it.Context == "" ||
 			a != nil && (a.Of == it.Last && !a.InterruptedByDisable || a.savingRetry) {
 			continue
 		}
@@ -595,7 +595,7 @@ func (s *Service) linkTaskFor(ctx context.Context, it *InboxItem, tasks []prompt
 	b := &s.inbox
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if it.Agent != nil && id != "" && inboxTaskLinkEligible(it) {
+	if it.Agent != nil && id != "" && !it.externallyRouted() && inboxTaskLinkEligible(it) {
 		held := w != nil && b.holds(w)
 		it.Agent.TodoID = id
 		if held {

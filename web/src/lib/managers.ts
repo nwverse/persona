@@ -274,7 +274,13 @@ function noteCurrentAssistant() {
   if (picked && roster) notePickedName(roster.managers.find((m) => m.id === picked)?.name ?? null);
   if (!roster) return;
   const current = installedManagers(roster).find((m) => m.id === shownManager());
-  noteShownIdentity(current ? { id: current.id, name: current.name } : null);
+  noteShownIdentity(current ? {
+    id: current.id,
+    name: current.name,
+    isDefault: current.id === roster.default,
+    line: switcherLine(current),
+    tone: statusLine(current).tone,
+  } : null);
 }
 onManagerChoice(noteCurrentAssistant);
 
@@ -288,7 +294,7 @@ export function watchRoster() {
   void loadRoster();
 }
 
-function subscribeRoster(l: () => void) {
+export function subscribeRoster(l: () => void) {
   watchRoster();
   rosterListeners.add(l);
   return () => void rosterListeners.delete(l);
@@ -296,7 +302,7 @@ function subscribeRoster(l: () => void) {
 
 /** The roster, or null until (and unless) the hub has one. */
 export function useRoster(): ManagerList | null {
-  return useSyncExternalStore(subscribeRoster, () => roster, () => roster);
+  return useSyncExternalStore(subscribeRoster, currentRoster, currentRoster);
 }
 
 /** The managers that run (or ran): the ones still being installed have nothing to show yet. */
@@ -378,24 +384,26 @@ export function managerOf(list: ManagerList | null, id: string): Manager | null 
 
 const normHost = (s: string | undefined): string => s?.trim().toLowerCase() ?? "";
 
+type HostMachine = { id: string; hostname?: string; host?: string; machine_uid?: string };
+
+/** The kind of binding, so a caller looking up one host can prefer a UID match over a legacy name match. */
+export function managerHostMatch(manager: Manager, machine: HostMachine): "uid" | "host" | undefined {
+  const managerUid = normHost(manager.machine_uid);
+  const machineUid = normHost(machine.machine_uid);
+  if (managerUid && machineUid) return managerUid === machineUid ? "uid" : undefined;
+  const managerHost = normHost(manager.host);
+  const machineHost = normHost(machine.hostname) || normHost(machine.host) || normHost(machine.id);
+  return managerHost && managerHost === machineHost ? "host" : undefined;
+}
+
 /** Installed managers hosted on `machine`, in display order (default first). Matches by `machine_uid` when both carry
  *  one (never falling back to `host` when two distinct UIDs disagree), and falls back safely to case-insensitive host
  *  matching for older managers or hubs (#14964). */
 export function hostedManagersForMachine(
   roster: ManagerList | null,
-  machine: { id: string; hostname?: string; host?: string; machine_uid?: string },
+  machine: HostMachine,
 ): Manager[] {
-  if (!roster) return [];
-  const machineUid = normHost(machine.machine_uid);
-  const machineHost = normHost(machine.hostname) || normHost(machine.host);
-  const machineId = normHost(machine.id);
-  return managerOrder(roster).filter((m) => {
-    const managerUid = normHost(m.machine_uid);
-    if (managerUid && machineUid) return managerUid === machineUid;
-    const managerHost = normHost(m.host);
-    if (!managerHost) return false;
-    return machineHost ? managerHost === machineHost : managerHost === machineId;
-  });
+  return roster ? managerOrder(roster).filter((m) => managerHostMatch(m, machine)) : [];
 }
 
 const NON_COMPARABLE_VERSION = new Set(["", "dev", "unknown"]);

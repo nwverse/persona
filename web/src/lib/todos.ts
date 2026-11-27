@@ -3,17 +3,18 @@ import { currentHeaders, noteItemManager } from "./manager-choice";
 import { acceptanceStands, decisionDismissed, linkedParkInteraction, linkedParkOwnerAsk, parkInteractionID, reviewState, type Supervision } from "./supervision";
 import type { LineageStep, TaskBrief } from "./brief";
 import type { RuleSuggestion } from "./rule-suggestion";
+import type { TodoWait } from "./todo-wait-wire";
 import type { TodoSummary } from "./todo-view-wire";
 import { api, ApiError, enc } from "./api";
 import { parseAPIError, retryable, unrecoverableError } from "./api-errors";
-import { stateOf } from "./format";
+import { activityOf, stateOf } from "./format";
 import { foldedState } from "./child-sessions";
 import { foldRows } from "./folded-rows";
 import { splitAgentSessions, type AgentGroup, type AgentMutes } from "./agent-groups";
 import type { AgentState, Interaction, Machine, Question, Session } from "./types";
 import type { Route } from "./router";
 import { byTime } from "./times";
-import { stateName, waitName } from "./state-labels";
+import { serverWaitReason, stateName, waitName } from "./state-labels";
 import { usageLimitAgent } from "./usage-limit";
 
 export type TodoAgentSource = "manual" | "space" | "spawned" | "chat";
@@ -85,7 +86,123 @@ export interface TodoCreateOptions {
 /** What the hub last read of a PR on GitHub (pr_status.go). */
 export interface PRFacts { url: string; title?: string; state: "open" | "merged" | "closed"; draft: boolean; review: "required" | "approved" | "changes_requested" | "pending"; checks: "failure" | "pending" | "success" | "none"; conflicts: boolean; checked_at: string }
 
+/** Server-computed weakest-link ("barrel rule") Target Repo delivery gate summary under todos_v2 (#15699). */
+export interface TodoRepoGate {
+  state:
+    | "blocked_ci"
+    | "blocked_conflict"
+    | "blocked_changes"
+    | "awaiting_review"
+    | "checks_pending"
+    | "missing_pr"
+    | "ready"
+    | "reference_only"
+    | (string & {});
+  target_count: number;
+  ready_count: number;
+  reference_count: number;
+  blocking_repo?: string;
+  blocking_pr?: string;
+  reason?: string;
+}
+
+/** Active persistent blocker edge projected on a to-do under todos_v2 (#16135, #16138). */
+export interface TodoActiveBlocker {
+  id: string;
+  kind: string;
+  target_ref: string;
+  state: string;
+  attempts?: number;
+}
+
+/** Server-computed read-only direct child progress summary on parent goals under todos_v2 (#16432). */
+export interface TodoChildSummary {
+  total: number;
+  open: number;
+  needs_you: number;
+  working: number;
+  done: number;
+}
+
+/** Server-owned board projection section keys returned under todos_v2 (#15774, #15800). */
+export type TodoBoardSectionKey =
+  | "needs_you"
+  | "in_progress"
+  | "pending_review"
+  | "waiting"
+  | "someday"
+  | "done"
+  | (string & {});
+
+/** One top-level entry in a server-computed status group, with optional folded/surfaced child IDs (#15774). */
+export interface TodoBoardEntry {
+  todo_id: string;
+  folded_child_ids?: string[];
+  surfaced_child_ids?: string[];
+  folded_count?: number;
+}
+
+/** One server-computed status group in `board.status_groups` (#15774). */
+export interface TodoBoardStatusGroup {
+  key: TodoBoardSectionKey;
+  total_count: number;
+  visible_count: number;
+  entries: TodoBoardEntry[];
+}
+
+/** Per-direction counts in `board.direction_groups` (#15774). */
+export interface TodoBoardDirectionCounts {
+  needs_you: number;
+  in_progress: number;
+  pending_review: number;
+  waiting: number;
+  done: number;
+  total: number;
+}
+
+/** One server-computed direction group in `board.direction_groups` (#15774). */
+export interface TodoBoardDirectionGroup {
+  direction_id: string;
+  label?: string;
+  counts: TodoBoardDirectionCounts;
+  todo_ids: string[];
+}
+
+/** One node in the server-computed By-to-do sidebar tree (`board.sidebar_tree`, #15774). */
+export interface TodoBoardSidebarNode {
+  todo_id: string;
+  section: TodoBoardSectionKey;
+  item_type: "personal" | "task" | (string & {});
+  direction_id?: string;
+  child_ids?: string[];
+  surfaced_child_ids?: string[];
+  folded_count: number;
+  needs_you_count: number;
+  active_count: number;
+}
+
+/** Global section and open totals in `board.counts` (#15774). */
+export interface TodoBoardCounts {
+  needs_you: number;
+  in_progress: number;
+  pending_review: number;
+  waiting: number;
+  someday: number;
+  done: number;
+  open_total: number;
+}
+
+/** Complete server-owned board projection tree returned by GET /api/v1/todos under todos_v2=true (#15774, #15800). */
+export interface TodoBoardProjection {
+  status_groups: TodoBoardStatusGroup[];
+  direction_groups: TodoBoardDirectionGroup[];
+  sidebar_tree: TodoBoardSidebarNode[];
+  counts: TodoBoardCounts;
+}
+
 export interface Todo {
+  /** Hub projection on list and detail reads. Older hubs omit it. */
+  wait?: TodoWait | null;
   id: string;
   title: string;
   notes?: string;
@@ -126,6 +243,8 @@ export interface Todo {
   kind?: string;
   /** Additive audience metadata (#14619): "human" (personal to-do), "autonomous" (agent task), or unset for legacy rows. */
   audience?: string;
+  /** Server-derived item classification (#15758): "personal" or "task"; unset on older hubs. */
+  item_type?: "personal" | "task" | (string & {});
   /** "auto" when the hub marked the task done because its work was judged finished, with why (docs/assistant/todos.md "Automatic completion"). */
   done_by?: string;
   done_reason?: string;
@@ -186,6 +305,12 @@ export interface Todo {
   /** The hub's view of the row (#10226, docs/assistant/todo-status-sop.md "The hub's view"): read only behind
    *  Developing Persona's switches for now (features/todos/model). Unset from managers without `todo_view`. */
   view?: TodoSummary;
+  /** Server-computed weakest-link Target Repo delivery gate summary, populated only when todos_v2 === true (#15699). */
+  repo_gate?: TodoRepoGate;
+  /** Active persistent blocker edges blocking this to-do, populated only when todos_v2 === true (#16135, #16138). */
+  active_blockers?: TodoActiveBlocker[];
+  /** Read-only direct child progress summary on parent goals, populated only when todos_v2 === true (#16432). */
+  child_summary?: TodoChildSummary;
 }
 
 /** Whether this closed to-do was cancelled, including the legacy supervision-only representation. */
@@ -212,6 +337,7 @@ export interface TodoAsk {
   questions?: Question[];
   outcome?: "done" | "cannot" | "decide" | string;
   verdict: string;
+  summary?: string;
   recommend?: string;
   /** Direct evidence/PR/MR URL when present and not merely the to-do's own page (#14659). */
   link?: string;
@@ -272,6 +398,19 @@ export type AskTake = "take" | "ack" | "accept";
 export function openAsk(todo: Pick<Todo, "ask">): TodoAsk | undefined {
   const a = todo.ask;
   return a && a.verdict && a.asked_at ? a : undefined;
+}
+
+/** The current Pass round of a task its supervisor explicitly asked the owner to verify. */
+export function personalVerificationAsk(todo: Todo): TodoAsk | undefined {
+  const ask = openAsk(todo);
+  return reviewState(todo) === "user_check" && ask && !ask.outcome ? ask : undefined;
+}
+
+/** The open decision a supervisor raised for the owner through task_review. */
+export function taskReviewDecisionAsk(todo: Todo): TodoAsk | undefined {
+  const ask = openAsk(todo);
+  return !todo.done_at && reviewState(todo) === "needs_user" && !decisionDismissed(todo) &&
+    ask?.outcome === "decide" && !ask.questions?.length ? ask : undefined;
 }
 
 /** What the ask's button does; none for a decision that recommends nothing: nothing for one tap to take, so it is
@@ -445,18 +584,117 @@ export function shownStatus(todo: Todo, status: TodoStatus): TodoStatus {
   return awaitsReview(todo, status) ? "unread" : status;
 }
 
+export const PR_STATUS_FRESH_MS = 15 * 60_000;
+
+export function normalizedPR(url: string | undefined): string {
+  return (url ?? "").trim().replace(/[#?].*$/, "").replace(/\/+$/, "").toLowerCase();
+}
+
+function parseTimestampMs(at: string | null | undefined): number {
+  if (!at) return 0;
+  const v = Date.parse(at);
+  return Number.isNaN(v) ? 0 : v;
+}
+
+/** Its PRs with fresh facts saying open and non-draft: the current one first, then earlier ones newest first (#7935). */
+export function openMergePRs(todo: Todo, now: number): PRFacts[] {
+  const fresh = (f: PRFacts) => {
+    const checked = parseTimestampMs(f.checked_at);
+    return !!checked && now - checked >= 0 && now - checked <= PR_STATUS_FRESH_MS && f.state === "open" && !f.draft;
+  };
+  const out: PRFacts[] = [];
+  const current = todo.pr_status;
+  if (current && todo.pr_url && normalizedPR(todo.pr_url) === normalizedPR(current.url) && fresh(current)) out.push(current);
+  for (const f of todo.other_prs ?? []) if (normalizedPR(f.url) !== normalizedPR(todo.pr_url) && fresh(f)) out.push(f);
+  return out;
+}
+
+function prBlockerLook(blockers: readonly string[] | undefined): { label: string; tone: TodoTone } | undefined {
+  if (!blockers?.length) return undefined;
+  if (blockers.includes("conflicts")) return { label: t("todos.status_pr_conflicts"), tone: "red" };
+  if (blockers.includes("changes_requested")) return { label: t("todos.status_pr_changes_requested"), tone: "amber" };
+  if (blockers.includes("checks_failing") || blockers.includes("checks_failed")) return { label: t("todos.status_pr_checks_failed"), tone: "red" };
+  if (blockers.includes("review_required")) return { label: t("todos.status_pr_in_review"), tone: "idle" };
+  if (blockers.includes("checks_pending")) return { label: t("todos.status_pr_checks_pending"), tone: "idle" };
+  return undefined;
+}
+
+function openPRFactsLook(prs: readonly PRFacts[]): { label: string; tone: TodoTone } | undefined {
+  if (!prs.length) return undefined;
+  if (prs.some((f) => f.conflicts)) return { label: t("todos.status_pr_conflicts"), tone: "red" };
+  if (prs.some((f) => f.review === "changes_requested")) return { label: t("todos.status_pr_changes_requested"), tone: "amber" };
+  if (prs.some((f) => f.checks === "failure" || (f.checks as string) === "failing")) return { label: t("todos.status_pr_checks_failed"), tone: "red" };
+  if (prs.some((f) => f.review === "required" || (f.review as string) === "review_required")) return { label: t("todos.status_pr_in_review"), tone: "idle" };
+  if (prs.some((f) => f.checks === "pending")) return { label: t("todos.status_pr_checks_pending"), tone: "idle" };
+  return { label: t("todos.status_pr_waiting_merge"), tone: "idle" };
+}
+
+function repoGatePRLook(gate: TodoRepoGate | undefined): { label: string; tone: TodoTone } | undefined {
+  if (!gate || gate.target_count <= 0 || gate.reason === "draft_pr") return undefined;
+  switch (gate.state) {
+    case "blocked_conflict":
+      return { label: t("todos.status_pr_conflicts"), tone: "red" };
+    case "blocked_changes":
+      return { label: t("todos.status_pr_changes_requested"), tone: "amber" };
+    case "blocked_ci":
+      return { label: t("todos.status_pr_checks_failed"), tone: "red" };
+    case "awaiting_review":
+      return { label: t("todos.status_pr_in_review"), tone: "idle" };
+    case "checks_pending":
+      return {
+        label: gate.reason === "checks_pending" ? t("todos.status_pr_checks_pending") : t("todos.status_pr_waiting_merge"),
+        tone: "idle",
+      };
+    default:
+      return undefined;
+  }
+}
+
+/** Accurate label and tone for an open to-do with a non-draft open PR (projected wait, fresh PR facts, or target repo gate). */
+export function openPRLook(todo: Todo, now = Date.now()): { label: string; tone: TodoTone } | undefined {
+  if (todo.done_at) return undefined;
+  if (todo.wait?.kind === "pr_merge") {
+    return prBlockerLook(todo.wait.pr_blockers) ?? openPRFactsLook(openMergePRs(todo, now)) ?? { label: t("todos.status_pr_waiting_merge"), tone: "idle" };
+  }
+  return openPRFactsLook(openMergePRs(todo, now)) ?? repoGatePRLook(todo.repo_gate);
+}
+
+/** Display label and tone when an open to-do has no active agent handling it: open non-draft PR state, parked hold,
+ *  or an open main-chat concern ("Tracking") instead of a misleading "Not started". */
+export function todoRestLook(todo: Todo, status: TodoStatus, now = Date.now()): { label: string; tone: TodoTone } | undefined {
+  if (todo.done_at || isCancelled(todo)) return undefined;
+  if (todo.supervision?.state === "user_check" || acceptedAtRest(todo, status) || waitsForOwner(todo) || awaitsReview(todo, status)) return undefined;
+  if (status !== "not_started" && status !== "follow_up") return undefined;
+  const pr = openPRLook(todo, now);
+  if (pr) return pr;
+  if (todo.supervision?.state === "parked" && !openAsk(todo)) {
+    if (todo.supervision.parked?.handoff) return { label: TODO_STATUS_INFO.waiting.label, tone: "idle" };
+    if (status === "not_started") {
+      const label = todo.supervision.parked?.evidence?.kind === "merge_review" ? t("task-wait.kind_merge_review") : t("todos.status_parked");
+      return { label, tone: "idle" };
+    }
+  }
+  if (status === "not_started" && todo.kind === "concern") {
+    return { label: t("todos.status_tracking"), tone: "idle" };
+  }
+  return undefined;
+}
+
 /** The status's label for this todo: "Auto-completed" for one the hub closed, "Accepted" for one its supervisor did
- *  (or accepted and nothing runs again). */
-export function todoStatusLabel(todo: Todo, status: TodoStatus): string {
+ *  (or accepted and nothing runs again), open PR / parked state, or "Tracking" for an open concern with no active agent. */
+export function todoStatusLabel(todo: Todo, status: TodoStatus, now = Date.now()): string {
   if (isCancelled(todo)) return t("lib-todos.review_cancelled");
   if (!todo.done_at && todo.supervision?.state === "user_check") return t("assistant-tasks.review_user_check");
   if (acceptedAtRest(todo, status)) return t("lib-todos.review_done");
   if (waitsForOwner(todo)) return t("work-entry.pending");
   if (awaitsReview(todo, status)) return t("assistant-tasks.review_pending");
   if (status === "done" && isReviewDone(todo)) return todo.supervision?.state === "cancelled" ? t("lib-todos.review_cancelled") : t("lib-todos.review_done");
-  if (status === "follow_up" && todo.supervision?.state === "parked" && todo.supervision.parked?.handoff && !openAsk(todo)) {
-    return TODO_STATUS_INFO.waiting.label;
+  if (!todo.done_at && todo.wait != null && (status === "not_started" || status === "follow_up")) {
+    if (todo.wait.kind === "pr_merge") return openPRLook(todo, now)?.label ?? t("todos.status_pr_waiting_merge");
+    return waitName(serverWaitReason(todo.wait));
   }
+  const rest = todoRestLook(todo, status, now);
+  if (rest) return rest.label;
   return status === "done" && isAutoDone(todo) ? t("lib-todos.auto_done") : TODO_STATUS_INFO[status].label;
 }
 
@@ -554,7 +792,7 @@ export function todoStatus(todo: Todo, lookup?: SessionLookup): TodoStatus {
  *  (background_working), or the hub waits out another agent, a deploy / CI / a time, or a moment's model failure
  *  for it and wakes it (work blocked on anything but the user). */
 export function agentWaits(s: Session): boolean {
-  const st = stateOf(s);
+  const st = activityOf(s);
   if (st === "working") return Boolean(s.background_working);
   const w = s.work;
   return st !== "needs_you" && st !== "unread" && w?.phase === "blocked" && (w.on === "agent" || w.on === "external" || w.on === "transient");
@@ -575,7 +813,7 @@ export function waitingLine(todo: Todo, lookup?: SessionLookup): string | undefi
 /** The agent stopped on a model API error (the hub's turn_error): cut off, not finished (#1516). */
 export function interruptedAgent(s?: Session): boolean {
   if (!s?.turn_error || usageLimitAgent(s)) return false;
-  const st = stateOf(s);
+  const st = activityOf(s);
   return st === "unread" || st === "idle";
 }
 
@@ -719,7 +957,7 @@ function byDate(a: Session, b: Session): number {
 }
 
 function sessionRank(s: Session, mutes: AgentMutes): number {
-  const state = stateOf(s);
+  const state = activityOf(s);
   const waiting = ["idle", "unknown"].includes(state) && Boolean(s.loop || s.background?.length || s.subagents?.some((a) => a.running));
   const isMuted = mutes.sessions.includes(`${s.machine_id}/${s.session_id}`) || Boolean(s.space_name && mutes.spaces.includes(`${s.machine_id}/${s.space_name}`));
   if (state === "needs_you") return 0;
@@ -882,6 +1120,158 @@ export async function setDecisionSupersedes(todoId: string, id: string, supersed
   return r.decision;
 }
 
+/** One explicit item sent to POST /api/v1/todos/decisions/batch (#15698). */
+export interface TodoDecisionBatchItem {
+  todo_id: string;
+  option?: string;
+  reply?: string;
+}
+
+/** Per-item result returned by POST /api/v1/todos/decisions/batch (#15698). */
+export interface TodoDecisionBatchResult {
+  todo_id: string;
+  ok: boolean;
+  status?: number;
+  error?: string;
+}
+
+/** Batch decision submission response (#15698). */
+export interface TodoDecisionBatchResponse {
+  results: TodoDecisionBatchResult[];
+  succeeded: number;
+  failed: number;
+}
+
+/** Submit explicit per-item options or custom replies for multiple pending decisions in one request (#15698). */
+export async function submitTodoDecisionsBatch(
+  items: readonly TodoDecisionBatchItem[],
+): Promise<TodoDecisionBatchResponse> {
+  const res = await api<TodoDecisionBatchResponse>("/todos/decisions/batch", {
+    method: "POST",
+    headers: currentHeaders(),
+    json: { items },
+  });
+  const results = Array.isArray(res?.results) ? res.results : [];
+  return {
+    results,
+    succeeded: typeof res?.succeeded === "number" ? res.succeeded : results.filter((r) => r.ok).length,
+    failed: typeof res?.failed === "number" ? res.failed : results.filter((r) => !r.ok).length,
+  };
+}
+
+/** One same-cause pending decision cluster returned by GET /api/v1/todos/decisions/groups (#16433). */
+export interface TodoDecisionGroup {
+  key: string;
+  cause_kind: string;
+  label: string;
+  url?: string;
+  todo_ids: string[];
+  count: number;
+}
+
+/** Response returned by GET /api/v1/todos/decisions/groups (#16433). */
+export interface TodoDecisionGroupsResponse {
+  groups: TodoDecisionGroup[];
+  total_pending: number;
+}
+
+/** Fetch server-computed same-cause decision groups; only call when todos_v2 === true (#16433). */
+export async function fetchTodoDecisionGroups(signal?: AbortSignal): Promise<TodoDecisionGroupsResponse> {
+  const res = await api<TodoDecisionGroupsResponse>("/todos/decisions/groups", {
+    headers: currentHeaders(),
+    signal,
+  });
+  const groups = Array.isArray(res?.groups) ? res.groups : [];
+  return {
+    groups,
+    total_pending:
+      typeof res?.total_pending === "number"
+        ? res.total_pending
+        : groups.reduce((acc, g) => acc + (g.count || g.todo_ids?.length || 0), 0),
+  };
+}
+
+/** One queued PR entry in GET /api/v1/todos/mergetrain (#16432, #16433). */
+export interface MergeTrainQueueItem {
+  todo_id: string;
+  pr_number?: number;
+  pr_url?: string;
+  state: string;
+  policy?: string;
+  approved?: boolean;
+  position: number;
+  rebase_failures?: number;
+  last_error?: string;
+}
+
+/** Per-to-do queue position badge in GET /api/v1/todos/mergetrain (#16432, #16433). */
+export interface MergeTrainTodoBadge {
+  repo_key: string;
+  position: number;
+  ahead_pr_url?: string;
+  state: string;
+}
+
+/** Per-repository merge-train queue snapshot in GET /api/v1/todos/mergetrain (#16432, #16433). */
+export interface MergeTrainRepoQueue {
+  repo_key: string;
+  head?: MergeTrainQueueItem;
+  queue: MergeTrainQueueItem[];
+  escalated?: MergeTrainQueueItem[];
+}
+
+/** Response returned by GET /api/v1/todos/mergetrain (#16432, #16433). */
+export interface TodoMergeTrainResponse {
+  repos: MergeTrainRepoQueue[];
+  by_todo: Record<string, MergeTrainTodoBadge>;
+}
+
+/** Fetch read-only same-repo merge-train queue positions; only call when todos_v2 === true (#16433). */
+export async function fetchTodoMergeTrain(signal?: AbortSignal): Promise<TodoMergeTrainResponse> {
+  const res = await api<TodoMergeTrainResponse>("/todos/mergetrain", {
+    headers: currentHeaders(),
+    signal,
+  });
+  return {
+    repos: Array.isArray(res?.repos) ? res.repos : [],
+    by_todo: res?.by_todo && typeof res.by_todo === "object" ? res.by_todo : {},
+  };
+}
+
+/** One read-only causal audit event returned by GET /api/v1/todos/{id}/trace (#16433). */
+export interface TodoCausalTraceEvent {
+  id: string;
+  at: string;
+  category: string;
+  kind: string;
+  summary: string;
+  ref?: string;
+  url?: string;
+}
+
+/** Response returned by GET /api/v1/todos/{id}/trace (#16433). */
+export interface TodoCausalTraceResponse {
+  todo_id: string;
+  title: string;
+  events: TodoCausalTraceEvent[];
+  count: number;
+}
+
+/** Fetch on-demand read-only causal audit trace for a to-do; only call when todos_v2 === true (#16433). */
+export async function fetchTodoCausalTrace(id: string, signal?: AbortSignal): Promise<TodoCausalTraceResponse> {
+  const res = await api<TodoCausalTraceResponse>(`/todos/${enc(id)}/trace`, {
+    headers: currentHeaders(),
+    signal,
+  });
+  const events = Array.isArray(res?.events) ? res.events : [];
+  return {
+    todo_id: typeof res?.todo_id === "string" ? res.todo_id : id,
+    title: typeof res?.title === "string" ? res.title : "",
+    events,
+    count: typeof res?.count === "number" ? res.count : events.length,
+  };
+}
+
 // ── API helpers ──────────────────────────────────────────────
 
 /** A new to-do; `due` makes it due at a moment or on a day (one made on the calendar, #2029). */
@@ -934,6 +1324,8 @@ export interface TodoPatch {
   project?: string;
   /** A responsible party that is not a Persona-started agent (#12712); null clears it. */
   responsible?: TodoResponsible | null;
+  /** Explicit 2-type classification under todos_v2 (#15758, #16100). */
+  item_type?: "personal" | "task";
 }
 
 export async function updateTodo(id: string, patch: TodoPatch): Promise<Todo> {
@@ -942,6 +1334,33 @@ export async function updateTodo(id: string, patch: TodoPatch): Promise<Todo> {
     json: patch,
   });
   return r.todo;
+}
+
+/** Clears `seen_at` and persists server-side `AutoSeenUndone` anti-rebound protection (#14658, #16100). */
+export async function unseeTodo(id: string): Promise<Todo | undefined> {
+  const r = await api<{ todo?: Todo }>(`/todos/${enc(id)}/seen`, {
+    method: "DELETE",
+    headers: currentHeaders(),
+  });
+  return r?.todo;
+}
+
+/** Adds an external PR blocker edge to an open to-do under todos_v2 (#16198, #16199). */
+export async function addTodoExternalPRBlocker(id: string, targetRef: string): Promise<TodoActiveBlocker> {
+  const r = await api<{ blocker: TodoActiveBlocker }>(`/todos/${enc(id)}/blockers`, {
+    method: "POST",
+    headers: currentHeaders(),
+    json: { kind: "external_pr", target_ref: targetRef.trim() },
+  });
+  return r.blocker;
+}
+
+/** Cancels an active blocker edge on a to-do under todos_v2 (#16198, #16199). */
+export async function cancelTodoBlocker(id: string, blockerId: string): Promise<void> {
+  await api<{ ok?: boolean }>(`/todos/${enc(id)}/blockers/${enc(blockerId)}`, {
+    method: "DELETE",
+    headers: currentHeaders(),
+  });
 }
 
 export async function deleteTodo(id: string): Promise<void> {
@@ -1047,7 +1466,7 @@ export function dockAgents(sessions: Session[], todos: Todo[], conversation: str
   const out: DockAgent[] = [];
   for (const s of sessions) {
     if (s.assistant) continue;
-    const state = stateOf(s);
+    const state = activityOf(s);
     if (state !== "needs_you" && state !== "working") continue;
     if (taskAgents.has(`${s.machine_id}/${s.session_id}`)) continue;
     if (s.todo && !manual.has(s.todo.id)) continue;

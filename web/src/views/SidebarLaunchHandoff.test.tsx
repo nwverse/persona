@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // Sidebar launch handoff (#12380): launching a new Agent with an initial prompt transitions cleanly from the
-// "Starting" placeholder directly into "Working" without briefly flashing/counting into "Done unread" ("新回复")
+// "Starting" placeholder directly into "Working" without briefly flashing/counting into "Done unread" ("完成未看")
 // in the "Not on a to-do" group.
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -108,7 +108,7 @@ describe("Sidebar launch handoff (#12380)", () => {
     await flush();
 
     // Baseline: 10 unassigned agents, with 1 Done unread.
-    expect(todoNoneRow()).toMatch(/10 个 Agent新回复$/);
+    expect(todoNoneRow()).toMatch(/10 个 Agent完成未看$/);
     expect(startingSection()).toBeUndefined();
 
     // Phase 1: creating -> shown in Starting, unassigned stays 10 Done unread.
@@ -116,7 +116,7 @@ describe("Sidebar launch handoff (#12380)", () => {
     act(() => { launchId = launchAgent({ machineId: "mac", cwd: "/code/app", launcher: "claude", text: "Fix issue", attachments: [] }, { open: false }); });
     await flush();
     expect(startingSection()).toBeDefined();
-    expect(todoNoneRow()).toMatch(/10 个 Agent新回复$/);
+    expect(todoNoneRow()).toMatch(/10 个 Agent完成未看$/);
 
     // Phase 2: POST /sessions returns an idle session while POST /messages is still in flight -> no duplicate in todo:none, no 11 Done unread flash.
     // Delivery loads its module on intent; wait until the real request has installed its resolver before completing it.
@@ -125,7 +125,7 @@ describe("Sidebar launch handoff (#12380)", () => {
     await flush();
     expect(getState().launches[launchId].phase).toBe("sending");
     expect(startingSection()).toBeDefined();
-    expect(todoNoneRow()).toMatch(/10 个 Agent新回复$/);
+    expect(todoNoneRow()).toMatch(/10 个 Agent完成未看$/);
 
     // Phase 3: POST /messages succeeds -> phase becomes ready while hub has not yet pushed working (and even if a transient unread arrives with no reply).
     await act(async () => vi.waitFor(() => expect(resolveSend).toBeTypeOf("function")));
@@ -134,7 +134,7 @@ describe("Sidebar launch handoff (#12380)", () => {
     expect(getState().launches[launchId].phase).toBe("ready");
     expect(startingSection()).toBeUndefined();
     expect(todoNoneRow()).toMatch(/11 个 Agent工作中$/);
-    expect(todoNoneRow()).not.toContain("新回复");
+    expect(todoNoneRow()).not.toContain("完成未看");
 
     // Even if a transient hub push reports idle/unread with no reply before working arrives, it stays Working.
     act(() => sock.push({ type: "sessions", machine_id: "mac", sessions: [...base, { ...created, state: "unread", status: "idle" }] }));
@@ -150,7 +150,7 @@ describe("Sidebar launch handoff (#12380)", () => {
     // Phase 5: Turn finishes -> transitions cleanly from Working to Done unread.
     act(() => sock.push({ type: "sessions", machine_id: "mac", sessions: [...base, { ...created, state: "unread", status: "idle", last_text: "Fixed." }] }));
     await flush();
-    expect(todoNoneRow()).toMatch(/11 个 Agent新回复$/);
+    expect(todoNoneRow()).toMatch(/11 个 Agent完成未看$/);
   });
 
   it("does not hold an empty-prompt launch or failed send in Working state", async () => {
@@ -192,7 +192,7 @@ describe("Sidebar launch handoff (#12380)", () => {
     await flush();
     expect(getState().launches[emptyId].phase).toBe("ready");
     expect(getState().launches[emptyId].handoffAt).toBeUndefined();
-    expect(todoNoneRow()).toMatch(/11 个 Agent新回复$/);
+    expect(todoNoneRow()).toMatch(/11 个 Agent完成未看$/);
 
     // Failed first-message send: handoffAt is cleared, never stuck in Working.
     let failId = "";

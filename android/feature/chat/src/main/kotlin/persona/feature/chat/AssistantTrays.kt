@@ -2,6 +2,7 @@ package persona.feature.chat
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.*
@@ -29,6 +30,9 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.progressBarRangeInfo
@@ -64,18 +68,13 @@ import persona.core.domain.tasks.Interruption
 import persona.core.domain.tasks.notDoneReason
 import persona.core.domain.tasks.orphanedLine
 import persona.core.domain.tasks.planTaskOf
+import persona.core.domain.tasks.reviewState
 import persona.core.domain.tasks.retryLauncher
 import persona.core.domain.tasks.TasksStore
 import persona.core.domain.tasks.assistantEntries
-import persona.core.domain.tasks.awaitsDecision
-import persona.core.domain.tasks.acceptanceStands
 import persona.core.domain.tasks.finishedSummary
 import persona.core.domain.tasks.showsJustFinished
 import persona.core.domain.tasks.triage
-import persona.core.domain.tasks.reviewState
-import persona.core.domain.tasks.reviewStage
-import persona.core.domain.sort.shownCloseout
-import persona.core.domain.tasks.TriageSection
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
@@ -119,8 +118,7 @@ internal data class TrayProgress(val id: String, val title: String, val todo: To
     val orphaned: persona.core.contracts.CoreText? = null,
     /** Open, waiting on nobody, and none of its agents works (unread or seen, #3576): the row says Stopped, not In progress,
      *  and draws only a counted bar. Back to In progress once one of them works again. */
-    val stopped: Boolean = false, val closeoutStatus: String? = null, val waitingFor: String? = null,
-    val externalWait: Boolean = false)
+    val stopped: Boolean = false)
 
 /** Prefer an explicit supervisor report, then the agent's counted plan; do not estimate progress from status. */
 internal fun trayProgress(todos: List<Todo>, plans: List<TaskPlan>, host: AssistantTaskHost,
@@ -155,9 +153,6 @@ internal fun trayProgress(todos: List<Todo>, plans: List<TaskPlan>, host: Assist
         TrayProgress(bound[todo.id] ?: "todo:${todo.id}", todo.title, todo = todo,
             done = done, cancelled = cancelled, blocked = blocked,
             stopped = !done && !cancelled && !blocked && (state == TaskState.Unread || state == TaskState.Followup),
-            closeoutStatus = lead?.shownCloseout?.status,
-            waitingFor = lead?.shownCloseout?.waiting ?: lead?.work?.wait ?: lead?.work?.line,
-            externalWait = lead?.work?.phase == "blocked" && lead.work?.on == "external",
             text = if (done || cancelled) completedText else todo.ask?.verdict ?: report?.takeIf { reportIsCurrent }?.rowText?.takeIf(String::isNotBlank) ?: plan?.current?.takeIf(String::isNotBlank)
                 ?: todo.startError?.takeIf(String::isNotBlank) ?: lead?.attentionReason?.takeIf(String::isNotBlank)
                 ?: lead?.activity?.takeIf(String::isNotBlank) ?: lead?.lastText?.takeIf(String::isNotBlank),
@@ -265,6 +260,8 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
     onPlan: (TaskPlan) -> Unit = {},
     /** The main conversation folds background rounds (#4314): Needs you groups its rows by supervising conversation. */
     groupByOrigin: Boolean = false,
+    /** To Decide shares the footer bar but keeps its card count separate from the tray's rows. */
+    leading: (@Composable () -> Unit)? = null,
     /**
      * Optional dynamic cap for the expanded panel's scrollable list height given the tray's own measured non-list
      * vertical chrome (capsule bar, [under], outer spacing, and card vertical padding). Read in layout measurement so
@@ -373,7 +370,7 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
     val bottomPadding = Tokens.Space.xxs
     val verticalGap = Tokens.Space.xs
     val cardPadding = Tokens.Space.xs
-    val listBottomPadding = Tokens.Space.s
+    val listBottomPadding = Tokens.Space.xs
     val minimumListHeight = Tokens.MinTouch.android
     AssistantTrayLayout(
         modifier = modifier,
@@ -401,27 +398,39 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
                             AssistantTray.Finished -> entries.finished.size
                             AssistantTray.HeldPushes -> heldGroups.total
                         }
-                        JSectionHeader(stringResource(tray.label), trailing = pluralStringResource(R.plurals.chat_tray_items, count, count), action = if (tray == AssistantTray.NeedsYou && approvals.isNotEmpty()) ({
-                            JTextButton(stringResource(R.string.chat_tray_approve_all), { onApprove(approvals) },
-                                enabled = enabled && !busy, modifier = Modifier.testTag("assistant-approve-all"))
-                        }) else if (tray == AssistantTray.Running || tray == AssistantTray.Finished) ({
-                            JTextButton(stringResource(R.string.chat_tasks_dock_all, progress.size + standalone.size),
-                                { host.sheet.value = TaskSheet.Board }, modifier = Modifier.testTag("assistant-task-board"))
-                        }) else if (tray == AssistantTray.HeldPushes) ({
-                            JTextButton(stringResource(R.string.chat_tasks_retry), { host.tasks.refreshPushIntercepts() },
-                                enabled = !heldLoading, modifier = Modifier.testTag("assistant-held-retry"))
-                        }) else null)
+                        TrayPanelHeader(
+                            title = stringResource(tray.label),
+                            countText = pluralStringResource(R.plurals.chat_tray_items, count, count),
+                            action = if (tray == AssistantTray.NeedsYou && approvals.isNotEmpty()) ({
+                                JTextButton(stringResource(R.string.chat_tray_approve_all), { onApprove(approvals) },
+                                    enabled = enabled && !busy, modifier = Modifier.testTag("assistant-approve-all"))
+                            }) else if (tray == AssistantTray.Running || tray == AssistantTray.Finished) ({
+                                JTextButton(stringResource(R.string.chat_tasks_dock_all, progress.size + standalone.size),
+                                    { host.sheet.value = TaskSheet.Board }, modifier = Modifier.testTag("assistant-task-board"))
+                            }) else if (tray == AssistantTray.HeldPushes) ({
+                                JTextButton(stringResource(R.string.chat_tasks_retry), { host.tasks.refreshPushIntercepts() },
+                                    enabled = !heldLoading, modifier = Modifier.testTag("assistant-held-retry"))
+                            }) else null,
+                        )
                     }
                     when (tray) {
                         AssistantTray.NeedsYou -> {
                             if (needsCount == 0) item { JEmptyState(stringResource(R.string.chat_tray_caught_up), "", icon = PhIcons.CheckCircle) }
                             // #4314: one group, as before; with several supervising conversations, each under its title,
                             // this conversation's first (its own cards, plans and drafts are in it), the rows unchanged.
+                            var shownGroupCount = 0
                             for (group in needsGroups) {
-                                if (needsGroups.size > 1 && (group.entries.isNotEmpty() || (group.conversation == host.conversation && (own.isNotEmpty() || drafts.isNotEmpty())))) {
+                                val showGroupHeader = needsGroups.size > 1 && (group.entries.isNotEmpty() || (group.conversation == host.conversation && (own.isNotEmpty() || drafts.isNotEmpty())))
+                                if (showGroupHeader) {
+                                    val firstGroup = shownGroupCount == 0
+                                    shownGroupCount++
                                     item(key = "needs-group:${group.conversation}") {
-                                        JSectionHeader(host.sessions.firstOrNull { it.sessionId == group.conversation }?.displayTitle?.takeIf(String::isNotBlank)
-                                            ?: stringResource(R.string.chat_tray_other_conversation))
+                                        TrayGroupHeader(
+                                            host.sessions.firstOrNull { it.sessionId == group.conversation }?.displayTitle?.takeIf(String::isNotBlank)
+                                                ?: stringResource(R.string.chat_tray_other_conversation),
+                                            first = firstGroup,
+                                            modifier = Modifier.testTag("assistant-needs-group-${group.conversation}"),
+                                        )
                                     }
                                 }
                                 items(asking.filter(group::has), key = { it.key }) { entry ->
@@ -460,20 +469,30 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
                                     val gate = todo.hold?.takeIf { it.unblock == HoldUnblock.User }?.gate
                                     when {
                                         todo.ask?.outcome == "decide" -> TaskDecisionCard(todo, host, enabled) { openTask(host, todo) }
+                                        todo.reviewState == "user_check" && todo.ask?.askedAt?.isNotBlank() == true ->
+                                            TaskOwnerDecision(todo, host, enabled = enabled, onOpen = { openTask(host, todo) })
                                         entry.status == TriageStatus.Failed || entry.status == TriageStatus.Interrupted ->
                                             TrayOutcomeRow(entry, host, enabled, taskBusy)
-                                        !todo.awaitsDecision() && todo.hold?.unblock != HoldUnblock.User && row != null -> Column {
-                                            Text(stringResource(R.string.chat_tray_unattended),
-                                                Modifier.padding(horizontal = Tokens.Space.l, vertical = Tokens.Space.xs),
-                                                style = PersonaTheme.type.micro, color = PersonaTheme.palette.ink3)
-                                            TrayProgressRow(row, onClick = { openTask(host, todo) })
+                                        else -> {
+                                            val readyToVerify = stringResource(R.string.chat_tray_ready_to_verify)
+                                            val parsed = todo.ask?.verdict?.let { trayVerdictText(it, readyToVerify) }
+                                            val subtitle = parsed?.text ?: gate ?: row?.text.orEmpty()
+                                            TrayDecisionRow(
+                                                todo.title,
+                                                subtitle,
+                                                R.string.chat_tray_review,
+                                                "assistant-review-${row?.id ?: "todo:${todo.id}"}",
+                                                enabled,
+                                                verdictTone = parsed?.tone,
+                                                onOpen = { openTask(host, todo) },
+                                            ) { openTask(host, todo) }
                                         }
-                                        else -> TrayDecisionRow(todo.title, todo.ask?.verdict ?: gate ?: row?.text.orEmpty(), R.string.chat_tray_review,
-                                            "assistant-review-${row?.id ?: "todo:${todo.id}"}", enabled, onOpen = { openTask(host, todo) }) { openTask(host, todo) }
                                     }
                                 }
                                 val groupDrafts = drafts.takeIf { group.conversation == host.conversation }.orEmpty()
-                                if (groupDrafts.isNotEmpty()) item { JSectionHeader(stringResource(R.string.chat_tray_drafts)) }
+                                if (groupDrafts.isNotEmpty()) item {
+                                    TrayGroupHeader(stringResource(R.string.chat_tray_drafts), first = shownGroupCount == 0 && asking.isEmpty() && own.isEmpty() && plansWaiting.isEmpty() && deciding.isEmpty())
+                                }
                                 items(groupDrafts, key = { "draft:${if (it is TrayDraft.Feed) it.item.id else it.id}" }) { draft ->
                                     if (draft is TrayDraft.Feed) {
                                         Box(Modifier.testTag("assistant-draft-${draft.id}").padding(horizontal = Tokens.Space.s)) {
@@ -528,10 +547,11 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
                                         } else {
                                             val projected = progressByTodo[entry.todo.id] ?: TrayProgress("todo:${entry.todo.id}", entry.todo.title, todo = entry.todo)
                                             // Only replace the projection's state when a shared Agent's requests belong elsewhere (#7531).
-                                            val row = if (entry.hasAgentsElsewhere) projected.copy(blocked = false, stopped = false)
+                                            val row = if (entry.hasAgentsElsewhere) projected.copy(blocked = false,
+                                                stopped = entry.status == TriageStatus.Unread || entry.status == TriageStatus.FollowUp)
                                             else projected
                                             TrayProgressRow(row, activity = entry.activity, waiting = entry.waiting,
-                                                working = entry.status == TriageStatus.Working,
+                                                working = entry.status == TriageStatus.Working, supervisorReview = entry.supervisorReview,
                                                 onClick = { openTask(host, entry.todo) })
                                         }
                                     }
@@ -560,16 +580,9 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
                             if (shelvedLine && entries.shelved.isNotEmpty()) item(key = "shelved") {
                                 TrayShelvedLine(entries.shelved.size) { state.expanded = null; host.sheet.value = TaskSheet.Board }
                             }
-                            if (entries.justFinished.isNotEmpty()) {
-                                item(key = "just-finished") {
-                                    JSectionHeader(stringResource(R.string.chat_tray_just_finished), count = entries.justFinished.size,
-                                        modifier = Modifier.testTag("assistant-just-finished"))
-                                }
-                                items(entries.justFinished, key = { "acceptance:${it.key}" }) { entry ->
-                                    JustFinishedRow(entry.todo, host, feed, bySession, scope)
-                                }
+                            if (schedules.isNotEmpty() || backgroundRecords) item {
+                                TrayGroupHeader(stringResource(R.string.chat_tray_quiet), first = entries.running.isEmpty() && !(shelvedLine && entries.shelved.isNotEmpty()))
                             }
-                            if (schedules.isNotEmpty() || backgroundRecords) item { JSectionHeader(stringResource(R.string.chat_tray_quiet)) }
                             items(schedules, key = { "schedule:${it.id}" }) { schedule ->
                                 JRow(schedule.title, subtitle = schedule.lastError?.takeIf(String::isNotBlank)
                                     ?: schedule.nextRun?.let { stringResource(R.string.chat_tray_next_run, formatTrayScheduleTime(it, currentLocale)) }
@@ -585,7 +598,7 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
                             if (backgroundRecords && onBackground != null) item {
                                 JRow(stringResource(R.string.chat_tray_background), onClick = onBackground, leadingIcon = PhIcons.Clock)
                             }
-                            if (entries.running.isEmpty() && entries.justFinished.isEmpty() && schedules.isEmpty() && !backgroundRecords &&
+                            if (entries.running.isEmpty() && schedules.isEmpty() && !backgroundRecords &&
                                 !(shelvedLine && entries.shelved.isNotEmpty())) item {
                                 JEmptyState(stringResource(R.string.chat_tray_no_progress), "", icon = PhIcons.ListChecks)
                             }
@@ -595,8 +608,16 @@ internal fun AssistantTrays(host: AssistantTaskHost, state: AssistantTrayState,
             }
         }
         // Content-width chips at the leading edge, like the old All / task chips; a large font scrolls rather than wraps.
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).testTag("assistant-tray-bar"),
-            horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s), verticalAlignment = Alignment.CenterVertically) {
+        val barScroll = rememberScrollState()
+        Row(
+            Modifier.fillMaxWidth()
+                .assistantTrayEdgeFade(barScroll)
+                .horizontalScroll(barScroll)
+                .testTag("assistant-tray-bar"),
+            horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            leading?.invoke()
             // Finished is there while it has rows, or its tray is open (an emptied tray stays reachable till it closes)
             for (tray in AssistantTray.entries.filter {
                 (it != AssistantTray.HeldPushes || showHeldEntry) &&
@@ -826,13 +847,122 @@ private fun HeldPushRow(item: HeldPushItem, host: AssistantTaskHost, todos: List
 }
 
 @Composable
-private fun TrayDecisionRow(title: String, subtitle: String, action: Int, tag: String, enabled: Boolean,
-    onOpen: (() -> Unit)? = null, onClick: () -> Unit) {
-    JRow(title, subtitle = subtitle, subtitleLines = 1, chevron = false, onClick = onOpen.takeIf { enabled },
-        leading = { AssistantTrayMark(AssistantTrayTone.Pending) }, trailing = {
-            JButton(stringResource(action), onClick, Modifier.testTag(tag), kind = JButtonKind.Secondary,
-                size = JButtonSize.Small, enabled = enabled)
-        })
+private fun TrayPanelHeader(
+    title: String,
+    countText: String,
+    action: (@Composable RowScope.() -> Unit)? = null,
+) {
+    val palette = PersonaTheme.palette
+    Row(
+        Modifier.fillMaxWidth()
+            .padding(start = Tokens.Space.m, end = Tokens.Space.m, top = Tokens.Space.s, bottom = Tokens.Space.xs)
+            .semantics { heading() }
+            .testTag("assistant-tray-header"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Tokens.Space.sm),
+    ) {
+        Text(
+            title,
+            Modifier.weight(1f, fill = false),
+            style = PersonaTheme.type.callout.copy(fontWeight = FontWeight.SemiBold),
+            color = palette.ink,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text("·", style = PersonaTheme.type.caption, color = palette.ink3, maxLines = 1)
+        Text(
+            countText,
+            style = PersonaTheme.type.caption,
+            color = palette.ink3,
+            maxLines = 1,
+        )
+        Spacer(Modifier.weight(1f))
+        if (action != null) Row(verticalAlignment = Alignment.CenterVertically, content = action)
+    }
+}
+
+@Composable
+private fun TrayGroupHeader(title: String, first: Boolean, modifier: Modifier = Modifier) {
+    val palette = PersonaTheme.palette
+    Column(modifier.fillMaxWidth()) {
+        if (!first) JDivider(Modifier.padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.xs))
+        Text(
+            title,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(
+                    start = Tokens.Space.m,
+                    end = Tokens.Space.m,
+                    top = if (first) Tokens.Space.xs else Tokens.Space.xxs,
+                    bottom = Tokens.Space.xxs,
+                )
+                .semantics { heading() },
+            style = PersonaTheme.type.labelSmall.copy(fontWeight = FontWeight.Medium),
+            color = palette.ink3,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+@Composable
+private fun TrayDecisionRow(
+    title: String,
+    subtitle: String,
+    action: Int,
+    tag: String,
+    enabled: Boolean,
+    verdictTone: VerdictTone? = null,
+    onOpen: (() -> Unit)? = null,
+    onClick: () -> Unit,
+) {
+    val palette = PersonaTheme.palette
+    val shape = PersonaTheme.shapes.controlShape
+    Row(
+        Modifier.fillMaxWidth()
+            .heightIn(min = Tokens.MinTouch.android)
+            .clip(shape)
+            .then(if (onOpen != null && enabled) Modifier.clickable(role = Role.Button, onClick = onOpen) else Modifier)
+            .stableAlpha(if (enabled) 1f else 0.45f)
+            .padding(horizontal = Tokens.Space.m, vertical = Tokens.Space.s),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s),
+    ) {
+        Box(Modifier.size(Tokens.Size.iconXS), contentAlignment = Alignment.Center) {
+            when (verdictTone) {
+                VerdictTone.Done -> JIcon(PersonaIcons.success, decorative = true, size = Tokens.Size.markS, tint = palette.positive)
+                VerdictTone.Cannot -> JIcon(PersonaIcons.error, decorative = true, size = Tokens.Size.markS, tint = palette.danger.dot)
+                VerdictTone.Decide -> JIcon(PersonaIcons.help, decorative = true, size = Tokens.Size.markS, tint = palette.needsYou.dot)
+                else -> AssistantTrayMark(AssistantTrayTone.Pending)
+            }
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xxs)) {
+            Text(
+                title,
+                style = PersonaTheme.type.callout.copy(fontWeight = FontWeight.Medium),
+                color = palette.ink,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (subtitle.isNotBlank()) {
+                Text(
+                    subtitle,
+                    style = PersonaTheme.type.caption,
+                    color = palette.ink2,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        JButton(
+            stringResource(action),
+            onClick,
+            Modifier.testTag(tag),
+            kind = JButtonKind.Secondary,
+            size = JButtonSize.Small,
+            enabled = enabled,
+        )
+    }
 }
 
 @Composable
@@ -908,49 +1038,30 @@ internal fun formatTrayScheduleTime(raw: String, locale: Locale, zone: ZoneId = 
 
 @Composable
 private fun TrayProgressRow(row: TrayProgress, activity: BackgroundWork? = null, waiting: Boolean = false,
-    working: Boolean = false, onClick: () -> Unit) {
+    working: Boolean = false, supervisorReview: Boolean = false, onClick: () -> Unit) {
     val live = !row.done && !row.cancelled
     val work = activity.takeIf { live }
     val detail = trayBackgroundLine(work) ?: row.text
     val palette = PersonaTheme.palette
-    val reported = live && work == null && !working &&
-        (row.closeoutStatus in setOf("done", "not_done", "blocked") || row.externalWait || row.stopped && !row.blocked)
-    val agentLabel = if (reported && row.closeoutStatus == "done") stringResource(R.string.chat_tray_agent_reported_done)
-        else if (reported && (row.closeoutStatus == "blocked" || row.externalWait)) {
-            row.waitingFor?.takeIf(String::isNotBlank)?.let { stringResource(R.string.chat_tray_agent_waiting_on, it) }
-                ?: stringResource(R.string.chat_tray_agent_waiting)
-        } else if (reported) stringResource(R.string.chat_tray_agent_unfinished)
-        else stringResource(if (live && waiting) R.string.chat_tray_waiting else if (work != null || working) R.string.chat_tray_working
-            else if (row.cancelled) R.string.chat_tray_cancelled else if (row.blocked) R.string.chat_tray_blocked else if (row.plan != null) R.string.chat_tray_planned
-            else if (row.stopped) R.string.chat_tray_stopped_state else R.string.chat_tray_in_progress)
     JRow(onClick = onClick, modifier = Modifier.testTag("assistant-progress-${row.id}"), chevron = false, trailing = {
         if (row.done) JIcon(PersonaIcons.done, stringResource(if (row.todo?.supervision?.state == "accepted")
             R.string.chat_tray_accepted else R.string.chat_tray_done), tint = palette.positive)
-        else if (!reported) Text(agentLabel,
+        // judged finished and with its supervisor for review (`RunningEntry.Task.supervisorReview`): the row says whose turn it is
+        else Text(stringResource(if (work != null) R.string.chat_tray_working else if (live && waiting) R.string.chat_tray_waiting
+            else if (live && supervisorReview) R.string.chat_tray_supervisor_review
+            else if (row.cancelled) R.string.chat_tray_cancelled else if (row.blocked) R.string.chat_tray_blocked else if (row.plan != null) R.string.chat_tray_planned
+            else if (row.stopped) R.string.chat_tray_stopped_state else R.string.chat_tray_in_progress),
             style = PersonaTheme.type.micro, color = if (row.blocked || row.orphaned != null) palette.cautionText else palette.ink3, maxLines = 1)
     }) {
         if (live && (work != null || (working && !waiting))) {
             JSpinner(Modifier.testTag("assistant-work-spinner"))
             Spacer(Modifier.width(Tokens.Space.s))
-        } else if (live && (waiting || reported && (row.externalWait || row.closeoutStatus == "blocked"))) {
+        } else if (live && waiting) {
             TrayWaitClock()
             Spacer(Modifier.width(Tokens.Space.s))
         }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
             Text(row.title, style = PersonaTheme.type.bodyStrong, color = palette.ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            // Long waiting targets get their own line instead of consuming the title's width.
-            if (reported) Text(agentLabel, style = PersonaTheme.type.micro, color = palette.ink3,
-                maxLines = 2, overflow = TextOverflow.Ellipsis)
-            row.todo?.let { todo ->
-                val state = if (todo.reviewState == "parked") stringResource(R.string.chat_tray_entry_parked)
-                    else todo.reviewStage?.label(todo.supervision?.round ?: 1) ?: stringResource(R.string.chat_tray_entry_running)
-                Text(stringResource(R.string.chat_tray_todo_state, state), style = PersonaTheme.type.micro,
-                    color = palette.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                if (!working && work == null && todo.supervision?.state != "parked" &&
-                    (row.closeoutStatus == "blocked" || row.externalWait)) {
-                    Text(stringResource(R.string.chat_tray_park_hint), style = PersonaTheme.type.micro, color = palette.ink3)
-                }
-            }
             val text = row.whyNotDone?.let { if (it.isEmpty()) stringResource(R.string.chat_tray_stopped) else stringResource(R.string.chat_tray_stopped_reason, it) } ?: row.text
             // nobody works on it: said where the row says what it does, in the caution color (never only the color: the words say it)
             val orphaned = row.orphaned?.takeIf { work == null && !waiting }
@@ -1065,25 +1176,6 @@ private fun TrayOutcomeRow(entry: NeedsYouEntry.Task, host: AssistantTaskHost, e
         else FlowRow(actionModifier, horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s),
             verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)) { actions() }
     }
-}
-
-@Composable
-private fun JustFinishedRow(todo: Todo, host: AssistantTaskHost, feed: List<FeedItem>, sessions: Map<SessionKey, Session>,
-    scope: kotlinx.coroutines.CoroutineScope) {
-    val open: () -> Unit = {
-        openTask(host, todo)
-        if (host.tasks.features?.value?.contains("todo_seen") == true) scope.launch {
-            try {
-                val placed = todo.triage({ sessions[it] }, System.currentTimeMillis())
-                if (placed.section == TriageSection.JustDone) host.tasks.setTodoSeen(todo.id, true, after = placed.last)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Throwable) {
-            }
-        }
-    }
-    val row = trayProgress(listOf(todo), emptyList(), host, feed, everyTodo = true).first()
-    TrayProgressRow(row, onClick = open)
 }
 
 /**

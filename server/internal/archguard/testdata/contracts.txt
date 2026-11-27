@@ -3,8 +3,10 @@
 # package named *wire must be listed (the test checks), other contracts (nodeproto, proto, relayproto, rpc) are listed
 # by hand: proxyproto, say, is a protocol implementation, not a contract. The SDK's wire types (generated from the
 # protocol's schema, another module) are named by their full import path.
+internal/agentviewwire
 internal/aiwire
 internal/assistantwire
+internal/buswire
 internal/cliwire
 internal/connectorwire
 internal/devicewire
@@ -13,6 +15,8 @@ internal/extwire
 internal/githubwire
 internal/imessagewire
 internal/kbwire
+internal/larksyncwire
+internal/linkwire
 internal/mailwire
 internal/modapi
 internal/nodeproto
@@ -21,4 +25,5 @@ internal/recordingwire
 internal/relayproto
 internal/repositorywire
 internal/rpc
+internal/wireids
 github.com/nwverse/persona/sdk/go/wire

@@ -137,7 +137,7 @@ func (d *deadlineExhaustingEstimateStore) RecentTaskEstimateSamples(ctx context.
 func TestTaskEstimateHistorySurvivesReconciliationDeadline(t *testing.T) {
 	store := &deadlineExhaustingEstimateStore{memStore: &memStore{}}
 	s, _, _ := briefServiceOn(t, nil, "please fix the fixture issue")
-	s.store = func() Store { return store }
+	s.setStore(func() Store { return store })
 	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 	defer cancel()
 	task := PlanTask{Goal: "Return a fixture answer", Readonly: true, Machine: "box"}
@@ -209,7 +209,7 @@ func TestTaskEstimateCalibrationAfterProcessRestart(t *testing.T) {
 	}
 
 	var reopen string
-	dsn := newDatabase(t)
+	dsn := newMigratedDatabase(t, db.ManagerSet)
 	if !t.Run("seed", func(t *testing.T) {
 		database, err := db.Open(t.Context(), dsn, db.ManagerSet)
 		if err != nil {
@@ -316,7 +316,7 @@ func TestTaskEstimateCalibrationAfterProcessRestart(t *testing.T) {
 	}
 
 	t.Run("another manager starts without this history", func(t *testing.T) {
-		isolated, err := db.Open(t.Context(), newDatabase(t), db.ManagerSet)
+		isolated, err := db.Open(t.Context(), newMigratedDatabase(t, db.ManagerSet), db.ManagerSet)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -332,7 +332,7 @@ func TestTaskEstimateCalibrationAfterProcessRestart(t *testing.T) {
 }
 
 func TestTaskPlanEstimateProvenanceSurvivesOwnerStart(t *testing.T) {
-	dsn := newDatabase(t)
+	dsn := newMigratedDatabase(t, db.ManagerSet)
 	database, err := db.Open(t.Context(), dsn, db.ManagerSet)
 	if err != nil {
 		t.Fatal(err)

@@ -261,25 +261,19 @@ func (h *Hub) relayLinkConn(w http.ResponseWriter, r *http.Request, a devicewire
 // handToManager has the manager take a connection the hub holds: it dials the relay with the id and the hub waits
 // for it.
 func (h *Hub) handToManager(ctx context.Context, a devicewire.Accept) (*relayTaken, error) {
-	return h.handToManagerVia(ctx, h.machineOwner(a.MachineID), devicewire.MethodAccept, &a) // its manager (ownership.go)
+	to := h.machineOwner(a.MachineID)
+	return h.handToManagerVia(ctx, relayFor{manager: to, machine: a.MachineID}, func(ctx context.Context, id string) error {
+		a.ID = id
+		return h.callBus(ctx, to, devicewire.MethodAccept, a, nil)
+	})
 }
 
-// handToManagerVia is handToManager with the manager's method that takes it: the devices' (devices.accept, a) or the
-// extensions' relayed requests (extensions.accept, a nil: only the id), handed to manager to.
-func (h *Hub) handToManagerVia(ctx context.Context, to, method string, a *devicewire.Accept) (*relayTaken, error) {
-	f := relayFor{manager: to}
-	if a != nil {
-		f.machine = a.MachineID
-	}
+// handToManagerVia offers a relay and waits for the manager to take it after accept asks.
+func (h *Hub) handToManagerVia(ctx context.Context, f relayFor, accept func(context.Context, string) error) (*relayTaken, error) {
 	id, ch, drop := h.offerRelay(f)
 	cctx, cancel := context.WithTimeout(ctx, relayWait)
 	defer cancel()
-	var params any = map[string]string{"id": id}
-	if a != nil {
-		a.ID = id
-		params = *a
-	}
-	err := h.callBus(cctx, to, method, params, nil)
+	err := accept(cctx, id)
 	if err == nil {
 		select {
 		case t := <-ch:
@@ -567,7 +561,7 @@ func (h *Hub) stopLinks() []*relayLink {
 // bar shows both, docs/operations/link.md); the manager tells Persona Link.
 func (h *Hub) linkEndpoints() link.Message {
 	msg := link.Message{Type: "endpoints", HubName: h.hubName(), MeshHubs: h.meshHubCount()}
-	for _, e := range h.endpointList() {
+	for _, e := range h.linkEndpointList() {
 		if e.Scheme == "https" {
 			msg.Endpoints = append(msg.Endpoints, link.Endpoint{URL: e.URL, Kind: e.Kind})
 		}

@@ -62,8 +62,8 @@
     <string name="designsystem_core_field_invalid">请检查填写内容和格式</string>
     <string name="designsystem_core_computer_fallback">电脑</string>
     <string name="designsystem_core_close_agent_title">关闭这个 Agent？</string>
-    <string name="designsystem_core_close_agent_message_tab">「%1$s」\n%2$s\n\n会退出 %3$s 上的 %4$s，并关掉它在终端里的标签页「%5$s」（分屏的标签页只关它这一格）。正在做的事会中断；对话记录会保留，之后可以在 Agents 的「历史」里继续。</string>
-    <string name="designsystem_core_close_agent_message_pane">「%1$s」\n%2$s\n\n会退出 %3$s 上的 %4$s，并关掉它所在的终端窗格。正在做的事会中断；对话记录会保留，之后可以在 Agents 的「历史」里继续。</string>
+    <string name="designsystem_core_close_agent_message_tab">「%1$s」\n%2$s\n\n这会退出 %3$s 上的 %4$s 并关闭其标签页「%5$s」。如果终端已分屏，只关闭它所在的部分。正在进行的工作会停止，会话会保留，可以从 Agents 的历史记录中恢复。</string>
+    <string name="designsystem_core_close_agent_message_pane">「%1$s」\n%2$s\n\n这会退出 %3$s 上的 %4$s 并关闭其终端。正在进行的工作会停止，会话会保留，可以从 Agents 的历史记录中恢复。</string>
     <string name="designsystem_core_close_agent_message_runtime">「%1$s」\n%2$s\n\n会结束它在 %3$s 上的会话，正在做的事会中断。</string>
     <string name="designsystem_core_delete_session_title">删除这个对话？</string>
     <string name="designsystem_core_delete_session_on_machine_command">「%1$s」会从各端的列表里移除。%2$s 上的对话记录不会删除，之后在电脑上用 %3$s 继续，它会重新出现。</string>
@@ -91,7 +91,7 @@
     <string name="designsystem_core_draft_placeholder_left">草稿里还有没填的「%1$s」</string>
     <string name="designsystem_core_agents_pinned">置顶</string>
     <string name="designsystem_core_state_needs_you">需要你</string>
-    <string name="designsystem_core_state_unread">新回复</string>
+    <string name="designsystem_core_state_unread">完成未看</string>
     <string name="designsystem_core_state_awaiting_reply">待你回复</string>
     <string name="designsystem_core_state_working">工作中</string>
     <string name="designsystem_core_state_background_waiting">后台等待中</string>
@@ -113,7 +113,7 @@
         <item quantity="other">%1$d 个工作中</item>
     </plurals>
     <plurals name="designsystem_core_count_unread">
-        <item quantity="other">%1$d 个新回复</item>
+        <item quantity="other">%1$d 个完成未看</item>
     </plurals>
     <plurals name="designsystem_core_count_idle">
         <item quantity="other">%1$d 个空闲</item>

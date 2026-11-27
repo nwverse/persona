@@ -37,6 +37,8 @@
     <string name="chat_tray_draft_changed">下書きが更新されました。最新の内容を確認してから送信してください。</string>
     <string name="chat_tray_caught_up">すべて対応済み</string>
     <string name="chat_tray_accept">受け入れる</string>
+    <string name="chat_tray_pass">OK</string>
+    <string name="chat_tray_ready_to_verify">確認待ち</string>
     <string name="chat_tray_finish_now">ここで完了</string>
     <string name="chat_tray_follow_recommendation">推奨に従う</string>
     <string name="chat_tray_finish_failed">タスクを完了できませんでした。もう一度お試しください。</string>
@@ -49,7 +51,6 @@
     <string name="chat_tray_stopped_reason">止まったまま未完了 · %1$s</string>
     <string name="chat_tray_pr_number">PR #%1$s</string>
     <string name="chat_tray_done">完了</string>
-    <string name="chat_tray_just_finished">完了したばかり</string>
     <string name="chat_tray_finished_empty">直近 24 時間に完了したタスクはありません</string>
     <string name="chat_tray_finished_done">完了</string>
     <string name="chat_tray_accepted">検収済み</string>
@@ -73,14 +74,4 @@
     <string name="chat_tray_held_reason_dedup">関連する通知は過去12時間以内に送信済みです</string>
     <string name="chat_tray_held_load_failed">保留された通知を読み込めませんでした。接続を確認して再試行してください。</string>
     <string name="chat_tray_held_p2_toggle">通知なしの項目を展開または折りたたむ</string>
-    <string name="chat_tray_entry_acceptance">確認待ち</string>
-    <string name="chat_tray_entry_stopped">停止・未完了</string>
-    <string name="chat_tray_entry_parked">保留</string>
-    <string name="chat_tray_agent_reported_done">完了報告・確認待ち</string>
-    <string name="chat_tray_agent_waiting">停止・待機中</string>
-    <string name="chat_tray_agent_waiting_on">停止・%1$s待ち</string>
-    <string name="chat_tray_todo_state">タスク：%1$s</string>
-    <string name="chat_tray_unattended">1時間以上フォローアップがありません</string>
-    <string name="chat_tray_park_hint">監督役：待機を確認して保留してください</string>
-    <string name="chat_tray_agent_unfinished">停止・未完了</string>
 </resources>

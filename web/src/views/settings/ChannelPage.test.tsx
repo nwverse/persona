@@ -150,6 +150,12 @@ describe("ChannelPage target override hint", () => {
     expect(byText(t("settings-channels.target_override_settings"))).toBeUndefined();
   });
 
+  it("explains where groups, topics and direct messages go in groups_and_topics mode", async () => {
+    await refreshWith({ ...detail(false, false), target_override: { mode: "groups_and_topics" } });
+    expect(host.textContent).toContain(t("settings-channels.target_override_groups_and_topics"));
+    expect(host.textContent).not.toContain(t("settings-channels.target_override_topics"));
+  });
+
   it("shows the group topic routing hint with an extension settings shortcut when active", async () => {
     await refreshWith({
       ...detail(false, false),
@@ -271,5 +277,28 @@ describe("ChannelPage saves", () => {
     expect(hub.asked.map((a) => a.kind)).toEqual(["unbind"]);
     await answer(hub.asked.shift(), { ...detail(true, false), state: "not_connected", account: undefined });
     expect(sw("Feature A").disabled).toBe(false);
+  });
+
+  it("closes open unbind and target picker dialogs when switching to another channel", async () => {
+    // Open the unbind dialog on demo, then switch to another channel while mounted.
+    await act(async () => byText(t("settings-channels.unbind")).click());
+    await settle();
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+
+    await act(async () => root.render(<ChannelPage id="other" onBack={() => {}} onSettings={onSettings} />));
+    await answer(hub.asked.shift(), { ...detail(false, false), id: "other", name: "Other" });
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+
+    // Open the target picker on other, then switch back to demo while mounted.
+    const targetRow = [...host.querySelectorAll<HTMLButtonElement>("button")].find((b) =>
+      b.textContent?.includes(t("settings-channels.target_row")),
+    )!;
+    await act(async () => targetRow.click());
+    await settle();
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+
+    await act(async () => root.render(<ChannelPage id="demo" onBack={() => {}} onSettings={onSettings} />));
+    await answer(hub.asked.shift(), detail(false, false));
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 });

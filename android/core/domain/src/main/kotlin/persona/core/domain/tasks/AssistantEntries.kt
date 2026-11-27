@@ -1,6 +1,5 @@
 package persona.core.domain.tasks
 
-import persona.core.domain.sort.shownCloseout
 import persona.core.contracts.AgentState
 import persona.core.contracts.FeedItem
 import persona.core.contracts.GroupKeys
@@ -88,8 +87,6 @@ data class AssistantEntries(
     val running: List<RunningEntry>,
     val shelved: List<RunningEntry>,
     val finished: List<FinishedEntry> = emptyList(),
-    /** Reported finishes awaiting acceptance in In progress's uncounted Just finished group. */
-    val justFinished: List<RunningEntry.Task> = emptyList(),
 )
 
 /** How long a task's review is its supervisor's alone (docs/assistant/unified-entry.md "Needs you and In progress"):
@@ -109,58 +106,19 @@ fun Todo.supervisorReviewing(now: Long): Boolean {
     return now - since < REVIEW_OVERDUE_MS
 }
 
-/** An open ask or a review explicitly addressed to the owner. A closed to-do cannot ask for another decision (#12974). */
-fun Todo.awaitsDecision(): Boolean {
+/** The task waits for the user's decision or review: an open task's ask, or its supervisor's `needs_user` on an open
+ *  task, or a `pending_review` that is the owner's: one waiting an hour or more at [now], or one the hub gives no start
+ *  for ([supervisorReviewing]). A younger review is its supervisor's to do. A finished task never waits, whatever ask
+ *  it still carries: the hub's To-dos triage files it with the finished ones (#12974). */
+fun Todo.awaitsDecision(now: Long): Boolean {
     if (isDone) return false
     if (openAsk != null) return true
-    return supervision?.state == "user_check" || supervision?.state == "needs_user"
+    return supervision?.state == "user_check" || supervision?.state == "needs_user" || (supervision?.state == "pending_review" && !supervisorReviewing(now))
 }
 
 /** Nothing of the task runs or asks (the web's `awaitsReview` statuses). */
 private val RESTING = setOf(TriageStatus.FollowUp, TriageStatus.Unread, TriageStatus.NotStarted)
 
-/** Stopped unfinished work becomes the owner's attention after an hour without supervisor follow-up. */
-const val STOP_FOLLOWUP_MS = 60 * 60 * 1000L
-
-data class TaskExecution(val running: Boolean, val waiting: Boolean, val closeout: persona.core.contracts.Closeout?, val unattendedSince: Long)
-
-fun Todo.execution(lookup: (SessionKey) -> Session?): TaskExecution {
-    val active = activeAgents.filter { it.startError.isNullOrBlank() }
-    val sessions = active.mapNotNull { lookup(it.key) }
-    val running = sessions.any { it.agentState == AgentState.Working || it.starting || it.work?.phase == "working" }
-        || backgroundWork(lookup) != null
-    val lead = sessions.minByOrNull { when (it.agentState) {
-        AgentState.NeedsYou -> 0
-        AgentState.Unread -> 1
-        AgentState.Working -> 2
-        AgentState.Idle -> 3
-        else -> 4
-    } }
-    val waiting = !running && lead?.shownCloseout?.status != "done" && sessions.any {
-        val work = it.work
-        work?.phase == "blocked" && (work.on == "agent" || work.on == "transient" || work.on == "external" && !work.wait.isNullOrBlank())
-    }
-    fun time(at: String?) = parseTime(at)?.toEpochMilli() ?: 0L
-    val stopped = active.maxOfOrNull { a ->
-        val session = lookup(a.key)
-        parseTime(session?.work?.turnAt)?.toEpochMilli() ?: parseTime(session?.stateSince)?.toEpochMilli()
-            ?: parseTime(session?.updatedAt)?.toEpochMilli() ?: time(a.linkedAt)
-    } ?: 0L
-    val followed = maxOf(time(supervision?.followedUpAt),
-        supervision?.reviews?.filter { it.by.isNullOrBlank() }?.maxOfOrNull { time(it.at) } ?: 0L)
-    return TaskExecution(running, waiting, if (running) null else lead?.shownCloseout, maxOf(time(createdAt), stopped, followed))
-}
-
-fun Todo.externallyWaiting(now: Long, status: TriageStatus, last: Long, lookup: (SessionKey) -> Session?): Boolean {
-    if (supervision?.state == "pending_review") return false
-    if (supervision?.state == "parked") return true
-    if (activeAgents.mapNotNull { lookup(it.key) }.any { it.waitsWithoutBackground() }) return false
-    if (status == TriageStatus.Unread && (parseTime(seenAt)?.toEpochMilli() ?: 0L) < last) return false
-    if (kind != "concern" && delivery?.state == "live") return false
-    return hasOpenPR(now)
-}
-
-/** Nothing of the task runs or asks (the web's `awaitsReview` statuses). */
 /** The review a decision belongs to (web `decisionRound`): the latest review's time, else the hub's, else the ask's. */
 internal fun Todo.decisionRound(): Instant? =
     listOf(supervision?.reviews?.lastOrNull()?.at, decisionReview?.reviewAt, ask?.askedAt)
@@ -212,12 +170,11 @@ fun assistantEntries(
     val open = mutableListOf<Pair<RunningEntry.Task, Int>>()
     val shelved = mutableListOf<RunningEntry.Task>()
     val finished = mutableListOf<FinishedEntry>()
-    val justFinished = mutableListOf<Pair<RunningEntry.Task, Long>>()
     val folded = mutableSetOf<SessionKey>()
     // failed starts whose work finished in a related to-do: closed, as the To-dos page has them (#3713)
     val superseded = supersededFailedStarts(todos)
-    // the main conversation watches every task (docs/assistant/unified-entry.md); another one the tasks it dispatched
-    val listed = todos.filter { isMain || it.origin == conversation }
+    // the main conversation watches every task (docs/assistant/unified-entry.md); another one the tasks it dispatched or supervises
+    val listed = todos.filter { isMain || it.origin == conversation || it.supervision?.supervisor == conversation }
     // One home per request: prefer the task the hub ties the session to, else the first current task listing it.
     // Other tasks neither repeat its cards nor wait on the user for them (web `assistantEntries`, #7531).
     val listing = mutableMapOf<SessionKey, MutableSet<String>>()
@@ -246,33 +203,21 @@ fun assistantEntries(
         // a failed start carries done_at (the hub ends it), yet it is the user's to retry while its bucket says open
         val waits = if (status == TriageStatus.Failed) bucket == TodoBucket.Open
             else !todo.isDone && (status == TriageStatus.NeedsYou || status == TriageStatus.Interrupted)
-        val decision = todo.awaitsDecision()
+        val decision = todo.awaitsDecision(now)
         val deliveryApproval = todo.hold?.unblock == HoldUnblock.User
-        val deliveryHeldBySupervisor = todo.hold?.unblock == HoldUnblock.Supervisor
         // its supervisor's review is under way (not the owner's yet): in progress, whatever the To-dos page files it under
         val reviewing = !decision && !deliveryApproval && todo.supervisorReviewing(now)
-        val execution = todo.execution(lookup)
-        val settled = todo.isDone || todo.acceptanceStands
-        val external = execution.waiting || todo.externallyWaiting(now, status, todo.triage(lookup, now, restored[todo.id] ?: 0L).last, lookup)
-        val unfinished = !deliveryHeldBySupervisor && !hasAgentsElsewhere && !settled && todo.activeAgents.isNotEmpty() && !execution.running && !external &&
-            status != TriageStatus.UsageLimit && execution.closeout?.status != "done"
-        val unattended = unfinished && execution.unattendedSince > 0 && now - execution.unattendedSince > STOP_FOLLOWUP_MS
         when {
             asks.isNotEmpty() -> asking += NeedsYouEntry.Task(todo, status, asks)
-            waits || decision || deliveryApproval || unattended -> {
+            waits || decision || deliveryApproval -> {
                 // Only the review decision is hidden once dismissed (web `assistantEntries`, #8262): an Agent that asks still shows.
                 val dismissed = status != TriageStatus.NeedsYou && decision && todo.decisionDismissed()
                 if (deliveryApproval || !dismissed) deciding += NeedsYouEntry.Task(todo, status, asks) to todo.entryRank(status)
             }
-            !settled && !deliveryHeldBySupervisor && !execution.running && !external && execution.closeout?.status == "done" ->
-                justFinished += RunningEntry.Task(todo, status) to execution.unattendedSince
-            unfinished -> Unit
-            !settled && !deliveryHeldBySupervisor && !execution.running && !external && reviewing -> justFinished += RunningEntry.Task(todo, status) to
-                todo.triage(lookup, now, restored[todo.id] ?: 0L).last
-            bucket == TodoBucket.Open || reviewing || !settled && (external || execution.running) -> {
+            bucket == TodoBucket.Open || reviewing -> {
                 val activity = todo.backgroundWork(lookup)
-                val waiting = hasAgentsElsewhere || external || activity == null && todo.activeAgents.mapNotNull { lookup(it.key) }.any { it.waitsWithoutBackground() || it.waitsInBackground }
-                open += RunningEntry.Task(todo, if (execution.running) TriageStatus.Working else status, activity, waiting, hasAgentsElsewhere,
+                val waiting = activity == null && todo.activeAgents.mapNotNull { lookup(it.key) }.any { it.waitsWithoutBackground() || it.waitsInBackground }
+                open += RunningEntry.Task(todo, status, activity, waiting, hasAgentsElsewhere,
                     supervisorReview = reviewing && status in RESTING) to todo.entryRank(status)
             }
             bucket == TodoBucket.Shelved -> shelved += RunningEntry.Task(todo, status, hasAgentsElsewhere = hasAgentsElsewhere)
@@ -280,7 +225,7 @@ fun assistantEntries(
                 // finished work a conversation handed out, for a day after it finished, seen or not (#10922); a failed
                 // start a related to-do finished is history, not news
                 val ended = todo.finishedAt(placed)
-                if ((placed.section == TriageSection.JustDone || placed.section == TriageSection.Done || placed.section == TriageSection.Cancelled) &&
+                if ((placed.section == TriageSection.JustDone || placed.section == TriageSection.Done) &&
                     status != TriageStatus.Failed && !todo.origin.isNullOrBlank() && ended > 0 && now - ended < JUST_DONE_MS) {
                     finished += FinishedEntry(todo, status, fresh = todo.showsJustFinished(placed, now), at = ended)
                 }
@@ -316,7 +261,6 @@ fun assistantEntries(
         running = open.sortedWith(compareBy<Pair<RunningEntry.Task, Int>> { it.second }.thenByDescending { time(it.first.todo.createdAt) }).map { it.first } +
             agentsRunning,
         shelved = shelved.sortedByDescending { time(it.todo.createdAt) },
-        justFinished = justFinished.sortedWith(compareByDescending<Pair<RunningEntry.Task, Long>> { it.second }.thenBy { it.first.key }).map { it.first },
         // newest finished first; the same moment by id, so every client lists them in one order
         finished = finished.sortedWith(compareByDescending<FinishedEntry> { it.at }.thenBy { it.todo.id }),
     )

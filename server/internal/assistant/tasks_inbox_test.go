@@ -447,7 +447,8 @@ func TestTaskPlanInboxReuseCannotReplaceAnotherSource(t *testing.T) {
 
 func TestTaskPlanInboxExplicitLinkSurvivesURLRecheck(t *testing.T) {
 	ctx := context.Background()
-	s, _ := newTaskService(t)
+	s, f := newTaskService(t)
+	f.inbox = newFakeInbox()
 	it := taskInboxItem(t, s, "example:source", "box", "c1x1x1")
 	gh := githubItem(it.ID, "issues", "10")
 	s.inbox.mu.Lock()

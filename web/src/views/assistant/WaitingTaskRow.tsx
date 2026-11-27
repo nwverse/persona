@@ -8,8 +8,7 @@ import { putTodo, refreshTodos } from "../../lib/store";
 import { heldDelivery, interruption, updateTodo, type Todo, type TodoStatus } from "../../lib/todos";
 import { cx, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
-import { ROW_ACTIONS, waitsLabel } from "./FailedTaskRow";
-import { progressOf, retryTaskNow, useRetrying, useTaskNow } from "./Tasks";
+import { progressOf, retryTaskNow, ROW_ACTIONS, useRetrying, useTaskNow, waitsLabel } from "./Tasks";
 
 /** A task in Needs you that only waits (#8237): cut off by the model service, with why and Continue (its receipt card's
  *  until then); waiting for review, with what it handed in; finished work held for the owner's OK, with what holds it

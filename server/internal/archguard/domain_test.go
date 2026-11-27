@@ -34,7 +34,11 @@ const domainBaselineMoves = "DOMAIN_LAYERS_MOVES"
 // move carried. It prints the packages it checked per layer and the files it parsed in full, which is its budget,
 // and fails when it inspected nothing.
 func TestDomainLayers(t *testing.T) {
-	lists, err := domainrules.ReadLists("testdata")
+	listDir, err := filepath.Abs("testdata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lists, err := domainrules.ReadLists(listDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +82,7 @@ func TestDomainLayers(t *testing.T) {
 func domainRun(t *testing.T, pkgs []*domainrules.Pkg, lists domainrules.Lists) ([]domainrules.Finding,
 	[]domainrules.Count, domainrules.Stats) {
 	t.Helper()
-	idx := domainrules.NewIndex(serverModule, pkgs, lists.Contracts)
+	idx := domainrules.NewIndex(serverModule, pkgs, lists.Contracts).WithBareIDs(lists.BareIDs)
 	findings, st, err := domainrules.Run(pkgs, idx, "")
 	if err != nil {
 		t.Fatal(err)
@@ -142,7 +146,11 @@ func carryDomainLists(t *testing.T, lists domainrules.Lists, findings []domainru
 		}
 		t.Logf("carried %s along %d moved files", domainListPaths[i], len(moves))
 	}
-	lists, err := domainrules.ReadLists("testdata")
+	listDir, err := filepath.Abs("testdata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lists, err = domainrules.ReadLists(listDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,7 +312,11 @@ func TestDomainLayerNames(t *testing.T) {
 	if dir == "" {
 		t.Skip("only with -domain-layer-names (scripts/test/name_freezes.py)")
 	}
-	lists, err := domainrules.ReadLists("testdata")
+	listDir, err := filepath.Abs("testdata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lists, err := domainrules.ReadLists(listDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +335,7 @@ func TestDomainLayerNames(t *testing.T) {
 		}
 	}
 	measure := func(pkgs []*domainrules.Pkg) (lines, others []string, err error) {
-		idx := domainrules.NewIndex(serverModule, pkgs, lists.Contracts)
+		idx := domainrules.NewIndex(serverModule, pkgs, lists.Contracts).WithBareIDs(lists.BareIDs)
 		findings, _, err := domainrules.Run(pkgs, idx, "")
 		if err != nil {
 			return nil, nil, err

@@ -29,7 +29,7 @@ class ConversationInvalidTest {
         ))
         for (on in listOf("agent", "external", "transient")) {
             val replacement = Session(machineId = "box", sessionId = "new", state = "idle",
-                work = WorkState(phase = "blocked", on = on, wait = if (on == "external") "the release check" else null))
+                work = WorkState(phase = "blocked", on = on))
             assertTrue(on, replacement.waitsWithoutBackground())
             val sessions = listOf(old, replacement)
             val byKey = sessions.associateBy { it.key }

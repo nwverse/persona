@@ -289,13 +289,14 @@ func seenOf(it *InboxItem) inboxSeen {
 // another received batch merges into that entry: its count and messages join the earlier ones, its time becomes the
 // entry's, and the entry keeps the first batch's id and link. messages, when the caller has them (mail), are the
 // batch's; else they are read from the item. Under b.mu.
-func (b *inboxBook) noteReceived(it *InboxItem, prev inboxSeen, messages []InboxChainMessage) {
+func (b *inboxBook) noteReceived(it *InboxItem, prev inboxSeen, messages []InboxChainMessage, sourceEvent ...string) {
 	if it.Last == prev.last && prev.last != "" {
 		return
 	}
 	// followMerged consumes this per-round fact before the next collection. Unlike a timestamp comparison with the
 	// survivor, it proves that this member itself advanced even when its source event is older than the survivor's.
 	it.receivedInCollection = true
+	b.captureExternalInbox(it, sourceEvent)
 	fresh := prev.last == "" && len(it.Chain) == 0
 	n := it.Count - prev.count
 	if fresh {
@@ -419,6 +420,13 @@ func (b *inboxBook) file(it *InboxItem, at time.Time, by string) {
 
 // doneByManager is done_by for an item the manager concluded needs nothing.
 const doneByManager = "manager"
+
+// hasChainEventAt checks which event produced a recorded timestamp.
+func (it *InboxItem) hasChainEventAt(kind string, at time.Time) bool {
+	return slices.ContainsFunc(it.Chain, func(e InboxChainEntry) bool {
+		return e.Kind == kind && e.At.Equal(at)
+	})
+}
 
 // noteSelfReplied records that the user answered in the source itself, not through Persona. Under b.mu.
 func (b *inboxBook) noteSelfReplied(it *InboxItem, at time.Time) {

@@ -31,6 +31,8 @@
   "graph_links": "会话与链接",
   "graph_open_action": "打开",
   "graph_running": "运行中",
+  "scene": "3D 场景",
+  "scene_reset": "重置视角",
   "map": "地图",
   "map_zoom_in": "放大",
   "map_zoom_out": "缩小",

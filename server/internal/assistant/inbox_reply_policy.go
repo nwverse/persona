@@ -567,7 +567,7 @@ func (s *Service) classifyInboxReplyPolicies(ctx context.Context, input any) {
 		b.mu.Lock()
 		var todo []*InboxItem
 		for _, it := range b.items {
-			if !it.open() || !policy.appliesToItem(it) {
+			if it.VisibilityExcluded || !it.open() || !policy.appliesToItem(it) {
 				continue
 			}
 			if it.Tier != TierAction && b.policyTwin(it) != TwinFirst && !it.handled() {
@@ -640,7 +640,7 @@ func (s *Service) classifyInboxReplyPolicyItem(ctx context.Context, input any, i
 		}
 		b := &s.inbox
 		b.mu.Lock()
-		if !it.open() || !policy.appliesToItem(it) || replyPolicyClassificationCurrent(it, cfg) {
+		if it.VisibilityExcluded || !it.open() || !policy.appliesToItem(it) || replyPolicyClassificationCurrent(it, cfg) {
 			b.mu.Unlock()
 			return nil
 		}
@@ -649,12 +649,21 @@ func (s *Service) classifyInboxReplyPolicyItem(ctx context.Context, input any, i
 		serial := it.replyClassifySerial
 		b.mu.Unlock()
 
-		snap, _ := s.classifyReplyPolicy(ctx, policy, data, "")
+		allowed, visibilityErr := s.inboxVisibilityModelAllowed(ctx, it)
+		if visibilityErr == nil && !allowed {
+			return nil
+		}
+		var snap *InboxReplyPolicySnapshot
+		if visibilityErr != nil {
+			snap = replyPolicyVisibilityFailSnapshot(policy, data.contentVersion, visibilityErr)
+		} else {
+			snap, _ = s.classifyReplyPolicy(ctx, policy, data, "")
+		}
 		if ctx.Err() != nil {
 			return nil
 		}
 		b.mu.Lock()
-		if !it.open() || replyPolicyContentVersion(it) != data.contentVersion || it.replyClassifySerial != serial {
+		if it.VisibilityExcluded || !it.open() || replyPolicyContentVersion(it) != data.contentVersion || it.replyClassifySerial != serial {
 			b.mu.Unlock()
 			return nil
 		}
@@ -662,7 +671,7 @@ func (s *Service) classifyInboxReplyPolicyItem(ctx context.Context, input any, i
 		it.ReplyPolicy = snap
 		b.settle(w)
 		b.mu.Unlock()
-		if failed := s.saveWrites(ctx, []*inboxWrite{w}, "its reply policy classification"); failed[it.ID] {
+		if failed := s.saveWrites(ctx, []*inboxWrite{w}, "its reply policy classification"); failed[data.id] {
 			return errInboxNotPersisted
 		}
 		return nil
@@ -1222,6 +1231,25 @@ func (s *Service) classifyReplyPolicy(ctx context.Context, policy replyPolicySpe
 
 // ---- Gate 1: Queue gate (before AI handling) ----
 
+// replyPolicyVisibilityFailSnapshot builds a durable fail-closed snapshot when visibility authorization cannot be read.
+func replyPolicyVisibilityFailSnapshot(policy replyPolicySpec, contentVersion string, err error) *InboxReplyPolicySnapshot {
+	msg := ""
+	if err != nil {
+		msg = err.Error()
+	}
+	if msg == "" {
+		msg = "visibility configuration unavailable"
+	}
+	return &InboxReplyPolicySnapshot{
+		ContentVersion: contentVersion,
+		PolicyRevision: policy.revision,
+		At:             time.Now().UTC(),
+		Category:       "unknown",
+		Route:          assistantwire.ReplyRouteOwnerOnly,
+		Error:          msg,
+	}
+}
+
 // gateReplyPolicyQueue classifies open items eligible for AI handling (and already-queued items without a session)
 // whose reply-policy snapshot is missing, errored, or stale for the current content version or policy revision.
 // Called before escalateWithPolicy and startInboxAgents in handPass.
@@ -1229,28 +1257,41 @@ func (s *Service) gateReplyPolicyQueue(ctx context.Context, policy replyPolicySp
 	if !policy.enabled {
 		return
 	}
+	type queueItem struct {
+		it   *InboxItem
+		data replyPolicyItemData
+	}
 	b := &s.inbox
 	b.mu.Lock()
-	var todo []replyPolicyItemData
+	var todo []queueItem
 	for _, it := range b.items {
 		if !b.needsReplyPolicyQueueCheckLocked(it, policy, since) {
 			continue
 		}
-		todo = append(todo, snapshotItemForReplyPolicyLocked(it))
+		todo = append(todo, queueItem{it: it, data: snapshotItemForReplyPolicyLocked(it)})
 	}
 	b.mu.Unlock()
 	if len(todo) == 0 {
 		return
 	}
 	var writes []*inboxWrite
-	for _, data := range todo {
-		snap, _ := s.classifyReplyPolicy(ctx, policy, data, "")
+	for _, entry := range todo {
+		allowed, visibilityErr := s.inboxVisibilityModelAllowed(ctx, entry.it)
+		if visibilityErr == nil && !allowed {
+			continue
+		}
+		var snap *InboxReplyPolicySnapshot
+		if visibilityErr != nil {
+			snap = replyPolicyVisibilityFailSnapshot(policy, entry.data.contentVersion, visibilityErr)
+		} else {
+			snap, _ = s.classifyReplyPolicy(ctx, policy, entry.data, "")
+		}
 		if ctx.Err() != nil {
 			return
 		}
 		b.mu.Lock()
-		it := b.items[data.id]
-		if it != nil && it.open() && replyPolicyContentVersion(it) == data.contentVersion {
+		it := b.items[entry.data.id]
+		if it != nil && !it.VisibilityExcluded && it.open() && replyPolicyContentVersion(it) == entry.data.contentVersion {
 			w := beginWrite(it)
 			it.ReplyPolicy = snap
 			b.settle(w)
@@ -1264,7 +1305,7 @@ func (s *Service) gateReplyPolicyQueue(ctx context.Context, policy replyPolicySp
 // needsReplyPolicyQueueCheckLocked reports whether it is an escalation or queued-start candidate that needs a fresh
 // reply-policy classification. Caller holds b.mu.
 func (b *inboxBook) needsReplyPolicyQueueCheckLocked(it *InboxItem, policy replyPolicySpec, since time.Time) bool {
-	if !policy.appliesToItem(it) || !it.open() || it.Context == "" {
+	if it.VisibilityExcluded || !policy.appliesToItem(it) || !it.open() || it.Context == "" {
 		return false
 	}
 	cv := replyPolicyContentVersion(it)

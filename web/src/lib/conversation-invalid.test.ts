@@ -57,8 +57,7 @@ describe("unrecoverable conversations", () => {
     expect(todoStatus(task, makeSessionLookup(sessions))).toBe("waiting");
     const got = entries(task, sessions);
     expect(got.needsYou).toEqual([]);
-    expect(got.running).toEqual([]);
-    expect(got.parked.map((item) => item.key)).toEqual(["task:task"]);
+    expect(got.running.map((item) => item.key)).toEqual(["task:task"]);
   });
 
   it("does not revive an interruption after its task is parked, even with new transcript activity", () => {
