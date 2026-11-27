@@ -155,7 +155,7 @@ function HostConfirmation({ adapter, active }: { adapter: AppUIStreamPage; activ
   const ix = active ? Object.values(interactions).find((ix) => adapter.ownsHostConfirmation(ix as NativePagePermission)) : undefined;
   return ix ? <PagePermission key={ix.id} adapter={adapter} ix={ix as NativePagePermission} /> : null;
 }
-function PagePermission({ adapter, ix }: { adapter: AppUIStreamPage; ix: NativePagePermission }) {
+export function PagePermission({ adapter, ix }: { adapter: AppUIStreamPage; ix: NativePagePermission }) {
   const [busy, setBusy] = useState(false);
   const answer = async (allow: boolean) => {
     if (busy || !adapter.ownsHostConfirmation(ix)) return;
@@ -163,8 +163,9 @@ function PagePermission({ adapter, ix }: { adapter: AppUIStreamPage; ix: NativeP
     try {
       // The existing hub endpoint routes this pending ID to its owning manager and rechecks auth.
       // Do not manufacture an Agent session or bypass the generic Agent approval guard.
-      await apiOp(`/interactions/${enc(ix.id)}/resolve`, { method: "POST", json: { allow } });
-      endInteraction(ix.id);
+      await apiOp(`/interactions/${enc(ix.id)}/resolve`, { method: "POST", json: { allow },
+        headers: ix.created_at ? { "X-Persona-Interaction-Created-At": ix.created_at } : undefined });
+      endInteraction(ix.id, undefined, ix.created_at);
     } catch (error) { toast(t("settings-extensionview.action_failed", { error: errorText(error) }), "error"); }
     finally { setBusy(false); }
   };

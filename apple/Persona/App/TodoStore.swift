@@ -870,6 +870,22 @@ final class TodoStore {
         }
     }
 
+    /// Surfaces a failed explicit to-do write (`toggleDone`, `reschedule`, `refile`, `delete`): `AppModel.show`
+    /// silences timeouts under `isQuiet` (intended for retried background reads), so a timed-out write that rolled
+    /// back instead shows an explicit error toast.
+    static func reportWriteFailure(_ error: Error,
+                                   show: @MainActor (Error) -> Void = { AppModel.shared.show($0) },
+                                   toast: @MainActor (Toast) -> Void = { AppModel.shared.toast = $0 }) {
+        if error.isTimeout {
+            let message = (error as? APIError)?.businessMessage
+                ?? String(localized: "The request timed out. Try again later.")
+            toast(Toast(message, style: .error))
+            Haptics.error()
+            return
+        }
+        show(error)
+    }
+
     /// A change drawn before the hub answered failed: the to-do back as it was (only it, so what else changed meanwhile
     /// stays), and why, felt as well as shown (offline has its own haptic, in `notDone`).
     private func putBack(_ before: TodoItem, generation targetGeneration: Int, _ error: Error) {
@@ -880,17 +896,17 @@ final class TodoStore {
             back[idx] = before
             apply(back)
         }
-        if !error.isOffline { Haptics.error() }
-        AppModel.shared.show(error)
+        Self.reportWriteFailure(error)
     }
 
     /// `api` is the client to write through (tests pass a fake hub's); the app uses the current hub connection.
     /// Closes an open to-do or reopens a closed one. `done` says which when the row knows better than `doneAt`: a failed
     /// start waiting on the owner reads open and is closed for good (#3713, `TodoTriageLogic.checksAsOpen`).
-    func toggleDone(_ todo: TodoItem, done: Bool? = nil, api: APIClient? = nil) {
+    func toggleDone(_ todo: TodoItem, done: Bool? = nil, api: APIClient? = nil,
+                    onFailure: (@MainActor (Error) -> Void)? = nil) {
         let targetGeneration = generation
         let newDone = done ?? !todo.isDone
-        let original = todos
+        let before = byID[todo.id] ?? todo
         // Optimistic update; a read already in flight cannot replace it.
         mutationRevision += 1
         var updated = todos
@@ -904,11 +920,16 @@ final class TodoStore {
             do {
                 _ = try await update(id: todo.id, done: newDone, api: api)
             } catch {
-                // Revert on failure: `todos` already holds the optimistic list, so put back the one saved before it.
+                // Revert only this to-do on failure so concurrent updates to other to-dos during a long confirmation
+                // wait stay intact.
                 guard generation == targetGeneration else { return }
                 mutationRevision += 1
-                apply(original)
-                AppModel.shared.show(error)
+                var back = todos
+                if let idx = back.firstIndex(where: { $0.id == before.id }) {
+                    back[idx] = before
+                    apply(back)
+                }
+                if let onFailure { onFailure(error) } else { Self.reportWriteFailure(error) }
             }
         }
     }

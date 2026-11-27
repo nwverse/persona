@@ -245,6 +245,36 @@ func (s core) readHeldNote(ctx context.Context, chat, ask, text string) {
 	}
 }
 
+// readWorking tells the owner, in the private chat, that a held /read is still being worked on, once it has worked
+// read_working_after (#16808): it reads the group and investigates before it answers, which can take minutes, and the
+// group's reaction is all the owner would see meanwhile. Once per run (runLive.readNoted), under a key of its own so a
+// restart that forgets it does not say it twice within Lark's hour. A /read answered straight in the group says nothing
+// here: the group's reaction is where its owner looks.
+func (s core) readWorking(ctx context.Context, r *channel.Run, took time.Duration) {
+	if took < s.timing("read_working_after") || s.runExt(r, readDirectKey) != "" {
+		return
+	}
+	prog := s.live(r.ID)
+	if prog == nil {
+		return // a run not followed any more
+	}
+	prog.mu.Lock()
+	noted := prog.readNoted
+	prog.readNoted = true
+	prog.mu.Unlock()
+	if noted {
+		return
+	}
+	l := s.botLang(ctx)
+	h := &readHeld{ChatID: s.runExt(r, readChatKey), Ask: s.runExt(r, readAskKey)}
+	text := i18n.T(l, "assistant-feishu.read_working")
+	c := readHeldFromCard(l, h).Note(text)
+	c.Link(i18n.T(l, "assistant-feishu.read_held_open"), readGroupLink(h.ChatID))
+	if _, err := s.botPostTo(ctx, feishuTarget{}, "", c, text, readHeldPrivateKey(r.ReplyTo, "working")); err != nil {
+		s.logf("bots: /read: tell the owner it is being worked on: %v", err)
+	}
+}
+
 // readHeldAction answers a press of a held answer's buttons (the card action "rd"): do is "post" or "skip". Lark
 // waits 3 seconds for the answer: a post that takes longer says so, and the card is changed when it is done.
 func (s core) readHeldAction(ctx context.Context, a *botcard.CardAction) *botcard.CardResponse {

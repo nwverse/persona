@@ -103,6 +103,15 @@ func (n *Node) runtimeStartOn(ctx context.Context, h *runtimeConn, p runtimeStar
 	if p.DeferMCP {
 		params["defer_mcp"] = true
 	}
+	if h.agent() == agyAgent {
+		ch, err := n.agyChannelFor(ctx, p.Launcher)
+		if err != nil {
+			return nil, nil, err
+		}
+		if ch != nil {
+			params["channel"] = ch
+		}
+	}
 	var res struct {
 		Session json.RawMessage     `json:"session"`
 		Instead *proto.StartInstead `json:"instead"`
@@ -160,21 +169,34 @@ func (n *Node) runtimeStartOn(ctx context.Context, h *runtimeConn, p runtimeStar
 // node or machine restart falls back to local settings.json (losing bypassPermissions or escalating read-only plan).
 // Starts that left permission_mode empty stay unrecorded here so they continue to follow local settings.json.
 func (n *Node) recordAgyRuntimeStart(h *runtimeConn, s *proto.Session, p runtimeStartParams) {
-	if h == nil || h.agent() != agyAgent || s == nil || s.SessionID == "" || n.state == nil || p.PermissionMode == "" {
+	if h == nil || h.agent() != agyAgent || s == nil || s.SessionID == "" || n.state == nil {
 		return
 	}
-	mode := cmp.Or(s.PermissionMode, p.PermissionMode)
+	managedAgy := p.Launcher != "" && p.Launcher != agyAgent
+	if p.PermissionMode == "" && !managedAgy {
+		return
+	}
+	mode := ""
+	if p.PermissionMode != "" {
+		mode = cmp.Or(s.PermissionMode, p.PermissionMode)
+	}
+	launcher := cmp.Or(p.Launcher, s.Launcher, agyAgent)
 	if n.state.update(s.SessionID, func(st *sessionState) bool {
-		if st.AppMode == mode {
-			return false
+		changed := false
+		if mode != "" && st.AppMode != mode {
+			st.AppMode = mode
+			changed = true
 		}
-		st.AppMode = mode
-		return true
+		if managedAgy && st.Launcher != launcher {
+			st.Launcher = launcher
+			changed = true
+		}
+		return changed
 	}) {
 		return
 	}
 	n.state.put(s.SessionID, sessionState{
-		Launcher:    cmp.Or(s.Launcher, p.Launcher, agyAgent),
+		Launcher:    launcher,
 		Cwd:         cmp.Or(s.Cwd, p.Cwd),
 		Model:       cmp.Or(s.Model, p.Model),
 		ModelEffort: cmp.Or(s.Effort, p.Effort),

@@ -12,10 +12,12 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/cliport"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/extmgr/githubport"
 	"github.com/nwverse/persona/server/internal/githubwire"
+	"github.com/nwverse/persona/server/internal/mailwire"
 	"github.com/nwverse/persona/server/internal/netproxy"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -84,6 +86,9 @@ func (h *Manager) callConnector(ctx context.Context, by asker, name string, args
 	// The ledger of what went out (sent_ledger.go) is told of the write with this ctx: who asked, and the card the user answered.
 	trace := &sentTrace{by: by}
 	ctx = context.WithValue(ctx, sentTraceKey{}, trace)
+	if name == mailwire.ToolMove {
+		ctx = context.WithValue(ctx, mailMoveKey{}, &mailMoveCall{})
+	}
 	return h.connectors.Call(ctx, name, args, func(ctx context.Context, summary string, input json.RawMessage) bool {
 		r, id := h.approveCard(ctx, by, name, summary, input)
 		trace.card, trace.answeredBy = id, r.AnsweredBy
@@ -274,8 +279,8 @@ func (h *Manager) forgetArchive(ctx context.Context, source string) (assistantwi
 	if c := h.connectorByID(source); c != nil {
 		p.ArchiveSources = h.forgetArchiveSources(c)
 	}
-	var f assistantwire.KBForgotten
-	if err := h.kbAsk(ctx, assistantwire.MethodKBForget, p, &f); err != nil {
+	f, err := buswire.Call(ctx, h.kbCaller(), assistantwire.KBForgetMethod, p)
+	if err != nil {
 		return assistantwire.KBForgotten{}, err
 	}
 	return f, nil

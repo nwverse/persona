@@ -75,6 +75,56 @@ func TestReadAnswerIsHeldForTheOwner(t *testing.T) {
 	}
 }
 
+// A held /read that works past read_working_after tells the owner once, in the private chat, that it is on it (#16808):
+// nothing before that, nothing in the group, nothing more on later ticks, no buttons; and nothing at all for a /read
+// answered straight in the group, whose reaction is where its owner looks.
+func TestReadWorkingNoteGoesOncePrivately(t *testing.T) {
+	for _, direct := range []bool{false, true} {
+		name := "held"
+		if direct {
+			name = "direct"
+		}
+		t.Run(name, func(t *testing.T) {
+			s, posts, _ := cotHub(t, false)
+			r, _ := cotRun(s)
+			s.setRunExt(r, readChatKey, testChat)
+			s.setRunExt(r, readAskKey, "分析问答报错原因")
+			if direct {
+				s.setRunExt(r, readDirectKey, "1")
+			}
+			ctx := context.Background()
+			s.sink().progress(ctx, r, readWorkingAfter-time.Second, nil, "")
+			if len(*posts) != 0 {
+				t.Fatalf("a note before read_working_after: %v", *posts)
+			}
+			for range 3 {
+				s.sink().progress(ctx, r, readWorkingAfter+time.Second, []string{"运行 `ls`"}, "")
+			}
+			dm, group := heldPosts(*posts)
+			if len(group) != 0 {
+				t.Fatalf("the group got %v", group)
+			}
+			if direct {
+				if len(dm) != 0 {
+					t.Fatalf("a direct /read told the owner privately: %v", dm)
+				}
+				return
+			}
+			if len(dm) != 1 {
+				t.Fatalf("private notes %v, want one", dm)
+			}
+			card, _ := dm[0]["card"].(string)
+			if dm[0]["uuid"] != readHeldPrivateKey("om_m1", "working") || dm[0]["reply_to"] != "" {
+				t.Fatalf("the note: %v", dm[0])
+			}
+			if !strings.Contains(card, "分析问答报错原因") || !strings.Contains(card, "正在读群") || strings.Contains(card, `"do":"post"`) ||
+				strings.Contains(card, "运行") {
+				t.Fatalf("the note lacks the ask or the words, or has buttons or the process: %s", card)
+			}
+		})
+	}
+}
+
 // A held /read whose card could not be sent because the hub was unreachable is tried again, under the same key; once
 // it went, the run ends.
 func TestReadAnswerHeldRetriesWhenUnreachable(t *testing.T) {

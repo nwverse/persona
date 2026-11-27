@@ -64,8 +64,7 @@ import (
 // Antigravity incremental transcript append (tail anchor + rolling SHA-256 + deferred/periodic verification),
 // sub-second fileMeta fast hit, watched-poll idle backoff, and bounded summary/cache weights (with decoupled
 // raw-byte and object-weight transcriptCache caps) add 1,969 B (289,171 B).
-// Merging #16001 onto that main keeps its settled list-summary / .persona-turn-completion keying and static
-// summary_behind readListedTranscript cache, restores dev/ino/ctime wake-receipt detection, and adds a fixed
+// Merging #16001 onto that main keeps its settled list-summary / .persona-turn-completion keying and static summary_behind readListedTranscript cache, restores dev/ino/ctime wake-receipt detection, and adds a fixed
 // 4 KiB head-sample integrity check inside the racy window alongside the tail anchor. The union measures
 // 290,316 B exactly. The merge also restores one missing ASI semicolon in main's runtime.js.
 // With the compat.js declaration fix (#16771), main measured 290,321 B.
@@ -81,9 +80,31 @@ import (
 // Antigravity idle auto-compaction `/compact` divider mapping and empty-prompt exemption (#16604) add 174 B (294,512 B).
 // OpenCode unconditional interruptVersion queued-turn cancellation and status refresh add 71 B (294,583 B).
 // Keeping Antigravity media-guard fail-closed when the optional partial JPEG copy fails, races, or receives a non-string state adds 55 B (294,638 B).
+// PR #16425 (P0-1) reuses one read-only conversation_summaries connection with a stat-validated parsed snapshot,
+// prepared primary-key lookup and the watch-poll short-circuit (the nativeWorking gate stays open so the active
+// interval keeps evaluating). It uses main's object-shaped transcriptVersion key, keeps main's #16604 compact,
+// CHECKPOINT and availability-model edits through the merge, and ships summary-db.js through the antigravity/lib/*.js
+// glob. Re-aligned onto the main carrying #16604, the union measures 296,417 B exactly (+1,779 B over 294,638 B).
+// Main carrying #17140 (Antigravity background-task restart/list reconciliation, +2,241 B) measured 298,658 B.
+// Deterministic runtime compaction settlement (`session.compaction.settled` in runtime-sdk and antigravity runtime) adds 211 B (298,869 B).
+// Main carrying #17145 (Antigravity ACP pool isolation) plus hardening runtime-sdk shell-gates against POSIX/zsh/ksh -c/operand option bypasses, standalone +, unquoted command substitutions, and line continuations measures 301,379 B (+2,510 B over 298,869 B).
+// Checking conversation existence before serving Antigravity session.items (fail-closed on stat/metadata read errors) adds 272 B (301,651 B, #16410).
+// Antigravity session model persistence and reload restoration after idle ACP recycle or companion restart (#16393) adds 313 B over main (301,651 B -> 301,964 B).
+// Making runtime-sdk light() idempotent and avoiding double light() in dsh-files adds 58 B (302,022 B).
+// Registering integer and number A2A tool parameters with numeric TypeBox schemas in pi adds 172 B (302,194 B).
+// Hardening opencode pre-prompt interrupt/close guards and post-close snapshot/streamEnd suppression adds 644 B (302,838 B).
+// Pausing the Antigravity prompt inactivity watchdog once a matched foreground reply is settled and the only open
+// work is a same-turn live background task (six fail-closed predicates, wake re-arm and T1-T5 tests; #17214) adds
+// 1,424 B of gzipped-package budget (302,838 B -> 304,262 B).
+// Preserving delivered replies across live Antigravity background wakes, in-place RUNNING->DONE updates, and runtime-sdk catch-up/batch delta ordering (#14920) adds 1,015 B over main (304,262 B -> 305,277 B).
+// Keeping Antigravity summary-db connection() atomic and closing on probe() error adds 48 B (305,277 B -> 305,325 B).
+// Persisting the model after the first turn and restoring older Antigravity sessions from their transcript adds 100 B (#16458).
+// Targeted Antigravity stepsToItems lookup (targetItemId), per-session sentMsgVersions, and lazy transcriptOf projection (#16152) add 567 B (305,425 B -> 305,992 B).
+// Antigravity unavailable-Auto permission-mode fallback, restricted permission_modes advertisement, and runtime-sdk session.modes permission_mode forwarding (#17239) add 703 B (305,992 B -> 306,695 B).
+// Hardening dsh assistant memoryWrite against relative-path, clipInput truncation, and symlink escapes (#17339) adds 739 B (306,695 B -> 307,434 B).
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 294_638
+	const budget = 307_434
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {

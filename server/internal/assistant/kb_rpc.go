@@ -78,9 +78,10 @@ func handleKBRPC[P, R any](ctx context.Context, _ buswire.Method[P, R], errorMet
 // kbRPCRequest shares the engine with the apps and MCP tools, without invoking an HTTP handler or exposing agents.
 func (s *Service) kbRPCRequest(ctx context.Context, method string, raw json.RawMessage) (any, bool, error) {
 	switch method {
-	case assistantwire.MethodKBProviderCheckpoint, assistantwire.MethodKBProviderSentMarkers:
-		result, err := s.kbProviderRead(ctx, method, raw)
-		return result, true, err
+	case assistantwire.MethodKBProviderCheckpoint:
+		return handleKBRPC(ctx, assistantwire.KBProviderCheckpointMethod, method, raw, s.kbProviderCheckpointRPC)
+	case assistantwire.MethodKBProviderSentMarkers:
+		return handleKBRPC(ctx, assistantwire.KBProviderSentMarkersMethod, method, raw, s.kbProviderSentMarkersRPC)
 	case assistantwire.MethodKBList:
 		return handleKBRPC(ctx, assistantwire.KBListMethod, method, raw, s.kbListRPC)
 	case assistantwire.MethodKBRecent:

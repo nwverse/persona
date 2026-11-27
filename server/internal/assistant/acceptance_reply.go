@@ -322,7 +322,7 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 		b.mu.Unlock()
 		return acceptResult{}, nil
 	}
-	if ownerCheck && !decideAsk(a) && !a.Conclusion && t.DoneAt == nil {
+	if ownerCheck && !decideAsk(a) && !a.Conclusion {
 		if err := s.investigationCloseError(ctx, t); err != nil {
 			b.mu.Unlock()
 			return acceptResult{}, err
@@ -396,6 +396,19 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 					}
 					return acceptResult{}, fmt.Errorf("%w: %w", errAcceptStore, err)
 				}
+			} else if cur, ok := s.todoNow(id); ok {
+				if err := s.investigationCloseError(ctx, cur); err != nil {
+					if !resumeOwnerPass {
+						b.mu.Lock()
+						if a := b.asks[id]; a != nil && a.AskedAt.Equal(cp.AskedAt) {
+							a.AcceptedAt = previousAcceptedAt
+							s.saveAcceptLocked(ctx)
+						}
+						b.mu.Unlock()
+						s.askChanged(ctx)
+					}
+					return acceptResult{}, err
+				}
 			}
 			v, changed, err := s.updateSupervision(ctx, id, func(v *Supervision) bool {
 				if v.State != reviewUserCheck {
@@ -410,6 +423,9 @@ func (s *Service) acceptTryAsDismissalLocked(ctx context.Context, id, card strin
 			}
 			if closed || changed {
 				s.taskReviewed(ctx, v.Supervisor, id, reviewAccepted, v)
+				// The owner's Pass is the acceptance task_review(user_check) deferred: the terminal cleanup the owner
+				// opted into at Start follows it, under the same checks as a direct acceptance (#16948).
+				s.goFinishTaskTerminal(ctx, t)
 			}
 		}
 		completeDismissal()

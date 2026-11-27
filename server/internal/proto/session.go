@@ -120,6 +120,16 @@ const (
 	StatusInterrupted = "interrupted"
 )
 
+// LauncherRefreshSendWait leaves time for a terminal Claude send to check the provider, quit and resume the
+// conversation in place before typing. The node bounds preparation and the restart separately.
+const LauncherRefreshSendWait = 4 * time.Minute
+
+// CanRefreshTerminalLauncher identifies sends that may need the longer wait. Only the node knows which process
+// and launcher configuration are actually in the pane.
+func (s *Session) CanRefreshTerminalLauncher() bool {
+	return s.PaneID != "" && !s.Assistant && s.SourceKind == "" && (s.Agent == "claude" || s.Agent == "")
+}
+
 // Unified agent states (docs/protocol/agent-states.md).
 const (
 	StateNeedsYou = "needs_you" // waiting for the user: a question, plan, permission or any TUI dialog
@@ -634,6 +644,12 @@ const (
 	NotFoundNoTranscript   = "no_transcript"
 	NotFoundUnknownSession = "unknown_session"
 )
+
+// NotRunningEngine is the data.reason of a node's not_running refusal of a message to a session that is not live in an
+// engine that cannot bring it back from the phone (node/sendsafe.go notRunningRefusal), with data.engine the engine's
+// name. The hub words it in the request's language (apierr.Call, rpc-errors.not_running_engine); a not_running without
+// it (an older node, a runtime's own answer, a resume that never came up) keeps the node's words (#17044).
+const NotRunningEngine = "engine_cannot_reopen"
 
 // CodeTurnOverBackground is session.interrupt's answer when the Escape went to a session whose turn was already over
 // and only its background work (a background command, a subagent, a workflow) keeps it Working: nothing was

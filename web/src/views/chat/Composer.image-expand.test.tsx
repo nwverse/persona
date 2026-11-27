@@ -6,6 +6,7 @@ import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { COMPOSER_INPUT } from "../../lib/dock-focus";
+import { setComposerImages } from "../../lib/composer-images";
 import { sendDraft } from "../../lib/drafts";
 import { COMPOSITION_TAIL_MS } from "../../lib/ime";
 import { loadPages } from "../../lib/lazy-page";
@@ -25,6 +26,7 @@ let root: Root;
 
 beforeAll(async () => {
   Element.prototype.scrollIntoView ??= () => {};
+  HTMLImageElement.prototype.decode ??= () => Promise.resolve();
   await loadPages();
 });
 
@@ -47,6 +49,7 @@ beforeEach(() => {
 
 afterEach(() => {
   act(() => root.unmount());
+  setComposerImages("expand-test", []);
   host.remove();
   document.body.replaceChildren();
   vi.unstubAllGlobals();
@@ -331,13 +334,58 @@ describe("Composer expanded image stage", () => {
         expect(stage()).toBeNull();
         expect(leaked).toEqual([]);
 
-        // Also test Esc when focus is on the stage toolbar's Annotate button (outside textarea)
+        // Also test Esc when focus is on an inline stage toolbar button (outside textarea)
         act(() => tileButton("ui.png").click());
         await flush();
-        const annotate = host.querySelector<HTMLButtonElement>('[data-testid="composer-image-annotate"]')!;
-        act(() => annotate.focus());
+        const boxBtn = host.querySelector<HTMLButtonElement>('[data-testid="composer-image-tool-box"]')!;
+        act(() => boxBtn.focus());
         act(() => {
-          annotate.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+          boxBtn.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+        });
+        await flush();
+        expect(stage()).toBeNull();
+        expect(leaked).toEqual([]);
+
+        // Full Esc precedence with active inline tool & open tool sub-menu:
+        // sub-menu -> composer inner overlay -> deactivate active edit tool -> collapse stage
+        act(() => tileButton("ui.png").click());
+        await flush();
+        act(() => host.querySelector<HTMLButtonElement>('[data-testid="composer-image-tool-box"]')!.click());
+        expect(stage()?.dataset.composerImageTool).toBe("box");
+
+        // Open Line width menu -> 1st Esc closes only the menu (tool stays active, stage stays open)
+        await waitUntil(() => expect(host.querySelector<HTMLButtonElement>('[data-testid="composer-image-width"]')!.disabled).toBe(false));
+        const widthBtn = host.querySelector<HTMLButtonElement>('[data-testid="composer-image-width"]')!;
+        act(() => widthBtn.click());
+        expect(document.querySelector('[role="menu"]')).not.toBeNull();
+        act(() => {
+          document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+        });
+        expect(document.querySelector('[role="menu"]')).toBeNull();
+        expect(stage()?.dataset.composerImageTool).toBe("box");
+        expect(leaked).toEqual([]);
+
+        // Composer slash palette while Box tool is active -> Esc closes only slash palette
+        act(() => inputEl().focus());
+        typeText("/co");
+        await waitUntil(() => expect(host.querySelector("[data-slash-palette]")).not.toBeNull());
+        act(() => {
+          inputEl().dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+        });
+        expect(host.querySelector("[data-slash-palette]")).toBeNull();
+        expect(stage()?.dataset.composerImageTool).toBe("box");
+
+        // Next Esc from live input deactivates Box tool (returns to preview) while keeping stage open
+        act(() => {
+          inputEl().dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+        });
+        expect(stage()?.dataset.composerImageTool).toBe("preview");
+        expect(stage()).not.toBeNull();
+        expect(leaked).toEqual([]);
+
+        // Final Esc collapses the expanded stage without leaking to ChatView's window listener
+        act(() => {
+          inputEl().dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
         });
         await flush();
         expect(stage()).toBeNull();

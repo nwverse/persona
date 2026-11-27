@@ -243,14 +243,14 @@ export class DemoRepository extends HubRepository {
     if (recentItems.length >= 2) {
       this.starredData.push(demoRecord(
         ['id', 'machine_id', 'session_id', 'item_id', 'conversation', 'role', 'title', 'speaker', 'written_at', 'starred_at', 'text'],
-        ['demo-star-1', DEMO_MACHINE, 'demo-recent-review', Wire.text(recentItems[1], 'id'), 'assistant',
+        ['demo-star-1', DEMO_MACHINE, 'demo-recent-review', Wire.text(recentItems[1], 'id'), 'assistant', 'assistant',
           'Release checklist', 'Persona', '2026-11-27T08:40:00Z', '2026-11-27T08:45:00Z', Wire.text(recentItems[1], 'text')]
       ));
     }
     if (reviewItems.length >= 4) {
       this.starredData.push(demoRecord(
         ['id', 'machine_id', 'session_id', 'item_id', 'conversation', 'role', 'title', 'speaker', 'written_at', 'starred_at', 'text'],
-        ['demo-star-2', DEMO_MACHINE, 'demo-agent-review', Wire.text(reviewItems[3], 'id'), 'agent',
+        ['demo-star-2', DEMO_MACHINE, 'demo-agent-review', Wire.text(reviewItems[3], 'id'), 'agent', 'assistant',
           'Review release checks', 'Claude', '2026-11-27T08:50:00Z', '2026-11-27T08:52:00Z', Wire.text(reviewItems[3], 'text')]
       ));
     }

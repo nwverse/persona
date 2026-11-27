@@ -1036,6 +1036,10 @@ Six parallel lanes (chat rendering, message actions, Agents list / Machines, Ter
 - Debounced drafts must flush pending writes on composer unmount, session change, and `pagehide` (#4591). Cleanup with only `clearTimeout` loses final text when switching within 250 milliseconds (chat remounts by session `key`). On the render changing `draftKey`, text is still old but key is new; write only when keys match. Clearing on send also clears the pending write.
 - Reproduce slow delivery / failure locally with mock hub `MOCK_SEND_DELAY_MS=<milliseconds>`, `MOCK_SEND_FAIL=1`.
 - Restoration must check whether the composer still belongs to that session (#4551): switching away during send remounts chat, making old `setDraft` ineffective after the saved draft was deleted; changing only `draftKey` instead puts text into another session. Restore through `sendDraft(key, { type: "unsent" })`: use that session's open composer, otherwise saved draft. Images, context, and references already followed this separation; text was missed.
+- Image previews and their original object URLs belong to the draft store across composer unmounts (#17179). A
+  confirmed refusal puts the held URLs back into the sending conversation. The IndexedDB layer saves original
+  image bytes so an edited draft can make a new source URL on reload. Fence pending reads and writes when the
+  draft or credentials change.
 
 ## Smooth, stable expansion / collapse (2026-11-04, #1124)
 
