@@ -4650,7 +4650,8 @@ export interface ConnectorThingGroup {
 }
 
 /**
- * What the thing grew out of: kind inbox (an item's id), todo (a todo's id) or session (<machine>/<session>).
+ * What the thing grew out of: kind inbox (an item's id), todo (a todo's id), session (a coding Agent's
+ * <machine>/<session>) or agent (a personal Agent's <source>:<sessionKey>).
  */
 export interface ConnectorThingParent {
   kind: string;
