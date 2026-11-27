@@ -168,7 +168,7 @@ The apps do not call the program. They call the manager, and any of the user's d
 | Method | Path | Body | Answer |
 | --- | --- | --- | --- |
 | GET | `/api/v1/text-lookup` | — | `{available, extension?, contribution?, name?, underline_saved, words}`. `available: false` (still 200) when no contribution is on, or the extension is disabled, not running or its `text_lookup.state` fails; the failure is logged |
-| POST | `/api/v1/text-lookup/lookup` | `{word, context?}` | the lookup's answer. `word` is letters, an apostrophe or a hyphen, 1 to 64 characters, Latin script; `context` is trimmed to 500 characters. `404` `text_lookup_unavailable` when no dictionary answers |
+| POST | `/api/v1/text-lookup/lookup` | `{word, context?}` | the lookup's answer. `word` is 1 to 64 Latin letters (ASCII, Latin-1 and Latin Extended-A/B, such as `café` or `naïve`; not `×` or `÷`), with an apostrophe or a hyphen only between two letters, the same rule as the web and iOS clients; `context` is trimmed to 500 characters. `404` `text_lookup_unavailable` when no dictionary answers |
 | POST | `/api/v1/text-lookup/words` | `{word, context?, source?}` | `{saved}` |
 | DELETE | `/api/v1/text-lookup/words/{word}` | — | `{saved}` |
 

@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -166,7 +168,30 @@ func TestTextLookup(t *testing.T) {
 		t.Fatalf("remove: %d %v", code, body)
 	}
 
-	for _, word := range []string{"", "context!", "123", strings.Repeat("a", 65)} {
+	// Accented Latin words are words, the same as on iOS and the web: looked up, saved and removed (the path escaped).
+	for _, word := range []string{"café", "résumé", "naïve", "Ångström", "well-known", "don't"} {
+		code, body = call(t, mux, "POST", "/api/v1/text-lookup/lookup", master, fmt.Sprintf(`{"word": %q}`, word))
+		if code != 200 || body["word"] != word {
+			t.Errorf("lookup %q: %d %v", word, code, body)
+		}
+		code, body = call(t, mux, "POST", "/api/v1/text-lookup/words", master, fmt.Sprintf(`{"word": %q}`, word))
+		if code != 200 || body["saved"] != true {
+			t.Errorf("save %q: %d %v", word, code, body)
+		}
+	}
+	code, body = call(t, mux, "GET", "/api/v1/text-lookup", master, "")
+	if words, _ := body["words"].([]any); code != 200 || !slices.Contains(words, any("café")) || !slices.Contains(words, any("naïve")) {
+		t.Fatalf("state after saving accented words: %d %v", code, body)
+	}
+	for _, word := range []string{"café", "résumé", "naïve"} {
+		code, body = call(t, mux, "DELETE", "/api/v1/text-lookup/words/"+url.PathEscape(word), master, "")
+		if code != 200 || body["saved"] != false {
+			t.Errorf("remove %q: %d %v", word, code, body)
+		}
+	}
+
+	for _, word := range []string{"", "context!", "123", "v2", "a--b", "-ab", "ab'", "单词", "слово", "a×b", "a÷b", "ab_cd", // i18n-ignore: non-Latin words must be refused
+		strings.Repeat("a", 65), strings.Repeat("é", 65)} {
 		code, body = call(t, mux, "POST", "/api/v1/text-lookup/lookup", master, fmt.Sprintf(`{"word": %q}`, word))
 		if code != 400 {
 			t.Errorf("word %q: %d %v", word, code, body)

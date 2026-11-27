@@ -24,8 +24,15 @@ const textLookupTimeout = 3 * time.Second
 // textLookupWordsMost is how many saved words one answer carries.
 const textLookupWordsMost = 5000
 
-// textLookupWord is a word the apps may look up: letters, an apostrophe and a hyphen, 1 to 64, Latin script.
-var textLookupWord = regexp.MustCompile(`^[A-Za-z](?:[A-Za-z'-]{0,62}[A-Za-z])?$`)
+// textLookupLetters are the Latin letters a word may hold, the same set as the apps (TextLookupWords.swift, word.ts):
+// ASCII, Latin-1 and Latin Extended-A/B (é, ß, ł…), not × or ÷.
+const textLookupLetters = `A-Za-z\x{00C0}-\x{00D6}\x{00D8}-\x{00F6}\x{00F8}-\x{024F}`
+
+// textLookupWord is a word the apps may look up: Latin letters, with an apostrophe or a hyphen only between two
+// letters ("don't", "well-known", "café"). textLookupWordMost bounds its length in characters, not bytes.
+var textLookupWord = regexp.MustCompile(`^[` + textLookupLetters + `]+(?:['-][` + textLookupLetters + `]+)*$`)
+
+const textLookupWordMost = 64
 
 const textLookupUnavailable = "text_lookup_unavailable"
 
@@ -124,7 +131,7 @@ type textLookupBody struct {
 // textLookupIn checks a lookup's word and trims its context to 500 characters.
 func textLookupIn(b textLookupBody) (word, around string, ok bool) {
 	word = strings.TrimSpace(b.Word)
-	if !textLookupWord.MatchString(word) {
+	if utf8.RuneCountInString(word) > textLookupWordMost || !textLookupWord.MatchString(word) {
 		return "", "", false
 	}
 	around = strings.TrimSpace(b.Context)

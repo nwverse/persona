@@ -164,3 +164,37 @@ describe("where a click resolves", () => {
     expect(savedWordRanges(text, ["hello"], { left: 0 })).toEqual([]);
   });
 });
+
+// The same Latin letters as iOS (TextLookupWords.swift) and the manager (text_lookup.go): accented words are words.
+describe("accented Latin words", () => {
+  it("accepts é, ï, Å and ß, and still refuses other scripts, digits, × and ÷", () => {
+    for (const word of ["café", "résumé", "naïve", "Ångström", "straße", "łódź", "über-cool", "l’été"]) {
+      expect(isLookupWord(word), word).toBe(true);
+    }
+    for (const word of ["слово", "单词", "café2", "a×b", "a÷b", "é", "-café", "café-"]) {
+      expect(isLookupWord(word), word).toBe(false);
+    }
+  });
+
+  it("reads the whole accented word under the caret, not its ASCII part", () => {
+    expect(wordAt("un café noir", 4)).toEqual({ start: 3, end: 7, word: "café" });
+    expect(wordAt("un café noir", 7)).toEqual({ start: 3, end: 7, word: "café" });
+    expect(wordAt("send a résumé.", 9)).toEqual({ start: 7, end: 13, word: "résumé" });
+    expect(wordAt("a naïve view", 3)).toMatchObject({ word: "naïve" });
+    // a typographic apostrophe is looked up as the plain one, as iOS sends it
+    expect(wordAt("I don’t know", 3)).toMatchObject({ word: "don't" });
+  });
+
+  it.each(["café", "résumé", "naïve"])("resolves a click on %s", (word) => {
+    layOut(word);
+    expect(resolveWord(document, 20, 10)).toEqual({ word, context: `Say ${word} there.`, range: expect.any(Range) });
+  });
+
+  it("underlines saved accented words as whole words only", () => {
+    const p = document.createElement("p");
+    p.textContent = "Café, résumé and a naïve cafés idea; résumés too.";
+    document.body.append(p);
+    const ranges = savedWordRanges(document.body, ["café", "résumé", "naïve"], { left: 5 });
+    expect(ranges.map((r) => r.toString())).toEqual(["Café", "résumé", "naïve"]);
+  });
+});

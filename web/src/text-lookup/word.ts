@@ -9,7 +9,15 @@ export const CONTEXT_MAX = 500;
 /** Long enough that the second press of a double-click arrives first and the word stays selected. */
 export const DOUBLE_CLICK_MS = 400;
 
-const WORD = /^[A-Za-z]+(?:['-][A-Za-z]+)*$/;
+/** Latin letters, the same set as iOS (TextLookupWords.swift) and the manager (text_lookup.go): ASCII, Latin-1 and
+ *  Latin Extended-A/B (é, ß, ł…), not × or ÷. JavaScript's `\b` and `\w` only know ASCII, so word edges are found
+ *  with this class, never with them. */
+const LETTERS = "A-Za-z\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u024F";
+const LETTER = new RegExp(`[${LETTERS}]`, "u");
+/** An apostrophe (straight or typographic) or a hyphen, only between two letters. */
+const WORD = new RegExp(`^[${LETTERS}]+(?:['\u2019-][${LETTERS}]+)*$`, "u");
+const WORD_CHAR = new RegExp(`[${LETTERS}'\u2019-]`, "u");
+const WORDS_IN_TEXT = new RegExp(`[${LETTERS}]+(?:['\u2019-][${LETTERS}]+)*`, "gu");
 const SENTENCE_EDGE = /[.!?\n。！？]/;
 
 export function isLookupWord(word: string): boolean {
@@ -17,7 +25,12 @@ export function isLookupWord(word: string): boolean {
 }
 
 function isWordChar(ch: string | undefined): boolean {
-  return !!ch && /[A-Za-z'-]/.test(ch);
+  return !!ch && WORD_CHAR.test(ch);
+}
+
+/** The word as the manager takes it: a typographic apostrophe becomes the plain one, as on iOS. */
+function plain(word: string): string {
+  return word.replace(/\u2019/g, "'");
 }
 
 /** The Latin word covering `offset` (a caret between characters), or null. `offset === end` is the caret just after it. */
@@ -31,11 +44,11 @@ export function wordAt(text: string, offset: number): { start: number; end: numb
   let end = i + 1;
   while (isWordChar(text[start - 1])) start--;
   while (isWordChar(text[end])) end++;
-  while (start < end && !/[A-Za-z]/.test(text[start]!)) start++;
-  while (end > start && !/[A-Za-z]/.test(text[end - 1]!)) end--;
+  while (start < end && !LETTER.test(text[start]!)) start++;
+  while (end > start && !LETTER.test(text[end - 1]!)) end--;
   if (start >= end || offset < start || offset > end) return null;
   const word = text.slice(start, end);
-  return isLookupWord(word) ? { start, end, word } : null;
+  return isLookupWord(word) ? { start, end, word: plain(word) } : null;
 }
 
 /** The sentence containing [start, end), at most `limit` characters, whitespace collapsed. */
@@ -204,7 +217,7 @@ export function contextFor(container: Element, node: Text, start: number, end: n
 
 /** Ranges of saved words in `root`. `budget.left` counts text nodes visited and stops the walk when it runs out. */
 export function savedWordRanges(root: Node, words: readonly string[], budget: { left: number }): Range[] {
-  const wanted = new Set(words.map((w) => w.toLowerCase()));
+  const wanted = new Set(words.map((w) => plain(w).toLowerCase()));
   if (!wanted.size || budget.left <= 0) return [];
   const doc = root.ownerDocument ?? (root as Document);
   const owner = root.nodeType === Node.DOCUMENT_NODE ? (root as Document) : doc;
@@ -214,7 +227,7 @@ export function savedWordRanges(root: Node, words: readonly string[], budget: { 
     },
   });
   const ranges: Range[] = [];
-  const pattern = /[A-Za-z]+(?:['-][A-Za-z]+)*/g;
+  const pattern = new RegExp(WORDS_IN_TEXT);
   const scan = (current: Text) => {
     if (budget.left <= 0) return;
     budget.left--;
@@ -223,7 +236,7 @@ export function savedWordRanges(root: Node, words: readonly string[], budget: { 
     let match: RegExpExecArray | null;
     while ((match = pattern.exec(text))) {
       const word = match[0];
-      if (!wanted.has(word.toLowerCase()) || !isLookupWord(word)) continue;
+      if (!wanted.has(plain(word).toLowerCase()) || !isLookupWord(word)) continue;
       const range = owner.createRange();
       range.setStart(current, match.index);
       range.setEnd(current, match.index + word.length);
