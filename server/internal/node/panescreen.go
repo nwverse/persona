@@ -165,8 +165,8 @@ func (n *Node) scrollback(ctx context.Context, pane string, lines int) (all []st
 		// The output's last lines are the screen's again (with blank lines the screen read leaves out): room for them.
 		want = lines + scrollbackScreenRoom
 	}
-	out, err := sb.Scrollback(ctx, ref, want)
-	if err != nil || len(out.Lines) == 0 {
+	out, dropped, err := sb.Scrollback(ctx, ref, want)
+	if err != nil || len(out) == 0 {
 		return nil, false, false
 	}
 	text, err := n.readPane(ctx, pane, "visible", 400)
@@ -177,7 +177,7 @@ func (n *Node) scrollback(ctx context.Context, pane string, lines int) (all []st
 	if strings.TrimSpace(text) != "" {
 		shown = strings.Split(strings.TrimRight(text, "\n"), "\n")
 	}
-	return aboveScreen(out.Lines, shown), out.Dropped, true
+	return aboveScreen(out, shown), dropped, true
 }
 
 // scrollbackScreenRoom: the lines of output a screen may take, asked for on top of what a caller wants (Orca's screen

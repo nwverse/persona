@@ -33,7 +33,7 @@ type Fake struct {
 	layouts     []any
 	trees       []map[string]any
 	screens     map[string]map[string]any
-	outputs     map[string]*Output
+	outputs     map[string]*output
 	status      map[string]any
 	on          map[string]func(params map[string]any) any
 	keepalive   int
@@ -77,7 +77,7 @@ func New(t testing.TB) *Fake {
 	kind, socket := Endpoint(dir)
 	f := &Fake{
 		MetaPath: filepath.Join(dir, "orca-runtime.json"), Socket: socket, Kind: kind,
-		token: "test-token-1", runtimeID: "rt-1", screens: map[string]map[string]any{}, outputs: map[string]*Output{},
+		token: "test-token-1", runtimeID: "rt-1", screens: map[string]map[string]any{}, outputs: map[string]*output{},
 		on: map[string]func(map[string]any) any{}, agentStatus: map[string]map[string]any{}, revisions: map[string]int{},
 		status: map[string]any{"appVersion": "1.4.245", "runtimeProtocolVersion": 3, "minCompatibleRuntimeClientVersion": 2,
 			"protocolVersion": 3, "capabilities": []string{"terminal.prompt-delivery.v1"}},
@@ -813,25 +813,34 @@ func (f *Fake) SetScreenRows(handle string, lines []string, wrapped []bool) {
 	f.mu.Unlock()
 }
 
-// Output is what a terminal's program wrote, as Orca keeps it (terminal.read without screen).
-type Output struct {
-	// Tail is the output tail: the newest lines, rows redrawn in place as they ended, the line being written last.
-	Tail []string
-	// TailTruncated: Orca let older lines of the tail go.
-	TailTruncated bool
-	// Log is every completed line, redrawn rows each time, oldest kept first; Total counts all the completed lines
-	// ever written (the cursor after the newest), so the oldest kept is Total-len(Log).
-	Log   []string
-	Total int
-	// NoCursor answers as an Orca without cursor reads: no cursors, a cursor ignored.
-	NoCursor bool
+// output is what a terminal's program wrote, as Orca keeps it (terminal.read without screen).
+type output struct {
+	// tail is the output tail: the newest lines, rows redrawn in place as they ended, the line being written last.
+	tail          []string
+	tailTruncated bool
+	// log is every completed line, redrawn rows each time, oldest kept first; total counts all the completed lines
+	// ever written (the cursor after the newest), so the oldest kept is total-len(log).
+	log   []string
+	total int
+	// noCursor answers as an Orca without cursor reads: no cursors, a cursor ignored.
+	noCursor bool
 }
 
-// SetOutput sets what terminal.read without screen answers for a handle: the tail, and the log a cursor pages. A
-// handle without one answers a tail read with the screen, as Orca does for a program on the alternate screen.
-func (f *Fake) SetOutput(handle string, o Output) {
+// SetOutput sets what terminal.read without screen answers for a handle: tail is the output tail (the newest lines,
+// rows redrawn in place as they ended, the line being written last; truncated: Orca let older lines of it go), log
+// every completed line, redrawn rows each time, oldest kept first, and total the count of every completed line ever
+// written (the cursor after the newest; the oldest kept is total-len(log)). A handle without output answers a tail read
+// with the screen, as Orca does for a program on the alternate screen.
+func (f *Fake) SetOutput(handle string, tail []string, truncated bool, log []string, total int) {
 	f.mu.Lock()
-	f.outputs[handle] = &o
+	f.outputs[handle] = &output{tail: tail, tailTruncated: truncated, log: log, total: total}
+	f.mu.Unlock()
+}
+
+// SetOldOutput sets a handle's output tail as an Orca without cursor reads answers it: no cursors, a cursor ignored.
+func (f *Fake) SetOldOutput(handle string, tail []string) {
+	f.mu.Lock()
+	f.outputs[handle] = &output{tail: tail, noCursor: true}
 	f.mu.Unlock()
 }
 
@@ -855,26 +864,26 @@ func (f *Fake) readOutputLocked(h string, p map[string]any) map[string]any {
 		}
 		return def
 	}
-	oldest, latest := max(0, o.Total-len(o.Log)), o.Total
+	oldest, latest := max(0, o.total-len(o.log)), o.total
 	out := map[string]any{"handle": h, "status": "running", "source": "stream"}
-	if !o.NoCursor {
+	if !o.noCursor {
 		out["oldestCursor"], out["nextCursor"], out["latestCursor"] = fmt.Sprint(oldest), fmt.Sprint(latest), fmt.Sprint(latest)
 	}
-	if c, ok := p["cursor"].(float64); ok && !o.NoCursor {
+	if c, ok := p["cursor"].(float64); ok && !o.noCursor {
 		cursor := int(c)
 		if cursor > latest {
 			out["tail"], out["truncated"], out["limited"] = []string{}, false, false
 			return out
 		}
 		from := max(cursor, oldest)
-		rest := o.Log[from-oldest:]
+		rest := o.log[from-oldest:]
 		lines := rest[:min(len(rest), limit(2000))]
 		out["tail"], out["truncated"], out["limited"] = slices.Clone(lines), cursor < oldest, len(lines) < len(rest)
 		out["nextCursor"] = fmt.Sprint(from + len(lines))
 		return out
 	}
-	lines := slices.Clone(o.Tail[max(0, len(o.Tail)-limit(120)):])
-	limited := len(lines) < len(o.Tail)
+	lines := slices.Clone(o.tail[max(0, len(o.tail)-limit(120)):])
+	limited := len(lines) < len(o.tail)
 	chars := 0
 	for _, l := range lines {
 		chars += len(l)
@@ -886,7 +895,7 @@ func (f *Fake) readOutputLocked(h string, p map[string]any) map[string]any {
 	if chars > 32768 {
 		lines[0], limited = lines[0][chars-32768:], true
 	}
-	out["tail"], out["truncated"], out["limited"] = lines, o.TailTruncated, limited
+	out["tail"], out["truncated"], out["limited"] = lines, o.tailTruncated, limited
 	return out
 }
 

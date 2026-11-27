@@ -228,36 +228,35 @@ func TestRead(t *testing.T) {
 }
 
 // The output tail is the read without screen or cursor; the log pages by cursor, from the oldest line Orca keeps when
-// the cursor is older. An Orca that answers without cursors reads none.
-func TestReadTailAndOutput(t *testing.T) {
+// the cursor is older. An Orca that answers without cursors reads no log.
+func TestReadTailAndLog(t *testing.T) {
 	f := orcarttest.New(t)
 	f.SetTerminals(orcarttest.Terminal("term_1", "tab1", "leaf1", "wt1", "/tmp/p", "", "x", "claude"))
 	log := make([]string, 0, 2000)
 	for i := 501; i <= 2500; i++ {
 		log = append(log, fmt.Sprintf("line-%d", i))
 	}
-	f.SetOutput("term_1", orcarttest.Output{Tail: append(slices.Clone(log), "$ "), TailTruncated: true, Log: log, Total: 2500})
+	f.SetOutput("term_1", append(slices.Clone(log), "$ "), true, log, 2500)
 	c := client(f, nil)
 	ctx := context.Background()
 	tg := orcart.Target{Handle: "term_1", Incarnation: "inc-term_1"}
-	tail, err := c.ReadTail(ctx, tg, 5)
+	tail, truncated, limited, source, err := c.ReadTail(ctx, tg, 5)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"line-2497", "line-2498", "line-2499", "line-2500", "$ "}; !slices.Equal(tail.Lines, want) ||
-		!tail.Truncated || !tail.Limited || tail.Source != "stream" {
-		t.Errorf("tail = %+v", tail)
+	if want := []string{"line-2497", "line-2498", "line-2499", "line-2500", "$ "}; !slices.Equal(tail, want) ||
+		!truncated || !limited || source != "stream" {
+		t.Errorf("tail = %q truncated %v limited %v source %q", tail, truncated, limited, source)
 	}
-	out, err := c.ReadOutput(ctx, tg, 0, 3)
+	lines, oldest, err := c.ReadLog(ctx, tg, 0, 3)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"line-501", "line-502", "line-503"}; !slices.Equal(out.Lines, want) || out.Oldest != 500 ||
-		out.Next != 503 || out.Latest != 2500 {
-		t.Errorf("output = %+v", out)
+	if want := []string{"line-501", "line-502", "line-503"}; !slices.Equal(lines, want) || oldest != 500 {
+		t.Errorf("log = %q from %d", lines, oldest)
 	}
-	if out, err := c.ReadOutput(ctx, tg, 1<<53, 10); err != nil || len(out.Lines) != 0 || out.Latest != 2500 {
-		t.Errorf("past the newest: %+v, %v", out, err)
+	if lines, _, err := c.ReadLog(ctx, tg, 1<<53, 10); err != nil || len(lines) != 0 {
+		t.Errorf("past the newest: %q, %v", lines, err)
 	}
 	if got := f.Trace("terminal.read"); !slices.Equal(got, []string{
 		`terminal.read {"limit":5,"terminal":"term_1"}`,
@@ -269,8 +268,8 @@ func TestReadTailAndOutput(t *testing.T) {
 	if inv := f.Invalid(); len(inv) != 0 {
 		t.Errorf("invalid requests: %v", inv)
 	}
-	f.SetOutput("term_1", orcarttest.Output{Tail: []string{"$ "}, NoCursor: true})
-	if _, err := c.ReadOutput(ctx, tg, 0, 10); !errors.Is(err, orcart.ErrNoCursor) {
+	f.SetOldOutput("term_1", []string{"$ "})
+	if _, _, err := c.ReadLog(ctx, tg, 0, 10); !errors.Is(err, orcart.ErrNoCursor) {
 		t.Errorf("no cursors: %v", err)
 	}
 }

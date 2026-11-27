@@ -34,48 +34,49 @@ func (h *orcaHost) ScreenRefresh() time.Duration { return orcaScreenRefresh }
 
 // Scrollback is Orca's output tail for the pane, reaching further back through its log when the tail holds more than
 // one read sends and the log agrees with it.
-func (h *orcaHost) Scrollback(ctx context.Context, pane host.PaneRef, lines int) (host.Scrollback, error) {
+func (h *orcaHost) Scrollback(ctx context.Context, pane host.PaneRef, lines int) ([]string, bool, error) {
 	limit := lines
 	if lines <= 0 || lines > orcart.TailLimit {
 		limit = orcart.TailLimit
 	}
 	t, err := h.terminal(ctx, pane.ID, false)
 	if err != nil {
-		return host.Scrollback{}, orcaErr(err)
+		return nil, false, orcaErr(err)
 	}
-	var tail *orcart.Tail
+	var tail []string
+	var truncated, limited bool
+	var source string
 	var tg orcart.Target
 	err = h.onTerminal(ctx, t, false, func(target orcart.Target) error {
 		var e error
-		tail, e = h.c.ReadTail(ctx, target, limit)
+		tail, truncated, limited, source, e = h.c.ReadTail(ctx, target, limit)
 		tg = target
 		return e
 	})
 	if err != nil {
-		return host.Scrollback{}, orcaErr(err)
+		return nil, false, orcaErr(err)
 	}
-	if tail.Source == "screen" {
-		return host.Scrollback{}, nil // the alternate screen: nothing is above it
+	if source == "screen" {
+		return nil, false, nil // the alternate screen: nothing is above it
 	}
-	sb := host.Scrollback{Lines: tail.Lines, Dropped: tail.Truncated || tail.Limited}
-	if !tail.Limited || len(tail.Lines) >= limit {
-		return sb, nil
+	if !limited || len(tail) >= limit {
+		return tail, truncated || limited, nil
 	}
 	// One read sent less than Orca keeps (32 KiB): the log, where it lines up with the tail, goes further back.
 	// An Orca without cursor reads (orcart.ErrNoCursor), or one failing now (the client logs that), leaves the tail.
-	log, err := h.c.ReadOutput(ctx, tg, 0, orcart.TailLimit)
+	log, oldest, err := h.c.ReadLog(ctx, tg, 0, orcart.TailLimit)
 	if err != nil {
-		return sb, nil
+		return tail, true, nil
 	}
-	if at := joinOrcaLog(log.Lines, tail.Lines); at >= 0 {
-		older := log.Lines[:at]
-		if room := lines - (len(tail.Lines) - 1); lines > 0 && len(older) > room {
-			older = older[len(older)-max(room, 0):]
-		}
-		sb.Lines = append(append([]string{}, older...), tail.Lines[1:]...)
-		sb.Dropped = log.Oldest > 0 || len(older) < at
+	at := joinOrcaLog(log, tail)
+	if at < 0 {
+		return tail, true, nil
 	}
-	return sb, nil
+	older := log[:at]
+	if room := lines - (len(tail) - 1); lines > 0 && len(older) > room {
+		older = older[len(older)-max(room, 0):]
+	}
+	return append(append([]string{}, older...), tail[1:]...), oldest > 0 || len(older) < at, nil
 }
 
 // joinOrcaLog is where in log the tail's second line is (its first may be cut at the read's size limit), -1 when the

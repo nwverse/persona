@@ -5,8 +5,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-
-	"github.com/nwverse/persona/server/internal/orcart/orcarttest"
 )
 
 // Scrolling up on an Orca terminal (#17048): what the client shows above the screen comes from Orca's output tail and,
@@ -36,7 +34,7 @@ func orcaBefore(t *testing.T, n *Node, anchor []string, lines, loaded int) map[s
 func TestOrcaScrollbackPagesTheTailAboveTheScreen(t *testing.T) {
 	n, o, _ := orcaSession(t)
 	tail := append(orcaLines(1, 40, "out %d"), "", "out 41", "out 42", "$ ")
-	o.SetOutput("term_1", orcarttest.Output{Tail: tail, Log: tail[:len(tail)-1], Total: len(tail) - 1})
+	o.SetOutput("term_1", tail, false, tail[:len(tail)-1], len(tail)-1)
 	o.SetScreen("term_1", strings.Join(append(orcaLines(31, 40, "out %d"), "out 41", "out 42", "$"), "\n")+"\n")
 
 	got := orcaBefore(t, n, []string{"out 31", "out 32"}, 20, 13)
@@ -73,7 +71,7 @@ func TestOrcaScrollbackReachesBackThroughTheLog(t *testing.T) {
 	n, o, _ := orcaSession(t)
 	pad := strings.Repeat("x", 60)
 	log := orcaLines(501, 2500, "line %d "+pad)
-	o.SetOutput("term_1", orcarttest.Output{Tail: append(slices.Clone(log), "$ "), TailTruncated: true, Log: log, Total: 2500})
+	o.SetOutput("term_1", append(slices.Clone(log), "$ "), true, log, 2500)
 	o.SetScreen("term_1", strings.Join(append(orcaLines(2481, 2500, "line %d "+pad), "$"), "\n")+"\n")
 
 	loaded := 21
@@ -115,7 +113,11 @@ func TestOrcaScrollbackLeavesARedrawnLogOut(t *testing.T) {
 			tail = append(tail, fmt.Sprintf("said %d %s", i, pad))
 		}
 		tail = append(tail, "spinner 399", "> ")
-		o.SetOutput("term_1", orcarttest.Output{Tail: tail, Log: log, Total: len(log), NoCursor: noCursor})
+		if noCursor {
+			o.SetOldOutput("term_1", tail)
+		} else {
+			o.SetOutput("term_1", tail, false, log, len(log))
+		}
 		o.SetScreen("term_1", fmt.Sprintf("said 399 %s\nspinner 399\n>\n", pad))
 		got := orcaBefore(t, n, []string{"said 399 " + pad}, 500, 3)
 		rows := strings.Split(str(got["text"]), "\n")

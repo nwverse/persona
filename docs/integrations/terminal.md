@@ -1218,4 +1218,4 @@ under 1 % of one core more (Orca and the node together). Each read is also one r
   through the log to the oldest kept line, `dropped`; a log of redraws left out, also on an Orca without cursor reads;
   the alternate screen as before; `refresh_ms` for Orca and not herdr; where the screen begins in the output). The fake
   runtime (`orcarttest`) answers tail and cursor reads as Orca 1.4.277 does, its 32 KiB cut included.
-- `orcart`: `TestReadTailAndOutput`. Web: `lib/terminal.test.ts` ("history anchor", "poll pace").
+- `orcart`: `TestReadTailAndLog`. Web: `lib/terminal.test.ts` ("history anchor", "poll pace").

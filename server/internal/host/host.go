@@ -93,17 +93,10 @@ type PlainScreen interface {
 // its screen, which is what the pane shows.
 type Scrollbacker interface {
 	// Scrollback is up to lines (0: all it has) of the pane's output, oldest first, ending with what the program writes
-	// now; rows it redrew in place appear as they ended. Empty when nothing is above the screen (a program on the
-	// alternate screen).
-	Scrollback(ctx context.Context, pane PaneRef, lines int) (Scrollback, error)
-}
-
-// Scrollback is a pane's earlier output (Scrollbacker).
-type Scrollback struct {
-	Lines []string
-	// Dropped: the pane wrote output older than Lines[0] that is not available: the host let it go, or keeps it only
-	// in a form that does not line up with Lines.
-	Dropped bool
+	// now; rows it redrew in place appear as they ended. None when nothing is above the screen (a program on the
+	// alternate screen). dropped: the pane wrote output older than the first line that is not available: the host let
+	// it go, or keeps it only in a form that does not line up with these lines.
+	Scrollback(ctx context.Context, pane PaneRef, lines int) (output []string, dropped bool, err error)
 }
 
 // QuickScreen is a host whose screen read is cheap enough to repeat several times a second while someone watches a
