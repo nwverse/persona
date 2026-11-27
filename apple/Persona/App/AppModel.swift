@@ -44,6 +44,10 @@ final class AppModel {
     var config: ServerConfig? { hub?.config }
     /// Persona's looks (docs/apple/persona.md): the chosen one, what the hub offers, the packages on the phone.
     let personas: PersonaStore
+    /// Word lookup through a `text_lookup` extension (#10977, docs/apple/ios.md "Word lookup (text_lookup)"): inert until
+    /// the hub-level hub says one answers.
+    @ObservationIgnored private(set) lazy var textLookup = TextLookupModel(deps: .init(
+        api: { [weak self] in self?.api }, features: { [weak self] in self?.hubFeatures ?? [] }))
     /// Which paths conversations mention are there on their machines (only those are linked).
     let filePresence = FilePresence()
     /// Which machine ports links point at are listening (docs/operations/ports.md).
@@ -3372,6 +3376,8 @@ final class AppModel {
             // Whether this hub lists one manager's sessions may have come with this hello (`sessions_manager`).
             Task { await sessionLists.rescope(group, model: self) }
             if isHub { PersonalAgentSync.shared.received([]) }
+            // Whether words can be looked up may have changed while the socket was down, or with this hello's features.
+            if isHub { textLookup.refresh() }
             // The direction tree changes while the socket is down: read it again on every (re)connect (#4352).
             if isHub, let hubAPI = api { Task { await refreshDirectionTree(hubAPI) } }
             // Its features say again whether this hub's filing routes are there (#11516), whichever hub is picked now; a
@@ -3493,6 +3499,8 @@ final class AppModel {
             #if os(iOS)
             if isHub { StarredStore.shared.invalidate(manager: manager) }
             #endif
+        case .textLookupChanged:
+            if isHub { textLookup.refresh() }
         case .personas:
             // The new tier's package is downloaded whole before the face changes. The list changed
             // just now: a refresh already under way may have asked before, so it is read again after that one (#2405).
@@ -3505,6 +3513,7 @@ final class AppModel {
         case .managers:
             // Settings › Managers reads the roster again (ManagersView watches this).
             if isHub { managersRevision += 1 }
+            if isHub { textLookup.refresh() }
             Task { await refreshManagerRoster(group) }
         case .directions:
             // The direction tree changed (#4352): read it again. Its answer is the default manager's alone, so another
@@ -3546,6 +3555,8 @@ final class AppModel {
             // counts only for the copy of the manager that sent it.
             op.manager = pushedBy(manager)
             if isHub { ExtensionOperations.shared.received(op) }
+            // An install, upgrade or uninstall that ended may add or take away the lookup extension.
+            if isHub, !op.isActive { textLookup.refresh() }
         case .extensionAuth(let id, let auth, let manager):
             if isHub { ExtensionAuthStore.shared.received(id, auth, manager: pushedBy(manager)) }
         case .pluginBadge(let plugin, let id, let badge, let manager):
@@ -3553,6 +3564,7 @@ final class AppModel {
             if isHub, pushedBy(manager) == nil { ExtensionSlots.shared.received(plugin: plugin, id: id, badge: badge) }
         case .extensionInvalidate(let ext, let id):
             ExtensionUIRegistry.shared.invalidate(extension: ext, ui: id, group: group)
+            if isHub, ext == textLookup.state.extensionID { textLookup.refresh() }
             if ext == SubscriptionsUI.id { SubscriptionsRefresh.shared.changed() } // the entry rows' counts
             ExtensionWidgetReconciliation.invalidate(group: group, owner: ext, contribution: id)
         #if os(iOS)
@@ -3679,6 +3691,7 @@ final class AppModel {
         case .todos: "todos"
         case .savedPrompts: "assistant_saved_prompts"
         case .starredMessages: "assistant_starred"
+        case .textLookupChanged: "text_lookup_changed"
         case .personas: "personas"
         case .look: "look"
         case .managers: "managers"
@@ -5224,6 +5237,7 @@ final class AppModel {
             assistantConfig = heldAssistant(g)
         }
         directionTree = nil // the other hub's to-dos and sessions; `refreshAssistant` below reads this one's
+        textLookup.reset() // the other hub's lookup extension, or none; nothing of the last hub's carries over
         outsideDirections = [:]
         outsideDirectionFallback = [:]
         directionTreeLanded = directionTreeAsk // and a read already under way answers for the other one

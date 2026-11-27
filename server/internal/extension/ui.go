@@ -249,6 +249,10 @@ type SecretProviderItem = wire.SecretProviderItem
 // (docs/extensions/repository-providers.md).
 type RepositoryProviderItem = wire.RepositoryProviderItem
 
+// TextLookupItem is a contribution to text_lookup: a dictionary the apps ask for a word the user taps
+// (docs/extensions/extensions.md "Looking up a word").
+type TextLookupItem = wire.TextLookupItem
+
 // RepositoryLinkLabel is what a repository provider calls one kind of its links (wire.RepositoryLinkKinds), "MR" for a
 // pull_request: it only relabels.
 type RepositoryLinkLabel = wire.RepositoryLinkLabel
