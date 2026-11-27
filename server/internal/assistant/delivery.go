@@ -129,7 +129,7 @@ func unblockOf(s, gate string) string {
 	}
 }
 
-var defaultOffGate = lazyre.New(`(?i)默认关|默认关闭|off by default|disabled by default|default.off|既定でオフ|デフォルトでオフ`)                               // i18n-ignore: matches reported feature-gate evidence
+var defaultOffGate = lazyre.New(`(?i)默认关|默认关闭|off by default|disabled by default|default\.off|既定でオフ|デフォルトでオフ`)                              // i18n-ignore: matches reported feature-gate evidence
 var negatedDefaultOffGate = lazyre.New(`(?i)(?:not|never|no longer) (?:off|disabled) by default|(?:没有|并非|不是|不再)默认关|既定でオフではない|デフォルトでオフではない`) // i18n-ignore: matches negated feature-gate evidence
 
 func hasDefaultOffGate(text string) bool {

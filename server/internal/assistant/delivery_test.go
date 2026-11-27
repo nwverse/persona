@@ -231,3 +231,17 @@ func TestDefaultOffGateDoesNotTreatNegationAsEvidence(t *testing.T) {
 		}
 	}
 }
+
+func TestDefaultOffGateRequiresLiteralDot(t *testing.T) {
+	if !hasDefaultOffGate("Feature is default.off") {
+		t.Fatal("literal default.off gate was rejected")
+	}
+	gate := "The default office location needs review"
+	if hasDefaultOffGate(gate) {
+		t.Fatalf("unrelated text accepted as default-off evidence: %q", gate)
+	}
+	title := verdictText(i18n.ZhHans, &acceptAsk{}, &TodoDelivery{State: deliveryOff, Gate: gate})
+	if strings.Contains(title, "默认关着") {
+		t.Fatalf("unsupported default-off claim in title: %q", title)
+	}
+}
