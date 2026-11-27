@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -75,6 +76,127 @@ func withEventHub(t testing.TB, n *Node) *eventHub {
 	go func() { _ = peer.Serve(ctx, h2nR) }()
 	t.Cleanup(func() { cancel(); _ = n2hW.Close(); _ = h2nW.Close() })
 	return h
+}
+
+func TestCCPluginServesManualClaudePanes(t *testing.T) {
+	for _, tc := range []struct{ kind, env, pane string }{
+		{host.Herdr, herdrPaneEnv, "w1:p1"},
+		{host.HerdrCore, herdrCorePaneEnv, "t1"},
+		{host.Orca, orcaPaneEnv, "p1"},
+		{host.Tern, ternPaneEnv, "42"},
+		{host.Rex, rexPaneEnv, "block:test"},
+		{host.Tmux, "", "main:@1.%1"},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			n, _, _ := herdrNode(t)
+			oldEnv, oldArgv := paneEnvOfPID, processArgv
+			paneEnvOfPID = func(int) map[string]string { return map[string]string{tc.env: tc.pane} }
+			processArgv = func(int) ([]string, error) { return []string{"claude"}, nil }
+			t.Cleanup(func() { paneEnvOfPID, processArgv = oldEnv, oldArgv })
+			c := claudeProc{pid: os.Getpid(), SessionID: sidA, Kind: "interactive", Entrypoint: "cli"}
+			if tc.kind == host.Tmux {
+				c.Tmux = tc.pane
+				if outsidePane(c) == "" {
+					t.Fatal("fixture has no external tmux pane")
+				}
+			} else {
+				refs := n.enginePaneRefs(paneEnvOfPID(c.pid))
+				if len(refs) != 1 {
+					t.Fatalf("pane refs = %v", refs)
+				}
+				n.hostAgents = map[string][]host.Agent{tc.kind: {{Agent: "claude", PaneID: refs[0]}}}
+				if n.outsideSource(c) != "" {
+					t.Fatal("fixture must belong to an engine pane")
+				}
+			}
+			if !ccPluginServes(n, c) || !n.ccPluginServesPermissions(c) {
+				t.Fatal("manual Claude without Persona hooks was refused")
+			}
+			processArgv = func(int) ([]string, error) {
+				return []string{"claude", "--plugin-dir", filepath.Join(n.dir, "claude-hooks")}, nil
+			}
+			wantServes := n.outsideSource(c) != ""
+			if ccPluginServes(n, c) != wantServes || n.ccPluginServesPermissions(c) {
+				t.Fatal("managed hooks did not exclude the new service path and permission bridge")
+			}
+			processArgv = func(int) ([]string, error) { return []string{"claude"}, nil }
+			if !n.ccPluginServesPermissions(c) {
+				t.Fatal("manual Claude did not regain authorization after removing hook argv")
+			}
+			n.ccPlugins.notePersonaHook(c.SessionID, c.pid)
+			if ccPluginServes(n, c) != wantServes || n.ccPluginServesPermissions(c) {
+				t.Fatal("observed Persona hook did not revoke plugin authorization")
+			}
+		})
+	}
+}
+
+func TestCCPluginServesSessionGuards(t *testing.T) {
+	n, _, _ := herdrNode(t)
+	for _, c := range []claudeProc{
+		{SessionID: sidA, Kind: "bg", Spare: true},
+		{SessionID: sidA, Kind: "interactive", ParkedJobID: "job"},
+		{SessionID: "../invalid", Kind: "interactive"},
+		{Kind: "interactive"},
+		{SessionID: sidA, Kind: "unknown"},
+	} {
+		if ccPluginServes(n, c) || n.ccPluginServesPermissions(c) {
+			t.Fatalf("ineligible Claude was served: %+v", c)
+		}
+	}
+	for _, kind := range []string{"", "interactive", "bg"} {
+		c := claudeProc{SessionID: sidA, Kind: kind}
+		if !ccPluginServes(n, c) || !n.ccPluginServesPermissions(c) {
+			t.Fatalf("eligible kind %q was refused", kind)
+		}
+	}
+	n.procs[sidA] = &assistantProc{id: sidA}
+	if c := (claudeProc{SessionID: sidA, Kind: "interactive"}); ccPluginServes(n, c) || n.ccPluginServesPermissions(c) {
+		t.Fatal("Assistant admitted by the manual-session fallback")
+	}
+}
+
+func TestCCPluginTmuxPersonaHookRevokesActivePermission(t *testing.T) {
+	n, f, home := herdrNode(t)
+	noPaneEnv(t)
+	oldArgv := processArgv
+	processArgv = func(int) ([]string, error) { return []string{"claude"}, nil }
+	t.Cleanup(func() { processArgv = oldArgv })
+	h := withEventHub(t, n)
+	bgTranscript(t, home, home, sidA, "default")
+	writeOutsideClaude(t, home, sidA, "cli", "waiting", nil, map[string]any{"tmux": "main:@1.%1"})
+	f.reply("session.snapshot", snapshot(nil, nil, nil, nil))
+	c := pluginSocket(t, n)
+	status, out := pluginPost(t, c, "poll", map[string]any{
+		"session_id": sidA, "capabilities": []string{"permissions"}, "wait_ms": 50,
+	})
+	if status != http.StatusOK || out["permissions"] != true || !n.ccPluginPermissionsCapable(sidA, os.Getpid()) {
+		t.Fatalf("tmux permission authorization: %d %v", status, out)
+	}
+	req := map[string]any{
+		"session_id": sidA, "req_id": "req-tmux", "tool_name": "Bash",
+		"tool_input": map[string]any{"command": "ls"}, "wait_ms": 50,
+	}
+	status, out = pluginPost(t, c, "permission", req)
+	if status != http.StatusOK || out["action"] != "renew" {
+		t.Fatalf("tmux permission card: %d %v", status, out)
+	}
+	waitFor(t, "tmux plugin card published", func() bool { asked, _, _ := h.counts(); return asked == 1 })
+	n.ccPlugins.notePersonaHook(sidA, os.Getpid())
+	if n.ccPluginPermissionsCapable(sidA, os.Getpid()) || n.ccPlugins.hasActivePermission(sidA) {
+		t.Fatal("Persona hook left plugin authorization or an active card")
+	}
+	waitFor(t, "Persona hook cancels plugin card", func() bool {
+		asked, cancelled, dismissed := h.counts()
+		return asked == 1 && cancelled == 1 && dismissed == 0
+	})
+	status, out = pluginPost(t, c, "permission", req)
+	if status != http.StatusOK || out["action"] != "passthrough" {
+		t.Fatalf("permission after Persona hook takeover: %d %v", status, out)
+	}
+	if asked, _, _ := h.counts(); asked != 1 {
+		t.Fatal("Persona hook takeover created a duplicate card")
+	}
 }
 
 func TestCCPluginPollAuthorizesPermissionsAndBlocksPersonaHooks(t *testing.T) {
@@ -203,7 +325,8 @@ func TestCCPluginPollAuthorizesPermissionsAndBlocksPersonaHooks(t *testing.T) {
 		t.Fatalf("managed hook /permission: %d %v (cards=%d)", status, out, len(fh.interactions()))
 	}
 
-	// External tmux session keeps tmux screen cards instead of plugin permissions (avoids scr_ + ix_ double cards).
+	// External tmux without managed hooks can bridge permissions through the plugin.
+	processArgv = func(int) ([]string, error) { return []string{"claude"}, nil }
 	writeOutsideClaude(t, home, sidB, "cli", "waiting", inbox, map[string]any{"tmux": "main:@1.%1"})
 	status, out = pluginPost(t, c, "poll", map[string]any{
 		"session_id":     sidB,
@@ -211,9 +334,10 @@ func TestCCPluginPollAuthorizesPermissionsAndBlocksPersonaHooks(t *testing.T) {
 		"capabilities":   []string{"busy_input", "interrupt", "settings", "permissions"},
 		"wait_ms":        50,
 	})
-	if status != http.StatusOK || out["permissions"] == true {
-		t.Fatalf("external tmux /poll got permissions: %d %v", status, out)
+	if status != http.StatusOK || out["permissions"] != true {
+		t.Fatalf("external tmux /poll denied permissions: %d %v", status, out)
 	}
+	n.ccPlugins.notePersonaHook(sidB, os.Getpid())
 	status, out = pluginPost(t, c, "permission", map[string]any{
 		"session_id": sidB,
 		"req_id":     "req-blocked-tmux",

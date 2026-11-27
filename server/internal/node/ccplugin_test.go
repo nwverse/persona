@@ -282,7 +282,7 @@ func TestCCPluginFallsBackToTheInbox(t *testing.T) {
 }
 
 // The node hands a session's messages only to the claude that has it open: a poll naming another session is refused,
-// and a claude the node does not deliver to this way (one an SDK runs) is told to come back much later.
+// and an interactive claude without Persona hooks can poll regardless of its entrypoint.
 func TestCCPluginPollsAreTheSessionsOwn(t *testing.T) {
 	n, f, home := herdrNode(t)
 	noPaneEnv(t)
@@ -308,7 +308,7 @@ func TestCCPluginPollsAreTheSessionsOwn(t *testing.T) {
 
 	writeOutsideClaude(t, home, sidA, "sdk-ts", "idle", nil, nil)
 	status, out = pluginPost(t, c, "poll", map[string]any{"session_id": sidA, "wait_ms": 100})
-	if status != http.StatusOK || out["retry_ms"] != float64(ccPluginOtherRetry.Milliseconds()) {
+	if status != http.StatusOK || out["retry_ms"] != nil {
 		t.Errorf("an SDK's claude: %d %v", status, out)
 	}
 }
