@@ -355,10 +355,13 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				s.Capabilities = caps
 			}
 			hasRuntimeRow := false
+			var runtimeLastText string
+			var runtimeUpdatedAt time.Time
 			if runtimeID := agyRuntimeIDs[id]; runtimeID != "" {
 				seen[runtimeID] = true
 				if runtimeRow, ok := n.runtimes.agyPaneRuntimeRow(runtimeID); ok {
 					hasRuntimeRow = true
+					runtimeLastText, runtimeUpdatedAt = runtimeRow.LastText, runtimeRow.UpdatedAt
 					if s.Model == "" {
 						s.Model = runtimeRow.Model
 					}
@@ -392,6 +395,13 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				u, readable := n.agyTranscriptMeta(conversation)
 				if readable {
 					n.applyAgyTurnEvidence(&s, conversation, u.turn)
+					transcriptAt := u.turn.replyAt
+					if transcriptAt.IsZero() {
+						transcriptAt = u.modTime
+					}
+					if u.turn.lastText != "" && runtimeLastText != "" && runtimeUpdatedAt.After(transcriptAt) {
+						s.LastText = runtimeLastText
+					}
 				}
 				if hasRuntimeRow {
 					n.resolveAgyContext(&s, agyConversations[id])

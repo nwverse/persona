@@ -835,6 +835,18 @@ func TestAgyPaneUpdatedAtFromRuntimeAndTranscript(t *testing.T) {
 			if !r.UpdatedAt.Equal(newerAt) || r.LastText != "Latest reply" {
 				t.Fatalf("pane with runtime = updated:%v lastText:%q, want %v / %q", r.UpdatedAt, r.LastText, newerAt, "Latest reply")
 			}
+
+			// A companion snapshot older than the transcript cannot replace the locally verified reply.
+			olderRow := proto.Session{SessionID: agyAgent + "-" + agyTestID, Agent: agyAgent, Cwd: home,
+				Status: proto.StatusWorking, UpdatedAt: transcriptAt.Add(-time.Minute), LastText: "Older runtime reply"}
+			n.runtimes.setSessions(runtime, []proto.Session{olderRow})
+			if got := findPane(); got.LastText != "Hi there" {
+				t.Fatalf("older runtime reply won over transcript: %q", got.LastText)
+			}
+			n.runtimes.setSessions(runtime, []proto.Session{
+				{SessionID: agyAgent + "-" + agyTestID, Agent: agyAgent, Cwd: home, Status: proto.StatusWorking, UpdatedAt: newerAt, LastText: "Latest reply"},
+				{SessionID: agyAgent + "-older-companion", Agent: agyAgent, Cwd: home, Status: proto.StatusDone, UpdatedAt: olderAt, LastText: "Old reply"},
+			})
 		}
 		if r.SessionID == agyAgent+"-older-companion" {
 			olderIdx = i
