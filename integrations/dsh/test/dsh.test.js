@@ -1389,6 +1389,248 @@ test('a gated command in an assistant conversation\'s shell is stopped; elsewher
   assert.equal((await pre('session-other', 'ex GET /me')).kind, 'allow')
 })
 
+test('assistant shell gates block obfuscated shell invocations, subagents, and uncheckable commands', async (t) => {
+  const gated = { name: 'example_api', description: 'Example', input_schema: { type: 'object' }, shell: ['ex', 'example/scripts/ex.sh'] }
+  const { n, ctl, ev, rt } = await setup(t, { assistant: true, registerTool: () => () => {}, tools: [gated] })
+  ctl.add('session-asst', { cwd: '/home/u/.persona/assistant' })
+  rt.start()
+  await n.ready
+  await until('listed', () => n.last('runtime.sessions'))
+  await rt.refreshTools()
+
+  const pre = (payload) => ev.waterfall('tools/pre-execute', payload, () => ({ kind: 'allow' }))
+  const asstAgent = { session: { id: 'session-asst' } }
+
+  for (const command of [
+    '/usr/local/bin/ex GET /me',
+    './ex GET /me',
+    'ex;echo hi',
+    'ex|cat',
+    'ex&&id',
+    'echo $(ex)',
+    'echo `ex`',
+    '"ex" GET /me',
+    "'ex' GET /me",
+    '\\ex GET /me',
+    'e""x GET /me',
+    "sh -c 'ex GET /me'",
+    "bash -c 'e\"\"x GET /me'",
+    "eval 'ex GET /me'",
+  ]) {
+    const res = await pre({ name: 'bash', arguments: { command }, agent: asstAgent })
+    assert.equal(res.kind, 'deny', `must deny obfuscated gated command: ${command}`)
+    assert.match(res.reason, /example_api/)
+  }
+
+  // Tool name casing / shell alias, cmd field, JSON string arguments, and mixed command+cmd.
+  assert.equal((await pre({ name: 'shell', arguments: { command: 'ex GET /me' }, agent: asstAgent })).kind, 'deny')
+  assert.equal((await pre({ name: 'Bash', arguments: { cmd: 'ex GET /me' }, agent: asstAgent })).kind, 'deny')
+  assert.equal((await pre({ name: 'bash', arguments: JSON.stringify({ command: 'ex GET /me' }), agent: asstAgent })).kind, 'deny')
+  assert.equal((await pre({ name: 'bash', arguments: { command: 'echo ok', cmd: 'ex GET /me' }, agent: asstAgent })).kind, 'deny')
+
+  // Uncheckable / malformed / empty shell arguments fail closed in assistant sessions.
+  for (const args of [{ command: '' }, { command: '   ' }, { command: 123 }, {}, null, 'not-json']) {
+    const res = await pre({ name: 'bash', arguments: args, agent: asstAgent })
+    assert.equal(res.kind, 'deny', `must fail closed on uncheckable args: ${JSON.stringify(args)}`)
+  }
+
+  // Assistant subagent and newly-created assistant-cwd agent (before listSessions) are also gated.
+  assert.equal((await pre({ name: 'bash', arguments: { command: 'ex GET /me' }, agent: { session: { id: 'sub-1', header: { parentSession: 'session-asst' } } } })).kind, 'deny')
+  assert.equal((await pre({ name: 'bash', arguments: { command: 'ex GET /me' }, agent: { session: { id: 'brand-new', header: { cwd: '/home/u/.persona/assistant' } } } })).kind, 'deny')
+
+  // Safe commands remain allowed for assistant and subagent; gated commands remain allowed for non-assistant.
+  assert.equal((await pre({ name: 'bash', arguments: { command: 'echo ok' }, agent: asstAgent })).kind, 'allow')
+  assert.equal((await pre({ name: 'bash', arguments: { command: 'echo ok' }, agent: { session: { id: 'sub-1', header: { parentSession: 'session-asst' } } } })).kind, 'allow')
+  assert.equal((await pre({ name: 'bash', arguments: { command: 'ex GET /me' }, agent: { session: { id: 'session-other' } } })).kind, 'allow')
+})
+
+test('assistant shell gates load without registerTool (phoneTools=false) and fail closed on disconnect, error, or mid-flight drop', async (t) => {
+  const gated = { name: 'example_api', description: 'Example', input_schema: { type: 'object' }, shell: ['ex'] }
+  // Intentionally omit registerTool (matches config.phoneTools === false in plugin.js).
+  const { n, ctl, ev, rt } = await setup(t, { assistant: true, tools: [gated] })
+  ctl.add('session-asst', { cwd: '/home/u/.persona/assistant' })
+  rt.start()
+  await n.ready
+  await until('listed', () => n.last('runtime.sessions'))
+
+  const pre = (command) => ev.waterfall('tools/pre-execute', { name: 'bash', arguments: { command }, agent: { session: { id: 'session-asst' } } }, () => ({ kind: 'allow' }))
+
+  // Without registerTool, gates still load automatically and enforce rules.
+  assert.equal((await pre('ex GET /me')).kind, 'deny')
+  assert.equal((await pre('echo ok')).kind, 'allow')
+
+  // Hub disconnect invalidates rules and fails closed even for safe commands.
+  n.setHub(false)
+  await until('hub down', () => !rt.hubConnected)
+  assert.equal((await pre('echo ok')).kind, 'deny')
+  assert.equal((await pre('ex GET /me')).kind, 'deny')
+
+  // Hub reconnect with failing mcp.tools stays fail-closed.
+  const origReq = n.peer.onRequest
+  let failTools = true
+  n.peer.onRequest = async (m, p) => {
+    if (m === 'mcp.tools' && failTools) throw new Error('hub tools unavailable')
+    return origReq(m, p)
+  }
+  n.setHub(true)
+  await until('hub back', () => rt.hubConnected)
+  assert.equal((await pre('echo ok')).kind, 'deny')
+
+  // Once mcp.tools recovers, on-demand refresh loads rules and restores normal allow/deny.
+  failTools = false
+  assert.equal((await pre('ex GET /me')).kind, 'deny')
+  assert.equal((await pre('echo ok')).kind, 'allow')
+
+  // Mid-flight disconnect during refresh must not mark stale empty results as ready.
+  n.setHub(false)
+  await until('hub down 2', () => !rt.hubConnected)
+  const gate = deferred()
+  let intercepted = false
+  n.peer.onRequest = async (m, p) => {
+    if (m === 'mcp.tools' && p?.assistant && !intercepted) {
+      intercepted = true
+      await gate.promise
+      return { tools: [] }
+    }
+    return origReq(m, p)
+  }
+  n.setHub(true)
+  await until('hub back 2', () => rt.hubConnected)
+  await until('refresh in flight', () => intercepted)
+  // Disconnect while the first assistant tools request is still in flight, then resolve stale [].
+  n.setHub(false)
+  await until('hub down 3', () => !rt.hubConnected)
+  gate.resolve()
+  // Flush the ordered socket so the stale [] mcp.tools reply is guaranteed processed before assertions.
+  await n.peer.call('launchers.models', {})
+  assert.equal((await pre('ex GET /me')).kind, 'deny')
+  // Reconnect again: fresh fetch runs and enforces the real gate (not stale []).
+  n.setHub(true)
+  await until('hub back 3', () => rt.hubConnected)
+  assert.equal((await pre('ex GET /me')).kind, 'deny')
+  assert.equal((await pre('echo ok')).kind, 'allow')
+
+  // Periodic refresh failure after rules were previously ready clears shellReady and fails closed.
+  failTools = true
+  n.peer.onRequest = async (m, p) => {
+    if (m === 'mcp.tools' && p?.assistant && failTools) throw new Error('periodic refresh failed')
+    return origReq(m, p)
+  }
+  await rt.refreshTools()
+  assert.equal((await pre('echo ok')).kind, 'deny')
+  failTools = false
+  assert.equal((await pre('echo ok')).kind, 'allow')
+})
+
+test('assistant shell gates fail closed during runtime.hello and across node reconnects, honor exec.signal, and allow empty gates when hubReady', async (t) => {
+  const helloGate = deferred()
+  const gated = { name: 'example_api', description: 'Example', input_schema: { type: 'object' }, shell: ['ex'] }
+  const { n, ctl, ev, rt } = await setup(t, { assistant: true, tools: [gated] })
+  n.hub = false
+  n.holdHello = helloGate.promise
+  ctl.add('session-asst', { cwd: '/home/u/.persona/assistant' })
+  rt.start()
+  await until('hello reached node', () => n.hellos === 1)
+
+  const pre = (command, extra = {}) => ev.waterfall(
+    'tools/pre-execute',
+    { name: 'bash', arguments: { command }, agent: { session: { id: 'session-asst', header: { cwd: '/home/u/.persona/assistant' } } }, ...extra },
+    () => ({ kind: 'allow' }),
+  )
+
+  // Path A: while runtime.hello is in flight (rt.connected && !rt.ready), must fail closed without touching mcp.tools.
+  assert.equal(rt.hubConnected, false)
+  assert.equal((await pre('ex GET /me')).kind, 'deny')
+  assert.equal((await pre('echo ok')).kind, 'deny')
+
+  // Release hello with hub: false -> still fail closed (must not hit TDZ or latch rejected promise).
+  helloGate.resolve()
+  await n.ready
+  assert.equal(rt.hubConnected, false)
+  assert.equal((await pre('ex GET /me')).kind, 'deny')
+  // Explicitly calling refreshTools() while !hubReady() must resolve cleanly (no TDZ ReferenceError).
+  await rt.refreshTools()
+
+  // Bring hub up with empty tools -> legitimate empty rule set allows safe commands (no false positives).
+  n.tools = []
+  n.setHub(true)
+  await until('hub up with empty tools', () => rt.hubConnected)
+  assert.equal((await pre('echo ok')).kind, 'allow')
+
+  // Path B: node socket disconnects (p.done clears peer/readyPeer without onHub(false)) and reconnects with a new gate.
+  const reconnectHello = deferred()
+  n.holdHello = reconnectHello.promise
+  n.tools = [{ name: 'new_api', description: 'New', input_schema: { type: 'object' }, shell: ['newcmd'] }]
+  n.peer.close(new Error('node restarted'))
+  await until('reconnect hello in flight', () => n.hellos === 2)
+  // Stale pre-reconnect shellReady must NOT allow newcmd while runtime.hello is still in flight.
+  assert.equal(rt.hubConnected, false)
+  assert.equal((await pre('newcmd run')).kind, 'deny')
+  reconnectHello.resolve()
+  await until('hub ready after reconnect', () => rt.hubConnected)
+  assert.equal((await pre('newcmd run')).kind, 'deny')
+  assert.equal((await pre('echo ok')).kind, 'allow')
+
+  // Aborting exec.signal while awaiting refreshShellGates returns fail-closed immediately.
+  n.setHub(false)
+  await until('hub down for abort test', () => !rt.hubConnected)
+  const slowTools = deferred()
+  const origReq = n.peer.onRequest
+  n.peer.onRequest = async (m, p) => {
+    if (m === 'mcp.tools' && p?.assistant) {
+      await slowTools.promise
+      return { tools: n.tools }
+    }
+    return origReq(m, p)
+  }
+  n.setHub(true)
+  await until('hub up for abort test', () => rt.hubConnected)
+  const ac = new AbortController()
+  const pending = pre('echo ok', { signal: ac.signal })
+  ac.abort(new Error('cancelled'))
+  assert.equal((await pending).kind, 'deny')
+  slowTools.resolve()
+  await until('recovered after slow tools', async () => (await pre('echo ok')).kind === 'allow')
+})
+
+test('assistant shell gates decouple from slow registerTool fetches and cover pre-existing multi-hop assistant agents', async (t) => {
+  const gated = { name: 'example_api', description: 'Example', input_schema: { type: 'object' }, shell: ['ex'] }
+  const preExisting = { session: { id: 'asst-root', header: { cwd: '/home/u/.persona/assistant' } } }
+  const midParent = { session: { id: 'sub-mid', header: { parentSession: 'asst-root', cwd: '/tmp/work' } } }
+  const agentsMap = new Map([['asst-root', preExisting], ['sub-mid', midParent]])
+  const agents = { get: (id) => agentsMap.get(id), list: () => [...agentsMap.values()] }
+
+  const nonAssistantHang = deferred()
+  const { n, ev, rt } = await setup(t, {
+    assistant: true,
+    registerTool: () => () => {},
+    tools: [gated],
+    agents,
+  })
+  rt.start()
+  await n.ready
+  const origReq = n.peer.onRequest
+  n.peer.onRequest = async (m, p) => {
+    if (m === 'mcp.tools' && !p?.assistant) {
+      await nonAssistantHang.promise
+      return { tools: [] }
+    }
+    return origReq(m, p)
+  }
+  // Force a fresh reconnect refresh where non-assistant mcp.tools hangs indefinitely while assistant mcp.tools succeeds.
+  n.setHub(false)
+  await until('hub down', () => !rt.hubConnected)
+  n.setHub(true)
+  await until('hub back', () => rt.hubConnected)
+
+  const pre = (agent, command) => ev.waterfall('tools/pre-execute', { name: 'bash', arguments: { command }, agent }, () => ({ kind: 'allow' }))
+  // Pre-existing assistant root (seeded in start() without listSessions) and 2-hop subagent are gated without stalling on non-assistant mcp.tools!
+  assert.equal((await pre({ session: { id: 'asst-root' } }, 'ex GET /me')).kind, 'deny')
+  assert.equal((await pre({ session: { id: 'sub-leaf', header: { parentSession: 'sub-mid', cwd: '/tmp/work' } } }, 'ex GET /me')).kind, 'deny')
+  assert.equal((await pre({ session: { id: 'sub-leaf', header: { parentSession: 'sub-mid', cwd: '/tmp/work' } } }, 'echo ok')).kind, 'allow')
+  nonAssistantHang.resolve()
+})
+
 test('the assistant\'s own tools are only for its conversations, called as the assistant\'s', async (t) => {
   const registered = new Map()
   const registerTool = (def, opts) => {
