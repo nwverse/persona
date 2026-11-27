@@ -9,21 +9,15 @@ import (
 // a chat opened and not yet written to is found among the tabs (session.tabs.listAll), where every chat has one.
 // Checked on Orca 1.4.277 (docs/plans/plan-orca-support.md "Structured sessions").
 
-// ChatTab is one chat's tab: the chat (Orca's session id), its provider ("claude", "codex"…), its title and the
-// worktree it is in. State is the chat's status when Orca has one ("working", "done"…; "" for a chat with no turn yet)
-// and UpdatedAt when that status last changed (epoch ms, 0 without one).
-type ChatTab struct {
-	SessionID  string
-	Agent      string
-	Title      string
-	WorktreeID string
-	State      string
-	UpdatedAt  int64
-}
+// chatTabLeaf ends the pane key ChatTabs gives the agent row of a chat found among the tabs, after the chat's own tab
+// ("structured-agent-session-<session id>"), so SessionOf reads the chat out of it as out of a worktree.ps row's.
+const chatTabLeaf = ":tab"
 
-// ChatTabs is session.tabs.listAll: the chat tabs of every worktree, in order. A host without the method answers
-// method_not_found (IsCode), which a caller takes as "no tabs to add".
-func (c *Client) ChatTabs(ctx context.Context) ([]ChatTab, error) {
+// ChatTabs is session.tabs.listAll: the chats of each worktree's tabs, in order, as worktree.ps would list them (a
+// Worktree with only WorktreeID and Agents set). A chat's row has its pane key (SessionOf names the chat), its provider
+// (AgentType), its title (ConversationName), and its status when Orca has one (State, UpdatedAt; none for a chat with
+// no turn yet). A host without the method answers method_not_found (IsCode), which a caller takes as "no tabs to add".
+func (c *Client) ChatTabs(ctx context.Context) ([]Worktree, error) {
 	var res struct {
 		Snapshots []struct {
 			Worktree string `json:"worktree"`
@@ -45,20 +39,26 @@ func (c *Client) ChatTabs(ctx context.Context) ([]ChatTab, error) {
 	if err := c.Call(ctx, ListTimeout, "session.tabs.listAll", map[string]any{}, &res); err != nil {
 		return nil, err
 	}
-	var out []ChatTab
+	var out []Worktree
 	for _, s := range res.Snapshots {
+		w := Worktree{WorktreeID: s.Worktree}
 		for _, t := range s.Tabs {
 			if t.Type != "agent-session" || strings.TrimSpace(t.SessionID) == "" {
 				continue
 			}
-			tab := ChatTab{SessionID: t.SessionID, Agent: t.Agent, Title: t.Title, WorktreeID: s.Worktree}
+			row := AgentRow{PaneKey: SessionPanePrefix + t.SessionID + chatTabLeaf, AgentType: t.Agent, ConversationName: t.Title}
 			if st := t.ChatStatus; st != nil {
-				tab.State, tab.UpdatedAt = st.State, st.UpdatedAt
-				if st.MainAgent != nil && st.MainAgent.State != "" && st.State != "blocked" && st.State != "waiting" {
-					tab.State = st.MainAgent.State
+				row.State, row.UpdatedAt = st.State, st.UpdatedAt
+				if st.MainAgent != nil && st.MainAgent.State != "" {
+					row.MainAgent = &struct {
+						State string `json:"state"`
+					}{State: st.MainAgent.State}
 				}
 			}
-			out = append(out, tab)
+			w.Agents = append(w.Agents, row)
+		}
+		if len(w.Agents) > 0 {
+			out = append(out, w)
 		}
 	}
 	return out, nil

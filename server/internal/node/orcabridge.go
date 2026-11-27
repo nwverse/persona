@@ -132,7 +132,7 @@ type orcaBridge struct {
 	asks    map[string]*orcaAsk  // by orcaPromptKey
 	sends   map[string]time.Time // client_msg_id → when it was first sent (its operation id's time: a retry replays)
 	pushed  string               // the rows last pushed
-	tabs    []orcart.ChatTab     // the chat tabs last read (orcaTabsPoll)
+	tabs    []orcart.Worktree    // the chats among the tabs last read (orcaTabsPoll), by worktree
 	tabsAt  time.Time            // when they were read; zero: read them next refresh
 	noTabs  bool                 // the host has no session.tabs.listAll (an older Orca)
 	book    *orcaBook
@@ -264,7 +264,7 @@ func (b *orcaBridge) refresh(ctx context.Context) {
 }
 
 // chatTabs are the chat tabs, read again every orcaTabsPoll (the last ones meanwhile); none from a host without them.
-func (b *orcaBridge) chatTabs(ctx context.Context, running bool) []orcart.ChatTab {
+func (b *orcaBridge) chatTabs(ctx context.Context, running bool) []orcart.Worktree {
 	b.mu.Lock()
 	tabs, due := b.tabs, running && !b.noTabs && time.Since(b.tabsAt) >= orcaTabsPoll
 	b.mu.Unlock()
@@ -284,19 +284,18 @@ func (b *orcaBridge) chatTabs(ctx context.Context, running bool) []orcart.ChatTa
 	return b.tabs
 }
 
-// orcaChat is one chat open in Orca: its worktree, and its worktree.ps row, its tab, or both.
+// orcaChat is one chat open in Orca: its worktree, and its worktree.ps row, else the row of its tab (orcart.ChatTabs).
 type orcaChat struct {
 	orca  string
 	agent string // Orca's provider ("claude", "codex", "antigravity"…)
 	tree  orcart.Worktree
 	row   *orcart.AgentRow
-	tab   *orcart.ChatTab
 	rev   int64 // its last change (epoch ms)
 }
 
 // orcaOpenChats are the chats open in Orca on this machine, in worktree.ps's order, then the chat tabs worktree.ps
 // does not list (no turn yet). A worktree on an SSH target is that machine's node's.
-func orcaOpenChats(trees []orcart.Worktree, tabs []orcart.ChatTab) []orcaChat {
+func orcaOpenChats(trees, tabs []orcart.Worktree) []orcaChat {
 	var out []orcaChat
 	seen := map[string]bool{}
 	byID := map[string]orcart.Worktree{}
@@ -315,14 +314,20 @@ func orcaOpenChats(trees []orcart.Worktree, tabs []orcart.ChatTab) []orcaChat {
 			out = append(out, orcaChat{orca: orca, agent: firstOf(a.AgentType, "claude"), tree: w, row: a, rev: a.UpdatedAt})
 		}
 	}
-	for i := range tabs {
-		t := &tabs[i]
+	for _, t := range tabs {
 		w, ok := byID[t.WorktreeID]
-		if !ok || seen[t.SessionID] {
+		if !ok {
 			continue
 		}
-		seen[t.SessionID] = true
-		out = append(out, orcaChat{orca: t.SessionID, agent: firstOf(t.Agent, "claude"), tree: w, tab: t, rev: t.UpdatedAt})
+		for i := range t.Agents {
+			a := &t.Agents[i]
+			orca, ok := orcart.SessionOf(a.PaneKey)
+			if !ok || seen[orca] {
+				continue
+			}
+			seen[orca] = true
+			out = append(out, orcaChat{orca: orca, agent: firstOf(a.AgentType, "claude"), tree: w, row: a, rev: a.UpdatedAt})
+		}
 	}
 	return out
 }
@@ -333,8 +338,6 @@ func orcaEntryOf(c orcaChat, h *orcaHead) orcaBookEntry {
 		Branch: c.tree.Branch, Parent: orcaParent(c.tree.WorktreeID, c.tree.ParentWorktreeID), Updated: c.rev}
 	if a := c.row; a != nil {
 		e.Title = firstOf(a.ConversationName, a.DisplayName, a.TaskTitle, firstLine(a.Prompt))
-	} else if c.tab != nil {
-		e.Title = c.tab.Title
 	}
 	return e
 }
@@ -422,8 +425,6 @@ func orcaRow(c orcaChat, e orcaBookEntry, h *orcaHead) map[string]any {
 	status := proto.StatusIdle
 	if c.row != nil {
 		status = orcaChatStatus(*c.row)
-	} else if c.tab != nil {
-		status = orcaChatStatus(orcart.AgentRow{State: c.tab.State})
 	}
 	row := map[string]any{"session_id": e.Persona, "title": firstOf(e.Title, filepath.Base(c.tree.Path)), "cwd": c.tree.Path,
 		"status": status, "updated_at": updated, "rev": rev, "space_id": c.tree.WorktreeID,

@@ -626,7 +626,8 @@ func TestOrcaBridgeOffersARefusedAnswerAgain(t *testing.T) {
 		t.Fatalf("cards %+v / %+v", first, second)
 	}
 	o.set("working", "[]")
-	time.Sleep(200 * time.Millisecond)
+	polls := o.f.Count("worktree.ps")
+	waitFor(t, "a few more refreshes", func() bool { return o.f.Count("worktree.ps") >= polls+3 })
 	if n := len(o.writes("agentSession.respondToApproval")); n != 2 {
 		t.Errorf("answered %d times", n)
 	}
