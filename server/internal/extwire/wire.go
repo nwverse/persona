@@ -202,6 +202,22 @@ type Report struct {
 	// flag and their layers are left untouched across rolling upgrades.
 	PushGradingDeclared   bool     `json:"push_grading_declared,omitempty"`
 	PushGradingExtensions []string `json:"push_grading_extensions,omitempty"`
+	// Modules are the approved installed extensions that supply a module (modapi.ExtensionModules, #16254), each
+	// with whether it supplies module.<id> now. The hub reads them from the default manager only, while it is connected
+	// and its hello carries the modules marker: On adds module.<id> to the features, !On removes the built-in module's
+	// flag of the same id (the installed provider decides). An older manager sends none, and an older hub ignores them.
+	Modules []ModuleProvider `json:"modules,omitempty"`
+}
+
+// ModuleID is a module's id (module.<id> is its flag).
+type ModuleID string
+
+// ModuleProvider is one approved installed extension's module in Report.Modules.
+type ModuleProvider struct {
+	// ID is the module's id (and the extension's).
+	ID ModuleID `json:"id"`
+	// On: the extension is enabled, every contribution the module needs is on, and the modules setting leaves it on.
+	On bool `json:"on"`
 }
 
 // BotIdentity is a platform's stable identifier, not a display name or an authentication token.

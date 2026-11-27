@@ -446,7 +446,7 @@ func Actions(v *View) []*Action {
 			if e.Button != nil {
 				out = append(out, &e.Button.Action)
 			}
-			for _, a := range []*Action{e.Expand, e.Load, e.Comment, e.Reply, e.Context, e.MarkViewed, e.Draft} {
+			for _, a := range []*Action{e.Expand, e.Load, e.Comment, e.Reply, e.Context, e.MarkViewed, e.Draft, e.Navigate} {
 				if a != nil {
 					out = append(out, a)
 				}

@@ -35,8 +35,8 @@ func (ps *extensions) extensionAssistantCall(ctx context.Context, id, method str
 	}
 	var out json.RawMessage
 	if method == assistantwire.MethodAssistantEntriesList {
-		// The entries ledger names its reader itself (#13106).
-		if err := ps.h.kbAsk(assistantwire.WithEntriesReader(ctx, id), method, params, &out); err != nil {
+		// The entries ledger names its reader itself (#13106). Forward both wire bodies as raw JSON.
+		if err := ps.h.kbAsk(assistantwire.WithEntriesReader(ctx, id), assistantwire.AssistantEntriesListMethod.Name, params, &out); err != nil {
 			return nil, err
 		}
 		return out, nil

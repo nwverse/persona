@@ -1439,12 +1439,17 @@ export function createOpencodeCompanion(options = {}) {
       }
 
       await transition?.retireOldFile()
-      if (stopped || closedSessions.has(id) || isAsst && interruptVersion !== s.interruptVersion) {
+      if (stopped || closedSessions.has(id) || interruptVersion !== s.interruptVersion) {
         throw new RpcError('Input was interrupted before delivery', 'busy', { delivered: 'none' })
       }
       const turnDone = s.tail.catch(() => {}).then(async () => {
         s.queued = Math.max(0, s.queued - 1)
-        if (stopped || closedSessions.has(id) || isAsst && interruptVersion !== s.interruptVersion) return
+        if (stopped || closedSessions.has(id) || interruptVersion !== s.interruptVersion) {
+          listCache.at = 0
+          if (!stopped) rt.sessionsChanged(0)
+          if (!worker) scheduleAcpIdleStop()
+          return
+        }
         s.running = true
         s.turnError = ''
         s.processFailure = false
@@ -1535,6 +1540,8 @@ export function createOpencodeCompanion(options = {}) {
       if (!enqueued) {
         s.queued = Math.max(0, s.queued - 1)
         if (worker) assistantWorkers.release(worker)
+        if (!stopped) rt.sessionsChanged(0)
+        if (!worker) scheduleAcpIdleStop()
       }
     }
   }
@@ -1543,20 +1550,21 @@ export function createOpencodeCompanion(options = {}) {
     const id = params.session_id
     const s = live.get(id)
     if (!s) return { settled: true }
-    if (s.assistant) s.interruptVersion++
+    s.interruptVersion++
     s.abort?.abort()
     for (const ac of s.asks) ac.abort()
     s.asks.clear()
     const acp = s.worker?.acp || (!s.assistant ? sharedAcp : null)
     acp?.cancel(id)
-    if (!s.running) return { settled: true }
+    if (!s.running && s.queued === 0) return { settled: true }
+    let timer
     const settled = await Promise.race([
       s.tail.then(() => true, () => true),
       new Promise((r) => {
-        const t = setTimeout(() => r(false), INTERRUPT_SETTLE_MS)
-        t.unref?.()
+        timer = setTimeout(() => r(false), INTERRUPT_SETTLE_MS)
+        timer.unref?.()
       }),
-    ])
+    ]).finally(() => clearTimeout(timer))
     return settled ? { settled: true } : {}
   }
 
@@ -1599,8 +1607,8 @@ export function createOpencodeCompanion(options = {}) {
       s.abort?.abort()
       for (const ac of s.asks) ac.abort()
       s.asks.clear()
+      s.interruptVersion++
       if (s.assistant) {
-        s.interruptVersion++
         const worker = s.worker
         worker?.acp.cancel(id)
         if (worker) await assistantWorkers.discard(worker)

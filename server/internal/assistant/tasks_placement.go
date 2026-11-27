@@ -106,9 +106,19 @@ func (t *PlanTask) noteWhy(note string) {
 // (#12032). It also reports what the resolved launcher runs (startAgent: its agent type, and whether it runs with
 // Allow all), using the same launcher list rather than another probe. A read-only task whose launcher has no read-only
 // mode is refused here (readonlyLauncherRefusal), when it is planned and again before it starts.
+func checkAliasAgent(aliases proto.ModelAliases, agent startAgent) error {
+	if len(aliases) > 0 && agent.agent != "" && agent.agent != "claude" {
+		return fmt.Errorf("model_aliases require a Claude Code terminal launcher")
+	}
+	return nil
+}
+
 func (s *Service) fitTaskLauncher(ctx context.Context, t *PlanTask, m Device, own startPick, params map[string]any) (startAgent, error) {
 	note, agent, err := s.fitNewLauncher(ctx, m, own, params)
 	if err != nil {
+		return agent, err
+	}
+	if err := checkAliasAgent(t.ModelAliases, agent); err != nil {
 		return agent, err
 	}
 	if t.Readonly {
@@ -319,6 +329,12 @@ func (s *Service) startTaskAgent(ctx context.Context, t *PlanTask, retry bool) (
 	// A self-planning constraint applies only while a policy rule asks for it on this try.
 	t.planFirst = false
 	params := map[string]any{"model_source": planModelSource(*t), "launcher": t.Launcher, "model": t.Model, "effort": t.Effort, "speed": t.Speed, "tier": t.Tier}
+	if caller.model != "" {
+		params["explicit_model"] = caller.model
+	}
+	if len(t.ModelAliases) != 0 {
+		params["model_aliases"] = t.ModelAliases
+	}
 	if t.Host != "" {
 		params["host"] = t.Host // before the fit: an engine host's runtime runs its own launchers (#8140)
 	}

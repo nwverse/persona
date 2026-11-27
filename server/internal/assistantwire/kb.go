@@ -1,13 +1,13 @@
 package assistantwire
 
 import (
-	"github.com/nwverse/persona/server/internal/wireids"
-
 	"time"
 
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/kbwire"
+	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 // The knowledge base is the assistant's (docs/assistant/knowledge.md "Who owns what"): its engine and loop, its files under the data
@@ -141,6 +141,17 @@ const (
 	EventKBAgentTurn = "kb.agent_turn"
 )
 
+// Typed descriptors for the knowledge base's internal bus calls.
+var (
+	KBContextMethod       = buswire.Method[KBContextParams, KBContextResult]{Name: MethodKBContext}
+	KBProjectsMethod      = buswire.Method[KBProjectsParams, KBProjectsResult]{Name: MethodKBProjects}
+	KBForgetMethod        = buswire.Method[KBForget, KBForgotten]{Name: MethodKBForget}
+	KBPostsPutMethod      = buswire.Method[KBPosts, KBPostsPutResult]{Name: MethodKBPostsPut}
+	KBPostsCommentsMethod = buswire.Method[KBPosts, KBPostsCommentsAck]{Name: MethodKBPostsComments}
+	KBPostsPendingMethod  = buswire.Method[KBPosts, KBPostsPendingResult]{Name: MethodKBPostsPending}
+	KBArchivedChatsMethod = buswire.Method[KBPosts, KBArchivedChatsResult]{Name: MethodKBArchivedChats}
+)
+
 // KBKick is EventKBKick's params: the connector that has something new, and what (a connector scope: chats, items).
 type KBKick struct {
 	Connector string `json:"connector,omitempty"`
@@ -218,6 +229,17 @@ const CodeKBReadOnly = "kb_read_only"
 // CodeKBDisabled means the manager has disabled knowledge; retrying cannot enable it.
 const CodeKBDisabled = "kb_disabled"
 
+// KBProjectsParams identifies the machine and working directory to match against knowledge base projects.
+type KBProjectsParams struct {
+	MachineID wireids.MachineID `json:"machine_id"`
+	Cwd       string            `json:"cwd"`
+}
+
+// KBProjectsResult lists the projects whose code directories match the request.
+type KBProjectsResult struct {
+	Projects []KBProject `json:"projects"`
+}
+
 // KBProject is a project as kb.projects names it.
 type KBProject struct {
 	Slug string `json:"slug"`
@@ -239,6 +261,14 @@ type KBForgotten struct {
 	Items  int `json:"items"`
 }
 
+// KBChatID identifies a chat as filed in the knowledge base.
+type KBChatID string
+
+// KBContextParams identifies the chat whose context to read.
+type KBContextParams struct {
+	ChatID KBChatID `json:"chat_id"`
+}
+
 // KBContextResult is kb.context's answer.
 type KBContextResult struct {
 	Context *kbwire.ChatContext `json:"context"`
@@ -255,6 +285,24 @@ type KBPosts struct {
 	Comments []connectorwire.PostComment `json:"comments"`
 	Limit    int                         `json:"limit,omitempty"`
 	Source   string                      `json:"source,omitempty"`
+}
+
+// KBPostsPutResult contains one status per submitted post.
+type KBPostsPutResult struct {
+	Statuses []string `json:"statuses"`
+}
+
+// KBPostsCommentsAck is the empty acknowledgment of a comment update.
+type KBPostsCommentsAck = buswire.None
+
+// KBPostsPendingResult lists posts whose comments need to be read again.
+type KBPostsPendingResult struct {
+	Posts []connectorwire.PendingPost `json:"posts"`
+}
+
+// KBArchivedChatsResult lists conversations archived under the requested source.
+type KBArchivedChatsResult struct {
+	Chats []connectorwire.ArchivedChat `json:"chats"`
 }
 
 // KBAgentTurn is kb.agent_turn's params: the agent, where it works, and what its turn comes to (the hub's verdict
