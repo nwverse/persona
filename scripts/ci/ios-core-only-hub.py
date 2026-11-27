@@ -144,6 +144,21 @@ def prepare_app(source, work, simulator, readings):
     run_log(["native/app-core/scripts/build-apple.sh", "--simulator"], work / "app-core.log", 1200, source, env)
     run_log(["xcodegen", "generate", "-q"], work / "xcodegen.log", 120, source / "apple", env)
     derived = work / "DerivedData"
+    resolve = ["xcodebuild", "-project", "apple/Persona.xcodeproj", "-scheme", "Persona", "-configuration", "Debug",
+               "-destination", f"platform=iOS Simulator,id={simulator}", "-derivedDataPath", derived,
+               "-clonedSourcePackagesDirPath", work / "SourcePackages", "-resolvePackageDependencies"]
+    # Xcode 26.0 intermittently crashes while inserting freshly resolved packages into its IDE group. Retry only that
+    # observed IDE crash once; source/compiler failures remain fatal.
+    for attempt in range(2):
+        readings.append({"build": f"swift-packages-{attempt + 1}", **idle_reading()})
+        try:
+            run_log(resolve, work / f"swift-packages-{attempt + 1}.log", 900, source, env)
+            break
+        except Failed:
+            log = work / f"swift-packages-{attempt + 1}.log"
+            if attempt or "NSMutableArray insertObjects" not in log.read_text():
+                raise
+            print("Xcode 26.0 package-group crash; one bounded resolution retry", flush=True)
     command = ["python3", "scripts/heavy_slot.py", "run", "--kind", "xcode", "--", "xcodebuild",
                "-project", "apple/Persona.xcodeproj", "-scheme", "Persona", "-configuration", "Debug",
                "-destination", f"platform=iOS Simulator,id={simulator}", "-derivedDataPath", derived,
@@ -190,7 +205,27 @@ def has(ctl, element_id):
     return bool(matches(elements(ctl), element_id=element_id))
 
 
+def ensure_active(ctl):
+    """Dismiss a SpringBoard permission/notice alert on this run's synthetic simulator, never on a physical device."""
+    state = ctl.call("state")
+    if state.get("appState") == "active":
+        return True
+    now = time.monotonic()
+    if now - getattr(ctl, "last_alert_attempt", 0) < 1:
+        return False
+    ctl.last_alert_attempt = now
+    for label in ("不允许", "Don't Allow", "Don’t Allow", "Not Now", "允许", "Allow", "OK", "好"):
+        result = run(["idb", "ui", "tap", label, "--udid", ctl.udid], 30)
+        if result.returncode == 0:
+            print(f"dismissed a system interruption on the owned simulator ({label})", flush=True)
+            wait_for(ctl, "active app after a system interruption", 10,
+                     lambda: ctl.call("state").get("appState") == "active" or None)
+            return True
+    return False
+
+
 def no_errors(ctl, page):
+    ensure_active(ctl)
     rows = elements(ctl)
     bad_ids = {"inbox.offline", "todos.offline"}
     bad = [row.get("id") for row in rows if row.get("id") in bad_ids]
@@ -247,6 +282,9 @@ def exercise_app(ctl, base, code, edition, shots):
 
     def paired():
         state = ctl.call("state")
+        if state.get("paired") is True and state.get("appState") != "active":
+            ensure_active(ctl)
+            state = ctl.call("state")
         return state if state.get("paired") is True and state.get("appState") == "active" else None
 
     state = wait_for(ctl, "real pairing and an active app", 60, paired)
@@ -314,8 +352,14 @@ def exercise_app(ctl, base, code, edition, shots):
     require(ctl, element_id="settings-live-screen") if full else None
     for entry in ("settings-live-screen", "settings-meetings", "settings-health"):
         proof["entries"][entry] = has(ctl, entry)
+    capture_both(ctl, shots, edition, "advanced-settings", proof)
     for entry in ("settings-live-screen", "settings-meetings", "settings-health"):
         check(proof["entries"][entry] == full, f"{edition}: wrong {entry} visibility")
+    size = run(["xcrun", "simctl", "ui", ctl.udid, "content_size", "accessibility-extra-extra-extra-large"], 30)
+    check(size.returncode == 0, "could not set the largest accessibility text size")
+    capture_both(ctl, shots, edition, "advanced-settings-ax5", proof)
+    size = run(["xcrun", "simctl", "ui", ctl.udid, "content_size", "large"], 30)
+    check(size.returncode == 0, "could not restore the default text size")
     capture_both(ctl, shots, edition, "advanced-settings", proof)
 
     settings(ctl, "openConnectors")

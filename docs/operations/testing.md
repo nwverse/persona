@@ -839,7 +839,8 @@ the pair code must answer 401, and the app must still answer at the end. Health,
 Mail and Lark entry assertions are checked against the full-hub positive control. The recording archive's read entry remains
 available in both editions.
 
-Light/dark PNGs, per-edition sanitized proofs and `evidence.json` (commit, Xcode and pre-build local-time / idle readings) are
+Light/dark PNGs, including Settings › Advanced at the largest accessibility text size, per-edition sanitized proofs and
+`evidence.json` (commit, Xcode and pre-build local-time / idle readings) are
 written below `--shots`; credentials are never included. Inspect every PNG. `--keep` retains the temporary source snapshot,
 hub homes and logs for diagnosis; without it the driver removes them. Every run ends with one `PASS`, `FAIL` or `TIMEOUT` line.
 A failed build or assertion, a missing proof, or a missing capture is never a pass.
