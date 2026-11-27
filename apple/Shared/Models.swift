@@ -3281,6 +3281,7 @@ extension Interaction {
         ownerProposal = try c.decodeIfPresent(Bool.self, forKey: .ownerProposal)
         noExpiry = try c.decodeIfPresent(Bool.self, forKey: .noExpiry)
         ownerApprovalPhrases = try c.decodeIfPresent([String].self, forKey: .ownerApprovalPhrases)
+        noHandBack = try c.decodeIfPresent(Bool.self, forKey: .noHandBack)
     }
 }
 
