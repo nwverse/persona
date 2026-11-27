@@ -541,6 +541,9 @@ func (rh *RuntimeHost) request(ctx context.Context, h *runtimeConn, method strin
 			features = append(features, "usage_windows", "leader_tools", "supervision_policy", "a2a_mcp", "remote_agent", "memory_tools", "codex_claims")
 			if hello.Caps.Assistant {
 				features = append(features, "assistant_pids")
+				if hello.Caps.AssistantEnvironment && !hello.Caps.RemoteAgent {
+					features = append(features, "assistant_command_gate")
+				}
 			}
 		}
 		res := map[string]any{"protocol": RuntimeProtocol, "node_version": rh.version, "hub": rh.current() != nil,
@@ -716,8 +719,12 @@ func (rh *RuntimeHost) event(h *runtimeConn, event string, params json.RawMessag
 			return
 		}
 		var moved []string
+		var agyPaneBackground map[string][]proto.BackgroundTask
 		if !h.isDaemon() { // a daemon's offline sessions are not resumed in this machine's terminal engine
 			x := runtimeRowExtras(params, len(p.Sessions))
+			if h.id() == agyRuntimeID {
+				agyPaneBackground = agyPaneBackgroundFromRows(params)
+			}
 			h.setResume(x.resume)
 			// …nor read from this machine's transcripts: a daemon names none (runtimetranscript.go).
 			ts := x.transcripts
@@ -734,7 +741,7 @@ func (rh *RuntimeHost) event(h *runtimeConn, event string, params json.RawMessag
 		if cap(list) > 2*len(list)+8 { // the list shrank: keep no array of the old size
 			list = append(make([]proto.Session, 0, len(list)), list...)
 		}
-		rewatch, driven := rh.reg.setSessions(h, list)
+		rewatch, driven := rh.reg.setSessionList(h, list, agyPaneBackground)
 		for _, id := range driven { // started for the hub by another runtime: its cards go to the phone first here too
 			if h.peer != nil {
 				_ = h.peer.Notify("runtime.driven", map[string]any{"session_id": id})

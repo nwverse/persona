@@ -18,13 +18,16 @@ import (
 // groups as written inline (larkgate_inline.go) and resolves immediately preceding literal command assignments
 // solely for classification. It never executes the input.
 func normalizeLarkCommand(cmd, cwd string, gates []proto.CommandGate) string {
-	return normalizeLarkCommandTracked(cmd, cwd, gates, nil)
+	return normalizeLarkCommandRelaxed(cmd, cwd, gates, nil, false)
 }
 
 // resolved, when non-nil, records the normalized segment positions whose executable came from a proven assignment.
 // The classifier uses that provenance only for the neighboring-opaque-program check; the command itself is still
 // parsed and classified normally. Positions, rather than word content, keep an identical later literal segment distinct.
-func normalizeLarkCommandTracked(cmd, cwd string, gates []proto.CommandGate, resolved map[int]bool) string {
+// relax (a bypass conversation, classifyLarkRelaxed) also lets a here-document's file be named through a literal
+// variable set earlier in the list (`d=~/notes; cat > $d/note.md <<'EOF'`) and sit in a directory that does not exist
+// yet (made by mkdir in the same list), #15860.
+func normalizeLarkCommandRelaxed(cmd, cwd string, gates []proto.CommandGate, resolved map[int]bool, relax bool) string {
 	tree, err := syntax.NewParser().Parse(strings.NewReader(cmd), "")
 	if err != nil {
 		return cmd
@@ -78,156 +81,151 @@ func normalizeLarkCommandTracked(cmd, cwd string, gates []proto.CommandGate, res
 
 	// A heredoc fed only to a file writer is data, except when a later command
 	// could execute it or its unquoted body contains an executable substitution.
-	// Track literal path assignments and cd across ;, &&, and || with branch
-	// intersection so proven variable paths ($d/note.md, "$HOME/note.md") work
-	// without allowing conditional or dynamic reassignments to hide unsafe targets (#15860).
 	hasHeredoc, safe, goTest := false, true, false
 	var bodies []*syntax.Word
-	if flat {
-		hState := heredocNormState{vars: map[string]string{}, dir: cwd}
-		var walkHeredoc func(*syntax.Stmt, heredocNormState) (heredocNormState, heredocNormState)
-		walkHeredoc = func(stmt *syntax.Stmt, st heredocNormState) (heredocNormState, heredocNormState) {
-			if b, ok := stmt.Cmd.(*syntax.BinaryCmd); ok {
-				switch b.Op {
-				case syntax.AndStmt:
-					xTrue, xFalse := walkHeredoc(b.X, st)
-					yTrue, yFalse := walkHeredoc(b.Y, xTrue)
-					return yTrue, intersectHeredocState(xFalse, yFalse)
-				case syntax.OrStmt:
-					xTrue, xFalse := walkHeredoc(b.X, st)
-					yTrue, yFalse := walkHeredoc(b.Y, xFalse)
-					return intersectHeredocState(xTrue, yTrue), yFalse
-				}
+	dir := cwd // a literal cd moves where later relative targets are
+	// vars (relax): literal values of variables assigned by a statement of their own at the top of the list, in order,
+	// plus the trusted process HOME unless a statement in the command overrides HOME (#16755).
+	// One assigned anywhere else (after && or ||) or to anything but a literal is unknown from then on.
+	vars := map[string]string{}
+	homeOverridden := false
+	if relax {
+		if home, err := os.UserHomeDir(); err == nil && home != "" {
+			vars["HOME"] = home
+		}
+	}
+	top := map[*syntax.Stmt]bool{}
+	for _, stmt := range tree.Stmts {
+		top[stmt] = true
+	}
+	// path is a target or argument word's value: a literal word as before or, relaxed, one with variables from vars.
+	path := func(word *syntax.Word, value string) string {
+		if value == "" && relax {
+			if resolved, _, ok := literalLoopWord(word, vars); ok {
+				return resolved
 			}
-			before := st.clone()
-			call := stmt.Cmd.(*syntax.CallExpr)
-			if len(call.Args) == 0 {
-				if len(stmt.Redirs) != 0 {
-					safe = false
-				} else {
-					for _, a := range call.Assigns {
-						if a.Name == nil {
-							continue
-						}
-						delete(st.vars, a.Name.Value)
-						if a.Append || a.Index != nil || a.Array != nil || a.Value == nil || a.Name.Value == "IFS" || a.Name.Value == "HOME" || larkExecutableEnv[a.Name.Value] {
-							safe = false
-							continue
-						}
-						if val, ok := larkLiteralAssignValue(a.Value, cmd); ok {
-							st.vars[a.Name.Value] = val
-						} else {
-							safe = false
-						}
-					}
-				}
-				return st, st.clone()
-			}
-			name, dynamic := executionWord(call.Args[0])
-			base := filepath.Base(name)
-			if name == "cd" && !dynamic && len(call.Args) == 2 && len(call.Assigns) == 0 && len(stmt.Redirs) == 0 {
-				to, expanded := executionWord(call.Args[1])
-				if expanded {
-					if resolved, ok := heredocResolveWord(call.Args[1], st.vars, cmd); ok {
-						to, expanded = resolved, false
-					}
-				}
-				if to = larkHomePath(to); !filepath.IsAbs(to) && filepath.IsAbs(st.dir) {
-					to = filepath.Join(st.dir, to)
-				}
-				if info, err := os.Stat(to); expanded || err != nil || !info.IsDir() || !filepath.IsAbs(to) {
-					safe = false
-				}
-				st.dir = to
-				before.dir = ""
-				return st, before
-			}
-			// Do not infer safety from an interpreter denylist: build tools and
-			// arbitrary programs can execute the file as well. Only these ordinary
-			// file/inspection commands and the specified test invocation are inert.
-			allowed := map[string]bool{"cat": true, "tee": true, "echo": true, "pwd": true, "ls": true, "head": true, "wc": true, "mkdir": true}[base]
-			if base == "go" && len(call.Args) > 1 && call.Args[1].Lit() == "test" {
-				allowed = true
-				goTest = true
-			}
-			if !allowed || name != base || dynamic || dynamicCommandName(name) || len(call.Assigns) != 0 {
+		}
+		return value
+	}
+	targetSafe := func(target string) bool {
+		if homeOverridden && (target == "~" || strings.HasPrefix(target, "~/")) {
+			return false
+		}
+		return safeHeredocTarget(target, dir, relax)
+	}
+	for _, stmt := range stmts {
+		call := stmt.Cmd.(*syntax.CallExpr)
+		if len(call.Args) == 0 {
+			if len(stmt.Redirs) != 0 {
 				safe = false
 			}
-			for _, arg := range call.Args[1:] {
-				value, expanded := executionWord(arg)
-				if expanded {
-					if resolved, ok := heredocResolveWord(arg, st.vars, cmd); ok {
-						value, expanded = resolved, false
-					}
-				}
-				option, _, _ := strings.Cut(strings.TrimLeft(value, "-"), "=")
-				if expanded || strings.HasPrefix(value, "-") && (option == "exec" || option == "toolexec") {
-					safe = false
-				}
-			}
-			for _, redir := range stmt.Redirs {
-				if redir.Hdoc == nil {
-					target, ok := heredocResolveWord(redir.Word, st.vars, cmd)
-					if (redir.Op != syntax.RdrOut && redir.Op != syntax.AppOut) || !ok || !safeHeredocTarget(target, st.dir) {
-						safe = false
-					}
+			for _, a := range call.Assigns {
+				if a.Name == nil {
 					continue
 				}
-				hasHeredoc = true
-				bodies = append(bodies, redir.Hdoc)
-				if base != "cat" && base != "tee" {
-					safe = false
+				if a.Name.Value == "HOME" {
+					homeOverridden = true
+					delete(vars, "HOME")
 					continue
 				}
-				if base == "cat" {
-					output := false
-					for _, other := range stmt.Redirs {
-						if other.Op == syntax.RdrOut || other.Op == syntax.AppOut {
-							if target, ok := heredocResolveWord(other.Word, st.vars, cmd); ok && safeHeredocTarget(target, st.dir) {
-								output = true
-							}
-						}
-					}
-					if !output || len(call.Args) != 1 {
-						safe = false
-					}
+				value, ok := "", false
+				if relax && top[stmt] && !a.Append && a.Index == nil && a.Array == nil && a.Value != nil {
+					value, ok = larkLiteralAssignValue(a.Value, cmd)
+				}
+				if ok {
+					vars[a.Name.Value] = value
 				} else {
-					files := 0
-					for _, arg := range call.Args[1:] {
-						value, ok := heredocResolveWord(arg, st.vars, cmd)
-						if ok && (value == "-a" || value == "--append") {
-							continue
-						}
-						if !ok || value == "" || strings.HasPrefix(value, "-") || !safeHeredocTarget(value, st.dir) {
-							safe = false
-						}
-						files++
-					}
-					if files == 0 {
-						safe = false
+					delete(vars, a.Name.Value)
+				}
+			}
+			continue
+		}
+		name, dynamic := executionWord(call.Args[0])
+		base := filepath.Base(name)
+		if name == "cd" && !dynamic && len(call.Args) == 2 && len(call.Assigns) == 0 && len(stmt.Redirs) == 0 {
+			to, expanded := executionWord(call.Args[1])
+			if homeOverridden && (to == "~" || strings.HasPrefix(to, "~/")) {
+				safe = false
+			}
+			if to = larkHomePath(to); !filepath.IsAbs(to) && filepath.IsAbs(dir) {
+				to = filepath.Join(dir, to)
+			}
+			if info, err := os.Stat(to); expanded || err != nil || !info.IsDir() || !filepath.IsAbs(to) {
+				safe = false
+			}
+			dir = to
+			continue
+		}
+		// Do not infer safety from an interpreter denylist: build tools and
+		// arbitrary programs can execute the file as well. Only these ordinary
+		// file/inspection commands and the specified test invocation are inert.
+		allowed := map[string]bool{"cat": true, "tee": true, "echo": true, "pwd": true, "ls": true, "head": true, "wc": true}[base] ||
+			relax && base == "mkdir" // makes the directories a note is then written in
+		if base == "go" && len(call.Args) > 1 && call.Args[1].Lit() == "test" {
+			allowed = true
+			goTest = true
+		}
+		if !allowed || name != base || dynamic || dynamicCommandName(name) || len(call.Assigns) != 0 {
+			safe = false
+		}
+		for _, arg := range call.Args[1:] {
+			value, expanded := executionWord(arg)
+			if expanded && relax {
+				if resolved, _, ok := literalLoopWord(arg, vars); ok {
+					value, expanded = resolved, false
+				}
+			}
+			option, _, _ := strings.Cut(strings.TrimLeft(value, "-"), "=")
+			if expanded || strings.HasPrefix(value, "-") && (option == "exec" || option == "toolexec") {
+				safe = false
+			}
+		}
+		for _, redir := range stmt.Redirs {
+			if redir.Hdoc == nil {
+				if (redir.Op != syntax.RdrOut && redir.Op != syntax.AppOut) || redir.Word == nil || !targetSafe(path(redir.Word, redir.Word.Lit())) {
+					safe = false
+				}
+				continue
+			}
+			hasHeredoc = true
+			bodies = append(bodies, redir.Hdoc)
+			if base != "cat" && base != "tee" {
+				safe = false
+				continue
+			}
+			if base == "cat" {
+				output := false
+				for _, other := range stmt.Redirs {
+					if (other.Op == syntax.RdrOut || other.Op == syntax.AppOut) && other.Word != nil && targetSafe(path(other.Word, other.Word.Lit())) {
+						output = true
 					}
 				}
-				syntax.Walk(redir.Hdoc, func(n syntax.Node) bool {
-					switch p := n.(type) {
-					case *syntax.CmdSubst, *syntax.ProcSubst, *syntax.ArithmExp:
-						safe = false
-					case *syntax.ParamExp:
-						if !scalarParameter(p) {
-							safe = false // reject ${var:=val} mutations inside unquoted heredocs
-						}
-					}
-					return true
-				})
-			}
-			return st, st.clone()
-		}
-		for _, stmt := range tree.Stmts {
-			onTrue, onFalse := walkHeredoc(stmt, hState)
-			if b, ok := stmt.Cmd.(*syntax.BinaryCmd); ok && (b.Op == syntax.AndStmt || b.Op == syntax.OrStmt) {
-				hState = intersectHeredocState(onTrue, onFalse)
+				if !output || len(call.Args) != 1 {
+					safe = false
+				}
 			} else {
-				hState = onTrue
+				files := 0
+				for _, arg := range call.Args[1:] {
+					value := path(arg, arg.Lit())
+					if value == "-a" || value == "--append" {
+						continue
+					}
+					if value == "" || strings.HasPrefix(value, "-") || !targetSafe(value) {
+						safe = false
+					}
+					files++
+				}
+				if files == 0 {
+					safe = false
+				}
 			}
+			syntax.Walk(redir.Hdoc, func(n syntax.Node) bool {
+				switch n.(type) {
+				case *syntax.CmdSubst, *syntax.ProcSubst:
+					safe = false
+				}
+				return true
+			})
 		}
 	}
 	if goTest {
@@ -269,54 +267,11 @@ func normalizeLarkCommandTracked(cmd, cwd string, gates []proto.CommandGate, res
 	return result
 }
 
-type heredocNormState struct {
-	vars map[string]string
-	dir  string
-}
-
-func (s heredocNormState) clone() heredocNormState {
-	return heredocNormState{vars: maps.Clone(s.vars), dir: s.dir}
-}
-
-func intersectHeredocState(a, b heredocNormState) heredocNormState {
-	out := heredocNormState{vars: map[string]string{}}
-	if a.dir != "" && a.dir == b.dir {
-		out.dir = a.dir
-	}
-	for k, v := range a.vars {
-		if bv, ok := b.vars[k]; ok && bv == v {
-			out.vars[k] = v
-		}
-	}
-	return out
-}
-
-func heredocResolveWord(word *syntax.Word, vars map[string]string, cmd string) (string, bool) {
-	if word == nil {
-		return "", false
-	}
-	if home, ok := larkHomeWord(word, cmd); ok {
-		return home, true
-	}
-	value, _, ok := literalLoopWord(word, vars)
-	if !ok || strings.Contains(value, "$") {
-		return "", false
-	}
-	return value, true
-}
-
-func isVirtualFSTarget(path string) bool {
-	for _, prefix := range []string{"/dev", "/proc", "/sys"} {
-		if path == prefix || strings.HasPrefix(path, prefix+"/") {
-			return true
-		}
-	}
-	return false
-}
-
 // Special files, symlinks and virtual filesystems can forward the heredoc to
 // a running process. An unknown target is not proof of an ordinary file.
-func safeHeredocTarget(name, cwd string) bool {
+// relax (a bypass conversation) also takes a file in directories that do not exist yet: the write then makes or fails
+// on plain directories under the nearest one that exists, which is checked as the parent would be (#15860).
+func safeHeredocTarget(name, cwd string, relax bool) bool {
 	if name = larkHomePath(name); !safeLiteralCommand(name) {
 		return false
 	}
@@ -327,39 +282,57 @@ func safeHeredocTarget(name, cwd string) bool {
 		name = filepath.Join(cwd, name)
 	}
 	name = filepath.Clean(name)
-	if isVirtualFSTarget(name) {
-		return false
-	}
-	parent := filepath.Dir(name)
-	if resolvedParent, err := filepath.EvalSymlinks(parent); err == nil {
-		if isVirtualFSTarget(filepath.Join(resolvedParent, filepath.Base(name))) {
+	parent, err := filepath.EvalSymlinks(filepath.Dir(name))
+	if err != nil {
+		if !relax {
 			return false
 		}
-		info, err := os.Lstat(name)
-		if os.IsNotExist(err) {
-			return true
+		if parent, err = larkMissingParent(filepath.Dir(name)); err != nil {
+			return false
 		}
-		return err == nil && info.Mode().IsRegular()
-	} else if !os.IsNotExist(err) {
-		return false
 	}
-	// When the parent directory does not exist yet (e.g. before mkdir -p or a sanitized path),
-	// walk up to the nearest existing ancestor and verify it resolves to a real directory outside /dev, /proc, and /sys.
-	for anc := parent; ; anc = filepath.Dir(anc) {
-		if _, err := os.Lstat(anc); os.IsNotExist(err) {
-			if anc == filepath.Dir(anc) {
+	for _, path := range []string{name, filepath.Join(parent, filepath.Base(name))} {
+		for _, prefix := range []string{"/dev", "/proc", "/sys"} {
+			if path == prefix || strings.HasPrefix(path, prefix+"/") {
 				return false
 			}
-			continue
-		} else if err != nil {
-			return false
 		}
-		resolvedAnc, err := filepath.EvalSymlinks(anc)
-		if err != nil || isVirtualFSTarget(resolvedAnc) {
-			return false
+	}
+	info, err := os.Lstat(name)
+	if os.IsNotExist(err) {
+		return true
+	}
+	return err == nil && info.Mode().IsRegular()
+}
+
+// larkMissingParent is where a directory that does not exist would be made: the nearest existing ancestor, with its
+// symlinks resolved, joined with the missing rest. That ancestor has to be a directory.
+func larkMissingParent(dir string) (string, error) {
+	for missing := ""; ; {
+		real, err := filepath.EvalSymlinks(dir)
+		if err == nil {
+			info, err := os.Stat(real)
+			if err != nil {
+				return "", err
+			}
+			if !info.IsDir() {
+				return "", os.ErrInvalid
+			}
+			return filepath.Join(real, missing), nil
 		}
-		info, err := os.Stat(resolvedAnc)
-		return err == nil && info.IsDir()
+		if !os.IsNotExist(err) {
+			return "", err
+		}
+		// Reject an existing entry whose EvalSymlinks returned ErrNotExist (a dangling symlink, #16755).
+		if _, lerr := os.Lstat(dir); lerr == nil || !os.IsNotExist(lerr) {
+			return "", os.ErrInvalid
+		}
+		up := filepath.Dir(dir)
+		if up == dir {
+			return "", err
+		}
+		missing = filepath.Join(filepath.Base(dir), missing)
+		dir = up
 	}
 }
 

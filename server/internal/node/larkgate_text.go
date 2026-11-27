@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"mvdan.cc/sh/v3/syntax"
 )
 
 // Where text naming lark-cli matters (#8119). Words only run as a command at a command's own position, which
@@ -33,23 +34,13 @@ type larkFlow struct {
 // runs as well. Text naming lark-cli that only filters see or print stays data. In a sequential list (one command
 // after another, as written) only a program after the text was written can run the file, and a note (Markdown,
 // plain text, a log, a table) only a program that names it (#8148).
-func larkTextRuns(cmd string, flow []larkFlow, sequential bool, vars map[string]string) bool {
+func larkTextRuns(cmd string, flow []larkFlow, sequential bool) bool {
 	names := larkCLIRe.MatchString(cmd)
 	pipelineCalls := larkPipelineCallFlags(cmd, flow)
 	tainted, mentioned, writes, program, notesRun, pos := false, false, false, false, false, 0
 	var notes []string
 	runsNote := func(f larkFlow) bool {
-		if !f.program || len(notes) == 0 {
-			return false
-		}
-		expanded := ""
-		if len(vars) > 0 && strings.Contains(f.text, "$") {
-			expanded = expandLarkTextVars(f.text, vars, false)
-		}
-		return slices.ContainsFunc(notes, func(n string) bool {
-			base := filepath.Base(n)
-			return strings.Contains(f.text, base) || expanded != "" && strings.Contains(expanded, base)
-		})
+		return f.program && slices.ContainsFunc(notes, func(n string) bool { return strings.Contains(f.text, filepath.Base(n)) })
 	}
 	for i, f := range flow {
 		own := !f.call && larkCLIRe.MatchString(f.text)
@@ -231,31 +222,18 @@ func larkInlineScript(args []string, valued, flags string) (string, bool) {
 	return "", false
 }
 
-// larkWritesFile: a segment's redirections write a file (anything but /dev/null or another descriptor); the notes
-// among them (larkNoteFile) are listed apart.
-func larkWritesFile(redirect string) (writes bool, notes []string) {
-	return larkWritesFileWithVars(redirect, nil, false)
-}
-
-// larkWritesFileWithVars resolves proven literal path variables (and $HOME when allowHome is true) in redirect
-// targets before classifying note files (#15860).
-func larkWritesFileWithVars(redirect string, vars map[string]string, allowHome bool) (writes bool, notes []string) {
+// larkWritesFileVars: a segment's redirections write a file (anything but /dev/null or another descriptor); the notes
+// among them (larkNoteFile) are listed apart. vars, when not nil, are the literal values earlier assignments in the
+// command gave (classifyLarkRelaxed): a note's directory may then come from one (larkNotePath, #15860).
+func larkWritesFileVars(redirect string, vars map[string]string) (writes bool, notes []string) {
 	for _, t := range strings.Fields(redirect) {
 		op := strings.TrimLeft(t, "0123456789&")
 		if !strings.HasPrefix(op, ">") || redirectFD.MatchString(t) {
 			continue
 		}
 		target := strings.TrimLeft(op, ">|")
-		singleQuoted := false
-		if len(target) >= 2 && target[0] == target[len(target)-1] && (target[0] == '"' || target[0] == '\'') {
-			inner := target[1 : len(target)-1]
-			if !strings.ContainsAny(inner, "'\" \t\n") {
-				singleQuoted = target[0] == '\''
-				target = inner
-			}
-		}
-		if !singleQuoted && strings.Contains(target, "$") && (len(vars) > 0 || allowHome) {
-			target = expandLarkTextVars(target, vars, allowHome)
+		if path, ok := larkNotePath(target, vars); ok {
+			target = path
 		}
 		switch {
 		case target == "/dev/null":
@@ -268,21 +246,26 @@ func larkWritesFileWithVars(redirect string, vars map[string]string, allowHome b
 	return writes, notes
 }
 
-func expandLarkTextVars(s string, vars map[string]string, allowHome bool) string {
-	home := ""
-	if allowHome {
-		home, _ = os.UserHomeDir()
+// larkNotePath is a redirect target whose directory comes from literal variables (`$d/note.md`, `"${d}/note.md"`),
+// with them filled in. The file's own name has to be written out: a program that runs the note then names it
+// (larkTextRuns), as it would a literal path. ok is false for anything else, a variable this command did not set to a
+// literal value included; the target then stays a write.
+func larkNotePath(target string, vars map[string]string) (string, bool) {
+	slash := strings.LastIndex(target, "/")
+	if len(vars) == 0 || slash < 0 || !strings.Contains(target[:slash], "$") ||
+		strings.ContainsAny(strings.Trim(target[slash+1:], `"'`), "$`\\\"'{}") {
+		return "", false
 	}
-	return shellVarRef.ReplaceAllStringFunc(s, func(m string) string {
-		k := strings.Trim(m, "${}")
-		if val, ok := vars[k]; ok {
-			return val
-		}
-		if k == "HOME" && home != "" {
-			return home
-		}
-		return m
-	})
+	file, err := syntax.NewParser().Parse(strings.NewReader(": "+target), "")
+	if err != nil || len(file.Stmts) != 1 {
+		return "", false
+	}
+	call, ok := file.Stmts[0].Cmd.(*syntax.CallExpr)
+	if !ok || len(call.Args) != 2 || len(file.Stmts[0].Redirs) != 0 {
+		return "", false
+	}
+	path, _, ok := literalLoopWord(call.Args[1], vars)
+	return path, ok && larkNoteFile.MatchString(path)
 }
 
 // larkNoteFile: a literal path to a note (Markdown, plain text, a log, a table). No program runs one unless it is

@@ -122,6 +122,48 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(writes).toContain("/api/v1/todos/verify-task/accept");
   });
 
+  it("shows and answers the step behind a direction's rolled-up Needs you row", async () => {
+    const ask = {
+      outcome: "decide" as const, asked_at: at, verdict: "Release approval needed", question: "Which release should go out?",
+      recommend: "Preview", options: [{ label: "Preview" }, { label: "Stable" }],
+    };
+    const projectedAsk = { id: `todo:decision@${at}`, home: "todo" as const, kind: "decision" as const, round: at };
+    const view = { phase: "needs_you" as const, section: "needs_you" as const, reason: "owner_decides" as const, rank: 0 };
+    todo = {
+      ...todo, title: "Publish the update", kind: "task", agents: [], supervision: undefined,
+      view: { ...view, steps: { total: 1, done: 0 }, asks: [{ ...projectedAsk, id: `step:release-step/${projectedAsk.id}` }] },
+    };
+    const step: Todo = {
+      id: "release-step", title: "Choose the release", kind: "task", origin: "worker-supervisor", part_of: todo.id,
+      created_at: at, updated_at: at, agents: [{ machine_id: "demo", session_id: "worker", linked_at: at }],
+      supervision: { state: "needs_user", supervisor: "worker-supervisor" }, ask, view: { ...view, asks: [projectedAsk] },
+    };
+    moreTodos = [step];
+    mainChat = "main-chat";
+    await act(async () => refresh());
+    expect(entry("needs").textContent).toBe(`${label.needs}1`);
+    await act(async () => { entry("needs").click(); await import("./TaskDecision"); });
+    const selector = '[data-needs-row="task:tray-task"]';
+    const collapsed = host.querySelector(selector);
+    expect(collapsed?.textContent).toContain(step.title);
+    expect(collapsed?.textContent).toContain(stateName("needs_you"));
+    expect(collapsed?.textContent).not.toContain(t("lib-state-labels.not_started"));
+    expect(host.querySelectorAll("[data-needs-row]")).toHaveLength(1);
+    await openRows("task:tray-task");
+    await expect.poll(() => host.querySelector(`${selector} [data-decision-question]`)?.textContent).toBe(ask.question);
+    const row = host.querySelector(selector)!;
+    await act(async () => row.querySelector<HTMLButtonElement>("button[data-needs-title]")!.click());
+    expect(getPanel()).toEqual({ kind: "task", todo: step.id });
+
+    const option = [...row.querySelectorAll("button")].find((button) => button.textContent === "Stable");
+    expect(option).toBeDefined();
+    await act(async () => option!.click());
+    const answers = vi.mocked(fetch).mock.calls.filter(([url, init]) => String(url).endsWith("/accept") && init?.method === "POST");
+    expect(answers.map(([url, init]) => [url, JSON.parse(String(init?.body))])).toEqual([
+      [`/api/v1/todos/${step.id}/accept`, { asked_at: at, option: "Stable" }],
+    ]);
+  });
+
   it.each([false, true])("opens a quiet verification whose Pass round has not arrived (main=%s)", async (main) => {
     const verification: Todo = {
       id: "verify-without-pass", title: "Inspect the finished work", quiet: true, origin: "dispatch-chat", created_at: at, updated_at: at,
@@ -173,6 +215,23 @@ describe("Assistant Needs you / In progress trays", () => {
     const sends = vi.mocked(fetch).mock.calls.filter(([url, init]) => String(url).endsWith("/todos/release-review/accept") && init?.method === "POST");
     expect(sends).toHaveLength(1);
     expect(JSON.parse(String(sends[0][1]?.body))).toEqual({ asked_at: at, option: "Release only" });
+  });
+
+  it("renders the projected PR and blockers in the waiting tray ahead of conflicting park evidence", async () => {
+    moreTodos = [{
+      id: "held", title: "Review the export", origin: conversation, created_at: at, updated_at: at,
+      supervision: { supervisor: conversation, state: "parked", parked: {
+        waiting_on: "date", reason: "Earlier plan", until: at, count: 1,
+      } },
+      wait: { kind: "pr_merge", waiting_on: "PR #77", pr_blockers: ["checks_failing"] },
+    }];
+    await act(async () => refreshTodos());
+    await act(async () => entry("parked").click());
+    const row = host.querySelector('[data-parked-task-row="held"]')!;
+    expect(row.querySelector("[data-wait-target]")?.textContent).toContain("PR #77");
+    await act(async () => row.querySelector<HTMLButtonElement>("[data-wait-toggle]")!.click());
+    expect(row.textContent).toContain(t("assistant-tasks.pr_blocker_checks_failed"));
+    expect(row.textContent).not.toContain("Earlier plan");
   });
 
   it("Parked grouping: shows explicit waits and multi-PR waits once, outside active work, including on All", async () => {
@@ -694,6 +753,64 @@ describe("Assistant Needs you / In progress trays", () => {
     expect(rows().map((row) => row.dataset.taskSlot)).toEqual(["task:f-new", "task:f-seen"]);
     expect(rows().map((row) => row.querySelector("[data-task-status]")!.getAttribute("data-task-status"))).toEqual(["done", "done"]);
     expect(entry("finished").textContent).toBe(`${label.finished}2`);
+  });
+
+  it("shows the final Codex reply instead of startup progress, ignores legacy startup progress while active, and keeps newer real progress ahead of stale replies", async () => {
+    const startup = "Codex will start in the terminal to use the requested reasoning effort. Approvals and questions will use the terminal screen.";
+    const earlierReply = "Earlier turn draft.";
+    const newerProgress = "Rechecking the export checksums.";
+    const result = "The export now includes all rows.";
+    const t0 = "2026-11-10T08:00:00Z";
+    const t1 = "2026-11-10T08:01:00Z";
+    const t2 = "2026-11-10T08:02:00Z";
+    const t3 = "2026-11-10T08:03:00Z";
+    const delivered: Todo = {
+      id: "delivered", title: "Fix the export", origin: conversation, created_at: t0, updated_at: t0,
+      agents: [{ machine_id: "demo", session_id: "export-worker", linked_at: t0 }],
+      supervision: {
+        supervisor: conversation,
+        progress: { kind: "progress", text: startup, at: t1 },
+      },
+    };
+    moreTodos = [delivered];
+    await act(async () => refreshTodos());
+    // Active task with empty last_text and legacy Codex startup notice in supervision.progress: never show the notice.
+    act(() => upsertSession({ machine_id: "demo", session_id: "export-worker", title: "Export worker", cwd: "/demo",
+      status: "working", state: "working", updated_at: t0 }));
+    act(() => entry("running").click());
+    const row = () => host.querySelector('[data-task-slot="task:delivered"]')?.textContent;
+    expect(row()).not.toContain(startup);
+
+    // Delivered task whose real progress arrived after an earlier reply shows the newer progress, not the stale reply.
+    act(() => upsertSession({ machine_id: "demo", session_id: "export-worker", title: "Export worker", cwd: "/demo",
+      status: "idle", state: "unread", updated_at: t1, last_text: earlierReply }));
+    act(() => putTodo({
+      ...delivered, delivery: { state: "live", at: t2 },
+      supervision: { supervisor: conversation, progress: { kind: "progress", text: newerProgress, at: t2 } },
+    }));
+    expect(row()).toContain(newerProgress);
+    expect(row()).not.toContain(earlierReply);
+
+    // Once a newer final reply lands after that progress report, the reply wins over the older progress.
+    act(() => upsertSession({ machine_id: "demo", session_id: "export-worker", title: "Export worker", cwd: "/demo",
+      status: "idle", state: "unread", updated_at: t3, last_text: result }));
+    expect(row()).toContain(result);
+    expect(row()).not.toContain(newerProgress);
+
+    // Even if a legacy startup notice had a newer timestamp than the reply, it is still ignored and the reply wins.
+    act(() => putTodo({
+      ...delivered, delivery: { state: "live", at: t3 },
+      supervision: { supervisor: conversation, progress: { kind: "progress", text: startup, at: "2026-11-10T08:04:00Z" } },
+    }));
+    expect(row()).toContain(result);
+    expect(row()).not.toContain(startup);
+
+    act(() => putTodo({
+      ...delivered, done_at: t3, delivery: { state: "live", at: t3 }, supervision: { ...delivered.supervision!, state: "user_check",
+        reviews: [{ at: t3, verdict: "accepted" }], progress: { kind: "done", text: "Verified against the source.", at: t3 } },
+    }));
+    await act(async () => entry("finished").click());
+    expect(row()).toContain("Verified against the source.");
   });
 
   it("keeps reopened accepted work Working while its Agent runs again", () => {
