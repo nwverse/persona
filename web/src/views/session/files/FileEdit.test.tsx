@@ -175,6 +175,16 @@ describe("FileEdit", () => {
       await click(t("files-editor.keep_editing"));
       expect(document.body.textContent).not.toContain(t("files-editor.discard_title"));
 
+      // 2a. External SidePanel Escape delegation (e.g. focus on ResizeHandle) prompts discard when dirty.
+      const editRoot = host.querySelector<HTMLElement>('[data-testid="file-edit"]')!;
+      expect(editRoot.hasAttribute("data-unsaved-edit")).toBe(true);
+      const delegated = new CustomEvent("persona:escape-unsaved", { cancelable: true });
+      act(() => { editRoot.dispatchEvent(delegated); });
+      expect(delegated.defaultPrevented).toBe(true);
+      expect(document.body.textContent).toContain(t("files-editor.discard_title"));
+      await click(t("files-editor.keep_editing"));
+      expect(document.body.textContent).not.toContain(t("files-editor.discard_title"));
+
       // 2b. While saving is in flight, Escape consumes the event without opening discard dialog or closing.
       let finishSave!: (r: Response) => void;
       vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((resolve) => { finishSave = resolve; })));

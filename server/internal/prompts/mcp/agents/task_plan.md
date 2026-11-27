@@ -10,7 +10,7 @@ Use repositories_list or repository_get when needed. An explicit repository URL 
 
 Pass todo_id with a saved backend or container operation_id. Repositories for a new container must be ready. Host selects an enabled engine.
 
-Workspace new isolates and can name a branch (default task/<todo id>). Existing needs a clean, unused checkout. Queue waits FIFO if requested or the owner waits. None creates nothing. Omit for none on readonly or the writable default (new if busy). Engine setup failure stops dispatch. Acceptance keeps workspaces. Respect org read-only refusals.
+Workspace new isolates and can name a branch (default task/<todo id>). Existing needs a clean, unused checkout. Queue waits FIFO if requested or the owner waits. Scratch uses a managed isolated dir (omit cwd). None creates nothing. Omit for none on readonly or the writable default (new if busy). Engine setup failure stops dispatch. Acceptance keeps workspaces. Respect org read-only refusals.
 
 `wait_seconds` observes up to 50 seconds after dispatch. Inline observation includes `completed` with this input's `reply`, `question` with a pending `interaction_id`, or `timeout`/`cancelled`/`unavailable`/`interrupted`/`failed`. Observation records known input and session ids. Observation never answers questions, accepts tasks, resends or cancels work. Normal supervision and `task_review` apply. Older nodes may time out rather than return an unrelated reply. Only an immediately dispatchable single task waits.{{template "shared/mcp_language" .}}
 
@@ -46,6 +46,7 @@ Workspace new isolates and can name a branch (default task/<todo id>). Existing 
         ],
         "anyOf": [
           {"required": ["cwd"]},
+          {"type": "object", "required": ["workspace"], "properties": {"workspace": {"type": "string", "enum": ["scratch"]}}},
           {"type": "object", "required": ["workspace", "todo_id"], "properties": {"workspace": {"type": "object", "required": ["backend"]}}},
           {"type": "object", "required": ["workspace"], "properties": {"workspace": {"type": "object", "required": ["container"]}}}
         ],
@@ -86,13 +87,13 @@ Workspace new isolates and can name a branch (default task/<todo id>). Existing 
           },
           "cwd": {
             "type": "string",
-            "description": "Abs or ~/ dir, unless workspace.backend/container supplies it."
+            "description": "Abs or ~/ dir; omit for scratch/backend/container."
           },
           "workspace": {
             "type": ["string", "object"],
-            "description": "workspace policy; omit for default; existing: path or workspace id",
+            "description": "policy; existing: path/id",
             "oneOf": [
-              { "type": "string", "enum": ["new", "none"] },
+              { "type": "string", "enum": ["new", "none", "scratch"] },
               { "type": "object", "required": ["backend"], "additionalProperties": false, "properties": { "backend": { "type": "object", "required": ["operation_id"], "additionalProperties": false, "properties": { "operation_id": { "type": "string", "minLength": 1 }, "host": { "type": "string" } } } } },
               { "type": "object", "required": ["container"], "additionalProperties": false, "properties": { "container": { "type": "object", "additionalProperties": false, "properties": { "selected_repo_ids": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }, "operation_id": { "type": "string", "minLength": 1 }, "host": { "type": "string" } } } } },
               { "type": "object", "required": ["existing"], "additionalProperties": false, "properties": { "existing": { "type": "string", "minLength": 1 }, "queue": { "type": "boolean" } } },

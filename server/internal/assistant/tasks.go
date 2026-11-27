@@ -1052,6 +1052,9 @@ func (s *Service) aliasTaskWorktreeStatus(machine, srcDir, aliasDir string) {
 func (s *Service) resolveTaskRepo(ctx context.Context, t *PlanTask) {
 	dir := taskRunDir(*t)
 	t.Repo, t.repoOf = "", t.Machine+"\x00"+proto.NodeClean(dir)
+	if t.scratchWorkspace() {
+		return
+	}
 	st := t.cwdStatus
 	if st == nil || (!statusNames(*st, t.cwdStatusOf, t.repoOf) && (t.cwdStatusResolved == "" || t.cwdStatusResolved != t.repoOf)) {
 		ctx, cancel := context.WithTimeout(ctx, repoLookup)
