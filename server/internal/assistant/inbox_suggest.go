@@ -763,7 +763,7 @@ func normalizeReplyMentions(text string, raw []InboxMention) ([]InboxMention, er
 	byID := make(map[string]string, len(raw))
 	byName := make(map[string]string, len(raw))
 	for _, m := range raw {
-		id := strings.TrimSpace(m.ID)
+		id := strings.TrimSpace(string(m.ID))
 		if id == "" || strings.ContainsAny(id, " \t\r\n") {
 			return nil, errSuggestion{"each mention requires a non-empty id without whitespace"}
 		}
@@ -785,7 +785,7 @@ func normalizeReplyMentions(text string, raw []InboxMention) ([]InboxMention, er
 		}
 		byID[id] = name
 		byName[name] = id
-		out = append(out, InboxMention{ID: id, Name: name})
+		out = append(out, InboxMention{ID: InboxMentionUserID(id), Name: name})
 	}
 	return out, nil
 }

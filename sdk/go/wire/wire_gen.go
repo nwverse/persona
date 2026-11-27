@@ -4437,9 +4437,15 @@ type ConnectorInboxReply struct {
 // ConnectorInboxMention: binds an exact @name in the reply's text to a verified external user id, for connectors that
 // support real @ mentions.
 type ConnectorInboxMention struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID   ConnectorMentionUserID `json:"id"`
+	Name string                 `json:"name"`
 }
+
+// ConnectorMentionUserID: A person's user ID on the connector's own service, as verified for a real @ mention.
+type ConnectorMentionUserID string
+
+// String returns the ID as it is on the wire.
+func (v ConnectorMentionUserID) String() string { return string(v) }
 
 type ConnectorStatusChange struct {
 	Ref   string `json:"ref"`

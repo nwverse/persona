@@ -7,7 +7,7 @@ export function BoundMentions({ text, mentions, sent, className }: { text: strin
   const active = activeMentions(text, mentions);
   if (active.length === 0) return null;
   return (
-    <div data-testid="bound-mentions" className={cx("flex flex-wrap items-center gap-1 text-[11.5px] text-ink-2", className)}>
+    <div data-testid="bound-mentions" className={cx("flex flex-wrap items-center gap-1 text-submeta text-ink-2", className)}>
       <span className="text-ink-3">{t(sent ? "assistant-handoffcard.mentions_sent" : "assistant-handoffcard.mentions_will")}</span>
       {active.map((m) => (
         <span

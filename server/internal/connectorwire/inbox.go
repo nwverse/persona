@@ -203,10 +203,13 @@ const (
 	TagExternalObject = "external_object"
 )
 
+// MentionUserID is a person's user ID on the connector's own service, as verified for a real @ mention.
+type MentionUserID string
+
 // InboxMention binds an exact @name in InboxReply.Text to a verified external user ID.
 type InboxMention struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID   MentionUserID `json:"id"`
+	Name string        `json:"name"`
 }
 
 // InboxReply is a reply to one of a connector's inbox items.

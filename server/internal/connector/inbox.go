@@ -14,6 +14,7 @@ type (
 	GroupNew            = connectorwire.GroupNew
 	GroupToolCall       = connectorwire.GroupToolCall
 	InboxMention        = connectorwire.InboxMention
+	MentionUserID       = connectorwire.MentionUserID
 	InboxReply          = connectorwire.InboxReply
 	InboxThing          = connectorwire.InboxThing
 	StatusChange        = connectorwire.StatusChange

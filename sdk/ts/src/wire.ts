@@ -4784,8 +4784,17 @@ export interface ConnectorInboxReply {
  * mentions.
  */
 export interface ConnectorInboxMention {
-  id: string;
+  id: ConnectorMentionUserID;
   name: string;
+}
+
+/**
+ * A person's user ID on the connector's own service, as verified for a real @ mention.
+ */
+export type ConnectorMentionUserID = string & { readonly __brand: "ConnectorMentionUserID" };
+/** A ConnectorMentionUserID from its raw string. */
+export function connectorMentionUserID(raw: string): ConnectorMentionUserID {
+  return raw as ConnectorMentionUserID;
 }
 
 export interface ConnectorStatusChange {

@@ -875,10 +875,15 @@
       "description": "Binds an exact @name in the reply's text to a verified external user id, for connectors that support real @ mentions.",
       "type": "object",
       "properties": {
-        "id": {"type": "string"},
+        "id": {"type": "string", "x-id": "ConnectorMentionUserID"},
         "name": {"type": "string"}
       },
       "required": ["id", "name"]
+    },
+    "ConnectorMentionUserID": {
+      "type": "string",
+      "x-id": "ConnectorMentionUserID",
+      "description": "A person's user ID on the connector's own service, as verified for a real @ mention."
     },
     "ConnectorStatusChange": {
       "type": "object",

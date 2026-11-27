@@ -9,6 +9,9 @@ import (
 // InboxMention binds an exact @name in a reply suggestion or reply attempt to a verified external user ID.
 type InboxMention = connector.InboxMention
 
+// InboxMentionUserID is the verified external user ID an InboxMention binds.
+type InboxMentionUserID = connector.MentionUserID
+
 // The processing conversation bound to an event (InboxItem.Handling) and the manager's suggestion on it
 // (InboxItem.Suggestion), docs/assistant/inbox.md "Events and handling chain".
 
