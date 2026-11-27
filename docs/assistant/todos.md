@@ -710,6 +710,11 @@ Recent reads use durable seen timestamps; input and view-exit activity use a sep
 durable record, so they neither mark a future answer read nor suppress its notification. A manager restart forgets neither.
 The owner may still explicitly complete a task in the UI; that does not stop its Agent.
 
+An explicit supervisor cancellation can close a newly planned dispatch while its only Agent is passively viewed.
+It requires a recent first dispatch and a readable transcript with no owner input, possible writes or delivered result.
+A published review or file, an incomplete transcript, or owner input keeps the activity guard.
+The retirement sweep continues to protect the open view and the normal inactivity window.
+
 **Closure and Agent retirement are separate**: completed and cancelled tasks both keep their Agent conversations usable.
 The web chat shows a persistent completed/cancelled ownership line, separate from active task ownership, with a link to
 the task and a continuation hint only while sending remains available. Cancellation no longer interrupts the Agent or
