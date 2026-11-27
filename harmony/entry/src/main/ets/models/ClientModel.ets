@@ -629,7 +629,8 @@ export class ClientModel {
     if (this.detached) return;
     await this.local.put('profiles', JSON.stringify({ profiles: this.profiles, active: this.profile.id }));
   }
-  private async applyAppearance(change: DevicePreferenceChange): Promise<void> {
+  private async applyAppearance(change: DevicePreferenceChange): Promise<boolean> {
+    let saved = false;
     await this.changePreferences(async (): Promise<void> => {
       const mode = change.appearance === undefined ? this.appearance : change.appearance;
       const requested = change.style === undefined ? this.style : change.style;
@@ -639,9 +640,11 @@ export class ClientModel {
       catch (_) { this.error = 'cache_unavailable'; return; }
       this.appearance = mode; this.style = style; this.alerts = alerts;
       for (const view of this.views.values()) { view.appearance = mode; view.style = style; }
+      saved = true;
     });
+    return saved;
   }
-  async setAppearance(mode: number, style?: string, alerts?: boolean): Promise<void> { await this.applyAppearance({ appearance: mode, style: style, alerts: alerts }); }
+  async setAppearance(mode: number, style?: string, alerts?: boolean): Promise<boolean> { return await this.applyAppearance({ appearance: mode, style: style, alerts: alerts }); }
   async setStyle(style: string): Promise<void> { await this.applyAppearance({ style: style }); }
   async setAlerts(alerts: boolean): Promise<void> { await this.applyAppearance({ alerts: alerts }); }
   async setLanguage(language: string): Promise<void> {
@@ -1755,19 +1758,20 @@ export class ClientModel {
     const path = '/api/v1/sessions/' + encodeURIComponent(this.selected.machine) + '/' + encodeURIComponent(this.selected.session || this.selected.id) + '/interrupt';
     return this.canInterrupt() && this.turnWorking() && this.interruptPendingKey !== this.interruptIdentity() && !this.operationBlocked(path);
   }
-  async stop(admission?: () => boolean): Promise<void> {
-    if (!this.canStop() || admission && !admission()) return;
+  async stop(admission?: () => boolean): Promise<boolean> {
+    if (!this.canStop() || admission && !admission()) return false;
     const generation = this.generation, scope = this.scope(), target = this.target(), row = this.selected, repo = this.repo();
     const feedback = this.sendAttempts.get(target);
     const pending = this.interruptIdentity(), admit = (): boolean => this.owns(generation, scope) && this.target() === target && this.repository === repo && this.canInterrupt() && this.turnWorking() && (!admission || admission());
     this.interruptPendingKey = pending;
     try { await repo.stop(row, admit); } catch (error) {
       if (this.owns(generation, scope) && this.target() === target && this.repository === repo) this.failure(error as Error);
-      return;
+      return false;
     } finally { if (this.interruptPendingKey === pending) this.interruptPendingKey = ''; }
     if (feedback && this.owns(generation,scope) && this.sendAttempts.get(target) === feedback) await this.endSendFeedback(scope,target,feedback);
-    if (!this.owns(generation, scope) || this.target() !== target || this.repository !== repo) return;
+    if (!this.owns(generation, scope) || this.target() !== target || this.repository !== repo) return false;
     if (this.demo && this.demoRepository === repo) this.refreshDemo();
+    return true;
   }
   async answer(option: string, values: Record<string, Object>, expected?: Decision, admit?: () => boolean): Promise<void> {
     if (admit && !admit()) return;
@@ -2036,7 +2040,15 @@ export class ClientModel {
       !!session && this.capabilities(session).canApprove;
   }
   canInterrupt(): boolean { return this.connected && this.capabilities().canInterrupt; }
-  canInterruptSession(row: ResourceRow): boolean { return this.connected && this.capabilities(row).canInterrupt; }
+  canInterruptSession(row: ResourceRow): boolean {
+    if (!this.connected || row.kind !== 'session') return false;
+    if (row.group && row.group !== this.profile.id) return false;
+    if (row.manager && row.manager !== this.profile.manager) return false;
+    const session = this.sessions.find((item: ResourceRow) =>
+      item.machine === row.machine && (item.session || item.id) === (row.session || row.id)
+    );
+    return this.capabilities(session || row).canInterrupt;
+  }
   private serializeDraftContexts(refs: Record<string,Object>[]): string {
     if (!refs.length) return '';
     return JSON.stringify(refs.length===1 ? refs[0] : Wire.payload(['contexts'],[refs]));

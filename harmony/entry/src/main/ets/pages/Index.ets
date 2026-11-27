@@ -171,6 +171,7 @@ struct Index {
   @Local foldWorkbenchTab: number = 0;
   @Local foldWorkbenchTabSignal: number = 0;
   @Local quickPaletteOpen: boolean = false;
+  @Local private workbenchInterruptKey: string = '';
   private foldInspectorCollapsedRail: boolean = false;
   private lastFoldPosture: string = '';
   @Local foldWindowWidthVp: number = 0;
@@ -532,7 +533,7 @@ struct Index {
   private peerSegmentHeight(): number { return PhoneStyle.formSize(39.7,47.3,this.environment.fontScale); }
   private peerSegmentWidth(): number {
     const paletteReserve = this.phonePeer() ? 46 : 0;
-    const room = (this.phoneWidth - 2 * this.peerActionSize() - 48 - paletteReserve) / 2;
+    const room = (this.phoneWidth - 2 * this.peerActionSize() - 64 - paletteReserve) / 2;
     return Math.max(48, Math.min(PhoneStyle.formSize(98,114,this.environment.fontScale), room));
   }
   private drawerWidth(): number { return Math.min(380, Math.max(1,this.phoneWidth * 0.82)); }
@@ -558,7 +559,7 @@ struct Index {
   }
   private startPhonePan(event:GestureEvent): void {
     this.gestureKind = '';
-    if (this.wide() || !this.model.profile.id || this.showSheet || this.phoneSettingsShown || this.readerShown || this.chatSearchShown) return;
+    if (this.wide() || !this.model.profile.id || this.showSheet || this.phoneSettingsShown || this.readerShown || this.chatSearchShown || this.quickPaletteOpen) return;
     const finger = event.fingerList[0];
     if (!finger) return;
     const x = finger.localX - event.offsetX, y = finger.localY - event.offsetY;
@@ -991,26 +992,42 @@ struct Index {
   }
   private async interruptSessionFromWorkbench(row: ResourceRow): Promise<void> {
     if (row.kind !== 'session') return;
+    const rowKey = row.key();
+    if (!rowKey || this.workbenchInterruptKey === rowKey) return;
+    this.workbenchInterruptKey = rowKey;
+    let owner: ClientModel = this.model;
     try {
-      const owner = await this.model.viewFor(row);
-      if (owner.selected.key() === row.key() && owner.canStop()) {
-        await owner.stop();
-        toastCenter.show(tr('fold_interrupt_agent'), 'info');
+      owner = row.manager || (row.group && row.group !== this.model.profile.id)
+        ? await this.model.viewFor(row)
+        : this.model;
+      const generation = owner.connectionGeneration();
+      const scope = owner.scope();
+      const sessionId = row.session || row.id;
+      if (!owner.owns(generation, scope) || !owner.canInterruptSession(row)) return;
+      if (owner.selected.key() === rowKey && owner.canStop()) {
+        const stopped = await owner.stop((): boolean => owner.owns(generation, scope));
+        if (stopped && owner.owns(generation, scope)) {
+          toastCenter.show(tr('fold_interrupt_agent'), 'info');
+        } else if (!stopped && owner.owns(generation, scope) && owner.error) {
+          toastCenter.error(trError(owner.error));
+        }
         return;
       }
-      if (owner.connected && owner.canInterruptSession(row)) {
-        await owner.repo().call(
-          '/api/v1/sessions/' + encodeURIComponent(row.machine) + '/' + encodeURIComponent(row.session || row.id) + '/interrupt',
-          'POST',
-          Wire.payload([], []),
-          '',
-          (): boolean => owner.connected && owner.canInterruptSession(row)
-        );
-        await owner.refresh();
-        toastCenter.show(tr('fold_interrupt_agent'), 'info');
-      }
+      const path = '/api/v1/sessions/' + encodeURIComponent(row.machine) + '/' + encodeURIComponent(sessionId) + '/interrupt';
+      if (owner.operationBlocked(path)) return;
+      const admit = (): boolean => owner.owns(generation, scope) && owner.connected && owner.canInterruptSession(row);
+      await owner.repo().call(path, 'POST', Wire.payload([], []), '', admit);
+      if (!owner.owns(generation, scope)) return;
+      await owner.refresh();
+      if (!owner.owns(generation, scope)) return;
+      toastCenter.show(tr('fold_interrupt_agent'), 'info');
     } catch (error) {
-      toastCenter.show(trError((error as Error).message || 'failed'), 'error');
+      owner.reportError(error as Error);
+      toastCenter.error(trError(owner.error || (error as Error).message || 'failed'));
+    } finally {
+      if (this.workbenchInterruptKey === rowKey) {
+        this.workbenchInterruptKey = '';
+      }
     }
   }
   private wide(): boolean {
@@ -1106,12 +1123,24 @@ struct Index {
     } catch (_) {}
     return false;
   }
+  private hasCompetingModalOverlay(): boolean {
+    return this.phoneSettingsShown ||
+      this.activityVisible ||
+      this.readerShown ||
+      this.directionPermissionsVisible ||
+      this.spacesShown ||
+      this.showSheet ||
+      this.chatForward.isChoosing(this.detailModel) ||
+      !!this.messageLift.current;
+  }
   private openQuickPalette(): void {
-    if (!this.model.profile.id) return;
+    if (!this.model.profile.id || this.hasCompetingModalOverlay()) return;
+    if (this.chatSearchShown) this.chatSearchShown = false;
+    if (this.chatTitleMenuVisible || this.chatBodyMenuVisible) this.dismissChatActions();
     Haptics.selection();
     this.quickPaletteOpen = true;
   }
-  private executeQuickCommand(entry: QuickCommandEntry): void {
+  private async executeQuickCommand(entry: QuickCommandEntry): Promise<void> {
     this.quickPaletteOpen = false;
     if (entry.category === 'agents') {
       const rows = this.model.directoryReady && this.model.directorySessions.length
@@ -1150,8 +1179,12 @@ struct Index {
       this.openXiaoYiQuick();
     } else if (id === 'action:toggle_theme') {
       const nextMode = this.environment.dark ? 1 : 2;
-      this.model.setAppearance(nextMode).catch(() => {});
-      this.environment.dark = nextMode === 2;
+      try {
+        const saved = await this.model.setAppearance(nextMode);
+        if (saved && this.model.appearance === nextMode) {
+          this.environment.dark = nextMode === 2;
+        }
+      } catch (_) {}
     } else if (id === 'action:liveview_preview') {
       nativeLiveView.publishSample('needsYou').then((ok: boolean) => {
         if (ok) {
@@ -4058,6 +4091,7 @@ struct Index {
         isTriFold: this.isTriFoldPosture(),
         initialTab: this.foldWorkbenchTab,
         tabSignal: this.foldWorkbenchTabSignal,
+        pendingInterruptKey: this.workbenchInterruptKey,
         onClose: () => {
           this.setFoldInspectorOpen(false);
         },

@@ -18,6 +18,7 @@ export interface QuickSessionInput {
   readonly state?: string;
   readonly keywords?: readonly string[];
   readonly herdrTabName?: string;
+  readonly preferHerdrTabName?: boolean;
   readonly data?: Record<string, Object>;
 }
 
@@ -102,10 +103,11 @@ function stateBadgeLabel(
 
 function resolveAgentTitle(
   session: QuickSessionInput,
-  preferHerdrTab: boolean,
+  defaultPreferHerdrTab: boolean,
   fallbackTitle: string
 ): string {
-  if (preferHerdrTab) {
+  const preferTab = session.preferHerdrTabName !== undefined ? session.preferHerdrTabName : defaultPreferHerdrTab;
+  if (preferTab) {
     const explicitTab = (session.herdrTabName || '').trim();
     if (explicitTab) return explicitTab;
     if (session.data) {

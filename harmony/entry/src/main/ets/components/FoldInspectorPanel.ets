@@ -42,6 +42,7 @@ export struct FoldInspectorPanel {
   @Param isTriFold: boolean = false;
   @Param initialTab: number = 0;
   @Param tabSignal: number = 0;
+  @Param pendingInterruptKey: string = '';
   @Event onClose: () => void = () => {};
   @Event onOpenTools: () => void = () => {};
   @Event onOpenToolsTab: (tab: number) => void = (_tab: number) => {
@@ -119,6 +120,12 @@ export struct FoldInspectorPanel {
     if (Wire.bool(data, 'working') || raw === 'working' || raw === 'running') return 'working';
     if (raw === 'done' || raw === 'unread' || Wire.bool(data, 'unread')) return 'unread';
     return 'idle';
+  }
+
+  private canInterruptRow(row: ResourceRow): boolean {
+    if (this.normalizedRowState(row) !== 'working') return false;
+    const owner = this.model.directoryOwnerFor(row) || this.activeOwner();
+    return owner.canInterruptSession(row);
   }
 
   private sessionState(): string {
@@ -646,7 +653,7 @@ export struct FoldInspectorPanel {
               })
               .id('fold.inspector.session.' + row.id)
 
-              if (this.normalizedRowState(row) === 'working') {
+              if (this.canInterruptRow(row)) {
                 Button({ type: ButtonType.Circle }) {
                   SymbolGlyph(Symbols.stop).fontSize('10vp').fontColor([Colors.danger])
                 }
@@ -654,6 +661,7 @@ export struct FoldInspectorPanel {
                 .height(30)
                 .padding(0)
                 .backgroundColor(Colors.control)
+                .enabled(this.pendingInterruptKey !== row.key())
                 .accessibilityText(tr('fold_interrupt_agent'))
                 .bindTips(tr('fold_interrupt_agent'))
                 .onClick(() => {

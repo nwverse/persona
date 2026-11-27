@@ -38,39 +38,39 @@ export struct QuickCommandSheet {
     const rows = this.model.directoryReady && this.model.directorySessions.length
       ? this.model.directorySessions
       : this.model.sessions;
-    return rows
-      .filter((row: ResourceRow) => {
-        if (row.kind !== 'session') return false;
-        const data = row.data();
-        return !Wire.bool(data, 'archived') && !Wire.bool(data, 'assistant') && !Wire.bool(data, 'hidden_by_directory');
-      })
-      .map((row: ResourceRow): QuickSessionInput => {
-        const data = row.data();
-        const rawState = row.state || Wire.text(data, 'status');
-        const state = Wire.bool(data, 'needs_you') || rawState === 'needs_you' || rawState === 'blocked'
-          ? 'needs_you'
-          : Wire.bool(data, 'working') || rawState === 'working' || rawState === 'running'
-            ? 'working'
-            : rawState === 'done' || rawState === 'unread' || Wire.bool(data, 'unread')
-              ? 'unread'
-              : 'idle';
-        const machineName = this.model.machineName(row.machine) || row.machine;
-        const branch = Wire.text(data, 'git_branch') || Wire.text(data, 'branch');
-        const cwd = Wire.text(data, 'cwd');
-        const subtitleParts = [machineName, branch].filter((part: string) => !!part);
-        return {
-          id: row.id,
-          key: row.key(),
-          title: row.title || tr('agent_untitled'),
-          herdrTabName: herdrTabName(data),
-          subtitle: subtitleParts.join(' · '),
-          machineName: machineName,
-          state: state,
-          keywords: [row.machine, branch, cwd, Wire.text(data, 'launcher'), Wire.text(data, 'model')]
-            .filter((part: string) => !!part),
-          data: data
-        };
+    const inputs: QuickSessionInput[] = [];
+    for (const row of rows) {
+      if (row.kind !== 'session') continue;
+      const data = row.data();
+      if (Wire.bool(data, 'archived') || Wire.bool(data, 'assistant') || Wire.bool(data, 'hidden_by_directory')) continue;
+      const rawState = row.state || Wire.text(data, 'status');
+      const state = Wire.bool(data, 'needs_you') || rawState === 'needs_you' || rawState === 'blocked'
+        ? 'needs_you'
+        : Wire.bool(data, 'working') || rawState === 'working' || rawState === 'running'
+          ? 'working'
+          : rawState === 'done' || rawState === 'unread' || Wire.bool(data, 'unread')
+            ? 'unread'
+            : 'idle';
+      const machineName = this.model.machineName(row.machine) || row.machine;
+      const branch = Wire.text(data, 'git_branch') || Wire.text(data, 'branch');
+      const cwd = Wire.text(data, 'cwd');
+      const subtitleParts = [machineName, branch].filter((part: string) => !!part);
+      const preferHerdr = this.model.directoryOwnerFor(row)?.useHerdrTabName ?? this.model.useHerdrTabName;
+      inputs.push({
+        id: row.id,
+        key: row.key(),
+        title: row.title || tr('agent_untitled'),
+        herdrTabName: herdrTabName(data),
+        preferHerdrTabName: preferHerdr,
+        subtitle: subtitleParts.join(' · '),
+        machineName: machineName,
+        state: state,
+        keywords: [row.machine, branch, cwd, Wire.text(data, 'launcher'), Wire.text(data, 'model')]
+          .filter((part: string) => !!part),
+        data: data
       });
+    }
+    return inputs;
   }
 
   private paletteLabels(): QuickCommandLabels {
@@ -345,7 +345,7 @@ export struct QuickCommandSheet {
                       Divider().strokeWidth(Tokens.divider).color(Colors.divider).margin({ left: 54 })
                     }
                     this.entryRow(entry)
-                  }, (entry: QuickCommandEntry) => entry.id + ':' + entry.title + ':' + entry.badge + ':' + entry.iconKey)
+                  }, (entry: QuickCommandEntry) => entry.id + ':' + entry.title + ':' + entry.subtitle + ':' + entry.badge + ':' + entry.iconKey)
                 }
                 .width('100%')
                 .backgroundColor(Colors.surface)

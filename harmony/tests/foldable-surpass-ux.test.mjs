@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { stripTypeScriptTypes } from 'node:module';
 import {
   FOLD_DISPLAY_MODE_FULL,
   FOLD_STATUS_FOLDED_WITH_SECOND_HALF_FOLDED,
@@ -184,10 +185,16 @@ test('QuickCommandSheet, FoldInspectorPanel, SessionTools, and Index wire stage-
   assert.match(inspector, /onAreaChange\(/);
   assert.match(inspector, /if \(this\.useCompactChipGrid\(\)\)[\s\S]*Column\(\{ space: 8 \}\)[\s\S]*Row\(\{ space: 8 \}\)[\s\S]*Row\(\{ space: 8 \}\)/);
   assert.doesNotMatch(inspector, /normalizedRowState\(row\) === 'working' && !this\.model\.demo/);
-  assert.match(inspector, /normalizedRowState\(row\) === 'working'/);
+  assert.match(inspector, /canInterruptRow\(row: ResourceRow\)[\s\S]*owner\.canInterruptSession\(row\)/);
+  assert.match(inspector, /if \(this\.canInterruptRow\(row\)\)[\s\S]*\.enabled\(this\.pendingInterruptKey !== row\.key\(\)\)/);
   assert.match(inspector, /machine_cpu_load/);
   assert.match(inspector, /fold\.workbench\.machine\.cpu\./);
   assert.match(inspector, /fold\.workbench\.machine\.load\./);
+
+  // QuickCommandSheet: per-hub useHerdrTabName, single row.data() decode, and subtitle in ForEach key
+  assert.match(sheet, /this\.model\.directoryOwnerFor\(row\)\?\.useHerdrTabName \?\? this\.model\.useHerdrTabName/);
+  assert.equal((sheet.match(/row\.data\(\)/g) || []).length, 1);
+  assert.match(sheet, /entry\.id \+ ':' \+ entry\.title \+ ':' \+ entry\.subtitle/);
 
   // SessionTools: two-tier non-clipping header in isCompactPane
   assert.match(tools, /if \(this\.isCompactPane\)/);
@@ -196,19 +203,77 @@ test('QuickCommandSheet, FoldInspectorPanel, SessionTools, and Index wire stage-
   assert.match(tools, /TextAlign\.Start/);
   assert.match(tools, /file_crumb_session/);
 
-  // Index: shell.quick.palette on both phone & wide, Ctrl/Meta+K, instant theme toggle, Demo interrupt, book_half_open
+  // Index: shell.quick.palette, Ctrl/Meta+K, modal collision guard, synced theme toggle, scoped interrupt, book_half_open
   assert.match(index, /@Local quickPaletteOpen: boolean = false;/);
+  assert.match(index, /@Local private workbenchInterruptKey: string = '';/);
+  assert.match(index, /hasCompetingModalOverlay\(\)[\s\S]*phoneSettingsShown[\s\S]*activityVisible[\s\S]*readerShown[\s\S]*directionPermissionsVisible[\s\S]*spacesShown[\s\S]*showSheet[\s\S]*chatForward\.isChoosing/);
+  assert.match(index, /openQuickPalette\(\)[\s\S]*hasCompetingModalOverlay\(\)[\s\S]*chatSearchShown/);
+  assert.match(index, /startPhonePan[\s\S]*this\.quickPaletteOpen/);
+  assert.match(index, /peerSegmentWidth\(\)[\s\S]*- 64 - paletteReserve/);
   assert.match(index, /resolveFoldKeyboardShortcut\(/);
   assert.match(index, /action === 'open_palette'/);
   assert.match(index, /id\('shell\.quick\.palette'\)/);
   assert.match(index, /SheetType\.CENTER/);
   assert.match(index, /SheetSize\.LARGE/);
   assert.match(index, /action:toggle_theme/);
-  assert.match(index, /setAppearance\(/);
-  assert.match(index, /this\.environment\.dark =/);
+  assert.match(index, /const saved = await this\.model\.setAppearance\(nextMode\);[\s\S]*if \(saved && this\.model\.appearance === nextMode\)[\s\S]*this\.environment\.dark = nextMode === 2;/);
   assert.match(index, /book_half_open[\s\S]*fold_posture_book/);
   assert.doesNotMatch(index, /interruptSessionFromWorkbench[\s\S]*this\.model\.demo \|\|/);
-  assert.match(clientModel, /canInterruptSession\(row: ResourceRow\)/);
+  const interruptFn = index.slice(index.indexOf('  private async interruptSessionFromWorkbench('), index.indexOf('  private wide(): boolean'));
+  assert.match(interruptFn, /this\.workbenchInterruptKey === rowKey/);
+  assert.match(interruptFn, /owner\.owns\(generation, scope\)/);
+  assert.match(interruptFn, /owner\.operationBlocked\(path\)/);
+  assert.match(interruptFn, /toastCenter\.error\(/);
+  assert.match(interruptFn, /finally \{[\s\S]*this\.workbenchInterruptKey = '';/);
+  assert.match(clientModel, /async stop\(admission\?: \(\) => boolean\): Promise<boolean>/);
+  assert.match(clientModel, /async setAppearance\([^)]*\): Promise<boolean>/);
+  assert.match(clientModel, /canInterruptSession\(row: ResourceRow\): boolean/);
+});
+
+test('QuickCommandPalette supports per-session multi-hub preferHerdrTabName and ClientModel.canInterruptSession isolates foreign hubs', () => {
+  const multiHub = buildQuickCommandGroups('', [
+    {
+      id: 'hub-a-1',
+      title: 'cli-a',
+      herdrTabName: 'Hub A Tab',
+      preferHerdrTabName: true,
+      state: 'working'
+    },
+    {
+      id: 'hub-b-1',
+      title: 'cli-b',
+      herdrTabName: 'Hub B Tab',
+      preferHerdrTabName: false,
+      state: 'working'
+    }
+  ], { useHerdrTabName: false });
+  assert.equal(multiHub[0].entries[0].title, 'Hub A Tab');
+  assert.equal(multiHub[0].entries[1].title, 'cli-b');
+
+  // Verify ClientModel.canInterruptSession rejects foreign Hub/manager, offline, and non-session rows.
+  const clientModelSrc = readFileSync(new URL('../entry/src/main/ets/models/ClientModel.ets', import.meta.url), 'utf8');
+  const fnStart = clientModelSrc.indexOf('  canInterruptSession(row: ResourceRow): boolean {');
+  const fnEnd = clientModelSrc.indexOf('  private serializeDraftContexts', fnStart);
+  const rawFn = clientModelSrc.slice(fnStart, fnEnd).trim();
+  const jsFn = stripTypeScriptTypes(rawFn.replace('canInterruptSession(', 'function canInterruptSession('));
+  const makeModel = (connected, profileId, manager, sessions = []) => {
+    const model = {
+      connected,
+      profile: { id: profileId, manager },
+      sessions,
+      capabilities: (row) => ({ canInterrupt: row?.caps?.interrupt === true })
+    };
+    model.canInterruptSession = new Function(`return (${jsFn});`)();
+    return model;
+  };
+  const root = makeModel(true, 'hub-a', 'mgr-a');
+  assert.equal(root.canInterruptSession({ kind: 'session', group: 'hub-a', manager: 'mgr-a', machine: 'm1', id: 's1', caps: { interrupt: true } }), true);
+  assert.equal(root.canInterruptSession({ kind: 'session', group: 'hub-b', manager: 'mgr-a', machine: 'm1', id: 's1', caps: { interrupt: true } }), false);
+  assert.equal(root.canInterruptSession({ kind: 'session', group: 'hub-a', manager: 'mgr-b', machine: 'm1', id: 's1', caps: { interrupt: true } }), false);
+  assert.equal(root.canInterruptSession({ kind: 'conversation', group: 'hub-a', manager: 'mgr-a', machine: 'm1', id: 'c1', caps: { interrupt: true } }), false);
+  assert.equal(root.canInterruptSession({ kind: 'session', group: 'hub-a', manager: 'mgr-a', machine: 'm1', id: 's1', caps: { interrupt: false } }), false);
+  const offline = makeModel(false, 'hub-a', 'mgr-a');
+  assert.equal(offline.canInterruptSession({ kind: 'session', group: 'hub-a', manager: 'mgr-a', machine: 'm1', id: 's1', caps: { interrupt: true } }), false);
 });
 
 test('All 4 locales include stage-2 strings with zero duplicate keys', () => {
