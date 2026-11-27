@@ -436,7 +436,7 @@ func (n *Node) agyTranscriptMeta(conversation string) (agySessionMeta, bool) {
 	if n == nil || conversation == "" || !uuidRe.MatchString(conversation) {
 		return agySessionMeta{}, false
 	}
-	dir := n.agyDataRoot()
+	dir := n.agyRootKnownFor(conversation)
 	root, err := agyBrain(dir, conversation)
 	if err != nil {
 		return agySessionMeta{}, false

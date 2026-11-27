@@ -2,7 +2,6 @@ package assistant
 
 import (
 	"context"
-	"encoding/json"
 	"time"
 
 	"github.com/nwverse/persona/sdk/go/wire"
@@ -27,59 +26,66 @@ func (s *Service) kbProviderBinding(ctx context.Context, req assistantwire.KBPro
 	return b, set.History, true
 }
 
-func (s *Service) kbProviderRead(ctx context.Context, method string, raw json.RawMessage) (any, error) {
-	denied := &rpc.Error{Code: "permission_denied", Message: "knowledge import selection unavailable"}
-	var env assistantwire.KBProviderRequest
-	if err := kbDecodeParams(method, raw, &env); err != nil {
-		return nil, err
-	}
-	b, history, ok := s.kbProviderBinding(ctx, env)
+func kbProviderDenied() *rpc.Error {
+	return &rpc.Error{Code: "permission_denied", Message: "knowledge import selection unavailable"}
+}
+
+func (s *Service) kbProviderCheckpointRPC(ctx context.Context, req assistantwire.KBProviderRequest) (*wire.KBImportCheckpointResult, error) {
+	b, history, ok := s.kbProviderBinding(ctx, req)
 	if !ok || s.ui == nil {
-		return nil, denied
+		return nil, kbProviderDenied()
 	}
-	query := env.Params
-	checkpointOnly := method == assistantwire.MethodKBProviderCheckpoint
-	if checkpointOnly {
-		if query != (assistantwire.KBImportQuery{}) {
-			return nil, kbInvalidParams(method, "expected an empty checkpoint query")
-		}
-	} else {
-		if _, err := time.Parse(time.DateOnly, query.Day); err != nil || query.After < 0 || query.Approval == "" {
-			return nil, kbInvalidParams(method, "invalid day, approval or starting line")
-		}
+	if req.Params != (assistantwire.KBImportQuery{}) {
+		return nil, kbInvalidParams(assistantwire.MethodKBProviderCheckpoint, "expected an empty checkpoint query")
 	}
-	engine, err := s.kbGet(ctx)
-	if err != nil {
-		return nil, denied
-	}
-	cp, ok := s.ui.ProviderCheckpoint(engine, history, b, query.Day, time.Now())
+	_, cp, ok := s.kbProviderCheckpoint(ctx, b, history, "")
 	if !ok {
-		return nil, denied
+		return nil, kbProviderDenied()
 	}
-	if checkpointOnly {
-		current, _, ok := s.kbProviderBinding(ctx, env)
-		if !ok || current != b {
-			return nil, denied
-		}
-		return cp, nil
+	current, _, ok := s.kbProviderBinding(ctx, req)
+	if !ok || current != b {
+		return nil, kbProviderDenied()
 	}
-	if cp.Approval != query.Approval {
-		return nil, denied
+	return &cp, nil
+}
+
+func (s *Service) kbProviderSentMarkersRPC(ctx context.Context, req assistantwire.KBProviderRequest) (*wire.KBSentMarkersResult, error) {
+	b, history, ok := s.kbProviderBinding(ctx, req)
+	if !ok || s.ui == nil {
+		return nil, kbProviderDenied()
+	}
+	query := req.Params
+	if _, err := time.Parse(time.DateOnly, query.Day); err != nil || query.After < 0 || query.Approval == "" {
+		return nil, kbInvalidParams(assistantwire.MethodKBProviderSentMarkers, "invalid day, approval or starting line")
+	}
+	engine, cp, ok := s.kbProviderCheckpoint(ctx, b, history, query.Day)
+	if !ok || cp.Approval != query.Approval {
+		return nil, kbProviderDenied()
 	}
 	day, err := s.kbDaySent(ctx, engine, assistantwire.KBDayParams{ID: kb.ChatID(b.FiledAs, string(b.SourceID)), Day: query.Day})
 	if err != nil || day.SentOrigin != "available" {
 		return nil, &rpc.Error{Code: "unavailable", Message: "sent markers unavailable"}
 	}
 	// The ledger lookup can span a change to the selected account, retention or plan.
-	current, history, ok := s.kbProviderBinding(ctx, env)
+	current, history, ok := s.kbProviderBinding(ctx, req)
 	if !ok || current != b {
-		return nil, denied
+		return nil, kbProviderDenied()
 	}
 	fresh, ok := s.ui.ProviderCheckpoint(engine, history, b, query.Day, time.Now())
 	if !ok || fresh.Approval != cp.Approval {
-		return nil, denied
+		return nil, kbProviderDenied()
 	}
-	return kbMarkerPage(day.Messages, query.After), nil
+	page := kbMarkerPage(day.Messages, query.After)
+	return &page, nil
+}
+
+func (s *Service) kbProviderCheckpoint(ctx context.Context, b assistantwire.KBImportProvider, history *assistantwire.KBHistory, day string) (*kb.Engine, wire.KBImportCheckpointResult, bool) {
+	engine, err := s.kbGet(ctx)
+	if err != nil {
+		return nil, wire.KBImportCheckpointResult{}, false
+	}
+	cp, ok := s.ui.ProviderCheckpoint(engine, history, b, day, time.Now())
+	return engine, cp, ok
 }
 
 func kbMarkerPage(messages []kb.DayMessage, after int) wire.KBSentMarkersResult {

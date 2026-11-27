@@ -56,6 +56,7 @@ registerHooks({
 const { DemoRepository } = await import('../entry/src/main/ets/models/DemoRepository.ets');
 const { messageDisplay } = await import('../entry/src/main/ets/models/Compatibility.ets');
 const { parseMessageContent } = await import('../entry/src/main/ets/core/MessageContent.ts');
+const { parseStarredIndexResponse, parseStarredListResponse } = await import('../entry/src/main/ets/core/StarredMessages.ts');
 const { loadMessageImage } = await import('../entry/src/main/ets/models/MessageImage.ets');
 const { loadRemoteDocument } = await import('../entry/src/main/ets/models/RemoteDocument.ets');
 const { ResourceRow } = await import('../entry/src/main/ets/models/Wire.ets');
@@ -344,5 +345,30 @@ test('read-only demo preview routes serve synthetic files, git diff, screen, met
 
   const usage = await repo.call('/api/v1/usage/windows');
   assert.equal(usage.accounts.length, 2);
+  assert.equal(globalThis.__demoTransportCalls, 0);
+});
+
+test('seeded demo starred fixtures parse cleanly via StarredMessages list and index parsers', async () => {
+  globalThis.__demoTransportCalls = 0;
+  const repo = new DemoRepository();
+  const listRaw = await repo.call('/api/v1/assistant/starred');
+  const indexRaw = await repo.call('/api/v1/assistant/starred?index=1');
+  const list = parseStarredListResponse(listRaw);
+  const index = parseStarredIndexResponse(indexRaw);
+
+  assert.equal(list.canWrite, true);
+  assert.equal(index.canWrite, true);
+  assert.ok(list.stars.length >= 2);
+  assert.ok(index.refs.length >= 2);
+
+  for (const id of ['demo-star-1', 'demo-star-2']) {
+    const star = list.stars.find((entry) => entry.id === id);
+    assert.ok(star, `missing ${id}`);
+    assert.equal(star.role, 'assistant');
+    assert.ok(star.title.trim().length > 0);
+    assert.ok(star.speaker.trim().length > 0);
+    assert.ok(star.text.trim().length > 0);
+    assert.ok(index.refs.some((ref) => ref.id === id));
+  }
   assert.equal(globalThis.__demoTransportCalls, 0);
 });

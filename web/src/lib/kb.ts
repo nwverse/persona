@@ -153,6 +153,9 @@ export interface RecordingMinutes {
   /** The summary card (#6563): the headline, the core conclusions and the points and decisions grouped by topic. Read
    *  defensively on its own (modules/recording/minutes-overview.ts `minutesOverview`), so a broken one never costs the fields above. */
   overview?: unknown;
+  /** Real disagreements and each side's stance (#16728). Read defensively on its own
+   *  (modules/recording/minutes-debates.ts `minutesDebates`), so a broken block never costs the fields above. */
+  debates?: unknown;
   partial?: boolean;
   /** The same minutes as Markdown, what Copy sends; it follows the summary card when there is one. */
   markdown: string;

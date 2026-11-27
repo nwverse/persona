@@ -147,6 +147,7 @@ type ContextParams struct {
 	PrepareRecovery bool               `json:"prepare_recovery,omitempty"`
 	SessionID       string             `json:"session_id"`
 	MachineID       string             `json:"machine_id,omitempty"`
+	Query           string             `json:"query,omitempty"`
 	Ack             []ViewErrorReceipt `json:"ack,omitempty"`
 }
 

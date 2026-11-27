@@ -26,13 +26,9 @@ import (
 // phone opens it, reports the call and asks the manager for the matter. The hub keeps no state about calls.
 
 func init() {
-	handleBus(assistantwire.MethodCallRing, func(h *Hub, ctx context.Context, c *busConn, params json.RawMessage) (any, error) {
-		var p assistantwire.CallRingRequest
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: assistantwire.MethodCallRing + ": " + err.Error()}
-		}
+	handleTypedBus(assistantwire.CallRingMethod, assistantwire.MethodCallRing+": ", func(h *Hub, ctx context.Context, c *busConn, p assistantwire.CallRingRequest) (assistantwire.CallRingResult, error) {
 		if p.Call.ID == "" || p.Call.Title == "" {
-			return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: assistantwire.MethodCallRing + ": id and title are required"}
+			return assistantwire.CallRingResult{}, &rpc.Error{Code: bus.CodeInvalidParams, Message: assistantwire.MethodCallRing + ": id and title are required"}
 		}
 		return h.push.ringCall(ctx, c.managerID(), p.Call), nil
 	})

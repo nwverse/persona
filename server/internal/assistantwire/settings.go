@@ -3,6 +3,7 @@ package assistantwire
 import (
 	"time"
 
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -70,6 +71,11 @@ const (
 	// the owner's Retry or Delete when it is not found (#10669). An older manager answers "unknown method": the hub
 	// answers the app with the failure, as before.
 	MethodKeepUndelivered = "assistant.keep_undelivered"
+)
+
+var (
+	StartMethod           = buswire.Method[StartParams, StartResult]{Name: MethodStart}
+	KeepUndeliveredMethod = buswire.Method[KeepUndeliveredParams, KeepUndeliveredResult]{Name: MethodKeepUndelivered}
 )
 
 // InboxPermissionModeParam is manager-only authorization metadata on assistant.send, session.send and
@@ -186,6 +192,11 @@ type StartParams struct {
 	Human bool `json:"-"`
 }
 
+// StartResult carries the conversation started for the hub.
+type StartResult struct {
+	Session proto.Session `json:"session"`
+}
+
 // FirstMessageIDPrefix begins the client_msg_id the manager gives the first message of a conversation a person's own
 // app opened (StartParams.Human). It is the manager's alone: the hub refuses an app's send that names one, so no later
 // message can carry it; a channel's ids (<channel>-<message>) never begin with it.
@@ -227,6 +238,11 @@ type KeepUndeliveredParams struct {
 	// nothing was typed, so the message is simply sent again. The original start, not when the connection ended,
 	// covers a slow first attempt.
 	TriedAt time.Time `json:"tried_at,omitempty"`
+}
+
+// KeepUndeliveredResult carries the message kept for later delivery.
+type KeepUndeliveredResult struct {
+	Undelivered *proto.UndeliveredMessage `json:"undelivered"`
 }
 
 // RenameParams is assistant.rename's params: Params are the app's ({title?, tab_name?}).

@@ -1,10 +1,12 @@
 import { Colors } from '../design/Colors';
 import { Motion } from '../design/Motion';
+import { PersonaSectionLabel, PersonaSheetHeader, PersonaStatusPill, PersonaStatusTone } from '../design/NormalizedPrimitives';
 import { PhoneStyle } from '../design/PhoneStyle';
 import { Symbols } from '../design/Symbols';
 import { Tokens } from '../design/Tokens';
 import { tr } from '../design/Strings';
 import { ClientModel } from '../models/ClientModel';
+import { starredStore } from '../models/StarredStore';
 import { ResourceRow, Wire } from '../models/Wire';
 import { herdrTabName } from '../core/SessionNaming';
 import {
@@ -29,6 +31,7 @@ export struct QuickCommandSheet {
   @Require @Param model: ClientModel;
   @Param showWorkbench: boolean = false;
   @Param showLiveView: boolean = true;
+  @Param showExportChat: boolean = false;
   @Param autoFocus: boolean = false;
   @Event onSelectEntry: (entry: QuickCommandEntry) => void = () => {};
   @Event onClose: () => void = () => {};
@@ -88,8 +91,12 @@ export struct QuickCommandSheet {
       workbenchCode: tr('quick_palette_code_tab'),
       workbenchMachines: tr('quick_palette_machines_tab'),
       openXiaoYi: tr('phone_xiaoyi'),
+      openTokenUsage: tr('token_usage_title'),
       toggleTheme: tr('quick_palette_toggle_theme'),
       liveViewPreview: tr('quick_palette_liveview_preview'),
+      starredMessages: tr('starred_messages'),
+      archivedChats: tr('archived_chats'),
+      exportChat: tr('export_chat'),
       needsYou: tr('needs_you'),
       working: tr('working'),
       unread: tr('agent_group_unread'),
@@ -103,8 +110,12 @@ export struct QuickCommandSheet {
       useHerdrTabName: this.model.useHerdrTabName,
       inboxVisible: this.model.inboxPageVisible(),
       todosVisible: this.model.todosPageVisible(),
+      knowledgeVisible: this.model.knowledgePageVisible(),
       showWorkbench: this.showWorkbench,
       showLiveView: this.showLiveView,
+      showStarred: starredStore.isOffered(this.model),
+      showArchived: this.model.connected,
+      showExportChat: this.showExportChat,
       isDark: this.env.dark,
       labels: this.paletteLabels()
     });
@@ -125,10 +136,18 @@ export struct QuickCommandSheet {
   }
 
   private toneWash(tone: QuickCommandTone): ResourceColor {
-    if (tone === 'needs_you' || tone === 'accent') return Colors.selection;
-    if (tone === 'working') return this.env.dark ? '#28FFB224' : '#189B5500';
-    if (tone === 'unread') return this.env.dark ? '#244CC38A' : '#161D7A4C';
+    if (tone === 'needs_you') return Colors.needsWash;
+    if (tone === 'accent') return Colors.selection;
+    if (tone === 'working') return Colors.workingWash;
+    if (tone === 'unread') return Colors.unreadWash;
     return Colors.control;
+  }
+
+  private pillTone(tone: QuickCommandTone): PersonaStatusTone {
+    if (tone === 'needs_you') return 'needs';
+    if (tone === 'working') return 'working';
+    if (tone === 'unread') return 'unread';
+    return 'neutral';
   }
 
   private entrySymbol(entry: QuickCommandEntry): Resource {
@@ -143,9 +162,13 @@ export struct QuickCommandSheet {
     if (entry.iconKey === 'workbench') return Symbols.apps;
     if (entry.iconKey === 'code') return $r('sys.symbol.code');
     if (entry.iconKey === 'xiaoyi') return $r('sys.symbol.wand_and_stars');
+    if (entry.iconKey === 'token_usage') return Symbols.health;
     if (entry.iconKey === 'sun') return $r('sys.symbol.sun_max');
     if (entry.iconKey === 'moon') return $r('sys.symbol.moon');
     if (entry.iconKey === 'liveview') return $r('sys.symbol.bell');
+    if (entry.iconKey === 'star') return $r('sys.symbol.star_fill');
+    if (entry.iconKey === 'archive') return $r('sys.symbol.archivebox');
+    if (entry.iconKey === 'export') return $r('sys.symbol.share');
     return Symbols.agent;
   }
 
@@ -183,25 +206,27 @@ export struct QuickCommandSheet {
     }
     .width(32)
     .height(32)
-    .borderRadius(9)
-    .backgroundColor(entry.iconKey === 'xiaoyi' ? Colors.selection : this.toneWash(entry.tone))
+    .borderRadius(Tokens.radiusControl)
+    .backgroundColor(entry.iconKey === 'xiaoyi' ? Colors.aiWash : this.toneWash(entry.tone))
     .flexShrink(0)
   }
 
   @Builder entryRow(entry: QuickCommandEntry) {
     Button({ type: ButtonType.Normal }) {
-      Row({ space: 10 }) {
+      Row({ space: Tokens.spaceM }) {
         this.entryLeadingIcon(entry)
-        Column({ space: 2 }) {
+        Column({ space: Tokens.spaceXxs }) {
           Text(entry.title)
-            .fontSize(Tokens.interfaceFontVp(15, this.env.fontScale))
+            .fontSize(Tokens.typeSecondary)
+            .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSecondary))
             .fontWeight(entry.tone === 'needs_you' ? FontWeight.Bold : FontWeight.Medium)
             .fontColor(Colors.ink)
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
           if (entry.subtitle) {
             Text(entry.subtitle)
-              .fontSize(Tokens.interfaceFontVp(12, this.env.fontScale))
+              .fontSize(Tokens.typeLabel)
+              .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
               .fontColor(Colors.secondary)
               .maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -209,26 +234,18 @@ export struct QuickCommandSheet {
         }.layoutWeight(1).alignItems(HorizontalAlign.Start)
 
         if (entry.badge) {
-          Text(entry.badge)
-            .fontSize(Tokens.interfaceFontVp(11, this.env.fontScale))
-            .fontWeight(FontWeight.Medium)
-            .fontColor(this.toneColor(entry.tone))
-            .padding({ left: 8, right: 8, top: 3, bottom: 3 })
-            .backgroundColor(this.toneWash(entry.tone))
-            .borderRadius(Tokens.capsule)
-            .maxLines(1)
-            .flexShrink(0)
+          PersonaStatusPill({ tone: this.pillTone(entry.tone), label: entry.badge })
         }
         if (entry.category !== 'actions') {
           SymbolGlyph(Symbols.expand)
-            .fontSize('11vp')
+            .fontSize(Tokens.interfaceFontVp(Tokens.typeLabel, this.env.fontScale))
             .fontColor([Colors.tertiary])
             .flexShrink(0)
         }
       }
       .width('100%')
       .constraintSize({ minHeight: 52 })
-      .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+      .padding({ left: Tokens.spaceM, right: Tokens.spaceM, top: Tokens.spaceS, bottom: Tokens.spaceS })
       .alignItems(VerticalAlign.Center)
     }
     .width('100%')
@@ -239,49 +256,24 @@ export struct QuickCommandSheet {
   }
 
   build() {
-    Column({ space: 12 }) {
-      Row({ space: 10 }) {
-        Column({ space: 2 }) {
-          Text(tr('quick_palette_title'))
-            .fontSize(Tokens.interfaceFontVp(19, this.env.fontScale))
-            .fontWeight(FontWeight.Bold)
-            .fontColor(Colors.ink)
-            .maxLines(1)
-        }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+    Column({ space: Tokens.spaceM }) {
+      PersonaSheetHeader({
+        title: tr('quick_palette_title'),
+        trailingShortcut: '⌘K',
+        closeIdentity: 'quick.palette.close',
+        onClose: () => this.onClose()
+      })
 
-        Text('⌘K')
-          .fontSize(Tokens.interfaceFontVp(11, this.env.fontScale))
-          .fontFamily('monospace')
-          .fontWeight(FontWeight.Medium)
-          .fontColor(Colors.secondary)
-          .padding({ left: 8, right: 8, top: 4, bottom: 4 })
-          .backgroundColor(Colors.control)
-          .borderRadius(Tokens.capsule)
-
-        Button({ type: ButtonType.Circle }) {
-          SymbolGlyph($r('sys.symbol.xmark')).fontSize('14vp').fontColor([Colors.secondary])
-        }
-        .width(36)
-        .height(36)
-        .padding(0)
-        .backgroundColor(Colors.control)
-        .accessibilityText(tr('close'))
-        .onClick(() => {
-          Haptics.tap();
-          this.onClose();
-        })
-        .id('quick.palette.close')
-      }.width('100%').padding({ left: 16, right: 16, top: 16 })
-
-      Row({ space: 8 }) {
+      Row({ space: Tokens.spaceS }) {
         SymbolGlyph(Symbols.search)
-          .fontSize('16vp')
+          .fontSize(Tokens.interfaceFontVp(16, this.env.fontScale))
           .fontColor([Colors.secondary])
           .flexShrink(0)
         TextInput({ text: this.query, placeholder: tr('quick_palette_placeholder') })
           .layoutWeight(1)
-          .height(38)
-          .fontSize(Tokens.interfaceFontVp(15, this.env.fontScale))
+          .height(Tokens.controlBar - Tokens.spaceSm)
+          .fontSize(Tokens.typeSecondary)
+          .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSecondary))
           .fontColor(Colors.ink)
           .placeholderColor(Colors.secondary)
           .backgroundColor(Color.Transparent)
@@ -295,11 +287,12 @@ export struct QuickCommandSheet {
           .id('quick.palette.search')
         if (this.query.length > 0) {
           Button({ type: ButtonType.Circle }) {
-            SymbolGlyph($r('sys.symbol.xmark')).fontSize('11vp').fontColor([Colors.secondary])
+            SymbolGlyph($r('sys.symbol.xmark')).fontSize(Tokens.interfaceFontVp(11, this.env.fontScale)).fontColor([Colors.secondary])
           }
           .width(26)
           .height(26)
           .padding(0)
+          .responseRegion({ x: -9, y: -9, width: Tokens.controlBar, height: Tokens.controlBar })
           .backgroundColor(Colors.control)
           .accessibilityText(tr('clear'))
           .onClick(() => {
@@ -310,17 +303,18 @@ export struct QuickCommandSheet {
         }
       }
       .width('calc(100% - 32vp)')
-      .padding({ left: 12, right: 10, top: 4, bottom: 4 })
+      .padding({ left: Tokens.spaceM, right: Tokens.spaceM, top: Tokens.spaceXs, bottom: Tokens.spaceXs })
       .backgroundColor(Colors.surface)
-      .borderRadius(PhoneStyle.cardRadius)
-      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: PhoneStyle.cardRadius })
+      .borderRadius(Tokens.radiusSheetCard)
+      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: Tokens.radiusSheetCard })
       .shadow(PhoneStyle.cardElevation(this.env.dark))
 
       if (this.groups.length === 0) {
-        Column({ space: 8 }) {
+        Column({ space: Tokens.spaceS }) {
           SymbolGlyph(Symbols.search).fontSize('26vp').fontColor([Colors.tertiary])
           Text(tr('quick_palette_empty'))
-            .fontSize(Tokens.interfaceFontVp(14, this.env.fontScale))
+            .fontSize(Tokens.typeSecondary)
+            .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSecondary))
             .fontColor(Colors.secondary)
         }
         .width('100%')
@@ -330,15 +324,10 @@ export struct QuickCommandSheet {
         .id('quick.palette.empty')
       } else {
         Scroll() {
-          Column({ space: 14 }) {
+          Column({ space: Tokens.spaceM }) {
             ForEach(this.groups, (group: QuickCommandGroup) => {
-              Column({ space: 6 }) {
-                Text(this.categoryTitle(group.category))
-                  .fontSize(Tokens.interfaceFontVp(12, this.env.fontScale))
-                  .fontWeight(FontWeight.Bold)
-                  .fontColor(Colors.secondary)
-                  .padding({ left: 4, right: 4 })
-                  .width('100%')
+              Column({ space: Tokens.spaceSm }) {
+                PersonaSectionLabel({ text: this.categoryTitle(group.category) })
 
                 Column() {
                   ForEach(group.entries.slice(), (entry: QuickCommandEntry, index: number) => {
@@ -358,7 +347,7 @@ export struct QuickCommandSheet {
             }, (group: QuickCommandGroup) => group.category + ':' + group.entries.map((entry: QuickCommandEntry) => entry.id + '|' + entry.title + '|' + entry.badge).join(','))
           }
           .width('100%')
-          .padding({ left: 16, right: 16, bottom: 28 })
+          .padding({ left: Tokens.spaceL, right: Tokens.spaceL, bottom: 28 })
         }
         .width('100%')
         .layoutWeight(1)

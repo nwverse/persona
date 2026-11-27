@@ -214,3 +214,52 @@ func listedRow(list []proto.Session, session string) proto.Session {
 	}
 	return proto.Session{}
 }
+
+// While compaction is running, the node may keep a silent compaction row disguised as StatusDone / StatusIdle while
+// /compact and CHECKPOINT steps advance Rev. Both refreshMainConversationAttention and decorateMainConversationAttention
+// must skip scanning until CompactionRunning clears, then resume normal classification once compaction settles.
+func TestMainConversationAttentionSkipsWhileCompactionRunning(t *testing.T) {
+	ft := attentionFleet(t)
+	at := time.Date(2026, 11, 26, 6, 16, 4, 0, time.UTC)
+	ft.f.setItems(attentionTestRenumber(attentionTestItems(at, at.Add(time.Minute))[3:])...) // one completed silent round
+
+	compacting := func(rev int64, status string) proto.Session {
+		row := mainRow(rev)
+		row.Status = status
+		row.Compaction = &proto.Compaction{State: proto.CompactionRunning}
+		return row
+	}
+
+	ft.sessions("server", compacting(11, proto.StatusDone))
+	ft.sessions("server", compacting(12, proto.StatusIdle))
+	if got := attentionTestReads(ft.f); got != 0 {
+		t.Fatalf("refreshMainConversationAttention made %d session.items RPCs while CompactionRunning, want 0", got)
+	}
+	if _, cached := ft.s.conversationAttentionCached("server", "conv1", 11); cached {
+		t.Fatal("compacting revision 11 was unexpectedly classified")
+	}
+	if _, cached := ft.s.conversationAttentionCached("server", "conv1", 12); cached {
+		t.Fatal("compacting revision 12 was unexpectedly classified")
+	}
+
+	row := compacting(12, proto.StatusDone)
+	row.State = proto.StateUnread
+	ft.s.decorateMainConversationAttention(&row, ft.s.settings(t.Context()))
+	if got := attentionTestReads(ft.f); got != 0 {
+		t.Fatalf("decorateMainConversationAttention made %d session.items RPCs while CompactionRunning, want 0", got)
+	}
+	if row.State != proto.StateUnread {
+		t.Fatalf("decorateMainConversationAttention altered state while CompactionRunning: %q", row.State)
+	}
+
+	settled := mainRow(12)
+	settled.Compaction = &proto.Compaction{State: proto.CompactionDone}
+	ft.sessions("server", settled)
+	waitFor(t, "settled revision 12 classified once compaction finishes", func() bool {
+		e, ok := ft.s.conversationAttentionCached("server", "conv1", 12)
+		return ok && e.Silent && listedRow(ft.lastList("server"), "conv1").State == proto.StateIdle
+	})
+	if got := attentionTestReads(ft.f); got != 1 {
+		t.Fatalf("after compaction settled, got %d session.items RPCs, want 1", got)
+	}
+}
