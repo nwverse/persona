@@ -569,6 +569,9 @@ func (s *Service) removeTodo(ctx context.Context, id string) error {
 	s.todos.writing.Lock()
 	if current, ok := s.todoNow(id); ok {
 		err := s.receivedFindingsCloseError(current, nil)
+		if err == nil {
+			err = s.investigationParentDeleteError(current)
+		}
 		if err == nil && current.Supervision != nil && current.Supervision.Investigation != nil &&
 			current.Supervision.Investigation.Version != 0 {
 			err = s.investigationTransitionError(ctx, current, current.Supervision, nil)

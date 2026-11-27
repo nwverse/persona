@@ -1,6 +1,7 @@
 {
   "workers_accepted": "All {count} workers were accepted. Their leader has stopped. Review the parent and its recorded decisions for the remaining work.",
   "investigation_handoff_open": "Complete or reassign the investigation finding before closing this follow-up: {finding}",
+  "investigation_parent_handoff_open": "Complete the handed-off follow-up before deleting this investigation task: {finding}",
   "investigation_review_required": "Review the current investigation findings before parking or closing this task.",
   "investigation_findings_open": "Give these investigation findings a follow-up, owner decision, or completion evidence first: {findings}",
   "handoff_wait": "Waiting for {task} to check {check}",
