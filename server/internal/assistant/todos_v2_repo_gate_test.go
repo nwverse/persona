@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistant/repository"
+	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/db"
 )
 
 func TestTodosV2RepoGateHTTPGatingAndRollback(t *testing.T) {
@@ -61,7 +63,7 @@ func TestTodosV2RepoGateHTTPGatingAndRollback(t *testing.T) {
 				State:     "open",
 				Review:    "approved",
 				Checks:    "failure",
-				CheckedAt: now,
+				CheckedAt: now.Add(-time.Minute),
 			},
 			OtherPRs: []TodoPRStatus{
 				{
@@ -281,6 +283,38 @@ func TestTodosV2RepoGateHTTPGatingAndRollback(t *testing.T) {
 		t.Fatalf("unbound todo should omit repo_gate even when todos_v2=true, got: %v", enabled[unboundID]["repo_gate"])
 	}
 
+	assertPRHistory := func(row map[string]any) {
+		t.Helper()
+		for _, key := range []string{"pr_url", "pr_status", "other_prs"} {
+			if want := before[blockedID][key]; want == nil || !reflect.DeepEqual(row[key], want) {
+				t.Errorf("%s = %v, want original PR history %v", key, row[key], want)
+			}
+		}
+	}
+
+	// Accept the task while the last CI observation still says the delivery PR failed.
+	s.todos.mu.Lock()
+	s.todos.todos[blockedID].DoneAt = &now
+	s.todos.todos[blockedID].DoneBy = db.DoneByReview
+	s.todos.mu.Unlock()
+	for _, result := range []struct {
+		route string
+		row   map[string]any
+	}{
+		{"list", getTodosRaw()[blockedID]},
+		{"detail", getTodoItemRaw(blockedID)},
+	} {
+		if got := decodeGate(result.row); got != nil {
+			t.Errorf("%s closed todo repo_gate = %+v, want omitted", result.route, got)
+		}
+		view, _ := result.row["view"].(map[string]any)
+		if result.row["done_at"] == nil || view["phase"] != string(assistantwire.TodoPhaseDone) || result.row["wait"] != nil {
+			t.Errorf("%s closed todo has done_at=%v, phase=%v, wait=%v, want done without a wait",
+				result.route, result.row["done_at"], view["phase"], result.row["wait"])
+		}
+		assertPRHistory(result.row)
+	}
+
 	// Phase 3: lossless rollback to todos_v2=false -> repo_gate immediately disappears again.
 	setTodosV2(false, true)
 	after := getTodosRaw()
@@ -294,6 +328,7 @@ func TestTodosV2RepoGateHTTPGatingAndRollback(t *testing.T) {
 	if gotTitle, _ := after[blockedID]["title"].(string); !strings.Contains(gotTitle, "Cross-repo feature") {
 		t.Fatalf("unexpected title after rollback: %q", gotTitle)
 	}
+	assertPRHistory(after[blockedID])
 }
 
 func TestTodosV2RepoGateUnlinkedTargetNeedsExplicitPR(t *testing.T) {

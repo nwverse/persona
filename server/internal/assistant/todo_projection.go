@@ -425,6 +425,10 @@ func (s *Service) populateTodoRepoGates(ctx context.Context, list []listedTodo) 
 }
 
 func buildRepoGateInputs(t Todo, bound []repository.TaskRepository) []repoGateRepo {
+	// Closeout settles the live gate. Cached PR observations remain available as history.
+	if t.DoneAt != nil {
+		return nil
+	}
 	return linkedRepoGateInputs(bound, repoGatePRObservations(t))
 }
 
