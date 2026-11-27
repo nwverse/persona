@@ -105,6 +105,8 @@
   "assistant_service_tier_refused": "Codex couldn’t apply Fast before the first message. Nothing was sent; try again or choose Standard.",
   "agent_speed_unsupported": "This launcher can’t start an Agent at that speed: {reason}",
   "agent_speed_start_only": "A faster speed applies only to a new Agent start: {reason}",
+  "agent_speed_tier_new": "Start a new Codex Agent to choose a service tier.",
+  "agent_speed_tier_value": "Choose priority or ultrafast and omit the separate speed field.",
   "agent_speed_model": "This model doesn’t advertise that Codex speed: {reason}",
   "agent_speed_invalid": "That Agent speed isn’t valid: {reason}",
   "session_speed_unsupported": "This session does not offer the selected speed.",

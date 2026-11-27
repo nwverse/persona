@@ -105,6 +105,8 @@
   "assistant_service_tier_refused": "Codex 没能在第一条消息前启用 Fast。这次没有发送，请重试或改用 Standard。",
   "agent_speed_unsupported": "这个启动器不能以该速度启动 Agent：{reason}",
   "agent_speed_start_only": "更快的速度只能在启动新 Agent 时选择：{reason}",
+  "agent_speed_tier_new": "请启动新的 Codex Agent 以选择速度档位。",
+  "agent_speed_tier_value": "请选择 priority 或 ultrafast，并省略独立的 speed 字段。",
   "agent_speed_model": "这个模型未提供该 Codex 速度：{reason}",
   "agent_speed_invalid": "Agent 速度无效：{reason}",
   "session_speed_unsupported": "此会话不提供所选速度。",
