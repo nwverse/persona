@@ -193,14 +193,23 @@ func TestOnDemandAgyProviderWaitsUntilSessionUsesIt(t *testing.T) {
 	}}
 	withPullHub(t, n, h)
 	entry := proto.ManagedLauncher{Name: "agy-gw", Agent: "agy", BaseURL: "https://gw.example.com", Model: "m1", Delivery: proto.DeliveryOnDemand, Rev: "r1"}
-	n.setCatalog([]proto.ManagedLauncher{{Name: "box", Model: "m1", Delivery: proto.DeliveryOnDemand, Withheld: true, Rev: "1"}, entry.Public()})
+	pushed := proto.ManagedLauncher{Name: "push-sentinel", BaseURL: "https://push.example.com", Model: "m1", Delivery: proto.DeliveryPush, Rev: "r1"}
+	n.setCatalog([]proto.ManagedLauncher{
+		{Name: "box", Model: "m1", Delivery: proto.DeliveryOnDemand, Withheld: true, Rev: "1"},
+		entry.Public(),
+		pushed.Public(),
+	})
 
-	time.Sleep(80 * time.Millisecond)
+	// Wait for the background prefetch goroutine to finish pulling the pushed sentinel listed after agy-gw.
+	waitWithin(t, 5*time.Second, "pushed sentinel prefetched", func() bool {
+		l, ok := n.managedLauncher(pushed.Name)
+		return ok && !l.Withheld
+	})
 	mu.Lock()
 	prefetched := slices.Clone(asked)
 	mu.Unlock()
-	if len(prefetched) != 0 {
-		t.Fatalf("on-demand agy launcher was prefetched on catalog push: asked %v", prefetched)
+	if !slices.Equal(prefetched, []string{pushed.Name}) {
+		t.Fatalf("on-demand agy launcher was prefetched on catalog push: asked %v, want only [%s]", prefetched, pushed.Name)
 	}
 
 	// Resolving the channel on demand triggers launchers.pull and returns the isolated channel spec.
@@ -213,7 +222,7 @@ func TestOnDemandAgyProviderWaitsUntilSessionUsesIt(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if !slices.Equal(asked, []string{entry.Name}) {
-		t.Fatalf("expected on-demand pull for %s only, got %v", entry.Name, asked)
+	if !slices.Equal(asked, []string{pushed.Name, entry.Name}) {
+		t.Fatalf("expected on-demand pull for %s after sentinel, got %v", entry.Name, asked)
 	}
 }

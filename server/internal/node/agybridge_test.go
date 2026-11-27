@@ -524,7 +524,11 @@ func TestAgyCatalogChangesNeverRestartRunningCompanion(t *testing.T) {
 	oldFind, oldCmd, oldProbe := findAgyExecutable, agyBridgeCommand, agyBridgeProbeEvery
 	t.Cleanup(func() { findAgyExecutable, agyBridgeCommand, agyBridgeProbeEvery = oldFind, oldCmd, oldProbe })
 	agyBridgeProbeEvery = 10 * time.Millisecond
-	findAgyExecutable = func() string { return filepath.Join(dir, "agy") }
+	var probes atomic.Int32
+	findAgyExecutable = func() string {
+		probes.Add(1)
+		return filepath.Join(dir, "agy")
+	}
 	writeAgy(t, filepath.Join(dir, "agy"), "v1")
 	agyBridgeCommand = func(_ context.Context, rh *RuntimeHost, _, _ string) (*exec.Cmd, error) {
 		for _, kv := range agyBridgeEnv(t.Context(), rh, []string{"PATH=/usr/bin"}) {
@@ -552,7 +556,8 @@ func TestAgyCatalogChangesNeverRestartRunningCompanion(t *testing.T) {
 	})
 	n.setCatalog(nil)
 
-	time.Sleep(100 * time.Millisecond)
+	probesAfter := probes.Load()
+	waitFor(t, "probes continued after catalog changes", func() bool { return probes.Load() >= probesAfter+5 })
 	if got := starts(marks); !slices.Equal(got, []string{"start"}) {
 		t.Fatalf("catalog/scope/key changes restarted the running companion: %v", got)
 	}
