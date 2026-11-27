@@ -105,6 +105,7 @@ export { SidebarRail } from "./SidebarRail";
 // the chunk is in, never suspending: a Suspense here would hold the sidebar's other updates (a navigation) while it
 // loads. A chunk that will not load is reported, and the next mount asks again.
 const HerdrNoticesContent = lazyPage(() => import("./agents/HerdrNotices").then((m) => m.HerdrNotices));
+const SidebarSpacesLazy = lazy(() => import("./SidebarSpaces").then((m) => ({ default: m.SidebarSpaces })));
 export const HerdrNotices = memo(function HerdrNotices() {
   const [ready, setReady] = useState(HerdrNoticesContent.ready);
   useEffect(() => {
@@ -477,6 +478,7 @@ export function Sidebar({ route, onSearch, onNewAgent, onNavigate, workspaceActi
         </div>
         {/* a phone's drawer has Pages as its grid of icons; every other group (#9071) is a section, as on a wide screen */}
         {narrow && <NavGrid showHubNotice={active} pages={sections.find((g) => !g.id)?.pages ?? []} more={more} activeKey={activeKey} go={go} onNavigate={onNavigate} />}
+        <Suspense fallback={null}><SidebarSpacesLazy route={route} reg={reg} hover={hover} activeKey={activeKey} go={go} /></Suspense>
         {sections
           .filter((g) => (g.id ? g.pages.length > 0 : !narrow))
           .map((g, i) => <PageGroup showHubNotice={active} key={g.id || "pages"} group={g} more={g.id ? [] : more} first={i === 0 && !narrow} reg={reg} hover={hover} activeKey={activeKey} go={go} />)}

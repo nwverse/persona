@@ -587,7 +587,7 @@ function Shell() {
       // Health's existing data stays in the default panel without its module (including a core-only build), rather
       // than depending on the optional Space Conversations extension or opening an editable new-conversation home.
       const archive = healthReadOnly(route.slug);
-      main = route.sid || archive ? <Space key={`${route.slug}/${route.sid ?? "home"}`} slug={route.slug} sid={route.sid} fresh={route.fresh || archive} onToggleSidebar={toggle} /> : <SpaceExtensionEntry slug={route.slug} />;
+      main = route.sid || route.fresh || archive ? <Space key={`${route.slug}/${route.sid ?? "home"}`} slug={route.slug} sid={route.sid} fresh={route.fresh || archive} onToggleSidebar={toggle} /> : <SpaceExtensionEntry slug={route.slug} />;
       break;
     }
     case "track-new":
