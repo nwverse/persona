@@ -33,6 +33,8 @@ type turns struct {
 	book feishuBook
 	// handoff is the proxy replies the module has taken (handoff.go), with its own lock.
 	handoff *handoffBook
+	// guest is the group guest conversations the module runs (guest.go), with its own lock.
+	guest *guestBook
 	// detached are the cards closed when their node went away (asks.go).
 	detached detachedCards
 	// held are the /read answers held for the owner (read_held.go).
