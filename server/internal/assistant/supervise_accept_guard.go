@@ -130,7 +130,7 @@ func (s *Service) closeoutFollowUpError(ctx context.Context, t Todo, deferred st
 			for _, line := range acceptWaitingRe.FindAllStringSubmatch(reply.Text, -1) {
 				text := strings.TrimSpace(line[1])
 				switch strings.ToLower(text) {
-				case "", "none", "n/a", "-", "—", "无":
+				case "", "none", "n/a", "-", "—", "无": // i18n-ignore: matches the original report text
 				default:
 					outstanding = append(outstanding, text)
 				}
