@@ -123,6 +123,19 @@ func usageGit(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
+// usageTempRootsAre makes roots (and their physical paths) the temporary folders while the test runs: t.TempDir is in
+// the system's own, so a test of anything else says there are none.
+func usageTempRootsAre(t *testing.T, roots ...string) {
+	t.Helper()
+	old := usageTempRoots
+	var all []string
+	for _, r := range roots {
+		all = append(all, r, realPath(r))
+	}
+	usageTempRoots = func() []string { return all }
+	t.Cleanup(func() { usageTempRoots = old })
+}
+
 func usageMkdir(t *testing.T, parts ...string) string {
 	t.Helper()
 	p := filepath.Join(parts...)
@@ -141,6 +154,7 @@ func TestResolveUsageDir(t *testing.T) {
 	}
 	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	usageTempRootsAre(t) // home is in the system's temporary folder; here it is not one
 	ctx := context.Background()
 	home := t.TempDir()
 	resolve := func(dir string) proto.UsageDir {
@@ -255,22 +269,110 @@ func TestResolveUsageDir(t *testing.T) {
 	}
 }
 
+// A temporary folder is :temp for an older manager, and named by its path for one that takes them (temp_dirs, #16827).
 func TestUsageDirKey(t *testing.T) {
 	home := "/home/tester" // not under the temporary folder, as a home is (t.TempDir is)
 	n := &Node{home: home}
-	for cwd, want := range map[string]string{
-		home:                               "~",
-		filepath.Join(home, "code", "app"): "~/code/app",
-		"~/code/app":                       "~/code/app",
-		"/srv/work":                        "/srv/work",
-		"/tmp/x":                           proto.UsageDirTemp,
-		filepath.Join(os.TempDir(), "y"):   proto.UsageDirTemp,
-		"":                                 proto.UsageDirUnknown,
-		"relative/path":                    proto.UsageDirUnknown,
+	inTemp := filepath.Join(os.TempDir(), "y")
+	for cwd, want := range map[string][2]string{
+		home:                               {"~", "~"},
+		filepath.Join(home, "code", "app"): {"~/code/app", "~/code/app"},
+		"~/code/app":                       {"~/code/app", "~/code/app"},
+		"/srv/work":                        {"/srv/work", "/srv/work"},
+		"/tmp/x":                           {proto.UsageDirTemp, "/tmp/x"},
+		"/tmp/x/../x/sub/":                 {proto.UsageDirTemp, "/tmp/x/sub"},
+		inTemp:                             {proto.UsageDirTemp, filepath.Clean(inTemp)},
+		"":                                 {proto.UsageDirUnknown, proto.UsageDirUnknown},
+		"relative/path":                    {proto.UsageDirUnknown, proto.UsageDirUnknown},
 	} {
-		if got := n.usageDirKey(cwd); got != want {
-			t.Errorf("%q = %q, want %q", cwd, got, want)
+		for i, temps := range []bool{false, true} {
+			if got := n.usageDirKey(cwd, temps); got != want[i] {
+				t.Errorf("%q (temps %v) = %q, want %q", cwd, temps, got, want[i])
+			}
 		}
+	}
+	for dir, want := range map[string]bool{"/tmp/x": true, proto.UsageDirTemp: true, "~/code/app": false, "/srv/work": false,
+		proto.UsageDirAssistant: false, "": false} {
+		if n.usageTempKey(dir) != want {
+			t.Errorf("usageTempKey(%q) = %v", dir, !want)
+		}
+	}
+}
+
+// A temporary folder resolves like any directory when a repository was made in it: a worktree added there, a clone,
+// a repository with a first commit and no remote. In no repository, in one at the temporary folder's top, in one with
+// no commit or a broken .git, and gone, it is temp: no name and no place, so the apps show one "Temporary folders"
+// (#16827).
+func TestResolveUsageDirTemp(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("no git")
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", "/dev/null")
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	ctx := context.Background()
+	base := t.TempDir()
+	home, tmp, other := usageMkdir(t, base, "home"), usageMkdir(t, base, "tmp"), usageMkdir(t, base, "var-tmp")
+	usageTempRootsAre(t, tmp, other)
+	resolve := func(dir string) proto.UsageDir {
+		t.Helper()
+		r, ok := resolveUsageDir(ctx, home, dir)
+		if !ok {
+			t.Fatalf("%s not resolved", dir)
+		}
+		return r
+	}
+	isTemp := func(dir string) {
+		t.Helper()
+		if r := resolve(dir); r != (proto.UsageDir{Dir: dir, Project: "temp"}) {
+			t.Errorf("%s = %+v, want temp", dir, r)
+		}
+	}
+
+	app := usageMkdir(t, home, "code", "app")
+	usageGit(t, app, "init", "-q")
+	usageGit(t, app, "remote", "add", "origin", "https://github.com/Acme/App.git")
+	usageGit(t, app, "commit", "-q", "--allow-empty", "-m", "first")
+	lane := filepath.Join(tmp, "app-lane-x")
+	usageGit(t, app, "worktree", "add", "-q", lane)
+	if r := resolve(lane); r.Project != "git:github.com/acme/app" || r.Name != "Acme/App" || !r.Worktree || r.Place != realPath(lane) {
+		t.Fatalf("worktree in a temporary folder = %+v", r)
+	}
+	usageMkdir(t, lane, "web")
+	if r := resolve(filepath.Join(lane, "web")); r.Project != "git:github.com/acme/app" || r.Place != realPath(lane) {
+		t.Fatalf("a folder in it = %+v", r)
+	}
+	clone := usageMkdir(t, tmp, "clone-y")
+	usageGit(t, clone, "init", "-q")
+	usageGit(t, clone, "remote", "add", "origin", "git@gitlab.example.com:Team/Tool.git")
+	if r := resolve(clone); r.Project != "git:gitlab.example.com/Team/Tool" || r.Worktree || r.Place != realPath(clone) {
+		t.Fatalf("repository in a temporary folder = %+v", r)
+	}
+	local := usageMkdir(t, tmp, "local-z")
+	usageGit(t, local, "init", "-q")
+	usageGit(t, local, "commit", "-q", "--allow-empty", "-m", "first")
+	if r := resolve(local); r.Project != "local:"+usageGit(t, local, "rev-list", "--max-parents=0", "HEAD") || r.Name != "local-z" {
+		t.Fatalf("no remote = %+v", r)
+	}
+
+	isTemp(usageMkdir(t, tmp, "scratch-1"))
+	fresh := usageMkdir(t, tmp, "fresh-2")
+	usageGit(t, fresh, "init", "-q")
+	isTemp(fresh) // no commit: only its folder's name to know it by
+	broken := usageMkdir(t, tmp, "broken-3")
+	if err := os.WriteFile(filepath.Join(broken, ".git"), []byte("gitdir: /nowhere\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	isTemp(broken)
+	isTemp(filepath.Join(tmp, "gone-4"))
+	usageGit(t, other, "init", "-q") // a repository at a temporary folder's top: every folder in it would be one project
+	usageGit(t, other, "remote", "add", "origin", "https://github.com/acme/stray.git")
+	isTemp(usageMkdir(t, other, "inside-5"))
+	// Outside the temporary folders, as before: a folder is its own, a gone one is not resolved.
+	if r := resolve(usageMkdir(t, base, "Trip")); r.Project != "folder:trip" {
+		t.Fatalf("folder = %+v", r)
+	}
+	if _, ok := resolveUsageDir(ctx, home, "~/gone"); ok {
+		t.Fatal("a missing directory outside the temporary folders resolved")
 	}
 }
 
@@ -409,9 +511,60 @@ func TestUsageMeterAsksTheManager(t *testing.T) {
 	}
 }
 
+// A manager that takes temporary folders (temp_dirs) gets a session that started in one by its path, which the node
+// resolves in the background (TestResolveUsageDirTemp); an older one gets :temp, as before (#16827).
+func TestUsageMeterTempDirs(t *testing.T) {
+	for _, temps := range []bool{true, false} {
+		n, reports := usageStartupNodeFeatures(t, true, temps)
+		project := filepath.Join(os.Getenv("CLAUDE_CONFIG_DIR"), "projects", "fixture")
+		n.home = "/home/tester"
+		lane := filepath.Join(t.TempDir(), "app-lane-x") // in the system's temporary folder
+		now := time.Now().UTC()
+		body := `{"type":"user","cwd":"` + lane + `","timestamp":"` + now.Format(time.RFC3339Nano) + `","message":{"content":"hi"}}` + "\n" +
+			claudeReply(now, "r1", "fixture-model", 1, 0, 0, 2)
+		if err := os.WriteFile(filepath.Join(project, "fixture-session.jsonl"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		ready := make(chan struct{})
+		close(ready)
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() { defer close(done); n.meterUsage(ctx, ready) }()
+		want := map[bool]string{true: filepath.Clean(lane), false: proto.UsageDirTemp}[temps]
+		select {
+		case p := <-reports:
+			var report struct {
+				Params struct {
+					Buckets []proto.UsageBucket `json:"buckets"`
+				} `json:"params"`
+			}
+			if err := json.Unmarshal(p, &report); err != nil || len(report.Params.Buckets) == 0 {
+				t.Fatalf("report %s, %v", p, err)
+			}
+			for _, b := range report.Params.Buckets {
+				if b.Dir != want {
+					t.Errorf("temps=%v: bucket %+v, want dir %q", temps, b, want)
+				}
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("temps=%v: no report", temps)
+		}
+		dirs := n.usageDirs.get()
+		dirs.mu.Lock()
+		asked := dirs.asked[want]
+		dirs.mu.Unlock()
+		if dirs.temps != temps || asked != temps { // a token is never resolved
+			t.Errorf("temps=%v: resolver temps %v, asked to resolve %v", temps, dirs.temps, asked)
+		}
+		cancel()
+		<-done
+	}
+}
+
 // A backfill request carries what its buckets' directories resolve to, each resolved once a run; tokens and
 // directories that are gone carry nothing.
 func TestBackfillDirs(t *testing.T) {
+	usageTempRootsAre(t)
 	home := t.TempDir()
 	usageMkdir(t, home, "Notes")
 	n := &Node{home: home}

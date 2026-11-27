@@ -124,8 +124,9 @@ func (n *Node) meterUsage(ctx context.Context, stateLoaded <-chan struct{}) {
 		st, _ := n.state.get(session)
 		return st.Launcher
 	}
-	if n.usageKeepsDirs(ctx) {
+	if keeps, temps := n.usageKeepsDirs(ctx); keeps {
 		dirs := newUsageDirs(n.home)
+		dirs.temps = temps
 		go dirs.run(ctx)
 		n.usageDirs.p.Store(dirs)
 		defer n.usageDirs.p.CompareAndSwap(dirs, nil)
