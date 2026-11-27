@@ -203,5 +203,7 @@
   "sort_by_activity": "Agents 按最近更新排序",
   "sort_by_activity_hint": "关闭时保持固定顺序；开启后按最近活动排序，且只在鼠标离开侧栏时才重新排序。",
   "show_agents_filter": "Agents 列表显示筛选",
-  "show_agents_filter_hint": "在 Agents 列表上显示「筛选」按钮和条件。关闭时隐藏并清除已有筛选。"
+  "show_agents_filter_hint": "在 Agents 列表上显示「筛选」按钮和条件。关闭时隐藏并清除已有筛选。",
+  "more_settings": "更多设置",
+  "more_settings_hint_other": "还有 {count} 个分类"
 }

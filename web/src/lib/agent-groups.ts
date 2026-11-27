@@ -111,6 +111,15 @@ export function splitAgentSessions(all: Session[], machines: Machine[], keepOffl
   return { live, recent };
 }
 
+/** The Agents running now (#16898, lib/looks.ts `agents_view: "active"`): those a terminal engine (herdr and the other
+ *  terminal hosts, the "In a tab" filter's) still has a pane for, on a computer that is online. Not one a restart stopped
+ *  (it can be resumed but is not running), one whose host is not known, nor a session with no pane: a desktop app's chat,
+ *  a Feishu topic's, a finished runtime's history, even while cards still wait in it. */
+export function runningNow(live: Session[], machines: Machine[]): Session[] {
+  const online = new Set(machines.filter((m) => m.online).map((m) => m.id));
+  return live.filter((s) => online.has(s.machine_id) && sessionSource(s) === "terminal" && activityOf(s) !== "offline" && activityOf(s) !== "unknown" && viewOf(s).reason?.kind !== "restart_interrupted");
+}
+
 export interface Space {
   key: string;
   machineId: string;

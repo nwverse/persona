@@ -38,6 +38,7 @@ const WRAPPERS: Record<string, string> = { text: "settings-knowledge.", word: "s
 // Row labels that are not settings, with why.
 const NOT_SETTINGS: Record<string, string> = {
   "settings-notifications.load_failed": "the row that says the page could not be read, with its retry",
+  "settings.more_settings": "Short Settings' row that lists the other categories again (#16898): a way to them, not a setting",
 };
 
 /** From `from` (just after an opening "{" or after "<Row"), the index of the "}" or ">" that closes it, past nested braces and strings. */

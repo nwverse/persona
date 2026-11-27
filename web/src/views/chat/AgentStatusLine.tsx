@@ -37,8 +37,10 @@ export function sessionQuota(accounts: UsageAccount[], session: Session, now: nu
   return windows.length ? { account, windows } : null;
 }
 
-export function AgentStatusLine({ session, source, assistant, items, onCompact, compactBlocked }: {
+export function AgentStatusLine({ session, source, assistant, items, onCompact, compactBlocked, noContext = false }: {
   session: Session;
+  /** the plain main chat (#16898, lib/looks.ts): no context meter */
+  noContext?: boolean;
   source?: ReactNode;
   assistant?: boolean;
   items?: readonly Item[];
@@ -47,7 +49,7 @@ export function AgentStatusLine({ session, source, assistant, items, onCompact, 
 }) {
   const isAssistant = Boolean(assistant || session.assistant);
   const place = isAssistant ? null : workingLocation(session);
-  const hasContext = currentContextTokens(session) > 0 || hasSessionTokenUsage(items);
+  const hasContext = !noContext && (currentContextTokens(session) > 0 || hasSessionTokenUsage(items));
   const accounts = useUsageWindows();
   const now = useNow(30_000, !isAssistant && accounts.length > 0);
   const quota = isAssistant ? null : sessionQuota(accounts, session, now);

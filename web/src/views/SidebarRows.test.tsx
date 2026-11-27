@@ -7,6 +7,7 @@ import type { AgentSession } from "../lib/agents";
 import type { Session } from "../lib/types";
 import { setAgentDetails } from "../lib/context-usage";
 import { AgentRow, PersonaRow, SessionRow } from "./Sidebar";
+import { ROW_TITLE_MIN } from "./SidebarParts";
 import { unreadShown } from "./SidebarRows";
 import { conversationMenuItems } from "./ConversationMenu";
 
@@ -63,6 +64,27 @@ describe("an agent's row", () => {
   it("keeps its ⋯ shown when open, on hover only otherwise", () => {
     expect(more(renderToStaticMarkup(<SessionRow {...rowProps} active />))).toMatch(/class="[^"]*\bflex\b/);
     expect(more(renderToStaticMarkup(<SessionRow {...rowProps} active={false} />))).toMatch(/class="[^"]*\bhidden\b/);
+  });
+});
+
+describe("a herdr tab and its Agent session in the running-now list (#16898)", () => {
+  const named = { ...session, slot_id: "w1:t1", slot_name: "bugfix-codex-fork-home-isolation", pane_id: "w1:p1" };
+  const props = { ...rowProps, s: named, prefix: "bugfix-codex-fork-home-isolation", prefixClass: "min-w-0 truncate text-ink-3" };
+  it("gives each name its own line when stacked, and draws each once", () => {
+    const html = renderToStaticMarkup(<SessionRow {...props} stackPrefix active={false} />);
+    expect(html).toContain('data-herdr-tab-line');
+    expect(html).toContain('title="bugfix-codex-fork-home-isolation"');
+    expect(html.match(/>bugfix-codex-fork-home-isolation</g)).toHaveLength(1);
+    expect(html.match(/>整理文档</g)).toHaveLength(1);
+    expect(html).toContain("flex-1 flex-col min-w-0");
+    expect(html).not.toContain("标签页 bugfix-codex-fork-home-isolation");
+  });
+  it("keeps the default's inline prefix and minimum title width", () => {
+    const html = renderToStaticMarkup(<SessionRow {...props} active={false} />);
+    expect(html).not.toContain("data-herdr-tab-line");
+    expect(html).toContain(ROW_TITLE_MIN);
+    expect(html.match(/>bugfix-codex-fork-home-isolation</g)).toHaveLength(1);
+    expect(html.match(/>整理文档</g)).toHaveLength(1);
   });
 });
 

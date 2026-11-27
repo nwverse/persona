@@ -391,7 +391,8 @@ function SideUnreadLine({ sides, count, open }: { sides?: readonly Session[]; co
 }
 
 // `prefix`: a word before the title (a tab's name, a pane's agent), in `prefixClass`
-type SessionRowProps = { menuLabel?: string; /** The mark at the start of a row that does not show its state (a Persona conversation's chat icon), drawn while it neither works nor holds a reply nobody has opened (#5862, #13425). */ icon?: IconName; s: Session; k: string; reg: RegFn; hover: (k: string | null) => void; active: boolean; /** null: a targetless external direction, drawn as the same non-link row. */ to: Route | null; go: GoFn; tab?: boolean; /** Plain space and tab label for older nodes without a tab association. */ tabFallback?: string; label?: string; prefix?: string; prefixClass?: string; hint?: string; /** A lead's hint stays whole when there is room; the title keeps its minimum and the hint truncates first. */ hintFull?: boolean; host?: string; showState?: boolean; showTodoTag?: boolean; onMenu?: RowMenuFn; endRoom?: boolean; /** A lead row whose own conversation is idle while something under it runs (the direction tree's `running`, #6626): draw the working arc anyway (#6230). An own needs-you / unread state still takes precedence. */ workingMark?: boolean;
+type SessionRowProps = { menuLabel?: string; /** The mark at the start of a row that does not show its state (a Persona conversation's chat icon), drawn while it neither works nor holds a reply nobody has opened (#5862, #13425). */ icon?: IconName; s: Session; k: string; reg: RegFn; hover: (k: string | null) => void; active: boolean; /** null: a targetless external direction, drawn as the same non-link row. */ to: Route | null; go: GoFn; tab?: boolean; /** Plain space and tab label for older nodes without a tab association. */ tabFallback?: string; label?: string; prefix?: string; prefixClass?: string; hint?: string; /** A lead's hint stays whole when there is room; the title keeps its minimum and the hint truncates first. */ hintFull?: boolean; host?: string; showState?: boolean; showTodoTag?: boolean; onMenu?: RowMenuFn; endRoom?: boolean; /** Running now (#16898): the herdr tab name above the Agent session name, each with the row's width. */
+  stackPrefix?: boolean; /** A lead row whose own conversation is idle while something under it runs (the direction tree's `running`, #6626): draw the working arc anyway (#6230). An own needs-you / unread state still takes precedence. */ workingMark?: boolean;
   /** 常驻 rows (#6214): the "在做 N · 等你 N" counts never fade on hover and the ⋯ sits in a reserved end slot instead
    * of covering them, so hovering removes no information. */
   keepTrailing?: boolean };
@@ -405,7 +406,7 @@ function sameProps<P extends { to: Route | null }>(a: P, b: P): boolean {
   return keys.every((key) => (key === "to" ? (a.to && b.to ? routePath(a.to) === routePath(b.to) : a.to === b.to) : Object.is(a[key], b[key])));
 }
 
-export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, active, to, go, tab, tabFallback, label, prefix, prefixClass, hint, hintFull, host, showState = true, showTodoTag, onMenu, menuLabel = t("sidebar.agent_actions"), endRoom, icon = "chat", workingMark = false, keepTrailing = false }: SessionRowProps) {
+export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, active, to, go, tab, tabFallback, label, prefix, prefixClass, hint, hintFull, host, showState = true, showTodoTag, onMenu, menuLabel = t("sidebar.agent_actions"), endRoom, icon = "chat", workingMark = false, keepTrailing = false, stackPrefix = false }: SessionRowProps) {
   // a parent of child sessions in its folded state (#5120): one of them waiting makes it need you, one working makes it
   // work; the rows of the paged list come as the hub sends them, the other lists' folded already (lib/folded-rows.ts)
   // its side sessions' part from their rows when an open chat holds them (#7944): a side seen here shows at once
@@ -464,7 +465,7 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
   const tabIdentity = associatedTab ? t("sidebar.tab_named", { label: associatedTab }) : "";
   // A structural tab row keeps its old plain-text fallback, but only a real association earns the localized identity.
   const structuralTabHint = !hasTabAssociation && tabFallback || (tab && !primaryTab ? tabLabel(s) : "");
-  const tail = [hintFull ? hint : "", tabIdentity || structuralTabHint].filter(Boolean).join(" · ");
+  const tail = [hintFull ? hint : "", stackPrefix ? "" : tabIdentity || structuralTabHint].filter(Boolean).join(" · ");
   // Settings › Appearance › show details on agent rows (#2430): a second line under an agent's title — folder · model · context · age
   const details = useAgentDetails();
   const withDetail = details && showState && !s.assistant;
@@ -499,9 +500,10 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
   // A 常驻 row's counts stay on screen while the ⋯ fades in beside them (#6214).
   const hintAside = keepTrailing ? undefined : aside;
   // Behind a prefix or beside a lead's full hint, the title keeps room for a few characters: secondary text gives way first.
-  const titleMin = prefix || (hintFull && tail) ? ROW_TITLE_MIN : "min-w-0";
+  const titleMin = (prefix && !stackPrefix) || (hintFull && tail) ? ROW_TITLE_MIN : "min-w-0";
   // The tab's name gives way before the session title does.
   const titleFirst = tail ? "basis-auto" : undefined;
+  const titleClass = cx("truncate text-[13px]", active ? "font-medium text-ink" : st === "offline" ? "text-ink-3" : "text-ink-2", st === "unread" && !active && !usageLimitLabel(s) && "font-medium text-ink");
   // one ref per key, so letting go takes out only this row's entry (keyedRefs)
   const regRow = useMemo(() => reg(k), [reg, k]);
   // words left unsent in its box, once you are not in it (#5568): in place of what it asks or did
@@ -558,13 +560,13 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
       {/* the agent's mark before its state (#6390): what runs there, then how it is doing */}
       {showState && !s.assistant && <SessionMark s={s} size={14} />}
       <span className="flex size-3.5 shrink-0 items-center justify-center">{showState || st === "working" || unseen || leadActive ? <StatusMark state={leadActive ? "working" : phase === "error" ? "error" : usageLimitLabel(s) && st === "unread" ? "idle" : st} awaiting={awaiting} finished={finished} waiting={backgroundWaiting(s)} /> : <Icon name={icon} size={12} className="text-ink-3" />}</span>
-      {prefix && <span className={prefixClass}>{prefix}</span>}
       {/* with the mark, the title sits in the column whether a second line shows or not: the same element through a
           workflow's start and end, so the mark does not fade in again */}
       {holdSides && <HoldSides mid={row.machine_id} sid={row.session_id} />}
-      {ultra || detail.length > 0 || workflow || line || sideLine || childLine || plan || stall ? (
+      {stackPrefix || prefix || ultra || detail.length > 0 || workflow || line || sideLine || childLine || plan || stall ? (
         <span className={cx("flex flex-1 flex-col", titleMin, titleFirst)}>
-          {ultra ? (
+          {prefix && (stackPrefix ? <span data-herdr-tab-line title={prefix} className={prefixClass}>{prefix}</span> : <span className={cx("flex min-w-0 items-center gap-2", titleMin)}><span className={prefixClass}>{prefix}</span><span className={titleClass}>{displayTitle}</span></span>)}
+          {prefix && !stackPrefix ? null : ultra ? (
             <span className="flex min-w-0 items-center gap-1">
               <span className={cx("min-w-0 truncate text-[13px]", active ? "font-medium text-ink" : "text-ink-2", st === "unread" && !active && !usageLimitLabel(s) && "font-medium text-ink")}>
                 {displayTitle}
@@ -572,7 +574,7 @@ export const SessionRow = memo(function SessionRow({ s: row, k, reg, hover, acti
               <UltraMark size={10} />
             </span>
           ) : (
-            <span className={cx("truncate text-[13px]", active ? "font-medium text-ink" : st === "offline" ? "text-ink-3" : "text-ink-2", st === "unread" && !active && !usageLimitLabel(s) && "font-medium text-ink")}>
+            <span className={titleClass}>
               {displayTitle}
             </span>
           )}

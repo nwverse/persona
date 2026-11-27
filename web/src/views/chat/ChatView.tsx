@@ -145,6 +145,8 @@ import { codedFailure, knownAction, refreshReadiness, type CodedFailure } from "
 import { FALLBACK_UNAVAILABLE, recoveryExhausted } from "../../lib/model-fallback";
 import { BASE } from "../../lib/base";
 import { usageLimitLabel } from "../../lib/usage-limit";
+import { usePlainMainChat } from "../../lib/looks";
+import { plainChatLines, plainFeed } from "../../lib/plain-chat";
 import { displayLines, getFeedState, loadedFrom, loadFeed, loadToday, sendRouted, startOfDay, useFeed, type DisplayLine, type FeedItem } from "../../lib/feed";
 import { splitBackgroundActivity } from "../../lib/quiet-activity";
 import { CardConversation } from "../../ui/AssistantCard";
@@ -411,6 +413,9 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   // The main conversation is always Persona (#1313): not its first message, the node's title for it.
   const mainConversation = useStore((s) => s.assistant?.main);
   const isMain = Boolean(assistant && (mainCache || sid === mainConversation));
+  // the plain main chat (#16898, lib/looks.ts): questions and replies, without the tray chips, the permission pill, the
+  // context meter, finished background rounds and briefing cards (lib/plain-chat.ts)
+  const plain = usePlainMainChat() && isMain;
   // Full Agent pages and non-main Persona conversations may offer a way back; side panels, Team panels and the main chat do not.
   const backPage = Boolean(!embedded && !chrome && (inPage || (assistant && !isMain)));
   // A conversation's hand-off strip wins over the Inbox item's when both are present; null keeps it hidden after ✕.
@@ -1805,7 +1810,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
     const scoped = through === false ? feed : Number.isFinite(through) ? feed.filter((item) => Date.parse(item.at) <= through) : NO_FEED;
     return splitBackgroundActivity(allLines, scoped, historyFrom);
   }, [allLines, feed, historyFrom, detached, tr.items]);
-  const lines = quiet.timeline;
+  const lines = useMemo(() => (plain ? plainChatLines(quiet.timeline) : quiet.timeline), [plain, quiet.timeline]);
   // a DayLine over the first line of each new calendar day (#8160); day-only keys keep them stable as pages and
   // midnight arrivals land. Days the earlier stretches already open with a divider are not repeated here.
   const dayTaken = useMemo(() => new Set(earlier.stretchDays), [earlier.stretchDays]);
@@ -1833,8 +1838,8 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   );
   const feedFrom = assistant ? historyFrom : undefined;
   const assistantLines = useMemo(
-    () => (assistant ? displayLines(lines, quiet.timelineFeed, feedFrom) : NO_DISPLAY_LINES),
-    [assistant, lines, quiet.timelineFeed, feedFrom],
+    () => (assistant ? displayLines(lines, plain ? plainFeed(quiet.timelineFeed) : quiet.timelineFeed, feedFrom) : NO_DISPLAY_LINES),
+    [assistant, lines, plain, quiet.timelineFeed, feedFrom],
   );
   // the last exchange while the chat is at work, even while a message of yours on its way draws it finished (live needs
   // !outgoing above): its words get no reply bar until the work is over (#5314, SegmentView `busy`)
@@ -2489,7 +2494,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
   // lists its own modes (#8261) gets the picker with those two, and no Plan mode.
   const modesOn = Boolean(session) && (Boolean(assistant) || (hasModes(session) && activityOf(session!) !== "offline"));
   const listedOn = Boolean(session) && !assistant && Boolean(listedModesOf(session)) && activityOf(session!) !== "offline";
-  const leading = useMemo(() => (session && (modesOn || listedOn) ? <PermissionPicker session={session} assistant={assistant} /> : null), [session, modesOn, listedOn, assistant]);
+  const leading = useMemo(() => (session && (modesOn || listedOn) && !plain ? <PermissionPicker session={session} assistant={assistant} /> : null), [session, modesOn, listedOn, assistant, plain]);
   const planMode = usePlanMode(modesOn ? session : undefined, assistant);
   // the model pill: an Agent's (#5032), a Persona conversation's (#5033, its pick kept for the conversation)
   const trailing = useMemo(() => (session ? assistant ? <AssistantModelPill session={session} /> : <AgentModelPill session={session} /> : null), [session, assistant]);
@@ -2953,10 +2958,11 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
           <>
             <AssistantActionBar key={sid} conversation={sid} ownAsks={actionBarAsks} turnAsks={turnSplit.turn} taskDecisions={taskDecisions}
               focusDecision={commandReveal?.pending ? commandReveal.id : undefined}
-              inCall={takeover} turnItems={turnSplit.turn.length ? tr.items : undefined} openDecisionSource={openDecisionSource} sourceOpen={decisionDrill !== null} />
-            {!takeover && <RouteChip conversation={sid} />}
+              inCall={takeover} turnItems={turnSplit.turn.length ? tr.items : undefined} openDecisionSource={openDecisionSource} sourceOpen={decisionDrill !== null}
+              plain={plain} />
+            {!takeover && !plain && <RouteChip conversation={sid} />}
             {/* items handed to this conversation that are still open: "Wrap up" asks it for the final write-back (#5932) */}
-            {!takeover && isMain && <Suspense fallback={null}><LazyWrapUpChips conversation={sid} /></Suspense>}
+            {!takeover && isMain && !plain && <Suspense fallback={null}><LazyWrapUpChips conversation={sid} /></Suspense>}
           </>
         )}
         {pendingCards}
@@ -3090,6 +3096,7 @@ function ActiveChatView({ mid, sid, assistant, assistantManager, starting: launc
               session={session}
               assistant={isAssistant}
               items={earlier.liveItems}
+              noContext={plain}
               compactBlocked={compactBlocked}
               onCompact={isAssistant || agentCompactBlocked ? undefined : compactSession}
               source={sourceSubtitle(session) ? <ComposerSource session={session} assistant /> : undefined}

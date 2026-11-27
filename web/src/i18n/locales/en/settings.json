@@ -206,5 +206,8 @@
   "sort_by_activity": "Sort Agents by recent activity",
   "sort_by_activity_hint": "Off keeps the stable order. On orders by latest activity, moving only while the pointer is off the sidebar.",
   "show_agents_filter": "Show the Filter on the Agents list",
-  "show_agents_filter_hint": "Adds a Filter button and chips to the Agents list. Off hides them and clears any filter."
+  "show_agents_filter_hint": "Adds a Filter button and chips to the Agents list. Off hides them and clears any filter.",
+  "more_settings": "More settings",
+  "more_settings_hint_one": "{count} more category",
+  "more_settings_hint_other": "{count} more categories"
 }

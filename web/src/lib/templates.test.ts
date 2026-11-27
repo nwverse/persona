@@ -1,5 +1,6 @@
 // Templates (#16772, lib/templates.ts): the format, links, the built-ins, and a plan and an apply against a fake host.
 import { describe, expect, it } from "vitest";
+import type { LookMode, LookName } from "./looks";
 import type { PhoneNavMode } from "./phone-nav";
 import type { SidebarIconMode } from "./sidebar-icons";
 import type { SidebarPrefs } from "./sidebar-pages";
@@ -14,6 +15,7 @@ function fakeHost(o: { extensions?: Record<string, { name: string; enabled: bool
   const state = {
     phoneNav: "switch" as PhoneNavMode,
     icons: "monochrome" as SidebarIconMode,
+    looks: { main_chat: "full", agents_view: "full", settings_view: "full", sidebar_view: "full" } as Record<LookName, string>,
     off: new Set<string>(["voice"]),
     start: "",
     prefs: NONE as SidebarPrefs,
@@ -26,6 +28,8 @@ function fakeHost(o: { extensions?: Record<string, { name: string; enabled: bool
     setPhoneNav: (m) => { state.phoneNav = m; state.writes++; },
     sidebarIcons: () => state.icons,
     setSidebarIcons: (m) => { state.icons = m; state.writes++; },
+    look: <N extends LookName>(name: N) => state.looks[name] as LookMode<N>,
+    setLook: (name, mode) => { state.looks[name] = mode; state.writes++; },
     modules: () => ["health", "voice"].map((id) => ({ id, title: id, off: state.off.has(id) })),
     setModuleOff: (id, off) => { if (off) state.off.add(id); else state.off.delete(id); state.writes++; },
     startPage: () => state.start,
@@ -43,6 +47,7 @@ function fakeHost(o: { extensions?: Record<string, { name: string; enabled: bool
     },
     words: {
       phoneNav: "Phone navigation", phoneNavMode: (m) => m, sidebarIcons: "Sidebar icons", sidebarIconsMode: (m) => m,
+      look: (name) => "Look " + name, lookMode: (_name, mode) => mode,
       module: (t) => "Module " + t, on: "on", off: "off", startPage: "Start page", startDefault: "main",
       sidebarPages: "Sidebar pages", pagesDefault: "default", pagesUnderMore: (n) => `${n} under More`, pagesCustom: "custom",
       extensionMissing: "not installed", extensionEnabled: "switched", extensionConfig: (k) => "config " + k,
@@ -58,14 +63,14 @@ describe("templates: the format", () => {
   it("reads a full template and keeps only what it knows", () => {
     const r = parseTemplate({
       ...base, name: { en: "Mine", "zh-Hans": "我的" }, description: "d",
-      browser: { phone_nav: "tabs", sidebar_icons: "colored", modules_off: ["health", "health"] },
+      browser: { phone_nav: "tabs", sidebar_icons: "colored", main_chat: "plain", agents_view: "active", modules_off: ["health", "health"] },
       navigation: { start: "agent-list", pages: { hidden: ["todos"], order: [], shown: [] } },
       extensions: { "example-ext": { enabled: true, config: { agent: true } } },
       settings: [{ key: "assistant.main_tasks_quiet", value: false }, { key: "agents.hidden_dirs", action: "add", value: "~/x" }],
     });
     expect("template" in r).toBe(true);
     if (!("template" in r)) return;
-    expect(r.template.browser).toEqual({ phone_nav: "tabs", sidebar_icons: "colored", modules_off: ["health"] });
+    expect(r.template.browser).toEqual({ phone_nav: "tabs", sidebar_icons: "colored", main_chat: "plain", agents_view: "active", modules_off: ["health"] });
     expect(r.template.navigation?.pages?.hidden).toEqual(["todos"]);
     expect(r.template.settings?.[1]).toEqual({ key: "agents.hidden_dirs", action: "add", value: "~/x" });
     expect(localized(r.template.name, "zh-Hans")).toBe("我的");
@@ -75,7 +80,7 @@ describe("templates: the format", () => {
   it("refuses what is not a template, with a reason", () => {
     for (const bad of [
       null, [], {}, { ...base, persona_template: 2 }, { ...base, id: "Has Caps" }, { ...base, name: "" },
-      { ...base, extra: 1 }, { ...base, browser: { phone_nav: "bottom" } }, { ...base, navigation: { start: "../x" } },
+      { ...base, extra: 1 }, { ...base, browser: { phone_nav: "bottom" } }, { ...base, browser: { main_chat: "lean" } }, { ...base, browser: { settings_view: true } }, { ...base, navigation: { start: "../x" } },
       { ...base, extensions: { "bad id": {} } }, { ...base, extensions: { x: { enabled: "yes" } } },
       { ...base, settings: [{ key: "k" }] }, { ...base, settings: [{ key: "k", value: 1, action: "drop" }] },
       { ...base, settings: Array.from({ length: 65 }, () => ({ key: "k", value: 1 })) },
@@ -89,7 +94,7 @@ describe("templates: the format", () => {
     const builtIns = builtInTemplates((k) => k);
     expect(builtIns.map((b) => b.id)).toEqual(["default"]);
     for (const b of builtIns) expect(parseTemplate(JSON.parse(JSON.stringify(b)))).toEqual({ template: b });
-    expect(builtIns[0].browser).toEqual({ phone_nav: "switch", sidebar_icons: "monochrome", modules_off: [] });
+    expect(builtIns[0].browser).toEqual({ phone_nav: "switch", sidebar_icons: "monochrome", main_chat: "full", agents_view: "full", settings_view: "full", sidebar_view: "full", modules_off: [] });
     expect(builtIns[0].navigation).toEqual({ pages: null });
   });
 });
@@ -118,7 +123,7 @@ describe("templates: links", () => {
 describe("templates: plan and apply", () => {
   const t: PersonaTemplate = {
     persona_template: 1, id: "t", name: "T",
-    browser: { phone_nav: "tabs", sidebar_icons: "monochrome", modules_off: ["health"] },
+    browser: { phone_nav: "tabs", sidebar_icons: "monochrome", main_chat: "plain", agents_view: "full", modules_off: ["health"] },
     navigation: { start: "agent-list", pages: { order: [], shown: [], hidden: ["todos", "kb"] } },
     extensions: { "example-ext": { enabled: true, config: { agent: true, agent_prefix: "/agent" } }, missing: { enabled: true } },
     settings: [{ key: "assistant.main_tasks_quiet", value: false }, { key: "no.such", value: 1 }],
@@ -133,6 +138,8 @@ describe("templates: plan and apply", () => {
     expect(plan.map((i) => [i.part, i.label, i.status])).toEqual([
       ["browser", "Phone navigation", "change"],
       ["browser", "Sidebar icons", "unchanged"],
+      ["browser", "Look main_chat", "change"],
+      ["browser", "Look agents_view", "unchanged"],
       ["browser", "Module health", "change"],
       ["browser", "Module voice", "change"],
       ["navigation", "Start page", "change"],
@@ -143,15 +150,17 @@ describe("templates: plan and apply", () => {
       ["settings", "Title assistant.main_tasks_quiet", "change"],
       ["settings", "no.such", "skipped"],
     ]);
-    expect(plan[5].detail).toBe("default → 2 under More");
-    expect(plan[10].detail).toBe("status unsupported");
+    expect(plan[2].detail).toBe("full → plain");
+    expect(plan[7].detail).toBe("default → 2 under More");
+    expect(plan[12].detail).toBe("status unsupported");
   });
 
   it("applies every part, keeps an extension's other settings, and finds nothing left to do after", async () => {
     const { host, state } = fakeHost({ extensions });
     const done = await applyTemplate(t, host);
-    expect(done.filter((i) => i.status === "applied")).toHaveLength(8);
+    expect(done.filter((i) => i.status === "applied")).toHaveLength(9);
     expect(state.phoneNav).toBe("tabs");
+    expect(state.looks).toEqual({ main_chat: "plain", agents_view: "full", settings_view: "full", sidebar_view: "full" });
     expect([...state.off]).toEqual(["health"]);
     expect(state.start).toBe("agent-list");
     expect(state.prefs.hidden).toEqual(["todos", "kb"]);

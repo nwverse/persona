@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentGrouping, type AgentMutes, awaitsReply, buildAgentGroups, hostsOf, isQuiet, justFinished, replyAsk, sessionHost, splitAgentSessions } from "./agent-groups";
+import { agentGrouping, type AgentMutes, awaitsReply, buildAgentGroups, hostsOf, isQuiet, justFinished, replyAsk, runningNow, sessionHost, splitAgentSessions } from "./agent-groups";
 import { byAttention } from "./format";
 import type { AgentState, Machine, Session } from "./types";
 
@@ -65,6 +65,18 @@ describe("所有分组共用 live 与最近的边界", () => {
     expect(recent).toHaveLength(40);
     expect(recent[0].updated_at).toBe(date(23));
     expect(ids(all)).toEqual(before);
+  });
+});
+
+describe("runningNow", () => {
+  it("keeps the Agents a terminal still has a pane for, on an online computer, not one a restart stopped", () => {
+    const pane = (n: number) => ({ pane_id: `w1:p${n}` });
+    const all = [session("working", "working", pane(1)), session("idle", "idle", pane(2)), session("waits", "needs_you", pane(3)),
+      session("restarted", "unknown", { status: "interrupted", ...pane(4) }), session("offline", "offline", pane(5)),
+      session("machine-offline", "working", { machine_id: "machine-off", ...pane(6) }),
+      session("no-pane", "idle"), session("cards-left", "needs_you"), session("feishu", "idle", { pane_id: "botmux:t1" })];
+    const { live } = splitAgentSessions(all, machines);
+    expect(ids(runningNow(live, machines))).toEqual(["working", "idle", "waits"]);
   });
 });
 
