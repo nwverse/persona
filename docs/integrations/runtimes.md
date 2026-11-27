@@ -658,7 +658,7 @@ so the model can still look at the part that arrived. The companion atomically c
 directory and the hook executes those installed copies, so later upgrades, another companion's exit or a changed `current`
 cannot strand it in a deleted generation. The installed `package.json` gives the copied `.js` decision helper an explicit ES-module scope even under a CommonJS parent. The hook answers `ask` when an installed copy is gone, so a stale plugin never blocks agy; `--no-media-guard` keeps the companion from writing it. agy runs a hook through
 `/bin/sh` on macOS and Linux and through `cmd.exe` on Windows, so the Windows hook is a `cmd` command with every path
-quoted that checks Node.js and the installed script with `if exist` and answers `ask` when either is gone (a cmd that cannot find
+quoted that checks Node.js and the installed scripts with `if exist` and answers `ask` when any is gone (a cmd that cannot find
 the program prints no JSON at all). Pictures attached to a
 message from Persona get the same check: a broken one is left out of the prompt with a line saying so.
 
