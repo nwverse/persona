@@ -31,12 +31,11 @@ const (
 	prEventKindCIFailure = "ci_failure"
 	prEventKindReview    = "pr_review"
 
-	prRouteOutcomeSent            = "agent_sent"
-	prRouteOutcomeQueued          = "agent_queued"
-	prRouteOutcomeResumed         = "agent_resumed"
-	prRouteOutcomeFallback        = "supervisor_fallback"
-	prRouteOutcomeFallbackPending = "supervisor_pending"
-	prRouteOutcomeUncertain       = "agent_uncertain"
+	prRouteOutcomeSent      = "agent_sent"
+	prRouteOutcomeQueued    = "agent_queued"
+	prRouteOutcomeResumed   = "agent_resumed"
+	prRouteOutcomeFallback  = "supervisor_fallback"
+	prRouteOutcomeUncertain = "agent_uncertain"
 
 	prEventRouteDedupKey = "assistant.pr_event_route_dedup"
 	prEventRouteDedupCap = 2000
@@ -59,12 +58,14 @@ type prRoutedEvent struct {
 	CheckName   string
 	CheckCount  int
 	Summary     string
+	CheckedAt   time.Time // the observation that selected COMMENTED feedback
 }
 
 type prEventRouteRecord struct {
-	TodoID  string    `json:"todo_id"`
-	Outcome string    `json:"outcome"`
-	At      time.Time `json:"at"`
+	TodoID          string    `json:"todo_id"`
+	Outcome         string    `json:"outcome"`
+	At              time.Time `json:"at"`
+	FallbackPending bool      `json:"fallback_pending,omitempty"`
 }
 
 type prEventRouteBook struct {
@@ -314,7 +315,7 @@ func reviewAuthorHasWriteAssociation(assoc string) bool {
 }
 
 var (
-	prCheckStatusLine    = lazyre.New(`^(?:ci(?: checks?| status)?|all checks|checks|(?:all )?tests|test suite|build|lint)(?:: ?| (?:has |have )?)(?:[✅❌] ?)?(?:passed|passing|failed|failing|green|red|succeeded|successful|success|failure|pending|complete|completed)$`)
+	prCheckStatusLine    = lazyre.New(`^(?:(?:all )?ci(?: checks?| status)?|all checks|checks|(?:all )?tests|test suite|build|lint)(?:: ?| (?:has |have |is |are )?)(?:[✅❌] ?)?(?:passed|passing|failed|failing|green|red|succeeded|successful|success|failure|pending|complete|completed)$`)
 	prCoverageStatusLine = lazyre.New(`^(?:code )?coverage(?: report)?(?:: ?| (?:is )?)(?:[0-9]+(?:\.[0-9]+)?%|updated|passed|failed|unchanged)$`)
 	prWatcherReviewLine  = lazyre.New("^automated independent semantic review(?: at `[0-9a-f]+`)? found no blocking defects$")
 	prWatcherCheckLine   = lazyre.New("^- `[^`]+`$")
@@ -371,8 +372,12 @@ func (s *Service) deliverPRFeedback(ctx context.Context, t Todo, ev prRoutedEven
 		return errors.New("PR event dedupe history could not be read")
 	}
 	switch prior.Outcome {
-	case prRouteOutcomeSent, prRouteOutcomeQueued, prRouteOutcomeResumed, prRouteOutcomeFallback:
+	case prRouteOutcomeSent, prRouteOutcomeQueued, prRouteOutcomeResumed:
 		return nil
+	case prRouteOutcomeFallback:
+		if !prior.FallbackPending {
+			return nil
+		}
 	}
 	cause := errors.New("direct Agent routing was unavailable")
 	if prior.Outcome == prRouteOutcomeUncertain {
@@ -384,18 +389,18 @@ func (s *Service) deliverPRFeedback(ctx context.Context, t Todo, ev prRoutedEven
 			return s.recordPREventRoute(ctx, key, prEventRouteRecord{TodoID: t.ID, Outcome: outcome})
 		}
 		cause = err
-		pending := prRouteOutcomeFallbackPending
+		pending := prEventRouteRecord{TodoID: t.ID, Outcome: prRouteOutcomeFallback, FallbackPending: true}
 		if sendUnknown(err) {
-			pending = prRouteOutcomeUncertain
+			pending.Outcome = prRouteOutcomeUncertain
 		} else if t.Supervision == nil {
 			return err
 		}
 		// Hold the fallback route across retries even if the Agent comes back while the outbox is being saved.
-		if err := s.recordPREventRoute(ctx, key, prEventRouteRecord{TodoID: t.ID, Outcome: pending}); err != nil {
+		if err := s.recordPREventRoute(ctx, key, pending); err != nil {
 			return err
 		}
 	}
-	if _, ok := s.prFeedbackTarget(t.ID, ev.PRURL, ev.HeadSHA); !ok {
+	if _, ok := s.prFeedbackTarget(t.ID, ev.PRURL, ev.HeadSHA, ev.CheckedAt); !ok {
 		return errors.New("PR feedback no longer matches the task")
 	}
 	if t.Supervision == nil || !s.signalReplacing(nil, prEventFallbackSignal(t.ID, ev, cause)) {
@@ -609,7 +614,7 @@ func (s *Service) deliverPREventToAgent(ctx context.Context, t Todo, ev prRouted
 			return "", errors.New("task closed before delivery")
 		}
 		if ev.ReviewState == "COMMENTED" {
-			if _, ok := s.prFeedbackTarget(t.ID, ev.PRURL, ev.HeadSHA); !ok {
+			if _, ok := s.prFeedbackTarget(t.ID, ev.PRURL, ev.HeadSHA, ev.CheckedAt); !ok {
 				return "", errors.New("PR feedback no longer matches the task")
 			}
 		}

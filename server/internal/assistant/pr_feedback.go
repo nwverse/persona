@@ -88,10 +88,11 @@ func (f prFeedback) reviewsAfter(cursor prFeedbackCursor) []githubPRReview {
 	return pending
 }
 
-func (s *Service) prFeedbackTarget(todoID, url, head string) (Todo, bool) {
+func (s *Service) prFeedbackTarget(todoID, url, head string, checkedAt time.Time) (Todo, bool) {
 	t, ok := s.todoNow(todoID)
 	return t, ok && taskOpen(t) && !needsUserWakeEligible(t) && t.PRURL == url && s.stagePR(todoID) == url &&
-		t.PRStatus != nil && t.PRStatus.URL == url && t.PRStatus.State == "open" && t.PRStatus.HeadOID == head
+		t.PRStatus != nil && t.PRStatus.URL == url && t.PRStatus.State == "open" && t.PRStatus.HeadOID == head &&
+		t.PRStatus.CheckedAt.Equal(checkedAt)
 }
 
 func (s *Service) routePRFeedback(ctx context.Context, todoID string, status TodoPRStatus, g githubForge, feedback prFeedback) error {
@@ -101,7 +102,7 @@ func (s *Service) routePRFeedback(ctx context.Context, todoID string, status Tod
 	if !s.prEventsRouteToAgentOn(ctx) {
 		return nil
 	}
-	if _, ok := s.prFeedbackTarget(todoID, status.URL, status.HeadOID); !ok {
+	if _, ok := s.prFeedbackTarget(todoID, status.URL, status.HeadOID, status.CheckedAt); !ok {
 		return nil
 	}
 	st := s.store()
@@ -131,7 +132,7 @@ func (s *Service) routePRFeedback(ctx context.Context, todoID string, status Tod
 		}
 	}
 	for _, ev := range events {
-		t, ok := s.prFeedbackTarget(todoID, status.URL, status.HeadOID)
+		t, ok := s.prFeedbackTarget(todoID, status.URL, status.HeadOID, status.CheckedAt)
 		if !ok {
 			return nil
 		}
@@ -139,7 +140,7 @@ func (s *Service) routePRFeedback(ctx context.Context, todoID string, status Tod
 			return err
 		}
 	}
-	if _, ok := s.prFeedbackTarget(todoID, status.URL, status.HeadOID); !ok {
+	if _, ok := s.prFeedbackTarget(todoID, status.URL, status.HeadOID, status.CheckedAt); !ok {
 		return nil
 	}
 	// On the first complete observation, baseline the reviews already present without fetching their
@@ -177,7 +178,8 @@ func (f prFeedback) reviewEvents(ctx context.Context, todoID string, status Todo
 		events = append(events, prRoutedEvent{
 			TodoID: todoID, PRURL: status.URL, HeadSHA: status.HeadOID, Kind: prEventKindReview,
 			EventID: prReviewEventID(r.ID), ReviewState: r.State, Author: author, Body: body,
-			EventURL: cmp.Or(strings.TrimSpace(r.HTMLURL), status.URL+"#pullrequestreview-"+strconv.FormatInt(r.ID, 10)),
+			EventURL:  cmp.Or(strings.TrimSpace(r.HTMLURL), triageNormalizePRURL(status.URL)+"#pullrequestreview-"+strconv.FormatInt(r.ID, 10)),
+			CheckedAt: status.CheckedAt,
 		})
 	}
 	return events, nil
