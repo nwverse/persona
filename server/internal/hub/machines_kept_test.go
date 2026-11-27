@@ -366,7 +366,7 @@ func TestKeptMachinesMove(t *testing.T) {
 	}
 	h.startDevices(ctx)
 	srv := newHubServer(t, h)
-	far := json.RawMessage(`{"id":"far","name":"Far","kind":"ssh","ssh_host":"far.example","tailcat_addr":"tc-s3cret"}`)
+	far := json.RawMessage(`{"id":"far","name":"Far","kind":"ssh","ssh_host":"far.example","tailcat_addr":"tc-s3cret","future_field":{"priority":2}}`)
 	a := connectKeeper(t, h, srv, "m-0a0a0a", far)
 	b := connectKeeper(t, h, srv, "m-0b0b0b")
 	h.devices.moving.Lock()
@@ -378,7 +378,7 @@ func TestKeptMachinesMove(t *testing.T) {
 	if from, err := h.moveMachine(ctx, "far", b.id); err != nil || from != a.id {
 		t.Fatalf("move to b: %s %v", from, err)
 	}
-	if e := b.has("far"); !strings.Contains(string(e), "tc-s3cret") || a.has("far") != nil || h.keptBy("far") != b.id {
+	if e := b.has("far"); string(e) != string(far) || a.has("far") != nil || h.keptBy("far") != b.id {
 		t.Fatalf("after the move: b %s, a %s, kept by %q", e, a.has("far"), h.keptBy("far"))
 	}
 

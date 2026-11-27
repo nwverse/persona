@@ -174,6 +174,211 @@ describe('antigravity transcript and tool mapping', () => {
     assert.deepEqual(items[1].tool_input, { todo_id: 'todo_1', verdict: 'accepted' })
   })
 
+  it('normalizes Run-prefixed Persona MCP titles in mapToolName and mapPermissionToolCall without misclassifying shell or non-MCP titles', () => {
+    for (const server of MCP_SERVER_NAMES) {
+      for (const prefix of [`mcp_${server}`, `mcp_${server}_19d68ad7`]) {
+        assert.equal(mapToolName(`Run ${prefix}_todo_decisions`), 'mcp__persona__todo_decisions')
+        assert.deepEqual(
+          mapPermissionToolCall({
+            kind: 'other',
+            title: `Run ${prefix}_todo_decisions`,
+            rawInput: { todo_id: 'todo_1' },
+          }),
+          { toolName: 'mcp__persona__todo_decisions', toolInput: { todo_id: 'todo_1' } },
+        )
+        assert.deepEqual(
+          mapPermissionToolCall({
+            title: `Run ${prefix}_notify_user`,
+            rawInput: { message: 'Ready' },
+          }),
+          { toolName: 'mcp__persona__notify_user', toolInput: { message: 'Ready' } },
+        )
+        assert.deepEqual(
+          mapPermissionToolCall({
+            kind: 'execute',
+            title: `Run ${prefix}_todo_decisions`,
+            rawInput: { todo_id: 'todo_2' },
+          }),
+          { toolName: 'mcp__persona__todo_decisions', toolInput: { todo_id: 'todo_2' } },
+        )
+        assert.deepEqual(
+          mapPermissionToolCall({
+            kind: 'other',
+            title: `Run ${prefix}_persona_call`,
+            rawInput: { name: 'todo_decisions', arguments: { todo_id: 'todo_3' } },
+          }),
+          { toolName: 'mcp__persona__todo_decisions', toolInput: { todo_id: 'todo_3' } },
+        )
+      }
+    }
+
+    // Shell commands, explicit tool names, trailing shell metacharacters, and non-Persona MCP titles must never be misclassified.
+    assert.deepEqual(
+      mapPermissionToolCall({
+        kind: 'execute',
+        title: 'Run mcp_persona_19d68ad7_todo_decisions',
+        rawInput: { CommandLine: 'rm -rf /tmp/x' },
+      }),
+      { toolName: 'Bash', toolInput: { command: 'rm -rf /tmp/x', description: 'Run mcp_persona_19d68ad7_todo_decisions' } },
+    )
+    assert.deepEqual(
+      mapPermissionToolCall({
+        name: 'run_command',
+        kind: 'execute',
+        title: 'Run mcp_persona_19d68ad7_todo_decisions',
+        rawInput: { command: 'echo hi' },
+      }),
+      { toolName: 'Bash', toolInput: { command: 'echo hi', description: 'Run mcp_persona_19d68ad7_todo_decisions' } },
+    )
+    assert.deepEqual(
+      mapPermissionToolCall({
+        kind: 'execute',
+        title: 'Run mcp_persona_19d68ad7_todo_decisions && ls',
+        rawInput: {},
+      }),
+      { toolName: 'Bash', toolInput: { command: 'Run mcp_persona_19d68ad7_todo_decisions && ls', description: '' } },
+    )
+    assert.deepEqual(
+      mapPermissionToolCall({
+        kind: 'execute',
+        title: 'Run npm test',
+        rawInput: {},
+      }),
+      { toolName: 'Bash', toolInput: { command: 'Run npm test', description: '' } },
+    )
+    assert.deepEqual(
+      mapPermissionToolCall({
+        kind: 'other',
+        title: 'Run npm test',
+        rawInput: {},
+      }),
+      { toolName: 'Run npm test', toolInput: {} },
+    )
+    assert.deepEqual(
+      mapPermissionToolCall({
+        kind: 'other',
+        title: 'Run mcp_github_create_issue',
+        rawInput: { repo: 'nwverse/persona' },
+      }),
+      { toolName: 'Run mcp_github_create_issue', toolInput: { repo: 'nwverse/persona' } },
+    )
+    assert.equal(mapToolName('Run run_command'), 'Run run_command')
+    assert.equal(mapToolName('Run read_file'), 'Run read_file')
+    assert.equal(mapToolName('Run\nmcp_persona_19d68ad7_todo_decisions'), 'Run\nmcp_persona_19d68ad7_todo_decisions')
+    assert.equal(mapToolName('Run mcp_persona_19d68ad7_todo_decisions --flag'), 'Run mcp_persona_19d68ad7_todo_decisions --flag')
+
+    // Adversarial security & misclassification guards:
+    // 1. Bare mcp_persona_* command under kind: "execute" must stay Bash (cannot bypass Assistant command gate).
+    assert.deepEqual(
+      mapPermissionToolCall({
+        kind: 'execute',
+        title: 'mcp_persona_19d68ad7_evil',
+        rawInput: {},
+      }),
+      { toolName: 'Bash', toolInput: { command: 'mcp_persona_19d68ad7_evil', description: '' } },
+    )
+    // 2. kind: "execute" with shell Cwd or lowercase cwd must stay Bash even with "Run " prefix.
+    assert.deepEqual(
+      mapPermissionToolCall({
+        kind: 'execute',
+        title: 'Run mcp_persona_19d68ad7_evil',
+        rawInput: { Cwd: '/tmp' },
+      }),
+      { toolName: 'Bash', toolInput: { command: 'Run mcp_persona_19d68ad7_evil', description: '/tmp' } },
+    )
+    assert.deepEqual(
+      mapPermissionToolCall({
+        kind: 'execute',
+        title: 'Run mcp_persona_19d68ad7_evil',
+        rawInput: { cwd: '/tmp' },
+      }),
+      { toolName: 'Bash', toolInput: { command: 'Run mcp_persona_19d68ad7_evil', description: '' } },
+    )
+    // 2b. Core Persona MCP tools legitimately pass lowercase cwd / file_path under kind: "other" or omitted kind.
+    for (const kind of ['other', undefined]) {
+      const base = kind ? { kind } : {}
+      assert.deepEqual(
+        mapPermissionToolCall({
+          ...base,
+          title: 'Run mcp_persona_19d68ad7_agent_start',
+          rawInput: { machine: 'mbp', cwd: '/repo/app', prompt: 'Investigate' },
+        }),
+        { toolName: 'mcp__persona__agent_start', toolInput: { machine: 'mbp', cwd: '/repo/app', prompt: 'Investigate' } },
+      )
+      assert.deepEqual(
+        mapPermissionToolCall({
+          ...base,
+          title: 'Run mcp_persona_19d68ad7_dispatch_start',
+          rawInput: { cwd: '/repo/app', task: 'run' },
+        }),
+        { toolName: 'mcp__persona__dispatch_start', toolInput: { cwd: '/repo/app', task: 'run' } },
+      )
+      assert.deepEqual(
+        mapPermissionToolCall({
+          ...base,
+          title: 'Run mcp_persona_19d68ad7_a2a_send',
+          rawInput: { to: 'worker-1', cwd: '/repo/app', message: 'ping' },
+        }),
+        { toolName: 'mcp__persona__a2a_send', toolInput: { to: 'worker-1', cwd: '/repo/app', message: 'ping' } },
+      )
+      assert.deepEqual(
+        mapPermissionToolCall({
+          ...base,
+          title: 'Run mcp_persona_19d68ad7_channels_runs',
+          rawInput: { file_path: '/tmp/run.log', limit: 10 },
+        }),
+        { toolName: 'mcp__persona__channels_runs', toolInput: { file_path: '/tmp/run.log', limit: 10 } },
+      )
+    }
+    // 3. kind: "read" / "edit" with file paths must NEVER be overridden by a Run mcp_persona_* title.
+    assert.deepEqual(
+      mapPermissionToolCall({
+        kind: 'read',
+        title: 'Run mcp_persona_19d68ad7_evil',
+        rawInput: { AbsolutePath: '/etc/passwd' },
+      }),
+      { toolName: 'Read', toolInput: { file_path: '/etc/passwd' } },
+    )
+    assert.deepEqual(
+      mapPermissionToolCall({
+        kind: 'edit',
+        title: 'Run mcp_persona_19d68ad7_evil',
+        rawInput: { TargetFile: '/etc/hosts' },
+      }),
+      { toolName: 'Edit', toolInput: { file_path: '/etc/hosts', old_string: '', new_string: '' } },
+    )
+    // 4. Native shell/file fields even under kind: "other" / omitted kind cannot spoof Persona MCP.
+    assert.deepEqual(
+      mapPermissionToolCall({
+        kind: 'other',
+        title: 'Run mcp_persona_19d68ad7_evil',
+        rawInput: { Cwd: '/tmp' },
+      }),
+      { toolName: 'Bash', toolInput: { command: 'Run mcp_persona_19d68ad7_evil', description: '/tmp' } },
+    )
+    assert.deepEqual(
+      mapPermissionToolCall({
+        title: 'Run mcp_persona_19d68ad7_evil',
+        rawInput: { AbsolutePath: '/etc/passwd' },
+      }),
+      { toolName: 'Read', toolInput: { file_path: '/etc/passwd' } },
+    )
+    // 5. Separate persona_a2a MCP server tools must not be mangled into mcp__persona__a2a_<hash>_<tool>.
+    assert.equal(mapToolName('mcp_persona_a2a_19d68ad7_a2a_send'), 'mcp_persona_a2a_19d68ad7_a2a_send')
+    assert.equal(mapToolName('Run mcp_persona_a2a_19d68ad7_a2a_send'), 'Run mcp_persona_a2a_19d68ad7_a2a_send')
+    assert.equal(mapToolName('mcp_persona_a2a_a2a_send'), 'mcp_persona_a2a_a2a_send')
+    assert.deepEqual(
+      mapPermissionToolCall({
+        kind: 'other',
+        title: 'Run mcp_persona_a2a_19d68ad7_a2a_send',
+        rawInput: { to: 'agent-2' },
+      }),
+      { toolName: 'Run mcp_persona_a2a_19d68ad7_a2a_send', toolInput: { to: 'agent-2' } },
+    )
+    // Meanwhile a hashed tool named a2a_send on the persona server itself still normalizes.
+    assert.equal(mapToolName('mcp_persona_19d68ad7_a2a_send'), 'mcp__persona__a2a_send')
+  })
+
   it('maps transcript steps into ordered Persona items with paired tool results', () => {
     const steps = [
       {

@@ -112,6 +112,8 @@ var (
 	_ host.PlainScreen = (*orcaHost)(nil)
 	_ host.Organizer   = (*orcaHost)(nil)
 	_ host.Launcher    = (*orcaHost)(nil)
+	_ host.EnvLauncher = (*orcaHost)(nil)
+	_ shellOpener      = (*orcaHost)(nil)
 )
 
 func newOrcaHost(c *orcart.Client) *orcaHost { return &orcaHost{c: c, scan: orcaScan} }

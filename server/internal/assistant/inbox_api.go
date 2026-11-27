@@ -86,7 +86,7 @@ func (s *Service) inboxRoutes() {
 			apierr.Write(w, http.StatusNotFound, errNoInboxItem)
 			return
 		}
-		// Its knowledge base chat (kb_inbox.go), for the user's own apps.
+		// Its knowledge base chat (inbox_kb_chat.go), for the user's own apps.
 		var chat *inboxKBChat
 		if fullRole(r) {
 			chat = s.itemKBChat(r.Context(), &c)

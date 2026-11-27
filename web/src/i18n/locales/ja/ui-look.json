@@ -59,9 +59,9 @@
   "sidebar_usage": "サイドバーのランチャー残量",
   "sidebar_usage_hint": "サイドバー下部に各ランチャーの残り枠を示すカードを表示します。このブラウザにのみ保存されます。",
   "surface_style": "ウインドウスタイル",
-  "surface_style_hint": "デフォルトは従来の不透明な表示を保ちます。Liquid Glass は半透明のすりガラス質感とデスクトップの透過を追加します。このブラウザにのみ保存されます。",
+  "surface_style_hint": "デフォルトは従来の不透明な表示を保ちます。すりガラスは半透明の質感とデスクトップの透過を追加します。このブラウザにのみ保存されます。",
   "surface_default": "デフォルト",
-  "surface_liquid_glass": "Liquid Glass",
+  "surface_liquid_glass": "すりガラス",
   "glass_translucency": "ガラスの透明度",
-  "glass_translucency_hint": "Liquid Glass の透過度と背景ぼかしの強さを調整します。このブラウザにのみ保存されます。"
+  "glass_translucency_hint": "すりガラスの透過度と背景ぼかしの強さを調整します。このブラウザにのみ保存されます。"
 }

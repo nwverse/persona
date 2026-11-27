@@ -53,7 +53,7 @@ With the SDK (`integrations/runtime-sdk`, Node 22+, no dependencies) you only wr
 
 | Driver method | Returns |
 | --- | --- |
-| `listSessions()` | Session rows: `session_id`, `title`, `cwd`, `status` (`working` / `blocked` / `done` / `idle` / `offline`), `updated_at`, `rev` (changes whenever content changes; the App fetches new content based on it), `last_text`, `space_id` / `space_name` (sessions in the same space are grouped together in the App), `model`; optionally `permission_mode` / `effort` (the current mode), `transcript` (this session's chat is a local Claude transcript: the content belongs to node, see "Runtimes that run Claude Code" below), `codex_thread` (this session's chat is a local Codex thread, see "Runtimes that run Codex" below), `is_subagent` / `parent_session_id` (another of the runtime's sessions started this one, see "Sub-Agents and background tasks" below), `started_at` (when the session began: a child's card counts its running time from it) and `started_by_persona` (the hub started this session through the runtime or had it take the session over: the manager finds a start whose answer it lost among these, so say it after a restart too; a daemon's is dropped, #8130). A session `start` answered before it really began (see below) is listed with `starting: true` until it has, and once it failed as `offline` with `start_error` (why) for a while, as the node lists its own starts (`docs/protocol/protocol.md` ("New session")) |
+| `listSessions()` | Session rows: `session_id`, `title`, `cwd`, `status` (`working` / `blocked` / `done` / `idle` / `offline`), `updated_at`, `rev` (changes whenever content changes; the App fetches new content based on it), `last_text`, `space_id` / `space_name` (sessions in the same space are grouped together in the App; a runtime without workspaces of its own gives the session's directory, and the node puts the session in that folder's space on the computer, the terminal workspace rooted there when there is one: `docs/protocol/agent-states.md` ("One folder, one space (#13533)")), `model`; optionally `permission_mode` / `effort` (the current mode), `transcript` (this session's chat is a local Claude transcript: the content belongs to node, see "Runtimes that run Claude Code" below), `codex_thread` (this session's chat is a local Codex thread, see "Runtimes that run Codex" below), `is_subagent` / `parent_session_id` (another of the runtime's sessions started this one, see "Sub-Agents and background tasks" below), `started_at` (when the session began: a child's card counts its running time from it) and `started_by_persona` (the hub started this session through the runtime or had it take the session over: the manager finds a start whose answer it lost among these, so say it after a restart too; a daemon's is dropped, #8130). A session `start` answered before it really began (see below) is listed with `starting: true` until it has, and once it failed as `offline` with `start_error` (why) for a while, as the node lists its own starts (`docs/protocol/protocol.md` ("New session")) |
 | `items(params)` | One page of items (same params and result as `session.items`: from the end backwards by `turns` / `limit`, `before_seq` to page back, `after_seq` to catch up, `from_seq` + `through_seq` for a range), with `history` and `to_seq` |
 
 A row's `last_text` is the agent's reply preview. When botmux delivers a reply to its topic, the agent can finish with a line containing only `BOTMUX_NOTHING_TO_SEND`. The node removes standalone marker lines from reported previews. A marker-only update retains the previous words for that session or subagent when available. Runtime drivers that shorten previews should remove marker lines before joining lines or clipping text. The full message remains available in `session.items`.
@@ -638,21 +638,32 @@ the local export names the corresponding file in that conversation's task direct
 
 A session is listed `unknown` when the evidence cannot say working, idle or done (`transcriptState` in
 `integrations/antigravity/lib/map.js`). It is never guessed as idle: an idle native summary closes a turn only when its
-step count covers the last exported step. The companion logs why, as reason counts, each time the tally across listed
+step count covers the last exported step (or when both the export and an idle summary have zero steps). A freshly
+`session.start`-ed conversation with no completed turns also stays `idle` if `agy` writes a 0-byte `transcript.jsonl`
+before populating a summary row (provided the summary store is readable and shows zero steps and no active/unrecognized
+status). Active native
+states (`CASCADE_RUN_STATUS_RUNNING`, `CASCADE_RUN_STATUS_CANCELING`, `CASCADE_RUN_STATUS_BUSY`, and `not_fully_idle`)
+all report `working`. The companion logs why, as reason counts, each time the tally across listed
 sessions changes (`agy unknown status: no_summary 1, summary_behind 2`, then `none` once it clears, #12003):
 `read_failed` (the native summary database could not be read), `no_summary`, `summary_not_idle`, `summary_behind` (the
 summary's step count does not cover the last exported step), `no_step_index`, and `no_relevant_step` (no user input,
-response, tool result or error has been exported). A failed summary read is logged when it starts or its cause changes,
+response, tool result or error has been exported). Any non-empty unrecognized summary status value is also logged once
+as a sanitized enum token (`agy unrecognized summary status: …`). A failed summary read is logged when it starts or its cause changes,
 with SQLite's result-code text only, and once more when reads recover, with the number of failures. The lines carry no
 session IDs, message text or paths; under `personad node` they appear in the node log after `agy runtime:`.
 
 A settled Persona-owned ACP reply writes `.persona-turn-completion` beside the conversation's history-epoch file (mode
 0600). It stores SHA-256 fingerprints of the branch and actual settled reply index: one for the full reply and one for
-its byte length and first/last eight characters so truncated exports can match, never message text. After a restart, a
-`summary_behind` row becomes `done` only while the current export matches that settled turn; a missing or mismatched
-marker, including one followed by later native work, leaves `unknown`. Starting another prompt or issuing a native rewind clears
-the marker, and a known or pending native-cut check suppresses recovery. Transcript-only status rules and the step-count
-coverage check above are unchanged.
+its byte length and first/last eight characters so truncated exports can match, never message text (a clean tool-only
+turn ending without trailing text writes an `idle:` fingerprint of the completed `GENERIC` step instead). After a restart,
+a `summary_behind`, `no_summary` (with a readable summary store), or unspecified `summary_not_idle` (`""` or
+`CASCADE_RUN_STATUS_UNSPECIFIED`, with no unexported native steps past the export) row becomes `done` (or `idle` for a
+settled tool-only turn) only while the current export matches that settled turn; a missing or mismatched marker, an
+unrecognized future summary status, or later native work leaves `unknown`. When `GetCascadeTrajectory` has already
+verified an idle native trajectory matching every exported step past a lagging `summary_behind` count, that cached
+verification resolves the row until the export or summary changes. Starting another prompt, an autonomous wake, or a
+native rewind clears the marker and verification cache, and a known or pending native-cut check suppresses recovery.
+Transcript-only status rules and the step-count coverage check above are unchanged.
 
 What subagents and background tasks send back reaches the CLI companion's chat (#14625). agy 1.5.15 writes each
 as a `SYSTEM_MESSAGE` step whose body is `[Message] … sender=<id> … content=<text>`; the companion maps it to a
@@ -815,7 +826,10 @@ with their description and arguments (#10756). A companion loaded from `<store>/
 each new or resumed session, preferring `<store>/current/antigravity/mcp-proxy.mjs` whenever it exists. Consecutive
 upgrades therefore do not leave later sessions pointing into a deleted generation; source checkouts without `current`
 keep using their own `mcp-proxy.mjs`. The proxy entry is self-contained (its schema projection is inlined), so after
-Node loads it, pruning its generation cannot break a later relative import. For non-assistant Agent sessions (`--agent`),
+Node loads it, pruning its generation cannot break a later relative import. For assistant sessions, when the upstream catalog marks core tools with `_meta["anthropic/alwaysLoad"] === true`,
+the proxy declares only those always-load tools (larger than `persona_call`) and keeps deferred tools reachable through
+`persona_call`; when all tools carry `alwaysLoad` (e.g. `assistant.load_all_tools = true`) or none do (older servers),
+it falls back to declaring every tool larger than `persona_call`. For non-assistant Agent sessions (`--agent`),
 the proxy prioritizes core task, leader and supervision tools and caps secondary declarations within the eager budget so
 `agy` does not evict leader or supervision tools while keeping secondary tools reachable through `persona_call` (#15822);
 `persona_a2a` stays on its separate scoped server.

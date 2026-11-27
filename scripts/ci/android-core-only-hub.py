@@ -69,6 +69,8 @@ def validate_proof(proof, edition, run_id):
     reads = proof.get("core_reads") or {}
     check(reads.get("installed_managers", 0) >= 1 and reads.get("sessions", -1) >= 0 and
           reads.get("paired_devices", 0) >= 1, f"{edition}: authenticated core reads were not exercised: {reads}")
+    check(reads.get("inbox_items", -1) == 0 and reads.get("todos", -1) == 0,
+          f"{edition}: Inbox and To-dos must both be well-formed empty lists: {reads}")
     carried = proof.get("carried_modules") or []
     active = proof.get("active_modules") or []
     check(carried, f"{edition}: the app carried no modules, so the check would be vacuous")

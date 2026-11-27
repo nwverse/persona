@@ -502,7 +502,7 @@ func (n *Node) agyOpenIn(id string) (pane string, a host.Agent, held bool) {
 	if pane != "" {
 		return pane, a, true
 	}
-	return "", host.Agent{}, agyPresenceHeldWith(n.agyDataRoot(), conversation, func(writtenAt, now time.Time) bool {
+	return "", host.Agent{}, agyPresenceHeldWith(n.agyRootFor(conversation), conversation, func(writtenAt, now time.Time) bool {
 		return n.runtimes.agyCompanionOwnsWrite(conversation, writtenAt, now)
 	})
 }

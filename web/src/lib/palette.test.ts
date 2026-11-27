@@ -141,7 +141,7 @@ describe("registered commands", () => {
     const ran: unknown[][] = [];
     const list = appCommands({ ...base, machines: [{ id: "a", name: "Alpha" }, { id: "b", name: "Beta" }], run: (...a) => void ran.push(a) });
     const machines = list.filter((c) => c.id.startsWith("app:machine:"));
-    expect(machines.map((c) => [c.title, c.chord])).toEqual([["切到电脑：Alpha", "Mod+1"], ["切到电脑：Beta", "Mod+2"]]);
+    expect(machines.map((c) => [c.title, c.chord])).toEqual([["切换到电脑：Alpha", "Mod+1"], ["切换到电脑：Beta", "Mod+2"]]);
     machines[1]!.run();
     expect(ran).toEqual([["machine", 2]]);
     expect(list.some((c) => c.id === "app:machine")).toBe(false);

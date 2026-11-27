@@ -368,8 +368,8 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 					if s.ContextWindow == 0 && runtimeRow.ContextWindow > 0 {
 						s.ContextWindow = runtimeRow.ContextWindow
 					}
-					if s.OutputTokens == 0 && runtimeRow.OutputTokens > 0 {
-						s.OutputTokens = runtimeRow.OutputTokens
+					if s.OutputTokensValue() == 0 && runtimeRow.OutputTokensValue() > 0 {
+						s.SetOutputTokens(int(runtimeRow.OutputTokensValue()))
 					}
 					if s.UpdatedAt.IsZero() && !runtimeRow.UpdatedAt.IsZero() {
 						s.UpdatedAt = runtimeRow.UpdatedAt
@@ -594,6 +594,7 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 	linkSideSessions(out, parents)           // the desktop app's side sessions under the sessions that started them (#5935)
 	linkHerdrChildren(out, agents)           // herdr's sub-agent terminals under the session of the terminal that started them
 	placeClaudeDesktop(out, origins, n.home) // and in their projects (#8521)
+	n.joinFolderSpaces(out)                  // one folder, one space, whichever app placed a session there (folderspace.go)
 	if n.peer != nil {
 		n.noteCheckpointEnds(out)
 	}

@@ -18,11 +18,57 @@ import (
 
 // feishuSink is the Feishu bot as the pipeline's sink: a progress card replying to the message after a few seconds,
 // rewritten every few, the answer written into it (or cards of their own when long), and the message's reaction going
-// from OnIt to DONE.
+// from OnIt to DONE. With cot_answer on, a turn whose agent message is allowed writes its answer into that message and
+// sends no card, falling back to these cards when the message cannot carry it (#16847).
 type feishuSink struct{ s core }
 
 // progressIdle: the card's elapsed time moves every few seconds, new steps or not: a long turn must not look stuck.
 func (f feishuSink) progressIdle() time.Duration { return f.s.timing("progress_idle") }
+
+// nativeWorker is the run's worker, nil when it has none. It takes only the run's own lock.
+func (f feishuSink) nativeWorker(r *channel.Run) *cotWorker {
+	owner := f.s.live(r.ID)
+	if owner == nil {
+		return nil
+	}
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	return owner.native
+}
+
+// cotWorked: r's agent message is a worker's. Topics always; a private run with dm_cot on, or one that already
+// has a worker (the route does not change mid-turn: the legacy path has a different cursor and would append twice).
+func (f feishuSink) cotWorked(ctx context.Context, r *channel.Run, scope cotScope) bool {
+	switch scope {
+	case cotScopeTopic:
+		return true
+	case cotScopeDM:
+		if f.cotAllowed(ctx, scope) {
+			return true
+		}
+		return f.nativeWorker(r) != nil
+	}
+	return false
+}
+
+// holdsCard is unified mode holding the progress card back: none has been posted, the agent message is not off,
+// and it is open already or the turn is still inside the grace. w is nil before the first snapshot. Past the grace a
+// turn with no process gets its card.
+func (f feishuSink) holdsCard(r *channel.Run, w *cotWorker, took time.Duration) bool {
+	if r.Ext["card"] != "" {
+		return false
+	}
+	if w != nil {
+		open, off := w.state()
+		if off {
+			return false
+		}
+		if open {
+			return true
+		}
+	}
+	return took < f.s.timing("cot_unified_grace")
+}
 
 // When Feishu says the card is updated too often, updates stop for 5 s, then 10, 20, at most 30; the answer is not
 // held back by the pause, except that its own last write into the card waits the first window out once
@@ -38,10 +84,17 @@ func (f feishuSink) progress(ctx context.Context, r *channel.Run, took time.Dura
 	if s.runExt(r, readChatKey) != "" {
 		return // a /read shows no progress in its group: the reaction says it is being worked on (read.go)
 	}
-	if s.runExt(r, "chat") != "" {
-		// The topic's card keeps its own immediate lifecycle; the native API must not hold it back.
-		defer func() { f.topicCotQueue(r, false) }()
-	} else if f.cotProgressNow(ctx, r) {
+	scope := s.cotScope(r)
+	switch {
+	case f.cotWorked(ctx, r, scope):
+		// Queued as this returns, after the card: the worker's persistence takes the channels' lock, which a
+		// progress tick holds across this call, so queuing first would keep that tick, and the next one's card,
+		// waiting on the native API. The queue itself only replaces a snapshot.
+		defer func() { f.cotQueue(r, nil) }()
+		if f.cotUnified(ctx, scope) && f.holdsCard(r, f.nativeWorker(r), took) {
+			return // unified mode: no progress card while the agent message carries the turn
+		}
+	case f.cotProgressNow(ctx, r):
 		return
 	}
 	c := progressCard(s.botLang(ctx), r.Label, took, steps, live, s.h.RunProgress(r))
@@ -155,15 +208,35 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 	if note != "" {
 		foot += "\n" + note
 	}
-	// The process is in the agent message above the answer, or else folded into the answer's first card.
+	// The process is in the agent message above the answer, or else folded into the answer's first card. In unified
+	// mode the answer itself goes into the agent message, and no card is sent, when the worker confirms it.
 	var steps []string
 	native := false
 	var worker *cotWorker
 	var repair *cotFallback
-	if s.runExt(r, "chat") != "" {
-		native, worker = f.topicCotQueue(r, true)
+	scope := s.cotScope(r)
+	read := readRun(r.Ext)
+	card := r.Ext["card"]
+	fin := &cotFinal{end: end}
+	worked := f.cotWorked(ctx, r, scope)
+	if worked && end == channel.EndDone && !quiet && !read && card == "" && f.cotUnified(ctx, scope) {
+		if plain := answerCards(l, s.linkNamer(ctx), answer, false, nil, foot); len(plain) == 1 && plain[0].fallback != "" {
+			fin.answer = plain[0].fallback + "\n\n" + foot
+		}
+	}
+	if worked {
+		native, worker = f.cotQueue(r, fin)
 	} else {
 		native = f.cotFinishNow(ctx, r)
+	}
+	if fin.answer != "" && worker != nil {
+		out, ok := worker.result(ctx, s.timing("cot_answer_wait"))
+		if ok && out.answered {
+			f.markDone(ctx, r, final, end)
+			return nil
+		}
+		// The outcome is known: nothing to repair later, so the worker skips its repair wait.
+		native, worker = ok && out.native, nil
 	}
 	if worker != nil {
 		defer func() {
@@ -177,11 +250,9 @@ func (f feishuSink) answer(ctx context.Context, r *channel.Run, answer, note str
 	}
 	// A /read's answer may be read by the whole group, posted there directly or by the owner: the process (commands,
 	// paths on the computer) and the web link to the conversation stay out of it (read.go).
-	read := readRun(r.Ext)
 	if read {
 		steps = nil
 	}
-	card := r.Ext["card"]
 	if card != "" {
 		// Its last write is as a message: the card stops streaming first (the run's lock is held, stream.go).
 		var k *cardKit
