@@ -185,6 +185,7 @@ type Node struct {
 	agyParentSubs *lru[string, agyParentSubagentInfo]
 	agyReports    map[string]agyHookReport  // pane -> what its agy hook last said (agyhooks.go)
 	agyBound      map[string]agyPaneBinding // herdr pane -> last accepted non-subagent agy conversation (agypane.go)
+	agyRoots      agyRootsState             // agy data directories besides the default (agyroots.go)
 	agyTitles     *agyTitleBook             // agy's own conversation titles, as last read (agytitle.go)
 	// pumping: the shared watch pump runs (session_watch.go watchPump); it stops when watches is empty.
 	pumping bool
@@ -365,8 +366,8 @@ type Node struct {
 	// finishedSince: when each finished Agent's terminal was first seen at rest, with its screen; agentTerms: the
 	// terminals opened for Agents on engines without marks of their own (finished_close.go); n.mu.
 	finishedSince map[string]finishedClock
-	agentTerms    map[string]bool
-	agentRoots    map[string]bool // first shells of Agent worktrees on engines without tokens (personatab.go)
+	agentTerms    map[string]string // pane -> the session it was opened for ("agent": not known yet)
+	agentRoots    map[string]bool   // first shells of Agent worktrees on engines without tokens (personatab.go)
 
 	expectedTokensMu sync.Mutex
 	expectedTokens   map[string]map[string]string
@@ -2640,7 +2641,7 @@ func (n *Node) handleMethod(ctx context.Context, method string, params json.RawM
 		if err != nil {
 			if !p.StrictRead {
 				if conv, ok := strings.CutPrefix(p.SessionID, agyAgent+"-"); ok && uuidRe.MatchString(conv) {
-					dir := n.agyDataRoot()
+					dir := n.agyRootFor(conv)
 					if root, rerr := agyBrain(dir, conv); rerr == nil {
 						defer root.Close()
 						if h, _, aerr := n.agyRead(root, filepath.Join(dir, conv), conv, nil); aerr == nil {

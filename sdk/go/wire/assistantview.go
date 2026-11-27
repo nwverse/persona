@@ -428,7 +428,7 @@ func stripAssistantFields(v *View, keepPageNavigation bool) []string {
 				}
 				e.Buttons = kept
 			}
-			for _, ap := range []**Action{&e.Expand, &e.Load, &e.Comment, &e.Reply, &e.Context, &e.MarkViewed, &e.Draft} {
+			for _, ap := range []**Action{&e.Expand, &e.Load, &e.Comment, &e.Reply, &e.Context, &e.MarkViewed, &e.Draft, &e.Navigate} {
 				if assistantOnlyAction(*ap, keepPageNavigation) {
 					drop("assistant_action")
 					*ap = nil

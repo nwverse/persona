@@ -21,6 +21,8 @@ import { Tokens } from '../design/Tokens';
 import { tr } from '../design/Strings';
 import { Haptics } from '../platform/Haptics';
 import { workspaceGridColumns, workspaceGridGutter, workspaceHorizontalPadding } from '../core/WorkspaceGrid';
+import { isHubPageHidden } from '../core/HubModules';
+import { InboxKBChatLink, parseInboxKBChat } from '../core/KBChatInbox';
 
 const MAX_IMAGE_PIXELS: number = 40000000;
 const MAX_IMAGE_EDGE: number = 8192;
@@ -235,6 +237,7 @@ export struct InboxWorkspacePage {
   @Event onComposeAvailability:(enabled:boolean)=>void=()=>{};
   @Event onChanged: () => void = (): void => {};
   @Event onOpen: (row: ResourceRow) => void = (_row: ResourceRow) => {};
+  @Event onOpenResource: (row: ResourceRow) => void = (_row: ResourceRow) => {};
   @Event onHandoff: (row: ResourceRow) => void = (_row: ResourceRow) => {};
   @Event onLink: (address: string) => void = (_address: string) => {};
   @Local environment: NativeEnvironment = nativeEnvironment;
@@ -893,6 +896,66 @@ export struct InboxWorkspacePage {
     }.width('100%')
   }
 
+  private linkedKnowledgeChat(): InboxKBChatLink | null {
+    if (this.workspace.isReference()) return null;
+    if (isHubPageHidden('knowledge', this.model.sidebarConfig, this.model.demo)) return null;
+    return parseInboxKBChat(this.workspace.kbChat);
+  }
+
+  private openKnowledgeChat(link: InboxKBChatLink): void {
+    Haptics.tap();
+    const row = new ResourceRow(link.id, this.workspace.selected.title || link.id, 'knowledge');
+    row.path = link.path;
+    row.manager = this.workspace.selected.manager || this.model.profile.manager;
+    row.group = this.workspace.selected.group || this.model.profile.id;
+    this.onOpenResource(row);
+  }
+
+  @Builder kbChatCard() {
+    if (this.linkedKnowledgeChat()) {
+      Button({ type: ButtonType.Normal }) {
+        Row({ space: Tokens.spaceM }) {
+          SymbolGlyph($r('sys.symbol.books_vertical_fill'))
+            .fontSize('18vp')
+            .fontColor([Colors.ai])
+          Column({ space: Tokens.spaceXxs }) {
+            Text(tr('kb_chat_knowledge_page'))
+              .fontSize(Tokens.typeSecondary)
+              .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSecondary))
+              .fontWeight(FontWeight.Medium)
+              .fontColor(Colors.ink)
+              .maxLines(1)
+            Text(this.workspace.selected.title || this.linkedKnowledgeChat()!.id)
+              .fontSize(Tokens.typeLabel)
+              .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
+              .fontColor(Colors.secondary)
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+          }
+          .layoutWeight(1)
+          .alignItems(HorizontalAlign.Start)
+          SymbolGlyph(Symbols.expand)
+            .fontSize('12vp')
+            .fontColor([Colors.tertiary])
+        }
+        .width('100%')
+        .padding({ left: Tokens.spaceL, right: Tokens.spaceM, top: Tokens.spaceM, bottom: Tokens.spaceM })
+        .alignItems(VerticalAlign.Center)
+      }
+      .width('100%')
+      .padding(0)
+      .backgroundColor(Colors.surface)
+      .borderRadius(PhoneStyle.cardRadius)
+      .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.environment.dark), radius: PhoneStyle.cardRadius })
+      .shadow(PhoneStyle.cardElevation(this.environment.dark))
+      .onClick(() => {
+        const link = this.linkedKnowledgeChat();
+        if (link) this.openKnowledgeChat(link);
+      })
+      .id('inbox.detail.kb_chat')
+    }
+  }
+
   @Builder summary() {
     Column({ space: Tokens.gap }) {
       this.rowStatus()
@@ -1147,6 +1210,7 @@ export struct InboxWorkspacePage {
             this.conversation()
           } else {
             this.summary()
+            this.kbChatCard()
             this.connectorContent()
             this.mailContent()
             this.conversation()

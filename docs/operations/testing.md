@@ -559,6 +559,13 @@ example configs and services) and both watcher skills under `.claude/skills/`. T
   Xcode after `sim.sh`, run `native/app-core/scripts/build-apple.sh` with no flag:** a simulator-only framework has no
   device slice, so Xcode stops with "no library for this platform was found", which looks like a broken build. The
   script prints the same reminder whenever it leaves the simulator slice only.
+- **The Rust core on Linux, for a Linux Apple toolchain** (such as nwverse/apple-build, #16944). The same
+  `native/app-core/scripts/build-apple.sh` (with or without `--simulator`) needs no Xcode there: it builds the device
+  and arm64 simulator slices as static libraries whatever the machine's architecture, writes the XCFramework in the
+  layout `xcodebuild -create-xcframework` produces, and builds no macOS slice (it says so in one line: macOS
+  `swift test` needs a Mac). The cache sits under `${XDG_CACHE_HOME:-~/.cache}/persona/app-core` and works as on a
+  Mac; the key takes each SDK's build version from the toolchain's copy of the Xcode SDKs (`APPLE_BUILD_SDK_ROOT`, else
+  `sdk_root` in apple-build's `config.json`), or `none` when it cannot be read.
 
 ## Fast local checks (`scripts/check-fast.sh`, #2849)
 
@@ -617,7 +624,7 @@ Path mapping (a new mapping is a rule in check-fast's per-path table, `scripts/c
 | `server/**`, `web/src/**`, `web/e2e/**`, `scripts/**`, `sdk/**`, `apple/**`, `android/**`, `integrations/**`, `spec/**`, `schema/**` | Also `scripts/test/test_doc_sections.py`: most of the section names it checks are in code comments there |
 | `apple/**` | `scripts/test/test_apple_l10n.py` (complete String Catalogs and Swift Chinese literals included in catalogs) and `scripts/test/test_apple_no_callkit.py` (no CallKit import or link setting; also run for `scripts/persona_config.py`); iOS / macOS builds and tests need a Mac and are reported as skipped |
 | `apple/project.yml` and the includes its tests turn on (`apple/app-entitlements.yml`, `apple/watch-and-share.yml`, `apple/lean-dev-build.yml`, `apple/siri-calls.yml`), `scripts/app/sim.sh`, `scripts/app/ui-test.sh`, `scripts/app/perf-test.sh`, `scripts/app/share-from-apps.sh`, `scripts/app/lean-build-note.sh`, `scripts/app/island_peer.sh`, `scripts/diag/stream-scroll/run-ios.sh`, `scripts/release/release.sh`, `scripts/ci/apple.sh`, `native/iphone-bridge/build.sh` | Also `scripts/test/test_apple_dev_build.py`: the switch that leaves the watch app and the share extension out of a development build, that only `sim.sh` sets it and every other script that generates a project clears it, which slices of the Rust core each build takes, the line a lean build prints, and the Release-only commit stamp ("Development builds"; the project checks need xcodegen). Its searches of the whole tree also catch a new caller, which no row maps |
-| `native/app-core/scripts/build-apple.sh` | `scripts/test/test_app_core_apple_build.py`: the simulator-only build and the XCFramework cache shared between worktrees, with fake cargo and Xcode tools ("Development builds") |
+| `native/app-core/scripts/build-apple.sh` | `scripts/test/test_app_core_apple_build.py`: the simulator-only build and the XCFramework cache shared between worktrees, with fake cargo and Xcode tools, and the Linux path with no Xcode tool on PATH ("Development builds") |
 | `deploy/docker/**`, `docs/operations/docker.md`, root `Dockerfile` | `scripts/test/test_docker_entrypoint.py` (also checks root `Dockerfile`’s `EXPOSE`) |
 | Other paths | No code checks; list unmapped paths individually |
 
@@ -1359,6 +1366,19 @@ Persona has no Universal Links (no associated domains), so web isn't kept; no in
   Slimming failure runs `simslim off` to restore stock, then continues (`failed→stock`); tests still run. Usage errors (missing profile/udid, duplicate names) exit 2 without changes.
 - Actual slimming: `scripts/app/slim-sim.sh <udid> [profile JSON]` (one boot for shut-down devices; running mismatched devices reboot), usually not called directly.
 - Creation, `simctl erase`, runtime changes lose per-device slimming; rerun sim-boot.sh. Afterwards `xcrun simctl shutdown <udid>`, task end `xcrun simctl delete <udid>`.
+- **At most 3 simulators booted per Mac, reuse first, shut down when done (#17089)**: every simulator costs roughly 1-2 GB slim and
+  4-6 GB stock, and Agents share the Mac. `sim-boot.sh` counts the Booted and Booting simulators; a boot (or create plus boot) that would
+  exceed `SIM_MAX_BOOTED` (default 3) waits up to `SIM_SLOT_WAIT` seconds (default 1200) for a slot, then exits 75 and lists the booted
+  ones, so shut down one you own (`xcrun simctl shutdown <udid>`) or wait. Using an already booted simulator is never blocked.
+  Boots take a machine-wide lock (`SIM_BOOT_LOCK_DIR`, default `$TMPDIR/persona-sim-boot.lock`; a dead holder's lock is taken over), so two
+  Agents cannot both pass the check.
+  - **Reuse before creating**: a new name adopts a shut-down `Persona …` simulator with the same device type and runtime (it is renamed;
+    `SIM_REUSE=0` creates a new one instead). So don't keep a udid across tasks: once shut down, a simulator may become someone else's.
+    Keep one name per task (`Persona Shots <issue>`) and rerun `sim-boot.sh` with it; it finds the same device.
+  - **Clean up**: `simctl shutdown` as soon as the run or screenshots are done, not at the end of the day; `simctl delete <udid>` when the
+    task ends, with a udid you checked is not empty (`docs/lessons/testing.md`).
+  - `--create-only` and `--start-only` (hosted CI, which owns its deadline) skip the limit, the lock and the adoption.
+  - `scripts/test/test_sim_boot.py` covers the limit, the wait, the lock and the adoption.
 - If a test fails only slimmed, rerun on a new `--profile stock` device (or `simslim off <udid>` on yours) before blaming code.
 - Temporarily enable services: `simslim enable <udid> <category or launchd name>` on running device, no reboot, lasts until next `on` or reboot.
   Permanent: add to profile (`simslim enable … --save apple/simslim/<name>.json`), then `--reslim`. `on --no-reboot` only disables more, never reenables. Categories: `simslim profiles`; features: `simslim doctor --list`.

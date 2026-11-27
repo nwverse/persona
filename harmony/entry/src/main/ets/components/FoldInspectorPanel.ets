@@ -1,5 +1,7 @@
 import { Colors } from '../design/Colors';
+import { ButtonStyles } from '../design/Controls';
 import { Motion } from '../design/Motion';
+import { PersonaStatusPill, PersonaStatusTone } from '../design/NormalizedPrimitives';
 import { PhoneStyle } from '../design/PhoneStyle';
 import { Symbols } from '../design/Symbols';
 import { Tokens } from '../design/Tokens';
@@ -52,6 +54,7 @@ export struct FoldInspectorPanel {
   @Event onStepRelay: (direction: 1 | -1) => void = () => {};
   @Event onInterruptSession: (row: ResourceRow) => void = () => {};
   @Event onOpenXiaoYi: () => void = () => {};
+  @Event onOpenTokenUsage: () => void = () => {};
   @Event onOpenLink: (address: string) => void = () => {};
   @Local private env: NativeEnvironment = nativeEnvironment;
   @Local private liveView: NativeLiveView = nativeLiveView;
@@ -145,6 +148,13 @@ export struct FoldInspectorPanel {
     if (state === 'working') return Colors.working;
     if (state === 'unread') return Colors.unread;
     return Colors.secondary;
+  }
+
+  private stateTone(state: string): PersonaStatusTone {
+    if (state === 'needs_you') return 'needs';
+    if (state === 'working') return 'working';
+    if (state === 'unread') return 'unread';
+    return 'neutral';
   }
 
   private activeFleetSessions(): ResourceRow[] {
@@ -346,13 +356,15 @@ export struct FoldInspectorPanel {
 
   @Builder metaRow(label: string, value: string, mono: boolean = false, startEllipsis: boolean = false) {
     if (value) {
-      Row({ space: 8 }) {
+      Row({ space: Tokens.spaceS }) {
         Text(label)
-          .fontSize(Tokens.interfaceFontVp(12, this.env.fontScale))
+          .fontSize(Tokens.typeLabel)
+          .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
           .fontColor(Colors.secondary)
           .maxLines(1)
         Text(value)
-          .fontSize(Tokens.interfaceFontVp(12, this.env.fontScale))
+          .fontSize(Tokens.typeLabel)
+          .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
           .fontFamily(mono ? 'monospace' : 'sans-serif')
           .fontWeight(FontWeight.Medium)
           .fontColor(Colors.ink)
@@ -367,7 +379,7 @@ export struct FoldInspectorPanel {
 
   @Builder toolChip(labelKey: string, tab: number, identity: string, symbol?: Resource) {
     Button({ type: ButtonType.Normal }) {
-      Column({ space: 4 }) {
+      Column({ space: Tokens.spaceXs }) {
         if (symbol) {
           SymbolGlyph(symbol)
             .fontSize('15vp')
@@ -382,7 +394,8 @@ export struct FoldInspectorPanel {
             .textAlign(TextAlign.Center)
         }
         Text(tr(labelKey))
-          .fontSize(Tokens.interfaceFontVp(11, this.env.fontScale))
+          .fontSize(Tokens.typeLabel)
+          .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
           .fontWeight(FontWeight.Medium)
           .fontColor(Colors.link)
           .maxLines(1)
@@ -392,14 +405,14 @@ export struct FoldInspectorPanel {
       .height('100%')
       .justifyContent(FlexAlign.Center)
       .alignItems(HorizontalAlign.Center)
-      .padding({ left: 4, right: 4 })
+      .padding({ left: Tokens.spaceXs, right: Tokens.spaceXs })
     }
     .layoutWeight(1)
-    .height(this.useCompactChipGrid() ? 48 : 52)
+    .height(this.useCompactChipGrid() ? Tokens.controlTouch : 52)
     .padding(0)
-    .backgroundColor(Colors.selection)
-    .borderRadius(12)
-    .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: 12 })
+    .backgroundColor(Colors.needsWash)
+    .borderRadius(Tokens.radiusControl)
+    .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: Tokens.radiusControl })
     .shadow(PhoneStyle.cardElevation(this.env.dark))
     .accessibilityText(tr(labelKey))
     .bindTips(tr(labelKey))
@@ -419,24 +432,26 @@ export struct FoldInspectorPanel {
   @Builder pulseCounterTile(count: number, labelKey: string, tint: ResourceColor, identity: string) {
     Column({ space: 3 }) {
       Row({ space: 5 }) {
-        Circle().width(6).height(6).fill(tint)
+        Circle().width(Tokens.spaceSm).height(Tokens.spaceSm).fill(tint)
         Text(String(count))
-          .fontSize(Tokens.interfaceFontVp(15, this.env.fontScale))
+          .fontSize(Tokens.typeSecondary)
+          .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSecondary))
           .fontWeight(FontWeight.Bold)
           .fontColor(count > 0 ? Colors.ink : Colors.secondary)
           .maxLines(1)
       }
       Text(tr(labelKey))
-        .fontSize(Tokens.interfaceFontVp(11, this.env.fontScale))
+        .fontSize(Tokens.typeLabel)
+        .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
         .fontColor(Colors.secondary)
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
     }
     .layoutWeight(1)
     .alignItems(HorizontalAlign.Center)
-    .padding({ left: 4, right: 4, top: 8, bottom: 8 })
-    .backgroundColor(count > 0 && tint === Colors.needs ? Colors.selection : Colors.control)
-    .borderRadius(12)
+    .padding({ left: Tokens.spaceXs, right: Tokens.spaceXs, top: Tokens.spaceS, bottom: Tokens.spaceS })
+    .backgroundColor(count > 0 && tint === Colors.needs ? Colors.needsWash : Colors.control)
+    .borderRadius(Tokens.radiusControl)
     .accessibilityGroup(true)
     .accessibilityText(tr(labelKey) + ' ' + String(count))
     .id(identity)
@@ -445,17 +460,19 @@ export struct FoldInspectorPanel {
   @Builder workbenchSegment(labelKey: string, index: number, identity: string) {
     Button({ type: ButtonType.Normal }) {
       Text(tr(labelKey))
-        .fontSize(Tokens.interfaceFontVp(12, this.env.fontScale))
+        .fontSize(Tokens.typeLabel)
+        .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
         .fontWeight(this.workbenchTab === index ? FontWeight.Bold : FontWeight.Medium)
         .fontColor(this.workbenchTab === index ? Colors.ink : Colors.secondary)
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
     }
     .layoutWeight(1)
-    .height(30)
-    .padding({ left: 6, right: 6 })
+    .height(32)
+    .padding({ left: Tokens.spaceSm, right: Tokens.spaceSm })
+    .responseRegion({ x: 0, y: -6, width: '100%', height: Tokens.controlBar })
     .backgroundColor(this.workbenchTab === index ? Colors.surface : Color.Transparent)
-    .borderRadius(9)
+    .borderRadius(Tokens.radiusControl - 1)
     .shadow(this.workbenchTab === index ? PhoneStyle.cardElevation(this.env.dark) : { radius: 0, color: Color.Transparent })
     .accessibilitySelected(this.workbenchTab === index)
     .onClick(() => {
@@ -468,17 +485,19 @@ export struct FoldInspectorPanel {
   }
 
   @Builder urgentNeedsYouCard(row: ResourceRow) {
-    Row({ space: 10 }) {
+    Row({ space: Tokens.spaceM }) {
       NeedsYouPulseDot({ dotSize: 9, tint: Colors.needs, surface: Colors.surface, bordered: false })
-      Column({ space: 2 }) {
+      Column({ space: Tokens.spaceXxs }) {
         Text(this.displaySessionTitle(row))
-          .fontSize(Tokens.interfaceFontVp(13, this.env.fontScale))
+          .fontSize(Tokens.typeCaption)
+          .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption))
           .fontWeight(FontWeight.Bold)
           .fontColor(Colors.ink)
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
         Text([this.model.machineName(row.machine) || row.machine, tr('needs_you')].filter((v: string) => !!v).join(' · '))
-          .fontSize(Tokens.interfaceFontVp(11, this.env.fontScale))
+          .fontSize(Tokens.typeLabel)
+          .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
           .fontColor(Colors.needs)
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -487,7 +506,9 @@ export struct FoldInspectorPanel {
       Button(tr('fold_urgent_review'), { type: ButtonType.Capsule })
         .height(28)
         .padding({ left: 10, right: 10 })
-        .fontSize(Tokens.interfaceFontVp(11, this.env.fontScale))
+        .responseRegion({ x: -4, y: -8, width: '100%', height: Tokens.controlBar })
+        .fontSize(Tokens.typeLabel)
+        .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
         .fontWeight(FontWeight.Medium)
         .backgroundColor(Colors.action)
         .fontColor(Colors.onAction)
@@ -498,17 +519,17 @@ export struct FoldInspectorPanel {
         .id('fold.inspector.urgent.review')
     }
     .width('100%')
-    .padding({ left: 12, right: 10, top: 10, bottom: 10 })
-    .backgroundColor(Colors.selection)
-    .borderRadius(16)
-    .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: 16 })
+    .padding({ left: Tokens.spaceM, right: Tokens.spaceM, top: Tokens.spaceM, bottom: Tokens.spaceM })
+    .backgroundColor(Colors.needsWash)
+    .borderRadius(Tokens.radiusCard)
+    .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: Tokens.radiusCard })
     .shadow(PhoneStyle.cardElevation(this.env.dark))
     .id('fold.inspector.urgent')
   }
 
   @Builder relayBar() {
-    Row({ space: 8 }) {
-      Row({ space: 6 }) {
+    Row({ space: Tokens.spaceS }) {
+      Row({ space: Tokens.spaceSm }) {
         Circle()
           .width(7)
           .height(7)
@@ -518,7 +539,8 @@ export struct FoldInspectorPanel {
             ? tr('fold_relay_queue').replace('{count}', String(this.fleetCounts().needsYou + this.fleetCounts().unread))
             : tr('fold_relay_clear')
         )
-          .fontSize(Tokens.interfaceFontVp(12, this.env.fontScale))
+          .fontSize(Tokens.typeLabel)
+          .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
           .fontWeight(600)
           .fontColor((this.fleetCounts().needsYou + this.fleetCounts().unread) > 0 ? Colors.ink : Colors.secondary)
           .maxLines(1)
@@ -531,6 +553,7 @@ export struct FoldInspectorPanel {
       .width(32)
       .height(28)
       .padding(0)
+      .responseRegion(ButtonStyles.touchRegion(32))
       .backgroundColor(Colors.control)
       .enabled((this.fleetCounts().needsYou + this.fleetCounts().unread + this.fleetCounts().working) > 0)
       .accessibilityText(tr('fold_relay_prev'))
@@ -542,9 +565,10 @@ export struct FoldInspectorPanel {
       .id('fold.relay.prev')
 
       Button({ type: ButtonType.Capsule }) {
-        Row({ space: 4 }) {
+        Row({ space: Tokens.spaceXs }) {
           Text(tr('fold_relay_next'))
-            .fontSize(Tokens.interfaceFontVp(12, this.env.fontScale))
+            .fontSize(Tokens.typeLabel)
+            .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
             .fontWeight(FontWeight.Medium)
             .fontColor((this.fleetCounts().needsYou + this.fleetCounts().unread + this.fleetCounts().working) > 0 ? Colors.link : Colors.secondary)
             .maxLines(1)
@@ -555,7 +579,8 @@ export struct FoldInspectorPanel {
       }
       .height(28)
       .padding({ left: 10, right: 9 })
-      .backgroundColor((this.fleetCounts().needsYou + this.fleetCounts().unread) > 0 ? Colors.selection : Colors.control)
+      .responseRegion({ x: 0, y: -8, width: '100%', height: Tokens.controlBar })
+      .backgroundColor((this.fleetCounts().needsYou + this.fleetCounts().unread) > 0 ? Colors.needsWash : Colors.control)
       .enabled((this.fleetCounts().needsYou + this.fleetCounts().unread + this.fleetCounts().working) > 0)
       .accessibilityText(tr('fold_relay_next'))
       .bindTips(tr('fold_relay_next'))
@@ -566,61 +591,58 @@ export struct FoldInspectorPanel {
       .id('fold.relay.next')
     }
     .width('100%')
-    .padding({ left: 12, right: 10, top: 10, bottom: 10 })
+    .padding({ left: Tokens.spaceM, right: 10, top: 10, bottom: 10 })
     .backgroundColor(Colors.surface)
-    .borderRadius(16)
-    .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: 16 })
+    .borderRadius(Tokens.radiusCard)
+    .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: Tokens.radiusCard })
     .shadow(PhoneStyle.cardElevation(this.env.dark))
     .id('fold.relay.bar')
   }
 
   @Builder fleetPulseCard() {
     Column({ space: 10 }) {
-      Row({ space: 8 }) {
+      Row({ space: Tokens.spaceS }) {
         Text(tr('fold_inspector_fleet'))
-          .fontSize(Tokens.interfaceFontVp(14, this.env.fontScale))
+          .fontSize(Tokens.typeSecondary)
+          .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSecondary))
           .fontWeight(FontWeight.Bold)
           .fontColor(Colors.ink)
           .layoutWeight(1)
         if (this.fleetCounts().total > 0) {
-          Text(String(this.fleetCounts().total))
-            .fontSize(Tokens.interfaceFontVp(11, this.env.fontScale))
-            .fontWeight(FontWeight.Bold)
-            .fontColor(Colors.secondary)
-            .padding({ left: 7, right: 7, top: 2, bottom: 2 })
-            .backgroundColor(Colors.control)
-            .borderRadius(Tokens.capsule)
+          PersonaStatusPill({ tone: 'neutral', label: String(this.fleetCounts().total) })
         }
       }.width('100%')
 
-      Row({ space: 6 }) {
+      Row({ space: Tokens.spaceSm }) {
         this.pulseCounterTile(this.fleetCounts().needsYou, 'needs_you', Colors.needs, 'fold.inspector.count.needs')
         this.pulseCounterTile(this.fleetCounts().working, 'working', Colors.working, 'fold.inspector.count.working')
         this.pulseCounterTile(this.fleetCounts().unread, 'agent_group_unread', Colors.unread, 'fold.inspector.count.unread')
       }.width('100%')
 
       if (this.fleetCounts().needsYou === 0 && this.fleetCounts().working === 0 && this.fleetCounts().unread === 0) {
-        Row({ space: 6 }) {
+        Row({ space: Tokens.spaceSm }) {
           SymbolGlyph(Symbols.check).fontSize('12vp').fontColor([Colors.positive])
           Text(tr('live_view_all_caught_up'))
-            .fontSize(Tokens.interfaceFontVp(12, this.env.fontScale))
+            .fontSize(Tokens.typeLabel)
+            .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
             .fontColor(Colors.secondary)
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .layoutWeight(1)
-        }.width('100%').padding({ left: 2, right: 2 })
+        }.width('100%').padding({ left: Tokens.spaceXxs, right: Tokens.spaceXxs })
       }
 
       if (this.prioritizedSessions().length > 0) {
-        Column({ space: 6 }) {
+        Column({ space: Tokens.spaceSm }) {
           ForEach(this.prioritizedSessions(), (row: ResourceRow) => {
-            Row({ space: 6 }) {
+            Row({ space: Tokens.spaceSm }) {
               Button({ type: ButtonType.Normal }) {
-                Row({ space: 8 }) {
+                Row({ space: Tokens.spaceS }) {
                   this.statusMark(this.normalizedRowState(row))
-                  Column({ space: 2 }) {
+                  Column({ space: Tokens.spaceXxs }) {
                     Text(this.displaySessionTitle(row))
-                      .fontSize(Tokens.interfaceFontVp(13, this.env.fontScale))
+                      .fontSize(Tokens.typeCaption)
+                      .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption))
                       .fontWeight(this.activeOwner().selected.key() === row.key() ? FontWeight.Bold : FontWeight.Medium)
                       .fontColor(Colors.ink)
                       .maxLines(1)
@@ -629,22 +651,23 @@ export struct FoldInspectorPanel {
                       this.model.machineName(row.machine) || row.machine,
                       tr(this.stateLabelKey(this.normalizedRowState(row)))
                     ].filter((part: string) => !!part).join(' · '))
-                      .fontSize(Tokens.interfaceFontVp(11, this.env.fontScale))
+                      .fontSize(Tokens.typeLabel)
+                      .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
                       .fontColor(Colors.secondary)
                       .maxLines(1)
                       .textOverflow({ overflow: TextOverflow.Ellipsis })
                   }.layoutWeight(1).alignItems(HorizontalAlign.Start)
                   SymbolGlyph(Symbols.expand).fontSize('11vp').fontColor([Colors.tertiary])
-                }.width('100%').padding({ left: 10, right: 10, top: 8, bottom: 8 })
+                }.width('100%').padding({ left: 10, right: 10, top: Tokens.spaceS, bottom: Tokens.spaceS })
               }
               .layoutWeight(1)
               .padding(0)
-              .backgroundColor(this.activeOwner().selected.key() === row.key() ? Colors.selection : Colors.control)
-              .borderRadius(12)
+              .backgroundColor(this.activeOwner().selected.key() === row.key() ? Colors.needsWash : Colors.control)
+              .borderRadius(Tokens.radiusControl)
               .border({
                 width: this.activeOwner().selected.key() === row.key() ? 1 : 0,
                 color: this.activeOwner().selected.key() === row.key() ? Colors.link : Color.Transparent,
-                radius: 12
+                radius: Tokens.radiusControl
               })
               .animation(Motion.state(this.env.reduceMotion))
               .onClick(() => {
@@ -660,7 +683,8 @@ export struct FoldInspectorPanel {
                 .width(30)
                 .height(30)
                 .padding(0)
-                .backgroundColor(Colors.control)
+                .responseRegion(ButtonStyles.touchRegion(30))
+                .backgroundColor(Colors.dangerWash)
                 .enabled(this.pendingInterruptKey !== row.key())
                 .accessibilityText(tr('fold_interrupt_agent'))
                 .bindTips(tr('fold_interrupt_agent'))
@@ -678,19 +702,20 @@ export struct FoldInspectorPanel {
     .width('100%')
     .padding(14)
     .backgroundColor(Colors.surface)
-    .borderRadius(18)
-    .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: 18 })
+    .borderRadius(Tokens.radiusCard)
+    .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: Tokens.radiusCard })
     .shadow(PhoneStyle.cardElevation(this.env.dark))
   }
 
   @Builder xiaoYiChip() {
     Button({ type: ButtonType.Normal }) {
-      Column({ space: 4 }) {
+      Column({ space: Tokens.spaceXs }) {
         SymbolGlyph(Symbols.persona)
           .fontSize('15vp')
           .fontColor([Colors.ai])
         Text(tr('phone_xiaoyi'))
-          .fontSize(Tokens.interfaceFontVp(11, this.env.fontScale))
+          .fontSize(Tokens.typeLabel)
+          .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
           .fontWeight(FontWeight.Medium)
           .fontColor(Colors.ai)
           .maxLines(1)
@@ -700,14 +725,14 @@ export struct FoldInspectorPanel {
       .height('100%')
       .justifyContent(FlexAlign.Center)
       .alignItems(HorizontalAlign.Center)
-      .padding({ left: 4, right: 4 })
+      .padding({ left: Tokens.spaceXs, right: Tokens.spaceXs })
     }
     .layoutWeight(1)
-    .height(this.useCompactChipGrid() ? 48 : 52)
+    .height(this.useCompactChipGrid() ? Tokens.controlTouch : 52)
     .padding(0)
-    .backgroundColor(Colors.selection)
-    .borderRadius(12)
-    .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: 12 })
+    .backgroundColor(Colors.aiWash)
+    .borderRadius(Tokens.radiusControl)
+    .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: Tokens.radiusControl })
     .shadow(PhoneStyle.cardElevation(this.env.dark))
     .accessibilityText(tr('phone_xiaoyi'))
     .bindTips(tr('phone_xiaoyi'))
@@ -718,40 +743,88 @@ export struct FoldInspectorPanel {
     .id('fold.inspector.tools.xiaoyi')
   }
 
+  @Builder tokenUsageQuickCard() {
+    Button({ type: ButtonType.Normal }) {
+      Row({ space: Tokens.spaceM }) {
+        Stack({ alignContent: Alignment.Center }) {
+          SymbolGlyph(Symbols.health)
+            .fontSize('16vp')
+            .fontColor([Colors.link])
+        }
+        .width(32)
+        .height(32)
+        .borderRadius(Tokens.radiusControl)
+        .backgroundColor(Colors.needsWash)
+        .flexShrink(0)
+
+        Column({ space: Tokens.spaceXxs }) {
+          Text(tr('token_usage_title'))
+            .fontSize(Tokens.typeCaption)
+            .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption))
+            .fontWeight(FontWeight.Bold)
+            .fontColor(Colors.ink)
+            .maxLines(1)
+          Text(tr('token_usage_quick_subtitle'))
+            .fontSize(Tokens.typeLabel)
+            .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
+            .fontColor(Colors.secondary)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        .layoutWeight(1)
+        .alignItems(HorizontalAlign.Start)
+
+        SymbolGlyph(Symbols.expand)
+          .fontSize('12vp')
+          .fontColor([Colors.tertiary])
+      }
+      .width('100%')
+      .padding(14)
+    }
+    .width('100%')
+    .padding(0)
+    .backgroundColor(Colors.surface)
+    .borderRadius(Tokens.radiusCard)
+    .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: Tokens.radiusCard })
+    .shadow(PhoneStyle.cardElevation(this.env.dark))
+    .onClick(() => {
+      Haptics.tap();
+      this.onOpenTokenUsage();
+    })
+    .id('fold.workbench.token_usage')
+  }
+
   @Builder pulseTabContent() {
     Scroll() {
-      Column({ space: 12 }) {
+      Column({ space: Tokens.spaceM }) {
         if (this.urgentSession()) {
           this.urgentNeedsYouCard(this.urgentSession()!)
         }
         this.relayBar()
         if (this.selectedSession()) {
-          Column({ space: 8 }) {
-            Row({ space: 8 }) {
+          Column({ space: Tokens.spaceS }) {
+            Row({ space: Tokens.spaceS }) {
               this.statusMark(this.sessionState())
               Text(this.displaySessionTitle(this.selectedSession()!, tr('main_chat')))
-                .fontSize(Tokens.interfaceFontVp(15, this.env.fontScale))
+                .fontSize(Tokens.typeSecondary)
+                .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSecondary))
                 .fontWeight(FontWeight.Bold)
                 .fontColor(Colors.ink)
                 .maxLines(2)
                 .textOverflow({ overflow: TextOverflow.Ellipsis })
                 .layoutWeight(1)
-              Text(tr(this.stateLabelKey(this.sessionState())))
-                .fontSize(Tokens.interfaceFontVp(11, this.env.fontScale))
-                .fontWeight(FontWeight.Medium)
-                .fontColor(this.stateTint(this.sessionState()))
-                .padding({ left: 7, right: 7, top: 2, bottom: 2 })
-                .backgroundColor(this.sessionState() === 'needs_you' ? Colors.selection : Colors.control)
-                .borderRadius(Tokens.capsule)
-                .maxLines(1)
+              PersonaStatusPill({
+                tone: this.stateTone(this.sessionState()),
+                label: tr(this.stateLabelKey(this.sessionState()))
+              })
             }.width('100%').alignItems(VerticalAlign.Center)
-            Divider().strokeWidth(0.5).color(Colors.divider)
+            Divider().strokeWidth(Tokens.divider).color(Colors.divider)
             this.metaRow(tr('machine'), this.activeOwner().machineName(this.selectedSession()!.machine) || this.selectedSession()!.machine)
             this.metaRow(tr('model'), (Wire.text(this.sessionData(), 'model').split('/').pop() || Wire.text(this.sessionData(), 'launcher') || 'Claude'))
             this.metaRow(tr('branch'), Wire.text(this.sessionData(), 'git_branch'), true)
             this.metaRow(tr('phone_session_folder'), Wire.text(this.sessionData(), 'cwd'), true, true)
             if (this.selectedSession()!.kind === 'session' && this.selectedSession()!.machine) {
-              Divider().strokeWidth(0.5).color(Colors.divider).margin({ top: 2, bottom: 2 })
+              Divider().strokeWidth(Tokens.divider).color(Colors.divider).margin({ top: 2, bottom: 2 })
               Column() {
                 if (this.useCompactChipGrid()) {
                   Column({ space: 8 }) {
@@ -778,26 +851,29 @@ export struct FoldInspectorPanel {
           .width('100%')
           .padding(14)
           .backgroundColor(Colors.surface)
-          .borderRadius(18)
-          .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: 18 })
+          .borderRadius(Tokens.radiusCard)
+          .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: Tokens.radiusCard })
           .shadow(PhoneStyle.cardElevation(this.env.dark))
         }
         this.fleetPulseCard()
-      }.width('100%').padding({ left: 12, right: 12, bottom: 24 })
+        this.tokenUsageQuickCard()
+      }.width('100%').padding({ left: Tokens.spaceM, right: Tokens.spaceM, bottom: Tokens.spaceXl })
     }.width('100%').layoutWeight(1).scrollBar(BarState.Off)
   }
 
   @Builder embeddedToolPill(labelKey: string, tab: number, identity: string) {
     Button({ type: ButtonType.Capsule }) {
       Text(tr(labelKey))
-        .fontSize(Tokens.interfaceFontVp(11, this.env.fontScale))
+        .fontSize(Tokens.typeLabel)
+        .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
         .fontWeight(this.embeddedToolsTab === tab ? FontWeight.Bold : FontWeight.Medium)
         .fontColor(this.embeddedToolsTab === tab ? Colors.link : Colors.secondary)
         .maxLines(1)
     }
-    .height(26)
+    .height(28)
     .padding({ left: 10, right: 10 })
-    .backgroundColor(this.embeddedToolsTab === tab ? Colors.selection : Colors.control)
+    .responseRegion({ x: 0, y: -8, width: '100%', height: Tokens.controlBar })
+    .backgroundColor(this.embeddedToolsTab === tab ? Colors.needsWash : Colors.control)
     .onClick(() => {
       Haptics.selection();
       this.embeddedToolsTab = tab;
@@ -808,31 +884,33 @@ export struct FoldInspectorPanel {
 
   @Builder codeTabContent() {
     if (this.selectedSession()?.kind === 'session' && this.selectedSession()?.machine) {
-      Column({ space: 6 }) {
-        Row({ space: 6 }) {
+      Column({ space: Tokens.spaceSm }) {
+        Row({ space: Tokens.spaceSm }) {
           this.embeddedToolPill('files', 0, 'fold.workbench.code.files')
           this.embeddedToolPill('git', 1, 'fold.workbench.code.git')
           this.embeddedToolPill('terminal', 2, 'fold.workbench.code.terminal')
           Blank().layoutWeight(1)
           Button({ type: ButtonType.Capsule }) {
-            Row({ space: 4 }) {
+            Row({ space: Tokens.spaceXs }) {
               Text(tr('fold_workbench_expand_tools'))
-                .fontSize(Tokens.interfaceFontVp(11, this.env.fontScale))
+                .fontSize(Tokens.typeLabel)
+                .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
                 .fontWeight(FontWeight.Medium)
                 .fontColor(Colors.link)
                 .maxLines(1)
               SymbolGlyph(Symbols.expand).fontSize('10vp').fontColor([Colors.link])
             }
           }
-          .height(26)
+          .height(28)
           .padding({ left: 9, right: 9 })
+          .responseRegion({ x: 0, y: -8, width: '100%', height: Tokens.controlBar })
           .backgroundColor(Colors.control)
           .onClick(() => {
             Haptics.tap();
             this.onOpenToolsTab(this.embeddedToolsTab);
           })
           .id('fold.workbench.expand')
-        }.width('100%').padding({ left: 12, right: 12 })
+        }.width('100%').padding({ left: Tokens.spaceM, right: Tokens.spaceM })
 
         Column() {
           SessionTools({
@@ -849,17 +927,18 @@ export struct FoldInspectorPanel {
         .layoutWeight(1)
         .clip(true)
         .backgroundColor(Colors.surface)
-        .borderRadius({ topLeft: 18, topRight: 18 })
-        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: { topLeft: 18, topRight: 18 } })
+        .borderRadius({ topLeft: Tokens.radiusCard, topRight: Tokens.radiusCard })
+        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: { topLeft: Tokens.radiusCard, topRight: Tokens.radiusCard } })
       }.width('100%').layoutWeight(1)
     } else {
       Column({ space: 10 }) {
         SymbolGlyph(Symbols.folder).fontSize('28vp').fontColor([Colors.tertiary])
         Text(tr('fold_workbench_pick_session'))
-          .fontSize(Tokens.interfaceFontVp(13, this.env.fontScale))
+          .fontSize(Tokens.typeCaption)
+          .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption))
           .fontColor(Colors.secondary)
           .textAlign(TextAlign.Center)
-          .padding({ left: 24, right: 24 })
+          .padding({ left: Tokens.spaceXl, right: Tokens.spaceXl })
       }
       .width('100%')
       .layoutWeight(1)
@@ -871,22 +950,24 @@ export struct FoldInspectorPanel {
 
   @Builder machineTelemetryGauge(label: string, valueText: string, percent: number, tint: ResourceColor, identity: string) {
     Column({ space: 3 }) {
-      Row({ space: 6 }) {
+      Row({ space: Tokens.spaceSm }) {
         Text(label)
-          .fontSize(Tokens.interfaceFontVp(11, this.env.fontScale))
+          .fontSize(Tokens.typeLabel)
+          .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
           .fontColor(Colors.secondary)
           .layoutWeight(1)
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
         Text(valueText)
-          .fontSize(Tokens.interfaceFontVp(11, this.env.fontScale))
+          .fontSize(Tokens.typeLabel)
+          .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
           .fontFamily('monospace')
           .fontWeight(600)
           .fontColor(tint)
           .maxLines(1)
       }.width('100%')
       Stack({ alignContent: Alignment.Start }) {
-        Row().width('100%').height(6).borderRadius(3).backgroundColor(this.env.dark ? '#28FFFFFF' : '#14000000')
+        Row().width('100%').height(6).borderRadius(3).backgroundColor(Colors.hairlineGlass)
         Row()
           .width(String(Math.max(0, Math.min(100, percent))) + '%')
           .height(6)
@@ -898,20 +979,22 @@ export struct FoldInspectorPanel {
 
   @Builder usageWindowRow(w: SubscriptionWindow) {
     Column({ space: 3 }) {
-      Row({ space: 6 }) {
+      Row({ space: Tokens.spaceSm }) {
         Text(w.label || (w.minutes === 300 ? '5h' : w.minutes === 10080 ? '7d' : 'Window'))
-          .fontSize(Tokens.interfaceFontVp(11, this.env.fontScale))
+          .fontSize(Tokens.typeLabel)
+          .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
           .fontColor(Colors.secondary)
           .layoutWeight(1)
           .maxLines(1)
         Text(String(Math.round(Math.max(0, Math.min(100, w.percent)))) + '%')
-          .fontSize(Tokens.interfaceFontVp(11, this.env.fontScale))
+          .fontSize(Tokens.typeLabel)
+          .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
           .fontWeight(600)
           .fontColor(w.percent >= 80 ? Colors.working : Colors.ink)
           .maxLines(1)
       }.width('100%')
       Stack({ alignContent: Alignment.Start }) {
-        Row().width('100%').height(6).borderRadius(3).backgroundColor(this.env.dark ? '#28FFFFFF' : '#14000000')
+        Row().width('100%').height(6).borderRadius(3).backgroundColor(Colors.hairlineGlass)
         Row()
           .width(String(Math.max(0, Math.min(100, w.percent))) + '%')
           .height(6)
@@ -923,11 +1006,12 @@ export struct FoldInspectorPanel {
 
   @Builder machinesTabContent() {
     Scroll() {
-      Column({ space: 12 }) {
+      Column({ space: Tokens.spaceM }) {
         Column({ space: 10 }) {
-          Row({ space: 8 }) {
+          Row({ space: Tokens.spaceS }) {
             Text(tr('machines'))
-              .fontSize(Tokens.interfaceFontVp(14, this.env.fontScale))
+              .fontSize(Tokens.typeSecondary)
+              .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeSecondary))
               .fontWeight(FontWeight.Bold)
               .fontColor(Colors.ink)
               .layoutWeight(1)
@@ -938,49 +1022,44 @@ export struct FoldInspectorPanel {
 
           if (!this.machineRows().length) {
             Text(tr('empty'))
-              .fontSize(Tokens.interfaceFontVp(12, this.env.fontScale))
+              .fontSize(Tokens.typeLabel)
+              .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
               .fontColor(Colors.secondary)
-              .padding({ top: 6, bottom: 6 })
+              .padding({ top: Tokens.spaceSm, bottom: Tokens.spaceSm })
           } else {
-            Column({ space: 8 }) {
+            Column({ space: Tokens.spaceS }) {
               ForEach(this.machineRows(), (machine: ResourceRow) => {
-                Column({ space: 4 }) {
-                  Row({ space: 8 }) {
+                Column({ space: Tokens.spaceXs }) {
+                  Row({ space: Tokens.spaceS }) {
                     Circle()
-                      .width(8)
-                      .height(8)
+                      .width(Tokens.spaceS)
+                      .height(Tokens.spaceS)
                       .fill(machineOnline(machine) ? Colors.positive : Colors.tertiary)
                     Text(machine.title || machine.id)
-                      .fontSize(Tokens.interfaceFontVp(13, this.env.fontScale))
+                      .fontSize(Tokens.typeCaption)
+                      .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption))
                       .fontWeight(600)
                       .fontColor(Colors.ink)
                       .maxLines(1)
                       .textOverflow({ overflow: TextOverflow.Ellipsis })
                       .layoutWeight(1)
                     if (this.machineSummary(machine).needsYou > 0) {
-                      Text(String(this.machineSummary(machine).needsYou) + ' ' + tr('needs_you'))
-                        .fontSize(Tokens.interfaceFontVp(10, this.env.fontScale))
-                        .fontWeight(FontWeight.Bold)
-                        .fontColor(Colors.needs)
-                        .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-                        .backgroundColor(Colors.selection)
-                        .borderRadius(Tokens.capsule)
-                        .maxLines(1)
+                      PersonaStatusPill({
+                        tone: 'needs',
+                        label: String(this.machineSummary(machine).needsYou) + ' ' + tr('needs_you')
+                      })
                     } else if (this.machineSummary(machine).working > 0) {
-                      Text(String(this.machineSummary(machine).working) + ' ' + tr('working'))
-                        .fontSize(Tokens.interfaceFontVp(10, this.env.fontScale))
-                        .fontWeight(FontWeight.Medium)
-                        .fontColor(Colors.working)
-                        .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-                        .backgroundColor(Colors.control)
-                        .borderRadius(Tokens.capsule)
-                        .maxLines(1)
+                      PersonaStatusPill({
+                        tone: 'working',
+                        label: String(this.machineSummary(machine).working) + ' ' + tr('working')
+                      })
                     }
                   }.width('100%').alignItems(VerticalAlign.Center)
 
                   if (this.machineHardwareCaption(machine)) {
                     Text(this.machineHardwareCaption(machine))
-                      .fontSize(Tokens.interfaceFontVp(11, this.env.fontScale))
+                      .fontSize(Tokens.typeLabel)
+                      .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
                       .fontColor(Colors.secondary)
                       .maxLines(1)
                       .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -988,7 +1067,8 @@ export struct FoldInspectorPanel {
                   }
                   if (this.formatLoadSummary(machine)) {
                     Text(this.formatLoadSummary(machine))
-                      .fontSize(Tokens.interfaceFontVp(11, this.env.fontScale))
+                      .fontSize(Tokens.typeLabel)
+                      .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
                       .fontFamily('monospace')
                       .fontColor(Colors.ink)
                       .maxLines(1)
@@ -996,9 +1076,10 @@ export struct FoldInspectorPanel {
                       .width('100%')
                   }
                   if (this.machineCpuPercent(machine) >= 0 || this.machineLoadPerCore(machine) >= 0) {
-                    Column({ space: 6 }) {
+                    Column({ space: Tokens.spaceSm }) {
                       Text(tr('machine_cpu_load'))
-                        .fontSize(Tokens.interfaceFontVp(10, this.env.fontScale))
+                        .fontSize(Tokens.typeLabel)
+                        .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
                         .fontWeight(FontWeight.Medium)
                         .fontColor(Colors.secondary)
                         .maxLines(1)
@@ -1023,13 +1104,13 @@ export struct FoldInspectorPanel {
                     }
                     .width('100%')
                     .alignItems(HorizontalAlign.Start)
-                    .padding({ top: 4 })
+                    .padding({ top: Tokens.spaceXs })
                   }
                 }
                 .width('100%')
                 .padding(10)
                 .backgroundColor(Colors.control)
-                .borderRadius(12)
+                .borderRadius(Tokens.radiusControl)
                 .id('fold.workbench.machine.' + machine.id)
               }, (machine: ResourceRow) => machine.key() + ':' + machine.raw)
             }.width('100%')
@@ -1038,29 +1119,24 @@ export struct FoldInspectorPanel {
         .width('100%')
         .padding(14)
         .backgroundColor(Colors.surface)
-        .borderRadius(18)
-        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: 18 })
+        .borderRadius(Tokens.radiusCard)
+        .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: Tokens.radiusCard })
         .shadow(PhoneStyle.cardElevation(this.env.dark))
 
         if (this.usageAccounts.length > 0) {
           Column({ space: 10 }) {
             ForEach(this.usageAccounts, (account: SubscriptionAccount) => {
-              Column({ space: 6 }) {
-                Row({ space: 6 }) {
+              Column({ space: Tokens.spaceSm }) {
+                Row({ space: Tokens.spaceSm }) {
                   Text(account.name || usageProviderTitle(account.provider, 'AI'))
-                    .fontSize(Tokens.interfaceFontVp(13, this.env.fontScale))
+                    .fontSize(Tokens.typeCaption)
+                    .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption))
                     .fontWeight(FontWeight.Bold)
                     .fontColor(Colors.ink)
                     .maxLines(1)
                     .layoutWeight(1)
                   if (account.plan) {
-                    Text(account.plan)
-                      .fontSize(Tokens.interfaceFontVp(10, this.env.fontScale))
-                      .fontWeight(FontWeight.Medium)
-                      .fontColor(Colors.secondary)
-                      .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-                      .backgroundColor(Colors.control)
-                      .borderRadius(Tokens.capsule)
+                    PersonaStatusPill({ tone: 'neutral', label: account.plan })
                   }
                 }.width('100%')
                 ForEach(account.liveWindows(Date.now()).slice(0, 2), (w: SubscriptionWindow) => {
@@ -1070,54 +1146,51 @@ export struct FoldInspectorPanel {
               .width('100%')
               .padding(10)
               .backgroundColor(Colors.control)
-              .borderRadius(12)
+              .borderRadius(Tokens.radiusControl)
               .id('fold.workbench.usage.' + account.provider)
             }, (account: SubscriptionAccount) => account.id + ':' + account.snapshot)
           }
           .width('100%')
           .padding(14)
           .backgroundColor(Colors.surface)
-          .borderRadius(18)
-          .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: 18 })
+          .borderRadius(Tokens.radiusCard)
+          .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: Tokens.radiusCard })
           .shadow(PhoneStyle.cardElevation(this.env.dark))
         }
-      }.width('100%').padding({ left: 12, right: 12, bottom: 24 })
+        this.tokenUsageQuickCard()
+      }.width('100%').padding({ left: Tokens.spaceM, right: Tokens.spaceM, bottom: Tokens.spaceXl })
     }.width('100%').layoutWeight(1).scrollBar(BarState.Off)
   }
 
   build() {
     Row() {
-      Divider().vertical(true).strokeWidth(0.5).color(Colors.divider).height('100%')
+      Divider().vertical(true).strokeWidth(Tokens.divider).color(Colors.divider).height('100%')
       Column({ space: 10 }) {
-        Row({ space: 8 }) {
+        Row({ space: Tokens.spaceS }) {
           Column({ space: 5 }) {
             Text(tr('fold_inspector_title'))
-              .fontSize(Tokens.interfaceFontVp(16, this.env.fontScale))
+              .fontSize(Tokens.typeHeading)
+              .maxFontScale(Tokens.interfaceFontMaxScale)
               .fontWeight(FontWeight.Bold)
               .fontColor(Colors.ink)
               .maxLines(1)
             if (this.postureLabel) {
-              Row({ space: 5 }) {
-                SymbolGlyph(Symbols.apps).fontSize('11vp').fontColor([Colors.link])
-                Text(this.postureLabel)
-                  .fontSize(Tokens.interfaceFontVp(11, this.env.fontScale))
-                  .fontWeight(FontWeight.Medium)
-                  .fontColor(Colors.link)
-                  .maxLines(1)
-                  .textOverflow({ overflow: TextOverflow.Ellipsis })
-              }
-              .padding({ left: 8, right: 8, top: 3, bottom: 3 })
-              .backgroundColor(Colors.selection)
-              .borderRadius(Tokens.capsule)
-              .id('fold.inspector.posture')
+              Row() {
+                PersonaStatusPill({
+                  tone: 'needs',
+                  label: this.postureLabel,
+                  symbol: Symbols.apps
+                })
+              }.id('fold.inspector.posture')
             }
           }.layoutWeight(1).alignItems(HorizontalAlign.Start)
           Button({ type: ButtonType.Circle }) {
             SymbolGlyph($r('sys.symbol.xmark')).fontSize('14vp').fontColor([Colors.secondary])
           }
-          .width(32)
-          .height(32)
+          .width(Tokens.controlCompact)
+          .height(Tokens.controlCompact)
           .padding(0)
+          .responseRegion(ButtonStyles.touchRegion(Tokens.controlCompact))
           .backgroundColor(Colors.control)
           .accessibilityText(tr('close'))
           .bindTips(tr('close'))
@@ -1126,7 +1199,7 @@ export struct FoldInspectorPanel {
             this.onClose();
           })
           .id('fold.inspector.close')
-        }.width('100%').padding({ left: 16, right: 14, top: 12, bottom: 0 }).alignItems(VerticalAlign.Top)
+        }.width('100%').padding({ left: Tokens.spaceL, right: 14, top: Tokens.spaceM, bottom: 0 }).alignItems(VerticalAlign.Top)
 
         Row({ space: 3 }) {
           this.workbenchSegment('fold_workbench_pulse', 0, 'fold.workbench.tab.pulse')
@@ -1136,7 +1209,7 @@ export struct FoldInspectorPanel {
         .width('calc(100% - 24vp)')
         .padding(3)
         .backgroundColor(Colors.control)
-        .borderRadius(12)
+        .borderRadius(Tokens.radiusControl)
         .id('fold.workbench.tabs')
 
         if (this.workbenchTab === 0) {
