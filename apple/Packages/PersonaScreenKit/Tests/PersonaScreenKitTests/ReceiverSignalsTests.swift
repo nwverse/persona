@@ -132,4 +132,62 @@ final class ReceiverSignalsTests: XCTestCase {
         r.frame(captureMicros: 20_000, arrivalMicros: 20_000 + 205_000 + offset, firstByteMicros: nil, bytes: 1_000, refinement: false, fps: 60)
         XCTAssertEqual(r.take(now: 230_000 + offset).queueP50Ms, 0, "the new route's 200 ms longer path is its floor")
     }
+
+    func testBackwardArrivalTimestampDoesNotUnderflowAndRecoversAfterPrune() {
+        var r = ReceiverSignals()
+        // Three normal frames followed by a backward arrival timestamp must not trap in `take(now:)`,
+        // nor wrap `arrivalMicros &- baseline[0].at` and evict the valid delay floor.
+        for i in 0..<3 {
+            let at = 1_000_000 + UInt64(i) * 50_000
+            r.frame(captureMicros: at, arrivalMicros: at + offset, firstByteMicros: nil, bytes: 10_000, refinement: false, fps: 20)
+        }
+        r.frame(captureMicros: 850_000, arrivalMicros: 900_000 + offset, firstByteMicros: nil, bytes: 10_000, refinement: false, fps: 20)
+        let afterStepBack = r.take(now: 1_150_000 + offset)
+        XCTAssertNil(afterStepBack.deliveredKbps, "last.at <= first.at returns nil without underflow")
+        XCTAssertEqual(afterStepBack.queueLastMs ?? -1, 50, accuracy: 0.01, "backward arrival must not evict the delay floor")
+
+        // Once pre-step-back entries age out (> 1 s), monotonic frames over >= 200 ms report deliveredKbps cleanly (25 KB / 100 ms = 2,000 kbps).
+        for i in 0..<4 {
+            let at = 2_200_000 + UInt64(i) * 100_000
+            r.frame(captureMicros: at, arrivalMicros: at + offset, firstByteMicros: nil, bytes: 25_000, refinement: false, fps: 10)
+        }
+        let recovered = r.take(now: 2_500_000 + offset)
+        XCTAssertEqual(recovered.deliveredKbps ?? 0, 2_000, accuracy: 1)
+    }
+
+    func testHighTimestampsNearUInt64MaxAndLargeClockDeltaDoNotOverflow() {
+        // (a) `arrival = 1 << 63, capture = 1`: signed `Int64.min - 1` would trap without wrapping subtraction.
+        var wrap = ReceiverSignals()
+        let signBit: UInt64 = 1 << 63
+        wrap.frame(captureMicros: 1, arrivalMicros: signBit, firstByteMicros: nil, bytes: 10_000, refinement: false, fps: 30)
+        XCTAssertEqual(wrap.take(now: signBit).frames, 1)
+
+        // (b) `baseline[0].delay == Int64.min` followed by `delay == 1000`: signed `1000 - Int64.min` would trap without `UInt64(bitPattern: delay &- baseline[0].delay)`.
+        var hugeSpread = ReceiverSignals()
+        hugeSpread.frame(captureMicros: 0, arrivalMicros: signBit, firstByteMicros: nil, bytes: 10_000, refinement: false, fps: 30)
+        hugeSpread.frame(captureMicros: signBit, arrivalMicros: signBit + 1_000, firstByteMicros: nil, bytes: 10_000, refinement: false, fps: 30)
+        let spread = hugeSpread.take(now: signBit + 2_000)
+        XCTAssertEqual(spread.frames, 2)
+        XCTAssertEqual(spread.queueLastMs ?? -1, Double(signBit + 1_000) / 1000, accuracy: 1e6)
+
+        // (c) Keyframe at `UInt64.max - 1_000` (saturates `wakeUntil`) plus `prune` / `within` at `UInt64.max`.
+        var r = ReceiverSignals()
+        let base = UInt64.max - 500_000
+        for i in 0..<4 {
+            let capture = UInt64(i) * 60_000
+            let arrival = base + capture
+            r.frame(captureMicros: capture, arrivalMicros: arrival, firstByteMicros: nil, bytes: 15_000, refinement: false, fps: 30)
+            r.decoded(ms: 5, at: arrival)
+            r.shown(replaced: false, at: arrival)
+        }
+        let nearMax = UInt64.max - 1_000
+        r.frame(captureMicros: nearMax - base, arrivalMicros: nearMax, firstByteMicros: nearMax - 10_000,
+                bytes: 40_000, refinement: false, keyframe: true, fps: 30)
+        let s = r.take(now: UInt64.max)
+        XCTAssertEqual(s.frames, 5)
+        XCTAssertEqual(s.queueP50Ms ?? -1, 0, accuracy: 0.01)
+        XCTAssertEqual(s.decodeP95Ms, 5)
+        XCTAssertEqual(s.replacedShare, 0)
+        XCTAssertFalse(s.burstKbps.isEmpty)
+    }
 }
