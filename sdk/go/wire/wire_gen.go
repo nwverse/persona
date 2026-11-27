@@ -4331,8 +4331,8 @@ type ConnectorThingGroup struct {
 	New   []string `json:"new"`
 }
 
-// ConnectorThingParent: what the thing grew out of: kind inbox (an item's id), todo (a todo's id) or session
-// (<machine>/<session>).
+// ConnectorThingParent: what the thing grew out of: kind inbox (an item's id), todo (a todo's id), session (a coding
+// Agent's <machine>/<session>) or agent (a personal Agent's <source>:<sessionKey>).
 type ConnectorThingParent struct {
 	Kind string `json:"kind"`
 	ID   string `json:"id"`
