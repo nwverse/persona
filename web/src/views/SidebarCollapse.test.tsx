@@ -82,6 +82,17 @@ describe("folding the whole sidebar", () => {
     act(() => open.click());
     expect(getLayout().sidebarCollapsed).toBe(false);
   });
+
+  it("omits duplicate collapse and top rail buttons when MacBayTools hosts them (#17136)", async () => {
+    act(() => root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} hideCollapse />));
+    await flush();
+    expect(button("收起侧边栏")).toBeUndefined();
+
+    act(() => root.render(<SidebarRail route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} hideCollapse />));
+    await flush();
+    expect(button("展开侧边栏")).toBeUndefined();
+    expect(host.querySelector("[data-rail-top-controls]")).toBeNull();
+  });
 });
 
 describe("the focus across a fold (web usability audit item 23)", () => {

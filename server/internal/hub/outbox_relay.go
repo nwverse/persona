@@ -2,13 +2,10 @@ package hub
 
 import (
 	"context"
-	"encoding/json"
 	"sync"
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
-	"github.com/nwverse/persona/server/internal/bus"
-	"github.com/nwverse/persona/server/internal/rpc"
 )
 
 // What a manager made while the hub was away comes with manager.outbox once it is back (docs/operations/hub-restart.md "The
@@ -20,11 +17,7 @@ import (
 // not deliver it again either.
 
 func init() {
-	handleBus(assistantwire.MethodOutbox, func(h *Hub, ctx context.Context, c *busConn, params json.RawMessage) (any, error) {
-		var p assistantwire.Outbox
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, &rpc.Error{Code: bus.CodeInvalidParams, Message: assistantwire.MethodOutbox + ": " + err.Error()}
-		}
+	handleTypedBus(assistantwire.OutboxMethod, assistantwire.MethodOutbox+": ", func(h *Hub, ctx context.Context, c *busConn, p assistantwire.Outbox) (assistantwire.OutboxResult, error) {
 		from := c.managerID()
 		out := assistantwire.OutboxResult{Done: []string{}}
 		for _, it := range p.Items {

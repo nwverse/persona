@@ -248,6 +248,10 @@ func TestAgentStartAsksTheManager(t *testing.T) {
 		t.Fatalf("with the manager: %q %q %q", p("launcher"), p("model"), p("tab_name"))
 	}
 	p = start(`{"machine_id":"box","cwd":"/code","prompt":"x","launcher":"other","model":"picked","tab_name":"mine"}`)
+	start(`{"machine_id":"box","cwd":"/code","prompt":"x","model_aliases":{"opus_model":"vendor/strong"}}`)
+	if aliases, _ := n.lastStart(t)["model_aliases"].(map[string]any); aliases["opus_model"] != "vendor/strong" {
+		t.Fatal("HTTP start lost model aliases before reaching the node")
+	}
 	if p("launcher") != "other" || p("model") != "picked" || p("tab_name") != "mine" {
 		t.Fatalf("picked for this start: %q %q %q", p("launcher"), p("model"), p("tab_name"))
 	}
