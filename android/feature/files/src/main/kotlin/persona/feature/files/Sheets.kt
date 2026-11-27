@@ -3,6 +3,7 @@ package persona.feature.files
 import androidx.annotation.StringRes
 import org.xml.sax.Attributes
 import org.xml.sax.InputSource
+import org.xml.sax.SAXException
 import org.xml.sax.helpers.DefaultHandler
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -17,7 +18,7 @@ import kotlin.math.roundToLong
  * One sheet of a table file (docs/android/android.md "Files and Git in chat"): its cells as text, row by row; rows can be shorter than
  * [columns]. The same model as iOS (`TableParsing.swift`) and the web (`lib/sheets.ts`).
  */
-internal class TableSheet(val name: String) {
+internal class TableSheet(val name: String, private val maxRows: Int = MAX_ROWS) {
     val rows = ArrayList<List<String>>()
     var columns = 0
         private set
@@ -26,7 +27,7 @@ internal class TableSheet(val name: String) {
         private set
 
     fun append(more: List<List<String>>) {
-        val room = MAX_ROWS - rows.size
+        val room = maxRows - rows.size
         if (more.size > room) capped = true
         for (row in more.take(room.coerceAtLeast(0))) {
             rows.add(row)
@@ -294,9 +295,20 @@ internal object Xlsx {
         return if (any) n - 1 else null
     }
 
+    /** Sentinel thrown once a worksheet hits [TableSheet.MAX_ROWS] so SAX stops immediately without retaining cell text. */
+    private class SheetCappedException : SAXException() {
+        override fun fillInStackTrace(): Throwable = this
+    }
+
     /** One worksheet's `<sheetData>`: cells placed by their reference (B3), gaps left empty. */
-    private fun cells(xml: ByteArray, name: String, strings: List<String>, dates: List<Boolean>): TableSheet {
-        val sheet = TableSheet(name)
+    internal fun cells(
+        xml: ByteArray,
+        name: String,
+        strings: List<String>,
+        dates: List<Boolean>,
+        maxRows: Int = TableSheet.MAX_ROWS,
+    ): TableSheet {
+        val sheet = TableSheet(name, maxRows)
         var row = ArrayList<String>()
         var rowIndex = -1
         var cellColumn = 0
@@ -307,24 +319,41 @@ internal object Xlsx {
         var inInline = false
         var phonetic = 0
         fun flushRow() {
-            if (rowIndex < 0) return
+            if (rowIndex < 0 || sheet.capped) return
             while (row.lastOrNull() == "") row.removeAt(row.size - 1)
             sheet.append(listOf(row))
             row = ArrayList()
         }
+        fun stopIfCapped() {
+            if (!sheet.capped) return
+            value.setLength(0)
+            inValue = false
+            inInline = false
+            phonetic = 0
+            throw SheetCappedException()
+        }
         Xml.parse(xml, object : DefaultHandler() {
             override fun startElement(uri: String?, localName: String?, qName: String, attributes: Attributes) {
+                if (sheet.capped) return
                 when (Xml.local(qName)) {
                     "row" -> {
-                        if (sheet.capped) return
                         flushRow()
-                        val r = attributes.getValue("r")?.toIntOrNull()?.minus(1) ?: (rowIndex + 1)
+                        if (sheet.rows.size >= maxRows) {
+                            sheet.append(listOf(emptyList()))
+                            stopIfCapped()
+                        }
+                        val r = attributes.getValue("r")?.toIntOrNull()?.takeIf { it > 0 }?.minus(1) ?: (rowIndex + 1)
                         // Rows the file skips are empty rows (bounded: a row far down doesn't allocate the gap past the cap).
-                        if (r > rowIndex + 1) sheet.append(List(minOf(r - rowIndex - 1, TableSheet.MAX_ROWS + 1)) { emptyList() })
+                        if (r > rowIndex + 1) {
+                            sheet.append(List(minOf(r - rowIndex - 1, maxRows + 1)) { emptyList() })
+                        }
+                        if (sheet.rows.size >= maxRows) {
+                            if (!sheet.capped) sheet.append(listOf(emptyList()))
+                            stopIfCapped()
+                        }
                         rowIndex = r
                     }
                     "c" -> {
-                        if (sheet.capped) return
                         cellColumn = attributes.getValue("r")?.let(::column) ?: row.size
                         cellType = attributes.getValue("t") ?: ""
                         cellStyle = attributes.getValue("s")?.toIntOrNull() ?: 0
@@ -341,12 +370,12 @@ internal object Xlsx {
             }
 
             override fun endElement(uri: String?, localName: String?, qName: String) {
+                if (sheet.capped) return
                 when (Xml.local(qName)) {
                     "v", "t" -> inValue = false
                     "rPh" -> if (inInline && phonetic > 0) phonetic--
                     "is" -> { inInline = false; phonetic = 0 }
                     "c" -> {
-                        if (sheet.capped) return
                         val raw = value.toString()
                         val shown = when (cellType) {
                             "s" -> raw.toIntOrNull()?.let(strings::getOrNull) ?: ""
@@ -365,7 +394,9 @@ internal object Xlsx {
                 }
             }
 
-            override fun characters(ch: CharArray, start: Int, length: Int) { if (inValue) value.appendRange(ch, start, start + length) }
+            override fun characters(ch: CharArray, start: Int, length: Int) {
+                if (!sheet.capped && inValue) value.appendRange(ch, start, start + length)
+            }
         })
         flushRow()
         return sheet
