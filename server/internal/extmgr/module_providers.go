@@ -41,12 +41,13 @@ func (h *Manager) reportModules() []extwire.ModuleProvider {
 }
 
 // approvedModuleProvider: rec is the official installation of module m. It is the extension of m's id, a package
-// installed on this machine (not a remote plugin, not the built-in), from a market whose spec is the official one
-// (specOf: the spec of a market by id, false when there is none), verified with the official signing key or a retired
-// one (extension.Official). A local upload, a private market's package and a remote plugin never are.
+// installed on this machine (not the built-in, not a remote plugin installed from remote: without a package; an
+// installed package whose program is attached, Record.AttachedPackage, still is one), from a market whose spec is the
+// official one (specOf: the spec of a market by id, false when there is none), verified with the official signing key
+// or a retired one (extension.Official). A local upload, a private market's package and a remote plugin never are.
 func approvedModuleProvider(m modapi.ExtensionModule, rec extension.Record, specOf func(id string) (string, bool)) bool {
 	id := string(m.ID)
-	if rec.ID != id || rec.Source != extension.SourceInstalled || rec.Remote != nil {
+	if rec.ID != id || rec.Source != extension.SourceInstalled || (rec.Remote != nil && !rec.AttachedPackage()) {
 		return false
 	}
 	mid := extension.FromMarket(rec.Origin)

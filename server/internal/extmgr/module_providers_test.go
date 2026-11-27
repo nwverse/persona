@@ -32,8 +32,9 @@ func volcModule(t *testing.T) modapi.ExtensionModule {
 
 // Only the official installation of a listed module supplies its flag (#16254): the counterexamples of the design
 // (a local upload, a private market's package, a private market holding a retired official key, a package of another
-// id, a remote plugin, the built-in) are not providers at all, and an official one that is disabled, has a needed
-// contribution off or is switched off in the modules setting is a provider whose flag is off.
+// id, a remote plugin without a package, the built-in) are not providers at all; an official package whose program
+// is attached is one. An official one that is disabled, has a needed contribution off or is switched off in the
+// modules setting is a provider whose flag is off.
 func TestModuleProviderPredicate(t *testing.T) {
 	m := volcModule(t)
 	official, retired, private := newMarketKey(t).text, newMarketKey(t).text, newMarketKey(t).text
@@ -76,7 +77,13 @@ func TestModuleProviderPredicate(t *testing.T) {
 		// 7. Another id from the official market (volc2): the list names volc only.
 		{"official volc2", with(func(r *extension.Record) { r.ID, r.Origin = "volc2", extension.MarketOrigin("off1", "volc2") }), false},
 		{"origin of another id", with(func(r *extension.Record) { r.Origin = extension.MarketOrigin("off1", "volc2") }), false},
+		// An official package whose program is attached (Attach) keeps its package and supplies the module.
+		{"official package, program attached", with(func(r *extension.Record) {
+			r.Remote = &extension.Remote{RPCSocket: "/run/volc.sock", Package: true}
+		}), true},
+		// A remote plugin installed from remote: has no package, even with the official origin and key.
 		{"remote plugin", with(func(r *extension.Record) { r.Remote = &extension.Remote{} }), false},
+		{"remote plugin with sockets", with(func(r *extension.Record) { r.Remote = &extension.Remote{RPCSocket: "/run/volc.sock"} }), false},
 		{"built-in", with(func(r *extension.Record) {
 			r.Source, r.Origin, r.MarketKey = extension.SourceBuiltin, "builtin:volc", ""
 		}), false},

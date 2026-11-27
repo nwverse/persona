@@ -523,7 +523,8 @@ extension package without its clients noticing. Only the host decides which: `mo
 module it claims.
 
 - **Who is a provider** (`server/internal/extmgr/module_providers.go`): the registry's record of the listed id, a
-  package installed on the hub's machine (`source: installed`, not a remote plugin), from a market whose spec is the
+  package installed on the hub's machine (`source: installed`, not a remote plugin installed from `remote:` without a
+  package; an installed package whose program is attached, `Record.AttachedPackage`, still counts), from a market whose spec is the
   official one (`extension.IsOfficialMarket`), verified with the official signing key or a retired one
   (`extension.Official.PreviousSigningKeys`). A local upload, a private market's package and another id are not
   providers. A private market cannot hold an official key, current or retired (`extension.NormalizeMarketKeys`).
