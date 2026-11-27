@@ -140,8 +140,16 @@ export struct SettingsPage {
     const sessionTarget = owner.target(target);
     const current = (): boolean => this.mounted && this.active && this.page === page && this.model === owner && revision === this.machineRevision && owner.owns(generation, scope);
     this.management.setAdmission(current);
-    await this.management.load(this.basePage(), owner, page==='model_purpose' ? target.id : ''); if (!current()) return;
     const row = new ManagementRow(target.id, target.title, target.detail, target.data());
+    if (page === 'channel_detail' && !this.channelAllowed(row.id) ||
+        page === 'connector_detail' && !this.connectorAllowed(row.id)) {
+      this.management.selectedId = row.id;
+      this.management.channelDetail = {};
+      this.management.error = '';
+      this.management.loading = false;
+      return;
+    }
+    await this.management.load(this.basePage(), owner, page==='model_purpose' ? target.id : ''); if (!current()) return;
     if (page === 'extension_detail') await this.management.openExtension(owner, row);
     else if (page === 'connector_detail') this.management.openConnector(row);
     else if (page === 'channel_detail') await this.management.openChannel(owner, row);
@@ -1129,12 +1137,12 @@ export struct SettingsPage {
   private connectorAllowed(id: string): boolean {
     const normalized = id.trim().toLowerCase();
     if (!this.model.mailModuleAllowed() && (normalized === 'mail' || normalized.startsWith('mail:'))) return false;
-    if (!this.model.larkModuleAllowed() && ['feishu_bot', 'lark_bot'].includes(normalized)) return false;
+    if (!this.model.larkModuleAllowed() && ['larksync', 'feishu_bot', 'feishu-bot', 'lark_bot'].includes(normalized)) return false;
     return true;
   }
   private channelAllowed(id: string): boolean {
     const normalized = id.trim().toLowerCase();
-    if (!this.model.larkModuleAllowed() && ['feishu', 'lark'].includes(normalized)) return false;
+    if (!this.model.larkModuleAllowed() && ['feishu', 'feishu_bot', 'feishu-bot', 'lark_bot'].includes(normalized)) return false;
     return true;
   }
   @Builder connectorDetailPage() {

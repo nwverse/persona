@@ -1605,6 +1605,7 @@ export class InboxWorkspace {
   }
 
   async openMailCompose(): Promise<void> {
+    if (!this.mailAllowed()) return;
     let owner: OwnerSnapshot; try { owner = this.capture(undefined); } catch (error) { this.error = this.errorCode(error as Error); return; }
     this.mailComposeError = ''; this.mailComposeOpen = true; this.mailComposeBusy = true; this.mailComposeReady = false;
     this.mailComposeBlocked = false; this.mailComposeState = 'draft'; this.mailComposeAccount = '';

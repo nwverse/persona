@@ -75,7 +75,9 @@ export struct PhoneInboxSources {
   private extensionIdAllowed(id: string): boolean {
     const normalized = id.trim().toLowerCase();
     if (!this.model.mailModuleAllowed() && (normalized === 'mail' || normalized.startsWith('mail:'))) return false;
-    if (!this.model.larkModuleAllowed() && ['lark', 'feishu', 'lark_bot', 'feishu_bot'].includes(normalized)) return false;
+    // `module.lark` gates only the Lark bot (feishu, feishu_bot, feishu-bot, lark_bot, larksync);
+    // the Lark extension stays visible (#16073).
+    if (!this.model.larkModuleAllowed() && ['feishu', 'feishu_bot', 'feishu-bot', 'lark_bot', 'larksync'].includes(normalized)) return false;
     return true;
   }
   private visibleGraphGroups(): InboxSourceGroup[] {

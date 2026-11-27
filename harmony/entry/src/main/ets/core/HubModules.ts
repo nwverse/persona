@@ -6,16 +6,6 @@ export const MAIL_MODULE_FEATURE: string = 'module.mail';
 export const LARK_MODULE_FEATURE: string = 'module.lark';
 export const RECORDING_MODULE_FEATURE: string = 'module.recording';
 
-const HUB_PUSH_ROUTE_FEATURES: readonly string[] = [
-  'push',
-  'apns',
-  'hms_push',
-  'live_activity_push',
-  'notify_push',
-  'live_view_push',
-  'push_route'
-];
-
 /**
  * Extract the Hub's published module flags from a `hello` / `health` `features` list, matching iOS `HubModules`.
  * Returns `null` when the Hub does not announce the `modules` marker (older hub => every module allowed).
@@ -98,16 +88,11 @@ export function parseHiddenHubPages(sidebarConfig: string): Set<string> {
 }
 
 /**
- * Whether the Hub advertises a background push route capable of updating/ending LiveView while backgrounded
- * (matching iOS #16783 `LiveActivityController.left`). Foreground-only `ws_notify` does NOT keep LiveView alive
- * across backgrounding because the WebSocket closes on background.
+ * Whether this client has a confirmed registered Hub background push route (matching iOS #16783 `PushHealth`).
+ * HarmonyOS currently uses foreground `ws_notify` without Push Kit registration, so `hasPushRegistration` is false.
  */
-export function hasHubPushRoute(features: readonly string[]): boolean {
-  if (!features || features.length === 0) return false;
-  for (let i = 0; i < features.length; i++) {
-    if (HUB_PUSH_ROUTE_FEATURES.includes(features[i])) return true;
-  }
-  return false;
+export function hasRegisteredPushRoute(hasPushRegistration: boolean): boolean {
+  return hasPushRegistration;
 }
 
 /**

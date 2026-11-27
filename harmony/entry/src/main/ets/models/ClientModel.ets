@@ -46,7 +46,7 @@ import { Pairing, PairingTarget } from '../platform/Pairing';
 import { scopeKey, sessionCapabilities, projectToolTurn, TranscriptReducer } from '../core/Domain';
 import type { SessionCapabilityInput, EffectiveSessionCapabilities, TranscriptItem, TranscriptSnapshot, ToolTurnProjection, WorkInspectionStep } from '../core/Domain';
 import { extractPublishedModules, isRecordingModuleAllowed, parseStoredHubModules, serializeStoredHubModules } from '../core/XiaoYiActions';
-import { LARK_MODULE_FEATURE, MAIL_MODULE_FEATURE, hasHubPushRoute, isHubModuleAllowed, parseHiddenHubPages } from '../core/HubModules';
+import { LARK_MODULE_FEATURE, MAIL_MODULE_FEATURE, hasRegisteredPushRoute, isHubModuleAllowed, parseHiddenHubPages } from '../core/HubModules';
 
 
 
@@ -147,8 +147,13 @@ export class ClientModel {
     const hidden = parseHiddenHubPages(this.sidebarConfig);
     return this.demo || (!hidden.has('todos') && !hidden.has('todo'));
   }
+  /**
+   * Whether this device has a registered Hub background push route (#16783, PushHealth).
+   * HarmonyOS currently uses foreground `ws_notify` without Push Kit registration yet,
+   * so non-demo sessions return `false` and end active LiveViews on background instead of leaving them frozen.
+   */
   hasPushRoute(): boolean {
-    return this.demo || hasHubPushRoute(this.features);
+    return this.demo || hasRegisteredPushRoute(false);
   }
   @Trace forgottenProfile: string = '';
   @Trace forgottenEpoch: number = 0;
@@ -246,7 +251,7 @@ export class ClientModel {
   applyNavigationConfig(data: Record<string, Object>): void {
     const existing = Wire.parse(this.sidebarConfig);
     const current: Record<string, Object> = Wire.payload([], []);
-    Object.keys(existing).filter((key: string) => key !== 'pages').forEach((key: string) => {
+    Object.keys(existing).filter((key: string) => !['pages', 'hidden', 'hidden_pages'].includes(key)).forEach((key: string) => {
       current[key] = existing[key];
     });
     if (Wire.has(data, 'pages')) current['pages'] = data['pages'];
@@ -2210,6 +2215,7 @@ export class ClientModel {
     this.ssh.stop(); this.stopReconnect(); this.cancelDraftTimer(); this.closeTranscript(); this.releaseTerminal(); this.retireViews(); this.repository?.close(); this.generation++; this.selectionGeneration++;
     this.publishedImageLimits = {};
     this.demo = true; this.connected = true; this.profile = new HubProfile('demo', tr('local_demo')); this.profile.hubId = 'demo'; this.profile.manager = 'demo';
+    this.features = []; this.rememberedHubModules = null; this.sidebarConfig = '';
     this.useHerdrTabName = false; this.agentsDisplaySupported = false; this.agentsDisplaySaving = false; this.agentsDisplayRevision++;
     this.sendAttempts.clear(); this.feedbackChanged();
     this.demoRepository = new DemoRepository(this.local); this.repository = this.demoRepository;

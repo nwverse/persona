@@ -9,7 +9,7 @@ import {
   MAIL_MODULE_FEATURE,
   RECORDING_MODULE_FEATURE,
   extractPublishedModules,
-  hasHubPushRoute,
+  hasRegisteredPushRoute,
   isHubModuleAllowed,
   parseHiddenHubPages,
   shouldEndLiveViewOnBackground
@@ -228,12 +228,12 @@ test('parseHiddenHubPages handles pages.hidden, hidden, hidden_pages, arrays, an
   assert.deepEqual([...parseHiddenHubPages('{"pages":{"hidden_pages":["inbox","todos"]}}')].sort(), ['inbox', 'todos']);
 });
 
-test('hasHubPushRoute and shouldEndLiveViewOnBackground mirror iOS #16783 lifecycle', () => {
-  assert.equal(hasHubPushRoute([]), false);
-  assert.equal(hasHubPushRoute(['ws_notify', 'connectors']), false);
-  for (const flag of ['push', 'apns', 'hms_push', 'live_activity_push', 'notify_push', 'live_view_push', 'push_route']) {
-    assert.equal(hasHubPushRoute(['ws_notify', flag]), true, flag);
-  }
+test('hasRegisteredPushRoute and shouldEndLiveViewOnBackground mirror iOS #16783 lifecycle without invented feature flags', () => {
+  const hubModulesSrc = readFileSync(new URL('../entry/src/main/ets/core/HubModules.ts', import.meta.url), 'utf8');
+  assert.doesNotMatch(hubModulesSrc, /HUB_PUSH_ROUTE_FEATURES|hasHubPushRoute|hms_push|live_activity_push|notify_push|live_view_push|push_route/);
+
+  assert.equal(hasRegisteredPushRoute(false), false);
+  assert.equal(hasRegisteredPushRoute(true), true);
 
   assert.equal(shouldEndLiveViewOnBackground(false, false, true), true);
   assert.equal(shouldEndLiveViewOnBackground(true, false, true), false);
@@ -332,23 +332,34 @@ test('ClientModel exposes module, page visibility, push route helpers, and backg
   await model.background();
   assert.deepEqual(globalThis.__paritySetForegroundCalls, [[false, false, false]]);
 
-  // Hub announces mail, lark, and push route
-  model.features = ['modules', 'module.mail', 'module.lark', 'hms_push'];
+  // Hub announces mail & lark; Harmony has no Push Kit registration yet so hasPushRoute remains false on live Hub
+  model.features = ['modules', 'module.mail', 'module.lark', 'ws_notify'];
   model.sidebarConfig = JSON.stringify({ pages: { hidden: ['todos'] } });
   assert.equal(model.mailModuleAllowed(), true);
   assert.equal(model.larkModuleAllowed(), true);
   assert.equal(model.inboxPageVisible(), true);
   assert.equal(model.todosPageVisible(), false);
-  assert.equal(model.hasPushRoute(), true);
+  assert.equal(model.hasPushRoute(), false);
 
   globalThis.__paritySetForegroundCalls = [];
   await model.background();
-  assert.deepEqual(globalThis.__paritySetForegroundCalls, [[false, true, false]]);
+  assert.deepEqual(globalThis.__paritySetForegroundCalls, [[false, false, false]]);
 
-  // Demo mode stays fail-open regardless of features / sidebarConfig
-  model.demo = true;
-  model.features = ['modules'];
+  // applyNavigationConfig clears stale hidden / hidden_pages / pages when a subsequent update un-hides them
+  model.applyNavigationConfig({ hidden: ['inbox'], hidden_pages: ['todos'] });
+  assert.equal(model.inboxPageVisible(), false);
+  assert.equal(model.todosPageVisible(), false);
+  model.applyNavigationConfig({ pages: { hidden: [] } });
+  assert.equal(model.inboxPageVisible(), true);
+  assert.equal(model.todosPageVisible(), true);
+
+  // Demo mode stays fail-open and resets sidebarConfig / rememberedHubModules cleanly
   model.sidebarConfig = JSON.stringify({ hidden: ['inbox', 'todos'] });
+  model.rememberedHubModules = [];
+  model.useDemo();
+  assert.equal(model.demo, true);
+  assert.equal(model.sidebarConfig, '');
+  assert.equal(model.rememberedHubModules, null);
   assert.equal(model.mailModuleAllowed(), true);
   assert.equal(model.larkModuleAllowed(), true);
   assert.equal(model.inboxPageVisible(), true);
@@ -360,9 +371,10 @@ test('ClientModel exposes module, page visibility, push route helpers, and backg
   assert.deepEqual(globalThis.__paritySetForegroundCalls, [[false, true, true]]);
 });
 
-test('UI files wire module guards, hidden page guards, and non-handbackable interaction cards', () => {
+test('UI files wire module guards, keep lark extension visible, skip disabled channel/connector Hub loads, and guard openMailCompose', () => {
   const index = readFileSync(new URL('../entry/src/main/ets/pages/Index.ets', import.meta.url), 'utf8');
   const inboxPage = readFileSync(new URL('../entry/src/main/ets/components/InboxWorkspacePage.ets', import.meta.url), 'utf8');
+  const inboxWorkspace = readFileSync(new URL('../entry/src/main/ets/models/InboxWorkspace.ets', import.meta.url), 'utf8');
   const sources = readFileSync(new URL('../entry/src/main/ets/components/PhoneInboxSources.ets', import.meta.url), 'utf8');
   const settingsPage = readFileSync(new URL('../entry/src/main/ets/components/SettingsPage.ets', import.meta.url), 'utf8');
   const form = readFileSync(new URL('../entry/src/main/ets/components/InteractionDecisionForm.ets', import.meta.url), 'utf8');
@@ -376,15 +388,28 @@ test('UI files wire module guards, hidden page guards, and non-handbackable inte
   assert.match(index, /if \(dest === 'inbox'\) \{ this\.openSpace\(this\.model\.inboxPageVisible\(\) \? 'inbox' : 'persona'\); return; \}/);
   assert.match(index, /if \(this\.model\.mailModuleAllowed\(\)\) MenuItem\(\{content:tr\('mail_compose'\)\}\)/);
 
-  // InboxWorkspacePage.ets mail module guard keeps stored items readable
+  // InboxWorkspace.ets & InboxWorkspacePage.ets mail module guard keeps stored items readable & blocks openMailCompose
   assert.match(inboxPage, /this\.model\.mailModuleAllowed\(\)/);
   assert.match(inboxPage, /Wire\.text\(this\.workspace\.detail,\s*'context'\)/);
+  assert.match(inboxWorkspace, /async openMailCompose\(\): Promise<void> \{\s*if \(!this\.mailAllowed\(\)\) return;/);
 
-  // PhoneInboxSources.ets & SettingsPage.ets mail/lark module guards
+  // PhoneInboxSources.ets keeps 'lark' extension visible when module.lark is off; only bot IDs are filtered
   assert.match(sources, /this\.model\.mailModuleAllowed\(\)/);
   assert.match(sources, /this\.model\.larkModuleAllowed\(\)/);
+  const extAllowedBlock = sources.slice(sources.indexOf('private extensionIdAllowed('), sources.indexOf('private visibleGraphGroups('));
+  assert.match(extAllowedBlock, /\['feishu',\s*'feishu_bot',\s*'feishu-bot',\s*'lark_bot',\s*'larksync'\]\.includes\(normalized\)/);
+  assert.doesNotMatch(extAllowedBlock, /['"]lark['"]/);
+
+  // SettingsPage.ets separates Lark bot (larksync/feishu/feishu-bot/lark_bot) from Lark extension and skips Hub load when off
   assert.match(settingsPage, /this\.model\.mailModuleAllowed\(\)/);
   assert.match(settingsPage, /this\.model\.larkModuleAllowed\(\)/);
+  const connectorBlock = settingsPage.slice(settingsPage.indexOf('private connectorAllowed('), settingsPage.indexOf('private channelAllowed('));
+  const channelBlock = settingsPage.slice(settingsPage.indexOf('private channelAllowed('), settingsPage.indexOf('@Builder connectorDetailPage('));
+  assert.match(connectorBlock, /\['larksync',\s*'feishu_bot',\s*'feishu-bot',\s*'lark_bot'\]\.includes\(normalized\)/);
+  assert.doesNotMatch(connectorBlock, /['"]lark['"]/);
+  assert.match(channelBlock, /\['feishu',\s*'feishu_bot',\s*'feishu-bot',\s*'lark_bot'\]\.includes\(normalized\)/);
+  assert.doesNotMatch(channelBlock, /['"]lark['"]/);
+  assert.match(settingsPage, /if \(page === 'channel_detail' && !this\.channelAllowed\(row\.id\) \|\|[\s\S]*?page === 'connector_detail' && !this\.connectorAllowed\(row\.id\)\) \{[\s\S]*?return;\s*\}/);
 
   // InteractionDecisionForm.ets hides handback menu when disallowed
   assert.match(form, /interactionCanHandBack\(this\.request\)/);
