@@ -5041,8 +5041,16 @@ final class AppModel {
     func openNativeTemplate(_ template: String) {
         pendingNativeTemplate = template
         settingsPath = NavigationPath([SettingsPage.templates])
-        selectedTab = .settings
-        if tabRouter != nil { shellSettings = true }
+        if NativeTemplateStore.shared.enabled {
+            shellSettings = false
+            selectedTab = .settings
+        } else if tabRouter != nil {
+            // The old shell and the iPad's router own Settings as a sheet; setting their tab first would immediately
+            // route back to the page in front. Set only the route they understand, then present the sheet.
+            tabRouter?.route(.settings, in: self)
+        } else {
+            selectedTab = .settings
+        }
     }
 
     /// Add Computer / Confirm Computer over the whole app (AddComputerView.swift): set it from anywhere without a sheet of its own

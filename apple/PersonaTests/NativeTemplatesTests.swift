@@ -1,4 +1,5 @@
 import XCTest
+import PersonaWire
 @testable import Persona
 
 @MainActor final class NativeTemplatesTests: XCTestCase {
