@@ -587,16 +587,20 @@ func (n *Node) resumeWith(id string, opts sendOpts) resumed {
 // fillResume: a start that resumes a Claude session that is not running (the app's Resume Session, #4328) keeps what
 // the session ran with for whatever the start leaves out (asked), as a message that resumes it does; before, it ran
 // on the launcher's default model and wrote that over the one the session remembered. The model comes along only
-// with the launcher it was picked for. A Codex or compatible thread resumes its own way (codex_resume.go), and a
-// running session is not started again: both keep what was asked.
+// with the launcher it was picked for. A Codex thread resumes its own way (codex_resume.go), and a running session is
+// not started again: both keep what was asked. A TRAE CLI session gets only its launcher, directory and task
+// (traexResumeWith): without them a bare Resume (the web's sends only the id) would start Claude Code on its id.
 func (n *Node) fillResume(id string, asked resumed) resumed {
 	if !validID(id) {
 		return asked
 	}
-	if _, live := n.agent(id); live || n.codexPath(id) != "" || n.traexPath(id) != "" {
+	if _, live := n.agent(id); live || n.codexPath(id) != "" {
 		return asked
 	}
 	r := n.resumeWith(id, sendOpts{})
+	if n.traexPath(id) != "" {
+		r = n.traexResumeWith(id)
+	}
 	out := asked
 	if out.execution.Source.Role == "" {
 		out.execution.Source = r.execution.Source
@@ -621,6 +625,25 @@ func (n *Node) fillResume(id string, asked resumed) resumed {
 	return out
 }
 
+// traexResumeWith is what a TRAE CLI session that is not running comes back with when a start leaves it out:
+// `<launcher> resume <id>` (startOtherAgent) on the launcher it ran on (the CLI by name for one Persona has no record
+// of), in its directory, on its task. Its model, effort and permission mode stay the CLI's own: a TRAE CLI takes them
+// only on a new session (control.go).
+func (n *Node) traexResumeWith(id string) resumed {
+	st, _ := n.state.get(id)
+	r := resumed{launcher: cmp.Or(st.Launcher, traexAgent), cwd: st.Cwd, taskID: st.TaskID, workspaceID: st.WorkspaceID,
+		workspaceLabel: st.WorkspaceLabel, tab: n.traexTitle(id)}
+	r.execution.Source = st.ModelSource
+	if r.cwd == "" {
+		if t, ok := n.traexThread(id); ok && t.Cwd != "" {
+			r.cwd = t.Cwd
+		} else if p := rolloutPath(n.traexHome(), id); p != "" {
+			r.cwd = metaOf(n.traexHome(), p).cwd
+		}
+	}
+	return r
+}
+
 // resumeTabName names the tab a session is resumed in: its title (Claude's AI title, or the one it was given), so
 // the tab reads as it did before it was closed rather than agent-<n>.
 func (n *Node) resumeTabName(id string) string {
@@ -637,13 +660,14 @@ func (n *Node) resumeTabName(id string) string {
 
 // resumeOtherWith resumes a Codex or a compatible CLI that is not running, with text as its first message, the user's
 // Resume (#4754): with the launcher, directory and model to resume with (st): the session's own, or
-// what a Codex thread started outside Persona is resumed with (codex_resume.go).
+// what a Codex thread started outside Persona is resumed with (codex_resume.go). Herdr and Orca alike (#17044): a new
+// terminal in the engine's workspace for its directory, or the shell its agent left.
 func (n *Node) resumeOtherWith(ctx context.Context, id string, st sessionState, text string, images []proto.Image) error {
 	ctx = n.withResumeHost(ctx, id)
 	if st.TaskID != "" {
 		ctx, _ = withTaskSpace(ctx, st.TaskID, st.WorkspaceID, st.WorkspaceLabel)
 	}
-	if r := n.notRunningRefusal(ctx, id); r != nil {
+	if r := n.resumeEngineRefusal(ctx, id); r != nil {
 		return r
 	}
 	launch, err := n.launcherFor(n.startKind(ctx))
@@ -660,6 +684,13 @@ func (n *Node) resumeOtherWith(ctx context.Context, id string, st sessionState, 
 		argv, ok = n.codexLauncher(ctx, st.Launcher)
 		if !ok {
 			return fmt.Errorf("启动器「%s」不再运行 Codex，没法接着这个会话", st.Launcher)
+		}
+		if st.AppMode == "" && stockOrcaCodexArgv(st.Launcher, argv) {
+			// Orca's own Codex launch profile, as a new start of the stock launcher there runs it: the resumed Codex
+			// gets the arguments it started with (codex_orca_launch_defaults.go). Herdr leaves the words as they are.
+			if argv, err = codexOrcaLaunchDefaults(ctx, launch, argv); err != nil {
+				return err
+			}
 		}
 		if argv, err = n.codexReadonlyArgs(st.Launcher, argv, st.AppMode); err != nil {
 			return err // Refuse conflicting permissions before creating a workspace, tab or attachment.
@@ -719,7 +750,10 @@ func (n *Node) resumeCodex(ctx context.Context, launch host.Launcher, id string,
 	}
 	defer os.RemoveAll(dir)
 	file := filepath.Join(dir, "start.json")
-	b, _ := json.Marshal(codexStartFile{Source: sourceSession(st.ModelSource, id), SourceHosts: sourceHostsFor(st.ModelSource), Argv: argv, Prompt: prompt, Agent: herdrAgentFor(launch, "codex"), Dir: st.Cwd})
+	// In an Orca terminal the resumed Codex keeps that terminal's hooks, as a new start there does (codex_start.go).
+	owner, _ := launch.(interface{ Kind() string })
+	isolateHooks := owner != nil && owner.Kind() == host.Orca
+	b, _ := json.Marshal(codexStartFile{Source: sourceSession(st.ModelSource, id), SourceHosts: sourceHostsFor(st.ModelSource), Argv: argv, Prompt: prompt, Agent: herdrAgentFor(launch, "codex"), IsolateHooks: isolateHooks, Dir: st.Cwd})
 	if err := os.WriteFile(file, b, 0o600); err != nil {
 		return err
 	}

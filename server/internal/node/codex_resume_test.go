@@ -284,13 +284,15 @@ func TestCodexResumeUsesRequestedHost(t *testing.T) {
 			for _, tc := range []struct {
 				name, pane, def, explicit string
 				orca, wantResume          bool
+				wantCode                  string // the refusal when not resumed here ("": the Codex read-only one)
 			}{
-				{"orca_explicit_herdr", "orca:tab1:leaf1", "herdr", "herdr", true, true},
-				{"disabled_host_explicit_herdr", "orca:tab1:leaf1", "paseo", "herdr", false, true},
-				{"orca_without_explicit_host", "orca:tab1:leaf1", "herdr", "", true, false},
-				{"disabled_host_without_explicit_host", "orca:tab1:leaf1", "paseo", "", false, false},
-				{"remembered_herdr_without_explicit_host", "w1:p1", "paseo", "", false, true},
-				{"explicit_paseo", "w1:p1", "herdr", "paseo", false, false},
+				{"orca_explicit_herdr", "orca:tab1:leaf1", "herdr", "herdr", true, true, ""},
+				{"disabled_host_explicit_herdr", "orca:tab1:leaf1", "paseo", "herdr", false, true, ""},
+				// It resumes in the Orca it ran in (#17044), not herdr: this stand-in Orca is not running.
+				{"orca_without_explicit_host", "orca:tab1:leaf1", "herdr", "", true, false, engineMissing},
+				{"disabled_host_without_explicit_host", "orca:tab1:leaf1", "paseo", "", false, false, ""},
+				{"remembered_herdr_without_explicit_host", "w1:p1", "paseo", "", false, true, ""},
+				{"explicit_paseo", "w1:p1", "herdr", "paseo", false, false, ""},
 			} {
 				if tc.explicit == "paseo" && !direct {
 					continue
@@ -329,6 +331,9 @@ func TestCodexResumeUsesRequestedHost(t *testing.T) {
 						want := "codex_read_only"
 						if direct {
 							want = codexResumeRefused
+						}
+						if tc.wantCode != "" {
+							want = tc.wantCode
 						}
 						if code, _ := refusalOf(t, err); code != want {
 							t.Fatalf("refusal = %v, want %s", err, want)
