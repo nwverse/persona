@@ -68,6 +68,11 @@ func (n *Node) paneFor(ctx context.Context, id string) (string, error) {
 }
 
 func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, opts sendOpts) error {
+	// A new turn must not start while the previous turn's checkpoint is still reading the working tree: otherwise
+	// edits made by this turn would be attributed to the previous one (#12533).
+	if err := n.waitCheckpoint(ctx, id); err != nil {
+		return err
+	}
 	if exitCommand(text) {
 		release := n.recovery.lock(id)
 		defer release()
@@ -198,6 +203,10 @@ func (n *Node) sendLocked(ctx context.Context, id, text string, images []proto.I
 	} else {
 		if opts.SwitchNow { // gone since switchNowReady: nothing below would carry the switch out
 			return n.switchNowDropped(id, refusal(proto.CodeSwitchUnsupported, fmt.Sprintf("session %s is not running in one of Persona's terminals: there is no agent to switch (%v)", id, err), nil))
+		}
+		// A transcript a session of the desktop app went on from: the message goes on in that session (#14394).
+		if cur := n.desktopWentOn(ctx, id); cur != "" {
+			return n.sendWentOn(ctx, id, cur, text, images, opts)
 		}
 		// A session of the desktop app's sidebar that nothing runs: the app opens it, and the message goes to its inbox,
 		// not to a claude --resume of ours (claudedesktop_open.go).

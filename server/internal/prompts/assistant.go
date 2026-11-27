@@ -932,6 +932,8 @@ func RenderInboxToAgent(d InboxToAgent) string { return render("assistant/inbox_
 type SuperviseParked struct {
 	Reason, WaitingOn, Until string
 	Count, Left              int
+	// Resent: a parked_due told again because no task_review followed the earlier reminder; 1 is the first resend.
+	Resent int
 }
 
 // SuperviseDecision is a decision a task's supervisor put to the owner (task_review needs_user), as a supervision
@@ -1005,6 +1007,11 @@ type SuperviseReviewRework struct {
 
 func RenderSuperviseReviewRework(r SuperviseReviewRework) string {
 	return render("assistant/supervise_review_rework", r)
+}
+
+// RenderTaskInvestigation is the finding-report contract of an opted-in investigation.
+func RenderTaskInvestigation() string {
+	return render("assistant/task_investigation", nil)
 }
 
 // RenderTaskDoneWhen is what follows a supervised task's prompt: what done means, and that the agent shows it.

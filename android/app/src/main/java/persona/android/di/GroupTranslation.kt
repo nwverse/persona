@@ -445,6 +445,7 @@ internal fun AssistantConversations.inGroup(names: GroupNames, scope: CoroutineS
         override suspend fun startConversation() = names.key(source.startConversation())
         override suspend fun startConversation(launcher: String) = names.key(source.startConversation(launcher))
         override suspend fun startConversation(pick: persona.core.contracts.ModelPick) = names.key(source.startConversation(pick))
+        override suspend fun mainConversationOrNull(manager: String) = source.mainConversationOrNull(manager)?.let(names::key)
         // another manager's main conversation (docs/assistant/managers.md step 4), in this group's merged ids
         override suspend fun mainConversationOf(manager: String) = names.key(source.mainConversationOf(manager))
         override suspend fun spaceConversations(space: String) = source.spaceConversations(space).map(names::session)
@@ -499,6 +500,7 @@ internal fun AgentCreationService.inGroup(names: GroupNames): AgentCreationServi
             result(source.start(request.copy(machineId = names.rawMachine(request.machineId)), operationId))
         override suspend fun operation(operationId: String) = result(source.operation(operationId))
         override suspend fun newAgentModel() = source.newAgentModel()
+        override suspend fun newAgentModel(machineId: String) = source.newAgentModel(names.rawMachine(machineId))
         override suspend fun launcherModels(machineId: String, launcher: String, refresh: Boolean) =
             source.launcherModels(names.rawMachine(machineId), launcher, refresh)
         override suspend fun launcherModels(machineId: String, launcher: String, refresh: Boolean, host: String?) =

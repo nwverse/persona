@@ -239,6 +239,7 @@ func remoteTestNode(t *testing.T) *Node {
 	n, home := testNode(t)
 	n.codices = newCodexRegistry()
 	n.codices.scan = func() []codexProcess { return nil }
+	n.codices.checked = func() ([]codexProcess, bool) { return n.codices.scan(), true }
 	fixtureCodexIndex(n.codices)
 	n.logger = log.New(io.Discard, "", 0)
 	n.metas = map[string]quickMeta{}
@@ -325,6 +326,50 @@ func TestCodexRemoteIdentityAndOnlyReadDiscovery(t *testing.T) {
 	}
 	if _, _, err := n.codexOwner(id1); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCodexSharedOriginKeepsTheLiveOwnerRoute(t *testing.T) {
+	n := remoteTestNode(t)
+	home, bus := startFakeCodexBus(t, remoteRaw)
+	state := fmt.Sprintf(`{"projectless-thread-ids":[%q]}`, remoteRaw)
+	if err := os.WriteFile(filepath.Join(home, ".codex-global-state.json"), []byte(state), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rollout := filepath.Join(home, "rollout-"+remoteRaw+".jsonl")
+	meta := `{"type":"session_meta","payload":{"originator":"persona","source":"vscode"}}` + "\n"
+	if err := os.WriteFile(rollout, []byte(meta), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	id := n.registerCodex(home, remoteRaw, rollout)
+	if err := n.send(context.Background(), id, "App fallback", nil, sendOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-bus.turns:
+	default:
+		t.Fatal("the App window did not take the fallback send")
+	}
+
+	remote, _ := connectRemoteFixture(t, n, home, "shared", remoteRaw)
+	if err := n.send(context.Background(), id, "Live owner", nil, sendOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	if remote.count("turn/start") != 1 {
+		t.Fatal("the live owner did not take the send")
+	}
+	select {
+	case <-bus.turns:
+		t.Fatal("a send with a live owner went through the App fallback")
+	default:
+	}
+
+	other, _ := connectRemoteFixture(t, n, home, "other", remoteRaw)
+	if err := modesCall(t, n, id, map[string]any{"model": "gpt-y"}); refusalCode(err) != "codex_read_only" {
+		t.Fatalf("settings with conflicting owners = %v, want codex_read_only", err)
+	}
+	if len(bus.settings) != 0 || remote.count("thread/settings/update") != 0 || other.count("thread/settings/update") != 0 {
+		t.Fatal("settings reached an endpoint despite the owner conflict")
 	}
 }
 

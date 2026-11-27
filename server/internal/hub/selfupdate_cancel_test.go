@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -54,7 +55,7 @@ func cancellationBuildFixture(dir string, in map[string]any, result any) error {
 }
 
 func TestDevelopmentCancelUntilAdoption(t *testing.T) {
-	for _, phase := range []string{"resolve", "build", "waiting_idle", "backup", "restarting"} {
+	for _, phase := range []string{"resolve", "preflight", "build", "waiting_idle", "backup", "backup_failure", "archive_programs", "restarting"} {
 		t.Run(phase, func(t *testing.T) {
 			h, machine, target, _ := updatingHub(t, newPublisher(t, "unused", 202611021700), "release")
 			h.store = newMeshStore()
@@ -84,9 +85,26 @@ func TestDevelopmentCancelUntilAdoption(t *testing.T) {
 			entered, release := make(chan struct{}), make(chan struct{})
 			ctx, stop := context.WithTimeout(context.Background(), 30*time.Second)
 			defer stop()
+			// Hold the real compressor on a FIFO until the HTTP assertions finish.
+			var programPipe *os.File
+			if phase == "archive_programs" {
+				path := filepath.Join(bin, "program-input")
+				if err := exec.Command("mkfifo", path).Run(); err != nil {
+					t.Fatal(err)
+				}
+				var err error
+				programPipe, err = os.OpenFile(path, os.O_RDWR, 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { programPipe.Close() })
+				if _, err := programPipe.WriteString("fixture saved program"); err != nil {
+					t.Fatal(err)
+				}
+			}
 			first := true
-			u.devRun = func(ctx context.Context, cfg *update.DevelopmentConfig, dir, op string, in map[string]any, out any, report func(update.DevelopmentProgress)) error {
-				if first && phase == op {
+			u.devRun = func(ctx context.Context, cfg *update.DevelopmentConfig, dir, op string, in map[string]any, out any, resume func(), report func(update.DevelopmentProgress)) error {
+				if first && (phase == op || phase == "backup_failure" && op == "backup") {
 					first = false
 					close(entered)
 					if op != "backup" {
@@ -106,7 +124,17 @@ func TestDevelopmentCancelUntilAdoption(t *testing.T) {
 				case "build":
 					return cancellationBuildFixture(dir, in, out)
 				default:
-					return update.DevelopmentRequest(ctx, cfg, dir, op, in, out, report)
+					if first && phase == "archive_programs" && op == "backup" {
+						first = false
+						in["executables"].(map[string]string)["personad"] = programPipe.Name()
+						return update.DevelopmentRequest(ctx, cfg, dir, op, in, out, resume, func(p update.DevelopmentProgress) {
+							report(p)
+							if p.Step == "archive_programs" {
+								close(entered)
+							}
+						})
+					}
+					return update.DevelopmentRequest(ctx, cfg, dir, op, in, out, resume, report)
 				}
 			}
 			handed := make(chan struct{})
@@ -171,7 +199,7 @@ func TestDevelopmentCancelUntilAdoption(t *testing.T) {
 			if !status().CanCancel {
 				t.Fatal("cancel not offered")
 			}
-			if phase == "backup" {
+			if phase == "backup" || phase == "backup_failure" {
 				request("POST", "/test-write", "", 503)
 				unauth := httptest.NewRecorder()
 				gate.ServeHTTP(unauth, httptest.NewRequest(http.MethodPost, route+"/cancel", nil))
@@ -180,12 +208,39 @@ func TestDevelopmentCancelUntilAdoption(t *testing.T) {
 				}
 			}
 			request("POST", route+"/cancel", "", 200)
-			if phase == "backup" {
+			if phase == "backup" || phase == "backup_failure" {
 				request("POST", route+"/cancel", "", 200)
 				if v := status(); !v.Cancelling || !v.CanCancel || v.State != "backing_up" {
 					t.Fatal("backup cancel not pending", v)
 				}
 				request("POST", "/test-write", "", 503)
+			}
+			if phase == "archive_programs" {
+				request("POST", "/test-write", "", 200)
+				if v := status(); !v.Cancelling || v.Backup != nil || v.DevelopmentProgress.Step != phase {
+					t.Fatal("cancellation lost the running snapshot", v)
+				}
+				programPipe.Close() // EOF lets the helper finish compressing the captured bytes.
+			}
+
+			if phase == "preflight" {
+				if _, err := os.Stat(filepath.Join(u.dir, "development", "backup.log")); !os.IsNotExist(err) {
+					t.Fatal("early cancellation started a snapshot", err)
+				}
+			}
+			if phase == "backup_failure" {
+				if err := os.WriteFile(filepath.Join(bin, "pg_dump"), []byte("#!/bin/sh\nexit 7\n"), 0700); err != nil {
+					t.Fatal(err)
+				}
+				close(release)
+				waitForUpdate(t, u, "snapshot failure", func() bool { return status().State == "failed" })
+				v := status()
+				if v.Cancelling || v.Backup != nil || !strings.Contains(v.Error, "7") ||
+					!strings.Contains(v.Error, su(h.userLang(), "development_step_database_dump")) {
+					t.Fatal("cancellation hid the snapshot failure", v)
+				}
+				request("POST", "/test-write", "", 200)
+				return
 			}
 			close(release)
 			waitForUpdate(t, u, "cancelled attempt to finish", func() bool { return status().State == "idle" })
@@ -201,7 +256,7 @@ func TestDevelopmentCancelUntilAdoption(t *testing.T) {
 			if len(persisted.History) != 1 || persisted.History[0].Result != "cancelled" {
 				t.Fatal(persisted.History)
 			}
-			if phase == "backup" {
+			if phase == "backup" || phase == "archive_programs" {
 				v := status()
 				if v.Backup == nil || persisted.DevelopmentBackup == nil || persisted.DevelopmentBackup.ID != v.Backup.ID || persisted.History[0].Backup == nil || persisted.History[0].Backup.ID != v.Backup.ID {
 					t.Fatal("verified receipt missing", v)

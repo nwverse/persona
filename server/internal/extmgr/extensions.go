@@ -104,6 +104,9 @@ type ExtensionView struct {
 	// Attached: an extension running on its own that the manager reaches on its sockets (a remote: install), and how it
 	// is connected.
 	Attached *ExtensionAttached `json:"attached,omitempty"`
+	// MarketSignature: how an extension installed from a market was verified (extension_market_keys.go).
+	// State: official | signed | key_removed | unsigned | market_invalid.
+	MarketSignature *MarketSignatureView `json:"market_signature,omitempty"`
 }
 
 // ExtensionAttached is how an attached extension is connected (docs/extensions/extensions.md "Attached extensions").
@@ -193,6 +196,8 @@ type extensions struct {
 	// switchMu puts the user's Enabled switches one after another (switchExtension, enableChannel): a pack's switch
 	// reads and writes its record of members (#1830). Taken before any registry operation, never inside one.
 	switchMu sync.Mutex
+	// Keeps concurrent config reconciliation and provider cutover from starting two speech processes.
+	speechApplyMu sync.Mutex
 
 	h    *Manager
 	ctx  context.Context
@@ -419,6 +424,7 @@ func (ps *extensions) view(ctx context.Context, p *extension.Extension) Extensio
 	if ps.h != nil {
 		ps.h.extensionUpgrades().decorate(ctx, &v, p)
 		ps.h.decorateMarketMetadata(ctx, &v, p)
+		v.MarketSignature = ps.h.marketSignatureOf(ctx, p)
 		ps.h.decorateInstalledLogo(&v, p)
 	}
 	if m.NodeProgram() != nil {
@@ -786,6 +792,10 @@ func (ps *extensions) runtimeContext(fallback context.Context) context.Context {
 // it starts again if it is there, switched on, compatible and set up. The started process and its setup belong to the
 // manager's lifecycle (runtimeContext), never to a short-lived caller request context.
 func (ps *extensions) apply(ctx context.Context, id string) {
+	if id != "" && id == volcID(ps.modules()) {
+		ps.speechApplyMu.Lock()
+		defer ps.speechApplyMu.Unlock()
+	}
 	ctx = ps.runtimeContext(ctx)
 	ps.mu.Lock()
 	old := ps.byID[id]
@@ -1246,6 +1256,8 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 			return ps.storageCall(ctx, p, method, params)
 		}
 		switch method {
+		case kbImportCheckpoint, kbSentMarkers:
+			return ps.kbProviderCall(ctx, p, hp, settingsEpoch, method, params)
 		case "kb.list", "kb.get", "kb.day", "kb.search", "kb.update", "kb.owner", "kb.recent", "kb.put_recording":
 			return ps.extensionKBCall(ctx, id, method, params)
 		case "assistant.conversations", "assistant.messages", "assistant.memory", assistantwire.MethodAssistantEntriesList: // assistant.read, assistant.memory.read (extension_assistant_read.go)
@@ -1364,7 +1376,13 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 			extensionConnectors.Store(c.ID, p.Record.Source)
 		}
 		cfg := proc.Config{ID: c.ID, Name: c.Name, Manifest: ps.knownOnly(id, connectorManifest(c)), Secrets: secrets, KB: kbase,
-			Logf: ps.logf, Link: link}
+			Logf: ps.logf, Link: link, Identity: &connector.ExtensionIdentity{
+				Extension: p.Record.ID,
+				Version:   p.Record.Version,
+				Source:    p.Record.Source,
+				MarketKey: p.Record.MarketKey,
+				Remote:    p.Record.Remote != nil,
+			}}
 		cfg.RecallNotBefore = hp.recallNotBefore // the program is not asked about a send before this install, whoever asks
 		if p.Record.Granted.GhLogin && ps.h != nil {
 			cfg.GhToken = ps.h.ghTokenFor

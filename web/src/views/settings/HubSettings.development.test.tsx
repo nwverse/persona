@@ -200,6 +200,37 @@ it.each([
   if (step === "database_dump") expect(host.textContent).toContain("Databases 1/2");
 });
 
+it("shows backup preflight before building and the hub reason when it fails", async () => {
+  await mount("backing_up", { development_progress: { phase: "backing_up", step: "preflight",
+    step_index: 1, step_total: 1, elapsed_seconds: 0 } });
+  expect(pipelineNodes("Phase steps")).toEqual([["preflight", "active"]]);
+  expect(host.textContent).toContain("Check backup settings");
+  expect(pipelineNodes("Update stages")).toEqual([
+    ["building", "pending"], ["waiting_idle", "pending"], ["backing_up", "pending"], ["restarting", "pending"],
+  ]);
+  await pushUpdate({ can_cancel: true, cancelling: true });
+  expect(host.textContent).toContain("Cancelling…");
+  expect(host.textContent).not.toContain("Will stop after backup finishes");
+  const reason = "The update stopped at “Check backup settings”. Only the owner may access the backup folder (0700).";
+  await pushUpdate({ state: "failed", development_progress: undefined, error: reason });
+  expect(host.textContent).toContain(reason);
+});
+
+it.each([true, false])("renders snapshot preflight with built-in pause %s", async builtin => {
+  await mount("backing_up", { development: { configured: true, branch: "main", builtin_quiesce: builtin },
+    development_progress: { phase: "backing_up", step: "quiesce", step_index: 2, step_total: builtin ? 6 : 7, elapsed_seconds: 0 } });
+  const steps = pipelineNodes("Phase steps");
+  expect(steps.slice(0, 2)).toEqual([["preflight", "done"], ["quiesce", "active"]]);
+  expect(steps.some(([name]) => name === "resume_writers")).toBe(!builtin);
+});
+
+it("shows writers resumed while the hub packages programs", async () => {
+  const steps = ["preflight", "quiesce", "database_dump", "archive_files", "resume_writers", "archive_programs", "verify_snapshot"];
+  await mount("backing_up", { development_progress: { phase: "backing_up", steps, step: "archive_programs",
+    step_index: 6, step_total: 7, elapsed_seconds: 8 } });
+  expect(pipelineNodes("Phase steps")).toEqual(steps.map((name, i) => [name, i < 5 ? "done" : i === 5 ? "active" : "pending"]));
+});
+
 it("uses the named node before the index and keeps telemetry for an unknown step", async () => {
   const p = { phase: "building", step: "go_build", step_index: 1, step_total: 6, elapsed_seconds: 5,
     item_label: "personad (linux-amd64)", percent: 75, item_done: 3, item_total: 4 } as const;

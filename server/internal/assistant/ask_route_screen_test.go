@@ -150,6 +150,22 @@ func TestSupervisorScreenAllowAndTheUsersDialogs(t *testing.T) {
 	e.settle()
 }
 
+func TestExternalImportsScreenIsUserOnly(t *testing.T) {
+	ix := proto.Interaction{Kind: proto.IxScreen, Dialog: &screen.Dialog{
+		Question: "Allow external CLAUDE.md file imports?",
+		Options: []screen.Option{
+			{Key: "1", Label: " Yes, allow external imports "},
+			{Key: "2", Label: "No, continue without external imports"},
+		},
+	}}
+	if why := userScreen(ix); why != "authorizes the agent's access, which only the user grants" {
+		t.Fatalf("userScreen = %q", why)
+	}
+	if !routable(ix) || terminalQuestion(ix) {
+		t.Fatal("the supervisor must escalate the dialog to the user")
+	}
+}
+
 func TestSupervisedScreenAndUserScreen(t *testing.T) {
 	ix := commandScreen("id", "s")
 	if !supervisedScreen(ix) || !routable(ix) || userScreen(ix) != "" || terminalQuestion(ix) {

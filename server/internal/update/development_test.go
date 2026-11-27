@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -25,7 +26,7 @@ func TestDevelopmentProgressAcceptsOnlySafeFields(t *testing.T) {
 child process output
 {"phase":"building","step":"manifest","step_index":6,"step_total":6,"elapsed_seconds":42}`
 	var events []DevelopmentProgress
-	readDevelopmentProgress(strings.NewReader(input), "build", false, func(p DevelopmentProgress) {
+	readDevelopmentProgress(strings.NewReader(input), "build", func(p DevelopmentProgress) {
 		events = append(events, p)
 	})
 	if len(events) != 2 || events[0].ItemLabel != "personad (linux-amd64)" || events[0].Percent == nil || *events[0].Percent != 0 ||
@@ -71,26 +72,43 @@ while not pathlib.Path(os.environ["FIXTURE_DUMP_CONTINUE"]).exists():
 		t.Fatal(err)
 	}
 	binary := filepath.Join(dir, "personad")
-	if err := os.WriteFile(binary, []byte("fixture binary"), 0700); err != nil {
+	if err := os.WriteFile(binary, []byte("pinned binary"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	var saved DevelopmentBackup
 	var events []DevelopmentProgress
-	var gateErr error
+	var gateErr, resumeErr error
+	resume := func() {
+		// Packaging must finish from the pinned file after its live name goes away.
+		resumeErr = os.Remove(binary)
+	}
 	err = DevelopmentRequest(ctx, &DevelopmentConfig{Backup: DevelopmentBackupConfig{Builtin: true}}, dir, "backup",
 		map[string]any{"runtime": home, "candidate": DevelopmentCandidate{Commit: strings.Repeat("a", 40)},
 			"platform": "linux-amd64", "executables": map[string]string{"personad": binary}},
-		&saved, func(p DevelopmentProgress) {
+		&saved, resume, func(p DevelopmentProgress) {
 			events = append(events, p)
 			if p.Step == "database_dump" && p.ItemDone != nil && *p.ItemDone == 0 &&
 				p.BytesDone != nil && *p.BytesDone == 1029 && p.BytesPerSecond != nil && *p.BytesPerSecond > 0 {
 				gateErr = os.WriteFile(dumped, nil, 0600)
 			}
 		})
+	if resumeErr != nil {
+		t.Fatal(resumeErr)
+	}
 	if err != nil || gateErr != nil || saved.ID == "" || saved.Retained != 1 {
 		t.Fatalf("backup result %+v, helper %v, gate %v", saved, err, gateErr)
+	}
+	var steps []string
+	for _, p := range events {
+		steps = append(steps, p.Step)
+		if p.Steps[p.StepIndex-1] != p.Step {
+			t.Fatalf("step order differs from progress: %+v", p)
+		}
+	}
+	if got := slices.Compact(steps); !slices.Equal(got, []string{"preflight", "quiesce", "database_dump", "archive_files", "resume_writers", "archive_programs", "verify_snapshot"}) {
+		t.Fatalf("backup steps: %v", got)
 	}
 	if _, err := os.Stat(dumped); err != nil {
 		t.Fatal("did not receive live dump bytes", err)
@@ -104,6 +122,47 @@ while not pathlib.Path(os.environ["FIXTURE_DUMP_CONTINUE"]).exists():
 	log, logErr := os.ReadFile(filepath.Join(dir, "backup.log"))
 	if err != nil || logErr != nil || !strings.Contains(string(log), private) {
 		t.Fatalf("missing private diagnostics: %v, %v", err, logErr)
+	}
+}
+
+func TestDevelopmentBackupFailureRotation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("development helper needs Unix")
+	}
+	dir, home := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "hub.json"), []byte(`{"database_url":"fixture"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &DevelopmentConfig{Backup: DevelopmentBackupConfig{Builtin: true, Directory: "relative"}}
+	input := map[string]any{"runtime": home}
+	run := func(reason string) {
+		t.Helper()
+		var steps []string
+		err := DevelopmentRequest(context.Background(), cfg, dir, "backup", input, &DevelopmentBackup{}, nil, func(p DevelopmentProgress) {
+			steps = append(steps, p.Step)
+		})
+		var failure backupFailure
+		if !errors.As(err, &failure) || failure.Reason != reason || strings.Join(steps, ",") != "preflight" {
+			t.Fatalf("unexpected failure or steps: reason %q, want %q; steps %v; err %v", failure.Reason, reason, steps, err)
+		}
+	}
+	run("directory")
+	old, err := os.ReadFile(filepath.Join(dir, "backup.log"))
+	if err != nil || !strings.Contains(string(old), "invalid backup directory") {
+		t.Fatal("missing first failure", err)
+	}
+	cfg.Backup.Directory = ""
+	// Rejected before libpq is loaded (a NUL byte), so the case is the same on a host without libpq; the secret must
+	// still stay out of the log.
+	input["hub_database"] = "password=fixture-secret\x00invalid-key=private"
+	run("database")
+	previous, err := os.ReadFile(filepath.Join(dir, "backup.prev.log"))
+	if err != nil || string(previous) != string(old) {
+		t.Fatal("previous log was not preserved", err)
+	}
+	current, err := os.ReadFile(filepath.Join(dir, "backup.log"))
+	if err != nil || !strings.Contains(string(current), "invalid database connection") || strings.Contains(string(current), "fixture-secret") {
+		t.Fatal("incorrect current log", err)
 	}
 }
 
@@ -277,7 +336,7 @@ else:
 	go func() {
 		done <- DevelopmentRequest(ctx, &DevelopmentConfig{}, dir, "build", map[string]any{
 			"candidate": DevelopmentCandidate{Commit: strings.Repeat("a", 40)},
-		}, &struct{}{}, nil)
+		}, &struct{}{}, nil, nil)
 	}()
 	for {
 		if _, err := os.Stat(filepath.Join(bin, "ready")); err == nil {

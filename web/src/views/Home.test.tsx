@@ -421,6 +421,28 @@ describe("compact rows", () => {
     expect(html).toContain("@container");
   });
 
+  it("lets a section's only card fill a two-column row, capped at two of three in every grid", () => {
+    const a = agent(1, 0, "needs_you");
+    fake.todos = [{ id: "only", title: "Only task", created_at: "2026-11-01T00:00:00Z", updated_at: "2026-11-01T00:00:00Z" }];
+    let html: string;
+    try {
+      html = render([a, agent(2, 0, "working")], [{ id: "p", kind: "permission", machine_id: "mac", session_id: a.session_id, tool_name: "Bash" } as Interaction]);
+    } finally {
+      fake.todos = [];
+    }
+    const grids = [...html.matchAll(/class="([^"]*\bgrid\b[^"]*)"/g)].map((m) => m[1]!.replaceAll("&amp;", "&").replaceAll("&gt;", ">"));
+    const rows = grids.filter((c) => c.includes("@min-[60rem]:grid-cols-2") && c.includes("@min-[100rem]:grid-cols-3") && c.includes("items-start"));
+    const tasks = grids.filter((c) => c.includes("@min-[60rem]:grid-cols-2") && c.includes("@min-[100rem]:grid-cols-3") && c.includes("items-stretch"));
+    const cards = grids.filter((c) => c.includes("@min-[84rem]:grid-cols-2") && c.includes("@min-[120rem]:grid-cols-3"));
+    expect([rows.length, tasks.length, cards.length]).toEqual([1, 1, 1]);
+    expect(rows[0]).toContain("[&>:only-child]:col-span-full");
+    expect(rows[0]).toContain("@min-[100rem]:[&>:only-child]:col-span-2");
+    expect(tasks[0]).toContain("[&>:only-child]:col-span-full");
+    expect(tasks[0]).toContain("@min-[100rem]:[&>:only-child]:col-span-2");
+    expect(cards[0]).toContain("[&>:only-child]:col-span-full");
+    expect(cards[0]).toContain("@min-[120rem]:[&>:only-child]:col-span-2");
+  });
+
   it("keeps a short space name that only starts the title, and drops a repeat", () => {
     expect(rowTags("app store listing", ["Mac", "app", "#2"])).toEqual(["Mac", "app", "#2"]);
     expect(rowTags("Fix the login redirect loop", ["Mac", "web", "Fix the login redir…"])).toEqual(["Mac", "web"]);

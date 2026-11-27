@@ -2,11 +2,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
 import { EXTENSIONS_CHANGED } from "./extension-prompts";
 import {
-  checkError, clearedSecrets, clearExtensionSecret, compact, configError, fieldTitle, isDirty, listItems, listExtensions, listSummary, numberProblems, placeholder, extensionDetail,
+  checkError, clearedSecrets, clearExtensionSecret, compact, configError, fieldTitle, isDirty, listItems, listExtensions, listSummary, numberProblems, placeholder, prefillDraft, extensionDetail,
   machineStatus, extensionState, extensionTone, readNumber, rebaseDraft, runNote, same, secretState, setupSecret, setAt, setExtensionConfig, setExtensionConfigPreservingEntries, setExtensionEnabled, setExtensionSecret, sourceText,
   stateLine, valueAt, morePermissions, extensionUpgrades, setExtensionAutoUpgrade, setExtensionUpgrades, upgradeAction, upgradeDetail, upgradeNote,
   type HubExtension, type ExtensionField, type ExtensionUpgrade, type JsonObject, nodeProgramStatus, exitText, saveFooter, channelOf, sandboxState,
-  entryID, entryItems, entryKey, fieldPath, isEntryList,
+  entryID, entryItems, entryKey, fieldPath, isEntryList, extensionTypeText, permissionTitle, permissionDetail,
 } from "./extensions";
 
 const extension = (status: string, extra: Partial<HubExtension> = {}): HubExtension => ({ id: `p-${status}`, name: status, kind: "connectors", status, ...extra });
@@ -86,6 +86,19 @@ describe("扩展的文字", () => {
     expect(stateLine(extension("running", { source: "hub.json" }))).toBe("启动 · manager.json");
     expect(sourceText("other")).toBeUndefined();
   });
+  it("names extension kinds and permissions in words, without hub keys or socket filenames", () => {
+    expect(extensionTypeText("connectors")).toBe("连接器");
+    expect(extensionTypeText("agent_sources")).toBe("Agent 来源");
+    expect(extensionTypeText("a_new_point")).toBe("其他扩展");
+    expect(extensionTypeText()).toBeUndefined();
+    expect(permissionTitle({ key: "network", title: "访问网络" })).toBe("它可联系的网站");
+    expect(permissionTitle({ key: "agent_runtimes", title: "接入节点" })).toBe("在 Agents 里显示它的 Agent");
+    expect(permissionTitle({ key: "secrets", title: "使用密钥" })).toBe("使用密钥");
+    const runtime = permissionDetail({ key: "agent_runtimes", detail: "only runtime.sock" });
+    expect(runtime).toContain("本地 Agent 服务");
+    expect(runtime).not.toContain("runtime.sock");
+    expect(permissionDetail({ key: "network", detail: "notes.example.com" })).toBe("notes.example.com");
+  });
   it("says whether an attached extension is online, since when, and the version its program says", () => {
     const at = new Date();
     at.setHours(10, 42, 0, 0);
@@ -143,6 +156,22 @@ describe("扩展的文字", () => {
     expect(checkError(new ApiError(409, "设置刚被改过", { code: "settings_moved" }))).toBe("设置刚被改过");
     expect(checkError(new ApiError(400, "bad", { code: "invalid_config" }))).toBeNull();
     expect(checkError(new Error("check_failed"))).toBeNull();
+  });
+});
+
+describe("a proposed settings prefill", () => {
+  it("fills only form fields, keeps groups nested and never enters ordinary entry lists", () => {
+    const fields: ExtensionField[] = [
+      { name: "machine", type: "string" },
+      { name: "repos", type: "array", items: { name: "items", type: "string" } },
+      { name: "limits", type: "object", fields: [{ name: "max", type: "integer" }, { name: "label", type: "string" }] },
+      { name: "accounts", type: "array", secret: { name: "entry_key", title: "Key" }, items: { name: "items", type: "object", fields: [{ name: "name", type: "string" }] } },
+    ];
+    expect(prefillDraft(
+      { machine: "old", limits: { label: "Saved" }, accounts: [{ _id: "one", name: "One" }] },
+      { machine: "new", repos: ["~/code"], limits: { max: 4, unknown: "no" }, accounts: [{ name: "Other" }], secret: "no", unknown: "no" },
+      fields,
+    )).toEqual({ machine: "new", repos: ["~/code"], limits: { label: "Saved", max: 4 }, accounts: [{ _id: "one", name: "One" }] });
   });
 });
 
