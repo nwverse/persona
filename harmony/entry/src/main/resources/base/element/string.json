@@ -9199,6 +9199,478 @@
     {
       "name": "machine_cpu_load",
       "value": "CPU & Load"
+    },
+    {
+      "name": "composer_queue_edit",
+      "value": "Take Back to Edit"
+    },
+    {
+      "name": "composer_queue_move_up",
+      "value": "Move Up"
+    },
+    {
+      "name": "composer_queue_move_down",
+      "value": "Move Down"
+    },
+    {
+      "name": "composer_queue_taken_back",
+      "value": "Moved back to the input box"
+    },
+    {
+      "name": "composer_queue_deleted",
+      "value": "Removed from the queue"
+    },
+    {
+      "name": "composer_queue_arrives_turn_end",
+      "value": "Arrives when this turn ends"
+    },
+    {
+      "name": "composer_queue_arrives_next",
+      "value": "Arrives with next message"
+    },
+    {
+      "name": "starred_messages",
+      "value": "Starred Messages"
+    },
+    {
+      "name": "star_message",
+      "value": "Star"
+    },
+    {
+      "name": "unstar_message",
+      "value": "Unstar"
+    },
+    {
+      "name": "starred_badge",
+      "value": "Starred"
+    },
+    {
+      "name": "starred_saved_toast",
+      "value": "Message starred"
+    },
+    {
+      "name": "starred_removed_toast",
+      "value": "Message unstarred"
+    },
+    {
+      "name": "starred_search_placeholder",
+      "value": "Search Starred Messages"
+    },
+    {
+      "name": "starred_empty_title",
+      "value": "No Starred Messages"
+    },
+    {
+      "name": "starred_empty_message",
+      "value": "Touch and hold a message to star it."
+    },
+    {
+      "name": "starred_unavailable_title",
+      "value": "Starred Messages Are Unavailable"
+    },
+    {
+      "name": "starred_unavailable_message",
+      "value": "Update the hub to use starred messages with this assistant."
+    },
+    {
+      "name": "starred_load_failed",
+      "value": "Couldn't Load Starred Messages"
+    },
+    {
+      "name": "starred_search_empty",
+      "value": "No matching starred messages"
+    },
+    {
+      "name": "starred_open_original",
+      "value": "Open Original"
+    },
+    {
+      "name": "starred_original_unavailable",
+      "value": "The original message is unavailable."
+    },
+    {
+      "name": "starred_original_check_failed",
+      "value": "Couldn't check the original message. Try again."
+    },
+    {
+      "name": "starred_omitted_chars",
+      "value": "{count} additional characters"
+    },
+    {
+      "name": "export_chat",
+      "value": "Export Chat"
+    },
+    {
+      "name": "export_include_timestamps",
+      "value": "Include Timestamps"
+    },
+    {
+      "name": "export_include_work_steps",
+      "value": "Include Work Steps"
+    },
+    {
+      "name": "export_preview_count",
+      "value": "{count} messages"
+    },
+    {
+      "name": "export_truncated_badge",
+      "value": "{count} truncated"
+    },
+    {
+      "name": "export_truncated_notice",
+      "value": "{omitted} characters truncated"
+    },
+    {
+      "name": "export_copy_markdown",
+      "value": "Copy Markdown"
+    },
+    {
+      "name": "export_save_share",
+      "value": "Save / Share"
+    },
+    {
+      "name": "export_copied_toast",
+      "value": "Markdown copied"
+    },
+    {
+      "name": "archived_chats",
+      "value": "Archived"
+    },
+    {
+      "name": "unarchive",
+      "value": "Unarchive"
+    },
+    {
+      "name": "unarchived_toast",
+      "value": "Unarchived"
+    },
+    {
+      "name": "archived_search_placeholder",
+      "value": "Search Archived Chats"
+    },
+    {
+      "name": "archived_empty_title",
+      "value": "No Archived Chats"
+    },
+    {
+      "name": "archived_empty_message",
+      "value": "Archived conversations will appear here. Tap one to open or unarchive it."
+    },
+    {
+      "name": "archived_search_empty",
+      "value": "No matching archived chats"
+    },
+    {
+      "name": "fork_continue_new_chat",
+      "value": "Continue in New Chat"
+    },
+    {
+      "name": "fork_chat_done_toast",
+      "value": "Opened branch in new chat"
+    },
+    {
+      "name": "undo",
+      "value": "Undo"
+    },
+    {
+      "name": "assistant",
+      "value": "Assistant"
+    },
+    {
+      "name": "token_usage_title",
+      "value": "Token Usage"
+    },
+    {
+      "name": "token_usage_quick_subtitle",
+      "value": "12-week heatmap & projects"
+    },
+    {
+      "name": "token_usage_unsupported",
+      "value": "Update hub to view token usage"
+    },
+    {
+      "name": "token_usage_total_12w",
+      "value": "Last 12 weeks"
+    },
+    {
+      "name": "token_usage_hit_rate",
+      "value": "Cache Hit"
+    },
+    {
+      "name": "token_usage_input",
+      "value": "Input"
+    },
+    {
+      "name": "token_usage_output",
+      "value": "Output"
+    },
+    {
+      "name": "token_usage_cache_read",
+      "value": "Cache Read"
+    },
+    {
+      "name": "token_usage_cache_write",
+      "value": "Cache Write"
+    },
+    {
+      "name": "token_usage_heatmap_title",
+      "value": "Token Activity"
+    },
+    {
+      "name": "token_usage_heatmap_tap_hint",
+      "value": "Tap a day"
+    },
+    {
+      "name": "token_usage_less",
+      "value": "Less"
+    },
+    {
+      "name": "token_usage_more",
+      "value": "More"
+    },
+    {
+      "name": "token_usage_by_project",
+      "value": "Usage by Project"
+    },
+    {
+      "name": "token_usage_no_projects",
+      "value": "No project usage in this range"
+    },
+    {
+      "name": "token_usage_range_today",
+      "value": "Today"
+    },
+    {
+      "name": "token_usage_range_3d",
+      "value": "3d"
+    },
+    {
+      "name": "token_usage_range_7d",
+      "value": "7d"
+    },
+    {
+      "name": "token_usage_by_machine",
+      "value": "By Computer"
+    },
+    {
+      "name": "token_usage_by_model",
+      "value": "By Model"
+    },
+    {
+      "name": "token_usage_share",
+      "value": "Share"
+    },
+    {
+      "name": "token_usage_project_home",
+      "value": "Home Folder"
+    },
+    {
+      "name": "token_usage_project_temp",
+      "value": "Temporary Folders"
+    },
+    {
+      "name": "token_usage_project_assistant",
+      "value": "Assistant"
+    },
+    {
+      "name": "token_usage_project_unknown",
+      "value": "Unknown Folder"
+    },
+    {
+      "name": "todo_wait_heading",
+      "value": "Waiting"
+    },
+    {
+      "name": "todo_wait_from_step",
+      "value": "From step: {step}"
+    },
+    {
+      "name": "todo_wait_waiting_on",
+      "value": "Waiting on"
+    },
+    {
+      "name": "todo_wait_blocked_by",
+      "value": "Blocked by"
+    },
+    {
+      "name": "todo_wait_details",
+      "value": "Details"
+    },
+    {
+      "name": "todo_wait_wakes_when",
+      "value": "Wakes when"
+    },
+    {
+      "name": "todo_wait_scheduled_wake",
+      "value": "Scheduled wake"
+    },
+    {
+      "name": "todo_wait_check_in_due_label",
+      "value": "Check-in due"
+    },
+    {
+      "name": "todo_wait_until_label",
+      "value": "Until"
+    },
+    {
+      "name": "todo_wait_sent_via",
+      "value": "Sent via {channel}"
+    },
+    {
+      "name": "todo_wait_open_message",
+      "value": "Open Message"
+    },
+    {
+      "name": "todo_wait_view_pr",
+      "value": "View PR"
+    },
+    {
+      "name": "todo_wait_open_source",
+      "value": "Open Source"
+    },
+    {
+      "name": "todo_wait_waiting_since",
+      "value": "Waiting since {time}"
+    },
+    {
+      "name": "todo_wait_kind_person_reply",
+      "value": "Waiting for reply"
+    },
+    {
+      "name": "todo_wait_kind_merge_review",
+      "value": "Waiting for review"
+    },
+    {
+      "name": "todo_wait_kind_pr_merge",
+      "value": "Waiting to merge"
+    },
+    {
+      "name": "todo_wait_kind_external_event",
+      "value": "Waiting on external event"
+    },
+    {
+      "name": "todo_wait_kind_date",
+      "value": "Waiting until date"
+    },
+    {
+      "name": "todo_wait_kind_todo_handoff",
+      "value": "Waiting on another to-do"
+    },
+    {
+      "name": "todo_wait_kind_agent",
+      "value": "Waiting on another Agent"
+    },
+    {
+      "name": "todo_wait_kind_usage_limit",
+      "value": "Usage limit reached"
+    },
+    {
+      "name": "todo_wait_kind_computer_offline",
+      "value": "Computer offline"
+    },
+    {
+      "name": "todo_wait_kind_scheduled_report",
+      "value": "Scheduled report"
+    },
+    {
+      "name": "todo_wait_kind_parked",
+      "value": "Parked"
+    },
+    {
+      "name": "todo_wait_blocker_review_required",
+      "value": "Needs review"
+    },
+    {
+      "name": "todo_wait_blocker_changes_requested",
+      "value": "Changes requested"
+    },
+    {
+      "name": "todo_wait_blocker_checks_pending",
+      "value": "Checks running"
+    },
+    {
+      "name": "todo_wait_blocker_checks_failing",
+      "value": "Checks failing"
+    },
+    {
+      "name": "todo_wait_blocker_conflicts",
+      "value": "Merge conflicts"
+    },
+    {
+      "name": "todo_wait_usage_limit_target",
+      "value": "{target} reached its usage limit"
+    },
+    {
+      "name": "todo_wait_waiting_to_merge_target",
+      "value": "Waiting to merge {target}"
+    },
+    {
+      "name": "todo_wait_waiting_on_target",
+      "value": "Waiting on {target}"
+    },
+    {
+      "name": "todo_wait_back_at",
+      "value": "Back {time}"
+    },
+    {
+      "name": "todo_wait_wakes_at",
+      "value": "Wakes {time}"
+    },
+    {
+      "name": "todo_wait_check_in_due",
+      "value": "Check-in due ({time})"
+    },
+    {
+      "name": "todo_wait_until_at",
+      "value": "Until {time}"
+    },
+    {
+      "name": "todo_wait_since_at",
+      "value": "Since {time}"
+    },
+    {
+      "name": "personal_agents",
+      "value": "Personal Agents"
+    },
+    {
+      "name": "personal_agents_hide",
+      "value": "Hide"
+    },
+    {
+      "name": "personal_agents_restore",
+      "value": "Restore"
+    },
+    {
+      "name": "personal_agents_removed",
+      "value": "Removed ({count})"
+    },
+    {
+      "name": "knowledge_minutes_debates",
+      "value": "Disagreements"
+    },
+    {
+      "name": "knowledge_minutes_debate_open",
+      "value": "Open"
+    },
+    {
+      "name": "knowledge_minutes_debate_settled",
+      "value": "Settled"
+    },
+    {
+      "name": "knowledge_minutes_debate_outcome",
+      "value": "Outcome"
+    },
+    {
+      "name": "kb_chat_in_inbox",
+      "value": "In Inbox"
+    },
+    {
+      "name": "kb_chat_inbox_done_count",
+      "value": "{count} done"
+    },
+    {
+      "name": "kb_chat_knowledge_page",
+      "value": "Knowledge Page"
     }
   ]
 }

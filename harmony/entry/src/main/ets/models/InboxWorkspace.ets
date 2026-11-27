@@ -306,6 +306,7 @@ export class InboxWorkspace {
   @Trace items: ResourceRow[] = [];
   @Trace selected: ResourceRow = new ResourceRow();
   @Trace detail: Record<string, Object> = {};
+  @Trace kbChat: Record<string, Object> = {};
   @Trace sourceFilter: string = 'all';
   @Trace accountFilter: string = 'all';
   @Trace kindFilter:string = '';
@@ -807,6 +808,7 @@ export class InboxWorkspace {
     this.threadReplyTo = ''; this.threadReply = false; this.handoffDraft = ''; this.handoffBusy = false;
     this.referenceMode = false; this.referenceThreadId = ''; this.referenceThreadTitle = '';
     this.currentThreadRootMessage = ''; this.currentThreadCanReply = false; this.referenceThreadLoaded = false;
+    this.kbChat = {};
   }
 
   private capture(row: ResourceRow | undefined = this.selected): OwnerSnapshot {
@@ -1082,6 +1084,8 @@ export class InboxWorkspace {
       const updated = this.detailRow(data, row);
       if (updated.id && updated.id !== row.id) { this.error = 'identity_changed'; return; }
       updated.id = row.id; this.selected = updated; this.selectedKey = updated.key(); this.detail = data;
+      const topKbChat = Wire.object(result, 'kb_chat');
+      this.kbChat = Object.keys(topKbChat).length ? topKbChat : Wire.object(data, 'kb_chat');
       const nextTargetRevision = targetRevision(updated, data);
       if (this.detailTargetRevision) this.replyTargetChanged = this.detailTargetRevision !== nextTargetRevision;
       this.detailTargetRevision = nextTargetRevision;

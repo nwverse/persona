@@ -117,8 +117,18 @@ describe("窗口外观风格", () => {
     expect(localStorage.getItem("persona.surface-style")).toBe("liquid-glass");
     expect(document.documentElement.dataset.surfaceStyle).toBe("liquid-glass");
     expect(document.documentElement.dataset.desktopGlass).toBe("1");
-    expect(document.documentElement.style.getPropertyValue("--glass-t")).toBe("0.68");
+    expect(document.documentElement.style.getPropertyValue("--glass-t")).toBe("0.75");
     expect(setSurface).toHaveBeenLastCalledWith("liquid-glass");
+
+    setGlassTranslucency(0);
+    expect(glassTranslucency()).toBe(0);
+    expect(localStorage.getItem("persona.glass-translucency")).toBe("0");
+    expect(document.documentElement.style.getPropertyValue("--glass-t")).toBe("0.00");
+
+    setGlassTranslucency(100);
+    expect(glassTranslucency()).toBe(100);
+    expect(localStorage.getItem("persona.glass-translucency")).toBe("100");
+    expect(document.documentElement.style.getPropertyValue("--glass-t")).toBe("1.00");
 
     setGlassTranslucency(84);
     expect(glassTranslucency()).toBe(84);
@@ -127,7 +137,7 @@ describe("窗口外观风格", () => {
 
     setGlassTranslucency(DEFAULT_GLASS_TRANSLUCENCY);
     expect(localStorage.getItem("persona.glass-translucency")).toBeNull();
-    expect(document.documentElement.style.getPropertyValue("--glass-t")).toBe("0.68");
+    expect(document.documentElement.style.getPropertyValue("--glass-t")).toBe("0.75");
 
     setSurfaceStyle("default");
     expect(localStorage.getItem("persona.surface-style")).toBeNull();

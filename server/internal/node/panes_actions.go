@@ -142,13 +142,16 @@ func (n *Node) closePane(ctx context.Context, pane string) error {
 		defer unlock()
 		return n.close(ctx, id)
 	}
-	if id := p.Tokens[personaTabToken]; validID(id) {
-		release := n.recovery.lock(id)
+	n.mu.Lock()
+	mark := n.personaTabLocked(p)
+	n.mu.Unlock()
+	if validID(mark) {
+		release := n.recovery.lock(mark)
 		defer release()
-		if err := n.saveStopCause(ctx, id, proto.StopUser); err != nil {
+		if err := n.saveStopCause(ctx, mark, proto.StopUser); err != nil {
 			return err
 		}
-		defer n.state.stopped(id, proto.StopUser)
+		defer n.state.stopped(mark, proto.StopUser)
 	}
 	org, ref, err := paneCap[host.Organizer](n, pane)
 	if err != nil {

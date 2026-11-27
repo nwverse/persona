@@ -153,7 +153,7 @@ describe("New agent: presets (#2225)", () => {
     tiers = [{ name: "deepest", launcher: "fast", model: "m-review", effort: "max" }];
     await open();
     await pick("preset:deepest");
-    expect(hint()?.textContent).toBe("这里用不上：Max，会按启动器或模型自己的设置运行。");
+    expect(hint()?.textContent).toBe("以下设置在此不适用：Max，将沿用启动器或模型自身的设置。");
     act(() => button("启动").click());
     expect(launched[0]).toMatchObject({ launcher: "fast", model: "m-review" });
     expect(launched[0]?.effort).toBeUndefined();
@@ -205,7 +205,7 @@ describe("New agent: presets (#2225)", () => {
     await openPanel();
     const review = preset("review")!;
     expect(review.getAttribute("aria-disabled")).toBe("true");
-    expect(review.title).toBe("Key 或登录被拒绝了");
+    expect(review.title).toBe("Key 或登录凭证已被拒绝");
     act(() => review.click());
     await flush();
     expect(panel()).not.toBeNull();

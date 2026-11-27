@@ -44,7 +44,7 @@ const type = (value: string) =>
   });
 
 const PW = "correct horse 7";
-const REFUSED = "请在卡片上答复：填密码后点运行，或拒绝";
+const REFUSED = "请在卡片上操作：输入密码后点击「运行」，或点击「拒绝」。";
 const COMMANDS = [
   "sudo -S -k -p '' launchctl bootstrap system /Library/LaunchDaemons/com.example.backup.plist",
   'sudo -S -k -p \'\' sh -c "echo  two  spaces > /tmp/x"',
@@ -62,7 +62,7 @@ const ENV_WARNINGS = [
   },
   {
     lang: "zh-Hans",
-    warning: "警告：你输入的密码会通过 PERSONA_SECRET 直接传给上面列出的每一条命令。编码后的输出可能绕过脱敏。",
+    warning: "警告：你输入的密码将通过 PERSONA_SECRET 直接传递给以上列出的每条命令，经过编码的输出可能绕过脱敏保护。",
     decline: "拒绝",
     run: "运行",
   },
@@ -317,8 +317,8 @@ describe("密码卡片（secret_run）", () => {
       render(card({ delivery }));
       expect(host.querySelector('[role="alert"]')).toBeNull();
       expect(host.textContent).not.toContain("PERSONA_SECRET");
-      expect(host.textContent).not.toContain("编码后的输出");
-      expect(host.textContent).toContain("只用这一次，不会保存，助手也看不到。");
+      expect(host.textContent).not.toContain("经过编码的输出");
+      expect(host.textContent).toContain("仅本次使用，不会保存，助手也无法查看。");
     }
   });
 

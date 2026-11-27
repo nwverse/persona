@@ -20,6 +20,7 @@ import (
 	"github.com/nwverse/persona/server/internal/apierr"
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/i18n"
@@ -650,6 +651,15 @@ func (b *BusHub) httpHandler(s *Service) http.Handler {
 	return b.httpH
 }
 
+// handleAssistantRequest binds a handler to its descriptor and uses the bus's existing decoder.
+func handleAssistantRequest[P, R any](ctx context.Context, _ buswire.Method[P, R], decode func(any) error, run func(context.Context, P) (R, error)) (any, error) {
+	var p P
+	if err := decode(&p); err != nil {
+		return nil, err
+	}
+	return run(ctx, p)
+}
+
 func (b *BusHub) request(ctx context.Context, method string, params json.RawMessage) (reply any, requestErr error) {
 	b.waitHello(ctx)
 	s := b.service()
@@ -704,17 +714,9 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 		}
 		return s.Action(ctx, p)
 	case assistantwire.MethodTodoHandoff:
-		var p TodoHandoff
-		if err := decode(&p); err != nil {
-			return nil, err
-		}
-		return s.TodoHandoff(ctx, p)
+		return handleAssistantRequest(ctx, assistantwire.TodoHandoffMethod, decode, s.TodoHandoff)
 	case assistantwire.MethodTodoLink:
-		var p TodoLinkParams
-		if err := decode(&p); err != nil {
-			return nil, err
-		}
-		return s.TodoLink(ctx, p)
+		return handleAssistantRequest(ctx, assistantwire.TodoLinkMethod, decode, s.TodoLink)
 	case assistantwire.MethodStart:
 		var p StartParams
 		if err := decode(&p); err != nil {
@@ -726,11 +728,9 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 		}
 		return map[string]any{"session": sess}, nil
 	case assistantwire.MethodProjectReviewOwnerInput:
-		var p assistantwire.ProjectReviewOwnerInput
-		if err := decode(&p); err != nil {
-			return nil, err
-		}
-		return struct{}{}, s.projectReviewOwnerInput(ctx, p)
+		return handleAssistantRequest(ctx, assistantwire.ProjectReviewOwnerInputMethod, decode, func(ctx context.Context, p assistantwire.ProjectReviewOwnerInput) (buswire.None, error) {
+			return buswire.None{}, s.projectReviewOwnerInput(ctx, p)
+		})
 	case assistantwire.MethodSendParams:
 		var p SendParams
 		if err := decode(&p); err != nil {

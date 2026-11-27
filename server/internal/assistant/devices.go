@@ -68,6 +68,9 @@ type Devices interface {
 	// pace-based headroom a tier's candidates are scored by (candidate_headroom.go). Read-only, from the same cache as
 	// CapacitySnapshot; nil when nothing is known.
 	UsageAccounts(ctx context.Context) []proto.UsageAccount
+	// UsageGatewayAccounts is the account-pool gateways' account list as last read (proto.GatewayAccounts), for a
+	// gateway pool's headroom when its accounts carry no window numbers (candidate_headroom.go). Never reads a gateway.
+	UsageGatewayAccounts() proto.GatewayAccounts
 	// GatewayRetryAt uses a bound, complete gateway inventory with fresh account observations. Zero means no hold.
 	GatewayRetryAt(source, provider string, now time.Time) time.Time
 	// Follow has the node send the manager a session's items and text as they are made (on), or stop.
@@ -133,6 +136,7 @@ func (s *Service) nodeAnswer(ctx context.Context, machine, method string, params
 		RecoveryID      string                           `json:"recovery_id"`
 		RecoveryOnly    bool                             `json:"recovery_only"`
 		PrepareRecovery bool                             `json:"prepare_recovery"`
+		Query           string                           `json:"query"`
 		Ack             []assistantwire.ViewErrorReceipt `json:"ack"`
 	}
 	switch method {
@@ -198,7 +202,7 @@ func (s *Service) nodeAnswer(ctx context.Context, machine, method string, params
 		if !s.assistantCaller(ctx, machine, p.SessionID) {
 			return ContextResult{}, true, nil
 		}
-		return s.Context(ctx, ContextParams{SessionID: p.SessionID, MachineID: machine, Ack: p.Ack, RecoveryID: p.RecoveryID, RecoveryOnly: p.RecoveryOnly, PrepareRecovery: p.PrepareRecovery}), true, nil
+		return s.Context(ctx, ContextParams{SessionID: p.SessionID, MachineID: machine, Ack: p.Ack, RecoveryID: p.RecoveryID, RecoveryOnly: p.RecoveryOnly, PrepareRecovery: p.PrepareRecovery, Query: p.Query}), true, nil
 	}
 	return nil, false, nil
 }
