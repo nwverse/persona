@@ -1062,6 +1062,15 @@ func (s *Service) digestEntryRecheck(ctx context.Context, g superviseSignal, web
 			return prompts.SuperviseEntry{}, false // told by another message meanwhile (a later decision's)
 		}
 	case sigOrphaned:
+		if g.Orphan == orphanQueued {
+			p, i, err := s.currentPlanAssignment(ctx, t)
+			if err != nil || orphanWaitsOnDecision(t) || s.taskStartOnWay(t.ID) {
+				return prompts.SuperviseEntry{}, false
+			}
+			if q, ok := queuedTaskOrphan(p.ID, p.Tasks[i], time.Now()); !ok || q.key != g.Key {
+				return prompts.SuperviseEntry{}, false
+			}
+		}
 		if g.WorkerSet != "" {
 			if st != "" && st != reviewRework {
 				return prompts.SuperviseEntry{}, false

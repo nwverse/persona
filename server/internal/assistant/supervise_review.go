@@ -1086,6 +1086,15 @@ func (s *Service) reviewDoneTodoLocked(ctx context.Context, id, reason string, a
 	}
 	return true, func() {
 		s.todoRowSet(ctx, doneKeys)
+		if before.failedStart() {
+			if p, _, err := s.currentPlanAssignment(ctx, before); err == nil {
+				s.tasks.planEdits.acquire(p.ID)
+				if current, err := s.loadPlan(ctx, p.ID); err == nil {
+					s.event(ctx, map[string]any{"type": "task_plan", "plan": s.planWithSpace(ctx, current)})
+				}
+				s.tasks.planEdits.release(p.ID)
+			}
+		}
 		// Recording an outcome and telling the planning conversation belong to a newly closed open task, not a failed start.
 		if before.DoneAt == nil {
 			s.todoPushOver(id) // closed: nothing about it waits on the owner any more

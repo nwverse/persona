@@ -491,3 +491,71 @@ func TestOrphanedLeaderReceivesAcceptedWorkerGeneration(t *testing.T) {
 		t.Fatal("wake overrode an owner decision")
 	}
 }
+
+func TestOrphanWatchCoversStalledStartupQueues(t *testing.T) {
+	for _, kind := range []string{workspaceQueueKey, pendingPlacementQueueKey} {
+		t.Run(kind, func(t *testing.T) {
+			ctx := t.Context()
+			s, f := newQuietService(t)
+			s.superviseTimes = superviseTimings{gather: time.Hour, every: time.Hour, urgent: time.Hour}
+			now := time.Now()
+			todo, err := s.createTodo(ctx, "Queued task", "Carry out the decision", "conv1", "plan_q")
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.superviseTodo(ctx, todo.ID, "conv1", []string{"Finish the task"}, 30)
+			at := now.Add(-orphanQueuedAfter)
+			queue := &TaskQueue{Key: kind, Reason: "Waiting for the project", QueuedAt: at, NextAt: now.Add(time.Minute)}
+			p := &TaskPlan{ID: "plan_q", Conversation: "conv1", State: planStarted, CreatedAt: at, UpdatedAt: now,
+				Tasks: []PlanTask{{TodoID: todo.ID, Machine: "box", Queue: queue}}}
+			if err := s.savePlan(ctx, p); err != nil {
+				t.Fatal(err)
+			}
+			s.orphanWatch(ctx, now.Add(-time.Second))
+			if o := listedOrphan(t, s, todo.ID); o != nil {
+				t.Fatalf("a fresh queue was flagged: %+v", o)
+			}
+			s.orphanWatch(ctx, now)
+			o := listedOrphan(t, s, todo.ID)
+			if o == nil || o.Reason != orphanQueued || !o.Since.Equal(at) {
+				t.Fatalf("stalled queue missing from to-do: %+v", o)
+			}
+			s.superviseWatch(ctx, now)
+			s.supervise.mu.Lock()
+			g := s.supervise.pending[todo.ID+"|"+sigOrphaned]
+			s.supervise.mu.Unlock()
+			if g.Orphan != orphanQueued || g.Detail != queue.Reason {
+				t.Fatalf("stalled queue not escalated: %+v", g)
+			}
+			e, ok := s.digestEntry(ctx, g, "")
+			if !ok || e.Orphan != orphanQueued {
+				t.Fatalf("stalled queue dropped from digest: %+v", e)
+			}
+			if err := s.patchPlanTask(ctx, p.ID, 0, func(task *PlanTask) {
+				next := *queue
+				next.Attempt++
+				task.Queue = &next
+			}); err != nil {
+				t.Fatal(err)
+			}
+			s.orphanWatch(ctx, now.Add(time.Minute))
+			if again, ok := s.orphanSignal(todoNow(s, todo.ID)); !ok || again.Key != g.Key {
+				t.Fatalf("queue retry changed the escalation generation: %+v", again)
+			}
+			if err := s.patchPlanTask(ctx, p.ID, 0, func(task *PlanTask) { task.Queue = nil }); err != nil {
+				t.Fatal(err)
+			}
+			if e, ok := s.digestEntry(ctx, g, ""); ok {
+				t.Fatalf("an old queue signal survived the plan starting: %+v", e)
+			}
+			f.setSessions("box", proto.Session{SessionID: "s1", Status: proto.StatusWorking})
+			if err := s.linkTodoAgent(ctx, todo.ID, "box", "s1", "Working", "/code/app", "claude"); err != nil {
+				t.Fatal(err)
+			}
+			s.orphanWatch(ctx, now.Add(2*time.Minute))
+			if o := listedOrphan(t, s, todo.ID); o != nil {
+				t.Fatalf("queue remained orphaned after start: %+v", o)
+			}
+		})
+	}
+}

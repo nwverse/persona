@@ -269,7 +269,7 @@ func (g superviseSignal) urgent() bool {
 	return false
 }
 
-// immediate signals need a decision and wait only for gathering, never the shared spacing or routine cooldown.
+// immediate signals bypass shared spacing and routine cooldown.
 // An explicit NotBefore (a deferred failed-start batch) still applies.
 func (g superviseSignal) immediate() bool { return supervisionBatchImmediate(g) }
 
@@ -913,12 +913,19 @@ func (s *Service) superviseTimings() superviseTimings {
 	return p
 }
 
-// digestWait is how long until the pending signals are due (false: none): each waits p.gather after it came, and
+func superviseGatherAt(g superviseSignal, gather time.Duration) time.Time {
+	if g.Kind == sigIdle && g.Handoff {
+		return g.At
+	}
+	return g.At.Add(gather)
+}
+
+// digestWait is how long until the pending signals are due (false: none): most wait p.gather after they came, and
 // p.every (p.urgent for an urgent one) after the last message (last; zero: none yet), except an immediate one.
 func digestWait(now, last time.Time, pending []superviseSignal, p superviseTimings) (time.Duration, bool) {
 	var due time.Time
 	for _, g := range pending {
-		at := g.At.Add(p.gather)
+		at := superviseGatherAt(g, p.gather)
 		if g.NotBefore.After(at) {
 			at = g.NotBefore
 		}

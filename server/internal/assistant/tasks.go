@@ -1341,6 +1341,11 @@ func (s *Service) taskRoutes() {
 		if ext {
 			items, plans, shown = s.extensionFeed(r.Context(), items, plans)
 		}
+		if len(plans) > 0 {
+			// Older plans can still carry the error of a to-do closed since.
+			// Load the live to-dos before projecting those plans for clients.
+			_ = s.ensureTodosLoaded(r.Context())
+		}
 		for id, p := range plans {
 			plans[id] = s.planWithSpace(r.Context(), s.planWithSuggestion(r.Context(), p, s.requestLang(r)))
 		}
