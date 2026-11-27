@@ -598,8 +598,8 @@ func TestTodosV2BoardProjectionHTTPGatingAndRollback(t *testing.T) {
 	if waitGroup.Key != boardSectionWaiting || waitGroup.TotalCount != 1 || waitGroup.VisibleCount != 0 {
 		t.Fatalf("waiting group = %+v, want total=1 visible=0", waitGroup)
 	}
-	if len(b.DirectionGroups) != 2 || b.DirectionGroups[0].DirectionID != "dir_alpha" || b.DirectionGroups[1].DirectionID != "" {
-		t.Fatalf("direction_groups = %+v, want [dir_alpha, \"\"]", b.DirectionGroups)
+	if len(b.DirectionGroups) != 1 || b.DirectionGroups[0].DirectionID != "dir_alpha" || b.DirectionGroups[0].Counts.Total != 3 {
+		t.Fatalf("direction_groups = %+v, want [dir_alpha(total=3)]", b.DirectionGroups)
 	}
 	if len(b.SidebarTree) != 2 {
 		t.Fatalf("sidebar_tree = %+v, want 2 visible open nodes", b.SidebarTree)

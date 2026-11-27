@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -14,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/lazyre"
 )
 
 // Matching owns no source actions: it only proposes a reversible task link from this manager's snapshot.
@@ -102,7 +102,7 @@ func softPhrase(text, phrase string) bool {
 	return false
 }
 
-var softURL = regexp.MustCompile(`https?://[^\s<>"\x60]+`)
+var softURL = lazyre.New(`https?://[^\s<>"\x60]+`)
 
 func softURLs(text string) []string {
 	var out []string

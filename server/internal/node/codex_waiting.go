@@ -865,10 +865,14 @@ func (n *Node) codexBoxFor(ctx context.Context, pane string) error {
 
 // codexWaitCalls answers what a waiting row has no thread for: an empty conversation, nothing to watch, no modes.
 // Its terminal calls are the pane's as usual (handled false).
-func (n *Node) codexWaitCalls(method, id string) (any, error, bool) {
+func (n *Node) codexWaitCalls(method, id string, userInputs bool) (any, error, bool) {
 	switch method {
 	case "session.items":
-		return map[string]any{"items": []proto.Item{}, "has_more": false, "history": "codex-wait:" + id, "to_seq": 0}, nil, true
+		history := "codex-wait:" + id
+		if userInputs {
+			return proto.UserInputIndex{Inputs: []proto.UserInputPosition{}, History: history}, nil, true
+		}
+		return map[string]any{"items": []proto.Item{}, "has_more": false, "history": history, "to_seq": 0}, nil, true
 	case "session.item", "session.image", "session.visualization":
 		return nil, fmt.Errorf("no item"), true
 	case "session.watch", "session.unwatch":
