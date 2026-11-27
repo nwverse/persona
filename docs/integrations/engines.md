@@ -382,6 +382,40 @@ since the card was made is refused without a keypress (`prompt_changed`).
 Nothing else comes from this host: no spaces, slots, terminal tab, live stream or starting sessions. A message still goes through the session's peer
 inbox when it has one. tmux is added next to whichever engine the machine selected and needs no choice.
 
+## Commands waiting for input
+
+An Agent sometimes runs a command that stops at a prompt: a login asking for a password, a CLI that wants a pasted token, a sign-in that
+prints a URL and waits for the code (#14527). The line goes straight into the command from a card the owner answers on any client, never
+through the model, so it needs no turn of the Agent's and never enters its context.
+
+- **Antigravity (agy) in a terminal pane** (herdr, Herdr App, Orca, Tern). agy runs a long command as a background task of its conversation,
+  outside the pane, and holds every message while a non-daemon task runs: neither a chat message (nor Send now) nor typing in the pane reaches
+  it, and a message that carries the answer does not start a turn until the task ends. The node reads the pane's conversation instead
+  (`server/internal/node/agyinput.go`, once a second with the Codex cards): a task log in `<agy data>/brain/<conversation>/.system_generated/tasks/`
+  that ends at a prompt and has not changed for 2 seconds, with no end message from the task (`Task id … finished`) and no restart notice
+  after it in the conversation's `messages/`, written since the pane's agy started, is a `command_input` card in the node's card list
+  (`codex.interactions`). A prompt is the output's last line with no newline after it, at most 300 characters, ending in `:`, `?`, `>`, `]`
+  or `)` (`proto.CommandPrompt`). The card carries the task's description from the transcript's start step, the prompt and up to 20 lines
+  before it, escapes and blank lines removed.
+- **The answer** goes back as a Codex card's does (`codex.answer`). The node checks that the task still waits on the same prompt (otherwise
+  `prompt_changed`, nothing typed), finds the language server of the pane's agy in the environment agy gives the commands it runs
+  (`ANTIGRAVITY_LS_ADDRESS`, `ANTIGRAVITY_CSRF_TOKEN`, read from a process under the pane's agy; a loopback address only), and posts
+  `SendAgentMessage {recipient: "<conversation>/<task>", senderId: "<conversation>", content: "<line>\n"}`, the message agy's own
+  `manage_task send_input` sends. The task's pseudo-terminal types it, and the task wakes agy when it ends. Not now and a hand-back type
+  nothing; after either, and after the line went in, the same prompt is not asked again. Refusals reach the device that answered, in its
+  language, and the card stays: `command_input_line` (empty, a line break or another control character, too long), `command_input_unreachable`
+  (no language server found or reached: nothing typed), `command_input_refused` (agy answered with an error: nothing typed) and
+  `command_input_unconfirmed` (the request went out and no answer came: the line may be in, so look before sending it again).
+- **A prompt in the pane itself** (a shell, `ssh`, `sudo` in a herdr or tmux pane): a blocked Agent gets a screen card as before, with a
+  password field when its last line is a password prompt, and the web terminal's key bar has a line key that types one hidden line and Return
+  into the pane (`docs/web/web.md`, "Terminal").
+- **Not yet**: Claude Code's and Codex's shell tools give a command no terminal anyone can type into, so such a command fails or waits without
+  a prompt Persona can answer; agy on the Antigravity companion (ACP); Windows, where agy's environment cannot be read. #14527 lists them.
+
+Limit: agy itself keeps what reaches a task in the task's mailbox file and, when the prompt echoes, in its log, as it does for its own
+`send_input`. Persona keeps no copy: the card's field is secret, so the hub records `<redacted>` (`docs/protocol/protocol.md`, "Commands
+waiting for input").
+
 ## botmux
 
 [botmux](https://github.com/deepcoldy/botmux) maps each Lark topic to a Claude Code / Codex / compatible CLI session in its own tmux. It is not an engine:
