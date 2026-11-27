@@ -11,7 +11,7 @@ import { ancestors, buildTree, filterEntries, highlightLines, languageOf, status
 import { findIn, isGenerated, lineLink, lineTyped, overlay, type Span } from "../../lib/code-review";
 import { composing } from "../../lib/send-history";
 import { columnAfter, navClick, navigateValues, navKey, type NavIntent } from "../../lib/code-navigate";
-import { currentPlatform } from "../../lib/shortcuts";
+import { currentPlatform, modName } from "../../lib/platform";
 import { useReview } from "./review-context";
 import { initials, rowIcon, toneOf, type UIAction, type UIItem, type UITone } from "../../lib/extension-ui";
 import { imageSrc } from "../../lib/extension-ui-v6";
@@ -384,7 +384,8 @@ export function CodeView({ item, act, busy, local }: { item: UIItem } & CodeHand
     }
   };
   const nav = item.navigate;
-  const mac = currentPlatform() === "mac";
+  const platform = currentPlatform();
+  const mac = platform === "mac";
   // where a caret (a text node and an offset in it) is in the code: the line and the column, in characters
   const spotOf = (node: Node | null, offset: number) => {
     const el = node && (node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement);
@@ -492,7 +493,7 @@ export function CodeView({ item, act, busy, local }: { item: UIItem } & CodeHand
         className={cx("code-hl bg-inset font-mono text-[12px] outline-none", !wrap && "overflow-x-auto")}
         style={{ lineHeight: `${LH}px` }}
         tabIndex={nav ? -1 : undefined}
-        title={nav ? t("extensions-codeviews.navigate_hint", { mod: mac ? "⌘" : "Ctrl", alt: mac ? "⌥" : "Alt", back: mac ? "⌘[" : "Ctrl+Alt+←" }) : undefined}
+        title={nav ? t("extensions-codeviews.navigate_hint", { mod: modName(platform), alt: mac ? "⌥" : "Alt", back: mac ? "⌘[" : "Ctrl+Alt+←" }) : undefined}
         onClick={(e) => {
           if (!nav || !navClick(e, mac)) return;
           e.preventDefault();
