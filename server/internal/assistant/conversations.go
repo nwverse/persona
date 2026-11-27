@@ -1323,6 +1323,17 @@ func (s *Service) drainRelays(machine string, list []proto.Session) {
 					}
 				}
 			}
+			if !stale && !keep && !landed && msg.Tool == prFollowupTool {
+				// Pre-upgrade queued follow-ups also become quiet. A delivery
+				// already in doubt was checked above under its original identity.
+				quiet := msg
+				quiet.OnceID = relayMsgID(id, original)
+				_, stale = s.keepRelayLater(id, quiet)
+				keep = !stale
+				if keep {
+					retry = relayRetryGap
+				}
+			}
 			if !stale && !keep && !landed {
 				msg, retry, err = s.tryQueuedRelay(ctx, machine, id, &original)
 				keep = retry > 0

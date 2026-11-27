@@ -263,6 +263,7 @@ func (s *Service) recheckQueuedDigestAtDetailed(ctx context.Context, to string, 
 	tried := !msg.TriedAt.IsZero() || !msg.DoubtedAt.IsZero()
 	var deferred []superviseSignal
 	if !tried {
+		signals = slices.DeleteFunc(signals, func(g superviseSignal) bool { return s.routineSignalSuppressed(g, now) })
 		signals, deferred = s.partitionFinalWakeSignals(ctx, signals, now, "drain")
 	}
 	// A tried message cannot change its text or identity; do not let wake partitioning strand it at the queue head.

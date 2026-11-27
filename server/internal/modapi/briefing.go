@@ -50,6 +50,8 @@ type TodoPort interface {
 	OpenProgressTodos(ctx context.Context) []BriefTodoProgress
 	TodoTitle(id string) (string, bool)
 	StalePRFollowups(ctx context.Context, at time.Time, lang string) []BriefPRFollowup
+	DeferredSupervision(ctx context.Context, at time.Time) []BriefDeferredSupervision
+	SupervisionBriefed(ctx context.Context, ids []string, at time.Time)
 }
 
 // InboxPort reads open follow-up Inbox signals for the model-only briefing sections.
@@ -148,6 +150,9 @@ type ScheduleFactsRunner interface {
 // BriefFacts are the facts of a morning or evening routine's run, as the model is given them (assistant/routine_facts):
 // the lines are ready to read; the totals count more than the lines when the lists were cut.
 type BriefFacts struct {
+	DeferredSupervisionHeading string
+	DeferredSupervision        []string
+
 	NorthStar                                                        []string
 	ConfirmationSummary                                              string
 	Confirmations                                                    []string
@@ -473,8 +478,18 @@ type BriefPRFollowup struct {
 	Note           string     `json:"note,omitempty"`
 }
 
+// BriefDeferredSupervision is a saved signal the supervisor can review in a briefing.
+type BriefDeferredSupervision struct {
+	ID     string `json:"id"`
+	TodoID string `json:"todo_id"`
+	Title  string `json:"title"`
+	Reason string `json:"reason"`
+}
+
 // BriefSnapshot is what one run of a routine with facts on says, as it was when the run started.
 type BriefSnapshot struct {
+	DeferredSupervision []BriefDeferredSupervision
+
 	Contributions     []RoutineContribution
 	At                time.Time
 	NorthStar         BriefNorthStar
@@ -563,6 +578,8 @@ type BriefFallbackSend struct {
 
 // BriefBody is a `brief` item's JSON body.
 type BriefBody struct {
+	DeferredSupervision []BriefDeferredSupervision `json:"deferred_supervision,omitempty"`
+
 	Contributions    []RoutineContribution  `json:"contributions,omitempty"`
 	NorthStar        BriefBodyNorthStar     `json:"north_star"`
 	Confirmations    BriefConfirmations     `json:"confirmations"`
