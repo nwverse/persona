@@ -207,9 +207,9 @@ func TestUserCheckPassWaitsForItsOwnRound(t *testing.T) {
 	}
 }
 
-func (d *userCheckPassStore) ReviewDoneTodo(ctx context.Context, id, reason string, accepted bool, at time.Time) (*db.TodoRow, bool, error) {
+func (d *userCheckPassStore) ReviewTodo(ctx context.Context, id, reason string, accepted bool, at time.Time, ledger *db.TodoSupervisionRow, guard func() error) (*db.TodoRow, bool, error) {
 	d.closeCalls.Add(1)
-	return d.DB.ReviewDoneTodo(ctx, id, reason, accepted, at)
+	return d.DB.ReviewTodo(ctx, id, reason, accepted, at, ledger, guard)
 }
 
 func (d *userCheckPassStore) PutTodoSupervision(ctx context.Context, row db.TodoSupervisionRow) error {

@@ -265,6 +265,8 @@ type Service struct {
 	extEvents        extEventBook           // extension_event.go
 	phoneKept        keptPhoneTools         // fleet_tools.go: the phone's tools as the hub last listed them
 	agentNames       agentNamingBook        // agent_naming.go
+	taskActivity     taskActivityBook       // task_close_activity.go: owner input/view activity, not read receipts
+	taskCloseStops   taskCloseStopBook      // tasks_close_stops.go: stopped Agents of completed tasks
 	prefs            settingsBook           // profile.go
 	guard            dispatchGuardBook      // dispatch_guard.go
 	main             mainBook               // start.go
@@ -1196,6 +1198,8 @@ func (s *Service) UserSpoke(ctx context.Context, r SessionRef) {
 }
 
 func (s *Service) userSpokeText(ctx context.Context, r SessionRef, text string) {
+	s.rememberTaskCloseExcerpt(r, text)
+	s.rememberSessionActivity(ctx, r.MachineID, r.SessionID)
 	s.userSpokeMessage(ctx, r, text, "")
 }
 
@@ -1203,6 +1207,8 @@ func (s *Service) userSpokeText(ctx context.Context, r SessionRef, text string) 
 // the send's client_msg_id ("" from an older hub or a client that names none), which its session.assistant_sent
 // carries too.
 func (s *Service) userSpokeMessage(ctx context.Context, r SessionRef, text, clientMsgID string) {
+	s.rememberTaskCloseExcerpt(r, text)
+	s.rememberSessionActivity(ctx, r.MachineID, r.SessionID)
 	s.availOwnerSpoke(r, time.Now()) // before anything else: what the conversation is doing as the message comes (availability.go)
 	if exitText(text) {
 		s.retireTodoWork([2]string{r.MachineID, r.SessionID}) // /exit or /quit starts no turn that could cancel the wake

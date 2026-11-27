@@ -40,7 +40,7 @@ describe("a node's items as palette commands", () => {
     const cmds = itemsToCommands("Workspace · build", tab, nodeActions(tab, deps()));
     const titles = cmds.map((c) => c.title);
     expect(titles).toContain("重命名");
-    expect(titles).toContain("新建窗格 · 向右拆分");
+    expect(titles).toContain("终端分屏 · 向右拆分");
     expect(titles).toContain("Git · 拉取");
     expect(titles).toContain("Git · 复制分支名");
     expect(titles).toContain("复制目录路径");
@@ -158,8 +158,8 @@ describe("the node the user is on", () => {
     const where = nodesFor(ctx);
     expect(where.find((w) => w.node.kind === "workspace")?.node.canWorktree).toBe(true);
     // the agent's pane under its title, its space under its name
-    expect(where.map((w) => w.section)).toEqual(["窗格 · t", "空间 · proj"]);
-    const ids = nodeCommands(ctx).filter((c) => c.section === "窗格 · t").map((c) => c.id);
+    expect(where.map((w) => w.section)).toEqual(["终端 · t", "空间 · proj"]);
+    const ids = nodeCommands(ctx).filter((c) => c.section === "终端 · t").map((c) => c.id);
     expect(ids).toEqual(expect.arrayContaining([
       "node:pane:w1:p1:node-split:node-split-right",
       "node:pane:w1:p1:node-close-pane",

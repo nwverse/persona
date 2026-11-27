@@ -46,7 +46,7 @@ type fleetCache struct {
 	live         *assistantwire.FleetLive            // the assistant's
 	lives        map[string]*assistantwire.FleetLive // the other managers' (manager_state.go)
 	clients      assistantwire.Clients               // what fleet.clients said last
-	clientsSent  bool
+	clientsSent  map[string]*busConn                 // the connections that received the current clients snapshot
 	// clientsSend holds one fleet.clients from working out what is true to telling it (fleetClientsChanged).
 	clientsSend sync.Mutex
 }
@@ -472,18 +472,77 @@ func (h *Hub) fleetClientsChanged() {
 		Elicitation:     h.hasElicitationClient(),
 		ElicitationPush: h.push.pushesElicitation(h.desktopOnline()),
 		AppOnline:       h.hasFullAppOnline(),
+		Viewing:         h.viewedSessions(),
 	}
 	f.mu.Lock()
-	same := f.clientsSent && f.clients == c
-	f.clients, f.clientsSent = c, true
+	same := f.clients.Elicitation == c.Elicitation && f.clients.ElicitationPush == c.ElicitationPush &&
+		f.clients.AppOnline == c.AppOnline && slices.Equal(f.clients.Viewing, c.Viewing)
+	delivered := f.clientsSent
+	f.clients = c
 	f.mu.Unlock()
-	if !same {
-		if err := h.notifyManagers(assistantwire.EventClients, c); err != nil {
-			f.mu.Lock()
-			f.clientsSent = false
-			f.mu.Unlock()
+	next := map[string]*busConn{}
+	for _, p := range h.busRoster() {
+		if p.Role != bus.RoleManager {
+			continue
+		}
+		conn := h.busConnOf(p.ID)
+		if conn == nil {
+			continue
+		}
+		if same && delivered[p.ID] == conn {
+			next[p.ID] = conn
+			continue
+		}
+		if conn.peer.Notify(assistantwire.EventClients, h.clientsForManager(c, p.ID)) == nil {
+			next[p.ID] = conn
 		}
 	}
+	f.mu.Lock()
+	f.clientsSent = next
+	f.mu.Unlock()
+}
+
+// viewedSessions reports owner presence from apps authenticated with a full credential.
+func (h *Hub) viewedSessions() []assistantwire.SessionRef {
+	h.mu.Lock()
+	clients := make([]*client, 0, len(h.clients))
+	for c := range h.clients {
+		if c.role == roleFull {
+			clients = append(clients, c)
+		}
+	}
+	h.mu.Unlock()
+	seen := map[[2]string]bool{}
+	for _, c := range clients {
+		c.mu.Lock()
+		for key := range c.subs {
+			seen[key] = true
+		}
+		for key := range c.termSubs {
+			seen[[2]string{key[0], key[1]}] = true
+		}
+		c.mu.Unlock()
+	}
+	out := make([]assistantwire.SessionRef, 0, len(seen))
+	for key := range seen {
+		out = append(out, assistantwire.SessionRef{MachineID: key[0], SessionID: key[1]})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].MachineID < out[j].MachineID ||
+			out[i].MachineID == out[j].MachineID && out[i].SessionID < out[j].SessionID
+	})
+	return out
+}
+
+func (h *Hub) clientsForManager(c assistantwire.Clients, manager string) assistantwire.Clients {
+	out := c
+	out.Viewing = nil
+	for _, ref := range c.Viewing {
+		if h.sessionOwner(ref.MachineID, ref.SessionID) == manager {
+			out.Viewing = append(out.Viewing, ref)
+		}
+	}
+	return out
 }
 
 // clientsSettle runs on a manager connection's first word after its handshake, as mutesSettle does, and tells it what
@@ -503,17 +562,30 @@ func (h *Hub) clientsSettle(c *busConn) {
 		clients := f.clients
 		f.mu.Unlock()
 		if h.busCurrent(c) {
-			_ = c.peer.Notify(assistantwire.EventClients, clients)
+			err := c.peer.Notify(assistantwire.EventClients, h.clientsForManager(clients, c.ident.ID))
+			f.mu.Lock()
+			if err != nil {
+				delete(f.clientsSent, c.ident.ID)
+			} else {
+				if f.clientsSent == nil {
+					f.clientsSent = map[string]*busConn{}
+				}
+				f.clientsSent[c.ident.ID] = c
+			}
+			f.mu.Unlock()
 		}
 	}()
 }
 
-// fleetConnected: the manager's handshake went through: it is told what of the apps it needs.
-func (h *Hub) fleetConnected() {
+// fleetClientsRefresh also tells connected managers after an ownership change: their scoped viewers can change
+// even when the global viewer set does not.
+func (h *Hub) fleetClientsRefresh() {
 	f := &h.reported
+	f.clientsSend.Lock()
 	f.mu.Lock()
-	f.clientsSent = false
+	f.clientsSent = nil
 	f.mu.Unlock()
+	f.clientsSend.Unlock()
 	h.fleetClientsChanged()
 }
 

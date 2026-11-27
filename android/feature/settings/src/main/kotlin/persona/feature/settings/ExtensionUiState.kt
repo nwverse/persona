@@ -103,6 +103,39 @@ internal object ExtensionViewText {
     /** [askText] when [extension] is the subscription pages; every other page refuses the link. */
     fun askFrom(extension: String, url: String?): String? = if (extension == SUBSCRIPTIONS_UI) askText(url) else null
 
+    /**
+     * The text of one of this extension's quick prompts (`persona://compose?prompt=<id>&text=…`, an older name's scheme
+     * too). The hub has already checked that the id and text match one of the extension's enabled quick prompts; this
+     * reads the same strict link shape and returns null for every other link.
+     */
+    fun composeText(url: String?): String? {
+        val raw = url ?: return null
+        val uri = runCatching { java.net.URI(raw) }.getOrNull() ?: return null
+        if (uri.scheme?.lowercase() !in persona.core.contracts.ProtocolCompatibility.appSchemes ||
+            uri.rawAuthority?.lowercase() != "compose" || uri.userInfo != null ||
+            uri.rawPath?.let { it.isNotEmpty() && it != "/" } == true ||
+            uri.rawQuery == null || uri.rawFragment != null || '#' in raw
+        ) return null
+        val fields = linkedMapOf<String, String>()
+        for (part in uri.rawQuery.split('&')) {
+            val name = decodeCompose(part.substringBefore('=')) ?: return null
+            if (name !in setOf("prompt", "text") || name in fields) return null
+            fields[name] = decodeCompose(part.substringAfter('=', "")) ?: return null
+        }
+        val prompt = fields["prompt"] ?: return null
+        val text = fields["text"] ?: return null
+        if (prompt.isEmpty() || prompt.codePointCount(0, prompt.length) > COMPOSE_PROMPT_MOST || prompt.any(Char::isWhitespace)) return null
+        if (text.isBlank() || text.codePointCount(0, text.length) > COMPOSE_TEXT_MOST) return null
+        return text
+    }
+
+    /** [composeText] for an extension page: the hub has tied the quick prompt to this extension already. */
+    fun composeFrom(extension: String, url: String?): String? =
+        if (extension.isNotBlank()) composeText(url) else null
+
+    private const val COMPOSE_PROMPT_MOST = 64
+    private const val COMPOSE_TEXT_MOST = 8_000
+
     /** A space conversation's machine and session, never a general app link. */
     fun spaceConversation(url: String?): Pair<String, String>? {
         val uri = runCatching { java.net.URI(url ?: return null) }.getOrNull() ?: return null
@@ -115,12 +148,16 @@ internal object ExtensionViewText {
 
     /** Which `open_url` a button may bring back: https, this page's own settings, and the reserved pages' links. */
     fun opens(extension: String, url: String?): Boolean =
-        isHttps(url) || settings(extension, url) != null || askFrom(extension, url) != null ||
+        isHttps(url) || settings(extension, url) != null || askFrom(extension, url) != null || composeFrom(extension, url) != null ||
             extension == "space-conversations" && spaceConversation(url) != null
 
     /** A query component, with `+` kept (the pages percent-encode; they do not use form encoding). */
     private fun decodeQuery(raw: String): String? =
         runCatching { java.net.URLDecoder.decode(raw.replace("+", "%2B"), "UTF-8") }.getOrNull()
+
+    /** A compose query uses ordinary form encoding, where `+` is a space, as the hub's `url.Query()` reads it. */
+    private fun decodeCompose(raw: String): String? =
+        runCatching { java.net.URLDecoder.decode(raw, "UTF-8") }.getOrNull()
 
     /** A field's value before the user touches it: the extension's, never for a secret; a switch is off; no choices `[]`. */
     fun initial(item: ExtensionViewItem): String = when (item.kind) {

@@ -759,6 +759,10 @@ func (n *Node) close(ctx context.Context, id string) error {
 // automatic one (idle, task_completed: #10355), which is recorded only once the close went through, as an automatic
 // stop's is (retire.go).
 func (n *Node) closeWithCause(ctx context.Context, id string, cause proto.StopCause) (err error) {
+	return n.closeWithCauseChecked(ctx, id, cause, nil)
+}
+
+func (n *Node) closeWithCauseChecked(ctx context.Context, id string, cause proto.StopCause, before func() error) (err error) {
 	if err := n.switchingRefusal(id); err != nil { // a launcher switch, maybe on the last connection's Node
 		return err
 	}
@@ -778,7 +782,7 @@ func (n *Node) closeWithCause(ctx context.Context, id string, cause proto.StopCa
 	a, ok := n.agent(id)
 	if !ok {
 		if st, mine := n.state.get(id); mine {
-			return n.closeAfterExit(ctx, id, st)
+			return n.closeAfterExit(ctx, id, st, before)
 		}
 		return fmt.Errorf("这个 Agent 不在这台电脑的终端里运行，没法从手机关闭")
 	}
@@ -786,10 +790,25 @@ func (n *Node) closeWithCause(ctx context.Context, id string, cause proto.StopCa
 	if err != nil {
 		return err
 	}
+	if before != nil {
+		if err := before(); err != nil {
+			return err
+		}
+	}
 	_ = n.sendKeys(ctx, a.PaneID, "ctrl+c")
 	time.Sleep(200 * time.Millisecond)
+	if before != nil {
+		if err := before(); err != nil {
+			return err
+		}
+	}
 	_ = n.sendKeys(ctx, a.PaneID, "ctrl+c")
 	time.Sleep(500 * time.Millisecond)
+	if before != nil {
+		if err := before(); err != nil {
+			return err
+		}
+	}
 	return org.Close(ctx, ref, a.WorkspaceID, a.TabID)
 }
 

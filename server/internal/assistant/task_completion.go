@@ -360,6 +360,16 @@ func (s *Service) taskCompletionCurrent(ctx context.Context, t Todo, work time.T
 
 func (s *Service) taskRuntimeSettled(ctx context.Context, t Todo) bool {
 	agents, reached := s.taskAgentsReached(ctx, t)
+	if reached {
+		if c, missing := s.missingPendingTurnAgent(ctx, t, agents); missing {
+			items, read := s.lastTurnItems(ctx, c.MachineID, c.SessionID)
+			end, closed := turnEndOf(items)
+			e, known := s.turnOf(ctx, t.ID)
+			if read && closed && known && e.of(c, end) {
+				agents = append(agents, c) // fresh transcript proof, never absence alone
+			}
+		}
+	}
 	return reached && taskAgentsSettled(t, s.rowsProven(agents))
 }
 

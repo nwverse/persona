@@ -1,4 +1,5 @@
 import { relativeActivityDate } from '../core/PhoneDate';
+import { MinutesWaitResult, resolveMinutesWait } from '../core/MinutesWait';
 import { i18n } from '@kit.LocalizationKit';
 import { KnowledgeLandingMenu, knowledgeInk, knowledgePriorityTone, knowledgeRelevanceTone, knowledgeWash } from '../models/KnowledgeListPresentation';
 import { IconActions } from '../design/IconActions';
@@ -1450,6 +1451,29 @@ export struct KnowledgeWorkspacePage {
     }
   }
 
+  private minutesWaitLine(detail: Record<string, Object>): MinutesWaitResult {
+    const meta = Wire.object(detail, 'meta');
+    const transcription = Wire.object(meta, 'transcription');
+    const minutesState = Wire.text(meta, 'minutes_state');
+    const hasMinutes = Object.keys(Wire.object(detail, 'minutes')).length > 0;
+    return resolveMinutesWait(transcription, minutesState, hasMinutes);
+  }
+
+  private minutesWaitText(wait: MinutesWaitResult): string {
+    if (wait.line === 'checking') {
+      if (wait.doneMinutes !== undefined && wait.totalMinutes !== undefined) {
+        return tr('knowledge_minutes_checking_progress')
+          .replace('{done}', String(wait.doneMinutes))
+          .replace('{total}', String(wait.totalMinutes));
+      }
+      return tr('knowledge_minutes_checking');
+    }
+    if (wait.line === 'writing') {
+      return tr('knowledge_minutes_writing');
+    }
+    return '';
+  }
+
   @Builder recordingSection(detail: Binding<Record<string, Object>>) {
     Column({ space: Tokens.gap }) {
       if (Object.keys(Wire.object(detail.value, 'minutes')).length) {
@@ -1461,6 +1485,16 @@ export struct KnowledgeWorkspacePage {
           }.width('100%').id('knowledge.minutes.action.' + Wire.text(action, 'id'))
         }, (action: Record<string, Object>, index: number) => JSON.stringify([index, Wire.text(action, 'id'), JSON.stringify(action)]))
         if (this.selectedActions.length) Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('knowledge_minutes_add_todos')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('knowledge_minutes_add_todos', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('knowledge_minutes_add_todos')).bindTips(tr('knowledge_minutes_add_todos')).onClick(() => this.confirmAddTodos())
+      } else if (this.minutesWaitLine(detail.value).line !== 'none') {
+        Text(tr('knowledge_minutes')).fontSize(Tokens.body).maxFontScale(Tokens.interfaceScaleFor(Tokens.body)).fontWeight(FontWeight.Medium)
+        Row({ space: Tokens.gap }) {
+          LoadingProgress().width(16).height(16).color(Colors.link)
+          Text(this.minutesWaitText(this.minutesWaitLine(detail.value)))
+            .fontSize(Tokens.meta)
+            .maxFontScale(Tokens.interfaceScaleFor(Tokens.meta))
+            .fontColor(Colors.secondary)
+            .layoutWeight(1)
+        }.width('100%').alignItems(VerticalAlign.Center).id('knowledge.minutes.wait')
       }
       Button({ type: ButtonType.Circle }) { SymbolGlyph(IconActions.symbol('knowledge_minutes_make')).fontSize(Tokens.symbolFont).fontColor([IconActions.color('knowledge_minutes_make', false)]) }.attributeModifier(ButtonStyles.icon).accessibilityText(tr('knowledge_minutes_make')).bindTips(tr('knowledge_minutes_make')).enabled(!this.workspace.busy && this.workspace.writeState !== 'pending' && this.workspace.writeState !== 'unknown').onClick(() => this.workspace.makeMinutes()).id('knowledge.minutes.make')
       if (Wire.rows(detail.value, 'segments').length) {

@@ -88,6 +88,7 @@ var (
 // superviseSignal is one thing about one task the supervisor should know. Key names the stretch of state it is about:
 // the same signal with the same key is told once.
 type superviseSignal struct {
+	WorkerSet       string `json:"worker_set,omitempty"` // accepted child generation of an orphaned leader
 	Todo, Kind, Key string
 	// Handoff is an idle-shaped report that an owner's decision or review rework did not reach the agent.
 	// It is not a turn-end stop, so a native wakeup must not defer it.
@@ -1377,6 +1378,12 @@ func (s *Service) superviseWatch(ctx context.Context, now time.Time) {
 		if t.Supervision == nil && t.DoneAt == nil {
 			// A legacy completion judged while no main existed deliberately stayed unjudged. Once main is configured,
 			// recover that exact ledger turn instead of leaving it outside every future supervised sweep (#5732).
+			if _, reporting := s.reporterOf(ctx, t.Origin); reporting {
+				if e, ok := s.turnOf(ctx, t.ID); ok && e.State == turnDone && e.Judged == nil {
+					s.watchTurn(ctx, t, s.taskAgentsIn(ctx, t, lists))
+				}
+				continue
+			}
 			main := s.settings(ctx).Main
 			if main == "" {
 				continue

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -295,9 +296,10 @@ func receiptID(todo string, e taskTurn) string {
 // taskTurnsDoc is the ledger as it is kept: the turns by todo, and since when it is kept (a turn that ended before
 // was handled, or not, by a manager that kept none: it is not taken up again).
 type taskTurnsDoc struct {
-	Since       time.Time                 `json:"since"`
-	Turns       map[string]taskTurn       `json:"turns"`
-	InboxEvents map[string]taskInboxEvent `json:"inbox_events,omitempty"`
+	Since         time.Time                 `json:"since"`
+	Turns         map[string]taskTurn       `json:"turns"`
+	InboxEvents   map[string]taskInboxEvent `json:"inbox_events,omitempty"`
+	CloseDeclines map[string]time.Time      `json:"close_declines,omitempty"`
 }
 
 // turnLook is the row of a task's last agent as the sweep last looked at it: it looks again when the row moved. A row
@@ -535,7 +537,7 @@ func (s *Service) pruneTurns(ctx context.Context) {
 	}
 	b := &s.tasks.turns
 	b.mu.Lock()
-	if !s.turnsLocked(ctx) || len(b.doc.Turns)+len(b.doc.InboxEvents) == 0 {
+	if !s.turnsLocked(ctx) || len(b.doc.Turns)+len(b.doc.InboxEvents)+len(b.doc.CloseDeclines) == 0 {
 		b.mu.Unlock()
 		return
 	}
@@ -545,6 +547,9 @@ func (s *Service) pruneTurns(ctx context.Context) {
 	}
 	for _, e := range b.doc.InboxEvents {
 		ids = append(ids, e.Todo)
+	}
+	for id := range b.doc.CloseDeclines {
+		ids = append(ids, id)
 	}
 	b.mu.Unlock()
 	var gone []string
@@ -566,6 +571,7 @@ func (s *Service) pruneTurns(ctx context.Context) {
 			delete(b.closed, SessionRef{MachineID: e.Machine, SessionID: e.Session})
 		}
 		delete(b.doc.Turns, id)
+		delete(b.doc.CloseDeclines, id)
 		delete(b.tries, id)
 		for key := range b.looked {
 			if key.Todo == id {
@@ -723,6 +729,29 @@ func (s *Service) turnJudged(ctx context.Context, todo string, c taskDoneCheck, 
 	e.Judged = j
 	b.doc.Turns[todo] = e
 	s.saveTurnsLocked(ctx)
+}
+
+// An activity hold is not a settled judgment or a failed attempt. This also
+// invalidates a saved judgment replayed after a later start, so the sweep retries it.
+func (s *Service) deferTurnJudgment(ctx context.Context, todo string) {
+	b := &s.tasks.turns
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !s.turnsLocked(ctx) {
+		return
+	}
+	if e, ok := b.doc.Turns[todo]; ok && e.State == turnDone {
+		e.Judged = nil
+		if e.Signal != nil && e.Signal.Kind == sigReview {
+			e.Signal = nil
+		}
+		b.doc.Turns[todo] = e
+		key := turnRecoveryKey{Todo: todo, Machine: e.Machine, Session: e.Session}
+		delete(b.looked, key)
+		delete(b.retry, key)
+		delete(b.tries, todo)
+		s.saveTurnsLocked(ctx)
+	}
 }
 
 // turnSignalKind: a signal that says how a turn ended, kept on its turn.
@@ -1011,7 +1040,7 @@ func (s *Service) taskJudging(todo string, n int) {
 	}
 }
 
-// watchTurn is the sweep's look at supervised task t for a turn that ended unheard, from its agents as listed. It
+// watchTurn looks for a supervised task's unheard turn, or retries an unsupervised task's pending judgment. It
 // costs no call to a node unless the task's agents all look stopped and the last one's row moved since the sweep last
 // looked (once after a start of the manager); then one transcript read, at most turnRecoverMost going at a time. A
 // look that could not finish (the node did not answer, the judgment did not land) is tried again on the next tick and
@@ -1022,6 +1051,12 @@ func (s *Service) taskJudging(todo string, n int) {
 // by turnRecoverMost across tasks.
 func (s *Service) watchTurn(ctx context.Context, t Todo, agents []proto.Session) {
 	agents = currentTaskAgents(agents, supersededAgents(t, agents))
+	// A deferred, already-receipted turn can outlive its inventory row.
+	// This is only a read address: recoverTurn must still verify the same closed turn.
+	pending, missing := s.missingPendingTurnAgent(ctx, t, agents)
+	if missing {
+		agents = append(slices.Clone(agents), pending)
+	}
 	probe := make([]proto.Session, len(agents))
 	var last proto.Session
 	now := time.Now()
@@ -1036,6 +1071,9 @@ func (s *Service) watchTurn(ctx context.Context, t Todo, agents []proto.Session)
 		if last.SessionID == "" || c.UpdatedAt.After(last.UpdatedAt) {
 			last = c
 		}
+	}
+	if missing {
+		last = pending
 	}
 	b := &s.tasks.turns
 	b.mu.Lock()
@@ -1166,6 +1204,27 @@ func (s *Service) watchTurn(ctx context.Context, t Todo, agents []proto.Session)
 	}()
 }
 
+func (s *Service) missingPendingTurnAgent(ctx context.Context, t Todo, agents []proto.Session) (proto.Session, bool) {
+	e, ok := s.turnOf(ctx, t.ID)
+	if !ok || e.State != turnDone || e.Judged != nil || e.Key == "" ||
+		autoDoneSkip(t, e.Work, true) != "" {
+		return proto.Session{}, false
+	}
+	for _, c := range agents {
+		if c.MachineID == e.Machine && c.SessionID == e.Session {
+			return proto.Session{}, false // a current runtime row always outranks the ledger
+		}
+	}
+	for _, a := range t.Agents {
+		if a.MachineID == e.Machine && a.SessionID == e.Session && a.ReleasedAt == nil && a.DismissedAt == nil &&
+			!a.LinkedAt.After(e.At) {
+			return proto.Session{MachineID: e.Machine, SessionID: e.Session, Rev: e.Rev, UpdatedAt: e.Seen,
+				Status: proto.StatusDone}, true
+		}
+	}
+	return proto.Session{}, false
+}
+
 // recoverTurn reads the transcript of supervised task t's selected agent and takes up a closed turn the ledger does not
 // have, through settleTurn: the end's own checks first, then the start nobody heard, then the receipt, the judgment
 // and the signal. A turn the ledger has but that is not judged yet is judged (resumeTurn); one it has with no name
@@ -1206,7 +1265,7 @@ func (s *Service) recoverTurn(ctx context.Context, t Todo, last proto.Session) (
 	settling := b.settling(t.ID) // with the ledger's mutex held: the turn on the ledger and the mark are one moment's
 	b.mu.Unlock()
 	current, ok := s.todoNow(t.ID)
-	if !ok || current.DoneAt != nil || current.Supervision == nil {
+	if !ok || current.DoneAt != nil {
 		return true
 	}
 	if s.taskInboxRecipient(ctx, t.ID, last.MachineID, last.SessionID) {
@@ -1226,6 +1285,9 @@ func (s *Service) recoverTurn(ctx context.Context, t Todo, last proto.Session) (
 		// identifies the same turn, replay its outstanding signal even if the revision keeps moving.
 		s.replayTurnSignal(t.ID, e)
 		return s.resumeTurn(ctx, current, e)
+	}
+	if current.Supervision == nil {
+		return true // unsupervised tasks retry only a turn already pending on the ledger
 	}
 	if settling {
 		return false // its end is being handled right now (settleTurn): looked at again
@@ -1274,6 +1336,9 @@ func (s *Service) recoverTurn(ctx context.Context, t Todo, last proto.Session) (
 func (s *Service) resumeTurn(ctx context.Context, t Todo, e taskTurn) (looked bool) {
 	if e.State != turnDone || e.Judged != nil {
 		return true // judged: only the telling is left
+	}
+	if s.taskCloseActivityError(ctx, t, time.Now()) != nil {
+		return false // waiting for the owner does not spend the bounded judgment retries
 	}
 	b := &s.tasks.turns
 	serviceRetry := e.JudgeFailures > 0

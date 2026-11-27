@@ -21,9 +21,12 @@ sealed interface AssistDraftTarget {
     data object Starter : AssistDraftTarget
 }
 
+/** Keep what is typed and add the handoff under it, or replace it (an extension's own quick prompt). */
+enum class AssistDraftTextMode { Append, Replace }
+
 /**
- * Screenshot and/or bounded non-sensitive page context captured by Android Digital Assistant (`ROLE_ASSISTANT`)
- * waiting to prefill Persona's composer draft. Kept in memory only; never auto-sends.
+ * Text, screenshot and/or bounded non-sensitive page context waiting to prefill Persona's composer draft, from Android
+ * Digital Assistant (`ROLE_ASSISTANT`) or an extension's compose link. Kept in memory only; never auto-sends.
  */
 data class PendingAssistDraft(
     val id: String,
@@ -35,6 +38,7 @@ data class PendingAssistDraft(
     val screenshotApplied: Boolean = false,
     val contextApplied: Boolean = false,
     val textApplied: Boolean = false,
+    val textMode: AssistDraftTextMode = AssistDraftTextMode.Append,
 ) {
     val hasUnappliedContent: Boolean
         get() = (screenshot != null && !screenshotApplied) ||
@@ -60,9 +64,10 @@ class AssistDraftQueue(
         screenshot: ComposerAttachment? = null,
         context: ChatLinkContext? = null,
         text: String = "",
+        textMode: AssistDraftTextMode = AssistDraftTextMode.Append,
     ) {
         val now = clock()
-        val trimmedText = text.trim()
+        val nextText = if (textMode == AssistDraftTextMode.Replace) text else text.trim()
         state.update { current ->
             val reusable = current?.takeIf { it.id == id && !isExpired(it, now) }
             if (reusable != null) {
@@ -71,8 +76,9 @@ class AssistDraftQueue(
                     screenshotApplied = if (screenshot != null) false else reusable.screenshotApplied,
                     context = context ?: reusable.context,
                     contextApplied = if (context != null) false else reusable.contextApplied,
-                    text = trimmedText.ifEmpty { reusable.text },
-                    textApplied = if (trimmedText.isNotEmpty()) false else reusable.textApplied,
+                    text = nextText.ifEmpty { reusable.text },
+                    textApplied = if (nextText.isNotEmpty()) false else reusable.textApplied,
+                    textMode = if (nextText.isNotEmpty()) textMode else reusable.textMode,
                 )
             } else {
                 PendingAssistDraft(
@@ -80,7 +86,8 @@ class AssistDraftQueue(
                     createdAtMillis = now,
                     screenshot = screenshot,
                     context = context,
-                    text = trimmedText,
+                    text = nextText,
+                    textMode = textMode,
                 )
             }
         }
@@ -218,21 +225,31 @@ fun prefillAssistDraft(
             contextAdded = true
         }
     }
-    val note = draft.text.trim()
+    val note = if (draft.textMode == AssistDraftTextMode.Replace) draft.text else draft.text.trim()
     if (note.isNotEmpty() && !draft.textApplied) {
         composer.beginEdit()
-        val existing = composer.value.text
-        val combined = when {
-            existing.isBlank() -> note
-            existing.trimEnd().endsWith(note) -> existing
-            else -> "${existing.trimEnd()}\n$note"
-        }
-        if (combined != existing) {
-            composer.value = androidx.compose.ui.text.input.TextFieldValue(
-                combined,
-                androidx.compose.ui.text.TextRange(combined.length),
-            )
-            textAdded = true
+        if (draft.textMode == AssistDraftTextMode.Replace) {
+            if (composer.value.text != note) {
+                composer.value = androidx.compose.ui.text.input.TextFieldValue(
+                    note,
+                    androidx.compose.ui.text.TextRange(note.length),
+                )
+                textAdded = true
+            }
+        } else {
+            val existing = composer.value.text
+            val combined = when {
+                existing.isBlank() -> note
+                existing.trimEnd().endsWith(note) -> existing
+                else -> "${existing.trimEnd()}\n$note"
+            }
+            if (combined != existing) {
+                composer.value = androidx.compose.ui.text.input.TextFieldValue(
+                    combined,
+                    androidx.compose.ui.text.TextRange(combined.length),
+                )
+                textAdded = true
+            }
         }
     }
     return AssistDraftApplyResult(screenshotAdded, screenshotRejected, contextAdded, textAdded)

@@ -118,6 +118,7 @@ internal suspend fun extensionNotificationLockedAfterUnlockSettles(
 fun ExtensionUiPage(extensions: ExtensionManagement?, extensionId: String, uiId: String, title: String, onBack: () -> Unit,
                     initialState: String? = null, depth: Int = 0, shown: Boolean = true, availableAdapter: NativeExtensionStreamAdapter? = null,
                     onPush: (ExtensionUiRoute) -> Unit = {}, manager: String? = null, onAsk: ((String) -> Unit)? = null,
+                    onCompose: ((String, String?) -> Unit)? = null,
                     onSettings: ((String, String?) -> Unit)? = null,
                     onConversation: ((String, String) -> Unit)? = null,
                     notificationActionToken: String? = null,
@@ -226,6 +227,13 @@ fun ExtensionUiPage(extensions: ExtensionManagement?, extensionId: String, uiId:
                 onConversation(conversation.first, conversation.second)
                 true
             } else {
+                val compose = ExtensionViewText.composeFrom(extensionId, url)
+                if (compose != null && onCompose != null) {
+                    // A page's own quick prompt goes to the assistant's composer, unsent. Close the page first.
+                    onBack()
+                    onCompose(compose, pageManager)
+                    return@rememberExtensionView true
+                }
                 // Set Up with … is only answered here, and only from these pages. Close the page, then hand the text on.
                 val text = ExtensionViewText.askFrom(extensionId, url) ?: return@rememberExtensionView false
                 val send = ask ?: return@rememberExtensionView false

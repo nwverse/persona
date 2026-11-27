@@ -1437,6 +1437,34 @@ export struct SettingsPage {
                 .onSelect(this.appearanceSelector('group', this.appearanceRevision)).id('appearance.agent-grouping')
             } else LoadingProgress().width(Tokens.touch).height(Tokens.touch).accessibilityText(tr('loading'))
           }.constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.fine, bottom: Tokens.fine }).width('100%')
+          if (this.model.agentsDisplaySupported) {
+            Divider().strokeWidth(Tokens.divider).color(Colors.divider).margin({ left: Tokens.page })
+            Row({ space: Tokens.inset }) {
+              Column({ space: Tokens.fine }) {
+                Text(tr('agents_use_herdr_tab_name'))
+                  .fontSize(Tokens.body)
+                  .maxFontScale(Tokens.interfaceFontMaxScale)
+                  .fontColor(Colors.ink)
+                  .width('100%')
+                Text(tr('agents_use_herdr_tab_name_hint'))
+                  .fontSize(Tokens.caption)
+                  .maxFontScale(Tokens.interfaceScaleFor(Tokens.caption))
+                  .fontColor(Colors.secondary)
+                  .width('100%')
+              }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+              Toggle({ type: ToggleType.Switch, isOn: this.model.useHerdrTabName })
+                .selectedColor(Colors.action)
+                .enabled(!this.model.agentsDisplaySaving && this.model.connected && !this.model.demo)
+                .onChange((value: boolean) => {
+                  if (value !== this.model.useHerdrTabName) {
+                    Haptics.selection();
+                    this.model.setUseHerdrTabName(value);
+                  }
+                })
+                .accessibilityText(tr('agents_use_herdr_tab_name'))
+                .id('appearance.use-herdr-tab-name')
+            }.width('100%').constraintSize({ minHeight: Tokens.touch }).padding({ left: Tokens.page, right: Tokens.page, top: Tokens.fine, bottom: Tokens.fine })
+          }
         }
         .width('100%')
         .clip(true)
