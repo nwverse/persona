@@ -14,7 +14,7 @@ import "./machines/machine-views.css";
 import { ENGINE_SECTION_ID } from "./machines/engine-anchor";
 import { openNewAgent } from "../lib/new-agent";
 import { stateCount } from "../lib/state-labels";
-import { stateOf } from "../lib/format";
+import { activityOf } from "../lib/format";
 import { hubLabel, routeText } from "../lib/mesh";
 import { machineDeployment } from "../lib/machine-deploy";
 import { classifyConnection } from "../lib/node-health";
@@ -152,7 +152,7 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
   if (route.name === "machine") {
     return <div className="@container h-full">
       <div className="flex h-full min-w-0">
-        <nav aria-label={t("machines.title")} className="hidden w-52 shrink-0 overflow-y-auto border-r border-line p-2 @3xl:block">
+        {machines.length > 1 && <nav aria-label={t("machines.title")} className="hidden w-52 shrink-0 overflow-y-auto border-r border-line p-2 @3xl:block">
           <a className="flex min-h-11 items-center gap-2 px-2 text-label font-medium text-ink-2 hover:text-ink"
             href={href({ name: "machines" })} onClick={e => onLinkClick(e, { name: "machines" })}>
             <Icon name="chevronLeft" size={14} />{t("machines.title")}
@@ -174,7 +174,7 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
               {alert && alert.kind !== "offline" && <span className="block text-submeta text-orange">{alertLabel(alert)}</span>}
             </a>;
           })}
-        </nav>
+        </nav>}
         <div className="min-w-0 flex-1">
           <Suspense fallback={<Loading />}><MachineDetail key={route.mid} mid={route.mid}
             subview={route.subview ?? (legacyEngine ? "management" : route.range ? "monitoring" : "work")} mode={route.mode} onToggleSidebar={onToggleSidebar} /></Suspense>
@@ -183,6 +183,7 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
     </div>;
   }
 
+  const fleetWidth = machines.length === 1 ? "max-w-3xl" : "max-w-[1560px]";
   const add = (
     <Button tone="primary" icon="plus" onClick={() => (canAdd ? setAdding({ again: null }) : setHelping(true))}>
       {t("machines.add")}
@@ -198,15 +199,17 @@ export function Machines({ onToggleSidebar }: { onToggleSidebar: () => void }) {
         {machines.length > 0 && canAdd && add}
       </header>
       <FleetScroll view={view}>
-        <div className="machine-views mx-auto max-w-[1560px] px-5 pt-3 sm:px-8">
-          <Segmented<MachinesView> compact wrap value={view} onChange={chooseView} label={t("machines.view_label")} options={[
-            { v: "cards", label: t("machines.view_cards") },
-            ...(machines.length > 1 ? [{ v: "capabilities" as const, label: t("machines.view_capabilities") }] : []),
-            { v: "resources", label: t("resources.assistant_resources") },
-          ]} />
+        <div className={cx("mx-auto px-5 pt-3 sm:px-8", fleetWidth)}>
+          <div className="machine-views w-fit max-w-full">
+            <Segmented<MachinesView> compact wrap value={view} onChange={chooseView} label={t("machines.view_label")} options={[
+              { v: "cards", label: t("machines.view_cards") },
+              ...(machines.length > 1 ? [{ v: "capabilities" as const, label: t("machines.view_capabilities") }] : []),
+              { v: "resources", label: t("resources.assistant_resources") },
+            ]} />
+          </div>
         </div>
         {/* two columns, three on a wide screen: the cards used to stop at 1000px and leave half a wide window empty; a full-row item takes col-span-full, since md:col-span-2 alone leaves a third of the row to the next card */}
-        <div className={cx("mx-auto grid grid-cols-1 gap-3 px-5 py-6 sm:px-8", machines.length === 1 ? "max-w-3xl" : "max-w-[1560px] md:grid-cols-2 2xl:grid-cols-3")}>
+        <div className={cx("mx-auto grid grid-cols-1 gap-3 px-5 py-6 sm:px-8", fleetWidth, machines.length !== 1 && "md:grid-cols-2 2xl:grid-cols-3")}>
           {fleetView && machines.length > 1 && <TodayTokens machines={machines} metrics={metrics} />}
           {view === "resources" && <div className="col-span-full"><Suspense fallback={<Loading />}><ResourcesPanel /></Suspense></div>}
           {fleetView && !metrics && !error && (!loaded || machines.length > 0) && <Loading />}
@@ -439,11 +442,14 @@ const MachineCard = memo(function MachineCard({ m, onlyComputer, index, metrics:
         <MachineDeploy machine={m} hostedManagers={hostedManagers} className="mt-2" onDetails={() => onAlert(m.id, m.deploy_error ? "deploy_failed" : "mismatch")} onClose={NOOP} />
       )}
       {onlyComputer && !pending && m.online && <div className="flex flex-wrap gap-2 px-4 py-2">
-        <Button tone="primary" icon="plus" onClick={() => openNewAgent({ machineId: m.id })}>{t("space-page.new_agent")}</Button>
+        <Button tone="primary" className="[@media(pointer:coarse)]:min-h-11" icon="plus" onClick={() => openNewAgent({ machineId: m.id })}>{t("space-page.new_agent")}</Button>
         {(["files", "storage"] as const).map(subview => {
           const to = { ...detail, subview };
           return <a key={subview} href={href(to)} onClick={e => onLinkClick(e, to)}
-            className="inline-flex min-h-11 items-center rounded-control px-3 text-label text-ink-2 hover:bg-hover">{t(subview === "files" ? "machines.view_files" : "machines.view_storage")}</a>;
+            className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-control bg-surface px-3 text-label font-medium text-ink shadow-btn hover:bg-hover [@media(pointer:coarse)]:min-h-11">
+            <Icon name={subview === "files" ? "folder" : "archive"} size={14} stroke={2.1} />
+            {t(subview === "files" ? "machines.view_files" : "machines.view_storage")}
+          </a>;
         })}
       </div>}
       <MachineMetricsSummary machine={m} metrics={mm} />
@@ -489,7 +495,7 @@ function agentCounts(list: readonly Session[]) {
   const by = new Map<string, { total: number; working: number; needsYou: number; waitingSid?: string }>();
   for (const s of list) {
     if (s.assistant) continue;
-    const state = stateOf(s);
+    const state = activityOf(s);
     if (state === "offline") continue;
     const counts = by.get(s.machine_id) ?? { total: 0, working: 0, needsYou: 0 };
     counts.total++;
@@ -571,7 +577,7 @@ function AlertSheetHost({ sheet, machines, metrics, sessions, known, records, la
 }) {
   const m = sheet ? machines.find((x) => x.id === sheet.mid) : undefined;
   const mm = m ? metrics?.find((x) => x.machine_id === m.id) : undefined;
-  const agents = useMemo(() => (m ? sessions.filter((s) => s.machine_id === m.id && !s.assistant && stateOf(s) !== "offline") : []), [m, sessions]);
+  const agents = useMemo(() => (m ? sessions.filter((s) => s.machine_id === m.id && !s.assistant && activityOf(s) !== "offline") : []), [m, sessions]);
   const alerts = m ? machineAlerts({ machine: m, metrics: mm, launchers: launcherIssues(m.id), managerOffline: !!offlineManagerOf(roster, m) }) : [];
   return (
     <MachineAlertSheet

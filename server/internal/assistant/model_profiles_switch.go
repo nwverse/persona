@@ -53,7 +53,7 @@ func (s *Service) applyModelProfileLocked(ctx context.Context, id string, by Pro
 }
 
 func (s *Service) modelProfileSwitchLocked(ctx context.Context, id string, by ProfileActor, preview *modelProfileApproval) (modelProfileSwitch, bool, error) {
-	ps, seeded, err := s.modelProfilesLocked(ctx)
+	ps, err := s.modelProfilesLocked(ctx)
 	if err != nil {
 		return modelProfileSwitch{}, false, err
 	}
@@ -79,9 +79,6 @@ func (s *Service) modelProfileSwitchLocked(ctx context.Context, id string, by Pr
 	state, err := s.readModelProfileState(ctx)
 	if err != nil {
 		return modelProfileSwitch{}, false, err
-	}
-	if seeded {
-		state.seed()
 	}
 	now := time.Now().UTC()
 	image := &modelProfileImage{Profile: state.Active, At: now, Purposes: map[string]ModelBinding{}, Launchers: map[string]LauncherModels{}}
@@ -164,13 +161,10 @@ func (s *Service) modelProfileSwitchLocked(ctx context.Context, id string, by Pr
 		}
 	}
 	if len(sw.Changed) == 0 && state.Active == id {
-		// already in use, nothing to do: the rollback stays the one of the switch that got here (or none, just made)
+		// Already in use: keep the rollback from the switch that got here.
 		if preview != nil {
 			preview.display = modelProfileApprovalDisplay("switch", "", sw, image, p.Purposes, stored)
 			return sw, false, nil
-		}
-		if seeded {
-			return sw, false, s.putModelProfileSettings(ctx, map[string]any{modelProfilesKey: ps, modelProfileStateKey: state})
 		}
 		return sw, false, nil
 	}
@@ -185,9 +179,6 @@ func (s *Service) modelProfileSwitchLocked(ctx context.Context, id string, by Pr
 	state.pushRollback(*image)
 	state.record(ModelProfileEvent{At: now, Action: "switch", From: sw.From, To: id, By: by, Changed: sw.Changed})
 	writes[modelProfileStateKey] = state
-	if seeded {
-		writes[modelProfilesKey] = ps
-	}
 	if err := s.putModelProfileSettings(ctx, writes); err != nil {
 		return sw, false, err
 	}
@@ -219,7 +210,7 @@ func (s *Service) rollbackModelProfileLocked(ctx context.Context, targetID strin
 
 func (s *Service) modelProfileRollbackLocked(ctx context.Context, targetID string, by ProfileActor, preview *modelProfileApproval) (modelProfileSwitch, bool, error) {
 	if preview != nil {
-		ps, _, err := s.modelProfilesLocked(ctx)
+		ps, err := s.modelProfilesLocked(ctx)
 		if err != nil {
 			return modelProfileSwitch{}, false, err
 		}

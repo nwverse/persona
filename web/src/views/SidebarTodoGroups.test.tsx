@@ -83,18 +83,18 @@ describe("By to-do's rows (#6458)", () => {
     // a waiting one says what it waits on, in the neutral tone: nothing is the owner's (#11090)
     expect(row("todo:ci").textContent).toMatch(/1 个 Agent等外部$/);
     expect(row("todo:ci").querySelector("[data-tree-state]")!.className).toContain("text-ink-2");
-    expect(row("todo:none").textContent).toMatch(/^没挂待办的.*2 个 Agent需要你$/);
+    expect(row("todo:none").textContent).toMatch(/^未关联待办.*2 个 Agent需要你$/);
   });
 
   it("an empty group says 0 and no state", () => {
     show(<TodoTreeView tree={buildTodoTree(onTodos, machines, todos, { spaces: [], sessions: [] }, Date.now(), { keepEmpty: true })} activeKey="" {...stable} />);
-    expect(row("todo:none").textContent).toMatch(/^没挂待办的.*0 个 Agent$/);
+    expect(row("todo:none").textContent).toMatch(/^未关联待办.*0 个 Agent$/);
   });
 
   it("says 完成未看 over a finished agent not looked at yet, as its row and By status do, not 已完成", () => {
     const unseen = [...onTodos, s("done", "unread", "/code/notes"), s("seen", "idle", "/code/notes")];
     show(<TodoTreeView tree={buildTodoTree(unseen, machines, todos, { spaces: [], sessions: [] }, Date.now())} activeKey="" {...stable} />);
-    expect(row("todo:none").textContent).toMatch(/^没挂待办的.*2 个 Agent完成未看$/);
+    expect(row("todo:none").textContent).toMatch(/^未关联待办.*2 个 Agent完成未看$/);
     // Recent (not running) as the sidebar draws it under By to-do: its agents stopped
     act(() => root.unmount());
     root = createRoot(host);
@@ -105,7 +105,7 @@ describe("By to-do's rows (#6458)", () => {
   it("puts the agents opened in a terminal in the same group, each row ending with the Terminal source mark (#6591)", () => {
     show(<TodoTreeView tree={buildTodoTree(sessions, machines, todos, { spaces: [], sessions: [] }, Date.now())} activeKey="" {...stable} />);
     const marks = [...branch("todo:none").querySelectorAll("[data-tree-branch-list] [data-source]")].map((el) => [el.getAttribute("data-source"), el.getAttribute("aria-label")]);
-    expect(marks).toEqual([["feishu", "飞书群"], ["terminal", "终端"]]);
+    expect(marks).toEqual([["feishu", "飞书群"], ["terminal", "在标签页中"]]);
   });
 
   it("folds the group by default, except when it holds an agent that needs you", () => {
@@ -129,7 +129,7 @@ describe("By to-do's rows (#6458)", () => {
     show(<TodoTreeView tree={tree} activeKey="" {...stable} />);
     // folded: nothing under it at all, so nothing for a reader to land on (a folded group mounts no rows)
     expect(branch("todo:none").querySelector("[data-tree-branch-list]")).toBeNull();
-    const info = row("todo:none").querySelector<HTMLButtonElement>('button[aria-label="关于「没挂待办的」"]')!;
+    const info = row("todo:none").querySelector<HTMLButtonElement>('button[aria-label="关于「未关联待办」"]')!;
     expect(info.hasAttribute("aria-expanded")).toBe(false);
     // the tip's words load the first time an ⓘ is asked (InfoTipPanel)
     await act(async () => info.click());

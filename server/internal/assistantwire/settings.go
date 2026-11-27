@@ -3,6 +3,7 @@ package assistantwire
 import (
 	"time"
 
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -70,6 +71,11 @@ const (
 	// the owner's Retry or Delete when it is not found (#10669). An older manager answers "unknown method": the hub
 	// answers the app with the failure, as before.
 	MethodKeepUndelivered = "assistant.keep_undelivered"
+)
+
+var (
+	StartMethod           = buswire.Method[StartParams, StartResult]{Name: MethodStart}
+	KeepUndeliveredMethod = buswire.Method[KeepUndeliveredParams, KeepUndeliveredResult]{Name: MethodKeepUndelivered}
 )
 
 // InboxPermissionModeParam is manager-only authorization metadata on assistant.send, session.send and
@@ -172,6 +178,9 @@ type StartParams struct {
 	// GuestTools: a guest conversation (assistant/guest.go) that may use only these connector tools; nil is an
 	// ordinary one.
 	GuestTools []string `json:"guest_tools,omitempty"`
+	// GuestHandoff: a proxy reply's guest (assistant/bot_handoff.go). The manager registers it before the node
+	// starts it; never over the bus.
+	GuestHandoff string `json:"-"`
 	// NewSessionID: start it under this session id (a meeting's follow-up, made once also across a restart); a node
 	// that cannot picks its own. Never over the bus.
 	NewSessionID string `json:"-"`
@@ -181,6 +190,11 @@ type StartParams struct {
 	// Human attributes the first message to an app start vouched for by the hub. It is used for missing replies.
 	// The node adds no client message ID to that input. Never over the bus.
 	Human bool `json:"-"`
+}
+
+// StartResult carries the conversation started for the hub.
+type StartResult struct {
+	Session proto.Session `json:"session"`
 }
 
 // FirstMessageIDPrefix begins the client_msg_id the manager gives the first message of a conversation a person's own
@@ -224,6 +238,11 @@ type KeepUndeliveredParams struct {
 	// nothing was typed, so the message is simply sent again. The original start, not when the connection ended,
 	// covers a slow first attempt.
 	TriedAt time.Time `json:"tried_at,omitempty"`
+}
+
+// KeepUndeliveredResult carries the message kept for later delivery.
+type KeepUndeliveredResult struct {
+	Undelivered *proto.UndeliveredMessage `json:"undelivered"`
 }
 
 // RenameParams is assistant.rename's params: Params are the app's ({title?, tab_name?}).

@@ -29,12 +29,29 @@ export function ConnectorReadNotice({ failure, onRetry }: { failure: Conversatio
   </div>;
 }
 
+function safeWebURL(url?: string): string | undefined {
+  const trimmed = url?.trim();
+  if (!trimmed || /\s/.test(trimmed) || !/^https?:\/\//i.test(trimmed)) return undefined;
+  for (let i = 0; i < trimmed.length; i++) {
+    const c = trimmed.charCodeAt(i);
+    if (c <= 0x1f || c === 0x7f) return undefined;
+  }
+  const auth = trimmed.replace(/^https?:\/\//i, "").split(/[/?#]/, 1)[0];
+  if (!auth || auth.includes("@") || auth.includes("\\")) return undefined;
+  try {
+    const u = new URL(trimmed);
+    return (u.protocol === "https:" || u.protocol === "http:") && u.hostname && !u.username && !u.password ? u.href : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function ConnectorReplyTarget({ item, page }: { item: InboxItem; page?: ThreadPage | null }) {
   const target = item.connector?.reply_to;
   if (item.source !== "larkcli") return null;
   const message = page?.messages.find((m) => m.id === target);
   const preview = message?.text ? larkMessagePreview(message.text) : "";
-  const source = item.connector?.open_url ? undefined : message?.url;
+  const source = item.connector?.open_url ? undefined : safeWebURL(message?.url);
   const reply = target && item.connector?.can_reply;
   if (!reply && !source) return null;
   return <div className="flex shrink-0 items-center gap-2 border-b border-line px-4 py-2 text-xs text-ink-3">

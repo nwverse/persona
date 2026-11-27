@@ -153,6 +153,10 @@ func TestProviderEnv(t *testing.T) {
 				"ANTHROPIC_DEFAULT_HAIKU_MODEL": "h", "ANTHROPIC_SMALL_FAST_MODEL": "sf", "ANTHROPIC_DEFAULT_FABLE_MODEL": "big[1m]"}},
 		{"tiers explicit", with(func(l *proto.ManagedLauncher) { l.SonnetModel = "s"; l.FableModel = "f" }), "", "", false,
 			want{"ANTHROPIC_DEFAULT_SONNET_MODEL": "s", "ANTHROPIC_DEFAULT_FABLE_MODEL": "f"}},
+		{"blank gateway aliases inherit", with(func(l *proto.ManagedLauncher) {
+			l.SonnetModel = "standard"
+			l.Env = "ANTHROPIC_DEFAULT_SONNET_MODEL=\nANTHROPIC_DEFAULT_OPUS_MODEL=\nANTHROPIC_DEFAULT_FABLE_MODEL="
+		}), "", "", false, want{"ANTHROPIC_DEFAULT_SONNET_MODEL": "standard", "ANTHROPIC_DEFAULT_OPUS_MODEL": "big[1m]", "ANTHROPIC_DEFAULT_FABLE_MODEL": "big[1m]"}},
 		{"subagent force", with(func(l *proto.ManagedLauncher) { l.SubagentModel = "sub"; l.SubagentForce = true }), "", "", false,
 			want{"CLAUDE_CODE_SUBAGENT_MODEL": "sub", "CLAUDE_CODE_SUBAGENT_MODEL_FORCE": "1"}},
 		{"no subagent force", base, "", "", false, want{"CLAUDE_CODE_SUBAGENT_MODEL_FORCE": "-"}},

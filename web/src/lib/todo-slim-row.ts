@@ -65,7 +65,7 @@ export function repoCountOf(todo: Todo & { repositories?: readonly unknown[] }):
  */
 export function slimSecondaryCue(
   todo: Todo,
-  view: { urgentLead: string; urgentText: string; orphaned: boolean; owner?: OwnerNeed },
+  view: { urgentLead: string; urgentText: string; orphaned: boolean; owner?: OwnerNeed; supervisorLabel?: string },
   options: {
     effectiveSection?: TriageSection;
     failedOpen: boolean;
@@ -94,6 +94,7 @@ export function slimSecondaryCue(
   }
 
   if (todo.wait != null) return { tone: "muted", text: waitSummary(todo.wait), testId: "todo-slim-cue" };
+  if (view.supervisorLabel) return { tone: "muted", text: view.supervisorLabel, testId: "todo-slim-cue" };
 
   if (options.effectiveSection === "waiting") {
     const urgent = `${view.urgentLead}${view.urgentText}`.trim();

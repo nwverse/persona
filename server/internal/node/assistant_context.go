@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -472,6 +473,12 @@ type contextAnswer struct {
 // assistantContext asks the hub for the live snapshot (prompts.AssistantContext) and the view errors to report. The
 // hub answers from what it read lately and waits only briefly for a new read, so this doesn't hold the message up.
 func (n *Node) assistantContext(id string) contextAnswer {
+	return n.assistantContextFor(id, "")
+}
+
+// assistantContextFor is assistantContext with the current turn's user text (capped to 4 KiB) so the hub can attach
+// entity-triggered local memory for the main conversation without waiting on any model.
+func (n *Node) assistantContextFor(id, query string) contextAnswer {
 	if n.peer == nil {
 		return contextAnswer{}
 	}
@@ -479,7 +486,17 @@ func (n *Node) assistantContext(id string) contextAnswer {
 	defer cancel()
 	st, _ := n.state.get(id)
 	res := contextAnswer{requested: true, requestedRecoveryID: st.RecoveryPending}
-	if err := n.peer.Call(ctx, "assistant.context", map[string]any{"session_id": id, "recovery_id": st.RecoveryPending, "prepare_recovery": true}, &res); err != nil {
+	params := map[string]any{"session_id": id, "recovery_id": st.RecoveryPending, "prepare_recovery": true}
+	if q := strings.TrimSpace(query); q != "" {
+		if len(q) > 4096 {
+			q = q[:4096]
+			for len(q) > 0 && !utf8.ValidString(q) {
+				q = q[:len(q)-1]
+			}
+		}
+		params["query"] = q
+	}
+	if err := n.peer.Call(ctx, "assistant.context", params, &res); err != nil {
 		n.logger.Printf("assistant context: %v", err)
 		return contextAnswer{requested: true, requestedRecoveryID: st.RecoveryPending}
 	}

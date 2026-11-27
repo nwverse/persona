@@ -264,6 +264,9 @@ func (s *Service) mechanicalAgents(ctx context.Context, t Todo, agents []proto.S
 }
 
 func (s *Service) mechanicalPR(ctx context.Context, t Todo, agents []proto.Session, now time.Time, wake time.Time) (bool, time.Time) {
+	if t.hasTaskRuntime() {
+		return false, wake // PR and deployment observations already update the stage ledger
+	}
 	d := t.Delivery
 	if d == nil || d.Unblock != unblockOther || d.Gate == "" || d.At.IsZero() ||
 		(d.State != deliveryPR && d.State != deliveryMerged) || t.PRURL == "" || len(agents) != 1 {
@@ -336,8 +339,8 @@ func (s *Service) mechanicalPR(ctx context.Context, t Todo, agents []proto.Sessi
 		}
 		// Merge/CI proves a delivery stage, not deployment, live verification or acceptance. If no wake owns the
 		// next step the supervisor still hears of it; otherwise the recorded follow-up proceeds without a model wake.
-		if !s.setTaskDelivery(ctx, t.ID, TodoDelivery{State: deliveryMerged, Gate: i18n.T(s.lang(ctx),
-			"assistant-todos.supervision_needs_deployment"), Unblock: unblockAgent, At: now.UTC()}) {
+		if !s.writeTaskDelivery(ctx, t.ID, TodoDelivery{State: deliveryMerged, Gate: i18n.T(s.lang(ctx),
+			"assistant-todos.supervision_needs_deployment"), Unblock: unblockAgent, At: now.UTC()}, true) {
 			return false, time.Time{}
 		}
 		return false, wake

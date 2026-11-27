@@ -207,7 +207,7 @@ class RealInboxRepository(
         }
         scope.launch {
             combine(sessions.sessions, interactions.pending, sessions.listStatus) { agents, waiting, status ->
-                Triple(agents.map { AgentSession(it) }, waiting.map {
+                Triple(agents.map { AgentSession(it) }, waiting.filterNot { it.isDisplayMirror }.map {
                     val askLine = when (it.kind) {
                         "plan" -> (it.plan ?: it.summary)?.lineSequence()?.map { line -> line.trim().trimStart('#').trim() }
                             ?.firstOrNull { line -> line.isNotEmpty() }

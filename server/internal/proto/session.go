@@ -120,6 +120,16 @@ const (
 	StatusInterrupted = "interrupted"
 )
 
+// LauncherRefreshSendWait leaves time for a terminal Claude send to check the provider, quit and resume the
+// conversation in place before typing. The node bounds preparation and the restart separately.
+const LauncherRefreshSendWait = 4 * time.Minute
+
+// CanRefreshTerminalLauncher identifies sends that may need the longer wait. Only the node knows which process
+// and launcher configuration are actually in the pane.
+func (s *Session) CanRefreshTerminalLauncher() bool {
+	return s.PaneID != "" && !s.Assistant && s.SourceKind == "" && (s.Agent == "claude" || s.Agent == "")
+}
+
 // Unified agent states (docs/protocol/agent-states.md).
 const (
 	StateNeedsYou = "needs_you" // waiting for the user: a question, plan, permission or any TUI dialog
@@ -133,6 +143,12 @@ const (
 // CodedStartErrorMax is how many runes of a coded refusal's start_error a list row or a task keeps where a summary would
 // be clipped shorter: the hub's sentence for the code (StartErrorCode) is bounded, and its remedy comes last (#1642).
 const CodedStartErrorMax = 600
+
+// TitleMax is the most runes a session's title has in a list of sessions or a session frame (#16343): the node, the
+// manager and the hub cut a longer one (transcript.ListTitle), and the list answers' rows were already cut to it. A
+// title that long is an opening prompt an agent stored as its title (a Codex thread name, a runtime's own title),
+// which no row shows; the transcript keeps the prompt whole.
+const TitleMax = 256
 
 // ToolLoop is a node-detected repetition. It contains no tool input or output.
 // Since identifies the start of this repetition within the current turn.
@@ -245,15 +261,20 @@ type Session struct {
 	// apply to it, and a launcher switch to Launcher itself brings it back there. Beside EffortChangeFailed, in its
 	// padding: a Session stays in its allocation size class.
 	OffLauncher bool `json:"off_launcher,omitempty"`
+	// NativeTurnVerified says the AGY terminal's working or done status is backed by its current transcript and lifecycle hook.
+	NativeTurnVerified bool `json:"native_turn_verified,omitempty"`
 	// LogicalPlaceholder is manager-internal provenance: this row stands in for a logical conversation whose active
 	// physical segment is not listed. Its Assistant identity comes from the logical root, not from a physical Cwd.
-	// It occupies the last byte of padding before BackgroundStalledSince, keeping Session in its allocation size class.
+	// Kept with NativeTurnVerified beside BackgroundStalledSince so Session stays in its allocation size class.
 	LogicalPlaceholder bool `json:"-"`
-	// BackgroundStalledSince (#13744): the time since which this session's background commands have used no CPU and
-	// written no output, set only when a known worker (a build, tests, a download) runs there and that has lasted ten
-	// minutes while the turn is over. State stays working: a running tool is work, this only tells a client the work
-	// looks stuck. Zero (omitted) otherwise. Whole seconds in a uint32, in the padding before Ultracode: a Session
-	// stays in its allocation size class (TestSessionFitsItsSizeClass).
+	// BackgroundStalledSince (#13744, #16418): the time since which this session's background commands have used no CPU
+	// and written no output, set while the turn is over once that lasted the node's grace (ten minutes for a known
+	// worker such as a build, tests or a download; three for a process it does not know or a command moved from the
+	// foreground; two for shells gone from under the live claude). Beside a subagent, workflow or Monitor, state stays
+	// working and this only tells a client the work looks stuck; when stalled background commands are all that is left,
+	// the manager leaves the finished turn's own state and the task's turn settles. Zero (omitted) otherwise. Whole
+	// seconds in a uint32, in the padding before Ultracode: a Session stays in its allocation size class
+	// (TestSessionFitsItsSizeClass).
 	BackgroundStalledSince UnixTime32 `json:"background_stalled_since,omitempty"`
 	// Ultracode is Claude Code's independent session-only workflow switch: nil means unknown.
 	// UltracodePending (beside AsksRead) means a requested change waits for an idle input box; LostAt asks the client
@@ -275,8 +296,7 @@ type Session struct {
 	// largest windows are a few million tokens (Tokens32 saturates anything bigger).
 	ContextTokens int32 `json:"context_tokens,omitempty"`
 	ContextWindow int32 `json:"context_window,omitempty"`
-	// OutputTokens is cumulative generated output, not the latest context size or transcript revision.
-	OutputTokens int `json:"output_tokens,omitempty"`
+	// Cumulative generated output lives in SessionHierarchy; see OutputTokensValue / SetOutputTokens.
 	// Efforts are the levels session.modes takes for Effort when they are not Claude Code's (which the apps know): a
 	// Codex thread the phone drives through its app-server (node/codex_effort.go), its model's levels weakest first; a
 	// runtime's row of an agent that is not Claude Code's, as the runtime lists them (Paseo's, #8133; the node drops
@@ -566,6 +586,10 @@ const (
 	// CodeAgentStartStalled: the agent opened but its session never became identifiable. This says nothing about
 	// launcher health and must not trigger an automatic retry or a health detour.
 	CodeAgentStartStalled = "agent_start_stalled"
+	// CodeCodexNotLoggedIn: a Codex start met Codex's sign-in screen (node/codex_start.go): Codex has no login on that
+	// computer, so no wait would bring its session up. The launcher's sign-in (launcher health's auth), not a stalled
+	// start; the new tab is closed, and someone runs `codex login` on that computer.
+	CodeCodexNotLoggedIn = "codex_not_logged_in"
 	// CodeShellWaiting: the new tab's shell stopped on a question of its startup files (an update prompt, [Y/n]) before
 	// the start command was typed (#2570). Nothing ran; the tab is kept a while for someone to answer (node/shellsettle.go).
 	CodeShellWaiting = "shell_waiting"
@@ -620,6 +644,12 @@ const (
 	NotFoundNoTranscript   = "no_transcript"
 	NotFoundUnknownSession = "unknown_session"
 )
+
+// NotRunningEngine is the data.reason of a node's not_running refusal of a message to a session that is not live in an
+// engine that cannot bring it back from the phone (node/sendsafe.go notRunningRefusal), with data.engine the engine's
+// name. The hub words it in the request's language (apierr.Call, rpc-errors.not_running_engine); a not_running without
+// it (an older node, a runtime's own answer, a resume that never came up) keeps the node's words (#17044).
+const NotRunningEngine = "engine_cannot_reopen"
 
 // CodeTurnOverBackground is session.interrupt's answer when the Escape went to a session whose turn was already over
 // and only its background work (a background command, a subagent, a workflow) keeps it Working: nothing was
@@ -697,8 +727,9 @@ const (
 
 // TodoRef names a session's associated todo; Session.Todo is active, CompletedTodo() is display-only history.
 type TodoRef struct {
-	ID    string `json:"id"`
-	Title string `json:"title"`
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	Cancelled bool   `json:"cancelled,omitempty"`
 }
 
 // SourceRuntime is the source_kind of a session an agent runtime lists (docs/integrations/runtimes.md): source_instance_id names
@@ -778,7 +809,7 @@ type QueueEdit struct {
 	Images [][]Image `json:"images,omitempty"`
 }
 
-// ServiceTier is a speed advertised by the native Codex model catalog.
+// ServiceTier is an advertised running-session speed or a native Codex catalog tier.
 type ServiceTier struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`

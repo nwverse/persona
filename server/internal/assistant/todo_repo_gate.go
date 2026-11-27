@@ -1,6 +1,13 @@
 package assistant
 
-import "strings"
+import (
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/nwverse/persona/server/internal/assistant/repository"
+	"github.com/nwverse/persona/server/internal/assistantwire"
+)
 
 // Weakest-link delivery gate states across a to-do's bound Target Repos under todos_v2.
 const (
@@ -60,6 +67,36 @@ const (
 	gateSeverityBlockedConflict = 5
 	gateSeverityBlockedCI       = 6
 )
+
+// snapshotRepoGate keeps same-repository observations in the legacy task snapshot when todos_v2 is off.
+func snapshotRepoGate(t Todo, bound []repository.TaskRepository, todosV2 bool) *repoGate {
+	if todosV2 {
+		return aggregateRepoGate(buildRepoGateInputs(t, bound))
+	}
+
+	prByURL := repoGatePRObservations(t)
+	repos := linkedRepoGateInputs(bound, prByURL)
+	for i, binding := range bound {
+		repo := &repos[i]
+		repoURL := normalizeRepoGateURL(binding.SourceSnapshot.Identity.CanonicalURL)
+		if !repo.IsTarget || repoURL == "" {
+			continue
+		}
+		linked := make(map[string]bool, len(binding.Links))
+		for _, link := range binding.Links {
+			if link.Kind == "pull_request" || strings.TrimSpace(link.Role) == repository.LinkRoleReference {
+				linked[normalizeRepoGateURL(link.CanonicalURL)] = true
+			}
+		}
+		prefix := repoURL + "/"
+		for key, obs := range prByURL {
+			if !linked[key] && strings.HasPrefix(key, prefix) {
+				repo.PRs = append(repo.PRs, toRepoGatePR(obs.URL, obs))
+			}
+		}
+	}
+	return aggregateRepoGate(repos)
+}
 
 // aggregateRepoGate computes a deterministic weakest-link ("barrel rule") delivery gate summary
 // across a to-do's bound repositories. Reference-only repositories (IsTarget == false) are counted
@@ -263,4 +300,84 @@ func isWeakerEval(candidate, current repoGateEval) bool {
 		return candidate.pr < current.pr
 	}
 	return candidate.reason < current.reason
+}
+
+// repoGateOpenNonDraftPR reports whether g represents at least one open non-draft delivery PR on a target repository.
+// Draft PRs, missing PRs, reference-only repos and ready/merged gates return false.
+func repoGateOpenNonDraftPR(g *repoGate) bool {
+	if g == nil || g.TargetCount <= 0 || strings.EqualFold(strings.TrimSpace(g.Reason), "draft_pr") {
+		return false
+	}
+	switch g.State {
+	case repoGateBlockedCI, repoGateBlockedConflict, repoGateBlockedChanges, repoGateAwaitingReview, repoGateChecksPending:
+		return true
+	default:
+		return false
+	}
+}
+
+func repoGatePRWait(g *repoGate) *assistantwire.TodoWait {
+	if !repoGateOpenNonDraftPR(g) {
+		return nil
+	}
+	target := shortRepoGatePRLabel(g.BlockingPR)
+	if target == "" {
+		target = strings.TrimSpace(g.BlockingRepo)
+	}
+	var blockers []assistantwire.TodoWaitPRBlocker
+	switch g.State {
+	case repoGateBlockedConflict:
+		blockers = append(blockers, assistantwire.TodoWaitPRBlockerConflicts)
+	case repoGateBlockedChanges:
+		blockers = append(blockers, assistantwire.TodoWaitPRBlockerChangesRequested)
+	case repoGateBlockedCI:
+		blockers = append(blockers, assistantwire.TodoWaitPRBlockerChecksFailing)
+	case repoGateAwaitingReview:
+		blockers = append(blockers, assistantwire.TodoWaitPRBlockerReviewRequired)
+	case repoGateChecksPending:
+		if strings.EqualFold(strings.TrimSpace(g.Reason), "checks_pending") {
+			blockers = append(blockers, assistantwire.TodoWaitPRBlockerChecksPending)
+		}
+	}
+	return &assistantwire.TodoWait{
+		Kind:       assistantwire.TodoWaitKindPrMerge,
+		WaitingOn:  target,
+		URL:        strings.TrimSpace(g.BlockingPR),
+		PrBlockers: blockers,
+	}
+}
+
+func shortRepoGatePRLabel(raw string) string {
+	clean := strings.TrimSpace(raw)
+	if idx := strings.IndexAny(clean, "#?"); idx >= 0 {
+		clean = clean[:idx]
+	}
+	sep := strings.Index(clean, "://")
+	if sep < 0 {
+		return ""
+	}
+	rest := clean[sep+3:]
+	slash := strings.IndexByte(rest, '/')
+	if slash < 0 {
+		return ""
+	}
+	path := strings.Trim(rest[slash:], "/")
+	if path == "" {
+		return ""
+	}
+	segs := strings.Split(path, "/")
+	if len(segs) < 4 {
+		return ""
+	}
+	n, err := strconv.Atoi(segs[len(segs)-1])
+	if err != nil || n <= 0 {
+		return ""
+	}
+	if segs[len(segs)-2] == "pull" {
+		return fmt.Sprintf("PR #%d", n)
+	}
+	if len(segs) >= 5 && segs[len(segs)-3] == "-" && segs[len(segs)-2] == "merge_requests" {
+		return fmt.Sprintf("MR !%d", n)
+	}
+	return ""
 }

@@ -46,12 +46,30 @@ function iconOf(n: Record<string, unknown>): CardButton["icon"] {
   return { token, image };
 }
 
+function safeCardLink(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const trimmed = raw.trim();
+  if (!trimmed || /\s/.test(trimmed) || !/^https?:\/\//i.test(trimmed)) return undefined;
+  for (let i = 0; i < trimmed.length; i++) {
+    const c = trimmed.charCodeAt(i);
+    if (c <= 0x1f || c === 0x7f) return undefined;
+  }
+  const auth = trimmed.replace(/^https?:\/\//i, "").split(/[/?#]/, 1)[0];
+  if (!auth || auth.includes("@") || auth.includes("\\")) return undefined;
+  try {
+    const u = new URL(trimmed);
+    return (u.protocol === "https:" || u.protocol === "http:") && u.hostname && !u.username && !u.password ? u.href : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** The card's buttons in order (the `overflow` menu's options too), as iOS draws them: an icon-only one is kept, one
  * that does nothing is kept turned off; one with neither words nor an icon is left out. */
 export function cardButtons(meta: Record<string, unknown> | undefined): CardButton[] {
   const out: CardButton[] = [];
   const add = (o: Record<string, unknown>, label: string, style?: unknown) => {
-    const url = typeof o.url === "string" && /^https?:/i.test(o.url) ? o.url : undefined;
+    const url = safeCardLink(o.url);
     const action = typeof o.actionId === "string" && o.actionMethod === 2 ? o.actionId : undefined;
     const tooltip = typeof o.tooltip === "string" && o.tooltip.trim() ? o.tooltip.trim() : undefined;
     const icon = iconOf(o);
