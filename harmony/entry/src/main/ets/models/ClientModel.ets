@@ -147,6 +147,9 @@ export class ClientModel {
     const hidden = parseHiddenHubPages(this.sidebarConfig);
     return this.demo || (!hidden.has('todos') && !hidden.has('todo'));
   }
+  knowledgePageVisible(): boolean {
+    return this.demo || !parseHiddenHubPages(this.sidebarConfig).has('knowledge');
+  }
   /**
    * Whether this device has a registered Hub background push route (#16783, PushHealth).
    * HarmonyOS currently uses foreground `ws_notify` without Push Kit registration yet,
@@ -167,6 +170,7 @@ export class ClientModel {
   @Trace managers: ResourceRow[] = [];
   @Trace rosterDefaultId: string = '';
   @Trace features: string[] = [];
+  @Trace starredRevision: number = 0;
   @Trace private publishedImageLimits: Record<string, Object> = {};
   private helloHub: string = '';
   private helloScope: string = '';
@@ -629,7 +633,8 @@ export class ClientModel {
     if (this.detached) return;
     await this.local.put('profiles', JSON.stringify({ profiles: this.profiles, active: this.profile.id }));
   }
-  private async applyAppearance(change: DevicePreferenceChange): Promise<void> {
+  private async applyAppearance(change: DevicePreferenceChange): Promise<boolean> {
+    let saved = false;
     await this.changePreferences(async (): Promise<void> => {
       const mode = change.appearance === undefined ? this.appearance : change.appearance;
       const requested = change.style === undefined ? this.style : change.style;
@@ -639,9 +644,11 @@ export class ClientModel {
       catch (_) { this.error = 'cache_unavailable'; return; }
       this.appearance = mode; this.style = style; this.alerts = alerts;
       for (const view of this.views.values()) { view.appearance = mode; view.style = style; }
+      saved = true;
     });
+    return saved;
   }
-  async setAppearance(mode: number, style?: string, alerts?: boolean): Promise<void> { await this.applyAppearance({ appearance: mode, style: style, alerts: alerts }); }
+  async setAppearance(mode: number, style?: string, alerts?: boolean): Promise<boolean> { return await this.applyAppearance({ appearance: mode, style: style, alerts: alerts }); }
   async setStyle(style: string): Promise<void> { await this.applyAppearance({ style: style }); }
   async setAlerts(alerts: boolean): Promise<void> { await this.applyAppearance({ alerts: alerts }); }
   async setLanguage(language: string): Promise<void> {
@@ -976,6 +983,8 @@ export class ClientModel {
       else if (type === 'items' || type === 'items_replace') { this.transcript?.receive(data); } else if (type === 'terminal') {
         if (Wire.text(data, 'machine_id') === this.selected.machine && Wire.text(data, 'session_id') === this.selected.session)
           this.terminalText = (this.terminalText + Wire.text(data, 'data')).slice(-200000);
+      } else if (type === 'assistant_starred') {
+        this.starredRevision++;
       } else if (['interaction', 'interactions', 'interaction_resolved', 'session', 'sessions', 'sessions_delta', 'item', 'items', 'session_delta', 'todo', 'inbox', 'task_plan', 'assistant_feed', 'managers', 'machines'].includes(type)) {
         if (type === 'inbox') this.inboxRead.change++;
         if (type === 'todo') this.todoRead.change++;
@@ -1465,8 +1474,8 @@ export class ClientModel {
         return;
       }
       const projection = projectToolTurn(group[0].id, group, running && index === turns.length - 1);
-      projection.userMessages.forEach((item: TranscriptItem) => { const display = messageDisplay(item.text || ''); const message = new ChatMessage(item.id, 'user', display.text); message.ownerTarget = this.target(); message.itemId = item.id; message.source = display.sources; const content = parseMessageContent(display.text); message.text = content.text; message.imagePaths = content.images; message.filePaths = content.files; message.at = this.itemTime(item); messages.push(message); });
-      projection.userImages.forEach((item: TranscriptItem) => { const message = new ChatMessage(item.id, 'user'); message.imageId = item.id; message.ownerTarget = this.target(); message.itemId = item.id; message.at = this.itemTime(item); messages.push(message); });
+      projection.userMessages.forEach((item: TranscriptItem) => { const display = messageDisplay(item.text || ''); const message = new ChatMessage(item.id, 'user', display.text); message.ownerTarget = this.target(); message.itemId = item.id; message.sourceFingerprint = typeof item['source_fingerprint'] === 'string' ? item['source_fingerprint'] as string : ''; message.source = display.sources; const content = parseMessageContent(display.text); message.text = content.text; message.imagePaths = content.images; message.filePaths = content.files; message.at = this.itemTime(item); messages.push(message); });
+      projection.userImages.forEach((item: TranscriptItem) => { const message = new ChatMessage(item.id, 'user'); message.imageId = item.id; message.ownerTarget = this.target(); message.itemId = item.id; message.sourceFingerprint = typeof item['source_fingerprint'] === 'string' ? item['source_fingerprint'] as string : ''; message.at = this.itemTime(item); messages.push(message); });
       if (projection.summaryVisible) {
         const summary = new ChatMessage(projection.workKey, 'work');
         summary.at = this.itemTime(group[0]);
@@ -1474,7 +1483,7 @@ export class ClientModel {
         summary.work = projection.inspectionSteps.map((step: WorkInspectionStep) => this.workText(step)).filter((value: string) => !!value).join('\n\n');
         summary.raw = JSON.stringify(group); messages.push(summary);
       }
-      if (projection.visibleAssistantText) { const message = new ChatMessage('visible-' + group[0].id, 'assistant', projection.visibleAssistantText.text || ''); message.ownerTarget = this.target(); message.itemId = projection.visibleAssistantText.id; messages.push(message); }
+      if (projection.visibleAssistantText) { const message = new ChatMessage('visible-' + group[0].id, 'assistant', projection.visibleAssistantText.text || ''); message.ownerTarget = this.target(); message.itemId = projection.visibleAssistantText.id; message.sourceFingerprint = typeof projection.visibleAssistantText['source_fingerprint'] === 'string' ? projection.visibleAssistantText['source_fingerprint'] as string : ''; message.at = this.itemTime(projection.visibleAssistantText); messages.push(message); }
     });
     return messages;
   }
@@ -1755,19 +1764,20 @@ export class ClientModel {
     const path = '/api/v1/sessions/' + encodeURIComponent(this.selected.machine) + '/' + encodeURIComponent(this.selected.session || this.selected.id) + '/interrupt';
     return this.canInterrupt() && this.turnWorking() && this.interruptPendingKey !== this.interruptIdentity() && !this.operationBlocked(path);
   }
-  async stop(admission?: () => boolean): Promise<void> {
-    if (!this.canStop() || admission && !admission()) return;
+  async stop(admission?: () => boolean): Promise<boolean> {
+    if (!this.canStop() || admission && !admission()) return false;
     const generation = this.generation, scope = this.scope(), target = this.target(), row = this.selected, repo = this.repo();
     const feedback = this.sendAttempts.get(target);
     const pending = this.interruptIdentity(), admit = (): boolean => this.owns(generation, scope) && this.target() === target && this.repository === repo && this.canInterrupt() && this.turnWorking() && (!admission || admission());
     this.interruptPendingKey = pending;
     try { await repo.stop(row, admit); } catch (error) {
       if (this.owns(generation, scope) && this.target() === target && this.repository === repo) this.failure(error as Error);
-      return;
+      return false;
     } finally { if (this.interruptPendingKey === pending) this.interruptPendingKey = ''; }
     if (feedback && this.owns(generation,scope) && this.sendAttempts.get(target) === feedback) await this.endSendFeedback(scope,target,feedback);
-    if (!this.owns(generation, scope) || this.target() !== target || this.repository !== repo) return;
+    if (!this.owns(generation, scope) || this.target() !== target || this.repository !== repo) return false;
     if (this.demo && this.demoRepository === repo) this.refreshDemo();
+    return true;
   }
   async answer(option: string, values: Record<string, Object>, expected?: Decision, admit?: () => boolean): Promise<void> {
     if (admit && !admit()) return;
@@ -2036,6 +2046,15 @@ export class ClientModel {
       !!session && this.capabilities(session).canApprove;
   }
   canInterrupt(): boolean { return this.connected && this.capabilities().canInterrupt; }
+  canInterruptSession(row: ResourceRow): boolean {
+    if (!this.connected || row.kind !== 'session') return false;
+    if (row.group && row.group !== this.profile.id) return false;
+    if (row.manager && row.manager !== this.profile.manager) return false;
+    const session = this.sessions.find((item: ResourceRow) =>
+      item.machine === row.machine && (item.session || item.id) === (row.session || row.id)
+    );
+    return this.capabilities(session || row).canInterrupt;
+  }
   private serializeDraftContexts(refs: Record<string,Object>[]): string {
     if (!refs.length) return '';
     return JSON.stringify(refs.length===1 ? refs[0] : Wire.payload(['contexts'],[refs]));

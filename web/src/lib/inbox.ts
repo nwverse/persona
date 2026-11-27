@@ -539,7 +539,7 @@ export function waitingAgents(interactions: Interaction[], sessions: Record<stri
   if (f.source || f.folder || (f.kind && f.kind !== "agent")) return [];
   // a card a task's supervisor holds is not the user's yet (lib/supervisor-held.ts)
   const shown = interactions
-    .filter((ix) => !supervisorHeld(ix) && !interactionMuted(ix, sessions, mutes) && hasText([ix.session_title, ix.summary, interactionTitle(ix), interactionAsk(ix)], f.query))
+    .filter((ix) => !ix.mirror_of && !supervisorHeld(ix) && !interactionMuted(ix, sessions, mutes) && hasText([ix.session_title, ix.summary, interactionTitle(ix), interactionAsk(ix)], f.query))
     .sort((a, b) => byTime(a.created_at, b.created_at) || a.id.localeCompare(b.id));
   return withChildCardsUnderParents(shown);
 }

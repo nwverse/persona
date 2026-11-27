@@ -111,6 +111,9 @@ func (n *Node) putAgentState(ctx context.Context, launch host.Launcher, id strin
 			}
 		}
 	}
+	if h, ok := launch.(*orcaHost); ok {
+		state.OrcaTerminal = h.claimTerminalOwner(state.Pane, id)
+	}
 	n.state.put(id, state)
 }
 

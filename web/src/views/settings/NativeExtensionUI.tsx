@@ -1,10 +1,10 @@
 // Actual extension-page navigation, with owner-bound socket sessions retained below the top of the stack.
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import type { LegacyExtensionUI } from "./ExtensionView";
-import { pageHref } from "./ExtensionView";
+import { composeAssistant, pageHref } from "./ExtensionView";
 import { appUIStreamPage, type AppUIStreamPage, type NativePagePermission } from "../../lib/extension-ui-app-stream";
 import { NATIVE_STREAM_COMPONENTS, type StreamPageIdentity } from "../../lib/extension-ui-stream";
-import { MAX_STACK, uiContext, type UIPush } from "../../lib/extension-ui";
+import { composeText, MAX_STACK, uiContext, type UIPush } from "../../lib/extension-ui";
 import { credentialOwner, enc, errorText } from "../../lib/api";
 import { endInteraction, getState, useStore } from "../../lib/store";
 import { apiOp } from "../../lib/ops";
@@ -100,7 +100,13 @@ function ConnectedPage(props: Props & { legacy: (props: Props) => ReactNode; onL
     const page = appUIStreamPage({ identity, state: props.page.state ?? "", context: { ...uiContext(props.context), locale: currentLanguage(), ui_version: NATIVE_UI_VERSION, stream: { protocol: 1, components: [...NATIVE_STREAM_COMPONENTS] } } }, props.manager,
       (result) => {
         if (result.toast) toast(result.toast, "ok");
-        if (result.open_url) openLink(result.open_url);
+        if (result.open_url) {
+          // A page's own quick prompt goes into the assistant's main composer without sending it (#16697); every
+          // other answer's URL opens as a link.
+          const prompt = composeText(result.open_url);
+          if (prompt) composeAssistant(prompt);
+          else openLink(result.open_url);
+        }
         if (result.push) callbacks.current.push(result.push);
         if (result.pop) callbacks.current.pop();
       },
@@ -149,7 +155,7 @@ function HostConfirmation({ adapter, active }: { adapter: AppUIStreamPage; activ
   const ix = active ? Object.values(interactions).find((ix) => adapter.ownsHostConfirmation(ix as NativePagePermission)) : undefined;
   return ix ? <PagePermission key={ix.id} adapter={adapter} ix={ix as NativePagePermission} /> : null;
 }
-function PagePermission({ adapter, ix }: { adapter: AppUIStreamPage; ix: NativePagePermission }) {
+export function PagePermission({ adapter, ix }: { adapter: AppUIStreamPage; ix: NativePagePermission }) {
   const [busy, setBusy] = useState(false);
   const answer = async (allow: boolean) => {
     if (busy || !adapter.ownsHostConfirmation(ix)) return;
@@ -157,8 +163,9 @@ function PagePermission({ adapter, ix }: { adapter: AppUIStreamPage; ix: NativeP
     try {
       // The existing hub endpoint routes this pending ID to its owning manager and rechecks auth.
       // Do not manufacture an Agent session or bypass the generic Agent approval guard.
-      await apiOp(`/interactions/${enc(ix.id)}/resolve`, { method: "POST", json: { allow } });
-      endInteraction(ix.id);
+      await apiOp(`/interactions/${enc(ix.id)}/resolve`, { method: "POST", json: { allow },
+        headers: ix.created_at ? { "X-Persona-Interaction-Created-At": ix.created_at } : undefined });
+      endInteraction(ix.id, undefined, ix.created_at);
     } catch (error) { toast(t("settings-extensionview.action_failed", { error: errorText(error) }), "error"); }
     finally { setBusy(false); }
   };

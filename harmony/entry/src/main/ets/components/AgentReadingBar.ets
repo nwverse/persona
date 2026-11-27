@@ -23,10 +23,10 @@ export struct AgentReadingBar {
   aboutToDisappear():void { this.state.detach(this.owner); }
   build() {
     Stack({alignContent:Alignment.Top}) {
-      if (this.state.progress<2/3) Column() { this.full() }
+      if (this.state.progress<0.5) Column() { this.full() }
         .width('100%').constraintSize({minHeight:this.state.collapse>0 ? this.state.height : undefined})
         .onAreaChange((_:Area,area:Area) => this.state.measure(this.owner,Number(area.height)))
-        .translate({y:-this.state.collapse}).opacity(1-Math.min(1,this.state.progress*1.5))
+        .translate({y:-this.state.collapse}).opacity(1-Math.min(1,this.state.progress*2))
         .hitTestBehavior(this.state.progress<0.5 ? HitTestMode.Default : HitTestMode.None)
         .accessibilityLevel(this.state.progress<0.5 ? 'auto' : 'no-hide-descendants')
       if (this.state.progress>=0.5) Column() { this.slim() }.width('100%')

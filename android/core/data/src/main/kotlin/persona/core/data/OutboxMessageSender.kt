@@ -266,12 +266,91 @@ class OutboxMessageSender(
         change(clientMessageId, undecided, OutboxState.Cancelled)
 
     override suspend fun retry(clientMessageId: String): Boolean {
+        val entries = store.entries.first()
+        val entry = entries.firstOrNull { it.clientMessageId == clientMessageId } ?: return false
         // Still on its way: the queue looks again now rather than at its next wake (iOS's Retry Now on a waiting message).
-        if (store.entries.first().any { it.clientMessageId == clientMessageId && it.state in dispatchable }) {
+        if (entry.state in dispatchable) {
             wake.trySend(Unit)
             return true
         }
-        return change(clientMessageId, setOf(OutboxState.Refused, OutboxState.NeedsConfirmation), OutboxState.Queued)
+        if (entry.state == OutboxState.NeedsConfirmation) {
+            return retryNeedsConfirmation(entry, entries)
+        }
+        return change(clientMessageId, setOf(OutboxState.Refused), OutboxState.Queued)
+    }
+
+    private suspend fun retryNeedsConfirmation(entry: OutboxEntry, entries: List<OutboxEntry>): Boolean {
+        check(job.isActive) { "Pairing scope is closed" }
+        val id = entry.clientMessageId
+        val evidence = if (transport.readyToSend.value) {
+            try {
+                withTimeoutOrNull(reconciliationTimeoutMillis) {
+                    transport.reconcile(
+                        request(entry),
+                        entry.createdAt,
+                        entries.count { it.session == entry.session && it.text == entry.text } == 1,
+                    )
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                null
+            }
+        } else null
+        return when (evidence) {
+            MessageEvidence.Shown -> {
+                val (moved, publish) = lifecycle.withLock {
+                    check(job.isActive) { "Pairing scope is closed" }
+                    val current = store.entries.first().firstOrNull { it.clientMessageId == id }
+                        ?: return@withLock (false to false)
+                    if (current.operationId != entry.operationId) return@withLock (false to false)
+                    val transitioned = store.transition(id, reconcilable, OutboxState.Shown)
+                    if (transitioned) wake.trySend(Unit)
+                    transitioned to (transitioned || current.state == OutboxState.Shown)
+                }
+                if (publish) publishAuthoritative(entry)
+                moved
+            }
+            is MessageEvidence.Receipt -> {
+                if (evidence.result.provesServerReceived()) {
+                    val settled = lifecycle.withLock {
+                        check(job.isActive) { "Pairing scope is closed" }
+                        settleLocked(entry, setOf(OutboxState.NeedsConfirmation), evidence.result)
+                    }
+                    if (settled.publish) publishAuthoritative(entry)
+                    if (settled.moved) wake.trySend(Unit)
+                    settled.moved
+                } else {
+                    // The hub finalized this opId as failed or unknown; re-POSTing it would replay 202 unknown forever.
+                    // The user explicitly confirmed resend, so rotate to a fresh opId and requeue.
+                    lifecycle.withLock {
+                        check(job.isActive) { "Pairing scope is closed" }
+                        val current = store.entries.first().firstOrNull { it.clientMessageId == id }
+                            ?: return@withLock false
+                        if (current.state != OutboxState.NeedsConfirmation || current.operationId != entry.operationId) {
+                            return@withLock false
+                        }
+                        store.transition(id, setOf(OutboxState.NeedsConfirmation), OutboxState.Queued, null, newOperationId()).also {
+                            if (it) wake.trySend(Unit)
+                        }
+                    }
+                }
+            }
+            null -> {
+                // 404, pending, or offline: keep the same opId so hub deduplication prevents duplicates.
+                lifecycle.withLock {
+                    check(job.isActive) { "Pairing scope is closed" }
+                    val current = store.entries.first().firstOrNull { it.clientMessageId == id }
+                        ?: return@withLock false
+                    if (current.state != OutboxState.NeedsConfirmation || current.operationId != entry.operationId) {
+                        return@withLock false
+                    }
+                    store.transition(id, setOf(OutboxState.NeedsConfirmation), OutboxState.Queued).also {
+                        if (it) wake.trySend(Unit)
+                    }
+                }
+            }
+        }
     }
 
     override suspend fun retryRefused(session: SessionKey, code: String): Int = lifecycle.withLock {
@@ -290,14 +369,19 @@ class OutboxMessageSender(
 
     override suspend fun confirm(clientMessageId: String, delivered: Boolean): Boolean = change(
         clientMessageId, undecided,
-        if (delivered) OutboxState.Sent else OutboxState.Refused)
+        if (delivered) OutboxState.Sent else OutboxState.Refused,
+        opId = if (delivered) null else newOperationId())
 
     /** [reason]: the hub's sentence for the refusal [error], which Undo puts back with it. */
     private suspend fun change(
-        id: String, from: Set<OutboxState>, to: OutboxState, error: String? = null, reason: String? = null,
+        id: String, from: Set<OutboxState>, to: OutboxState, error: String? = null, reason: String? = null, opId: String? = null,
     ): Boolean = lifecycle.withLock {
         check(job.isActive) { "Pairing scope is closed" }
-        (if (reason == null) store.transition(id, from, to, error) else store.transition(id, from, to, error, null, reason)).also {
+        when {
+            reason != null -> store.transition(id, from, to, error, opId, reason)
+            opId != null -> store.transition(id, from, to, error, opId)
+            else -> store.transition(id, from, to, error)
+        }.also {
             if (it) {
                 if (to == OutboxState.Cancelled) receiptState.discard(id)
                 wake.trySend(Unit)
@@ -603,7 +687,7 @@ class OutboxMessageSender(
                     }
                     is MessageEvidence.Receipt -> {
                         // A late success can settle manual review; an unknown receipt must keep that choice visible.
-                        val from = if (evidence.result == MessageTransportResult.Accepted || evidence.result == MessageTransportResult.Held)
+                        val from = if (evidence.result.provesServerReceived())
                             reviewable + OutboxState.NeedsConfirmation else reviewable
                         settle(entry, from, evidence.result)
                     }
@@ -701,7 +785,7 @@ class OutboxMessageSender(
         return settled.state
     }
 
-    private data class Settlement(val state: OutboxState, val publish: Boolean)
+    private data class Settlement(val state: OutboxState, val publish: Boolean, val moved: Boolean = false)
 
     /** Under [lifecycle]: the operation check and its durable write cannot interleave with a composer or transcript. */
     private suspend fun settleLocked(entry: OutboxEntry, from: Set<OutboxState>, result: MessageTransportResult): Settlement {
@@ -733,7 +817,7 @@ class OutboxMessageSender(
             if (current.state in settled) return Settlement(current.state, publish = false)
         }
         val moved = when {
-            failure?.delivered != "none" -> store.transition(id, from, state, error)
+            failure?.notDelivered() != true -> store.transition(id, from, state, error)
             reason != null -> store.transition(id, from, state, error, newOperationId(), reason)
             else -> store.transition(id, from, state, error, newOperationId())
         }
@@ -741,7 +825,7 @@ class OutboxMessageSender(
             it.clientMessageId == id && it.state in settled
         })
         if (moved && state == OutboxState.WaitingForNetwork) stall(id, error) else unstall(id)
-        return Settlement(state, publish)
+        return Settlement(state, publish, moved)
     }
 
     private suspend fun publishAuthoritative(entry: OutboxEntry) {
@@ -914,6 +998,14 @@ class OutboxMessageSender(
             code != null && code != "internal" && it.isNotEmpty() && it != code && !it.startsWith("HTTP ")
         }
 
+        /** True when the hub confirmed nothing reached the node, including older hubs omitting delivered on 503 assistant_offline. */
+        private fun MessageTransportResult.HubError.notDelivered(): Boolean =
+            delivered == "none" || (code == "assistant_offline" && delivered == null)
+
+        private fun MessageTransportResult.provesServerReceived(): Boolean =
+            this == MessageTransportResult.Accepted || this == MessageTransportResult.Kept ||
+                this == MessageTransportResult.Held || (this as? MessageTransportResult.HubError)?.delivered == "yes"
+
         fun classify(result: MessageTransportResult): OutboxState = when (result) {
             MessageTransportResult.Held -> OutboxState.Held
             MessageTransportResult.Accepted -> OutboxState.Sent
@@ -928,6 +1020,7 @@ class OutboxMessageSender(
                 result.code in refusals || result.code in SetupFailureCodes -> OutboxState.Refused
                 // The computer asleep: it would wait for a link that is already up; refused at once with Retry (iOS).
                 result.code == "node_unreachable" && result.delivered == "none" -> OutboxState.Refused
+                result.code == "assistant_offline" && result.notDelivered() -> OutboxState.WaitingForNetwork
                 result.delivered == "none" && result.retryable -> OutboxState.WaitingForNetwork
                 result.delivered == "none" -> OutboxState.Refused
                 else -> OutboxState.Unknown

@@ -477,6 +477,52 @@
       },
       "extractionState": "manual"
     },
+    "AI Assistant": {
+      "comment": "A personal Agent's row in the Messages list without a latest message",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AI Assistant"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AI 助手"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AIアシスタント"
+          }
+        }
+      }
+    },
+    "Allowance used up": {
+      "comment": "A personal Agent's allowance at its service is used up",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allowance used up"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "额度已用完"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "利用枠を使い切りました"
+          }
+        }
+      }
+    },
     "Assistant [Token Project]": {
       "comment": "Token usage by project: the Persona assistant's own conversations",
       "localizations": {
@@ -809,6 +855,29 @@
       },
       "extractionState": "manual"
     },
+    "Me: %@": {
+      "comment": "A personal Agent's latest message, sent by the user, in the Messages list",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Me: %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "我：%@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自分：%@"
+          }
+        }
+      }
+    },
     "Non-development": {
       "comment": "Token usage by project: folders, the home folder and the assistant, not in a git repository",
       "localizations": {
@@ -832,6 +901,29 @@
         }
       },
       "extractionState": "manual"
+    },
+    "Not current": {
+      "comment": "A personal Agent's allowance figure is an old reading",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not current"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "非最新"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "最新ではありません"
+          }
+        }
+      }
     },
     "Nothing Used in These Days": {
       "comment": "Token usage by project: the range has no usage",
@@ -63542,6 +63634,29 @@
         }
       }
     },
+    "Dictionary [Text Lookup]" : {
+      "comment" : "The word lookup card's provider when the extension gives no name",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dictionary"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "辞書"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "词典"
+          }
+        }
+      }
+    },
     "Cycling [Extension Map]": {
       "extractionState": "manual",
       "localizations": {
@@ -83999,6 +84114,75 @@
           "stringUnit": {
             "state": "translated",
             "value": "正在从「%1$@」取…"
+          }
+        }
+      }
+    },
+    "Look Up in %@" : {
+      "comment" : "Edit menu item over one selected word; the argument is the lookup extension's name, e.g. Relingo",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Look Up in %@"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@で調べる"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在 %@ 中查词"
+          }
+        }
+      }
+    },
+    "Looking up…" : {
+      "comment" : "The word lookup card while the definition loads",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Looking up…"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "検索中…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在查询…"
+          }
+        }
+      }
+    },
+    "No entry for this word." : {
+      "comment" : "The word lookup card when the dictionary has no entry",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No entry for this word."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "この単語は見つかりませんでした。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "没有查到这个词。"
           }
         }
       }
@@ -155875,6 +156059,52 @@
           "stringUnit": {
             "state": "translated",
             "value": "回放录带"
+          }
+        }
+      }
+    },
+    "Save [Text Lookup]" : {
+      "comment" : "Button on the word lookup card: save the word to the extension's vocabulary list",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Save"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收藏"
+          }
+        }
+      }
+    },
+    "Saved [Text Lookup]" : {
+      "comment" : "Button on the word lookup card once the word is in the vocabulary list; tap removes it",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saved"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存済み"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已收藏"
           }
         }
       }
@@ -228463,6 +228693,29 @@
       },
       "extractionState": "manual"
     },
+    "Word lookup is turned off." : {
+      "comment" : "The word lookup card when the extension was turned off meanwhile",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Word lookup is turned off."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "単語の検索はオフになっています。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查词已关闭。"
+          }
+        }
+      }
+    },
     "Work Can Be Undone": {
       "extractionState": "manual",
       "localizations": {
@@ -235569,6 +235822,78 @@
       },
       "extractionState": "manual"
     },
+    "lark.agent.pin": {
+      "comment": "Messages: pin a personal AI assistant to the shelf",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pin"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "置顶"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ピン留め"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "lark.agent.unpin": {
+      "comment": "Messages: unpin a personal AI assistant",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Unpin"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "取消置顶"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ピン留めを外す"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
+    "lark.filter.agents": {
+      "comment": "Messages filter: only the personal AI assistants",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AI Assistants"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AI 助手"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AIアシスタント"
+          }
+        }
+      },
+      "extractionState": "manual"
+    },
     "lark.filter.all": {
       "extractionState": "manual",
       "localizations": {
@@ -235660,6 +235985,30 @@
           }
         }
       }
+    },
+    "lark.messages.agentsToggle": {
+      "comment": "Settings switch: list personal AI assistants with the Lark chats on the Messages page",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AI Assistants in Messages"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "消息里显示 AI 助手"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "メッセージに AI アシスタントを表示"
+          }
+        }
+      },
+      "extractionState": "manual"
     },
     "lark.searchChats": {
       "comment": "Search field over the Lark chats list",
@@ -241674,6 +242023,144 @@
           "stringUnit": {
             "state": "translated",
             "value": "文字会%@，当日回顾的保留时间与会议纪要相同，默认永久保留。"
+          }
+        }
+      }
+    },
+    "Decision: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Decision: %1$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "決定：%1$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "决定：%1$@"
+          }
+        }
+      }
+    },
+    "Disagreements": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disagreements"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "意見の相違"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "分歧"
+          }
+        }
+      }
+    },
+    "Outcome": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Outcome"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "結果"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "结果"
+          }
+        }
+      }
+    },
+    "Outcome: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Outcome: %1$@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "結果：%1$@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "结果：%1$@"
+          }
+        }
+      }
+    },
+    "settled": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "settled"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "合意済み"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已谈拢"
+          }
+        }
+      }
+    },
+    "still disagreed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "still disagreed"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未合意"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "仍有分歧"
           }
         }
       }

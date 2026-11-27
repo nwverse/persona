@@ -1,6 +1,10 @@
 package assistantwire
 
-import "time"
+import (
+	"time"
+
+	"github.com/nwverse/persona/server/internal/buswire"
+)
 
 // Outside-decision node requests. A local script reaches these through its
 // node's same-user socket; the manager authenticates the connected machine.
@@ -9,6 +13,27 @@ const (
 	MethodDecisionGet      = "decision.get"
 	MethodDecisionWithdraw = "decision.withdraw"
 )
+
+var (
+	DecisionRaiseMethod    = buswire.Method[OutsideDecisionRaiseParams, OutsideDecisionReply]{Name: MethodDecisionRaise}
+	DecisionGetMethod      = buswire.Method[OutsideDecisionIDParams, OutsideDecisionReply]{Name: MethodDecisionGet}
+	DecisionWithdrawMethod = buswire.Method[OutsideDecisionIDParams, OutsideDecisionReply]{Name: MethodDecisionWithdraw}
+)
+
+// OutsideDecisionID identifies a durable outside decision on the node bus.
+type OutsideDecisionID string
+
+// OutsideDecisionRaiseParams carries a node's request and its display source.
+type OutsideDecisionRaiseParams struct {
+	Decision OutsideDecisionRequest `json:"decision"`
+	Cwd      string                 `json:"cwd,omitempty"`
+	Source   string                 `json:"source"`
+}
+
+// OutsideDecisionIDParams identifies the decision to fetch or withdraw.
+type OutsideDecisionIDParams struct {
+	ID OutsideDecisionID `json:"id"`
+}
 
 // The states and answer provenance of an outside decision.
 const (

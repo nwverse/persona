@@ -34,8 +34,8 @@ describe("extension sign-in words", () => {
     expect(authStateText(auth("signed_in", { account: "me@example.com" }))).toBe("已登录：me@example.com");
     expect(authStateText(auth("signed_in"))).toBe("已登录");
     expect(authStateText(auth("expired"))).toBe("已过期");
-    expect(authStateText(auth("error", { message: "网络不通" }))).toBe("出错：网络不通");
-    expect(authStateText(auth("unknown"))).toBe("扩展没在运行");
+    expect(authStateText(auth("error", { message: "网络不通" }))).toBe("错误：网络不通");
+    expect(authStateText(auth("unknown"))).toBe("扩展未运行");
     expect(authStateText(auth("weird"))).toBe("weird");
   });
 

@@ -495,11 +495,12 @@ func (p briefDeliveryPort) SendFallback(ctx context.Context, req modapi.BriefFal
 	st, err := s.chat().Status(ctx)
 	ready := err == nil && st.Ready
 	s.larkModule().WorkbenchOn(st.Features, ready)
-	if ready && st.Features.Pushes {
+	_, delivery := s.taskDeliveryForConversation(ctx, req.Device.ID, req.Run.SessionID)
+	if ready && (st.Features.Pushes || isFeishuThreadDelivery(delivery)) {
 		// The fallback has no assistant answer of its own. Track the failed turn that is actually last, so a transient
 		// Feishu failure can retry, but a newer answer still makes this old occurrence too late to post.
 		_, answer, turn, _ := s.channelLastTurnOf(ctx, req.Device.ID, req.Run.SessionID)
-		to := s.larkMirror(req.Device.ID, req.Run.SessionID, req.Label, false, answer, turn)
+		to := s.larkMirror(req.Device.ID, req.Run.SessionID, req.Label, false, answer, turn, delivery)
 		s.postBriefMirror(ctx, to, l, cards, "f"+req.ID, func() { s.briefAsked(req.Facts, shown) })
 	}
 

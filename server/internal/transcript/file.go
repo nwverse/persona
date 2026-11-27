@@ -357,6 +357,7 @@ func (f *File) Full(id string) (proto.Item, error) {
 	if !found { // an item in lines not parsed yet: parse back to it (window.go)
 		it, found, err = f.findOlder(id)
 	}
+	path := f.Path
 	ref, reread := f.refs[it.Seq]
 	scratch := Meta{Sidechain: f.meta.Sidechain, Codex: f.meta.Codex,
 		agentCalls: maps.Clone(f.meta.agentCalls), taskCalls: maps.Clone(f.meta.taskCalls)}
@@ -376,7 +377,7 @@ func (f *File) Full(id string) (proto.Item, error) {
 		}
 		return it, nil
 	}
-	parsed, err := f.reparse(it.Seq, ref, &scratch)
+	parsed, err := f.reparse(path, it.Seq, ref, &scratch)
 	if it.SourceFingerprint != "" && err != nil && !errors.Is(err, io.EOF) {
 		return it, err
 	}
@@ -411,6 +412,7 @@ func (f *File) WithImages(items []proto.Item) []proto.Item {
 			continue
 		}
 		f.mu.Lock()
+		path := f.Path
 		ref, cut := f.refs[it.Seq]
 		scratch := Meta{Sidechain: f.meta.Sidechain, Codex: f.meta.Codex}
 		f.mu.Unlock()
@@ -418,7 +420,7 @@ func (f *File) WithImages(items []proto.Item) []proto.Item {
 			continue
 		}
 		if parsed[it.Seq] == nil {
-			parsed[it.Seq], _ = f.reparse(it.Seq, ref, &scratch)
+			parsed[it.Seq], _ = f.reparse(path, it.Seq, ref, &scratch)
 		}
 		if full, ok := parsed[it.Seq][it.ID]; ok && full.Image != nil {
 			if out == nil {
@@ -433,9 +435,9 @@ func (f *File) WithImages(items []proto.Item) []proto.Item {
 	return out
 }
 
-// reparse reads line seq again and returns its items by id.
-func (f *File) reparse(seq int, ref lineRef, scratch *Meta) (map[string]proto.Item, error) {
-	fh, err := openTranscript(f.Path)
+// reparse reads line seq again from path and returns its items by id.
+func (f *File) reparse(path string, seq int, ref lineRef, scratch *Meta) (map[string]proto.Item, error) {
+	fh, err := openTranscript(path)
 	if err != nil {
 		return nil, err
 	}

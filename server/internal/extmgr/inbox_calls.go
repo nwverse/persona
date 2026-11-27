@@ -11,9 +11,11 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/connectorwire"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/wireids"
 )
 
 // ---- the routes: the manager's ----
@@ -62,8 +64,9 @@ func (h *Manager) tellInboxChanged() {
 // inboxItemRaw is an item as the manager stores it (an extension's inbox_item slot); false when there is none, or
 // the manager can't say.
 func (h *Manager) inboxItemRaw(ctx context.Context, id string) ([]byte, bool) {
-	var res assistantwire.InboxItemResult
-	if err := h.callAssistant(ctx, assistantwire.MethodInboxItem, map[string]any{"id": id}, &res); err != nil || !res.OK {
+	res, err := buswire.Call(ctx, assistantCaller(h.callAssistant), assistantwire.InboxItemMethod,
+		assistantwire.InboxItemParams{ID: wireids.InboxItemID(id)})
+	if err != nil || !res.OK {
 		return nil, false
 	}
 	return res.Item, true
@@ -71,10 +74,8 @@ func (h *Manager) inboxItemRaw(ctx context.Context, id string) ([]byte, bool) {
 
 // forgetInbox removes a source's inbox items (the manager's); it says how many went.
 func (h *Manager) forgetInbox(ctx context.Context, source string) (int, error) {
-	var res struct {
-		Deleted int `json:"deleted"`
-	}
-	err := h.callAssistant(ctx, assistantwire.MethodInboxForget, map[string]any{"source": source}, &res)
+	res, err := buswire.Call(ctx, assistantCaller(h.callAssistant), assistantwire.InboxForgetMethod,
+		assistantwire.InboxForgetParams{Source: source})
 	return res.Deleted, err
 }
 

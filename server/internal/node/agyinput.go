@@ -177,7 +177,7 @@ func (n *Node) agyInputPanes() []agyInputPane {
 // runs the pane now, with no end message and no restart notice after it, whose output ends in a prompt (quiet: one that
 // has not changed for agyInputQuiet). Without quiet (an answer checking its card), the prompt only has to be there.
 func (n *Node) agyWaiting(ctx context.Context, p agyInputPane, now time.Time, quiet bool) []agyWaitingTask {
-	dir := filepath.Join(n.agyDataRoot(), "brain", p.conversation, ".system_generated")
+	dir := filepath.Join(n.agyRootFor(p.conversation), "brain", p.conversation, ".system_generated")
 	entries, err := os.ReadDir(filepath.Join(dir, "tasks"))
 	if err != nil {
 		return nil
@@ -375,7 +375,7 @@ const agyLabel = "Antigravity"
 // agyTaskCommand is the command a task runs, as its start step describes it ("Task Description: …"), "" when the end
 // of the transcript does not say.
 func (n *Node) agyTaskCommand(conversation, task string) string {
-	path := filepath.Join(n.agyDataRoot(), "brain", conversation, agyTranscriptPath)
+	path := filepath.Join(n.agyRootFor(conversation), "brain", conversation, agyTranscriptPath)
 	f, err := os.Open(path)
 	if err != nil {
 		return ""

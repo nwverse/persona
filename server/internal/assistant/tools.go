@@ -40,7 +40,8 @@ import (
 var toolNames = []string{"resource_status", "ask_user", "ask_user_withdraw", "notify_user", "supervision_finish", "schedule_followup", "schedule_routine", "schedule_state_set", "delete_routine", "list_followups",
 	"cancel_followup", "list_places", "save_place", "machines_list", "machine_redeploy", "agents_list", "agent_read", "agent_send", "agent_switch", "agents_switch", "agent_interrupt", "agent_start", "agent_supervise", "agent_transfer", "agent_archive", "agent_unarchive", "agent_autoname", "agent_autoname_receipt", "interaction_answer", "ask_escalate", "inbox_suggest", "inbox_draft",
 	"inbox_folders", "inbox_move", "inbox_post", "inbox_replay", "message_send", "kb_search", "kb_list", "kb_get", "kb_update", "kb_history_plan", "kb_history_status", "kb_history_stop", "kb_history_resume", "persona_settings", "secret_run", "skill_import",
-	"model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback", "model_profile_capture", "model_probe", "launcher_import",
+	"model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback", "model_profile_capture",
+	"model_profile_deactivate", "model_profile_clear", "model_probe", "launcher_import",
 	"repositories_list", "repository_get", "repository_add", "view_show", "view_update", "view_get", pageToolName,
 	"conversations_list", "conversations_switch", "conversation_read", "conversation_rename", "conversation_archive", "conversation_unarchive",
 	"conversation_tags_set",
@@ -191,7 +192,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		return s.toolTaskPlanFrom(ctx, machine, self, args)
 	case "task_plan_withdraw":
 		return s.toolTaskPlanWithdraw(ctx, self, args) // tasks_start.go
-	case "model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback", "model_profile_capture":
+	case "model_profiles_list", "model_profile_get", "model_profile_switch", "model_profile_rollback", "model_profile_capture",
+		"model_profile_deactivate", "model_profile_clear":
 		return s.toolModelProfile(ctx, machine, self, name, args)
 	case "model_probe":
 		return s.toolModelProbe(ctx, args)
@@ -712,17 +714,18 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			return "", waitErr
 		}
 		var a struct {
-			Machine           string `json:"machine"`
-			Cwd               string `json:"cwd"`
-			Prompt            string `json:"prompt"`
-			SkipProjectMemory bool   `json:"skip_project_memory"`
-			Launcher          string `json:"launcher"`
-			Model             string `json:"model"`
-			Effort            string `json:"effort"`
-			Speed             string `json:"speed"`
-			PermissionMode    string `json:"permission_mode"`
-			Tier              string `json:"tier"`
-			Host              string `json:"host"` // agy (the Antigravity companion) or an engine host; "": the hub's choice (start_host.go)
+			Machine           string             `json:"machine"`
+			Cwd               string             `json:"cwd"`
+			Prompt            string             `json:"prompt"`
+			SkipProjectMemory bool               `json:"skip_project_memory"`
+			ModelAliases      proto.ModelAliases `json:"model_aliases"`
+			Launcher          string             `json:"launcher"`
+			Model             string             `json:"model"`
+			Effort            string             `json:"effort"`
+			Speed             string             `json:"speed"`
+			PermissionMode    string             `json:"permission_mode"`
+			Tier              string             `json:"tier"`
+			Host              string             `json:"host"` // agy (the Antigravity companion) or an engine host; "": the hub's choice (start_host.go)
 			Worktree          struct {
 				Branch string `json:"branch"`
 			} `json:"worktree"`
@@ -733,9 +736,14 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			// approves on the phone (secret_handoff.go).
 			SecretEnv map[string]string `json:"secret_env"`
 		}
-		_ = json.Unmarshal(args, &a)
 		if err := checkSecretEnvArg(args); err != nil {
 			return "", fmt.Errorf("%w; no agent was started", err)
+		}
+		if err := json.Unmarshal(args, &a); err != nil {
+			return "", errors.New("invalid agent_start arguments; no agent was started")
+		}
+		if err := a.ModelAliases.Validate(); err != nil {
+			return "", err
 		}
 		if a.PermissionMode = strings.TrimSpace(a.PermissionMode); a.PermissionMode != "" && !slices.Contains(proto.PermissionModes, a.PermissionMode) {
 			return "", fmt.Errorf("invalid permission_mode %q; no agent was started", a.PermissionMode)
@@ -809,6 +817,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 				s.savePlacement(ctx, decision)
 			}
 			return "", fmt.Errorf("%w; no agent was started", err)
+		}
+		if err := checkAliasAgent(a.ModelAliases, fit); err != nil {
+			return "", err
 		}
 		if err := checkHostLauncher(run, fit); err != nil {
 			return "", fmt.Errorf("%w; no agent was started", err)
@@ -891,6 +902,12 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		// Start with a local placeholder; the model names the returned session in the background.
 		title := localTabName(a.Prompt)
 		params := map[string]any{"cwd": a.Cwd, "launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "speed": a.Speed, "permission_mode": a.PermissionMode, "tab_name": title, "title": title}
+		if own.model != "" {
+			params["explicit_model"] = own.model
+		}
+		if len(a.ModelAliases) != 0 {
+			params["model_aliases"] = a.ModelAliases
+		}
 		if a.Host != "" {
 			params["host"] = a.Host
 		}

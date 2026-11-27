@@ -136,6 +136,10 @@ internal fun mergedInteractions(stacks: GroupStacks): InteractionCenter = object
         resolveOutcome(id, resolution, handoffCard = false)
     override suspend fun resolveOutcome(id: String, resolution: Resolution, handoffCard: Boolean) =
         stacks.use(GroupKeys.namespaceOf(id)) { it.repositories.interactions.resolveOutcome(GroupKeys.raw(id), resolution, handoffCard) }
+    override suspend fun resolveOccurrence(interaction: Interaction, resolution: Resolution, handoffCard: Boolean) =
+        stacks.use(GroupKeys.namespaceOf(interaction.id)) {
+            it.repositories.interactions.resolveOccurrence(it.names.rawInteraction(interaction), resolution, handoffCard)
+        }
     override suspend fun replyOwnerApproval(interaction: Interaction, phrase: String) =
         stacks.use(GroupKeys.namespaceOf(interaction.id)) {
             it.repositories.interactions.replyOwnerApproval(it.names.rawInteraction(interaction), phrase)
@@ -236,6 +240,8 @@ internal fun mergedMachineManagement(
     override suspend fun herdr(machineId: String) = routes.on(machineId) { it.herdr(machineId) }
     override suspend fun startHerdr(machineId: String) = routes.on(machineId) { it.startHerdr(machineId) }
     override suspend fun setEngine(machineId: String, engine: String) = routes.on(machineId) { it.setEngine(machineId, engine) }
+    override suspend fun setEngineHosts(machineId: String, hosts: List<String>, default: String) =
+        routes.on(machineId) { it.setEngineHosts(machineId, hosts, default) }
     override suspend fun botmux(machineId: String) = routes.on(machineId) { it.botmux(machineId) }
     override suspend fun setBotmux(machineId: String, on: Boolean) = routes.on(machineId) { it.setBotmux(machineId, on) }
     override suspend fun claudeSettings(machineId: String) = routes.on(machineId) { it.claudeSettings(machineId) }

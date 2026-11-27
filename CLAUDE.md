@@ -245,7 +245,9 @@ The full list is in `docs/lessons/`; read the file for the area you touch first.
   never a hand-picked number (`docs/lessons/workflow.md`).
 - Scripts that wait for background jobs or logs always have a timeout and end with a one-line verdict on success, failure and timeout.
 - **Simulators only through `scripts/app/sim-boot.sh`** (`--profile default|watch|live-activity|stock`, slimmed by default); never
-  `simctl create/boot` or `-destination name=…`, and never reboot someone else's. A failure only on a slim simulator gets rerun on
+  `simctl create/boot` or `-destination name=…`, and never reboot someone else's. At most 3 simulators are booted per Mac (a fourth
+  boot waits, then exits 75): reuse one that exists (a new name adopts a shut-down `Persona …` simulator), `xcrun simctl shutdown <udid>`
+  the moment you are done, and `xcrun simctl delete <udid>` when the task ends. A failure only on a slim simulator gets rerun on
   `--profile stock` first; a "no system prompt appeared" test proves something only on stock. UI tests launch with `app.launchPinned()` (`docs/operations/testing.md`).
 - A DEBUG launch argument's name must not equal any Swift identifier, or `release.sh`'s strings check blocks TestFlight: name switches
   `open…` / `show…` and add each on its own line, in order, to `scripts/release/debug_switches.txt`.
