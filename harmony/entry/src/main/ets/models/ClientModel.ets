@@ -2036,6 +2036,7 @@ export class ClientModel {
       !!session && this.capabilities(session).canApprove;
   }
   canInterrupt(): boolean { return this.connected && this.capabilities().canInterrupt; }
+  canInterruptSession(row: ResourceRow): boolean { return this.connected && this.capabilities(row).canInterrupt; }
   private serializeDraftContexts(refs: Record<string,Object>[]): string {
     if (!refs.length) return '';
     return JSON.stringify(refs.length===1 ? refs[0] : Wire.payload(['contexts'],[refs]));

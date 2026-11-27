@@ -54,6 +54,7 @@ export struct FoldInspectorPanel {
   @Event onOpenLink: (address: string) => void = () => {};
   @Local private env: NativeEnvironment = nativeEnvironment;
   @Local private liveView: NativeLiveView = nativeLiveView;
+  @Local private rootWidth: number = 0;
   @Local private workbenchTab: number = 0;
   @Local private embeddedToolsTab: number = 0;
   @Local private embeddedWorkspace: SessionWorkspace | undefined = undefined;
@@ -280,6 +281,39 @@ export struct FoldInspectorPanel {
     return tr('machine_load') + ' ' + loadText;
   }
 
+  private effectivePanelWidth(): number {
+    return this.rootWidth > 0 ? this.rootWidth : this.panelWidth;
+  }
+
+  private useCompactChipGrid(): boolean {
+    return this.effectivePanelWidth() < 316;
+  }
+
+  private machineCpuPercent(machine: ResourceRow): number {
+    const key = machineKey(machine.group, machine.manager, machine.id);
+    const reading = this.machineReadings.get(key);
+    if (!reading) return -1;
+    const cpu = Wire.number(reading.latest, 'cpu', -1);
+    return cpu >= 0 && Number.isFinite(cpu) ? Math.max(0, Math.min(100, cpu)) : -1;
+  }
+
+  private machineLoadPerCore(machine: ResourceRow): number {
+    const key = machineKey(machine.group, machine.manager, machine.id);
+    const reading = this.machineReadings.get(key);
+    if (!reading) return -1;
+    const sys = Object.keys(reading.system).length ? reading.system : Wire.object(machine.data(), 'system');
+    const cores = Wire.number(sys, 'cores');
+    const loadVal = Wire.number(reading.latest, 'load', -1);
+    if (cores <= 0 || loadVal < 0 || !Number.isFinite(loadVal)) return -1;
+    return loadVal / cores;
+  }
+
+  private telemetryGaugeTint(percent: number, warnAt: number, dangerAt: number): ResourceColor {
+    if (percent >= dangerAt) return Colors.danger;
+    if (percent >= warnAt) return Colors.working;
+    return Colors.positive;
+  }
+
   private machineHardwareCaption(machine: ResourceRow): string {
     const key = machineKey(machine.group, machine.manager, machine.id);
     const reading = this.machineReadings.get(key);
@@ -354,11 +388,12 @@ export struct FoldInspectorPanel {
       .padding({ left: 4, right: 4 })
     }
     .layoutWeight(1)
-    .height(52)
+    .height(this.useCompactChipGrid() ? 48 : 52)
     .padding(0)
     .backgroundColor(Colors.selection)
     .borderRadius(12)
     .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: 12 })
+    .shadow(PhoneStyle.cardElevation(this.env.dark))
     .accessibilityText(tr(labelKey))
     .bindTips(tr(labelKey))
     .onClick(() => {
@@ -611,7 +646,7 @@ export struct FoldInspectorPanel {
               })
               .id('fold.inspector.session.' + row.id)
 
-              if (this.normalizedRowState(row) === 'working' && !this.model.demo) {
+              if (this.normalizedRowState(row) === 'working') {
                 Button({ type: ButtonType.Circle }) {
                   SymbolGlyph(Symbols.stop).fontSize('10vp').fontColor([Colors.danger])
                 }
@@ -660,11 +695,12 @@ export struct FoldInspectorPanel {
       .padding({ left: 4, right: 4 })
     }
     .layoutWeight(1)
-    .height(52)
+    .height(this.useCompactChipGrid() ? 48 : 52)
     .padding(0)
     .backgroundColor(Colors.selection)
     .borderRadius(12)
     .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: 12 })
+    .shadow(PhoneStyle.cardElevation(this.env.dark))
     .accessibilityText(tr('phone_xiaoyi'))
     .bindTips(tr('phone_xiaoyi'))
     .onClick(() => {
@@ -708,11 +744,26 @@ export struct FoldInspectorPanel {
             this.metaRow(tr('phone_session_folder'), Wire.text(this.sessionData(), 'cwd'), true, true)
             if (this.selectedSession()!.kind === 'session' && this.selectedSession()!.machine) {
               Divider().strokeWidth(0.5).color(Colors.divider).margin({ top: 2, bottom: 2 })
-              Row({ space: 6 }) {
-                this.toolChip('files', 0, 'fold.inspector.tools.files', Symbols.folder)
-                this.toolChip('git', 1, 'fold.inspector.tools.git', $r('sys.symbol.arrow_triangle_merge'))
-                this.toolChip('terminal', 2, 'fold.inspector.tools.terminal')
-                this.xiaoYiChip()
+              Column() {
+                if (this.useCompactChipGrid()) {
+                  Column({ space: 8 }) {
+                    Row({ space: 8 }) {
+                      this.toolChip('files', 0, 'fold.inspector.tools.files', Symbols.folder)
+                      this.toolChip('git', 1, 'fold.inspector.tools.git', $r('sys.symbol.arrow_triangle_merge'))
+                    }.width('100%')
+                    Row({ space: 8 }) {
+                      this.toolChip('terminal', 2, 'fold.inspector.tools.terminal')
+                      this.xiaoYiChip()
+                    }.width('100%')
+                  }.width('100%')
+                } else {
+                  Row({ space: 6 }) {
+                    this.toolChip('files', 0, 'fold.inspector.tools.files', Symbols.folder)
+                    this.toolChip('git', 1, 'fold.inspector.tools.git', $r('sys.symbol.arrow_triangle_merge'))
+                    this.toolChip('terminal', 2, 'fold.inspector.tools.terminal')
+                    this.xiaoYiChip()
+                  }.width('100%')
+                }
               }.width('100%').id('fold.inspector.workspace')
             }
           }
@@ -810,6 +861,33 @@ export struct FoldInspectorPanel {
     }
   }
 
+  @Builder machineTelemetryGauge(label: string, valueText: string, percent: number, tint: ResourceColor, identity: string) {
+    Column({ space: 3 }) {
+      Row({ space: 6 }) {
+        Text(label)
+          .fontSize(Tokens.interfaceFontVp(11, this.env.fontScale))
+          .fontColor(Colors.secondary)
+          .layoutWeight(1)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+        Text(valueText)
+          .fontSize(Tokens.interfaceFontVp(11, this.env.fontScale))
+          .fontFamily('monospace')
+          .fontWeight(600)
+          .fontColor(tint)
+          .maxLines(1)
+      }.width('100%')
+      Stack({ alignContent: Alignment.Start }) {
+        Row().width('100%').height(6).borderRadius(3).backgroundColor(this.env.dark ? '#28FFFFFF' : '#14000000')
+        Row()
+          .width(String(Math.max(0, Math.min(100, percent))) + '%')
+          .height(6)
+          .borderRadius(3)
+          .backgroundColor(tint)
+      }.width('100%').height(6).clip(true)
+    }.width('100%').id(identity)
+  }
+
   @Builder usageWindowRow(w: SubscriptionWindow) {
     Column({ space: 3 }) {
       Row({ space: 6 }) {
@@ -825,7 +903,7 @@ export struct FoldInspectorPanel {
           .maxLines(1)
       }.width('100%')
       Stack({ alignContent: Alignment.Start }) {
-        Row().width('100%').height(6).borderRadius(3).backgroundColor(Colors.control)
+        Row().width('100%').height(6).borderRadius(3).backgroundColor(this.env.dark ? '#28FFFFFF' : '#14000000')
         Row()
           .width(String(Math.max(0, Math.min(100, w.percent))) + '%')
           .height(6)
@@ -908,6 +986,36 @@ export struct FoldInspectorPanel {
                       .maxLines(1)
                       .textOverflow({ overflow: TextOverflow.Ellipsis })
                       .width('100%')
+                  }
+                  if (this.machineCpuPercent(machine) >= 0 || this.machineLoadPerCore(machine) >= 0) {
+                    Column({ space: 6 }) {
+                      Text(tr('machine_cpu_load'))
+                        .fontSize(Tokens.interfaceFontVp(10, this.env.fontScale))
+                        .fontWeight(FontWeight.Medium)
+                        .fontColor(Colors.secondary)
+                        .maxLines(1)
+                      if (this.machineCpuPercent(machine) >= 0) {
+                        this.machineTelemetryGauge(
+                          'CPU',
+                          machinePercent(this.machineCpuPercent(machine)),
+                          this.machineCpuPercent(machine),
+                          this.telemetryGaugeTint(this.machineCpuPercent(machine), 75, 90),
+                          'fold.workbench.machine.cpu.' + machine.id
+                        )
+                      }
+                      if (this.machineLoadPerCore(machine) >= 0) {
+                        this.machineTelemetryGauge(
+                          tr('machine_load'),
+                          tr('machine_load_per_core').replace('{per}', this.machineLoadPerCore(machine).toFixed(this.machineLoadPerCore(machine) >= 10 ? 1 : 2)),
+                          Math.min(100, this.machineLoadPerCore(machine) * 100),
+                          this.telemetryGaugeTint(this.machineLoadPerCore(machine) * 100, 75, 100),
+                          'fold.workbench.machine.load.' + machine.id
+                        )
+                      }
+                    }
+                    .width('100%')
+                    .alignItems(HorizontalAlign.Start)
+                    .padding({ top: 4 })
                   }
                 }
                 .width('100%')
@@ -1034,6 +1142,12 @@ export struct FoldInspectorPanel {
     }
     .width(this.panelWidth)
     .height('100%')
+    .onAreaChange((_old: Area, area: Area) => {
+      const w = Number(area.width);
+      if (Number.isFinite(w) && w > 0 && Math.abs(w - this.rootWidth) > 1) {
+        this.rootWidth = w;
+      }
+    })
     .transition(Motion.slideFade(this.env.reduceMotion, 0))
     .id('fold.inspector.panel')
   }

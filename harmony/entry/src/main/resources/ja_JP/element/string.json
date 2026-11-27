@@ -9147,6 +9147,58 @@
     {
       "name": "copied",
       "value": "コピーしました"
+    },
+    {
+      "name": "quick_palette_title",
+      "value": "クイックコマンド"
+    },
+    {
+      "name": "quick_palette_placeholder",
+      "value": "エージェント、ワークスペース、操作を検索…"
+    },
+    {
+      "name": "quick_palette_agents",
+      "value": "対応待ち・稼働中のエージェント"
+    },
+    {
+      "name": "quick_palette_workspaces",
+      "value": "ワークスペース"
+    },
+    {
+      "name": "quick_palette_actions",
+      "value": "プロコントロール"
+    },
+    {
+      "name": "quick_palette_toggle_theme",
+      "value": "ライト / ダークテーマを切り替え"
+    },
+    {
+      "name": "quick_palette_toggle_workbench",
+      "value": "ライブワークベンチを切り替え"
+    },
+    {
+      "name": "quick_palette_liveview_preview",
+      "value": "LiveView プレビュー"
+    },
+    {
+      "name": "quick_palette_code_tab",
+      "value": "コードタブに切り替え"
+    },
+    {
+      "name": "quick_palette_machines_tab",
+      "value": "マシンタブに切り替え"
+    },
+    {
+      "name": "quick_palette_empty",
+      "value": "一致するコマンドがありません"
+    },
+    {
+      "name": "fold_posture_book",
+      "value": "折りたたみブック"
+    },
+    {
+      "name": "machine_cpu_load",
+      "value": "CPU と負荷"
     }
   ]
 }
