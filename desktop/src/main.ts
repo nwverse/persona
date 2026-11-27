@@ -278,7 +278,7 @@ async function showMain(): Promise<BrowserWindow | undefined> {
   current.on("leave-full-screen", publishChrome);
   const onThemeUpdated = () => {
     if (current.isDestroyed()) return;
-    if (surfaceStyle === "liquid-glass") applySurfaceStyle(current, surfaceStyle);
+    if (process.platform === "darwin") applySurfaceStyle(current, surfaceStyle);
     else current.setBackgroundColor(windowBackground());
   };
   nativeTheme.on("updated", onThemeUpdated);

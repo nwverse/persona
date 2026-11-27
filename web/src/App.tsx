@@ -766,7 +766,7 @@ function Shell() {
         onClick={close}
       />
       <main ref={setMainRef} inert={a11y.modal || undefined} className="relative flex min-w-0 flex-1 flex-col">
-        {macChrome !== undefined && <MacMainContour mainEl={mainEl} bay={macBay} animating={sidebarAnimating} contourRef={contourDriverRef} />}
+        {macChrome !== undefined && <MacMainContour mainEl={mainEl} bay={macBay} animating={macWindowed && sidebarAnimating} contourRef={contourDriverRef} />}
         {/* dropped after loading: which phase, and a click explains with "Retry now" (views/ConnectionPill.tsx). A strip
             over the page that pushes it down while it shows, never a layer over its header, its fields or its title
             (web usability audit item 87); its details open over the page. */}

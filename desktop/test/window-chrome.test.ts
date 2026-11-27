@@ -21,6 +21,7 @@ test("showMain configures macOS hiddenInset titlebar and publishes window chrome
   assert.ok(showMain.includes('current.on("leave-full-screen", publishChrome)'), "showMain must publish chrome on fullscreen leave");
   assert.ok(!showMain.includes('current.on("focus", publishChrome)'), "showMain must not churn root chrome IPC on window focus");
   assert.ok(!showMain.includes('current.on("blur", publishChrome)'), "showMain must not churn root chrome IPC on window blur");
+  assert.ok(showMain.includes('if (process.platform === "darwin") applySurfaceStyle(current, surfaceStyle);'), "onThemeUpdated must keep macOS appliedStates in sync across Light/Dark switches");
   const tray = await source("tray.ts");
   assert.ok(tray.includes("!window.isVisible() || window.isMinimized()"), "macOS activate handler must avoid redundant show() when window is already visible");
   assert.ok(main.includes("applyMacSurfaceStyle("), "applySurfaceStyle must delegate to applyMacSurfaceStyle");
