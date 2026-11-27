@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/closeout"
 	"github.com/nwverse/persona/server/internal/lazyre"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -211,6 +212,10 @@ func deliveryStage(state string) string {
 // setTaskDelivery keeps d as task id's delivery, with its stages (the same setting), and on the todo.
 // False leaves the previous state intact so deterministic supervision cannot consume a failed write.
 func (s *Service) setTaskDelivery(ctx context.Context, id string, d TodoDelivery) bool {
+	return s.writeTaskDelivery(ctx, id, d, false)
+}
+
+func (s *Service) writeTaskDelivery(ctx context.Context, id string, d TodoDelivery, legacy bool) bool {
 	var reviewedAt time.Time // the latest review: a hold told to the supervisor before it is told again (#13191)
 	if t, ok := s.todoNow(id); ok {
 		if r := triageLatestReview(t.Supervision); r != nil {
@@ -227,6 +232,10 @@ func (s *Service) setTaskDelivery(ctx context.Context, id string, d TodoDelivery
 		return false
 	}
 	cur := b.stages[id]
+	if legacy && cur.hasTaskRuntime() {
+		b.mu.Unlock()
+		return false
+	}
 	// A later owner hold can ask for the same action again after a review cleared it.
 	if dd := cur.Delivery; dd != nil && dd.State == d.State && dd.Gate == d.Gate && dd.Unblock == d.Unblock &&
 		(d.Unblock != unblockUser || !d.At.After(dd.At)) {
@@ -311,7 +320,8 @@ func currentDelivery(t Todo) *TodoDelivery {
 		return t.Delivery
 	}
 	d := *t.Delivery
-	if p := prFacts(t, t.PRURL); d.State == deliveryPR && p != nil && !p.CheckedAt.IsZero() && !p.CheckedAt.Before(d.At) {
+	structured := t.hasTaskRuntime()
+	if p := prFacts(t, t.PRURL); !structured && d.State == deliveryPR && p != nil && !p.CheckedAt.IsZero() && !p.CheckedAt.Before(d.At) {
 		switch {
 		case p.State == "merged" && len(polledPRs(t)) == 1:
 			d.State, d.Gate, d.Unblock = deliveryMerged, "", unblockAgent
@@ -324,7 +334,12 @@ func currentDelivery(t Todo) *TodoDelivery {
 		return &d
 	}
 	d.SupervisorTold = time.Time{}
-	if d.Unblock != unblockSupervisor { // already read once (the snapshot reads its copies again)
+	if structured {
+		if w := t.WaitState; t.Phase == assistantwire.TaskPhaseWaiting && d.Gate == "" && w != nil &&
+			w.WaitingOn == assistantwire.WaitExternal && w.Target.Kind == assistantwire.WaitTargetPR && sameReplyPR(w.Target.Ref, t.PRURL) {
+			d.Gate, d.Unblock = clip(oneLine(w.Reason), 60), unblockOther
+		}
+	} else if d.Unblock != unblockSupervisor { // already read once (the snapshot reads its copies again)
 		d.Unblock = unblockOf(d.Unblock, d.Gate)
 	}
 	v := t.Supervision

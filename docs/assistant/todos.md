@@ -617,6 +617,19 @@ checks are evidence for that review, never a result or acceptance by themselves.
 
 ## Delivery
 
+**Task phase and waiting state (#17256).** An Agent can give its current `phase` (preparing, working, waiting,
+reviewing or done) in `report_to_supervisor`. A `wait_state` implies waiting and names `waiting_on` (user, external,
+dependency or date), a `wait_target` with a reference and optional kind and summary, a reason and an optional RFC 3339
+deadline. A new phase outside waiting clears the wait. A typed work contract can start tracking phase from the kind
+of its first report. The existing stage ledger keeps these optional fields in both to-do modes and across restarts.
+
+For a structured task, an explicit `delivery_pr` uses a saved delivery link or the Agent's verified checkout.
+The hub uses the linked PR's draft, review and check status, and the running build's commit, to update the phase and
+the existing `stage` and `delivery` fields. For example, pending checks on a ready PR can put the task in Waiting and
+a confirmed deployment moves it to Reviewing. Waits on other dependencies keep their own target and reason.
+The Agent's done report still goes through the existing acceptance checks. Tasks without structured runtime state
+keep the older report handling.
+
 (#3306, #12034, lessons in `docs/lessons/delivery.md`) Assistant setting `delivery_gate` (`assistant.delivery_gate` in `persona_settings`, `PUT /api/v1/assistant` with `{"delivery_gate": "off" | "merged" | "live"}`, and Web Settings › Assistant › Agent follow-up) controls the three-tier delivery closeout gate, while keeping full backward compatibility with the legacy boolean `assistant.done_needs_delivery` (`true` maps to `live`, explicit `false` maps to `off`, both unset defaults to `merged`):
 
 - **`merged` (default)**: for supervised tasks with linked PR(s) (`pr_url`, review `link`, or saved repository `pull_request` links) and/or linked repository `issue` links, `task_review accepted` verifies that every PR is merged and every linked issue is closed before closing the to-do. Otherwise it refuses premature acceptance and instructs the supervisor to `park` the task (`waiting_on: "external_event"` with `evidence.kind: "external_event"`, `url`, `pr_event: "terminal"`, or `waiting_on: "someone_else"` with `evidence.kind: "merge_review"`) until merge and issue closure—so `sweepPRStatuses` / `parked_due` wakes the supervisor for final verification and closeout. `outcome: "cannot"`, non-PR/non-issue tasks, read-only tasks, and tasks whose brief/criteria explicitly opt into PR-only/draft-only scope are not held. Uncheckable/rate-limited GitHub checks return a temporary verification error without marking work unfinished; unreadable non-GitHub hosts add a reply note and do not block.
