@@ -63542,6 +63542,29 @@
         }
       }
     },
+    "Dictionary [Text Lookup]" : {
+      "comment" : "The word lookup card's provider when the extension gives no name",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dictionary"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "辞書"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "词典"
+          }
+        }
+      }
+    },
     "Cycling [Extension Map]": {
       "extractionState": "manual",
       "localizations": {
@@ -155833,6 +155856,52 @@
         }
       }
     },
+    "Save [Text Lookup]" : {
+      "comment" : "Button on the word lookup card: save the word to the extension's vocabulary list",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Save"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "收藏"
+          }
+        }
+      }
+    },
+    "Saved [Text Lookup]" : {
+      "comment" : "Button on the word lookup card once the word is in the vocabulary list; tap removes it",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Saved"
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "保存済み"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已收藏"
+          }
+        }
+      }
+    },
     "Replied as you": {
       "localizations": {
         "en": {
@@ -228416,6 +228485,29 @@
         }
       },
       "extractionState": "manual"
+    },
+    "Word lookup is turned off." : {
+      "comment" : "The word lookup card when the extension was turned off meanwhile",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Word lookup is turned off."
+          }
+        },
+        "ja" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "単語の検索はオフになっています。"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查词已关闭。"
+          }
+        }
+      }
     },
     "Work Can Be Undone": {
       "extractionState": "manual",
