@@ -50,6 +50,7 @@ const SHARED_INDEX: SearchGroup[] = [
   { tab: "general", group: t("settings.starred_messages"), anchor: "starred-messages" },
   { tab: "general", group: t("ui-look.recent_chats"), anchor: "recent-chats" },
   { tab: "general", group: t("ui-look.sidebar_usage"), anchor: "sidebar-usage" },
+  { tab: "general", group: t("settings.needs_you_auto_open"), anchor: "needs-you-auto-open" },
   { tab: "general", group: t("settings.start_page"), anchor: "start-page" },
   { tab: "general", group: t("settings.start_page_open_on"), hint: t("settings.start_page_main"), anchor: "open-on" },
   { tab: "general", group: t("settings.sidebar_pages"), anchor: "sidebar-pages" },
