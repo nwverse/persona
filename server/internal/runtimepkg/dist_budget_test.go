@@ -106,12 +106,12 @@ import (
 // Routing dsh assistant shell gates through runtime-sdk shell-gates with fail-closed hubReady/disconnect/phoneTools=false guards adds 794 B (307,615 B -> 308,409 B).
 // Guarding Antigravity ACP stdout/nativeRequest against JSON null/non-object payloads and rejecting stale _start() after stop/process replacement add 107 B (308,409 B -> 308,516 B).
 // Hardening opencode companion & plugin assistant isMemoryWrite with symlink/namei/multi-resource/allowlisted-rawInput/diff/metadata containment (opencode/lib/memory-write.js) adds 2,064 B (308,516 B -> 310,580 B).
-// Persona-owned prepared session identity persistence, scoped marker validation, lazy restart restoration and
-// fail-closed supervision-policy recovery (#17348) added 2,094 B over the prior main. With the upstream
-// channel, dsh, ACP and OpenCode additions above, reserve the additive 312,674 B ceiling; the gate reports the union size.
+// Persona-owned prepared identity persistence, scoped marker validation, lazy restoration and fail-closed
+// supervision-policy recovery (#17348) measured 310,620 B against the 308,516 B ACP main: +2,104 B.
+// Its Antigravity part is unchanged by the separately packed OpenCode change above, giving a 312,684 B union.
 // Raise the budget only for code a runtime needs, never to embed the packages raw again.
 func TestDistBudget(t *testing.T) {
-	const budget = 312_674
+	const budget = 312_684
 	_, out := generateIntegrations(t)
 	entries, err := os.ReadDir(out)
 	if err != nil {
