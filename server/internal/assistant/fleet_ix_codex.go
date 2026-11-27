@@ -39,15 +39,21 @@ func (s *Service) syncCodexInteractions(machine string, params json.RawMessage) 
 		return
 	}
 	listed := map[string]proto.Interaction{}
+	lang := s.commandInputLang(p.Interactions)
 	for _, ix := range p.Interactions {
 		// Display-copy identity is manager-owned at every node-controlled ingress.
 		ix.MirrorOf, ix.MirrorMain = "", false
-		if reservedCard(ix) {
+		// A command-input card comes only from this list, in its own shape (fleet_ix_command.go).
+		input := proto.IsCommandInputCard(ix)
+		if reservedCard(ix) && !input {
 			s.logf("[%s] codex card %s: %v", machine, ix.ID, errReservedCard)
 			continue
 		}
 		ix.MachineID = machine
 		ix = cleanTitle(ix)
+		if input {
+			ix = commandInputCard(lang, ix)
+		}
 		// Node-listed cards do not pass through waitInteractionPrepared, so apply
 		// the turn's privacy before either display or direct-chat routing reads it.
 		ix.Private = ix.Private || s.justMeNow(ix.MachineID, ix.SessionID)
@@ -89,6 +95,9 @@ func (s *Service) syncCodexInteractions(machine string, params json.RawMessage) 
 			continue
 		}
 		pd := s.codexPending(machine, ix)
+		if proto.IsCommandInputCard(ix) {
+			pd = s.commandInputPending(machine, ix)
+		}
 		// A screen card for the same session read the terminal without knowing Codex: an approval or an overlay
 		// question card is that dialog read properly. An async question is not on the terminal's keyboard at all.
 		for id, old := range m {

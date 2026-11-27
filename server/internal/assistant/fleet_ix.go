@@ -1981,15 +1981,17 @@ func (s *Service) expireLocalInteractions(now time.Time) {
 	}
 }
 
-// errReservedCard: a node, runtime or extension may not pass for a manager-owned
-// password, hand-off or approval-display identity.
-var errReservedCard = errors.New("the tool names " + proto.SecretRunTool + " and " + proto.SecretHandoffTool +
-	" and approval display IDs are reserved for manager-owned cards")
+// errReservedCard: a card from a node (a hook, a runtime, a daemon, a Codex list) or an extension may not pass for the
+// password card, the hand-off card, an approval-display identity or a command-input card: only the assistant's
+// secret_run tool makes the first (secret_run.go), only the manager's Agent start the second, display identity is
+// manager-owned, and only a node's own card list the fourth (fleet_ix_command.go).
+var errReservedCard = errors.New("the tool names " + proto.SecretRunTool + ", " + proto.SecretHandoffTool + " and " +
+	proto.CommandInputTool + ", and approval display IDs, are reserved for manager-owned cards")
 
-// reservedCard: ix calls itself the password card, the hand-off card, or an
+// reservedCard: ix calls itself the password card, the hand-off card, a command-input card, or an
 // authoritative operation inside the display-copy ID namespace.
 func reservedCard(ix proto.Interaction) bool {
-	return ix.ToolName == proto.SecretRunTool || ix.ToolName == proto.SecretHandoffTool ||
+	return ix.ToolName == proto.SecretRunTool || ix.ToolName == proto.SecretHandoffTool || ix.ToolName == proto.CommandInputTool ||
 		strings.HasPrefix(ix.ID, proto.ApprovalMirrorIDPrefix) ||
 		strings.HasPrefix(ix.ID, outboundSettingsCardPrefix)
 }
