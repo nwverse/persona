@@ -307,8 +307,8 @@ func (n *Node) grantEditedWithRewrite(cfg proto.AssistantLark, session string, c
 	if err := dec.Decode(&extra); err != io.EOF {
 		return fmt.Errorf("unexpected trailing JSON in body")
 	}
-	g := gateGrant{command: cfg.Gates[c.Gate].Command, method: strings.ToUpper(c.Method), path: c.Path, query: gateQueryKey(c.Query), body: body, bodyBound: true, bodyUseNumber: true,
-		rewriteBody: bytes.Clone(rewriteBody), until: time.Now().Add(gateGrantFor), session: session, through: through}
+	g := gateGrant{command: cfg.Gates[c.Gate].Command, method: strings.ToUpper(c.Method), path: c.Path, query: gateQueryKey(c.Query), account: c.Account,
+		body: body, bodyBound: true, bodyUseNumber: true, rewriteBody: bytes.Clone(rewriteBody), until: time.Now().Add(gateGrantFor), session: session, through: through}
 	p := n.gates()
 	p.mu.Lock()
 	defer p.mu.Unlock()

@@ -154,6 +154,8 @@ type LauncherModels struct {
 	Locked string `json:"locked,omitempty"`
 	// SupportsStartModel: the node verified a new native omp session can take a model in this host.
 	SupportsStartModel bool `json:"supports_start_model,omitempty"`
+	// SupportsStartServiceTier means this launcher and host accept a native Codex tier on session.start.
+	SupportsStartServiceTier bool `json:"supports_start_service_tier,omitempty"`
 }
 
 // ModelPrice is the catalog's reference price in USD per one million tokens. It is display metadata, not a gateway quote.
