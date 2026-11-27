@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { stripTypeScriptTypes } from 'node:module';
 import { projectTranscriptRows, projectToolTurn, transcriptRecord } from '../entry/src/main/ets/core/Domain.ts';
 import { isAgentInput, recordedDuration } from '../entry/src/main/ets/core/AgentEvents.ts';
-import { workStatusFailed, workToolArguments, workToolName, workToolStatus, workToolSubject } from '../entry/src/main/ets/core/WorkPresentation.ts';
+import { turnChangesFromWork, workStatusFailed, workToolArguments, workToolName, workToolStatus, workToolSubject } from '../entry/src/main/ets/core/WorkPresentation.ts';
 import { workingTurnLabel } from '../entry/src/main/ets/core/PhoneDate.ts';
 import { stepsToItems } from '../../integrations/antigravity/lib/map.js';
 
@@ -37,10 +37,10 @@ class ChatMessage {
 }
 
 const ProjectionHarness = new Function(
-  'groupUserImages', 'projectTranscriptRows', 'isAgentInput', 'recordedDuration', 'transcriptRecord', 'ChatMessage', 'messageDisplay', 'parseMessageContent',
+  'turnChangesFromWork', 'groupUserImages', 'projectTranscriptRows', 'isAgentInput', 'recordedDuration', 'transcriptRecord', 'ChatMessage', 'messageDisplay', 'parseMessageContent',
   'Wire', 'return ' + stripTypeScriptTypes('class ProjectionHarness {' + method('projectMessages') + method('expandWork') + '}'),
 )(
-  groupUserImages, projectTranscriptRows, isAgentInput, recordedDuration, transcriptRecord,
+  turnChangesFromWork, groupUserImages, projectTranscriptRows, isAgentInput, recordedDuration, transcriptRecord,
   ChatMessage,
   text => ({ text, sources: [] }),
   text => ({ text, images: [], files: [] }),
@@ -105,6 +105,18 @@ test('a completed exchange keeps wire tool names, arguments, results and folded 
   assert.deepEqual(JSON.parse(workToolArguments(call.use)), { command: 'npm test' });
   assert.equal(call.results[0].text, '1 failed');
   assert.equal(workStatusFailed(workToolStatus(call, false)), true);
+});
+
+test('projected work keeps file changes and the reply fingerprint used by starring', () => {
+  const rows = project([
+    { id: 'question', seq: 1, kind: 'text', role: 'user', text: 'Update a sample file' },
+    { id: 'edit', seq: 2, kind: 'tool_use', role: 'assistant', tool_name: 'Edit', tool_id: 'a',
+      input: { file_path: 'sample.txt', old_string: 'one', new_string: 'two' } },
+    { id: 'result', seq: 3, kind: 'tool_result', role: 'tool', tool_id: 'a', text: 'Done' },
+    { id: 'answer', seq: 4, kind: 'text', role: 'assistant', text: 'Updated', source_fingerprint: 'fixture-fingerprint' }
+  ]);
+  assert.equal(rows.find(row => row.work)?.turnChanges?.files[0]?.path, 'sample.txt');
+  assert.equal(rows.find(row => row.itemId === 'answer')?.sourceFingerprint, 'fixture-fingerprint');
 });
 
 test('older tool spellings remain inspectable and stopped or denied tools are not reported as running or failed', () => {

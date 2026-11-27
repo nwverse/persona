@@ -27,7 +27,7 @@ import { supervisorHeld } from "./supervisor-held";
 import { inFolderFilter } from "./inbox-folders";
 import type { ChainEntry, InboxHandling, InboxRelated, InboxStatus, InboxSuggestion, InboxSuggestionAttempt, SuggestionAction } from "./inbox-events";
 import { actedText, actOnSuggestion, statusOf } from "./inbox-suggestion"; // not inbox-events.ts: that one is the Inbox page's
-import type { MailAccount } from "./mail";
+import type { MailAccount } from "./agent-settings";
 import type { ExternalRef } from "../features/external-sources/api";
 
 // Not the Inbox's: re-exported from their own modules until their importers import them from there (#11538).
@@ -148,14 +148,17 @@ export interface InboxItem {
   /** Only in GET /inbox/{id}: the conversation as text. */
   context?: string;
   /** Only in GET /inbox/{id}, for a mail: whether the hub clipped the newest mail's text when it stored `context`.
-   *  Absent: the hub does not know (or is from before it sent this). Read it through storedMailClipping (lib/mail.ts). */
+   *  Absent: the hub does not know (or is from before it sent this). Read it through storedMailClipping (lib/mail-stored.ts). */
   mail_body_truncated?: boolean;
+  /** Only in GET /inbox/{id}: the knowledge base chat it came from, when there is one (#15356). */
+  kb_chat?: { id: string; path?: string } | null;
   agent?: InboxAgent;
   /** Deterministic PR/Issue auto-forward status and linked to-do metadata (#12492). */
   todo_forward?: InboxTodoForward;
   /** New foreign mail translated by the hub as it came in (for a device whose Settings › Translation asks), by target language. */
   translations?: Record<string, { subject: string; preview: string }>;
-  /** What it grew out of (docs/assistant/inbox.md "Relationships: parents and children"): another item, a todo or an agent session ("<machine>/<session>"). */
+  /** What it grew out of (docs/assistant/inbox.md "Relationships: parents and children"): another item, a todo, a
+   *  coding Agent's session ("<machine>/<session>") or a personal Agent's session ("<source>:<sessionKey>"). */
   parent?: InboxParent;
   /** The folder path it is filed under ("work/alerts/engine"; docs/assistant/inbox.md "Folders"); absent: unfiled. `folder_by`
    *  says who filed it: the model, or the user (then the model leaves it alone). */
@@ -211,11 +214,11 @@ export interface InboxMute extends InboxMuteOption {
   manager?: string;
 }
 
-export type InboxParentKind = "inbox" | "todo" | "session";
+export type InboxParentKind = "inbox" | "todo" | "session" | "agent";
 export interface InboxParent { kind: InboxParentKind; id: string; by?: "continues" | "connector" | "user" }
 
-/** GET /api/v1/inbox/tree/{kind}/{id}: the node's ancestors (nearest first; the last may be a todo or a session,
- * with no item) and the items right under it. */
+/** GET /api/v1/inbox/tree/{kind}/{id}: the node's ancestors (nearest first; the last may be a todo, a coding Agent
+ * session or a personal Agent session, with no item) and the items right under it. */
 export interface InboxTree {
   node: InboxParent;
   item?: InboxItem;
@@ -536,7 +539,7 @@ export function waitingAgents(interactions: Interaction[], sessions: Record<stri
   if (f.source || f.folder || (f.kind && f.kind !== "agent")) return [];
   // a card a task's supervisor holds is not the user's yet (lib/supervisor-held.ts)
   const shown = interactions
-    .filter((ix) => !supervisorHeld(ix) && !interactionMuted(ix, sessions, mutes) && hasText([ix.session_title, ix.summary, interactionTitle(ix), interactionAsk(ix)], f.query))
+    .filter((ix) => !ix.mirror_of && !supervisorHeld(ix) && !interactionMuted(ix, sessions, mutes) && hasText([ix.session_title, ix.summary, interactionTitle(ix), interactionAsk(ix)], f.query))
     .sort((a, b) => byTime(a.created_at, b.created_at) || a.id.localeCompare(b.id));
   return withChildCardsUnderParents(shown);
 }
@@ -1423,7 +1426,7 @@ export async function setAllDone(items: InboxItem[], action: BulkAction | boolea
 /** "Send": the hub replies in the chat / by mail / in the document (moving the rows' status in `changes` first) and
  * files the item as done. Filed at once; a failure puts the item back and keeps the text and the unticked changes for
  * the draft card and dialog. */
-export async function sendReply(item: InboxItem, text: string, changes: DocChange[] = []): Promise<boolean> {
+export async function sendReply(item: InboxItem, text: string, changes: DocChange[] = [], expectedSender?: "bot" | "user"): Promise<boolean> {
   const key = itemKey(item);
   if (state.sending.includes(key)) return false;
   const before = listed(item);
@@ -1437,7 +1440,7 @@ export async function sendReply(item: InboxItem, text: string, changes: DocChang
   unsentReplies.delete(key);
   droppedChanges.delete(key);
   try {
-    const r = await api<InboxItem>(`${itemPath(item.id)}/reply`, { method: "POST", json: { text, changes: changes.length ? changes : undefined }, headers: itemRequest(item) });
+    const r = await api<InboxItem>(`${itemPath(item.id)}/reply`, { method: "POST", json: { text, changes: changes.length ? changes : undefined, expected_sender_identity: expectedSender }, headers: itemRequest(item) });
     const hub = r?.id === item.id ? keepStamp(r, item) : undefined;
     settleMark(key, mark, true, hub);
     if (hub) replaceItem(withPending([hub])[0]);

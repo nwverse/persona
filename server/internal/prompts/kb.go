@@ -220,12 +220,29 @@ type KBMinutesNote struct {
 	Text, Who, By, DueDate, Topic string
 }
 
+// KBMinutesDebatePosition is one side of a disagreement in a part's notes for the merging call (#16728).
+type KBMinutesDebatePosition struct {
+	Line        int
+	Stance, Who string
+}
+
+// KBMinutesDebate is a disagreement in a part's notes for the merging call (#16728): each position and any outcome
+// carries the transcript line number it cites.
+type KBMinutesDebate struct {
+	Question, Topic string
+	Settled         bool
+	Positions       []KBMinutesDebatePosition
+	OutcomeText     string
+	OutcomeLine     int
+}
+
 // KBMinutesPart is a part's notes, From and To its first and last lines' clock times.
 type KBMinutesPart struct {
 	Part                             int
 	From, To, Where                  string
 	Attendees                        []string
 	Points, Decisions, Actions, Open []KBMinutesNote
+	Debates                          []KBMinutesDebate
 }
 
 // KBMinutesMergeInput is a long meeting's parts' notes to merge (kb/minutes_merge_input).

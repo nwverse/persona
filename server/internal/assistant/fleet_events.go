@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/devicewire"
@@ -57,27 +59,15 @@ func (s *Service) nodeEvent(machine, event string, params json.RawMessage) bool 
 	case "session.delta":
 		s.followedDelta(machine, params)
 	case "interaction.dismiss":
-		var p struct {
-			ID string `json:"id"`
-		}
+		var p nodeInteractionEnd
 		if json.Unmarshal(params, &p) == nil {
-			if s.endPreparedByID(p.ID, "dismissed", "The approval was dismissed on the computer; this card did not apply the change.") {
-				return false
-			}
-			s.recordEnd(p.ID, "dismissed", &proto.Resolution{Dismiss: true, AnsweredBy: proto.AnsweredByTerminal})
-			s.finishInteraction(p.ID)
+			s.endNodeInteraction(p, "dismissed", "The approval was dismissed on the computer; this card did not apply the change.", &proto.Resolution{Dismiss: true, AnsweredBy: proto.AnsweredByTerminal})
 		}
 		return false
 	case "interaction.cancel":
-		var p struct {
-			ID string `json:"id"`
-		}
+		var p nodeInteractionEnd
 		if json.Unmarshal(params, &p) == nil {
-			if s.endPreparedByID(p.ID, "cancelled", "The approval was cancelled on the computer; nothing changed.") {
-				return false
-			}
-			s.recordEnd(p.ID, "cancelled", nil) // or the next manager would take it for one a hook may still claim
-			s.finishInteraction(p.ID)
+			s.endNodeInteraction(p, "cancelled", "The approval was cancelled on the computer; nothing changed.", nil)
 		}
 		return false
 	case "codex.interactions": // the Codex questions and approvals open on this machine (fleet_ix_codex.go)
@@ -104,6 +94,86 @@ func (s *Service) nodeEvent(machine, event string, params json.RawMessage) bool 
 		// the hub shows it to the apps (hook_event)
 	}
 	return true
+}
+
+type nodeInteractionEnd struct {
+	ID        string    `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// endNodeInteraction applies a node's cancellation only to the occurrence that
+// node was waiting on. Occurrence-less events retain legacy ID-only behavior;
+// newer peers never let a delayed cancel/dismiss end a same-ID replacement.
+func (s *Service) endNodeInteraction(p nodeInteractionEnd, status, preparedText string, resolution *proto.Resolution) {
+	if p.CreatedAt.IsZero() {
+		if status == "dismissed" {
+			s.fleet.mu.Lock()
+			waiting := detachedApprovalWaitingLocked(s.fleet.interactions[p.ID])
+			s.fleet.mu.Unlock()
+			if waiting {
+				// The original terminal call already returned its non-final waiting
+				// result. A later dismissal cannot decide the retained owner card.
+				return
+			}
+		}
+		by := ""
+		if resolution != nil {
+			by = resolution.AnsweredBy
+		}
+		if s.endPreparedByIDWithBy(p.ID, status, preparedText, by) {
+			return
+		}
+		s.recordEnd(p.ID, status, resolution)
+		s.finishInteraction(p.ID)
+		return
+	}
+
+	s.fleet.mu.Lock()
+	live := s.fleet.interactions[p.ID]
+	mismatch := live != nil && !live.ix.CreatedAt.Equal(p.CreatedAt)
+	waiting := status == "dismissed" && detachedApprovalWaitingLocked(live)
+	s.fleet.mu.Unlock()
+	if mismatch || waiting {
+		return
+	}
+	if live != nil {
+		if live.prepared != nil {
+			// endPreparedIfBy rechecks this exact pointer under fleet.mu before its
+			// terminal claim; only that winner may record the node's terminal actor.
+			by := ""
+			if resolution != nil {
+				by = resolution.AnsweredBy
+			}
+			s.endPreparedIfBy(live, status, preparedText, nil, by)
+			return
+		}
+		if err := s.recordEndOccurrenceStrict(live.ix, status, resolution); err != nil {
+			s.logf("record node interaction occurrence outcome: %v", err)
+		}
+		s.finishPending(live)
+		return
+	}
+
+	// The waiter may already have returned while its durable row remains. Read
+	// the full occurrence so strict finalization never inserts or ends a guessed
+	// ID-only row, and never touch a different current occurrence.
+	recorder, ok := s.store().(interactionRecorder)
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), historyTimeout)
+	rec, err := recorder.InteractionRecord(ctx, p.ID)
+	cancel()
+	if err != nil {
+		s.logf("read node interaction occurrence: %v", err)
+		return
+	}
+	if rec == nil || rec.Status != "pending" || !rec.Interaction.CreatedAt.Equal(p.CreatedAt) {
+		return
+	}
+	if err := s.recordEndOccurrenceStrict(rec.Interaction, status, resolution); err != nil {
+		s.logf("record node interaction occurrence outcome: %v", err)
+	}
 }
 
 // NodeRequest answers what of a node's requests is the manager's (devices.Options.Answer, with NodeAnswer's).
@@ -211,6 +281,15 @@ func (s *Service) nodeRequest(ctx context.Context, machine, method string, param
 		}
 		out, err := r.RelayGate(ctx, machine, params)
 		return out, true, err
+	case proto.MethodPluginNodeHubCall: // a program on that computer calls the hub (extmgr/extension_node_calls.go)
+		r, ok := s.ext.(interface {
+			NodeProgramHubCall(ctx context.Context, machine string, params json.RawMessage) (any, error)
+		})
+		if !ok {
+			return nil, true, errors.New("plugin.node.hub_call: no extensions here")
+		}
+		out, err := r.NodeProgramHubCall(ctx, machine, params)
+		return out, true, err
 	case proto.MethodMailAttachment: // mail_save_attachment's bytes for the node that saves them (fleet_tools.go)
 		var p proto.MailAttachmentRequest
 		if err := json.Unmarshal(params, &p); err != nil {
@@ -270,6 +349,13 @@ func (s *Service) nodeRequest(ctx context.Context, machine, method string, param
 		if res, refused := s.guestRefuses(ctx, machine, p.SessionID, p.Name, p.Guest); refused {
 			return res, true, nil
 		}
+		// A proxy reply's one tool is answered here, before a meeting room's (bot_handoff.go).
+		if id, handoff, err := s.handoffOf(ctx, machine, p.SessionID); err == nil && handoff {
+			if s.isWorkMachine(machine) {
+				return proto.TextResult("unknown tool "+p.Name, true), true, nil
+			}
+			return s.larkModule().HandoffToolCall(ctx, id, p.Name, p.Args), true, nil
+		}
 		if rec, room, err := s.roomOf(ctx, machine, p.SessionID); err == nil && room {
 			if s.isWorkMachine(machine) {
 				return proto.TextResult("unknown tool "+p.Name, true), true, nil
@@ -287,12 +373,12 @@ func (s *Service) FleetUp(ctx context.Context) {
 	if !s.fleetOn() {
 		return
 	}
-	s.fleetStart(context.WithoutCancel(ctx))
+	s.fleetStart(ctx)
 	defer s.boardFleetUp() // the pending cards are read: the board may have changed while the assistant was away
 	s.fleet.sentMu.Lock()
 	s.fleet.sent, s.fleet.archived = nil, nil
 	s.fleet.sentMu.Unlock()
-	s.tellPendingInteractions()
+	s.tellPendingInteractions(ctx)
 	// Reconnect reads only session reviews. Other phone cards still belong to their
 	// active callers, including an ask_user started while the connection came up.
 	s.pubMu.Lock()
@@ -312,9 +398,19 @@ func (s *Service) FleetEvent(ctx context.Context, name string, params json.RawMe
 		var c assistantwire.Clients
 		if json.Unmarshal(params, &c) == nil {
 			s.fleet.mu.Lock()
+			before := s.fleet.clients.Viewing
 			wasOnline := s.fleet.clients.AppOnline
 			s.fleet.clients = c
 			s.fleet.mu.Unlock()
+			for _, ref := range c.Viewing {
+				s.cancelSessionRetirement(ref.MachineID, ref.SessionID)
+			}
+			for _, ref := range before {
+				if !slices.Contains(c.Viewing, ref) {
+					// Leaving a quiet page is the last owner activity, not its old transcript time.
+					s.rememberSessionActivity(ctx, ref.MachineID, ref.SessionID)
+				}
+			}
 			if c.AppOnline && !wasOnline {
 				go s.ownerAppeared(context.WithoutCancel(ctx), "app_online", "")
 			}

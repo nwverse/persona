@@ -15,7 +15,7 @@ registerHooks({
     if (specifier === '../core/SessionSnapshot' || context.parentURL?.endsWith('/SessionSnapshot.ts') && specifier === './TranscriptCache') return {url: new URL(specifier + '.ts', context.parentURL).href, shortCircuit: true};
     if (specifier === '@kit.ArkTS') return { url: 'persona-question-test:arkts', shortCircuit: true };
     if (context.parentURL?.endsWith('/ClientModel.ets')) {
-      if (['./Wire', './InteractionDecision', './ChatDraftStore', '../core/MessageImageGallery', '../core/Domain', '../core/AgentEvents', '../core/ConversationPlan', '../core/BackgroundActivity', '../core/ChatSendFeedback', '../core/DictationLanguage', './AgentAttention','./SessionArchive','./SessionRelations'].includes(specifier)) {
+      if (['./Wire', './InteractionDecision', './ChatDraftStore', '../core/MessageImageGallery', '../core/Domain', '../core/AgentEvents', '../core/ConversationPlan', '../core/BackgroundActivity', '../core/ChatSendFeedback', '../core/DictationLanguage', './AgentAttention', './SessionArchive', './SessionRelations', '../core/WorkPresentation', '../core/HubModules', '../core/XiaoYiActions'].includes(specifier)) {
         const base = new URL(specifier, context.parentURL);
         return { url: base.href + (existsSync(new URL(base.href + '.ts')) ? '.ts' : '.ets'), shortCircuit: true };
       }
@@ -51,6 +51,7 @@ registerHooks({
         export function parseMessageContent(text){return {text,images:[],files:[]};}
         export class ChatAttachments { static allowHub(){} static async forgetHub(){} }
         export const nativeNotifications={async initialize(){},async clear(){},features(){return [];},receive(){}};
+        export const nativeLiveView={async initialize(){},async receiveFleetEvent(){},async syncFromModel(){},async stopNow(){},setForeground(){}};
         export function resolveManagerScope(value){return value;}
         export class SessionWorkspace {}
         export class HubTransport { async request(){return '{}';} close(){} }

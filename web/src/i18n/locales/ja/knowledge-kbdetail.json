@@ -35,5 +35,6 @@
   "recording_day_recap": "1日の振り返り",
   "recording_transcript": "文字起こし",
   "recording_photos": "写真",
-  "recording_photo_label": "写真{n}"
+  "recording_photo_label": "写真{n}",
+  "recording_paused_module_off": "ハブのマシンで会議の録音がオフになっているため、議事録の作成と文字起こしは一時停止しています。すでに保存されている内容はそのまま閲覧できます。"
 }

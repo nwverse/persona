@@ -54,7 +54,7 @@ test('every quick filter keeps its complete localized accessible label and appli
  assert.match(filters,/accessibilitySelected\(this\.workspace\.quickFilter === key\)/);
  assert.match(source,/private quickHeight\(\): number \{ return PhoneStyle.formSize\(44,57.7,this.environment.fontScale\)/);
  assert.match(filters,/responseRegion\(\{x:0,y:0,width:'100%',height:this.quickHeight\(\)\}\)/);
- assert.match(filters,/onClick\([\s\S]*this\.chooseQuick\(key\)[\s\S]*\.id\('agents\.quick\.' \+ key\)/);
+ assert.match(filters,/onClick\([\s\S]*this\.workspace\.setQuickFilter\(key\)[\s\S]*\.id\('agents\.quick\.' \+ key\)/);
  assert.match(filters,/\.scrollable\(ScrollDirection\.Horizontal\)/);
  assert.ok(filters.indexOf('this.filterControl()')>filters.indexOf('.scrollable(ScrollDirection.Horizontal)'));
 });
@@ -77,7 +77,7 @@ test('magnified project and Agent views keep symbols inside their slots and give
  assert.match(projects, /15\*this\.spaceCardScale\(\)\)\.maxFontScale\(Tokens\.interfaceScaleFor\(15\)\)\.fontWeight\(600\)/);
  assert.match(launch, /this\.machineChoice\(m\)[\s\S]{0,160}scrollable\(ScrollDirection\.Horizontal\)/);
  assert.match(projects, /px2vp\(width\) < 320/);
- assert.match(projects, /Text\(agent.row.title[^\n]+maxFontScale\(Tokens.interfaceScaleFor\(15\)\)/);
+ assert.match(projects, /Text\(this\.displayAgentTitle\(agent\)[^\n]+maxFontScale\(Tokens\.interfaceScaleFor\(15\)\)/);
  assert.match(picker, /Text\(o.title\)\.fontSize\(17\)\.maxFontScale\(Tokens.interfaceScaleFor\(17\)\)/);
  assert.doesNotMatch(launch.match(/TextArea\(\{text:this.newTask[\s\S]*?id\('agent.task'\)/)[0],/maxFontScale/);
  assert.match(launch, /Text\(tr\('phone_new_chat_title'\)\)\.fontSize\(17\)\.maxFontScale\(Tokens\.chromeFontMaxScale\)\.maxLines\(2\)\.fontWeight\(600\)/);

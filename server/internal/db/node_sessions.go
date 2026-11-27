@@ -45,6 +45,7 @@ type NodeSession struct {
 	OriginKnown      bool            `json:"origin_known,omitempty"` // explicit manager decision; false on pre-upgrade records
 	ConfigDir        string          `json:"config_dir,omitempty"`   // the assistant's explicit Claude profile
 	Pane             string          `json:"pane,omitempty"`
+	OrcaTerminal     json.RawMessage `json:"orca_terminal,omitempty"`
 	Launcher         string          `json:"launcher"`
 	Cwd              string          `json:"cwd"`
 	StartedAt        time.Time       `json:"started_at"`
@@ -144,7 +145,7 @@ func (d *DB) PutNodeSession(ctx context.Context, machine, id string, s NodeSessi
 			'origin_known', $30::boolean, 'engine_runtime', $31::text, 'model_source', $32::jsonb,
 			'desktop_pending_model', $33::text, 'desktop_pending_effort', $34::text,
 			'app_mode_explicit', $35::boolean, 'ran_at', $36::bigint, 'start_op_id', $37::text, 'remote_agent', $38::boolean,
-			'segment_inputs', $39::jsonb), now() FROM saved
+			'segment_inputs', $39::jsonb, 'orca_terminal', $40::jsonb), now() FROM saved
 		ON CONFLICT (key) DO UPDATE SET value = (CASE
 			WHEN COALESCE((settings.value->>'stop_cause_at')::bigint, 0) > $26
 				OR (COALESCE((settings.value->>'stop_cause_at')::bigint, 0) = $26
@@ -188,7 +189,7 @@ func (d *DB) PutNodeSession(ctx context.Context, machine, id string, s NodeSessi
 		s.UltracodeProcess, unknownStart, s.CreationID, s.Incarnation, guest, s.GuestKind, s.ConfigDir, pendingSwitch, engineHistory, pendingHandoff,
 		modelRecovery, s.FollowsSetting, string(s.StopCause), s.StopCauseAt, s.AwaitingFirstMessage, jsonOrNil(s.IdleCompaction), s.Origin, s.OriginKnown,
 		s.EngineRuntime, jsonOrNil(s.ModelSource), s.DesktopPendingModel, s.DesktopPendingEffort, s.AppModeExplicit, s.RanAt, s.StartOpID, s.RemoteAgent,
-		jsonOrNil(segmentInputs))
+		jsonOrNil(segmentInputs), jsonOrNil(s.OrcaTerminal))
 	return err
 }
 
@@ -236,10 +237,11 @@ type nodeModel struct {
 	AwaitingFirstMessage bool `json:"awaiting_first_message"`
 	// EngineRuntime: the engine runtime whose start wrote the record ("" for a terminal's, and for a row written before
 	// it was kept).
-	EngineRuntime string   `json:"engine_runtime"`
-	StartOpID     string   `json:"start_op_id"`
-	RemoteAgent   bool     `json:"remote_agent"`
-	SegmentInputs []string `json:"segment_inputs"`
+	EngineRuntime string          `json:"engine_runtime"`
+	StartOpID     string          `json:"start_op_id"`
+	RemoteAgent   bool            `json:"remote_agent"`
+	SegmentInputs []string        `json:"segment_inputs"`
+	OrcaTerminal  json.RawMessage `json:"orca_terminal"`
 }
 
 // jsonOrNil is raw, or nil when it holds nothing (empty, or a JSON null).
@@ -283,6 +285,7 @@ func (d *DB) NodeSessions(ctx context.Context, machine string) (map[string]NodeS
 		s.StartOpID = m.StartOpID
 		s.RemoteAgent = m.RemoteAgent
 		s.SegmentInputs = m.SegmentInputs
+		s.OrcaTerminal = jsonOrNil(m.OrcaTerminal)
 		s.StopCause, s.StopCauseAt = m.StopCause, m.StopCauseAt
 		s.RanAt = m.RanAt
 		if m.StartedAtUnknown {

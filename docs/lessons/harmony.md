@@ -122,7 +122,7 @@ whole ones. Keep the failure reason on the state callback so tests can tell a si
 The shared core's `counts` keep a muted unread or working row in the total, matching the iOS shadow comparison
 (`sort/mod.rs` `counts`). The Unread and Working filters themselves leave muted rows out, as iOS's `filterCounts` does.
 Showing the core's number on a chip then promises rows its filter never lists, and Mark all as read cannot empty it.
-Subtract the muted rows the search admits, and test a chip's number against the rows its filter shows.
+Read the core's `filter_counts` for these chips. The core already applies the active search, machine and mute predicates in the same projection. Test each chip against the rows its filter shows.
 
 ## Keep the reader's row yourself in a Repeat list
 

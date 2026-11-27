@@ -6,7 +6,7 @@ import { compatibleEnvelope, setCompatibilityFeatures } from "./compatibility";
 // App-wide state: what the hub pushes over the WebSocket (machines, sessions, interactions), plus the assistant.
 // Views read it with useStore(selector); per-session item streams go to listeners (ChatView subscribes).
 
-import { chosenManager, defaultKnown, defaultManager, fromShownManager, messageManager, noteConversation, noteItemManager, onDefaultManager, onManagerChoice, sameManager, shownManager } from "./manager-choice";
+import { chosenManager, defaultKnown, defaultManager, fromShownManager, messageManager, noteConversation, noteItemManager, onDefaultManager, onManagerChoice, sameManager, shownManager, stampedHeaders } from "./manager-choice";
 import { BASE } from "./base";
 import { mainConversationMachine, clearMemoryPages, discardFeedCache, feedCacheScope, readFeedCache } from "./feed-cache";
 import { clearAssistantSnapshot, readAssistantSnapshot, writeAssistantSnapshot } from "./assistant-snapshot";
@@ -22,12 +22,12 @@ import { applySessionDelta, SESSIONS_DELTA_FEATURE, sessionRefreshed, sessionSna
 import { dueMarks, heldRows, liveMarks, newMark, nextDue, seenCopy, settleMarks, unansweredMarks, unseen, type SeenMark, type SeenMarks } from "./seen-outbox";
 import { probeEdge } from "./edge-auth";
 import { api, ApiError, CLIENT_FEATURES, CLIENT_PONG_TIMEOUT, CLIENT_PLATFORM, CLIENT_VERSION, errorText, getToken, credentialOwner, invalidateInFlightGets, sessionPath } from "./api";
-import { helloDeviceId } from "./device-id";
+import { clientInstance, helloDeviceId } from "./device-id";
 import { currentLanguage } from "../i18n";
 import type { AgentMutes } from "./agent-groups";
 import { justFinished } from "./agent-groups";
-import { stateOf } from "./format";
-import { timeMs } from "./times";
+import { activityOf } from "./format";
+import { timeMs, timeNs } from "./times";
 import { agentKey, NO_PINS, pinsOf, type AgentPins } from "./pins";
 import { holdNotedSeen, recordMarkedSeen, releaseOpenSeen, releaseSeen, resetSeenVisit } from "./seen-rows";
 import type { AssistantInfo, Interaction, Item, Machine, MeshHub, Session } from "./types";
@@ -49,6 +49,9 @@ import { configureMessageFeedback, resetMessageFeedback } from "./message-send";
 import { afterEvent, afterHello, graceUntil, isResumed, NO_CURSOR, RESTART_FAST_MS, retryDelay, shownConn, wsQuery, type Drop, type EventCursor } from "./reconnect";
 
 export type Conn = "connecting" | "online" | "offline";
+
+/** One manager's cursor for closed rows older than GET /todos's bounded default window (#15683). */
+type TodoClosedCursor = { next_cursor: string; has_more: boolean };
 
 export interface AnsweredCard {
   ix: Interaction;
@@ -111,6 +114,10 @@ export interface State {
   todos: Todo[];
   /** Optional `shared_blockers` summary from GET /todos under todos_v2 (#14728); parsed lazily by the To-dos view. */
   sharedBlockers: unknown[];
+  /** Per-manager cursors for closed rows older than the bounded default list (#15683). */
+  closedCursors: Record<string, TodoClosedCursor>;
+  closedLoading: boolean;
+  closedError: string | null;
   /** Optional server-computed `board` projection tree from GET /todos under todos_v2 (#15800). */
   todoBoard: TodoBoardProjection | null;
   todosSupported: boolean;
@@ -125,6 +132,7 @@ function currentAssistantSnapshot(page: string) {
     clearAssistantSnapshot(page);
     return null;
   }
+  if (kept && !kept.assistant.manager && kept.manager) kept.assistant.manager = kept.manager;
   return kept;
 }
 
@@ -161,6 +169,9 @@ let state: State = {
   outbox: {},
   todos: [],
   sharedBlockers: [],
+  closedCursors: {},
+  closedLoading: false,
+  closedError: null,
   todoBoard: null,
   todosSupported: true,
   todosLoaded: false,
@@ -303,7 +314,7 @@ onRuntimeChanges((upsert, remove) => {
 });
 
 /** What a summary row (`waiting` present) says by leaving a field out: none (docs/protocol/protocol.md "Summary rows"). */
-const SUMMARY_FLAGS = ["quiet", "awaits_reply", "starting", "awaiting_first_message", "start_error", "start_error_code",
+const SUMMARY_FLAGS = ["view", "locallySeen", "quiet", "awaits_reply", "starting", "awaiting_first_message", "start_error", "start_error_code",
   "turn_error", "turn_error_kind", "turn_error_code", "turn_error_resets_at", "turn_error_resumes"] as const;
 
 /** `row` as a changed list row says it is now: a complete row is the row; a summary row goes over the fields it
@@ -552,14 +563,19 @@ async function lookUpCardSession(id: string, mid: string, sid: string) {
   }
 }
 
+// Re-insertion keeps these bounded Maps in oldest-to-newest eviction order.
+function rememberLatest<K, V>(entries: Map<K, V>, id: K, value: V, kept: number) {
+  entries.delete(id);
+  entries.set(id, value);
+  if (entries.size > kept) entries.delete(entries.keys().next().value!);
+}
+
 /** A clicked filtered row may not belong to the unfiltered first page. Keep a small hint until exact lookup finishes. */
 export function rememberSessionRow(row: Session) {
   if (row.deleted) { markConversationDeleted(row.machine_id, row.session_id); return; }
   if (!availableConversation(row)) return;
   const id = runtimeIdentity(row);
-  rowHints.delete(id);
-  rowHints.set(id, row);
-  if (rowHints.size > ROW_HINT_LIMIT) rowHints.delete(rowHints.keys().next().value!);
+  rememberLatest(rowHints, id, row, ROW_HINT_LIMIT);
   if (!state.features.includes(SESSIONS_LOOKUP_FEATURE) && typeof row.waiting !== "boolean") applyCompleteSessions([row]);
 }
 
@@ -840,7 +856,7 @@ function sendHello(sock: WebSocket) {
   // the interface language: this connection's text, and the user's language for pushes and the assistant (docs/protocol/i18n.md)
   // and what it can render: MCP forms and links come only to a socket that says so
   // device_id: this browser's (lib/device-id.ts), so the hub pushes nothing to it while a page is open (#7459)
-  sock.send(JSON.stringify({ type: "client_hello", platform: CLIENT_PLATFORM, version: CLIENT_VERSION, features: [...CLIENT_FEATURES, ...helloExtras()], locale: currentLanguage(), device_id: helloDeviceId(), heartbeat: { pong_timeout: CLIENT_PONG_TIMEOUT } }));
+  sock.send(JSON.stringify({ type: "client_hello", platform: CLIENT_PLATFORM, version: CLIENT_VERSION, instance: clientInstance, features: [...CLIENT_FEATURES, ...helloExtras()], locale: currentLanguage(), device_id: helloDeviceId(), heartbeat: { pong_timeout: CLIENT_PONG_TIMEOUT } }));
 }
 
 /** Sets what client_hello declares beyond CLIENT_FEATURES, from the next hello on. */
@@ -874,7 +890,7 @@ export function connect() {
     }, 250);
   }
   directionTreeAwaitsHello(true); // its hello reads the direction tree: the screens wait for that read
-  const sock = new WebSocket(`${proto}//${location.host}${BASE}/api/v1/ws?${wsQuery(socketToken, cursor, [SESSIONS_LIST_FEATURE, SESSIONS_LIST_CHANGES_FEATURE, SESSIONS_DELTA_FEATURE, SESSION_LIVE_FEATURE, "extension_ui_stream_v1", "persona_contracts_v1"])}`);
+  const sock = new WebSocket(`${proto}//${location.host}${BASE}/api/v1/ws?${wsQuery(socketToken, cursor, [SESSIONS_LIST_FEATURE, SESSIONS_LIST_CHANGES_FEATURE, SESSIONS_DELTA_FEATURE, SESSION_LIVE_FEATURE, ...CLIENT_FEATURES.slice(4, 7)])}`);
   ws = sock;
   restartNotice = false;
   // an attempt does not move offline back to connecting: the pill stays on one phase while the hub is down instead of
@@ -1222,8 +1238,9 @@ function onMessage(msg: Record<string, unknown>) {
     }
     case "interaction": {
       const ix = msg.interaction as Interaction;
-      const prev = state.interactions.find((i) => i.id === ix.id);
-      if (!endedHere.has(ix.id)) {
+      const prev = interactionByID(ix.id);
+      if (prev && laterTime(prev.created_at, ix.created_at)) break;
+      if (!occurrenceCovered(endedHere, ix) && !occurrenceCovered(resolvedSeen, ix)) {
         changeInteraction(ix.id, ix);
         refreshCountsForCard(prev, ix);
       }
@@ -1231,11 +1248,13 @@ function onMessage(msg: Record<string, unknown>) {
     }
     case "interaction_resolved": {
       const id = msg.id as string;
-      const prev = state.interactions.find((i) => i.id === id);
+      const current = interactionByID(id);
+      const endedAt = typeof msg.created_at === "string" ? msg.created_at : undefined;
+      if (current && endedAt && laterTime(current.created_at, endedAt)) break;
       if (msg.answered_by === "assistant") answeredForUser(msg);
       changeInteraction(id, null);
-      cardWithdrawn(id);
-      refreshCountsForCard(prev, undefined);
+      cardWithdrawn(id, endedAt);
+      refreshCountsForCard(current, undefined);
       break;
     }
     case "push_grading":
@@ -1263,6 +1282,12 @@ function onMessage(msg: Record<string, unknown>) {
     }
     case "agents.prefs":
       void refreshAgentPrefs();
+      break;
+    case "mutes":
+      void refreshMutes();
+      break;
+    case "pins":
+      void refreshPins();
       break;
     case "agents":
       agentsChanged(Array.isArray(msg.session_ids) ? (msg.session_ids as string[]) : []);
@@ -1308,6 +1333,24 @@ async function save<K extends "mutes" | "pins">(key: K, path: string, next: Stat
 /** "Mute" (optimistic): PUT /mutes; throws when the hub refuses, with the mutes put back. */
 export function saveMutes(mutes: AgentMutes): Promise<void> {
   return save("mutes", "/mutes", mutes, mutesSaves);
+}
+
+async function refreshMutes() {
+  if (mutesSaves.out) return;
+  const at = mutesSaves.rev;
+  try {
+    const v = await api<AgentMutes>("/mutes", { dedupe: false });
+    if (at === mutesSaves.rev && !mutesSaves.out) set({ mutes: { spaces: v.spaces ?? [], sessions: v.sessions ?? [], allowed: v.allowed ?? [] } });
+  } catch { /* keep current mutes until next sync */ }
+}
+
+async function refreshPins() {
+  if (pinsSaves.out) return;
+  const at = pinsSaves.rev;
+  try {
+    const v = await api<Partial<AgentPins>>("/pins", { dedupe: false });
+    if (at === pinsSaves.rev && !pinsSaves.out) set({ pins: pinsOf(v) });
+  } catch { /* keep current pins until next sync */ }
 }
 
 /** One machine as the hub answered a change to it (PUT …/engine), over what the list has: the hub's next \`machines\`
@@ -1537,12 +1580,14 @@ export function setPushGrading(pushGrading: boolean) {
   if (state.pushGrading !== pushGrading) set({ pushGrading });
 }
 
+function interactionByID(id: string) {
+  return state.interactions.find((ix) => ix.id === id);
+}
+
 function changeInteraction(id: string, ix: Interaction | null) {
-  ixChanges.delete(id); // re-inserted: the oldest are dropped first
-  ixChanges.set(id, { rev: ++ixRev, ix });
-  if (ixChanges.size > IX_CHANGES_KEPT) ixChanges.delete(ixChanges.keys().next().value!);
+  rememberLatest(ixChanges, id, { rev: ++ixRev, ix }, IX_CHANGES_KEPT);
   // the hub sends every pending card again now and then: one that says what the page has already changes nothing
-  const old = ix && state.interactions.find((i) => i.id === id);
+  const old = ix && interactionByID(id);
   if (old && JSON.stringify(old) === JSON.stringify(ix)) return;
   const interactions = state.interactions.filter((i) => i.id !== id);
   if (ix) interactions.push(ix);
@@ -1553,7 +1598,10 @@ function changeInteraction(id: string, ix: Interaction | null) {
 
 /** The pending interactions from a snapshot asked for at revision `before`, with what changed since. */
 export function mergeInteractions(snapshot: Interaction[], before: number): Interaction[] {
-  const out = new Map(snapshot.filter((i) => !endedHere.has(i.id)).map((i) => [i.id, i]));
+  const out = new Map(snapshot.filter((i) => !occurrenceCovered(endedHere, i) && !occurrenceCovered(resolvedSeen, i)).map((i) => {
+    const current = interactionByID(i.id);
+    return [i.id, current && laterTime(current.created_at, i.created_at) ? current : i];
+  }));
   for (const [id, c] of ixChanges) {
     if (c.rev <= before) continue;
     out.delete(id);
@@ -1564,39 +1612,54 @@ export function mergeInteractions(snapshot: Interaction[], before: number): Inte
 
 const ANSWERED_MS = 20_000;
 
-// Cards this page ended (answered, found over, handed back), newest last. Until the node ends one, the hub's pending
-// cards still list it: the snapshot after a hello that resumes the stream sends it again as an `interaction` frame, and
-// a full list read after the answer has it too. It is never answerable here again (#1541). A failed answer does not end
-// its card, so nothing has to come off this list.
-const endedHere = new Set<string>();
+// Cards this page ended (answered, found over, handed back), keyed by the occurrence's creation time. Until the node
+// ends one, the hub's pending cards still list it. A later occurrence may reuse the id and must remain answerable;
+// an absent timestamp keeps the legacy id-only behavior (#1541, #11310). A failed answer does not end its card.
+const endedHere = new Map<string, string | undefined>();
 const ENDED_KEPT = 500;
 
+function laterTime(a: string | undefined, b: string | undefined): boolean {
+  const left = timeNs(a), right = timeNs(b);
+  return left !== null && right !== null && left > right;
+}
+
+function rememberOccurrence(markers: Map<string, string | undefined>, id: string, occurrence: string | undefined, kept: number) {
+  if (markers.has(id) && !laterTime(occurrence, markers.get(id))) return;
+  rememberLatest(markers, id, occurrence, kept);
+}
+
+function occurrenceCovered(markers: Map<string, string | undefined>, ix: Interaction): boolean {
+  return markers.has(ix.id) && !laterTime(ix.created_at, markers.get(ix.id));
+}
+
 /**
- * An interaction this page answered (or found over when it tried): its card goes at once, without waiting for the
- * hub's interaction_resolved, which may be late or lost with a socket. With `answer` it shows answered for a while.
+ * An interaction this page answered (or found over when it tried): its occurrence goes at once, without waiting for
+ * the hub's interaction_resolved, which may be late or lost with a socket. A delayed response for an older occurrence
+ * does not remove its same-id replacement. With `answer` it shows answered for a while.
  */
-export function endInteraction(id: string, answer?: AnsweredCard) {
-  endedHere.delete(id);
-  endedHere.add(id);
-  if (endedHere.size > ENDED_KEPT) endedHere.delete(endedHere.values().next().value!);
+export function endInteraction(id: string, answer?: AnsweredCard, occurrence?: string) {
+  occurrence = answer?.ix.created_at ?? occurrence;
+  rememberOccurrence(endedHere, id, occurrence, ENDED_KEPT);
+  const current = interactionByID(id);
+  if (current && laterTime(current.created_at, occurrence)) return;
   changeInteraction(id, null);
   if (!answer) return;
-  const card = { ...answer, at: answer.at ?? Date.now(), withdrawn: answer.withdrawn || answer.already === true || resolvedSeen.has(id) };
+  const previous = state.answered[id];
+  if (previous && laterTime(previous.ix.created_at, occurrence)) return;
+  const card = { ...answer, at: answer.at ?? Date.now(), withdrawn: answer.withdrawn || answer.already === true || occurrenceCovered(resolvedSeen, answer.ix) };
   set({ answered: { ...state.answered, [id]: card } });
   setTimeout(() => dropAnswered(id, card), ANSWERED_MS);
 }
 
-// Cards the hub has withdrawn (interaction_resolved), newest last: the event often comes before the answer's own reply.
-const resolvedSeen = new Set<string>();
+// Cards the hub has withdrawn (interaction_resolved), keyed by occurrence when the hub supplies it.
+const resolvedSeen = new Map<string, string | undefined>();
 const RESOLVED_KEPT = 200;
 
 /** The hub withdrew a card (interaction_resolved, on the same socket as the sessions pushes). */
-export function cardWithdrawn(id: string) {
-  resolvedSeen.delete(id);
-  resolvedSeen.add(id);
-  if (resolvedSeen.size > RESOLVED_KEPT) resolvedSeen.delete(resolvedSeen.values().next().value!);
+export function cardWithdrawn(id: string, occurrence?: string) {
+  rememberOccurrence(resolvedSeen, id, occurrence, RESOLVED_KEPT);
   const cur = state.answered[id];
-  if (!cur || cur.withdrawn) return;
+  if (!cur || cur.withdrawn || (occurrence && laterTime(cur.ix.created_at, occurrence))) return;
   set({ answered: { ...state.answered, [id]: { ...cur, withdrawn: true } } });
 }
 
@@ -1615,7 +1678,12 @@ export function dropAnswered(id: string, only?: AnsweredCard) {
  *  session history's to show. */
 function answeredForUser(msg: Record<string, unknown>) {
   const id = msg.id as string;
-  const ix = state.interactions.find((i) => i.id === id) ?? state.answered[id]?.ix;
+  const occurrence = typeof msg.created_at === "string" ? msg.created_at : undefined;
+  const pending = interactionByID(id);
+  const answered = state.answered[id]?.ix;
+  const ix = occurrence
+    ? (pending?.created_at === occurrence ? pending : answered?.created_at === occurrence ? answered : undefined)
+    : pending ?? answered;
   if (ix) keepDelegated(ix, msg);
 }
 
@@ -1627,10 +1695,15 @@ const DELEGATED_KEPT = 50;
  *  page's own answer lost, so its "Answered" card goes. */
 export function keepDelegated(ix: Interaction, r: Record<string, unknown>) {
   if (ix.kind !== "question") return;
-  changeInteraction(ix.id, null);
+  const current = interactionByID(ix.id);
+  if (!current || !laterTime(current.created_at, ix.created_at)) changeInteraction(ix.id, null);
   const answered = { ...state.answered };
-  delete answered[ix.id];
-  const card: DelegatedAnswer = state.delegated[ix.id] ?? { ix, answers: answersIn(r.answers), reason: typeof r.reason === "string" ? r.reason : "", at: Date.now() };
+  if (!state.answered[ix.id] || !laterTime(state.answered[ix.id].ix.created_at, ix.created_at)) delete answered[ix.id];
+  const previous = state.delegated[ix.id];
+  if (previous && laterTime(previous.ix.created_at, ix.created_at)) return;
+  const card: DelegatedAnswer = previous && !laterTime(ix.created_at, previous.ix.created_at)
+    ? previous
+    : { ix, answers: answersIn(r.answers), reason: typeof r.reason === "string" ? r.reason : "", at: Date.now() };
   const delegated = { ...state.delegated, [ix.id]: card };
   const ids = Object.keys(delegated);
   for (const old of ids.slice(0, Math.max(0, ids.length - DELEGATED_KEPT))) delete delegated[old];
@@ -1682,10 +1755,18 @@ function numbered<T>(path: string, read: (dedupe: boolean) => Promise<T> = (dedu
 
 // The last to-do list the hub answered and its validator (#9590; the `GET /api/v1/todos` row in docs/assistant/todos.md):
 // the hub tags its merged list with `ETag: W/"t1-<hash of its bytes>"` and answers a read naming that tag with a 304 and
-// no body. Most {"type":"todos"} pushes change nothing the list holds, and the whole list is hundreds of KB on a busy
-// hub, so a read sends the tag and a 304 applies the kept answer again, as a 200 with those same bytes would. Memory
-// only, one login's: reset() drops it, and a tag kept under another login is not sent.
-type TodosListAnswer = { todos: Todo[]; shared_blockers?: unknown[]; board?: TodoBoardProjection };
+// no body. Most {"type":"todos"} pushes change nothing the list holds, so a read sends the tag and a 304 applies the kept
+// answer again, as a 200 with those same bytes would. The Web's opt-in answer is not a page: it carries every open
+// to-do, a bounded closed window and the server's board projection, so it replaces this list whole; older closed
+// history uses the advertised cursor.
+// Memory only, one login's: reset() drops it, and a tag kept under another login is not sent.
+type TodosListAnswer = {
+  todos: Todo[];
+  shared_blockers?: unknown[];
+  board?: TodoBoardProjection;
+  closed_cursors?: Record<string, TodoClosedCursor>;
+  notModified?: boolean;
+};
 
 function validTodoBoard(raw: unknown): TodoBoardProjection | null {
   if (!raw || typeof raw !== "object") return null;
@@ -1696,7 +1777,56 @@ function validTodoBoard(raw: unknown): TodoBoardProjection | null {
   return b as TodoBoardProjection;
 }
 
+type TodoPageAnswer = {
+  todos: Todo[];
+  next_cursor?: string;
+  has_more: boolean;
+};
+
 let keptTodos: { owner: string; etag: string; revision: string; answer: TodosListAnswer } | null = null;
+let defaultTodos: Todo[] = [];
+let olderClosedTodos: Todo[] = [];
+let closedEpoch = 0;
+
+function closedCursorsOf(answer: TodosListAnswer): Record<string, TodoClosedCursor> {
+  const out: Record<string, TodoClosedCursor> = {};
+  for (const [manager, cursor] of Object.entries(answer.closed_cursors ?? {})) {
+    if (cursor?.has_more && cursor.next_cursor) out[manager] = cursor;
+  }
+  return out;
+}
+
+function mergeTodoRows(base: Todo[], older: Todo[]): Todo[] {
+  const seen = new Set(base.map((todo) => todo.id));
+  const out = [...base];
+  for (const todo of older) {
+    if (seen.has(todo.id)) continue;
+    seen.add(todo.id);
+    out.push(todo);
+  }
+  return out;
+}
+
+/** The closed rows still carried by the bounded list are authoritative; an older row survives only while no fresher
+ *  row with its id says it was reopened or failed to start. A missing older row is retained: a bounded answer cannot
+ *  distinguish "older than the window" from "deleted", while an explicit drop or reopen always names the id. */
+function retainOlderClosed(list: Todo[], older: Todo[]): Todo[] {
+  const fresh = new Set(list.map((todo) => todo.id));
+  return older.filter((todo) => !fresh.has(todo.id));
+}
+
+/** Keep a cursor that has already walked history instead of resetting it to a newer page's boundary. */
+function mergeClosedCursors(
+  previous: Record<string, TodoClosedCursor>,
+  next: Record<string, TodoClosedCursor>,
+): Record<string, TodoClosedCursor> {
+  const out = { ...next };
+  for (const [manager, cursor] of Object.entries(previous)) {
+    // A manager already in the state has advanced or exhausted its cursor; do not put its first page back.
+    out[manager] = cursor;
+  }
+  return out;
+}
 
 async function readTodos(dedupe = false): Promise<TodosListAnswer> {
   const owner = credentialOwner();
@@ -1704,6 +1834,7 @@ async function readTodos(dedupe = false): Promise<TodosListAnswer> {
   let status = 0;
   let reply: Headers | undefined;
   const answer = await api<TodosListAnswer>("/todos", {
+    query: { closed_limit: "50" },
     dedupe,
     headers: kept?.etag ? { "If-None-Match": kept.etag } : undefined,
     onResponse: (headers, code) => { status = code; reply = headers; },
@@ -1712,7 +1843,7 @@ async function readTodos(dedupe = false): Promise<TodosListAnswer> {
   const revision = reply?.get("X-Persona-Todos-Revision") ?? "";
   if (status === 304 && kept) {
     if (revision) kept.revision = revision;
-    return kept.answer;
+    return { ...kept.answer, notModified: true };
   }
   // a hub without either validator keeps nothing, and the next read is whole as before
   if (owner === credentialOwner()) keptTodos = etag || revision ? { owner, etag, revision, answer } : null;
@@ -1788,19 +1919,43 @@ export async function refresh() {
 function applyTodos(todos: PromiseSettledResult<TodosListAnswer>, fresh: () => boolean) {
   if (!fresh()) return; // a later answer is in place, or this one belongs to a login reset() ended
   if (todos.status === "fulfilled") {
+    if (todos.value.notModified) {
+      set({ todosLoaded: true, todosSupported: true, todosError: null });
+      return;
+    }
     const list = todos.value.todos ?? [];
     const sharedBlockers = Array.isArray(todos.value.shared_blockers) ? todos.value.shared_blockers : [];
     const todoBoard = validTodoBoard(todos.value.board);
+    const older = retainOlderClosed(list, olderClosedTodos);
+    closedEpoch++;
+    defaultTodos = list;
+    olderClosedTodos = older;
     for (const t of list) {
       if (t.manager) noteItemManager(`/todos/${encodeURIComponent(t.id)}`, t.manager);
     }
-    set({ todos: list, sharedBlockers, todoBoard, todosSupported: true, todosLoaded: true, todosError: null, spacesSupported: computeSpacesSupported(list) });
+    set({
+      todos: mergeTodoRows(list, older),
+      sharedBlockers,
+      todoBoard: older.length ? null : todoBoard,
+      closedCursors: mergeClosedCursors(state.closedCursors, closedCursorsOf(todos.value)),
+      closedLoading: false,
+      closedError: null,
+      todosSupported: true,
+      todosLoaded: true,
+      todosError: null,
+      spacesSupported: computeSpacesSupported(list),
+    });
     keepTaskRows([]);
     void lookUpTaskAgents();
     return;
   }
   const reason = todos.reason;
-  if (reason instanceof ApiError && reason.status === 404) return set({ sharedBlockers: [], todoBoard: null, todosSupported: false, todosLoaded: true, todosError: null, spacesSupported: false });
+  if (reason instanceof ApiError && reason.status === 404) {
+    closedEpoch++;
+    defaultTodos = [];
+    olderClosedTodos = [];
+    return set({ todos: [], sharedBlockers: [], todoBoard: null, closedCursors: {}, closedLoading: false, closedError: null, todosSupported: false, todosLoaded: true, todosError: null, spacesSupported: false });
+  }
   set({ todosLoaded: true, todosError: errorText(reason) });
 }
 
@@ -1817,6 +1972,10 @@ export function putTodo(todo: Todo) {
   // A confirmed write is newer than every list read that is still in flight.
   todosAsked.forget();
   if (todo.manager) noteItemManager(`/todos/${encodeURIComponent(todo.id)}`, todo.manager);
+  defaultTodos = defaultTodos.map((t) => (t.id === todo.id ? { ...t, ...todo, wait: todo.wait } : t));
+  olderClosedTodos = todo.done_at && !(todo.start_error && !todo.cancelled_at)
+    ? olderClosedTodos.map((t) => (t.id === todo.id ? { ...t, ...todo, wait: todo.wait } : t))
+    : olderClosedTodos.filter((t) => t.id !== todo.id);
   set({ todos: state.todos.map((t) => (t.id === todo.id ? { ...t, ...todo, wait: todo.wait } : t)) });
 }
 
@@ -1825,7 +1984,80 @@ export function putTodo(todo: Todo) {
 export function dropTodo(id: string) {
   noteItemManager(`/todos/${encodeURIComponent(id)}`, undefined);
   todosAsked.forget();
+  defaultTodos = defaultTodos.filter((t) => t.id !== id);
+  olderClosedTodos = olderClosedTodos.filter((t) => t.id !== id);
   set({ todos: state.todos.filter((t) => t.id !== id) });
+}
+
+/**
+ * Reads one bounded page of closed history from each manager whose default window left rows behind. This is the
+ * existing GET /todos cursor path, not a synthetic page: every manager is named, pages keep its cursor, and only rows
+ * beyond the default window are appended. A manager can return open duplicates while walking backwards; those are
+ * skipped because the default already carries every open to-do.
+ */
+export async function loadOlderClosed(manager?: string) {
+  if (state.closedLoading) return;
+  const starts = Object.entries(state.closedCursors).filter(([id, cursor]) =>
+    (!manager || id === manager) && cursor.has_more && cursor.next_cursor);
+  if (!starts.length) return;
+  const epoch = closedEpoch;
+  const owner = credentialOwner();
+  const cursors = { ...state.closedCursors };
+  const added: Todo[] = [];
+  const failures: unknown[] = [];
+  set({ closedLoading: true, closedError: null });
+  for (const [managerID, start] of starts) {
+    let cursor = start.next_cursor;
+    for (let page = 0; cursor && page < 3; page++) {
+      try {
+        const query = new URLSearchParams({ limit: "50", cursor });
+        const answer = await api<TodoPageAnswer>(`/todos?${query}`, { headers: stampedHeaders(managerID) });
+        if (epoch !== closedEpoch || owner !== credentialOwner()) return;
+        const known = new Set([...defaultTodos, ...olderClosedTodos, ...added].map((todo) => todo.id));
+        let found = 0;
+        for (const todo of answer.todos ?? []) {
+          if (!todo.done_at || known.has(todo.id)) continue;
+          known.add(todo.id);
+          added.push(todo);
+          if (todo.manager) noteItemManager(`/todos/${encodeURIComponent(todo.id)}`, todo.manager);
+          found++;
+        }
+        cursor = answer.has_more && answer.next_cursor ? answer.next_cursor : "";
+        if (found) break;
+      } catch (reason) {
+        failures.push(reason);
+        break;
+      }
+    }
+    // A manager that failed after one or more successful pages keeps the cursor those pages reached; the next manager is
+    // still attempted, and the caller can retry only this one later.
+    cursors[managerID] = { next_cursor: cursor, has_more: Boolean(cursor) };
+  }
+  if (epoch !== closedEpoch || owner !== credentialOwner()) return;
+  olderClosedTodos = [...olderClosedTodos, ...added];
+  set({
+    todos: mergeTodoRows(defaultTodos, olderClosedTodos),
+    // The server board describes the bounded page. Once older rows are appended, let the view's local triage include
+    // them rather than rendering a board that cannot name them.
+    todoBoard: added.length ? null : state.todoBoard,
+    closedCursors: cursors,
+    closedLoading: false,
+    closedError: failures.length ? failures.map((failure) => errorText(failure)).join(" · ") : null,
+  });
+}
+
+/** Loads every remaining closed page in the current manager scope. Used only when the calendar asks to show closed rows:
+ *  the list remains bounded until that explicit view needs the complete dated history. */
+export async function loadAllOlderClosed(manager?: string) {
+  for (let page = 0; page < 1000; page++) {
+    const before = state.closedCursors;
+    const hasMore = Object.entries(before).some(([id, cursor]) =>
+      (!manager || id === manager) && cursor.has_more && cursor.next_cursor);
+    if (!hasMore) return;
+    const signature = JSON.stringify(before);
+    await loadOlderClosed(manager);
+    if (state.closedError || JSON.stringify(state.closedCursors) === signature) return;
+  }
 }
 
 // A push that says the to-dos changed ({"type":"todos"}, a task's feed item) comes in bursts. Settle 200 ms, then ask
@@ -1872,7 +2104,11 @@ export async function refreshTodos(opts?: { coalesce?: boolean }) {
 /** A setting of the assistant's changed from this page (#8324): the copy in `assistant` shows it before the hub answers. */
 export function patchAssistant(patch: Partial<Omit<AssistantInfo, "conversations">>) {
   const a = state.assistant;
-  if (a) set({ assistant: { ...a, ...patch } });
+  if (!a) return;
+  // A Labs receipt can be newer than the last profile response.
+  const assistant = { ...a, ...(state.labsSeen && { labs_seen: state.labsSeen }), ...patch };
+  cacheAssistant(assistant.manager || cacheKey(), assistant);
+  set({ assistant });
 }
 
 const labsSeenByManager = new Map<string, string[]>();
@@ -1894,8 +2130,7 @@ export function acceptLabsSeen(manager: string, ids: string[]) {
   const cached = assistantByManager.get(cacheKey()) ?? currentAssistantSnapshot(pageOf())?.assistant;
   if (cached) {
     const assistant = { ...cached, labs_seen: seen };
-    assistantByManager.set(cacheKey(), assistant);
-    writeAssistantSnapshot(pageOf(), manager, assistant);
+    cacheAssistant(manager, assistant);
   }
   set({ labsSeen: seen });
 }
@@ -1939,14 +2174,15 @@ export async function refreshAssistant(opts?: { coalesce?: boolean }): Promise<b
       replaceDefaultAssistant();
       return false;
     }
+    // Older profiles can omit the owner. The response still belongs to the manager we requested.
+    if (!assistant.manager && manager) assistant.manager = manager;
     if (assistant.labs_seen) assistant.labs_seen = keepLabsSeen(manager || shownManager(), assistant.labs_seen);
     defaultAssistantRetry = "";
     const scope = feedCacheScope();
     const cached = readFeedCache(scope);
     if (cached && (cached.manager ?? "") === from && (cached.machineID !== mainConversationMachine(assistant) || cached.sessionID !== assistant.main)) discardFeedCache(scope);
     restoredAssistant = null;
-    writeAssistantSnapshot(from, manager, assistant);
-    assistantByManager.set(cacheKey(), assistant);
+    cacheAssistant(manager, assistant);
     // its conversations' own requests (feed, stop…) go to it, whichever manager the page shows later
     // (the default's are not noted: with no header the hub finds their manager itself)
     const owner = chosenManager() ?? undefined;
@@ -1973,6 +2209,11 @@ const pageOf = () => chosenManager() ?? "";
  *  the roster is read) or the default once the roster said which that is; "" before (the default's, whose id is not
  *  known yet), moved under the default's id when it is. */
 const cacheKey = () => chosenManager() ?? (defaultKnown() ? defaultManager() : "");
+
+function cacheAssistant(manager: string, assistant: AssistantInfo) {
+  assistantByManager.set(cacheKey(), assistant);
+  writeAssistantSnapshot(pageOf(), manager, assistant);
+}
 
 // The manager whose page is drawn (null: the default's, before the roster said which that is).
 let drawnPage = { page: pageOf(), manager: null as string | null };
@@ -2029,8 +2270,8 @@ export function markSeenLocally(mid: string, sid: string) {
     send({ type: "seen", machine_id: mid, session_id: sid });
     return;
   }
-  if (s && (stateOf(s) === "unread" || justFinished(s, state.mutes))) {
-    recordMarkedSeen(s, stateOf(s) === "idle" ? "just_finished" : "unread", viewed.has(runtimeIdentity(s)));
+  if (s && (activityOf(s) === "unread" || justFinished(s, state.mutes))) {
+    recordMarkedSeen(s, activityOf(s) === "idle" ? "just_finished" : "unread", viewed.has(runtimeIdentity(s)));
   }
   set({ seen: { ...state.seen, [runtimeIdentity(s!)]: deliverSeen(mid, sid, mark) } });
   scheduleSeenCheck();
@@ -2165,6 +2406,9 @@ export function reset() {
   rowHints.clear();
   taskRowsAsked.clear();
   listedFull.clear();
+  closedEpoch++;
+  defaultTodos = [];
+  olderClosedTodos = [];
   runtimeSessions.reset();
   runtimeAgents.reset();
   clearMemoryPages();
@@ -2194,6 +2438,9 @@ export function reset() {
     todos: [],
     sharedBlockers: [],
     todoBoard: null,
+    closedCursors: {},
+    closedLoading: false,
+    closedError: null,
     todosSupported: true,
     todosLoaded: false,
     todosError: null,

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { stripTypeScriptTypes } from 'node:module';
+import { herdrTabName } from '../entry/src/main/ets/core/SessionNaming.ts';
 
 const source = readFileSync(new URL('../entry/src/main/ets/components/AgentListPage.ets', import.meta.url), 'utf8');
 const rowBindingSource = readFileSync(new URL('../entry/src/main/ets/models/RowBinding.ets', import.meta.url), 'utf8');
@@ -45,12 +46,12 @@ const BoundAgentGroup = new Function('return ' + stripTypeScriptTypes(classCode(
 
 function pageClass(wire, translate) {
   return new Function('BoundAgentRow', 'AgentRowPresentation', 'BoundAgentGroup', 'Wire', 'tr', 'Colors', 'reconcileBoundRows',
-    'agentRowPreview', 'agentRowTone', 'runningSubagents',
-    stripTypeScriptTypes('class Page {\n' + ['isRowSelected','syncRowBindings', 'bindAgentRows', 'updateAgentRowPresentation', 'rowTime', 'rowStatus', 'rowStatusColor', 'needsStatusLabel', 'rowPlace','rowSpoken','subagentLine']
+    'agentRowPreview', 'agentRowTone', 'runningSubagents', 'herdrTabName',
+    stripTypeScriptTypes('class Page {\n' + ['isRowSelected','syncRowBindings', 'bindAgentRows', 'updateAgentRowPresentation', 'rowTime', 'rowStatus', 'rowStatusColor', 'needsStatusLabel', 'rowPlace','rowSpoken','subagentLine','rowTitle']
       .map(methodCode).join('\n') + '\n}\n') + '\nreturn Page;')(
         BoundAgentRow, AgentRowPresentation, BoundAgentGroup, wire, translate,
         { needs: 'needs', working: 'working', unread: 'unread', secondary: 'secondary' }, reconcileBoundRows,
-        agentRowPreview, agentRowTone, runningSubagents);
+        agentRowPreview, agentRowTone, runningSubagents, herdrTabName);
 }
 
 function methodsClass(names, globals) {
@@ -273,13 +274,14 @@ test('state group headers replace repeated status words, while muted and machine
  page.workspace.groupingMode='machine';assert.equal(page.rowPlace(display),'Claude · login-form');
  const row=source.slice(source.indexOf('  @Builder agentRow('),source.indexOf('  @Builder rowContext('));
  assert.match(row,/\.accessibilityText\(this\.rowSpoken\(binding\)\)/);
+  assert.match(methodCode('rowSpoken'), /this.rowTitle\(binding\)/);
 });
 
 test('phone search starts folded, reveals only from a downward top pull, and a saved query survives leaving',()=>{
  const TouchType={Down:0,Move:1,Up:2};
  const Search=new Function('TouchType','return '+stripTypeScriptTypes('class Search {'+
    ['searchVisible','setSearchEditing','resetSearchReveal','trackPull','refreshAgents'].map(methodCode).join('\n')+'}'))(TouchType);
- const page=new Search(); page.refreshGroupingSupport=()=>{};page.reloadDecisions=()=>{};
+ const page=new Search(); page.refreshGroupingSupport=()=>{};page.reloadDecisions=()=>{};page.refreshPersonalAgents=()=>Promise.resolve();
  let top=0,refreshes=0;
  page.workspace={search:'',setReadingDetail(){},refresh(){refreshes++;return Promise.resolve();},isBoundTo(){return true;}};
  page.agentScroller={currentOffset:()=>({yOffset:top})};page.compactRoot=true;page.active=true;page.onSearchMode=()=>{};page.resetSearchReveal();
@@ -375,7 +377,7 @@ test('a muted row keeps Needs you but drops other marks and the bold unread titl
   assert.match(render, /status === 'unread' && !binding\.presentation\.muted \? FontWeight\.Bold : FontWeight\.Medium/);
   assert.match(render, /Symbols\.muted/);
   assert.match(render, /opacity\(binding\.presentation\.muted \? Tokens\.mutedOpacity : 1\)/);
-  assert.match(render, /breathing: binding\.presentation\.tone === 'needs_you' && this\.active && !this\.environment\.reduceMotion/);
+  assert.match(render, /binding\.presentation\.tone === 'needs_you' && this\.active && !this\.environment\.reduceMotion[\s\S]*NeedsYouPulseDot\(/);
 });
 
 test('background waiting shows its own word instead of the working capsule', () => {
@@ -444,17 +446,22 @@ test('a parent row shows its family state and running count once, and a child sa
 
 test('list actions tap on folds and filters, Interrupt taps once it is sent, and Mark all as read succeeds once', async () => {
   const feedback = [];
-  const Actions = methodsClass(['toggleGroup', 'toggleFamilyRow', 'toggleIdle', 'foldAll', 'interruptRow', 'markAllCount', 'markAllLabel', 'markAllSeen'],
-    { Haptics: { tap: () => feedback.push('tap'), success: () => feedback.push('success') }, tr: (key) => key });
+  const Actions = methodsClass(['toggleGroup', 'toggleFamilyRow', 'toggleIdle', 'foldAll', 'interruptRow', 'confirmMarkAllSeen'],
+    { Haptics: { tap: () => feedback.push('tap'), success: () => feedback.push('success') }, tr: (key) => key, toastCenter: {success: () => {}}, nativeLiveView: {syncFromModel: async () => {}} });
   const page = new Actions(), calls = [];
-  let interruptResult = true, markResult = true, canFold = true;
+  let dialog;
+  page.getUIContext = () => ({showAlertDialog: value => { dialog = value; }});
+  let interruptResult = true, markResult = 2, canFold = true;
+  const authorized = new Set(['a', 'b']);
   page.filterSheetOpen = true;
   page.workspace = {
     quickFilter: 'all', unread: ['a', 'b'],
     toggleFold: (id) => calls.push('fold ' + id), toggleFamily: (row) => calls.push('family ' + row.id), toggleIdleRows: (id) => calls.push('idle ' + id),
     canFoldAll: () => canFold, foldAll: (fold) => calls.push('all ' + fold),
     interrupt: async (row) => { calls.push('interrupt ' + row.id); return interruptResult; },
-    unreadToMark() { return this.unread; }, markAllSeen: async () => { calls.push('mark'); return markResult; }
+    unreadToMark() { return this.quickFilter === 'unread' ? this.unread : []; },
+    actionTicket: row => () => authorized.has(row),
+    markAllSeen: async rows => { calls.push(rows.join(',')); return Math.min(markResult, rows.length); }
   };
   page.toggleGroup('state/working'); page.toggleFamilyRow({ id: 'main' }); page.toggleIdle('state/idle'); page.toggleIdle('machine/m1');
   assert.deepEqual(calls.splice(0), ['fold state/working', 'family main', 'fold state/idle', 'idle machine/m1']);
@@ -469,13 +476,23 @@ test('list actions tap on folds and filters, Interrupt taps once it is sent, and
   interruptResult = false; page.interruptRow({ id: 'gone' }); await new Promise((resolve) => setTimeout(resolve));
   assert.deepEqual([calls.splice(0), feedback.splice(0)], [['interrupt run', 'interrupt gone'], ['tap']]);
 
-  assert.equal(page.markAllCount(), 0, 'only under the Unread filter');
+  page.confirmMarkAllSeen();
+  assert.equal(dialog, undefined, 'only the unread filter offers the confirmation');
   page.workspace.quickFilter = 'unread';
-  assert.equal(page.markAllCount(), 2);
-  assert.equal(page.markAllLabel(2), '2 agent_group_unread', 'the count reads as the group headers do');
-  page.markAllSeen(); await new Promise((resolve) => setTimeout(resolve));
-  markResult = false; page.markAllSeen(); await new Promise((resolve) => setTimeout(resolve));
-  assert.deepEqual([calls.splice(0), feedback.splice(0)], [['mark', 'mark'], ['success']]);
+  page.confirmMarkAllSeen();
+  dialog.primaryButton.action();
+  assert.deepEqual(calls, [], 'cancel sends no requests');
+  page.confirmMarkAllSeen();
+  authorized.delete('b');
+  dialog.secondaryButton.action();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(calls.splice(0), ['a'], 'only rows from the confirmed owner are admitted');
+  assert.deepEqual(feedback.splice(0), ['tap', 'tap', 'success']);
+  markResult = 0;
+  page.confirmMarkAllSeen();
+  dialog.secondaryButton.action();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(feedback, ['tap'], 'a failed batch has no success feedback');
 });
 
 test('Interrupt, Mark all as read and Collapse / Expand all sit where iOS puts them, and haptics are touch vibration', () => {
@@ -484,15 +501,15 @@ test('Interrupt, Mark all as read and Collapse / Expand all sit where iOS puts t
   assert.ok(menu.indexOf("tr('agent_interrupt')") > menu.indexOf("'agent_unpin' : 'agent_pin'"), 'after Pin, as iOS');
   assert.match(menu,/if \(this\.workspace\.canInterrupt\(row\)\) \{\s*MenuItem\(\{ content: tr\('agent_interrupt'\)/);
   const list = source.slice(source.indexOf('  build() {'));
-  assert.ok(list.indexOf('this.markAllCount() > 0') < list.indexOf('ForEach(this.groupBindings'), 'Mark all as read heads the list');
-  assert.ok(list.includes(".id('agents.mark_all_seen')"));
+  assert.ok(list.indexOf('this.markAllSeenRow()') < list.indexOf('ForEach(this.groupBindings'), 'Mark all as read heads the list');
+  assert.equal((source.match(/\.id\('agents\.unread\.mark_all_seen'\)/g) || []).length, 1);
   const sheet = source.slice(source.indexOf('  @Builder filterSheet('), source.indexOf('  private isRowSelected('));
   assert.ok(sheet.includes('this.foldAllButton(true, false); this.foldAllButton(false, false)'));
   assert.ok(sheet.includes('this.environment.fontScale >= 1.5'), 'stacked with large text');
   assert.ok(source.includes('.enabled(this.workspace.canFoldAll(fold))'));
   const haptics = readFileSync(new URL('../entry/src/main/ets/platform/Haptics.ets', import.meta.url), 'utf8');
-  assert.ok(haptics.includes("{ usage: 'touch' }"), 'the phone touch-vibration setting governs it');
-  assert.ok(haptics.includes('isSupportEffectSync'));
+  assert.ok(haptics.includes("EFFECT_SOFT, 'touch'"), 'the phone touch-vibration setting governs it');
+  assert.ok(haptics.includes('EFFECT_NOTICE_SUCCESS'));
   const module = readFileSync(new URL('../entry/src/main/module.json5', import.meta.url), 'utf8');
   assert.ok(module.includes('"ohos.permission.VIBRATE"'));
 });
@@ -524,4 +541,62 @@ test('Needs You surfaces follow the visible oldest-first order as the decisions 
   assert.equal(page.startsSurface(b,group.value.id),true);assert.equal(page.endsSurface(b,group.value.id),true);
   page.rail=true;assert.equal(page.startsSurface(b,group.value.id),false);
   assert.equal(page.endsSurface(b,'state/working'),true);
+});
+
+test('herdrTabName is projected once per raw update and rowTitle toggles cleanly without extra Wire.parse calls', () => {
+  const context = fixture(), { page } = context;
+  const firstRow = row(
+    { slot_id: 'slot-1', space_kind: 'herdr', slot_name: 'auth-refactor', last_text: 'Initial' },
+    { title: 'Work on session 1a2b' }
+  );
+  const bound = { identity: '["session/m1/s1",0]', key: 'row-1', value: firstRow };
+  const bindings = page.bindAgentRows([], [bound], true);
+  const binding = bindings[0];
+
+  assert.equal(context.parseCount, 1);
+  assert.equal(binding.presentation.herdrTabName, 'auth-refactor');
+  assert.equal(page.rowTitle(binding), 'Work on session 1a2b');
+
+  page.model = { ...page.model, useHerdrTabName: true };
+  assert.equal(page.rowTitle(binding), 'auth-refactor');
+  assert.equal(context.parseCount, 1, 'toggling useHerdrTabName on does not re-parse raw');
+
+  page.model = { ...page.model, useHerdrTabName: false };
+  assert.equal(page.rowTitle(binding), 'Work on session 1a2b');
+  assert.equal(context.parseCount, 1, 'toggling useHerdrTabName off does not re-parse raw');
+
+  page.bindAgentRows(bindings, [bound], true);
+  assert.equal(context.parseCount, 1, 'unchanged raw does not re-parse');
+
+  bound.value = row(
+    { slot_id: 'slot-1', space_kind: 'herdr', slot_name: 'renamed-tab', last_text: 'Updated' },
+    { title: 'Work on session 1a2b' }
+  );
+  page.bindAgentRows(bindings, [bound], true);
+  assert.equal(context.parseCount, 2, 'raw change parses once');
+  assert.equal(binding.presentation.herdrTabName, 'renamed-tab');
+
+  page.model = { ...page.model, useHerdrTabName: true };
+  assert.equal(page.rowTitle(binding), 'renamed-tab');
+
+  // Directory owner preference overrides root model preference when present.
+  page.model = { ...page.model, useHerdrTabName: true, directoryOwnerFor: () => ({ useHerdrTabName: false }) };
+  assert.equal(page.rowTitle(binding), 'Work on session 1a2b');
+  page.model = { ...page.model, useHerdrTabName: false, directoryOwnerFor: () => ({ useHerdrTabName: true }) };
+  assert.equal(page.rowTitle(binding), 'renamed-tab');
+  page.model = { ...page.model, useHerdrTabName: true, directoryOwnerFor: () => ({ machineName: id => 'Computer ' + id }) };
+
+  bound.value = row({ slot_id: 'slot-1', space_kind: 'orca', slot_name: 'ignored' }, { title: '' });
+  page.bindAgentRows(bindings, [bound], true);
+  assert.equal(context.parseCount, 3);
+  assert.equal(binding.presentation.herdrTabName, '');
+  assert.equal(page.rowTitle(binding), 'agent_untitled');
+
+  const needsCardsBlock = source.slice(source.indexOf('  @Builder needsYouCards('), source.indexOf('  @Computed get orderedNeedsRows'));
+  assert.match(needsCardsBlock, /this\.rowTitle\(binding\)/);
+  assert.doesNotMatch(needsCardsBlock, /binding\.bound\.value\.title/);
+
+  const railBlock = source.slice(source.indexOf('  @Builder railAvatar('), source.indexOf('  @Builder resultList('));
+  assert.match(railBlock, /this\.rowTitle\(binding\)/);
+  assert.doesNotMatch(railBlock, /binding\.bound\.value\.title/);
 });

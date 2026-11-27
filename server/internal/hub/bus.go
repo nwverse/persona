@@ -17,6 +17,7 @@ import (
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/bus"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/devicewire"
 	"github.com/nwverse/persona/server/internal/extwire"
@@ -54,6 +55,32 @@ func handleBus(method string, fn busCall) {
 		panic("bus: method registered twice: " + method)
 	}
 	busMethods[method] = fn
+}
+
+// handleTypedBus binds a handler to the method's request and result types. The
+// decoder accepts unknown fields, and invalidPrefix keeps the method's error text.
+func handleTypedBus[P, R any](method buswire.Method[P, R], invalidPrefix string, fn func(*Hub, context.Context, *busConn, P) (R, error)) {
+	handleTypedBusWithDecoder(method, func(_ *busConn, params json.RawMessage) (P, error) {
+		var p P
+		if err := json.Unmarshal(params, &p); err != nil {
+			return p, &rpc.Error{Code: bus.CodeInvalidParams, Message: invalidPrefix + err.Error()}
+		}
+		return p, nil
+	}, fn)
+}
+
+func handleTypedBusWithDecoder[P, R any](method buswire.Method[P, R], decode func(*busConn, json.RawMessage) (P, error), fn func(*Hub, context.Context, *busConn, P) (R, error)) {
+	handleBus(method.Name, func(h *Hub, ctx context.Context, c *busConn, params json.RawMessage) (any, error) {
+		p, err := decode(c, params)
+		if err != nil {
+			return nil, err
+		}
+		out, err := fn(h, ctx, c, p)
+		if err != nil {
+			return nil, err
+		}
+		return out, nil
+	})
 }
 
 // handleBusEvent registers what takes event (a one-way message) once a connection said its handshake; unregistered
@@ -302,7 +329,7 @@ func (h *Hub) serveBus(w http.ResponseWriter, r *http.Request) {
 	// the card up and made the change on a later approval, after the assistant had heard the call failed (#5907). A
 	// devices.file_call's long file copy / zip likewise stops when the hub's caller goes away (#6113). Ordinary
 	// devices.call methods run on: their node may not support cancellation, so stopping the manager would be ambiguous.
-	c.peer.Cancels = map[string]bool{assistantwire.MethodFleetAsk: true, assistantwire.MethodFleetAskPrepared: true, extwire.MethodHubCall: true, devicewire.MethodFileCall: true}
+	c.peer.Cancels = map[string]bool{assistantwire.MethodFleetAsk: true, assistantwire.MethodFleetAskPrepared: true, extwire.MethodHubCall: true, devicewire.MethodFileCall: true, devicewire.MethodRetireCall: true}
 	c.peer.OnRequest = func(ctx context.Context, method string, params json.RawMessage) (any, error) {
 		return h.busRequest(ctx, c, method, params)
 	}
@@ -382,16 +409,17 @@ func (c *busConn) refuse(h *Hub, err error) (any, error) {
 // busManagerHello is what manager.hello says that the hub keeps for now; the rest (apps, the machine's summary) is
 // the follow-up's.
 type busManagerHello struct {
-	ID             string   `json:"id"`
-	Host           string   `json:"host"`
-	MachineUID     string   `json:"machine_uid,omitempty"`
-	OS             string   `json:"os"`
-	Arch           string   `json:"arch"`
-	Deploy         string   `json:"deploy"`
-	Version        string   `json:"version"`
-	PendingRestart bool     `json:"pending_restart,omitempty"`
-	Capabilities   []string `json:"capabilities"`
-	Features       []string `json:"features"`
+	ID                     string   `json:"id"`
+	Host                   string   `json:"host"`
+	MachineUID             string   `json:"machine_uid,omitempty"`
+	OS                     string   `json:"os"`
+	Arch                   string   `json:"arch"`
+	Deploy                 string   `json:"deploy"`
+	Version                string   `json:"version"`
+	PendingRestart         bool     `json:"pending_restart,omitempty"`
+	Capabilities           []string `json:"capabilities"`
+	Features               []string `json:"features"`
+	ProjectReviewAppInputs *bool    `json:"project_review_app_inputs,omitempty"`
 }
 
 // busHelloReply is manager.hello's answer: who the hub knows the service as, the managers, and the assistant's hello
@@ -426,6 +454,18 @@ func (h *Hub) managerHello(ctx context.Context, c *busConn, params json.RawMessa
 		OS: clip(p.OS, 40), Arch: clip(p.Arch, 40), Deploy: clip(p.Deploy, 40), Version: clip(p.Version, 80),
 		PendingRestart: p.PendingRestart, Capabilities: capabilities, Features: features}); err != nil {
 		return nil, err
+	}
+	// A hello without the switch or the capability (a manager from before project review, or one rolled back to such a
+	// version) turns App inputs off: what was queued for it is dropped, and nothing more is queued that it could never
+	// take. An optional feature: its write failing must not hang up the manager (refuse says "wrong identity", which a
+	// client may take as final). The switch saved by an earlier hello stays in place, and the next hello writes again.
+	appInputs := p.ProjectReviewAppInputs != nil && *p.ProjectReviewAppInputs &&
+		slices.Contains(p.Capabilities, assistantwire.CapabilityProjectReview)
+	if err := h.setProjectReviewAppInputs(ctx, c.ident.ID, appInputs); err != nil {
+		h.logf("bus: [%s] project review App inputs not saved: %v", c.ident.ID, err)
+	}
+	if slices.Contains(p.Capabilities, assistantwire.CapabilityProjectReview) {
+		h.pokeProjectReviewOwners() // its rows, kept while it was away
 	}
 	for _, l := range []struct {
 		what      string

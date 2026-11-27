@@ -82,8 +82,8 @@ func TestLeadPlanStartsAtOnce(t *testing.T) {
 	if res, err := s2.toolTaskPlan(ctx, "side1", planArgs(false)); err != nil || !strings.Contains(res, "card") {
 		t.Fatalf("an ordinary conversation's writable plan did not wait on its card: %s %v", res, err)
 	}
-	if got := f2.pushed(); len(got) != 1 {
-		t.Fatalf("an ordinary conversation's plan card, with the owner away, pushes once: %+v", got)
+	if got := f2.pushed(); len(got) != 0 {
+		t.Fatalf("an ordinary conversation without authority must not push a category-zero plan: %+v", got)
 	}
 }
 
@@ -270,8 +270,8 @@ func TestSupervisorPlanStartsAtOnceInScheduledFollowup(t *testing.T) {
 			if started != 0 {
 				t.Fatalf("unauthorized conversation started %d task(s) without Start", started)
 			}
-			if got := f.pushed(); len(got) != 1 {
-				t.Fatalf("waiting plan card with owner away should push once: %+v", got)
+			if got := f.pushed(); len(got) != 0 {
+				t.Fatalf("missing auto-start authority must not push a category-zero plan: %+v", got)
 			}
 		})
 	}

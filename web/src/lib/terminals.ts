@@ -2,7 +2,7 @@
 // workspaces, tabs and panes of its terminal host, agent or plain shell) turned into the rows the page shows, plus the
 // Jump-To filter and which terminals the page keeps alive. Pure, so it is tested without a DOM.
 import { t } from "../i18n";
-import { baseName, sessionTitle, shortPath, stateOf } from "./format";
+import { baseName, sessionTitle, shortPath, activityOf } from "./format";
 import { agentSurface, type AgentSurface } from "./agent-kind";
 import type { AgentState, Session } from "./types";
 
@@ -111,7 +111,7 @@ const HOST_STATUS: Record<string, AgentState> = { working: "working", blocked: "
 
 /** An agent pane's state: the session's own (it knows unread and pending answers) else what the host says. */
 export function paneState(p: PaneDTO, session: Session | undefined): PaneState {
-  if (session) return stateOf(session);
+  if (session) return activityOf(session);
   if (!p.agent) return "shell";
   return HOST_STATUS[p.status ?? ""] ?? "unknown";
 }
@@ -223,6 +223,19 @@ export function paneTrail(spaces: readonly TermSpace[], id: string): string {
       if (p) return [sp.label, t.label === sp.label ? "" : t.label, p.title !== t.label ? p.title : ""].filter(Boolean).join(" › ");
     }
   return "";
+}
+
+/** The pane's title and owning workspace label for a compact terminal header breadcrumb. */
+export function paneHeaderInfo(spaces: readonly TermSpace[], id: string): { title: string; workspace: string } {
+  for (const sp of spaces)
+    for (const t of sp.tabs) {
+      const p = t.panes.find((x) => x.id === id);
+      if (p) {
+        const title = t.panes.length > 1 && t.label && t.label !== p.title && t.label !== sp.label ? `${t.label} · ${p.title}` : p.title || t.label;
+        return { title, workspace: sp.label };
+      }
+    }
+  return { title: "", workspace: "" };
 }
 
 /** The pane's working directory, "" when unknown. */

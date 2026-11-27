@@ -155,8 +155,10 @@ type BodyStream struct {
 // deploy, version, pending_restart?, capabilities}; its answer is Hello (with the hub's name, role and managers besides).
 const (
 	// The assistant calls the hub (Hub).
-	MethodHello        = "manager.hello"
-	MethodDevice       = "device.call"
+	MethodHello  = "manager.hello"
+	MethodDevice = "device.call"
+	// MethodDeviceRetire forwards only session.stop_if_idle, with caller cancellation.
+	MethodDeviceRetire = "device.retire"
 	MethodApp          = "app.call"
 	MethodNotify       = "notify.request"
 	MethodSnapshot     = "manager.snapshot"
@@ -296,6 +298,8 @@ var Routes = []string{
 	"DELETE /api/v1/assistant/conversations/{id}",
 	"GET /api/v1/assistant/conversations/{id}/always",
 	"GET /api/v1/assistant/standing-authorizations",
+	"GET /api/v1/assistant/outbound-messages",
+	"POST /api/v1/assistant/outbound-messages",
 	"GET /api/v1/assistant/north-star",
 	"DELETE /api/v1/assistant/standing-authorizations/{id}",
 	"POST /api/v1/assistant/rule-suggestions/{id}/always",
@@ -376,6 +380,7 @@ var Routes = []string{
 	"GET /api/v1/assistant/followups",
 	"POST /api/v1/assistant/followups/{id}/run",
 	"DELETE /api/v1/assistant/followups/{id}",
+	"GET /api/v1/task-plans",
 	"GET /api/v1/task-plans/{id}",
 	"POST /api/v1/task-plans/{id}/start",
 	"POST /api/v1/task-plans/{id}/workspace-preview",

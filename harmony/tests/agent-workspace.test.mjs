@@ -1175,6 +1175,25 @@ test('Interrupt is offered on a running or waiting turn its source can stop, and
   assert.equal(await workspace.interrupt(waiting), false, 'a request already in flight is not sent twice');
 });
 
+test('a large confirmed unread batch bounds concurrent requests and counts every accepted row', async () => {
+  const sessions = Array.from({ length: 11 }, (_, index) =>
+    agent('sample-' + index, { state: 'unread', status: 'done' }));
+  const { workspace, state } = await opened({ sessions });
+  workspace.setQuickFilter('unread');
+  let inFlight = 0, peak = 0;
+  state.request = async call => {
+    if (!call.path.endsWith('/seen')) return undefined;
+    inFlight++;
+    peak = Math.max(peak, inFlight);
+    await new Promise(resolve => setImmediate(resolve));
+    inFlight--;
+    return { ok: true };
+  };
+  assert.equal(await workspace.markAllSeen(), sessions.length);
+  assert.equal(peak, 4);
+  assert.equal(workspace.unreadToMark().length, 0);
+});
+
 test('Mark all as read under Unread marks every listed row at once and puts back a row the hub refuses', async () => {
   const first = agent('first', { state: 'unread', status: 'done' });
   const second = agent('second', { state: 'unread', status: 'done', machine_id: 'm2' });
@@ -1201,7 +1220,7 @@ test('Mark all as read under Unread marks every listed row at once and puts back
   assert.deepEqual(workspace.unreadToMark(), []);
   assert.equal(workspace.busy, true);
   release();
-  assert.equal(await done, false);
+  assert.equal(await done, 1, 'only the accepted row counts as read');
   assert.deepEqual(state.calls.map((call) => [call.method, call.path]).sort(), [
     ['POST', '/api/v1/sessions/m1/first/seen'], ['POST', '/api/v1/sessions/m2/second/seen']
   ]);

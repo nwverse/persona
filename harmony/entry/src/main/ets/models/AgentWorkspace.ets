@@ -123,6 +123,7 @@ export class AgentWorkspace {
   @Trace unpinnedRows: ResourceRow[] = [];
   /** The quick filters' counts, before the filter narrows the list; Needs you counts the section's rows. */
   @Trace counts: Record<string, number> = {};
+  @Trace unreadShownRows: ResourceRow[] = [];
   @Trace quickFilter: string = 'all';
   @Trace filterCounts:Record<string,Object> = {};
   @Trace groupingMode: string = 'state';
@@ -139,6 +140,11 @@ export class AgentWorkspace {
   @Trace mutesSpaces: string[] = [];
   @Trace mutesSessions: string[] = [];
   @Trace mutesAllowed: string[] = [];
+  /**
+   * Mirrors iOS `ChatsView.kept`: under a quick filter (e.g. Unread), sessions that matched when
+   * entering the filter stay in place after being opened/read so the reader can step through sequentially.
+   */
+  private filterKept: string[] = [];
 
   private client: ClientModel | undefined;
   @Trace private preferences: Map<string, AgentPreferences> = new Map();
@@ -153,7 +159,6 @@ export class AgentWorkspace {
   relations: SessionRelations = new SessionRelations([]);
   private expandedFamilies = new Set<string>();
   /** The core's unread rows under the current filter (`unread_shown`), what Mark All as Seen marks. */
-  private unreadShown: string[] = [];
   foldFamilies(): boolean { return this.quickFilter === 'all' && !this.search.trim(); }
   foldedChildren(row: ResourceRow, graph: SessionRelations = this.relations): ResourceRow[] {
     return graph.children(row).filter(child => !this.isPinned(child));
@@ -264,7 +269,7 @@ export class AgentWorkspace {
     this.expandedFamilies.clear(); this.relations = new SessionRelations([]);
     this.externalSelection = undefined; this.groups = []; this.sourceRows = []; this.latestSourceRows = []; this.projectRows = undefined; this.historyRows = []; this.historyLoaded = false; this.frozenGroups = undefined;
     this.supervisorQueue = undefined; this.hidSupervisorRows = false;
-    this.quickFilter = 'all'; this.filterCounts = {}; this.unpinnedRows = [];
+    this.quickFilter = 'all'; this.filterCounts = {}; this.unpinnedRows = []; this.unreadShownRows = []; this.filterKept = [];
     this.preferredGrouping = this.defaultGrouping; this.groupingMode = this.defaultGrouping;
     this.supportsTodos = false; this.supportsDirections = false;
     this.machineFilter = ''; this.search = ''; this.history = false; this.selectedKey = '';
@@ -311,7 +316,7 @@ export class AgentWorkspace {
     this.expandedFamilies.clear(); this.relations = new SessionRelations([]);
     this.supervisorQueue = undefined; this.hidSupervisorRows = false;
     this.projectRows = undefined;
-    this.filterCounts = {}; this.unpinnedRows = [];
+    this.filterCounts = {}; this.unpinnedRows = []; this.unreadShownRows = []; this.filterKept = [];
     this.revision++; this.openingView = false; this.client = undefined; this.groups = []; this.sourceRows = []; this.latestSourceRows = []; this.historyRows = []; this.historyLoaded = false;
     this.frozenGroups = undefined; this.readingDetail = false;
     if (this.persistTimer !== -1) clearTimeout(this.persistTimer);
@@ -368,7 +373,7 @@ export class AgentWorkspace {
   }
 
   setSearch(value: string): void {
-    this.releaseFreeze(); this.search = value; this.rebuild(); this.refreezeAfterFilter(); this.saveViewLater();
+    this.releaseFreeze(); this.filterKept = []; this.search = value; this.rebuild(); this.refreezeAfterFilter(); this.saveViewLater();
   }
 
   private compactDisplay:boolean=false;
@@ -377,9 +382,16 @@ export class AgentWorkspace {
     this.compactDisplay=value;this.rebuild();
   }
 
+  /** Resets quick-filter kept rows (e.g. pull-to-refresh or reselecting active chip). */
+  clearFilterKept(): void {
+    if (!this.filterKept.length) return;
+    this.filterKept = [];
+    this.rebuild();
+  }
+
   setQuickFilter(value: string): void {
     if (!['all', 'needsYou', 'working', 'unread', 'backgroundWaiting', 'feishu', 'terminal'].includes(value)) return;
-    this.releaseFreeze(); this.quickFilter = value; this.rebuild(); this.refreezeAfterFilter(); this.saveViewLater();
+    this.releaseFreeze(); this.filterKept = []; this.quickFilter = value; this.rebuild(); this.refreezeAfterFilter(); this.saveViewLater();
   }
 
   groupingOptions(): string[] {
@@ -437,7 +449,7 @@ export class AgentWorkspace {
   }
 
   async setMachineFilter(value: string): Promise<void> {
-    this.releaseFreeze(); this.machineFilter = this.machineForShownHub(value); this.rebuild(); this.saveViewLater();
+    this.releaseFreeze(); this.filterKept = []; this.machineFilter = this.machineForShownHub(value); this.rebuild(); this.saveViewLater();
     if (this.history) {
       const client = this.client;
       if (client) await this.loadHistory(client, this.revision, true);
@@ -465,7 +477,7 @@ export class AgentWorkspace {
   async setCurrentHubOnly(value: boolean): Promise<void> {
     const client = this.client;
     if (!client || this.currentHubOnly === value) return;
-    this.hubModeLoaded = true; this.currentHubOnly = value; this.releaseFreeze();
+    this.hubModeLoaded = true; this.currentHubOnly = value; this.releaseFreeze(); this.filterKept = [];
     this.historyRequest++; this.historyRows = []; this.historyLoaded = false; this.loading = false;
     this.machineFilter = this.machineForShownHub(this.machineFilter);
     if (this.history && !this.historySupported()) this.history = false;
@@ -496,6 +508,7 @@ export class AgentWorkspace {
     this.latestSourceRows = this.latestSourceRows.filter(keep); this.historyRows = this.historyRows.filter(keep);
     if (this.externalSelection?.group === group) { this.externalSelection = undefined; this.selectedKey = ''; }
     if (this.frozenGroups) this.frozenGroups = this.frozenGroups.map((source: AgentWorkspaceGroup) => { const copy = this.copyGroup(source); copy.rows = copy.rows.filter(keep); return copy; }).filter((source: AgentWorkspaceGroup) => source.rows.length > 0);
+    this.filterKept = [];
     this.preferences = new Map<string, AgentPreferences>(); this.rebuild();
   }
   selectExternal(row: ResourceRow): void { this.externalSelection = row; if (this.client) this.syncSelected(this.client); }
@@ -643,6 +656,7 @@ export class AgentWorkspace {
     try {
       await snapshot.repo.call(path, 'POST', Wire.payload([], []), '', (): boolean => this.active(snapshot));
       if (!this.ownerActive(snapshot)) return false;
+      this.filterKept = removeKey(this.filterKept, coreRowId(row));
       this.patchState(row, 'idle');
       return true;
     } catch (failure) { if (this.active(snapshot)) this.fail(failure as Error); return false; }
@@ -677,69 +691,53 @@ export class AgentWorkspace {
    * lists, folded groups included, so the chip empties. Families are open under a quick filter, so each child is its own row.
    */
   unreadToMark(): ResourceRow[] {
-    if (this.quickFilter !== 'unread' || !this.unreadShown.length) return [];
-    const byId = new Map<string, ResourceRow>();
-    this.relations.rows.forEach((row: ResourceRow) => byId.set(coreRowId(row), row));
-    const rows: ResourceRow[] = [], seen = new Set<string>();
-    this.unreadShown.forEach((id: string) => {
-      const row = byId.get(id);
-      if (!row || row.state !== 'unread' || this.isMuted(row) || !this.canMarkSeen(row) || seen.has(rowKey(row))) return;
-      seen.add(rowKey(row)); rows.push(row);
-    });
-    return rows;
-  }
-
-  /**
-   * The chips count what each filter lists, as iOS `filterCounts`: a muted row that is unread or working is listed under
-   * neither, though the core's `counts` include it (sort/mod.rs `counts`, kept for the shared sort parity). Only with such
-   * a row is there anything to take away, and only then does the core list the rows the search admits once more.
-   */
-  private listedCounts(input: AgentListInput, projection: CoreAgentListProjection): Record<string, Object> {
-    const counts: Record<string, Object> = {};
-    Object.keys(projection.counts || {}).forEach((key: string) => counts[key] = projection.counts[key]);
-    const muted = input.rows.filter((row: AgentListRow): boolean => {
-      const state = Wire.text(row.raw, 'state');
-      return (state === 'unread' || state === 'working') && !Wire.bool(row.raw, 'background_waiting') && this.isMuted(row.source as ResourceRow);
-    });
-    if (!muted.length) return counts;
-    let admitted = input.quick === 'all' ? projection.filtered : undefined;
-    if (!admitted) {
-      const settings: Record<string, Object> = {};
-      Object.keys(input.coreSettings).forEach((key: string) => settings[key] = input.coreSettings[key]);
-      settings['inventory'] = true;
-      admitted = this.adapter.project(this.makeListInput(this.relations, 'all', settings)).filtered || [];
-    }
-    const listed = new Set<string>(admitted);
-    muted.forEach((row: AgentListRow) => {
-      const key = Wire.text(row.raw, 'state');
-      if (listed.has(coreRowId(row.source as ResourceRow))) counts[key] = Math.max(0, Wire.number(counts, key) - 1);
-    });
-    return counts;
+    if (this.quickFilter !== 'unread') return [];
+    return this.unreadShownRows.filter((row: ResourceRow) =>
+      row.state === 'unread' && !this.isMuted(row) && this.canMarkSeen(row));
   }
 
   /** Marks every row at once and leaves Unread before the hub answers; a row the hub refuses comes back with the error shown. */
-  async markAllSeen(rows: ResourceRow[] = this.unreadToMark()): Promise<boolean> {
-    if (this.busy) return false;
+  async markAllSeen(rows: ResourceRow[] = this.unreadToMark()): Promise<number> {
+    if (this.busy) return 0;
+    const eligible = new Set(this.unreadToMark().map((row: ResourceRow) => rowKey(row)));
     const jobs: SeenJob[] = [];
     rows.forEach((row: ResourceRow) => {
-      if (!this.canMarkSeen(row)) return;
+      if (!eligible.delete(rowKey(row))) return;
       const path = this.sessionPath(row) + '/seen', snapshot = this.captureRow(row, path);
       if (snapshot && !this.blocked(snapshot, path)) jobs.push({ key: rowKey(row), path: path, snapshot: snapshot });
     });
-    if (!jobs.length) return false;
+    if (!jobs.length) return 0;
     this.busy = true; this.error = '';
+    this.filterKept = [];
     const restore = this.markSeenLocally(new Set<string>(jobs.map((job: SeenJob) => job.key)));
-    const failures = await Promise.all(jobs.map(async (job: SeenJob): Promise<Error | undefined> => {
-      try { await job.snapshot.repo.call(job.path, 'POST', Wire.payload([], []), '', (): boolean => this.active(job.snapshot)); return undefined; }
-      catch (failure) { return failure as Error; }
-    }));
-    const current = jobs.filter((job: SeenJob) => this.ownerActive(job.snapshot));
-    const failed = new Set<string>(), first = failures.find((failure: Error | undefined, index: number) => !!failure && current.includes(jobs[index]));
-    jobs.forEach((job: SeenJob, index: number) => { if (failures[index] && current.includes(job)) failed.add(job.key); });
+    const failures: (Error | undefined)[] = [];
+    const batchSize = 4;
+    for (let start = 0; start < jobs.length; start += batchSize) {
+      const batch = jobs.slice(start, start + batchSize);
+      const results = await Promise.all(batch.map(async (job: SeenJob): Promise<Error | undefined> => {
+        if (!this.active(job.snapshot)) return new Error('request_updated');
+        try {
+          await job.snapshot.repo.call(job.path, 'POST', Wire.payload([], []), '', (): boolean => this.active(job.snapshot));
+          return undefined;
+        } catch (error) { return error as Error; }
+      }));
+      failures.push(...results);
+    }
+    const failed = new Set<string>();
+    let current = 0;
+    let first: Error | undefined;
+    jobs.forEach((job: SeenJob, index: number) => {
+      if (!this.ownerActive(job.snapshot)) return;
+      current++;
+      if (failures[index]) {
+        failed.add(job.key);
+        if (!first) first = failures[index];
+      }
+    });
     if (failed.size) restore(failed);
     if (first) this.fail(first);
-    if (current.length) this.busy = false;
-    return !failed.size && current.length === jobs.length;
+    if (current) this.busy = false;
+    return current - failed.size;
   }
 
   private markSeenLocally(keys: Set<string>): (failed: Set<string>) => void {
@@ -925,8 +923,20 @@ export class AgentWorkspace {
   }
 
   private patchState(row: ResourceRow, state: string): void {
-    const key = rowKey(row);
-    const patch = (items: ResourceRow[]): ResourceRow[] => items.map((item: ResourceRow) => rowKey(item) !== key ? item : seenRow(item, state));
+    this.patchStates([row], state);
+  }
+
+  private patchStates(rows: ResourceRow[], state: string): void {
+    const keys = new Set<string>(rows.map((row: ResourceRow) => rowKey(row)));
+    const patch = (items: ResourceRow[]): ResourceRow[] => items.map((item: ResourceRow) => {
+      if (!keys.has(rowKey(item))) return item;
+      const next = item.copy(), data = next.data();
+      if (state === 'idle') {
+        const work = Wire.object(data, 'work');
+        if (Wire.bool(work, 'just_finished')) { work['just_finished'] = false; data['work'] = work; }
+      }
+      data['state'] = state; next.raw = JSON.stringify(data); next.state = state; return next;
+    });
     this.latestSourceRows = patch(this.latestSourceRows); this.historyRows = patch(this.historyRows); this.rebuild();
   }
 
@@ -1031,12 +1041,28 @@ export class AgentWorkspace {
     });
   }
 
+  private effectiveKept(): string[] {
+    const merged: string[] = [];
+    const seen = new Set<string>();
+    const add = (id: string): void => {
+      if (id && !seen.has(id)) { seen.add(id); merged.push(id); }
+    };
+    if (this.frozenGroups) {
+      this.frozenGroups.forEach((group) => group.memberIds.forEach(add));
+    }
+    if (this.quickFilter !== 'all') {
+      this.filterKept.forEach(add);
+    }
+    return merged;
+  }
+
   private rebuild(): void {
     let groups: CoreAgentListGroup[];
     let counts: Record<string, Object>;
     const byId = new Map<string, ResourceRow>();
     let unpinned: string[];
     let matches: string[];
+    let unreadIds: string[];
     try {
       const relations = sessionRelations(this.latestSourceRows, unavailableSessionSources(this.client?.directoryOwners() || []));
       relations.rows.forEach(row => byId.set(coreRowId(row), row));
@@ -1045,9 +1071,9 @@ export class AgentWorkspace {
       matches = projection.queryMatches || [];
       groups = phoneAgentGroups(input,projection);
       unpinned = projection.unpinned || [];
+      unreadIds = projection.unread_shown || [];
       this.filterCounts = projection.filter_counts || {};
-      counts = this.listedCounts(input, projection);
-      this.unreadShown = projection.unread_shown || [];
+      counts = projection.filter_counts || projection.counts || {};
       // The core matches the query (including machine and quick filters) before it hides
       // offline rows from its ordinary groups. Offer those readable matches once.
       if (this.search.trim() && projection.filtered) {
@@ -1067,6 +1093,17 @@ export class AgentWorkspace {
     }
     this.sourceRows = this.relations.rows;
     if (this.client) this.syncSelected(this.client);
+    this.unreadShownRows = unreadIds.flatMap((id: string): ResourceRow[] => {
+      const row = byId.get(id);
+      return row ? [row] : [];
+    });
+    if (this.quickFilter !== 'all' && !this.readingDetail) {
+      const nextKept = new Set<string>(this.filterKept.filter((id: string) => byId.has(id)));
+      groups.forEach((group) => group.rows.forEach((id: string) => { if (byId.has(id)) nextKept.add(id); }));
+      this.filterKept = Array.from(nextKept);
+    } else if (this.quickFilter === 'all' && this.filterKept.length) {
+      this.filterKept = [];
+    }
     const needs = this.needsGroup(groups, byId);
     const nextCounts: Record<string, number> = {};
     ['needsYou', 'unread', 'working', 'backgroundWaiting'].forEach((key: string) => nextCounts[key] = Wire.number(counts, key));
@@ -1190,8 +1227,7 @@ export class AgentWorkspace {
     return counts;
   }
 
-  private makeListInput(relations: SessionRelations = this.relations, quick: string = this.quickFilter,
-    settings?: Record<string, Object>): AgentListInput {
+  private makeListInput(relations: SessionRelations = this.relations): AgentListInput {
     const fold = this.foldFamilies();
     const displayed = fold ? relations.rows.filter(row => !relations.root(row) || this.isPinned(row)) : relations.rows;
     const rows: AgentListRow[] = displayed.map((row: ResourceRow): AgentListRow => {
@@ -1201,9 +1237,9 @@ export class AgentWorkspace {
       if (fold) raw['state'] = this.familyState(row, relations);
       return {id: coreRowId(row), raw, source: row};
     });
-    return {rows, includeSourceFilters:true, history: this.history, grouping: this.groupingMode, quick: quick,
+    return {rows, includeSourceFilters:true, history: this.history, grouping: this.groupingMode, quick: this.quickFilter,
       machineFilter: this.machineFilter, query: this.search, reading: this.readingDetail,
-      kept: this.frozenGroups?.flatMap((group) => group.memberIds) || [],
+      kept: this.effectiveKept(),
       machines: (this.client ? this.shownOwners(this.client) : []).flatMap((owner: ClientModel): Record<string, Object>[] => {
         const current: Record<string, Object>[] = owner.machines.map((row: ResourceRow): Record<string, Object> =>
           ({ 'id': row.id, 'name': row.title, 'group': owner.profile.id, 'manager': row.manager || owner.profile.manager }));
@@ -1216,7 +1252,7 @@ export class AgentWorkspace {
           });
         return current;
       }),
-      coreSettings: settings || { 'inventory': !!this.search.trim(), 'sort': 'state', 'folded': this.folded, 'expanded_idle': this.expandedIdle, 'expanded_quiet': this.expandedQuiet,
+      coreSettings: { 'inventory': !!this.search.trim(), 'sort': 'state', 'folded': this.quickFilter !== 'all' && this.filterKept.length > 0 && !this.folded.includes('state/idle') && !this.folded.includes('!state/idle') ? this.folded.concat(['!state/idle']) : this.folded, 'expanded_idle': this.expandedIdle, 'expanded_quiet': this.expandedQuiet,
         'compact': this.compactDisplay, 'history': this.history, 'include_filter_counts': true, 'now': new Date().toISOString(), 'held': this.heldSession },
       preferencesFor: (row: AgentListRow): AgentListPreferences => this.preferencesFor(row.source as ResourceRow),
       machineIdentity: (row: AgentListRow): string => this.machineIdentity(row.source as ResourceRow),

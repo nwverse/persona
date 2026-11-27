@@ -167,6 +167,23 @@ function CardButtonIcon({ icon }: { icon: NonNullable<CardButton["icon"]> }) {
   return <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-current opacity-60" />;
 }
 
+function safeCardURL(url?: string): string | null {
+  const trimmed = url?.trim();
+  if (!trimmed || /\s/.test(trimmed) || !/^https?:\/\//i.test(trimmed)) return null;
+  for (let i = 0; i < trimmed.length; i++) {
+    const c = trimmed.charCodeAt(i);
+    if (c <= 0x1f || c === 0x7f) return null;
+  }
+  const auth = trimmed.replace(/^https?:\/\//i, "").split(/[/?#]/, 1)[0];
+  if (!auth || auth.includes("@") || auth.includes("\\")) return null;
+  try {
+    const parsed = new URL(trimmed);
+    return (parsed.protocol === "https:" || parsed.protocol === "http:") && parsed.hostname && !parsed.username && !parsed.password ? parsed.href : null;
+  } catch {
+    return null;
+  }
+}
+
 /** A card's buttons under it: a link opens in a tab, a callback is pressed as the user, then the message is read again
  * 1.2 s later with the spinner still on (iOS LarkCardButton). `onDone` gets the pressed message's id. */
 export function CardButtons({ buttons, messageID, account, onDone }: { buttons: CardButton[]; messageID?: string; account?: number; onDone?: (messageID: string) => void | Promise<void> }) {
@@ -183,7 +200,8 @@ export function CardButtons({ buttons, messageID, account, onDone }: { buttons: 
   if (!buttons.length) return null;
   const press = async (b: CardButton, i: number) => {
     if (b.url) {
-      window.open(b.url, "_blank", "noopener,noreferrer");
+      const href = safeCardURL(b.url);
+      if (href) window.open(href, "_blank", "noopener,noreferrer");
       return;
     }
     if (!b.action || !messageID) return;
@@ -203,7 +221,7 @@ export function CardButtons({ buttons, messageID, account, onDone }: { buttons: 
   return (
     <div className="mt-2.5 flex flex-wrap gap-1.5">
       {buttons.map((b, i) => {
-        const usable = !b.disabled && (Boolean(b.url) || (Boolean(b.action) && Boolean(messageID)));
+        const usable = !b.disabled && (b.url ? Boolean(safeCardURL(b.url)) : Boolean(b.action) && Boolean(messageID));
         const name = b.label || b.tooltip || t("inbox-larkthread.card_button");
         return (
           <button

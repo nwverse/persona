@@ -23,6 +23,7 @@ import (
 	"github.com/nwverse/persona/server/internal/moduleswitch"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/connector/proc"
@@ -33,6 +34,7 @@ import (
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/identity"
 	"github.com/nwverse/persona/server/internal/lazyre"
+	"github.com/nwverse/persona/server/internal/modapi"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
 
@@ -104,6 +106,9 @@ type ExtensionView struct {
 	// Attached: an extension running on its own that the manager reaches on its sockets (a remote: install), and how it
 	// is connected.
 	Attached *ExtensionAttached `json:"attached,omitempty"`
+	// MarketSignature: how an extension installed from a market was verified (extension_market_keys.go).
+	// State: official | signed | key_removed | unsigned | market_invalid.
+	MarketSignature *MarketSignatureView `json:"market_signature,omitempty"`
 }
 
 // ExtensionAttached is how an attached extension is connected (docs/extensions/extensions.md "Attached extensions").
@@ -193,6 +198,8 @@ type extensions struct {
 	// switchMu puts the user's Enabled switches one after another (switchExtension, enableChannel): a pack's switch
 	// reads and writes its record of members (#1830). Taken before any registry operation, never inside one.
 	switchMu sync.Mutex
+	// Keeps concurrent config reconciliation and provider cutover from starting two speech processes.
+	speechApplyMu sync.Mutex
 
 	h    *Manager
 	ctx  context.Context
@@ -224,10 +231,11 @@ type extensions struct {
 	dev devTaps
 	// badges are the plugins' badges on their nav_pages' entries ("<plugin>/<ui>" → extension.Badge; extension_ui.go).
 	badges sync.Map
-	// events and todoEvents keep slow extension programs out of the assistant bus read loop: the knowledge base's and the
-	// todos' queues, apart so that a flood of one does not push out the other's.
+	// events, todoEvents and larkEvents keep slow extension programs out of the assistant bus read loop and sync runs:
+	// separate queues so a flood of one does not push out another's.
 	events     extensionEvents
 	todoEvents extensionEvents
+	larkEvents extensionEvents
 	// filtersSent are the agent filters last handed to the nodes, as JSON (agent_filters.go); nil before the first.
 	filtersSent []byte
 	// invalid are the extensions' ui.invalidate waiting to be told to the apps (extension_ui.go), at most one a second.
@@ -418,6 +426,7 @@ func (ps *extensions) view(ctx context.Context, p *extension.Extension) Extensio
 	if ps.h != nil {
 		ps.h.extensionUpgrades().decorate(ctx, &v, p)
 		ps.h.decorateMarketMetadata(ctx, &v, p)
+		v.MarketSignature = ps.h.marketSignatureOf(ctx, p)
 		ps.h.decorateInstalledLogo(&v, p)
 	}
 	if m.NodeProgram() != nil {
@@ -523,6 +532,11 @@ func (h *Manager) attachExtensions(ctx context.Context) {
 	}
 	h.addVoiceExtension(ctx, reg, store) // `personad voice`, taking hub.json's entry of it over (voice_extension.go)
 	h.addVolcExtension(ctx, reg, store)  // `personad volc`, off until the owner turns it on (volc_extension.go)
+	// The rows of a module an installed extension may supply wait unread while nothing may serve them: a built-in's
+	// row on a build without it, or any row of a module the modules setting switched off (module_providers.go).
+	for _, m := range modapi.ExtensionModules() {
+		reg.HoldModule(string(m.ID), !h.modules().On(string(m.ID)))
+	}
 	if err := reg.Load(ctx); err != nil {
 		h.logf("plugins: %v", err)
 	}
@@ -624,7 +638,7 @@ func (ps *extensions) changed(c extension.Change) {
 		ps.forgetAssistantData(ctx, c.ID) // what the assistant read of its data directory goes with it
 		// What the user let it read of the assistant's sensitive information goes too (#13246): installed again, it
 		// starts as a third party's with no grant.
-		if err := ps.h.callAssistant(ctx, assistantwire.MethodExtensionTrustForget, assistantwire.ExtensionTrustForget{Extension: c.ID}, nil); err != nil {
+		if _, err := buswire.Call(ctx, assistantCaller(ps.h.callAssistant), assistantwire.ExtensionTrustForgetMethod, assistantwire.ExtensionTrustForget{Extension: c.ID}); err != nil {
 			ps.logf("plugin %s removed: its trust was not forgotten: %v", c.ID, err)
 		}
 		if n, err := ps.h.removeHandoffRules(ctx, c.ID, ""); err != nil {
@@ -651,6 +665,9 @@ func (ps *extensions) changed(c extension.Change) {
 	}
 	if ps.h != nil {
 		ps.h.agentFiltersChanged(ctx) // only when they changed (agent_filters.go)
+	}
+	if ps.h != nil && textLookupTouched(c.Old, c.ID, ps.reg) {
+		ps.h.textLookupChanged() // the apps ask GET /api/v1/text-lookup again
 	}
 	if ps.h != nil {
 		ps.h.sendReport() // its looks came or went: the hub serves them from the report (hub/looks.go)
@@ -785,6 +802,10 @@ func (ps *extensions) runtimeContext(fallback context.Context) context.Context {
 // it starts again if it is there, switched on, compatible and set up. The started process and its setup belong to the
 // manager's lifecycle (runtimeContext), never to a short-lived caller request context.
 func (ps *extensions) apply(ctx context.Context, id string) {
+	if id != "" && id == volcID(ps.modules()) {
+		ps.speechApplyMu.Lock()
+		defer ps.speechApplyMu.Unlock()
+	}
 	ctx = ps.runtimeContext(ctx)
 	ps.mu.Lock()
 	old := ps.byID[id]
@@ -1245,7 +1266,9 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 			return ps.storageCall(ctx, p, method, params)
 		}
 		switch method {
-		case "kb.list", "kb.get", "kb.day", "kb.search", "kb.update", "kb.owner", "kb.recent":
+		case kbImportCheckpoint, kbSentMarkers:
+			return ps.kbProviderCall(ctx, p, hp, settingsEpoch, method, params)
+		case "kb.list", "kb.get", "kb.day", "kb.search", "kb.update", "kb.owner", "kb.recent", "kb.put_recording":
 			return ps.extensionKBCall(ctx, id, method, params)
 		case "assistant.conversations", "assistant.messages", "assistant.memory", assistantwire.MethodAssistantEntriesList: // assistant.read, assistant.memory.read (extension_assistant_read.go)
 			return ps.extensionAssistantCall(ctx, id, method, params)
@@ -1363,7 +1386,13 @@ func (ps *extensions) specOf(ctx context.Context, p *extension.Extension, hp *hu
 			extensionConnectors.Store(c.ID, p.Record.Source)
 		}
 		cfg := proc.Config{ID: c.ID, Name: c.Name, Manifest: ps.knownOnly(id, connectorManifest(c)), Secrets: secrets, KB: kbase,
-			Logf: ps.logf, Link: link}
+			Logf: ps.logf, Link: link, Identity: &connector.ExtensionIdentity{
+				Extension: p.Record.ID,
+				Version:   p.Record.Version,
+				Source:    p.Record.Source,
+				MarketKey: p.Record.MarketKey,
+				Remote:    p.Record.Remote != nil,
+			}}
 		cfg.RecallNotBefore = hp.recallNotBefore // the program is not asked about a send before this install, whoever asks
 		if p.Record.Granted.GhLogin && ps.h != nil {
 			cfg.GhToken = ps.h.ghTokenFor

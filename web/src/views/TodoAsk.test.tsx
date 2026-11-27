@@ -4,6 +4,9 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { t } from "../i18n";
+import { getQuotes, removeQuote, storeDraft, storedPageDraft, withQuoteBlock } from "../lib/drafts";
+import { registerComposer } from "../lib/links";
 import { ApiError } from "../lib/api";
 import { getState } from "../lib/store";
 import { boardSectionOf } from "../lib/task-board";
@@ -112,7 +115,7 @@ describe("a to-do's row", () => {
     expect(row.dataset.ask).toBe("decide");
     expect(row.textContent).toContain("需要你决定：两个方案各有取舍");
     expect(row.textContent).toContain("推荐：先发预发环境");
-    expect(askButton()!.textContent).toBe("就这样");
+    expect(askButton()!.textContent).toBe("采纳");
     expect(askButton()!.getAttribute("aria-label")).toContain("上线新登录页");
   });
 
@@ -124,7 +127,7 @@ describe("a to-do's row", () => {
     expect(host.querySelector("[data-testid=todo-ask-panel]")).toBeNull();
     expect(api.mock.calls.some(([path]) => path === "/todos")).toBe(true); // read again: the ask is gone
     expect(askRow()).toBeNull();
-    expect(toast).toHaveBeenCalledWith("已按推荐来", "ok");
+    expect(toast).toHaveBeenCalledWith("已采用推荐方案", "ok");
   });
 
   it("settles a recorded decision whose Agent is unavailable", async () => {
@@ -133,8 +136,8 @@ describe("a to-do's row", () => {
     await drawList([todo()]);
     act(() => askButton()!.click());
     await flush();
-    expect(host.querySelector("[data-ask-done=recorded]")?.textContent).toBe("已记下，Agent 已停，督办会接手");
-    expect(toast).toHaveBeenCalledWith("已记下，Agent 已停，督办会接手", "ok");
+    expect(host.querySelector("[data-ask-done=recorded]")?.textContent).toBe("已记录。Agent 已停止运行，将由督办接手处理。");
+    expect(toast).toHaveBeenCalledWith("已记录。Agent 已停止运行，将由督办接手处理。", "ok");
   });
 
   it("an earlier round already answered says so and reads the to-dos again", async () => {
@@ -146,7 +149,7 @@ describe("a to-do's row", () => {
     await drawList([todo()]);
     act(() => askButton()!.click());
     await flush();
-    expect(host.querySelector("[data-ask-done=handled]")?.textContent).toBe("已经处理过了");
+    expect(host.querySelector("[data-ask-done=handled]")?.textContent).toBe("已处理过");
     expect(api.mock.calls.some(([path]) => path === "/todos")).toBe(true);
   });
 
@@ -174,7 +177,7 @@ describe("a to-do's row", () => {
     seed({ todos: [todo({ ask: { ...decide, asked_at: "2026-11-09T09:00:00Z", recommend: "直接上线" } })] });
     act(() => root.render(<TodosView />));
     await flush();
-    expect(askButton()?.textContent).toBe("就这样");
+    expect(askButton()?.textContent).toBe("采纳");
     expect(askRow()!.textContent).toContain("推荐：直接上线");
   });
 
@@ -207,6 +210,54 @@ describe("a to-do's row", () => {
 });
 
 describe("a to-do's page", () => {
+  it("follows up in the origin composer with a removable task quote and the draft intact", async () => {
+    const origin = "direction";
+    const key = "assistant-computer/direction";
+    const ask = { verdict: "Please verify", asked_at: ASKED, summary: "The route is step-free." };
+    const task = todo({ origin, ask, supervision: { supervisor: "main", state: "user_check" } });
+    seed({ assistant: { machine_id: "assistant-computer", main: "main", conversations: [] } });
+    storeDraft(key, "My existing question");
+    setRoute(origin, "earlier-decision", ASKED);
+    act(() => root.render(<TodoAskPanel todo={task} />));
+    const action = () => [...host.querySelectorAll("button")].find((b) => b.textContent === t("assistant-taskpanel.follow_up"));
+    await act(async () => action()!.click());
+    expect(navigate).toHaveBeenCalledWith({ name: "persona", sid: origin });
+    const focus = vi.fn();
+    const unregister = registerComposer({ key, focus, send: vi.fn() });
+    expect(focus).toHaveBeenCalledOnce();
+    unregister();
+    const quotes = getQuotes(key).list;
+    expect(quotes).toHaveLength(1);
+    expect(quotes[0]).toMatchObject({ task: { id: task.id, title: task.title }, text: ask.summary });
+    expect(withQuoteBlock(quotes, storedPageDraft(key))).toContain(task.id);
+    removeQuote(key, quotes[0].id!);
+    expect(getQuotes(key).list).toEqual([]);
+    expect(storedPageDraft(key)).toBe("My existing question");
+    expect(getFeedState().routes[origin]).toBeUndefined();
+    expect(accepts()).toEqual([]);
+    expect(host.querySelector("[data-ask-done]")).toBeNull();
+    act(() => root.render(<TodoAskPanel todo={{ ...task, origin: undefined }} />));
+    expect(action()).toBeUndefined();
+    act(() => root.render(<TodoAskPanel todo={{ ...task, supervision: undefined }} />));
+    expect(action()).toBeUndefined();
+    storeDraft(key, "");
+  });
+
+  it("shows the verification summary and direct deliverable, with an empty fallback on older hubs", () => {
+    const summary = "Both routes have step-free access.";
+    const link = "https://docs.example.com/routes";
+    const ask = { verdict: "Please verify the result", asked_at: ASKED };
+    act(() => root.render(<TodoAskPanel todo={todo({ ask: { ...ask, summary, link } })} />));
+    expect(host.textContent).toContain(summary);
+    expect(host.querySelector("a")?.href).toBe(link);
+    for (const legacy of [ask, { ...ask, link: location.origin + "/s/node/worker" }]) {
+      act(() => root.render(<TodoAskPanel todo={todo({ ask: legacy })} />));
+      expect(host.textContent).toContain(ask.verdict);
+      expect(host.textContent).not.toContain(summary);
+      expect(host.querySelector("a")).toBeNull();
+    }
+  });
+
   it("lists parked work outside Done and counts it under the badge's name", async () => {
     await drawList([todo({
       seen_at: new Date(Date.now() + 1000).toISOString(),
@@ -228,7 +279,7 @@ describe("a to-do's page", () => {
     expect(panel.textContent).toContain("需要你"); // the state name (lib/state-labels.ts)
     expect(panel.textContent).toContain("推荐：先发预发环境");
     const buttons = [...panel.querySelectorAll("button")].map((b) => b.textContent);
-    expect(buttons).toEqual(["按推荐来", "去对话里回答"]);
+    expect(buttons).toEqual(["采用推荐", "前往对话回答"]);
     act(() => [...panel.querySelectorAll("button")][1].click());
     expect(navigate).toHaveBeenCalledWith({ name: "persona", sid: "conv1" });
     expect(getFeedState().routes.conv1).toEqual({ todoId: "t1", askedAt: ASKED });
@@ -238,8 +289,8 @@ describe("a to-do's page", () => {
   it("a decision with nothing recommended says where to answer it", async () => {
     await drawList([todo({ ask: { ...decide, recommend: undefined } })], "t1");
     const panel = host.querySelector<HTMLElement>("[data-testid=todo-ask-panel]")!;
-    expect(panel.textContent).toContain("没有推荐方案");
-    expect([...panel.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["去对话里回答"]);
+    expect(panel.textContent).toContain("暂无推荐方案");
+    expect([...panel.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["前往对话回答"]);
   });
 
   it("shows nothing while the to-do waits on nothing", async () => {
@@ -273,10 +324,10 @@ describe("controlled to-do ask callbacks", () => {
     await flush();
     expect(onAccept).toHaveBeenCalledWith("t1", ASKED);
     expect(onRefresh).toHaveBeenCalledTimes(1);
-    expect(onNotice).toHaveBeenCalledWith("已经处理过了", "ok");
+    expect(onNotice).toHaveBeenCalledWith("已处理过", "ok");
     expect(host.querySelector("[data-ask-done=handled]")).not.toBeNull();
 
-    const conversation = [...panel.querySelectorAll("button")].find((button) => button.textContent === "去对话里回答")!;
+    const conversation = [...panel.querySelectorAll("button")].find((button) => button.textContent === "前往对话回答")!;
     act(() => conversation.click());
     expect(onOpenConversation).toHaveBeenCalledWith(item, decide);
     expect(accept).not.toHaveBeenCalled();
@@ -319,7 +370,7 @@ describe("controlled to-do ask callbacks", () => {
     await flush();
     expect(onAccept).toHaveBeenCalledWith("t1", ASKED);
     expect(onRefresh).toHaveBeenCalledTimes(1);
-    expect(onNotice).toHaveBeenCalledWith("已按推荐来", "ok");
+    expect(onNotice).toHaveBeenCalledWith("已采用推荐方案", "ok");
     expect(host.querySelector("[data-ask-done=taken]")).not.toBeNull();
     expect(accept).not.toHaveBeenCalled();
     expect(refresh).not.toHaveBeenCalled();
@@ -338,7 +389,7 @@ describe("controlled to-do ask callbacks", () => {
     expect(accept).toHaveBeenCalledWith("t1", ASKED);
     expect(onRefresh).toHaveBeenCalledTimes(1);
     expect(refresh).not.toHaveBeenCalled();
-    expect(toast).toHaveBeenCalledWith("已按推荐来", "ok");
+    expect(toast).toHaveBeenCalledWith("已采用推荐方案", "ok");
     expect(host.querySelector("[data-ask-done=taken]")).not.toBeNull();
   });
 
@@ -362,7 +413,7 @@ describe("controlled to-do ask callbacks", () => {
     await flush();
     act(() => askButton()!.click());
     await flush();
-    expect(onNotice).toHaveBeenNthCalledWith(1, "已按推荐来", "ok");
+    expect(onNotice).toHaveBeenNthCalledWith(1, "已采用推荐方案", "ok");
     expect(onNotice).toHaveBeenNthCalledWith(2, expect.stringContaining("refresh offline"), "error");
     expect(host.querySelector("[data-ask-done=taken]")).not.toBeNull();
     expect(askButton()).toBeNull();
@@ -382,9 +433,9 @@ describe("default to-do ask compatibility", () => {
     await flush();
     expect(accept).toHaveBeenCalledWith("t1", ASKED);
     expect(refresh).toHaveBeenCalledTimes(1);
-    expect(toast).toHaveBeenCalledWith("已经处理过了", "ok");
+    expect(toast).toHaveBeenCalledWith("已处理过", "ok");
 
-    const conversation = [...panel.querySelectorAll("button")].find((button) => button.textContent === "去对话里回答")!;
+    const conversation = [...panel.querySelectorAll("button")].find((button) => button.textContent === "前往对话回答")!;
     act(() => conversation.click());
     expect(route).toHaveBeenCalledWith("conv1", "t1", ASKED);
     expect(navigate).toHaveBeenCalledWith({ name: "persona", sid: "conv1" });
