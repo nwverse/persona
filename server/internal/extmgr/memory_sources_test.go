@@ -400,8 +400,8 @@ func TestMemoryPageStandingBytes(t *testing.T) {
 func TestReadMemoryPagesMaxPagesBound(t *testing.T) {
 	ctx := context.Background()
 	f := &fakeMemoryCaller{pages: map[string]json.RawMessage{
-		"":       json.RawMessage(`{"entries": [], "tagged": true, "has_more": true, "after": "p2"}`),
-		"p2":     json.RawMessage(`{"entries": [], "tagged": true, "has_more": false}`),
+		"":   json.RawMessage(`{"entries": [], "tagged": true, "has_more": true, "after": "p2"}`),
+		"p2": json.RawMessage(`{"entries": [], "tagged": true, "has_more": false}`),
 	}}
 	b := memoryTestBounds()
 	b.MaxPages = 1

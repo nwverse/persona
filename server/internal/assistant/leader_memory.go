@@ -54,11 +54,10 @@ func (s *Service) leaderBoundProject(ctx context.Context, session string) (slug,
 	return slug, name
 }
 
-// leaderProjectMemoryEntries gathers extension project memory for leader session's bound project from both:
-//  1. prompts/projects/<slug>.md (via projectExtensionContext, for non-memory_sources extensions), and
-//  2. memory_sources entries matching the bound project's slug or name (non-sensitive, deduplicated against standing).
-//
-// Total text stays within leaderProjectMemoryMax bytes.
+// leaderProjectMemoryEntries gathers extension project memory for leader session's bound project from both
+// prompts/projects/<slug>.md (via projectExtensionContext, for non-memory_sources extensions) and memory_sources
+// entries matching the bound project's slug or name (non-sensitive, deduplicated against standing), capped at
+// leaderProjectMemoryMax bytes.
 func (s *Service) leaderProjectMemoryEntries(ctx context.Context, machine, session string) (projectName string, entries []prompts.RecoveryEntry) {
 	if !s.isLeader(ctx, session) || !s.ownersPersonal(ctx, machine, session) {
 		return "", nil

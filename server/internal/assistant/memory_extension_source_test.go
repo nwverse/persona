@@ -246,7 +246,7 @@ func TestDecisionsQueryMemoryTags(t *testing.T) {
 	if err := json.Unmarshal([]byte(raw), &out); err != nil {
 		t.Fatal(err)
 	}
-	if len(out.Memory) != 1 || out.Memory[0].ID != memoryExtensionIDPrefix+"qa-finance" {
+	if len(out.Memory) != 2 || out.Memory[0].ID != memoryExtensionIDPrefix+"qa-finance" || out.Memory[1].ID != memoryExtensionIDPrefix+"qa-workflow" {
 		t.Fatalf("category recall: %s", raw)
 	}
 	for _, args := range []string{`{"tag":"workflow","by":"user"}`, `{"tag":"workflow","trust":"user_verbatim"}`, `{"tag":"workflow","status":"superseded"}`} {
