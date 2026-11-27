@@ -80,13 +80,15 @@ type treeDirection struct {
 	Sessions  []directionSession `json:"sessions,omitempty"`
 }
 
-// treeCounts are how many of a direction's listed tasks are in each state.
+// treeCounts are how many of a direction's listed tasks are in each state. UserCheck is the subset of Review tasks
+// accepted by their supervisor awaiting owner verification (omitted when 0 so wire shapes stay backward-compatible).
 type treeCounts struct {
-	Working  int `json:"working"`
-	NeedsYou int `json:"needs_you"`
-	Stuck    int `json:"stuck"`
-	Review   int `json:"review"`
-	Planned  int `json:"planned"`
+	Working   int `json:"working"`
+	NeedsYou  int `json:"needs_you"`
+	Stuck     int `json:"stuck"`
+	Review    int `json:"review"`
+	UserCheck int `json:"user_check,omitempty"`
+	Planned   int `json:"planned"`
 }
 
 func (c *treeCounts) add(state string) {
@@ -412,6 +414,9 @@ func (s *Service) directionTreeParts(ctx context.Context, now time.Time) (*treeB
 	if err := s.listDecisionReviews(ctx, all); err != nil {
 		s.logf("direction tree decision reviews: %v", err)
 	}
+	if cfg.todosV2On() {
+		s.populateTodoActiveBlockers(ctx, all)
+	}
 	asks := s.todoAsks(ctx) // once the to-dos are let go: it reads them itself
 	var undone []Todo
 	wantCards := map[string]map[string]bool{}
@@ -472,18 +477,19 @@ func (s *Service) directionOwners() *treeBuild {
 
 // treeBuild is one build of the tree: the to-dos placed, the sessions by machine and id, and what is nested where.
 type treeBuild struct {
-	s        *Service
-	main     string
-	leads    []string
-	todosV2  bool
-	todos    map[string]listedTodo
-	placed   map[string]todoTriage
-	views    map[string]assistantwire.TodoSummary
-	carried  map[string]bool    // open PartOf steps already rolled up onto an open top-level parent
-	heldOnly map[[2]string]bool // canonical (machine, session) waiting only on Delegating cards
-	open     []string           // the ids the To-dos page counts open, by id
-	reached  map[string]bool
-	now      time.Time
+	s             *Service
+	main          string
+	leads         []string
+	todosV2       bool
+	effectiveDirs map[string]string // todos_v2 effective direction_id by todo id
+	todos         map[string]listedTodo
+	placed        map[string]todoTriage
+	views         map[string]assistantwire.TodoSummary
+	carried       map[string]bool    // open PartOf steps already rolled up onto an open top-level parent
+	heldOnly      map[[2]string]bool // canonical (machine, session) waiting only on Delegating cards
+	open          []string           // the ids the To-dos page counts open, by id
+	reached       map[string]bool
+	now           time.Time
 
 	sessions map[[2]string]proto.Session
 	lists    map[string][]proto.Session    // the complete lists read once for this build, by machine
@@ -537,7 +543,6 @@ func newTreeBuild(s *Service, main string, leads []string, all []listedTodo, lis
 		c, ok := tb.sessions[[2]string{machine, id}]
 		return c, ok
 	}
-	tb.placed = triagePlace(all, look, now, loc)
 	facts := make([]projection.Facts, len(all))
 	for i := range all {
 		f := projectionFacts(all[i], tb.sessions, loc)
@@ -555,13 +560,52 @@ func newTreeBuild(s *Service, main string, leads []string, all []listedTodo, lis
 		facts[i] = f
 	}
 	projViews := projection.Views(facts, now)
-	for i := range all {
-		tb.views[all[i].ID] = projViews[i]
-	}
-	for _, t := range all {
-		tb.index(t)
-		if triageCountsAsOpen(t.Todo, tb.placed[t.ID]) {
-			tb.open = append(tb.open, t.ID)
+	if cfg.todosV2On() {
+		applyActiveBlockersToViews(all, projViews, nil)
+		tb.placed = make(map[string]todoTriage, len(all))
+		for i := range all {
+			tb.views[all[i].ID] = projViews[i]
+			tb.placed[all[i].ID] = todoTriageFromProjectionView(all[i], projViews[i], look)
+		}
+		for i, t := range all {
+			tb.index(t)
+			if projectionViewCountsAsOpen(projViews[i]) {
+				tb.open = append(tb.open, t.ID)
+			}
+		}
+		if len(tb.leads) > 0 {
+			leadDirs := make(map[string]string, len(tb.leads))
+			for _, id := range tb.leads {
+				leadDirs[id] = id
+			}
+			effectiveInput := make([]listedTodo, len(all))
+			copy(effectiveInput, all)
+			for i := range effectiveInput {
+				t := effectiveInput[i].Todo
+				if strings.TrimSpace(t.DirectionID) != "" || t.Supervision == nil {
+					continue
+				}
+				if _, _, ok := parseLeaderRef(t.Supervision.Supervisor); !ok {
+					continue
+				}
+				if owner := tb.taskOwner(t); owner != "" {
+					sup := *t.Supervision
+					sup.Supervisor = owner
+					effectiveInput[i].Supervision = &sup
+				}
+			}
+			tb.effectiveDirs = resolveEffectiveDirections(effectiveInput, leadDirs)
+		}
+	} else {
+		tb.placed = triagePlace(all, look, now, loc)
+		for i := range all {
+			tb.views[all[i].ID] = projViews[i]
+		}
+		for _, t := range all {
+			tb.index(t)
+			if triageCountsAsOpen(t.Todo, tb.placed[t.ID]) {
+				tb.open = append(tb.open, t.ID)
+			}
 		}
 	}
 	for _, id := range tb.open {
@@ -591,6 +635,8 @@ func newTreeBuild(s *Service, main string, leads []string, all []listedTodo, lis
 			tb.workersUnder[at] = append(tb.workersUnder[at], id)
 		}
 	}
+	// Match projection.Counts step roll-up: when a top-level open parent carries a PartOf step, projection.Views rolls
+	// the step's NeedsYou onto the parent, so the step must not be double-counted in needs_you.
 	topOpen := map[string]bool{}
 	for _, id := range tb.open {
 		if _, nested := tb.workerAt[id]; !nested && tb.views[id].Phase != assistantwire.TodoPhaseDone {
@@ -679,11 +725,11 @@ func (tb *treeBuild) taskOwner(t Todo) string {
 	return sup
 }
 
-// directionOf is the group a listed task is in: under todos_v2=true, an explicit direction_id takes precedence
-// (matching board.direction_groups as the single source of truth; an explicit direction_id that is not a current
-// leader stays in the secretary group rather than falling back to supervisor/origin). When direction_id is unset
-// (or todos_v2=false), it falls back to the existing supervisor rule (and origin under todos_v2=true), else the
-// secretary ("").
+// directionOf is the group a listed task is in: under todos_v2=true, it aligns with resolveEffectiveDirections
+// (explicit direction_id precedence, supervisor/taskOwner, origin, cycle-safe part_of ancestor inheritance, and
+// unanimous subtree child fallback for undirected umbrella parents), limited to current leaders (tb.leads). An
+// explicit direction_id that is not a current leader stays in the secretary group ("") rather than falling back to
+// supervisor, origin, or part_of inheritance. Under todos_v2=false, it uses only the legacy taskOwner rule.
 func (tb *treeBuild) directionOf(t Todo) string {
 	if tb.todosV2 {
 		if dirID := strings.TrimSpace(t.DirectionID); dirID != "" {
@@ -692,23 +738,36 @@ func (tb *treeBuild) directionOf(t Todo) string {
 			}
 			return ""
 		}
+		if dirID := tb.effectiveDirs[t.ID]; dirID != "" {
+			if slices.Contains(tb.leads, dirID) {
+				return dirID
+			}
+			return ""
+		}
+		if sup := tb.taskOwner(t); sup != "" && slices.Contains(tb.leads, sup) {
+			return sup
+		}
+		if origin := strings.TrimSpace(t.Origin); origin != "" && slices.Contains(tb.leads, origin) {
+			return origin
+		}
+		return ""
 	}
 	if sup := tb.taskOwner(t); sup != "" && slices.Contains(tb.leads, sup) {
 		return sup
 	}
-	if tb.todosV2 {
-		if origin := strings.TrimSpace(t.Origin); origin != "" && slices.Contains(tb.leads, origin) {
-			return origin
-		}
-	}
 	return ""
 }
 
+// isUserCheck: an open task accepted by its supervisor awaiting optional owner verification (not blocking Needs you).
+func isUserCheck(t listedTodo) bool {
+	return t.DoneAt == nil && triageReviewState(t.Todo) == reviewUserCheck
+}
+
 // state is listed task t's state in the tree (first match wins). Needs you follows the authoritative to-do projection
-// so supervisor-held cards, supervised failed starts, deferred can_wait decisions and dismissed decisions stay out of
-// counts.needs_you and agree with GET /api/v1/todos counts.needs_you. An open personal verification (user_check) is
-// in the projection's Needs you (reason verify), so here too; a quiet or carried one, kept out of Needs you below, is
-// review.
+// (todo/projection), so sidebar direction counts, GET /api/v1/todos counts.needs_you, and main chat Needs you agree on
+// genuine owner-action items: supervisor-held (Delegating-only) cards, supervised failed starts and unescalated
+// interrupted runs, deferred can_wait decisions, user_check verification, and dismissed decisions all stay out of
+// needs_you. user_check sits in review (with counts.user_check) as the secondary "to verify" layer.
 func (tb *treeBuild) state(t listedTodo) string {
 	tr := tb.placed[t.ID]
 	v, hasView := tb.views[t.ID]
@@ -721,7 +780,7 @@ func (tb *treeBuild) state(t listedTodo) string {
 	switch {
 	case needsYou:
 		return treeNeedsYou
-	case t.DoneAt == nil && triageReviewState(t.Todo) == reviewUserCheck:
+	case isUserCheck(t):
 		return treeReview
 	case tr.Section != triageWorking && (t.Supervision.state(t.Todo) == reviewPending || verifyAsk):
 		return treeReview
@@ -752,6 +811,9 @@ func (tb *treeBuild) tree(names map[string]string) directionTree {
 		}
 		state := tb.state(t)
 		g.Counts.add(state)
+		if state == treeReview && isUserCheck(t) {
+			g.Counts.UserCheck++
+		}
 		agents := tb.agents(t.ID, map[[2]string]bool{})
 		g.Running = g.Running || treeRunning(agents)
 		g.Tasks = append(g.Tasks, treeTask{ID: t.ID, Title: t.Title, State: state, Agents: agents,

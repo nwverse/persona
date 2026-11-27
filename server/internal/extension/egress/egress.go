@@ -136,6 +136,7 @@ type Proxy struct {
 	Logf    func(string, ...any)
 
 	mu            sync.Mutex
+	closed        bool
 	ln            net.Listener
 	rules         map[string]Rule
 	creds         map[string]string // credential → extension
@@ -155,11 +156,22 @@ type Proxy struct {
 
 // Start listens on loopback (an unused port).
 func (p *Proxy) Start() error {
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		return net.ErrClosed
+	}
+	p.mu.Unlock()
 	ln, err := osproc.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return err
 	}
 	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		_ = ln.Close()
+		return net.ErrClosed
+	}
 	p.ln = ln
 	p.mu.Unlock()
 	go p.serve(ln, "", false)
@@ -191,12 +203,14 @@ func (p *Proxy) hubPort(port string) bool {
 	return err != nil || hp == port
 }
 
-// Close stops every listener.
+// Close stops every listener and revokes all registrations, settings checks, and active I/O.
 func (p *Proxy) Close() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.closed = true
 	if p.ln != nil {
 		_ = p.ln.Close()
+		p.ln = nil
 	}
 	for _, l := range p.unix {
 		_ = l.Close()
@@ -207,6 +221,12 @@ func (p *Proxy) Close() {
 	for ext := range p.active {
 		p.cancelIOLocked(ext)
 	}
+	for _, c := range p.checks {
+		p.endCheckLocked(c)
+	}
+	clear(p.rules)
+	clear(p.creds)
+	clear(p.credOf)
 	p.unix, p.relay = nil, nil
 }
 
@@ -249,6 +269,9 @@ func (p *Proxy) Register(ext string, r Rule) string {
 	cred := hex.EncodeToString(b)
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.closed {
+		return ""
+	}
 	if p.rules == nil {
 		p.rules, p.creds, p.credOf, p.counts = map[string]Rule{}, map[string]string{}, map[string]string{}, map[string]*Counts{}
 	}

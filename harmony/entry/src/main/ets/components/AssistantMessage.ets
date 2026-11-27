@@ -18,6 +18,7 @@ export struct AssistantMessage {
   @Require @Param feed: AssistantFeedModel;
   @Require @Param message: ChatMessage;
   @Param active: boolean = false;
+  @Param streaming: boolean = false;
   @Param workspaceRoot: string = '';
   @Param mediaWidth: number = 0;
   @Param documents: ConversationMarkdownCache | undefined = undefined;
@@ -56,10 +57,10 @@ export struct AssistantMessage {
   }
   build() {
     Column({ space: Tokens.gap }) {
-      ForEach(this.parts, (part: BoundRow<AssistantMessagePart>) => {
+      ForEach(this.parts, (part: BoundRow<AssistantMessagePart>, index: number) => {
         if (part.value.cardKey) AssistantViewCard({ model: this.model, feed: this.feed, item: this.item, cardKey: part.value.cardKey,
           active: this.active && this.model.connected, onLink: (address: string) => this.onLink(address), onOpenResource: (address: string) => this.openResource(address) })
-        else if (part.value.text) MarkdownText({ transcript: true, chatReply: true, documents:this.documents, narration:this.message.narration, text: part.value.text, mediaModel:this.model, mediaActive:this.active, mediaWidth:this.mediaWidth,
+        else if (part.value.text) MarkdownText({ streaming:this.streaming && index === this.parts.length - 1, transcript: true, chatReply: true, documents:this.documents, narration:this.message.narration, text: part.value.text, mediaModel:this.model, mediaActive:this.active, mediaWidth:this.mediaWidth,
           mediaTarget:this.message.ownerTarget, messageId:this.message.id, onPreview:this.onPreview, onEditImage:this.onEditImage, workspaceRoot:this.workspaceRoot, onOpenFile:(path: string) => this.onOpenFile(path), onLink: (address: string) => this.onLink(address) })
       }, (part: BoundRow<AssistantMessagePart>) => part.key)
     }.width('100%').alignItems(HorizontalAlign.Start)

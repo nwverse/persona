@@ -765,7 +765,7 @@ stated above; #15088 lists the ones known.
 | `out-conversion` | no conversion to a core's or the kit's type outside it | the core |
 | `out-wire-ref` | no `.Wire` outside adapters and testkit, called or not | the package it is in |
 | `out-parse-call` | a core's `Parse` and `Restore` only from it, its tests, adapters and testkit | the core |
-| `out-visitor-impl` | a `Visit` method that takes a core's or the kit's type, or any `Visit` method of a generic type in a package that imports a core or the kit, only in adapters, testkit and the core's own tests | the core |
+| `out-visitor-impl` | a `Visit` method that takes a core's or the kit's type, a parameterless `Visit` method matching an imported core's or the kit's visitor interface, or any `Visit` method of a generic type in a package that imports a core or the kit, only in adapters, testkit and the core's own tests | the core |
 | `out-clock-read` | `instant.ReadClock` only in `domainkit/clock` and its testkit | `domainkit/instant` |
 | `out-slot-mint` | `slot.NewSlot` only in adapters and testkit | `domainkit/slot` |
 | `out-code-mint` | `fail.NewCode` and `fail.NewPart` only in cores, the kit and testkit | `domainkit/fail` |
@@ -1327,6 +1327,6 @@ When no iPhone is connected, the hub wakes the newest iOS registration that offe
 
 ### Runtime list catalog
 
-`catalog=1` on the paged runtime list (`docs/protocol/protocol.md`, "Projects and spaces"; `server/internal/hub/sessions_catalog.go`) names the filtered list's projects and spaces. The index counts the rows by machine and project and by machine and group (`sessionlist.PlaceCounts`, a scan at request time); the hub's adapter turns each directory into a project. What repository a directory holds is not on the row: the adapter asks the directory's computer (`git.status` with `identity_only`), remembers the answer in memory for 30 minutes, and falls back to the folder's name. `place` and `space` are the matching filters, sets of machine and project (or group) pairs.
+`catalog=1` on the paged runtime list (`docs/protocol/protocol.md`, "Projects and spaces"; `server/internal/hub/sessions_catalog.go`) names the filtered list's projects and spaces, and says each space's folder, read off the space's kept rows as its name is. The index counts the rows by machine and project and by machine and group (`sessionlist.PlaceCounts`, a scan at request time); the hub's adapter turns each directory into a project. What repository a directory holds is not on the row: the adapter asks the directory's computer (`git.status` with `identity_only`), remembers the answer in memory for 30 minutes, and falls back to the folder's name. `place` and `space` are the matching filters, sets of machine and project (or group) pairs.
 
 Why not a field on the row: `proto.Session` has no word left in its size class and `sessionlist.Item` none in a 150-row batch (`docs/lessons/server.md`, "A field that pushes a row past its size class"), and a repository's remote is a fact about a directory, the same for every row in it. Asked per directory when a client opens the view, it costs nothing on a list update, a push or a page, works with the nodes already deployed, and is lost with nothing else when the hub restarts.

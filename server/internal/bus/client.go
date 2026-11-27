@@ -258,14 +258,12 @@ func (c *Client) session(ctx context.Context) (helloed bool, err error) {
 	var res json.RawMessage
 	hctx, hcancel := context.WithTimeout(sctx, HelloTimeout)
 	err = p.Call(hctx, c.HelloMethod, params, &res)
-	hcancel()
 	if err != nil {
-		var coded *rpc.Error
-		if errors.As(err, &coded) && coded.Code == CodeWrongIdentity {
-			err = fmt.Errorf("%w: %s", ErrRejected, coded.Message)
-		}
+		err = helloError(err, p, served, sctx, hctx)
+		hcancel()
 		return false, fmt.Errorf("%s: %w", c.HelloMethod, err)
 	}
+	hcancel()
 	if c.OnHello != nil {
 		if err := c.OnHello(res); err != nil {
 			return false, err
@@ -273,7 +271,56 @@ func (c *Client) session(ctx context.Context) (helloed bool, err error) {
 	}
 	c.setPeer(p)
 	defer c.setPeer(nil)
-	return true, closeReason(<-served)
+	select {
+	case err := <-served:
+		return true, closeReason(err)
+	case <-p.Done():
+		// Closed (rpc.Peer.Close): by its own read loop as it ended, or by the service to have everything read
+		// again on a new connection. The socket goes with it (ws.CloseNow above): a closed peer left on an open
+		// socket answers nothing, and nothing would dial again until the hub hung up. Close takes a nil error too
+		// (an orderly close): it still ends the connection, and Run hears why rather than nil.
+		err := p.Err()
+		if err == nil {
+			err = rpc.ErrClosed
+		}
+		return true, closeReason(err)
+	}
+}
+
+// helloError translates a handshake failure into ErrRejected / ErrRevoked when the hub refused the
+// identity or closed the WebSocket with CloseRevoked / CloseRefused during HelloMethod.
+func helloError(err error, p *rpc.Peer, served <-chan error, sctx, hctx context.Context) error {
+	var coded *rpc.Error
+	if errors.As(err, &coded) {
+		if coded.Code == CodeWrongIdentity {
+			return fmt.Errorf("%w: %s", ErrRejected, coded.Message)
+		}
+		return err
+	}
+	var ce websocket.CloseError
+	if errors.As(err, &ce) {
+		return closeReason(err)
+	}
+	if perr := p.Err(); perr != nil {
+		return closeReason(perr)
+	}
+	if sctx.Err() != nil || hctx.Err() != nil {
+		return err
+	}
+	// If ws.Write failed with a raw transport error right as the hub sent a Close frame, give Serve
+	// a brief window to surface the peer's CloseError before falling back to the write error.
+	t := time.NewTimer(50 * time.Millisecond)
+	defer t.Stop()
+	select {
+	case serr := <-served:
+		if serr != nil {
+			return closeReason(serr)
+		}
+	case <-t.C:
+	case <-hctx.Done():
+	case <-sctx.Done():
+	}
+	return err
 }
 
 // closeReason says why the hub closed the connection: a revoked token or a refused handshake is ErrRejected.

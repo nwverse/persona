@@ -217,7 +217,7 @@ func codexBox(plain []string) int {
 }
 
 // codexDraft is the box's text that is not its dim placeholder: the › row and the rows right under it (a draft of
-// several lines), up to the first blank row or the TUI's bottom status. Compact layouts omit the blank separator.
+// several lines), up to the TUI's recognized footer. With an unrecognized footer, stop at the first blank row.
 func codexDraft(raw, plain []string, i int, noColor bool) string {
 	var rows []string
 	end := len(plain)
@@ -226,7 +226,8 @@ func codexDraft(raw, plain []string, i int, noColor bool) string {
 		end--
 	} else if end > i+2 {
 		last := strings.TrimSpace(plain[end-1])
-		if strings.HasPrefix(last, "? for shortcuts") || strings.HasPrefix(last, "← for agents · ? for shortcuts") {
+		if strings.HasPrefix(last, "? for shortcuts") || strings.HasPrefix(last, "← for agents · ? for shortcuts") ||
+			codexWarningRE.MatchString(plain[end-1]) {
 			// Match the status/path and shortcut footer together at the bottom, not model names or hint text
 			// inside a multiline draft. Real text above the footer remains protected from remote input.
 			if s := codexStatusStart(plain, i, end-1); s >= 0 {
@@ -235,8 +236,17 @@ func codexDraft(raw, plain []string, i int, noColor bool) string {
 		}
 	}
 	for k := i; k < end; k++ {
-		if k > i && (strings.TrimSpace(plain[k]) == "" || !strings.HasPrefix(plain[k], "  ")) {
-			break
+		if k > i {
+			if strings.TrimSpace(plain[k]) == "" {
+				if end == len(plain) {
+					break
+				}
+				rows = append(rows, "")
+				continue
+			}
+			if !strings.HasPrefix(plain[k], "  ") {
+				break
+			}
 		}
 		text := plain[k]
 		if k == i {
@@ -252,7 +262,7 @@ func codexDraft(raw, plain []string, i int, noColor bool) string {
 			rows = append(rows, t)
 		}
 	}
-	draft := strings.Join(rows, "\n")
+	draft := strings.TrimRight(strings.Join(rows, "\n"), "\n")
 	if noColor && draft == CodexPlaceholder {
 		return ""
 	}

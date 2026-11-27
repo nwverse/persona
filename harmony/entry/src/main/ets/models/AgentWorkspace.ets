@@ -108,6 +108,7 @@ export class AgentWorkspace {
   @Trace unpinnedRows: ResourceRow[] = [];
   /** The quick filters' counts, before the filter narrows the list; Needs you counts the section's rows. */
   @Trace counts: Record<string, number> = {};
+  @Trace unreadShownRows: ResourceRow[] = [];
   @Trace quickFilter: string = 'all';
   @Trace filterCounts:Record<string,Object> = {};
   @Trace groupingMode: string = 'state';
@@ -124,6 +125,11 @@ export class AgentWorkspace {
   @Trace mutesSpaces: string[] = [];
   @Trace mutesSessions: string[] = [];
   @Trace mutesAllowed: string[] = [];
+  /**
+   * Mirrors iOS `ChatsView.kept`: under a quick filter (e.g. Unread), sessions that matched when
+   * entering the filter stay in place after being opened/read so the reader can step through sequentially.
+   */
+  private filterKept: string[] = [];
 
   private client: ClientModel | undefined;
   @Trace private preferences: Map<string, AgentPreferences> = new Map();
@@ -247,7 +253,7 @@ export class AgentWorkspace {
     this.expandedFamilies.clear(); this.relations = new SessionRelations([]);
     this.externalSelection = undefined; this.groups = []; this.sourceRows = []; this.latestSourceRows = []; this.projectRows = undefined; this.historyRows = []; this.historyLoaded = false; this.frozenGroups = undefined;
     this.supervisorQueue = undefined; this.hidSupervisorRows = false;
-    this.quickFilter = 'all'; this.filterCounts = {}; this.unpinnedRows = [];
+    this.quickFilter = 'all'; this.filterCounts = {}; this.unpinnedRows = []; this.unreadShownRows = []; this.filterKept = [];
     this.preferredGrouping = this.defaultGrouping; this.groupingMode = this.defaultGrouping;
     this.supportsTodos = false; this.supportsDirections = false;
     this.machineFilter = ''; this.search = ''; this.history = false; this.selectedKey = '';
@@ -294,7 +300,7 @@ export class AgentWorkspace {
     this.expandedFamilies.clear(); this.relations = new SessionRelations([]);
     this.supervisorQueue = undefined; this.hidSupervisorRows = false;
     this.projectRows = undefined;
-    this.filterCounts = {}; this.unpinnedRows = [];
+    this.filterCounts = {}; this.unpinnedRows = []; this.unreadShownRows = []; this.filterKept = [];
     this.revision++; this.openingView = false; this.client = undefined; this.groups = []; this.sourceRows = []; this.latestSourceRows = []; this.historyRows = []; this.historyLoaded = false;
     this.frozenGroups = undefined; this.readingDetail = false;
     if (this.persistTimer !== -1) clearTimeout(this.persistTimer);
@@ -351,7 +357,7 @@ export class AgentWorkspace {
   }
 
   setSearch(value: string): void {
-    this.releaseFreeze(); this.search = value; this.rebuild(); this.refreezeAfterFilter(); this.saveViewLater();
+    this.releaseFreeze(); this.filterKept = []; this.search = value; this.rebuild(); this.refreezeAfterFilter(); this.saveViewLater();
   }
 
   private compactDisplay:boolean=false;
@@ -360,9 +366,16 @@ export class AgentWorkspace {
     this.compactDisplay=value;this.rebuild();
   }
 
+  /** Resets quick-filter kept rows (e.g. pull-to-refresh or reselecting active chip). */
+  clearFilterKept(): void {
+    if (!this.filterKept.length) return;
+    this.filterKept = [];
+    this.rebuild();
+  }
+
   setQuickFilter(value: string): void {
     if (!['all', 'needsYou', 'working', 'unread', 'backgroundWaiting', 'feishu', 'terminal'].includes(value)) return;
-    this.releaseFreeze(); this.quickFilter = value; this.rebuild(); this.refreezeAfterFilter(); this.saveViewLater();
+    this.releaseFreeze(); this.filterKept = []; this.quickFilter = value; this.rebuild(); this.refreezeAfterFilter(); this.saveViewLater();
   }
 
   groupingOptions(): string[] {
@@ -420,7 +433,7 @@ export class AgentWorkspace {
   }
 
   async setMachineFilter(value: string): Promise<void> {
-    this.releaseFreeze(); this.machineFilter = this.machineForShownHub(value); this.rebuild(); this.saveViewLater();
+    this.releaseFreeze(); this.filterKept = []; this.machineFilter = this.machineForShownHub(value); this.rebuild(); this.saveViewLater();
     if (this.history) {
       const client = this.client;
       if (client) await this.loadHistory(client, this.revision, true);
@@ -448,7 +461,7 @@ export class AgentWorkspace {
   async setCurrentHubOnly(value: boolean): Promise<void> {
     const client = this.client;
     if (!client || this.currentHubOnly === value) return;
-    this.hubModeLoaded = true; this.currentHubOnly = value; this.releaseFreeze();
+    this.hubModeLoaded = true; this.currentHubOnly = value; this.releaseFreeze(); this.filterKept = [];
     this.historyRequest++; this.historyRows = []; this.historyLoaded = false; this.loading = false;
     this.machineFilter = this.machineForShownHub(this.machineFilter);
     if (this.history && !this.historySupported()) this.history = false;
@@ -479,6 +492,7 @@ export class AgentWorkspace {
     this.latestSourceRows = this.latestSourceRows.filter(keep); this.historyRows = this.historyRows.filter(keep);
     if (this.externalSelection?.group === group) { this.externalSelection = undefined; this.selectedKey = ''; }
     if (this.frozenGroups) this.frozenGroups = this.frozenGroups.map((source: AgentWorkspaceGroup) => { const copy = this.copyGroup(source); copy.rows = copy.rows.filter(keep); return copy; }).filter((source: AgentWorkspaceGroup) => source.rows.length > 0);
+    this.filterKept = [];
     this.preferences = new Map<string, AgentPreferences>(); this.rebuild();
   }
   selectExternal(row: ResourceRow): void { this.externalSelection = row; if (this.client) this.syncSelected(this.client); }
@@ -626,10 +640,41 @@ export class AgentWorkspace {
     try {
       await snapshot.repo.call(path, 'POST', Wire.payload([], []), '', (): boolean => this.active(snapshot));
       if (!this.ownerActive(snapshot)) return false;
+      this.filterKept = removeKey(this.filterKept, coreRowId(row));
       this.patchState(row, 'idle');
       return true;
     } catch (failure) { if (this.active(snapshot)) this.fail(failure as Error); return false; }
     finally { if (this.ownerActive(snapshot)) this.busy = false; }
+  }
+
+  /** Matches iOS Unread filter "Mark all as seen": marks every visible unread row seen and clears kept rows. */
+  async markAllSeen(): Promise<number> {
+    if (this.busy || !this.unreadShownRows.length) return 0;
+    const targets = this.unreadShownRows.filter((row: ResourceRow) => this.canMarkSeen(row));
+    if (!targets.length) return 0;
+    this.busy = true; this.error = '';
+    let marked = 0;
+    try {
+      const doneRows: ResourceRow[] = [];
+      for (const row of targets) {
+        const path = this.sessionPath(row) + '/seen', snapshot = this.captureRow(row, path);
+        if (!snapshot || this.blocked(snapshot, path)) continue;
+        await snapshot.repo.call(path, 'POST', Wire.payload([], []), '', (): boolean => this.active(snapshot));
+        if (!this.ownerActive(snapshot)) break;
+        doneRows.push(row);
+        marked++;
+      }
+      if (doneRows.length) {
+        this.filterKept = [];
+        this.patchStates(doneRows, 'idle');
+      }
+      return marked;
+    } catch (failure) {
+      this.fail(failure as Error);
+      return marked;
+    } finally {
+      this.busy = false;
+    }
   }
 
   machineIdentity(row: ResourceRow): string { return JSON.stringify([row.group || this.client?.profile.id || '', row.manager, row.kind === 'machine' ? row.id : rowMachine(row)]); }
@@ -775,9 +820,13 @@ export class AgentWorkspace {
   }
 
   private patchState(row: ResourceRow, state: string): void {
-    const key = rowKey(row);
+    this.patchStates([row], state);
+  }
+
+  private patchStates(rows: ResourceRow[], state: string): void {
+    const keys = new Set<string>(rows.map((row: ResourceRow) => rowKey(row)));
     const patch = (items: ResourceRow[]): ResourceRow[] => items.map((item: ResourceRow) => {
-      if (rowKey(item) !== key) return item;
+      if (!keys.has(rowKey(item))) return item;
       const next = item.copy(), data = next.data();
       if (state === 'idle') {
         const work = Wire.object(data, 'work');
@@ -889,12 +938,28 @@ export class AgentWorkspace {
     });
   }
 
+  private effectiveKept(): string[] {
+    const merged: string[] = [];
+    const seen = new Set<string>();
+    const add = (id: string): void => {
+      if (id && !seen.has(id)) { seen.add(id); merged.push(id); }
+    };
+    if (this.frozenGroups) {
+      this.frozenGroups.forEach((group) => group.memberIds.forEach(add));
+    }
+    if (this.quickFilter !== 'all') {
+      this.filterKept.forEach(add);
+    }
+    return merged;
+  }
+
   private rebuild(): void {
     let groups: CoreAgentListGroup[];
     let counts: Record<string, Object>;
     const byId = new Map<string, ResourceRow>();
     let unpinned: string[];
     let matches: string[];
+    let unreadIds: string[];
     try {
       const relations = sessionRelations(this.latestSourceRows, unavailableSessionSources(this.client?.directoryOwners() || []));
       relations.rows.forEach(row => byId.set(coreRowId(row), row));
@@ -903,6 +968,7 @@ export class AgentWorkspace {
       matches = projection.queryMatches || [];
       groups = phoneAgentGroups(input,projection);
       unpinned = projection.unpinned || [];
+      unreadIds = projection.unread_shown || [];
       this.filterCounts = projection.filter_counts || {};
       counts = projection.counts || {};
       // The core matches the query (including machine and quick filters) before it hides
@@ -924,6 +990,17 @@ export class AgentWorkspace {
     }
     this.sourceRows = this.relations.rows;
     if (this.client) this.syncSelected(this.client);
+    this.unreadShownRows = unreadIds.flatMap((id: string): ResourceRow[] => {
+      const row = byId.get(id);
+      return row ? [row] : [];
+    });
+    if (this.quickFilter !== 'all' && !this.readingDetail) {
+      const nextKept = new Set<string>(this.filterKept.filter((id: string) => byId.has(id)));
+      groups.forEach((group) => group.rows.forEach((id: string) => { if (byId.has(id)) nextKept.add(id); }));
+      this.filterKept = Array.from(nextKept);
+    } else if (this.quickFilter === 'all' && this.filterKept.length) {
+      this.filterKept = [];
+    }
     const needs = this.needsGroup(groups, byId);
     const nextCounts: Record<string, number> = {};
     ['needsYou', 'unread', 'working', 'backgroundWaiting'].forEach((key: string) => nextCounts[key] = Wire.number(counts, key));
@@ -1059,7 +1136,7 @@ export class AgentWorkspace {
     });
     return {rows, includeSourceFilters:true, history: this.history, grouping: this.groupingMode, quick: this.quickFilter,
       machineFilter: this.machineFilter, query: this.search, reading: this.readingDetail,
-      kept: this.frozenGroups?.flatMap((group) => group.memberIds) || [],
+      kept: this.effectiveKept(),
       machines: (this.client ? this.shownOwners(this.client) : []).flatMap((owner: ClientModel): Record<string, Object>[] => {
         const current: Record<string, Object>[] = owner.machines.map((row: ResourceRow): Record<string, Object> =>
           ({ 'id': row.id, 'name': row.title, 'group': owner.profile.id, 'manager': row.manager || owner.profile.manager }));
@@ -1072,7 +1149,7 @@ export class AgentWorkspace {
           });
         return current;
       }),
-      coreSettings: { 'inventory': !!this.search.trim(), 'sort': 'state', 'folded': this.folded, 'expanded_idle': this.expandedIdle, 'expanded_quiet': this.expandedQuiet,
+      coreSettings: { 'inventory': !!this.search.trim(), 'sort': 'state', 'folded': this.quickFilter !== 'all' && this.filterKept.length > 0 && !this.folded.includes('state/idle') && !this.folded.includes('!state/idle') ? this.folded.concat(['!state/idle']) : this.folded, 'expanded_idle': this.expandedIdle, 'expanded_quiet': this.expandedQuiet,
         'compact': this.compactDisplay, 'history': this.history, 'include_filter_counts': true, 'now': new Date().toISOString(), 'held': this.heldSession },
       preferencesFor: (row: AgentListRow): AgentListPreferences => this.preferencesFor(row.source as ResourceRow),
       machineIdentity: (row: AgentListRow): string => this.machineIdentity(row.source as ResourceRow),

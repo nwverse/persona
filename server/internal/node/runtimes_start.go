@@ -103,6 +103,15 @@ func (n *Node) runtimeStartOn(ctx context.Context, h *runtimeConn, p runtimeStar
 	if p.DeferMCP {
 		params["defer_mcp"] = true
 	}
+	if h.agent() == agyAgent {
+		ch, err := n.agyChannelFor(ctx, p.Launcher)
+		if err != nil {
+			return nil, nil, err
+		}
+		if ch != nil {
+			params["channel"] = ch
+		}
+	}
 	var res struct {
 		Session json.RawMessage     `json:"session"`
 		Instead *proto.StartInstead `json:"instead"`
@@ -150,8 +159,50 @@ func (n *Node) runtimeStartOn(ctx context.Context, h *runtimeConn, p runtimeStar
 	}
 	if p.Resume == "" {
 		n.recordEngineStart(h, started, p.Cwd)
+		n.recordAgyRuntimeStart(h, started, p)
 	}
 	return started, cleanInstead(res.Instead), nil
+}
+
+// recordAgyRuntimeStart persists an explicit permission mode chosen when Persona starts a non-assistant Antigravity
+// companion session. The companion keeps per-session modes in memory only, so without a persisted record a companion,
+// node or machine restart falls back to local settings.json (losing bypassPermissions or escalating read-only plan).
+// Starts that left permission_mode empty stay unrecorded here so they continue to follow local settings.json.
+func (n *Node) recordAgyRuntimeStart(h *runtimeConn, s *proto.Session, p runtimeStartParams) {
+	if h == nil || h.agent() != agyAgent || s == nil || s.SessionID == "" || n.state == nil {
+		return
+	}
+	managedAgy := p.Launcher != "" && p.Launcher != agyAgent
+	if p.PermissionMode == "" && !managedAgy {
+		return
+	}
+	mode := ""
+	if p.PermissionMode != "" {
+		mode = cmp.Or(s.PermissionMode, p.PermissionMode)
+	}
+	launcher := cmp.Or(p.Launcher, s.Launcher, agyAgent)
+	if n.state.update(s.SessionID, func(st *sessionState) bool {
+		changed := false
+		if mode != "" && st.AppMode != mode {
+			st.AppMode = mode
+			changed = true
+		}
+		if managedAgy && st.Launcher != launcher {
+			st.Launcher = launcher
+			changed = true
+		}
+		return changed
+	}) {
+		return
+	}
+	n.state.put(s.SessionID, sessionState{
+		Launcher:    launcher,
+		Cwd:         cmp.Or(s.Cwd, p.Cwd),
+		Model:       cmp.Or(s.Model, p.Model),
+		ModelEffort: cmp.Or(s.Effort, p.Effort),
+		AppMode:     mode,
+		StartedAt:   time.Now().UTC(),
+	})
 }
 
 // recordEngineStart keeps the node's record of a session an engine runtime (Paseo, Cindy) has just started, as a

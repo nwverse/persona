@@ -1,7 +1,7 @@
 import { t } from "../i18n";
 import { splitAgentSessions, type AgentGroup, type AgentMutes } from "./agent-groups";
 import { repoOf } from "./agent-repos-core";
-import { backgroundWaiting, stateOf } from "./format";
+import { backgroundWaiting, activityOf } from "./format";
 import { buildTodoAgentGroups, interruptedAgent, makeSessionLookup, openAsk, todoStatus, type SessionLookup, type Todo, type TodoStatus } from "./todos";
 import { todoLook, waitOf, type WaitReason } from "./todo-wait-reason";
 import { usageLimitAgent } from "./usage-limit";
@@ -9,6 +9,7 @@ import type { Machine, Session } from "./types";
 import { stateName } from "./state-labels";
 import { sameValue } from "./stable-lines";
 import type { DirectionCounts, DirectionTaskState } from "./direction-tree";
+import { timeMs } from "./times";
 
 /** The one-word state every node of the tree shows (#2526): "Needs you" before "Working" before "Waiting in the
  *  background" (#6045) before "Done". */
@@ -91,7 +92,7 @@ export interface TodoTree {
 }
 
 export function agentTreeState(s: Session): TreeState {
-  const st = stateOf(s);
+  const st = activityOf(s);
   if (usageLimitAgent(s)) return "waiting"; // a limit resetting is a wait, not work (#1758)
   if (st === "needs_you" || interruptedAgent(s)) return "needs_you";
   if (s.starting) return "working";
@@ -125,7 +126,7 @@ export function worstTreeState(states: TreeState[]): TreeState {
  *  running; undefined keeps "Done" (agents seen, or a mix of seen and stopped). */
 export function agentGroupLabel(sessions: readonly Session[], state: TreeState): string | undefined {
   if (state !== "done" || !sessions.length) return undefined;
-  const states = sessions.map(stateOf);
+  const states = sessions.map(activityOf);
   if (states.includes("unread")) return stateName("unread");
   if (states.every((st) => st === "offline")) return stateName("offline");
   return undefined;
@@ -137,7 +138,7 @@ function worst(states: TreeState[]): TreeState {
 
 function latest(sessions: Session[]): number {
   let at = 0;
-  for (const s of sessions) at = Math.max(at, Date.parse(s.updated_at ?? "") || 0, Date.parse(s.state_since ?? "") || 0);
+  for (const s of sessions) at = Math.max(at, timeMs(s.updated_at), timeMs(s.state_since));
   return at;
 }
 
@@ -477,7 +478,7 @@ export function groupTodosByProject(
     const states = list.map((td): TreeState => (waiting(td) ? "needs_you" : todoTreeState(todoStatus(td, lookup), liveAgents(td, lookup))));
     const state = worst(states);
     const sessions = list.flatMap((td) => (td.agents ?? []).filter((a) => !a.released_at).map((a) => lookup(a.machine_id, a.session_id)).filter((s): s is Session => Boolean(s)));
-    const touched = Math.max(latest(sessions), ...list.map((td) => Date.parse(td.updated_at) || 0));
+    const touched = Math.max(latest(sessions), ...list.map((td) => timeMs(td.updated_at)));
     const area = tier === 0;
     return { group: { key, name, state, todos: list, folded: !area && state === "done" && now - touched > STALE_MS, ...(area && { area }) }, tier };
   });

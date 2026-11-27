@@ -4,6 +4,7 @@ package persona.core.contracts
 
 import persona.core.contracts.CoreText.Key
 import persona.core.contracts.CoreText
+import persona.core.contracts.api.ExtensionView
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.KeepGeneratedSerializer
@@ -681,6 +682,8 @@ data class Session(
      * under its own folder, whose paths name no repository). Group by repository goes by it (core:domain repoOf); older hubs never send it.
      */
     @SerialName("repo_root") val repoRoot: String? = null,
+    /** The physical directory given by the node for workspace association, with symlinks resolved. */
+    @SerialName("workspace_cwd") val workspaceCwd: String? = null,
     /** The top of the git working tree cwd is in (repoRoot for the main checkout) and its branch, from the node (#1805). */
     @SerialName("worktree") val worktree: String? = null,
     @SerialName("branch") val branch: String? = null,
@@ -914,7 +917,7 @@ data class Session(
             else -> UsageLimitWhen.Resets(at)
         }
     }
-    val folderName: String get() = cwd.trimEnd('/').substringAfterLast('/')
+    val folderName: String get() = compactFolderName(cwd)
     val displayTitle: String get() = if (title.isEmpty() || title == "Claude Code") folderName.ifEmpty { sessionId.take(8) } else title
     /** Codex in a terminal, or a thread from a Codex app-server / Codex history. */
     val isCodex: Boolean get() = agent == "codex" || sourceKind == "codex_app_server" || sourceKind == "codex_history"
@@ -1115,6 +1118,8 @@ data class Item(
     val narration: Boolean? = null,
     @SerialName("codex_heartbeat_quiet") val codexHeartbeatQuiet: Boolean? = null,
     @SerialName("source_fingerprint") val sourceFingerprint: String? = null,
+    /** Out-of-band, read-only views rendered beside this item. */
+    @SerialName("tool_views") val toolViews: List<ExtensionView> = emptyList(),
 )
 
 /**
@@ -1416,8 +1421,14 @@ data class Interaction(
     @SerialName("delegating") val delegating: Boolean = false,
     /** What the assistant filled in when it handed the question to the user. */
     @SerialName("delegate") val delegate: Delegate? = null,
+    /** True when the card has no interactive computer terminal or UI to hand back to; absent/false keeps "Leave to computer". */
+    @SerialName("no_hand_back") val noHandBack: Boolean = false,
+    /** The authoritative interaction whose display-only copy this is; absent on the authoritative card. Last to keep positional callers source-compatible. */
+    @SerialName("mirror_of") val mirrorOf: String? = null,
 ) {
     val sessionKey: SessionKey get() = SessionKey(machineId, sessionId)
+    /** Aggregate surfaces count the authoritative request; conversation views still show both cards. */
+    val isDisplayMirror: Boolean get() = !mirrorOf.isNullOrEmpty()
     /** The one exact reply this card advertises. Anything else stays an ordinary card action. */
     val ownerApprovalPhrase: String?
         get() = ownerApprovalPhrases?.firstOrNull()?.takeIf {

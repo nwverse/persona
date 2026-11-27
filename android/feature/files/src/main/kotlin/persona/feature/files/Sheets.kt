@@ -3,6 +3,7 @@ package persona.feature.files
 import androidx.annotation.StringRes
 import org.xml.sax.Attributes
 import org.xml.sax.InputSource
+import org.xml.sax.SAXException
 import org.xml.sax.helpers.DefaultHandler
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -17,7 +18,7 @@ import kotlin.math.roundToLong
  * One sheet of a table file (docs/android/android.md "Files and Git in chat"): its cells as text, row by row; rows can be shorter than
  * [columns]. The same model as iOS (`TableParsing.swift`) and the web (`lib/sheets.ts`).
  */
-internal class TableSheet(val name: String) {
+internal class TableSheet(val name: String, private val maxRows: Int = MAX_ROWS) {
     val rows = ArrayList<List<String>>()
     var columns = 0
         private set
@@ -26,7 +27,7 @@ internal class TableSheet(val name: String) {
         private set
 
     fun append(more: List<List<String>>) {
-        val room = MAX_ROWS - rows.size
+        val room = maxRows - rows.size
         if (more.size > room) capped = true
         for (row in more.take(room.coerceAtLeast(0))) {
             rows.add(row)
@@ -205,13 +206,19 @@ internal object Xlsx {
      * that never was (serial 60, after Lotus 1-2-3): days from 61 on count from 1899-12-30, earlier ones from 12-31.
      */
     fun date(raw: String): String {
-        val v = raw.toDoubleOrNull()?.takeIf { it.isFinite() && it > -1 && it < 2_958_466 } ?: return raw
-        if (v >= 60 && v < 61) return if (v == 60.0) "1900-02-29" else "1900-02-29 " + time(LocalDateTime.of(2000, 1, 1, 0, 0).plusSeconds(((v - 60) * 86_400).roundToLong()))
-        val seconds = (v * 86_400).roundToLong()
-        val t = (if (v < 60) LocalDateTime.of(1899, 12, 31, 0, 0) else LocalDateTime.of(1899, 12, 30, 0, 0)).plusSeconds(seconds)
-        val day = "%04d-%02d-%02d".format(Locale.ROOT, t.year, t.monthValue, t.dayOfMonth)
-        if (seconds % 86_400 == 0L) return day
-        return if (v < 1) time(t) else "$day ${time(t)}"
+        val v = raw.toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0 && it < 2_958_466 } ?: return raw
+        val totalSeconds = (v * 86_400).roundToLong()
+        val days = totalSeconds / 86_400L
+        val secOfDay = totalSeconds % 86_400L
+        val t = LocalDateTime.of(2000, 1, 1, 0, 0).plusSeconds(secOfDay)
+        if (days == 0L) return time(t)
+        val day = if (days == 60L) {
+            "1900-02-29"
+        } else {
+            val d = (if (days < 60L) LocalDateTime.of(1899, 12, 31, 0, 0) else LocalDateTime.of(1899, 12, 30, 0, 0)).plusDays(days)
+            "%04d-%02d-%02d".format(Locale.ROOT, d.year, d.monthValue, d.dayOfMonth)
+        }
+        return if (secOfDay == 0L) day else "$day ${time(t)}"
     }
 
     private fun time(t: LocalDateTime) =
@@ -228,7 +235,7 @@ internal object Xlsx {
                 when (Xml.local(qName)) { "si" -> current.setLength(0); "rPh" -> phonetic++; "t" -> inText = phonetic == 0 }
             }
             override fun endElement(uri: String?, localName: String?, qName: String) {
-                when (Xml.local(qName)) { "si" -> strings.add(current.toString()); "rPh" -> phonetic--; "t" -> inText = false }
+                when (Xml.local(qName)) { "si" -> strings.add(current.toString()); "rPh" -> if (phonetic > 0) phonetic--; "t" -> inText = false }
             }
             override fun characters(ch: CharArray, start: Int, length: Int) { if (inText) current.appendRange(ch, start, start + length) }
         })
@@ -257,13 +264,21 @@ internal object Xlsx {
         return formats.map { id -> id in 14..22 || id in 45..47 || custom[id]?.let(::isDateCode) == true }
     }
 
-    /** A custom number format is a date when it has date letters outside quotes and brackets ([Red], "text"). */
+    /** A custom number format is a date when it has date letters outside quotes, brackets ([Red], "text"), escapes (\x), and padding (_x, *x). */
     private fun isDateCode(code: String): Boolean {
         val plain = StringBuilder()
         var skip: Char? = null
-        for (ch in code.lowercase(Locale.ROOT)) {
+        var i = 0
+        val lower = code.lowercase(Locale.ROOT)
+        while (i < lower.length) {
+            val ch = lower[i++]
             if (skip != null) { if (ch == skip) skip = null; continue }
-            when (ch) { '"' -> skip = '"'; '[' -> skip = ']'; else -> plain.append(ch) }
+            when (ch) {
+                '"' -> skip = '"'
+                '[' -> skip = ']'
+                '\\', '_', '*' -> i++
+                else -> plain.append(ch)
+            }
         }
         return plain.any { it in "ymdhs" }
     }
@@ -280,9 +295,20 @@ internal object Xlsx {
         return if (any) n - 1 else null
     }
 
+    /** Sentinel thrown once a worksheet hits [TableSheet.MAX_ROWS] so SAX stops immediately without retaining cell text. */
+    private class SheetCappedException : SAXException() {
+        override fun fillInStackTrace(): Throwable = this
+    }
+
     /** One worksheet's `<sheetData>`: cells placed by their reference (B3), gaps left empty. */
-    private fun cells(xml: ByteArray, name: String, strings: List<String>, dates: List<Boolean>): TableSheet {
-        val sheet = TableSheet(name)
+    internal fun cells(
+        xml: ByteArray,
+        name: String,
+        strings: List<String>,
+        dates: List<Boolean>,
+        maxRows: Int = TableSheet.MAX_ROWS,
+    ): TableSheet {
+        val sheet = TableSheet(name, maxRows)
         var row = ArrayList<String>()
         var rowIndex = -1
         var cellColumn = 0
@@ -291,42 +317,65 @@ internal object Xlsx {
         val value = StringBuilder()
         var inValue = false
         var inInline = false
+        var phonetic = 0
         fun flushRow() {
-            if (rowIndex < 0) return
+            if (rowIndex < 0 || sheet.capped) return
             while (row.lastOrNull() == "") row.removeAt(row.size - 1)
             sheet.append(listOf(row))
             row = ArrayList()
         }
+        fun stopIfCapped() {
+            if (!sheet.capped) return
+            value.setLength(0)
+            inValue = false
+            inInline = false
+            phonetic = 0
+            throw SheetCappedException()
+        }
         Xml.parse(xml, object : DefaultHandler() {
             override fun startElement(uri: String?, localName: String?, qName: String, attributes: Attributes) {
+                if (sheet.capped) return
                 when (Xml.local(qName)) {
                     "row" -> {
-                        if (sheet.capped) return
                         flushRow()
-                        val r = attributes.getValue("r")?.toIntOrNull()?.minus(1) ?: (rowIndex + 1)
+                        if (sheet.rows.size >= maxRows) {
+                            sheet.append(listOf(emptyList()))
+                            stopIfCapped()
+                        }
+                        val r = attributes.getValue("r")?.toIntOrNull()?.takeIf { it > 0 }?.minus(1) ?: (rowIndex + 1)
                         // Rows the file skips are empty rows (bounded: a row far down doesn't allocate the gap past the cap).
-                        if (r > rowIndex + 1) sheet.append(List(minOf(r - rowIndex - 1, TableSheet.MAX_ROWS + 1)) { emptyList() })
+                        if (r > rowIndex + 1) {
+                            sheet.append(List(minOf(r - rowIndex - 1, maxRows + 1)) { emptyList() })
+                        }
+                        if (sheet.rows.size >= maxRows) {
+                            if (!sheet.capped) sheet.append(listOf(emptyList()))
+                            stopIfCapped()
+                        }
                         rowIndex = r
                     }
                     "c" -> {
-                        if (sheet.capped) return
                         cellColumn = attributes.getValue("r")?.let(::column) ?: row.size
                         cellType = attributes.getValue("t") ?: ""
                         cellStyle = attributes.getValue("s")?.toIntOrNull() ?: 0
                         value.setLength(0)
+                        inValue = false
+                        inInline = false
+                        phonetic = 0
                     }
                     "v" -> inValue = true
-                    "is" -> inInline = true
-                    "t" -> if (inInline) inValue = true
+                    "is" -> { inInline = true; phonetic = 0 }
+                    "rPh" -> if (inInline) phonetic++
+                    "t" -> if (inInline && phonetic == 0) inValue = true
                 }
             }
 
             override fun endElement(uri: String?, localName: String?, qName: String) {
+                if (sheet.capped) return
                 when (Xml.local(qName)) {
                     "v", "t" -> inValue = false
-                    "is" -> inInline = false
+                    "rPh" -> if (inInline && phonetic > 0) phonetic--
+                    "is" -> { inInline = false; phonetic = 0 }
                     "c" -> {
-                        if (sheet.capped) return
                         val raw = value.toString()
                         val shown = when (cellType) {
                             "s" -> raw.toIntOrNull()?.let(strings::getOrNull) ?: ""
@@ -345,7 +394,9 @@ internal object Xlsx {
                 }
             }
 
-            override fun characters(ch: CharArray, start: Int, length: Int) { if (inValue) value.appendRange(ch, start, start + length) }
+            override fun characters(ch: CharArray, start: Int, length: Int) {
+                if (!sheet.capped && inValue) value.appendRange(ch, start, start + length)
+            }
         })
         flushRow()
         return sheet
