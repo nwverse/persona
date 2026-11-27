@@ -425,6 +425,12 @@ test('permission cards normalize canonical tool names before display titles', as
     ['a distinct human title remains readable beside the command',
       { name: 'run_command', kind: 'execute', title: 'Run focused tests', rawInput: { command: 'npm test' } },
       'Bash', { command: 'npm test', description: 'Run focused tests' }, 'npm test'],
+    ['Run-prefixed Persona MCP title normalizes to mcp__persona__<tool>',
+      { kind: 'other', title: 'Run mcp_persona_19d68ad7_todo_decisions', rawInput: { todo_id: 'todo_1' } },
+      'mcp__persona__todo_decisions', { todo_id: 'todo_1' }, 'todo_id: todo_1'],
+    ['Run-prefixed proxied persona_call title unwraps target tool',
+      { kind: 'other', title: 'Run mcp_jarvis_19d68ad7_persona_call', rawInput: { name: 'todo_decisions', arguments: { todo_id: 'todo_2' } } },
+      'mcp__persona__todo_decisions', { todo_id: 'todo_2' }, 'todo_id: todo_2'],
   ]
   for (const [name, toolCall, toolName, toolInput, summary] of cases) {
     await t.test(name, async (t) => {

@@ -103,9 +103,18 @@ func usableResolution(x proto.UsageDir) bool {
 		return x.Host == "" && rest != "" && !strings.Contains(rest, "/")
 	case devicewire.UsageProjectHome:
 		return x.Host == "" && x.Name == ""
+	case devicewire.UsageProjectTemp: // a temporary folder in no repository made inside it (#16827): never its name
+		return x.Host == "" && x.Name == "" && x.Place == "" && !x.Worktree
 	default:
-		return false // temp and assistant are tokens (proto.UsageDirTemp …), never a resolution
+		return false // assistant is a token (proto.UsageDirAssistant), never a resolution
 	}
+}
+
+// replacesResolution: next, a node's latest resolution of a directory, takes the place of old, the one kept. A
+// temporary folder's "temp" never replaces another (#16827): a node says it for a folder that is gone too, and a
+// worktree removed since keeps the repository it was. db's putUsageDirSQL keeps the same rule.
+func replacesResolution(old, next proto.UsageDir) bool {
+	return projectKind(next.Project) != devicewire.UsageProjectTemp || projectKind(old.Project) == devicewire.UsageProjectTemp
 }
 
 // projectKind is a project key's kind (devicewire.UsageProject*).
@@ -138,7 +147,8 @@ func projectGroup(kind devicewire.UsageProjectKind) devicewire.UsageProjectGroup
 type usageDirMap map[string]map[string]proto.UsageDir
 
 // projectOf is the project of a machine's directory: "" not split (no directory), a token's own, its resolution's, or
-// unknown when no node resolved it.
+// unknown when no node resolved it. A temporary folder resolved to temp is the token's project, with no resolution
+// (ok false): the one "Temporary folders", never a folder's name or place.
 func (m usageDirMap) projectOf(machine, dir string) (key string, res proto.UsageDir, ok bool) {
 	switch dir {
 	case "":
@@ -151,24 +161,29 @@ func (m usageDirMap) projectOf(machine, dir string) (key string, res proto.Usage
 		return string(usageProjectUnknown), proto.UsageDir{}, false
 	}
 	if r, ok := m[machine][dir]; ok {
+		if projectKind(r.Project) == devicewire.UsageProjectTemp {
+			return r.Project, proto.UsageDir{}, false
+		}
 		return r.Project, r, true
 	}
 	return string(usageProjectUnknown), proto.UsageDir{}, false
 }
 
 // dirsOf are the directories, on any machine, whose project is key (a superset: the sums are filtered again by
-// machine); nil for the projects a directory cannot name (unknown: every directory no node resolved).
+// machine); nil for the projects a directory cannot name (unknown: every directory no node resolved). Temp's are an
+// older node's token and every temporary folder resolved to it.
 func (m usageDirMap) dirsOf(key string) []string {
+	seen := map[string]bool{}
+	out := []string{}
 	switch devicewire.UsageProjectKind(key) {
 	case devicewire.UsageProjectAssistant:
 		return []string{proto.UsageDirAssistant}
 	case devicewire.UsageProjectTemp:
-		return []string{proto.UsageDirTemp}
+		seen[proto.UsageDirTemp] = true
+		out = append(out, proto.UsageDirTemp)
 	case usageProjectUnknown:
 		return nil
 	}
-	seen := map[string]bool{}
-	out := []string{}
 	for _, dirs := range m {
 		for dir, r := range dirs {
 			if r.Project == key && !seen[dir] {
@@ -189,7 +204,9 @@ func (d *Devices) dirMap(ctx context.Context) (usageDirMap, error) {
 		if out[machine] == nil {
 			out[machine] = map[string]proto.UsageDir{}
 		}
-		out[machine][r.Dir] = r
+		if old, ok := out[machine][r.Dir]; !ok || replacesResolution(old, r) {
+			out[machine][r.Dir] = r
+		}
 	}
 	if st, ok := d.opts.Store.(usageProjectStore); ok {
 		rows, err := st.UsageDirs(ctx)

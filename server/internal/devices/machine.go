@@ -1158,9 +1158,10 @@ func (m *Machine) onRequest(ctx context.Context, method string, params json.RawM
 		}
 		return map[string]any{"sessions": out}, nil
 	case "usage.features": // what this manager keeps of the usage a node meters (usage_projects.go)
-		return map[string]any{"dirs": true}, nil
+		// temp_dirs: a temporary folder by its path, resolved like any directory (#16827), not only as :temp.
+		return map[string]any{"dirs": true, "temp_dirs": true}, nil
 	case "usage.resplit.status": // the last week split by directory once (usage_resplit.go)
-		return m.d.usageResplitStatus(ctx, m.cfg.ID, time.Now())
+		return m.d.usageResplitStatus(ctx, m.cfg.ID, params, time.Now())
 	case "usage.resplit":
 		sctx, cancel := m.storeCtx()
 		defer cancel()
