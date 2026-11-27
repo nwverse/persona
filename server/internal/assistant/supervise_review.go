@@ -949,6 +949,26 @@ func reviewSupersededReason(verdict, reason, note, decisionReason string, checks
 	return ""
 }
 
+// updateSupervisionWithCloseGuarded applies the current-todo admission and the live-work close guard in one write
+// boundary. The investigation guard must run before either durable write; the close guard runs again before commit.
+func (s *Service) updateSupervisionWithCloseGuarded(ctx context.Context, id string, guard func(Todo) bool, change func(*Supervision) bool, closing *taskReviewClose) (Supervision, bool, error) {
+	if closing == nil {
+		return s.updateSupervisionGuarded(ctx, id, guard, change)
+	}
+	s.loadSeen(ctx)
+	_ = s.loadTaskActivity(ctx)
+	// Match guarded supervision writes: the to-do writer must be acquired before the ledger writer.
+	s.todos.writing.Lock()
+	s.supervise.writeMu.Lock()
+	v, changed, err := s.updateSupervisionGuardedLockedAt(ctx, id, time.Now().UTC(), guard, change, closing)
+	s.supervise.writeMu.Unlock()
+	s.todos.writing.Unlock()
+	if closing.after != nil {
+		closing.after()
+	}
+	return v, changed, err
+}
+
 // reviewDoneTodo closes todo id after its review (done_by review or cancelled, with reason); false when it was done already. An
 // accepted task's outcome is recorded, as when it closes by itself or the user closes it (todo_outcome.go, #2820); a
 // cancelled one came to nothing and records none.
@@ -961,6 +981,7 @@ func (s *Service) reviewDoneTodoWithSupervision(ctx context.Context, id, reason 
 		s.loadSeen(ctx)
 		_ = s.loadTaskActivity(ctx)
 	}
+	s.todos.writing.Lock()
 	var cancelCheckedAgents []TodoAgent
 	cancelStaleAllowed := false
 	if ledger == nil && !accepted {
@@ -968,19 +989,16 @@ func (s *Service) reviewDoneTodoWithSupervision(ctx context.Context, id, reason 
 			cancelCheckedAgents, cancelStaleAllowed = s.canBypassStaleInvestigationCancel(ctx, cur)
 		}
 	}
-	s.todos.writing.Lock()
-	if ledger == nil {
-		if current, ok := s.todoNow(id); ok && current.DoneAt == nil {
-			var err error
-			if !accepted && cancelStaleAllowed && staleInvestigationCancelAllowed(current, cancelCheckedAgents) {
-				err = s.receivedFindingsCloseError(current, nil)
-			} else {
-				err = s.investigationCloseError(ctx, current)
-			}
-			if err != nil {
-				s.todos.writing.Unlock()
-				return false, err
-			}
+	if current, ok := s.todoNow(id); ok && current.DoneAt == nil {
+		var err error
+		if !accepted && cancelStaleAllowed && staleInvestigationCancelAllowed(current, cancelCheckedAgents) {
+			err = s.receivedFindingsCloseError(current, nil)
+		} else {
+			err = s.investigationCloseError(ctx, current)
+		}
+		if err != nil {
+			s.todos.writing.Unlock()
+			return false, err
 		}
 	}
 	ok, after, err := s.reviewDoneTodoLocked(ctx, id, reason, accepted, ledger, ownerPass)

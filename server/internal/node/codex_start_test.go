@@ -1110,7 +1110,7 @@ alias dmcc='ANTHROPIC_BASE_URL=http://127.0.0.1:8 claude'
 	}
 	// Plain codex on the PATH is a launcher of its own.
 	list, codex, _, _ = mergeLaunchers(launcherBegin + "\x1d\x1d/usr/local/bin/codex\n" + launcherEnd)
-	if len(list) != 2 || list[1].Name != "codex" || list[1].Agent != "codex" || len(codex["codex"]) != 1 {
+	if len(list) != 1 || list[0].Name != "codex" || list[0].Agent != "codex" || len(codex["codex"]) != 1 {
 		t.Errorf("plain codex: %+v %v", list, codex)
 	}
 }

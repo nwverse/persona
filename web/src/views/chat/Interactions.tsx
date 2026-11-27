@@ -19,7 +19,7 @@ import { modeTitle, PERMISSION_MODES } from "../../lib/session-actions";
 import { interactionAsk } from "../../lib/inbox";
 import { plainMarkdown } from "../../lib/plain-markdown";
 import { cardToolName, mcpServerLabel } from "../../lib/turns";
-import { isSecretHandoff, isSecretRun, optionDisplay, secretHandoffInput, secretRunInput } from "../../lib/tool-detail";
+import { isCommandInput, isSecretHandoff, isSecretRun, optionDisplay, secretHandoffInput, secretRunInput } from "../../lib/tool-detail";
 import { RecommendedTag } from "../../ui/RecommendedTag";
 import { dropAnswered, getSession, useStore, type AnsweredCard as Answered } from "../../lib/store";
 import { useChildRow } from "../../lib/use-child-sessions";
@@ -1548,8 +1548,9 @@ export function InteractionCard({ ix }: { ix: Interaction }) {
     // a kind the core has no card for, drawn by the module that names it (core/module-host.ts `cardRenderers`)
     : renderer ? <ModuleCard key={ix.id} module={renderer} interaction={ix} /> : <ScreenCard ix={ix} />;
   const marks = <InteractionMarks interaction={ix} />;
-  // a permission card says it in its body (PermissionBody); a secret run's or hand-off's card has none, so it says it here
-  const from = ix.folded_under && (ix.kind !== "permission" || isSecretRun(ix) || isSecretHandoff(ix)) ? permissionFrom(ix) : "";
+  // a permission card says it in its body (PermissionBody); a secret run's, hand-off's or command input's card has none,
+  // so it says it here
+  const from = ix.folded_under && (ix.kind !== "permission" || isSecretRun(ix) || isSecretHandoff(ix) || isCommandInput(ix)) ? permissionFrom(ix) : "";
   // what it asks in one line, as the folded cards' line says it (the command of a tool approval, a question)
   const about = plainMarkdown(cardLine(ix)).replace(/\s+/g, " ").trim();
   const disabled = pending || (!canApprove && !managerWork);

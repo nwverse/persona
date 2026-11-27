@@ -624,13 +624,15 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 		}
 		params = next
 	}
-	if devicewire.IsSessionStart(method) && !nodeHas(info, nodeproto.SessionStartSpeed) {
+	if devicewire.IsSessionStart(method) && (!nodeHas(info, nodeproto.SessionStartSpeed) || !nodeHas(info, nodeproto.SessionStartServiceTier)) {
 		raw, _ := json.Marshal(params)
 		var fields struct {
-			Speed string `json:"speed"`
+			Speed       string `json:"speed"`
+			ServiceTier string `json:"service_tier"`
 		}
 		_ = json.Unmarshal(raw, &fields)
-		if proto.FasterSpeed(strings.TrimSpace(fields.Speed)) {
+		if (fields.ServiceTier != "" && !nodeHas(info, nodeproto.SessionStartServiceTier)) ||
+			(proto.FasterSpeed(strings.TrimSpace(fields.Speed)) && !nodeHas(info, nodeproto.SessionStartSpeed)) {
 			// An older node would drop the explicit, billable choice and start at the launcher's own speed.
 			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_session_start_speed")}
 		}

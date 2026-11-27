@@ -442,7 +442,7 @@ func (n *Node) refreshClaudeDirs() {
 	runs := map[string]claudeRun{}
 	twice := map[string]bool{}
 	for pid, e := range envs {
-		launcher := e.BaseURL != "" || e.Model != "" || e.ConfigDir != "" || e.FastUnavailable || e.Vertex
+		launcher := e.BaseURL != "" || e.Model != "" || e.FastUnavailable || e.Vertex
 		if !launcher && !e.Cmd {
 			continue
 		}

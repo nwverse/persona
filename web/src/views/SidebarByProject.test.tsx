@@ -11,6 +11,7 @@ vi.hoisted(() => {
 });
 import { t } from "../i18n";
 import { loadPages } from "../lib/lazy-page";
+import { onOpenNewAgent, type NewAgentPreset } from "../lib/new-agent";
 import { connect, reset } from "../lib/store";
 import { SESSIONS_AGENTS_ONLY_FEATURE } from "../lib/runtime-list";
 import { SESSIONS_CATALOG_FEATURE } from "../lib/session-groups";
@@ -123,5 +124,20 @@ describe("By project on two computers (#13522)", () => {
     const rows = [...laptop.querySelectorAll<HTMLElement>("[data-session-row]")];
     expect(rows.map((r) => r.textContent?.includes("Agent "))).toEqual([true, true, true]);
     for (const r of rows) expect(r.textContent).not.toContain("Work laptop");
+  });
+
+  it("starts a new Agent from a project's + in its folder on its computer, through the one New agent sheet (#13523)", async () => {
+    const opened: NewAgentPreset[] = [];
+    const off = onOpenNewAgent((preset) => opened.push(preset));
+    try {
+      await render();
+      const plus = host.querySelector<HTMLButtonElement>(`button[aria-label="${t("agents-groupedsessions.new_agent_in", { name: "app · ~/Desktop" })}"]`)!;
+      await act(async () => plus.click());
+      expect(opened).toEqual([{ machineId: "laptop", cwd: "/Users/me/Desktop/app" }]);
+      // one on each of the laptop's projects with a folder, none on its No project; the server is away
+      expect(computers().map((c) => c.querySelectorAll("[data-space-add]").length)).toEqual([2, 0]);
+    } finally {
+      off();
+    }
   });
 });

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/buswire"
 )
 
 // Routes are the routes the manager answers (net/http patterns): the hub relays each request on them to the manager
@@ -100,6 +101,11 @@ const (
 	MethodHubCall = "extensions.hub_call"
 )
 
+var (
+	AuthorizeMethod = buswire.Method[Authorize, Authorized]{Name: MethodAuthorize}
+	HubCallMethod   = buswire.Method[HubCall, HubCallResult]{Name: MethodHubCall}
+)
+
 // What the hub's own features ask of the manager (HubCall.Method).
 const (
 	// HubGitHubLogin: {} → {login}: the GitHub connector's signed-in login (the persona tiers).
@@ -159,6 +165,18 @@ type ErrorReports struct {
 type HubCall struct {
 	Method string          `json:"method"`
 	Params json.RawMessage `json:"params,omitempty"`
+}
+
+// HubCallResult is the JSON reply selected by HubCall.Method. Each nested method
+// keeps its own result shape and the bus carries it without an extra envelope.
+type HubCallResult json.RawMessage
+
+func (r HubCallResult) MarshalJSON() ([]byte, error) {
+	return json.RawMessage(r).MarshalJSON()
+}
+
+func (r *HubCallResult) UnmarshalJSON(data []byte) error {
+	return (*json.RawMessage)(r).UnmarshalJSON(data)
 }
 
 // Report is EventReport's params.
@@ -292,6 +310,16 @@ const (
 
 // MethodAccept: {id} → {}: the hub holds a request for the manager (a relayed route): it dials the relay with the id.
 const MethodAccept = "extensions.accept"
+
+var AcceptMethod = buswire.Method[Accept, buswire.None]{Name: MethodAccept}
+
+// RelayID identifies the pending extension relay.
+type RelayID string
+
+// Accept is the request to take a pending extension relay.
+type Accept struct {
+	ID RelayID `json:"id"`
+}
 
 // LooksGone is EventLooksGone's params: the removed extension's looks' ids.
 type LooksGone struct {

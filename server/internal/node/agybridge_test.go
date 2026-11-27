@@ -733,3 +733,46 @@ func TestAgyChangeSettlesOnTwoProbes(t *testing.T) {
 		t.Fatal("back to the companion's own agy is no change")
 	}
 }
+
+// The companion is told the node's own program, which serves its chats' Persona tools (`<program> mcp`): a Persona
+// Link install calls it persona-node, and the companion's lookup by name found only personad (#14582).
+func TestAgyBridgeCommandPassesTheNodeProgram(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell script fixture")
+	}
+	dir := t.TempDir()
+	for rel, body := range map[string]string{
+		"antigravity/package.json":  `{"type":"module"}`,
+		"antigravity/companion.mjs": "console.log('ok')\n",
+		"runtime-sdk/package.json":  `{"type":"module"}`,
+		"runtime-sdk/index.js":      "export {}\n",
+	} {
+		p := filepath.Join(dir, "pkgs", agyPackage, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fakeNode := filepath.Join(dir, "node-22")
+	if err := os.WriteFile(fakeNode, []byte("#!/bin/sh\nprintf 22.19.0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(runtimepkg.OverrideEnv, filepath.Join(dir, "pkgs"))
+	t.Setenv("PERSONA_NODEJS", fakeNode)
+	program := filepath.Join(dir, "home", ".persona", "bin", "persona-node")
+	oldSelf := selfProgram
+	selfProgram = func(string, string) (string, string, error) { return program, program, nil }
+	t.Cleanup(func() { selfProgram = oldSelf })
+
+	rh := NewRuntimeHost("test", filepath.Join(dir, "state", "runtime.sock"))
+	cmd, err := agyBridgeCommand(context.Background(), rh, "/usr/local/bin/agy", "builtin-agy-1-1")
+	if err != nil {
+		t.Fatalf("agyBridgeCommand: %v", err)
+	}
+	i := slices.Index(cmd.Args, "--personad-bin")
+	if i < 0 || i+1 >= len(cmd.Args) || cmd.Args[i+1] != program {
+		t.Fatalf("cmd.Args %q: want --personad-bin %s", cmd.Args, program)
+	}
+}
