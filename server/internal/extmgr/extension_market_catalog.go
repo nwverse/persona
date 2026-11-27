@@ -220,7 +220,13 @@ func (h *Manager) catalogItem(l i18n.Lang, s *marketState, e *extension.MarketEn
 		it.Installed, it.InstalledSource = cur.Record.Version, cur.Record.Source
 		it.FromThisMarket = extension.FromMarket(cur.Record.Origin) == s.rec.ID
 		it.Upgradable = cur.Record.Source == extension.SourceInstalled && extension.NewerVersion(m.Version, cur.Record.Version)
-		if cur.Record.Source == extension.SourceInstalled { // an upgrade keeps its settings: the address config: lines name (#8570)
+		switch {
+		case cur.Record.Source == extension.SourceBuiltin:
+			it.Upgradable = h.extensions.reg.CanHandoffBuiltin(m.ID) && h.builtinMarketUpgrade(s.rec, e)
+		case cur.Record.BuiltinPredecessor:
+			it.Upgradable = it.Upgradable && cur.Record.VerifiedBuiltinPredecessor() && h.builtinMarketUpgrade(s.rec, e)
+		}
+		if cur.Record.Source == extension.SourceInstalled || it.Upgradable { // an upgrade keeps its settings: the address config: lines name (#8570)
 			it.Permissions = extension.ExplainWith(l, m, h.extensions.reg.SavedConfig(cur))
 		}
 	}

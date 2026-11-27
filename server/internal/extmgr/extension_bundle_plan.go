@@ -273,6 +273,11 @@ func (h *Manager) guardExtensionPlan(ctx context.Context, previews []*extension.
 		if err != nil {
 			return fail(err)
 		}
+		if old := h.extensions.reg.SnapshotExact(pv.Manifest.ID); old != nil && (h.extensions.reg.CanHandoffBuiltin(pv.Manifest.ID) || old.Record.BuiltinPredecessor) {
+			if !h.builtinMarketUpgrade(rec, entry) || !extension.ManifestsEqual(entry.Parsed, pv.Manifest) {
+				return fail(i18n.Err("extension-identity.invalid"))
+			}
+		}
 		if pv.RenameFrom != "" {
 			old := h.extensions.reg.SnapshotExact(pv.RenameFrom)
 			target := h.extensions.reg.Snapshot(pv.Manifest.ID)
