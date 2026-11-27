@@ -1,4 +1,6 @@
 // Package agentprompt holds the prompt-shape rules both the manager and the node must agree on.
+//
+//persona:layer library
 package agentprompt
 
 import "strings"

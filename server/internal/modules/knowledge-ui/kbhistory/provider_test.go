@@ -27,8 +27,8 @@ func TestProviderCheckpointAcrossImporterRestart(t *testing.T) {
 	ht := newHistoryTest(t, src)
 	p := ht.plan(true, nil)
 	key := kb.ChatID(testSource, chat)
-	read := func(day string) (Checkpoint, bool) {
-		return ProviderCheckpoint(ht.e, ht.cfg, testSource, key, day, ht.clock.Now())
+	read := func(day string) (checkpoint, bool) {
+		return providerCheckpoint(ht.e, ht.cfg, testSource, key, day, ht.clock.Now())
 	}
 	before, ok := read("")
 	if !ok || before.State != "pending" || before.Read != 0 || before.SourceID != chat || before.FiledAs != testSource {
@@ -101,7 +101,7 @@ func TestProviderCheckpointRefusesAmbiguousIdentity(t *testing.T) {
 	p := ht.plan(true, nil)
 	rejected := func() {
 		t.Helper()
-		if _, ok := ProviderCheckpoint(ht.e, ht.cfg, testSource, key, "", ht.clock.Now()); ok {
+		if _, ok := providerCheckpoint(ht.e, ht.cfg, testSource, key, "", ht.clock.Now()); ok {
 			t.Fatal("a second account or connector matched the authorized chat")
 		}
 	}

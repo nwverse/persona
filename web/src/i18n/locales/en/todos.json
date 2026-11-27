@@ -499,5 +499,12 @@
   "status_pr_checks_pending": "Checks running",
   "status_pr_waiting_merge": "Waiting to merge",
   "status_parked": "Parked",
-  "status_tracking": "Tracking"
+  "status_tracking": "Tracking",
+  "grouping_v2_status": "By status",
+  "grouping_v2_direction": "By direction",
+  "grouping_v2_folder": "By project",
+  "grouping_v2_request": "By request",
+  "detail_direction_inherited_hint": "Inherited from {name}",
+  "detail_direction_inherited_picker_hint": "Currently inherited from {name}. Apply to pin explicitly, pick another direction, or remove it.",
+  "detail_subtask_direction_mismatch": "Direction: {direction}"
 }
