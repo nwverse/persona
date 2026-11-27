@@ -453,8 +453,11 @@ func screenCardWait(sess proto.Session, hooks bool) time.Duration {
 
 // coversScreen: the interaction stands for what the terminal waits on (a hook's, a Codex approval or overlay
 // question), so no screen card is made beside it. A Codex async question does not: Codex shows no dialog for it,
-// though herdr calls the agent blocked while it is open.
-func coversScreen(p *pending) bool { return !(p.codex && p.ix.ToolName == "request_user_input_async") }
+// though herdr calls the agent blocked while it is open. Nor does a command waiting for input: it is a task of the
+// Agent's, not the Agent's own screen (fleet_ix_command.go).
+func coversScreen(p *pending) bool {
+	return !(p.codex && (p.ix.ToolName == "request_user_input_async" || p.ix.ToolName == proto.CommandInputTool))
+}
 
 // screenAnswer turns an answer to a screen card into session.keys parameters. With a dialog the node checks its
 // revision before pressing anything; an option's keys come from the node's fresh reading of the screen, and the

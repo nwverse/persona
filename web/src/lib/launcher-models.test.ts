@@ -317,7 +317,10 @@ describe("手动输入的模型 ID（#1644）", () => {
     expect(typedModelOffered("omp", list)).toBe(false);
     expect(startPicks({ ...pick, list })).toEqual({ model: pick.model });
     expect(startPicks({ ...pick, list, model: "opus" })).toEqual({ model: "opus" });
+    expect(nativeOmpStart("omp", { name: "omp" }, "orca")).toBe(true);
+    expect(startPicks({ ...pick, nativeOmp: nativeOmpStart("omp", { name: "omp" }, "orca"), list })).toEqual({ model: pick.model });
     expect(nativeOmpStart("omp", { name: "alias" }, "herdr")).toBe(false);
+    expect(nativeOmpStart("omp", { name: "alias" }, "orca")).toBe(false);
     expect(nativeOmpStart("omp", { name: "omp", source: "paseo" }, "herdr")).toBe(false);
     expect(nativeOmpStart("omp", { name: "omp" }, "herdr-core")).toBe(false);
     expect(nativeOmpStart("codex", { name: "omp" }, "herdr")).toBe(false);

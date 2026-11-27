@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs'
-import { basename, join } from 'node:path'
+import { basename, dirname, extname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { defaultStateRoot, legacyEnvName } from '../../runtime-sdk/lib/compat.js'
 import { stateDir } from '../../runtime-sdk/lib/identity.js'
@@ -12,6 +12,8 @@ export function contextOpening(text) {
   return /^(?:<persona-context\b|<jarvis-context\b)/.test(text)
 }
 
+// On Windows the daemon is personad.exe: without the suffix it was never found, so the assistant got no Persona tools.
+const exe = (options) => ((options.platform || process.platform) === 'win32' ? '.exe' : '')
 export function daemonCandidates(home, options) {
   // An explicit runtime home owns discovery too; an ambient PERSONA_HOME must not replace it.
   const roots = options.stateHome ? [options.stateHome] : [home ? stateDir(home, {}) : stateDir(), join(home, '.persona'), join(home, '.jarvis')]
@@ -58,4 +60,10 @@ export function mcpServers(bin, pid, assistant, a2aToken) {
 }
 export function assistantSearchPaths(home) {
   return [...new Set([join(stateDir(home), 'assistant', '.bin'), join(home, '.jarvis', 'assistant', '.bin'), join(home, '.local', 'bin')])]
+}
+// The node's program (--personad-bin, else personad), or persona-node beside it, a Persona Link install's (#14582).
+export function nodeProgram(home, options) {
+  const bin = daemonBinary(home, options)
+  const link = join(dirname(bin), 'persona-node' + extname(bin))
+  return existsSync(bin) ? bin : existsSync(link) ? link : ''
 }

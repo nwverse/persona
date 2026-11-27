@@ -85,7 +85,10 @@ var larkContextFromGate = func(ctx context.Context, n *Node, cfg proto.Assistant
 			return nil, false
 		}
 		logicalPath := "/" + resource + "/" + id
-		if larkDecision(cfg, larkCall{Gate: c.Gate, Method: http.MethodGet, Path: logicalPath}) != "allow" {
+		call := larkCall{Gate: c.Gate, Method: http.MethodGet, Path: logicalPath}
+		// This node-initiated lookup needs an explicit allowing rule; the unmatched
+		// default for ordinary user-initiated reads does not authorize it.
+		if action, ok := matchLark(g.Rules, call); !ok || action != "allow" {
 			return nil, false
 		}
 		return gateContextRead(ctx, n, g, resource, id)

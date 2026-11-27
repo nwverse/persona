@@ -445,8 +445,8 @@ func (h *Manager) RecordNodeSent(ctx context.Context, machineID string, raw json
 	}
 	method := strings.ToUpper(strings.TrimSpace(p.Method))
 	path := cutRunes(strings.TrimSpace(cleanText(p.Path)), sentValueMost)
-	if !nodeWriteMethods[method] || !strings.HasPrefix(path, "/") {
-		return nil, &rpc.Error{Code: "invalid_params", Message: "lark.sent: method and path of a write (POST, PUT, PATCH, DELETE or OPTIONS, and a path from /)"}
+	if !nodeSentWrite(method, path) || !strings.HasPrefix(path, "/") {
+		return nil, &rpc.Error{Code: "invalid_params", Message: "lark.sent: method and path must name a write or an Agent API side-effecting GET/HEAD"}
 	}
 	through, err := nodeLetThrough(p.LetThrough)
 	if err != nil {
@@ -499,6 +499,12 @@ func (h *Manager) isUserLarkRule(r *proto.LarkRule) bool {
 	}
 	return slices.ContainsFunc(connector.LarkRules(h.connectors.UserRules(), nil), same) &&
 		!slices.ContainsFunc(connector.LarkRules(h.cfg.ConnectorGate, h.cfg.LarkGate), same)
+}
+
+// nodeSentWrite matches the gate's write classification. Ordinary GET/HEAD
+// reports are refused; the Agent API's explicit side-effecting routes are writes.
+func nodeSentWrite(method, path string) bool {
+	return nodeWriteMethods[method] || proto.AgentAPIWriteGET(method, path)
 }
 
 // nodeWriteMethods are the methods the gate treats as writes (node/larkgate_rules.go larkRead: all but GET and HEAD).

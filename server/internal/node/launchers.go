@@ -54,8 +54,9 @@ func invalidateLauncherCache() {
 // as zsh itself splits and unquotes them (name US word US … RS), so quoting never has to be parsed here (bash prints
 // `alias -p` after bashAliasMark instead, launchers_shell.go); then, each after a GS byte, where codex, traex, omp,
 // pi, cursor-agent and agy are on the PATH, the names of the shell's functions and aliases (one a line: they come
-// before a file on PATH of the same name), and its PATH (for the wrapper scripts on it, pathlaunchers.go). All of it between launcherBegin and
-// launcherEnd, so what the rc files print around it is never read as a section (launcherOutput).
+// before a file on PATH of the same name), its PATH (for the wrapper scripts on it, pathlaunchers.go), and
+// the Claude executable on that original PATH. All of it between launcherBegin and launcherEnd, so what
+// the rc files print around it is never read as a section (launcherOutput).
 const launcherScript = `printf '\001persona-launchers-begin\001'
 __jl_path=$PATH
 _claude_launchers 2>/dev/null || true
@@ -87,6 +88,9 @@ printf '\035'
 if [ -n "$ZSH_VERSION" ]; then eval 'print -rl -- ${(k)functions} ${(k)aliases}'; elif [ -n "$BASH_VERSION" ]; then compgen -A function; compgen -a; fi
 printf '\035'
 printf '%s' "$__jl_path"
+printf '\035'
+PATH=$__jl_path
+if [ -n "$ZSH_VERSION" ]; then builtin whence -p claude 2>/dev/null; else builtin type -P claude 2>/dev/null; fi
 printf '\001persona-launchers-end\001'`
 
 // launcherBegin and launcherEnd frame what launcherScript prints (launcherOutput).
@@ -111,8 +115,9 @@ type launcherFetchObserverKey struct{}
 
 // launchers lists the launchers of this machine's login shell: the `_claude_launchers` helper's (claude wrapper
 // functions), then every alias that runs claude (`alias dmcc="ANTHROPIC_BASE_URL=… claude …"`), by name. A name
-// the helper lists is not repeated; none at all: plain claude. A forced refresh requires a discovery newer than the
-// one visible when the request arrived, and reports a failed scan even when an older list exists.
+// the helper lists is not repeated. With no configured launcher, plain claude is listed when installed.
+// A forced refresh requires a discovery newer than the one visible when the request arrived, and reports
+// a failed scan even when an older list exists.
 func (n *Node) launchers(ctx context.Context, refresh ...bool) ([]proto.Launcher, error) {
 	forced := len(refresh) > 0 && refresh[0]
 	launcherCache.Lock()
@@ -259,7 +264,7 @@ func lastLaunchers(failed error) ([]proto.Launcher, error) {
 }
 
 // mergeLaunchers is launcherScript's output as the launcher list: the helper's, then the aliases it does not name,
-// then the wrapper scripts on PATH no function or alias shadows (nothing at all: plain claude), then Codex's — plain
+// then the wrapper scripts on PATH no function or alias shadows (otherwise plain claude, when installed), then Codex's — plain
 // codex when it is on the PATH (else the ChatGPT app's bundled one, bundledCodexCLI), and the aliases that run it (how each runs: codex) — then plain traex and plain omp when
 // they are on the PATH, then pi, the Cursor CLI and the Antigravity CLI when their programs are (workagent.go: started in
 // a herdr pane with the model the start names). settings: the claude aliases' and scripts' own --settings, by
@@ -278,8 +283,12 @@ func mergeLaunchers(out string) (list []proto.Launcher, codex map[string][]strin
 	piPath, rest, _ := strings.Cut(rest, "\x1d")
 	cursorPath, rest, _ := strings.Cut(rest, "\x1d")
 	agyPath, rest, _ := strings.Cut(rest, "\x1d")
-	shellNames, pathVar, _ := strings.Cut(rest, "\x1d")
+	shellNames, rest, _ := strings.Cut(rest, "\x1d")
+	pathVar, claudePath, _ := strings.Cut(rest, "\x1d")
 	list = parseLaunchers(helper)
+	if list == nil {
+		list = []proto.Launcher{} // an empty discovery is still a valid cache entry
+	}
 	helperRows := map[string]int{}
 	for i, l := range list {
 		helperRows[l.Name] = i
@@ -311,8 +320,8 @@ func mergeLaunchers(out string) (list []proto.Launcher, codex map[string][]strin
 		list = append(list, l)
 	}
 	maps.Copy(settings, pathSettings)
-	if len(list) == 0 {
-		list = []proto.Launcher{{Name: "claude", DisplayName: "Claude Code"}}
+	if len(list) == 0 && strings.TrimSpace(claudePath) != "" {
+		list = append(list, proto.Launcher{Name: "claude", DisplayName: "Claude Code"})
 	}
 	codex = map[string][]string{}
 	ls, words := parseCodexAliases(aliases)
