@@ -99,6 +99,10 @@ func TestHistoricalDeliverySettlementPreservesCurrentSwitchAndFIFO(t *testing.T)
 			if err != nil || len(handoff) == 0 {
 				t.Fatalf("historical receipt consumed current handoff: %s %v", handoff, err)
 			}
+			originalHandoff, _, err := d.ConversationPreparation(ctx, "root", "chat", "op3")
+			if err != nil || (len(originalHandoff) == 0) != (outcome == "accepted") {
+				t.Fatalf("original handoff settlement mismatch: %s %v", originalHandoff, err)
+			}
 			row, err := restarted.ClaimConversationInput(ctx, "root", "chat", 4)
 			if err != nil || row == nil || row.ClientMsgID != "next" || row.DispatchSegment != "s4" || row.DispatchEpoch != 4 {
 				t.Fatalf("next input not claimed in order: %+v %v", row, err)

@@ -9,7 +9,9 @@ The reconciler queries `assistant.segment.input` on the recorded target. An
 receipt proves rejection; `accepted: false` means unknown. Contradictory receipts
 fail closed. Historical settlement checks the current root epoch and original
 attempt CAS, then settles only the old input. It cannot accept a new switch,
-consume its handoff or move its target. Current first-turn settlement and switch
+consume its handoff or move its target. A positive historical receipt consumes
+only the original epoch's idle-accepted handoff, so a later rollback cannot attach
+that already-delivered context again. Current first-turn settlement and switch
 acceptance remain one transaction.
 
 New switch preparation/activation refuses unresolved input under the root lock.

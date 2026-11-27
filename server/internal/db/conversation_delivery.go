@@ -76,8 +76,8 @@ func (d *DB) NoteConversationInputBlocked(ctx context.Context, machine, session 
 	})
 }
 
-// Historical settlement never resolves a switch, clears its handoff, changes its
-// target, or requeues another input. Positive and definitive negative receipts
+// Historical settlement never resolves the current switch, clears its handoff,
+// changes its target, or requeues another input. Positive and definitive negative receipts
 // are terminal for this attempt; missing receipts remain ambiguous.
 func (d *DB) ResolveHistoricalConversationDelivery(ctx context.Context, machine, session string, epoch int64, input ConversationInput, outcome string) error {
 	if outcome != "accepted" && outcome != "rejected" {
@@ -90,9 +90,21 @@ func (d *DB) ResolveHistoricalConversationDelivery(ctx context.Context, machine,
 		if input.DispatchEpoch <= 0 || input.DispatchEpoch >= epoch || input.DispatchSegment == "" {
 			return ErrConversationEpoch
 		}
-		_, err := tx.Exec(ctx, `UPDATE conversation_inputs SET state=$4,delivery_version=delivery_version+1,blocked_reason='',last_reconciled_at=now() WHERE logical_machine=$1 AND logical_session=$2 AND client_msg_id=$3`, machine, session, input.ClientMsgID, outcome)
-		return err
+		if _, err := tx.Exec(ctx, `UPDATE conversation_inputs SET state=$4,delivery_version=delivery_version+1,blocked_reason='',last_reconciled_at=now() WHERE logical_machine=$1 AND logical_session=$2 AND client_msg_id=$3`, machine, session, input.ClientMsgID, outcome); err != nil {
+			return err
+		}
+		if outcome == "accepted" {
+			return consumeHistoricalInputHandoff(ctx, tx, machine, session, input)
+		}
+		return nil
 	})
+}
+
+// Only the original idle-accepted activation's handoff was carried by this
+// historical input. A future rollback must not attach that old handoff again.
+func consumeHistoricalInputHandoff(ctx context.Context, tx pgx.Tx, machine, session string, input ConversationInput) error {
+	_, err := tx.Exec(ctx, `UPDATE conversation_switches SET handoff=NULL WHERE logical_machine=$1 AND logical_session=$2 AND phase='accepted' AND target_segment=$3 AND expected_epoch+1=$4`, machine, session, input.DispatchSegment, input.DispatchEpoch)
+	return err
 }
 
 type ConversationInputResolution struct {
@@ -145,6 +157,9 @@ func (d *DB) ResolveConversationInputManually(ctx context.Context, machine, sess
 		}
 		if _, err := tx.Exec(ctx, `UPDATE conversation_inputs SET state=$4,delivery_version=delivery_version+1,blocked_reason='',last_reconciled_at=now(),dispatch_segment=CASE WHEN $4='queued' THEN '' ELSE dispatch_segment END,dispatch_machine=CASE WHEN $4='queued' THEN '' ELSE dispatch_machine END,dispatch_session=CASE WHEN $4='queued' THEN '' ELSE dispatch_session END,dispatch_epoch=CASE WHEN $4='queued' THEN 0 ELSE dispatch_epoch END WHERE logical_machine=$1 AND logical_session=$2 AND client_msg_id=$3`, machine, session, p.Input.ClientMsgID, state); err != nil {
 			return err
+		}
+		if p.Action == "accepted" && p.Input.DispatchEpoch > 0 && p.Input.DispatchEpoch < epoch {
+			return consumeHistoricalInputHandoff(ctx, tx, machine, session, p.Input)
 		}
 		// A manual acceptance can confirm the current switch only for its own
 		// first dispatch. Historical settlement cannot consume current handoff.
