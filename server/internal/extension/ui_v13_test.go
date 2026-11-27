@@ -1,9 +1,11 @@
 package extension
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/i18n"
 )
 
 func navigateView() *View {
@@ -38,5 +40,22 @@ func TestNavigateIsLeftOutBelow13(t *testing.T) {
 	}
 	if items(v)[0].Navigate != nil {
 		t.Fatal("a native stream has no navigate")
+	}
+}
+
+// A native stream view may carry a code's navigate (stream.schema.json lists it): DecodeCheckedStreamViewJSON takes it,
+// and FitNativeFor's downgrade13 leaves it out of what the native app gets.
+func TestFitNativeStripsNavigate(t *testing.T) {
+	page, _ := Slot("nav_page")
+	raw := []byte(`{"sections":[{"key":"s","items":[{"key":"code","type":"code","path":"main.go","text":"package main\n","navigate":{"id":"nav"}}]}]}`)
+	if _, err := wire.DecodeCheckedStreamViewJSON(raw); err != nil {
+		t.Fatalf("a stream view with navigate is refused: %v", err)
+	}
+	got, err := FitNativeFor(raw, page, UIVersion, nil, i18n.En)
+	if err != nil {
+		t.Fatalf("FitNativeFor: %v", err)
+	}
+	if strings.Contains(string(got), "navigate") || !strings.Contains(string(got), `"type":"code"`) || !strings.Contains(string(got), "package main") {
+		t.Fatalf("want the code without navigate, got %s", got)
 	}
 }
