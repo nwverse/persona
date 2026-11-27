@@ -9,7 +9,7 @@ Bundle ID comes from configuration (`app.bundle_id`, watch `<id>.watchkitapp`, `
 
 ## Native Agent console templates (#17129)
 
-Settings › **Templates** imports the shared `schema/template.schema.json` link or JSON. The native preview separates
+Settings › **Templates** imports the shared `../schema/template.schema.json` link or JSON. The native preview separates
 changes from unsupported parts and never writes on import. Applying the Agent console stores the choice on this iPhone;
 **Default** restores it. The normal shell is unchanged until the owner applies a template.
 
