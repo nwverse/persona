@@ -2944,19 +2944,23 @@ selector; where Persona's earlier rules differ, Cindy's wins, built from Persona
 - **Families and earlier versions** (`lib/model-families.ts`): a provider group (and Recommended, after the model that
   runs) keeps each model family together under its name in small type: Claude Fable, Opus, Sonnet and Haiku (in that
   order, by capability), a GPT line per variant ("GPT Sol", "GPT Terra"), a Gemini tier ("Gemini Pro", "Gemini Flash";
-  thinking levels and release channels such as `-medium` or `-preview` are not tiers). The family is read from the
-  model's concrete ID (an alias by what it resolves to, a gateway's vendor path and date stamps dropped); anything else
-  (the provider's own Default entry first, `glm-5.3`, `gpt-4o`, an ID typed before last) keeps its list order after the
-  families. Vendors come in the order the list first names them, other families by first mention. Within a family the
-  newest version leads (every row of it the hub lists: a 1M-context one, a gateway route's "Opus 5.5 (kiro)") and says
+  thinking levels and release channels such as `-medium` or `-preview` are not tiers), and unversioned peer families
+  (**Orchestrator** for `gemini-pro-orchestrator*`, **GPT-OSS** for `gpt-oss-*`, neither folded nor marked Latest, and
+  neither triggering family headers on its own). The family is read from the
+  model's concrete ID (an alias by what it resolves to, a gateway's vendor path and date stamps dropped); the provider's
+  own Default entry stays headerless first, and anything else (`glm-5.3`, `gpt-4o`, an ID typed before last) keeps its
+  list order after the families under a localized **Other** (`其他`; `その他`) header so it never appears inside the
+  preceding family. Vendors come in the order the list first names them, other families by first mention. Within a
+  versioned family the newest version leads (every row of it the hub lists: a 1M-context one, a gateway route's "Opus
+  5.5 (kiro)") and says
   **Latest** (最新; 最新) when older ones exist. Spellings of one model are not rows of their own: the hub sends one row
   whose `aliases` hold the others (Claude Code's tier aliases on a gateway whose tiers name one model,
   `docs/assistant/model-config.md` "One row per model", #10365), and a setup saved with one of them (a kept pick, a
   favorite, a recent setup, Model configuration's model) is that row's (`isCurrentModel`, `listedModel`); the
   older ones fold under the family's **Earlier versions · N** (更早版本 · N; 以前のバージョン · N), unfolded for this
   opening only. Never folded: the model that runs or waits, a favorite's or a recent setup's model, a customized one, and
-  everything under a search (which still marks only the family's real newest). Nothing changes for a list where no family
-  has two rows. Why: Claude.ai and ChatGPT keep older models behind one "More models" step, Claude Code's `/model` offers
+  everything under a search (which still marks only the family's real newest). Nothing changes for a list where no
+  versioned family has two rows. Why: Claude.ai and ChatGPT keep older models behind one "More models" step, Claude Code's `/model` offers
   per-family aliases that track the newest; a provider listing every pinned version (14 rows for one Claude account)
   buried the newest of each family (the user's ask, 2026-11-17).
 - **Context below the composer** (#5056): `ContextMeter` sits in the right-aligned usage row below the composer card.
