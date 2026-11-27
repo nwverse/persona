@@ -31,6 +31,9 @@ type judgeStub struct {
 	input      atomic.Value
 }
 
+// infoTagPromptStart is how the information tagging prompt (prompts/assistant/info_tag.md) starts.
+const infoTagPromptStart = "You tag a piece of text from the owner's conversations"
+
 func stubJudge(t *testing.T, h *Hub, status int, reply string) *judgeStub {
 	t.Helper()
 	js := &judgeStub{}
@@ -40,6 +43,12 @@ func stubJudge(t *testing.T, h *Hub, status int, reply string) *judgeStub {
 			return
 		}
 		raw, _ := io.ReadAll(r.Body)
+		// Information tagging (info.tag) inherits Sorting's model too, and tags a text leaving a conversation
+		// (#13246); its requests are answered here and do not change the judge's count or input.
+		if strings.Contains(string(raw), infoTagPromptStart) {
+			_ = json.NewEncoder(w).Encode(map[string]any{"content": []any{map[string]any{"type": "text", "text": `{"categories":[]}`}}})
+			return
+		}
 		js.input.Store(string(raw))
 		js.calls.Add(1)
 		if status != http.StatusOK {

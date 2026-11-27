@@ -217,7 +217,7 @@ final class QuestionDockTests: XCTestCase {
         shot("own-source-dark")
     }
 
-    /// Taps the pushed chat's Back: "返回" in the navigation bar, or on the open iPhone Duo the side rail's round one
+    /// Taps the pushed chat's Back: 「返回」 in the navigation bar, or on the open iPhone Duo the side rail's round one
     /// (`BackButton`, no label), by its point. False when there is none.
     @MainActor @discardableResult private func tapBack() -> Bool {
         let back = app.buttons.matching(NSPredicate(format: "identifier == %@ OR label == %@ OR label == %@", "BackButton", "返回", "Back")).firstMatch

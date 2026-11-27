@@ -29,6 +29,7 @@ import pr_watch_repair
 import pr_watch_recovery
 from pr_watch_review import review as semantic_review
 import pr_watch_human
+from pr_watch_local_gate import require_local_gate, LocalGateError
 from pr_watch_verify import verify
 
 FORMAT_VERSION = 1
@@ -36,6 +37,9 @@ VERIFICATION_POLICY_VERSION = 3
 REVIEW_POLICY_VERSION = 3
 REPAIR_LIMIT = 3
 INFRASTRUCTURE_ATTEMPT_LIMIT = 3
+# `gh pr list` returns the newest PRs first and pages through `--limit` itself,
+# so the bound must exceed the open PRs or the oldest are never polled (#14864).
+DISCOVERY_LIMIT = 2000
 
 
 def blocking_findings(findings):
@@ -78,10 +82,15 @@ def load_config(path):
             raise WatchError("close_stale must be a boolean")
         if item.get("respect_human_reviews", False) is not True and item.get("respect_human_reviews", False) is not False:
             raise WatchError("respect_human_reviews must be a boolean")
+        # Every repository here states its own contribution rules. One that has no issue-link workflow opts this gate
+        # out instead of the watcher failing every PR it can never merge.
+        if item.get("require_issue_link", True) is not True and item.get("require_issue_link", True) is not False:
+            raise WatchError("require_issue_link must be a boolean")
         repos.append({"name": repo, "checkout": str(Path(root).expanduser()), "base": base,
                       "verify": item["verify"], "merge": item.get("merge", False),
                       "close_stale": item.get("close_stale", False),
                       "respect_human_reviews": item.get("respect_human_reviews", False),
+                      "require_issue_link": item.get("require_issue_link", True),
                       "privacy": item.get("privacy"), "notify_command": item.get("notify_command")})
     reviewer = raw.get("reviewer", {})
     if not isinstance(reviewer, dict):
@@ -96,8 +105,10 @@ def load_config(path):
     # The human-review opt-in only adds an alternative semantic-evidence source
     # behind an off-by-default switch; it never weakens a verification or merge
     # gate, so toggling it must not invalidate existing exact-head evidence.
+    # require_issue_link likewise decides a merge-time gate only: the review and
+    # verification evidence of an unchanged head stays valid when it is set.
     repository_policy = [{key: value for key, value in item.items()
-                          if key not in ("reviewer", "respect_human_reviews")}
+                          if key not in ("reviewer", "respect_human_reviews", "require_issue_link")}
                          for item in raw["repositories"]]
     return {"repositories": repos, "reviewer": reviewer, "reviewer_concurrency": concurrency, "webhook": webhook,
             "repository_policy": repository_policy,
@@ -315,9 +326,12 @@ class Watcher:
         try:
             for repo, config in self.repositories.items():
                 raw = gh_json(["pr", "list", "--repo", repo, "--state", "open", "--json",
-                               "number,headRefOid,isDraft,baseRefName,mergeable", "--limit", "200"])
+                               "number,headRefOid,isDraft,baseRefName,mergeable", "--limit", str(DISCOVERY_LIMIT)])
                 if not isinstance(raw, list):
                     raise WatchError("PR discovery did not return an array")
+                if len(raw) >= DISCOVERY_LIMIT:
+                    self.log("%s: discovery reached its bound of %d open PRs; older PRs are not polled"
+                             % (repo, DISCOVERY_LIMIT))
                 for item in raw:
                     if not isinstance(item, dict) or not isinstance(item.get("number"), int):
                         raise WatchError("invalid PR discovery entry")
@@ -407,7 +421,7 @@ class Watcher:
         with self.merge_locks_guard:
             lock = self.merge_locks.setdefault(repo, threading.Lock())
         with lock:
-            if repo == repository("nwverse/persona"):
+            if repo.casefold() == repository("nwverse/persona"):
                 yield
             else:
                 with pr_watch_merge.merge_lock(self.repositories[repo]["checkout"]):
@@ -655,7 +669,8 @@ class Watcher:
         if self.dry_run or not config["merge"]:
             self.log("%s#%s passed; merge disabled" % (repo, number))
             return False
-        if repo == repository("nwverse/persona"):
+        if repo.casefold() == repository("nwverse/persona"):
+            require_local_gate(repo, pr["headRefOid"], pr["baseRefOid"])
             # merge-pr.sh owns the shared lock for this path. Acquiring it in
             # another process while self.merging() holds it would deadlock.
             wrapper = str(Path(__file__).resolve().parents[2] / "scripts" / "hooks" / "merge-pr.sh")
@@ -666,7 +681,8 @@ class Watcher:
         else:
             privacy = config.get("privacy")
             generic_merge(repo, number, root, privacy=privacy, timeout=600,
-                          expected_head=pr["headRefOid"], expected_base=pr["baseRefOid"])
+                          expected_head=pr["headRefOid"], expected_base=pr["baseRefOid"],
+                          require_issue_link=config.get("require_issue_link", True))
         if pr_snapshot(repo, number)["state"] != "MERGED":
             raise WatchError("merge returned without a merged PR")
         self.log("%s#%s merged at %s" % (repo, number, pr["headRefOid"][:9]))
@@ -736,7 +752,8 @@ class Watcher:
         new_number, checks = (None, [])
         try:
             new_number, checks = pr_watch_repair.commit_and_push_repair(
-                repo, pr, str(worktree), pr["baseRefOid"], reason, config["verify"])
+                repo, pr, str(worktree), pr["baseRefOid"], reason, config["verify"],
+                require_issue_link=config.get("require_issue_link", True))
         except pr_watch_common.RepairAttemptError:
             self.state.put(repo, number, pr["headRefOid"], evidence_key=evidence_key,
                            repair_rounds=rounds + 1, outcome="repairing", failure=reason)
@@ -825,7 +842,8 @@ class Watcher:
             checked(["python3", "-I", str(scanner), "--range", base + ".." + updated_head],
                     cwd=worktree, timeout=180, environ=dict(os.environ, PERSONA_PRIVACY_ROOT=str(worktree)))
             if pr.get("isCrossRepository"):
-                new_number, repair_checks = pr_watch_repair.commit_and_push_repair(repo, merged_pr, str(worktree), base, str(error), config["verify"], allow_merge_only=True, original_pr=pr)
+                new_number, repair_checks = pr_watch_repair.commit_and_push_repair(repo, merged_pr, str(worktree), base, str(error), config["verify"], allow_merge_only=True, original_pr=pr,
+                                                                                  require_issue_link=config.get("require_issue_link", True))
                 self.record_continuation(repo, pr, old.get("evidence_key"), new_number, repair_checks,
                                          repair_rounds=rounds + 1)
             else:
@@ -861,7 +879,8 @@ class Watcher:
             raise
         self.state.put(repo, number, pr["headRefOid"], evidence_key=old.get("evidence_key"),
                        repair_rounds=rounds + 1, outcome="repairing", failure=str(error))
-        new_number, repair_checks = pr_watch_repair.commit_and_push_repair(repo, pr, str(worktree), pr["baseRefOid"], str(error), config["verify"])
+        new_number, repair_checks = pr_watch_repair.commit_and_push_repair(repo, pr, str(worktree), pr["baseRefOid"], str(error), config["verify"],
+                                                                          require_issue_link=config.get("require_issue_link", True))
         if new_number == number:
             published = pr_snapshot(repo, number)
             published_head = published["headRefOid"]
@@ -927,7 +946,12 @@ query($owner: String!, $name: String!, $number: Int!, $pageSize: Int!,
         seen = set()
         for _ in range(1000):
             variables = {"owner": owner, "name": name, "number": number, "pageSize": 100}
-            variables.update({field + "Cursor": value for field, value in cursors.items()})
+            # `False` marks a finished collection here, but the cursor variable is declared String: sending
+            # `false` is rejected ("Could not coerce value false to String") on every second page, which used
+            # to block every PR with more than one page of activity (#16737). The @include directive already
+            # drops a finished collection, so its cursor only has to be a legal value.
+            variables.update({field + "Cursor": None if value is False else value
+                              for field, value in cursors.items()})
             variables.update({"needComments": cursors["comments"] is not False,
                               "needReviews": cursors["reviews"] is not False,
                               "needThreads": cursors["threads"] is not False})
@@ -1396,7 +1420,7 @@ query($owner: String!, $name: String!, $number: Int!, $pageSize: Int!,
                     if current_pr["headRefOid"] != head or current_pr["baseRefOid"] != pr["baseRefOid"] \
                             or not self.mergeable(current_pr):
                         return
-                    if not linked_issue(current_pr["body"], repo):
+                    if config.get("require_issue_link", True) and not linked_issue(current_pr["body"], repo):
                         raise WatchError("PR has no linked issue; not merged")
                     self.finish_merge(config, current_pr, old)
                 return
@@ -1416,7 +1440,7 @@ query($owner: String!, $name: String!, $number: Int!, $pageSize: Int!,
                     if current_pr["headRefOid"] != head or current_pr["baseRefOid"] != pr["baseRefOid"] \
                             or not self.mergeable(current_pr):
                         return
-                    if not linked_issue(current_pr["body"], repo):
+                    if config.get("require_issue_link", True) and not linked_issue(current_pr["body"], repo):
                         raise WatchError("PR has no linked issue; not merged")
                     try:
                         self.success_review(repo, number, current_pr, old.get("checks", []), old.get("base_failures"))
@@ -1489,7 +1513,8 @@ query($owner: String!, $name: String!, $number: Int!, $pageSize: Int!,
                         checked(["python3", "-I", str(scanner), "--range", base + ".." + updated_head],
                                 cwd=worktree, timeout=180, environ=dict(os.environ, PERSONA_PRIVACY_ROOT=str(worktree)))
                         if pr.get("isCrossRepository"):
-                            new_number, repair_checks = pr_watch_repair.commit_and_push_repair(repo, merged_pr, str(worktree), base, "conflicting base", config["verify"], allow_merge_only=True, original_pr=pr)
+                            new_number, repair_checks = pr_watch_repair.commit_and_push_repair(repo, merged_pr, str(worktree), base, "conflicting base", config["verify"], allow_merge_only=True, original_pr=pr,
+                                                                                              require_issue_link=config.get("require_issue_link", True))
                             self.record_continuation(repo, pr, evidence_key, new_number, repair_checks,
                                                      repair_rounds=rounds + 1)
                         else:
@@ -1661,7 +1686,7 @@ query($owner: String!, $name: String!, $number: Int!, $pageSize: Int!,
                         or not self.mergeable(current_pr)):
                     self.log("%s#%s moved during review; old result discarded" % (repo, number))
                     return
-                if not linked_issue(current_pr["body"], repo):
+                if config.get("require_issue_link", True) and not linked_issue(current_pr["body"], repo):
                     raise WatchError("PR has no linked issue; not merged")
                 if not current.get("success_posted"):
                     self.phase(key, "posting successful review")
@@ -1793,6 +1818,9 @@ query($owner: String!, $name: String!, $number: Int!, $pageSize: Int!,
                            merge_attempts=int(current.get("merge_attempts", 0)) + 1,
                            retry_after=retry, failure=str(error))
             self.log("%s#%s merge blocked: %s" % (repo, number, bounded(error, 700)))
+            if isinstance(error, LocalGateError) and current.get("local_gate_notice") != str(error) and not self.dry_run:
+                self.comment(repo, number, str(error))
+                self.state.put(repo, number, head, local_gate_notice=str(error))
 
     def worker(self):
         while True:

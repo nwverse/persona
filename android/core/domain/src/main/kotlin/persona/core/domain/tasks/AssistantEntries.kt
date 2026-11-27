@@ -96,9 +96,11 @@ const val REVIEW_OVERDUE_MS = 60 * 60 * 1000L
 /**
  * The task waits for its supervisor's review, which is not the owner's to do yet: open, in `pending_review` for less than
  * [REVIEW_OVERDUE_MS] at [now] (epoch ms). False past that, and when the hub does not say since when (an older hub): the
- * review is then the owner's, as it was. An open ask or an asking Agent is the owner's whatever this says.
+ * review is then the owner's, as it was. An open ask or an asking Agent is the owner's whatever this says. An owner hold
+ * its Agent reported that the supervisor has not read yet (`unblock` supervisor, #13191) is the supervisor's however old.
  */
 fun Todo.supervisorReviewing(now: Long): Boolean {
+    if (hold?.unblock == HoldUnblock.Supervisor) return true // an owner hold its supervisor reads first (#13191)
     if (isDone || supervision?.state != "pending_review") return false
     val since = parseTime(supervision?.pendingSince)?.toEpochMilli() ?: return false
     return now - since < REVIEW_OVERDUE_MS
@@ -171,8 +173,8 @@ fun assistantEntries(
     val folded = mutableSetOf<SessionKey>()
     // failed starts whose work finished in a related to-do: closed, as the To-dos page has them (#3713)
     val superseded = supersededFailedStarts(todos)
-    // the main conversation watches every task (docs/assistant/unified-entry.md); another one the tasks it dispatched
-    val listed = todos.filter { isMain || it.origin == conversation }
+    // the main conversation watches every task (docs/assistant/unified-entry.md); another one the tasks it dispatched or supervises
+    val listed = todos.filter { isMain || it.origin == conversation || it.supervision?.supervisor == conversation }
     // One home per request: prefer the task the hub ties the session to, else the first current task listing it.
     // Other tasks neither repeat its cards nor wait on the user for them (web `assistantEntries`, #7531).
     val listing = mutableMapOf<SessionKey, MutableSet<String>>()

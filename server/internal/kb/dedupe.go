@@ -75,9 +75,17 @@ type dedupeCandidate struct {
 // dedupeCandidates ranks pairs of live, not ignored projects by what they have in common: people (relative to the
 // smaller side), chats, documents, and words of their names and aliases.
 func dedupeCandidates(projects []*Project) []dedupeCandidate {
+	// A project with a parent is locked (protected); one with projects under it is the user's organizing too, and the
+	// pair would likely look alike: neither is asked about (project_tree.go).
+	parents := map[string]bool{}
+	for _, p := range projects {
+		if p.Live() && p.Parent != "" {
+			parents[p.Parent] = true
+		}
+	}
 	var live []*Project
 	for _, p := range projects {
-		if p.Live() && p.Status != "ignored" && !protectedProject(p) {
+		if p.Live() && p.Status != "ignored" && !protectedProject(p) && !parents[p.Slug] {
 			live = append(live, p)
 		}
 	}
@@ -289,16 +297,21 @@ func (e *Engine) mergeProjects(keepSlug, dropSlug, why string, manual bool) erro
 		if protectedProject(keep) || protectedProject(drop) {
 			return errors.New("automatic merge would change a protected project")
 		}
+		for _, p := range e.Store.Projects() {
+			if p.Live() && (p.Parent == keep.Slug || p.Parent == drop.Slug) {
+				return errors.New("automatic merge would change the user's project tree")
+			}
+		}
 		if e.shareProjectSource(keep, drop) {
 			return errors.New("automatic merge would fold separate views of a shared source")
 		}
 		for _, id := range drop.Chats {
-			if c, ok := e.Store.Chat(id); ok && c.fieldLocked("projects") {
+			if c, ok := e.Store.Chat(id); ok && taggingFieldLocked(&c.Tagging, "projects") {
 				return errors.New("automatic merge would change protected chat relationships")
 			}
 		}
 		for _, id := range drop.People {
-			if p, ok := e.Store.Person(id); ok && p.fieldLocked("projects") {
+			if p, ok := e.Store.Person(id); ok && taggingFieldLocked(&p.Tagging, "projects") {
 				return errors.New("automatic merge would change protected person relationships")
 			}
 		}
@@ -307,7 +320,7 @@ func (e *Engine) mergeProjects(keepSlug, dropSlug, why string, manual bool) erro
 			if !ok {
 				continue
 			}
-			if it, ok := e.Store.Item(kind, id); ok && it.fieldLocked("projects") {
+			if it, ok := e.Store.Item(kind, id); ok && taggingFieldLocked(&it.Tagging, "projects") {
 				return errors.New("automatic merge would change protected item relationships")
 			}
 		}
@@ -325,12 +338,12 @@ func (e *Engine) mergeProjects(keepSlug, dropSlug, why string, manual bool) erro
 	}
 	addProjectAliases(keep, drop.Aliases, taken)
 	// Not what the user took off keep; and what they took off drop stays off keep, unless keep has it (rec.Excluded).
-	keep.People = addUnique(keep.People, keep.kept("people", drop.People)...)
-	keep.Chats = addUnique(keep.Chats, keep.kept("chats", drop.Chats)...)
-	keep.Items = addUnique(keep.Items, keep.kept("items", drop.Items)...)
+	keep.People = addUnique(keep.People, taggingKept(&keep.Tagging, "people", drop.People)...)
+	keep.Chats = addUnique(keep.Chats, taggingKept(&keep.Tagging, "chats", drop.Chats)...)
+	keep.Items = addUnique(keep.Items, taggingKept(&keep.Tagging, "items", drop.Items)...)
 	for _, list := range []string{"people", "chats", "items"} {
 		for _, id := range drop.Excluded[list] {
-			if !slices.Contains(*keep.list(list), id) && !keep.excludes(list, id) {
+			if !slices.Contains(*keep.list(list), id) && !taggingExcludes(&keep.Tagging, list, id) {
 				rec.exclude(list, id)
 			}
 		}
@@ -399,7 +412,7 @@ func (e *Engine) mergeProjects(keepSlug, dropSlug, why string, manual bool) erro
 	if len(rec.Excluded) > 0 { // tagging only: an automatic merge's write keeps keep's own exclusions as they were
 		err := e.Store.editTagging(KindProject, keep.Slug, func(t *Tagging) bool {
 			for list, ids := range rec.Excluded {
-				t.exclude(list, ids...)
+				taggingExclude(t, list, ids...)
 			}
 			return true
 		})
@@ -415,7 +428,7 @@ func (e *Engine) mergeProjects(keepSlug, dropSlug, why string, manual bool) erro
 	// Who named drop names keep.
 	swap := func(ref string, list []string) ([]string, bool) {
 		to := keep.Slug
-		if list, member := refList(ref); keep.excludes(list, member) {
+		if list, member := refList(ref); taggingExcludes(&keep.Tagging, list, member) {
 			to = "" // the user took it off keep: it stops naming drop and does not name keep
 		}
 		changed := false
@@ -435,6 +448,12 @@ func (e *Engine) mergeProjects(keepSlug, dropSlug, why string, manual bool) erro
 		return err
 	}
 	if err := e.excludeBack(keep.Slug, rec.Excluded, true); err != nil {
+		return err
+	}
+	// The projects under drop go under keep (beside keep, when keep is one of them or below one).
+	moves, err := e.moveChildren(drop.Slug, keep.Slug, drop.Parent)
+	rec.Children = moves
+	if err != nil {
 		return err
 	}
 	drop.Status, drop.MergedInto, drop.Merge, drop.Dirty = "merged", keep.Slug, rec, false
@@ -480,11 +499,11 @@ func (e *Engine) excludeBack(slug string, links map[string][]string, on bool) er
 				kind, id, _ = strings.Cut(member, "/")
 			}
 			err := e.Store.editTagging(kind, id, func(t *Tagging) bool {
-				had := t.excludes("projects", slug)
+				had := taggingExcludes(t, "projects", slug)
 				if on {
-					t.exclude("projects", slug)
+					taggingExclude(t, "projects", slug)
 				} else {
-					t.include("projects", slug)
+					taggingInclude(t, "projects", slug)
 				}
 				return had != on
 			})

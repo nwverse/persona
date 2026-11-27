@@ -100,11 +100,11 @@ func (s *Service) createScreenInteraction(machine string, sess proto.Session) {
 	if d != nil {
 		id += "_" + d.Rev // another dialog is another card: nothing picked on the last one carries over
 	}
-	ix := proto.Interaction{
+	ix := cleanTitle(proto.Interaction{
 		ID: id, MachineID: machine, SessionID: sess.SessionID, SessionTitle: sess.Title, Cwd: sess.Cwd, Kind: proto.IxScreen,
 		CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().Add(24 * time.Hour).UTC(), Screen: trimScreen(text), Dialog: d,
 		Secret: screen.SecretPrompt(text),
-	}
+	})
 	s.fleet.mu.Lock()
 	if s.screenHandedBackLocked(machine, sess.SessionID, id, d != nil) {
 		s.fleet.mu.Unlock()
@@ -167,13 +167,13 @@ func (s *Service) createScreenInteraction(machine string, sess proto.Session) {
 	s.ixMapLocked()[id] = p
 	s.fleet.mu.Unlock()
 	s.record(ix)
-	if back && !told && terminalQuestion(ix) && s.restoreRoute(ctx, ix) {
+	if back && !told && supervisedScreen(ix) && s.restoreRoute(ctx, ix) {
 		return // Reconnecting a terminal must not lose a question held by its supervisor.
 	}
 	if back || d == nil {
 		s.show(ix) // back: pushed before the node's connection ended (#4252); no dialog: the real card rings later (#4450)
 		if back {
-			go s.feishuCardBack(ix)
+			go s.larkModule().AskBack(ix, resumeGrace)
 		}
 	} else {
 		s.announce(ix)
@@ -272,6 +272,7 @@ func (s *Service) upgradeScreenCard(machine, session, id string, p *pending) {
 				if p.orphaned != nil {
 					p.orphaned.Stop()
 				}
+				p.stopReminderLocked()
 			}
 			s.fleet.mu.Unlock()
 			if same {
@@ -452,8 +453,11 @@ func screenCardWait(sess proto.Session, hooks bool) time.Duration {
 
 // coversScreen: the interaction stands for what the terminal waits on (a hook's, a Codex approval or overlay
 // question), so no screen card is made beside it. A Codex async question does not: Codex shows no dialog for it,
-// though herdr calls the agent blocked while it is open.
-func coversScreen(p *pending) bool { return !(p.codex && p.ix.ToolName == "request_user_input_async") }
+// though herdr calls the agent blocked while it is open. Nor does a command waiting for input: it is a task of the
+// Agent's, not the Agent's own screen (fleet_ix_command.go).
+func coversScreen(p *pending) bool {
+	return !(p.codex && (p.ix.ToolName == "request_user_input_async" || p.ix.ToolName == proto.CommandInputTool))
+}
 
 // screenAnswer turns an answer to a screen card into session.keys parameters. With a dialog the node checks its
 // revision before pressing anything; an option's keys come from the node's fresh reading of the screen, and the

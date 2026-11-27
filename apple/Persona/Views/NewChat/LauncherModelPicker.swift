@@ -16,16 +16,16 @@ nonisolated struct LauncherModelChoice: Equatable {
     var presetDefault = false
     /// The launcher New Agent will actually start. A shared settings picker leaves this nil.
     var startLauncher: Launcher? = nil
-    var startsInHerdr = false
+    var startsInOmpModelHost = false
 
     private var supportsTyping: Bool {
         if let launcher = startLauncher, launcher.startsOmp || launcher.runtimeAgent == "omp" { return launcher.startsOmp }
         return LauncherModels.takesTypedModel(agent: list.agent)
     }
-    /// Only the native launcher in herdr can apply an omp start model, even when a different host's catalog has rows.
+    /// Only the native launcher in herdr or Orca can apply an omp start model, even when a different host's catalog has rows.
     var startAllowsModel: Bool {
         guard startLauncher?.startsOmp == true else { return true } // other runtimes keep their advertised lists
-        return startsInHerdr && list.supportsStartModel == true && list.locked == nil
+        return startsInOmpModelHost && list.supportsStartModel == true && list.locked == nil
     }
     private var offersModels: Bool { startAllowsModel && (!list.models.isEmpty || supportsTyping) }
     /// A pick can reach the agent even when the list is empty if the launcher accepts a typed ID.
@@ -40,7 +40,7 @@ nonisolated struct LauncherModelChoice: Equatable {
     /// or typed, even when the list is empty.
     var showsLocked: Bool {
         guard list.locked != nil else { return false }
-        return startLauncher?.startsOmp == true ? startsInHerdr : offersModels
+        return startLauncher?.startsOmp == true ? startsInOmpModelHost : offersModels
     }
     /// The model the agent runs when it is given none.
     var defaultModel: AgentModel? { list.models.first(where: \.isDefault) }
@@ -48,7 +48,12 @@ nonisolated struct LauncherModelChoice: Equatable {
     var choices: [AgentModel] { list.models.filter { !$0.isDefault } }
     /// The IDs typed before that ran here, most recent first (`custom`, remembered by the hub).
     var remembered: [AgentModel] { list.models.filter(\.custom) }
-    var selected: AgentModel? { picked.isEmpty ? nil : list.models.first { $0.id == picked } }
+    /// The listed row for a saved ID: exact row IDs win, then the hub's folded aliases (both case-sensitive, as on the
+    /// web). A saved alias keeps its original value until the user deliberately picks the canonical row.
+    func listed(_ id: String) -> AgentModel? {
+        list.models.first { $0.id == id } ?? list.models.first { ($0.aliases ?? []).contains(id) }
+    }
+    var selected: AgentModel? { picked.isEmpty ? nil : listed(picked) }
 
     /// The `model` a start sends: nil for the default; a typed ID the list lacks goes as it is when the agent takes one.
     /// `presetDefault` keeps a preset's explicit choice of the default entry explicit too.
@@ -83,7 +88,7 @@ nonisolated struct LauncherModelChoice: Equatable {
     /// The thinking efforts the model that will run takes; nil: not known (every level stays offered): a typed ID's.
     var efforts: [String]? {
         if unlisted != nil { return nil }
-        let running = selected ?? (configured.isEmpty ? defaultModel : list.models.first { $0.id == configured })
+        let running = selected ?? (configured.isEmpty ? defaultModel : listed(configured))
         guard let running, !running.custom else { return nil }
         return running.efforts ?? []
     }
@@ -91,14 +96,14 @@ nonisolated struct LauncherModelChoice: Equatable {
     /// What is typed, as an id to use when no model has exactly that id and the hub would take it (`ModelID`); nil: none.
     func customModelID(_ query: String) -> String? {
         let id = ModelID.cleaned(query)
-        guard ModelID.isValid(id), !list.models.contains(where: { $0.id == id }) else { return nil }
+        guard ModelID.isValid(id), listed(id) == nil else { return nil }
         return id
     }
 
     /// Why what is typed can't be used as a model ID; nil: it can, it is listed, or nothing is typed.
     func customProblem(_ query: String) -> String? {
         let id = ModelID.cleaned(query)
-        guard !id.isEmpty, !list.models.contains(where: { $0.id == id }) else { return nil }
+        guard !id.isEmpty, listed(id) == nil else { return nil }
         return ModelID.problem(id)?.text
     }
 
@@ -110,7 +115,7 @@ nonisolated struct LauncherModelChoice: Equatable {
         let q = query.trimmingCharacters(in: .whitespaces)
         guard !q.isEmpty else { return choices }
         return choices.filter { m in
-            [m.displayName, m.name, m.id, m.resolved ?? "", m.description ?? ""].contains { $0.localizedCaseInsensitiveContains(q) }
+            ([m.displayName, m.name, m.id, m.resolved ?? "", m.description ?? ""] + (m.aliases ?? [])).contains { $0.localizedCaseInsensitiveContains(q) }
         }
     }
 }
@@ -271,7 +276,7 @@ struct LauncherModelPicker: View {
                     }
                 }
                 Spacer(minLength: Theme.Space.s)
-                if id == picked {
+                if id == picked || (!id.isEmpty && id == choice.selected?.id) {
                     ThemedIcon(Theme.Icon.done).foregroundStyle(Theme.accent).fontWeight(.semibold)
                 }
             }
@@ -408,9 +413,6 @@ struct TypedModelSheet: View {
                 }
             }
         }
-        #if os(macOS)
-        .macSheet()
-        #endif
         .presentationDetents([.medium, .large])
         .onAppear {
             if text.isEmpty { text = initial }

@@ -68,6 +68,11 @@ func (n *Node) paneFor(ctx context.Context, id string) (string, error) {
 }
 
 func (n *Node) send(ctx context.Context, id, text string, images []proto.Image, opts sendOpts) error {
+	// A new turn must not start while the previous turn's checkpoint is still reading the working tree: otherwise
+	// edits made by this turn would be attributed to the previous one (#12533).
+	if err := n.waitCheckpoint(ctx, id); err != nil {
+		return err
+	}
 	if exitCommand(text) {
 		release := n.recovery.lock(id)
 		defer release()
@@ -105,6 +110,9 @@ func (n *Node) sendLocked(ctx context.Context, id, text string, images []proto.I
 			return err
 		}
 		opts.ApplySwitch = true
+	}
+	if handled, err := n.sendCreatedCodexApp(ctx, id, text, images); handled {
+		return err
 	}
 	if n.externalCodex(id) {
 		if n.codexResumable(ctx, id) { // nothing runs it: a stopped agent takes no messages (stopped.go, #4754)
@@ -196,6 +204,10 @@ func (n *Node) sendLocked(ctx context.Context, id, text string, images []proto.I
 		if opts.SwitchNow { // gone since switchNowReady: nothing below would carry the switch out
 			return n.switchNowDropped(id, refusal(proto.CodeSwitchUnsupported, fmt.Sprintf("session %s is not running in one of Persona's terminals: there is no agent to switch (%v)", id, err), nil))
 		}
+		// A transcript a session of the desktop app went on from: the message goes on in that session (#14394).
+		if cur := n.desktopWentOn(ctx, id); cur != "" {
+			return n.sendWentOn(ctx, id, cur, text, images, opts)
+		}
 		// A session of the desktop app's sidebar that nothing runs: the app opens it, and the message goes to its inbox,
 		// not to a claude --resume of ours (claudedesktop_open.go).
 		if handled, err := n.sendThroughDesktopApp(ctx, id, text, images); handled {
@@ -214,8 +226,8 @@ func (n *Node) sendLocked(ctx context.Context, id, text string, images []proto.I
 			return r
 		}
 		// A stopped agent takes no messages; its terminal page's Resume brings it back (stopped.go, #4754). Only a
-		// branch nothing has started yet (fork.go) is started by its first message, with the launcher it came from,
-		// and a session of Claude's desktop app the app could not take is resumed as before.
+		// branch nothing has started yet (fork.go) is started by its first message, with the launcher it came from.
+		// Desktop-owned sessions return through sendThroughDesktopApp above, including an import or opening failure.
 		if !n.freshFork(id) && !n.desktopSession(id) {
 			return n.stoppedRefusal(id)
 		}
@@ -277,7 +289,7 @@ func (n *Node) sendLocked(ctx context.Context, id, text string, images []proto.I
 	text = inertControls(text) // as the host pastes it (hostPrompt): the box and the transcript are matched against it
 	var watch *promptWatch
 	if kind == "claude" {
-		text = keepImagePaths(text)
+		text = claudeMessageText(keepImagePaths(text))
 		watch = n.watchPrompt(id, text) // where the transcript ends before the typing: what comes after may be this (sendsafe_submit.go)
 	}
 	typedAt := time.Now()
@@ -315,6 +327,13 @@ func (n *Node) sendLocked(ctx context.Context, id, text string, images []proto.I
 		}
 	}
 	return uncertain(err)
+}
+
+// promptClaude is the Claude-only entry for queue re-entry and delivery retries.
+// Ordinary sends normalize before starting their transcript watch; this also keeps
+// those later host and paste deliveries in the same model-input mode.
+func (n *Node) promptClaude(ctx context.Context, pane, text string) error {
+	return n.prompt(ctx, pane, claudeMessageText(text))
 }
 
 // prompt submits text to the agent in a pane. A host only prompts agents it detects (herdr); for the others (a compatible CLI)

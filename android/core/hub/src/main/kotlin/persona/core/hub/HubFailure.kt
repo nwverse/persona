@@ -27,7 +27,7 @@ class HubFailure(
     override val status: Int? = null,
     override val code: String? = null,
     val retryable: Boolean = true,
-    val delivered: String? = null,
+    override val delivered: String? = null,
     val retryAfterSeconds: Long? = null,
     cause: Throwable? = null,
     /** The input the hub refused (`field` of its error body) and its reason (`message`), when it names one. */
@@ -66,7 +66,8 @@ class HubFailure(
 
         private const val MaxErrorBodyBytes = 64L * 1024
 
-        internal fun from(response: Response, requireReadableBody: Boolean = false): HubFailure {
+        /** The failure a refused [response] stands for; public for modules' own hub calls (`:module:*`, #13433). */
+        fun from(response: Response, requireReadableBody: Boolean = false): HubFailure {
             val raw = if (requireReadableBody) {
                 val error = response.peekBody(MaxErrorBodyBytes + 1)
                 if (error.contentLength() > MaxErrorBodyBytes)

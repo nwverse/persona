@@ -46,17 +46,31 @@ Query keys not listed for a row are dropped (not passed on, not acted on). Fragm
 | A knowledge entry | `/kb/<kind>/<id>` | | native | in place | native |
 | Computers | `/machines` | | Computers | in place | native |
 | A computer | `/machines/<id>` | `range` | native | in place | native |
+| A computer subview | `/machines/<id>/<subview>` | `path` for files, `range` for monitoring, `mode=reclaim` for storage | web only | in place | web only |
 | Settings | `/settings` | `tab`, the tab's item key, `manager` | the matching page | in place | native |
 | An extension's page | `/extension/<extension>/<ui>` | `state` | native | in place | native |
+
+On the web, a bare computer address opens Work. Existing links with a monitoring range
+(`1h`, `6h` or `24h`) open Monitoring. The supported subviews are `work`, `monitoring`, `files`,
+`storage`, `diagnostics`, `procs`, `services`, `toolchain`, `network` and `management` (`config` is an alias).
+The legacy `#engine` bookmark on a computer opens Management. An unknown subview shows Page not found. Older fleet history entries carrying a reclaim request resolve
+in place to `/machines/<id>/storage?mode=reclaim`. Opening reclaim displays the map and its suggestions. The older `/cleanup` and `/storage/cleanup`
+suffixes select the same recovery view. Files accepts a URL-encoded directory in `path` (also accepted as `dir`).
+The `fs` subview opens Files on the addressed computer. Switching computers starts Files at the new computer’s home.
 
 - `<kind>` is one of `projects`, `topics`, `chats`, `people`, `docs`, `meetings`, `events`, `recordings`; a meeting is
   `/kb/meetings/<id>` and a recording `/kb/recordings/<id>`. An id that holds `/` is one escaped segment (`%2F`).
 - `at` names one message to land on (`?at=<item id>`; Claude's ids hold `#`, written `%23`).
 - Settings tabs are the web's (`web/src/views/settings/nav.ts`): `general`, `persona`, `prompts`, `notifications`,
-  `models`, `agents`, `channels`, `connectors`, `sources`, `extensions`, `shortcuts`, `devices`, `hub`, `managers`,
+  `models`, `agents`, `channels`, `connectors`, `sources`, `extensions`, `shortcuts`, `advanced`, `devices`, `hub`, `managers`,
   `knowledge`, `avatar`, `labs`. Four have an item key: `models` → `purpose`, `channels` → `channel`, `extensions` →
   `extension`, `connectors` → `connector`. An extension's settings are `/settings?tab=extensions&extension=<id>`. An
   unknown tab opens Settings. The iPhone opens the page it has for a tab, else Settings.
+- The assistant's pages (Dashboards, `docs/assistant/dashboards.md`) are an extension's pages under the reserved id
+  `-pages`: the Dashboards index is `/extension/-pages/index`, one page `/extension/-pages/pg_0123456789abcdef`
+  (`persona://open/extension/-pages/pg_0123456789abcdef`). The apps draw them over HTTP only, never the native page
+  stream, and take the header's title from the drawn page, so a page not pinned in the sidebar shows its title, not
+  its id.
 - A page the iPhone has no screen for opens in the in-app web card, as any other link to the hub does.
 - **Not in the table**: every other path on the hub (`/admin`, `/share/…`, `/screen/…`, the web's own pages such as
   `/overview` or `/history`). The iPhone and Android open them in the web card; the web and the desktop app treat them
@@ -79,9 +93,13 @@ These name the same pages and are read wherever links are read. Nothing new writ
 | `persona://task/<id>` | `/todos/<id>` |
 | `persona://kb/<kind>/<id…>` | `/kb/<kind>/<id>` (the rest of the path is the id) |
 | `persona://settings/extensions/<id>` | `/settings?tab=extensions&extension=<id>` |
+| `persona://settings/extensions/<id>?set=<url-encoded JSON object>` | that settings page with the proposed ordinary configuration values filled in (Web; nothing is saved until Save) |
 | `persona://extension/<extension>/<ui>[?state=]` | `/extension/<extension>/<ui>[?state=]` |
 
 The older product name's scheme and paths are accepted as these are (`docs/protocol/rolling-upgrade-compatibility.md`).
+The `set` form is deliberately narrow: one object of known ordinary configuration fields, at most 2 KiB decoded, with no
+secrets, entry lists, unknown fields, extra path, extra query or fragment. Web applies it to the existing extension form;
+the saved configuration stays the base, and Save is the only write. Apple and Android do not apply this prefill yet.
 
 ## Which hub
 
@@ -106,8 +124,10 @@ checks; none of them is ever written by the hub's link builder.
 | `persona://browser-login?hub=&request=` | a browser asks to sign in (the web sign-in page's code) | read only by the app's own scanner in Settings › Devices; opened as a link it signs nothing in ([protocol.md](protocol.md) "Browser QR sign-in") |
 | `persona://shortcut-callback/…` | a Shortcut Persona ran came back | its token |
 | `persona://ask?text=`, `persona://sources-graph` | the subscriptions pages' actions | only from those pages |
+| `persona://compose?prompt=&text=` | an extension page's own quick prompt, into the assistant's composer without sending | only that extension's declared quick prompt; id and text must match it exactly (Web and Android today; iOS not yet) |
 | `persona://widget/<kind>`, `persona://record…`, `persona://allday?action=` | Home Screen widgets, Live Activities, watch complications | Persona's own surfaces |
 | `persona://inbox/<id>/source` | an extension's link back to the Inbox item it is drawn for | only that item (`checkOpenURL`) |
+| `persona://tracks/<machine>/<space>/<session>` | the `space-conversations` extension opens an existing assistant conversation | only that extension; bounded ASCII path segments, no query, fragment or credentials; Health and arbitrary internal routes refused |
 | `persona://file/<machine>/<path>` | a file in a card | cards only |
 
 ## Security
@@ -119,9 +139,9 @@ checks; none of them is ever written by the hub's link builder.
   password is an outside link (a link with a user name or password is not opened as a page at all).
 - **A malformed app link is refused**: a route that does not start with a single `/`, holds a backslash or a control
   character, or would leave the hub when resolved against it.
-- **Extensions stay limited.** An extension's `open_url` is still only https, its own settings or the Inbox item it is
-  drawn for (`docs/extensions/extensions.md`). An https link to the user's hub that is in the table opens that page in
-  the app, which only shows a page.
+- **Extensions stay limited.** An extension's `open_url` is still only https, its own settings, the Inbox item it is
+  drawn for, or the `space-conversations` extension's one narrow conversation handoff (`docs/extensions/extensions.md`).
+  An https link to the user's hub that is in the table opens that page in the app, which only shows a page.
 - **The assistant's links.** The model is told to copy the links it is given, never to build its own; an assistant
   view's `open` is still checked against https and Persona's own forms (`CheckAssistantOpen`).
 

@@ -130,7 +130,7 @@ func TestTodoAfterReadySinglePrereqTodoCompleteRoutesToMainNotBackground(t *test
 		proto.Session{SessionID: "conv1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
 		proto.Session{SessionID: "bg1", MachineID: "server", Assistant: true, Status: proto.StatusIdle},
 	)
-	f.hello.Assistant.CompleteAgentlessTodos = true
+	f.setHello(func(h *Hello) { h.Assistant.CompleteAgentlessTodos = true })
 
 	root := createRequestAndPiece(t, s, "conv1", "Batch rollout", "", "", nil)
 	pre := createRequestAndPiece(t, s, "conv1", "Batch 1 schema", "", root.ID, nil)
@@ -458,12 +458,7 @@ func TestTodoAfterReadyRestartAndResweepIdempotency(t *testing.T) {
 	}
 	waitFor(t, "first wake", func() bool { return len(sendsToConversation(f1, "conv1")) == 1 })
 
-	// Verify durable wake marker was persisted to the store.
-	markers := map[string]todoReadyWakeMarker{}
-	found, err := st.Setting(ctx, todoReadyWakesKey, &markers)
-	if err != nil || !found || markers[dep.ID].Key != todoReadyKey(dep) {
-		t.Fatalf("persisted wake markers = %+v (found=%v err=%v), want key %q for %s", markers, found, err, todoReadyKey(dep), dep.ID)
-	}
+	waitForTodoReadyReceipt(t, st, dep)
 
 	// Repeated sweeps on the same Service must NOT re-emit.
 	s1.sweepTodoAfterReady(ctx)
@@ -892,12 +887,9 @@ func TestTodoAfterReadyReopenDependentClearsWakeStateAndAllowsNextWake(t *testin
 		}
 		waitFor(t, "initial todo_ready wake", func() bool { return len(sendsToConversation(f, "conv1")) == 1 })
 
-		// Confirm durable marker and dedup fingerprint were persisted for the initial wake.
+		waitForTodoReadyReceipt(t, st, dep)
+		// Confirm the initial wake's dedup fingerprint was persisted.
 		initialKey := todoReadyKey(dep)
-		markers := map[string]todoReadyWakeMarker{}
-		if found, err := st.Setting(ctx, todoReadyWakesKey, &markers); err != nil || !found || markers[dep.ID].Key != initialKey {
-			t.Fatalf("initial wake markers = %+v (found=%v err=%v), want key %q", markers, found, err, initialKey)
-		}
 		dedupKey, _ := digestFingerprint(prompts.SuperviseEntry{}, superviseSignal{Todo: dep.ID, Kind: sigTodoReady})
 		dedup := map[string]superviseFingerprint{}
 		if found, err := st.Setting(ctx, superviseDedupKey, &dedup); err != nil || !found {
@@ -965,6 +957,8 @@ func TestTodoAfterReadyReopenDependentClearsWakeStateAndAllowsNextWake(t *testin
 			t.Fatalf("unexpected second wake:\n%s", msg)
 		}
 
+		waitForTodoReadyReceipt(t, st, reopenedDep)
+
 		// Repeated sweeps and a simulated restart (with Postgres microsecond ReopenedAt truncation) must not duplicate.
 		s.sweepTodoAfterReady(ctx)
 		requireNoTodoReadyQueued(t, s, "re-sweep duplicated reopened wake")
@@ -1008,6 +1002,7 @@ func TestTodoAfterReadyReopenDependentClearsWakeStateAndAllowsNextWake(t *testin
 			t.Fatal(err)
 		}
 		waitFor(t, "initial wake", func() bool { return len(sendsToConversation(f, "conv1")) == 1 })
+		waitForTodoReadyReceipt(t, st, dep)
 
 		if _, err := s.editTodo(ctx, dep.ID, db.TodoEdit{Done: &done}); err != nil {
 			t.Fatal(err)
@@ -1039,6 +1034,7 @@ func TestTodoAfterReadyReopenDependentClearsWakeStateAndAllowsNextWake(t *testin
 			t.Fatal(err)
 		}
 		waitFor(t, "initial wake", func() bool { return len(sendsToConversation(f, "conv1")) == 1 })
+		waitForTodoReadyReceipt(t, st, dep)
 
 		if _, err := s.editTodo(ctx, dep.ID, db.TodoEdit{Done: &open}); err != nil {
 			t.Fatal(err)
@@ -1048,6 +1044,20 @@ func TestTodoAfterReadyReopenDependentClearsWakeStateAndAllowsNextWake(t *testin
 		if got := len(sendsToConversation(f, "conv1")); got != 1 {
 			t.Fatalf("no-op reopen caused duplicate wake: got %d, want 1", got)
 		}
+	})
+}
+
+// Delivery records the send before the digest persists its wake marker.
+func waitForTodoReadyReceipt(t *testing.T, st *memStore, dep Todo) {
+	t.Helper()
+	key := todoReadyKey(dep)
+	waitFor(t, "persisted wake marker "+key, func() bool {
+		var markers map[string]todoReadyWakeMarker
+		found, err := st.Setting(t.Context(), todoReadyWakesKey, &markers)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return found && markers[dep.ID].Key == key
 	})
 }
 

@@ -374,6 +374,11 @@ func TestHandoffNotApprovedStartsNothing(t *testing.T) {
 			ix := r.card()
 			if c.answer != nil {
 				c.answer(r, ix)
+			} else {
+				// Unseen hand-off cards do not expire until viewed in the app.
+				if !r.s.markInteractionSeen(context.Background(), ix.ID) {
+					t.Fatal("markInteractionSeen returned false")
+				}
 			}
 			answer, errText := r.answer(done)
 			if errText != "" || !strings.Contains(answer, c.want) || !strings.Contains(answer, "No agent was started") {
@@ -574,7 +579,16 @@ func TestHandoffAMixedNoDeclines(t *testing.T) {
 			r := newHandoffRig(t)
 			done := r.start(handoffArgs)
 			ix := r.card()
-			if w := r.post(ix.ID, body, &assistantwire.HandoffApprover{DeviceID: "d1"}); w.Code != http.StatusOK {
+			approver := &assistantwire.HandoffApprover{DeviceID: "d1"}
+			if body == `{}` {
+				if w := r.post(ix.ID, body, nil); w.Code != http.StatusForbidden {
+					t.Fatalf("empty answer without a vouched-for approver: %d %s", w.Code, w.Body)
+				}
+				if w := r.post(ix.ID, `{"approve":true}`, approver); w.Code != http.StatusBadRequest {
+					t.Fatalf("plan answer on the hand-off: %d %s", w.Code, w.Body)
+				}
+			}
+			if w := r.post(ix.ID, body, approver); w.Code != http.StatusOK {
 				t.Fatalf("the answer: %d %s", w.Code, w.Body)
 			}
 			answer, errText := r.answer(done)

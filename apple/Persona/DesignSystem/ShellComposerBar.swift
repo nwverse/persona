@@ -9,7 +9,7 @@ import SwiftUI
 /// shapes, so focus and the IME's marked text survive the change; so are + and the mic (voice and stop too), which move
 /// with the box between the shapes (`ComposerBoxLayout`, #7278). Only what the card alone has comes and goes.
 /// The callers keep their own state (drafts, uploads, SendSafety in `Composer`; the starter's text in StarterComposer).
-struct ShellComposerBar<Attach: View, Modes: View>: View {
+struct ShellComposerBar<Attach: View, Modes: View, Top: View>: View {
     var placeholder: String
     @Binding var text: String
     @Binding var selection: TextSelection?
@@ -31,10 +31,6 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     var modesDisclosure = false
     /// What goes with the message, quoted at the top of the card (#986); quotes keep it open (`hasAttachments`).
     var quotes: Binding<[ContextRef]>? = nil
-    /// Always the card, never the one line (the Mac: the field and its row of buttons stay, as a desktop app's box).
-    var alwaysOpen = false
-    /// The conversation whose sent messages ↑ / ↓ and ⌃R bring back (the Mac, `MacSendHistory`); nil: none.
-    var history: String? = nil
     /// The main conversation cannot answer yet: send says what to do first and goes there, the draft stays.
     var gate: SendGate? = nil
     /// The iPhone's 「+」 opens the composer's panel (`AttachSheet`, a half-height system sheet), given where the button is
@@ -52,6 +48,8 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     var send: () -> Void
     @ViewBuilder var attach: () -> Attach
     @ViewBuilder var modes: () -> Modes
+    /// Composer-bound accessories fused into the top edge of the card surface (queued messages, task routing).
+    @ViewBuilder var top: () -> Top
     @State private var dictation = Dictation()
     @Environment(\.buiTheme) private var theme
     #if os(iOS)
@@ -150,7 +148,7 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
         return Theme.Shell.composerRadius - well / 2 - (Theme.Size.tapTarget - well) / 2
     }
 
-    private var expanded: Bool { !barOn && (alwaysOpen || focused.wrappedValue || !text.isEmpty || hasAttachments) }
+    private var expanded: Bool { !barOn && (focused.wrappedValue || !text.isEmpty || hasAttachments) }
 
     /// The dictation bar is up: the composer keeps its one-line shape under it.
     private var barOn: Bool {
@@ -252,17 +250,28 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
         let erased = AnyView(box)
         #endif
         // Erased (#6735): generic, so every intermediate of the chain below took a run-time-sized stack slot holding the box.
-        erased
-        .padding(.horizontal, expanded ? 0 : Theme.Space.xs)
-        .padding(.vertical, expanded ? 0 : Theme.Space.xxs)
+        let input = erased
+            .padding(.horizontal, expanded ? 0 : Theme.Space.xs)
+            .padding(.vertical, expanded ? 0 : Theme.Space.xxs)
+            .contentShape(.rect(cornerRadius: Theme.Shell.composerRadius))
+            .onTapGesture { if !barOn { focused.wrappedValue = true } }
+        VStack(alignment: .leading, spacing: 0) {
+            top()
+                .clipShape(
+                    UnevenRoundedRectangle(
+                        topLeadingRadius: Theme.Shell.composerRadius,
+                        topTrailingRadius: Theme.Shell.composerRadius,
+                        style: .continuous
+                    )
+                )
+            input
+        }
         .modifier(ComposerSurface())
         #if os(iOS)
         .overlay { ComposerHoldOverlay(hold: hold) }
         .coordinateSpace(.named(ComposerHold.space))
         #endif
         .composerGlow(glows)
-        .contentShape(.rect(cornerRadius: Theme.Shell.composerRadius))
-        .onTapGesture { if !barOn { focused.wrappedValue = true } }
         .shellScaled()
         .animation(openMotion, value: expanded)
         .animation(Theme.Motion.state, value: canSend)
@@ -357,7 +366,6 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
                 }
             }
             .lineLimit(expanded ? 1...maximumLines : 1...1)
-            #if os(iOS) || os(visionOS)
             // Grown taller, the field must not stay scrolled down a line (#909, TextViewScroll).
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { _ in
                 #if os(iOS)
@@ -366,16 +374,10 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
                 if focused.wrappedValue { TextViewScroll.settleFocused() }
                 #endif
             }
-            #endif
             .focused(focused)
             #if os(iOS)
             // Return Key Sends (#8178): what send does, never from under the full-page editor (it keeps Return a new line).
             .returnSends(text: $text, canSend: canSend, gate: gate?.action, paused: enlarged || barOn) { endDictation(then: sendTyped) }
-            #endif
-            #if os(macOS)
-            .textFieldStyle(.plain) // the card is the field's box; the Mac's own bezel drew a second one inside
-            .macComposerKeys(focused: focused.wrappedValue, canSend: canSend, // ⏎ sends, ⇧⏎ a new line
-                             history: history.map { MacComposerHistory(key: $0, text: $text, focus: { focused.wrappedValue = true }) }, send: send)
             #endif
             .padding(.leading, expanded ? Theme.Space.l : Theme.Space.xs)
             .padding(.trailing, fieldRightInset)
@@ -667,12 +669,7 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
 
     /// Sends what the field shows: the keyboard's composition confirmed into the draft first (`TypedText`, #2203).
     private func sendTyped() {
-        #if os(iOS) || os(visionOS)
         if focused.wrappedValue { TypedText.commitFocused(into: $text) }
-        #endif
-        #if os(macOS)
-        if let history { MacSendHistory.shared.record(history, text) }
-        #endif
         send()
     }
 
@@ -680,6 +677,27 @@ struct ShellComposerBar<Attach: View, Modes: View>: View {
     private func endDictation(then action: () -> Void) {
         dictation.stop()
         action()
+    }
+}
+
+extension ShellComposerBar where Top == EmptyView {
+    init(placeholder: String, text: Binding<String>, selection: Binding<TextSelection?>,
+         focused: FocusState<Bool>.Binding, canSend: Bool, hasAttachments: Bool = false,
+         stop: (() -> Void)? = nil, voice: (() -> Void)? = nil, voiceLabel: String? = nil,
+         modesTitle: SessionModes.ComposerTitle? = nil, modesDisclosure: Bool = false,
+         quotes: Binding<[ContextRef]>? = nil, gate: SendGate? = nil,
+         openAttach: ((CGRect) -> Void)? = nil, glows: Bool = false,
+         dictationHints: @escaping () -> [String] = { [] },
+         dictationRequest: DictationRequest? = nil, takeDictation: ((DictationRequest) -> Bool)? = nil,
+         send: @escaping () -> Void,
+         @ViewBuilder attach: @escaping () -> Attach,
+         @ViewBuilder modes: @escaping () -> Modes) {
+        self.init(placeholder: placeholder, text: text, selection: selection, focused: focused, canSend: canSend,
+                  hasAttachments: hasAttachments, stop: stop, voice: voice, voiceLabel: voiceLabel,
+                  modesTitle: modesTitle, modesDisclosure: modesDisclosure, quotes: quotes, gate: gate,
+                  openAttach: openAttach, glows: glows, dictationHints: dictationHints,
+                  dictationRequest: dictationRequest, takeDictation: takeDictation, send: send,
+                  attach: attach, modes: modes, top: { EmptyView() })
     }
 }
 

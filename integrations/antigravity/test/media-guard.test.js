@@ -68,22 +68,67 @@ test('everything else gets no opinion, and the script never fails closed', (t) =
   assert.equal(run(JSON.stringify({ toolCall: { name: 'read_file', args: { Path: join(dir, 'cut.png') } } })).decision, 'deny')
 })
 
-test('the plugin is written idempotently and answers "ask" once its script is gone', (t) => {
+test('the plugin is idempotent, outlives its source generation and asks only if its installed script is gone', { skip: process.platform === 'win32' && 'no /bin/sh' }, (t) => {
   const home = mkdtempSync(join(tmpdir(), 'agy-media-guard-'))
   t.after(() => rmSync(home, { recursive: true, force: true }))
   const agyDir = join(home, 'antigravity-cli')
   mkdirSync(agyDir)
-  const dir = installMediaGuard({ agyDir, script: SCRIPT })
+  mkdirSync(join(home, 'config'))
+  writeFileSync(join(home, 'config', 'package.json'), '{"type":"commonjs"}\n')
+  const sourceRoot = join(home, 'source-generation')
+  const source = join(sourceRoot, 'media-guard.mjs')
+  mkdirSync(join(sourceRoot, 'lib'), { recursive: true })
+  writeFileSync(source, readFileSync(SCRIPT))
+  writeFileSync(join(sourceRoot, 'lib', 'media-guard.js'), readFileSync(new URL('../lib/media-guard.js', import.meta.url)))
+  const dir = installMediaGuard({ agyDir, script: source })
   assert.equal(dir, join(home, 'config', 'plugins', 'persona-media-guard'))
+  assert.equal(JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).type, 'module', 'the installed .js helper has an explicit ESM scope even under a CommonJS parent')
   const hooks = JSON.parse(readFileSync(join(dir, 'hooks.json'), 'utf8'))['persona-media-guard'].PreToolUse[0]
   assert.equal(hooks.matcher, 'read_file|view_file')
   const sh = (command, input) => JSON.parse(execFileSync('/bin/sh', ['-c', command], { input }).toString())
   writeFileSync(join(home, 'cut.png'), png.subarray(0, 20))
   const payload = JSON.stringify({ toolCall: { name: 'read_file', args: { Path: join(home, 'cut.png') } } })
   assert.equal(sh(hooks.hooks[0].command, payload).decision, 'deny')
-  assert.equal(installMediaGuard({ agyDir, script: SCRIPT }), dir)
-  const gone = installMediaGuard({ agyDir, script: join(home, 'moved', 'media-guard.mjs') })
-  const stale = JSON.parse(readFileSync(join(gone, 'hooks.json'), 'utf8'))['persona-media-guard'].PreToolUse[0].hooks[0].command
-  assert.deepEqual(sh(stale, payload), { decision: 'ask' })
+  assert.equal(installMediaGuard({ agyDir, script: source }), dir)
+  rmSync(sourceRoot, { recursive: true, force: true })
+  assert.equal(sh(hooks.hooks[0].command, payload).decision, 'deny', 'the installed copy does not depend on its source generation')
+  rmSync(join(dir, 'media-guard.mjs'))
+  assert.deepEqual(sh(hooks.hooks[0].command, payload), { decision: 'ask' })
   assert.ok(existsSync(join(dir, 'plugin.json')))
+})
+
+// agy runs a hook through cmd.exe on Windows, which has no /bin/sh: the command there is cmd's own, with each path quoted.
+test('on Windows the hook is a cmd.exe command', (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'agy-media-guard-'))
+  t.after(() => rmSync(home, { recursive: true, force: true }))
+  const agyDir = join(home, 'antigravity-cli')
+  mkdirSync(agyDir)
+  const node = String.raw`C:\Program Files (x86)\nodejs\node.exe`
+  const script = SCRIPT
+  const dir = installMediaGuard({ agyDir, script, node, platform: 'win32' })
+  const command = JSON.parse(readFileSync(join(dir, 'hooks.json'), 'utf8'))['persona-media-guard'].PreToolUse[0].hooks[0].command
+  const ask = 'echo {"decision":"ask"}'
+  const installed = join(dir, 'media-guard.mjs')
+  const dependency = join(dir, 'lib', 'media-guard.js')
+  assert.equal(command, `if exist "${node}" (if exist "${installed}" (if exist "${dependency}" ("${node}" "${installed}" --state "${join(agyDir, 'persona-media-guard')}") else (${ask})) else (${ask})) else (${ask})`)
+})
+
+test('cmd.exe runs the Windows hook and answers "ask" once its script or Node.js is gone', { skip: process.platform !== 'win32' && 'needs cmd.exe' }, (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'agy media guard ('))
+  t.after(() => rmSync(home, { recursive: true, force: true }))
+  const agyDir = join(home, 'antigravity-cli')
+  mkdirSync(agyDir)
+  const hook = (script, node) => JSON.parse(readFileSync(join(installMediaGuard({ agyDir, script, node }), 'hooks.json'), 'utf8'))['persona-media-guard'].PreToolUse[0].hooks[0].command
+  // As written, and wrapped in the quotes cmd /c strips: both are how a caller may pass it.
+  const cmd = (command, input) => [command, `"${command}"`].map((line) =>
+    JSON.parse(execFileSync('cmd.exe', ['/d', '/c', line], { input, windowsVerbatimArguments: true }).toString()))
+  writeFileSync(join(home, 'cut.png'), png.subarray(0, 20))
+  const payload = JSON.stringify({ toolCall: { name: 'read_file', args: { Path: join(home, 'cut.png') } } })
+  for (const answer of cmd(hook(SCRIPT), payload)) assert.equal(answer.decision, 'deny')
+  const installed = join(home, 'config', 'plugins', 'persona-media-guard', 'media-guard.mjs')
+  const missingScript = hook(SCRIPT)
+  rmSync(installed)
+  for (const answer of cmd(missingScript, payload)) assert.deepEqual(answer, { decision: 'ask' })
+  // Node.js moved (an upgrade, a reinstall): cmd would say "is not recognized" and print no JSON.
+  for (const answer of cmd(hook(SCRIPT, join(home, 'old node (x86)', 'node.exe')), payload)) assert.deepEqual(answer, { decision: 'ask' })
 })

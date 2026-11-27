@@ -26,7 +26,7 @@ func TestSupervisorConversationExactChoiceSettles(t *testing.T) {
 	// the existing "OK takes the recommendation" rule, so the second option asserts Chosen too.
 	want := a.Options[1].Label
 	sent := len(sentToAgent(f))
-	s.userSpokeText(context.Background(), supervisorRef(), want)
+	deliveredSupervisorChoice(t, s, supervisorRef(), want, "choice-1")
 	got := askOf(s, todo.ID)
 	if got == nil || got.AcceptedAt.IsZero() || got.Chosen != want || got.ByDefault {
 		t.Fatalf("the supervisor reply did not settle the exact option: %+v", got)
@@ -63,7 +63,7 @@ func TestSupervisorConversationLoneLetterDoesNotSettle(t *testing.T) {
 		return signalled(s, f, todo.ID, sigDecisionReply, "task_decided")
 	})
 	// The full label still settles afterwards.
-	s.userSpokeText(context.Background(), supervisorRef(), askOf(s, todo.ID).Options[1].Label)
+	deliveredSupervisorChoice(t, s, supervisorRef(), askOf(s, todo.ID).Options[1].Label, "choice-2")
 	if want := askOf(s, todo.ID).Options[1].Label; askOf(s, todo.ID).Chosen != want {
 		t.Fatalf("the full label after the lone letter did not settle %q", want)
 	}
@@ -104,7 +104,7 @@ func TestSupervisorConversationProvenanceIgnored(t *testing.T) {
 		t.Fatal("the pending decision left needs_user")
 	}
 	// A genuine owner message right after still settles the card.
-	s.userSpokeText(context.Background(), supervisorRef(), askOf(s, todo.ID).Options[0].Label)
+	deliveredSupervisorChoice(t, s, supervisorRef(), askOf(s, todo.ID).Options[0].Label, "choice-after-relay")
 	if askOf(s, todo.ID).AcceptedAt.IsZero() {
 		t.Fatal("the genuine owner reply after provenance input did not settle")
 	}
@@ -120,13 +120,10 @@ func TestSupervisorConversationEmptyTextIgnored(t *testing.T) {
 	if got == nil || got.AgentReply != nil || !got.DueAt.Equal(before.DueAt) {
 		t.Fatalf("an empty spoke changed the supervisor decision: %+v", got)
 	}
+	// The hand-back pauses synchronously, before the spoke returns (handBackOneSupervisorReply), so the checks
+	// above see it; no wait is needed (fixed sleeps are a guard failure, docs/lessons/testing.md).
 	if signalled(s, f, todo.ID, sigDecisionReply, "task_decided") {
 		t.Fatal("an empty spoke emitted a decision_reply signal")
-	}
-	// Guard against a flaky timing assumption: give any async hand-off a moment, then recheck.
-	time.Sleep(4 * shortSuperviseTimings.gather)
-	if askOf(s, todo.ID).AgentReply != nil {
-		t.Fatal("an empty spoke paused the decision asynchronously")
 	}
 }
 
@@ -225,8 +222,7 @@ func decisionReplyTarget(t *testing.T, s *Service, id string) (to, routed string
 	if !ok {
 		t.Fatalf("no pending decision_reply for %s", id)
 	}
-	ctx := context.Background()
-	return g.To, s.digestTo(ctx, s.settings(ctx), g)
+	return g.To, s.digestTo(context.Background(), s.settings(context.Background()), g)
 }
 
 // A free-text reply in an independent direction conversation must hand the pending card back to
@@ -296,7 +292,7 @@ func TestLeaderDirectionExactChoiceDeliversToWorker(t *testing.T) {
 	s.todos.mu.Unlock()
 	want := askOf(s, todo.ID).Options[1].Label
 	sent := len(sentToAgent(f))
-	s.userSpokeText(context.Background(), leaderDirectionRef(), want)
+	deliveredSupervisorChoice(t, s, leaderDirectionRef(), want, "leader-choice-1")
 	if delivered := sentToAgent(f)[sent:]; len(delivered) != 1 || !strings.Contains(delivered[0], want) {
 		t.Fatalf("the leader's exact choice was not relayed to the worker: %q", delivered)
 	}
@@ -393,11 +389,14 @@ func TestHeldForBriefingDecisionIgnoresSupervisorConversation(t *testing.T) {
 		t.Fatal("the fixture ask is not held for a briefing")
 	}
 	before := askOf(s, todo.ID)
-	// An exact option label would settle an ordinary card; here it must do nothing.
-	s.userSpokeText(context.Background(), supervisorRef(), before.Options[1].Label)
+	// An exact option label would settle an ordinary card once delivered; here it must do nothing.
+	deliveredSupervisorChoice(t, s, supervisorRef(), before.Options[1].Label, "briefing-choice-1")
 	got := askOf(s, todo.ID)
 	if got == nil || !got.ForBriefing || got.AgentReply != nil || got.Chosen != "" || !got.AcceptedAt.IsZero() {
 		t.Fatalf("a briefing-held decision was released or settled: %+v", got)
+	}
+	if s.supervisorSettlePending(todo.ID, time.Now()) {
+		t.Fatal("a briefing-held decision registered a pending supervisor settlement")
 	}
 	if signalled(s, f, todo.ID, sigDecisionReply, "task_decided") {
 		t.Fatal("a briefing-held decision emitted a hand-back signal")
@@ -451,9 +450,12 @@ func TestDismissedDecisionIgnoresSupervisorConversation(t *testing.T) {
 	}
 	dismiss(false)
 	want := "redeploy" // the non-recommended option, so chooseOption takes its full delivery path
-	s.userSpokeText(context.Background(), supervisorRef(), want)
+	deliveredSupervisorChoice(t, s, supervisorRef(), want, "dismissed-choice-1")
 	if got := askOf(s, todo.ID); got == nil || got.Chosen != "" || !got.AcceptedAt.IsZero() || got.AgentReply != nil {
 		t.Fatalf("an exact label reopened a dismissed decision: %+v", got)
+	}
+	if s.supervisorSettlePending(todo.ID, time.Now()) {
+		t.Fatal("a dismissed decision registered a pending supervisor settlement")
 	}
 	s.userSpokeText(context.Background(), supervisorRef(), "let me think about the rollout risk first")
 	if got := askOf(s, todo.ID); got == nil || got.AgentReply != nil || got.Chosen != "" {
@@ -465,9 +467,9 @@ func TestDismissedDecisionIgnoresSupervisorConversation(t *testing.T) {
 	if todoNow(s, todo.ID).Supervision.State != reviewNeedsUser {
 		t.Fatal("the dismissed decision left needs_user")
 	}
-	// Undo restores the ordinary path: the same exact label now settles the round.
+	// Undo restores the ordinary path: the same exact label now settles the round once delivered.
 	dismiss(true)
-	s.userSpokeText(context.Background(), supervisorRef(), want)
+	deliveredSupervisorChoice(t, s, supervisorRef(), want, "dismissed-choice-2")
 	if got := askOf(s, todo.ID); got == nil || got.AcceptedAt.IsZero() || got.Chosen != want {
 		t.Fatalf("the decision did not answer after Undo: %+v", got)
 	}

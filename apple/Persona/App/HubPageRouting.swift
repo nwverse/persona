@@ -100,9 +100,6 @@ extension AppModel {
         if session(key)?.assistant == true || key == assistantMain {
             openAssistantConversation(key)
         } else {
-            #if os(macOS)
-            MacShellState.shared.willOpen()
-            #endif
             open(key)
         }
     }
@@ -143,6 +140,9 @@ extension AppModel {
     /// hub-level group: a link never switches the hub the app shows.
     func openHubPage(_ page: HubPage, group: String) -> HubLinkOpen? {
         let hubLevel = group == hub?.group
+        #if os(iOS)
+        if hubLevel, returnToStartIfHidden(page.navigationPage) { return .opened }
+        #endif
         switch page {
         case .agent(let machine, let session, let item):
             openLinked(linkedSession(group, machine: machine, session: session), item: item)

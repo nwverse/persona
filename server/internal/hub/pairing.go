@@ -275,11 +275,17 @@ func (h *Hub) newPairCode(ctx context.Context, machine string) (*pairCode, error
 	p := pairCode{Token: "jp_" + hex.EncodeToString(secret[:]), ExpiresAt: time.Now().UTC().Add(pairLifetime),
 		URL: h.cfg.PublicURL, HubID: h.hubID(), Alt: []string{}, Machine: machine}
 	p.TLSPort, p.FP = h.tlsPin()
-	for _, alt := range h.pairCandidates() {
-		if len(p.Alt) == 2 {
-			break
+	if machine != "" && p.FP != "" && len(h.cfg.Public.LinkAdvertise) > 0 {
+		endpoints := h.linkEndpointList()
+		if len(endpoints) == 0 {
+			return nil, errors.New("public.link_advertise has no valid HTTPS endpoints")
 		}
-		p.Alt = append(p.Alt, alt)
+		p.URL, p.TLSPort = endpoints[0].URL, endpoints[0].Port
+		for _, e := range endpoints[1:min(len(endpoints), 3)] {
+			p.Alt = append(p.Alt, e.URL)
+		}
+	} else {
+		p.Alt = append(p.Alt, h.pairCandidates()...)
 	}
 	if err := h.store.CreatePairToken(ctx, hashToken(p.Token), p.ExpiresAt, p.Machine); err != nil {
 		return nil, err
@@ -296,10 +302,19 @@ func pairExpires(p *db.PairToken) time.Time {
 	return until
 }
 
+// expiringContext returns a context canceled when until is reached (or immediately when already elapsed).
+// A zero until returns a plain cancelable context with no deadline timer.
+func expiringContext(parent context.Context, until time.Time) (context.Context, context.CancelFunc) {
+	if until.IsZero() {
+		return context.WithCancel(parent)
+	}
+	return context.WithDeadline(parent, until)
+}
+
 // An open WS must not keep a pairing credential alive indefinitely. Recheck redemption while it is open,
 // then cancel exactly at the earlier of its original expiry and the redemption grace deadline.
 func (h *Hub) pairContext(parent context.Context, p principal) (context.Context, context.CancelFunc) {
-	ctx, cancel := context.WithCancel(parent)
+	ctx, cancel := expiringContext(parent, p.PairExpires)
 	go func() {
 		defer cancel()
 		until := p.PairExpires

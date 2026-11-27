@@ -24,6 +24,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/kb"
+	"github.com/nwverse/persona/server/internal/nodeproto"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -64,6 +65,7 @@ type fakeHub struct {
 	rcFiles             map[string]string                  // a machine's launchers.list rc_file (its shell follows: bash or zsh)
 	slowLaunchers       map[string]bool                    // a machine whose launchers.list answers only when the call gives up
 	launcherGate        chan struct{}                      // when set, every launchers.list answer waits for this gate
+	onLauncherModels    func(context.Context, string)      // before the requested launcher returns its models, under mu
 	failLauncherRefresh bool                               // launchers.list with refresh:true fails, ordinary reads still answer
 	launcherListParams  []map[string]any                   // launchers.list params in order
 	agentModels         map[string][]proto.AgentModel      // the nodes' launchers.models, by launcher
@@ -78,6 +80,7 @@ type fakeHub struct {
 	modelExts      []assistantwire.ModelExtension // plugins.models: the extensions granted models (model_rpc.go)
 	needTriage     []string
 	ownModels      bool                         // the test sets hello.Models itself: no fake model
+	infoTagModel   bool                         // the service tags with information categories (Service.noInfoTag off)
 	devices        []Device                     // devices.list answers these when set (else one per machine with sessions)
 	devicesFull    bool                         // devices.list says its list is complete (a machine not in it was removed)
 	devicesOther   []string                     // devices.list's ids kept out of it (pending, leaving, absorbed)
@@ -86,6 +89,8 @@ type fakeHub struct {
 	itemsFail      int                          // session.items fails this many more times (then recovers)
 	itemsFailPlain int                          // one-turn completion reads without lazy_images fail this many times
 	items          []proto.Item                 // session.items answers this
+	sentItems      map[string][]proto.Item      // user transcript items written by successful assistant.send calls, by session_id
+	omitSentItems  bool                         // suppress sentItems writes to simulate RPC success without a transcript item
 	page           func(turns int) []proto.Item // when set, session.items answers with this instead (a real transcript's PageTurns)
 	pageTurns      bool                         // and only the last n turns of it to "turns": n, as the node does (else all of it)
 	itemsPage      int                          // > 0: session.items with after_seq pages them by seq, this many a page
@@ -105,6 +110,7 @@ type fakeHub struct {
 	replies        []string      // the model's answers, in turn (the last one again when they run out)
 	answers        []fakeAnswer  // how each of those answers comes, in turn (none: at once and whole)
 	modelDown      bool          // the model's gateway answers 502 to the calls replies would answer: asked, never answering
+	modelRequests  int           // every model HTTP request, across all purposes
 	noModel        bool
 	asked          []modelCall
 	pushes         []Notification
@@ -126,6 +132,7 @@ type fakeHub struct {
 	failStart    error
 	refuseUltra  error            // session.start's answer to a start that asks for ultracode (a node refusing it, #3596)
 	refuseGoal   error            // session.start's answer to a start that carries a goal (a node too old for it)
+	refuseHost   map[string]error // session.start's answer to a start naming that host (a node whose Antigravity companion went away)
 	startFailed  string           // the StartError of the sessions session.start answers (the launcher failed in its new tab)
 	worktrees    []map[string]any // worktree.prepare / worktree.create params, {"method": …} added
 	failWorktree error            // worktree.create's answer when set
@@ -159,6 +166,13 @@ type fakeHub struct {
 	// were asked; the sessions whose pushes are off, by machine.
 	triage      string
 	triageAsked []modelCall
+	// infoTag answers the information tagging (info_tag.go): {"categories":[]} when empty; infoTagFails fails it.
+	infoTag      string
+	infoTagFails bool
+	infoTagAsked []modelCall
+	// captureSort answers sorting a quick capture (capture_sort.go): it fails when empty.
+	captureSort      string
+	captureSortAsked []modelCall
 	// The Progress row's paraphrase of a report (report_line.go): its answer (none: an error), and what was asked.
 	reportLine      string
 	reportLineAsked []modelCall
@@ -167,6 +181,9 @@ type fakeHub struct {
 	delegateAsked []modelCall
 	tabReply      string
 	tabAsked      []string
+	// tabModelEntered / tabModelGate hold one naming-model answer open until the test releases it.
+	tabModelEntered chan struct{}
+	tabModelGate    <-chan struct{}
 	// The todo titles' model (todo.title): its answer, an error instead, and what it was asked.
 	todoTitleReply string
 	todoTitleErr   error
@@ -222,9 +239,11 @@ type fakeHub struct {
 	doctor      map[string]string
 	doctorState map[string]string // each machine's claude-version state ("unanswered": no version came this time)
 	// auth is claude.auth_status's answer by "machine/launcher" (nil: the node has no such method), and the
-	// questions it got.
-	auth      map[string]proto.ClaudeAuthStatus
-	authAsked []string
+	// questions it got. authBy, when set, answers claude.auth_status from the full RPC params.
+	auth       map[string]proto.ClaudeAuthStatus
+	authBy     func(device string, params map[string]any) proto.ClaudeAuthStatus
+	authAsked  []string
+	authParams []map[string]any
 	// authHold, when set, holds claude.auth_status's answer until it is closed (a node running a slow launcher).
 	authHold chan struct{}
 	// nodes answer node methods on any machine, by method, before the answers below (answerNode).
@@ -250,15 +269,36 @@ func (f *fakeHub) Hello(context.Context) (Hello, error) {
 	f.mu.Lock()
 	h, in := f.hello, f.inbox
 	f.mu.Unlock()
-	if in != nil { // the inbox's tests give the models there (inbox_fake_test.go)
-		h.Models = in.hubModels()
+	if in != nil {
+		in.mu.Lock()
+		hasModels := in.model != nil || len(in.models) > 0
+		in.mu.Unlock()
+		if hasModels { // Only an explicitly configured fake Inbox replaces the ordinary hello's models.
+			h.Models = in.hubModels()
+		}
 	}
 	return h, nil
+}
+
+// setHello updates the hub's hello under f.mu so tests can mutate it after a
+// Service has started background work without racing against Hello.
+func (f *fakeHub) setHello(fn func(*Hello)) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	fn(&f.hello)
+}
+
+// setLocale sets the hub hello's locale under f.mu.
+func (f *fakeHub) setLocale(locale string) {
+	f.setHello(func(h *Hello) { h.Locale = locale })
 }
 
 // deviceCallsForTest records calls made with the test's context under fakeHub.mu.
 // Background refreshes can reach the same node independently of the action under test.
 type deviceCallsForTest struct{}
+
+// sessionListOfflineForTest lets a test drop a node read on one request while unrelated background reads proceed.
+type sessionListOfflineForTest struct{}
 
 // afterListCall marks the context of the call a test arms afterList for (listHooked).
 type afterListCall struct{}
@@ -277,6 +317,9 @@ func (f *fakeHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		f.mu.Unlock()
 		if check && ctx.Err() != nil {
 			return nil, ctx.Err()
+		}
+		if offline, ok := ctx.Value(sessionListOfflineForTest{}).(func(string) bool); ok && offline(p.Device) {
+			return nil, fmt.Errorf("%s: %w", p.Device, apierr.ErrOffline)
 		}
 	}
 	if p.Method == DeviceSessionGet {
@@ -351,6 +394,9 @@ func (f *fakeHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		}
 	}
 	f.mu.Unlock()
+	if hooks.beforeCall != nil {
+		hooks.beforeCall(p)
+	}
 	if hooks.before != nil {
 		hooks.before(read)
 	}
@@ -360,6 +406,9 @@ func (f *fakeHub) DeviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 	result, err := f.deviceCall(ctx, p)
 	if hooks.after != nil {
 		hooks.after(read)
+	}
+	if hooks.afterCall != nil {
+		hooks.afterCall(p)
 	}
 	return result, err
 }
@@ -494,6 +543,9 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 			return json.Marshal(map[string]any{"items": page, "more_after": more})
 		}
 		items := f.items
+		if sid, _ := a["session_id"].(string); sid != "" && len(f.sentItems[sid]) > 0 {
+			items = append(slices.Clone(items), f.sentItems[sid]...)
+		}
 		if n, _ := a["turns"].(float64); f.pageTurns && n > 0 {
 			items = lastTurns(items, int(n))
 		}
@@ -593,6 +645,12 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		return json.Marshal(map[string]any{"launchers": f.launcherList})
 	case assistantwire.DeviceLaunchersModels:
 		name, _ := a["name"].(string)
+		if f.onLauncherModels != nil {
+			f.onLauncherModels(ctx, name)
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		models := f.agentModels[name]
 		if models == nil {
 			models = []proto.AgentModel{}
@@ -628,6 +686,7 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 	case assistantwire.DeviceClaudeAuthStatus:
 		name, _ := a["name"].(string)
 		f.authAsked = append(f.authAsked, p.Device+"/"+name)
+		f.authParams = append(f.authParams, maps.Clone(a))
 		if hold := f.authHold; hold != nil {
 			f.mu.Unlock()
 			select {
@@ -635,6 +694,9 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 			case <-ctx.Done():
 			}
 			f.mu.Lock()
+		}
+		if f.authBy != nil {
+			return json.Marshal(f.authBy(p.Device, a))
 		}
 		if f.auth == nil {
 			return nil, errors.New("unknown method claude.auth_status")
@@ -686,6 +748,9 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		if g, _ := a["goal"].(string); f.refuseGoal != nil && g != "" {
 			return nil, f.refuseGoal
 		}
+		if h, _ := a["host"].(string); f.refuseHost[h] != nil {
+			return nil, f.refuseHost[h]
+		}
 		if f.onStart != nil {
 			f.onStart(f, a) // the node changes state (for example its session list) while handling this start
 		}
@@ -721,13 +786,22 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		f.retired = append(f.retired, a["session_id"].(string))
 		f.retireArgs = append(f.retireArgs, map[string]any{"method": p.Method, "close_terminal": a["close_terminal"]})
 		return json.RawMessage(`{"closed":true}`), nil
-	case deviceSessionStop:
+	case deviceSessionRetireGuarded:
+		if f.retireErr != nil {
+			return nil, f.retireErr
+		}
+		f.retired = append(f.retired, a["session_id"].(string))
+		f.retireArgs = append(f.retireArgs, map[string]any{"method": p.Method, "close_terminal": a["close_terminal"]})
+		return json.RawMessage(`{"closed":true,"guard_verified":true}`), nil
+	case deviceSessionStop, nodeproto.StopIfIdle:
 		if f.retireErr != nil {
 			return nil, f.retireErr
 		}
 		if retire, _ := a["retire"].(bool); retire {
 			f.retired = append(f.retired, a["session_id"].(string))
-			f.retireArgs = append(f.retireArgs, map[string]any{"method": p.Method, "retire": true})
+			f.retireArgs = append(f.retireArgs, map[string]any{
+				"method": p.Method, "retire": true, "stop_cause": a["stop_cause"], "close_terminal": a["close_terminal"],
+			})
 		} else {
 			f.stopped = append(f.stopped, a["session_id"].(string))
 		}
@@ -775,6 +849,23 @@ func (f *fakeHub) deviceCall(ctx context.Context, p DeviceCall) (json.RawMessage
 		out := map[string]any{"session_id": id}
 		if f.assistantAnswer != nil {
 			maps.Copy(out, f.assistantAnswer(a))
+		}
+		source, _ := a["message_source"].(map[string]any)
+		if !f.omitSentItems && source["kind"] == proto.SourceSupervision {
+			if text, _ := a["text"].(string); text != "" {
+				target, _ := out["session_id"].(string)
+				if target == "" {
+					target = id
+				}
+				if f.sentItems == nil {
+					f.sentItems = map[string][]proto.Item{}
+				}
+				item := proto.Item{Seq: len(f.sentItems[target]) + 1, Role: "user", Kind: proto.KindText, Text: text, TS: time.Now()}
+				if cid, _ := a["client_msg_id"].(string); cid != "" {
+					item.ClientMsgID = cid
+				}
+				f.sentItems[target] = append(f.sentItems[target], item)
+			}
 		}
 		return json.Marshal(out)
 	}
@@ -834,11 +925,17 @@ func (f *fakeHub) AppCall(ctx context.Context, p AppCall) (json.RawMessage, erro
 		if f.apps[p.AppID+" "+p.Method] == nil { // else the test's answer (answerApp), below
 			return json.Marshal(map[string]any{"instructions": "", "skills": nil})
 		}
+	case assistantwire.AppPhone + " " + assistantwire.PhoneTools:
+		if f.apps[p.AppID+" "+p.Method] == nil {
+			return json.Marshal(map[string]any{"tools": []proto.Tool{}})
+		}
 	case AppSettings + " " + SettingsList:
 		return json.Marshal(map[string]any{"settings": []Setting{{Key: "inbox.rules", Title: "收件箱分拣规则", About: "the rules",
 			Value: "a string", Actions: []string{"get", "set"}}}})
 	case AppSettings + " " + AppTool:
-		return json.Marshal(proto.TextResult("the hub's: "+string(p.Params), false))
+		if f.apps[p.AppID+" "+p.Method] == nil { // else the test's answer (answerApp), below
+			return json.Marshal(proto.TextResult("the hub's: "+string(p.Params), false))
+		}
 	case AppPlugins + " " + assistantwire.PluginsPresets:
 		return json.Marshal(map[string]any{"presets": f.presets})
 	case AppPlugins + " " + assistantwire.PluginsVoice:
@@ -863,7 +960,7 @@ func (f *fakeHub) NotifyRequest(_ context.Context, p NotifyRequest) (NotifyResul
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	switch p.Notification.Kind {
-	case NotifyPush, assistantwire.NotifyDone, assistantwire.NotifyInput, assistantwire.NotifyReply, assistantwire.NotifyDecide:
+	case NotifyPush, assistantwire.NotifyDone, assistantwire.NotifyInput, assistantwire.NotifyReply, assistantwire.NotifyDecide, assistantwire.NotifyHealthWater:
 	default:
 		return NotifyResult{}, fmt.Errorf("kind %q", p.Notification.Kind)
 	}
@@ -1065,15 +1162,53 @@ func (f *fakeHub) eventTypes() string {
 // in memory, as Service does with no store).
 type memStore struct {
 	noPlans
-	mu   sync.Mutex
-	vals map[string][]byte
-	puts int
+	mu      sync.Mutex
+	vals    map[string][]byte
+	outside map[string]db.OutsideDirection
+	puts    int
 	// failSetting: what reading a setting fails with (nil: it reads; set through setFailSetting).
 	failSetting error
-	// failPut: what writing settings fails with (nil: it writes); nothing is written then.
+	// failPut: what writing settings fails with (nil: it writes; set through setFailPut); nothing is written then.
 	failPut error
 	// failKeys: what reading one key fails with, the other keys still reading (set through failKey).
 	failKeys map[string]error
+	// routing: the model_routing rows written (PutModelRouting).
+	routing []db.ModelRoutingRow
+}
+
+// rawSetting returns a cloned copy of the raw JSON bytes stored for key under m.mu.
+func (m *memStore) rawSetting(key string) ([]byte, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	raw, ok := m.vals[key]
+	if !ok {
+		return nil, false
+	}
+	return slices.Clone(raw), true
+}
+
+// setRawSetting stores raw JSON bytes directly for key under m.mu without incrementing puts (for seeding raw or corrupt JSON).
+func (m *memStore) setRawSetting(key string, raw []byte) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.vals == nil {
+		m.vals = map[string][]byte{}
+	}
+	m.vals[key] = slices.Clone(raw)
+}
+
+// putCount returns the number of settings writes recorded under m.mu.
+func (m *memStore) putCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.puts
+}
+
+// snapshotRaw captures putCount and a cloned copy of key's stored JSON bytes atomically under m.mu.
+func (m *memStore) snapshotRaw(key string) (int, []byte) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.puts, slices.Clone(m.vals[key])
 }
 
 // setFailSetting makes reading every setting fail with err from now on; nil reads them again. It takes the lock, as the
@@ -1101,6 +1236,28 @@ func (m *memStore) failKey(key string, err error) {
 
 // noPlans is a store without the task_plans and assistant_feed tables.
 type noPlans struct{}
+
+func (m *memStore) PutPlacement(ctx context.Context, p db.PlacementRow) error {
+	return m.PutSetting(ctx, "placement."+p.ID, p.Decision)
+}
+
+func (noPlans) PutPlacement(context.Context, db.PlacementRow) error { return nil }
+
+func (m *memStore) PutModelRouting(_ context.Context, r db.ModelRoutingRow) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.routing = append(m.routing, r)
+	return nil
+}
+
+// modelRoutings are the model_routing rows written so far.
+func (m *memStore) modelRoutings() []db.ModelRoutingRow {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return slices.Clone(m.routing)
+}
+
+func (noPlans) PutModelRouting(context.Context, db.ModelRoutingRow) error { return nil }
 
 func (noPlans) CreateTaskPlan(context.Context, db.TaskPlanRow) error {
 	return errors.New("no task_plans here")
@@ -1225,6 +1382,53 @@ func (m *memStore) PutSettings(ctx context.Context, values map[string]any) error
 	return nil
 }
 
+func (m *memStore) OutsideDirections(_ context.Context) (map[string]db.OutsideDirection, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.failSetting != nil {
+		return nil, m.failSetting
+	}
+	out := make(map[string]db.OutsideDirection, len(m.outside))
+	for id, ref := range m.outside {
+		out[id] = ref
+	}
+	return out, nil
+}
+
+func (m *memStore) CreateOutsideDirection(ctx context.Context, id string, ref db.OutsideDirection, values map[string]any) error {
+	encoded := make(map[string][]byte, len(values))
+	for key, value := range values {
+		b, err := json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		encoded[key] = b
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if m.failPut != nil {
+		return m.failPut
+	}
+	if _, exists := m.outside[id]; exists {
+		return errors.New("outside direction already exists")
+	}
+	if m.vals == nil {
+		m.vals = map[string][]byte{}
+	}
+	if m.outside == nil {
+		m.outside = map[string]db.OutsideDirection{}
+	}
+	for key, b := range encoded {
+		m.vals[key] = b
+	}
+	m.outside[id] = ref
+	m.puts += len(encoded) + 1
+	return nil
+}
+
 // newTestService is an assistant on f with an in-memory store.
 // testLogf is t.Logf until the test ends, nothing after: the service's goroutines (a run's watcher, a snapshot being
 // published) can still log when the test is over, and t.Logf then panics and fails the whole package.
@@ -1313,13 +1517,21 @@ func newServiceOn(t testing.TB, f *fakeHub, st Store) *Service {
 // withSettings saves f.settings as s's own (none: s keeps what it has), and gives the hub's hello the fake model.
 func withSettings(t testing.TB, f *fakeHub, s *Service) *Service {
 	t.Helper()
+	installTestTrackKinds(s)
 	f.fakeModel(t)
 	// These tests are about what a plan does once it exists; what task_plan requires of a brief is task_brief_test.go's,
 	// which turns this off.
 	s.briefsOptional = true
+	// And they start the main conversation's plans from their cards: that a supervisor's plan starts at once is
+	// plan_owner_step_test.go's, which turns this off.
+	s.mainPlansWait = true
 	// And about what a supervisor does with its tasks, told to the main conversation: the background supervisor that
 	// takes them by default is supervise_background_test.go's, which turns this off.
 	s.noBackground = true
+	// And with each report told at once, not held for its Agent's stop (reportStopHold): supervise_slim_test.go's.
+	s.noReportHold = true
+	// And with no information tagging (info_tag.go), as before it: its tests turn it on (f.infoTagModel).
+	s.noInfoTag = !f.infoTagModel
 	if f.settings != nil {
 		setSettings(t, s, func(v *Settings) { *v = *f.settings })
 	}
@@ -1508,7 +1720,7 @@ type told struct {
 
 // launcherAgent is the agent a launcher starts in these tests: the one its name starts with, else claude.
 func launcherAgent(name string) string {
-	for _, other := range []string{"codex", "gemini"} {
+	for _, other := range []string{"codex", "gemini", "traex"} {
 		if strings.HasPrefix(name, other) {
 			return other
 		}
@@ -1530,6 +1742,9 @@ func (f *fakeHub) fakeModel(t testing.TB) {
 	jsonOnly := strings.TrimSpace(prompts.RenderJSONOnly(""))
 	tabName := prompts.RenderTabName()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		f.modelRequests++
+		f.mu.Unlock()
 		if r.Method == http.MethodGet && r.URL.Path == "/" { // a node's port probe (node/ports.go), not this test's client
 			http.NotFound(w, r)
 			return
@@ -1547,10 +1762,19 @@ func (f *fakeHub) fakeModel(t testing.TB) {
 		}
 		f.mu.Lock()
 		reply, fail, down, delay, stop := "", false, false, time.Duration(0), "end_turn"
+		var tabModelGate <-chan struct{}
+		var tabModelEntered chan struct{}
 		switch {
 		case in.System == tabName:
 			f.tabAsked = append(f.tabAsked, in.System+"\n---\n"+user)
 			reply = f.tabReply
+			tabModelGate, tabModelEntered = f.tabModelGate, f.tabModelEntered
+		case strings.HasPrefix(in.System, "You tag a piece of text"): // information tagging (info_tag.go)
+			f.infoTagAsked = append(f.infoTagAsked, modelCall{in.System, user})
+			reply, fail = cmp.Or(f.infoTag, `{"categories":[]}`), f.infoTagFails
+		case strings.HasPrefix(in.System, "You sort a note the owner jotted down"): // quick capture (capture_sort.go)
+			f.captureSortAsked = append(f.captureSortAsked, modelCall{in.System, user})
+			reply, fail = f.captureSort, f.captureSort == ""
 		case strings.Contains(in.System, "起一个待办标题"): // a task's todo (todo_titles.go): none unless the test gives one
 			f.todoTitleAsked = append(f.todoTitleAsked, modelCall{in.System, user})
 			reply, fail = f.todoTitleReply, f.todoTitleErr != nil
@@ -1595,6 +1819,16 @@ func (f *fakeHub) fakeModel(t testing.TB) {
 			down = f.modelDown
 		}
 		f.mu.Unlock()
+		if tabModelEntered != nil {
+			close(tabModelEntered)
+		}
+		if tabModelGate != nil {
+			select {
+			case <-tabModelGate:
+			case <-r.Context().Done():
+				return
+			}
+		}
 		if fail {
 			http.Error(w, `{"error":{"message":"no model"}}`, http.StatusBadRequest)
 			return
@@ -1614,7 +1848,8 @@ func (f *fakeHub) fakeModel(t testing.TB) {
 	}))
 	t.Cleanup(srv.Close)
 	key := filepath.Join(t.TempDir(), "key")
-	if err := os.WriteFile(key, []byte("k"), 0o600); err != nil {
+	// ai shares a quota hold by address and credential. A recycled test port belongs to a new fixture.
+	if err := os.WriteFile(key, []byte(randomHex(16)), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	f.hello.Models.AI = ai.Config{BaseURL: srv.URL, APIKeyFile: key, Model: "fake"}

@@ -118,10 +118,33 @@ func TestLauncherHealthRecordsAppStarts(t *testing.T) {
 	if h := healthState(s, "l4", "work"); h.State != healthOK {
 		t.Fatalf("a start that worked: %+v", h)
 	}
+	// A successful follow-up can clear the failed start as soon as it is recorded. Read both states in order.
+	checking := make(chan struct{})
+	release := make(chan struct{})
+	f.checkWait = func(ctx context.Context) error {
+		select {
+		case <-checking:
+		default:
+			close(checking)
+		}
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	s.StartEnded(ctx, StartEnded{MachineID: "box", Error: "claude exited before showing its input box"})
+	<-checking
 	if h := healthState(s, "box", "claude"); h.State != healthFailing || h.Source != healthSourceStart {
 		t.Fatalf("an app start of claude that failed: %+v", h)
 	}
+	close(release)
+	f.checkWait = nil
+	waitFor(t, "the passing recheck of the failed app start", func() bool {
+		checked := healthState(s, "box", "claude")
+		return checked.State == healthOK && checked.Source == healthSourceCheck
+	})
 	s.StartEnded(ctx, StartEnded{MachineID: "server", Launcher: "work", Error: "directory /nope does not exist"})
 	if _, ok := s.launcherHealth(ctx, "server", "work"); ok {
 		t.Fatal("a refused request counted")

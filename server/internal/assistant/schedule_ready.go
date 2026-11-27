@@ -28,7 +28,7 @@ import (
 // errNotReady: the run was skipped because the computer or the model is not set up yet.
 var errNotReady = i18n.Err("assistant-schedule.not_ready_skipped")
 
-// feedNotice is a line the hub writes into a conversation (ref empty; body: {"text"}).
+// feedNotice is a line the hub writes into a conversation (ref is the to-do ID for a task notice; body: {"text"}).
 const feedNotice = "notice"
 
 // noticeBody is a notice's body.
@@ -132,7 +132,7 @@ func (s *Service) noteReady(ctx context.Context, t Task) {
 	}
 	l := s.lang(ctx)
 	text := i18n.T(l, "assistant-schedule.ready_again", i18n.Args{"name": t.labelIn(l)})
-	if t.Space == SpaceHealth { // the main conversation does not name a health task either (health.go)
+	if s.trackPolicy(ctx, t.Space).Redact { // the main conversation does not name a task of a space that redacts either (health.go)
 		text = i18n.T(l, "assistant-schedule.ready_again_unnamed")
 	}
 	if _, err := s.appendFeed(ctx, main, feedNotice, "", noticeBody{Text: text}); err != nil {

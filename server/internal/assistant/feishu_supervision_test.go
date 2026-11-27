@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/feishubot"
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/screen"
 )
@@ -23,6 +23,7 @@ func namedDirection(t *testing.T, e *routeEnv) {
 }
 
 func TestLarkSupervisedTerminalDialog(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	const terminal = "  Which edition should we use?\n\n› 1. Pocket\n  2. Standard\n\n  Press enter to confirm or esc to go back\n"
 	dialog := screen.ParseDialog(terminal)
 	if dialog == nil || len(dialog.Options) != 2 {
@@ -73,8 +74,9 @@ func TestLarkSupervisedTerminalDialog(t *testing.T) {
 		return p != nil && p.ix.CreatedAt.After(first) && p.route.at() == "lead1"
 	})
 	e.f.withQueue(e.lastShown(id))
-	if _, err := runJSON(t, e.s, "lead1", "interaction_answer", map[string]any{"machine": "mac", "session_id": sess.SessionID, "interaction_id": id, "answers": map[string]string{dialog.Question: "Pocket"}}); err == nil || !strings.Contains(err.Error(), "only the user") || len(e.d.callsTo("mac", "session.keys")) != 0 {
-		t.Fatalf("terminal choices are the user's: %v", err)
+	// The supervisor could pick Pocket itself (ask_route_screen_test.go); here it hands the choice to the owner.
+	if _, err := runJSON(t, e.s, "lead2", "interaction_answer", map[string]any{"machine": "mac", "session_id": sess.SessionID, "interaction_id": id, "answers": map[string]string{dialog.Question: "Pocket"}}); err == nil || !strings.Contains(err.Error(), "only the user") || len(e.d.callsTo("mac", "session.keys")) != 0 {
+		t.Fatalf("a conversation the dialog was not handed to answered it: %v", err)
 	}
 	e.s.askTick(time.Now().Add(24 * time.Hour))
 	e.s.askTick(time.Now().Add(48 * time.Hour))
@@ -90,7 +92,7 @@ func TestLarkSupervisedTerminalDialog(t *testing.T) {
 		t.Fatalf("after escalation: %d cards, %d pushes", len(posts), e.pushesOf(id))
 	}
 	raw := posts[0]["card"].(string)
-	var card feishubot.Card
+	var card botcard.Card
 	if err := json.Unmarshal([]byte(raw), &card); err != nil {
 		t.Fatal(err)
 	}
@@ -117,6 +119,7 @@ func TestLarkSupervisedTerminalDialog(t *testing.T) {
 // are no named directions. An ordinary session and the owner's protected input
 // keep their existing paths.
 func TestLarkTerminalRoutingWithoutLeaders(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newRouteEnv(t, nil, false)
 	screenAsk := func(id, session string) proto.Interaction {
 		ix := askQuestion(id, session)
@@ -126,9 +129,16 @@ func TestLarkTerminalRoutingWithoutLeaders(t *testing.T) {
 	}
 	plain := screenAsk("ordinary", "unrelated-session")
 	e.raise(plain)
-	waitFor(t, "ordinary terminal sent to owner", func() bool { return e.pushesOf(plain.ID) == 1 })
-	if e.lastShown(plain.ID).Delegating {
-		t.Fatal("ordinary terminal sent to a supervisor")
+	waitFor(t, "ordinary terminal routed to main", func() bool {
+		for _, m := range laterFor(e.s, "conv1") {
+			if m.From == cardAgentQuestion && strings.Contains(m.Text, "interaction_id="+plain.ID) {
+				return true
+			}
+		}
+		return false
+	})
+	if !e.lastShown(plain.ID).Delegating || e.pushesOf(plain.ID) != 0 {
+		t.Fatal("ordinary non-owner terminal pushed to the owner instead of routing to main")
 	}
 	supervised := screenAsk("supervised", "worker-1")
 	e.raise(supervised)
@@ -161,6 +171,7 @@ func TestLarkTerminalRoutingWithoutLeaders(t *testing.T) {
 }
 
 func TestLarkTerminalProtectedInput(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	const privateText = "SYNTHETIC-PRIVATE-VALUE"
 	ix := proto.Interaction{Kind: proto.IxScreen, Screen: privateText, Dialog: &screen.Dialog{
 		Question: "Which edition?", Detail: privateText,
@@ -170,13 +181,10 @@ func TestLarkTerminalProtectedInput(t *testing.T) {
 		t.Fatal("only a choice's question and plain labels can go to its supervisor")
 	}
 	for name, change := range map[string]func(*proto.Interaction){
-		"raw":      func(v *proto.Interaction) { v.Dialog = nil },
-		"secret":   func(v *proto.Interaction) { v.Secret = true },
-		"private":  func(v *proto.Interaction) { v.Private = true },
-		"form":     func(v *proto.Interaction) { v.Fields = []proto.Field{{}} },
-		"command":  func(v *proto.Interaction) { v.Dialog.Command = "example" },
-		"warning":  func(v *proto.Interaction) { v.Dialog.Warning = "warning" },
-		"deadline": func(v *proto.Interaction) { v.Dialog.DeadlineAction = screen.DeadlineDeny },
+		"raw":     func(v *proto.Interaction) { v.Dialog = nil },
+		"secret":  func(v *proto.Interaction) { v.Secret = true },
+		"private": func(v *proto.Interaction) { v.Private = true },
+		"form":    func(v *proto.Interaction) { v.Fields = []proto.Field{{}} },
 	} {
 		v, d := ix, *ix.Dialog
 		v.Dialog = &d
@@ -185,26 +193,42 @@ func TestLarkTerminalProtectedInput(t *testing.T) {
 			t.Errorf("%s prompt went to a supervisor", name)
 		}
 	}
+	// A command approval, a warning and a countdown are the supervisor's to decide (#13752's rule for permissions);
+	// the plain-question wording (terminalQuestion) is for the ordinary choice only.
+	for name, change := range map[string]func(*proto.Interaction){
+		"command":  func(v *proto.Interaction) { v.Dialog.Command = "example" },
+		"warning":  func(v *proto.Interaction) { v.Dialog.Warning = "warning" },
+		"deadline": func(v *proto.Interaction) { v.Dialog.DeadlineAction = screen.DeadlineDeny },
+	} {
+		v, d := ix, *ix.Dialog
+		v.Dialog = &d
+		change(&v)
+		if !routable(v) || terminalQuestion(v) || userScreen(v) != "" {
+			t.Errorf("%s prompt: routable %v, ordinary %v, user's %q", name, routable(v), terminalQuestion(v), userScreen(v))
+		}
+	}
 	for _, fixture := range []string{"claude-2.1.322-bypass-confirm-160.txt", "claude-2.1.312-trust-162.txt"} {
 		plain, err := os.ReadFile("../screen/testdata/" + fixture)
 		if err != nil {
 			t.Fatal(err)
 		}
 		ix.Dialog = screen.ParseDialog(string(plain))
-		if ix.Dialog == nil || routable(ix) {
-			t.Errorf("%s permission should remain the owner's", fixture)
+		// Held by the supervisor (never pushed on its own), but only the owner answers it: ask_escalate.
+		if ix.Dialog == nil || !routable(ix) || userScreen(ix) == "" || terminalQuestion(ix) {
+			t.Errorf("%s permission should remain the owner's to answer", fixture)
 		}
 	}
 }
 
 func TestLarkSupervisionCardTitles(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newRouteEnv(t, nil, true)
 	namedDirection(t, e)
 	ctx := context.Background()
 	it := &reportItem{todo: e.todo.ID, state: reportFailed}
 	reports, _ := e.s.reportCards(ctx, []*reportItem{it})
 	stuck, _ := e.s.goalCard(ctx, []*reportItem{it})
-	cards := map[string]*feishubot.Card{
+	cards := map[string]*botcard.Card{
 		"progress": reports[0], "stuck": stuck,
 		"conclusion": e.s.conclusionCard(ctx, e.todo, acceptAsk{Conclusion: true, Outcome: outcomeDone}),
 		"verify":     e.s.acceptCard(ctx, e.todo, acceptAsk{}, false),

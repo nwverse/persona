@@ -2,6 +2,7 @@
 <resources>
     <string name="chat_plan_approve_stepwise">Approve, confirm each step</string>
     <string name="chat_menu_fork">Branch to new chat</string>
+    <string name="chat_menu_fork_wait_turn">Wait for the current turn to finish</string>
     <string name="chat_menu_forked">Branched to a new chat</string>
     <string name="chat_menu_fork_failed">Couldn\'t branch: %1$s</string>
     <string name="chat_menu_rewind">Rewind to here</string>

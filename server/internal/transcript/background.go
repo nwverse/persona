@@ -65,8 +65,9 @@ func (m *Meta) trackBackground(toolUseID, name string, raw json.RawMessage, ts t
 		if m.loopPending == nil {
 			m.loopPending = map[string]proto.LoopInfo{}
 		}
+		delay := min(time.Duration(in.Delay)*time.Second, time.Hour)
 		m.loopPending[toolUseID] = proto.LoopInfo{Kind: "wakeup", Prompt: in.Prompt, Reason: in.Reason,
-			IntervalSeconds: int(in.Delay), NextAt: ts.Add(time.Duration(in.Delay) * time.Second)}
+			IntervalSeconds: int(in.Delay), NextAt: ts.Add(delay)}
 	case "CronCreate":
 		if (in.Recurring != nil && !*in.Recurring) || onceCron(in.Cron) {
 			return // a one-off reminder, not a loop
@@ -203,8 +204,9 @@ func (m *Meta) backgroundStarted(toolUseID, result string, isError bool, ts time
 	if !ok {
 		if mv := bgMovedRe.FindStringSubmatch(result); mv != nil && !isError {
 			m.removeBackground(mv[1])
+			// Only the timeout's move: a command the turn waited for and could not is the likeliest to hang (#16418).
 			m.Background = append(m.Background, proto.BackgroundTask{ID: mv[1], Kind: "shell", Description: "超时转到后台的命令",
-				OutputFile: outputFile(result), StartedAt: ts})
+				OutputFile: outputFile(result), StartedAt: ts, MovedFromForeground: true})
 		}
 		return
 	}
