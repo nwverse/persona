@@ -14,6 +14,9 @@ Eligible sessions advertise `capabilities.takeover: {running, can_resume, reason
 
 The manager sends one Ctrl+D through the selected CLI session's terminal writer only after confirming the composer is empty, with no modal or queued input, and rechecking both process identity and terminal instance. Remote terminal-writer bridges are supported. It waits for the process to exit, the transcript to end on a complete stable line, and a fresh scan to find no writer. For an idle, unowned Codex App thread (no live App bus, no connected app-server owner, no live rollout holder, no running turn), it rechecks that the Codex App is not running and could not load the thread before launching `codex resume <thread>` under the same `CODEX_HOME`. Any failed check or timeout refuses takeover; no signal or forced termination is used. Takeover resumes the same thread and session ID in a new terminal tab of the start's terminal engine, else the first other one the computer has (herdr, Herdr App, Orca, Tern; Orca since #17044, so an Orca-only computer can take over too). The separate continue option starts an independent session with context and the attached to-do preserved. `encrypted_context` and `app_running` are continuation-only.
 
+CLI takeover also supports non-default Codex homes: the new terminal runs `CODEX_HOME=<home> codex ... resume <thread>` with the original thread ID, and the session keeps its opaque list ID.
+Sidebar-listed threads with the shared app-server stamp (#10438, #14492) follow Codex App takeover rules (`app_owned: true`, confirmation required, continuation only while the App runs) and have no ordinary terminal resume.
+
 ## Recognition
 
 - herdr reports Codex panes as `agent: "codex"`. With herdr's Codex integration installed (`~/.codex/herdr-agent-state.sh`, registered on

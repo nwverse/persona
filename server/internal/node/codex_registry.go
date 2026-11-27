@@ -140,6 +140,16 @@ func codexSourceID(home, raw, legacy string) string {
 	return "c0de-" + hex.EncodeToString(h[:16])
 }
 
+// matchesSourceID reports whether id is the source's registry key: the raw thread ID in the legacy home or an opaque key in other homes.
+func (r *codexRegistry) matchesSourceID(id string, src codexSource) bool {
+	if r == nil || src.thread == "" {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return codexSourceID(src.home, src.thread, r.config.LegacyHome) == id
+}
+
 func (n *Node) configureCodex(c proto.CodexConfig) {
 	if n.sessionScope != nil {
 		discovery := false
@@ -1114,7 +1124,8 @@ func (n *Node) codexSessionsIn(seen map[string]bool, pass *codexListPass) []prot
 			}
 		}
 		if s.SourceKind == "codex_history" && !s.Capabilities.Send && !s.IsSubagent && !n.codexBlocked(id) && !ownerAmbiguous {
-			if codexAppOrigin(src) {
+			// A shared stamp corroborated by the App sidebar uses the same takeover safeguards.
+			if codexAppOrigin(src) || desktopViewOnly && codexThreadOrigin(src).sharedAppStamp() && pass.appState(src.home).listed(src.thread) {
 				liveWriter := liveRollouts[id] != "" || s.Status == proto.StatusWorking || n.codexRemoteConnecting(src.home)
 				if !liveWriter && !pass.desktopAvailable(src.home) {
 					resumable := n.codexResumableIn(context.Background(), id, pass)
