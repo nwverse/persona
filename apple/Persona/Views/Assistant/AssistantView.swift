@@ -417,6 +417,15 @@ struct AssistantView: View {
                 TasksStore.shared.fullAgent = nil
                 navPath.wrappedValue.append(key)
             }
+            // A task's detail asked for (a "Sent to" line, a card's task, a dispatch link): in the Sidebar layout's page a
+            // value on its path, so it belongs to the root it was opened on (#13156). Pushed by view from the conversation
+            // (`detailPresentation`), a pick in the sidebar replaced the root under it and the page stayed in front.
+            .onChange(of: taskDetailByValue && (TasksStore.shared.detailTask != nil || TasksStore.shared.detailAgent != nil),
+                      initial: true) { _, asked in
+                guard asked, let route = TasksStore.shared.takeDetail() else { return }
+                navPath.wrappedValue.append(route)
+            }
+            .environment(\.taskDetailByValue, taskDetailByValue)
             // On appear too (a cold launch onto Inbox asks before this page exists), but each request once: the root
             // appears again after every pop, and replaying the last request pushed the inbox right back.
             .onChange(of: request?.serial, initial: true) { _, serial in
@@ -562,6 +571,16 @@ struct AssistantView: View {
                 _ = await model.clearMainContext()
             }
             #endif
+    }
+
+    /// The Sidebar layout's page beside its column takes a task's detail on its path (#13156); elsewhere it is a sheet, or
+    /// in regular width pushed by view from the conversation as before (`detailPresentation`).
+    private var taskDetailByValue: Bool {
+        #if os(iOS)
+        embedded && widthClass == .regular
+        #else
+        false
+        #endif
     }
 
     /// The sidebar's places push by value (`ShellRoute`, `ShellDestinations`): the iPhone shell and the iPad's column.

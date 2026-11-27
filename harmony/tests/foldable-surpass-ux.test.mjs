@@ -195,6 +195,10 @@ test('QuickCommandSheet, FoldInspectorPanel, SessionTools, and Index wire stage-
   assert.match(sheet, /this\.model\.directoryOwnerFor\(row\)\?\.useHerdrTabName \?\? this\.model\.useHerdrTabName/);
   assert.equal((sheet.match(/row\.data\(\)/g) || []).length, 1);
   assert.match(sheet, /entry\.id \+ ':' \+ entry\.title \+ ':' \+ entry\.subtitle/);
+  assert.match(sheet, /@Param autoFocus: boolean = false;/);
+  assert.match(sheet, /\.defaultFocus\(this\.autoFocus\)/);
+  assert.match(sheet, /\.align\(Alignment\.TopStart\)/);
+  assert.match(sheet, /group\.entries\.map\(/);
 
   // SessionTools: two-tier non-clipping header in isCompactPane
   assert.match(tools, /if \(this\.isCompactPane\)/);
@@ -215,6 +219,7 @@ test('QuickCommandSheet, FoldInspectorPanel, SessionTools, and Index wire stage-
   assert.match(index, /id\('shell\.quick\.palette'\)/);
   assert.match(index, /SheetType\.CENTER/);
   assert.match(index, /SheetSize\.LARGE/);
+  assert.match(index, /autoFocus:\s*this\.wide\(\)/);
   assert.match(index, /action:toggle_theme/);
   assert.match(index, /const saved = await this\.model\.setAppearance\(nextMode\);[\s\S]*if \(saved && this\.model\.appearance === nextMode\)[\s\S]*this\.environment\.dark = nextMode === 2;/);
   assert.match(index, /book_half_open[\s\S]*fold_posture_book/);

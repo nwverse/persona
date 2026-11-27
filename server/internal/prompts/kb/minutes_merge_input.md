@@ -11,5 +11,9 @@
 待办：{{range .}}
 - {{if .Photo}}[P{{.Photo}}]{{else}}[{{.Line}}]{{end}} {{with .Who}}{{.}}：{{end}}{{.Text}}{{with .By}}（期限：{{.}}）{{end}}{{with .DueDate}}（{{.}}）{{end}}{{end}}{{end}}{{with .Open}}
 未决：{{range .}}
-- {{if .Photo}}[P{{.Photo}}]{{else}}[{{.Line}}]{{end}} {{.Text}}{{end}}{{end}}
+- {{if .Photo}}[P{{.Photo}}]{{else}}[{{.Line}}]{{end}} {{.Text}}{{end}}{{end}}{{with .Debates}}
+分歧：{{range .}}
+- {{.Question}}{{with .Topic}}〈{{.}}〉{{end}}（{{if .Settled}}已谈拢{{else}}仍有分歧{{end}}）{{range .Positions}}
+  - [{{.Line}}] {{.Stance}}{{with .Who}}（{{.}}）{{end}}{{end}}{{if .OutcomeLine}}
+  - [{{.OutcomeLine}}] 结果：{{.OutcomeText}}{{end}}{{end}}{{end}}
 {{end}}

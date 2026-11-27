@@ -29,6 +29,7 @@ export struct QuickCommandSheet {
   @Require @Param model: ClientModel;
   @Param showWorkbench: boolean = false;
   @Param showLiveView: boolean = true;
+  @Param autoFocus: boolean = false;
   @Event onSelectEntry: (entry: QuickCommandEntry) => void = () => {};
   @Event onClose: () => void = () => {};
   @Local private query: string = '';
@@ -286,7 +287,7 @@ export struct QuickCommandSheet {
           .backgroundColor(Color.Transparent)
           .padding({ left: 0, right: 0 })
           .enterKeyType(EnterKeyType.Go)
-          .defaultFocus(true)
+          .defaultFocus(this.autoFocus)
           .onChange((value: string) => {
             this.query = value;
           })
@@ -354,13 +355,14 @@ export struct QuickCommandSheet {
                 .shadow(PhoneStyle.cardElevation(this.env.dark))
                 .clip(true)
               }.width('100%').alignItems(HorizontalAlign.Start)
-            }, (group: QuickCommandGroup) => group.category)
+            }, (group: QuickCommandGroup) => group.category + ':' + group.entries.map((entry: QuickCommandEntry) => entry.id + '|' + entry.title + '|' + entry.badge).join(','))
           }
           .width('100%')
           .padding({ left: 16, right: 16, bottom: 28 })
         }
         .width('100%')
         .layoutWeight(1)
+        .align(Alignment.TopStart)
         .scrollBar(BarState.Off)
         .animation(Motion.state(this.env.reduceMotion))
       }

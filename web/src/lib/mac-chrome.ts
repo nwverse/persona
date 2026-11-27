@@ -49,6 +49,10 @@ function subscribe(listener: () => void): () => void {
 /** Subscribes to macOS unified-titlebar chrome state; returns browser-safe defaults outside macOS desktop. */
 export const useMacChrome = (): DesktopWindowChrome => useSyncExternalStore(subscribe, getSnapshot, () => DEFAULT_MAC_CHROME);
 
+/** A shell's `data-mac-chrome` (styles.css): the window under the unified titlebar, or in full screen; absent outside it. */
+export const macChromeMode = (chrome: DesktopWindowChrome): "windowed" | "fullscreen" | undefined =>
+  chrome.unifiedTitlebar ? (chrome.fullScreen ? "fullscreen" : "windowed") : undefined;
+
 /** Computes the 44 px co-linear Apple G2 continuous-curvature SVG cutout and contour paths for `<main>`. */
 export function appleG2Contour(W: number, H: number, bay: "rail" | "hidden" | null): { clip: string; stroke: string; rim: string } {
   const clipTail = `H ${W - 14} A 14,14 0 0 1 ${W},14 V ${H - 14} A 14,14 0 0 1 ${W - 14},${H} H 14 A 14,14 0 0 1 0,${H - 14}`;
