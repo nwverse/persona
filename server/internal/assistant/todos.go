@@ -132,6 +132,9 @@ type Todo struct {
 	// Project: the slug of the knowledge-base project it belongs to (#2581, todo_project.go); the apps group open
 	// todos by it. Clients that do not know it show the todo as ever.
 	Project string `json:"project,omitempty"`
+	// Temporary: a one-off to-do the owner (or the sort, todo_sort.go) marked as belonging to no project (#13026).
+	// Clients that do not know it show the to-do as ever.
+	Temporary bool `json:"temporary,omitempty"`
 	// Kind: "concern" for something the owner raised in the main conversation (#3561, concerns.go), which closes only
 	// once its outcome was reported to them; left out for a to-do or a task. Set when it is made, never changed.
 	Kind string `json:"kind,omitempty"`
@@ -1264,6 +1267,7 @@ func (s *Service) todoRoutes() {
 			Notes                *string         `json:"notes"`
 			Done                 *bool           `json:"done"`
 			Project              *string         `json:"project"`
+			Temporary            *bool           `json:"temporary"`
 			PartOf               json.RawMessage `json:"part_of"`
 			After                json.RawMessage `json:"after"`
 			RequireAcceptedAfter *bool           `json:"require_accepted_after"`
@@ -1274,7 +1278,7 @@ func (s *Service) todoRoutes() {
 			apierr.Write(w, http.StatusBadRequest, err)
 			return
 		}
-		e := db.TodoEdit{Title: in.Title, Notes: in.Notes, Done: in.Done}
+		e := db.TodoEdit{Title: in.Title, Notes: in.Notes, Done: in.Done, Temporary: in.Temporary}
 		if in.RequireAcceptedAfter != nil && !fullRole(r) {
 			apierr.Write(w, http.StatusForbidden, errors.New("only the owner can change request prerequisite enforcement"))
 			return

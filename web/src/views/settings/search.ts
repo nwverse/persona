@@ -52,6 +52,8 @@ const SHARED_INDEX: SearchGroup[] = [
   { tab: "general", group: t("ui-look.sidebar_usage"), anchor: "sidebar-usage" },
   { tab: "general", group: t("settings.start_page"), anchor: "start-page" },
   { tab: "general", group: t("settings.start_page_open_on"), hint: t("settings.start_page_main"), anchor: "open-on" },
+  { tab: "general", group: t("overview-projects.settings_title"), anchor: "overview" },
+  { tab: "general", group: t("overview-projects.settings_classic"), anchor: "overview-classic" },
   { tab: "general", group: t("settings.sidebar_pages"), anchor: "sidebar-pages" },
   // General › Translation (its language and what it translates show once it is on)
   { tab: "general", group: t("settings-nav.tab_translate"), anchor: "settings-translation" },

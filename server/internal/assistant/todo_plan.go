@@ -31,7 +31,7 @@ func (t *Todo) setPlan(row db.TodoRow) {
 		t.DueDate = row.DueDate.UTC().Format(dayLayout)
 	}
 	t.RemindAt, t.RemindedAt, t.Priority = row.RemindAt, row.RemindedAt, row.Priority
-	t.Project = row.Project
+	t.Project, t.Temporary = row.Project, row.Temporary
 	t.Kind = row.Kind
 	t.SeenAt = row.SeenAt
 	t.AutoSeenUndone = row.AutoSeenUndone
@@ -53,7 +53,7 @@ func (t *Todo) keepPlan(row *db.TodoRow) {
 		row.DueDate = &d
 	}
 	row.RemindAt, row.RemindedAt, row.Priority = t.RemindAt, t.RemindedAt, t.Priority
-	row.Project = t.Project
+	row.Project, row.Temporary = t.Project, t.Temporary
 	row.Kind = t.Kind
 	row.SeenAt = t.SeenAt
 	row.AutoSeenUndone = t.AutoSeenUndone

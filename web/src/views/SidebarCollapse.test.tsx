@@ -42,6 +42,8 @@ const withAgent = async () => {
 
 beforeEach(() => {
   localStorage.clear();
+  // these tests are about the groupings as they were: By to-do, the default before By project (knowledge base)
+  localStorage.setItem("persona.agentGrouping", "todo");
   setSidebarCollapsed(false);
   vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(new Response("{}", { headers: { "Content-Type": "application/json" } }))));
   history.replaceState(null, "", "/");
@@ -298,19 +300,19 @@ describe("folding a block of the sidebar", () => {
     expect(button("新建 Agent")).toBeDefined();
   });
 
-  it("offers the groupings as segments above the quick filter, 按待办 first and the default (#2812)", async () => {
+  it("offers the groupings as segments above the quick filter, 按项目 first (the default) and 按待办 as chosen (#2812)", async () => {
     act(() => root.render(<Sidebar route={{ name: "home" }} onSearch={() => {}} onNewAgent={() => {}} />));
     await flush();
     const bar = host.querySelector<HTMLElement>('[role="radiogroup"][aria-label="Agent 分组"]')!;
     const segs = [...bar.querySelectorAll<HTMLButtonElement>('[role="radio"]')];
-    expect(segs.map((b) => b.textContent)).toEqual(["待办", "机器", "仓库", "项目", "状态"]);
-    expect(segs.map((b) => b.getAttribute("aria-label"))).toEqual(["按待办", "按机器", "按仓库", "按项目", "按状态"]);
-    expect(segs[0].getAttribute("aria-checked")).toBe("true");
-    expect(segs.every((b) => b.className.includes("whitespace-nowrap"))).toBe(true);
-    act(() => segs[1].click());
-    expect(localStorage.getItem("persona.agentGrouping")).toBe("machine");
+    expect(segs.map((b) => b.textContent)).toEqual(["项目", "待办", "机器", "仓库", "空间", "状态"]);
+    expect(segs.map((b) => b.getAttribute("aria-label"))).toEqual(["按项目", "按待办", "按机器", "按仓库", "按空间", "按状态"]);
     expect(segs[1].getAttribute("aria-checked")).toBe("true");
-    expect(segs[0].getAttribute("aria-checked")).toBe("false");
+    expect(segs.every((b) => b.className.includes("whitespace-nowrap"))).toBe(true);
+    act(() => segs[2].click());
+    expect(localStorage.getItem("persona.agentGrouping")).toBe("machine");
+    expect(segs[2].getAttribute("aria-checked")).toBe("true");
+    expect(segs[1].getAttribute("aria-checked")).toBe("false");
     // no dropdown on the title row any more
     expect(host.querySelector('button[aria-haspopup="menu"][aria-label^="Agent 分组"]')).toBeNull();
   });

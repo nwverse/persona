@@ -1333,6 +1333,13 @@ A list row found by what is inside it, not by its own name (a Persona chat found
 
 Android's `JMenu` takes a choice list in groups: an action can open a group with a title (`JAction.section`, drawn after a rule; `JActionSheet` draws it too, over its labels' column, as the Agents ⋯'s Display) and carry a quiet line under its label (`JAction.subtitle`), as the To-dos list's Show (each choice with how many it would show) and Sort by (#3740). A status section's count can sit in a capsule of its state's tone (`JSectionHeader` `countTone`, the To-dos list's sections, #3712), as iOS `CountBadge`. A one-line notice over a list keeps its action on its line as a text button (`JNotice` `inlineAction`: "1 more waiting on you, not in This week · Show all"). Above 1× text, `JMenu(multilineActions = true)` wraps a menu option and its subtitle instead of ellipsizing the count, destination, verb or scope; the pull-down stays anchored at every text size and the default one-line rendering is unchanged. First use: the Inbox's FYI / Collapsed group actions (#10425), because an anchored `JMenu` caps their width.
 
+- **Agents by project** (web, the default grouping): level one is the knowledge-base project the Overview board shows
+  (the nearest project pinned to Overview, else the top-level one; sub-projects roll up and are named on the row as
+  "› sub-project"), level two the state (Working, Waiting, Just finished, Seen folded). Every Agent that needs the user
+  is lifted into one Needs you section above all projects, and each project heading keeps its needs-you number; Agents
+  in no project go to Unassigned, always last. A row is a short title (the to-do's when it is the to-do's only Agent,
+  else the session title without its prompt opener, about 40 columns) and the row's one line; no computer or path.
+
 ### 3.5 Navigation
 
 - Shell (compact width): Assistant and Agents as pages on a strip, a drawer sidebar, no tab bar. Top bar: persona button, `ShellSwitch`, circle button (`apple/Persona/DesignSystem/ShellComponents.swift:24,739,775`). Both destinations of the switch across the top look tappable at rest (#13450): the chosen one sits on the pill, and each other one is outlined, a hairline capsule where it is (`Size.hairline`: Liquid Glass in `Theme.cardStroke`, as the app's other glass capsules are edged; BeautifulUI in `lineStrong`, lighter than the chosen capsule's ring), faded by how far the pill is from it, so the pill takes it in as it glides with the strip. While tapping the chosen one again opens its menu, its name is followed by the pull-down mark (`Theme.Icon.pullDown`, small, in the name's quieter color, not read by VoiceOver: the menu says what it is), and the name gives way to the mark within the segment's 72 pt; a segment with no menu has no mark, and the bar that stands in while the strip slides marks what the page's bar marks at rest. A finger on a segment fills it with `Theme.Fill.pressed`. Each segment is hit the capsule's whole height, 44 pt at the default text size: the capsule's padding above and below is inside the segment's button or menu, and the capsule is drawn as before; the Agents count hangs off the corner of that hit frame, clear of the mark. iPhone Duo's tab bar keeps its own look. Re-tapping Assistant opens its menu. Explicitly selecting Agents opens its list, clearing any retained detail navigation; re-tapping Agents from a detail returns to the list. Re-tapping Agents while already at the list opens the existing list-options menu. A card, notification or session link remains a targeted open and goes directly to that Agent, not through the list. This list-first rule serves people moving between their everyday Assistant conversation and Agent work, without a setting or a new visual style.
@@ -3538,6 +3545,57 @@ is what is being chosen; a section with no rows now gets its bar all the same, s
 section that holds what needs the user (Needs you, Stuck) has no switch and says "Always shown" under its name in
 `--ink-3` (3.4: a session that needs the user is never hidden); a hidden one is the same hairline outline as a hidden
 card, "Hidden" under its name. The greeting and its summary are not part of it and stay first. No new token or component.
+
+## Watch cards (web, #13020)
+
+The owner's watch cards (`docs/assistant/watch-cards.md`) are Overview's first block, above its sections and the
+extensions' cards: a heading ("Watching", the card count and, in `--red`, the alert count) over an adaptive grid of
+cards at least 240 px wide (`WATCH_GRID`). One card component, `WatchCard` (`web/src/views/watch/WatchCard.tsx`), draws
+every place a card appears (the wall and a project node's `ProjectWatchCards`):
+
+- Surface `rounded-card bg-surface shadow-card`, padding 14 px; the name in `text-meta` semibold (one line, the question
+  as its tooltip), a ⋯ `IconButton` for its actions, a `bell` when it has an alert rule.
+- The answer by display kind: **number** in `text-2xl` tabular figures with its unit in `--ink-3`; **status light** as an
+  8–10 px dot in `--green` / `--orange` / `--red` with its word in `text-card-title`; **table** in `bg-inset` at
+  `text-label`, at most 5 rows and "N more rows"; **trend** the number with a 96 × 32 sparkline (`--accent`, `--red`
+  when it alerts). The reading's line under it in `text-meta` `--ink-2`, at most two lines.
+- A tripped alert: a 2 px `--red` ring at half strength and an **Alert** tag (`bg-red-tint`, `--red`); a bad status
+  without an alert colours the value only. A paused card is drawn at 70% opacity and says Paused in its meta line.
+- A draft: a dashed `--line-strong` outline on the canvas (no surface), "Draft from Persona · add it?" in `--accent-ink`,
+  its preview as a two-column list and the two choices (primary **Add to Overview**, secondary **Discard**).
+- The meta line in `text-submeta` `--ink-3`: the refresh rule in the Scheduled tasks page's words (`ruleText`), when it
+  was updated, and its project (left out inside that project's own panel).
+- Reordering reuses "Arranging cards in place": the `grip`, an HTML drag onto another card (2 px inset `--accent` ring on
+  the target) and, for keyboard and touch, **Move earlier / Move later** in the ⋯ menu. Delete confirms in the menu row
+  (4.4), Discard on a draft does not ask (nothing ran yet).
+
+With no cards the wall is one line in `--ink-3` saying how to get one. No new token.
+
+## Overview by project (web, #13019)
+
+By default Overview (under the greeting, and **Needs you** / **Stuck, take a look** when they have rows) is the watch
+wall, then **By project**, then **Temporary** and **Unsorted**, then the main chat's question summary; the activity
+sections in columns (Working, Unread, tasks, computers) are the **Classic layout**, off unless Settings › General ›
+Overview turns it on (`docs/web/web.md` "Overview by project"). New here:
+
+- **Project card** (`web/src/views/overview/ProjectOverview.tsx` `ProjectCard`): one per top-level project of the
+  tree, in an adaptive grid of cards at least 320 px wide (as `WATCH_GRID`, wider for the milestone lines). Surface
+  `rounded-card bg-surface shadow-card`, `hover:bg-hover`; the name in `text-card-title` semibold with the `layers`
+  icon and, at the right, the open to-dos pill (`bg-accent-tint` / `--accent-ink` when any, `bg-field` / `--ink-3`
+  at none); the project's one line in `text-label` `--ink-2`; the sub-projects line (`folder`, the count and the first
+  four names); one line per milestone with the map's flag colors (open `--accent-ink`, accepted `--green`, not
+  accepted `--orange`), its target date and its acceptance word; and, over a hairline at the card's bottom, the latest
+  of its own yesterday notes. Nothing on it is new data: it is the node panel's (the counts come from one function,
+  `lib/project-overview.ts`). The whole card opens the project tree with the project selected (the title link's
+  overlay spans it, as a task card's does on touch).
+- **Temporary / Unsorted blocks**: a heading with its count (as Overview's groups) and one surface listing up to five
+  to-do titles (each opens its to-do), "N more" to the To-dos page, and on Unsorted the **Sort these N…** link in
+  `--accent-ink` that opens the sort sheet. Side by side at 60rem and wider, stacked below.
+- **No projects**: the quiet card Overview already uses for "no computers" (icon in `bg-field`, title, one line, a
+  secondary **Open the project tree** button), with the two blocks still under it.
+
+The node panel on the map gains the same open to-dos count (a `SectionTitle` with its count and a line saying how many
+are on the project itself) and the project's watch cards (`ProjectWatchCards`) under its milestones. No new token.
 
 ## Arranging conversations in place (#12017)
 

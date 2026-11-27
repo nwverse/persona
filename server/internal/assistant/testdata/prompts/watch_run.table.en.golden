@@ -1,0 +1,6 @@
+Watch card "Open orders" (id w_1a2b): the owner asked you to check this and keep the answer on their Overview card.
+
+Question: How many orders are waiting in the Garden app shop?
+
+Find the current answer, then call watch_report once with id "w_1a2b" and a small `table` (columns and up to 10 rows) plus a one-line `text` summary. Add `status` (ok / warn / bad) whenever you can judge it. Keep `text` to one short line the owner reads at a glance; say plainly when the answer could not be found, with status warn, rather than guessing.
+Do not call notify_user: Persona pushes the alert itself when the card's rule trips. Reply in one line.

@@ -22,6 +22,9 @@ import { AgentChatListRow, AgentFilterButton, AgentFilterChips } from "./agents/
 import { agentGrouping, AGENT_GROUPINGS, type AgentGrouping, buildAgentGroups, buildSpaces, heldPlace, hostsOf, isHeldSeen, isQuiet, needsSeenOf, sessionHost, splitAgentSessions, type AgentGroup, type Space } from "../lib/agent-groups";
 import { isMuted } from "../lib/session-actions";
 import { heldOrderFor, holdNotedSeen, noteShownUnseen, releaseAllSeen, releaseSeen, useHeldSeenOrder, useSeenRowsMode, useSeenRowsNoticed, useSeenVisit } from "../lib/seen-rows";
+import { buildProjectAgentList } from "../lib/agent-projects";
+import { useTodoProjects } from "../lib/todo-projects";
+import { ProjectAgentsView } from "./SidebarProjects";
 import { reportBoundary } from "../lib/error-reports";
 import { isChunkError, reloadForStaleChunk, reloadPage } from "./PageBoundary";
 import { useWorkspaceCatalog } from "../lib/workspace-catalog";
@@ -779,7 +782,8 @@ function AgentsBlock(props: AgentsBlockProps) {
   const grouping = agentGrouping(stored);
   // a hub without todos shows by machine, a by-todo choice kept for when it has them; to-dos that cannot be read, by
   // status until they can
-  const shown = todosSupported === false && grouping === "todo" ? "machine" : todosUnread && grouping === "todo" ? "state" : grouping;
+  const needsTodos = grouping === "todo" || grouping === "kbproject";
+  const shown = todosSupported === false && needsTodos ? "machine" : todosUnread && needsTodos ? "state" : grouping;
   // several assistants: the list is the current one's (docs/assistant/managers.md "Clients"), which the hub's paged list
   // cannot ask for, so the complete list is read and filtered here
   const several = useScope().several;
@@ -795,11 +799,11 @@ function AgentsBlock(props: AgentsBlockProps) {
     setGrouping(g);
     // By to-do while its to-dos cannot be read (shown by status): the tap reads them again, as the note's Retry does
     const { todosError, todos } = getState();
-    if (g === "todo" && todosError !== null && todos.length === 0) void refreshTodos();
+    if ((g === "todo" || g === "kbproject") && todosError !== null && todos.length === 0) void refreshTodos();
     props.hover(null);
   }, [props.hover]);
-  // `shown !== "repo"` only tells TypeScript what pagedAgentList already rules out
-  return paged && shown !== "repo" && !hubUnreachable ? <BoundedAgentsBlock {...props} {...display} grouping={shown} todosUnread={todosUnread && grouping === "todo"} chooseGrouping={chooseGrouping} />
+  // `shown !== "repo"` / `"kbproject"` only tells TypeScript what pagedAgentList already rules out
+  return paged && shown !== "repo" && shown !== "kbproject" && !hubUnreachable ? <BoundedAgentsBlock {...props} {...display} grouping={shown} todosUnread={todosUnread && needsTodos} chooseGrouping={chooseGrouping} />
     : <LegacyAgentsBlock {...props} {...display} grouping={grouping} hubUnreachable={hubUnreachable} chooseGrouping={chooseGrouping} />;
 }
 
@@ -845,7 +849,7 @@ function agentListItems({ archives, hover, onNavigate, display, emptyWorkspaces 
 /** The groupings this hub offers: By to-do only where it has to-dos. */
 function useGroupings() {
   const todosSupported = useStore((s) => s.todosSupported);
-  return useMemo(() => AGENT_GROUPINGS.filter((g) => g.key !== "todo" || todosSupported !== false), [todosSupported]);
+  return useMemo(() => AGENT_GROUPINGS.filter((g) => (g.key !== "todo" && g.key !== "kbproject") || todosSupported !== false), [todosSupported]);
 }
 
 /** What each quick filter selects on the paged list (`sessions_quick_filters`, #6662), as the complete list matches them
@@ -860,7 +864,7 @@ const SHOW_ALL: ListFilters = {};
 const NO_COUNTS: FilterCounts = { needs: 0, unread: 0, working: 0, bg_waiting: 0, feishu: 0, terminal: 0 };
 
 /** The paged list's section kind for each grouping it draws (#6662): By project is the space (`group`). */
-const PAGED_DIMENSION: Record<Exclude<AgentGrouping, "repo">, GroupDimension> = { todo: "todo", machine: "machine", space: "group", state: "state" };
+const PAGED_DIMENSION: Record<Exclude<AgentGrouping, "repo" | "kbproject">, GroupDimension> = { todo: "todo", machine: "machine", space: "group", state: "state" };
 
 const NO_EXCLUDED_IDS: ReadonlySet<string> = new Set();
 
@@ -891,7 +895,7 @@ function PagedFilterChips({ filters, machines }: { filters: AgentDimensionFilter
   return <AgentFilterChips filters={filters} onChange={setAgentListFilters} facets={facets} />;
 }
 
-function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, add = true, grouping, todosUnread = false, chooseGrouping, showFilter, dimFilters, chatList, displayValue, onHoldsSeen }: AgentsBlockProps & AgentsDisplayProps & { grouping: Exclude<AgentGrouping, "repo">; /** By to-do shown by status: its to-dos cannot be read */ todosUnread?: boolean; chooseGrouping: (g: AgentGrouping) => void }) {
+function BoundedAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, add = true, grouping, todosUnread = false, chooseGrouping, showFilter, dimFilters, chatList, displayValue, onHoldsSeen }: AgentsBlockProps & AgentsDisplayProps & { grouping: Exclude<AgentGrouping, "repo" | "kbproject">; /** By to-do shown by status: its to-dos cannot be read */ todosUnread?: boolean; chooseGrouping: (g: AgentGrouping) => void }) {
   const machines = useStore(selectSidebarMachines);
   const mutes = useStore((s) => s.mutes);
   const scope = useScope();
@@ -1206,8 +1210,11 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   // a hub without todos shows by machine, a by-todo choice kept for when it has them; to-dos that cannot be read, by
   // status until they can (TodosUnread says so). The chat list's rows are on no grouping and need no to-dos: it is
   // drawn as it is, with no word about them
-  const todosFailed = !chatList && todosUnread && grouping === "todo" && todosSupported !== false;
-  const shownGrouping = todosSupported === false && grouping === "todo" ? "machine" : todosFailed ? "state" : grouping;
+  const byTodos = grouping === "todo" || grouping === "kbproject";
+  const todosFailed = !chatList && todosUnread && byTodos && todosSupported !== false;
+  const shownGrouping = todosSupported === false && byTodos ? "machine" : todosFailed ? "state" : grouping;
+  // By project (knowledge base): the projects' names, parents and Overview pins, read as the To-dos page reads them
+  const kbProjects = useTodoProjects(shownGrouping === "kbproject");
   const catalog = useWorkspaceCatalog(shownGrouping === "repo");
   const agentRepos = useAgentReposModule(shownGrouping === "repo");
   const availableGroupings = useGroupings();
@@ -1302,13 +1309,13 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
   }, [unpinned, machines, rowOrder, byUpdate, activity]);
   const groups = useMemo(() => {
     if (shownGrouping === "space" || shownGrouping === "repo" || shownGrouping === "machine") return [];
-    if (shownGrouping === "todo") return [];
+    if (shownGrouping === "todo" || shownGrouping === "kbproject") return [];
     return buildAgentGroups(unpinned, machines, "state", mutes, undefined, heldOrder);
   }, [unpinned, machines, shownGrouping, mutes, todos, rowOrder, heldOrder]);
   // by todo waits for the first GET /todos: the socket pushes the sessions before it answers, and a tree drawn without
   // the todos puts every agent under No to-do for a moment, then moves them under their todos (#2812); the chat list's
   // rows are drawn at once
-  const todosPending = !chatList && shownGrouping === "todo" && !todosLoaded;
+  const todosPending = !chatList && (shownGrouping === "todo" || shownGrouping === "kbproject") && !todosLoaded;
   // The first summary page can orient the owner while the complete baseline is read. By to-do still waits for its
   // grouping input; neutral rows never invent provisional groups or counts, and the complete tree replaces them at once.
   const loadingPreview = !loaded && !todosPending && !chatList && !filtered && !hubUnreachable && !listError && previewListed.length > 0;
@@ -1336,6 +1343,10 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
     return shareTree(lastTodoTree.current, byUpdate ? activity.todoTreeByUpdate(built) : built);
   }, [unpinned, machines, shownGrouping, mutes, todos, todosLoaded, keepEmptyGroups, rowOrder, byUpdate, activity, todosV2, serverBoard]);
   lastTodoTree.current = todoTree;
+  const projectList = useMemo(() => {
+    if (shownGrouping !== "kbproject" || !todosLoaded) return undefined;
+    return buildProjectAgentList([...unpinned].sort(rowOrder), todos, kbProjects, { mutes, unassigned: t("sidebar.kbproject_unassigned") });
+  }, [unpinned, shownGrouping, todos, todosLoaded, kbProjects, mutes, rowOrder]);
   const repoMachines = useMemo(() => {
     if (shownGrouping !== "repo" || !agentRepos.mod) return [];
     const built = agentRepos.mod.buildRepoMachineTree(unpinned, machines, { ...catalog, hiddenSources: botmuxHidden ? ["botmux"] : undefined, navigationSessions: [...shown, ...pinnedAgents.filter((p) => !shown.includes(p))], hideEmpty: filtered, showEmptyWorkspaces, compareSessions: rowOrder });
@@ -1573,6 +1584,8 @@ function LegacyAgentsBlock({ reg, hover, activeKey, go, onNewAgent, onNavigate, 
         repoMachines.map((m) => (
           <RepoMachineSection key={m.key} m={m} flat={repoMachines.length <= 1} machines={machines} reg={reg} hover={hover} activeKey={activeKey} go={go} onRowMenu={onRowMenu} {...workspaceActions} />
         ))
+      ) : projectList ? (
+        <ProjectAgentsView list={projectList} machines={machines} reg={reg} hover={hover} activeKey={activeKey} go={go} onRowMenu={onRowMenu} />
       ) : todoTree ? (
         <TodoTreeView tree={todoTree} showHost={mixedHosts} reg={reg} hover={hover} activeKey={activeKey} go={go} onRowMenu={onRowMenu} onNavigate={onNavigate} after={recent.length > 0 && (
           // "By to-do" draws "Recent (not running)" as a row like its to-dos' and groups' (#6458); its name says what it

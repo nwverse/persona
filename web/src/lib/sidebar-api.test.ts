@@ -45,7 +45,8 @@ describe("the sidebar's grouping", () => {
   it("goes round the groupings", () => {
     expect(nextGrouping("todo")).toBe("machine");
     expect(nextGrouping("machine")).toBe("repo");
-    expect(nextGrouping("state")).toBe("todo");
+    expect(nextGrouping("state")).toBe("kbproject");
+    expect(nextGrouping("kbproject")).toBe("todo");
   });
   it("skips the ones a hub does not offer", () => {
     expect(nextGrouping("state", ["machine", "repo", "space", "state"])).toBe("machine");
@@ -60,11 +61,12 @@ describe("the sidebar's grouping", () => {
     expect(store.get(GROUPING_KEY)).toBe("space");
     expect(seen).toEqual(["space"]);
     off();
-    expect(groupingLabel("space")).toBe("按项目");
+    expect(groupingLabel("space")).toBe("按空间");
+    expect(groupingLabel("kbproject")).toBe("按项目");
   });
-  it("starts from by todo when nothing was chosen", () => {
+  it("starts from by project (knowledge base) when nothing was chosen", () => {
     vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {} });
-    expect(cycleGrouping()).toBe("machine");
+    expect(cycleGrouping()).toBe("todo");
   });
 });
 

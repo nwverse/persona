@@ -89,6 +89,8 @@ type Options struct {
 
 // Service is the assistant. It implements Handler.
 type Service struct {
+	// sortMem keeps the to-do sort's batches when the store has no table for them (todo_sort_batches.go).
+	sortMem memSortBatches
 	// modules are the feature modules loaded (modules.go); nil, none.
 	modules *kernel.Kernel
 	// moduleSwitch is the same list as the provider seams read it (moduleswitch): recording's and Lark's layers.
@@ -318,24 +320,25 @@ type Service struct {
 	// with none set up. Tests turn tagging off unless they are about it: a model's socket inside a synctest bubble
 	// never counts as blocked.
 	noInfoTag      bool
-	background     backgroundBook         // supervise_background.go
-	autoRuns       autoReviewBook         // supervise_autoreview.go
-	sessionReviews sessionReviewBook      // agents_session_review.go
-	reports        reportBook             // reports.go
-	upReports      reportRate             // agent_control.go: report_to_supervisor
-	noteRate       reportRate             // todo_decisions.go: todo_decision_add
-	dispatch       dispatchBook           // dispatch.go: dispatch_start, dispatch_read
-	admission      admissionBook          // admission.go: execution-agent resource and direction gate
-	placementSched placementSchedulerBook // placement_queue.go: pending_placement scheduler leases and fallback loop
-	adoptMu        sync.Mutex             // agent_control.go: one agent_supervise at a time
-	placeBook      placeBook              // places.go
-	accept         acceptBook             // acceptance.go
-	pushQuiet      quietSwitch            // push_quiet.go: the hub's low-distraction switch as last read
-	attention      attentionClock         // attention.go: the attention mode as last read, and its end
-	deploy         deployProbe            // deploy_check.go: is the work in the running hub
-	prEventRoute   prEventRouteBook       // pr_status_route.go: opt-in direct PR-event routing dedupe
-	prFeedback     prFeedbackBook         // pr_feedback.go: per-PR feedback cursors and routing serialization
-	parkReplies    parkReplyBook          // park_reply.go: bounded source reads for explicitly bound person replies
+	background       backgroundBook         // supervise_background.go
+	autoRuns         autoReviewBook         // supervise_autoreview.go
+	sessionReviews   sessionReviewBook      // agents_session_review.go
+	reports          reportBook             // reports.go
+	upReports        reportRate             // agent_control.go: report_to_supervisor
+	noteRate         reportRate             // todo_decisions.go: todo_decision_add
+	dispatch         dispatchBook           // dispatch.go: dispatch_start, dispatch_read
+	admission        admissionBook          // admission.go: execution-agent resource and direction gate
+	placementSched   placementSchedulerBook // placement_queue.go: pending_placement scheduler leases and fallback loop
+	adoptMu          sync.Mutex             // agent_control.go: one agent_supervise at a time
+	placeBook        placeBook              // places.go
+	watchBook        watchBook              // watch.go
+	accept           acceptBook             // acceptance.go
+	pushQuiet        quietSwitch            // push_quiet.go: the hub's low-distraction switch as last read
+	attention        attentionClock         // attention.go: the attention mode as last read, and its end
+	deploy           deployProbe            // deploy_check.go: is the work in the running hub
+	prEventRoute     prEventRouteBook       // pr_status_route.go: opt-in direct PR-event routing dedupe
+	prFeedback       prFeedbackBook         // pr_feedback.go: per-PR feedback cursors and routing serialization
+	parkReplies      parkReplyBook          // park_reply.go: bounded source reads for explicitly bound person replies
 
 	reviewDismissals  taskReviewDismissalBook // task_review_dismissals.go
 	supervisorSettles supervisorSettleBook    // decision_supervisor_reply.go: exact choices waiting for their send (#13041)
@@ -516,6 +519,8 @@ func New(o Options) *Service {
 	s.startRoutes()
 	s.skillRoutes()
 	s.workoutRoutes()
+	s.watchRoutes()
+	s.intakeRoutes()
 	s.healthRoutes() // the Health module (health_layer.go)
 	s.scheduleRoutes()
 	s.scheduleGrantRoutes()
@@ -533,6 +538,7 @@ func New(o Options) *Service {
 	s.todayRoutes()
 	s.todoAcceptRoute()
 	s.todoRoutes()
+	s.todoSortRoutes() // todo_sort_batches.go
 	s.agentRoutes()
 	s.sessionReviewRoutes()
 	s.workspaceBoardRoutes()

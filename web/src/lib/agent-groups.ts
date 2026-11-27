@@ -20,23 +20,27 @@ export interface HeldOrderOptions {
   heldSeen?: HeldSeenMap;
 }
 
-export type AgentGrouping = "repo" | "space" | "state" | "machine" | "todo";
+export type AgentGrouping = "kbproject" | "repo" | "space" | "state" | "machine" | "todo";
 // "By to-do" leads and is the default for a browser that never picked one (#2812); a grouping picked before stays. The
 // sidebar shows them in this order as segments, the paged list and the complete list alike (#6662), and the
 // switch-grouping shortcut goes round them in it. "By machine" is herdr's own layout (machine → workspace → tab,
 // lib/herdr-tree.ts). `short` is the segment's label, `label` the full name. "By pinned" (#4352) is gone (#6662): the
 // sidebar's 常驻 rows unfold to the same tree, so a picked one reads as By to-do.
+// "By project" (`kbproject`) is the knowledge-base project of the to-do an Agent works on (lib/agent-projects.ts), the
+// owner's default; the herdr space that was called "By project" before is "By space".
 export const AGENT_GROUPINGS: { key: AgentGrouping; label: string; short: string }[] = [
+  { key: "kbproject", label: t("lib-agent-groups.by_project"), short: t("lib-agent-groups.seg_project") },
   { key: "todo", label: t("lib-agent-groups.by_todo"), short: t("lib-agent-groups.seg_todo") },
   { key: "machine", label: t("lib-agent-groups.by_machine"), short: t("lib-agent-groups.seg_machine") },
   { key: "repo", label: t("lib-agent-groups.by_repo"), short: t("lib-agent-groups.seg_repo") },
-  { key: "space", label: t("lib-agent-groups.by_project"), short: t("lib-agent-groups.seg_project") },
+  { key: "space", label: t("lib-agent-groups.by_space"), short: t("lib-agent-groups.seg_space") },
   { key: "state", label: t("lib-agent-groups.by_state"), short: t("lib-agent-groups.seg_state") },
 ];
 
-// the grouping this browser chose last (persona.agentGrouping, #1836); by todo until it chooses (#2812, was by machine, #1990)
+// the grouping this browser chose last (persona.agentGrouping, #1836); by knowledge-base project until it chooses (was by
+// to-do, #2812; by machine, #1990)
 export function agentGrouping(value: string | null): AgentGrouping {
-  return AGENT_GROUPINGS.find((g) => g.key === value)?.key ?? "todo";
+  return AGENT_GROUPINGS.find((g) => g.key === value)?.key ?? "kbproject";
 }
 
 // the host kinds a pane ref may be prefixed with (keep in step with Kinds in server/internal/host/host.go); herdr's ids go bare and may hold a colon

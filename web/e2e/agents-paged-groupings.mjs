@@ -56,7 +56,7 @@ if (!before && !counts.todo) {
   console.log("VERDICT FAIL the fake hub counts no to-dos (start it with MOCK_SESSIONS_LIST=1)");
   process.exit(1);
 }
-const SEGMENTS = ["待办", "机器", "仓库", "项目", "状态"];
+const SEGMENTS = ["项目", "待办", "机器", "仓库", "空间", "状态"];
 // the complete list's quick filters (lib/agent-filter.ts), the paged list's chips too on a hub with sessions_quick_filters
 const QUICK = ["全部", "需要你", "完成未看", "工作中", "后台等待中", "飞书群", "在标签页中"];
 
@@ -74,6 +74,8 @@ try {
       localStorage.setItem("persona.language", "zh-Hans");
       localStorage.setItem("persona.sidebarWidth", "340");
       for (const key of Object.keys(localStorage)) if (key.startsWith("fold:") || key.endsWith("BrowseBy") || key === "persona.agentGrouping") localStorage.removeItem(key);
+      // this run is about By to-do and the paged groupings; By project (the default since) has its own, agents-by-kb-project.mjs
+      localStorage.setItem("persona.agentGrouping", "todo");
     }, theme);
     const paged = page.locator("[data-paged-sessions='runtime']").first();
     const bar = page.locator('aside [role="radiogroup"][aria-label="Agent 分组"]').first();

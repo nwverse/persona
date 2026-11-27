@@ -23,5 +23,10 @@
   "not_told_yet": "このToDoは今は確認できません。少し待ってからもう一度お試しください。",
   "machine_not_found": "このコンピュータはハブのコンピュータではありません。",
   "machine_offline": "このコンピュータは現在オフラインです。戻ってからもう一度お試しください。",
-  "images_forbidden": "このデバイスではToDoの画像を読み込めません"
+  "images_forbidden": "このデバイスではToDoの画像を読み込めません",
+  "sort_reason_direction": "担当のスーパーバイザーが「{name}」を受け持っています",
+  "sort_reason_dirs": "Agent が「{name}」のフォルダ {dir} で作業しています",
+  "sort_reason_title": "タイトルに「{name}」とあります",
+  "sort_batch_missing": "取り消せる変更がありません",
+  "sort_batch_undone": "この変更はすでに取り消されています"
 }

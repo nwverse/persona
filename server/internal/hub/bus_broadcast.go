@@ -39,6 +39,7 @@ import (
 // managerMessageTypes are the types the managers send the apps (internal/assistant Service.event, internal/extmgr
 // Manager.broadcast and broadcastExtension, internal/devices Devices.broadcast).
 var managerMessageTypes = map[string]bool{
+	"assistant_watches": true, // watch cards changed (assistant/watch.go)
 	// the assistant
 	"saved_agent_searches": true, "assistant_feed": true, "assistant_saved_prompts": true, "assistant_starred": true, "assistant_schedule": true, "assistant_view": true, "assistant_view_action": true,
 	"assistant_view_block": true, "agents.triage": true, "direction_offer": true, "directions": true, "interaction_reanswered": true, "kb_selection": true, "launcher_health": true,

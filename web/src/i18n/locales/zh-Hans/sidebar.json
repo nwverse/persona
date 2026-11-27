@@ -176,6 +176,10 @@
   "module_screen_share_hint": "在「机器」里的电脑页面打开它的实时屏幕，并在浏览器里操作。",
   "subagents_running": "{count} 个运行中",
   "subagents_need_you": "{count} 个等你确认",
+  "kbproject_unassigned": "未归类",
+  "kbproject_all_seen_other": "{count} 个 · 都看过了",
+  "kbproject_needs_only": "只有需要你的 Agent，列在最上面",
+  "kbproject_all_seen_one": "{count} 个 · 都看过了",
   "sort_activity": "按最近更新排序",
   "show_list_filter": "显示筛选",
   "show_empty_workspaces": "显示空工作区"

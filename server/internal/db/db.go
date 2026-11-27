@@ -549,7 +549,7 @@ func (d *DB) TruncateForTest(ctx context.Context) error {
 		"todos", "todo_agents", "deleted_request_gates", "assistant_always", "machine_trust", "hub_settings", "manager_outbox", "handed_over",
 		"machine_audit", "sent_as_user", "session_work_events", "hub_push_sent", "urgent_calls", "model_usage", "conversation_histories",
 		"project_review_state", "project_review_deliveries", "project_review_owner_relay", "project_review_owner_managers",
-		"assistant_conversation_spaces", "assistant_tracks", "assistant_track_kinds", "assistant_space_recordings", "assistant_info_categories", "assistant_captures", "assistant_extension_trust", "assistant_extension_grants", "logical_conversations", "conversation_segment_closures", "conversation_prepared_candidates", "health_intake", "health_tells", "repo_mirrors", "file_transfer_audit"})
+		"assistant_conversation_spaces", "assistant_tracks", "assistant_track_kinds", "assistant_space_recordings", "assistant_info_categories", "assistant_captures", "assistant_extension_trust", "assistant_extension_grants", "logical_conversations", "conversation_segment_closures", "conversation_prepared_candidates", "health_intake", "health_tells", "repo_mirrors", "todo_sort_batches", "file_transfer_audit"})
 	if err != nil {
 		return err
 	}

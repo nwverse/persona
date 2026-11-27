@@ -1,0 +1,21 @@
+Record a watch run's result, as its run message says.{{template "shared/mcp_language" .}}
+
+```json
+{
+  "type": "object",
+  "required": ["id", "text"],
+  "properties": {
+    "id": {"type": "string"},
+    "number": {"type": "number"},
+    "status": {"type": "string", "enum": ["ok", "warn", "bad"]},
+    "text": {"type": "string"},
+    "table": {
+      "type": "object",
+      "properties": {
+        "columns": {"type": "array", "items": {"type": "string"}},
+        "rows": {"type": "array", "items": {"type": "array", "items": {"type": "string"}}}
+      }
+    }
+  }
+}
+```

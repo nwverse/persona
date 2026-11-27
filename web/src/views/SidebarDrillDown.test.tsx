@@ -37,6 +37,8 @@ const flush = async () => {
 beforeEach(async () => {
   await initI18n("en");
   localStorage.clear();
+  // these tests are about the groupings as they were: By to-do, the default before By project (knowledge base)
+  localStorage.setItem("persona.agentGrouping", "todo");
   vi.stubGlobal("fetch", vi.fn((url: string) => Promise.resolve(new Response(JSON.stringify(answers[new URL(url, "http://x").pathname] ?? {}), { headers: { "Content-Type": "application/json" } }))));
   history.replaceState(null, "", "/");
   host = document.createElement("div");

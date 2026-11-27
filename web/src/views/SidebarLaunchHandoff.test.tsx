@@ -65,6 +65,8 @@ const startingSection = () => [...host.querySelectorAll("[data-sidebar-group-hea
 beforeEach(() => {
   (globalThis as unknown as { __socks: Sock[] }).__socks.length = 0;
   localStorage.clear();
+  // these tests are about the groupings as they were: By to-do, the default before By project (knowledge base)
+  localStorage.setItem("persona.agentGrouping", "todo");
   localStorage.setItem("persona.token", "tok");
   reset();
   host = document.createElement("div");

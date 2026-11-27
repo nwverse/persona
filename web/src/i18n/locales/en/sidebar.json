@@ -184,6 +184,10 @@
   "module_screen_share_hint": "Open a computer's live screen from its page in Machines and control it from the browser.",
   "subagents_running": "{count} running",
   "subagents_need_you": "{count} need you",
+  "kbproject_unassigned": "Unassigned",
+  "kbproject_all_seen_one": "{count} · all seen",
+  "kbproject_all_seen_other": "{count} · all seen",
+  "kbproject_needs_only": "Only Agents that need you, listed above",
   "sort_activity": "Sort by recent activity",
   "show_list_filter": "Show filter",
   "show_empty_workspaces": "Show empty workspaces"

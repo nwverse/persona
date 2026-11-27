@@ -76,6 +76,8 @@ const render = async () => {
 
 beforeEach(() => {
   localStorage.clear();
+  // these tests are about the groupings as they were: By to-do, the default before By project (knowledge base)
+  localStorage.setItem("persona.agentGrouping", "todo");
   sessionStorage.clear();
   reset();
   // Settings › Agents: the Filter is on for these tests (it is off until the hub says so)
@@ -301,11 +303,12 @@ describe("按待办's 最近（未运行）", () => {
 });
 
 describe("a hub without todos (GET /todos 404)", () => {
-  it("hides 待办 and shows 按机器 for a browser that never chose", async () => {
+  it("hides 项目 and 待办 and shows 按机器 for a browser that never chose", async () => {
+    localStorage.removeItem("persona.agentGrouping");
     vi.stubGlobal("fetch", hub(() => json({ error: "not found" }, 404)));
     await refresh();
     await render();
-    expect(segments().map((b) => b.textContent)).toEqual(["机器", "仓库", "项目", "状态"]);
+    expect(segments().map((b) => b.textContent)).toEqual(["机器", "仓库", "空间", "状态"]);
     expect(checked()).toBe("按机器");
     expect(agentsBlock().textContent).toContain("工作电脑");
     expect(agentsBlock().textContent).not.toContain("加载中…");
@@ -323,7 +326,7 @@ describe("a hub without todos (GET /todos 404)", () => {
     vi.stubGlobal("fetch", hub(() => json({ todos: [todo] })));
     await act(async () => { await refresh(); });
     await flush();
-    expect(segments()[0].getAttribute("aria-label")).toBe("按待办");
+    expect(segments()[1].getAttribute("aria-label")).toBe("按待办");
     expect(checked()).toBe("按待办");
     expect(agentsBlock().textContent).toContain("天气 App 发 1.3 版");
   });

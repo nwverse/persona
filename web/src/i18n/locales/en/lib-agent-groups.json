@@ -12,5 +12,7 @@
   "source_feishu": "Lark group",
   "source_terminal": "In a tab",
   "source_desktop": "Desktop app",
-  "open_feishu_topic": "Open this topic in Lark"
+  "open_feishu_topic": "Open this topic in Lark",
+  "by_space": "By space",
+  "seg_space": "Space"
 }

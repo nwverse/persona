@@ -1,0 +1,20 @@
+{
+  "err_store": "关注卡暂时不可用，请稍后再试。",
+  "err_read_only": "这台设备只能查看关注卡。",
+  "err_not_found": "这张关注卡已经不在了。",
+  "err_question": "写下这张卡要查什么，不超过 {max} 个字。",
+  "err_title": "卡片名称写成一行，不超过 {max} 个字。",
+  "err_unit": "单位不超过 {max} 个字。",
+  "err_display": "选择卡片怎么展示：数字、状态灯、表格或趋势。",
+  "err_alert": "选择什么时候提醒：高于或低于某个数、状态灯变红，或结果有变化。",
+  "err_schedule": "用 09:00 这样的时间、2h 这样的间隔，或 cron 规则。",
+  "err_project": "知识库里没有这个项目。",
+  "err_too_many": "最多保留 {max} 张关注卡，删掉一张再添加。",
+  "err_not_draft": "这张卡已经在概览上了，请直接编辑。",
+  "err_draft": "请先确认这张卡。",
+  "err_text": "结果需要一行，不超过 {max} 个字。",
+  "err_number": "数字无效。",
+  "err_status": "状态只能是 ok、warn 或 bad。",
+  "err_table": "表格最多 {cols} 列、{rows} 行，每格内容要短。",
+  "push_subtitle": "关注卡"
+}

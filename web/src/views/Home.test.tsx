@@ -1,6 +1,7 @@
 // The overview ("Overview") rendered statically (#2320): a waiting card is something to do, and "Mark all as seen" is there whenever
 // an agent is unread, though its tab is filed under "Stuck, take a look" or "Working".
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { setClassicOverview } from "../lib/overview-layout";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { Interaction, Machine, Session } from "../lib/types";
 import type { Todo } from "../lib/todos";
@@ -626,3 +627,6 @@ it("lets a card's kicker yield to its title on a phone, its words whole in its t
   expect(classes).toEqual(expect.arrayContaining(["shrink-0", "max-sm:min-w-0", "max-sm:flex-1", "max-sm:max-w-max"]));
   expect(classes.filter((c) => /^(?:flex-|grow|basis-|max-w-|min-w-)/.test(c))).toEqual([]);
 });
+
+// these tests read the classic layout's sections (#13019: off by default, Settings › General › Overview)
+beforeEach(() => setClassicOverview(true));

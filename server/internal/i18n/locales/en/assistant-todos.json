@@ -23,5 +23,10 @@
   "not_told_yet": "This to-do can't be checked right now. Try again in a moment.",
   "machine_not_found": "This computer isn't one of the hub's computers.",
   "machine_offline": "This computer is off right now. Try again once it's back.",
-  "images_forbidden": "This device can’t read to-do images"
+  "images_forbidden": "This device can’t read to-do images",
+  "sort_reason_direction": "Its supervisor works on {name}",
+  "sort_reason_dirs": "Its Agent works in {dir}, a folder of {name}",
+  "sort_reason_title": "Its title names {name}",
+  "sort_batch_missing": "There's no such change to undo",
+  "sort_batch_undone": "That change was undone already"
 }

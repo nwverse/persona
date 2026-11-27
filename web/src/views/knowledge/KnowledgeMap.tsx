@@ -325,8 +325,8 @@ const TAB = "h-7 whitespace-nowrap rounded-[7px] text-[12.5px]";
 const VIEW_LABEL: Record<View, string> = { topics: "knowledge-knowledgemap.view_topics", projects: "knowledge-knowledgemap.view_projects", tree: "knowledge-knowledgemap.view_tree" };
 const SUBTITLE: Record<View, string> = { topics: "knowledge-knowledgemap.subtitle_topics", projects: "knowledge-knowledgemap.subtitle_projects", tree: "knowledge-knowledgemap.subtitle_tree" };
 
-export function KnowledgeMap({ onToggleSidebar }: { onToggleSidebar: () => void }) {
-  const [view, setView] = useState<View>("topics");
+export function KnowledgeMap({ onToggleSidebar, focus }: { onToggleSidebar: () => void; /** a project's slug: open the project tree with it selected */ focus?: string }) {
+  const [view, setView] = useState<View>(focus ? "tree" : "topics");
   const [reload, setReload] = useState(0);
   const [mapLoad, refresh] = useMapData(view, reload);
   // The project tree: its own list, drawn by hierarchy or by tag; what the user opened or closed survives a redraw.
@@ -437,6 +437,16 @@ export function KnowledgeMap({ onToggleSidebar }: { onToggleSidebar: () => void 
     const n = byId.get(nodeId(id)) ?? [...byId.values()].find((x) => x.project?.id === id);
     if (n) reveal(n);
   };
+  // Opened on a project (/kb/map/<slug>): once the tree is drawn, that project is selected and its home shown, once.
+  const focused = useRef(false);
+  useEffect(() => {
+    if (!focus || focused.current || view !== "tree" || mode !== "tree" || !byId.size) return;
+    focused.current = true;
+    const n = byId.get(nodeId(focus));
+    if (!n) return;
+    reveal(n);
+    setSheet(true);
+  });
   // Dragging and the node menu: only by hierarchy (in the tag view a project is drawn once per tag).
   const treeLive = useRef(tree);
   treeLive.current = tree;

@@ -260,3 +260,31 @@ func RenderTodoProject(p TodoProject) string {
 	}
 	return render("todo/project", p)
 }
+
+// TodoSort is the system prompt suggesting a knowledge-base project, or the Temporary mark, for each open to-do in no
+// project (todo/sort, #13026, docs/assistant/todos.md "Sorting into projects").
+type TodoSort struct {
+	Language string
+	Owner    string
+}
+
+func RenderTodoSort(d TodoSort) string { return render("todo/sort", d) }
+
+// TodoSortInput is what the sort is asked about (todo/sort_input): the projects a suggestion may name and the to-dos.
+type TodoSortInput struct {
+	Language string
+	Projects []TodoSortProject
+	Todos    []TodoSortTodo
+}
+
+// TodoSortProject is one project: its slug, name, one line and up to three of its code folders, joined.
+type TodoSortProject struct {
+	Slug, Name, OneLine, Dirs string
+}
+
+// TodoSortTodo is one to-do: its id, title, first notes and the folders its Agents work in, joined.
+type TodoSortTodo struct {
+	ID, Title, Notes, Dirs string
+}
+
+func RenderTodoSortInput(in TodoSortInput) string { return render("todo/sort_input", in) }

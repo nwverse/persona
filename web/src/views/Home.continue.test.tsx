@@ -5,6 +5,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setClassicOverview } from "../lib/overview-layout";
 import type { OutboxEntry } from "../lib/outbox";
 import type { Machine, Session } from "../lib/types";
 
@@ -325,3 +326,6 @@ describe("Continue on a finished agent's row", () => {
     expect(fake.entries.get("second")?.state).toBe("sent");
   });
 });
+
+// these tests read the classic layout's sections (#13019: off by default, Settings › General › Overview)
+beforeEach(() => setClassicOverview(true));

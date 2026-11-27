@@ -147,4 +147,16 @@ describe("the project tree view", () => {
     await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
     expect(body(requests.find(put("/kb/projects/garden-app"))!)).toEqual({ parent: "docs-site" });
   });
+
+  it("opens on a project from Overview's card (/kb/map/<slug>), its home with its open to-dos and its watch cards", async () => {
+    act(() => root.render(<><KnowledgeMap focus="seeds" onToggleSidebar={() => {}} /><Toasts /></>));
+    await answer(get("/kb/projects"), { items, tags: ["home"] });
+    const home = host.querySelector('[data-project-home="seeds"]')!;
+    expect(home).toBeTruthy();
+    expect(home.querySelector("[data-project-todos]")).toBeTruthy();
+    await answer((r) => r.url.includes("/assistant/watches") && r.url.includes("project=seeds"), {
+      watches: [{ id: "w1", title: "Germination rate", question: "How many seeds sprouted?", display: "number", unit: "%", schedule: { repeat: "daily", time: "08:00" }, project: "seeds", state: "active", latest: { value: 82, status: "ok", at: "2026-11-22T08:00:00Z" } }],
+    });
+    expect(home.querySelector('[data-project-watches="seeds"]')?.textContent).toContain("Germination rate");
+  });
 });

@@ -93,6 +93,8 @@ beforeEach(() => {
   rowsNow = ROWS;
   showBotmux = true;
   localStorage.clear();
+  // these tests are about the groupings as they were: By to-do, the default before By project (knowledge base)
+  localStorage.setItem("persona.agentGrouping", "todo");
   reset();
   FakeSocket.all = [];
   vi.stubGlobal("WebSocket", FakeSocket);
@@ -109,7 +111,7 @@ describe("the sidebar's paged Agents by to-do", () => {
   it("draws each open to-do as an open section of its Agents, then Not on a to-do folded, under the complete list's bar", async () => {
     const fetch = await render(["sessions_list", "sessions_lookup", "sessions_agents_only", "sessions_todo"]);
     expect(host.querySelector("[data-paged-sessions]")).not.toBeNull();
-    expect(segments()).toEqual(["待办", "机器", "仓库", "项目", "状态"]);
+    expect(segments()).toEqual(["项目", "待办", "机器", "仓库", "空间", "状态"]);
     expect(bar()!.querySelector('[aria-checked="true"]')!.textContent).toBe("待办");
     // the To-dos page's order (sortTodos), its titles
     expect(sections().map((s) => [heading(s).textContent, heading(s).getAttribute("aria-expanded")])).toEqual([
@@ -128,7 +130,7 @@ describe("the sidebar's paged Agents by to-do", () => {
   it("reads the complete list for By to-do on a hub that cannot list sessions by to-do, with the same bar", async () => {
     const fetch = await render(["sessions_list", "sessions_lookup", "sessions_agents_only"]);
     expect(host.querySelector("[data-paged-sessions]")).toBeNull();
-    expect(segments()).toEqual(["待办", "机器", "仓库", "项目", "状态"]);
+    expect(segments()).toEqual(["项目", "待办", "机器", "仓库", "空间", "状态"]);
     expect(paths(fetch).some((u) => u.searchParams.get("summary") === "0" || !u.search)).toBe(true);
     expect(host.textContent).toContain("Ship 1.3");
   });

@@ -176,6 +176,10 @@
   "module_screen_share_hint": "マシンのコンピュータのページからライブ画面を開き、ブラウザで操作します。",
   "subagents_running": "{count} 件が実行中",
   "subagents_need_you": "{count} 件が確認待ち",
+  "kbproject_unassigned": "未分類",
+  "kbproject_all_seen_other": "{count} 件・すべて確認済み",
+  "kbproject_needs_only": "対応が必要な Agent だけです（上に表示）",
+  "kbproject_all_seen_one": "{count} 件・すべて確認済み",
   "sort_activity": "最近の更新順に並べる",
   "show_list_filter": "フィルターを表示",
   "show_empty_workspaces": "空のワークスペースを表示"

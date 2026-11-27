@@ -109,6 +109,8 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date(at));
   localStorage.clear();
+  // these tests are about the groupings as they were: By to-do, the default before By project (knowledge base)
+  localStorage.setItem("persona.agentGrouping", "todo");
   reset();
   usage = [account(20)];
   vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");

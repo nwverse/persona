@@ -12,11 +12,17 @@ export interface TodoProject {
   name: string;
   /** A long-term project: an area of work rather than one feature or launch. */
   long: boolean;
+  /** The project it shows under on the project tree (meta.json parent); none at the top level. */
+  parent?: string;
+  /** Pinned to Overview by the user (meta.json overview_pinned): the Agents list's project headings follow it. */
+  pinned?: boolean;
 }
 
 interface KBEntry {
   id: string;
   name: string;
+  parent?: string;
+  overview_pinned?: boolean;
   /** "<short | long> · <status>" */
   extra?: string;
 }
@@ -58,18 +64,19 @@ export function loadTodoProjects(signal?: AbortSignal): Promise<void> {
 export function todoProjectsOf(items: KBEntry[]): TodoProject[] {
   return items
     .filter((it) => !/·\s*ignored$/.test(it.extra ?? ""))
-    .map((it) => ({ slug: it.id, name: it.name || it.id, long: (it.extra ?? "").startsWith("long") }));
+    .map((it) => ({ slug: it.id, name: it.name || it.id, long: (it.extra ?? "").startsWith("long"), ...(it.parent ? { parent: it.parent } : {}), ...(it.overview_pinned ? { pinned: true } : {}) }));
 }
 
-/** The projects, read again whenever a page that uses them opens. */
-export function useTodoProjects(): TodoProject[] {
+/** The projects, read again whenever a page that uses them opens (`active`: only while it shows them). */
+export function useTodoProjects(active = true): TodoProject[] {
   const picked = useChosenManager();
   const list = useSyncExternalStore(subscribe, current, current);
   useEffect(() => {
+    if (!active) return;
     const abort = new AbortController();
     void loadTodoProjects(abort.signal); // each page that shows them reads them fresh: a project made meanwhile shows up
     return () => abort.abort();
-  }, [picked]);
+  }, [picked, active]);
   return list;
 }
 

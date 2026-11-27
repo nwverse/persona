@@ -1,20 +1,24 @@
 // The knowledge map's "Project tree" view (#12927; lib/kb-tree.ts): the data, the moves (drag, Move to…) with their
 // Undo, the node menu (Move to…, Rename, Milestone) and the side panel, which is the project's home: where it sits, the
 // projects under it, its milestones and its own yesterday's notes (a parent's are not inherited), with a Report tab
-// that a later version fills in.
+// that a later version fills in. The home also counts the open to-dos on the project and below it, as Overview's card
+// does (lib/project-overview.ts), and shows the project's watch cards as its routine checks (views/watch/ProjectWatchCards.tsx).
 import { useCallback, useEffect, useRef, useState } from "react";
 import { formatDate, t } from "../../i18n";
 import { api, enc, errorText, isAbort } from "../../lib/api";
+import { useScopedTodos } from "../../lib/current-assistant";
 import { type KBDetailResponse } from "../../lib/kb";
 import { personaLine, type MapNode } from "../../lib/kb-map";
 import {
   canMove, depthOf, MILESTONE_STATES, milestoneStateLabel, moved, SUGGESTED_DEPTH, treeOf, treeStatus,
   type Milestone, type MilestoneState, type ProjectTree, type TreeEntry,
 } from "../../lib/kb-tree";
+import { projectFacts } from "../../lib/project-overview";
 import { navigate } from "../../lib/router";
 import { Button, cx, IconButton, Loading, toast } from "../../ui/atoms";
 import { Icon } from "../../ui/icons";
 import { type MenuItem } from "../../ui/menu-model";
+import { ProjectWatchCards } from "../watch/ProjectWatchCards";
 import { SectionTitle, TonePill } from "./KBParts";
 
 // ── data ────────────────────────────────────────────────
@@ -188,7 +192,10 @@ export function ProjectHome({ node, data, onOpen, onMenu, milestoneAsk }: {
   const way: string[] = [];
   for (let at = data.parents.get(e.id); at && !way.includes(at) && way.length < 32; at = data.parents.get(at)) way.unshift(at);
   const depth = depthOf(data.parents, e.id);
-  const children = list.filter((x) => data.parents.get(x.id) === e.id).sort((a, b) => a.name.localeCompare(b.name));
+  // the projects under it and its open to-dos counted as Overview's card counts them (lib/project-overview.ts, #13019)
+  const todos = useScopedTodos();
+  const facts = projectFacts(list, data.parents, todos, e.id);
+  const children = facts.children;
   const milestones = tree?.milestones ?? e.milestones ?? [];
   const notes = yesterdayNotes(detail?.log);
   const parent = data.parents.get(e.id) ?? null;
@@ -237,7 +244,7 @@ export function ProjectHome({ node, data, onOpen, onMenu, milestoneAsk }: {
             </div>
             {depth > SUGGESTED_DEPTH && <p className="mt-1.5 px-1 text-label text-attention">{t("knowledge-projecttree.deep_hint", { levels: depth, suggested: SUGGESTED_DEPTH })}</p>}
           </section>
-          <section className="mb-4">
+          <section className="mb-4" data-project-children={children.length}>
             <SectionTitle title={t("knowledge-projecttree.children")} count={children.length} />
             {children.length ? children.map((c) => (
               <div key={c.id} className="flex items-center gap-2 border-t border-line py-1.5 pl-1 text-meta">
@@ -250,6 +257,12 @@ export function ProjectHome({ node, data, onOpen, onMenu, milestoneAsk }: {
             )) : <p className="px-1 text-label text-ink-3">{t("knowledge-projecttree.no_children")}</p>}
           </section>
           <Milestones id={e.id} list={milestones} data={data} ask={milestoneAsk} onSaved={again} />
+          <section className="mb-4" data-project-todos={facts.openTodos}>
+            <SectionTitle title={t("overview-projects.open_todos_title")} count={facts.openTodos} />
+            <p className="px-1 text-label text-ink-3">{t("overview-projects.open_todos_detail", { count: facts.openTodos, own: facts.ownTodos })}</p>
+          </section>
+          {/* the routine checks on this project (#13020): its watch cards, as Overview draws them */}
+          <div className="not-empty:mb-4"><ProjectWatchCards project={e.id} /></div>
           <section className="mb-4">
             <SectionTitle title={t("knowledge-projecttree.yesterday")} />
             {!detail && !failed ? <Loading /> : failed ? <p className="px-1 text-label text-orange">{failed}</p>
@@ -274,7 +287,7 @@ function Milestones({ id, list, data, ask, onSaved }: { id: string; list: Milest
   }, [ask]);
   useEffect(() => setEditing(null), [id]);
   return (
-    <section className="mb-4" data-milestones="">
+    <section className="mb-4" data-milestones={list.length}>
       <SectionTitle title={t("knowledge-projecttree.milestones")} count={list.length}
         right={editing !== "new" && <Button tone="quiet" size="sm" icon="plus" onClick={() => setEditing("new")}>{t("knowledge-projecttree.add")}</Button>} />
       {list.map((m) => editing === m.id ? (

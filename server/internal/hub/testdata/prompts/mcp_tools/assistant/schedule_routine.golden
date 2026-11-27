@@ -1,6 +1,6 @@
 {
   "name": "schedule_routine",
-  "description": "Create a recurring routine, or pass `id` from list_followups to edit supplied fields. `enabled: false` pauses it. Use `time` (with optional `weekdays`) or 5-field `cron` in the user's zone (at least 5m apart; aliases, 0/7=Sun, Vixie day OR; no seconds/@every/TZ=; check reply's next runs). `until` needs RFC 3339 or relative duration.\n\nRuns inherit Main chat's launcher/model/effort (omit to keep; empty launcher resets). Permission mode is the user's. `fresh_each_run: true` starts a new chat per run with its state note. For a supervised to-do, pass `todo_id` (omit keeps; \"\" clears; Persona checks real progress from run 2 and asks on stalls). For a dashboard page you write, pass `page_id` (one routine/page, immutable, \u003e=60m apart, never pushes or posts to Inbox, no report/todo_id; held on draft until Keep, data-only grant on kept page). Get owner consent before creating or changing recurring work.",
+  "description": "Create a recurring routine, or pass `id` from list_followups to edit supplied fields. `enabled: false` pauses it. Use `time` (with optional `weekdays`) or 5-field `cron` in the user's zone (at least 5m apart; aliases, 0/7=Sun, Vixie day OR; no seconds/@every/TZ=; check reply's next runs). `until` needs RFC 3339 or relative duration.\n\nRuns inherit Main chat's launcher/model/effort (omit to keep; empty launcher resets). Permission mode is the user's. `fresh_each_run: true` starts a new chat per run with its state note. For a supervised to-do, pass `todo_id` (omit keeps; \"\" clears; Persona checks real progress from run 2 and asks on stalls). For a dashboard page you write, pass `page_id` (one routine/page, immutable, >=60m apart, never pushes or posts to Inbox, no report/todo_id; held on draft until Keep, data-only grant on kept page). Get owner consent before creating or changing recurring work.",
   "input_schema": {
     "type": "object",
     "properties": {
@@ -10,7 +10,7 @@
       },
       "page_id": {
         "type": "string",
-        "description": "pg_ dashboard page to refresh (immutable, \u003c=1/hour, no push/inbox/report/todo_id)"
+        "description": "pg_ dashboard page to refresh (immutable, <=1/hour, no push/inbox/report/todo_id)"
       },
       "fresh_each_run": {
         "type": "boolean"

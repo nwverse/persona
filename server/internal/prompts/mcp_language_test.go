@@ -24,8 +24,11 @@ func TestMCPLegacyBytes(t *testing.T) {
 	if err := json.Unmarshal(raw, &expected); err != nil {
 		t.Fatal(err)
 	}
-	// Tools added after the legacy inventory was frozen include to-do split and merge and browser_fetch_download.
-	newTools := []string{"decision_record", "decisions_query", "space_state_update", "lark_image", "ask_user_withdraw", "conversations_switch", "health_strength", "file_transfer", "a2a_read", "page", "model_profile_capture", "model_probe", "launcher_import", "external_sources_read", "external_sources_write", "bot_group_reply", "todo_split", "todo_merge", "browser_fetch_download"}
+	// Unified-ledger tools, origin-scoped withdrawal, health_strength (#14713), file_transfer, a2a_read (#13831),
+	// page (Dashboards, #15017), model_profile_capture (#15288), bot_group_reply (#16096), the watch tools and
+	// browser_fetch_download were introduced after the frozen legacy inventory.
+	newTools := []string{"decision_record", "decisions_query", "space_state_update", "lark_image", "ask_user_withdraw", "conversations_switch", "health_strength", "file_transfer", "a2a_read", "page", "model_profile_capture", "model_probe", "launcher_import", "external_sources_read", "external_sources_write", "bot_group_reply", "todo_split", "todo_merge", "browser_fetch_download",
+		"watch_draft", "watch_confirm", "watch_list", "watch_update", "watch_delete", "watch_reorder", "watch_report"}
 	for _, name := range newTools {
 		if _, exists := expected[name]; exists {
 			t.Fatalf("%s is not a legacy tool", name)

@@ -7,6 +7,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setClassicOverview } from "../lib/overview-layout";
 vi.hoisted(() => {
   globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
   window.matchMedia ??= ((query: string) => ({ matches: false, media: query, onchange: null, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false })) as typeof window.matchMedia;
@@ -281,3 +282,6 @@ describe("Overview on a hub that pages its Agents list, with several assistants"
     expect(machineLine()).toBe("2 个 Agent · macOS 26.1");
   });
 });
+
+// these tests read the classic layout's sections (#13019: off by default, Settings › General › Overview)
+beforeEach(() => setClassicOverview(true));

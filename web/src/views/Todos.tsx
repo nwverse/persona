@@ -2,6 +2,8 @@ import { decisionSourceLabel } from "../lib/todo-decision-label";
 import { NewTodoRepositoryBindings, TodoRepositoryBindings, useRepositoryRequestContext } from "../ui/TaskRepositoryBindingsEditor";
 import { cleanRepositoryDraft, createTodoWithRepositories, repositoryDuplicateLink, validRepositoryDraft, type CreateRepositoryBindings, type RepositoryCatalog } from "../lib/task-repositories";
 import { hasRequestPieces } from "../lib/request-pieces";
+import { isUnsorted, TEMPORARY } from "../lib/todo-sort";
+import { SortUnsortedLine } from "./todos/SortUnsortedLine";
 import { ExternalSourcesEntry } from "../features/external-sources/ExternalSourcesEntry";
 import { defaultManager, MANAGER_HEADER, sameManager, useShownManager } from "../lib/manager-choice";
 // Beautiful UI Todos View: left list (sorted by status & created_at), right detail, handover dialog.
@@ -292,6 +294,8 @@ function TodoListView({
   const [activeId, setActiveId] = useState<string | undefined>(selectedId);
   const [search, setSearch] = useState("");
   const [newOpen, setNewOpen] = useState(false);
+  // "Sort N unsorted…" (#13026): the open to-dos in no project and not marked Temporary, the hub's own rule
+  const [sortOpen, setSortOpen] = useState(false);
   const [handoverOpen, setHandoverOpen] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   // Which to-do the hand-over and delete dialogs are for: a row's whose menu chose them (#4429), or for hand-over
@@ -722,6 +726,7 @@ function TodoListView({
     useMemo(() => sortTodos(todos.filter((td) => placed.row.get(td.id) === "done"), lookup), [todos, placed, lookup]),
     sameList,
   );
+  const unsortedCount = useMemo(() => todos.filter(isUnsorted).length, [todos]);
   const filteredCancelled = useSteady(
     useMemo(() => sortTodos(todos.filter((td) => placed.row.get(td.id) === "cancelled"), lookup), [todos, placed, lookup]),
     sameList,
@@ -1503,6 +1508,7 @@ function TodoListView({
             ) : (
               byStatus ? (
               <div className="flex flex-col gap-1" data-testid="todos-sections" data-todo-source={serverBoard ? "board" : fromView ? "view" : undefined}>
+                {unsortedCount > 0 && <SortUnsortedLine count={unsortedCount} onOpen={() => setSortOpen(true)} />}
                 {hiddenWaitingCount > 0 && <HiddenWaitingLine count={hiddenWaitingCount} filter={listFilter} onShowAll={() => chooseFilter("all")} />}
                 {statusSectionOrder.map((sec) =>
                   displayTriaged.sections[sec].length === 0 && !((sec === "done" || sec === "cancelled") && hasOlderClosed) ? null : (
@@ -1532,6 +1538,7 @@ function TodoListView({
               </div>
               ) : (
               <div className="flex flex-col gap-1">
+                {unsortedCount > 0 && <SortUnsortedLine count={unsortedCount} onOpen={() => setSortOpen(true)} />}
                 {grouping === "direction" ? (
                   <>
                     {directionSections.map((g) => (
@@ -1739,6 +1746,11 @@ function TodoListView({
       )}
 
       {/* Dialogs */}
+      {sortOpen && (
+        <Suspense fallback={null}>
+          <SortTodos onClose={() => setSortOpen(false)} />
+        </Suspense>
+      )}
       <NewTodoDialog
         key={`${owner}:${repositoryManager}:${newOpen}`}
         manager={repositoryManager}
@@ -3485,12 +3497,13 @@ function TodoPlanEditor({ todo, todosV2 }: { todo: Todo; todosV2?: boolean }) {
         <span className="whitespace-nowrap">{t("todos.project_label")}</span>
         <select
           aria-label={t("todos.project_label")}
-          value={todo.project ?? ""}
-          onChange={(e) => void save({ project: e.target.value })}
+          value={todo.temporary ? TEMPORARY : (todo.project ?? "")}
+          onChange={(e) => void save(e.target.value === TEMPORARY ? { temporary: true } : { project: e.target.value, temporary: false })}
           className={cx(PLAN_FIELD, "max-w-56 truncate")}
           data-testid="todo-plan-project"
         >
           <option value="" aria-label={t("todos.project_none")}>{todosV2 ? "" : t("todos.project_none")}</option>
+          <option value={TEMPORARY}>{t("todos-sort.temporary")}</option>
           {projects.map((p) => (
             <option key={p.slug} value={p.slug}>
               {p.name}
@@ -3560,6 +3573,7 @@ function askText(ix: Interaction | undefined): string {
 
 // A task's brief (#3822) comes with the first to-do that has one, not with the page.
 const TodoRequestGraph = lazy(() => import("./TodoRequestGraph"));
+const SortTodos = lazy(() => import("./todos/SortTodos"));
 const TaskBriefPanel = lazy(() => import("./assistant/TaskBrief").then((m) => ({ default: m.TaskBriefPanel })));
 const WorkspaceNaming = lazyPage(() => import("../ui/WorkspaceNaming").then((m) => m.WorkspaceNaming));
 const TaskBriefHistory = lazy(() => import("./assistant/TaskBrief").then((m) => ({ default: m.TaskBriefHistory })));

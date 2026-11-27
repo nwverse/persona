@@ -863,7 +863,9 @@ export function firstScreenOverBudget(bytes: [string, number][], budget = FIRST_
 // And 33 B for Dashboards phase 2 watch rendering (#13020): the idle renderer (ViewBody.tsx) wraps a lone metric's
 // label and detail instead of truncating and caps a row's value at max-w-[45%]. Core-only build on main 9760656350
 // with #13020 sends 46,124 B at idle (23 B over); 10 B of room on top.
-export const IDLE_TIER_BUDGET = 46_134;
+// And 29 B for the watch wall (#13020): Overview (idle) gains the lazy import of views/watch/WatchWall.tsx and its
+// Suspense; the wall itself loads as a chunk of its own. Combined with the 33 B phase-2 delta: 46,101 + 33 + 29 = 46,163 B.
+export const IDLE_TIER_BUDGET = 46_163;
 
 const gzip = promisify(gzipCompress);
 
