@@ -266,6 +266,24 @@ describe.each(["assistant", "agents"] as const)("%s folded history", (style) => 
     expect(host.textContent).not.toContain("正在取 10 条");
     for (const n of [1, 2, 3, 4, 5, 6]) expect(detailText()).toContain(`echo ${n}`);
   });
+  it.each(["incomplete", "rejected"])("continues later folds after an %s read and on Retry", async (failure) => {
+    const expand = vi.fn(async (item: Item) => {
+      if (item.seq !== 1) return true;
+      if (failure === "rejected") throw new Error("409 missing_generation");
+      return false;
+    });
+    draw(style, seg([fold(1, 3), words(4, "Earlier progress."), fold(5, 7)]), false, expand);
+    tap();
+    await settle();
+    expect(expand.mock.calls.map(([item]) => item.seq)).toEqual([1, 5]);
+    expect(host.textContent).toContain("没能取回这段过程");
+    const retry = host.querySelector<HTMLButtonElement>('[role="status"] button')!;
+    act(() => retry.click());
+    await settle();
+    expect(expand.mock.calls.map(([item]) => item.seq)).toEqual([1, 5, 1, 5]);
+    expect(host.textContent).toContain("没能取回这段过程");
+    expect(host.textContent).not.toContain("正在取 10 条");
+  });
   it("shows Retry and stops spinning when expandFold resolves incomplete (false)", async () => {
     const expand = vi.fn(async () => false);
     draw(style, seg([fold(1, 5)]), false, expand);

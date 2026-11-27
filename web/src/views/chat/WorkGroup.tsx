@@ -215,9 +215,12 @@ export const WorkGroup = memo(function WorkGroup({ g, p, limit }: { g: WorkGroup
         (done, f) =>
           done.then(() =>
             live
-              ? Promise.resolve(expandFold(f)).then((ok) => {
-                  if (ok === false) throw new Error("fold read incomplete");
-                })
+              ? Promise.resolve()
+                  .then(() => expandFold(f))
+                  .then((ok) => {
+                    if (live && ok === false) setFailed(true);
+                  })
+                  .catch(() => live && setFailed(true))
               : undefined,
           ),
         Promise.resolve(),
