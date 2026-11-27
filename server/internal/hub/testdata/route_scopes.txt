@@ -107,6 +107,7 @@ push.grading         DELETE /api/v1/push/grading/layer
 -                    DELETE /api/v1/task-trust
 -                    DELETE /api/v1/todos/{id}
 todos.write          DELETE /api/v1/todos/{id}/agents/{mid}/{sid}
+-                    DELETE /api/v1/todos/{id}/confirm
 -                    DELETE /api/v1/todos/{id}/blockers/{blockerId}
 -                    DELETE /api/v1/todos/{id}/seen
 -                    DELETE /api/v1/todos/{id}/someday
@@ -919,6 +920,7 @@ push.grading         PUT /api/v1/push/grading/layer
 -                    PUT /api/v1/resources
 -                    PUT /api/v1/subscriptions/{id}
 todos.write          PUT /api/v1/todos/{id}/agents/{mid}/{sid}
+-                    PUT /api/v1/todos/{id}/confirm
 todos.write          PUT /api/v1/todos/{id}/repositories
 todos.write          PUT /api/v1/todos/{id}/repositories/{repo_id}/links
 -                    PUT /api/v1/todos/{id}/restored
@@ -926,6 +928,7 @@ todos.write          PUT /api/v1/todos/{id}/repositories/{repo_id}/links
 -                    PUT /api/v1/todos/{id}/someday
 todos.write          PUT /api/v1/todos/{id}/spaces/{mid}/{space...}
 -                    PUT /api/v1/todos/{id}/thread
+-                    PUT /api/v1/todos/{id}/words
 todos.write          PUT /api/v1/todos/{id}/workspace-rules
 -                    PUT /api/v1/workspace-board/settings
 -                    PUT {base}

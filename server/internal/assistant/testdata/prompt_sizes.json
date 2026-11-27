@@ -37,7 +37,8 @@
   "mcp_tools.assistant#ask_user": 3022,
   "mcp_tools.assistant#ask_user_withdraw": 645,
   "mcp_tools.assistant#cancel_followup": 209,
-  "mcp_tools.assistant#concern_report": 951,
+  "mcp_tools.assistant#concern_file": 1706,
+  "mcp_tools.assistant#concern_report": 1108,
   "mcp_tools.assistant#conversation_archive": 519,
   "mcp_tools.assistant#conversation_new": 770,
   "mcp_tools.assistant#conversation_read": 440,
@@ -143,5 +144,5 @@
   "supervise.review_rework": 555,
   "supervise.rework": 396,
   "supervise.task_goal": 111,
-  "supervision_instructions": 15555
+  "supervision_instructions": 15618
 }

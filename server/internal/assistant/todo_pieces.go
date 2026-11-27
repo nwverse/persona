@@ -32,6 +32,20 @@ import (
 //
 // Nothing here decides when work is split or started: that is the conversation's (its instructions, an extension).
 
+// concernIn: id is a concern in book. A concern's tasks may have pieces of their own (concern_matters.go), so a request
+// under a concern is two levels deep.
+func concernIn(book map[string]*Todo, id string) bool {
+	t, ok := book[id]
+	return ok && t.isConcern()
+}
+
+// concernNow: id is a concern in the book now (a request root under one is still a request's root).
+func (s *Service) concernNow(id string) bool {
+	s.todos.mu.RLock()
+	defer s.todos.mu.RUnlock()
+	return concernIn(s.todos.todos, id)
+}
+
 // pieceEdit is a change to a to-do's place in a request; nil leaves that part as it is. Changing part_of without
 // giving after empties after: the pieces it waited for belong to the request it left.
 type pieceEdit struct {
@@ -97,10 +111,13 @@ func (s *Service) checkPiecesNow(id string, p pieceEdit) (db.TodoEdit, error) {
 			return out, errors.New("part_of can't name the to-do itself")
 		case !ok:
 			return out, fmt.Errorf("part_of: no to-do %q (todo_list has their ids)", partOf)
-		case root.PartOf != "":
+		case root.PartOf != "" && !concernIn(book, root.PartOf):
 			return out, fmt.Errorf("part_of: %q is itself a piece of %q; name the request's own to-do, %q", partOf, root.PartOf, root.PartOf)
+		case cur.isConcern():
+			return out, errors.New("part_of: a concern is no piece of anything; move its tasks instead")
 		}
-		if id != "" {
+		if id != "" && !root.isConcern() {
+			// under a concern a task may be a request with pieces of its own; elsewhere one level
 			for _, t := range book {
 				if t.PartOf == id {
 					return out, fmt.Errorf("part_of: this to-do is a request with pieces (%q among them), so it can't be a piece itself", t.ID)
@@ -262,7 +279,7 @@ func (s *Service) recheckPieces(id string, e db.TodoEdit) (db.TodoEdit, error) {
 	if e.RequireAcceptedAfter != nil {
 		enforced = *e.RequireAcceptedAfter
 	}
-	if enforced && (partOf != "" || cur.isConcern()) {
+	if enforced && (partOf != "" && !s.concernNow(partOf) || cur.isConcern()) {
 		return links, &pieceError{errRequestGateRoot}
 	}
 	return links, nil

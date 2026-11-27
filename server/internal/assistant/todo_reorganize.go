@@ -111,6 +111,18 @@ func (s *Service) reorganizeTodos(ctx context.Context, in todoReorganizeRequest)
 		return todoReorganizeResponse{}, err
 	}
 
+	if targetPartOf != nil && *targetPartOf != "" {
+		// a concern is a matter, never part of anything (checkPieces refuses it on every other link write)
+		for _, tid := range ids {
+			if cur, ok := s.todoNow(tid); ok && cur.isConcern() {
+				s.todos.writing.Unlock()
+				return todoReorganizeResponse{}, reorganizeBadRequestError{
+					err: fmt.Errorf("part_of: %q is a concern, which is no part of anything; move its tasks instead", tid),
+				}
+			}
+		}
+	}
+
 	now := time.Now().UTC()
 	st := s.todoDB()
 	updated := make([]Todo, 0, len(affectedIDs))

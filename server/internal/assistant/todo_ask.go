@@ -91,10 +91,20 @@ type listedTodo struct {
 	DecisionReview       *decisionReview            `json:"decision_review,omitempty"`
 	Orphaned             *TodoOrphan                `json:"orphaned,omitempty"`
 	View                 *assistantwire.TodoSummary `json:"view,omitempty"`
-	Wait                 *assistantwire.TodoWait    `json:"wait,omitempty"`
-	RepoGate             *repoGate                  `json:"repo_gate,omitempty"`
-	ItemType             string                     `json:"item_type,omitempty"`
-	ChildSummary         *todoChildSummary          `json:"child_summary,omitempty"`
+	// HeaderCard is the hub's verdict on what the main conversation's header may show of it (header_card.go):
+	// needs_user, finished or "" for none. Always present, so every client agrees on what may raise a card.
+	HeaderCard string `json:"header_card"`
+	// Concern is a concern's filed words and where it stands; Matter is the concern a task belongs to
+	// (concern_matters.go, "Matters").
+	Concern *ConcernView `json:"concern,omitempty"`
+	Matter  string       `json:"matter,omitempty"`
+	// FollowedBy names who follows a task: a direction with its name, the main conversation, or the background
+	// supervisor (concern_matters.go TaskFollow); absent while nobody supervises it.
+	FollowedBy         *TaskFollow             `json:"followed_by,omitempty"`
+	Wait               *assistantwire.TodoWait `json:"wait,omitempty"`
+	RepoGate           *repoGate               `json:"repo_gate,omitempty"`
+	ItemType           string                  `json:"item_type,omitempty"`
+	ChildSummary       *todoChildSummary       `json:"child_summary,omitempty"`
 }
 
 // askEvidenceLink returns raw when it is a valid http(s) URL and not merely the to-do's own /todos/<id> page.

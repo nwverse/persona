@@ -166,13 +166,14 @@ func (s *Service) viewedTodo(ctx context.Context, id string) (listedTodo, bool, 
 // viewedTodoRuns is viewedTodo with the sessions of the to-do's active runs as its view read them (todoFactsOf),
 // which its timeline reads rather than ask the computers again (todo_timeline.go).
 func (s *Service) viewedTodoRuns(ctx context.Context, id string) (listedTodo, []proto.Session, bool, error) {
-	list, p, err := s.todosViewed(ctx, false)
+	// briefs: matterOf reads a task's brief to find its matter, so the row matches the list's
+	list, p, err := s.todosViewed(ctx, true)
 	if err != nil {
 		return listedTodo{}, nil, false, err
 	}
+	s.enrichMatters(ctx, list) // the single row carries matter, concern and header_card as the list does
 	for i, t := range list {
 		if t.ID == id {
-			t.Todo = s.withBrief(t.Todo) // as withBriefFrom gives it in the list
 			return t, p.facts[i].Sessions, true, nil
 		}
 	}

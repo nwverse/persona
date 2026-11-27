@@ -331,6 +331,7 @@ type Service struct {
 	adoptMu        sync.Mutex             // agent_control.go: one agent_supervise at a time
 	placeBook      placeBook              // places.go
 	accept         acceptBook             // acceptance.go
+	concerns       concernBook            // concern_matters.go
 	pushQuiet      quietSwitch            // push_quiet.go: the hub's low-distraction switch as last read
 	attention      attentionClock         // attention.go: the attention mode as last read, and its end
 	deploy         deployProbe            // deploy_check.go: is the work in the running hub

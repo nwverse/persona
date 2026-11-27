@@ -45,8 +45,8 @@ var toolNames = []string{"resource_status", "ask_user", "ask_user_withdraw", "no
 	"conversations_list", "conversations_switch", "conversation_read", "conversation_rename", "conversation_archive", "conversation_unarchive",
 	"conversation_tags_set",
 	"conversation_new", "conversation_send", "task_plan", "task_plan_withdraw", "task_review", "task_scope", "task_decided", "task_start_screen", "task_start_keys", "task_retry",
-	"todo_workspace", "todo_repositories_get", "todo_repositories_set", "todo_repository_links_set", "todo_repository_links_add", "todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete", "concern_report",
-	"direction_name", "leader_progress", "decision_record", "decisions_query"}
+	"todo_workspace", "todo_repositories_get", "todo_repositories_set", "todo_repository_links_set", "todo_repository_links_add", "todo_list", "todo_get", "todo_create", "todo_update", "todo_complete", "todo_reopen", "todo_delete", "concern_report", "concern_file",
+	"direction_name", "leader_progress", "decision_record", "decisions_query", "health_intake"}
 
 // Tools are the assistant's tools (assistant.tools).
 func (s *Service) Tools(ctx context.Context) []proto.Tool {
@@ -241,6 +241,8 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		return s.toolLeaderProgress(ctx, self, args)
 	case "concern_report":
 		return s.toolConcernReport(ctx, machine, self, args) // concerns.go
+	case "concern_file":
+		return s.toolConcernFile(ctx, machine, self, args) // concern_matters.go
 	case knowledgeSearchTool, knowledgeReadTool:
 		_, guest, err := s.guestOf(ctx, machine, self)
 		if err != nil || guest || s.isWorkMachine(machine) || isOutwardReader(ctx) {

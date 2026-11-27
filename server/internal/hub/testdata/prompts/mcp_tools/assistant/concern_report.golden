@@ -15,6 +15,10 @@
       "report": {
         "type": "string",
         "description": "what you told the user of its outcome, as you said it in this reply (at most 4000 characters)"
+      },
+      "owner_saw": {
+        "type": "boolean",
+        "description": "the full answer is in this reply and nothing was handed out: close already acknowledged, with no card waiting"
       }
     }
   }

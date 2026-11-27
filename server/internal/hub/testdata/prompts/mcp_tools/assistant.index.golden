@@ -43,10 +43,6 @@ kb_search
 kb_list
 kb_get
 kb_update
-kb_history_plan
-kb_history_status
-kb_history_stop
-kb_history_resume
 persona_settings
 secret_run
 skill_import
@@ -94,6 +90,7 @@ todo_complete
 todo_reopen
 todo_delete
 concern_report
+concern_file
 direction_name
 leader_progress
 decision_record

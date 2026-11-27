@@ -21,6 +21,9 @@ var todoRoutes = []string{
 	"GET /api/v1/todos/{id}/trace",                   // read-only causal audit trace under todos_v2 (todo_causal_trace.go, #16433)
 	"POST /api/v1/todos/{id}/split",                  // atomically split a todo into child todos under todos_v2 (todo_topology_ops.go, #16433)
 	"POST /api/v1/todos/{id}/merge",                  // atomically merge source todo into target todo under todos_v2 (todo_topology_ops.go, #16433)
+	"PUT /api/v1/todos/{id}/confirm",                 // Got it on a matter (a concern), and its Undo (todo_confirm.go, #14415)
+	"DELETE /api/v1/todos/{id}/confirm",
+	"PUT /api/v1/todos/{id}/words", // the owner files or moves one of their messages under a concern (concern_matters.go, #14415)
 }
 
 func init() { Routes = append(Routes, todoRoutes...) }

@@ -162,7 +162,7 @@ func (s *Service) reportConcernRoute(w http.ResponseWriter, r *http.Request, id,
 		apierr.Write(w, http.StatusBadRequest, errors.New("an extension writes outcomes only"))
 		return
 	}
-	t, closed, err := s.reportConcern(r.Context(), id, choice, "", "")
+	t, closed, err := s.reportConcern(r.Context(), id, choice, "", "", false)
 	switch {
 	case errors.Is(err, db.ErrTodoNotFound):
 		apierr.Write(w, http.StatusNotFound, err)

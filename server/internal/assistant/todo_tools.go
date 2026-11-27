@@ -414,7 +414,13 @@ func (s *Service) toolTodoCreate(ctx context.Context, machine, self string, args
 		if err != nil {
 			return "", fmt.Errorf("the concern could not be saved, nothing changed: %w", err)
 		}
-		return "Concern recorded (it stays open until you report its outcome with concern_report): " + todoLine(t, now, loc), nil
+		filed := ""
+		if w := s.fileCurrentMessage(ctx, machine, self, t.ID); w != "" {
+			filed = fmt.Sprintf(" The owner's message %q is filed under it.", clip(oneLine(w), 60))
+			s.todosChanged(ctx)
+		}
+		return "Concern recorded (it stays open until you report its outcome with concern_report):" + filed +
+			" It has no about yet: set it with concern_file (what it is, why, what counts as done). " + todoLine(t, now, loc), nil
 	}
 	if ok, outcome, err := s.confirmOutbound(ctx, machine, self, "todo_create", "", title, args); err != nil || !ok {
 		return todoNotAllowed(outcome, err)

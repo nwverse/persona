@@ -33,7 +33,7 @@ func (t *Todo) setPlan(row db.TodoRow) {
 	t.RemindAt, t.RemindedAt, t.Priority = row.RemindAt, row.RemindedAt, row.Priority
 	t.Project = row.Project
 	t.Kind = row.Kind
-	t.SeenAt = row.SeenAt
+	t.SeenAt, t.ConfirmedAt = row.SeenAt, row.ConfirmedAt
 	t.AutoSeenUndone = row.AutoSeenUndone
 	t.RestoredAt, t.SomedayUntil = row.RestoredAt, row.SomedayUntil
 	t.InboxItem = row.InboxItem
@@ -55,7 +55,7 @@ func (t *Todo) keepPlan(row *db.TodoRow) {
 	row.RemindAt, row.RemindedAt, row.Priority = t.RemindAt, t.RemindedAt, t.Priority
 	row.Project = t.Project
 	row.Kind = t.Kind
-	row.SeenAt = t.SeenAt
+	row.SeenAt, row.ConfirmedAt = t.SeenAt, t.ConfirmedAt
 	row.AutoSeenUndone = t.AutoSeenUndone
 	row.RestoredAt, row.SomedayUntil = t.RestoredAt, t.SomedayUntil
 	row.InboxItem = t.InboxItem

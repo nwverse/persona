@@ -340,7 +340,7 @@ func (s *Service) todosOnRuns(machines map[string]bool) map[string]bool {
 }
 
 // todosAroundLocked are heads with the to-dos their views read: the to-do each is a step of, and every step of those
-// and of heads (a parent's view rolls its steps up; steps are one level deep, todo_pieces.go). nil without heads
+// and of heads (a parent's view rolls its steps up; steps are one level deep below a request, todo_pieces.go). nil without heads
 // (s.todos.mu held).
 func (s *Service) todosAroundLocked(heads map[string]bool) map[string]bool {
 	if len(heads) == 0 {
