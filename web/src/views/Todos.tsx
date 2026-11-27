@@ -1453,7 +1453,17 @@ function TodoListView({
               ) : offline && todos.length === 0 ? (
                 <OfflineState offline={offline} ring="ring-surface" className="py-14" />
               ) : (
-                <TodoBoard todos={boardProjection.todos} lookup={lookup} triages={boardProjection.triages} projectName={projectName} tick={tick} onOpen={openFromList} />
+                <TodoBoard
+                  todos={boardProjection.todos}
+                  lookup={lookup}
+                  triages={boardProjection.triages}
+                  projectName={projectName}
+                  tick={tick}
+                  onOpen={openFromList}
+                  todosV2={todosV2}
+                  allTodos={todosV2 ? todos : undefined}
+                  effectiveDirectionOf={todosV2 ? resolveDirection : undefined}
+                />
               )}
             </TodoListScroller>
           ) : requestMode ? (
