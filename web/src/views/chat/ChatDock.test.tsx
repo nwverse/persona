@@ -70,7 +70,7 @@ describe("Header", () => {
     expect(quiet).toMatch(/<button type="button" aria-label="分支会话（2）" title="分支会话（2）" aria-expanded="false" data-side-sessions="2"[^>]*>.*<span>2<\/span><\/button>/);
     expect(quiet).not.toContain("data-side-sessions-needs");
     const waiting = header({ sides: { count: 3, open: true, needs: true, onToggle: () => {} } });
-    expect(waiting).toContain('aria-label="分支会话（3） · 有分支会话需要你"');
+    expect(waiting).toContain('aria-label="分支会话（3） · 有分支会话需要你处理"');
     expect(waiting).toContain('aria-expanded="true"');
     expect(waiting).toContain("data-side-sessions-needs");
   });
@@ -101,7 +101,7 @@ describe("Header", () => {
     state().machines = [{ id: "m", name: "MacBook", online: false } as (typeof machines)[number]];
     try {
       const html = bare(header());
-      expect(html).toMatch(/title="Agent 在 MacBook 上运行，那台电脑现在离线，连上后才能继续"[^>]*data-agent-device="offline"[^>]*opacity-75/);
+      expect(html).toMatch(/title="Agent 运行于 MacBook，该电脑当前离线，重新上线后将继续执行。"[^>]*data-agent-device="offline"[^>]*opacity-75/);
     } finally {
       state().machines = machines;
     }
@@ -143,7 +143,7 @@ describe("Header", () => {
     // a running background task: the button counts it
     const busy = { ...session, background: [{ id: "b1", kind: "bash", command: "npm test" }] } as Session;
     const counted = bare(header({ session: busy, overview }));
-    expect(counted).toMatch(/aria-description="后台任务，1 个在运行"/);
+    expect(counted).toMatch(/aria-description="后台任务，1 个正在运行"/);
     expect(counted).toMatch(/data-background-count="true"[^>]*>1</);
   });
 
@@ -245,13 +245,13 @@ describe("PendingCards", () => {
     const plan = ix("l", "plan", { plan: "\n## 改用 **vitest**\n1. 换配置" });
     const planHtml = cards({ narrow: false, interactions: [], answered: [{ ix: plan, resolution: { approve: true }, at: Date.now() }] });
     expect(planHtml).toContain("改用 vitest");
-    expect(planHtml).not.toContain("计划等你审批");
+    expect(planHtml).not.toContain("计划待审批");
     expect(cards({ narrow: false, interactions: [], answered: [{ ix: ix("l2", "plan"), resolution: { approve: true }, at: Date.now() }] })).not.toContain("data-answered-about");
     // a terminal dialog with nothing to say: no "Terminal needs you" above its Yes
     const dialog = ix("d", "screen", { dialog: { options: [{ key: "1", label: "Yes" }] } as Interaction["dialog"] });
     const dialogHtml = cards({ narrow: false, interactions: [], answered: [{ ix: dialog, resolution: { option: "1" }, at: Date.now() }] });
     expect(dialogHtml).not.toContain("data-answered-about");
-    expect(dialogHtml).not.toContain("终端等你处理");
+    expect(dialogHtml).not.toContain("终端需要你处理");
     // handed back (#2450): nothing was decided, so no answer line repeats the head; the line says which request went back
     const handed = cards({ narrow: false, interactions: [], answered: [{ ix: perm, resolution: { dismiss: true }, at: Date.now() }] });
     expect(handed).toContain("data-answered-about");
@@ -278,7 +278,7 @@ describe("PendingCards", () => {
 
   it("names a child session's card by the child's title, on its parent's page (#5120)", () => {
     expect(permissionFrom({ folded_under: "lead", session_title: "  Write the\n tests " })).toBe("来自子 Agent · Write the tests");
-    expect(permissionFrom({ folded_under: "lead" })).toBe("来自子 Agent · 子智能体任务");
+    expect(permissionFrom({ folded_under: "lead" })).toBe("来自子 Agent · 子 Agent 任务");
     expect(permissionFrom({ folded_under: "lead", session_title: "y".repeat(80) })).toBe(`来自子 Agent · ${"y".repeat(47)}…`);
     // a question card says it too, at its top; the session's own cards say nothing
     const questions = [{ question: "用哪个框架？", options: [{ label: "A" }] }] as Interaction["questions"];
@@ -309,7 +309,7 @@ describe("PendingCards", () => {
     const html = cards({ narrow: false });
     expect(html).not.toContain("data-chat-cards=");
     expect(html).not.toContain("还有");
-    expect(html).toContain("计划等你审批");
+    expect(html).toContain("计划待审批");
     expect(html).not.toContain("用哪个框架？");
     expect(html).not.toContain("允许使用 Bash？");
     expect(html).toContain("data-chat-cards-position");
@@ -330,7 +330,7 @@ describe("PendingCards", () => {
 
   it("folds them into one line while the keyboard is up", () => {
     const html = cards({ narrow: true, keyboard: true });
-    expect(html).toContain("3 件待处理");
+    expect(html).toContain("3 项待处理");
     expect(html).not.toContain("还有");
     const folds = [...html.matchAll(/<div class="grid [^"]*"([^>]*)>/g)].map((m) => m[1]);
     expect(folds.every((f) => f.includes("inert"))).toBe(true);
@@ -338,7 +338,7 @@ describe("PendingCards", () => {
 
   it("is one line on a phone on its side", () => {
     const html = renderToStaticMarkup(<PendingCards interactions={three} answered={[]} narrow short keyboard={false} onDismissKeyboard={() => {}} />);
-    expect(html).toContain("3 件待处理");
+    expect(html).toContain("3 项待处理");
     expect(html).not.toContain("还有");
   });
 
@@ -377,8 +377,8 @@ describe("PendingCards, the next card waiting elsewhere (#4091)", () => {
     for (const narrow of [false, true]) {
       const html = cards({ narrow, interactions: [], answered, offer: true });
       expect(html).toContain("已回答");
-      expect(html).toContain("还有 2 件等你");
-      expect(html).toContain("下一件：照片同步脚本支持 HEIC · 保存为哪种格式？");
+      expect(html).toContain("还有 2 项待你处理");
+      expect(html).toContain("下一项：照片同步脚本支持 HEIC · 保存为哪种格式？");
       expect(html).toMatch(/<a href="[^"]*\/s\/n\/t"[^>]*data-chat-next-waiting/);
     }
   });
@@ -451,11 +451,11 @@ describe("QueuePanel (#5327, cindy's pending queue)", () => {
 
   it("lists the messages in send order without numbers, one line each, a hairline under them", () => {
     const html = panel({ session: queued });
-    expect(html).toMatch(/^<div role="region" aria-label="排队的消息" data-queue-panel="true" class="w-full border-b border-line"/);
+    expect(html).toMatch(/^<div role="region" aria-label="排队中的消息" data-queue-panel="true" class="w-full border-b border-line"/);
     expect(rows(html)).toHaveLength(2);
     expect(html.indexOf("顺便把截图换掉")).toBeLessThan(html.indexOf("跑一遍 UI 测试"));
     // the place is in the labels only
-    expect(html).toContain('aria-label="排队的第 1 条：顺便把截图换掉"');
+    expect(html).toContain('aria-label="第 1 条排队消息：顺便把截图换掉"');
     expect(html).not.toMatch(/>1</);
     expect(html).toMatch(/data-queue-row-body="true" class="[^"]*truncate text-\[13px\]/);
     expect(html).toMatch(/max-h-\[196px\][^"]*overflow-y-auto/);
@@ -490,8 +490,8 @@ describe("QueuePanel (#5327, cindy's pending queue)", () => {
     expect(claude).toContain('aria-label="编辑第 1 条排队消息"');
     expect(claude).toContain('aria-label="删除第 2 条排队消息"');
     // it hands over the whole queue at one press, and says so; its tooltip says what happens too, as the dialog did before #7155
-    expect(claude).toContain('aria-label="现在就把排队的消息全部发给 Claude，不用等到下一步"');
-    expect(claude).toMatch(/title="现在就把排队的消息全部发给 Claude，不用等到下一步\nClaude 会马上收到，不用等到下一步。/);
+    expect(claude).toContain('aria-label="立即将所有排队消息发送给 Claude，无需等待下一步"');
+    expect(claude).toMatch(/title="立即将所有排队消息发送给 Claude，无需等待下一步\nClaude 将立即收到这些消息，无需等待下一步。/);
     const codex = panel({ session: { ...queued, agent: "codex" } });
     expect(codex).not.toContain("data-send-now");
     expect(codex.match(/data-queue-edit/g)).toHaveLength(2);
@@ -507,7 +507,7 @@ describe("QueuePanel (#5327, cindy's pending queue)", () => {
     const persona = { ...queued, agent: undefined, assistant: true, queued: ["顺便把截图换掉", "来自「日报」：今天的汇总"], queued_relayed: 1 } as Session;
     const html = panel({ session: persona, persona: "Nova" });
     expect(html.match(/data-send-now/g)).toHaveLength(1);
-    expect(html).toContain("现在就把排队的消息全部发给 Nova");
+    expect(html).toContain("立即将所有排队消息发送给 Nova");
     // collapsed: no relayed row markup yet, just the summary line
     expect(html).not.toContain("data-queue-relayed-list");
     expect(html).toContain("1 条消息来自其他对话");
@@ -528,7 +528,7 @@ describe("QueuePanel (#5327, cindy's pending queue)", () => {
     const image = { mime: "image/png", data: "iVBORw0KGgo=" };
     const html = panel({ session: persona, persona: "Nova", pending: [{ id: "local", raw: persona.queued![0], before: [], images: [image, image] }] });
     expect(html.match(/data-queue-mark="photo"/g)).toHaveLength(1);
-    expect(html).toContain('aria-label="排队的第 1 条：2 张图片"');
+    expect(html).toContain('aria-label="第 1 条排队消息：2 张图片"');
     expect(html).not.toContain(">请看图片<");
   });
 
@@ -551,8 +551,8 @@ describe("QueuePanel (#5327, cindy's pending queue)", () => {
       expect(html).toContain('data-queue-header="true"');
       expect(html).toContain("已排队，尚未发送");
       // the label says what came with it
-      expect(html).toContain('aria-label="排队的第 1 条：把这两张截图对一下 · 2 张图片"');
-      expect(html).toContain('aria-label="排队的第 2 条：1 张图片"');
+      expect(html).toContain('aria-label="第 1 条排队消息：把这两张截图对一下 · 2 张图片"');
+      expect(html).toContain('aria-label="第 2 条排队消息：1 张图片"');
     } finally {
       vi.unstubAllGlobals();
     }

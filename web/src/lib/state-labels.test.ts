@@ -38,7 +38,7 @@ describe("state names", () => {
     expect(STATE_LABEL).toEqual({ error: "出错", done: "已完成", needs_you: "需要你", working: "工作中", unread: "完成未看", idle: "已看", offline: "未运行", unknown: "未知" });
     const names: Record<StateName, string> = {
       error: "出错", needs_you: "需要你", working: "工作中", unread: "完成未看", idle: "已看", offline: "未运行", unknown: "未知",
-      waiting: "待唤醒", bg_waiting: "后台等待中", awaits_reply: "待你回复", just_finished: "刚做完待看", done: "已完成", interrupted: "中断了", follow_up: "待跟进", not_started: "未开始", failed: "没开起来",
+      waiting: "待唤醒", bg_waiting: "后台等待中", awaits_reply: "待你回复", just_finished: "刚做完待看", done: "已完成", interrupted: "已中断", follow_up: "待跟进", not_started: "未开始", failed: "启动失败",
     };
     for (const [s, name] of Object.entries(names)) expect(stateName(s as StateName)).toBe(name);
     const waits: Record<LegacyWaitReason, string> = {

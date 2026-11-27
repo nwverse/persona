@@ -84,23 +84,25 @@ export struct WorkStepTimeline {
       Row({ space: 4 }) {
         if (add > 0) {
           Text('+' + String(add))
-            .fontSize(Tokens.interfaceFontVp(11, this.env.fontScale))
+            .fontSize(Tokens.typeLabel)
+            .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
             .fontWeight(FontWeight.Medium)
             .fontFamily('monospace')
             .fontColor(Colors.diffAdded)
             .padding({ left: 5, right: 5, top: 2, bottom: 2 })
             .backgroundColor(Colors.codeAddedFill)
-            .borderRadius(6)
+            .borderRadius(Tokens.radiusBadge)
         }
         if (del > 0) {
           Text('−' + String(del))
-            .fontSize(Tokens.interfaceFontVp(11, this.env.fontScale))
+            .fontSize(Tokens.typeLabel)
+            .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
             .fontWeight(FontWeight.Medium)
             .fontFamily('monospace')
             .fontColor(Colors.diffRemoved)
             .padding({ left: 5, right: 5, top: 2, bottom: 2 })
             .backgroundColor(Colors.codeRemovedFill)
-            .borderRadius(6)
+            .borderRadius(Tokens.radiusBadge)
         }
       }
     }
@@ -117,45 +119,49 @@ export struct WorkStepTimeline {
           .copyOption(CopyOptions.LocalDevice)
           .width('100%')
       } else {
-        Row({ space: 6 }) {
+        Row({ space: Tokens.spaceSm }) {
           SymbolGlyph(Symbols.spaces)
             .fontSize('12.5vp')
             .fontColor([Colors.secondary])
           Text(tr('work_summary'))
-            .fontSize(Tokens.interfaceFontVp(12, this.env.fontScale))
+            .fontSize(Tokens.typeLabel)
+            .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
             .fontWeight(FontWeight.Medium)
             .fontColor(Colors.secondary)
             .maxLines(1)
           Blank().layoutWeight(1)
           Text(String(this.steps.length))
-            .fontSize(Tokens.interfaceFontVp(11.5, this.env.fontScale))
+            .fontSize(Tokens.typeLabel)
+            .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
             .fontWeight(FontWeight.Bold)
             .fontFamily('monospace')
             .fontColor(Colors.link)
             .padding({ left: 7, right: 7, top: 1.5, bottom: 1.5 })
             .backgroundColor(Colors.accentWell)
-            .borderRadius(9)
+            .borderRadius(Tokens.radiusCapsule)
             .id('chat.work.timeline.count')
         }
         .width('100%')
-        .padding({ left: 4, right: 4, top: 2, bottom: 2 })
+        .padding({ left: Tokens.spaceXs, right: Tokens.spaceXs, top: Tokens.spaceXxs, bottom: Tokens.spaceXxs })
         .alignItems(VerticalAlign.Center)
 
         ForEach(this.steps, (step: WorkStepView, index: number) => {
-          Column({ space: 6 }) {
+          Column({ space: Tokens.spaceSm }) {
             Button({ type: ButtonType.Normal }) {
-              Row({ space: 8 }) {
+              Row({ space: Tokens.spaceS }) {
                 Stack() { this.stepStatusMark(step) }.width(18).height(18)
                 Column({ space: 1 }) {
-                  Row({ space: 6 }) {
+                  Row({ space: Tokens.spaceSm }) {
                     Text(step.verb)
-                      .fontSize(Tokens.interfaceFontVp(13, this.env.fontScale))
+                      .fontSize(Tokens.typeCaption)
+                      .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption))
                       .fontWeight(FontWeight.Medium)
                       .fontColor(step.failed ? Colors.danger : Colors.ink)
                       .maxLines(1)
                     if (step.subject) {
                       Text(step.subject)
-                        .fontSize(Tokens.interfaceFontVp(13, this.env.fontScale))
+                        .fontSize(Tokens.typeCaption)
+                        .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption))
                         .fontColor(Colors.secondary)
                         .maxLines(1)
                         .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -172,13 +178,13 @@ export struct WorkStepTimeline {
                     .rotate({ angle: this.isOpen(step.id) ? 0 : -90 })
                     .animation(Motion.state(this.env.reduceMotion))
                 }
-              }.width('100%').padding({ left: 10, right: 10, top: 7, bottom: 7 }).constraintSize({ minHeight: 36 })
+              }.width('100%').padding({ left: 10, right: 10, top: 7, bottom: 7 }).constraintSize({ minHeight: Tokens.controlCompact })
             }
             .width('100%')
             .padding(0)
             .backgroundColor(Colors.surface)
-            .borderRadius(12)
-            .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: step.failed ? Colors.danger : PhoneStyle.cardBorder(this.env.dark), radius: 12 })
+            .borderRadius(Tokens.radiusControl)
+            .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: step.failed ? Colors.danger : PhoneStyle.cardBorder(this.env.dark), radius: Tokens.radiusControl })
             .onClick(() => {
               if (step.inputPreview || step.outputPreview) this.toggleStep(step.id);
               else if (step.filePath) { Haptics.tap(); this.onOpenFile(step.filePath); }
@@ -186,32 +192,33 @@ export struct WorkStepTimeline {
             .id('chat.work.step.' + step.id)
 
             if (this.isOpen(step.id) && (step.inputPreview || step.outputPreview)) {
-              Column({ space: 6 }) {
+              Column({ space: Tokens.spaceSm }) {
                 if (step.inputPreview) {
                   Text(step.inputPreview)
                     .fontFamily('monospace')
-                    .fontSize(12)
-                    .lineHeight(18)
+                    .fontSize(Tokens.typeLabel)
+                    .lineHeight(Tokens.lineHeightCaption)
                     .fontColor(Colors.ink)
                     .copyOption(CopyOptions.LocalDevice)
                     .width('100%')
                 }
                 if (step.outputPreview) {
-                  if (step.inputPreview) Divider().strokeWidth(0.5).color(Colors.divider)
+                  if (step.inputPreview) Divider().strokeWidth(Tokens.divider).color(Colors.divider)
                   Text(step.outputPreview)
                     .fontFamily('monospace')
-                    .fontSize(12)
-                    .lineHeight(18)
+                    .fontSize(Tokens.typeLabel)
+                    .lineHeight(Tokens.lineHeightCaption)
                     .fontColor(step.failed ? Colors.danger : Colors.secondary)
                     .copyOption(CopyOptions.LocalDevice)
                     .width('100%')
                 }
-                Row({ space: 8 }) {
+                Row({ space: Tokens.spaceS }) {
                   if (step.filePath) {
                     Button(tr('open'), { type: ButtonType.Capsule })
                       .height(28)
                       .padding({ left: 10, right: 10 })
-                      .fontSize(12)
+                      .fontSize(Tokens.typeLabel)
+                      .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
                       .fontColor(Colors.link)
                       .backgroundColor(Colors.selection)
                       .onClick(() => { Haptics.tap(); this.onOpenFile(step.filePath); })
@@ -220,7 +227,8 @@ export struct WorkStepTimeline {
                   Button(tr('copy'), { type: ButtonType.Capsule })
                     .height(28)
                     .padding({ left: 10, right: 10 })
-                    .fontSize(12)
+                    .fontSize(Tokens.typeLabel)
+                    .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
                     .fontColor(Colors.secondary)
                     .backgroundColor(Colors.control)
                     .onClick(() => this.copySnippet([step.inputPreview, step.outputPreview].filter((v: string) => !!v).join('\n\n')))
@@ -229,8 +237,8 @@ export struct WorkStepTimeline {
               .width('100%')
               .padding(10)
               .backgroundColor(Colors.codeCanvas)
-              .borderRadius(10)
-              .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: 10 })
+              .borderRadius(Tokens.radiusControl)
+              .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: Tokens.radiusControl })
               .transition(Motion.slideFade(this.env.reduceMotion, -4))
             }
           }.width('100%')
@@ -238,10 +246,10 @@ export struct WorkStepTimeline {
       }
     }
     .width('100%')
-    .padding(8)
+    .padding(Tokens.spaceS)
     .backgroundColor(Colors.control)
-    .borderRadius(15)
-    .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: 15 })
+    .borderRadius(Tokens.radiusCard)
+    .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: Tokens.radiusCard })
     .animation(Motion.state(this.env.reduceMotion))
     .id('chat.work.timeline')
   }
@@ -281,24 +289,27 @@ export struct TurnChangesCard {
         .height(30)
         .borderRadius(9)
         .backgroundColor(Colors.selection)
-        Column({ space: 2 }) {
+        Column({ space: Tokens.spaceXxs }) {
           Text(this.headerLabel())
-            .fontSize(Tokens.interfaceFontVp(14, this.env.fontScale))
+            .fontSize(Tokens.typeCaption)
+            .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption))
             .fontWeight(FontWeight.Medium)
             .fontColor(Colors.ink)
             .maxLines(1)
           if (this.changes.exact) {
-            Row({ space: 6 }) {
+            Row({ space: Tokens.spaceSm }) {
               if (this.changes.totalAdditions > 0) {
                 Text('+' + String(this.changes.totalAdditions))
-                  .fontSize(Tokens.interfaceFontVp(12, this.env.fontScale))
+                  .fontSize(Tokens.typeLabel)
+                  .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
                   .fontFamily('monospace')
                   .fontWeight(FontWeight.Medium)
                   .fontColor(Colors.diffAdded)
               }
               if (this.changes.totalDeletions > 0) {
                 Text('-' + String(this.changes.totalDeletions))
-                  .fontSize(Tokens.interfaceFontVp(12, this.env.fontScale))
+                  .fontSize(Tokens.typeLabel)
+                  .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
                   .fontFamily('monospace')
                   .fontWeight(FontWeight.Medium)
                   .fontColor(Colors.diffRemoved)
@@ -309,8 +320,9 @@ export struct TurnChangesCard {
         if (this.changes.files.length > 0) {
           Button(tr('turn_changes_review'), { type: ButtonType.Capsule })
             .height(30)
-            .padding({ left: 12, right: 12 })
-            .fontSize(Tokens.interfaceFontVp(13, this.env.fontScale))
+            .padding({ left: Tokens.spaceM, right: Tokens.spaceM })
+            .fontSize(Tokens.typeCaption)
+            .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption))
             .fontWeight(FontWeight.Medium)
             .fontColor(Colors.link)
             .backgroundColor(Colors.selection)
@@ -322,15 +334,16 @@ export struct TurnChangesCard {
         }
       }.width('100%').padding({ left: 14, right: 14, top: 10, bottom: 10 })
 
-      Divider().strokeWidth(0.5).color(Colors.divider)
+      Divider().strokeWidth(Tokens.divider).color(Colors.divider)
 
-      Column({ space: 2 }) {
+      Column({ space: Tokens.spaceXxs }) {
         ForEach(this.visibleFiles(), (file: TurnChangedFile) => {
           Button({ type: ButtonType.Normal }) {
-            Row({ space: 8 }) {
+            Row({ space: Tokens.spaceS }) {
               SymbolGlyph(Symbols.document).fontSize('14vp').fontColor([Colors.secondary])
               Text(file.shown)
-                .fontSize(Tokens.interfaceFontVp(13, this.env.fontScale))
+                .fontSize(Tokens.typeCaption)
+                .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption))
                 .fontFamily('monospace')
                 .fontColor(Colors.ink)
                 .maxLines(1)
@@ -338,22 +351,24 @@ export struct TurnChangesCard {
                 .ellipsisMode(EllipsisMode.CENTER)
                 .layoutWeight(1)
               if (file.exact && (file.additions > 0 || file.deletions > 0)) {
-                Row({ space: 4 }) {
+                Row({ space: Tokens.spaceXs }) {
                   if (file.additions > 0) {
                     Text('+' + String(file.additions))
-                      .fontSize(12)
+                      .fontSize(Tokens.typeLabel)
+                      .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
                       .fontFamily('monospace')
                       .fontColor(Colors.diffAdded)
                   }
                   if (file.deletions > 0) {
                     Text('-' + String(file.deletions))
-                      .fontSize(12)
+                      .fontSize(Tokens.typeLabel)
+                      .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeLabel))
                       .fontFamily('monospace')
                       .fontColor(Colors.diffRemoved)
                   }
                 }
               }
-            }.width('100%').padding({ left: 12, right: 12, top: 7, bottom: 7 }).constraintSize({ minHeight: 38 })
+            }.width('100%').padding({ left: Tokens.spaceM, right: Tokens.spaceM, top: 7, bottom: 7 }).constraintSize({ minHeight: 38 })
           }
           .width('100%')
           .padding(0)
@@ -367,18 +382,19 @@ export struct TurnChangesCard {
 
         if (this.changes.files.length > TURN_CHANGES_INITIAL_VISIBLE) {
           Button({ type: ButtonType.Normal }) {
-            Row({ space: 6 }) {
+            Row({ space: Tokens.spaceSm }) {
               Text(this.expanded
                 ? tr('bubble_show_less')
                 : tr('turn_changes_more').replace('{count}', String(this.changes.files.length - TURN_CHANGES_INITIAL_VISIBLE)))
-                .fontSize(Tokens.interfaceFontVp(13, this.env.fontScale))
+                .fontSize(Tokens.typeCaption)
+                .maxFontScale(Tokens.interfaceScaleFor(Tokens.typeCaption))
                 .fontColor(Colors.link)
               SymbolGlyph(Symbols.down)
                 .fontSize('11vp')
                 .fontColor([Colors.link])
                 .rotate({ angle: this.expanded ? 180 : 0 })
                 .animation(Motion.state(this.env.reduceMotion))
-            }.padding({ left: 12, right: 12, top: 6, bottom: 8 })
+            }.padding({ left: Tokens.spaceM, right: Tokens.spaceM, top: Tokens.spaceSm, bottom: Tokens.spaceS })
           }
           .width('100%')
           .padding(0)
@@ -391,12 +407,12 @@ export struct TurnChangesCard {
           })
           .id('turn_changes.toggle')
         }
-      }.width('100%').padding({ top: 4, bottom: 4 })
+      }.width('100%').padding({ top: Tokens.spaceXs, bottom: Tokens.spaceXs })
     }
     .width('100%')
-    .backgroundColor(Colors.styleCard || (this.env.dark ? '#1C1C1E' : '#F4F5F7'))
-    .borderRadius(16)
-    .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: 16 })
+    .backgroundColor(Colors.styleCard || Colors.codeSurface)
+    .borderRadius(Tokens.radiusCard)
+    .border({ width: PhoneStyle.surfaceEdgeWidth(0.5), color: PhoneStyle.cardBorder(this.env.dark), radius: Tokens.radiusCard })
     .shadow(PhoneStyle.cardElevation(this.env.dark))
     .transition(Motion.fadeScale(this.env.reduceMotion, 0.96))
     .id('turn_changes.card')

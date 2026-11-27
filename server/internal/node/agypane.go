@@ -458,7 +458,7 @@ func (n *Node) agyConversation(id, pane string) string {
 		}
 		n.mu.Unlock()
 
-		dir := n.agyDataRoot()
+		dir := n.agyRootFor(raw)
 		var next agyPaneBinding
 		var result string
 		var keepBound bool
@@ -857,7 +857,7 @@ func (n *Node) agyEchoBase(id, pane string) echoAfter {
 	if n.agyConversation(id, pane) != conversation {
 		return echoAfter{in: echoInTranscript}
 	}
-	dir := n.agyDataRoot()
+	dir := n.agyRootFor(conversation)
 	root, err := agyBrain(dir, conversation)
 	if err != nil {
 		return echoAfter{in: echoInTranscript}
@@ -914,7 +914,7 @@ func (n *Node) agyPaneCall(ctx context.Context, method, id, pane string, raw jso
 	conversation := n.agyConversation(id, pane)
 	if conversation != "" {
 		h = agyStepsHistory(conversation)
-		dir := n.agyDataRoot()
+		dir := n.agyRootFor(conversation)
 		root, err := agyBrain(dir, conversation)
 		if err == nil {
 			defer root.Close()
@@ -1084,7 +1084,7 @@ func (n *Node) pollAgyPane(w *watch) {
 	var info *agyPaneFiles
 	if conversation != "" {
 		h = agyStepsHistory(conversation)
-		dir := n.agyDataRoot()
+		dir := n.agyRootFor(conversation)
 		root, err := agyBrain(dir, conversation)
 		if err == nil {
 			defer root.Close()

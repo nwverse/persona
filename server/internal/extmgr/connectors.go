@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nwverse/persona/server/internal/assistantwire"
+	"github.com/nwverse/persona/server/internal/buswire"
 	"github.com/nwverse/persona/server/internal/cliport"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/extmgr/githubport"
@@ -274,8 +275,8 @@ func (h *Manager) forgetArchive(ctx context.Context, source string) (assistantwi
 	if c := h.connectorByID(source); c != nil {
 		p.ArchiveSources = h.forgetArchiveSources(c)
 	}
-	var f assistantwire.KBForgotten
-	if err := h.kbAsk(ctx, assistantwire.MethodKBForget, p, &f); err != nil {
+	f, err := buswire.Call(ctx, h.kbCaller(), assistantwire.KBForgetMethod, p)
+	if err != nil {
 		return assistantwire.KBForgotten{}, err
 	}
 	return f, nil

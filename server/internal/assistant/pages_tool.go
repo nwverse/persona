@@ -736,7 +736,7 @@ func readOnlySection(sec wire.Section) (wire.Section, bool) {
 			continue
 		}
 		e.Action, e.Button, e.Actions, e.Buttons = nil, nil, nil, nil
-		e.Expand, e.Load, e.Comment, e.Reply, e.Context, e.MarkViewed, e.Draft = nil, nil, nil, nil, nil, nil, nil
+		e.Expand, e.Load, e.Comment, e.Reply, e.Context, e.MarkViewed, e.Draft, e.Navigate = nil, nil, nil, nil, nil, nil, nil, nil
 		e.Crumbs, e.Threads = nil, nil
 		e.Tiles = slices.Clone(e.Tiles)
 		for i := range e.Tiles {

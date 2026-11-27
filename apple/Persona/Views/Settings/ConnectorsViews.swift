@@ -588,6 +588,12 @@ struct FeishuConnectorView: View {
             Section {
                 Toggle("Show Messages on Home", isOn: $larkHome.enabled)
                 .accessibilityIdentifier("feishu-home-enabled")
+                if larkHome.enabled {
+                    Toggle(String(localized: "lark.messages.agentsToggle", defaultValue: "AI Assistants in Messages",
+                                  comment: "Settings switch: list personal AI assistants with the Lark chats on the Messages page"),
+                           isOn: $larkHome.agentsInMessages)
+                    .accessibilityIdentifier("feishu-home-agents")
+                }
             } footer: {
                 Text("Adds a Messages entry on Home to browse all direct and group chats. It shares accounts and chat history with the Inbox.")
             }

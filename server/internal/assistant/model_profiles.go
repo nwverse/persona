@@ -762,6 +762,9 @@ func (s *Service) captureModels(ctx context.Context) (map[string]ModelBinding, m
 			if l.Kind == "api" && f.name != "model" {
 				continue
 			}
+			if *f.launcher == "" && f.name != "small_model" && strings.HasSuffix(f.name, "_model") {
+				continue
+			}
 			*f.set = profileValue(*f.launcher)
 		}
 		launchers[l.Name] = m
