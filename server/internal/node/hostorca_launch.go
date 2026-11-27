@@ -32,7 +32,7 @@ func (h *orcaHost) CreateSlot(ctx context.Context, space, cwd, label string) (*h
 }
 
 // CreateSpaceEnv is CreateSpace whose shell starts with env added (host.EnvLauncher: terminal.create's env; an Orca
-// that refuses the field opens the terminal without it, orcart.NewTerminal).
+// that refuses the field opens the terminal without it, orcart.WithEnv).
 func (h *orcaHost) CreateSpaceEnv(ctx context.Context, cwd, label string, env []string) (*host.Created, error) {
 	return h.createTerminal(ctx, "", cwd, label, orcaOpen{env: env})
 }
@@ -77,12 +77,14 @@ func (h *orcaHost) createTerminal(ctx context.Context, space, cwd, label string,
 	}
 
 	shell, typed := h.launchShell(ctx)
-	req := orcart.NewTerminal{Worktree: "id:" + wt.WorktreeID, Title: label, MutationID: newUUID(), Shell: shell,
-		Env: orcaEnv(how.env)}
-	if how.shell {
-		req.Command = orcaCdLine(cwd, wt.Path)
+	var opts []orcart.CreateOption
+	if env := orcaEnv(how.env); env != nil {
+		opts = append(opts, orcart.WithEnv(env))
 	}
-	t, err := h.c.OpenTerminal(ctx, req)
+	if line := orcaCdLine(cwd, wt.Path); how.shell && line != "" {
+		opts = append(opts, orcart.WithCommand(line))
+	}
+	t, err := h.c.CreateTerminal(ctx, "id:"+wt.WorktreeID, label, newUUID(), shell, opts...)
 	if err != nil {
 		return nil, orcaErr(err)
 	}

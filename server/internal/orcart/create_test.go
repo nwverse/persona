@@ -59,15 +59,15 @@ func TestRenameAndPaneTitle(t *testing.T) {
 	}
 }
 
-// OpenTerminal sends env as terminal.create's env object and a command with shell-ready delivery; an Orca whose schema
+// CreateTerminal sends env as terminal.create's env object and a command with shell-ready delivery; an Orca whose schema
 // refuses env (invalid_argument, nothing made) is asked once more without it, with the same mutation id, and opens one
 // terminal.
-func TestOpenTerminalEnvAndCommand(t *testing.T) {
+func TestCreateTerminalEnvAndCommand(t *testing.T) {
 	fake := orcarttest.New(t)
 	c := &orcart.Client{MetaPath: fake.MetaPath}
 	ctx := context.Background()
-	if _, err := c.OpenTerminal(ctx, orcart.NewTerminal{Worktree: "id:wt-1", Title: "t", MutationID: "mut-1",
-		Env: map[string]string{"PERSONA_AGENT": "1"}, Command: "cd /tmp/x"}); err != nil {
+	if _, err := c.CreateTerminal(ctx, "id:wt-1", "t", "mut-1", "", orcart.WithEnv(map[string]string{"PERSONA_AGENT": "1"}),
+		orcart.WithCommand("cd /tmp/x")); err != nil {
 		t.Fatal(err)
 	}
 	p := fake.Params("terminal.create")[0]
@@ -79,7 +79,7 @@ func TestOpenTerminalEnvAndCommand(t *testing.T) {
 	}
 
 	fake.Reset()
-	if _, err := c.OpenTerminal(ctx, orcart.NewTerminal{Worktree: "id:wt-1", Title: "t", MutationID: "mut-2"}); err != nil {
+	if _, err := c.CreateTerminal(ctx, "id:wt-1", "t", "mut-2", ""); err != nil {
 		t.Fatal(err)
 	}
 	for _, k := range []string{"env", "command", "startupCommandDelivery"} {
@@ -90,8 +90,7 @@ func TestOpenTerminalEnvAndCommand(t *testing.T) {
 
 	fake.Reset()
 	fake.Unknown("terminal.create", "env")
-	created, err := c.OpenTerminal(ctx, orcart.NewTerminal{Worktree: "id:wt-1", Title: "t", MutationID: "mut-3",
-		Env: map[string]string{"PERSONA_AGENT": "1"}})
+	created, err := c.CreateTerminal(ctx, "id:wt-1", "t", "mut-3", "", orcart.WithEnv(map[string]string{"PERSONA_AGENT": "1"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,8 +107,8 @@ func TestOpenTerminalEnvAndCommand(t *testing.T) {
 	fake.Reset()
 	fake.Unknown("terminal.create")
 	fake.Handle("terminal.create", func(map[string]any) any { return orcarttest.Fail{Code: "runtime_error"} })
-	if _, err := c.OpenTerminal(ctx, orcart.NewTerminal{Worktree: "id:wt-1", Title: "t", MutationID: "mut-4",
-		Env: map[string]string{"PERSONA_AGENT": "1"}}); err == nil || fake.Count("terminal.create") != 1 {
+	if _, err := c.CreateTerminal(ctx, "id:wt-1", "t", "mut-4", "", orcart.WithEnv(map[string]string{"PERSONA_AGENT": "1"})); err == nil ||
+		fake.Count("terminal.create") != 1 {
 		t.Errorf("err %v after %d creates", err, fake.Count("terminal.create"))
 	}
 }
