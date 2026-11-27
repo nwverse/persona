@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/approval"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
@@ -324,5 +325,61 @@ func TestMainInternalReviewerIsIndependentOfItsSourceTask(t *testing.T) {
 	to, home := e.s.internalReviewer(ctx, ix)
 	if to != "bg1" || home != "server" {
 		t.Fatalf("main approval followed a lower task supervisor: %q on %q", to, home)
+	}
+}
+
+// The prepared entry must share one-shot maintenance authority and never turn an
+// expired, remembered or synthetic answer into an Apply callback.
+func TestPreparedMaintenanceRequiresFreshDecision(t *testing.T) {
+	for _, mode := range []string{"owner", "assistant", "remembered", "default", "terminal", "late", "cancel", "expired"} {
+		t.Run(mode, func(t *testing.T) {
+			e := newRouteEnv(t, nil, true)
+			ix := askPermission("ix_prepared_maintenance", "lead1")
+			ix.MachineID, ix.SessionTitle, ix.ToolName = "server", "Persona", "enkeep_rerun"
+			ix.ToolInput = json.RawMessage(`{"force":true}`)
+			applied := make(chan struct{}, 1)
+			done := make(chan error, 1)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			go func() {
+				_, err := e.s.waitPreparedCard(ctx, ix, approval.Operation{Apply: func(context.Context, proto.Resolution) (string, error) {
+					applied <- struct{}{}
+					return "applied", nil
+				}, Unanswered: "nothing executed"})
+				done <- err
+			}()
+			e.noticeWith("conv1", "interaction_id="+ix.ID)
+			yes := true
+			r := proto.Resolution{Allow: &yes, AnsweredBy: proto.AnsweredByAssistant}
+			switch mode {
+			case "owner":
+				r.AnsweredBy = ""
+			case "remembered":
+				r.AnsweredBy, r.Remembered = "", true
+			case "default":
+				r.AnsweredBy = proto.AnsweredByDefault
+			case "terminal":
+				r.AnsweredBy = proto.AnsweredByTerminal
+			case "late":
+				r.Late = true
+			case "cancel":
+				r.Cancel = true
+			case "expired":
+				r.Dismiss, r.Reason = true, proto.DismissedExpired
+			}
+			if err := e.s.resolve(ix.ID, r); err != nil {
+				t.Fatal(err)
+			}
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+			want := 0
+			if mode == "owner" || mode == "assistant" {
+				want = 1
+			}
+			if len(applied) != want || e.pushesOf(ix.ID) != 0 {
+				t.Fatalf("prepared maintenance applied %d times, want %d; owner pushes %d", len(applied), want, e.pushesOf(ix.ID))
+			}
+		})
 	}
 }
