@@ -1,18 +1,18 @@
 {
   "new_failed": "无法打开 Shell：{error}",
   "offline": "离线",
-  "loading": "读取中…",
+  "loading": "加载中…",
   "retry": "重试",
   "no_panes_agent": "在这台电脑上启动 Agent 后，标签页会显示在这里。",
   "new_terminal": "新建 Shell",
   "new_in_space": "在「{name}」中新建 Shell",
-  "none_online": "没有在线的电脑。",
+  "none_online": "当前没有在线的电脑。",
   "close_finished_title_other": "关闭 {count} 个遗留的 Shell？",
-  "close_finished_detail": "关闭后这些 Shell 会停止。会话仍会保留，恢复会话会打开新标签页。",
-  "close_finished_kept_other": "另有 {count} 个仍有程序在运行，会保持打开。",
+  "close_finished_detail": "关闭后这些 Shell 将停止运行。原有会话仍会保留，恢复会话时会在新标签页中打开。",
+  "close_finished_kept_other": "另有 {count} 个 Shell 中仍有程序正在运行，将保持打开状态。",
   "close_finished_confirm": "关闭 Shell",
   "close_finished_failed": "无法关闭 Shell。{error}",
   "closed_finished_other": "已关闭 {count} 个 Shell",
-  "finished_none": "没有可关闭的遗留 Shell",
+  "finished_none": "暂无可关闭的遗留 Shell",
   "terminals": "标签页"
 }

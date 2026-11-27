@@ -116,6 +116,7 @@ import type { FoldAdaptiveLayout } from '../core/FoldPosture';
 import { FoldInspectorPanel } from '../components/FoldInspectorPanel';
 import { QuickCommandEntry } from '../core/QuickCommandPalette';
 import { QuickCommandSheet } from '../components/QuickCommandSheet';
+import { TokenUsageSheet } from '../components/TokenUsageSheet';
 import { nativeLiveView } from '../platform/NativeLiveView';
 import { FloatingToastOverlay } from '../components/FloatingToastOverlay';
 import { toastCenter } from '../models/ToastCenter';
@@ -176,6 +177,7 @@ struct Index {
   @Local foldWorkbenchTab: number = 0;
   @Local foldWorkbenchTabSignal: number = 0;
   @Local quickPaletteOpen: boolean = false;
+  @Local tokenUsageOpen: boolean = false;
   @Local private workbenchInterruptKey: string = '';
   private foldInspectorCollapsedRail: boolean = false;
   private lastFoldPosture: string = '';
@@ -1144,6 +1146,7 @@ struct Index {
       this.starredSheetShown ||
       this.exportSheetShown ||
       this.archivedSheetShown ||
+      this.tokenUsageOpen ||
       !!this.messageLift.current;
   }
   private openQuickPalette(): void {
@@ -1175,7 +1178,7 @@ struct Index {
     } else if (id === 'workspace:todos') {
       if (this.model.todosPageVisible()) this.openSpace('todo');
     } else if (id === 'workspace:knowledge') {
-      this.openSpace('knowledge');
+      if (this.model.knowledgePageVisible()) this.openSpace('knowledge');
     } else if (id === 'workspace:health') {
       this.openSpace('health');
     } else if (id === 'workspace:machines') {
@@ -1188,6 +1191,8 @@ struct Index {
       if (this.wide() && this.foldLayout.supportsInspector) this.switchFoldWorkbenchTab(1);
     } else if (id === 'action:workbench_machines') {
       if (this.wide() && this.foldLayout.supportsInspector) this.switchFoldWorkbenchTab(2);
+    } else if (id === 'action:open_token_usage') {
+      this.tokenUsageOpen = true;
     } else if (id === 'action:open_xiaoyi') {
       this.openXiaoYiQuick();
     } else if (id === 'action:toggle_theme') {
@@ -1392,10 +1397,26 @@ struct Index {
       }
     }
   }
+  @Builder tokenUsageSheet() {
+    WithTheme({ theme: nativeLookTheme(this.look, this.model.style, this.environment.dark), colorMode: this.environment.dark ? ThemeColorMode.DARK : ThemeColorMode.LIGHT }) {
+      ThemeScope({ systemControls: this.look.accentId === 'style' && usesSystemStyleColors(this.model.style),
+        styleID: phoneInterfaceStyleID(this.model.style),
+        interfaceAccent: deviceLookInterfaceTint(this.look.accentId,this.model.style,this.environment.dark,
+          this.environment.dark ? this.look.palette(this.model.style).dark : this.look.palette(this.model.style).light),
+        surfaces: deviceLookSurface(this.model.style, this.look.accentId, this.environment.dark, this.look.palette(this.model.style)),
+        selectedAccentInk: deviceLookSelectedFilterInk(this.look.palette(this.model.style), this.environment.dark) }) {
+        TokenUsageSheet({
+          model: this.model,
+          onClose: () => { this.tokenUsageOpen = false; }
+        })
+      }
+    }
+  }
   private dismissTopOverlay(): boolean {
     if (this.exportSheetShown) { this.exportSheetShown = false; return true; }
     if (this.starredSheetShown) { this.starredSheetShown = false; return true; }
     if (this.archivedSheetShown) { this.archivedSheetShown = false; return true; }
+    if (this.tokenUsageOpen) { this.tokenUsageOpen = false; return true; }
     if (this.quickPaletteOpen) { this.quickPaletteOpen = false; return true; }
     if (this.directionPermissionsVisible) { this.directionPermissionsVisible = false; return true; }
     if (this.messageLift.dismiss() || this.closeForwardNavigation()) return true;
@@ -1589,7 +1610,7 @@ struct Index {
   @Monitor('model.profile', 'model.connected', 'model.features') applicationOwnerChanged(): void {
     this.applications.bind(this.model); this.applications.connectionChanged();
   }
-  @Monitor('model.profile') scopeChanged(): void { if (this.activeScope !== this.model.scope()) { this.quickPaletteOpen = false; this.chatForward.end(); this.chatForward.clearNew(); this.pendingSearchHit = ''; this.pendingSearchTarget = ''; this.chatSearchShown = false; this.drawerSearching = false; this.phoneSettingsMachine = undefined; this.phoneSettingsQuery = ''; this.phoneSettingsTrail = []; this.phoneSettingsShown = false; this.phoneSettingsDepth = -1; this.pendingInboxHandoff = ''; this.projectCatalog.clear(); this.agentWorktree = undefined; this.pickedAgentTree = ''; this.agentWorkspace.hide(); this.spacesShown = false; this.dismissChatActions(); this.showSheet = false; this.agentFormRevision++; this.creatingAgent = false; this.agentTodo = undefined; this.readerShown = false; this.readerAddress = ''; this.readerTitle = ''; this.detailModel.hideConversation(); this.detailModel = this.model; this.chatReady = false; this.detailRoute = ''; this.routeRevision++; this.bindDeviceOwner(this.model); } this.syncConversationRows(); this.restoreScope(); deviceFeatures.context(); }
+  @Monitor('model.profile') scopeChanged(): void { if (this.activeScope !== this.model.scope()) { this.tokenUsageOpen = false; this.quickPaletteOpen = false; this.chatForward.end(); this.chatForward.clearNew(); this.pendingSearchHit = ''; this.pendingSearchTarget = ''; this.chatSearchShown = false; this.drawerSearching = false; this.phoneSettingsMachine = undefined; this.phoneSettingsQuery = ''; this.phoneSettingsTrail = []; this.phoneSettingsShown = false; this.phoneSettingsDepth = -1; this.pendingInboxHandoff = ''; this.projectCatalog.clear(); this.agentWorktree = undefined; this.pickedAgentTree = ''; this.agentWorkspace.hide(); this.spacesShown = false; this.dismissChatActions(); this.showSheet = false; this.agentFormRevision++; this.creatingAgent = false; this.agentTodo = undefined; this.readerShown = false; this.readerAddress = ''; this.readerTitle = ''; this.detailModel.hideConversation(); this.detailModel = this.model; this.chatReady = false; this.detailRoute = ''; this.routeRevision++; this.bindDeviceOwner(this.model); } this.syncConversationRows(); this.restoreScope(); deviceFeatures.context(); }
   @Monitor('model.conversations', 'model.mainId', 'model.mainMachineId', 'model.sidebarConfig', 'model.connected', 'spacesShown', 'breakpoint', 'collapsed', 'sidebarTaskHistory.revision') conversationsChanged(): void { this.syncConversationRows(); }
   @Monitor('model.appearance') appearanceChanged(): void {
     this.getUIContext().getHostContext()?.getApplicationContext().setColorMode(this.model.appearance === 1 ? ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT : this.model.appearance === 2 ? ConfigurationConstant.ColorMode.COLOR_MODE_DARK : ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
@@ -1631,7 +1652,7 @@ struct Index {
     if (this.model.projectsRequested && this.model.ready) { this.consumeProjectLaunch(); return; }
     if (this.model.pendingXiaoYiRoute && this.model.ready) { this.consumeXiaoYiRoute(); return; }
     if (intent !== this.navigationIntent) this.savePath();
-    if (this.model.section === 2 && !this.model.inboxPageVisible() || this.model.section === 5 && !this.model.todosPageVisible()) {
+    if (this.model.section === 2 && !this.model.inboxPageVisible() || this.model.section === 5 && !this.model.todosPageVisible() || this.model.section === 6 && !this.model.knowledgePageVisible()) {
       this.openSpace('persona');
       return;
     }
@@ -1644,7 +1665,8 @@ struct Index {
   @Monitor('model.sidebarConfig', 'model.demo') hiddenPagesChanged(): void {
     const viewingInbox = this.model.section === 2 || this.phoneTop === 'inbox' || this.phoneTop === 'resources' && this.phoneParam === 'inbox';
     const viewingTodos = this.model.section === 5 || this.phoneTop === 'todo' || this.phoneTop === 'resources' && this.phoneParam === 'todo';
-    if (viewingInbox && !this.model.inboxPageVisible() || viewingTodos && !this.model.todosPageVisible()) {
+    const viewingKnowledge = this.model.section === 6 || this.phoneTop === 'knowledge' || this.phoneTop === 'knowledge_meetings' || this.phoneTop === 'resources' && this.phoneParam === 'knowledge';
+    if (viewingInbox && !this.model.inboxPageVisible() || viewingTodos && !this.model.todosPageVisible() || viewingKnowledge && !this.model.knowledgePageVisible()) {
       this.openSpace('persona');
     }
   }
@@ -1679,7 +1701,7 @@ struct Index {
       return;
     }
     if (dest === 'todos') { this.openSpace(this.model.todosPageVisible() ? 'todo' : 'persona'); return; }
-    if (dest === 'knowledge') { this.openSpace('knowledge'); return; }
+    if (dest === 'knowledge') { this.openSpace(this.model.knowledgePageVisible() ? 'knowledge' : 'persona'); return; }
     if (dest === 'health') { this.openSpace('health'); return; }
     if (dest === 'inbox') { this.openSpace(this.model.inboxPageVisible() ? 'inbox' : 'persona'); return; }
     if (dest === 'recording') {
@@ -2128,7 +2150,7 @@ struct Index {
   private openSettingsRoot(): void { this.stack.pushPath({ name: 'settings_root', param: '' }); this.savePath(); }
   private openSpace(kind: string): void {
     this.phoneSettingsDepth = -1;
-    if (kind === 'inbox' && !this.model.inboxPageVisible() || kind === 'todo' && !this.model.todosPageVisible()) {
+    if (kind === 'inbox' && !this.model.inboxPageVisible() || kind === 'todo' && !this.model.todosPageVisible() || kind === 'knowledge' && !this.model.knowledgePageVisible()) {
       kind = 'persona';
     }
     if (kind === 'settings' && !this.wide() && this.spacesShown) {
@@ -2148,6 +2170,7 @@ struct Index {
       if (this.phoneTop !== 'resources' || this.phoneParam !== 'health') this.openResources('health');
     }
     else if (kind === 'hub') this.openSheet('hub');
+    else if (kind === 'token_usage') { this.tokenUsageOpen = true; }
     else if (kind === 'collapse') this.collapsed = true;
     else {
       const index = ['persona', 'agents', 'inbox', 'settings', 'projects', 'todo', 'knowledge', 'health', 'devices', 'schedules', 'recordings', 'applications'].indexOf(kind);
@@ -2181,6 +2204,7 @@ struct Index {
     if (kind === 'knowledge') return $r('sys.symbol.books_vertical_fill');
     if (kind === 'health') return $r('sys.symbol.heart');
     if (kind === 'devices') return $r('sys.symbol.matebook_and_phone_fill');
+    if (kind === 'token_usage') return Symbols.health;
     if (kind === 'settings') return Symbols.gear;
     if (kind === 'applications') return Symbols.apps;
     if (kind === 'collapse') return Symbols.collapse;
@@ -2201,6 +2225,7 @@ struct Index {
     if (kind === 'health') return tr('phone_drawer_health');
     if (kind === 'schedules') return tr('phone_drawer_schedules');
     if (kind === 'devices') return tr('phone_machines');
+    if (kind === 'token_usage') return tr('token_usage_title');
     if (kind === 'recordings') return tr('knowledge_kind_meetings');
     return tr(kind);
   }
@@ -2438,8 +2463,9 @@ struct Index {
         if (this.model.inboxPageVisible()) this.spaceRow('inbox')
         if (this.model.todosPageVisible()) this.spaceRow('todo')
         this.spaceRow('schedules')
-        this.spaceRow('knowledge')
+        if (this.model.knowledgePageVisible()) this.spaceRow('knowledge')
         this.spaceRow('health')
+        this.spaceRow('token_usage')
         if (this.applications.visible) this.spaceRow('applications')
         this.spaceRow('devices')
         if (!this.wide()) this.drawerDivider()
@@ -2704,8 +2730,9 @@ struct Index {
       ListItemGroup() {
       if (this.model.inboxPageVisible()) this.spaceRow('inbox')
       if (this.model.todosPageVisible()) this.spaceRow('todo')
-      this.spaceRow('knowledge')
+      if (this.model.knowledgePageVisible()) this.spaceRow('knowledge')
       this.spaceRow('health')
+      this.spaceRow('token_usage')
       if (this.applications.visible) this.spaceRow('applications')
       this.spaceRow('devices')
       this.spaceRow('settings')
@@ -2756,7 +2783,7 @@ struct Index {
       } })
   }
   @Builder inboxList() {
-    InboxWorkspacePage({ model: this.model, visible: this.model.section === 2, phoneList:!this.wide(), refreshRevision: this.inboxRefreshRevision, toolbarActions:!this.wide() && this.rootModuleMenuKind()==='inbox', composeRevision:this.inboxComposeRevision, onComposeAvailability:(enabled:boolean) => { if (this.model.section===2 && !this.phoneTop) { this.inboxComposeScope=this.inboxPermissionOwner();this.inboxComposeAvailable=enabled; } }, onChanged: () => this.inboxRefreshRevision++, onOpen: (row: ResourceRow) => this.openRow(row), onLink: (address: string) => this.openReader(address),
+    InboxWorkspacePage({ model: this.model, visible: this.model.section === 2, phoneList:!this.wide(), refreshRevision: this.inboxRefreshRevision, toolbarActions:!this.wide() && this.rootModuleMenuKind()==='inbox', composeRevision:this.inboxComposeRevision, onComposeAvailability:(enabled:boolean) => { if (this.model.section===2 && !this.phoneTop) { this.inboxComposeScope=this.inboxPermissionOwner();this.inboxComposeAvailable=enabled; } }, onChanged: () => this.inboxRefreshRevision++, onOpen: (row: ResourceRow) => this.openRow(row), onOpenResource: (row: ResourceRow) => this.openLinkedResource(row), onLink: (address: string) => this.openReader(address),
       onHandoff: (row: ResourceRow) => this.openLinkedResource(row) })
   }
   private openFromPhoneSettings(page: string): void {
@@ -3052,7 +3079,7 @@ struct Index {
       }.width('100%').padding({ top: 4, bottom: 4 })
       if (this.model.inboxPageVisible()) this.railSpaceButton('inbox')
       if (this.model.todosPageVisible()) this.railSpaceButton('todo')
-      this.railSpaceButton('knowledge')
+      if (this.model.knowledgePageVisible()) this.railSpaceButton('knowledge')
       this.railSpaceButton('health')
       this.railSpaceButton('devices')
       this.railSpaceButton('settings')
@@ -4041,7 +4068,7 @@ struct Index {
         else this.targetLoading(name, param)
       } else if (name === 'inbox' || name === 'todo_source' || name === 'todo_thread' || name === 'resources' && param === 'inbox') {
         if (name === 'resources' || this.targetReady(name, param)) InboxWorkspacePage({ model: name === 'resources' ? this.model : this.detailModel, row: name === 'resources' ? undefined : this.routeRow(param), list: name === 'resources', phoneList: !this.wide() && name === 'resources', visible: this.activeChild === this.childKey(name, param), refreshRevision: this.inboxRefreshRevision, toolbarActions:!this.wide() && this.rootModuleMenuKind()==='inbox', composeRevision:this.inboxComposeRevision, onComposeAvailability:(enabled:boolean) => { if (this.activeChild===this.childKey(name,param) && this.rootModuleMenuKind()==='inbox') { this.inboxComposeScope=this.inboxPermissionOwner();this.inboxComposeAvailable=enabled; } }, handoffRequested: this.pendingInboxHandoff === this.childKey(name, param), onHandoffConsumed: () => { if (this.pendingInboxHandoff === this.childKey(name, param)) this.pendingInboxHandoff = ''; },
-          onChanged: () => { if (this.activeChild === this.childKey(name, param)) this.inboxRefreshRevision++; }, onOpen: (row: ResourceRow) => this.openFrom(name, param, row), onHandoff: (row: ResourceRow) => this.openFrom(name, param, row), onLink: (address: string) => this.openReader(address) })
+          onChanged: () => { if (this.activeChild === this.childKey(name, param)) this.inboxRefreshRevision++; }, onOpen: (row: ResourceRow) => this.openFrom(name, param, row), onOpenResource: (row: ResourceRow) => this.openFrom(name, param, row), onHandoff: (row: ResourceRow) => this.openFrom(name, param, row), onLink: (address: string) => this.openReader(address) })
         else this.targetLoading(name, param)
       } else if (name === 'todo' || name === 'resources' && param === 'todo') {
         if (name === 'resources' || this.targetReady(name, param)) TodoWorkspacePage({ model: name === 'resources' ? this.model : this.detailModel, row: name === 'todo' ? this.routeRow(param) : undefined, list: name === 'resources', visible: this.activeChild === this.childKey(name, param),
@@ -4285,6 +4312,7 @@ struct Index {
         onStepRelay: (direction: 1 | -1) => this.stepFoldRelay(direction),
         onInterruptSession: (row: ResourceRow) => { this.interruptSessionFromWorkbench(row); },
         onOpenXiaoYi: () => this.openXiaoYiQuick(),
+        onOpenTokenUsage: () => { this.tokenUsageOpen = true; },
         onOpenLink: (address: string) => this.openReader(address)
       })
     }
@@ -4362,6 +4390,14 @@ struct Index {
       showClose: false,
       backgroundColor: Colors.sheetBackground,
       onDisappear: () => { this.archivedSheetShown = false; }
+    })
+    Column().width(0).height(0).bindSheet($$this.tokenUsageOpen, this.tokenUsageSheet(), {
+      height: SheetSize.LARGE,
+      preferType: this.wide() ? SheetType.CENTER : SheetType.BOTTOM,
+      dragBar: !this.wide(),
+      showClose: false,
+      backgroundColor: Colors.sheetBackground,
+      onDisappear: () => { this.tokenUsageOpen = false; }
     })
     Column().width(0).height(0).bindSheet(!this.model.profile.id && this.phoneSettingsShown, this.phoneSettings(), {
       height: this.wide() ? SheetSize.LARGE : this.compactFormHeight(),

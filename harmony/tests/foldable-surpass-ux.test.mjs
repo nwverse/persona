@@ -85,6 +85,7 @@ test('QuickCommandPalette respects workspace visibility and workbench/LiveView f
     'action:toggle_workbench',
     'action:workbench_code',
     'action:workbench_machines',
+    'action:open_token_usage',
     'action:open_xiaoyi',
     'action:toggle_theme',
     'action:liveview_preview'
@@ -100,7 +101,7 @@ test('QuickCommandPalette respects workspace visibility and workbench/LiveView f
   assert.equal(wsIdsHidden.includes('workspace:inbox'), false);
   assert.equal(wsIdsHidden.includes('workspace:todos'), false);
   const actionIdsHidden = hidden.find((g) => g.category === 'actions').entries.map((e) => e.id);
-  assert.deepEqual(actionIdsHidden, ['action:open_xiaoyi', 'action:toggle_theme']);
+  assert.deepEqual(actionIdsHidden, ['action:open_token_usage', 'action:open_xiaoyi', 'action:toggle_theme']);
 });
 
 test('Smart book_half_open posture and Ctrl/Meta+K open_palette shortcut work cleanly alongside hover_tabletop', () => {
