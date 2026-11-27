@@ -801,6 +801,11 @@ an input box but herdr doesn't know claude is present (`agent_not_found` or empt
 then explain process-name / `HERDR_AGENT=claude` recognition and cases where the prefix doesn't reach claude. Foreground process name comes from herdr `pane.process_info`. With no input box, retain the shell-not-started error;
 other engines' panes (Orca) keep their original error.
 
+`pane.process_info` in herdr 0.9.5 names each foreground process by `name`, `argv` and `cmdline`, with no `argv0`, and Claude Code's `name` is its version
+(`2.1.330`). Its list starts with the foreground group's leader: a launcher's wrapper when claude runs under one. Code that takes the first process for
+claude itself must pick Claude Code out first (`herdr.Client.PaneProcesses`): matching `argv0` found nothing, and the port scan reported Claude Code's own
+loopback listener as a server the Agent runs, which kept every idle Agent behind a wrapper from Close (#14681).
+
 - A Claude Code turn ending with a model API error ("API Error: Connection lost mid-response…", overload, rate limit, expired login) is done in herdr just like normal completion, so hub counts it unread:
   task_plan tasks once showed green "Done" cards with the raw error as summary and "finished" in snapshots (#1516). Only the last text distinguishes this: when a session is stopped and `last_text` begins with these errors, hub sets `turn_error` (prefix only;
   mentioning "API Error" in an answer doesn't count), marks the task interrupted, doesn't auto-close it, and writes an `interrupted` receipt. Ordinary Agent pushes also stop using a success marker.
