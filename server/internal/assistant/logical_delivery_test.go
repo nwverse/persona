@@ -53,7 +53,8 @@ func TestCrossEpochReconcilerQueriesOriginalDispatchAndDoesNotAcceptNewSwitch(t 
 				calls++
 				return json.RawMessage(receipt), nil
 			})
-			active := conversationlog.Segment{ID: "new-segment", MachineID: "server", SessionID: "new-session", State: "active"}
+			active := logicalFixtureTarget("agy")
+			active.ID, active.SessionID, active.State = "new-segment", "new-session", "active"
 			c := &db.LogicalConversation{MachineID: "server", SessionID: "side-chat", Epoch: 4, Segments: []conversationlog.Segment{active}, Switch: &db.ConversationSwitch{OperationID: "new-switch", Phase: "active"}}
 			input := db.ConversationInput{ClientMsgID: "lost-reply", Epoch: 3, State: "in_doubt", DispatchEpoch: 3, DispatchSegment: "old-segment", DispatchMachine: "server", DispatchSession: "original-session"}
 			if err := s.reconcileLogicalInput(ctx, st, c, active, input); err != nil {
@@ -115,7 +116,8 @@ func TestSourceReceiptDoesNotAcceptAnAlreadyPreparingUpgradeSwitch(t *testing.T)
 	f.answerNode("assistant.segment.input", func(_ string, _ json.RawMessage) (any, error) {
 		return map[string]bool{"accepted": true}, nil
 	})
-	active := conversationlog.Segment{ID: "source", MachineID: "server", SessionID: "original-session", State: "active"}
+	active := logicalFixtureTarget("agy")
+	active.ID, active.SessionID, active.State = "source", "original-session", "active"
 	c := &db.LogicalConversation{MachineID: "server", SessionID: "side-chat", Epoch: 3, Segments: []conversationlog.Segment{active}, Switch: &db.ConversationSwitch{OperationID: "pre-upgrade-prepared", ExpectedEpoch: 3, TargetSegment: "prepared-target", Phase: "prepared"}}
 	input := db.ConversationInput{ClientMsgID: "source-reply-lost", Epoch: 3, State: "in_doubt", DispatchEpoch: 3, DispatchSegment: "source", DispatchMachine: "server", DispatchSession: "original-session"}
 	if err := s.reconcileLogicalInput(t.Context(), st, c, active, input); err != nil {

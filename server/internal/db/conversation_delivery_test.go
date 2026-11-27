@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"sync"
 	"testing"
-
-	"github.com/nwverse/persona/server/internal/conversationlog"
 )
 
 // Simulate the already-persisted epoch-3 lost-reply / epoch-4 recovery state.
@@ -27,7 +25,16 @@ func historicalDeliveryFixture(t *testing.T) (*DB, string, ConversationInput) {
 		if err := d.PutConversationHandoff(ctx, "root", "chat", op, json.RawMessage(`{"summary":"handoff for new target"}`)); err != nil {
 			t.Fatal(err)
 		}
-		if err := d.PrepareConversationSegment(ctx, "root", "chat", op, conversationlog.Segment{ID: fmt.Sprintf("s%d", epoch+1), MachineID: fmt.Sprintf("machine%d", epoch+1), SessionID: fmt.Sprintf("native%d", epoch+1), Engine: "agy"}, 0); err != nil {
+		conversation, err := d.LogicalConversation(ctx, "root", "chat")
+		if err != nil {
+			t.Fatal(err)
+		}
+		target, ok := conversation.Active()
+		if !ok {
+			t.Fatal("fixture has no active source")
+		}
+		target.ID, target.MachineID, target.SessionID, target.Engine = fmt.Sprintf("s%d", epoch+1), fmt.Sprintf("machine%d", epoch+1), fmt.Sprintf("native%d", epoch+1), "agy"
+		if err := d.PrepareConversationSegment(ctx, "root", "chat", op, target, 0); err != nil {
 			t.Fatal(err)
 		}
 		if err := d.ActivateConversationSegment(ctx, "root", "chat", op, epoch); err != nil {
