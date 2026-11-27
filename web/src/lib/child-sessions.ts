@@ -6,6 +6,7 @@
 import { activityOf, stateOf } from "./format";
 import { foldedStateWith, foldHome, foldsUnder, hubSides } from "./side-fold";
 import type { AgentState, Interaction, Session } from "./types";
+import { timeMs } from "./times";
 
 /** The hub folds child sessions and its paged list takes `roots=1` and `parent_session_id=` (docs/protocol/protocol.md
  *  "Session hierarchy"): send those keys only when hello lists this. */
@@ -51,7 +52,7 @@ export function isFoldedIn(s: Session, listed: ReadonlySet<string>): boolean {
  *  name mid/sid as parent (e.g. when the parent was archived), excluding rows belonging to a side's own chat
  *  (`folded_side`, #7944); for a side's chat, those rows. */
 export function foldedChildren(rows: readonly Session[], mid: string, sid: string): Session[] {
-  const at = (s: Session) => Date.parse(s.started_at ?? s.updated_at ?? "") || 0;
+  const at = (s: Session) => timeMs(s.started_at ?? s.updated_at);
   return rows
     .filter((s) => {
       const home = foldHome(s);

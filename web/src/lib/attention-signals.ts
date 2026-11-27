@@ -3,7 +3,7 @@
 // continuity immediately, while loading the heavy background notification, desktop presence, Web Push, and Service
 // Worker reply runtime asynchronously (lib/attention-signals-runtime.ts). `<AttentionSignals>` is what App renders.
 import { useEffect, useRef } from "react";
-import { attentionSoundEnabled, badgeText, onAttentionSoundChange, tabTitle } from "./attention";
+import { attentionSoundEnabled, badgeText, cardArrivalKey, onAttentionSoundChange, tabTitle } from "./attention";
 import { homeKey } from "./folded-rows";
 import { activityOf, stateOf } from "./format";
 import { agentKey } from "./pins";
@@ -240,7 +240,7 @@ function recordColdSnapshot(buf: ColdBuffer | null, snap: AttentionSnapshot, now
       firstPushGrading: snap.pushGrading,
       baselineSessions,
       baselineInteractions: [...snap.interactions],
-      baselineInteractionIds: new Set(snap.interactions.map((ix) => ix.id)),
+      baselineInteractionIds: new Set(snap.interactions.map(cardArrivalKey)),
       latest: snap,
     };
   }
@@ -258,8 +258,9 @@ function recordColdSnapshot(buf: ColdBuffer | null, snap: AttentionSnapshot, now
       // A brand-new session first appearing already waiting should not treat its initial cards as newly added cards.
       if (st === "needs_you") {
         for (const ix of snap.interactions) {
-          if (ix.session_id !== "" && homeKey(ix) === k && !buf.baselineInteractionIds.has(ix.id)) {
-            buf.baselineInteractionIds.add(ix.id);
+          const arrivalKey = cardArrivalKey(ix);
+          if (ix.session_id !== "" && homeKey(ix) === k && !buf.baselineInteractionIds.has(arrivalKey)) {
+            buf.baselineInteractionIds.add(arrivalKey);
             buf.baselineInteractions.push(ix);
           }
         }

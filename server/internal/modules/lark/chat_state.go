@@ -232,7 +232,7 @@ func (s core) loadBotLocked(ctx context.Context) {
 			}
 			b.cards[id] = botCard{MessageID: ref.MessageID, Thread: ref.Thread, ChatID: ref.ChatID, At: ref.At, NudgedAt: ref.NudgedAt, SkippedAt: ref.SkippedAt, Tries: ref.Tries, TriedAt: ref.TriedAt,
 				DeadlineNudge: ref.DeadlineNudge,
-				Ix: proto.Interaction{ID: id, Kind: ref.Kind, MachineID: ref.MachineID, SessionID: ref.SessionID, ExpiresAt: ref.ExpiresAt,
+				Ix: proto.Interaction{ID: id, Kind: ref.Kind, MachineID: ref.MachineID, SessionID: ref.SessionID, CreatedAt: ref.CreatedAt, ExpiresAt: ref.ExpiresAt,
 					ApprovalBatchID: ref.ApprovalBatchID, ApprovalItemID: ref.ApprovalItemID, OwnerProposal: ref.OwnerProposal, Resumable: ref.Resumable, NoExpiry: ref.NoExpiry}}
 		}
 	}
@@ -291,7 +291,7 @@ func (s core) keepBotCardLocked(id string, card *botCard) {
 	if at.IsZero() {
 		at = b.clock()
 	}
-	b.st.Cards[id] = &botCardRef{MessageID: card.MessageID, Kind: card.Ix.Kind, MachineID: card.Ix.MachineID, SessionID: card.Ix.SessionID,
+	b.st.Cards[id] = &botCardRef{MessageID: card.MessageID, Kind: card.Ix.Kind, MachineID: card.Ix.MachineID, SessionID: card.Ix.SessionID, CreatedAt: card.Ix.CreatedAt.UTC(),
 		Thread: card.Thread, ChatID: card.ChatID, At: at.UTC(), ExpiresAt: card.Ix.ExpiresAt.UTC(), NudgedAt: card.NudgedAt.UTC(),
 		ApprovalBatchID: card.Ix.ApprovalBatchID, ApprovalItemID: card.Ix.ApprovalItemID, OwnerProposal: card.Ix.OwnerProposal,
 		Resumable: card.Ix.Resumable, NoExpiry: card.Ix.NoExpiry,

@@ -80,8 +80,9 @@ type ChatCardRef struct {
 	Kind            string    `json:"kind,omitempty"`
 	MachineID       string    `json:"machine_id,omitempty"`
 	SessionID       string    `json:"session_id,omitempty"`
-	Thread          string    `json:"thread,omitempty"`  // the topic it was posted into (ChatCard.Thread)
-	ChatID          string    `json:"chat_id,omitempty"` // the group chat of that topic (ChatCard.ChatID); "" in the owner's DM
+	CreatedAt       time.Time `json:"created_at,omitzero"` // occurrence this message asks, for safe same-ID replacement handling
+	Thread          string    `json:"thread,omitempty"`    // the topic it was posted into (ChatCard.Thread)
+	ChatID          string    `json:"chat_id,omitempty"`   // the group chat of that topic (ChatCard.ChatID); "" in the owner's DM
 	At              time.Time `json:"at"`
 	ExpiresAt       time.Time `json:"expires_at,omitzero"` // the decision deadline when posted; a live prepared card may extend it
 	ApprovalBatchID string    `json:"approval_batch_id,omitempty"`

@@ -194,7 +194,7 @@ func (l assistantLink) helloBase() assistantwire.Hello {
 	h := l.h
 	// SecretHandoffGate: this hub checks who approves a hand-off card (secret_handoff.go). ArchivedApart: it takes a
 	// machine's archived rows apart from its list (fleet.archived, fleet_link.go).
-	out := assistantwire.Hello{Locale: string(h.userLang()), SecretHandoffGate: true, ArchivedApart: true}
+	out := assistantwire.Hello{Locale: string(h.userLang()), SecretHandoffGate: true, ArchivedApart: true, ApprovalMirrors: true}
 	if m, ok := h.mutesEvent(); ok { // the hub's mutes, before the manager pushes anything (fleet_link.go)
 		out.Mutes = m.Mutes
 	}
@@ -275,7 +275,8 @@ func (l assistantLink) deviceCallFrom(ctx context.Context, from string, p assist
 		case assistantwire.DeviceInteractionsList:
 			list := []proto.Interaction{}
 			for _, ix := range h.pendingInteractions() {
-				if cmp.Or(ix.Manager, assistantwire.AssistantID) == from && h.cardAllowed(from, ix) {
+				// A manager reconnects authoritative operations; display copies belong only in app snapshots.
+				if ix.MirrorOf == "" && cmp.Or(ix.Manager, assistantwire.AssistantID) == from && h.cardAllowed(from, ix) {
 					list = append(list, ix)
 				}
 			}
@@ -299,7 +300,8 @@ func (l assistantLink) deviceCallFrom(ctx context.Context, from string, p assist
 		}
 		list := []proto.Interaction{}
 		for _, ix := range h.pendingInteractions() {
-			if (ix.MachineID == "" || ix.MachineID == m.cfg.ID) && cmp.Or(ix.Manager, assistantwire.AssistantID) == from && h.cardAllowed(from, ix) {
+			// A manager reconnects authoritative operations; display copies belong only in app snapshots.
+			if ix.MirrorOf == "" && (ix.MachineID == "" || ix.MachineID == m.cfg.ID) && cmp.Or(ix.Manager, assistantwire.AssistantID) == from && h.cardAllowed(from, ix) {
 				list = append(list, ix)
 			}
 		}

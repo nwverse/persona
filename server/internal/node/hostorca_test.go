@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -46,6 +47,10 @@ func TestMain(m *testing.M) {
 	}
 	if mode := os.Getenv("NODE_TEST_PLUGIN"); mode != "" { // the test binary as a plugin's program (plugins_test.go)
 		runTestPlugin(mode)
+	}
+	if os.Getenv("PERSONA_TEST_CLAUDE_USAGE_CLI") == "1" { // fake Claude CLI before TestMain unsets CLAUDE_CONFIG_DIR
+		runFakeClaudeUsageCLI()
+		os.Exit(0)
 	}
 	if os.Getenv("NODE_TEST_PREFLIGHT") == "1" { // the test binary as the preflight's child (preflight_test.go)
 		// NODE_TEST_PREFLIGHT_SLOW: start that much later, as on a busy machine; NODE_TEST_PREFLIGHT_STARTED: a file
@@ -89,8 +94,11 @@ func TestMain(m *testing.M) {
 	// Nor the user's Codex catalog: a model recovery on a Codex list runs no `codex debug models` (a test that wants
 	// windows gives its own, assistant_fallback_window.go).
 	codexDebugModels = func(context.Context, *Node, string) ([]byte, error) { return nil, errors.New("no codex in tests") }
-	// Subscription usage tests provide their own app-server instead of polling a real account.
+	// Subscription usage tests provide their own CLI / app-server instead of polling a real account.
 	codexUsageCLI = func() (string, error) { return "", errors.New("no codex in tests") }
+	claudeUsageCommand = func(context.Context, string, []string, []string, bool) (*exec.Cmd, error) {
+		return nil, errors.New("no claude in tests")
+	}
 	// Nor the ChatGPT app's bundled codex: a test that wants one sets its own (codex_bundled_test.go).
 	bundledCodexCLI = func() string { return "" }
 	// Nor the user's Paseo: its home points nowhere (a test that wants one sets its own).
