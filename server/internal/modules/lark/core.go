@@ -136,8 +136,6 @@ func (s core) setRunExt(r *channel.Run, key, value string) { s.h.SetRunExt(r, ke
 
 func (s core) runSteps(id string) []string { return s.h.RunSteps(id) }
 
-func (s core) runTo(ext map[string]string) feishuTarget { return s.h.RunTo(ext) }
-
 func (s core) unreachable(err error) bool { return s.h.Unreachable(err) }
 
 func (s core) botStepParts(l i18n.Lang, it proto.Item) (string, string) { return s.h.StepParts(l, it) }

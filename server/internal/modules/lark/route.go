@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 
+	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/i18n"
-	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// feishuTopic is the chat and thread a message was said in (the core's feishu_route.go names it too).
+// feishuTopic is the chat and thread a message was said in.
 type feishuTopic struct {
 	Chat, Thread string
 	UnboundMode  assistantwire.TopicTodoMode
@@ -36,44 +36,22 @@ func runTo(ext map[string]string) feishuTarget {
 	return (&feishuTopic{Chat: ext["chat"], Thread: ext["thread"]}).target()
 }
 
-// threadRoutes are who can get what was said in the topic of open todo t, best first: the agent it has that is running
-// (the one that most needs it, pickTaskAgent; a closed one, offline or interrupted, is not counted), then the
-// conversation that opened it (for a question's to-do, which has none, the conversation that asked: its record,
-// ask_todo.go), then the main conversation. One the bot's switches do not allow, or that is not there,
-// is left out; the error is why none is left (nil when there are routes).
-func (s *Service) threadRoutes(ctx context.Context, t Todo, f FeishuFeatures) ([]botTarget, error) {
-	var tried []botTarget
-	var running []proto.Session
-	for _, a := range s.taskAgents(ctx, t) {
-		if a.Status != proto.StatusOffline && a.Status != proto.StatusInterrupted {
-			running = append(running, a)
-		}
-	}
-	if len(running) > 0 {
-		c := pickTaskAgent(running)
-		tried = append(tried, botTarget{Kind: targetAgent, MachineID: c.MachineID, SessionID: c.SessionID})
-	}
-	if t.Origin != "" {
-		tried = append(tried, botTarget{Kind: targetPersona, SessionID: t.Origin})
-	} else if a, ok := s.askTodoOf(ctx, t.ID); ok {
-		tried = append(tried, botTarget{Kind: targetPersona, SessionID: a.SessionID})
-	}
-	tried = append(tried, botTarget{Kind: targetMain})
+// threadRoutes tries the to-do's active agent, its opening or asking conversation, then the main conversation.
+// It skips targets that are disabled or unavailable. If no route is available, it returns the last failure.
+func (s core) threadRoutes(ctx context.Context, todoID string, f FeishuFeatures) ([]botTarget, error) {
+	tried := append(s.h.ThreadRouteCandidates(ctx, todoID), botTarget{Kind: targetMain})
 	l := s.botLang(ctx)
 	var out []botTarget
 	var last error
 	for _, c := range tried {
-		if err := botAllowed(l, f, c); err != nil {
+		if err := s.botAllowed(l, f, c); err != nil {
 			last = err
 			continue
 		}
-		if c.Kind == targetPersona {
-			// The conversation is looked for: a todo outlives the conversation that opened it.
-			if _, ok := s.session(ctx, s.settings(ctx).MachineID, c.SessionID); !ok {
-				continue
-			}
+		if c.Kind == targetPersona && !s.h.SessionExists(ctx, "", c.SessionID) {
+			continue // A to-do outlives the conversation that opened it.
 		}
-		if _, err := s.resolveBotTarget(ctx, c); err != nil {
+		if _, err := s.h.ResolveTarget(ctx, c); err != nil {
 			last = err
 			continue
 		}
@@ -85,30 +63,31 @@ func (s *Service) threadRoutes(ctx context.Context, t Todo, f FeishuFeatures) ([
 	return out, last
 }
 
-const readChatKey = "read_chat"
-
-const readThreadKey = "read_thread"
+const (
+	readChatKey   = assistantwire.FeishuReadChatKey
+	readThreadKey = "read_thread"
+)
 
 // readRun says a run answers a /read: its answer goes under the message in that group, quietly.
 func readRun(ext map[string]string) bool { return ext[readChatKey] != "" }
 
 // openTarget is who takes a to-do opened from a topic or from elsewhere: the main conversation, which origin is the id
 // of. fail says why not, in the bot's language, "" when it can.
-func (s *Service) openTarget(ctx context.Context, st FeishuStatus) (target botTarget, origin, fail string) {
+func (s core) openTarget(ctx context.Context, st FeishuStatus) (target botTarget, origin, fail string) {
 	l := s.botLang(ctx)
 	failed := func(err error) string {
 		return i18n.T(l, "assistant-feishu.thread_open_failed", i18n.Args{"error": clip(oneLine(err.Error()), 200)})
 	}
 	target = botTarget{Kind: targetMain}
-	if err := botAllowed(l, st.Features, target); err != nil {
+	if err := s.botAllowed(l, st.Features, target); err != nil {
 		return target, "", failed(err)
 	}
-	rt, err := s.resolveBotTarget(ctx, target)
+	rt, err := s.h.ResolveTarget(ctx, target)
 	if err != nil {
 		return target, "", failed(err)
 	}
-	origin = s.settings(ctx).Main
-	if _, ok := s.session(ctx, rt.machine, origin); origin == "" || rt.isNew || !ok {
+	origin, _ = s.h.MainChat(ctx)
+	if exists := s.h.SessionExists(ctx, rt.Machine, origin); origin == "" || rt.IsNew || !exists {
 		return target, "", i18n.T(l, "assistant-feishu.thread_open_no_main")
 	}
 	return target, origin, ""

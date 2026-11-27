@@ -2,11 +2,42 @@ package assistant
 
 import (
 	"context"
+	"slices"
 
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/proto"
 )
+
+func (h larkHost) FindInterruptibleRun(match func(*channel.Run) bool) func(proto.Session, func(string) string) {
+	c := &h.s.chans
+	c.mu.Lock()
+	index := slices.IndexFunc(c.st.Runs, match)
+	if index < 0 {
+		c.mu.Unlock()
+		return nil
+	}
+	run := c.st.Runs[index]
+	prog := c.live[run.ID]
+	c.mu.Unlock()
+	if prog == nil {
+		return nil
+	}
+	return func(session proto.Session, interrupt func(string) string) {
+		// Target resolution can yield to a finish, recall or replacement. Recheck the same objects
+		// under the lifecycle's lock order: progress, then channel state.
+		prog.mu.Lock()
+		defer prog.mu.Unlock()
+		c.mu.Lock()
+		current := slices.Contains(c.st.Runs, run) && c.live[run.ID] == prog && match(run) &&
+			!run.Recalled && !c.answering[run.ID] && !prog.finished && prog.failing.IsZero() &&
+			(!turnOver(session) || !run.Seen && !run.Held)
+		c.mu.Unlock()
+		if current {
+			prog.stoppedCard = interrupt(prog.stoppedCard)
+		}
+	}
+}
 
 // stopOutcome is what interrupting a conversation's current turn came to; the caller renders it as a command note
 // (/stop) or a card toast (the progress card's Stop button).

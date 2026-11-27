@@ -10,13 +10,11 @@ import (
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// Where the Feishu chat's messages go, as the core resolves it (the lark module reaches it through its host): a
-// target's conversation or agent as it is now, whether the bot's switches allow it, the run that answers a message
-// started in it, a topic's to-do and who takes what is said there, and where a run's messages go.
+// The Feishu chat's access to the core's runs and to-dos. Target resolution shared with plugin channels lives in
+// target_resolve.go.
 
 // startBotRun sends text (with its pictures) for the owner's message messageID into the target's conversation, or
-// starts one, and starts the run that answers it. ext are the run's channel values besides the reaction (where the
-// answer goes: runTo).
+// starts one, and starts the run that answers it. ext are the run's channel values besides the reaction.
 func (s *Service) startBotRun(ctx context.Context, rt resolvedTarget, t botTarget, messageID, text string, images []proto.Image, probe, reaction string, ext map[string]string) error {
 	run := &channel.Run{ID: "fb_" + messageID, Channel: channel.Feishu, ReplyTo: messageID, Started: time.Now().UTC(), Label: rt.label,
 		Probe: probe, Ext: ext}
@@ -130,4 +128,30 @@ func (s *Service) todoOfThread(th TodoThread) (Todo, bool) {
 		}
 	}
 	return Todo{}, false
+}
+
+// ThreadRouteCandidates reads the best available agent and opening conversation of an open to-do.
+func (h larkHost) ThreadRouteCandidates(ctx context.Context, todoID string) []botTarget {
+	s := h.s
+	t, ok := s.todoNow(todoID)
+	if !ok {
+		t = Todo{ID: todoID}
+	}
+	var candidates []botTarget
+	var running []proto.Session
+	for _, a := range s.taskAgents(ctx, t) {
+		if a.Status != proto.StatusOffline && a.Status != proto.StatusInterrupted {
+			running = append(running, a)
+		}
+	}
+	if len(running) > 0 {
+		c := pickTaskAgent(running)
+		candidates = append(candidates, botTarget{Kind: targetAgent, MachineID: c.MachineID, SessionID: c.SessionID})
+	}
+	if t.Origin != "" {
+		candidates = append(candidates, botTarget{Kind: targetPersona, SessionID: t.Origin})
+	} else if a, ok := s.askTodoOf(ctx, t.ID); ok {
+		candidates = append(candidates, botTarget{Kind: targetPersona, SessionID: a.SessionID})
+	}
+	return candidates
 }

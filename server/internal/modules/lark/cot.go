@@ -180,7 +180,7 @@ func (p *cotProgress) owned() bool { return p.persist != nil }
 func (f feishuSink) cotStart(ctx context.Context, r *channel.Run, p *cotProgress) bool {
 	s := f.s
 	params := map[string]any{"reply_to": r.ReplyTo}
-	to := s.runTo(s.runExts(r, "chat", "thread"))
+	to := runTo(s.runExts(r, "chat", "thread"))
 	if to.ChatID != "" {
 		params["chat_id"], params["in_thread"] = to.ChatID, true
 	}
