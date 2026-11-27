@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	approvalops "github.com/nwverse/persona/server/internal/approval"
+	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -54,6 +55,7 @@ func (s *Service) resolvePreparedAnswer(ctx context.Context, p *pending, r proto
 	}
 	p.claimed = true
 	p.resolution = &r
+	p.endedBy = cmpOr(endedByOf("", &r), db.EndedBy(ctx)) // for the history: who answered (recordEndBy)
 	if p.resolved == nil {
 		p.resolved = make(chan struct{})
 	}
@@ -235,13 +237,14 @@ func (s *Service) finishPrepared(p *pending, status string) {
 		// The original tool call is still waiting, so its result is the one place
 		// to identify the expired interaction. A clarified card instead uses its
 		// existing durable journal below; starting another delivery would duplicate it.
-		a.outcome.Text = approvalResultText(p.ix.ID, status, a.outcome.Text)
+		a.outcome.Text = approvalResultTextWithSummary(p.ix.ID, status, safeInteractionSummary(p.ix), a.outcome.Text)
 	}
 	text := a.outcome.Text
 	journalStatus := a.reportStatus
 	if journalStatus == "" {
 		journalStatus = status
 	}
+	by := p.endedBy
 	s.fleet.mu.Unlock()
 
 	if a.op.Discard != nil {
@@ -252,7 +255,10 @@ func (s *Service) finishPrepared(p *pending, status string) {
 		told := redacted(p.ix, r)
 		kept = &told
 	}
-	s.recordEnd(p.ix.ID, status, kept)
+	if status == "expired" || by == "" {
+		by = endedByOf(status, kept)
+	}
+	s.recordEndBy(p.ix.ID, status, by, kept)
 	if clarified {
 		s.approvalJournalFinished(context.Background(), p.ix, journalStatus, text)
 	}

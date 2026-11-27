@@ -118,10 +118,53 @@ iOS / Android have both entry points (Android Machines is under Agents: **List s
 
 Windows: herdr has native Windows support since 0.9.5; except live terminal, capabilities match above. Orca works too. See [windows.md](../operations/windows.md), "herdr."
 
-Antigravity CLI panes can show chat history after the hook installed by `herdr integration install antigravity-cli`
-reports the pane's conversation ID. Persona reads that conversation's local `transcript.jsonl` from the node's Antigravity data
-directory and uses the reported ID to restore Persona-started panes with `agy --conversation`. Until herdr
-reports a usable ID, the pane remains accessible through the terminal and can still receive prompts.
+**Antigravity CLI panes** show chat history once the pane's conversation ID is known. Two sources report it, and either is
+enough: Persona's own hooks (below) and the hook installed by `herdr integration install antigravity-cli`. Persona reads
+that conversation's local `transcript.jsonl` from the node's Antigravity data directory, or `transcript_full.jsonl` when
+the compact export is absent. Switching export sources resets the history cursor. The node uses the conversation ID to
+restore Persona-started panes with `agy --conversation`. The pane's row is then titled after that conversation, as the Antigravity
+companion titles it: the companion's title, else agy's own (its `cache/conversation_metadata.json`), else the first
+message typed into it (#13639). agy sets no terminal title, so until one of these is known the row has the shell's title
+or herdr's tab name. Until an ID is known the pane remains accessible through the terminal and can still receive prompts.
+
+Persona's own Antigravity hooks (#13729) work the way Moshi's do, so agy under herdr-core, Orca or Tern, or under herdr
+without its integration, is readable too. The node adds a group `persona` to agy's global hooks file (`hooks.json` in the
+agy config directory next to the data directory, `~/.gemini/config` by default; `ANTIGRAVITY_CLI_CONFIG_DIR` moves both)
+with two entries, `PreInvocation` and `Stop`, running `<personad> hook --agy <Event>`. Groups of other tools (herdr, Moshi,
+Orca) are never touched; the write is additive, atomic and idempotent, and happens when the node starts and agy is
+installed. The hook reads agy's JSON input, finds its pane from the environment the engine gave it (`HERDR_PANE_ID`,
+`HC_TERMINAL_ID`, `ORCA_PANE_KEY`, `TERN_PANE`), reports `conversationId` to the node over its socket and always prints
+`{}` within two seconds; with no node it does nothing. The TUI stays the only writer of the conversation.
+A top-level group was chosen over an agy plugin directory because agy loads the global file for every interactive
+session and one owned key is as easy to remove as a directory.
+
+The node treats the two reports alike: one conversation belongs to one pane, a conversation reported in two panes is
+unreadable in both, and when herdr's report and Persona's differ for one pane nothing is known (never guessed). A
+conversation that opens as a built-in subagent's is ignored as before (#13336). A report is kept in node memory and
+dropped when its pane no longer runs agy. A pane is only readable under an engine that lists agy in its panes at all.
+`personad node doctor` has an `agy-hooks` line (installed / missing / stale when the binary moved; `--fix` rewrites it).
+`personad node agy-hooks [status|install|uninstall]` manages the entries; `uninstall` also tells the node not to put
+them back.
+
+A conversation's row changes ID with the pane that shows it (#14395). While a live pane shows it, the row is the pane's,
+`agy-<workspace>-<pane>`, and the companion's own row for the conversation, `agy-<conversation id>`, is left out. With no
+such pane (it closed, agy quit in it, the engine gave the conversation another pane) the companion's row is listed
+instead. The row listed names the conversation's other IDs in its `aliases`: a pane's row names `agy-<conversation id>`,
+and whichever row lists the conversation names the pane rows that showed it before, most recent first (up to eight).
+The node remembers which conversation the last 256 pane rows it listed showed, in memory only, so a pane that closed
+while the node was not running is not named. A pane that runs another conversation now names that one: its ID is its
+own row's again. Agents' A2A addresses are resolved through these IDs (`docs/integrations/a2a.md`).
+
+**Close…** on an agy Agent that is not busy archives and closes it, as it does a Claude Code one (#14520): from its
+pane's row the pane closes (`session.retire`), from its own row the companion closes it. The archive is kept under
+`agy-<conversation id>`, also when made on a pane's row, so it holds for whichever row lists the conversation next, and
+after Restore a message continues the conversation in the companion; the tool's archive, which Antigravity does not
+have, answers `unsupported` (`docs/protocol/protocol.md`, "Agent session archives"). When the user only closes a pane
+(**Close anyway** on a busy Agent) or stops agy in it, the companion's row for its conversation is listed as a closed
+Claude Code pane is: offline, stopped by the user ("Not running"), until a pane shows the conversation again, or it works
+or changes a minute or more after the close. It still takes the user's messages, which the companion runs, as there is
+no terminal to resume it in; A2A messages do not wake it. The node keeps this mark in memory for the last 256
+conversations closed: after a restart the companion's rows are listed as it says.
 
 Orca's native Claude chats (structured, no terminal) connect through node's bridge: list, state, send text / images, interrupt, close,
 answer approvals / questions, change permission / thinking (no plan mode); no screen reads, keys, or live terminal. Chats appear only after their first message;
@@ -231,7 +274,7 @@ workspace behavior.
   - only a shell is in front (herdr `pane.process_info`; Orca: no agent process carries the pane's key), and no client has its terminal open;
   - its screen has not changed for the whole grace period; new output restarts the clock.
 
-  Terminals the user opened, a pane picked for Run Agent Here and the panes of other engines (Tern, Herdr App) are never touched. A workspace is never closed directly: closing the pane closes its tab when it was the only pane, and the engine drops a workspace with its last tab, so a workspace goes only when everything in it was such a terminal (the first shell of a worktree the assistant creates for an Agent is marked too, #10624: `worktree.create` with `for_agent`, herdr's `persona_worktree` token or the node's in-memory record; it closes with the same checks once every other pane of its workspace is a finished Agent terminal, so the whole workspace goes; a worktree the user creates is never marked). When the engine does not answer nothing is closed that round; a failed close is retried on a later round; the clocks live in memory, so a node restart closes later, never sooner. Closing never changes the session's stop cause: an Agent the hub stopped as `task_completed` or `idle` can still be resumed by the assistant afterwards (an Agent stopped by hand, or one that exited by itself, has no cause and waits for the user's Resume, as before). Resume needs nothing new: within the grace period it runs in the kept shell (the same recovery lock keeps the two apart), after it in a new tab. Running the Agent with `exec` so the pane exits with it was rejected: the last output and the screen a failed start is diagnosed from would go at once, Resume could not reuse the shell, and the typed start's `&&` chains and per-shell quoting do not survive `exec` in fish or PowerShell.
+  Terminals the user opened, a pane picked for Run Agent Here and the panes of other engines (Tern, Herdr App) are never touched. A workspace is never closed directly: closing the pane closes its tab when it was the only pane, and the engine drops a workspace with its last tab, so a workspace goes only when everything in it was such a terminal (the first shell of a worktree the assistant creates for an Agent is marked too, #10624: `worktree.create` with `for_agent`, herdr's `persona_worktree` token or the node's in-memory record; it closes with the same checks once every other pane of its workspace is a finished Agent terminal, so the whole workspace goes; a worktree the user creates is never marked). When the engine does not answer nothing is closed that round; a failed close is retried on a later round; the clocks live in memory, so a node restart closes later, never sooner. Closing never changes the session's stop cause: an Agent the hub stopped as `task_completed` or `idle` can still be resumed by the assistant afterwards (an Agent stopped by hand waits for the user's Resume; one that exited by itself has no cause, which the assistant may resume on purpose since #11528). Resume needs nothing new: within the grace period it runs in the kept shell (the same recovery lock keeps the two apart), after it in a new tab. Running the Agent with `exec` so the pane exits with it was rejected: the last output and the screen a failed start is diagnosed from would go at once, Resume could not reuse the shell, and the typed start's `&&` chains and per-shell quoting do not survive `exec` in fish or PowerShell.
 - **The Agent mark** (#10111): every terminal Persona opens for an Agent starts with `PERSONA_AGENT=1` in its environment (herdr `workspace.create` / `tab.create` `env`, the Herdr App's `terminal.run` `env`; `host.EnvLauncher`, with the startup switches in "What a start tab's shell starts with" below), so a shell's startup files can tell it from one the user opened, for example to skip a prompt's git status daemon: `[[ -n $PERSONA_AGENT ]] && …`. The typed start also puts `PERSONA_AGENT=1` in front of the Agent command (`agentMarkEnv`, `server/internal/node/agentenv.go`), so the Agent's processes carry it on every engine, including Orca, whose `terminal.create` takes no environment (there the shell itself does not have it). A herdr without `env` support is asked again without it. Terminals the user opens never get it.
 - **Cleanup by hand**: `panes.list` labels each terminal a stopped Agent left with `agent_session`; **Close finished terminals** (`POST /api/v1/machines/{mid}/panes/close_finished`, preview first) closes the ones the user confirms now, after checking again that only a shell is in front.
 - **Who closes a terminal**: the user (**Close** on a session, **Archive and close**, force archive of an Agent blocked on a confirmation, closing a pane or tab from the terminal list), the grace period above for a finished Agent's terminal, and a finished review's reviewer, an internal helper, which closes with its worktree copy.
@@ -389,7 +432,8 @@ of them at once. A node on the default herdr server drives every **running** nam
 - **Showing the session**: a named session's spaces are labelled `<session> · <workspace label>`. Renaming one sets herdr's label without that
   prefix (typed or not), and `space.rename` answers the name the space shows now, which the hub keys pins, mutes and to-do links by.
 - **Left alone**: stopped sessions, the `persona-<hash>` sessions of other nodes' data directories (`herdr/session.go`), names that cannot stand in an
-  id, and every other session on a node that runs on a session of its own or on a socket `HERDR_SOCKET_PATH` moved. Windows drives the default server only.
+  id, sessions explicitly blocked per computer (`PUT /api/v1/machines/{mid}/herdr/sessions/blocked`, #14898), and every other session on a node that runs on a session of its own or on a socket `HERDR_SOCKET_PATH` moved. Windows drives the default server only.
+- **Blocking named sessions (#14898)**: each computer keeps a blocked list of named herdr sessions (`herdr_sessions_blocked/<machine id>`, empty by default, configured in Web **Settings › Agents › Named herdr sessions** or `persona_settings` `agents.blocked_herdr_sessions`). The manager sends the list in `node.configure` (`herdr_sessions_blocked`), and the node persists it in `~/.persona/herdr-sessions-blocked.json` along with session IDs seen inside blocked sessions. When a named session is blocked, the node skips it in `herdrHost` discovery, snapshots, lookups and event streams, ends active terminal streams for it, and ignores hooks, standby replay, plugin permission polls, outside Claude processes, Codex process/rollout scans, runtime rows, and remembered offline transcripts from it (keeping assistant and kept sessions exempt). Unblocking immediately restores both live driving and remembered session IDs.
 - **Pane identity from processes**: hooks, MCP calls, the pi extension (`herdrPaneOf`) and the process scans read `HERDR_SESSION` (or the session
   directory in `HERDR_SOCKET_PATH`) with `HERDR_PANE_ID` (`herdr.EnvSession`, `herdr.PaneOf`), so a hook in a named session's `w4:p1` never binds
   the default server's `w4:p1`. Hooks, MCP calls and the pi extension write panes as the default server sees them (`nodeclient.HookPane`), and the
@@ -459,7 +503,7 @@ After reboot, launchd / systemd starts node, but no terminal has started classic
   iOS / Mac too (`HerdrNotice.swift`): poll every 60 seconds while Agents is foregrounded and not covered by chat, and at once when a watched machine comes online or changes engine (#4685). One notice per machine atop list, respecting machine filters / hub groups.
   One read failure does not remove existing notices; endpoint 404 stops polling that machine. Start shows "Starting…"; failures show localized known reasons inline (immediate exit / killed, missing, no response, old node, offline, timeout, `HerdrFailure.says`; unknown reasons remain raw). Keep button; raw hub text, status, request ID under long-press / context-menu Copy details, not body.
   After success, use POST result for that machine during this run until hub also reports running (GET may still use connection-time value). Web same (`web/src/lib/herdr-notice.ts`, `views/agents/HerdrNotices.tsx`), below filters in sidebar / mobile Agents section, polling every 60 seconds while visible and at once when a watched machine comes online or changes engine or the tab is shown (#5060),
-  same rules / localized failures, with raw hub text, status, request ID (`X-Request-Id`) in Copy details button / context menu.
+  same rules / localized failures, with raw hub text, status, request ID (`X-Request-Id`) in Copy details button / context menu. The notice's code, its polling and its words (`herdr-notice`) are not on the web first screen: `Sidebar.tsx` loads them with its first render (`lazyPage`, drawn once the chunk is in, without Suspense so the sidebar's other updates never wait for it; a chunk that won't load is reported and the next mount asks again, #14339).
 - **While it is not running**: the node keeps asking herdr for its sessions about twice a second. With no socket it falls back to the herdr CLI, which can reach a server the socket cannot (another session, an older herdr). Once the CLI says no server runs (`server_not_running`), calls without a socket return that same answer without running herdr for 1 s, then 2 s, 4 s, … up to 30 s; the socket answering, or the CLI finding a server, ends the wait at once (`herdr.Client.call`). A computer with herdr installed and its server stopped used to run herdr twice a second (about 140 runs a minute, 240 ms of CPU a minute between the node and those runs; about 20 ms now). A started server is found on the next poll through its socket, so starting it from the phone or a terminal shows its sessions as fast as before. `herdr session list` (the named sessions, every 5 s) needs no server and succeeds, so it has no such answer; instead a list that found nothing running is kept while herdr itself, the entries of `<herdr config dir>/sessions/` and the absence of every listed socket stay the same, and given again without running herdr (`herdr/sessionlist.go`). A server starting creates its socket or its session's directory, so the next list runs herdr again; a list with any session running is never kept.
 - **Failure**: still `engine_missing`. Missing herdr copy unchanged; installed-but-failed says "Automatic start also failed." Details include exit code / final output lines,
   output in `persona/herdr/persona-herdr-server.log` under the user's cache folder (`~/.cache` on Linux, `~/Library/Caches` on macOS; a folder of the node's own in the temp folder when there is none), also node logs. No autostart on Windows; behavior unchanged.

@@ -78,3 +78,6 @@ func (d *DB) InfoCategories(ctx context.Context, kind string, refs []string) (ma
 	}
 	return out, rows.Err()
 }
+
+// InfoCategoryCapture is the kind of a quick capture's tags: ref is its id (assistant_captures).
+const InfoCategoryCapture = "capture"

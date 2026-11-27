@@ -122,6 +122,8 @@ type Machine struct {
 	deploying       bool
 	deployErr       string
 	deployPhase     string
+	deploySource    string
+	deployVersion   string
 	deployRun       *deployRun
 	deployPreflight *nodeDeployPreflight
 	updateHandoff   bool // grace expired while waiting for idle: no new headless turns until the update settles
@@ -171,6 +173,8 @@ type Machine struct {
 	claudeDirsMu sync.Mutex
 	// hiddenDirs is the machine's hidden Agent folders, cached (agentdirs.go).
 	hiddenDirs hiddenDirsCache
+	// herdrSessionsBlocked is the machine's blocked named herdr sessions, cached (herdrsessions.go).
+	herdrSessionsBlocked herdrSessionsCache
 	// nodeCmd replaces the node command (tests).
 	nodeCmd func(context.Context) *exec.Cmd
 	// localNote is why the last start of a local node passed a program beside it over (localNode), said once until it
@@ -297,6 +301,10 @@ func (m *Machine) snapshot() proto.Machine {
 	if m.link != nil {
 		link = m.link.info()
 	}
+	source := m.deploySource
+	if m.deployVersion != version || !m.deploying && m.info.Version != m.deployVersion && deployErr == "" {
+		source = ""
+	}
 	return proto.Machine{
 		ID: m.cfg.ID, Name: m.name(), Kind: m.cfg.Kind, Icon: icon, SSHHost: m.cfg.SSHHost, Online: m.online || warm, Error: m.err,
 		Hostname: m.info.Hostname, OS: m.info.OS, Arch: m.info.Arch, Home: m.info.Home,
@@ -304,7 +312,7 @@ func (m *Machine) snapshot() proto.Machine {
 		NodeVersion: m.info.Version, NodeMismatch: m.online && nodeMismatch(version, m.info),
 		NodeProtocol: m.info.Protocol, NodeIncompatible: incompatible,
 		Deploying: m.deploying, DeployError: deployErr,
-		CanDeploy: &canDeploy, DeployReason: deployReason, DeployNoPackage: onlyPackage, DeployPhase: m.deployPhase,
+		DeploySource: source, CanDeploy: &canDeploy, DeployReason: deployReason, DeployNoPackage: onlyPackage, DeployPhase: m.deployPhase,
 		Transport: m.via, TailcatPath: m.path, Tailcat: m.cfg.TailcatAddr != "",
 		Engine: engine, Engines: engines, EngineHosts: choice.Hosts, EngineDefault: choice.Default,
 		EngineSuggested: suggested, EngineSetsUnsupported: setsUnsupported, Link: link, System: d.metrics.system(m.cfg.ID),
@@ -634,6 +642,23 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 			return &rpc.Error{Code: proto.CodeStartGoalUnsupported, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_start_goal")}
 		}
 	}
+	if method == "assistant.prepare" && !nodeHas(info, nodeproto.TrackSpaces) {
+		raw, _ := json.Marshal(params)
+		var fields struct {
+			Space json.RawMessage `json:"space"`
+		}
+		_ = json.Unmarshal(raw, &fields)
+		if len(fields.Space) > 0 && string(fields.Space) != "null" {
+			// A track's directory (#13472): an older node would write its instructions without the track's SPACE.md
+			// or folders. The manager asks only a node it saw announce it; this holds when the node changed since.
+			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "rpc-errors.node_outdated")}
+		}
+	}
+	if method == "assistant.space_md" && !nodeHas(info, nodeproto.TrackSpaceMD) {
+		// A track's SPACE.md (#13472): an older node does not know the method. The manager asks only a node it saw
+		// announce it; this holds when the node changed since.
+		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "rpc-errors.node_outdated")}
+	}
 	if devicewire.IsSessionStart(method) && !nodeHas(info, nodeproto.ResumeOutsideHealth) {
 		raw, _ := json.Marshal(params)
 		var fields struct {
@@ -702,9 +727,22 @@ func (m *Machine) callOnce(ctx context.Context, method string, params any, out a
 		// The same for an API purpose that runs on a launcher there.
 		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_model_run")}
 	}
-	if method == proto.MethodSecretRun && !nodeHas(info, nodeproto.SecretRun) {
-		// An older node would answer "unknown method"; this says what to do about it before the user types anything.
-		return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_secret_run")}
+	if method == proto.MethodSecretRun {
+		if !nodeHas(info, nodeproto.SecretRun) {
+			// An older node would answer "unknown method"; this says what to do about it before the user types anything.
+			return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_secret_run")}
+		}
+		if !nodeHas(info, nodeproto.SecretRunEnv) {
+			raw, _ := json.Marshal(params)
+			var fields struct {
+				Delivery string `json:"delivery"`
+			}
+			_ = json.Unmarshal(raw, &fields)
+			if fields.Delivery == proto.SecretRunDeliveryEnv {
+				// An older node would ignore delivery and run without the secret the card promised (#11945).
+				return &rpc.Error{Code: proto.CodeNodeOutdated, Message: i18n.T(i18n.From(ctx), "hub-machine.node_no_secret_run")}
+			}
+		}
 	}
 	if ctx.Err() != nil {
 		return rpc.NotSent(ctx.Err()) // waited for the connection or the resident handover: nothing went out
@@ -954,7 +992,8 @@ func (m *Machine) onEvent(event string, params json.RawMessage) {
 		defer m.sessionsEventMu.Unlock() // held through OnEvent and forward below
 		if list, ok := m.decodeSessions(params); ok {
 			m.setSessions(list)
-			m.d.heldWake(m.cfg.ID) // a message held for a session listed now goes (held.go)
+			m.d.heldWake(m.cfg.ID)      // a message held for a session listed now goes (held.go)
+			m.d.heldStartWake(m.cfg.ID) // held new-Agent starts for this computer go now (held_starts.go)
 		}
 	case "sessions.revs":
 		var p struct {

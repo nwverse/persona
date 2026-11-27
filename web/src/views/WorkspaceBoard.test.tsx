@@ -26,6 +26,7 @@ import type { BoardCard } from "../lib/workspace-board";
 import type { Machine, Session } from "../lib/types";
 import type { Todo } from "../lib/todos";
 import { WorkspaceBoard, WorkspaceCard } from "./WorkspaceBoard";
+import { t } from "../i18n";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -264,5 +265,27 @@ describe("the workflow board with many cards and Agents", () => {
     expect([shown("m0"), shown("m1"), shown("released")]).toEqual([true, false, false]);
     choose("m1");
     expect([shown("m0"), shown("m1"), shown("released")]).toEqual([false, true, false]);
+  });
+
+  it.each(["C:\\", "\\\\server\\share\\", "/"])("disables parent navigation at directory root %s", async (path) => {
+    localStorage.setItem("persona.workspace-board.view", "manual");
+    vi.stubGlobal("fetch", vi.fn((url: string) => {
+      const pathname = new URL(url, "http://x").pathname;
+      const response = pathname === "/api/v1/machines/m0/dirs" ? { path, parent: "", entries: [] } : answers[pathname] ?? {};
+      return Promise.resolve(new Response(JSON.stringify(response), { headers: { "Content-Type": "application/json" } }));
+    }));
+    await act(() => refresh());
+    act(() => root.render(<WorkspaceBoard />));
+    await flush();
+    const bind = [...host.querySelectorAll("button")].find((button) => button.textContent === t("workspaceboard.bind_workspace"));
+    expect(bind).toBeDefined();
+    act(() => bind!.click());
+    const directory = [...document.querySelectorAll("button")].find((button) => button.textContent === t("workspaceboard.mode_directory"));
+    expect(directory).toBeDefined();
+    act(() => directory!.click());
+    await flush();
+    const parent = document.querySelector<HTMLButtonElement>(`button[aria-label="${t("workspaceboard.parent_directory")}"]`);
+    expect(parent).not.toBeNull();
+    expect(parent!.disabled).toBe(true);
   });
 });

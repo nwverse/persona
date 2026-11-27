@@ -63,9 +63,6 @@ struct AutoConversationsView: View {
             #if os(iOS) || os(visionOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
-            #if os(macOS)
-            .macSheetDone { dismiss() }
-            #else
             .toolbar {
                 // ✕ at the leading corner, the page's own menu at the trailing one (#9653).
                 SheetClose { dismiss() }
@@ -73,11 +70,7 @@ struct AutoConversationsView: View {
                     ToolbarItem(placement: .primaryAction) { recentMenu(on) }
                 }
             }
-            #endif
         }
-        #if os(macOS)
-        .macSheet()
-        #endif
     }
 
     /// The sidebar's Show Scheduled Task Chats (#8324) at the top left, opposite Done: the same setting as Assistant

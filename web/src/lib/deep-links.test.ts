@@ -123,6 +123,36 @@ describe("deep links: pages and paths", () => {
     expect(pageOfPath("/settings", "?tab=labs&enabled=1&token=x")).toEqual({ page: "settings", tab: "labs" });
   });
 
+  it("preserves Inbox Sources deep links including state and manager across query and path forms", () => {
+    const state = JSON.stringify({ p: "source", id: "sub_1" });
+    const enc = encodeURIComponent(state);
+    expect(pageOfPath("/settings", `?tab=sources&state=${enc}&manager=work`)).toEqual({
+      page: "settings",
+      tab: "sources",
+      item: state,
+      manager: "work",
+    });
+    expect(pagePath({ page: "settings", tab: "sources", item: state, manager: "work" })).toBe(
+      `/settings?tab=sources&state=${enc}&manager=work`,
+    );
+    expect(pageOfPath("/settings/sources")).toEqual({ page: "settings", tab: "sources" });
+    expect(pageOfPath(`/settings/sources/${enc}`, "?manager=work")).toEqual({
+      page: "settings",
+      tab: "sources",
+      item: state,
+      manager: "work",
+    });
+    expect(pageOfPath(`/settings/sources@work/${enc}`)).toEqual({
+      page: "settings",
+      tab: "sources",
+      item: state,
+      manager: "work",
+    });
+    expect(appPath(`persona://open/settings/sources/${enc}?manager=work`)).toBe(
+      `/settings?tab=sources&state=${enc}&manager=work`,
+    );
+  });
+
   it("keeps the knowledge kinds and settings tabs of the pages that define them", () => {
     expect(DEEP_KB_KINDS).toEqual([...KB_KINDS]);
     expect(Object.keys(DEEP_SETTINGS_TABS).sort()).toEqual([...TABS].sort());

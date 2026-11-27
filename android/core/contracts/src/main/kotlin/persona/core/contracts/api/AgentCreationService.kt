@@ -165,6 +165,8 @@ data class AgentModel(
     val description: String? = null,
     /** The concrete model an alias stands for with this launcher's settings (opus → its model id). */
     val resolved: String? = null,
+    /** Other spellings the hub folded into this row; a saved alias selects this row, not a duplicate. */
+    val aliases: List<String> = emptyList(),
     /** What the agent runs when it is given no model: picking it is the same as picking none. */
     @SerialName("default") val isDefault: Boolean = false,
     /** The thinking efforts it takes, weakest first; empty: no effort setting. */
@@ -216,6 +218,8 @@ data class AgentLauncher(
     @SerialName("permission_modes") val permissionModes: List<String>? = null,
     /** Where the computer found the launcher, for example path, zshrc, or a managed provider. */
     val source: String? = null,
+    /** Whether a runtime launcher can receive separate task follow-up supervision instructions. */
+    @SerialName("supervision_policy") val supervisionPolicy: Boolean = false,
 ) {
     /** What people read for it: its display name, else its startup name (the web's `providerTitle`). */
     val title: String get() = launcherTitle(name, agentType, displayName?.trim()?.takeIf(String::isNotEmpty), baseUrl, source)

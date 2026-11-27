@@ -10,12 +10,21 @@ vi.mock("./api", () => ({
   enc: encodeURIComponent,
 }));
 
-import { badAddresses, loadMailAccounts, markMailSeen, newDraft, parseAddresses, replyDraft, resetMailForTests, sendBody, sendMail } from "./mail";
+import { badAddresses, loadMailAccounts, markMailSeen, newDraft, parseAddresses, replyDraft, resetMailForTests, sendBody, sendMail, storedMailClipping } from "./mail";
 
 beforeEach(() => {
   calls.list = [];
   calls.fail = false;
   resetMailForTests();
+});
+
+describe("storedMailClipping", () => {
+  it("reads the item page's flag as a closed state; anything but a boolean is unknown, never whole", () => {
+    expect(storedMailClipping({ mail_body_truncated: true })).toBe("clipped");
+    expect(storedMailClipping({ mail_body_truncated: false })).toBe("whole");
+    for (const item of [undefined, {}, { mail_body_truncated: undefined }, { mail_body_truncated: null }, { mail_body_truncated: "false" }, { mail_body_truncated: 0 }])
+      expect(storedMailClipping(item), JSON.stringify(item)).toBe("unknown");
+  });
 });
 
 describe("addresses", () => {
@@ -32,6 +41,15 @@ describe("addresses", () => {
   it("names the ones that are not an address", () => {
     expect(badAddresses("a@example.com, lucy, b@example")).toEqual(["lucy", "b@example"]);
     expect(badAddresses("示例 <c@example.com>")).toEqual([]);
+  });
+
+  it("keeps commas, semicolons and escaped quotes inside quoted display names", () => {
+    const raw = '"Wang, Lucy" <lucy@example.com>; "Ops; \\"Core\\"" <ops@example.com>';
+    expect(parseAddresses(raw)).toEqual([
+      { name: "Wang, Lucy", email: "lucy@example.com" },
+      { name: 'Ops; "Core"', email: "ops@example.com" },
+    ]);
+    expect(badAddresses(raw)).toEqual([]);
   });
 });
 

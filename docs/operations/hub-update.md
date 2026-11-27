@@ -8,11 +8,22 @@ Implemented in 4 steps; after each step, the corresponding "Plan" is rewritten a
 
 ### Web development updates
 
-For operators running the Web client with the built-in child manager, Settings › hub offers
-**Update source › Web development**. This feature is scoped to the Web development UI and
-its Hub/Node backend update chain. It does not add or validate native macOS, iOS, Android,
-or other client update flows. A Linux/macOS **Hub host** and registered computers' service
-binaries are backend installation targets, distinct from native client adaptation.
+Operators of a Linux or macOS Hub that starts the built-in child assistant can choose
+**Settings › Hub › Update source › Web development**, including when independent assistants
+own some of the computers. This builds the Web client, Hub and computer services from a
+single commit. Independent assistants follow that commit only after the Hub confirms the
+new version. A candidate still building, awaiting confirmation or rolled back gives them
+no new target.
+
+The Hub advertises the confirmed commit, version and build. Each independent assistant
+authenticates to the Hub and tries its package for the required platform first. The
+assistant verifies the archive and executable against the manifest. If the manifest lacks
+the platform, Git and Go on the assistant's host can build that exact detached commit.
+Failed verification or missing tools leave the installed program in place. See [Node packages](node-update.md#node-packages).
+
+An independent assistant that supports this update waits until it is idle to switch its
+own executable. If startup fails, it restores the previous program. The computers it owns
+can update separately through **Redeploy** or **Update computers automatically**. See [Automatic updates for an independent manager](../assistant/managers.md#automatic-updates-for-an-independent-manager).
 
 This uses the existing update endpoints, hourly scheduler,
 idle checks, binary verification, blue-green switch/watchdog, confirmation and node deployment
@@ -22,17 +33,19 @@ accepted keeps its fixed candidate; source changes are refused until it ends. Re
 join that attempt. A rolled-back development commit is never automatically tried again.
 
 Development updates always use `https://github.com/nwverse/persona.git`, branch `main`.
-They work out of the box on a Linux or macOS Hub that starts the built-in child manager: the
-Hub pauses its own writers for the snapshot, so no hook script is needed. **Settings › Hub ›
-Update source › Web development** offers **Backup folder** and **Snapshots to keep**. The Web
-settings are declarative only: a folder and a count, never a shell command, credential or
-helper path.
+The Hub can pause its own writers for a snapshot of the Hub and built-in assistant.
+Remote assistants that keep their own databases and files fall outside that snapshot.
+The **Development backup** section in Web Settings lets the operator choose a **Backup
+folder** and the number of **Snapshots to keep**. Operators configure external coordination
+commands on the Hub host.
 
 The recommended folder is `<runtime>/update/development-backups` (where the Hub has always
-kept these snapshots); it is shown as the placeholder and used when no folder is set. **Use
-recommended** and an empty field are an explicit Web choice of it, so they win over a
-`directory` in `hub.json`; leaving the field out of a request keeps whatever is set. A
-custom folder is validated on the Hub with the backup command's rules (`internal/operations/backup`):
+kept these snapshots). It appears as a wrapping placeholder in the full-width folder field.
+**Use recommended** appears for a custom folder and clears the field. **Save** is enabled
+when the folder or retention changes. Saving a change to an empty folder explicitly chooses
+the recommendation over a `directory` in `hub.json`. Omitting the folder from a request
+keeps the saved folder. The Hub validates a custom folder with the backup command's rules
+(`internal/operations/backup`):
 it must be an absolute path (a leading `~` is expanded), may not be inside data a snapshot
 collects (the knowledge base, `managers/assistant`, extensions, skills or
 `hub.machines_kept`), may not be the runtime directory or contain it (or an external
@@ -45,10 +58,11 @@ changed while the current one holds a `coordination-pending.json` marker or an
 and a new folder would otherwise pause and dump writers again past them. The retention count
 defaults to three and may be 1–50; an explicit `0` is refused (omit the field to inherit).
 
-For installations with writers outside the Hub's control, `update.development.backup.quiesce`
-and `resume` in private `hub.json` remain an optional advanced override. Both must be set
-together; a half-configured pair disables the channel rather than silently using the built-in
-pause. The Web settings cannot supply a shell command, credential or arbitrary path:
+Another local manager under `<runtime>/managers/<id>/manager.json`, an `extra_databases`
+entry or an `extra_roots` entry requires external coordination. Configure **both**
+`update.development.backup.quiesce` and `resume` in private `hub.json`. The same pair is
+an optional override for the built-in pause on other installations. A missing required hook
+or a half-configured pair disables Web development, and Settings shows the Hub's reason.
 
 ```json
 {
@@ -110,6 +124,32 @@ installation user's existing HTTPS credential mechanism, with interactive prompt
 Updates execute build code from this project's repository.
 Docker Hubs and Windows Hubs retain their original update paths.
 
+Settings › Hub shows the current step and elapsed phase time during a development build,
+snapshot backup or saved-version preparation. Build progress covers the pinned checkout,
+`npm ci`, the Web development and public-share bundles, precompression and runtime assets,
+program/platform targets, and manifest checksum verification.
+
+The backup starts by pausing writers. Database progress shows completed dumps and the
+cumulative bytes written by `pg_dump`; the final dump size is unknown while it runs.
+Before writing `files.tar.gz`, the helper scans the included trees for regular file counts
+and sizes using the archive exclusions. The archive reports completed files and uncompressed
+file bytes read. Program and Node package archiving, external writer resume when configured,
+and snapshot verification have their own steps. Applying a saved version shows the snapshot
+checksum scan and the copy of compressed program and Node packages into staging. The byte
+totals describe each step's inputs. A percentage describes that step's bytes or completed build
+targets. The Web uses its standard file-size units and shows a smoothed rate in MB/s.
+
+`GET /api/v1/hub/update` adds the optional `development_progress` object while these phases
+run. It carries `phase` (`building`, `backing_up` or `applying_backup`), `step`, the one-based
+`step_index`, `step_total` and `elapsed_seconds`. When available it also carries `item_label`,
+`item_done`, `item_total`, `bytes_done`, `bytes_total`, `bytes_per_second` and `percent`.
+The page polls for counters about once per second. The helper reports counter samples at most
+about every 750 ms, with an immediate event at step changes and when totals become available.
+The structured pipe carries only fixed step and target labels and numbers. Tool diagnostics
+stay in private logs and the result stays in its own file. On a failure the error names the
+failed step and phase log. Progress is cleared when the phase ends. Existing clients can keep
+reading `state` and the legacy `progress` string.
+
 The helper resolves the full commit of `refs/heads/main`; a missing `main` branch is an error.
 Settings shows `main` and the installed/target commits. A detached private checkout fetches that
 exact object even if the remote advances while building. There are no repository/branch overrides
@@ -163,9 +203,10 @@ Link/connector node updates retain their own idle and commit checks; direct SSH 
 replaces the program and restarts the node, so it can interrupt work. See [node-update.md](node-update.md).
 
 The compile gate runs `npm ci` and `npm run build:development` for Web, generates runtime packages,
-then runs tagged `go build` for `personad` on the Hub's platform and each registered computer's
-last-reported OS/architecture, deduplicated, plus
-`persona-hub`/`persona-manager` on the Hub's platform. Web assets
+then runs tagged `go build`. Package targets include the Hub's platform, the last known
+OS and architecture of computers across all owners, and the reported platforms of connected
+independent assistants. Machines on the same platform share a build. The Hub also builds
+its own `persona-hub` and `persona-manager` programs. Web assets
 are embedded and precompressed. No full tests, vet, mobile builds, release publication or hosted
 CI are required. The development command retains TypeScript, Vite, WebAssembly, localization
 and asset-graph checks, but skips the release's first-screen/idle performance budgets. The
@@ -224,8 +265,8 @@ set aside in the same update transaction so the new embedded UI actually serves.
 restores that override and all swapped programs. Explicit **Apply backup** installs saved programs
 and their embedded Web only; it never extracts this data archive or its standalone override. After
 Hub confirmation, compiled node packages are installed locally even with automatic fleet updates
-off, so **Redeploy** can use the matching build. Fleet installation still requires the separate
-`auto_update_nodes` choice. Applying a backup with fleet auto-update enabled requires saved packages
+off, so **Redeploy** can use the matching build. Automatic deployment to computers requires the
+separate `auto_update_nodes` choice. Applying a backup with fleet auto-update enabled requires saved packages
 for all currently known platforms; otherwise it stops before adoption. With fleet updates off,
 remote Nodes keep their current programs and available saved packages are installed locally.
 A backup replaces only its staged platforms. Other regular local packages remain usable at
@@ -234,17 +275,20 @@ identity, while an existing valid explicit identity is preserved. An invalid ret
 marker stops package adoption and keeps staging for inspection.
 Online/offline Link nodes, SSH/tailcat, busy checks, old capabilities,
 fresh ownership and guardian rollback retain their original behavior in [node-update.md](node-update.md).
-There is no platform configuration or fixed platform matrix. Offline computers with a known
-platform are included. A computer that has never reported its platform supplies no build target;
-once it connects, the next development update includes its platform. With no known remote
-platforms, only the Hub's platform is built. For a freshly compiled development update, old
+The Hub includes offline computers whose platforms it already knows. If an independent
+assistant learns a computer's platform after the Hub builds its packages, the assistant
+can build the missing package from the current confirmed commit. The Hub includes that
+platform the next time it builds. With no known remote platforms, it builds only for its
+own platform. For a freshly compiled development update, old
 unversioned packages are set aside before installation so omitted platforms are not mistaken
 for the new version. A saved-version application instead retains and labels omitted packages
 as described above. Any set-aside or version-label failure stops fleet deployment.
-Independent/remote managers have their own binaries, data and package sources: this local build
-path refuses their machine ownership instead of claiming those computers were upgraded. Use
-their original update channel. A publisher-owned `bin/nodes` symlink is likewise an explicit
-unsupported installation boundary; no immutable release pointer is rewritten.
+A publisher-owned `bin/nodes` symlink remains an unsupported installation boundary.
+
+In Web Settings, open a computer's row to reach **Redeploy** when available. The row
+shows the installed version, any reported update phase or failure, and the reason a
+deployment is blocked. With several assistants it names the known owner. The row shows
+the package source when the assistant reports whether it used a Hub package or a local build.
 
 #### Development recovery
 
@@ -908,6 +952,9 @@ Where a release hub reads `latest.json` and downloads from (#4522). v0.2.1's bin
 - **A hub deployed with `deploy.sh`** carries a non-empty environment `PERSONA_UPDATE_URL`, then the config's `publish.update_url`, else `<publish.site_url>/dl`: a config with only `site_url` pointing at the publish site gets the frozen `dl/` below, so the hub never sees a newer release or offers its phones the Android app. `deploy.sh` prints which source the hub will carry when `publish.update_url` is not set; set it (for example to the GitHub Releases base) before deploying, or `update.url` in the hub's `hub.json` afterwards.
 - **The default of official builds** is the GitHub Releases base (`https://github.com/nwverse/persona/releases/latest/download`, through `publish.update_url`), the same base the Release's `install.sh` downloads from; v0.5.2 and later carry it. Releases up to v0.4.0 were built with the publish site's `dl/`, which has stayed on the 2026-11-07 build since the repository history was rewritten (the rollback guard refuses to publish over it), so those hubs never see a newer release: set `update.url` to the GitHub base, or upgrade once by hand. The getting-started guide and the website's install command point new installs at the Release's `install.sh` for the same reason. `update.url` still lets a hub choose another source without a new build.
 
+On the web, **Settings › This hub** shows the latest version from the selected Release or Beta source and its publication time when available (#15710).
+With no result yet, it prompts for a check. If the installed build number is higher than the source's latest build, it explains that updating from that source would require a downgrade. A stopped-source warning takes precedence.
+
 ### Beta updates (opt-in)
 
 **Stable remains the default.** Settings › hub lets a person choose the beta update source explicitly; nothing about an existing installation switches it to prereleases. Choosing **Release** returns to the stable source. A running check, download or confirmation must finish before changing channels, and switching discards the other channel's candidate rather than installing it. The existing `web-dev` private build/backup channel stays separate.
@@ -1103,11 +1150,9 @@ activation, repeat the authenticated true PUT to request a fresh package check
 on connected managers. Repeating false never requests deployment. Publication
 and node confirmation must be reported separately.
 
-This policy updates node executables, not an independently installed manager.
-The latter still needs its own fixed candidate, original manager/unit/config
-identity, complete activity evidence, transaction lock, guardian, health
-confirmation and rollback. A node capability or a staged manager binary alone
-does not satisfy that contract.
+This policy governs updates to computer services. An independent manager's own executable
+has a separate idle check, startup confirmation and rollback. A node deployment confirms
+only the computer it updated. See [Automatic updates for an independent manager](../assistant/managers.md#automatic-updates-for-an-independent-manager).
 
 ## 13. Tests
 

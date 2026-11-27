@@ -60,9 +60,6 @@ struct SecretHandoffForm: View {
             .disabled(sending)
             if let scope = interaction.alwaysLabel, !scope.isEmpty {
                 Button("Always Allow") { submit(Resolution(allow: true, always: true)) }
-                    #if os(macOS)
-                    .buttonStyle(.link)
-                    #endif
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
                     .font(Theme.Font.caption)

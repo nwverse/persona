@@ -8,6 +8,7 @@ import persona.core.domain.tasks.waitsForOwner
 
 import persona.core.domain.tasks.hold
 import persona.feature.chat.ReviewChecklist
+import persona.feature.chat.TaskShellQuestion
 import persona.core.designsystem.text
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -44,7 +45,11 @@ import persona.core.designsystem.icons.PhIcons
 import persona.core.designsystem.icons.PersonaIcons
 import persona.core.domain.sort.slotLabel
 import persona.core.domain.tasks.TasksStore
+import persona.core.domain.tasks.TaskState
 import persona.core.domain.tasks.TodoDecisionsSource
+import persona.core.domain.tasks.checksAsOpen
+import persona.core.domain.tasks.planTaskOf
+import persona.core.domain.tasks.retryLauncher
 import persona.core.domain.tasks.TriageSection
 import persona.core.domain.tasks.supersededFailedStarts
 import persona.core.domain.tasks.triage
@@ -117,7 +122,17 @@ fun TodoDetailScreen(
 
     val sessionMap = remember(sessions) { sessions.associateBy { it.key } }
     val sessionLookup: (SessionKey) -> Session? = remember(sessionMap) { { key: SessionKey -> sessionMap[key] } }
+    val placed = todo.triage(sessionLookup, now.toEpochMilli(), superseded = todo.id in supersededFailedStarts(todos))
+    val open = todo.checksAsOpen(placed)
+    val failedStart = open && !todo.startError.isNullOrBlank()
+    val canRetry = failedStart && !todo.origin.isNullOrBlank() && tasks != null
+    val plans = tasks?.plans?.collectAsState()?.value.orEmpty()
+    val failedTask = if (canRetry) planTaskOf(todo, plans) else null
+    val codedStartFailure = if (failedStart) startFailureCodeLine(failedTask?.errorCode, failedTask?.errorArgs) else null
+    var startFailureDetails by remember(todo.id, todo.startError, failedTask?.errorCode) { mutableStateOf(false) }
     val hubFeatures = tasks?.features?.collectAsState()
+    val instead = if (canRetry) retryLauncher(failedTask, hubFeatures?.value.orEmpty()) else null
+    val retrying = TasksStore.retryKey(todo.id) in tasks?.busy?.collectAsState()?.value.orEmpty()
     val seenOn = hubFeatures?.value?.contains("todo_seen") == true
     LaunchedEffect(todoId, seenOn) {
         val store = tasks ?: return@LaunchedEffect
@@ -185,32 +200,82 @@ fun TodoDetailScreen(
             // The cap grows with the text size, as Android's other width caps do: Japanese "Hand to agent" was cut at 1.3x
             // in a fixed 560dp, where the uncapped bar showed it whole (iOS stacks the buttons instead).
             JBottomBar(Modifier.widthIn(max = Tokens.Size.readable * LocalDensity.current.fontScale.coerceAtLeast(1f))) {
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = Tokens.Space.xs, vertical = Tokens.Space.xxs),
-                    horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)
-                ) {
-                    JButton(
-                        text = stringResource(if (todo.isDone) R.string.agents_todo_reopen else R.string.agents_todo_complete),
-                        kind = JButtonKind.Secondary,
-                        icon = if (todo.isDone) PhIcons.ArrowClockwise else PhIcons.Check,
-                        onClick = {
-                            scope.launch {
-                                try {
-                                    tasks?.setTodoDone(todo, !todo.isDone)
-                                } catch (e: Exception) {
-                                    onError(res.getString(R.string.agents_todo_state_failed, e.message.orEmpty()))
+                if (canRetry) {
+                    // A failed start is still open. Its one-tap launcher remedy comes first, then Retry, as on the web.
+                    FlowRow(
+                        Modifier.fillMaxWidth().padding(horizontal = Tokens.Space.xs, vertical = Tokens.Space.xxs),
+                        horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s),
+                        verticalArrangement = Arrangement.spacedBy(Tokens.Space.s),
+                    ) {
+                        if (instead != null) JButton(
+                            text = stringResource(persona.core.designsystem.R.string.designsystem_use_launcher_instead, instead),
+                            icon = PersonaIcons.retry,
+                            loading = retrying,
+                            enabled = !retrying,
+                            modifier = Modifier.testTag("todo-retry-launcher"),
+                            onClick = {
+                                tasks?.retryTaskOnLauncher(todo, instead) {
+                                    onError(operationFeedback(it).text.resolve(res))
                                 }
-                            }
-                        },
-                        modifier = Modifier.weight(1f)
-                    )
-                    // A done to-do can't be handed over (the hub refuses, #1856): Reopen comes first.
-                    if (!todo.isDone) JButton(
-                        text = stringResource(R.string.agents_todo_hand_to_agent),
-                        icon = PhIcons.Robot,
-                        onClick = { onHandOff(todo) },
-                        modifier = Modifier.weight(1f)
-                    )
+                            },
+                        )
+                        JButton(
+                            text = stringResource(persona.core.designsystem.R.string.designsystem_retry),
+                            kind = if (instead == null) JButtonKind.Primary else JButtonKind.Secondary,
+                            icon = PersonaIcons.retry,
+                            loading = retrying,
+                            modifier = Modifier.testTag("todo-retry"),
+                            onClick = { tasks?.retryTask(todo) { onError(operationFeedback(it).text.resolve(res)) } },
+                        )
+                        if (open) JButton(
+                            text = stringResource(R.string.agents_todo_hand_to_agent),
+                            kind = JButtonKind.Secondary,
+                            icon = PersonaIcons.handToAI,
+                            onClick = { onHandOff(todo) },
+                        )
+                        JButton(
+                            text = stringResource(if (open) R.string.agents_todo_complete else R.string.agents_todo_reopen),
+                            kind = JButtonKind.Secondary,
+                            icon = if (open) PersonaIcons.done else PersonaIcons.retry,
+                            onClick = {
+                                scope.launch {
+                                    try {
+                                        tasks?.setTodoDone(todo, open)
+                                    } catch (e: Exception) {
+                                        onError(res.getString(R.string.agents_todo_state_failed, e.message.orEmpty()))
+                                    }
+                                }
+                            },
+                        )
+                    }
+                } else {
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = Tokens.Space.xs, vertical = Tokens.Space.xxs),
+                        horizontalArrangement = Arrangement.spacedBy(Tokens.Space.s)
+                    ) {
+                        JButton(
+                            text = stringResource(if (open) R.string.agents_todo_complete else R.string.agents_todo_reopen),
+                            kind = JButtonKind.Secondary,
+                            icon = if (open) PhIcons.Check else PhIcons.ArrowClockwise,
+                            onClick = {
+                                scope.launch {
+                                    try {
+                                        tasks?.setTodoDone(todo, open)
+                                    } catch (e: Exception) {
+                                        onError(res.getString(R.string.agents_todo_state_failed, e.message.orEmpty()))
+                                    }
+                                }
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+                        // A done to-do can't be handed over (the hub refuses, #1856): Reopen comes first.
+                        if (open) JButton(
+                            text = stringResource(R.string.agents_todo_hand_to_agent),
+                            icon = PhIcons.Robot,
+                            onClick = { onHandOff(todo) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
                 }
             }
         }
@@ -233,22 +298,25 @@ fun TodoDetailScreen(
                         verticalArrangement = Arrangement.spacedBy(Tokens.Space.s)
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            val status = when (state) {
-                                TodoState.NeedsYou -> Status.NeedsYou
-                                TodoState.Unread -> Status.Unread
-                                TodoState.Working -> Status.Working
+                            val status = when {
+                                failedStart -> Status.NeedsYou
+                                state == TodoState.NeedsYou -> Status.NeedsYou
+                                state == TodoState.Unread -> Status.Unread
+                                state == TodoState.Working -> Status.Working
                                 else -> Status.Idle
                             }
                             JStatusDot(status)
                             Spacer(Modifier.width(Tokens.Space.s))
                             if (todo.isCancelled) {
                                 JTag(stringResource(R.string.agents_todo_cancelled))
-                            } else if (todo.isDone) {
+                            } else if (!open) {
                                 if (todo.doneBy == "auto") {
                                     JTag(stringResource(R.string.agents_todo_auto_done))
                                 } else {
                                     JTag(stringResource(R.string.agents_todos_done))
                                 }
+                            } else if (failedStart) {
+                                JTag(TaskState.Failed.label.text())
                             } else if (todo.acceptedAtRest(sessionLookup)) {
                                 // accepted, then reopened by the hub with more work: still Accepted until a new review (#3156)
                                 JTag(stringResource(R.string.agents_todo_state_accepted), Tone.Positive)
@@ -305,6 +373,7 @@ fun TodoDetailScreen(
                                 placeholder = stringResource(R.string.agents_todo_notes_edit_placeholder),
                                 minLines = 3,
                                 maxLines = 8,
+                                readingContent = true,
                                 supportingText = dictate?.heard?.takeIf { it.isNotBlank() },
                                 trailing = dictate?.let { d -> {
                                     persona.feature.chat.DictationMic(d, stringResource(R.string.agents_todo_notes_dictate), enabled = !saving)
@@ -342,11 +411,13 @@ fun TodoDetailScreen(
                                 }, enabled = titleText.isNotBlank() && !saving && dictate?.active != true, loading = saving)
                             }
                         } else if (todo.notes.isNotBlank()) {
-                            Text(
-                                todo.notes,
-                                style = PersonaTheme.type.body,
-                                color = PersonaTheme.palette.ink2
-                            )
+                            ReadingContent {
+                                Text(
+                                    todo.notes,
+                                    style = PersonaTheme.type.body,
+                                    color = PersonaTheme.palette.ink2
+                                )
+                            }
                         } else {
                             Text(
                                 stringResource(R.string.agents_todo_notes_empty),
@@ -366,7 +437,7 @@ fun TodoDetailScreen(
                                 color = PersonaTheme.palette.ink2
                             )
                         }
-                        if (todo.isDone && todo.doneBy == "auto" && !todo.doneReason.isNullOrBlank()) {
+                        if (!open && todo.doneBy == "auto" && !todo.doneReason.isNullOrBlank()) {
                             Text(
                                 stringResource(R.string.agents_todo_auto_reason, todo.doneReason.orEmpty()),
                                 style = PersonaTheme.type.caption,
@@ -377,6 +448,31 @@ fun TodoDetailScreen(
                         todo.hold?.let { TodoHoldLine(it) }
                         // What done means for a task the main conversation supervises, and where its review stands (#3124).
                         ReviewChecklist(todo)
+                    }
+                }
+            }
+
+            if (failedStart) {
+                item(key = "start-failure") {
+                    Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.m)) {
+                        JNotice(
+                            stringResource(R.string.agents_todo_start_failed, codedStartFailure ?: todo.startError.orEmpty()),
+                            status = Status.Unknown,
+                            icon = PersonaIcons.error,
+                        )
+                        if (codedStartFailure != null) {
+                            // The short coded line leads; the raw hub failure remains available only on request.
+                            Column(verticalArrangement = Arrangement.spacedBy(Tokens.Space.xs)) {
+                                JTextButton(
+                                    stringResource(if (startFailureDetails) persona.core.designsystem.R.string.designsystem_details_collapse
+                                    else persona.core.designsystem.R.string.designsystem_details_expand),
+                                    { startFailureDetails = !startFailureDetails },
+                                    modifier = Modifier.testTag("todo-start-failure-details"),
+                                )
+                                if (startFailureDetails) JCodeBlock(todo.startError.orEmpty(), small = true)
+                            }
+                        }
+                        if (canRetry) tasks?.let { TaskShellQuestion(todo, failedTask, it) }
                     }
                 }
             }
@@ -462,7 +558,7 @@ fun TodoDetailScreen(
             if (todo.currentAgents.isEmpty()) {
                 item(key = "active-empty") {
                     JEmptyState(stringResource(R.string.agents_todo_no_agents),
-                        stringResource(if (todo.isDone) R.string.agents_todo_no_agents_done_hint else R.string.agents_todo_no_agents_hint))
+                        stringResource(if (!open) R.string.agents_todo_no_agents_done_hint else R.string.agents_todo_no_agents_hint))
                 }
             } else {
                 itemsIndexed(todo.currentAgents, key = { _, a -> a.key.path }) { index, agent ->

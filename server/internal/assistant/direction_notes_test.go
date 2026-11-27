@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/assistant/supervisionrole"
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
@@ -102,7 +103,7 @@ func TestDirectionNotesRoute(t *testing.T) {
 func TestDirectionNotesReachTheLeaderPolicy(t *testing.T) {
 	s, f := notesEnv(t)
 	ctx := context.Background()
-	policy := prompts.RenderSupervisionInstructions()
+	policy := mustSupervisionRole(t, supervisionrole.RoleLeader())
 	if got := dispatchedPolicy(t, s, "conv_lead"); got != policy {
 		t.Fatal("a leader without notes has a different policy")
 	}
@@ -217,8 +218,8 @@ func TestDirectionNotesReachALeadersOwnTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, "the start", func() bool { f.mu.Lock(); defer f.mu.Unlock(); return len(f.starts) == 1 })
-	if v := onlyTodo(s).Supervision; v == nil || v.Supervisor != "conv1" {
-		t.Fatalf("main must supervise the leader's new plan (#5732): %+v", v)
+	if v := onlyTodo(s).Supervision; v == nil || v.Supervisor != "lead1" || v.SupervisorSource != "plan" {
+		t.Fatalf("the planning lead must supervise its task: %+v", v)
 	}
 	f.mu.Lock()
 	p, _ := f.starts[0]["prompt"].(string)

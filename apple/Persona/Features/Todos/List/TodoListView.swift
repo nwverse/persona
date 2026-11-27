@@ -3,13 +3,15 @@ import PersonaWire
 import SwiftUI
 
 extension TodosListDeps {
-    /// The app's: the shared store and outbox, the hub, the knowledge base's projects and the app's toast.
+    /// The app's: the shared store and outbox, the hub, the knowledge base's projects, the app's toast, and what answers
+    /// the rows' asks.
     @MainActor static var live: TodosListDeps {
         let app = AppModel.shared
         return TodosListDeps(store: TodoStore.shared, outbox: TodoOutbox.shared, api: { app.api }, now: { Date() },
                              calendar: { TodoCalendar.userCalendar }, projects: { TodoProjects.shared.list },
                              toast: { app.toast = $0 }, show: { app.show($0) },
-                             assistive: { UIAccessibility.isVoiceOverRunning || UIAccessibility.isSwitchControlRunning })
+                             assistive: { UIAccessibility.isVoiceOverRunning || UIAccessibility.isSwitchControlRunning },
+                             asks: .shared)
     }
 }
 
@@ -18,10 +20,15 @@ extension TodosListDeps {
 /// Needs you's and Someday and Done today folded after the last; the rows (`TodoListRow`). The foot toolbar, Mail's,
 /// holds the Filter, the system's search field and New To-Do (`TodosFootBar`); ⋯ holds Sort By and Group by Project
 /// (`TodosViewMenu`). While a choice hides what needs the owner, the list's first line says so
-/// (`TodosGuardLine`). The calm rule hides the Filter and the headers while only plain To do rows exist. A row ticks, swipes (Done, Someday) and has a long-press
-/// menu (`TodoRowActions`); the writes wait out their Undo on the device (`TodoOutbox`). While the hub is out of reach
-/// the list is the one last read, under one line that says so. Rows open today's to-do page until the to-do's own page
-/// arrives. iOS only: visionOS keeps today's To-dos.
+/// (`TodosGuardLine`). The calm rule hides the Filter and the headers while only plain To do rows exist. A row ticks,
+/// swipes (Done, Someday) and has a long-press menu (`TodoRowActions`); the writes wait out their Undo on the device
+/// (`TodoOutbox`). While the hub is out of reach the list is the one last read, under one line that says so. Rows open
+/// today's to-do page until the to-do's own page arrives. iOS only: visionOS keeps today's To-dos.
+///
+/// It shows one place (`TodosPlacesModel`, DESIGN_SYSTEM 3.5 "To-dos places"), picked in the sidebar or from its title's
+/// menu: All To-dos and a project's place draw the Filter, Today and Upcoming do not; Upcoming is by day, its ⋯ holding
+/// Show as Calendar alone. In a place, the guard line also counts what needs the owner outside it. New To-Do starts the
+/// to-do in the place shown (`TodosListModel.capture`), as Upcoming's day headings do.
 struct TodoListView: View {
     @Environment(AppModel.self) private var app
     @Environment(\.shownTree) private var shownTree
@@ -33,112 +40,78 @@ struct TodoListView: View {
     @State private var sight = TodoListSight()
     /// Whether the guard line has scrolled away: the title's subtitle takes its place then.
     @State private var lines = TodosTopLinesSight()
-    /// Whether this page has put its list back where the place was left: once, as the page is made. A list kept in its
-    /// navigation stack keeps its own place when a to-do pushed over it pops.
-    @State private var placed = false
-    /// New To-Do's sheet (the row's confirmations and Date… are the model's, presented from their row).
-    @State private var creating = false
+    /// The place this page last put its list back for (where it was left, or its top): once per place, as the page is
+    /// made or another place is picked. A list kept in its navigation stack keeps its own place when a to-do pushed over
+    /// it pops.
+    @State private var placedIn: String?
+    /// New To-Do's sheet, with where it starts (the row's confirmations and Date… are the model's, presented from their
+    /// row).
+    @State private var creating: TodoCapture?
     /// The words "Search Chats for …" took to the app's search, while it is up.
     @State private var chatSearch: TodosChatSearch?
     /// The chat picked there, opened once the search is gone.
     @State private var pickedChat: SessionKey?
     private let workspace = TodoWorkspace.shared
+    /// The places: the title's menu, and the place the list shows (`model.place`) and its name, which the page takes
+    /// from them only when they change (`TodoPlaceFollower`), so a place's number changing redraws nothing here (P5).
+    @State private var places = TodosPlacesModel(deps: .live)
+    @State private var placeTitle: String?
+    /// Upcoming drawn as a calendar (⋯ › Show as Calendar), kept on the device.
+    @StoredValue("todos.v1.upcomingCalendar") private var upcomingCalendar = false
+    @State private var allProjects = false
+    /// A to-do opened from Upcoming's calendar.
+    @State private var pushedTodo: TodoDetailRoute?
 
     /// Whether this page's tree is the one the window shows: a tree on its way out leaves the workspace alone.
     private var shownHere: Bool { builtTree == nil || shownTree?.tree === builtTree }
 
+    /// The place's name: the page's title.
+    private var title: String { placeTitle ?? String(localized: "All To-dos [To-dos List]") }
+
     var body: some View {
-        ScrollViewReader { proxy in
-            List {
-                if model.ready {
-                    TodosTopLines(model: model, sight: lines)
-                    content
-                    TodosSearchChatsRow(model: model) { chatSearch = TodosChatSearch(words: $0) }
+        Group {
+            // A search lists what matches as a list, whatever the place draws.
+            if model.place == .upcoming && upcomingCalendar && !model.searching {
+                TodoUpcomingCalendar(asCalendar: $upcomingCalendar, model: model, place: title, showAll: { places.show(.all) },
+                                     add: { creating = model.capture(on: $0.day, at: $0.time) }) {
+                    pushedTodo = TodoDetailRoute(id: $0)
                 }
-            }
-            .sectionCards()
-            .accessibilityIdentifier("todos.v1") // the list itself
-            .themedPage()
-            .refreshable { await model.refresh() }
-            .onScrollGeometryChange(for: TodoListEdges.self) { TodoListEdges($0) } action: { _, edges in
-                sight.covered = edges.top
-                sight.atEnd = edges.atEnd
-                lines.covered = edges.top
-            }
-            .onScrollPhaseChange { old, phase in
-                model.hold.set(.scrolling, phase != .idle)
-                sight.scrolling = phase != .idle
-                if phase != .idle { model.settleArrivals() } // nothing fades in under a finger
-                // Where a scroll came to rest; not the idle a page is made in, before its rows are drawn.
-                if phase == .idle, old != .idle {
-                    sight.rested()
-                    if let top = sight.top(in: model.groups) { workspace.rested(workspace.place, at: top, shown: shownHere) }
-                }
-            }
-            .onAppear {
-                model.sort = sort
-                model.byProject = byProject
-                model.start()
-                model.hold.set(.outOfSight, false)
-                // Back from a to-do pushed over it: a list that rested at its very end is at its end again. The to-do
-                // page has no foot toolbar, so while it is in front the list's foot inset is smaller, and a list at its
-                // end is held to that shorter end; once the toolbar is back it would sit lower than it rested.
-                if placed, sight.restedAtEnd { backToTheEnd(proxy) }
-            }
-            .onDisappear { model.hold.set(.outOfSight, true) }
-            // A choice re-files the list from its top, once the list has the new rows: its first line or row is put at the
-            // foot of what is in sight, which the list cannot scroll that far up for, so it stops at its top, the first
-            // heading in sight (a heading's own id puts its rows at the top, the heading under the bar). Its guard line
-            // starts in sight, so the subtitle waits until it scrolls away again.
-            .onChange(of: model.choice) { _, _ in
-                sight.moved()
-                lines.guardGone = false
-                let target = TodosTopLines.first(offline: TodosTopLines.offline(app), hidden: model.hiddenNeeds)
-                    ?? model.groups.first.map { $0.drawnKeys.first ?? TodosSectionHeader.id($0.id) }
-                guard let target else { return }
-                Task { @MainActor in
-                    await Task.yield()
-                    proxy.scrollTo(target, anchor: .bottom)
-                }
-            }
-            // Back where the place's list last rested, once its rows are laid out: only for a page made anew (another
-            // place opened in between), never when a to-do pushed over it pops.
-            .task(id: model.ready) {
-                guard model.ready, !placed else { return }
-                guard let key = workspace.scrolled(in: workspace.place), model.row(key) != nil else {
-                    placed = true
-                    return
-                }
-                // Once the list has drawn its first rows under its bars (a second at most): until then it has nothing to
-                // scroll to, and a bar laid out after moves it again. Once more if a late layout moved it all the same;
-                // a page that went meanwhile tries again as it comes back.
-                for _ in 0..<20 where (sight.visible.isEmpty || sight.covered == 0) && !Task.isCancelled {
-                    try? await Task.sleep(for: .milliseconds(50))
-                }
-                guard !Task.isCancelled else { return }
-                proxy.scrollTo(key, anchor: .top)
-                try? await Task.sleep(for: .milliseconds(150))
-                guard !Task.isCancelled else { return }
-                if sight.top(in: model.groups) != key { proxy.scrollTo(key, anchor: .top) }
-                placed = true
+            } else {
+                list
             }
         }
-        .detailTitle(String(localized: "All To-dos [To-dos List]"))
+        .background {
+            TodoPlaceFollower(places: places, allProjects: { allProjects = true }) { place, title in
+                if model.place != place { model.place = place }
+                if placeTitle != title { placeTitle = title }
+            }
+        }
+        // The model follows the store from the page's first appearance, whichever it draws: Upcoming's calendar says
+        // what needs the owner elsewhere (`hiddenNeeds`) from the model too. The list says when it is in sight (its hold).
+        .onAppear {
+            model.sort = sort
+            model.byProject = byProject
+            model.place = places.current
+            model.start()
+        }
+        .detailTitle(title)
         .navigationBarTitleDisplayMode(.inline)
-        .modifier(TodosSubtitle(model: model, lines: lines))
-        .modifier(TodosViewOptions(model: model))
+        .modifier(TodosSubtitle(model: model, lines: lines, place: title))
+        .modifier(TodosViewOptions(model: model, place: title, asCalendar: $upcomingCalendar))
         .pageSearchable(text: $model.query, placement: Self.searchPlacement, prompt: String(localized: "Search To-dos [To-dos Search]"))
         // The search narrows the list or gives it back: it no longer rests where a scroll left it.
-        .onChange(of: model.query) { _, _ in sight.moved() }
-        .modifier(TodosFootBar(model: model, creating: $creating))
+        .onChange(of: model.searchedWords) { _, _ in sight.moved() }
+        .modifier(TodosFootBar(model: model, place: title, creating: $creating))
         .sheet(item: Binding(get: { model.dating.flatMap { key in model.item(key).map { DueTarget(key: key, item: $0) } } },
                              set: { model.dating = $0?.key })) { target in
             TodoDueSheet(item: target.item) { due in model.setDue(target.key, to: due) }
         }
-        .sheet(isPresented: $creating) {
+        .sheet(item: $creating) { capture in
             // A new to-do the hub turned down comes back with what it said (its toast's Edit).
-            TodoNewSheet(draft: model.draft) { title, notes in model.create(title: title, notes: notes) }
-                .onAppear { model.tookDraft() }
+            TodoNewSheet(draft: model.draft, capture: capture, projectName: capture.project.map { places.title(.project($0)) }) {
+                model.create(title: $0, notes: $1, due: $2, project: capture.project)
+            }
+            .onAppear { model.tookDraft() }
         }
         // The app's search over the window, Persona's chats only (no Agents on an everyday page), with the words typed.
         .fullScreenCover(item: $chatSearch, onDismiss: openPickedChat) { search in
@@ -147,7 +120,7 @@ struct TodoListView: View {
                 chatSearch = nil
             }
         }
-        .onChange(of: model.draft) { _, draft in if draft != nil { creating = true } }
+        .onChange(of: model.draft) { _, draft in if let draft { creating = model.capture(draft) } }
         // The arrangement is kept on this device, as ⋯ left it.
         .onChange(of: model.sort) { _, s in sort = s }
         .onChange(of: model.byProject) { _, on in byProject = on }
@@ -162,6 +135,122 @@ struct TodoListView: View {
         // The projects' names, read when the page opens and for the assistant made current.
         .task(id: app.assistantSwitches) { await TodoProjects.shared.load(app.api?.currentAssistantSettings()) }
         .task { await model.refresh() }
+        .navigationDestination(item: $pushedTodo) { r in TodoDetailView(todoID: r.id) }
+        .sheet(isPresented: $allProjects) {
+            TodoAllProjectsSheet(places: places) { place in
+                allProjects = false
+                places.show(place)
+            }
+        }
+    }
+
+    private var list: some View {
+        ScrollViewReader { proxy in
+            List {
+                if model.ready {
+                    TodosTopLines(model: model, sight: lines, place: title) { places.show(.all) }
+                    content
+                    TodosSearchChatsRow(model: model) { chatSearch = TodosChatSearch(words: $0) }
+                }
+            }
+            .sectionCards()
+            .accessibilityIdentifier("todos.v1") // the list itself
+            .themedPage()
+            .refreshable { await model.refresh() }
+            .onScrollGeometryChange(for: TodoListEdges.self) { TodoListEdges($0) } action: { _, edges in
+                sight.covered = edges.top
+                sight.floor = edges.floor
+                sight.atEnd = edges.atEnd
+                lines.covered = edges.top
+            }
+            .onScrollPhaseChange { old, phase in
+                model.hold.set(.scrolling, phase != .idle)
+                sight.scrolling = phase != .idle
+                if phase != .idle { model.settleArrivals() } // nothing fades in under a finger
+                // Where a scroll came to rest; not the idle a page is made in, before its rows are drawn. A search's
+                // results are no place's list: the place keeps where it rested.
+                if phase == .idle, old != .idle {
+                    sight.rested()
+                    if !model.searching, let top = sight.top(in: model.groups) {
+                        workspace.rested(model.place.id, at: top, shown: shownHere)
+                    }
+                }
+            }
+            .onAppear {
+                model.hold.set(.outOfSight, false)
+                // Back from a to-do pushed over it: a list that rested at its very end is at its end again. The to-do
+                // page has no foot toolbar, so while it is in front the list's foot inset is smaller, and a list at its
+                // end is held to that shorter end; once the toolbar is back it would sit lower than it rested.
+                if placedIn != nil, sight.restedAtEnd { backToTheEnd(proxy) }
+            }
+            .onDisappear { model.hold.set(.outOfSight, true) }
+            // A row's card unfolded by the owner's tap (Options ⌄): once it has laid out, its foot is brought above the
+            // foot toolbar if it fell under it, and no further; a card already in sight moves nothing.
+            .onChange(of: model.cardUnfolded) { _, unfolded in
+                guard let key = unfolded?.key else { return }
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(300)) // the unfold's `Motion.state`, and its layout
+                    guard model.cardUnfolded?.key == key, let bottom = sight.bottoms[key], bottom > sight.floor else { return }
+                    withAnimation(Theme.Motion.reduced ? nil : Theme.Motion.state) { proxy.scrollTo(key, anchor: .bottom) }
+                }
+            }
+            // A choice re-files the list from its top, once the list has the new rows. Its guard line starts in sight, so
+            // the subtitle waits until it scrolls away again.
+            .onChange(of: model.choice) { _, _ in
+                sight.moved()
+                lines.guardGone = false
+                toTop(proxy)
+            }
+            // Another place is another list: where the last one rested no longer holds (the new place's own is put back
+            // below), and its guard line starts in sight.
+            .onChange(of: model.place) { _, _ in
+                sight.moved()
+                lines.guardGone = false
+            }
+            // Back where the place's list last rested, once its rows are laid out: only for a page made anew (another
+            // page opened in between) or another place picked, never when a to-do pushed over it pops. A place picked
+            // with nothing kept starts at its top.
+            .task(id: PlacedKey(ready: model.ready, place: model.place.id)) {
+                let place = model.place.id
+                guard model.ready, placedIn != place else { return }
+                let switched = placedIn != nil
+                guard let key = workspace.scrolled(in: place), model.draws(key) else {
+                    placedIn = place
+                    if switched { toTop(proxy) }
+                    return
+                }
+                // Once the list has drawn its first rows under its bars (a second at most): until then it has nothing to
+                // scroll to, and a bar laid out after moves it again. Once more if a late layout moved it all the same;
+                // a page that went meanwhile tries again as it comes back.
+                for _ in 0..<20 where (sight.visible.isEmpty || sight.covered == 0) && !Task.isCancelled {
+                    try? await Task.sleep(for: .milliseconds(50))
+                }
+                guard !Task.isCancelled else { return }
+                proxy.scrollTo(key, anchor: .top)
+                try? await Task.sleep(for: .milliseconds(150))
+                guard !Task.isCancelled else { return }
+                if sight.top(in: model.groups) != key { proxy.scrollTo(key, anchor: .top) }
+                placedIn = place
+            }
+        }
+    }
+
+    private struct PlacedKey: Equatable {
+        var ready: Bool
+        var place: String
+    }
+
+    /// The list from its top, once it has its new rows (a choice, another place): its first line or row is put at the
+    /// foot of what is in sight, which the list cannot scroll that far up for, so it stops at its top, the first heading
+    /// in sight (a heading's own id puts its rows at the top, the heading under the bar).
+    private func toTop(_ proxy: ScrollViewProxy) {
+        let target = TodosTopLines.first(offline: TodosTopLines.offline(app), hidden: model.hiddenNeeds)
+            ?? model.groups.first.map { $0.drawnKeys.first ?? TodosSectionHeader.id($0.id) }
+        guard let target else { return }
+        Task { @MainActor in
+            await Task.yield()
+            proxy.scrollTo(target, anchor: .bottom)
+        }
     }
 
     private func openPickedChat() {
@@ -218,7 +307,12 @@ struct TodoListView: View {
                             if fold.open { ForEach(fold.keys, id: \.self) { key in row(key) } }
                         }
                     } header: {
-                        if let title = group.title { TodosSectionHeader(model: model, group: group, title: title) }
+                        if model.place == .upcoming && !model.searching {
+                            TodoUpcomingHeader(group: group) { creating = model.capture(on: $0) }
+                                .id(TodosSectionHeader.id(group.id))
+                        } else if let title = group.title {
+                            TodosSectionHeader(model: model, group: group, title: title)
+                        }
                     }
                 }
             }
@@ -233,9 +327,13 @@ struct TodoListView: View {
             .onDisappear {
                 sight.visible.remove(key)
                 sight.middles[key] = nil
+                sight.bottoms[key] = nil
             }
-            // Where its middle is in the list's frame, kept unobserved: whether the bars cover it.
-            .onGeometryChange(for: CGFloat.self) { $0.frame(in: .scrollView).midY } action: { sight.middles[key] = $0 }
+            // Where its middle and its foot are in the list's frame, kept unobserved: whether the bars cover it.
+            .onGeometryChange(for: TodoRowSpan.self) { TodoRowSpan($0.frame(in: .scrollView)) } action: {
+                sight.middles[key] = $0.middle
+                sight.bottoms[key] = $0.bottom
+            }
             .id(key)
             // The row's list traits on its outermost view, where the list reads them (`TodoListCell.insets`).
             .listRowInsets(TodoListCell.insets)
@@ -267,10 +365,11 @@ struct TodoListView: View {
         if let offline = app.assistantManagerOffline, !model.hasRows {
             AssistantOfflineNotice(manager: offline)
         } else if model.searching {
-            // Nothing open matches: the line under it widens the search to the chats.
-            EmptyStateView(symbol: Theme.Icon.search,
-                           title: String(localized: "No Results for “\(model.query.trimmingCharacters(in: .whitespacesAndNewlines))”"),
-                           message: String(localized: "Search looks through the titles and notes of your open to-dos. [To-dos Search]"))
+            // Nothing matches, open or closed: the line under it widens the search to the chats.
+            EmptyStateView(symbol: Theme.Icon.search, title: String(localized: "No Results for “\(model.searchedWords)”"),
+                           message: String(localized: "Search looks through the titles and notes of all your to-dos, including done ones. [To-dos Search]"))
+        } else if model.placeIsEmpty {
+            TodoPlaceEmptyState(place: model.place, title: title, comingUp: model.comingUp) { places.show($0) }
         } else {
             switch model.choice {
             case .all:
@@ -312,13 +411,31 @@ private struct TodosChatSearch: Identifiable {
 /// field, then New To-Do, the bar's one prominent item. On iOS 26 and later the Filter is a pop-up that names its choice
 /// with its own × beside it, and the field folds to ⌕ while a choice is on; iOS 18's classic toolbar draws Mail's iOS 18
 /// form: the Filter's glyph (filled while a choice is on, a tap back to All), "Filtered by: ‹choice›" in the middle, and
-/// +, with the search field under the title. The calm list and a list with no rows have no Filter; when it comes back it
-/// takes the toolbar's free leading slot, so no row moves. Toolbar items are chosen on the view, since a toolbar's
+/// +, with the search field under the title. The calm list, a list with no rows, Today and Upcoming have no Filter; when
+/// it comes back it takes the toolbar's free leading slot, so no row moves. + starts the to-do in the place shown, the
+/// one prominent action in a place's empty state too. Toolbar items are chosen on the view, since a toolbar's
 /// builder cannot ask the OS (docs/lessons/ios.md "iOS 18.6 floor"). Its own modifier reading the model's few flags,
 /// never its layout, so a choice or a count redraws the toolbar and a landing does not (P5).
 private struct TodosFootBar: ViewModifier {
     var model: TodosListModel
-    @Binding var creating: Bool
+    /// The place's name: + says where a new to-do starts ("New To-Do in Kyoto trip").
+    var place: String
+    @Binding var creating: TodoCapture?
+
+    /// + in the place shown: the to-do starts there (`TodosListModel.capture`), and its name says where.
+    private func newButton(prominent: Bool) -> TodosNewButton {
+        TodosNewButton(title: Self.newTitle(model.place, place: place), prominent: prominent) { creating = model.capture() }
+    }
+
+    /// "New To-Do in Kyoto trip", "New To-Do Due Today", "New To-Do Due Tomorrow"; in All To-dos, "New To-Do".
+    private static func newTitle(_ shown: TodoPlaceRef, place: String) -> String {
+        switch shown.id {
+        case TodoPlaceKind.today: TodoUpcomingLayout.newTodo(due: String(localized: "Today [To-dos Due]"))
+        case TodoPlaceKind.upcoming: TodoUpcomingLayout.newTodo(due: String(localized: "Tomorrow [To-dos Due]"))
+        default: shown.project == nil ? String(localized: "New To-Do [To-dos Actions]")
+            : String(localized: "New To-Do in \(place) [To-dos Places]")
+        }
+    }
 
     private var filters: Bool { model.filters }
     private var filtered: Bool { filters && model.choice != .all }
@@ -346,7 +463,7 @@ private struct TodosFootBar: ViewModifier {
         ToolbarSpacer(.flexible, placement: .bottomBar)
         DefaultToolbarItem(kind: .search, placement: .bottomBar)
         ToolbarSpacer(.fixed, placement: .bottomBar)
-        ToolbarItem(placement: .bottomBar) { TodosNewButton(prominent: true) { creating = true } }
+        ToolbarItem(placement: .bottomBar) { newButton(prominent: true) }
     }
 
     @ToolbarContentBuilder private var classicBar: some ToolbarContent {
@@ -361,7 +478,7 @@ private struct TodosFootBar: ViewModifier {
                 TodosFilteredBy(model: model)
                 Spacer()
             }
-            TodosNewButton(prominent: false) { creating = true }
+            newButton(prominent: false)
         }
     }
 }
@@ -465,14 +582,15 @@ private struct TodosFilteredBy: View {
 }
 
 /// New To-Do: + at the toolbar's trailing end, the bar's one prominent item on iOS 26 and later; its name for VoiceOver
-/// and in the large content viewer.
+/// and in the large content viewer, which in a project says the project it starts in.
 private struct TodosNewButton: View {
+    var title: String
     var prominent: Bool
     var action: () -> Void
 
     var body: some View {
         let button = Button(action: action) {
-            Label(String(localized: "New To-Do [To-dos Actions]"), systemImage: Theme.Icon.add)
+            Label(title, systemImage: Theme.Icon.add)
                 .labelStyle(.iconOnly)
         }
         .keyboardShortcut("n", modifiers: .command)
@@ -483,14 +601,16 @@ private struct TodosNewButton: View {
 }
 
 /// The title's subtitle (iOS 26 and later; iOS 18 names the choice in its toolbar all the while): once the guard line has
-/// scrolled away, the choice and what needs the owner outside it, so N stays in sight. Its own modifier, so N changing
-/// redraws the title, not the list (P5).
+/// scrolled away, what it said (`TodosListModel.subtitle`), so N stays in sight, in a place too. Its own modifier, so N
+/// changing redraws the title, not the list (P5).
 private struct TodosSubtitle: ViewModifier {
     var model: TodosListModel
     var lines: TodosTopLinesSight
+    /// The place's name, for what needs the owner outside it.
+    var place: String
 
     func body(content: Content) -> some View {
-        content.navigationSubtitleWhenSupported(lines.guardGone ? model.subtitle : "")
+        content.navigationSubtitleWhenSupported(lines.guardGone ? model.subtitle(place: place) : "")
     }
 }
 
@@ -499,15 +619,18 @@ private struct TodosSubtitle: ViewModifier {
 /// ⋯ (DESIGN_SYSTEM 3.4 "To-dos list"): how the list is arranged, kept on the device (the page writes the model's
 /// arrangement back). Sort By as a section with the current order checked (Toggles under a heading, which a menu draws
 /// whole, where a picker drops it); choosing Suggested is the reset. Then Group by Project, one checkmarked item as Mail's
-/// Group by Sender: never offered in the calm list, greyed with why under a choice that draws one section or the days.
+/// Group by Sender: never offered in the calm list, greyed with why under a choice that draws one section or the days,
+/// and in a project's place, which is one project. Upcoming's holds Show as Calendar alone (3.5 "To-dos places").
 /// Monochrome, as the system's bar items. Before iOS 27 (or built with an older SDK) it is a menu of ours at the bar's
 /// trailing end.
 struct TodosViewMenu: View {
     var model: TodosListModel
+    var place: String
+    @Binding var asCalendar: Bool
 
     var body: some View {
         Menu {
-            TodosViewMenuItems(model: model)
+            TodosViewMenuItems(model: model, place: place, asCalendar: $asCalendar)
         } label: {
             Label(String(localized: "More [To-dos List]"), systemImage: Theme.Icon.more)
                 .labelStyle(.iconOnly)
@@ -523,25 +646,44 @@ struct TodosViewMenu: View {
 /// OS (docs/lessons/ios.md "iOS 18.6 floor").
 private struct TodosViewOptions: ViewModifier {
     var model: TodosListModel
+    /// The place's name, for why a project's place does not group by project.
+    var place: String
+    @Binding var asCalendar: Bool
 
     func body(content: Content) -> some View {
         #if compiler(>=6.4) // `ToolbarOverflowMenu` is in the iOS 27 SDK; Xcode 26 (Swift ≤ 6.3) has no such type
         if #available(iOS 27.0, *) {
-            content.toolbar { ToolbarOverflowMenu { TodosViewMenuItems(model: model) } }
+            content.toolbar { ToolbarOverflowMenu { TodosViewMenuItems(model: model, place: place, asCalendar: $asCalendar) } }
         } else {
-            content.pageToolbar { ToolbarItem(placement: .primaryAction) { TodosViewMenu(model: model) } }
+            content.pageToolbar { ToolbarItem(placement: .primaryAction) { menu } }
         }
         #else
-        content.pageToolbar { ToolbarItem(placement: .primaryAction) { TodosViewMenu(model: model) } }
+        content.pageToolbar { ToolbarItem(placement: .primaryAction) { menu } }
         #endif
     }
+
+    private var menu: TodosViewMenu { TodosViewMenu(model: model, place: place, asCalendar: $asCalendar) }
 }
 
 /// What ⋯ holds, in either form. One view, so what ⋯ holds is changed here alone.
 private struct TodosViewMenuItems: View {
     var model: TodosListModel
+    var place: String
+    @Binding var asCalendar: Bool
 
     var body: some View {
+        if model.place == .upcoming {
+            // Upcoming's days are its grouping and its order: ⋯ holds its other way to draw them.
+            Toggle(isOn: $asCalendar) {
+                Label(String(localized: "Show as Calendar [To-dos Places]"), systemImage: Theme.Icon.calendarView)
+            }
+            .accessibilityIdentifier("todos.places.showCalendar")
+        } else {
+            arrangement
+        }
+    }
+
+    @ViewBuilder private var arrangement: some View {
         Section(String(localized: "Sort By [To-dos List]")) {
             ForEach(TodosListSort.allCases) { s in
                 Toggle(s.title, isOn: Binding(get: { model.sort == s }, set: { on in
@@ -553,7 +695,8 @@ private struct TodosViewMenuItems: View {
             }
         }
         if !model.calm {
-            if let note = TodosFilter.groupingNote(model.choice) {
+            if let note = model.place.project == nil ? TodosFilter.groupingNote(model.choice)
+                : String(localized: "\(place) is one project [To-dos View]") {
                 // Greyed, with why in the section's heading: a disabled item's own words are too faint to read on the
                 // menu's glass (docs/lessons/ios.md "A switch with words under it inside a menu").
                 Section(note) {
@@ -651,12 +794,17 @@ private struct TodosFoldWords: View {
     }
 }
 
-/// What the list says before its first card, each line on the page: the hub out of reach, then what a choice hides that
-/// needs the owner. A view of its own, so only it follows the hub's link and N (P5).
+/// What the list says before its first card, each line on the page: the hub out of reach, then what needs the owner
+/// that the list does not show (what a choice hides, and in a place what is outside it). A view of its own, so only it
+/// follows the hub's link and N (P5).
 private struct TodosTopLines: View {
     @Environment(AppModel.self) private var app
     var model: TodosListModel
     var sight: TodosTopLinesSight
+    /// The place's name, for a line about what is outside it.
+    var place: String
+    /// Show All in a place: All To-dos, where everything that needs the owner is.
+    var showAll: () -> Void
 
     /// Whether the titles say the hub is out of reach (`ConnectionStatus`, after its delay).
     static func offline(_ app: AppModel) -> Bool {
@@ -684,9 +832,9 @@ private struct TodosTopLines: View {
                                                   trailing: Theme.Space.flush))
                 }
                 if hidden > 0 {
-                    TodosGuardLine(text: String(localized: "\(hidden) more need you [To-dos Filter]")) {
+                    TodosGuardLine(text: TodosFilter.guardWords(hidden, elsewhere: model.hiddenElsewhere, place: place)) {
                         Haptics.tap()
-                        model.choice = .all
+                        if model.place.isAll { model.choice = .all } else { showAll() }
                     }
                     // Gone once the bars cover it: where it is in the list's frame against what they cover, as
                     // `TodoListSight` tells where the list rests (a list row says nothing of being under a bar, and
@@ -716,7 +864,8 @@ private struct TodosTopLines: View {
 /// "● 3 more need you · Show All" (DESIGN_SYSTEM 3.4 "Sessions that need the user"): while a choice hides what needs
 /// the owner, a line on the page over the first card, never a card or a tint of its own (the quiet-surfaces rule), the
 /// whole line its button back to everything. The needs-you dot, still; the words in the secondary color; Show All in
-/// the accent. One element with its action. The place notice of To-dos' places takes the same line.
+/// the accent. One element with its action. In a place it also counts what needs the owner outside it, one line for
+/// both, and Show All opens All To-dos ("● 2 more need you, not in Today · Show All", 3.5 "To-dos places").
 struct TodosGuardLine: View {
     var text: String
     var showAll: () -> Void
@@ -767,15 +916,17 @@ private struct TodosOfflineLine: View {
     }
 }
 
-/// "⌕ Search Chats for “kyoto” ›": the search's last row, which takes the words to the app's search over Persona's chats.
-/// A view of its own, so only it follows the words (P5).
+/// "⌕ Search Chats for “kyoto” ›": the search's last row, which takes the words in the field to the app's search over
+/// Persona's chats; drawn under the results, once the list searches. A view of its own, so only it follows the words (P5).
+/// Its identifier says whether the results drawn are the field's words' yet (a look lands a moment after the key), so a
+/// UI test waits for them; nothing a person sees or hears changes.
 private struct TodosSearchChatsRow: View {
     var model: TodosListModel
     var open: (String) -> Void
 
     var body: some View {
-        let words = model.query.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !words.isEmpty {
+        let words = TodoSearch.words(model.query)
+        if model.searching && !words.isEmpty {
             Section {
                 Button {
                     Haptics.tap()
@@ -797,7 +948,7 @@ private struct TodosSearchChatsRow: View {
                 // Plain, so its glyph and chevron are the grays they say, not the accent a list's button tints them.
                 .buttonStyle(.plain)
                 .listRowInsets(TodoListCell.insets)
-                .accessibilityIdentifier("todos.searchChats")
+                .accessibilityIdentifier(model.searchedWords == words ? "todos.searchChats" : "todos.searchChats.looking")
             }
         }
     }
@@ -820,12 +971,26 @@ private extension View {
 /// very end (a list shorter than its frame has no end to come back to).
 struct TodoListEdges: Equatable {
     var top: CGFloat
+    /// Where the foot toolbar begins in the list's frame: what is below it is under the bar.
+    var floor: CGFloat
     var atEnd: Bool
 
     init(_ g: ScrollGeometry) {
         top = g.contentInsets.top
+        floor = g.containerSize.height - g.contentInsets.bottom
         let end = g.contentSize.height + g.contentInsets.bottom - g.containerSize.height
         atEnd = end > -g.contentInsets.top && g.contentOffset.y >= end - 1
+    }
+}
+
+/// Where a row is in the list's frame, as the geometry reports it.
+nonisolated struct TodoRowSpan: Equatable, Sendable {
+    var middle: CGFloat
+    var bottom: CGFloat
+
+    init(_ frame: CGRect) {
+        middle = frame.midY
+        bottom = frame.maxY
     }
 }
 
@@ -834,10 +999,12 @@ struct TodoListEdges: Equatable {
 @MainActor final class TodoListSight {
     /// The rows drawn, the ones under the bars included.
     var visible: Set<String> = []
-    /// Each drawn row's middle in the list's frame.
+    /// Each drawn row's middle and foot in the list's frame.
     var middles: [String: CGFloat] = [:]
-    /// How much of the list's top the bars cover.
+    var bottoms: [String: CGFloat] = [:]
+    /// How much of the list's top the bars cover, and where the foot toolbar begins.
     var covered: CGFloat = 0
+    var floor: CGFloat = .infinity
     /// The list is at its very end now; it came to rest there; a finger moves it.
     var atEnd = false
     private(set) var restedAtEnd = false

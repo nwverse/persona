@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import os
 
 // One voice call bound to one conversation (docs/assistant/voice.md 6.3): the socket to the hub's voice extension, the frames,
 // the captions, the runs it handed over, and the audio. The state lives here and in `VoiceCalls`, not in AppModel or
@@ -82,6 +83,17 @@ nonisolated enum VoiceEnd: Equatable, Sendable {
         default: false
         }
     }
+
+    /// How the call's log names it: the case, a refused status, a failure's code; never the extension's message or why a
+    /// model is unavailable.
+    var logWord: String {
+        switch self {
+        case .rejected(let status): "rejected (\(status))"
+        case .failed(let code, _): "failed (\(code.map { String(describing: $0) } ?? "no code"))"
+        case .modelUnavailable: "modelUnavailable"
+        default: String(describing: self)
+        }
+    }
 }
 
 /// One line the call heard or said. Ids carry the connection's generation: a new connection's `u1` is a new line.
@@ -126,6 +138,44 @@ nonisolated enum VoiceTimbre {
     static func choose(_ voice: String?, group: String, extensionID: String) {
         let k = key(group: group, extensionID: extensionID)
         if let voice, !voice.isEmpty { UserDefaults.standard.set(voice, forKey: k) } else { UserDefaults.standard.removeObject(forKey: k) }
+    }
+}
+
+/// How far a voice's jitter buffer grew on this device (#14933), per group, extension and voice, for a day: a voice that
+/// came slower than it plays, or ran dry mid-reply, starts its next call with that lead in hand instead of stalling through
+/// its first reply again. One whose measured replies all kept up is forgotten, and any other voice starts at 200 ms.
+/// Written at most once as a call ends or changes voice.
+nonisolated struct VoiceLeadMemory {
+    /// How long a slow voice is remembered.
+    static let keep: TimeInterval = 24 * 60 * 60
+
+    var defaults: UserDefaults = .standard
+
+    static func key(group: String, extensionID: String, voice: String?) -> String {
+        "voice.lead." + (group.isEmpty ? "-" : group) + "." + extensionID + "." + (voice.flatMap { $0.isEmpty ? nil : $0 } ?? "-")
+    }
+
+    /// The level a call of the voice starts at: 0 unless one ended slow less than `keep` ago.
+    func level(group: String, extensionID: String, voice: String?, now: Date) -> Int {
+        guard let saved = defaults.dictionary(forKey: Self.key(group: group, extensionID: extensionID, voice: voice)),
+              let level = saved["level"] as? Int, let at = saved["at"] as? Double
+        else { return 0 }
+        let age = now.timeIntervalSince1970 - at
+        return age < Self.keep && age > -Self.keep ? max(0, level) : 0
+    }
+
+    /// What a call of the voice learned: slow, its lead from now on; kept up, forgotten; nothing measured, as it was (the
+    /// day counts on from the call that found it slow).
+    func remember(_ lead: VoiceLead, group: String, extensionID: String, voice: String?, now: Date) {
+        let key = Self.key(group: group, extensionID: extensionID, voice: voice)
+        switch lead.slow {
+        case true? where lead.level > 0:
+            defaults.set(["level": lead.level, "at": now.timeIntervalSince1970] as [String: Any], forKey: key)
+        case false?:
+            if defaults.object(forKey: key) != nil { defaults.removeObject(forKey: key) }
+        default:
+            break
+        }
     }
 }
 
@@ -201,6 +251,8 @@ struct VoiceDeps {
     /// A system call's manager (`PersonaCalls`): it hears the call connect, end, be interrupted and be muted on the page.
     /// nil for every other call.
     var callEvents: (@MainActor (VoiceCallEvent) -> Void)? = nil
+    /// Where a call of the group's extension and voice starts its jitter buffer, and what it learned as it ended.
+    var leads = VoiceLeadMemory()
 
     /// A system call to Persona (#9290): the system's audio session (`audio`, which its manager activates and
     /// deactivates as the system does), and its manager told what happens (`events`).
@@ -229,6 +281,10 @@ struct VoiceDeps {
 }
 
 @MainActor @Observable final class VoiceConversation {
+    /// The call's connection and cut-offs (#13963), beside the audio's own lines (`PhoneVoiceAudio`, same category), so one
+    /// exported log tells a link that falls behind from a voice that was cut off or a connection that went.
+    nonisolated static let log = Logger(subsystem: "persona", category: "voice")
+
     let key: SessionKey
     let surface: VoiceSurface
     let extensionID: String
@@ -343,6 +399,13 @@ struct VoiceDeps {
     @ObservationIgnored private var formatOnResume: VoiceAudioFormat?
     /// The voice's levels reach `levels` (the orb's): not while the app is in the background, where nobody sees them.
     @ObservationIgnored private var levelsShown = true
+    /// For the log (#13963): when this connection said `ready`, when the last one went, and when the extension last cut
+    /// the voice off (its `clear`), until the user's next caption.
+    @ObservationIgnored private var readyAt: Date?
+    @ObservationIgnored private var droppedAt: Date?
+    @ObservationIgnored private var cutAt: Date?
+    /// A user caption this long (ms) after a cut-off is logged as following it; a later one is the next thing they said.
+    private static let cutCaptionWithin = 10_000
     /// The app's word on the bound conversation (`deps.session`) is not kept up to date: in the background the app's
     /// socket to the hub is closed (`AppModel.suspendLinks`), so the state it last said (working, perhaps) may long be
     /// over while this call goes on there (#9887). The idle rule takes the voice connection's own word then (`targetBusy`).
@@ -425,6 +488,7 @@ struct VoiceDeps {
             resolved = true
         }
         speechGate = deps.speechGate(key.group, extensionID)
+        startLead()
         // A meeting call never ends after idle minutes: it runs for the whole meeting (decision 7).
         if meeting == nil { watchIdle(epoch) }
         connect()
@@ -439,12 +503,17 @@ struct VoiceDeps {
     /// Ends the call: the socket, the microphone and the player go, the screen may lock again.
     func end(_ reason: VoiceEnd) {
         guard !phase.isEnded else { return }
+        Self.log.notice("voice: the call ended: \(reason.logWord, privacy: .public)")
+        readyAt = nil
+        droppedAt = nil
+        cutAt = nil
         epoch += 1
         for task in timers.values { task.cancel() }
         timers = [:]
         socket?.close()
         socket = nil
         uplink.close()
+        rememberLead()
         audio?.stop()
         audio = nil
         deps.microphone.release(microphoneOwner)
@@ -557,6 +626,7 @@ struct VoiceDeps {
     /// Interrupt Voice: stops what the voice says (never the agent). What was queued is dropped here at once.
     func interruptSpeech() {
         guard ready, let socket else { return }
+        Self.log.notice("voice: Interrupt tapped while the voice \(self.playing ? "played" : "was quiet", privacy: .public)")
         socket.send(text: VoiceMessage.interrupt)
         audio?.clear()
         lastActivity = deps.clock.now
@@ -586,11 +656,25 @@ struct VoiceDeps {
         return true
     }
 
-    /// Another voice: a new connection that picks the call up where it was.
+    /// Another voice: a new connection that picks the call up where it was. Its jitter buffer starts where that voice's
+    /// last calls left it (#14933): another voice's raised lead says nothing of this one.
     func change(voice: String?) {
         guard voice != self.voice else { return }
+        rememberLead()
         self.voice = voice
+        startLead()
         reopen()
+    }
+
+    /// The jitter buffer starts where the last calls of this voice left it (`VoiceLeadMemory`).
+    private func startLead() {
+        audio?.startLead(at: deps.leads.level(group: key.group, extensionID: extensionID, voice: voice, now: deps.clock.now))
+    }
+
+    /// What this call's replies said of its voice's pace, for the voice's next call.
+    private func rememberLead() {
+        guard let audio else { return }
+        deps.leads.remember(audio.lead, group: key.group, extensionID: extensionID, voice: voice, now: deps.clock.now)
     }
 
     /// Only Send What I Just Said turned on or off on the settings page while the call ran: a new connection that
@@ -644,6 +728,7 @@ struct VoiceDeps {
 
     private func connect() {
         guard let api = deps.api() else { return end(.noHub) }
+        Self.log.notice("voice: connecting\(self.attempt == 0 ? "" : ", try \(self.attempt)", privacy: .public)")
         generation += 1
         let generation = generation
         ready = false
@@ -668,6 +753,8 @@ struct VoiceDeps {
     /// A new connection now, not counted as a reconnect (another voice or model).
     private func reopen() {
         guard !phase.isEnded, audio != nil else { return }
+        Self.log.notice("voice: a new connection for another voice, model or setting")
+        readyAt = nil
         timers["ready"]?.cancel()
         timers["retry"]?.cancel()
         socket?.close()
@@ -700,6 +787,7 @@ struct VoiceDeps {
     /// handshake the hub refused for good is not tried again.
     private func dropped(_ close: VoiceSocketClose, generation: Int) {
         guard generation == self.generation, !phase.isEnded else { return }
+        logDrop(close)
         timers["ready"]?.cancel()
         ready = false
         if connected { connected = false }
@@ -718,6 +806,25 @@ struct VoiceDeps {
             guard me.generation == generation, !me.phase.isEnded else { return }
             me.connect()
         }
+    }
+
+    /// The connection went (`dropped`): after how long, why, and what comes next. Its close reason is the socket's error or
+    /// the hub's word, which the exported log scrubs as it does every line.
+    private func logDrop(_ close: VoiceSocketClose) {
+        let now = deps.clock.now
+        let up = readyAt.map { "after \(Int(now.timeIntervalSince($0).rounded())) s up" } ?? "before it was ready"
+        readyAt = nil
+        droppedAt = droppedAt ?? now
+        let next: String
+        if let status = close.status, refusedForGood(status) {
+            next = "refused for good"
+        } else if attempt + 1 <= Self.retryDelays.count || meeting != nil {
+            next = "trying again, try \(attempt + 1)"
+        } else {
+            next = "giving up"
+        }
+        let status = close.status.map { "status \($0), " } ?? ""
+        Self.log.notice("voice: the connection went \(up, privacy: .public) (\(status, privacy: .public)\(close.reason ?? "no reason", privacy: .public)); \(next, privacy: .public)")
     }
 
     /// Whether a refused handshake ends the call: 401 (the token) and 403 (an answer-only device) always. A 404 only
@@ -745,6 +852,11 @@ struct VoiceDeps {
         case .ready(let r):
             becomeReady(r)
         case .clear:
+            // The extension's word: the user cut in (its energy rule or the upstream's), or its upstream reconnected. On
+            // the loudspeaker the voice's own echo can pass for the user (#13963): the audio's line says where it played,
+            // and whether the user's caption followed says which it was.
+            Self.log.notice("voice: the extension cut the voice off while it \(self.playing ? "played" : "was quiet", privacy: .public) (echo cancellation \(self.audio?.cancelsEcho ?? false, privacy: .public))")
+            cutAt = deps.clock.now
             audio?.clear()
         case .transcript(let t):
             caption(t)
@@ -766,6 +878,14 @@ struct VoiceDeps {
             }
         case .link(let state):
             if link != state { link = state }
+        case .reply(let edge):
+            // The extension's word on where the voice's replies begin and end (#14933); without it the jitter buffer
+            // tells by the silences, as with an extension from before `reply`.
+            switch edge {
+            case .start: audio?.reply(true)
+            case .end: audio?.reply(false)
+            case .other: break
+            }
         case .error(let failure):
             if failure.fatal {
                 end(.failed(code: failure.code, message: failure.message))
@@ -799,6 +919,14 @@ struct VoiceDeps {
             format = wanted
         }
         Self.formats[Self.formatKey(key.group, extensionID)] = wanted
+        let now = deps.clock.now
+        if let droppedAt {
+            Self.log.notice("voice: connected again \(Int(now.timeIntervalSince(droppedAt).rounded()), privacy: .public) s after the connection went, on try \(self.attempt, privacy: .public) (in \(r.inputRate, privacy: .public) Hz, out \(r.outputRate, privacy: .public) Hz)")
+        } else {
+            Self.log.notice("voice: connected (in \(r.inputRate, privacy: .public) Hz, out \(r.outputRate, privacy: .public) Hz)")
+        }
+        readyAt = now
+        droppedAt = nil
         ready = true
         if !connected { connected = true }
         everReady = true
@@ -839,6 +967,14 @@ struct VoiceDeps {
             lastAnswer = said
         }
         lastActivity = deps.clock.now
+        if t.role == VoiceLine.user, let cut = cutAt {
+            // A real cut-in is the user's words, captioned about a second after they stop; none soon after points to echo.
+            cutAt = nil
+            let after = Int((lastActivity.timeIntervalSince(cut) * 1000).rounded())
+            if after <= Self.cutCaptionWithin {
+                Self.log.notice("voice: the user's caption came \(after, privacy: .public) ms after the extension cut the voice off")
+            }
+        }
         if t.role == VoiceLine.user {
             // Thinking once the owner's words are final (once for each line), unless the voice already began to answer
             // them (a late caption goes before that answer: `before`); not while they still come.

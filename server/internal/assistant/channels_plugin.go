@@ -284,13 +284,25 @@ func (s *Service) channelTarget(ctx context.Context, id string) (resolvedTarget,
 	return s.resolveBotTarget(ctx, botTarget{Kind: targetMain})
 }
 
-// channelThreadKey is the thread m is in when channel id keeps a conversation per thread (capabilities.threads), ""
-// when m goes to the channel's target.
+// channelThreadKey is the routing key m uses when channel id keeps per-thread/group/topic conversations, ""
+// when m goes to the channel's target. While integrations_v2 is off, legacy capabilities.threads + m.Thread runs unchanged.
 func (s *Service) channelThreadKey(ctx context.Context, id string, m channel.Message) string {
-	if v, ok := s.pluginChannel(ctx, id); !ok || !v.Capabilities.Threads {
+	v, ok := s.pluginChannel(ctx, id)
+	if !ok {
 		return ""
 	}
-	return strings.TrimSpace(m.Thread)
+	if !s.integrationsV2On(ctx) {
+		if !v.Capabilities.Threads {
+			return ""
+		}
+		return strings.TrimSpace(m.Thread)
+	}
+	c := &s.chans
+	c.mu.Lock()
+	s.loadChannelsLocked(ctx)
+	mode := s.channelPrefLocked(id).ThreadMode
+	c.mu.Unlock()
+	return channelRouteKey(mode, m)
 }
 
 // channelRoute is where channel id's message m goes: its thread's conversation when the channel keeps one per thread
@@ -564,6 +576,13 @@ func (s *Service) channelInteraction(ix proto.Interaction) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	var to []string
+	redacted, decided := false, false
+	redacts := func() bool { // decided once for every channel, and only when one needs it
+		if !decided {
+			redacted, decided = s.exitPolicy(ctx, interactionText(ix), ix.SessionID, s.ixSpace(ctx, ix)).Redact, true
+		}
+		return redacted
+	}
 	for _, v := range s.textChannels(ctx) {
 		if v.Capabilities.Asks != channel.AsksText || !featureOn(v, channel.FeatureAsks) {
 			continue
@@ -571,8 +590,9 @@ func (s *Service) channelInteraction(ix proto.Interaction) {
 		if ix.Private {
 			continue // a Just me turn's card: never in a channel (meeting_justme.go)
 		}
-		// "All questions" does not take the cards of a space that redacts: only one the channel drives itself (health.go).
-		if !s.channelDrives(ctx, v.ID, ix.MachineID, ix.SessionID) && (!featureOn(v, channel.FeatureAllAsks) || s.ixPolicy(ctx, ix).Redact) {
+		// "All questions" does not take a card that says something sensitive: only one the channel drives itself
+		// (health.go, info_use.go).
+		if !s.channelDrives(ctx, v.ID, ix.MachineID, ix.SessionID) && (!featureOn(v, channel.FeatureAllAsks) || redacts()) {
 			continue
 		}
 		to = append(to, v.ID)

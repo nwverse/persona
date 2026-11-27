@@ -100,9 +100,6 @@ extension AppModel {
         if session(key)?.assistant == true || key == assistantMain {
             openAssistantConversation(key)
         } else {
-            #if os(macOS)
-            MacShellState.shared.willOpen()
-            #endif
             open(key)
         }
     }

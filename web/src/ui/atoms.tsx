@@ -205,7 +205,7 @@ export function Button({
   if (href && !disabled && !busy) {
     // an <a> is never :enabled, so the link has its own hover / press
     const links: Record<BtnTone, string> = {
-      primary: "bg-ink text-surface shadow-[inset_0_1px_0_rgba(255,255,255,0.14)] hover:opacity-90",
+      primary: "bg-ink text-surface hover:opacity-90",
       accent: "bg-accent-ink text-surface hover:brightness-105",
       secondary: "bg-surface text-ink shadow-btn hover:bg-hover",
       quiet: "text-ink-2 hover:bg-hover hover:text-ink",
@@ -219,7 +219,7 @@ export function Button({
     );
   }
   const tones: Record<BtnTone, string> = {
-    primary: "bg-ink text-surface shadow-[inset_0_1px_0_rgba(255,255,255,0.14)] enabled:hover:opacity-90",
+    primary: "bg-ink text-surface enabled:hover:opacity-90",
     accent: "bg-accent-ink text-surface enabled:hover:brightness-105",
     // dark: at 45% the ring and the light label still read as a button you can press, so a disabled one drops both
     secondary: "bg-surface text-ink shadow-btn enabled:hover:bg-hover dark:disabled:bg-transparent dark:disabled:text-ink-3 dark:disabled:shadow-hairline",
@@ -279,7 +279,7 @@ export function Switch({ on, onChange, disabled, label, className, describedBy, 
       onClick={() => onChange(!on)}
       className={cx("switch touch-hit relative inline-flex h-[22px] w-[38px] shrink-0 items-center rounded-full transition-colors duration-200 disabled:opacity-50", on ? "bg-switch-on" : "bg-switch-off", className)}
     >
-      <span aria-hidden className="absolute left-[2px] size-[18px] rounded-full bg-white shadow-knob transition-transform duration-200" style={{ transform: on ? "translateX(16px)" : "none", transitionTimingFunction: EASE }} />
+      <span aria-hidden className="absolute left-[2px] size-[18px] rounded-full bg-white shadow-knob transition-transform duration-200" style={{ transform: on ? "translateX(16px)" : "none", transitionTimingFunction: "var(--ease-spring)" }} />
     </button>
   );
 }
@@ -615,9 +615,11 @@ export function Menu({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the handlers read `live`; only the menu's anchor and close change them
   }, [anchor, onClose, id, focusScoped]);
 
+  const inSidePanel = Boolean(anchor?.closest?.("[data-side-panel]"));
   const panelProps = (depth: number) => ({
     id,
     depth,
+    inSidePanel,
     items: levels[depth],
     active: actives[depth] ?? -1,
     confirming,
@@ -674,11 +676,12 @@ type Place =
 
 /** One level of a menu: the rows, the highlight gliding under them, a rename input or a failure where they call for it. */
 function MenuPanel({
-  id, depth, items, active, confirming, renaming, busy, failure, rows: report, keyed, place, header, headerAsWritten, loading, loadError,
+  id, depth, inSidePanel, items, active, confirming, renaming, busy, failure, rows: report, keyed, place, header, headerAsWritten, loading, loadError,
   onHover, onEnter, onLeave, onChoose, onRename, onCancelRename,
 }: {
   id: string;
   depth: number;
+  inSidePanel?: boolean;
   items: MenuItem[];
   active: number;
   confirming: string | null;
@@ -783,8 +786,9 @@ function MenuPanel({
       role={reading ? "dialog" : "menu"}
       aria-label={reading ? (header ?? items[0].label) : undefined}
       data-menu={id}
-      className="fixed z-50 max-h-[calc(100dvh-(--spacing(4)))] overflow-y-auto rounded-[10px] bg-surface p-1 shadow-overlay"
-      style={{ ...pos, animation: `pop-in 160ms ${EASE} both`, transformOrigin: origin }}
+      data-side-panel={inSidePanel ? "" : undefined}
+      className="fixed z-50 max-h-[calc(100dvh-(--spacing(4)))] overflow-y-auto rounded-card bg-surface p-1 shadow-overlay"
+      style={{ ...pos, animation: "pop-in 180ms var(--ease-spring) both", transformOrigin: origin }}
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}
       onScroll={measureMore}
@@ -1165,7 +1169,7 @@ export function Dialog({
         aria-labelledby={shown.title ? titleId : labelledBy}
         aria-describedby={describedBy}
         tabIndex={-1}
-        className="flex max-h-[calc(88vh-(--spacing(8)))] w-full max-w-(--dialog-w) animate-[slide-up_220ms_var(--ease-out-strong)_both] flex-col overflow-hidden rounded-[14px] bg-surface shadow-overlay outline-none max-sm:max-h-[calc(var(--kb-h)*0.9)] max-sm:max-w-none max-sm:animate-none max-sm:rounded-b-none max-sm:transition-transform max-sm:duration-300 max-sm:ease-(--ease-out-strong) max-sm:starting:translate-y-full"
+        className="flex max-h-[calc(88vh-(--spacing(8)))] w-full max-w-(--dialog-w) animate-[slide-up_240ms_var(--ease-spring)_both] flex-col overflow-hidden rounded-[14px] bg-surface shadow-overlay outline-none max-sm:max-h-[calc(var(--kb-h)*0.9)] max-sm:max-w-none max-sm:animate-none max-sm:rounded-b-none max-sm:transition-transform max-sm:duration-300 max-sm:ease-(--ease-out-strong) max-sm:starting:translate-y-full"
         style={{ "--dialog-w": `${width}px` } as React.CSSProperties}
       >
         {shown.title && (

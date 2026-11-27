@@ -66,8 +66,16 @@ func (h *Hub) assistantRoutesRelayed(api *http.ServeMux) {
 			api.HandleFunc(pattern, h.forwardAgentArchives)
 			continue
 		}
+		if pattern == assistantwire.RouteAgentIdleArchive || pattern == assistantwire.RouteAgentIdleArchiveAudit {
+			api.HandleFunc(pattern, h.forwardAgentIdleArchive)
+			continue
+		}
 		if pattern == "POST /api/v1/sessions/{mid}/{sid}/autoname" { // a full device, a capable owner (agent_autoname.go)
 			api.HandleFunc(pattern, h.forwardAgentAutoname)
+			continue
+		}
+		if pattern == todoRevisionRoute { // the pushed read's cheap validator, merged over every manager
+			api.HandleFunc(pattern, h.mergeTodoRevision)
 			continue
 		}
 		if key, ok := mergedLists[pattern]; ok { // the todos: every manager's

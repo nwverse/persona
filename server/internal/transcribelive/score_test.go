@@ -2,11 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"github.com/nwverse/persona/server/internal/recordingwire"
 	"math"
 	"testing"
 	"time"
-
-	"github.com/nwverse/persona/server/internal/kb"
 )
 
 func TestCER(t *testing.T) {
@@ -79,26 +78,24 @@ func TestEmbeddedMeeting(t *testing.T) {
 	}
 }
 
-// What the check uploads is what the hub takes: a body the knowledge base refuses (a device that is not a phone)
+// What the check uploads is what the hub takes: a body the upload refuses (a device that is not a phone)
 // would stop every live run at its first upload.
 func TestUploadBodyIsAValidMeetingUpload(t *testing.T) {
 	var m meeting
 	if err := json.Unmarshal(meetingJSON, &m); err != nil {
 		t.Fatal(err)
 	}
-	st, err := kb.NewStore(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	e := &kb.Engine{Store: st}
 	tl := map[string]any{"roles": []any{map[string]any{"at": 0.0, "attendance": "listener"}},
 		"speaking": []map[string]any{{"start": 52.1, "end": 55.8, "text": m.Lines[10].Text}}}
 	b, _ := json.Marshal(uploadBody(&m, "zh-CN", "listener", time.Now().UTC(), 1, tl))
-	var u kb.RecordingUpload
+	var u recordingwire.RecordingUpload
 	if err := json.Unmarshal(b, &u); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.PutRecording("6f1c2d4e-1111-4abc-8def-0123456789ab", u, time.Now()); err != nil {
-		t.Fatalf("the hub refuses the check's upload: %v", err)
+	// The upload itself is the recording module's (internal/modules/recording/writers, cleanUpload), which this
+	// package cannot import: what it refuses outright is checked here, rule by rule.
+	if u.Revision <= 0 || u.StartedAt.IsZero() || (u.Device != "phone" && u.Device != "watch") ||
+		u.Kind != recordingwire.RecordingMeeting || len(u.Segments) > recordingwire.MaxRecordingSegments {
+		t.Fatalf("the hub refuses the check's upload: %+v", u)
 	}
 }

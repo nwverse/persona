@@ -79,7 +79,13 @@ func codexShell(launcher string) string { return codexShellWith(launcher, "app-s
 // assistant_fallback_window.go).
 func codexShellWith(launcher, sub string) string {
 	return `__persona_args=("$@")
-function __persona_codex { builtin command codex "$@" ` + sub + ` "${__persona_args[@]}"; }
+function __persona_codex {
+  if [[ -n "${PERSONA_MODEL_SOURCE_BIN-}" && -n "${PERSONA_MODEL_SOURCE_HOSTS-}" ]]; then
+    "${PERSONA_MODEL_SOURCE_BIN}" model-source codex "$@" ` + sub + ` "${__persona_args[@]}"
+  else
+    builtin command codex "$@" ` + sub + ` "${__persona_args[@]}"
+  fi
+}
 if [[ -n "${ZSH_VERSION-}" ]] && (( $+functions[codex] )); then
   # Keep a user-defined codex() launcher intact while routing its final command through the app-server wrapper.
   # Copy it through the functions table: functions -c needs zsh 5.8, and a subscript never expands aliases.
@@ -104,7 +110,7 @@ func (n *Node) codexAssistantCommand(shell, launcher string, args []string) *exe
 		// Keep the assistant's MCP and provider flags before app-server. Running
 		// personad launch here bypasses the shell's codex wrapper and starts a TUI.
 		argv := append(append(prefix[1:], args...), "app-server")
-		return exec.Command(shell, append([]string{"-ic", `builtin command codex "$@"`, "persona"}, argv...)...)
+		return exec.Command(shell, append([]string{"-ic", `if [[ -n "${PERSONA_MODEL_SOURCE_BIN-}" && -n "${PERSONA_MODEL_SOURCE_HOSTS-}" ]]; then "${PERSONA_MODEL_SOURCE_BIN}" model-source codex "$@"; else builtin command codex "$@"; fi`, "persona"}, argv...)...)
 	}
 	return exec.Command(shell, append([]string{"-ic", codexShell(n.launcherForScript(launcher)), "persona"}, args...)...)
 }
@@ -130,13 +136,14 @@ func (n *Node) spawnCodexWithMode(id, cwd, launcher string, resume, spare bool, 
 	}
 	cmd := n.codexAssistantCommand(shell, launcher, args)
 	cmd.Dir = root
-	cmd.Env = identity.Environment(os.Environ(), "PERSONA_ASSISTANT=1")
+	cmd.Env = identity.Environment(withoutEnv(os.Environ(), []string{categoriesEnv}), "PERSONA_ASSISTANT=1")
 	if provider, ok := n.managedLauncher(launcher); ok && provider.AgentType() == "codex" {
 		// Use the same managed environment and header bindings as personad launch,
 		// without passing secrets as shell code or command-line arguments.
 		cmd.Env = identity.Environment(withoutEnv(cmd.Env, envClearFor(provider)), managedEnv(provider)...)
 	}
 	gateEnv, releaseGates, nameGates := n.assistantLarkEnvNamed(cwd, id) // its addresses at the gate proxy go with the process
+	categories := categoriesFromEnv(gateEnv)
 	started := false
 	defer func() {
 		if !started {
@@ -144,6 +151,7 @@ func (n *Node) spawnCodexWithMode(id, cwd, launcher string, resume, spare bool, 
 		}
 	}()
 	cmd.Env = identity.Environment(cmd.Env, gateEnv...)
+	cmd.Env = identity.Environment(cmd.Env, modelSourceEnvironment(sourceSession(assistantModelSource(execution), id), n.bin)...)
 	cmd.SysProcAttr = osproc.SessionGroupAttr()
 	msysCmdLine(cmd)
 	stdin, err := cmd.StdinPipe()
@@ -165,7 +173,7 @@ func (n *Node) spawnCodexWithMode(id, cwd, launcher string, resume, spare bool, 
 	started = true
 	p := &assistantProc{id: id, agent: "codex", launcher: launcher, cwd: cwd, cmd: cmd, stdin: stdin, exited: make(chan struct{}),
 		born: time.Now(), lastActive: time.Now(), model: execution, fingerprint: n.executionFingerprint(launcher, execution),
-		instructions: instructions, personaMCPOnly: personaMCPOnly, origin: execution.Origin}
+		instructions: instructions, personaMCPOnly: personaMCPOnly, categories: categories, origin: execution.Origin}
 	c := &codexConn{n: n, p: p, key: key, memDir: memDir, pending: map[int64]chan codexReply{}, asks: map[string]context.CancelFunc{}, files: map[string][]string{},
 		nameGates: nameGates}
 	p.cx = c
@@ -177,10 +185,14 @@ func (n *Node) spawnCodexWithMode(id, cwd, launcher string, resume, spare bool, 
 			n.logger.Printf("assistant codex %s: %s", key, l)
 		}
 	})
+	p.owner.Store(n)
 	liveAssistants.Store(p, struct{}{})
 	go c.read(stdout)
 	go func() {
 		_ = cmd.Wait()
+		if p.stopped.Load() {
+			osproc.SweepGroup(cmd.Process.Pid, assistantGroupSweep)
+		}
 		releaseGates()
 		c.mu.Lock()
 		c.closed = true

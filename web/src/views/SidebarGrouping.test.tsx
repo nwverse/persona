@@ -5,6 +5,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { seedAgentsDisplay } from "../lib/agents-display";
 // jsdom has no matchMedia (the sidebar's modules read it when they load) and no ResizeObserver (its highlight)
 vi.hoisted(() => {
   globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} } as unknown as typeof ResizeObserver;
@@ -60,6 +61,7 @@ const hub = (todos: () => Promise<Response>) =>
 let host: HTMLDivElement;
 let root: Root;
 const flush = async () => {
+  await act(async () => { await vi.dynamicImportSettled(); });
   for (let i = 0; i < 5; i++) await act(async () => { await Promise.resolve(); });
 };
 const grouping = () => host.querySelector<HTMLElement>('[role="radiogroup"][aria-label="Agent 分组"]')!;
@@ -76,6 +78,8 @@ beforeEach(() => {
   localStorage.clear();
   sessionStorage.clear();
   reset();
+  // Settings › Agents: the Filter is on for these tests (it is off until the hub says so)
+  seedAgentsDisplay({ show_botmux: true, configured: true, show_filter: true });
   resetAgentListFilters();
   FakeSocket.all = [];
   vi.stubGlobal("WebSocket", FakeSocket);

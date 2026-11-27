@@ -10,11 +10,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/server/internal/botcard"
+
 	"github.com/nwverse/persona/server/internal/channel"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/extension"
 	"github.com/nwverse/persona/server/internal/extension/host"
-	"github.com/nwverse/persona/server/internal/feishubot"
 	"github.com/nwverse/persona/server/internal/i18n"
 )
 
@@ -64,12 +65,27 @@ func (h *Manager) extensionChannel(id string) (extensionChannel, bool) {
 
 // channelList is every channel: the apps, the hub's own, the plugins', then the markets' not installed.
 func (h *Manager) channelList(ctx context.Context) []channel.View {
-	out := []channel.View{appChannel(h.botLang(ctx)), h.feishuChannel(ctx)}
+	list, _ := h.channelListWithOverrides(ctx)
+	return list
+}
+
+// channelListWithOverrides returns channelList alongside per-channel target override hints (non-nil map even when empty,
+// so the assistant can distinguish an explicit "no override" from an older hub response that omitted target_overrides).
+func (h *Manager) channelListWithOverrides(ctx context.Context) ([]channel.View, map[string]*channel.TargetOverride) {
+	bot := h.botView(ctx)
+	out := []channel.View{appChannel(h.botLang(ctx)), h.feishuChannelFromBotView(ctx, bot)}
+	overrides := map[string]*channel.TargetOverride{}
+	if len(bot.TopicChats) > 0 {
+		overrides[channel.Feishu] = &channel.TargetOverride{Mode: channel.TargetOverrideTopics}
+	}
 	if v, ok := h.voiceChannel(ctx); ok {
 		out = append(out, v)
 	}
 	for _, pc := range h.extensionChannels() {
 		out = append(out, h.extensionChannelView(ctx, pc))
+		if ov := h.extensionChannelTargetOverride(pc); ov != nil {
+			overrides[pc.item.ID] = ov
+		}
 	}
 	out = append(out, h.marketChannels(out)...)
 	order := func(v channel.View) int {
@@ -84,7 +100,114 @@ func (h *Manager) channelList(ctx context.Context) []channel.View {
 		return 2
 	}
 	slices.SortStableFunc(out, func(a, b channel.View) int { return order(a) - order(b) })
-	return out
+	return out, overrides
+}
+
+var (
+	topicRoutingConfigKeys  = []string{"agent_group_topics", "group_topics", "topic_routing"}
+	threadRoutingConfigKeys = []string{"thread_routing"}
+)
+
+// extensionChannelTargetOverride reports whether a plugin channel currently routes threaded or topic messages ahead of
+// its default target. When the extension declares a recognized topic/thread routing config key, its effective config
+// decides (so turning the setting off clears the hint even when capabilities.threads is true); otherwise
+// capabilities.threads alone indicates active per-thread routing.
+func (h *Manager) extensionChannelTargetOverride(pc extensionChannel) *channel.TargetOverride {
+	if pc.extension == nil {
+		if pc.item.Capabilities.Threads {
+			return &channel.TargetOverride{Mode: channel.TargetOverrideThreads}
+		}
+		return nil
+	}
+	var cfg map[string]any
+	if h.extensions != nil && h.extensions.reg != nil {
+		if raw := h.extensions.reg.Config(pc.extension); len(raw) > 0 {
+			_ = json.Unmarshal(raw, &cfg)
+		}
+	}
+	ov, decided := extensionConfigTargetOverride(pc.extension.Schema, cfg)
+	if decided {
+		if ov == nil {
+			return nil
+		}
+		if !pc.item.Capabilities.Threads && pc.extension.Manifest != nil {
+			for _, other := range pc.extension.Manifest.Channels() {
+				if other.Capabilities.Threads {
+					return nil
+				}
+			}
+		}
+		return ov
+	}
+	if pc.item.Capabilities.Threads {
+		return &channel.TargetOverride{Mode: channel.TargetOverrideThreads}
+	}
+	return nil
+}
+
+func extensionConfigTargetOverride(schema *extension.Schema, cfg map[string]any) (*channel.TargetOverride, bool) {
+	declared := map[string]bool{}
+	if schema != nil {
+		for _, f := range schema.Fields {
+			declared[f.Name] = true
+		}
+	}
+	decided := false
+	for _, key := range topicRoutingConfigKeys {
+		val, inCfg := cfg[key]
+		if !inCfg && !declared[key] {
+			continue
+		}
+		decided = true
+		if inCfg && routingConfigValueActive(val) {
+			return &channel.TargetOverride{Mode: channel.TargetOverrideTopics}, true
+		}
+	}
+	for _, key := range threadRoutingConfigKeys {
+		val, inCfg := cfg[key]
+		if !inCfg && !declared[key] {
+			continue
+		}
+		decided = true
+		if inCfg && routingConfigValueActive(val) {
+			return &channel.TargetOverride{Mode: channel.TargetOverrideThreads}, true
+		}
+	}
+	return nil, decided
+}
+
+func routingConfigValueActive(v any) bool {
+	switch x := v.(type) {
+	case bool:
+		return x
+	case string:
+		s := strings.ToLower(strings.TrimSpace(x))
+		return s != "" && s != "off" && s != "none" && s != "disabled" && s != "false" && s != "channel_default"
+	case []any:
+		for _, item := range x {
+			switch it := item.(type) {
+			case string:
+				if strings.TrimSpace(it) != "" {
+					return true
+				}
+			default:
+				if routingConfigValueActive(it) {
+					return true
+				}
+			}
+		}
+		return false
+	case map[string]any:
+		if en, ok := x["enabled"].(bool); ok {
+			return en
+		}
+		if mode, ok := x["mode"].(string); ok {
+			return routingConfigValueActive(mode)
+		}
+		return len(x) > 0
+	default:
+		return false
+	}
 }
 
 func appChannel(l i18n.Lang) channel.View {
@@ -104,7 +227,10 @@ var feishuCapabilities = channel.Capabilities{ImagesIn: true, FilesIn: true, Voi
 	Asks: channel.AsksButtons, Push: true, Progress: true, Threads: true}
 
 func (h *Manager) feishuChannel(ctx context.Context) channel.View {
-	v := h.botView(ctx)
+	return h.feishuChannelFromBotView(ctx, h.botView(ctx))
+}
+
+func (h *Manager) feishuChannelFromBotView(ctx context.Context, v feishuBotView) channel.View {
 	l := h.botLang(ctx)
 	out := channel.View{ID: channel.Feishu, Name: i18n.T(l, "hub-channels.feishu_name"), Kind: channel.KindIM, Source: channel.SourceBuiltin, Installed: true,
 		Enabled: v.Enabled, Bind: channel.BindFields, Capabilities: feishuCapabilities,
@@ -478,7 +604,7 @@ func (h *Manager) bindFeishuStep(ctx context.Context, step string, values map[st
 	}
 	credentials := func(errText string) connector.Prompt {
 		p := connector.Prompt{Step: "credentials", Fields: fields, Hint: i18n.T(l, "hub-channels.credentials_hint")}
-		if u := feishubot.ConsoleURL(strings.TrimSpace(values["domain"])); u != "" {
+		if u := botcard.ConsoleURL(strings.TrimSpace(values["domain"])); u != "" {
 			p.Link, p.LinkText = u, i18n.T(l, "hub-channels.console_link")
 		}
 		p.Error = errText
@@ -505,7 +631,7 @@ func (h *Manager) bindFeishuStep(ctx context.Context, step string, values map[st
 		on := true
 		receipt, err := h.applyBotUpdateWithReceipt(ctx, &on, &id, &secret, &domain, nil, false)
 		if err != nil {
-			if feishubot.CredentialRejected(err) {
+			if botcard.CredentialRejected(err) {
 				h.logf("bots: credentials rejected by the platform: %v", err)
 				return credentials(i18n.T(l, "hub-channels.credentials_rejected")), nil
 			}
@@ -524,7 +650,7 @@ func (h *Manager) bindFeishuStep(ctx context.Context, step string, values map[st
 		// No app yet: create one in a single authorization (bots_register.go); typing the credentials is the way
 		// when the accounts site cannot be reached, and on the Lark bot's settings page.
 		// A private deployment has no accounts site of ours to ask.
-		if feishubot.ConsoleURL(h.cfg.Bots.Feishu.Domain) != "" {
+		if botcard.ConsoleURL(h.cfg.Bots.Feishu.Domain) != "" {
 			p, ok := h.beginFeishuRegistration(ctx, "")
 			if err := ctx.Err(); err != nil {
 				return connector.Prompt{}, err
@@ -571,7 +697,7 @@ func (h *Manager) bindFeishuStep(ctx context.Context, step string, values map[st
 	}
 	code := p.Code
 	if c := b.set.Configure; c != nil {
-		configNote = feishuConfigureNote(l, feishubot.ConfigureReport{Issue: c.Issue, Configured: c.Configured}, b.set.Domain, b.set.AppID)
+		configNote = feishuConfigureNote(l, botcard.ConfigureReport{Issue: c.Issue, Configured: c.Configured}, b.set.Domain, b.set.AppID)
 	}
 	b.mu.Unlock()
 	if issued {
@@ -587,27 +713,27 @@ func (h *Manager) bindFeishuStep(ctx context.Context, step string, values map[st
 // feishuConfigureNote turns the auto-configure report into one sentence for the pair step; "" when nothing
 // was tried or there is nothing worth saying. The manual fallback names the one thing to do by hand, with a
 // link to the app's console page.
-func feishuConfigureNote(l i18n.Lang, rep feishubot.ConfigureReport, domain, appID string) string {
+func feishuConfigureNote(l i18n.Lang, rep botcard.ConfigureReport, domain, appID string) string {
 	if rep.Skipped {
 		return ""
 	}
-	if rep.Issue == feishubot.IssueNone && rep.Configured {
+	if rep.Issue == botcard.IssueNone && rep.Configured {
 		return i18n.T(l, "hub-channels.auto_configured")
 	}
 	what := ""
 	switch rep.Issue {
-	case feishubot.IssueBotCapability:
+	case botcard.IssueBotCapability:
 		what = i18n.T(l, "hub-channels.auto_config_bot_capability")
-	case feishubot.IssuePatchScope:
+	case botcard.IssuePatchScope:
 		what = i18n.T(l, "hub-channels.auto_config_patch_scope")
-	case feishubot.IssueNotSelfBuilt:
+	case botcard.IssueNotSelfBuilt:
 		what = i18n.T(l, "hub-channels.auto_config_not_self_built")
 	default:
 		what = i18n.T(l, "hub-channels.auto_config_unreachable")
 	}
 	note := i18n.T(l, "hub-channels.auto_config_manual", i18n.Args{"what": what})
-	if rep.Issue != feishubot.IssueUnreachable {
-		if u := feishubot.AppConsoleURL(domain, appID); u != "" {
+	if rep.Issue != botcard.IssueUnreachable {
+		if u := botcard.AppConsoleURL(domain, appID); u != "" {
 			note += " " + u // the app's console page, where that one switch is
 		}
 	}
