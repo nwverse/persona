@@ -355,13 +355,12 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				s.Capabilities = caps
 			}
 			hasRuntimeRow := false
-			var runtimeLastText string
-			var runtimeUpdatedAt time.Time
+			var companionPreview agyPreview
 			if runtimeID := agyRuntimeIDs[id]; runtimeID != "" {
 				seen[runtimeID] = true
-				if runtimeRow, ok := n.runtimes.agyPaneRuntimeRow(runtimeID); ok {
+				if runtimeRow, preview, ok := n.runtimes.agyPaneRuntimeRow(runtimeID); ok {
 					hasRuntimeRow = true
-					runtimeLastText, runtimeUpdatedAt = runtimeRow.LastText, runtimeRow.UpdatedAt
+					companionPreview = preview
 					if s.Model == "" {
 						s.Model = runtimeRow.Model
 					}
@@ -377,9 +376,6 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 					if s.UpdatedAt.IsZero() && !runtimeRow.UpdatedAt.IsZero() {
 						s.UpdatedAt = runtimeRow.UpdatedAt
 					}
-					if s.LastText == "" && runtimeRow.LastText != "" {
-						s.LastText = runtimeRow.LastText
-					}
 					// The companion has already applied the native rewind cut.
 					agyBackgroundTasks{running: runtimeRow.Background, ended: runtimeRow.BackgroundEnded()}.apply(&s)
 					n.agyRuntimeTaskLogs(&s, agyConversations[id])
@@ -394,14 +390,16 @@ func (n *Node) sessionListIn(ctx context.Context, refreshAgents bool, pass *code
 				conversation := agyConversations[id]
 				u, readable := n.agyTranscriptMeta(conversation)
 				if readable {
-					n.applyAgyTurnEvidence(&s, conversation, u.turn)
-					transcriptAt := u.turn.replyAt
+					transcriptAt := u.turn.lastTextAt
 					if transcriptAt.IsZero() {
 						transcriptAt = u.modTime
 					}
-					if u.turn.lastText != "" && runtimeLastText != "" && runtimeUpdatedAt.After(transcriptAt) {
-						s.LastText = runtimeLastText
+					if u.turn.lastText != "" && companionPreview.text != "" && companionPreview.at.After(transcriptAt) {
+						u.turn.lastText = companionPreview.text
 					}
+					n.applyAgyTurnEvidence(&s, conversation, u.turn)
+				} else if s.LastText == "" && companionPreview.text != "" && n.agyConversation(id, a.PaneID) == conversation {
+					s.LastText = companionPreview.text
 				}
 				if hasRuntimeRow {
 					n.resolveAgyContext(&s, agyConversations[id])

@@ -835,18 +835,6 @@ func TestAgyPaneUpdatedAtFromRuntimeAndTranscript(t *testing.T) {
 			if !r.UpdatedAt.Equal(newerAt) || r.LastText != "Latest reply" {
 				t.Fatalf("pane with runtime = updated:%v lastText:%q, want %v / %q", r.UpdatedAt, r.LastText, newerAt, "Latest reply")
 			}
-
-			// A companion snapshot older than the transcript cannot replace the locally verified reply.
-			olderRow := proto.Session{SessionID: agyAgent + "-" + agyTestID, Agent: agyAgent, Cwd: home,
-				Status: proto.StatusWorking, UpdatedAt: transcriptAt.Add(-time.Minute), LastText: "Older runtime reply"}
-			n.runtimes.setSessions(runtime, []proto.Session{olderRow})
-			if got := findPane(); got.LastText != "Hi there" {
-				t.Fatalf("older runtime reply won over transcript: %q", got.LastText)
-			}
-			n.runtimes.setSessions(runtime, []proto.Session{
-				{SessionID: agyAgent + "-" + agyTestID, Agent: agyAgent, Cwd: home, Status: proto.StatusWorking, UpdatedAt: newerAt, LastText: "Latest reply"},
-				{SessionID: agyAgent + "-older-companion", Agent: agyAgent, Cwd: home, Status: proto.StatusDone, UpdatedAt: olderAt, LastText: "Old reply"},
-			})
 		}
 		if r.SessionID == agyAgent+"-older-companion" {
 			olderIdx = i
@@ -861,5 +849,39 @@ func TestAgyPaneUpdatedAtFromRuntimeAndTranscript(t *testing.T) {
 	n.runtimes.setSessions(runtime, normalizeRuntimeSessions(runtime, []proto.Session{companion}))
 	if got := findPane(); got.LastText != "Latest reply" || !got.UpdatedAt.Equal(companion.UpdatedAt) {
 		t.Fatalf("pane after a delivery marker: last text %q, updated %v", got.LastText, got.UpdatedAt)
+	}
+	// A transcript with no step timestamps uses its modification time.
+	companion.LastText = "Earlier companion reply"
+	companion.UpdatedAt = transcriptAt.Add(-time.Minute)
+	n.runtimes.setSessions(runtime, []proto.Session{companion})
+	if got := findPane(); got.LastText != "Hi there" {
+		t.Fatalf("older companion snapshot displaced transcript preview: %q", got.LastText)
+	}
+
+	// Later checkpoint writes do not change the time of the visible assistant text.
+	agyTestAppend(t, transcriptPath, `{"step_index":2,"type":"PLANNER_RESPONSE","status":"ACTIVE","created_at":"2026-11-24T11:00:00Z","content":"Checking the example"}`+"\n"+
+		`{"step_index":3,"type":"CHECKPOINT","created_at":"2026-11-24T13:00:00Z"}`+"\n")
+	checkpointAt := transcriptAt.Add(3 * time.Hour)
+	if err := os.Chtimes(transcriptPath, checkpointAt, checkpointAt); err != nil {
+		t.Fatal(err)
+	}
+	companion.LastText = "Companion update"
+	companion.UpdatedAt = transcriptAt.Add(2 * time.Hour)
+	n.runtimes.setSessions(runtime, []proto.Session{companion})
+	if got := findPane(); got.LastText != "Companion update" {
+		t.Fatalf("checkpoint displaced newer companion preview: %q", got.LastText)
+	}
+
+	agyTestAppend(t, transcriptPath, `{"step_index":4,"type":"PLANNER_RESPONSE","created_at":"2026-11-24T14:00:00Z","content":"Transcript update"}`+"\n")
+	companion.UpdatedAt = transcriptAt.Add(5 * time.Hour)
+	companion.LastText = "BOTMUX_NOTHING_TO_SEND"
+	n.runtimes.setSessions(runtime, normalizeRuntimeSessions(runtime, []proto.Session{companion}))
+	if got := findPane(); got.LastText != "Transcript update" || !got.UpdatedAt.Equal(companion.UpdatedAt) {
+		t.Fatalf("marker displaced transcript preview: %q, updated %v", got.LastText, got.UpdatedAt)
+	}
+
+	agyTestAppend(t, transcriptPath, `{"step_index":5,"type":"USER_INPUT","content":"Next question"}`+"\n")
+	if got := findPane(); got.LastText != "" {
+		t.Fatalf("new turn showed previous companion preview: %q", got.LastText)
 	}
 }
