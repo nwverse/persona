@@ -309,6 +309,7 @@ func (f *fakeOpenAPI) count(want string) int {
 
 type botWorld struct {
 	h   *Manager
+	st  *botStore
 	api *fakeOpenAPI
 	a   *fakeAssistant
 	mux http.Handler
@@ -332,7 +333,7 @@ func newBotWorld(t *testing.T) *botWorld {
 	h.startBots(ctx)
 	mux := http.NewServeMux()
 	h.botRoutes(mux)
-	w := &botWorld{h: h, api: api, a: a, mux: mux, ctx: ctx}
+	w := &botWorld{h: h, st: st, api: api, a: a, mux: mux, ctx: ctx}
 	if code, out := w.do(t, "PUT", "/api/v1/bots/feishu",
 		fmt.Sprintf(`{"enabled":true,"app_id":"cli_test","app_secret":"s3cret","domain":%q,"features":{"main":true,"cards":true}}`, api.srv.URL)); code != 200 {
 		t.Fatalf("enable: %d %v", code, out)

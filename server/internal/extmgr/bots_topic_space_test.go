@@ -13,7 +13,7 @@ func TestTopicSpaceReadbackValidationAndLegacyUpdate(t *testing.T) {
 	w := newBotWorld(t)
 	w.pair(t)
 	archived := time.Unix(1_700_000_000, 0)
-	w.store.tracks = []db.Track{
+	w.st.tracks = []db.Track{
 		{Slug: "research", Title: "Research", Template: "space", DirName: "tracks/research"},
 		{Slug: "archived-space", Title: "Archived", Template: "space", DirName: "tracks/archived-space", ArchivedAt: &archived},
 		{Slug: "builtin-space", Title: "Builtin", Template: "space", Builtin: true},
@@ -77,7 +77,7 @@ func TestTopicsSpaceCommand(t *testing.T) {
 	needsLarkModule(t)
 	w := newBotWorld(t)
 	w.pair(t)
-	w.store.tracks = []db.Track{
+	w.st.tracks = []db.Track{
 		{Slug: "ops", Title: "Ops", Template: "space", DirName: "tracks/ops"},
 	}
 
@@ -115,14 +115,14 @@ func TestTopicsSpaceCommand(t *testing.T) {
 
 	// Audit records include bot_topic_space.
 	foundAudit := false
-	w.store.mu.Lock()
-	for _, row := range w.store.audit {
+	w.st.mu.Lock()
+	for _, row := range w.st.audit {
 		if row.Action == auditBotTopicSpace && row.Detail["space"] == "ops" {
 			foundAudit = true
 			break
 		}
 	}
-	w.store.mu.Unlock()
+	w.st.mu.Unlock()
 	if !foundAudit {
 		t.Fatalf("missing %s audit record", auditBotTopicSpace)
 	}
