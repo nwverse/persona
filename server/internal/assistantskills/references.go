@@ -43,6 +43,8 @@ func Bind(scope string, entries []Entry) []Entry {
 
 var leadingReference = lazyre.New(`(?s)^\s*<` + compat.ContextPattern() + `\b([^>]*)>.*?</` + compat.ContextPattern() + `>`)
 
+var malformedSkillKind = lazyre.New(`(?i)(?:^|\s)kind\s*=\s*(?:"skill"|'skill'|skill(?:\s|$|/))`)
+
 var ErrReference = errors.New("selected skill is unavailable or its execution environment changed; remove it and select it again")
 
 // References reads only explicit leading context selections, never @name, paths, quoted tags or later prose.
@@ -58,7 +60,7 @@ func References(text string) ([]string, error) {
 		decoder := xml.NewDecoder(strings.NewReader("<context" + tag + "/>"))
 		token, err := decoder.Token()
 		if err != nil {
-			if strings.Contains(tag, `"skill"`) {
+			if malformedSkillKind.MatchString(tag) {
 				return nil, ErrReference
 			}
 			continue
