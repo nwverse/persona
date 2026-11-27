@@ -3,6 +3,8 @@ package assistantwire
 import (
 	"encoding/json"
 	"fmt"
+
+	"github.com/nwverse/persona/server/internal/buswire"
 )
 
 // Events an extension tells the assistant's main conversation (docs/extensions/extensions.md "Assistant events"). The
@@ -15,6 +17,9 @@ const (
 	// MethodExtensionEvent is manager → assistant: ExtensionEvent → wire.AssistantEventResult.
 	MethodExtensionEvent = "assistant.extension_event"
 )
+
+// ExtensionEventMethod binds the manager's extension event to the assistant's delivery result.
+var ExtensionEventMethod = buswire.Method[ExtensionEvent, AssistantEventResult]{Name: MethodExtensionEvent}
 
 // ExtensionEvent is MethodExtensionEvent's params: the event as the extension sent it, and who sent it.
 type ExtensionEvent struct {
