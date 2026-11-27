@@ -69,21 +69,26 @@ func Unreachable(ip net.IP) bool {
 		slices.ContainsFunc(metadataIPs, func(m string) bool { return net.ParseIP(m).Equal(ip) })
 }
 
-// forSettings says whether an address from an extension's settings (or one its owner allowed) may be dialled at port:
-// not Unreachable, and not this machine's own address at the hub's or this proxy's port.
-func (p *Proxy) forSettings(ip net.IP, port string) bool {
-	if Unreachable(ip) {
+// isSelfService reports whether ip:port targets this machine's own hub or
+// egress-proxy listener.
+func (p *Proxy) isSelfService(ip net.IP, port string) bool {
+	if !p.hubPort(port) && !p.ownPort(port) {
 		return false
 	}
-	_, hubPort, _ := net.SplitHostPort(p.HubAddr)
-	if port != hubPort && !p.ownPort(port) {
+	if ip.IsLoopback() {
 		return true
 	}
 	local := p.LocalAddrs
 	if local == nil {
 		local = machineAddrs
 	}
-	return !slices.ContainsFunc(local(), ip.Equal)
+	return slices.ContainsFunc(local(), ip.Equal)
+}
+
+// forSettings says whether an address from an extension's settings (or one its owner allowed) may be dialled at port:
+// not Unreachable, and not this machine's own address at the hub's or this proxy's port.
+func (p *Proxy) forSettings(ip net.IP, port string) bool {
+	return !Unreachable(ip) && !p.isSelfService(ip, port)
 }
 
 // machineAddrs are this machine's own addresses.

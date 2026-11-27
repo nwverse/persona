@@ -11,7 +11,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"slices"
 	"sync"
 	"time"
 )
@@ -209,8 +208,14 @@ func (p *Proxy) runtimeDial(ctx context.Context, host, port string, configured b
 		if configured && !p.forSettings(ip, port) {
 			return nil, errNotForSettings
 		}
-		if net.ParseIP(host) == nil && (ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() || slices.Contains(metadataIPs, ip.String())) {
-			return nil, errInternal
+		if !configured {
+			if net.ParseIP(host) == nil {
+				if !p.forSettings(ip, port) {
+					return nil, errInternal
+				}
+			} else if p.isSelfService(ip, port) {
+				return nil, errInternal
+			}
 		}
 	}
 	upstream := p.Upstream

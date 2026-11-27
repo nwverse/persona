@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"slices"
 	"time"
 )
 
@@ -34,6 +33,9 @@ func (p *Proxy) dialOut(ctx context.Context, host, port string, rule Rule) (net.
 	target := net.JoinHostPort(host, port)
 	ip := net.ParseIP(host)
 	if ip != nil {
+		if p.isSelfService(ip, port) {
+			return nil, fmt.Errorf("%s %w", host, errInternal)
+		}
 		if up, err := upstream(&url.URL{Scheme: "https", Host: target}); err == nil && up != nil {
 			return p.connectVia(ctx, up, target)
 		}
@@ -57,7 +59,7 @@ func (p *Proxy) dialOut(ctx context.Context, host, port string, rule Rule) (net.
 	var last error = fmt.Errorf("%s: no address", host)
 	var ok []net.IP
 	for _, ip := range ips {
-		if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() || ip.IsLinkLocalMulticast() || slices.Contains(metadataIPs, ip.String()) {
+		if !p.forSettings(ip, port) {
 			last = fmt.Errorf("%s %w", host, errInternal)
 			continue
 		}

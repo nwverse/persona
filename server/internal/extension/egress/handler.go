@@ -84,6 +84,9 @@ func (p *Proxy) handler(fixed string) http.Handler {
 			}
 		default:
 			allowed = Matches(host, rule.Hosts)
+			if allowed && IsLoopbackHost(host) && (p.ownPort(port) || p.hubPort(port)) {
+				allowed = false
+			}
 			if !allowed && rule.target(host, port, connect) {
 				if IsLoopbackHost(host) {
 					if !p.ownPort(port) && !p.hubPort(port) {
