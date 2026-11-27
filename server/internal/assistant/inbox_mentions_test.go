@@ -38,6 +38,10 @@ func TestInboxSuggestMentionsValidation(t *testing.T) {
 	}{
 		{"non-reply", `{"kind":"conclusion","text":"@Alice done","mentions":[{"id":"101","name":"Alice"}]}`},
 		{"missing in text", `{"kind":"reply","text":"Looks good","mentions":[{"id":"101","name":"Alice"}]}`},
+		{"prefix only", `{"kind":"reply","text":"@AliceSmith looks good","mentions":[{"id":"101","name":"Alice"}]}`},
+		{"inline code only", `{"kind":"reply","text":"See ` + "`@Alice`" + ` in code","mentions":[{"id":"101","name":"Alice"}]}`},
+		{"fenced code only", `{"kind":"reply","text":"` + "```" + `\n@Alice\n` + "```" + `","mentions":[{"id":"101","name":"Alice"}]}`},
+		{"link label only", `{"kind":"reply","text":"[ping @Alice](https://example.com/a)","mentions":[{"id":"101","name":"Alice"}]}`},
 		{"duplicate name different id", `{"kind":"reply","text":"@Alice looks good","mentions":[{"id":"101","name":"Alice"},{"id":"102","name":"Alice"}]}`},
 		{"at in name", `{"kind":"reply","text":"@@Alice looks good","mentions":[{"id":"101","name":"@Alice"}]}`},
 		{"empty id", `{"kind":"reply","text":"@Alice looks good","mentions":[{"id":"   ","name":"Alice"}]}`},
@@ -118,6 +122,41 @@ func TestInboxSuggestionConfirmForwardsAndPrunesMentions(t *testing.T) {
 		}
 		if lark.got[0].Text != "@Alice done, also @Dave please check" {
 			t.Fatalf("reply text = %q", lark.got[0].Text)
+		}
+	})
+
+	t.Run("prefix edit or code-masked @name prunes mention and keeps actualReply empty", func(t *testing.T) {
+		h, lark, it := handledHub(t)
+		if _, err := suggestTool(t, h, `{"kind":"reply","text":"@Alice please check","mentions":[{"id":"101","name":"Alice"}]}`); err != nil {
+			t.Fatalf("suggest: %v", err)
+		}
+		code, out := suggestionCall(t, h, it.ID, `{"version":1,"action":"confirm","text":"@AliceSmith and `+"`@Alice`"+` please check"}`)
+		if code != 200 {
+			t.Fatalf("confirm failed: %d %v", code, out)
+		}
+		if len(lark.got) != 1 || len(lark.got[0].Mentions) != 0 {
+			t.Fatalf("expected zero forwarded mentions, got %+v", lark.got)
+		}
+		// Explicitly recorded empty mentions (MentionsSet=true, Mentions=nil) must never fall back to proposal.
+		explicitEmpty := &InboxSuggestionAttempt{
+			Version:     1,
+			Text:        "@Alice still in text",
+			Mentions:    nil,
+			MentionsSet: true,
+			Proposal:    &InboxSuggestion{Kind: SuggestReply, Text: "@Alice", Mentions: []InboxMention{{ID: "101", Name: "Alice"}}},
+		}
+		if got := actualReply(explicitEmpty); got == nil || len(got.Mentions) != 0 {
+			t.Fatalf("actualReply with MentionsSet=true fell back to proposal: %+v", got)
+		}
+		// Legacy attempts without MentionsSet keep fallback behavior.
+		legacy := &InboxSuggestionAttempt{
+			Version:  1,
+			Text:     "@Alice legacy",
+			Proposal: &InboxSuggestion{Kind: SuggestReply, Text: "@Alice", Mentions: []InboxMention{{ID: "101", Name: "Alice"}}},
+		}
+		wantLegacy := []InboxMention{{ID: "101", Name: "Alice"}}
+		if got := actualReply(legacy); got == nil || !slices.Equal(got.Mentions, wantLegacy) {
+			t.Fatalf("legacy actualReply mentions = %+v, want %+v", got, wantLegacy)
 		}
 	})
 }

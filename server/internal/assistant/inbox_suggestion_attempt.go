@@ -34,6 +34,7 @@ type InboxSuggestionAttempt struct {
 	Code           string           `json:"code,omitempty"`
 	Text           string           `json:"text"`
 	Mentions       []InboxMention   `json:"mentions,omitempty"`
+	MentionsSet    bool             `json:"mentions_set,omitempty"`
 	At             time.Time        `json:"at"` // latest reservation or outcome, not the replacement suggestion's time
 	Conversation   *SessionRef      `json:"conversation,omitempty"`
 	RetryAfter     int              `json:"retry_after,omitempty"`
@@ -59,6 +60,7 @@ func listedSuggestionAttempts(attempts []*InboxSuggestionAttempt) []*InboxSugges
 		}
 		c := *a
 		c.Mentions = slices.Clone(a.Mentions)
+		c.MentionsSet = false
 		c.ClientID, c.Target, c.Proposal, c.active = "", "", nil, false
 		c.Category, c.Route, c.ContentVersion, c.PolicyRevision = "", "", "", ""
 		c.Reviewed = false
@@ -117,7 +119,7 @@ func actualReply(a *InboxSuggestionAttempt) *InboxSuggestion {
 	}
 	actual := *a.Proposal
 	actual.Text = a.Text
-	if len(a.Mentions) > 0 {
+	if a.MentionsSet || len(a.Mentions) > 0 {
 		actual.Mentions = slices.Clone(a.Mentions)
 	} else {
 		actual.Mentions = activeReplyMentions(a.Text, a.Proposal.Mentions)
@@ -154,7 +156,7 @@ func inheritReplyUncertainty(it *InboxItem, g *InboxSuggestion, text string) *In
 	}
 	a := suggestionAttempt(it, g.Version)
 	if a == nil {
-		a = &InboxSuggestionAttempt{Version: g.Version, Text: text, Mentions: activeReplyMentions(text, g.Mentions), ClientID: proof.ClientID, Proposal: copySuggestion(g), Conversation: g.Conversation, Target: proof.Target}
+		a = &InboxSuggestionAttempt{Version: g.Version, Text: text, Mentions: activeReplyMentions(text, g.Mentions), MentionsSet: true, ClientID: proof.ClientID, Proposal: copySuggestion(g), Conversation: g.Conversation, Target: proof.Target}
 		keepSuggestionAttempt(it, a)
 	}
 	a.Status, a.Retryable, a.Code, a.At, a.active = suggestionUnknown, false, assistantwire.CodeAssistantInDoubt, proof.At, false
@@ -640,7 +642,7 @@ func (s *Service) confirmSuggestionReplyLocked(ctx context.Context, it *InboxIte
 		if !validClientID(id) {
 			id = namedClientID(fmt.Sprintf("suggestion\n%s\n%d", it.ID, g.Version))
 		}
-		a = &InboxSuggestionAttempt{Version: g.Version, Text: text, Mentions: activeReplyMentions(text, g.Mentions), ClientID: id, Proposal: copySuggestion(g),
+		a = &InboxSuggestionAttempt{Version: g.Version, Text: text, Mentions: activeReplyMentions(text, g.Mentions), MentionsSet: true, ClientID: id, Proposal: copySuggestion(g),
 			Conversation: g.Conversation, Target: suggestionReplyTarget(it)}
 		keepSuggestionAttempt(it, a)
 	}

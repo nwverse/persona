@@ -206,6 +206,13 @@ describe("the hand-off card", () => {
     expect(bar()?.textContent).toContain("@Alice");
     expect(bar()?.textContent).not.toContain("@Bob");
     expect(bar()?.textContent).not.toContain("@Charlie");
+
+    // Prefix collision (@AliceSmith) or @Alice only inside inline code must not keep @Alice bound.
+    act(() => {
+      set.call(area, "@AliceSmith and `@Alice` please sync");
+      area.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect(bar()).toBeNull();
   });
 
   it("renders Markdown and bound @ mentions once the reply is sent", () => {

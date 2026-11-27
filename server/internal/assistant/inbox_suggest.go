@@ -7,9 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/nwverse/persona/server/internal/i18n"
 	"github.com/nwverse/persona/server/internal/prompts"
@@ -684,6 +687,70 @@ func currentSuggestion(it *InboxItem) *InboxSuggestion {
 	return legacySuggestion(it)
 }
 
+var (
+	mentionFenceOpenRe  = regexp.MustCompile("^```[a-zA-Z0-9_+#-]*\\s*$")
+	mentionFenceCloseRe = regexp.MustCompile("^```\\s*$")
+	mentionCodeOrLinkRe = regexp.MustCompile("`[^`\\n]+`|\\[[^\\]\\n]+\\]\\(https?://[^\\s<>()]+\\)")
+)
+
+func isMentionBoundary(rest string) bool {
+	if rest == "" {
+		return true
+	}
+	r, _ := utf8.DecodeRuneInString(rest)
+	return !(unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '-')
+}
+
+func mentionPresentInSegment(segment, needle string) bool {
+	for offset := 0; offset <= len(segment)-len(needle); {
+		idx := strings.Index(segment[offset:], needle)
+		if idx < 0 {
+			return false
+		}
+		end := offset + idx + len(needle)
+		if isMentionBoundary(segment[end:]) {
+			return true
+		}
+		offset += idx + 1
+	}
+	return false
+}
+
+// mentionPresentInText reports whether @name appears as a complete mention token in prose outside fenced code blocks,
+// inline code spans, and Markdown HTTP(S) links, matching the connector mention boundary rules.
+func mentionPresentInText(text, name string) bool {
+	if text == "" || name == "" {
+		return false
+	}
+	needle := "@" + name
+	lines := strings.Split(strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n"), "\n")
+	for i := 0; i < len(lines); {
+		if mentionFenceOpenRe.MatchString(lines[i]) {
+			j := i + 1
+			for j < len(lines) && !mentionFenceCloseRe.MatchString(lines[j]) {
+				j++
+			}
+			if j < len(lines) {
+				i = j + 1
+				continue
+			}
+		}
+		line := lines[i]
+		pos := 0
+		for _, loc := range mentionCodeOrLinkRe.FindAllStringIndex(line, -1) {
+			if loc[0] > pos && mentionPresentInSegment(line[pos:loc[0]], needle) {
+				return true
+			}
+			pos = loc[1]
+		}
+		if pos < len(line) && mentionPresentInSegment(line[pos:], needle) {
+			return true
+		}
+		i++
+	}
+	return false
+}
+
 // normalizeReplyMentions validates and deduplicates explicit mention bindings submitted with a reply suggestion.
 func normalizeReplyMentions(text string, raw []InboxMention) ([]InboxMention, error) {
 	if len(raw) == 0 {
@@ -713,7 +780,7 @@ func normalizeReplyMentions(text string, raw []InboxMention) ([]InboxMention, er
 		if prevID, exists := byName[name]; exists && prevID != id {
 			return nil, errSuggestion{"two mentioned people cannot share the same name"}
 		}
-		if !strings.Contains(text, "@"+name) {
+		if !mentionPresentInText(text, name) {
 			return nil, errSuggestion{fmt.Sprintf("mention %q must appear as @%s in text", name, name)}
 		}
 		byID[id] = name
@@ -723,14 +790,14 @@ func normalizeReplyMentions(text string, raw []InboxMention) ([]InboxMention, er
 	return out, nil
 }
 
-// activeReplyMentions retains only bound mentions whose exact @name still appears in text after user edits.
+// activeReplyMentions retains only bound mentions whose complete @name token still appears in prose after user edits.
 func activeReplyMentions(text string, mentions []InboxMention) []InboxMention {
 	if len(mentions) == 0 || text == "" {
 		return nil
 	}
 	var out []InboxMention
 	for _, m := range mentions {
-		if m.ID != "" && m.Name != "" && strings.Contains(text, "@"+m.Name) {
+		if m.ID != "" && m.Name != "" && mentionPresentInText(text, m.Name) {
 			out = append(out, m)
 		}
 	}
