@@ -40,6 +40,7 @@ import (
 // Antigravity launchers.check honoring explicit params.model (#15905) adds 1 B (266,213 B).
 // Antigravity withoutStaleWorking coverage for send policy, fork, rewind, modes, and native error reads (#15924) adds 48 B (266,261 B).
 // Runtime package lifecycle support for preserving tools across upgrades (#16016) adds 4,368 B (270,629 B).
+// An agy main chat on Windows finding personad.exe and a cmd.exe media-guard hook that also checks Node.js (#14511) add 163 B (270,792 B).
 // ACP instruction fitting to the mounted device tools and supervision role (#16052) adds 244 B (270,873 B).
 // Antigravity settled-turn recovery across delayed shifted-index exports and structured agy_turn_end turn_duration items (#15619) add 1,169 B (272,042 B).
 // Antigravity non-rewind negative cache for summary_behind GetCascadeTrajectory checks + summarizeTranscript prefix summary reuse (#13086) add 872 B (272,914 B).
