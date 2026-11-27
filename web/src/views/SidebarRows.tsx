@@ -4,7 +4,7 @@ import { memo, useCallback, useMemo, useState, useSyncExternalStore, type ReactN
 import { formatList, t } from "../i18n";
 import { awaitsReply, justFinished, sessionSource, sourceName } from "../lib/agent-groups";
 import { addSection, arrangeSessions, assignSection, GROUP_LABEL, isDefaultView, providerLabel, refreshAgentSessions, removeSection, resetView, setView, SHOW_LABEL, SORT_LABEL, toggleProvider, togglePin, totalUnread, updateAgentPrefs, useAgentList, useAgentPrefs, viewOf, type AgentPrefs, type AgentSession, type GroupBy, type ShowMode, type SortBy } from "../lib/agents";
-import { activityOf, backgroundWaiting, sessionDisplayTab, sessionTitle, sessionTitleDetail, stateOf, tabLabel } from "../lib/format";
+import { activityOf, backgroundWaiting, externalLink, sessionDisplayTab, sessionTitle, sessionTitleDetail, stateOf, tabLabel } from "../lib/format";
 import { useHerdrTabName } from "../lib/agents-display";
 import { firstAndCurrent } from "../lib/persona-nav";
 import { pickMainChat } from "../lib/handoff";
@@ -297,12 +297,13 @@ function SourceTag({ s, className }: { s: Session; className?: string }) {
   const label = sourceName(source);
   const mark = source === "feishu" ? <BrandMark brand="lark" size={16} fit="badge" /> : <Icon name={SOURCE_ICON[source].name} size={14} className={SOURCE_ICON[source].tone} />;
   const cls = cx("flex size-4 shrink-0 items-center justify-center", className);
-  if (source === "feishu" && s.external_url) {
+  const ext = source === "feishu" ? externalLink(s) : undefined;
+  if (ext) {
     // a link inside the row's link: opened by hand, so the row does not navigate too
     const open = (e: React.SyntheticEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      window.open(s.external_url, "_blank", "noopener");
+      window.open(ext, "_blank", "noopener,noreferrer");
     };
     const title = t("lib-agent-groups.open_feishu_topic");
     return (
