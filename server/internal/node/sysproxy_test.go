@@ -568,14 +568,10 @@ func TestAgyBridgeEnvSystemProxyIntegration(t *testing.T) {
 	t.Run("injects system proxy when launchd env has no proxy", func(t *testing.T) {
 		detectSystemProxy = func(context.Context) systemProxy { return detected }
 		rh := NewRuntimeHost("test", "/tmp/persona-runtime.sock")
-		rh.setAgyProviderEnv([]string{"GEMINI_API_KEY=test-key", "PERSONA_AGY_MODEL_PROVIDER=gemini"})
 		got := agyBridgeEnv(context.Background(), rh, []string{"PATH=/usr/bin"})
 		m := envMap(got)
 		if m["PERSONA_RUNTIME_SOCKET"] != "/tmp/persona-runtime.sock" {
 			t.Fatalf("PERSONA_RUNTIME_SOCKET = %q", m["PERSONA_RUNTIME_SOCKET"])
-		}
-		if m["GEMINI_API_KEY"] != "test-key" || m["PERSONA_AGY_MODEL_PROVIDER"] != "gemini" {
-			t.Fatalf("provider env missing: %v", m)
 		}
 		if m["HTTPS_PROXY"] != "http://127.0.0.1:7890" || m["https_proxy"] != "http://127.0.0.1:7890" {
 			t.Fatalf("HTTPS proxy not injected: %v", m)
@@ -589,11 +585,10 @@ func TestAgyBridgeEnvSystemProxyIntegration(t *testing.T) {
 		}
 	})
 
-	t.Run("adds single-label provider gateway host to NO_PROXY when ExcludeSimpleHostnames is on", func(t *testing.T) {
+	t.Run("adds single-label gateway host to NO_PROXY when ExcludeSimpleHostnames is on", func(t *testing.T) {
 		detectSystemProxy = func(context.Context) systemProxy { return detected }
 		rh := NewRuntimeHost("test", "/tmp/persona-runtime.sock")
-		rh.setAgyProviderEnv([]string{"GOOGLE_GEMINI_BASE_URL=http://gateway", "GEMINI_API_KEY=test-key", "PERSONA_AGY_MODEL_PROVIDER=gemini"})
-		got := agyBridgeEnv(context.Background(), rh, []string{"PATH=/usr/bin"})
+		got := agyBridgeEnv(context.Background(), rh, []string{"PATH=/usr/bin", "GOOGLE_GEMINI_BASE_URL=http://gateway"})
 		m := envMap(got)
 		wantNoProxy := "localhost,127.0.0.1,::1,192.0.2.0/24,.local,gateway"
 		if m["NO_PROXY"] != wantNoProxy || m["no_proxy"] != wantNoProxy {
@@ -601,11 +596,10 @@ func TestAgyBridgeEnvSystemProxyIntegration(t *testing.T) {
 		}
 	})
 
-	t.Run("merges provider NO_PROXY with loopback and system exceptions", func(t *testing.T) {
+	t.Run("merges existing NO_PROXY with loopback and system exceptions", func(t *testing.T) {
 		detectSystemProxy = func(context.Context) systemProxy { return detected }
 		rh := NewRuntimeHost("test", "/tmp/persona-runtime.sock")
-		rh.setAgyProviderEnv([]string{"GEMINI_API_KEY=test-key", "NO_PROXY=gateway.example.com"})
-		got := agyBridgeEnv(context.Background(), rh, []string{"PATH=/usr/bin"})
+		got := agyBridgeEnv(context.Background(), rh, []string{"PATH=/usr/bin", "NO_PROXY=gateway.example.com"})
 		m := envMap(got)
 		wantNoProxy := "gateway.example.com,localhost,127.0.0.1,::1,192.0.2.0/24,.local"
 		if m["NO_PROXY"] != wantNoProxy || m["no_proxy"] != wantNoProxy {
@@ -613,38 +607,36 @@ func TestAgyBridgeEnvSystemProxyIntegration(t *testing.T) {
 		}
 	})
 
-	t.Run("provider explicit proxy suppresses system proxy fallback", func(t *testing.T) {
+	t.Run("explicit proxy suppresses system proxy fallback", func(t *testing.T) {
 		called := false
 		detectSystemProxy = func(context.Context) systemProxy {
 			called = true
 			return detected
 		}
 		rh := NewRuntimeHost("test", "/tmp/persona-runtime.sock")
-		rh.setAgyProviderEnv([]string{"HTTPS_PROXY=http://proxy.example.com:3128"})
-		got := agyBridgeEnv(context.Background(), rh, []string{"PATH=/usr/bin"})
+		got := agyBridgeEnv(context.Background(), rh, []string{"PATH=/usr/bin", "HTTPS_PROXY=http://proxy.example.com:3128"})
 		if called {
-			t.Fatal("detectSystemProxy should not be called when provider explicitly sets HTTPS_PROXY")
+			t.Fatal("detectSystemProxy should not be called when base explicitly sets HTTPS_PROXY")
 		}
 		m := envMap(got)
 		if m["HTTPS_PROXY"] != "http://proxy.example.com:3128" {
 			t.Fatalf("HTTPS_PROXY = %q", m["HTTPS_PROXY"])
 		}
 		if _, ok := m["ALL_PROXY"]; ok {
-			t.Fatalf("unexpected ALL_PROXY injected alongside explicit provider proxy: %v", m)
+			t.Fatalf("unexpected ALL_PROXY injected alongside explicit proxy: %v", m)
 		}
 	})
 
-	t.Run("provider explicit empty proxy disables system proxy fallback", func(t *testing.T) {
+	t.Run("explicit empty proxy disables system proxy fallback", func(t *testing.T) {
 		called := false
 		detectSystemProxy = func(context.Context) systemProxy {
 			called = true
 			return detected
 		}
 		rh := NewRuntimeHost("test", "/tmp/persona-runtime.sock")
-		rh.setAgyProviderEnv([]string{"HTTP_PROXY="})
-		got := agyBridgeEnv(context.Background(), rh, []string{"PATH=/usr/bin"})
+		got := agyBridgeEnv(context.Background(), rh, []string{"PATH=/usr/bin", "HTTP_PROXY="})
 		if called {
-			t.Fatal("detectSystemProxy should not be called when provider explicitly clears HTTP_PROXY")
+			t.Fatal("detectSystemProxy should not be called when base explicitly clears HTTP_PROXY")
 		}
 		m := envMap(got)
 		if v, ok := m["HTTP_PROXY"]; !ok || v != "" {
@@ -1112,25 +1104,24 @@ func TestAgyBridgeEnvProxyPrecedence(t *testing.T) {
 		}
 	})
 
-	t.Run("provider explicit proxy and explicit empty proxy disable both system and shell fallback", func(t *testing.T) {
+	t.Run("explicit proxy and explicit empty proxy disable both system and shell fallback", func(t *testing.T) {
 		for _, kv := range []string{"HTTPS_PROXY=http://provider.example.com:3128", "HTTP_PROXY="} {
 			sysCalled, shellCalled := false, false
 			detectSystemProxy = func(context.Context) systemProxy { sysCalled = true; return sysProxy }
 			detectShellProxy = func(context.Context) shellProxy { shellCalled = true; return shProxy }
 
 			rh := NewRuntimeHost("test", "/tmp/persona-runtime.sock")
-			rh.setAgyProviderEnv([]string{kv})
-			got := agyBridgeEnv(context.Background(), rh, []string{"PATH=/usr/bin"})
+			got := agyBridgeEnv(context.Background(), rh, []string{"PATH=/usr/bin", kv})
 			if sysCalled || shellCalled {
-				t.Fatalf("provider %q triggered fallback probe: sys=%v shell=%v", kv, sysCalled, shellCalled)
+				t.Fatalf("base %q triggered fallback probe: sys=%v shell=%v", kv, sysCalled, shellCalled)
 			}
 			k, want, _ := strings.Cut(kv, "=")
 			m := envMap(got)
 			if v, ok := m[k]; !ok || v != want {
-				t.Fatalf("provider %q: %s = %q (ok=%v), want %q", kv, k, v, ok, want)
+				t.Fatalf("base %q: %s = %q (ok=%v), want %q", kv, k, v, ok, want)
 			}
 			if _, ok := m["ALL_PROXY"]; ok {
-				t.Fatalf("provider %q leaked shell ALL_PROXY: %v", kv, m)
+				t.Fatalf("base %q leaked shell ALL_PROXY: %v", kv, m)
 			}
 		}
 	})
@@ -1163,14 +1154,13 @@ func TestAgyBridgeEnvProxyPrecedence(t *testing.T) {
 		detectShellProxy = func(context.Context) shellProxy { shellCalled = true; return shProxy }
 
 		rh := NewRuntimeHost("test", "/tmp/persona-runtime.sock")
-		rh.setAgyProviderEnv([]string{"GEMINI_API_KEY=test-key", "NO_PROXY=gateway.example.com"})
-		got := agyBridgeEnv(context.Background(), rh, []string{"PATH=/usr/bin"})
+		got := agyBridgeEnv(context.Background(), rh, []string{"PATH=/usr/bin", "NO_PROXY=gateway.example.com"})
 		if !sysCalled || !shellCalled {
 			t.Fatalf("expected both probes in order: sys=%v shell=%v", sysCalled, shellCalled)
 		}
 		m := envMap(got)
-		if m["PERSONA_RUNTIME_SOCKET"] != "/tmp/persona-runtime.sock" || m["GEMINI_API_KEY"] != "test-key" {
-			t.Fatalf("bridge or provider env missing: %v", m)
+		if m["PERSONA_RUNTIME_SOCKET"] != "/tmp/persona-runtime.sock" {
+			t.Fatalf("bridge socket env missing: %v", m)
 		}
 		if m["HTTP_PROXY"] != "http://127.0.0.1:9990" || m["http_proxy"] != "http://127.0.0.1:9990" {
 			t.Fatalf("HTTP proxy missing: %v", m)

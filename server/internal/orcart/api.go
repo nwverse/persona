@@ -234,19 +234,51 @@ type Screen struct {
 	Wrapped []bool
 	// Source is what was read ("screen"; "stream" is the output's tail, not the screen).
 	Source string
+	// Draft is the text in an agent's input box, which Orca lifts out of the rows: it leaves the prompt's row as its
+	// bare glyph (❯ › ») and drops the rows the text wrapped onto (Orca 1.4.277; older runtimes leave the rows as
+	// drawn and send no draft). Without colors it is whatever the box shows: typed text, and also Claude Code's grey
+	// suggested next message (checked live on 1.4.277 with Claude Code 2.1.331). Empty: the box shows no text, or
+	// only a placeholder Orca knows (Claude's `Try "…"` tip, Codex's).
+	Draft string
 }
 
-// Text is the screen as text, soft-wrapped rows joined, one line per row, ending in a newline.
+// Text is the screen as text, soft-wrapped rows joined, one line per row, ending in a newline. The box's text Orca
+// lifted out (Draft) is put back on the prompt's row, its further lines under it indented as Claude Code draws them:
+// a reader of the text sees the box as it is on screen.
 func (s Screen) Text() string {
 	var b strings.Builder
+	at := s.draftRow()
 	for i, l := range s.Lines {
-		b.WriteString(l)
+		if i == at {
+			lines := strings.Split(s.Draft, "\n")
+			b.WriteString(l + " " + lines[0])
+			for _, r := range lines[1:] {
+				b.WriteString("\n  " + r)
+			}
+		} else {
+			b.WriteString(l)
+		}
 		if i < len(s.Wrapped) && s.Wrapped[i] && i+1 < len(s.Lines) {
 			continue
 		}
 		b.WriteByte('\n')
 	}
 	return b.String()
+}
+
+// draftRow is the row Orca left the box's prompt glyph on alone (its own lvo does the same: the last such row), -1
+// without a draft or such a row.
+func (s Screen) draftRow() int {
+	if s.Draft == "" {
+		return -1
+	}
+	for i := len(s.Lines) - 1; i >= 0; i-- {
+		switch strings.TrimSpace(s.Lines[i]) {
+		case "❯", "›", "»":
+			return i
+		}
+	}
+	return -1
 }
 
 // ErrNoScreen: Orca has no screen for the terminal right now (terminal.read's source "screen-unavailable").
@@ -261,6 +293,7 @@ func (c *Client) Read(ctx context.Context, t Target) (*Screen, error) {
 				Wrapped bool `json:"wrapped"`
 			} `json:"tailRows"`
 			Source string `json:"source"`
+			Draft  string `json:"draft"`
 		} `json:"terminal"`
 	}
 	p := t.params()
@@ -271,7 +304,7 @@ func (c *Client) Read(ctx context.Context, t Target) (*Screen, error) {
 	if res.Terminal.Source == "screen-unavailable" {
 		return nil, fmt.Errorf("orca terminal.read: %w", ErrNoScreen)
 	}
-	s := &Screen{Lines: res.Terminal.Tail, Source: res.Terminal.Source}
+	s := &Screen{Lines: res.Terminal.Tail, Source: res.Terminal.Source, Draft: res.Terminal.Draft}
 	for _, r := range res.Terminal.TailRows {
 		s.Wrapped = append(s.Wrapped, r.Wrapped)
 	}
@@ -297,6 +330,96 @@ func (c *Client) AgentStatus(ctx context.Context, t Target) (*AgentStatus, error
 		return nil, fmt.Errorf("orca terminal.agentStatus: no status in the answer")
 	}
 	return res.AgentStatus, nil
+}
+
+// Process is terminal.inspectProcess: what runs in a terminal, as Orca reads its process table. Orca 1.4.277 answers a
+// shell at rest with no foreground program, no children and its proof of an idle shell.
+type Process struct {
+	// foreground is the program in front of the terminal's shell ("" when Orca names none: the shell itself is in
+	// front, or it could not tell); children: something other than the shell is in front.
+	foreground string
+	children   bool
+	// childEvidence is how Orca knows children ("no-children", "children", "unverifiable"; "" when it does not say).
+	childEvidence string
+	// verdict is Orca's own verdict on its evidence ("live" when it read the terminal's process as it is now;
+	// "unverifiable" when it could not, as for an incarnation that is not the terminal's any more; "" when the answer
+	// carries no evidence, as from older runtimes); reason says why it could not ("incarnation_mismatch"…).
+	verdict, reason string
+	// idleShell: Orca proved the shell idle — in front, alone in its process group, no child, no stopped or
+	// background job on its terminal, no output since it looked (idleShellProven).
+	idleShell bool
+	// shellPID is the terminal's shell process (the evidence's fence), 0 when not given.
+	shellPID int
+}
+
+// Known: Orca could tell what runs in the terminal; an answer it marks unverifiable says nothing.
+func (p Process) Known() bool {
+	return p.childEvidence != "unverifiable" && (p.verdict == "" || p.verdict == "live")
+}
+
+// Foreground is the program Orca names in front of the terminal's shell, "" for none (or none it could name).
+func (p Process) Foreground() string { return p.foreground }
+
+// HasChildren: something other than the terminal's shell is in front.
+func (p Process) HasChildren() bool { return p.children }
+
+// IdleShell: Orca proved the shell at rest with nothing else in its terminal (idleShellProven).
+func (p Process) IdleShell() bool { return p.idleShell }
+
+// ShellPID is the terminal's shell process as Orca's evidence names it, 0 when it does not.
+func (p Process) ShellPID() int { return p.shellPID }
+
+// Unverified says why Orca could not tell ("incarnation_mismatch", "unverifiable"…), "" for a known answer.
+func (p Process) Unverified() string {
+	switch {
+	case p.Known():
+		return ""
+	case p.reason != "":
+		return p.reason
+	}
+	return "unverifiable"
+}
+
+// InspectProcess is terminal.inspectProcess, fenced to the terminal's incarnation: Orca answers for another process
+// behind the handle with an unverifiable verdict (Process.Known false). Orca runtimes without the method answer
+// method_not_found.
+func (c *Client) InspectProcess(ctx context.Context, t Target) (*Process, error) {
+	var res struct {
+		Process *struct {
+			ForegroundProcess *string `json:"foregroundProcess"`
+			HasChildProcesses bool    `json:"hasChildProcesses"`
+			ChildEvidence     string  `json:"childProcessEvidence"`
+			IdleShellProven   bool    `json:"idleShellProven"`
+			Evidence          *struct {
+				Verdict string `json:"verdict"`
+				Reason  string `json:"reason"`
+				Fence   *struct {
+					ShellPID int `json:"shellPid"`
+				} `json:"fence"`
+			} `json:"foregroundProcessEvidence"`
+		} `json:"process"`
+	}
+	if err := c.Call(ctx, CallTimeout, "terminal.inspectProcess", t.params(), &res); err != nil {
+		return nil, err
+	}
+	if res.Process == nil {
+		return nil, fmt.Errorf("orca terminal.inspectProcess: no process in the answer")
+	}
+	r := res.Process
+	p := &Process{children: r.HasChildProcesses, childEvidence: r.ChildEvidence, idleShell: r.IdleShellProven}
+	if r.ForegroundProcess != nil {
+		p.foreground = *r.ForegroundProcess
+	}
+	if e := r.Evidence; e != nil {
+		p.verdict, p.reason = e.Verdict, e.Reason
+		if p.verdict == "" {
+			p.verdict = "unverifiable" // evidence without a verdict proves nothing
+		}
+		if e.Fence != nil {
+			p.shellPID = e.Fence.ShellPID
+		}
+	}
+	return p, nil
 }
 
 // ClientID is how Persona names itself to Orca as the driver of its input (terminal.send's client.id, required).

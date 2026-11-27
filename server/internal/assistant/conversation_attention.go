@@ -329,8 +329,12 @@ func (s *Service) mainConversationAttention(ctx context.Context, machine, sessio
 // turn and held every reply and event of the node meanwhile (#16214). So the
 // scan runs on a goroutine of its own, and the machine's list is published
 // again once its verdict is in.
+func compactionRunning(c *proto.Compaction) bool {
+	return c != nil && c.State == proto.CompactionRunning
+}
+
 func (s *Service) refreshMainConversationAttention(sess proto.Session, mainSession, mainMachine string) {
-	if sess.Rev == 0 || sess.Starting || (sess.Status != proto.StatusDone && sess.Status != proto.StatusIdle) {
+	if sess.Rev == 0 || sess.Starting || compactionRunning(sess.Compaction) || (sess.Status != proto.StatusDone && sess.Status != proto.StatusIdle) {
 		return
 	}
 	if sess.SessionID != mainSession || sess.MachineID != mainMachine {
@@ -394,7 +398,7 @@ func (s *Service) decorateMainConversationAttention(row *proto.Session, cfg Sett
 }
 
 func (s *Service) decorateMainConversationAttentionForRoute(row *proto.Session, mainSession, mainMachine string) {
-	if !mainConversationAttentionCandidate(row.Assistant, row.Status, row.State, row.Starting, row.PendingInteractions) || row.SessionID != mainSession || row.MachineID != mainMachine {
+	if compactionRunning(row.Compaction) || !mainConversationAttentionCandidate(row.Assistant, row.Status, row.State, row.Starting, row.PendingInteractions) || row.SessionID != mainSession || row.MachineID != mainMachine {
 		return
 	}
 	row.State = s.mainConversationAttentionState(row.MachineID, row.SessionID, row.State, row.Rev, row.SeenAt)

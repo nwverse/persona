@@ -45,7 +45,7 @@ func (n *Node) watchAgySend(id, pane, text string, typedAt time.Time) *agySendWa
 		return nil
 	}
 	w := &agySendWatch{
-		path:  filepath.Join(n.agyDataRoot(), "brain", conversation, agyTranscriptPath),
+		path:  filepath.Join(n.agyRootFor(conversation), "brain", conversation, agyTranscriptPath),
 		want:  echoWords(text),
 		sent:  text,
 		after: typedAt,

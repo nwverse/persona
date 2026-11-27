@@ -710,17 +710,18 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			return "", waitErr
 		}
 		var a struct {
-			Machine           string `json:"machine"`
-			Cwd               string `json:"cwd"`
-			Prompt            string `json:"prompt"`
-			SkipProjectMemory bool   `json:"skip_project_memory"`
-			Launcher          string `json:"launcher"`
-			Model             string `json:"model"`
-			Effort            string `json:"effort"`
-			Speed             string `json:"speed"`
-			PermissionMode    string `json:"permission_mode"`
-			Tier              string `json:"tier"`
-			Host              string `json:"host"` // agy (the Antigravity companion) or an engine host; "": the hub's choice (start_host.go)
+			Machine           string             `json:"machine"`
+			Cwd               string             `json:"cwd"`
+			Prompt            string             `json:"prompt"`
+			SkipProjectMemory bool               `json:"skip_project_memory"`
+			ModelAliases      proto.ModelAliases `json:"model_aliases"`
+			Launcher          string             `json:"launcher"`
+			Model             string             `json:"model"`
+			Effort            string             `json:"effort"`
+			Speed             string             `json:"speed"`
+			PermissionMode    string             `json:"permission_mode"`
+			Tier              string             `json:"tier"`
+			Host              string             `json:"host"` // agy (the Antigravity companion) or an engine host; "": the hub's choice (start_host.go)
 			Worktree          struct {
 				Branch string `json:"branch"`
 			} `json:"worktree"`
@@ -731,9 +732,14 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 			// approves on the phone (secret_handoff.go).
 			SecretEnv map[string]string `json:"secret_env"`
 		}
-		_ = json.Unmarshal(args, &a)
 		if err := checkSecretEnvArg(args); err != nil {
 			return "", fmt.Errorf("%w; no agent was started", err)
+		}
+		if err := json.Unmarshal(args, &a); err != nil {
+			return "", errors.New("invalid agent_start arguments; no agent was started")
+		}
+		if err := a.ModelAliases.Validate(); err != nil {
+			return "", err
 		}
 		if a.PermissionMode = strings.TrimSpace(a.PermissionMode); a.PermissionMode != "" && !slices.Contains(proto.PermissionModes, a.PermissionMode) {
 			return "", fmt.Errorf("invalid permission_mode %q; no agent was started", a.PermissionMode)
@@ -807,6 +813,9 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 				s.savePlacement(ctx, decision)
 			}
 			return "", fmt.Errorf("%w; no agent was started", err)
+		}
+		if err := checkAliasAgent(a.ModelAliases, fit); err != nil {
+			return "", err
 		}
 		if err := checkHostLauncher(run, fit); err != nil {
 			return "", fmt.Errorf("%w; no agent was started", err)
@@ -889,6 +898,12 @@ func (s *Service) runTool(ctx context.Context, machine, self, name string, args 
 		// Start with a local placeholder; the model names the returned session in the background.
 		title := localTabName(a.Prompt)
 		params := map[string]any{"cwd": a.Cwd, "launcher": a.Launcher, "model": a.Model, "effort": a.Effort, "speed": a.Speed, "permission_mode": a.PermissionMode, "tab_name": title, "title": title}
+		if own.model != "" {
+			params["explicit_model"] = own.model
+		}
+		if len(a.ModelAliases) != 0 {
+			params["model_aliases"] = a.ModelAliases
+		}
 		if a.Host != "" {
 			params["host"] = a.Host
 		}
