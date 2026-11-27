@@ -6,6 +6,7 @@ import { Symbols } from '../design/Symbols';
 import { Tokens } from '../design/Tokens';
 import { tr } from '../design/Strings';
 import { ClientModel } from '../models/ClientModel';
+import { starredStore } from '../models/StarredStore';
 import { ResourceRow, Wire } from '../models/Wire';
 import { herdrTabName } from '../core/SessionNaming';
 import {
@@ -30,6 +31,7 @@ export struct QuickCommandSheet {
   @Require @Param model: ClientModel;
   @Param showWorkbench: boolean = false;
   @Param showLiveView: boolean = true;
+  @Param showExportChat: boolean = false;
   @Param autoFocus: boolean = false;
   @Event onSelectEntry: (entry: QuickCommandEntry) => void = () => {};
   @Event onClose: () => void = () => {};
@@ -91,6 +93,9 @@ export struct QuickCommandSheet {
       openXiaoYi: tr('phone_xiaoyi'),
       toggleTheme: tr('quick_palette_toggle_theme'),
       liveViewPreview: tr('quick_palette_liveview_preview'),
+      starredMessages: tr('starred_messages'),
+      archivedChats: tr('archived_chats'),
+      exportChat: tr('export_chat'),
       needsYou: tr('needs_you'),
       working: tr('working'),
       unread: tr('agent_group_unread'),
@@ -106,6 +111,9 @@ export struct QuickCommandSheet {
       todosVisible: this.model.todosPageVisible(),
       showWorkbench: this.showWorkbench,
       showLiveView: this.showLiveView,
+      showStarred: starredStore.isOffered(this.model),
+      showArchived: this.model.connected,
+      showExportChat: this.showExportChat,
       isDark: this.env.dark,
       labels: this.paletteLabels()
     });
@@ -155,6 +163,9 @@ export struct QuickCommandSheet {
     if (entry.iconKey === 'sun') return $r('sys.symbol.sun_max');
     if (entry.iconKey === 'moon') return $r('sys.symbol.moon');
     if (entry.iconKey === 'liveview') return $r('sys.symbol.bell');
+    if (entry.iconKey === 'star') return $r('sys.symbol.star_fill');
+    if (entry.iconKey === 'archive') return $r('sys.symbol.archivebox');
+    if (entry.iconKey === 'export') return $r('sys.symbol.share');
     return Symbols.agent;
   }
 

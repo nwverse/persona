@@ -42,16 +42,16 @@ describe("MarketCatalog empty line", () => {
     catalog.value = { markets: [market("official", { error: "timeout" }), market("team")], extensions: [] } satisfies Catalog;
     act(() => root.render(<MarketCatalog onBack={() => {}} onOpen={() => {}} onMarkets={() => {}} />));
     await flush();
-    expect(host.textContent).toContain("读不到「official」");
-    expect(host.textContent).toContain("读到的市场里还没有扩展");
-    expect(host.textContent).not.toContain("这个市场还没有扩展");
+    expect(host.textContent).toContain("无法读取市场「official」");
+    expect(host.textContent).toContain("已读取的市场中暂无扩展");
+    expect(host.textContent).not.toContain("此市场暂无扩展");
   });
 
-  it("keeps 这个市场还没有扩展 for a single readable market", async () => {
+  it("keeps 此市场暂无扩展 for a single readable market", async () => {
     catalog.value = { markets: [market("official")], extensions: [] } satisfies Catalog;
     act(() => root.render(<MarketCatalog onBack={() => {}} onOpen={() => {}} onMarkets={() => {}} />));
     await flush();
-    expect(host.textContent).toContain("这个市场还没有扩展");
+    expect(host.textContent).toContain("此市场暂无扩展");
   });
 });
 
@@ -60,8 +60,8 @@ describe("MarketCatalog rate-limited GitHub market", () => {
     catalog.value = { markets: [market("team", { spec: "github:example/extensions", error: "HTTP 403" })], extensions: [] } satisfies Catalog;
     act(() => root.render(<MarketCatalog onBack={() => {}} onOpen={() => {}} onMarkets={() => {}} />));
     await flush();
-    expect(host.textContent).toContain("GitHub 不带 token 时每小时只能读 60 次");
-    expect(button("填 token")).toBeTruthy();
+    expect(host.textContent).toContain("未配置 token 时，GitHub 每小时仅允许读取 60 次");
+    expect(button("添加 token")).toBeTruthy();
   });
 
   it("does not offer a token when the market has one or is not GitHub", async () => {
@@ -71,8 +71,8 @@ describe("MarketCatalog rate-limited GitHub market", () => {
     } satisfies Catalog;
     act(() => root.render(<MarketCatalog onBack={() => {}} onOpen={() => {}} onMarkets={() => {}} />));
     await flush();
-    expect(host.textContent).not.toContain("GitHub 不带 token 时每小时只能读 60 次");
-    expect(button("填 token")).toBeUndefined();
+    expect(host.textContent).not.toContain("未配置 token 时，GitHub 每小时仅允许读取 60 次");
+    expect(button("添加 token")).toBeUndefined();
   });
 
   it("asks no token of a newcomer for the official market: grey, and a quiet way to the markets page", async () => {
@@ -83,10 +83,10 @@ describe("MarketCatalog rate-limited GitHub market", () => {
     const onMarkets = vi.fn();
     act(() => root.render(<MarketCatalog onBack={() => {}} onOpen={() => {}} onMarkets={onMarkets} />));
     await flush();
-    expect(host.textContent).toContain("暂时读不到官方扩展");
-    expect(host.textContent).not.toContain("GitHub 不带 token 时每小时只能读 60 次");
-    expect(button("填 token")).toBeUndefined();
-    const link = button("去「管理市场」填一个 GitHub token");
+    expect(host.textContent).toContain("暂时无法访问官方扩展");
+    expect(host.textContent).not.toContain("未配置 token 时，GitHub 每小时仅允许读取 60 次");
+    expect(button("添加 token")).toBeUndefined();
+    const link = button("前往「管理市场」添加 GitHub token");
     expect(link).toBeTruthy();
     act(() => link!.click());
     expect(onMarkets).toHaveBeenCalledOnce();
@@ -96,13 +96,13 @@ describe("MarketCatalog rate-limited GitHub market", () => {
     catalog.value = { markets: [market("team", { spec: "github:example/extensions", error: "HTTP 403" })], extensions: [] } satisfies Catalog;
     act(() => root.render(<MarketCatalog onBack={() => {}} onOpen={() => {}} onMarkets={() => {}} />));
     await flush();
-    const fix = button("填 token");
+    const fix = button("添加 token");
     expect(fix).toBeTruthy();
     act(() => fix!.click());
     await flush();
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain("「team」的 token");
     // and how to get one: GitHub's token page, filled in
-    const create = [...document.querySelectorAll('[role="dialog"] a')].find((a) => a.textContent?.includes("去 GitHub 生成")) as HTMLAnchorElement | undefined;
+    const create = [...document.querySelectorAll('[role="dialog"] a')].find((a) => a.textContent?.includes("前往 GitHub 创建")) as HTMLAnchorElement | undefined;
     expect(create?.href).toContain("https://github.com/settings/personal-access-tokens/new?");
     expect(create?.target).toBe("_blank");
   });
@@ -152,7 +152,7 @@ describe("MarketCatalog updating state (#6468)", () => {
     type("zzz"); // the typing pause for the second query is still running
     await act(async () => first.resolve(reply([])));
     expect(host.querySelector("[role=status]")).not.toBeNull(); // the answer is for "zz", not "zzz"
-    expect(host.textContent).not.toContain("没有找到");
+    expect(host.textContent).not.toContain("未找到");
     await wait(300);
     const second = asks.at(-1)!;
     expect(second.q).toBe("zzz");

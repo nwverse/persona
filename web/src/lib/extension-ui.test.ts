@@ -70,7 +70,7 @@ describe("画一页", () => {
     expect(submitValues(view, { note: "new", token: "s", extra: "no" })).toEqual({ note: "new", token: "s", auto: "true", off: "false", plan: "solo", limit: "20" });
     expect(numberProblem("12.5")).toBe("");
     expect(numberProblem("")).toBe("");
-    expect(numberProblem("abc")).toBe("要是一个数");
+    expect(numberProblem("abc")).toBe("必须为数字");
   });
   it("reads what a press answered", () => {
     expect(outcome({})).toEqual({ view: undefined, reload: true, toast: undefined, url: undefined });

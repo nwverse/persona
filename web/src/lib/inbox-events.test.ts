@@ -62,9 +62,9 @@ describe("收件箱事件：分区", () => {
 
 describe("收件箱事件：行上的标记", () => {
   it("says what is going on", () => {
-    expect(handlingWord(urgent)).toBe("AI 正在看");
-    expect(handlingWord(agentWorking)).toBe("Agent 在做");
-    expect(handlingWord(waiting)).toBe("等对方回复");
+    expect(handlingWord(urgent)).toBe("AI 正在查看");
+    expect(handlingWord(agentWorking)).toBe("Agent 处理中");
+    expect(handlingWord(waiting)).toBe("等待对方回复");
     expect(handlingWord(reply)).toBeUndefined();
     expect(handlingWord(legacy(waiting))).toBeUndefined();
   });
@@ -76,7 +76,7 @@ describe("收件箱事件：行上的标记", () => {
   });
   it("names the suggestion's kind and its first line", () => {
     expect(suggestionTitle(reply.suggestion!)).toBe("建议回复");
-    expect(suggestionTitle(agentSuggestion.suggestion!)).toBe("建议派 Agent");
+    expect(suggestionTitle(agentSuggestion.suggestion!)).toBe("建议启动 Agent");
     expect(suggestionTitle(conclusion.suggestion!)).toBe("结论");
     expect(firstLine("\n  第一行\n第二行")).toBe("第一行");
   });
@@ -160,7 +160,7 @@ describe("收件箱事件：确认 / 驳回 / 说一句话", () => {
     expect(body).toMatchObject({ version: 2, action: "confirm", text: "好的，周四给你" });
     expect(body.client_id).toMatch(/^[0-9a-f-]{36}$/);
     expect(getInbox().items.find((x) => x.id === reply.id)?.status).toBe("working");
-    expect(vi.mocked(toast).mock.calls.at(-1)).toEqual(["已发送，等对方回复", "ok"]);
+    expect(vi.mocked(toast).mock.calls.at(-1)).toEqual(["已发送，等待对方回复", "ok"]);
   });
   it("「建议已更新」 and the item as the hub has it now when the version moved", async () => {
     const fresh = { ...reply, suggestion: { ...reply.suggestion!, version: 3, text: "新的建议" } };

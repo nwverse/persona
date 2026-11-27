@@ -170,12 +170,9 @@ type subscriptionModel struct{ h *Manager }
 // purposeModelInfo is what a model purpose runs on now, as the assistant resolves it (models.usable): not usable when
 // it cannot be asked.
 func (h *Manager) purposeModelInfo(ctx context.Context, purpose string) subscriptions.ModelInfo {
-	var res struct {
-		Usable   bool   `json:"usable"`
-		Provider string `json:"provider"`
-		Model    string `json:"model"`
-	}
-	if err := h.callAssistant(ctx, assistantwire.MethodModelsUsable, map[string]any{"purpose": purpose}, &res); err != nil || !res.Usable {
+	res, err := buswire.Call(ctx, assistantCaller(h.callAssistant), assistantwire.ModelsUsableMethod,
+		assistantwire.ModelsUsableParams{Purpose: purpose})
+	if err != nil || !res.Usable {
 		return subscriptions.ModelInfo{}
 	}
 	return subscriptions.ModelInfo{OK: true, Provider: res.Provider, Model: res.Model}

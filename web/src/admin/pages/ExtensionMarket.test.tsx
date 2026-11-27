@@ -76,33 +76,33 @@ describe("the admin page's markets", () => {
   it("shows the official market out of reach in grey, with the reason on hover", async () => {
     markets = [official(LIMITED)];
     await open();
-    expect(text()).toContain("暂时读不到官方扩展，稍后再试。");
+    expect(text()).toContain("暂时无法获取官方扩展，请稍后重试。");
     expect(text()).not.toContain("填一个 token");
-    const line = [...host.querySelectorAll("p")].find((p) => p.textContent === "暂时读不到官方扩展，稍后再试。")!;
+    const line = [...host.querySelectorAll("p")].find((p) => p.textContent === "暂时无法获取官方扩展，请稍后重试。")!;
     expect(line.className).toContain("text-ink-3");
     expect(line.getAttribute("title")).toBe(LIMITED);
     expect(host.querySelector(".bg-red-tint")).toBeNull();
     expect(host.querySelector(".text-red")).toBeNull();
-    expect(text()).toContain("市场暂时读不到，读到后扩展会列在这里");
-    expect(text()).not.toContain("这里还没有扩展");
+    expect(text()).toContain("暂时无法读取该市场，恢复后其扩展会显示在此处。");
+    expect(text()).not.toContain("暂无可用扩展");
     // the official market is the GitHub one most likely to hit the shared rate limit: its error still offers a token
-    expect(text()).toContain("GitHub 不带 token 时每小时只能读 60 次");
-    expect(button("填 token")).toBeTruthy();
+    expect(text()).toContain("未配置 token 时，GitHub 每小时仅允许读取 60 次");
+    expect(button("添加 token")).toBeTruthy();
   });
 
   it("keeps another market's error red", async () => {
     markets = [official(), { id: "m2", name: "team", spec: "https://market.example.com/persona-extensions.json", extensions: 0, error: "HTTP 404" } as Market];
     await open();
-    expect(text()).toContain("读不到：HTTP 404");
+    expect(text()).toContain("读取失败：HTTP 404");
     expect(host.querySelector(".text-red")).not.toBeNull();
-    expect(text()).not.toContain("GitHub 不带 token 时每小时只能读 60 次");
+    expect(text()).not.toContain("未配置 token 时，GitHub 每小时仅允许读取 60 次");
   });
 
   it("offers a token under a GitHub market's error, and opens its dialog", async () => {
     markets = [github("team", "HTTP 403")];
     await open();
-    expect(text()).toContain("GitHub 不带 token 时每小时只能读 60 次");
-    const fix = button("填 token");
+    expect(text()).toContain("未配置 token 时，GitHub 每小时仅允许读取 60 次");
+    const fix = button("添加 token");
     expect(fix).toBeTruthy();
     act(() => fix!.click());
     await flush();
@@ -112,7 +112,7 @@ describe("the admin page's markets", () => {
   it("does not offer a token when the GitHub market has one", async () => {
     markets = [{ ...github("team", "HTTP 403"), has_token: true }];
     await open();
-    expect(text()).not.toContain("GitHub 不带 token 时每小时只能读 60 次");
+    expect(text()).not.toContain("未配置 token 时，GitHub 每小时仅允许读取 60 次");
   });
 
   it("shows a private market's signing keys and edits them", async () => {
@@ -125,8 +125,8 @@ describe("the admin page's markets", () => {
     const dialog = () => document.querySelector('[role="dialog"]')?.textContent ?? "";
     expect(dialog()).toContain("签名公钥 · private");
     expect(dialog()).toContain(key.key_id);
-    expect(dialog()).toContain("签了当前索引");
-    expect(dialog()).toContain("只有官方市场的公钥才免沙箱");
+    expect(dialog()).toContain("用于签署当前索引");
+    expect(dialog()).toContain("仅官方市场的公钥可豁免沙箱隔离");
     const input = document.querySelector<HTMLInputElement>('[role="dialog"] input')!;
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
     act(() => {
@@ -149,7 +149,7 @@ describe("the admin page's markets", () => {
   it("says there are no extensions when every market was read", async () => {
     markets = [official()];
     await open();
-    expect(text()).toContain("这里还没有扩展");
-    expect(text()).not.toContain("暂时读不到");
+    expect(text()).toContain("暂无可用扩展");
+    expect(text()).not.toContain("暂时无法");
   });
 });
