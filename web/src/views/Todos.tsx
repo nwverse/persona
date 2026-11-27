@@ -826,7 +826,7 @@ function TodoListView({
         board: serverBoard,
         matchesFilter: hasAnyFilter ? filterTodo : undefined,
         resolveFallbackName: directionLabel,
-        ungroupedLabel: t("lib-todo-tree.secretary"),
+        ungroupedLabel: t("todos.direction_uncategorized"),
       });
     }
     if (!hasTreeDirections) return [];
@@ -835,7 +835,10 @@ function TodoListView({
       tree: directionTree,
       openTodos,
       todosV2,
-      resolveDirectionName: (d) => directionTitle(d, leaderTitles?.find((c) => c.session_id === d.id)?.title),
+      resolveDirectionName: (d) =>
+        todosV2 && d.secretary
+          ? t("todos.direction_uncategorized")
+          : directionTitle(d, leaderTitles?.find((c) => c.session_id === d.id)?.title),
       resolveFallbackName: directionLabel,
     });
   }, [grouping, byDirection, serverBoard, todos, hasAnyFilter, search, listFilter, effectiveKindFilter, activeBlocker, tick, hasTreeDirections, directionTree, filteredUncompleted, placed, todosV2, leaderTitles, directionLabel]);
@@ -2312,7 +2315,7 @@ const TodoDirectionSection = memo(function TodoDirectionSection({
     <div className="mt-1 first:mt-0" data-testid="todo-group" data-group={`direction:${direction.secretary ? "secretary" : direction.id}`}>
       <button type="button" aria-expanded={!folded} onClick={toggle} className="flex h-7 w-full min-w-0 items-center gap-1.5 rounded-control px-2 text-left text-[12px] text-ink-2 hover:bg-hover [@media(pointer:coarse)]:min-h-11">
         <Icon name="chevron" size={10} stroke={2.4} className="shrink-0 opacity-60 transition-transform" style={{ transform: folded ? "rotate(-90deg)" : "none" }} />
-        <Icon name={direction.secretary ? "person" : "target"} size={12} stroke={2} className="shrink-0 text-ink-3" />
+        <Icon name={direction.secretary ? (slim ? "inbox" : "person") : "target"} size={12} stroke={2} className="shrink-0 text-ink-3" />
         <span className="min-w-0 flex-1 truncate font-semibold">{title}</span>
         {folded && <OwnerMarkCount count={ownerCount(todos, views)} />}
         <DirectionCountsText direction={direction} />
