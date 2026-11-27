@@ -339,7 +339,7 @@ func sandboxURL(raw string, rule egress.Rule) (string, bool) {
 // address, one of its Targets is that loopback port (plain http only when the target allows it), or the owner allowed a
 // loopback host (on that port, or on any when it names none).
 func loopbackPermitted(u *url.URL, rule egress.Rule) bool {
-	if rule.Local() {
+	if rule.Loopback() {
 		return true
 	}
 	plain := strings.EqualFold(u.Scheme, "http") || strings.EqualFold(u.Scheme, "ws")

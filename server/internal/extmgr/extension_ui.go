@@ -1,6 +1,7 @@
 package extmgr
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -14,6 +15,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/compat"
 	"github.com/nwverse/persona/server/internal/connector"
 	"github.com/nwverse/persona/server/internal/connector/proc"
 	"github.com/nwverse/persona/server/internal/extension"
@@ -30,6 +33,11 @@ import (
 // inbox item's page is drawn from that item (context.item), only for the items of the plugin's own connector.
 
 const uiTimeout = 20 * time.Second
+
+const (
+	settingsPrefillMost    = 2 << 10
+	settingsPrefillURLMost = 32 << 10
+)
 
 // UIPlace is one thing a plugin draws, as the apps list it.
 type UIPlace struct {
@@ -193,6 +201,8 @@ type uiRequest struct {
 		Size     string `json:"size,omitempty"`
 		// UIVersion is the UI version the app draws: 1 (the first eight items) when it says nothing.
 		UIVersion int `json:"ui_version,omitempty"`
+		// Unsupported lists component types this client cannot render even within UIVersion (e.g. ["scene"]).
+		Unsupported []string `json:"unsupported,omitempty"`
 		// Assistant is the name the app shows for the assistant (its "Ask {name}…"), sent only to the manager's own
 		// pages (subscriptions_ui.go), which name it; never handed to an extension (uiParams). Sent at all (even ""),
 		// it says the app opens their Set Up with … (#5661).
@@ -334,7 +344,24 @@ func (h *Manager) withUI(ctx context.Context, id, uiID string, in uiRequest, cal
 	return call(p, hp, *item, slot, params)
 }
 
+func sanitizeUnsupported(raw []string) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var out []string
+	for _, c := range raw {
+		if _, ok := wire.ComponentSince[c]; ok && !slices.Contains(out, c) {
+			out = append(out, c)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 func (h *Manager) uiCall(ctx context.Context, id, uiID string, in uiRequest) (extension.ActionResult, error) {
+	unsupported := sanitizeUnsupported(in.Context.Unsupported)
 	return h.withUI(ctx, id, uiID, in, func(p *extension.Extension, hp *hubExtension, item extension.UIItem, slot extension.UISlot, params extension.UIParams) (extension.ActionResult, error) {
 		var res extension.ActionResult
 		if result, handled, err := h.pageLegacy(ctx, p, hp, item, slot, params, in); handled {
@@ -358,7 +385,7 @@ func (h *Manager) uiCall(ctx context.Context, id, uiID string, in uiRequest) (ex
 			return res, err
 		}
 		fit := func(v *extension.View) error {
-			dropped, err := extension.Fit(v, slot, params.UIVersion, h.uiFallbackLang(ctx, params.Locale))
+			dropped, err := extension.FitFor(v, slot, params.UIVersion, unsupported, h.uiFallbackLang(ctx, params.Locale))
 			if len(dropped) > 0 && params.UIVersion == extension.UIVersion {
 				h.extensions.logf("plugin %s: ui %s drew items this hub does not know (%s): left out", id, uiID, strings.Join(dropped, ", "))
 			}
@@ -392,7 +419,7 @@ func (h *Manager) uiCall(ctx context.Context, id, uiID string, in uiRequest) (ex
 				return extension.ActionResult{}, err
 			}
 		}
-		if err := extension.FitResult(&res, slot, params.UIVersion, h.uiFallbackLang(ctx, params.Locale)); err != nil {
+		if err := extension.FitResultFor(&res, slot, params.UIVersion, unsupported, h.uiFallbackLang(ctx, params.Locale)); err != nil {
 			return extension.ActionResult{}, i18n.Err("hub-extension_ui.view_unsupported", i18n.Args{"err": err.Error()})
 		}
 		if err := checkPushes(p.Manifest, item, &extension.View{Sections: []extension.Section{{Items: res.Items}}}, nil); err != nil {
@@ -407,7 +434,7 @@ func (h *Manager) uiCall(ctx context.Context, id, uiID string, in uiRequest) (ex
 		if params.UIVersion < 3 {
 			res.Push, res.Pop = nil, false // an older app knows neither: it draws the view it got, or draws again
 		}
-		if err := checkOpenURL(id, item, in.Context.Item, res.OpenURL); err != nil {
+		if err := checkOpenURL(id, p.Manifest, item, in.Context.Item, res.OpenURL); err != nil {
 			return extension.ActionResult{}, err
 		}
 		return res, nil
@@ -446,22 +473,102 @@ func checkPushes(m *extension.Manifest, from extension.UIItem, v *extension.View
 }
 
 // checkOpenURL holds what extension id's action opens to https; an inbox_item may also open its item's own source page
-// (extension.InboxSourceURL), that item's only, and any of its pages its own settings (extension.SettingsURL), its own
-// only.
-func checkOpenURL(id string, ui extension.UIItem, itemID, raw string) error {
+// (extension.InboxSourceURL), that item's only, any of its pages its own settings (extension.SettingsURL), its own
+// only, and any page one of its own declared quick prompts in the assistant's composer
+// (persona://compose?prompt=<id>&text=<text>).
+// space-conversations may also open one assistant conversation (spaceConversationLink).
+func checkOpenURL(id string, m *extension.Manifest, ui extension.UIItem, itemID, raw string) error {
 	if raw == "" || raw == extension.SettingsURL(id) {
 		return nil
+	}
+	if strings.HasPrefix(raw, extension.SettingsURL(id)+"?") {
+		if ownSettingsPrefill(id, m, raw) {
+			return nil
+		}
+		return i18n.Err("hub-extension_ui.open_not_settings")
 	}
 	if ui.Placement == "inbox_item" && itemID != "" && raw == extension.InboxSourceURL(itemID) {
 		return nil
 	}
+	if id == spacesMigrationID && spaceConversationLink(raw) {
+		return nil
+	}
+	if promptID, promptText, ok := composePrompt(raw); ok {
+		if m != nil {
+			for _, p := range m.Prompts() {
+				if p.ID == promptID && p.Kind == extension.PromptQuick && p.Text == promptText {
+					return nil
+				}
+			}
+		}
+		return i18n.Err("hub-extension_ui.open_not_prompt")
+	}
 	if u, err := url.Parse(raw); err != nil || u.Scheme != "https" || u.Host == "" {
+		if u, err := url.Parse(raw); err == nil && u != nil && compat.IsAppScheme(strings.ToLower(u.Scheme)) && strings.EqualFold(u.Host, "compose") {
+			return i18n.Err("hub-extension_ui.open_not_prompt")
+		}
 		if strings.HasPrefix(raw, "persona:") {
 			return i18n.Err("hub-extension_ui.open_not_source")
 		}
 		return i18n.Err("hub-extension_ui.open_not_https")
 	}
 	return nil
+}
+
+// ownSettingsPrefill accepts exactly persona://settings/extensions/<id>?set=<url-encoded JSON object>: proposed values
+// for this extension's ordinary configuration fields, never its secrets, entry lists or another extension's settings.
+func ownSettingsPrefill(id string, m *extension.Manifest, raw string) bool {
+	prefix := extension.SettingsURL(id) + "?set="
+	if m == nil || len(raw) > settingsPrefillURLMost || !strings.HasPrefix(raw, prefix) {
+		return false
+	}
+	encoded := raw[len(prefix):]
+	if encoded == "" || strings.ContainsAny(encoded, "&#;") {
+		return false
+	}
+	decoded, err := url.QueryUnescape(encoded)
+	if err != nil || len(decoded) > settingsPrefillMost {
+		return false
+	}
+	var patch map[string]json.RawMessage
+	if json.Unmarshal([]byte(decoded), &patch) != nil || patch == nil {
+		return false
+	}
+	schema, err := extension.ParseSchema(m.Configuration)
+	if err != nil || schema == nil {
+		return false
+	}
+	secrets := make(map[string]struct{}, len(m.Secrets))
+	for _, secret := range m.Secrets {
+		secrets[secret.Name] = struct{}{}
+	}
+	if !ordinarySettingsFields(schema.Fields, patch, secrets) {
+		return false
+	}
+	return schema.CheckPartial([]byte(decoded)) == nil
+}
+
+func ordinarySettingsFields(fields []extension.Field, patch map[string]json.RawMessage, secrets map[string]struct{}) bool {
+	for name, raw := range patch {
+		if _, secret := secrets[name]; secret || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return false
+		}
+		i := slices.IndexFunc(fields, func(f extension.Field) bool { return f.Name == name })
+		if i < 0 {
+			return false
+		}
+		f := fields[i]
+		if f.EntryList() || f.Secret != nil {
+			return false
+		}
+		if f.Type == "object" {
+			var group map[string]json.RawMessage
+			if json.Unmarshal(raw, &group) != nil || group == nil || !ordinarySettingsFields(f.Fields, group, nil) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 var (
@@ -492,11 +599,18 @@ func (h *Manager) extensionUIRoutes(api *http.ServeMux) {
 				base = gw.base
 			}
 		}
-		writeJSON(w, map[string]any{"ui": uiPlacesOut(r, h.extensions.localizeUI(h.requestLang(r), h.extensions.uiPlaces(placement, base)))})
+		places := h.extensions.localizeUI(h.requestLang(r), h.extensions.uiPlaces(placement, base))
+		pagesOverview := r.URL.Query().Get("pages_overview") == "1"
+		places = append(places, h.pagesPlaces(r, placement, pagesOverview)...) // the assistant's pages, after the extensions' own (pages_hook.go)
+		writeJSON(w, map[string]any{"ui": uiPlacesOut(r, places)})
 	})
 	api.HandleFunc("POST /api/v1/extensions/{id}/-/ui/{ui}", func(w http.ResponseWriter, r *http.Request) {
 		if principalOf(r.Context()).Role != roleFull {
 			writeExtensionResponseErr(w, r, http.StatusForbidden, i18n.ErrEnglish("extension-status.read_only_device"))
+			return
+		}
+		if r.PathValue("id") == PagesExtension {
+			h.pagesUI(w, r) // the assistant's pages, never an extension's process
 			return
 		}
 		var in uiRequest

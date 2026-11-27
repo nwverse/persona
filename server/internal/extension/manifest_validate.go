@@ -75,6 +75,14 @@ func (m *Manifest) Validate() error {
 	}
 	errs = append(errs, m.validateModel()...)
 	errs = append(errs, m.validateTools()...)
+	if u := m.Upgrade; u != nil {
+		if u.Backup != "" && u.Backup != BackupAuto && u.Backup != BackupRequired {
+			bad("upgrade.backup %q: auto or required", u.Backup)
+		}
+		if (u.Prepare || u.HealthCheck) && !m.Runtime.SpeaksRPC() {
+			bad("upgrade.prepare and upgrade.health_check need a runtime that speaks the protocol")
+		}
+	}
 	for _, name := range sortedKeys(m.Contributes) {
 		p, known := Points[name]
 		if !known {
@@ -141,6 +149,9 @@ func (m *Manifest) Validate() error {
 				}
 			}
 		}
+		if name == "routine_facts" && !m.Permissions.RoutineFacts {
+			bad("contributes.routine_facts needs permissions.routine_facts")
+		}
 		if name == "error_reports" && !m.Permissions.ErrorReports {
 			bad("contributes.error_reports needs permissions.error_reports (the user agrees that it gets the error and crash reports)")
 		}
@@ -155,6 +166,9 @@ func (m *Manifest) Validate() error {
 					claimed[h] = it.ID
 				}
 			}
+		}
+		if name == "memory_sources" && len(items) > 1 {
+			bad("contributes.memory_sources: one per extension")
 		}
 		if name == "auth_relay" && !m.Permissions.AuthRelay {
 			bad("contributes.auth_relay needs permissions.auth_relay (the user agrees that it completes the authorization links their Agents stop at)")

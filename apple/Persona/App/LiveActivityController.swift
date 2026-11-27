@@ -259,12 +259,20 @@ final class LiveActivityController {
         all.filter(\.running).max { ($0.staleDate ?? .distantPast) < ($1.staleDate ?? .distantPast) }?.id
     }
 
-    /// The app went to the background. With no push route to this phone (the hub's `none`), nothing can update or
-    /// end the activity from now on: it would go stale and keep showing old counts and an old request for hours. It
-    /// ends now instead, and the app starts it again when it is back in front (#12982).
-    func left(pushReaches: Bool?) {
-        guard pushReaches == false else { return }
+    /// The app went to the background. With no push route to this phone at `group`'s hub (its `none`, or no route at
+    /// all for this credential, #16756), nothing can update or end the activity from now on: it would go stale and keep
+    /// showing old counts and an old request for hours. It ends now instead, and the app starts it again when it is back
+    /// in front (#12982).
+    func left(health: PushHealth, group: String?) {
+        guard Self.endsOnLeaving(health, group: group) else { return }
         endAll()
+    }
+
+    /// Only a confirmed outage ends the activity. An unknown route (an older hub that reports none, or none read yet)
+    /// keeps it: such a hub may well push, and ending a working activity at every switch away would cost more than an
+    /// activity that might go stale.
+    nonisolated static func endsOnLeaving(_ health: PushHealth, group: String?) -> Bool {
+        group.flatMap { health.pushReaches(group: $0) } == false
     }
 
     func endAll() {
@@ -395,8 +403,9 @@ extension LiveActivityController {
         state.assistant = phase != "done"
         if phase == "cleared" { state = FleetState(phase: .needsYou, needsYou: 1, items: [ask]) }
         if phase == "offline" { state = FleetState(phase: .working, working: 3, unread: 1, items: [work, done], workingSince: now - 754) }
+        // The Studio's threads wait for a core (1.4 per core, past 100: #12519), so the busiest shows how that reads.
         state.stats = .init(tpm: 12000, tokens: 42_000_000, requests: 1200,
-                            loads: [.init(id: "studio", name: "Studio", percent: 35), .init(id: "macbook", name: "MacBook", percent: 70)])
+                            loads: [.init(id: "studio", name: "Studio", percent: 140), .init(id: "macbook", name: "MacBook", percent: 70)])
         Task {
             try? await Task.sleep(for: .seconds(1)) // the scene must be active to start one
             // `apply` starts no activity for finished agents alone (the hub does not either) and keeps it fresh: these

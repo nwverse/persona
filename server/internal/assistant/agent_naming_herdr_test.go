@@ -2,6 +2,7 @@ package assistant
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -39,7 +40,7 @@ func TestAgentNameUsesHerdrTabAndProtectsManualRename(t *testing.T) {
 	s.tryAgentName(ctx, "server", c, now)
 	c.SlotName = "My export work"
 	c.UpdatedAt = now.Add(2 * time.Hour)
-	c.OutputTokens++
+	c.SetOutputTokens(int(c.OutputTokensValue()) + 1)
 	f.sessions["server"][0] = c
 	if s.tryAgentName(ctx, "server", c, c.UpdatedAt) || calls.Load() != 1 {
 		t.Fatal("renamed an owner-named tab")
@@ -111,7 +112,9 @@ func TestAgentNameDoesNotOverwriteTabRenamedDuringNaming(t *testing.T) {
 }
 
 func TestFeishuAgentsCardHerdrSessionNames(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	f := newFakeHub().withMachine()
+	f.answerApp(AppFeishu, FeishuPost, func(json.RawMessage) (any, error) { return map[string]any{"message_id": "om_agents"}, nil })
 	s := newTestService(t, f)
 	ctx := context.Background()
 	row := proto.Session{SessionID: "s1", Title: "CLI session name", SpaceKind: "herdr", SlotID: "w1:t1", SlotName: "Export work",
@@ -135,8 +138,7 @@ func TestFeishuAgentsCardHerdrSessionNames(t *testing.T) {
 			c := row
 			c.Title, c.SlotName = tc.title, tc.tab
 			f.sessions["server"] = []proto.Session{c}
-			card, fallback := s.agentsCard(ctx, "")
-			body := string(card.JSON())
+			body, fallback := botCommandCard(t, s, f, &FeishuFeatures{Agents: true}, "om_agents_"+tc.name, "/agents")
 			if !strings.Contains(body, "**"+tc.primary+"**") || !strings.Contains(fallback, tc.primary) {
 				t.Fatalf("primary %q missing: %s\n%s", tc.primary, body, fallback)
 			}

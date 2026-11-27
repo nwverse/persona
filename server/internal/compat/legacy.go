@@ -1,5 +1,7 @@
 // Package compat contains only the pre-cutover runtime identities required for
 // rolling upgrades. Do not use these names for product copy or rewrite user data.
+//
+//persona:layer library
 package compat
 
 import (
@@ -150,6 +152,9 @@ func HeaderConflict(h http.Header, name string) bool {
 func ContextPattern() string { return `(?:jarvis|persona)-context` }
 func FilePattern() string    { return `(?:jarvis|persona)-file` }
 func ContextNames() []string { return []string{"jarvis-context", "persona-context"} }
+func IsAppScheme(scheme string) bool {
+	return scheme == "persona" || scheme == "jarvis"
+}
 
 // compat is also built on its own, copied without the rest of the server (scripts/test/test_persona_migration_edges.py),
 // so it uses the standard library only: its patterns compile on first use with sync.OnceValue, not internal/lazyre.

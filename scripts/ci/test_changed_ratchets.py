@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import changed_ratchets  # noqa: E402
 import sleep_ratchet  # noqa: E402
 import web_font_ratchet  # noqa: E402
+import wire_types_ratchet  # noqa: E402
 
 GO = "server/internal/demo/demo_test.go"
 NEW_GO = "server/internal/demo/new_test.go"
@@ -111,6 +112,36 @@ class CheckTests(RepositoryCase):
         self.commit("raised")
         base = self.git("rev-parse", "main")
         self.assertEqual(self.check(), (sleep_ratchet.raised_against({GO: 2}, {GO: 1}, base[:12]), []))
+
+    def test_a_raised_wire_types_baseline_fails_and_a_lowered_one_merges(self):
+        import json
+        rel = wire_types_ratchet.BASELINE_REL
+        self.git("checkout", "-q", "main")
+        self.write(rel, json.dumps({"metrics": {"bare-id": {"A.ID": 1}}}))
+        self.commit("main has the baseline")
+        self.git("checkout", "-q", "change")
+        self.git("merge", "-q", "main")
+        self.write(rel, json.dumps({"metrics": {"bare-id": {}}}))
+        self.commit("lowered")
+        self.assertEqual(self.check(), ([], []))
+        self.write(rel, json.dumps({"metrics": {"bare-id": {"A.ID": 1, "B.ID": 1}}}))
+        self.commit("raised")
+        failures, _ = self.check()
+        self.assertEqual(1, len(failures))
+        self.assertIn("B.ID", failures[0])
+
+    def test_a_moved_file_keeps_its_entry_and_a_moved_raise_still_fails(self):
+        moved = "server/internal/modules/demo/demo_test.go"
+        (self.repo / moved).parent.mkdir(parents=True)
+        self.git("mv", GO, moved)
+        self.baselines(sleeps={moved: 1})
+        self.commit("moved")
+        self.assertEqual(self.check(), ([], []))
+        self.write(moved, go(2))
+        self.baselines(sleeps={moved: 2})
+        self.commit("moved and raised")
+        base = self.git("rev-parse", "main")
+        self.assertEqual(self.check(), (sleep_ratchet.raised_against({moved: 2}, {moved: 1}, base[:12]), []))
 
     def test_an_entry_lowered_for_a_file_the_change_does_not_touch_is_checked(self):
         self.baselines(sleeps={})

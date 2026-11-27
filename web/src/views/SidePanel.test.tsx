@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 // The side panel's Files / Git / file viewer / link panels load when first opened (#2673): the panel shows the loading
 // look while the chunk comes, then the panel; a chunk that will not load shows a way to retry, never a blank panel.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -151,6 +153,19 @@ describe("侧边面板的键盘操作", () => {
   afterEach(() => {
     opener.remove();
     document.querySelectorAll("[data-test-menu]").forEach((m) => m.remove());
+  });
+
+  // #16856: the handle sits in the gutter left of the aside, so clipping the aside hid it from the pointer
+  it("leaves the resize handle outside every clip on a wide screen", () => {
+    expect(separator().className).toContain("lg:flex");
+    expect(separator().className).not.toContain("lg:block");
+    const css = readFileSync(join(__dirname, "../styles.css"), "utf8");
+    const clipped = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+      .filter(([, , body]) => /overflow:\s*clip/.test(body!))
+      .flatMap(([, selectors]) => selectors!.split(",").map((one) => one.replace(/\/\*[\s\S]*?\*\//g, "").trim()));
+    expect(clipped).toContain("[data-app-shell] > main");
+    expect(clipped).toContain('[data-app-shell] > aside > div:not([role="separator"])');
+    expect(clipped).not.toContain("[data-app-shell] > aside");
   });
 
   it("puts the resize handle in the tab order with its width", () => {

@@ -310,7 +310,13 @@ nonisolated enum AssistantEntries {
             mine.agents = own
             let status = own.count < active.count ? withNeeds(all, own: todoStatus(mine, lookup: lookup)) : all
             if status == .notStarted && Self.startInFlight(todo, plans: plans) { starting.insert(todo.id) }
-            let asks = own.flatMap { asksOf[pair($0.machineID, $0.sessionID)] ?? [] }
+            // a card the task's supervising conversation holds (delegating) is that conversation's until it passes it up
+            let routed = own.flatMap { asksOf[pair($0.machineID, $0.sessionID)] ?? [] }
+            let asks = routed.filter { $0.delegating != true }
+            // a supervised task's failed start is its supervisor's to retry or remedy, and an Agent whose every card its
+            // supervisor holds waits on that conversation, not on the user (the web's `assistantEntries`)
+            let supervised = !(todo.supervision?.supervisor ?? "").isEmpty
+            let held = supervised && !routed.isEmpty && asks.isEmpty
             let row = Row.task(id: todo.id, status: status, agents: active.count)
             let listed = { folded.formUnion(active.map { pair($0.machineID, $0.sessionID) }) }
             let triage = TodoTriageLogic.triage(todo, lookup: lookup, now: now, restoredAt: restored[todo.id],
@@ -318,7 +324,8 @@ nonisolated enum AssistantEntries {
             let bucket = TodoTriageLogic.bucket(todo, triage)
             // First keep the legacy slot. Direct-user filtering removes rows from Needs You only; it never moves an
             // excluded permission, retry, failed start or supervisor review into In Progress.
-            let legacyWaits = status == .failed ? bucket == .open : todo.doneAt == nil && (status == .needsYou || status == .interrupted)
+            let legacyWaits = status == .failed ? bucket == .open && !supervised
+                : todo.doneAt == nil && (status == .needsYou || status == .interrupted) && !held
             let legacyDecision = awaitsDecision(todo, now: now)
             let legacyDelivery = todo.doneAt == nil && todo.delivery?.waitsForOwner == true
             let waits = !directAttention && legacyWaits
@@ -368,7 +375,9 @@ nonisolated enum AssistantEntries {
             }
         }
 
-        let waitingPlans = directAttention ? [] : plans.values.filter { $0.conversation == conversation && $0.state == .open }
+        // a plan waiting for Start is the owner's own decision: Main lists every open one but Health's (as the web's
+        // assistant-entries), another conversation its own
+        let waitingPlans = plans.values.filter { ($0.conversation == conversation || isMain && $0.space != "health") && $0.state == .open }
             .sorted { ($0.createdAt ?? .distantPast, $0.id) < ($1.createdAt ?? .distantPast, $1.id) }
             .map { Row.plan(id: $0.id) }
         let messages = feed.filter(messageWaits).compactMap { item in item.ref.map { Row.message(feedID: item.id, itemID: $0) } }
@@ -454,9 +463,15 @@ nonisolated struct ActionTrayContent: Equatable, Sendable {
     /// The number its entry shows: its rows (shelved ones are not counted). Finished's is finished work, never open work.
     func count(_ tray: ActionTray) -> Int { rows(tray).count }
 
-    /// The entries the bar shows: Needs You and In Progress always, Finished while it lists something or `open` is it.
+    /// The entries the bar shows: Needs You (always visible) and In Progress always; Finished is not persistent on the
+    /// collapsed bar and appears on the bar only while its tray is open (reachable from any open tray's header).
     func entries(open: ActionTray?) -> [ActionTray] {
-        ActionTray.allCases.filter { $0 != .finished || !finished.isEmpty || open == .finished }
+        ActionTray.allCases.filter { $0 != .finished || open == .finished }
+    }
+
+    /// Whether the open tray header offers a one-tap link into the 24-hour Finished list.
+    func offersFinishedLink(for tray: ActionTray) -> Bool {
+        tray != .finished && !finished.isEmpty
     }
 
     /// Groups Needs You (`grouped`) when `enabled` (the main conversation folding background rounds); otherwise one list.
@@ -538,6 +553,9 @@ struct AssistantActionBar: View {
     /// is the one open: in the trays' place, so never with `open` (#8223).
     @State private var held: PushInterceptsModel?
     @State private var heldOpen = false
+    /// Whether the main conversation's Inbox wrap-up tray is open in the shared tray slot (mutually exclusive with
+    /// `open`, `heldOpen`, and `dock`).
+    @State private var wrapUpOpen = false
     private var store: TasksStore { .shared }
 
     private var entryRow: AnyLayout { AnyLayout(HStackLayout(spacing: Theme.Space.s)) }
@@ -551,13 +569,15 @@ struct AssistantActionBar: View {
             if let open {
                 tray(open, content)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else if wrapUpOpen, inMain {
+                WrapUpTray(conversation: conversation) { withAnimation(Theme.Motion.state) { wrapUpOpen = false } }
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             } else if heldOpen, let held {
                 PushInterceptsTray(model: held) { withAnimation(Theme.Motion.state) { heldOpen = false } }
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            // Wider than the bar (Finished beside the two, Held Pushes and the computer's pill, a large text size), the
-            // entries scroll sideways instead of running off its edge, as on the web and Android (#10922); while they fit
-            // nothing moves.
+            // Wider than the bar (Wrap Up, Held Pushes, the computer's pill, or a large text size), the entries scroll
+            // sideways instead of running off its edge, as on the web and Android (#10922); while they fit nothing moves.
             ScrollView(.horizontal, showsIndicators: false) {
                 row {
                     if let dock {
@@ -571,6 +591,7 @@ struct AssistantActionBar: View {
                                         dock.fold(ids)
                                     } else {
                                         open = nil
+                                        wrapUpOpen = false
                                         heldOpen = false
                                         dock.show()
                                     }
@@ -579,16 +600,27 @@ struct AssistantActionBar: View {
                         }
                     }
                     ForEach(content.entries(open: open)) { entry($0, count: content.count($0)) }
+                    if inMain {
+                        WrapUpEntry(conversation: conversation, open: wrapUpOpen) {
+                            withAnimation(Theme.Motion.state) {
+                                open = nil
+                                heldOpen = false
+                                wrapUpOpen.toggle()
+                            }
+                        }
+                    }
                     if inMain, let held {
                         PushInterceptsEntry(model: held, open: heldOpen) {
                             withAnimation(Theme.Motion.state) {
                                 open = nil
+                                wrapUpOpen = false
                                 heldOpen.toggle()
                             }
                         }
                     }
-                    if ComputerActivityPill.shows(computer) {
-                        ComputerActivityPill(activity: computer).background(Theme.pageBackground, in: .capsule) // as the entries
+                    // A Mac the model operates (the screen-share module's pill), as the entries.
+                    ForEach(Modules.registry.views(at: .chatFooter).filter { $0.shows(.init(activity: computer)) }) {
+                        $0.view(.init(activity: computer)).background(Theme.pageBackground, in: .capsule)
                     }
                 }
                 .padding(.horizontal, Theme.Space.xs)
@@ -598,11 +630,11 @@ struct AssistantActionBar: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         // No fade of its own: the chat runs on behind the bar and fades out there (`FooterFog`, #3696).
-        .onChange(of: conversation) { open = nil; expanded = []; drawn = []; planChoices = [:] }
-        // One tray at a time: Needs You's or In Progress' opening closes the held pushes'.
-        .onChange(of: open) { if open == nil { expanded = []; drawn = []; planChoices = [:] } else { heldOpen = false } }
+        .onChange(of: conversation) { open = nil; wrapUpOpen = false; heldOpen = false; expanded = []; drawn = []; planChoices = [:] }
+        // One tray at a time: Needs You's, In Progress' or Finished's opening closes Wrap Up and Held Pushes.
+        .onChange(of: open) { if open == nil { expanded = []; drawn = []; planChoices = [:] } else { wrapUpOpen = false; heldOpen = false } }
         // The pager steps aside while a tray is open (#12831).
-        .onChange(of: open != nil || heldOpen, initial: true) { _, tray in dock?.trayOpen = tray }
+        .onChange(of: open != nil || wrapUpOpen || heldOpen, initial: true) { _, tray in dock?.trayOpen = tray }
         // The held pushes are read in the main conversation while its tab is in front, every 30 s, with ln mode off too,
         // so the entry comes when the mode is turned on; the bar reads none of the model's values itself.
         .tabActiveTask(id: inMain) {
@@ -611,7 +643,7 @@ struct AssistantActionBar: View {
             if held == nil { held = model }
             await model.run()
         }
-        .onChange(of: inMain) { _, inMain in if !inMain { held = nil; heldOpen = false } }
+        .onChange(of: inMain) { _, inMain in if !inMain { held = nil; heldOpen = false; wrapUpOpen = false } }
         #if DEBUG
         .onAppear {
             if let value = UserDefaults.standard.string(forKey: "showActionTray"), let tray = ActionTray(rawValue: value) {
@@ -707,6 +739,26 @@ struct AssistantActionBar: View {
             HStack(spacing: Theme.Space.s) {
                 Text(tray.title).font(Theme.Font.sectionHeader).foregroundStyle(.secondary).lineLimit(1)
                 Spacer(minLength: Theme.Space.s)
+                if content.offersFinishedLink(for: tray) {
+                    Button {
+                        Haptics.tap()
+                        withAnimation(Theme.Motion.state) { open = .finished }
+                    } label: {
+                        HStack(spacing: Theme.Space.xs) {
+                            if content.finished.contains(where: \.fresh) {
+                                StatusDot(state: .unread, size: Theme.Size.dot)
+                            }
+                            Text(ActionTray.finished.title)
+                            if let text = CountBadge.text(content.count(.finished)) { Text(text).monospacedDigit() }
+                        }
+                        .dockCapsule()
+                        .fixedSize()
+                        .tapTargetHeight()
+                        .contentShape(.rect)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("action-tray.finished-link")
+                }
                 // The board has everything; of what finished, the trays list only the last 24 hours' (Finished).
                 Button {
                     open = nil
@@ -1160,7 +1212,11 @@ struct AssistantActionBar: View {
                 HStack(spacing: Theme.Space.s) {
                     Text(title).font(Theme.Font.body).lineLimit(1)
                     Spacer(minLength: Theme.Space.s)
-                    Text(detail).font(Theme.Font.caption).lineLimit(1).fixedSize()
+                    // Its words, never wider than a part of the row: a long wait line cut at the tail, not the row (and the
+                    // tray with it) wider than the screen (#13656).
+                    Text(detail).font(Theme.Font.caption).lineLimit(1).truncationMode(.tail)
+                        .scaledFrame(maxWidth: Theme.Size.box160, alignment: .trailing)
+                        .layoutPriority(1)
                         .foregroundStyle(tint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(.secondary))
                 }
                 if let subtitle {

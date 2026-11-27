@@ -9,7 +9,7 @@ Verified with omp 18.18.x and herdr 0.9.5. Everything here needs a herdr engine.
 
 Added in steps (issue #4148).
 
-In New Agent on web or Android, select the computer's `omp` launcher in herdr. Enter a model ID such as
+In New Agent on web or Android, select the computer's `omp` launcher in herdr or Orca. Enter a model ID such as
 `opus` or `openai/gpt-5.2` to use it for this session. You can enter an ID even when the model list is empty.
 Leaving the model at Default lets omp read `modelRoles.default` from its own configuration.
 An older Persona node offers the launcher default. Upgrade the node on that computer to enter a model ID.
@@ -19,8 +19,8 @@ iOS and iPadOS leave the model to omp's own configuration, as described under "S
 
 | Works from the phone | Not supported |
 | --- | --- |
-| Start `omp` in a new herdr tab with a first message and an optional model | Setting thinking effort, permission mode or ultracode on that start |
-| List running omp sessions and their state, and the stopped ones of the last 7 days | Engines other than herdr, and Windows |
+| Start `omp` in a new herdr or Orca tab with a first message and an optional model | Setting thinking effort, permission mode or ultracode on that start |
+| List running omp sessions and their state, and the stopped ones of the last 7 days | Engines other than herdr (except starting `omp` in Orca), and Windows |
 | Read the chat, including live text | A web client for omp (the equivalent of pi-web) |
 | Send messages, interrupt, rename | Sessions under an `omp --profile` directory |
 | Answer `ask_user` questions and `approve` cards | Automatic updates of the Persona extension |
@@ -188,6 +188,15 @@ entries (calls outside the conversation), orchestration tokens included, under t
   covers a live pane's file, a start for a runtime's session, the fallback row moving to its session, and the calls a stopped
   session refuses. `server/internal/node/omp_start_model_test.go` checks the new session's recorded model and the arguments
   the terminal receives for default, short and provider-qualified model IDs.
+- End-to-end node: `cd server && go test ./internal/node -run '^TestOmpEndToEnd' -count=1` drives `session.start` through
+  fake herdr, joins the extension's row, sends through the node, exits to the on-disk row and resumes the exact session file
+  into a replacement runtime. The refusal cases cover a missing extension, a session file deleted after the scan and an
+  existing file outside the trusted sessions root.
+- Opt-in live smoke: `./scripts/test/test-omp.sh` needs herdr, omp, Go and Python 3, builds `TestOmpLiveAttachesToHerdrAndRuntime`
+  with the `omplive` tag and checks that a real omp with only Persona's extension joins its isolated herdr pane. It uses a fresh
+  HOME, config and persona directory and a named disposable herdr session, clears inherited agent-directory and herdr-config
+  overrides, sends no message (so makes no model request), and cleans up its own processes and files. A missing tool prints `RESULT skip` and exits 0; success and failure print `RESULT ok`
+  or `RESULT fail`.
 - iOS: `apple/PersonaTests/OmpNewAgentTests.swift` covers telling an omp launcher, no modes or efforts and no attachments;
   against `MOCK_OMP=1 PORT=<dedicated port> python3 scripts/mock/mock_hub.py` (which lists an `omp` launcher and refuses an omp
   start that is async or sets those options, as the node does), `PersonaUITests/NewAgentAttachmentsTests/testOmpStartsWithItsFirstMessageAndNoOptions`

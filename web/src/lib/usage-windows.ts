@@ -1,6 +1,6 @@
 // Subscription rate-limit windows (#2432, docs/server/usage-windows.md): GET /api/v1/usage/windows lists the accounts the
-// machines' agents are signed in to with how much of each window (5h, 7d …) is used. Pure helpers here (pace,
-// countdown, sample age, what the sidebar shows); the bars and the popover are views/UsageBars.tsx.
+// machines' agents are signed in to with how much of each window (5h, 7d …) is used. Pure helpers here cover
+// countdowns, sample age and what the sidebar in views/UsageBars.tsx shows.
 import { useSyncExternalStore } from "react";
 import { formatDate, formatRelative, t as tr } from "../i18n";
 import { api, ApiError } from "./api";
@@ -12,6 +12,12 @@ export interface UsageWindow {
   resets_at?: string;
   /** An allowance a provider keeps for one model next to the plan's own (#2595); absent for the plan's window. */
   model?: string;
+  /** Optional group heading from a usage extension; windows sharing a group render together under one heading. */
+  group?: string;
+  /** Optional row display name from a usage extension. */
+  title?: string;
+  /** Optional short remark under the window row from a usage extension. */
+  note?: string;
   /** Where scheduling stops using this window's account, 0-100; it can differ per account and per window. Absent
    *  when the hub (older, or no such rule) does not say: nothing is drawn then (#13173). */
   protect_percent?: number;
@@ -42,50 +48,115 @@ export interface UsageAccount {
   /** Why a gateway's numbers are old: "error" (it could not read this account just now) or, when its own last read
    *  failed, "rejected" (the key was turned away), "unreachable" or "failed" (docs/server/usage-windows.md). */
   problem?: string;
+  /** Optional summary line from a usage extension (plain text in the user's language). */
+  headline?: string;
+  /** Optional status or explanation from a usage extension (e.g. cooldown or why no windows are drawn). */
+  notice?: string;
 }
 
 /** Samples older than this are dropped (a source that went quiet for days says nothing about now). */
 export const SAMPLE_MAX_AGE_MS = 3 * 24 * 3600_000;
-/** From this used percentage a bar turns to the caution colour. */
+/** From this used percentage a bar turns to the caution colour (kept for ultracode quota warnings). */
 export const WARN_PERCENT = 80;
-/** The pace is not judged in the first part of a window: a few minutes in, any use is "ahead". */
-export const PACE_QUIET_FRACTION = 0.05;
-/** How far (percentage points) the actual use may be from the expected before it is over / under. */
-export const PACE_TOLERANCE = 5;
+/** Remaining headroom thresholds (percentage points above protection reserve R): green >= 20, orange >= 5, red < 5. */
+export const REMAINING_OK_HEADROOM = 20;
+export const REMAINING_WARN_HEADROOM = 5;
 const POLL_MS = 60_000;
+
+export type RemainingTone = "green" | "orange" | "red";
+
+const clampPercent = (p: number) => (Number.isFinite(p) ? Math.min(100, Math.max(0, p)) : 0);
+const roundPct = (p: number) => Math.round(p * 1e6) / 1e6;
+
+/** Remaining quota share `r = 100 - used`, clamped to [0, 100]. */
+export function remainingPercent(usedPercent: number): number {
+  return roundPct(100 - clampPercent(usedPercent));
+}
+
+/** Protection reserve `R = 100 - protect_percent` on the remaining-quota scale, or null when unprotected. */
+export function protectReserve(protectPercent: number | undefined): number | null {
+  if (typeof protectPercent !== "number" || !Number.isFinite(protectPercent) || protectPercent < 0 || protectPercent > 100) return null;
+  return roundPct(100 - protectPercent);
+}
+
+/** Semantic tone from remaining percentage `r` and protection reserve `R` (0 when unprotected),
+ *  classified by headroom `h = r - R`: green (--green) when h >= 20, orange (--orange) when 5 <= h < 20, red (--red) when h < 5. */
+export function remainingTone(remaining: number, reserve = 0): RemainingTone {
+  const r = Number.isFinite(remaining) ? remaining : 0;
+  const R = Number.isFinite(reserve) && reserve > 0 ? reserve : 0;
+  const h = roundPct(r - R);
+  if (h < REMAINING_WARN_HEADROOM) return "red";
+  if (h < REMAINING_OK_HEADROOM) return "orange";
+  return "green";
+}
+
+/** Distance `h = r - R` between remaining quota and protection reserve, plus pause/timeline helpers live in
+ *  `lib/usage-timeline.ts` so popover-only code stays off the first screen (FIRST_SCREEN_BUDGET). */
+
+export interface TightestWindow {
+  remaining: number;
+  reserve: number;
+  headroom: number;
+  paused: boolean;
+}
+
+function windowTightness(w: UsageWindow): TightestWindow {
+  const remaining = remainingPercent(w.used_percent);
+  const rawReserve = protectReserve(w.protect_percent);
+  const reserve = rawReserve ?? 0;
+  const headroom = roundPct(remaining - reserve);
+  const paused = rawReserve !== null && headroom <= 0;
+  return { remaining, reserve, headroom, paused };
+}
+
+function tightestOf(windows: readonly UsageWindow[]): TightestWindow {
+  let best = windowTightness(windows[0]);
+  for (let i = 1; i < windows.length; i++) {
+    const cur = windowTightness(windows[i]);
+    if (
+      cur.headroom < best.headroom ||
+      (cur.headroom === best.headroom && (cur.remaining < best.remaining || (cur.remaining === best.remaining && cur.paused && !best.paused)))
+    ) {
+      best = cur;
+    }
+  }
+  return best;
+}
+
+/** Most constrained window of an account by headroom `h = r - R` (smallest first, then smallest `r`).
+ *  Per-model windows do not override plan windows while plan windows exist. When an account has only
+ *  per-model pools (no plan windows), each pool is constrained by its own tightest window and the account
+ *  takes the pool with the most headroom so one exhausted model pool does not hide healthy sibling pools. */
+export function tightestRemaining(a: Pick<UsageAccount, "windows">): TightestWindow {
+  if (!a.windows.length) return { remaining: 100, reserve: 0, headroom: 100, paused: false };
+  const plan = a.windows.filter((w) => !w.model?.trim());
+  if (plan.length) return tightestOf(plan);
+  const byModel = new Map<string, UsageWindow[]>();
+  for (const w of a.windows) {
+    const k = w.model!.trim().toLowerCase();
+    const list = byModel.get(k);
+    if (list) list.push(w);
+    else byModel.set(k, [w]);
+  }
+  let best: TightestWindow | null = null;
+  for (const pool of byModel.values()) {
+    const cur = tightestOf(pool);
+    if (
+      !best ||
+      cur.headroom > best.headroom ||
+      (cur.headroom === best.headroom && (cur.remaining > best.remaining || (cur.remaining === best.remaining && !cur.paused && best.paused)))
+    ) {
+      best = cur;
+    }
+  }
+  return best!;
+}
 
 /** The window's length in minutes from its label ("5h", "7d", "45m"); the given minutes when the label is not one. */
 export function windowMinutes(w: Pick<UsageWindow, "label" | "window_minutes">): number {
   const m = /^(\d+(?:\.\d+)?)\s*([mhdw])$/i.exec(w.label.trim());
   if (m) return Math.round(Number(m[1]) * { m: 1, h: 60, d: 1440, w: 10080 }[m[2].toLowerCase() as "m" | "h" | "d" | "w"]);
   return w.window_minutes > 0 ? w.window_minutes : 0;
-}
-
-export type PaceState = "over" | "under" | "on";
-export interface Pace {
-  /** Where use would be if it were spread evenly over the window, 0-100. */
-  expected: number;
-  state: PaceState;
-}
-
-/** How use compares with an even spread: expected% = elapsed / length; over when use is more than 5 points above it,
- *  under when more than 5 below. null with no reset time or length, and in the first 5% of the window. */
-export function pace(w: UsageWindow, now = Date.now()): Pace | null {
-  const total = windowMinutes(w) * 60_000;
-  const resets = w.resets_at ? Date.parse(w.resets_at) : NaN;
-  if (!(total > 0) || !Number.isFinite(resets)) return null;
-  const elapsed = total - (resets - now);
-  if (elapsed < 0 || elapsed > total) return null;
-  if (elapsed / total < PACE_QUIET_FRACTION) return null;
-  const expected = (elapsed / total) * 100;
-  const diff = w.used_percent - expected;
-  return { expected, state: diff > PACE_TOLERANCE ? "over" : diff < -PACE_TOLERANCE ? "under" : "on" };
-}
-
-/** The pace of one of an account's windows, as the popover shows it. An out-of-date reading says nothing about how
- *  fast it is being used now, so a stale account has none (#12411): its numbers and reset stay, faded and dated. */
-export function accountPace(a: Pick<UsageAccount, "stale">, w: UsageWindow, now = Date.now()): Pace | null {
-  return a.stale ? null : pace(w, now);
 }
 
 type Countdown = { kind: "due" | "clock" | "span"; text: string };
@@ -143,7 +214,7 @@ export function liveAccounts(accounts: UsageAccount[], now = Date.now()): UsageA
     const windows = a.windows.filter((w) => !w.resets_at || Date.parse(w.resets_at) > now);
     const staleAt = a.stale_at ? Date.parse(a.stale_at) : NaN;
     const stale = Boolean(a.stale) || (Number.isFinite(staleAt) && now >= staleAt);
-    if (windows.length || isBalanceAccount(a)) out.push({ ...a, windows, ...(stale ? { stale } : {}) });
+    if (windows.length || isBalanceAccount(a) || Boolean(a.notice?.trim() || a.headline?.trim())) out.push({ ...a, windows, ...(stale ? { stale } : {}) });
   }
   return out;
 }
@@ -155,10 +226,18 @@ export function isBalanceAccount(a: UsageAccount): boolean {
 }
 
 /** The used percentage of an account's fullest window. A per-model allowance does not count while the plan's own windows
- *  are there: one model running out is not the account running out. */
+ *  are there: one model running out is not the account running out. With only per-model pools, each pool uses its own
+ *  fullest window and the account takes the least-used pool. */
 export function fullest(a: UsageAccount): number {
-  const plan = a.windows.filter((w) => !w.model);
-  return (plan.length ? plan : a.windows).reduce((m, w) => Math.max(m, w.used_percent), 0);
+  const plan = a.windows.filter((w) => !w.model?.trim());
+  if (plan.length) return plan.reduce((m, w) => Math.max(m, w.used_percent), 0);
+  if (!a.windows.length) return 0;
+  const byModel = new Map<string, number>();
+  for (const w of a.windows) {
+    const k = w.model!.trim().toLowerCase();
+    byModel.set(k, Math.max(byModel.get(k) ?? 0, w.used_percent));
+  }
+  return Math.min(...byModel.values());
 }
 
 /** Where an account was seen, for people: the computers that read it by name (an older hub only says "a computer"),
@@ -168,29 +247,70 @@ export function sourceNames(a: UsageAccount): string[] {
   return [...machines, ...(a.sources ?? [])];
 }
 
-/** The plan to write beside the name, unless the name already says it ("Codex Pro" and plan "pro"). */
-export function planNote(a: UsageAccount): string {
-  const plan = (a.plan ?? "").trim();
-  return plan && !a.name.toLowerCase().includes(plan.toLowerCase()) ? plan : "";
+export const windowKey = (w: UsageWindow) =>
+  w.group || w.title
+    ? `${w.label}:${w.window_minutes}:${w.model ?? ""}:${w.group ?? ""}:${w.title ?? ""}`
+    : `${w.label}:${w.window_minutes}:${w.model ?? ""}`;
+
+/** The usage provider ID shared by older node samples, gateways and visibility settings. */
+export function canonicalUsageProvider(provider: string): string {
+  const id = provider.trim().toLowerCase();
+  return id === "agy" ? "antigravity" : id;
 }
 
-export const windowKey = (w: UsageWindow) => `${w.label}:${w.window_minutes}:${w.model ?? ""}`;
-
-/** The accounts the sidebar draws bars for: the two with the fullest window, stale ones last. A balance account has
- *  no bar (it is shown as an amount instead), so it never takes one of these places. */
+/** The sidebar takes the two accounts with lowest headroom `h = r - R`, with stale accounts last. Rank whole
+ *  percentages as displayed so sub-percent jitter keeps the same order. Balance accounts have their own rows. */
 export function topAccounts(accounts: UsageAccount[], n = 2): UsageAccount[] {
   return accounts
-    .filter((a) => !isBalanceAccount(a))
-    .sort((a, b) => Number(!!a.stale) - Number(!!b.stale) || fullest(b) - fullest(a))
+    .filter((a) => !isBalanceAccount(a) && a.windows.length > 0)
+    .sort((a, b) => {
+      const ta = tightestRemaining(a);
+      const tb = tightestRemaining(b);
+      return Number(!!a.stale) - Number(!!b.stale)
+        || Math.round(ta.headroom) - Math.round(tb.headroom)
+        || Math.round(ta.remaining) - Math.round(tb.remaining)
+        || canonicalUsageProvider(a.provider).localeCompare(canonicalUsageProvider(b.provider))
+        || a.id.localeCompare(b.id);
+    })
     .slice(0, n);
 }
 
-/** Browser-local storage key for user-pinned sidebar usage account IDs (#12418, display-only). */
+/** Browser-local storage key for user-pinned sidebar usage account/window IDs (#12418, #13870, display-only). */
 export const PINNED_USAGE_ACCOUNTS_KEY = "persona.usage.pinnedAccounts";
+
+const WINDOW_PIN_PREFIX = "window:";
+
+/** Stable pin ID for one specific usage window of an account in the sidebar strip (#13870). */
+export function usageWindowPinId(accountId: string, w: UsageWindow): string {
+  return `${WINDOW_PIN_PREFIX}${encodeURIComponent(accountId)}:${windowKey(w)}`;
+}
+
+/** Decode a window pin ID into its account ID and `windowKey`, or null for an account-level pin or malformed value. */
+export function parseUsageWindowPinId(id: string): { accountId: string; windowKey: string } | null {
+  if (!id.startsWith(WINDOW_PIN_PREFIX)) return null;
+  const rest = id.slice(WINDOW_PIN_PREFIX.length);
+  const sep = rest.indexOf(":");
+  if (sep <= 0) return null;
+  const key = rest.slice(sep + 1);
+  if (!key) return null;
+  try {
+    const accountId = decodeURIComponent(rest.slice(0, sep));
+    return accountId ? { accountId, windowKey: key } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Concise account + optional model title for a pinned window row in the collapsed sidebar strip. */
+export function sidebarWindowTitle(account: Pick<UsageAccount, "name">, w: Pick<UsageWindow, "model">): string {
+  const model = (w.model ?? "").trim();
+  return model && account.name.toLowerCase() !== model.toLowerCase() ? `${account.name} · ${model}` : account.name;
+}
 
 const emptyPinned: readonly string[] = [];
 let pinnedRaw: string | null | undefined;
 let pinnedCache: readonly string[] = emptyPinned;
+let pinnedVolatile = false;
 const pinnedListeners = new Set<() => void>();
 let stopPinnedSync: (() => void) | undefined;
 
@@ -208,7 +328,7 @@ function normalizePinnedIds(ids: readonly unknown[]): string[] {
   return out;
 }
 
-/** Parse a stored pinned-account ID list, returning [] on missing or malformed values. */
+/** Parse a stored pinned-account/window ID list, returning [] on missing or malformed values. */
 export function parsePinnedUsageAccounts(raw: string | null): string[] {
   if (!raw) return [];
   try {
@@ -219,19 +339,22 @@ export function parsePinnedUsageAccounts(raw: string | null): string[] {
   }
 }
 
-function readPinnedRaw(): string | null {
+function readPinnedRaw(): { ok: true; value: string | null } | { ok: false } {
   try {
-    return typeof localStorage === "undefined" ? null : localStorage.getItem(PINNED_USAGE_ACCOUNTS_KEY);
+    if (typeof localStorage === "undefined") return { ok: false };
+    return { ok: true, value: localStorage.getItem(PINNED_USAGE_ACCOUNTS_KEY) };
   } catch {
-    return null;
+    return { ok: false };
   }
 }
 
 function getPinnedSnapshot(): readonly string[] {
-  const raw = readPinnedRaw();
-  if (raw === pinnedRaw) return pinnedCache;
-  pinnedRaw = raw;
-  const parsed = parsePinnedUsageAccounts(raw);
+  if (pinnedVolatile) return pinnedCache;
+  const res = readPinnedRaw();
+  if (!res.ok) return pinnedCache;
+  if (res.value === pinnedRaw) return pinnedCache;
+  pinnedRaw = res.value;
+  const parsed = parsePinnedUsageAccounts(res.value);
   pinnedCache = parsed.length ? parsed : emptyPinned;
   return pinnedCache;
 }
@@ -240,11 +363,12 @@ function notifyPinned(): void {
   for (const l of pinnedListeners) l();
 }
 
-/** Persist the user's chosen sidebar usage account IDs in this browser (display-only). */
+/** Persist the user's chosen sidebar usage account/window pin IDs in this browser (display-only). */
 export function setPinnedUsageAccounts(ids: readonly string[]): readonly string[] {
   const next = normalizePinnedIds(ids);
   const raw = next.length ? JSON.stringify(next) : null;
   let persisted = false;
+  let storageFailed = false;
   try {
     if (typeof localStorage !== "undefined") {
       if (raw) localStorage.setItem(PINNED_USAGE_ACCOUNTS_KEY, raw);
@@ -252,9 +376,11 @@ export function setPinnedUsageAccounts(ids: readonly string[]): readonly string[
       persisted = true;
     }
   } catch {
-    // storage unavailable: keep in-memory state for this tab
+    // storage unavailable: keep in-memory state for this tab without overwriting from stale storage
+    storageFailed = true;
   }
-  pinnedRaw = persisted ? raw : readPinnedRaw();
+  pinnedVolatile = !persisted && (next.length > 0 || storageFailed);
+  pinnedRaw = persisted ? raw : undefined;
   pinnedCache = next.length ? next : emptyPinned;
   notifyPinned();
   return pinnedCache;
@@ -273,7 +399,10 @@ function subscribePinned(listener: () => void) {
   pinnedListeners.add(listener);
   if (!stopPinnedSync && typeof addEventListener === "function") {
     const onStorage = (e: StorageEvent) => {
-      if (e.key === null || e.key === PINNED_USAGE_ACCOUNTS_KEY) notifyPinned();
+      if ((e.key === null || e.key === PINNED_USAGE_ACCOUNTS_KEY) && !pinnedVolatile) {
+        const res = readPinnedRaw();
+        if (res.ok && res.value !== pinnedRaw) notifyPinned();
+      }
     };
     addEventListener("storage", onStorage);
     stopPinnedSync = () => removeEventListener("storage", onStorage);
@@ -287,143 +416,69 @@ function subscribePinned(listener: () => void) {
   };
 }
 
-/** Browser-local pinned account IDs for the collapsed sidebar usage strip. */
+/** Browser-local pinned account/window IDs for the collapsed sidebar usage strip. */
 export function usePinnedUsageAccounts(): readonly string[] {
   return useSyncExternalStore(subscribePinned, getPinnedSnapshot, getPinnedSnapshot);
 }
 
-/** Choose which live accounts appear in the collapsed sidebar strip:
- *  when pinned IDs match at least one live account, show those matched accounts in pinned order;
- *  otherwise fall back to the default automatic ranking (`topAccounts(live)` and live balance accounts). */
-export function selectSidebarUsageAccounts(
+/** Whether an account can be pinned to the collapsed sidebar strip (has usage windows or a prepaid balance). */
+export function isPinnableUsageAccount(a: UsageAccount): boolean {
+  return isBalanceAccount(a) || a.windows.length > 0;
+}
+
+export type SidebarUsageItem =
+  | { kind: "account"; key: string; account: UsageAccount }
+  | { kind: "window"; key: string; account: UsageAccount; window: UsageWindow }
+  | { kind: "balance"; key: string; account: UsageAccount };
+
+/** Choose which live accounts or specific usage windows appear in the collapsed sidebar strip:
+ *  when pinned IDs match at least one live pinnable account or window, show those matched items in pinned order;
+ *  otherwise fall back to the default automatic ranking (`topAccounts(live)` followed by live balance accounts). */
+export function selectSidebarUsageItems(
   live: UsageAccount[],
   pinnedIds: readonly string[],
-): { bars: UsageAccount[]; balances: UsageAccount[]; custom: boolean } {
+): { items: SidebarUsageItem[]; custom: boolean } {
   if (pinnedIds.length > 0) {
     const byId = new Map(live.map((a) => [a.id, a]));
-    const matched: UsageAccount[] = [];
+    const items: SidebarUsageItem[] = [];
     for (const id of pinnedIds) {
       const a = byId.get(id);
-      if (a) matched.push(a);
+      if (a) {
+        if (isPinnableUsageAccount(a)) {
+          items.push({ kind: isBalanceAccount(a) ? "balance" : "account", key: a.id, account: a });
+        }
+        continue;
+      }
+      const parsed = parseUsageWindowPinId(id);
+      if (!parsed) continue;
+      const acct = byId.get(parsed.accountId);
+      const win = acct?.windows.find((w) => windowKey(w) === parsed.windowKey);
+      if (acct && win) items.push({ kind: "window", key: id, account: acct, window: win });
     }
-    if (matched.length > 0) {
-      return {
-        bars: matched.filter((a) => !isBalanceAccount(a)),
-        balances: matched.filter(isBalanceAccount),
-        custom: true,
-      };
-    }
+    if (items.length > 0) return { items, custom: true };
   }
   return {
-    bars: topAccounts(live),
-    balances: live.filter(isBalanceAccount),
+    items: [
+      ...topAccounts(live).map((account): SidebarUsageItem => ({ kind: "account", key: account.id, account })),
+      ...live.filter(isBalanceAccount).map((account): SidebarUsageItem => ({ kind: "balance", key: account.id, account })),
+    ],
     custom: false,
   };
 }
 
-/** The longest stretch the reset timeline shows: windows resetting later are drawn to its end. */
-export const TIMELINE_CAP_MS = 7 * 24 * 3600_000;
-
-/** The windows of one account, in the order a card lists them: the plan's own 5h, then 7d, then the other plan windows
- *  by length, and last the per-model allowances (by length too). */
-export function sortedWindows(a: Pick<UsageAccount, "windows">): UsageWindow[] {
-  const rank = (w: UsageWindow) => {
-    const m = windowMinutes(w);
-    return (w.model ? 2e6 : 0) + (m === 300 ? 0 : m === 10080 ? 1 : 2 + m);
-  };
-  return [...a.windows].sort((x, y) => rank(x) - rank(y));
-}
-
-/** When an account's plan 7d window resets, in ms; Infinity without one (or without a reset time): those sort last. */
-export function weeklyResetMs(a: Pick<UsageAccount, "windows">): number {
-  const w = a.windows.find((x) => !x.model && windowMinutes(x) === 10080 && x.resets_at);
-  const at = w?.resets_at ? Date.parse(w.resets_at) : NaN;
-  return Number.isFinite(at) ? at : Infinity;
-}
-
-/** A card's accounts: the soonest 7d reset first; accounts without one last, then by name. */
-export function sortForCard(accounts: UsageAccount[]): UsageAccount[] {
-  return [...accounts].sort((a, b) => {
-    const x = weeklyResetMs(a);
-    const y = weeklyResetMs(b);
-    if (x !== y) return x < y ? -1 : 1;
-    return a.name.localeCompare(b.name);
-  });
-}
-
-export interface ProviderGroup {
-  provider: string;
-  /** Sorted by `sortForCard`. */
-  accounts: UsageAccount[];
-  /** The newest `sampled_at` of the group, "" when none reads as a time. */
-  sampledAt: string;
-}
-
-/** The accounts grouped by provider (account type), groups in the order the hub first listed them. */
-export function groupByProvider(accounts: UsageAccount[]): ProviderGroup[] {
-  const by = new Map<string, UsageAccount[]>();
-  for (const a of accounts) by.set(a.provider, [...(by.get(a.provider) ?? []), a]);
-  return [...by].map(([provider, list]) => {
-    const newest = list.reduce((m, a) => Math.max(m, Date.parse(a.sampled_at) || -Infinity), -Infinity);
-    return { provider, accounts: sortForCard(list), sampledAt: Number.isFinite(newest) ? new Date(newest).toISOString() : "" };
-  });
-}
-
-const PROVIDER_TITLES: Record<string, string> = { xai: "xAI", deepseek: "DeepSeek", kimi: "Kimi", agy: "Antigravity" };
-/** A provider's name for a card title: its own spelling when known, else the id with a capital. */
-export const providerTitle = (p: string) => PROVIDER_TITLES[p] ?? p.charAt(0).toUpperCase() + p.slice(1);
-
-const HOUR_MS = 3600_000;
-/** The shared axis: now, then these hours from now. The first 24 hours take 45% of the width, 1 to 7 days the other 55%. */
-export const TIMELINE_TICKS_HOURS = [6, 12, 24, 72, 120, 168] as const;
-/** Where `ms` from now falls along the axis, 0-1 (clamped at 7 days). */
-export function timelinePosition(ms: number): number {
-  const h = Math.max(0, Math.min(ms, TIMELINE_CAP_MS)) / HOUR_MS;
-  return h <= 24 ? (h / 24) * 0.45 : 0.45 + ((h - 24) / 144) * 0.55;
-}
-
-export interface TimelineLane {
-  key: string;
-  label: string;
-  /** A window longer than six hours (the weekly one): the blue capsule; a short one is the teal one. */
-  long: boolean;
-  /** Where the capsule ends along the axis, 0-1. */
-  end: number;
-  /** Time left, in ms (the end may be beyond the axis; `end` is then 1). */
-  remainingMs: number;
-  resetsAt: string;
-}
-export interface TimelineRow {
-  account: UsageAccount;
-  /** The plan windows with a reset time still ahead, 5h first. */
-  lanes: TimelineLane[];
-}
-
-/** The rows of one provider card's reset timeline: one per account, in the order given (the card's quota order), each
- *  with a lane per plan window that has a reset time. Accounts with no lane have no row. Pure client computation. */
-export function providerTimeline(accounts: UsageAccount[], now = Date.now()): TimelineRow[] {
-  const rows: TimelineRow[] = [];
-  for (const account of accounts) {
-    const lanes: TimelineLane[] = [];
-    for (const w of sortedWindows(account)) {
-      const at = w.resets_at ? Date.parse(w.resets_at) : NaN;
-      if (w.model || !Number.isFinite(at) || at <= now) continue;
-      lanes.push({ key: windowKey(w), label: w.label, long: windowMinutes(w) > 360, end: timelinePosition(at - now), remainingMs: at - now, resetsAt: w.resets_at as string });
-    }
-    if (lanes.length) rows.push({ account, lanes });
+/** Choose which live accounts appear in the collapsed sidebar strip (account-level projection of `selectSidebarUsageItems`). */
+export function selectSidebarUsageAccounts(
+  live: UsageAccount[],
+  pinnedIds: readonly string[],
+): { bars: UsageAccount[]; balances: UsageAccount[]; custom: boolean } {
+  const { items, custom } = selectSidebarUsageItems(live, pinnedIds);
+  const bars: UsageAccount[] = [];
+  const balances: UsageAccount[] = [];
+  for (const item of items) {
+    if (item.kind === "balance") balances.push(item.account);
+    else bars.push(item.account);
   }
-  return rows;
-}
-
-/** Time left as a short label: "45m", "1.5h", "2d 3h" (each language's units). */
-export function remainingText(ms: number): string {
-  const mins = Math.ceil(ms / 60_000);
-  if (mins < 60) return tr("usage.minutes", { m: Math.max(1, mins) });
-  const hours = ms / HOUR_MS;
-  if (hours < 24) return tr("usage.hours", { h: Math.round(hours * 10) / 10 });
-  const d = Math.floor(hours / 24);
-  const h = Math.round(hours - d * 24);
-  return h === 0 ? tr("usage.days", { d }) : tr("usage.days_hours", { d, h });
+  return { bars, balances, custom };
 }
 
 export const isWarn = (percent: number) => percent >= WARN_PERCENT;
@@ -432,6 +487,7 @@ export interface UnconnectedProvider {
   id: string;
   title: string;
   agent: string;
+  base_url?: string;
 }
 
 const emptyAccounts: UsageAccount[] = [];
@@ -459,7 +515,7 @@ function pollUsage() {
     const mine = ++seq;
     const current = () => !dead && mine === seq;
     api<{ accounts?: UsageAccount[]; hidden_providers?: string[] }>("/usage/windows")
-      .then((r) => current() && publishUsage(r.accounts ?? emptyAccounts, true, r.hidden_providers?.length ? r.hidden_providers.map((p) => p.toLowerCase()) : noProviders))
+      .then((r) => current() && publishUsage(r.accounts ?? emptyAccounts, true, r.hidden_providers?.map(canonicalUsageProvider) ?? noProviders))
       .catch((e: unknown) => {
         if (!current()) return;
         const missing = e instanceof ApiError && e.status === 404;
@@ -496,7 +552,7 @@ export function useUsageWindows(): UsageAccount[] {
   return useSyncExternalStore(subscribeUsage, () => usageAccounts, () => emptyAccounts);
 }
 
-/** The providers the owner hid from the usage bars (lowercase), so nothing else in the strip lists them either (#13179). */
+/** The canonical providers the owner hid from the usage bars, so the strip leaves them out everywhere (#13179). */
 export function useHiddenUsageProviders(): readonly string[] {
   return useSyncExternalStore(subscribeUsage, () => usageHidden, () => noProviders);
 }

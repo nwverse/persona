@@ -229,7 +229,7 @@ def point_versions(sources):
             for match in re.finditer(r'^\t"([a-z0-9_]+)":\s*\{Name:[^\n]*?\bVersion:\s*(\w+)',
                                      block(code, "var Points = map[string]Point{"), re.M):
                 found[match.group(1)] = match.group(2)
-        for match in re.finditer(r'\bPoints\["([a-z0-9_]+)"\]\s*=\s*Point\{[^\n]*?\bVersion:\s*(\w+)', code):
+        for match in re.finditer(r'\bPoints\["([a-z0-9_]+)"\]\s*=\s*Point\{[^{}]*?\bVersion:\s*(\w+)', code, re.S):
             found[match.group(1)] = match.group(2)
     return found
 
@@ -493,8 +493,18 @@ class ParserTests(unittest.TestCase):
                           '\t"ui": {Name: "ui", Version: UIVersion, Item: nil},\n}\n'),
             "looks.go": ('package extension\n\nfunc init() {\n'
                          '\tPoints["looks"] = Point{Name: "looks", Version: 1, Item: nil}\n}\n'),
+            "routine_facts.go": ('package extension\n\nfunc init() {\n'
+                                 '\tPoints["routine_facts"] = Point{\n'
+                                 '\t\tName: "routine_facts", Namespace: "routine_facts", Version: 1, NeedsRPC: true,\n'
+                                 '\t\tItem: func(raw json.RawMessage) (string, error) {\n'
+                                 '\t\t\tvar item wire.RoutineFactsItem\n'
+                                 '\t\t\tif err := strict(raw, &item); err != nil { return "", err }\n'
+                                 '\t\t\treturn item.ID.String(), nil\n'
+                                 '\t\t},\n'
+                                 '\t}\n'
+                                 '}\n'),
         }
-        self.assertEqual({"conn": "2", "ui": "UIVersion", "looks": "1"}, point_versions(sources))
+        self.assertEqual({"conn": "2", "ui": "UIVersion", "looks": "1", "routine_facts": "1"}, point_versions(sources))
 
     def test_section_and_tables(self):
         markdown = ("# Doc\n\n## Wire\n\nServer → client:\n\n| type | Fields |\n| --- | --- |\n"
@@ -564,7 +574,7 @@ class DocWireTests(unittest.TestCase):
         self.assertLessEqual(NOT_ON_THE_WEBSOCKET, to_clients, "an exemption the code no longer has: drop it")
         to_clients -= NOT_ON_THE_WEBSOCKET
         # The parsers still find the lists (a move of the code would otherwise pass with nothing to check).
-        self.assertTrue({"hello", "sessions", "assistant_feed", "inbox"} <= to_clients, sorted(to_clients))
+        self.assertTrue({"hello", "sessions", "assistant_feed", "inbox", "health_intake"} <= to_clients, sorted(to_clients))
         self.assertTrue({"subscribe", "client_hello", "ping", "tool_result"} <= from_clients, sorted(from_clients))
         documented_to_clients, documented_from_clients = documented_websocket_types()
         self.assertEqual({"Server → client": [], "Client → server": []},
@@ -578,7 +588,7 @@ class DocWireTests(unittest.TestCase):
     def test_feature_flags_are_documented(self):
         have = features()
         self.assertTrue({"tls", "client_hello", "persona_contracts_v1", "sessions_list", "assistant_views",
-                         "agent_session_archives", "agent_session_archive_close"} <= have, sorted(have))
+                         "agent_session_archives", "agent_session_archive_close", "health_intake"} <= have, sorted(have))
         self.assertEqual([], missing(have, documented_features()),
                          f"features in the hub's hello and /health not named in {PROTOCOL_DOC} "
                          "\"Health check and feature flags\" or in a \"... feature flags\" section of a doc split "

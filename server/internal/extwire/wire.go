@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 
 	"github.com/nwverse/persona/sdk/go/wire"
+	"github.com/nwverse/persona/server/internal/buswire"
 )
 
 // Routes are the routes the manager answers (net/http patterns): the hub relays each request on them to the manager
@@ -98,6 +99,11 @@ const (
 	MethodHubCall = "extensions.hub_call"
 )
 
+var (
+	AuthorizeMethod = buswire.Method[Authorize, Authorized]{Name: MethodAuthorize}
+	HubCallMethod   = buswire.Method[HubCall, HubCallResult]{Name: MethodHubCall}
+)
+
 // What the hub's own features ask of the manager (HubCall.Method).
 const (
 	// HubGitHubLogin: {} → {login}: the GitHub connector's signed-in login (the persona tiers).
@@ -159,6 +165,18 @@ type HubCall struct {
 	Params json.RawMessage `json:"params,omitempty"`
 }
 
+// HubCallResult is the JSON reply selected by HubCall.Method. Each nested method
+// keeps its own result shape and the bus carries it without an extra envelope.
+type HubCallResult json.RawMessage
+
+func (r HubCallResult) MarshalJSON() ([]byte, error) {
+	return json.RawMessage(r).MarshalJSON()
+}
+
+func (r *HubCallResult) UnmarshalJSON(data []byte) error {
+	return (*json.RawMessage)(r).UnmarshalJSON(data)
+}
+
 // Report is EventReport's params.
 type Report struct {
 	// Features are the extensions' features the apps see beside the hub's (hello, health).
@@ -178,6 +196,12 @@ type Report struct {
 	// passes the manager's messages of those types only. An older manager's report has none: the hub cannot tell its
 	// extensions' types, and passes any type but its own from it.
 	EventsDeclared bool `json:"events_declared,omitempty"`
+	// PushGradingDeclared: PushGradingExtensions lists every enabled, compatible extension on this manager currently
+	// granted the push.grading scope. The hub prunes any stored push grading layer of this manager whose extension is
+	// absent, so disabling, uninstalling or dropping the scope restores the owner's settings. Older managers omit this
+	// flag and their layers are left untouched across rolling upgrades.
+	PushGradingDeclared   bool     `json:"push_grading_declared,omitempty"`
+	PushGradingExtensions []string `json:"push_grading_extensions,omitempty"`
 }
 
 // BotIdentity is a platform's stable identifier, not a display name or an authentication token.
@@ -284,6 +308,16 @@ const (
 
 // MethodAccept: {id} → {}: the hub holds a request for the manager (a relayed route): it dials the relay with the id.
 const MethodAccept = "extensions.accept"
+
+var AcceptMethod = buswire.Method[Accept, buswire.None]{Name: MethodAccept}
+
+// RelayID identifies the pending extension relay.
+type RelayID string
+
+// Accept is the request to take a pending extension relay.
+type Accept struct {
+	ID RelayID `json:"id"`
+}
 
 // LooksGone is EventLooksGone's params: the removed extension's looks' ids.
 type LooksGone struct {

@@ -1,14 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { TODO_LIST_SECTIONS, type TodoSummary } from "../../../lib/todo-view-wire";
+import { TODO_LIST_SECTIONS, TODO_PHASES, type TodoSummary } from "../../../lib/todo-view-wire";
 import { TRIAGE_SECTIONS, type Triage, type TriageRule, type TriageSection } from "../../../lib/todo-triage";
 import { makeSessionLookup, type Todo } from "../../../lib/todos";
 import type { Session } from "../../../lib/types";
-import { BY_DESIGN, BOUNDARY_MS, classify, knownView, legacyOf, PAGE_ORDER, restoredAt, rowFacts, type ByDesign, type RowFacts } from "./view-legacy";
+import { BY_DESIGN, BOUNDARY_MS, classify, KNOWN_PHASES, knownView, legacyOf, PAGE_ORDER, restoredAt, rowFacts, type ByDesign, type RowFacts } from "./view-legacy";
 
 const NOW = Date.parse("2026-11-10T12:00:00Z");
 const HOUR = 3_600_000;
 const local = (section: TriageSection, rule: TriageRule, last = NOW - HOUR): Triage => ({ section, rule, last });
-const view = (section: string, reason: string, more: Partial<TodoSummary> = {}): TodoSummary => ({ phase: "todo", section, reason, rank: 0, ...more });
+// The view as the wire carries it: raw strings, which may be a newer hub's values the closed types do not know.
+const view = (section: string, reason: string, more: object = {}): TodoSummary => ({ phase: "todo", section, reason, rank: 0, ...more }) as TodoSummary;
 const facts = (more: Partial<RowFacts> = {}): RowFacts => ({
   missing: false,
   usageLimit: false,
@@ -49,11 +50,14 @@ describe("legacyOf", () => {
     expect(classify(local("just_done", "finished_unseen"), live, facts(), NOW)).toEqual({ kind: "same" });
   });
 
-  it("reads only sections and reasons this web knows", () => {
+  it("reads only phases, sections and reasons this web knows", () => {
+    expect(KNOWN_PHASES).toEqual(TODO_PHASES);
     expect(knownView(view("todo", "rest"))).toBe(true);
+    expect(knownView(view("todo", "rest", { phase: "a_newer_phase" }))).toBe(false);
     expect(knownView(view("later", "rest"))).toBe(false);
     expect(knownView(view("todo", "a_newer_reason"))).toBe(false);
     expect(knownView(undefined)).toBe(false);
+    expect(classify(local("other", "rest"), view("todo", "rest", { phase: "a_newer_phase" }), facts(), NOW)).toEqual({ kind: "unknown" });
     expect(classify(local("other", "rest"), view("todo", "a_newer_reason"), facts(), NOW)).toEqual({ kind: "unknown" });
   });
 
@@ -140,6 +144,16 @@ describe("the decided differences: each case, and look-alikes that are not one",
     { why: "awaits_reply", is: { local: local("working", "agent_running"), view: view("can_wait", "awaits_reply"), facts: facts({ awaitsReply: true }) }, not: [] },
     { why: "awaits_reply", is: { local: local("parked", "pr_open"), view: view("can_wait", "awaits_reply"), facts: facts({ awaitsReply: true }) }, not: [] },
     { why: "awaits_reply", is: { local: local("parked", "parked"), view: view("can_wait", "awaits_reply"), facts: facts({ awaitsReply: true }) }, not: [] },
+    {
+      why: "stopped_unfinished",
+      is: { local: local("just_done", "finished_unseen"), view: view("needs_you", "stopped_unfinished") },
+      not: [
+        { local: local("just_done", "finished_unseen"), view: view("needs_you", "agent_asks") },
+        { local: local("just_done", "closed"), view: view("needs_you", "stopped_unfinished") },
+        { local: local("working", "agent_running"), view: view("needs_you", "stopped_unfinished") },
+        { local: local("just_done", "finished_unseen"), view: view("todo", "stopped_unfinished") },
+      ],
+    },
     // row 9: accepted work nobody has seen stays Just finished
     {
       why: "finished_unseen",
@@ -186,6 +200,17 @@ describe("the decided differences: each case, and look-alikes that are not one",
     },
     { why: "inactive", is: { local: local("other", "rest"), view: view("todo", "rest", inactive), facts: facts({ restoredHere: true }) }, not: [] },
     { why: "inactive", is: { local: local("shelved", "stale"), view: view("todo", "rest"), facts: facts({ missing: true }) }, not: [] },
+    // rows 1, 2: a supervised failed start and a card its supervisor holds are Persona's work, not the owner's; any other
+    // Working, or a decision only the owner can make, is not this difference
+    {
+      why: "supervisor_holds",
+      is: { local: local("waiting", "agent_asks"), view: view("working", "persona_working") },
+      not: [
+        { local: local("waiting", "agent_asks"), view: view("working", "agent_running") },
+        { local: local("waiting", "owner_decides"), view: view("working", "persona_working") },
+      ],
+    },
+    { why: "supervisor_holds", is: { local: local("waiting", "failed_start"), view: view("working", "persona_working") }, not: [] },
   ];
 
   for (const c of cases) {

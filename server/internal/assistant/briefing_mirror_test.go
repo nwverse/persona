@@ -11,7 +11,8 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/feishubot"
+	"github.com/nwverse/persona/server/internal/botcard"
+
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
 )
@@ -26,6 +27,7 @@ type briefingMirrorPosts struct {
 // The generic mirror uses the same retry helper as a briefing. This fixture has no scheduled-run watcher, so only
 // the retry under test reads status after the first post fails. Both results keep posting disabled while uncertain.
 func TestFeishuMirrorStatusRetryBoundary(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, tc := range []struct {
 		name      string
 		statusErr error
@@ -52,7 +54,7 @@ func TestFeishuMirrorStatusRetryBoundary(t *testing.T) {
 					t.Fatal("the first mirrored post did not reach the failing fake transport")
 				}
 				unavailable.Store(true)
-				time.Sleep(time.Duration(feishuMirrorRetries+1)*feishuMirrorRetry + time.Nanosecond) // sleep-ok: advance only synctest fake time beyond the finite retry budget
+				time.Sleep(time.Duration(feishuMirrorRetries+1)*quickMirrorRetry + time.Nanosecond) // sleep-ok: advance only synctest fake time beyond the finite retry budget
 				synctest.Wait()
 				if got := failedReads.Load(); got != tc.wantReads {
 					t.Errorf("failed status reads = %d, want %d", got, tc.wantReads)
@@ -85,6 +87,7 @@ func (p *briefingMirrorPosts) snapshot() []briefingMirrorPost {
 // This drives the scheduled run's production completion callback. The fake model's HTTP server and runNow setup
 // stay outside synctest; only direct fake app calls, channels and retry timers belong to the virtual-clock bubble.
 func TestBriefingMirrorCompletion(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	for _, tc := range []struct {
 		name                        string
 		postError                   error
@@ -98,7 +101,7 @@ func TestBriefingMirrorCompletion(t *testing.T) {
 		{name: "temporary status failure during retry", postError: errors.New("HTTP 503"), statusGap: true, wantPosts: 2},
 		{name: "replayed completion", replay: true, wantPosts: 1},
 		{name: "completion while post is pending", inFlight: true, wantPosts: 1},
-		{name: "permanent post refusal", postError: &feishubot.APIError{Op: "send", Code: 230002}, wantPosts: 1},
+		{name: "permanent post refusal", postError: &botcard.APIError{Op: "send", Code: 230002}, wantPosts: 1},
 		{name: "push channel disabled", disabled: true, wantPosts: 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -185,13 +188,11 @@ func TestBriefingMirrorCompletion(t *testing.T) {
 			t.Fatal("the initial briefing was not posted")
 		}
 		// Replace immutable facts rather than modifying an object another run observer may still read.
-		e.s.brief.mu.Lock()
-		run := *e.s.brief.bySession[e.sess.SessionID]
-		facts := *run.facts
+		run := *e.s.briefOf(e.sess.SessionID)
+		facts := *run.Facts
 		facts.At = time.Now().Add(-briefKeep - time.Minute)
-		run.facts = &facts
-		e.s.brief.bySession[e.sess.SessionID] = &run
-		e.s.brief.mu.Unlock()
+		run.Facts = &facts
+		e.s.briefSetSessionRun(e.sess.SessionID, &run)
 		complete()
 		if got := len(e.cards()); got != 1 {
 			t.Errorf("same retained completion posted again after facts expired: %d cards", got)

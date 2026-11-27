@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/nwverse/persona/server/internal/i18n"
 )
@@ -63,8 +64,14 @@ func (r *Registry) Rollback(ctx context.Context, id, actor string) (*Extension, 
 		return nil, fmt.Errorf("没有装过扩展 %s", id)
 	}
 	id = old.Record.ID
+	if errors.Is(old.problemErr, ErrIdentity) {
+		return nil, ErrIdentity
+	}
 	if old.Record.AttachedPackage() {
 		return nil, i18n.Err("extension-status.attached_detach_first", i18n.Args{"id": id})
+	}
+	if old.Record.BuiltinPredecessor && old.Record.PreviousOrigin == builtinOrigin(id) {
+		return r.rollbackBuiltin(ctx, old, actor, unlock)
 	}
 	prev := old.Record.PreviousVersion
 	if prev == "" || old.Record.Remote != nil {
@@ -135,6 +142,17 @@ func (r *Registry) Rollback(ctx context.Context, id, actor string) (*Extension, 
 			row.Origin, row.MarketKey = row.PreviousOrigin, row.PreviousMarketKey
 		}
 		row.PreviousOrigin, row.PreviousMarketKey = "", ""
+		if row.BuiltinPredecessor {
+			if !row.VerifiedBuiltinPredecessor() {
+				return ErrIdentity
+			}
+			if err := r.guardHandoff(ctx, old, &row); err != nil {
+				return err
+			}
+			if back := r.yielded[id]; back != nil {
+				row.PreviousVersion, row.PreviousOrigin = back.Record.Version, builtinOrigin(id)
+			}
+		}
 		row.Manifest, _ = json.Marshal(m)
 		row.Granted, row.GrantedDigest = m.Permissions, Digest(m)
 		if err := r.store.PutExtension(ctx, row); err != nil {
@@ -182,6 +200,9 @@ func (r *Registry) Uninstall(ctx context.Context, id string, keepData bool, acto
 		return i18n.Err("extension-status.config_disable_only", i18n.Args{"id": id})
 	}
 	id = old.Record.ID
+	if keepData && errors.Is(old.problemErr, ErrIdentity) {
+		return ErrIdentity
+	}
 	mutation := r.settingsWrite(id)
 	defer mutation.finish()
 	var trash string
@@ -196,7 +217,7 @@ func (r *Registry) Uninstall(ctx context.Context, id string, keepData bool, acto
 		slot := old.Record.StorageKey()
 		dirs := []string{filepath.Join("installed", slot), filepath.Join("tools", slot)}
 		if !keepData {
-			dirs = append(dirs, filepath.Join("data", slot))
+			dirs = append(dirs, filepath.Join("data", slot), filepath.Join("backups", slot)) // its snapshots are its data too
 		}
 		// Its directories move aside before the row goes: one that cannot move fails the uninstall with nothing
 		// changed, rather than leaving data behind an uninstall that said it worked. Load finishes or undoes a move
@@ -232,6 +253,13 @@ func (r *Registry) Uninstall(ctx context.Context, id string, keepData bool, acto
 		delete(r.extensions, id)
 		back := r.yielded[id]
 		if back != nil {
+			if r.handoffs[id] {
+				back = snapshotExtension(back)
+				back.Record.Enabled, back.Record.Config = back.builtinDefaultEnabled, nil
+				back.Record.DisabledContributions, back.Record.PackOff = nil, nil
+				back.Record.InstalledAt, back.Record.UpdatedAt = time.Time{}, time.Time{}
+				back.Manifest = back.Full
+			}
 			delete(r.yielded, id)
 			r.extensions[id] = back
 		}
@@ -376,12 +404,13 @@ func (r *Registry) moveBack(aside string) error {
 	return os.RemoveAll(aside)
 }
 
-// ownDir says whether rel is one of the directories an uninstall of id moves: installed/<id>, data/<id>, tools/<id>.
+// ownDir says whether rel is one of the directories an uninstall of id moves: installed/<id>, data/<id>, tools/<id>,
+// backups/<id>.
 func ownDir(id, rel string) bool {
 	if id == "" || id != filepath.Base(id) || id == "." || id == ".." {
 		return false
 	}
-	for _, d := range []string{"installed", "data", "tools"} {
+	for _, d := range []string{"installed", "data", "tools", "backups"} {
 		if filepath.Clean(rel) == filepath.Join(d, id) {
 			return true
 		}

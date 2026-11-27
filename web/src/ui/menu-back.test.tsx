@@ -15,7 +15,7 @@ beforeEach(() => {
   vi.stubGlobal("CSS", { escape: (value: string) => value });
   window.matchMedia = ((query: string) => ({
     // NARROW is a max-width query: a phone matches it, a desktop does not
-    matches: narrow && query.includes("max-width"),
+    get matches() { return narrow && query.includes("max-width"); },
     media: query,
     onchange: null,
     addEventListener() {},
@@ -44,8 +44,12 @@ function open(onClose: () => void) {
 
 async function back() {
   await act(async () => {
+    const popped = new Promise<void>((done, fail) => {
+      const timer = setTimeout(() => fail(new Error("no Back happened")), 1000);
+      addEventListener("popstate", () => (clearTimeout(timer), done()), { once: true });
+    });
     history.back();
-    await new Promise((r) => setTimeout(r, 30));
+    await popped;
   });
 }
 
@@ -58,6 +62,7 @@ describe("menu and Back", () => {
     expect(history.length).toBe(before + 1);
     expect(location.pathname).toBe("/t/m/w/tab/s1");
     await back();
+    await act(async () => vi.waitFor(() => expect(onClose).toHaveBeenCalledTimes(1)));
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(location.pathname).toBe("/t/m/w/tab/s1");
   });

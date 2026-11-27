@@ -105,8 +105,8 @@ func (s *Service) toolSecretStore(ctx context.Context, machine, session string, 
 		cardRaw, _ := json.Marshal(input)
 		now := time.Now().UTC()
 		ix := proto.Interaction{ID: "ix_" + randomHex(12), MachineID: machine, SessionID: session, SessionTitle: row.Title, Kind: proto.IxPermission, ToolName: proto.SecretHandoffTool, ToolTitle: i18n.T(l, "assistant-secret_store.title"), ToolInput: cardRaw,
-			Summary: i18n.T(l, "assistant-secret_store.summary", i18n.Args{"agent": agent, "machine": s.machineName(machine), "operation": operation, "item": itemLabel, "vault": vaultLabel, "count": len(in.Target.Fields)}), CreatedAt: now, ExpiresAt: now.Add(handoffCardWait)}
-		r, err := s.ask(ctx, ix)
+			Summary: i18n.T(l, "assistant-secret_store.summary", i18n.Args{"agent": agent, "machine": s.machineName(machine), "operation": operation, "item": itemLabel, "vault": vaultLabel, "count": len(in.Target.Fields)}), CreatedAt: now, ExpiresAt: now.Add(ownerCardMaxWait), SeenTTLSeconds: secondsCeil(handoffCardWait)}
+		r, err := s.ask(withCard(ctx, cardSecretForm), ix)
 		claim, vouched := s.takeHandoffClaim(ix.ID)
 		if err != nil {
 			return bad("secret storage approval interrupted; nothing was written")
@@ -165,14 +165,23 @@ func (s *Service) toolSecretStore(ctx context.Context, machine, session string, 
 		}
 		// No arbitrary provider response can become a tool answer.
 		refs := map[string]string{}
+		var deleted []string
 		for _, f := range p.target.Fields {
+			if f.Delete {
+				deleted = append(deleted, f.Name)
+				continue
+			}
 			ref := out.References[f.Name]
 			if scheme, valid := extension.ReferenceScheme(ref); !valid || scheme != "op" {
 				return bad("secret storage completed without valid field references; do not retry blindly")
 			}
 			refs[f.Name] = ref
 		}
-		b, _ := json.Marshal(map[string]any{"references": refs})
+		ans := map[string]any{"references": refs}
+		if len(deleted) > 0 {
+			ans["deleted"] = deleted
+		}
+		b, _ := json.Marshal(ans)
 		return proto.TextResult(string(b), false)
 	default:
 		return bad("use personad tool secret_store --from-file; internal phase must be prepare or commit")

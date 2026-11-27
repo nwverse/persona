@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { test } from 'node:test'
 import { startFakeNode, until } from '../../runtime-sdk/testing/fake-node.js'
-import { transcriptState, transcriptStatus } from '../lib/map.js'
+import { nativeWorking, transcriptState, transcriptStatus } from '../lib/map.js'
 import { createAgyRuntime } from '../lib/runtime.js'
 
 const ID = '11111111-2222-3333-4444-555555555555'
@@ -58,9 +58,9 @@ async function fixture(t, steps, summary, options = {}) {
     const old = new Date(Date.now() - 30 * 86400_000)
     utimesSync(transcript, old, old)
   }
-  if (options.internal) {
+  if (options.internal || options.meta) {
     mkdirSync(join(agyDir, 'cache'), { recursive: true })
-    writeFileSync(join(agyDir, 'cache', 'conversation_metadata.json'), JSON.stringify({ conversations: { [ID]: { is_internal: true } } }))
+    writeFileSync(join(agyDir, 'cache', 'conversation_metadata.json'), JSON.stringify({ conversations: { [ID]: options.meta ?? { is_internal: true } } }))
   }
   const summaryFile = join(agyDir, 'conversation_summaries.db')
   let db
@@ -103,6 +103,31 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   }
   return { node, write, state, refresh, summaryFile, database: () => db, logs: lines }
 }
+
+test('untitled conversations take their title from the first line of the preview', { timeout: 15_000 }, async (t) => {
+  const first = 'Draft the release checklist for the sample project and list every open question'
+  const Preview = `<USER_REQUEST>\n\n  ${first}  \nSecond line\n</USER_REQUEST>`
+  const { node } = await fixture(t, [step('PLANNER_RESPONSE', { content: 'Done' })], idle, { meta: { summary: { Title: '', Preview } } })
+  const row = node.last('runtime.sessions').sessions[0]
+  assert.equal(row.title, first.slice(0, 60).trimEnd() + '\u2026')
+  // A title from the prompt says so, as the node's own prompt titles do, so Persona's naming may replace it.
+  assert.equal(row.title_source, 'prompt')
+})
+
+test('a short preview is the whole title of an untitled conversation', { timeout: 15_000 }, async (t) => {
+  const { node } = await fixture(t, [step('PLANNER_RESPONSE', { content: 'Done' })], idle, { meta: { summary: { Title: '', Preview: 'Summarize brief.md' } } })
+  assert.equal(node.last('runtime.sessions').sessions[0].title, 'Summarize brief.md')
+})
+
+test('a preview that opens with Persona context leaves the folder name as the title', { timeout: 15_000 }, async (t) => {
+  // agy keeps only the request's first line, so the context block that opens it is never there whole.
+  for (const Preview of ['Content of persona-context:///snapshot.txt:', '<persona-context kind="snapshot">', '<' + 'jarvis-context kind="snapshot">']) {
+    const { node } = await fixture(t, [step('PLANNER_RESPONSE', { content: 'Done' })], idle, { meta: { summary: { Title: '', Preview } } })
+    const row = node.last('runtime.sessions').sessions[0]
+    assert.equal(row.title, basename(row.cwd))
+    assert.equal(row.title_source, undefined)
+  }
+})
 
 test('runtime inventory follows an external tool turn through its final reply', { timeout: 15_000 }, async (t) => {
   const created_at = new Date().toISOString()
@@ -316,4 +341,99 @@ test('lagging summaries never truncate freshly exported steps by timestamp alone
   state({ ...idle, step_count: 2, last_modified_time: '2026-01-03T00:00:01Z' })
   await refresh()
   assert.equal(node.last('runtime.sessions').sessions[0].rev, history)
+})
+
+test('canceling and busy native states count as working while unspecified and unknown states stay fail-closed', () => {
+  const reply = step('PLANNER_RESPONSE', { content: 'Running the experiment' })
+  for (const status of ['CASCADE_RUN_STATUS_RUNNING', 'CASCADE_RUN_STATUS_CANCELING', 'CASCADE_RUN_STATUS_BUSY']) {
+    assert.equal(nativeWorking({ status }), true, `${status} is nativeWorking`)
+    assert.deepEqual(transcriptState([reply], { status }), { status: 'working' }, `${status} maps to working`)
+    assert.equal(nativeWorking({ status, killed: 1 }), false, `killed ${status} is not working`)
+    assert.deepEqual(transcriptState([reply], { status, killed: 1 }), { status: 'idle' }, `killed ${status} maps to idle`)
+  }
+  assert.equal(nativeWorking({ status: 'CASCADE_RUN_STATUS_UNSPECIFIED' }), false)
+  assert.deepEqual(
+    transcriptState([reply], { status: 'CASCADE_RUN_STATUS_UNSPECIFIED', step_count: 1 }),
+    { status: 'unknown', reason: 'summary_not_idle' },
+  )
+})
+
+test('empty conversations with an idle zero-step summary report idle without relaxing non-empty or non-zero controls', () => {
+  assert.deepEqual(transcriptState([], { status: 'CASCADE_RUN_STATUS_IDLE', step_count: 0 }), { status: 'idle' })
+  assert.deepEqual(transcriptState([], { status: 'CASCADE_RUN_STATUS_IDLE', step_count: 1 }), { status: 'unknown', reason: 'no_relevant_step' })
+  assert.deepEqual(transcriptState([], undefined), { status: 'unknown', reason: 'no_relevant_step' })
+  assert.deepEqual(transcriptState([], { status: '', step_count: 0 }), { status: 'unknown', reason: 'no_relevant_step' })
+  assert.deepEqual(transcriptState([], { status: 'CASCADE_RUN_STATUS_UNSPECIFIED', step_count: 0 }), { status: 'unknown', reason: 'no_relevant_step' })
+  assert.deepEqual(transcriptState([step('CHECKPOINT')], { status: 'CASCADE_RUN_STATUS_IDLE', step_count: 0 }), { status: 'unknown', reason: 'no_relevant_step' })
+  assert.deepEqual(transcriptState([step('CHECKPOINT')], { status: 'CASCADE_RUN_STATUS_IDLE', step_count: 1 }), { status: 'unknown', reason: 'no_relevant_step' })
+})
+
+test('runtime reports canceling and busy native summaries as working and logs sanitized unrecognized status tokens once', { timeout: 15_000 }, async (t) => {
+  const created_at = new Date().toISOString()
+  const { node, state, refresh, logs } = await fixture(t, [step('PLANNER_RESPONSE', { created_at, content: 'Private narration' })], {
+    status: 'CASCADE_RUN_STATUS_CANCELING', step_count: 1,
+  })
+  assert.equal(node.last('runtime.sessions').sessions[0].status, 'working')
+  assert.deepEqual(unknownReports(logs), [])
+
+  state({ status: 'CASCADE_RUN_STATUS_BUSY', step_count: 1 })
+  assert.equal(await refresh(), 'working')
+  assert.deepEqual(unknownReports(logs), [])
+
+  state({ status: 'CASCADE_RUN_STATUS_UNSPECIFIED', step_count: 1 })
+  assert.equal(await refresh(), 'unknown')
+  assert.equal(await refresh(), 'unknown')
+  assert.deepEqual(unknownReports(logs), ['agy unknown status: summary_not_idle 1'])
+  assert.deepEqual(
+    logs.filter((line) => line.startsWith('agy unrecognized summary status:')),
+    ['agy unrecognized summary status: CASCADE_RUN_STATUS_UNSPECIFIED'],
+    'enum token logged once without duplicates',
+  )
+
+  state({ status: 'Private 12345678-1234-4123-8123-1234567890ab', step_count: 1 })
+  assert.equal(await refresh(), 'unknown')
+  assert.ok(logs.includes('agy unrecognized summary status: <other>'))
+  assert.ok(!logs.some((line) => /Private|12345678-1234/.test(line)), 'never logs non-enum status text or IDs')
+})
+
+test('freshly started Persona session stays idle when agy creates an empty transcript file before writing a summary row', { timeout: 15_000 }, async (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'persona-agy-empty-start-'))
+  const agyDir = join(home, 'agy')
+  const freshId = '22222222-3333-4444-8555-666666666666'
+  mkdirSync(agyDir, { recursive: true })
+  const binary = join(home, 'fake-agy.mjs')
+  writeFileSync(binary, `#!/usr/bin/env node
+if (process.argv.includes('models')) { console.log('test-model\\tTest Model'); process.exit(0) }
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { createInterface } from 'node:readline'
+createInterface({ input: process.stdin }).on('line', (line) => {
+  const req = JSON.parse(line)
+  if (req.id === undefined) return
+  if (req.method === 'session/new') {
+    const logs = join(${JSON.stringify(agyDir)}, 'brain', '${freshId}', '.system_generated', 'logs')
+    mkdirSync(logs, { recursive: true })
+    writeFileSync(join(logs, 'transcript.jsonl'), '')
+    process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: req.id, result: { sessionId: '${freshId}' } }) + '\\n')
+    return
+  }
+  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: req.id, result: {} }) + '\\n')
+})
+`, { mode: 0o700 })
+  const node = await startFakeNode(t)
+  const logs = []
+  const runtime = createAgyRuntime({ home, agyDir, agyBin: binary, socketPath: node.path, log: (line) => logs.push(line) })
+  t.after(async () => {
+    await runtime.stop()
+    rmSync(home, { recursive: true, force: true })
+  })
+  runtime.start()
+  await node.ready
+  const started = await node.peer.call('session.start', { cwd: home })
+  assert.equal(started.session.session_id, `agy-${freshId}`)
+  await until('fresh session listed as idle', () => {
+    const row = node.last('runtime.sessions')?.sessions.find((s) => s.session_id === `agy-${freshId}`)
+    return row?.status === 'idle'
+  })
+  assert.deepEqual(unknownReports(logs), [])
 })

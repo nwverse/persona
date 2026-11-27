@@ -6,15 +6,19 @@
 import { TODO_LIST_SECTIONS, TODO_REASONS, type TodoSummary } from "../../../lib/todo-view-wire";
 import type { Triage, TriageRule, TriageSection } from "../../../lib/todo-triage";
 import type { SessionLookup, Todo } from "../../../lib/todos";
-import { stateOf } from "../../../lib/format";
+import { activityOf } from "../../../lib/format";
 import { usageLimitAgent } from "../../../lib/usage-limit";
 
+/** lib/todo-view-wire.ts TODO_PHASES, kept local so the shared first-screen todo-view-wire chunk stays unchanged
+ *  (view-legacy.test.ts keeps the two equal). */
+export const KNOWN_PHASES: readonly string[] = ["needs_you", "working", "waiting", "ready", "todo", "someday", "done"];
+const PHASES: ReadonlySet<string> = new Set(KNOWN_PHASES);
 const SECTIONS: ReadonlySet<string> = new Set(TODO_LIST_SECTIONS);
 const REASONS: ReadonlySet<string> = new Set(TODO_REASONS);
 
-/** A view this web can read: a row with a newer hub's section or reason is drawn as if it had none, and counted apart. */
+/** A view this web can read: a row with a newer hub's phase, section or reason is drawn as if it had none, and counted apart. */
 export function knownView(view: TodoSummary | undefined): view is TodoSummary {
-  return !!view && SECTIONS.has(view.section) && REASONS.has(view.reason);
+  return !!view && PHASES.has(view.phase) && SECTIONS.has(view.section) && REASONS.has(view.reason);
 }
 
 /** Today's section for each of the view's: Waiting is the web's Parked (a parked hold and an open PR wait there, 6.3
@@ -96,7 +100,7 @@ export function rowFacts(todo: Todo, lookup: SessionLookup | undefined, now: num
       continue;
     }
     if (usageLimitAgent(s, now)) out.usageLimit = true;
-    const st = stateOf(s);
+    const st = activityOf(s);
     if (s.awaits_reply && (st === "unread" || st === "idle")) out.awaitsReply = true;
     // the hub's blockedOn: what a turn that is over and not on a card ended blocked on
     const w = s.work;
@@ -128,11 +132,13 @@ export type ByDesign =
   | "run_waits"
   | "usage_limit"
   | "awaits_reply"
+  | "stopped_unfinished"
   | "finished_unseen"
   | "finished_recent"
   | "finished_seen"
   | "someday"
-  | "inactive";
+  | "inactive"
+  | "supervisor_holds";
 
 const FINISHED_DONE: ReadonlySet<TriageRule> = new Set(["seen", "accepted"]);
 const AT_REST: ReadonlySet<TriageRule> = new Set(["rest", "stale"]);
@@ -165,14 +171,18 @@ export const BY_DESIGN: readonly { why: ByDesign; holds: (local: Triage, view: T
   {
     why: "run_waits",
     holds: (l, v, f) =>
-      (l.rule === "agent_running" && f.waits && (v.section === "waiting" || v.section === "just_finished")) ||
+      (l.rule === "agent_running" && f.waits && v.reason !== "usage_limit" && (v.section === "waiting" || v.section === "just_finished")) ||
       (l.rule === "agent_asks" && f.transient && v.reason === "background"),
   },
   // row 10: a usage limit waits for its reset; the web's one status for it hides every other run, so it files the to-do
-  // at rest where the hub places it by its runs (one that works, waits or finished unseen first)
-  { why: "usage_limit", holds: (l, v, f) => f.usageLimit && AT_REST.has(l.rule) && RUN_PLACED.has(v.reason) },
+  // at rest where the hub places it by its runs (one that works, waits or finished unseen first). When another run's
+  // external wait keeps the web in Working, the hub's usage-limit view still takes precedence over that wait.
+  { why: "usage_limit", holds: (l, v, f) => f.usageLimit && ((AT_REST.has(l.rule) && RUN_PLACED.has(v.reason)) || (l.rule === "agent_running" && v.reason === "usage_limit")) },
   // row 4: a run that ended on a plain-text question is Can wait, ahead of everything below row 3 but closed work
   { why: "awaits_reply", holds: (l, v, f) => v.reason === "awaits_reply" && f.awaitsReply && !ABOVE_CAN_WAIT.has(l.rule) },
+  // #9823: an unfinished stop unattended for an hour needs follow-up; the legacy page still reads its unread reply
+  // or pending review as a finish. The assistant tray already uses the closeout; this compares the old page only.
+  { why: "stopped_unfinished", holds: (l, v) => v.section === "needs_you" && v.reason === "stopped_unfinished" && l.section === "just_done" && l.rule === "finished_unseen" },
   // row 9: accepted work nobody has seen stays in Just finished however long (the web: Done after 24 h)
   { why: "finished_unseen", holds: (l, v) => v.reason === "finished_unseen" && l.rule === "accepted" && l.section === "done" },
   // row 9: finished work stays in Just finished for 24 h after it was seen (the web: Done once seen), ahead of an open
@@ -190,6 +200,10 @@ export const BY_DESIGN: readonly { why: ByDesign; holds: (local: Triage, view: T
   // hub's restores), so the Inactive mark differs from Shelved only where the hub knows otherwise: a computer that does
   // not answer (whose runs the web lacks too), a due day in the owner's zone, and a restore of this browser's own
   { why: "inactive", holds: (l, v, f) => v.section === "todo" && AT_REST.has(l.rule) && (f.missing || f.due || f.restoredHere) },
+  // rows 1, 2: a supervised task's failed start, and a run's card its supervisor holds (delegating), are the supervising
+  // conversation's until it passes them up: Working, said as Persona's. The web's triage reads the session's state and
+  // the start error alone and files both as waiting on the owner
+  { why: "supervisor_holds", holds: (l, v) => (l.rule === "failed_start" || l.rule === "agent_asks") && v.section === "working" && v.reason === "persona_working" },
 ];
 
 /** How a row's view compares with today's triage of the same row. */

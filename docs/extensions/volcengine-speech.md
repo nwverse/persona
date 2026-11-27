@@ -8,8 +8,10 @@ before.
 Who it serves: everyday owners who already pay for, or want, a Chinese-first speech service. The form shows one key, a voice and two
 switches; models, voice ids and the old console's App ID are under **Advanced**.
 
-Code: `server/internal/volc` (the program), `server/internal/extmgr/volc_extension.go` (the manifest, the switch), the assistant's
-`meeting_transcription_choice.go`; the stand-in service for tests is `server/internal/volc/volctest`.
+Code: `server/internal/modules/volc` (the program), `server/internal/extmgr/volc_extension.go` (the manifest, the switch), the assistant's
+`meeting_transcription_choice.go`; the stand-in service for tests is `server/internal/modules/volc/volctest`. The program
+is the `volc` module (docs/architecture/core-and-modules.md "Volcengine speech"): a build with `persona_without_volc` or
+`persona_core_only` has neither `personad volc` nor the extension.
 
 ## Setting it up
 
@@ -26,8 +28,11 @@ The extension must be on to save a key: the hub asks the running program to try 
 
 ## The extension
 
-A built-in like the voice extension: registered off (`addVolcExtension`), not registered when a package was installed under the id
-`volc` before. Its program is `personad volc` (and `persona-manager volc`), speaking the extension protocol (RPC on stdin / stdout, the
+A fresh host registers the built-in extension switched off. An existing package installed under the
+ID `volc` keeps its place. Hosts with the built-in provider can preview a signed same-ID successor in
+the official marketplace and roll back to the built-in after the first upgrade. See
+`docs/extensions/extensions.md`, “Moving a built-in provider to the official marketplace”.
+The built-in program is `personad volc` (and `persona-manager volc`), speaking the extension protocol (RPC on stdin / stdout, the
 Go SDK's `ext.Main`) and serving HTTP on its socket. It says the build's version at `initialize`: the hub registered the built-in under
 that version and runs the same executable.
 
@@ -170,7 +175,7 @@ a quota gateway's key reaches the voice extension today, so the owner enters it 
 
 ## Tests
 
-- `server/internal/volc`: the client against `volctest`, a stand-in written from the service's documentation independently of the
+- `server/internal/modules/volc`: the client against `volctest`, a stand-in written from the service's documentation independently of the
   client (its own framing): live jobs (captions, sentences and their recording times, flush, end, usage, the request and its hotwords),
   a dropped session replaced without a sentence said twice or out of order, a hole, a pause, refusals (`upstream_forbidden`,
   `no_upstream`), replay windows (kept ones; a failing window as a gap in an extension's job, a service that goes down, a final pass

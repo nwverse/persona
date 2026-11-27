@@ -22,6 +22,8 @@ import (
 )
 
 type Hub struct {
+	// projectReview: wakes the owner-input relay (project_review.go).
+	projectReview projectReviewRelay
 	passwordLogin passwordLoginState
 	browserLogin  browserLoginState
 	// errs: the hub's own error reports on their way to the managers (error_reports.go).
@@ -48,10 +50,11 @@ type Hub struct {
 	// tests: replaces os.Hostname
 	hostname func() (string, error)
 
-	cfg     *Config
-	version string
-	build   update.Build // channel, build number, where updates come from (docs/operations/hub-update.md)
-	upd     *updater     // updating itself to the publisher's release (selfupdate.go)
+	cfg      *Config
+	version  string
+	build    update.Build    // channel, build number, where updates come from (docs/operations/hub-update.md)
+	upd      *updater        // updating itself to the publisher's release (selfupdate.go)
+	recovery recoveryService // read-only whole-install Recovery inventory (recovery_routes.go)
 	// quiesce and assistantProc pause the hub's own writers for a Web
 	// development snapshot (quiesce.go).
 	quiesce       writeQuiescer
@@ -82,6 +85,7 @@ type Hub struct {
 	fsWatchForceMu       sync.Mutex
 	fsWatchForceByID     map[string]bool
 	push                 *Pusher
+	gradingReconcile     pushGradingLayerReconciler
 	agentWork            agentWork    // whether the manager is there to ask (agents_link.go)
 	store                Store        // nil in unit tests: nothing is persisted
 	lockTests            lockTestWake // wakes the lock test dispatcher when a test is scheduled (locktest.go)
@@ -183,6 +187,7 @@ type Hub struct {
 
 	secret       secretState  // secretkey.go
 	devtok       devTokens    // device token lookups (devicetokens.go)
+	readonlyMu   sync.Mutex   // serializes active-cap checks on read-only session issuance (readonly_sessions.go)
 	shareIngress shareIngress // anonymous admission limits; no sharing business state
 	public       publicState  // TLS identity, listener and advertised addresses (public.go)
 	sends        sendLog      // messages being / just sent, by client_msg_id (send.go)
@@ -308,6 +313,9 @@ func runHub(ctx context.Context, b update.Build, cfg *Config, budget *shutdownBu
 	h.teeErrors()                  // the log's error lines become reports while an extension takes them (error_reports.go)
 	h.builtinLooks = builtinPersonaFS()
 	h.live = newLiveActivities(h)
+	if err := cfg.checkPrivateNetworkOnly(); err != nil {
+		return err // before anything starts that could reach past the private network
+	}
 	h.upd = newUpdater(h)
 	h.upd.confirmed = !updating // an update under way is confirmed by this process (its watchdog waits for that)
 	h.upd.logSource()
@@ -352,7 +360,9 @@ func runHub(ctx context.Context, b update.Build, cfg *Config, budget *shutdownBu
 	h.push.userLang = h.userLang
 	h.push.userLoc = h.userLocation
 	h.push.attention = h.attentionMode
+	h.push.privateOnly = cfg.Security.PrivateNetworkOnly          // own APNs key only, sealed (push.go relayed, push_send.go)
 	h.push.devicesChanged = func() { go h.fleetClientsChanged() } // a phone that takes MCP forms by push (fleet_link.go)
+	go h.projectReviewOwnerLoop(ctx)
 	go h.push.maintenanceLoop(ctx)
 	// The machines are the manager's to connect (devices_link.go); until it reports them they show as before a
 	// restart (what it handed over), before the assistant's process starts and takes that hand-over.
@@ -716,11 +726,13 @@ var phoneConfirmedTools = map[string]bool{
 var phoneOnScreenTools = map[string]bool{
 	"phone_clipboard_get": true,
 	"phone_clipboard_set": true,
+	// The system's Health permission screen shows only over the app on screen (#13740).
+	"phone_health_request_access": true,
 }
 
 // phoneNotOnScreen is the answer to a phoneOnScreenTools call no connected phone can take.
 const phoneNotOnScreen = "Persona is not open on the user's phone, and the phone lets only the app on screen use the " +
-	"clipboard: ask the user to open Persona, then retry."
+	"clipboard or ask for Health access: ask the user to open Persona, then retry."
 
 // requestPhoneWake selects a provider and asks iOS to wake it without waiting for a connection.
 // It reports whether a provider can be woken, including when a recent request throttles this push.

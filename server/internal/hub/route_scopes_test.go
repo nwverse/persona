@@ -23,7 +23,8 @@ import (
 // extwire.Routes (internal/extmgr: an extension's token is judged by their patterns there, extensions.authorize).
 func routePatterns(t *testing.T) []string {
 	seen := map[string]bool{}
-	for _, dir := range []string{".", filepath.Join("..", "extmgr")} {
+	// larksync's routes are mounted on extmgr's API mux (extmgr/bots.go larkSyncRoutes) since they moved to the module (#16357).
+	for _, dir := range []string{".", filepath.Join("..", "extmgr"), filepath.Join("..", "modules", "lark", "larksync")} {
 		fset := token.NewFileSet()
 		files, _ := filepath.Glob(filepath.Join(dir, "*.go"))
 		for _, name := range files {
@@ -163,6 +164,39 @@ func TestBackendWorkspacesRequireFullCredentials(t *testing.T) {
 		}
 		if scope := extwire.RouteScopes[pattern]; scope != "" {
 			t.Errorf("backend workspace route %s grants extension scope %s", pattern, scope)
+		}
+	}
+}
+
+func TestRepoMirrorsRequireFullCredentials(t *testing.T) {
+	patterns := routePatterns(t)
+	for _, pattern := range []string{
+		"GET /api/v1/assistant/repositories/mirrors",
+		"GET /api/v1/assistant/repositories/{id}/mirrors/{machine_id}",
+		"PUT /api/v1/assistant/repositories/{id}/mirrors/{machine_id}",
+		"POST /api/v1/assistant/repositories/{id}/mirrors/{machine_id}/sync",
+		"DELETE /api/v1/assistant/repositories/{id}/mirrors/{machine_id}",
+	} {
+		if !slices.Contains(patterns, pattern) {
+			t.Errorf("missing repo mirror route %s", pattern)
+		}
+		if scope := extwire.RouteScopes[pattern]; scope != "" {
+			t.Errorf("repo mirror route %s grants extension scope %s", pattern, scope)
+		}
+	}
+}
+
+func TestTodoHandoffRequiresFullCredentials(t *testing.T) {
+	patterns := routePatterns(t)
+	for _, pattern := range []string{
+		"GET /api/v1/todos/{id}/handoffs",
+		"POST /api/v1/todos/{id}/handoff",
+	} {
+		if !slices.Contains(patterns, pattern) {
+			t.Errorf("missing todo handoff route %s", pattern)
+		}
+		if scope := extwire.RouteScopes[pattern]; scope != "" {
+			t.Errorf("todo handoff route %s grants extension scope %s", pattern, scope)
 		}
 	}
 }

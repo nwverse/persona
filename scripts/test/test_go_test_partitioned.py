@@ -16,9 +16,11 @@ import go_test_partitioned as gtp
 MODULE = ["example/server/cmd/personad", "example/server/internal/assistant", "example/server/internal/assistantwire",
           "example/server/internal/node", "example/server/internal/node/sub"]
 NODE, ASSISTANT = "./internal/node", "./internal/assistant"
-# The fixture module has no internal/hub, internal/devices or internal/extmgr: they split the way internal/assistant does.
+# The fixture module has no internal/hub, internal/devices, internal/extmgr, internal/modules/voice or internal/db:
+# they split the way internal/assistant does.
 PATTERNS = {NODE: ["^(TestA|TestC)$", "^(TestB)$"], ASSISTANT: ["^(TestX|TestZ)$", "^(TestY)$"],
-            "./internal/hub": ["^(TestH)$"], "./internal/devices": ["^(TestD)$"], "./internal/extmgr": ["^(TestM)$"]}
+            "./internal/hub": ["^(TestH)$"], "./internal/devices": ["^(TestD)$"], "./internal/extmgr": ["^(TestM)$"],
+            "./internal/modules/voice": ["^(TestV)$"], "./internal/db": ["^(TestDB)$"]}
 PREFIX = "example/server/"
 # MODULE with subpackages of internal/assistant, for the ./<dir>/... arguments check-fast passes (#12765).
 TREE = MODULE + [PREFIX + "internal/assistant/inbox", PREFIX + "internal/assistant/inbox/item"]
@@ -239,6 +241,34 @@ class PlanTests(unittest.TestCase):
                          "./internal/assistant partition (1 tests)")
         self.assertEqual(gtp.describe(["go", "test", "-count=1", "./internal/hub", "./internal/kb"]), "2 package(s)")
 
+    def test_build_flags_forwards_only_build_affecting_flags_to_discovery(self):
+        flags = [
+            "-count=1", "-p", "1", "-timeout", "290s", "-v", "-skip", "-race",
+            "-tags", "persona_core_only", "--tags=extra", "-race", "-trimpath=false",
+            "-covermode=atomic", "-gcflags=all=-N", "-ldflags", "-w",
+            "-a", "-x", "-json", "-o", "/tmp/pkg.test", "-coverprofile", "",
+        ]
+        self.assertEqual(
+            gtp.build_flags(flags),
+            ["-tags", "persona_core_only", "--tags=extra", "-race", "-trimpath=false",
+             "-covermode=atomic", "-gcflags=all=-N", "-ldflags", "-w"],
+        )
+
+    def test_main_forwards_build_flags_to_partition_listing(self):
+        argv = ["go", "test", "-count=1", "-tags", "persona_core_only", "-race", "-trimpath", ASSISTANT]
+        with mock.patch.dict(os.environ, {}, clear=False), \
+                mock.patch.object(go_partitions, "list_patterns", return_value=["^(TestX)$", "^(TestY)$"]) as listed, \
+                mock.patch.object(gtp, "run", return_value=0) as runner:
+            os.environ.pop("GOFLAGS", None)
+            self.assertEqual(gtp.main(argv), 0)
+        listed.assert_called_once_with(
+            os.getcwd(), ASSISTANT, env=None, flags=["-tags", "persona_core_only", "-race", "-trimpath"],
+        )
+        self.assertEqual(runner.call_args.args[0], [
+            ["go", "test", "-count=1", "-tags", "persona_core_only", "-race", "-trimpath", "-run", "^(TestX)$", ASSISTANT],
+            ["go", "test", "-count=1", "-tags", "persona_core_only", "-race", "-trimpath", "-run", "^(TestY)$", ASSISTANT],
+        ])
+
 
 class SubtreePlanTests(unittest.TestCase):
     """A ./<dir>/... argument that covers a partitioned package, as check-fast's Go checks pass it (#12765)."""
@@ -332,7 +362,8 @@ class CoverageIntegrationTests(unittest.TestCase):
         self.root = Path(temporary.name)
         self.env = os.environ.copy()
         self.env.pop("GOFLAGS", None)
-        self.env.update(GOTOOLCHAIN="local", GOMAXPROCS="2")
+        # Go chooses the fixture's declared minimum on older hosts, as it does for the repository itself.
+        self.env.update(GOTOOLCHAIN="auto", GOMAXPROCS="2")
         (self.root / "go.mod").write_text("module example.com/coverfixture\n\ngo 1.27.1\n")
         self.write("internal/node/node.go", """package node
 
@@ -376,6 +407,9 @@ func TestValue(t *testing.T) {
 	}
 }
 """)
+
+    def test_fixture_uses_the_module_minimum_instead_of_an_older_local_go(self):
+        self.assertEqual(self.env["GOTOOLCHAIN"], "auto")
 
     def write(self, relative, contents):
         path = self.root / relative
@@ -526,7 +560,8 @@ class SubtreeIntegrationTests(unittest.TestCase):
         self.root = Path(temporary.name)
         self.env = os.environ.copy()
         self.env.pop("GOFLAGS", None)
-        self.env.update(GOTOOLCHAIN="local", GOMAXPROCS="2")
+        # Go chooses the fixture's declared minimum on older hosts, as it does for the repository itself.
+        self.env.update(GOTOOLCHAIN="auto", GOMAXPROCS="2")
         (self.root / "go.mod").write_text("module example.com/subtreefixture\n\ngo 1.27.1\n")
         tests = {"internal/assistant/assistant_test.go": ("assistant", ["TestA1", "TestA2", "TestA3", "TestA4"]),
                  "internal/assistant/inbox/inbox_test.go": ("inbox", ["TestInbox"]),

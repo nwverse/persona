@@ -17,6 +17,7 @@ import (
 	"github.com/nwverse/persona/server/internal/assistantwire"
 	"github.com/nwverse/persona/server/internal/db"
 	"github.com/nwverse/persona/server/internal/i18n"
+	"github.com/nwverse/persona/server/internal/modapi"
 	"github.com/nwverse/persona/server/internal/prompts"
 	"github.com/nwverse/persona/server/internal/proto"
 	"github.com/nwverse/persona/server/internal/rpc"
@@ -229,6 +230,10 @@ func (s *Service) ConversationSent(ctx context.Context, r ConversationSent) {
 	}
 	// A direction's notes block counts as given only once the node took the send (direction_notes.go).
 	s.notesOwnerOutcome(ctx, r.SessionID, r.ClientMsgID, outcome != outcomeFailed)
+	// Quiet messages kept for this conversation leave only once the node accepted the send (relay_later.go).
+	s.relayLaterOwnerOutcome(ctx, r.SessionID, r.ClientMsgID, outcome == outcomeOK)
+	// An exact decision choice typed in a supervisor conversation settles only once delivered (#13041).
+	s.supervisorSettleOutcome(ctx, r)
 	s.recordSend(r.MachineID, r.SessionID, "resume", originApp, false, outcome, r.Code, r.Error)
 }
 
@@ -891,8 +896,8 @@ func signedPoints(d float64) string {
 }
 
 // body is the north star as a `brief` item says it.
-func (b briefNorthStar) body(lines []string) briefBodyNorthStar {
-	out := briefBodyNorthStar{Lines: lines}
+func (b briefNorthStar) body(lines []string) modapi.BriefBodyNorthStar {
+	out := modapi.BriefBodyNorthStar{Lines: lines}
 	if out.Lines == nil {
 		out.Lines = []string{}
 	}
@@ -917,9 +922,15 @@ func (b briefNorthStar) body(lines []string) briefBodyNorthStar {
 
 // runFacts are the facts a task's run opens with: a routine with facts on has the briefing's (briefing.go), which open
 // with the north star; a daily report (Task.Report, such as a dot's) has the north star's lines alone; any other task
-// none.
+// none. Without the briefing module (modules.go) a routine with facts on opens with none, and a daily report with the
+// north star's lines alone, keeping no snapshot for a fallback.
 func (s *Service) runFacts(ctx context.Context, t Task, now time.Time) string {
 	switch {
+	case !s.briefingOn():
+		if t.Report {
+			return s.northStarRunFacts(ctx, now)
+		}
+		return ""
 	case t.Facts:
 		return s.briefStart(ctx, t, now)
 	case t.Report:

@@ -20,8 +20,13 @@ import (
 // (launchers.catalog), or for a node from before the catalog the same with their secrets (launchers.managed). A failed
 // read sends nothing.
 func (s *Service) managedNodeCalls(ctx context.Context, machine string) []devicewire.NodeCall {
+	s.invalidateLauncherListCache(machine)
 	if s.machinePending(ctx, machine) {
 		return nil
+	}
+	var calls []devicewire.NodeCall
+	if cfgCall, ok := s.agyNodeConfigureCall(ctx, machine); ok {
+		calls = append(calls, cfgCall)
 	}
 	s.models.mu.Lock()
 	stored, err := s.readStoredLaunchers(ctx)
@@ -32,27 +37,27 @@ func (s *Service) managedNodeCalls(ctx context.Context, machine string) []device
 	s.models.mu.Unlock()
 	if err != nil {
 		s.logf("launchers: prepare node configuration: %v", err)
-		return nil
+		return calls
 	}
 	if _, err := s.nodeLaunchers(stored); err != nil {
 		s.logf("launchers: prepare node configuration: %v", err)
-		return nil
+		return calls
 	}
 	catalog, legacy, err := s.nodeLaunchersFor(ctx, stored, keys, machine)
 	if err != nil {
 		s.logf("launchers: prepare node configuration: %v", err)
-		return nil
+		return calls
 	}
 	c, err := json.Marshal(map[string]any{"launchers": catalog})
 	if err != nil {
-		return nil
+		return calls
 	}
 	l, err := json.Marshal(map[string]any{"launchers": legacy})
 	if err != nil {
-		return nil
+		return calls
 	}
-	return []devicewire.NodeCall{{MachineID: machine, Method: DeviceLaunchersCatalog, Params: c,
-		Fallback: &devicewire.NodeCall{MachineID: machine, Method: DeviceLaunchersManaged, Params: l}}}
+	return append(calls, devicewire.NodeCall{MachineID: machine, Method: DeviceLaunchersCatalog, Params: c,
+		Fallback: &devicewire.NodeCall{MachineID: machine, Method: DeviceLaunchersManaged, Params: l}})
 }
 
 // managedForNodes: the providers with their secrets as every node from before the catalog would get them (no scope
@@ -131,6 +136,7 @@ func (s *Service) pushManaged(ctx context.Context, machine string) {
 
 // pushNodeLaunchers publishes a confirmed snapshot while the caller holds models.mu.
 func (s *Service) pushNodeLaunchers(ctx context.Context, machine string, stored []storedLauncher, keys []machineKey) {
+	s.invalidateLauncherListCache(machine)
 	for _, d := range s.devices(ctx) {
 		if !d.Online || (machine != "" && d.ID != machine) || s.machinePending(ctx, d.ID) {
 			continue
@@ -276,7 +282,7 @@ func (s *Service) zshrcLaunchers(ctx context.Context, refresh bool, only ...stri
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				res, err := s.listLaunchers(ctx, d)
+				res, err := s.listLaunchersWith(ctx, d, launcherListReadOpts{bypassRead: refresh})
 				mu.Lock()
 				defer mu.Unlock()
 				state := LauncherSync{Machine: d.ID, Name: d.Name, State: "ok"}

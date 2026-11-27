@@ -428,11 +428,12 @@ func (s *Service) saveStagesLocked(ctx context.Context, id string) {
 // prStatusPassMost bounds one pass of PR observations (sweepPRStatusesBounded), apart from the deploy checks' time.
 var prStatusPassMost = time.Minute
 
-// sweepPRStatusesBounded is sweepPRStatuses with its own deadline (prStatusPassMost).
+// sweepPRStatusesBounded is sweepPRStatuses, then sweepParkIssues, with its own deadline (prStatusPassMost).
 func (s *Service) sweepPRStatusesBounded(now time.Time) {
 	ctx, cancel := context.WithTimeout(context.Background(), prStatusPassMost)
 	defer cancel()
 	s.sweepPRStatuses(ctx, now)
+	s.sweepParkIssues(ctx, now) // parks waiting on a GitHub issue (#14050)
 }
 
 // sweepDeploys looks again at the held tasks: once the running hub contains the work, the task is deployed (its
@@ -582,6 +583,11 @@ var githubHTTP = &http.Client{Timeout: 15 * time.Second}
 // githubGetter is the extensions' GitHub connector (extmgr.Manager.GitHubGet).
 type githubGetter interface {
 	GitHubGet(ctx context.Context, path string, out any) (bool, error)
+}
+
+// githubConnectorStatus is the local connectivity check on extmgr.Manager (zero remote calls).
+type githubConnectorStatus interface {
+	GitHubConnected(ctx context.Context) bool
 }
 
 // forge is where deploy checks read PRs: the test's, else GitHub (through the connector when there is one).

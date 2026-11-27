@@ -100,7 +100,8 @@ def strings(o, key=()):
 
 def example_values():
     try:
-        return {v for _, v in strings(json.load(open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.example.json"))))}
+        with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.example.json")) as source:
+            return {v for _, v in strings(json.load(source))}
     except (OSError, ValueError):
         return set()
 
@@ -178,6 +179,10 @@ def config_values():
     paths.update(os.path.expanduser(os.environ[key]) for key in CONFIG_ENV if os.environ.get(key))
     defaults = example_values()
     for path in paths:
+        # The runtime's hub.json contains credentials. A build config override
+        # or symlink must never make the repository scanner open that file.
+        if any(os.path.normcase(os.path.basename(p)) == "hub.json" for p in (path, os.path.realpath(path))):
+            continue
         try:
             with open(path) as source:
                 cfg = json.load(source)
@@ -372,6 +377,9 @@ def regular_governance_files(head=None):
             if b"\t" in record and record.split(b" ", 1)[0] in (b"100644", b"100755")}
 
 
+PUBLIC_ADMIN_OWNER = re.compile(r"/docs/SUPER_RULES\.md @([A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?)")
+
+
 def public_admin_lines():
     """Exact published references by path; missing/unreadable evidence grants no exception."""
     try:
@@ -379,11 +387,14 @@ def public_admin_lines():
                               capture_output=True, check=True, text=True, timeout=10).stdout.strip()
         regular = regular_governance_files(base)
         published = git_file_data(list(regular), base + ":")
-        owner = re.fullmatch(r"/docs/SUPER_RULES\.md @([A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?)",
-                             published.get(".github/CODEOWNERS", b"").decode("utf-8").strip())
-        if not owner:
+        # The reference line sits among .github/CODEOWNERS's generated owner block, so only a whole line is
+        # one; an unmatched line (two owners, trailing text) and two different owners both grant nothing.
+        logins = {owner.group(1)
+                  for line in published.get(".github/CODEOWNERS", b"").decode("utf-8").splitlines()
+                  for owner in (PUBLIC_ADMIN_OWNER.fullmatch(line),) if owner}
+        if len(logins) != 1:
             return {}
-        login = owner.group(1)
+        login = logins.pop()
         return {path: {line: login for template in templates
                        for line in (template.format(login=login),)
                        if line in published.get(path, b"").decode("utf-8").splitlines()}

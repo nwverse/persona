@@ -33,6 +33,17 @@ type Profile struct {
 	Attention *Attention `json:"attention,omitempty"`
 }
 
+// LabsEventType is the client event discriminator for Labs receipts.
+type LabsEventType string
+
+const LabsSeenEventType LabsEventType = "assistant_labs_seen"
+
+// LabsSeenEvent is the committed read-receipt set sent to connected clients via ws.broadcast.
+type LabsSeenEvent struct {
+	Type     LabsEventType `json:"type"`
+	LabsSeen []string      `json:"labs_seen"`
+}
+
 // MainRouteMachine keeps legacy profiles usable while preferring the confirmed main binding.
 func (p Profile) MainRouteMachine() string {
 	if p.MainMachineID != "" {
@@ -65,6 +76,14 @@ const (
 // assistant.model. It carries the AI twin's own saved mode separately from the caller-controlled permission_mode.
 // Older nodes ignore it and retain their default clamp; newer nodes never treat its absence as permission to bypass.
 const InboxPermissionModeParam = "inbox_permission_mode"
+
+// DefaultPermissionModeParam carries the manager's current default separately from an explicit permission_mode.
+// PermissionModeExplicitParam marks the latter as a deliberate per-conversation choice. Older nodes ignore both and
+// retain their legacy resume behavior; newer nodes keep the legacy behavior when an older manager omits them.
+const (
+	DefaultPermissionModeParam  = "default_permission_mode"
+	PermissionModeExplicitParam = "permission_mode_explicit"
+)
 
 // CodeUndeliveredAhead: SendParams refuses the owner's message because older ones to the same conversation are kept
 // undelivered (MethodKeepUndelivered): the hub keeps this one behind them instead of sending it first.
@@ -153,6 +172,9 @@ type StartParams struct {
 	// GuestTools: a guest conversation (assistant/guest.go) that may use only these connector tools; nil is an
 	// ordinary one.
 	GuestTools []string `json:"guest_tools,omitempty"`
+	// GuestHandoff: a proxy reply's guest (assistant/bot_handoff.go). The manager registers it before the node
+	// starts it; never over the bus.
+	GuestHandoff string `json:"-"`
 	// NewSessionID: start it under this session id (a meeting's follow-up, made once also across a restart); a node
 	// that cannot picks its own. Never over the bus.
 	NewSessionID string `json:"-"`

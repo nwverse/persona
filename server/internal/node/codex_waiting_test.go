@@ -120,6 +120,11 @@ func TestCodexStartWithoutAMessage(t *testing.T) {
 	if err != nil || len(res["items"].([]any)) != 0 {
 		t.Fatalf("items %v %v", res, err)
 	}
+	index, err := request(t, n, "session.items", map[string]any{"session_id": s.SessionID, "user_inputs": true})
+	inputs, isList := index["inputs"].([]any)
+	if err != nil || !isList || len(inputs) != 0 || index["total"] != float64(0) || index["history"] != res["history"] {
+		t.Fatalf("input index %v %v", index, err)
+	}
 	if _, err := request(t, n, "session.modes", map[string]any{"session_id": s.SessionID}); err == nil {
 		t.Error("modes of a row with no thread")
 	}
@@ -566,7 +571,9 @@ func clearRolloutCache(home string) {
 	rolloutCaches.Lock()
 	for h, c := range rolloutCaches.byHome {
 		if h == home || strings.HasPrefix(h, home) || strings.HasPrefix(home, h) {
+			c.mu.Lock()
 			c.at = time.Time{}
+			c.mu.Unlock()
 		}
 	}
 	rolloutCaches.Unlock()

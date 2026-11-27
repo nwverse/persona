@@ -25,6 +25,9 @@ const TaskInstructions = "task_instructions_v1"
 // EventUpdatePreflightFailed reports a refused resident reload for a committed node update.
 const EventUpdatePreflightFailed = "node.update.preflight_failed"
 
+// EventUpdateDraining reports that a committed node update is draining idle work before handover.
+const EventUpdateDraining = "node.update.draining"
+
 // PersonaContracts is the optional bidirectional naming capability. It does not
 // change the node protocol floor or become a required capability.
 const PersonaContracts = "persona_contracts_v1"
@@ -37,6 +40,10 @@ const MCPWait = "mcp_wait_v1"
 // ManagerUpdateInventory is the optional read-only local update.inventory
 // contract. A legacy peer remains compatible, but cannot produce idle evidence.
 const ManagerUpdateInventory = "manager_update_inventory_v1"
+
+// StopIfIdle is an additive automatic-stop RPC. Old peers refuse it before
+// stopping anything; callers must never fall back to unconditional session.stop.
+const StopIfIdle = "session.stop_if_idle"
 
 // ExternalLauncherInventory is optional source-scoped discovery from a trusted node-local adapter registration.
 // It is announced dynamically only while that registration is enabled, never as execution authority.
@@ -87,6 +94,8 @@ const (
 	// SessionStartSpeed: session.start and session.start.work take speed for a new terminal Codex or Claude Code Agent.
 	// A node without it would silently drop the explicit choice and start at the launcher's own speed.
 	SessionStartSpeed = "session_start_speed"
+	// SessionStartServiceTier lets session.start apply a native Codex service_tier before the first turn.
+	SessionStartServiceTier = "session_start_service_tier"
 	// NodeUpdate: the node.update.* methods (docs/operations/node-update.md). Whether an update can run right now is still
 	// node.info's node_update / node_update_reason.
 	NodeUpdate = "node_update"
@@ -120,6 +129,9 @@ const (
 	// SecretRun: secret.run, commands the user approved on the password card run with the password they typed on
 	// their stdin (docs/assistant/assistant.md "Password card"). A node on Windows announces it and refuses the run.
 	SecretRun = "secret_run"
+	// SecretRunEnv: secret.run also accepts explicit delivery=env, putting the password in each approved command's
+	// PERSONA_SECRET. An older node would silently ignore the field, so the manager refuses it before the card.
+	SecretRunEnv = "secret_run_env"
 	// SecretEnv: secret.stage and session.start's secret_ticket, values the user approved on the hand-off card put
 	// in one Agent start's environment (docs/extensions/secret-providers.md "The hand-off to one Agent run").
 	SecretEnv = "secret_env"
@@ -162,10 +174,18 @@ const (
 	// (docs/operations/node-update.md "Usage"). sessions.list answers update_busy, that check, and the hub waits on it;
 	// for a node without it (or a list without the field) it waits on the old rule, every Agent idle.
 	NodeUpdateIdle = "node_update_idle"
+	// NodeUpdateDrain: a resident node reports node.update.draining and node.info's update_draining while draining
+	// active work after node.update.commit, and announces node.restarting when handover begins so the hub can anchor
+	// its post-restart confirmation deadline to handover rather than the pre-drain commit reply.
+	NodeUpdateDrain = "node_update_drain_v1"
 	// MachineDiagnose: machine.diagnose and machine.cleanup, a computer's bounded self-description (largest process
 	// groups, folders, rebuildable caches, tools) and the emptying of caches from its own catalog
 	// (docs/server/machines.md "Diagnosis and cleanup"). Without it the manager answers node_outdated.
 	MachineDiagnose = "machine_diagnose"
+	// MachineStorageUsage: machine.storage.usage, .trash, .untrash, .purge and .check, the disk usage map's scan, its
+	// guarded move to the trash and the protection rules an offload's paths are checked against
+	// (docs/server/machine-usage-map.md). Without it the manager answers node_outdated.
+	MachineStorageUsage = "machine_storage_usage"
 	// StartContinue: start.continue, an answer to the startup question a start's new tab stopped on (shell_waiting),
 	// typed into the kept tab while the question is still there, and the start run again there under the same id
 	// (docs/protocol/protocol.md "Answering a start's question"). Without it the manager answers node_outdated.
@@ -187,6 +207,9 @@ const (
 	// AgentDirsBlocked: node.configure's agent_dirs_blocked, the Agent folder rules that block (#10053): the node keeps
 	// sessions working there out of every list and sends nothing of them. Without it the manager only hides them.
 	AgentDirsBlocked = "agent_dirs_blocked"
+	// HerdrSessionsBlocked: node.configure's herdr_sessions_blocked and herdr.sessions.list (#14898): named herdr
+	// sessions kept out of Persona on this computer.
+	HerdrSessionsBlocked = "herdr_sessions_blocked"
 	// NodeLanes: the node answers rpc.lanes and frames its connection when the manager asks, its messages on the lanes of
 	// ControlLane and BulkLane (docs/protocol/protocol.md "Lanes"). Without it the manager never asks, and the connection
 	// stays JSON lines.
@@ -202,6 +225,9 @@ const (
 	// reads the id. Without it the hub refuses such a resume itself: an older node would start a new conversation
 	// under an id it has nothing of.
 	ResumeOutsideHealth = "resume_outside_health"
+	// StartOpID: session.start and session.start.work record op_id on the started session (persisted via state.put)
+	// and answer start.status for reconnect reconciliation of held Agent starts (#10674).
+	StartOpID = "start_op_id_v1"
 )
 
 // ResumeWindowSeconds is how long the manager tries to resume a dropped connection that can resume, from when it
@@ -222,6 +248,11 @@ var (
 	ControlLane = []string{"ping", "stream.ack"}
 	// BulkLane: what carries a file's or a package's bytes, and a forwarded port's.
 	BulkLane = []string{"file.chunk", "file.read", "file.upload.chunk", "node.update.chunk", "stream.data"}
+	// NodeCreditReplies: the node's answers that can run to megabytes (a page of a transcript, an item whole, an
+	// image) wait for credit on the interactive lane (rpc.Peer.CreditReplies), ahead of bulk. Its own session.items
+	// pushes go on the bulk lane with credit (rpc.Peer.NotifyBulk); a runtime's, forwarded from that runtime's read
+	// loop, do not (#13677).
+	NodeCreditReplies = []string{"session.items", "session.item", "session.image"}
 )
 
 // Error codes in the manager's answers to a resident node's replayed notifications (a notify with spool_id,
@@ -253,11 +284,19 @@ const RestartExitCode = 75
 // TaskWorkspace supports explicit backend-created task workspaces.
 const TaskWorkspace = "task_workspace_v1"
 
+// TaskWorkspaceCapabilities is the reply to task.workspace.capabilities.
+type TaskWorkspaceCapabilities struct {
+	Capability        string `json:"capability"`
+	Start             bool   `json:"start,omitempty"`
+	EmptyRepositories bool   `json:"empty_repositories,omitempty"`
+	LocalGit          bool   `json:"local_git,omitempty"`
+}
+
 // MarkdownCloseout means the node recognizes the terminal-readable work report as well as archived XML.
 const MarkdownCloseout = "closeout.markdown.v1"
 
 // Announced is what a node built from this code announces.
-var Announced = []string{MarkdownCloseout, TaskWorkspace, TaskInstructions, SourcePermissions, OwnerControls, SessionSkills, ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, MCPWait, Sessions, SessionEchoStatus, ModelConfiguration, AssistantConfigDir, AssistantSupervisionInstructions, AssistantServiceTier, SessionStartSpeed, TaskExecution, TaskInput, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow, LauncherSwitchIdle, PaneCwd, NodeUpdateIdle, PaneNewSpace, MachineDiagnose, StartGoal, StartContinue, LauncherCheckAssistantTurn, StartAnswer, AssistantToolSearchFallback, AgentDirsBlocked, NodeLanes, ResumeOutsideHealth, DenyDirs}
+var Announced = []string{MarkdownCloseout, TaskWorkspace, TaskInstructions, SourcePermissions, OwnerControls, SessionSkills, ShareProjection, CreationReceipt, PersonaContracts, ManagerUpdateInventory, MCPWait, Sessions, SessionEchoStatus, ModelConfiguration, AssistantConfigDir, AssistantSupervisionInstructions, AssistantServiceTier, SessionStartSpeed, SessionStartServiceTier, TaskExecution, TaskInput, NodeUpdate, Engines, MachineUID, HerdrServer, PluginNodeCall, Ultracode, HealthSpaces, Preview, SecretRun, SecretRunEnv, Clipboard, SecretEnv, LauncherSwitch, ModelHTTP, EngineSwitch, ModelRun, LauncherSwitchNow, LauncherSwitchIdle, PaneCwd, NodeUpdateIdle, NodeUpdateDrain, PaneNewSpace, MachineDiagnose, MachineStorageUsage, StartGoal, StartContinue, LauncherCheckAssistantTurn, StartAnswer, AssistantToolSearchFallback, AgentDirsBlocked, HerdrSessionsBlocked, NodeLanes, ResumeOutsideHealth, DenyDirs, StartOpID}
 
 // ShareProjection is the bounded complete-source sharing projection, not light Items.
 const ShareProjection = "share_projection.v1"

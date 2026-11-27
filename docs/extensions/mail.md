@@ -1,6 +1,6 @@
 # Mail
 
-`server/internal/mail`: lets both Claude and the App send and receive the user's email. It uses standard IMAP + SMTP with no third-party relay service.
+`server/internal/modules/mail` (a feature module: `persona_without_mail` builds the manager without it; `docs/architecture/core-and-modules.md` "Provider seams"): lets both Claude and the App send and receive the user's email. It uses standard IMAP + SMTP with no third-party relay service.
 Gmail uses "Sign In with Google" (OAuth2 + XOAUTH2) and additionally supports searching with Gmail search syntax (`X-GM-RAW`). Credentials are encrypted and stored in the hub's `dataDir` (default `~/.persona`).
 
 ## Capabilities
@@ -133,7 +133,7 @@ the system browser opens Microsoft sign-in and authorization → back to the App
   "Sent" itself, so the hub doesn't append another copy.
 - **Refresh tokens rotate**: Microsoft issues a new one on every refresh (and the old one becomes invalid), so the hub encrypts and stores it back into `oauth_enc` right away (Google doesn't rotate).
 - Credentials: `{provider: "microsoft", client_id, refresh_token}` encrypted in `mail_accounts.oauth_enc`, same as Gmail.
-- Code: `server/internal/mail/microsoft.go`; App: `apple/Persona/Views/Mail/MailOutlookViews.swift`.
+- Code: `server/internal/modules/mail/microsoft.go`; App: `apple/Persona/Views/Mail/MailOutlookViews.swift`.
 - API: `GET` / `PUT /api/v1/mail/oauth/microsoft/config` (`{configured, client_id, source: app|config, redirect_uri}`; PUT `{client_id}`, an empty string clears it),
   `POST …/microsoft/start` (`{login_hint?}` → `{auth_url, callback_scheme, state}`), `POST …/microsoft/finish` (the callback's `{state, code}` or
   `{state, error, error_description}` → `{account}`). A callback carrying an error is still passed to the hub: it turns Microsoft's error code into what to do (see below).
@@ -289,6 +289,18 @@ download route takes.
   Files are created with `O_EXCL`, so an existing file (or a symlink at that name) is never written through:
   the next free `name (2).ext` … `name (99).ext` is used instead.
 - The node writes into its own data directory, which the agent sandbox leaves readable (only its secrets are closed).
+
+## With the mail module off
+
+A hub that turns the mail module off (the `modules` row, or a build without it) has no `/api/v1/mail/…` route and no
+mail tools, and reads no new mail. What it already stored stays the user's and stays readable through Core's routes
+(`docs/architecture/core-and-modules.md`, "A module that is off keeps what the user has"): each mail item in the Inbox
+with its subject, sender, date, preview and `context` (the header lines and up to 3,000 characters of the newest
+mail's text, `GET /api/v1/inbox/{id}`), a translation it kept, and the mail filed into the knowledge base. The full
+body, the HTML and the attachments were never stored: they are fetched from the mail server as a mail opens, so they
+are not available until the module is back. Clients show the stored text and say so in one plain line, and leave out
+the controls that would write to the mailbox; the web's is described in `docs/web/web.md` ("Modules"), the iPhone
+and iPad app's in `docs/apple/ios.md` ("Modules"), and the Android app follows in #15995.
 
 ## Known limitations
 

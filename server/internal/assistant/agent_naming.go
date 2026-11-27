@@ -66,8 +66,8 @@ type agentNamingBook struct {
 	timerSeq  uint64
 	runs      sync.WaitGroup     // active naming passes; database-backed test fixtures wait before closing their store
 	requests  singleflight.Group // one model call per session for requested names (agent_naming_request.go)
-	// beforeRequest lets a concurrency test observe every caller reaching the singleflight gate; nil in production.
-	beforeRequest func()
+	// requestJoined observes admission to the shared model call in the concurrency test.
+	requestJoined func()
 	// unconfigured: the background naming found no model set up and the log has said so; not said again (for each
 	// session it tries) until a model answers (agentNamingSay).
 	unconfigured bool
@@ -189,7 +189,7 @@ func agentNameDue(v Settings, r agentNameRecord, c proto.Session, now time.Time,
 		return true
 	}
 	hours := agentNamingInterval(v)
-	return hours > 0 && !r.NamedAt.IsZero() && now.Sub(r.NamedAt) >= time.Duration(hours)*time.Hour && c.OutputTokens > r.NamedOutput &&
+	return hours > 0 && !r.NamedAt.IsZero() && now.Sub(r.NamedAt) >= time.Duration(hours)*time.Hour && int(c.OutputTokensValue()) > r.NamedOutput &&
 		c.Status == proto.StatusWorking && !c.UpdatedAt.IsZero() && now.Sub(c.UpdatedAt) < 5*time.Minute
 }
 
@@ -388,7 +388,7 @@ func (s *Service) tryAgentName(ctx context.Context, machine string, c proto.Sess
 	if tab == "" && quietOn(prefs.AgentAutoNaming) && !c.Assistant && !c.Archived && knownAgentTitle(c) && !r.Manual && r.NamedAt.IsZero() && agentNamingInterval(prefs) > 0 && !badAgentSessionName(c) {
 		r.Machine, r.Session = machine, c.SessionID
 		r.NamedAt = now
-		r.NamedOutput = c.OutputTokens
+		r.NamedOutput = int(c.OutputTokensValue())
 		_ = s.putAgentNameLocked(ctx, key, r)
 		b.mu.Unlock()
 		return false
@@ -474,7 +474,7 @@ func (s *Service) tryAgentName(ctx context.Context, machine string, c proto.Sess
 	r.Failures = 0
 	r.LastFailure = ""
 	r.NamedAt = now
-	r.NamedOutput = c.OutputTokens
+	r.NamedOutput = int(c.OutputTokensValue())
 	r.NextAttempt = time.Time{}
 	if err := s.putAgentNameLocked(ctx, key, r); err != nil {
 		s.logf("agent naming: session=%q/%q reason=result_write_failed", machine, c.SessionID)

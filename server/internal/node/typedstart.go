@@ -12,6 +12,7 @@ import (
 	"github.com/nwverse/persona/server/internal/herdr"
 	"github.com/nwverse/persona/server/internal/host"
 	"github.com/nwverse/persona/server/internal/proto"
+	"github.com/nwverse/persona/server/internal/transcript"
 )
 
 // A start types its command into a fresh pane a moment after the tab is made, often before the shell's line editor
@@ -30,6 +31,12 @@ const terminalNotReady = proto.CodeTerminalNotReady
 
 // startScriptPrefix names the files a start writes in the node's directory.
 const startScriptPrefix = "agent-start-"
+
+// isStartScriptTitle reports whether title is the shell's terminal title for Persona's own sourced agent-start-*.sh
+// command (typedstart.go), which must never stand as a session's display title.
+func isStartScriptTitle(title string) bool {
+	return transcript.IsStartScriptTitle(title)
+}
 
 // startScript is the start file at path that runs cmd: it removes itself, then runs cmd.
 func startScript(path, cmd string) string {
@@ -94,17 +101,6 @@ func (n *Node) runAgentCommand(ctx context.Context, launch host.Launcher, create
 		return func() {}, err
 	}
 	return t.done, nil
-}
-
-// runWorkAgentCommand is runAgentCommand without automatic terminal cleanup. A launch.Run error can mean the pane
-// accepted the command but its response was lost, so the caller gets done even on error and cleans the agent, not the
-// terminal. done is nil only when no command could be typed; it removes an unsourced start file in every case.
-func (n *Node) runWorkAgentCommand(ctx context.Context, launch host.Launcher, created *host.Created, ws, anchor, cmd string, shells ...string) (done func(), err error) {
-	t, err := n.typeStartMode(ctx, launch, created, ws, anchor, cmd, false, shells...)
-	if t == nil {
-		return nil, err
-	}
-	return t.done, err
 }
 
 // typedStart is a start's line typed into its new pane (typeStart): the line, and the start file it sources ("" when

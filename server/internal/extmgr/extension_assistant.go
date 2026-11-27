@@ -79,6 +79,9 @@ func (ps *extensions) extensionSkills() []ExtensionSkill {
 		if !p.Record.Enabled || p.Problem != "" {
 			continue
 		}
+		if extension.DeclaresMemorySources(p) {
+			continue // its data skills are text it writes, an outlet around the hub's filter (memory_sources.go)
+		}
 		skills, _ := ps.dataSkillsOf(p)
 		for _, s := range skills {
 			add(s)
@@ -117,7 +120,9 @@ func (ps *extensions) extensionInstructions(ctx context.Context, base string) st
 	data := ps.dataInstructions(ctx, base)
 	var b strings.Builder
 	for _, p := range ps.reg.List() {
-		if !p.Record.Enabled || p.Problem != "" {
+		// An extension that declares memory_sources gives its memory through the hub's filter, not here
+		// (memory_sources.go).
+		if !p.Record.Enabled || p.Problem != "" || extension.DeclaresMemorySources(p) {
 			continue
 		}
 		for _, a := range p.Manifest.AssistantParts() { // with the declarative instructions (contributes.prompts)
@@ -312,6 +317,11 @@ func (ps *extensions) assistantMCPServers() []proto.AssistantMCPServer {
 	seen := map[string]bool{}
 	for _, p := range ps.reg.List() {
 		if !p.Record.Enabled || p.Problem != "" {
+			continue
+		}
+		if extension.DeclaresMemorySources(p) && len(p.Manifest.MCPServers()) > 0 {
+			// Its own MCP servers could recall its entries around the hub's filter (memory_sources.go).
+			ps.logf("plugin %s: mcp servers withheld from the assistant: it declares memory_sources", p.Record.ID)
 			continue
 		}
 		for _, m := range p.Manifest.MCPServers() {

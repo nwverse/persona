@@ -9,13 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nwverse/persona/server/internal/feishubot"
-	"github.com/nwverse/persona/server/internal/i18n"
-	"github.com/nwverse/persona/server/internal/prompts"
+	"github.com/nwverse/persona/server/internal/botcard"
 	"github.com/nwverse/persona/server/internal/proto"
 )
 
-// The Lark card of a routine with facts (briefing_card.go). All ids are placeholders.
+// The Lark card of a routine with facts (modules/briefing/card.go). All ids are placeholders.
 
 // briefRunEnv is a morning routine that has run once on a fake hub, with Feishu paired and its pushes on.
 type briefRunEnv struct {
@@ -36,6 +34,15 @@ func newBriefRunEnv(t *testing.T, facts bool) *briefRunEnv { return newBriefRunE
 
 // newBriefRunEnvWith is newBriefRunEnv with more on the board when the run starts (its facts are worked out then).
 func newBriefRunEnvWith(t *testing.T, facts bool, more func(e *briefRunEnv)) *briefRunEnv {
+	t.Helper()
+	if facts {
+		needsBriefingModule(t)
+	}
+	return briefRunEnvWith(t, facts, more)
+}
+
+// briefRunEnvWith is newBriefRunEnvWith whether or not this build has the briefing module (modules_test.go).
+func briefRunEnvWith(t *testing.T, facts bool, more func(e *briefRunEnv)) *briefRunEnv {
 	t.Helper()
 	f := newFakeHub().withMachine()
 	e := &briefRunEnv{t: t, f: f}
@@ -99,7 +106,7 @@ func (e *briefRunEnv) features(f FeishuFeatures) {
 	e.mu.Lock()
 	e.feat = &f
 	e.mu.Unlock()
-	e.s.feishuForgetStatus()
+	e.s.larkModule().ForgetStatus()
 }
 
 // mirror ends the routine's turn: the answer goes to Feishu.
@@ -122,6 +129,7 @@ func (e *briefRunEnv) cards() []string {
 // With facts on, the routine's answer goes to Lark as one card made by Persona: the model's summary on top, under it the
 // waiting cards, the last twelve hours and the task to verify with its Accept button.
 func TestBriefRoutineSendsOneCard(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBriefRunEnv(t, true)
 	e.mirror()
 	cards := e.cards()
@@ -150,6 +158,7 @@ func TestBriefRoutineSendsOneCard(t *testing.T) {
 
 // With facts off the routine sends its answer as before: the model's own text, no sections of Persona's.
 func TestBriefRoutineWithoutFactsSendsTheAnswerAsBefore(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBriefRunEnv(t, false)
 	e.mirror()
 	cards := e.cards()
@@ -166,6 +175,7 @@ func TestBriefRoutineWithoutFactsSendsTheAnswerAsBefore(t *testing.T) {
 // Too many rows are not cut off in the middle of the card: each section lists briefRowsMax of them and says how many more,
 // and the card stays one card inside the size Lark takes.
 func TestBriefRoutineCountsWhatDoesNotFit(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBriefRunEnvWith(t, true, func(e *briefRunEnv) {
 		for i := 0; i < 11; i++ { // 13 waiting in all, 12 to verify
 			e.waiting(fmt.Sprintf("ix_more_%02d", i), fmt.Sprintf("再来一个问题%02d", i), time.Duration(i+1)*time.Minute)
@@ -215,6 +225,7 @@ func (e *briefRunEnv) reminded() int {
 // once the task has been asked again (another round) the old card's button is answered "already handled" and verifies
 // nothing (#4853).
 func TestBriefAcceptButtonIsForItsRoundOnly(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBriefRunEnv(t, true)
 	e.mirror()
 	var card struct {
@@ -248,8 +259,8 @@ func TestBriefAcceptButtonIsForItsRoundOnly(t *testing.T) {
 	if value == nil || value["id"] != "todo_v1" || value["asked_at"] == "" {
 		t.Fatalf("no Accept button with its round on the card: %v", value)
 	}
-	press := func(v map[string]any) *feishubot.CardAction {
-		var a feishubot.CardAction
+	press := func(v map[string]any) *botcard.CardAction {
+		var a botcard.CardAction
 		a.Action.Value = v
 		a.Context.MessageID = "om_brief_1"
 		return &a
@@ -260,7 +271,7 @@ func TestBriefAcceptButtonIsForItsRoundOnly(t *testing.T) {
 	e.s.accept.mu.Lock()
 	e.s.accept.asks["todo_v1"].AskedAt = time.Now().Add(-time.Minute)
 	e.s.accept.mu.Unlock()
-	if r := e.s.botCardAction(ctx, press(value), ""); r == nil || r.Toast == nil || !strings.Contains(r.Toast.Content, "已经处理过了") {
+	if r := e.s.larkModule().Action(ctx, press(value), ""); r == nil || r.Toast == nil || !strings.Contains(r.Toast.Content, "已经处理过了") {
 		t.Fatalf("an old round's button was not answered as handled: %+v", r)
 	}
 	if !askOf(e.s, "todo_v1").AcceptedAt.IsZero() {
@@ -269,7 +280,7 @@ func TestBriefAcceptButtonIsForItsRoundOnly(t *testing.T) {
 
 	// The button of the round that waits now works.
 	now := map[string]any{"a": "accept", "id": "todo_v1", "asked_at": askOf(e.s, "todo_v1").AskedAt.UTC().Format(timeKeyLayout)}
-	if r := e.s.botCardAction(ctx, press(now), ""); r == nil || r.Toast == nil || !strings.Contains(r.Toast.Content, "已验收") {
+	if r := e.s.larkModule().Action(ctx, press(now), ""); r == nil || r.Toast == nil || !strings.Contains(r.Toast.Content, "已验收") {
 		t.Fatalf("the current round's button did not verify it: %+v", r)
 	}
 	if askOf(e.s, "todo_v1").AcceptedAt.IsZero() {
@@ -279,6 +290,7 @@ func TestBriefAcceptButtonIsForItsRoundOnly(t *testing.T) {
 
 // The briefing card carries the tasks to verify, so the "still not verified" cards are not sent again that day.
 func TestBriefCardReplacesThatDaysAcceptanceReminders(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBriefRunEnv(t, true)
 	e.mirror()
 	n := len(e.cards())
@@ -290,6 +302,7 @@ func TestBriefCardReplacesThatDaysAcceptanceReminders(t *testing.T) {
 
 // If the briefing has not gone out an hour after its time, the reminders go as they did before.
 func TestBriefReminderComesWhenTheBriefingDoesNot(t *testing.T) {
+	needsLarkLayer(t)
 	e := newBriefRunEnv(t, true)
 	e.s.remindAcceptance(e.at(9, 30)) // the briefing's hour is not over
 	if e.reminded() != 0 {
@@ -303,6 +316,7 @@ func TestBriefReminderComesWhenTheBriefingDoesNot(t *testing.T) {
 
 // The model is given the facts the card lists, in the message that starts the run; without facts it is not.
 func TestBriefRoutineGivesTheModelTheSameFacts(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	text := newBriefRunEnv(t, true)
 	sent, _ := text.f.lastSend(t)["text"].(string)
 	for _, want := range []string{"Persona 算好的事实", "等用户处理的 2 件", "旧的问题", "等用户验收的 1 件", "修登录崩溃", "登录不再崩溃"} {
@@ -319,6 +333,7 @@ func TestBriefRoutineGivesTheModelTheSameFacts(t *testing.T) {
 // A long list of what finished does not push out what did not go through: the failed rows come first in the last twelve
 // hours' section (#4124), the finished ones after them up to the section's ten rows.
 func TestBriefShowsFailuresBeforeALongListOfDoneTasks(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBriefRunEnvWith(t, true, func(e *briefRunEnv) {
 		for i := 0; i < 12; i++ {
 			at := time.Now().Add(-time.Duration(i+1) * time.Minute)
@@ -343,6 +358,7 @@ func TestBriefShowsFailuresBeforeALongListOfDoneTasks(t *testing.T) {
 // answered as any other. A failed model turn does not mirror its raw error: the scheduled-run watcher sends the fixed-facts
 // fallback once instead (briefing_fallback_test.go), and a later successful retry has facts of its own.
 func TestBriefCardIsForTheRunsOwnTurnOnly(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	e := newBriefRunEnv(t, true)
 	setSession := func(s proto.Session) { e.f.setSessions("server", s) }
 
@@ -369,6 +385,7 @@ func TestBriefCardIsForTheRunsOwnTurnOnly(t *testing.T) {
 // The reminders wait an hour for the briefing only when its card can go out: not with the Lark bot's pushes off, not on a
 // day the routine does not run, and never past midnight.
 func TestBriefReminderGraceOnlyWhenTheCardCanGoOut(t *testing.T) {
+	needsLarkLayer(t)
 	setMorning := func(e *briefRunEnv, change func(t *Task)) {
 		sc := e.s.loadSchedule(context.Background())
 		sc.mu.Lock()
@@ -419,103 +436,17 @@ func TestBriefReminderGraceOnlyWhenTheCardCanGoOut(t *testing.T) {
 // Without the Lark card (the bot's pushes are off) the model is told to list the rows itself; the web app has the item, the
 // phone apps do not yet.
 func TestBriefRoutineWithoutACardTellsTheModelToListTheRows(t *testing.T) {
+	needsLarkLayer(t) // the chat is the lark module's
 	sent, _ := newBriefRunEnvWith(t, true, func(e *briefRunEnv) { e.features(FeishuFeatures{Main: true}) }).f.lastSend(t)["text"].(string)
 	if !strings.Contains(sent, "这次不会发飞书卡片") || strings.Contains(sent, "你不用再逐条列") || !strings.Contains(sent, "旧的问题") {
 		t.Errorf("a run without a card:\n%s", sent)
 	}
 }
 
-func TestBriefCardsKeepEveryOwnerWaitWithinPhysicalBudget(t *testing.T) {
-	f := &briefFacts{l: i18n.En, loc: time.UTC, At: time.Date(2026, 11, 18, 8, 0, 0, 0, time.UTC), web: "https://example.com"}
-	d := prompts.BriefDirection{Name: "Main", Open: 220, Link: "https://example.com/main"}
-	for i := 0; i < 220; i++ {
-		d.Waits = append(d.Waits, prompts.BriefWait{
-			Kind: "needs_user", TodoID: fmt.Sprintf("todo-%03d", i),
-			Line: fmt.Sprintf("Owner wait %03d %s", i, strings.Repeat("x", 140)),
-			Link: fmt.Sprintf("https://example.com/todos/%03d", i),
-		})
-	}
-	f.Directions = []prompts.BriefDirection{d}
-	const header = "Model unavailable; these are the computed facts"
-	card, plain, _ := (&Service{}).briefCardWithHeader(f, "Morning briefing", "", header)
-	card.Buttons(feishubot.Btn("Open", feishubot.Default, map[string]any{"a": "open"}))
-	cards := splitBriefAnswerCards(card, plain, header)
-	if len(cards) < 2 {
-		t.Fatalf("the oversized fixture produced %d card, want continuations", len(cards))
-	}
-	var all strings.Builder
-	for i, c := range cards {
-		if n := len(c.card.JSON()); n > reportCardMaxBytes {
-			t.Errorf("card %d is %d bytes, limit %d", i, n, reportCardMaxBytes)
-		}
-		if n := len(c.card.Body.Elements); n > reportCardMaxElements {
-			t.Errorf("card %d has %d elements, limit %d", i, n, reportCardMaxElements)
-		}
-		all.WriteString(briefCardElementText(c.card, ""))
-		if !strings.HasPrefix(c.fallback, header) {
-			t.Errorf("card %d plain substitute does not start with the fixed header", i)
-		}
-	}
-	if !strings.HasPrefix(plain, header+"\n") {
-		t.Fatalf("the phone fallback's first line changed: %q", plain[:min(len(plain), 100)])
-	}
-	last := -1
-	rendered := all.String()
-	for i, w := range d.Waits {
-		row := feishubot.EscapeMarkdown(w.Line) + briefLink(f.l, w.Link)
-		if n := strings.Count(rendered, row); n != 1 {
-			t.Fatalf("owner row %d occurs %d times in the rich cards, want exactly once", i, n)
-		}
-		at := strings.Index(rendered, row)
-		if at <= last {
-			t.Fatalf("owner row %d is out of order", i)
-		}
-		last = at
-		if n := strings.Count(plain, w.Line); n != 1 {
-			t.Fatalf("owner row %d occurs %d times in the phone fallback, want exactly once", i, n)
-		}
-	}
-}
+const briefRowsMax = 10
+const briefKeep = 3 * time.Hour
 
-// The answer the card quotes is cut as Markdown: a code block the cut lands in is closed and an emphasis or link the cut
-// lands in is dropped, so the quoted answer does not turn the rest of itself into code or show half a marker.
-func TestBriefCardQuotesItsAnswerAsMarkdown(t *testing.T) {
-	f := &briefFacts{l: i18n.En, loc: time.UTC, At: time.Date(2026, 11, 11, 8, 0, 0, 0, time.UTC)}
-	card := func(answer string) string {
-		t.Helper()
-		c, _, _ := (&Service{}).briefCard(f, "Morning brief", answer)
-		return cardMarkdown(t, c)
-	}
-	long := func(s string) string {
-		t.Helper()
-		if n := len([]rune(s)); n <= briefAnswerRunes {
-			t.Fatalf("the fixture is %d runes, not over %d", n, briefAnswerRunes)
-		}
-		return s
-	}
-	prose := strings.Repeat("Nothing needs you this morning. ", 44) // 1408 runes, so the cut lands inside the marker
-
-	code := card(long("**Today**\n\n```\n" + strings.Repeat("log line\n", 200) + "```\n\nAll good.\n"))
-	if n := strings.Count(code, "```"); n%2 != 0 {
-		t.Errorf("%d fence lines, so the block swallows the rest of the answer: %q", n, code[max(0, len(code)-160):])
-	}
-	if !strings.HasSuffix(code, "…") {
-		t.Errorf("the cut is not marked with an ellipsis: %q", code[max(0, len(code)-160):])
-	}
-
-	bold := card(long(prose + "**" + strings.Repeat("still to come ", 15)))
-	if n := strings.Count(bold, "**"); n%2 != 0 {
-		t.Errorf("%d emphasis markers, so the cut left one open: %q", n, bold[max(0, len(bold)-160):])
-	}
-	link := card(long(prose + "[the long page](https://example.com/notes/2026/11/" + strings.Repeat("a", 80) + ")"))
-	if strings.Contains(link, "example.com") {
-		t.Errorf("half a link is left in the answer: %q", link[max(0, len(link)-160):])
-	}
-
-	// A chart the model drew is still drawn as numbers on the card: cutting must not leave it as the block clipMarkdown
-	// would drop it to.
-	chart := card(long("```persona-card\n" + `{"type":"line","title":"Sleep this week","unit":"h","points":[{"label":"Mon","value":7.2},{"label":"Tue","value":6.5}]}` + "\n```\n\n" + strings.Repeat("Nothing needs you this morning. ", 44)))
-	if strings.Contains(chart, "persona-card") || !strings.Contains(chart, "Mon") || !strings.Contains(chart, "7.2") {
-		t.Errorf("the chart is not drawn as numbers: %q", chart[max(0, len(chart)-200):])
-	}
+func (s *Service) briefCard(f *briefFacts, label, answer string) (*botcard.Card, string, []string) {
+	pages, plain, shown := s.scheduleCards(f, label, answer, "", "", "")
+	return (*botcard.Card)(pages[0].Card), plain, shown
 }

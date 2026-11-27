@@ -72,10 +72,17 @@ export function secretHandoffInput(input: Record<string, unknown> | undefined): 
   return { variables, store: input?.store_operation === "create" || input?.store_operation === "edit", agent: s(input?.agent), machine: s(input?.machine_name), cwd: s(input?.cwd), prompt: s(input?.prompt) };
 }
 
-/** A password card's computer, purpose and commands, the commands exactly as sent. */
-export function secretRunInput(input: Record<string, unknown> | undefined): { machine: string; purpose: string; commands: string[] } {
+/** A command an Agent runs that stopped at a prompt (`command_input`, #14527): the owner types the line it waits for,
+ *  and the line goes straight into the command, never through the model. Its card is views/chat/CommandInputCard.tsx. */
+export function isCommandInput(ix: Pick<Interaction, "kind" | "tool_name">): boolean {
+  return ix.kind === "permission" && ix.tool_name === "command_input";
+}
+
+/** A password card's computer, purpose, delivery and commands, the commands exactly as sent. */
+export function secretRunInput(input: Record<string, unknown> | undefined): { machine: string; purpose: string; delivery: "stdin" | "env"; commands: string[] } {
   const commands = Array.isArray(input?.commands) ? input.commands.filter((c): c is string => typeof c === "string" && c.trim() !== "") : [];
-  return { machine: s(input?.machine_name) || s(input?.machine), purpose: s(input?.purpose), commands };
+  const delivery = input?.delivery === "env" ? "env" : "stdin";
+  return { machine: s(input?.machine_name) || s(input?.machine), purpose: s(input?.purpose), delivery, commands };
 }
 
 /** The questions an AskUserQuestion / ask_user call asked (empty when its input has none). */
@@ -95,13 +102,15 @@ export function toolQuestions(input: Record<string, unknown> | undefined): ToolQ
   });
 }
 
-/** Each question's answer in the hub's ask_user result (`The user answered:\n- <question> → <answer>`); empty when
- *  nobody answered or the text is not the hub's (iOS AskUserAnswers.parse). */
+/** Each question's answer in the hub's ask_user result (`The user answered:\n- <question> → <answer>`) or Claude
+ *  Code's AskUserQuestion result (`User has answered your questions: "<q>"="<a>", …`, #5937); empty when nobody
+ *  answered or the text is neither (iOS AskUserAnswers.parse). */
 export function askUserAnswers(result: string, questions: ToolQuestion[]): Record<string, string> {
-  if (!result.startsWith("The user answered:")) return {};
+  const claude = result.startsWith("User has answered your questions:");
+  if (!claude && !result.startsWith("The user answered:")) return {};
   const marks = questions
     .map((q) => {
-      const mark = `\n- ${q.question} → `;
+      const mark = claude ? `"${q.question}"="` : `\n- ${q.question} → `;
       const at = result.indexOf(mark);
       return at >= 0 ? { q: q.question, at, end: at + mark.length } : null;
     })
@@ -109,7 +118,12 @@ export function askUserAnswers(result: string, questions: ToolQuestion[]): Recor
     .sort((a, b) => a.at - b.at);
   const out: Record<string, string> = {};
   marks.forEach((m, n) => {
-    const answer = result.slice(m.end, n + 1 < marks.length ? marks[n + 1].at : undefined).trim();
+    let answer = result.slice(m.end, n + 1 < marks.length ? marks[n + 1].at : undefined);
+    if (claude) {
+      const close = answer.lastIndexOf('"');
+      answer = close >= 0 ? answer.slice(0, close) : "";
+    }
+    answer = answer.trim();
     if (answer) out[m.q] = answer;
   });
   return out;

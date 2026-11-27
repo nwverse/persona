@@ -75,15 +75,25 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 	// The effort is checked against the agent this start actually dispatches: an explicit agentType wins over the
 	// launcher's name, so a Claude start refuses ultra even on a launcher named codex.
 	kind := n.startAgentType(launcher, agentType)
+	if kind == traexAgent && effort == "" {
+		effort = execution.Effort
+	}
 	if err := execution.check(kind); err != nil {
 		return nil, err
 	}
 	var argv []string
 	codex := false
-	if proto.FasterSpeed(execution.Speed) {
+	explicitSpeed := proto.FasterSpeed(execution.Speed) || execution.ServiceTier != ""
+	if explicitSpeed {
 		argv, codex = n.codexLauncher(ctx, launcher)
-		if err := execution.applyStartSpeed(launcher, kind, codex); err != nil {
-			return nil, err
+		if execution.ServiceTier != "" {
+			if !codex || kind == traexAgent {
+				return nil, unsupportedStartSpeed(launcher, execution.ServiceTier)
+			}
+		} else {
+			if err := execution.applyStartSpeed(launcher, kind, codex); err != nil {
+				return nil, err
+			}
 		}
 		if execution.ServiceTier != "" {
 			if err := n.checkCodexStartSpeed(ctx, launcher, execution.Model, execution.ServiceTier); err != nil {
@@ -169,7 +179,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 			return nil, refusal("not_running", "接着这个 omp 会话后没等到它的会话行，这次没有发送。", nil)
 		}
 	}
-	if !proto.FasterSpeed(execution.Speed) {
+	if !explicitSpeed {
 		argv, codex = n.codexLauncher(ctx, launcher)
 	}
 	var launch host.Launcher
@@ -209,7 +219,11 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		if err != nil {
 			return nil, err
 		}
-		if agent != "claude" && agent != "codex" {
+		if kind == traexAgent {
+			if agent != traexAgent || resume != "" {
+				return nil, errors.New("TRAE CLI model overrides require a new session on a TRAE CLI launcher")
+			}
+		} else if agent != "claude" && agent != "codex" {
 			return nil, errors.New("普通 Agent 的启动只支持 Claude Code 或 Codex 启动器")
 		}
 	}
@@ -279,9 +293,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		if resume != "" { // a Codex thread is resumed above: this id is not one
 			return nil, refusal(codexResumeRefused, "找不到这个 Codex 会话的记录，没法接着它：请在电脑上恢复（codex resume）。", nil)
 		}
-		// An inherited effort needs no override, which would leave the shared app-server; the record keeps it all the same.
-		runs := n.codexOwnEffort(ctx, argv, codexPaneEnv(launch), cwd, execution)
-		s, err := n.startCodex(ctx, launch, cwd, launcher, codexExecutionArgs(argv, runs), execution, prompt, ws, tabName, mode)
+		s, err := n.startCodex(ctx, launch, cwd, launcher, argv, execution, prompt, ws, tabName, mode)
 		if err == nil && strings.TrimSpace(prompt) != "" {
 			n.codexGoalAfterStart(s.SessionID, s.PaneID, execution.Goal) // its first message is in (codex_start_goal.go)
 		}
@@ -294,8 +306,11 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		return n.startWorkAgent(ctx, launch, cwd, launcher, work, execution.Model, effort, mode, prompt, ws, tabName)
 	}
 	if kind != "claude" { // start_agent.go
-		if mode != "" || effort != "" {
+		if mode != "" || (effort != "" && (kind != traexAgent || resume != "")) {
 			return nil, fmt.Errorf("permission mode and effort are only supported for Claude starts")
+		}
+		if kind == traexAgent && resume == "" {
+			execution.Effort = effort
 		}
 		return n.startOtherAgent(ctx, launch, cwd, launcher, kind, prompt, resume, ws, tabName, execution)
 	}
@@ -320,7 +335,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		return nil, err
 	}
 	// No tier alias on the command line for a gateway provider (#10365): its model for that tier, else its default.
-	spec := claudeLaunch{Source: execution.Source, Launcher: launcher, Settings: settings, Hooks: hooks, Display: n.liveRepliesPlugin(hooks), Model: n.claudeModelArg(launcher, execution.Model),
+	spec := claudeLaunch{Source: execution.Source, Launcher: launcher, Settings: settings, Hooks: hooks, Display: n.liveRepliesPlugin(hooks), Model: n.claudeModelArg(launcher, execution.Model), Effort: effort,
 		Plugins: n.claudeLoadsPlugins(ctx), TaskInstructionFile: instructionFile}
 	if backend := backendLaunchFrom(ctx); backend != nil && mode != "plan" {
 		for _, repo := range backend.executor.journal.Repositories {
@@ -367,7 +382,7 @@ func (n *Node) start(ctx context.Context, cwd, launcher, prompt, resume, workspa
 		cmd = cdThen(cwd, cmd, shells...)
 	}
 	n.notePaneStart(launcher) // not in the agent sandbox unless a managed launcher (agentsandbox.go)
-	st := sessionState{ModelSource: execution.Source, Pane: pane, Launcher: launcher, Cwd: cwd, StartedAt: time.Now().UTC(), Model: execution.Model, ModelFingerprint: execution.Fingerprint,
+	st := sessionState{ModelSource: execution.Source, Pane: pane, Launcher: launcher, Cwd: cwd, StartedAt: time.Now().UTC(), Model: execution.Model, ModelEffort: effort, ModelFingerprint: execution.Fingerprint,
 		PlanThen: planThen, TaskInstructions: execution.TaskInstructions, TaskInstructionFile: instructionFile, TaskInstructionChannel: instructionChannel}
 	if prev, ok := n.state.get(id); ok && resume != "" {
 		if !prev.StartedAt.IsZero() { // a branch (fork.go) has none: it starts now
@@ -565,7 +580,7 @@ func (n *Node) retypeStart(ctx context.Context, pane string, typed *typedStart) 
 // error: in its data (screen) for a coded one, else after its text.
 func (n *Node) startTabFailed(ctx context.Context, launch host.Launcher, created *host.Created, ws, id string, err error) error {
 	pane := created.Pane.String()
-	shown, _ := n.readPane(ctx, pane, "recent-unwrapped", 30)
+	shown, _ := n.readPane(ctx, pane, "recent-unwrapped", 2*screen.DialogLines)
 	tail := lastLines(shown, 12)
 	keep := func(e error) error {
 		if adoptedPane(ctx) != nil { // the user's own pane ("Run Agent Here"): theirs to keep, never closed later
@@ -579,7 +594,10 @@ func (n *Node) startTabFailed(ctx context.Context, launch host.Launcher, created
 	case rpcCode(err) == proto.CodeShellWaiting:
 		return keep(err)
 	case errors.As(err, &stalled):
-		return keep(refusal(proto.CodeAgentStartStalled, fmt.Sprintf("%v\n%s", err, tail), map[string]any{"screen": tail}))
+		// The whole screen, as a dialog is read (screen.DialogLines): whoever remedies the start reads what stopped it
+		// (an unrecognized dialog's question and every choice), not only its last rows.
+		whole := stalledScreen(shown)
+		return keep(refusal(proto.CodeAgentStartStalled, fmt.Sprintf("%v\n%s", err, whole), map[string]any{"screen": whole}))
 	case errors.As(err, &rejected):
 		n.closeNewTab(ctx, launch, created, ws)
 		return refusal(proto.CodeStartLineRejected, fmt.Sprintf("%v, twice; the tab is closed\n%s", err, tail),
@@ -590,6 +608,19 @@ func (n *Node) startTabFailed(ctx context.Context, launch host.Launcher, created
 		return err
 	}
 	return fmt.Errorf("%w\n%s", err, tail)
+}
+
+// stalledScreen is the last screen.DialogLines rows of a stalled start's pane, the blank rows under what it drew left
+// out (a tall pane's fresh screen is mostly blank rows below a dialog drawn from its top).
+func stalledScreen(shown string) string {
+	lines := strings.Split(strings.TrimRight(shown, "\n"), "\n")
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	if len(lines) > screen.DialogLines {
+		lines = lines[len(lines)-screen.DialogLines:]
+	}
+	return strings.Join(lines, "\n")
 }
 
 // checkStart validates a start's arguments and returns the directory (~ expanded, home when empty) and launcher.
@@ -703,11 +734,18 @@ func (n *Node) workspaceFor(ctx context.Context, launch host.Launcher, cwd strin
 }
 
 func (n *Node) sessionFor(id string, a host.Agent) *proto.Session {
+	title := a.Title
+	if isStartScriptTitle(title) {
+		title = ""
+	}
 	s := &proto.Session{
 		SessionID: id, Cwd: a.Cwd, Status: a.AgentStatus, PaneID: a.PaneID, TabID: a.TabID,
-		WorkspaceID: a.WorkspaceID, AgentName: a.Name, Title: a.Title, Agent: a.Agent, UpdatedAt: time.Now().UTC(), // just started
+		WorkspaceID: a.WorkspaceID, AgentName: a.Name, Title: title, Agent: a.Agent, UpdatedAt: time.Now().UTC(), // just started
 	}
 	_ = n.refreshHosts(context.Background())
+	if a.Agent == agyAgent {
+		n.agyPaneTitle(s, n.agyConversation(id, a.PaneID))
+	}
 	n.placeIn(s, a)
 	n.decorate(s)
 	s.PermissionMode, s.Effort = n.modesOf(id)
@@ -728,6 +766,10 @@ func (n *Node) close(ctx context.Context, id string) error {
 // automatic one (idle, task_completed: #10355), which is recorded only once the close went through, as an automatic
 // stop's is (retire.go).
 func (n *Node) closeWithCause(ctx context.Context, id string, cause proto.StopCause) (err error) {
+	return n.closeWithCauseChecked(ctx, id, cause, nil)
+}
+
+func (n *Node) closeWithCauseChecked(ctx context.Context, id string, cause proto.StopCause, before func() error) (err error) {
 	if err := n.switchingRefusal(id); err != nil { // a launcher switch, maybe on the last connection's Node
 		return err
 	}
@@ -747,7 +789,7 @@ func (n *Node) closeWithCause(ctx context.Context, id string, cause proto.StopCa
 	a, ok := n.agent(id)
 	if !ok {
 		if st, mine := n.state.get(id); mine {
-			return n.closeAfterExit(ctx, id, st)
+			return n.closeAfterExit(ctx, id, st, before)
 		}
 		return fmt.Errorf("这个 Agent 不在这台电脑的终端里运行，没法从手机关闭")
 	}
@@ -755,10 +797,25 @@ func (n *Node) closeWithCause(ctx context.Context, id string, cause proto.StopCa
 	if err != nil {
 		return err
 	}
+	if before != nil {
+		if err := before(); err != nil {
+			return err
+		}
+	}
 	_ = n.sendKeys(ctx, a.PaneID, "ctrl+c")
 	time.Sleep(200 * time.Millisecond)
+	if before != nil {
+		if err := before(); err != nil {
+			return err
+		}
+	}
 	_ = n.sendKeys(ctx, a.PaneID, "ctrl+c")
 	time.Sleep(500 * time.Millisecond)
+	if before != nil {
+		if err := before(); err != nil {
+			return err
+		}
+	}
 	return org.Close(ctx, ref, a.WorkspaceID, a.TabID)
 }
 
