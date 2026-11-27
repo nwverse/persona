@@ -111,12 +111,12 @@ export function strokeMark(ctx: CanvasRenderingContext2D, m: Mark, colors: Recor
   ctx.stroke();
 }
 
-/** The crop's frame while cropping: the rest dimmed, a line round the crop, its corners marked, the thirds while it is
- *  dragged. */
-export function drawCropFrame(ctx: CanvasRenderingContext2D, area: Size, f: Rect, dragging: boolean) {
+/** The crop's frame while cropping: the cropped-out parts of the picture dimmed, a line round the crop, its corners
+ *  marked, and the rule-of-thirds grid while it is dragged. */
+export function drawCropFrame(ctx: CanvasRenderingContext2D, picture: Rect, f: Rect, dragging: boolean) {
   ctx.fillStyle = `rgb(0 0 0 / ${IMAGE_EDIT.cropDim})`;
   ctx.beginPath();
-  ctx.rect(0, 0, area.width, area.height);
+  ctx.rect(picture.x, picture.y, picture.width, picture.height);
   ctx.rect(f.x, f.y, f.width, f.height);
   ctx.fill("evenodd");
   ctx.strokeStyle = "#fff";
@@ -184,7 +184,7 @@ export function paintEditorCanvas(
   const colors = inkColors();
   for (const m of opts.current ? [...edits.marks, opts.current] : edits.marks) strokeMark(ctx, m, colors);
   ctx.restore();
-  if (opts.cropMode) drawCropFrame(ctx, size, l.crop, opts.cropping);
+  if (opts.cropMode) drawCropFrame(ctx, l.picture, l.crop, opts.cropping);
 }
 
 export function encodeCanvas(c: HTMLCanvasElement, type: string, quality?: number): Promise<Blob | null> {
