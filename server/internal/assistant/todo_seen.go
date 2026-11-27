@@ -137,7 +137,7 @@ func (s *Service) autoSeeAcceptedTodo(ctx context.Context, id, outcome string, u
 				continue
 			}
 			if workerSessionFinishedForAutoSeen(c) {
-				s.markSeen(ctx, a.MachineID, a.SessionID)
+				s.markSessionRead(ctx, a.MachineID, a.SessionID)
 			}
 			break
 		}

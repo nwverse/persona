@@ -322,7 +322,8 @@ export const listExtensionsInfo = (isAuthContextCurrent?: () => boolean) =>
   }));
 /** A detail as either kind of hub sends it, its pages' places read with the new keys. */
 export const detailOf = (d: HubExtensionDetail): HubExtensionDetail => (d.ui ? { ...d, ui: d.ui.map(placeOf) } : d);
-export const extensionDetail = (id: string) => api<HubExtensionDetail>(withEntryLists(`${base(id)}/`)).then(detailOf);
+export const extensionDetail = (id: string, options?: Pick<Parameters<typeof api>[1] & object, "headers" | "signal" | "isAuthContextCurrent">) =>
+  api<HubExtensionDetail>(withEntryLists(`${base(id)}/`), options).then(detailOf);
 /** After a change that can start, stop or reconfigure an extension: its entries, cards and sections are asked for again. */
 export const changed = <T>(r: T): T => {
   refreshExtensionPlaces();
@@ -432,6 +433,40 @@ export function extensionTone(p?: HubExtension | null): "red" | "orange" | "gree
 
 export function sourceText(s?: string): string | undefined {
   return s === "builtin" ? t("lib-extensions.source_builtin") : s === "hub.json" ? "manager.json" : s === "installed" ? t("lib-extensions.source_installed") : undefined;
+}
+
+const EXTENSION_KINDS: Record<string, string> = {
+  voice: "lib-extensions.kind_voice",
+  connectors: "lib-extensions.kind_connectors",
+  channel: "lib-extensions.kind_channel",
+  api: "lib-extensions.kind_api",
+  quota: "lib-extensions.kind_quota",
+  usage: "lib-extensions.kind_usage",
+  providers: "lib-extensions.kind_providers",
+  agent_sources: "lib-extensions.kind_agent_sources",
+  assistant: "lib-extensions.kind_assistant",
+  ui: "lib-extensions.kind_ui",
+  events: "lib-extensions.kind_events",
+  extension_pack: "lib-extensions.kind_extension_pack",
+};
+
+/** The extension's contribution category in words, never the hub's internal key. */
+export function extensionTypeText(kind?: string): string | undefined {
+  if (!kind) return undefined;
+  return t(EXTENSION_KINDS[kind] ?? "lib-extensions.kind_other");
+}
+
+/** A permission's heading with technical shortcut keys replaced by what the capability means to a person. */
+export function permissionTitle(p: { key: string; title: string }): string {
+  if (p.key === "network") return t("settings-extensions.permission_network_title");
+  if (p.key === "agent_runtimes") return t("settings-extensions.permission_runtimes_title");
+  return p.title;
+}
+
+/** A permission's explanation: the agent-runtime socket is described by what it reaches, not its internal filename. */
+export function permissionDetail(p: { key: string; detail?: string }): string {
+  if (p.key === "agent_runtimes") return t("settings-extensions.permission_runtimes_detail");
+  return p.detail ?? "";
 }
 
 export function pointText(name: string): string {
@@ -692,6 +727,26 @@ export function rebaseDraft<T extends { text: string; integer: boolean }>(
     draft: edits.reduce((out, e) => setAt(out, e.path, e.value), fresh),
     typed: Object.fromEntries(Object.entries(kept.typed).filter(([k]) => k in problems || edited.has(k))),
   };
+}
+
+/** Proposed values from a settings link, put only on fields the form draws: unknown fields, secrets and entry lists
+ *  never enter the draft. The saved configuration stays the base; Save is still the only write. */
+export function prefillDraft(draft: JsonObject, prefill: JsonObject, fields: ExtensionField[]): JsonObject {
+  const apply = (out: JsonObject, values: JsonObject, at: ExtensionField[], path: string[]): JsonObject => {
+    let next = out;
+    for (const [name, value] of Object.entries(values)) {
+      const field = at.find((f) => f.name === name);
+      if (!field || field.secret || isEntryList(field) || value === null || value === undefined) continue;
+      if (field.type === "object") {
+        if (typeof value !== "object" || Array.isArray(value)) continue;
+        next = apply(next, value as JsonObject, field.fields ?? [], [...path, field.name]);
+      } else {
+        next = setAt(next, [...path, field.name], value);
+      }
+    }
+    return next;
+  };
+  return apply(draft, prefill, fields, []);
 }
 
 /** The items of a list field: the draft's, else the default. */

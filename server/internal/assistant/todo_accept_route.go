@@ -62,7 +62,11 @@ func (s *Service) todoAcceptRoute() {
 		case in.Option != "":
 			result, err = s.chooseOption(r.Context(), r.PathValue("id"), in.AskedAt, in.Option)
 		default:
-			result, err = s.acceptReviewRound(r.Context(), r.PathValue("id"), in.AskedAt)
+			result, err = s.acceptTryFromApp(r.Context(), r.PathValue("id"), in.AskedAt)
+		}
+		if errors.Is(err, errCloseNotConfirmed) {
+			writeTypedNothing(w, http.StatusUnprocessableEntity, "todo_close_not_confirmed", err)
+			return
 		}
 		if errors.Is(err, errDecisionOption) {
 			apierr.Write(w, http.StatusBadRequest, err)
@@ -70,6 +74,12 @@ func (s *Service) todoAcceptRoute() {
 		}
 		if errors.Is(err, errAcceptStore) { // nothing accepted: the button works again once the store answers
 			apierr.Write(w, http.StatusServiceUnavailable, i18n.Err("http-status.unavailable"))
+			return
+		}
+		if isInvestigationGuardError(err) {
+			// Unconfirmed or open investigation findings block closing the task, not Agent delivery.
+			// Use 422 so older apps keep the button retryable (unlike 409) and do not show a 502 delivery failure.
+			writeTypedNothing(w, http.StatusUnprocessableEntity, "investigation_findings_pending", err)
 			return
 		}
 		if delivered := writeDelivered(err); err != nil && delivered != "none" {

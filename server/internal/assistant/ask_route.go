@@ -20,19 +20,22 @@ import (
 	"github.com/nwverse/persona/server/internal/screen"
 )
 
-// Asks go to the supervisor first (docs/assistant/unified-entry.md "Asks go to the supervisor first"). With leader
-// conversations configured (assistant.leaders not empty), a card a supervised task's agent raises — a question, a tool
-// approval or a plan — goes to the conversation supervising the task, not to the user: the apps show it marked
-// delegating, nothing rings, and the supervisor gets it as a supervision entry. The supervisor owns its agents' cards
-// (the decision rights of 2026-11-23: the user decides only the goal, what only they know, what goes out in their name,
-// spending, what cannot be undone, and what only they can do). It answers a question itself (interaction_answer; the
-// answer becomes the task's decision), and allows or denies a tool permission or a plan itself too (interaction_answer
-// with allow; answeredApproval): the agent gets it marked as the assistant's answer (AnsweredBy), never as the user's.
-// Allowing what stays the user's — a card with a form or a secret, or an approval that would send, reply or comment in
-// the user's name, spend money or delete (userApproval) — needs ask_escalate: every card of the task still waiting
-// then rings the user once, with the supervisor's reason and recommendation, and a leader's escalation is an escalated
-// entry in the main conversation, so the layers above know. Denying any permission or plan remains the supervisor's:
-// denial executes nothing and returns its reason to the agent.
+// Asks go to the supervisor first (docs/assistant/unified-entry.md "Asks go to the supervisor first"). A card a
+// supervised task's agent raises — a question, a tool approval, a parsed terminal dialog, or (with assistant.leaders
+// configured) a plan or owner-only approval — goes to the conversation supervising the task, not to the user: the apps
+// show it marked delegating, nothing rings, and the supervisor gets it as a supervision entry. The supervisor owns its
+// agents' cards (the decision rights of 2026-11-23: the user decides only the goal, what only they know, what goes out
+// in their name, spending, what cannot be undone, and what only they can do). It answers a question itself
+// (interaction_answer; the answer becomes the task's decision), and allows or denies a tool permission or a plan itself
+// too (interaction_answer with allow; answeredApproval): the agent gets it marked as the assistant's answer
+// (AnsweredBy), never as the user's. Allowing what stays the user's — a card with a form or a secret, or an approval
+// that would send, reply or comment in the user's name, spend money or delete (userApproval) — needs ask_escalate:
+// every card of the task still waiting then rings the user once, with the supervisor's reason and recommendation, and a
+// leader's escalation is an escalated entry in the main conversation, so the layers above know. Denying any permission
+// or plan remains the supervisor's: denial executes nothing and returns its reason to the agent. Without leaders
+// configured (assistant.leaders empty), six-class owner cards and plans stay with the user directly while non-six-class
+// agent permissions and questions and parsed terminal dialogs still take the active supervision route on the task's
+// supervisor (#16291).
 //
 // Nothing reaches the user on a timeout. A card nobody handles within askHoldFor moves one rung up (leader, then the
 // main conversation; one rung, the background supervisor or the main conversation, for a task no leader supervises),
@@ -74,8 +77,9 @@ type askRoute struct {
 	held     time.Time // when it reached this rung: askBusyMax counts from here
 	// maybeTold: a question card restored after a restart. Whether the user was told of it is not kept, so should it
 	// reach the user (an escalation) without a supervisor's context, it only goes back on the apps (ringAsks).
-	maybeTold bool
-	delivered bool // this rung has actually received the card, rather than merely queued its signal
+	maybeTold       bool
+	delivered       bool      // this rung has actually received the card, rather than merely queued its signal
+	standaloneUntil time.Time // when a permission with no open to-do becomes answerable in the app
 	// A card that runs past its last rung goes back to its task's supervisor (reminded) and stays there (parked) until
 	// someone answers or escalates it, reminding the supervisor each askHoldFor, reminders times so far, at most
 	// askRemindMax. None of it is kept over a restart: a restored route starts again from the supervisor.
@@ -122,17 +126,21 @@ func terminalQuestion(ix proto.Interaction) bool {
 // on its own screen (a safety check its hooks never see, "Dangerous rmdir operation…") among them. Unparsed screens,
 // typed values, secrets and forms are not: the supervisor could not read them, so they stay with the user.
 func supervisedScreen(ix proto.Interaction) bool {
-	d := ix.Dialog
-	if ix.Kind != proto.IxScreen || ix.Private || ix.Secret || len(ix.Fields) > 0 || d == nil || strings.TrimSpace(d.Question) == "" {
+	if !safeScreenDialog(ix) {
 		return false
 	}
-	return slices.ContainsFunc(d.Options, func(o screen.Option) bool { return o.Kind == "" && o.Label != "" })
+	return slices.ContainsFunc(ix.Dialog.Options, func(o screen.Option) bool { return o.Kind == "" && o.Label != "" })
+}
+
+func safeScreenDialog(ix proto.Interaction) bool {
+	return ix.Kind == proto.IxScreen && !ix.Private && !ix.Secret && len(ix.Fields) == 0 &&
+		ix.Dialog != nil && strings.TrimSpace(ix.Dialog.Question) != ""
 }
 
 // userScreen says why supervised terminal dialog ix is the user's to decide, not its supervisor's ("" when the
-// supervisor may pick its option): Claude's startup trust and Bypass Permissions confirmations, which have ordinary
-// option rows though they authorize access, and a command that would send, reply or comment in the user's name,
-// spend money or delete (userApprovalWords). The supervisor hands those to the user with ask_escalate.
+// supervisor may pick its option): Claude's startup trust, external imports and Bypass Permissions confirmations,
+// and a command that would send, reply or comment in the user's name, spend money or delete (userApprovalWords).
+// The supervisor hands those to the user with ask_escalate.
 func userScreen(ix proto.Interaction) string {
 	d := ix.Dialog
 	if d == nil {
@@ -140,7 +148,9 @@ func userScreen(ix proto.Interaction) string {
 	}
 	for _, o := range d.Options {
 		label := strings.ToLower(strings.TrimSpace(o.Label))
-		if label == "yes, i trust this folder" || label == "yes, i accept" && strings.Contains(d.Detail+" "+d.Question, "Bypass Permissions mode") {
+		trust := label == "yes, i trust this folder" || label == "yes, allow external imports"
+		bypass := label == "yes, i accept" && strings.Contains(d.Detail+" "+d.Question, "Bypass Permissions mode")
+		if trust || bypass {
 			return "authorizes the agent's access, which only the user grants"
 		}
 	}
@@ -212,18 +222,40 @@ func (v Settings) supervisorConversation(session string) bool {
 	return session != "" && (session == v.Main || session == v.BackgroundSupervisor || slices.Contains(v.Leaders, session))
 }
 
+// noLeaderAskRoutable reports whether ix should route through askLadder when assistant.leaders is empty (#16291).
+// Parsed terminal dialogs keep their existing route, and non-six-class agent permissions and questions on open
+// supervised tasks take the active supervision route (sigAsk + askTick) instead of falling through to
+// handNonOwnerCard's passive keepRelayLater queue. Six-class owner cards (secrets/forms, outward writes,
+// userApproval matches, manager/confirm_outbound cards) and plans stay out of askLadder when no leader is configured.
+func (s *Service) noLeaderAskRoutable(ix proto.Interaction) bool {
+	switch ix.Kind {
+	case proto.IxScreen:
+		return true
+	case proto.IxPermission:
+		return s.inputCardSource(ix, false) == cardAgentPermission && !secretOrForm(ix) && userApproval(ix) == ""
+	case proto.IxQuestion:
+		return s.inputCardSource(ix, false) == cardAgentQuestion && !secretOrForm(ix)
+	default:
+		return false
+	}
+}
+
 // askLadder is where a card of machine/sid's goes first: the conversations supervising its task, nearest first, the
 // task, and the machine those conversations are on (the assistant's: its leaders and its main conversation). None when
 // the agent is no supervised task's, the task already waits for the user, or the agent is a supervising conversation
-// (supervisorConversation). Only parsed terminal questions go to a supervisor even when no leader is configured.
+// (supervisorConversation). Without configured leaders, parsed terminal dialogs and non-six-class agent permissions and
+// questions still route to the task's supervisor (noLeaderAskRoutable), while six-class owner cards and plans stay with
+// the user.
 //
-// A task no leader supervises has one rung: the background supervisor, then the user, as a leader's card goes to the
-// leader, then the main conversation; the main conversation while the background supervisor is off or not made yet
-// (ownSupervisor, supervise_background.go).
+// A task no leader supervises has one rung: the task's own supervisor (ownSupervisor, supervise_background.go — the
+// main conversation).
 func (s *Service) askLadder(ctx context.Context, ix proto.Interaction) (ladder []string, todo, home string, ok bool) {
 	machine, sid := ix.MachineID, ix.SessionID
 	cfg := s.settings(ctx)
-	if (len(cfg.Leaders) == 0 && ix.Kind != proto.IxScreen) || cfg.Main == "" || sid == "" || cfg.supervisorConversation(sid) {
+	if cfg.Main == "" || sid == "" || cfg.supervisorConversation(sid) {
+		return nil, "", "", false
+	}
+	if len(cfg.Leaders) == 0 && !s.noLeaderAskRoutable(ix) {
 		return nil, "", "", false
 	}
 	home = cfg.MachineID
@@ -395,9 +427,10 @@ func (s *Service) routedTo(id, self string, main bool) (string, bool) {
 // or plan moves up at once when the conversation holding it itself needs the user (needsYouLocked) and there is a rung
 // above it.
 //
-// No card reaches the user here: past its last rung a card goes back to its task's supervisor (quietRemind) and stays
-// there, parked, reminding it each askHoldFor up to askRemindMax times; only ask_escalate hands it to the user. A route
-// with no rung at all (none askLadder makes) has no supervisor to hold it, and its card is the user's as an unrouted one.
+// A task's card goes back to its supervisor past the last rung. It stays there, parked, reminding the supervisor
+// each askHoldFor up to askRemindMax times; only ask_escalate hands it to the user. A route with no rung at all
+// has no supervisor to hold it. A standalone permission has no task to escalate and becomes answerable in the app
+// if the main conversation has not handled it within askHoldFor.
 func (s *Service) askTick(now time.Time) {
 	type up struct {
 		todo, to string
@@ -406,12 +439,21 @@ func (s *Service) askTick(now time.Time) {
 		reason   string
 	}
 	var ups, reminds []up
+	var standalone []proto.Interaction
 	toUser := map[string][]string{}
 	s.fleet.mu.Lock()
 	for id, p := range s.fleet.interactions {
 		r := p.route
 		if r == nil || p.claimed || p.ix.Kind == proto.IxScreen {
 			continue // A terminal question stays with its supervisor until an explicit escalation.
+		}
+		if !r.standaloneUntil.IsZero() {
+			if !now.Before(r.standaloneUntil) && now.Before(p.ix.ExpiresAt) {
+				p.route = nil
+				p.ix.Delegating = false
+				standalone = append(standalone, p.ix)
+			}
+			continue
 		}
 		if len(r.ladder) == 0 {
 			toUser[r.todo] = append(toUser[r.todo], id)
@@ -461,6 +503,9 @@ func (s *Service) askTick(now time.Time) {
 	for todo, ids := range toUser {
 		s.logf("asks %v of task %s: no supervisor holds them, to the user", ids, todo)
 		s.ringAsks(todo, ids, nil, escalation{})
+	}
+	for _, ix := range standalone {
+		s.show(ix) // Restore the app controls without sending an alert to another surface.
 	}
 }
 
@@ -644,7 +689,7 @@ func (s *Service) toolAskEscalate(ctx context.Context, self string, args json.Ra
 	if !ok || t.DoneAt != nil || t.Supervision == nil {
 		return "", fmt.Errorf("no open supervised task %s", a.TodoID)
 	}
-	terminalOnly := len(s.settings(ctx).Leaders) == 0
+	terminalOnly := false
 	main := s.isMain(ctx, self)
 	if !main && t.Supervision.Supervisor != self && !s.backgroundSupervises(ctx, self, t) {
 		above, _ := s.supervisorAboveTask(ctx, t)

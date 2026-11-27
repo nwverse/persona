@@ -126,6 +126,19 @@ Registration and historical recognition are separate: transcript readers, task c
 continue accepting `mcp__persona__*` and `mcp__jarvis__*` forever. Extension namespaces and their permission rules are
 unchanged. Guest allow lists remain restricted to their configured tools; namespace selection grants no extra tools.
 
+### Conditional automatic stop
+
+`session.stop_if_idle` is additive; the node protocol version and minimum remain 1. It takes
+`{session_id, retire:true, stop_cause}` and returns `{stopped}`. Only an automatic stop cause is accepted.
+The node refreshes runtime state and checks cancellation and pending/recent input before each Ctrl+C while holding
+the session's typing lock. Incoming input is recorded before waiting for that lock. Input recorded between keys
+prevents the second interrupt.
+
+Managers use cancellation-enabled `device.retire` and `devices.retire_call` across the existing bus, only for this
+method. Ordinary `device.call`, `devices.call` and explicit user stops keep their completion semantics.
+An old hub, manager or node refuses the new method without stopping anything. There is no unconditional
+`session.stop` fallback; the Agent stays available until a compatible path can retire it safely.
+
 ### MCP progress wait kinds
 
 `mcp_wait_v1` is additive and does not raise the node protocol floor. Only an MCP process that has a progress token
@@ -323,7 +336,7 @@ shell helpers could send the Chinese placeholder `默认` instead. Every client 
 empty model: the launcher's own default applies, its existing localized Default presentation is used, and no placeholder
 is sent as a model pick. Explicit model IDs are unchanged in both directions.
 
-### New omp sessions in herdr (#11964)
+### New omp sessions in herdr and Orca (#11964)
 
 Both old and new nodes can return an empty model list for `omp`. New clients request the launcher models for the
 selected host. They offer typed model IDs for native `omp` only when that response includes

@@ -378,6 +378,7 @@ func (s *Service) ProfileChanged(context.Context) {
 	s.prefs.mu.Lock()
 	s.prefs.at = time.Time{}
 	s.prefs.mu.Unlock()
+	s.invalidateLauncherListCache("")
 	// A manager.json pin may have changed the supervision interval even though the saved settings did not.
 	s.rescheduleSupervision()
 }
@@ -403,6 +404,8 @@ func snapshotAgentGroup(c proto.Session, now time.Time) snapshotAgentGroupKind {
 	switch {
 	case c.State == proto.StateNeedsYou, silentRow(c), upstreamRow(c):
 		return snapshotAgentNeedsYou // a turn with no output or a persistent upstream stall needs visibility (#10187, #13372)
+	case unverifiedAgyTurn(c):
+		return snapshotAgentOutside
 	case c.State == proto.StateWorking:
 		return snapshotAgentWorking
 	case c.AwaitsReply && c.State == proto.StateIdle && recent:
