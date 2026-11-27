@@ -868,7 +868,8 @@ func checkGlobalPermissionHooks(configDir, dataDir string) DoctorCheck {
 
 func checkGlobalPermissionHooksIn(configDir, dataDir string, lang i18n.Lang) DoctorCheck {
 	c := DoctorCheck{Name: "global-permission-hooks", Items: []string{}}
-	b, err := os.ReadFile(filepath.Join(configDir, "settings.json"))
+	settingsPath := filepath.Join(configDir, "settings.json")
+	b, err := os.ReadFile(settingsPath)
 	if errors.Is(err, os.ErrNotExist) {
 		c.Status, c.Detail = DoctorOK, i18n.T(lang, "node-doctor.global_hooks_no_file")
 		return c
@@ -926,7 +927,7 @@ func checkGlobalPermissionHooksIn(configDir, dataDir string, lang i18n.Lang) Doc
 				"count": len(foreign), "hook": foreign[0], "extension_count": fromExtensions, "extensions": names,
 			})
 		}
-		c.Hint = i18n.T(lang, "node-doctor.global_hooks_found_hint")
+		c.Hint = i18n.T(lang, "node-doctor.global_hooks_found_hint", i18n.Args{"path": settingsPath})
 	}
 	return c
 }
