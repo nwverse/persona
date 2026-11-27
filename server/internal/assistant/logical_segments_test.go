@@ -1696,3 +1696,32 @@ func TestLogicalHistoryFoldRangeSkipsPriorFrozenSegmentsAndBoundsMore(t *testing
 		t.Fatalf("segment 1 fold page = %+v", seg1Page)
 	}
 }
+
+func TestLogicalHistoryFoldRangeFinishesFrozenSegmentBeforeSuccessor(t *testing.T) {
+	service, fleet, store, _ := logicalPair(t, "claude")
+	conversation := activatePair(t, store)
+	var called []string
+	fleet.answerNode(DeviceSessionItems, func(_ string, raw json.RawMessage) (any, error) {
+		var params historyParams
+		if err := json.Unmarshal(raw, &params); err != nil {
+			return nil, err
+		}
+		called = append(called, params.SessionID)
+		if params.SessionID != "side-chat" {
+			t.Fatalf("successor queried before frozen segment completed: %s", raw)
+		}
+		fromSeq, toSeq := 1, 6
+		return historyPage{
+			History: "h1", FromSeq: &fromSeq, ToSeq: &toSeq, More: true,
+			Items: []proto.Item{{ID: "step#0", Seq: 2, Role: "assistant", Kind: proto.KindText, Text: "progress"}},
+		}, nil
+	})
+	from, through := 2, 9
+	page, err := service.logicalHistoryPage(t.Context(), store, conversation, historyParams{From: &from, Through: &through, LazyImages: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(called, []string{"side-chat"}) || len(page.Items) != 1 || page.Items[0].Seq != 2 || !page.More {
+		t.Fatalf("incomplete frozen fold page = %+v, calls = %v", page, called)
+	}
+}

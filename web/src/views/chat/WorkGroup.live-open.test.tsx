@@ -3,6 +3,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { t } from "../../i18n";
 import { emptyTaskIndex } from "../../lib/tasks";
 import type { Item } from "../../lib/types";
 import { segments, segmentIdentity, type Segment, type Step } from "../../lib/turns";
@@ -254,7 +255,7 @@ describe.each(["assistant", "agents"] as const)("%s folded history", (style) => 
     draw(style, seg(steps), true, expand);
     tap();
     await settle();
-    expect(host.textContent).toContain("没能取回这段过程");
+    expect(host.textContent).toContain(t("chat-workgroup.load_failed"));
     expect(host.textContent).not.toContain("正在取 10 条");
     expect(detailText()).toContain("echo 6");
     const retry = host.querySelector<HTMLButtonElement>('[role="status"] button')!;
@@ -262,7 +263,7 @@ describe.each(["assistant", "agents"] as const)("%s folded history", (style) => 
     rejectNext = false;
     act(() => retry.click());
     await settle();
-    expect(host.textContent).not.toContain("没能取回这段过程");
+    expect(host.textContent).not.toContain(t("chat-workgroup.load_failed"));
     expect(host.textContent).not.toContain("正在取 10 条");
     for (const n of [1, 2, 3, 4, 5, 6]) expect(detailText()).toContain(`echo ${n}`);
   });
@@ -276,12 +277,12 @@ describe.each(["assistant", "agents"] as const)("%s folded history", (style) => 
     tap();
     await settle();
     expect(expand.mock.calls.map(([item]) => item.seq)).toEqual([1, 5]);
-    expect(host.textContent).toContain("没能取回这段过程");
+    expect(host.textContent).toContain(t("chat-workgroup.load_failed"));
     const retry = host.querySelector<HTMLButtonElement>('[role="status"] button')!;
     act(() => retry.click());
     await settle();
     expect(expand.mock.calls.map(([item]) => item.seq)).toEqual([1, 5, 1, 5]);
-    expect(host.textContent).toContain("没能取回这段过程");
+    expect(host.textContent).toContain(t("chat-workgroup.load_failed"));
     expect(host.textContent).not.toContain("正在取 10 条");
   });
   it("shows Retry and stops spinning when expandFold resolves incomplete (false)", async () => {
@@ -290,7 +291,7 @@ describe.each(["assistant", "agents"] as const)("%s folded history", (style) => 
     tap();
     await settle();
     expect(expand).toHaveBeenCalledTimes(1);
-    expect(host.textContent).toContain("没能取回这段过程");
+    expect(host.textContent).toContain(t("chat-workgroup.load_failed"));
     expect(host.textContent).not.toContain("正在取 10 条");
     expect(detail()).toBeNull();
   });
