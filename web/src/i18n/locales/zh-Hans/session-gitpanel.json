@@ -5,6 +5,7 @@
   "commits": "提交",
   "load_older_commits": "加载更早的提交",
   "status_failed": "读不到 Git 状态",
+  "change_gone": "Git 状态中已没有这项改动。请返回或刷新。",
   "retry": "重试",
   "not_repo": "不是 Git 仓库",
   "reading": "正在读取",

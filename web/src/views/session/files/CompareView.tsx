@@ -1,7 +1,7 @@
 // Two versions of a changed file side by side in the Git panel (docs/web/web.md "Compare", #1437; iOS / Mac: #1299): pictures
 // next to each other or under a slider, documents (PDF / docx / pptx / xlsx) as a diff of their text by page, slide or
 // sheet. A version comes from git/blob (written into the node's cache) or the working tree.
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { api, enc, errorText, fileDownloadURL, isAbort } from "../../../lib/api";
 import { diffLines, docxUnits, flatten, hunks, pairRows, pdfUnits, pptxUnits, ROW_SEP, shownText, workbookUnits, type Hunk, type Unit } from "../../../lib/compare";
 import { extOf } from "../../../lib/files";
@@ -28,33 +28,39 @@ interface Side {
   path?: string; // on the machine; missing: the file does not exist in that version
 }
 
-async function resolve(mid: string, cwd: string, root: string, path: string, rev: Rev, signal: AbortSignal): Promise<Side> {
+async function resolve(mid: string, cwd: string, root: string, path: string, rev: Rev, signal: AbortSignal, current?: () => boolean): Promise<Side> {
   if (rev === "WORKTREE") return { label: t("session-files-compareview.worktree"), path: `${root.replace(/\/$/, "")}/${path}` };
-  const b = await api<{ path?: string; missing?: boolean }>(`/machines/${enc(mid)}/git/blob?cwd=${enc(cwd)}&path=${enc(path)}&rev=${enc(rev)}`, { signal });
+  const b = await api<{ path?: string; missing?: boolean }>(`/machines/${enc(mid)}/git/blob?cwd=${enc(cwd)}&path=${enc(path)}&rev=${enc(rev)}`, { signal, isAuthContextCurrent: () => !signal.aborted && (current?.() ?? true) });
   const label = rev === "HEAD" ? "HEAD" : rev === "INDEX" ? t("session-files-compareview.index") : rev.endsWith("^") ? t("session-files-compareview.before_commit", { hash: rev.slice(0, 7) }) : rev.slice(0, 7);
+  if (!b.missing && !b.path) throw new Error(t("session-files-compareview.version_unavailable"));
   return { label, path: b.missing ? undefined : b.path };
 }
 
-export function CompareView({ mid, cwd, root, path, before, after, deleted }: { mid: string; cwd: string; root: string; path: string; before: Rev; after: Rev; deleted?: boolean }) {
-  const [sides, setSides] = useState<[Side, Side] | null>(null);
-  const [error, setError] = useState("");
+export function CompareView({ mid, cwd, root, path, beforePath = path, before, after, deleted, refreshed, isAuthContextCurrent }: { mid: string; cwd: string; root: string; path: string; beforePath?: string; before: Rev; after: Rev; deleted?: boolean; refreshed?: number; isAuthContextCurrent?: () => boolean }) {
+  const [result, setResult] = useState<{ key: string; sides?: [Side, Side]; error?: string } | null>(null);
+  const [retry, setRetry] = useState(0);
+  const [mode, setMode] = useState<"side" | "slide">("side");
+  const [at, setAt] = useState(50);
+  const docScroll = useRef(0);
+  const key = JSON.stringify([mid, cwd, root, path, beforePath, before, after, deleted, refreshed, retry]);
   useEffect(() => {
     const ac = new AbortController();
-    setSides(null);
-    setError("");
-    Promise.all([resolve(mid, cwd, root, path, before, ac.signal), deleted && after === "WORKTREE" ? Promise.resolve({ label: t("session-files-compareview.worktree") }) : resolve(mid, cwd, root, path, after, ac.signal)])
-      .then((s) => !ac.signal.aborted && setSides(s))
-      .catch((e) => !isAbort(e) && setError(errorText(e)));
+    const active = () => !ac.signal.aborted && (isAuthContextCurrent?.() ?? true);
+    Promise.all([resolve(mid, cwd, root, beforePath, before, ac.signal, isAuthContextCurrent), deleted && after === "WORKTREE" ? Promise.resolve({ label: t("session-files-compareview.worktree") }) : resolve(mid, cwd, root, path, after, ac.signal, isAuthContextCurrent)])
+      .then((sides) => active() && setResult({ key, sides }))
+      .catch((e) => active() && !isAbort(e) && setResult({ key, error: errorText(e) }));
     return () => ac.abort();
-  }, [mid, cwd, root, path, before, after, deleted]);
-  if (error) return <Empty icon="info" title={t("session-files-compareview.versions_failed")} detail={error} />;
-  if (!sides)
+  }, [mid, cwd, root, path, beforePath, before, after, deleted, key, isAuthContextCurrent]);
+  const current = result?.key === key ? result : null;
+  if (current?.error) return <Empty icon="info" title={t("session-files-compareview.versions_failed")} detail={current.error} action={<Button icon="retry" className="touch-hit" onClick={() => setRetry((n) => n + 1)}>{t("session-gitpanel.retry")}</Button>} />;
+  if (!current?.sides)
     return (
       <div className="flex flex-1 items-center justify-center">
         <Loading label={t("session-files-compareview.loading_versions")} />
       </div>
     );
-  return compareKind(path) === "image" ? <ImageCompare mid={mid} sides={sides} /> : <DocCompare mid={mid} sides={sides} ext={extOf(path)} />;
+  const oldExt = extOf(beforePath);
+  return compareKind(path) === "image" ? <ImageCompare mid={mid} sides={current.sides} mode={mode} onMode={setMode} at={at} onAt={setAt} /> : <DocCompare mid={mid} sides={current.sides} beforeExt={DOC_EXTS.includes(oldExt) ? oldExt : extOf(path)} afterExt={extOf(path)} scrollTop={docScroll} isAuthContextCurrent={isAuthContextCurrent} />;
 }
 
 function OpenButtons({ mid, sides }: { mid: string; sides: [Side, Side] }) {
@@ -73,16 +79,14 @@ function OpenButtons({ mid, sides }: { mid: string; sides: [Side, Side] }) {
 
 // ── pictures ──────────────────────────────────────────────
 
-function ImageCompare({ mid, sides }: { mid: string; sides: [Side, Side] }) {
-  const [mode, setMode] = useState<"side" | "slide">("side");
-  const [at, setAt] = useState(50);
+function ImageCompare({ mid, sides, mode, onMode, at, onAt }: { mid: string; sides: [Side, Side]; mode: "side" | "slide"; onMode: (mode: "side" | "slide") => void; at: number; onAt: (at: number) => void }) {
   const src = (s: Side) => (s.path ? fileDownloadURL(mid, s.path, "", { inline: true }) : "");
   const both = sides.every((s) => s.path);
   const checker = { backgroundImage: "conic-gradient(var(--field) 25%, var(--inset) 0 50%, var(--field) 0 75%, var(--inset) 0)", backgroundSize: "20px 20px" };
   return (
     <>
       <div className="flex min-h-10 shrink-0 items-center gap-2 border-b border-line px-3 py-1.5">
-        {both && <Segmented label={t("session-files-compareview.mode")} value={mode} onChange={setMode} options={[["side", t("session-files-compareview.side_by_side")], ["slide", t("session-files-compareview.slider")]]} />}
+        {both && <Segmented label={t("session-files-compareview.mode")} value={mode} onChange={onMode} options={[["side", t("session-files-compareview.side_by_side")], ["slide", t("session-files-compareview.slider")]]} />}
         <span className="min-w-0 flex-1 truncate text-[11.5px] text-ink-3">
           {sides[0].label} → {sides[1].label}
         </span>
@@ -112,7 +116,7 @@ function ImageCompare({ mid, sides }: { mid: string; sides: [Side, Side] }) {
           </div>
           <div className="flex shrink-0 items-center gap-3 border-t border-line px-4 py-2 text-[11.5px] whitespace-nowrap">
             <span className="text-red">{t("session-files-compareview.old")}</span>
-            <input type="range" min={0} max={100} value={at} onChange={(e) => setAt(Number(e.target.value))} aria-label={t("session-files-compareview.divider")} className="flex-1 accent-[var(--accent)]" />
+            <input type="range" min={0} max={100} value={at} onChange={(e) => onAt(Number(e.target.value))} aria-label={t("session-files-compareview.divider")} className="flex-1 accent-[var(--accent)]" />
             <span className="text-green">{t("session-files-compareview.new")}</span>
           </div>
         </div>
@@ -139,21 +143,26 @@ async function unitsOf(mid: string, side: Side, ext: string, signal: AbortSignal
   return workbookUnits(XLSX, XLSX.read(new Uint8Array(data), { type: "array" }));
 }
 
-function DocCompare({ mid, sides, ext }: { mid: string; sides: [Side, Side]; ext: string }) {
+function DocCompare({ mid, sides, beforeExt, afterExt, scrollTop, isAuthContextCurrent }: { mid: string; sides: [Side, Side]; beforeExt: string; afterExt: string; scrollTop: RefObject<number>; isAuthContextCurrent?: () => boolean }) {
   const [state, setState] = useState<{ hunks?: Hunk[]; added?: number; removed?: number; error?: string; tooBig?: boolean }>({});
+  const [retry, setRetry] = useState(0);
+  const scroller = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const ac = new AbortController();
     setState({});
-    Promise.all(sides.map((s) => unitsOf(mid, s, ext, ac.signal)))
+    Promise.all([unitsOf(mid, sides[0], beforeExt, ac.signal), unitsOf(mid, sides[1], afterExt, ac.signal)])
       .then(([a, b]) => {
-        if (ac.signal.aborted) return;
+        if (ac.signal.aborted || !(isAuthContextCurrent?.() ?? true)) return;
         const ops = diffLines(flatten(a), flatten(b));
         if (!ops) return setState({ tooBig: true });
         setState({ hunks: hunks(ops), added: ops.filter((o) => o.kind === "add").length, removed: ops.filter((o) => o.kind === "del").length });
       })
-      .catch((e) => !isAbort(e) && setState({ error: errorText(e) }));
+      .catch((e) => !ac.signal.aborted && (isAuthContextCurrent?.() ?? true) && !isAbort(e) && setState({ error: errorText(e) }));
     return () => ac.abort();
-  }, [mid, sides, ext]);
+  }, [mid, sides, beforeExt, afterExt, retry, isAuthContextCurrent]);
+  useLayoutEffect(() => {
+    if (scroller.current) scroller.current.scrollTop = scrollTop.current;
+  }, [scrollTop, state.hunks]);
   const bar = (
     <div className="flex min-h-10 shrink-0 items-center gap-2 border-b border-line px-3 py-1.5 text-[11.5px] whitespace-nowrap text-ink-3 tabular-nums">
       <span className="min-w-0 flex-1 truncate">
@@ -176,7 +185,7 @@ function DocCompare({ mid, sides, ext }: { mid: string; sides: [Side, Side]; ext
     return (
       <>
         {bar}
-        <Empty icon="info" title={t("session-files-compareview.compare_failed")} detail={state.error} />
+        <Empty icon="info" title={t("session-files-compareview.compare_failed")} detail={state.error} action={<Button icon="retry" className="touch-hit" onClick={() => setRetry((n) => n + 1)}>{t("session-gitpanel.retry")}</Button>} />
       </>
     );
   if (state.tooBig)
@@ -201,7 +210,7 @@ function DocCompare({ mid, sides, ext }: { mid: string; sides: [Side, Side]; ext
       {state.hunks.length === 0 ? (
         <Empty icon="check" title={t("session-files-compareview.no_text_change")} detail={t("session-files-compareview.no_text_change_detail")} />
       ) : (
-        <div className="min-h-0 flex-1 overflow-y-auto py-2">
+        <div ref={scroller} onScroll={(event) => { scrollTop.current = event.currentTarget.scrollTop; }} className="min-h-0 flex-1 overflow-y-auto py-2">
           {state.hunks.map((h, i) => (
             <section key={i} className="mb-2">
               {h.skippedBefore > 0 && <div className="px-4 py-1 text-[11.5px] text-ink-3">{t("session-files-compareview.skipped", { count: h.skippedBefore })}</div>}
