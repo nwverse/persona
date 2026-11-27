@@ -819,13 +819,9 @@ func (b *BusHub) request(ctx context.Context, method string, params json.RawMess
 	case assistantwire.MethodFeishuView:
 		return s.FeishuView(ctx), nil
 	case assistantwire.MethodFleetAsk:
-		var p struct {
-			Interaction proto.Interaction `json:"interaction"`
-		}
-		if err := decode(&p); err != nil {
-			return nil, err
-		}
-		return s.askHub(ctx, p.Interaction)
+		return handleBusRequest(ctx, assistantwire.FleetAskMethod, decode, func(ctx context.Context, p assistantwire.FleetAskParams) (proto.Resolution, error) {
+			return s.askHub(ctx, p.Interaction)
+		})
 	case assistantwire.MethodFleetAskPrepared:
 		var p struct {
 			Interaction proto.Interaction `json:"interaction"`

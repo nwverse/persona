@@ -345,6 +345,41 @@ func TestHubCardWithoutExpiryWaitsForTheManager(t *testing.T) {
 	})
 }
 
+func TestHubFleetAskBusWait(t *testing.T) {
+	const delay = 3 * time.Minute
+	for _, tc := range []struct {
+		name                       string
+		allowAfter, expiresAfter   time.Duration
+		wantDuration, wantWithdraw time.Duration
+	}{
+		{name: "no expiry", allowAfter: delay, wantDuration: delay},
+		{name: "expiry with grace", expiresAfter: delay, wantDuration: delay + cardAnswerGrace, wantWithdraw: delay + cardAnswerGrace},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				h := newTestHub(t)
+				h.askVia = nil
+				card := &askedCard{start: time.Now(), allowAfter: tc.allowAfter}
+				playManager(t, h, card.answer)
+				ix := hubSettingCard()
+				ix.ExpiresAt = time.Time{}
+				if tc.expiresAfter != 0 {
+					ix.ExpiresAt = card.start.Add(tc.expiresAfter).UTC()
+				}
+
+				r, err := h.waitInteraction(t.Context(), ix)
+				waited := time.Since(card.start)
+				synctest.Wait()
+				if wantAllow := tc.allowAfter != 0; err != nil || r.UserAllowed() != wantAllow || r.Dismiss == wantAllow ||
+					waited != tc.wantDuration || card.withdrawnAfter() != tc.wantWithdraw {
+					t.Fatalf("fleet ask after %s = %+v, %v, withdrawn after %s; want allowed %v, wait %s, withdrawal %s",
+						waited, r, err, card.withdrawnAfter(), wantAllow, tc.wantDuration, tc.wantWithdraw)
+				}
+			})
+		})
+	}
+}
+
 // The hub's own card goes with its caller, as before: one that stops waiting after five minutes leaves no card.
 func TestHubSettingCardGoesWithItsCaller(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
