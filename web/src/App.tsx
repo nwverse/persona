@@ -67,6 +67,7 @@ import { ExtensionNavPage } from "./views/extensions/ExtensionSlots";
 import { useExtensionPlace } from "./lib/extension-slots";
 import { AttentionSignals } from "./lib/attention-signals";
 import { clearDesktopIsland, DesktopIslandSignals } from "./lib/desktop-island";
+import { TextLookupHost } from "./text-lookup/host";
 import { openStartPage } from "./lib/start-page";
 import { conversationRoute } from "./lib/conversation-page";
 import { useTrackTitle } from "./lib/tracks";
@@ -753,6 +754,7 @@ function Shell() {
       <AttentionSignals label={title} pane={pane} />
       {/* the counts for the desktop app's island at the MacBook notch (#7669), only in a desktop app that has it */}
       {window.personaDesktop?.setIslandState && <DesktopIslandSignals />}
+      <TextLookupHost />
     </div>
   );
 }

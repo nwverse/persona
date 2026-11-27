@@ -152,6 +152,7 @@ var catalogItemTypes = map[string]reflect.Type{
 
 	"repository_providers": reflect.TypeFor[RepositoryProviderItem](),
 	"disk_offload":         reflect.TypeFor[DiskOffloadItem](),
+	"text_lookup":          reflect.TypeFor[TextLookupItem](),
 }
 
 // Include the parsed projection as well as the signed entry fields: callers may

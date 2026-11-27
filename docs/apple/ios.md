@@ -1521,6 +1521,58 @@ With Automatic translation enabled, content not in the target language (Simplifi
 - Screenshots / tests: `mock_hub.py` mail 504 is English; the Design review (f2) chat has English messages; `/api/v1/translate` returns "【译】原文" ("[Translated] original text");
   UI tests `TranslationTests`; DEBUG `-openTranslationSettings YES` opens Settings.
 
+## Word lookup (text_lookup)
+
+The iOS client of the `text_lookup` extension point (#10977, the contract in that issue; the server and web sides live in
+their own changes). Audience: everyday readers of English text in Persona. Nothing changes without an enabled extension
+that contributes `text_lookup` (Relingo is the first).
+
+- **Model** `TextLookupModel` (`apple/Persona/Features/TextLookup/TextLookupModel.swift`), one per app for the hub-level
+  group (`AppModel.textLookup`, deps: the hub client and the hello's features). Without the `text_lookup` feature it sends
+  nothing and is inert; otherwise `GET /api/v1/text-lookup` decides (`available: false`, a 404 from an older manager or
+  any failure: inert). Read again on every hello, `text_lookup_changed`, an extension operation that ended, an
+  `extension_ui` invalidate of the lookup extension, `managers`, a change of hub, and coming back to the front (at most
+  once a minute). Reads coalesce: changes while one is out make exactly one more. Lookups go to
+  `POST /api/v1/text-lookup/lookup {word, context?}` (the sentence around the word, at most 240 characters) and are cached
+  (200 words, cleared when lookup turns off); `text_lookup_unavailable` turns it off at once. Save / Saved
+  (`POST …/words {word, context?, source?}`, `DELETE …/words/{word}`) show at once and go back when the hub refuses. All
+  requests are `async` through `APIClient`; nothing runs on the main thread but publishing the answer (P1, P7).
+- **Which words** (`TextLookupWords`): a Latin word of 2–40 letters, an apostrophe or hyphen only between letters. A
+  token glued to code or an address (`_ / \ @ : #`, an inner full stop, digits) or with a capital inside (camelCase) is
+  never looked up.
+- **Hit testing** (`TextLookupViews.swift`): the persona Markdown theme's paragraphs and headings (`lookUpWords(_:)`
+  in `MarkdownUI.Theme.persona`, `.larkMessage`) and a few plain `Text`s (`lookUpWords(plain:)`) read where their own
+  `Text` laid out its glyphs (`Text.LayoutKey`, the real layout), map the tapped glyph's character index into the block's
+  plain text (`MarkdownContent.renderPlainText()`, worked out on the tap only) and open the card over the word. When the
+  layout and the plain text are not the same characters (a picture inside the line) no word is guessed. A character in a
+  link or inline code (from the block's Markdown) is never a lookup: the link's own tap stays the link's.
+- **Only on reading surfaces**: `.textLookupSurface(source)` puts the model in the environment; elsewhere (and always
+  while lookup is off) the blocks add no modifier at all. The surface changes only an environment value, never the
+  view's structure (a branch there rebuilt the whole chat page and dropped its subscription).
+- **The tap** is a `UITapGestureRecognizer` (`LookupTap`) that recognizes alongside every other recognizer, never
+  cancels or delays touches, and fails for a touch held past `Theme.TextLookup.tapLimit` (0.3 s): long-press lift and
+  selection, link taps, buttons and scrolling go on as before. The card is a popover on the iPhone too (a `UIHostingController`
+  presented as a UIKit popover over the word, `TextLookupMenu.present`, which follows the card's size as it loads;
+  SwiftUI's `.popover` kept the loading state's size): the word at once with "Looking up…", then pronunciation, senses (at most `Theme.TextLookup.senseLimit`),
+  Save / Saved and the extension's name; a failure says why with Retry; a tap outside closes it.
+- **Underline of saved words** only when the extension says `underline_saved` (off by default): a Canvas over the block
+  draws a hairline under each saved word, computed when the layout or the saved words change, never per frame.
+
+| Surface | Behavior |
+| --- | --- |
+| Persona conversation and an Agent's chat (`ChatView`, sources `chat` / `agent`) | tap a word of a reply (paragraphs, headings, list items, quotes, a plan); code blocks, tool output and terminals never; a long press still lifts the message, and its selected words' edit menu has **Look Up in <provider>** for one selected word (the way for VoiceOver, which selects rather than taps) |
+| Inbox (`InboxEventPage`, an item's page under `InboxActionBar`, source `inbox`) | the AI summary and the assistant row's Markdown body; Lark messages through `.larkMessage`; mail bodies are HTML in a web view and are not covered |
+| To-do detail (source `todo`) | the notes as shown; the notes field while editing never |
+| Knowledge base page (source `knowledge`) | the page's Markdown and a profile's summary |
+| Extension cards (`ExtensionMarkdown`, source `card`) | a card's Markdown, never in a picture of the card |
+| Rows and buttons (Inbox list, to-do list, Agents list) | never: a tap there opens the row |
+
+Tests: `TextLookupModelTests` and `TextLookupWordsTests` (PersonaTests, FakeHub); `TextLookupUITests` against
+`MOCK_TEXT_LOOKUP=1` (`scripts/mock/text_lookup_mock.py`; `docs/operations/testing.md` "Mock-data screenshots
+(README / promotional images)") taps a word in Persona's conversation, an Agent's chat and an Inbox item, saves it,
+checks that a long press still lifts and a code block opens nothing, and that nothing happens without the extension.
+Platforms: iOS and iPadOS; the Mac, visionOS and the watch compile the modifiers as no-ops.
+
 ## Interface language (internationalization, #2457)
 
 iOS, Mac, visionOS, watch and extensions support Simplified Chinese, English and 日本語 (shared rules in `docs/protocol/i18n.md`).
