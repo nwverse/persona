@@ -1,7 +1,7 @@
 // The inbox list (docs/assistant/inbox.md"App"): the section bar on top (Needs you, In progress, FYI, Done or All;
 // "Section bar", #9053), filters by source and kind, search, then the section chosen; under All every section stacked,
 // Needs you (agents waiting on you first), In progress, FYI, Collapsed and Done, each opening / closing from its title.
-import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { Fragment, memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { agentDraft, agentWorking, conversationRoute, interactionAsk, interactionTitle, isDone, isLark, itemKey, itemRoute, muteItem, sameItem, connectorSources, KIND_FILTERS, kindLabel, labelIsUrgent, mailAccounts, matches, reloadInbox, sections, sendReply, setAllDone, setDone, shortTime, TIERS, useInbox, waitingAgents, type InboxItem, type InboxMute, type SectionKey, doneWithHistory, loadOlderDone, loadDoneDays, loadDoneGroup } from "../../lib/inbox";
 import { lineSummary, markdownInSummary, withoutMarks } from "../../lib/inbox-markdown";
 import { repeatsSummary, interactionAgentTitle, listInboxMutes, muteLine, muteShortName, muteTitle, policyMenuTitle, unmuteInbox, BULK_CONFIRM_AT, bulkScope, bulkScopeName, mailShort } from "../../lib/inbox-page";
@@ -56,6 +56,32 @@ function useStored(key: string): [string, (v: string) => void] {
     if (x) localStorage.setItem(key, x);
     else localStorage.removeItem(key);
   }];
+}
+
+/** Whether the Inbox filter chip strip is expanded to wrap onto multiple lines, kept on this device (#16990). */
+const FILTERS_EXPANDED_KEY = "inbox.filters.expanded";
+
+function useStoredFlag(key: string): [boolean, (next: boolean | ((prev: boolean) => boolean)) => void] {
+  const [v, setV] = useState(() => {
+    try {
+      return localStorage.getItem(key) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const set = useCallback((next: boolean | ((prev: boolean) => boolean)) => {
+    setV((prev) => {
+      const resolved = typeof next === "function" ? next(prev) : next;
+      try {
+        if (resolved) localStorage.setItem(key, "1");
+        else localStorage.removeItem(key);
+      } catch {
+        // Storage unavailable or blocked; keep the toggle working in memory.
+      }
+      return resolved;
+    });
+  }, [key]);
+  return [v, set];
 }
 
 /** The groups opened or closed by hand, kept on this device (#2059): "<manager group>|<section>|<group>" → open. */
@@ -198,23 +224,34 @@ export function InboxList({ selected, routed, picked = null, onPicked, listBesid
   // device, so a list left filtered last time opens filtered). The button goes with the empty state, so the keyboard
   // moves to the first filter chip in the toolbar (a button: no phone keyboard comes up for it).
   const filtersBar = useRef<HTMLDivElement>(null);
+  const filtersBarId = useId();
+  const [filtersExpanded, setFiltersExpanded] = useStoredFlag(FILTERS_EXPANDED_KEY);
+  const [filtersOverflow, setFiltersOverflow] = useState(false);
   const [filtersFade, setFiltersFade] = useState({ left: 0, right: 0 });
+  const filtersKey = `${chips.map((a) => `${a.id}:${a.email}`).join("\0")}|${connectors.map((c) => `${c.id}:${c.name}`).join("\0")}`;
   const measureFilters = useCallback(() => {
+    if (filtersExpanded) {
+      setFiltersFade((prev) => (prev.left === 0 && prev.right === 0 ? prev : { left: 0, right: 0 }));
+      return;
+    }
     const el = filtersBar.current;
     if (!el) return;
     const left = Math.max(0, Math.round(el.scrollLeft));
     const right = Math.max(0, Math.round(el.scrollWidth - el.clientWidth - el.scrollLeft));
+    const overflow = el.scrollWidth > el.clientWidth;
     setFiltersFade((prev) => (prev.left === left && prev.right === right ? prev : { left, right }));
-  }, []);
-  useLayoutEffect(measureFilters, [measureFilters, chips.length, connectors.length, source, kind]);
+    setFiltersOverflow((prev) => (prev === overflow ? prev : overflow));
+  }, [filtersExpanded]);
+  useLayoutEffect(measureFilters, [measureFilters, filtersKey, source, kind, filtersExpanded]);
   useEffect(() => {
     const el = filtersBar.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
+    if (!el || filtersExpanded || typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver(measureFilters);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [measureFilters]);
-  const filtersMask = barFade(filtersFade.left, filtersFade.right);
+  }, [measureFilters, filtersExpanded]);
+  const filtersMask = filtersExpanded ? undefined : barFade(filtersFade.left, filtersFade.right);
+  const showExpandFilters = filtersExpanded || filtersOverflow;
   const clearFilters = () => {
     filtersBar.current?.querySelector<HTMLButtonElement>("button[aria-pressed]")?.focus();
     setSource("");
@@ -499,21 +536,29 @@ export function InboxList({ selected, routed, picked = null, onPicked, listBesid
           <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("inbox-inboxlist.search_placeholder")} aria-label={t("inbox-inboxlist.search_label")} className="min-w-0 flex-1 bg-transparent text-[12.5px] text-ink outline-none placeholder:text-ink-3" />
           {query && <IconButton icon="x" label={t("inbox-inboxlist.clear")} size={20} iconSize={11} onClick={() => setQuery("")} />}
         </label>
-        {/* One horizontally scrollable row of toggleable source/kind filters: InboxBar above owns the section scope (All),
-            so no second "All" button sits here, and Clean up all stays outside the scrolling strip (hidden in narrow split panes,
-            where it remains first in the ⋯ menu). */}
-        <div className="mt-2.5 flex items-center gap-1.5">
+        {/* One horizontally scrollable row of toggleable source/kind filters by default; expands to wrapped rows on request
+            when chips overflow (#16990). InboxBar above owns the section scope (All), so no second "All" button sits here,
+            and the expand toggle, Clean up all (hidden in narrow split panes, where it remains first in the ⋯ menu) and ⋯
+            stay outside the scrolling strip. */}
+        <div className={cx("mt-2.5 flex gap-1.5", filtersExpanded ? "items-start" : "items-center")}>
         <div
+          id={filtersBarId}
           ref={filtersBar}
-          onScroll={measureFilters}
+          onScroll={filtersExpanded ? undefined : measureFilters}
           onWheel={(ev) => {
+            if (filtersExpanded) return;
             const box = filtersBar.current;
             if (box && box.scrollWidth > box.clientWidth && Math.abs(ev.deltaY) > Math.abs(ev.deltaX)) {
               box.scrollLeft += ev.deltaY * (ev.deltaMode === 1 ? 16 : 1);
             }
           }}
           style={filtersMask ? { maskImage: filtersMask, WebkitMaskImage: filtersMask } : undefined}
-          className="-my-1 flex min-w-0 flex-1 flex-nowrap items-center gap-1.5 overflow-x-auto py-1 scrollbar-none [&>*]:shrink-0"
+          className={cx(
+            "flex min-w-0 flex-1 items-center gap-1.5",
+            filtersExpanded
+              ? "flex-wrap"
+              : "-my-1 flex-nowrap overflow-x-auto py-1 scrollbar-none [&>*]:shrink-0",
+          )}
           role="toolbar"
           aria-label={t("inbox-inboxlist.filters")}
         >
@@ -541,11 +586,28 @@ export function InboxList({ selected, routed, picked = null, onPicked, listBesid
           {connectors.map((c) => (
             <Chip key={`c:${c.id}`} on={source === c.id} onClick={() => pickSource(c.id)}>{c.name}</Chip>
           ))}
-          <span aria-hidden className="mx-0.5 h-4 w-px bg-line-strong" />
+          {!filtersExpanded && <span aria-hidden className="mx-0.5 h-4 w-px bg-line-strong" />}
           {KIND_FILTERS.map((k) => (
             <Chip key={k.key} on={kind === k.key} onClick={() => pickKind(k.key)}>{k.label}</Chip>
           ))}
         </div>
+        {showExpandFilters && (
+          <button
+            type="button"
+            data-expand-filters
+            aria-controls={filtersBarId}
+            aria-expanded={filtersExpanded}
+            aria-label={filtersExpanded ? t("inbox-inboxlist.collapse_filters") : t("inbox-inboxlist.expand_filters")}
+            title={filtersExpanded ? t("inbox-inboxlist.collapse_filters") : t("inbox-inboxlist.expand_filters")}
+            onClick={() => setFiltersExpanded((v) => !v)}
+            className={cx(
+              "touch-hit flex size-7 shrink-0 items-center justify-center rounded-[8px] transition-[background-color,color,transform] duration-150 enabled:active:scale-[0.94]",
+              filtersExpanded ? "bg-hover text-ink" : "text-ink-3 enabled:hover:bg-hover enabled:hover:text-ink",
+            )}
+          >
+            <Icon name="chevron" size={13} stroke={2.2} className={cx("transition-transform duration-200", filtersExpanded && "rotate-180")} />
+          </button>
+        )}
         <button
           type="button"
           disabled={!openInView.length || picking}
