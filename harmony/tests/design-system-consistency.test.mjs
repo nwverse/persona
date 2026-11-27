@@ -72,7 +72,10 @@ test('normalized surfaces and PhoneStyle contain zero hardcoded hex color litera
     'design/PhoneStyle.ets',
     'design/NormalizedPrimitives.ets',
     'components/SessionTools.ets',
-    'components/TodoWorkspacePage.ets'
+    'components/TodoWorkspacePage.ets',
+    'components/StarredMessagesSheet.ets',
+    'components/ChatExportSheet.ets',
+    'components/ArchivedConversationsSheet.ets'
   ];
 
   for (const file of guardedFiles) {

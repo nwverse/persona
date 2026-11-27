@@ -195,7 +195,7 @@ function SpaceHome({ track, readOnly, onToggleSidebar }: { track: Track; readOnl
         />
       )}
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-[760px] px-4 py-6 sm:px-8" style={{ animation: `fade-up 320ms ${EASE} both` }}>
+        <div className="mx-auto max-w-[760px] px-4 py-6 sm:px-8" style={{ animation: `fade-up 320ms ${EASE} backwards` }}>
           <div className="mb-5 flex flex-col items-center text-center">
             <span className="mb-3 flex size-12 items-center justify-center rounded-full bg-inset text-accent-ink shadow-raised">
               <Icon name={icon} size={22} />

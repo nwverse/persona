@@ -161,7 +161,7 @@ describe("连接器会话页", () => {
     await flush();
     act(() => buttons().find((b) => b.getAttribute("aria-label")?.includes("很早的"))!.click());
     await flush();
-    expect(toast).toHaveBeenCalledWith("原消息太早了，往上翻几页再找");
+    expect(toast).toHaveBeenCalledWith("原消息较早，请向上翻页查找。");
   });
 
   it("sends a reply to one message with its id as reply_to", async () => {

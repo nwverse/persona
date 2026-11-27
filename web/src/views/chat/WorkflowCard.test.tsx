@@ -308,7 +308,7 @@ describe("the panel's detail card", () => {
     act(() => root.render(<WorkflowCard run={running()} scope="dlg:" onJump={jump} />));
     const card = q('[data-workflow-card="running"]')!;
     expect(card.dataset.workflowTask).toBe("w1");
-    expect(text("[data-workflow-status]")).toBe("在跑");
+    expect(text("[data-workflow-status]")).toBe("运行中");
     expect(text("[data-workflow-counts]")).toBe("4/5+");
     expect(text("[data-workflow-now]")).toBe("当前 Verify：verify:5");
     expect(host.querySelectorAll("[data-phase]")).toHaveLength(2);
@@ -380,11 +380,11 @@ describe("the panel's detail card", () => {
       });
     drawDetailCard([capped(1)]);
     expect(lines("Audit")).toEqual(["unlisted", "more", ...ids(9, 20)]);
-    expect(text("[data-phase-unlisted]")).toBe("更早的 4 个没有列出");
+    expect(text("[data-phase-unlisted]")).toBe("更早的 4 个未列出");
     expect(text("[data-phase-more]")).toBe("还有 8 个");
     push([capped(2)]); // an agent started elsewhere in the run: the hub drops a1
     expect(lines("Audit")).toEqual(["unlisted", "more", ...ids(9, 20)]);
-    expect(text("[data-phase-unlisted]")).toBe("更早的 5 个没有列出");
+    expect(text("[data-phase-unlisted]")).toBe("更早的 5 个未列出");
     expect(text("[data-phase-more]")).toBe("还有 7 个");
     expect([...host.querySelectorAll<HTMLElement>("[data-agent]")].every((r) => r.style.animation === "")).toBe(true); // nothing came in
     act(() => q("[data-phase-more]")!.click());
@@ -404,7 +404,7 @@ describe("the panel's detail card", () => {
     drawDetailCard([running({ running: false, status: "failed", ended_at: at(100), agents_running: 0, agents_failed: 1, phase_stats: [{ title: "Audit", started: 3, done: 2, running: 0, failed: 1 }, { title: "Verify", started: 2, done: 2, running: 0 }] })]);
     const audit = q('[data-phase="Audit"] [data-phase-mark]')!;
     expect(audit.dataset.phaseMark).toBe("done_failed");
-    expect(audit.getAttribute("aria-label")).toBe("完成，有失败");
+    expect(audit.getAttribute("aria-label")).toBe("已完成（部分失败）");
     expect(audit.querySelector(".text-red")).not.toBeNull();
     expect(audit.querySelector(".text-green")).toBeNull();
     expect(q('[data-phase="Verify"] [data-phase-mark]')!.dataset.phaseMark).toBe("done");
@@ -453,7 +453,7 @@ describe("what moves", () => {
     drawDetailCard([running()]);
     push([running({ running: false, status: "completed", ended_at: at(100) })]);
     expect(q("[data-workflow-status]")!.className).toContain("bg-green-tint");
-    expect(q("[data-workflow-status] [data-fading]")?.textContent).toBe("完成");
+    expect(q("[data-workflow-status] [data-fading]")?.textContent).toBe("已完成");
   });
 
   it("turns the card's status word and strip in place when the run ends", () => {

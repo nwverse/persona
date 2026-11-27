@@ -55,8 +55,12 @@ export interface QuickCommandLabels {
   readonly workbenchCode?: string;
   readonly workbenchMachines?: string;
   readonly openXiaoYi?: string;
+  readonly openTokenUsage?: string;
   readonly toggleTheme?: string;
   readonly liveViewPreview?: string;
+  readonly starredMessages?: string;
+  readonly archivedChats?: string;
+  readonly exportChat?: string;
   readonly needsYou?: string;
   readonly working?: string;
   readonly unread?: string;
@@ -68,8 +72,12 @@ export interface QuickCommandBuildOptions {
   readonly useHerdrTabName?: boolean;
   readonly inboxVisible?: boolean;
   readonly todosVisible?: boolean;
+  readonly knowledgeVisible?: boolean;
   readonly showWorkbench?: boolean;
   readonly showLiveView?: boolean;
+  readonly showStarred?: boolean;
+  readonly showArchived?: boolean;
+  readonly showExportChat?: boolean;
   readonly isDark?: boolean;
   readonly labels?: QuickCommandLabels;
 }
@@ -269,8 +277,8 @@ function buildWorkspaceEntries(
     });
   }
 
-  candidates.push(
-    {
+  if (options.knowledgeVisible !== false) {
+    candidates.push({
       id: 'workspace:knowledge',
       category: 'workspaces',
       title: labels?.knowledge || 'Knowledge',
@@ -280,7 +288,10 @@ function buildWorkspaceEntries(
       iconKey: 'knowledge',
       workspaceKind: 'knowledge',
       keywords: ['knowledge', 'docs', 'notes', 'meetings', '知识库', 'ナレッジ']
-    },
+    });
+  }
+
+  candidates.push(
     {
       id: 'workspace:health',
       category: 'workspaces',
@@ -368,6 +379,17 @@ function buildActionEntries(
 
   candidates.push(
     {
+      id: 'action:open_token_usage',
+      category: 'actions',
+      title: labels?.openTokenUsage || 'Token Usage',
+      subtitle: '',
+      badge: '',
+      tone: 'accent',
+      iconKey: 'token_usage',
+      actionId: 'open_token_usage',
+      keywords: ['token', 'usage', 'heatmap', 'calendar', 'project', 'tokens', '用量', 'トークン']
+    },
+    {
       id: 'action:open_xiaoyi',
       category: 'actions',
       title: labels?.openXiaoYi || 'Open XiaoYi',
@@ -402,6 +424,48 @@ function buildActionEntries(
       iconKey: 'liveview',
       actionId: 'liveview_preview',
       keywords: ['liveview', 'live', 'view', 'capsule', 'preview', '实况窗', 'プレビュー']
+    });
+  }
+
+  if (options.showStarred === true) {
+    candidates.push({
+      id: 'action:open_starred',
+      category: 'actions',
+      title: labels?.starredMessages || 'Starred Messages',
+      subtitle: '',
+      badge: '',
+      tone: 'accent',
+      iconKey: 'star',
+      actionId: 'open_starred',
+      keywords: ['starred', 'star', 'saved', 'bookmark', '收藏', '星标', 'お気に入り', 'スター']
+    });
+  }
+
+  if (options.showArchived === true) {
+    candidates.push({
+      id: 'action:open_archived',
+      category: 'actions',
+      title: labels?.archivedChats || 'Archived Chats',
+      subtitle: '',
+      badge: '',
+      tone: 'neutral',
+      iconKey: 'archive',
+      actionId: 'open_archived',
+      keywords: ['archived', 'archive', 'unarchive', '归档', 'アーカイブ']
+    });
+  }
+
+  if (options.showExportChat === true) {
+    candidates.push({
+      id: 'action:export_chat',
+      category: 'actions',
+      title: labels?.exportChat || 'Export Chat',
+      subtitle: '',
+      badge: '',
+      tone: 'accent',
+      iconKey: 'export',
+      actionId: 'export_chat',
+      keywords: ['export', 'markdown', 'share', 'copy', 'transcript', '导出', 'エクスポート']
     });
   }
 

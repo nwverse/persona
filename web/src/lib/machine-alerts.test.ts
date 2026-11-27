@@ -82,7 +82,7 @@ describe("machineAlerts", () => {
     expect(alertLabel({ kind: "launcher", severity: "warning", count: 2 })).toBe("启动器异常 · 2");
     expect(alertLabel({ kind: "load", severity: "warning", value: 1.24 })).toBe("负载偏高 · 每核 1.2");
     expect(alertLabel({ kind: "offline", severity: "critical" })).toBe("离线");
-    expect(alertLabel({ kind: "offline", severity: "critical" }, true)).toBe("离线 · 排查");
+    expect(alertLabel({ kind: "offline", severity: "critical" }, true)).toBe("离线 · 排查建议");
   });
 });
 
@@ -106,7 +106,7 @@ describe("one meaning for load (#12519)", () => {
   });
 
   it("defines load in one sentence, and calls the used-memory alert what it counts", async () => {
-    expect(loadDefinition()).toMatch(/^负载 = 正在运行和排队等 CPU 的线程数/);
+    expect(loadDefinition()).toMatch(/^负载指过去 1 分钟内正在运行及等待 CPU 的平均线程数/);
     await initI18n("en");
     expect(loadDefinition()).toMatch(/^Load is the number of threads running or waiting for a CPU/);
     expect(perCoreLabel(1.43)).toBe("1.4 per core");

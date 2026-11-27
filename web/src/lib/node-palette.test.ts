@@ -91,7 +91,7 @@ describe("a node's items as palette commands", () => {
     push.run();
     await flush();
     off();
-    expect(asked).toEqual({ title: "推送", body: "main 会推到它的上游分支。不会强制推送：远端有更新的提交时会停下并说明。", label: "确认推送" });
+    expect(asked).toEqual({ title: "推送", body: "将把 main 推送至其上游分支，不会强制推送。如果远端已有更新的提交，推送会中止并提示原因。", label: "确认推送" });
     expect(d.post).not.toHaveBeenCalled();
     answerWith(true);
     push.run();

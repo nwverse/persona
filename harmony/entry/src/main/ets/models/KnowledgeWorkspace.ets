@@ -85,6 +85,7 @@ export class KnowledgeWorkspace {
   @Trace query: string = '';
   @Trace selected: ResourceRow = new ResourceRow();
   @Trace detail: Record<string, Object> = {};
+  @Trace inboxItems: Record<string, Object>[] = [];
   @Trace matches: Record<string, Object>[] = [];
   @Trace supportsExpectedPinned:boolean = false;
   @Trace agents: ResourceRow[] = [];
@@ -132,7 +133,7 @@ export class KnowledgeWorkspace {
     this.loading = true; this.busy = false; this.error = ''; this.writeState = ''; this.editOpen = false; this.editorDirty = false; this.editorRevision++;
     this.detailEditorBaseline = this.editorRevision;
     this.detailInitialized = false;
-    this.detail = {}; this.supportsExpectedPinned=false; this.matches = []; this.agents = []; this.momentText = ''; this.momentTarget = ''; this.results = []; this.entries = [];
+    this.detail = {}; this.inboxItems = []; this.supportsExpectedPinned=false; this.matches = []; this.agents = []; this.momentText = ''; this.momentTarget = ''; this.results = []; this.entries = [];
     this.agentDraft = ''; this.agentLauncher = ''; this.directoryTargets = []; this.targetMachines = []; this.selectedDirectory = 0;
     this.tags = [];
     this.recordingPage = !row && initialKind === 'recordings';
@@ -175,7 +176,7 @@ export class KnowledgeWorkspace {
   }
 
   hide(): void {
-    this.revision++; this.readRevision++; this.client = undefined; this.editorClient = undefined; this.listRows = []; this.detail = {}; this.supportsExpectedPinned=false; this.matches = []; this.agents = [];
+    this.revision++; this.readRevision++; this.client = undefined; this.editorClient = undefined; this.listRows = []; this.detail = {}; this.inboxItems = []; this.supportsExpectedPinned=false; this.matches = []; this.agents = [];
     this.detailInitialized = false;
     if (this.searchTimer !== -1) clearTimeout(this.searchTimer);
     this.searchTimer = -1;
@@ -523,6 +524,7 @@ export class KnowledgeWorkspace {
     const detail = Wire.object(result, 'detail');
     if (Wire.text(detail, 'id') !== row.id || Wire.text(detail, 'kind') !== row.path) throw new Error('request_updated');
     this.detail = detail;
+    this.inboxItems = row.path === 'chats' ? Wire.rows(result, 'inbox') : [];
     this.supportsExpectedPinned=row.path==='recordings' && Wire.bool(result,'supports_expected_pinned');
     this.matches = Wire.rows(result, 'matches');
     this.agents = Wire.rows(result, 'agents').map((data: Record<string, Object>) => {
